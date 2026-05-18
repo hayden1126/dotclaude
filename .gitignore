@@ -1,0 +1,42 @@
+# Secrets — never commit
+.credentials.json
+*.pem
+*.key
+.env
+.env.*
+
+# Local Claude Code state (in case any of these get accidentally placed here)
+history.jsonl
+daily-costs.json
+cost-tracker.log
+bash-commands.log
+mcp-needs-auth-cache.json
+.last-cleanup
+.gsd-profile
+sourced.config
+
+# Runtime artifact dirs
+backups/
+cache/
+file-history/
+paste-cache/
+projects/
+session-data/
+session-env/
+sessions/
+shell-snapshots/
+telemetry/
+todos/
+tasks/
+metrics/
+debug/
+downloads/
+
+# Editor / OS
+.DS_Store
+*.swp
+.idea/
+.vscode/
+
+# Plan mode scratch
+plans/
