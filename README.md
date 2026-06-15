@@ -28,7 +28,7 @@ so edits in either place stay in sync.
 |---|---|---|
 | `CLAUDE.md` | Global instructions: working partnership, boundaries, voice, the explore -> spec -> plan -> execute -> verify -> review workflow | symlink `~/.claude/CLAUDE.md` |
 | `settings.json` | Hooks, status line, env vars, enabled plugins | symlink `~/.claude/settings.json` |
-| `skills/` | The three skills I authored: `coding-practices`, `research-discipline`, `writing-voice` | symlink per dir into `~/.claude/skills/` |
+| `skills/` | The skills I authored: `coding-practices`, `research-discipline`, `writing-voice`, `staged-reader-review`, `ebook-extract` | symlink per dir into `~/.claude/skills/` |
 | `hooks/danger-guard.sh` | PreToolUse(Bash) guard: two-tier confirmation for destructive git and `rm` ops | symlink `~/.claude/hooks/danger-guard.sh` |
 | `templates/` | `SPEC.md`, `PLAN.md`, `STATUS.md` scaffolds for full-lane work that survive `/clear` | symlink per file into `~/.claude/templates/` |
 | `notify-toast.ps1` | WSL to Windows toast notifier for the Notification hook | symlink `~/.claude/notify-toast.ps1` |
