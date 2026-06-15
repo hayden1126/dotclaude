@@ -4,23 +4,5 @@
       "repo": "anthropics/claude-plugins-official",
       "source": "github"
     }
-  },
-  "context-mode": {
-    "source": {
-      "repo": "mksglu/context-mode",
-      "source": "github"
-    }
-  },
-  "ecc": {
-    "source": {
-      "source": "git",
-      "url": "https://github.com/affaan-m/everything-claude-code.git"
-    }
-  },
-  "thedotmack": {
-    "source": {
-      "repo": "thedotmack/claude-mem",
-      "source": "github"
-    }
   }
 }

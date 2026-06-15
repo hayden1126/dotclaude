@@ -1,4 +1,4 @@
-# Secrets — never commit
+# Secrets: never commit
 .credentials.json
 *.pem
 *.key
@@ -7,13 +7,8 @@
 
 # Local Claude Code state (in case any of these get accidentally placed here)
 history.jsonl
-daily-costs.json
-cost-tracker.log
-bash-commands.log
 mcp-needs-auth-cache.json
 .last-cleanup
-.gsd-profile
-sourced.config
 
 # Runtime artifact dirs
 backups/

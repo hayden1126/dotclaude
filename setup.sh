@@ -1,77 +1,78 @@
 #!/usr/bin/env bash
-# setup.sh — install this Claude Code setup into ~/.claude
+# setup.sh — install this lean Claude Code setup into ~/.claude
 #
-# Idempotent: safe to re-run. Existing files are backed up to
-# ~/.claude/backups/pre-showcase-<unix-ts>/ before being replaced.
+# Idempotent: safe to re-run. Existing non-symlink files are backed up to
+# ~/.claude/backups/pre-dotclaude-<unix-ts>/ before being replaced with symlinks
+# back to this repo, so future edits in either place stay in sync.
 
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CLAUDE_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
 TS="$(date +%s)"
-BACKUP_DIR="$CLAUDE_DIR/backups/pre-showcase-$TS"
+BACKUP_DIR="$CLAUDE_DIR/backups/pre-dotclaude-$TS"
 
 say()  { printf "\033[1;36m==>\033[0m %s\n" "$*"; }
 warn() { printf "\033[1;33m!!\033[0m  %s\n" "$*" >&2; }
-die()  { printf "\033[1;31mxx\033[0m  %s\n" "$*" >&2; exit 1; }
 
 mkdir -p "$CLAUDE_DIR"
 
 # ---------------------------------------------------------------------------
-# 1. Back up any existing files we are about to replace
+# 1. Symlink helpers — back up any real file we are about to replace
 # ---------------------------------------------------------------------------
 backup_if_present() {
   local target="$1"
   if [[ -e "$target" && ! -L "$target" ]]; then
-    mkdir -p "$BACKUP_DIR"
-    say "backing up $target -> $BACKUP_DIR/"
-    mv "$target" "$BACKUP_DIR/"
+    mkdir -p "$BACKUP_DIR$(dirname "${target#"$CLAUDE_DIR"}")"
+    say "backing up $target"
+    mv "$target" "$BACKUP_DIR$(dirname "${target#"$CLAUDE_DIR"}")/"
   elif [[ -L "$target" ]]; then
     rm "$target"
   fi
 }
 
-# ---------------------------------------------------------------------------
-# 2. Symlink the repo files into ~/.claude
-# ---------------------------------------------------------------------------
 link() {
   local src="$1" dst="$2"
   backup_if_present "$dst"
   mkdir -p "$(dirname "$dst")"
   ln -s "$src" "$dst"
-  say "linked $dst -> $src"
+  say "linked ${dst#"$CLAUDE_DIR/"} -> repo"
 }
 
-link "$REPO_DIR/settings.json"          "$CLAUDE_DIR/settings.json"
-link "$REPO_DIR/CLAUDE.md"              "$CLAUDE_DIR/CLAUDE.md"
-link "$REPO_DIR/statusline-command.sh"  "$CLAUDE_DIR/statusline-command.sh"
-link "$REPO_DIR/notify-toast.ps1"       "$CLAUDE_DIR/notify-toast.ps1"
-chmod +x "$REPO_DIR/statusline-command.sh"
+# ---------------------------------------------------------------------------
+# 2. Single-file symlinks
+# ---------------------------------------------------------------------------
+link "$REPO_DIR/settings.json"   "$CLAUDE_DIR/settings.json"
+link "$REPO_DIR/CLAUDE.md"       "$CLAUDE_DIR/CLAUDE.md"
+link "$REPO_DIR/notify-toast.ps1" "$CLAUDE_DIR/notify-toast.ps1"
 
-# rules/ — keep as a directory of symlinks so future additions show up
-# without re-running setup
-mkdir -p "$CLAUDE_DIR/rules"
-for f in "$REPO_DIR"/rules/*.md; do
+# hooks/ — per-file so plugin-installed hooks in ~/.claude/hooks/ are left alone
+chmod +x "$REPO_DIR"/hooks/*.sh
+for f in "$REPO_DIR"/hooks/*.sh; do
   [[ -e "$f" ]] || continue
-  link "$f" "$CLAUDE_DIR/rules/$(basename "$f")"
+  link "$f" "$CLAUDE_DIR/hooks/$(basename "$f")"
 done
 
-# agents/ — same pattern (user-authored only; plugin agents come from plugins)
-mkdir -p "$CLAUDE_DIR/agents"
-for f in "$REPO_DIR"/agents/*.md; do
+# skills/ — one symlink per authored skill directory (plugin skills come from plugins)
+for d in "$REPO_DIR"/skills/*/; do
+  [[ -d "$d" ]] || continue
+  link "${d%/}" "$CLAUDE_DIR/skills/$(basename "$d")"
+done
+
+# templates/ — per-file (SPEC/PLAN/STATUS scaffolds for full-lane work)
+for f in "$REPO_DIR"/templates/*.md; do
   [[ -e "$f" ]] || continue
-  link "$f" "$CLAUDE_DIR/agents/$(basename "$f")"
+  link "$f" "$CLAUDE_DIR/templates/$(basename "$f")"
 done
 
 # ---------------------------------------------------------------------------
 # 3. Register marketplaces and install plugins
 # ---------------------------------------------------------------------------
 if ! command -v claude >/dev/null 2>&1; then
-  warn "claude CLI not on PATH — skipping plugin install"
-  warn "install Claude Code first, then re-run this script"
+  warn "claude CLI not on PATH — skipping plugin install (install Claude Code, then re-run)"
 else
   say "registering marketplaces"
-  python3 - <<'PY' "$REPO_DIR/plugins/marketplaces.json"
+  python3 - "$REPO_DIR/plugins/marketplaces.json" <<'PY'
 import json, subprocess, sys
 with open(sys.argv[1]) as f:
     data = json.load(f)
@@ -79,14 +80,13 @@ for name, entry in data.items():
     src = entry["source"]
     ref = src.get("repo") or src.get("url")
     if not ref:
-        print(f"!! skipping {name}: no repo/url")
-        continue
+        print(f"!! skipping {name}: no repo/url"); continue
     print(f"==> claude plugin marketplace add {ref}")
     subprocess.run(["claude", "plugin", "marketplace", "add", ref], check=False)
 PY
 
   say "installing plugins"
-  python3 - <<'PY' "$REPO_DIR/plugins/enabled.json"
+  python3 - "$REPO_DIR/plugins/enabled.json" <<'PY'
 import json, subprocess, sys
 with open(sys.argv[1]) as f:
     data = json.load(f)
@@ -99,27 +99,22 @@ PY
 fi
 
 # ---------------------------------------------------------------------------
-# 4. Install standalone CLI tools (GSD, etc.)
+# 4. Standalone CLI tools (ccstatusline, etc.)
 # ---------------------------------------------------------------------------
 say "installing standalone CLI tools from tools.json"
-python3 - <<'PY' "$REPO_DIR/tools.json"
+python3 - "$REPO_DIR/tools.json" <<'PY'
 import json, subprocess, sys, shutil
 with open(sys.argv[1]) as f:
     tools = json.load(f)
 for name, spec in tools.items():
-    installer = spec.get("installer")
-    if installer == "manual":
-        note = spec.get("note", "manual install required")
-        print(f"!! {name}: skipped (manual). {note}")
-        continue
+    if spec.get("installer") == "manual":
+        print(f"!! {name}: skipped (manual). {spec.get('note','manual install required')}"); continue
     cmd_str = spec.get("command")
     if not cmd_str:
-        print(f"!! {name}: no command, skipping")
-        continue
+        print(f"!! {name}: no command, skipping"); continue
     head = cmd_str.split()[0]
     if shutil.which(head) is None:
-        print(f"!! {name}: {head!r} not on PATH, skipping")
-        continue
+        print(f"!! {name}: {head!r} not on PATH, skipping"); continue
     print(f"==> {name}: {cmd_str}")
     subprocess.run(cmd_str, shell=True, check=False)
 PY
@@ -136,19 +131,19 @@ cat <<'EOF'
  1.  Authenticate Claude Code:
        claude login
 
- 2.  GSD was installed via `npx get-shit-done-cc` (see tools.json).
-     If that step was skipped (e.g. no node on PATH), install it now:
-       npx -y get-shit-done-cc
-     GSD ships the hooks referenced from settings.json. If absent,
-     the hooks fail open (no harm) but you lose the update banner,
-     context monitor, and session-state tracking.
+ 2.  Status line uses ccstatusline (installed via bun from tools.json).
+     If bun was not on PATH, install bun then run:
+       bun install -g ccstatusline
 
- 3.  Re-authenticate any MCP servers (Hugging Face, Google Drive, etc.)
-     from inside Claude Code with /mcp.
+ 3.  Re-authenticate any MCP servers (context7, chrome-devtools) from
+     inside Claude Code with /mcp.
 
- 4.  Windows-only: notify-toast.ps1 expects WSL. On macOS/Linux,
-     replace the Notification hook in settings.json with your preferred
-     notifier (osascript / notify-send / etc.).
+ 4.  Windows/WSL only: the Stop + Notification hooks in settings.json call
+     powershell.exe and notify-toast.ps1. On macOS/Linux, swap them for your
+     platform's notifier (osascript / notify-send).
+
+ 5.  The danger-guard hook (hooks/danger-guard.sh) needs python3 on PATH.
+     If absent it fails open (allows the command, no guard).
 
 ============================================================
 

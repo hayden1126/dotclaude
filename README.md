@@ -1,77 +1,80 @@
 # My Claude Code setup
 
-A portable snapshot of my global [Claude Code](https://docs.claude.com/en/docs/claude-code/overview) configuration — settings, hooks, status line, custom agents, rules, and the plugin marketplaces I install. Run `./setup.sh` on a fresh machine (or device) and end up with the same setup.
+A portable snapshot of my global [Claude Code](https://docs.claude.com/en/docs/claude-code/overview)
+configuration: global instructions, the skills and hook I authored, durable-state templates,
+settings, and the plugins I install. Run `./setup.sh` on a fresh machine and end up with the
+same setup.
 
-This repo intentionally does **not** vendor plugin-owned content (skills, sub-agents, hooks from plugins like `ecc`, `superpowers`, `context-mode`, etc.) — those get installed from their own marketplaces. What lives here is what *I* wrote or curated.
+This is a deliberately lean, principle-driven config. It vendors only what I wrote or curated.
+Plugin-owned content (plugin skills, agents, hooks) is installed from the plugins' own
+marketplaces, not copied here, so it never goes stale.
 
 ## Quickstart
 
 ```bash
-git clone <this repo> claude-setup
-cd claude-setup
+git clone https://github.com/hayden1126/dotclaude.git
+cd dotclaude
 ./setup.sh
 claude login        # one-time auth
 ```
 
-`setup.sh` is idempotent. Existing files in `~/.claude/` are backed up to `~/.claude/backups/pre-showcase-<timestamp>/` before being replaced with symlinks back to this repo.
+`setup.sh` is idempotent. Existing real files in `~/.claude/` are backed up to
+`~/.claude/backups/pre-dotclaude-<timestamp>/`, then replaced with symlinks back to this repo,
+so edits in either place stay in sync.
 
 ## What's in here
 
-| Path | What it is | Symlinks to |
+| Path | What it is | Installs to |
 |---|---|---|
-| `CLAUDE.md` | Global user instructions — aggressive auto-memory mode, 8 memory types, compaction rules | `~/.claude/CLAUDE.md` |
-| `settings.json` | Hooks, status line, env vars, enabled plugins, marketplaces | `~/.claude/settings.json` |
-| `statusline-command.sh` | Custom agnoster-style status line with daily cost tracking | `~/.claude/statusline-command.sh` |
-| `notify-toast.ps1` | WSL → Windows toast notifier for the `Notification` hook | `~/.claude/notify-toast.ps1` |
-| `rules/context7.md` | Global rule: always use Context7 MCP for library docs | `~/.claude/rules/context7.md` |
-| `agents/` | User-authored sub-agents (the `sourced` framework: `voice-extractor`, `prose-drafter`, `source-finder`, `sourced-helper`) | `~/.claude/agents/` |
-| `plugins/marketplaces.json` | List of plugin marketplaces to register | consumed by `setup.sh` |
-| `plugins/enabled.json` | List of plugins to install + enable | consumed by `setup.sh` |
-| `tools.json` | Standalone CLI tools to install (GSD via `npx`, etc.) | consumed by `setup.sh` |
-| `docs/PLUGINS.md` | What each enabled plugin does | reference |
-| `setup.sh` | The installer | — |
+| `CLAUDE.md` | Global instructions: working partnership, boundaries, voice, the explore -> spec -> plan -> execute -> verify -> review workflow | symlink `~/.claude/CLAUDE.md` |
+| `settings.json` | Hooks, status line, env vars, enabled plugins | symlink `~/.claude/settings.json` |
+| `skills/` | The three skills I authored: `coding-practices`, `research-discipline`, `writing-voice` | symlink per dir into `~/.claude/skills/` |
+| `hooks/danger-guard.sh` | PreToolUse(Bash) guard: two-tier confirmation for destructive git and `rm` ops | symlink `~/.claude/hooks/danger-guard.sh` |
+| `templates/` | `SPEC.md`, `PLAN.md`, `STATUS.md` scaffolds for full-lane work that survive `/clear` | symlink per file into `~/.claude/templates/` |
+| `notify-toast.ps1` | WSL to Windows toast notifier for the Notification hook | symlink `~/.claude/notify-toast.ps1` |
+| `plugins/marketplaces.json` | Marketplaces to register | consumed by `setup.sh` |
+| `plugins/enabled.json` | Plugins to install and enable | consumed by `setup.sh` |
+| `tools.json` | Standalone CLI tools (ccstatusline via bun) | consumed by `setup.sh` |
+| `docs/PLUGINS.md` | One-line description of each plugin | reference |
+| `setup.sh` | The installer | run once per machine |
+| `sync.sh` | Regenerates the derived plugin lists from live `~/.claude/` | run after plugin changes |
 
 ## Plugins
 
-`setup.sh` registers these marketplaces and installs the plugins listed in `plugins/enabled.json`. See `docs/PLUGINS.md` for a one-line description of each.
-
-| Plugin | Marketplace |
-|---|---|
-| `superpowers` | [anthropics/claude-plugins-official](https://github.com/anthropics/claude-plugins-official) |
-| `context7` | anthropics/claude-plugins-official |
-| `frontend-design` | anthropics/claude-plugins-official |
-| `chrome-devtools-mcp` | anthropics/claude-plugins-official |
-| `context-mode` | [mksglu/context-mode](https://github.com/mksglu/context-mode) |
-| `claude-mem` | [thedotmack/claude-mem](https://github.com/thedotmack/claude-mem) |
-| `ecc` | [affaan-m/everything-claude-code](https://github.com/affaan-m/everything-claude-code) |
+`setup.sh` installs seven plugins, all from
+[anthropics/claude-plugins-official](https://github.com/anthropics/claude-plugins-official):
+`superpowers`, `code-review`, `commit-commands`, `claude-md-management`, `hookify`, `context7`,
+`chrome-devtools-mcp`. See `docs/PLUGINS.md` for what each does.
 
 ## Hooks
 
-`settings.json` wires several lifecycle hooks. Most point at `$HOME/.claude/hooks/gsd-*.{js,sh}` — those scripts are shipped by [GSD](https://github.com/affaan-m/everything-claude-code) (or the standalone "get-shit-done" toolkit), **not** this repo. If you skip the GSD install, the hooks fail-open and Claude Code keeps working; you just lose the update banner, context monitor, session-state tracking, etc.
+`settings.json` wires three lifecycle hooks:
 
-Hooks worth knowing:
+- **PreToolUse(Bash): `danger-guard.sh`** (in this repo). Two tiers. It hard-blocks
+  (`deny`) never-legitimate ops (force-push, `reset --hard`, `git clean -f`) and prompts
+  (`ask`) for routine-but-sensitive ops (plain push, checkout, switch, revert, `rm -rf`).
+  Token-aware, so it does not trip on `git commit -m "push fix"`, and it recurses into
+  `bash -c "..."` and `eval` wrappers. Fires for the main agent and all subagents. Fail-open
+  on any parse error. Needs python3 on PATH.
+- **Stop** and **Notification**: play a Windows sound and (on permission prompts) a toast via
+  `notify-toast.ps1`. WSL setup; swap for your platform's notifier elsewhere.
 
-- **SessionStart**: injects auto-memory aggressive-mode reminder, checks for GSD updates, restores session state, heals `context-mode` cache.
-- **Notification**: plays a Windows sound + toast (WSL setup).
-- **PreToolUse on Write|Edit**: GSD prompt/read/workflow guards.
-- **PostToolUse on Bash/Edit/Write/etc.**: GSD context monitor.
-- **statusLine**: runs `statusline-command.sh` → daily cost + context bar.
+## Status line
 
-## Manual steps after `setup.sh`
+`settings.json` runs [ccstatusline](https://github.com/sirmalloc/ccstatusline) at
+`$HOME/.bun/bin/ccstatusline`. `setup.sh` installs it from `tools.json` with
+`bun install -g ccstatusline`. If bun is not on PATH the status line is blank but Claude Code
+works fine.
 
-1. `claude login` — one-time auth with Anthropic.
-2. GSD is auto-installed via `npx get-shit-done-cc` by `setup.sh` (see `tools.json`). If `npx` wasn't on PATH at setup time, run it manually. The `sourced` academic-writing framework (also in `tools.json`) is `installer: manual` — install separately if needed; otherwise the four agents in `agents/` are inert and can be deleted.
-3. Re-auth any MCP servers (`/mcp` inside Claude Code).
-4. **Non-WSL**: replace the `Notification` hook in `settings.json` with your platform's notifier (`osascript` on macOS, `notify-send` on Linux).
-5. **Different home dir**: paths in `settings.json` use `$HOME`, so this should work anywhere bash expands env vars in hook commands. If your Claude Code build doesn't expand `$HOME` in hook commands, `setup.sh` will fix the symlinks but you'll need to substitute manually.
+## What's deliberately not here
 
-## What's deliberately *not* here
-
-- **Secrets** — `~/.credentials.json`, MCP auth tokens. Re-auth per machine.
-- **Plugin content** — `~/.claude/skills/`, `~/.claude/commands/`, `~/.claude/get-shit-done/` etc. These are installed by their respective marketplaces / installers; vendoring them would go stale immediately.
-- **Local state** — `history.jsonl`, `projects/`, `session-env/`, `paste-cache/`, logs, telemetry. Those are runtime artifacts, not configuration.
-- **My personal data** — daily costs, memory entries, todos, debug dumps.
+- **Secrets**: `~/.claude/.credentials.json`, MCP auth tokens. Re-auth per machine.
+- **Plugin content**: plugin-shipped skills, commands, and hooks. Installed from their
+  marketplaces.
+- **Local state**: `history.jsonl`, `projects/`, memory entries, `sessions/`, caches, logs.
+  Runtime artifacts, not configuration (see `.gitignore`).
 
 ## License
 
-MIT for the configuration / scripts in this repo. Plugin licenses are governed by their respective upstream projects.
+MIT for the configuration and scripts in this repo. Plugin licenses are governed by their
+upstream projects.

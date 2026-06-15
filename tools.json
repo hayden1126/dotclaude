@@ -1,15 +1,9 @@
 {
-  "gsd": {
-    "installer": "npx",
-    "package": "get-shit-done-cc",
-    "purpose": "The GSD (get-shit-done) workflow toolkit. Ships ~50 gsd-* skills, agents, and hooks into ~/.claude/. The settings.json hook entries (gsd-prompt-guard, gsd-context-monitor, gsd-workflow-guard, gsd-statusline, etc.) come from here.",
-    "homepage": "https://github.com/gsd-build/get-shit-done",
-    "command": "npx -y get-shit-done-cc"
-  },
-  "sourced": {
-    "installer": "manual",
-    "purpose": "Academic-writing framework. Ships the voice/style libraries under ~/.claude/voice/ and ~/.claude/style/ that the agents/voice-extractor.md, prose-drafter.md, source-finder.md, sourced-helper.md sub-agents depend on.",
-    "optional": true,
-    "note": "Installed from a private editable repo (pipx install -e <path>). Not auto-installable. If you don't use the sourced framework, you can delete the four agents in agents/ — they're inert without it."
+  "ccstatusline": {
+    "installer": "bun",
+    "package": "ccstatusline",
+    "purpose": "Status line renderer. settings.json statusLine runs $HOME/.bun/bin/ccstatusline. Without it the status line is blank but Claude Code still works.",
+    "homepage": "https://github.com/sirmalloc/ccstatusline",
+    "command": "bun install -g ccstatusline"
   }
 }
