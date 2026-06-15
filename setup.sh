@@ -39,10 +39,27 @@ link() {
   say "linked ${dst#"$CLAUDE_DIR/"} -> repo"
 }
 
+# settings.json is the one file the runtime itself rewrites (it persists managed
+# keys like extraKnownMarketplaces and reorders the file). A live symlink would
+# push that churn straight back into the repo, so we COPY it instead: the repo
+# file is the curated baseline; the runtime owns its own copy in ~/.claude/.
+# Re-running resets the copy to the baseline (backing up the old one); the
+# runtime then re-derives its managed keys on next launch.
+copy_managed() {
+  local src="$1" dst="$2"
+  if [[ -e "$dst" && ! -L "$dst" ]] && cmp -s "$src" "$dst"; then
+    say "${dst#"$CLAUDE_DIR/"} already current"; return
+  fi
+  backup_if_present "$dst"
+  mkdir -p "$(dirname "$dst")"
+  cp "$src" "$dst"
+  say "copied ${dst#"$CLAUDE_DIR/"} (runtime-managed, not symlinked)"
+}
+
 # ---------------------------------------------------------------------------
-# 2. Single-file symlinks
+# 2. Single files
 # ---------------------------------------------------------------------------
-link "$REPO_DIR/settings.json"   "$CLAUDE_DIR/settings.json"
+copy_managed "$REPO_DIR/settings.json" "$CLAUDE_DIR/settings.json"
 link "$REPO_DIR/CLAUDE.md"       "$CLAUDE_DIR/CLAUDE.md"
 link "$REPO_DIR/notify-toast.ps1" "$CLAUDE_DIR/notify-toast.ps1"
 

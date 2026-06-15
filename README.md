@@ -20,14 +20,17 @@ claude login        # one-time auth
 
 `setup.sh` is idempotent. Existing real files in `~/.claude/` are backed up to
 `~/.claude/backups/pre-dotclaude-<timestamp>/`, then replaced with symlinks back to this repo,
-so edits in either place stay in sync.
+so edits in either place stay in sync. The one exception is `settings.json`: it is **copied**, not
+symlinked, because the Claude Code runtime rewrites it (persisting managed keys like
+`extraKnownMarketplaces`). A symlink would push that churn back into the repo; the copy keeps the
+repo file as a curated baseline while the runtime owns its own copy.
 
 ## What's in here
 
 | Path | What it is | Installs to |
 |---|---|---|
 | `CLAUDE.md` | Global instructions: working partnership, boundaries, voice, the explore -> spec -> plan -> execute -> verify -> review workflow | symlink `~/.claude/CLAUDE.md` |
-| `settings.json` | Hooks, status line, env vars, enabled plugins | symlink `~/.claude/settings.json` |
+| `settings.json` | Hooks, status line, env vars, enabled plugins (curated baseline) | **copy** to `~/.claude/settings.json` (runtime-managed, not symlinked) |
 | `skills/` | The skills I authored: `coding-practices`, `research-discipline`, `writing-voice`, `staged-reader-review`, `ebook-extract` | symlink per dir into `~/.claude/skills/` |
 | `hooks/danger-guard.sh` | PreToolUse(Bash) guard: two-tier confirmation for destructive git and `rm` ops | symlink `~/.claude/hooks/danger-guard.sh` |
 | `templates/` | `SPEC.md`, `PLAN.md`, `STATUS.md` scaffolds for full-lane work that survive `/clear` | symlink per file into `~/.claude/templates/` |
