@@ -1,9 +1,17 @@
 # Brief: a durable session-handoff mechanism (hook and/or skill) in dotclaude
 
-> READ THIS FIRST if you are a fresh session picking up this work. It is a pre-design BRIEF, not a
-> spec. Your job: explore the dotclaude setup, then run `superpowers:brainstorming` with Hayden to turn
-> this into a design, then `writing-plans`, then implement. Do not skip brainstorming. Written
-> 2026-06-17 by a prior session that was handed off because its context was too full.
+> RESOLVED 2026-06-17. v1 is implemented as a skill: `skills/handoff/SKILL.md` (skill-only and
+> advisory, the direction Hayden picked). The design rationale and the full plan are in
+> `~/.claude/plans/read-docs-durable-handoff-brief-md-and-p-precious-cherny.md`. Two pieces are
+> deliberately deferred, not forgotten: (1) any hook (a PreCompact safety-net or Stop-gate), revisit
+> only after empirically testing the `SessionStart` `compact`-matcher re-inject path (open bug #15174);
+> (2) the autonomous loop-engineering handoff (a Python orchestrator step that refreshes the RESUME
+> block). The sections below are kept as historical design context, do not re-run the brainstorming.
+
+> ORIGINAL BRIEF (historical). It was a pre-design BRIEF, not a spec. The job was: explore the dotclaude
+> setup, then run `superpowers:brainstorming` with Hayden to turn this into a design, then
+> `writing-plans`, then implement. Written 2026-06-17 by a prior session that was handed off because its
+> context was too full.
 
 ## The problem (why we are doing this)
 
@@ -95,9 +103,10 @@ implementing.
 - Follow existing dotclaude conventions: explore `skills/`, `hooks/`, `templates/`, `docs/`, and how
   existing skills/hooks are structured BEFORE designing. Do not reinvent. In particular this should
   COMPOSE with, not duplicate, existing capability: the `claude-md-management` skills
-  (`revise-claude-md`, `claude-md-improver`), the file-based memory system (memory files with
-  frontmatter + a `MEMORY.md` index, described in `~/.claude/CLAUDE.md`), and the `templates/` (the
-  STATUS/SPEC/PLAN templates Hayden seeds durable state from). NOTE: dotclaude vendors ONLY
+  (`revise-claude-md`, `claude-md-improver`), the file-based memory system (per-project memory files
+  with frontmatter + a `MEMORY.md` index under `~/.claude/projects/<cwd-slug>/memory/`; the harness
+  injects the format each session, and `~/.claude/CLAUDE.md` holds only a short Memory rule, not the
+  full system), and the `templates/` (the STATUS/SPEC/PLAN templates Hayden seeds durable state from). NOTE: dotclaude vendors ONLY
   Hayden-authored content; plugin-owned skills/hooks install from marketplaces. A handoff skill/hook
   authored here is the right kind of thing to vendor.
 - Hayden's global rules (`~/.claude/CLAUDE.md`): be an adversarial sparring partner, not a yes-man; ask
