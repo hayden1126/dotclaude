@@ -24,14 +24,15 @@ fi
 [[ -z "$msg" ]] && msg="Input needed"
 
 # Resolve notify-toast.ps1 to a Windows path powershell.exe understands.
-# WSL: wslpath. MSYS/Cygwin: cygpath. Anything else: best-effort sed (/c/x -> C:\x).
+# WSL ships wslpath; MSYS2/git-bash/Cygwin ship cygpath. No path tool => no
+# Windows toast is possible anyway, so skip cleanly (fail-open).
 ps1="$HOME/.claude/notify-toast.ps1"
 if command -v wslpath >/dev/null 2>&1; then
   winpath=$(wslpath -w "$ps1")
 elif command -v cygpath >/dev/null 2>&1; then
   winpath=$(cygpath -w "$ps1")
 else
-  winpath=$(printf '%s' "$ps1" | sed -E 's#^/([A-Za-z])/#\1:/#; s#/#\\#g')
+  exit 0
 fi
 
 ( powershell.exe -ExecutionPolicy Bypass -File "$winpath" -Message "$msg" >/dev/null 2>&1 & )
