@@ -6,7 +6,15 @@
 > deliberately deferred, not forgotten: (1) any hook (a PreCompact safety-net or Stop-gate), revisit
 > only after empirically testing the `SessionStart` `compact`-matcher re-inject path (open bug #15174);
 > (2) the autonomous loop-engineering handoff (a Python orchestrator step that refreshes the RESUME
-> block). The sections below are kept as historical design context, do not re-run the brainstorming.
+> block).
+>
+> UPDATE 2026-06-19: the lightweight-trigger half of the seed recommendation shipped as
+> `hooks/handoff-reminder.sh`, a `UserPromptSubmit` advisory hook that nudges toward `/handoff` on
+> wrap-up signals (PR #2). It only reminds, it does not perform the handoff, so the skill-only
+> decision stands; deferral (1) now refers specifically to the deterministic PreCompact/Stop
+> safety-net, which is still open.
+>
+> The sections below are kept as historical design context, do not re-run the brainstorming.
 
 > ORIGINAL BRIEF (historical). It was a pre-design BRIEF, not a spec. The job was: explore the dotclaude
 > setup, then run `superpowers:brainstorming` with Hayden to turn this into a design, then
