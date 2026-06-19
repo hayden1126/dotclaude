@@ -34,8 +34,9 @@ repo file as a curated baseline while the runtime owns its own copy.
 | `skills/` | The skills I authored: `coding-practices`, `research-discipline`, `writing-voice`, `staged-reader-review`, `ebook-extract`, `handoff` | symlink per dir into `~/.claude/skills/` |
 | `hooks/danger-guard.sh` | PreToolUse(Bash) guard: two-tier confirmation for destructive git and `rm` ops | symlink `~/.claude/hooks/danger-guard.sh` |
 | `hooks/handoff-reminder.sh` | UserPromptSubmit hook: on a wrap-up / handoff / clear-memory signal, reminds me to invoke the `handoff` skill instead of improvising it | symlink `~/.claude/hooks/handoff-reminder.sh` |
+| `hooks/notify.sh` | Notification(permission_prompt) hook: pops a Windows toast, resolving the toast path per platform (WSL via `wslpath`, native Windows git-bash via `cygpath`) | symlink `~/.claude/hooks/notify.sh` |
 | `templates/` | `SPEC.md`, `PLAN.md`, `STATUS.md` scaffolds for full-lane work that survive `/clear` | symlink per file into `~/.claude/templates/` |
-| `notify-toast.ps1` | WSL to Windows toast notifier for the Notification hook | symlink `~/.claude/notify-toast.ps1` |
+| `notify-toast.ps1` | Windows toast script that `notify.sh` renders for the Notification hook | symlink `~/.claude/notify-toast.ps1` |
 | `plugins/marketplaces.json` | Marketplaces to register | consumed by `setup.sh` |
 | `plugins/enabled.json` | Plugins to install and enable | consumed by `setup.sh` |
 | `tools.json` | Standalone CLI tools (ccstatusline via bun) | consumed by `setup.sh` |
@@ -66,8 +67,11 @@ repo file as a curated baseline while the runtime owns its own copy.
   Token-aware, so it does not trip on `git commit -m "push fix"`, and it recurses into
   `bash -c "..."` and `eval` wrappers. Fires for the main agent and all subagents. Fail-open
   on any parse error. Needs python3 on PATH.
-- **Stop** and **Notification**: play a Windows sound and (on permission prompts) a toast via
-  `notify-toast.ps1`. WSL setup; swap for your platform's notifier elsewhere.
+- **Stop** and **Notification**: play a Windows sound and (on permission prompts) a toast. The
+  sound hooks are inline in `settings.json`; the toast goes through `notify.sh`, which resolves
+  the path for both WSL (`wslpath`) and native Windows git-bash (`cygpath`) and renders
+  `notify-toast.ps1`. Windows-only: on macOS/Linux, swap for your platform's notifier
+  (`osascript` / `notify-send`).
 
 ## Status line
 

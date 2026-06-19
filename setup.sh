@@ -155,9 +155,11 @@ cat <<'EOF'
  3.  Re-authenticate any MCP servers (context7, chrome-devtools) from
      inside Claude Code with /mcp.
 
- 4.  Windows/WSL only: the Stop + Notification hooks in settings.json call
-     powershell.exe and notify-toast.ps1. On macOS/Linux, swap them for your
-     platform's notifier (osascript / notify-send).
+ 4.  Windows/WSL only: the Stop + Notification hooks call powershell.exe. The
+     sound hooks are inline in settings.json; the toast goes through
+     hooks/notify.sh (WSL via wslpath, native Windows via cygpath) and renders
+     notify-toast.ps1. On macOS/Linux, swap them for your platform's notifier
+     (osascript / notify-send).
 
  5.  The danger-guard hook (hooks/danger-guard.sh) needs python3 on PATH.
      If absent it fails open (allows the command, no guard).
