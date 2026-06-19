@@ -1,8 +1,8 @@
 param([string]$Message = "Input needed")
 
-# TODO: XML-escape $Message ([System.Security.SecurityElement]::Escape) if Claude Code's
-# Notification message ever carries & < > (generic today, so unreachable; raw markup makes the
-# LoadXml below throw and silently drops the toast). Ref Claude Code issue #32952.
+# Render &, <, > literally instead of letting them break the toast XML below (LoadXml would
+# throw and the toast would silently vanish). A no-op on today's plain messages; cheap insurance.
+$Message = [System.Security.SecurityElement]::Escape($Message)
 
 [Windows.UI.Notifications.ToastNotificationManager,Windows.UI.Notifications,ContentType=WindowsRuntime] | Out-Null
 [Windows.Data.Xml.Dom.XmlDocument,Windows.Data.Xml.Dom.XmlDocument,ContentType=WindowsRuntime] | Out-Null
