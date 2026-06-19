@@ -9,7 +9,8 @@
   "agentPushNotifEnabled": true,
   "attribution": {
     "commit": "",
-    "pr": ""
+    "pr": "",
+    "sessionUrl": false
   },
   "statusLine": {
     "type": "command",
