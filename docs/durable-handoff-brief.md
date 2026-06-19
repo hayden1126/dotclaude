@@ -114,8 +114,8 @@ implementing.
   (`revise-claude-md`, `claude-md-improver`), the file-based memory system (per-project memory files
   with frontmatter + a `MEMORY.md` index under `~/.claude/projects/<cwd-slug>/memory/`; the harness
   injects the format each session, and `~/.claude/CLAUDE.md` holds only a short Memory rule, not the
-  full system), and the `templates/` (the STATUS/SPEC/PLAN templates Hayden seeds durable state from). NOTE: dotclaude vendors ONLY
-  Hayden-authored content; plugin-owned skills/hooks install from marketplaces. A handoff skill/hook
+  full system), and the `templates/` (the STATUS/SPEC/PLAN templates Hayden seeds durable state from). NOTE: dotclaude vendors content
+  authored by Hayden and Friends; plugin-owned skills/hooks install from marketplaces. A handoff skill/hook
   authored here is the right kind of thing to vendor.
 - Hayden's global rules (`~/.claude/CLAUDE.md`): be an adversarial sparring partner, not a yes-man; ask
   before implementing on a design fork; no em dashes in prose/docs/commit messages (writing-voice);
