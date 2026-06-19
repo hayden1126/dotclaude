@@ -1,7 +1,7 @@
 # My Claude Code setup
 
 A portable snapshot of my global [Claude Code](https://docs.claude.com/en/docs/claude-code/overview)
-configuration: global instructions, the skills and hook I authored, durable-state templates,
+configuration: global instructions, the skills and hooks I authored or merged, durable-state templates,
 settings, and the plugins I install. Run `./setup.sh` on a fresh machine and end up with the
 same setup.
 
