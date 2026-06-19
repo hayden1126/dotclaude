@@ -33,6 +33,7 @@ repo file as a curated baseline while the runtime owns its own copy.
 | `settings.json` | Hooks, status line, env vars, enabled plugins (curated baseline) | **copy** to `~/.claude/settings.json` (runtime-managed, not symlinked) |
 | `skills/` | The skills I authored: `coding-practices`, `research-discipline`, `writing-voice`, `staged-reader-review`, `ebook-extract`, `handoff` | symlink per dir into `~/.claude/skills/` |
 | `hooks/danger-guard.sh` | PreToolUse(Bash) guard: two-tier confirmation for destructive git and `rm` ops | symlink `~/.claude/hooks/danger-guard.sh` |
+| `hooks/handoff-reminder.sh` | UserPromptSubmit hook: on a wrap-up / handoff / clear-memory signal, reminds me to invoke the `handoff` skill instead of improvising it | symlink `~/.claude/hooks/handoff-reminder.sh` |
 | `templates/` | `SPEC.md`, `PLAN.md`, `STATUS.md` scaffolds for full-lane work that survive `/clear` | symlink per file into `~/.claude/templates/` |
 | `notify-toast.ps1` | WSL to Windows toast notifier for the Notification hook | symlink `~/.claude/notify-toast.ps1` |
 | `plugins/marketplaces.json` | Marketplaces to register | consumed by `setup.sh` |
@@ -51,8 +52,14 @@ repo file as a curated baseline while the runtime owns its own copy.
 
 ## Hooks
 
-`settings.json` wires three lifecycle hooks:
+`settings.json` wires four lifecycle hooks:
 
+- **UserPromptSubmit: `handoff-reminder.sh`** (in this repo). When a prompt looks like a session
+  wrap-up or context reset (`hand off`, `wrap up`, `stop here`, `clear context`, `fresh session`,
+  etc.), it injects a one-line reminder
+  to invoke the `handoff` skill rather than improvising its steps (which kept dropping the
+  curate-memory step). Advisory only: it adds context, it cannot run the skill; silent no-op
+  otherwise; always exits 0 so it can never block a prompt. Fail-open if `jq` is absent.
 - **PreToolUse(Bash): `danger-guard.sh`** (in this repo). Two tiers. It hard-blocks
   (`deny`) never-legitimate ops (force-push, `reset --hard`, `git clean -f`) and prompts
   (`ask`) for routine-but-sensitive ops (plain push, checkout, switch, revert, `rm -rf`).
