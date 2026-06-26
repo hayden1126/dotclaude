@@ -12,6 +12,15 @@
 # ops stay "ask" so Hayden can approve in-dialog, matching the "propose and confirm"
 # boundaries in CLAUDE.md.
 #
+# Auto mode (toggle): when enabled, the whole guard flips to an allow-by-default mode -
+# every dangerous op (the deny AND ask tiers above) is downgraded to a single "ask"
+# permission prompt, and EVERY other bash command is auto-approved ("allow"), bypassing
+# the normal permission system. So force-push etc. still need an explicit yes, but nothing
+# is hard-blocked and routine commands stop prompting. Enable it either way:
+#   - live, no restart:  touch ~/.claude/.danger-guard-auto   (rm to disable)
+#   - at launch:         DANGER_GUARD_AUTO=1 claude
+# With the toggle off, behavior is exactly the two-tier deny/ask above.
+#
 # Token-aware: does not false-positive on `git commit -m "push fix"`. Recurses into
 # `bash -c "..."` / `sh -c "..."` / `eval "..."` wrappers. Fires for the main agent and
 # all subagents (covers the Explore/Plan CLAUDE.md blind spot). Fail-open: any parse
@@ -39,6 +48,12 @@ _ORDER = {None: 0, "ask": 1, "deny": 2}
 
 def tier_max(a, b):
     return a if _ORDER[a] >= _ORDER[b] else b
+
+def auto_enabled():
+    if os.environ.get("DANGER_GUARD_AUTO", "").strip().lower() in ("1", "true", "yes", "on"):
+        return True
+    base = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude")
+    return os.path.exists(os.path.join(base, ".danger-guard-auto"))
 
 def classify_git(args):
     k = 0
@@ -111,10 +126,22 @@ def classify_cmd(cmd, depth=0):
     return tier
 
 tier = classify_cmd(cmd)
-if tier == "deny":
+
+if auto_enabled():
+    # Allow-by-default: dangerous ops (either tier) need a yes; everything else passes.
+    if tier in ("deny", "ask"):
+        decision = "ask"
+        reason = ("Auto mode: dangerous op (force-push / reset --hard / git clean -f / "
+                  "push / checkout / switch / revert / rm -rf) needs Hayden's explicit approval.")
+    else:
+        decision = "allow"
+        reason = "Auto mode: bash command auto-approved."
+elif tier == "deny":
+    decision = "deny"
     reason = ("Destructive git op (force-push / reset --hard / git clean -f) is hard-blocked. "
               "Run it yourself if you truly intend it.")
 elif tier == "ask":
+    decision = "ask"
     reason = ("Sensitive op (push / checkout / switch / revert / rm -rf) needs Hayden's "
               "explicit approval.")
 else:
@@ -123,7 +150,7 @@ else:
 print(json.dumps({
     "hookSpecificOutput": {
         "hookEventName": "PreToolUse",
-        "permissionDecision": tier,
+        "permissionDecision": decision,
         "permissionDecisionReason": reason
     }
 }))

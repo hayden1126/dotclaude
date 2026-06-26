@@ -67,6 +67,11 @@ repo file as a curated baseline while the runtime owns its own copy.
   Token-aware, so it does not trip on `git commit -m "push fix"`, and it recurses into
   `bash -c "..."` and `eval` wrappers. Fires for the main agent and all subagents. Fail-open
   on any parse error. Needs python3 on PATH.
+  An optional **auto mode** flips the guard to allow-by-default: every dangerous op (both
+  tiers) is downgraded to a single `ask` prompt and every other bash command is auto-approved
+  (`allow`). So force-push still needs an explicit yes, but nothing is hard-blocked and routine
+  commands stop prompting. Toggle it live with `touch ~/.claude/.danger-guard-auto` (`rm` to
+  disable), or at launch with `DANGER_GUARD_AUTO=1 claude`. Off by default.
 - **Stop** and **Notification**: play a Windows sound and (on permission prompts) a toast. The
   sound hooks are inline in `settings.json`; the toast goes through `notify.sh`, which resolves
   the path for both WSL (`wslpath`) and native Windows git-bash (`cygpath`) and renders
