@@ -1,31 +1,61 @@
-# STATUS: durable session-handoff skill
+# STATUS: dotclaude repo
 
 > Living state. Update at the end of every working block so a fresh session can resume from here after `/clear`.
-> Design rationale lives in `docs/durable-handoff-brief.md` (RESOLVED) and the plan at
-> `~/.claude/plans/read-docs-durable-handoff-brief-md-and-p-precious-cherny.md`. The durable decision and
-> the verified hook-capability facts live in memory (`dotclaude-handoff-skill`). This doc is current state
-> and next steps only, it does not restate those.
+> Forward-looking only: current state and next steps. Git holds the history; memory holds durable decisions
+> (`dotclaude-handoff-skill`, `dotclaude-research-sourcing-skill`). Per-effort design rationale lives in its
+> plan under `~/.claude/plans/`.
 
-Last updated: 2026-06-26
-Branch: main (origin/main in sync)
+Last updated: 2026-07-08
+Branch: feat/research-sourcing-skill (PR #10 open; merged current `main` in to clear conflicts). Base is `main`.
 
 ## Done
-- Added an opt-in **auto mode** to `hooks/danger-guard.sh` (new `auto_enabled()` helper, enabled by `DANGER_GUARD_AUTO=1` OR the sentinel file `~/.claude/.danger-guard-auto`). When on, the guard flips to allow-by-default: every dangerous op (both the deny and ask tiers) drops to a single `ask` prompt, and all other bash commands are auto-approved (`allow`). Off by default; the two-tier deny/ask behavior is unchanged when off. Verified live in both modes (env var + sentinel toggle on and off); README hooks section updated. Shipped on `feat/danger-guard-auto-mode`, merged to `main` and pushed.
-- Authored `skills/handoff/SKILL.md`: an advisory, skill-only v1 handoff procedure (survey, reconcile doc-drift as an early gate, update STATUS, curate memory, commit, leave pointers). Symlinked into `~/.claude/skills/handoff`, discoverable as `/handoff`. Commit `8bb222d` (skill plus the drift it caught when dogfooded on its own implementation).
-- Peer-reviewed and sharpened after a multi-lens critique flagged mild overengineering, redundancy, and a writing-voice caps violation: de-capped emphasis, tightened the Overview, removed a redundant meta-paragraph. Commit `681ae87`. Both commits pushed.
-- Memory entry `dotclaude-handoff-skill` records the v1 decision and the verified facts (no hook sees context fill; a hook cannot inject text that survives compaction; durable vector is a file on disk; a skill inherits to the loop-engineering inner puppet for free, a hook does not).
-- Shipped the lightweight-trigger half of the original seed recommendation: `hooks/handoff-reminder.sh`, a `UserPromptSubmit` advisory hook that nudges to invoke `/handoff` on wrap-up / handoff / clear signals. It only adds a reminder (does not perform the handoff), is fail-open, and never blocks a prompt, so the skill-only decision still holds. PR #2 (`3454cc2`, merged `ab9ba6b`); documented in README.
-- Resolved the open skill-design decision (Hayden): the handoff skill's step 3 now updates an existing living doc in place instead of creating a new STATUS.md (seeds from the template only when none exists). This STATUS.md is that living doc, so this entry is itself an in-place update.
+- Authored `skills/research-sourcing/` (`SKILL.md` + `reference.md`): a manually-invoked skill for logging
+  verifiable sources during multiagent deep-research runs. Each subagent writes a JSON shard (URL, dates,
+  verbatim `exact_quote`, the claim it supports); the orchestrator merges, dedups, spot-checks, and renders
+  `SOURCES.md`. Two tiers: `lean` (default, core fields) and `thorough` (adds access_mode / verification_status
+  / quote_trace / reliability + an orchestrator spot-check). Adapted from `~/sourced`'s citation mechanism,
+  minus the Python/pandoc/academic-tier machinery. Design + decisions in the plan
+  `~/.claude/plans/i-want-to-create-nested-adleman.md`.
+  - Manual-trigger design: the `description` names only explicit-request triggers plus a "do not fire on
+    ordinary research" guard, so it stays dormant until invoked by name. The binding mechanism is the paste-in
+    dispatch contract (`reference.md` section 2) the orchestrator inlines into every subagent prompt, because
+    subagents do not auto-load skills.
+  - Verified RED to GREEN live on an HTTP-103 research task (Agent-tool subagents). Baseline (no contract):
+    paraphrase, a bulk URL list, confabulated stats. With the contract: 12-13 per-claim entries with verbatim
+    quotes + traces, refusing to log the snippet-only claims the baseline had asserted. Shard validated as
+    well-formed JSON.
+  - README `skills/` row updated; `setup.sh` auto-globs `skills/*/`, so no wiring change; symlinked into
+    `~/.claude/skills/`.
+- Added an opt-in **auto mode** to `hooks/danger-guard.sh` (2026-06-26, commit `17d7989` on `main`): an
+  `auto_enabled()` helper (env `DANGER_GUARD_AUTO=1` or sentinel `~/.claude/.danger-guard-auto`) flips the
+  guard to allow-by-default, every dangerous op drops to a single `ask` and all other bash is `allow`. Off by
+  default; two-tier deny/ask unchanged when off. README hooks section updated.
 
 ## In flight
-- None. The v1 handoff skill, the `UserPromptSubmit` reminder hook (PR #2), and the danger-guard auto mode are all shipped.
+- None. research-sourcing is authored, tested, committed, and pushed (PR #10). danger-guard auto mode is
+  merged to `main`.
 
 ## Blocked / decisions needed
 - None.
 
 ## Notes for next session
-- Deferred work (kept consistent with the brief RESOLVED note and memory): (1) the *deterministic* PreCompact/Stop safety-net hook, revisit only after empirically testing the `SessionStart` `compact`-matcher re-inject path (open bug #15174). This is distinct from the `UserPromptSubmit` reminder hook already shipped in PR #2; the safety-net is the still-deferred piece. (2) the autonomous loop-engineering handoff (a Python orchestrator step that refreshes the RESUME block), which the interactive skill does not cover because the headless maker has no skills.
-- Skill verified live: run this session on real changes + genuine drift (the PR #5 reconcile and this wrap-up handoff). Survey, drift-reconcile, STATUS update, memory curation, and git reporting all worked. (Closes the prior "to verify" note.)
-- Evaluated and SKIPPED, do not re-raise: (a) wiring `handoff-reminder.sh` into the loop-engineering inner loop (the puppet gets one machine prompt with no human turn or wrap-up phrase, so the hook has no addressee; the skill already inherits there); (b) cross-platform notifiers (osascript / notify-send) for the toast (YAGNI on this WSL-only setup; README already documents the manual macOS/Linux swap).
-- Commit ranges: the skill shipped earlier in `8bb222d..681ae87`; the reminder hook in PR #2 (`3454cc2..ab9ba6b`). The 2026-06-19 session (`1ba4c66..0039235`) merged PR #1 (notify cross-platform), #4 (notify docs + file mode), #5 (handoff-doc reconcile), #6 (Hayden-and-Friends credit + living-doc rule), #7 (drop dead sed fallback), #8 (XML-escape the toast message). The 2026-06-26 session added danger-guard auto mode on `feat/danger-guard-auto-mode` (base `6b293a0`), merged to `main` and pushed. See `git log` on `main`.
-- Setup note: this machine was provisioned this session via `./setup.sh` (symlinks live in `~/.claude/`); `ccstatusline` was skipped because `bun` is not on PATH (blank status line until `bun install -g ccstatusline`). The local memory store is empty here (the prior `dotclaude-handoff-skill` entry is local state and did not transfer).
+- Next concrete step: PR #10 conflicts resolved via this merge; merge PR #10 to `main`.
+- research-sourcing follow-ups (all optional): (1) the thorough-tier planted-fabrication spot-check
+  (orchestrator re-opens an entry, diffs `quote_trace` against the source, unmerges + escalates on a mismatch)
+  is *specified but not exercised end-to-end*: only the subagent-side behavior change was tested live.
+  (2) Only tested with Agent-tool subagents, not a real Workflow-tool run (where agents could return structured
+  output instead of file shards). (3) `SKILL.md` is 927 words, above the ~600 aim; kept deliberately
+  (load-bearing discipline block). (4) Minor: the test subagent's `quote_trace` ran slightly longer than
+  exactly 20 chars, harmless for the substring spot-check.
+- Deferred work (also in memory `dotclaude-handoff-skill`): (1) the *deterministic* PreCompact/Stop safety-net
+  hook, revisit only after testing the `SessionStart` `compact`-matcher re-inject path (bug #15174); distinct
+  from the shipped `UserPromptSubmit` reminder hook. (2) the autonomous loop-engineering handoff (a Python
+  orchestrator step that refreshes the RESUME block).
+- Evaluated and SKIPPED, do not re-raise: (a) wiring `handoff-reminder.sh` into the loop-engineering inner
+  loop (the puppet gets one machine prompt with no wrap-up phrase, so the hook has no addressee; the skill
+  already inherits there); (b) cross-platform notifiers (osascript / notify-send) for the toast (YAGNI on this
+  WSL-only setup; README documents the manual macOS/Linux swap).
+- Commit ranges: handoff skill `8bb222d..681ae87`; reminder hook PR #2 (`3454cc2..ab9ba6b`); the 2026-06-19
+  session (`1ba4c66..0039235`) merged PRs #1 and #4 through #8; the 2026-06-26 session added danger-guard auto
+  mode (`17d7989` on `main`); the 2026-07-08 session added `skills/research-sourcing` (commit `3b25aa7`, base
+  `6b293a0`, PR #10). See `git log`.
