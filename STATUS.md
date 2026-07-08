@@ -6,7 +6,7 @@
 > plan under `~/.claude/plans/`.
 
 Last updated: 2026-07-08
-Branch: feat/research-sourcing-skill (committed + pushed; PR not yet opened). Base is `main` (6b293a0).
+Branch: feat/research-sourcing-skill (PR #10 open; merged current `main` in to clear conflicts). Base is `main`.
 
 ## Done
 - Authored `skills/research-sourcing/` (`SKILL.md` + `reference.md`): a manually-invoked skill for logging
@@ -16,36 +16,46 @@ Branch: feat/research-sourcing-skill (committed + pushed; PR not yet opened). Ba
   / quote_trace / reliability + an orchestrator spot-check). Adapted from `~/sourced`'s citation mechanism,
   minus the Python/pandoc/academic-tier machinery. Design + decisions in the plan
   `~/.claude/plans/i-want-to-create-nested-adleman.md`.
-- Manual-trigger design: the `description` names only explicit-request triggers plus a "do not fire on
-  ordinary research" guard, so it stays dormant until invoked by name. The binding mechanism is the paste-in
-  dispatch contract (`reference.md` section 2) the orchestrator inlines into every subagent prompt, because
-  subagents do not auto-load skills.
-- Verified RED->GREEN live on an HTTP-103 research task (Agent-tool subagents). Baseline (no contract):
-  paraphrase, a bulk URL list, and confabulated stats ("~93%", "Safari 17 preconnect-only"). With the
-  contract: 12-13 per-claim entries with verbatim quotes + traces, and it *refused to log* the two
-  snippet-only claims the baseline had asserted (they went to its Gaps report). Shard validated as
-  well-formed JSON against the schema.
-- README `skills/` row updated to include `research-sourcing`. `setup.sh` auto-globs `skills/*/`, so no
-  wiring change was needed; symlinked into `~/.claude/skills/`.
+  - Manual-trigger design: the `description` names only explicit-request triggers plus a "do not fire on
+    ordinary research" guard, so it stays dormant until invoked by name. The binding mechanism is the paste-in
+    dispatch contract (`reference.md` section 2) the orchestrator inlines into every subagent prompt, because
+    subagents do not auto-load skills.
+  - Verified RED to GREEN live on an HTTP-103 research task (Agent-tool subagents). Baseline (no contract):
+    paraphrase, a bulk URL list, confabulated stats. With the contract: 12-13 per-claim entries with verbatim
+    quotes + traces, refusing to log the snippet-only claims the baseline had asserted. Shard validated as
+    well-formed JSON.
+  - README `skills/` row updated; `setup.sh` auto-globs `skills/*/`, so no wiring change; symlinked into
+    `~/.claude/skills/`.
+- Added an opt-in **auto mode** to `hooks/danger-guard.sh` (2026-06-26, commit `17d7989` on `main`): an
+  `auto_enabled()` helper (env `DANGER_GUARD_AUTO=1` or sentinel `~/.claude/.danger-guard-auto`) flips the
+  guard to allow-by-default, every dangerous op drops to a single `ask` and all other bash is `allow`. Off by
+  default; two-tier deny/ask unchanged when off. README hooks section updated.
 
 ## In flight
-- None. The skill is authored, tested, committed on `feat/research-sourcing-skill`, and pushed.
+- None. research-sourcing is authored, tested, committed, and pushed (PR #10). danger-guard auto mode is
+  merged to `main`.
 
 ## Blocked / decisions needed
 - None.
 
 ## Notes for next session
-- Next concrete step: open a PR for `feat/research-sourcing-skill` and merge to `main` (prior work all went
-  through PRs).
+- Next concrete step: PR #10 conflicts resolved via this merge; merge PR #10 to `main`.
 - research-sourcing follow-ups (all optional): (1) the thorough-tier planted-fabrication spot-check
   (orchestrator re-opens an entry, diffs `quote_trace` against the source, unmerges + escalates on a mismatch)
-  is *specified but not exercised end-to-end* — only the subagent-side behavior change was tested live.
-  (2) Only tested with Agent-tool subagents, not a real Workflow-tool run (where agents could return
-  structured output instead of file shards). (3) `SKILL.md` is 927 words, above the ~600 aim; kept
-  deliberately (load-bearing discipline block); revisit only if it feels heavy in use. (4) Minor: the test
-  subagent's `quote_trace` ran slightly longer than exactly 20 chars — harmless for the substring spot-check.
-- Carried-forward deferred work from the handoff effort (unchanged, also in memory `dotclaude-handoff-skill`):
-  (1) the *deterministic* PreCompact/Stop safety-net hook, revisit only after testing the `SessionStart`
-  `compact`-matcher re-inject path (bug #15174); distinct from the shipped `UserPromptSubmit` reminder hook.
-  (2) the autonomous loop-engineering handoff (a Python orchestrator step that refreshes the RESUME block).
-- Commit range this session: `6b293a0..` this branch's tip. See `git log feat/research-sourcing-skill`.
+  is *specified but not exercised end-to-end*: only the subagent-side behavior change was tested live.
+  (2) Only tested with Agent-tool subagents, not a real Workflow-tool run (where agents could return structured
+  output instead of file shards). (3) `SKILL.md` is 927 words, above the ~600 aim; kept deliberately
+  (load-bearing discipline block). (4) Minor: the test subagent's `quote_trace` ran slightly longer than
+  exactly 20 chars, harmless for the substring spot-check.
+- Deferred work (also in memory `dotclaude-handoff-skill`): (1) the *deterministic* PreCompact/Stop safety-net
+  hook, revisit only after testing the `SessionStart` `compact`-matcher re-inject path (bug #15174); distinct
+  from the shipped `UserPromptSubmit` reminder hook. (2) the autonomous loop-engineering handoff (a Python
+  orchestrator step that refreshes the RESUME block).
+- Evaluated and SKIPPED, do not re-raise: (a) wiring `handoff-reminder.sh` into the loop-engineering inner
+  loop (the puppet gets one machine prompt with no wrap-up phrase, so the hook has no addressee; the skill
+  already inherits there); (b) cross-platform notifiers (osascript / notify-send) for the toast (YAGNI on this
+  WSL-only setup; README documents the manual macOS/Linux swap).
+- Commit ranges: handoff skill `8bb222d..681ae87`; reminder hook PR #2 (`3454cc2..ab9ba6b`); the 2026-06-19
+  session (`1ba4c66..0039235`) merged PRs #1 and #4 through #8; the 2026-06-26 session added danger-guard auto
+  mode (`17d7989` on `main`); the 2026-07-08 session added `skills/research-sourcing` (commit `3b25aa7`, base
+  `6b293a0`, PR #10). See `git log`.
