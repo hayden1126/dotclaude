@@ -5,10 +5,17 @@
 > (`dotclaude-handoff-skill`, `dotclaude-research-sourcing-skill`). Per-effort design rationale lives in its
 > plan under `~/.claude/plans/`.
 
-Last updated: 2026-07-08
+Last updated: 2026-07-09
 Branch: feat/research-sourcing-skill (PR #10 open; merged current `main` in to clear conflicts). Base is `main`.
 
 ## Done
+- Upgraded `skills/staged-reader-review/SKILL.md` to the sourced-bundle version (2026-07-09, byte-identical
+  to sourced PR #77). Dual-home decision: the skill lives in both this repo (the no-sourced distribution
+  channel) and the sourced bundle (canonical); the `~/.claude/skills/staged-reader-review` symlink into this
+  repo stays, and `sourced global-install` writing through it is the sync mechanism, so a future bundle
+  change surfaces here as a diff to commit. New in this version: the forced artifact
+  `<draft>.reader-review.md` (stable S/RR/RN ids, fixed three-value verdict), the sourced editing-gate
+  pre-flight record, rendered-output input rules, and no em dashes.
 - Authored `skills/research-sourcing/` (`SKILL.md` + `reference.md`): a manually-invoked skill for logging
   verifiable sources during multiagent deep-research runs. Each subagent writes a JSON shard (URL, dates,
   verbatim `exact_quote`, the claim it supports); the orchestrator merges, dedups, spot-checks, and renders
