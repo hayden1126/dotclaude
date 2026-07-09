@@ -29,8 +29,14 @@ STYLE = {
 }
 MSG_STYLE = ('Msg', 97, 189)
 # Total-context chip: green when comfortable, amber past 50% of the window,
-# red past 66% (~400k of a 600k window).
-TOTAL_STYLE = [(0.66, 88, 210), (0.50, 130, 215), (0.0, 22, 114)]
+# red past 66% (~400k of a 600k window), and blinking bright red with bold
+# white text past ~83% (~500k). Terminals without blink support show it static.
+TOTAL_STYLE = [
+    (0.83, 196, 231, '\x1b[1m\x1b[5m'),
+    (0.66, 88, 210, ''),
+    (0.50, 130, 215, ''),
+    (0.0, 22, 114, ''),
+]
 RESET = '\x1b[0m'
 
 
@@ -42,9 +48,9 @@ def total_chip(total, window):
     if not window:
         return f'Ctx {fmt(total)}'
     frac = total / window
-    for threshold, bg, fg in TOTAL_STYLE:
+    for threshold, bg, fg, attrs in TOTAL_STYLE:
         if frac >= threshold:
-            return chip('Ctx', fmt(total), bg, fg)
+            return attrs + chip('Ctx', fmt(total), bg, fg)
 SKIP = {'Messages', 'Free space', 'Autocompact buffer'}
 CAT_RE = re.compile(r'([A-Z][A-Za-z.]*(?: [a-z][a-z.]+)*):\s*([\d.]+k?)\s*tokens?\s*\(([\d.]+)%\)')
 MARKER = b'Estimated usage by category'
