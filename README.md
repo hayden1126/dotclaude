@@ -39,6 +39,8 @@ repo file as a curated baseline while the runtime owns its own copy.
 | `notify-toast.ps1` | Windows toast script that `notify.sh` renders for the Notification hook | symlink `~/.claude/notify-toast.ps1` |
 | `plugins/marketplaces.json` | Marketplaces to register | consumed by `setup.sh` |
 | `plugins/enabled.json` | Plugins to install and enable | consumed by `setup.sh` |
+| `statusline/ctx-breakdown.py` | ccstatusline widget: colored per-category context chips (system prompt, tools, agents, memory, skills, MCP, messages) | symlink `~/.config/ccstatusline/ctx-breakdown.py` |
+| `statusline/ccstatusline-settings.json` | ccstatusline layout baseline that wires the widget in | installed by `setup.sh` to `~/.config/ccstatusline/settings.json` (paths patched per machine) |
 | `tools.json` | Standalone CLI tools (ccstatusline via bun) | consumed by `setup.sh` |
 | `docs/PLUGINS.md` | One-line description of each plugin | reference |
 | `setup.sh` | The installer | run once per machine |
@@ -84,6 +86,17 @@ repo file as a curated baseline while the runtime owns its own copy.
 `$HOME/.bun/bin/ccstatusline`. `setup.sh` installs it from `tools.json` with
 `bun install -g ccstatusline`. If bun is not on PATH the status line is blank but Claude Code
 works fine.
+
+`statusline/ctx-breakdown.py` adds a custom widget that splits context usage into colored
+chips by category: system prompt, system tools, custom agents, memory, skills, MCP, and
+messages. Claude Code only exposes lump token totals to statusline scripts, so the widget
+parses the fixed-overhead categories from the most recent `/context` output stored in the
+session transcript, and computes the messages figure live (total minus overhead) from the
+totals piped on stdin. Run `/context` once per session to seed the split; until then the
+widget shows the total with a hint. The total chip is green, turns amber past 50% of the
+context window, red past 66%, and blinking bright red past 83% (about 400k and 500k of a
+600k window; terminals without blink support show it static). The widget lives in
+ccstatusline's config dir, so reinstalling or upgrading ccstatusline never touches it.
 
 ## What's deliberately not here
 

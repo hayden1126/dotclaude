@@ -137,7 +137,52 @@ for name, spec in tools.items():
 PY
 
 # ---------------------------------------------------------------------------
-# 5. Final checklist
+# 5. Status line widget (~/.config/ccstatusline)
+# ---------------------------------------------------------------------------
+# ctx-breakdown.py renders per-category context chips in the status line. It
+# lives in ccstatusline's own config dir (survives ccstatusline reinstalls).
+# The settings baseline carries a placeholder commandPath; we patch it here
+# with this machine's absolute python and script paths, because ccstatusline
+# executes widget commands through the platform shell where $HOME/%USERPROFILE%
+# expansion is not portable.
+CC_CFG_DIR="$HOME/.config/ccstatusline"
+link "$REPO_DIR/statusline/ctx-breakdown.py" "$CC_CFG_DIR/ctx-breakdown.py"
+python3 - "$REPO_DIR/statusline/ccstatusline-settings.json" "$CC_CFG_DIR/settings.json" <<'PY'
+import json, os, shutil, sys, time
+baseline_path, dst = sys.argv[1], sys.argv[2]
+script = os.path.join(os.path.dirname(dst), 'ctx-breakdown.py')
+cmd = f'"{sys.executable}" "{script}"'
+
+def has_widget(settings):
+    return any(w.get('type') == 'custom-command'
+               and 'ctx-breakdown' in (w.get('commandPath') or '')
+               for line in settings.get('lines', []) for w in line)
+
+settings = None
+try:
+    with open(dst) as f:
+        settings = json.load(f)
+except (OSError, ValueError):
+    pass
+if settings is None or not has_widget(settings):
+    if settings is not None:
+        backup = f'{dst}.pre-dotclaude-{int(time.time())}'
+        shutil.copy(dst, backup)
+        print(f'!! existing ccstatusline settings lacked the widget; backed up to {backup}')
+    with open(baseline_path) as f:
+        settings = json.load(f)
+for line in settings.get('lines', []):
+    for w in line:
+        if w.get('type') == 'custom-command' and 'ctx-breakdown' in (w.get('commandPath') or ''):
+            w['commandPath'] = cmd
+os.makedirs(os.path.dirname(dst), exist_ok=True)
+with open(dst, 'w') as f:
+    json.dump(settings, f, indent=2)
+print('==> ccstatusline settings installed (ctx-breakdown widget wired)')
+PY
+
+# ---------------------------------------------------------------------------
+# 6. Final checklist
 # ---------------------------------------------------------------------------
 cat <<'EOF'
 
@@ -151,6 +196,8 @@ cat <<'EOF'
  2.  Status line uses ccstatusline (installed via bun from tools.json).
      If bun was not on PATH, install bun then run:
        bun install -g ccstatusline
+     The context chips widget needs one /context run per session to pick
+     up the category split; until then it shows the total with a hint.
 
  3.  Re-authenticate any MCP servers (context7, chrome-devtools) from
      inside Claude Code with /mcp.
