@@ -36,6 +36,24 @@
         "id": "7",
         "type": "git-changes",
         "color": "yellow"
+      },
+      {
+        "id": "8",
+        "type": "separator"
+      },
+      {
+        "id": "9",
+        "type": "session-usage",
+        "color": "brightBlue"
+      },
+      {
+        "id": "10",
+        "type": "separator"
+      },
+      {
+        "id": "11",
+        "type": "weekly-usage",
+        "color": "brightBlue"
       }
     ],
     [],

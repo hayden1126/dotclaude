@@ -69,22 +69,23 @@ def fmt(n):
 
 
 def parse_breakdown(path):
-    """Return {category: tokens} from the last /context dump in the transcript."""
+    """Return ({category: tokens}, autocompact_window) from the last /context
+    dump in the transcript. Either element may be None."""
     try:
         size = os.path.getsize(path)
     except OSError:
-        return None
+        return None, None
     cache = os.path.join(tempfile.gettempdir(),
                          'ctx-breakdown-' + re.sub(r'\W', '_', path)[-80:] + '.json')
     try:
         with open(cache, encoding='utf-8') as f:
             c = json.load(f)
         if c.get('size') == size:
-            return c.get('cats') or None
+            return c.get('cats') or None, c.get('acw')
     except (OSError, ValueError):
         pass
 
-    cats = None
+    cats = acw = None
     try:
         with open(path, 'rb') as f:
             data = f.read()
@@ -97,6 +98,9 @@ def parse_breakdown(path):
             # /context lines are ANSI-heavy: a category line can run long
             chunk = data[pos:pos + 8000].decode('utf-8', 'ignore')
             chunk = re.sub(r'\x1b\[[0-9;]*m', '', chunk)
+            m = re.search(r'Auto-compact window:\s*([\d.]+k?)', chunk)
+            if m:
+                acw = to_tokens(m.group(1))
             chunk = chunk.split('Auto-compact window', 1)[0]
             found = {}
             for m in CAT_RE.finditer(chunk):
@@ -106,14 +110,14 @@ def parse_breakdown(path):
             if len(found) >= 3:
                 cats = found
     except OSError:
-        return None
+        return None, None
 
     try:
         with open(cache, 'w', encoding='utf-8') as f:
-            json.dump({'size': size, 'cats': cats}, f)
+            json.dump({'size': size, 'cats': cats, 'acw': acw}, f)
     except OSError:
         pass
-    return cats
+    return cats, acw
 
 
 def main():
@@ -132,13 +136,16 @@ def main():
         print('Ctx ?')
         return
 
-    window = cw.get('context_window_size')
-    head = total_chip(total, window)
-
-    cats = None
+    cats = acw = None
     tp = data.get('transcript_path')
     if tp:
-        cats = parse_breakdown(tp)
+        cats, acw = parse_breakdown(tp)
+    # Threshold base: the smaller of the model window and the auto-compact
+    # window, since compaction fires at the latter.
+    candidates = [w for w in (cw.get('context_window_size'), acw) if w]
+    window = min(candidates) if candidates else None
+    head = total_chip(total, window)
+
     if not cats:
         print(f'{head} (run /context for split)')
         return
