@@ -43,6 +43,9 @@ repo file as a curated baseline while the runtime owns its own copy.
 | `statusline/ccstatusline-settings.json` | ccstatusline layout baseline that wires the widget in | installed by `setup.sh` to `~/.config/ccstatusline/settings.json` (paths patched per machine) |
 | `tools.json` | Standalone CLI tools (ccstatusline via bun) | consumed by `setup.sh` |
 | `docs/PLUGINS.md` | One-line description of each plugin | reference |
+| `docs/chrome-devtools-wsl.md` | WSL2-only: how to make `chrome-devtools-mcp` work (Strategy A headless Linux Chrome, plus B to attach to your Windows Chrome) | reference |
+| `chrome-debug.ps1` | Windows launcher for Strategy B (Chrome with a remote-debugging port) | run on Windows when needed |
+| `setup-chrome-wsl.sh` | Opt-in WSL2 installer: installs Chrome for Testing and registers the user-scoped `chrome-devtools` override | run once on WSL2; not called by `setup.sh` |
 | `setup.sh` | The installer | run once per machine |
 | `sync.sh` | Regenerates the derived plugin lists from live `~/.claude/` | run after plugin changes |
 
@@ -52,6 +55,10 @@ repo file as a curated baseline while the runtime owns its own copy.
 [anthropics/claude-plugins-official](https://github.com/anthropics/claude-plugins-official):
 `superpowers`, `code-review`, `commit-commands`, `claude-md-management`, `hookify`, `context7`,
 `chrome-devtools-mcp`. See `docs/PLUGINS.md` for what each does.
+
+`chrome-devtools-mcp` works out of the box on Linux and macOS. On WSL2 it cannot launch Chrome;
+run `./setup-chrome-wsl.sh` once to fix it (see `docs/chrome-devtools-wsl.md`). Non-WSL users
+need nothing extra.
 
 ## Hooks
 
