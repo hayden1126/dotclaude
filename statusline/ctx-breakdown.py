@@ -32,13 +32,14 @@ MSG_STYLE = ('Msg', 97, 189)
 MIN_CHIP = 10_000
 ETC_STYLE = ('Etc', 236, 245)
 # Total-context chip: green when comfortable, amber past 50% of the window,
-# red past 66% (~400k of a 600k window), and blinking bright red with bold
-# white text past ~83% (~500k). Terminals without blink support show it static.
+# red past 66% (~400k of a 600k window). Past ~83% (~500k) it inverts to
+# bold black-on-white with a "Ctx!" label; the blink attribute is included
+# but Claude Code's TUI and some terminals drop it, hence the inverted look.
 TOTAL_STYLE = [
-    (0.83, 196, 231, '\x1b[1m\x1b[5m'),
-    (0.66, 88, 210, ''),
-    (0.50, 130, 215, ''),
-    (0.0, 22, 114, ''),
+    (0.83, 231, 16, '\x1b[1m\x1b[5m', 'Ctx!'),
+    (0.66, 88, 210, '', 'Ctx'),
+    (0.50, 130, 215, '', 'Ctx'),
+    (0.0, 22, 114, '', 'Ctx'),
 ]
 RESET = '\x1b[0m'
 
@@ -51,9 +52,9 @@ def total_chip(total, window):
     if not window:
         return f'Ctx {fmt(total)}'
     frac = total / window
-    for threshold, bg, fg, attrs in TOTAL_STYLE:
+    for threshold, bg, fg, attrs, label in TOTAL_STYLE:
         if frac >= threshold:
-            return attrs + chip('Ctx', fmt(total), bg, fg)
+            return attrs + chip(label, fmt(total), bg, fg)
 SKIP = {'Messages', 'Free space', 'Autocompact buffer'}
 CAT_RE = re.compile(r'([A-Z][A-Za-z.]*(?: [a-z][a-z.]+)*):\s*([\d.]+k?)\s*tokens?\s*\(([\d.]+)%\)')
 MARKER = b'Estimated usage by category'
