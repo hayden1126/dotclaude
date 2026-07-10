@@ -42,5 +42,7 @@ research-discipline skill points here for docs lookups.
 ## `chrome-devtools-mcp`
 
 Drives a real Chrome instance over the DevTools Protocol: click, type, screenshot, inspect
-network and console, run traces and audits. Needs Chrome started with
-`--remote-debugging-port=9222`.
+network and console, run traces and audits. Works out of the box on Linux and macOS. On WSL2
+the stock server cannot launch Chrome; a machine-local, opt-in override fixes it (not applied
+by `setup.sh`). WSL2 users: see [chrome-devtools-wsl.md](chrome-devtools-wsl.md). Everyone
+else needs nothing.
