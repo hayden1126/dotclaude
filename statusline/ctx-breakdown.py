@@ -127,6 +127,17 @@ def parse_breakdown(path):
     return cats, acw
 
 
+def autocompact_setting():
+    """autoCompactWindow from the active config dir's settings.json, if set."""
+    cfg = os.environ.get('CLAUDE_CONFIG_DIR') or os.path.expanduser('~/.claude')
+    try:
+        with open(os.path.join(cfg, 'settings.json'), encoding='utf-8') as f:
+            v = json.load(f).get('autoCompactWindow')
+        return v if isinstance(v, (int, float)) and v > 0 else None
+    except (OSError, ValueError):
+        return None
+
+
 def main():
     try:
         data = json.load(sys.stdin)
@@ -147,9 +158,11 @@ def main():
     tp = data.get('transcript_path')
     if tp:
         cats, acw = parse_breakdown(tp)
-    # Threshold base: the smaller of the model window and the auto-compact
-    # window, since compaction fires at the latter.
-    candidates = [w for w in (cw.get('context_window_size'), acw) if w]
+    # Threshold base: the smallest of the model window, the auto-compact
+    # window reported by /context, and the autoCompactWindow setting --
+    # compaction fires at the auto-compact point, not the model window.
+    candidates = [w for w in
+                  (cw.get('context_window_size'), acw, autocompact_setting()) if w]
     window = min(candidates) if candidates else None
     head = total_chip(total, window)
 
