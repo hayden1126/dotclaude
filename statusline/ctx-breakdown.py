@@ -28,6 +28,9 @@ STYLE = {
     'Hooks': ('Hk', 238, 250),
 }
 MSG_STYLE = ('Msg', 97, 189)
+# Categories below this get folded into one dim "Etc" chip to keep the bar short.
+MIN_CHIP = 10_000
+ETC_STYLE = ('Etc', 236, 245)
 # Total-context chip: green when comfortable, amber past 50% of the window,
 # red past 66% (~400k of a 600k window), and blinking bright red with bold
 # white text past ~83% (~500k). Terminals without blink support show it static.
@@ -153,11 +156,16 @@ def main():
     overhead = sum(cats.values())
     msgs = max(0, total - overhead)
     chips = []
+    etc = 0
     for k, v in cats.items():
-        if v < 50:
+        if v < MIN_CHIP:
+            etc += v
             continue
         label, bg, fg = STYLE.get(k, (k[:3], 238, 250))
         chips.append(chip(label, fmt(v), bg, fg))
+    if etc >= 1000:
+        label, bg, fg = ETC_STYLE
+        chips.append(chip(label, fmt(etc), bg, fg))
     label, bg, fg = MSG_STYLE
     chips.append(chip(label, fmt(msgs), bg, fg))
     print(head + ''.join(chips))
