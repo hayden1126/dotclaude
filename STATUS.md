@@ -6,7 +6,7 @@
 > design rationale lives in its plan under `~/.claude/plans/`.
 
 Last updated: 2026-07-10
-Branch: feat/chrome-devtools-wsl (off `main` at `4df5a49`). Committed, NOT pushed, no PR yet. Base is `main`.
+Branch: feat/chrome-devtools-wsl (off `main` at `4df5a49`). Pushed; PR #13 open. Base is `main`.
 
 ## Done
 - **WSL2 `chrome-devtools-mcp` fix (opt-in).** The plugin's default server fails to launch Chrome on WSL2
@@ -31,15 +31,15 @@ Branch: feat/chrome-devtools-wsl (off `main` at `4df5a49`). Committed, NOT pushe
     repo, and the fix is NOT wired into `setup.sh`, so non-WSL users are unaffected.
 
 ## In flight
-- None. Work is committed on `feat/chrome-devtools-wsl`.
+- PR #13 open (https://github.com/hayden1126/dotclaude/pull/13), awaiting review/merge.
 
 ## Blocked / decisions needed
-- Push + PR for `feat/chrome-devtools-wsl` awaits Hayden's approval (push is never automatic).
+- None. PR #13 is open; merge at will.
 
 ## Notes for next session
-- Next concrete step: if approved, `git push -u origin feat/chrome-devtools-wsl` and open a PR. To activate
-  the fix in a live session on THIS machine, fully restart Claude Code; `/mcp` should then list
-  `chrome-devtools` as Connected and the browser tools work with no manual Chrome launch.
+- Next concrete step: review/merge PR #13. To activate the fix in a live session on THIS machine, fully
+  restart Claude Code; `/mcp` should then list `chrome-devtools` as Connected and the browser tools work with
+  no manual Chrome launch.
 - A fresh clone on a new WSL machine needs `./setup-chrome-wsl.sh` run once (the override is in `~/.claude.json`
   user scope, not the repo). Non-WSL machines need nothing.
 - Prior shipped work (all merged, see `git log`): research-sourcing skill (PR #10), staged-reader-review
