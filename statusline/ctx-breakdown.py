@@ -100,6 +100,10 @@ def parse_breakdown(path):
                 break
             # /context lines are ANSI-heavy: a category line can run long
             chunk = data[pos:pos + 8000].decode('utf-8', 'ignore')
+            # The command-time transcript entry stores ANSI codes JSON-escaped
+            # (a literal backslash-u001b sequence in the raw bytes); the copy
+            # attached to the next user message has raw ESC bytes. Handle both.
+            chunk = chunk.replace('\\u001b', '\x1b')
             chunk = re.sub(r'\x1b\[[0-9;]*m', '', chunk)
             m = re.search(r'Auto-compact window:\s*([\d.]+k?)', chunk)
             if m:
