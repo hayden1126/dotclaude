@@ -16,8 +16,13 @@ The percent is total / window. Flags opt in to more:
            Ctx 85.4k 43% ▏ [Sys 4.2k][Tool 18.1k][Mem 3.1k][Skl 5.9k][Msg 54k]
            (fallback before the first /context run:  Ctx 85k 43% (run /context))
   --conf   render a standalone Conf chip (active config dir) instead
+  --no-pct drop the percent from the total chip (tier colors still apply)
 """
 import sys, json, os, re, tempfile
+
+# ccstatusline pipes stdout, where Windows Python defaults to cp1252 and the
+# divider glyph below raises UnicodeEncodeError, blanking the whole widget.
+sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 
 # (label, 256-color bg, 256-color fg) - hues follow /context's own legend
 STYLE = {
@@ -53,11 +58,11 @@ def chip(label, value, bg, fg):
     return f'\x1b[48;5;{bg}m\x1b[38;5;{fg}m {label} {value} {RESET}'
 
 
-def total_chip(total, window):
+def total_chip(total, window, show_pct=True):
     if not window:
         return f'Ctx {fmt(total)}'
     frac = total / window
-    value = f'{fmt(total)} {frac * 100:.0f}%'
+    value = f'{fmt(total)} {frac * 100:.0f}%' if show_pct else fmt(total)
     for threshold, bg, fg, attrs, label in TOTAL_STYLE:
         if frac >= threshold:
             return attrs + chip(label, value, bg, fg)
@@ -186,7 +191,7 @@ def main():
     candidates = [w for w in
                   (cw.get('context_window_size'), acw, autocompact_setting(cfg)) if w]
     window = min(candidates) if candidates else None
-    head = total_chip(total, window)
+    head = total_chip(total, window, '--no-pct' not in sys.argv[1:])
 
     if '--chips' not in sys.argv[1:]:
         print(head)
