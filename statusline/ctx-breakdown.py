@@ -128,9 +128,19 @@ def parse_breakdown(path):
     return cats, acw
 
 
-def autocompact_setting():
-    """autoCompactWindow from the active config dir's settings.json, if set."""
-    cfg = os.environ.get('CLAUDE_CONFIG_DIR') or os.path.expanduser('~/.claude')
+def autocompact_setting(transcript_path):
+    """autoCompactWindow from the active config dir's settings.json, if set.
+
+    The config dir is derived from the transcript path (always
+    <config-dir>/projects/<project>/<session>.jsonl) because Claude Code does
+    not pass CLAUDE_CONFIG_DIR through to child processes."""
+    cfg = None
+    if transcript_path:
+        candidate = os.path.dirname(os.path.dirname(os.path.dirname(transcript_path)))
+        if os.path.basename(os.path.dirname(os.path.dirname(transcript_path))) == 'projects':
+            cfg = candidate
+    if not cfg:
+        cfg = os.environ.get('CLAUDE_CONFIG_DIR') or os.path.expanduser('~/.claude')
     try:
         with open(os.path.join(cfg, 'settings.json'), encoding='utf-8') as f:
             v = json.load(f).get('autoCompactWindow')
@@ -163,7 +173,7 @@ def main():
     # window reported by /context, and the autoCompactWindow setting --
     # compaction fires at the auto-compact point, not the model window.
     candidates = [w for w in
-                  (cw.get('context_window_size'), acw, autocompact_setting()) if w]
+                  (cw.get('context_window_size'), acw, autocompact_setting(tp)) if w]
     window = min(candidates) if candidates else None
     head = total_chip(total, window)
 
