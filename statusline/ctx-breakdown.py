@@ -36,10 +36,12 @@ MSG_STYLE = ('Msg', 53, 140)
 MIN_CHIP = 10_000
 ETC_STYLE = ('Etc', 236, 245)
 CONF_STYLE = (24, 117)
-# Total-context chip: green while comfortable, bold red with a "Ctx!" label
-# past ~83% of the window (~500k of a 600k window), where compaction is close.
+# Total-context chip: green while comfortable, dark red past 66% of the
+# window, bright bold red with a "Ctx!" label past ~83% (~500k of a 600k
+# window), where compaction is close.
 TOTAL_STYLE = [
-    (0.83, 88, 210, '\x1b[1m', 'Ctx!'),
+    (0.83, 160, 231, '\x1b[1m', 'Ctx!'),
+    (0.66, 88, 210, '', 'Ctx'),
     (0.0, 22, 114, '', 'Ctx'),
 ]
 RESET = '\x1b[0m'
