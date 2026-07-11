@@ -10,6 +10,11 @@ Base: `main`. For branch / PR / push state, run `gh pr list` and `git log main..
 stored here).
 
 ## Done (recent; git holds the detail)
+- **Status-line ctx chip: percent + divider** (2026-07-11, follow-up to PR #12).
+  `statusline/ctx-breakdown.py` total chip now renders its share of the (auto-compact) window as a
+  percent and is set off from the per-category chips by a dim `▏`; README prose updated to match.
+  Widget is now actually installed live on this machine (setup.sh had not been re-run since PR #12
+  merged, so it had never been active). Derive PR/merge state with `gh pr list`.
 - **Handoff-lifecycle hardening** (2026-07-11, `4df5a49..af14b97`). Three parts: (1)
   `skills/handoff/SKILL.md` now enforces prune-as-you-write (delete-test, one overwritten next-session
   block, ~100-120 line ceiling) and a "Volatile git state: derive, never store" rule (push/merge/PR
