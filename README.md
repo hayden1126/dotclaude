@@ -43,6 +43,9 @@ repo file as a curated baseline while the runtime owns its own copy.
 | `statusline/ccstatusline-settings.json` | ccstatusline layout baseline that wires the widget in | installed by `setup.sh` to `~/.config/ccstatusline/settings.json` (paths patched per machine) |
 | `tools.json` | Standalone CLI tools (ccstatusline via bun) | consumed by `setup.sh` |
 | `docs/PLUGINS.md` | One-line description of each plugin | reference |
+| `docs/chrome-devtools-wsl.md` | WSL2-only: how to make `chrome-devtools-mcp` work (Strategy A headless Linux Chrome, plus B to attach to your Windows Chrome) | reference |
+| `chrome-debug.ps1` | Windows launcher for Strategy B (Chrome with a remote-debugging port) | run on Windows when needed |
+| `setup-chrome-wsl.sh` | Opt-in WSL2 installer: installs Chrome for Testing and registers the user-scoped `chrome-devtools` override | run once on WSL2; not called by `setup.sh` |
 | `setup.sh` | The installer | run once per machine |
 | `sync.sh` | Regenerates the derived plugin lists from live `~/.claude/` | run after plugin changes |
 
@@ -53,15 +56,20 @@ repo file as a curated baseline while the runtime owns its own copy.
 `superpowers`, `code-review`, `commit-commands`, `claude-md-management`, `hookify`, `context7`,
 `chrome-devtools-mcp`. See `docs/PLUGINS.md` for what each does.
 
+`chrome-devtools-mcp` works out of the box on Linux and macOS. On WSL2 it cannot launch Chrome;
+run `./setup-chrome-wsl.sh` once to fix it (see `docs/chrome-devtools-wsl.md`). Non-WSL users
+need nothing extra.
+
 ## Hooks
 
 `settings.json` wires four lifecycle hooks:
 
-- **UserPromptSubmit: `handoff-reminder.sh`** (in this repo). When a prompt looks like a session
-  wrap-up or context reset (`hand off`, `wrap up`, `stop here`, `clear context`, `fresh session`,
-  etc.), it injects a one-line reminder
+- **UserPromptSubmit: `handoff-reminder.sh`** (in this repo). When a prompt is a genuine session
+  wrap-up or context-reset command (`hand off`, `wrap up`, `stop here`, `clear context`, `/clear`),
+  it injects a one-line reminder
   to invoke the `handoff` skill rather than improvising its steps (which kept dropping the
-  curate-memory step). Advisory only: it adds context, it cannot run the skill; silent no-op
+  curate-memory step). Precision-first: it stays silent when "handoff" is just a topic (discussing
+  the skill or this hook) and on injected system content (task notifications). Advisory only: it adds context, it cannot run the skill; silent no-op
   otherwise; always exits 0 so it can never block a prompt. Fail-open if `jq` is absent.
 - **PreToolUse(Bash): `danger-guard.sh`** (in this repo). Two tiers. It hard-blocks
   (`deny`) never-legitimate ops (force-push, `reset --hard`, `git clean -f`) and prompts
@@ -93,10 +101,12 @@ messages. Claude Code only exposes lump token totals to statusline scripts, so t
 parses the fixed-overhead categories from the most recent `/context` output stored in the
 session transcript, and computes the messages figure live (total minus overhead) from the
 totals piped on stdin. Run `/context` once per session to seed the split; until then the
-widget shows the total with a hint. The total chip is green, turns amber past 50% of the
-context window, red past 66%, and blinking bright red past 83% (about 400k and 500k of a
-600k window; terminals without blink support show it static). The widget lives in
-ccstatusline's config dir, so reinstalling or upgrading ccstatusline never touches it.
+widget shows the total with a hint. The total chip shows the token count and its percent
+of the window, set off from the per-category chips by a thin divider; it is green, turns
+amber past 50% of the context window, red past 66%, and blinking bright red past 83%
+(about 400k and 500k of a 600k window; terminals without blink support show it static).
+The widget lives in ccstatusline's config dir, so reinstalling or upgrading ccstatusline
+never touches it.
 
 ## What's deliberately not here
 
