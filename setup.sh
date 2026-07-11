@@ -175,7 +175,8 @@ for line in settings.get('lines', []):
     for w in line:
         old = w.get('commandPath') or ''
         if w.get('type') == 'custom-command' and 'ctx-breakdown' in old:
-            w['commandPath'] = cmd + (' --conf' if '--conf' in old else '')
+            flags = [t for t in old.split() if t.startswith('--')]
+            w['commandPath'] = ' '.join([cmd] + flags)
 os.makedirs(os.path.dirname(dst), exist_ok=True)
 with open(dst, 'w') as f:
     json.dump(settings, f, indent=2)

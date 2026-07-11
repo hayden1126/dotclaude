@@ -8,11 +8,14 @@ Messages live as total_context - overhead. Categories other than Messages
 only change when config changes, so one /context run per session keeps the
 split honest for the whole session.
 
-Output: colored background "chips", one per category (needs preserveColors:
-true on the widget so ccstatusline passes the ANSI codes through):
-  Ctx 85.4k 43% ▏ [Sys 4.2k][Tool 18.1k][Mem 3.1k][Skl 5.9k][Msg 54k]
-The percent is total / window; a dim ▏ divides the total from its breakdown.
-Fallback (no /context run yet):  Ctx 85k 43% (run /context for split)
+Default output is the total chip only (needs preserveColors: true on the
+widget so ccstatusline passes the ANSI codes through):
+  Ctx 85.4k 43%
+The percent is total / window. Flags opt in to more:
+  --chips  append per-category breakdown chips after a dim ▏ divider:
+           Ctx 85.4k 43% ▏ [Sys 4.2k][Tool 18.1k][Mem 3.1k][Skl 5.9k][Msg 54k]
+           (fallback before the first /context run:  Ctx 85k 43% (run /context))
+  --conf   render a standalone Conf chip (active config dir) instead
 """
 import sys, json, os, re, tempfile
 
@@ -33,14 +36,10 @@ MSG_STYLE = ('Msg', 53, 140)
 MIN_CHIP = 10_000
 ETC_STYLE = ('Etc', 236, 245)
 CONF_STYLE = (24, 117)
-# Total-context chip: green when comfortable, amber past 50% of the window,
-# red past 66% (~400k of a 600k window). Past ~83% (~500k) it inverts to
-# bold black-on-white with a "Ctx!" label; the blink attribute is included
-# but Claude Code's TUI and some terminals drop it, hence the inverted look.
+# Total-context chip: green while comfortable, bold red with a "Ctx!" label
+# past ~83% of the window (~500k of a 600k window), where compaction is close.
 TOTAL_STYLE = [
-    (0.83, 231, 16, '\x1b[1m\x1b[5m', 'Ctx!'),
-    (0.66, 88, 210, '', 'Ctx'),
-    (0.50, 130, 215, '', 'Ctx'),
+    (0.83, 88, 210, '\x1b[1m', 'Ctx!'),
     (0.0, 22, 114, '', 'Ctx'),
 ]
 RESET = '\x1b[0m'
@@ -187,6 +186,9 @@ def main():
     window = min(candidates) if candidates else None
     head = total_chip(total, window)
 
+    if '--chips' not in sys.argv[1:]:
+        print(head)
+        return
     if not cats:
         print(f'{head} (run /context for split)')
         return

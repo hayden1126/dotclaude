@@ -34,14 +34,6 @@
         "type": "separator"
       },
       {
-        "id": "13",
-        "type": "custom-command",
-        "color": "brightBlack",
-        "commandPath": "python ctx-breakdown.py --conf",
-        "timeout": 2000,
-        "preserveColors": true
-      },
-      {
         "id": "14",
         "type": "custom-text",
         "color": "brightBlue",
