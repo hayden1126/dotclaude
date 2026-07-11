@@ -5,7 +5,8 @@
       {
         "id": "1",
         "type": "model",
-        "color": "cyan"
+        "color": "cyan",
+        "rawValue": true
       },
       {
         "id": "2",
@@ -29,31 +30,66 @@
         "color": "magenta"
       },
       {
-        "id": "6",
+        "id": "12",
         "type": "separator"
       },
       {
-        "id": "7",
-        "type": "git-changes",
-        "color": "yellow"
-      },
-      {
-        "id": "8",
-        "type": "separator"
+        "id": "14",
+        "type": "custom-text",
+        "color": "brightBlue",
+        "customText": " 5h: "
       },
       {
         "id": "9",
         "type": "session-usage",
-        "color": "brightBlue"
+        "color": "brightBlue",
+        "rawValue": true
+      },
+      {
+        "id": "18",
+        "type": "custom-text",
+        "color": "brightBlack",
+        "customText": " "
+      },
+      {
+        "id": "16",
+        "type": "block-timer",
+        "color": "brightBlack",
+        "rawValue": true,
+        "metadata": {
+          "compact": "true"
+        }
       },
       {
         "id": "10",
         "type": "separator"
       },
       {
+        "id": "15",
+        "type": "custom-text",
+        "color": "brightBlue",
+        "customText": "1w: "
+      },
+      {
         "id": "11",
         "type": "weekly-usage",
-        "color": "brightBlue"
+        "color": "brightBlue",
+        "rawValue": true
+      },
+      {
+        "id": "19",
+        "type": "custom-text",
+        "color": "brightBlack",
+        "customText": " "
+      },
+      {
+        "id": "17",
+        "type": "weekly-reset-timer",
+        "color": "brightBlack",
+        "rawValue": true,
+        "metadata": {
+          "compact": "true"
+        }
       }
     ],
     [],
