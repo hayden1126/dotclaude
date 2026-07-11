@@ -10,8 +10,9 @@ split honest for the whole session.
 
 Output: colored background "chips", one per category (needs preserveColors:
 true on the widget so ccstatusline passes the ANSI codes through):
-  Ctx 85.4k [Sys 4.2k][Tool 18.1k][Mem 3.1k][Skl 5.9k][Msg 54k]
-Fallback (no /context run yet):  Ctx 85k (run /context for split)
+  Ctx 85.4k 43% ▏ [Sys 4.2k][Tool 18.1k][Mem 3.1k][Skl 5.9k][Msg 54k]
+The percent is total / window; a dim ▏ divides the total from its breakdown.
+Fallback (no /context run yet):  Ctx 85k 43% (run /context for split)
 """
 import sys, json, os, re, tempfile
 
@@ -42,6 +43,8 @@ TOTAL_STYLE = [
     (0.0, 22, 114, '', 'Ctx'),
 ]
 RESET = '\x1b[0m'
+# Dim divider between the total chip and the category breakdown chips.
+GROUP_SEP = '\x1b[38;5;240m ▏ ' + RESET
 
 
 def chip(label, value, bg, fg):
@@ -52,9 +55,10 @@ def total_chip(total, window):
     if not window:
         return f'Ctx {fmt(total)}'
     frac = total / window
+    value = f'{fmt(total)} {frac * 100:.0f}%'
     for threshold, bg, fg, attrs, label in TOTAL_STYLE:
         if frac >= threshold:
-            return attrs + chip(label, fmt(total), bg, fg)
+            return attrs + chip(label, value, bg, fg)
 SKIP = {'Messages', 'Free space', 'Autocompact buffer'}
 CAT_RE = re.compile(r'([A-Z][A-Za-z.]*(?: [a-z][a-z.]+)*):\s*([\d.]+k?)\s*tokens?\s*\(([\d.]+)%\)')
 MARKER = b'Estimated usage by category'
@@ -186,7 +190,7 @@ def main():
         chips.append(chip(label, fmt(etc), bg, fg))
     label, bg, fg = MSG_STYLE
     chips.append(chip(label, fmt(msgs), bg, fg))
-    print(head + ''.join(chips))
+    print(head + GROUP_SEP + ''.join(chips))
 
 
 if __name__ == '__main__':

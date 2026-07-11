@@ -101,10 +101,12 @@ messages. Claude Code only exposes lump token totals to statusline scripts, so t
 parses the fixed-overhead categories from the most recent `/context` output stored in the
 session transcript, and computes the messages figure live (total minus overhead) from the
 totals piped on stdin. Run `/context` once per session to seed the split; until then the
-widget shows the total with a hint. The total chip is green, turns amber past 50% of the
-context window, red past 66%, and blinking bright red past 83% (about 400k and 500k of a
-600k window; terminals without blink support show it static). The widget lives in
-ccstatusline's config dir, so reinstalling or upgrading ccstatusline never touches it.
+widget shows the total with a hint. The total chip shows the token count and its percent
+of the window, set off from the per-category chips by a thin divider; it is green, turns
+amber past 50% of the context window, red past 66%, and blinking bright red past 83%
+(about 400k and 500k of a 600k window; terminals without blink support show it static).
+The widget lives in ccstatusline's config dir, so reinstalling or upgrading ccstatusline
+never touches it.
 
 ## What's deliberately not here
 
