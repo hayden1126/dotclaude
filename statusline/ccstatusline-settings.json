@@ -53,6 +53,21 @@
         "rawValue": true
       },
       {
+        "id": "18",
+        "type": "custom-text",
+        "color": "brightBlack",
+        "customText": " "
+      },
+      {
+        "id": "16",
+        "type": "block-timer",
+        "color": "brightBlack",
+        "rawValue": true,
+        "metadata": {
+          "compact": "true"
+        }
+      },
+      {
         "id": "10",
         "type": "separator"
       },
@@ -67,6 +82,21 @@
         "type": "weekly-usage",
         "color": "brightBlue",
         "rawValue": true
+      },
+      {
+        "id": "19",
+        "type": "custom-text",
+        "color": "brightBlack",
+        "customText": " "
+      },
+      {
+        "id": "17",
+        "type": "weekly-reset-timer",
+        "color": "brightBlack",
+        "rawValue": true,
+        "metadata": {
+          "compact": "true"
+        }
       }
     ],
     [],

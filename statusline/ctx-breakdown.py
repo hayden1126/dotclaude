@@ -27,7 +27,7 @@ STYLE = {
     'Rules': ('Rul', 238, 250),
     'Hooks': ('Hk', 238, 250),
 }
-MSG_STYLE = ('Msg', 97, 189)
+MSG_STYLE = ('Msg', 53, 140)
 # Categories below this get folded into one dim "Etc" chip to keep the bar short.
 MIN_CHIP = 10_000
 ETC_STYLE = ('Etc', 236, 245)
