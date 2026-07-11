@@ -1,9 +1,10 @@
 # STATUS: <feature name>
 
 > Living state. Update at the end of every working block so a fresh session can resume from here after `/clear`.
+> State each fact once. Git owns push/merge/tree state — derive it (`git status -sb`, `gh pr view`), do not store it here. OPERATIONS.md owns accounts/services; the plan file owns design.
 
 Last updated: <date>
-Branch / worktree: <name>
+Branch / worktree: <name> (position vs `main`; run git for push/merge state)
 
 ## Done
 - <task + commit sha>

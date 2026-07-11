@@ -17,6 +17,7 @@
 - In prose written for others (docs, READMEs, essays, reports) and in commit and PR messages: no em dashes (use commas, parentheses, or colons). The writing-voice skill has the full spec.
 
 ## How we work
+- On session start, if the repo has a `STATUS.md`, read it before starting work: it holds current state, the next step, and pointers to whatever other durable docs that repo keeps. (Read-side bookend to the handoff skill, which writes it.)
 - Fast lane: if the change is a one-sentence diff, just do it (implement, verify, commit). No ceremony.
 - Full lane (multi-file or unfamiliar): explore, spec, plan, execute, verify, review. Keep durable state in `SPEC.md`, `PLAN.md`, `STATUS.md` (seed them from `~/.claude/templates/`) so it survives `/clear`. Do not let the planner also be the implementer for large work.
 - Delegate verbose, read-only, or independent work to subagents; they return summaries and keep the main context clean. Keep code-writing single-threaded. Parallelize reads and research, never parallel edits.

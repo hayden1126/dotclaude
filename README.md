@@ -64,11 +64,12 @@ need nothing extra.
 
 `settings.json` wires four lifecycle hooks:
 
-- **UserPromptSubmit: `handoff-reminder.sh`** (in this repo). When a prompt looks like a session
-  wrap-up or context reset (`hand off`, `wrap up`, `stop here`, `clear context`, `fresh session`,
-  etc.), it injects a one-line reminder
+- **UserPromptSubmit: `handoff-reminder.sh`** (in this repo). When a prompt is a genuine session
+  wrap-up or context-reset command (`hand off`, `wrap up`, `stop here`, `clear context`, `/clear`),
+  it injects a one-line reminder
   to invoke the `handoff` skill rather than improvising its steps (which kept dropping the
-  curate-memory step). Advisory only: it adds context, it cannot run the skill; silent no-op
+  curate-memory step). Precision-first: it stays silent when "handoff" is just a topic (discussing
+  the skill or this hook) and on injected system content (task notifications). Advisory only: it adds context, it cannot run the skill; silent no-op
   otherwise; always exits 0 so it can never block a prompt. Fail-open if `jq` is absent.
 - **PreToolUse(Bash): `danger-guard.sh`** (in this repo). Two tiers. It hard-blocks
   (`deny`) never-legitimate ops (force-push, `reset --hard`, `git clean -f`) and prompts
