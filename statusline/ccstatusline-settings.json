@@ -29,15 +29,6 @@
         "color": "magenta"
       },
       {
-        "id": "6",
-        "type": "separator"
-      },
-      {
-        "id": "7",
-        "type": "git-changes",
-        "color": "yellow"
-      },
-      {
         "id": "8",
         "type": "separator"
       },

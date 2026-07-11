@@ -31,6 +31,7 @@ MSG_STYLE = ('Msg', 97, 189)
 # Categories below this get folded into one dim "Etc" chip to keep the bar short.
 MIN_CHIP = 10_000
 ETC_STYLE = ('Etc', 236, 245)
+CONF_STYLE = (24, 117)
 # Total-context chip: green when comfortable, amber past 50% of the window,
 # red past 66% (~400k of a 600k window). Past ~83% (~500k) it inverts to
 # bold black-on-white with a "Ctx!" label; the blink attribute is included
@@ -128,19 +129,18 @@ def parse_breakdown(path):
     return cats, acw
 
 
-def autocompact_setting(transcript_path):
-    """autoCompactWindow from the active config dir's settings.json, if set.
-
-    The config dir is derived from the transcript path (always
+def config_dir(transcript_path):
+    """The active config dir, derived from the transcript path (always
     <config-dir>/projects/<project>/<session>.jsonl) because Claude Code does
     not pass CLAUDE_CONFIG_DIR through to child processes."""
-    cfg = None
     if transcript_path:
-        candidate = os.path.dirname(os.path.dirname(os.path.dirname(transcript_path)))
         if os.path.basename(os.path.dirname(os.path.dirname(transcript_path))) == 'projects':
-            cfg = candidate
-    if not cfg:
-        cfg = os.environ.get('CLAUDE_CONFIG_DIR') or os.path.expanduser('~/.claude')
+            return os.path.dirname(os.path.dirname(os.path.dirname(transcript_path)))
+    return os.environ.get('CLAUDE_CONFIG_DIR') or os.path.expanduser('~/.claude')
+
+
+def autocompact_setting(cfg):
+    """autoCompactWindow from the config dir's settings.json, if set."""
     try:
         with open(os.path.join(cfg, 'settings.json'), encoding='utf-8') as f:
             v = json.load(f).get('autoCompactWindow')
@@ -172,13 +172,15 @@ def main():
     # Threshold base: the smallest of the model window, the auto-compact
     # window reported by /context, and the autoCompactWindow setting --
     # compaction fires at the auto-compact point, not the model window.
+    cfg = config_dir(tp)
     candidates = [w for w in
-                  (cw.get('context_window_size'), acw, autocompact_setting(tp)) if w]
+                  (cw.get('context_window_size'), acw, autocompact_setting(cfg)) if w]
     window = min(candidates) if candidates else None
     head = total_chip(total, window)
+    conf = chip('Conf', os.path.basename(cfg), *CONF_STYLE) if cfg else ''
 
     if not cats:
-        print(f'{head} (run /context for split)')
+        print(f'{head}{conf} (run /context for split)')
         return
 
     overhead = sum(cats.values())
@@ -196,7 +198,7 @@ def main():
         chips.append(chip(label, fmt(etc), bg, fg))
     label, bg, fg = MSG_STYLE
     chips.append(chip(label, fmt(msgs), bg, fg))
-    print(head + ''.join(chips))
+    print(head + ''.join(chips) + conf)
 
 
 if __name__ == '__main__':
