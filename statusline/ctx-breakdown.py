@@ -155,6 +155,11 @@ def main():
     except ValueError:
         print('Ctx ?')
         return
+    if '--conf' in sys.argv[1:]:
+        # Standalone Conf chip so the layout can place it independently.
+        cfg = config_dir(data.get('transcript_path'))
+        print(chip('Conf', os.path.basename(cfg), *CONF_STYLE) if cfg else '')
+        return
     cw = data.get('context_window') or {}
     total = cw.get('total_input_tokens')
     if total is None:
@@ -177,10 +182,9 @@ def main():
                   (cw.get('context_window_size'), acw, autocompact_setting(cfg)) if w]
     window = min(candidates) if candidates else None
     head = total_chip(total, window)
-    conf = chip('Conf', os.path.basename(cfg), *CONF_STYLE) if cfg else ''
 
     if not cats:
-        print(f'{head}{conf} (run /context for split)')
+        print(f'{head} (run /context for split)')
         return
 
     overhead = sum(cats.values())
@@ -198,7 +202,7 @@ def main():
         chips.append(chip(label, fmt(etc), bg, fg))
     label, bg, fg = MSG_STYLE
     chips.append(chip(label, fmt(msgs), bg, fg))
-    print(head + ''.join(chips) + conf)
+    print(head + ''.join(chips))
 
 
 if __name__ == '__main__':

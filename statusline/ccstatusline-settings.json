@@ -29,22 +29,44 @@
         "color": "magenta"
       },
       {
-        "id": "8",
+        "id": "12",
         "type": "separator"
+      },
+      {
+        "id": "13",
+        "type": "custom-command",
+        "color": "brightBlack",
+        "commandPath": "python ctx-breakdown.py --conf",
+        "timeout": 2000,
+        "preserveColors": true
+      },
+      {
+        "id": "14",
+        "type": "custom-text",
+        "color": "brightBlue",
+        "customText": "5h: "
       },
       {
         "id": "9",
         "type": "session-usage",
-        "color": "brightBlue"
+        "color": "brightBlue",
+        "rawValue": true
       },
       {
         "id": "10",
         "type": "separator"
       },
       {
+        "id": "15",
+        "type": "custom-text",
+        "color": "brightBlue",
+        "customText": "1w: "
+      },
+      {
         "id": "11",
         "type": "weekly-usage",
-        "color": "brightBlue"
+        "color": "brightBlue",
+        "rawValue": true
       }
     ],
     [],
