@@ -5,9 +5,11 @@
 #   plugins/marketplaces.json  <- ~/.claude/plugins/known_marketplaces.json
 #   plugins/enabled.json       <- ~/.claude/settings.json::enabledPlugins
 #
-# Everything else (settings.json, CLAUDE.md, skills/, hooks/, templates/,
-# notify-toast.ps1) is symlinked by setup.sh, so the repo IS the live copy —
-# no sync needed. Safe to re-run; reports a diff but never auto-commits.
+# Everything else (CLAUDE.md, skills/, hooks/, templates/, notify-toast.ps1)
+# is symlinked by setup.sh, so the repo IS the live copy — no sync needed.
+# settings.json is the exception: setup.sh COPIES it (the runtime rewrites its
+# own copy), so the repo file is a curated baseline that can drift from live.
+# Safe to re-run; reports a diff but never auto-commits.
 
 set -euo pipefail
 
