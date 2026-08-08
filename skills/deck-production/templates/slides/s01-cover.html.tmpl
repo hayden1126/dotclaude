@@ -1,0 +1,33 @@
+<section id="s01-cover" class="ground-dark arch-cover">
+  <div class="scrim" data-decor></div>
+
+  <div class="content">
+    <p class="kicker">{{SUBJECT}}</p>
+    <h1>{{TITLE}}</h1>
+    <p class="sub muted">{{SUBTITLE}}</p>
+  </div>
+
+  <style>
+    /* Placeholder ground. Replace with a full-bleed image once one is staged:
+       <img class="bleed" src="media/your-image.jpg" alt="">
+       and delete this background rule. */
+    #s01-cover .scrim {
+      background: radial-gradient(120% 100% at 20% 0%,
+                  rgba(168, 121, 79, 0.30) 0%, rgba(23, 27, 50, 0) 60%),
+                  var(--ground-dark);
+    }
+    #s01-cover .content {
+      left: var(--margin-slide);
+      right: var(--margin-slide);
+      bottom: var(--sp-16);
+    }
+    #s01-cover h1 { margin-top: var(--sp-3); max-width: 1400px; text-wrap: balance; }
+    #s01-cover .sub {
+      font-family: var(--font-display);
+      font-size: 34px;
+      font-weight: 400;
+      margin-top: var(--sp-4);
+      max-width: 1100px;
+    }
+  </style>
+</section>

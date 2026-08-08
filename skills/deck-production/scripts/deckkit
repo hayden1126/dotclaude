@@ -1,0 +1,121 @@
+#!/usr/bin/env python3
+"""deckkit: the single entry point for the deck-production tools. Stdlib only.
+
+Its most important job is choosing the interpreter. Font work needs fontTools,
+which usually lives in the system python and not in a project .venv; pptx work
+needs python-pptx, which usually lives in the .venv and not in the system
+python. Getting this wrong was a recurring cost, so it is automated here
+instead of documented and forgotten.
+
+Run `deckkit` with no arguments for the subcommand list. That list is generated
+from what is actually on disk, so it can never advertise a tool that is not
+built, and per-subcommand flags come from the subcommand itself
+(`deckkit <name> --help`). There is deliberately no second copy of the CLI
+surface here or in SKILL.md to drift out of sync.
+
+Exit codes: 0 ok · 1 check failed · 2 usage/config error · 3 environment missing
+"""
+from __future__ import annotations
+
+import os
+import pathlib
+import sys
+
+HERE = pathlib.Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
+
+import deckcfg  # noqa: E402  (path must be set first)
+
+# subcommand -> (script, interpreter kind, takes a deck dir, one-line summary).
+# This dict is the ONLY home for the subcommand list: `usage()` renders it and
+# checks each script's existence, so the help text cannot advertise a tool that
+# has not been written. Per-subcommand flags live in the subcommand's own
+# argparse, reachable via `deckkit <name> --help`.
+COMMANDS: dict[str, tuple[str, str, bool, str]] = {
+    "new":         ("new_deck.py",     "self",      False, "scaffold a deck: tree, config, theme, shell, reveal"),
+    "doctor":      ("doctor.py",       "self",      True,  "environment probe, install hints, known landmines"),
+    "build":       ("build.py",        "self",      True,  "stitch fragments into index.html (--check diffs only)"),
+    "lint":        ("lint.py",         "fonttools", True,  "the mechanical audit; --baseline guards the FLAG set"),
+    "fonts":       ("subset_fonts.py", "fonttools", True,  "subset and rename the theme faces to woff2"),
+    "package":     ("package.py",      "self",      True,  "runtime-only site + zip, presenter notes stripped"),
+    "serve":       ("serve.py",        "self",      True,  "range-capable static server for the iteration loop"),
+    "geometry":    ("geometry.py",     "self",      True,  "overlap, overflow, and clearance gate"),
+    "fingerprint": ("fingerprint.py",  "self",      True,  "regression fingerprint, diffed at every phase exit"),
+    "pdf":         ("pdf.py",          "self",      True,  "decktape capture off ?export"),
+    "pptx":        ("export_pptx.py",  "pptx",      True,  "PowerPoint picture + editable pair"),
+    "theme":       ("theme_extract.py", "pptx",     False, "mine a pptx/pdf/logo/site for palette and fonts"),
+    "ingest":      ("ingest.py",       "pptx",      False, "Phase 0: renders, text, media with provenance names"),
+    "regress":     ("parity_check.py", "self",      False, "reference-deck regression gate (read-only)"),
+}
+
+
+def usage() -> str:
+    lines = [__doc__.strip().splitlines()[0], "", "usage: deckkit <command> [args]",
+             "       deckkit <command> --help     flags for one command", ""]
+    built, pending = [], []
+    for name, (script, _kind, takes_deck, summary) in COMMANDS.items():
+        arg = "<deck>" if takes_deck else ("<dir>" if name == "new" else "...")
+        row = f"  {name:<12} {arg:<8} {summary}"
+        (built if (HERE / script).exists() else pending).append(row)
+    lines += built
+    if pending:
+        lines += ["", "  not built yet (the dispatcher refuses these):"] + pending
+    lines += ["", "exit codes: 0 ok · 1 check failed · 2 usage/config · 3 environment missing",
+              "precedence:  CLI flag > DECKKIT_* env > deck.toml > default"]
+    return "\n".join(lines)
+
+
+def resolve_interpreter(kind: str, deck_arg: str | None) -> str:
+    if kind == "self":
+        return sys.executable
+    try:
+        cfg = deckcfg.load(deck_arg) if deck_arg else deckcfg.load()
+    except deckcfg.ConfigError:
+        # No deck yet, or an unreadable one: fall back to the documented defaults.
+        cfg = deckcfg.DeckConfig(pathlib.Path.cwd(), {}, "<defaults>")
+    return cfg.interpreter(kind)
+
+
+def main(argv: list[str]) -> int:
+    if len(argv) < 2 or argv[1] in ("-h", "--help", "help"):
+        print(usage())
+        return deckcfg.EXIT_OK
+    if argv[1] in ("-V", "--version"):
+        print("deckkit (deck-production skill)")
+        return deckcfg.EXIT_OK
+
+    name = argv[1]
+    if name not in COMMANDS:
+        print(f"error: unknown command {name!r}\n", file=sys.stderr)
+        print(usage(), file=sys.stderr)
+        return deckcfg.EXIT_USAGE
+
+    script_name, kind, takes_deck, _summary = COMMANDS[name]
+    script = HERE / script_name
+    if not script.exists():
+        print(f"error: `{name}` is not built yet ({script_name} does not exist).",
+              file=sys.stderr)
+        print("       Run `deckkit` for what is available.", file=sys.stderr)
+        return deckcfg.EXIT_USAGE
+
+    rest = argv[2:]
+    deck_arg = None
+    if takes_deck and rest and not rest[0].startswith("-"):
+        deck_arg = rest[0]
+
+    interpreter = resolve_interpreter(kind, deck_arg)
+    if not pathlib.Path(interpreter).exists() and interpreter != sys.executable:
+        print(f"environment: {interpreter} does not exist", file=sys.stderr)
+        print(f"  {name} needs the '{kind}' interpreter; set [env] in deck.toml "
+              f"or run `deckkit doctor`", file=sys.stderr)
+        return deckcfg.EXIT_ENV
+
+    os.execv(interpreter, [interpreter, str(script), *rest])
+    return deckcfg.EXIT_OK  # unreachable
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main(sys.argv))
+    except deckcfg.ConfigError as exc:
+        sys.exit(deckcfg.bail(str(exc)))

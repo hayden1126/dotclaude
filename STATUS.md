@@ -5,49 +5,77 @@
 > decisions ([[dotclaude-handoff-skill]], [[dotclaude-research-sourcing-skill]],
 > [[dotclaude-chrome-devtools-wsl]]). Per-effort design rationale lives in its plan under `~/.claude/plans/`.
 
-Last updated: 2026-07-11
+Last updated: 2026-08-08
 Base: `main`. For branch / PR / push state, run `gh pr list` and `git log main..HEAD` (derive it; not
 stored here).
 
 ## Done (recent; git holds the detail)
+- **`deck-production` skill, block S1 of 6** (2026-08-08, branch `feat/deck-production-skill`, base
+  `8602081`). Generalizes the deck machinery built for one company (`~/bella/decks/_shared/tools/`) into
+  config-driven tooling: `deckkit` dispatcher (its main job is picking the interpreter), `deckcfg`
+  (tomllib, CLI > env > file > default), scaffolder, and generalized build/lint/package plus serve,
+  doctor, and the reference-deck regression gate. Templates carry the storyboard grammar, builder
+  contract, substrate trio, and review-record format. Design and the S1-S6 block plan live in
+  `~/.claude/plans/explore-our-entire-workflow-bright-shamir.md` (gitignored, machine-local).
 - **Status-line ctx chip: percent + divider** (2026-07-11, follow-up to PR #12).
-  `statusline/ctx-breakdown.py` total chip now renders its share of the (auto-compact) window as a
-  percent and is set off from the per-category chips by a dim `▏`; README prose updated to match.
-  Widget is now actually installed live on this machine (setup.sh had not been re-run since PR #12
-  merged, so it had never been active). Derive PR/merge state with `gh pr list`.
-- **Handoff-lifecycle hardening** (2026-07-11, `4df5a49..af14b97`). Three parts: (1)
-  `skills/handoff/SKILL.md` now enforces prune-as-you-write (delete-test, one overwritten next-session
-  block, ~100-120 line ceiling) and a "Volatile git state: derive, never store" rule (push/merge/PR
-  status derived via `git`/`gh`, never written into STATUS; `gh pr view` for merge, which survives
-  squash); (2) `hooks/handoff-reminder.sh` rewritten precision-first: fires only on genuine wrap-up
-  commands, silent on "handoff" as a topic word and on injected system content (23-case battery); (3)
-  `CLAUDE.md` gains a read-side resume line (read STATUS.md on session start). `templates/STATUS.md` +
-  README updated to match. See [[dotclaude-handoff-skill]].
-- **WSL2 `chrome-devtools-mcp` fix (opt-in)** (2026-07-10, PR #13). `setup-chrome-wsl.sh` installs Chrome
-  for Testing and registers a user-scoped `chrome-devtools` MCP override that shadows the plugin's broken
-  default server (WSL2 cannot launch Chrome otherwise); `docs/chrome-devtools-wsl.md` + `chrome-debug.ps1`
-  cover Strategy A (headless Linux) and B (attach to Windows Chrome). Not wired into `setup.sh`, so non-WSL
-  is unaffected. See [[dotclaude-chrome-devtools-wsl]].
+  `statusline/ctx-breakdown.py` total chip renders its share of the auto-compact window as a percent,
+  set off from the per-category chips by a dim `▏`. Derive PR/merge state with `gh pr list`.
+- **Handoff-lifecycle hardening** (2026-07-11, `4df5a49..af14b97`). `skills/handoff/SKILL.md` enforces
+  prune-as-you-write and "volatile git state: derive, never store"; `hooks/handoff-reminder.sh` rewritten
+  precision-first (23-case battery); `CLAUDE.md` gained the read-side resume line. See
+  [[dotclaude-handoff-skill]].
+- **WSL2 `chrome-devtools-mcp` fix (opt-in)** (2026-07-10, PR #13). `setup-chrome-wsl.sh` +
+  `docs/chrome-devtools-wsl.md` + `chrome-debug.ps1`. Confirmed live and working 2026-08-08. See
+  [[dotclaude-chrome-devtools-wsl]].
 - Prior shipped (git + memory hold detail): research-sourcing skill (PR #10), staged-reader-review
   bundle upgrade, danger-guard opt-in auto mode, statusline ctx chips (PR #12).
 
 ## In flight
-- None.
+- **`deck-production` blocks S2-S6.** S1 shipped and verified; the skill has the phase model and the core
+  loop but no orchestration layer, so an agent cannot yet run a deck end to end.
+  - **Next concrete step: block S3, the geometry gate** (`geometry.py` + `geometry_probe.js` + a
+    declarative `geometry.rules.toml`), because it catches the defect class screenshots miss. Its
+    verification target is sharp and already specified: the gate must FAIL on a fixture reproducing the
+    reference deck's s17 overlap defect (unbounded caption `max-width`, no panel background, anchors
+    ~95px apart) and PASS on the real s17 as it stands today.
+  - Then S2 (fonts + PDF), S4 (SKILL references + 6 Workflow scripts), S5 (ingest + theme extractor),
+    S6 (pptx export). S1-S4 is the usable product.
+  - Ownership rule established this block: SKILL.md owns the phase model, gates, and batch constants;
+    `deckkit`'s `COMMANDS` dict owns the CLI surface (help is generated, never transcribed);
+    `deckcfg.derive_rigor` owns the rigor rule; `tests/parity/goldens.json` owns the reference numbers.
+    The plan file owns block numbering only, and must not leak "S<n>" into shipped artifacts.
 
 ## Blocked / decisions needed
-- None.
+- **`CLAUDE.md` "never parallel edits" now has a sanctioned exception.** `CLAUDE.md` states it absolutely;
+  `skills/deck-production/SKILL.md` gate G3 relaxes it under one condition (each builder writes exactly
+  one new file no other agent touches). A session reading `CLAUDE.md` alone will believe G3 is forbidden.
+  Decide whether `CLAUDE.md` gets a pointer or whether "Depth on demand" already covers it. CLAUDE.md
+  edits go through `/revise-claude-md`, not by hand.
+- **Pre-existing README drift, unrelated to this branch.** `README.md` says settings.json "wires four
+  lifecycle hooks" and documents `PreToolUse(Bash): danger-guard.sh`, but `settings.json` wires three:
+  danger-guard was dropped in `8602081`. Fix or restore, your call.
 
 ## Notes for next session
-- chrome-devtools-wsl activation: to activate the fix in a live session on THIS machine, fully restart
-  Claude Code (`/mcp` should then list `chrome-devtools` as Connected). A fresh clone on a new WSL machine
-  needs `./setup-chrome-wsl.sh` run once (the override is in `~/.claude.json` user scope, not the repo);
-  non-WSL machines need nothing.
-- research-sourcing follow-ups (all optional): (1) the thorough-tier planted-fabrication spot-check is
-  specified but not exercised end-to-end (only the subagent-side change was tested live); (2) only tested
-  with Agent-tool subagents, not a real Workflow-tool run; (3) `SKILL.md` is ~927 words (kept deliberately).
+- **Verify `deck-production` before touching it:** `deckkit regress --ref-deck
+  ~/bella/decks/2026-07-general-en` must print `parity: green`. It runs read-only and asserts the
+  reference tree is unmodified afterward. That gate is a precondition for editing any script in the
+  skill, because the reference deck is deliberately NOT migrated and will otherwise drift silently.
+- Smoke test: `deckkit new /tmp/x --title T --slides 6`, approve the storyboard frontmatter, then
+  `deckkit build /tmp/x && deckkit lint /tmp/x && deckkit package /tmp/x`. Expect lint 0/0.
+- `deckkit` reaches PATH via `~/.local/bin` (setup.sh links it when that dir exists). On a machine
+  without it, use `~/.claude/skills/deck-production/scripts/deckkit`.
+- Known gap carried deliberately: `deck.forward_targets` is declared in `deck.toml`, not detected. No
+  tooling yet reads a slide and decides whether a number is a forward target, so the default `false`
+  means "nobody has said", not "no targets". Revisit when the storyboard MUST/NEVER grammar is enforced
+  in S3.
+- research-sourcing follow-ups (all optional): the thorough-tier planted-fabrication spot-check is
+  specified but never exercised end to end; only tested with Agent-tool subagents, not a real
+  Workflow-tool run.
 - Deferred (also in [[dotclaude-handoff-skill]]): (1) the deterministic PreCompact/Stop safety-net hook,
   revisit only after testing the `SessionStart` `compact`-matcher re-inject path (bug #15174); (2) the
   autonomous loop-engineering handoff (a Python orchestrator step that refreshes the RESUME block).
 - Evaluated and SKIPPED, do not re-raise: (a) wiring `handoff-reminder.sh` into the loop-engineering inner
   loop (the puppet gets one machine prompt with no wrap-up phrase, so the hook has no addressee; the skill
   already inherits there); (b) cross-platform notifiers for the toast (YAGNI on this WSL-only setup).
+- A fresh clone on a new WSL machine needs `./setup-chrome-wsl.sh` run once (the MCP override lives in
+  `~/.claude.json` user scope, not the repo); non-WSL machines need nothing.

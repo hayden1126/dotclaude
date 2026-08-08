@@ -1,0 +1,70 @@
+---
+type: deck-storyboard
+deck: {{SLUG}}
+status: draft
+approved_by:
+approved_on:
+updated: {{DATE}}
+---
+
+# Storyboard — {{TITLE}}
+
+Authoritative slide manifest for this deck. The build tooling consumes the
+manifest order; lint cross-checks declared fact IDs against fragment comments
+and the registry.
+
+**This file is the spec.** A build only supersedes it by amending it in the
+same unit of work: if a fix changes mandated wording or the fact-ID set, the
+detail block and the manifest row change in that same commit. A storyboard
+that lags the deck is worse than no storyboard.
+
+Rules in force for every slide:
+- Every number comes from a registry row. Filed or audited values beat
+  presentation values.
+- Public footnotes name sources and dates. Registry IDs never render.
+- Any row flagged unverified, deck-only, or conflicting is either dropped,
+  reframed, or labelled on the slide face. Never shipped quietly.
+- Archetype names refer to the shipped library, which is `css/archetypes.css`
+  in this deck: each `.arch-*` class carries a comment saying when to use it. A
+  deck-local layout goes in `css/archetypes.local.css` with an `.arch-x-`
+  prefix and is registered in `ARCHETYPES.md`.
+
+## Manifest
+
+| # | file | title | archetype | act | status | fact IDs | assets |
+|---|------|-------|-----------|-----|--------|----------|--------|
+{{MANIFEST_ROWS}}
+
+Status values: `draft` (not built) · `built` (fragment exists, unreviewed) ·
+`reviewed` (built, verified, screenshot-checked).
+
+## Slide details
+
+One block per slide. The block is LAW for the builder agent: everything it
+states binds, and anything it forbids is a violation, not a preference.
+
+Write each block with these four move types so lint can check them
+mechanically:
+
+- `MUST: "exact string"` — this wording appears verbatim on the face.
+- `NEVER: "exact string"` — this wording must not appear anywhere.
+- `LABEL: <claim> as "<qualifier>"` — this claim only ships with that label.
+- `SOURCE: <names and dates>` — what the public footnote says.
+
+Everything else is prose guidance: what the slide argues, what the hero number
+is, what the visual does, what to avoid and why.
+
+### Act: {{FIRST_ACT}}
+
+**s01 cover** — (What it argues. Hero. Visual. Then the MUST/NEVER/LABEL/SOURCE
+lines.)
+
+## Decisions (resolved at review)
+
+Numbered, each with who decided and when. A decision recorded here does not get
+re-litigated by a later session.
+
+## Gaps confirmed (do not fill)
+
+Things that genuinely do not exist in the substrate. Naming them here is what
+stops a future session from inventing them.

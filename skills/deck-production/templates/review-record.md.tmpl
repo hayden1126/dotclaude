@@ -1,0 +1,89 @@
+---
+type: review
+deck: {{SLUG}}
+phase: {{PHASE}}
+updated: {{DATE}}
+status: in-progress
+---
+
+# {{PHASE}} — findings ledger
+
+This file never ships: the packager copies a runtime allowlist, and reviews are
+not on it.
+
+## Method
+
+What ran, over what scope, at what rigor tier. Batch sizes, agent counts, and
+the git tripwire result per batch. Enough that someone can re-run it.
+
+## Decision ledger
+
+Nothing is decided unilaterally. Every judgment call lands here.
+
+### Still open (needs action outside this session)
+
+| # | Item | Who decides | Blocks |
+|---|------|-------------|--------|
+
+### Resolved this session
+
+| # | Item | Decision | Who | When |
+|---|------|----------|-----|------|
+
+## Findings
+
+Triage classes:
+
+- **V violation** — mechanical breach. Fix now.
+- **J judgment** — a real tension needing the owner's read. No edit until ruled.
+- **R rights** — image, consent, or trademark state. Carries forward.
+- **C compliant-confirmed** — an obligation checked and found satisfied,
+  recorded **with the on-face quote** so it is not re-checked from memory.
+- **FP refuted** — a finding that did not survive verification. **Kept**, with
+  the refutation, so a later session does not re-find it.
+
+| # | Class | Slide | On-face quote | Why | Disposition | Verified this session |
+|---|-------|-------|---------------|-----|-------------|----------------------|
+
+## Fix pass (single-threaded)
+
+One entry per fix: what changed, whether the storyboard was amended in the same
+unit, and the gate result after it (build deterministic, lint 0/0, geometry 0).
+
+## Inventories
+
+Mandatory rollups that assert the sweep actually walked each list, not that it
+felt thorough.
+
+- Superlative inventory: every phrase, its qualifier, its source, adjudicated.
+- Never-list rollup: every item, `absent` or `hit`, for every slide in scope.
+
+## Deterministic pre-pass
+
+The grep results that go under the agent sweep. Zero-hit categories are
+recorded as "grep clean", never omitted: an absent line is indistinguishable
+from a check that was skipped.
+
+## Visual and rhythm pass
+
+Contact sheets reviewed, verdict per sheet, adjacency and pacing decisions.
+
+## Media play-test
+
+Per asset: autoplay, progression, captions, unmute, console clean, and the
+export-mode regression. State plainly what a machine cannot verify.
+
+## Acceptance
+
+1. Coverage: every in-scope slide has a finder and a verifier record.
+2. Inventories complete and adjudicated.
+3. Named obligations closed with on-face quotes.
+4. Every violation fixed, gate green after each, independent re-verify passed.
+5. Mechanical: lint 0 errors / 0 warnings; fingerprint unchanged or delta
+   narrated line by line.
+6. Geometry: 0 violations on every in-scope slide at the declared canvas.
+7. Visual: full sequence reviewed, verdict recorded, no unresolved adjacency
+   defect.
+8. Media: play-tested with evidence; what only a human can check is flagged.
+9. Provenance: git shows only orchestrator edits; tripwire clean around every
+   batch; this record complete including the decision ledger.

@@ -1,0 +1,49 @@
+# editorial-serif: dark ground, oversized serif numerals, one metallic accent.
+#
+# Register: luxury, consumer brand, anything where the deck should feel printed
+# rather than rendered. Alternating dark statement slides and light data slides
+# give a long deck act structure.
+#
+# Fonts are licence-clean and usually already on a TeX-equipped Linux box.
+# `deckkit fonts` subsets them and rewrites their internal name tables to the
+# `family` values below, so the deck CSS never names an upstream family and a
+# font swap never touches a stylesheet.
+
+name = "editorial-serif"
+description = "Dark editorial ground, ivory light ground, brass accent, Palatino-class display serif."
+tokens = "tokens.css"
+
+[[fonts]]
+role = "display"
+family = "Deck Display"
+source = "/usr/share/texmf/fonts/opentype/public/tex-gyre/texgyrepagella-{style}.otf"
+styles = ["regular", "bold", "italic"]
+licence = "GUST Font License (LPPL 1.3c)"
+licence_file = "GUST-FONT-LICENSE.txt"
+subset = "latin-safety"
+
+[[fonts]]
+role = "sans"
+family = "Deck Sans"
+source = "/usr/share/texmf/fonts/opentype/public/tex-gyre/texgyreheros-{style}.otf"
+styles = ["regular", "bold"]
+licence = "GUST Font License (LPPL 1.3c)"
+licence_file = "GUST-FONT-LICENSE.txt"
+subset = "latin-safety"
+
+# Optional. Only emitted when the deck declares a CJK language, because the
+# source is a large download and the subset is driven by actual slide text.
+[[fonts]]
+role = "cjk"
+family = "Deck CJK"
+source = "fonts-src/NotoSansCJKsc-{style}.otf"
+styles = ["Regular", "Bold"]
+licence = "SIL Open Font License 1.1"
+licence_file = "OFL-1.1.txt"
+subset = "text-driven"
+optional = true
+
+[archetypes]
+# Which archetypes this theme styles well. Not a restriction, a starting set.
+recommended = ["cover", "statement", "divider", "numeral", "stat-wall", "data",
+               "chapter", "proof", "rail", "compare", "video", "manifesto"]

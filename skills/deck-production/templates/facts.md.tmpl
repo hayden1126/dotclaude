@@ -1,0 +1,46 @@
+---
+type: facts
+deck: {{SLUG}}
+updated: {{DATE}}
+---
+
+# Fact registry — {{TITLE}}
+
+Every number and every claim that appears on a slide lives in exactly one row
+here. Slides cite the ID; they never restate the value. Update the row and
+nothing downstream can go stale.
+
+**ID policy.** `F-001` upward, assigned sequentially, **stable and never
+reused**. A row that turns out to be a duplicate is annotated in place
+("dropped as duplicate of F-014; ID retired") rather than deleted, so an old
+citation can still be resolved.
+
+**Single home.** A value lives in one canonical row. Two exceptions, both
+explicit: a source-faithful row quoting the same value from a different
+document must name the canonical row in its flags; narrative pages may restate
+a value for readability but must carry the ID beside it. On any conflict, this
+table wins.
+
+**Precedence.** Where sources disagree, the more accountable one wins: an
+audited filing beats a press release beats a prior deck beats a conversation.
+Record the disagreement with a `CONFLICT` flag and write the reasoning into
+`sensitive.md` rather than quietly picking one.
+
+## Flags
+
+| Flag | Meaning | May it ship? |
+|---|---|---|
+| (none) | sourced and verified against the cited document | yes |
+| `VERBAL` | told to us in conversation, not in any document | only with the flag surfaced on the face |
+| `DECK-ONLY` | appears in a prior deck, unverified elsewhere | only reframed or labelled |
+| `press-grade` | press or PR sourced, not company-verified | only with attribution on the face |
+| `CONFLICT` | sources disagree; see sensitive.md | only after the conflict is resolved |
+| `PARTIAL` | true for a subset, not the whole | only with the scope stated |
+| `projection` | a forward-looking estimate | only labelled as a target or estimate |
+| `unsourced` | no source found | never |
+
+## Rows
+
+| ID | Claim | Value | Source | As-of | Flags |
+|----|-------|-------|--------|-------|-------|
+| F-001 | (what the number is a claim about) | (the value, with units) | (document, page or section) | (period or date) | |

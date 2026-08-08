@@ -1,0 +1,48 @@
+/* editorial-serif design tokens.
+   The single source for palette, type, and spacing. Sizes are px on the
+   declared canvas; the scaffolder rewrites the type scale if the canvas is not
+   1920x1080. Every pair below meets WCAG AA 4.5:1 against its intended ground.
+
+   Swap the six palette values for a brand's own and the whole deck follows.
+   Do not add a second place where a colour or a size is named. */
+
+:root {
+  /* palette: two grounds, one ink, one accent, one muted, one alarm */
+  --ground-dark: #171B32;     /* primary dark ground */
+  --ground-light: #F7F5F1;    /* primary light ground */
+  --ground-light-2: #E6E1D8;  /* secondary light ground, tiles and rails */
+  --ink: #14172B;             /* body text on light */
+  --paper: #F7F5F1;           /* body text on dark */
+  --paper-dim: rgba(247, 245, 241, 0.72);   /* secondary text on dark */
+  --muted: #4B4E68;           /* structural, captions on light */
+  --muted-soft: #8B8DA8;      /* hairlines, deep-background text on dark */
+  --accent: #A8794F;          /* kickers, rules, chapter numerals */
+  --accent-bright: #C2913F;   /* stat numerals on dark ground */
+  --alarm: #8C1A1C;           /* rare: a number that must not be missed */
+
+  /* type. Families are deck-local names written by `deckkit fonts`; the
+     fallbacks matter only until the woff2 files exist. */
+  --font-display: "Deck Display", "Palatino Linotype", Palatino, Georgia, serif;
+  --font-sans: "Deck Sans", Arial, Helvetica, sans-serif;
+  --font-cjk: "Deck CJK", "Source Han Sans SC", "Noto Sans SC", sans-serif;
+
+  /* modular scale for a 1920x1080 canvas */
+  --fs-hero: 280px;           /* one oversized numeral, once per slide */
+  --fs-giant: 168px;          /* chapter numerals, secondary giants */
+  --fs-h1: 88px;              /* cover and divider titles */
+  --fs-h2: 60px;              /* slide headlines */
+  --fs-h3: 40px;              /* panel headers */
+  --fs-stat: 96px;            /* tile numerals */
+  --fs-body: 28px;
+  --fs-caption: 21px;
+  --fs-footnote: 15px;
+
+  /* spacing, 8px base */
+  --sp-1: 8px;  --sp-2: 16px;  --sp-3: 24px;  --sp-4: 32px;
+  --sp-6: 48px; --sp-8: 64px;  --sp-12: 96px; --sp-16: 128px;
+  --margin-slide: 96px;       /* default slide inset; the geometry safe area */
+
+  /* strokes */
+  --hairline: 1px solid rgba(139, 141, 168, 0.35);
+  --hairline-dark: 1px solid rgba(23, 27, 50, 0.18);
+}

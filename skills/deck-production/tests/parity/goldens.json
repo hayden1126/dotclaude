@@ -1,0 +1,101 @@
+{
+  "build": {
+    "built": 50,
+    "exit": 0,
+    "rows": 50,
+    "sha256": "77b6796474de0adfbbed93730dbd17f9448acf2bdaa3a49d09dd44f95ebb78c6",
+    "would_change": false
+  },
+  "fonts": {
+    "bella-cjk-bold.woff2": {
+      "bytes": 83080,
+      "sha256": "f1158335a9c3245c20eddf6bc3868a21ea78bff1a251b573b8bdb4bff6e803d3"
+    },
+    "bella-cjk-regular.woff2": {
+      "bytes": 83340,
+      "sha256": "345d64516341c659b326e7380e4707b841b3f655afd9a71e75782a94f40e6b2d"
+    },
+    "bella-display-bold.woff2": {
+      "bytes": 29452,
+      "sha256": "882762529274b09fac7d8b976a33a1255f657d205028369c129e6d46fbf23dad"
+    },
+    "bella-display-italic.woff2": {
+      "bytes": 31064,
+      "sha256": "7766457296991dc4c36ce5e1a1ba3c68effd7423d4f97e24d85d1a67dc244fdf"
+    },
+    "bella-display-regular.woff2": {
+      "bytes": 29476,
+      "sha256": "281eec6d121bb1ed43e0e34a1faa776882afd0430728fafb05a5b5df09d1100b"
+    },
+    "bella-sans-bold.woff2": {
+      "bytes": 22256,
+      "sha256": "c8fc9ebc42219e496cbe8541dbc010fee56008c504a92f24ef4aa7d6dea28ac6"
+    },
+    "bella-sans-regular.woff2": {
+      "bytes": 22096,
+      "sha256": "e837a640c942d8ac296155c71d967f2e253f80e46ab7d91387329429acdd12c3"
+    }
+  },
+  "lint": {
+    "errors": 0,
+    "exit": 0,
+    "flag_count": 26,
+    "flags": [
+      "slides/s02-hook.html F-188 [DECK-ONLY]",
+      "slides/s14-nurses.html F-156 [DECK-ONLY]",
+      "slides/s14-nurses.html F-157 [DECK-ONLY]",
+      "slides/s17-globe.html F-298 [press-grade]",
+      "slides/s20-portfolio.html F-027 [press-grade]",
+      "slides/s20-portfolio.html F-046 [DECK-ONLY]",
+      "slides/s21-ladder.html F-038 [DECK-ONLY]",
+      "slides/s21-ladder.html F-039 [DECK-ONLY]",
+      "slides/s21-ladder.html F-040 [DECK-ONLY]",
+      "slides/s26-ght-founder.html F-063 [press-grade]",
+      "slides/s26-ght-founder.html F-149 [DECK-ONLY]",
+      "slides/s26-ght-founder.html F-357 [DECK-ONLY]",
+      "slides/s27-ght-products.html F-045 [DECK-ONLY]",
+      "slides/s29-stb.html F-140 [DECK-ONLY]",
+      "slides/s29-stb.html F-141 [DECK-ONLY]",
+      "slides/s30-ltv.html F-140 [DECK-ONLY]",
+      "slides/s32-lcatterton.html F-380 [press-grade]",
+      "slides/s32-lcatterton.html F-382 [press-grade]",
+      "slides/s34-dr-bella.html F-007 [DECK-ONLY]",
+      "slides/s35-revolutions.html F-005 [DECK-ONLY]",
+      "slides/s35-revolutions.html F-156 [DECK-ONLY]",
+      "slides/s35-revolutions.html F-171 [DECK-ONLY, projection]",
+      "slides/s38-gateway.html F-034 [DECK-ONLY]",
+      "slides/s47-roadmap.html F-382 [press-grade]",
+      "slides/s49-vision.html F-009 [DECK-ONLY]",
+      "slides/s49-vision.html F-010 [DECK-ONLY]"
+    ],
+    "warnings": 2
+  },
+  "package": {
+    "exit": 0,
+    "file_count": 78,
+    "shipped_sha256": "69424878542b19b2300f25fdec14e0aaa98d61b5350f70380923ace6278bc8ca",
+    "top_level": [
+      "css",
+      "fonts",
+      "index.html",
+      "media",
+      "vendor"
+    ]
+  },
+  "package_check": {
+    "byte_delta": 2248,
+    "char_delta": 2246,
+    "note_blocks_stripped": 4,
+    "notes_in_shipped": 0,
+    "notes_in_source": 4,
+    "runtime_absent": [],
+    "runtime_present": [
+      "index.html",
+      "css",
+      "fonts",
+      "vendor",
+      "media"
+    ],
+    "shipped_sha256": "69424878542b19b2300f25fdec14e0aaa98d61b5350f70380923ace6278bc8ca"
+  }
+}

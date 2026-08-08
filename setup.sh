@@ -73,8 +73,19 @@ done
 # skills/ — one symlink per authored skill directory (plugin skills come from plugins)
 for d in "$REPO_DIR"/skills/*/; do
   [[ -d "$d" ]] || continue
+  chmod +x "${d%/}"/scripts/* 2>/dev/null || true
   link "${d%/}" "$CLAUDE_DIR/skills/$(basename "$d")"
 done
+
+# A skill that ships a CLI gets it on PATH, so the invocations printed in its
+# SKILL.md and by its own tools actually resolve. Opt-in by directory: if
+# ~/.local/bin does not exist, the skill still works via its absolute path.
+if [[ -d "$HOME/.local/bin" ]]; then
+  for exe in "$REPO_DIR"/skills/*/scripts/deckkit; do
+    [[ -x "$exe" ]] || continue
+    link "$exe" "$HOME/.local/bin/$(basename "$exe")"
+  done
+fi
 
 # templates/ — per-file (SPEC/PLAN/STATUS scaffolds for full-lane work)
 for f in "$REPO_DIR"/templates/*.md; do

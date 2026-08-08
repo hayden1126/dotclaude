@@ -1,0 +1,108 @@
+/* Archetype layout scaffolds: GRID AND RHYTHM ONLY, never content typography.
+   Twelve shipped layouts, one class each. A slide that fights its archetype
+   forks rules into its own scoped <style>; archetype variants are never added
+   here. A deck's own layouts go in archetypes.local.css with an .arch-x-
+   prefix and a registry entry in ARCHETYPES.md.
+
+   ============================ LOCKED LESSON ============================
+   reveal.js writes an inline `display: block` on the presented section
+   (SlideContent.load uses config.display; reveal.css also has
+   section.present{display:block}). Inline style outranks EVERY stylesheet
+   selector, INCLUDING #id. So `display:` on a <section>, at ANY specificity,
+   is dead CSS on the live slide.
+
+   The reason this bug is expensive is that a fragment preview WITHOUT reveal
+   still looks correct, so it survives review and only breaks in the built
+   deck.
+
+   Rule: sections never carry display/grid/flex. Each layout archetype
+   attaches its grid to a mandatory direct child <div class="wrap"> with
+   height:100%. Lint enforces both halves.
+
+   Separate, lesser trap: base.css sets text-align and padding on
+   `.reveal .slides section` (specificity 0,2,1), which outranks a bare
+   `.arch-*` class FOR THOSE PROPERTIES. Restate them at
+   `.reveal .slides section.arch-*` strength, or put them on .wrap.
+   ======================================================================= */
+
+/* ---------------------------------------------------------------- rhythm */
+
+/* cover / statement / manifesto: full-bleed image, minimal type block.
+   Use a statement slide as a pacing beat between data-heavy runs. */
+.arch-cover, .arch-statement, .arch-manifesto { position: relative; overflow: hidden; }
+.arch-cover .bleed, .arch-statement .bleed, .arch-manifesto .bleed, .arch-divider .bleed {
+  position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; z-index: 0;
+}
+.arch-cover .content, .arch-statement .content, .arch-manifesto .content {
+  position: absolute; z-index: 1;
+}
+.arch-cover .scrim, .arch-statement .scrim, .arch-manifesto .scrim {
+  position: absolute; inset: 0; z-index: 0;
+  background: linear-gradient(180deg, rgba(23,27,50,0) 40%, rgba(23,27,50,0.55) 100%);
+}
+
+/* chapter divider: full-bleed dark, translucent panel, serif title.
+   Dividers are what give a long deck act structure. Keep them identical. */
+.arch-divider { position: relative; overflow: hidden; }
+.arch-divider .panel {
+  position: absolute; z-index: 1; left: var(--margin-slide); bottom: var(--sp-16);
+  padding: var(--sp-8); max-width: 1100px;
+  background: rgba(23, 27, 50, 0.72); backdrop-filter: blur(6px);
+}
+
+/* full-bleed video. object-fit: contain, never cover: a crop can cut a face
+   or a caption burned into the source footage. */
+.arch-video { position: relative; overflow: hidden; background: #000; }
+.arch-video video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }
+.arch-video .caption { position: absolute; z-index: 1; left: var(--margin-slide); bottom: var(--sp-8); color: var(--paper); }
+.arch-video .unmute-hint { position: absolute; z-index: 2; right: var(--margin-slide); bottom: var(--sp-8); transition: opacity 0.3s; }
+.arch-video.sound-on .unmute-hint { opacity: 0; }
+
+/* ------------------------------------------------------------------ data */
+
+/* one giant numeral + one sentence. The cold open's third beat. */
+.arch-numeral > .wrap { display: grid; place-content: center; text-align: center; height: 100%; }
+
+/* stat wall: headline + N tiles with hairline tops. Every tile carries its own
+   date; a tile without one is a liability, not a claim. */
+.reveal .slides section.arch-stat-wall { padding: var(--margin-slide); }
+.arch-stat-wall .tiles { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--sp-4); margin-top: var(--sp-8); }
+.arch-stat-wall .tile { border-top: var(--hairline); padding-top: var(--sp-3); }
+
+/* dark sidebar + light chart canvas. The workhorse data layout: the argument
+   lives in the sidebar, the evidence on the canvas. */
+.arch-data > .wrap { display: grid; grid-template-columns: 560px 1fr; height: 100%; }
+.arch-data .side { background: var(--ground-dark); color: var(--paper); padding: var(--margin-slide) var(--sp-8); }
+.arch-data .canvas { background: var(--ground-light); color: var(--ink); padding: var(--margin-slide); position: relative; }
+
+/* compare: two or three panels side by side. Also the before/after layout;
+   give the "before" panel .panel-past to recede it. */
+.reveal .slides section.arch-compare { padding: var(--margin-slide); }
+.arch-compare > .wrap { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: var(--sp-6); height: 100%; }
+.arch-compare .panel-past { color: var(--muted); }
+
+/* -------------------------------------------------------------- argument */
+
+/* numbered chapter: header band + evidence split (gallery 2/3, stats 1/3) */
+.arch-chapter > .wrap { display: grid; grid-template-rows: 300px 1fr; height: 100%; }
+.arch-chapter .band { background: var(--ground-dark); color: var(--paper); padding: var(--sp-8) var(--margin-slide); display: flex; align-items: center; gap: var(--sp-6); }
+.arch-chapter .band .chapter-no { font-family: var(--font-display); font-size: var(--fs-giant); color: var(--accent); line-height: 1; }
+.arch-chapter .split { display: grid; grid-template-columns: 2fr 1fr; }
+.arch-chapter .gallery { background: var(--ground-light); padding: var(--sp-8); }
+.arch-chapter .stat-panel { background: var(--ground-dark); color: var(--paper); padding: var(--sp-8); display: grid; place-content: center; text-align: center; }
+
+/* proof slide: problem left / what we own centre / evidence right */
+.reveal .slides section.arch-proof { padding: var(--margin-slide); }
+.arch-proof > .wrap { display: grid; grid-template-columns: 1fr 2fr 1fr; gap: var(--sp-6); height: 100%; }
+
+/* benchmark rail: N peer cards in a row, each one line of claim + one number */
+.reveal .slides section.arch-rail { padding: var(--margin-slide); }
+.arch-rail .rail { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: var(--sp-4); margin-top: var(--sp-8); }
+.arch-rail .peer { border-top: var(--hairline); padding-top: var(--sp-3); }
+
+/* --------------------------------------------------------------- accents */
+
+/* Section accent override. Scope a colour shift to one act by adding
+   .accent-alt to those sections; never re-declare the palette per slide. */
+.accent-alt .stat .stat-num { color: var(--accent); }
+.accent-alt .kicker { color: var(--accent); }
