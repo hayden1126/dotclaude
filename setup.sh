@@ -173,8 +173,10 @@ if settings is None or not has_widget(settings):
         settings = json.load(f)
 for line in settings.get('lines', []):
     for w in line:
-        if w.get('type') == 'custom-command' and 'ctx-breakdown' in (w.get('commandPath') or ''):
-            w['commandPath'] = cmd
+        old = w.get('commandPath') or ''
+        if w.get('type') == 'custom-command' and 'ctx-breakdown' in old:
+            flags = [t for t in old.split() if t.startswith('--')]
+            w['commandPath'] = ' '.join([cmd] + flags)
 os.makedirs(os.path.dirname(dst), exist_ok=True)
 with open(dst, 'w') as f:
     json.dump(settings, f, indent=2)
