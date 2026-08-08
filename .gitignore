@@ -35,3 +35,7 @@ downloads/
 
 # Plan mode scratch
 plans/
+
+# Python bytecode (skills/ ships Python tooling)
+__pycache__/
+*.pyc

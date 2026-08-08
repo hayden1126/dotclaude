@@ -97,19 +97,15 @@ Registry IDs never render. Lint audits the chain in both directions, reports fla
 Everything runs through one dispatcher, which also picks the right interpreter (font work needs fontTools in the system python; pptx work needs python-pptx in a venv).
 
 ```bash
-deckkit new <dir> --title T [--theme ID] [--slides N] [--facts deck|repo|none]
-deckkit doctor [<deck>]            # environment, install commands, known landmines
-deckkit build <deck> [--check]     # --check diffs without writing: the determinism assertion
-deckkit lint <deck> [--baseline F] [--write-baseline F] [--allow-draft]
-deckkit package <deck> [--out DIR] [--check]
-deckkit serve <deck>               # range-capable, unlike python -m http.server
-deckkit regress --ref-deck PATH    # the regression gate; run green before editing any script
+deckkit                      # the subcommand list, generated from what exists on disk
+deckkit <command> --help     # flags for one command
 ```
 
-Exit codes: `0` ok, `1` check failed, `2` usage or config error, `3` environment missing.
-Precedence: CLI flag > `DECKKIT_*` env > `deck.toml` > default.
+**There is deliberately no copy of the CLI surface in this file.** The dispatcher generates its list from the scripts actually present, so it can never advertise a tool that has not been written, and each subcommand's flags come from its own argparse. Read it from the tool, not from here.
 
-*Not yet built: `fonts`, `geometry`, `fingerprint`, `pdf`, `pptx`, `theme extract`, `ingest`. The dispatcher reports honestly when a subcommand is missing.*
+The loop you will run most: `deckkit build` then `deckkit lint`, then `deckkit serve` and look at it. `deckkit build --check` writes nothing and diffs, which is the determinism assertion every phase exit needs. `deckkit regress --ref-deck PATH` is the gate to run green before editing any script in this skill.
+
+If `deckkit` is not on your PATH, it is at `~/.claude/skills/deck-production/scripts/deckkit`. `setup.sh` symlinks it into `~/.local/bin` when that directory exists.
 
 ## The three failures that cost the most
 
@@ -141,6 +137,6 @@ Precedence: CLI flag > `DECKKIT_*` env > `deck.toml` > default.
 
 ## Reference material
 
-Detail lives beside the phase that needs it. Load one, not all.
+Detail belongs beside the phase that needs it, in `references/`, loaded one at a time.
 
-*`references/` is written in S4 of the build plan. Until then the phase model above, `BUILD-CONTRACT.md` in a scaffolded deck, and `deckkit doctor` carry the operational detail.*
+**`references/` does not exist yet.** Until it does, the operational detail lives in three places that are current by construction: the phase model above, `BUILD-CONTRACT.md` instantiated inside a scaffolded deck, and `deckkit doctor` for anything environmental. Run `deckkit` to see which tools exist; the phases that depend on the missing ones (geometry gate, PDF, pptx, ingest, theme extraction) cannot be executed yet.

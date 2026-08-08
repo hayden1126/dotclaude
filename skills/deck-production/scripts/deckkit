@@ -7,20 +7,11 @@ needs python-pptx, which usually lives in the .venv and not in the system
 python. Getting this wrong was a recurring cost, so it is automated here
 instead of documented and forgotten.
 
-    deckkit new <dir> --title T [--theme ID] [--facts repo|deck|none]
-    deckkit doctor [<deck>]
-    deckkit build <deck> [--check] [--urls] [--json]
-    deckkit lint <deck> [--baseline FILE]
-    deckkit fonts <deck> [--check]
-    deckkit package <deck> [--check]
-    deckkit serve <deck> [--port N]
-    deckkit geometry <deck> [--rules FILE] [--slides SPEC]
-    deckkit fingerprint <deck> [--baseline FILE]
-    deckkit pdf <deck> [--background]
-    deckkit pptx <deck> [--picture-only|--editable-only]
-    deckkit theme extract [--pptx F] [--pdf F] [--logo F] [--site URL] --out DIR
-    deckkit ingest <stage> ...
-    deckkit regress --ref-deck PATH [--facts PATH]
+Run `deckkit` with no arguments for the subcommand list. That list is generated
+from what is actually on disk, so it can never advertise a tool that is not
+built, and per-subcommand flags come from the subcommand itself
+(`deckkit <name> --help`). There is deliberately no second copy of the CLI
+surface here or in SKILL.md to drift out of sync.
 
 Exit codes: 0 ok · 1 check failed · 2 usage/config error · 3 environment missing
 """
@@ -35,25 +26,43 @@ sys.path.insert(0, str(HERE))
 
 import deckcfg  # noqa: E402  (path must be set first)
 
-# subcommand -> (script, interpreter kind, takes a deck dir as first positional)
-COMMANDS: dict[str, tuple[str, str, bool]] = {
-    "new":         ("new_deck.py",     "self",      False),
-    "doctor":      ("doctor.py",       "self",      True),
-    "build":       ("build.py",        "self",      True),
-    "lint":        ("lint.py",         "fonttools", True),
-    "fonts":       ("subset_fonts.py", "fonttools", True),
-    "package":     ("package.py",      "self",      True),
-    "serve":       ("serve.py",        "self",      True),
-    "geometry":    ("geometry.py",     "self",      True),
-    "fingerprint": ("fingerprint.py",  "self",      True),
-    "pdf":         ("pdf.py",          "self",      True),
-    "pptx":        ("export_pptx.py",  "pptx",      True),
-    "theme":       ("theme_extract.py", "pptx",     False),
-    "ingest":      ("ingest.py",       "pptx",      False),
-    "regress":     ("parity_check.py", "self",      False),
+# subcommand -> (script, interpreter kind, takes a deck dir, one-line summary).
+# This dict is the ONLY home for the subcommand list: `usage()` renders it and
+# checks each script's existence, so the help text cannot advertise a tool that
+# has not been written. Per-subcommand flags live in the subcommand's own
+# argparse, reachable via `deckkit <name> --help`.
+COMMANDS: dict[str, tuple[str, str, bool, str]] = {
+    "new":         ("new_deck.py",     "self",      False, "scaffold a deck: tree, config, theme, shell, reveal"),
+    "doctor":      ("doctor.py",       "self",      True,  "environment probe, install hints, known landmines"),
+    "build":       ("build.py",        "self",      True,  "stitch fragments into index.html (--check diffs only)"),
+    "lint":        ("lint.py",         "fonttools", True,  "the mechanical audit; --baseline guards the FLAG set"),
+    "fonts":       ("subset_fonts.py", "fonttools", True,  "subset and rename the theme faces to woff2"),
+    "package":     ("package.py",      "self",      True,  "runtime-only site + zip, presenter notes stripped"),
+    "serve":       ("serve.py",        "self",      True,  "range-capable static server for the iteration loop"),
+    "geometry":    ("geometry.py",     "self",      True,  "overlap, overflow, and clearance gate"),
+    "fingerprint": ("fingerprint.py",  "self",      True,  "regression fingerprint, diffed at every phase exit"),
+    "pdf":         ("pdf.py",          "self",      True,  "decktape capture off ?export"),
+    "pptx":        ("export_pptx.py",  "pptx",      True,  "PowerPoint picture + editable pair"),
+    "theme":       ("theme_extract.py", "pptx",     False, "mine a pptx/pdf/logo/site for palette and fonts"),
+    "ingest":      ("ingest.py",       "pptx",      False, "Phase 0: renders, text, media with provenance names"),
+    "regress":     ("parity_check.py", "self",      False, "reference-deck regression gate (read-only)"),
 }
 
-USAGE = __doc__.split("Exit codes:")[0].strip()
+
+def usage() -> str:
+    lines = [__doc__.strip().splitlines()[0], "", "usage: deckkit <command> [args]",
+             "       deckkit <command> --help     flags for one command", ""]
+    built, pending = [], []
+    for name, (script, _kind, takes_deck, summary) in COMMANDS.items():
+        arg = "<deck>" if takes_deck else ("<dir>" if name == "new" else "...")
+        row = f"  {name:<12} {arg:<8} {summary}"
+        (built if (HERE / script).exists() else pending).append(row)
+    lines += built
+    if pending:
+        lines += ["", "  not built yet (the dispatcher refuses these):"] + pending
+    lines += ["", "exit codes: 0 ok · 1 check failed · 2 usage/config · 3 environment missing",
+              "precedence:  CLI flag > DECKKIT_* env > deck.toml > default"]
+    return "\n".join(lines)
 
 
 def resolve_interpreter(kind: str, deck_arg: str | None) -> str:
@@ -69,7 +78,7 @@ def resolve_interpreter(kind: str, deck_arg: str | None) -> str:
 
 def main(argv: list[str]) -> int:
     if len(argv) < 2 or argv[1] in ("-h", "--help", "help"):
-        print(USAGE)
+        print(usage())
         return deckcfg.EXIT_OK
     if argv[1] in ("-V", "--version"):
         print("deckkit (deck-production skill)")
@@ -77,14 +86,16 @@ def main(argv: list[str]) -> int:
 
     name = argv[1]
     if name not in COMMANDS:
-        print(f"error: unknown command {name!r}", file=sys.stderr)
-        print(f"       commands: {', '.join(sorted(COMMANDS))}", file=sys.stderr)
+        print(f"error: unknown command {name!r}\n", file=sys.stderr)
+        print(usage(), file=sys.stderr)
         return deckcfg.EXIT_USAGE
 
-    script_name, kind, takes_deck = COMMANDS[name]
+    script_name, kind, takes_deck, _summary = COMMANDS[name]
     script = HERE / script_name
     if not script.exists():
-        print(f"error: {name} is not implemented yet ({script} missing)", file=sys.stderr)
+        print(f"error: `{name}` is not built yet ({script_name} does not exist).",
+              file=sys.stderr)
+        print("       Run `deckkit` for what is available.", file=sys.stderr)
         return deckcfg.EXIT_USAGE
 
     rest = argv[2:]

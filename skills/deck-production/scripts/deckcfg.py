@@ -34,6 +34,8 @@ DEFAULTS: dict = {
     "deck.issuer_listed": False,
     "deck.rigor": None,              # sketch|standard|regulated; derived when absent
     "deck.rigor_reason": "",
+    "deck.forward_targets": False,   # does any slide carry a forward financial
+                                     # target? declared, not detected; forces regulated
     "canvas.width": 1920,
     "canvas.height": 1080,
     "theme.id": "editorial-serif",
@@ -225,8 +227,18 @@ class DeckConfig:
             return False
         return bool(self.get(check))
 
-    def derive_rigor(self, slide_count: int = 0, external_refs: int = 0) -> str:
-        """Declared tier wins; otherwise derive. Printed by lint on every run."""
+    def derive_rigor(self, slide_count: int = 0, external_refs: int = 0,
+                     forward_targets: bool | None = None) -> str:
+        """Declared tier wins; otherwise derive. Printed by lint on every run.
+
+        `forward_targets` is the third regulated trigger: a deck that puts a
+        forward-looking financial target on a slide is regulated regardless of
+        audience. It is DECLARED, not detected: no tooling yet reads a slide
+        and decides whether a number is a target, so it comes from
+        `[deck] forward_targets` in deck.toml (or an explicit argument) and
+        defaults to false. Do not let this default read as "no targets" -- it
+        reads as "nobody has said".
+        """
         declared = self.get("deck.rigor")
         if declared:
             if declared not in ("sketch", "standard", "regulated"):
@@ -235,8 +247,11 @@ class DeckConfig:
                     f"got {declared!r}"
                 )
             return declared
+        if forward_targets is None:
+            forward_targets = bool(self.get("deck.forward_targets"))
         audience = self.get("deck.audience")
-        if self.get("deck.issuer_listed") or audience in ("external-investor", "regulated-external"):
+        if (self.get("deck.issuer_listed") or forward_targets
+                or audience in ("external-investor", "regulated-external")):
             return "regulated"
         if slide_count and slide_count <= 15 and audience == "internal" and external_refs == 0:
             return "sketch"
@@ -245,7 +260,7 @@ class DeckConfig:
     # ------------------------------------------------------- environment
 
     def interpreter(self, kind: str) -> str:
-        """Which python runs a given tool. See references/pitfalls.md."""
+        """Which python runs a given tool. Font work needs fontTools; pptx work needs python-pptx."""
         if kind == "fonttools":
             return self.get("env.fonttools_python")
         if kind == "pptx":
@@ -273,6 +288,19 @@ def find_chrome(cfg: DeckConfig | None = None) -> str | None:
         builds = sorted(cache.glob("*/chrome-linux64/chrome"), reverse=True)
         if builds:
             return str(builds[0])
+    # WSL convention from docs/chrome-devtools-wsl.md: Chrome for Testing under
+    # ~/chrome with a stable `current` symlink. It is neither in the puppeteer
+    # cache nor on PATH, so without this a machine that already has Chrome gets
+    # told to install a second one.
+    for candidate in (pathlib.Path.home() / "chrome" / "current",
+                      pathlib.Path.home() / "chrome" / "current" / "chrome"):
+        if candidate.is_file():
+            return str(candidate)
+        if candidate.is_dir():
+            found = next(candidate.glob("chrome-linux64/chrome"), None) or \
+                    next(candidate.glob("chrome"), None)
+            if found:
+                return str(found)
     for name in ("google-chrome", "chromium", "chromium-browser", "chrome"):
         found = shutil.which(name)
         if found:
