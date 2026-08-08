@@ -1,0 +1,36 @@
+<!-- Worked example. Every clause of BUILD-CONTRACT.md is visible here:
+     one section, id == filename stem, ground + archetype classes, layout on a
+     direct child div.wrap, one scoped <style>, no <script>, one hero number
+     with its citation comment inside the element holding it, an on-face date,
+     and a public source footer that names sources rather than registry ids. -->
+<section id="s02-numeral" class="ground-dark arch-numeral">
+  <div class="wrap">
+    <p class="stat hero">
+      <span class="stat-num">0.0<!-- F-001 --><span class="stat-unit">UNIT</span></span>
+      <span class="stat-caption">What this measures, PERIOD &middot; +0.0%<!-- F-001 --> year on year</span>
+    </p>
+
+    <p class="statement">One sentence that says what the number means. Not two.</p>
+
+    <footer class="src">Source: (document name, month year).</footer>
+  </div>
+
+  <style>
+    /* Centring and text-align come from `.arch-numeral > .wrap` in
+       archetypes.css. `display:` on the section itself is dead under reveal's
+       inline display:block, at any specificity. Do not put it here. */
+    #s02-numeral { padding: 0 var(--margin-slide); }
+    #s02-numeral footer.src { text-align: left; }
+    #s02-numeral .stat-caption { color: var(--paper-dim); letter-spacing: 0.02em; }
+    #s02-numeral .statement {
+      font-family: var(--font-display);
+      font-weight: 400;
+      font-size: 36px;
+      line-height: 1.5;
+      max-width: 1240px;
+      margin: var(--sp-8) auto 0;
+      text-wrap: balance;
+      color: var(--paper);
+    }
+  </style>
+</section>

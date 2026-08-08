@@ -1,0 +1,98 @@
+---
+type: narrative
+deck: {{SLUG}}
+updated: {{DATE}}
+status: bootstrap
+---
+
+# Sensitive material — pre-flight checklist
+
+Pre-flight checklist for any outward-facing material, ordered by severity.
+**This page records the WHY so future sessions do not resurrect dropped
+claims.** That sentence is the whole point of the file: without the reasoning,
+a later session re-derives a claim someone already decided to kill.
+
+Items are numbered so a review can cite `B4` and mean one specific thing.
+
+---
+
+## A. Never repeat
+
+Factually unsupported, fabricated, or materially misleading. A hit here is a
+stop-the-line defect, not a judgment call.
+
+Format per item: the claim in bold, where it appeared, why it fails, the
+registry IDs involved.
+
+*(empty at bootstrap; filled by the prior-material sweep and the claim audit)*
+
+---
+
+## B. Reframe required
+
+True-ish but wrongly framed. Each item states the reality **and the exact
+permitted formulation**. An item without a permitted formulation is not
+finished.
+
+### Starter list: generic exposure classes
+
+These apply to any company. **Confirm or delete each one before the first
+build**, and a deletion needs one line of why. Deleting them all is a decision;
+leaving them unreviewed is not.
+
+| # | Exposure | Required reframe |
+|---|---|---|
+| B1 | Unqualified superlative ("leading", "first", "only", "best") | Add scope, metric, and source, or delete |
+| B2 | Undated number | Stamp the period on the face |
+| B3 | Unit-less number | State the unit and the currency |
+| B4 | Forward target stated as fact | "target" / "plan", with safe-harbour framing |
+| B5 | Market size without analyst and vintage | Name the analyst and the report date |
+| B6 | Growth rate off a small base | State the absolute base beside the rate |
+| B7 | Adjusted or non-GAAP figure alone | Show the statutory figure and one line of reconciliation |
+| B8 | Rank claim without scope and share | State the ranking basis and the actual share |
+| B9 | An LOI, MOU, or framework framed as a closed deal | Use the announcement's own language, including its caveats |
+| B10 | An investor or backer named to imply more than the instrument | Name the actual instrument, amount, and date |
+| B11 | Customer logos or named individuals | Written consent, or render as anonymised text |
+| B12 | Third-party trademarks | Cleared rights, or set type instead of the mark |
+| B13 | Competitor named and disparaged | Source it, date it, neutralise it, or drop it |
+| B14 | Health, efficacy, or clinical claim on a non-medical product | Drop the claim; keep the product description |
+| B15 | Pricing that contradicts the live site | Date-label the pricing basis |
+| B16 | Headcount, facility, or location count | Date-stamp it; counts drift monthly |
+| B17 | Capability claim beyond what ships today | Describe what exists; put the rest on a roadmap |
+| B18 | Data-scale claim ("millions of records") | Use the sourced language verbatim |
+| B19 | Regulatory or legal history | Know it cold; decide consciously whether the deck raises it |
+| B20 | Unlicensed stock or AI-generated imagery | Replace with owned or licensed assets |
+
+---
+
+## C. Deliberately soft-pedalled
+
+Known, framed consciously. Flag a slide only when it **crosses the stated
+boundary**, not because the topic appears.
+
+This list cannot be automated. It comes from one question, asked of the person
+who owns the deck:
+
+> *What must this deck never say, and what will an investor raise that we would
+> rather not raise ourselves?*
+
+*(empty at bootstrap; fill from that answer before the storyboard gate)*
+
+---
+
+## D. Polish defects
+
+Mechanical, fix in any successor. Leftover source-language text on a
+translated slide, a label that contradicts its own footnote, a duplicate
+slide, a watermark, an undated column, a unit-less number.
+
+---
+
+## How an unreviewed item behaves
+
+While `status: bootstrap`, an item nobody has ruled on behaves as **class C**
+during a sweep: flagged only if the slide crosses its boundary. That makes the
+first sweep on a new deck noisier than a mature one, and it quiets as items get
+ruled into A, B, C, or deleted. This is expected. Track the ruling rate in the
+review record; flip `status` to `reviewed` when the starter list has been
+walked.

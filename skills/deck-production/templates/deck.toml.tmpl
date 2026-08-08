@@ -1,0 +1,97 @@
+# deck.toml — static configuration for this deck.
+#
+# Volatile state lives elsewhere, one home each:
+#   approval           -> storyboard.md frontmatter
+#   per-slide status    -> the storyboard manifest `status` column
+#   FLAG baseline       -> reviews/flag-baseline.txt
+#   fingerprint         -> reviews/fingerprint.txt
+#   repo state          -> git
+#
+# Precedence for every tool: CLI flag > DECKKIT_* env > this file > default.
+
+[deck]
+slug      = "{{SLUG}}"
+title     = "{{TITLE}}"
+subtitle  = "{{SUBTITLE}}"
+subject   = "{{SUBJECT}}"
+audience  = "{{AUDIENCE}}"        # internal | partner | external-investor | regulated-external
+language  = "{{LANG}}"
+issuer_listed = false
+# rigor is derived from audience/issuer_listed/forward-targets when unset.
+# A human may raise it freely; lowering it is one step and needs a reason.
+# rigor = "standard"
+# rigor_reason = ""
+
+[canvas]
+width  = {{CANVAS_WIDTH}}
+height = {{CANVAS_HEIGHT}}
+
+[theme]
+id     = "{{THEME}}"
+origin = "{{THEME_ORIGIN}}"       # builtin | extracted
+tokens = "css/tokens.css"
+
+{{FONT_BLOCKS}}
+
+[substrate]
+tier      = "{{SUBSTRATE_TIER}}"  # repo | deck-local | none
+facts     = "{{SUBSTRATE_FACTS}}"
+voice     = "{{SUBSTRATE_VOICE}}"
+sensitive = "{{SUBSTRATE_SENSITIVE}}"
+assets    = "media"
+fact_id   = "F-\\d{3,4}"
+flag_words = ["VERBAL", "UNVERIFIED", "DECK-ONLY", "CONFLICT", "press-grade", "unsourced", "PARTIAL", "projection"]
+
+[archetypes]
+css        = "css/archetypes.css"
+local_css  = "css/archetypes.local.css"
+wrap_required = ["arch-numeral", "arch-data", "arch-compare", "arch-chapter", "arch-proof"]
+
+[build]
+storyboard = "storyboard.md"
+fragment_dir = "slides"
+index      = "index.html"
+serve_port = {{PORT}}
+# The gate: no fragment is built before a human approves the storyboard.
+require_approved_storyboard = true
+
+[vendor]
+reveal_version = "{{REVEAL_VERSION}}"
+plugins = ["notes"]
+
+[export.site]
+runtime     = ["index.html", "css", "fonts", "vendor", "media"]
+strip_notes = true
+zip         = true
+
+[export.pdf]
+url  = "?export"
+out  = "renders/{slug}.pdf"
+# size defaults to the canvas
+
+[export.pptx]
+slide_size = "16:9"
+# Most English corporate themes leave the East Asian theme font empty, which
+# would tofu on a Use-Destination-Theme paste. Name it explicitly instead.
+cjk_ea_typeface = "Microsoft YaHei"
+
+[lint]
+fid_chain           = true
+fid_registry_flags  = true
+fid_leak            = true
+naked_numbers       = true
+style_scoping       = true
+unique_section_ids  = true
+asset_links         = true
+glyph_coverage      = true
+reveal_display      = true
+wrap_archetypes     = true
+storyboard_approved = true
+allow_naked_years   = true
+
+[env]
+# Font work needs fontTools, usually in the system python. pptx work needs
+# python-pptx, usually in a project .venv. deckkit picks the right one.
+fonttools_python = "/usr/bin/python3"
+pptx_python      = ""
+chrome           = ""

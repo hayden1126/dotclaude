@@ -1,0 +1,116 @@
+# Builder contract — {{TITLE}}
+
+Every builder agent reads this file first and obeys it exactly. It is a
+contract, not advice. The orchestrator does not read it into its own context;
+agents are given the path.
+
+## What you produce
+
+**Exactly one file**: `{{FRAGMENT_DIR}}/<your slide's filename>.html`. You write
+that file and nothing else. Not the storyboard, not `index.html`, not shared
+CSS, not another slide, not an asset copy. Another agent is working on the
+neighbouring slide in the same batch, and the orchestrator owns everything
+shared.
+
+## Structure
+
+- One root `<section>` and nothing outside it. No wrapping element, no sibling.
+- `id` on that section equals the filename stem. `s07-market.html` gives
+  `<section id="s07-market">`.
+- The section carries a ground class (`ground-dark` or `ground-light`) and its
+  archetype class (`arch-*`).
+- **Layout attaches to a direct child `<div class="wrap">`, never to the
+  section.** reveal writes an inline `display: block` on the presented section,
+  which outranks every selector including `#id`. A fragment previewed on its
+  own still looks right, which is exactly why this bug ships if you ignore it.
+  Archetypes that need a wrap: {{WRAP_REQUIRED}}.
+- Per-slide CSS goes in one `<style>` block inside the section. **Every
+  selector in it contains `#your-section-id`.** An unscoped selector will
+  restyle other slides; lint rejects it.
+- No `<script>`. Ever. The deck also ships as a PDF and as a PowerPoint export;
+  anything that only exists after JS runs does not survive either.
+- No nested `<section>`, no reveal fragment classes, no vertical stacks. Flat
+  horizontal slides only, so the PDF page count equals the slide count.
+
+## Canvas
+
+Fixed **{{CANVAS_WIDTH}}x{{CANVAS_HEIGHT}}**. Sizes are px on that canvas; reveal scales the
+whole thing. Use the tokens in `css/tokens.css` for colour, type, and spacing.
+Do not introduce a hex value or a font size that is not a token, and do not
+restate a token's value.
+
+Respect the safe area: `var(--margin-slide)` of clearance on all four edges,
+except deliberate full-bleed elements (`.bleed`, `.scrim`).
+
+## Numbers and sourcing
+
+- Every number comes from a registry row named in your slide's manifest entry.
+  You may not introduce a number that is not in your declared set. If the slide
+  needs one that is missing, say so in `openQuestions` and leave it out.
+- Put the citation as an **HTML comment inside the element holding the
+  number**: `<span class="stat-num">628<!-- F-233 --></span>`. Inside SVG
+  `<text>` too. Every naked number needs one.
+- **Registry IDs never render.** Comments only.
+- Data slides carry a `<footer class="src">` naming public sources and dates:
+  "Source: Frost & Sullivan (IPO prospectus, June 2025); company FY2025 annual
+  results, March 2026."
+- Every number is dated on the face. An undated number is the single most
+  common defect in a deck like this. A unit-less number is a liability, not a
+  claim.
+- One hero number per panel. A delta belongs in that number's caption, never as
+  a second numeral competing with it.
+
+## Copy
+
+Follow the deck's voice rules at `{{VOICE_PATH}}`. Read them; do not assume.
+The recurring ones:
+
+- Every superlative carries a qualifier and a source, or it is deleted.
+- Targets sound like targets: "target", "plan", "signed". Never "will exceed".
+- Borrowed equity does the positioning. Named partners and verified rankings
+  say more than self-description.
+- Non-English terms are glossed on first use, then either form is fine. Wrap
+  them: `<span lang="zh-Hans">圣贝拉</span>`, so the CJK face applies and the
+  subsetter sees the glyphs.
+- No em dashes in slide copy. Use a middot, a colon, or parentheses.
+- No absolutes about operations. "Zero tolerance for errors" is liability
+  phrasing, not luxury phrasing.
+
+## Charts
+
+- **Invoke the `dataviz` skill before writing the first line of chart code.**
+- Hand-authored inline SVG with real `<text>` elements. Never raster text,
+  never `<foreignObject>`. Text must stay selectable, translatable, and
+  subsettable.
+- Static only. No tooltips, no hover states, no animation: the deck ships as a
+  PDF.
+- House tokens only. One axis, never dual. Thin marks, recessive hairline grid,
+  direct labels rather than a legend where the layout allows.
+- Rebuild a chart from the registry values. Never screenshot a chart from a
+  reference deck.
+
+## Assets
+
+- You do **not** copy files. Reference them as `media/<name>` and list what you
+  need in `assetsNeeded` with source and destination. The orchestrator stages
+  them after your batch. A missing `media/<name>` at your build time is
+  expected.
+- **Read the actual image file before you place it.** Catalog descriptions have
+  been wrong: swapped captions, a 128px thumbnail described as a photo, a
+  co-brand lockup that was not one. Reading the file is what catches this.
+- No third-party logo or mark without cleared rights. Render credentials as set
+  type instead.
+
+## Reference renders
+
+If you are given a render of a previous version of this slide, it is a
+**layout and atmosphere reference only**. It is never a pixel target and it is
+**never a source of numbers**. The registry is the only number source.
+
+## When you finish
+
+Fill the structured report: the file you wrote, the section id, the assets you
+need staged, the fact IDs you cited, any flags you surfaced on the face, any
+deviation from the storyboard block and why, and any open question. A
+deviation you do not report is a defect; a deviation you report becomes a
+storyboard amendment.

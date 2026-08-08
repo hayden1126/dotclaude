@@ -1,0 +1,50 @@
+# Parity config for the reference deck at /home/hayden/bella/decks/2026-07-general-en.
+#
+# This file lives here, NOT in the bella repo: the reference deck stays
+# untouched. Every path is relative to the deck directory, so the tools resolve
+# them the same way they would if a deck.toml sat beside index.html.
+#
+# Values are chosen to reproduce the ORIGINAL decks/_shared/tools behaviour
+# exactly, so any diff the harness reports is a real regression in this skill
+# rather than a settings difference.
+
+[deck]
+slug = "2026-07-general-en"
+title = "SAINT BELLA GROUP: investor deck (EN)"
+subject = "EN general investor pitch, 2026-07"
+audience = "external-investor"
+language = "en"
+issuer_listed = true
+rigor = "regulated"
+
+[canvas]
+width = 1920
+height = 1080
+
+[substrate]
+tier = "repo"
+facts = "../../facts"
+voice = "../../narrative/voice.md"
+sensitive = "../../narrative/sensitive.md"
+assets = "../../assets/media"
+# The original lint hardcoded three-digit ids and this exact flag vocabulary.
+fact_id = "F-\\d{3}"
+flag_words = ["VERBAL", "DECK-ONLY", "CONFLICT", "press-grade", "unsourced", "PARTIAL", "projection"]
+
+[archetypes]
+css = "css/archetypes.css"
+# The original WRAP_ARCHES tuple. Deliberately excludes arch-stat-wall, which
+# scopes its padding at section strength instead of using a wrap child.
+wrap_required = ["arch-numeral", "arch-data", "arch-chapter", "arch-proof", "arch-three-panel"]
+
+[build]
+storyboard = "storyboard.md"
+fragment_dir = "slides"
+index = "index.html"
+serve_port = 8021
+require_approved_storyboard = true
+
+[export.site]
+runtime = ["index.html", "css", "fonts", "vendor", "media"]
+strip_notes = true
+zip = true
