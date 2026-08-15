@@ -5,11 +5,19 @@
 > decisions ([[dotclaude-handoff-skill]], [[dotclaude-research-sourcing-skill]],
 > [[dotclaude-chrome-devtools-wsl]]). Per-effort design rationale lives in its plan under `~/.claude/plans/`.
 
-Last updated: 2026-08-08
+Last updated: 2026-08-15
 Base: `main`. For branch / PR / push state, run `gh pr list` and `git log main..HEAD` (derive it; not
 stored here).
 
 ## Done (recent; git holds the detail)
+- **`vetting-sources` skill** (2026-08-15, commit `245eeda`). New procedural skill: bring an external /
+  third-party document into a knowledge base by faithful multi-agent extraction, an accuracy + internal-
+  consistency audit (reconcile vs filings and the web, then adversarially verify), and a cite-safety
+  brief; quarantine holds until the audit clears. Delegates to `research-sourcing` / `research-discipline`
+  / `writing-voice` / `staged-reader-review` / `ebook-extract` / `dispatching-parallel-agents`; ships
+  `references/workflow-scaffolds.md` with the reusable Workflow skeletons. Built while running the pipeline
+  live on a real broker report in `~/bella`; gap-audited by a fresh agent (no-registry, scanned-PDF, and
+  foreign-number-format paths added from that pass).
 - **`deck-production` skill, block S1 of 6** (2026-08-08, branch `feat/deck-production-skill`, base
   `8602081`). Generalizes the deck machinery built for one company (`~/bella/decks/_shared/tools/`) into
   config-driven tooling: `deckkit` dispatcher (its main job is picking the interpreter), `deckcfg`
