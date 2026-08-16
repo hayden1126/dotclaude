@@ -10,6 +10,12 @@ Base: `main`. For branch / PR / push state, run `gh pr list` and `git log main..
 stored here).
 
 ## Done (recent; git holds the detail)
+- **Handoff: proactive CLAUDE.md trigger** (2026-08-16, branch `handoff-proactive-claude-md`, commit
+  `6c775d8`). `skills/handoff/SKILL.md` Step 2 now fires one narrow, prune-biased proactive CLAUDE.md
+  reflection (a durable repo-level convention/structural fact established this session → propose via
+  `/revise-claude-md`, scoped to that fact), tells the reconcile sub-agent to cover nested CLAUDE.md
+  files (not just root), and gains a Common Mistakes row for the silent-omission case. Design rationale
+  in `~/.claude/plans/improve-my-handoff-skill-inherited-lamport.md`. See [[dotclaude-handoff-skill]].
 - **`frontend-ui-discipline` skill** (2026-08-16). Reusable web-UI discipline (desktop + mobile) distilled
   from the Bella president-dashboard UI work: `SKILL.md` (themed sections — verify-at-both-widths, measure-
   don't-assume, sticky/scroll-margin offset math, touch≠hover, single-source-of-truth state, overlays /
