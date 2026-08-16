@@ -5,11 +5,22 @@
 > decisions ([[dotclaude-handoff-skill]], [[dotclaude-research-sourcing-skill]],
 > [[dotclaude-chrome-devtools-wsl]]). Per-effort design rationale lives in its plan under `~/.claude/plans/`.
 
-Last updated: 2026-08-15
+Last updated: 2026-08-16
 Base: `main`. For branch / PR / push state, run `gh pr list` and `git log main..HEAD` (derive it; not
 stored here).
 
 ## Done (recent; git holds the detail)
+- **`frontend-ui-discipline` skill** (2026-08-16). Reusable web-UI discipline (desktop + mobile) distilled
+  from the Bella president-dashboard UI work: `SKILL.md` (themed sections — verify-at-both-widths, measure-
+  don't-assume, sticky/scroll-margin offset math, touch≠hover, single-source-of-truth state, overlays /
+  highlight / i18n, robustness, responsive) + `references/self-contained-dashboards.md` (gated single-file
+  dashboard pattern + deploy contract + 11-row bug catalogue). Authored from its own `SPEC.md` (kept in the
+  dir as source), a third `~/bella/dashboards/president-briefing/build.py` rationale pass, and a full-history
+  sweep of all 51 Bella commit messages. **RED→GREEN validated** per `superpowers:writing-skills`: a
+  skill-less agent missed 16px inputs / 44px tap-targets / measured sticky offset; the same task with the
+  skill fixed all three. Symlinked into `~/.claude/skills`. SKILL.md ~800 words (over the ~500 soft target,
+  kept for coverage; split lever = move the two low-frequency sections into a second reference). See
+  [[frontend-ui-discipline-skill]].
 - **`vetting-sources` skill** (2026-08-15, commit `245eeda`). New procedural skill: bring an external /
   third-party document into a knowledge base by faithful multi-agent extraction, an accuracy + internal-
   consistency audit (reconcile vs filings and the web, then adversarially verify), and a cite-safety
