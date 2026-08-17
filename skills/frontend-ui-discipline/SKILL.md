@@ -1,11 +1,11 @@
 ---
 name: frontend-ui-discipline
-description: Hayden's discipline for building web UIs that work on mobile and desktop without the usual bugs. Use when writing or reviewing HTML/CSS/JS for a site or dashboard, styling layout (sticky/fixed headers, flex/grid, overlays), adding search/filter/highlight, i18n/language toggles, or any touch-vs-desktop interaction. Covers verify-in-real-browser-at-both-widths, measure-don't-assume, sticky/scroll-margin math, touch :hover pitfalls, single-source-of-truth state, and self-contained-dashboard specifics.
+description: Hayden's discipline for building web UIs that work on mobile and desktop without the usual bugs. Use when writing or reviewing HTML/CSS/JS for a site or dashboard, styling layout (sticky/fixed headers, flex/grid, overlays), adding search/filter/highlight, i18n/language toggles, or any touch-vs-desktop interaction. Covers verify-in-real-browser-at-both-widths, measure-don't-assume, sticky/scroll-margin math, touch :hover pitfalls, single-source-of-truth state, overlays, highlight, and i18n.
 ---
 
 # Frontend UI discipline
 
-Build web UIs that work on mobile and desktop the first time. Each rule is a scar from a real bug; the reference file's catalogue carries the stories. For the gated single-file dashboard pattern (build script, provenance, deploy contract) plus that catalogue, see `references/self-contained-dashboards.md`.
+Build web UIs that work on mobile and desktop the first time. Each rule is a scar from a real bug. (The bella-specific gated single-file dashboard pattern that seeded these rules now lives with that project, in the `bella-dashboard` skill in the bella repo.)
 
 ## Verify in a real browser, at both widths
 - **Never claim done from the code alone.** Build, reload, assert state in the browser (`chrome-devtools` `evaluate_script`), screenshot, then commit. Evidence, not assertion.

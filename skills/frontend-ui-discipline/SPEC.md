@@ -1,5 +1,11 @@
 # Skill extraction + spec: `frontend-ui-discipline` (+ self-contained-dashboards reference)
 
+> **Migration note (2026-08-17):** the bella-specific `references/self-contained-dashboards.md` described
+> below was later moved out of this (general) skill into the project-scoped `bella-dashboard` skill in the
+> bella repo (`bella/.claude/skills/bella-dashboard/references/`), alongside the streaming-chat and CJK
+> references added the same day. This SPEC is kept as the original authoring record; Part B's content now
+> lives with that project. This skill is now general-only.
+
 ## Context
 
 This session built a stack of mobile+desktop UI features on the Bella president-briefing dashboard (floating glass search, in-place highlight, EN/中文 toggle, cross-links) and fixed a long run of real UI bugs. The user wants that hard-won knowledge captured as a reusable **discipline skill** for building good, bug-free UIs (desktop and especially mobile). Decisions: **both layers** — a general web-UI discipline skill plus a companion reference for the specific self-contained-dashboard pattern; and **extract + spec only** now (a fresh session writes the actual SKILL.md, since context is ~60% full). This file is the durable source material so nothing is lost across the `/clear`.

@@ -5,11 +5,19 @@
 > decisions ([[dotclaude-handoff-skill]], [[dotclaude-research-sourcing-skill]],
 > [[dotclaude-chrome-devtools-wsl]]). Per-effort design rationale lives in its plan under `~/.claude/plans/`.
 
-Last updated: 2026-08-16
+Last updated: 2026-08-17
 Base: `main`. For branch / PR / push state, run `gh pr list` and `git log main..HEAD` (derive it; not
 stored here).
 
 ## Done (recent; git holds the detail)
+- **`frontend-ui-discipline` trimmed to general-only** (2026-08-17). Its bella-specific
+  `references/self-contained-dashboards.md` was **migrated out** into a new project-scoped `bella-dashboard`
+  skill that now lives in the **bella repo** (`~/code/bella/.claude/skills/bella-dashboard/`, committed
+  there, not here) — so a bella-only playbook no longer loads into every project's namespace. This repo's
+  change: dropped the reference file, trimmed the SKILL.md intro line + the description's
+  "self-contained-dashboard specifics" tail, and added a migration note atop `SPEC.md`. The new skill also
+  captured the streaming-chat + Worker-backend + CJK-typography scars from post-2026-08-16 bella work. See
+  [[frontend-ui-discipline-skill]], [[bella-dashboard-skill]].
 - **Handoff: proactive CLAUDE.md trigger** (2026-08-16, branch `handoff-proactive-claude-md`, commit
   `6c775d8`). `skills/handoff/SKILL.md` Step 2 now fires one narrow, prune-biased proactive CLAUDE.md
   reflection (a durable repo-level convention/structural fact established this session → propose via
@@ -19,8 +27,9 @@ stored here).
 - **`frontend-ui-discipline` skill** (2026-08-16). Reusable web-UI discipline (desktop + mobile) distilled
   from the Bella president-dashboard UI work: `SKILL.md` (themed sections — verify-at-both-widths, measure-
   don't-assume, sticky/scroll-margin offset math, touch≠hover, single-source-of-truth state, overlays /
-  highlight / i18n, robustness, responsive) + `references/self-contained-dashboards.md` (gated single-file
-  dashboard pattern + deploy contract + 11-row bug catalogue). Authored from its own `SPEC.md` (kept in the
+  highlight / i18n, robustness, responsive) + (originally) a `references/self-contained-dashboards.md`
+  bella pattern reference, **migrated out to the bella repo on 2026-08-17 — see the entry above**.
+  Authored from its own `SPEC.md` (kept in the
   dir as source), a third `~/bella/dashboards/president-briefing/build.py` rationale pass, and a full-history
   sweep of all 51 Bella commit messages. **RED→GREEN validated** per `superpowers:writing-skills`: a
   skill-less agent missed 16px inputs / 44px tap-targets / measured sticky offset; the same task with the
