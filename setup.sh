@@ -150,24 +150,77 @@ PY
 # ---------------------------------------------------------------------------
 # 5. Status line widget (~/.config/ccstatusline)
 # ---------------------------------------------------------------------------
-# ctx-breakdown.py renders per-category context chips in the status line. It
-# lives in ccstatusline's own config dir (survives ccstatusline reinstalls).
-# The settings baseline carries a placeholder commandPath; we patch it here
-# with this machine's absolute python and script paths, because ccstatusline
-# executes widget commands through the platform shell where $HOME/%USERPROFILE%
-# expansion is not portable.
+# Two custom-command widgets live in ccstatusline's own config dir (they survive
+# ccstatusline reinstalls): ctx-breakdown.py (per-category context chips, line 1)
+# and session-summary.py (a 1-2 sentence session summary on lines 2-3). The
+# settings baseline carries placeholder commandPaths; we patch each here with this
+# machine's absolute python and script paths, because ccstatusline runs widget
+# commands through the platform shell where $HOME/%USERPROFILE% expansion is not
+# portable.
 CC_CFG_DIR="$HOME/.config/ccstatusline"
-link "$REPO_DIR/statusline/ctx-breakdown.py" "$CC_CFG_DIR/ctx-breakdown.py"
+for pyf in "$REPO_DIR"/statusline/*.py; do
+  [[ -e "$pyf" ]] || continue
+  link "$pyf" "$CC_CFG_DIR/$(basename "$pyf")"
+done
 python3 - "$REPO_DIR/statusline/ccstatusline-settings.json" "$CC_CFG_DIR/settings.json" <<'PY'
 import json, os, shutil, sys, time
 baseline_path, dst = sys.argv[1], sys.argv[2]
-script = os.path.join(os.path.dirname(dst), 'ctx-breakdown.py')
-cmd = f'"{sys.executable}" "{script}"'
+cfgdir = os.path.dirname(dst)
 
-def has_widget(settings):
+def patch_paths(settings):
+    """Rewrite every custom-command widget whose commandPath names a bare *.py
+    script to this machine's absolute python + absolute script path, preserving
+    any trailing args (e.g. --row 1)."""
+    for line in settings.get('lines', []):
+        for w in line:
+            if w.get('type') != 'custom-command':
+                continue
+            toks = (w.get('commandPath') or '').split()
+            idx = next((i for i, t in enumerate(toks)
+                        if t.strip('"').endswith('.py')), None)
+            if idx is None:
+                continue
+            script = os.path.join(cfgdir, os.path.basename(toks[idx].strip('"')))
+            rest = toks[idx + 1:]
+            w['commandPath'] = ' '.join([f'"{sys.executable}"', f'"{script}"'] + rest)
+
+def has_ctx_widget(settings):
     return any(w.get('type') == 'custom-command'
                and 'ctx-breakdown' in (w.get('commandPath') or '')
                for line in settings.get('lines', []) for w in line)
+
+def ensure_summary_widgets(settings, baseline):
+    """Idempotently ensure both session-summary rows exist. Existing installs
+    already carry the ctx-breakdown widget, so the re-seed below never fires for
+    them; graft the summary widgets in from the baseline instead, onto the same
+    line index, preserving the user's own line-1 customizations."""
+    lines = settings.setdefault('lines', [])
+    while len(lines) < 3:
+        lines.append([])
+    def present(row):
+        needle = f'--row {row}'
+        return any(w.get('type') == 'custom-command'
+                   and 'session-summary' in (w.get('commandPath') or '')
+                   and needle in (w.get('commandPath') or '')
+                   for line in lines for w in line)
+    for li, bline in enumerate(baseline.get('lines', [])):
+        for w in bline:
+            cp = w.get('commandPath') or ''
+            if w.get('type') != 'custom-command' or 'session-summary' not in cp:
+                continue
+            row = 1 if '--row 1' in cp else 2 if '--row 2' in cp else None
+            if not row or present(row):
+                continue
+            ids = [int(x['id']) for l in lines for x in l
+                   if str(x.get('id', '')).isdigit()]
+            nw = dict(w)
+            nw['id'] = str((max(ids) if ids else 0) + 1)
+            while len(lines) <= li:
+                lines.append([])
+            lines[li].append(nw)
+
+with open(baseline_path) as f:
+    baseline = json.load(f)
 
 settings = None
 try:
@@ -175,23 +228,19 @@ try:
         settings = json.load(f)
 except (OSError, ValueError):
     pass
-if settings is None or not has_widget(settings):
+if settings is None or not has_ctx_widget(settings):
     if settings is not None:
         backup = f'{dst}.pre-dotclaude-{int(time.time())}'
         shutil.copy(dst, backup)
-        print(f'!! existing ccstatusline settings lacked the widget; backed up to {backup}')
-    with open(baseline_path) as f:
-        settings = json.load(f)
-for line in settings.get('lines', []):
-    for w in line:
-        old = w.get('commandPath') or ''
-        if w.get('type') == 'custom-command' and 'ctx-breakdown' in old:
-            flags = [t for t in old.split() if t.startswith('--')]
-            w['commandPath'] = ' '.join([cmd] + flags)
-os.makedirs(os.path.dirname(dst), exist_ok=True)
+        print(f'!! existing ccstatusline settings lacked the ctx widget; backed up to {backup}')
+    settings = baseline
+
+ensure_summary_widgets(settings, baseline)
+patch_paths(settings)
+os.makedirs(cfgdir, exist_ok=True)
 with open(dst, 'w') as f:
     json.dump(settings, f, indent=2)
-print('==> ccstatusline settings installed (ctx-breakdown widget wired)')
+print('==> ccstatusline settings installed (ctx-breakdown + session-summary widgets wired)')
 PY
 
 # ---------------------------------------------------------------------------
