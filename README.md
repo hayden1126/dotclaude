@@ -63,7 +63,8 @@ need nothing extra.
 
 ## Hooks
 
-`settings.json` wires these lifecycle hooks:
+`settings.json` wires these lifecycle hooks (all run by default except `danger-guard`, which
+ships but is opt-in, see its entry):
 
 - **UserPromptSubmit: `handoff-reminder.sh`** (in this repo). When a prompt is a genuine session
   wrap-up or context-reset command (`hand off`, `wrap up`, `stop here`, `clear context`, `/clear`),
@@ -79,7 +80,11 @@ need nothing extra.
   walking up for `.git` (no git subprocess); the summary is the freshest `ai-title` line read from
   the session transcript, so a brand-new session shows the repo alone until Claude generates the
   first summary (a one-turn lag). Fail-open (exit 0, no output on any error). Needs python3 on PATH.
-- **PreToolUse(Bash): `danger-guard.sh`** (in this repo). Two tiers. It hard-blocks
+- **PreToolUse(Bash): `danger-guard.sh`** (in this repo, **ships but not wired by default**).
+  The script is symlinked into `~/.claude/hooks/` so it is ready to use, but `settings.json`
+  intentionally carries no `PreToolUse` block (dropped in `8602081`: `setup.sh` would otherwise
+  silently re-enable a guard some machines want off). Opt in by adding a `PreToolUse` matcher for
+  `Bash` that runs it. Once wired it works in two tiers: it hard-blocks
   (`deny`) never-legitimate ops (force-push, `reset --hard`, `git clean -f`) and prompts
   (`ask`) for routine-but-sensitive ops (plain push, checkout, switch, revert, `rm -rf`).
   Token-aware, so it does not trip on `git commit -m "push fix"`, and it recurses into
@@ -89,7 +94,7 @@ need nothing extra.
   tiers) is downgraded to a single `ask` prompt and every other bash command is auto-approved
   (`allow`). So force-push still needs an explicit yes, but nothing is hard-blocked and routine
   commands stop prompting. Toggle it live with `touch ~/.claude/.danger-guard-auto` (`rm` to
-  disable), or at launch with `DANGER_GUARD_AUTO=1 claude`. Off by default.
+  disable), or at launch with `DANGER_GUARD_AUTO=1 claude`.
 - **Stop** and **Notification**: play a Windows sound and (on permission prompts) a toast. The
   sound hooks are inline in `settings.json`; the toast goes through `notify.sh`, which resolves
   the path for both WSL (`wslpath`) and native Windows git-bash (`cygpath`) and renders
