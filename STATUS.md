@@ -31,7 +31,7 @@ stored here).
   input-ready detector is unaffected. Verified: widget unit-tested (wrap/fallback/empty), the real ccstatusline
   binary renders 3 lines and collapses empty rows, and a live OAuth call produced accurate summaries. Caveat:
   the OAuth credentials file is undocumented and its token rotates; a stale/failed read just leaves the last
-  summary (fail-open).
+  summary (fail-open). Open as **PR #21** (derive merge state: `gh pr view 21 --json state,mergedAt`).
 - **Two loose decisions resolved** (2026-08-18, branch `feat/resolve-loose-decisions`). (a) **danger-guard
   README fix** (`bb99b31`): the Hooks section listed `PreToolUse(Bash): danger-guard.sh` as wired, but
   `settings.json` intentionally omits it (dropped in `8602081`). Reframed as ships-but-opt-in with the
