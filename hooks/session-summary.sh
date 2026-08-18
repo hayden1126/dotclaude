@@ -141,9 +141,11 @@ system = ("You label a developer's coding session in one glance so they can "
 user = (
     (f"Prior summary (may be stale, refine it): {prior}\n\n" if prior else "")
     + "Recent conversation:\n" + dialogue
-    + "\n\nIn 1-2 sentences, plainly state what this session is working on and "
-      "where it currently stands. Be specific -- name the thing being built or "
-      "fixed. No preamble, no markdown, no quotes: just the sentence(s)."
+    + "\n\nIn 1-2 sentences, plainly state what this coding session is building "
+      "or fixing and where it currently stands. Describe the work itself (the "
+      "files, feature, or bug), not the conversation about it; do not address the "
+      "developer or use second person. Plain text only: no markdown, asterisks, "
+      "backticks, quotes, or preamble."
 )
 body = json.dumps({
     "model": MODEL,

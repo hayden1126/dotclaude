@@ -17,7 +17,7 @@ line). Needs preserveColors: true so the dim ANSI passes through.
 Fail-open: any error or missing data -> print nothing (never a traceback, never
 a stray error string in the status line).
 """
-import sys, os, json
+import sys, os, json, re
 
 try:
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -97,6 +97,32 @@ def scan_ai_title(transcript, cwd, chunk=262144):
     return ""
 
 
+def flex_reserve():
+    """Width ccstatusline holds back from every line per its flexMode, then hard
+    -truncates anything longer. Read from the sibling ccstatusline settings.json
+    (this widget lives in that config dir): 'full-minus-N' -> N; else a small
+    safety reserve."""
+    try:
+        here = os.path.dirname(os.path.abspath(__file__))
+        with open(os.path.join(here, "settings.json")) as f:
+            fm = str(json.load(f).get("flexMode", ""))
+        m = re.match(r"full-minus-(\d+)", fm)
+        if m:
+            return int(m.group(1))
+    except Exception:
+        pass
+    return 6
+
+
+def strip_markdown(s):
+    """Drop markdown emphasis so `**bold**`, `*italic*`, and `code` do not render
+    as literal glyphs in the status line."""
+    s = re.sub(r"\*\*([^*]+)\*\*", r"\1", s)
+    s = re.sub(r"\*([^*]+)\*", r"\1", s)
+    s = re.sub(r"`([^`]+)`", r"\1", s)
+    return s.replace("**", "").replace("`", "")
+
+
 def wrap(text, width, max_rows):
     """Greedy word-wrap into at most max_rows lines; ellipsize the last if the
     text does not fit."""
@@ -137,13 +163,24 @@ def main():
     summary = read_cached_summary(cfg, session_id) or scan_ai_title(transcript, cwd)
     if not summary:
         fail()
+    summary = strip_markdown(summary)
 
-    try:
-        width = int(os.environ.get("COLUMNS") or DEFAULT_WIDTH)
-    except ValueError:
-        width = DEFAULT_WIDTH
-    # leave a small margin, and reserve room for the 2-col marker/indent
-    text_width = max(16, width - 2 - len(MARKER))
+    # ccstatusline injects the real terminal width as `terminal_width` in the
+    # stdin JSON -- the authoritative value it uses for its own layout. COLUMNS is
+    # often unset when Claude Code spawns the status line (which truncated the
+    # summary at DEFAULT_WIDTH), so prefer terminal_width; fall back only if it is
+    # missing.
+    width = data.get("terminal_width")
+    if not isinstance(width, int) or width < 20:
+        try:
+            width = int(os.environ.get("COLUMNS") or DEFAULT_WIDTH)
+        except ValueError:
+            width = DEFAULT_WIDTH
+    # ccstatusline renders each line at (terminal_width - flex reserve) and hard
+    # -truncates the rest, so wrap to that effective width -- not the raw width,
+    # which would get clipped mid-word -- and reserve the marker/indent column.
+    usable = max(20, width - flex_reserve())
+    text_width = max(16, usable - len(MARKER) - 1)
 
     rows = wrap(summary, text_width, MAX_ROWS)
     row = arg_row()
