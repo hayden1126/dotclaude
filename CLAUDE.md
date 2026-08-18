@@ -20,7 +20,7 @@
 - On session start, if the repo has a `STATUS.md`, read it before starting work: it holds current state, the next step, and pointers to whatever other durable docs that repo keeps. (Read-side bookend to the handoff skill, which writes it.)
 - Fast lane: if the change is a one-sentence diff, just do it (implement, verify, commit). No ceremony.
 - Full lane (multi-file or unfamiliar): explore, spec, plan, execute, verify, review. Keep durable state in `SPEC.md`, `PLAN.md`, `STATUS.md` (seed them from `~/.claude/templates/`) so it survives `/clear`. Do not let the planner also be the implementer for large work.
-- Delegate verbose, read-only, or independent work to subagents; they return summaries and keep the main context clean. Keep code-writing single-threaded. Parallelize reads and research, never parallel edits.
+- Delegate verbose, read-only, or independent work to subagents; they return summaries and keep the main context clean. Keep code-writing single-threaded; parallelize reads and research freely. Parallel edits only when each agent writes its own new file that no other agent touches and you merge single-threaded: never two agents on the same file or shared state.
 - Always give yourself a runnable verification target (tests, build, lint, screenshot). Show evidence, not assertions.
 - If I have corrected you twice on the same thing, the context is polluted: stop, reload from the durable files, and start fresh.
 
