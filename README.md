@@ -36,12 +36,14 @@ repo file as a curated baseline while the runtime owns its own copy.
 | `hooks/handoff-reminder.sh` | UserPromptSubmit hook: on a wrap-up / handoff / clear-memory signal, reminds me to invoke the `handoff` skill instead of improvising it | symlink `~/.claude/hooks/handoff-reminder.sh` |
 | `hooks/session-title.sh` | UserPromptSubmit hook: sets the terminal tab title to `[<repo>] <ai-summary>` via `sessionTitle`, so tabs are tellable apart | symlink `~/.claude/hooks/session-title.sh` |
 | `hooks/notify.sh` | Notification(permission_prompt) hook: pops a Windows toast, resolving the toast path per platform (WSL via `wslpath`, native Windows git-bash via `cygpath`) | symlink `~/.claude/hooks/notify.sh` |
+| `hooks/session-summary.sh` | Stop hook: regenerates a 1-2 sentence session summary via a direct Haiku Messages-API call (Claude subscription OAuth token, stdlib urllib, no API key/jq), detached so it never blocks; caches to `<config-dir>/session-summaries/<session_id>.txt` for the status-line widget | symlink `~/.claude/hooks/session-summary.sh` |
 | `templates/` | `SPEC.md`, `PLAN.md`, `STATUS.md` scaffolds for full-lane work that survive `/clear` | symlink per file into `~/.claude/templates/` |
 | `notify-toast.ps1` | Windows toast script that `notify.sh` renders for the Notification hook | symlink `~/.claude/notify-toast.ps1` |
 | `plugins/marketplaces.json` | Marketplaces to register | consumed by `setup.sh` |
 | `plugins/enabled.json` | Plugins to install and enable | consumed by `setup.sh` |
 | `statusline/ctx-breakdown.py` | ccstatusline widget: colored per-category context chips (system prompt, tools, agents, memory, skills, MCP, messages) | symlink `~/.config/ccstatusline/ctx-breakdown.py` |
-| `statusline/ccstatusline-settings.json` | ccstatusline layout baseline that wires the widget in | installed by `setup.sh` to `~/.config/ccstatusline/settings.json` (paths patched per machine) |
+| `statusline/session-summary.py` | ccstatusline widget: renders the cached session summary (falls back to the transcript ai-title), word-wrapped across two dim rows on status lines 2-3 (`--row 1` / `--row 2`) | symlink `~/.config/ccstatusline/session-summary.py` |
+| `statusline/ccstatusline-settings.json` | ccstatusline layout baseline that wires the ctx-breakdown and session-summary widgets in | installed by `setup.sh` to `~/.config/ccstatusline/settings.json` (paths patched per machine) |
 | `tools.json` | Standalone CLI tools (ccstatusline via bun) | consumed by `setup.sh` |
 | `docs/PLUGINS.md` | One-line description of each plugin | reference |
 | `docs/chrome-devtools-wsl.md` | WSL2-only: how to make `chrome-devtools-mcp` work (Strategy A headless Linux Chrome, plus B to attach to your Windows Chrome) | reference |
@@ -95,11 +97,20 @@ ships but is opt-in, see its entry):
   (`allow`). So force-push still needs an explicit yes, but nothing is hard-blocked and routine
   commands stop prompting. Toggle it live with `touch ~/.claude/.danger-guard-auto` (`rm` to
   disable), or at launch with `DANGER_GUARD_AUTO=1 claude`.
-- **Stop** and **Notification**: play a Windows sound and (on permission prompts) a toast. The
-  sound hooks are inline in `settings.json`; the toast goes through `notify.sh`, which resolves
-  the path for both WSL (`wslpath`) and native Windows git-bash (`cygpath`) and renders
-  `notify-toast.ps1`. Windows-only: on macOS/Linux, swap for your platform's notifier
-  (`osascript` / `notify-send`).
+- **Stop: `session-summary.sh`** (in this repo). On each substantive turn it (re)generates a 1-2
+  sentence "what is this session doing, and where does it stand" summary and caches it for the
+  status-line widget, so a developer juggling several Claude terminals can re-orient after switching
+  back. Generation is a direct Haiku Messages-API call authenticated with the Claude subscription
+  OAuth token read from `~/.claude/.credentials.json` (stdlib urllib, no API key, no jq), so it burns
+  a little 5h/7d subscription quota per turn but skips the system-prompt overhead of a headless
+  `claude -p`. Detached so Stop never blocks the turn; fails open (exit 0) on a missing/expired token
+  or a failed call, leaving the prior summary in place. A cadence gate skips regeneration when the
+  transcript grew < 2KB, and the prior summary is fed back in. Needs python3 on PATH.
+- **Stop / Notification sounds**: play a Windows sound and (on permission prompts) a toast. The
+  sound hooks are inline in `settings.json` (the Stop sound runs alongside `session-summary.sh`
+  above); the toast goes through `notify.sh`, which resolves the path for both WSL (`wslpath`) and
+  native Windows git-bash (`cygpath`) and renders `notify-toast.ps1`. Windows-only: on macOS/Linux,
+  swap for your platform's notifier (`osascript` / `notify-send`).
 
 ## Status line
 
@@ -118,8 +129,15 @@ widget shows the total with a hint. The total chip shows the token count and its
 of the window, set off from the per-category chips by a thin divider; it is green, turns
 amber past 50% of the context window, red past 66%, and blinking bright red past 83%
 (about 400k and 500k of a 600k window; terminals without blink support show it static).
-The widget lives in ccstatusline's config dir, so reinstalling or upgrading ccstatusline
-never touches it.
+`statusline/session-summary.py` adds a second custom widget on status lines 2 and 3 (previously
+empty): a 1-2 sentence plain-language summary of what the session is doing and where it stands,
+word-wrapped to the terminal width across two dim rows (`--row 1` / `--row 2`). The text is produced
+out-of-band by the `session-summary.sh` Stop hook and cached per session; the widget only reads that
+cache, falling back to Claude Code's own ai-title before the first summary lands. Line 1 (model,
+context, git, usage) is left untouched so anything that keys on it keeps working.
+
+Both widgets live in ccstatusline's config dir, so reinstalling or upgrading ccstatusline
+never touches them.
 
 ## What's deliberately not here
 

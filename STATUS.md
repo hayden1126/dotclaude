@@ -10,6 +10,28 @@ Base: `main`. For branch / PR / push state, run `gh pr list` and `git log main..
 stored here).
 
 ## Done (recent; git holds the detail)
+- **Session-summary status-line row** (2026-08-18, design in
+  `~/.claude/plans/in-an-earlier-session-toasty-marshmallow.md`). A persistent 1-2 sentence "what is this
+  session doing, and where does it stand" line so several concurrent Claude terminals are tellable apart
+  without relying on the (often off-screen) native task panel. Two decoupled halves:
+  **`statusline/session-summary.py`**, a ccstatusline custom-command widget on the previously-empty lines 2-3
+  (`--row 1`/`--row 2`, dim, word-wrapped to COLUMNS) that reads a cached summary and falls back to the
+  transcript's `ai-title`; and **`hooks/session-summary.sh`**, a `Stop` hook that regenerates the summary via a
+  **direct Haiku Messages-API call authenticated with the Claude subscription OAuth token** from
+  `~/.claude/.credentials.json` (no API key; stdlib `urllib`, no jq), writing
+  `<config-dir>/session-summaries/<session_id>.txt`. Detached (never blocks the turn), fail-open, cadence-gated
+  (skips if the transcript grew <2KB), feeds the prior summary back. Chosen over headless `claude -p` after
+  measuring both live: direct API ~3.7s and ~3x cheaper (no system-prompt overhead) vs `claude -p` ~11.7s.
+  `setup.sh` §5 generalized: symlinks BOTH `statusline/*.py`, patches any custom-command commandPath preserving
+  trailing args, and idempotently grafts the two widgets into an existing install. `settings.json` registers the
+  Stop hook, but it is COPIED by setup.sh (needs a `./setup.sh` re-run or hand-edit). This session installed
+  **surgically** (live ccstatusline config patched + hook appended to live `settings.json`) because a full
+  `copy_managed` would clobber the runtime-managed `model` key; the widget is live now, the Stop-hook
+  auto-refresh activates next session. **Line 1 (metrics/ctx) left untouched** so the loop-engineering
+  input-ready detector is unaffected. Verified: widget unit-tested (wrap/fallback/empty), the real ccstatusline
+  binary renders 3 lines and collapses empty rows, and a live OAuth call produced accurate summaries. Caveat:
+  the OAuth credentials file is undocumented and its token rotates; a stale/failed read just leaves the last
+  summary (fail-open).
 - **Two loose decisions resolved** (2026-08-18, branch `feat/resolve-loose-decisions`). (a) **danger-guard
   README fix** (`bb99b31`): the Hooks section listed `PreToolUse(Bash): danger-guard.sh` as wired, but
   `settings.json` intentionally omits it (dropped in `8602081`). Reframed as ships-but-opt-in with the
@@ -44,33 +66,18 @@ stored here).
   session (6 `custom-title` lines, tab set to `[dotclaude] <summary>`), with dedup (key `customTitle`,
   confirmed on live data) suppressing redundant re-emits when the summary is unchanged. Design in
   `~/.claude/plans/status-hazy-robin.md`.
-- **`frontend-ui-discipline` trimmed to general-only** (2026-08-17). Its bella-specific
-  `references/self-contained-dashboards.md` was **migrated out** into a new project-scoped `bella-dashboard`
-  skill that now lives in the **bella repo** (`~/code/bella/.claude/skills/bella-dashboard/`, committed
-  there, not here) — so a bella-only playbook no longer loads into every project's namespace. This repo's
-  change: dropped the reference file, trimmed the SKILL.md intro line + the description's
-  "self-contained-dashboard specifics" tail, and added a migration note atop `SPEC.md`. The new skill also
-  captured the streaming-chat + Worker-backend + CJK-typography scars from post-2026-08-16 bella work. See
+- **`frontend-ui-discipline` skill** (2026-08-16/17). Reusable desktop+mobile web-UI discipline distilled
+  from the Bella dashboard work (verify-at-both-widths, sticky/scroll-margin math, touch≠hover,
+  single-source-of-truth state, i18n); RED→GREEN validated per `superpowers:writing-skills`. Its
+  bella-specific dashboard reference was later migrated out into a project-scoped `bella-dashboard` skill in
+  the bella repo, so a bella-only playbook no longer loads into every project's namespace. See
   [[frontend-ui-discipline-skill]], [[bella-dashboard-skill]].
 - **Handoff: proactive CLAUDE.md trigger** (2026-08-16, branch `handoff-proactive-claude-md`, commit
   `6c775d8`). `skills/handoff/SKILL.md` Step 2 now fires one narrow, prune-biased proactive CLAUDE.md
   reflection (a durable repo-level convention/structural fact established this session → propose via
   `/revise-claude-md`, scoped to that fact), tells the reconcile sub-agent to cover nested CLAUDE.md
   files (not just root), and gains a Common Mistakes row for the silent-omission case. Design rationale
-  in `~/.claude/plans/improve-my-handoff-skill-inherited-lamport.md`. See [[dotclaude-handoff-skill]].
-- **`frontend-ui-discipline` skill** (2026-08-16). Reusable web-UI discipline (desktop + mobile) distilled
-  from the Bella president-dashboard UI work: `SKILL.md` (themed sections — verify-at-both-widths, measure-
-  don't-assume, sticky/scroll-margin offset math, touch≠hover, single-source-of-truth state, overlays /
-  highlight / i18n, robustness, responsive) + (originally) a `references/self-contained-dashboards.md`
-  bella pattern reference, **migrated out to the bella repo on 2026-08-17 — see the entry above**.
-  Authored from its own `SPEC.md` (kept in the
-  dir as source), a third `~/bella/dashboards/president-briefing/build.py` rationale pass, and a full-history
-  sweep of all 51 Bella commit messages. **RED→GREEN validated** per `superpowers:writing-skills`: a
-  skill-less agent missed 16px inputs / 44px tap-targets / measured sticky offset; the same task with the
-  skill fixed all three. Symlinked into `~/.claude/skills`. SKILL.md ~800 words (over the ~500 soft target,
-  kept for coverage; split lever = move the two low-frequency sections into a second reference). See
-  [[frontend-ui-discipline-skill]].
-- **`vetting-sources` skill** (2026-08-15, commit `245eeda`). New procedural skill: bring an external /
+  in `~/.claude/plans/improve-my-handoff-skill-inherited-lamport.md`. See [[dotclaude-handoff-skill]].- **`vetting-sources` skill** (2026-08-15, commit `245eeda`). New procedural skill: bring an external /
   third-party document into a knowledge base by faithful multi-agent extraction, an accuracy + internal-
   consistency audit (reconcile vs filings and the web, then adversarially verify), and a cite-safety
   brief; quarantine holds until the audit clears. Delegates to `research-sourcing` / `research-discipline`
@@ -142,6 +149,10 @@ stored here).
   autonomous loop-engineering handoff (a Python orchestrator step that refreshes the RESUME block).
 - Evaluated and SKIPPED, do not re-raise: (a) wiring `handoff-reminder.sh` into the loop-engineering inner
   loop (the puppet gets one machine prompt with no wrap-up phrase, so the hook has no addressee; the skill
-  already inherits there); (b) cross-platform notifiers for the toast (YAGNI on this WSL-only setup).
+  already inherits there); (b) cross-platform notifiers for the toast (YAGNI on this WSL-only setup);
+  (c) a CLAUDE.md nudge to force more native task-list creation so the task panel shows progress more often
+  — rejected: the new session-summary line already grounds "what/where" without depending on task hygiene, a
+  blanket nudge fights the fast-lane rule, and stale/unmarked tasks mislead. Revisit only if a *medium*-work
+  gap (4-6 steps, no tasks created) shows up in practice, and then scope it to multi-step work, not "always".
 - A fresh clone on a new WSL machine needs `./setup-chrome-wsl.sh` run once (the MCP override lives in
   `~/.claude.json` user scope, not the repo); non-WSL machines need nothing.

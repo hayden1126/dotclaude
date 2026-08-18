@@ -45,6 +45,15 @@
             "command": "( powershell.exe -c \"(New-Object Media.SoundPlayer 'C:\\\\Windows\\\\Media\\\\notify.wav').PlaySync()\" >/dev/null 2>&1 & ) ; exit 0"
           }
         ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$HOME/.claude/hooks/session-summary.sh\"",
+            "timeout": 10
+          }
+        ]
       }
     ],
     "Notification": [

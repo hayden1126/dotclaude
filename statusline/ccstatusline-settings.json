@@ -92,8 +92,26 @@
         }
       }
     ],
-    [],
-    []
+    [
+      {
+        "id": "20",
+        "type": "custom-command",
+        "color": "brightBlack",
+        "commandPath": "python session-summary.py --row 1",
+        "timeout": 2000,
+        "preserveColors": true
+      }
+    ],
+    [
+      {
+        "id": "21",
+        "type": "custom-command",
+        "color": "brightBlack",
+        "commandPath": "python session-summary.py --row 2",
+        "timeout": 2000,
+        "preserveColors": true
+      }
+    ]
   ],
   "flexMode": "full-minus-40",
   "compactThreshold": 60,
