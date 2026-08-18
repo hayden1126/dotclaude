@@ -20,7 +20,11 @@ stored here).
   research sweep (Karpathy, Anthropic multi-agent guidance, the worktree-parallel camp, and the serial camp
   all converge on that same boundary) and by Hayden's own skills already encoding the disjoint-file
   qualifier (deck-production G3, frontend-ui-discipline, vetting-sources, research-sourcing); resolves the
-  `CLAUDE.md` > skills precedence conflict that made G3 read as forbidden. Design + full sourced research in
+  `CLAUDE.md` > skills precedence conflict that made G3 read as forbidden. (c) The handoff reconcile pass
+  also fixed stale "danger-guard active by default" claims in `skills/handoff/SKILL.md` and `setup.sh`
+  (`a0b8ada`); one incidental now-false clause in `docs/durable-handoff-brief.md` (a dated VERIFIED
+  snapshot) was left for a scope call, see Blocked. Open as **PR #20** (derive merge state:
+  `gh pr view 20 --json state,mergedAt`). Design + full sourced research in
   `~/.claude/plans/status-enumerated-kitten.md`.
 - **Terminal tab title hook** (2026-08-17). New `hooks/session-title.sh` (UserPromptSubmit) sets the
   session title (== terminal tab title) to `[<repo>] <ai-summary>` via the supported
@@ -110,7 +114,12 @@ stored here).
     The plan file owns block numbering only, and must not leak "S<n>" into shipped artifacts.
 
 ## Blocked / decisions needed
-- (none currently)
+- **`docs/durable-handoff-brief.md` scope call.** Line ~98 (in the "Inner-loop inheritance mechanics,
+  VERIFIED 2026-06-17" note) says the global `settings.json` "reference[s] the global `danger-guard.sh`",
+  now false since `8602081` dropped that `PreToolUse` block. Left unedited because it is a dated,
+  point-in-time design snapshot, not a living behavior doc. Decide: correct the clause (one-line fix,
+  e.g. point at the currently-wired hooks) or leave it as a historical record. The nearby loop-engineering
+  reference on the next line is a different repo's file and is NOT stale.
 
 ## Notes for next session
 - **Verify `deck-production` before touching it:** `deckkit regress --ref-deck
