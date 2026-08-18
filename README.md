@@ -34,6 +34,7 @@ repo file as a curated baseline while the runtime owns its own copy.
 | `skills/` | The skills I authored: `coding-practices`, `research-discipline`, `research-sourcing`, `writing-voice`, `staged-reader-review`, `ebook-extract`, `deck-production`, `vetting-sources`, `handoff` | symlink per dir into `~/.claude/skills/`; a skill's `scripts/` CLI also symlinks into `~/.local/bin` when that dir exists (`deck-production` ships `deckkit`) |
 | `hooks/danger-guard.sh` | PreToolUse(Bash) guard: two-tier confirmation for destructive git and `rm` ops | symlink `~/.claude/hooks/danger-guard.sh` |
 | `hooks/handoff-reminder.sh` | UserPromptSubmit hook: on a wrap-up / handoff / clear-memory signal, reminds me to invoke the `handoff` skill instead of improvising it | symlink `~/.claude/hooks/handoff-reminder.sh` |
+| `hooks/session-title.sh` | UserPromptSubmit hook: sets the terminal tab title to `[<repo>] <ai-summary>` via `sessionTitle`, so tabs are tellable apart | symlink `~/.claude/hooks/session-title.sh` |
 | `hooks/notify.sh` | Notification(permission_prompt) hook: pops a Windows toast, resolving the toast path per platform (WSL via `wslpath`, native Windows git-bash via `cygpath`) | symlink `~/.claude/hooks/notify.sh` |
 | `templates/` | `SPEC.md`, `PLAN.md`, `STATUS.md` scaffolds for full-lane work that survive `/clear` | symlink per file into `~/.claude/templates/` |
 | `notify-toast.ps1` | Windows toast script that `notify.sh` renders for the Notification hook | symlink `~/.claude/notify-toast.ps1` |
@@ -62,7 +63,7 @@ need nothing extra.
 
 ## Hooks
 
-`settings.json` wires four lifecycle hooks:
+`settings.json` wires these lifecycle hooks:
 
 - **UserPromptSubmit: `handoff-reminder.sh`** (in this repo). When a prompt is a genuine session
   wrap-up or context-reset command (`hand off`, `wrap up`, `stop here`, `clear context`, `/clear`),
@@ -71,6 +72,13 @@ need nothing extra.
   curate-memory step). Precision-first: it stays silent when "handoff" is just a topic (discussing
   the skill or this hook) and on injected system content (task notifications). Advisory only: it adds context, it cannot run the skill; silent no-op
   otherwise; always exits 0 so it can never block a prompt. Fail-open if `jq` is absent.
+- **UserPromptSubmit: `session-title.sh`** (in this repo). Sets the session title (the terminal tab
+  title) to `[<repo>] <ai-summary>` so tabs are tellable apart. It emits the supported
+  `hookSpecificOutput.sessionTitle`, not raw OSC escapes, so the title has display precedence over
+  Claude's own AI title and the tab's running/idle status icons stay intact. The repo name comes from
+  walking up for `.git` (no git subprocess); the summary is the freshest `ai-title` line read from
+  the session transcript, so a brand-new session shows the repo alone until Claude generates the
+  first summary (a one-turn lag). Fail-open (exit 0, no output on any error). Needs python3 on PATH.
 - **PreToolUse(Bash): `danger-guard.sh`** (in this repo). Two tiers. It hard-blocks
   (`deny`) never-legitimate ops (force-push, `reset --hard`, `git clean -f`) and prompts
   (`ask`) for routine-but-sensitive ops (plain push, checkout, switch, revert, `rm -rf`).

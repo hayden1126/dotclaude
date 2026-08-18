@@ -26,6 +26,15 @@
             "timeout": 5
           }
         ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$HOME/.claude/hooks/session-title.sh\"",
+            "timeout": 5
+          }
+        ]
       }
     ],
     "Stop": [
