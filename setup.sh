@@ -221,8 +221,9 @@ cat <<'EOF'
      notify-toast.ps1. On macOS/Linux, swap them for your platform's notifier
      (osascript / notify-send).
 
- 5.  The danger-guard hook (hooks/danger-guard.sh) needs python3 on PATH.
-     If absent it fails open (allows the command, no guard).
+ 5.  The danger-guard and session-title hooks (hooks/danger-guard.sh,
+     hooks/session-title.sh) need python3 on PATH. If absent they fail open
+     (danger-guard allows the command; session-title leaves the title unchanged).
 
 ============================================================
 

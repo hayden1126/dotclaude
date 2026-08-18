@@ -10,6 +10,24 @@ Base: `main`. For branch / PR / push state, run `gh pr list` and `git log main..
 stored here).
 
 ## Done (recent; git holds the detail)
+- **Terminal tab title hook** (2026-08-17). New `hooks/session-title.sh` (UserPromptSubmit) sets the
+  session title (== terminal tab title) to `[<repo>] <ai-summary>` via the supported
+  `hookSpecificOutput.sessionTitle` field (NOT raw OSC), so tabs are tellable apart while the
+  running/idle status icons stay intact. Repo name from a pure-python `.git` walk (no subprocess,
+  ~10ms); summary is the freshest `{"type":"ai-title",...}` line tail-read from the transcript
+  (one-turn lag on a brand-new session; AI-title generation is not gated by a custom title, so it
+  stays live). Registered as the second `UserPromptSubmit` entry alongside `handoff-reminder.sh`;
+  both run as independent subprocesses and Claude Code aggregates their outputs (additionalContext
+  accumulates, sessionTitle applied separately), so no clobber. Mechanism reverse-engineered from the
+  installed binary (v2.1.233): tab title = session name, precedence `customTitle ?? aiTitle`,
+  `terminalTitleFromRename` defaults true so no settings toggle is needed. Format/branch/turn-1
+  fallback are tunables at the top of the script. NOTE: `settings.json` is COPIED by setup.sh, so the
+  registration needs a `./setup.sh` re-run or a `~/.claude/settings.json` hand-edit (both done this
+  session; the running session even picked the new registration up live, no restart). Fail-open;
+  needs python3. Verified end-to-end: Stage-1 battery green (12/12), and the hook fired live this
+  session (6 `custom-title` lines, tab set to `[dotclaude] <summary>`), with dedup (key `customTitle`,
+  confirmed on live data) suppressing redundant re-emits when the summary is unchanged. Design in
+  `~/.claude/plans/status-hazy-robin.md`.
 - **`frontend-ui-discipline` trimmed to general-only** (2026-08-17). Its bella-specific
   `references/self-contained-dashboards.md` was **migrated out** into a new project-scoped `bella-dashboard`
   skill that now lives in the **bella repo** (`~/code/bella/.claude/skills/bella-dashboard/`, committed
@@ -85,9 +103,11 @@ stored here).
   one new file no other agent touches). A session reading `CLAUDE.md` alone will believe G3 is forbidden.
   Decide whether `CLAUDE.md` gets a pointer or whether "Depth on demand" already covers it. CLAUDE.md
   edits go through `/revise-claude-md`, not by hand.
-- **Pre-existing README drift, unrelated to this branch.** `README.md` says settings.json "wires four
-  lifecycle hooks" and documents `PreToolUse(Bash): danger-guard.sh`, but `settings.json` wires three:
-  danger-guard was dropped in `8602081`. Fix or restore, your call.
+- **README Hooks list enumerates `danger-guard` as wired, but it isn't.** `README.md`'s Hooks section
+  still lists `PreToolUse(Bash): danger-guard.sh` among the wired hooks, but `settings.json` has no
+  `PreToolUse` entry (danger-guard was dropped in `8602081`). The script still ships in `hooks/` and is
+  symlinked by setup.sh, just not registered. Fix by dropping it from the wired list or restoring the
+  `PreToolUse` block, your call.
 
 ## Notes for next session
 - **Verify `deck-production` before touching it:** `deckkit regress --ref-deck
