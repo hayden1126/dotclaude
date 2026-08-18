@@ -5,11 +5,23 @@
 > decisions ([[dotclaude-handoff-skill]], [[dotclaude-research-sourcing-skill]],
 > [[dotclaude-chrome-devtools-wsl]]). Per-effort design rationale lives in its plan under `~/.claude/plans/`.
 
-Last updated: 2026-08-17
+Last updated: 2026-08-18
 Base: `main`. For branch / PR / push state, run `gh pr list` and `git log main..HEAD` (derive it; not
 stored here).
 
 ## Done (recent; git holds the detail)
+- **Two loose decisions resolved** (2026-08-18, branch `feat/resolve-loose-decisions`). (a) **danger-guard
+  README fix** (`bb99b31`): the Hooks section listed `PreToolUse(Bash): danger-guard.sh` as wired, but
+  `settings.json` intentionally omits it (dropped in `8602081`). Reframed as ships-but-opt-in with the
+  opt-in path spelled out; no `settings.json` change (kept opt-in by default per Hayden, who runs it off
+  locally). (b) **parallel-edits carve-out** (`d035a7e`, via `/revise-claude-md`): CLAUDE.md line 23's flat
+  "never parallel edits" is now conditional (parallel edits only when each agent writes its own new file no
+  other agent touches + single-threaded merge; never same file / shared state). Backed by a 5-agent sourced
+  research sweep (Karpathy, Anthropic multi-agent guidance, the worktree-parallel camp, and the serial camp
+  all converge on that same boundary) and by Hayden's own skills already encoding the disjoint-file
+  qualifier (deck-production G3, frontend-ui-discipline, vetting-sources, research-sourcing); resolves the
+  `CLAUDE.md` > skills precedence conflict that made G3 read as forbidden. Design + full sourced research in
+  `~/.claude/plans/status-enumerated-kitten.md`.
 - **Terminal tab title hook** (2026-08-17). New `hooks/session-title.sh` (UserPromptSubmit) sets the
   session title (== terminal tab title) to `[<repo>] <ai-summary>` via the supported
   `hookSpecificOutput.sessionTitle` field (NOT raw OSC), so tabs are tellable apart while the
@@ -98,16 +110,7 @@ stored here).
     The plan file owns block numbering only, and must not leak "S<n>" into shipped artifacts.
 
 ## Blocked / decisions needed
-- **`CLAUDE.md` "never parallel edits" now has a sanctioned exception.** `CLAUDE.md` states it absolutely;
-  `skills/deck-production/SKILL.md` gate G3 relaxes it under one condition (each builder writes exactly
-  one new file no other agent touches). A session reading `CLAUDE.md` alone will believe G3 is forbidden.
-  Decide whether `CLAUDE.md` gets a pointer or whether "Depth on demand" already covers it. CLAUDE.md
-  edits go through `/revise-claude-md`, not by hand.
-- **README Hooks list enumerates `danger-guard` as wired, but it isn't.** `README.md`'s Hooks section
-  still lists `PreToolUse(Bash): danger-guard.sh` among the wired hooks, but `settings.json` has no
-  `PreToolUse` entry (danger-guard was dropped in `8602081`). The script still ships in `hooks/` and is
-  symlinked by setup.sh, just not registered. Fix by dropping it from the wired list or restoring the
-  `PreToolUse` block, your call.
+- (none currently)
 
 ## Notes for next session
 - **Verify `deck-production` before touching it:** `deckkit regress --ref-deck
