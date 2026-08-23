@@ -23,7 +23,8 @@ stored here).
   clause -> bare `[repo]`) and no longer reads `ai-title` (its only tail-scan now is `custom-title`,
   for dedup). Verified: `bash -n`, 5 parse unit tests (no `LABEL:` leak into the prose summary), a live
   Haiku call producing `[hq] Terminal title label caching` plus a clean summary, all four cascade
-  rungs, and dedup. Gotcha saved as [[cc-ai-title-suppressed-by-custom-title]].
+  rungs, and dedup. Gotcha saved as [[cc-ai-title-suppressed-by-custom-title]]. Open as **PR #22**
+  (derive merge state: `gh pr view 22 --json state,mergedAt`).
 - **Session-summary status-line row** (2026-08-18, design in
   `~/.claude/plans/in-an-earlier-session-toasty-marshmallow.md`). A persistent 1-2 sentence "what is this
   session doing, and where does it stand" line so several concurrent Claude terminals are tellable apart
