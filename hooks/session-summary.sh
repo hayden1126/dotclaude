@@ -24,7 +24,7 @@ input=$(cat 2>/dev/null)
 
 generate() {
   python3 - "$1" <<'PY'
-import sys, os, json, urllib.request, urllib.error
+import sys, os, json, re, urllib.request, urllib.error
 
 # ---- tunables -------------------------------------------------------------
 MODEL        = "claude-haiku-4-5-20251001"
@@ -33,8 +33,9 @@ MIN_GROWTH   = 2048     # bytes; skip regen if the transcript grew less than thi
 RECENT_MSGS  = 10       # trailing user/assistant messages fed to the model
 MSG_CLIP     = 400      # chars kept per message
 CALL_TIMEOUT = 30       # seconds for the API call
-MAX_TOKENS   = 200      # summary is 1-2 sentences; cap output cost
+MAX_TOKENS   = 220      # summary is 1-2 sentences + a short label line; cap output cost
 SUMMARY_MAX  = 400      # hard clip on the returned summary
+LABEL_MAX    = 32       # hard clip on the short tab-title label
 # ---------------------------------------------------------------------------
 
 def die():
@@ -61,6 +62,7 @@ cfg = config_dir(transcript)
 out_dir = os.path.join(cfg, "session-summaries")
 state_dir = os.path.join(out_dir, ".state")
 cache_file = os.path.join(out_dir, session_id + ".txt")
+label_file = os.path.join(out_dir, session_id + ".title.txt")
 state_file = os.path.join(state_dir, session_id)
 
 try:
@@ -78,11 +80,17 @@ except (OSError, ValueError):
 if os.path.exists(cache_file) and prev is not None and size - prev < MIN_GROWTH:
     die()
 
-# prior summary, fed back so the label stays stable turn to turn
+# prior summary + label, fed back so both stay stable turn to turn
 prior = ""
 try:
     with open(cache_file, encoding="utf-8") as f:
         prior = " ".join(f.read().split())
+except OSError:
+    pass
+prior_label = ""
+try:
+    with open(label_file, encoding="utf-8") as f:
+        prior_label = " ".join(f.read().split())
 except OSError:
     pass
 
@@ -140,12 +148,16 @@ system = ("You label a developer's coding session in one glance so they can "
           "re-orient after switching between several terminals.")
 user = (
     (f"Prior summary (may be stale, refine it): {prior}\n\n" if prior else "")
+    + (f"Prior label (may be stale, refine it): {prior_label}\n\n" if prior_label else "")
     + "Recent conversation:\n" + dialogue
     + "\n\nIn 1-2 sentences, plainly state what this coding session is building "
       "or fixing and where it currently stands. Describe the work itself (the "
       "files, feature, or bug), not the conversation about it; do not address the "
       "developer or use second person. Plain text only: no markdown, asterisks, "
       "backticks, quotes, or preamble."
+      "\n\nThen, on a separate final line, output exactly 'LABEL: <label>' where "
+      "<label> is a 3-6 word terminal-tab label (at most 32 characters) naming the "
+      "project/feature or current task, with no trailing punctuation."
 )
 body = json.dumps({
     "model": MODEL,
@@ -167,13 +179,30 @@ except Exception as e:
     sys.stderr.write(f"session-summary: api call failed: {e}\n")
     die()
 
-summary = " ".join("".join(
+raw = "".join(
     b.get("text", "") for b in resp.get("content", []) if isinstance(b, dict)
-).split())
+)
+
+# Peel off a trailing "LABEL: ..." line (if the model emitted one) BEFORE collapsing
+# whitespace, so the label never leaks into the prose summary the statusline shows.
+label = None
+kept = []
+for ln in raw.splitlines():
+    m = re.match(r"\s*LABEL:\s*(.*)", ln, re.IGNORECASE)
+    if m:
+        cand = m.group(1).strip().strip("\"'").rstrip(".,;:").strip()
+        if cand:
+            label = cand            # keep the last non-empty LABEL line
+        continue
+    kept.append(ln)
+
+summary = " ".join("\n".join(kept).split())
 if not summary:
     die()
 if len(summary) > SUMMARY_MAX:
     summary = summary[:SUMMARY_MAX - 1].rstrip() + "…"
+if label and len(label) > LABEL_MAX:
+    label = label[:LABEL_MAX - 1].rstrip() + "…"
 
 try:
     os.makedirs(out_dir, exist_ok=True)
@@ -182,6 +211,11 @@ try:
     with open(tmp, "w", encoding="utf-8") as f:
         f.write(summary + "\n")
     os.replace(tmp, cache_file)
+    if label:                        # only touch the label file on a clean parse, so a
+        ltmp = label_file + ".tmp"   # one-off miss keeps the prior good label in place
+        with open(ltmp, "w", encoding="utf-8") as f:
+            f.write(label + "\n")
+        os.replace(ltmp, label_file)
     with open(state_file, "w") as f:
         f.write(str(size))
 except OSError:

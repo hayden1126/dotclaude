@@ -6,8 +6,10 @@ line under the metrics row, so a developer juggling several Claude terminals can
 re-orient after switching back to one. The text is produced out-of-band by the
 Stop hook (hooks/session-summary.sh -> Haiku) and cached per session; this widget
 only reads that cache. Before the first summary lands (or if generation is off or
-failed) it falls back to Claude Code's own ai-title from the transcript, so a
-fresh session still shows something.
+failed) it falls back to Claude Code's own ai-title from the transcript. NOTE: that
+ai-title is now usually absent (CC 2.1.237 stopped generating it once a custom
+session title is set, which session-title.sh does on turn 1), so this fallback
+rarely fires and a fresh session may show nothing until the first Stop summary lands.
 
 The summary can run to two visual rows. ccstatusline renders one widget per line,
 so this script is wired twice -- `--row 1` on line 2, `--row 2` on line 3 -- and
@@ -71,8 +73,11 @@ def read_cached_summary(cfg, session_id):
 
 
 def scan_ai_title(transcript, cwd, chunk=262144):
-    """Freshest ai-title from the transcript tail: the zero-cost fallback shown
-    before the Haiku summary lands (same tail-scan as session-title.sh)."""
+    """Freshest ai-title from the transcript tail: a zero-cost fallback for before
+    the Haiku summary lands. NOTE: since CC 2.1.237 the ai-title is generated only
+    when no custom session title is set, and session-title.sh sets one on turn 1, so
+    this record is now usually absent. This widget is the last reader of it;
+    session-title.sh no longer scans ai-title (it reads the .title.txt label)."""
     if not transcript:
         return ""
     path = transcript
