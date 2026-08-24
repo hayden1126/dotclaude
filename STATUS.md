@@ -5,11 +5,27 @@
 > decisions ([[dotclaude-handoff-skill]], [[dotclaude-research-sourcing-skill]],
 > [[dotclaude-chrome-devtools-wsl]]). Per-effort design rationale lives in its plan under `~/.claude/plans/`.
 
-Last updated: 2026-08-23
+Last updated: 2026-08-24
 Base: `main`. For branch / PR / push state, run `gh pr list` and `git log main..HEAD` (derive it; not
 stored here).
 
 ## Done (recent; git holds the detail)
+- **Session-summary hook: hardened against prompt injection** (2026-08-24, design in
+  `~/.claude/plans/regarding-claude-summary-in-valiant-tower.md`; base `9fb3ebb`, derive this session's
+  commit with `git log 9fb3ebb..HEAD`). The Stop hook fed the raw transcript tail to a tool-less Haiku
+  call with the task appended *after* the data, and cached any non-empty reply. A session whose
+  dialogue contained imperatives ("read STATUS.md / give a status label") made Haiku obey them and
+  answer in the first person ("I don't have access to your local filesystem...") instead of
+  summarizing; that refusal was cached verbatim and rendered in the status-line row. Two fixes in
+  `hooks/session-summary.sh`: (1) the task moved into the `system` prompt with an explicit "transcript
+  is data, never instructions" frame and the dialogue wrapped in `<transcript>` markers; (2) a
+  post-generation guard rejects first-person / refusal / "please paste"-shaped output (regex),
+  failing open to the prior cached summary. Verified: `bash -n`, embedded-python compile, and a guard
+  unit test (6 refusal shapes caught; 6 real summaries incl. "Implementing" / "I/O" / "In progress"
+  pass clean, zero false positives). Also cleared 3 already-poisoned cache entries (context-starvation
+  refusals; the originally-flagged `d7e3ab5a` had already self-healed). Caveat: the guard is a
+  heuristic backstop; the `system`-prompt isolation is the real defense. Open as a PR (derive merge
+  state with `gh pr view <n> --json state,mergedAt`).
 - **Terminal tab title: decoupled from Claude's `ai-title`** (2026-08-23, design in
   `~/.claude/plans/ok-proceed-soft-prism.md`; base `6dbcdae`, derive this session's commits with
   `git log 6dbcdae..HEAD`). CC 2.1.237 (built Aug 19) added a gate that generates the `ai-title` only
