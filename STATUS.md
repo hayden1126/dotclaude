@@ -5,11 +5,26 @@
 > decisions ([[dotclaude-handoff-skill]], [[dotclaude-research-sourcing-skill]],
 > [[dotclaude-chrome-devtools-wsl]]). Per-effort design rationale lives in its plan under `~/.claude/plans/`.
 
-Last updated: 2026-08-18
+Last updated: 2026-08-23
 Base: `main`. For branch / PR / push state, run `gh pr list` and `git log main..HEAD` (derive it; not
 stored here).
 
 ## Done (recent; git holds the detail)
+- **Terminal tab title: decoupled from Claude's `ai-title`** (2026-08-23, design in
+  `~/.claude/plans/ok-proceed-soft-prism.md`; base `6dbcdae`, derive this session's commits with
+  `git log 6dbcdae..HEAD`). CC 2.1.237 (built Aug 19) added a gate that generates the `ai-title` only
+  when no custom session title is set; `session-title.sh` set one on turn 1, so from Aug 20 it
+  suppressed the very `ai-title` record it tail-read and the tab collapsed to bare `[repo]` (proven by
+  A/B of the installed `2.1.235` vs `2.1.237` binaries: the write path is identical, the
+  `!sessionTitle` gate is new). Fix: stop depending on `ai-title`. `session-summary.sh`'s existing
+  Haiku call now also emits a `<=32`-char `LABEL:` cached to `session-summaries/<id>.title.txt` (the
+  long summary in `<id>.txt` stays clean prose for the widget); `session-title.sh` builds
+  `[repo] <label>` via a cascade (Haiku label -> current prompt's first line -> long-summary first
+  clause -> bare `[repo]`) and no longer reads `ai-title` (its only tail-scan now is `custom-title`,
+  for dedup). Verified: `bash -n`, 5 parse unit tests (no `LABEL:` leak into the prose summary), a live
+  Haiku call producing `[hq] Terminal title label caching` plus a clean summary, all four cascade
+  rungs, and dedup. Gotcha saved as [[cc-ai-title-suppressed-by-custom-title]]. Open as **PR #22**
+  (derive merge state: `gh pr view 22 --json state,mergedAt`).
 - **Session-summary status-line row** (2026-08-18, design in
   `~/.claude/plans/in-an-earlier-session-toasty-marshmallow.md`). A persistent 1-2 sentence "what is this
   session doing, and where does it stand" line so several concurrent Claude terminals are tellable apart
@@ -51,24 +66,10 @@ stored here).
   snapshot) was left for a scope call, see Blocked. Open as **PR #20** (derive merge state:
   `gh pr view 20 --json state,mergedAt`). Design + full sourced research in
   `~/.claude/plans/status-enumerated-kitten.md`.
-- **Terminal tab title hook** (2026-08-17). New `hooks/session-title.sh` (UserPromptSubmit) sets the
-  session title (== terminal tab title) to `[<repo>] <ai-summary>` via the supported
-  `hookSpecificOutput.sessionTitle` field (NOT raw OSC), so tabs are tellable apart while the
-  running/idle status icons stay intact. Repo name from a pure-python `.git` walk (no subprocess,
-  ~10ms); summary is the freshest `{"type":"ai-title",...}` line tail-read from the transcript
-  (one-turn lag on a brand-new session; AI-title generation is not gated by a custom title, so it
-  stays live). Registered as the second `UserPromptSubmit` entry alongside `handoff-reminder.sh`;
-  both run as independent subprocesses and Claude Code aggregates their outputs (additionalContext
-  accumulates, sessionTitle applied separately), so no clobber. Mechanism reverse-engineered from the
-  installed binary (v2.1.233): tab title = session name, precedence `customTitle ?? aiTitle`,
-  `terminalTitleFromRename` defaults true so no settings toggle is needed. Format/branch/turn-1
-  fallback are tunables at the top of the script. NOTE: `settings.json` is COPIED by setup.sh, so the
-  registration needs a `./setup.sh` re-run or a `~/.claude/settings.json` hand-edit (both done this
-  session; the running session even picked the new registration up live, no restart). Fail-open;
-  needs python3. Verified end-to-end: Stage-1 battery green (12/12), and the hook fired live this
-  session (6 `custom-title` lines, tab set to `[dotclaude] <summary>`), with dedup (key `customTitle`,
-  confirmed on live data) suppressing redundant re-emits when the summary is unchanged. Design in
-  `~/.claude/plans/status-hazy-robin.md`.
+- **Terminal tab title hook** (2026-08-17, `hooks/session-title.sh` introduced; design in
+  `~/.claude/plans/status-hazy-robin.md`). Registered as the second `UserPromptSubmit` entry beside
+  `handoff-reminder.sh` (independent subprocesses, no clobber). Its original `ai-title`-based label
+  mechanism was replaced on 2026-08-23, see the entry above; git holds the origin detail.
 - **`frontend-ui-discipline` skill** (2026-08-16/17). Reusable desktop+mobile web-UI discipline distilled
   from the Bella dashboard work (verify-at-both-widths, sticky/scroll-margin math, touch≠hover,
   single-source-of-truth state, i18n); RED→GREEN validated per `superpowers:writing-skills`. Its
@@ -124,6 +125,13 @@ stored here).
     The plan file owns block numbering only, and must not leak "S<n>" into shipped artifacts.
 
 ## Blocked / decisions needed
+- **Status-line widget's `ai-title` fallback is now dead.** `statusline/session-summary.py`
+  (`scan_ai_title`) still falls back to Claude's `ai-title` before the first Stop summary lands, but
+  the title work above suppresses `ai-title` generation, so that record is now generally never
+  written and a fresh session shows blank summary rows until the first Stop. No free pre-Stop
+  replacement exists (the `.title.txt` label is also written on Stop). Decide: seed those rows from
+  the current prompt's first line (as `session-title.sh` now does) or accept the brief blank and drop
+  the dead `scan_ai_title` fallback. Docs already note the fallback is moot.
 - **`docs/durable-handoff-brief.md` scope call.** Line ~98 (in the "Inner-loop inheritance mechanics,
   VERIFIED 2026-06-17" note) says the global `settings.json` "reference[s] the global `danger-guard.sh`",
   now false since `8602081` dropped that `PreToolUse` block. Left unedited because it is a dated,

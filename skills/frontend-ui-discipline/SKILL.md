@@ -9,6 +9,8 @@ Build web UIs that work on mobile and desktop the first time. Each rule is a sca
 
 ## Verify in a real browser, at both widths
 - **Never claim done from the code alone.** Build, reload, assert state in the browser (`chrome-devtools` `evaluate_script`), screenshot, then commit. Evidence, not assertion.
+- **Design mocks especially — a CSS read cannot see a rendered visual.** Filter/displacement/blend effects (`feTurbulence`, masks, `mix-blend`) can silently shred a shape into fragments; a one-second screenshot catches what hand-reading the stylesheet never will. Never present a visual you have not seen rendered.
+- **A fix isn't done until it's re-rendered and back-ported.** Re-shoot after every change — one fix can spawn another (an overlap patch that adds a visible seam) — and propagate a shared-asset fix to every copy that carries it (artboards, exports, the canvas), or the copies silently drift. For centering/optical-alignment work see the `ui-alignment` skill.
 - **Test mobile AND desktop every time:** 390×844 and ≥1024. Bugs that appear at only one width are the common case.
 - **Ship small verified increments** — one change, verify, commit.
 - **Verification traps:** smooth-scroll is async (wait, then measure); read a live `Highlight`'s size *before* clearing the search; `curl` needs `--compressed` or a gzipped page reads as empty.
