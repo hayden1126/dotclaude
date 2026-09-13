@@ -4,5 +4,11 @@
       "repo": "anthropics/claude-plugins-official",
       "source": "github"
     }
+  },
+  "openai-codex": {
+    "source": {
+      "repo": "openai/codex-plugin-cc",
+      "source": "github"
+    }
   }
 }

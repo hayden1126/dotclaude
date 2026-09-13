@@ -1,0 +1,10 @@
+# Codex CLI configuration — managed by dotclaude, symlinked to ~/.codex/config.toml.
+# See dotclaude docs for the Codex/Claude pairing rationale.
+
+# Read a repo's CLAUDE.md as the project instruction file when it has no AGENTS.md, so
+# Codex obeys the same per-project rules as Claude Code. An explicit AGENTS.md still wins.
+project_doc_fallback_filenames = ["CLAUDE.md"]
+
+# Combined instruction-doc cap (default 32 KiB); raised so a longer CLAUDE.md charter
+# isn't silently truncated.
+project_doc_max_bytes = 65536

@@ -93,6 +93,15 @@ for f in "$REPO_DIR"/templates/*.md; do
   link "$f" "$CLAUDE_DIR/templates/$(basename "$f")"
 done
 
+# codex/ — Codex CLI config, symlinked into ~/.codex for Codex/Claude instruction
+# parity (config.toml points Codex at each repo's CLAUDE.md; AGENTS.md is the global
+# working agreement). Link ONLY these two files: NEVER symlink the whole ~/.codex dir,
+# which holds auth.json (a secret) plus log/ and tmp/ that must stay local.
+CODEX_DIR="$HOME/.codex"
+mkdir -p "$CODEX_DIR"
+link "$REPO_DIR/codex/config.toml" "$CODEX_DIR/config.toml"
+link "$REPO_DIR/codex/AGENTS.md"   "$CODEX_DIR/AGENTS.md"
+
 # ---------------------------------------------------------------------------
 # 3. Register marketplaces and install plugins
 # ---------------------------------------------------------------------------
