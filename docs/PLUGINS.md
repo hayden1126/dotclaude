@@ -1,9 +1,10 @@
 # Plugins
 
-The seven plugins this setup installs, all from the official marketplace
-(`anthropics/claude-plugins-official`). Authoritative source: each plugin's own repo.
-`setup.sh` reads `plugins/marketplaces.json` and `plugins/enabled.json` to register and
-install them.
+The eight plugins this setup installs. Seven are from the official marketplace
+(`anthropics/claude-plugins-official`); the eighth, `codex`, is from the separate
+`openai-codex` marketplace (`openai/codex-plugin-cc`). Authoritative source: each plugin's
+own repo. `setup.sh` reads `plugins/marketplaces.json` and `plugins/enabled.json` to register
+and install them.
 
 ## `superpowers`
 
@@ -46,3 +47,10 @@ network and console, run traces and audits. Works out of the box on Linux and ma
 the stock server cannot launch Chrome; a machine-local, opt-in override fixes it (not applied
 by `setup.sh`). WSL2 users: see [chrome-devtools-wsl.md](chrome-devtools-wsl.md). Everyone
 else needs nothing.
+
+## `codex`
+
+Use OpenAI's Codex CLI from inside Claude Code: `/codex:review` for an independent second
+opinion on the current diff, `/codex:rescue` to delegate a well-specified task. From the
+non-official `openai-codex` marketplace (`openai/codex-plugin-cc`), not the official one.
+Full setup and usage in [codex.md](codex.md).
