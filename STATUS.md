@@ -10,23 +10,18 @@ Base: `main`. For branch / PR / push state, run `gh pr list` and `git log main..
 stored here).
 
 ## Done (recent; git holds the detail)
-- **Codex CLI integrated as an optional second tool** (2026-09-13, branch
-  `feat/codex-cli-integration`, base `3c45679`; derive this session's commit with
+- **Codex CLI integrated + plugin docs reconciled** (2026-09-13, branch
+  `feat/codex-cli-integration`, base `3c45679`; derive this session's commits with
   `git log 3c45679..HEAD`; rationale + wiring diagram in `docs/codex.md`). OpenAI's Codex CLI
-  paired with Claude Code (funded by the ChatGPT Pro sub), optional and explicit: it never runs
-  unless invoked. Two layers: **A, parity** (always on, Codex obeys the same rules Claude does)
-  and **B, the bridge** (the toggleable `codex-plugin-cc` plugin, the only thing that lets Claude
-  invoke Codex). Shipped: new `codex/config.toml` + `codex/AGENTS.md` symlinked into `~/.codex/` by
-  a `setup.sh` block (only those two files, never the whole dir, so `auth.json` stays local);
-  `openai-codex` marketplace (`openai/codex-plugin-cc`) added to `plugins/marketplaces.json` and
-  `codex@openai-codex` enabled in `plugins/enabled.json`; `docs/codex.md` written as the how/why.
-  Parity mechanism: `config.toml` sets `project_doc_fallback_filenames = ["CLAUDE.md"]` (plus a
-  64 KiB `project_doc_max_bytes`) so Codex reads a repo's `CLAUDE.md` when it has no `AGENTS.md`;
-  an explicit `AGENTS.md` still wins. Verified: plugin active, `/codex:setup` green (codex 0.154.0,
-  ChatGPT auth, review-gate off, runtime lazy), and the `CLAUDE.md`-fallback parity confirmed
-  empirically. Review-gate left OFF by choice (opt in via `/codex:setup --enable-review-gate`).
-  **Not yet done:** `/codex:review` end-to-end test not run; and the branch is committed but NOT
-  pushed, push/PR decision pending Hayden (derive state with `git status -sb` / `gh pr list`).
+  paired with Claude Code as an optional second tool (funded by the ChatGPT Pro sub), never running
+  unless invoked: `codex/{config.toml,AGENTS.md}` symlinked into `~/.codex/` by a `setup.sh` block
+  (`auth.json` stays local), the `openai-codex` marketplace (`openai/codex-plugin-cc`) plus the
+  `codex@openai-codex` plugin wired into `plugins/*.json`, and CLAUDE.md-fallback parity
+  (`config.toml` sets `project_doc_fallback_filenames = ["CLAUDE.md"]`) so Codex reads a repo's
+  `CLAUDE.md` when it has no `AGENTS.md`. The follow-up commit reconciled the stale docs: `README.md`
+  and `docs/PLUGINS.md` now say eight plugins (seven from the official marketplace, `codex` from the
+  non-official `openai-codex` one), with a `codex/` table row and a `## codex` section. Verified:
+  plugin active, `/codex:setup` green (codex 0.154.0, ChatGPT auth, review-gate off).
 - **Session-summary hook: hardened against prompt injection** (2026-08-24, design in
   `~/.claude/plans/regarding-claude-summary-in-valiant-tower.md`; base `9fb3ebb`, derive this session's
   commit with `git log 9fb3ebb..HEAD`). The Stop hook fed the raw transcript tail to a tool-less Haiku
@@ -143,6 +138,11 @@ stored here).
   bundle upgrade, danger-guard opt-in auto mode, statusline ctx chips (PR #12).
 
 ## In flight
+- **Codex CLI: push and PR are the next step (Hayden's call).** The integration and doc reconcile
+  are committed on branch `feat/codex-cli-integration`, base `3c45679`. Next concrete steps: push the
+  branch and open a PR; the optional `/codex:review` end-to-end test is not yet run. For current
+  branch / PR state, derive it rather than trust a stored fact: `git fetch`; `git status -sb`;
+  `gh pr list --head feat/codex-cli-integration`.
 - **`deck-production` blocks S2-S6.** S1 shipped and verified; the skill has the phase model and the core
   loop but no orchestration layer, so an agent cannot yet run a deck end to end.
   - **Next concrete step: block S3, the geometry gate** (`geometry.py` + `geometry_probe.js` + a
@@ -158,14 +158,11 @@ stored here).
     The plan file owns block numbering only, and must not leak "S<n>" into shipped artifacts.
 
 ## Blocked / decisions needed
-- **`README.md` and `docs/PLUGINS.md` are stale re the Codex plugin** (deliberately left out of
-  the Codex commit, which was scoped to the seven wiring files). Both now undercount: `README.md`
-  says "installs seven plugins, all from anthropics/claude-plugins-official" (now eight, one from
-  the separate `openai-codex` marketplace) and its "What's in here" table lists no `codex/` entry;
-  `docs/PLUGINS.md` opens "The seven plugins ... all from the official marketplace" and has no Codex
-  section. Decide: fold the fixes into the push (bump seven->eight, note the non-official
-  marketplace, add a `codex/` table row and a `## codex` PLUGINS entry pointing at `docs/codex.md`)
-  or handle as a follow-up. Unambiguous corrections, so no design call, just scope.
+- **Codex integration: no open decisions.** The `README.md` / `docs/PLUGINS.md` drift (seven ->
+  eight plugins, the non-official `openai-codex` marketplace, the `codex/` row and `## codex`
+  section) is fixed in the follow-up commit. The new top-level `codex/` directory needs no
+  `CLAUDE.md` line: this repo's root `CLAUDE.md` is the global behavioral instructions, not a
+  directory map, and `codex/` is already documented in README's "What's in here" table.
 - **Status-line widget's `ai-title` fallback is now dead.** `statusline/session-summary.py`
   (`scan_ai_title`) still falls back to Claude's `ai-title` before the first Stop summary lands, but
   the title work above suppresses `ai-title` generation, so that record is now generally never
@@ -202,8 +199,8 @@ stored here).
 - Evaluated and SKIPPED, do not re-raise: (a) wiring `handoff-reminder.sh` into the loop-engineering inner
   loop (the puppet gets one machine prompt with no wrap-up phrase, so the hook has no addressee; the skill
   already inherits there); (b) cross-platform notifiers for the toast (YAGNI on this WSL-only setup);
-  (c) a CLAUDE.md nudge to force more native task-list creation so the task panel shows progress more often
-  — rejected: the new session-summary line already grounds "what/where" without depending on task hygiene, a
+  (c) a CLAUDE.md nudge to force more native task-list creation so the task panel shows progress more often,
+  rejected: the new session-summary line already grounds "what/where" without depending on task hygiene, a
   blanket nudge fights the fast-lane rule, and stale/unmarked tasks mislead. Revisit only if a *medium*-work
   gap (4-6 steps, no tasks created) shows up in practice, and then scope it to multi-step work, not "always".
 - A fresh clone on a new WSL machine needs `./setup-chrome-wsl.sh` run once (the MCP override lives in
