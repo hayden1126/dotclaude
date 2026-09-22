@@ -5,7 +5,7 @@
 > decisions ([[dotclaude-handoff-skill]], [[dotclaude-research-sourcing-skill]],
 > [[dotclaude-chrome-devtools-wsl]]). Per-effort design rationale lives in its plan under `~/.claude/plans/`.
 
-Last updated: 2026-09-13
+Last updated: 2026-09-22
 Base: `main`. For branch / PR / push state, run `gh pr list` and `git log main..HEAD` (derive it; not
 stored here).
 
@@ -103,7 +103,9 @@ stored here).
   single-source-of-truth state, i18n); RED→GREEN validated per `superpowers:writing-skills`. Its
   bella-specific dashboard reference was later migrated out into a project-scoped `bella-dashboard` skill in
   the bella repo, so a bella-only playbook no longer loads into every project's namespace. See
-  [[frontend-ui-discipline-skill]], [[bella-dashboard-skill]].
+  [[frontend-ui-discipline-skill]], [[bella-dashboard-skill]]. Layout-bug scar added 2026-09-22 (a bug's
+  cause is a hypothesis until measured; the Vulcan #13 flex-item `min-height:auto = 0` collapse as the
+  worked example), merged as PR #25.
 - **Handoff: proactive CLAUDE.md trigger** (2026-08-16, branch `handoff-proactive-claude-md`, commit
   `6c775d8`). `skills/handoff/SKILL.md` Step 2 now fires one narrow, prune-biased proactive CLAUDE.md
   reflection (a durable repo-level convention/structural fact established this session → propose via
@@ -138,11 +140,6 @@ stored here).
   bundle upgrade, danger-guard opt-in auto mode, statusline ctx chips (PR #12).
 
 ## In flight
-- **Codex CLI: push and PR are the next step (Hayden's call).** The integration and doc reconcile
-  are committed on branch `feat/codex-cli-integration`, base `3c45679`. Next concrete steps: push the
-  branch and open a PR; the optional `/codex:review` end-to-end test is not yet run. For current
-  branch / PR state, derive it rather than trust a stored fact: `git fetch`; `git status -sb`;
-  `gh pr list --head feat/codex-cli-integration`.
 - **`deck-production` blocks S2-S6.** S1 shipped and verified; the skill has the phase model and the core
   loop but no orchestration layer, so an agent cannot yet run a deck end to end.
   - **Next concrete step: block S3, the geometry gate** (`geometry.py` + `geometry_probe.js` + a
@@ -158,11 +155,12 @@ stored here).
     The plan file owns block numbering only, and must not leak "S<n>" into shipped artifacts.
 
 ## Blocked / decisions needed
-- **Codex integration: no open decisions.** The `README.md` / `docs/PLUGINS.md` drift (seven ->
-  eight plugins, the non-official `openai-codex` marketplace, the `codex/` row and `## codex`
-  section) is fixed in the follow-up commit. The new top-level `codex/` directory needs no
-  `CLAUDE.md` line: this repo's root `CLAUDE.md` is the global behavioral instructions, not a
-  directory map, and `codex/` is already documented in README's "What's in here" table.
+- **`codex/config.toml` is tracked, but Codex auto-writes machine-local trust state into it.** Every
+  session, Codex appends `[projects."<path>"] trust_level = "trusted"` blocks (ephemeral scratchpad
+  `/tmp/...` paths and personal project dirs), so the file shows a recurring uncommittable diff (kept
+  out of PR #25 by simply not staging it). Decide: gitignore the `[projects."..."]` blocks, split
+  trust state into a local-only file, or accept a standing "never stage `config.toml`" rule. Until
+  decided, do not commit that diff.
 - **Status-line widget's `ai-title` fallback is now dead.** `statusline/session-summary.py`
   (`scan_ai_title`) still falls back to Claude's `ai-title` before the first Stop summary lands, but
   the title work above suppresses `ai-title` generation, so that record is now generally never
@@ -178,6 +176,13 @@ stored here).
   reference on the next line is a different repo's file and is NOT stale.
 
 ## Notes for next session
+- Optional Codex follow-up, carried from the merged integration (PR #24): the `/codex:review`
+  end-to-end test has never been run. Low priority.
+- Stale local branches to clean when convenient (`/clean_gone`): `docs/ui-discipline-layout-scar`
+  (merged as PR #25) and `fix/session-summary-injection-guard` (merged as PR #23, remote gone).
+- STATUS is over its ~120-line soft ceiling. A dedicated prune pass (collapse fully-shipped Done
+  entries to one-line git pointers) is overdue; not attempted mid-handoff to avoid dropping the
+  derive-PR-state pointers each entry carries. Do it as its own small task.
 - **Verify `deck-production` before touching it:** `deckkit regress --ref-deck
   ~/bella/decks/2026-07-general-en` must print `parity: green`. It runs read-only and asserts the
   reference tree is unmodified afterward. That gate is a precondition for editing any script in the
