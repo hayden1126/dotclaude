@@ -19,6 +19,7 @@ Build web UIs that work on mobile and desktop the first time. Each rule is a sca
 - **Read the rendered size, never the declared one.** `min-height` grows with padding and borders; set offsets from `offsetHeight`/`getBoundingClientRect()`, not the stylesheet value. If you catch yourself copying a `top:` from a `min-height`, stop and measure.
 - **Pinned layout is offset math:** a sticky element sits at `top: Σ(sticky heights above it)`; stacked bars add up; leave a small gap so it floats, not butts.
 - **Anchored jumps need `scroll-margin-top` ≥ the stacked sticky height**, or `href="#id"` lands under the header.
+- **A layout bug's cause is a hypothesis until you measure it.** Flex/grid/sticky/overflow behaviour is emergent: unreadable from the source, and agreeing code-readers (or subagents) just share one blind spot. Reproduce in the runtime and measure (heights, computed styles) before naming the mechanism. Scar: a table that "disappeared after continue" read as scroll-off in the code; measuring showed it collapsed 389px→0px, because a scroll-container flex item (`.p-table`, `overflow-x:auto`) has `min-height:auto = 0` and caves in when its flex parent overflows.
 
 ## Touch is not hover — design for the finger first
 - **`:hover` latches on touch:** it stays applied after a tap until you tap elsewhere. Drop hover colour changes or gate them in `@media (hover:hover)`.
