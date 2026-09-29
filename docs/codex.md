@@ -12,11 +12,11 @@ They compose: when Claude drives Codex through the bridge, Codex still obeys the
 
 ## What points to what
 
-`dotclaude` is the single source of truth; everything else is a symlink or an install target.
+`dotclaude` is the single source of truth; everything else is a symlink, a merge target, or an install target.
 
 ```
 dotclaude/                                  ->  runtime
-  codex/config.toml       symlink ------->  ~/.codex/config.toml
+  codex/config.toml       merged -------->  ~/.codex/config.toml  (a local file Codex also writes)
       "read each repo's CLAUDE.md as Codex's instructions"
   codex/AGENTS.md         symlink ------->  ~/.codex/AGENTS.md
       global working rules, for Codex
@@ -35,6 +35,8 @@ A `/codex:review` call goes Claude, plugin, `codex app-server`, Codex, and Codex
 ## Configuration mechanism
 
 `~/.codex/config.toml` sets `project_doc_fallback_filenames = ["CLAUDE.md"]`, so Codex reads a repo's existing `CLAUDE.md` as its instruction doc when the repo has no `AGENTS.md`. An explicit `AGENTS.md` in a repo still takes precedence, so per-repo Codex-specific guidance is a drop-in override. The combined instruction cap is raised to 64 KiB (`project_doc_max_bytes`).
+
+`~/.codex/config.toml` is merged, not symlinked, because Codex writes to it: a `[projects."<path>"]` trust entry for every directory you trust, and MCP servers that other installers register (the AWS tooling added one). Through a symlink those writes landed in this repo's working tree, one `git add -A` away from publishing local paths. `codex/merge-config.py` upserts the repo's top-level keys into the local file and leaves every table alone. It is idempotent, turns an old symlink into a local copy without losing entries, and backs up an existing file to `config.toml.pre-dotclaude-<ts>` before changing it. On Python 3.11+ it checks the result with `tomllib` before writing and refuses rather than break the file; older Pythons get a warning and an unverified write. Put only top-level, single-line keys in `codex/config.toml`; per-machine settings belong in the local file.
 
 ## How to use it
 
@@ -58,7 +60,9 @@ Division of labor: Claude for architecture, implementation, and long-context or 
 
 ## Setup on a new machine
 
-`setup.sh` handles it: it symlinks `codex/config.toml` and `codex/AGENTS.md` into `~/.codex/` (never the whole directory, so `auth.json` stays local), registers the `openai-codex` marketplace, and installs the plugin. After that, run `codex login` once to authenticate, then `/codex:setup` to verify.
+`setup.sh` handles it: it symlinks `codex/AGENTS.md` into `~/.codex/` (or `$CODEX_HOME`), merges `codex/config.toml` into the local `config.toml` there (leaving `auth.json` and the rest of Codex's state alone), registers the `openai-codex` marketplace, and installs the plugin. After that, run `codex login` once to authenticate, then `/codex:setup` to verify.
+
+A machine set up before the merge still has `~/.codex/config.toml` as a symlink into this repo, so Codex keeps writing here until it is migrated. Migrate with `python3 codex/merge-config.py` alone, not a full `./setup.sh` re-run (that also resets the live `~/.claude/settings.json`).
 
 ## Key facts (September 2026, subject to change)
 

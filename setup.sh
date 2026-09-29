@@ -93,14 +93,19 @@ for f in "$REPO_DIR"/templates/*.md; do
   link "$f" "$CLAUDE_DIR/templates/$(basename "$f")"
 done
 
-# codex/ — Codex CLI config, symlinked into ~/.codex for Codex/Claude instruction
-# parity (config.toml points Codex at each repo's CLAUDE.md; AGENTS.md is the global
-# working agreement). Link ONLY these two files: NEVER symlink the whole ~/.codex dir,
-# which holds auth.json (a secret) plus log/ and tmp/ that must stay local.
-CODEX_DIR="$HOME/.codex"
+# codex/ — Codex CLI config for Codex/Claude instruction parity. AGENTS.md (the
+# global working agreement) is symlinked: Codex only reads it. config.toml is NOT:
+# Codex writes its own state there (a [projects."<path>"] trust entry per directory
+# you trust, MCP servers other installers register), and a symlink would push that
+# churn into this repo, the settings.json problem above. merge-config.py upserts the
+# repo's top-level keys (the CLAUDE.md fallback) into a real ~/.codex/config.toml and
+# leaves the rest alone; an old symlink becomes a local copy, so nothing is lost.
+# NEVER symlink the whole ~/.codex dir: it holds auth.json (a secret) plus log/, tmp/.
+CODEX_DIR="${CODEX_HOME:-$HOME/.codex}"
 mkdir -p "$CODEX_DIR"
-link "$REPO_DIR/codex/config.toml" "$CODEX_DIR/config.toml"
-link "$REPO_DIR/codex/AGENTS.md"   "$CODEX_DIR/AGENTS.md"
+link "$REPO_DIR/codex/AGENTS.md" "$CODEX_DIR/AGENTS.md"
+python3 "$REPO_DIR/codex/merge-config.py" "$REPO_DIR/codex/config.toml" "$CODEX_DIR/config.toml" \
+  || warn "codex config.toml merge failed (see above); $CODEX_DIR/config.toml left unchanged"
 
 # ---------------------------------------------------------------------------
 # 3. Register marketplaces and install plugins
