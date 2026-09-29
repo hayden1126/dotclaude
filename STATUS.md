@@ -171,6 +171,16 @@ stored here).
      SubagentStop report-schema check.
   3. A tmux heartbeat, a delegation canary test after each Claude Code upgrade, and a monthly audit.
 
+  Facts the build depends on (verified in the Claude Code docs on 2026-09-29; move them into the
+  spec):
+  - Hook input identifies a subagent by `agent_id` and `agent_type` only, never by its brief. That is
+    why scope is coarse.
+  - Claude Code silently ignores an agent frontmatter field it does not recognize, and a hook that
+    errors (any exit other than 2) does not block. Enforcement can switch off without any signal,
+    hence the upgrade canary and the fail-closed hooks.
+  - Teammates report to the lead through `teammate-message` and `idle_notification` events, not task
+    notifications. A liveness check that looks only at task notifications misses them.
+
   Next step: a Stage 1 spec and plan. Local evidence (not in git; it names agent IDs from other
   projects): `~/scratch/delegation-eval/DECISION.md` and `REVIEW.md`.
 - **Codex setup shared with a friend** (Hayden's ask, 2026-09-29). The share page is BUILT and private:
