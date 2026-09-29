@@ -1,18 +1,17 @@
 # Skill extraction + spec: `frontend-ui-discipline` (+ self-contained-dashboards reference)
 
-> **Migration note (2026-08-17):** the bella-specific `references/self-contained-dashboards.md` described
-> below was later moved out of this (general) skill into the project-scoped `bella-dashboard` skill in the
-> bella repo (`bella/.claude/skills/bella-dashboard/references/`), alongside the streaming-chat and CJK
-> references added the same day. This SPEC is kept as the original authoring record; Part B's content now
+> **Migration note (2026-08-17):** the client-specific `references/self-contained-dashboards.md` described
+> below was later moved out of this (general) skill into a project-scoped skill in that client's private
+> repo, alongside the streaming-chat and CJK references added the same day. This SPEC is kept as the original authoring record; Part B's content now
 > lives with that project. This skill is now general-only.
 
 ## Context
 
-This session built a stack of mobile+desktop UI features on the Bella president-briefing dashboard (floating glass search, in-place highlight, EN/中文 toggle, cross-links) and fixed a long run of real UI bugs. The user wants that hard-won knowledge captured as a reusable **discipline skill** for building good, bug-free UIs (desktop and especially mobile). Decisions: **both layers** — a general web-UI discipline skill plus a companion reference for the specific self-contained-dashboard pattern; and **extract + spec only** now (a fresh session writes the actual SKILL.md, since context is ~60% full). This file is the durable source material so nothing is lost across the `/clear`.
+This session built a stack of mobile+desktop UI features on a client's internal briefing dashboard (floating glass search, in-place highlight, EN/中文 toggle, cross-links) and fixed a long run of real UI bugs. The user wants that hard-won knowledge captured as a reusable **discipline skill** for building good, bug-free UIs (desktop and especially mobile). Decisions: **both layers** — a general web-UI discipline skill plus a companion reference for the specific self-contained-dashboard pattern; and **extract + spec only** now (a fresh session writes the actual SKILL.md, since context is ~60% full). This file is the durable source material so nothing is lost across the `/clear`.
 
 ## Deliverable shape (for the fresh session)
 
-- **First, re-explore before drafting.** Run another exploration pass (dispatch an Explore agent) over `dashboards/president-briefing/build.py` — especially its rationale comments (`/* ... */` in the CSS, `//` in the JS) and the built HTML — plus a diff of this session's commits, to surface any design decisions Parts A–C still missed. Fold anything new into the skill. Two passes already found gaps (Part C was the second); assume a third will find more.
+- **First, re-explore before drafting.** Run another exploration pass (dispatch an Explore agent) over the dashboard's `build.py` — especially its rationale comments (`/* ... */` in the CSS, `//` in the JS) and the built HTML — plus a diff of this session's commits, to surface any design decisions Parts A–C still missed. Fold anything new into the skill. Two passes already found gaps (Part C was the second); assume a third will find more.
 - **Author at** `/home/hayden/dotclaude/skills/frontend-ui-discipline/` (version-controlled dotfiles), then **symlink** `~/.claude/skills/frontend-ui-discipline` → it (mirrors every existing skill). Confirm final name with Hayden; alternatives: `web-ui-craft`, `building-web-ui`.
 - **Files:** `SKILL.md` (general discipline, terse) + `references/self-contained-dashboards.md` (the pattern specifics + bug catalogue). Split per `superpowers:writing-skills`: keep principles <~50 lines inline, push heavy reference out.
 - **Frontmatter:** only `name` + `description`, ≤1024 chars, kebab-case, name == folder. 
@@ -56,7 +55,7 @@ Each principle below pairs the **rule** with the **bug in this session that taug
 
 14. **Know the verification traps.** (a) Smooth-scroll is async — measuring position right after a click reads a mid-animation value; wait (`setTimeout`) then assert. (b) A live `Highlight` object read AFTER you cleared the search reports size 0 — capture values before mutating. (c) Cloudflare serves gzip; `curl` without `--compressed` looks empty even when content is live — always `curl -s --compressed`.
 
-15. **Ship in small verified increments.** One change → build → verify in browser → commit → deploy → verify live (`/`→200, gated path→302, grep the served HTML for the new markup). For parallelizable non-edit work (translation), fan out subagents writing **disjoint** fragment files, then merge single-threaded — never parallel edits to one shared file. Gate sensitive content (translations of IR/defense prose) on a human review before deploy.
+15. **Ship in small verified increments.** One change → build → verify in browser → commit → deploy → verify live (`/`→200, gated path→302, grep the served HTML for the new markup). For parallelizable non-edit work (translation), fan out subagents writing **disjoint** fragment files, then merge single-threaded — never parallel edits to one shared file. Gate sensitive content (translations of sensitive prose) on a human review before deploy.
 
 ---
 
@@ -65,10 +64,10 @@ Each principle below pairs the **rule** with the **bug in this session that taug
 The specific pattern this dashboard uses, worth its own reference:
 
 - **One build script → one self-contained HTML.** `build.py` reads `content.json` and emits HTML via f-strings; CSS is one `r"""..."""` constant, JS another; fonts are base64 `@font-face` data URIs. Zero external requests. Why: the page is served behind a Cloudflare Access gate, and inlining means no side-loaded asset can escape the gate.
-- **Two variants from one function, split at build time.** `build(internal, sibling)` filters facts by `audience=="public"` for the investor file and drops internal sections; internal strings never appear in the public HTML (no view-source leak). Verify no-leak with `grep` on the built investor file.
+- **Two variants from one function, split at build time.** `build(internal, sibling)` filters facts by `audience=="public"` for the external file and drops internal sections; internal strings never appear in the public HTML (no view-source leak). Verify no-leak with `grep` on the built external file.
 - **Fact registry + F-IDs + provenance.** Every number traces to an `F-NNN` id; a `.prov` overlay reveals source/F-ID on hover/tap; a full registry table lists all facts with source chips. Cross-links: F-IDs → `#reg-<fid>` rows (rows carry that id, land with `:target` highlight); registry Section cell → `#<section>`.
 - **i18n mechanism specifics.** `_zh` sibling keys in `content.json` (`claim_zh`, etc.); `t()`/`bi()`/`bi_field()` helpers; UI/section/chart Chinese inline in `build.py`; CJK via appended system font stacks. See Part A #11.
-- **Build/deploy runbook.** From repo root: `.venv/bin/python dashboards/president-briefing/build.py` (the shell cwd resets between tool calls — `cd /home/hayden/code/bella` first). Deploy from the dashboard dir: `npm run deploy` (wrangler; **run build first**, it isn't wired into the npm script). Only `site/` deploys. Full contract in `dashboards/president-briefing/DEPLOYMENT.md`. Cross-ref memory `[[bella-president-dashboard-deployed]]`.
+- **Build/deploy runbook.** Build with the dashboard's `build.py`, then deploy with `npm run deploy` (wrangler; **run build first**, it isn't wired into the npm script). Only `site/` deploys. The full runbook lives with the dashboard in the client's private repo.
 
 ## PART C — Inherited design decisions (predate this session; keep them in the general SKILL.md)
 

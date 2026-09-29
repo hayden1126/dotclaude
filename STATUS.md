@@ -10,6 +10,16 @@ Base: `main`. For branch / PR / push state, run `gh pr list` and `git log main..
 stored here).
 
 ## Done (recent; git holds the detail)
+- **Client deck data removed from the current tree** (2026-09-29, branch `fix/scrub-client-refs`,
+  derive commits with `git log 6667609..fix/scrub-client-refs`). The deck-production parity fixtures
+  (config, goldens, flag list) described a client's real investor deck; they moved to the client's
+  private repo beside the reference deck (`decks/_parity/`, README there has the run command), and
+  `parity_check.py` now requires `--config` and `--goldens`. Real figures, a fact ID, a source line and
+  quoted deck claims left in two templates were replaced with neutral placeholders. Mentioning the
+  engagement is fine; its contents and data are what stays out. History is deliberately left as-is
+  (Hayden's call). Verified: parity gate green from the new location; a fresh `deckkit new` deck
+  lints 0/0 and packages; a number-match and 8-word-overlap scan against the client repo finds no
+  contents in the tree.
 - **Codex `config.toml` drift resolved: merged, no longer symlinked** (2026-09-29, branch
   `fix/codex-config-merge`, base `7063a4c`; rationale in `docs/codex.md` "Configuration mechanism").
   Codex writes trust entries and installer-added MCP servers (aws-mcp, 2026-09-25) into its config,
@@ -110,11 +120,11 @@ stored here).
   `handoff-reminder.sh` (independent subprocesses, no clobber). Its original `ai-title`-based label
   mechanism was replaced on 2026-08-23, see the entry above; git holds the origin detail.
 - **`frontend-ui-discipline` skill** (2026-08-16/17). Reusable desktop+mobile web-UI discipline distilled
-  from the Bella dashboard work (verify-at-both-widths, sticky/scroll-margin math, touch≠hover,
+  from a client dashboard project (verify-at-both-widths, sticky/scroll-margin math, touch≠hover,
   single-source-of-truth state, i18n); RED→GREEN validated per `superpowers:writing-skills`. Its
-  bella-specific dashboard reference was later migrated out into a project-scoped `bella-dashboard` skill in
-  the bella repo, so a bella-only playbook no longer loads into every project's namespace. See
-  [[frontend-ui-discipline-skill]], [[bella-dashboard-skill]]. Layout-bug scar added 2026-09-22 (a bug's
+  client-specific dashboard reference was later migrated out into a project-scoped skill in that
+  client's repo, so a single-client playbook no longer loads into every project's namespace. See
+  [[frontend-ui-discipline-skill]]. Layout-bug scar added 2026-09-22 (a bug's
   cause is a hypothesis until measured; the Vulcan #13 flex-item `min-height:auto = 0` collapse as the
   worked example), merged as PR #25.
 - **Handoff: proactive CLAUDE.md trigger** (2026-08-16, branch `handoff-proactive-claude-md`, commit
@@ -128,10 +138,10 @@ stored here).
   brief; quarantine holds until the audit clears. Delegates to `research-sourcing` / `research-discipline`
   / `writing-voice` / `staged-reader-review` / `ebook-extract` / `dispatching-parallel-agents`; ships
   `references/workflow-scaffolds.md` with the reusable Workflow skeletons. Built while running the pipeline
-  live on a real broker report in `~/bella`; gap-audited by a fresh agent (no-registry, scanned-PDF, and
+  live on a real broker report in a client repo; gap-audited by a fresh agent (no-registry, scanned-PDF, and
   foreign-number-format paths added from that pass).
 - **`deck-production` skill, block S1 of 6** (2026-08-08, branch `feat/deck-production-skill`, base
-  `8602081`). Generalizes the deck machinery built for one company (`~/bella/decks/_shared/tools/`) into
+  `8602081`). Generalizes the deck machinery built for one company (its repo's `decks/_shared/tools/`) into
   config-driven tooling: `deckkit` dispatcher (its main job is picking the interpreter), `deckcfg`
   (tomllib, CLI > env > file > default), scaffolder, and generalized build/lint/package plus serve,
   doctor, and the reference-deck regression gate. Templates carry the storyboard grammar, builder
@@ -151,14 +161,18 @@ stored here).
   bundle upgrade, danger-guard opt-in auto mode, statusline ctx chips (PR #12).
 
 ## In flight
-- **Make the Codex setup shareable with a friend** (Hayden's ask, 2026-09-29). Next concrete step:
-  wire Codex skills into `setup.sh`. Today `~/.codex/skills/{coding-practices,frontend-ui-discipline}`
-  are hand-made symlinks, so a fresh setup gives Codex no skills; link each `skills/*` dir into
-  `$CODEX_DIR/skills/` (decide the set: `writing-voice` is Hayden's own voice). Then build a standalone
-  share page (Artifact): install + `codex login`, the two `codex/config.toml` keys, a generic
-  `AGENTS.md` template, the plugin install, which skills to copy, a usage cheat-sheet. Never tell the
-  friend to run `setup.sh`: it installs all of dotclaude over their `~/.claude`. Before calling it
-  working, run `/codex:review` end to end once (never done since PR #24).
+- **Next session: evaluate agent delegation** (keeping delegated agents in scope and permissions, and
+  why they stall without reporting back; prompts vs skills vs hooks vs agent definitions). Brief:
+  `~/.claude/plans/agent-delegation-evaluation.md`. Evaluate first; build only after Hayden picks.
+- **Codex setup shared with a friend** (Hayden's ask, 2026-09-29). The share page is BUILT and private:
+  https://claude.ai/artifact/KWwrPkLsbMUi7Ugjfskqsz (source was a session scratchpad; republish by that
+  URL). It links only four clean skills (coding-practices, research-discipline, ui-alignment,
+  vetting-sources) and tells the friend never to run `setup.sh`. Before Hayden shares it: push the
+  two local branches (`fix/codex-config-merge`, then `fix/scrub-client-refs` stacked on it; the page
+  links this repo), and run `/codex:review` end to end once (never done since PR #24; the page tells
+  the friend it works). Separate, Hayden-side: wire Codex skills into
+  `setup.sh` (today `~/.codex/skills/{coding-practices,frontend-ui-discipline}` are hand-made
+  symlinks, so a fresh setup gives Codex no skills; `writing-voice` is Hayden's own voice, exclude).
 - **`deck-production` blocks S2-S6.** S1 shipped and verified; the skill has the phase model and the core
   loop but no orchestration layer, so an agent cannot yet run a deck end to end.
   - **Next concrete step: block S3, the geometry gate** (`geometry.py` + `geometry_probe.js` + a
@@ -170,7 +184,8 @@ stored here).
     S6 (pptx export). S1-S4 is the usable product.
   - Ownership rule established this block: SKILL.md owns the phase model, gates, and batch constants;
     `deckkit`'s `COMMANDS` dict owns the CLI surface (help is generated, never transcribed);
-    `deckcfg.derive_rigor` owns the rigor rule; `tests/parity/goldens.json` owns the reference numbers.
+    `deckcfg.derive_rigor` owns the rigor rule; the goldens beside the reference deck (private client
+    repo, `decks/_parity/`) own the reference numbers.
     The plan file owns block numbering only, and must not leak "S<n>" into shipped artifacts.
 
 ## Blocked / decisions needed
@@ -189,17 +204,19 @@ stored here).
   reference on the next line is a different repo's file and is NOT stale.
 
 ## Notes for next session
-- `fix/codex-config-merge` (base `7063a4c`) is committed locally; pushing and opening a PR need
-  Hayden's OK. Derive: `git fetch && git log --oneline origin/main..fix/codex-config-merge`.
+- Two stacked PRs from 2026-09-29, base `7063a4c`: `fix/codex-config-merge` (into `main`), then
+  `fix/scrub-client-refs` (into the first). Merge the Codex one first. Derive their state:
+  `gh pr list --state all --head fix/codex-config-merge` and `--head fix/scrub-client-refs`.
 - Stale local branches to clean when convenient (`/clean_gone`): `docs/status-handoff-2026-09-22`
   (merged as PR #26), `docs/ui-discipline-layout-scar`
   (merged as PR #25) and `fix/session-summary-injection-guard` (merged as PR #23, remote gone).
 - STATUS is over its ~120-line soft ceiling. A dedicated prune pass (collapse fully-shipped Done
   entries to one-line git pointers) is overdue; not attempted mid-handoff to avoid dropping the
   derive-PR-state pointers each entry carries. Do it as its own small task.
-- **Verify `deck-production` before touching it:** `deckkit regress --ref-deck
-  ~/bella/decks/2026-07-general-en` must print `parity: green`. It runs read-only and asserts the
-  reference tree is unmodified afterward. That gate is a precondition for editing any script in the
+- **Verify `deck-production` before touching it:** run `deckkit regress` as the README in the
+  private client repo's `decks/_parity/` shows; it must print `parity: green`. `--config` and
+  `--goldens` are required, because no fixtures ship in this public repo. It runs read-only and asserts
+  the reference tree is unmodified afterward. That gate is a precondition for editing any script in the
   skill, because the reference deck is deliberately NOT migrated and will otherwise drift silently.
 - Smoke test: `deckkit new /tmp/x --title T --slides 6`, approve the storyboard frontmatter, then
   `deckkit build /tmp/x && deckkit lint /tmp/x && deckkit package /tmp/x`. Expect lint 0/0.

@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
 """Regression gate: run this skill's tooling against a reference deck, read-only.
 
-Usage: python3 parity_check.py --ref-deck PATH [--config PATH]
-                               [--capture] [--goldens FILE] [--json]
+Usage: python3 parity_check.py --ref-deck PATH --config PATH --goldens FILE
+                               [--capture] [--json]
 
 The reference deck is a real deck built by an earlier, deck-specific version of
 these tools. It is NOT migrated and NOT written to: no deck.toml is created
 there, `build --check` stitches into memory, and packaging is redirected to a
 temp directory. Every write path is asserted before it runs.
+
+The config and goldens describe that deck, so they live with it in its own
+(private) repo, never in this skill; both flags are required.
 
 Goldens are CAPTURED BY THIS TOOL on a known-good run (`--capture`), never
 transcribed from prose. The reference deck's own review record states its
@@ -38,8 +41,6 @@ import deckcfg  # noqa: E402
 
 SKILL = pathlib.Path(__file__).resolve().parent.parent
 SCRIPTS = SKILL / "scripts"
-DEFAULT_GOLDENS = SKILL / "tests" / "parity" / "goldens.json"
-DEFAULT_CONFIG = SKILL / "tests" / "parity" / "bella.deck.toml"
 
 
 def run(argv: list[str]) -> tuple[int, str]:
@@ -121,8 +122,10 @@ def compare(observed: dict, golden: dict, path: str = "") -> list[str]:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Reference-deck regression gate")
     parser.add_argument("--ref-deck", required=True)
-    parser.add_argument("--config", default=str(DEFAULT_CONFIG))
-    parser.add_argument("--goldens", default=str(DEFAULT_GOLDENS))
+    parser.add_argument("--config", required=True,
+                        help="deck.toml-shaped config for the reference deck (kept beside it)")
+    parser.add_argument("--goldens", required=True,
+                        help="goldens JSON captured for the reference deck (kept beside it)")
     parser.add_argument("--capture", action="store_true",
                         help="record this run as the golden (only on a known-good tree)")
     parser.add_argument("--json", action="store_true")

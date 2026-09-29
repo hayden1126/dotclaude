@@ -366,7 +366,7 @@ def load(argv_deck: str | None = None, config_path: str | None = None) -> DeckCo
 def synthesize(deck: pathlib.Path, overrides: dict) -> DeckConfig:
     """Build an in-memory config for a deck we must not write into.
 
-    This is what lets `deckkit regress` drive the untouched bella deck: no
+    This is what lets `deckkit regress` drive the untouched reference deck: no
     deck.toml is ever created there.
     """
     cfg = DeckConfig(pathlib.Path(deck).resolve(), {}, "<synthesized>")
