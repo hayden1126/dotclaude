@@ -151,13 +151,16 @@ stored here).
   bundle upgrade, danger-guard opt-in auto mode, statusline ctx chips (PR #12).
 
 ## In flight
+- **Next session: evaluate agent delegation** (keeping delegated agents in scope and permissions, and
+  why they stall without reporting back; prompts vs skills vs hooks vs agent definitions). Brief:
+  `~/.claude/plans/agent-delegation-evaluation.md`. Evaluate first; build only after Hayden picks.
 - **Codex setup shared with a friend** (Hayden's ask, 2026-09-29). The share page is BUILT and private:
   https://claude.ai/artifact/KWwrPkLsbMUi7Ugjfskqsz (source was a session scratchpad; republish by that
   URL). It links only four clean skills (coding-practices, research-discipline, ui-alignment,
   vetting-sources) and tells the friend never to run `setup.sh`. Before Hayden shares it: push the
-  client-name scrub (`fix/scrub-client-refs`; the page links this repo, and the history question is
-  below), and run `/codex:review` end to end once (never done since PR #24; the page tells the friend
-  it works). Separate, Hayden-side: wire Codex skills into
+  two local branches (`fix/codex-config-merge`, then `fix/scrub-client-refs` stacked on it; the page
+  links this repo), and run `/codex:review` end to end once (never done since PR #24; the page tells
+  the friend it works). Separate, Hayden-side: wire Codex skills into
   `setup.sh` (today `~/.codex/skills/{coding-practices,frontend-ui-discipline}` are hand-made
   symlinks, so a fresh setup gives Codex no skills; `writing-voice` is Hayden's own voice, exclude).
 - **`deck-production` blocks S2-S6.** S1 shipped and verified; the skill has the phase model and the core
@@ -176,12 +179,6 @@ stored here).
     The plan file owns block numbering only, and must not leak "S<n>" into shipped artifacts.
 
 ## Blocked / decisions needed
-- **A confidential client's name and deck details remain in this public repo's git history.** The
-  2026-09-29 forward fix (branch `fix/scrub-client-refs`) removed every mention from the tree and moved
-  the deck-production parity fixtures into the private client repo beside the reference deck. Commits
-  before it still carry them on GitHub. Hayden chose "forward fix now, decide the rewrite later".
-  Decide: rewrite history (`git filter-repo` + force-push `main`, the sourced precedent; any other clone
-  must re-clone) or accept.
 - **Status-line widget's `ai-title` fallback is now dead.** `statusline/session-summary.py`
   (`scan_ai_title`) still falls back to Claude's `ai-title` before the first Stop summary lands, but
   the title work above suppresses `ai-title` generation, so that record is now generally never

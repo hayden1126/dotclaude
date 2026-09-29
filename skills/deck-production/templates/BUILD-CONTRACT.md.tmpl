@@ -48,12 +48,12 @@ except deliberate full-bleed elements (`.bleed`, `.scrim`).
   You may not introduce a number that is not in your declared set. If the slide
   needs one that is missing, say so in `openQuestions` and leave it out.
 - Put the citation as an **HTML comment inside the element holding the
-  number**: `<span class="stat-num">628<!-- F-233 --></span>`. Inside SVG
+  number**: `<span class="stat-num">1,234<!-- F-001 --></span>`. Inside SVG
   `<text>` too. Every naked number needs one.
 - **Registry IDs never render.** Comments only.
 - Data slides carry a `<footer class="src">` naming public sources and dates:
-  "Source: Frost & Sullivan (IPO prospectus, June 2025); company FY2025 annual
-  results, March 2026."
+  "Source: <publisher> (<document>, <month year>); company <period> results,
+  <month year>."
 - Every number is dated on the face. An undated number is the single most
   common defect in a deck like this. A unit-less number is a liability, not a
   claim.
@@ -65,16 +65,18 @@ except deliberate full-bleed elements (`.bleed`, `.scrim`).
 Follow the deck's voice rules at `{{VOICE_PATH}}`. Read them; do not assume.
 The recurring ones:
 
-- Every superlative carries a qualifier and a source, or it is deleted.
-- Targets sound like targets: "target", "plan", "signed". Never "will exceed".
+- A superlative ("largest", "first", "leading") needs a stated scope and a
+  named source, or it goes.
+- Forward-looking numbers are labelled as plans or targets. Never state a
+  future result as fact.
 - Borrowed equity does the positioning. Named partners and verified rankings
   say more than self-description.
 - Non-English terms are glossed on first use, then either form is fine. Wrap
   them: `<span lang="zh-Hans">中文</span>`, so the CJK face applies and the
   subsetter sees the glyphs.
 - No em dashes in slide copy. Use a middot, a colon, or parentheses.
-- No absolutes about operations. "Zero tolerance for errors" is liability
-  phrasing, not luxury phrasing.
+- No absolute claims about operations ("always", "never fails", "100%"). They
+  read as liability, not confidence.
 
 ## Charts
 
