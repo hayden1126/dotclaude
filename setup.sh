@@ -98,7 +98,7 @@ done
 # Codex writes its own state there (a [projects."<path>"] trust entry per directory
 # you trust, MCP servers other installers register), and a symlink would push that
 # churn into this repo, the settings.json problem above. merge-config.py upserts the
-# repo's top-level keys (the CLAUDE.md fallback) into a real ~/.codex/config.toml and
+# repo's top-level keys (the CLAUDE.md fallback and the default model) into a real ~/.codex/config.toml and
 # leaves the rest alone; an old symlink becomes a local copy, so nothing is lost.
 # NEVER symlink the whole ~/.codex dir: it holds auth.json (a secret) plus log/, tmp/.
 CODEX_DIR="${CODEX_HOME:-$HOME/.codex}"

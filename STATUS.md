@@ -222,9 +222,6 @@ stored here).
   reference on the next line is a different repo's file and is NOT stale.
 
 ## Notes for next session
-- Stale local branches to clean when convenient (`/clean_gone`): `docs/status-handoff-2026-09-22`
-  (merged as PR #26), `docs/ui-discipline-layout-scar`
-  (merged as PR #25) and `fix/session-summary-injection-guard` (merged as PR #23, remote gone).
 - STATUS is over its ~120-line soft ceiling. A dedicated prune pass (collapse fully-shipped Done
   entries to one-line git pointers) is overdue; not attempted mid-handoff to avoid dropping the
   derive-PR-state pointers each entry carries. Do it as its own small task.
