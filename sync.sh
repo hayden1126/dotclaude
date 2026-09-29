@@ -9,6 +9,8 @@
 # is symlinked by setup.sh, so the repo IS the live copy — no sync needed.
 # settings.json is the exception: setup.sh COPIES it (the runtime rewrites its
 # own copy), so the repo file is a curated baseline that can drift from live.
+# codex/config.toml is the same kind of baseline: setup.sh merges its keys into
+# ~/.codex/config.toml, and Codex's own entries there never come back here.
 # Safe to re-run; reports a diff but never auto-commits.
 
 set -euo pipefail
@@ -47,7 +49,7 @@ if command -v git >/dev/null 2>&1 && [[ -d "$REPO_DIR/.git" ]]; then
     say "changes detected:"
     git diff --stat -- plugins/
     say "review: git -C $REPO_DIR diff plugins/"
-    say "commit when ready: git -C $REPO_DIR add -A && git -C $REPO_DIR commit -m 'sync plugins from ~/.claude/'"
+    say "commit when ready: git -C $REPO_DIR add plugins/ && git -C $REPO_DIR commit -m 'sync plugins from ~/.claude/'"
   else
     say "no changes — repo already in sync"
   fi

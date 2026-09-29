@@ -1,5 +1,8 @@
-# Codex CLI configuration — managed by dotclaude, symlinked to ~/.codex/config.toml.
-# See dotclaude docs for the Codex/Claude pairing rationale.
+# Codex CLI configuration baseline, managed by dotclaude. NOT symlinked: Codex writes
+# its own state into ~/.codex/config.toml (trust entries, MCP servers), so setup.sh runs
+# codex/merge-config.py, which upserts the top-level keys below into that local file and
+# leaves everything else alone. Only top-level, single-line keys belong here.
+# See docs/codex.md for the Codex/Claude pairing rationale.
 
 # Read a repo's CLAUDE.md as the project instruction file when it has no AGENTS.md, so
 # Codex obeys the same per-project rules as Claude Code. An explicit AGENTS.md still wins.

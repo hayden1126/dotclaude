@@ -38,7 +38,7 @@ repo file as a curated baseline while the runtime owns its own copy.
 | `hooks/notify.sh` | Notification(permission_prompt) hook: pops a Windows toast, resolving the toast path per platform (WSL via `wslpath`, native Windows git-bash via `cygpath`) | symlink `~/.claude/hooks/notify.sh` |
 | `hooks/session-summary.sh` | Stop hook: regenerates a 1-2 sentence session summary via a direct Haiku Messages-API call (Claude subscription OAuth token, stdlib urllib, no API key/jq), detached so it never blocks; caches the summary to `<config-dir>/session-summaries/<session_id>.txt` for the status-line widget and a short (`<=32`-char) tab label to `<session_id>.title.txt` for `session-title.sh` | symlink `~/.claude/hooks/session-summary.sh` |
 | `templates/` | `SPEC.md`, `PLAN.md`, `STATUS.md` scaffolds for full-lane work that survive `/clear` | symlink per file into `~/.claude/templates/` |
-| `codex/` | Codex CLI config (config.toml + AGENTS.md), symlinked into ~/.codex; see docs/codex.md | symlink each file into `~/.codex/` (not the whole dir, so `auth.json` stays local) |
+| `codex/` | Codex CLI config (config.toml baseline + AGENTS.md + merge-config.py); see docs/codex.md | symlink `AGENTS.md` into `~/.codex/`; merge `config.toml`'s keys into the local `~/.codex/config.toml` (Codex writes to it, so it is never linked; `auth.json` stays local) |
 | `notify-toast.ps1` | Windows toast script that `notify.sh` renders for the Notification hook | symlink `~/.claude/notify-toast.ps1` |
 | `plugins/marketplaces.json` | Marketplaces to register | consumed by `setup.sh` |
 | `plugins/enabled.json` | Plugins to install and enable | consumed by `setup.sh` |

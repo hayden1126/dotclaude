@@ -5,11 +5,22 @@
 > decisions ([[dotclaude-handoff-skill]], [[dotclaude-research-sourcing-skill]],
 > [[dotclaude-chrome-devtools-wsl]]). Per-effort design rationale lives in its plan under `~/.claude/plans/`.
 
-Last updated: 2026-09-22
+Last updated: 2026-09-29
 Base: `main`. For branch / PR / push state, run `gh pr list` and `git log main..HEAD` (derive it; not
 stored here).
 
 ## Done (recent; git holds the detail)
+- **Codex `config.toml` drift resolved: merged, no longer symlinked** (2026-09-29, branch
+  `fix/codex-config-merge`, base `7063a4c`; rationale in `docs/codex.md` "Configuration mechanism").
+  Codex writes trust entries and installer-added MCP servers (aws-mcp, 2026-09-25) into its config,
+  and the `setup.sh` symlink put them in this repo. Now `codex/merge-config.py` upserts the repo's
+  top-level keys into a real `~/.codex/config.toml` and leaves Codex's tables local (the
+  `settings.json` pattern, but a merge, since `copy_managed` would wipe trust entries); `sync.sh`
+  suggests `git add plugins/`, not `-A`. This machine migrated: live file is local with all 5 trust
+  entries kept (aws-mcp too, then removed on purpose the same day when AWS tooling moved to the
+  per-project `aws-core` plugin). Verified: 8 fixture cases (fresh, symlink migration, stale value, tables
+  only, foreign symlink, multi-line refusal, corrupt refusal, idempotency); `codex mcp add/remove`
+  landed only in the local file; `codex exec` still quotes a marker from a repo's `CLAUDE.md`.
 - **Codex CLI integrated + plugin docs reconciled** (2026-09-13, branch
   `feat/codex-cli-integration`, base `3c45679`; derive this session's commits with
   `git log 3c45679..HEAD`; rationale + wiring diagram in `docs/codex.md`). OpenAI's Codex CLI
@@ -140,6 +151,14 @@ stored here).
   bundle upgrade, danger-guard opt-in auto mode, statusline ctx chips (PR #12).
 
 ## In flight
+- **Make the Codex setup shareable with a friend** (Hayden's ask, 2026-09-29). Next concrete step:
+  wire Codex skills into `setup.sh`. Today `~/.codex/skills/{coding-practices,frontend-ui-discipline}`
+  are hand-made symlinks, so a fresh setup gives Codex no skills; link each `skills/*` dir into
+  `$CODEX_DIR/skills/` (decide the set: `writing-voice` is Hayden's own voice). Then build a standalone
+  share page (Artifact): install + `codex login`, the two `codex/config.toml` keys, a generic
+  `AGENTS.md` template, the plugin install, which skills to copy, a usage cheat-sheet. Never tell the
+  friend to run `setup.sh`: it installs all of dotclaude over their `~/.claude`. Before calling it
+  working, run `/codex:review` end to end once (never done since PR #24).
 - **`deck-production` blocks S2-S6.** S1 shipped and verified; the skill has the phase model and the core
   loop but no orchestration layer, so an agent cannot yet run a deck end to end.
   - **Next concrete step: block S3, the geometry gate** (`geometry.py` + `geometry_probe.js` + a
@@ -155,12 +174,6 @@ stored here).
     The plan file owns block numbering only, and must not leak "S<n>" into shipped artifacts.
 
 ## Blocked / decisions needed
-- **`codex/config.toml` is tracked, but Codex auto-writes machine-local trust state into it.** Every
-  session, Codex appends `[projects."<path>"] trust_level = "trusted"` blocks (ephemeral scratchpad
-  `/tmp/...` paths and personal project dirs), so the file shows a recurring uncommittable diff (kept
-  out of PR #25 by simply not staging it). Decide: gitignore the `[projects."..."]` blocks, split
-  trust state into a local-only file, or accept a standing "never stage `config.toml`" rule. Until
-  decided, do not commit that diff.
 - **Status-line widget's `ai-title` fallback is now dead.** `statusline/session-summary.py`
   (`scan_ai_title`) still falls back to Claude's `ai-title` before the first Stop summary lands, but
   the title work above suppresses `ai-title` generation, so that record is now generally never
@@ -176,9 +189,10 @@ stored here).
   reference on the next line is a different repo's file and is NOT stale.
 
 ## Notes for next session
-- Optional Codex follow-up, carried from the merged integration (PR #24): the `/codex:review`
-  end-to-end test has never been run. Low priority.
-- Stale local branches to clean when convenient (`/clean_gone`): `docs/ui-discipline-layout-scar`
+- `fix/codex-config-merge` (base `7063a4c`) is committed locally; pushing and opening a PR need
+  Hayden's OK. Derive: `git fetch && git log --oneline origin/main..fix/codex-config-merge`.
+- Stale local branches to clean when convenient (`/clean_gone`): `docs/status-handoff-2026-09-22`
+  (merged as PR #26), `docs/ui-discipline-layout-scar`
   (merged as PR #25) and `fix/session-summary-injection-guard` (merged as PR #23, remote gone).
 - STATUS is over its ~120-line soft ceiling. A dedicated prune pass (collapse fully-shipped Done
   entries to one-line git pointers) is overdue; not attempted mid-handoff to avoid dropping the
