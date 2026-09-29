@@ -10,6 +10,16 @@ Base: `main`. For branch / PR / push state, run `gh pr list` and `git log main..
 stored here).
 
 ## Done (recent; git holds the detail)
+- **Client deck data removed from the current tree** (2026-09-29, branch `fix/scrub-client-refs`,
+  derive commits with `git log 6667609..fix/scrub-client-refs`). The deck-production parity fixtures
+  (config, goldens, flag list) described a client's real investor deck; they moved to the client's
+  private repo beside the reference deck (`decks/_parity/`, README there has the run command), and
+  `parity_check.py` now requires `--config` and `--goldens`. Real figures, a fact ID, a source line and
+  quoted deck claims left in two templates were replaced with neutral placeholders. Mentioning the
+  engagement is fine; its contents and data are what stays out. History is deliberately left as-is
+  (Hayden's call). Verified: parity gate green from the new location; a fresh `deckkit new` deck
+  lints 0/0 and packages; a number-match and 8-word-overlap scan against the client repo finds no
+  contents in the tree.
 - **Codex `config.toml` drift resolved: merged, no longer symlinked** (2026-09-29, branch
   `fix/codex-config-merge`, base `7063a4c`; rationale in `docs/codex.md` "Configuration mechanism").
   Codex writes trust entries and installer-added MCP servers (aws-mcp, 2026-09-25) into its config,
@@ -194,8 +204,9 @@ stored here).
   reference on the next line is a different repo's file and is NOT stale.
 
 ## Notes for next session
-- `fix/codex-config-merge` (base `7063a4c`) is committed locally; pushing and opening a PR need
-  Hayden's OK. Derive: `git fetch && git log --oneline origin/main..fix/codex-config-merge`.
+- Two stacked PRs from 2026-09-29, base `7063a4c`: `fix/codex-config-merge` (into `main`), then
+  `fix/scrub-client-refs` (into the first). Merge the Codex one first. Derive their state:
+  `gh pr list --state all --head fix/codex-config-merge` and `--head fix/scrub-client-refs`.
 - Stale local branches to clean when convenient (`/clean_gone`): `docs/status-handoff-2026-09-22`
   (merged as PR #26), `docs/ui-discipline-layout-scar`
   (merged as PR #25) and `fix/session-summary-injection-guard` (merged as PR #23, remote gone).

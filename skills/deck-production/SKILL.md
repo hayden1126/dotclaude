@@ -103,7 +103,7 @@ deckkit <command> --help     # flags for one command
 
 **There is deliberately no copy of the CLI surface in this file.** The dispatcher generates its list from the scripts actually present, so it can never advertise a tool that has not been written, and each subcommand's flags come from its own argparse. Read it from the tool, not from here.
 
-The loop you will run most: `deckkit build` then `deckkit lint`, then `deckkit serve` and look at it. `deckkit build --check` writes nothing and diffs, which is the determinism assertion every phase exit needs. `deckkit regress --ref-deck PATH` is the gate to run green before editing any script in this skill.
+The loop you will run most: `deckkit build` then `deckkit lint`, then `deckkit serve` and look at it. `deckkit build --check` writes nothing and diffs, which is the determinism assertion every phase exit needs. `deckkit regress --ref-deck PATH --config PATH --goldens FILE` is the gate to run green before editing any script in this skill; the config and goldens live beside the reference deck in its own private repo, not in this skill.
 
 If `deckkit` is not on your PATH, it is at `~/.claude/skills/deck-production/scripts/deckkit`. `setup.sh` symlinks it into `~/.local/bin` when that directory exists.
 
