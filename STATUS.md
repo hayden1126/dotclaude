@@ -10,8 +10,7 @@ Base: `main`. For branch / PR / push state, run `gh pr list` and `git log main..
 stored here).
 
 ## Done (recent; git holds the detail)
-- **Client deck data removed from the current tree** (2026-09-29, branch `fix/scrub-client-refs`,
-  derive commits with `git log 6667609..fix/scrub-client-refs`). The deck-production parity fixtures
+- **Client deck data removed from the current tree** (2026-09-29, PR #28). The deck-production parity fixtures
   (config, goldens, flag list) described a client's real investor deck; they moved to the client's
   private repo beside the reference deck (`decks/_parity/`, README there has the run command), and
   `parity_check.py` now requires `--config` and `--goldens`. Real figures, a fact ID, a source line and
@@ -20,8 +19,7 @@ stored here).
   (Hayden's call). Verified: parity gate green from the new location; a fresh `deckkit new` deck
   lints 0/0 and packages; a number-match and 8-word-overlap scan against the client repo finds no
   contents in the tree.
-- **Codex `config.toml` drift resolved: merged, no longer symlinked** (2026-09-29, branch
-  `fix/codex-config-merge`, base `7063a4c`; rationale in `docs/codex.md` "Configuration mechanism").
+- **Codex `config.toml` drift resolved: merged, no longer symlinked** (2026-09-29, PR #27; rationale in `docs/codex.md` "Configuration mechanism").
   Codex writes trust entries and installer-added MCP servers (aws-mcp, 2026-09-25) into its config,
   and the `setup.sh` symlink put them in this repo. Now `codex/merge-config.py` upserts the repo's
   top-level keys into a real `~/.codex/config.toml` and leaves Codex's tables local (the
@@ -161,15 +159,35 @@ stored here).
   bundle upgrade, danger-guard opt-in auto mode, statusline ctx chips (PR #12).
 
 ## In flight
-- **Next session: evaluate agent delegation** (keeping delegated agents in scope and permissions, and
-  why they stall without reporting back; prompts vs skills vs hooks vs agent definitions). Brief:
-  `~/.claude/plans/agent-delegation-evaluation.md`. Evaluate first; build only after Hayden picks.
+- **Delegation hardening: direction chosen, build next** (Hayden, 2026-09-29). The evaluation found
+  that agents told a scope in prose drift because they keep full Bash and filesystem access, and that
+  the "stalls" are long, silent teammate turns rather than lost reports. The picked direction is
+  "prose for judgment, enforcement for authority, acceptance and liveness", with **coarse scope**: an
+  agent's reach comes from its type and working directory (readers have no write tools or Bash;
+  writers work in a worktree), never from parsing its brief. It is built in three stages:
+  1. A brief template (named artifact path plus a delegation ledger), read-only, reviewer and writer
+     agent definitions, subagents by default over teams, and a Codex delegation wrapper.
+  2. A PreToolUse policy that runs in shadow mode for a week, then enforces and fails closed, plus a
+     SubagentStop report-schema check.
+  3. A tmux heartbeat, a delegation canary test after each Claude Code upgrade, and a monthly audit.
+
+  Facts the build depends on (verified in the Claude Code docs on 2026-09-29; move them into the
+  spec):
+  - Hook input identifies a subagent by `agent_id` and `agent_type` only, never by its brief. That is
+    why scope is coarse.
+  - Claude Code silently ignores an agent frontmatter field it does not recognize, and a hook that
+    errors (any exit other than 2) does not block. Enforcement can switch off without any signal,
+    hence the upgrade canary and the fail-closed hooks.
+  - Teammates report to the lead through `teammate-message` and `idle_notification` events, not task
+    notifications. A liveness check that looks only at task notifications misses them.
+
+  Next step: a Stage 1 spec and plan. Local evidence (not in git; it names agent IDs from other
+  projects): `~/scratch/delegation-eval/DECISION.md` and `REVIEW.md`.
 - **Codex setup shared with a friend** (Hayden's ask, 2026-09-29). The share page is BUILT and private:
   https://claude.ai/artifact/KWwrPkLsbMUi7Ugjfskqsz (source was a session scratchpad; republish by that
   URL). It links only four clean skills (coding-practices, research-discipline, ui-alignment,
-  vetting-sources) and tells the friend never to run `setup.sh`. Before Hayden shares it: push the
-  two local branches (`fix/codex-config-merge`, then `fix/scrub-client-refs` stacked on it; the page
-  links this repo), and run `/codex:review` end to end once (never done since PR #24; the page tells
+  vetting-sources) and tells the friend never to run `setup.sh`. Before Hayden shares it: run
+  `/codex:review` end to end once (never done since PR #24; the page tells
   the friend it works). Separate, Hayden-side: wire Codex skills into
   `setup.sh` (today `~/.codex/skills/{coding-practices,frontend-ui-discipline}` are hand-made
   symlinks, so a fresh setup gives Codex no skills; `writing-voice` is Hayden's own voice, exclude).
@@ -204,9 +222,6 @@ stored here).
   reference on the next line is a different repo's file and is NOT stale.
 
 ## Notes for next session
-- Two stacked PRs from 2026-09-29, base `7063a4c`: `fix/codex-config-merge` (into `main`), then
-  `fix/scrub-client-refs` (into the first). Merge the Codex one first. Derive their state:
-  `gh pr list --state all --head fix/codex-config-merge` and `--head fix/scrub-client-refs`.
 - Stale local branches to clean when convenient (`/clean_gone`): `docs/status-handoff-2026-09-22`
   (merged as PR #26), `docs/ui-discipline-layout-scar`
   (merged as PR #25) and `fix/session-summary-injection-guard` (merged as PR #23, remote gone).
