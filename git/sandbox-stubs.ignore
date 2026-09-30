@@ -1,0 +1,33 @@
+# Claude Code's Bash sandbox mounts /dev/null over the protected paths a repo root lacks, so
+# they appear, inside the sandbox only, as character devices, and `git add -A` fails ("can only
+# add regular files"). Directory names are ignored only when they aren't directories (`/x`,
+# then `!/x/`), so a real new .vscode/ or .claude/skills/ still shows up. A real new FILE with
+# one of these names (say a first .claude/settings.json) needs `git add -f`.
+/.bash_profile
+/.bashrc
+/.profile
+/.zprofile
+/.zshrc
+/.gitconfig
+/.gitmodules
+/.ripgreprc
+/.claude/launch.json
+/.claude/loop.md
+/.claude/scheduled_tasks.json
+/.claude/settings.json
+/.idea
+!/.idea/
+/.vscode
+!/.vscode/
+/.claude/agents
+!/.claude/agents/
+/.claude/commands
+!/.claude/commands/
+/.claude/output-styles
+!/.claude/output-styles/
+/.claude/routines
+!/.claude/routines/
+/.claude/skills
+!/.claude/skills/
+/.claude/workflows
+!/.claude/workflows/

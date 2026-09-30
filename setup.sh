@@ -59,7 +59,16 @@ copy_managed() {
 # ---------------------------------------------------------------------------
 # 2. Single files
 # ---------------------------------------------------------------------------
-copy_managed "$REPO_DIR/settings.json" "$CLAUDE_DIR/settings.json"
+# What belongs to one machine (hooks for its own scripts, excludedCommands for its own
+# tools) goes in settings.machine.json beside the live copy, never in this repo, and the
+# copy is the baseline with that overlay merged in (merge-settings.py has the rule).
+# Without an overlay the baseline is copied byte for byte.
+MERGED_SETTINGS="$(mktemp)"
+trap 'rm -f "$MERGED_SETTINGS"' EXIT
+chmod 644 "$MERGED_SETTINGS"  # mktemp's 0600 would carry over to the installed copy
+python3 "$REPO_DIR/merge-settings.py" "$REPO_DIR/settings.json" "$CLAUDE_DIR/settings.machine.json" \
+  > "$MERGED_SETTINGS" || { warn "settings.machine.json is not valid JSON; settings.json left unchanged"; exit 1; }
+copy_managed "$MERGED_SETTINGS" "$CLAUDE_DIR/settings.json"
 link "$REPO_DIR/CLAUDE.md"       "$CLAUDE_DIR/CLAUDE.md"
 link "$REPO_DIR/notify-toast.ps1" "$CLAUDE_DIR/notify-toast.ps1"
 
@@ -273,6 +282,10 @@ if [[ "$(uname -s)" == "Linux" ]]; then
     command -v "$dep" >/dev/null 2>&1 ||
       echo "WARNING: $dep is missing; the sandbox (failIfUnavailable) will stop Claude Code from starting. sudo apt install bubblewrap socat" >&2
   done
+  # The sandbox mounts /dev/null over protected dotfiles a repo lacks, which breaks
+  # `git add -A` inside it; the block (explained in the file) hides them from git.
+  python3 "$REPO_DIR/git/install-ignore.py" "$REPO_DIR/git/sandbox-stubs.ignore" \
+    || warn "sandbox stub block not installed into the git excludes file (see above)"
 fi
 
 # ---------------------------------------------------------------------------

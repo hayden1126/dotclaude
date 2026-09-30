@@ -50,11 +50,6 @@ stored here).
     actually needed to `sandbox.network.allowedDomains`.
   - **Not observed live:** a real agent's `dangerouslyDisableSandbox` being denied. The teammate probe
     declined to try it; the harness covers the rule (37/37).
-  - **Machine-local, not in this repo** (a `setup.sh` re-run would lose or lack them; decide whether
-    to move them in):
-    - the live `~/.claude/settings.json` had the Stage 2 hooks merged by hand, and it carries hq's
-      tool exclusions (`hq-new` to `hq-open`);
-    - `~/.config/git/ignore` holds the sandbox-stub block.
   - **Other machines:** install by hand per the docs' install order (the policy hook fails closed).
     bubblewrap and socat are required.
   - **Optional:** a no-scope classic GitHub token at `~/.config/dotclaude/github-public-token` enables
@@ -109,7 +104,8 @@ stored here).
 
 ## Notes for next session
 - **Verify delegation before touching it:** `python3 -m unittest discover -s tests/delegation -t tests/delegation`
-  (137 tests, no model calls; they pass inside the sandbox too). The live harness `tests/delegation/run.py --runner claude|codex` spends
+  (138 tests, no model calls; they pass inside the sandbox too), and the installer helpers with
+  `python3 -m unittest discover -s tests/setup -t tests/setup`. The live harness `tests/delegation/run.py --runner claude|codex` spends
   model calls. Run it after changing a role, a hook or `codex-delegate`, and after a Claude Code upgrade
   until the Stage 3 canary exists.
 - **Verify `deck-production` before touching it:** run `deckkit regress` as the README in the

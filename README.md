@@ -31,12 +31,20 @@ symlinked, because the Claude Code runtime rewrites it (persisting managed keys 
 `extraKnownMarketplaces`). A symlink would push that churn back into the repo; the copy keeps the
 repo file as a curated baseline while the runtime owns its own copy.
 
+Because each run replaces that copy, anything added to it by hand is lost. Settings that belong to one
+machine, such as hooks for its own scripts or `sandbox.excludedCommands` for its own tools, go in
+`~/.claude/settings.machine.json` instead. It isn't in this repo; `setup.sh` installs the baseline with
+it merged in. Objects merge key by key, lists append (skipping items already there), and any other
+value replaces the baseline's (`merge-settings.py`).
+
 ## What's in here
 
 | Path | What it is | Installs to |
 |---|---|---|
 | `CLAUDE.md` | Global instructions: working partnership, boundaries, voice, the explore -> spec -> plan -> execute -> verify -> review workflow | symlink `~/.claude/CLAUDE.md` |
-| `settings.json` | Hooks, status line, env vars, enabled plugins, and the Bash sandbox (curated baseline; see docs/delegation.md for the sandbox) | **copy** to `~/.claude/settings.json` (runtime-managed, not symlinked) |
+| `settings.json` | Hooks, status line, env vars, enabled plugins, and the Bash sandbox (curated baseline; see docs/delegation.md for the sandbox) | **copy** to `~/.claude/settings.json` (runtime-managed, not symlinked), merged with `~/.claude/settings.machine.json` when present |
+| `merge-settings.py` | Merges the machine overlay into the baseline for `setup.sh` | run by `setup.sh` |
+| `git/sandbox-stubs.ignore` | Git ignore patterns for the `/dev/null` mounts the Bash sandbox puts over protected dotfiles a repo lacks (they break `git add -A`) | upserted by `git/install-ignore.py` between markers in the global git excludes file (`core.excludesFile`, else `~/.config/git/ignore`); Linux only |
 | `skills/` | The skills I authored: `coding-practices`, `research-discipline`, `research-sourcing`, `writing-voice`, `staged-reader-review`, `ebook-extract`, `deck-production`, `vetting-sources`, `handoff`, `frontend-ui-discipline`, `ui-alignment`, `delegation` | symlink per dir into `~/.claude/skills/`; a skill's `scripts/` CLI also symlinks into `~/.local/bin` when that dir exists (`deck-production` ships `deckkit`; `delegation` ships `codex-delegate`, `delegation-ledger` and `gh-public`) |
 | `agents/` | Delegation roles: `Explore` (overrides the built-in with a no-shell reader), `researcher`, `reviewer`, `writer`; see docs/delegation.md | symlink per file into `~/.claude/agents/` |
 | `hooks/agent-spawn-guard.sh` | PreToolUse(Agent) guard: denies a `writer` spawn that doesn't pass `isolation` on the call; fails closed | symlink `~/.claude/hooks/agent-spawn-guard.sh` |
@@ -46,6 +54,7 @@ repo file as a curated baseline while the runtime owns its own copy.
 | `hooks/danger-guard.sh` | PreToolUse(Bash) guard: two-tier confirmation for destructive git and `rm` ops | symlink `~/.claude/hooks/danger-guard.sh` |
 | `hooks/handoff-reminder.sh` | UserPromptSubmit hook: on a wrap-up / handoff / clear-memory signal, reminds me to invoke the `handoff` skill instead of improvising it | symlink `~/.claude/hooks/handoff-reminder.sh` |
 | `hooks/session-title.sh` | UserPromptSubmit hook: sets the terminal tab title to `[<repo>] <label>` via `sessionTitle`, so tabs are tellable apart; the label comes from the Stop-hook Haiku cache (`.title.txt`), falling back to the current prompt's first line | symlink `~/.claude/hooks/session-title.sh` |
+| `hooks/stop-ring.sh` | Stop hook: plays the Windows notify sound when the main session finishes, not when a subagent or background agent stops | symlink `~/.claude/hooks/stop-ring.sh` |
 | `hooks/notify.sh` | Notification(permission_prompt) hook: pops a Windows toast, resolving the toast path per platform (WSL via `wslpath`, native Windows git-bash via `cygpath`) | symlink `~/.claude/hooks/notify.sh` |
 | `hooks/session-summary.sh` | Stop hook: regenerates a 1-2 sentence session summary via a direct Haiku Messages-API call (Claude subscription OAuth token, stdlib urllib, no API key/jq), detached so it never blocks; caches the summary to `<config-dir>/session-summaries/<session_id>.txt` for the status-line widget and a short (`<=32`-char) tab label to `<session_id>.title.txt` for `session-title.sh` | symlink `~/.claude/hooks/session-summary.sh` |
 | `templates/` | `SPEC.md`, `PLAN.md`, `STATUS.md` scaffolds for full-lane work that survive `/clear` | symlink per file into `~/.claude/templates/` |
@@ -60,6 +69,7 @@ repo file as a curated baseline while the runtime owns its own copy.
 | `docs/PLUGINS.md` | One-line description of each plugin | reference |
 | `docs/delegation.md` | Delegation hardening: design, verified facts, known gaps, install order, next stages | reference |
 | `tests/delegation/` | Unit tests for the delegation pieces (no model calls) and `run.py`, a live harness that spends model calls | run from the repo root |
+| `tests/setup/` | Unit tests for `merge-settings.py` and `git/install-ignore.py` | `python3 -m unittest discover -s tests/setup -t tests/setup` |
 | `docs/chrome-devtools-wsl.md` | WSL2-only: how to make `chrome-devtools-mcp` work (Strategy A headless Linux Chrome, plus B to attach to your Windows Chrome) | reference |
 | `chrome-debug.ps1` | Windows launcher for Strategy B (Chrome with a remote-debugging port) | run on Windows when needed |
 | `setup-chrome-wsl.sh` | Opt-in WSL2 installer: installs Chrome for Testing and registers the user-scoped `chrome-devtools` override | run once on WSL2; not called by `setup.sh` |
@@ -147,8 +157,9 @@ ships but is opt-in, see its entry):
   or a failed call, leaving the prior summary in place. A cadence gate skips regeneration when the
   transcript grew < 2KB, and the prior summary is fed back in. Needs python3 on PATH.
 - **Stop / Notification sounds**: play a Windows sound and (on permission prompts) a toast. The
-  sound hooks are inline in `settings.json` (the Stop sound runs alongside `session-summary.sh`
-  above); the toast goes through `notify.sh`, which resolves the path for both WSL (`wslpath`) and
+  Notification sound is inline in `settings.json`. The Stop sound is `stop-ring.sh`, which rings only
+  when the main session finishes: Stop also fires for every subagent and background agent, and those
+  carry `agent_id`. The toast goes through `notify.sh`, which resolves the path for both WSL (`wslpath`) and
   native Windows git-bash (`cygpath`) and renders `notify-toast.ps1`. Windows-only: on macOS/Linux,
   swap for your platform's notifier (`osascript` / `notify-send`).
 
