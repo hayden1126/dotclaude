@@ -111,6 +111,28 @@ class LedgerHook(unittest.TestCase):
                          ("stop", True, "done"))
         self.assertNotIn("last_assistant_message", json.dumps(stop))
 
+    def test_auto_mode_report_comes_from_the_handback(self):
+        transcript = os.path.join(self.tmp.name, "agent-a1.jsonl")
+        with open(transcript, "w") as f:
+            f.write(json.dumps({"type": "assistant", "message": {"content": [
+                {"type": "tool_use", "name": "SubagentHandback",
+                 "input": {"message": fenced(VALID)}}]}}) + "\n")
+        p = self.hook(dict(self.stop(msg=""), agent_transcript_path=transcript))
+        self.assertEqual(p.returncode, 0)
+        row = self.rows()[0]
+        self.assertEqual((row["report_ok"], row["report_source"]), (True, "handback"))
+
+    def test_no_report_anywhere_is_recorded_as_missing(self):
+        self.hook(dict(self.stop(msg=""), agent_transcript_path="/nonexistent.jsonl"))
+        row = self.rows()[0]
+        self.assertEqual((row["report_ok"], row["report_source"]), (False, None))
+
+    def test_internal_helper_agents_are_skipped(self):
+        for ev in (dict(self.start(), agent_type=""), dict(self.stop(), agent_type="")):
+            p = self.hook(ev)
+            self.assertEqual((p.returncode, p.stdout), (0, ""))
+        self.assertEqual(self.rows(), [])
+
     def test_invalid_report_is_recorded_not_blocked(self):
         p = self.hook(self.stop(msg="I finished, no JSON."))
         self.assertEqual(p.returncode, 0)

@@ -83,7 +83,13 @@ All were checked on 2026-09-29 against Claude Code 2.1.285 and Codex CLI 0.154.
 - **Hook events:**
   - SubagentStart fires "each time an in-process agent team teammate handles a new message", so the
     ledger folds rows by `agent_id`;
-  - the SubagentStop input carries `last_assistant_message` and `agent_transcript_path`;
+  - the SubagentStop input carries `last_assistant_message` and `agent_transcript_path`. In auto
+    mode a subagent delivers its report through the `SubagentHandback` tool, so
+    `last_assistant_message` is empty and the report is the tool call's `message` (observed live on
+    2026-09-30, and the hooks docs say the same). The ledger falls back to the transcript's last
+    handback and records `report_source`;
+  - Claude Code's own helper agents also fire SubagentStop, with an empty `agent_type` and no
+    transcript. The ledger skips them;
   - in `-p` mode a folder is treated as trusted, so project hooks run
     ([hooks](https://code.claude.com/docs/en/hooks)).
 - **Silent failure modes:**
@@ -196,5 +202,11 @@ blocked.
    must print a deny. The same payload with `"isolation":"worktree"` must print nothing.
 3. **Last, the settings.** Add the three hook entries (PreToolUse `Agent|Task`, SubagentStart,
    SubagentStop) and `"worktree": {"baseRef": "head"}` to the live `~/.claude/settings.json`.
-   Then start a new session, spawn an `Explore` agent, and confirm the ledger got its start and
-   stop rows (`delegation-ledger tail`).
+   Then spawn an `Explore` agent and confirm two things. First, the override bound: its transcript
+   runs on sonnet, and it lists no Bash. Second, the ledger got start and stop rows
+   (`delegation-ledger tail`).
+
+Observed on the 2026-09-30 install: skill links and settings hooks took effect in the running session
+at once, and the guard denied a live writer spawn. Agent definitions reloaded a little later. The first
+`Explore` spawn after linking still got the built-in (opus, with Bash), and a retry a minute later got
+ours. So check the override with a fresh spawn, or in a new session.
