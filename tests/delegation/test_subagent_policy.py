@@ -4,6 +4,7 @@ Each test runs against a temporary home whose user settings carry this repo's ba
 `sandbox` block, so the excluded-command rules are the ones that ship."""
 import json
 import os
+import re
 import subprocess
 import tempfile
 import unittest
@@ -54,7 +55,7 @@ class Base(unittest.TestCase):
         os.makedirs(self.wt)
         os.makedirs(os.path.join(self.proj, "src"))
         self.slug_dir = os.path.join(self.home, ".claude", "projects",
-                                     self.proj.replace("/", "-").replace(".", "-"))
+                                     re.sub(r"[^A-Za-z0-9]", "-", self.proj))
         os.makedirs(os.path.join(self.slug_dir, "s1", "subagents"))
         self.transcript = os.path.join(self.slug_dir, "s1.jsonl")
         bindir = os.path.join(self.home, "bin")  # gh-public as setup.sh links it, and a script
