@@ -1,7 +1,7 @@
 # My Claude Code setup
 
 A portable snapshot of my global [Claude Code](https://docs.claude.com/en/docs/claude-code/overview)
-configuration: global instructions, the skills and hooks Hayden and Friends authored, durable-state templates,
+configuration: global instructions, the skills, agents and hooks Hayden and Friends authored, durable-state templates,
 settings, and the plugins I install. Run `./setup.sh` on a fresh machine and end up with the
 same setup.
 
@@ -31,7 +31,7 @@ repo file as a curated baseline while the runtime owns its own copy.
 |---|---|---|
 | `CLAUDE.md` | Global instructions: working partnership, boundaries, voice, the explore -> spec -> plan -> execute -> verify -> review workflow | symlink `~/.claude/CLAUDE.md` |
 | `settings.json` | Hooks, status line, env vars, enabled plugins (curated baseline) | **copy** to `~/.claude/settings.json` (runtime-managed, not symlinked) |
-| `skills/` | The skills I authored: `coding-practices`, `research-discipline`, `research-sourcing`, `writing-voice`, `staged-reader-review`, `ebook-extract`, `deck-production`, `vetting-sources`, `handoff`, `delegation` | symlink per dir into `~/.claude/skills/`; a skill's `scripts/` CLI also symlinks into `~/.local/bin` when that dir exists (`deck-production` ships `deckkit`; `delegation` ships `codex-delegate` and `delegation-ledger`) |
+| `skills/` | The skills I authored: `coding-practices`, `research-discipline`, `research-sourcing`, `writing-voice`, `staged-reader-review`, `ebook-extract`, `deck-production`, `vetting-sources`, `handoff`, `frontend-ui-discipline`, `ui-alignment`, `delegation` | symlink per dir into `~/.claude/skills/`; a skill's `scripts/` CLI also symlinks into `~/.local/bin` when that dir exists (`deck-production` ships `deckkit`; `delegation` ships `codex-delegate` and `delegation-ledger`) |
 | `agents/` | Delegation roles: `Explore` (overrides the built-in with a no-shell reader), `researcher`, `reviewer`, `writer`; see docs/delegation.md | symlink per file into `~/.claude/agents/` |
 | `hooks/agent-spawn-guard.sh` | PreToolUse(Agent) guard: denies a `writer` spawn that doesn't pass `isolation` on the call; fails closed | symlink `~/.claude/hooks/agent-spawn-guard.sh` |
 | `hooks/delegation-ledger.sh` | SubagentStart/SubagentStop hook: appends a pointer row per delegated agent to the delegation ledger; never blocks | symlink `~/.claude/hooks/delegation-ledger.sh` |
@@ -50,6 +50,8 @@ repo file as a curated baseline while the runtime owns its own copy.
 | `statusline/ccstatusline-settings.json` | ccstatusline layout baseline that wires the ctx-breakdown and session-summary widgets in | installed by `setup.sh` to `~/.config/ccstatusline/settings.json` (paths patched per machine) |
 | `tools.json` | Standalone CLI tools (ccstatusline via bun) | consumed by `setup.sh` |
 | `docs/PLUGINS.md` | One-line description of each plugin | reference |
+| `docs/delegation.md` | Delegation hardening: design, verified facts, known gaps, install order, next stages | reference |
+| `tests/delegation/` | Unit tests for the delegation pieces (no model calls) and `run.py`, a live harness that spends model calls | run from the repo root |
 | `docs/chrome-devtools-wsl.md` | WSL2-only: how to make `chrome-devtools-mcp` work (Strategy A headless Linux Chrome, plus B to attach to your Windows Chrome) | reference |
 | `chrome-debug.ps1` | Windows launcher for Strategy B (Chrome with a remote-debugging port) | run on Windows when needed |
 | `setup-chrome-wsl.sh` | Opt-in WSL2 installer: installs Chrome for Testing and registers the user-scoped `chrome-devtools` override | run once on WSL2; not called by `setup.sh` |
@@ -74,6 +76,16 @@ need nothing extra.
 `settings.json` wires these lifecycle hooks (all run by default except `danger-guard`, which
 ships but is opt-in, see its entry):
 
+- **PreToolUse(`Agent|Task`): `agent-spawn-guard.sh`** (in this repo). Denies a `writer` spawn that
+  doesn't pass `isolation` on the Agent call. With agent teams on, a named spawn would otherwise start
+  as a teammate in the main checkout, and the writer's frontmatter isolation would be ignored.
+  **Fails closed**: if the guard script or python3 is missing, it exits 2 and blocks every Agent
+  spawn. That is deliberate, but it means `skills/delegation` must be linked before this hook is
+  wired (see `docs/delegation.md`, install order). Needs python3 on PATH.
+- **SubagentStart / SubagentStop: `delegation-ledger.sh`** (in this repo). Appends a pointer row
+  (ids, type, paths, whether the final report validated) per delegated agent to
+  `${XDG_STATE_HOME:-~/.local/state}/dotclaude/delegations.jsonl`, so `delegation-ledger open` can
+  list unfinished delegations after a crash. Observer only: prints nothing, always exits 0.
 - **UserPromptSubmit: `handoff-reminder.sh`** (in this repo). When a prompt is a genuine session
   wrap-up or context-reset command (`hand off`, `wrap up`, `stop here`, `clear context`, `/clear`),
   it injects a one-line reminder
@@ -93,9 +105,9 @@ ships but is opt-in, see its entry):
   on any error). Needs python3 on PATH.
 - **PreToolUse(Bash): `danger-guard.sh`** (in this repo, **ships but not wired by default**).
   The script is symlinked into `~/.claude/hooks/` so it is ready to use, but `settings.json`
-  intentionally carries no `PreToolUse` block (dropped in `8602081`: `setup.sh` would otherwise
-  silently re-enable a guard some machines want off). Opt in by adding a `PreToolUse` matcher for
-  `Bash` that runs it. Once wired it works in two tiers: it hard-blocks
+  intentionally carries no `PreToolUse` entry for `Bash` (dropped in `8602081`: `setup.sh` would
+  otherwise silently re-enable a guard some machines want off). Opt in by adding a `Bash` matcher that
+  runs it to the existing `PreToolUse` array. Once wired it works in two tiers: it hard-blocks
   (`deny`) never-legitimate ops (force-push, `reset --hard`, `git clean -f`) and prompts
   (`ask`) for routine-but-sensitive ops (plain push, checkout, switch, revert, `rm -rf`).
   Token-aware, so it does not trip on `git commit -m "push fix"`, and it recurses into

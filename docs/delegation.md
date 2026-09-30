@@ -30,7 +30,7 @@ found:
 | Spawn guard | `hooks/agent-spawn-guard.sh`, `skills/delegation/scripts/agent-spawn-guard` | Enforces: denies a `writer` spawn without `isolation` on the call. Fails closed |
 | Ledger | `hooks/delegation-ledger.sh`, `skills/delegation/scripts/delegation-ledger` | Observes: a pointer row per agent start and stop, plus `report_ok`. Fails open |
 | Brief and report | `skills/delegation/BRIEF.md`, `report.schema.json` | Persuades (the brief); checks (the schema, via the ledger and codex-delegate) |
-| Codex wrapper | `skills/delegation/scripts/codex-delegate` | Enforces: model gate, sandbox, memory cap, timeout, schema, and a recursive model audit |
+| Codex wrapper | `skills/delegation/scripts/codex-delegate` | Enforces: model gate, sandbox, memory cap (via systemd-run when available; otherwise a warning), timeout, schema, and a recursive model audit |
 | `worktree.baseRef: "head"` | `settings.json` | A writer's worktree branches from the current branch, not from `main` |
 
 ### Where enforcement stops (known gaps)
@@ -39,8 +39,9 @@ found:
   The docs: "An `isolation` value in the subagent's frontmatter doesn't prevent it". The spawn guard
   closes this for `writer` only.
 - **Writer escape.** The writer's Bash can still write outside its worktree through a subprocess
-  (for example `python3 -c open(...)`). The worktree guard checks only command text and working
-  directory. Stage 2's sandbox is the fix, and it needs a live test of the worktree's writable root.
+  (for example `python3 -c open(...)`). Claude Code's built-in worktree check checks only command
+  text and working directory ([sub-agents](https://code.claude.com/docs/en/sub-agents): it "blocks a
+  command that redirects git into the main checkout"). Stage 2's sandbox is the fix, and it needs a live test of the worktree's writable root.
 - **Hook timeout.** A hook timeout is non-blocking, so a spawn guard that hangs past 10 s lets the call
   through. It is a stdlib script that makes no network calls.
 - **general-purpose spawns** are logged, not constrained. Stage 2 decides whether to require a role.
@@ -155,7 +156,10 @@ anyone acting for Anthropic or OpenAI.
   - it denies MCP write and send tools and `git push`;
   - it parses commands with Parable and fails closed.
 - **A SubagentStop and SubagentHandback schema check,** capped at 2 rejections.
-- **Decide on the general-purpose rule** from the ledger's data.
+- **Decide on the general-purpose rule** from the ledger's data. Two existing skills would be
+  affected: `vetting-sources` (its `references/workflow-scaffolds.md` sets
+  `agentType:'general-purpose'`) and `staged-reader-review` (named spawns with no role, which become
+  teammates when agent teams are on).
 
 **Stage 3 (watch):**
 - A cctop-style heartbeat in `tmux-state.sh`.

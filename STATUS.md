@@ -9,177 +9,45 @@ Last updated: 2026-09-29
 Base: `main`. For branch / PR / push state, run `gh pr list` and `git log main..HEAD` (derive it; not
 stored here).
 
-## Done (recent; git holds the detail)
-- **Client deck data removed from the current tree** (2026-09-29, PR #28). The deck-production parity fixtures
-  (config, goldens, flag list) described a client's real investor deck; they moved to the client's
-  private repo beside the reference deck (`decks/_parity/`, README there has the run command), and
-  `parity_check.py` now requires `--config` and `--goldens`. Real figures, a fact ID, a source line and
-  quoted deck claims left in two templates were replaced with neutral placeholders. Mentioning the
-  engagement is fine; its contents and data are what stays out. History is deliberately left as-is
-  (Hayden's call). Verified: parity gate green from the new location; a fresh `deckkit new` deck
-  lints 0/0 and packages; a number-match and 8-word-overlap scan against the client repo finds no
-  contents in the tree.
-- **Codex `config.toml` drift resolved: merged, no longer symlinked** (2026-09-29, PR #27; rationale in `docs/codex.md` "Configuration mechanism").
-  Codex writes trust entries and installer-added MCP servers (aws-mcp, 2026-09-25) into its config,
-  and the `setup.sh` symlink put them in this repo. Now `codex/merge-config.py` upserts the repo's
-  top-level keys into a real `~/.codex/config.toml` and leaves Codex's tables local (the
-  `settings.json` pattern, but a merge, since `copy_managed` would wipe trust entries); `sync.sh`
-  suggests `git add plugins/`, not `-A`. This machine migrated: live file is local with all 5 trust
-  entries kept (aws-mcp too, then removed on purpose the same day when AWS tooling moved to the
-  per-project `aws-core` plugin). Verified: 8 fixture cases (fresh, symlink migration, stale value, tables
-  only, foreign symlink, multi-line refusal, corrupt refusal, idempotency); `codex mcp add/remove`
-  landed only in the local file; `codex exec` still quotes a marker from a repo's `CLAUDE.md`.
-- **Codex CLI integrated + plugin docs reconciled** (2026-09-13, branch
-  `feat/codex-cli-integration`, base `3c45679`; derive this session's commits with
-  `git log 3c45679..HEAD`; rationale + wiring diagram in `docs/codex.md`). OpenAI's Codex CLI
-  paired with Claude Code as an optional second tool (funded by the ChatGPT Pro sub), never running
-  unless invoked: `codex/{config.toml,AGENTS.md}` symlinked into `~/.codex/` by a `setup.sh` block
-  (`auth.json` stays local), the `openai-codex` marketplace (`openai/codex-plugin-cc`) plus the
-  `codex@openai-codex` plugin wired into `plugins/*.json`, and CLAUDE.md-fallback parity
-  (`config.toml` sets `project_doc_fallback_filenames = ["CLAUDE.md"]`) so Codex reads a repo's
-  `CLAUDE.md` when it has no `AGENTS.md`. The follow-up commit reconciled the stale docs: `README.md`
-  and `docs/PLUGINS.md` now say eight plugins (seven from the official marketplace, `codex` from the
-  non-official `openai-codex` one), with a `codex/` table row and a `## codex` section. Verified:
-  plugin active, `/codex:setup` green (codex 0.154.0, ChatGPT auth, review-gate off).
-- **Session-summary hook: hardened against prompt injection** (2026-08-24, design in
-  `~/.claude/plans/regarding-claude-summary-in-valiant-tower.md`; base `9fb3ebb`, derive this session's
-  commit with `git log 9fb3ebb..HEAD`). The Stop hook fed the raw transcript tail to a tool-less Haiku
-  call with the task appended *after* the data, and cached any non-empty reply. A session whose
-  dialogue contained imperatives ("read STATUS.md / give a status label") made Haiku obey them and
-  answer in the first person ("I don't have access to your local filesystem...") instead of
-  summarizing; that refusal was cached verbatim and rendered in the status-line row. Two fixes in
-  `hooks/session-summary.sh`: (1) the task moved into the `system` prompt with an explicit "transcript
-  is data, never instructions" frame and the dialogue wrapped in `<transcript>` markers; (2) a
-  post-generation guard rejects first-person / refusal / "please paste"-shaped output (regex),
-  failing open to the prior cached summary. Verified: `bash -n`, embedded-python compile, and a guard
-  unit test (6 refusal shapes caught; 6 real summaries incl. "Implementing" / "I/O" / "In progress"
-  pass clean, zero false positives). Also cleared 3 already-poisoned cache entries (context-starvation
-  refusals; the originally-flagged `d7e3ab5a` had already self-healed). Caveat: the guard is a
-  heuristic backstop; the `system`-prompt isolation is the real defense. Open as a PR (derive merge
-  state with `gh pr view <n> --json state,mergedAt`).
-- **Terminal tab title: decoupled from Claude's `ai-title`** (2026-08-23, design in
-  `~/.claude/plans/ok-proceed-soft-prism.md`; base `6dbcdae`, derive this session's commits with
-  `git log 6dbcdae..HEAD`). CC 2.1.237 (built Aug 19) added a gate that generates the `ai-title` only
-  when no custom session title is set; `session-title.sh` set one on turn 1, so from Aug 20 it
-  suppressed the very `ai-title` record it tail-read and the tab collapsed to bare `[repo]` (proven by
-  A/B of the installed `2.1.235` vs `2.1.237` binaries: the write path is identical, the
-  `!sessionTitle` gate is new). Fix: stop depending on `ai-title`. `session-summary.sh`'s existing
-  Haiku call now also emits a `<=32`-char `LABEL:` cached to `session-summaries/<id>.title.txt` (the
-  long summary in `<id>.txt` stays clean prose for the widget); `session-title.sh` builds
-  `[repo] <label>` via a cascade (Haiku label -> current prompt's first line -> long-summary first
-  clause -> bare `[repo]`) and no longer reads `ai-title` (its only tail-scan now is `custom-title`,
-  for dedup). Verified: `bash -n`, 5 parse unit tests (no `LABEL:` leak into the prose summary), a live
-  Haiku call producing `[hq] Terminal title label caching` plus a clean summary, all four cascade
-  rungs, and dedup. Gotcha saved as [[cc-ai-title-suppressed-by-custom-title]]. Open as **PR #22**
-  (derive merge state: `gh pr view 22 --json state,mergedAt`).
-- **Session-summary status-line row** (2026-08-18, design in
-  `~/.claude/plans/in-an-earlier-session-toasty-marshmallow.md`). A persistent 1-2 sentence "what is this
-  session doing, and where does it stand" line so several concurrent Claude terminals are tellable apart
-  without relying on the (often off-screen) native task panel. Two decoupled halves:
-  **`statusline/session-summary.py`**, a ccstatusline custom-command widget on the previously-empty lines 2-3
-  (`--row 1`/`--row 2`, dim, word-wrapped to COLUMNS) that reads a cached summary and falls back to the
-  transcript's `ai-title`; and **`hooks/session-summary.sh`**, a `Stop` hook that regenerates the summary via a
-  **direct Haiku Messages-API call authenticated with the Claude subscription OAuth token** from
-  `~/.claude/.credentials.json` (no API key; stdlib `urllib`, no jq), writing
-  `<config-dir>/session-summaries/<session_id>.txt`. Detached (never blocks the turn), fail-open, cadence-gated
-  (skips if the transcript grew <2KB), feeds the prior summary back. Chosen over headless `claude -p` after
-  measuring both live: direct API ~3.7s and ~3x cheaper (no system-prompt overhead) vs `claude -p` ~11.7s.
-  `setup.sh` §5 generalized: symlinks BOTH `statusline/*.py`, patches any custom-command commandPath preserving
-  trailing args, and idempotently grafts the two widgets into an existing install. `settings.json` registers the
-  Stop hook, but it is COPIED by setup.sh (needs a `./setup.sh` re-run or hand-edit). This session installed
-  **surgically** (live ccstatusline config patched + hook appended to live `settings.json`) because a full
-  `copy_managed` would clobber the runtime-managed `model` key; the widget is live now, the Stop-hook
-  auto-refresh activates next session. **Line 1 (metrics/ctx) left untouched** so the loop-engineering
-  input-ready detector is unaffected. Verified: widget unit-tested (wrap/fallback/empty), the real ccstatusline
-  binary renders 3 lines and collapses empty rows, and a live OAuth call produced accurate summaries. Caveat:
-  the OAuth credentials file is undocumented and its token rotates; a stale/failed read just leaves the last
-  summary (fail-open). Follow-up fix (`f56ddbc`): the widget now wraps at ccstatusline's *effective* width
-  (read `terminal_width` from the stdin JSON, minus the `flexMode` reserve) instead of the unset `COLUMNS`
-  env (which clipped the line ~40% short), and strips markdown. Open as **PR #21** (derive merge state:
-  `gh pr view 21 --json state,mergedAt`).
-- **Two loose decisions resolved** (2026-08-18, branch `feat/resolve-loose-decisions`). (a) **danger-guard
-  README fix** (`bb99b31`): the Hooks section listed `PreToolUse(Bash): danger-guard.sh` as wired, but
-  `settings.json` intentionally omits it (dropped in `8602081`). Reframed as ships-but-opt-in with the
-  opt-in path spelled out; no `settings.json` change (kept opt-in by default per Hayden, who runs it off
-  locally). (b) **parallel-edits carve-out** (`d035a7e`, via `/revise-claude-md`): CLAUDE.md line 23's flat
-  "never parallel edits" is now conditional (parallel edits only when each agent writes its own new file no
-  other agent touches + single-threaded merge; never same file / shared state). Backed by a 5-agent sourced
-  research sweep (Karpathy, Anthropic multi-agent guidance, the worktree-parallel camp, and the serial camp
-  all converge on that same boundary) and by Hayden's own skills already encoding the disjoint-file
-  qualifier (deck-production G3, frontend-ui-discipline, vetting-sources, research-sourcing); resolves the
-  `CLAUDE.md` > skills precedence conflict that made G3 read as forbidden. (c) The handoff reconcile pass
-  also fixed stale "danger-guard active by default" claims in `skills/handoff/SKILL.md` and `setup.sh`
-  (`a0b8ada`); one incidental now-false clause in `docs/durable-handoff-brief.md` (a dated VERIFIED
-  snapshot) was left for a scope call, see Blocked. Open as **PR #20** (derive merge state:
-  `gh pr view 20 --json state,mergedAt`). Design + full sourced research in
-  `~/.claude/plans/status-enumerated-kitten.md`.
-- **Terminal tab title hook** (2026-08-17, `hooks/session-title.sh` introduced; design in
-  `~/.claude/plans/status-hazy-robin.md`). Registered as the second `UserPromptSubmit` entry beside
-  `handoff-reminder.sh` (independent subprocesses, no clobber). Its original `ai-title`-based label
-  mechanism was replaced on 2026-08-23, see the entry above; git holds the origin detail.
-- **`frontend-ui-discipline` skill** (2026-08-16/17). Reusable desktop+mobile web-UI discipline distilled
-  from a client dashboard project (verify-at-both-widths, sticky/scroll-margin math, touch≠hover,
-  single-source-of-truth state, i18n); RED→GREEN validated per `superpowers:writing-skills`. Its
-  client-specific dashboard reference was later migrated out into a project-scoped skill in that
-  client's repo, so a single-client playbook no longer loads into every project's namespace. See
-  [[frontend-ui-discipline-skill]]. Layout-bug scar added 2026-09-22 (a bug's
-  cause is a hypothesis until measured; the Vulcan #13 flex-item `min-height:auto = 0` collapse as the
-  worked example), merged as PR #25.
-- **Handoff: proactive CLAUDE.md trigger** (2026-08-16, branch `handoff-proactive-claude-md`, commit
-  `6c775d8`). `skills/handoff/SKILL.md` Step 2 now fires one narrow, prune-biased proactive CLAUDE.md
-  reflection (a durable repo-level convention/structural fact established this session → propose via
-  `/revise-claude-md`, scoped to that fact), tells the reconcile sub-agent to cover nested CLAUDE.md
-  files (not just root), and gains a Common Mistakes row for the silent-omission case. Design rationale
-  in `~/.claude/plans/improve-my-handoff-skill-inherited-lamport.md`. See [[dotclaude-handoff-skill]].- **`vetting-sources` skill** (2026-08-15, commit `245eeda`). New procedural skill: bring an external /
-  third-party document into a knowledge base by faithful multi-agent extraction, an accuracy + internal-
-  consistency audit (reconcile vs filings and the web, then adversarially verify), and a cite-safety
-  brief; quarantine holds until the audit clears. Delegates to `research-sourcing` / `research-discipline`
-  / `writing-voice` / `staged-reader-review` / `ebook-extract` / `dispatching-parallel-agents`; ships
-  `references/workflow-scaffolds.md` with the reusable Workflow skeletons. Built while running the pipeline
-  live on a real broker report in a client repo; gap-audited by a fresh agent (no-registry, scanned-PDF, and
-  foreign-number-format paths added from that pass).
-- **`deck-production` skill, block S1 of 6** (2026-08-08, branch `feat/deck-production-skill`, base
-  `8602081`). Generalizes the deck machinery built for one company (its repo's `decks/_shared/tools/`) into
-  config-driven tooling: `deckkit` dispatcher (its main job is picking the interpreter), `deckcfg`
-  (tomllib, CLI > env > file > default), scaffolder, and generalized build/lint/package plus serve,
-  doctor, and the reference-deck regression gate. Templates carry the storyboard grammar, builder
-  contract, substrate trio, and review-record format. Design and the S1-S6 block plan live in
-  `~/.claude/plans/explore-our-entire-workflow-bright-shamir.md` (gitignored, machine-local).
-- **Status-line ctx chip: percent + divider** (2026-07-11, follow-up to PR #12).
-  `statusline/ctx-breakdown.py` total chip renders its share of the auto-compact window as a percent,
-  set off from the per-category chips by a dim `▏`. Derive PR/merge state with `gh pr list`.
-- **Handoff-lifecycle hardening** (2026-07-11, `4df5a49..af14b97`). `skills/handoff/SKILL.md` enforces
-  prune-as-you-write and "volatile git state: derive, never store"; `hooks/handoff-reminder.sh` rewritten
-  precision-first (23-case battery); `CLAUDE.md` gained the read-side resume line. See
-  [[dotclaude-handoff-skill]].
-- **WSL2 `chrome-devtools-mcp` fix (opt-in)** (2026-07-10, PR #13). `setup-chrome-wsl.sh` +
-  `docs/chrome-devtools-wsl.md` + `chrome-debug.ps1`. Confirmed live and working 2026-08-08. See
-  [[dotclaude-chrome-devtools-wsl]].
-- Prior shipped (git + memory hold detail): research-sourcing skill (PR #10), staged-reader-review
-  bundle upgrade, danger-guard opt-in auto mode, statusline ctx chips (PR #12).
+## Done (recent; git, the linked plans and memory hold the detail)
+- **Client deck data removed from the current tree** (2026-09-29, PR #28). Parity fixtures live in the
+  client's private repo (`decks/_parity/`); `parity_check.py` requires `--config` and `--goldens`.
+  History deliberately left as-is (Hayden's call).
+- **Codex `config.toml` merged, not symlinked** (2026-09-29, PR #27; rationale in `docs/codex.md`,
+  "Configuration mechanism").
+- **Codex CLI integrated** (2026-09-13, `feat/codex-cli-integration`; wiring and rationale in
+  `docs/codex.md`).
+- **Session-summary hook hardened against prompt injection** (2026-08-24, base `9fb3ebb`; design in
+  `~/.claude/plans/regarding-claude-summary-in-valiant-tower.md`). The `system`-prompt isolation is the
+  real defense; the refusal-shape regex is a backstop.
+- **Terminal tab title decoupled from `ai-title`** (2026-08-23, PR #22; design in
+  `~/.claude/plans/ok-proceed-soft-prism.md`; gotcha [[cc-ai-title-suppressed-by-custom-title]]).
+- **Session-summary status-line row** (2026-08-18, PR #21; design in
+  `~/.claude/plans/in-an-earlier-session-toasty-marshmallow.md`). Caveat: the OAuth credentials file it
+  reads is undocumented and its token rotates; a failed read keeps the last summary.
+- **Loose decisions resolved** (2026-08-18, PR #20; design in `~/.claude/plans/status-enumerated-kitten.md`):
+  danger-guard ships but is opt-in; the CLAUDE.md parallel-edits carve-out.
+- **Terminal tab title hook** (2026-08-17; design in `~/.claude/plans/status-hazy-robin.md`).
+- **`frontend-ui-discipline` skill** (2026-08-16/17; layout-bug scar merged as PR #25;
+  [[frontend-ui-discipline-skill]]).
+- **Handoff: proactive CLAUDE.md trigger** (2026-08-16, `6c775d8`; [[dotclaude-handoff-skill]]).
+- **`vetting-sources` skill** (2026-08-15, `245eeda`).
+- **`deck-production` block S1 of 6** (2026-08-08, base `8602081`; S1-S6 plan in
+  `~/.claude/plans/explore-our-entire-workflow-bright-shamir.md`).
+- Older (git and memory hold the detail): ctx chip percent (PR #12 follow-up), handoff-lifecycle
+  hardening (`4df5a49..af14b97`), WSL2 `chrome-devtools-mcp` (PR #13, [[dotclaude-chrome-devtools-wsl]]),
+  research-sourcing (PR #10), staged-reader-review upgrade, danger-guard opt-in auto mode.
 
 ## In flight
-- **Delegation hardening: Stage 1 built; Stage 2 next.** `docs/delegation.md` holds the design, the
-  verified facts, the adopt/copy verdict and the next stages; `skills/delegation/SKILL.md` is the
-  operating guide.
-  - **Stage 1** (branch `feat/delegation-stage1`; check its PR with `gh pr list --head
-    feat/delegation-stage1`):
-    - the roles: `Explore` override, `researcher`, `reviewer`, `writer`;
-    - the spawn guard, the ledger, and `codex-delegate`.
-  - **After merge, install on this machine by hand, in the order the docs' install section
-    gives:**
-    1. the links (`skills/delegation` first, because the hook shims call its scripts);
-    2. the guard check;
-    3. last, the live `~/.claude/settings.json` hook entries and `worktree.baseRef`.
-
-    Don't re-run `setup.sh`: it resets that file. The guard fails closed, so wiring it before the
-    skill link exists blocks every Agent spawn.
-  - **Then Stage 2:**
-    - the native sandbox (Hayden runs the `sudo apt install bubblewrap socat` step);
-    - the subagent-only policy hook;
-    - the report check.
-  - **Local evidence** (not in git, because it names agent IDs from other projects):
-    `~/scratch/delegation-eval/`.
+- **Delegation hardening: Stage 1 built; Stage 2 next.** `docs/delegation.md` holds the design,
+  the verified facts, the adopt/copy verdict, the install order and Stages 2 and 3;
+  `skills/delegation/SKILL.md` is the operating guide. Stage 1 is on `feat/delegation-stage1`
+  (derive its PR with `gh pr list --head feat/delegation-stage1`).
+  - **Next, after merge:** install it on this machine by hand, following the docs' "Installing on a
+    machine that is already set up" section. Don't use `setup.sh`: it resets the live settings.
+    Order matters, because the guard fails closed.
+  - **Then Stage 2.** Hayden runs the `sudo apt install bubblewrap socat` step.
+  - **Local evidence** (not in git): `~/scratch/delegation-eval/`.
 - **Codex setup shared with a friend** (Hayden's ask, 2026-09-29). The share page is BUILT and private:
   https://claude.ai/artifact/KWwrPkLsbMUi7Ugjfskqsz (source was a session scratchpad; republish by that
   URL). It links only four clean skills (coding-practices, research-discipline, ui-alignment,
@@ -213,15 +81,22 @@ stored here).
   the dead `scan_ai_title` fallback. Docs already note the fallback is moot.
 - **`docs/durable-handoff-brief.md` scope call.** Line ~98 (in the "Inner-loop inheritance mechanics,
   VERIFIED 2026-06-17" note) says the global `settings.json` "reference[s] the global `danger-guard.sh`",
-  now false since `8602081` dropped that `PreToolUse` block. Left unedited because it is a dated,
+  now false since `8602081` dropped the danger-guard `PreToolUse(Bash)` entry. Left unedited because it is a dated,
   point-in-time design snapshot, not a living behavior doc. Decide: correct the clause (one-line fix,
   e.g. point at the currently-wired hooks) or leave it as a historical record. The nearby loop-engineering
-  reference on the next line is a different repo's file and is NOT stale.
+  reference on the next line is a different repo's file and is NOT stale. The same doc's lines ~49-50
+  ("setup.sh symlinks its skills, the danger-guard hook, CLAUDE.md, and templates") are also stale
+  now (setup.sh links every hook, `agents/`, and the CLIs). Include them in the same call.
+- **Historical docs naming `Explore` for git work.** `skills/frontend-ui-discipline/SPEC.md:14` (an
+  authoring record) tells an Explore agent to read a diff of the session's commits. The `Explore`
+  override has no shell, so that step now needs `researcher` or a pasted diff. Decide: update the
+  record, or leave it as history.
 
 ## Notes for next session
-- STATUS is over its ~120-line soft ceiling. A dedicated prune pass (collapse fully-shipped Done
-  entries to one-line git pointers) is overdue; not attempted mid-handoff to avoid dropping the
-  derive-PR-state pointers each entry carries. Do it as its own small task.
+- **Verify delegation before touching it:** `python3 -m unittest discover -s tests/delegation -t tests/delegation`
+  (54 tests, no model calls). The live harness `tests/delegation/run.py --runner claude|codex` spends
+  model calls. Run it after changing a role, a hook or `codex-delegate`, and after a Claude Code upgrade
+  until the Stage 3 canary exists.
 - **Verify `deck-production` before touching it:** run `deckkit regress` as the README in the
   private client repo's `decks/_parity/` shows; it must print `parity: green`. `--config` and
   `--goldens` are required, because no fixtures ship in this public repo. It runs read-only and asserts

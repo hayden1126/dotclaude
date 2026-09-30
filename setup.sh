@@ -297,6 +297,9 @@ cat <<'EOF'
      if absent it fails open (leaves the title unchanged). The opt-in
      danger-guard hook (hooks/danger-guard.sh) is not wired by default; once
      you wire it, it also needs python3 and fails open (allows the command).
+     The agent-spawn guard (hooks/agent-spawn-guard.sh) needs python3 too and
+     FAILS CLOSED: without python3 or the linked skills/delegation it blocks
+     every Agent spawn. The delegation ledger hook fails open.
 
 ============================================================
 

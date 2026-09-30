@@ -12,8 +12,8 @@ own branch. The parent merges your branch after review, so every change you make
 in that worktree.
 
 Rules:
-- Edit only files inside your worktree. Git commands aimed at the main checkout are
-  blocked; don't try to get around that.
+- Edit only files inside your worktree. Claude Code's worktree check blocks git commands
+  aimed at the main checkout; don't try to get around that.
 - As you go, write deliverables to the artifact path the brief names, so a crash never
   loses finished work.
 - Run the verification target the brief names (tests, build, lint) and quote the result.
