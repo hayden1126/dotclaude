@@ -80,7 +80,7 @@ def main_status(cwd):
     """sha256 of the main checkout's `git status` for an agent in a worktree, else None."""
     if not cwd or "/.claude/worktrees/" not in cwd:
         return None
-    main = cwd.split("/.claude/worktrees/")[0]
+    main = cwd.rsplit("/.claude/worktrees/", 1)[0]  # the innermost: worktrees can nest
     try:
         out = subprocess.run(["git", "-C", main, "status", "--porcelain=v1", "-uall"],
                              capture_output=True, timeout=3).stdout
@@ -95,13 +95,16 @@ def cmd_hook(_args):
         event = data.get("hook_event_name")
         if event not in ("SubagentStart", "SubagentStop"):
             raise ValueError(f"unexpected hook_event_name {event!r}")
+        meta = dc.agent_meta(data)
         base = {
             "ts": dc.now_iso(),
             "runner": "claude",
             "id": norm_id(data.get("agent_id")),
-            "agent_type": data.get("agent_type"),
+            "agent_type": dc.agent_role(data, meta),
             "session_id": data.get("session_id"),
         }
+        if meta.get("name"):
+            base["name"] = meta["name"]  # a teammate: agent_type is its role, this its name
         if not base["id"]:
             raise ValueError(f"{event}: no agent_id in hook input")
         if not base["agent_type"]:

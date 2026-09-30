@@ -498,6 +498,14 @@ class Researcher(Base):
     def r(self, cmd):
         return self.bash(cmd, atype="researcher")
 
+    def test_a_researcher_teammate_gets_the_allowlist(self):
+        # A teammate's hook agent_type is its name; its role comes from meta.json.
+        self.meta("t1", agentType="team-probe", name="team-probe", customAgentType="researcher",
+                  taskKind="in_process_teammate")
+        self.assertDenied(self.bash("touch x", atype="team-probe", aid="t1"),
+                          "researcher-program")
+        self.assertIsNone(self.bash("git log -1", atype="team-probe", aid="t1"))
+
     def test_allowlisted_reads_pass(self):
         for cmd in ("git log --oneline -5", "git show HEAD --stat", "git blame -L 1,5 f",
                     "grep -rn foo . | head -20", "find . -name '*.py' | wc -l", "sed -n '1,5p' f",

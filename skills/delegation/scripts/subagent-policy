@@ -225,7 +225,8 @@ class Analyzer:
         self.data = data
         self.p = policy
         self.home = home or os.path.expanduser("~")
-        self.agent_type = data.get("agent_type") or ""
+        self.meta = dc.agent_meta(data)
+        self.agent_type = dc.agent_role(data, self.meta)
         self.cwd = os.path.realpath(data.get("cwd") or os.getcwd())
         self.worktree = self._worktree()
         self.main_root = (self.worktree.rsplit("/.claude/worktrees/", 1)[0]
@@ -248,19 +249,9 @@ class Analyzer:
         """The worktree root of an isolated agent: meta.json's worktreePath, else a cwd
         under .claude/worktrees/. A writer with neither is refused (it would otherwise be
         policed as if the whole checkout were its root)."""
-        tp, aid = self.data.get("transcript_path"), self.data.get("agent_id")
-        if tp and aid:
-            aid = str(aid)
-            aid = aid[len("agent-"):] if aid.startswith("agent-") else aid
-            base = tp[:-len(".jsonl")] if tp.endswith(".jsonl") else tp
-            meta = os.path.join(base, "subagents", f"agent-{aid}.meta.json")
-            try:
-                with open(meta) as f:
-                    wt = json.load(f).get("worktreePath")
-                if wt:
-                    return os.path.realpath(wt)
-            except (OSError, ValueError):
-                pass
+        wt = self.meta.get("worktreePath")
+        if wt:
+            return os.path.realpath(wt)
         if "/.claude/worktrees/" in self.cwd + "/":
             # The innermost one: a lead session in a worktree nests its agents' worktrees.
             head, tail = self.cwd.rsplit("/.claude/worktrees/", 1)
@@ -1129,7 +1120,7 @@ def log_deny(data, d):
         aid = str(data.get("agent_id") or "")
         dc.append_row({"ts": dc.now_iso(), "runner": "claude", "event": "policy",
                        "id": aid[len("agent-"):] if aid.startswith("agent-") else aid,
-                       "agent_type": data.get("agent_type"), "session_id": data.get("session_id"),
+                       "agent_type": dc.agent_role(data), "session_id": data.get("session_id"),
                        "tool": data.get("tool_name"), "rule": d.rule, "intent": d.intent})
     except Exception:
         pass

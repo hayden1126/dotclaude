@@ -140,6 +140,30 @@ def report_check(text):
     return (not errs), status, (errs[0] if errs else None)
 
 
+def agent_meta(data):
+    """The agent's meta.json, which sits beside its transcript under the parent session's
+    subagents/ directory, or {} when there is none."""
+    tp, aid = data.get("transcript_path") or "", str(data.get("agent_id") or "")
+    if not tp or not aid:
+        return {}
+    aid = aid[len("agent-"):] if aid.startswith("agent-") else aid
+    base = tp[:-len(".jsonl")] if tp.endswith(".jsonl") else tp
+    try:
+        with open(os.path.join(base, "subagents", f"agent-{aid}.meta.json")) as f:
+            meta = json.load(f)
+    except (OSError, ValueError):
+        return {}
+    return meta if isinstance(meta, dict) else {}
+
+
+def agent_role(data, meta=None):
+    """The role an agent was spawned as. For an agent-team teammate, the hook input's
+    agent_type is the teammate's name and the role is meta.json's customAgentType
+    (observed on Claude Code 2.1.286), so role rules keyed on agent_type alone would miss it."""
+    meta = agent_meta(data) if meta is None else meta
+    return meta.get("customAgentType") or data.get("agent_type") or ""
+
+
 def pid_alive(pid):
     try:
         return pid is not None and os.path.exists(f"/proc/{int(pid)}")

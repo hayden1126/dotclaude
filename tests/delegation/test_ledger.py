@@ -147,6 +147,28 @@ class LedgerHook(unittest.TestCase):
         err = os.path.join(self.tmp.name, "state", "dotclaude", "delegation-ledger.err")
         self.assertTrue(os.path.getsize(err) > 0)
 
+    def test_a_teammate_is_recorded_by_its_role_and_name(self):
+        # A teammate's hook agent_type is its name; the role is meta.json's customAgentType
+        # (observed on 2.1.286).
+        sub = os.path.join(self.tmp.name, "s1", "subagents")
+        os.makedirs(sub)
+        with open(os.path.join(sub, "agent-a1.meta.json"), "w") as f:
+            json.dump({"agentType": "team-x", "name": "team-x", "customAgentType": "researcher",
+                       "taskKind": "in_process_teammate", "teamName": "session-s1"}, f)
+        self.hook(dict(self.start(), agent_type="team-x"))
+        self.hook(dict(self.stop(), agent_type="team-x",
+                       transcript_path=os.path.join(self.tmp.name, "s1.jsonl")))
+        self.assertEqual([(r["agent_type"], r.get("name")) for r in self.rows()],
+                         [("researcher", "team-x")] * 2)
+
+    def test_agent_role_falls_back_to_the_hook_type(self):
+        self.assertEqual(dc.agent_role({"agent_type": "Explore"}, {}), "Explore")
+        self.assertEqual(dc.agent_role({"agent_type": "team-x"}, {"customAgentType": "writer"}),
+                         "writer")
+        self.assertEqual(dc.agent_role({}, {}), "")
+        self.assertEqual(dc.agent_meta({"transcript_path": "/nonexistent/s.jsonl",
+                                        "agent_id": "a1"}), {})
+
     def test_teammate_restarts_fold_to_one_entry(self):
         for _ in range(3):
             self.hook(self.start())
