@@ -369,6 +369,32 @@ class Files(Base):
         self.assertIsNone(self.decide("Read", {"file_path": os.path.join(self.proj, "README")}))
         self.assertIsNone(self.decide("Read", {"file_path": self.home + "/.workspace-mcp/attachments/a.pdf"}))
 
+    def test_the_secrets_file_and_proc_are_credential_reads(self):
+        self.assertDenied(self.decide("Read", {"file_path": self.home + "/.secrets.env"}),
+                          "credential-read", "hard_stop")
+        for path in ("/proc/self/environ", "/proc/1/environ"):
+            self.assertDenied(self.decide("Grep", {"pattern": "TOKEN=", "path": path}),
+                              "credential-read", msg=path)
+        self.assertDenied(self.decide("Glob", {"pattern": "/proc/*/environ"}), "credential-read")
+
+    def test_grep_rooted_above_a_credential_path_is_scoped_down(self):
+        os.makedirs(os.path.join(self.home, ".ssh"))
+        for path in (self.home, "~", "/"):
+            self.assertDenied(self.decide("Grep", {"pattern": "ghp_", "path": path}),
+                              "credential-search", "scope_down", path)
+        self.assertDenied(self.decide("Grep", {"pattern": "ghp_"}, cwd=self.home),
+                          "credential-search")  # no path: Grep searches the cwd
+        self.assertIsNone(self.decide("Grep", {"pattern": "ghp_", "path": self.proj}))
+        self.assertIsNone(self.decide("Grep", {"pattern": "ghp_"}))
+        self.assertIsNone(self.decide("Glob", {"pattern": "*", "path": self.home}))
+
+    def test_a_missing_credential_path_does_not_block_its_parent(self):
+        os.makedirs(os.path.join(self.home, ".config", "other"))
+        self.assertIsNone(self.decide("Grep", {"pattern": "x", "path": self.home + "/.config"}))
+        os.makedirs(os.path.join(self.home, ".config", "gh"))
+        self.assertDenied(self.decide("Grep", {"pattern": "x", "path": self.home + "/.config"}),
+                          "credential-search")
+
     def test_writes_outside_the_repo_are_left_to_the_sandbox_for_non_writers(self):
         self.assertIsNone(self.decide("Write", {"file_path": self.home + "/vault/notes.md"}))
 
