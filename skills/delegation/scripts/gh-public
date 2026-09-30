@@ -1,0 +1,76 @@
+#!/usr/bin/env python3
+"""gh-public: read-only access to public GitHub data, for delegated agents.
+
+  gh-public /repos/OWNER/REPO                 any GET path on api.github.com
+  gh-public /repos/OWNER/REPO/contents/PATH?ref=main
+  gh-public search code 'symbol repo:owner/name'
+  gh-public search repositories 'topic:sandbox language:python'
+  gh-public search issues 'repo:owner/name is:open label:bug'
+  gh-public search commits 'repo:owner/name fix'
+
+Why it exists: inside the sandbox, `~/.config/gh` is unreadable (the credential barrier), so
+`gh` and authenticated git can't work, and delegated agents are denied both. This client only
+ever sends GET requests to api.github.com.
+
+Authentication:
+- If `~/.config/dotclaude/github-public-token` exists, it holds a classic token with **no
+  scopes**. GitHub treats that as public read only: it can't write anything or see private
+  repositories.
+- That token enables code search and raises the rate limit from 60 to 5,000 requests an hour.
+- Without it, requests go out unauthenticated, and code search is unavailable.
+
+Output: the JSON response on stdout, and the rate limit on stderr. Exits 1 on an HTTP error.
+"""
+import json
+import os
+import sys
+import urllib.error
+import urllib.parse
+import urllib.request
+
+API = "https://api.github.com"
+TOKEN_FILE = os.path.expanduser("~/.config/dotclaude/github-public-token")
+SEARCH_KINDS = ("code", "repositories", "issues", "commits", "users", "topics")
+
+
+def token():
+    try:
+        with open(TOKEN_FILE) as f:
+            return f.read().strip() or None
+    except OSError:
+        return None
+
+
+def build(argv):
+    if len(argv) >= 3 and argv[0] == "search" and argv[1] in SEARCH_KINDS:
+        return f"/search/{argv[1]}?" + urllib.parse.urlencode({"q": " ".join(argv[2:]),
+                                                               "per_page": 30})
+    if len(argv) == 1 and argv[0].startswith("/") and "://" not in argv[0]:
+        return argv[0]
+    raise SystemExit(__doc__)
+
+
+def main(argv=None):
+    path = build(sys.argv[1:] if argv is None else argv)
+    req = urllib.request.Request(API + path, method="GET", headers={
+        "Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28",
+        "User-Agent": "dotclaude-gh-public"})
+    t = token()
+    if t:
+        req.add_header("Authorization", f"Bearer {t}")
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            body, headers, code = r.read(), r.headers, 0
+    except urllib.error.HTTPError as e:
+        body, headers, code = e.read(), e.headers, 1
+    sys.stderr.write(f"rate limit: {headers.get('x-ratelimit-remaining')}/"
+                     f"{headers.get('x-ratelimit-limit')} ({'token' if t else 'no token'})\n")
+    try:
+        print(json.dumps(json.loads(body), indent=1))
+    except ValueError:
+        sys.stdout.write(body.decode("utf-8", "replace"))
+    return code
+
+
+if __name__ == "__main__":
+    sys.exit(main())

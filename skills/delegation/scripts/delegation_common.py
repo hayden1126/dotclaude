@@ -62,12 +62,13 @@ def read_rows():
 
 def fold(rows):
     """Latest row per (runner, id), plus the first-seen timestamp. SubagentStart fires on
-    every teammate message, so an id can have many start/stop pairs; the latest wins."""
+    every teammate message, so an id can have many start/stop pairs; the latest wins.
+    subagent-policy's `policy` rows are skipped here (tail and audit show them)."""
     out = {}
     for r in rows:
         key = (r.get("runner"), r.get("id"))
-        if key[1] is None:
-            continue
+        if key[1] is None or r.get("event") == "policy":
+            continue  # a policy row records a denial, not a lifecycle event
         first = out.get(key, {}).get("first_ts", r.get("ts"))
         merged = dict(out.get(key, {}))
         merged.update(r)  # None overrides too: a clean resume must clear an old error

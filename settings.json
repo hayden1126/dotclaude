@@ -19,14 +19,103 @@
   "worktree": {
     "baseRef": "head"
   },
+  "teammateMode": "in-process",
+  "sandbox": {
+    "enabled": true,
+    "failIfUnavailable": true,
+    "autoAllowBashIfSandboxed": false,
+    "allowUnsandboxedCommands": true,
+    "excludedCommands": [
+      "git push",
+      "git push *",
+      "git fetch",
+      "git fetch *",
+      "git pull",
+      "git pull *",
+      "git ls-remote *",
+      "gh *",
+      "codex-delegate *",
+      "codex *",
+      "claude *",
+      "tmux *",
+      "powershell.exe *",
+      "cmd.exe *"
+    ],
+    "filesystem": {
+      "denyRead": [
+        "~/.config/gh",
+        "~/.ssh",
+        "~/.netrc",
+        "~/.aws",
+        "~/.git-credentials",
+        "~/.claude/.credentials.json",
+        "~/.codex/auth.json",
+        "~/.google_workspace_mcp"
+      ],
+      "denyWrite": [
+        "~/dotclaude/settings.json",
+        "~/dotclaude/hooks",
+        "~/dotclaude/skills",
+        "~/dotclaude/agents",
+        "~/dotclaude/CLAUDE.md",
+        "~/.claude/settings.json",
+        "~/.claude/hooks",
+        "~/.claude/skills",
+        "~/.claude/agents"
+      ],
+      "allowWrite": [
+        "~/.cache/uv",
+        "~/.cache/pip",
+        "~/.cache/pnpm",
+        "~/.cache/node-gyp",
+        "~/.cache/ms-playwright",
+        "~/.local/share/uv/python",
+        "~/.local/share/pnpm/store",
+        "~/.npm",
+        "~/.bun/install/cache"
+      ]
+    },
+    "network": {
+      "allowedDomains": [
+        "github.com",
+        "api.github.com",
+        "codeload.github.com",
+        "objects.githubusercontent.com",
+        "raw.githubusercontent.com",
+        "registry.npmjs.org",
+        "pypi.org",
+        "files.pythonhosted.org"
+      ]
+    }
+  },
   "hooks": {
     "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "i=$(cat); case \"$i\" in *'\"agent_id\"'*) printf '%s' \"$i\" | timeout 8 bash \"$HOME/.claude/hooks/subagent-policy.sh\" || { echo \"subagent-policy missing, failed or timed out: this delegated call is blocked\" >&2; exit 2; } ;; esac",
+            "timeout": 10
+          }
+        ]
+      },
       {
         "matcher": "Agent|Task",
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"$HOME/.claude/hooks/agent-spawn-guard.sh\"",
+            "command": "bash \"$HOME/.claude/hooks/agent-spawn-guard.sh\" || exit 2",
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "matcher": "SubagentHandback",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$HOME/.claude/hooks/report-check.sh\"",
             "timeout": 10
           }
         ]
@@ -50,6 +139,11 @@
             "type": "command",
             "command": "bash \"$HOME/.claude/hooks/delegation-ledger.sh\"",
             "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "bash \"$HOME/.claude/hooks/report-check.sh\"",
+            "timeout": 10
           }
         ]
       }

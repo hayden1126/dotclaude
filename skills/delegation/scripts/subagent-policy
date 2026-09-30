@@ -1,0 +1,1173 @@
+#!/usr/bin/env python3
+"""subagent-policy: PreToolUse policy for delegated agents (subagents and in-process teammates).
+
+It applies only to calls made inside a subagent. Hook input carries `agent_id` there and never
+on the main thread, not even in an `--agent` session (code.claude.com/docs/en/hooks). The
+settings entry filters on that before starting Python: a main-thread call starts it only when its
+payload happens to contain the text "agent_id", and then exits at once.
+
+Where it sits:
+- The sandbox (session-wide, OS-enforced, Bash only) binds a command whatever form it takes:
+  an alias, a script, `eval`.
+- This hook:
+  - denies leaving the sandbox;
+  - polices the file and MCP tools, which the sandbox never sees;
+  - applies each role's rules (policy.toml), and says why.
+
+  It catches the obvious forms; the sandbox catches the rest.
+
+Contract:
+- stdin is the PreToolUse hook JSON.
+- An allowed call prints nothing and exits 0. There is no "allow" decision, so normal permission
+  handling still applies.
+- A denial prints a PreToolUse deny whose reason names a rule and an intent, and appends a
+  `policy` row to the ledger.
+
+Fails closed for the tools it polices (shell, file, MCP): an exception, a malformed policy.toml,
+or the 5-second alarm becomes a deny. That alarm fires before Claude Code's own hook timeout,
+which would let the call through. Other tools (SubagentHandback, SendMessage, ...) are allowed
+on error, so a policy bug can't swallow a report.
+
+Command parsing uses Parable (vendor/parable.py, MIT, vendored verbatim). The rule set and the
+intent vocabulary follow cc-safety-net (github.com/kenryu42/cc-safety-net, MIT), reimplemented.
+"""
+import fnmatch
+import json
+import os
+import re
+import shutil
+import signal
+import sys
+import time
+import tomllib
+
+HERE = os.path.dirname(os.path.realpath(__file__))
+sys.path.insert(0, HERE)
+sys.path.insert(0, os.path.join(HERE, "vendor"))
+import delegation_common as dc  # noqa: E402
+
+POLICY_PATH = os.environ.get("DELEGATION_POLICY") or os.path.join(os.path.dirname(HERE),
+                                                                  "policy.toml")
+SHELL_TOOLS = {"Bash", "Monitor", "PowerShell"}
+WRITE_TOOLS = {"Edit", "Write", "NotebookEdit", "MultiEdit"}
+READ_TOOLS = {"Read", "Grep", "Glob", "LS", "NotebookRead"}
+ALARM_SECONDS = 5
+INTENTS = ("hard_stop", "use_alternative", "scope_down", "manual_only", "stop_and_explain")
+
+
+class Deny(Exception):
+    def __init__(self, rule, intent, message):
+        super().__init__(message)
+        self.rule, self.intent, self.message = rule, intent, message
+
+
+def policed(tool):
+    return (tool in SHELL_TOOLS or tool in WRITE_TOOLS or tool in READ_TOOLS
+            or str(tool).startswith("mcp__"))
+
+
+# ---------------------------------------------------------------- policy and settings
+
+def load_policy(path=POLICY_PATH):
+    with open(path, "rb") as f:
+        p = tomllib.load(f)
+    for table in ("intents", "roles", "shell", "git", "curl", "wget", "rm", "protect",
+                  "researcher", "mcp"):
+        if not isinstance(p.get(table), dict):
+            raise ValueError(f"policy.toml: missing table [{table}]")
+    missing = [i for i in INTENTS if not p["intents"].get(i)]
+    if missing:
+        raise ValueError(f"policy.toml: [intents] lacks {missing}")
+    for intent in p["git"]["denied"].values():
+        if intent not in INTENTS:
+            raise ValueError(f"policy.toml: unknown intent {intent!r} in [git].denied")
+    return p
+
+
+def _read_json(path):
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return {}
+    except ValueError as e:
+        raise ValueError(f"unreadable settings file {path}: {e}")
+
+
+def settings_tiers(project, home):
+    """Settings files by tier, lowest precedence first, following
+    code.claude.com/docs/en/settings#settings-precedence. A `--settings` payload is invisible
+    to a hook, so whoever launches Claude with one (the live harness) also names it in
+    DELEGATION_SETTINGS_EXTRA. That is the launcher's environment, which no agent can set."""
+    tiers = [
+        ("user", _read_json(os.path.join(home, ".claude", "settings.json"))),
+        ("user", _read_json(os.path.join(home, ".claude", "settings.local.json"))),
+        ("project", _read_json(os.path.join(project, ".claude", "settings.json"))),
+        ("local", _read_json(os.path.join(project, ".claude", "settings.local.json"))),
+    ]
+    extra = os.environ.get("DELEGATION_SETTINGS_EXTRA")
+    if extra:
+        tiers.append(("user", _read_json(extra)))  # --settings ranks as a trusted tier
+    tiers.append(("managed", _read_json("/etc/claude-code/managed-settings.json")))
+    return tiers
+
+
+def sandbox_view(tiers):
+    """The effective sandbox posture: scalars from the highest tier that sets them, lists
+    unioned, excludedCommands from trusted tiers only (2.1.285 ignores project entries)."""
+    view = {"enabled": None, "failIfUnavailable": None, "excludedCommands": [],
+            "denyRead": [], "denyWrite": [], "allowWrite": []}
+    for tier, s in tiers:
+        sb = (s or {}).get("sandbox") or {}
+        for key in ("enabled", "failIfUnavailable"):
+            if key in sb:
+                view[key] = sb[key]
+        if tier in ("user", "managed"):
+            view["excludedCommands"] += list(sb.get("excludedCommands") or [])
+        fs = sb.get("filesystem") or {}
+        for key in ("denyRead", "denyWrite", "allowWrite"):
+            view[key] += list(fs.get(key) or [])
+    return view
+
+
+# ---------------------------------------------------------------- paths
+
+def expand(p, home):
+    p = str(p).replace("{uid}", str(os.getuid()))
+    if p == "~" or p.startswith("~/"):
+        p = home + p[1:]
+    return os.path.normpath(p)
+
+
+def resolve(p, base):
+    """Absolute, with symlinks resolved on the longest existing prefix, so a link through
+    /tmp or the worktree into a protected directory still counts."""
+    p = p if os.path.isabs(p) else os.path.join(base, p)
+    p = os.path.normpath(p)
+    head, tail = p, []
+    while head and not os.path.exists(head) and head != os.path.dirname(head):
+        head, t = os.path.dirname(head), os.path.basename(head)
+        tail.insert(0, t)
+    return os.path.normpath(os.path.join(os.path.realpath(head), *tail))
+
+
+def under(p, root):
+    return p == root or p.startswith(root.rstrip("/") + "/")
+
+
+# ---------------------------------------------------------------- words
+
+class Lit:
+    """A shell word reduced to its static text. dynamic: it depends on an expansion the
+    policy can't evaluate ($VAR, $(...), `...`). glob: unquoted *, ? or [ or a brace list."""
+    __slots__ = ("text", "dynamic", "glob")
+
+    def __init__(self, text, dynamic=False, glob=False):
+        self.text, self.dynamic, self.glob = text, dynamic, glob
+
+    @property
+    def static(self):
+        return None if self.dynamic else self.text
+
+
+def scan_word(value, home):
+    out, i, q, dyn, glob = [], 0, None, False, False
+    n = len(value)
+    if value == "~" or value.startswith("~/"):
+        out.append(home)
+        i = 1
+    while i < n:
+        c = value[i]
+        if q == "'":
+            if c == "'":
+                q = None
+            else:
+                out.append(c)
+        else:
+            if c == "\\" and i + 1 < n:
+                out.append(value[i + 1])
+                i += 2
+                continue
+            if q is None and c == "'":
+                q = "'"
+            elif c == '"':
+                q = None if q == '"' else '"'
+            elif c == "`":
+                dyn = True
+            elif c == "$":
+                rest = value[i:]
+                m = re.match(r"\$(\{HOME\}|HOME)(?![A-Za-z0-9_])", rest)
+                if m:
+                    out.append(home)
+                    i += len(m.group(0))
+                    continue
+                dyn = True
+            elif q is None and c in "*?[{":
+                glob = True
+                out.append(c)
+            else:
+                out.append(c)
+        i += 1
+    return Lit("".join(out), dyn, glob)
+
+
+# ---------------------------------------------------------------- the analyzer
+
+class Analyzer:
+    def __init__(self, data, policy, home=None):
+        self.data = data
+        self.p = policy
+        self.home = home or os.path.expanduser("~")
+        self.agent_type = data.get("agent_type") or ""
+        self.cwd = os.path.realpath(data.get("cwd") or os.getcwd())
+        self.worktree = self._worktree()
+        self.main_root = (self.worktree.split("/.claude/worktrees/")[0]
+                          if self.worktree else None)
+        self.project = self.main_root or self._project_dir()
+        self.root = self.worktree or self.project
+        self.sandbox = sandbox_view(settings_tiers(self.project, self.home))
+        self.temp_roots = [expand(t, self.home) for t in self.p["rm"]["temp_roots"]]
+        self.allow_write = [expand(a, self.home) for a in self.sandbox["allowWrite"]]
+        self.is_researcher = self.agent_type in self.p["roles"]["allowlisted_shell"]
+        self.is_writer = self.agent_type in self.p["roles"]["worktree_root"]
+        # Any isolated agent (a writer, or any type spawned with isolation "worktree") is held
+        # to its worktree; a writer without one is refused outright (decide()).
+        self.confined = self.worktree is not None
+        self.path_dirs = self._path_dirs()
+
+    # ------------------------------------------------ context
+
+    def _worktree(self):
+        """The worktree root of an isolated agent: meta.json's worktreePath, else a cwd
+        under .claude/worktrees/. A writer with neither is refused (it would otherwise be
+        policed as if the whole checkout were its root)."""
+        tp, aid = self.data.get("transcript_path"), self.data.get("agent_id")
+        if tp and aid:
+            aid = str(aid)
+            aid = aid[len("agent-"):] if aid.startswith("agent-") else aid
+            base = tp[:-len(".jsonl")] if tp.endswith(".jsonl") else tp
+            meta = os.path.join(base, "subagents", f"agent-{aid}.meta.json")
+            try:
+                with open(meta) as f:
+                    wt = json.load(f).get("worktreePath")
+                if wt:
+                    return os.path.realpath(wt)
+            except (OSError, ValueError):
+                pass
+        if "/.claude/worktrees/" in self.cwd + "/":
+            parts = self.cwd.split("/.claude/worktrees/")
+            return parts[0] + "/.claude/worktrees/" + parts[1].split("/")[0]
+        return None
+
+    def _project_dir(self):
+        """The session's project directory. The hook's cwd follows the agent's `cd`, so it
+        can be a subdirectory; the transcript lives under ~/.claude/projects/<slug>/, where
+        the slug is the project path with every non-alphanumeric character turned into `-`.
+        The nearest ancestor of cwd with that slug is the project; failing that, cwd."""
+        tp = self.data.get("transcript_path") or ""
+        slug = os.path.basename(os.path.dirname(tp)) if tp else ""
+        d = self.cwd
+        while slug:
+            if re.sub(r"[^A-Za-z0-9]", "-", d) == slug:
+                return d
+            if d == os.path.dirname(d):
+                break
+            d = os.path.dirname(d)
+        return self.cwd
+
+    def _path_dirs(self):
+        dirs = os.environ.get("PATH", "").split(":")
+        snaps = sorted(
+            (os.path.join(self.home, ".claude", "shell-snapshots", f) for f in
+             os.listdir(os.path.join(self.home, ".claude", "shell-snapshots"))),
+            key=os.path.getmtime) if os.path.isdir(
+                os.path.join(self.home, ".claude", "shell-snapshots")) else []
+        if snaps:
+            try:
+                with open(snaps[-1], errors="replace") as f:
+                    for line in f:
+                        m = re.match(r"^export PATH='([^']*)'", line)
+                        if m:
+                            dirs += m.group(1).split(":")
+            except OSError:
+                pass
+        return [d for d in dict.fromkeys(dirs) if d]
+
+    def deny(self, rule, intent, message):
+        raise Deny(rule, intent, message)
+
+    # ------------------------------------------------ entry
+
+    def decide(self):
+        tool = self.data.get("tool_name") or ""
+        ti = self.data.get("tool_input")
+        if not isinstance(ti, dict):
+            if policed(tool):
+                self.deny("malformed-input", "stop_and_explain", "hook input has no tool_input")
+            return
+        if self.is_writer and not self.worktree and policed(tool):  # never a handback
+            self.deny("worktree-root", "stop_and_explain",
+                      "this writer has no worktree (no worktreePath in its meta.json and its cwd "
+                      "is not under .claude/worktrees/), so its root can't be enforced")
+        if tool in SHELL_TOOLS:
+            self.shell_tool(ti)
+        elif tool in WRITE_TOOLS:
+            path = ti.get("file_path") or ti.get("notebook_path")
+            if not path:
+                self.deny("malformed-input", "stop_and_explain", f"{tool} call with no path")
+            self.file_write(str(path))
+        elif tool in READ_TOOLS:
+            self.file_read(ti)
+        elif tool.startswith("mcp__"):
+            if not any(fnmatch.fnmatchcase(tool, g) for g in self.p["mcp"]["read_tools"]):
+                self.deny("mcp-write", "manual_only",
+                          f"{tool} is not on the read-only MCP list (policy.toml [mcp])")
+
+    # ------------------------------------------------ file tools
+
+    def read_denied(self):
+        return [expand(x, self.home) for x in
+                self.p["protect"]["read_denied"] + self.sandbox["denyRead"]]
+
+    def check_read_path(self, path):
+        p = resolve(expand(path, self.home), self.cwd)
+        for d in self.read_denied():
+            if under(p, d) or under(p, resolve(d, "/")):
+                self.deny("credential-read", "hard_stop",
+                          f"{path} is a credential path; delegated agents never read it")
+
+    def file_read(self, ti):
+        for key in ("file_path", "path", "notebook_path"):
+            if ti.get(key):
+                self.check_read_path(str(ti[key]))
+        pat = ti.get("pattern")
+        if isinstance(pat, str) and (pat.startswith("/") or pat.startswith("~")):
+            prefix = re.split(r"[*?\[{]", pat, 1)[0]
+            self.check_read_path(prefix or "/")
+
+    def protected(self, p):
+        for x in self.p["protect"]["write_denied"] + self.sandbox["denyWrite"]:
+            d = expand(x, self.home)
+            if under(p, d) or under(p, resolve(d, "/")):
+                return x
+        for x in self.p["protect"]["root_write_denied"]:
+            d = os.path.join(self.root, x)
+            if under(p, d) and not any(under(p, os.path.join(self.root, y))
+                                       for y in self.p["protect"]["root_write_allowed"]):
+                return x
+        return None
+
+    def in_temp(self, p):
+        return any(under(p, t) for t in self.temp_roots)
+
+    def check_write_path(self, path, base, strict_root=False):
+        """A literal write target. strict_root: the file tools, where a writer may only
+        touch its worktree and temp; Bash targets are held to the worktree only inside the
+        session repo (the sandbox already stops the rest)."""
+        p = resolve(expand(path, self.home), base)
+        hit = self.protected(p)
+        if hit:
+            self.deny("protected-path", "hard_stop",
+                      f"{path} is protected ({hit}): delegated agents never write Claude Code, "
+                      "shell, git or enforcement config")
+        if self.confined:
+            inside = under(p, self.root) or self.in_temp(p)
+            if not inside and (strict_root or under(p, self.main_root)):
+                self.deny("worktree-root", "scope_down",
+                          f"{path} is outside your worktree ({self.root}); write only inside it")
+
+    def file_write(self, path):
+        self.check_write_path(path, self.cwd, strict_root=True)
+
+    # ------------------------------------------------ shell tools
+
+    def shell_tool(self, ti):
+        for k, v in ti.items():
+            if re.search("sandbox", str(k), re.I) and v:
+                self.deny("sandbox-escape", "hard_stop",
+                          f"{k} is set; delegated agents never run outside the sandbox")
+        sb = self.sandbox
+        if not (sb["enabled"] is True and sb["failIfUnavailable"] is True):
+            self.deny("sandbox-off", "stop_and_explain",
+                      "the sandbox is not enforced for this session (sandbox.enabled and "
+                      "sandbox.failIfUnavailable must both be true), so delegated agents get no "
+                      "shell here")
+        cmd = ti.get("command")
+        if not isinstance(cmd, str):
+            self.deny("malformed-input", "stop_and_explain", "shell call with no command")
+        self.analyze_string(cmd, self.cwd, 0)
+
+    def analyze_string(self, cmd, cwd, depth):
+        from parable import parse, ParseError
+        if len(cmd.encode()) > self.p["shell"]["max_command_bytes"]:
+            self.deny("too-long", "stop_and_explain", "command too long to check")
+        if depth > self.p["shell"]["max_depth"]:
+            self.deny("too-deep", "stop_and_explain", "commands nested too deeply to check")
+        if re.search(r"\$\{\(|\$~|=\(", cmd):
+            self.deny("zsh-expansion", "stop_and_explain",
+                      "zsh expansion flags or =(...) can run code the policy can't see")
+        try:
+            nodes = parse(cmd)
+        except ParseError as e:
+            self.deny("parse-error", "stop_and_explain",
+                      f"the command doesn't parse as bash ({e.message}); zsh-only syntax such as "
+                      "glob qualifiers is not allowed")
+        for n in nodes:
+            cwd = self.node(n, cwd, depth)
+
+    def children(self, n):
+        for v in vars(n).values():
+            if isinstance(v, list):
+                for x in v:
+                    if hasattr(x, "kind"):
+                        yield x
+            elif hasattr(v, "kind"):
+                yield v
+
+    def node(self, n, cwd, depth):
+        kind = getattr(n, "kind", "")
+        if kind == "command":
+            return self.command(n, cwd, depth)
+        if kind == "list":
+            for part in n.parts:
+                if getattr(part, "kind", "") != "operator":
+                    cwd = self.node(part, cwd, depth)
+            return cwd
+        if kind == "redirect":
+            self.redirect(n, cwd)
+            return cwd
+        if kind in ("cmdsub", "procsub"):
+            inner = getattr(n, "command", None)
+            if inner is not None:
+                self.node(inner, cwd, depth + 1)
+            return cwd
+        start = cwd
+        for c in self.children(n):
+            cwd = self.node(c, cwd, depth)
+        return start if kind in ("subshell", "pipeline") else cwd
+
+    def redirect(self, r, cwd):
+        op = getattr(r, "op", "") or ""
+        target = getattr(r, "target", None)
+        if ">" not in op or target is None or not hasattr(target, "value"):
+            return
+        lit = scan_word(target.value, self.home)
+        if re.fullmatch(r"&(\d+|-)", target.value.strip()):
+            return  # 2>&1, >&2, >&-: Parable keeps a duplication's target as "&N"
+        # Everything else writes its target, `>& file` and `&>` included (zsh sends both
+        # streams there), and so does an all-digit name (`1> 123` writes a file named 123).
+        allowed = self.p["researcher"]["allowed_redirect_targets"]
+        if self.is_researcher and (lit.dynamic or lit.text not in allowed):
+            self.deny("researcher-write", "scope_down",
+                      f"researcher output goes to stdout; a redirect to {target.value} writes a file")
+        if lit.static is not None and lit.text not in allowed:
+            self.check_write_path(lit.text, cwd)
+
+    def command(self, n, cwd, depth):
+        for w in n.words:
+            for part in getattr(w, "parts", None) or []:
+                self.node(part, cwd, depth + 1)
+        for r in n.redirects or []:
+            self.redirect(r, cwd)
+        lits = [scan_word(w.value, self.home) for w in n.words]
+        return self.argv(lits, cwd, depth)
+
+    # ------------------------------------------------ one simple command
+
+    def assignment(self, lit):
+        m = re.match(r"^([A-Za-z_][A-Za-z0-9_]*)=(.*)$", lit.text or "", re.S)
+        return m.groups() if m else None
+
+    def check_env(self, name, value):
+        sh = self.p["shell"]
+        if f"{name}={value}" in sh["allowed_env"]:
+            return
+        if self.is_researcher and name not in self.p["researcher"]["allowed_env"]:
+            self.deny("env-assignment", "scope_down", f"researcher may not set {name}")
+        if name in sh["denied_env_names"] or any(name.startswith(x)
+                                                 for x in sh["denied_env_prefixes"]):
+            self.deny("env-assignment", "use_alternative",
+                      f"setting {name} changes what the command executes; run it without that")
+
+    def resolves(self, word):
+        if word in self.p["shell"]["builtins"]:
+            return True
+        if "/" in word:
+            return os.access(resolve(word, self.cwd), os.X_OK)
+        return shutil.which(word, path=":".join(self.path_dirs)) is not None
+
+    def argv(self, lits, cwd, depth):
+        sh = self.p["shell"]
+        for _ in range(20):
+            while lits and not lits[0].dynamic and self.assignment(lits[0]):
+                self.check_env(*self.assignment(lits[0]))
+                lits = lits[1:]
+            if not lits:
+                return cwd
+            head = lits[0]
+            if head.dynamic:
+                self.deny("dynamic-executable", "manual_only",
+                          f"the command name {head.text!r} comes from an expansion")
+            word = head.text
+            base = os.path.basename(word)
+            if not self.resolves(word):
+                self.deny("unknown-command", "stop_and_explain",
+                          f"{word!r} is not a program on PATH (an alias or a shell function?); "
+                          "use the full command it stands for")
+            self.check_excluded([l.text if not l.dynamic else None for l in lits])
+            if base == "sudo":
+                self.deny("sudo", "manual_only", "delegated agents never use sudo")
+            if base in sh["shells"]:
+                return self.shell_wrapper(lits, cwd, depth)
+            if base == "eval":
+                if any(l.dynamic for l in lits[1:]):
+                    self.deny("dynamic-eval", "stop_and_explain", "eval of a dynamic string")
+                self.analyze_string(" ".join(l.text for l in lits[1:]), cwd, depth + 1)
+                return cwd
+            if base in ("source", "."):
+                target = lits[1].text if len(lits) > 1 and not lits[1].dynamic else ""
+                if any(target.endswith(s) for s in sh["source_allowed_suffixes"]):
+                    return cwd
+                self.deny("source", "stop_and_explain",
+                          "source runs a file the policy can't see (only */bin/activate is allowed)")
+            if base in sh["wrappers"] and base != "sudo":
+                inner = self.peel_wrapper(base, lits)
+                if inner is None:
+                    return cwd  # the wrapper alone (e.g. bare `env`) just prints
+                lits = inner
+                continue
+            break
+        else:
+            self.deny("too-deep", "stop_and_explain", "too many nested wrappers")
+        args = [l.text if not l.dynamic else None for l in lits]
+        globs = [l.glob for l in lits]
+        return self.program(base, args, globs, cwd, depth)
+
+    def peel_wrapper(self, base, lits):
+        """Return the wrapped command's words, or None when there is none."""
+        rest = lits[1:]
+        if base == "env":
+            i = 0
+            while i < len(rest):
+                t = rest[i].text
+                split = None
+                if t == "--":
+                    i += 1
+                    break
+                if t in ("--split-string",) and i + 1 < len(rest):
+                    split, after = rest[i + 1], i + 2
+                elif t.startswith("--split-string="):
+                    split, after = Lit(t.split("=", 1)[1], rest[i].dynamic), i + 1
+                elif t in ("--ignore-environment", "--null", "--debug"):
+                    i += 1
+                    continue
+                elif t in ("--unset", "--chdir"):
+                    i += 2
+                    continue
+                elif t.startswith("--unset=") or t.startswith("--chdir="):
+                    i += 1
+                    continue
+                elif t.startswith("--"):
+                    self.deny("unknown-option", "stop_and_explain",
+                              f"env {t} is an option the policy doesn't know; use plain env")
+                elif t.startswith("-") and len(t) > 1:
+                    # A short cluster, parsed as env does: flags, then a value-taking letter
+                    # whose value is the rest of the cluster or the next word. -S (split
+                    # string) runs its value as a command, attached or not (`-iS'git ...'`).
+                    after = i + 1
+                    for k, ch in enumerate(t[1:], 1):
+                        if ch in "i0v":
+                            continue
+                        value = t[k + 1:]
+                        if ch in "uC":
+                            if not value:
+                                after = i + 2
+                            break
+                        if ch == "S":
+                            if value:
+                                split = Lit(value, rest[i].dynamic)
+                            elif i + 1 < len(rest):
+                                split, after = rest[i + 1], i + 2
+                            else:
+                                split = Lit("")
+                            break
+                        self.deny("unknown-option", "stop_and_explain",
+                                  f"env -{ch} is an option the policy doesn't know; use plain env")
+                    if split is None:
+                        i = after
+                        continue
+                if split is not None:
+                    if split.dynamic:
+                        self.deny("dynamic-shell", "stop_and_explain", "env -S with a dynamic string")
+                    return [Lit(s) for s in split.text.split()] + rest[after:]
+                elif self.assignment(rest[i]):
+                    self.check_env(*self.assignment(rest[i]))
+                    i += 1
+                else:
+                    break
+            rest = rest[i:]
+        elif base in ("timeout",):
+            while rest and rest[0].text.startswith("-"):
+                rest = rest[2:] if rest[0].text in ("-s", "--signal", "-k", "--kill-after") else rest[1:]
+            rest = rest[1:]  # the duration
+        elif base in ("nice", "ionice"):
+            while rest and rest[0].text.startswith("-"):
+                rest = rest[2:] if rest[0].text in ("-n", "--adjustment", "-c", "-p") else rest[1:]
+        elif base == "stdbuf":
+            while rest and rest[0].text.startswith("-"):
+                rest = rest[2:] if rest[0].text in ("-i", "-o", "-e") else rest[1:]
+        elif base == "flock":
+            while rest and rest[0].text.startswith("-"):
+                rest = rest[2:] if rest[0].text in ("-w", "--timeout", "-E") else rest[1:]
+            rest = rest[1:]  # the lock file
+        elif base == "watch":
+            while rest and rest[0].text.startswith("-"):
+                rest = rest[2:] if rest[0].text in ("-n", "--interval", "-d") else rest[1:]
+        elif base == "xargs":
+            takes = {"-a", "-d", "-E", "-e", "-I", "-i", "-L", "-l", "-n", "-P", "-s",
+                     "--arg-file", "--delimiter", "--max-args", "--max-procs", "--max-chars"}
+            while rest and rest[0].text.startswith("-"):
+                rest = rest[2:] if rest[0].text in takes else rest[1:]
+            if not rest:
+                return None
+            return rest + [Lit("", dynamic=True)]  # the arguments come from stdin
+        elif base in ("command", "builtin"):
+            if rest and rest[0].text in ("-v", "-V"):
+                return None
+            while rest and rest[0].text.startswith("-"):
+                rest = rest[1:]
+        else:  # exec, time, nohup, noglob, nocorrect
+            while rest and rest[0].text.startswith("-"):
+                rest = rest[1:]
+        return rest or None
+
+    def shell_wrapper(self, lits, cwd, depth):
+        rest, script, has_c = lits[1:], None, False
+        i = 0
+        while i < len(rest):
+            t = rest[i].text
+            if t == "-c" or (t.startswith("-") and not t.startswith("--") and "c" in t[1:]):
+                has_c = True
+                if i + 1 < len(rest):
+                    script = rest[i + 1]
+                break
+            if t.startswith("-") or t.startswith("+"):
+                i += 1
+                continue
+            break
+        if has_c:
+            if script is None or script.dynamic:
+                self.deny("dynamic-shell", "stop_and_explain", "a shell -c with a dynamic script")
+            self.analyze_string(script.text, cwd, depth + 1)
+            return cwd
+        if i < len(rest) and not rest[i].text.startswith("-"):
+            if self.is_researcher:
+                self.deny("researcher-program", "scope_down",
+                          "researcher runs only allowlisted read commands, not scripts")
+            return cwd  # a script file: its body is the sandbox's to bound
+        self.deny("shell-stdin", "stop_and_explain",
+                  "a shell reading commands from stdin (e.g. `... | sh`) can't be checked")
+
+    def check_excluded(self, args):
+        """excludedCommands run outside the sandbox, so a delegated agent may not run one.
+        Matched per simple command (stricter than Claude Code's whole-command match)."""
+        words = [a for a in args]
+        if not words or words[0] is None:
+            return
+        words = [os.path.basename(words[0])] + words[1:]
+        for pat in self.sandbox["excludedCommands"]:
+            p = pat.strip()
+            wild = p.endswith(" *") or p.endswith(":*")
+            toks = (p[:-2] if wild else p).split()
+            if not toks:
+                continue
+            if (words[:len(toks)] == toks and (wild or len(words) == len(toks))):
+                self.deny("excluded-command", "manual_only",
+                          f"{' '.join(toks)} runs outside the sandbox (excludedCommands), so "
+                          "delegated agents may not run it")
+
+    # ------------------------------------------------ programs
+
+    def program(self, base, args, globs, cwd, depth):
+        if self.is_researcher:
+            return self.researcher_program(base, args, globs, cwd, depth)
+        if base == "git":
+            return self.git(args, cwd)
+        if base in ("cd", "pushd"):
+            return self.cd(args, cwd)
+        if base == "rm":
+            self.rm(args, globs, cwd)
+        elif base == "find":
+            self.find(args, cwd, depth)
+        elif base == "curl":
+            self.curl(args)
+        elif base == "wget":
+            self.wget(args)
+        self.write_targets(base, args, cwd)
+        return cwd
+
+    def cd(self, args, cwd):
+        target = next((a for a in args[1:] if a is None or not a.startswith("-")), self.home)
+        if target is None:
+            return cwd
+        new = resolve(expand(target, self.home), cwd)
+        if self.confined and not (under(new, self.root) or self.in_temp(new)):
+            self.deny("worktree-root", "scope_down",
+                      f"cd {target} leaves your worktree ({self.root}); stay inside it")
+        return new
+
+    def write_targets(self, base, args, cwd):
+        pos = [a for a in args[1:] if a is None or not a.startswith("-")]
+        opts = [a for a in args[1:] if a is not None and a.startswith("-")]
+        targets = []
+        tdir = None
+        for i, a in enumerate(args[1:], 1):
+            if a in ("-t", "--target-directory") and i + 1 < len(args):
+                tdir = args[i + 1]
+            elif a and a.startswith("--target-directory="):
+                tdir = a.split("=", 1)[1]
+        if base in ("cp", "install", "rsync", "ln"):
+            targets = [tdir] if tdir else pos[-1:] if len(pos) >= 2 else []
+        elif base == "mv":
+            targets = pos + ([tdir] if tdir else [])
+        elif base in ("tee", "touch", "mkdir", "rmdir", "truncate", "rm", "shred", "unlink"):
+            targets = pos
+        elif base in ("chmod", "chown", "chgrp"):
+            targets = pos[1:]
+        elif base == "dd":
+            targets = [a.split("=", 1)[1] for a in args[1:] if a and a.startswith("of=")]
+        elif base == "sed":
+            if any(o == "-i" or o.startswith("-i") or o.startswith("--in-place") for o in opts):
+                targets = pos[1:]
+            targets += self.sed_writes(args)
+        for t in targets:
+            if t is not None:
+                self.check_write_path(t, cwd)
+
+    SED_CMD = r"(?:^|[;{}\n0-9$!,]|/[A-Za-z0-9]*)\s*"
+
+    def sed_scripts(self, args):
+        scripts = [args[i + 1] for i, a in enumerate(args[:-1])
+                   if a in ("-e", "--expression") and args[i + 1] is not None]
+        if not scripts:
+            scripts = [a for a in args[1:] if a is not None and not a.startswith("-")][:1]
+        return scripts
+
+    def sed_writes(self, args):
+        """The files a sed script's w/W commands (or an s///w flag) write. An `e` command runs
+        a shell command the policy can't see, so it is refused outright."""
+        out = []
+        for s in self.sed_scripts(args):
+            if re.search(self.SED_CMD + r"e(?:\s|$)", s):
+                self.deny("sed-exec", "stop_and_explain",
+                          "a sed e command runs a shell command the policy can't see")
+            out += re.findall(self.SED_CMD + r"[wW]\s+([^\s;}]+)", s)
+        return out
+
+    def rm(self, args, globs, cwd):
+        recursive = False
+        targets = []
+        end_opts = False
+        for a, g in zip(args[1:], globs[1:]):
+            if not end_opts and a == "--":
+                end_opts = True
+            elif not end_opts and a and a.startswith("--"):
+                recursive |= a in ("--recursive",)
+            elif not end_opts and a and a.startswith("-") and len(a) > 1:
+                recursive |= ("r" in a[1:] or "R" in a[1:])
+            else:
+                targets.append((a, g))
+        roots = [self.root] + self.allow_write + self.temp_roots
+        for t, g in targets:
+            if t is None or g:
+                if recursive:
+                    self.deny("rm-dynamic", "scope_down",
+                              "rm -r with a computed or glob target; name literal paths inside "
+                              "your root")
+                continue
+            p = resolve(expand(t, self.home), cwd)
+            if p in ("/", self.home) or under(self.home, p):
+                self.deny("rm-root-or-home", "hard_stop", f"rm of {t} would remove / or home")
+            if ".git" in p.split("/"):
+                self.deny("rm-git-metadata", "hard_stop", f"rm of git metadata ({t})")
+            if recursive and not any(under(p, r) for r in roots):
+                self.deny("rm-outside-root", "scope_down",
+                          f"rm -r of {t} is outside your root ({self.root}) and temp")
+
+    def find(self, args, cwd, depth):
+        starts = []
+        for a in args[1:]:
+            if a is None or a.startswith("-") or a in ("(", "!", ")"):
+                break
+            starts.append(a)
+        starts = starts or ["."]
+        if "-delete" in args:
+            self.rm(["rm", "-r"] + starts, [False] * (len(starts) + 2), cwd)
+        for flag in ("-exec", "-execdir", "-ok", "-okdir"):
+            for i, a in enumerate(args):
+                if a == flag:
+                    inner = []
+                    for b in args[i + 1:]:
+                        if b in (";", "+", "\\;"):
+                            break
+                        inner.append(b)
+                    lits = [Lit("", dynamic=True) if b is None or "{}" in b else Lit(b)
+                            for b in inner]
+                    if lits:
+                        self.argv(lits, cwd, depth + 1)
+        for i, a in enumerate(args):
+            if a in ("-fprint", "-fprint0", "-fprintf", "-fls") and i + 1 < len(args) and args[i + 1]:
+                self.check_write_path(args[i + 1], cwd)
+
+    def short_cluster(self, a):
+        return a.startswith("-") and not a.startswith("--") and len(a) > 1
+
+    def curl(self, args, researcher=False):
+        c = self.p["curl"]
+        send_long = [f for f in c["send_flags"] if f.startswith("--")]
+        send_short = {f[1] for f in c["send_flags"] if not f.startswith("--")}
+        out_long = [f for f in c["output_flags"] if f.startswith("--")]
+        out_short = {f[1] for f in c["output_flags"] if not f.startswith("--")}
+        i = 1
+        while i < len(args):
+            a = args[i] or ""
+            method = None
+            if a in ("-X", "--request"):
+                method = args[i + 1] if i + 1 < len(args) else None
+                i += 1
+            elif a.startswith("--request="):
+                method = a.split("=", 1)[1]
+            elif self.short_cluster(a) and "X" in a[1:]:
+                rest = a[a.index("X", 1) + 1:]
+                method = rest or (args[i + 1] if i + 1 < len(args) else None)
+            if method is not None or a in ("-X", "--request"):
+                if (method or "").upper() not in c["allowed_methods"]:
+                    self.deny("http-write", "manual_only",
+                              f"curl with method {method!r}; delegated agents only GET or HEAD")
+            if any(a == f or a.startswith(f + "=") for f in send_long):
+                self.deny("http-write", "manual_only", f"curl {a} sends data")
+            if self.short_cluster(a):
+                for ch in a[1:]:
+                    if ch == "X":
+                        break
+                    if ch in send_short:
+                        self.deny("http-write", "manual_only", f"curl -{ch} sends data")
+                    if researcher and ch in out_short:
+                        self.deny("researcher-write", "scope_down",
+                                  f"curl -{ch} writes a local file; researcher reads to stdout")
+            if researcher and any(a == f or a.startswith(f + "=") for f in out_long):
+                self.deny("researcher-write", "scope_down",
+                          f"curl {a} writes a local file; researcher reads to stdout")
+            i += 1
+
+    def wget(self, args, researcher=False):
+        for a in args[1:]:
+            if a and any(a == f or a.startswith(f + "=") for f in self.p["wget"]["send_flags"]):
+                self.deny("http-write", "manual_only", f"wget {a} sends data")
+        if researcher:
+            joined = " ".join(a or "" for a in args[1:])
+            to_stdout = re.search(r"(^|\s)(-q?O\s*-|--output-document=-)(\s|$)", joined)
+            writes = re.search(r"(^|\s)(-o|-a|-r|-m|-P|--output-file|--append-output|"
+                               r"--recursive|--mirror|--directory-prefix)(\s|=|$)", joined)
+            if not to_stdout or writes:
+                self.deny("researcher-write", "scope_down",
+                          "researcher runs wget only with -O- (output to stdout)")
+
+    # ------------------------------------------------ git
+
+    GIT_BRANCH_MUTATE = {"-d", "-D", "--delete", "-m", "-M", "--move", "-c", "-C", "--copy",
+                         "-f", "--force", "-u", "--set-upstream-to", "--unset-upstream",
+                         "--edit-description"}
+    GIT_TAG_MUTATE = {"-d", "--delete", "-f", "--force"}
+    GIT_REMOTE_READ = {None, "-v", "--verbose", "show", "get-url"}
+
+    def git(self, args, cwd, researcher=False):
+        g = self.p["git"]
+        i = 1
+        gcwd = cwd
+        while i < len(args) and args[i] and args[i].startswith("-"):
+            a = args[i]
+            if a == "-c" or a.startswith("--config-env"):
+                self.deny("git-config-override", "use_alternative",
+                          "git -c can set a pager, diff driver or fsmonitor that runs a command; "
+                          "run git without it")
+            if a == "-C" and i + 1 < len(args):
+                if args[i + 1] is None:
+                    self.deny("git-dynamic-dir", "stop_and_explain", "git -C with a computed path")
+                gcwd = resolve(expand(args[i + 1], self.home), gcwd)
+                i += 2
+                continue
+            if a.startswith("--exec-path="):
+                self.deny("git-exec-path", "manual_only", "git --exec-path runs other programs")
+            if a.startswith("--git-dir=") or a.startswith("--work-tree="):
+                gcwd = resolve(expand(a.split("=", 1)[1], self.home), gcwd)
+            i += 1
+        if self.confined and not (under(gcwd, self.root) or self.in_temp(gcwd)):
+            self.deny("worktree-root", "scope_down",
+                      f"git outside your worktree ({gcwd}); run it inside {self.root}")
+        if i >= len(args):
+            return cwd
+        sub = args[i]
+        rest = [a for a in args[i + 1:]]
+        if sub is None:
+            self.deny("dynamic-executable", "manual_only", "git subcommand from an expansion")
+        if sub not in g["known"]:
+            self.deny("git-unknown", "stop_and_explain",
+                      f"git {sub} is not a known git subcommand (an alias?); use the subcommand "
+                      "it stands for")
+        for a in rest:
+            if a and any(a == f or a.startswith(f + "=") for f in g["denied_flags"]):
+                self.deny("git-flag", "use_alternative", f"git {sub} {a} is not allowed")
+            if sub == "grep" and a and (a.startswith("-O") or a == "--open-files-in-pager"):
+                self.deny("git-flag", "use_alternative", "git grep -O runs a pager command")
+            if sub == "clone" and a and (a in ("-u", "--template", "--config") or
+                                         a.startswith("--template=") or a.startswith("--config=")):
+                self.deny("git-flag", "use_alternative", f"git clone {a} is not allowed")
+            if sub == "clone" and a and re.match(r"^(ext|fd)::", a):
+                self.deny("git-transport", "hard_stop", f"git clone {a} runs a command")
+        if sub in g["denied"]:
+            self.deny(f"git-{sub}", g["denied"][sub],
+                      f"git {sub} is not something delegated agents do"
+                      + (" (it needs the GitHub credential, which subagents never get)"
+                         if sub in ("push", "fetch", "pull", "ls-remote", "send-pack") else ""))
+        pos = [a for a in rest if a is not None and not a.startswith("-")]
+        flags = {a.split("=", 1)[0] for a in rest if a and a.startswith("-")}
+        first = pos[0] if pos else None
+        if researcher:
+            self.git_read_only(sub, rest, pos, flags, first, cwd)
+            return cwd
+        if sub == "checkout" and not (rest and rest[0] == "-b"):
+            self.deny("git-checkout", "use_alternative",
+                      "only `git checkout -b <new>` is allowed; use `git switch -c <new>` to "
+                      "create a branch")
+        if sub == "switch" and not (flags & {"-c", "--create"}) or (
+                sub == "switch" and flags & {"-C", "--force-create", "-f", "--force",
+                                             "--discard-changes"}):
+            self.deny("git-switch", "use_alternative", "only `git switch -c <new>` is allowed")
+        if sub == "restore" and (not flags & {"--staged", "-S"} or flags & {"--worktree", "-W"}):
+            self.deny("git-restore", "use_alternative",
+                      "git restore that discards work is not allowed; `git restore --staged "
+                      "<path>` unstages")
+        if sub == "branch" and flags & self.GIT_BRANCH_MUTATE:
+            self.deny("git-branch", "use_alternative",
+                      "deleting, moving or force-resetting a branch is not allowed")
+        if sub == "stash" and first in ("drop", "clear", "pop"):
+            self.deny("git-stash", "use_alternative",
+                      f"git stash {first} discards a stash entry; `git stash apply` keeps it")
+        if sub == "worktree" and first not in (None, "list"):
+            self.deny("git-worktree", "manual_only", "only `git worktree list` is allowed")
+        if sub == "tag" and flags & self.GIT_TAG_MUTATE:
+            self.deny("git-tag", "manual_only", "deleting or moving a tag is not allowed")
+        if sub == "remote" and first not in self.GIT_REMOTE_READ:
+            self.deny("git-remote", "manual_only", f"git remote {first} changes remotes")
+        if sub == "config" and not self.git_config_read(rest, pos, flags):
+            self.deny("git-config", "manual_only", "git config writes are not allowed")
+        if sub == "reflog" and first in ("expire", "delete"):
+            self.deny("git-reflog", "manual_only", f"git reflog {first} discards history")
+        if sub == "gc" and any(f.startswith("--prune") for f in flags):
+            self.deny("git-gc", "manual_only", "git gc --prune discards objects")
+        if sub in ("merge", "cherry-pick", "am") and "--abort" in flags:
+            self.deny("git-abort", "use_alternative", f"git {sub} --abort discards work in progress")
+        if sub == "rm" and (flags & {"-f", "--force"} or any(
+                a and re.fullmatch(r"-[a-zA-Z]*f[a-zA-Z]*", a) for a in rest)):
+            self.deny("git-rm-force", "use_alternative", "git rm -f discards changes")
+        if sub == "submodule" and first not in ("status", "summary", None):
+            self.deny("git-submodule", "manual_only", f"git submodule {first} is not allowed")
+        if sub in ("difftool", "mergetool"):
+            self.deny("git-tool", "manual_only", f"git {sub} launches an external program")
+        cpos = self.clone_positionals(rest) if sub == "clone" else []
+        if sub == "clone" and self.confined and len(cpos) >= 2 and cpos[-1] is not None:
+            self.check_write_path(cpos[-1], cwd)
+        return cwd
+
+    CLONE_VALUE_FLAGS = {"--depth", "-b", "--branch", "-o", "--origin", "--reference",
+                         "--reference-if-able", "-j", "--jobs", "--shallow-since",
+                         "--shallow-exclude", "--separate-git-dir", "--filter",
+                         "--server-option", "--bundle-uri", "--revision"}
+
+    def clone_positionals(self, rest):
+        out, skip = [], False
+        for a in rest:
+            if skip:
+                skip = False
+            elif a is not None and a in self.CLONE_VALUE_FLAGS:
+                skip = True
+            elif a is None or not a.startswith("-"):
+                out.append(a)
+        return out
+
+    def git_config_read(self, rest, pos, flags):
+        write_flags = {"--unset", "--unset-all", "--add", "--replace-all", "--edit", "-e",
+                       "--rename-section", "--remove-section", "--global", "--system"}
+        if flags & write_flags:
+            return False
+        if flags & {"--get", "--get-all", "--get-regexp", "--list", "-l", "--get-urlmatch",
+                    "--show-origin", "--show-scope", "--name-only"}:
+            return True
+        return len(pos) <= 1
+
+    def git_read_only(self, sub, rest, pos, flags, first, cwd):
+        g = self.p["git"]
+        if sub not in g["read_only"]:
+            self.deny("researcher-git", "scope_down",
+                      f"researcher runs read-only git; git {sub} changes something")
+        ok = True
+        if sub == "branch":
+            ok = not (flags & (self.GIT_BRANCH_MUTATE | {"-t", "--track", "--no-track",
+                                                         "--create-reflog"}))
+            ok = ok and (not pos or flags & {"--list", "-l", "--contains", "--merged",
+                                             "--no-merged", "--points-at", "--no-contains"})
+        elif sub == "tag":
+            ok = not (flags & (self.GIT_TAG_MUTATE | {"-a", "-s", "-m", "-F", "-u",
+                                                      "--annotate", "--sign"}))
+            ok = ok and (not pos or flags & {"-l", "--list", "--contains", "--points-at",
+                                             "--merged", "--no-merged"})
+        elif sub == "remote":
+            ok = first in self.GIT_REMOTE_READ
+        elif sub == "stash":
+            ok = first in ("list", "show")
+        elif sub == "worktree":
+            ok = first == "list"
+        elif sub == "config":
+            ok = self.git_config_read(rest, pos, flags)
+        elif sub == "reflog":
+            ok = first in (None, "show")
+        elif sub == "clone":
+            cpos = self.clone_positionals(rest)
+            url = cpos[0] if cpos else ""
+            dest = cpos[1] if len(cpos) > 1 else None
+            ok = url.startswith("https://") and dest is not None and self.in_temp(
+                resolve(expand(dest, self.home), cwd))
+            if not ok:
+                self.deny("researcher-clone", "scope_down",
+                          "researcher clones only an https URL into an explicit temp dir "
+                          f"({self.temp_roots[0]}/...)")
+        if not ok:
+            self.deny("researcher-git", "scope_down",
+                      f"researcher runs only the read-only forms of git {sub}")
+
+    # ------------------------------------------------ researcher
+
+    def researcher_program(self, base, args, globs, cwd, depth):
+        r = self.p["researcher"]
+        if len(args) == 2 and args[1] in ("--version", "--help", "-h", "-V") and \
+                "/" not in (args[0] or ""):
+            return cwd
+        if base not in r["programs"]:
+            self.deny("researcher-program", "scope_down",
+                      f"researcher runs only allowlisted read commands; {base} is not one")
+        if "/" in (args[0] or "") and base != "gh-public":
+            self.deny("researcher-program", "scope_down",
+                      "researcher runs programs by name from PATH, not by path")
+        for a in args[1:]:
+            if a is None:
+                continue
+            for f in r["denied_flags"].get(base, []):
+                attached = (not f.startswith("--") and len(f) == 2 and self.short_cluster(a)
+                            and a.startswith(f))
+                if a == f or a.startswith(f + "=") or attached:
+                    self.deny("researcher-flag", "scope_down",
+                              f"{base} {f} writes or runs something; researcher only reads")
+        if base == "git":
+            return self.git(args, cwd, researcher=True)
+        if base == "cd":
+            return self.cd(args, cwd)
+        if base == "sed":
+            scripts = [a for a in args[1:] if a and not a.startswith("-")][:1]
+            scripts += [args[i + 1] for i, a in enumerate(args[:-1]) if a in ("-e", "--expression")
+                        and args[i + 1]]
+            for s in scripts:
+                # w/W/e after a command boundary, an address (1, $, /re/, !) or an s///
+                # flag list. Errs toward denying: a false positive costs a blocked_actions line.
+                if re.search(r"(?:^|[;{}\n0-9$!,]|/[A-Za-z0-9]*)\s*[wWe](?:\s|$)", s):
+                    self.deny("researcher-flag", "scope_down",
+                              "a sed w/W/e command writes a file or runs one")
+        if base == "uniq" and len([a for a in args[1:] if a and not a.startswith("-")]) > 1:
+            self.deny("researcher-flag", "scope_down", "uniq with an output file writes it")
+        if base == "curl":
+            self.curl(args, researcher=True)
+        if base == "wget":
+            self.wget(args, researcher=True)
+        return cwd
+
+
+# ---------------------------------------------------------------- main
+
+def deny_output(d, policy):
+    footer = (policy or {}).get("intents", {}).get(d.intent, "")
+    return json.dumps({"hookSpecificOutput": {
+        "hookEventName": "PreToolUse",
+        "permissionDecision": "deny",
+        "permissionDecisionReason": f"[subagent-policy] {d.rule} ({d.intent}): {d.message}. "
+                                    f"{footer}".strip(),
+    }})
+
+
+def log_deny(data, d):
+    try:
+        aid = str(data.get("agent_id") or "")
+        dc.append_row({"ts": dc.now_iso(), "runner": "claude", "event": "policy",
+                       "id": aid[len("agent-"):] if aid.startswith("agent-") else aid,
+                       "agent_type": data.get("agent_type"), "session_id": data.get("session_id"),
+                       "tool": data.get("tool_name"), "rule": d.rule, "intent": d.intent})
+    except Exception:
+        pass
+
+
+def heartbeat():
+    try:
+        os.makedirs(dc.state_dir(), exist_ok=True)
+        path = os.path.join(dc.state_dir(), "subagent-policy.heartbeat")
+        with open(path, "a"):
+            pass
+        os.utime(path, None)
+    except Exception:
+        pass
+
+
+def _alarm(_sig, _frm):
+    raise TimeoutError(f"policy check took over {ALARM_SECONDS}s")
+
+
+def evaluate(data, policy=None, home=None):
+    """None to allow, or a Deny. Raises on internal errors (main() decides what that means)."""
+    policy = policy or load_policy()
+    try:
+        Analyzer(data, policy, home=home).decide()
+    except Deny as d:
+        return d
+    return None
+
+
+def main():
+    signal.signal(signal.SIGALRM, _alarm)
+    signal.alarm(ALARM_SECONDS)
+    data, policy = None, None
+    try:
+        data = json.loads(sys.stdin.read() or "null")
+        if not isinstance(data, dict):
+            raise ValueError("hook input is not a JSON object")
+        if not data.get("agent_id"):
+            return 0  # the main thread: not ours to police
+        heartbeat()
+        policy = load_policy()
+        d = evaluate(data, policy)
+    except Exception as e:  # noqa: BLE001  fail closed for policed tools only
+        tool = (data or {}).get("tool_name") if isinstance(data, dict) else None
+        if data is not None and isinstance(data, dict) and not data.get("agent_id"):
+            return 0
+        if tool is not None and not policed(tool):
+            return 0
+        d = Deny("policy-error", "stop_and_explain",
+                 f"the policy check failed ({type(e).__name__}: {e}), so this call is refused")
+    finally:
+        signal.alarm(0)
+    if d:
+        if isinstance(data, dict):
+            log_deny(data, d)
+        print(deny_output(d, policy))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

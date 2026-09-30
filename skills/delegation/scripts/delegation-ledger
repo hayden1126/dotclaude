@@ -4,11 +4,22 @@
   delegation-ledger hook            SubagentStart/SubagentStop hook body (stdin: hook JSON)
   delegation-ledger open [--hours N] [--silent-min M]
                                     agents whose latest event is not a stop, with evidence
-  delegation-ledger tail [-n N]     the last N rows
+  delegation-ledger tail [-n N]     the last N rows (including subagent-policy denials)
+  delegation-ledger audit [--hours N]
+                                    is enforcement still binding? policy heartbeat, writers that
+                                    changed the main checkout, rejected reports, denials
+  delegation-ledger sandbox-denials [--days N]
+                                    hosts and paths the sandbox refused, from the transcripts
 
 The hook is an observer: it always exits 0 and prints nothing, so a ledger bug can never
 block or alter an agent (failing open is correct here, unlike the spawn guard). Its own
 errors go to $XDG_STATE_HOME/dotclaude/delegation-ledger.err.
+
+For an agent in a worktree, the start and stop rows also carry a hash of the main checkout's
+`git status` (main_before, main_after). The sandbox lets a worktree agent's subprocess write
+anywhere in the session repo, so a computed-path write into the main checkout can't be
+stopped, only seen. `audit` reports a changed hash as evidence, not a verdict, because the
+lead may have been editing too.
 
 `open` only suggests. Each row prints the evidence it used (parent session alive, minutes
 since the agent transcript last changed, what its last entry was), so a verdict can be
@@ -17,9 +28,13 @@ Apache-2.0), reimplemented: ~/.claude/sessions/<pid>.json maps a session to a li
 a transcript whose last entry is a tool_use or a tool_result is mid-turn.
 """
 import argparse
+import collections
 import glob
+import hashlib
 import json
 import os
+import re
+import subprocess
 import sys
 import time
 import traceback
@@ -44,16 +59,34 @@ def handback_message(path):
             lines = f.read().decode("utf-8", "replace").splitlines()
     except (OSError, TypeError):
         return ""
-    for line in reversed(lines):
+    handbacks, failed = [], set()  # report-check may have sent earlier ones back
+    for line in lines:
         try:
             e = json.loads(line)
         except ValueError:
             continue
-        for c in reversed((e.get("message") or {}).get("content") or []):
-            if (isinstance(c, dict) and c.get("type") == "tool_use"
-                    and c.get("name") == "SubagentHandback"):
-                return (c.get("input") or {}).get("message") or ""
-    return ""
+        for c in (e.get("message") or {}).get("content") or []:
+            if not isinstance(c, dict):
+                continue
+            if c.get("type") == "tool_use" and c.get("name") == "SubagentHandback":
+                handbacks.append((c.get("id"), (c.get("input") or {}).get("message") or ""))
+            elif c.get("type") == "tool_result" and c.get("is_error"):
+                failed.add(c.get("tool_use_id"))
+    accepted = [m for i, m in handbacks if i not in failed]
+    return (accepted or [m for _, m in handbacks] or [""])[-1]
+
+
+def main_status(cwd):
+    """sha256 of the main checkout's `git status` for an agent in a worktree, else None."""
+    if not cwd or "/.claude/worktrees/" not in cwd:
+        return None
+    main = cwd.split("/.claude/worktrees/")[0]
+    try:
+        out = subprocess.run(["git", "-C", main, "status", "--porcelain=v1", "-uall"],
+                             capture_output=True, timeout=3).stdout
+    except (OSError, subprocess.SubprocessError):
+        return "unknown"
+    return hashlib.sha256(out).hexdigest()[:16]
 
 
 def cmd_hook(_args):
@@ -78,6 +111,9 @@ def cmd_hook(_args):
         if event == "SubagentStart":
             row = dict(base, event="start", cwd=data.get("cwd"),
                        parent_transcript=data.get("transcript_path"))
+            mb = main_status(data.get("cwd"))
+            if mb:
+                row["main_before"] = mb
         else:
             text, source = data.get("last_assistant_message") or "", "last_message"
             if not text.strip():
@@ -87,6 +123,9 @@ def cmd_hook(_args):
             row = dict(base, event="stop", agent_transcript=data.get("agent_transcript_path"),
                        report_ok=ok, report_status=status, report_error=err,
                        report_source=source)
+            ma = main_status(data.get("cwd"))
+            if ma:
+                row["main_after"] = ma
         dc.append_row(row)
     except Exception:
         try:
@@ -200,6 +239,91 @@ def cmd_open(args):
     return 0
 
 
+def used_tools(path):
+    try:
+        with open(path, errors="replace") as f:
+            return '"type":"tool_use"' in f.read().replace(" ", "")
+    except (OSError, TypeError):
+        return False
+
+
+def cmd_audit(args):
+    """Is enforcement still binding? Prints findings; exits 1 if any warning."""
+    horizon = time.time() - args.hours * 3600
+    rows = [r for r in dc.read_rows() if r.get("ts") and
+            dc.parse_iso(r["ts"]).timestamp() >= horizon]
+    warn = 0
+    hb = os.path.join(dc.state_dir(), "subagent-policy.heartbeat")
+    hb_t = os.path.getmtime(hb) if os.path.exists(hb) else None
+    # The policy hook updates the heartbeat on every delegated tool call. An agent that used
+    # tools and stopped well after the last heartbeat means the hook never saw it: unwired,
+    # or `agent_id` renamed in hook input by an upgrade.
+    unseen = [r for r in rows if r.get("runner") == "claude" and r.get("event") == "stop"
+              and (hb_t is None or dc.parse_iso(r["ts"]).timestamp() > hb_t + 120)
+              and used_tools(r.get("agent_transcript"))]
+    if unseen:
+        warn += 1
+        print(f"WARN policy hook: {len(unseen)} agent(s) used tools after its last heartbeat "
+              f"({'never' if hb_t is None else time.strftime('%Y-%m-%d %H:%M', time.localtime(hb_t))})."
+              " Check the PreToolUse entry and that hook input still carries agent_id.")
+    else:
+        print("ok   policy hook: saw every agent that used tools")
+    folded = dc.fold(rows)
+    moved = [(k, e) for k, e in folded.items()
+             if e.get("main_before") and e.get("main_after")
+             and e["main_before"] != e["main_after"]]
+    for (_, rid), e in moved:
+        warn += 1
+        print(f"WARN main checkout changed while {e.get('agent_type')} {rid} ran in its worktree "
+              "(evidence, not proof: the lead may have edited too). Inspect `git status` there.")
+    if not moved:
+        print("ok   no worktree agent coincided with a main-checkout change")
+    try:
+        import tomllib
+        with open(os.path.join(os.path.dirname(dc.HERE), "policy.toml"), "rb") as f:
+            roles = set(tomllib.load(f)["roles"]["report_checked"])
+    except (OSError, ValueError, KeyError):
+        roles = {"Explore", "researcher", "reviewer", "writer"}
+    bad = [e for e in folded.values() if e.get("event") == "stop" and e.get("report_ok") is False
+           and e.get("agent_type") in roles]
+    print(f"{'WARN' if bad else 'ok  '} reports failing the contract: {len(bad)}")
+    warn += bool(bad)
+    denials = collections.Counter((r.get("agent_type"), r.get("rule")) for r in rows
+                                  if r.get("event") == "policy")
+    print(f"info policy denials in the last {args.hours:g}h: {sum(denials.values())}")
+    for (atype, rule), n in denials.most_common(10):
+        print(f"       {n:3}  {atype}  {rule}")
+    return 1 if warn else 0
+
+
+VIOLATION_RE = re.compile(r"deny (network-outbound|file-write|file-read)\S* ([^\s()\\\"]+)")
+
+
+def cmd_sandbox_denials(args):
+    """What the sandbox refused, from the transcripts: which hosts to allow, which paths hurt.
+    Reads only the <sandbox_violations> lines Claude Code writes into tool results."""
+    cutoff = time.time() - args.days * 86400
+    seen = collections.Counter()
+    for p in glob.glob(os.path.expanduser("~/.claude/projects/*/*.jsonl")) + \
+            glob.glob(os.path.expanduser("~/.claude/projects/*/*/subagents/*.jsonl")):
+        try:
+            if os.path.getmtime(p) < cutoff:
+                continue
+            with open(p, errors="replace") as f:
+                text = f.read()
+        except OSError:
+            continue
+        if "sandbox_violations" not in text:
+            continue
+        for kind, target in VIOLATION_RE.findall(text):
+            seen[(kind, target)] += 1
+    if not seen:
+        print(f"no sandbox denials in the last {args.days:g} days")
+    for (kind, target), n in seen.most_common():
+        print(f"{n:4}  {kind:16}  {target}")
+    return 0
+
+
 def cmd_tail(args):
     for r in dc.read_rows()[-args.n:]:
         print(json.dumps(r, sort_keys=True))
@@ -217,6 +341,12 @@ def main(argv=None):
     t = sub.add_parser("tail")
     t.add_argument("-n", type=int, default=20)
     t.set_defaults(fn=cmd_tail)
+    a = sub.add_parser("audit")
+    a.add_argument("--hours", type=float, default=168)
+    a.set_defaults(fn=cmd_audit)
+    s = sub.add_parser("sandbox-denials")
+    s.add_argument("--days", type=float, default=7)
+    s.set_defaults(fn=cmd_sandbox_denials)
     args = ap.parse_args(argv)
     return args.fn(args)
 

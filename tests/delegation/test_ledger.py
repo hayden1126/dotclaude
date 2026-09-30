@@ -219,6 +219,68 @@ class LedgerHook(unittest.TestCase):
                            env=self.env)
         self.assertEqual((p.returncode, p.stdout), (0, ""))
 
+    def test_the_accepted_handback_wins_over_one_report_check_sent_back(self):
+        transcript = os.path.join(self.tmp.name, "agent-a1.jsonl")
+        use = lambda i, msg: {"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "id": i, "name": "SubagentHandback", "input": {"message": msg}}]}}
+        result = lambda i, err: {"type": "user", "message": {"content": [
+            {"type": "tool_result", "tool_use_id": i, "is_error": err, "content": "x"}]}}
+        with open(transcript, "w") as f:
+            for e in (use("h1", "no json"), result("h1", True), use("h2", fenced(VALID)),
+                      result("h2", False)):
+                f.write(json.dumps(e) + "\n")
+        self.hook(dict(self.stop(msg=""), agent_transcript_path=transcript))
+        self.assertTrue(self.rows()[0]["report_ok"])
+
+    def test_policy_rows_are_not_lifecycle_events(self):
+        self.hook(self.start())
+        rows = self.rows_via_module() + [{"runner": "claude", "id": "a1", "event": "policy",
+                                          "rule": "git-push"}]
+        self.assertEqual(dc.fold(rows)[("claude", "a1")]["event"], "start")
+
+    def test_a_worktree_agent_records_the_main_checkout_status(self):
+        repo = os.path.join(self.tmp.name, "repo")
+        os.makedirs(os.path.join(repo, ".claude", "worktrees", "agent-w1"))
+        subprocess.run(["git", "init", "-q", repo], check=True)
+        wt = os.path.join(repo, ".claude", "worktrees", "agent-w1")
+        self.hook(dict(self.start("agent-w1"), cwd=wt, agent_type="writer"))
+        with open(os.path.join(repo, "escaped.txt"), "w") as f:
+            f.write("x")
+        self.hook(dict(self.stop("w1"), cwd=wt, agent_type="writer"))
+        start, stop = self.rows()
+        self.assertNotEqual(start["main_before"], stop["main_after"])
+        p = subprocess.run(["python3", LEDGER, "audit"], capture_output=True, text=True,
+                           env=self.env)
+        self.assertIn("main checkout changed while writer w1", p.stdout)
+        self.assertEqual(p.returncode, 1)
+
+    def test_audit_warns_when_the_policy_hook_never_saw_an_agent(self):
+        transcript = os.path.join(self.tmp.name, "agent-a1.jsonl")
+        with open(transcript, "w") as f:
+            f.write(json.dumps({"type": "assistant", "message": {"content": [
+                {"type": "tool_use", "name": "Read", "input": {}}]}}) + "\n")
+        self.hook(self.start())
+        self.hook(dict(self.stop(), agent_transcript_path=transcript))
+        p = subprocess.run(["python3", LEDGER, "audit"], capture_output=True, text=True,
+                           env=self.env)
+        self.assertIn("WARN policy hook", p.stdout)
+        hb = os.path.join(self.tmp.name, "state", "dotclaude", "subagent-policy.heartbeat")
+        open(hb, "w").close()
+        p = subprocess.run(["python3", LEDGER, "audit"], capture_output=True, text=True,
+                           env=self.env)
+        self.assertIn("ok   policy hook", p.stdout)
+
+    def test_sandbox_denials_are_counted_from_transcripts(self):
+        proj = os.path.join(self.tmp.name, ".claude", "projects", "-p")
+        os.makedirs(proj)
+        with open(os.path.join(proj, "s.jsonl"), "w") as f:
+            f.write(json.dumps({"type": "user", "message": {"content": [{
+                "type": "tool_result", "content": "000\n<sandbox_violations>\ndeny "
+                "network-outbound example.com:443 (user denied)\n</sandbox_violations>"}]}}) + "\n")
+        p = subprocess.run(["python3", LEDGER, "sandbox-denials"], capture_output=True,
+                           text=True, env=self.env)
+        self.assertIn("example.com:443", p.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()
