@@ -7,7 +7,7 @@ Two rules:
   say "An `isolation` value in the subagent's frontmatter doesn't prevent it"
   (code.claude.com/docs/en/sub-agents). Passing isolation on the call does.
 - A named spawn needs the team prefix (policy.toml `[spawn] team_prefix`). Every named
-  spawn silently becomes an in-process teammate, and teammates caused 10 of the 11 stalls
+  spawn silently becomes an in-process teammate, and teammates accounted for 10 of the 11 stalls
   in the 2026-09-29 eval while buying almost no peer coordination (docs/delegation.md,
   Stage 3). A fork, or a spawn isolated on the call, may still be named.
 
