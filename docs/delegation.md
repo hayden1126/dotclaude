@@ -356,7 +356,7 @@ acting for Anthropic or OpenAI.
   - Pick cases with `--cases`.
   - `--runner codex` runs one short Terra run.
 - **Results on 2026-09-30:**
-  - unit: 136 tests;
+  - unit: 137 tests, passing both outside and inside the sandbox;
   - claude: 37/37 (all Stage 1 cases, plus policy, allowlist, deps, escape, and report in both
     default and auto mode). The computed-path escape reached the main checkout, as the known gap
     predicts, and `audit` flagged it;
