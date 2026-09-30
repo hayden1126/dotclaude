@@ -1,0 +1,193 @@
+#!/usr/bin/env python3
+"""delegation-ledger: record delegated agents, and list the ones that never finished.
+
+  delegation-ledger hook            SubagentStart/SubagentStop hook body (stdin: hook JSON)
+  delegation-ledger open [--hours N] [--silent-min M]
+                                    agents whose latest event is not a stop, with evidence
+  delegation-ledger tail [-n N]     the last N rows
+
+The hook is an observer: it always exits 0 and prints nothing, so a ledger bug can never
+block or alter an agent (failing open is correct here, unlike the spawn guard). Its own
+errors go to $XDG_STATE_HOME/dotclaude/delegation-ledger.err.
+
+`open` only suggests. Each row prints the evidence it used (parent session alive, minutes
+since the agent transcript last changed, what its last entry was), so a verdict can be
+checked, never just trusted. The liveness rules follow cctop's (github.com/stefanprodan/cctop,
+Apache-2.0), reimplemented: ~/.claude/sessions/<pid>.json maps a session to a live pid, and
+a transcript whose last entry is a tool_use or a tool_result is mid-turn.
+"""
+import argparse
+import glob
+import json
+import os
+import sys
+import time
+import traceback
+
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+import delegation_common as dc  # noqa: E402
+
+
+def norm_id(agent_id):
+    s = str(agent_id or "")
+    return s[len("agent-"):] if s.startswith("agent-") else s
+
+
+def cmd_hook(_args):
+    try:
+        data = json.loads(sys.stdin.read() or "{}")
+        event = data.get("hook_event_name")
+        base = {
+            "ts": dc.now_iso(),
+            "runner": "claude",
+            "id": norm_id(data.get("agent_id")),
+            "agent_type": data.get("agent_type"),
+            "session_id": data.get("session_id"),
+        }
+        if not base["id"]:
+            raise ValueError(f"{event}: no agent_id in hook input")
+        if event == "SubagentStart":
+            row = dict(base, event="start", cwd=data.get("cwd"),
+                       parent_transcript=data.get("transcript_path"))
+        elif event == "SubagentStop":
+            ok, status, err = dc.report_check(data.get("last_assistant_message") or "")
+            row = dict(base, event="stop", agent_transcript=data.get("agent_transcript_path"),
+                       report_ok=ok, report_status=status, report_error=err)
+        else:
+            raise ValueError(f"unexpected hook_event_name {event!r}")
+        dc.append_row(row)
+    except Exception:
+        try:
+            os.makedirs(dc.state_dir(), exist_ok=True)
+            with open(os.path.join(dc.state_dir(), "delegation-ledger.err"), "a") as f:
+                f.write(f"{dc.now_iso()} {traceback.format_exc(limit=3)}\n")
+        except Exception:
+            pass
+    return 0
+
+
+def live_sessions():
+    """sessionId -> pid for Claude processes that are still running."""
+    out = {}
+    for p in glob.glob(os.path.expanduser("~/.claude/sessions/*.json")):
+        try:
+            with open(p) as f:
+                d = json.load(f)
+        except (OSError, ValueError):
+            continue
+        if dc.pid_alive(d.get("pid")):
+            out[d.get("sessionId")] = d.get("pid")
+    return out
+
+
+def agent_transcript(entry):
+    if entry.get("agent_transcript"):
+        return os.path.expanduser(entry["agent_transcript"])
+    parent = entry.get("parent_transcript")
+    if not parent:
+        return None
+    parent = os.path.expanduser(parent)
+    return os.path.join(parent[:-len(".jsonl")] if parent.endswith(".jsonl") else parent,
+                        "subagents", f"agent-{entry['id']}.jsonl")
+
+
+def last_entry(path):
+    """What the transcript's final line is: mid-turn (tool_use / tool_result / no stop
+    reason) or a finished turn."""
+    try:
+        with open(path, "rb") as f:
+            f.seek(0, os.SEEK_END)
+            f.seek(max(0, f.tell() - 65536))
+            tail = f.read().decode("utf-8", "replace").splitlines()
+    except OSError:
+        return "no transcript"
+    for line in reversed(tail):
+        try:
+            e = json.loads(line)
+        except ValueError:
+            continue
+        msg = e.get("message") or {}
+        content = msg.get("content") if isinstance(msg.get("content"), list) else []
+        kinds = {c.get("type") for c in content if isinstance(c, dict)}
+        if e.get("type") == "assistant":
+            if "tool_use" in kinds or msg.get("stop_reason") is None:
+                return "mid-turn (tool_use)"
+            return f"turn ended ({msg.get('stop_reason')})"
+        if e.get("type") == "user":
+            return "mid-turn (tool_result)" if "tool_result" in kinds else "awaiting reply"
+    return "unreadable"
+
+
+def description(path):
+    meta = path[:-len(".jsonl")] + ".meta.json" if path and path.endswith(".jsonl") else None
+    try:
+        with open(meta) as f:
+            return (json.load(f).get("description") or "")[:60]
+    except (OSError, ValueError, TypeError):
+        return ""
+
+
+def cmd_open(args):
+    now = time.time()
+    horizon = now - args.hours * 3600
+    sessions = live_sessions()
+    found = 0
+    for (runner, rid), e in sorted(dc.fold(dc.read_rows()).items(),
+                                   key=lambda kv: kv[1].get("ts", "")):
+        if e.get("event") in ("stop",):
+            continue
+        try:
+            if dc.parse_iso(e["ts"]).timestamp() < horizon:
+                continue
+        except (KeyError, ValueError):
+            continue
+        found += 1
+        if runner == "codex":
+            verdict, ev = dc.codex_state(e)
+            print(f"codex  {rid}  {e.get('event')}  {verdict}\n       {ev}; out {e.get('out')}")
+            continue
+        path = agent_transcript(e)
+        parent_alive = e.get("session_id") in sessions
+        age = (now - os.path.getmtime(path)) / 60 if path and os.path.exists(path) else None
+        last = last_entry(path) if path else "no transcript"
+        if not parent_alive:
+            verdict = "orphaned: its session is gone; redo it or resume from its artifact"
+        elif last.startswith("turn ended"):
+            verdict = "ended its turn but no stop row: read its transcript for the report"
+        elif age is not None and age >= args.silent_min:
+            verdict = f"silent {age:.0f} min: ask it for status"
+        else:
+            verdict = "running"
+        ev = (f"session {'alive' if parent_alive else 'gone'}, "
+              + (f"transcript {age:.0f} min old" if age is not None else "no transcript")
+              + f", last entry {last}")
+        print(f"claude {rid}  {e.get('agent_type')}  {description(path)!r}  {verdict}\n"
+              f"       {ev}")
+    if not found:
+        print(f"no unfinished delegations in the last {args.hours:g}h")
+    return 0
+
+
+def cmd_tail(args):
+    for r in dc.read_rows()[-args.n:]:
+        print(json.dumps(r, sort_keys=True))
+    return 0
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(prog="delegation-ledger", description=__doc__.split("\n")[0])
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    sub.add_parser("hook").set_defaults(fn=cmd_hook)
+    o = sub.add_parser("open")
+    o.add_argument("--hours", type=float, default=48)
+    o.add_argument("--silent-min", type=float, default=30)
+    o.set_defaults(fn=cmd_open)
+    t = sub.add_parser("tail")
+    t.add_argument("-n", type=int, default=20)
+    t.set_defaults(fn=cmd_tail)
+    args = ap.parse_args(argv)
+    return args.fn(args)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

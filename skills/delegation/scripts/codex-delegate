@@ -1,0 +1,460 @@
+#!/usr/bin/env python3
+"""codex-delegate: run a Codex delegation under a fixed contract.
+
+  codex-delegate run --model sol|terra --dir DIR --brief FILE|- [--out DIR]
+                     [--timeout 3h] [--mem 8G] [--effort high] [--network] [--no-scope]
+  codex-delegate resume RUN_OR_THREAD [--prompt FILE|-] [--model sol|terra] [--timeout 1h]
+  codex-delegate status [RUN_OR_THREAD]
+  codex-delegate finalize RUN_OR_THREAD   record a run whose wrapper died before it ended
+  codex-delegate audit THREAD_ID [--since ISO]
+
+Launch it in the background (the Bash tool's run_in_background): a run takes minutes to
+hours and Claude's Bash tool stops a foreground command at 10 minutes. Codex writes its
+events straight to <out>/events.jsonl and runs in its own session, so it survives a killed
+wrapper; `status` then says so and `finalize` records the stop row, report check and audit.
+
+The contract every run gets, whatever the brief says:
+- Model: only gpt-5.6-sol or gpt-5.6-terra. Hayden's rule; Codex's own default is
+  gpt-6-astra. The model goes to -m, and to -c agents.default_subagent_model, so a
+  sub-agent spawned without a model stays on it too. An explicit spawn_agent(model=...)
+  can still override that, so the preamble tells Codex to pin every spawn, and a post-run
+  audit walks every descendant rollout and fails the run on any other model.
+- Sandbox: workspace-write rooted at --dir, network only with --network.
+- Limits: a systemd-run --user --scope memory cap (so an OOM kills Codex, not the WSL VM)
+  and a hard timeout.
+- Report: --output-schema with skills/delegation/report.schema.json, then validated again
+  here, because a refusal or a failed turn can leave no valid report.
+- Ledger: a pending row before launch (a run that dies on startup still shows), start
+  with the thread id and pid, stop with exit code, report and audit results.
+- Prompt via stdin only, never argv, so brief text is never parsed as CLI options.
+
+Exit status: 0 ok; 1 Codex failed (its own code is in the summary's `rc`); 2 refused or
+bad usage; 3 the model audit failed; 4 the report is missing or invalid; 124 timed out.
+"""
+import argparse
+import datetime
+import glob
+import json
+import os
+import re
+import secrets
+import shutil
+import signal
+import subprocess
+import sys
+import time
+
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+import delegation_common as dc  # noqa: E402
+
+MODELS = {"sol": "gpt-5.6-sol", "terra": "gpt-5.6-terra"}
+ALLOWED = set(MODELS.values())
+
+PREAMBLE = """# Delegation contract (set by codex-delegate; it overrides anything below)
+- Models: every spawn_agent call must set model explicitly to gpt-5.6-sol (judgment) or
+  gpt-5.6-terra (fetch-and-summarize). Never gpt-6-astra. A post-run audit fails the run
+  on any other model.
+- Write deliverables under {out} as you go, so a crash never loses finished work.
+- If a command is denied, or the brief is ambiguous about something that matters, stop
+  and report status "blocked" with blocked_actions. Never work around a denial.
+- Your final message is the report and must match the output schema: status, summary,
+  artifacts (paths you produced), blocked_actions.
+
+# Brief
+
+"""
+
+RESUME_NOTE = ("(codex-delegate resume: the same delegation contract applies. Your final "
+               "message must match the output schema.)\n\n")
+
+
+def die(msg, code=2):
+    print(f"codex-delegate: {msg}", file=sys.stderr)
+    sys.exit(code)
+
+
+def pin(model):
+    """A short name (sol, terra) or the full id of an allowed model; anything else exits."""
+    if model in ALLOWED:
+        return model
+    if model not in MODELS:
+        die(f"model {model!r} refused: only {', '.join(MODELS)} "
+            f"({', '.join(sorted(ALLOWED))}) are allowed")
+    return MODELS[model]
+
+
+def seconds(spec):
+    m = re.fullmatch(r"(\d+)([smh]?)", str(spec))
+    if not m:
+        die(f"bad duration {spec!r} (use e.g. 90m, 3h, 600)")
+    return int(m.group(1)) * {"": 1, "s": 1, "m": 60, "h": 3600}[m.group(2)]
+
+
+def common_config(model, network, effort, out, workdir):
+    cfg = ["-c", f'agents.default_subagent_model="{model}"']
+    if network:
+        cfg += ["-c", "sandbox_workspace_write.network_access=true"]
+    if effort:
+        cfg += ["-c", f'model_reasoning_effort="{effort}"']
+    real_out, real_dir = os.path.realpath(out), os.path.realpath(workdir)
+    if os.path.commonpath([real_out, real_dir]) != real_dir:
+        cfg += ["-c", f"sandbox_workspace_write.writable_roots={json.dumps([real_out])}"]
+    return cfg
+
+
+def exec_cmd(model, workdir, out, network=False, effort=None):
+    return (["codex", "exec", "-m", model, "-s", "workspace-write", "-C", workdir,
+             "--skip-git-repo-check", "--json", "--output-schema", dc.SCHEMA_PATH,
+             "-o", os.path.join(out, "report.json")]
+            + common_config(model, network, effort, out, workdir) + ["-"])
+
+
+def resume_cmd(thread_id, model, workdir, out, network=False, effort=None):
+    # `codex exec resume` takes neither -s nor -C: the sandbox goes in via -c and the
+    # working directory via the process cwd. --output-schema is per turn, so pass it again.
+    return (["codex", "exec", "resume", thread_id, "-m", model, "--skip-git-repo-check",
+             "--json", "--output-schema", dc.SCHEMA_PATH,
+             "-o", os.path.join(out, "report.json"),
+             "-c", 'sandbox_mode="workspace-write"']
+            + common_config(model, network, effort, out, workdir) + ["-"])
+
+
+def wrap(cmd, timeout_s, mem, scope=True):
+    lim = ["timeout", "--kill-after=30", str(timeout_s)]
+    if scope and shutil.which("systemd-run"):
+        return ["systemd-run", "--user", "--scope", "-q", "-p", f"MemoryMax={mem}"] + lim + cmd
+    if scope:
+        print("codex-delegate: systemd-run not found, running without a memory cap",
+              file=sys.stderr)
+    return lim + cmd
+
+
+# ---------------------------------------------------------------- rollout audit
+
+def sessions_root():
+    return os.path.join(os.environ.get("CODEX_HOME") or os.path.expanduser("~/.codex"),
+                        "sessions")
+
+
+def rollout_meta(path):
+    """The first session_meta payload: a child's carries parent_thread_id."""
+    try:
+        with open(path) as f:
+            for i, line in enumerate(f):
+                if i > 50:
+                    break
+                try:
+                    e = json.loads(line)
+                except ValueError:
+                    continue
+                if e.get("type") == "session_meta":
+                    return e.get("payload") or {}
+    except OSError:
+        pass
+    return {}
+
+
+def rollout_models(path):
+    models = set()
+    try:
+        with open(path) as f:
+            for line in f:
+                if '"turn_context"' not in line:
+                    continue
+                try:
+                    e = json.loads(line)
+                except ValueError:
+                    continue
+                if e.get("type") == "turn_context":
+                    m = (e.get("payload") or {}).get("model")
+                    if m:
+                        models.add(m)
+    except OSError:
+        pass
+    return models
+
+
+def candidate_rollouts(since_epoch):
+    root = sessions_root()
+    day = datetime.datetime.fromtimestamp(since_epoch - 86400)
+    files = []
+    while day.date() <= datetime.date.today():
+        files += glob.glob(os.path.join(root, day.strftime("%Y/%m/%d"), "rollout-*.jsonl"))
+        day += datetime.timedelta(days=1)
+    return [p for p in files if os.path.getmtime(p) >= since_epoch - 120]
+
+
+def audit(thread_id, since_epoch):
+    """Every model used by the thread and its descendants. ok is False when the root
+    rollout can't be found (nothing verified) or any model is outside ALLOWED."""
+    files = candidate_rollouts(since_epoch)
+    roots = [p for p in files if p.endswith(f"-{thread_id}.jsonl")]
+    if not roots:
+        roots = glob.glob(os.path.join(sessions_root(), "*", "*", "*",
+                                       f"rollout-*-{thread_id}.jsonl"))
+    metas = {p: rollout_meta(p) for p in set(files) | set(roots)}
+    family, members = {thread_id}, set(roots)
+    grew = True
+    while grew:
+        grew = False
+        for p, m in metas.items():
+            tid, parent = m.get("id"), m.get("parent_thread_id")
+            if p not in members and parent in family:
+                members.add(p)
+                family.add(tid)
+                grew = True
+    models = {}
+    for p in members:
+        for m in rollout_models(p):
+            models.setdefault(m, []).append(os.path.basename(p))
+    bad = sorted(m for m in models if m not in ALLOWED)
+    return {"ok": bool(roots) and not bad, "root_found": bool(roots),
+            "threads": len(members), "models": sorted(models), "disallowed": bad}
+
+
+# ---------------------------------------------------------------- run / resume
+
+def stream(cmd, cwd, out, row, start_event):
+    """Run cmd with its JSONL events going straight to out/events.jsonl, and record start
+    with the thread id once `thread.started` appears there. Codex gets its own session and
+    never writes through this process, so killing the wrapper (SIGTERM, SIGHUP, a group
+    kill) leaves Codex running; Ctrl-C (SIGINT) is forwarded, since that is a person
+    asking it to stop. Returns (rc, thread_id)."""
+    events_path = os.path.join(out, "events.jsonl")
+    thread_id = row.get("thread_id")
+    with open(events_path, "a") as ev, open(os.path.join(out, "stderr.log"), "a") as err:
+        offset = ev.tell()
+        proc = subprocess.Popen(cmd, cwd=cwd, stdin=subprocess.PIPE, stdout=ev, stderr=err,
+                                text=True, start_new_session=True)
+    signal.signal(signal.SIGINT, lambda *_: proc.send_signal(signal.SIGINT))
+    for sig in (signal.SIGTERM, signal.SIGHUP):
+        signal.signal(sig, lambda *_: (dc.append_row(dict(
+            row, ts=dc.now_iso(), event="interrupted", thread_id=thread_id, pid=proc.pid)),
+            os._exit(143)))
+    proc.stdin.write(row.pop("_prompt"))
+    proc.stdin.close()
+    started, buf = False, ""
+    with open(events_path) as rd:
+        rd.seek(offset)
+        while not started:
+            chunk = rd.readline()
+            if not chunk:
+                if proc.poll() is not None:
+                    break
+                time.sleep(0.2)
+                continue
+            buf += chunk
+            if not buf.endswith("\n"):
+                continue  # a partial line; the rest is still being written
+            line, buf = buf, ""
+            try:
+                e = json.loads(line)
+            except ValueError:
+                continue
+            if e.get("type") == "thread.started":
+                thread_id = e.get("thread_id") or thread_id
+                dc.append_row(dict(row, ts=dc.now_iso(), event=start_event,
+                                   thread_id=thread_id, pid=proc.pid))
+                started = True
+    rc = proc.wait()
+    for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
+        signal.signal(sig, signal.SIG_DFL)
+    return rc, thread_id
+
+
+def finish(row, rc, thread_id, since_epoch, out):
+    report_ok, report_status, report_error = False, None, "no report.json"
+    try:
+        with open(os.path.join(out, "report.json")) as f:
+            obj = json.load(f)
+        errs = dc.validate_report(obj)
+        report_ok, report_status = not errs, obj.get("status")
+        report_error = errs[0] if errs else None
+    except (OSError, ValueError) as e:
+        report_error = f"report.json unreadable ({type(e).__name__})"
+    aud = audit(thread_id, since_epoch) if thread_id else {
+        "ok": False, "root_found": False, "threads": 0, "models": [], "disallowed": []}
+    if rc:
+        code = 124 if rc == 124 else 1
+    else:
+        code = 3 if not aud["ok"] else (4 if not report_ok else 0)
+    summary = {"run_id": row["run_id"], "thread_id": thread_id, "rc": rc, "exit": code,
+               "timed_out": rc == 124, "report_ok": report_ok, "report_status": report_status,
+               "report_error": report_error, "audit_ok": aud["ok"], "models": aud["models"],
+               "disallowed": aud["disallowed"], "out": out}
+    dc.append_row(dict(row, ts=dc.now_iso(), event="stop", thread_id=thread_id,
+                       **{k: summary[k] for k in ("rc", "exit", "timed_out", "report_ok",
+                                                  "report_status", "report_error", "audit_ok",
+                                                  "models", "disallowed")}))
+    print(json.dumps(summary, indent=2))
+    return code
+
+
+def read_text(path):
+    if path == "-":
+        return sys.stdin.read()
+    with open(path) as f:
+        return f.read()
+
+
+def cmd_run(a):
+    model = pin(a.model)
+    workdir = os.path.realpath(a.dir)
+    if not os.path.isdir(workdir):
+        die(f"--dir {a.dir} is not a directory")
+    brief = read_text(a.brief)
+    if not brief.strip():
+        die("empty brief")
+    run_id = time.strftime("%Y%m%dT%H%M%S") + "-" + secrets.token_hex(3)
+    out = os.path.realpath(a.out or os.path.join(workdir, ".codex-delegate", run_id))
+    os.makedirs(out, exist_ok=True)
+    row = {"runner": "codex", "id": run_id, "run_id": run_id, "model": model,
+           "dir": workdir, "out": out, "network": a.network, "effort": a.effort}
+    dc.append_row(dict(row, ts=dc.now_iso(), event="pending", wrapper_pid=os.getpid()))
+    cmd = wrap(exec_cmd(model, workdir, out, a.network, a.effort),
+               seconds(a.timeout), a.mem, not a.no_scope)
+    since = time.time()
+    rc, thread_id = stream(cmd, workdir, out,
+                           dict(row, _prompt=PREAMBLE.format(out=out) + brief), "start")
+    return finish(row, rc, thread_id, since, out)
+
+
+def lookup(key):
+    for (runner, _rid), e in dc.fold(dc.read_rows()).items():
+        if runner == "codex" and key in (e.get("run_id"), e.get("thread_id")):
+            return e
+    die(f"no codex run {key!r} in the ledger ({dc.ledger_path()})")
+
+
+def cmd_resume(a):
+    e = lookup(a.run)
+    if not e.get("thread_id"):
+        die(f"run {e['run_id']} never started a thread; start it again with run")
+    model = pin(a.model) if a.model else e["model"]
+    if model not in ALLOWED:
+        die(f"ledger model {model!r} is not allowed")
+    prompt = read_text(a.prompt) if a.prompt else "Continue the task from where you stopped."
+    row = {k: e.get(k) for k in ("runner", "id", "run_id", "dir", "out", "network", "effort")}
+    row.update(model=model, wrapper_pid=os.getpid())
+    cmd = wrap(resume_cmd(e["thread_id"], model, e["dir"], e["out"], e.get("network"),
+                          e.get("effort")), seconds(a.timeout), a.mem, not a.no_scope)
+    since = time.time()
+    rc, thread_id = stream(cmd, e["dir"], e["out"],
+                           dict(row, thread_id=e["thread_id"], _prompt=RESUME_NOTE + prompt),
+                           "resume")
+    return finish(row, rc, thread_id or e["thread_id"], since, e["out"])
+
+
+# ---------------------------------------------------------------- status / audit
+
+PHASES = {"command_execution": "running commands", "file_change": "editing files",
+          "web_search": "searching the web", "agent_message": "writing",
+          "reasoning": "thinking", "mcp_tool_call": "calling a tool",
+          "collab_tool_call": "coordinating sub-agents"}
+
+
+def phase(events_path):
+    """A coarse phase from the last event (idea from codex-plugin-cc's job-control.mjs,
+    Apache-2.0; reimplemented). Codex emits no heartbeat, so silence is normal while it
+    thinks. Read it together with the minutes since the last event."""
+    try:
+        with open(events_path, "rb") as f:
+            f.seek(0, os.SEEK_END)
+            f.seek(max(0, f.tell() - 32768))
+            lines = f.read().decode("utf-8", "replace").splitlines()
+    except OSError:
+        return "no events"
+    for line in reversed(lines):
+        try:
+            e = json.loads(line)
+        except ValueError:
+            continue
+        t = e.get("type", "")
+        if t == "turn.completed":
+            return "turn completed"
+        if t in ("turn.failed", "error"):
+            return "failed"
+        if t.startswith("item."):
+            kind = (e.get("item") or {}).get("type", "?")
+            return PHASES.get(kind, kind)
+        if t in ("thread.started", "turn.started"):
+            return "starting"
+    return "unknown"
+
+
+def cmd_status(a):
+    entries = [e for (r, _), e in dc.fold(dc.read_rows()).items() if r == "codex"]
+    if a.run:
+        entries = [e for e in entries if a.run in (e.get("run_id"), e.get("thread_id"))]
+    if not entries:
+        print("no codex runs in the ledger")
+        return 0
+    for e in sorted(entries, key=lambda e: e.get("ts", "")):
+        verdict, evidence = dc.codex_state(e)
+        extra = (f" exit={e.get('exit')} report_ok={e.get('report_ok')} "
+                 f"audit_ok={e.get('audit_ok')}" if e.get("event") == "stop" else "")
+        print(f"{e['run_id']}  {e.get('model')}  {e.get('event')}: {verdict}  "
+              f"{phase(os.path.join(e.get('out') or '', 'events.jsonl'))}{extra}\n"
+              f"    {evidence}\n    thread {e.get('thread_id')}  out {e.get('out')}")
+    return 0
+
+
+def cmd_finalize(a):
+    """The stop row, report check and audit for a run whose wrapper died before Codex
+    ended. Codex's exit code is unknown by then, so it is recorded as null."""
+    e = lookup(a.run)
+    if e.get("event") == "stop":
+        die(f"run {e['run_id']} already has a stop row", 0)
+    if dc.pid_alive(e.get("pid")):
+        die(f"run {e['run_id']} is still running (pid {e.get('pid')}); finalize it after it ends")
+    row = {k: e.get(k) for k in ("runner", "id", "run_id", "dir", "out", "network", "effort",
+                                 "model")}
+    return finish(row, None, e.get("thread_id"), dc.parse_iso(e["first_ts"]).timestamp(),
+                  e["out"])
+
+
+def cmd_audit(a):
+    since = dc.parse_iso(a.since).timestamp() if a.since else time.time() - 7 * 86400
+    res = audit(a.thread, since)
+    print(json.dumps(res, indent=2))
+    return 0 if res["ok"] else 1
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(prog="codex-delegate", description=__doc__.split("\n")[0])
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    r = sub.add_parser("run")
+    r.add_argument("--model", required=True)
+    r.add_argument("--dir", required=True)
+    r.add_argument("--brief", required=True)
+    r.add_argument("--out")
+    r.add_argument("--timeout", default="3h")
+    r.add_argument("--mem", default="8G")
+    r.add_argument("--effort")
+    r.add_argument("--network", action="store_true")
+    r.add_argument("--no-scope", action="store_true", help="skip the systemd-run memory cap")
+    r.set_defaults(fn=cmd_run)
+    s = sub.add_parser("resume")
+    s.add_argument("run")
+    s.add_argument("--prompt")
+    s.add_argument("--model")
+    s.add_argument("--timeout", default="1h")
+    s.add_argument("--mem", default="8G")
+    s.add_argument("--no-scope", action="store_true")
+    s.set_defaults(fn=cmd_resume)
+    st = sub.add_parser("status")
+    st.add_argument("run", nargs="?")
+    st.set_defaults(fn=cmd_status)
+    fz = sub.add_parser("finalize")
+    fz.add_argument("run")
+    fz.set_defaults(fn=cmd_finalize)
+    au = sub.add_parser("audit")
+    au.add_argument("thread")
+    au.add_argument("--since")
+    au.set_defaults(fn=cmd_audit)
+    a = ap.parse_args(argv)
+    return a.fn(a)
+
+
+if __name__ == "__main__":
+    sys.exit(main())
