@@ -47,8 +47,19 @@ stored here).
   research-sourcing (PR #10), staged-reader-review upgrade, danger-guard opt-in auto mode.
 
 ## In flight
-- **Delegation hardening: Stage 2 live; Stage 3 (upgrade canary) is next** (`docs/delegation.md`,
-  "Next"). `skills/delegation/SKILL.md` is the operating guide. Open items:
+- **Delegation hardening Stage 3: planned and approved 2026-09-30, not started.** The plan is
+  `~/.claude/plans/lets-move-on-to-refactored-pascal.md` (`docs/delegation.md` "Next" points there).
+  Decisions already made:
+  - named spawns are denied by default, and a `team-` name prefix opts a single spawn in;
+  - deadlines nudge, then hard-stop;
+  - liveness shows in the tmux status bar and a CLI.
+
+  Order: Step 0 probes → A0 spawn guard → A4 due nudges and A5 canary → A1 → A3 → A2 → A6. Branch
+  `feat/delegation-stage3`. Stage 2 was verified on CC 2.1.285. If `claude --version` shows anything
+  newer, the canary is already due. This pointer was written from hq and left uncommitted, so make
+  it the branch's first commit.
+- **Delegation hardening: Stage 2 live** (`docs/delegation.md`). `skills/delegation/SKILL.md` is the
+  operating guide. Open items:
   - **After 2026-10-07:** run `delegation-ledger sandbox-denials --days 7` and add the hosts that were
     actually needed to `sandbox.network.allowedDomains`.
   - **Not observed live:** a real agent's `dangerouslyDisableSandbox` being denied. The teammate probe
