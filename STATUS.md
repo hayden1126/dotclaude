@@ -93,14 +93,10 @@ stored here).
     The plan file owns block numbering only, and must not leak "S<n>" into shipped artifacts.
 
 ## Blocked / decisions needed
-- **Policy: a program the same command line creates.** `uv venv .venv && .venv/bin/python ...` is
-  denied as `unknown-command`, since `.venv` doesn't exist when the hook checks (`docs/delegation.md`,
-  known gaps). Recommended: keep it strict and make the denial say "run the creating step as its own
-  call". The looser option is to accept any unresolved path that contains `/`. Hayden's call.
-- **A stale `.git/config.lock` in `~/dotclaude`** (empty, read-only, created 2026-09-30 17:34 during
-  a sandboxed session, likely a sandbox mount stub left behind). It blocks every `git config` write
-  in the repo, which is why `git push -u` couldn't record this branch's upstream. Deleting it needs
-  Hayden's OK; then `git branch --set-upstream-to=origin/feat/delegation-stage3`.
+- **The main checkout carries an uncommitted `docs/delegation.md` edit** from the hq session that
+  planned Stage 3 (2026-09-30 21:10Z; it meant the edit to be this branch's first commit). PR #42
+  rewrites the same "Next" section and supersedes it. Discard it (`git restore docs/delegation.md`
+  in `~/dotclaude`) before pulling the merge; awaiting Hayden's OK.
 - **Status-line widget's `ai-title` fallback is now dead.** `statusline/session-summary.py`
   (`scan_ai_title`) still falls back to Claude's `ai-title` before the first Stop summary lands, but
   the title work above suppresses `ai-title` generation, so that record is now generally never

@@ -236,6 +236,23 @@ class Commands(Base):
         for cmd in ("gp", "grhh", "gstc", "=git push", "claude-alt -p x", "ggpush"):
             self.assertDenied(self.bash(cmd), "unknown-command", "stop_and_explain", cmd)
 
+    def test_a_path_the_same_line_creates_is_denied_with_the_fix(self):
+        # The hook runs before the line does, so .venv doesn't exist yet. The denial stays, but
+        # it names the fix (run the creating step first) instead of guessing at an alias.
+        d = sp.evaluate(self.ev("Bash", {"command": "uv venv .venv && .venv/bin/python -c 1"}),
+                        POLICY, home=self.home)
+        self.assertEqual((d.rule, d.intent), ("unknown-command", "stop_and_explain"))
+        self.assertIn("doesn't exist yet", d.message)
+        self.assertIn("its own Bash call", d.message)
+        self.assertNotIn("alias", d.message)
+
+    def test_a_path_that_is_not_executable_says_so(self):
+        with open(os.path.join(self.proj, "notes.txt"), "w") as f:
+            f.write("x")
+        d = sp.evaluate(self.ev("Bash", {"command": "./notes.txt"}), POLICY, home=self.home)
+        self.assertEqual(d.rule, "unknown-command")
+        self.assertIn("isn't executable", d.message)
+
     def test_zsh_only_syntax_is_refused(self):
         self.assertDenied(self.bash('ls *(e:"rm x":)'), "parse-error")
         self.assertDenied(self.bash("echo ${(e)x}"), "zsh-expansion")
