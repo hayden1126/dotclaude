@@ -4,7 +4,7 @@
   delegation-ledger hook            SubagentStart/SubagentStop hook body (stdin: hook JSON)
   delegation-ledger open [--hours N] [--silent-min M]
                                     agents whose latest event is not a stop, with evidence
-  delegation-ledger tail [-n N]     the last N rows (including subagent-policy denials)
+  delegation-ledger tail [-n N]     the last N rows (including policy and spawn-guard denials)
   delegation-ledger audit [--hours N]
                                     is enforcement still binding? policy heartbeat, writers that
                                     changed the main checkout, rejected reports, denials

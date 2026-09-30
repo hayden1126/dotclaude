@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Live delegation harness: real model calls against a disposable fixture repo.
 
-  python3 tests/delegation/run.py --runner claude [--keep]   # 4 short `claude -p` sessions (sonnet)
+  python3 tests/delegation/run.py --runner claude [--stage N | --cases a,b] [--keep]
+                                                    # short `claude -p` sessions, mostly sonnet
   python3 tests/delegation/run.py --runner codex  [--keep]   # 1 short Terra run via codex-delegate
 
 It installs nothing. The claude runner copies agents/ into the fixture's .claude/agents

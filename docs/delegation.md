@@ -65,7 +65,7 @@ Each layer covers what the others can't.
 | Sandbox | `settings.json` `sandbox` | Enforces (OS): the write roots, `denyRead` (the credential barrier), `denyWrite` (the enforcement sources), and the network allowlist. `failIfUnavailable`, and `autoAllowBashIfSandboxed: false`, so Hayden's prompts stay as they were |
 | Subagent policy | `hooks/subagent-policy.sh`, `skills/delegation/scripts/subagent-policy`, `skills/delegation/policy.toml` | Enforces: see "Subagent policy" below. Fails closed for the tools it polices |
 | Report check | `hooks/report-check.sh`, `skills/delegation/scripts/report-check` | Enforces acceptance: a schema-invalid report is sent back twice at most. Fails open |
-| Ledger | `hooks/delegation-ledger.sh`, `skills/delegation/scripts/delegation-ledger` | Observes: start and stop rows, `report_ok`, denial rows, the main-checkout hash for a worktree agent; `audit`; `sandbox-denials`. Fails open |
+| Ledger | `hooks/delegation-ledger.sh`, `skills/delegation/scripts/delegation-ledger` | Observes: start and stop rows (`agent_type` is the resolved role; a teammate adds `name` and `teammate`), `report_ok`, denial rows, the main-checkout hash for a worktree agent; `audit`; `sandbox-denials`. Fails open |
 | Public GitHub client | `skills/delegation/scripts/gh-public` | GET-only access to api.github.com for delegated agents, optionally with a public-read token |
 | Brief and report | `skills/delegation/BRIEF.md`, `report.schema.json` | Persuades (the brief); checks (the schema) |
 | Codex wrapper | `skills/delegation/scripts/codex-delegate` | Enforces: model gate, sandbox, memory cap (via systemd-run when available, otherwise a warning), timeout, schema, and a recursive model audit |
@@ -238,7 +238,7 @@ most.
 team_prefix` (`team-`). A fork, or a spawn that passes `isolation` on the call, may still be
 named, and the writer rule keeps priority. The denial (intent `use_alternative`) says to drop the
 name and SendMessage the returned id. It is recorded as a `named-spawn` policy row, so the
-monthly audit can tell whether the guard is fighting real needs. SKILL §1 says when a team earns
+monthly audit can tell whether the guard is fighting real needs. SKILL §1b says when a team earns
 the prefix.
 
 ### What Step 0 found
@@ -299,7 +299,7 @@ the binary disagree, the binary wins.
   ([sub-agents](https://code.claude.com/docs/en/sub-agents)).
 - **Teammate mode:**
   - the binary's default is `in-process` (the docs say so too);
-  - all 87 recorded teammates in `~/.claude/teams/*/config.json` ran with `backendType: in-process`;
+  - all 89 recorded teammates (rechecked 2026-09-30) in `~/.claude/teams/*/config.json` ran with `backendType: in-process`;
   - teammate `meta.json` files carry `teamName`.
 - **Worktree base:** `isolation: worktree` branches from the default branch unless
   `worktree.baseRef` is `"head"` ([worktrees](https://code.claude.com/docs/en/worktrees)).
@@ -467,8 +467,9 @@ hook fail closed, so wiring a hook before its script is reachable blocks every d
    - `codex-delegate`, `delegation-ledger` and `gh-public` → `~/.local/bin/`.
 2. **Check the scripts before wiring them.**
    - The spawn guard, with
-     `echo '{"tool_name":"Agent","tool_input":{"subagent_type":"writer"}}' | bash ~/.claude/hooks/agent-spawn-guard.sh`,
-     must print a deny.
+     `echo '{"tool_name":"Agent","tool_input":{"subagent_type":"writer"}}' | XDG_STATE_HOME=$(mktemp -d) bash ~/.claude/hooks/agent-spawn-guard.sh`,
+     must print a deny, and so must `{"tool_name":"Agent","tool_input":{"name":"x"}}`. The
+     throwaway `XDG_STATE_HOME` keeps the denial rows out of the real ledger.
    - The policy, with `{"agent_id":"x","tool_name":"Bash","tool_input":{"command":"git push"},"cwd":"/tmp"}`
      through `bash ~/.claude/hooks/subagent-policy.sh`, must print a deny. It denies Bash until the
      sandbox block is in, which is expected.

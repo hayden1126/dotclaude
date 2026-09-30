@@ -155,9 +155,9 @@ class NamedSpawn(unittest.TestCase):
         run(agent(subagent_type="Explore", name="helper"), env=self.env)
         rows = self.rows()
         self.assertEqual(len(rows), 1)
-        self.assertEqual({k: rows[0][k] for k in ("event", "rule", "tool", "name")},
+        self.assertEqual({k: rows[0][k] for k in ("event", "rule", "tool", "name", "agent_type")},
                          {"event": "policy", "rule": "named-spawn", "tool": "Agent",
-                          "name": "helper"})
+                          "name": "helper", "agent_type": "main"})
 
     def test_an_allowed_spawn_writes_nothing(self):
         run(agent(subagent_type="Explore"), env=self.env)

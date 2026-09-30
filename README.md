@@ -101,7 +101,8 @@ ships but is opt-in, see its entry):
   named spawn silently becomes a teammate.
   **Fails closed**: if the guard script or python3 is missing, it exits 2 and blocks every Agent
   spawn. That is deliberate, but it means `skills/delegation` must be linked before this hook is
-  wired (see `docs/delegation.md`, install order). Needs python3 on PATH.
+  wired (see `docs/delegation.md`, install order). Needs python3 3.11 or newer on PATH (`tomllib`),
+  and an unreadable `skills/delegation/policy.toml` denies every spawn too.
 - **SubagentStart / SubagentStop: `delegation-ledger.sh`** (in this repo). Appends a pointer row
   (ids, type, paths, whether the final report validated) per delegated agent to
   `${XDG_STATE_HOME:-~/.local/state}/dotclaude/delegations.jsonl`, so `delegation-ledger open` can

@@ -109,7 +109,8 @@ validated (`report_ok`).
 - **Missing or invalid block:**
   - For our four roles, `report-check` already sent it back up to twice. A report that
     reaches you invalid had three tries, and the ledger records `report_ok: false`.
-  - For other types, ask once (SendMessage to its id).
+  - A `team-` teammate's reports aren't checked (its stops fire per message), and neither
+    are other types'. Ask once (SendMessage to its id).
   - Don't guess the status from the prose.
 - **`blocked`:** each entry names an intent, and the intent decides what you do next.
   - `hard_stop`: drop it.
@@ -143,8 +144,10 @@ validated (`report_ok`).
   - what its last entry was.
 
   It suggests; it doesn't decide.
-- A **silent teammate** is usually working, not dead. Ask it for status before you assume
-  otherwise.
+- A **silent agent** is usually working, not dead. A `team-` teammate can sit idle between
+  messages, and any agent can sit in one long tool call, which the stall timer doesn't
+  abort. In `open`, a last entry of `tool_use` means it is mid-call. Ask it for status
+  before you assume otherwise.
 - **After a crash or restart,** run `delegation-ledger open --hours 24`.
   - For each orphaned agent, look at its artifact path and redo only the unfinished part.
   - For Codex, run `codex-delegate status`, then `codex-delegate resume <run_id>`.

@@ -18,7 +18,7 @@ stop_and_explain = "Do not try variants. Rewrite the command in a plain form tha
 [spawn]
 # A named Agent spawn starts an in-process agent-team teammate. agent-spawn-guard denies one
 # unless its name starts with this prefix (a fork, or a spawn isolated on the call, may still
-# be named). Teams are opt-in per spawn; SKILL.md §1 says when one earns it.
+# be named). Teams are opt-in per spawn; SKILL.md §1b says when one earns it.
 team_prefix = "team-"
 
 [roles]
