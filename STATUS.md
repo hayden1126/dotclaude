@@ -10,6 +10,9 @@ Base: `main`. For branch / PR / push state, run `gh pr list` and `git log main..
 stored here).
 
 ## Done (recent; git, the linked plans and memory hold the detail)
+- **Machine overlay, installed on HAYPC** (2026-09-30, PR #40). A machine's own settings live in
+  `~/.claude/settings.machine.json` (README, "Quickstart"); HAYPC's holds hq's `hq-* *` exclusions and
+  the `tmux-state.sh` hooks. The sandbox stub block and `stop-ring.sh` now ship from this repo.
 - **Delegation hardening Stage 2 built and installed on HAYPC** (2026-09-30, PRs #35 to #38, merged
   range `e536dd8..b4a85ae`). It covers the session-wide sandbox, the subagent policy hook, report-check,
   `gh-public`, and the ledger's `audit` and `sandbox-denials`. `docs/delegation.md` holds the design,
@@ -44,17 +47,6 @@ stored here).
   research-sourcing (PR #10), staged-reader-review upgrade, danger-guard opt-in auto mode.
 
 ## In flight
-- **Machine overlay (branch `feat/machine-overlay`): install on HAYPC once merged.** Don't run
-  `setup.sh` for it (it reinstalls every plugin over the network). By hand, backing up first:
-  - write `~/.claude/settings.machine.json` with the live file's `hq-* *` excludedCommands and its
-    five `tmux-state.sh` hook groups (UserPromptSubmit, PreToolUse, PostToolUse, Notification, Stop);
-  - wrap the stub block already in `~/.config/git/ignore` in `git/install-ignore.py`'s markers, then
-    run that script and confirm "already current";
-  - replace the real `~/.claude/hooks/stop-ring.sh` with a link to `hooks/stop-ring.sh`;
-  - verify: `merge-settings.py settings.json ~/.claude/settings.machine.json` matches the live
-    `sandbox` exactly and the live hooks as a set.
-
-  hq's charter already points at the overlay, so until this is done it's ahead of the machine.
 - **Delegation hardening: Stage 2 live; Stage 3 (upgrade canary) is next** (`docs/delegation.md`,
   "Next"). `skills/delegation/SKILL.md` is the operating guide. Open items:
   - **After 2026-10-07:** run `delegation-ledger sandbox-denials --days 7` and add the hosts that were
