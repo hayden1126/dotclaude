@@ -1,15 +1,15 @@
 # Delegation hardening
 
 Delegated agents drifted out of scope and seemed to stall. This is the design that fixes it, what
-ships now, and what comes next. The skill that operators follow is `skills/delegation/SKILL.md`. This
+ships, and what comes next. The skill that operators follow is `skills/delegation/SKILL.md`. This
 doc holds the reasoning and the verified facts behind it.
 
 ## Principle and evidence
 
 Prose covers purpose and judgment. Enforcement covers authority, acceptance and liveness. Scope is
-**coarse**: an agent's reach comes from its role (its tools) and its working directory, and never
-from parsing its brief. Hook input identifies an agent only by `agent_id` and `agent_type`, so a hook
-could not read a per-task scope even if we wanted it to.
+**coarse**: an agent's reach comes from its role (its tools), its working directory and the
+session's sandbox, and never from parsing its brief. Hook input identifies an agent only by
+`agent_id` and `agent_type`, so a hook could not read a per-task scope even if we wanted it to.
 
 The 2026-09-29 evaluation covered 384 agents over 10 days. Its data stays local in
 `~/scratch/delegation-eval/` and is not in git, because it names agent IDs from other projects. It
@@ -18,48 +18,188 @@ found:
   while it held full Bash.
 - **"Stalls":** these were long, silent teammate turns (10 of 118 teammates went over 30 minutes), not
   lost reports. Ordinary subagents lost 1 report in 266.
+- **general-purpose:** 118 general-purpose agents ran. 47 edited files, 35 ran mutating shell commands,
+  and 36 were read-only. All 5 of its misbehaviors were read-only reviews that wrote scratch files or
+  ran code.
 
-## What ships (Stage 1)
+## Layers
+
+Each layer covers what the others can't.
+
+1. **The Bash sandbox** is Claude Code's own: session-wide, OS-enforced, and for Bash only.
+   - It confines Bash writes to the session repo, the Claude temp dir and the declared caches.
+   - It hides credentials.
+   - It filters the network by hostname.
+   - It binds a command whatever form it takes: an alias, a script, a Makefile or `eval`.
+2. **The subagent policy hook** is PreToolUse `*`, and it runs only when `agent_id` is present.
+   - It denies leaving the sandbox.
+   - It polices the file and MCP tools, which the sandbox never sees.
+   - It applies each role's rules, and says why, with an intent.
+   - It catches the obvious forms; layer 1 catches the rest.
+3. **The report check** covers acceptance. It sends a malformed report from one of our roles back
+   to the agent at most twice.
+4. **Observation.**
+   - The ledger records every start, stop and denial.
+   - `audit` flags a hook that stopped seeing agents, and a writer run that coincided with a
+     main-checkout change.
+   - `sandbox-denials` lists what the sandbox refused.
+
+| Actor | Sandbox | Policy hook | Report check |
+|---|---|---|---|
+| Main thread (including `--agent`) | on, with the escape through the normal permission flow | not applied (the settings command exits before Python unless the payload's text contains `"agent_id"`; Python then exits at once) | n/a |
+| Explore, reviewer | n/a (no Bash) | credential-read and MCP rules | yes |
+| researcher | on, no escape | Bash **allowlist**; credential and MCP rules | yes |
+| writer | on, no escape | default rules; root = `worktreePath` | yes |
+| general-purpose, forks, Plan, plugin and Workflow agents, in-process teammates | on, no escape | default rules; root = the project directory | no (their reports aren't JSON-bound) |
+
+## What ships
 
 | Piece | File | Enforces or persuades |
 |---|---|---|
 | `Explore`, overriding the built-in | `agents/Explore.md` | Enforces: Read, Grep, Glob, WebFetch and WebSearch only, on sonnet, CLAUDE.md skipped. The built-in keeps Bash and asks for read-only in prose only |
-| `researcher` | `agents/researcher.md` | Persuades: it has Bash, so read-only holds by prose only until Stage 2 |
+| `researcher` | `agents/researcher.md` | Enforces: its Bash runs on the policy's read-only allowlist |
 | `reviewer` | `agents/reviewer.md` | Enforces: Read, Grep and Glob only |
-| `writer` | `agents/writer.md` | Enforces: `isolation: worktree`, and no Agent tool |
+| `writer` | `agents/writer.md` | Enforces: `isolation: worktree`, no Agent tool, and the policy's worktree root |
 | Spawn guard | `hooks/agent-spawn-guard.sh`, `skills/delegation/scripts/agent-spawn-guard` | Enforces: denies a `writer` spawn without `isolation` on the call. Fails closed |
-| Ledger | `hooks/delegation-ledger.sh`, `skills/delegation/scripts/delegation-ledger` | Observes: a pointer row per agent start and stop, plus `report_ok`. Fails open |
-| Brief and report | `skills/delegation/BRIEF.md`, `report.schema.json` | Persuades (the brief); checks (the schema, via the ledger and codex-delegate) |
-| Codex wrapper | `skills/delegation/scripts/codex-delegate` | Enforces: model gate, sandbox, memory cap (via systemd-run when available; otherwise a warning), timeout, schema, and a recursive model audit |
+| Sandbox | `settings.json` `sandbox` | Enforces (OS): the write roots, `denyRead` (the credential barrier), `denyWrite` (the enforcement sources), and the network allowlist. `failIfUnavailable`, and `autoAllowBashIfSandboxed: false`, so Hayden's prompts stay as they were |
+| Subagent policy | `hooks/subagent-policy.sh`, `skills/delegation/scripts/subagent-policy`, `skills/delegation/policy.toml` | Enforces: see "Subagent policy" below. Fails closed for the tools it polices |
+| Report check | `hooks/report-check.sh`, `skills/delegation/scripts/report-check` | Enforces acceptance: a schema-invalid report is sent back twice at most. Fails open |
+| Ledger | `hooks/delegation-ledger.sh`, `skills/delegation/scripts/delegation-ledger` | Observes: start and stop rows, `report_ok`, denial rows, the main-checkout hash for a worktree agent; `audit`; `sandbox-denials`. Fails open |
+| Public GitHub client | `skills/delegation/scripts/gh-public` | GET-only access to api.github.com for delegated agents, optionally with a public-read token |
+| Brief and report | `skills/delegation/BRIEF.md`, `report.schema.json` | Persuades (the brief); checks (the schema) |
+| Codex wrapper | `skills/delegation/scripts/codex-delegate` | Enforces: model gate, sandbox, memory cap (via systemd-run when available, otherwise a warning), timeout, schema, and a recursive model audit |
 | `worktree.baseRef: "head"` | `settings.json` | A writer's worktree branches from the current branch, not from `main` |
+| `teammateMode: "in-process"` | `settings.json` | Pins the default: split-pane teammates are separate processes whose hook input has no `agent_id`, so the policy would never see them |
+
+### Subagent policy
+
+The rules live in `policy.toml`; the script only interprets them.
+
+**Gate.**
+- The settings command exits 0 unless the input's text contains `"agent_id"`. A main-thread call
+  whose payload happens to mention it starts Python, which checks the real field and exits at once.
+- Otherwise it runs `timeout 8 bash …/subagent-policy.sh || exit 2`, so a missing link, a crash or
+  a hang blocks the call.
+- Inside the script, a 5-second alarm denies before Claude Code's own hook timeout would let the
+  call through.
+- An exception denies a policed tool (shell, file, MCP), but allows a handback or a message, so a
+  policy bug can't swallow a report.
+
+**The sandbox must be on.** The hook merges the user, project, local and managed settings files, and
+gives a delegated agent no Bash unless `sandbox.enabled` and `failIfUnavailable` are both true. A
+repo that turns the sandbox off loses subagent Bash; the policy still applies.
+
+**Default rules** (every delegated agent), each with a cc-safety-net intent:
+- **The sandbox escape:** any truthy input key matching `/sandbox/i` is hard_stop.
+- **Excluded commands:** an `excludedCommands` match is manual_only. The list is read live from the
+  trusted tiers, as Claude Code reads it.
+- **Parsing:**
+  - The command is parsed with Parable, and every simple command is walked (lists, pipes,
+    subshells, `$( )`, backticks, control flow).
+  - A parse error is stop_and_explain, which also catches zsh glob qualifiers. `${(…)`, `$~` and
+    `=(…)` are denied explicitly.
+  - Wrappers are peeled: `env`, `command`, `exec`, `timeout`, `nice`, `nohup`, `xargs`, `find -exec`,
+    `bash`/`sh`/`zsh -c` (recursively), and `eval` with a static argument.
+  - A shell reading stdin (`… | sh`) and `source` (except `*/bin/activate`) are denied.
+- **Command words** must resolve on PATH, be a path to an executable, or be a builtin. That denies
+  oh-my-zsh aliases (`gp` = `git push`) and shell functions, and zsh `=git`.
+- **Environment:** `GIT_*`, `LD_*`, `BASH_ENV`, `PAGER` and similar prefixes are denied (except
+  `GIT_PAGER=cat`), and so is `git -c`.
+- **git:**
+  - reset, rebase, revert and clean are denied;
+  - so are a checkout or switch that discards, restore without `--staged`, and branch or tag
+    deletion;
+  - so are stash drop/clear/pop, worktree changes, remote and config writes, and reflog or
+    update-ref deletion;
+  - so are `--no-verify`, `--output`, `--ext-diff` and the `ext::` transport;
+  - an unknown subcommand is denied, which catches git aliases.
+- **HTTP:** curl and wget are GET or HEAD only, and send no data.
+- **rm:** `-r` outside the root, allowWrite and temp is denied; so are a dynamic or glob target of
+  `-r`, git metadata, and `/` or home.
+- **MCP:** only the read tools listed in `[mcp]`. A new MCP tool fails closed until it is listed.
+- **Protected writes:** file tools and literal Bash targets are realpath-resolved, so symlinks count.
+  The protected paths are:
+  - `~/.claude`, the project's `.claude` (except `.claude/worktrees`) and `.mcp.json`;
+  - git hooks and config;
+  - shell rc files;
+  - the live enforcement sources in `~/dotclaude`.
+- **Credential reads:** Read, Grep and Glob on the credential paths are denied (hard_stop), because
+  those tools run outside the sandbox.
+
+**Writer:**
+- Its root is `meta.json`'s `worktreePath`, falling back to a cwd under `.claude/worktrees/`.
+  Otherwise it is denied.
+- File-tool writes must stay inside the worktree or temp.
+- Bash write targets, `cd` and `git -C` into the session repo but outside the worktree are denied.
+- Reads of the main checkout stay allowed.
+
+**Researcher:** an allowlist.
+- **Allowed:**
+  - coreutils readers;
+  - grep, rg and find without their exec, write or filter flags;
+  - jq, `sed -n`, sort, uniq, diff;
+  - read-only git and its list forms;
+  - curl GET and `wget -O-` to stdout;
+  - `gh-public`;
+  - `git clone` of an https URL into the Claude temp dir;
+  - `<program> --version|--help`.
+- **Redirects** go only to `/dev/null`.
+- **No interpreters.**
+
+### Public GitHub for delegated agents (the credential barrier)
+
+git authenticates through `gh auth git-credential` over HTTPS, and its token lives in
+`~/.config/gh`. The sandbox's `denyRead` hides that directory. So nothing inside the sandbox can
+authenticate to GitHub, whatever form the command takes: an alias, a Makefile or a test script.
+
+The main thread's `gh` and git network commands are in `excludedCommands`. They run unsandboxed
+through the normal permission flow, as they did before. Delegated agents are denied every excluded
+command.
+
+For public data:
+- `gh-public` (GET only, api.github.com, REST and search);
+- `curl`;
+- `git clone` over https, which isn't excluded, so it stays sandboxed and credential-less;
+- WebFetch.
+
+Code search needs a token. A classic token with **no scopes** at
+`~/.config/dotclaude/github-public-token` can read public data only, and it lifts the rate limit
+from 60 to 5,000 requests an hour.
 
 ### Where enforcement stops (known gaps)
 
-- **Team bypass.** With agent teams on, a named spawn starts as a teammate in the main checkout.
-  The docs: "An `isolation` value in the subagent's frontmatter doesn't prevent it". The spawn guard
-  closes this for `writer` only.
-- **Writer escape.** The writer's Bash can still write outside its worktree through a subprocess
-  (for example `python3 -c open(...)`). Claude Code's built-in worktree check checks only command
-  text and working directory ([sub-agents](https://code.claude.com/docs/en/sub-agents): it "blocks a
-  command that redirects git into the main checkout"). Stage 2's sandbox is the fix, and it needs a live test of the worktree's writable root.
-- **Hook timeout.** A hook timeout is non-blocking, so a spawn guard that hangs past 10 s lets the call
-  through. It is a stdlib script that makes no network calls.
-- **general-purpose spawns** are logged, not constrained. Stage 2 decides whether to require a role.
-- **The `researcher` shell** is bounded by prose only until the sandbox lands.
-- **The live harness can't reach the team bypass.** A named spawn becomes a teammate only
-  in an interactive session with agent teams on, and `run.py` uses `claude -p`. What is
-  covered:
-  - the guard's decision is unit-tested;
-  - its denial is tested live, through the fixture's hook entry, which calls the guard script
-    directly rather than the installed shim;
-  - the install check below covers the installed shim.
-
-  A named, isolated writer staying a subagent in an interactive team session is untested.
-  The Stage 3 canary needs an interactive step for it.
+- **A writer's computed-path write into the main checkout.**
+  - The sandbox's write root is the session's cwd, and a worktree lives inside it.
+  - A live probe (2026-09-30) showed a worktree subagent writing the main checkout through
+    `python3 -c` with a computed path. A plain `../../../` redirect worked too, until the
+    policy's literal-path check.
+  - Claude Code's own worktree check stopped neither.
+  - The hook denies the literal forms. For the computed ones, the ledger hashes the main
+    checkout's `git status` at the writer's start and stop, and `audit` reports a change. That is
+    evidence, since the lead may have edited too.
+- **What the policy can't see.** Script bodies, interpreter code, and an alias that shadows a real
+  binary name are out of its sight. The sandbox, the credential barrier and the network filter
+  bound them (cc-safety-net's residual risks RR-1 to RR-5).
+- **Secrets in the shell environment.** `GOOGLE_OAUTH_CLIENT_ID` and `GOOGLE_OAUTH_CLIENT_SECRET`
+  are in the Bash tool's environment, so a delegated agent's `env` can print them. They are an
+  installed-app OAuth client, not user tokens. Moving them out of the login environment is
+  Hayden's call.
+- **Network filtering is by hostname only,** so domain fronting is possible.
+- **A cloned repo's committed `sandbox.filesystem.allowWrite`** widens that repo's own sandbox
+  (cc-safety-net RR-11). This is noted, not policed.
+- **Hook timeout.** A hook timeout is non-blocking. The settings command's `timeout 8` and the
+  script's 5-second alarm both deny first.
+- **Teammates and Workflow agents.** In-process teammates and Workflow agents are inferred to
+  carry `agent_id`; `-p` can't create a teammate. The heartbeat in `audit` would show either
+  being missed.
+- **Vault.** There is deliberately no vault read deny. A session-wide deny would break hq's vault
+  routing and vault's own sessions, and Bash writes to vault from other sessions are already
+  outside the write roots.
 
 ## Verified facts the design rests on
 
-All were checked on 2026-09-29 against Claude Code 2.1.285 and Codex CLI 0.154.
+Checked against Claude Code 2.1.285 and Codex CLI 0.154. "Probe" means a live `claude -p` run with
+a real sandbox on 2026-09-30. Where the docs and the binary disagree, the binary wins.
 
 - **Grep and Glob:** on Linux and WSL they are absent by default. They come back for a subagent that
   lists them in `tools` and leaves out Bash
@@ -67,146 +207,181 @@ All were checked on 2026-09-29 against Claude Code 2.1.285 and Codex CLI 0.154.
 - **Explore override:** "A user or project subagent named `Explore` overrides the built-in and keeps
   its own `model` field" ([sub-agents](https://code.claude.com/docs/en/sub-agents)). The live harness
   shows this: under a haiku lead, the Explore transcript runs on sonnet.
-- **Built-in Explore** (read from the 2.1.285 binary):
-  - it denies only the edit tools, keeps Bash, and has `omitClaudeMd: true` and `model: inherit`;
-  - its prompt forbids writes in prose ("STRICTLY PROHIBITED");
-  - its own description says not to use it for review or open-ended analysis.
+- **Built-in Explore** (read from the 2.1.285 binary): it denies only the edit tools, keeps Bash, and
+  has `omitClaudeMd: true` and `model: inherit`. Its prompt forbids writes in prose.
 - **Team bypass:** "a subagent that Claude spawns from the main conversation with a `name` launches as
   a teammate instead, unless the call is a fork or passes `isolation` on the call itself"
   ([sub-agents](https://code.claude.com/docs/en/sub-agents)).
+- **Teammate mode:**
+  - the binary's default is `in-process` (the docs say so too);
+  - all 87 recorded teammates in `~/.claude/teams/*/config.json` ran with `backendType: in-process`;
+  - teammate `meta.json` files carry `teamName`.
 - **Worktree base:** `isolation: worktree` branches from the default branch unless
-  `worktree.baseRef` is `"head"` ([worktrees](https://code.claude.com/docs/en/worktrees), "Choose the
-  base branch").
-- **Hook precedence:** "When multiple PreToolUse hooks return different decisions, precedence is
-  `deny` > `defer` > `ask` > `allow`". Exit 2 routes the same way as deny
-  ([hooks](https://code.claude.com/docs/en/hooks)).
-- **Hook events:**
+  `worktree.baseRef` is `"head"` ([worktrees](https://code.claude.com/docs/en/worktrees)).
+- **Hook input** (probe):
+  - `agent_id` and `agent_type` appear on a subagent's PreToolUse, SubagentStart and SubagentStop,
+    and never on the main thread;
+  - a worktree subagent's `cwd` is its worktree;
+  - `transcript_path` is the parent session's, and
+    `<it minus .jsonl>/subagents/agent-<id>.meta.json` has `worktreePath`;
+  - Bash `tool_input` carries `dangerouslyDisableSandbox` when it is set;
+  - SubagentStop carries `stop_hook_active`, `agent_transcript_path`, `background_tasks` and
+    `session_crons`.
+- **Hook precedence and blocking:**
+  - "precedence is `deny` > `defer` > `ask` > `allow`", and exit 2 routes like deny;
+  - a PreToolUse deny holds in bypassPermissions;
+  - a hook timeout does not block;
+  - the default command-hook timeout is 600 s ([hooks](https://code.claude.com/docs/en/hooks)).
+- **Handbacks** (the binary):
+  - `SubagentHandback` takes `{message}`;
+  - it exists only in auto mode;
+  - a subagent that ends without a delivered handback gets up to 3 nudges, then its report is lost.
+    That is why the report check stops at 2 rejections.
+- **Other hook events:**
   - SubagentStart fires "each time an in-process agent team teammate handles a new message", so the
     ledger folds rows by `agent_id`;
-  - the SubagentStop input carries `last_assistant_message` and `agent_transcript_path`. In auto
-    mode a subagent delivers its report through the `SubagentHandback` tool, so
-    `last_assistant_message` is empty and the report is the tool call's `message` (observed live on
-    2026-09-30, and the hooks docs say the same). The ledger falls back to the transcript's last
-    handback and records `report_source`;
-  - Claude Code's own helper agents also fire SubagentStop, with an empty `agent_type` and no
-    transcript. The ledger skips them;
-  - in `-p` mode a folder is treated as trusted, so project hooks run
-    ([hooks](https://code.claude.com/docs/en/hooks)).
-- **Silent failure modes:**
-  - Claude Code ignores an agent frontmatter field it doesn't recognize, without reporting an
-    error;
-  - a hook that errors (any exit other than 2) or times out doesn't block.
-
-  So enforcement can switch off without a signal. That is why `test_agents.py` checks field names
-  against the documented list, why the guard fails closed, and why there is an upgrade canary.
+  - Claude Code's own helper agents fire SubagentStop with an empty `agent_type` and no transcript;
+  - in `-p` mode a folder is treated as trusted, so project hooks run.
+- **Silent failure modes:** Claude Code ignores an agent frontmatter field it doesn't recognize, and
+  a settings value of the wrong type is ignored too. That is why `test_agents.py` and
+  `test_settings.py` pin names and types.
+- **Sandbox settings** (the binary's schema):
+  - `allowUnsandboxedCommands` is a **bool**, default true. The settings reference shows a string
+    enum;
+  - `autoAllowBashIfSandboxed` defaults to **true**. Enabling the sandbox with the default would
+    stop Hayden's Bash prompts, so the baseline sets it to false;
+  - `failIfUnavailable` exists. Without it, a sandbox that fails to start falls back to
+    unsandboxed silently (#84563);
+  - `excludedCommands` is honored only from the user, managed and `--settings` tiers;
+  - `claude sandbox status` (a hidden subcommand) prints the posture as JSON.
+- **Sandbox behavior** (probe):
+  - Bash writes outside cwd fail with "read-only file system", including `/tmp` outside
+    `/tmp/claude-<uid>`;
+  - a `denyRead` directory reads as empty, and a `denyRead` file as permission denied;
+  - `~` expands in `denyRead` and `allowWrite`, and a missing path is skipped harmlessly;
+  - an unlisted domain is refused and reported as `<sandbox_violations>` in the tool result.
+- **`excludedCommands` matching** (probe):
+  - `"cp *"` matched `cp a b` (the command left the sandbox and hit the permission gate);
+  - a bare `"touch"` did not match `touch x`;
+  - a compound command stays sandboxed even when one part matches;
+  - so the main thread's `cd x && git push` fails on the credential, and then retries through the
+    escape.
+- **Seccomp:**
+  - the filter is embedded in the native binary; the npm package is not needed;
+  - in the probe, `socket(AF_UNIX)` failed with EPERM and `cmd.exe` failed to launch;
+  - unix sockets are all-or-nothing on Linux (`allowUnixSockets` is ignored there), so tmux,
+    `systemd-run --user` and Windows binaries run through `excludedCommands`.
+- **Protected paths:** `.claude/settings*`, skills, agents, hooks, `.mcp.json`, `.git/hooks` and
+  `.git/config` stay read-only for sandboxed Bash, even inside a writable root
+  ([sandboxing](https://code.claude.com/docs/en/sandboxing)).
+- **The Bash tool's shell:**
+  - it runs zsh with the shell snapshot's aliases (237 here, including oh-my-zsh's `gp`, `grhh`
+    and `gstc`);
+  - its PATH matches the hook's;
+  - Claude Code defines `grep` (its bundled ugrep, which has `--filter`), `find` and `rg` as
+    functions.
 - **Teammate reporting:** teammates report to the lead through `teammate-message` and
-  `idle_notification` events, not task notifications. A liveness check that watches only task
-  notifications misses them.
+  `idle_notification` events, not task notifications.
 - **Stall timeout:** `CLAUDE_ASYNC_AGENT_STALL_TIMEOUT_MS` (default 10 minutes) aborts a subagent that
-  makes no progress and reports the stall to its parent
-  ([env-vars](https://code.claude.com/docs/en/env-vars)).
-- **Bash sandbox:**
-  - it confines Bash and its subprocesses, and subagents "use the same sandbox configuration";
-  - it needs bubblewrap and socat, and on WSL2 the seccomp filter, without which a sandboxed command
-    can launch Windows binaries;
-  - none of those is installed here ([sandboxing](https://code.claude.com/docs/en/sandboxing)).
+  makes no progress ([env-vars](https://code.claude.com/docs/en/env-vars)).
 - **Codex sub-agents:**
   - a `spawn_agent` without a model inherits the parent's model (tested);
-  - the `agents.default_subagent_model` config key exists (tested). It is deliberately
-    **not** in `codex/config.toml`: with the parent pinned to Sol, inheritance already covers
-    children spawned without a model, and `merge-config.py` manages only top-level keys (a
-    dotted key would need nested-table merging). `codex-delegate` passes it with `-c` as a
-    second safeguard;
+  - `agents.default_subagent_model` exists, and `codex-delegate` passes it with `-c`;
   - an explicit model argument still overrides both;
-  - a child can't get its own sandbox (`codex-rs/core/src/agent/child_config.rs`);
+  - a child can't get its own sandbox;
   - a child rollout's first `session_meta` carries `payload.parent_thread_id`;
   - `--json` emits no heartbeat event;
   - `--output-schema` applies per turn, so resume must pass it again.
 
 ## Adopt, copy or build (survey, 2026-09-29)
 
-No existing setup was worth building on, so we built a thin layer on native controls and copied five
-patterns:
+No existing setup was worth building on, so we built a thin layer on native controls and took
+patterns from these:
 - **Per-agent scope:** nothing enforces it. agent-pd only detects.
 - **Agent collections** (wshobson, VoltAgent) persuade only, and their reviewers carry Bash or Write.
 - **Orchestrators:** ruflo/claude-flow is hype, claude-squad is AGPL, and vibe-kanban and Conductor
   follow a different architecture.
-- **codex-plugin-cc** is kept for interactive `/codex:*` use, not for scripted delegation:
-  - it leaves the model unset;
-  - it kills its jobs at session end;
-  - jobs wedge in "running" (#391);
-  - it hangs when run in a worktree (#367).
+- **codex-plugin-cc** is kept for interactive `/codex:*` use, not for scripted delegation.
 
 | Source | License | What we took | Where |
 |---|---|---|---|
-| kenryu42/cc-safety-net | MIT | Fail closed on any exception, always with a reason; the block-intent vocabulary | spawn guard; `BRIEF.md` stop rule |
-| stefanprodan/cctop | Apache-2.0 | Liveness rules: `~/.claude/sessions/<pid>.json` plus `/proc`, and the transcript's last entry | `delegation-ledger open`; Stage 3 heartbeat |
+| kenryu42/cc-safety-net | MIT | The destructive-command rule table, the five block intents and their footers, the wrapper-peel and recursion caps, fail closed on any exception | `policy.toml`, `subagent-policy`, spawn guard, `BRIEF.md` |
+| Parable (ldayton/Parable, as pinned by ldayton/Dippy) | MIT | The bash parser, **vendored verbatim** (`scripts/vendor/parable.py`, pinned by sha256), with Dippy's walk-every-node approach reimplemented | `subagent-policy` |
+| oscarthroedsson/breadcrumb | MIT | The SubagentStop rejection counter, keyed on session and agent, with a cap of 2 | `report-check` |
+| stefanprodan/cctop | Apache-2.0 | The liveness rules: `~/.claude/sessions/<pid>.json` plus `/proc`, and the transcript's last entry | `delegation-ledger open` |
 | openai/codex-plugin-cc `job-control.mjs` | Apache-2.0 | Phase inference from the event log | `codex-delegate status` |
 | obra/external-subagents | none (idea only) | A pending row before launch; idle minutes | `codex-delegate` |
-| Parable, via ldayton/Dippy | MIT | Stdlib bash parser (planned) | Stage 2 hook |
-| oscarthroedsson/breadcrumb | MIT | SubagentStop rejection cap of 2 (planned) | Stage 2 report check |
 
-All of these are reimplemented; no code was copied verbatim. dcg is out: its license rider excludes
-anyone acting for Anthropic or OpenAI.
+Apart from Parable, everything is reimplemented. dcg is out: its license rider excludes anyone
+acting for Anthropic or OpenAI.
 
-## Next stages
-
-**Stage 2 (enforce):**
-- **Native sandbox, session-wide.** Install bubblewrap, socat and the seccomp filter (`npm i -g
-  @anthropic-ai/sandbox-runtime`) and set `failIfUnavailable: true`. Run a soft week first with
-  `allowUnsandboxedCommands: true`, so a retry goes through a prompt, then set it to `false`. Add
-  Read/Edit deny rules for `~/vault/**` and credential paths, which feed bubblewrap, and a network
-  allowlist.
-- **A subagent-only PreToolUse hook** (active when `agent_id` is present):
-  - it enforces agent_type plus cwd scope;
-  - it denies MCP write and send tools and `git push`;
-  - it parses commands with Parable and fails closed.
-- **A SubagentStop and SubagentHandback schema check,** capped at 2 rejections.
-- **Decide on the general-purpose rule** from the ledger's data. Two existing skills would be
-  affected: `vetting-sources` (its `references/workflow-scaffolds.md` sets
-  `agentType:'general-purpose'`) and `staged-reader-review` (named spawns with no role, which become
-  teammates when agent teams are on).
+## Next
 
 **Stage 3 (watch):**
-- A cctop-style heartbeat in `tmux-state.sh`.
-- An upgrade canary: rerun `tests/delegation/run.py` after each Claude Code upgrade. It checks that the
-  override, the guard and the hook fields still bind.
-- A monthly audit.
+- **A cctop-style heartbeat in `tmux-state.sh`.**
+- **An upgrade canary:** after each Claude Code upgrade, rerun `tests/delegation/run.py` and
+  `delegation-ledger audit`. It should also include an interactive check that a named teammate's
+  `git push` is denied.
+- **A monthly audit.**
+- **The general-purpose share:** watch it in the ledger. If read-only work keeps landing on
+  general-purpose, route it to a role or deny it.
 
 ## Tests
 
-- **Unit:** `python3 -m unittest discover -s tests/delegation -t tests/delegation`. It uses no model
-  calls; the codex-delegate tests use a fake `codex` on `PATH`.
-- **Live:** `python3 tests/delegation/run.py --runner claude` runs 4 short `claude -p` sessions (sonnet;
-  the reader case uses a haiku lead). `--runner codex` runs one short Terra run. Both use a disposable
-  fixture, install nothing, and isolate the ledger through `XDG_STATE_HOME`. Pick claude cases with
-  `--cases`.
-- **Results on 2026-09-29:**
-  - claude: 19/19 (reader, researcher, writer in a worktree with the main checkout unchanged, the
-    guard's denial, ledger pairs);
-  - codex: 7/7, plus a live `resume`.
+- **Unit:** `python3 -m unittest discover -s tests/delegation -t tests/delegation`. They make no model
+  calls. The policy tests run against this repo's baseline `sandbox` block, and the codex-delegate
+  tests use a fake `codex` on `PATH`.
+- **Live:** `python3 tests/delegation/run.py --runner claude` runs short `claude -p` sessions (sonnet;
+  the reader case uses a haiku lead) in a disposable fixture.
+  - The fixture's project settings wire the hooks by absolute path and turn the sandbox on, so it
+    tests this checkout before anything is installed.
+  - Pick cases with `--cases`.
+  - `--runner codex` runs one short Terra run.
+- **Results on 2026-09-30:**
+  - unit: 133 tests;
+  - claude: 37/37 (all Stage 1 cases, plus policy, allowlist, deps, escape, and report in both
+    default and auto mode). The computed-path escape reached the main checkout, as the known gap
+    predicts, and `audit` flagged it;
+  - codex: 7/7.
 
 ## Installing on a machine that is already set up
 
 `setup.sh` links everything below. It also **resets** `~/.claude/settings.json` to this repo's
 baseline, and the live file may hold hooks that aren't in the baseline (for example
-`tmux-state.sh`). On a live machine, do it by hand, **in this order**. The spawn guard fails
-closed, so if its hook is wired before the guard script is reachable, every Agent spawn is
-blocked.
+`tmux-state.sh`). On a live machine, do it by hand, **in this order**. The spawn guard and the policy
+hook fail closed, so wiring a hook before its script is reachable blocks every delegated call.
 
-1. **Links.** `skills/delegation` to `~/.claude/skills/delegation` (the hook shims call its
-   scripts). `agents/*.md` into `~/.claude/agents/`. `hooks/agent-spawn-guard.sh` and
-   `hooks/delegation-ledger.sh` into `~/.claude/hooks/`. `codex-delegate` and
-   `delegation-ledger` into `~/.local/bin/`.
-2. **Check the guard before wiring it.** `echo '{"tool_name":"Agent","tool_input":{"subagent_type":"writer"}}' | bash ~/.claude/hooks/agent-spawn-guard.sh`
-   must print a deny. The same payload with `"isolation":"worktree"` must print nothing.
-3. **Last, the settings.** Add the three hook entries (PreToolUse `Agent|Task`, SubagentStart,
-   SubagentStop) and `"worktree": {"baseRef": "head"}` to the live `~/.claude/settings.json`.
-   Then spawn an `Explore` agent and confirm two things. First, the override bound: its transcript
-   runs on sonnet, and it lists no Bash. Second, the ledger got start and stop rows
-   (`delegation-ledger tail`).
+1. **Links.**
+   - `skills/delegation` → `~/.claude/skills/delegation` (the hook shims call its scripts).
+   - `agents/*.md` → `~/.claude/agents/`.
+   - `hooks/{agent-spawn-guard,delegation-ledger,subagent-policy,report-check}.sh` →
+     `~/.claude/hooks/`.
+   - `codex-delegate`, `delegation-ledger` and `gh-public` → `~/.local/bin/`.
+2. **Check the scripts before wiring them.**
+   - The spawn guard, with
+     `echo '{"tool_name":"Agent","tool_input":{"subagent_type":"writer"}}' | bash ~/.claude/hooks/agent-spawn-guard.sh`,
+     must print a deny.
+   - The policy, with `{"agent_id":"x","tool_name":"Bash","tool_input":{"command":"git push"},"cwd":"/tmp"}`
+     through `bash ~/.claude/hooks/subagent-policy.sh`, must print a deny. It denies Bash until the
+     sandbox block is in, which is expected.
+3. **The hook entries.** Add the PreToolUse entries (`*` for the policy, `Agent|Task` for the guard,
+   `SubagentHandback` for the report check) and the SubagentStart and SubagentStop entries to the live
+   `~/.claude/settings.json`, copied from the baseline. Then spawn an `Explore` agent and check:
+   - its transcript runs on sonnet;
+   - the ledger has start and stop rows (`delegation-ledger tail`);
+   - `delegation-ledger audit` says the policy hook saw it.
+4. **The sandbox.** Add the `sandbox` block and `teammateMode`, then **restart Claude Code**: the
+   dependency check runs only at startup. In the new session:
+   - `claude sandbox status` shows enabled;
+   - a Bash write outside cwd fails;
+   - `cat ~/.config/gh/hosts.yml` fails;
+   - `git fetch` and `gh pr list` still work, through the exclusion;
+   - the prompts are unchanged.
+
+**If Claude Code won't start** because the sandbox can't (a missing bwrap after an upgrade, say), set
+`"enabled": false` under `sandbox` in `~/.claude/settings.json` with an editor. That also takes
+delegated agents' Bash away, until the sandbox is back.
 
 Observed on the 2026-09-30 install: skill links and settings hooks took effect in the running session
-at once, and the guard denied a live writer spawn. Agent definitions reloaded a little later. The first
-`Explore` spawn after linking still got the built-in (opus, with Bash), and a retry a minute later got
-ours. So check the override with a fresh spawn, or in a new session.
+at once. Agent definitions reloaded a little later: the first `Explore` spawn after linking still got
+the built-in. So check the override with a fresh spawn, or in a new session.

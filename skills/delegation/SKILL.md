@@ -16,18 +16,59 @@ cause of every drift case in the 2026-09-29 evaluation (`docs/delegation.md` in 
 | The task needs | Spawn | What it can do |
 |---|---|---|
 | Find or read code, docs, web pages | `Explore` (ours, overrides the built-in) | Read, Grep, Glob, WebFetch, WebSearch. No shell, no writes |
-| Read-only work that needs a shell: git history, `gh api`, `curl`, observing a command's output | `researcher` | Adds Bash. Read-only by prose only until Stage 2's sandbox lands, so give it a tight brief |
+| Read-only work that needs a shell: git history, public GitHub (`gh-public`, a shallow clone into temp), `curl` GET | `researcher` | Adds Bash, held to a read-only allowlist by the policy hook. No interpreters, no authenticated `gh` |
 | Review, audit, cross-file consistency | `reviewer` | Read, Grep, Glob. You run the tests |
 | Change files | `writer`, with `isolation: "worktree"` **on the Agent call** | Everything, inside its own worktree and branch. Commits, never pushes |
 | A long build, a second opinion, or anything about Codex itself | `codex-delegate run` | Pinned Sol or Terra, workspace-write sandbox, memory cap, schema report |
 
-- Use `general-purpose` only when no role fits, and say why in the brief. The ledger logs
-  every spawn's type, and a later stage may require an explicit role.
+- Use `general-purpose` only when no role fits, and say why in the brief. The three uses
+  that have no role today:
+  - Workflow agents that read sources and write output files (vetting-sources);
+  - hq cross-home dispatch, where the target is another home;
+  - messaged persona readers (staged-reader-review).
+
+  Read-only work belongs to Explore, researcher or reviewer, and changes belong to writer.
+  In the 2026-09-29 evaluation, every misbehaving general-purpose agent was a read-only review.
+  general-purpose runs under the same sandbox and policy as every delegated agent (section 1b).
 - A writer spawned without `isolation` on the call is denied by `agent-spawn-guard`. With
   agent teams on, a named spawn would otherwise start as a teammate in the main checkout,
   and the writer's frontmatter isolation is ignored.
 - **One writer at a time.** Readers, researchers and reviewers can run in parallel. Run
   two writers only when their files are disjoint and you are the named merge owner.
+
+## 1b. What no delegated agent can do
+
+**Enforcement.** Claude Code's Bash sandbox is on for the whole session, and a policy hook
+(`skills/delegation/policy.toml`) runs on every tool call a subagent or teammate makes. The
+main thread is never policed; its retry outside the sandbox goes through your normal
+permission flow.
+
+**Every delegated agent:**
+- **Stays in the sandbox:**
+  - `dangerouslyDisableSandbox` is denied;
+  - so is every `excludedCommands` entry, which covers `gh`, `git push/fetch/pull`, `codex`,
+    `claude` and `tmux`.
+- **Can't reach authenticated GitHub.** `~/.config/gh` is unreadable inside the sandbox, so
+  there is no push and no private-repo read. That holds whatever form the command takes.
+  Public GitHub is available through `gh-public` and https clones.
+- **Can't run destructive git.** reset, rebase, revert and clean are denied, as are a checkout
+  or switch that discards, branch or tag deletion, stash drop/clear/pop, worktree changes and
+  config writes.
+- **Can't use aliases or functions:** `gp` is denied; `git push` is spelled out.
+- **Can't use MCP write tools** (only the reads listed in policy.toml).
+- **Can't send data over HTTP:** only GET or HEAD.
+- **Can't write** Claude Code, shell, git or enforcement config.
+- **Can't read credential files.**
+- **Can't `rm -r` outside its root** or temp.
+
+**Writers** also can't write outside their worktree: file tools, redirects, `cd`,
+`git -C`. They can still read the main checkout. A computed-path subprocess write into the
+main checkout can't be stopped; `delegation-ledger audit` flags it.
+
+**When a denial arrives,** it names a rule and an intent. The agent reports it in
+`blocked_actions` with that intent. If the work really needs it, you run it yourself in the
+main thread. Your `git push` from another directory (`git -C x push`) doesn't match the
+exclusion, so it fails on the missing credential; retry it outside the sandbox.
 
 **Subagent or teammate?** Default to a subagent. A subagent's result returns as a
 notification, and Claude Code aborts one that makes no progress for 10 minutes
@@ -51,8 +92,11 @@ Every role ends its reply with a fenced JSON block matching `report.schema.json`
 `status`, `summary`, `artifacts`, `blocked_actions`. The ledger records whether that block
 validated (`report_ok`).
 
-- **Missing or invalid block:** ask the agent once to resend it (SendMessage to its id).
-  Don't guess the status from the prose.
+- **Missing or invalid block:**
+  - For our four roles, `report-check` already sent it back up to twice. A report that
+    reaches you invalid had three tries, and the ledger records `report_ok: false`.
+  - For other types, ask once (SendMessage to its id).
+  - Don't guess the status from the prose.
 - **`blocked`:** each entry names an intent, and the intent decides what you do next.
   - `hard_stop`: drop it.
   - `use_alternative`: consider the named alternative.
@@ -70,6 +114,14 @@ validated (`report_ok`).
 
 ## 4. Liveness and recovery
 
+- `delegation-ledger audit` checks that enforcement still binds:
+  - the policy hook saw every agent that used tools;
+  - no writer's run coincided with a main-checkout change;
+  - which reports failed the contract;
+  - the denials.
+
+  Run it after a Claude Code upgrade. `delegation-ledger sandbox-denials` lists the hosts
+  and paths the sandbox refused, which feed `sandbox.network.allowedDomains`.
 - `delegation-ledger open` lists delegations whose latest event isn't a stop. Each row
   shows its evidence:
   - whether the session is alive;

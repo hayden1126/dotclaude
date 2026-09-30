@@ -5,7 +5,9 @@ configuration: global instructions, the skills, agents and hooks Hayden and Frie
 settings, and the plugins I install. Run `./setup.sh` on a fresh machine and end up with the
 same setup.
 
-This is a deliberately lean, principle-driven config. It vendors only what Hayden and Friends wrote or curated.
+This is a deliberately lean, principle-driven config. It vendors only what Hayden and Friends wrote or curated,
+plus one pinned third-party file: Parable, the MIT bash parser the delegation policy uses
+(`skills/delegation/scripts/vendor/`).
 Plugin-owned content (plugin skills, agents, hooks) is installed from the plugins' own
 marketplaces, not copied here, so it never goes stale.
 
@@ -17,6 +19,10 @@ cd dotclaude
 ./setup.sh
 claude login        # one-time auth
 ```
+
+On Linux and WSL2, install `bubblewrap` and `socat` first (`sudo apt install bubblewrap socat`).
+The baseline turns Claude Code's Bash sandbox on with `failIfUnavailable`, so without them Claude
+Code refuses to start (`setup.sh` warns).
 
 `setup.sh` is idempotent. Existing real files in `~/.claude/` are backed up to
 `~/.claude/backups/pre-dotclaude-<timestamp>/`, then replaced with symlinks back to this repo,
@@ -30,11 +36,13 @@ repo file as a curated baseline while the runtime owns its own copy.
 | Path | What it is | Installs to |
 |---|---|---|
 | `CLAUDE.md` | Global instructions: working partnership, boundaries, voice, the explore -> spec -> plan -> execute -> verify -> review workflow | symlink `~/.claude/CLAUDE.md` |
-| `settings.json` | Hooks, status line, env vars, enabled plugins (curated baseline) | **copy** to `~/.claude/settings.json` (runtime-managed, not symlinked) |
-| `skills/` | The skills I authored: `coding-practices`, `research-discipline`, `research-sourcing`, `writing-voice`, `staged-reader-review`, `ebook-extract`, `deck-production`, `vetting-sources`, `handoff`, `frontend-ui-discipline`, `ui-alignment`, `delegation` | symlink per dir into `~/.claude/skills/`; a skill's `scripts/` CLI also symlinks into `~/.local/bin` when that dir exists (`deck-production` ships `deckkit`; `delegation` ships `codex-delegate` and `delegation-ledger`) |
+| `settings.json` | Hooks, status line, env vars, enabled plugins, and the Bash sandbox (curated baseline; see docs/delegation.md for the sandbox) | **copy** to `~/.claude/settings.json` (runtime-managed, not symlinked) |
+| `skills/` | The skills I authored: `coding-practices`, `research-discipline`, `research-sourcing`, `writing-voice`, `staged-reader-review`, `ebook-extract`, `deck-production`, `vetting-sources`, `handoff`, `frontend-ui-discipline`, `ui-alignment`, `delegation` | symlink per dir into `~/.claude/skills/`; a skill's `scripts/` CLI also symlinks into `~/.local/bin` when that dir exists (`deck-production` ships `deckkit`; `delegation` ships `codex-delegate`, `delegation-ledger` and `gh-public`) |
 | `agents/` | Delegation roles: `Explore` (overrides the built-in with a no-shell reader), `researcher`, `reviewer`, `writer`; see docs/delegation.md | symlink per file into `~/.claude/agents/` |
 | `hooks/agent-spawn-guard.sh` | PreToolUse(Agent) guard: denies a `writer` spawn that doesn't pass `isolation` on the call; fails closed | symlink `~/.claude/hooks/agent-spawn-guard.sh` |
 | `hooks/delegation-ledger.sh` | SubagentStart/SubagentStop hook: appends a pointer row per delegated agent to the delegation ledger; never blocks | symlink `~/.claude/hooks/delegation-ledger.sh` |
+| `hooks/subagent-policy.sh` | PreToolUse(*) policy for delegated agents only (rules in `skills/delegation/policy.toml`): no leaving the sandbox, no destructive git, no MCP writes, protected paths, the researcher allowlist, writers held to their worktree; fails closed | symlink `~/.claude/hooks/subagent-policy.sh` |
+| `hooks/report-check.sh` | PreToolUse(SubagentHandback)/SubagentStop hook: sends a delegated role's malformed report back, at most twice; fails open | symlink `~/.claude/hooks/report-check.sh` |
 | `hooks/danger-guard.sh` | PreToolUse(Bash) guard: two-tier confirmation for destructive git and `rm` ops | symlink `~/.claude/hooks/danger-guard.sh` |
 | `hooks/handoff-reminder.sh` | UserPromptSubmit hook: on a wrap-up / handoff / clear-memory signal, reminds me to invoke the `handoff` skill instead of improvising it | symlink `~/.claude/hooks/handoff-reminder.sh` |
 | `hooks/session-title.sh` | UserPromptSubmit hook: sets the terminal tab title to `[<repo>] <label>` via `sessionTitle`, so tabs are tellable apart; the label comes from the Stop-hook Haiku cache (`.title.txt`), falling back to the current prompt's first line | symlink `~/.claude/hooks/session-title.sh` |
@@ -86,6 +94,15 @@ ships but is opt-in, see its entry):
   (ids, type, paths, whether the final report validated) per delegated agent to
   `${XDG_STATE_HOME:-~/.local/state}/dotclaude/delegations.jsonl`, so `delegation-ledger open` can
   list unfinished delegations after a crash. Observer only: prints nothing, always exits 0.
+- **PreToolUse(`*`): `subagent-policy.sh`** (in this repo). Runs only for tool calls made inside a
+  subagent or teammate (the settings command exits before Python when the input has no
+  `agent_id`, so the main thread is never policed). The rules live in
+  `skills/delegation/policy.toml`, and `docs/delegation.md` lists them.
+  **Fails closed** for the tools it polices: a missing link, a crash or a hang blocks the delegated
+  call. Needs python3 3.12 or newer.
+- **PreToolUse(`SubagentHandback`) and SubagentStop: `report-check.sh`** (in this repo). It sends a
+  report from `Explore`, `researcher`, `reviewer` or `writer` back when it doesn't match
+  `report.schema.json`, at most twice. **Fails open**: a broken checker never swallows a report.
 - **UserPromptSubmit: `handoff-reminder.sh`** (in this repo). When a prompt is a genuine session
   wrap-up or context-reset command (`hand off`, `wrap up`, `stop here`, `clear context`, `/clear`),
   it injects a one-line reminder

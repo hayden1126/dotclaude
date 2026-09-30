@@ -23,8 +23,8 @@ what the agent falls back on when the brief doesn't cover a situation.>
 
 ## When blocked
 If a tool call is denied, or the brief is ambiguous about something that changes the result,
-stop that line of work. Add it to `blocked_actions` as `<intent>: <action> (<why>)`, using one
-of these intents:
+stop that line of work. Add it to `blocked_actions` as `<intent>: <action> (<why>)`. A
+`[subagent-policy]` denial names its intent in parentheses after the rule, so copy it. Otherwise pick one of:
 - `hard_stop`: never allowed. Don't retry.
 - `use_alternative`: a permitted way exists. Name it.
 - `scope_down`: doable in a smaller scope. Say what you would drop.

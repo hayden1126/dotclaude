@@ -90,7 +90,7 @@ done
 # ~/.local/bin does not exist, the skill still works via its absolute path.
 if [[ -d "$HOME/.local/bin" ]]; then
   for exe in "$REPO_DIR"/skills/*/scripts/deckkit \
-             "$REPO_DIR"/skills/delegation/scripts/{codex-delegate,delegation-ledger}; do
+             "$REPO_DIR"/skills/delegation/scripts/{codex-delegate,delegation-ledger,gh-public}; do
     [[ -x "$exe" ]] || continue
     link "$exe" "$HOME/.local/bin/$(basename "$exe")"
   done
@@ -266,6 +266,15 @@ with open(dst, 'w') as f:
 print('==> ccstatusline settings installed (ctx-breakdown + session-summary widgets wired)')
 PY
 
+# The sandbox block in settings.json sets failIfUnavailable: without these,
+# Claude Code refuses to start. Warn now rather than at the next launch.
+if [[ "$(uname -s)" == "Linux" ]]; then
+  for dep in bwrap socat; do
+    command -v "$dep" >/dev/null 2>&1 ||
+      echo "WARNING: $dep is missing; the sandbox (failIfUnavailable) will stop Claude Code from starting. sudo apt install bubblewrap socat" >&2
+  done
+fi
+
 # ---------------------------------------------------------------------------
 # 6. Final checklist
 # ---------------------------------------------------------------------------
@@ -300,6 +309,16 @@ cat <<'EOF'
      The agent-spawn guard (hooks/agent-spawn-guard.sh) needs python3 too and
      FAILS CLOSED: without python3 or the linked skills/delegation it blocks
      every Agent spawn. The delegation ledger hook fails open.
+
+ 6.  The Bash sandbox is ON in settings.json, with failIfUnavailable, so Claude
+     Code refuses to start without bubblewrap and socat (Linux/WSL2):
+       sudo apt install bubblewrap socat
+     (setup warns above if either is missing.) The seccomp filter ships inside
+     the native claude binary. `claude sandbox status` prints the posture.
+     The subagent policy hook (hooks/subagent-policy.sh, python3 >= 3.12)
+     FAILS CLOSED for delegated agents only; the main thread never runs it.
+     The report check (hooks/report-check.sh) fails open. See
+     docs/delegation.md for what each layer binds.
 
 ============================================================
 

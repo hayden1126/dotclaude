@@ -1,0 +1,187 @@
+# Subagent policy tables, read by scripts/subagent-policy on every subagent tool call.
+#
+# This file is the declared contract: change what subagents may do here, not in the script.
+# tests/delegation/test_subagent_policy.py loads it and checks the behavior it produces, and
+# the script refuses a malformed file (it denies the policed tools, it does not guess).
+#
+# The five intents and their footers follow cc-safety-net (github.com/kenryu42/cc-safety-net,
+# MIT, Copyright (c) 2026 J Liew), reworded for delegated agents. Every denial names one, so the
+# agent knows whether to retry, narrow the task or report it.
+
+[intents]
+hard_stop = "Do not retry this or look for a workaround (another tool, flag or path). List it in blocked_actions and continue with the rest of the task."
+use_alternative = "Do not retry the blocked form. Use the alternative named above, or list it in blocked_actions."
+scope_down = "Retry with a narrower, explicit target inside your own root. If the broad form is truly needed, list it in blocked_actions."
+manual_only = "Delegated agents never do this. If the task needs it, list it in blocked_actions so the lead or Hayden can run it."
+stop_and_explain = "Do not try variants. Rewrite the command in a plain form that can be checked, or list it in blocked_actions."
+
+[roles]
+# Roles whose reports must match report.schema.json (report-check).
+report_checked = ["Explore", "researcher", "reviewer", "writer"]
+# Roles whose shell runs on the [researcher] allowlist instead of the default rules.
+allowlisted_shell = ["researcher"]
+# Roles confined to their worktree (root = meta.json worktreePath).
+worktree_root = ["writer"]
+
+[shell]
+# Command words that are not programs on PATH but are fine to run. Anything else must resolve
+# on PATH or be a path to an executable, which is what turns an alias (gp = git push) or a shell
+# function into a denial.
+builtins = ["cd", "pushd", "popd", "echo", "printf", "true", "false", "test", "[", "[[", "pwd",
+  "export", "unset", "set", "shift", "read", "local", "declare", "typeset", "type", "which",
+  "command", "builtin", "exec", "time", "wait", "trap", "return", "exit", "break", "continue",
+  "let", "alias", "unalias", "hash", "umask", "ulimit", "jobs", "fg", "bg", "kill", "getopts",
+  "printenv", "whence", "where", "setopt", "unsetopt", "noglob", "nocorrect", ":", "eval",
+  "source", ".",
+  # Claude Code's shell snapshot defines these as functions around its embedded tools (grep is
+  # its bundled ugrep, so [researcher.denied_flags] covers ugrep's --filter). grep and find
+  # also resolve on PATH; rg may not.
+  "rg"]
+# Wrappers that run the rest of the command line: their inner command is checked instead.
+wrappers = ["sudo", "env", "command", "builtin", "exec", "time", "nohup", "nice", "timeout",
+  "stdbuf", "ionice", "xargs", "watch", "flock", "noglob", "nocorrect"]
+shells = ["bash", "sh", "zsh", "dash", "ksh"]
+# Environment assignments that change what a command executes.
+denied_env_prefixes = ["GIT_", "LD_", "DYLD_"]
+denied_env_names = ["BASH_ENV", "ENV", "ZDOTDIR", "PROMPT_COMMAND", "PAGER", "EDITOR", "VISUAL"]
+allowed_env = ["GIT_PAGER=cat", "PAGER=cat", "GIT_TERMINAL_PROMPT=0"]
+# `source`/`.` runs a file the policy can't see; only virtualenv activation is allowed.
+source_allowed_suffixes = ["/bin/activate"]
+max_command_bytes = 100000
+max_depth = 10
+
+[git]
+# Subcommands git ships with (git --list-cmds=main,nohelpers on 2.43). An unknown one is an
+# alias or an extension and is denied, so an alias can't hide a push.
+known = ["add", "am", "annotate", "apply", "archive", "bisect", "blame", "branch", "bundle",
+  "cat-file", "check-attr", "check-ignore", "check-mailmap", "check-ref-format", "checkout",
+  "cherry", "cherry-pick", "clean", "clone", "column", "commit", "commit-graph", "commit-tree",
+  "config", "count-objects", "describe", "diff", "diff-files", "diff-index", "diff-tree",
+  "difftool", "fetch", "filter-branch", "filter-repo", "format-patch", "fsck", "gc", "grep",
+  "hash-object", "help", "init", "interpret-trailers", "log", "ls-files", "ls-remote", "ls-tree",
+  "merge", "merge-base", "merge-file", "merge-tree", "mv", "name-rev", "notes", "prune", "pull",
+  "push", "range-diff", "read-tree", "rebase", "reflog", "remote", "repack", "replace", "reset",
+  "restore", "rev-list", "rev-parse", "revert", "rm", "send-pack", "shortlog", "show",
+  "show-branch", "show-ref", "sparse-checkout", "stash", "status", "submodule", "switch",
+  "symbolic-ref", "tag", "update-index", "update-ref", "var", "verify-commit", "verify-tag",
+  "version", "whatchanged", "worktree", "write-tree", "for-each-ref", "mktree"]
+# Flags denied on any subcommand: they write files or run a configured program.
+denied_flags = ["--output", "--ext-diff", "--upload-pack", "--receive-pack", "--exec",
+  "--open-files-in-pager", "--no-verify"]
+# Researcher: read-only subcommands. List-only forms of branch, tag, remote, stash, worktree
+# and config, and `clone` into a temp dir, are checked in code.
+read_only = ["log", "show", "diff", "blame", "annotate", "status", "ls-files", "ls-tree",
+  "rev-parse", "rev-list", "cat-file", "describe", "shortlog", "grep", "merge-base", "name-rev",
+  "for-each-ref", "show-ref", "count-objects", "version", "whatchanged", "diff-tree",
+  "diff-files", "diff-index", "show-branch", "range-diff", "check-ignore", "check-attr", "help",
+  "reflog", "branch", "tag", "remote", "stash", "worktree", "config", "clone"]
+
+[git.denied]
+# Denied outright for every delegated agent: subcommand = intent.
+push = "manual_only"
+"send-pack" = "manual_only"
+revert = "manual_only"
+rebase = "manual_only"
+reset = "use_alternative"
+clean = "use_alternative"
+"filter-branch" = "manual_only"
+"filter-repo" = "manual_only"
+replace = "manual_only"
+"update-ref" = "manual_only"
+"symbolic-ref" = "manual_only"
+prune = "manual_only"
+fetch = "manual_only"
+pull = "manual_only"
+"ls-remote" = "manual_only"
+"sparse-checkout" = "manual_only"
+
+[curl]
+# -X/--request with any other method is denied; so is every flag in send_flags.
+allowed_methods = ["GET", "HEAD"]
+# Flags that send data: denied for every delegated agent.
+send_flags = ["-d", "--data", "--data-ascii", "--data-binary", "--data-raw", "--data-urlencode",
+  "-F", "--form", "--form-string", "-T", "--upload-file", "-K", "--config", "--json"]
+# Researcher only: flags that write local files.
+output_flags = ["-o", "--output", "-O", "--remote-name", "--remote-name-all", "--output-dir",
+  "-D", "--dump-header", "-c", "--cookie-jar", "--trace", "--trace-ascii", "--libcurl",
+  "--etag-save", "--hsts", "--alt-svc", "--create-dirs"]
+
+[wget]
+send_flags = ["--post-data", "--post-file", "--method", "--body-data", "--body-file"]
+
+[rm]
+# Recursive removal is allowed only under these (plus the agent's root and allowWrite).
+temp_roots = ["/tmp/claude-{uid}"]
+
+[protect]
+# Never written by a delegated agent, through a file tool or a literal Bash target. Paths are
+# realpath-resolved, so a symlink into one of these counts. `~` is the home directory.
+write_denied = ["~/.claude", "~/.gitconfig", "~/.config/git", "~/.zshrc", "~/.zshenv",
+  "~/.zprofile", "~/.zlogin", "~/.bashrc", "~/.bash_profile", "~/.profile", "~/.oh-my-zsh",
+  "~/.config/gh", "~/.ssh", "~/.local/bin",
+  "~/dotclaude/settings.json", "~/dotclaude/hooks", "~/dotclaude/skills", "~/dotclaude/agents",
+  "~/dotclaude/CLAUDE.md", "~/dotclaude/codex", "~/.codex"]
+# Relative to the agent's root: its own project config and git internals.
+root_write_denied = [".claude", ".mcp.json", ".git/hooks", ".git/config", ".git/info"]
+root_write_allowed = [".claude/worktrees"]
+# Never read through Read, Grep or Glob (the sandbox's filesystem.denyRead is added at runtime,
+# so the two lists can't drift apart; these stay even where no sandbox is configured).
+read_denied = ["~/.config/gh", "~/.ssh", "~/.netrc", "~/.aws", "~/.claude/.credentials.json",
+  "~/.codex/auth.json", "~/.google_workspace_mcp", "~/.git-credentials", "~/.docker/config.json",
+  "~/.npmrc", "~/.pypirc", "~/.config/gcloud"]
+
+[researcher]
+# Programs the researcher's shell may run. Per-program restrictions follow; git and curl use
+# the tables above. `<program> --version` or `--help` alone is always allowed.
+programs = ["cat", "head", "tail", "wc", "ls", "file", "stat", "du", "df", "tree", "realpath",
+  "readlink", "basename", "dirname", "pwd", "which", "type", "whoami", "id", "uname", "date",
+  "ps", "pgrep", "nproc", "free", "strings", "xxd", "od", "hexdump", "md5sum", "sha1sum",
+  "sha256sum", "sha512sum", "base64", "column", "cut", "tr", "paste", "fold", "nl", "rev",
+  "expand", "unexpand", "seq", "echo", "printf", "true", "false", "test", "[", "printenv", "cd",
+  "jq", "yq", "diff", "cmp", "comm", "sort", "uniq", "grep", "egrep", "fgrep", "ugrep", "rg",
+  "find", "fd", "fdfind", "sed", "git", "curl", "wget", "gh-public", "sleep", "command", "env",
+  "timeout", "xargs", "time", "nice"]
+# Environment assignments the researcher may prefix a command with.
+allowed_env = ["LC_ALL", "LANG", "TZ", "NO_COLOR", "TERM", "COLUMNS", "GIT_PAGER", "PAGER",
+  "GIT_TERMINAL_PROMPT"]
+allowed_redirect_targets = ["/dev/null", "/dev/stdout", "/dev/stderr"]
+
+[researcher.denied_flags]
+# Per-program flags that write a file or run a program.
+grep = ["--filter", "--pre", "-Q", "--query", "--save-config"]
+egrep = ["--filter", "--pre", "-Q", "--query", "--save-config"]
+fgrep = ["--filter", "--pre", "-Q", "--query", "--save-config"]
+ugrep = ["--filter", "--pre", "-Q", "--query", "--save-config"]
+rg = ["--pre", "--pre-glob"]
+find = ["-delete", "-exec", "-execdir", "-ok", "-okdir", "-fprint", "-fprint0", "-fprintf", "-fls"]
+fd = ["-x", "--exec", "-X", "--exec-batch"]
+fdfind = ["-x", "--exec", "-X", "--exec-batch"]
+sed = ["-i", "--in-place"]
+sort = ["-o", "--output", "--compress-program"]
+tree = ["-o"]
+xxd = ["-r", "-revert"]
+date = ["-s", "--set"]
+yq = ["-i", "--inplace"]
+
+[mcp]
+# MCP tools a delegated agent may call: reads only, as fnmatch globs on the full tool name.
+# Anything unlisted is denied, so a new write tool fails closed until someone lists it here.
+read_tools = [
+  "mcp__gw-*__search_gmail_messages", "mcp__gw-*__get_gmail_*", "mcp__gw-*__list_gmail_*",
+  "mcp__gw-*__get_events", "mcp__gw-*__list_calendars", "mcp__gw-*__query_freebusy",
+  "mcp__gw-*__get_drive_file_content", "mcp__gw-*__get_drive_file_permissions",
+  "mcp__gw-*__get_drive_shareable_link", "mcp__gw-*__check_drive_file_public_access",
+  "mcp__gw-*__list_drive_items", "mcp__gw-*__search_drive_files", "mcp__gw-*__get_form",
+  "mcp__gw-*__get_form_response", "mcp__gw-*__list_form_responses",
+  "mcp__notion__notion-search*", "mcp__notion__notion-fetch", "mcp__notion__notion-get-*",
+  "mcp__notion__notion-list-*", "mcp__notion__notion-query-*",
+  "mcp__notion__notion-read-session-event",
+  "mcp__notion-write__API-retrieve-*", "mcp__notion-write__API-get-block-children",
+  "mcp__notion-write__API-query-data-source", "mcp__notion-write__API-post-search",
+  "mcp__notion-write__API-list-data-source-templates",
+  "mcp__sender__get_*", "mcp__sender__list_*", "mcp__sender__validate_workflow",
+  "mcp__plugin_context7_context7__resolve-library-id", "mcp__plugin_context7_context7__query-docs",
+  "mcp__claude_ai_Claude_Docs__read", "mcp__claude_ai_Claude_Docs__query",
+  "mcp__claude_ai_Claude_Docs__guide",
+  "mcp__*chrome-devtools__list_*", "mcp__*chrome-devtools__get_*",
+  "mcp__*chrome-devtools__take_snapshot", "mcp__*chrome-devtools__take_screenshot"]

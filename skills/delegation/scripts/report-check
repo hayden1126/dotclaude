@@ -1,0 +1,167 @@
+#!/usr/bin/env python3
+"""report-check: send a delegated role's malformed report back, at most twice.
+
+  PreToolUse(SubagentHandback)  auto mode: the report is tool_input.message
+  SubagentStop                  other modes: the report is last_assistant_message
+
+Scope:
+- It applies only to the roles in policy.toml [roles].report_checked, whose agent files end
+  with the report.schema.json contract.
+- Agent-team teammates are skipped: their stops fire per message, and a reader's
+  per-section reply isn't a report.
+- An empty SubagentStop message is skipped. That's auto mode, and the handback path already
+  checked it.
+
+Rejections:
+- A rejection names the schema errors and says "attempt N of 3".
+- The third attempt passes whatever it is, and the ledger then records report_ok: false.
+- The counter is a file per session and agent under $XDG_STATE_HOME/dotclaude/report-check/.
+  It is cleared on accept or when it gives up, and files older than a day are pruned.
+- The pattern is from breadcrumb (github.com/oscarthroedsson/breadcrumb, MIT), reimplemented.
+
+FAILS OPEN on purpose. It checks acceptance, not authority, and a denied handback gets only 3
+nudges before Claude Code drops the report. So any error here allows the report, and a cap of
+2 rejections stays inside those 3 nudges.
+"""
+import glob
+import json
+import os
+import re
+import sys
+import time
+import tomllib
+
+HERE = os.path.dirname(os.path.realpath(__file__))
+sys.path.insert(0, HERE)
+import delegation_common as dc  # noqa: E402
+
+POLICY_PATH = os.environ.get("DELEGATION_POLICY") or os.path.join(os.path.dirname(HERE),
+                                                                  "policy.toml")
+MAX_REJECTIONS = 2
+PRUNE_SECONDS = 86400
+
+
+def checked_roles():
+    with open(POLICY_PATH, "rb") as f:
+        return set(tomllib.load(f)["roles"]["report_checked"])
+
+
+def norm_id(agent_id):
+    s = str(agent_id or "")
+    return s[len("agent-"):] if s.startswith("agent-") else s
+
+
+def meta_for(data):
+    tp = data.get("transcript_path") or ""
+    base = tp[:-len(".jsonl")] if tp.endswith(".jsonl") else tp
+    path = os.path.join(base, "subagents", f"agent-{norm_id(data.get('agent_id'))}.meta.json")
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
+def counter_dir():
+    d = os.path.join(dc.state_dir(), "report-check")
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+def counter_path(data):
+    key = f"{data.get('session_id') or 'nosession'}-{norm_id(data.get('agent_id')) or 'noagent'}"
+    return os.path.join(counter_dir(), re.sub(r"[^A-Za-z0-9._-]", "_", key))
+
+
+def prune():
+    cutoff = time.time() - PRUNE_SECONDS
+    for p in glob.glob(os.path.join(counter_dir(), "*")):
+        try:
+            if os.path.getmtime(p) < cutoff:
+                os.remove(p)
+        except OSError:
+            pass
+
+
+def bump(path):
+    try:
+        with open(path) as f:
+            n = int(f.read().strip() or 0)
+    except (OSError, ValueError):
+        n = 0
+    n += 1
+    with open(path, "w") as f:
+        f.write(str(n))
+    return n
+
+
+def clear(path):
+    try:
+        os.remove(path)
+    except OSError:
+        pass
+
+
+def problems(text):
+    obj, why = dc.extract_report(text)
+    if obj is None:
+        return [why]
+    return dc.validate_report(obj)
+
+
+def rejection(errs, attempt):
+    return ("[report-check] Your report doesn't match the report contract "
+            f"(attempt {attempt} of {MAX_REJECTIONS + 1}): " + "; ".join(errs[:4]) + ". "
+            "Send it again, ending with one ```json block that has exactly these fields: "
+            'status ("done", "partial", "blocked" or "failed"), summary (a string), artifacts '
+            "(an array of strings) and blocked_actions (an array of strings). Keep your findings "
+            "above the block.")
+
+
+def decide(data, roles=None):
+    """None to accept, else the hook output dict."""
+    event = data.get("hook_event_name")
+    if not data.get("agent_id") or data.get("agent_type") not in (roles or checked_roles()):
+        return None
+    if meta_for(data).get("teamName"):
+        return None
+    if event == "PreToolUse":
+        if data.get("tool_name") != "SubagentHandback":
+            return None
+        text = (data.get("tool_input") or {}).get("message") or ""
+    elif event == "SubagentStop":
+        text = data.get("last_assistant_message") or ""
+        if not text.strip():
+            return None
+    else:
+        return None
+    prune()
+    path = counter_path(data)
+    errs = problems(text)
+    if not errs:
+        clear(path)
+        return None
+    attempt = bump(path)
+    if attempt > MAX_REJECTIONS:
+        clear(path)
+        return None
+    reason = rejection(errs, attempt)
+    if event == "PreToolUse":
+        return {"hookSpecificOutput": {"hookEventName": "PreToolUse",
+                                       "permissionDecision": "deny",
+                                       "permissionDecisionReason": reason}}
+    return {"decision": "block", "reason": reason}
+
+
+def main():
+    try:
+        out = decide(json.loads(sys.stdin.read() or "{}"))
+        if out:
+            print(json.dumps(out))
+    except Exception:  # noqa: BLE001  fail open: never swallow a report
+        pass
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
