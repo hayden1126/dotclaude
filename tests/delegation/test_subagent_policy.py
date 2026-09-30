@@ -4,6 +4,7 @@ Each test runs against a temporary home whose user settings carry this repo's ba
 `sandbox` block, so the excluded-command rules are the ones that ship."""
 import json
 import os
+import re
 import subprocess
 import tempfile
 import unittest
@@ -23,13 +24,19 @@ def _test_tmp_dir():
     """Where the fake homes go. Inside Claude Code's sandbox the system temp dir is
     /tmp/claude-<uid>, one of the policy's own temp roots, so every "outside the root" case
     would pass as a temp write. There the fake homes go in the repo instead (gitignored),
-    which a sandboxed session rooted in the repo can write."""
+    which a sandboxed session rooted in the repo can write. A checkout that is itself a
+    Claude worktree can't host them: the policy would read every fake path as inside that
+    worktree, and the one other writable place, the git common dir, trips rm-git-metadata."""
     base = os.path.realpath(tempfile.gettempdir())
     roots = [os.path.realpath(sp.expand(r, os.path.expanduser("~")))
              for r in POLICY["rm"]["temp_roots"]]
     if not any(sp.under(base, r) for r in roots):
         return None
-    local = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".tmp")
+    local = os.path.join(os.path.dirname(os.path.realpath(__file__)), ".tmp")
+    if "/.claude/worktrees/" in local:
+        raise RuntimeError("sandboxed in a checkout under .claude/worktrees/, the policy tests "
+                           "have nowhere clean to build their fake homes; run this suite with "
+                           "the sandbox off, or from a checkout outside .claude/worktrees/")
     os.makedirs(local, exist_ok=True)
     return local
 
@@ -48,7 +55,7 @@ class Base(unittest.TestCase):
         os.makedirs(self.wt)
         os.makedirs(os.path.join(self.proj, "src"))
         self.slug_dir = os.path.join(self.home, ".claude", "projects",
-                                     self.proj.replace("/", "-").replace(".", "-"))
+                                     re.sub(r"[^A-Za-z0-9]", "-", self.proj))
         os.makedirs(os.path.join(self.slug_dir, "s1", "subagents"))
         self.transcript = os.path.join(self.slug_dir, "s1.jsonl")
         bindir = os.path.join(self.home, "bin")  # gh-public as setup.sh links it, and a script
@@ -475,10 +482,33 @@ class Writer(Base):
         self.assertDenied(self.decide("Bash", {"command": "ls"}, atype="writer", cwd=self.proj,
                                       aid="nometa"), "worktree-root", "stop_and_explain")
 
+    def test_a_nested_worktree_resolves_to_the_innermost(self):
+        # A lead session that itself runs in a worktree puts its agents' worktrees inside it.
+        outer = os.path.join(self.proj, ".claude", "worktrees", "outer")
+        inner = os.path.join(outer, ".claude", "worktrees", "agent-w2")
+        os.makedirs(inner)
+        # The agent's root is the innermost worktree; the protected area is the outermost
+        # checkout, which holds both the lead's worktree and the real main checkout.
+        a = sp.Analyzer(self.ev("Bash", {"command": "ls"}, atype="writer", cwd=inner,
+                                aid="nometa"), POLICY, home=self.home)
+        self.assertEqual((a.worktree, a.main_root), (inner, self.proj))
+        for target in ("../escape.txt", f"{self.proj}/src/x"):
+            self.assertDenied(self.decide("Bash", {"command": f"echo x > {target}"},
+                                          atype="writer", cwd=inner, aid="nometa"),
+                              "worktree-root", msg=target)
+
 
 class Researcher(Base):
     def r(self, cmd):
         return self.bash(cmd, atype="researcher")
+
+    def test_a_researcher_teammate_gets_the_allowlist(self):
+        # A teammate's hook agent_type is its name; its role comes from meta.json.
+        self.meta("t1", agentType="team-probe", name="team-probe", customAgentType="researcher",
+                  taskKind="in_process_teammate")
+        self.assertDenied(self.bash("touch x", atype="team-probe", aid="t1"),
+                          "researcher-program")
+        self.assertIsNone(self.bash("git log -1", atype="team-probe", aid="t1"))
 
     def test_allowlisted_reads_pass(self):
         for cmd in ("git log --oneline -5", "git show HEAD --stat", "git blame -L 1,5 f",

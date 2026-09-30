@@ -90,7 +90,7 @@ Letting a reader's accumulated confusion bleed into later sections is deliberate
 
 ## Orchestration mechanics
 
-- One-shot subagents, one per persona. Spawn with a stable name; message each reader to deliver the next section. Address by ID if name lookup fails after the first round trip.
+- One-shot subagents, one per persona. Spawn each without a `name` (a named spawn starts an agent-team teammate, which the delegation spawn guard denies), keep the id each spawn returns, and SendMessage that id to deliver the next section.
 - Send sections to all readers in lockstep and wait for every response before advancing. Sections out of order break the coherence signal.
 - Consolidation is parent-owned: convergence judgment stays in one place, never delegated to a reader or a coordinator.
 

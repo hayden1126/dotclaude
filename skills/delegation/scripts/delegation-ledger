@@ -4,7 +4,7 @@
   delegation-ledger hook            SubagentStart/SubagentStop hook body (stdin: hook JSON)
   delegation-ledger open [--hours N] [--silent-min M]
                                     agents whose latest event is not a stop, with evidence
-  delegation-ledger tail [-n N]     the last N rows (including subagent-policy denials)
+  delegation-ledger tail [-n N]     the last N rows (including policy and spawn-guard denials)
   delegation-ledger audit [--hours N]
                                     is enforcement still binding? policy heartbeat, writers that
                                     changed the main checkout, rejected reports, denials
@@ -80,7 +80,7 @@ def main_status(cwd):
     """sha256 of the main checkout's `git status` for an agent in a worktree, else None."""
     if not cwd or "/.claude/worktrees/" not in cwd:
         return None
-    main = cwd.split("/.claude/worktrees/")[0]
+    main = cwd.split("/.claude/worktrees/", 1)[0]  # the outermost, as subagent-policy protects
     try:
         out = subprocess.run(["git", "-C", main, "status", "--porcelain=v1", "-uall"],
                              capture_output=True, timeout=3).stdout
@@ -95,13 +95,19 @@ def cmd_hook(_args):
         event = data.get("hook_event_name")
         if event not in ("SubagentStart", "SubagentStop"):
             raise ValueError(f"unexpected hook_event_name {event!r}")
+        meta = dc.agent_meta(data)
         base = {
             "ts": dc.now_iso(),
             "runner": "claude",
             "id": norm_id(data.get("agent_id")),
-            "agent_type": data.get("agent_type"),
+            "agent_type": dc.agent_role(data, meta),
             "session_id": data.get("session_id"),
         }
+        if meta.get("name"):
+            base["name"] = meta["name"]  # agent_type is the role; for a teammate this its name
+        if meta.get("teamName"):
+            # Its stops fire per message, so a stop row's report_ok isn't a report's verdict.
+            base["teammate"] = True
         if not base["id"]:
             raise ValueError(f"{event}: no agent_id in hook input")
         if not base["agent_type"]:
@@ -285,7 +291,7 @@ def cmd_audit(args):
     except (OSError, ValueError, KeyError):
         roles = {"Explore", "researcher", "reviewer", "writer"}
     bad = [e for e in folded.values() if e.get("event") == "stop" and e.get("report_ok") is False
-           and e.get("agent_type") in roles]
+           and e.get("agent_type") in roles and not e.get("teammate")]
     print(f"{'WARN' if bad else 'ok  '} reports failing the contract: {len(bad)}")
     warn += bool(bad)
     denials = collections.Counter((r.get("agent_type"), r.get("rule")) for r in rows

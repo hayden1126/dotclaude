@@ -147,6 +147,54 @@ class LedgerHook(unittest.TestCase):
         err = os.path.join(self.tmp.name, "state", "dotclaude", "delegation-ledger.err")
         self.assertTrue(os.path.getsize(err) > 0)
 
+    def test_a_teammate_is_recorded_by_its_role_and_name(self):
+        # A teammate's hook agent_type is its name; the role is meta.json's customAgentType
+        # (observed on 2.1.286).
+        sub = os.path.join(self.tmp.name, "s1", "subagents")
+        os.makedirs(sub)
+        with open(os.path.join(sub, "agent-a1.meta.json"), "w") as f:
+            json.dump({"agentType": "team-x", "name": "team-x", "customAgentType": "researcher",
+                       "taskKind": "in_process_teammate", "teamName": "session-s1"}, f)
+        self.hook(dict(self.start(), agent_type="team-x"))
+        self.hook(dict(self.stop(), agent_type="team-x",
+                       transcript_path=os.path.join(self.tmp.name, "s1.jsonl")))
+        self.assertEqual([(r["agent_type"], r.get("name")) for r in self.rows()],
+                         [("researcher", "team-x")] * 2)
+
+    def test_a_teammate_reply_is_not_a_failed_report(self):
+        # A teammate's stops fire per message, and report-check skips teammates, so audit must
+        # not count a checked-role teammate's plain reply as a report failing the contract.
+        sub = os.path.join(self.tmp.name, "s1", "subagents")
+        os.makedirs(sub)
+        with open(os.path.join(sub, "agent-a1.meta.json"), "w") as f:
+            json.dump({"agentType": "team-x", "name": "team-x", "customAgentType": "researcher",
+                       "taskKind": "in_process_teammate", "teamName": "session-s1"}, f)
+        tp = os.path.join(self.tmp.name, "s1.jsonl")
+        self.hook(dict(self.start(), agent_type="team-x"))
+        self.hook(dict(self.stop(msg="section 2 is unclear"), agent_type="team-x",
+                       transcript_path=tp))
+        self.assertTrue(self.rows()[-1]["teammate"])
+        p = subprocess.run(["python3", LEDGER, "audit"], capture_output=True, text=True,
+                           env=self.env)
+        self.assertIn("ok   reports failing the contract: 0", p.stdout)
+
+    def test_a_second_stop_for_one_agent_folds_to_one_entry(self):
+        # Auto mode can stop an agent twice (a plain reply, then its SubagentHandback).
+        self.hook(self.start())
+        self.hook(self.stop(msg="plain reply"))
+        self.hook(self.stop())
+        folded = dc.fold(self.rows_via_module())
+        self.assertEqual(len(folded), 1)
+        self.assertTrue(folded[("claude", "a1")]["report_ok"])
+
+    def test_agent_role_falls_back_to_the_hook_type(self):
+        self.assertEqual(dc.agent_role({"agent_type": "Explore"}, {}), "Explore")
+        self.assertEqual(dc.agent_role({"agent_type": "team-x"}, {"customAgentType": "writer"}),
+                         "writer")
+        self.assertEqual(dc.agent_role({}, {}), "")
+        self.assertEqual(dc.agent_meta({"transcript_path": "/nonexistent/s.jsonl",
+                                        "agent_id": "a1"}), {})
+
     def test_teammate_restarts_fold_to_one_entry(self):
         for _ in range(3):
             self.hook(self.start())

@@ -16,7 +16,9 @@ Rejections:
 - A rejection names the schema errors and says "attempt N of 3".
 - The third attempt passes whatever it is, and the ledger then records report_ok: false.
 - The counter is a file per session and agent under $XDG_STATE_HOME/dotclaude/report-check/.
-  It is cleared on accept or when it gives up, and files older than a day are pruned.
+  A valid report clears it. Once it gives up it stays given up for that agent (files older
+  than a day are pruned), so a hook registered twice (user and project settings), which bumps
+  it twice per stop, can't cycle 1, 2, 1, 2 and block forever.
 - The pattern is from breadcrumb (github.com/oscarthroedsson/breadcrumb, MIT), reimplemented.
 
 FAILS OPEN on purpose. It checks acceptance, not authority, and a denied handback gets only 3
@@ -39,6 +41,7 @@ POLICY_PATH = os.environ.get("DELEGATION_POLICY") or os.path.join(os.path.dirnam
                                                                   "policy.toml")
 MAX_REJECTIONS = 2
 PRUNE_SECONDS = 86400
+GAVE_UP = "gave-up"
 
 
 def checked_roles():
@@ -49,17 +52,6 @@ def checked_roles():
 def norm_id(agent_id):
     s = str(agent_id or "")
     return s[len("agent-"):] if s.startswith("agent-") else s
-
-
-def meta_for(data):
-    tp = data.get("transcript_path") or ""
-    base = tp[:-len(".jsonl")] if tp.endswith(".jsonl") else tp
-    path = os.path.join(base, "subagents", f"agent-{norm_id(data.get('agent_id'))}.meta.json")
-    try:
-        with open(path) as f:
-            return json.load(f)
-    except (OSError, ValueError):
-        return {}
 
 
 def counter_dir():
@@ -83,15 +75,22 @@ def prune():
             pass
 
 
-def bump(path):
+def read_counter(path):
     try:
         with open(path) as f:
-            n = int(f.read().strip() or 0)
-    except (OSError, ValueError):
+            return f.read().strip()
+    except OSError:
+        return ""
+
+
+def bump(path):
+    try:
+        n = int(read_counter(path) or 0)
+    except ValueError:
         n = 0
     n += 1
     with open(path, "w") as f:
-        f.write(str(n))
+        f.write(str(n) if n <= MAX_REJECTIONS else GAVE_UP)
     return n
 
 
@@ -121,9 +120,10 @@ def rejection(errs, attempt):
 def decide(data, roles=None):
     """None to accept, else the hook output dict."""
     event = data.get("hook_event_name")
-    if not data.get("agent_id") or data.get("agent_type") not in (roles or checked_roles()):
+    if not data.get("agent_id"):
         return None
-    if meta_for(data).get("teamName"):
+    meta = dc.agent_meta(data)
+    if dc.agent_role(data, meta) not in (roles or checked_roles()) or meta.get("teamName"):
         return None
     if event == "PreToolUse":
         if data.get("tool_name") != "SubagentHandback":
@@ -141,9 +141,10 @@ def decide(data, roles=None):
     if not errs:
         clear(path)
         return None
+    if read_counter(path) == GAVE_UP:
+        return None
     attempt = bump(path)
     if attempt > MAX_REJECTIONS:
-        clear(path)
         return None
     reason = rejection(errs, attempt)
     if event == "PreToolUse":

@@ -25,34 +25,41 @@ stored here).
   "Configuration mechanism").
 - **Codex CLI integrated** (2026-09-13, `feat/codex-cli-integration`; wiring and rationale in
   `docs/codex.md`).
-- **Session-summary hook hardened against prompt injection** (2026-08-24, base `9fb3ebb`; design in
-  `~/.claude/plans/regarding-claude-summary-in-valiant-tower.md`). The `system`-prompt isolation is the
-  real defense; the refusal-shape regex is a backstop.
-- **Terminal tab title decoupled from `ai-title`** (2026-08-23, PR #22; design in
-  `~/.claude/plans/ok-proceed-soft-prism.md`; gotcha [[cc-ai-title-suppressed-by-custom-title]]).
-- **Session-summary status-line row** (2026-08-18, PR #21; design in
-  `~/.claude/plans/in-an-earlier-session-toasty-marshmallow.md`). Caveat: the OAuth credentials file it
-  reads is undocumented and its token rotates; a failed read keeps the last summary.
-- **Loose decisions resolved** (2026-08-18, PR #20; design in `~/.claude/plans/status-enumerated-kitten.md`):
-  danger-guard ships but is opt-in; the CLAUDE.md parallel-edits carve-out.
-- **Terminal tab title hook** (2026-08-17; design in `~/.claude/plans/status-hazy-robin.md`).
-- **`frontend-ui-discipline` skill** (2026-08-16/17; layout-bug scar merged as PR #25;
-  [[frontend-ui-discipline-skill]]).
-- **Handoff: proactive CLAUDE.md trigger** (2026-08-16, `6c775d8`; [[dotclaude-handoff-skill]]).
-- **`vetting-sources` skill** (2026-08-15, `245eeda`).
-- **`deck-production` block S1 of 6** (2026-08-08, base `8602081`; S1-S6 plan in
-  `~/.claude/plans/explore-our-entire-workflow-bright-shamir.md`).
-- Older (git and memory hold the detail): ctx chip percent (PR #12 follow-up), handoff-lifecycle
-  hardening (`4df5a49..af14b97`), WSL2 `chrome-devtools-mcp` (PR #13, [[dotclaude-chrome-devtools-wsl]]),
-  research-sourcing (PR #10), staged-reader-review upgrade, danger-guard opt-in auto mode.
+- Older (git, the PRs and memory hold the detail): session-summary prompt-injection hardening
+  (2026-08-24), tab title decoupled from `ai-title` (PR #22,
+  [[cc-ai-title-suppressed-by-custom-title]]), the session-summary status-line row (PR #21,
+  [[dotclaude-session-summary-statusline]]), loose decisions (PR #20: danger-guard opt-in, the
+  parallel-edits carve-out), the tab title hook, `frontend-ui-discipline` (PR #25), the handoff
+  CLAUDE.md trigger, `vetting-sources`, `deck-production` S1, and earlier work back to PR #10.
 
 ## In flight
-- **Delegation hardening: Stage 2 live; Stage 3 (upgrade canary) is next** (`docs/delegation.md`,
-  "Next"). `skills/delegation/SKILL.md` is the operating guide. Open items:
+- **Delegation hardening Stage 3: Step 0 and A0 built** on `feat/delegation-stage3`, in the worktree
+  `.claude/worktrees/stage3`, so the live symlinked hooks stay on `main` until the merge. The plan
+  is `~/.claude/plans/lets-move-on-to-refactored-pascal.md`; this block's execution plan is
+  `~/.claude/plans/continue-from-status-md-lovely-puzzle.md`. The findings are in
+  `docs/delegation.md` "Stage 3":
+  - named spawns are denied unless their name starts with `team-`;
+  - teammates are policed by their role (meta.json `customAgentType`), not their name;
+  - report-check can no longer loop under a duplicated hook;
+  - the live harness now runs only the checkout's hooks (`--setting-sources project,local`);
+  - `staged-reader-review` now spawns its readers unnamed and messages them by id (a named spawn
+    would be denied). It hasn't run live that way yet.
+
+  Commit range `main..feat/delegation-stage3` (base `d46449b`). PR state:
+  `gh pr list --head feat/delegation-stage3 --state all`. Merging is the install (all symlinks, no
+  `setup.sh` re-run). After it merges, remove the worktree (`git worktree remove
+  .claude/worktrees/stage3`) or reuse it for A4.
+
+  **Next: A4 (due nudges) and A5 (the one-command canary)**, then A1 → A3 → A2 → A6. Decisions
+  already made: deadlines nudge, then hard-stop; liveness shows in the tmux status bar and a CLI.
+  A1 must catch an agent that sits in one long tool call, because the stall timer doesn't (P2).
+  A5's canary should fold in `run.py --stage 3`.
+- **Delegation hardening: Stage 2 live** (`docs/delegation.md`). `skills/delegation/SKILL.md` is the
+  operating guide. Open items:
   - **After 2026-10-07:** run `delegation-ledger sandbox-denials --days 7` and add the hosts that were
     actually needed to `sandbox.network.allowedDomains`.
   - **Not observed live:** a real agent's `dangerouslyDisableSandbox` being denied. The teammate probe
-    declined to try it; the harness covers the rule (37/37).
+    declined to try it; the harness covers the rule (its `policy` case).
   - **Other machines:** install by hand per the docs' install order (the policy hook fails closed).
     bubblewrap and socat are required.
   - **Optional:** a no-scope classic GitHub token at `~/.config/dotclaude/github-public-token` enables
@@ -69,8 +76,9 @@ stored here).
   the friend it works). Separate, Hayden-side: wire Codex skills into
   `setup.sh` (today `~/.codex/skills/{coding-practices,frontend-ui-discipline}` are hand-made
   symlinks, so a fresh setup gives Codex no skills; `writing-voice` is Hayden's own voice, exclude).
-- **`deck-production` blocks S2-S6.** S1 shipped and verified; the skill has the phase model and the core
-  loop but no orchestration layer, so an agent cannot yet run a deck end to end.
+- **`deck-production` blocks S2-S6** (plan: `~/.claude/plans/explore-our-entire-workflow-bright-shamir.md`).
+  S1 shipped and verified (base `8602081`); the skill has the phase model and the core loop but no
+  orchestration layer, so an agent cannot yet run a deck end to end.
   - **Next concrete step: block S3, the geometry gate** (`geometry.py` + `geometry_probe.js` + a
     declarative `geometry.rules.toml`), because it catches the defect class screenshots miss. Its
     verification target is sharp and already specified: the gate must FAIL on a fixture reproducing the
@@ -85,6 +93,14 @@ stored here).
     The plan file owns block numbering only, and must not leak "S<n>" into shipped artifacts.
 
 ## Blocked / decisions needed
+- **Policy: a program the same command line creates.** `uv venv .venv && .venv/bin/python ...` is
+  denied as `unknown-command`, since `.venv` doesn't exist when the hook checks (`docs/delegation.md`,
+  known gaps). Recommended: keep it strict and make the denial say "run the creating step as its own
+  call". The looser option is to accept any unresolved path that contains `/`. Hayden's call.
+- **A stale `.git/config.lock` in `~/dotclaude`** (empty, read-only, created 2026-09-30 17:34 during
+  a sandboxed session, likely a sandbox mount stub left behind). It blocks every `git config` write
+  in the repo, which is why `git push -u` couldn't record this branch's upstream. Deleting it needs
+  Hayden's OK; then `git branch --set-upstream-to=origin/feat/delegation-stage3`.
 - **Status-line widget's `ai-title` fallback is now dead.** `statusline/session-summary.py`
   (`scan_ai_title`) still falls back to Claude's `ai-title` before the first Stop summary lands, but
   the title work above suppresses `ai-title` generation, so that record is now generally never
@@ -106,11 +122,14 @@ stored here).
   record, or leave it as history.
 
 ## Notes for next session
-- **Verify delegation before touching it:** `python3 -m unittest discover -s tests/delegation -t tests/delegation`
-  (138 tests, no model calls; they pass inside the sandbox too), and the installer helpers with
-  `python3 -m unittest discover -s tests/setup -t tests/setup`. The live harness `tests/delegation/run.py --runner claude|codex` spends
-  model calls. Run it after changing a role, a hook or `codex-delegate`, and after a Claude Code upgrade
-  until the Stage 3 canary exists.
+- **Verify delegation before touching it:**
+  `python3 -m unittest discover -s tests/delegation -t tests/delegation` and
+  `python3 -m unittest discover -s tests/setup -t tests/setup` make no model calls. They pass inside
+  the sandbox, except from a checkout under `.claude/worktrees/`, where the policy tests refuse and
+  need the sandbox off. The live harness `tests/delegation/run.py --runner claude|codex` spends model
+  calls (and needs the sandbox off for the credentials). Run it after changing a role, a hook or
+  `codex-delegate`, and after a Claude Code upgrade until the Stage 3 canary exists. Counts and
+  results live in `docs/delegation.md`, "Tests".
 - **Verify `deck-production` before touching it:** run `deckkit regress` as the README in the
   private client repo's `decks/_parity/` shows; it must print `parity: green`. `--config` and
   `--goldens` are required, because no fixtures ship in this public repo. It runs read-only and asserts
@@ -127,15 +146,11 @@ stored here).
 - research-sourcing follow-ups (all optional): the thorough-tier planted-fabrication spot-check is
   specified but never exercised end to end; only tested with Agent-tool subagents, not a real
   Workflow-tool run.
-- Deferred (also in [[dotclaude-handoff-skill]]): (1) the deterministic PreCompact/Stop safety-net hook,
-  revisit only after testing the `SessionStart` `compact`-matcher re-inject path (bug #15174); (2) the
-  autonomous loop-engineering handoff (a Python orchestrator step that refreshes the RESUME block).
-- Evaluated and SKIPPED, do not re-raise: (a) wiring `handoff-reminder.sh` into the loop-engineering inner
-  loop (the puppet gets one machine prompt with no wrap-up phrase, so the hook has no addressee; the skill
-  already inherits there); (b) cross-platform notifiers for the toast (YAGNI on this WSL-only setup);
-  (c) a CLAUDE.md nudge to force more native task-list creation so the task panel shows progress more often,
-  rejected: the new session-summary line already grounds "what/where" without depending on task hygiene, a
-  blanket nudge fights the fast-lane rule, and stale/unmarked tasks mislead. Revisit only if a *medium*-work
-  gap (4-6 steps, no tasks created) shows up in practice, and then scope it to multi-step work, not "always".
-- A fresh clone on a new WSL machine needs `./setup-chrome-wsl.sh` run once (the MCP override lives in
-  `~/.claude.json` user scope, not the repo); non-WSL machines need nothing.
+- Deferred handoff work (the PreCompact/Stop safety net, the loop-engineering handoff) is in
+  [[dotclaude-handoff-skill]].
+- Evaluated and SKIPPED, do not re-raise: (a) wiring `handoff-reminder.sh` into the loop-engineering
+  inner loop (its one machine prompt has no wrap-up phrase, so the hook has no addressee); (b)
+  cross-platform notifiers for the toast (YAGNI on WSL-only); (c) a CLAUDE.md nudge to create more
+  native tasks (the session-summary line already grounds "what/where", and a blanket nudge fights the
+  fast lane). Revisit (c) only if a 4-6 step job with no tasks shows up, scoped to multi-step work.
+- A fresh WSL clone needs `./setup-chrome-wsl.sh` once ([[dotclaude-chrome-devtools-wsl]]).
