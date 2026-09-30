@@ -228,7 +228,7 @@ class Analyzer:
         self.agent_type = data.get("agent_type") or ""
         self.cwd = os.path.realpath(data.get("cwd") or os.getcwd())
         self.worktree = self._worktree()
-        self.main_root = (self.worktree.split("/.claude/worktrees/")[0]
+        self.main_root = (self.worktree.rsplit("/.claude/worktrees/", 1)[0]
                           if self.worktree else None)
         self.project = self.main_root or self._project_dir()
         self.root = self.worktree or self.project
@@ -262,8 +262,9 @@ class Analyzer:
             except (OSError, ValueError):
                 pass
         if "/.claude/worktrees/" in self.cwd + "/":
-            parts = self.cwd.split("/.claude/worktrees/")
-            return parts[0] + "/.claude/worktrees/" + parts[1].split("/")[0]
+            # The innermost one: a lead session in a worktree nests its agents' worktrees.
+            head, tail = self.cwd.rsplit("/.claude/worktrees/", 1)
+            return head + "/.claude/worktrees/" + tail.split("/")[0]
         return None
 
     def _project_dir(self):

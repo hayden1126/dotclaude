@@ -23,13 +23,19 @@ def _test_tmp_dir():
     """Where the fake homes go. Inside Claude Code's sandbox the system temp dir is
     /tmp/claude-<uid>, one of the policy's own temp roots, so every "outside the root" case
     would pass as a temp write. There the fake homes go in the repo instead (gitignored),
-    which a sandboxed session rooted in the repo can write."""
+    which a sandboxed session rooted in the repo can write. A checkout that is itself a
+    Claude worktree can't host them: the policy would read every fake path as inside that
+    worktree, and the one other writable place, the git common dir, trips rm-git-metadata."""
     base = os.path.realpath(tempfile.gettempdir())
     roots = [os.path.realpath(sp.expand(r, os.path.expanduser("~")))
              for r in POLICY["rm"]["temp_roots"]]
     if not any(sp.under(base, r) for r in roots):
         return None
-    local = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".tmp")
+    local = os.path.join(os.path.dirname(os.path.realpath(__file__)), ".tmp")
+    if "/.claude/worktrees/" in local:
+        raise RuntimeError("sandboxed in a checkout under .claude/worktrees/, the policy tests "
+                           "have nowhere clean to build their fake homes; run this suite with "
+                           "the sandbox off, or from a checkout outside .claude/worktrees/")
     os.makedirs(local, exist_ok=True)
     return local
 
@@ -474,6 +480,17 @@ class Writer(Base):
                                       aid="nometa"))
         self.assertDenied(self.decide("Bash", {"command": "ls"}, atype="writer", cwd=self.proj,
                                       aid="nometa"), "worktree-root", "stop_and_explain")
+
+    def test_a_nested_worktree_resolves_to_the_innermost(self):
+        # A lead session that itself runs in a worktree puts its agents' worktrees inside it.
+        outer = os.path.join(self.proj, ".claude", "worktrees", "outer")
+        inner = os.path.join(outer, ".claude", "worktrees", "agent-w2")
+        os.makedirs(inner)
+        a = sp.Analyzer(self.ev("Bash", {"command": "ls"}, atype="writer", cwd=inner,
+                                aid="nometa"), POLICY, home=self.home)
+        self.assertEqual((a.worktree, a.main_root), (inner, outer))
+        self.assertDenied(self.decide("Bash", {"command": "echo x > ../escape.txt"},
+                                      atype="writer", cwd=inner, aid="nometa"), "worktree-root")
 
 
 class Researcher(Base):
