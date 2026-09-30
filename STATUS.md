@@ -44,17 +44,23 @@ stored here).
   research-sourcing (PR #10), staged-reader-review upgrade, danger-guard opt-in auto mode.
 
 ## In flight
+- **Machine overlay (branch `feat/machine-overlay`): install on HAYPC once merged.** Don't run
+  `setup.sh` for it (it reinstalls every plugin over the network). By hand, backing up first:
+  - write `~/.claude/settings.machine.json` with the live file's `hq-* *` excludedCommands and its
+    five `tmux-state.sh` hook groups (UserPromptSubmit, PreToolUse, PostToolUse, Notification, Stop);
+  - wrap the stub block already in `~/.config/git/ignore` in `git/install-ignore.py`'s markers, then
+    run that script and confirm "already current";
+  - replace the real `~/.claude/hooks/stop-ring.sh` with a link to `hooks/stop-ring.sh`;
+  - verify: `merge-settings.py settings.json ~/.claude/settings.machine.json` matches the live
+    `sandbox` exactly and the live hooks as a set.
+
+  hq's charter already points at the overlay, so until this is done it's ahead of the machine.
 - **Delegation hardening: Stage 2 live; Stage 3 (upgrade canary) is next** (`docs/delegation.md`,
   "Next"). `skills/delegation/SKILL.md` is the operating guide. Open items:
   - **After 2026-10-07:** run `delegation-ledger sandbox-denials --days 7` and add the hosts that were
     actually needed to `sandbox.network.allowedDomains`.
   - **Not observed live:** a real agent's `dangerouslyDisableSandbox` being denied. The teammate probe
     declined to try it; the harness covers the rule (37/37).
-  - **Machine-local, not in this repo** (a `setup.sh` re-run would lose or lack them; decide whether
-    to move them in):
-    - the live `~/.claude/settings.json` had the Stage 2 hooks merged by hand, and it carries hq's
-      tool exclusions (`hq-new` to `hq-open`);
-    - `~/.config/git/ignore` holds the sandbox-stub block.
   - **Other machines:** install by hand per the docs' install order (the policy hook fails closed).
     bubblewrap and socat are required.
   - **Optional:** a no-scope classic GitHub token at `~/.config/dotclaude/github-public-token` enables
@@ -109,7 +115,8 @@ stored here).
 
 ## Notes for next session
 - **Verify delegation before touching it:** `python3 -m unittest discover -s tests/delegation -t tests/delegation`
-  (137 tests, no model calls; they pass inside the sandbox too). The live harness `tests/delegation/run.py --runner claude|codex` spends
+  (138 tests, no model calls; they pass inside the sandbox too), and the installer helpers with
+  `python3 -m unittest discover -s tests/setup -t tests/setup`. The live harness `tests/delegation/run.py --runner claude|codex` spends
   model calls. Run it after changing a role, a hook or `codex-delegate`, and after a Claude Code upgrade
   until the Stage 3 canary exists.
 - **Verify `deck-production` before touching it:** run `deckkit regress` as the README in the

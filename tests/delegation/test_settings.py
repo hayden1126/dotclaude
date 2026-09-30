@@ -79,6 +79,13 @@ class Baseline(unittest.TestCase):
         for c in [cmd] + [c for c in stops if "report-check" in c]:
             self.assertNotIn("exit 2", c)
 
+    def test_the_stop_sound_rings_for_the_main_session_only(self):
+        # Stop fires for subagents too; an inline sound rang for every one of them.
+        stops = commands("Stop")
+        self.assertIn('bash "$HOME/.claude/hooks/stop-ring.sh"', stops)
+        self.assertFalse(any("powershell.exe" in c for c in stops), stops)
+        self.assertTrue(os.access(os.path.join(REPO, "hooks", "stop-ring.sh"), os.X_OK))
+
 
 if __name__ == "__main__":
     unittest.main()
