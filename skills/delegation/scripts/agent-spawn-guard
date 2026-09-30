@@ -21,6 +21,7 @@ script cannot run.
 """
 import json
 import os
+import signal
 import sys
 import tomllib
 
@@ -82,7 +83,15 @@ def decide(data, policy):
     return None
 
 
+def _give_up(_signum, _frame):
+    raise TimeoutError("ledger lock held")
+
+
 def record(data, rule):
+    # The append takes a blocking flock. Bound it: a hook that outlives Claude Code's timeout
+    # is non-blocking, which would let a denied spawn through.
+    signal.signal(signal.SIGALRM, _give_up)
+    signal.alarm(2)
     try:
         ti = data.get("tool_input") or {}
         aid = str(data.get("agent_id") or "main")
@@ -93,6 +102,8 @@ def record(data, rule):
                        "name": ti.get("name"), "subagent_type": ti.get("subagent_type")})
     except Exception:  # noqa: BLE001  the ledger observes; it never decides
         pass
+    finally:
+        signal.alarm(0)
 
 
 def main():

@@ -487,11 +487,15 @@ class Writer(Base):
         outer = os.path.join(self.proj, ".claude", "worktrees", "outer")
         inner = os.path.join(outer, ".claude", "worktrees", "agent-w2")
         os.makedirs(inner)
+        # The agent's root is the innermost worktree; the protected area is the outermost
+        # checkout, which holds both the lead's worktree and the real main checkout.
         a = sp.Analyzer(self.ev("Bash", {"command": "ls"}, atype="writer", cwd=inner,
                                 aid="nometa"), POLICY, home=self.home)
-        self.assertEqual((a.worktree, a.main_root), (inner, outer))
-        self.assertDenied(self.decide("Bash", {"command": "echo x > ../escape.txt"},
-                                      atype="writer", cwd=inner, aid="nometa"), "worktree-root")
+        self.assertEqual((a.worktree, a.main_root), (inner, self.proj))
+        for target in ("../escape.txt", f"{self.proj}/src/x"):
+            self.assertDenied(self.decide("Bash", {"command": f"echo x > {target}"},
+                                          atype="writer", cwd=inner, aid="nometa"),
+                              "worktree-root", msg=target)
 
 
 class Researcher(Base):

@@ -229,7 +229,9 @@ class Analyzer:
         self.agent_type = dc.agent_role(data, self.meta)
         self.cwd = os.path.realpath(data.get("cwd") or os.getcwd())
         self.worktree = self._worktree()
-        self.main_root = (self.worktree.rsplit("/.claude/worktrees/", 1)[0]
+        # The outermost checkout, not the innermost: with nested worktrees it holds both the
+        # lead's worktree and the real main checkout, and it is the area escapes are denied in.
+        self.main_root = (self.worktree.split("/.claude/worktrees/", 1)[0]
                           if self.worktree else None)
         self.project = self.main_root or self._project_dir()
         self.root = self.worktree or self.project

@@ -1,9 +1,11 @@
 """agent-spawn-guard: writers must pass isolation on the call, named spawns need the team
 prefix, and everything fails closed."""
+import fcntl
 import json
 import os
 import subprocess
 import tempfile
+import time
 import unittest
 
 from _paths import HOOKS, REPO, SCRIPTS
@@ -12,19 +14,27 @@ GUARD = os.path.join(SCRIPTS, "agent-spawn-guard")
 SHIM = os.path.join(HOOKS, "agent-spawn-guard.sh")
 with open(os.path.join(REPO, "skills", "delegation", "policy.toml")) as _f:
     SHIPPED_POLICY = _f.read()
+# A denial appends a ledger row, so every run gets a throwaway state dir unless a test gives
+# its own: the real ledger must never see test rows.
+_STATE = tempfile.TemporaryDirectory(prefix="spawn-guard-test-")
+
+
+def guard_env(env):
+    base = {k: v for k, v in os.environ.items() if k != "DELEGATION_LEDGER"}
+    return {**base, "XDG_STATE_HOME": _STATE.name, **(env or {})}
 
 
 def run(payload, raw=False, env=None):
     stdin = payload if raw else json.dumps(payload)
     p = subprocess.run(["python3", GUARD], input=stdin, capture_output=True, text=True,
-                       env=dict(os.environ, **(env or {})))
+                       env=guard_env(env))
     decision = json.loads(p.stdout)["hookSpecificOutput"]["permissionDecision"] if p.stdout else None
     return p.returncode, decision
 
 
 def reason(payload, env=None):
     p = subprocess.run(["python3", GUARD], input=json.dumps(payload), capture_output=True,
-                       text=True, env=dict(os.environ, **(env or {})))
+                       text=True, env=guard_env(env))
     return json.loads(p.stdout)["hookSpecificOutput"]["permissionDecisionReason"]
 
 
@@ -65,7 +75,7 @@ class SpawnGuard(unittest.TestCase):
 
     def test_deny_reason_tells_claude_how_to_fix_it(self):
         p = subprocess.run(["python3", GUARD], input=json.dumps(agent(subagent_type="writer")),
-                           capture_output=True, text=True)
+                           capture_output=True, text=True, env=guard_env(None))
         reason = json.loads(p.stdout)["hookSpecificOutput"]["permissionDecisionReason"]
         self.assertIn('isolation: "worktree"', reason)
 
@@ -153,6 +163,18 @@ class NamedSpawn(unittest.TestCase):
         run(agent(subagent_type="Explore"), env=self.env)
         run(agent(subagent_type="Explore", name="team-a"), env=self.env)
         self.assertEqual(self.rows(), [])
+
+    def test_a_held_ledger_lock_does_not_delay_the_denial(self):
+        # A hook that outlives Claude Code's timeout is non-blocking, so a stuck ledger write
+        # would let the spawn through.
+        path = os.path.join(self.tmp.name, "locked.jsonl")
+        env = dict(self.env, DELEGATION_LEDGER=path)
+        with open(path, "a") as f:
+            fcntl.flock(f, fcntl.LOCK_EX)
+            start = time.monotonic()
+            self.assertEqual(run(agent(subagent_type="Explore", name="helper"), env=env),
+                             (0, "deny"))
+            self.assertLess(time.monotonic() - start, 5)
 
     def test_a_ledger_failure_does_not_change_the_decision(self):
         env = dict(self.env, DELEGATION_LEDGER="/proc/nope/delegations.jsonl")
