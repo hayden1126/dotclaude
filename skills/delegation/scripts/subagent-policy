@@ -510,6 +510,17 @@ class Analyzer:
             return os.access(resolve(word, self.cwd), os.X_OK)
         return shutil.which(word, path=":".join(self.path_dirs)) is not None
 
+    def unresolved(self, word):
+        """Why `word` doesn't resolve, worded so the agent can fix it. The hook checks the whole
+        line before any of it runs, so a path the same line creates doesn't exist yet."""
+        if "/" not in word:
+            return (f"{word!r} is not a program on PATH (an alias or a shell function?); "
+                    "use the full command it stands for")
+        if os.path.exists(resolve(word, self.cwd)):
+            return f"{word!r} isn't executable"
+        return (f"{word!r} doesn't exist yet. If this command line creates it (a venv, a "
+                "build), run the creating step as its own Bash call first, then this one")
+
     def argv(self, lits, cwd, depth):
         sh = self.p["shell"]
         for _ in range(20):
@@ -525,9 +536,7 @@ class Analyzer:
             word = head.text
             base = os.path.basename(word)
             if not self.resolves(word):
-                self.deny("unknown-command", "stop_and_explain",
-                          f"{word!r} is not a program on PATH (an alias or a shell function?); "
-                          "use the full command it stands for")
+                self.deny("unknown-command", "stop_and_explain", self.unresolved(word))
             self.check_excluded([l.text if not l.dynamic else None for l in lits])
             if base == "sudo":
                 self.deny("sudo", "manual_only", "delegated agents never use sudo")

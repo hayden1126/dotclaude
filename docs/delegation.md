@@ -205,8 +205,10 @@ from 60 to 5,000 requests an hour.
   baseline.
 - **A program the same command line creates is denied.** In `uv venv .venv && .venv/bin/python
   -c ...`, the policy checks `.venv/bin/python` before `.venv` exists, so it can't resolve it and
-  denies it as `unknown-command`. Running the creating step as its own call works. Seen once in the
-  live harness (2026-09-30), from a writer that chained its steps.
+  denies it as `unknown-command`. Seen once in the live harness (2026-09-30), from a writer that
+  chained its steps. Kept strict on purpose (Hayden's call): the denial now says the path doesn't
+  exist yet and to run the creating step as its own Bash call first, instead of guessing at an
+  alias.
 - **Network filtering is by hostname only,** so domain fronting is possible.
 - **A cloned repo's committed `sandbox.filesystem.allowWrite`** widens that repo's own sandbox
   (cc-safety-net RR-11). This is noted, not policed.
