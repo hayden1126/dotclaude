@@ -195,7 +195,12 @@ from 60 to 5,000 requests an hour.
   - The sandbox has its own PID namespace, so `/proc/<pid>/environ` of the parent isn't visible
     from Bash. The file tools are covered by the credential-read rule above.
 
-  The deny list names each variable, so it belongs in the private live settings, not this
+  The fix that holds is to not export secrets at all. Keep them in a file no shell sources
+  (`~/.secrets.env`, which the baseline's `denyRead` hides from sandboxed commands), and start
+  each MCP server that needs one through a wrapper that reads the file and passes that server
+  only the names it needs. A new secret is then protected by default, and no variable name
+  appears in any settings file. hq's `bin/hq-mcp-env` is one such wrapper. An `envVars` deny list
+  is the fallback; it names each variable, so it belongs in the private live settings, not this
   baseline.
 - **Network filtering is by hostname only,** so domain fronting is possible.
 - **A cloned repo's committed `sandbox.filesystem.allowWrite`** widens that repo's own sandbox
