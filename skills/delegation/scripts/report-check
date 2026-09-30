@@ -54,17 +54,6 @@ def norm_id(agent_id):
     return s[len("agent-"):] if s.startswith("agent-") else s
 
 
-def meta_for(data):
-    tp = data.get("transcript_path") or ""
-    base = tp[:-len(".jsonl")] if tp.endswith(".jsonl") else tp
-    path = os.path.join(base, "subagents", f"agent-{norm_id(data.get('agent_id'))}.meta.json")
-    try:
-        with open(path) as f:
-            return json.load(f)
-    except (OSError, ValueError):
-        return {}
-
-
 def counter_dir():
     d = os.path.join(dc.state_dir(), "report-check")
     os.makedirs(d, exist_ok=True)
@@ -131,9 +120,10 @@ def rejection(errs, attempt):
 def decide(data, roles=None):
     """None to accept, else the hook output dict."""
     event = data.get("hook_event_name")
-    if not data.get("agent_id") or data.get("agent_type") not in (roles or checked_roles()):
+    if not data.get("agent_id"):
         return None
-    if meta_for(data).get("teamName"):
+    meta = dc.agent_meta(data)
+    if dc.agent_role(data, meta) not in (roles or checked_roles()) or meta.get("teamName"):
         return None
     if event == "PreToolUse":
         if data.get("tool_name") != "SubagentHandback":
