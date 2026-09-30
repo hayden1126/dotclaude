@@ -54,9 +54,18 @@ class ReportCheck(unittest.TestCase):
         second = self.run_hook(self.handback("still no json"))
         self.assertIn("attempt 2 of 3", second["hookSpecificOutput"]["permissionDecisionReason"])
         self.assertIsNone(self.run_hook(self.handback("third try, still bad")))
-        # the counter was cleared on giving up, so a later bad report starts over
-        again = self.run_hook(self.handback("bad"))
-        self.assertIn("attempt 1 of 3", again["hookSpecificOutput"]["permissionDecisionReason"])
+        # having given up, it stays given up for this agent: a reset here is what let a
+        # duplicated hook cycle 1, 2, 1, 2 forever
+        self.assertIsNone(self.run_hook(self.handback("bad")))
+
+    def test_a_duplicated_hook_cannot_loop(self):
+        # Two registrations (user and project settings) both run on every stop. Each bumps
+        # the counter, so without a sticky give-up every stop still carried one block.
+        for _ in range(3):
+            outs = [self.run_hook(self.stop("no json")) for _ in range(2)]
+            if not any(outs):
+                return
+        self.fail("still blocking after three duplicated stops")
 
     def test_an_accepted_report_resets_the_counter(self):
         self.run_hook(self.handback("bad"))
