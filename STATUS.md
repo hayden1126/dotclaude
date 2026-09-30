@@ -33,8 +33,8 @@ stored here).
   CLAUDE.md trigger, `vetting-sources`, `deck-production` S1, and earlier work back to PR #10.
 
 ## In flight
-- **Delegation hardening Stage 3: Step 0 and A0 merged** (PR #42), plus a follow-up on the
-  re-created `feat/delegation-stage3` (the policy's unresolved-command message). The plan is
+- **Delegation hardening Stage 3: Step 0 and A0 merged and installed on HAYPC** (PRs #42 and #43,
+  2026-09-30; a named spawn from a live session was denied by the installed guard). The plan is
   `~/.claude/plans/lets-move-on-to-refactored-pascal.md`; this block's execution plan is
   `~/.claude/plans/continue-from-status-md-lovely-puzzle.md`. The findings are in
   `docs/delegation.md` "Stage 3":
@@ -45,10 +45,9 @@ stored here).
   - `staged-reader-review` now spawns its readers unnamed and messages them by id (a named spawn
     would be denied). It hasn't run live that way yet.
 
-  Commit range `d46449b..origin/main` for #42; PR state: `gh pr list --head feat/delegation-stage3
-  --state all`. **The install is `git pull` in `~/dotclaude`**, not the merge: the live hooks
-  symlink into that checkout (no `setup.sh` re-run). Build A4 in the worktree
-  `.claude/worktrees/stage3` (rebase it on `origin/main` first) or remove it.
+  Commit range `d46449b..00b7a31`. On another machine, the install is `git pull` in `~/dotclaude`
+  (the live hooks symlink into that checkout; no `setup.sh` re-run). Build A4 on a fresh branch
+  from `main`, in a worktree, so the live hooks stay untouched while it is edited.
 
   **Next: A4 (due nudges) and A5 (the one-command canary)**, then A1 → A3 → A2 → A6. Decisions
   already made: deadlines nudge, then hard-stop; liveness shows in the tmux status bar and a CLI.
@@ -93,10 +92,6 @@ stored here).
     The plan file owns block numbering only, and must not leak "S<n>" into shipped artifacts.
 
 ## Blocked / decisions needed
-- **The main checkout carries an uncommitted `docs/delegation.md` edit** from the hq session that
-  planned Stage 3 (2026-09-30 21:10Z; it meant the edit to be this branch's first commit). PR #42
-  rewrites the same "Next" section and supersedes it. Discard it (`git restore docs/delegation.md`
-  in `~/dotclaude`) before pulling the merge; awaiting Hayden's OK.
 - **Status-line widget's `ai-title` fallback is now dead.** `statusline/session-summary.py`
   (`scan_ai_title`) still falls back to Claude's `ai-title` before the first Stop summary lands, but
   the title work above suppresses `ai-title` generation, so that record is now generally never
