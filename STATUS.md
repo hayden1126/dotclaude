@@ -41,11 +41,15 @@ stored here).
 ## In flight
 - **Delegation hardening: Stage 1 built; Stage 2 next.** `docs/delegation.md` holds the design,
   the verified facts, the adopt/copy verdict, the install order and Stages 2 and 3;
-  `skills/delegation/SKILL.md` is the operating guide. Stage 1 is on `feat/delegation-stage1`
-  (derive its PR with `gh pr list --head feat/delegation-stage1`).
-  - **Next, after merge:** install it on this machine by hand, following the docs' "Installing on a
-    machine that is already set up" section. Don't use `setup.sh`: it resets the live settings.
-    Order matters, because the guard fails closed.
+  `skills/delegation/SKILL.md` is the operating guide. Stage 1 shipped in PR #32 (derive:
+  `gh pr view 32 --json state,mergedAt`).
+  - **Next: install it on this machine by hand.** Follow the docs' "Installing on a machine that is
+    already set up" section. Don't use `setup.sh`: it resets the live settings. Order matters,
+    because the guard fails closed.
+    - **Is it installed yet?** Derive with `ls -l ~/.claude/agents/Explore.md
+      ~/.claude/skills/delegation` and `grep -c agent-spawn-guard ~/.claude/settings.json`.
+    - **Until it is,** the live `CLAUDE.md` and handoff skill name roles (`researcher`, `writer`)
+      that don't exist here yet. They are symlinked to this repo, so they went live at merge.
   - **Then Stage 2.** Hayden runs the `sudo apt install bubblewrap socat` step.
   - **Local evidence** (not in git): `~/scratch/delegation-eval/`.
 - **Codex setup shared with a friend** (Hayden's ask, 2026-09-29). The share page is BUILT and private:
