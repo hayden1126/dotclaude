@@ -19,9 +19,27 @@ with open(os.path.join(REPO, "settings.json")) as f:
 SETTINGS_CMD = BASELINE["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
 
 
+def _test_tmp_dir():
+    """Where the fake homes go. Inside Claude Code's sandbox the system temp dir is
+    /tmp/claude-<uid>, one of the policy's own temp roots, so every "outside the root" case
+    would pass as a temp write. There the fake homes go in the repo instead (gitignored),
+    which a sandboxed session rooted in the repo can write."""
+    base = os.path.realpath(tempfile.gettempdir())
+    roots = [os.path.realpath(sp.expand(r, os.path.expanduser("~")))
+             for r in POLICY["rm"]["temp_roots"]]
+    if not any(sp.under(base, r) for r in roots):
+        return None
+    local = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".tmp")
+    os.makedirs(local, exist_ok=True)
+    return local
+
+
+TEST_TMP = _test_tmp_dir()
+
+
 class Base(unittest.TestCase):
     def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory(prefix="sp-test-")
+        self.tmp = tempfile.TemporaryDirectory(prefix="sp-test-", dir=TEST_TMP)
         self.home = os.path.realpath(self.tmp.name)
         os.makedirs(os.path.join(self.home, ".claude"))
         self.write_settings({"sandbox": BASELINE["sandbox"]})
@@ -174,6 +192,21 @@ class Sandbox(Base):
         with open(os.path.join(self.proj, ".claude", "settings.json"), "w") as f:
             json.dump({"sandbox": {"enabled": True, "failIfUnavailable": True}}, f)
         self.assertIsNone(self.bash("ls", cwd=os.path.join(self.proj, "src")))
+
+    def test_an_empty_project_settings_file_is_no_settings(self):
+        # The sandbox's /dev/null mount over a missing .claude/settings.json leaves an empty
+        # file while a command runs; a live Grep failed closed on it (2026-09-30).
+        os.makedirs(os.path.join(self.proj, ".claude"), exist_ok=True)
+        path = os.path.join(self.proj, ".claude", "settings.json")
+        for text in ("", "  \n"):
+            with open(path, "w") as f:
+                f.write(text)
+            self.assertIsNone(self.decide("Grep", {"pattern": "x", "path": self.proj}))
+            self.assertIsNone(self.bash("ls"))
+        with open(path, "w") as f:
+            f.write("{not json")
+        with self.assertRaises(ValueError):
+            self.decide("Grep", {"pattern": "x", "path": self.proj})
 
 
 class Excluded(Base):
