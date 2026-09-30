@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# PreToolUse(Agent) hook: enforce delegation-role spawn rules (today: a writer must pass
-# isolation on the call). The logic lives in skills/delegation/scripts/agent-spawn-guard.
+# PreToolUse(Agent) hook: enforce delegation-role spawn rules (a writer must pass isolation
+# on the call; a named spawn needs the team- prefix). The logic lives in
+# skills/delegation/scripts/agent-spawn-guard.
 # FAILS CLOSED: if the guard cannot run (missing link, no python3), exit 2 blocks the spawn
 # with the reason on stderr, which Claude sees. Fix the install; do not delete the hook.
 guard="$HOME/.claude/skills/delegation/scripts/agent-spawn-guard"

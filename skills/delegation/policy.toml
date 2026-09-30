@@ -15,6 +15,12 @@ scope_down = "Retry with a narrower, explicit target inside your own root. If th
 manual_only = "Delegated agents never do this. If the task needs it, list it in blocked_actions so the lead or Hayden can run it."
 stop_and_explain = "Do not try variants. Rewrite the command in a plain form that can be checked, or list it in blocked_actions."
 
+[spawn]
+# A named Agent spawn starts an in-process agent-team teammate. agent-spawn-guard denies one
+# unless its name starts with this prefix (a fork, or a spawn isolated on the call, may still
+# be named). Teams are opt-in per spawn; SKILL.md §1 says when one earns it.
+team_prefix = "team-"
+
 [roles]
 # Roles whose reports must match report.schema.json (report-check).
 report_checked = ["Explore", "researcher", "reviewer", "writer"]

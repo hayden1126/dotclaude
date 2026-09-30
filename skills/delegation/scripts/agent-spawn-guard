@@ -1,21 +1,37 @@
 #!/usr/bin/env python3
 """agent-spawn-guard: PreToolUse(Agent) policy for delegation roles.
 
-Denies a `writer` spawn that does not pass `isolation` on the call itself. With agent
-teams enabled, a named spawn launches as a teammate in the main session's working
-directory, and the docs say "An `isolation` value in the subagent's frontmatter doesn't
-prevent it" (code.claude.com/docs/en/sub-agents). Passing isolation on the call does.
+Two rules:
+- A `writer` spawn must pass `isolation` on the call itself. With agent teams enabled, a
+  named spawn launches as a teammate in the main session's working directory, and the docs
+  say "An `isolation` value in the subagent's frontmatter doesn't prevent it"
+  (code.claude.com/docs/en/sub-agents). Passing isolation on the call does.
+- A named spawn needs the team prefix (policy.toml `[spawn] team_prefix`). Every named
+  spawn silently becomes an in-process teammate, and teammates caused 10 of the 11 stalls
+  in the 2026-09-29 eval while buying almost no peer coordination (docs/delegation.md,
+  Stage 3). A fork, or a spawn isolated on the call, may still be named.
 
 Contract: stdin is the PreToolUse hook JSON. Allowed calls print nothing and exit 0 (no
 "allow" decision, so normal permission handling still applies). A denial prints a
-PreToolUse deny with a reason Claude sees. FAILS CLOSED, the pattern taken from
-cc-safety-net (github.com/kenryu42/cc-safety-net, MIT): any exception or malformed input
-becomes a deny naming the error, and the shell shim exits 2 if this script cannot run.
+PreToolUse deny with a reason Claude sees, and records a `policy` row in the ledger (best
+effort: a ledger error never changes the decision). FAILS CLOSED, the pattern taken from
+cc-safety-net (github.com/kenryu42/cc-safety-net, MIT): any exception, malformed input or
+unreadable policy.toml becomes a deny naming the error, and the shell shim exits 2 if this
+script cannot run.
 """
 import json
+import os
 import sys
+import tomllib
 
+HERE = os.path.dirname(os.path.realpath(__file__))
+sys.path.insert(0, HERE)
+import delegation_common as dc  # noqa: E402
+
+POLICY_PATH = os.environ.get("DELEGATION_POLICY") or os.path.join(os.path.dirname(HERE),
+                                                                  "policy.toml")
 ISOLATED = ("worktree", "remote")
+DEFAULT_TEAM_PREFIX = "team-"
 
 
 def deny(reason):
@@ -27,25 +43,71 @@ def deny(reason):
     return 0
 
 
-def decide(data):
+def load_policy(path=POLICY_PATH):
+    try:
+        with open(path, "rb") as f:
+            p = tomllib.load(f)
+    except (OSError, tomllib.TOMLDecodeError) as e:
+        raise ValueError(f"policy.toml unreadable at {path} ({type(e).__name__}: {e})") from e
+    spawn = p.get("spawn") or {}
+    prefix = spawn.get("team_prefix", DEFAULT_TEAM_PREFIX)
+    if not isinstance(prefix, str) or not prefix:
+        raise ValueError("policy.toml: [spawn] team_prefix must be a non-empty string")
+    return {"team_prefix": prefix,
+            "footer": (p.get("intents") or {}).get("use_alternative", "")}
+
+
+def decide(data, policy):
+    """(rule, reason) for a denied spawn, else None."""
     if not isinstance(data, dict) or not isinstance(data.get("tool_input"), dict):
-        return "malformed hook input (no tool_input object); refusing the spawn"
+        return "malformed", "malformed hook input (no tool_input object); refusing the spawn"
     if data.get("tool_name") not in ("Agent", "Task"):
         return None
     ti = data["tool_input"]
-    if ti.get("subagent_type") == "writer" and ti.get("isolation") not in ISOLATED:
-        return ('a writer must run isolated. Re-issue this Agent call with isolation: '
-                '"worktree". Without it, agent teams can start the writer as a teammate in '
-                "the main checkout, and the writer's frontmatter isolation is ignored.")
+    isolated = ti.get("isolation") in ISOLATED
+    if ti.get("subagent_type") == "writer" and not isolated:
+        return "writer-isolation", (
+            'a writer must run isolated. Re-issue this Agent call with isolation: '
+            '"worktree". Without it, agent teams can start the writer as a teammate in '
+            "the main checkout, and the writer's frontmatter isolation is ignored.")
+    name, prefix = ti.get("name"), policy["team_prefix"]
+    if (name and ti.get("subagent_type") != "fork" and not isolated
+            and not str(name).startswith(prefix)):
+        return "named-spawn", (
+            f"a named spawn starts an agent-team teammate, and teams are off by default. "
+            f"Re-issue this Agent call without `name`, then follow up with SendMessage to "
+            f"the id it returns. Only when agents must work together live (interlocking "
+            f"interfaces, adversarial investigation, dedup across a fan-out) name it with "
+            f'the "{prefix}" prefix. {policy["footer"]}').strip()
     return None
 
 
-def main():
+def record(data, rule):
     try:
-        reason = decide(json.loads(sys.stdin.read() or "null"))
+        ti = data.get("tool_input") or {}
+        aid = str(data.get("agent_id") or "main")
+        dc.append_row({"ts": dc.now_iso(), "runner": "claude", "event": "policy",
+                       "id": aid[len("agent-"):] if aid.startswith("agent-") else aid,
+                       "agent_type": data.get("agent_type"), "session_id": data.get("session_id"),
+                       "tool": data.get("tool_name"), "rule": rule, "intent": "use_alternative",
+                       "name": ti.get("name"), "subagent_type": ti.get("subagent_type")})
+    except Exception:  # noqa: BLE001  the ledger observes; it never decides
+        pass
+
+
+def main():
+    data = None
+    try:
+        data = json.loads(sys.stdin.read() or "null")
+        denied = decide(data, load_policy())
     except Exception as e:  # noqa: BLE001  fail closed on anything
-        reason = f"guard error ({type(e).__name__}: {e}); refusing the spawn"
-    return deny(reason) if reason else 0
+        denied = "error", f"guard error ({type(e).__name__}: {e}); refusing the spawn"
+    if not denied:
+        return 0
+    rule, reason = denied
+    if rule in ("writer-isolation", "named-spawn"):
+        record(data, rule)
+    return deny(reason)
 
 
 if __name__ == "__main__":
