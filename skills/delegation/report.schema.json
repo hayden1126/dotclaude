@@ -1,0 +1,26 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["status", "summary", "artifacts", "blocked_actions"],
+  "properties": {
+    "status": {
+      "type": "string",
+      "enum": ["done", "partial", "blocked", "failed"],
+      "description": "done: the end state is reached. partial: some of it, the rest named in summary. blocked: stopped on a boundary or ambiguity, see blocked_actions. failed: could not do it."
+    },
+    "summary": {
+      "type": "string",
+      "description": "What was done and what was found, in a few sentences. Claims about files cite path:line."
+    },
+    "artifacts": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "Paths (or branch@sha for a writer) of everything the task produced. Empty for a pure read."
+    },
+    "blocked_actions": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "Each action that was denied or that the brief forbade, as '<intent>: <action> (<why>)'. Empty when nothing was blocked."
+    }
+  }
+}

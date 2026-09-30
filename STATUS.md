@@ -159,30 +159,27 @@ stored here).
   bundle upgrade, danger-guard opt-in auto mode, statusline ctx chips (PR #12).
 
 ## In flight
-- **Delegation hardening: direction chosen, build next** (Hayden, 2026-09-29). The evaluation found
-  that agents told a scope in prose drift because they keep full Bash and filesystem access, and that
-  the "stalls" are long, silent teammate turns rather than lost reports. The picked direction is
-  "prose for judgment, enforcement for authority, acceptance and liveness", with **coarse scope**: an
-  agent's reach comes from its type and working directory (readers have no write tools or Bash;
-  writers work in a worktree), never from parsing its brief. It is built in three stages:
-  1. A brief template (named artifact path plus a delegation ledger), read-only, reviewer and writer
-     agent definitions, subagents by default over teams, and a Codex delegation wrapper.
-  2. A PreToolUse policy that runs in shadow mode for a week, then enforces and fails closed, plus a
-     SubagentStop report-schema check.
-  3. A tmux heartbeat, a delegation canary test after each Claude Code upgrade, and a monthly audit.
+- **Delegation hardening: Stage 1 built; Stage 2 next.** `docs/delegation.md` holds the design, the
+  verified facts, the adopt/copy verdict and the next stages; `skills/delegation/SKILL.md` is the
+  operating guide.
+  - **Stage 1** (branch `feat/delegation-stage1`; check its PR with `gh pr list --head
+    feat/delegation-stage1`):
+    - the roles: `Explore` override, `researcher`, `reviewer`, `writer`;
+    - the spawn guard, the ledger, and `codex-delegate`.
+  - **After merge, install on this machine by hand, in the order the docs' install section
+    gives:**
+    1. the links (`skills/delegation` first, because the hook shims call its scripts);
+    2. the guard check;
+    3. last, the live `~/.claude/settings.json` hook entries and `worktree.baseRef`.
 
-  Facts the build depends on (verified in the Claude Code docs on 2026-09-29; move them into the
-  spec):
-  - Hook input identifies a subagent by `agent_id` and `agent_type` only, never by its brief. That is
-    why scope is coarse.
-  - Claude Code silently ignores an agent frontmatter field it does not recognize, and a hook that
-    errors (any exit other than 2) does not block. Enforcement can switch off without any signal,
-    hence the upgrade canary and the fail-closed hooks.
-  - Teammates report to the lead through `teammate-message` and `idle_notification` events, not task
-    notifications. A liveness check that looks only at task notifications misses them.
-
-  Next step: a Stage 1 spec and plan. Local evidence (not in git; it names agent IDs from other
-  projects): `~/scratch/delegation-eval/DECISION.md` and `REVIEW.md`.
+    Don't re-run `setup.sh`: it resets that file. The guard fails closed, so wiring it before the
+    skill link exists blocks every Agent spawn.
+  - **Then Stage 2:**
+    - the native sandbox (Hayden runs the `sudo apt install bubblewrap socat` step);
+    - the subagent-only policy hook;
+    - the report check.
+  - **Local evidence** (not in git, because it names agent IDs from other projects):
+    `~/scratch/delegation-eval/`.
 - **Codex setup shared with a friend** (Hayden's ask, 2026-09-29). The share page is BUILT and private:
   https://claude.ai/artifact/KWwrPkLsbMUi7Ugjfskqsz (source was a session scratchpad; republish by that
   URL). It links only four clean skills (coding-practices, research-discipline, ui-alignment,

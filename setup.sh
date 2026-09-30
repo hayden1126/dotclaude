@@ -77,11 +77,20 @@ for d in "$REPO_DIR"/skills/*/; do
   link "${d%/}" "$CLAUDE_DIR/skills/$(basename "$d")"
 done
 
+# agents/: per-file, because ~/.claude/agents/ also holds agents other tools install
+# (the sourced framework's). Explore.md deliberately overrides the built-in Explore with
+# a no-shell reader; docs/delegation.md has the reasoning.
+for f in "$REPO_DIR"/agents/*.md; do
+  [[ -e "$f" ]] || continue
+  link "$f" "$CLAUDE_DIR/agents/$(basename "$f")"
+done
+
 # A skill that ships a CLI gets it on PATH, so the invocations printed in its
 # SKILL.md and by its own tools actually resolve. Opt-in by directory: if
 # ~/.local/bin does not exist, the skill still works via its absolute path.
 if [[ -d "$HOME/.local/bin" ]]; then
-  for exe in "$REPO_DIR"/skills/*/scripts/deckkit; do
+  for exe in "$REPO_DIR"/skills/*/scripts/deckkit \
+             "$REPO_DIR"/skills/delegation/scripts/{codex-delegate,delegation-ledger}; do
     [[ -x "$exe" ]] || continue
     link "$exe" "$HOME/.local/bin/$(basename "$exe")"
   done

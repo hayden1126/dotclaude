@@ -1,0 +1,52 @@
+#!/usr/bin/env python3
+"""agent-spawn-guard: PreToolUse(Agent) policy for delegation roles.
+
+Denies a `writer` spawn that does not pass `isolation` on the call itself. With agent
+teams enabled, a named spawn launches as a teammate in the main session's working
+directory, and the docs say "An `isolation` value in the subagent's frontmatter doesn't
+prevent it" (code.claude.com/docs/en/sub-agents). Passing isolation on the call does.
+
+Contract: stdin is the PreToolUse hook JSON. Allowed calls print nothing and exit 0 (no
+"allow" decision, so normal permission handling still applies). A denial prints a
+PreToolUse deny with a reason Claude sees. FAILS CLOSED, the pattern taken from
+cc-safety-net (github.com/kenryu42/cc-safety-net, MIT): any exception or malformed input
+becomes a deny naming the error, and the shell shim exits 2 if this script cannot run.
+"""
+import json
+import sys
+
+ISOLATED = ("worktree", "remote")
+
+
+def deny(reason):
+    print(json.dumps({"hookSpecificOutput": {
+        "hookEventName": "PreToolUse",
+        "permissionDecision": "deny",
+        "permissionDecisionReason": f"[agent-spawn-guard] {reason}",
+    }}))
+    return 0
+
+
+def decide(data):
+    if not isinstance(data, dict) or not isinstance(data.get("tool_input"), dict):
+        return "malformed hook input (no tool_input object); refusing the spawn"
+    if data.get("tool_name") not in ("Agent", "Task"):
+        return None
+    ti = data["tool_input"]
+    if ti.get("subagent_type") == "writer" and ti.get("isolation") not in ISOLATED:
+        return ('a writer must run isolated. Re-issue this Agent call with isolation: '
+                '"worktree". Without it, agent teams can start the writer as a teammate in '
+                "the main checkout, and the writer's frontmatter isolation is ignored.")
+    return None
+
+
+def main():
+    try:
+        reason = decide(json.loads(sys.stdin.read() or "null"))
+    except Exception as e:  # noqa: BLE001  fail closed on anything
+        reason = f"guard error ({type(e).__name__}: {e}); refusing the spawn"
+    return deny(reason) if reason else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -6,7 +6,17 @@ OpenAI's Codex CLI paired with Claude Code, funded by the ChatGPT Pro subscripti
 
 **Layer A, parity (who Codex obeys).** Always on once Codex is installed. However Codex runs, driven by Claude or by you in a terminal, it reads the same rules Claude does.
 
-**Layer B, the bridge (Claude driving Codex).** The `codex-plugin-cc` plugin. Toggleable. The only thing that lets Claude Code invoke Codex.
+**Layer B, the bridge (Claude driving Codex).** Two paths.
+- **Interactive:** the `codex-plugin-cc` plugin (`/codex:*`). It is toggleable, and it is how you ask for reviews and rescues.
+- **Scripted:** `codex-delegate` (from the `delegation` skill). It wraps `codex exec` directly, under a fixed contract:
+  - Sol or Terra only, with every sub-agent's model audited;
+  - the workspace-write sandbox;
+  - a memory cap and a timeout;
+  - a schema-checked report;
+  - a ledger row;
+  - resume by thread id.
+
+  It does not go through the plugin. The plugin leaves the model unset and drops its jobs when a session ends; see `docs/delegation.md`.
 
 They compose: when Claude drives Codex through the bridge, Codex still obeys the Layer A rules.
 
