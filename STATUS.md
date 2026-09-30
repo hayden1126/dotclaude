@@ -44,6 +44,17 @@ stored here).
   research-sourcing (PR #10), staged-reader-review upgrade, danger-guard opt-in auto mode.
 
 ## In flight
+- **Machine overlay (branch `feat/machine-overlay`): install on HAYPC once merged.** Don't run
+  `setup.sh` for it (it reinstalls every plugin over the network). By hand, backing up first:
+  - write `~/.claude/settings.machine.json` with the live file's `hq-* *` excludedCommands and its
+    five `tmux-state.sh` hook groups (UserPromptSubmit, PreToolUse, PostToolUse, Notification, Stop);
+  - wrap the stub block already in `~/.config/git/ignore` in `git/install-ignore.py`'s markers, then
+    run that script and confirm "already current";
+  - replace the real `~/.claude/hooks/stop-ring.sh` with a link to `hooks/stop-ring.sh`;
+  - verify: `merge-settings.py settings.json ~/.claude/settings.machine.json` matches the live
+    `sandbox` exactly and the live hooks as a set.
+
+  hq's charter already points at the overlay, so until this is done it's ahead of the machine.
 - **Delegation hardening: Stage 2 live; Stage 3 (upgrade canary) is next** (`docs/delegation.md`,
   "Next"). `skills/delegation/SKILL.md` is the operating guide. Open items:
   - **After 2026-10-07:** run `delegation-ledger sandbox-denials --days 7` and add the hosts that were
