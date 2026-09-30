@@ -317,7 +317,7 @@ class Analyzer:
                 self.deny("malformed-input", "stop_and_explain", f"{tool} call with no path")
             self.file_write(str(path))
         elif tool in READ_TOOLS:
-            self.file_read(ti)
+            self.file_read(tool, ti)
         elif tool.startswith("mcp__"):
             if not any(fnmatch.fnmatchcase(tool, g) for g in self.p["mcp"]["read_tools"]):
                 self.deny("mcp-write", "manual_only",
@@ -336,7 +336,18 @@ class Analyzer:
                 self.deny("credential-read", "hard_stop",
                           f"{path} is a credential path; delegated agents never read it")
 
-    def file_read(self, ti):
+    def check_search_root(self, path):
+        """Grep reads every file below its root, hidden ones included, so a root above an
+        existing credential path would read it. Glob only lists names, so it is not checked."""
+        p = resolve(expand(path, self.home), self.cwd)
+        for d in self.read_denied():
+            for c in (d, resolve(d, "/")):
+                if under(c, p) and os.path.lexists(c):
+                    self.deny("credential-search", "scope_down",
+                              f"Grep over {path} would read {c}, a credential path; "
+                              "search a narrower directory")
+
+    def file_read(self, tool, ti):
         for key in ("file_path", "path", "notebook_path"):
             if ti.get(key):
                 self.check_read_path(str(ti[key]))
@@ -344,6 +355,8 @@ class Analyzer:
         if isinstance(pat, str) and (pat.startswith("/") or pat.startswith("~")):
             prefix = re.split(r"[*?\[{]", pat, 1)[0]
             self.check_read_path(prefix or "/")
+        if tool == "Grep":
+            self.check_search_root(str(ti.get("path") or self.cwd))
 
     def protected(self, p):
         for x in self.p["protect"]["write_denied"] + self.sandbox["denyWrite"]:

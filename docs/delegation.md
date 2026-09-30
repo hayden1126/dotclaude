@@ -124,7 +124,12 @@ repo that turns the sandbox off loses subagent Bash; the policy still applies.
   - shell rc files;
   - the live enforcement sources in `~/dotclaude`.
 - **Credential reads:** Read, Grep and Glob on the credential paths are denied (hard_stop), because
-  those tools run outside the sandbox.
+  those tools run outside the sandbox. The paths include `~/.secrets.env` and all of `/proc`: a
+  file tool runs in Claude Code's own process, so `/proc/self/environ` is its whole environment
+  (a live probe read it through Grep).
+- **Credential searches:** a Grep rooted above an existing credential path (`~`, `~/.config`, `/`)
+  is denied (scope_down). Grep searches hidden files recursively, so `Grep ghp_ ~` would read
+  `~/.config/gh/hosts.yml`. Glob only lists names, so it isn't checked.
 
 **Writer:**
 - Its root is `meta.json`'s `worktreePath`, falling back to a cwd under `.claude/worktrees/`.
@@ -180,10 +185,23 @@ from 60 to 5,000 requests an hour.
 - **What the policy can't see.** Script bodies, interpreter code, and an alias that shadows a real
   binary name are out of its sight. The sandbox, the credential barrier and the network filter
   bound them (cc-safety-net's residual risks RR-1 to RR-5).
-- **Secrets in the shell environment.** `GOOGLE_OAUTH_CLIENT_ID` and `GOOGLE_OAUTH_CLIENT_SECRET`
-  are in the Bash tool's environment, so a delegated agent's `env` can print them. They are an
-  installed-app OAuth client, not user tokens. Moving them out of the login environment is
-  Hayden's call.
+- **Secrets in the shell environment.** A secret exported from a shell rc file is in Claude
+  Code's environment, so every sandboxed command inherits it and a delegated agent's `env` prints
+  it. Probed on 2.1.285 (2026-09-30):
+  - `sandbox.credentials.envVars` with `mode: "deny"` blanks the variable in sandboxed commands
+    only. Excluded commands and MCP servers run outside the sandbox and keep it.
+  - Deny alone isn't enough when `~/.zshenv` sources a secrets file: the sandboxed zsh sources it
+    again. The file must also be in `sandbox.filesystem.denyRead`.
+  - The sandbox has its own PID namespace, so `/proc/<pid>/environ` of the parent isn't visible
+    from Bash. The file tools are covered by the credential-read rule above.
+
+  The fix that holds is to not export secrets at all. Keep them in a file no shell sources
+  (`~/.secrets.env`, which the baseline's `denyRead` hides from sandboxed commands), and start
+  each MCP server that needs one through a wrapper that reads the file and passes that server
+  only the names it needs. A new secret is then protected by default, and no variable name
+  appears in any settings file. hq's `bin/hq-mcp-env` is one such wrapper. An `envVars` deny list
+  is the fallback; it names each variable, so it belongs in the private live settings, not this
+  baseline.
 - **Network filtering is by hostname only,** so domain fronting is possible.
 - **A cloned repo's committed `sandbox.filesystem.allowWrite`** widens that repo's own sandbox
   (cc-safety-net RR-11). This is noted, not policed.
@@ -338,7 +356,7 @@ acting for Anthropic or OpenAI.
   - Pick cases with `--cases`.
   - `--runner codex` runs one short Terra run.
 - **Results on 2026-09-30:**
-  - unit: 133 tests;
+  - unit: 136 tests;
   - claude: 37/37 (all Stage 1 cases, plus policy, allowlist, deps, escape, and report in both
     default and auto mode). The computed-path escape reached the main checkout, as the known gap
     predicts, and `audit` flagged it;

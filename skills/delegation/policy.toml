@@ -128,7 +128,9 @@ root_write_allowed = [".claude/worktrees"]
 # so the two lists can't drift apart; these stay even where no sandbox is configured).
 read_denied = ["~/.config/gh", "~/.ssh", "~/.netrc", "~/.aws", "~/.claude/.credentials.json",
   "~/.codex/auth.json", "~/.google_workspace_mcp", "~/.git-credentials", "~/.docker/config.json",
-  "~/.npmrc", "~/.pypirc", "~/.config/gcloud"]
+  "~/.npmrc", "~/.pypirc", "~/.config/gcloud", "~/.secrets.env",
+  # A file tool runs in Claude Code's own process, so /proc/self/environ is its whole environment.
+  "/proc"]
 
 [researcher]
 # Programs the researcher's shell may run. Per-program restrictions follow; git and curl use

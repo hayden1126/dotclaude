@@ -50,7 +50,8 @@
         "~/.git-credentials",
         "~/.claude/.credentials.json",
         "~/.codex/auth.json",
-        "~/.google_workspace_mcp"
+        "~/.google_workspace_mcp",
+        "~/.secrets.env"
       ],
       "denyWrite": [
         "~/dotclaude/settings.json",
