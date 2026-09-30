@@ -33,10 +33,35 @@ def norm_id(agent_id):
     return s[len("agent-"):] if s.startswith("agent-") else s
 
 
+def handback_message(path):
+    """The report a subagent delivered through the SubagentHandback tool, which is how
+    reports arrive in auto mode. Then the SubagentStop input's last_assistant_message is
+    empty (code.claude.com/docs/en/hooks: "The report is that call's `message` input")."""
+    try:
+        with open(os.path.expanduser(path), "rb") as f:
+            f.seek(0, os.SEEK_END)
+            f.seek(max(0, f.tell() - 1048576))
+            lines = f.read().decode("utf-8", "replace").splitlines()
+    except (OSError, TypeError):
+        return ""
+    for line in reversed(lines):
+        try:
+            e = json.loads(line)
+        except ValueError:
+            continue
+        for c in reversed((e.get("message") or {}).get("content") or []):
+            if (isinstance(c, dict) and c.get("type") == "tool_use"
+                    and c.get("name") == "SubagentHandback"):
+                return (c.get("input") or {}).get("message") or ""
+    return ""
+
+
 def cmd_hook(_args):
     try:
         data = json.loads(sys.stdin.read() or "{}")
         event = data.get("hook_event_name")
+        if event not in ("SubagentStart", "SubagentStop"):
+            raise ValueError(f"unexpected hook_event_name {event!r}")
         base = {
             "ts": dc.now_iso(),
             "runner": "claude",
@@ -46,15 +71,22 @@ def cmd_hook(_args):
         }
         if not base["id"]:
             raise ValueError(f"{event}: no agent_id in hook input")
+        if not base["agent_type"]:
+            # Claude Code's own helper agents fire SubagentStop with an empty agent_type and
+            # leave no transcript. They are not delegations, so they stay out of the ledger.
+            return 0
         if event == "SubagentStart":
             row = dict(base, event="start", cwd=data.get("cwd"),
                        parent_transcript=data.get("transcript_path"))
-        elif event == "SubagentStop":
-            ok, status, err = dc.report_check(data.get("last_assistant_message") or "")
-            row = dict(base, event="stop", agent_transcript=data.get("agent_transcript_path"),
-                       report_ok=ok, report_status=status, report_error=err)
         else:
-            raise ValueError(f"unexpected hook_event_name {event!r}")
+            text, source = data.get("last_assistant_message") or "", "last_message"
+            if not text.strip():
+                text = handback_message(data.get("agent_transcript_path"))
+                source = "handback" if text.strip() else None
+            ok, status, err = dc.report_check(text)
+            row = dict(base, event="stop", agent_transcript=data.get("agent_transcript_path"),
+                       report_ok=ok, report_status=status, report_error=err,
+                       report_source=source)
         dc.append_row(row)
     except Exception:
         try:

@@ -43,14 +43,17 @@ stored here).
   the verified facts, the adopt/copy verdict, the install order and Stages 2 and 3;
   `skills/delegation/SKILL.md` is the operating guide. Stage 1 shipped in PR #32 (derive:
   `gh pr view 32 --json state,mergedAt`).
-  - **Next: install it on this machine by hand.** Follow the docs' "Installing on a machine that is
-    already set up" section. Don't use `setup.sh`: it resets the live settings. Order matters,
-    because the guard fails closed.
-    - **Is it installed yet?** Derive with `ls -l ~/.claude/agents/Explore.md
-      ~/.claude/skills/delegation` and `grep -c agent-spawn-guard ~/.claude/settings.json`.
-    - **Until it is,** the live `CLAUDE.md` and handoff skill name roles (`researcher`, `writer`)
-      that don't exist here yet. They are symlinked to this repo, so they went live at merge.
-  - **Then Stage 2.** Hayden runs the `sudo apt install bubblewrap socat` step.
+  - **Installed on HAYPC** on 2026-09-30, and checked live: the override binds (sonnet, no Bash),
+    the guard denied a writer spawned without isolation, and the ledger records rows.
+    - **Other machines:** check with `ls -l ~/.claude/agents/Explore.md ~/.claude/skills/delegation`
+      and `grep -c agent-spawn-guard ~/.claude/settings.json`.
+    - **If it's missing,** install by hand per the docs' "Installing on a machine that is already set
+      up" section. Don't use `setup.sh`, and mind the order: the guard fails closed.
+  - **Next: Stage 2.** Hayden runs the `sudo apt install bubblewrap socat` step.
+  - **Ledger auto-mode fix:** it reads handed-back reports and skips internal agents. It is on
+    `fix/ledger-auto-mode`; derive its state with
+    `gh pr list --state all --head fix/ledger-auto-mode`. Ledger rows written before it merged
+    record auto-mode reports as `report_ok: false`, so discount them in the Stage 2 shadow data.
   - **Local evidence** (not in git): `~/scratch/delegation-eval/`.
 - **Codex setup shared with a friend** (Hayden's ask, 2026-09-29). The share page is BUILT and private:
   https://claude.ai/artifact/KWwrPkLsbMUi7Ugjfskqsz (source was a session scratchpad; republish by that
