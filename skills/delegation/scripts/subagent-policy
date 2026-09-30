@@ -85,11 +85,18 @@ def load_policy(path=POLICY_PATH):
 
 
 def _read_json(path):
+    """An empty file reads as no settings: while a sandboxed command runs, the sandbox mounts
+    /dev/null over a protected settings path the project lacks, which leaves an empty file
+    where the hook looks. Anything else that doesn't parse still fails closed."""
     try:
         with open(path) as f:
-            return json.load(f)
+            text = f.read()
     except FileNotFoundError:
         return {}
+    if not text.strip():
+        return {}
+    try:
+        return json.loads(text)
     except ValueError as e:
         raise ValueError(f"unreadable settings file {path}: {e}")
 
