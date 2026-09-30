@@ -5,11 +5,16 @@
 > decisions ([[dotclaude-handoff-skill]], [[dotclaude-research-sourcing-skill]],
 > [[dotclaude-chrome-devtools-wsl]]). Per-effort design rationale lives in its plan under `~/.claude/plans/`.
 
-Last updated: 2026-09-29
+Last updated: 2026-09-30
 Base: `main`. For branch / PR / push state, run `gh pr list` and `git log main..HEAD` (derive it; not
 stored here).
 
 ## Done (recent; git, the linked plans and memory hold the detail)
+- **Delegation hardening Stage 2 built and installed on HAYPC** (2026-09-30, PRs #35 to #38, merged
+  range `e536dd8..b4a85ae`). It covers the session-wide sandbox, the subagent policy hook, report-check,
+  `gh-public`, and the ledger's `audit` and `sandbox-denials`. `docs/delegation.md` holds the design,
+  the verified facts, the known gaps and the install order. Sandbox behavior on this machine is in
+  memory [[cc-sandbox-linux-facts]].
 - **Client deck data removed from the current tree** (2026-09-29, PR #28). Parity fixtures live in the
   client's private repo (`decks/_parity/`); `parity_check.py` requires `--config` and `--goldens`.
   History deliberately left as-is (Hayden's call).
@@ -39,22 +44,25 @@ stored here).
   research-sourcing (PR #10), staged-reader-review upgrade, danger-guard opt-in auto mode.
 
 ## In flight
-- **Delegation hardening: Stage 1 built; Stage 2 next.** `docs/delegation.md` holds the design,
-  the verified facts, the adopt/copy verdict, the install order and Stages 2 and 3;
-  `skills/delegation/SKILL.md` is the operating guide. Stage 1 shipped in PR #32 (derive:
-  `gh pr view 32 --json state,mergedAt`).
-  - **Installed on HAYPC** on 2026-09-30, and checked live: the override binds (sonnet, no Bash),
-    the guard denied a writer spawned without isolation, and the ledger records rows.
-    - **Other machines:** check with `ls -l ~/.claude/agents/Explore.md ~/.claude/skills/delegation`
-      and `grep -c agent-spawn-guard ~/.claude/settings.json`.
-    - **If it's missing,** install by hand per the docs' "Installing on a machine that is already set
-      up" section. Don't use `setup.sh`, and mind the order: the guard fails closed.
-  - **Next: Stage 2.** Hayden runs the `sudo apt install bubblewrap socat` step.
-  - **Ledger auto-mode fix:** it reads handed-back reports and skips internal agents. It is on
-    `fix/ledger-auto-mode`; derive its state with
-    `gh pr list --state all --head fix/ledger-auto-mode`. Ledger rows written before it merged
-    record auto-mode reports as `report_ok: false`, so discount them in the Stage 2 shadow data.
-  - **Local evidence** (not in git): `~/scratch/delegation-eval/`.
+- **Delegation hardening: Stage 2 live; Stage 3 (upgrade canary) is next** (`docs/delegation.md`,
+  "Next"). `skills/delegation/SKILL.md` is the operating guide. Open items:
+  - **After 2026-10-07:** run `delegation-ledger sandbox-denials --days 7` and add the hosts that were
+    actually needed to `sandbox.network.allowedDomains`.
+  - **Not observed live:** a real agent's `dangerouslyDisableSandbox` being denied. The teammate probe
+    declined to try it; the harness covers the rule (37/37).
+  - **Machine-local, not in this repo** (a `setup.sh` re-run would lose or lack them; decide whether
+    to move them in):
+    - the live `~/.claude/settings.json` had the Stage 2 hooks merged by hand, and it carries hq's
+      tool exclusions (`hq-new` to `hq-open`);
+    - `~/.config/git/ignore` holds the sandbox-stub block.
+  - **Other machines:** install by hand per the docs' install order (the policy hook fails closed).
+    bubblewrap and socat are required.
+  - **Optional:** a no-scope classic GitHub token at `~/.config/dotclaude/github-public-token` enables
+    `gh-public` code search.
+  - **Write-up:** Hayden wants a blog post or public repo on the findings. The evidence (probe
+    settings, prompts and outputs, harness logs) is in `~/scratch/delegation-writeup/evidence/`, and
+    the older eval is in `~/scratch/delegation-eval/`. Raw transcripts embed private context, so
+    never publish them as-is.
 - **Codex setup shared with a friend** (Hayden's ask, 2026-09-29). The share page is BUILT and private:
   https://claude.ai/artifact/KWwrPkLsbMUi7Ugjfskqsz (source was a session scratchpad; republish by that
   URL). It links only four clean skills (coding-practices, research-discipline, ui-alignment,
@@ -101,7 +109,7 @@ stored here).
 
 ## Notes for next session
 - **Verify delegation before touching it:** `python3 -m unittest discover -s tests/delegation -t tests/delegation`
-  (54 tests, no model calls). The live harness `tests/delegation/run.py --runner claude|codex` spends
+  (137 tests, no model calls; they pass inside the sandbox too). The live harness `tests/delegation/run.py --runner claude|codex` spends
   model calls. Run it after changing a role, a hook or `codex-delegate`, and after a Claude Code upgrade
   until the Stage 3 canary exists.
 - **Verify `deck-production` before touching it:** run `deckkit regress` as the README in the
