@@ -71,11 +71,24 @@ main checkout can't be stopped; `delegation-ledger audit` flags it.
 main thread. Your `git push` from another directory (`git -C x push`) doesn't match the
 exclusion, so it fails on the missing credential; retry it outside the sandbox.
 
-**Subagent or teammate?** Default to a subagent. A subagent's result returns as a
-notification, and Claude Code aborts one that makes no progress for 10 minutes
-(`CLAUDE_ASYNC_AGENT_STALL_TIMEOUT_MS`). Use a teammate only when the agents must talk to
-each other while they work. Teammates report through idle notifications and can stay silent
-far longer.
+**Subagent or teammate?** A subagent, almost always. Don't pass `name`: a named spawn
+silently becomes an agent-team teammate, so the spawn guard denies it. To talk to a subagent
+again, SendMessage the id its spawn returned. A subagent's result returns as a notification,
+and Claude Code aborts one that makes no progress for 10 minutes
+(`CLAUDE_ASYNC_AGENT_STALL_TIMEOUT_MS`), though a single long tool call doesn't trip it.
+Teammates report through idle notifications and can stay silent far longer: they caused 10 of
+the 11 stalls in our eval.
+
+A team earns its place only when agents must work together live:
+- interlocking interfaces, where each side's shape depends on the other's;
+- an adversarial investigation, where one agent attacks another's claims;
+- dedup across a wide fan-out, where agents must claim items as they go.
+
+Then name each spawn with the `team-` prefix (`policy.toml` `[spawn] team_prefix`), and the guard
+lets it through. A writer still needs `isolation` on the call, and an isolated spawn isn't a
+teammate, so a team can't include a writer; its changes go through you. Otherwise, you broker: a
+subagent that needs another reports `partial` and names what it needs, and you resume the other
+one through SendMessage.
 
 ## 2. Write the brief
 

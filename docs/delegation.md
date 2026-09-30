@@ -50,7 +50,8 @@ Each layer covers what the others can't.
 | Explore, reviewer | n/a (no Bash) | credential-read and MCP rules | yes |
 | researcher | on, no escape | Bash **allowlist**; credential and MCP rules | yes |
 | writer | on, no escape | default rules; root = `worktreePath` | yes |
-| general-purpose, forks, Plan, plugin and Workflow agents, in-process teammates | on, no escape | default rules; root = the project directory | no (their reports aren't JSON-bound) |
+| general-purpose, forks, Plan, plugin and Workflow agents | on, no escape | default rules; root = the project directory | no (their reports aren't JSON-bound) |
+| in-process teammates | on, no escape | their role's rules (meta.json `customAgentType`), else the default rules | no (their stops fire per message) |
 
 ## What ships
 
@@ -60,7 +61,7 @@ Each layer covers what the others can't.
 | `researcher` | `agents/researcher.md` | Enforces: its Bash runs on the policy's read-only allowlist |
 | `reviewer` | `agents/reviewer.md` | Enforces: Read, Grep and Glob only |
 | `writer` | `agents/writer.md` | Enforces: `isolation: worktree`, no Agent tool, and the policy's worktree root |
-| Spawn guard | `hooks/agent-spawn-guard.sh`, `skills/delegation/scripts/agent-spawn-guard` | Enforces: denies a `writer` spawn without `isolation` on the call. Fails closed |
+| Spawn guard | `hooks/agent-spawn-guard.sh`, `skills/delegation/scripts/agent-spawn-guard` | Enforces: denies a `writer` spawn without `isolation` on the call, and a named spawn without the `team-` prefix. Fails closed |
 | Sandbox | `settings.json` `sandbox` | Enforces (OS): the write roots, `denyRead` (the credential barrier), `denyWrite` (the enforcement sources), and the network allowlist. `failIfUnavailable`, and `autoAllowBashIfSandboxed: false`, so Hayden's prompts stay as they were |
 | Subagent policy | `hooks/subagent-policy.sh`, `skills/delegation/scripts/subagent-policy`, `skills/delegation/policy.toml` | Enforces: see "Subagent policy" below. Fails closed for the tools it polices |
 | Report check | `hooks/report-check.sh`, `skills/delegation/scripts/report-check` | Enforces acceptance: a schema-invalid report is sent back twice at most. Fails open |
@@ -202,22 +203,88 @@ from 60 to 5,000 requests an hour.
   appears in any settings file. hq's `bin/hq-mcp-env` is one such wrapper. An `envVars` deny list
   is the fallback; it names each variable, so it belongs in the private live settings, not this
   baseline.
+- **A program the same command line creates is denied.** In `uv venv .venv && .venv/bin/python
+  -c ...`, the policy checks `.venv/bin/python` before `.venv` exists, so it can't resolve it and
+  denies it as `unknown-command`. Running the creating step as its own call works. Seen once in the
+  live harness (2026-09-30), from a writer that chained its steps.
 - **Network filtering is by hostname only,** so domain fronting is possible.
 - **A cloned repo's committed `sandbox.filesystem.allowWrite`** widens that repo's own sandbox
   (cc-safety-net RR-11). This is noted, not policed.
 - **Hook timeout.** A hook timeout is non-blocking. The settings command's `timeout 8` and the
   script's 5-second alarm both deny first.
-- **Teammates and Workflow agents.** In-process teammates and Workflow agents are inferred to
-  carry `agent_id`; `-p` can't create a teammate. The heartbeat in `audit` would show either
-  being missed.
+- **Teammates are checked by hand.** `-p` still can't create a teammate (2.1.286: a named spawn
+  there runs as a plain subagent), so the live harness can't cover one. The teammate facts below
+  come from a live session. A teammate's meta.json appeared about 0.5 s after its transcript
+  began and before its first tool call; a first call that beat it would get the default rules.
 - **Vault.** There is deliberately no vault read deny. A session-wide deny would break hq's vault
   routing and vault's own sessions, and Bash writes to vault from other sessions are already
   outside the write roots.
 
+## Stage 3
+
+Stage 3 makes the setup check itself instead of relying on someone remembering. The plan is in
+`~/.claude/plans/lets-move-on-to-refactored-pascal.md`. Step 0 and A0 are done.
+
+### Teams are off by default (A0)
+
+Every named spawn silently became an in-process teammate. The 2026-09-30 re-evaluation found 57
+teams on this machine, all implicit `session-<id>` teams, and 86 of the 89 teammates recorded in
+`~/.claude/teams/*/config.json` were general-purpose. Of 308 teammate messages, 293 went to the lead. Of the 15 peer-to-peer ones, 13
+were report-delivery churn between nested agents, so 2 were real coordination. Teammates also
+caused 10 of the 11 eval stalls (34 to 520 minutes). So a team bought almost nothing and cost the
+most.
+
+`agent-spawn-guard` now denies a named spawn unless its name starts with `policy.toml` `[spawn]
+team_prefix` (`team-`). A fork, or a spawn that passes `isolation` on the call, may still be
+named, and the writer rule keeps priority. The denial (intent `use_alternative`) says to drop the
+name and SendMessage the returned id. It is recorded as a `named-spawn` policy row, so the
+monthly audit can tell whether the guard is fighting real needs. SKILL §1 says when a team earns
+the prefix.
+
+### What Step 0 found
+
+- **Workflow agents are covered** (P1). Their hook input carries `agent_id`, and the policy
+  denied one's `git push`. The inference Stage 2 rested on holds.
+- **The stall timer doesn't catch an agent inside one long tool call** (P2). A 100-second call
+  finished under a 45-second timer. So liveness (A1) must track the time since a tool started,
+  not only the time since the last event.
+- **The harness never isolated the code under test.** `claude -p` loads user settings, so the
+  installed copy of every hook ran beside the checkout's copy. A regression in the checkout could
+  pass because the installed copy enforced the same rule. It surfaced when report-check ran twice
+  per stop (below). The harness now passes `--setting-sources project,local`, and the fixture
+  carries the `env` and `teammateMode` it needs from the user tier.
+- **report-check could loop forever under a duplicated hook.** Each registration bumped the
+  counter, and giving up cleared it, so the attempts cycled 1, 2, 1, 2 and every stop still
+  carried a block. An Explore agent that kept refusing the JSON block looped for 18 stops on
+  2.1.286. Once it gives up, report-check now stays given up for that agent, for a day. The cost:
+  a later SendMessage resume of that agent keeps its id, so a bad report then passes unchecked
+  (the ledger still records `report_ok: false`).
+- **A teammate's `agent_type` is its name** (P4, 2026-09-30). A `team-probe` spawned as
+  `researcher` arrived as `agent_type: "team-probe"`. Its `agent_id` was present and the policy
+  denied its `git push`, but it got the default rules, not the researcher allowlist. The role is
+  in meta.json's `customAgentType` (beside `taskKind: "in_process_teammate"`). The policy and the
+  ledger now resolve the role through `delegation_common.agent_role`. The ledger also records the
+  teammate's `name`.
+- **Nested worktrees.** A lead session in a worktree nests its agents' worktrees inside it. The
+  policy's cwd fallback took the first `/.claude/worktrees/`, which made the lead's whole
+  worktree the agent's root; it now takes the last. The protected area (`main_root`) stays the
+  outermost checkout, because it holds both the lead's worktree and the real main checkout.
+- **The ledger anomalies are not coverage gaps** (P3). The unpaired stops from 05:17Z to 06:24Z
+  on 2026-09-30 were Claude Code helper agents, logged before the empty-type skip was installed.
+  The one general-purpose stop without a start began at 05:16:28Z, 30 seconds before the
+  ledger's first row. A researcher's two stops were legitimate: its plain-text reply stopped it
+  once, then Claude Code injected `[handback-send-enforce] Your report has not been delivered`
+  and it stopped again after `SubagentHandback`. `fold` already keeps the latest row per id, so
+  counts must use distinct ids, not stop rows.
+- **Two test-suite bugs.** A slug built by replacing only `/` and `.` failed about one run in
+  five. And sandboxed from a checkout under `.claude/worktrees/`, the policy tests have nowhere
+  clean to build their fake homes, so they now fail with one message saying so.
+
 ## Verified facts the design rests on
 
-Checked against Claude Code 2.1.285 and Codex CLI 0.154. "Probe" means a live `claude -p` run with
-a real sandbox on 2026-09-30. Where the docs and the binary disagree, the binary wins.
+Checked against Claude Code 2.1.285 and Codex CLI 0.154, then re-run on 2.1.286 with the full live
+harness. "Probe" means a live `claude -p` run with a real sandbox on 2026-09-30. Where the docs and
+the binary disagree, the binary wins.
 
 - **Grep and Glob:** on Linux and WSL they are absent by default. They come back for a subagent that
   lists them in `tools` and leaves out Bash
@@ -301,7 +368,24 @@ a real sandbox on 2026-09-30. Where the docs and the binary disagree, the binary
 - **Teammate reporting:** teammates report to the lead through `teammate-message` and
   `idle_notification` events, not task notifications.
 - **Stall timeout:** `CLAUDE_ASYNC_AGENT_STALL_TIMEOUT_MS` (default 10 minutes) aborts a subagent that
-  makes no progress ([env-vars](https://code.claude.com/docs/en/env-vars)).
+  makes no progress ([env-vars](https://code.claude.com/docs/en/env-vars)). Probe on 2.1.286
+  (`run.py` case `stall`): a background agent inside one 100-second tool call finished under a
+  45-second timer, so a single long call isn't aborted. There is no negative control, so this
+  doesn't show the timer fires at all in that setup. A silent agent can therefore sit in one call
+  far past the timer; the Stage 3 liveness state (A1) has to see it.
+- **Workflow agents** (probe on 2.1.286, case `workflow`): their PreToolUse, PostToolUse and
+  SubagentStart carry `agent_id`, with `agent_type: "workflow-subagent"`, and the policy denied
+  one's `git push`. Under `-p` the Workflow tool first asks for review ("Review dynamic workflow
+  before running"), so the harness pre-allows it.
+- **Teammate identity** (live session, 2.1.286): a teammate's hook `agent_type` is its name. Its
+  meta.json has `agentType` (the name), `name`, `customAgentType` (the role it was spawned as),
+  `taskKind: "in_process_teammate"` and `teamName`. The agent definition still binds (model and
+  tools). `agent_id` looks like `ateam-probe-<hex>`.
+- **meta.json timing:** a plain subagent's meta.json doesn't exist yet at SubagentStart; it does by
+  SubagentStop. A named plain subagent's meta.json carries `name`.
+- **A doubled SubagentStop:** in auto mode, an agent that ends with plain text stops, then Claude
+  Code injects `[handback-send-enforce]` and it stops again after `SubagentHandback`. Each stop
+  fires the hook.
 - **Codex sub-agents:**
   - a `spawn_agent` without a model inherits the parent's model (tested);
   - `agents.default_subagent_model` exists, and `codex-delegate` passes it with `-c`;
@@ -335,32 +419,38 @@ acting for Anthropic or OpenAI.
 
 ## Next
 
-**Stage 3 (watch):**
-- **A cctop-style heartbeat in `tmux-state.sh`.**
-- **An upgrade canary:** after each Claude Code upgrade, rerun `tests/delegation/run.py` and
-  `delegation-ledger audit`. It should also include an interactive check that a named teammate's
-  `git push` is denied.
-- **A monthly audit.**
-- **The general-purpose share:** watch it in the ledger. If read-only work keeps landing on
-  general-purpose, route it to a role or deny it.
+**Stage 3 (watch)** is planned in `~/.claude/plans/lets-move-on-to-refactored-pascal.md`, which
+replaced the bullets that stood here. Its order: Step 0 probes, then A0 (named spawns off),
+A4 and A5 (due nudges, a one-command canary), A1 (per-agent liveness state), A3 (one watch view),
+A2 (deadline nudge, then hard stop), A6 (monthly audit). Step 0 and A0 are done; see
+"Stage 3" above.
 
 ## Tests
 
 - **Unit:** `python3 -m unittest discover -s tests/delegation -t tests/delegation`. They make no model
   calls. The policy tests run against this repo's baseline `sandbox` block, and the codex-delegate
-  tests use a fake `codex` on `PATH`.
+  tests use a fake `codex` on `PATH`. Sandboxed from a checkout under `.claude/worktrees/`, the
+  policy tests refuse to run (their fake paths would read as inside that worktree); run them with
+  the sandbox off there.
 - **Live:** `python3 tests/delegation/run.py --runner claude` runs short `claude -p` sessions (sonnet;
   the reader case uses a haiku lead) in a disposable fixture.
-  - The fixture's project settings wire the hooks by absolute path and turn the sandbox on, so it
-    tests this checkout before anything is installed.
-  - Pick cases with `--cases`.
+  - The fixture's project settings wire the hooks by absolute path and turn the sandbox on, and
+    every session runs with `--setting-sources project,local`, so only this checkout's hooks run,
+    before anything is installed.
+  - Pick cases with `--cases`, or a stage with `--stage`.
   - `--runner codex` runs one short Terra run.
-- **Results on 2026-09-30:**
-  - unit: 137 tests, passing both outside and inside the sandbox;
-  - claude: 37/37 (all Stage 1 cases, plus policy, allowlist, deps, escape, and report in both
-    default and auto mode). The computed-path escape reached the main checkout, as the known gap
-    predicts, and `audit` flagged it;
-  - codex: 7/7.
+- **Results on 2026-09-30 (Claude Code 2.1.286):**
+  - unit: 158 tests;
+  - claude: 52 checks over all three stages. The last full run passed 51. The miss was the old
+    `report (auto)` check, which asserted that the model complies: it kept the brief's "no JSON"
+    rule all three times, and the cap let it through as designed. The check now asserts the
+    contract instead (valid, or recorded invalid after exactly two send-backs), and it passed live.
+    An earlier full run lost `deps` to a chained command (see the known gaps); it passes with one
+    call per step. The computed-path escape reached the main checkout, as the known gap predicts,
+    and `audit` flagged it;
+  - the Stage 2 baseline run with user settings still loaded went 36/37. That failure was the
+    report-check loop, and it led to the `--setting-sources` fix;
+  - codex: 7/7 (on 2.1.285, not rerun).
 
 ## Installing on a machine that is already set up
 

@@ -47,7 +47,7 @@ value replaces the baseline's (`merge-settings.py`).
 | `git/sandbox-stubs.ignore` | Git ignore patterns for the `/dev/null` mounts the Bash sandbox puts over protected dotfiles a repo lacks (they break `git add -A`) | upserted by `git/install-ignore.py` between markers in the global git excludes file (`core.excludesFile`, else `~/.config/git/ignore`); Linux only |
 | `skills/` | The skills I authored: `coding-practices`, `research-discipline`, `research-sourcing`, `writing-voice`, `staged-reader-review`, `ebook-extract`, `deck-production`, `vetting-sources`, `handoff`, `frontend-ui-discipline`, `ui-alignment`, `delegation` | symlink per dir into `~/.claude/skills/`; a skill's `scripts/` CLI also symlinks into `~/.local/bin` when that dir exists (`deck-production` ships `deckkit`; `delegation` ships `codex-delegate`, `delegation-ledger` and `gh-public`) |
 | `agents/` | Delegation roles: `Explore` (overrides the built-in with a no-shell reader), `researcher`, `reviewer`, `writer`; see docs/delegation.md | symlink per file into `~/.claude/agents/` |
-| `hooks/agent-spawn-guard.sh` | PreToolUse(Agent) guard: denies a `writer` spawn that doesn't pass `isolation` on the call; fails closed | symlink `~/.claude/hooks/agent-spawn-guard.sh` |
+| `hooks/agent-spawn-guard.sh` | PreToolUse(Agent) guard: denies a `writer` spawn that doesn't pass `isolation` on the call, and a named spawn without the `team-` prefix; fails closed | symlink `~/.claude/hooks/agent-spawn-guard.sh` |
 | `hooks/delegation-ledger.sh` | SubagentStart/SubagentStop hook: appends a pointer row per delegated agent to the delegation ledger; never blocks | symlink `~/.claude/hooks/delegation-ledger.sh` |
 | `hooks/subagent-policy.sh` | PreToolUse(*) policy for delegated agents only (rules in `skills/delegation/policy.toml`): no leaving the sandbox, no destructive git, no MCP writes, protected paths, the researcher allowlist, writers held to their worktree; fails closed | symlink `~/.claude/hooks/subagent-policy.sh` |
 | `hooks/report-check.sh` | PreToolUse(SubagentHandback)/SubagentStop hook: sends a delegated role's malformed report back, at most twice; fails open | symlink `~/.claude/hooks/report-check.sh` |
@@ -96,7 +96,9 @@ ships but is opt-in, see its entry):
 
 - **PreToolUse(`Agent|Task`): `agent-spawn-guard.sh`** (in this repo). Denies a `writer` spawn that
   doesn't pass `isolation` on the Agent call. With agent teams on, a named spawn would otherwise start
-  as a teammate in the main checkout, and the writer's frontmatter isolation would be ignored.
+  as a teammate in the main checkout, and the writer's frontmatter isolation would be ignored. It also
+  denies a named spawn whose name lacks the `team-` prefix (`policy.toml` `[spawn]`), since any
+  named spawn silently becomes a teammate.
   **Fails closed**: if the guard script or python3 is missing, it exits 2 and blocks every Agent
   spawn. That is deliberate, but it means `skills/delegation` must be linked before this hook is
   wired (see `docs/delegation.md`, install order). Needs python3 on PATH.

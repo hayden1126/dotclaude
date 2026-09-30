@@ -47,17 +47,20 @@ stored here).
   research-sourcing (PR #10), staged-reader-review upgrade, danger-guard opt-in auto mode.
 
 ## In flight
-- **Delegation hardening Stage 3: planned and approved 2026-09-30, not started.** The plan is
-  `~/.claude/plans/lets-move-on-to-refactored-pascal.md` (`docs/delegation.md` "Next" points there).
-  Decisions already made:
-  - named spawns are denied by default, and a `team-` name prefix opts a single spawn in;
-  - deadlines nudge, then hard-stop;
-  - liveness shows in the tmux status bar and a CLI.
+- **Delegation hardening Stage 3: Step 0 and A0 built** on `feat/delegation-stage3`, in the worktree
+  `.claude/worktrees/stage3`, so the live symlinked hooks stay on `main` until the merge. The plan
+  is `~/.claude/plans/lets-move-on-to-refactored-pascal.md`; this block's execution plan is
+  `~/.claude/plans/continue-from-status-md-lovely-puzzle.md`. The findings are in
+  `docs/delegation.md` "Stage 3":
+  - named spawns are denied unless their name starts with `team-`;
+  - teammates are policed by their role (meta.json `customAgentType`), not their name;
+  - report-check can no longer loop under a duplicated hook;
+  - the live harness now runs only the checkout's hooks (`--setting-sources project,local`).
 
-  Order: Step 0 probes → A0 spawn guard → A4 due nudges and A5 canary → A1 → A3 → A2 → A6. Branch
-  `feat/delegation-stage3`. Stage 2 was verified on CC 2.1.285. If `claude --version` shows anything
-  newer, the canary is already due. This pointer was written from hq and left uncommitted, so make
-  it the branch's first commit.
+  **Next: A4 (due nudges) and A5 (the one-command canary)**, then A1 → A3 → A2 → A6. Decisions
+  already made: deadlines nudge, then hard-stop; liveness shows in the tmux status bar and a CLI.
+  A1 must catch an agent that sits in one long tool call, because the stall timer doesn't (P2).
+  Merging needs no re-run of `setup.sh`: everything touched is symlinked.
 - **Delegation hardening: Stage 2 live** (`docs/delegation.md`). `skills/delegation/SKILL.md` is the
   operating guide. Open items:
   - **After 2026-10-07:** run `delegation-ledger sandbox-denials --days 7` and add the hosts that were
@@ -118,7 +121,8 @@ stored here).
 
 ## Notes for next session
 - **Verify delegation before touching it:** `python3 -m unittest discover -s tests/delegation -t tests/delegation`
-  (138 tests, no model calls; they pass inside the sandbox too), and the installer helpers with
+  (158 tests, no model calls; they pass inside the sandbox too, except from a checkout under
+  `.claude/worktrees/`, where the policy tests refuse and need the sandbox off), and the installer helpers with
   `python3 -m unittest discover -s tests/setup -t tests/setup`. The live harness `tests/delegation/run.py --runner claude|codex` spends
   model calls. Run it after changing a role, a hook or `codex-delegate`, and after a Claude Code upgrade
   until the Stage 3 canary exists.
