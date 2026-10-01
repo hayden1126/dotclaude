@@ -129,6 +129,12 @@ validated (`report_ok`).
 
 ## 4. Liveness and recovery
 
+- **On any silence, run `delegation-ledger watch` before guessing.** It prints one line per
+  live delegation, with what each is doing (`in Bash 12 min`, `running`, `finishing its turn`)
+  and a `⚠` past a threshold. `delegation-ledger open` adds the evidence behind each verdict, and
+  the orphans. Both run outside the sandbox as bare commands (`delegation-ledger` is in
+  `excludedCommands`). A piped or chained call stays sandboxed, where no session pid is
+  visible: it warns on its first line and calls each session `unknown`.
 - `delegation-ledger audit` checks that enforcement still binds:
   - the policy hook saw every agent that used tools;
   - no writer's run coincided with a main-checkout change;

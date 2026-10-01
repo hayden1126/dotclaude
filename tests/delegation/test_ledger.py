@@ -80,6 +80,9 @@ class LedgerEnv(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.env = dict(os.environ, HOME=self.tmp.name,
                         XDG_STATE_HOME=os.path.join(self.tmp.name, "state"))
+        # Inside the sandbox the lead's CLAUDE_PID is inherited but invisible, which would put
+        # every `open` here in the no-pid-visible mode. The Sandbox tests set it on purpose.
+        self.env.pop("CLAUDE_PID", None)
         self.ledger = os.path.join(self.tmp.name, "state", "dotclaude", "delegations.jsonl")
 
     def tearDown(self):
@@ -440,8 +443,13 @@ class AgentIndex(LedgerEnv):
         self.assertEqual(self.index()["activations"], 1)
 
 
-class Liveness(LedgerEnv):
-    """`open` on a live session: the transcript scan, the index and the thresholds."""
+DEAD = 2 ** 22 + 12345  # beyond pid_max on this box, so never alive
+
+
+class LiveSession(LedgerEnv):
+    """A live session s1 (this process's pid) and helpers to write its agent transcripts, run
+    the CLI, and write ledger rows directly. No tests of its own, so subclasses don't rerun
+    any."""
 
     def setUp(self):
         super().setUp()
@@ -457,16 +465,37 @@ class Liveness(LedgerEnv):
             for e in entries:
                 f.write(json.dumps(e) + "\n")
 
-    def open_(self, toml=None):
-        env = dict(self.env)
+    def cli(self, *argv, toml=None, **env):
+        env = dict(self.env, **env)
         if toml is not None:
             path = os.path.join(self.tmp.name, "liveness.toml")
             with open(path, "w") as f:
                 f.write(toml)
             env["DELEGATION_LIVENESS"] = path
-        p = subprocess.run(["python3", LEDGER, "open"], capture_output=True, text=True, env=env)
+        p = subprocess.run(["python3", LEDGER, *argv], capture_output=True, text=True, env=env)
         self.assertEqual(p.returncode, 0, p.stderr)
         return p.stdout
+
+    def open_(self, toml=None):
+        return self.cli("open", toml=toml)
+
+    def append(self, *rows):
+        os.makedirs(os.path.dirname(self.ledger), exist_ok=True)
+        with open(self.ledger, "a") as f:
+            f.writelines(json.dumps(r) + "\n" for r in rows)
+
+    def codex_row(self, rid, pid, **kw):
+        """A codex ledger row as codex-delegate writes it, with a fresh events.jsonl."""
+        out = os.path.join(self.tmp.name, rid)
+        os.makedirs(out)
+        open(os.path.join(out, "events.jsonl"), "w").close()
+        return dict({"runner": "codex", "id": rid, "run_id": rid, "event": "start",
+                     "ts": dc.now_iso(), "model": "gpt-5.6-terra", "dir": "/src/proj",
+                     "out": out, "pid": pid, "wrapper_pid": pid}, **kw)
+
+
+class Liveness(LiveSession):
+    """`open` on a live session: the transcript scan, the index and the thresholds."""
 
     def test_an_open_tool_use_is_a_call_in_flight(self):
         self.transcript(use("t1", "Bash", 5))
@@ -582,6 +611,183 @@ class Liveness(LedgerEnv):
         scan = ledger_mod.scan_transcript(path)
         self.assertEqual([tool for tool, _ in scan["open"]], ["Grep"])
         self.assertEqual(scan["last"], "tool_use")
+
+
+class Watch(LiveSession):
+    """`watch`: one line per live delegation, and the tmux token from `--summary`."""
+
+    def describe(self, text, aid="a1"):
+        with open(os.path.join(self.sub, f"agent-{aid}.meta.json"), "w") as f:
+            json.dump({"description": text}, f)
+
+    def watch(self, toml=None, **env):
+        return self.cli("watch", toml=toml, **env).splitlines()
+
+    def summary(self, toml=None, **env):
+        out = self.cli("watch", "--summary", toml=toml, **env)
+        self.assertEqual(out.count("\n"), 1, out)  # one line, even an empty one
+        return out[:-1]
+
+    def test_a_live_call_is_one_line(self):
+        self.transcript(use("t1", "Bash", 5))
+        self.describe("find the marker line in the fixture repo, then report back")
+        self.hook(dict(self.start(), cwd="/src/proj/.claude/worktrees/agent-a1"))
+        self.assertEqual(self.watch(), [
+            "claude  a1  Explore  proj  in Bash 5 min  'find the marker line in the fixture repo'"])
+        self.assertEqual(self.summary(), "1▶")
+
+    def test_past_tool_min_the_line_and_the_token_warn(self):
+        self.transcript(use("t1", "Bash", 5))
+        self.hook(self.start())
+        toml = "[subagent]\ntool_min = 1\n"
+        self.assertEqual(self.watch(toml), ["claude  a1  Explore  w  in Bash 5 min ⚠"])
+        self.assertEqual(self.summary(toml), "1▶ 1⚠")
+
+    def test_a_stopped_agent_is_absent(self):
+        self.transcript(use("t1", "Bash", 5), result("t1", 1), ended(1))
+        self.hook(self.start())
+        self.hook(self.stop())
+        self.assertEqual(self.watch(), ["no live delegations"])
+        self.assertEqual(self.summary(), "")
+
+    def test_an_orphan_is_only_counted_in_the_footer(self):
+        self.hook(self.start(sid="s9"))  # no session file for s9: its session is gone
+        self.assertEqual(self.watch(), [
+            "no live delegations",
+            "1 more unfinished but not live in the last 48h: delegation-ledger open"])
+        self.assertEqual(self.summary(), "")
+        self.assertIn("orphaned", self.open_())
+
+    def test_a_turn_that_just_ended_is_finishing_then_warns(self):
+        # The stop row lands a few seconds after the end_turn entry; a poll in that gap
+        # mustn't flash a warning.
+        self.transcript(use("t1", "Read", 3), result("t1", 3), ended(0))
+        self.hook(self.start())
+        self.assertEqual(self.watch(), ["claude  a1  Explore  w  finishing its turn"])
+        self.assertEqual(self.summary(), "1▶")
+        self.assertIn("finishing its turn", self.open_())
+        self.transcript(use("t1", "Read", 3), result("t1", 3), ended(2))
+        self.assertEqual(self.watch(),
+                         ["claude  a1  Explore  w  ended its turn but no stop row ⚠"])
+        self.assertEqual(self.summary(), "1▶ 1⚠")
+
+    def test_codex_runs_live_listed_dead_in_the_footer(self):
+        self.append(self.codex_row("r1", os.getpid()), self.codex_row("r2", DEAD),
+                    self.codex_row("r3", None, event="pending", wrapper_pid=os.getpid()))
+        self.assertEqual(self.watch(), [
+            "codex   r1  gpt-5.6-terra  proj  running, last event 0 min ago",
+            "codex   r3  gpt-5.6-terra  proj  starting",
+            "1 more unfinished but not live in the last 48h: delegation-ledger open"])
+        self.assertEqual(self.summary(), "2▶")
+
+    def test_watch_reads_only_the_ledger_tail(self):
+        self.transcript(use("t1", "Bash", 5))
+        self.hook(self.start())
+        pad = {"runner": "claude", "id": "p", "event": "policy", "rule": "git-push",
+               "ts": dc.now_iso(), "note": "x" * 200}
+        self.append(*[pad] * (ledger_mod.WATCH_TAIL // len(json.dumps(pad)) + 10))
+        self.assertGreater(os.path.getsize(self.ledger), ledger_mod.WATCH_TAIL)
+        self.assertEqual(self.watch(), ["no live delegations"])  # its start row was cut off
+        self.assertIn("in Bash 5 min", self.open_())             # open reads the whole ledger
+
+    def test_the_tail_read_drops_a_line_the_cut_split(self):
+        rows = [{"runner": "claude", "id": f"a{i}", "event": "start"} for i in range(3)]
+        self.append(*rows)
+        last = len(json.dumps(rows[-1])) + 1
+        with mock.patch.dict(os.environ, {"DELEGATION_LEDGER": self.ledger}):
+            self.assertEqual(dc.read_rows(tail=last), rows[-1:])      # a cut on a line end
+            self.assertEqual(dc.read_rows(tail=last + 5), rows[-1:])  # a split line, dropped
+            self.assertEqual(dc.read_rows(tail=1 << 20), rows)        # no cut, nothing dropped
+            self.assertEqual(dc.read_rows(), rows)
+
+    def test_a_malformed_file_warns_first_but_never_in_the_token(self):
+        self.transcript(use("t1", "Bash", 5))
+        self.hook(self.start())
+        lines = self.watch("[subagent\n")
+        self.assertTrue(lines[0].startswith("warning: "), lines)
+        self.assertIn("using the default thresholds", lines[0])
+        self.assertEqual(lines[1:], ["claude  a1  Explore  w  in Bash 5 min"])
+        self.assertEqual(self.summary("[subagent\n"), "1▶")
+
+
+class Sandbox(LiveSession):
+    """A call inside the Bash sandbox: CLAUDE_PID is set, but its own PID namespace hides that
+    process, so no pid check means anything. Here s1's session is gone, so a visible check
+    would call its agent orphaned."""
+
+    def setUp(self):
+        super().setUp()
+        os.remove(os.path.join(self.tmp.name, ".claude", "sessions", "1.json"))
+        self.transcript(use("t1", "Bash", 5))
+        self.hook(self.start())
+
+    def test_open_warns_first_and_calls_the_session_unknown(self):
+        out = self.cli("open", CLAUDE_PID=str(DEAD))
+        self.assertEqual(out.splitlines()[0], "warning: " + ledger_mod.SANDBOX_WARNING)
+        self.assertIn("in Bash 5 min", out)
+        self.assertIn("session unknown (no pid visible in the sandbox)", out)
+        self.assertNotIn("orphaned", out)
+
+    def test_watch_warns_first_and_lists_the_agent(self):
+        self.assertEqual(self.watch_lines(CLAUDE_PID=str(DEAD)),
+                         ["warning: " + ledger_mod.SANDBOX_WARNING,
+                          "claude  a1  Explore  w  in Bash 5 min"])
+        self.assertEqual(self.cli("watch", "--summary", CLAUDE_PID=str(DEAD)), "1▶\n")
+
+    def test_a_visible_claude_pid_keeps_the_orphan_verdict(self):
+        out = self.cli("open", CLAUDE_PID=str(os.getpid()))
+        self.assertNotIn("warning", out)
+        self.assertIn("orphaned", out)
+        self.assertEqual(self.watch_lines(CLAUDE_PID=str(os.getpid()))[0], "no live delegations")
+
+    def test_a_codex_run_is_not_called_dead(self):
+        self.append(self.codex_row("r1", DEAD))
+        out = self.cli("open", CLAUDE_PID=str(DEAD))
+        self.assertIn("pid not visible in the sandbox", out)
+        self.assertIn("not visible in the sandbox, last event 0 min ago", out)
+        self.assertNotIn("died", out)
+        self.assertIn("codex   r1  gpt-5.6-terra  proj  pid not visible, last event 0 min ago",
+                      self.watch_lines(CLAUDE_PID=str(DEAD)))
+
+    def watch_lines(self, **env):
+        return self.cli("watch", **env).splitlines()
+
+
+class ProcStart(LedgerEnv):
+    """A session file's procStart must match the pid's start time (field 22 of
+    /proc/<pid>/stat), so a pid the kernel reused doesn't keep a gone session alive."""
+
+    def own_start(self):
+        with open("/proc/self/stat") as f:
+            return int(f.read().rsplit(") ", 1)[1].split()[19])
+
+    def open_with_session(self, **fields):
+        sessions = os.path.join(self.tmp.name, ".claude", "sessions")
+        os.makedirs(sessions)
+        with open(os.path.join(sessions, "1.json"), "w") as f:
+            json.dump(dict({"pid": os.getpid(), "sessionId": "s1"}, **fields), f)
+        self.hook(self.start())
+        return subprocess.run(["python3", LEDGER, "open"], capture_output=True, text=True,
+                              env=self.env).stdout
+
+    def test_a_mismatched_proc_start_is_a_gone_session(self):
+        out = self.open_with_session(procStart="1")
+        self.assertIn("orphaned", out)
+        self.assertIn("session gone", out)
+
+    def test_a_matching_proc_start_is_a_live_session(self):
+        out = self.open_with_session(procStart=self.own_start())
+        self.assertNotIn("orphaned", out)
+        self.assertIn("session alive", out)
+
+    def test_pid_alive_checks_the_start_only_when_given(self):
+        start = self.own_start()
+        self.assertTrue(dc.pid_alive(os.getpid()))
+        self.assertTrue(dc.pid_alive(os.getpid(), start))
+        self.assertTrue(dc.pid_alive(os.getpid(), str(start)))
+        self.assertFalse(dc.pid_alive(os.getpid(), start + 1))
+        self.assertFalse(dc.pid_alive(DEAD, start))
+        self.assertEqual(dc.proc_start(os.getpid()), start)
 
 
 if __name__ == "__main__":

@@ -40,7 +40,8 @@ Stage 3 checks (probes first: each records a Claude Code fact the later steps re
               policy denies its git push
   stall       whether CLAUDE_ASYNC_AGENT_STALL_TIMEOUT_MS aborts a background agent that sits
               in one long tool call (is a running tool "progress"?); meanwhile `delegation-ledger
-              open` must show it `in Bash`, and its liveness index must end `stopped`
+              open` and `watch` must show it `in Bash`, `watch --summary` must count it, and
+              its liveness index must end `stopped`
   team        a team- spawn passes the guard and its role (researcher allowlist) binds. -p runs
               it as a plain subagent, so the teammate path itself is checked by hand
 
@@ -55,6 +56,7 @@ import glob
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -591,13 +593,16 @@ STALL_TIMEOUT_MS = 45000
 STALL_SLEEP_S = 100  # under the Bash tool's 120 s default, so only the stall timer can end it
 
 
-def poll_open(env, done, outputs, every=3):
-    """Run `delegation-ledger open` against the fixture's state every few seconds until done
-    is set, keeping each output."""
+POLLED = {"open": ["open"], "watch": ["watch"], "summary": ["watch", "--summary"]}
+
+
+def poll_ledger(env, done, outputs, every=3):
+    """Run `delegation-ledger open`, `watch` and `watch --summary` against the fixture's state
+    every few seconds until done is set, keeping each round's outputs by name."""
     while not done.wait(every):
-        p = subprocess.run([sys.executable, os.path.join(SCRIPTS, "delegation-ledger"), "open"],
-                           capture_output=True, text=True, env=env)
-        outputs.append(p.stdout)
+        outputs.append({name: subprocess.run(
+            [sys.executable, os.path.join(SCRIPTS, "delegation-ledger"), *argv],
+            capture_output=True, text=True, env=env).stdout for name, argv in POLLED.items()})
 
 
 def stall(root, env, state):
@@ -605,7 +610,7 @@ def stall(root, env, state):
           f"{STALL_SLEEP_S}s call)")
     cmd = f'python3 -c "import time; time.sleep({STALL_SLEEP_S})"'
     polls, done = [], threading.Event()
-    poller = threading.Thread(target=poll_open, args=(env, done, polls), daemon=True)
+    poller = threading.Thread(target=poll_ledger, args=(env, done, polls), daemon=True)
     poller.start()
     try:
         r = claude('Spawn one general-purpose subagent in the background (Agent tool, '
@@ -645,10 +650,16 @@ def stall(root, env, state):
           f"span {span:.0f}s, foreground {foreground}, finished {finished}")
     # A1 rests on this: the tool_use entry is in the transcript before the tool runs, so a
     # poll during the sleep sees a call in flight.
-    rows = [line.strip() for out in polls for line in out.splitlines() if aid in line]
-    in_bash = [line for line in rows if "in Bash" in line]
-    check("stall: `open` showed the agent in Bash during the call", in_bash,
-          in_bash[0][:160] if in_bash else f"{len(polls)} polls; last row {rows[-1:]}")
+    for name in ("open", "watch"):
+        rows = [line.strip() for p in polls for line in p[name].splitlines() if aid in line]
+        in_bash = [line for line in rows if "in Bash" in line]
+        check(f"stall: `{name}` showed the agent in Bash during the call", in_bash,
+              in_bash[0][:160] if in_bash else f"{len(polls)} polls; last row {rows[-1:]}")
+    # The other cases' agents are stopped or orphaned by now, so a count means this agent.
+    tokens = [p["summary"].strip() for p in polls]
+    counted = [t for t in tokens if re.fullmatch(r"[1-9]\d*▶( [1-9]\d*⚠)?", t)]
+    check("stall: `watch --summary` counted it", counted,
+          counted[0] if counted else f"{len(polls)} polls; tokens {sorted(set(tokens))[:5]}")
     try:
         with open(os.path.join(state, "dotclaude", "agents", f"{aid}.json")) as f:
             idx = json.load(f)

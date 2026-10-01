@@ -111,8 +111,10 @@ ships but is opt-in, see its entry):
   (ids, type, paths, whether the final report validated) per delegated agent to
   `${XDG_STATE_HOME:-~/.local/state}/dotclaude/delegations.jsonl`, and keeps a per-agent liveness
   index beside it (`agents/<id>.json`). `delegation-ledger open` lists unfinished delegations
-  with the tool each one is in and since when (thresholds in `skills/delegation/liveness.toml`).
-  Observer only: prints nothing, always exits 0.
+  with the tool each one is in and since when (thresholds in `skills/delegation/liveness.toml`),
+  and `delegation-ledger watch` prints one line per live delegation (`--summary` gives a token
+  like `2▶ 1⚠` for the tmux bar). The hook is an observer only: it prints nothing and always
+  exits 0.
 - **SessionStart (`startup|resume`): `delegation-due.sh`** (in this repo). Runs
   `delegation-ledger due --hook`: on the first session of a new Claude Code version it starts the
   quick canary in the background (unit tests, sandbox posture, strings in the binary; no model
