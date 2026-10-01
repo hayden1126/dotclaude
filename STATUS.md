@@ -35,18 +35,20 @@ stored here).
   full canary is green on 2.1.287 (65/65; counts and timing in `docs/delegation.md` "Tests").
   - **First,** once the teammate-check PR (branch `docs/a2-live`) merges: `git pull` in
     `~/dotclaude`, then `delegation-ledger canary` in the background. That PR changed the deadline
-    hooks (ToolSearch in `allow`, the message wording), so the canary must go 65/65 again.
-  - **Before building,** run `delegation-ledger due`. Its "reports failing the contract: 3" warning
-    is known: three rows from 2026-09-30 that predate the handback parser and the report-check
-    fixes (`a07a9cb`, `d0a4ed8`). They leave the audit's 7-day window on 2026-10-07; a warning
-    after that is new.
+    hooks (ToolSearch in `allow`, the message wording), so the canary must go 65/65 again. Then
+    ask Hayden before removing the worktree `.claude/worktrees/a2-live` (outside the sandbox) and
+    the local branch `docs/a2-live`.
+  - **Before building,** run `delegation-ledger due`. Its "reports failing the contract: 3" is
+    three known pre-fix rows from 2026-09-30, gone from the window on 2026-10-07.
   - **A6's spec** is the Stage 3 plan's A6 section: `audit --monthly` computed from the ledger and
     the index, with no scratch scripts. It also counts `nudge` rows and `deadline` denials, to
-    retune A2's budgets.
-  - **Plans:** A2 is `~/.claude/plans/deep-moseying-koala.md` (its Step 0 probe results are
-    final). Stage 3 is `~/.claude/plans/lets-move-on-to-refactored-pascal.md`, with A1/A3 detail in
-    `woolly-jingling-cookie.md`. A2's decisions and why are in `docs/delegation.md` "Deadline
-    (A2)"; A6 retunes its budgets from the ledger.
+    retune A2's budgets. Two calls for its plan: probe rows (`policy-check`, `team-probe*`,
+    `poster-audit`) sit in the live ledger beside real work and would skew every share and
+    duration, so it needs an exclusion rule first; and the ledger is days old and mostly
+    harness, so build the tool now but retune the budgets only after weeks of real use.
+  - **Plans:** Stage 3 is `~/.claude/plans/lets-move-on-to-refactored-pascal.md` (A1/A3 in
+    `woolly-jingling-cookie.md`, A2 in `deep-moseying-koala.md`); A2's decisions are in
+    `docs/delegation.md` "Deadline (A2)".
   - Build each step on a fresh branch from `main` in a worktree, so the live hooks stay
     untouched while it is edited.
 - **Delegation hardening: what is live on HAYPC** (Stage 2, plus the Stage 3 steps under Done;
