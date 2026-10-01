@@ -1,4 +1,5 @@
-# Subagent policy tables, read by scripts/subagent-policy on every subagent tool call.
+# Subagent policy tables, read by scripts/subagent-policy on every subagent tool call. Its
+# [deadline] table is also read by delegation-ledger's nudge, which fails open on it.
 #
 # This file is the declared contract: change what subagents may do here, not in the script.
 # tests/delegation/test_subagent_policy.py loads it and checks the behavior it produces, and
@@ -28,6 +29,26 @@ report_checked = ["Explore", "researcher", "reviewer", "writer"]
 allowlisted_shell = ["researcher"]
 # Roles confined to their worktree (root = meta.json worktreePath).
 worktree_root = ["writer"]
+
+[deadline]
+# A time budget per activation, in minutes (fractions allowed). An activation starts at each
+# SubagentStart: the spawn, a SendMessage resume, or a teammate's next message. So a resume
+# gets a fresh budget. The clock is the liveness index's activation_start
+# ($XDG_STATE_HOME/dotclaude/agents/<id>.json); an agent with no index has no deadline.
+# - Past nudge_min, the agent's next successful tool call gets one reminder to report
+#   (delegation-ledger's PostToolUse hook).
+# - Past stop_min (default: twice nudge_min), every tool except `allow` is denied with
+#   stop_and_explain, so the agent can still hand back a partial report.
+# Checks run between calls, so a long call that is already running finishes first. The main
+# thread is exempt. A role without its own entry, such as general-purpose, a Workflow agent or a
+# plugin type, gets `default`. The 2026-09-29 eval measured subagents at p50 3.8 and p90 13.2
+# minutes.
+allow = ["SubagentHandback", "SendMessage"]
+default = { nudge_min = 30 }
+Explore = { nudge_min = 10 }
+researcher = { nudge_min = 20 }
+reviewer = { nudge_min = 20 }
+writer = { nudge_min = 30 }
 
 [shell]
 # Command words that are not programs on PATH but are fine to run. Anything else must resolve
@@ -121,12 +142,16 @@ temp_roots = ["/tmp/claude-{uid}"]
 
 [protect]
 # Never written by a delegated agent, through a file tool or a literal Bash target. Paths are
-# realpath-resolved, so a symlink into one of these counts. `~` is the home directory.
+# realpath-resolved, so a symlink into one of these counts. `~` is the home directory, and
+# `{state_dir}` is $XDG_STATE_HOME/dotclaude (default ~/.local/state/dotclaude).
 write_denied = ["~/.claude", "~/.gitconfig", "~/.config/git", "~/.zshrc", "~/.zshenv",
   "~/.zprofile", "~/.zlogin", "~/.bashrc", "~/.bash_profile", "~/.profile", "~/.oh-my-zsh",
   "~/.config/gh", "~/.ssh", "~/.local/bin",
   "~/dotclaude/settings.json", "~/dotclaude/hooks", "~/dotclaude/skills", "~/dotclaude/agents",
-  "~/dotclaude/CLAUDE.md", "~/dotclaude/codex", "~/.codex"]
+  "~/dotclaude/CLAUDE.md", "~/dotclaude/codex", "~/.codex",
+  # The ledger and the liveness index: an agent that rewrote its own index could reset its
+  # deadline clock. The sandbox already keeps Bash out; this covers the file tools.
+  "{state_dir}"]
 # Relative to the agent's root: its own project config and git internals.
 root_write_denied = [".claude", ".mcp.json", ".git/hooks", ".git/config", ".git/info"]
 root_write_allowed = [".claude/worktrees"]

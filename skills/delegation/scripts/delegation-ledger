@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
 """delegation-ledger: record delegated agents, and list the ones that never finished.
 
-  delegation-ledger hook            SubagentStart/SubagentStop hook body (stdin: hook JSON)
+  delegation-ledger hook            SubagentStart/SubagentStop/PostToolUse hook body (stdin:
+                                    hook JSON)
   delegation-ledger open [--hours N]
                                     agents whose latest event is not a stop, with evidence;
                                     thresholds in skills/delegation/liveness.toml
   delegation-ledger watch [--summary]
                                     one line per live delegation, Claude and Codex; --summary
                                     prints a token like `2▶ 1⚠` for the tmux status bar
-  delegation-ledger tail [-n N]     the last N rows (including policy and spawn-guard denials)
+  delegation-ledger tail [-n N]     the last N rows (including policy and spawn-guard denials,
+                                    and deadline nudges)
   delegation-ledger audit [--hours N]
                                     is enforcement still binding? policy heartbeat, writers that
                                     changed the main checkout, rejected reports, denials
@@ -21,11 +23,16 @@
   delegation-ledger due [--hook]    what is due (canary, audit, dated items in due.toml); --hook
                                     is the SessionStart body, which also starts the cheap checks
 
-The hook is an observer: it always exits 0 and prints nothing, so a ledger bug can never
-block or alter an agent (failing open is correct here, unlike the spawn guard). Its own
-errors go to $XDG_STATE_HOME/dotclaude/delegation-ledger.err. Besides the ledger row, it
-keeps agents/<id>.json, the per-agent liveness index: the agent's state, when its current
-activation started, how many activations it has had, and its transcript path.
+The hook always exits 0, so a ledger bug can never block an agent (failing open is correct
+here, unlike the spawn guard). Its own errors go to
+$XDG_STATE_HOME/dotclaude/delegation-ledger.err. Besides the ledger row, it keeps
+agents/<id>.json, the per-agent liveness index: the agent's state, when its current activation
+started, how many activations it has had, and its transcript path.
+
+It prints nothing, except for the deadline nudge on PostToolUse. Past the role's nudge_min
+(policy.toml [deadline]), an agent's next successful call gets one additionalContext reminder
+per activation, recorded as `nudged` in its index and as a `nudge` row. subagent-policy
+enforces the stop that follows.
 
 For an agent in a worktree, the start and stop rows also carry a hash of the main checkout's
 `git status` (main_before, main_after). The sandbox lets a worktree agent's subprocess write
@@ -58,12 +65,12 @@ import datetime
 import glob
 import hashlib
 import json
-import math
 import os
 import re
 import subprocess
 import sys
 import time
+import tomllib
 import traceback
 
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
@@ -71,14 +78,9 @@ import delegation_common as dc  # noqa: E402
 
 
 def checks():
-    # Imported on use, so the SubagentStart/Stop hook path never depends on the check code.
+    # Imported on use, so the hook path never depends on the check code.
     import delegation_checks
     return delegation_checks
-
-
-def norm_id(agent_id):
-    s = str(agent_id or "")
-    return s[len("agent-"):] if s.startswith("agent-") else s
 
 
 def handback_message(path):
@@ -126,13 +128,16 @@ def cmd_hook(_args):
     try:
         data = json.loads(sys.stdin.read() or "{}")
         event = data.get("hook_event_name")
+        if event == "PostToolUse":
+            nudge(data, time.time())
+            return 0
         if event not in ("SubagentStart", "SubagentStop"):
             raise ValueError(f"unexpected hook_event_name {event!r}")
         meta = dc.agent_meta(data)
         base = {
             "ts": dc.now_iso(),
             "runner": "claude",
-            "id": norm_id(data.get("agent_id")),
+            "id": dc.norm_id(data.get("agent_id")),
             "agent_type": dc.agent_role(data, meta),
             "session_id": data.get("session_id"),
         }
@@ -178,25 +183,85 @@ def cmd_hook(_args):
 
 
 def index_agent(event, base, data):
-    """Keep agents/<id>.json, the liveness index `open` and `watch` read (and A2 will)."""
+    """Keep agents/<id>.json, the liveness index `open`, `watch` and the deadline read."""
     if event == "SubagentStart":
         transcript = agent_transcript({"id": base["id"],
                                        "parent_transcript": data.get("transcript_path")})
 
         def start(s):
             # A SendMessage resume or a teammate's next message is a new activation of the
-            # same agent: a fresh activation_start, the same first_start.
+            # same agent: a fresh activation_start and budget (so no `nudged` yet), the same
+            # first_start.
             s.update(id=base["id"], agent_type=base["agent_type"], name=base.get("name"),
                      teammate=bool(base.get("teammate")), session_id=base["session_id"],
                      agent_transcript=transcript, cwd=data.get("cwd"), state="running",
                      activation_start=base["ts"], activations=s.get("activations", 0) + 1)
             s.setdefault("first_start", base["ts"])
             s.pop("stopped_at", None)
+            s.pop("nudged", None)
         dc.update_agent_state(base["id"], start)
         dc.prune_agent_states()
     else:
         dc.update_agent_state(base["id"], lambda s: s.update(
             id=base["id"], state="stopped", stopped_at=base["ts"]))
+
+
+NUDGE = ("[deadline] You have run {ran} min of this activation's {budget} min budget ({role}). "
+         "Report now: finish and hand back, or hand back `partial` naming what is left. After "
+         "{stop} min every tool except {allow} is denied.")
+
+
+def load_deadline():
+    """policy.toml, or None when its [deadline] is unreadable or malformed. The nudge fails
+    open on that, as report-check does, while subagent-policy fails closed on the same file."""
+    try:
+        with open(dc.policy_path(), "rb") as f:
+            policy = tomllib.load(f)
+        dc.check_deadline(policy.get("deadline"))
+    except (OSError, ValueError):  # a TOMLDecodeError is a ValueError
+        return None
+    return policy
+
+
+def nudge(data, now):
+    """The PostToolUse body: once per activation, past the role's nudge_min, remind the agent
+    to report. PostToolUse fires only for a call that succeeded, so the nudge rides the next
+    successful call. Silent everywhere else."""
+    aid = dc.norm_id(data.get("agent_id"))
+    if not aid or not data.get("agent_type"):
+        return  # the main thread, or one of Claude Code's helper agents
+    idx = dc.read_agent_state(aid)
+    if not idx or idx.get("nudged"):
+        return  # no index means no clock; checked here so a nudged agent never takes the lock
+    age = dc.activation_age(idx, now)
+    policy = load_deadline() if age is not None else None
+    if policy is None:
+        return
+    role = dc.agent_role(data, dc.agent_meta(data))
+    nudge_s, stop_s = dc.deadline_for(policy, role)
+    if age < nudge_s:
+        return
+    won = False
+
+    def mark(s):
+        # Parallel calls race here, so only the first under the lock, in the same activation,
+        # sets the flag and prints.
+        nonlocal won
+        if not s.get("nudged") and s.get("activation_start") == idx["activation_start"]:
+            s["nudged"] = dc.now_iso()
+            won = True
+    dc.update_agent_state(aid, mark)
+    if not won:
+        return
+    print(json.dumps({"hookSpecificOutput": {
+        "hookEventName": "PostToolUse",
+        "additionalContext": NUDGE.format(
+            ran=dc.minutes_text(age), budget=dc.minutes_text(nudge_s), role=role,
+            stop=dc.minutes_text(stop_s), allow=" and ".join(policy["deadline"]["allow"])),
+    }}))
+    dc.append_row({"ts": dc.now_iso(), "runner": "claude", "event": "nudge", "id": aid,
+                   "agent_type": role, "session_id": data.get("session_id"),
+                   "minutes": round(age / 60, 1)})
 
 
 def live_sessions():
@@ -302,7 +367,6 @@ def load_liveness():
     and a value that isn't a positive number leaves its own default. The warning says which,
     and `open` and `watch` print it first (`watch --summary` doesn't), so a broken file can't
     make them go quiet."""
-    import tomllib
     path = os.environ.get("DELEGATION_LIVENESS") or LIVENESS_PATH
     limits = {kind: dict(v) for kind, v in LIVENESS_DEFAULTS.items()}
     try:
@@ -318,8 +382,7 @@ def load_liveness():
         for key, val in table.items():
             if key not in limits[kind]:
                 problems.append(f"{kind}.{key} is not a threshold")
-            elif (isinstance(val, bool) or not isinstance(val, (int, float))
-                  or not math.isfinite(val) or val <= 0):
+            elif not dc.is_positive(val):
                 problems.append(f"{kind}.{key} = {val!r} is not a positive number")
             else:
                 limits[kind][key] = val
@@ -579,8 +642,7 @@ def cmd_audit(args):
     if not moved:
         say("ok   no worktree agent coincided with a main-checkout change")
     try:
-        import tomllib
-        with open(os.path.join(os.path.dirname(dc.HERE), "policy.toml"), "rb") as f:
+        with open(dc.policy_path(), "rb") as f:
             roles = set(tomllib.load(f)["roles"]["report_checked"])
     except (OSError, ValueError, KeyError):
         roles = {"Explore", "researcher", "reviewer", "writer"}

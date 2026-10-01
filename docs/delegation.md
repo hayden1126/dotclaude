@@ -35,11 +35,13 @@ Each layer covers what the others can't.
    - It denies leaving the sandbox.
    - It polices the file and MCP tools, which the sandbox never sees.
    - It applies each role's rules, and says why, with an intent.
+   - It stops an agent that runs past its role's time budget, after the ledger hook has nudged
+     it ("Deadline (A2)").
    - It catches the obvious forms; layer 1 catches the rest.
 3. **The report check** covers acceptance. It sends a malformed report from one of our roles back
    to the agent at most twice.
 4. **Observation.**
-   - The ledger records every start, stop and denial.
+   - The ledger records every start, stop, denial and deadline nudge.
    - `audit` flags a hook that stopped seeing agents, and a writer run that coincided with a
      main-checkout change.
    - `sandbox-denials` lists what the sandbox refused.
@@ -67,7 +69,7 @@ Each layer covers what the others can't.
 | Sandbox | `settings.json` `sandbox` | Enforces (OS): the write roots, `denyRead` (the credential barrier), `denyWrite` (the enforcement sources), and the network allowlist. `failIfUnavailable`, and `autoAllowBashIfSandboxed: false`, so Hayden's prompts stay as they were |
 | Subagent policy | `hooks/subagent-policy.sh`, `skills/delegation/scripts/subagent-policy`, `skills/delegation/policy.toml` | Enforces: see "Subagent policy" below. Fails closed for the tools it polices |
 | Report check | `hooks/report-check.sh`, `skills/delegation/scripts/report-check` | Enforces acceptance: a schema-invalid report is sent back twice at most. Fails open |
-| Ledger | `hooks/delegation-ledger.sh`, `skills/delegation/scripts/delegation-ledger`, `skills/delegation/liveness.toml` | Observes: start and stop rows (`agent_type` is the resolved role; a teammate adds `name` and `teammate`), `report_ok`, denial rows, the main-checkout hash for a worktree agent; the per-agent liveness index (`agents/<id>.json`); `open` (the tool in flight and since when, thresholds in `liveness.toml`); `watch` (one line per live delegation, and a token like `2▶ 1⚠` for the tmux bar); `audit`; `sandbox-denials`. Fails open |
+| Ledger | `hooks/delegation-ledger.sh`, `skills/delegation/scripts/delegation-ledger`, `skills/delegation/liveness.toml` | Observes: start and stop rows (`agent_type` is the resolved role; a teammate adds `name` and `teammate`), `report_ok`, denial rows, the main-checkout hash for a worktree agent; the per-agent liveness index (`agents/<id>.json`); `open` (the tool in flight and since when, thresholds in `liveness.toml`); `watch` (one line per live delegation, and a token like `2▶ 1⚠` for the tmux bar); `audit`; `sandbox-denials`. Persuades: the deadline nudge, one PostToolUse `additionalContext` per activation past the role's `nudge_min`, and a `nudge` row. Fails open |
 | Canary and due checks | `hooks/delegation-due.sh`, `skills/delegation/scripts/delegation_checks.py`, `skills/delegation/due.toml` | Observes: `delegation-ledger canary` re-verifies enforcement on this Claude Code version; `due` runs the cheap checks at session start and shows Hayden what needs him. Fails open |
 | Public GitHub client | `skills/delegation/scripts/gh-public` | GET-only access to api.github.com for delegated agents, optionally with a public-read token |
 | Brief and report | `skills/delegation/BRIEF.md`, `report.schema.json` | Persuades (the brief); checks (the schema) |
@@ -94,6 +96,8 @@ gives a delegated agent no Bash unless `sandbox.enabled` and `failIfUnavailable`
 repo that turns the sandbox off loses subagent Bash; the policy still applies.
 
 **Default rules** (every delegated agent), each with a cc-safety-net intent:
+- **The deadline,** checked first: past the role's `stop_min` for this activation, every tool
+  except SubagentHandback and SendMessage is stop_and_explain ("Deadline (A2)").
 - **The sandbox escape:** any truthy input key matching `/sandbox/i` is hard_stop.
 - **Excluded commands:** an `excludedCommands` match is manual_only. The list is read live from the
   trusted tiers, as Claude Code reads it.
@@ -126,7 +130,9 @@ repo that turns the sandbox off loses subagent Bash; the policy still applies.
   - `~/.claude`, the project's `.claude` (except `.claude/worktrees`) and `.mcp.json`;
   - git hooks and config;
   - shell rc files;
-  - the live enforcement sources in `~/dotclaude`.
+  - the live enforcement sources in `~/dotclaude`;
+  - the ledger and the liveness index (`~/.local/state/dotclaude`), so an agent can't reset its
+    own deadline clock.
 - **Credential reads:** Read, Grep and Glob on the credential paths are denied (hard_stop), because
   those tools run outside the sandbox. The paths include `~/.secrets.env` and all of `/proc`: a
   file tool runs in Claude Code's own process, so `/proc/self/environ` is its whole environment
@@ -237,7 +243,7 @@ from 60 to 5,000 requests an hour.
 
 Stage 3 makes the setup check itself instead of relying on someone remembering. It runs in steps,
 Step 0 and then A0 to A6, planned in `~/.claude/plans/lets-move-on-to-refactored-pascal.md`. Step 0,
-A0, A4, A5, A1 and A3 are done.
+A0, A4, A5, A1, A3 and A2 are done.
 
 **Step 0** came first because everything after it rests on assumptions Stage 2 made but never
 tested live. It is four probes:
@@ -330,7 +336,7 @@ sonnet sessions a day. The checks therefore split by cost (Hayden's call, 2026-0
 
 | Check | What it runs | When |
 |---|---|---|
-| Quick canary (`canary --quick`, about 20 s, no model calls) | the unit suites; `claude sandbox status` (the sandbox on, Bash auto-allow off); 17 strings our hooks read, searched in the `claude` binary | by itself, in the background, on the first session of a new version |
+| Quick canary (`canary --quick`, about 20 s, no model calls) | the unit suites; `claude sandbox status` (the sandbox on, Bash auto-allow off); the strings our hooks read (`CANARY_STRINGS`), searched in the `claude` binary | by itself, in the background, on the first session of a new version |
 | Audit (`audit`) | the enforcement audit above, over the window since the last one | by itself, once a day |
 | Full canary (`canary`) | the quick tier, then the whole live harness (`run.py --runner claude`, all stages) | a reminder, when no green run is on record or the version has moved and the last green run is 7 or more days old, and after a failed run until one passes |
 | Dated items (`skills/delegation/due.toml`) | whatever the item says | a reminder from its date on, until the item is removed |
@@ -407,21 +413,21 @@ Codex rows get a `⚠` once `events.jsonl` has been quiet for `codex.silent_min`
 
 Notification and TeammateIdle hooks are left out: a pending prompt already shows as an open call,
 `-p` can't produce a prompt to test with, and a teammate's stop on each message already marks it
-idle. Their canary strings went too. A2 re-adds PostToolUse, with the one hook its nudge needs.
+idle. Their canary strings went too. A2 re-added PostToolUse, for the one hook its nudge needs.
 
 **The index.** The ledger hook also keeps `$XDG_STATE_HOME/dotclaude/agents/<id>.json`. It is
-rewritten at each start and stop under a lock, through a temp file and a rename, so a reader never
-sees a torn file. It holds the agent's state, its transcript path, `first_start`, and the current
-activation's start and count. A SendMessage resume or a teammate's next message starts a new
-activation, with a fresh budget. `open` reads the index for the activation and for the agent's
-kind (subagent or teammate). `watch` reads it too, and A2's deadlines will. A file untouched for
-7 days is pruned at the next start.
+rewritten at each start and stop (and once per activation by A2's nudge) under a lock, through a
+temp file and a rename, so a reader never sees a torn file. It holds the agent's state, its
+transcript path, `first_start`, and the current activation's start and count. A SendMessage
+resume or a teammate's next message starts a new activation, with a fresh budget. `open` reads the
+index for the activation and for the agent's kind (subagent or teammate). `watch` reads it too,
+and so do both of A2's deadline hooks. A file untouched for 7 days is pruned at the next start.
 
 **Why `liveness.toml` is its own file.** `load_policy` fails closed on a TOML syntax error, so a
 typo in a value only `open` and `watch` read would block every delegated call. `liveness.toml` fails open
 instead. A malformed file, or a value that isn't a positive number, falls back to the defaults in
 `delegation-ledger`, and `open` and `watch` print the warning first, so it can't go quiet. This is the
-`due.toml` reasoning. A2's deadlines will still go in `policy.toml`, because the policy hook
+`due.toml` reasoning. A2's deadlines went in `policy.toml` instead, because the policy hook
 enforces them.
 
 **`background_tasks` isn't used.** SubagentStop's `background_tasks` could have let `open` say
@@ -494,11 +500,91 @@ the bar, which is what we want. The script also runs it with `CLAUDE_PID` unset.
 inherits the tmux server's environment, so a server started from a Claude Bash call would carry
 that session's `CLAUDE_PID` after it died, and that would trip the sandbox self-check.
 
+### Deadline (A2)
+
+A looping agent looks healthy. It keeps calling tools, so neither Claude Code's stall timer nor
+A1's `⚠` fires, and nothing stops it. A2 gives each role a time budget per activation, in
+`policy.toml` `[deadline]` (Hayden's numbers, 2026-10-01):
+
+| Role | Nudge | Stop |
+|---|---|---|
+| Explore | 10 min | 20 min |
+| researcher, reviewer | 20 min | 40 min |
+| writer | 30 min | 60 min |
+| `default`: general-purpose, Workflow agents, plugin types | 30 min | 60 min |
+
+The 2026-09-29 eval measured subagents at p50 3.8 and p90 13.2 minutes. Explore's nudge sits
+below that p90, since a read-only search that runs past 10 minutes is usually lost; the others sit
+at 1.5 to 2.3 times it. A6 retunes the numbers against the ledger. `stop_min` defaults to twice
+`nudge_min`, and fractions are allowed, which lets the live case run in seconds.
+
+**The clock** is the liveness index's `activation_start`. Every SubagentStart begins an
+activation: the spawn, a SendMessage resume, or a teammate's next message. So a resume gets a
+fresh budget, and that is how the lead grants more time. The role comes from meta.json at call
+time (`customAgentType` for a teammate), as for every other policy rule, not from the index.
+
+**The nudge.** Past `nudge_min`, the agent's next successful call gets one PostToolUse
+`additionalContext`: report now, finish or hand back `partial`, because at `stop_min` every tool
+but the handback and SendMessage is denied. It lives in `delegation-ledger hook`, behind the same `agent_id`
+prefilter as the policy hook. The filter matches the substring anywhere in the payload, so a
+main-thread call whose input or output contains `"agent_id"` still starts Python, which returns at
+once.
+- It reads the index first and returns once `nudged` is set, so after the nudge it never takes the
+  lock again.
+- Otherwise it sets `nudged` under the index lock and checks again there, because parallel calls
+  race. Only the call that set it prints the nudge.
+- It appends a `nudge` row. `fold` skips those as it skips `policy` rows, so `open`, `watch` and
+  `audit` never read a nudge as a lifecycle event. `tail` shows them.
+- SubagentStart pops `nudged`, so each activation gets its own nudge.
+- It fails open throughout. A broken `[deadline]` means no nudge, while the policy hook fails
+  closed on the same file.
+
+**The stop.** Past `stop_min`, `subagent-policy` denies every tool except `[deadline] allow`
+(SubagentHandback and SendMessage), with stop_and_explain, so the agent can still hand back
+`partial`. It runs before every other rule, and it covers every tool, not only the policed ones
+(Hayden's call, 2026-10-01). Otherwise WebFetch, WebSearch, ToolSearch and the Task tools stay
+open, and an agent looping on the web never stops. The deny brings its own footer instead of
+stop_and_explain's "rewrite the command", so it reads as one message:
+
+```
+[subagent-policy] deadline (stop_and_explain): this activation has run 61 min, past the 60 min
+budget for writer. Only SubagentHandback and SendMessage are allowed now. Hand back a `partial`
+report naming what is done and what is left.
+```
+
+The check fails open on an unreadable index (no index, no clock) and never becomes a
+`policy-error`. A malformed `[deadline]` table fails closed, like the rest of `policy.toml`: every
+policed tool is denied, whatever the clock says. The tools it doesn't police (the handback,
+SendMessage, WebFetch, WebSearch, ToolSearch) still pass on a broken file, as they always have, so a
+policy bug can't swallow a report.
+
+**Why `policy.toml`.** The policy hook enforces the stop, so a broken value must fail closed.
+`liveness.toml` is a file of its own for the opposite reason: only `open` and `watch` read it, so
+it fails open.
+
+**The state dir is protected.** `{state_dir}` joined `[protect] write_denied`. It expands to
+`$XDG_STATE_HOME/dotclaude` (default `~/.local/state/dotclaude`), wherever the ledger actually
+writes. The OS sandbox covers only Bash, so a general-purpose agent's Write tool could otherwise
+rewrite its own index and reset its clock.
+
+**Checks run between calls,** so a long call that is already running finishes, and the stop lands
+on the next one. The main thread is exempt. Codex keeps `codex-delegate --timeout`.
+
+**Known gaps:**
+- **The nudge rides only a successful call.** PostToolUse doesn't fire for a denied, failed or
+  interrupted call, so an agent whose calls all fail past `nudge_min` meets the stop with no
+  warning.
+- **An agent with no index has no deadline.** Claude Code's helper agents (empty `agent_type`)
+  never get one, and neither does an agent whose SubagentStart hook failed.
+- **Workflow agents share `default`.** Their hook `agent_type` is `workflow-subagent` in every
+  workflow, so one budget fits all of them.
+
 ## Verified facts the design rests on
 
-Checked against Claude Code 2.1.285 and Codex CLI 0.154, then re-run on 2.1.286 with the full live
-harness. "Probe" means a live `claude -p` run with a real sandbox on 2026-09-30. Where the docs and
-the binary disagree, the binary wins.
+First checked against Claude Code 2.1.285 and Codex CLI 0.154 on 2026-09-30, then re-run on each
+version since with the full live harness. A fact added later names its own version. "Probe" means
+a live `claude -p` run with a real sandbox. Where the docs and the binary disagree, the binary
+wins.
 
 - **Grep and Glob:** on Linux and WSL they are absent by default. They come back for a subagent that
   lists them in `tools` and leaves out Bash
@@ -628,6 +714,21 @@ the binary disagree, the binary wins.
 - **A doubled SubagentStop:** in auto mode, an agent that ends with plain text stops, then Claude
   Code injects `[handback-send-enforce]` and it stops again after `SubagentHandback`. Each stop
   fires the hook.
+- **PostToolUse and resumes** (A2's Step 0 probe on 2.1.287, 2026-10-01; settings, prompt, raw
+  hook input and output in `~/scratch/delegation-writeup/evidence/a2-step0/`):
+  - a subagent's PostToolUse input carries `agent_id` and `agent_type`, plus `tool_name`,
+    `tool_use_id`, `duration_ms`, `prompt_id` and `transcript_path`. The main thread's has
+    neither id field;
+  - a PostToolUse hook's
+    `{"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":"..."}}` lands in
+    the agent transcript as an `attachment` entry with `attachment.type ==
+    "hook_additional_context"`, next to a `hook_success` entry. It never appears as an
+    attachment in the lead's transcript;
+  - a SendMessage resume of a plain subagent fires a second SubagentStart with the same
+    `agent_id`, then a second SubagentStop, so a resume gets a fresh deadline through the
+    ledger's existing start. `-p` can resume: SendMessage loads through ToolSearch;
+  - told nothing about order, the agent ran its Bash and Read calls in parallel. The `deadline`
+    case in the live harness asks for one call per turn.
 - **Codex sub-agents:**
   - a `spawn_agent` without a model inherits the parent's model (tested);
   - `agents.default_subagent_model` exists, and `codex-delegate` passes it with `-c`;
@@ -664,8 +765,8 @@ acting for Anthropic or OpenAI.
 **Stage 3 (watch)** is planned in `~/.claude/plans/lets-move-on-to-refactored-pascal.md`, which
 replaced the bullets that stood here. Its order: Step 0 probes, then A0 (named spawns off),
 A4 and A5 (due nudges, a one-command canary), A1 (per-agent liveness state), A3 (one watch view),
-A2 (deadline nudge, then hard stop), A6 (monthly audit). Step 0, A0, A4, A5, A1 and A3 are done;
-see "Stage 3" above. A2 is next.
+A2 (deadline nudge, then hard stop), A6 (monthly audit). "Stage 3" above says which are done. A6
+is next, and it retunes A2's budgets against the ledger.
 
 ## Tests
 
@@ -712,6 +813,14 @@ see "Stage 3" above. A2 is next.
     120-second call showed `in Bash` in a bare `watch`, while a piped `watch` gave the sandbox
     warning. `watch --summary` took 41 ms (median of 10), and the tmux token showed `1▶`, then
     cleared when the probe stopped.
+- **Results on 2026-10-01 (A2, 2.1.287):**
+  - before the build, the quick canary went green on 2.1.287 (250 + 19 unit tests, sandbox
+    posture, all 17 strings);
+  - unit: 270 tests, plus 19 in `tests/setup`;
+  - claude: the new `deadline` case passed 9 of 9, so a full run has 65 checks. The nudge landed
+    once, in the agent's transcript only. The second Read was denied at 0.6 min against the 0.4 min
+    stop, and the agent handed back `partial`. After the SendMessage resume, a second activation
+    (`activations` 2, `nudged` cleared) let its Read through.
 
 ## Installing on a machine that is already set up
 
@@ -736,8 +845,10 @@ hook fail closed, so wiring a hook before its script is reachable blocks every d
      through `bash ~/.claude/hooks/subagent-policy.sh`, must print a deny. It denies Bash until the
      sandbox block is in, which is expected.
 3. **The hook entries.** Add the PreToolUse entries (`*` for the policy, `Agent|Task` for the guard,
-   `SubagentHandback` for the report check) and the SubagentStart and SubagentStop entries to the live
-   `~/.claude/settings.json`, copied from the baseline. Then spawn an `Explore` agent and check:
+   `SubagentHandback` for the report check), the PostToolUse `*` entry (the deadline nudge, A2) and
+   the SubagentStart and SubagentStop entries to the live `~/.claude/settings.json`, copied from
+   the baseline. The nudge fails open, so its place in the order doesn't matter. Then spawn an
+   `Explore` agent and check:
    - its transcript runs on sonnet;
    - the ledger has start and stop rows (`delegation-ledger tail`);
    - `delegation-ledger audit` says the policy hook saw it.

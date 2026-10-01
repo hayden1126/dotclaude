@@ -37,21 +37,14 @@ HERE = os.path.dirname(os.path.realpath(__file__))
 sys.path.insert(0, HERE)
 import delegation_common as dc  # noqa: E402
 
-POLICY_PATH = os.environ.get("DELEGATION_POLICY") or os.path.join(os.path.dirname(HERE),
-                                                                  "policy.toml")
 MAX_REJECTIONS = 2
 PRUNE_SECONDS = 86400
 GAVE_UP = "gave-up"
 
 
 def checked_roles():
-    with open(POLICY_PATH, "rb") as f:
+    with open(dc.policy_path(), "rb") as f:
         return set(tomllib.load(f)["roles"]["report_checked"])
-
-
-def norm_id(agent_id):
-    s = str(agent_id or "")
-    return s[len("agent-"):] if s.startswith("agent-") else s
 
 
 def counter_dir():
@@ -61,7 +54,8 @@ def counter_dir():
 
 
 def counter_path(data):
-    key = f"{data.get('session_id') or 'nosession'}-{norm_id(data.get('agent_id')) or 'noagent'}"
+    aid = dc.norm_id(data.get("agent_id")) or "noagent"
+    key = f"{data.get('session_id') or 'nosession'}-{aid}"
     return os.path.join(counter_dir(), re.sub(r"[^A-Za-z0-9._-]", "_", key))
 
 
