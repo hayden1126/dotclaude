@@ -47,7 +47,7 @@ permission flow.
 - **Stays in the sandbox:**
   - `dangerouslyDisableSandbox` is denied;
   - so is every `excludedCommands` entry, which covers `gh`, `git push/fetch/pull`, `codex`,
-    `claude` and `tmux`.
+    `codex-delegate`, `claude`, `tmux` and `delegation-ledger`.
 - **Can't reach authenticated GitHub.** `~/.config/gh` is unreadable inside the sandbox, so
   there is no push and no private-repo read. That holds whatever form the command takes.
   Public GitHub is available through `gh-public` and https clones.
@@ -165,7 +165,8 @@ validated (`report_ok`).
   - `running` means no call is open and the agent wrote to its transcript recently. Past
     `silent_min` with no entry, it says `⚠ ask it for status`.
   - The thresholds live in `skills/delegation/liveness.toml`, per kind (subagent, teammate,
-    codex). A broken file falls back to the defaults, and `open` prints a warning first.
+    codex). A broken file falls back to the defaults, and `open` and `watch` print a warning
+    first.
 - A **silent agent** is usually working, not dead. A `team-` teammate can sit idle between
   messages, and any agent can sit in one long tool call, which the stall timer doesn't
   abort. A `⚠` is a reason to look, not a verdict: ask it for status before you assume

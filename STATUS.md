@@ -33,36 +33,42 @@ stored here).
   CLAUDE.md trigger, `vetting-sources`, `deck-production` S1, and earlier work back to PR #10.
 
 ## In flight
-- **Delegation hardening Stage 3: next is A3 (one watch view)**, then A2 → A6.
-  - Build each one on a fresh branch from `main` in a worktree, so the live hooks stay untouched
-    while it is edited.
-  - **The plans:** Stage 3 is `~/.claude/plans/lets-move-on-to-refactored-pascal.md`. Its A1 text
-    is superseded by `~/.claude/plans/woolly-jingling-cookie.md`, and its A4/A5 cadence by
-    `docs/delegation.md` ("The canary and the due checks").
+- **Delegation hardening Stage 3: A3 (one watch view) is built but not merged.** A2 comes next,
+  then A6.
+  - **A3** is on branch `feat/delegation-a3-watch`, based on `1d09748`. It also carries the A1
+    handoff commit. Run `gh pr list` for its PR.
+  - **After A3 merges, in order:**
+    1. Run `./setup.sh` the copy-and-diff way (see "Other machines" below). Only the
+       `delegation-ledger *` exclusion should be new.
+    2. Apply the tmux edits from the A3 plan's "After the merge" section. They are
+       machine-local, outside git.
+    3. Run the plan's manual checks, then `delegation-ledger canary` in the background.
+  - Build each step on a fresh branch from `main` in a worktree, so the live hooks stay
+    untouched while it is edited.
+  - **The plans:** Stage 3 is `~/.claude/plans/lets-move-on-to-refactored-pascal.md`.
+    - Its A1 and A3 text is detailed in `~/.claude/plans/woolly-jingling-cookie.md`, which holds
+      both plans, A3 first.
+    - Its A4/A5 cadence is in `docs/delegation.md` ("The canary and the due checks").
   - **Decisions already made:**
     - deadlines nudge, then hard-stop;
-    - liveness shows in the tmux status bar and a CLI;
-    - A3's `watch` and A2's checks read the A1 index (`$XDG_STATE_HOME/dotclaude/agents/<id>.json`)
-      and the transcript scan (`delegation-ledger`, `scan_transcript`/`claude_state`);
+    - A2's checks read the A1 index (`$XDG_STATE_HOME/dotclaude/agents/<id>.json`) and the
+      transcript scan (`delegation-ledger`, `scan_transcript`/`claude_state`). A3's `watch` lists
+      from the ledger, like `open`, instead;
     - A2's deadlines go in `policy.toml`, not `liveness.toml`;
     - A2 adds the one PostToolUse hook its nudge needs, and re-adds `PostToolUse` to
       `CANARY_STRINGS`.
   - **Before building,** run `delegation-ledger due`. **After building,** run
-    `delegation-ledger canary` outside the sandbox, in the background.
-  - **Installing Stage 3 on another machine:** `git pull` in `~/dotclaude`, then `./setup.sh`, both
-    outside the sandbox (A4 added a hook and a settings entry). A baseline key still wins over the
-    live file's value, so copy `~/.claude/settings.json` first and diff it after.
-- **Delegation hardening: Stage 2 live** (`docs/delegation.md`). `skills/delegation/SKILL.md` is the
-  operating guide. Open items:
-  - **Dated reminders** (the 2026-10-07 `sandbox-denials` review) live in `skills/delegation/due.toml`.
-    The session-start line shows each one from its date until it is removed.
-  - **Not observed live:** a real agent's `dangerouslyDisableSandbox` being denied. The teammate probe
-    declined to try it; the harness covers the rule (its `policy` case).
-  - **Other machines:** with a `settings.machine.json` overlay, `git pull` then `./setup.sh` (see
-    the Stage 3 install note above); without one, install by hand per the docs' install order (the
-    policy hook fails closed). bubblewrap and socat are required.
-  - **Optional:** a no-scope classic GitHub token at `~/.config/dotclaude/github-public-token` enables
-    `gh-public` code search.
+    `delegation-ledger canary` in the background. As a bare command it now runs outside the
+    sandbox on its own.
+- **Delegation hardening: what is live on HAYPC** (Stage 2, plus the Stage 3 steps under Done;
+  `docs/delegation.md`;
+  `skills/delegation/SKILL.md` is the operating guide). Open items:
+  - **Other machines:** `git pull` in `~/dotclaude`, then `./setup.sh`, both outside the sandbox
+    (A4 and A3 changed `settings.json`).
+    - A baseline key still wins over the live file's value, so copy `~/.claude/settings.json`
+      first and diff it after.
+    - Without a `settings.machine.json` overlay, install by hand per the docs' install order:
+      the policy hook fails closed.
   - **Write-up:** Hayden wants a blog post or public repo on the findings. The evidence (probe
     settings, prompts and outputs, harness logs) is in `~/scratch/delegation-writeup/evidence/`, and
     the older eval is in `~/scratch/delegation-eval/`. Raw transcripts embed private context, so

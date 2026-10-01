@@ -300,7 +300,8 @@ def load_liveness():
     """(thresholds, warning) from $DELEGATION_LIVENESS, else skills/delegation/liveness.toml.
     It fails open, like due.toml: a missing or malformed file leaves all the defaults above,
     and a value that isn't a positive number leaves its own default. The warning says which,
-    and `open` prints it first, so a broken file can't make `open` go quiet."""
+    and `open` and `watch` print it first (`watch --summary` doesn't), so a broken file can't
+    make them go quiet."""
     import tomllib
     path = os.environ.get("DELEGATION_LIVENESS") or LIVENESS_PATH
     limits = {kind: dict(v) for kind, v in LIVENESS_DEFAULTS.items()}

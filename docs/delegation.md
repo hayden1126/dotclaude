@@ -177,6 +177,8 @@ from 60 to 5,000 requests an hour.
 
 ### Where enforcement stops (known gaps)
 
+- **A real agent's `dangerouslyDisableSandbox` denial is not observed live.** The teammate probe
+  declined to try it. The harness covers the rule (its `policy` case).
 - **A writer's computed-path write into the main checkout.**
   - The sandbox's write root is the session's cwd, and a worktree lives inside it.
   - A live probe (2026-09-30) showed a worktree subagent writing the main checkout through
@@ -392,10 +394,12 @@ transcript has no such race:
 - a pending permission prompt shows as an open call too.
 
 `open` reads the last 1 MiB of each agent's transcript. Its verdicts, in order:
-1. the session is gone: `orphaned`;
+1. the session is gone: `orphaned` (or `unknown` when no pid is visible, inside the sandbox; see
+   "Watch (A3)");
 2. a call is open: `in <Tool> N min` (`, +k more` for parallel calls), with a `⚠` past
    `tool_min`;
-3. the turn ended but no stop row came: read the transcript for the report;
+3. the turn ended but no stop row came: `finishing its turn` for the first minute, then
+   `ended its turn but no stop row`, with a `⚠` (read the transcript for the report);
 4. otherwise `running`, or `⚠ ask it for status` once no transcript entry has appeared for
    `silent_min`.
 
@@ -410,13 +414,13 @@ rewritten at each start and stop under a lock, through a temp file and a rename,
 sees a torn file. It holds the agent's state, its transcript path, `first_start`, and the current
 activation's start and count. A SendMessage resume or a teammate's next message starts a new
 activation, with a fresh budget. `open` reads the index for the activation and for the agent's
-kind (subagent or teammate). A2's deadlines and A3's watch view build on it. A file untouched for
+kind (subagent or teammate). `watch` reads it too, and A2's deadlines will. A file untouched for
 7 days is pruned at the next start.
 
 **Why `liveness.toml` is its own file.** `load_policy` fails closed on a TOML syntax error, so a
-typo in a value only `open` reads would block every delegated call. `liveness.toml` fails open
+typo in a value only `open` and `watch` read would block every delegated call. `liveness.toml` fails open
 instead. A malformed file, or a value that isn't a positive number, falls back to the defaults in
-`delegation-ledger`, and `open` prints the warning first, so it can't go quiet. This is the
+`delegation-ledger`, and `open` and `watch` print the warning first, so it can't go quiet. This is the
 `due.toml` reasoning. A2's deadlines will still go in `policy.toml`, because the policy hook
 enforces them.
 
@@ -470,7 +474,8 @@ inside the sandbox and present outside it. Before A3, a sandboxed `open` called 
 `orphaned` and said nothing about why, and a sandboxed `watch` would have shown nothing live. Two
 fixes:
 - `delegation-ledger *` is in `sandbox.excludedCommands`, so a bare call runs outside the sandbox
-  and is exact. Delegated agents get `excluded-command` for it from the policy, and never need it.
+  and is exact. The live settings are a copy, so a machine set up before A3 needs `./setup.sh`
+  again (see "Installing on a machine that is already set up"). Delegated agents get `excluded-command` for it from the policy, and never need it.
 - A self-check covers the calls that still run inside, such as a piped one. The caller's own
   Claude process is alive by definition, so when `CLAUDE_PID` is set but not alive, no pid check
   means anything. Both views then print a warning first and call each session `unknown` instead of
@@ -584,8 +589,8 @@ the binary disagree, the binary wins.
   far past the timer; `open` shows it as `in <Tool> N min` (A1).
 - **Transcript entries** (2.1.286): a `tool_use` entry is written before its tool runs, and every
   user and assistant entry carries a `timestamp` with milliseconds. A1's liveness rests on the
-  first; the `stall` case checks it live, since a poll of `open` during its 100-second call must
-  show `in Bash`.
+  first; the `stall` case checks it live, since a poll of `open` and of `watch` during its
+  100-second call must show `in Bash`.
 - **SubagentStop `background_tasks` is session-wide** (probe on 2.1.286, 2026-10-01). The lead
   backgrounded `sleep 20`, then spawned a background agent that backgrounded `sleep 30` and ended
   its turn. The agent's list held three entries: the agent itself (`type: "subagent"`, with
@@ -738,6 +743,8 @@ hook fail closed, so wiring a hook before its script is reachable blocks every d
    - a Bash write outside cwd fails;
    - `cat ~/.config/gh/hosts.yml` fails;
    - `git fetch` and `gh pr list` still work, through the exclusion;
+   - a bare `delegation-ledger watch` prints no "no pid is visible" warning, so the
+     `delegation-ledger *` exclusion (A3) is in;
    - the prompts are unchanged.
 5. **The due checks.** Add the SessionStart entry (`delegation-due.sh`), then run
    `delegation-ledger canary` outside the sandbox, in the background. When it is green, a new session

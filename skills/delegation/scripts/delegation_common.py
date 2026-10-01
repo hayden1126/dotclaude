@@ -278,7 +278,7 @@ def pids_visible():
 
 def codex_state(e, visible=True):
     """(verdict, evidence) for a folded codex ledger entry, shared by `delegation-ledger
-    open` and `codex-delegate status`. Codex writes its events straight to the file, so it
+    open` and `watch` and by `codex-delegate status`. Codex writes its events straight to the file, so it
     can outlive a wrapper that was killed (Claude's Bash tool stops a foreground command at
     10 minutes); a run with no stop row is therefore not necessarily dead. With `visible`
     False (see pids_visible), the pid checks mean nothing, so it says that instead."""
