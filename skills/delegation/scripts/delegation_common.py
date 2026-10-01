@@ -117,14 +117,23 @@ def prune_agent_states(days=7):
                     os.remove(p)
 
 
-def read_rows():
+def read_rows(tail=None):
+    """The ledger's rows. With `tail` (bytes), only the end of the file is read, and the line
+    the cut split is dropped."""
     try:
-        with open(ledger_path()) as f:
-            lines = f.readlines()
+        with open(ledger_path(), "rb") as f:
+            cut = False
+            if tail is not None:
+                f.seek(0, os.SEEK_END)
+                cut = f.tell() > tail
+                # From one byte before the cut, the first line is always the split one: it is
+                # empty when the cut falls on a line end, so dropping it never loses a row.
+                f.seek(max(0, f.tell() - tail - 1))
+            lines = f.read().decode("utf-8", "replace").splitlines()
     except FileNotFoundError:
         return []
     rows = []
-    for line in lines:
+    for line in lines[1:] if cut else lines:
         try:
             rows.append(json.loads(line))
         except ValueError:
@@ -236,18 +245,43 @@ def agent_role(data, meta=None):
     return meta.get("customAgentType") or data.get("agent_type") or ""
 
 
-def pid_alive(pid):
+def proc_start(pid):
+    """Field 22 of /proc/<pid>/stat (starttime, in clock ticks since boot), or None. The
+    fields are split after the last ") ", since the command name may hold spaces."""
     try:
-        return pid is not None and os.path.exists(f"/proc/{int(pid)}")
+        with open(f"/proc/{int(pid)}/stat") as f:
+            return int(f.read().rsplit(") ", 1)[1].split()[19])
+    except (OSError, TypeError, ValueError, IndexError):
+        return None
+
+
+def pid_alive(pid, start=None):
+    """Whether pid is running. Given `start` (a session file's procStart), the process must
+    also have that start time, so a pid the kernel reused for another process reads as gone.
+    No `start` means don't check it."""
+    try:
+        if pid is None or not os.path.exists(f"/proc/{int(pid)}"):
+            return False
     except (TypeError, ValueError):
         return False
+    return start is None or str(proc_start(pid)) == str(start)
 
 
-def codex_state(e):
+def pids_visible():
+    """False when this process can't see its own Claude session's pid. Claude Code sets
+    CLAUDE_PID in the Bash tool's env, and that process is alive by definition, so not seeing
+    it means a sandbox PID namespace (each sandboxed command gets its own), where no pid check
+    means anything. True when CLAUDE_PID is unset (tmux, a plain terminal)."""
+    pid = os.environ.get("CLAUDE_PID")
+    return not pid or pid_alive(pid)
+
+
+def codex_state(e, visible=True):
     """(verdict, evidence) for a folded codex ledger entry, shared by `delegation-ledger
-    open` and `codex-delegate status`. Codex writes its events straight to the file, so it
+    open` and `watch` and by `codex-delegate status`. Codex writes its events straight to the file, so it
     can outlive a wrapper that was killed (Claude's Bash tool stops a foreground command at
-    10 minutes); a run with no stop row is therefore not necessarily dead."""
+    10 minutes); a run with no stop row is therefore not necessarily dead. With `visible`
+    False (see pids_visible), the pid checks mean nothing, so it says that instead."""
     event = e.get("event")
     out = e.get("out") or ""
     events = os.path.join(out, "events.jsonl")
@@ -258,6 +292,8 @@ def codex_state(e):
     run = e.get("run_id")
     if event == "stop":
         verdict = "finished"
+    elif not visible:
+        verdict = "pid not visible in the sandbox"
     elif codex_alive:
         verdict = "running" + ("" if wrapper_alive else " (its wrapper is gone; "
                                f"`codex-delegate finalize {run}` once it ends)")
@@ -268,8 +304,10 @@ def codex_state(e):
         verdict = f"ended without a stop row: `codex-delegate finalize {run}`"
     else:
         verdict = f"died: `codex-delegate resume {run}`"
-    evidence = (f"codex pid {e.get('pid')} {'alive' if codex_alive else 'gone'}, "
-                f"wrapper {'alive' if wrapper_alive else 'gone'}, "
+    pids = (f"codex pid {e.get('pid')} {'alive' if codex_alive else 'gone'}, "
+            f"wrapper {'alive' if wrapper_alive else 'gone'}" if visible else
+            f"codex pid {e.get('pid')} and its wrapper not visible in the sandbox")
+    evidence = (f"{pids}, "
                 + (f"last event {age:.0f} min ago" if age is not None else "no events file")
                 + (", report.json present" if has_report else ""))
     return verdict, evidence

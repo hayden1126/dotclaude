@@ -1,6 +1,6 @@
-# Liveness thresholds, in minutes. Read only by `delegation-ledger open` (and A3's watch).
-# Fails open: a malformed file falls back to the defaults in delegation-ledger, and `open`
-# prints a warning. Kept out of policy.toml, whose parse error blocks every delegated call.
+# Liveness thresholds, in minutes. Read only by `delegation-ledger open` and `watch`.
+# Fails open: a malformed file falls back to the defaults in delegation-ledger, and `open` and
+# `watch` print a warning. Kept out of policy.toml, whose parse error blocks every delegated call.
 # These are starting guesses; A6's monthly audit is where to retune them.
 [subagent]
 silent_min = 15   # past the 10-min stall timer, so a ⚠ means the timer didn't fire

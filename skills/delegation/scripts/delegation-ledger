@@ -5,6 +5,9 @@
   delegation-ledger open [--hours N]
                                     agents whose latest event is not a stop, with evidence;
                                     thresholds in skills/delegation/liveness.toml
+  delegation-ledger watch [--summary]
+                                    one line per live delegation, Claude and Codex; --summary
+                                    prints a token like `2▶ 1⚠` for the tmux status bar
   delegation-ledger tail [-n N]     the last N rows (including policy and spawn-guard denials)
   delegation-ledger audit [--hours N]
                                     is enforcement still binding? policy heartbeat, writers that
@@ -37,7 +40,17 @@ a verdict can be checked, never just trusted. The session rule follows cctop's
 a session to a live pid. The rest comes from the agent transcript, not from per-call hooks. A
 tool_use is written before the tool runs, a denied, failed or interrupted call still gets a
 tool_result (but no PostToolUse), and every entry carries a timestamp. So a tool_use with no
-tool_result is a call in flight, and its timestamp says since when.
+tool_result is a call in flight, and its timestamp says since when. A session file's
+procStart must match the pid's start time too, so a reused pid doesn't read as alive.
+
+`watch` uses `open`'s rule for what is unfinished, but lists only what is live: an orphan or a
+dead Codex run gets one footer line that points at `open`, and the tmux token never counts
+it. It reads only the ledger's last 1 MiB, so a 3-second poll stays cheap as the ledger grows.
+
+Inside the Bash sandbox no session pid is visible: each sandboxed command gets its own PID
+namespace. Both views detect that (CLAUDE_PID is set but not alive), print a warning first, and
+call a session unknown instead of gone. delegation-ledger is in sandbox.excludedCommands, so a
+bare call runs outside the sandbox and is exact; a piped one stays inside and warns.
 """
 import argparse
 import collections
@@ -165,7 +178,7 @@ def cmd_hook(_args):
 
 
 def index_agent(event, base, data):
-    """Keep agents/<id>.json, the liveness index `open` reads (and A2 and A3 will)."""
+    """Keep agents/<id>.json, the liveness index `open` and `watch` read (and A2 will)."""
     if event == "SubagentStart":
         transcript = agent_transcript({"id": base["id"],
                                        "parent_transcript": data.get("transcript_path")})
@@ -187,7 +200,8 @@ def index_agent(event, base, data):
 
 
 def live_sessions():
-    """sessionId -> pid for Claude processes that are still running."""
+    """sessionId -> pid for Claude processes that are still running. A session file's
+    procStart must match the process too, so a reused pid doesn't keep a gone session alive."""
     out = {}
     for p in glob.glob(os.path.expanduser("~/.claude/sessions/*.json")):
         try:
@@ -195,7 +209,7 @@ def live_sessions():
                 d = json.load(f)
         except (OSError, ValueError):
             continue
-        if dc.pid_alive(d.get("pid")):
+        if dc.pid_alive(d.get("pid"), d.get("procStart")):
             out[d.get("sessionId")] = d.get("pid")
     return out
 
@@ -286,7 +300,8 @@ def load_liveness():
     """(thresholds, warning) from $DELEGATION_LIVENESS, else skills/delegation/liveness.toml.
     It fails open, like due.toml: a missing or malformed file leaves all the defaults above,
     and a value that isn't a positive number leaves its own default. The warning says which,
-    and `open` prints it first, so a broken file can't make `open` go quiet."""
+    and `open` and `watch` print it first (`watch --summary` doesn't), so a broken file can't
+    make them go quiet."""
     import tomllib
     path = os.environ.get("DELEGATION_LIVENESS") or LIVENESS_PATH
     limits = {kind: dict(v) for kind, v in LIVENESS_DEFAULTS.items()}
@@ -325,9 +340,21 @@ def minutes(since, now):
     return (now - since) / 60
 
 
+STOP_GRACE_MIN = 1  # an end_turn entry precedes its stop row by up to ~3 s (a worktree
+                    # agent's `git status`), so a 3-second poll mustn't flag that gap
+
+
 def claude_state(e, alive, limits, now):
-    """(verdict, evidence, transcript path) for a Claude ledger entry, from the transcript
-    scan and the index. A pending permission prompt shows as an open call."""
+    """What the transcript scan and the index say about a Claude ledger entry. `alive` is
+    whether its session runs: True, False, or None when no pid is visible. Returns a dict:
+      verdict   `open`'s text;
+      short     `watch`'s text;
+      warn      past tool_min or silent_min, or a turn that ended past the grace with no
+                stop row;
+      live      `alive`: False only when the session is known to be gone;
+      evidence  what the verdict rests on;
+      path      the agent transcript.
+    A pending permission prompt shows as an open call."""
     idx = dc.read_agent_state(e["id"])
     path = agent_transcript(e) or idx.get("agent_transcript")
     lim = limits["teammate" if idx.get("teammate") or e.get("teammate") else "subagent"]
@@ -337,29 +364,42 @@ def claude_state(e, alive, limits, now):
         began = now
     scan = scan_transcript(path)
     calls = scan["open"]
-    if not alive:
+    warn = False
+    if alive is False:
         verdict = "orphaned: its session is gone; redo it or resume from its artifact"
+        short = "orphaned"
     elif calls:
         tool, t0 = calls[0]
         mins = minutes(t0 or began, now)
-        verdict = f"in {tool} {int(mins)} min" + (f", +{len(calls) - 1} more"
-                                                 if len(calls) > 1 else "")
+        verdict = short = f"in {tool} {int(mins)} min" + (f", +{len(calls) - 1} more"
+                                                         if len(calls) > 1 else "")
         if mins >= lim["tool_min"]:
+            warn = True
             verdict += f"  ⚠ past {lim['tool_min']:g} min: a long call or stuck; check it"
     elif scan["last"].startswith("turn ended"):
-        verdict = "ended its turn but no stop row: read its transcript for the report"
+        # Without a timestamp the end can't be timed, so the grace doesn't apply.
+        if scan["last_ts"] and minutes(scan["last_ts"], now) < STOP_GRACE_MIN:
+            verdict = short = "finishing its turn"
+        else:
+            warn = True
+            short = "ended its turn but no stop row"
+            verdict = short + ": read its transcript for the report"
     else:
         quiet = minutes(scan["last_ts"] or began, now)
-        verdict = (f"no transcript entry for {int(quiet)} min  ⚠ ask it for status"
-                   if quiet >= lim["silent_min"] else
-                   f"running (no transcript entry for {int(quiet)} min)")
+        warn = quiet >= lim["silent_min"]
+        short = (f"no transcript entry for {int(quiet)} min" if warn else
+                 f"running (no transcript entry for {int(quiet)} min)")
+        verdict = short + ("  ⚠ ask it for status" if warn else "")
     k = idx.get("activations")
-    ev = (f"session {'alive' if alive else 'gone'}, active {int(minutes(began, now))} min"
+    session = ("unknown (no pid visible in the sandbox)" if alive is None else
+               "alive" if alive else "gone")
+    ev = (f"session {session}, active {int(minutes(began, now))} min"
           + (f" (activation {k})" if k else "")
           + f", last entry {scan['last']}"
           + (f" {int(minutes(scan['last_ts'], now))} min ago" if scan["last_ts"] else "")
           + (f", {len(calls)} call{'s' if len(calls) > 1 else ''} open" if calls else ""))
-    return verdict, ev, path
+    return {"verdict": verdict, "short": short, "warn": warn, "live": alive,
+            "evidence": ev, "path": path}
 
 
 def codex_age(e, now):
@@ -370,36 +410,123 @@ def codex_age(e, now):
         return None
 
 
-def cmd_open(args):
-    now = time.time()
-    horizon = now - args.hours * 3600
-    limits, warning = load_liveness()
-    if warning:
-        print(f"warning: {warning}")
-    sessions = live_sessions()
-    found = 0
-    for (runner, rid), e in sorted(dc.fold(dc.read_rows()).items(),
-                                   key=lambda kv: kv[1].get("ts", "")):
-        if e.get("event") in ("stop",):
+def codex_entry(e, visible, limits, now):
+    """claude_state's dict for a codex ledger entry. It is live while the codex pid runs, or
+    while a pending row's wrapper does; None when no pid is visible."""
+    verdict, ev = dc.codex_state(e, visible)
+    age, cap = codex_age(e, now), limits["codex"]["silent_min"]
+    warn = age is not None and age >= cap
+    if warn:
+        verdict += f"  ⚠ no event past {cap:g} min: check it"
+    if not visible:
+        live = None
+    else:
+        live = dc.pid_alive(e.get("pid")) or (e.get("event") == "pending"
+                                             and dc.pid_alive(e.get("wrapper_pid")))
+    last = f"last event {int(age)} min ago" if age is not None else "no events yet"
+    if e.get("event") == "pending" and live:
+        short = "starting"
+    else:
+        short = f"{'pid not visible' if live is None else 'running'}, {last}"
+    return {"verdict": verdict, "short": short, "warn": warn, "live": live,
+            "evidence": ev, "path": e.get("out")}
+
+
+def unfinished(rows, horizon):
+    """[(runner, id, entry)], oldest first: the folded entries whose latest event isn't a
+    stop, from `horizon` (epoch seconds) on. `open` and `watch` share this rule, so the two
+    views can't disagree about what is unfinished."""
+    out = []
+    for (runner, rid), e in sorted(dc.fold(rows).items(), key=lambda kv: kv[1].get("ts", "")):
+        if e.get("event") == "stop":
             continue
         try:
             if dc.parse_iso(e["ts"]).timestamp() < horizon:
                 continue
         except (KeyError, ValueError):
             continue
-        found += 1
+        out.append((runner, rid, e))
+    return out
+
+
+SANDBOX_WARNING = ("no pid is visible inside the Bash sandbox, so a gone session looks like a "
+                   "live one; run delegation-ledger as a bare command (it is in "
+                   "excludedCommands)")
+
+
+def liveness_context():
+    """(limits, warnings, visible, sessions), computed once per view. `sessions` is None when
+    no pid is visible, which makes every Claude entry's `alive` None."""
+    limits, warning = load_liveness()
+    visible = dc.pids_visible()
+    warnings = ([] if visible else [SANDBOX_WARNING]) + ([warning] if warning else [])
+    return limits, warnings, visible, (live_sessions() if visible else None)
+
+
+def state_of(runner, e, ctx, now):
+    limits, _, visible, sessions = ctx
+    if runner == "codex":
+        return codex_entry(e, visible, limits, now)
+    alive = None if sessions is None else e.get("session_id") in sessions
+    return claude_state(e, alive, limits, now)
+
+
+def cmd_open(args):
+    now = time.time()
+    ctx = liveness_context()
+    for w in ctx[1]:
+        print(f"warning: {w}")
+    entries = unfinished(dc.read_rows(), now - args.hours * 3600)
+    for runner, rid, e in entries:
+        s = state_of(runner, e, ctx, now)
         if runner == "codex":
-            verdict, ev = dc.codex_state(e)
-            age, cap = codex_age(e, now), limits["codex"]["silent_min"]
-            if age is not None and age >= cap:
-                verdict += f"  ⚠ no event past {cap:g} min: check it"
-            print(f"codex  {rid}  {e.get('event')}  {verdict}\n       {ev}; out {e.get('out')}")
-            continue
-        verdict, ev, path = claude_state(e, e.get("session_id") in sessions, limits, now)
-        print(f"claude {rid}  {e.get('agent_type')}  {description(path)!r}  {verdict}\n"
-              f"       {ev}")
-    if not found:
+            print(f"codex  {rid}  {e.get('event')}  {s['verdict']}\n"
+                  f"       {s['evidence']}; out {e.get('out')}")
+        else:
+            print(f"claude {rid}  {e.get('agent_type')}  {description(s['path'])!r}  "
+                  f"{s['verdict']}\n       {s['evidence']}")
+    if not entries:
         print(f"no unfinished delegations in the last {args.hours:g}h")
+    return 0
+
+
+WATCH_HOURS = 48
+WATCH_TAIL = 1 << 20  # watch reads the ledger's last 1 MiB, so a 3-second poll stays cheap
+
+
+def repo_name(path):
+    """The repo a delegation works in: the basename of its directory, taken before any
+    /.claude/worktrees/ so a worktree agent shows its repo."""
+    return os.path.basename((path or "").split("/.claude/worktrees/", 1)[0].rstrip("/")) or "?"
+
+
+def cmd_watch(args):
+    now = time.time()
+    ctx = liveness_context()
+    lines, warned, gone = [], 0, 0
+    for runner, rid, e in unfinished(dc.read_rows(tail=WATCH_TAIL), now - WATCH_HOURS * 3600):
+        s = state_of(runner, e, ctx, now)
+        if s["live"] is False:
+            gone += 1  # orphans and dead codex runs: `open` has them, the bar never counts them
+            continue
+        warned += s["warn"]
+        flag = " ⚠" if s["warn"] else ""
+        if runner == "codex":
+            lines.append(f"codex   {e.get('run_id') or rid}  {e.get('model')}  "
+                         f"{repo_name(e.get('dir'))}  {s['short']}{flag}")
+        else:
+            desc = description(s["path"])[:40]
+            lines.append(f"claude  {rid}  {e.get('agent_type')}  {repo_name(e.get('cwd'))}  "
+                         f"{s['short']}{flag}" + (f"  {desc!r}" if desc else ""))
+    if args.summary:
+        print((f"{len(lines)}▶" + (f" {warned}⚠" if warned else "")) if lines else "")
+        return 0
+    for w in ctx[1]:
+        print(f"warning: {w}")
+    print("\n".join(lines) if lines else "no live delegations")
+    if gone:
+        print(f"{gone} more unfinished but not live in the last {WATCH_HOURS}h: "
+              "delegation-ledger open")
     return 0
 
 
@@ -528,6 +655,10 @@ def main(argv=None):
     o = sub.add_parser("open")
     o.add_argument("--hours", type=float, default=48)
     o.set_defaults(fn=cmd_open)
+    w = sub.add_parser("watch")
+    w.add_argument("--summary", action="store_true",
+                   help="one token for the tmux status bar, like `2▶ 1⚠`; empty when none")
+    w.set_defaults(fn=cmd_watch)
     t = sub.add_parser("tail")
     t.add_argument("-n", type=int, default=20)
     t.set_defaults(fn=cmd_tail)

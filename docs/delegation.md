@@ -67,7 +67,7 @@ Each layer covers what the others can't.
 | Sandbox | `settings.json` `sandbox` | Enforces (OS): the write roots, `denyRead` (the credential barrier), `denyWrite` (the enforcement sources), and the network allowlist. `failIfUnavailable`, and `autoAllowBashIfSandboxed: false`, so Hayden's prompts stay as they were |
 | Subagent policy | `hooks/subagent-policy.sh`, `skills/delegation/scripts/subagent-policy`, `skills/delegation/policy.toml` | Enforces: see "Subagent policy" below. Fails closed for the tools it polices |
 | Report check | `hooks/report-check.sh`, `skills/delegation/scripts/report-check` | Enforces acceptance: a schema-invalid report is sent back twice at most. Fails open |
-| Ledger | `hooks/delegation-ledger.sh`, `skills/delegation/scripts/delegation-ledger`, `skills/delegation/liveness.toml` | Observes: start and stop rows (`agent_type` is the resolved role; a teammate adds `name` and `teammate`), `report_ok`, denial rows, the main-checkout hash for a worktree agent; the per-agent liveness index (`agents/<id>.json`); `open` (the tool in flight and since when, thresholds in `liveness.toml`); `audit`; `sandbox-denials`. Fails open |
+| Ledger | `hooks/delegation-ledger.sh`, `skills/delegation/scripts/delegation-ledger`, `skills/delegation/liveness.toml` | Observes: start and stop rows (`agent_type` is the resolved role; a teammate adds `name` and `teammate`), `report_ok`, denial rows, the main-checkout hash for a worktree agent; the per-agent liveness index (`agents/<id>.json`); `open` (the tool in flight and since when, thresholds in `liveness.toml`); `watch` (one line per live delegation, and a token like `2▶ 1⚠` for the tmux bar); `audit`; `sandbox-denials`. Fails open |
 | Canary and due checks | `hooks/delegation-due.sh`, `skills/delegation/scripts/delegation_checks.py`, `skills/delegation/due.toml` | Observes: `delegation-ledger canary` re-verifies enforcement on this Claude Code version; `due` runs the cheap checks at session start and shows Hayden what needs him. Fails open |
 | Public GitHub client | `skills/delegation/scripts/gh-public` | GET-only access to api.github.com for delegated agents, optionally with a public-read token |
 | Brief and report | `skills/delegation/BRIEF.md`, `report.schema.json` | Persuades (the brief); checks (the schema) |
@@ -177,6 +177,8 @@ from 60 to 5,000 requests an hour.
 
 ### Where enforcement stops (known gaps)
 
+- **A real agent's `dangerouslyDisableSandbox` denial is not observed live.** The teammate probe
+  declined to try it. The harness covers the rule (its `policy` case).
 - **A writer's computed-path write into the main checkout.**
   - The sandbox's write root is the session's cwd, and a worktree lives inside it.
   - A live probe (2026-09-30) showed a worktree subagent writing the main checkout through
@@ -235,7 +237,7 @@ from 60 to 5,000 requests an hour.
 
 Stage 3 makes the setup check itself instead of relying on someone remembering. It runs in steps,
 Step 0 and then A0 to A6, planned in `~/.claude/plans/lets-move-on-to-refactored-pascal.md`. Step 0,
-A0, A4, A5 and A1 are done.
+A0, A4, A5, A1 and A3 are done.
 
 **Step 0** came first because everything after it rests on assumptions Stage 2 made but never
 tested live. It is four probes:
@@ -392,10 +394,12 @@ transcript has no such race:
 - a pending permission prompt shows as an open call too.
 
 `open` reads the last 1 MiB of each agent's transcript. Its verdicts, in order:
-1. the session is gone: `orphaned`;
+1. the session is gone: `orphaned` (or `unknown` when no pid is visible, inside the sandbox; see
+   "Watch (A3)");
 2. a call is open: `in <Tool> N min` (`, +k more` for parallel calls), with a `⚠` past
    `tool_min`;
-3. the turn ended but no stop row came: read the transcript for the report;
+3. the turn ended but no stop row came: `finishing its turn` for the first minute, then
+   `ended its turn but no stop row`, with a `⚠` (read the transcript for the report);
 4. otherwise `running`, or `⚠ ask it for status` once no transcript entry has appeared for
    `silent_min`.
 
@@ -410,19 +414,85 @@ rewritten at each start and stop under a lock, through a temp file and a rename,
 sees a torn file. It holds the agent's state, its transcript path, `first_start`, and the current
 activation's start and count. A SendMessage resume or a teammate's next message starts a new
 activation, with a fresh budget. `open` reads the index for the activation and for the agent's
-kind (subagent or teammate). A2's deadlines and A3's watch view build on it. A file untouched for
+kind (subagent or teammate). `watch` reads it too, and A2's deadlines will. A file untouched for
 7 days is pruned at the next start.
 
 **Why `liveness.toml` is its own file.** `load_policy` fails closed on a TOML syntax error, so a
-typo in a value only `open` reads would block every delegated call. `liveness.toml` fails open
+typo in a value only `open` and `watch` read would block every delegated call. `liveness.toml` fails open
 instead. A malformed file, or a value that isn't a positive number, falls back to the defaults in
-`delegation-ledger`, and `open` prints the warning first, so it can't go quiet. This is the
+`delegation-ledger`, and `open` and `watch` print the warning first, so it can't go quiet. This is the
 `due.toml` reasoning. A2's deadlines will still go in `policy.toml`, because the policy hook
 enforces them.
 
 **`background_tasks` isn't used.** SubagentStop's `background_tasks` could have let `open` say
 "stopped, waiting on N background tasks". A probe found the list session-wide, with no owner
 field, so A1 neither records nor reads it (see the verified facts and the known gaps).
+
+### Watch (A3)
+
+`open` is for recovery: it lists everything unfinished, live or not, with the evidence behind each
+verdict. `watch` is the view you glance at. It prints one line per live delegation, Claude and
+Codex alike:
+
+```
+claude  a1b2  writer  dotclaude  in Bash 12 min  'add the watch view to delegation-ledger'
+codex   20261001T101500-9f3a1c  gpt-5.6-sol  proj-x  running, last event 3 min ago
+1 more unfinished but not live in the last 48h: delegation-ledger open
+```
+
+`watch --summary` prints the same count as a token for the tmux status bar: `<n>▶`, plus
+` <w>⚠` when any line warns, or an empty line when nothing is live. `watch` prints once and
+exits. A looping default would hold the lead's Bash call until the 10-minute limit; a human who
+wants a loop runs `watch -n5 delegation-ledger watch`.
+
+**Live only.** `watch` uses `open`'s rule for what is unfinished (a folded entry whose latest
+event isn't a stop, within 48 hours), so the two views can't disagree. The index still supplies
+the agent's kind and activation. Then `watch` keeps only what is live:
+- an orphan or a dead Codex run only adds to a footer line that points at `open`;
+- the token never counts one. Nothing can dismiss an orphan, so a token that stayed up for 48
+  hours would teach you to ignore it;
+- crash recovery stays `open --hours 24`.
+
+**The grace.** A normal stop leaves a gap of up to about 3 seconds between the agent's `end_turn`
+entry and its stop row (a worktree agent's SubagentStop hook runs `git status`). A 3-second poll
+could catch that gap and flash a false `⚠`. So for its first minute (`STOP_GRACE_MIN`), both views
+call such a turn `finishing its turn`, with no warning. After that, `ended its turn but no stop
+row` gets a `⚠`.
+
+**Known gap: a lost stop row can't be dismissed.** An agent in a live session whose stop row never
+came keeps its line, and the token's `⚠`, for up to 48 hours. As of 2026-10-01, none of the 73
+Claude agents in the live ledger has a start as its latest row, so a dismiss command waits until
+this shows up.
+
+**The tail read.** The ledger has no rotation, so `watch` reads only its last 1 MiB, which keeps a
+3-second poll cheap. The cost: a start row more than about 2,900 rows back is missed by `watch`.
+`open` reads the whole ledger, so it still has it.
+
+**The sandbox finding.** Inside the Bash sandbox, no session pid is visible. Each sandboxed command
+gets its own PID namespace: `CLAUDE_PID` names the session, yet `/proc/$CLAUDE_PID` is missing
+inside the sandbox and present outside it. Before A3, a sandboxed `open` called every agent
+`orphaned` and said nothing about why, and a sandboxed `watch` would have shown nothing live. Two
+fixes:
+- `delegation-ledger *` is in `sandbox.excludedCommands`, so a bare call runs outside the sandbox
+  and is exact. The live settings are a copy, so a machine set up before A3 needs `./setup.sh`
+  again (see "Installing on a machine that is already set up"). Delegated agents get `excluded-command` for it from the policy, and never need it.
+- A self-check covers the calls that still run inside, such as a piped one. The caller's own
+  Claude process is alive by definition, so when `CLAUDE_PID` is set but not alive, no pid check
+  means anything. Both views then print a warning first and call each session `unknown` instead of
+  gone, and `open` says `pid not visible in the sandbox` for a Codex row instead of `died`. With
+  `CLAUDE_PID` unset (tmux, a plain terminal), the check passes.
+
+A session file's `procStart` must now match the pid's start time too, so a pid the kernel reused
+for another process no longer keeps a gone session alive.
+
+**tmux.** `~/bin/tmux-claude-status` is machine-local and only renders the token; the repo owns
+the `watch --summary` contract. The script is rate-limited to 3 seconds while the status line
+redraws every 2, so a rate-limited run repeats the last token from a cache file. tmux replaces a
+`#()` job's text with each run's output, an empty one included, so printing nothing there would
+blank the token on every other redraw. An empty token from `watch --summary` itself just clears
+the bar, which is what we want. The script also runs it with `CLAUDE_PID` unset. A `#()` job
+inherits the tmux server's environment, so a server started from a Claude Bash call would carry
+that session's `CLAUDE_PID` after it died, and that would trip the sandbox self-check.
 
 ## Verified facts the design rests on
 
@@ -519,8 +589,8 @@ the binary disagree, the binary wins.
   far past the timer; `open` shows it as `in <Tool> N min` (A1).
 - **Transcript entries** (2.1.286): a `tool_use` entry is written before its tool runs, and every
   user and assistant entry carries a `timestamp` with milliseconds. A1's liveness rests on the
-  first; the `stall` case checks it live, since a poll of `open` during its 100-second call must
-  show `in Bash`.
+  first; the `stall` case checks it live, since a poll of `open` and of `watch` during its
+  100-second call must show `in Bash`.
 - **SubagentStop `background_tasks` is session-wide** (probe on 2.1.286, 2026-10-01). The lead
   backgrounded `sleep 20`, then spawned a background agent that backgrounded `sleep 30` and ended
   its turn. The agent's list held three entries: the agent itself (`type: "subagent"`, with
@@ -529,6 +599,16 @@ the binary disagree, the binary wins.
 - **A subagent isn't woken by its background task** (same probe): no second SubagentStart fired
   when the agent's task finished. A subagent that backgrounds a command and ends its turn never
   sees the result.
+- **`CLAUDE_PID` and the sandbox's PID namespace** (2.1.286, 2026-10-01): Claude Code sets
+  `CLAUDE_PID` in the lead's Bash env, inside the sandbox and outside it, and it names the
+  session's Claude process. Each sandboxed command gets its own PID namespace, so
+  `/proc/$CLAUDE_PID` exists outside the sandbox and is missing inside it, where no session's pid
+  is visible. `SANDBOX_RUNTIME=1` is set only inside; A3 doesn't rely on it.
+- **`procStart`** (same day): a session file `~/.claude/sessions/<pid>.json` carries `procStart`,
+  which equals field 22 (starttime) of `/proc/<pid>/stat`. The command name in that file may hold
+  spaces, so the fields are split after the last `") "`.
+- **tmux `#()` jobs** (tmux 3.7c, 2026-10-01): tmux replaces a job's text with each run's output,
+  an empty one included.
 - **Workflow agents** (probe on 2.1.286, case `workflow`): their PreToolUse, PostToolUse and
   SubagentStart carry `agent_id`, with `agent_type: "workflow-subagent"`, and the policy denied
   one's `git push`. Under `-p` the Workflow tool first asks for review ("Review dynamic workflow
@@ -584,8 +664,8 @@ acting for Anthropic or OpenAI.
 **Stage 3 (watch)** is planned in `~/.claude/plans/lets-move-on-to-refactored-pascal.md`, which
 replaced the bullets that stood here. Its order: Step 0 probes, then A0 (named spawns off),
 A4 and A5 (due nudges, a one-command canary), A1 (per-agent liveness state), A3 (one watch view),
-A2 (deadline nudge, then hard stop), A6 (monthly audit). Step 0, A0, A4, A5 and A1 are done; see
-"Stage 3" above. A3 is next.
+A2 (deadline nudge, then hard stop), A6 (monthly audit). Step 0, A0, A4, A5, A1 and A3 are done;
+see "Stage 3" above. A2 is next.
 
 ## Tests
 
@@ -624,6 +704,10 @@ A2 (deadline nudge, then hard stop), A6 (monthly audit). Step 0, A0, A4, A5 and 
   - unit: 233 tests;
   - claude: the `stall` case passed 4 of 4, including its two new liveness checks, so a full run
     now has 54 checks.
+- **Results on 2026-10-01 (A3, 2.1.286):**
+  - unit: 250 tests;
+  - claude: the `stall` case passed 6 of 6, including its two new checks (`watch` showed the
+    agent in Bash, `watch --summary` counted it as `1▶`), so a full run has 56 checks.
 
 ## Installing on a machine that is already set up
 
@@ -659,6 +743,8 @@ hook fail closed, so wiring a hook before its script is reachable blocks every d
    - a Bash write outside cwd fails;
    - `cat ~/.config/gh/hosts.yml` fails;
    - `git fetch` and `gh pr list` still work, through the exclusion;
+   - a bare `delegation-ledger watch` prints no "no pid is visible" warning, so the
+     `delegation-ledger *` exclusion (A3) is in;
    - the prompts are unchanged.
 5. **The due checks.** Add the SessionStart entry (`delegation-due.sh`), then run
    `delegation-ledger canary` outside the sandbox, in the background. When it is green, a new session

@@ -47,6 +47,11 @@ class Baseline(unittest.TestCase):
             self.assertIn(pat, excluded)
         self.assertNotIn("git clone *", excluded)  # it stays sandboxed: public clones only
 
+    def test_the_ledger_cli_runs_outside_the_sandbox(self):
+        # Inside the sandbox no session pid is visible, so `open` and `watch` would call every
+        # agent orphaned (A3). A bare call runs outside; the policy denies it to agents.
+        self.assertIn("delegation-ledger *", S["sandbox"]["excludedCommands"])
+
     def test_policy_file_lists_cover_the_sandbox_lists(self):
         # The file tools run outside the sandbox; the policy applies the same lists to them,
         # and keeps its own copy for machines without a sandbox block.
