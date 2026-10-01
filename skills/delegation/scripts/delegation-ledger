@@ -259,12 +259,17 @@ def scan_transcript(path):
         content = msg.get("content")
         blocks = [c for c in content if isinstance(c, dict)] if isinstance(content, list) else []
         ts = entry_ts(e)
+        kind = entry_kind(e, msg, {c.get("type") for c in blocks})
+        if kind == "prompt":
+            # A new prompt (a SendMessage resume, a teammate's next message) starts a new
+            # turn, so a call an abort left without a tool_result is not in flight any more.
+            uses.clear()
         for c in blocks:
             if c.get("type") == "tool_use":
                 uses[c.get("id")] = (c.get("name") or "?", ts)
             elif c.get("type") == "tool_result":
                 done.add(c.get("tool_use_id"))
-        last, last_ts = entry_kind(e, msg, {c.get("type") for c in blocks}), ts or last_ts
+        last, last_ts = kind, ts or last_ts
     calls = sorted((v for k, v in uses.items() if k not in done), key=lambda v: v[1] or 0)
     return {"open": calls, "last": last, "last_ts": last_ts}
 
@@ -337,7 +342,7 @@ def claude_state(e, alive, limits, now):
     elif calls:
         tool, t0 = calls[0]
         mins = minutes(t0 or began, now)
-        verdict = f"in {tool} {mins:.0f} min" + (f", +{len(calls) - 1} more"
+        verdict = f"in {tool} {int(mins)} min" + (f", +{len(calls) - 1} more"
                                                  if len(calls) > 1 else "")
         if mins >= lim["tool_min"]:
             verdict += f"  ⚠ past {lim['tool_min']:g} min: a long call or stuck; check it"
@@ -345,14 +350,14 @@ def claude_state(e, alive, limits, now):
         verdict = "ended its turn but no stop row: read its transcript for the report"
     else:
         quiet = minutes(scan["last_ts"] or began, now)
-        verdict = (f"no transcript entry for {quiet:.0f} min  ⚠ ask it for status"
+        verdict = (f"no transcript entry for {int(quiet)} min  ⚠ ask it for status"
                    if quiet >= lim["silent_min"] else
-                   f"running (no transcript entry for {quiet:.0f} min)")
+                   f"running (no transcript entry for {int(quiet)} min)")
     k = idx.get("activations")
-    ev = (f"session {'alive' if alive else 'gone'}, active {minutes(began, now):.0f} min"
+    ev = (f"session {'alive' if alive else 'gone'}, active {int(minutes(began, now))} min"
           + (f" (activation {k})" if k else "")
           + f", last entry {scan['last']}"
-          + (f" {minutes(scan['last_ts'], now):.0f} min ago" if scan["last_ts"] else "")
+          + (f" {int(minutes(scan['last_ts'], now))} min ago" if scan["last_ts"] else "")
           + (f", {len(calls)} call{'s' if len(calls) > 1 else ''} open" if calls else ""))
     return verdict, ev, path
 

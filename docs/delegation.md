@@ -225,7 +225,8 @@ from 60 to 5,000 requests an hour.
   ends its turn isn't flagged: its stop row takes it out of `open`, and SubagentStop's
   `background_tasks` can't say whose task is whose (it is session-wide, so A1 ignores it). Claude
   Code doesn't wake the agent when the task ends (probe, 2.1.286), so the result is lost to it.
-  SKILL §4 tells the lead to have a long command run in the foreground.
+  `BRIEF.md` tells agents not to end a turn with a background command running, and SKILL §4
+  explains why.
 - **Vault.** There is deliberately no vault read deny. A session-wide deny would break hq's vault
   routing and vault's own sessions, and Bash writes to vault from other sessions are already
   outside the write roots.
@@ -385,6 +386,8 @@ parallel calls, and its threshold was a hardcoded `--silent-min 30`.
 fires no PostToolUse, so state kept by per-call hooks would get stuck on "in Bash". The
 transcript has no such race:
 - a `tool_use` id with no matching `tool_result` is a call still in flight;
+- a new prompt (a resume, a teammate's next message) clears the open calls before it, so a call
+  an abort left without a result doesn't read as in flight forever;
 - every entry carries a timestamp, so the oldest open call says since when;
 - a pending permission prompt shows as an open call too.
 
@@ -617,6 +620,10 @@ A2 (deadline nudge, then hard stop), A6 (monthly audit). Step 0, A0, A4, A5 and 
   - the Stage 2 baseline run with user settings still loaded went 36/37. That failure was the
     report-check loop, and it led to the `--setting-sources` fix;
   - codex: 7/7 (on 2.1.285, not rerun).
+- **Results on 2026-10-01 (A1, 2.1.286):**
+  - unit: 233 tests;
+  - claude: the `stall` case passed 4 of 4, including its two new liveness checks, so a full run
+    now has 54 checks.
 
 ## Installing on a machine that is already set up
 

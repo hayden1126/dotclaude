@@ -5,7 +5,7 @@
 > decisions ([[dotclaude-handoff-skill]], [[dotclaude-research-sourcing-skill]],
 > [[dotclaude-chrome-devtools-wsl]]). Per-effort design rationale lives in its plan under `~/.claude/plans/`.
 
-Last updated: 2026-09-30
+Last updated: 2026-10-01
 Base: `main`. For branch / PR / push state, run `gh pr list` and `git log main..HEAD` (derive it; not
 stored here).
 
@@ -41,13 +41,20 @@ stored here).
   CLAUDE.md trigger, `vetting-sources`, `deck-production` S1, and earlier work back to PR #10.
 
 ## In flight
-- **Delegation hardening Stage 3: next is A1 (per-agent liveness state)**, then A3 → A2 → A6, each
-  on a fresh branch from `main` in a worktree, so the live hooks stay untouched while it is edited.
-  The plan is `~/.claude/plans/lets-move-on-to-refactored-pascal.md` (its A4/A5 cadence is superseded
-  by `docs/delegation.md`, "The canary and the due checks"). Decisions already made: deadlines
-  nudge, then hard-stop; liveness shows in the tmux status bar and a CLI. A1 must catch an agent that
-  sits in one long tool call, because the stall timer doesn't (P2). Before building, run
-  `delegation-ledger due`; after building, run `delegation-ledger canary` outside the sandbox.
+- **Delegation hardening Stage 3: A1 (per-agent liveness state) is built** on
+  `feat/delegation-a1-liveness` (plan `~/.claude/plans/woolly-jingling-cookie.md`; design in
+  `docs/delegation.md`, "Liveness (A1)"). Unit 233/233; the live `stall` case passed 4/4. It
+  needs no `setup.sh` run: no new hook or settings entry, and `skills/delegation` is linked as
+  a directory, so it goes live when it merges. After the merge, run `delegation-ledger canary`
+  outside the sandbox, in the background; a full run now has 54 checks.
+- **Next: A3 (one watch view)**, then A2 → A6, each on a fresh branch from `main` in a worktree,
+  so the live hooks stay untouched while it is edited. The Stage 3 plan is
+  `~/.claude/plans/lets-move-on-to-refactored-pascal.md`. Its A1 text is superseded by the A1 plan
+  above, and its A4/A5 cadence by `docs/delegation.md`, "The canary and the due checks". Decisions
+  already made: deadlines nudge, then hard-stop; liveness shows in the tmux status bar and a CLI.
+  A3's `watch` and A2's checks read the A1 index (`$XDG_STATE_HOME/dotclaude/agents/<id>.json`),
+  and A2's deadlines go in `policy.toml`, not `liveness.toml`. Before building, run
+  `delegation-ledger due`.
   - **Installing Stage 3 on another machine:** `git pull` in `~/dotclaude`, then `./setup.sh`, both
     outside the sandbox (A4 added a hook and a settings entry). A baseline key still wins over the
     live file's value, so copy `~/.claude/settings.json` first and diff it after.

@@ -164,9 +164,11 @@ validated (`report_ok`).
   messages, and any agent can sit in one long tool call, which the stall timer doesn't
   abort. A `⚠` is a reason to look, not a verdict: ask it for status before you assume
   otherwise.
-- **A long command runs in the foreground.** A delegated agent that backgrounds a command and
-  ends its turn is never woken when it finishes, so it loses the result, and `open` can't
-  flag it. When the work has one, say so in the brief.
+- **No delegated agent ends its turn while a background command runs.** Claude Code never
+  wakes it when the command finishes, so it loses the result, and `open` can't flag it. A
+  long command runs in the foreground (up to the Bash tool's 10-minute limit). A longer one
+  runs in the background, and the agent waits on its output before reporting. `BRIEF.md`'s
+  Budget section says so; keep that line.
 - **After a crash or restart,** run `delegation-ledger open --hours 24`.
   - For each orphaned agent, look at its artifact path and redo only the unfinished part.
   - For Codex, run `codex-delegate status`, then `codex-delegate resume <run_id>`.

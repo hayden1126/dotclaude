@@ -495,6 +495,14 @@ class Liveness(LedgerEnv):
         self.assertNotIn("in Bash", out)
         self.assertIn("running (no transcript entry for 3 min)", out)
 
+    def test_a_new_prompt_clears_a_call_an_abort_left_open(self):
+        prompt = {"type": "user", "timestamp": iso_ago(2), "message": {"content": "go on"}}
+        self.transcript(use("t1", "Bash", 9), prompt, thinking(1))
+        self.hook(self.start())
+        out = self.open_()
+        self.assertNotIn("in Bash", out)
+        self.assertIn("running (no transcript entry for 1 min)", out)
+
     def test_thinking_last_is_measured_from_its_timestamp(self):
         # An attachment entry written later doesn't count as the agent's own.
         self.transcript(use("t1", "Read", 4), result("t1", 4), thinking(2),
