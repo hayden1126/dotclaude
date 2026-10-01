@@ -10,14 +10,18 @@ Base: `main`. For branch / PR / push state, run `gh pr list` and `git log main..
 stored here).
 
 ## Done (recent; git, the linked plans and memory hold the detail)
-- **Delegation hardening Stage 3: Step 0, A0, A4, A5 and A1, live on HAYPC** (2026-09-30 to
-  10-01; PRs #42 to #46, range `d46449b..ce16b8a`; A1 is PR #48, range `c0a3241..1d09748`).
+- **Delegation hardening Stage 3: Step 0, A0, A4, A5, A1 and A3, live on HAYPC** (2026-09-30
+  to 10-01; PRs #42 to #46, range `d46449b..ce16b8a`; A1 is PR #48, range `c0a3241..1d09748`;
+  A3 is PR #49, range `1d09748..65e7297`).
   - Named spawns are denied unless their name starts with `team-`.
   - Teammates are policed by their role (meta.json `customAgentType`).
   - `delegation-ledger canary` re-verifies enforcement. A SessionStart hook runs the cheap checks
     and shows a line only when something is due; `delegation-ledger due` shows the last results.
   - A1: `open` reads liveness from the agent transcript (`in Bash 12 min`, with a `⚠` past the
-    thresholds in `liveness.toml`). The ledger hook keeps a per-agent index for A2 and A3.
+    thresholds in `liveness.toml`). The ledger hook keeps a per-agent index for A2.
+  - A3: `delegation-ledger watch` lists the live delegations, and `--summary` puts a token
+    (`2▶ 1⚠`) in the tmux bar through the machine-local `~/bin/tmux-claude-status`. The sandbox
+    hides every session pid, so `delegation-ledger *` is in `excludedCommands`.
 
   `docs/delegation.md` "Stage 3" holds the findings, the decisions and the test counts.
 - Older (git, the PRs and memory hold the detail): `setup.sh` keeps the live settings' own keys
@@ -33,16 +37,7 @@ stored here).
   CLAUDE.md trigger, `vetting-sources`, `deck-production` S1, and earlier work back to PR #10.
 
 ## In flight
-- **Delegation hardening Stage 3: A3 (one watch view) is built but not merged.** A2 comes next,
-  then A6.
-  - **A3** is on branch `feat/delegation-a3-watch`, based on `1d09748`. It also carries the A1
-    handoff commit. Run `gh pr list` for its PR.
-  - **After A3 merges, in order:**
-    1. Run `./setup.sh` the copy-and-diff way (see "Other machines" below). Only the
-       `delegation-ledger *` exclusion should be new.
-    2. Apply the tmux edits from the A3 plan's "After the merge" section. They are
-       machine-local, outside git.
-    3. Run the plan's manual checks, then `delegation-ledger canary` in the background.
+- **Delegation hardening Stage 3: next is A2 (deadline: nudge, then hard stop)**, then A6.
   - Build each step on a fresh branch from `main` in a worktree, so the live hooks stay
     untouched while it is edited.
   - **The plans:** Stage 3 is `~/.claude/plans/lets-move-on-to-refactored-pascal.md`.
@@ -52,8 +47,7 @@ stored here).
   - **Decisions already made:**
     - deadlines nudge, then hard-stop;
     - A2's checks read the A1 index (`$XDG_STATE_HOME/dotclaude/agents/<id>.json`) and the
-      transcript scan (`delegation-ledger`, `scan_transcript`/`claude_state`). A3's `watch` lists
-      from the ledger, like `open`, instead;
+      transcript scan (`delegation-ledger`, `scan_transcript`/`claude_state`);
     - A2's deadlines go in `policy.toml`, not `liveness.toml`;
     - A2 adds the one PostToolUse hook its nudge needs, and re-adds `PostToolUse` to
       `CANARY_STRINGS`.
