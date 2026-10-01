@@ -122,6 +122,10 @@ validated (`report_ok`).
   Never re-spawn the same brief hoping the denial goes away.
 - **`partial` or `failed`:** read the summary before retrying, and retry at most once with
   a changed brief.
+- **A `deadline` stop:** the agent ran past its role's budget for this activation, and every
+  tool but the handback was denied (`stop_and_explain: ... deadline`). Read its partial report
+  first. Then resume it through SendMessage with a narrower brief, which starts a new
+  activation with a fresh budget, or take the rest over yourself.
 - **Writer:** review the diff on its branch (`artifacts[0]` is `branch@sha`), run the
   verification yourself, and merge single-threaded.
 - **Reader:** if its output must survive this session, write the report to the artifact
@@ -167,6 +171,16 @@ validated (`report_ok`).
   - The thresholds live in `skills/delegation/liveness.toml`, per kind (subagent, teammate,
     codex). A broken file falls back to the defaults, and `open` and `watch` print a warning
     first.
+- **Every activation has a deadline,** per role, in `skills/delegation/policy.toml`
+  `[deadline]`: Explore 10 min to a nudge and 20 to the stop, researcher and reviewer 20 and
+  40, writer and every other type 30 and 60.
+  - Past the nudge, the agent's next successful call carries one reminder to report
+    (a `nudge` row in `delegation-ledger tail`).
+  - Past the stop, every tool except SubagentHandback and SendMessage is denied, so the agent
+    hands back `partial` (see §3).
+  - A long call that is already running finishes first. A SendMessage resume or a teammate's
+    next message starts a new activation, with a fresh budget.
+  - An agent that loops on its tools never trips a `⚠`; the deadline is what stops it.
 - A **silent agent** is usually working, not dead. A `team-` teammate can sit idle between
   messages, and any agent can sit in one long tool call, which the stall timer doesn't
   abort. A `⚠` is a reason to look, not a verdict: ask it for status before you assume

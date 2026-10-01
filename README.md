@@ -51,7 +51,7 @@ it drops; put a value in the overlay to keep it.
 | `skills/` | The skills I authored: `coding-practices`, `research-discipline`, `research-sourcing`, `writing-voice`, `staged-reader-review`, `ebook-extract`, `deck-production`, `vetting-sources`, `handoff`, `frontend-ui-discipline`, `ui-alignment`, `delegation` | symlink per dir into `~/.claude/skills/`; a skill's `scripts/` CLI also symlinks into `~/.local/bin` when that dir exists (`deck-production` ships `deckkit`; `delegation` ships `codex-delegate`, `delegation-ledger` and `gh-public`) |
 | `agents/` | Delegation roles: `Explore` (overrides the built-in with a no-shell reader), `researcher`, `reviewer`, `writer`; see docs/delegation.md | symlink per file into `~/.claude/agents/` |
 | `hooks/agent-spawn-guard.sh` | PreToolUse(Agent) guard: denies a `writer` spawn that doesn't pass `isolation` on the call, and a named spawn without the `team-` prefix; fails closed | symlink `~/.claude/hooks/agent-spawn-guard.sh` |
-| `hooks/delegation-ledger.sh` | SubagentStart/SubagentStop hook: appends a pointer row per delegated agent to the delegation ledger; never blocks | symlink `~/.claude/hooks/delegation-ledger.sh` |
+| `hooks/delegation-ledger.sh` | SubagentStart/SubagentStop hook: appends a pointer row per delegated agent to the delegation ledger; as a PostToolUse hook, sends a delegated agent its deadline nudge; never blocks | symlink `~/.claude/hooks/delegation-ledger.sh` |
 | `hooks/delegation-due.sh` | SessionStart hook: runs the cheap delegation checks in the background (the quick canary on a new Claude Code version, a daily audit) and shows a line only when something is due; fails open | symlink `~/.claude/hooks/delegation-due.sh` |
 | `hooks/subagent-policy.sh` | PreToolUse(*) policy for delegated agents only (rules in `skills/delegation/policy.toml`): no leaving the sandbox, no destructive git, no MCP writes, protected paths, the researcher allowlist, writers held to their worktree; fails closed | symlink `~/.claude/hooks/subagent-policy.sh` |
 | `hooks/report-check.sh` | PreToolUse(SubagentHandback)/SubagentStop hook: sends a delegated role's malformed report back, at most twice; fails open | symlink `~/.claude/hooks/report-check.sh` |
@@ -113,8 +113,12 @@ ships but is opt-in, see its entry):
   index beside it (`agents/<id>.json`). `delegation-ledger open` lists unfinished delegations
   with the tool each one is in and since when (thresholds in `skills/delegation/liveness.toml`),
   and `delegation-ledger watch` prints one line per live delegation (`--summary` gives a token
-  like `2▶ 1⚠` for the tmux bar). The hook is an observer only: it prints nothing and always
-  exits 0.
+  like `2▶ 1⚠` for the tmux bar). The hook never blocks: it always exits 0.
+- **PostToolUse(`*`): `delegation-ledger.sh`** (in this repo), for delegated agents only (the
+  same `agent_id` prefilter as the policy hook). Once an agent's activation passes its role's
+  `nudge_min` (`skills/delegation/policy.toml` `[deadline]`), its next successful call gets one
+  reminder to report, as `additionalContext`. Fails open, so a broken install only loses the
+  nudge; `subagent-policy` enforces the stop.
 - **SessionStart (`startup|resume`): `delegation-due.sh`** (in this repo). Runs
   `delegation-ledger due --hook`: on the first session of a new Claude Code version it starts the
   quick canary in the background (unit tests, sandbox posture, strings in the binary; no model
@@ -125,7 +129,8 @@ ships but is opt-in, see its entry):
 - **PreToolUse(`*`): `subagent-policy.sh`** (in this repo). Runs only for tool calls made inside a
   subagent or teammate (the settings command exits before Python when the input has no
   `agent_id`, so the main thread is never policed). The rules live in
-  `skills/delegation/policy.toml`, and `docs/delegation.md` lists them.
+  `skills/delegation/policy.toml`, and `docs/delegation.md` lists them. They include a per-role
+  deadline: past `stop_min`, every tool but the handback and SendMessage is denied.
   **Fails closed** for the tools it polices: a missing link, a crash or a hang blocks the delegated
   call. Needs python3 3.12 or newer.
 - **PreToolUse(`SubagentHandback`) and SubagentStop: `report-check.sh`** (in this repo). It sends a

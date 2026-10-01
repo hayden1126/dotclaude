@@ -37,28 +37,31 @@ stored here).
   CLAUDE.md trigger, `vetting-sources`, `deck-production` S1, and earlier work back to PR #10.
 
 ## In flight
-- **Delegation hardening Stage 3: next is A2 (deadline: nudge, then hard stop)**, then A6.
+- **Delegation hardening Stage 3: A2 (deadline: nudge, then hard stop) is built** on branch
+  `feat/delegation-a2-deadline`, not yet merged; then A6.
+  - **The plan:** `~/.claude/plans/deep-moseying-koala.md`. Step 0 (the probes) and Step 1 (the
+    build) are done; Step 2 is left:
+    - review the branch, then run both unit suites outside the sandbox (270 tests expected);
+    - run the live case, `python3 tests/delegation/run.py --runner claude --cases deadline`,
+      from the worktree, outside the sandbox, then fill the "A2, 2.1.287" results block in
+      `docs/delegation.md` "Tests";
+    - after Hayden approves the PR and the merge, `./setup.sh` (copy `~/.claude/settings.json`
+      first and diff it after), then `delegation-ledger canary` in the background. It must go
+      green on 2.1.287 with more than 56 checks, and `delegation-ledger due` should then be
+      quiet apart from the dated 2026-10-07 item.
   - Build each step on a fresh branch from `main` in a worktree, so the live hooks stay
     untouched while it is edited.
   - **The plans:** Stage 3 is `~/.claude/plans/lets-move-on-to-refactored-pascal.md`.
     - Its A1 and A3 text is detailed in `~/.claude/plans/woolly-jingling-cookie.md`, which holds
       both plans, A3 first.
     - Its A4/A5 cadence is in `docs/delegation.md` ("The canary and the due checks").
-  - **Decisions already made:**
-    - deadlines nudge, then hard-stop;
-    - A2's checks read the A1 index (`$XDG_STATE_HOME/dotclaude/agents/<id>.json`) and the
-      transcript scan (`delegation-ledger`, `scan_transcript`/`claude_state`);
-    - A2's deadlines go in `policy.toml`, not `liveness.toml`;
-    - A2 adds the one PostToolUse hook its nudge needs, and re-adds `PostToolUse` to
-      `CANARY_STRINGS`.
-  - **Before building,** run `delegation-ledger due`. **After building,** run
-    `delegation-ledger canary` in the background. As a bare command it now runs outside the
-    sandbox on its own.
+    - A2's decisions and why are in `docs/delegation.md` "Deadline (A2)". A6 retunes its
+      budgets against the ledger.
 - **Delegation hardening: what is live on HAYPC** (Stage 2, plus the Stage 3 steps under Done;
   `docs/delegation.md`;
   `skills/delegation/SKILL.md` is the operating guide). Open items:
   - **Other machines:** `git pull` in `~/dotclaude`, then `./setup.sh`, both outside the sandbox
-    (A4 and A3 changed `settings.json`).
+    (A4 and A3 changed `settings.json`, and A2 adds a PostToolUse hook to it).
     - A baseline key still wins over the live file's value, so copy `~/.claude/settings.json`
       first and diff it after.
     - Without a `settings.machine.json` overlay, install by hand per the docs' install order:
