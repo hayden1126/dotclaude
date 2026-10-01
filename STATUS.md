@@ -38,10 +38,9 @@ stored here).
     canary` in the background. No `setup.sh` is needed: `settings.json` didn't change, and the
     scripts are symlinked. It must go 65/65 on 2.1.287; add that line to the same results block.
     `delegation-ledger due` should then be quiet apart from its dated items.
-  - **Cleanup, pending Hayden's OK:** the merged worktrees `.claude/worktrees/agent-a412dcb459721926c`
-    and `.claude/worktrees/a2-resume` (remove them outside the sandbox,
-    [[cc-p-mode-harness-gotchas]]), and the local branches `feat/delegation-a2-deadline`,
-    `worktree-agent-a412dcb459721926c` and `fix/a2-resume-text` once merged.
+  - **Then clean up (Hayden approved, 2026-10-01):** remove the worktree
+    `.claude/worktrees/a2-resume` outside the sandbox ([[cc-p-mode-harness-gotchas]]) and delete
+    the local branch `fix/a2-resume-text`.
   - **Plans:** A2 is `~/.claude/plans/deep-moseying-koala.md` (its Step 0 probe results are
     final). Stage 3 is `~/.claude/plans/lets-move-on-to-refactored-pascal.md`, with A1/A3 detail in
     `woolly-jingling-cookie.md`. A2's decisions and why are in `docs/delegation.md` "Deadline
