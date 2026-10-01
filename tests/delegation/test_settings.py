@@ -79,6 +79,16 @@ class Baseline(unittest.TestCase):
         for c in [cmd] + [c for c in stops if "report-check" in c]:
             self.assertNotIn("exit 2", c)
 
+    def test_due_checks_run_at_session_start_and_fail_open(self):
+        (entry,) = [e for e in S["hooks"]["SessionStart"]
+                    if any("delegation-due.sh" in h["command"] for h in e["hooks"])]
+        # Not on clear or compact: one nudge per session, not one per context reset.
+        self.assertEqual(entry["matcher"], "startup|resume")
+        (h,) = entry["hooks"]
+        self.assertNotIn("exit 2", h["command"])
+        self.assertLessEqual(h["timeout"], 10)  # the first reply waits for SessionStart hooks
+        self.assertTrue(os.access(os.path.join(REPO, "hooks", "delegation-due.sh"), os.X_OK))
+
     def test_the_stop_sound_rings_for_the_main_session_only(self):
         # Stop fires for subagents too; an inline sound rang for every one of them.
         stops = commands("Stop")

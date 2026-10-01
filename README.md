@@ -49,6 +49,7 @@ value replaces the baseline's (`merge-settings.py`).
 | `agents/` | Delegation roles: `Explore` (overrides the built-in with a no-shell reader), `researcher`, `reviewer`, `writer`; see docs/delegation.md | symlink per file into `~/.claude/agents/` |
 | `hooks/agent-spawn-guard.sh` | PreToolUse(Agent) guard: denies a `writer` spawn that doesn't pass `isolation` on the call, and a named spawn without the `team-` prefix; fails closed | symlink `~/.claude/hooks/agent-spawn-guard.sh` |
 | `hooks/delegation-ledger.sh` | SubagentStart/SubagentStop hook: appends a pointer row per delegated agent to the delegation ledger; never blocks | symlink `~/.claude/hooks/delegation-ledger.sh` |
+| `hooks/delegation-due.sh` | SessionStart hook: runs the cheap delegation checks in the background (the quick canary on a new Claude Code version, a daily audit) and shows a line only when something is due; fails open | symlink `~/.claude/hooks/delegation-due.sh` |
 | `hooks/subagent-policy.sh` | PreToolUse(*) policy for delegated agents only (rules in `skills/delegation/policy.toml`): no leaving the sandbox, no destructive git, no MCP writes, protected paths, the researcher allowlist, writers held to their worktree; fails closed | symlink `~/.claude/hooks/subagent-policy.sh` |
 | `hooks/report-check.sh` | PreToolUse(SubagentHandback)/SubagentStop hook: sends a delegated role's malformed report back, at most twice; fails open | symlink `~/.claude/hooks/report-check.sh` |
 | `hooks/danger-guard.sh` | PreToolUse(Bash) guard: two-tier confirmation for destructive git and `rm` ops | symlink `~/.claude/hooks/danger-guard.sh` |
@@ -107,6 +108,13 @@ ships but is opt-in, see its entry):
   (ids, type, paths, whether the final report validated) per delegated agent to
   `${XDG_STATE_HOME:-~/.local/state}/dotclaude/delegations.jsonl`, so `delegation-ledger open` can
   list unfinished delegations after a crash. Observer only: prints nothing, always exits 0.
+- **SessionStart (`startup|resume`): `delegation-due.sh`** (in this repo). Runs
+  `delegation-ledger due --hook`: on the first session of a new Claude Code version it starts the
+  quick canary in the background (unit tests, sandbox posture, strings in the binary; no model
+  calls), and once a day it starts `audit`. It prints one line (a `systemMessage`, for you, not the
+  model) only when a check failed or can't run, the full `delegation-ledger canary` is due (weekly,
+  when the version moved), or a dated item in `skills/delegation/due.toml` is due. Fails open:
+  always exits 0.
 - **PreToolUse(`*`): `subagent-policy.sh`** (in this repo). Runs only for tool calls made inside a
   subagent or teammate (the settings command exits before Python when the input has no
   `agent_id`, so the main thread is never policed). The rules live in

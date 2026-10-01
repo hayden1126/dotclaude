@@ -10,6 +10,12 @@
                                     changed the main checkout, rejected reports, denials
   delegation-ledger sandbox-denials [--days N]
                                     hosts and paths the sandbox refused, from the transcripts
+  delegation-ledger canary [--quick] [--accept-fewer]
+                                    re-verify enforcement on this Claude Code version: the quick
+                                    tier (unit tests, sandbox posture, strings in the binary),
+                                    then the live harness; records the result for `due`
+  delegation-ledger due [--hook]    what is due (canary, audit, dated items in due.toml); --hook
+                                    is the SessionStart body, which also starts the cheap checks
 
 The hook is an observer: it always exits 0 and prints nothing, so a ledger bug can never
 block or alter an agent (failing open is correct here, unlike the spawn guard). Its own
@@ -41,6 +47,12 @@ import traceback
 
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 import delegation_common as dc  # noqa: E402
+
+
+def checks():
+    # Imported on use, so the SubagentStart/Stop hook path never depends on the check code.
+    import delegation_checks
+    return delegation_checks
 
 
 def norm_id(agent_id):
@@ -256,9 +268,15 @@ def used_tools(path):
 def cmd_audit(args):
     """Is enforcement still binding? Prints findings; exits 1 if any warning."""
     horizon = time.time() - args.hours * 3600
-    rows = [r for r in dc.read_rows() if r.get("ts") and
-            dc.parse_iso(r["ts"]).timestamp() >= horizon]
+    every = dc.read_rows()
+    rows = [r for r in every if r.get("ts") and dc.parse_iso(r["ts"]).timestamp() >= horizon]
     warn = 0
+    lines = []
+
+    def say(line):  # each line also goes into the stamp `due` reads
+        lines.append(line)
+        print(line)
+
     hb = os.path.join(dc.state_dir(), "subagent-policy.heartbeat")
     hb_t = os.path.getmtime(hb) if os.path.exists(hb) else None
     # The policy hook updates the heartbeat on every delegated tool call. An agent that used
@@ -269,21 +287,24 @@ def cmd_audit(args):
               and used_tools(r.get("agent_transcript"))]
     if unseen:
         warn += 1
-        print(f"WARN policy hook: {len(unseen)} agent(s) used tools after its last heartbeat "
-              f"({'never' if hb_t is None else time.strftime('%Y-%m-%d %H:%M', time.localtime(hb_t))})."
-              " Check the PreToolUse entry and that hook input still carries agent_id.")
+        say(f"WARN policy hook: {len(unseen)} agent(s) used tools after its last heartbeat "
+            f"({'never' if hb_t is None else time.strftime('%Y-%m-%d %H:%M', time.localtime(hb_t))})."
+            " Check the PreToolUse entry and that hook input still carries agent_id.")
     else:
-        print("ok   policy hook: saw every agent that used tools")
-    folded = dc.fold(rows)
+        say("ok   policy hook: saw every agent that used tools")
+    # Fold the whole ledger, then keep the agents whose latest row is in the window: a writer
+    # that started before the window and stopped inside it still pairs its start and stop.
+    folded = {k: e for k, e in dc.fold(every).items()
+              if e.get("ts") and dc.parse_iso(e["ts"]).timestamp() >= horizon}
     moved = [(k, e) for k, e in folded.items()
              if e.get("main_before") and e.get("main_after")
              and e["main_before"] != e["main_after"]]
     for (_, rid), e in moved:
         warn += 1
-        print(f"WARN main checkout changed while {e.get('agent_type')} {rid} ran in its worktree "
-              "(evidence, not proof: the lead may have edited too). Inspect `git status` there.")
+        say(f"WARN main checkout changed while {e.get('agent_type')} {rid} ran in its worktree "
+            "(evidence, not proof: the lead may have edited too). Inspect `git status` there.")
     if not moved:
-        print("ok   no worktree agent coincided with a main-checkout change")
+        say("ok   no worktree agent coincided with a main-checkout change")
     try:
         import tomllib
         with open(os.path.join(os.path.dirname(dc.HERE), "policy.toml"), "rb") as f:
@@ -292,13 +313,19 @@ def cmd_audit(args):
         roles = {"Explore", "researcher", "reviewer", "writer"}
     bad = [e for e in folded.values() if e.get("event") == "stop" and e.get("report_ok") is False
            and e.get("agent_type") in roles and not e.get("teammate")]
-    print(f"{'WARN' if bad else 'ok  '} reports failing the contract: {len(bad)}")
+    say(f"{'WARN' if bad else 'ok  '} reports failing the contract: {len(bad)}")
     warn += bool(bad)
     denials = collections.Counter((r.get("agent_type"), r.get("rule")) for r in rows
                                   if r.get("event") == "policy")
-    print(f"info policy denials in the last {args.hours:g}h: {sum(denials.values())}")
+    say(f"info policy denials in the last {args.hours:g}h: {sum(denials.values())}")
     for (atype, rule), n in denials.most_common(10):
-        print(f"       {n:3}  {atype}  {rule}")
+        say(f"       {n:3}  {atype}  {rule}")
+    try:
+        checks().stamp_audit(args.hours, lines, shown=not args.unshown)
+    except OSError:
+        pass  # the sandbox's read-only state dir: a manual audit there just isn't stamped
+    except Exception:  # noqa: BLE001  the stamp is for `due`; the audit itself stands
+        checks().log_error()
     return 1 if warn else 0
 
 
@@ -330,6 +357,18 @@ def cmd_sandbox_denials(args):
     return 0
 
 
+def cmd_canary(args):
+    return checks().canary(args.quick, accept_fewer=args.accept_fewer)
+
+
+def cmd_due(args):
+    if args.hook:
+        return checks().hook_main(sys.stdin.read())
+    if args.background is not None:
+        return checks().background(args.background)
+    return checks().status()
+
+
 def cmd_tail(args):
     for r in dc.read_rows()[-args.n:]:
         print(json.dumps(r, sort_keys=True))
@@ -349,10 +388,21 @@ def main(argv=None):
     t.set_defaults(fn=cmd_tail)
     a = sub.add_parser("audit")
     a.add_argument("--hours", type=float, default=168)
+    a.add_argument("--unshown", action="store_true", help=argparse.SUPPRESS)  # due's daily run
     a.set_defaults(fn=cmd_audit)
     s = sub.add_parser("sandbox-denials")
     s.add_argument("--days", type=float, default=7)
     s.set_defaults(fn=cmd_sandbox_denials)
+    c = sub.add_parser("canary")
+    c.add_argument("--quick", action="store_true",
+                   help="only the quick tier: no model calls, runs inside the sandbox")
+    c.add_argument("--accept-fewer", action="store_true",
+                   help="go green although the harness ran fewer checks than the last green run")
+    c.set_defaults(fn=cmd_canary)
+    d = sub.add_parser("due")
+    d.add_argument("--hook", action="store_true", help="the SessionStart body (fails open)")
+    d.add_argument("--background", nargs="*", choices=("quick", "audit"), help=argparse.SUPPRESS)
+    d.set_defaults(fn=cmd_due)
     args = ap.parse_args(argv)
     return args.fn(args)
 

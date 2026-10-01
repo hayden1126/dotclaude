@@ -46,18 +46,26 @@ stored here).
     would be denied). A live dry run on 2026-09-30 confirmed it: two readers, three resumes each,
     and both quoted section 1 verbatim at the end.
 
-  Commit range `d46449b..00b7a31`. On another machine, the install is `git pull` in `~/dotclaude`
-  (the live hooks symlink into that checkout; no `setup.sh` re-run). Build A4 on a fresh branch
-  from `main`, in a worktree, so the live hooks stay untouched while it is edited.
+  Commit range `d46449b..00b7a31`.
+- **Delegation hardening Stage 3: A4 and A5** (branch `feat/delegation-stage3-a4a5`; the design and
+  the cadence decision are in `docs/delegation.md`, "The canary and the due checks"):
+  - `delegation-ledger canary [--quick]`;
+  - the SessionStart `delegation-due.sh` hook, which runs the quick canary itself on a new Claude
+    Code version and `audit` daily, and shows a line only when something is due;
+  - dated reminders in `skills/delegation/due.toml`.
 
-  **Next: A4 (due nudges) and A5 (the one-command canary)**, then A1 → A3 → A2 → A6. Decisions
-  already made: deadlines nudge, then hard-stop; liveness shows in the tmux status bar and a CLI.
-  A1 must catch an agent that sits in one long tool call, because the stall timer doesn't (P2).
-  A5's canary should fold in `run.py --stage 3`.
+  The install adds a hook and a settings entry, so on a machine it is `git pull` in `~/dotclaude`
+  **and** `./setup.sh`, both outside the sandbox. Then check that the live settings diff is only the
+  SessionStart entry.
+
+  **Next: A1 (per-agent liveness state)**, then A3 → A2 → A6, each on a fresh branch from `main` in a
+  worktree, so the live hooks stay untouched while it is edited. Decisions already made: deadlines
+  nudge, then hard-stop; liveness shows in the tmux status bar and a CLI. A1 must catch an agent that
+  sits in one long tool call, because the stall timer doesn't (P2).
 - **Delegation hardening: Stage 2 live** (`docs/delegation.md`). `skills/delegation/SKILL.md` is the
   operating guide. Open items:
-  - **After 2026-10-07:** run `delegation-ledger sandbox-denials --days 7` and add the hosts that were
-    actually needed to `sandbox.network.allowedDomains`.
+  - **Dated reminders** (the 2026-10-07 `sandbox-denials` review) live in `skills/delegation/due.toml`.
+    The session-start line shows each one from its date until it is removed.
   - **Not observed live:** a real agent's `dangerouslyDisableSandbox` being denied. The teammate probe
     declined to try it; the harness covers the rule (its `policy` case).
   - **Other machines:** install by hand per the docs' install order (the policy hook fails closed).
@@ -118,10 +126,11 @@ stored here).
   `python3 -m unittest discover -s tests/delegation -t tests/delegation` and
   `python3 -m unittest discover -s tests/setup -t tests/setup` make no model calls. They pass inside
   the sandbox, except from a checkout under `.claude/worktrees/`, where the policy tests refuse and
-  need the sandbox off. The live harness `tests/delegation/run.py --runner claude|codex` spends model
-  calls (and needs the sandbox off for the credentials). Run it after changing a role, a hook or
-  `codex-delegate`, and after a Claude Code upgrade until the Stage 3 canary exists. Counts and
-  results live in `docs/delegation.md`, "Tests".
+  need the sandbox off. `delegation-ledger canary` runs them, then the live harness
+  (`tests/delegation/run.py --runner claude`, which spends model calls), and records the result. Run
+  it outside the sandbox, in the background, after changing a role, a hook or `codex-delegate`;
+  after an upgrade, the session-start line says when. Counts and results live in
+  `docs/delegation.md`, "Tests".
 - **Verify `deck-production` before touching it:** run `deckkit regress` as the README in the
   private client repo's `decks/_parity/` shows; it must print `parity: green`. `--config` and
   `--goldens` are required, because no fixtures ship in this public repo. It runs read-only and asserts

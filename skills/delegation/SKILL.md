@@ -135,8 +135,16 @@ validated (`report_ok`).
   - which reports failed the contract;
   - the denials.
 
-  Run it after a Claude Code upgrade. `delegation-ledger sandbox-denials` lists the hosts
-  and paths the sandbox refused, which feed `sandbox.network.allowedDomains`.
+  A session start runs it once a day and shows a warning once; run it yourself any time.
+  `delegation-ledger sandbox-denials` lists the hosts and paths the sandbox refused, which feed
+  `sandbox.network.allowedDomains`.
+- **After a Claude Code upgrade,** the first session runs the quick canary in the background:
+  the unit tests, the sandbox posture, and the strings our hooks read from the binary. You hear
+  about it only if it fails. When the session-start line says the full canary is due (weekly, once
+  the version has moved), run `delegation-ledger canary` outside the sandbox and with
+  `run_in_background`: it takes about 5 minutes, and a slow run can pass the 10-minute
+  foreground limit. `delegation-ledger due` shows what is
+  pending, including the dated items in `due.toml`.
 - `delegation-ledger open` lists delegations whose latest event isn't a stop. Each row
   shows its evidence:
   - whether the session is alive;
