@@ -8,7 +8,7 @@ import time
 import unittest
 from unittest import mock
 
-from _paths import HOOKS, SCRIPTS, SKILL, load_script
+from _paths import HOOKS, REPO, SCRIPTS, SKILL, load_script
 
 LEDGER = os.path.join(SCRIPTS, "delegation-ledger")
 dc = load_script("delegation_common.py")
@@ -99,6 +99,13 @@ class LedgerEnv(unittest.TestCase):
                 return [json.loads(l) for l in f]
         except FileNotFoundError:
             return []
+
+    def agents(self):
+        return os.path.join(self.tmp.name, "state", "dotclaude", "agents")
+
+    def index(self, aid="a1"):
+        with open(os.path.join(self.agents(), f"{aid}.json")) as f:
+            return json.load(f)
 
     def start(self, aid="agent-a1", sid="s1"):
         return {"hook_event_name": "SubagentStart", "agent_id": aid, "agent_type": "Explore",
@@ -371,13 +378,6 @@ def ended(ago):
 class AgentIndex(LedgerEnv):
     """agents/<id>.json, the per-agent liveness index the hook keeps."""
 
-    def agents(self):
-        return os.path.join(self.tmp.name, "state", "dotclaude", "agents")
-
-    def index(self, aid="a1"):
-        with open(os.path.join(self.agents(), f"{aid}.json")) as f:
-            return json.load(f)
-
     def test_a_start_creates_the_entry(self):
         self.hook(self.start())
         idx = self.index()
@@ -441,6 +441,141 @@ class AgentIndex(LedgerEnv):
                 dc.update_agent_state("../x", lambda s: None)
         self.hook(self.start())
         self.assertEqual(self.index()["activations"], 1)
+
+
+class Nudge(LedgerEnv):
+    """The deadline nudge on PostToolUse, against an index whose activation began in the past
+    (the clock isn't faked). Explore's budget is 10 min, its stop 20."""
+
+    def post(self, aid="agent-a1", atype="Explore", tool="Read"):
+        return {"hook_event_name": "PostToolUse", "agent_id": aid, "agent_type": atype,
+                "session_id": "s1", "tool_name": tool, "tool_use_id": "t1",
+                "transcript_path": os.path.join(self.tmp.name, "s1.jsonl")}
+
+    def started(self, minutes, aid="a1"):
+        """Rewrite the index so this activation began `minutes` ago."""
+        t = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(minutes=minutes)
+        idx = dict(self.index(aid), activation_start=t.strftime("%Y-%m-%dT%H:%M:%SZ"))
+        with open(os.path.join(self.agents(), f"{aid}.json"), "w") as f:
+            json.dump(idx, f)
+
+    def nudges(self):
+        return [r for r in self.rows() if r["event"] == "nudge"]
+
+    def context(self, p):
+        self.assertEqual(p.returncode, 0)
+        out = json.loads(p.stdout)["hookSpecificOutput"]
+        self.assertEqual(out["hookEventName"], "PostToolUse")
+        return out["additionalContext"]
+
+    def err(self):
+        return os.path.join(self.tmp.name, "state", "dotclaude", "delegation-ledger.err")
+
+    def test_one_nudge_per_activation_and_a_fresh_one_after_a_restart(self):
+        self.hook(self.start())
+        self.started(11)
+        text = self.context(self.hook(self.post()))
+        self.assertEqual(text, "[deadline] You have run 11 min of this activation's 10 min "
+                               "budget (Explore). Report now: finish and hand back, or hand back "
+                               "`partial` naming what is left. After 20 min every tool except "
+                               "SubagentHandback and SendMessage is denied.")
+        self.assertTrue(self.index()["nudged"])
+        p = self.hook(self.post(tool="Grep"))
+        self.assertEqual((p.returncode, p.stdout), (0, ""))
+        (row,) = self.nudges()
+        self.assertEqual((row["id"], row["agent_type"], row["minutes"], row["session_id"]),
+                         ("a1", "Explore", 11.0, "s1"))
+        self.hook(self.stop())
+        self.hook(self.start())  # a resume: a new activation, so a new budget and nudge
+        self.assertNotIn("nudged", self.index())
+        self.started(11)
+        self.assertIn("[deadline]", self.context(self.hook(self.post())))
+        self.assertEqual(len(self.nudges()), 2)
+        self.assertFalse(os.path.exists(self.err()))
+
+    def test_parallel_calls_nudge_once(self):
+        self.hook(self.start())
+        self.started(11)
+        procs = [subprocess.Popen(["python3", LEDGER, "hook"], stdin=subprocess.PIPE,
+                                  stdout=subprocess.PIPE, text=True, env=self.env)
+                 for _ in range(6)]
+        outs = [p.communicate(json.dumps(self.post()))[0] for p in procs]
+        self.assertEqual(len([o for o in outs if o]), 1, outs)
+        self.assertEqual(len(self.nudges()), 1)
+
+    def test_a_teammate_is_nudged_on_its_role_budget(self):
+        sub = os.path.join(self.tmp.name, "s1", "subagents")
+        os.makedirs(sub)
+        with open(os.path.join(sub, "agent-a1.meta.json"), "w") as f:
+            json.dump({"agentType": "team-x", "name": "team-x", "customAgentType": "Explore",
+                       "taskKind": "in_process_teammate", "teamName": "session-s1"}, f)
+        self.hook(dict(self.start(), agent_type="team-x"))
+        self.started(11)  # past Explore's 10 min, under the default 30
+        self.assertIn("(Explore)", self.context(self.hook(self.post(atype="team-x"))))
+
+    def test_no_nudge_under_budget_for_the_main_thread_a_helper_or_no_index(self):
+        self.hook(self.start())
+        self.started(9)
+        main = self.post()
+        del main["agent_id"]
+        for ev in (self.post(), main, self.post(atype=""), self.post(aid="agent-noindex")):
+            p = self.hook(ev)
+            self.assertEqual((p.returncode, p.stdout), (0, ""), ev)
+        self.assertEqual(self.nudges(), [])
+        self.assertNotIn("nudged", self.index())
+        self.assertFalse(os.path.exists(self.err()))
+
+    def test_a_broken_deadline_table_is_silent(self):
+        self.hook(self.start())
+        self.started(31)
+        bad = os.path.join(self.tmp.name, "policy.toml")
+        for text in ("[deadline\n", "[deadline]\nallow = []\n",
+                     '[deadline]\nallow = []\ndefault = { nudge_min = "soon" }\n'):
+            with open(bad, "w") as f:
+                f.write(text)
+            for path in (bad, "/nonexistent/policy.toml"):
+                p = subprocess.run(["python3", LEDGER, "hook"], input=json.dumps(self.post()),
+                                   capture_output=True, text=True,
+                                   env=dict(self.env, DELEGATION_POLICY=path))
+                self.assertEqual((p.returncode, p.stdout), (0, ""), text)
+        self.assertNotIn("nudged", self.index())
+        self.assertFalse(os.path.exists(self.err()))
+
+    def test_the_settings_command_passes_the_nudge_through(self):
+        # Wired as settings.json wires it: the agent_id prefilter, then the shim, which must
+        # pass the script's stdout on.
+        with open(os.path.join(REPO, "settings.json")) as f:
+            (entry,) = json.load(f)["hooks"]["PostToolUse"]
+        hooks = os.path.join(self.tmp.name, ".claude", "hooks")
+        os.makedirs(hooks)
+        os.symlink(os.path.join(HOOKS, "delegation-ledger.sh"),
+                   os.path.join(hooks, "delegation-ledger.sh"))
+        os.makedirs(os.path.join(self.tmp.name, ".claude", "skills"))
+        os.symlink(SKILL, os.path.join(self.tmp.name, ".claude", "skills", "delegation"))
+        self.hook(self.start())
+        self.started(11)
+        p = subprocess.run(["sh", "-c", entry["hooks"][0]["command"]],
+                           input=json.dumps(self.post()), capture_output=True, text=True,
+                           env=self.env)
+        self.assertIn("[deadline]", self.context(p))
+
+    def test_nudge_rows_are_not_lifecycle_events(self):
+        # A late nudge row must not reopen a stopped agent in open or watch, or hide its
+        # failed report from audit.
+        self.hook(self.start())
+        self.hook(self.stop(msg="no report"))
+        nudge = {"ts": dc.now_iso(), "runner": "claude", "event": "nudge", "id": "a1",
+                 "agent_type": "Explore", "minutes": 11.0}
+        with open(self.ledger, "a") as f:
+            f.write(json.dumps(nudge) + "\n")
+        self.assertEqual(dc.fold(self.rows())[("claude", "a1")]["event"], "stop")
+        p = subprocess.run(["python3", LEDGER, "open"], capture_output=True, text=True,
+                           env=self.env)
+        self.assertIn("no unfinished delegations", p.stdout)
+        p = subprocess.run(["python3", LEDGER, "audit"], capture_output=True, text=True,
+                           env=self.env)
+        self.assertIn("WARN reports failing the contract: 1", p.stdout)
+        self.assertIn("policy denials in the last 168h: 0", p.stdout)
 
 
 DEAD = 2 ** 22 + 12345  # beyond pid_max on this box, so never alive

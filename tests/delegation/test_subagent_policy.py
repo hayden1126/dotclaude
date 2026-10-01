@@ -1,7 +1,9 @@
 """subagent-policy: the gate, every rule and intent, and the fail-closed paths.
 
 Each test runs against a temporary home whose user settings carry this repo's baseline
-`sandbox` block, so the excluded-command rules are the ones that ship."""
+`sandbox` block, so the excluded-command rules are the ones that ship. Its state dir (the
+liveness index the deadline reads) is in that home too."""
+import datetime
 import json
 import os
 import re
@@ -66,10 +68,26 @@ class Base(unittest.TestCase):
             os.chmod(exe, 0o755)
         self.old_path = os.environ["PATH"]
         os.environ["PATH"] = bindir + ":" + self.old_path
+        self.state = os.path.join(self.home, "state")
+        self.old_state = os.environ.get("XDG_STATE_HOME")
+        os.environ["XDG_STATE_HOME"] = self.state
 
     def tearDown(self):
         os.environ["PATH"] = self.old_path
+        if self.old_state is None:
+            os.environ.pop("XDG_STATE_HOME")
+        else:
+            os.environ["XDG_STATE_HOME"] = self.old_state
         self.tmp.cleanup()
+
+    def index(self, aid="a1", minutes=0, **fields):
+        """The agent's liveness index, its activation begun `minutes` ago."""
+        start = (datetime.datetime.now(datetime.timezone.utc)
+                 - datetime.timedelta(minutes=minutes)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        agents = os.path.join(self.state, "dotclaude", "agents")
+        os.makedirs(agents, exist_ok=True)
+        with open(os.path.join(agents, f"{aid}.json"), "w") as f:
+            json.dump({"id": aid, "state": "running", "activation_start": start, **fields}, f)
 
     def write_settings(self, s):
         with open(os.path.join(self.home, ".claude", "settings.json"), "w") as f:
@@ -102,7 +120,7 @@ class Base(unittest.TestCase):
 
 class Gate(Base):
     def run_main(self, payload, extra_env=None):
-        env = dict(os.environ, HOME=self.home, XDG_STATE_HOME=os.path.join(self.home, "state"))
+        env = dict(os.environ, HOME=self.home, XDG_STATE_HOME=self.state)
         env.update(extra_env or {})
         return subprocess.run(["python3", SCRIPT], input=json.dumps(payload),
                               capture_output=True, text=True, env=env)
@@ -127,6 +145,20 @@ class Gate(Base):
             row = json.loads(f.readline())
         self.assertEqual((row["event"], row["rule"], row["id"]), ("policy", "excluded-command", "a1"))
         self.assertTrue(os.path.exists(os.path.join(state, "subagent-policy.heartbeat")))
+
+    def test_the_deadline_deny_is_one_message_with_its_own_footer(self):
+        self.index("a1", minutes=61)
+        p = self.run_main(self.ev("WebFetch", {"url": "https://example.com"}))
+        reason = json.loads(p.stdout)["hookSpecificOutput"]["permissionDecisionReason"]
+        self.assertTrue(reason.startswith(
+            "[subagent-policy] deadline (stop_and_explain): this activation has run 61 min, past "
+            "the 60 min budget for general-purpose. Only SubagentHandback and SendMessage are "
+            "allowed now. Hand back a `partial` report"), reason)
+        self.assertNotIn(POLICY["intents"]["stop_and_explain"], reason)
+        with open(os.path.join(self.state, "dotclaude", "delegations.jsonl")) as f:
+            row = json.loads(f.readline())
+        self.assertEqual((row["event"], row["rule"], row["intent"], row["tool"]),
+                         ("policy", "deadline", "stop_and_explain", "WebFetch"))
 
     def test_an_allowed_call_prints_nothing(self):
         p = self.run_main(self.ev("Bash", {"command": "ls -la src"}))
@@ -628,7 +660,137 @@ class ReviewFindings(Base):
                                       cwd=self.proj, aid="nometa"))
 
 
+class Deadline(Base):
+    """The hard stop, against an index whose activation began in the past (no faked clock)."""
+
+    def web(self, **kw):
+        return self.decide("WebFetch", {"url": "https://example.com"}, **kw)
+
+    def test_denied_at_and_past_the_stop_and_allowed_just_under_it(self):
+        self.index("a1", minutes=59.5)
+        self.assertIsNone(self.web())
+        self.assertIsNone(self.bash("ls"))
+        for minutes in (60, 61, 600):
+            self.index("a1", minutes=minutes)
+            self.assertDenied(self.web(), "deadline", "stop_and_explain", minutes)
+            self.assertDenied(self.bash("ls"), "deadline", msg=minutes)
+
+    def test_every_tool_but_the_allow_list_is_denied(self):
+        self.index("a1", minutes=61)
+        for tool, ti in (("Read", {"file_path": os.path.join(self.proj, "x")}),
+                         ("WebSearch", {"query": "x"}), ("ToolSearch", {"query": "x"}),
+                         ("TaskCreate", {"subject": "x"}), ("Agent", {"prompt": "x"}),
+                         ("mcp__notion__notion-fetch", {}), ("Write", "not a dict")):
+            self.assertDenied(self.decide(tool, ti), "deadline", msg=tool)
+        for tool in POLICY["deadline"]["allow"]:
+            self.assertIsNone(self.decide(tool, {"message": "partial report"}), tool)
+        self.assertEqual(POLICY["deadline"]["allow"], ["SubagentHandback", "SendMessage"])
+
+    def test_each_role_has_its_own_budget_and_the_rest_get_default(self):
+        self.meta("w1", agentType="writer", worktreePath=self.wt)
+        for role, stop in (("Explore", 20), ("researcher", 40), ("reviewer", 40),
+                           ("writer", 60), ("general-purpose", 60), ("workflow-subagent", 60),
+                           ("plugin:some-agent", 60)):
+            aid, cwd = ("w1", self.wt) if role == "writer" else ("a1", None)
+            self.index(aid, minutes=stop - 0.5)
+            self.assertIsNone(self.web(atype=role, aid=aid, cwd=cwd), role)
+            self.index(aid, minutes=stop + 0.5)
+            self.assertDenied(self.web(atype=role, aid=aid, cwd=cwd), "deadline", msg=role)
+
+    def test_a_teammate_budget_comes_from_its_role_in_meta_json(self):
+        self.meta("t1", agentType="team-x", name="team-x", customAgentType="Explore",
+                  taskKind="in_process_teammate", teamName="session-s1")
+        self.index("t1", minutes=21)
+        self.assertDenied(self.web(atype="team-x", aid="t1"), "deadline")
+        self.index("t2", minutes=21)  # no meta.json: its hook type gets the default budget
+        self.assertIsNone(self.web(atype="team-x", aid="t2"))
+
+    def test_the_index_is_keyed_without_the_agent_prefix(self):
+        self.index("a1", minutes=61)
+        self.assertDenied(self.web(aid="agent-a1"), "deadline")
+
+    def test_no_index_or_a_bad_one_means_no_deadline(self):
+        self.assertIsNone(self.web())
+        agents = os.path.join(self.state, "dotclaude", "agents")
+        os.makedirs(agents)
+        for bad in ("{not json", "[]", json.dumps({"state": "running"}),
+                    json.dumps({"activation_start": "yesterday"}),
+                    json.dumps({"activation_start": None})):
+            with open(os.path.join(agents, "a1.json"), "w") as f:
+                f.write(bad)
+            self.assertIsNone(self.web(), bad)
+
+    def test_an_agent_cannot_rewrite_its_own_clock(self):
+        state = os.path.join(self.home, ".local", "state", "dotclaude")
+        for path in (os.path.join(state, "agents", "a1.json"),
+                     os.path.join(state, "delegations.jsonl")):
+            self.assertDenied(self.decide("Write", {"file_path": path, "content": "{}"}),
+                              "protected-path", "hard_stop", path)
+            self.assertDenied(self.decide("Edit", {"file_path": path}), "protected-path",
+                              msg=path)
+
+
+def policy_with_deadline(body):
+    """policy.toml's text with its [deadline] table's body replaced, in a temp file."""
+    with open(os.path.join(REPO, "skills", "delegation", "policy.toml")) as f:
+        text = f.read()
+    text, n = re.subn(r"(?ms)^\[deadline\]\n.*?(?=^\[)", "[deadline]\n" + body + "\n\n", text)
+    assert n == 1, "policy.toml has no [deadline] table"
+    fd, path = tempfile.mkstemp(suffix=".toml")
+    with os.fdopen(fd, "w") as f:
+        f.write(text)
+    return path
+
+
 class PolicyFile(unittest.TestCase):
+    def test_the_shipped_budgets(self):
+        for role, minutes in (("Explore", (10, 20)), ("researcher", (20, 40)),
+                              ("reviewer", (20, 40)), ("writer", (30, 60)),
+                              ("general-purpose", (30, 60)), ("allow", (30, 60))):
+            self.assertEqual(sp.dc.deadline_for(POLICY, role), (minutes[0] * 60, minutes[1] * 60),
+                             role)
+
+    def test_a_malformed_deadline_table_fails_closed(self):
+        allow = 'allow = ["SubagentHandback", "SendMessage"]\n'
+        default = "\ndefault = { nudge_min = 30 }"
+        bodies = [allow + "default = " + b for b in (
+            "{ nudge_min = 0 }", "{ nudge_min = -1 }", '{ nudge_min = "30" }',
+            "{ nudge_min = true }", "{ nudge_min = nan }", "{ nudge_min = inf }",
+            "{ nudge_min = 30, stop_min = 30 }", "{ nudge_min = 30, stop_min = 20 }",
+            "{ nudge_min = 30, stop_mins = 90 }", "{ stop_min = 60 }", "30")]
+        bodies += [allow + "Explore = { nudge_min = 10 }",  # no default
+                   allow + "default = { nudge_min = 30 }\nwriter = { nudge_min = 0 }",
+                   default, 'allow = "SubagentHandback"' + default, "allow = [1]" + default]
+        for body in bodies:
+            path = policy_with_deadline(body)
+            try:
+                with self.assertRaises(ValueError, msg=body):
+                    sp.load_policy(path)
+            finally:
+                os.remove(path)
+
+    def test_fractional_minutes_and_an_explicit_stop_load(self):
+        path = policy_with_deadline('allow = ["SubagentHandback", "SendMessage"]\n'
+                                    "default = { nudge_min = 0.1, stop_min = 0.4 }")
+        try:
+            p = sp.load_policy(path)
+        finally:
+            os.remove(path)
+        nudge, stop = sp.dc.deadline_for(p, "general-purpose")
+        self.assertAlmostEqual(nudge, 6)
+        self.assertAlmostEqual(stop, 24)
+
+    def test_a_missing_deadline_table_fails_closed(self):
+        with open(os.path.join(REPO, "skills", "delegation", "policy.toml")) as f:
+            text = re.sub(r"(?ms)^\[deadline\]\n.*?(?=^\[)", "", f.read())
+        with tempfile.NamedTemporaryFile("w", suffix=".toml", delete=False) as f:
+            f.write(text)
+        try:
+            with self.assertRaises(ValueError):
+                sp.load_policy(f.name)
+        finally:
+            os.remove(f.name)
+
     def test_every_denied_git_subcommand_is_known_and_has_a_real_intent(self):
         for sub, intent in POLICY["git"]["denied"].items():
             self.assertIn(sub, POLICY["git"]["known"])

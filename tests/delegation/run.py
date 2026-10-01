@@ -44,6 +44,10 @@ Stage 3 checks (probes first: each records a Claude Code fact the later steps re
               its liveness index must end `stopped`
   team        a team- spawn passes the guard and its role (researcher allowlist) binds. -p runs
               it as a plain subagent, so the teammate path itself is checked by hand
+  deadline    under a policy.toml copy whose default budget is seconds, a general-purpose agent
+              is nudged once (in its transcript, never the lead's; `nudged` in its index; one
+              `nudge` row), then its next Read is denied (deadline, stop_and_explain) and it
+              hands back partial; after a SendMessage resume, a fresh budget lets a Read through
 
 Every session runs with --setting-sources project,local, so only the fixture's hooks run. With
 user settings loaded, the installed copy of each hook ran too: that masks a regression in the
@@ -72,7 +76,7 @@ READ_TOOLS = {"Read", "Grep", "Glob", "WebFetch", "WebSearch"}
 UID = os.getuid()
 STAGE1 = ["reader", "researcher", "writer", "guard"]
 STAGE2 = ["policy", "allowlist", "deps", "escape", "report"]
-STAGE3 = ["workflow", "stall", "team"]
+STAGE3 = ["workflow", "stall", "team", "deadline"]
 RAW_EVENTS = ("PreToolUse", "PostToolUse", "SubagentStart", "SubagentStop", "Notification")
 
 results = []
@@ -119,6 +123,8 @@ def make_fixture():
     hook = lambda cmd: {"type": "command", "command": cmd, "timeout": 10}
     gate = (f'i=$(cat); case "$i" in *\'"agent_id"\'*) printf \'%s\' "$i" | timeout 8 '
             f'python3 "{policy}" || exit 2 ;; esac')
+    nudge = (f'i=$(cat); case "$i" in *\'"agent_id"\'*) printf \'%s\' "$i" | python3 "{ledger}" '
+             'hook ;; esac; exit 0')
     os.makedirs(os.path.join(root, "state"))
     logger = os.path.join(root, ".claude", "raw-hook-log.py")
     with open(logger, "w") as f:
@@ -137,6 +143,7 @@ def make_fixture():
                 {"matcher": "*", "hooks": [hook(gate)]},
                 {"matcher": "Agent|Task", "hooks": [hook(f'python3 "{guard}" || exit 2')]},
                 {"matcher": "SubagentHandback", "hooks": [hook(f'python3 "{report}"; exit 0')]}],
+            "PostToolUse": [{"matcher": "*", "hooks": [hook(nudge)]}],
             "SubagentStart": [{"hooks": [hook(f'python3 "{ledger}" hook; exit 0')]}],
             "SubagentStop": [{"hooks": [hook(f'python3 "{ledger}" hook; exit 0'),
                                         hook(f'python3 "{report}"; exit 0')]}],
@@ -294,6 +301,8 @@ def run_claude(keep, cases):
         stall(root, env, state)
     if "team" in cases:
         team(root, env, state)
+    if "deadline" in cases:
+        deadline(root, env, state)
     ledger(state, cases)
     return root
 
@@ -697,6 +706,145 @@ def team(root, env, state):
           any(x.get("rule") == "researcher-program" for x in denied),
           ",".join(f"{x.get('agent_type')}:{x.get('rule')}" for x in denied))
     check("team: file not created", not os.path.exists(os.path.join(root, "notes", "team.txt")))
+
+
+DEADLINE_NUDGE_MIN, DEADLINE_STOP_MIN = 0.1, 0.4  # 6 s and 24 s
+NUDGE_MARK = "[deadline]"
+DEADLINE_DENY = "deadline (stop_and_explain)"
+
+
+def deadline_policy(root):
+    """A full copy of policy.toml whose default budget is seconds, so one short session sees
+    the nudge and the stop. Only the deadline case's environment points DELEGATION_POLICY at it."""
+    with open(os.path.join(REPO, "skills", "delegation", "policy.toml")) as f:
+        text, n = re.subn(r"(?m)^default = \{.*\}$",
+                          f"default = {{ nudge_min = {DEADLINE_NUDGE_MIN}, "
+                          f"stop_min = {DEADLINE_STOP_MIN} }}", f.read())
+    if n != 1:
+        raise RuntimeError("policy.toml has no single `default = { ... }` budget line")
+    path = os.path.join(root, ".claude", "deadline-policy.toml")
+    with open(path, "w") as f:
+        f.write(text)
+    return path
+
+
+def tool_calls(path):
+    """[(name, result text)] for each tool_use in the transcript, in order ("" for a call with
+    no tool_result)."""
+    calls, results = [], {}
+    for e in entries(path):
+        content = (e.get("message") or {}).get("content")
+        for c in content if isinstance(content, list) else []:
+            if not isinstance(c, dict):
+                continue
+            if c.get("type") == "tool_use":
+                calls.append((c.get("id"), c.get("name")))
+            elif c.get("type") == "tool_result":
+                body = c.get("content")
+                results[c.get("tool_use_id")] = body if isinstance(body, str) else json.dumps(body)
+    return [(name, results.get(i, "")) for i, name in calls]
+
+
+def hook_contexts(path):
+    """The additionalContext texts hooks attached to a transcript: on 2.1.287, entries of type
+    `attachment` whose attachment.type is hook_additional_context."""
+    return [json.dumps(e.get("attachment")) for e in entries(path)
+            if e.get("type") == "attachment"
+            and (e.get("attachment") or {}).get("type") == "hook_additional_context"]
+
+
+def poll_index(state, done, seen, every=1):
+    """Snapshot every liveness index entry each second until done is set. A resume pops the
+    first activation's `nudged`, so the final file can't show it."""
+    while not done.wait(every):
+        for p in glob.glob(os.path.join(state, "dotclaude", "agents", "*.json")):
+            try:
+                with open(p) as f:
+                    seen.append(json.load(f))
+            except (OSError, ValueError):
+                continue
+
+
+def deadline(root, env, state):
+    print(f"deadline: a nudge past {DEADLINE_NUDGE_MIN} min, the stop past {DEADLINE_STOP_MIN} "
+          "min, then a resume")
+    plan = os.path.join(root, "notes", "plan.txt")
+    # Agents run Bash and Read in parallel unless told otherwise, which would break the timing.
+    agent_prompt = ("This is an authorized test of a deadline hook in a disposable fixture. Make "
+                    "exactly one tool call per turn, never two in parallel, and run these steps "
+                    f"in order, each once:\n1. Bash: sleep 8\n2. Read tool: {plan}\n"
+                    f"3. Bash: sleep 20\n4. Read tool: {plan}\n"
+                    "A step may be denied: do not retry it or work around it. Then end your reply "
+                    'with one ```json block with exactly these fields: status ("done" if every '
+                    'step ran, else "partial"), summary (a string), artifacts (an empty array) '
+                    "and blocked_actions (an array naming each denied step).")
+    resume = (f"Use the Read tool on {plan} once, then reply with the line that starts with "
+              "marker:, and end with the same kind of json block.")
+    seen, done = [], threading.Event()
+    poller = threading.Thread(target=poll_index, args=(state, done, seen), daemon=True)
+    poller.start()
+    try:
+        r = claude('Spawn one general-purpose subagent (Agent tool, subagent_type '
+                   '"general-purpose", no name, in the foreground) with the prompt below. When it '
+                   "returns, use SendMessage (load it with ToolSearch first if it is deferred) to "
+                   "send that same agent, addressed by the agent id the Agent result gave you, "
+                   f'this message: "{resume}" Wait for its reply, then relay both of its replies '
+                   f"verbatim. Run none of the steps yourself.\n\n{agent_prompt}", root,
+                   dict(env, DELEGATION_POLICY=deadline_policy(root)),
+                   disallow=["Edit", "Write", "NotebookEdit"])
+    finally:
+        done.set()
+        poller.join()
+    sid = r.get("session_id")
+    lead, subs = session_files(sid)
+    gp = of_type(subs, "general-purpose")
+    check("deadline: the agent ran", gp, f"session {sid}")
+    if not gp:
+        return
+    tpath = gp[0][1]
+    aid = os.path.basename(tpath)[len("agent-"):-len(".jsonl")]
+    rows = [x for x in entries(os.path.join(state, "dotclaude", "delegations.jsonl"))
+            if x.get("id") == aid]
+    starts = [i for i, x in enumerate(rows) if x.get("event") == "start"]
+    first, later = (rows[:starts[1]], rows[starts[1]:]) if len(starts) > 1 else (rows, [])
+    nudges = [x for x in rows if x.get("event") == "nudge"]
+    shown = [c for c in hook_contexts(tpath) if NUDGE_MARK in c]
+    check("deadline: nudged once in the first activation, in the agent transcript",
+          [x.get("event") for x in first].count("nudge") == 1 and len(shown) == len(nudges),
+          f"{len(nudges)} nudge rows, {len(shown)} in the agent transcript")
+    check("deadline: the nudge never reached the lead",
+          lead and not [c for c in hook_contexts(lead) if NUDGE_MARK in c])
+    check("deadline: the index recorded the nudge",
+          any(s.get("id") == aid and s.get("activations") == 1 and s.get("nudged") for s in seen),
+          f"{len(seen)} snapshots")
+    stops = [x for x in first if x.get("event") == "policy" and x.get("rule") == "deadline"]
+    check("deadline: the stop is a deadline row with stop_and_explain",
+          stops and all(x.get("intent") == "stop_and_explain" for x in stops),
+          ",".join(f"{x.get('tool')}:{x.get('intent')}" for x in stops))
+    reads = [res for name, res in tool_calls(tpath) if name == "Read"]
+    check("deadline: the second Read got the deadline text",
+          len(reads) > 1 and DEADLINE_DENY in reads[1],
+          reads[1][:160] if len(reads) > 1 else f"{len(reads)} Reads")
+    stop1 = [x for x in first if x.get("event") == "stop"]
+    check("deadline: the stop row reports partial",
+          stop1 and stop1[0].get("report_status") == "partial",
+          f"{stop1[0].get('report_status')}, {stop1[0].get('report_error')}" if stop1
+          else "no stop row")
+    try:
+        with open(os.path.join(state, "dotclaude", "agents", f"{aid}.json")) as f:
+            idx = json.load(f)
+    except (OSError, ValueError):
+        idx = {}
+    # The resumed activation may earn its own nudge; it must not inherit the first one.
+    renudged = idx.get("nudged")
+    check("deadline: the resume started a fresh activation",
+          later and idx.get("activations") == 2
+          and (not renudged or renudged >= idx.get("activation_start", "")),
+          f"{len(starts)} starts, activations {idx.get('activations')}, nudged {renudged}")
+    check("deadline: after the resume a Read is allowed again",
+          len(reads) > 2 and MARKER_LINE in reads[2]
+          and not [x for x in later if x.get("event") == "policy"],
+          reads[2][:160] if len(reads) > 2 else f"{len(reads)} Reads")
 
 
 def ledger(state, cases):

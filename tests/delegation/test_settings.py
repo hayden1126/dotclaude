@@ -71,6 +71,18 @@ class Baseline(unittest.TestCase):
         self.assertIn("timeout 8", cmd)
         self.assertIn("exit 2", cmd)
 
+    def test_the_deadline_nudge_runs_for_subagents_only_and_fails_open(self):
+        # PostToolUse fires on every call, the main thread's too: the same prefilter as the
+        # policy hook keeps Python off the main thread's path. A nudge is advice, so nothing
+        # here may block a call.
+        (entry,) = S["hooks"]["PostToolUse"]
+        self.assertEqual(entry["matcher"], "*")
+        (h,) = entry["hooks"]
+        self.assertIn("""case "$i" in *'"agent_id"'*)""", h["command"])
+        self.assertIn('bash "$HOME/.claude/hooks/delegation-ledger.sh"', h["command"])
+        self.assertNotIn("exit 2", h["command"])
+        self.assertLessEqual(h["timeout"], 5)
+
     def test_spawn_guard_fails_closed_on_a_missing_link(self):
         (cmd,) = commands("PreToolUse", "Agent|Task")
         self.assertTrue(cmd.endswith("|| exit 2"), cmd)
