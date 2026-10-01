@@ -707,7 +707,11 @@ see "Stage 3" above. A2 is next.
 - **Results on 2026-10-01 (A3, 2.1.286):**
   - unit: 250 tests;
   - claude: the `stall` case passed 6 of 6, including its two new checks (`watch` showed the
-    agent in Bash, `watch --summary` counted it as `1▶`), so a full run has 56 checks.
+    agent in Bash, `watch --summary` counted it as `1▶`), so a full run has 56 checks;
+  - after the merge and `setup.sh`, the full canary passed 56 of 56. A manual probe in one
+    120-second call showed `in Bash` in a bare `watch`, while a piped `watch` gave the sandbox
+    warning. `watch --summary` took 41 ms (median of 10), and the tmux token showed `1▶`, then
+    cleared when the probe stopped.
 
 ## Installing on a machine that is already set up
 
