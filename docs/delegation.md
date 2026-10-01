@@ -701,8 +701,8 @@ see "Stage 3" above. A2 is next.
     now has 54 checks.
 - **Results on 2026-10-01 (A3, 2.1.286):**
   - unit: 250 tests;
-  - the `stall` case gains two checks (`watch` showed the agent in Bash, `watch --summary`
-    counted it), so a full run has 56 checks.
+  - claude: the `stall` case passed 6 of 6, including its two new checks (`watch` showed the
+    agent in Bash, `watch --summary` counted it as `1▶`), so a full run has 56 checks.
 
 ## Installing on a machine that is already set up
 
