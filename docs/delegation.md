@@ -224,63 +224,85 @@ from 60 to 5,000 requests an hour.
 
 ## Stage 3
 
-Stage 3 makes the setup check itself instead of relying on someone remembering. The plan is in
-`~/.claude/plans/lets-move-on-to-refactored-pascal.md`. Step 0 and A0 are done.
+Stage 3 makes the setup check itself instead of relying on someone remembering. It runs in steps,
+Step 0 and then A0 to A6, planned in `~/.claude/plans/lets-move-on-to-refactored-pascal.md`. Step 0
+and A0 are done.
 
-### Teams are off by default (A0)
+**Step 0** came first because everything after it rests on assumptions Stage 2 made but never
+tested live. It is four probes:
+- P1: Workflow agents carry `agent_id`, so the policy hook sees them;
+- P2: the stall timer aborts a subagent that stops making progress;
+- P3: the ledger's unpaired rows are harmless;
+- P4: a teammate is policed by its role.
 
-Every named spawn silently became an in-process teammate. The 2026-09-30 re-evaluation found 57
-teams on this machine, all implicit `session-<id>` teams, and 86 of the 89 teammates recorded in
-`~/.claude/teams/*/config.json` were general-purpose. Of 308 teammate messages, 293 went to the lead. Of the 15 peer-to-peer ones, 13
-were report-delivery churn between nested agents, so 2 were real coordination. Teammates also
-caused 10 of the 11 eval stalls (34 to 520 minutes). So a team bought almost nothing and cost the
-most.
-
-`agent-spawn-guard` now denies a named spawn unless its name starts with `policy.toml` `[spawn]
-team_prefix` (`team-`). A fork, or a spawn that passes `isolation` on the call, may still be
-named, and the writer rule keeps priority. The denial (intent `use_alternative`) says to drop the
-name and SendMessage the returned id. It is recorded as a `named-spawn` policy row, so the
-monthly audit can tell whether the guard is fighting real needs. SKILL §1b says when a team earns
-the prefix.
+Running them also turned up four bugs that no probe targeted.
 
 ### What Step 0 found
 
-- **Workflow agents are covered** (P1). Their hook input carries `agent_id`, and the policy
-  denied one's `git push`. The inference Stage 2 rested on holds.
-- **The stall timer doesn't catch an agent inside one long tool call** (P2). A 100-second call
-  finished under a 45-second timer. So liveness (A1) must track the time since a tool started,
+The probes:
+- **P1: Workflow agents are policed.** In one probe run, a Workflow agent's hook input carried
+  `agent_id` (with `agent_type: "workflow-subagent"`), and the policy denied its `git push`. That
+  is one run, not a proof; the `workflow` case in the live harness re-runs it, and the canary (A5)
+  will run it on every upgrade.
+- **P2: the stall timer doesn't catch an agent inside one long tool call.** A 100-second call
+  finished under a 45-second timer. So liveness (A1) must track how long a tool has been running,
   not only the time since the last event.
+- **P3: the ledger's unpaired rows are not coverage gaps.** The stops without a start from 05:17Z
+  to 06:24Z on 2026-09-30 were Claude Code's own helper agents, logged before the ledger learned to
+  skip them (their `agent_type` is empty). The one general-purpose stop without a start belonged to
+  an agent that began at 05:16:28Z, 30 seconds before the ledger's first row. A researcher's two
+  stops were both real: its plain-text reply stopped it once, then Claude Code injected
+  `[handback-send-enforce] Your report has not been delivered`, and it stopped again after
+  `SubagentHandback`. The ledger's reader already keeps the latest row per agent (`fold`), so any
+  count must use distinct agent ids, not stop rows.
+- **P4: a teammate's `agent_type` is its name.** A `team-probe` spawned as `researcher` arrived as
+  `agent_type: "team-probe"`. The policy saw it (its `agent_id` was present, and it denied the
+  `git push`), but it applied the default rules, not the stricter researcher allowlist. The role is
+  in meta.json's `customAgentType`, beside `taskKind: "in_process_teammate"`. The policy and the
+  ledger now resolve the role through `delegation_common.agent_role`, and the ledger also records
+  the teammate's `name`. This matters because A0 still lets a `team-` spawn through.
+
+Found along the way:
 - **The harness never isolated the code under test.** `claude -p` loads user settings, so the
   installed copy of every hook ran beside the checkout's copy. A regression in the checkout could
-  pass because the installed copy enforced the same rule. It surfaced when report-check ran twice
-  per stop (below). The harness now passes `--setting-sources project,local`, and the fixture
-  carries the `env` and `teammateMode` it needs from the user tier.
+  pass because the installed copy enforced the same rule. It surfaced through the report-check loop
+  below. The harness now passes `--setting-sources project,local`, and the fixture carries the
+  `env` and `teammateMode` it needs from the user tier.
 - **report-check could loop forever under a duplicated hook.** Each registration bumped the
-  counter, and giving up cleared it, so the attempts cycled 1, 2, 1, 2 and every stop still
-  carried a block. An Explore agent that kept refusing the JSON block looped for 18 stops on
-  2.1.286. Once it gives up, report-check now stays given up for that agent, for a day. The cost:
-  a later SendMessage resume of that agent keeps its id, so a bad report then passes unchecked
-  (the ledger still records `report_ok: false`).
-- **A teammate's `agent_type` is its name** (P4, 2026-09-30). A `team-probe` spawned as
-  `researcher` arrived as `agent_type: "team-probe"`. Its `agent_id` was present and the policy
-  denied its `git push`, but it got the default rules, not the researcher allowlist. The role is
-  in meta.json's `customAgentType` (beside `taskKind: "in_process_teammate"`). The policy and the
-  ledger now resolve the role through `delegation_common.agent_role`. The ledger also records the
-  teammate's `name`.
+  retry counter, and giving up cleared it, so the attempts cycled 1, 2, 1, 2 and every stop was
+  still refused. An Explore agent that kept declining to end with its JSON report looped for 18
+  stops on 2.1.286. Once it gives up, report-check now stays given up for that agent, for a day.
+  The cost: a later SendMessage resume of that agent keeps its id, so a bad report then passes
+  unchecked (the ledger still records `report_ok: false`).
 - **Nested worktrees.** A lead session in a worktree nests its agents' worktrees inside it. The
-  policy's cwd fallback took the first `/.claude/worktrees/`, which made the lead's whole
-  worktree the agent's root; it now takes the last. The protected area (`main_root`) stays the
-  outermost checkout, because it holds both the lead's worktree and the real main checkout.
-- **The ledger anomalies are not coverage gaps** (P3). The unpaired stops from 05:17Z to 06:24Z
-  on 2026-09-30 were Claude Code helper agents, logged before the empty-type skip was installed.
-  The one general-purpose stop without a start began at 05:16:28Z, 30 seconds before the
-  ledger's first row. A researcher's two stops were legitimate: its plain-text reply stopped it
-  once, then Claude Code injected `[handback-send-enforce] Your report has not been delivered`
-  and it stopped again after `SubagentHandback`. `fold` already keeps the latest row per id, so
-  counts must use distinct ids, not stop rows.
-- **Two test-suite bugs.** A slug built by replacing only `/` and `.` failed about one run in
-  five. And sandboxed from a checkout under `.claude/worktrees/`, the policy tests have nowhere
-  clean to build their fake homes, so they now fail with one message saying so.
+  policy's cwd fallback took the first `/.claude/worktrees/`, which made the lead's whole worktree
+  the agent's root; it now takes the last. The protected area (`main_root`) stays the outermost
+  checkout, because it holds both the lead's worktree and the real main checkout.
+- **Two test-suite bugs.** A project slug built by replacing only `/` and `.` failed about one run
+  in five. And sandboxed from a checkout under `.claude/worktrees/`, the policy tests have nowhere
+  clean to build their fake homes, so they now stop with one message that says so, instead of six
+  wrong verdicts.
+
+### Teams are off by default (A0)
+
+A named spawn (an Agent call with a `name`) doesn't start a plain subagent. Claude Code starts an
+in-process teammate instead: a member of an agent team, which reports through messages rather than
+returning a result. Only a fork, or a spawn that passes `isolation` on the call, stays a subagent
+("Team bypass" under the verified facts). So every named spawn silently became a teammate.
+
+The 2026-09-30 re-evaluation found 57 teams on this machine, all implicit `session-<id>` teams, and
+86 of the 89 teammates recorded in `~/.claude/teams/*/config.json` were general-purpose. Of 308
+teammate messages, 293 went to the lead. Of the 15 peer-to-peer ones, 13 were report-delivery
+churn between nested agents, so 2 were real coordination. Teammates also accounted for 10 of the
+11 stalls in the eval (34 to 520 minutes). So a team bought almost nothing and cost the most.
+
+`agent-spawn-guard` now denies a named spawn unless its name starts with the `team-` prefix
+(`policy.toml` `[spawn] team_prefix`). A fork or an isolated spawn may still be named, and a
+writer is still denied without `isolation`, prefix or not. Teams stay possible: the guard removes
+the accidental path, not the deliberate one. The denial (intent `use_alternative`) says to drop the
+name and SendMessage the returned id. It is recorded as a `named-spawn` policy row, so the monthly
+audit can tell whether the guard is fighting real needs. SKILL §1b says when a team earns the
+prefix.
 
 ## Verified facts the design rests on
 

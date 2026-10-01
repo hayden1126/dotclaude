@@ -76,7 +76,7 @@ silently becomes an agent-team teammate, so the spawn guard denies it. To talk t
 again, SendMessage the id its spawn returned. A subagent's result returns as a notification,
 and Claude Code aborts one that makes no progress for 10 minutes
 (`CLAUDE_ASYNC_AGENT_STALL_TIMEOUT_MS`), though a single long tool call doesn't trip it.
-Teammates report through idle notifications and can stay silent far longer: they caused 10 of
+Teammates report through idle notifications and can stay silent far longer: they accounted for 10 of
 the 11 stalls in our eval.
 
 A team earns its place only when agents must work together live:

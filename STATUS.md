@@ -43,7 +43,8 @@ stored here).
   - report-check can no longer loop under a duplicated hook;
   - the live harness now runs only the checkout's hooks (`--setting-sources project,local`);
   - `staged-reader-review` now spawns its readers unnamed and messages them by id (a named spawn
-    would be denied). It hasn't run live that way yet.
+    would be denied). A live dry run on 2026-09-30 confirmed it: two readers, three resumes each,
+    and both quoted section 1 verbatim at the end.
 
   Commit range `d46449b..00b7a31`. On another machine, the install is `git pull` in `~/dotclaude`
   (the live hooks symlink into that checkout; no `setup.sh` re-run). Build A4 on a fresh branch
