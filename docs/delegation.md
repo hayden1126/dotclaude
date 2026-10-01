@@ -549,7 +549,8 @@ stop_and_explain's "rewrite the command", so it reads as one message:
 ```
 [subagent-policy] deadline (stop_and_explain): this activation has run 61 min, past the 60 min
 budget for writer. Only SubagentHandback and SendMessage are allowed now. Hand back a `partial`
-report naming what is done and what is left.
+report naming what is done and what is left. If the lead resumes you, the budget starts over and
+every tool works again.
 ```
 
 The check fails open on an unreadable index (no index, no clock) and never becomes a
@@ -821,6 +822,12 @@ is next, and it retunes A2's budgets against the ledger.
     once, in the agent's transcript only. The second Read was denied at 0.6 min against the 0.4 min
     stop, and the agent handed back `partial`. After the SendMessage resume, a second activation
     (`activations` 2, `nudged` cleared) let its Read through.
+  - after the merge and `setup.sh`, the full canary went 64 of 65 in 6 min 11 s. The miss: after the
+    resume, the agent wouldn't call Read. It took the resume as a retry of its denied step, which
+    its brief forbade, and the denial's "allowed now" as still in force. The mechanism held (a
+    second activation started), but a real resumed agent has the same blind spot. So the denial
+    now says a resume restarts the budget, and the case's resume message says it isn't a retry.
+    The case then passed 9 of 9 twice.
 
 ## Installing on a machine that is already set up
 

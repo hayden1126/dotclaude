@@ -155,6 +155,8 @@ class Gate(Base):
             "[subagent-policy] deadline (stop_and_explain): this activation has run 61 min, past "
             "the 60 min budget for general-purpose. Only SubagentHandback and SendMessage are "
             "allowed now. Hand back a `partial` report"), reason)
+        # A resumed agent must know it may try again: the denial alone reads as permanent.
+        self.assertIn("If the lead resumes you, the budget starts over", reason)
         self.assertNotIn(POLICY["intents"]["stop_and_explain"], reason)
         with open(os.path.join(self.state, "dotclaude", "delegations.jsonl")) as f:
             row = json.loads(f.readline())

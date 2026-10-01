@@ -10,11 +10,13 @@ Base: `main`. For branch / PR / push state, run `gh pr list` and `git log main..
 stored here).
 
 ## Done (recent; git, the linked plans and memory hold the detail)
-- **Delegation hardening Stage 3: Step 0, A0, A4, A5, A1 and A3, live on HAYPC** (2026-09-30
+- **Delegation hardening Stage 3: Step 0, A0, A4, A5, A1, A3 and A2, live on HAYPC** (2026-09-30
   to 10-01; PRs #42 to #46, range `d46449b..ce16b8a`; A1 is PR #48, range `c0a3241..1d09748`;
-  A3 is PR #49, range `1d09748..65e7297`). Named spawns need a `team-` prefix; teammates are
-  policed by role; `delegation-ledger canary`/`due` re-verify enforcement on their own; `open` and
-  `watch` read liveness from the transcript, and `watch --summary` feeds the tmux bar.
+  A3 is PR #49, range `1d09748..65e7297`; A2 is PR #51, range `0aa08f8..3d076d5`). Named spawns
+  need a `team-` prefix; teammates are policed by role; `delegation-ledger canary`/`due`
+  re-verify enforcement on their own; `open` and `watch` read liveness from the transcript, and
+  `watch --summary` feeds the tmux bar. A2 nudges, then stops, an agent past its role's budget
+  (`policy.toml` `[deadline]`).
   `docs/delegation.md` "Stage 3" holds the findings, the decisions and the test counts.
 - Older (git, the PRs and memory hold the detail): `setup.sh` keeps the live settings' own keys
   (PR #47, [[dotclaude-setup-install-model]]), the machine overlay `settings.machine.json`
@@ -29,16 +31,16 @@ stored here).
   CLAUDE.md trigger, `vetting-sources`, `deck-production` S1, and earlier work back to PR #10.
 
 ## In flight
-- **Delegation hardening Stage 3: A2 (deadline: nudge, then hard stop) is built and verified,
-  not merged** (branch `feat/delegation-a2-deadline`, base `0aa08f8`; derive its PR and merge
-  state with `gh pr list`). Then A6.
-  - **Next step, once Hayden merges:** `./setup.sh` outside the sandbox (copy
-    `~/.claude/settings.json` first, diff it after), then `delegation-ledger canary` in the
-    background. It must go green on 2.1.287 with the full live count recorded in
-    `docs/delegation.md` "Tests" ("A2, 2.1.287"); add the canary line there, with its duration.
-    If it moved from about 5 minutes, update `FULL_COST` in `delegation_checks.py` and SKILL §4's
-    "about 5 minutes". `delegation-ledger due` should then be quiet apart from its dated items.
-    Remove the A2 worktree outside the sandbox ([[cc-p-mode-harness-gotchas]]).
+- **Delegation hardening Stage 3: A2's resume-text fix, then a green canary, then A6.** The
+  post-merge canary went 64/65 (see `docs/delegation.md` "Tests", "A2, 2.1.287"). The fix is on
+  branch `fix/a2-resume-text` (base `3d076d5`; derive its PR and merge state with `gh pr list`).
+  - **Next step, once Hayden merges it:** `git pull` in `~/dotclaude`, then `delegation-ledger
+    canary` in the background. No `setup.sh` is needed: `settings.json` didn't change, and the
+    scripts are symlinked. It must go 65/65 on 2.1.287; add that line to the same results block.
+    `delegation-ledger due` should then be quiet apart from its dated items.
+  - **Then clean up (Hayden approved, 2026-10-01):** remove the worktree
+    `.claude/worktrees/a2-resume` outside the sandbox ([[cc-p-mode-harness-gotchas]]) and delete
+    the local branch `fix/a2-resume-text`.
   - **Plans:** A2 is `~/.claude/plans/deep-moseying-koala.md` (its Step 0 probe results are
     final). Stage 3 is `~/.claude/plans/lets-move-on-to-refactored-pascal.md`, with A1/A3 detail in
     `woolly-jingling-cookie.md`. A2's decisions and why are in `docs/delegation.md` "Deadline

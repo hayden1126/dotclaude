@@ -154,7 +154,7 @@ validated (`report_ok`).
   the unit tests, the sandbox posture, and the strings our hooks read from the binary. You hear
   about it only if it fails. When the session-start line says the full canary is due (weekly, once
   the version has moved), run `delegation-ledger canary` outside the sandbox and with
-  `run_in_background`: it takes about 5 minutes, and a slow run can pass the 10-minute
+  `run_in_background`: it takes about 6 minutes, and a slow run can pass the 10-minute
   foreground limit. `delegation-ledger due` shows what is
   pending, including the dated items in `due.toml`.
 - `delegation-ledger open` lists delegations whose latest event isn't a stop. Each row
