@@ -1,4 +1,5 @@
-"""Shared pieces for delegation-ledger and codex-delegate (stdlib only).
+"""Shared pieces for the delegation scripts (stdlib only): the ledger, the liveness index, the
+policy path and the [deadline] helpers.
 
 The ledger is an append-only JSONL file of pointers, never content: ids, types, paths,
 exit codes, and whether a report validated. Briefs and outputs stay in the transcripts

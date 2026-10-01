@@ -41,7 +41,7 @@ Each layer covers what the others can't.
 3. **The report check** covers acceptance. It sends a malformed report from one of our roles back
    to the agent at most twice.
 4. **Observation.**
-   - The ledger records every start, stop and denial.
+   - The ledger records every start, stop, denial and deadline nudge.
    - `audit` flags a hook that stopped seeing agents, and a writer run that coincided with a
      main-checkout change.
    - `sandbox-denials` lists what the sandbox refused.
@@ -336,7 +336,7 @@ sonnet sessions a day. The checks therefore split by cost (Hayden's call, 2026-0
 
 | Check | What it runs | When |
 |---|---|---|
-| Quick canary (`canary --quick`, about 20 s, no model calls) | the unit suites; `claude sandbox status` (the sandbox on, Bash auto-allow off); 18 strings our hooks read, searched in the `claude` binary | by itself, in the background, on the first session of a new version |
+| Quick canary (`canary --quick`, about 20 s, no model calls) | the unit suites; `claude sandbox status` (the sandbox on, Bash auto-allow off); the strings our hooks read (`CANARY_STRINGS`), searched in the `claude` binary | by itself, in the background, on the first session of a new version |
 | Audit (`audit`) | the enforcement audit above, over the window since the last one | by itself, once a day |
 | Full canary (`canary`) | the quick tier, then the whole live harness (`run.py --runner claude`, all stages) | a reminder, when no green run is on record or the version has moved and the last green run is 7 or more days old, and after a failed run until one passes |
 | Dated items (`skills/delegation/due.toml`) | whatever the item says | a reminder from its date on, until the item is removed |
@@ -513,8 +513,9 @@ A1's `⚠` fires, and nothing stops it. A2 gives each role a time budget per act
 | writer | 30 min | 60 min |
 | `default`: general-purpose, Workflow agents, plugin types | 30 min | 60 min |
 
-The 2026-09-29 eval measured subagents at p50 3.8 and p90 13.2 minutes, so a nudge sits at about
-1.5 to 2 times the p90. A6 retunes the numbers against the ledger. `stop_min` defaults to twice
+The 2026-09-29 eval measured subagents at p50 3.8 and p90 13.2 minutes. Explore's nudge sits
+below that p90, since a read-only search that runs past 10 minutes is usually lost; the others sit
+at 1.5 to 2.3 times it. A6 retunes the numbers against the ledger. `stop_min` defaults to twice
 `nudge_min`, and fractions are allowed, which lets the live case run in seconds.
 
 **The clock** is the liveness index's `activation_start`. Every SubagentStart begins an
@@ -525,7 +526,9 @@ time (`customAgentType` for a teammate), as for every other policy rule, not fro
 **The nudge.** Past `nudge_min`, the agent's next successful call gets one PostToolUse
 `additionalContext`: report now, finish or hand back `partial`, because at `stop_min` every tool
 but the handback and SendMessage is denied. It lives in `delegation-ledger hook`, behind the same `agent_id`
-prefilter as the policy hook, so a main-thread call never starts Python.
+prefilter as the policy hook. The filter matches the substring anywhere in the payload, so a
+main-thread call whose input or output contains `"agent_id"` still starts Python, which returns at
+once.
 - It reads the index first and returns once `nudged` is set, so after the nudge it never takes the
   lock again.
 - Otherwise it sets `nudged` under the index lock and checks again there, because parallel calls
@@ -550,7 +553,10 @@ report naming what is done and what is left.
 ```
 
 The check fails open on an unreadable index (no index, no clock) and never becomes a
-`policy-error`. A malformed `[deadline]` table fails closed, like the rest of `policy.toml`.
+`policy-error`. A malformed `[deadline]` table fails closed, like the rest of `policy.toml`: every
+policed tool is denied, whatever the clock says. The tools it doesn't police (the handback,
+SendMessage, WebFetch, WebSearch, ToolSearch) still pass on a broken file, as they always have, so a
+policy bug can't swallow a report.
 
 **Why `policy.toml`.** The policy hook enforces the stop, so a broken value must fail closed.
 `liveness.toml` is a file of its own for the opposite reason: only `open` and `watch` read it, so
@@ -575,9 +581,10 @@ on the next one. The main thread is exempt. Codex keeps `codex-delegate --timeou
 
 ## Verified facts the design rests on
 
-Checked against Claude Code 2.1.285 and Codex CLI 0.154, then re-run on 2.1.286 with the full live
-harness. "Probe" means a live `claude -p` run with a real sandbox on 2026-09-30. Where the docs and
-the binary disagree, the binary wins.
+First checked against Claude Code 2.1.285 and Codex CLI 0.154 on 2026-09-30, then re-run on each
+version since with the full live harness. A fact added later names its own version. "Probe" means
+a live `claude -p` run with a real sandbox. Where the docs and the binary disagree, the binary
+wins.
 
 - **Grep and Glob:** on Linux and WSL they are absent by default. They come back for a subagent that
   lists them in `tools` and leaves out Bash
@@ -758,8 +765,8 @@ acting for Anthropic or OpenAI.
 **Stage 3 (watch)** is planned in `~/.claude/plans/lets-move-on-to-refactored-pascal.md`, which
 replaced the bullets that stood here. Its order: Step 0 probes, then A0 (named spawns off),
 A4 and A5 (due nudges, a one-command canary), A1 (per-agent liveness state), A3 (one watch view),
-A2 (deadline nudge, then hard stop), A6 (monthly audit). Step 0, A0, A4, A5, A1, A3 and A2 are
-done; see "Stage 3" above. A6 is next, and it retunes A2's budgets against the ledger.
+A2 (deadline nudge, then hard stop), A6 (monthly audit). "Stage 3" above says which are done. A6
+is next, and it retunes A2's budgets against the ledger.
 
 ## Tests
 

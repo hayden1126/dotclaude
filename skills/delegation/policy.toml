@@ -1,4 +1,5 @@
-# Subagent policy tables, read by scripts/subagent-policy on every subagent tool call.
+# Subagent policy tables, read by scripts/subagent-policy on every subagent tool call. Its
+# [deadline] table is also read by delegation-ledger's nudge, which fails open on it.
 #
 # This file is the declared contract: change what subagents may do here, not in the script.
 # tests/delegation/test_subagent_policy.py loads it and checks the behavior it produces, and

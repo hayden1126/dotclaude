@@ -12,17 +12,9 @@ stored here).
 ## Done (recent; git, the linked plans and memory hold the detail)
 - **Delegation hardening Stage 3: Step 0, A0, A4, A5, A1 and A3, live on HAYPC** (2026-09-30
   to 10-01; PRs #42 to #46, range `d46449b..ce16b8a`; A1 is PR #48, range `c0a3241..1d09748`;
-  A3 is PR #49, range `1d09748..65e7297`).
-  - Named spawns are denied unless their name starts with `team-`.
-  - Teammates are policed by their role (meta.json `customAgentType`).
-  - `delegation-ledger canary` re-verifies enforcement. A SessionStart hook runs the cheap checks
-    and shows a line only when something is due; `delegation-ledger due` shows the last results.
-  - A1: `open` reads liveness from the agent transcript (`in Bash 12 min`, with a `⚠` past the
-    thresholds in `liveness.toml`). The ledger hook keeps a per-agent index for A2.
-  - A3: `delegation-ledger watch` lists the live delegations, and `--summary` puts a token
-    (`2▶ 1⚠`) in the tmux bar through the machine-local `~/bin/tmux-claude-status`. The sandbox
-    hides every session pid, so `delegation-ledger *` is in `excludedCommands`.
-
+  A3 is PR #49, range `1d09748..65e7297`). Named spawns need a `team-` prefix; teammates are
+  policed by role; `delegation-ledger canary`/`due` re-verify enforcement on their own; `open` and
+  `watch` read liveness from the transcript, and `watch --summary` feeds the tmux bar.
   `docs/delegation.md` "Stage 3" holds the findings, the decisions and the test counts.
 - Older (git, the PRs and memory hold the detail): `setup.sh` keeps the live settings' own keys
   (PR #47, [[dotclaude-setup-install-model]]), the machine overlay `settings.machine.json`
@@ -37,23 +29,22 @@ stored here).
   CLAUDE.md trigger, `vetting-sources`, `deck-production` S1, and earlier work back to PR #10.
 
 ## In flight
-- **Delegation hardening Stage 3: A2 (deadline: nudge, then hard stop) is built and verified**
-  on branch `feat/delegation-a2-deadline`, not yet merged; then A6.
-  - **The plan:** `~/.claude/plans/deep-moseying-koala.md`. Done: the probes, the build, the
-    review, 270 + 19 unit tests, and the live `deadline` case (9/9 on 2.1.287). Left:
-    - after Hayden approves the PR and the merge, `./setup.sh` (copy `~/.claude/settings.json`
-      first and diff it after), then `delegation-ledger canary` in the background. It must go
-      green on 2.1.287 with 65 checks, and `delegation-ledger due` should then be quiet apart
-      from the dated 2026-10-07 item. Then add the canary line to the "A2, 2.1.287" results in
-      `docs/delegation.md` "Tests".
+- **Delegation hardening Stage 3: A2 (deadline: nudge, then hard stop) is built and verified,
+  not merged** (branch `feat/delegation-a2-deadline`, base `0aa08f8`; derive its PR and merge
+  state with `gh pr list`). Then A6.
+  - **Next step, once Hayden merges:** `./setup.sh` outside the sandbox (copy
+    `~/.claude/settings.json` first, diff it after), then `delegation-ledger canary` in the
+    background. It must go green on 2.1.287 with the full live count recorded in
+    `docs/delegation.md` "Tests" ("A2, 2.1.287"); add the canary line there, with its duration.
+    If it moved from about 5 minutes, update `FULL_COST` in `delegation_checks.py` and SKILL §4's
+    "about 5 minutes". `delegation-ledger due` should then be quiet apart from its dated items.
+    Remove the A2 worktree outside the sandbox ([[cc-p-mode-harness-gotchas]]).
+  - **Plans:** A2 is `~/.claude/plans/deep-moseying-koala.md` (its Step 0 probe results are
+    final). Stage 3 is `~/.claude/plans/lets-move-on-to-refactored-pascal.md`, with A1/A3 detail in
+    `woolly-jingling-cookie.md`. A2's decisions and why are in `docs/delegation.md` "Deadline
+    (A2)"; A6 retunes its budgets from the ledger.
   - Build each step on a fresh branch from `main` in a worktree, so the live hooks stay
     untouched while it is edited.
-  - **The plans:** Stage 3 is `~/.claude/plans/lets-move-on-to-refactored-pascal.md`.
-    - Its A1 and A3 text is detailed in `~/.claude/plans/woolly-jingling-cookie.md`, which holds
-      both plans, A3 first.
-    - Its A4/A5 cadence is in `docs/delegation.md` ("The canary and the due checks").
-    - A2's decisions and why are in `docs/delegation.md` "Deadline (A2)". A6 retunes its
-      budgets against the ledger.
 - **Delegation hardening: what is live on HAYPC** (Stage 2, plus the Stage 3 steps under Done;
   `docs/delegation.md`;
   `skills/delegation/SKILL.md` is the operating guide). Open items:
@@ -99,14 +90,11 @@ stored here).
   replacement exists (the `.title.txt` label is also written on Stop). Decide: seed those rows from
   the current prompt's first line (as `session-title.sh` now does) or accept the brief blank and drop
   the dead `scan_ai_title` fallback. Docs already note the fallback is moot.
-- **`docs/durable-handoff-brief.md` scope call.** Line ~98 (in the "Inner-loop inheritance mechanics,
-  VERIFIED 2026-06-17" note) says the global `settings.json` "reference[s] the global `danger-guard.sh`",
-  now false since `8602081` dropped the danger-guard `PreToolUse(Bash)` entry. Left unedited because it is a dated,
-  point-in-time design snapshot, not a living behavior doc. Decide: correct the clause (one-line fix,
-  e.g. point at the currently-wired hooks) or leave it as a historical record. The nearby loop-engineering
-  reference on the next line is a different repo's file and is NOT stale. The same doc's lines ~49-50
-  ("setup.sh symlinks its skills, the danger-guard hook, CLAUDE.md, and templates") are also stale
-  now (setup.sh links every hook, `agents/`, and the CLIs). Include them in the same call.
+- **`docs/durable-handoff-brief.md` scope call.** Its "Inner-loop inheritance mechanics, VERIFIED
+  2026-06-17" note says the global `settings.json` references `danger-guard.sh` (false since
+  `8602081`), and its setup.sh summary (it now links every hook, `agents/` and the CLIs) is stale
+  too. Left unedited as a dated design snapshot. Decide: correct both, or keep it as history. The
+  loop-engineering reference beside them is another repo's file and is NOT stale.
 - **Historical docs naming `Explore` for git work.** `skills/frontend-ui-discipline/SPEC.md:14` (an
   authoring record) tells an Explore agent to read a diff of the session's commits. The `Explore`
   override has no shell, so that step now needs `researcher` or a pasted diff. Decide: update the
@@ -128,9 +116,9 @@ stored here).
   the reference tree is unmodified afterward. That gate is a precondition for editing any script in the
   skill, because the reference deck is deliberately NOT migrated and will otherwise drift silently.
 - Smoke test: `deckkit new /tmp/x --title T --slides 6`, approve the storyboard frontmatter, then
-  `deckkit build /tmp/x && deckkit lint /tmp/x && deckkit package /tmp/x`. Expect lint 0/0.
-- `deckkit` reaches PATH via `~/.local/bin` (setup.sh links it when that dir exists). On a machine
-  without it, use `~/.claude/skills/deck-production/scripts/deckkit`.
+  `deckkit build /tmp/x && deckkit lint /tmp/x && deckkit package /tmp/x` (expect lint 0/0).
+  `deckkit` is on PATH via `~/.local/bin`; otherwise use
+  `~/.claude/skills/deck-production/scripts/deckkit`.
 - Known gap carried deliberately: `deck.forward_targets` is declared in `deck.toml`, not detected. No
   tooling yet reads a slide and decides whether a number is a forward target, so the default `false`
   means "nobody has said", not "no targets". Revisit when the storyboard MUST/NEVER grammar is enforced

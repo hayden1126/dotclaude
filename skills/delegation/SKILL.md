@@ -61,6 +61,8 @@ permission flow.
 - **Can't read credential files** or `/proc`, and can't Grep a directory that contains one
   (`~`, `~/.config`, `/`). Brief a narrower search root.
 - **Can't `rm -r` outside its root** or temp.
+- **Can't run past its deadline:** past its role's stop time, only the handback and
+  SendMessage are allowed (§4).
 
 **Writers** also can't write outside their worktree: file tools, redirects, `cd`,
 `git -C`. They can still read the main checkout. A computed-path subprocess write into the
@@ -171,9 +173,9 @@ validated (`report_ok`).
   - The thresholds live in `skills/delegation/liveness.toml`, per kind (subagent, teammate,
     codex). A broken file falls back to the defaults, and `open` and `watch` print a warning
     first.
-- **Every activation has a deadline,** per role, in `skills/delegation/policy.toml`
-  `[deadline]`: Explore 10 min to a nudge and 20 to the stop, researcher and reviewer 20 and
-  40, writer and every other type 30 and 60.
+- **Every activation has a deadline,** a nudge time and a stop time per role, in
+  `skills/delegation/policy.toml` `[deadline]` (the numbers live there; a role without its own
+  entry gets `default`).
   - Past the nudge, the agent's next successful call carries one reminder to report
     (a `nudge` row in `delegation-ledger tail`).
   - Past the stop, every tool except SubagentHandback and SendMessage is denied, so the agent
