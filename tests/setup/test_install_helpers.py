@@ -118,6 +118,26 @@ class MergeCli(unittest.TestCase):
                 self.live({"effortLevel": "high"}))
         self.assertEqual((json.loads(r.stdout), r.stderr), ({"effortLevel": "high"}, ""))
 
+    def test_a_changed_object_and_a_dropped_hook_are_named(self):
+        with open(self.base, "w") as f:
+            json.dump({"permissions": {"allow": ["a"]},
+                       "hooks": {"Stop": [{"hooks": [{"command": "base"}]}]}}, f)
+        live = self.live({"permissions": {"allow": ["a", "b"]},
+                          "hooks": {"Stop": [{"hooks": [{"command": "hand-added"}]},
+                                             {"hooks": [{"command": "base"}]}]}})
+        r = run(MERGE, self.base, self.overlay("{}"), live)
+        self.assertIn("the baseline resets permissions", r.stderr)
+        self.assertIn("dropped: hand-added", r.stderr)
+        self.assertNotIn("base;", r.stderr)
+
+    def test_reordered_hooks_are_not_reported(self):
+        with open(self.base, "w") as f:
+            json.dump({"hooks": {"Stop": [{"hooks": [{"command": "x"}]}]}}, f)
+        over = self.overlay('{"hooks": {"Stop": [{"hooks": [{"command": "y"}]}]}}')
+        live = self.live({"hooks": {"Stop": [{"hooks": [{"command": "y"}]},
+                                             {"hooks": [{"command": "x"}]}]}})
+        self.assertEqual(run(MERGE, self.base, over, live).stderr, "")
+
     def test_an_overlay_key_is_not_duplicated_from_live(self):
         r = run(MERGE, self.base, self.overlay('{"b": 2}'), self.live({"b": 1}))
         self.assertEqual(json.loads(r.stdout), {"a": [1], "b": 2})

@@ -76,7 +76,7 @@ Division of labor: Claude for architecture, implementation, and long-context or 
 
 `setup.sh` handles it: it symlinks `codex/AGENTS.md` into `~/.codex/` (or `$CODEX_HOME`), merges `codex/config.toml` into the local `config.toml` there (leaving `auth.json` and the rest of Codex's state alone), registers the `openai-codex` marketplace, installs the plugin, and links `codex-delegate` into `~/.local/bin`. After that, run `codex login` once to authenticate, then `/codex:setup` to verify.
 
-A machine set up before the merge still has `~/.codex/config.toml` as a symlink into this repo, so Codex keeps writing here until it is migrated. Migrate with `python3 codex/merge-config.py` alone, not a full `./setup.sh` re-run (that also resets the live `~/.claude/settings.json`).
+A machine set up before the merge still has `~/.codex/config.toml` as a symlink into this repo, so Codex keeps writing here until it is migrated. Migrate with `python3 codex/merge-config.py` alone, not a full `./setup.sh` re-run (that also rewrites the live `~/.claude/settings.json` to the baseline plus the overlay, keeping only the live file's own top-level keys).
 
 ## Key facts (September 2026, subject to change)
 

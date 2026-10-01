@@ -4,8 +4,8 @@
 #
 # settings.json invokes this as `bash "$HOME/.claude/hooks/notify.sh"`, so the
 # command in settings stays platform-agnostic and all OS detection lives here.
-# That also keeps settings.json byte-identical across machines, so setup.sh can
-# copy it without re-stomping a hand-tuned, per-platform notify command.
+# That also keeps the settings.json baseline the same on every machine, so setup.sh
+# can install it without re-stomping a hand-tuned, per-platform notify command.
 #
 # The event JSON arrives on stdin: {"message": "..."}. Fail-open: any error just
 # skips the toast (exit 0) and never blocks the session.

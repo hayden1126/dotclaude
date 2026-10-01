@@ -324,7 +324,7 @@ sonnet sessions a day. The checks therefore split by cost (Hayden's call, 2026-0
 |---|---|---|
 | Quick canary (`canary --quick`, about 20 s, no model calls) | the unit suites; `claude sandbox status` (the sandbox on, Bash auto-allow off); 19 strings our hooks read, searched in the `claude` binary | by itself, in the background, on the first session of a new version |
 | Audit (`audit`) | the enforcement audit above, over the window since the last one | by itself, once a day |
-| Full canary (`canary`) | the quick tier, then the whole live harness (`run.py --runner claude`, all stages) | a reminder, when the version has moved and the last green full run is 7 or more days old, and after a failed run until one passes |
+| Full canary (`canary`) | the quick tier, then the whole live harness (`run.py --runner claude`, all stages) | a reminder, when no green run is on record or the version has moved and the last green run is 7 or more days old, and after a failed run until one passes |
 | Dated items (`skills/delegation/due.toml`) | whatever the item says | a reminder from its date on, until the item is removed |
 
 **How it runs.** `hooks/delegation-due.sh` runs `delegation-ledger due --hook` at SessionStart
@@ -350,8 +350,9 @@ State files of the wrong shape are read as empty, so they can't silence the rest
 that reports fewer checks than the last green one isn't green either (`--accept-fewer` accepts a
 deliberate cut).
 
-**No audit gaps.** The daily audit covers the time since the last one. A narrower manual run
-doesn't move that mark, so no stretch goes unaudited. Warnings nobody has seen yet are kept until
+**No audit gaps, up to a week.** The daily audit covers the time since the last one, capped at 168
+hours, so only a machine unused for over a week leaves a stretch unaudited. A narrower manual run
+doesn't move that mark. Warnings nobody has seen yet are kept until
 a session start shows them. `audit` pairs each agent's start and stop across the window edge, so a
 writer that ran over an audit boundary is still compared.
 
@@ -536,10 +537,11 @@ A2 (deadline nudge, then hard stop), A6 (monthly audit). Step 0, A0, A4 and A5 a
 - **Canary:** `delegation-ledger canary` runs the unit suites, the posture and string checks, then
   the live harness, and records the result for the due checks. After an upgrade, or a change to a
   role, a hook or `codex-delegate`, run it outside the sandbox and in the background. `--quick`
-  runs only the cheap tier, and it runs anywhere.
+  runs only the cheap tier. It runs anywhere, but it records its result only outside the sandbox,
+  where the state dir is writable.
 - **Results on 2026-09-30 (Claude Code 2.1.286):**
   - unit: 213 tests;
-  - canary: the first full run, from this branch, went green: the quick tier, then 52/52 live
+  - canary: the first full run, before PR #46 merged, went green: the quick tier, then 52/52 live
     checks;
   - claude: 52 checks over all three stages. The last full run passed 51. The miss was the old
     `report (auto)` check, which asserted that the model complies: it kept the brief's "no JSON"

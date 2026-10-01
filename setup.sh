@@ -43,8 +43,9 @@ link() {
 # keys like extraKnownMarketplaces and reorders the file). A live symlink would
 # push that churn straight back into the repo, so we COPY it instead: the repo
 # file is the curated baseline; the runtime owns its own copy in ~/.claude/.
-# Re-running resets the copy to the baseline (backing up the old one); the
-# runtime then re-derives its managed keys on next launch.
+# Re-running installs the baseline plus the machine overlay (backing up the old
+# copy) and keeps the copy's own top-level keys; see merge-settings.py. The
+# runtime re-derives its managed keys (plugins, marketplaces) on its own.
 copy_managed() {
   local src="$1" dst="$2"
   if [[ -e "$dst" && ! -L "$dst" ]] && cmp -s "$src" "$dst"; then

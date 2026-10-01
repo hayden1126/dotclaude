@@ -36,9 +36,9 @@ to one machine, such as hooks for its own scripts or `sandbox.excludedCommands` 
 in `~/.claude/settings.machine.json` instead. It isn't in this repo; `setup.sh` installs the baseline
 with it merged in. Objects merge key by key, lists append (skipping items already there), and any
 other value replaces the baseline's (`merge-settings.py`). Top-level keys only the live copy sets
-(what `/config`, `/model` and auto mode write, such as `autoMode` and `model`) are kept. A live value
-the baseline overrides, such as `effortLevel`, is named when `setup.sh` runs; put it in the overlay
-to keep it.
+(what `/config`, `/model` and auto mode write, such as `autoMode` and `model`) are kept. `setup.sh`
+names every live value the baseline overrides (such as `effortLevel`) and every live hook command
+it drops; put a value in the overlay to keep it.
 
 ## What's in here
 
@@ -46,7 +46,7 @@ to keep it.
 |---|---|---|
 | `CLAUDE.md` | Global instructions: working partnership, boundaries, voice, the explore -> spec -> plan -> execute -> verify -> review workflow | symlink `~/.claude/CLAUDE.md` |
 | `settings.json` | Hooks, status line, env vars, enabled plugins, and the Bash sandbox (curated baseline; see docs/delegation.md for the sandbox) | **copy** to `~/.claude/settings.json` (runtime-managed, not symlinked), merged with `~/.claude/settings.machine.json` when present |
-| `merge-settings.py` | Merges the machine overlay into the baseline for `setup.sh` | run by `setup.sh` |
+| `merge-settings.py` | Merges the machine overlay into the baseline and keeps the live file's own top-level keys, for `setup.sh` | run by `setup.sh` |
 | `git/sandbox-stubs.ignore` | Git ignore patterns for the `/dev/null` mounts the Bash sandbox puts over protected dotfiles a repo lacks (they break `git add -A`) | upserted by `git/install-ignore.py` between markers in the global git excludes file (`core.excludesFile`, else `~/.config/git/ignore`); Linux only |
 | `skills/` | The skills I authored: `coding-practices`, `research-discipline`, `research-sourcing`, `writing-voice`, `staged-reader-review`, `ebook-extract`, `deck-production`, `vetting-sources`, `handoff`, `frontend-ui-discipline`, `ui-alignment`, `delegation` | symlink per dir into `~/.claude/skills/`; a skill's `scripts/` CLI also symlinks into `~/.local/bin` when that dir exists (`deck-production` ships `deckkit`; `delegation` ships `codex-delegate`, `delegation-ledger` and `gh-public`) |
 | `agents/` | Delegation roles: `Explore` (overrides the built-in with a no-shell reader), `researcher`, `reviewer`, `writer`; see docs/delegation.md | symlink per file into `~/.claude/agents/` |
@@ -115,9 +115,9 @@ ships but is opt-in, see its entry):
   `delegation-ledger due --hook`: on the first session of a new Claude Code version it starts the
   quick canary in the background (unit tests, sandbox posture, strings in the binary; no model
   calls), and once a day it starts `audit`. It prints one line (a `systemMessage`, for you, not the
-  model) only when a check failed or can't run, the full `delegation-ledger canary` is due (weekly,
-  when the version moved), or a dated item in `skills/delegation/due.toml` is due. Fails open:
-  always exits 0.
+  model) only when a check failed or can't run, the daily audit warned, the full
+  `delegation-ledger canary` is due (weekly, when the version moved), or a dated item in
+  `skills/delegation/due.toml` is due. Fails open: always exits 0.
 - **PreToolUse(`*`): `subagent-policy.sh`** (in this repo). Runs only for tool calls made inside a
   subagent or teammate (the settings command exits before Python when the input has no
   `agent_id`, so the main thread is never policed). The rules live in
