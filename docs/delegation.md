@@ -67,7 +67,7 @@ Each layer covers what the others can't.
 | Sandbox | `settings.json` `sandbox` | Enforces (OS): the write roots, `denyRead` (the credential barrier), `denyWrite` (the enforcement sources), and the network allowlist. `failIfUnavailable`, and `autoAllowBashIfSandboxed: false`, so Hayden's prompts stay as they were |
 | Subagent policy | `hooks/subagent-policy.sh`, `skills/delegation/scripts/subagent-policy`, `skills/delegation/policy.toml` | Enforces: see "Subagent policy" below. Fails closed for the tools it polices |
 | Report check | `hooks/report-check.sh`, `skills/delegation/scripts/report-check` | Enforces acceptance: a schema-invalid report is sent back twice at most. Fails open |
-| Ledger | `hooks/delegation-ledger.sh`, `skills/delegation/scripts/delegation-ledger` | Observes: start and stop rows (`agent_type` is the resolved role; a teammate adds `name` and `teammate`), `report_ok`, denial rows, the main-checkout hash for a worktree agent; `audit`; `sandbox-denials`. Fails open |
+| Ledger | `hooks/delegation-ledger.sh`, `skills/delegation/scripts/delegation-ledger`, `skills/delegation/liveness.toml` | Observes: start and stop rows (`agent_type` is the resolved role; a teammate adds `name` and `teammate`), `report_ok`, denial rows, the main-checkout hash for a worktree agent; the per-agent liveness index (`agents/<id>.json`); `open` (the tool in flight and since when, thresholds in `liveness.toml`); `audit`; `sandbox-denials`. Fails open |
 | Canary and due checks | `hooks/delegation-due.sh`, `skills/delegation/scripts/delegation_checks.py`, `skills/delegation/due.toml` | Observes: `delegation-ledger canary` re-verifies enforcement on this Claude Code version; `due` runs the cheap checks at session start and shows Hayden what needs him. Fails open |
 | Public GitHub client | `skills/delegation/scripts/gh-public` | GET-only access to api.github.com for delegated agents, optionally with a public-read token |
 | Brief and report | `skills/delegation/BRIEF.md`, `report.schema.json` | Persuades (the brief); checks (the schema) |
@@ -221,6 +221,11 @@ from 60 to 5,000 requests an hour.
   there runs as a plain subagent), so the live harness can't cover one. The teammate facts below
   come from a live session. A teammate's meta.json appeared about 0.5 s after its transcript
   began and before its first tool call; a first call that beat it would get the default rules.
+- **A background command a subagent leaves running.** A subagent that backgrounds a command and
+  ends its turn isn't flagged: its stop row takes it out of `open`, and SubagentStop's
+  `background_tasks` can't say whose task is whose (it is session-wide, so A1 ignores it). Claude
+  Code doesn't wake the agent when the task ends (probe, 2.1.286), so the result is lost to it.
+  SKILL §4 tells the lead to have a long command run in the foreground.
 - **Vault.** There is deliberately no vault read deny. A session-wide deny would break hq's vault
   routing and vault's own sessions, and Bash writes to vault from other sessions are already
   outside the write roots.
@@ -229,7 +234,7 @@ from 60 to 5,000 requests an hour.
 
 Stage 3 makes the setup check itself instead of relying on someone remembering. It runs in steps,
 Step 0 and then A0 to A6, planned in `~/.claude/plans/lets-move-on-to-refactored-pascal.md`. Step 0,
-A0, A4 and A5 are done.
+A0, A4, A5 and A1 are done.
 
 **Step 0** came first because everything after it rests on assumptions Stage 2 made but never
 tested live. It is four probes:
@@ -322,7 +327,7 @@ sonnet sessions a day. The checks therefore split by cost (Hayden's call, 2026-0
 
 | Check | What it runs | When |
 |---|---|---|
-| Quick canary (`canary --quick`, about 20 s, no model calls) | the unit suites; `claude sandbox status` (the sandbox on, Bash auto-allow off); 19 strings our hooks read, searched in the `claude` binary | by itself, in the background, on the first session of a new version |
+| Quick canary (`canary --quick`, about 20 s, no model calls) | the unit suites; `claude sandbox status` (the sandbox on, Bash auto-allow off); 17 strings our hooks read, searched in the `claude` binary | by itself, in the background, on the first session of a new version |
 | Audit (`audit`) | the enforcement audit above, over the window since the last one | by itself, once a day |
 | Full canary (`canary`) | the quick tier, then the whole live harness (`run.py --runner claude`, all stages) | a reminder, when no green run is on record or the version has moved and the last green run is 7 or more days old, and after a failed run until one passes |
 | Dated items (`skills/delegation/due.toml`) | whatever the item says | a reminder from its date on, until the item is removed |
@@ -368,6 +373,53 @@ it in the background.
 
 **Why dated items have their own file.** The policy hook fails closed on a malformed
 `policy.toml`, and a typo in a reminder must never block a delegated agent.
+
+### Liveness (A1)
+
+Probe P2 showed that the stall timer doesn't abort an agent inside one long tool call. Before A1,
+`open` called such an agent "silent N min". It couldn't name the tool or say since when, it misread
+parallel calls, and its threshold was a hardcoded `--silent-min 30`.
+
+**Liveness comes from the agent transcript, not from per-call hooks** (Hayden's call,
+2026-09-30). A denied, failed or interrupted call writes a `tool_result` to the transcript but
+fires no PostToolUse, so state kept by per-call hooks would get stuck on "in Bash". The
+transcript has no such race:
+- a `tool_use` id with no matching `tool_result` is a call still in flight;
+- every entry carries a timestamp, so the oldest open call says since when;
+- a pending permission prompt shows as an open call too.
+
+`open` reads the last 1 MiB of each agent's transcript. Its verdicts, in order:
+1. the session is gone: `orphaned`;
+2. a call is open: `in <Tool> N min` (`, +k more` for parallel calls), with a `⚠` past
+   `tool_min`;
+3. the turn ended but no stop row came: read the transcript for the report;
+4. otherwise `running`, or `⚠ ask it for status` once no transcript entry has appeared for
+   `silent_min`.
+
+Codex rows get a `⚠` once `events.jsonl` has been quiet for `codex.silent_min`.
+
+Notification and TeammateIdle hooks are left out: a pending prompt already shows as an open call,
+`-p` can't produce a prompt to test with, and a teammate's stop on each message already marks it
+idle. Their canary strings went too. A2 re-adds PostToolUse, with the one hook its nudge needs.
+
+**The index.** The ledger hook also keeps `$XDG_STATE_HOME/dotclaude/agents/<id>.json`. It is
+rewritten at each start and stop under a lock, through a temp file and a rename, so a reader never
+sees a torn file. It holds the agent's state, its transcript path, `first_start`, and the current
+activation's start and count. A SendMessage resume or a teammate's next message starts a new
+activation, with a fresh budget. `open` reads the index for the activation and for the agent's
+kind (subagent or teammate). A2's deadlines and A3's watch view build on it. A file untouched for
+7 days is pruned at the next start.
+
+**Why `liveness.toml` is its own file.** `load_policy` fails closed on a TOML syntax error, so a
+typo in a value only `open` reads would block every delegated call. `liveness.toml` fails open
+instead. A malformed file, or a value that isn't a positive number, falls back to the defaults in
+`delegation-ledger`, and `open` prints the warning first, so it can't go quiet. This is the
+`due.toml` reasoning. A2's deadlines will still go in `policy.toml`, because the policy hook
+enforces them.
+
+**`background_tasks` isn't used.** SubagentStop's `background_tasks` could have let `open` say
+"stopped, waiting on N background tasks". A probe found the list session-wide, with no owner
+field, so A1 neither records nor reads it (see the verified facts and the known gaps).
 
 ## Verified facts the design rests on
 
@@ -461,7 +513,19 @@ the binary disagree, the binary wins.
   (`run.py` case `stall`): a background agent inside one 100-second tool call finished under a
   45-second timer, so a single long call isn't aborted. There is no negative control, so this
   doesn't show the timer fires at all in that setup. A silent agent can therefore sit in one call
-  far past the timer; the Stage 3 liveness state (A1) has to see it.
+  far past the timer; `open` shows it as `in <Tool> N min` (A1).
+- **Transcript entries** (2.1.286): a `tool_use` entry is written before its tool runs, and every
+  user and assistant entry carries a `timestamp` with milliseconds. A1's liveness rests on the
+  first; the `stall` case checks it live, since a poll of `open` during its 100-second call must
+  show `in Bash`.
+- **SubagentStop `background_tasks` is session-wide** (probe on 2.1.286, 2026-10-01). The lead
+  backgrounded `sleep 20`, then spawned a background agent that backgrounded `sleep 30` and ended
+  its turn. The agent's list held three entries: the agent itself (`type: "subagent"`, with
+  `agent_type`), the lead's shell task and the agent's own (`type: "shell"`, with `command`). No
+  field names an owner.
+- **A subagent isn't woken by its background task** (same probe): no second SubagentStart fired
+  when the agent's task finished. A subagent that backgrounds a command and ends its turn never
+  sees the result.
 - **Workflow agents** (probe on 2.1.286, case `workflow`): their PreToolUse, PostToolUse and
   SubagentStart carry `agent_id`, with `agent_type: "workflow-subagent"`, and the policy denied
   one's `git push`. Under `-p` the Workflow tool first asks for review ("Review dynamic workflow
@@ -505,7 +569,7 @@ patterns from these:
 | kenryu42/cc-safety-net | MIT | The destructive-command rule table, the five block intents and their footers, the wrapper-peel and recursion caps, fail closed on any exception | `policy.toml`, `subagent-policy`, spawn guard, `BRIEF.md` |
 | Parable (ldayton/Parable, as pinned by ldayton/Dippy) | MIT | The bash parser, **vendored verbatim** (`scripts/vendor/parable.py`, pinned by sha256), with Dippy's walk-every-node approach reimplemented | `subagent-policy` |
 | oscarthroedsson/breadcrumb | MIT | The SubagentStop rejection counter, keyed on session and agent, with a cap of 2 | `report-check` |
-| stefanprodan/cctop | Apache-2.0 | The liveness rules: `~/.claude/sessions/<pid>.json` plus `/proc`, and the transcript's last entry | `delegation-ledger open` |
+| stefanprodan/cctop | Apache-2.0 | The session rule: `~/.claude/sessions/<pid>.json` plus `/proc` (A1's transcript scan replaced its last-entry rule) | `delegation-ledger open` |
 | openai/codex-plugin-cc `job-control.mjs` | Apache-2.0 | Phase inference from the event log | `codex-delegate status` |
 | obra/external-subagents | none (idea only) | A pending row before launch; idle minutes | `codex-delegate` |
 
@@ -517,8 +581,8 @@ acting for Anthropic or OpenAI.
 **Stage 3 (watch)** is planned in `~/.claude/plans/lets-move-on-to-refactored-pascal.md`, which
 replaced the bullets that stood here. Its order: Step 0 probes, then A0 (named spawns off),
 A4 and A5 (due nudges, a one-command canary), A1 (per-agent liveness state), A3 (one watch view),
-A2 (deadline nudge, then hard stop), A6 (monthly audit). Step 0, A0, A4 and A5 are done; see
-"Stage 3" above. A1 is next.
+A2 (deadline nudge, then hard stop), A6 (monthly audit). Step 0, A0, A4, A5 and A1 are done; see
+"Stage 3" above. A3 is next.
 
 ## Tests
 

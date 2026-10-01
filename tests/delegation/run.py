@@ -39,7 +39,8 @@ Stage 3 checks (probes first: each records a Claude Code fact the later steps re
   workflow    a Workflow agent's PreToolUse/PostToolUse/SubagentStart carry agent_id, and the
               policy denies its git push
   stall       whether CLAUDE_ASYNC_AGENT_STALL_TIMEOUT_MS aborts a background agent that sits
-              in one long tool call (is a running tool "progress"?)
+              in one long tool call (is a running tool "progress"?); meanwhile `delegation-ledger
+              open` must show it `in Bash`, and its liveness index must end `stopped`
   team        a team- spawn passes the guard and its role (researcher allowlist) binds. -p runs
               it as a plain subagent, so the teammate path itself is checked by hand
 
@@ -58,6 +59,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(os.path.dirname(HERE))
@@ -589,17 +591,34 @@ STALL_TIMEOUT_MS = 45000
 STALL_SLEEP_S = 100  # under the Bash tool's 120 s default, so only the stall timer can end it
 
 
+def poll_open(env, done, outputs, every=3):
+    """Run `delegation-ledger open` against the fixture's state every few seconds until done
+    is set, keeping each output."""
+    while not done.wait(every):
+        p = subprocess.run([sys.executable, os.path.join(SCRIPTS, "delegation-ledger"), "open"],
+                           capture_output=True, text=True, env=env)
+        outputs.append(p.stdout)
+
+
 def stall(root, env, state):
     print(f"stall timeout vs one long tool call (probe P2: {STALL_TIMEOUT_MS // 1000}s timer, "
           f"{STALL_SLEEP_S}s call)")
     cmd = f'python3 -c "import time; time.sleep({STALL_SLEEP_S})"'
-    r = claude('Spawn one general-purpose subagent in the background (Agent tool, subagent_type '
-               '"general-purpose", run_in_background true, no name) with this prompt: "Run this '
-               f"exact Bash command once, as one foreground call: {cmd} . Then reply with the "
-               'word slept." Then do nothing else until its completion notification arrives, and '
-               'reply with that notification verbatim, including any error.', root,
-               dict(env, CLAUDE_ASYNC_AGENT_STALL_TIMEOUT_MS=str(STALL_TIMEOUT_MS)),
-               disallow=["Edit", "Write", "NotebookEdit"])
+    polls, done = [], threading.Event()
+    poller = threading.Thread(target=poll_open, args=(env, done, polls), daemon=True)
+    poller.start()
+    try:
+        r = claude('Spawn one general-purpose subagent in the background (Agent tool, '
+                   'subagent_type "general-purpose", run_in_background true, no name) with this '
+                   f'prompt: "Run this exact Bash command once, as one foreground call: {cmd} . '
+                   'Then reply with the word slept." Then do nothing else until its completion '
+                   'notification arrives, and reply with that notification verbatim, including '
+                   'any error.', root,
+                   dict(env, CLAUDE_ASYNC_AGENT_STALL_TIMEOUT_MS=str(STALL_TIMEOUT_MS)),
+                   disallow=["Edit", "Write", "NotebookEdit"])
+    finally:
+        done.set()
+        poller.join()
     sid = r.get("session_id")
     _, subs = session_files(sid)
     gp = of_type(subs, "general-purpose")
@@ -624,6 +643,20 @@ def stall(root, env, state):
     check("stall: one long foreground call outlives the timer (as on 2.1.286)",
           foreground and finished and span >= STALL_SLEEP_S,
           f"span {span:.0f}s, foreground {foreground}, finished {finished}")
+    # A1 rests on this: the tool_use entry is in the transcript before the tool runs, so a
+    # poll during the sleep sees a call in flight.
+    rows = [line.strip() for out in polls for line in out.splitlines() if aid in line]
+    in_bash = [line for line in rows if "in Bash" in line]
+    check("stall: `open` showed the agent in Bash during the call", in_bash,
+          in_bash[0][:160] if in_bash else f"{len(polls)} polls; last row {rows[-1:]}")
+    try:
+        with open(os.path.join(state, "dotclaude", "agents", f"{aid}.json")) as f:
+            idx = json.load(f)
+    except (OSError, ValueError):
+        idx = {}
+    check("stall: its liveness index ends stopped",
+          idx.get("state") == "stopped" and idx.get("activations", 0) >= 1,
+          f"state {idx.get('state')}, activations {idx.get('activations')}")
 
 
 def team(root, env, state):

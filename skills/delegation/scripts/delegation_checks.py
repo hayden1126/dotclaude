@@ -56,11 +56,9 @@ VERSION_RE = re.compile(r"\b(\d+\.\d+\.\d+)\b")
 # error. A present one proves little: the live tier is what checks behavior.
 CANARY_STRINGS = [
     ("PreToolUse", "settings.json: the policy hook, the spawn guard, the report check"),
-    ("PostToolUse", "Stage 3 A1 liveness"),
     ("SubagentStart", "settings.json: delegation-ledger"),
     ("SubagentStop", "settings.json: delegation-ledger, report-check"),
     ("SessionStart", "settings.json: delegation-due"),
-    ("TeammateIdle", "Stage 3 A1 liveness"),
     ("SubagentHandback", "report-check; delegation-ledger handback_message"),
     ("agent_id", "the policy hook's filter in settings.json"),
     ("agent_transcript_path", "delegation-ledger stop rows"),

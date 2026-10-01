@@ -3,12 +3,19 @@
 The ledger is an append-only JSONL file of pointers, never content: ids, types, paths,
 exit codes, and whether a report validated. Briefs and outputs stay in the transcripts
 and rollouts they already live in.
+
+Beside it, agents/<id>.json is the per-agent liveness index: the latest state of each Claude
+agent, rewritten at its starts and stops, so a reader gets one agent's state without folding
+the whole ledger.
 """
+import contextlib
 import datetime
 import fcntl
+import glob
 import json
 import os
 import re
+import tempfile
 import time
 
 HERE = os.path.dirname(os.path.realpath(__file__))
@@ -43,6 +50,71 @@ def append_row(row):
             f.write(line)
         finally:
             fcntl.flock(f, fcntl.LOCK_UN)
+
+
+def agents_dir():
+    return os.path.join(state_dir(), "agents")
+
+
+def _agent_path(aid):
+    aid = str(aid)
+    if not aid or aid.startswith(".") or os.path.basename(aid) != aid:
+        raise ValueError(f"not an agent id: {aid!r}")
+    return os.path.join(agents_dir(), f"{aid}.json")
+
+
+@contextlib.contextmanager
+def _agents_lock():
+    os.makedirs(agents_dir(), exist_ok=True)
+    with open(os.path.join(agents_dir(), ".lock"), "a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock, fcntl.LOCK_UN)
+
+
+def read_agent_state(aid):
+    """The agent's index entry, or {} when it is missing or malformed."""
+    try:
+        with open(_agent_path(aid)) as f:
+            d = json.load(f)
+    except (OSError, ValueError):
+        return {}
+    return d if isinstance(d, dict) else {}
+
+
+def update_agent_state(aid, fn):
+    """Read-modify-write the agent's index entry under agents/.lock. fn gets the current dict
+    and changes it in place or returns a new one. The result goes to a temp file that is then
+    os.replace'd, so a reader never sees a torn file."""
+    path = _agent_path(aid)
+    with _agents_lock():
+        cur = read_agent_state(aid)
+        new = fn(cur)
+        new = cur if new is None else new
+        fd, tmp = tempfile.mkstemp(dir=agents_dir(), prefix=f".{aid}.", suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w") as f:
+                json.dump(new, f, sort_keys=True)
+            os.replace(tmp, path)
+        except BaseException:
+            with contextlib.suppress(OSError):
+                os.unlink(tmp)
+            raise
+    return new
+
+
+def prune_agent_states(days=7):
+    """Remove index files (and temp files a crash left) whose mtime is over `days` old. They
+    are program-owned: an agent's file is written only at its starts and stops."""
+    cutoff = time.time() - days * 86400
+    with _agents_lock():
+        for p in (glob.glob(os.path.join(agents_dir(), "*.json"))
+                  + glob.glob(os.path.join(agents_dir(), ".*.tmp"))):
+            with contextlib.suppress(OSError):
+                if os.path.getmtime(p) < cutoff:
+                    os.remove(p)
 
 
 def read_rows():
