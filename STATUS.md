@@ -10,28 +10,20 @@ Base: `main`. For branch / PR / push state, run `gh pr list` and `git log main..
 stored here).
 
 ## Done (recent; git, the linked plans and memory hold the detail)
-- **Delegation hardening Stage 3: Step 0, A0, A4 and A5, installed on HAYPC** (2026-09-30, PRs #42
-  to #46, merged range `d46449b..ce16b8a`). Named spawns are denied unless their name starts with
-  `team-`. Teammates are policed by their role (meta.json `customAgentType`). `delegation-ledger
-  canary` re-verifies enforcement; its first full run, on 2.1.286, was green (52/52). A SessionStart
-  hook runs the cheap checks itself and shows a line only when something is due, including the
-  dated items in `skills/delegation/due.toml`. `docs/delegation.md` "Stage 3" holds the findings and
-  the cadence decision.
-- **`setup.sh` keeps the live settings' own keys** (2026-09-30, commit `39d8d34` on
-  `fix/setup-keep-live-settings`). `merge-settings.py` keeps the top-level keys only the live file
-  sets. It names every baseline override and every dropped live hook command on stderr. Before
-  this, the A4/A5 install wiped `autoMode`, `model` and other `/config` choices on HAYPC; they were
-  restored from `~/.claude/backups/`.
-- **Machine overlay, installed on HAYPC** (2026-09-30, PR #40). A machine's own settings live in
-  `~/.claude/settings.machine.json` (README, "Quickstart"); HAYPC's holds hq's `hq-* *` exclusions,
-  the `tmux-state.sh` hooks and `effortLevel: high`. The sandbox stub block and `stop-ring.sh` now
-  ship from this repo.
-- **Delegation hardening Stage 2 built and installed on HAYPC** (2026-09-30, PRs #35 to #38, merged
-  range `e536dd8..b4a85ae`). It covers the session-wide sandbox, the subagent policy hook, report-check,
-  `gh-public`, and the ledger's `audit` and `sandbox-denials`. `docs/delegation.md` holds the design,
-  the verified facts, the known gaps and the install order. Sandbox behavior on this machine is in
-  memory [[cc-sandbox-linux-facts]].
-- Older (git, the PRs and memory hold the detail): client deck data removed from the tree (PR #28;
+- **Delegation hardening Stage 3: Step 0, A0, A4, A5 and A1, live on HAYPC** (2026-09-30 to
+  10-01; PRs #42 to #46, range `d46449b..ce16b8a`; A1 is PR #48, range `c0a3241..1d09748`).
+  - Named spawns are denied unless their name starts with `team-`.
+  - Teammates are policed by their role (meta.json `customAgentType`).
+  - `delegation-ledger canary` re-verifies enforcement. A SessionStart hook runs the cheap checks
+    and shows a line only when something is due; `delegation-ledger due` shows the last results.
+  - A1: `open` reads liveness from the agent transcript (`in Bash 12 min`, with a `⚠` past the
+    thresholds in `liveness.toml`). The ledger hook keeps a per-agent index for A2 and A3.
+
+  `docs/delegation.md` "Stage 3" holds the findings, the decisions and the test counts.
+- Older (git, the PRs and memory hold the detail): `setup.sh` keeps the live settings' own keys
+  (PR #47, [[dotclaude-setup-install-model]]), the machine overlay `settings.machine.json`
+  (PR #40, README "Quickstart"), delegation Stage 2 (PRs #35 to #38, `docs/delegation.md`,
+  [[cc-sandbox-linux-facts]]), client deck data removed from the tree (PR #28;
   history deliberately left as-is, Hayden's call), Codex `config.toml` merged, not symlinked (PR #27)
   and the Codex CLI integration (both in `docs/codex.md`), session-summary prompt-injection hardening
   (2026-08-24), tab title decoupled from `ai-title` (PR #22,
@@ -41,20 +33,22 @@ stored here).
   CLAUDE.md trigger, `vetting-sources`, `deck-production` S1, and earlier work back to PR #10.
 
 ## In flight
-- **Delegation hardening Stage 3: A1 (per-agent liveness state) is built** on
-  `feat/delegation-a1-liveness` (plan `~/.claude/plans/woolly-jingling-cookie.md`; design in
-  `docs/delegation.md`, "Liveness (A1)"). Unit 233/233; the live `stall` case passed 4/4. It
-  needs no `setup.sh` run: no new hook or settings entry, and `skills/delegation` is linked as
-  a directory, so it goes live when it merges. After the merge, run `delegation-ledger canary`
-  outside the sandbox, in the background; a full run now has 54 checks.
-- **Next: A3 (one watch view)**, then A2 → A6, each on a fresh branch from `main` in a worktree,
-  so the live hooks stay untouched while it is edited. The Stage 3 plan is
-  `~/.claude/plans/lets-move-on-to-refactored-pascal.md`. Its A1 text is superseded by the A1 plan
-  above, and its A4/A5 cadence by `docs/delegation.md`, "The canary and the due checks". Decisions
-  already made: deadlines nudge, then hard-stop; liveness shows in the tmux status bar and a CLI.
-  A3's `watch` and A2's checks read the A1 index (`$XDG_STATE_HOME/dotclaude/agents/<id>.json`),
-  and A2's deadlines go in `policy.toml`, not `liveness.toml`. Before building, run
-  `delegation-ledger due`.
+- **Delegation hardening Stage 3: next is A3 (one watch view)**, then A2 → A6.
+  - Build each one on a fresh branch from `main` in a worktree, so the live hooks stay untouched
+    while it is edited.
+  - **The plans:** Stage 3 is `~/.claude/plans/lets-move-on-to-refactored-pascal.md`. Its A1 text
+    is superseded by `~/.claude/plans/woolly-jingling-cookie.md`, and its A4/A5 cadence by
+    `docs/delegation.md` ("The canary and the due checks").
+  - **Decisions already made:**
+    - deadlines nudge, then hard-stop;
+    - liveness shows in the tmux status bar and a CLI;
+    - A3's `watch` and A2's checks read the A1 index (`$XDG_STATE_HOME/dotclaude/agents/<id>.json`)
+      and the transcript scan (`delegation-ledger`, `scan_transcript`/`claude_state`);
+    - A2's deadlines go in `policy.toml`, not `liveness.toml`;
+    - A2 adds the one PostToolUse hook its nudge needs, and re-adds `PostToolUse` to
+      `CANARY_STRINGS`.
+  - **Before building,** run `delegation-ledger due`. **After building,** run
+    `delegation-ledger canary` outside the sandbox, in the background.
   - **Installing Stage 3 on another machine:** `git pull` in `~/dotclaude`, then `./setup.sh`, both
     outside the sandbox (A4 added a hook and a settings entry). A baseline key still wins over the
     live file's value, so copy `~/.claude/settings.json` first and diff it after.
