@@ -555,6 +555,11 @@ stops. The report path is three tools:
   its schema. ToolSearch only loads schemas, so a tool it loads is still denied (Hayden's call,
   2026-10-01).
 
+`allow` may add tools, but `check_deadline` refuses a list without all three (from a Codex
+review). An empty or misspelled list would otherwise load and deny the handback itself at the stop,
+leaving the agent no way to report. Refused as malformed, the file fails closed for the policed
+tools and keeps the report path open.
+
 The deny brings its own footer instead of stop_and_explain's "rewrite the command", so it reads as
 one message:
 

@@ -742,6 +742,9 @@ class Deadline(Base):
                                       msg=path)
 
 
+REPORT_PATH = 'allow = ["SubagentHandback", "SendMessage", "ToolSearch"]\n'
+
+
 def policy_with_deadline(body):
     """policy.toml's text with its [deadline] table's body replaced, in a temp file."""
     with open(os.path.join(REPO, "skills", "delegation", "policy.toml")) as f:
@@ -763,7 +766,7 @@ class PolicyFile(unittest.TestCase):
                              role)
 
     def test_a_malformed_deadline_table_fails_closed(self):
-        allow = 'allow = ["SubagentHandback", "SendMessage"]\n'
+        allow = REPORT_PATH
         default = "\ndefault = { nudge_min = 30 }"
         bodies = [allow + "default = " + b for b in (
             "{ nudge_min = 0 }", "{ nudge_min = -1 }", '{ nudge_min = "30" }',
@@ -772,7 +775,13 @@ class PolicyFile(unittest.TestCase):
             "{ nudge_min = 30, stop_mins = 90 }", "{ stop_min = 60 }", "30")]
         bodies += [allow + "Explore = { nudge_min = 10 }",  # no default
                    allow + "default = { nudge_min = 30 }\nwriter = { nudge_min = 0 }",
-                   default, 'allow = "SubagentHandback"' + default, "allow = [1]" + default]
+                   default, 'allow = "SubagentHandback"' + default, "allow = [1]" + default,
+                   # An allow list without the whole report path would trap a stopped agent:
+                   # empty, misspelled, or missing any one of the three (Codex review).
+                   "allow = []" + default,
+                   'allow = ["SubagentHandbak", "SendMessage", "ToolSearch"]' + default,
+                   'allow = ["SubagentHandback", "SendMessage"]' + default,
+                   'allow = ["SendMessage", "ToolSearch"]' + default]
         for body in bodies:
             path = policy_with_deadline(body)
             try:
@@ -782,8 +791,7 @@ class PolicyFile(unittest.TestCase):
                 os.remove(path)
 
     def test_fractional_minutes_and_an_explicit_stop_load(self):
-        path = policy_with_deadline('allow = ["SubagentHandback", "SendMessage"]\n'
-                                    "default = { nudge_min = 0.1, stop_min = 0.4 }")
+        path = policy_with_deadline(REPORT_PATH + "default = { nudge_min = 0.1, stop_min = 0.4 }")
         try:
             p = sp.load_policy(path)
         finally:
@@ -791,6 +799,14 @@ class PolicyFile(unittest.TestCase):
         nudge, stop = sp.dc.deadline_for(p, "general-purpose")
         self.assertAlmostEqual(nudge, 6)
         self.assertAlmostEqual(stop, 24)
+
+    def test_an_allow_list_may_add_to_the_report_path(self):
+        path = policy_with_deadline('allow = ["SubagentHandback", "SendMessage", "ToolSearch", '
+                                    '"TaskList"]\ndefault = { nudge_min = 30 }')
+        try:
+            self.assertIn("TaskList", sp.load_policy(path)["deadline"]["allow"])
+        finally:
+            os.remove(path)
 
     def test_a_missing_deadline_table_fails_closed(self):
         with open(os.path.join(REPO, "skills", "delegation", "policy.toml")) as f:

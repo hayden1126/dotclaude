@@ -33,11 +33,6 @@ stored here).
 ## In flight
 - **Delegation hardening Stage 3: next is A6 (monthly audit and GP share).** A2 is done, and the
   full canary is green on 2.1.287 (65/65; counts and timing in `docs/delegation.md` "Tests").
-  - **First,** once the teammate-check PR (branch `docs/a2-live`) merges: `git pull` in
-    `~/dotclaude`, then `delegation-ledger canary` in the background. That PR changed the deadline
-    hooks (ToolSearch in `allow`, the message wording), so the canary must go 65/65 again. Then
-    ask Hayden before removing the worktree `.claude/worktrees/a2-live` (outside the sandbox) and
-    the local branch `docs/a2-live`.
   - **Before building,** run `delegation-ledger due`. Its "reports failing the contract: 3" is
     three known pre-fix rows from 2026-09-30, gone from the window on 2026-10-07.
   - **A6's spec** is the Stage 3 plan's A6 section: `audit --monthly` computed from the ledger and
@@ -67,9 +62,10 @@ stored here).
 - **Codex setup shared with a friend** (Hayden's ask, 2026-09-29). The share page is BUILT and private:
   https://claude.ai/artifact/KWwrPkLsbMUi7Ugjfskqsz (source was a session scratchpad; republish by that
   URL). It links only four clean skills (coding-practices, research-discipline, ui-alignment,
-  vetting-sources) and tells the friend never to run `setup.sh`. Before Hayden shares it: run
-  `/codex:review` end to end once (never done since PR #24; the page tells
-  the friend it works). Separate, Hayden-side: wire Codex skills into
+  vetting-sources) and tells the friend never to run `setup.sh`. It is ready to share:
+  `/codex:review` ran end to end on 2026-10-01 (a review of A2; its one finding is fixed on
+  branch `fix/deadline-allow-floor`). The first try hit OpenAI's transient "model at capacity" on
+  `gpt-5.6-sol`; a retry worked. Separate, Hayden-side: wire Codex skills into
   `setup.sh` (today `~/.codex/skills/{coding-practices,frontend-ui-discipline}` are hand-made
   symlinks, so a fresh setup gives Codex no skills; `writing-voice` is Hayden's own voice, exclude).
 - **`deck-production` blocks S2-S6** (plan: `~/.claude/plans/explore-our-entire-workflow-bright-shamir.md`).
