@@ -45,7 +45,8 @@ worktree_root = ["writer"]
 # minutes.
 # `allow` is the report path: the handback, SendMessage (how a teammate reports, and how the lead
 # resumes), and ToolSearch, because SendMessage is deferred for a teammate and must be loaded
-# first. ToolSearch only loads schemas, so a tool it loads is still denied.
+# first. ToolSearch only loads schemas, so a tool it loads is still denied. `allow` may add
+# tools, but a list without all three is refused as malformed.
 allow = ["SubagentHandback", "SendMessage", "ToolSearch"]
 default = { nudge_min = 30 }
 Explore = { nudge_min = 10 }

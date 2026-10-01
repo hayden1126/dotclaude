@@ -150,17 +150,26 @@ def activation_age(entry, now):
 
 
 DEADLINE_KEYS = {"nudge_min", "stop_min"}
+# The report path a stopped agent needs: the handback, SendMessage (a teammate's report), and
+# ToolSearch to load SendMessage, which is deferred for a teammate. `allow` may add to it.
+REPORT_PATH = ("SubagentHandback", "SendMessage", "ToolSearch")
 
 
 def check_deadline(table):
     """Raise ValueError unless policy.toml's [deadline] has the shape both deadline hooks rely
-    on: `allow` a list of tool names, a `default` budget, and every budget
-    { nudge_min = N } with an optional stop_min past it, in positive minutes."""
+    on: `allow` a list of tool names that keeps the whole REPORT_PATH, a `default` budget, and
+    every budget { nudge_min = N } with an optional stop_min past it, in positive minutes. An
+    allow list without the report path would leave a stopped agent no way to report, so it is
+    malformed, and a malformed policy keeps the report path open."""
     if not isinstance(table, dict):
         raise ValueError("policy.toml: missing table [deadline]")
     allow = table.get("allow")
     if not isinstance(allow, list) or not all(isinstance(t, str) for t in allow):
         raise ValueError("policy.toml: [deadline] allow must be a list of tool names")
+    missing = [t for t in REPORT_PATH if t not in allow]
+    if missing:
+        raise ValueError("policy.toml: [deadline] allow lacks the report path: "
+                         + ", ".join(missing))
     if "default" not in table:
         raise ValueError("policy.toml: [deadline] lacks a default budget")
     for role, b in table.items():
