@@ -22,11 +22,15 @@ Contract:
   handling still applies.
 - A denial prints a PreToolUse deny whose reason names a rule and an intent, and appends a
   `policy` row to the ledger.
+- Past the role's stop budget for this activation (policy.toml [deadline]), every tool except
+  the `allow` list is denied, policed or not. delegation-ledger's PostToolUse hook nudged the
+  agent before that.
 
 Fails closed for the tools it polices (shell, file, MCP): an exception, a malformed policy.toml,
 or the 5-second alarm becomes a deny. That alarm fires before Claude Code's own hook timeout,
 which would let the call through. Other tools (SubagentHandback, SendMessage, ...) are allowed
-on error, so a policy bug can't swallow a report.
+on error, so a policy bug can't swallow a report. The deadline check alone fails open: with no
+readable liveness index there is no clock, so there is no deadline.
 
 Command parsing uses Parable (vendor/parable.py, MIT, vendored verbatim). The rule set and the
 intent vocabulary follow cc-safety-net (github.com/kenryu42/cc-safety-net, MIT), reimplemented.
@@ -46,8 +50,6 @@ sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(HERE, "vendor"))
 import delegation_common as dc  # noqa: E402
 
-POLICY_PATH = os.environ.get("DELEGATION_POLICY") or os.path.join(os.path.dirname(HERE),
-                                                                  "policy.toml")
 SHELL_TOOLS = {"Bash", "Monitor", "PowerShell"}
 WRITE_TOOLS = {"Edit", "Write", "NotebookEdit", "MultiEdit"}
 READ_TOOLS = {"Read", "Grep", "Glob", "LS", "NotebookRead"}
@@ -56,9 +58,12 @@ INTENTS = ("hard_stop", "use_alternative", "scope_down", "manual_only", "stop_an
 
 
 class Deny(Exception):
-    def __init__(self, rule, intent, message):
+    """A denial. `footer` replaces the intent's footer from [intents] when the rule's own
+    message already says what to do next (the deadline)."""
+
+    def __init__(self, rule, intent, message, footer=None):
         super().__init__(message)
-        self.rule, self.intent, self.message = rule, intent, message
+        self.rule, self.intent, self.message, self.footer = rule, intent, message, footer
 
 
 def policed(tool):
@@ -68,11 +73,11 @@ def policed(tool):
 
 # ---------------------------------------------------------------- policy and settings
 
-def load_policy(path=POLICY_PATH):
-    with open(path, "rb") as f:
+def load_policy(path=None):
+    with open(path or dc.policy_path(), "rb") as f:
         p = tomllib.load(f)
-    for table in ("intents", "roles", "shell", "git", "curl", "wget", "rm", "protect",
-                  "researcher", "mcp"):
+    for table in ("intents", "roles", "deadline", "shell", "git", "curl", "wget", "rm",
+                  "protect", "researcher", "mcp"):
         if not isinstance(p.get(table), dict):
             raise ValueError(f"policy.toml: missing table [{table}]")
     missing = [i for i in INTENTS if not p["intents"].get(i)]
@@ -81,6 +86,7 @@ def load_policy(path=POLICY_PATH):
     for intent in p["git"]["denied"].values():
         if intent not in INTENTS:
             raise ValueError(f"policy.toml: unknown intent {intent!r} in [git].denied")
+    dc.check_deadline(p["deadline"])
     return p
 
 
@@ -294,13 +300,14 @@ class Analyzer:
                 pass
         return [d for d in dict.fromkeys(dirs) if d]
 
-    def deny(self, rule, intent, message):
-        raise Deny(rule, intent, message)
+    def deny(self, rule, intent, message, footer=None):
+        raise Deny(rule, intent, message, footer)
 
     # ------------------------------------------------ entry
 
     def decide(self):
         tool = self.data.get("tool_name") or ""
+        self.deadline(tool)
         ti = self.data.get("tool_input")
         if not isinstance(ti, dict):
             if policed(tool):
@@ -323,6 +330,26 @@ class Analyzer:
             if not any(fnmatch.fnmatchcase(tool, g) for g in self.p["mcp"]["read_tools"]):
                 self.deny("mcp-write", "manual_only",
                           f"{tool} is not on the read-only MCP list (policy.toml [mcp])")
+
+    def deadline(self, tool):
+        """Past the role's stop budget for this activation, deny every tool but [deadline]
+        allow, policed or not: a web-looping agent must stop too. Fails open: an unreadable
+        index, or any error here, means no deadline rather than a policy-error."""
+        allow = self.p["deadline"]["allow"]
+        if tool in allow:
+            return
+        try:
+            age = dc.activation_age(dc.read_agent_state(dc.norm_id(self.data.get("agent_id"))),
+                                    time.time())
+            _, stop_s = dc.deadline_for(self.p, self.agent_type)
+        except Exception:  # noqa: BLE001  no clock, no deadline
+            return
+        if age is not None and age >= stop_s:
+            self.deny("deadline", "stop_and_explain",
+                      f"this activation has run {dc.minutes_text(age)} min, past the "
+                      f"{dc.minutes_text(stop_s)} min budget for {self.agent_type}",
+                      footer=f"Only {' and '.join(allow)} are allowed now. Hand back a `partial` "
+                             "report naming what is done and what is left.")
 
     # ------------------------------------------------ file tools
 
@@ -1117,7 +1144,8 @@ class Analyzer:
 # ---------------------------------------------------------------- main
 
 def deny_output(d, policy):
-    footer = (policy or {}).get("intents", {}).get(d.intent, "")
+    footer = d.footer if d.footer is not None else \
+        (policy or {}).get("intents", {}).get(d.intent, "")
     return json.dumps({"hookSpecificOutput": {
         "hookEventName": "PreToolUse",
         "permissionDecision": "deny",
@@ -1128,9 +1156,8 @@ def deny_output(d, policy):
 
 def log_deny(data, d):
     try:
-        aid = str(data.get("agent_id") or "")
         dc.append_row({"ts": dc.now_iso(), "runner": "claude", "event": "policy",
-                       "id": aid[len("agent-"):] if aid.startswith("agent-") else aid,
+                       "id": dc.norm_id(data.get("agent_id")),
                        "agent_type": dc.agent_role(data), "session_id": data.get("session_id"),
                        "tool": data.get("tool_name"), "rule": d.rule, "intent": d.intent})
     except Exception:

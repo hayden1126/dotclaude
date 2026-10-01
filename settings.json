@@ -123,6 +123,18 @@
         ]
       }
     ],
+    "PostToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "i=$(cat); case \"$i\" in *'\"agent_id\"'*) printf '%s' \"$i\" | bash \"$HOME/.claude/hooks/delegation-ledger.sh\" ;; esac",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
     "SessionStart": [
       {
         "matcher": "startup|resume",

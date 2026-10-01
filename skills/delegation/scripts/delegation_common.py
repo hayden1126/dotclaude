@@ -5,14 +5,15 @@ exit codes, and whether a report validated. Briefs and outputs stay in the trans
 and rollouts they already live in.
 
 Beside it, agents/<id>.json is the per-agent liveness index: the latest state of each Claude
-agent, rewritten at its starts and stops, so a reader gets one agent's state without folding
-the whole ledger.
+agent, rewritten at its starts and stops (and once per activation by the deadline nudge), so a
+reader gets one agent's state without folding the whole ledger.
 """
 import contextlib
 import datetime
 import fcntl
 import glob
 import json
+import math
 import os
 import re
 import tempfile
@@ -20,6 +21,24 @@ import time
 
 HERE = os.path.dirname(os.path.realpath(__file__))
 SCHEMA_PATH = os.path.join(os.path.dirname(HERE), "report.schema.json")
+
+
+def policy_path():
+    """policy.toml, or $DELEGATION_POLICY (the live harness and the tests point it elsewhere)."""
+    return os.environ.get("DELEGATION_POLICY") or os.path.join(os.path.dirname(HERE),
+                                                               "policy.toml")
+
+
+def norm_id(agent_id):
+    """An agent id as the ledger and the index key it: without Claude Code's `agent-` prefix."""
+    s = str(agent_id or "")
+    return s[len("agent-"):] if s.startswith("agent-") else s
+
+
+def is_positive(v):
+    """A positive, finite int or float. TOML allows inf and nan, and a bool is not a number."""
+    return (not isinstance(v, bool) and isinstance(v, (int, float)) and math.isfinite(v)
+            and v > 0)
 
 
 def now_iso():
@@ -107,7 +126,8 @@ def update_agent_state(aid, fn):
 
 def prune_agent_states(days=7):
     """Remove index files (and temp files a crash left) whose mtime is over `days` old. They
-    are program-owned: an agent's file is written only at its starts and stops."""
+    are program-owned: only the ledger hook writes an agent's file, at its starts and stops
+    and at its deadline nudge."""
     cutoff = time.time() - days * 86400
     with _agents_lock():
         for p in (glob.glob(os.path.join(agents_dir(), "*.json"))
@@ -115,6 +135,55 @@ def prune_agent_states(days=7):
             with contextlib.suppress(OSError):
                 if os.path.getmtime(p) < cutoff:
                     os.remove(p)
+
+
+def activation_age(entry, now):
+    """Seconds the agent's current activation has run, from its index entry's
+    activation_start; None when the entry is empty (the file is missing or unparsable) or its
+    start doesn't parse. Both deadline hooks fail open on None."""
+    try:
+        return now - parse_iso(entry["activation_start"]).timestamp()
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+DEADLINE_KEYS = {"nudge_min", "stop_min"}
+
+
+def check_deadline(table):
+    """Raise ValueError unless policy.toml's [deadline] has the shape both deadline hooks rely
+    on: `allow` a list of tool names, a `default` budget, and every budget
+    { nudge_min = N } with an optional stop_min past it, in positive minutes."""
+    if not isinstance(table, dict):
+        raise ValueError("policy.toml: missing table [deadline]")
+    allow = table.get("allow")
+    if not isinstance(allow, list) or not all(isinstance(t, str) for t in allow):
+        raise ValueError("policy.toml: [deadline] allow must be a list of tool names")
+    if "default" not in table:
+        raise ValueError("policy.toml: [deadline] lacks a default budget")
+    for role, b in table.items():
+        if role == "allow":
+            continue
+        if (not isinstance(b, dict) or set(b) - DEADLINE_KEYS
+                or not is_positive(b.get("nudge_min"))
+                or ("stop_min" in b and not is_positive(b["stop_min"]))):
+            raise ValueError(f"policy.toml: [deadline] {role} must be {{ nudge_min = N }} with "
+                             "an optional stop_min, in positive minutes")
+        if b.get("stop_min", 2 * b["nudge_min"]) <= b["nudge_min"]:
+            raise ValueError(f"policy.toml: [deadline] {role}: stop_min must be past nudge_min")
+
+
+def deadline_for(policy, role):
+    """(nudge_s, stop_s) for a role: its own [deadline] budget, else `default`. stop_min
+    defaults to twice nudge_min."""
+    table = policy["deadline"]
+    b = table[role] if role in table and role != "allow" else table["default"]
+    return b["nudge_min"] * 60, b.get("stop_min", 2 * b["nudge_min"]) * 60
+
+
+def minutes_text(seconds):
+    """Minutes as a deadline message prints them: 61.2, 0.4, 125."""
+    return f"{round(seconds / 60, 1):g}"
 
 
 def read_rows(tail=None):
@@ -141,15 +210,19 @@ def read_rows(tail=None):
     return rows
 
 
+NOT_LIFECYCLE = ("policy", "nudge")
+
+
 def fold(rows):
     """Latest row per (runner, id), plus the first-seen timestamp. SubagentStart fires on
     every teammate message, so an id can have many start/stop pairs; the latest wins.
-    subagent-policy's `policy` rows are skipped here (tail and audit show them)."""
+    subagent-policy's `policy` rows and the deadline's `nudge` rows are skipped here (tail
+    shows them, and audit counts the denials)."""
     out = {}
     for r in rows:
         key = (r.get("runner"), r.get("id"))
-        if key[1] is None or r.get("event") == "policy":
-            continue  # a policy row records a denial, not a lifecycle event
+        if key[1] is None or r.get("event") in NOT_LIFECYCLE:
+            continue  # a denial or a nudge, not a lifecycle event
         first = out.get(key, {}).get("first_ts", r.get("ts"))
         merged = dict(out.get(key, {}))
         merged.update(r)  # None overrides too: a clean resume must clear an old error
@@ -224,10 +297,9 @@ def report_check(text):
 def agent_meta(data):
     """The agent's meta.json, which sits beside its transcript under the parent session's
     subagents/ directory, or {} when there is none."""
-    tp, aid = data.get("transcript_path") or "", str(data.get("agent_id") or "")
+    tp, aid = data.get("transcript_path") or "", norm_id(data.get("agent_id"))
     if not tp or not aid:
         return {}
-    aid = aid[len("agent-"):] if aid.startswith("agent-") else aid
     base = tp[:-len(".jsonl")] if tp.endswith(".jsonl") else tp
     try:
         with open(os.path.join(base, "subagents", f"agent-{aid}.meta.json")) as f:

@@ -29,6 +29,26 @@ allowlisted_shell = ["researcher"]
 # Roles confined to their worktree (root = meta.json worktreePath).
 worktree_root = ["writer"]
 
+[deadline]
+# A time budget per activation, in minutes (fractions allowed). An activation starts at each
+# SubagentStart: the spawn, a SendMessage resume, or a teammate's next message. So a resume
+# gets a fresh budget. The clock is the liveness index's activation_start
+# ($XDG_STATE_HOME/dotclaude/agents/<id>.json); an agent with no index has no deadline.
+# - Past nudge_min, the agent's next successful tool call gets one reminder to report
+#   (delegation-ledger's PostToolUse hook).
+# - Past stop_min (default: twice nudge_min), every tool except `allow` is denied with
+#   stop_and_explain, so the agent can still hand back a partial report.
+# Checks run between calls, so a long call that is already running finishes first. The main
+# thread is exempt. A role without its own entry, such as general-purpose, a Workflow agent or a
+# plugin type, gets `default`. The 2026-09-29 eval measured subagents at p50 3.8 and p90 13.2
+# minutes.
+allow = ["SubagentHandback", "SendMessage"]
+default = { nudge_min = 30 }
+Explore = { nudge_min = 10 }
+researcher = { nudge_min = 20 }
+reviewer = { nudge_min = 20 }
+writer = { nudge_min = 30 }
+
 [shell]
 # Command words that are not programs on PATH but are fine to run. Anything else must resolve
 # on PATH or be a path to an executable, which is what turns an alias (gp = git push) or a shell
@@ -126,7 +146,10 @@ write_denied = ["~/.claude", "~/.gitconfig", "~/.config/git", "~/.zshrc", "~/.zs
   "~/.zprofile", "~/.zlogin", "~/.bashrc", "~/.bash_profile", "~/.profile", "~/.oh-my-zsh",
   "~/.config/gh", "~/.ssh", "~/.local/bin",
   "~/dotclaude/settings.json", "~/dotclaude/hooks", "~/dotclaude/skills", "~/dotclaude/agents",
-  "~/dotclaude/CLAUDE.md", "~/dotclaude/codex", "~/.codex"]
+  "~/dotclaude/CLAUDE.md", "~/dotclaude/codex", "~/.codex",
+  # The ledger and the liveness index: an agent that rewrote its own index could reset its
+  # deadline clock. The sandbox already keeps Bash out; this covers the file tools.
+  "~/.local/state/dotclaude"]
 # Relative to the agent's root: its own project config and git internals.
 root_write_denied = [".claude", ".mcp.json", ".git/hooks", ".git/config", ".git/info"]
 root_write_allowed = [".claude/worktrees"]

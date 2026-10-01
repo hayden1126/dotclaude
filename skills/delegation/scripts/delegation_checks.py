@@ -58,6 +58,7 @@ CANARY_STRINGS = [
     ("PreToolUse", "settings.json: the policy hook, the spawn guard, the report check"),
     ("SubagentStart", "settings.json: delegation-ledger"),
     ("SubagentStop", "settings.json: delegation-ledger, report-check"),
+    ("PostToolUse", "settings.json: delegation-ledger hook (deadline nudge)"),
     ("SessionStart", "settings.json: delegation-due"),
     ("SubagentHandback", "report-check; delegation-ledger handback_message"),
     ("agent_id", "the policy hook's filter in settings.json"),
