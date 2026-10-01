@@ -93,6 +93,52 @@ class MergeCli(unittest.TestCase):
             want = f.read()
         self.assertEqual(run(MERGE, os.path.join(REPO, "settings.json")).stdout, want)
 
+    def live(self, obj_or_text):
+        path = os.path.join(self.dir.name, "live.json")
+        with open(path, "w") as f:
+            f.write(obj_or_text if isinstance(obj_or_text, str) else json.dumps(obj_or_text))
+        return path
+
+    def test_live_only_keys_are_kept(self):
+        # The 2026-09-30 install: setup.sh dropped autoMode and model from the live file.
+        live = self.live({"a": [9], "autoMode": {"soft_deny": ["x"]}, "model": "opus"})
+        r = run(MERGE, self.base, os.path.join(self.dir.name, "absent.json"), live)
+        self.assertEqual(r.returncode, 0)
+        self.assertEqual(json.loads(r.stdout),
+                         {"a": [1], "autoMode": {"soft_deny": ["x"]}, "model": "opus"})
+        self.assertIn("kept the live-only keys autoMode, model", r.stderr)
+
+    def test_a_baseline_key_still_wins_and_the_reset_is_named(self):
+        with open(self.base, "w") as f:
+            f.write('{"effortLevel": "medium"}\n')
+        r = run(MERGE, self.base, self.overlay("{}"), self.live({"effortLevel": "high"}))
+        self.assertEqual(json.loads(r.stdout), {"effortLevel": "medium"})
+        self.assertIn("effortLevel ('high' -> 'medium')", r.stderr)
+        r = run(MERGE, self.base, self.overlay('{"effortLevel": "high"}'),
+                self.live({"effortLevel": "high"}))
+        self.assertEqual((json.loads(r.stdout), r.stderr), ({"effortLevel": "high"}, ""))
+
+    def test_an_overlay_key_is_not_duplicated_from_live(self):
+        r = run(MERGE, self.base, self.overlay('{"b": 2}'), self.live({"b": 1}))
+        self.assertEqual(json.loads(r.stdout), {"a": [1], "b": 2})
+
+    def test_nothing_to_keep_is_still_verbatim(self):
+        r = run(MERGE, self.base, os.path.join(self.dir.name, "absent.json"), self.live({"a": [9]}))
+        self.assertEqual(r.stdout, '{"a":   [1]}\n')
+        r = run(MERGE, self.base, os.path.join(self.dir.name, "absent.json"),
+                os.path.join(self.dir.name, "no-live.json"))
+        self.assertEqual(r.stdout, '{"a":   [1]}\n')
+
+    def test_an_empty_live_file_counts_as_none(self):
+        r = run(MERGE, self.base, os.path.join(self.dir.name, "absent.json"), self.live(""))
+        self.assertEqual((r.returncode, r.stdout), (0, '{"a":   [1]}\n'))
+
+    def test_a_bad_live_file_fails_and_prints_nothing(self):
+        for text in ("{not json", "[1, 2]"):
+            with self.subTest(text):
+                r = run(MERGE, self.base, self.overlay("{}"), self.live(text))
+                self.assertEqual((r.returncode, r.stdout), (1, ""))
+
 
 class IgnoreBlock(unittest.TestCase):
     def setUp(self):
@@ -147,6 +193,7 @@ class SetupWiring(unittest.TestCase):
         with open(os.path.join(REPO, "setup.sh")) as f:
             text = f.read()
         self.assertIn('merge-settings.py" "$REPO_DIR/settings.json" "$CLAUDE_DIR/settings.machine.json"', text)
+        self.assertIn('"$CLAUDE_DIR/settings.json" > "$MERGED_SETTINGS"', text)  # live keys kept
         self.assertIn('copy_managed "$MERGED_SETTINGS" "$CLAUDE_DIR/settings.json"', text)
         self.assertNotIn('copy_managed "$REPO_DIR/settings.json"', text)
         self.assertIn('git/install-ignore.py" "$REPO_DIR/git/sandbox-stubs.ignore"', text)

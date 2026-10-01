@@ -62,12 +62,15 @@ copy_managed() {
 # What belongs to one machine (hooks for its own scripts, excludedCommands for its own
 # tools) goes in settings.machine.json beside the live copy, never in this repo, and the
 # copy is the baseline with that overlay merged in (merge-settings.py has the rule).
-# Without an overlay the baseline is copied byte for byte.
+# Top-level keys only the live copy sets (autoMode, model and the other /config choices) are
+# kept; a live value the baseline overrides is named on stderr. Without an overlay or such a
+# key, the baseline is copied byte for byte.
 MERGED_SETTINGS="$(mktemp)"
 trap 'rm -f "$MERGED_SETTINGS"' EXIT
 chmod 644 "$MERGED_SETTINGS"  # mktemp's 0600 would carry over to the installed copy
 python3 "$REPO_DIR/merge-settings.py" "$REPO_DIR/settings.json" "$CLAUDE_DIR/settings.machine.json" \
-  > "$MERGED_SETTINGS" || { warn "settings.machine.json is not valid JSON; settings.json left unchanged"; exit 1; }
+  "$CLAUDE_DIR/settings.json" > "$MERGED_SETTINGS" \
+  || { warn "settings.machine.json or the live settings.json is not valid JSON; settings.json left unchanged"; exit 1; }
 copy_managed "$MERGED_SETTINGS" "$CLAUDE_DIR/settings.json"
 link "$REPO_DIR/CLAUDE.md"       "$CLAUDE_DIR/CLAUDE.md"
 link "$REPO_DIR/notify-toast.ps1" "$CLAUDE_DIR/notify-toast.ps1"

@@ -555,8 +555,9 @@ A2 (deadline nudge, then hard stop), A6 (monthly audit). Step 0, A0, A4 and A5 a
 ## Installing on a machine that is already set up
 
 `setup.sh` links everything below. It also **resets** `~/.claude/settings.json` to this repo's
-baseline, and the live file may hold hooks that aren't in the baseline (for example
-`tmux-state.sh`). On a live machine, do it by hand, **in this order**. The spawn guard and the policy
+baseline plus `settings.machine.json`, keeping only the top-level keys the baseline doesn't set (see
+the README). So a hook that is only in the live file (for example `tmux-state.sh`) is lost unless it
+is in the overlay. On a machine without that overlay, do it by hand, **in this order**. The spawn guard and the policy
 hook fail closed, so wiring a hook before its script is reachable blocks every delegated call.
 
 1. **Links.**

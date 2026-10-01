@@ -47,16 +47,18 @@ stored here).
     and both quoted section 1 verbatim at the end.
 
   Commit range `d46449b..00b7a31`.
-- **Delegation hardening Stage 3: A4 and A5** (branch `feat/delegation-stage3-a4a5`; the design and
-  the cadence decision are in `docs/delegation.md`, "The canary and the due checks"):
-  - `delegation-ledger canary [--quick]`;
+- **Delegation hardening Stage 3: A4 and A5 merged and installed on HAYPC** (PR #46, 2026-09-30;
+  the design and the cadence decision are in `docs/delegation.md`, "The canary and the due checks"):
+  - `delegation-ledger canary [--quick]`. The first full run, on 2.1.286, was green: 52/52;
   - the SessionStart `delegation-due.sh` hook, which runs the quick canary itself on a new Claude
     Code version and `audit` daily, and shows a line only when something is due;
   - dated reminders in `skills/delegation/due.toml`.
 
-  The install adds a hook and a settings entry, so on a machine it is `git pull` in `~/dotclaude`
-  **and** `./setup.sh`, both outside the sandbox. Then check that the live settings diff is only the
-  SessionStart entry.
+  On another machine the install is `git pull` in `~/dotclaude`, then `./setup.sh`, both outside the
+  sandbox (a new hook and a settings entry). `setup.sh` now keeps the live file's top-level keys the
+  baseline doesn't set, but a baseline key still wins: copy the live file first and diff it after.
+  The 2026-09-30 run on HAYPC, before that fix, dropped `autoMode`, `model` and other `/config`
+  choices; they were restored from `~/.claude/backups/`.
 
   **Next: A1 (per-agent liveness state)**, then A3 → A2 → A6, each on a fresh branch from `main` in a
   worktree, so the live hooks stay untouched while it is edited. Decisions already made: deadlines

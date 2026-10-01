@@ -31,11 +31,14 @@ symlinked, because the Claude Code runtime rewrites it (persisting managed keys 
 `extraKnownMarketplaces`). A symlink would push that churn back into the repo; the copy keeps the
 repo file as a curated baseline while the runtime owns its own copy.
 
-Because each run replaces that copy, anything added to it by hand is lost. Settings that belong to one
-machine, such as hooks for its own scripts or `sandbox.excludedCommands` for its own tools, go in
-`~/.claude/settings.machine.json` instead. It isn't in this repo; `setup.sh` installs the baseline with
-it merged in. Objects merge key by key, lists append (skipping items already there), and any other
-value replaces the baseline's (`merge-settings.py`).
+Each run replaces that copy, so a value added to a key the baseline sets is lost. Settings that belong
+to one machine, such as hooks for its own scripts or `sandbox.excludedCommands` for its own tools, go
+in `~/.claude/settings.machine.json` instead. It isn't in this repo; `setup.sh` installs the baseline
+with it merged in. Objects merge key by key, lists append (skipping items already there), and any
+other value replaces the baseline's (`merge-settings.py`). Top-level keys only the live copy sets
+(what `/config`, `/model` and auto mode write, such as `autoMode` and `model`) are kept. A live value
+the baseline overrides, such as `effortLevel`, is named when `setup.sh` runs; put it in the overlay
+to keep it.
 
 ## What's in here
 
