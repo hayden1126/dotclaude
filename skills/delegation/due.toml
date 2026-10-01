@@ -1,0 +1,15 @@
+# Dated reminders for delegation upkeep, read by `delegation-ledger due`.
+#
+# From its date on, each item is printed at every session start until it is removed from this
+# file. Remove it in the same change as the work it asks for. This file is separate from
+# policy.toml on purpose: the policy hook fails closed on a malformed policy.toml, and a typo
+# in a reminder must never block a delegated agent. A malformed due.toml only silences the
+# reminders (the error goes to delegation-ledger.err, and `delegation-ledger due` names it).
+#
+# [[item]]
+# date = 2026-01-31          # a TOML date, no quotes
+# do = "What to run, and what to change once it has run."
+
+[[item]]
+date = 2026-10-07
+do = "Run `delegation-ledger sandbox-denials --days 7` and add the hosts that were actually needed to sandbox.network.allowedDomains in settings.json, then remove this item."

@@ -43,6 +43,8 @@ Each layer covers what the others can't.
    - `audit` flags a hook that stopped seeing agents, and a writer run that coincided with a
      main-checkout change.
    - `sandbox-denials` lists what the sandbox refused.
+   - The canary re-verifies all of this on a new Claude Code version, and a SessionStart check
+     runs the cheap checks itself and reminds Hayden of the rest ("Stage 3", A4 and A5).
 
 | Actor | Sandbox | Policy hook | Report check |
 |---|---|---|---|
@@ -66,6 +68,7 @@ Each layer covers what the others can't.
 | Subagent policy | `hooks/subagent-policy.sh`, `skills/delegation/scripts/subagent-policy`, `skills/delegation/policy.toml` | Enforces: see "Subagent policy" below. Fails closed for the tools it polices |
 | Report check | `hooks/report-check.sh`, `skills/delegation/scripts/report-check` | Enforces acceptance: a schema-invalid report is sent back twice at most. Fails open |
 | Ledger | `hooks/delegation-ledger.sh`, `skills/delegation/scripts/delegation-ledger` | Observes: start and stop rows (`agent_type` is the resolved role; a teammate adds `name` and `teammate`), `report_ok`, denial rows, the main-checkout hash for a worktree agent; `audit`; `sandbox-denials`. Fails open |
+| Canary and due checks | `hooks/delegation-due.sh`, `skills/delegation/scripts/delegation_checks.py`, `skills/delegation/due.toml` | Observes: `delegation-ledger canary` re-verifies enforcement on this Claude Code version; `due` runs the cheap checks at session start and shows Hayden what needs him. Fails open |
 | Public GitHub client | `skills/delegation/scripts/gh-public` | GET-only access to api.github.com for delegated agents, optionally with a public-read token |
 | Brief and report | `skills/delegation/BRIEF.md`, `report.schema.json` | Persuades (the brief); checks (the schema) |
 | Codex wrapper | `skills/delegation/scripts/codex-delegate` | Enforces: model gate, sandbox, memory cap (via systemd-run when available, otherwise a warning), timeout, schema, and a recursive model audit |
@@ -225,8 +228,8 @@ from 60 to 5,000 requests an hour.
 ## Stage 3
 
 Stage 3 makes the setup check itself instead of relying on someone remembering. It runs in steps,
-Step 0 and then A0 to A6, planned in `~/.claude/plans/lets-move-on-to-refactored-pascal.md`. Step 0
-and A0 are done.
+Step 0 and then A0 to A6, planned in `~/.claude/plans/lets-move-on-to-refactored-pascal.md`. Step 0,
+A0, A4 and A5 are done.
 
 **Step 0** came first because everything after it rests on assumptions Stage 2 made but never
 tested live. It is four probes:
@@ -242,8 +245,8 @@ Running them also turned up four bugs that no probe targeted.
 The probes:
 - **P1: Workflow agents are policed.** In one probe run, a Workflow agent's hook input carried
   `agent_id` (with `agent_type: "workflow-subagent"`), and the policy denied its `git push`. That
-  is one run, not a proof; the `workflow` case in the live harness re-runs it, and the canary (A5)
-  will run it on every upgrade.
+  is one run, not a proof; the `workflow` case in the live harness re-runs it, and so does every
+  full canary run (A5).
 - **P2: the stall timer doesn't catch an agent inside one long tool call.** A 100-second call
   finished under a 45-second timer. So liveness (A1) must track how long a tool has been running,
   not only the time since the last event.
@@ -303,6 +306,67 @@ the accidental path, not the deliberate one. The denial (intent `use_alternative
 name and SendMessage the returned id. It is recorded as a `named-spawn` policy row, so the monthly
 audit can tell whether the guard is fighting real needs. SKILL §1b says when a team earns the
 prefix.
+
+### The canary and the due checks (A4, A5)
+
+Stage 2's facts were verified on 2.1.285, and the machine was on 2.1.286 before anyone noticed.
+Our enforcement leans on Claude Code internals that change without notice, and a change fails
+silently:
+- the policy hook fires only when hook input contains `"agent_id"`;
+- a teammate's role sits in meta.json's `customAgentType`;
+- a settings value of the wrong type is ignored.
+
+Upgrades come almost daily here (2.1.284 to 2.1.286 landed in three days). So a check that waits
+for someone to remember doesn't happen, and a full live run on every upgrade would cost about 15
+sonnet sessions a day. The checks therefore split by cost (Hayden's call, 2026-09-30):
+
+| Check | What it runs | When |
+|---|---|---|
+| Quick canary (`canary --quick`, about 20 s, no model calls) | the unit suites; `claude sandbox status` (the sandbox on, Bash auto-allow off); 19 strings our hooks read, searched in the `claude` binary | by itself, in the background, on the first session of a new version |
+| Audit (`audit`) | the enforcement audit above, over the window since the last one | by itself, once a day |
+| Full canary (`canary`) | the quick tier, then the whole live harness (`run.py --runner claude`, all stages) | a reminder, when the version has moved and the last green full run is 7 or more days old, and after a failed run until one passes |
+| Dated items (`skills/delegation/due.toml`) | whatever the item says | a reminder from its date on, until the item is removed |
+
+**How it runs.** `hooks/delegation-due.sh` runs `delegation-ledger due --hook` at SessionStart
+(`startup` and `resume`) in about 50 ms, and fails open:
+- It reads `canary.json`, `audit.json` and `due.toml`.
+- It starts the cheap checks as a detached job, so the session doesn't wait for them.
+- It prints a line only when something needs Hayden: a failed check, a due full run, unseen audit
+  warnings, or a dated item.
+- The line goes out as `systemMessage`, which Claude Code shows to the user and the model never
+  sees, so an upkeep note doesn't steer an unrelated session.
+- A headless `claude -p` session (`CLAUDE_CODE_SESSION_ATTENDED=0`) still starts the cheap checks,
+  but prints nothing and leaves the audit warnings unseen, since nobody reads its screen.
+
+`delegation-ledger due` prints the same state on demand.
+
+**It can't go quiet.** Anything that would stop the checks becomes a line of its own:
+- a version `claude --version` doesn't print;
+- a malformed `due.toml`;
+- a crashing audit;
+- a full run that failed. That one stays until a later run passes, even across upgrades.
+
+State files of the wrong shape are read as empty, so they can't silence the rest. A live run
+that reports fewer checks than the last green one isn't green either (`--accept-fewer` accepts a
+deliberate cut).
+
+**No audit gaps.** The daily audit covers the time since the last one. A narrower manual run
+doesn't move that mark, so no stretch goes unaudited. Warnings nobody has seen yet are kept until
+a session start shows them. `audit` pairs each agent's start and stop across the window edge, so a
+writer that ran over an audit boundary is still compared.
+
+**Running the full tier.** It refuses to run inside the sandbox, because `claude -p` needs the
+credentials the sandbox hides. The first real run (2.1.286, 2026-09-30) passed 52 of 52 checks in
+about 5 minutes. A slow run can pass the Bash tool's 10-minute foreground limit, so the lead runs
+it in the background.
+
+**What a string check proves.** Not much, either way:
+- A missing string means an upgrade renamed something we read, and that is worth stopping for.
+- A present one proves little: `agent_id` could still exist in the binary and no longer reach
+  PreToolUse. The live tier is what checks behavior, which is why it still runs weekly.
+
+**Why dated items have their own file.** The policy hook fails closed on a malformed
+`policy.toml`, and a typo in a reminder must never block a delegated agent.
 
 ## Verified facts the design rests on
 
@@ -405,6 +469,12 @@ the binary disagree, the binary wins.
   meta.json has `agentType` (the name), `name`, `customAgentType` (the role it was spawned as),
   `taskKind: "in_process_teammate"` and `teamName`. The agent definition still binds (model and
   tools). `agent_id` looks like `ateam-probe-<hex>`.
+- **SessionStart output** (interactive probe, 2.1.286): a hook's `systemMessage` shows on screen as
+  `SessionStart:startup says: <text>`, and its `additionalContext` doesn't show. A child the hook
+  starts in a new session (`start_new_session`) outlives the hook. SessionStart fires for
+  `claude -p` too (`source: "startup"`), and there the hook's environment has
+  `CLAUDE_CODE_ENTRYPOINT=sdk-cli` and `CLAUDE_CODE_SESSION_ATTENDED=0`, against `cli` and `1` in
+  an interactive session.
 - **meta.json timing:** a plain subagent's meta.json doesn't exist yet at SubagentStart; it does by
   SubagentStop. A named plain subagent's meta.json carries `name`.
 - **A doubled SubagentStop:** in auto mode, an agent that ends with plain text stops, then Claude
@@ -446,8 +516,8 @@ acting for Anthropic or OpenAI.
 **Stage 3 (watch)** is planned in `~/.claude/plans/lets-move-on-to-refactored-pascal.md`, which
 replaced the bullets that stood here. Its order: Step 0 probes, then A0 (named spawns off),
 A4 and A5 (due nudges, a one-command canary), A1 (per-agent liveness state), A3 (one watch view),
-A2 (deadline nudge, then hard stop), A6 (monthly audit). Step 0 and A0 are done; see
-"Stage 3" above.
+A2 (deadline nudge, then hard stop), A6 (monthly audit). Step 0, A0, A4 and A5 are done; see
+"Stage 3" above. A1 is next.
 
 ## Tests
 
@@ -463,8 +533,14 @@ A2 (deadline nudge, then hard stop), A6 (monthly audit). Step 0 and A0 are done;
     before anything is installed.
   - Pick cases with `--cases`, or a stage with `--stage`.
   - `--runner codex` runs one short Terra run.
+- **Canary:** `delegation-ledger canary` runs the unit suites, the posture and string checks, then
+  the live harness, and records the result for the due checks. After an upgrade, or a change to a
+  role, a hook or `codex-delegate`, run it outside the sandbox and in the background. `--quick`
+  runs only the cheap tier, and it runs anywhere.
 - **Results on 2026-09-30 (Claude Code 2.1.286):**
-  - unit: 158 tests;
+  - unit: 213 tests;
+  - canary: the first full run, from this branch, went green: the quick tier, then 52/52 live
+    checks;
   - claude: 52 checks over all three stages. The last full run passed 51. The miss was the old
     `report (auto)` check, which asserted that the model complies: it kept the brief's "no JSON"
     rule all three times, and the cap let it through as designed. The check now asserts the
@@ -486,8 +562,8 @@ hook fail closed, so wiring a hook before its script is reachable blocks every d
 1. **Links.**
    - `skills/delegation` → `~/.claude/skills/delegation` (the hook shims call its scripts).
    - `agents/*.md` → `~/.claude/agents/`.
-   - `hooks/{agent-spawn-guard,delegation-ledger,subagent-policy,report-check}.sh` →
-     `~/.claude/hooks/`.
+   - `hooks/{agent-spawn-guard,delegation-ledger,delegation-due,subagent-policy,report-check}.sh`
+     → `~/.claude/hooks/`.
    - `codex-delegate`, `delegation-ledger` and `gh-public` → `~/.local/bin/`.
 2. **Check the scripts before wiring them.**
    - The spawn guard, with
@@ -510,6 +586,10 @@ hook fail closed, so wiring a hook before its script is reachable blocks every d
    - `cat ~/.config/gh/hosts.yml` fails;
    - `git fetch` and `gh pr list` still work, through the exclusion;
    - the prompts are unchanged.
+5. **The due checks.** Add the SessionStart entry (`delegation-due.sh`), then run
+   `delegation-ledger canary` outside the sandbox, in the background. When it is green, a new session
+   prints nothing unless something is due, and `delegation-ledger due` shows the state. The hook fails
+   open, so its order doesn't matter.
 
 **If Claude Code won't start** because the sandbox can't (a missing bwrap after an upgrade, say), set
 `"enabled": false` under `sandbox` in `~/.claude/settings.json` with an editor. That also takes
