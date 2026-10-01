@@ -10,22 +10,30 @@ Base: `main`. For branch / PR / push state, run `gh pr list` and `git log main..
 stored here).
 
 ## Done (recent; git, the linked plans and memory hold the detail)
+- **Delegation hardening Stage 3: Step 0, A0, A4 and A5, installed on HAYPC** (2026-09-30, PRs #42
+  to #46, merged range `d46449b..ce16b8a`). Named spawns are denied unless their name starts with
+  `team-`. Teammates are policed by their role (meta.json `customAgentType`). `delegation-ledger
+  canary` re-verifies enforcement; its first full run, on 2.1.286, was green (52/52). A SessionStart
+  hook runs the cheap checks itself and shows a line only when something is due, including the
+  dated items in `skills/delegation/due.toml`. `docs/delegation.md` "Stage 3" holds the findings and
+  the cadence decision.
+- **`setup.sh` keeps the live settings' own keys** (2026-09-30, commit `39d8d34` on
+  `fix/setup-keep-live-settings`). `merge-settings.py` keeps the top-level keys only the live file
+  sets. It names every baseline override and every dropped live hook command on stderr. Before
+  this, the A4/A5 install wiped `autoMode`, `model` and other `/config` choices on HAYPC; they were
+  restored from `~/.claude/backups/`.
 - **Machine overlay, installed on HAYPC** (2026-09-30, PR #40). A machine's own settings live in
-  `~/.claude/settings.machine.json` (README, "Quickstart"); HAYPC's holds hq's `hq-* *` exclusions and
-  the `tmux-state.sh` hooks. The sandbox stub block and `stop-ring.sh` now ship from this repo.
+  `~/.claude/settings.machine.json` (README, "Quickstart"); HAYPC's holds hq's `hq-* *` exclusions,
+  the `tmux-state.sh` hooks and `effortLevel: high`. The sandbox stub block and `stop-ring.sh` now
+  ship from this repo.
 - **Delegation hardening Stage 2 built and installed on HAYPC** (2026-09-30, PRs #35 to #38, merged
   range `e536dd8..b4a85ae`). It covers the session-wide sandbox, the subagent policy hook, report-check,
   `gh-public`, and the ledger's `audit` and `sandbox-denials`. `docs/delegation.md` holds the design,
   the verified facts, the known gaps and the install order. Sandbox behavior on this machine is in
   memory [[cc-sandbox-linux-facts]].
-- **Client deck data removed from the current tree** (2026-09-29, PR #28). Parity fixtures live in the
-  client's private repo (`decks/_parity/`); `parity_check.py` requires `--config` and `--goldens`.
-  History deliberately left as-is (Hayden's call).
-- **Codex `config.toml` merged, not symlinked** (2026-09-29, PR #27; rationale in `docs/codex.md`,
-  "Configuration mechanism").
-- **Codex CLI integrated** (2026-09-13, `feat/codex-cli-integration`; wiring and rationale in
-  `docs/codex.md`).
-- Older (git, the PRs and memory hold the detail): session-summary prompt-injection hardening
+- Older (git, the PRs and memory hold the detail): client deck data removed from the tree (PR #28;
+  history deliberately left as-is, Hayden's call), Codex `config.toml` merged, not symlinked (PR #27)
+  and the Codex CLI integration (both in `docs/codex.md`), session-summary prompt-injection hardening
   (2026-08-24), tab title decoupled from `ai-title` (PR #22,
   [[cc-ai-title-suppressed-by-custom-title]]), the session-summary status-line row (PR #21,
   [[dotclaude-session-summary-statusline]]), loose decisions (PR #20: danger-guard opt-in, the
@@ -33,43 +41,25 @@ stored here).
   CLAUDE.md trigger, `vetting-sources`, `deck-production` S1, and earlier work back to PR #10.
 
 ## In flight
-- **Delegation hardening Stage 3: Step 0 and A0 merged and installed on HAYPC** (PRs #42 and #43,
-  2026-09-30; a named spawn from a live session was denied by the installed guard). The plan is
-  `~/.claude/plans/lets-move-on-to-refactored-pascal.md`; this block's execution plan is
-  `~/.claude/plans/continue-from-status-md-lovely-puzzle.md`. The findings are in
-  `docs/delegation.md` "Stage 3":
-  - named spawns are denied unless their name starts with `team-`;
-  - teammates are policed by their role (meta.json `customAgentType`), not their name;
-  - report-check can no longer loop under a duplicated hook;
-  - the live harness now runs only the checkout's hooks (`--setting-sources project,local`);
-  - `staged-reader-review` now spawns its readers unnamed and messages them by id (a named spawn
-    would be denied). A live dry run on 2026-09-30 confirmed it: two readers, three resumes each,
-    and both quoted section 1 verbatim at the end.
-
-  Commit range `d46449b..00b7a31`.
-- **Delegation hardening Stage 3: A4 and A5** (branch `feat/delegation-stage3-a4a5`; the design and
-  the cadence decision are in `docs/delegation.md`, "The canary and the due checks"):
-  - `delegation-ledger canary [--quick]`;
-  - the SessionStart `delegation-due.sh` hook, which runs the quick canary itself on a new Claude
-    Code version and `audit` daily, and shows a line only when something is due;
-  - dated reminders in `skills/delegation/due.toml`.
-
-  The install adds a hook and a settings entry, so on a machine it is `git pull` in `~/dotclaude`
-  **and** `./setup.sh`, both outside the sandbox. Then check that the live settings diff is only the
-  SessionStart entry.
-
-  **Next: A1 (per-agent liveness state)**, then A3 → A2 → A6, each on a fresh branch from `main` in a
-  worktree, so the live hooks stay untouched while it is edited. Decisions already made: deadlines
+- **Delegation hardening Stage 3: next is A1 (per-agent liveness state)**, then A3 → A2 → A6, each
+  on a fresh branch from `main` in a worktree, so the live hooks stay untouched while it is edited.
+  The plan is `~/.claude/plans/lets-move-on-to-refactored-pascal.md` (its A4/A5 cadence is superseded
+  by `docs/delegation.md`, "The canary and the due checks"). Decisions already made: deadlines
   nudge, then hard-stop; liveness shows in the tmux status bar and a CLI. A1 must catch an agent that
-  sits in one long tool call, because the stall timer doesn't (P2).
+  sits in one long tool call, because the stall timer doesn't (P2). Before building, run
+  `delegation-ledger due`; after building, run `delegation-ledger canary` outside the sandbox.
+  - **Installing Stage 3 on another machine:** `git pull` in `~/dotclaude`, then `./setup.sh`, both
+    outside the sandbox (A4 added a hook and a settings entry). A baseline key still wins over the
+    live file's value, so copy `~/.claude/settings.json` first and diff it after.
 - **Delegation hardening: Stage 2 live** (`docs/delegation.md`). `skills/delegation/SKILL.md` is the
   operating guide. Open items:
   - **Dated reminders** (the 2026-10-07 `sandbox-denials` review) live in `skills/delegation/due.toml`.
     The session-start line shows each one from its date until it is removed.
   - **Not observed live:** a real agent's `dangerouslyDisableSandbox` being denied. The teammate probe
     declined to try it; the harness covers the rule (its `policy` case).
-  - **Other machines:** install by hand per the docs' install order (the policy hook fails closed).
-    bubblewrap and socat are required.
+  - **Other machines:** with a `settings.machine.json` overlay, `git pull` then `./setup.sh` (see
+    the Stage 3 install note above); without one, install by hand per the docs' install order (the
+    policy hook fails closed). bubblewrap and socat are required.
   - **Optional:** a no-scope classic GitHub token at `~/.config/dotclaude/github-public-token` enables
     `gh-public` code search.
   - **Write-up:** Hayden wants a blog post or public repo on the findings. The evidence (probe
