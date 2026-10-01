@@ -61,8 +61,8 @@ permission flow.
 - **Can't read credential files** or `/proc`, and can't Grep a directory that contains one
   (`~`, `~/.config`, `/`). Brief a narrower search root.
 - **Can't `rm -r` outside its root** or temp.
-- **Can't run past its deadline:** past its role's stop time, only the handback and
-  SendMessage are allowed (§4).
+- **Can't run past its deadline:** past its role's stop time, only the report path is
+  allowed: the handback, SendMessage, and ToolSearch to load SendMessage (§4).
 
 **Writers** also can't write outside their worktree: file tools, redirects, `cd`,
 `git -C`. They can still read the main checkout. A computed-path subprocess write into the
@@ -125,7 +125,7 @@ validated (`report_ok`).
 - **`partial` or `failed`:** read the summary before retrying, and retry at most once with
   a changed brief.
 - **A `deadline` stop:** the agent ran past its role's budget for this activation, and every
-  tool but the handback was denied (`[subagent-policy] deadline (stop_and_explain)`). Read
+  tool but the report path was denied (`[subagent-policy] deadline (stop_and_explain)`). Read
   its partial report first. Then resume it through SendMessage with a narrower brief, which
   starts a new activation with a fresh budget, or take the rest over yourself.
 - **Writer:** review the diff on its branch (`artifacts[0]` is `branch@sha`), run the
@@ -178,8 +178,8 @@ validated (`report_ok`).
   entry gets `default`).
   - Past the nudge, the agent's next successful call carries one reminder to report
     (a `nudge` row in `delegation-ledger tail`).
-  - Past the stop, every tool except SubagentHandback and SendMessage is denied, so the agent
-    hands back `partial` (see §3).
+  - Past the stop, every tool except SubagentHandback, SendMessage and ToolSearch is denied,
+    so the agent hands back `partial` (see §3).
   - A long call that is already running finishes first. A SendMessage resume or a teammate's
     next message starts a new activation, with a fresh budget.
   - An agent that loops on its tools never trips a `⚠`; the deadline is what stops it.

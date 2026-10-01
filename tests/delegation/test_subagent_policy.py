@@ -153,8 +153,8 @@ class Gate(Base):
         reason = json.loads(p.stdout)["hookSpecificOutput"]["permissionDecisionReason"]
         self.assertTrue(reason.startswith(
             "[subagent-policy] deadline (stop_and_explain): this activation has run 61 min, past "
-            "the 60 min budget for general-purpose. Only SubagentHandback and SendMessage are "
-            "allowed now. Hand back a `partial` report"), reason)
+            "the 60 min stop for general-purpose. Only SubagentHandback, SendMessage and "
+            "ToolSearch are allowed now. Hand back a `partial` report"), reason)
         # A resumed agent must know it may try again: the denial alone reads as permanent.
         self.assertIn("If the lead resumes you, the budget starts over", reason)
         self.assertNotIn(POLICY["intents"]["stop_and_explain"], reason)
@@ -681,13 +681,17 @@ class Deadline(Base):
     def test_every_tool_but_the_allow_list_is_denied(self):
         self.index("a1", minutes=61)
         for tool, ti in (("Read", {"file_path": os.path.join(self.proj, "x")}),
-                         ("WebSearch", {"query": "x"}), ("ToolSearch", {"query": "x"}),
+                         ("WebSearch", {"query": "x"}), ("WebFetch", {"url": "https://x.org"}),
                          ("TaskCreate", {"subject": "x"}), ("Agent", {"prompt": "x"}),
                          ("mcp__notion__notion-fetch", {}), ("Write", "not a dict")):
             self.assertDenied(self.decide(tool, ti), "deadline", msg=tool)
         for tool in POLICY["deadline"]["allow"]:
             self.assertIsNone(self.decide(tool, {"message": "partial report"}), tool)
-        self.assertEqual(POLICY["deadline"]["allow"], ["SubagentHandback", "SendMessage"])
+        # ToolSearch stays open: SendMessage is deferred for a teammate, so without its schema
+        # a stopped teammate could not report (live check, 2.1.287). It only loads schemas.
+        self.assertIsNone(self.decide("ToolSearch", {"query": "select:SendMessage"}))
+        self.assertEqual(POLICY["deadline"]["allow"],
+                         ["SubagentHandback", "SendMessage", "ToolSearch"])
 
     def test_each_role_has_its_own_budget_and_the_rest_get_default(self):
         self.meta("w1", agentType="writer", worktreePath=self.wt)

@@ -97,7 +97,8 @@ repo that turns the sandbox off loses subagent Bash; the policy still applies.
 
 **Default rules** (every delegated agent), each with a cc-safety-net intent:
 - **The deadline,** checked first: past the role's `stop_min` for this activation, every tool
-  except SubagentHandback and SendMessage is stop_and_explain ("Deadline (A2)").
+  except the report path (SubagentHandback, SendMessage, ToolSearch) is stop_and_explain
+  ("Deadline (A2)").
 - **The sandbox escape:** any truthy input key matching `/sandbox/i` is hard_stop.
 - **Excluded commands:** an `excludedCommands` match is manual_only. The list is read live from the
   trusted tiers, as Claude Code reads it.
@@ -525,7 +526,7 @@ time (`customAgentType` for a teammate), as for every other policy rule, not fro
 
 **The nudge.** Past `nudge_min`, the agent's next successful call gets one PostToolUse
 `additionalContext`: report now, finish or hand back `partial`, because at `stop_min` every tool
-but the handback and SendMessage is denied. It lives in `delegation-ledger hook`, behind the same `agent_id`
+but the report path is denied. It lives in `delegation-ledger hook`, behind the same `agent_id`
 prefilter as the policy hook. The filter matches the substring anywhere in the payload, so a
 main-thread call whose input or output contains `"agent_id"` still starts Python, which returns at
 once.
@@ -536,21 +537,32 @@ once.
 - It appends a `nudge` row. `fold` skips those as it skips `policy` rows, so `open`, `watch` and
   `audit` never read a nudge as a lifecycle event. `tail` shows them.
 - SubagentStart pops `nudged`, so each activation gets its own nudge.
+- It names the nudge and the stop apart ("past the 30 min nudge ... at the 60 min stop"). The
+  first wording, "66.1 min of this activation's 30 min budget", read as the stop itself, and an
+  agent quit at the nudge.
 - It fails open throughout. A broken `[deadline]` means no nudge, while the policy hook fails
   closed on the same file.
 
-**The stop.** Past `stop_min`, `subagent-policy` denies every tool except `[deadline] allow`
-(SubagentHandback and SendMessage), with stop_and_explain, so the agent can still hand back
-`partial`. It runs before every other rule, and it covers every tool, not only the policed ones
-(Hayden's call, 2026-10-01). Otherwise WebFetch, WebSearch, ToolSearch and the Task tools stay
-open, and an agent looping on the web never stops. The deny brings its own footer instead of
-stop_and_explain's "rewrite the command", so it reads as one message:
+**The stop.** Past `stop_min`, `subagent-policy` denies every tool except `[deadline] allow`, the
+report path, with stop_and_explain, so the agent can still hand back `partial`. It runs before
+every other rule, and it covers every tool, not only the policed ones (Hayden's call, 2026-10-01).
+Otherwise WebFetch, WebSearch and the Task tools stay open, and an agent looping on the web never
+stops. The report path is three tools:
+- SubagentHandback, how a subagent reports;
+- SendMessage, how a teammate reports and how the lead resumes an agent;
+- ToolSearch, because SendMessage is deferred for a teammate. The teammate check found a stopped
+  teammate whose ToolSearch was denied, so it could only report by calling SendMessage without
+  its schema. ToolSearch only loads schemas, so a tool it loads is still denied (Hayden's call,
+  2026-10-01).
+
+The deny brings its own footer instead of stop_and_explain's "rewrite the command", so it reads as
+one message:
 
 ```
 [subagent-policy] deadline (stop_and_explain): this activation has run 61 min, past the 60 min
-budget for writer. Only SubagentHandback and SendMessage are allowed now. Hand back a `partial`
-report naming what is done and what is left. If the lead resumes you, the budget starts over and
-every tool works again.
+stop for writer. Only SubagentHandback, SendMessage and ToolSearch are allowed now. Hand back a
+`partial` report naming what is done and what is left. If the lead resumes you, the budget starts
+over and every tool works again.
 ```
 
 The check fails open on an unreadable index (no index, no clock) and never becomes a
@@ -579,6 +591,9 @@ on the next one. The main thread is exempt. Codex keeps `codex-delegate --timeou
   never get one, and neither does an agent whose SubagentStart hook failed.
 - **Workflow agents share `default`.** Their hook `agent_type` is `workflow-subagent` in every
   workflow, so one budget fits all of them.
+- **A teammate of a built-in type has no role.** Its meta.json carries no `customAgentType`, and
+  its `agentType` is its name, so its budget is `default` and the messages name it. Harmless
+  today, since general-purpose's budget is `default`. Our own roles do carry `customAgentType`.
 
 ## Verified facts the design rests on
 
@@ -730,6 +745,17 @@ wins.
     ledger's existing start. `-p` can resume: SendMessage loads through ToolSearch;
   - told nothing about order, the agent ran its Bash and Read calls in parallel. The `deadline`
     case in the live harness asks for one call per turn.
+- **The deadline on a teammate** (a manual check on 2.1.287, 2026-10-01, since `-p` can't make a
+  teammate). A `team-` general-purpose teammate in an interactive session, under the installed
+  hooks, had its `activation_start` backdated 65 min during a 60-second call:
+  - the call finished, and its PostToolUse brought the nudge ("66.1 min of this activation's 30
+    min budget"), so a teammate's PostToolUse carries `agent_id` too;
+  - its next two calls were denied with `deadline (stop_and_explain)`;
+  - SendMessage is a deferred tool for a teammate. Its ToolSearch to load the schema was denied
+    too, and it reported only by calling SendMessage without the schema. ToolSearch is in
+    `[deadline] allow` since;
+  - a general-purpose teammate's meta.json has `agentType` set to its name and no
+    `customAgentType`, so its budget falls to `default`.
 - **Codex sub-agents:**
   - a `spawn_agent` without a model inherits the parent's model (tested);
   - `agents.default_subagent_model` exists, and `codex-delegate` passes it with `-c`;
@@ -829,7 +855,12 @@ is next, and it retunes A2's budgets against the ledger.
     now says a resume restarts the budget, and the case's resume message says it isn't a retry.
     The case then passed 9 of 9 twice.
   - after that fix merged (PR #52), the full canary passed 65 of 65 in 6 min 0 s, so 2.1.287 is
-    green.
+    green;
+  - the manual teammate check passed: nudge and stop both reached the teammate (see "Verified
+    facts"). It found ToolSearch missing from the stop's allow list, now added;
+  - the next `deadline` run went 6 of 9: the agent obeyed the nudge, handed back after step 1, and
+    never reached the stop. The nudge now names the nudge and the stop apart, and the case tells
+    the agent the reminder is expected and to carry on.
 
 ## Installing on a machine that is already set up
 

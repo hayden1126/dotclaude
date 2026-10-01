@@ -475,10 +475,12 @@ class Nudge(LedgerEnv):
         self.hook(self.start())
         self.started(11)
         text = self.context(self.hook(self.post()))
-        self.assertEqual(text, "[deadline] You have run 11 min of this activation's 10 min "
-                               "budget (Explore). Report now: finish and hand back, or hand back "
-                               "`partial` naming what is left. After 20 min every tool except "
-                               "SubagentHandback and SendMessage is denied.")
+        # "nudge" and "stop" are named apart: "11 min of a 10 min budget" read as the stop
+        # itself, and agents quit at the nudge (2.1.287).
+        self.assertEqual(text, "[deadline] This activation has run 11 min, past the 10 min nudge "
+                               "for Explore. Report now: finish and hand back, or hand back "
+                               "`partial` naming what is left. At the 20 min stop, every tool "
+                               "except SubagentHandback, SendMessage and ToolSearch is denied.")
         self.assertTrue(self.index()["nudged"])
         p = self.hook(self.post(tool="Grep"))
         self.assertEqual((p.returncode, p.stdout), (0, ""))
@@ -511,7 +513,7 @@ class Nudge(LedgerEnv):
                        "taskKind": "in_process_teammate", "teamName": "session-s1"}, f)
         self.hook(dict(self.start(), agent_type="team-x"))
         self.started(11)  # past Explore's 10 min, under the default 30
-        self.assertIn("(Explore)", self.context(self.hook(self.post(atype="team-x"))))
+        self.assertIn("nudge for Explore.", self.context(self.hook(self.post(atype="team-x"))))
 
     def test_no_nudge_under_budget_for_the_main_thread_a_helper_or_no_index(self):
         self.hook(self.start())

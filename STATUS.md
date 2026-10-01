@@ -33,6 +33,9 @@ stored here).
 ## In flight
 - **Delegation hardening Stage 3: next is A6 (monthly audit and GP share).** A2 is done, and the
   full canary is green on 2.1.287 (65/65; counts and timing in `docs/delegation.md` "Tests").
+  - **First,** once the teammate-check PR (branch `docs/a2-live`) merges: `git pull` in
+    `~/dotclaude`, then `delegation-ledger canary` in the background. That PR changed the deadline
+    hooks (ToolSearch in `allow`, the message wording), so the canary must go 65/65 again.
   - **Before building,** run `delegation-ledger due`. Its "reports failing the contract: 3" warning
     is known: three rows from 2026-09-30 that predate the handback parser and the report-check
     fixes (`a07a9cb`, `d0a4ed8`). They leave the audit's 7-day window on 2026-10-07; a warning
