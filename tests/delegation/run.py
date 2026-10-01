@@ -778,8 +778,11 @@ def deadline(root, env, state):
                     'with one ```json block with exactly these fields: status ("done" if every '
                     'step ran, else "partial"), summary (a string), artifacts (an empty array) '
                     "and blocked_actions (an array naming each denied step).")
-    resume = (f"Use the Read tool on {plan} once, then reply with the line that starts with "
-              "marker:, and end with the same kind of json block.")
+    # Without the first sentence, the agent read this as retrying its denied step 4 and refused
+    # (2.1.287 canary): the check is about the fresh budget, not the agent's reading of "retry".
+    resume = ("This is a new instruction, not a retry: the resume started a fresh budget, so the "
+              f"earlier denial no longer applies. Use the Read tool on {plan} once, then reply "
+              "with the line that starts with marker:, and end with the same kind of json block.")
     seen, done = [], threading.Event()
     poller = threading.Thread(target=poll_index, args=(state, done, seen), daemon=True)
     poller.start()

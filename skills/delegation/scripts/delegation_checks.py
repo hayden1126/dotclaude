@@ -46,7 +46,7 @@ DUE_PATH = os.environ.get("DELEGATION_DUE") or os.path.join(SKILL_DIR, "due.toml
 FULL_EVERY_DAYS = 7
 AUDIT_EVERY_HOURS = 24
 RELAUNCH_MIN = 10
-FULL_COST = "about 15 sonnet `claude -p` sessions and 5 minutes"  # 52 checks in 5 min, 2.1.286
+FULL_COST = "about 16 sonnet `claude -p` sessions and 6 minutes"  # 65 checks in 6 min, 2.1.287
 # Set in the quick tier's own test run, so nothing under it can start another background job.
 CHILD_ENV = "DELEGATION_CHECKS_CHILD"
 VERSION_RE = re.compile(r"\b(\d+\.\d+\.\d+)\b")
