@@ -141,7 +141,8 @@ temp_roots = ["/tmp/claude-{uid}"]
 
 [protect]
 # Never written by a delegated agent, through a file tool or a literal Bash target. Paths are
-# realpath-resolved, so a symlink into one of these counts. `~` is the home directory.
+# realpath-resolved, so a symlink into one of these counts. `~` is the home directory, and
+# `{state_dir}` is $XDG_STATE_HOME/dotclaude (default ~/.local/state/dotclaude).
 write_denied = ["~/.claude", "~/.gitconfig", "~/.config/git", "~/.zshrc", "~/.zshenv",
   "~/.zprofile", "~/.zlogin", "~/.bashrc", "~/.bash_profile", "~/.profile", "~/.oh-my-zsh",
   "~/.config/gh", "~/.ssh", "~/.local/bin",
@@ -149,7 +150,7 @@ write_denied = ["~/.claude", "~/.gitconfig", "~/.config/git", "~/.zshrc", "~/.zs
   "~/dotclaude/CLAUDE.md", "~/dotclaude/codex", "~/.codex",
   # The ledger and the liveness index: an agent that rewrote its own index could reset its
   # deadline clock. The sandbox already keeps Bash out; this covers the file tools.
-  "~/.local/state/dotclaude"]
+  "{state_dir}"]
 # Relative to the agent's root: its own project config and git internals.
 root_write_denied = [".claude", ".mcp.json", ".git/hooks", ".git/config", ".git/info"]
 root_write_allowed = [".claude/worktrees"]

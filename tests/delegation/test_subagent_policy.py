@@ -10,6 +10,7 @@ import re
 import subprocess
 import tempfile
 import unittest
+from unittest import mock
 
 from _paths import HOOKS, REPO, SCRIPTS, load_script
 
@@ -721,13 +722,18 @@ class Deadline(Base):
             self.assertIsNone(self.web(), bad)
 
     def test_an_agent_cannot_rewrite_its_own_clock(self):
-        state = os.path.join(self.home, ".local", "state", "dotclaude")
-        for path in (os.path.join(state, "agents", "a1.json"),
-                     os.path.join(state, "delegations.jsonl")):
-            self.assertDenied(self.decide("Write", {"file_path": path, "content": "{}"}),
-                              "protected-path", "hard_stop", path)
-            self.assertDenied(self.decide("Edit", {"file_path": path}), "protected-path",
-                              msg=path)
+        # Wherever the state dir is: $XDG_STATE_HOME (set by Base), or the default under ~.
+        for xdg, state in ((self.state, os.path.join(self.state, "dotclaude")),
+                           (None, os.path.join(self.home, ".local", "state", "dotclaude"))):
+            with mock.patch.dict(os.environ):
+                if xdg is None:
+                    os.environ.pop("XDG_STATE_HOME")
+                for path in (os.path.join(state, "agents", "a1.json"),
+                             os.path.join(state, "delegations.jsonl")):
+                    self.assertDenied(self.decide("Write", {"file_path": path, "content": "{}"}),
+                                      "protected-path", "hard_stop", path)
+                    self.assertDenied(self.decide("Edit", {"file_path": path}), "protected-path",
+                                      msg=path)
 
 
 def policy_with_deadline(body):

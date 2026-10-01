@@ -146,7 +146,7 @@ def sandbox_view(tiers):
 # ---------------------------------------------------------------- paths
 
 def expand(p, home):
-    p = str(p).replace("{uid}", str(os.getuid()))
+    p = str(p).replace("{uid}", str(os.getuid())).replace("{state_dir}", dc.state_dir(home))
     if p == "~" or p.startswith("~/"):
         p = home + p[1:]
     return os.path.normpath(p)

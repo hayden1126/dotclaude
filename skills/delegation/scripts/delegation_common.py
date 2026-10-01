@@ -50,8 +50,9 @@ def parse_iso(ts):
         tzinfo=datetime.timezone.utc)
 
 
-def state_dir():
-    base = os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state")
+def state_dir(home=None):
+    base = (os.environ.get("XDG_STATE_HOME")
+            or os.path.join(home or os.path.expanduser("~"), ".local", "state"))
     return os.path.join(base, "dotclaude")
 
 
