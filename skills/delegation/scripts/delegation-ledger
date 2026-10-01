@@ -2,8 +2,9 @@
 """delegation-ledger: record delegated agents, and list the ones that never finished.
 
   delegation-ledger hook            SubagentStart/SubagentStop hook body (stdin: hook JSON)
-  delegation-ledger open [--hours N] [--silent-min M]
-                                    agents whose latest event is not a stop, with evidence
+  delegation-ledger open [--hours N]
+                                    agents whose latest event is not a stop, with evidence;
+                                    thresholds in skills/delegation/liveness.toml
   delegation-ledger tail [-n N]     the last N rows (including policy and spawn-guard denials)
   delegation-ledger audit [--hours N]
                                     is enforcement still binding? policy heartbeat, writers that
@@ -19,7 +20,9 @@
 
 The hook is an observer: it always exits 0 and prints nothing, so a ledger bug can never
 block or alter an agent (failing open is correct here, unlike the spawn guard). Its own
-errors go to $XDG_STATE_HOME/dotclaude/delegation-ledger.err.
+errors go to $XDG_STATE_HOME/dotclaude/delegation-ledger.err. Besides the ledger row, it
+keeps agents/<id>.json, the per-agent liveness index: the agent's state, when its current
+activation started, how many activations it has had, and its transcript path.
 
 For an agent in a worktree, the start and stop rows also carry a hash of the main checkout's
 `git status` (main_before, main_after). The sandbox lets a worktree agent's subprocess write
@@ -27,17 +30,22 @@ anywhere in the session repo, so a computed-path write into the main checkout ca
 stopped, only seen. `audit` reports a changed hash as evidence, not a verdict, because the
 lead may have been editing too.
 
-`open` only suggests. Each row prints the evidence it used (parent session alive, minutes
-since the agent transcript last changed, what its last entry was), so a verdict can be
-checked, never just trusted. The liveness rules follow cctop's (github.com/stefanprodan/cctop,
-Apache-2.0), reimplemented: ~/.claude/sessions/<pid>.json maps a session to a live pid, and
-a transcript whose last entry is a tool_use or a tool_result is mid-turn.
+`open` only suggests. Each row prints the evidence it used (parent session alive, how long
+this activation has run, the newest transcript entry and its age, the calls still open), so
+a verdict can be checked, never just trusted. The session rule follows cctop's
+(github.com/stefanprodan/cctop, Apache-2.0), reimplemented: ~/.claude/sessions/<pid>.json maps
+a session to a live pid. The rest comes from the agent transcript, not from per-call hooks. A
+tool_use is written before the tool runs, a denied, failed or interrupted call still gets a
+tool_result (but no PostToolUse), and every entry carries a timestamp. So a tool_use with no
+tool_result is a call in flight, and its timestamp says since when.
 """
 import argparse
 import collections
+import datetime
 import glob
 import hashlib
 import json
+import math
 import os
 import re
 import subprocess
@@ -145,6 +153,7 @@ def cmd_hook(_args):
             if ma:
                 row["main_after"] = ma
         dc.append_row(row)
+        index_agent(event, base, data)
     except Exception:
         try:
             os.makedirs(dc.state_dir(), exist_ok=True)
@@ -153,6 +162,28 @@ def cmd_hook(_args):
         except Exception:
             pass
     return 0
+
+
+def index_agent(event, base, data):
+    """Keep agents/<id>.json, the liveness index `open` reads (and A2 and A3 will)."""
+    if event == "SubagentStart":
+        transcript = agent_transcript({"id": base["id"],
+                                       "parent_transcript": data.get("transcript_path")})
+
+        def start(s):
+            # A SendMessage resume or a teammate's next message is a new activation of the
+            # same agent: a fresh activation_start, the same first_start.
+            s.update(id=base["id"], agent_type=base["agent_type"], name=base.get("name"),
+                     teammate=bool(base.get("teammate")), session_id=base["session_id"],
+                     agent_transcript=transcript, cwd=data.get("cwd"), state="running",
+                     activation_start=base["ts"], activations=s.get("activations", 0) + 1)
+            s.setdefault("first_start", base["ts"])
+            s.pop("stopped_at", None)
+        dc.update_agent_state(base["id"], start)
+        dc.prune_agent_states()
+    else:
+        dc.update_agent_state(base["id"], lambda s: s.update(
+            id=base["id"], state="stopped", stopped_at=base["ts"]))
 
 
 def live_sessions():
@@ -180,31 +211,105 @@ def agent_transcript(entry):
                         "subagents", f"agent-{entry['id']}.jsonl")
 
 
-def last_entry(path):
-    """What the transcript's final line is: mid-turn (tool_use / tool_result / no stop
-    reason) or a finished turn."""
+def entry_ts(e):
+    """A transcript entry's timestamp in epoch seconds, or None. Transcript timestamps carry
+    milliseconds, which dc.parse_iso doesn't take."""
+    try:
+        return datetime.datetime.fromisoformat(e["timestamp"].replace("Z", "+00:00")).timestamp()
+    except (KeyError, AttributeError, TypeError, ValueError):
+        return None
+
+
+def entry_kind(e, msg, kinds):
+    if e.get("type") == "user":
+        return "tool_result" if "tool_result" in kinds else "prompt"
+    if "tool_use" in kinds:
+        return "tool_use"
+    if msg.get("stop_reason"):
+        return f"turn ended ({msg['stop_reason']})"
+    return "thinking" if "thinking" in kinds else "text"
+
+
+def scan_transcript(path):
+    """What an agent transcript says about liveness, from its last 1 MiB (the bound
+    handback_message uses). Returns a dict:
+      open     [(tool, ts)], oldest first: the tool_use ids with no tool_result yet;
+      last     the newest entry's kind: tool_use, tool_result, thinking, text, prompt or
+               "turn ended (<stop_reason>)"; "no transcript" or "unreadable" when there is
+               nothing to read;
+      last_ts  the newest entry's time in epoch seconds, or None.
+    Only user and assistant entries count, not Claude Code's attachment entries."""
     try:
         with open(path, "rb") as f:
             f.seek(0, os.SEEK_END)
-            f.seek(max(0, f.tell() - 65536))
-            tail = f.read().decode("utf-8", "replace").splitlines()
-    except OSError:
-        return "no transcript"
-    for line in reversed(tail):
+            f.seek(max(0, f.tell() - 1048576))
+            lines = f.read().decode("utf-8", "replace").splitlines()
+    except (OSError, TypeError):
+        return {"open": [], "last": "no transcript", "last_ts": None}
+    uses, done = {}, set()
+    last, last_ts = "unreadable", None
+    for line in lines:
         try:
             e = json.loads(line)
         except ValueError:
+            continue  # the window may cut the first line
+        if not isinstance(e, dict) or e.get("type") not in ("user", "assistant"):
             continue
-        msg = e.get("message") or {}
-        content = msg.get("content") if isinstance(msg.get("content"), list) else []
-        kinds = {c.get("type") for c in content if isinstance(c, dict)}
-        if e.get("type") == "assistant":
-            if "tool_use" in kinds or msg.get("stop_reason") is None:
-                return "mid-turn (tool_use)"
-            return f"turn ended ({msg.get('stop_reason')})"
-        if e.get("type") == "user":
-            return "mid-turn (tool_result)" if "tool_result" in kinds else "awaiting reply"
-    return "unreadable"
+        msg = e.get("message") if isinstance(e.get("message"), dict) else {}
+        content = msg.get("content")
+        blocks = [c for c in content if isinstance(c, dict)] if isinstance(content, list) else []
+        ts = entry_ts(e)
+        kind = entry_kind(e, msg, {c.get("type") for c in blocks})
+        if kind == "prompt":
+            # A new prompt (a SendMessage resume, a teammate's next message) starts a new
+            # turn, so a call an abort left without a tool_result is not in flight any more.
+            uses.clear()
+        for c in blocks:
+            if c.get("type") == "tool_use":
+                uses[c.get("id")] = (c.get("name") or "?", ts)
+            elif c.get("type") == "tool_result":
+                done.add(c.get("tool_use_id"))
+        last, last_ts = kind, ts or last_ts
+    calls = sorted((v for k, v in uses.items() if k not in done), key=lambda v: v[1] or 0)
+    return {"open": calls, "last": last, "last_ts": last_ts}
+
+
+LIVENESS_PATH = os.path.join(os.path.dirname(dc.HERE), "liveness.toml")
+LIVENESS_DEFAULTS = {  # minutes; liveness.toml says why these values
+    "subagent": {"silent_min": 15, "tool_min": 30},
+    "teammate": {"silent_min": 30, "tool_min": 30},
+    "codex": {"silent_min": 30},
+}
+
+
+def load_liveness():
+    """(thresholds, warning) from $DELEGATION_LIVENESS, else skills/delegation/liveness.toml.
+    It fails open, like due.toml: a missing or malformed file leaves all the defaults above,
+    and a value that isn't a positive number leaves its own default. The warning says which,
+    and `open` prints it first, so a broken file can't make `open` go quiet."""
+    import tomllib
+    path = os.environ.get("DELEGATION_LIVENESS") or LIVENESS_PATH
+    limits = {kind: dict(v) for kind, v in LIVENESS_DEFAULTS.items()}
+    try:
+        with open(path, "rb") as f:
+            data = tomllib.load(f)
+    except (OSError, tomllib.TOMLDecodeError) as ex:
+        return limits, f"{path}: {ex}; using the default thresholds"
+    problems = []
+    for kind, table in data.items():
+        if kind not in limits or not isinstance(table, dict):
+            problems.append(f"[{kind}] is not one of {', '.join(limits)}")
+            continue
+        for key, val in table.items():
+            if key not in limits[kind]:
+                problems.append(f"{kind}.{key} is not a threshold")
+            elif (isinstance(val, bool) or not isinstance(val, (int, float))
+                  or not math.isfinite(val) or val <= 0):
+                problems.append(f"{kind}.{key} = {val!r} is not a positive number")
+            else:
+                limits[kind][key] = val
+    return limits, (f"{path}: {'; '.join(problems)}; the defaults stand for those"
+                    if problems else None)
 
 
 def description(path):
@@ -216,9 +321,61 @@ def description(path):
         return ""
 
 
+def minutes(since, now):
+    return (now - since) / 60
+
+
+def claude_state(e, alive, limits, now):
+    """(verdict, evidence, transcript path) for a Claude ledger entry, from the transcript
+    scan and the index. A pending permission prompt shows as an open call."""
+    idx = dc.read_agent_state(e["id"])
+    path = agent_transcript(e) or idx.get("agent_transcript")
+    lim = limits["teammate" if idx.get("teammate") or e.get("teammate") else "subagent"]
+    try:
+        began = dc.parse_iso(idx.get("activation_start") or e["ts"]).timestamp()
+    except (KeyError, TypeError, ValueError):
+        began = now
+    scan = scan_transcript(path)
+    calls = scan["open"]
+    if not alive:
+        verdict = "orphaned: its session is gone; redo it or resume from its artifact"
+    elif calls:
+        tool, t0 = calls[0]
+        mins = minutes(t0 or began, now)
+        verdict = f"in {tool} {int(mins)} min" + (f", +{len(calls) - 1} more"
+                                                 if len(calls) > 1 else "")
+        if mins >= lim["tool_min"]:
+            verdict += f"  ⚠ past {lim['tool_min']:g} min: a long call or stuck; check it"
+    elif scan["last"].startswith("turn ended"):
+        verdict = "ended its turn but no stop row: read its transcript for the report"
+    else:
+        quiet = minutes(scan["last_ts"] or began, now)
+        verdict = (f"no transcript entry for {int(quiet)} min  ⚠ ask it for status"
+                   if quiet >= lim["silent_min"] else
+                   f"running (no transcript entry for {int(quiet)} min)")
+    k = idx.get("activations")
+    ev = (f"session {'alive' if alive else 'gone'}, active {int(minutes(began, now))} min"
+          + (f" (activation {k})" if k else "")
+          + f", last entry {scan['last']}"
+          + (f" {int(minutes(scan['last_ts'], now))} min ago" if scan["last_ts"] else "")
+          + (f", {len(calls)} call{'s' if len(calls) > 1 else ''} open" if calls else ""))
+    return verdict, ev, path
+
+
+def codex_age(e, now):
+    """Minutes since a codex run's events.jsonl last changed, or None."""
+    try:
+        return minutes(os.path.getmtime(os.path.join(e.get("out") or "", "events.jsonl")), now)
+    except OSError:
+        return None
+
+
 def cmd_open(args):
     now = time.time()
     horizon = now - args.hours * 3600
+    limits, warning = load_liveness()
+    if warning:
+        print(f"warning: {warning}")
     sessions = live_sessions()
     found = 0
     for (runner, rid), e in sorted(dc.fold(dc.read_rows()).items(),
@@ -233,23 +390,12 @@ def cmd_open(args):
         found += 1
         if runner == "codex":
             verdict, ev = dc.codex_state(e)
+            age, cap = codex_age(e, now), limits["codex"]["silent_min"]
+            if age is not None and age >= cap:
+                verdict += f"  ⚠ no event past {cap:g} min: check it"
             print(f"codex  {rid}  {e.get('event')}  {verdict}\n       {ev}; out {e.get('out')}")
             continue
-        path = agent_transcript(e)
-        parent_alive = e.get("session_id") in sessions
-        age = (now - os.path.getmtime(path)) / 60 if path and os.path.exists(path) else None
-        last = last_entry(path) if path else "no transcript"
-        if not parent_alive:
-            verdict = "orphaned: its session is gone; redo it or resume from its artifact"
-        elif last.startswith("turn ended"):
-            verdict = "ended its turn but no stop row: read its transcript for the report"
-        elif age is not None and age >= args.silent_min:
-            verdict = f"silent {age:.0f} min: ask it for status"
-        else:
-            verdict = "running"
-        ev = (f"session {'alive' if parent_alive else 'gone'}, "
-              + (f"transcript {age:.0f} min old" if age is not None else "no transcript")
-              + f", last entry {last}")
+        verdict, ev, path = claude_state(e, e.get("session_id") in sessions, limits, now)
         print(f"claude {rid}  {e.get('agent_type')}  {description(path)!r}  {verdict}\n"
               f"       {ev}")
     if not found:
@@ -381,7 +527,6 @@ def main(argv=None):
     sub.add_parser("hook").set_defaults(fn=cmd_hook)
     o = sub.add_parser("open")
     o.add_argument("--hours", type=float, default=48)
-    o.add_argument("--silent-min", type=float, default=30)
     o.set_defaults(fn=cmd_open)
     t = sub.add_parser("tail")
     t.add_argument("-n", type=int, default=20)

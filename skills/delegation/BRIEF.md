@@ -37,6 +37,8 @@ Never work around a denial. Finish the rest of the task if you can, and report `
 ## Budget
 - <turns or wall time, e.g. "about 30 tool calls" or "finish within 20 minutes">
 - Report length: <e.g. "at most 400 words before the JSON block">
+- Don't end your turn while a background command you started is still running: nothing wakes
+  you when it finishes. Run it in the foreground, or wait on its output before you report.
 
 ## Verification (writers)
 - Run: `<command>`

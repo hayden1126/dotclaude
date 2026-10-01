@@ -148,14 +148,27 @@ validated (`report_ok`).
 - `delegation-ledger open` lists delegations whose latest event isn't a stop. Each row
   shows its evidence:
   - whether the session is alive;
-  - how many minutes old the transcript is;
-  - what its last entry was.
+  - how long this activation has run (a resume or a teammate's next message starts a new one);
+  - the newest transcript entry and how old it is;
+  - how many tool calls are still open.
 
   It suggests; it doesn't decide.
+- **Reading a verdict:**
+  - `in <Tool> N min` means a call is in flight (a pending permission prompt shows here too).
+    Past `tool_min` it adds a `⚠`: a long call, or a stuck one. Check it.
+  - `running` means no call is open and the agent wrote to its transcript recently. Past
+    `silent_min` with no entry, it says `⚠ ask it for status`.
+  - The thresholds live in `skills/delegation/liveness.toml`, per kind (subagent, teammate,
+    codex). A broken file falls back to the defaults, and `open` prints a warning first.
 - A **silent agent** is usually working, not dead. A `team-` teammate can sit idle between
   messages, and any agent can sit in one long tool call, which the stall timer doesn't
-  abort. In `open`, a last entry of `tool_use` means it is mid-call. Ask it for status
-  before you assume otherwise.
+  abort. A `⚠` is a reason to look, not a verdict: ask it for status before you assume
+  otherwise.
+- **No delegated agent ends its turn while a background command runs.** Claude Code never
+  wakes it when the command finishes, so it loses the result, and `open` can't flag it. A
+  long command runs in the foreground (up to the Bash tool's 10-minute limit). A longer one
+  runs in the background, and the agent waits on its output before reporting. `BRIEF.md`'s
+  Budget section says so; keep that line.
 - **After a crash or restart,** run `delegation-ledger open --hours 24`.
   - For each orphaned agent, look at its artifact path and redo only the unfinished part.
   - For Codex, run `codex-delegate status`, then `codex-delegate resume <run_id>`.

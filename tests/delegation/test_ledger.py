@@ -1,14 +1,18 @@
 """delegation-ledger and the shared report validator."""
+import datetime
 import json
 import os
 import subprocess
 import tempfile
+import time
 import unittest
+from unittest import mock
 
 from _paths import HOOKS, SCRIPTS, SKILL, load_script
 
 LEDGER = os.path.join(SCRIPTS, "delegation-ledger")
 dc = load_script("delegation_common.py")
+ledger_mod = load_script("delegation-ledger")
 
 VALID = {"status": "done", "summary": "ok", "artifacts": [], "blocked_actions": []}
 
@@ -69,7 +73,9 @@ class Validator(unittest.TestCase):
         self.assertEqual(set(schema["required"]), set(schema["properties"]))
 
 
-class LedgerHook(unittest.TestCase):
+class LedgerEnv(unittest.TestCase):
+    """A temp HOME and state dir, with the hook run as a subprocess against them."""
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.env = dict(os.environ, HOME=self.tmp.name,
@@ -101,6 +107,8 @@ class LedgerHook(unittest.TestCase):
                 "session_id": "s1", "last_assistant_message": msg if msg is not None
                 else fenced(VALID), "agent_transcript_path": "/t/agent-a1.jsonl"}
 
+
+class LedgerHook(LedgerEnv):
     def test_start_and_stop_rows_are_pointers(self):
         p = self.hook(self.start())
         self.assertEqual((p.returncode, p.stdout), (0, ""))
@@ -328,6 +336,252 @@ class LedgerHook(unittest.TestCase):
         p = subprocess.run(["python3", LEDGER, "sandbox-denials"], capture_output=True,
                            text=True, env=self.env)
         self.assertIn("example.com:443", p.stdout)
+
+
+def iso_ago(minutes):
+    """A transcript timestamp `minutes` ago, with milliseconds as Claude Code writes them."""
+    t = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(minutes=minutes)
+    return t.strftime("%Y-%m-%dT%H:%M:%S.") + f"{t.microsecond // 1000:03d}Z"
+
+
+def use(i, name, ago):
+    return {"type": "assistant", "timestamp": iso_ago(ago), "message": {
+        "stop_reason": "tool_use", "content": [{"type": "tool_use", "id": i, "name": name,
+                                                "input": {}}]}}
+
+
+def result(i, ago, err=False):
+    return {"type": "user", "timestamp": iso_ago(ago), "message": {"content": [
+        {"type": "tool_result", "tool_use_id": i, "is_error": err, "content": "x"}]}}
+
+
+def thinking(ago):
+    return {"type": "assistant", "timestamp": iso_ago(ago), "message": {
+        "stop_reason": None, "content": [{"type": "thinking", "thinking": "hm"}]}}
+
+
+def ended(ago):
+    return {"type": "assistant", "timestamp": iso_ago(ago), "message": {
+        "stop_reason": "end_turn", "content": [{"type": "text", "text": "done"}]}}
+
+
+class AgentIndex(LedgerEnv):
+    """agents/<id>.json, the per-agent liveness index the hook keeps."""
+
+    def agents(self):
+        return os.path.join(self.tmp.name, "state", "dotclaude", "agents")
+
+    def index(self, aid="a1"):
+        with open(os.path.join(self.agents(), f"{aid}.json")) as f:
+            return json.load(f)
+
+    def test_a_start_creates_the_entry(self):
+        self.hook(self.start())
+        idx = self.index()
+        self.assertEqual((idx["id"], idx["agent_type"], idx["session_id"], idx["cwd"]),
+                         ("a1", "Explore", "s1", "/w"))
+        self.assertEqual((idx["state"], idx["activations"], idx["teammate"]),
+                         ("running", 1, False))
+        self.assertEqual(idx["first_start"], idx["activation_start"])
+        self.assertTrue(idx["agent_transcript"].endswith("/s1/subagents/agent-a1.jsonl"))
+        self.assertEqual(sorted(os.listdir(self.agents())), [".lock", "a1.json"])  # no temp left
+        self.hook(self.stop())
+        err = os.path.join(self.tmp.name, "state", "dotclaude", "delegation-ledger.err")
+        self.assertFalse(os.path.exists(err))  # the hook fails open, so check it didn't fail
+
+    def test_a_second_start_is_a_new_activation_of_the_same_agent(self):
+        self.hook(self.start())
+        old = "2026-01-01T00:00:00Z"
+        idx = dict(self.index(), first_start=old, activation_start=old)
+        with open(os.path.join(self.agents(), "a1.json"), "w") as f:
+            json.dump(idx, f)
+        self.hook(self.start())
+        idx = self.index()
+        self.assertEqual(idx["first_start"], old)
+        self.assertNotEqual(idx["activation_start"], old)
+        self.assertEqual(idx["activations"], 2)
+
+    def test_a_stop_marks_it_stopped_without_background_tasks(self):
+        # background_tasks is session-wide (probe, 2.1.286), so the index doesn't keep it.
+        self.hook(self.start())
+        self.hook(dict(self.stop(), background_tasks=[{"id": "b1", "type": "shell"}]))
+        idx = self.index()
+        self.assertEqual(idx["state"], "stopped")
+        self.assertTrue(idx["stopped_at"])
+        self.assertNotIn("background_tasks", idx)
+        self.hook(self.start())
+        self.assertNotIn("stopped_at", self.index())
+
+    def test_a_helper_agent_writes_no_entry(self):
+        self.hook(dict(self.start(), agent_type=""))
+        self.assertFalse(os.path.exists(os.path.join(self.agents(), "a1.json")))
+
+    def test_a_stale_entry_is_pruned_and_a_fresh_one_kept(self):
+        os.makedirs(self.agents())
+        week = time.time() - 8 * 86400
+        for name, mtime in (("old.json", week), (".old.x.tmp", week),
+                            ("fresh.json", time.time() - 86400)):
+            path = os.path.join(self.agents(), name)
+            open(path, "w").close()
+            os.utime(path, (mtime, mtime))
+        self.hook(self.start())
+        self.assertEqual(sorted(os.listdir(self.agents())), [".lock", "a1.json", "fresh.json"])
+
+    def test_a_malformed_entry_reads_as_empty(self):
+        os.makedirs(self.agents())
+        with open(os.path.join(self.agents(), "a1.json"), "w") as f:
+            f.write("{not json")
+        with mock.patch.dict(os.environ, {"XDG_STATE_HOME": self.env["XDG_STATE_HOME"]}):
+            self.assertEqual(dc.read_agent_state("a1"), {})
+            self.assertEqual(dc.read_agent_state("../x"), {})
+            with self.assertRaises(ValueError):  # an id is never a path
+                dc.update_agent_state("../x", lambda s: None)
+        self.hook(self.start())
+        self.assertEqual(self.index()["activations"], 1)
+
+
+class Liveness(LedgerEnv):
+    """`open` on a live session: the transcript scan, the index and the thresholds."""
+
+    def setUp(self):
+        super().setUp()
+        sessions = os.path.join(self.tmp.name, ".claude", "sessions")
+        os.makedirs(sessions)
+        with open(os.path.join(sessions, "1.json"), "w") as f:
+            json.dump({"pid": os.getpid(), "sessionId": "s1"}, f)
+        self.sub = os.path.join(self.tmp.name, "s1", "subagents")
+        os.makedirs(self.sub)
+
+    def transcript(self, *entries, aid="a1"):
+        with open(os.path.join(self.sub, f"agent-{aid}.jsonl"), "w") as f:
+            for e in entries:
+                f.write(json.dumps(e) + "\n")
+
+    def open_(self, toml=None):
+        env = dict(self.env)
+        if toml is not None:
+            path = os.path.join(self.tmp.name, "liveness.toml")
+            with open(path, "w") as f:
+                f.write(toml)
+            env["DELEGATION_LIVENESS"] = path
+        p = subprocess.run(["python3", LEDGER, "open"], capture_output=True, text=True, env=env)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        return p.stdout
+
+    def test_an_open_tool_use_is_a_call_in_flight(self):
+        self.transcript(use("t1", "Bash", 5))
+        self.hook(self.start())
+        out = self.open_()
+        self.assertIn("in Bash 5 min", out)
+        self.assertIn("(activation 1), last entry tool_use 5 min ago, 1 call open", out)
+        self.assertNotIn("⚠", out)       # under the shipped tool_min
+        self.assertNotIn("warning", out)  # the shipped liveness.toml parses
+
+    def test_parallel_calls_report_the_one_still_open(self):
+        self.transcript(use("t1", "Read", 6), use("t2", "Bash", 6))
+        self.hook(self.start())
+        out = self.open_()
+        self.assertIn("in Read 6 min, +1 more", out)
+        self.assertIn("2 calls open", out)
+        self.transcript(use("t1", "Read", 6), use("t2", "Bash", 6), result("t1", 5))
+        out = self.open_()
+        self.assertIn("in Bash 6 min", out)
+        self.assertNotIn("more", out)
+
+    def test_a_denied_call_is_not_in_flight(self):
+        self.transcript(use("t1", "Bash", 3), result("t1", 3, err=True))
+        self.hook(self.start())
+        out = self.open_()
+        self.assertNotIn("in Bash", out)
+        self.assertIn("running (no transcript entry for 3 min)", out)
+
+    def test_a_new_prompt_clears_a_call_an_abort_left_open(self):
+        prompt = {"type": "user", "timestamp": iso_ago(2), "message": {"content": "go on"}}
+        self.transcript(use("t1", "Bash", 9), prompt, thinking(1))
+        self.hook(self.start())
+        out = self.open_()
+        self.assertNotIn("in Bash", out)
+        self.assertIn("running (no transcript entry for 1 min)", out)
+
+    def test_thinking_last_is_measured_from_its_timestamp(self):
+        # An attachment entry written later doesn't count as the agent's own.
+        self.transcript(use("t1", "Read", 4), result("t1", 4), thinking(2),
+                        {"type": "attachment", "timestamp": iso_ago(0)})
+        self.hook(self.start())
+        out = self.open_()
+        self.assertIn("running (no transcript entry for 2 min)", out)
+        self.assertIn("last entry thinking 2 min ago", out)
+
+    def test_a_silent_subagent_gets_a_warning(self):
+        self.transcript(thinking(20))
+        self.hook(self.start())
+        self.assertIn("no transcript entry for 20 min  ⚠ ask it for status", self.open_())
+
+    def test_a_teammate_has_its_own_thresholds(self):
+        with open(os.path.join(self.sub, "agent-a1.meta.json"), "w") as f:
+            json.dump({"name": "team-x", "customAgentType": "researcher",
+                       "teamName": "session-s1"}, f)
+        self.transcript(thinking(20))
+        self.hook(dict(self.start(), agent_type="team-x"))
+        self.assertIn("running (no transcript entry for 20 min)", self.open_())
+
+    def test_end_turn_keeps_the_no_stop_row_verdict(self):
+        self.transcript(use("t1", "Read", 3), result("t1", 3), ended(2))
+        self.hook(self.start())
+        out = self.open_()
+        self.assertIn("ended its turn but no stop row", out)
+        self.assertIn("last entry turn ended (end_turn) 2 min ago", out)
+
+    def test_a_lower_tool_min_flags_the_call(self):
+        self.transcript(use("t1", "Bash", 5))
+        self.hook(self.start())
+        out = self.open_("[subagent]\ntool_min = 1\n")
+        self.assertIn("in Bash 5 min  ⚠ past 1 min: a long call or stuck; check it", out)
+
+    def test_a_malformed_file_warns_first_and_keeps_the_defaults(self):
+        self.transcript(use("t1", "Bash", 40))
+        self.hook(self.start())
+        out = self.open_("[subagent\ntool_min = 1\n")
+        self.assertTrue(out.startswith("warning: "), out)
+        self.assertIn("using the default thresholds", out)
+        self.assertIn("⚠ past 30 min", out)
+
+    def test_a_bad_value_keeps_only_its_own_default(self):
+        self.transcript(thinking(5))
+        self.hook(self.start())
+        out = self.open_("[subagent]\ntool_min = -1\nsilent_min = 1\n[subagnet]\nx = 1\n")
+        first = out.splitlines()[0]
+        self.assertIn("subagent.tool_min = -1 is not a positive number", first)
+        self.assertIn("[subagnet] is not one of", first)
+        self.assertIn("⚠ ask it for status", out)  # silent_min = 1 still applied
+
+    def test_a_quiet_codex_run_gets_a_warning(self):
+        out_dir = os.path.join(self.tmp.name, "run")
+        os.makedirs(out_dir)
+        events = os.path.join(out_dir, "events.jsonl")
+        open(events, "w").close()
+        old = time.time() - 40 * 60
+        os.utime(events, (old, old))
+        os.makedirs(os.path.dirname(self.ledger), exist_ok=True)
+        with open(self.ledger, "w") as f:
+            f.write(json.dumps({"runner": "codex", "id": "r1", "run_id": "r1", "event": "start",
+                                "ts": dc.now_iso(), "out": out_dir, "pid": 2 ** 22 + 1}) + "\n")
+        self.assertIn("⚠ no event past 30 min: check it", self.open_())
+
+    def test_silent_min_flag_is_gone(self):
+        p = subprocess.run(["python3", LEDGER, "open", "--silent-min", "5"], capture_output=True,
+                           text=True, env=self.env)
+        self.assertEqual(p.returncode, 2)
+
+    def test_scan_handles_a_missing_or_cut_transcript(self):
+        self.assertEqual(ledger_mod.scan_transcript(None)["last"], "no transcript")
+        self.assertEqual(ledger_mod.scan_transcript("/nonexistent.jsonl")["last"], "no transcript")
+        path = os.path.join(self.sub, "agent-cut.jsonl")
+        with open(path, "w") as f:
+            f.write('ol_use"}]}}\n' + json.dumps(use("t1", "Grep", 1)) + "\n")
+        scan = ledger_mod.scan_transcript(path)
+        self.assertEqual([tool for tool, _ in scan["open"]], ["Grep"])
+        self.assertEqual(scan["last"], "tool_use")
 
 
 if __name__ == "__main__":
