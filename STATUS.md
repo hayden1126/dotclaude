@@ -37,18 +37,15 @@ stored here).
   CLAUDE.md trigger, `vetting-sources`, `deck-production` S1, and earlier work back to PR #10.
 
 ## In flight
-- **Delegation hardening Stage 3: A2 (deadline: nudge, then hard stop) is built** on branch
-  `feat/delegation-a2-deadline`, not yet merged; then A6.
-  - **The plan:** `~/.claude/plans/deep-moseying-koala.md`. Step 0 (the probes) and Step 1 (the
-    build) are done; Step 2 is left:
-    - review the branch, then run both unit suites outside the sandbox (270 tests expected);
-    - run the live case, `python3 tests/delegation/run.py --runner claude --cases deadline`,
-      from the worktree, outside the sandbox, then fill the "A2, 2.1.287" results block in
-      `docs/delegation.md` "Tests";
+- **Delegation hardening Stage 3: A2 (deadline: nudge, then hard stop) is built and verified**
+  on branch `feat/delegation-a2-deadline`, not yet merged; then A6.
+  - **The plan:** `~/.claude/plans/deep-moseying-koala.md`. Done: the probes, the build, the
+    review, 270 + 19 unit tests, and the live `deadline` case (9/9 on 2.1.287). Left:
     - after Hayden approves the PR and the merge, `./setup.sh` (copy `~/.claude/settings.json`
       first and diff it after), then `delegation-ledger canary` in the background. It must go
-      green on 2.1.287 with more than 56 checks, and `delegation-ledger due` should then be
-      quiet apart from the dated 2026-10-07 item.
+      green on 2.1.287 with 65 checks, and `delegation-ledger due` should then be quiet apart
+      from the dated 2026-10-07 item. Then add the canary line to the "A2, 2.1.287" results in
+      `docs/delegation.md` "Tests".
   - Build each step on a fresh branch from `main` in a worktree, so the live hooks stay
     untouched while it is edited.
   - **The plans:** Stage 3 is `~/.claude/plans/lets-move-on-to-refactored-pascal.md`.

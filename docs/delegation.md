@@ -556,9 +556,10 @@ The check fails open on an unreadable index (no index, no clock) and never becom
 `liveness.toml` is a file of its own for the opposite reason: only `open` and `watch` read it, so
 it fails open.
 
-**The state dir is protected.** `~/.local/state/dotclaude` joined `[protect] write_denied`. The OS
-sandbox covers only Bash, so a general-purpose agent's Write tool could otherwise rewrite its own
-index and reset its clock.
+**The state dir is protected.** `{state_dir}` joined `[protect] write_denied`. It expands to
+`$XDG_STATE_HOME/dotclaude` (default `~/.local/state/dotclaude`), wherever the ledger actually
+writes. The OS sandbox covers only Bash, so a general-purpose agent's Write tool could otherwise
+rewrite its own index and reset its clock.
 
 **Checks run between calls,** so a long call that is already running finishes, and the stop lands
 on the next one. The main thread is exempt. Codex keeps `codex-delegate --timeout`.
@@ -805,6 +806,14 @@ done; see "Stage 3" above. A6 is next, and it retunes A2's budgets against the l
     120-second call showed `in Bash` in a bare `watch`, while a piped `watch` gave the sandbox
     warning. `watch --summary` took 41 ms (median of 10), and the tmux token showed `1▶`, then
     cleared when the probe stopped.
+- **Results on 2026-10-01 (A2, 2.1.287):**
+  - before the build, the quick canary went green on 2.1.287 (250 + 19 unit tests, sandbox
+    posture, all 17 strings);
+  - unit: 270 tests, plus 19 in `tests/setup`;
+  - claude: the new `deadline` case passed 9 of 9, so a full run has 65 checks. The nudge landed
+    once, in the agent's transcript only. The second Read was denied at 0.6 min against the 0.4 min
+    stop, and the agent handed back `partial`. After the SendMessage resume, a second activation
+    (`activations` 2, `nudged` cleared) let its Read through.
 
 ## Installing on a machine that is already set up
 

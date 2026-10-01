@@ -123,9 +123,9 @@ validated (`report_ok`).
 - **`partial` or `failed`:** read the summary before retrying, and retry at most once with
   a changed brief.
 - **A `deadline` stop:** the agent ran past its role's budget for this activation, and every
-  tool but the handback was denied (`stop_and_explain: ... deadline`). Read its partial report
-  first. Then resume it through SendMessage with a narrower brief, which starts a new
-  activation with a fresh budget, or take the rest over yourself.
+  tool but the handback was denied (`[subagent-policy] deadline (stop_and_explain)`). Read
+  its partial report first. Then resume it through SendMessage with a narrower brief, which
+  starts a new activation with a fresh budget, or take the rest over yourself.
 - **Writer:** review the diff on its branch (`artifacts[0]` is `branch@sha`), run the
   verification yourself, and merge single-threaded.
 - **Reader:** if its output must survive this session, write the report to the artifact
