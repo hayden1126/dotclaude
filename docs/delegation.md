@@ -431,7 +431,7 @@ verdict. `watch` is the view you glance at. It prints one line per live delegati
 Codex alike:
 
 ```
-claude  a1b2  writer  dotclaude  in Bash 12 min  "run the stall probe's 100-second sleep a"
+claude  a1b2  writer  dotclaude  in Bash 12 min  'add the watch view to delegation-ledger'
 codex   20261001T101500-9f3a1c  gpt-5.6-sol  proj-x  running, last event 3 min ago
 1 more unfinished but not live in the last 48h: delegation-ledger open
 ```
@@ -454,6 +454,11 @@ entry and its stop row (a worktree agent's SubagentStop hook runs `git status`).
 could catch that gap and flash a false `⚠`. So for its first minute (`STOP_GRACE_MIN`), both views
 call such a turn `finishing its turn`, with no warning. After that, `ended its turn but no stop
 row` gets a `⚠`.
+
+**Known gap: a lost stop row can't be dismissed.** An agent in a live session whose stop row never
+came keeps its line, and the token's `⚠`, for up to 48 hours. As of 2026-10-01, none of the 73
+Claude agents in the live ledger has a start as its latest row, so a dismiss command waits until
+this shows up.
 
 **The tail read.** The ledger has no rotation, so `watch` reads only its last 1 MiB, which keeps a
 3-second poll cheap. The cost: a start row more than about 2,900 rows back is missed by `watch`.
@@ -480,7 +485,9 @@ the `watch --summary` contract. The script is rate-limited to 3 seconds while th
 redraws every 2, so a rate-limited run repeats the last token from a cache file. tmux replaces a
 `#()` job's text with each run's output, an empty one included, so printing nothing there would
 blank the token on every other redraw. An empty token from `watch --summary` itself just clears
-the bar, which is what we want.
+the bar, which is what we want. The script also runs it with `CLAUDE_PID` unset. A `#()` job
+inherits the tmux server's environment, so a server started from a Claude Bash call would carry
+that session's `CLAUDE_PID` after it died, and that would trip the sandbox self-check.
 
 ## Verified facts the design rests on
 
@@ -693,7 +700,7 @@ see "Stage 3" above. A2 is next.
   - claude: the `stall` case passed 4 of 4, including its two new liveness checks, so a full run
     now has 54 checks.
 - **Results on 2026-10-01 (A3, 2.1.286):**
-  - unit: 249 tests;
+  - unit: 250 tests;
   - the `stall` case gains two checks (`watch` showed the agent in Bash, `watch --summary`
     counted it), so a full run has 56 checks.
 

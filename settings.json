@@ -35,6 +35,7 @@
       "git ls-remote *",
       "gh *",
       "codex-delegate *",
+      "delegation-ledger *",
       "codex *",
       "claude *",
       "tmux *",

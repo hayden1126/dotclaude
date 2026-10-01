@@ -221,7 +221,8 @@ class Excluded(Base):
         for cmd in ("gh repo view", "git push origin main", "git push", "git fetch",
                     "env FOO=1 gh pr list", "ls && gh api /user", "bash -c 'git status; git push'",
                     "eval \"git push\"", "codex exec x", "claude -p hi", "tmux ls",
-                    "timeout 5 git pull", "echo hi | xargs gh issue view"):
+                    "timeout 5 git pull", "echo hi | xargs gh issue view",
+                    "delegation-ledger open", "timeout 5 delegation-ledger watch"):
             self.assertDenied(self.bash(cmd), "excluded-command", "manual_only", cmd)
 
     def test_project_exclusions_are_ignored_like_claude_code_does(self):
