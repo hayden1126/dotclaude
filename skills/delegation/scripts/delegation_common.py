@@ -188,6 +188,12 @@ def minutes_text(seconds):
     return f"{round(seconds / 60, 1):g}"
 
 
+def tool_list(names):
+    """[deadline] allow as a deadline message prints it: "A", "A and B", "A, B and C"."""
+    names = list(names)
+    return " and ".join(names) if len(names) < 3 else ", ".join(names[:-1]) + " and " + names[-1]
+
+
 def read_rows(tail=None):
     """The ledger's rows. With `tail` (bytes), only the end of the file is read, and the line
     the cut split is dropped."""

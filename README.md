@@ -130,7 +130,7 @@ ships but is opt-in, see its entry):
   subagent or teammate (the settings command exits before Python when the input has no
   `agent_id`, so the main thread is never policed). The rules live in
   `skills/delegation/policy.toml`, and `docs/delegation.md` lists them. They include a per-role
-  deadline: past `stop_min`, every tool but the handback and SendMessage is denied.
+  deadline: past `stop_min`, every tool but the handback, SendMessage and ToolSearch is denied.
   **Fails closed** for the tools it polices: a missing link, a crash or a hang blocks the delegated
   call. Needs python3 3.12 or newer.
 - **PreToolUse(`SubagentHandback`) and SubagentStop: `report-check.sh`** (in this repo). It sends a

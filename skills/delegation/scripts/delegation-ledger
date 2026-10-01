@@ -206,9 +206,9 @@ def index_agent(event, base, data):
             id=base["id"], state="stopped", stopped_at=base["ts"]))
 
 
-NUDGE = ("[deadline] You have run {ran} min of this activation's {budget} min budget ({role}). "
-         "Report now: finish and hand back, or hand back `partial` naming what is left. After "
-         "{stop} min every tool except {allow} is denied.")
+NUDGE = ("[deadline] This activation has run {ran} min, past the {nudge} min nudge for {role}. "
+         "Report now: finish and hand back, or hand back `partial` naming what is left. At the "
+         "{stop} min stop, every tool except {allow} is denied.")
 
 
 def load_deadline():
@@ -256,8 +256,8 @@ def nudge(data, now):
     print(json.dumps({"hookSpecificOutput": {
         "hookEventName": "PostToolUse",
         "additionalContext": NUDGE.format(
-            ran=dc.minutes_text(age), budget=dc.minutes_text(nudge_s), role=role,
-            stop=dc.minutes_text(stop_s), allow=" and ".join(policy["deadline"]["allow"])),
+            ran=dc.minutes_text(age), nudge=dc.minutes_text(nudge_s), role=role,
+            stop=dc.minutes_text(stop_s), allow=dc.tool_list(policy["deadline"]["allow"])),
     }}))
     dc.append_row({"ts": dc.now_iso(), "runner": "claude", "event": "nudge", "id": aid,
                    "agent_type": role, "session_id": data.get("session_id"),

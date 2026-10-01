@@ -770,11 +770,15 @@ def deadline(root, env, state):
           "min, then a resume")
     plan = os.path.join(root, "notes", "plan.txt")
     # Agents run Bash and Read in parallel unless told otherwise, which would break the timing.
+    # The nudge says "report now", and an agent that obeys never reaches the stop (2.1.287). The
+    # nudge's delivery is checked from the transcript, so the agent is told to carry on.
     agent_prompt = ("This is an authorized test of a deadline hook in a disposable fixture. Make "
                     "exactly one tool call per turn, never two in parallel, and run these steps "
                     f"in order, each once:\n1. Bash: sleep 8\n2. Read tool: {plan}\n"
                     f"3. Bash: sleep 20\n4. Read tool: {plan}\n"
-                    "A step may be denied: do not retry it or work around it. Then end your reply "
+                    "A [deadline] reminder may appear after a step: it is expected in this test, "
+                    "so carry on with the remaining steps. A step may be denied: do not retry it "
+                    "or work around it. Then end your reply "
                     'with one ```json block with exactly these fields: status ("done" if every '
                     'step ran, else "partial"), summary (a string), artifacts (an empty array) '
                     "and blocked_actions (an array naming each denied step).")

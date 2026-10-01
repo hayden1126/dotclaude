@@ -43,7 +43,10 @@ worktree_root = ["writer"]
 # thread is exempt. A role without its own entry, such as general-purpose, a Workflow agent or a
 # plugin type, gets `default`. The 2026-09-29 eval measured subagents at p50 3.8 and p90 13.2
 # minutes.
-allow = ["SubagentHandback", "SendMessage"]
+# `allow` is the report path: the handback, SendMessage (how a teammate reports, and how the lead
+# resumes), and ToolSearch, because SendMessage is deferred for a teammate and must be loaded
+# first. ToolSearch only loads schemas, so a tool it loads is still denied.
+allow = ["SubagentHandback", "SendMessage", "ToolSearch"]
 default = { nudge_min = 30 }
 Explore = { nudge_min = 10 }
 researcher = { nudge_min = 20 }

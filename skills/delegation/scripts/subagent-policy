@@ -347,8 +347,8 @@ class Analyzer:
         if age is not None and age >= stop_s:
             self.deny("deadline", "stop_and_explain",
                       f"this activation has run {dc.minutes_text(age)} min, past the "
-                      f"{dc.minutes_text(stop_s)} min budget for {self.agent_type}",
-                      footer=f"Only {' and '.join(allow)} are allowed now. Hand back a `partial` "
+                      f"{dc.minutes_text(stop_s)} min stop for {self.agent_type}",
+                      footer=f"Only {dc.tool_list(allow)} are allowed now. Hand back a `partial` "
                              "report naming what is done and what is left. If the lead resumes "
                              "you, the budget starts over and every tool works again.")
 
