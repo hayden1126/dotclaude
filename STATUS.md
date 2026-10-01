@@ -12,7 +12,7 @@ stored here).
 ## Done (recent; git, the linked plans and memory hold the detail)
 - **Delegation hardening Stage 3: Step 0, A0, A4, A5, A1, A3 and A2, live on HAYPC** (2026-09-30
   to 10-01; PRs #42 to #46, range `d46449b..ce16b8a`; A1 is PR #48, range `c0a3241..1d09748`;
-  A3 is PR #49, range `1d09748..65e7297`; A2 is PR #51, range `0aa08f8..3d076d5`). Named spawns
+  A3 is PR #49, range `1d09748..65e7297`; A2 is PRs #51 and #52, range `0aa08f8..270dcb8`). Named spawns
   need a `team-` prefix; teammates are policed by role; `delegation-ledger canary`/`due`
   re-verify enforcement on their own; `open` and `watch` read liveness from the transcript, and
   `watch --summary` feeds the tmux bar. A2 nudges, then stops, an agent past its role's budget
@@ -31,16 +31,15 @@ stored here).
   CLAUDE.md trigger, `vetting-sources`, `deck-production` S1, and earlier work back to PR #10.
 
 ## In flight
-- **Delegation hardening Stage 3: A2's resume-text fix, then a green canary, then A6.** The
-  post-merge canary went 64/65 (see `docs/delegation.md` "Tests", "A2, 2.1.287"). The fix is on
-  branch `fix/a2-resume-text` (base `3d076d5`; derive its PR and merge state with `gh pr list`).
-  - **Next step, once Hayden merges it:** `git pull` in `~/dotclaude`, then `delegation-ledger
-    canary` in the background. No `setup.sh` is needed: `settings.json` didn't change, and the
-    scripts are symlinked. It must go 65/65 on 2.1.287; add that line to the same results block.
-    `delegation-ledger due` should then be quiet apart from its dated items.
-  - **Then clean up (Hayden approved, 2026-10-01):** remove the worktree
-    `.claude/worktrees/a2-resume` outside the sandbox ([[cc-p-mode-harness-gotchas]]) and delete
-    the local branch `fix/a2-resume-text`.
+- **Delegation hardening Stage 3: next is A6 (monthly audit and GP share).** A2 is done, and the
+  full canary is green on 2.1.287 (65/65; counts and timing in `docs/delegation.md` "Tests").
+  - **Before building,** run `delegation-ledger due`. Its "reports failing the contract: 3" warning
+    is known: three rows from 2026-09-30 that predate the handback parser and the report-check
+    fixes (`a07a9cb`, `d0a4ed8`). They leave the audit's 7-day window on 2026-10-07; a warning
+    after that is new.
+  - **A6's spec** is the Stage 3 plan's A6 section: `audit --monthly` computed from the ledger and
+    the index, with no scratch scripts. It also counts `nudge` rows and `deadline` denials, to
+    retune A2's budgets.
   - **Plans:** A2 is `~/.claude/plans/deep-moseying-koala.md` (its Step 0 probe results are
     final). Stage 3 is `~/.claude/plans/lets-move-on-to-refactored-pascal.md`, with A1/A3 detail in
     `woolly-jingling-cookie.md`. A2's decisions and why are in `docs/delegation.md` "Deadline

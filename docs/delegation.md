@@ -828,6 +828,8 @@ is next, and it retunes A2's budgets against the ledger.
     second activation started), but a real resumed agent has the same blind spot. So the denial
     now says a resume restarts the budget, and the case's resume message says it isn't a retry.
     The case then passed 9 of 9 twice.
+  - after that fix merged (PR #52), the full canary passed 65 of 65 in 6 min 0 s, so 2.1.287 is
+    green.
 
 ## Installing on a machine that is already set up
 
