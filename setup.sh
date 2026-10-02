@@ -128,6 +128,16 @@ mkdir -p "$CODEX_DIR"
 link "$REPO_DIR/codex/AGENTS.md" "$CODEX_DIR/AGENTS.md"
 python3 "$REPO_DIR/codex/merge-config.py" "$REPO_DIR/codex/config.toml" "$CODEX_DIR/config.toml" \
   || warn "codex config.toml merge failed (see above); $CODEX_DIR/config.toml left unchanged"
+# The skills Codex gets: the portable ones (Hayden's list, 2026-10-01). The others lean on Claude
+# Code: its subagents, its own skills, chrome-devtools-mcp.
+CODEX_SKILLS=(coding-practices frontend-ui-discipline research-discipline ui-alignment vetting-sources)
+for s in "${CODEX_SKILLS[@]}"; do
+  if [[ -d "$REPO_DIR/skills/$s" ]]; then
+    link "$REPO_DIR/skills/$s" "$CODEX_DIR/skills/$s"
+  else
+    warn "codex skill $s is not in skills/; skipped"
+  fi
+done
 
 # ---------------------------------------------------------------------------
 # 3. Register marketplaces and install plugins

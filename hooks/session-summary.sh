@@ -14,7 +14,7 @@
 #
 # Detaches the call so Stop never blocks the turn. Fails open on everything (exit
 # 0, nothing on stdout): a missing/expired token or a failed call just leaves the
-# previous summary in place (the widget then keeps showing it, or the ai-title).
+# previous summary in place (the widget then keeps showing it, or nothing).
 #
 # Note: the OAuth token file is undocumented and its access token rotates; reads
 # are best-effort and the fail-open path covers a stale read between refreshes.

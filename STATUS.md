@@ -10,13 +10,15 @@ Base: `main`. For branch / PR / push state, run `gh pr list` and `git log main..
 stored here).
 
 ## Done (recent; git, the linked plans and memory hold the detail)
-- **Delegation hardening Stage 3: Step 0, A0, A4, A5, A1, A3 and A2, live on HAYPC** (2026-09-30
-  to 10-01; PRs #42 to #46, range `d46449b..ce16b8a`; A1 is PR #48, range `c0a3241..1d09748`;
-  A3 is PR #49, range `1d09748..65e7297`; A2 is PRs #51 and #52, range `0aa08f8..270dcb8`). Named spawns
+- **Delegation hardening Stage 3, complete and live on HAYPC** (2026-09-30 to 10-01; PRs #42 to
+  #46, range `d46449b..ce16b8a`; A1 is PR #48, range `c0a3241..1d09748`; A3 is PR #49, range
+  `1d09748..65e7297`; A2 is PRs #51 and #52, range `0aa08f8..270dcb8`; A6 is PR #55, range
+  `e4b790a..f3014c0`, with the legacy probes excluded and the quick canary green). Named spawns
   need a `team-` prefix; teammates are policed by role; `delegation-ledger canary`/`due`
   re-verify enforcement on their own; `open` and `watch` read liveness from the transcript, and
   `watch --summary` feeds the tmux bar. A2 nudges, then stops, an agent past its role's budget
-  (`policy.toml` `[deadline]`).
+  (`policy.toml` `[deadline]`). `audit --monthly` shows the numbers for retuning both, and `due`
+  asks for it once the ledger is a month old.
   `docs/delegation.md` "Stage 3" holds the findings, the decisions and the test counts.
 - Older (git, the PRs and memory hold the detail): `setup.sh` keeps the live settings' own keys
   (PR #47, [[dotclaude-setup-install-model]]), the machine overlay `settings.machine.json`
@@ -31,48 +33,39 @@ stored here).
   CLAUDE.md trigger, `vetting-sources`, `deck-production` S1, and earlier work back to PR #10.
 
 ## In flight
-- **Delegation hardening Stage 3: A6 (monthly audit), the last step, is PR #55** (range
-  `e4b790a..feat/a6-monthly-audit`; state: `gh pr view 55 --json state,mergedAt`). It adds
-  `delegation-ledger audit --monthly` (usage for retuning `[deadline]` and `liveness.toml`),
-  `delegation-ledger exclude` (keeps probes out of those numbers), and a `due` nudge for the
-  monthly run. Design and decisions: `~/.claude/plans/a6-jazzy-sloth.md` and `docs/delegation.md`
-  "Monthly audit (A6)". After it merges:
-  - `git pull` in `~/dotclaude`, outside the sandbox. A6 changes no `settings.json`, so
-    `setup.sh` isn't needed: the CLI and the hooks are symlinks.
-  - With Hayden's go-ahead, append the legacy exclusions on HAYPC, each as a bare command:
-    `delegation-ledger exclude --id apolicy-check-50aa2e0cfe57efc9 --why probe`, the same for
-    `ateam-probe-4965ec049f19323d` and `ateam-probe-2-d512254be0629b3d`, then
-    `--id a572ffd9d3102036e --why "install check"` and
-    `--session c9df7b29-0f66-4fc4-a932-253715942860 --name install-probe --why probe`.
-    `poster-audit` stays in: it was real work.
-  - Run `delegation-ledger canary --quick`, bare, so the merged code's quick tier is on record.
-  - **Retune later, not now.** Once the ledger is a month old, `due` asks for `audit --monthly`
-    (the date and the first sample sizes are in that docs section). Retune only the groups it
-    doesn't mark `too few to retune`. The live ledger is real work, not harness: the harness
-    writes to its own fixture state.
-  - Then remove the worktree (`git worktree remove .claude/worktrees/a6`, outside the sandbox).
-  - The "reports failing the contract: 3" in the daily audit is three known pre-fix rows from
-    2026-09-30, gone from its window on 2026-10-07.
+- **Small fixes, on branch `chore/small-fixes`** (base `f3014c0`; state: `gh pr list --head
+  chore/small-fixes`): Codex skills wired into `setup.sh`, the `.mcp.json` stub ignored, the
+  status line's dead ai-title fallback dropped, two history docs corrected. After it merges:
+  `git pull` in `~/dotclaude`, then `./setup.sh`, both outside the sandbox, to link Codex's skills
+  and reinstall the ignore block. Copy `~/.claude/settings.json` first and diff it after
+  ([[dotclaude-setup-install-model]]). Then remove `.claude/worktrees/small-fixes` and the branch.
+- **Next: the delegation write-up** (Hayden wants it; next after the small fixes). The first call
+  is the format: a blog post or a public repo, which sets how much of the evidence must be
+  cleaned of private context. The evidence (probe settings, prompts and outputs, harness logs) is
+  in `~/scratch/delegation-writeup/evidence/`, and the older eval is in `~/scratch/delegation-eval/`.
+  Raw transcripts embed private context, so never publish them as-is. `docs/delegation.md` holds
+  the findings and decisions to draw on.
 - **Delegation hardening: what is live on HAYPC** (Stage 2, plus the Stage 3 steps under Done;
   `docs/delegation.md`;
   `skills/delegation/SKILL.md` is the operating guide). Open items:
+  - **Retune later, not now.** When `due` asks for `audit --monthly` (the date and the first
+    sample sizes are in `docs/delegation.md` "Monthly audit (A6)"), retune `[deadline]` and
+    `liveness.toml` only for the groups it doesn't mark `too few to retune`. After a probe run by
+    hand in a live session, `delegation-ledger exclude --id <id> --why probe`.
+  - The daily audit's "reports failing the contract: 3" is three known pre-fix rows from
+    2026-09-30, gone from its window on 2026-10-07.
   - **Other machines:** `git pull` in `~/dotclaude`, then `./setup.sh`, both outside the sandbox
-    (A4 and A3 changed `settings.json`, and A2 adds a PostToolUse hook to it; A6 changes none).
+    (A4 and A3 changed `settings.json`, A2 adds a PostToolUse hook to it, and `setup.sh` now links
+    Codex's skills).
     - A baseline key still wins over the live file's value, so copy `~/.claude/settings.json`
       first and diff it after.
     - Without a `settings.machine.json` overlay, install by hand per the docs' install order:
       the policy hook fails closed.
-  - **Write-up:** Hayden wants a blog post or public repo on the findings. The evidence (probe
-    settings, prompts and outputs, harness logs) is in `~/scratch/delegation-writeup/evidence/`, and
-    the older eval is in `~/scratch/delegation-eval/`. Raw transcripts embed private context, so
-    never publish them as-is.
 - **Codex setup shared with a friend** (Hayden's ask, 2026-09-29). The share page is BUILT and private:
   https://claude.ai/artifact/KWwrPkLsbMUi7Ugjfskqsz (source was a session scratchpad; republish by that
   URL). It links only four clean skills (coding-practices, research-discipline, ui-alignment,
   vetting-sources) and tells the friend never to run `setup.sh`. It is ready to share
-  (`/codex:review` ran end to end on 2026-10-01). Separate, Hayden-side: wire Codex skills into
-  `setup.sh` (today `~/.codex/skills/{coding-practices,frontend-ui-discipline}` are hand-made
-  symlinks, so a fresh setup gives Codex no skills; `writing-voice` is Hayden's own voice, exclude).
+  (`/codex:review` ran end to end on 2026-10-01).
 - **`deck-production` blocks S2-S6** (plan: `~/.claude/plans/explore-our-entire-workflow-bright-shamir.md`,
   missing from HAYPC's `~/.claude/plans/` on 2026-10-01; find it on the machine that wrote it, or
   rebuild it from this block).
@@ -92,28 +85,7 @@ stored here).
     The plan file owns block numbering only, and must not leak "S<n>" into shipped artifacts.
 
 ## Blocked / decisions needed
-- **Sandbox stubs slip past the managed git ignore.** `git/install-ignore.py` writes root-anchored
-  patterns (`/x`) and leaves out `.mcp.json`. So `.mcp.json` shows as untracked, and a Bash
-  command run from a subdirectory gets its own `/dev/null` mounts there (`tests/.mcp.json`,
-  `tests/delegation/.claude/*`), which `git add -A` then trips on. Workaround: `git add -u`, and
-  run Bash from the repo root. Decide: add `/.mcp.json` to the list (cheap), and whether to
-  unanchor the patterns, which would also hide real nested files with those names.
-- **Status-line widget's `ai-title` fallback is now dead.** `statusline/session-summary.py`
-  (`scan_ai_title`) still falls back to Claude's `ai-title` before the first Stop summary lands, but
-  the title work above suppresses `ai-title` generation, so that record is now generally never
-  written and a fresh session shows blank summary rows until the first Stop. No free pre-Stop
-  replacement exists (the `.title.txt` label is also written on Stop). Decide: seed those rows from
-  the current prompt's first line (as `session-title.sh` now does) or accept the brief blank and drop
-  the dead `scan_ai_title` fallback. Docs already note the fallback is moot.
-- **`docs/durable-handoff-brief.md` scope call.** Its "Inner-loop inheritance mechanics, VERIFIED
-  2026-06-17" note says the global `settings.json` references `danger-guard.sh` (false since
-  `8602081`), and its setup.sh summary (it now links every hook, `agents/` and the CLIs) is stale
-  too. Left unedited as a dated design snapshot. Decide: correct both, or keep it as history. The
-  loop-engineering reference beside them is another repo's file and is NOT stale.
-- **Historical docs naming `Explore` for git work.** `skills/frontend-ui-discipline/SPEC.md:14` (an
-  authoring record) tells an Explore agent to read a diff of the session's commits. The `Explore`
-  override has no shell, so that step now needs `researcher` or a pasted diff. Decide: update the
-  record, or leave it as history.
+- None open.
 
 ## Notes for next session
 - **Verify delegation before touching it:**

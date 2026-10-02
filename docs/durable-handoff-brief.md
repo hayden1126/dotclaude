@@ -1,5 +1,11 @@
 # Brief: a durable session-handoff mechanism (hook and/or skill) in dotclaude
 
+> STALE CLAIMS, noted 2026-10-01. This brief is a dated snapshot, kept as written, except for this
+> note. Two of its facts no longer hold: the global `settings.json` doesn't reference
+> `danger-guard.sh` (it ships unwired since `8602081`, README "danger-guard.sh"), and `setup.sh`
+> now links every hook, `agents/` and the delegation CLIs, not just the skills, danger-guard,
+> CLAUDE.md and templates (README "Quickstart"). Read the README for the current setup.
+
 > RESOLVED 2026-06-17. v1 is implemented as a skill: `skills/handoff/SKILL.md` (skill-only and
 > advisory, the direction Hayden picked). The design rationale and the full plan are in
 > `~/.claude/plans/read-docs-durable-handoff-brief-md-and-p-precious-cherny.md`. Two pieces are

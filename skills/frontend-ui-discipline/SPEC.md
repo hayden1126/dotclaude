@@ -11,7 +11,7 @@ This session built a stack of mobile+desktop UI features on a client's internal 
 
 ## Deliverable shape (for the fresh session)
 
-- **First, re-explore before drafting.** Run another exploration pass (dispatch an Explore agent) over the dashboard's `build.py` — especially its rationale comments (`/* ... */` in the CSS, `//` in the JS) and the built HTML — plus a diff of this session's commits, to surface any design decisions Parts A–C still missed. Fold anything new into the skill. Two passes already found gaps (Part C was the second); assume a third will find more.
+- **First, re-explore before drafting.** Run another exploration pass (dispatch a researcher agent; Explore has no shell for the diff) over the dashboard's `build.py` — especially its rationale comments (`/* ... */` in the CSS, `//` in the JS) and the built HTML — plus a diff of this session's commits, to surface any design decisions Parts A–C still missed. Fold anything new into the skill. Two passes already found gaps (Part C was the second); assume a third will find more.
 - **Author at** `/home/hayden/dotclaude/skills/frontend-ui-discipline/` (version-controlled dotfiles), then **symlink** `~/.claude/skills/frontend-ui-discipline` → it (mirrors every existing skill). Confirm final name with Hayden; alternatives: `web-ui-craft`, `building-web-ui`.
 - **Files:** `SKILL.md` (general discipline, terse) + `references/self-contained-dashboards.md` (the pattern specifics + bug catalogue). Split per `superpowers:writing-skills`: keep principles <~50 lines inline, push heavy reference out.
 - **Frontmatter:** only `name` + `description`, ≤1024 chars, kebab-case, name == folder. 

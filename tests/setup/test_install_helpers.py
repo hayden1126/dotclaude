@@ -218,6 +218,15 @@ class SetupWiring(unittest.TestCase):
         self.assertNotIn('copy_managed "$REPO_DIR/settings.json"', text)
         self.assertIn('git/install-ignore.py" "$REPO_DIR/git/sandbox-stubs.ignore"', text)
 
+    def test_codex_gets_the_portable_skills_and_each_exists(self):
+        with open(os.path.join(REPO, "setup.sh")) as f:
+            line = next(l for l in f if l.startswith("CODEX_SKILLS=("))
+        skills = line.strip()[len("CODEX_SKILLS=("):-1].split()
+        self.assertEqual(skills, ["coding-practices", "frontend-ui-discipline",
+                                  "research-discipline", "ui-alignment", "vetting-sources"])
+        for s in skills:
+            self.assertTrue(os.path.isfile(os.path.join(REPO, "skills", s, "SKILL.md")), s)
+
 
 if __name__ == "__main__":
     unittest.main()
