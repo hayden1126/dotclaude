@@ -94,6 +94,10 @@ CODEX_KILL = ('Codex wrapper "{desc}" was stopped at its time limit, but Codex k
               "Don't re-run it. Wait on it with delegation-ledger wait --codex {run} "
               "(codex-delegate status lists the run), with run_in_background and timeout "
               "7200000.")
+CODEX_UNKNOWN = ('Codex wrapper "{desc}" was stopped at its time limit, but Codex keeps '
+                 "running. Don't re-run it. Find the run with codex-delegate status, then wait on "
+                 "it with delegation-ledger wait --codex and its run id, with run_in_background "
+                 "and timeout 7200000.")
 CODEX_REARM = ('Codex wrapper "{desc}" was stopped at its time limit, but Codex keeps running. '
                "Don't re-run it. Re-arm the run's watch: `delegation-ledger wait --resume "
                "{wid}`, with run_in_background and timeout 7200000.")
@@ -428,7 +432,8 @@ def map_kill(n, transcript, watches, cwd, spent):
         open_watch = dc.codex_watch(run) if fold is None and run else None
         wid = fold or (open_watch or {}).get("id")
         text = (CODEX_REARM.format(desc=n.desc, wid=wid) if wid else
-                CODEX_KILL.format(desc=n.desc, run=run or "<run_id>"))
+                CODEX_KILL.format(desc=n.desc, run=run) if run else
+                CODEX_UNKNOWN.format(desc=n.desc))
         return Kill(n, text, fold)
     return plain
 

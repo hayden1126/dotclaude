@@ -472,8 +472,11 @@ class Kills(GuardEnv):
                  "Don't re-run it. Wait on it with delegation-ledger wait --codex {} "
                  "(codex-delegate status lists the run), with run_in_background and timeout "
                  "7200000.")
-        self.assertEqual(self.decide(), self.block(codex.format("codex job", "<run_id>"),
-                                                   codex.format("codex resume", "r7")))
+        unknown = ('Codex wrapper "codex job" was stopped at its time limit, but Codex keeps '
+                   "running. Don't re-run it. Find the run with codex-delegate status, then wait "
+                   "on it with delegation-ledger wait --codex and its run id, with "
+                   "run_in_background and timeout 7200000.")
+        self.assertEqual(self.decide(), self.block(unknown, codex.format("codex resume", "r7")))
 
     def test_a_killed_codex_wrapper_folds_into_the_watch_its_launch_line_names(self):
         # Two codex watches made in the launch window: the launch line tells them apart. w-a's
@@ -503,6 +506,23 @@ class Kills(GuardEnv):
         self.watch(cond={"codex": "r1"}, desc="codex run r1 ends")
         self.assertEqual(self.decide(), self.block(self.lapse_reason(
             desc="codex run r1 ends", cond="codex run r1 ends")))  # neither unstarted nor ended
+
+    def test_a_codex_launch_line_after_other_output_still_folds(self):
+        # A resume's finalize-first summary, or wrap()'s systemd-run warning, can come first.
+        self.codex_row("r2", pid=os.getpid())
+        self.watch("w-b", cond={"codex": "r2"}, desc="codex run r2 ends")
+        output = self.path("bk1.output")
+        with open(output, "w") as f:
+            f.write("codex-delegate: systemd-run not found, running without a memory cap\n"
+                    "codex-delegate: run r2 ended without a stop row; finalizing it first\n"
+                    '{\n  "run_id": "r2"\n}\n'
+                    "codex-delegate: run r2, watch w-b. If this command is stopped, Codex keeps "
+                    "running: delegation-ledger wait --resume w-b\n")
+        self.lines(launch("toolu_1", "bk1", "codex-delegate resume r2", "codex resume",
+                          self.now - 3000),
+                   notice("bk1", "toolu_1", "codex resume", self.now - 60, output=output))
+        self.assertEqual(self.decide(), self.block(self.lapse_reason(
+            "w-b", desc="codex run r2 ends", cond="codex run r2 ends")))
 
     def test_an_unstarted_codex_run_says_to_resume_it_again(self):
         self.codex_row("r1", event="pending", thread_id="th-1")  # its wrapper died first
