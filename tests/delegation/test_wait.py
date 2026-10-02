@@ -27,6 +27,7 @@ SANDBOXED = "run delegation-ledger wait as a bare command (the sandbox hides oth
 # with its exit code, then exits with that code.
 FINALIZE_STUB = """#!/bin/sh
 printf '%s\\n' "$*" >> "$STUB_ARGV"
+[ -n "$STUB_PIDFILE" ] && echo $$ > "$STUB_PIDFILE"
 [ -n "$STUB_SLEEP" ] && sleep "$STUB_SLEEP"
 echo "stub finalized $2"
 if [ -z "$STUB_NO_ROW" ]; then
@@ -512,11 +513,11 @@ class Usage(WaitEnv):
     def test_max_stays_under_the_bash_cap(self):
         target = self.path("out")
         open(target, "w").close()
-        p = self.run_("--file", target, "--max", "115.5")
+        p = self.run_("--file", target, "--max", "110.5")
         self.assertEqual((p.returncode, p.stderr),
-                         (USAGE, "wait: --max must be at most 115, under the Bash tool's "
-                                 "120-minute cap\n"))
-        self.assertEqual(self.run_("--file", target, "--max", "115").returncode, 0)
+                         (USAGE, "wait: --max must be at most 110, under the Bash tool's "
+                                 "120-minute cap with room for a finalize\n"))
+        self.assertEqual(self.run_("--file", target, "--max", "110").returncode, 0)
 
     def test_other_subcommands_keep_exit_2_for_bad_usage(self):
         p = subprocess.run(["python3", LEDGER, "tail", "--bogus"], capture_output=True,
@@ -658,6 +659,33 @@ class Codex(WaitEnv):
         self.assertEqual(w["finalizing"], {"pid": p.pid, "start": dc.proc_start(p.pid)})
         self.assertTrue(dc.waiter_alive(w))
         self.finish(p, 0)
+
+    def test_a_second_watch_on_a_run_is_refused_in_the_same_session(self):
+        codex = self.job()
+        self.codex_row("r1", codex.pid)
+        p = self.start("--codex", "r1")
+        wid = self.waiting(p)["id"]
+        again = self.run_("--codex", "r1")
+        self.assertEqual((again.returncode, again.stderr),
+                         (USAGE, f"wait: watch {wid} already waits on r1: delegation-ledger "
+                                 f"wait --resume {wid}\n"))
+        other = self.run_("--codex", "r1", "--max", "0.002", CLAUDE_CODE_SESSION_ID="s9")
+        self.assertEqual(other.returncode, AT_MAX, other.stderr)
+
+    def test_a_beat_that_fails_mid_finalize_still_waits_for_it(self):
+        self.codex_row("r1", DEAD)
+        pidfile = self.path("stub.pid")
+        p = self.start("--codex", "r1", STUB_SLEEP="1", STUB_PIDFILE=pidfile)
+        self.until(lambda: os.path.exists(pidfile) and os.path.getsize(pidfile))
+        os.chmod(self.watches, 0o500)  # the next heartbeat can't write: an OSError
+        self.addCleanup(os.chmod, self.watches, 0o700)
+        self.until(lambda: "PermissionError" in self.err_log(), timeout=5)
+        os.chmod(self.watches, 0o700)  # so the end can be recorded
+        out, _ = self.finish(p, 0)
+        self.assertTrue(out.endswith("done: codex run r1 ends\n"), out)
+        with open(pidfile) as f:
+            self.assertFalse(dc.pid_alive(int(f.read())))  # waited on, not left running
+        self.assertEqual((self.finalized(), len(self.stops())), ("finalize r1\n", 1))
 
     def test_a_resume_during_a_finalize_doesnt_finalize_again(self):
         self.codex_row("r1", DEAD)

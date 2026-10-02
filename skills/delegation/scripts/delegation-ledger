@@ -94,7 +94,8 @@ steps aside at its next poll. Its exit codes:
   0 done; 1 the job failed; 2 the log went stale; 3 this waiter stepped aside; 64 bad usage;
   70 internal error, or nothing could be decided (a codex finalize recorded no stop row, or the
   run left the ledger), with the watch left open for a --resume and the details in
-  delegation-ledger.err; 75 still running at --max (at most 115 minutes).
+  delegation-ledger.err; 75 still running at --max (at most 110 minutes, leaving the 5-minute
+  finalize room under the cap). A session gets one unresolved watch per codex run.
 While it finalizes a codex run the waiter keeps its heartbeat, and it marks the watch as
 finalizing, so a waiter that takes over meanwhile waits for that stop row instead of writing
 a second one.
@@ -1154,7 +1155,7 @@ WAIT_ASIDE = 3    # this waiter stepped aside; the watch goes on, or was dropped
 WAIT_USAGE = 64   # EX_USAGE
 WAIT_ERROR = 70   # EX_SOFTWARE: nothing decided, the watch left open; see delegation-ledger.err
 WAIT_AT_MAX = 75  # EX_TEMPFAIL: still running, so re-arm
-WAIT_MAX_MIN = 115  # --max's ceiling, under the Bash tool's 120-minute cap
+WAIT_MAX_MIN = 110  # --max's ceiling: with a 5-minute finalize, under the 120-minute Bash cap
 WAIT_EXIT_HELP = """exit codes:
   0   done
   1   the job failed: a --fail match, its pids exited with another condition unmet, or the
@@ -1163,8 +1164,9 @@ WAIT_EXIT_HELP = """exit codes:
   3   this waiter stepped aside: a --resume took the watch over, it was dropped, or its file
       is gone; the line printed says which
   64  bad usage: no condition, an unknown or malformed id, an unknown codex run, a --pid that
-      isn't watchable (not running, pid 1, a kernel thread, another user's), --max over 115,
-      resuming an ended watch, or a run inside the sandbox
+      isn't watchable (not running, pid 1, a kernel thread, another user's), --max over 110,
+      a second watch on a codex run this session already watches, resuming an ended watch,
+      or a run inside the sandbox
   70  internal error, or nothing could be decided (a finalize recorded no stop row, the codex
       run left the ledger): the watch stays open for a --resume; details in
       delegation-ledger.err
@@ -1276,10 +1278,23 @@ class Waiter:
             raise StepAside(f"watch {self.wid} was taken over by pid {w.get('waiter_pid')} (a "
                             "--resume); this waiter stepped aside, and the watch goes on")
 
+    @staticmethod
+    def refuse_a_second_codex_watch(new):
+        """WaitRefused when the session already has an unresolved watch on new's codex run,
+        since each watch's waiter could finalize it. Called under the watches lock, so two
+        waits started together can't both pass."""
+        run = new["condition"].get("codex")
+        for w in dc.all_watches() if run is not None else ():
+            if (w.get("session_id") == new["session_id"] and w.get("state") in dc.UNRESOLVED
+                    and (w.get("condition") or {}).get("codex") == run):
+                raise WaitRefused(f"watch {w.get('id')} already waits on {run}: "
+                                  f"delegation-ledger wait --resume {w.get('id')}")
+
     def take(self, new):
         """Become the watch's waiter, creating it from `new` when given."""
         def take(w):
             if new is not None:
+                self.refuse_a_second_codex_watch(new)
                 w.update(new)
             elif not w:
                 raise WaitRefused(f"no watch {self.wid!r}")
@@ -1352,15 +1367,17 @@ class Waiter:
         """Run the codex-delegate beside this script as `finalize <run_id>`, a fixed argv with
         its output passed on, heartbeating every poll while it runs: None when it exits 0, else
         why not. Taken over or dropped meanwhile, it lets finalize finish (the other waiter
-        reads the stop row it writes), then steps aside."""
+        reads the stop row it writes), then steps aside. A beat that fails otherwise (a full
+        disk, a damaged watch file) is logged and ends the heartbeat, but finalize is still
+        waited on, so it never runs on unwatched beside a second one."""
         sys.stdout.flush()
         try:
             proc = subprocess.Popen([CODEX_DELEGATE, "finalize", run_id],
                                     stdin=subprocess.DEVNULL)
         except OSError as ex:
             return f"codex-delegate finalize {run_id} didn't run ({ex})"
-        deadline, aside, rc = time.monotonic() + FINALIZE_TIMEOUT_S, None, None
-        while rc is None:
+        deadline, aside, beating, rc = time.monotonic() + FINALIZE_TIMEOUT_S, None, True, None
+        while True:
             try:
                 rc = proc.wait(timeout=max(0.0, min(self.poll, deadline - time.monotonic())))
                 break
@@ -1369,17 +1386,19 @@ class Waiter:
             if time.monotonic() >= deadline:
                 proc.kill()
                 proc.wait()
-                if aside is None:
-                    return (f"codex-delegate finalize {run_id} was stopped after "
-                            f"{FINALIZE_TIMEOUT_S} s")
                 break
-            if aside is None:
+            if beating:
                 try:
                     self.beat()
                 except StepAside as ex:
-                    aside = ex
+                    aside, beating = ex, False
+                except Exception:  # noqa: BLE001  logged; finalize is still waited on
+                    checks().log_error()
+                    beating = False
         if aside is not None:
             raise aside
+        if rc is None:
+            return f"codex-delegate finalize {run_id} was stopped after {FINALIZE_TIMEOUT_S} s"
         return None if rc == 0 else f"codex-delegate finalize {run_id} exited {rc}"
 
     def record(self, verdict, why):
@@ -1421,7 +1440,7 @@ def cmd_wait(args):
             raise WaitRefused("--max and --poll take positive numbers")
         if args.max > WAIT_MAX_MIN:
             raise WaitRefused(f"--max must be at most {WAIT_MAX_MIN}, under the Bash tool's "
-                              "120-minute cap")
+                              "120-minute cap with room for a finalize")
         given = args.resume if args.resume is not None else args.drop
         if given is not None and (args.desc is not None or any(
                 getattr(args, o) is not None for o in WAIT_CONDITIONS)):
@@ -1521,9 +1540,9 @@ def main(argv=None):
                     help="wait for the codex run to end, finalize it unless it has a stop "
                          "row, and exit by the stop row's exit")
     wt.add_argument("--desc", help="what the watch is for (default: its condition)")
-    wt.add_argument("--max", type=float, default=110, metavar="MIN",
-                    help="exit 75 with the re-arm command after this long (default 110, at "
-                         f"most {WAIT_MAX_MIN})")
+    wt.add_argument("--max", type=float, default=WAIT_MAX_MIN, metavar="MIN",
+                    help=f"exit 75 with the re-arm command after this long (default and most: "
+                         f"{WAIT_MAX_MIN})")
     wt.add_argument("--poll", type=float, default=dc.WAIT_POLL_S, help=argparse.SUPPRESS)
     again = wt.add_mutually_exclusive_group()
     again.add_argument("--resume", metavar="ID", help="take over this watch and wait on")
