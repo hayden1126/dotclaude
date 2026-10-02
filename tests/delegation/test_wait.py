@@ -718,24 +718,32 @@ class Usage(WaitEnv):
 
 
 class Session(WaitEnv):
-    def session_of(self, **env):
+    def watch_of(self, **env):
+        """The watch a wait run with env records, removed again after."""
         target = self.path("out")
         open(target, "w").close()
         p = subprocess.run(self.argv("--file", target), capture_output=True, text=True,
                            env=env, timeout=30)
         self.assertEqual(p.returncode, 0, p.stderr)
-        sid = self.all_watches()[-1]["session_id"]
+        w = self.all_watches()[-1]
         for path in glob.glob(os.path.join(self.watches, "*.json")):
             os.remove(path)
-        return sid
+        return w
 
-    def claude_ancestor(self, sid):
-        """Make this test process a Claude process the walk finds: a sessions file named by
-        its pid, as Claude Code writes one."""
+    def session_of(self, **env):
+        return self.watch_of(**env)["session_id"]
+
+    def claude_ancestor(self, sid=None):
+        """Make this test process, every waiter's parent, a Claude process the walk finds: a
+        sessions file named by its pid, as Claude Code writes one (with no sessionId when sid
+        is None)."""
         path = os.path.join(self.tmp.name, ".claude", "sessions", f"{os.getpid()}.json")
         with open(path, "w") as f:
-            json.dump({"pid": os.getpid(), "procStart": dc.proc_start(os.getpid()),
-                       "sessionId": sid}, f)
+            json.dump(dict({"pid": os.getpid(), "procStart": dc.proc_start(os.getpid())},
+                           **({"sessionId": sid} if sid else {})), f)
+
+    def mine(self):
+        return os.getpid(), dc.proc_start(os.getpid())
 
     def test_with_no_claude_ancestor_the_env_counts_only_through_claude_pid(self):
         self.assertEqual(self.session_of(**self.env), "s1")  # CLAUDE_PID names the parent
@@ -755,10 +763,30 @@ class Session(WaitEnv):
         self.assertEqual(self.only()["session_id"], "unknown")
         self.assertNotIn("claude_pid", self.only())
 
-    def test_a_claude_ancestors_session_wins_over_the_env(self):
-        self.claude_ancestor("s-real")
-        self.assertEqual(self.session_of(**dict(self.env, CLAUDE_CODE_SESSION_ID="s-other",
-                                                CLAUDE_PID=str(DEAD))), "s-real")
+    def test_the_walked_process_own_env_wins_over_its_file(self):
+        # CLAUDE_PID is the process the walk found, so it set the env for this call: right
+        # after /clear the env has the new id while the sessions file may still lag.
+        self.claude_ancestor("s-file")
+        w = self.watch_of(**dict(self.env, CLAUDE_CODE_SESSION_ID="s-env",
+                                 CLAUDE_PID=str(os.getpid())))
+        self.assertEqual((w["session_id"], (w["claude_pid"], w["claude_start"])),
+                         ("s-env", self.mine()))
+
+    def test_a_nested_claude_takes_its_own_file_not_the_inherited_env(self):
+        # A nested claude -p (this test) inherited the lead's env: CLAUDE_PID names a farther
+        # ancestor (this test's parent stands in for the lead), and the session id is the lead's.
+        self.claude_ancestor("s-file")
+        w = self.watch_of(**dict(self.env, CLAUDE_CODE_SESSION_ID="s-lead",
+                                 CLAUDE_PID=str(os.getppid())))
+        self.assertEqual((w["session_id"], (w["claude_pid"], w["claude_start"])),
+                         ("s-file", self.mine()))
+
+    def test_a_sessions_file_with_no_session_id(self):
+        self.claude_ancestor()
+        w = self.watch_of(**dict(self.env, CLAUDE_PID=str(os.getppid())))
+        self.assertEqual((w["session_id"], (w["claude_pid"], w["claude_start"])),
+                         ("unknown", self.mine()))
+        self.assertEqual(self.session_of(**self.env), "s1")  # CLAUDE_PID is the walked process
 
 
 class Codex(WaitEnv):

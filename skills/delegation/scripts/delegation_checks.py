@@ -90,7 +90,9 @@ CANARY_STRINGS = [
     ("tool-use-id", "watch-guard map_kill: a notice's launching tool_use"),
     ("background_tasks", "watch-guard watch_pending: a shell holding a watch id"),
     ("prompt_id", "watch-guard stop_digest: a later stop acknowledges a lapse"),
-    ("CLAUDE_CODE_SESSION_ID", "delegation_common.wait_session: a watch's session"),
+    ("CLAUDE_CODE_SESSION_ID", "delegation_common.claude_identity: a watch's session, when "
+     "CLAUDE_PID is the Claude process the walk found, or no process was found and CLAUDE_PID "
+     "is an ancestor"),
 ]
 
 

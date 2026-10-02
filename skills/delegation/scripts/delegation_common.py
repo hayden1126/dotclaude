@@ -990,26 +990,31 @@ def live_sessions():
 
 def claude_identity():
     """(process, session): the Claude Code process this command runs under ((pid, procStart),
-    or None) and its session id ("unknown" when none can be trusted), from one walk. The
-    ancestor walk decides (claude_ancestor): the process it finds is the one, and that
-    process's sessions file names the session. Only when it finds nothing do the env vars
-    count, and only when CLAUDE_PID names an ancestor of this process: then that is the
-    process, and CLAUDE_CODE_SESSION_ID the session. Both are inherited, so on their own they
-    can name another process's session: a nested `claude -p` started from the lead's Bash may
-    carry the lead's, and a tmux server started from a Claude Bash call carries ones that go
-    stale."""
+    or None) and its session id ("unknown" when none can be trusted), from one walk.
+    CLAUDE_PID and CLAUDE_CODE_SESSION_ID are inherited, so on their own they can name another
+    process's session: a nested `claude -p` started from the lead's Bash may carry the lead's,
+    and a tmux server started from a Claude Bash call carries ones that go stale. So the
+    ancestor walk decides (claude_ancestor):
+    - it finds process A, and CLAUDE_PID is A: A set both vars for this Bash call, so they are
+      fresh, and CLAUDE_CODE_SESSION_ID is the session. The env follows a session change at
+      once, where A's sessions file might lag right after /clear;
+    - it finds A otherwise: A's sessions file names the session ("unknown" when it names
+      none), and the env isn't read, since it may be another process's;
+    - it finds nothing: the env counts only when CLAUDE_PID names an ancestor of this process,
+      at any level. Then that is the process, and CLAUDE_CODE_SESSION_ID the session."""
     chain = ancestors()
     found = claude_ancestor(chain)
+    try:
+        env_pid = int(os.environ.get("CLAUDE_PID") or "")
+    except ValueError:
+        env_pid = None
+    env_sid = os.environ.get("CLAUDE_CODE_SESSION_ID") or None
     if found is not None:
         pid, start, sid = found
-        return (pid, start), sid or "unknown"
-    try:
-        pid = int(os.environ.get("CLAUDE_PID") or "")
-    except ValueError:
+        return (pid, start), (env_sid if env_pid == pid and env_sid else sid) or "unknown"
+    if env_pid is None or env_pid not in chain:
         return None, "unknown"
-    if pid not in chain:
-        return None, "unknown"
-    return (pid, proc_start(pid)), os.environ.get("CLAUDE_CODE_SESSION_ID") or "unknown"
+    return (env_pid, proc_start(env_pid)), env_sid or "unknown"
 
 
 def wait_session():

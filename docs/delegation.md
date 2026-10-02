@@ -283,16 +283,25 @@ from 60 to 5,000 requests an hour.
 - **Adoption after `/clear` needs the Claude process.** A waiter and the guard each find their
   Claude process by walking up their parents, 6 levels at most, to the nearest one whose
   `~/.claude/sessions/<pid>.json` names its pid and procStart (`claude_identity`). A waiter's
-  session comes from the same walk: the `sessionId` in that file. Only when the walk finds
-  nothing do the env vars count, and only when `CLAUDE_PID` names one of those parents: then it
-  is the process, and `CLAUDE_CODE_SESSION_ID` the session. Both are inherited, so on their own
-  they can name another process's session: a nested `claude -p` started from the lead's Bash
-  may carry the lead's, and a tmux server started from a Claude Bash call carries ones that go
-  stale. A watch made outside Claude Code records no process and the session `unknown`, and a
-  guard that finds no process adopts nothing. Adoption also
-  rests on the sessions file naming the new session id after a `/clear`, so the old one stops
-  being live (see the verified facts). Were that to change, the old session would read as live
-  and nothing would be adopted: safe, but the watch would go unguarded.
+  session comes from the same walk. `CLAUDE_PID` and `CLAUDE_CODE_SESSION_ID` are inherited, so
+  on their own they can name another process's session: a nested `claude -p` started from the
+  lead's Bash may carry the lead's, and a tmux server started from a Claude Bash call carries
+  ones that go stale. So:
+  - when `CLAUDE_PID` is the process the walk found, that process set both vars for this Bash
+    call, and `CLAUDE_CODE_SESSION_ID` is the session. The env follows a session change at once
+    (observed on this machine), where the sessions file might lag right after a `/clear`;
+  - when the walk finds a process that isn't `CLAUDE_PID`, its sessions file's `sessionId` is
+    the session (`unknown` without one), and the env isn't read;
+  - when the walk finds nothing, the env counts only when `CLAUDE_PID` is an ancestor of the
+    command, at any level: then it is the process, and `CLAUDE_CODE_SESSION_ID` the session.
+
+  A watch made outside Claude Code records no process and the session `unknown`, and a guard
+  that finds no process adopts nothing. Adoption also rests on the sessions file naming the new
+  session id after a `/clear` (see the verified facts). The file still decides which sessions
+  are live (`live_sessions`), so it decides when the old id stops being live and its watch can
+  be adopted, and it names the session of a walked process that isn't `CLAUDE_PID`. Were the
+  rewrite to stop, the old session would read as live and nothing would be adopted: safe, but
+  the old watch would go unguarded. A new watch would still get the new id, from the env.
 - **A crash, then `claude --continue`, rests on the session id.** The guard adopts a crashed
   process's watch only in the session that has its id, so this assumes `--continue` keeps the
   session id. That isn't verified here; the manual re-arm check in `due.toml` asks for it. With a
