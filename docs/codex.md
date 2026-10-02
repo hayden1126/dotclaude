@@ -30,6 +30,8 @@ dotclaude/                                  ->  runtime
       "read each repo's CLAUDE.md as Codex's instructions"
   codex/AGENTS.md         symlink ------->  ~/.codex/AGENTS.md
       global working rules, for Codex
+  skills/<name>/          symlink ------->  ~/.codex/skills/<name>
+      the portable skills only (CODEX_SKILLS in setup.sh)
   plugins/marketplaces.json  \
   plugins/enabled.json        }  setup.sh ->  claude plugin install codex@openai-codex
                                              the codex-plugin-cc plugin inside Claude Code

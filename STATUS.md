@@ -33,6 +33,18 @@ stored here).
   CLAUDE.md trigger, `vetting-sources`, `deck-production` S1, and earlier work back to PR #10.
 
 ## In flight
+- **Small fixes, on branch `chore/small-fixes`** (base `f3014c0`; state: `gh pr list --head
+  chore/small-fixes`): Codex skills wired into `setup.sh`, the `.mcp.json` stub ignored, the
+  status line's dead ai-title fallback dropped, two history docs corrected. After it merges:
+  `git pull` in `~/dotclaude`, then `./setup.sh`, both outside the sandbox, to link Codex's skills
+  and reinstall the ignore block. Copy `~/.claude/settings.json` first and diff it after
+  ([[dotclaude-setup-install-model]]). Then remove `.claude/worktrees/small-fixes` and the branch.
+- **Next: the delegation write-up** (Hayden wants it; next after the small fixes). The first call
+  is the format: a blog post or a public repo, which sets how much of the evidence must be
+  cleaned of private context. The evidence (probe settings, prompts and outputs, harness logs) is
+  in `~/scratch/delegation-writeup/evidence/`, and the older eval is in `~/scratch/delegation-eval/`.
+  Raw transcripts embed private context, so never publish them as-is. `docs/delegation.md` holds
+  the findings and decisions to draw on.
 - **Delegation hardening: what is live on HAYPC** (Stage 2, plus the Stage 3 steps under Done;
   `docs/delegation.md`;
   `skills/delegation/SKILL.md` is the operating guide). Open items:
@@ -49,10 +61,6 @@ stored here).
       first and diff it after.
     - Without a `settings.machine.json` overlay, install by hand per the docs' install order:
       the policy hook fails closed.
-  - **Write-up:** Hayden wants a blog post or public repo on the findings. The evidence (probe
-    settings, prompts and outputs, harness logs) is in `~/scratch/delegation-writeup/evidence/`, and
-    the older eval is in `~/scratch/delegation-eval/`. Raw transcripts embed private context, so
-    never publish them as-is.
 - **Codex setup shared with a friend** (Hayden's ask, 2026-09-29). The share page is BUILT and private:
   https://claude.ai/artifact/KWwrPkLsbMUi7Ugjfskqsz (source was a session scratchpad; republish by that
   URL). It links only four clean skills (coding-practices, research-discipline, ui-alignment,
