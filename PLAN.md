@@ -132,8 +132,14 @@ settings docs say.
   - `id`, `session_id`, `description`, `condition`, `created`;
   - `waiter_pid`, `waiter_start` (its `procStart`), `waiter_heartbeat`;
   - `state` (open, done, failed, stale, dropped or acknowledged), and `blocked_at`.
-- **The session:** `CLAUDE_CODE_SESSION_ID`. If it's unset, the `~/.claude/sessions/*.json` entry
-  whose `pid` is `CLAUDE_PID`.
+- **The session** comes from one parent walk (`claude_identity`), since both env vars are
+  inherited: a tmux pane or a nested `claude -p` can carry another session's values.
+  - The walk finds a Claude process (a `~/.claude/sessions/<pid>.json` naming that pid and its
+    procStart). If `CLAUDE_PID` is that process, `CLAUDE_CODE_SESSION_ID` is the session: the
+    process set it for this Bash call, and it follows a `/clear` (checked live 2026-10-02, a
+    process whose id changed mid-life). Otherwise the file's `sessionId` is the session.
+  - The walk finds nothing: the env counts only when `CLAUDE_PID` is an ancestor.
+  - Otherwise the session is `unknown` and no Claude process is recorded.
 - **It refuses to run sandboxed.** If `dc.pids_visible()` is false, it prints "run
   delegation-ledger wait as a bare command" and exits 2 before recording anything.
 - **What it waits for** (at least one):
