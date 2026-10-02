@@ -760,9 +760,11 @@ the fix is enforcement. `PLAN.md` has the design history and the options weighed
     watch is the caller's: in its session, or left by its Claude process under a session id that
     is no longer live (a rerun after `/clear`, before the guard's first stop adopts it). A codex
     condition keeps its refusal instead.
-  - It records the session and the Claude Code process (`claude_pid`, from `CLAUDE_PID`, with its
-    procStart). `/clear` keeps the process but starts a new session id, and the guard adopts
-    the watch into the new session (below).
+  - It records the session and the Claude Code process its exit notifies (`claude_pid`, from
+    `CLAUDE_PID`, with its procStart); a waiter outside Claude Code records none, dropping the
+    last waiter's. `/clear` keeps the process but starts a new session id, and the guard adopts
+    the watch into the new session (below). A waiter that ends while that process runs records
+    `reported`.
   - It refuses to run sandboxed, where its pids would belong to another PID namespace. It refuses
     a `--pid` that is pid 1, a kernel thread, another user's, or not running. It refuses a second
     watch on a codex run, naming the existing watch's `--resume` when that watch's waiter is dead
