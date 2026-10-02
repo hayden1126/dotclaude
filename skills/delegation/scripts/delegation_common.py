@@ -376,26 +376,44 @@ def agent_role(data, meta=None):
     return meta.get("customAgentType") or data.get("agent_type") or ""
 
 
-def proc_start(pid):
-    """Field 22 of /proc/<pid>/stat (starttime, in clock ticks since boot), or None. The
-    fields are split after the last ") ", since the command name may hold spaces."""
+def _stat_fields(pid):
+    """The fields of /proc/<pid>/stat from field 3 (state) on, or None. They are split after
+    the last ") ", since the command name may hold spaces."""
     try:
         with open(f"/proc/{int(pid)}/stat") as f:
-            return int(f.read().rsplit(") ", 1)[1].split()[19])
+            return f.read().rsplit(") ", 1)[1].split()
     except (OSError, TypeError, ValueError, IndexError):
         return None
 
 
+def _start_of(fields):
+    """Field 22 (starttime, in clock ticks since boot) from _stat_fields' list, or None."""
+    try:
+        return int(fields[19])
+    except (TypeError, ValueError, IndexError):
+        return None
+
+
+def proc_start(pid):
+    """Field 22 of /proc/<pid>/stat (starttime, in clock ticks since boot), or None."""
+    return _start_of(_stat_fields(pid))
+
+
 def pid_alive(pid, start=None):
-    """Whether pid is running. Given `start` (a session file's procStart), the process must
-    also have that start time, so a pid the kernel reused for another process reads as gone.
-    No `start` means don't check it."""
+    """Whether pid is running. A zombie (state Z) or a dead task (X) has exited and only waits
+    to be reaped, so it is gone; a pid whose stat can't be read but whose /proc entry exists
+    counts as running. Given `start` (a session file's procStart), the process must also have
+    that start time, so a pid the kernel reused for another process reads as gone. No `start`
+    means don't check it."""
     try:
         if pid is None or not os.path.exists(f"/proc/{int(pid)}"):
             return False
     except (TypeError, ValueError):
         return False
-    return start is None or str(proc_start(pid)) == str(start)
+    fields = _stat_fields(pid)
+    if fields and fields[0] in ("Z", "X"):
+        return False
+    return start is None or str(_start_of(fields)) == str(start)
 
 
 def pids_visible():
@@ -459,14 +477,21 @@ def find_codex(key):
     return None
 
 
+def codex_stopped(e):
+    """(verdict, why) from a codex run's stop row: done when its `exit` is 0, else failed."""
+    if e.get("exit") == 0:
+        return "done", f"codex run {e.get('run_id')} ends"
+    return "failed", f"codex run {e.get('run_id')} stopped with exit {e.get('exit')}"
+
+
 # A watch is one long wait, at watches/<id>.json. `delegation-ledger wait` writes it and the
 # watch guard (a Stop hook) reads it, so these fields are the contract between them:
 #   id, session_id, description, created
 #                   set once; session_id is "unknown" when the waiter found no session
 #   condition       what it waits for: {"codex": run_id} alone, or any of "pids" (a list of
-#                   {"pid", "start"}, where start is the procStart seen when the wait began,
-#                   null for a pid already gone), "file", and "log" with "done" and "fail"
-#                   (regexes) and "stale_min"; watch_verdict reads it
+#                   {"pid", "start"}, where start is the procStart seen when the wait began;
+#                   a pid not running then is refused), "file", and "log" with "done" and
+#                   "fail" (regexes) and "stale_min"; watch_verdict reads it
 #   waiter_pid, waiter_start, waiter_heartbeat, poll_s
 #                   the current waiter: its pid and procStart, its last poll (ISO), and the
 #                   seconds between polls; waiter_alive reads them
@@ -475,11 +500,21 @@ def find_codex(key):
 #                   that takes the watch over, or polls it, clears it
 #   ended           when it left UNRESOLVED (ISO); absent until then
 # open is waiting; acknowledged is a lapse the guard let a stop through on; done, failed and
-# stale are how the waiter saw the condition end (exits 0, 1, 2); dropped is `wait --drop`.
-# Every change goes through update_watch, under watches/.lock, written atomically.
+# stale are how the waiter saw the condition end (it exits 0, 1, 2); dropped is `wait --drop`.
+# Every change goes through update_watch, under watches/.lock, written atomically. Each wait
+# start prunes temp files a crash left (over a day old) and watches that ended over 7 days ago.
+#
+# A codex watch: watch_verdict's "done" means Codex has ended, and unless the run has a stop
+# row, a `codex-delegate finalize` is still owed. So the guard must not record a codex watch as
+# done; it sends the lead to `wait --resume`, whose waiter finalizes and then decides by the
+# stop row's `exit` (0 done, else failed). A stop row with a nonzero exit is failed at once.
+# Known gap until T3: `codex-delegate resume` writes no row until Codex's thread.started, so a
+# `wait --codex` started in that window sees the previous run's stop row and ends at once.
 WATCH_STATES = ("open", "acknowledged", "done", "failed", "stale", "dropped")
 UNRESOLVED = ("open", "acknowledged")  # the states a waiter may take over
+ENDED = ("done", "failed", "stale", "dropped")
 WAIT_POLL_S = 15  # the waiter's default seconds between polls
+PRUNE_TMP_DAYS, PRUNE_ENDED_DAYS = 1, 7
 
 
 def watch_path(wid):
@@ -511,6 +546,25 @@ def update_watch(wid, fn):
         new = cur if new is None else new
         write_json(path, new)
     return new
+
+
+def prune_watches():
+    """Remove temp files a killed write left (over PRUNE_TMP_DAYS old) and watch files that
+    ended (ENDED) over PRUNE_ENDED_DAYS ago, by mtime: a watch's last write is its end."""
+    now = time.time()
+    with _lock(watches_dir()):
+        for p in glob.glob(os.path.join(watches_dir(), ".*.tmp")):
+            with contextlib.suppress(OSError):
+                if os.path.getmtime(p) < now - PRUNE_TMP_DAYS * 86400:
+                    os.remove(p)
+        for p in glob.glob(os.path.join(watches_dir(), "*.json")):
+            with contextlib.suppress(OSError, ValueError):
+                if os.path.getmtime(p) >= now - PRUNE_ENDED_DAYS * 86400:
+                    continue
+                with open(p) as f:
+                    w = json.load(f)
+                if isinstance(w, dict) and w.get("state") in ENDED:
+                    os.remove(p)
 
 
 def all_watches():
@@ -548,23 +602,34 @@ def condition_text(c):
     return " and ".join(text for _, text in _clauses(c))
 
 
-def scan_log(path, done, fail, cursor):
+def log_cursor():
+    """A fresh scan_log cursor: how far the log has been read, whether a done line was seen,
+    and the log's size at the previous scan."""
+    return {"offset": 0, "done": False, "size": None}
+
+
+def scan_log(path, done, fail, cursor, pids_gone=None):
     """Read the log from cursor["offset"] on: "failed" on a line matching `fail`, else "done"
-    once a line has matched `done`, else None. Only whole lines move the cursor, but a last
-    line with no newline yet is matched too, since a job may end without one. A log that
-    shrank (rewritten or rotated) is read again from the start."""
+    once a line has matched `done`, else None. Lines are matched once complete. A last line
+    with no newline yet may still be being written, so it is matched only once the job is over:
+    when the watch's pids are gone (`pids_gone`), or, for a watch with no pids (None), when the
+    log's size hasn't changed since the previous scan. A log that shrank (rewritten or rotated)
+    is read again from the start."""
     try:
         with open(path, "rb") as f:
-            if os.fstat(f.fileno()).st_size < cursor["offset"]:
+            size = os.fstat(f.fileno()).st_size
+            if size < cursor["offset"]:
                 cursor.update(offset=0, done=False)
             f.seek(cursor["offset"])
             data = f.read()
     except OSError:
         return None  # no log yet
+    settled = pids_gone if pids_gone is not None else size == cursor["size"]
+    cursor["size"] = size
     whole, newline, partial = data.rpartition(b"\n")
     cursor["offset"] += len(whole) + len(newline)
     lines = [(line, True) for line in whole.decode("utf-8", "replace").splitlines()]
-    if partial:
+    if partial and settled:
         lines.append((partial.decode("utf-8", "replace"), False))
     seen = False
     for line, consumed in lines:
@@ -580,26 +645,27 @@ def watch_verdict(w, cursor=None, now=None):
     """(verdict, why) for a watch's condition now: verdict is "done", "failed", "stale", or
     None while it still waits, and why says what it rests on. Every given part must hold for
     done; pids that all exited with another part unmet is failed. Pass the same `cursor` dict
-    on every poll to read a log incrementally; without one the whole log is read. For a codex
-    watch, done means the run has a stop row, or Codex and its wrapper are both gone (a live
-    wrapper writes the stop row itself, and a finalize then would write a second one). Its
-    waiter then runs `codex-delegate finalize`, whose exit decides done or failed."""
+    on every poll (log_cursor) to read a log incrementally; without one the whole log is read.
+    For a codex watch, a stop row decides by its `exit`; with none, done means Codex and its
+    wrapper are both gone (a live wrapper writes the stop row itself, and a finalize then would
+    write a second one), and a finalize is still owed: see the comment above WATCH_STATES."""
     c = w.get("condition") or {}
     now = time.time() if now is None else now
     if "codex" in c:
         e = fold(read_rows()).get(("codex", c["codex"]))
         if e is None:
             return "failed", f"codex run {c['codex']} is not in the ledger"
-        going = e.get("event") != "stop" and (pid_alive(e.get("pid"))
-                                              or pid_alive(e.get("wrapper_pid")))
+        if e.get("event") == "stop":
+            return codex_stopped(e)
+        going = pid_alive(e.get("pid")) or pid_alive(e.get("wrapper_pid"))
         return (None if going else "done"), condition_text(c)
-    cursor = {"offset": 0, "done": False} if cursor is None else cursor
+    cursor = log_cursor() if cursor is None else cursor
     # The pids first: a job writes its file or its last log line before it exits, so a check
-    # made after the exit can't miss them. A pid with no start was gone before the wait.
+    # made after the exit can't miss them.
     pids = c.get("pids") or []
-    running = [p for p in pids if p.get("start") is not None
-               and pid_alive(p.get("pid"), p["start"])]
-    log = scan_log(c["log"], c.get("done"), c.get("fail"), cursor) if c.get("log") else None
+    running = [p for p in pids if pid_alive(p.get("pid"), p.get("start"))]
+    log = (scan_log(c["log"], c.get("done"), c.get("fail"), cursor,
+                    pids_gone=not running if pids else None) if c.get("log") else None)
     if log == "failed":
         return "failed", f"{c['log']} has a line matching /{c['fail']}/"
     met = {"pids": not running, "file": bool(c.get("file")) and os.path.exists(c["file"]),

@@ -1,8 +1,10 @@
-"""delegation-ledger wait: the watch file, each condition and exit code, resume, drop, and the
-watches block in `watch` and `open`."""
+"""delegation-ledger wait: the watch file, each condition and exit code, resume, drop, pruning,
+and the watches block in `watch` and `open`."""
 import glob
 import json
 import os
+import shutil
+import signal
 import subprocess
 import tempfile
 import time
@@ -16,13 +18,20 @@ dc = load_script("delegation_common.py")
 
 DEAD = 2 ** 22 + 12345  # beyond pid_max on this box, so never alive
 POLL = "0.05"
+USAGE, ASIDE, ERROR, AT_MAX = 64, 3, 70, 75
 REARM = ("still running: re-arm with delegation-ledger wait --resume {} (run_in_background, "
          "timeout 7200000)\n")
 SANDBOXED = "run delegation-ledger wait as a bare command (the sandbox hides other processes)\n"
+# A stand-in for codex-delegate beside a copy of the ledger: `finalize` records its argv and,
+# like the real one, appends the run's stop row with its exit code, then exits with that code.
 FINALIZE_STUB = """#!/bin/sh
 printf '%s\\n' "$*" > "$STUB_ARGV"
 echo "stub finalized $2"
-exit "${STUB_RC:-0}"
+if [ -z "$STUB_NO_ROW" ]; then
+  printf '{"runner": "codex", "id": "%s", "run_id": "%s", "event": "stop", "exit": %s}\\n' \\
+    "$2" "$2" "${STUB_EXIT:-0}" >> "$XDG_STATE_HOME/dotclaude/delegations.jsonl"
+fi
+exit "${STUB_EXIT:-0}"
 """
 
 
@@ -45,22 +54,23 @@ class WaitEnv(unittest.TestCase):
         with open(os.path.join(sessions, "1.json"), "w") as f:
             json.dump({"pid": os.getpid(), "sessionId": "s1"}, f)
         self.watches = os.path.join(self.state, "dotclaude", "watches")
+        self.script = LEDGER
 
     def path(self, name):
         return os.path.join(self.tmp.name, name)
 
     def job(self):
-        """A real child process standing in for the long job; the test kills and reaps it."""
+        """A real child process standing in for the long job; cleanup kills and reaps it."""
         p = subprocess.Popen(["sleep", "60"])
         self.addCleanup(lambda: (p.kill(), p.wait()))
         return p
 
     def end(self, job):
         job.kill()
-        job.wait()  # reaped, so its /proc entry is gone, not a zombie's
+        job.wait()  # reaped, so its /proc entry is gone
 
     def argv(self, *argv, poll=True):
-        return ["python3", LEDGER, "wait", *argv] + (["--poll", POLL] if poll else [])
+        return ["python3", self.script, "wait", *argv] + (["--poll", POLL] if poll else [])
 
     def start(self, *argv, **env):
         p = subprocess.Popen(self.argv(*argv), stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -80,7 +90,7 @@ class WaitEnv(unittest.TestCase):
                               env=dict(self.env, **env), timeout=30)
 
     def cli(self, *argv):
-        p = subprocess.run(["python3", LEDGER, *argv], capture_output=True, text=True,
+        p = subprocess.run(["python3", self.script, *argv], capture_output=True, text=True,
                            env=self.env, timeout=30)
         self.assertEqual(p.returncode, 0, p.stderr)
         return p.stdout
@@ -116,7 +126,7 @@ class WaitEnv(unittest.TestCase):
         self.fail("condition never held")
 
     def waiting(self, p):
-        """The watch once p is its waiter, after checking p is still running."""
+        """The watch once p is its waiter, failing at once if p has exited."""
         def mine():
             if p.poll() is not None:
                 self.fail(f"the waiter exited {p.returncode}: {p.communicate()}")
@@ -130,7 +140,7 @@ class WaitEnv(unittest.TestCase):
     def lapsed(self, job):
         """An open watch on a live job whose waiter stopped at --max."""
         p = self.run_("--pid", str(job.pid), "--max", "0.002")
-        self.assertEqual(p.returncode, 75, p.stderr)
+        self.assertEqual(p.returncode, AT_MAX, p.stderr)
         return self.only()["id"]
 
 
@@ -168,6 +178,13 @@ class Conditions(WaitEnv):
         out, _ = self.finish(p, 0)
         self.assertIn(f"pids {a.pid}, {b.pid} exit", out)
 
+    def test_a_zombie_job_counts_as_exited(self):
+        job = self.job()
+        p = self.start("--pid", str(job.pid))
+        self.waiting(p)
+        job.kill()  # not reaped: its /proc entry stays, in state Z
+        self.finish(p, 0)
+
     def test_file_is_done_when_it_exists(self):
         target = self.path("out.json")
         p = self.start("--file", target)
@@ -198,12 +215,27 @@ class Conditions(WaitEnv):
             f.write("BUILD OK\n")
         self.finish(p, 0)
 
-    def test_a_last_line_without_a_newline_still_matches(self):
+    def test_a_last_line_without_a_newline_matches_once_the_log_settles(self):
         log = self.path("job.log")
         p = self.start("--log", log, "--done", "DONE")  # no log yet: still waiting
         self.waiting(p)
         with open(log, "w") as f:
             f.write("step 1\nDONE")
+        self.finish(p, 0)
+
+    def test_a_partial_line_is_matched_only_once_the_job_is_gone(self):
+        job = self.job()
+        log = self.path("job.log")
+        with open(log, "w") as f:
+            f.write("FAIL")  # the start of "FAILSAFE engaged", still being written
+        p = self.start("--pid", str(job.pid), "--log", log, "--done", "^OK$", "--fail",
+                       "^FAIL$")
+        self.waiting(p)
+        time.sleep(0.3)
+        self.assertIsNone(p.poll())
+        with open(log, "a") as f:
+            f.write("SAFE engaged\nOK")
+        self.end(job)
         self.finish(p, 0)
 
     def test_log_fail_line_exits_1(self):
@@ -245,17 +277,39 @@ class Conditions(WaitEnv):
         self.assertEqual(out, f"watch {w['id']} failed: pid {job.pid} exited, but "
                               f"{self.path('never')} exists is unmet\n")
 
-    def test_a_pid_gone_before_the_wait_counts_as_exited(self):
-        p = self.run_("--pid", str(DEAD), "--max", "1")
-        self.assertEqual(p.returncode, 0, p.stderr)
-        self.assertEqual(self.only()["condition"], {"pids": [{"pid": DEAD, "start": None}]})
+    def test_a_pid_not_running_at_the_start_is_refused(self):
+        p = self.run_("--pid", str(DEAD))
+        self.assertEqual((p.returncode, p.stdout), (USAGE, ""))
+        self.assertEqual(p.stderr, f"wait: pid {DEAD} isn't running here; a pid echoed from a "
+                                   "sandboxed command comes from another PID namespace\n")
+        self.assertFalse(os.path.exists(self.state))
+
+
+class ScanLog(unittest.TestCase):
+    def test_a_partial_line_matches_once_it_settles_or_the_pids_are_gone(self):
+        with tempfile.TemporaryDirectory() as d:
+            log = os.path.join(d, "job.log")
+            with open(log, "w") as f:
+                f.write("seen\nOK")
+            cur = dc.log_cursor()
+            self.assertIsNone(dc.scan_log(log, "^OK$", None, cur))           # a new size
+            self.assertEqual(dc.scan_log(log, "^OK$", None, cur), "done")    # unchanged a poll
+            cur = dc.log_cursor()
+            for _ in range(2):  # the pids still run: a partial line may not be finished
+                self.assertIsNone(dc.scan_log(log, "^OK$", None, cur, pids_gone=False))
+            self.assertEqual(dc.scan_log(log, "^OK$", None, cur, pids_gone=True), "done")
+            with open(log, "a") as f:
+                f.write("AY")
+            cur = dc.log_cursor()
+            for _ in range(2):  # the finished line is OKAY, which doesn't match
+                self.assertIsNone(dc.scan_log(log, "^OK$", None, cur))
 
 
 class Exits(WaitEnv):
     def test_max_prints_only_the_rearm_line_and_leaves_the_watch_open(self):
         job = self.job()
         p = self.run_("--pid", str(job.pid), "--max", "0.002")
-        self.assertEqual(p.returncode, 75, p.stderr)
+        self.assertEqual(p.returncode, AT_MAX, p.stderr)
         w = self.only()
         self.assertEqual((p.stdout, p.stderr), (REARM.format(w["id"]), ""))
         self.assertEqual(w["state"], "open")
@@ -284,7 +338,7 @@ class Exits(WaitEnv):
         job = self.job()
         wid = self.lapsed(job)
         p = self.run_("--resume", wid, "--max", "0.002")
-        self.assertEqual((p.returncode, p.stdout), (75, REARM.format(wid)))
+        self.assertEqual((p.returncode, p.stdout), (AT_MAX, REARM.format(wid)))
 
     def test_resume_reopens_an_acknowledged_watch(self):
         job = self.job()
@@ -293,14 +347,14 @@ class Exits(WaitEnv):
         p = self.start("--resume", wid)
         self.assertEqual(self.waiting(p)["state"], "open")
 
-    def test_resume_refuses_a_finished_watch(self):
+    def test_resume_refuses_an_ended_watch(self):
         target = self.path("out")
         open(target, "w").close()
         self.assertEqual(self.run_("--file", target).returncode, 0)
         wid = self.only()["id"]
         p = self.run_("--resume", wid)
         self.assertEqual((p.returncode, p.stderr),
-                         (2, f"wait: watch {wid} is done; start a new wait\n"))
+                         (USAGE, f"wait: watch {wid} is done; start a new wait\n"))
 
     def test_a_live_waiter_reopens_a_lapse_it_outlived(self):
         # The guard may call a waiter lapsed while its heartbeat is late (a suspended VM). A
@@ -311,15 +365,15 @@ class Exits(WaitEnv):
         self.until(lambda: [(w["state"], w["blocked_at"]) for w in self.all_watches()]
                    == [("open", None)])
 
-    def test_resume_supersedes_a_running_waiter(self):
+    def test_resume_makes_the_running_waiter_step_aside(self):
         job = self.job()
         first = self.start("--pid", str(job.pid))
         wid = self.waiting(first)["id"]
         second = self.start("--resume", wid)
         self.waiting(second)
-        out, _ = self.finish(first, 0)
-        self.assertEqual(out, f"watch {wid} is now waited on by pid {second.pid}; "
-                              "this waiter stopped\n")
+        out, _ = self.finish(first, ASIDE)
+        self.assertEqual(out, f"watch {wid} was taken over by pid {second.pid} (a --resume); "
+                              "this waiter stepped aside, and the watch goes on\n")
         self.end(job)
         self.finish(second, 0)
 
@@ -333,15 +387,52 @@ class Exits(WaitEnv):
         p = self.run_("--drop", wid)
         self.assertEqual((p.returncode, p.stdout), (0, f"watch {wid} is already dropped\n"))
 
-    def test_drop_stops_a_running_waiter(self):
+    def test_drop_leaves_an_ended_watch_as_it_ended(self):
+        target = self.path("out")
+        open(target, "w").close()
+        self.assertEqual(self.run_("--file", target).returncode, 0)
+        wid = self.only()["id"]
+        p = self.run_("--drop", wid)
+        self.assertEqual((p.returncode, p.stdout), (0, f"watch {wid} is already done\n"))
+        self.assertEqual(self.only()["state"], "done")
+
+    def test_drop_makes_a_running_waiter_step_aside(self):
         p = self.start("--pid", str(self.job().pid))
         wid = self.waiting(p)["id"]
         self.assertEqual(self.run_("--drop", wid).returncode, 0)
-        out, _ = self.finish(p, 0)
-        self.assertEqual(out, f"watch {wid} was dropped; stopped waiting\n")
+        out, _ = self.finish(p, ASIDE)
+        self.assertEqual(out, f"watch {wid} was dropped; this waiter stepped aside\n")
         self.assertEqual(self.only()["state"], "dropped")
 
-    def test_unknown_and_malformed_ids_exit_2(self):
+    def test_a_deleted_watch_file_makes_its_waiter_step_aside(self):
+        p = self.start("--pid", str(self.job().pid))
+        wid = self.waiting(p)["id"]
+        os.remove(os.path.join(self.watches, f"{wid}.json"))
+        out, _ = self.finish(p, ASIDE)
+        self.assertEqual(out, f"watch {wid}'s file is gone, so there is nothing left to wait "
+                              "on; this waiter stepped aside\n")
+        self.assertEqual(self.all_watches(), [])
+
+    def test_a_killed_waiter_leaves_the_watch_open_with_no_live_waiter(self):
+        p = self.start("--pid", str(self.job().pid))
+        self.waiting(p)
+        p.send_signal(signal.SIGKILL)
+        p.wait()
+        w = self.only()
+        self.assertEqual((w["state"], w["waiter_pid"]), ("open", p.pid))
+        self.assertFalse(dc.waiter_alive(w))
+
+    def test_an_internal_error_exits_70_and_logs_the_traceback(self):
+        p = self.start("--pid", str(self.job().pid))
+        self.waiting(p)
+        os.chmod(self.watches, 0o500)  # the next heartbeat can't write its temp file
+        self.addCleanup(os.chmod, self.watches, 0o700)
+        _, err = self.finish(p, ERROR)
+        self.assertTrue(err.startswith("wait: PermissionError: "), err)
+        with open(os.path.join(self.state, "dotclaude", "delegation-ledger.err")) as f:
+            self.assertIn("PermissionError", f.read())
+
+    def test_unknown_and_malformed_ids_exit_64(self):
         os.makedirs(self.watches)
         with open(os.path.join(self.watches, "w-torn.json"), "w") as f:
             f.write("{")
@@ -350,36 +441,50 @@ class Exits(WaitEnv):
         for wid in ("w-nope", "../x", ".lock", "a/b", "", "w-torn", "w-list"):
             for opt in ("--resume", "--drop"):
                 p = self.run_(opt, wid)
-                self.assertEqual(p.returncode, 2, (opt, wid, p.stderr))
+                self.assertEqual(p.returncode, USAGE, (opt, wid, p.stderr))
                 self.assertTrue(p.stderr.startswith("wait: "), p.stderr)
-        self.assertEqual(sorted(os.listdir(self.watches)), ["w-list.json", "w-torn.json"])
+        self.assertEqual(sorted(os.listdir(self.watches)), [".lock", "w-list.json",
+                                                            "w-torn.json"])
+
+    def test_the_help_lists_the_exit_codes(self):
+        out = self.cli("wait", "--help")
+        for line in ("0 done", "1 the job failed", "2 the log went stale",
+                     "3 this waiter stepped aside", "64 bad usage", "70 internal error",
+                     "75 still running at --max"):
+            self.assertIn(line, " ".join(out.split()))
 
 
 class Usage(WaitEnv):
-    def test_bad_usage_exits_2_and_records_nothing(self):
+    def test_bad_usage_exits_64_and_records_nothing(self):
         log = self.path("job.log")
         cases = [
             [], ["--done", "x"], ["--fail", "x", "--pid", "1"], ["--stale", "1", "--pid", "1"],
             ["--log", log], ["--log", log, "--fail", "x"], ["--log", log, "--stale", "1"],
             ["--log", log, "--done", "("], ["--log", log, "--done", "x", "--stale", "0"],
-            ["--pid", "0"], ["--pid", "x"], ["--pid", "1", "--max", "0"],
-            ["--pid", "1", "--max", "nan"], ["--pid", "1", "--poll", "0"],
-            ["--codex", "r1", "--pid", "1"], ["--codex", "r-unknown"],
-            ["--resume", "w-x", "--pid", "1"], ["--drop", "w-x", "--desc", "y"],
-            ["--resume", "w-x", "--drop", "w-x"],
+            ["--log", log, "--done", ""], ["--pid", "0"], ["--pid", "x"],
+            ["--pid", "1", "--max", "0"], ["--pid", "1", "--max", "nan"],
+            ["--pid", "1", "--poll", "0"], ["--codex", "r1", "--pid", "1"],
+            ["--codex", "r-unknown"], ["--resume", "w-x", "--pid", "1"],
+            ["--drop", "w-x", "--desc", "y"], ["--resume", "w-x", "--drop", "w-x"],
+            ["--bogus"], ["--pid", "1", "stray"],
         ]
         for argv in cases:
             p = self.run_(*argv, poll=False)
-            self.assertEqual(p.returncode, 2, (argv, p.stderr))
+            self.assertEqual(p.returncode, USAGE, (argv, p.stderr))
             self.assertTrue(p.stderr, argv)
         self.assertFalse(os.path.exists(self.state))
+
+    def test_other_subcommands_keep_exit_2_for_bad_usage(self):
+        p = subprocess.run(["python3", LEDGER, "tail", "--bogus"], capture_output=True,
+                           text=True, env=self.env)
+        self.assertEqual(p.returncode, 2, p.stderr)
 
     def test_a_sandboxed_run_is_refused_before_anything_is_written(self):
         target = self.path("out")
         open(target, "w").close()
         for argv in (["--file", target], ["--resume", "w-x"], ["--drop", "w-x"]):
             p = self.run_(*argv, CLAUDE_PID=str(DEAD))
-            self.assertEqual((p.returncode, p.stdout, p.stderr), (2, "", SANDBOXED), argv)
+            self.assertEqual((p.returncode, p.stdout, p.stderr), (USAGE, "", SANDBOXED), argv)
         self.assertFalse(os.path.exists(self.state))
 
     def test_a_visible_claude_pid_runs(self):
@@ -408,14 +513,22 @@ class Session(WaitEnv):
 
 
 class Codex(WaitEnv):
+    """--codex runs `codex-delegate finalize` from beside the ledger, so these tests run a copy
+    of the scripts with a stub codex-delegate next to it."""
+
     def setUp(self):
         super().setUp()
-        stub = self.path("codex-delegate")
+        bin_dir = self.path("bin")
+        os.makedirs(bin_dir)
+        for name in ("delegation-ledger", "delegation_common.py", "delegation_checks.py"):
+            shutil.copy2(os.path.join(SCRIPTS, name), bin_dir)
+        stub = os.path.join(bin_dir, "codex-delegate")
         with open(stub, "w") as f:
             f.write(FINALIZE_STUB)
         os.chmod(stub, 0o755)
+        self.script = os.path.join(bin_dir, "delegation-ledger")
         self.argv_file = self.path("argv")
-        self.env.update(DELEGATION_CODEX_DELEGATE=stub, STUB_ARGV=self.argv_file)
+        self.env["STUB_ARGV"] = self.argv_file
 
     def codex_row(self, rid, pid, **kw):
         path = os.path.join(self.state, "dotclaude", "delegations.jsonl")
@@ -425,6 +538,10 @@ class Codex(WaitEnv):
                                      "thread_id": f"t-{rid}", "event": "start",
                                      "ts": dc.now_iso(), "out": self.path(rid), "pid": pid,
                                      "wrapper_pid": pid}, **kw)) + "\n")
+
+    def finalized(self):
+        with open(self.argv_file) as f:
+            return f.read()
 
     def test_codex_finalizes_when_its_pid_is_gone(self):
         codex = self.job()
@@ -436,18 +553,35 @@ class Codex(WaitEnv):
         self.end(codex)
         out, _ = self.finish(p, 0)
         self.assertEqual(out, f"stub finalized r1\nwatch {w['id']} done: codex run r1 ends\n")
-        with open(self.argv_file) as f:
-            self.assertEqual(f.read(), "finalize r1\n")
+        self.assertEqual(self.finalized(), "finalize r1\n")
         self.assertEqual(self.only()["state"], "done")
 
-    def test_a_failed_finalize_exits_1(self):
+    def test_a_finalized_run_that_failed_exits_1(self):
         self.codex_row("r1", DEAD)
-        p = self.run_("--codex", "r1", STUB_RC="4")
+        p = self.run_("--codex", "r1", STUB_EXIT="4")
         self.assertEqual(p.returncode, 1, p.stderr)
         w = self.only()
-        self.assertEqual(p.stdout, f"stub finalized r1\nwatch {w['id']} failed: "
-                                   "codex-delegate finalize r1 exited 4\n")
+        self.assertEqual(p.stdout, f"stub finalized r1\nwatch {w['id']} failed: codex run r1 "
+                                   "stopped with exit 4\n")
         self.assertEqual(w["state"], "failed")
+
+    def test_a_finalize_that_records_no_stop_row_fails(self):
+        self.codex_row("r1", DEAD)
+        p = self.run_("--codex", "r1", STUB_EXIT="2", STUB_NO_ROW="1")
+        self.assertEqual(p.returncode, 1, p.stderr)
+        self.assertTrue(p.stdout.endswith("failed: codex-delegate finalize r1 exited 2\n"),
+                        p.stdout)
+
+    def test_a_stop_row_s_exit_decides_without_a_finalize(self):
+        self.codex_row("r1", DEAD, event="stop", exit=4)
+        p = self.run_("--codex", "r1")
+        self.assertEqual(p.returncode, 1, p.stderr)
+        w = self.only()
+        self.assertEqual(p.stdout, f"watch {w['id']} failed: codex run r1 stopped with exit 4\n")
+        self.codex_row("r2", DEAD, event="stop", exit=0)
+        p = self.run_("--codex", "r2")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertFalse(os.path.exists(self.argv_file))  # neither run was finalized again
 
     def test_a_live_wrapper_records_the_stop_before_any_finalize(self):
         # Codex has ended but its wrapper is still writing the stop row; finalizing then would
@@ -458,8 +592,9 @@ class Codex(WaitEnv):
         self.waiting(p)
         time.sleep(0.3)
         self.assertIsNone(p.poll())
-        self.codex_row("r1", DEAD, wrapper_pid=wrapper.pid, event="stop")
+        self.codex_row("r1", DEAD, wrapper_pid=wrapper.pid, event="stop", exit=0)
         self.finish(p, 0)
+        self.assertFalse(os.path.exists(self.argv_file))
 
     def test_a_pending_run_waits_for_its_wrapper(self):
         wrapper = self.job()
@@ -470,6 +605,56 @@ class Codex(WaitEnv):
         self.assertIsNone(p.poll())
         self.end(wrapper)
         self.finish(p, 0)
+
+
+class Prune(WaitEnv):
+    def test_a_wait_prunes_old_temp_files_and_long_ended_watches(self):
+        os.makedirs(self.watches)
+        now = time.time()
+
+        def put(name, age_days, state=None):
+            path = os.path.join(self.watches, name)
+            with open(path, "w") as f:
+                f.write("{" if state is None else json.dumps({"id": name[:-5], "state": state}))
+            os.utime(path, (now - age_days * 86400,) * 2)
+        put(".w-a.json.x1.tmp", 2)
+        put(".w-b.json.x2.tmp", 0.5)
+        for state in ("done", "failed", "stale", "dropped"):
+            put(f"w-{state}.json", 8, state)
+        put("w-recent.json", 6, "done")
+        put("w-open.json", 30, "open")
+        put("w-ack.json", 30, "acknowledged")
+        target = self.path("out")
+        open(target, "w").close()
+        self.assertEqual(self.run_("--file", target).returncode, 0)
+        new = [w["id"] for w in self.all_watches() if "created" in w]  # this wait's own watch
+        self.assertEqual(len(new), 1)
+        left = set(os.listdir(self.watches)) - {f"{new[0]}.json"}
+        self.assertEqual(left, {".lock", ".w-b.json.x2.tmp", "w-recent.json", "w-open.json",
+                                "w-ack.json"})
+
+
+class PidAlive(unittest.TestCase):
+    def test_a_zombie_is_gone(self):
+        p = subprocess.Popen(["sleep", "60"])
+        self.addCleanup(p.wait)
+        p.kill()  # not reaped, so it stays a zombie until the cleanup's wait
+
+        def state():
+            with open(f"/proc/{p.pid}/stat") as f:
+                return f.read().rsplit(") ", 1)[1].split()[0]
+        end = time.monotonic() + 5
+        while state() != "Z":
+            self.assertLess(time.monotonic(), end)
+            time.sleep(0.01)
+        start = dc.proc_start(p.pid)
+        self.assertIsNotNone(start)
+        self.assertFalse(dc.pid_alive(p.pid))
+        self.assertFalse(dc.pid_alive(p.pid, start))
+
+    def test_an_unreadable_stat_with_a_proc_entry_is_alive(self):
+        with mock.patch.object(dc, "_stat_fields", return_value=None):
+            self.assertTrue(dc.pid_alive(os.getpid()))
 
 
 class Views(WaitEnv):
