@@ -584,7 +584,7 @@ class Orphans(StateTest):
     def test_an_error_outside_the_file_reads_drops_only_this_nudge(self):
         self.watch()
         self.write_due('[[item]]\ndate = 2020-01-01\ndo = "check the thing"\n')
-        with mock.patch.object(checks, "live_session_ids", side_effect=OSError("no sessions")):
+        with mock.patch.object(checks.dc, "live_sessions", side_effect=OSError("no sessions")):
             msg = self.message()
         self.assertIn("check the thing", msg)
         self.assertNotIn("watch", msg)

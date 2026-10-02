@@ -846,8 +846,9 @@ def live_sessions():
                 d = json.load(f)
         except (OSError, ValueError):
             continue
-        if pid_alive(d.get("pid"), d.get("procStart")):
-            out[d.get("sessionId")] = d.get("pid")
+        sid = d.get("sessionId") if isinstance(d, dict) else None
+        if isinstance(sid, str) and sid and pid_alive(d.get("pid"), d.get("procStart")):
+            out[sid] = d.get("pid")
     return out
 
 

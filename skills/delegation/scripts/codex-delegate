@@ -82,6 +82,7 @@ LAUNCH = ("codex-delegate: run {run}, watch {wid}. If this command is stopped, C
 AT_MAX_WAIT = 75       # EX_TEMPFAIL, as `delegation-ledger wait` at --max: re-arm
 FINALIZE_LOCK_S = 240  # under the 5 minutes a waiter gives its finalize
 START_POLL_S = 0.2     # how often the events file is read until thread.started
+SANDBOXED = "codex-delegate: running sandboxed, so no watch is recorded; run it as a bare command"
 
 
 def die(msg, code=2):
@@ -240,7 +241,11 @@ def audit(thread_id, since_epoch):
 def claim_watch(run_id, take_over):
     """This wrapper as the waiter of a watch on its run, recorded before Codex starts: a new
     watch, or with `take_over` (a resume), the run's open watch whose waiter is gone. A live
-    waiter on the run refuses it, so two wrappers on one run can't both start Codex."""
+    waiter on the run refuses it, so two wrappers on one run can't both start Codex. None in
+    the sandbox, whose pids mean nothing outside it: the run goes on with no watch."""
+    if not dc.pids_visible():
+        print(SANDBOXED, file=sys.stderr, flush=True)
+        return None
     dc.prune_watches()
     session = dc.wait_session()
     w = dc.codex_watch(run_id) if take_over else None
@@ -295,7 +300,8 @@ def stream(cmd, cwd, out, row, prompt, start_event, waiter, wait_min):
     proc.stdin.write(prompt)
     proc.stdin.close()
     deadline = time.monotonic() + wait_min * 60
-    next_beat, started, beating, buf, rc = time.monotonic() + waiter.poll, False, True, "", None
+    poll = waiter.poll if waiter else dc.WAIT_POLL_S
+    next_beat, started, beating, buf, rc = time.monotonic() + poll, False, bool(waiter), "", None
     with open(events_path) as rd:
         rd.seek(offset)
 
@@ -327,7 +333,7 @@ def stream(cmd, cwd, out, row, prompt, start_event, waiter, wait_min):
                                    pid=proc.pid))
                 break
             if beating and now >= next_beat:
-                beating, next_beat = beat(waiter), now + waiter.poll
+                beating, next_beat = beat(waiter), now + poll
             wake = min(deadline, next_beat if beating else deadline)
             if not started:
                 wake = min(wake, now + START_POLL_S)
@@ -363,14 +369,17 @@ def supervise(cmd, cwd, out, row, prompt, start_event, waiter, wait_min):
     since = time.time()
     res = stream(cmd, cwd, out, row, prompt, start_event, waiter, wait_min)
     if res is None:
-        print(dc.REARM.format(waiter.wid), flush=True)
+        print(dc.REARM.format(waiter.wid) if waiter else
+              f"still running: wait with delegation-ledger wait --codex {row['run_id']} "
+              "(run_in_background, timeout 7200000)", flush=True)
         return AT_MAX_WAIT
     rc, thread_id = res
     with finalize_lock(row["run_id"]):
         code = finish(row, rc, thread_id, since, out)
         verdict, _ = dc.codex_stopped({"run_id": row["run_id"], "exit": code})
         try:
-            waiter.end(verdict)
+            if waiter:
+                waiter.end(verdict)
         except dc.StepAside:
             pass  # dropped, or taken over: its new waiter decides by the stop row
         except Exception as ex:  # noqa: BLE001  the stop row stands; the guard reads it
@@ -431,11 +440,22 @@ def cmd_run(a):
     cmd = wrap(exec_cmd(model, workdir, out, a.network, a.effort),
                seconds(a.timeout), a.mem, not a.no_scope)
     waiter = claim_watch(run_id, take_over=False)
-    dc.append_row(dict(row, ts=dc.now_iso(), event="pending", wrapper_pid=waiter.me,
-                       wrapper_start=waiter.start))
-    print(LAUNCH.format(run=run_id, wid=waiter.wid), flush=True)
+    dc.append_row(dict(row, ts=dc.now_iso(), event="pending", **wrapper_fields()))
+    launch_line(run_id, waiter)
     return supervise(cmd, workdir, out, row, PREAMBLE.format(out=out) + brief, "start", waiter,
                      wait_min)
+
+
+def wrapper_fields():
+    """This wrapper's pid and procStart, for its pending row."""
+    return {"wrapper_pid": os.getpid(), "wrapper_start": dc.proc_start(os.getpid())}
+
+
+def launch_line(run_id, waiter):
+    """Print the run and its watch, flushed, before Codex starts. With no watch (sandboxed),
+    nothing: the summary is the only output, as before watches."""
+    if waiter:
+        print(LAUNCH.format(run=run_id, wid=waiter.wid), flush=True)
 
 
 def lookup(key):
@@ -459,10 +479,10 @@ def cmd_resume(a):
     cmd = wrap(resume_cmd(e["thread_id"], model, e["dir"], e["out"], e.get("network"),
                           e.get("effort")), seconds(a.timeout), a.mem, not a.no_scope)
     waiter = claim_watch(e["run_id"], take_over=True)
-    row.update(model=model, wrapper_pid=waiter.me, wrapper_start=waiter.start)
+    row.update(model=model, **wrapper_fields())
     # A row before Codex starts, so the run's latest isn't the previous turn's stop meanwhile.
     dc.append_row(dict(row, ts=dc.now_iso(), event="pending"))
-    print(LAUNCH.format(run=e["run_id"], wid=waiter.wid), flush=True)
+    launch_line(e["run_id"], waiter)
     return supervise(cmd, e["dir"], e["out"], row, RESUME_NOTE + prompt, "resume", waiter,
                      wait_min)
 
@@ -538,8 +558,27 @@ def cmd_finalize(a):
                 "records the stop row itself")
         row = {k: e.get(k) for k in ("runner", "id", "run_id", "dir", "out", "network",
                                      "effort", "model")}
-        return finish(row, None, e.get("thread_id"), dc.parse_iso(e["first_ts"]).timestamp(),
-                      e["out"])
+        thread_id = e.get("thread_id") or events_thread_id(e["out"])
+        return finish(row, None, thread_id, dc.parse_iso(e["first_ts"]).timestamp(), e["out"])
+
+
+def events_thread_id(out):
+    """The thread id in <out>/events.jsonl's thread.started, or None. A wrapper that left
+    before Codex started its thread (at --max-wait, or killed) never recorded it."""
+    try:
+        with open(os.path.join(out, "events.jsonl")) as f:
+            for line in f:
+                if '"thread.started"' not in line:
+                    continue
+                try:
+                    e = json.loads(line)
+                except ValueError:
+                    continue
+                if e.get("type") == "thread.started" and e.get("thread_id"):
+                    return e["thread_id"]
+    except OSError:
+        pass
+    return None
 
 
 def cmd_audit(a):

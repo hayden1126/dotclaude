@@ -441,6 +441,32 @@ class Kills(GuardEnv):
         self.assertEqual(self.decide(), self.block(codex.format("codex job", "<run_id>"),
                                                    codex.format("codex resume", "r7")))
 
+    def test_a_killed_codex_wrapper_folds_into_its_runs_watch(self):
+        # A run's by the launch window; a resume's by the thread id it names.
+        launched = self.now - 7200
+        self.codex_row("r1", thread_id="th-9", pid=os.getpid())  # Codex runs on
+        self.watch("w-c", cond={"codex": "r1"}, desc="codex run r1 ends",
+                   created=iso(launched + 1)[:19] + "Z")
+        self.lines(launch("toolu_1", "bk1", "codex-delegate run --model sol --dir . --brief b",
+                          "codex job", launched),
+                   launch("toolu_2", "bk2", "codex-delegate resume th-9 --prompt p",
+                          "codex resume", self.now - 3000),
+                   notice("bk1", "toolu_1", "codex job", self.now - 60),
+                   notice("bk2", "toolu_2", "codex resume", self.now - 50))
+        self.assertEqual(self.decide(), self.block(self.lapse_reason(
+            "w-c", desc="codex run r1 ends", cond="codex run r1 ends")))
+
+    def test_an_unfolded_codex_kill_re_arms_the_runs_open_watch(self):
+        self.codex_row("r1", pid=os.getpid())
+        self.watch("w-c", sid="s2", cond={"codex": "r1"}, desc="codex run r1 ends")  # not ours
+        self.lines(launch("toolu_1", "bk1", "codex-delegate resume r1", "codex resume",
+                          self.now - 3000),
+                   notice("bk1", "toolu_1", "codex resume", self.now - 60))
+        self.assertEqual(self.decide(), self.block(
+            'Codex wrapper "codex resume" was stopped at its time limit, but Codex keeps '
+            "running. Don't re-run it. Re-arm the run's watch: `delegation-ledger wait "
+            "--resume w-c`, with run_in_background and timeout 7200000."))
+
     def test_a_kill_and_a_lapse_are_numbered_in_one_block(self):
         self.watch()
         self.lines(launch("toolu_1", "bk1", "make all", "the make", self.now - 7200),

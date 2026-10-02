@@ -30,7 +30,10 @@ to wake it. This hook is the enforcement:
   `delegation-ledger wait` folds into its watch's item when that watch has one in this stop:
   the watch a --resume names, else the one watch created within 120 s after the launch (more
   than one: the one whose condition the command's --pid, --file or --log names). A killed
-  `codex-delegate run|resume` gets its own reason: Codex keeps running.
+  `codex-delegate run|resume` folds the same way into the watch its wrapper waited as: a
+  resume's by the run or thread id it names, a run's the one codex watch created within 120 s
+  after the launch. Unfolded, its reason says Codex keeps running, and re-arms the run's
+  watch when one is open.
 
 Each stop runs in three phases, so what it records it also says. Gather is read-only and
 budgeted (3 s): no new item once that's spent, and a kill whose launch lookup the deadline cut
@@ -86,6 +89,9 @@ CODEX_KILL = ('Codex wrapper "{desc}" was stopped at its time limit, but Codex k
               "Don't re-run it. Wait on it with delegation-ledger wait --codex {run} "
               "(codex-delegate status lists the run), with run_in_background and timeout "
               "7200000.")
+CODEX_REARM = ('Codex wrapper "{desc}" was stopped at its time limit, but Codex keeps running. '
+               "Don't re-run it. Re-arm the run's watch: `delegation-ledger wait --resume "
+               "{wid}`, with run_in_background and timeout 7200000.")
 ACK_MESSAGE = ("Watch {id} ({desc}) still has no waiter; it's acknowledged. Re-arm with "
                "delegation-ledger wait --resume {id}, or drop it.")
 TASK_RE = re.compile(r"<task-id>([^<]+)</task-id>")
@@ -336,19 +342,43 @@ def fold_target(command, at, watches, cwd):
     named = RESUME_RE.search(command)
     if named:
         return named.group(1)
-    if at is None:
-        return None
+    fits = created_after(watches, at)
+    if len(fits) > 1:
+        fits = [w for w in fits if names_condition(command, w, cwd)]
+    return fits[0]["id"] if len(fits) == 1 else None
+
+
+def created_after(watches, at):
+    """The watches created within FOLD_WINDOW_S after a launch at `at` (None: no launch)."""
     fits = []
-    for w in watches:
+    for w in watches if at is not None else ():
         try:
             created = dc.parse_iso(w["created"]).timestamp()
         except (KeyError, TypeError, ValueError):
             continue
         if math.floor(at) <= created <= at + FOLD_WINDOW_S:
             fits.append(w)
-    if len(fits) > 1:
-        fits = [w for w in fits if names_condition(command, w, cwd)]
-    return fits[0]["id"] if len(fits) == 1 else None
+    return fits
+
+
+def codex_run(w):
+    return (w.get("condition") or {}).get("codex")
+
+
+def codex_target(match, at, watches):
+    """(fold, run) for a killed `codex-delegate run|resume` (its CODEX_RE match): the watch
+    its wrapper waited as, and the run id when known. A resume names its run or thread; a run
+    mints its id, so its watch is the one codex watch created within FOLD_WINDOW_S after the
+    launch."""
+    if match.group(1) == "resume":
+        key = match.group(2) if match.group(2) and not match.group(2).startswith("-") else None
+        e = dc.find_codex(key) if key else None
+        run = e["run_id"] if e else key
+        fits = [w for w in watches if run is not None and codex_run(w) == run]
+    else:
+        fits = [w for w in created_after(watches, at) if codex_run(w) is not None]
+        run = codex_run(fits[0]) if len(fits) == 1 else None
+    return (fits[0]["id"] if len(fits) == 1 else None), run
 
 
 def map_kill(n, transcript, watches, cwd, spent):
@@ -364,10 +394,12 @@ def map_kill(n, transcript, watches, cwd, spent):
         return plain._replace(fold=fold_target(command, at, watches, cwd))
     codex = CODEX_RE.search(command)
     if codex:
-        # `resume` names its run; `run` mints one the wrapper hadn't printed yet.
-        run = codex.group(2) if codex.group(1) == "resume" else None
-        return plain._replace(text=CODEX_KILL.format(
-            desc=n.desc, run=run if run and not run.startswith("-") else "<run_id>"))
+        fold, run = codex_target(codex, at, watches)
+        open_watch = dc.codex_watch(run) if fold is None and run else None
+        wid = fold or (open_watch or {}).get("id")
+        text = (CODEX_REARM.format(desc=n.desc, wid=wid) if wid else
+                CODEX_KILL.format(desc=n.desc, run=run or "<run_id>"))
+        return Kill(n, text, fold)
     return plain
 
 

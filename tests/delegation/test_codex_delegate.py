@@ -48,9 +48,10 @@ FAKE_CODEX = textwrap.dedent('''\
     with open(os.environ["FAKE_ARGV_LOG"], "a") as f:
         f.write(json.dumps({"argv": a, "prompt_head": prompt[:80], "ledger_last": last})
                 + "\\n")
+    import time
+    time.sleep(float(os.environ.get("FAKE_START_DELAY", "0")))
     print(json.dumps({"type": "thread.started", "thread_id": tid}), flush=True)
     print(json.dumps({"type": "item.completed", "item": {"type": "file_change"}}), flush=True)
-    import time
     time.sleep(float(os.environ.get("FAKE_SLEEP", "0")))
     report = os.environ.get("FAKE_REPORT", "valid")
     if report == "valid":
@@ -363,6 +364,28 @@ class FullRun(unittest.TestCase):
         self.assertEqual([r["event"] for r in self.ledger()].count("stop"), 1)
         self.assertTrue(self.ledger()[-1]["report_ok"])
         self.assertEqual(self.watches()[wid]["state"], "done")
+
+    def test_a_run_detached_before_its_thread_started_finalizes_with_a_passing_audit(self):
+        p = self.run_ok("--max-wait", "0.01", FAKE_START_DELAY="2")
+        self.assertEqual(p.returncode, 75, p.stderr)
+        detached = self.ledger()[-1]
+        self.assertEqual((detached["event"], detached["thread_id"]), ("detached", None))
+        deadline = time.time() + 15
+        while time.time() < deadline and cd.dc.pid_alive(detached["pid"]):
+            time.sleep(0.1)
+        f = self.run_cd("finalize", detached["run_id"])
+        self.assertEqual(f.returncode, 0, f.stderr)
+        stop = self.ledger()[-1]
+        self.assertEqual((stop["event"], stop["thread_id"], stop["audit_ok"]),
+                         ("stop", "th-1", True))
+
+    def test_a_sandboxed_run_records_no_watch_and_goes_on(self):
+        p = self.run_ok(CLAUDE_PID=str(DEAD))  # its own pid unseen: a sandbox PID namespace
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("codex-delegate: running sandboxed, so no watch is recorded; run it as a "
+                      "bare command\n", p.stderr)
+        self.assertEqual(self.watches(), {})
+        self.assertTrue(json.loads(p.stdout)["report_ok"])  # the summary alone, as before
 
     def test_max_wait_is_at_most_110_minutes(self):
         for bad in ("111", "0", "nan"):
