@@ -283,7 +283,10 @@ from 60 to 5,000 requests an hour.
 - **Adoption after `/clear` needs the Claude process.** A watch records `claude_pid` only when the
   waiter saw `CLAUDE_PID`, and the guard finds its own process from `CLAUDE_PID` or a sessions
   file at most 6 levels up its parents. A watch made outside Claude Code, or a guard that finds
-  neither, adopts nothing.
+  neither, adopts nothing. It also rests on the sessions file naming the new session id after a
+  `/clear`, so the old one stops being live (see the verified facts). Were that to change, the old
+  session would read as live and nothing would be adopted: safe, but the watch would go
+  unguarded.
 - **The re-arm across turns isn't in the live harness.** `claude -p` kills background shells
   about 5 s after its final result, so no waiter outlives a `-p` turn. A dated item in `due.toml`
   asks for the check by hand in an interactive session.
@@ -767,9 +770,11 @@ the fix is enforcement. `PLAN.md` has the design history and the options weighed
   - anything else is a lapse, which blocks once with the re-arm and drop commands. For a codex run
     that ended without a stop row, it adds that resuming finalizes it;
   - first, it adopts any unresolved watch recorded under its own Claude Code process with another
-    session id (a `/clear`), moving it into this session in the commit pass and logging it. It
-    finds that process from `CLAUDE_PID`, or the nearest parent with a
-    `~/.claude/sessions/<pid>.json`, 6 levels up at most.
+    session id that is no longer live (a `/clear`), moving it into this session in the commit
+    pass and logging it. A live session's watch is never adopted, whatever the pids say, and the
+    commit checks the process and the liveness again under the lock. It finds its process from
+    `CLAUDE_PID`, or the nearest parent with a `~/.claude/sessions/<pid>.json`, 6 levels up at
+    most.
 - **The kill catch**, in the same hook. Each stop reads the transcript on from where the last one
   stopped (`kills/<session>.json` holds the offset), searching the raw bytes for
   `task-notification`. A notice with `<status>killed</status>` at the background time limit blocks
@@ -1045,6 +1050,15 @@ wins.
   - each sandboxed command gets its own PID namespace, so its pids start near 1. Echoed out of it,
     such a pid names pid 1 or a root daemon on the host;
   - a hook edit in a settings file loads in the running session, as the settings docs say.
+- **A session id change rewrites the sessions file** (2.1.286, observed 2026-10-02 on a running
+  lead). The lead's Claude process started on 2026-09-30 under one session id, which its task
+  output dir and an older memory note carry. Its `~/.claude/sessions/<pid>.json` now names the
+  id in its current `CLAUDE_CODE_SESSION_ID`, under the same pid. So when a process's session id
+  changes, as on `/clear`, the old id leaves `live_sessions()`, which lets the guard adopt only
+  from a session that isn't live. The guard checks liveness anyway.
+- **A `claude -p` run writes its own sessions file** (same day), with `entrypoint: sdk-cli` and
+  `kind` set. So the guard's parent walk, run from a nested `-p` session's hook, stops at the
+  child's process, not its parent's.
 - **Codex sub-agents:**
   - a `spawn_agent` without a model inherits the parent's model (tested);
   - `agents.default_subagent_model` exists, and `codex-delegate` passes it with `-c`;

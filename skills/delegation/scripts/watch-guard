@@ -8,7 +8,7 @@ to wake it. This hook is the enforcement:
 
 - Watches (`delegation-ledger wait`; delegation_common documents the file). For each of this
   session's open or acknowledged watches, including those this Claude process recorded under
-  an earlier session id (a /clear), which it adopts:
+  an earlier session id that is no longer live (a /clear), which it adopts:
   - a live waiter, or a background shell whose command holds the watch id, allows (the waiter
     records the end itself);
   - else a met condition is recorded done and blocks once: the dead waiter's notification
@@ -497,20 +497,26 @@ def own_claude():
     return None
 
 
-def adoptable(w, me):
-    """Whether watch w was recorded under this hook's Claude process (`me`): after /clear that
-    process runs on under a new session id, and this guard takes the watch over."""
+def adoptable(w, me, live):
+    """Whether /clear left watch w: it was recorded under this hook's Claude process (`me`), in
+    a session that isn't live (not in `live`, from live_sessions()). After /clear that process
+    runs on under a new session id, and its sessions file names the new one, so the old id
+    leaves the live set. A live session's watch is never adopted, whatever the pids say: that
+    session's own guard has it."""
     return (me is not None and w.get("claude_pid") == me[0]
-            and str(w.get("claude_start")) == str(me[1]))
+            and str(w.get("claude_start")) == str(me[1]) and w.get("session_id") not in live)
 
 
-def adopt(sid, wids, until, clock):
-    """Move the watches /clear left (adoptable) into this session, and log each."""
+def adopt(sid, wids, me, until, clock):
+    """Move the watches /clear left into this session, and log each. Each is checked again
+    under the lock (adoptable), so one another session re-armed, or whose old session came
+    back, since it was gathered stays where it is."""
     moved = []
 
     def fn(wid):
         def move(cur):
-            if cur.get("state") in dc.UNRESOLVED and cur.get("session_id") != sid:
+            if (cur.get("state") in dc.UNRESOLVED and cur.get("session_id") != sid
+                    and adoptable(cur, me, dc.live_sessions())):
                 moved.append((wid, cur.get("session_id")))
                 cur["session_id"] = sid
         return move
@@ -538,10 +544,12 @@ def later_stop(cur, stop, size, now):
         return True
 
 
-def commit(sid, transcript, adopted, pendings, kills, scan_out, stop, size, now, until, clock):
+def commit(sid, transcript, adopted, me, pendings, kills, scan_out, stop, size, now, until,
+           clock):
     """Record everything gathered in one pass, under kills/<sid>.lock and then watches/.lock
     (each wait bounded by `until`), and return (items, acks). Each watch is re-read under the
-    lock, so a waiter that re-armed meanwhile, or a twin guard that recorded first, wins. A
+    lock, so a waiter that re-armed meanwhile, a twin guard that recorded first, or a watch
+    that wasn't adopted after all (it's in another session), wins. A
     watch whose update fails is logged and unsaid, and comes up again next stop; the rest, and
     the kills, go on. LockBusy means nothing is recorded or said this stop."""
     items, acks, itemized, outcomes = [], [], set(), {}
@@ -550,8 +558,9 @@ def commit(sid, transcript, adopted, pendings, kills, scan_out, stop, size, now,
         wid = p.w["id"]
 
         def fn(cur):
-            if cur.get("state") not in dc.UNRESOLVED or dc.waiter_alive(cur, now):
-                return  # dropped, ended or re-armed since it was gathered
+            if (cur.get("state") not in dc.UNRESOLVED or dc.waiter_alive(cur, now)
+                    or cur.get("session_id") != sid):
+                return  # dropped, ended, re-armed or not adopted since it was gathered
             if p.kind == "end":
                 cur.update(state=p.state, ended=iso(now))
                 outcomes[wid] = "block"
@@ -565,7 +574,7 @@ def commit(sid, transcript, adopted, pendings, kills, scan_out, stop, size, now,
 
     with dc.file_lock(kills_path(sid, ".lock"), until, clock):
         if adopted:
-            adopt(sid, adopted, until, clock)
+            adopt(sid, adopted, me, until, clock)
         if pendings:
             _, failed = dc.update_watches({p.w["id"]: record(p) for p in pendings}, until, clock)
             for wid, exc in failed:
@@ -638,9 +647,10 @@ def decide(data, now, clock=time.monotonic):
     except Exception:  # noqa: BLE001
         log("prune")
     me = own_claude()
+    live = dc.live_sessions() if me is not None else {}
     watches = [w for w in dc.all_watches() if w.get("state") in dc.UNRESOLVED
                and isinstance(w.get("id"), str)
-               and (w.get("session_id") == sid or adoptable(w, me))]
+               and (w.get("session_id") == sid or adoptable(w, me, live))]
     adopted = [w["id"] for w in watches if w.get("session_id") != sid]
     pendings = []
     for i, w in enumerate(watches):
@@ -664,8 +674,8 @@ def decide(data, now, clock=time.monotonic):
     if not pendings and scan_out is None and not adopted:
         return None
     try:
-        items, acks = commit(sid, transcript, adopted, pendings, kills, scan_out, stop, size, now,
-                             max(deadline, clock() + LOCK_GRACE_S), clock)
+        items, acks = commit(sid, transcript, adopted, me, pendings, kills, scan_out, stop, size,
+                             now, max(deadline, clock() + LOCK_GRACE_S), clock)
     except dc.LockBusy as ex:
         checks.log_error(f"watch-guard: {ex} stayed locked; nothing was taken this stop")
         return None

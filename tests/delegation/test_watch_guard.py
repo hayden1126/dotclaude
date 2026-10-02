@@ -345,21 +345,72 @@ class Watches(GuardEnv):
         self.watch(live=True)  # what a --resume's take() writes: blocked_at cleared
         self.assertIsNone(self.decide())
 
+    def mine(self, sid="s-before", **fields):
+        """A watch recorded under this test's process, which plays the Claude process."""
+        return self.watch(sid=sid, claude_pid=os.getpid(),
+                          claude_start=dc.proc_start(os.getpid()), **fields)
+
+    def as_claude(self, live=("s1",)):
+        """Run as the Claude process (CLAUDE_PID is this test), with `live` the live sessions.
+        Returns the live_sessions mock."""
+        env = mock.patch.dict(os.environ, {"CLAUDE_PID": str(os.getpid())})
+        sessions = mock.patch.object(guard.dc, "live_sessions",
+                                     return_value={s: os.getpid() for s in live})
+        env.start()
+        self.addCleanup(env.stop)
+        self.addCleanup(sessions.stop)
+        return sessions.start()
+
     def test_a_watch_left_by_clear_is_adopted_and_guarded(self):
-        # /clear starts a new session id in the same Claude process.
-        self.watch(sid="s-before", claude_pid=os.getpid(),
-                   claude_start=dc.proc_start(os.getpid()))
+        # /clear starts a new session id in the same Claude process, and the old id isn't live.
+        self.mine()
         self.lines()
-        with mock.patch.dict(os.environ, {"CLAUDE_PID": str(os.getpid())}):
-            self.assertEqual(self.decide(), self.block(self.lapse_reason()))
+        self.as_claude()
+        self.assertEqual(self.decide(), self.block(self.lapse_reason()))
         self.assertEqual(self.read()["session_id"], "s1")
         self.assertIn("adopted watch w-1 from session s-before", self.err_log())
+
+    def test_a_live_sessions_watch_isnt_adopted_even_when_the_process_matches(self):
+        self.mine()
+        self.lines()
+        self.as_claude(live=("s1", "s-before"))
+        self.assertIsNone(self.decide())
+        self.assertEqual(self.read()["session_id"], "s-before")
+        self.assertNotIn("adopted", self.err_log())
+
+    def test_adoption_is_checked_again_under_the_lock(self):
+        # Between gather and commit, the old session came back (claude --resume elsewhere).
+        self.mine()
+        self.lines()
+        sessions = self.as_claude()
+        calls = itertools.count()
+        sessions.side_effect = lambda: ({"s1": 1} if next(calls) == 0
+                                        else {"s1": 1, "s-before": 2})
+        self.assertIsNone(self.decide())
+        self.assertEqual(self.read()["session_id"], "s-before")
+        self.assertIsNone(self.read()["blocked_at"])
+        self.assertNotIn("adopted", self.err_log())
+
+    def test_a_watch_re_armed_elsewhere_after_gather_isnt_adopted(self):
+        self.mine()
+        self.lines()
+        self.as_claude()
+        real = guard.watch_pending
+
+        def watch_pending(w, shells, now):
+            p = real(w, shells, now)  # then another session's --resume takes the watch
+            self.watch(sid="s-other", claude_pid=DEAD, claude_start=None)
+            return p
+        with mock.patch.object(guard, "watch_pending", watch_pending):
+            self.assertIsNone(self.decide())
+        self.assertEqual(self.read()["session_id"], "s-other")
+        self.assertIsNone(self.read()["blocked_at"])
 
     def test_a_watch_of_a_dead_claude_process_isnt_adopted(self):
         self.watch(sid="s-before", claude_pid=DEAD, claude_start=None)
         self.lines()
-        with mock.patch.dict(os.environ, {"CLAUDE_PID": str(os.getpid())}):
-            self.assertIsNone(self.decide())
+        self.as_claude()
+        self.assertIsNone(self.decide())
         self.assertEqual(self.read()["session_id"], "s-before")
 
     def test_an_undecidable_watch_is_skipped_and_the_other_still_blocks(self):
