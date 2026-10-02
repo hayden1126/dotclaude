@@ -262,29 +262,29 @@ NOOP_STOP = '{"hook_event_name": "Stop", "stop_hook_active": false}'  # no sessi
 
 def check_guard_shim(shim=None):
     """The installed watch-guard shim runs clean: a main-thread Stop payload with no session id
-    (the guard does nothing for it) exits 0, prints nothing, and adds nothing to
-    delegation-ledger.err, where the shim sends Python's stderr. That proves the link and the
-    import, which would otherwise fail silently."""
+    (the guard does nothing for it) exits 0, prints nothing, and logs nothing to the
+    delegation-ledger.err where the shim sends Python's stderr. That proves the link and the
+    import, which would otherwise fail silently. It runs with a throwaway XDG_STATE_HOME, so the
+    real log's other writers (a guard's routine adoption line, say) can't fail it; the detail
+    quotes the last line it logged, since that log goes with the temp dir."""
     shim = shim or GUARD_SHIM
     if not os.path.exists(shim):
         return False, f"{shim} is missing"
-    err = state_path("delegation-ledger.err")
-
-    def size():
+    with tempfile.TemporaryDirectory() as state:
         try:
-            return os.path.getsize(err)
+            p = subprocess.run(["bash", shim], input=NOOP_STOP, capture_output=True, text=True,
+                               timeout=10, env=dict(os.environ, XDG_STATE_HOME=state))
+        except (OSError, subprocess.TimeoutExpired) as e:
+            return False, f"{shim} didn't run ({type(e).__name__}: {e})"
+        try:
+            with open(os.path.join(state, "dotclaude", "delegation-ledger.err")) as f:
+                logged = f.read().strip()
         except OSError:
-            return 0
-    before = size()
-    try:
-        p = subprocess.run(["bash", shim], input=NOOP_STOP, capture_output=True, text=True,
-                           timeout=10)
-    except (OSError, subprocess.TimeoutExpired) as e:
-        return False, f"{shim} didn't run ({type(e).__name__}: {e})"
-    grew = size() - before
-    if p.returncode or p.stdout.strip() or grew > 0:
-        return False, (f"{shim} exited {p.returncode}, printed {len(p.stdout.strip())} chars "
-                       f"and logged {max(grew, 0)} bytes; see delegation-ledger.err")
+            logged = ""
+    if p.returncode or p.stdout.strip() or logged:
+        last = f", and logged: {logged.splitlines()[-1][:200]}" if logged else ""
+        return False, (f"{shim} exited {p.returncode} and printed {len(p.stdout.strip())} "
+                       f"chars{last}")
     return True, f"{shim} ran clean"
 
 

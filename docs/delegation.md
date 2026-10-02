@@ -822,7 +822,9 @@ the fix is enforcement. `PLAN.md` has the design history and the options weighed
   waiter is still running". A watch with no session counts only once its waiter is dead.
 - **The shim logs.** `hooks/watch-guard.sh` appends Python's stderr to `delegation-ledger.err`,
   falling back to `/dev/null` when that file can't be written, so a missing link or an import
-  error shows there and in the quick canary instead of leaving the guard silently off.
+  error shows there and in the quick canary instead of leaving the guard silently off. The
+  canary runs the shim with a throwaway `XDG_STATE_HOME`, so a guard's routine log line (an
+  adoption, say) in the real file can't fail it, and it quotes the last line the shim logged.
 
 **Exit codes.**
 - `wait`: 0 done; 1 the job failed (a `--fail` match, its pids exited with another condition

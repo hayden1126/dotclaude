@@ -95,13 +95,22 @@ class GuardShim(StateTest):
         ok, detail = checks.check_guard_shim(self.shim("cat >/dev/null; exit 0\n"))
         self.assertTrue(ok, detail)
 
-    def test_a_logged_error_fails(self):
+    def test_a_logged_error_fails_and_is_quoted(self):
+        # Where the real shim logs: its own XDG_STATE_HOME's delegation-ledger.err.
+        ok, detail = checks.check_guard_shim(self.shim(
+            'cat >/dev/null; d="$XDG_STATE_HOME/dotclaude"; mkdir -p "$d"; '
+            'echo "ModuleNotFoundError: x" >>"$d/delegation-ledger.err"; exit 0\n'))
+        self.assertFalse(ok)
+        self.assertTrue(detail.endswith(" exited 0 and printed 0 chars, and logged: "
+                                        "ModuleNotFoundError: x"), detail)
+
+    def test_another_writer_of_the_real_log_doesnt_fail_it(self):
+        # A guard's routine line (an adoption, say) lands in the real log meanwhile.
         err = checks.state_path("delegation-ledger.err")
         os.makedirs(os.path.dirname(err), exist_ok=True)
         ok, detail = checks.check_guard_shim(self.shim(
-            f"cat >/dev/null; echo 'ModuleNotFoundError: x' >>{err}; exit 0\n"))
-        self.assertFalse(ok)
-        self.assertIn("see delegation-ledger.err", detail)
+            f"cat >/dev/null; echo 'watch-guard: adopted watch w-1' >>{err}; exit 0\n"))
+        self.assertTrue(ok, detail)
 
     def test_a_missing_shim_fails(self):
         ok, detail = checks.check_guard_shim(os.path.join(self.tmp.name, "nope.sh"))
