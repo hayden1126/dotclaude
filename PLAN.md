@@ -86,7 +86,14 @@ puts on the machine. The pieces:
 
 ## Tasks (bite-sized, ordered, independently verifiable)
 
-### T0: Probe the assumptions C rests on (done 2026-10-02, Claude Code 2.1.287)
+### T0: Probe the assumptions C rests on (done 2026-10-02, Claude Code 2.1.286)
+The probing session ran 2.1.286 (`CLAUDE_CODE_EXECPATH`). `claude --version` printed 2.1.287
+because it reports the newest installed version, not the running one, so record the version
+from the session's own executable.
+
+A kill notice that arrives mid-turn is stored differently from one that starts a turn: as
+`{"type": "attachment", "attachment": {"type": "queued_command", "prompt": "<task-notification>...",
+"origin": {"kind": "task-notification", ...}}}`. The kill catch matches both shapes.
 All of these ran in an interactive session with a temporary Stop hook in the project's
 `.claude/settings.local.json`, which was removed afterward. Hook edits load live, as the
 settings docs say.
