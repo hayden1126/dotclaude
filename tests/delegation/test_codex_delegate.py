@@ -1,6 +1,7 @@
 """codex-delegate: model gate, command contract, recursive audit, and full runs against a
 fake `codex` on PATH (no real Codex is launched)."""
 import datetime
+import fcntl
 import glob
 import json
 import os
@@ -459,6 +460,63 @@ class FullRun(unittest.TestCase):
         self.assertEqual(proc.stdout.read(), f"watch {wid} was dropped; Codex keeps running\n")
         proc.stdout.close()
         self.wait_gone(self.ledger()[-1]["pid"])
+
+    def codex_pid(self):
+        """The pid in the run's codex.pid, once the wrapper has written it."""
+        path = os.path.join(self.ledger()[0]["out"], "codex.pid")
+        deadline = time.time() + 10
+        while not os.path.exists(path) and time.time() < deadline:
+            time.sleep(0.05)
+        with open(path) as f:
+            return json.load(f)["pid"]
+
+    def test_a_wrapper_killed_before_thread_started_leaves_a_running_run(self):
+        # SIGKILL writes no row, so only codex.pid says Codex was launched.
+        proc = self.start(FAKE_START_DELAY="3")
+        run_id, wid = self.launch_ids(proc.stdout.readline())
+        codex = self.codex_pid()
+        proc.kill()
+        proc.wait(timeout=10)
+        proc.stdout.close()
+        self.assertEqual([r["event"] for r in self.ledger()], ["pending"])
+        self.assertTrue(cd.dc.pid_alive(codex))
+        r = self.run_cd("resume", run_id, "--no-scope")
+        self.assertEqual(r.returncode, 2)
+        self.assertIn(f"run {run_id} is still running (codex pid {codex})", r.stderr)
+        w = subprocess.Popen([sys.executable, LEDGER, "wait", "--resume", wid, "--poll", "0.2"],
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                             env=self.env)
+        time.sleep(1)
+        self.assertIsNone(w.poll())  # it waits on the live Codex, not "never started"
+        _, err = w.communicate(timeout=60)
+        self.assertEqual(w.returncode, 0, err)
+        self.assertEqual([r["event"] for r in self.ledger()], ["pending", "stop"])
+        stop = self.ledger()[-1]
+        self.assertEqual((stop["thread_id"], stop["audit_ok"]), ("th-1", True))
+
+    def test_the_wrapper_heartbeats_while_it_finishes(self):
+        proc = self.start("--poll", "0.4", FAKE_SLEEP="1")
+        run_id, wid = self.launch_ids(proc.stdout.readline())
+        lock = os.path.join(self.tmp.name, "state", "dotclaude", "codex-finalize",
+                            f"{run_id}.lock")
+        os.makedirs(os.path.dirname(lock), exist_ok=True)
+        with open(lock, "a") as held:
+            fcntl.flock(held, fcntl.LOCK_EX)  # the finish waits on it
+            self.wait_gone(self.codex_pid())
+            beats = set()
+            for _ in range(12):
+                beats.add(self.watches()[wid]["waiter_heartbeat"])
+                time.sleep(0.25)
+            self.assertIsNone(proc.poll())
+            self.assertEqual(self.watches()[wid]["state"], "open")
+            self.assertGreaterEqual(len(beats), 2)  # stamps are whole seconds
+            fcntl.flock(held, fcntl.LOCK_UN)
+        self.assertEqual(proc.wait(timeout=20), 0)
+        proc.stdout.close()
+        w = self.watches()[wid]
+        self.assertEqual(w["state"], "done")
+        time.sleep(1.2)
+        self.assertEqual(self.watches()[wid], w)  # no beat after the finish
 
     def test_max_wait_is_at_most_110_minutes(self):
         for bad in ("111", "0", "nan"):

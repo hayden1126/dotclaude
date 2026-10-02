@@ -456,7 +456,8 @@ def codex_state(e, visible=True):
     out = e.get("out") or ""
     events = os.path.join(out, "events.jsonl")
     age = ((time.time() - os.path.getmtime(events)) / 60) if os.path.exists(events) else None
-    codex_alive = pid_alive(e.get("pid"))
+    codex_pid = codex_proc(e)[0]
+    codex_alive = codex_running(e)
     wrapper_alive = codex_wrapper_alive(e)
     has_report = os.path.exists(os.path.join(out, "report.json"))
     run = e.get("run_id")
@@ -473,17 +474,17 @@ def codex_state(e, visible=True):
             f"`codex-delegate finalize {run}` once it ends)"))
     elif event == "pending" and wrapper_alive:
         verdict = "starting"
-    elif event == "pending" and e.get("thread_id"):  # a resume's wrapper died before Codex
+    elif codex_unstarted(e) and e.get("thread_id"):  # a resume's wrapper died before Codex
         verdict = f"never restarted its thread: `codex-delegate resume {run}`"
-    elif event == "pending":
+    elif codex_unstarted(e):
         verdict = "never started a thread: rerun it with `codex-delegate run`"
     elif has_report:
         verdict = f"ended without a stop row: `codex-delegate finalize {run}`"
     else:
         verdict = f"died: `codex-delegate resume {run}`"
-    pids = (f"codex pid {e.get('pid')} {'alive' if codex_alive else 'gone'}, "
+    pids = (f"codex pid {codex_pid} {'alive' if codex_alive else 'gone'}, "
             f"wrapper {'alive' if wrapper_alive else 'gone'}" if visible else
-            f"codex pid {e.get('pid')} and its wrapper not visible in the sandbox")
+            f"codex pid {codex_pid} and its wrapper not visible in the sandbox")
     evidence = (f"{pids}, "
                 + (f"last event {age:.0f} min ago" if age is not None else "no events file")
                 + (", report.json present" if has_report else ""))
@@ -496,17 +497,67 @@ def codex_wrapper_alive(e):
     return pid_alive(e.get("wrapper_pid"), e.get("wrapper_start"))
 
 
+def codex_pid_path(out):
+    return os.path.join(out or "", "codex.pid")
+
+
+def codex_proc(e):
+    """(pid, procStart) of the Codex process of a folded codex entry's current turn, procStart
+    None when unknown; (None, None) when none is known to have started. The wrapper writes
+    <out>/codex.pid right after its Popen, before the ledger hears of Codex (a wrapper
+    SIGKILLed before thread.started writes no row with the pid), so that file counts when the
+    entry's latest wrapper wrote it. Else a row past pending names the pid: a pending row
+    carries none, and a folded one's is the previous turn's."""
+    try:
+        with open(codex_pid_path(e.get("out"))) as f:
+            d = json.load(f)
+    except (OSError, ValueError):
+        d = None
+    if (isinstance(d, dict) and d.get("wrapper_pid") is not None
+            and d.get("wrapper_pid") == e.get("wrapper_pid")
+            and (e.get("wrapper_start") is None
+                 or str(d.get("wrapper_start")) == str(e.get("wrapper_start")))):
+        return d.get("pid"), d.get("start")
+    return (None, None) if e.get("event") == "pending" else (e.get("pid"), None)
+
+
+def codex_running(e):
+    """Whether the Codex process of the entry's current turn runs (codex_proc)."""
+    return pid_alive(*codex_proc(e))
+
+
 def codex_live(e):
-    """Whether a folded codex entry's run is still going: its Codex pid runs, or a pending
-    row's wrapper does (Codex hasn't started a thread yet)."""
-    return pid_alive(e.get("pid")) or (e.get("event") == "pending" and codex_wrapper_alive(e))
+    """Whether a folded codex entry's run is still going: its Codex runs, or a pending row's
+    wrapper does (Codex hasn't started yet)."""
+    return codex_running(e) or (e.get("event") == "pending" and codex_wrapper_alive(e))
+
+
+def events_thread_id(out):
+    """The thread id in <out>/events.jsonl's thread.started, or None. A wrapper that left
+    before Codex started its thread (at --max-wait, or killed) never recorded it."""
+    try:
+        with open(os.path.join(out or "", "events.jsonl")) as f:
+            for line in f:
+                if '"thread.started"' not in line:
+                    continue
+                try:
+                    e = json.loads(line)
+                except ValueError:
+                    continue
+                if e.get("type") == "thread.started" and e.get("thread_id"):
+                    return e["thread_id"]
+    except OSError:
+        pass
+    return None
 
 
 def codex_unstarted(e):
-    """Whether a codex run's latest row is a pending one whose wrapper died before Codex
-    started: nothing runs, and there is nothing to finalize. (A pending row carries no pid; a
-    folded one's is the previous turn's.)"""
-    return e.get("event") == "pending" and not codex_live(e)
+    """Whether a codex run's latest row is a pending one whose wrapper died before it launched
+    Codex: nothing runs, and there is nothing to finalize. That means no codex.pid from this
+    wrapper, and for a first turn no thread.started in events.jsonl (a resume's file holds the
+    earlier turns', so only the pid file tells there)."""
+    return (e.get("event") == "pending" and not codex_live(e) and codex_proc(e)[0] is None
+            and (bool(e.get("thread_id")) or events_thread_id(e.get("out")) is None))
 
 
 def codex_restart(e):
@@ -742,9 +793,9 @@ def codex_progress(run_id):
         raise Undecidable(f"codex run {run_id} is no longer in the ledger ({ledger_path()})")
     if e.get("event") == "stop":
         return "stopped", e
-    if pid_alive(e.get("pid")) or codex_wrapper_alive(e):
+    if codex_running(e) or codex_wrapper_alive(e):
         return "running", e
-    if e.get("event") == "pending":
+    if codex_unstarted(e):
         return "unstarted", e
     return "ended", e
 

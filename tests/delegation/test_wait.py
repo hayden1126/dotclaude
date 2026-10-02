@@ -791,9 +791,28 @@ class Codex(WaitEnv):
         self.finish(p, 0)
         self.assertFalse(os.path.exists(self.argv_file))
 
+    def test_a_pending_run_whose_wrapper_died_waits_on_its_codex_pid_file(self):
+        # A wrapper SIGKILLed after its Popen, before thread.started, wrote no row with the
+        # pid; its codex.pid shows Codex runs, so the waiter waits, then finalizes.
+        wrapper, codex = self.job(), self.job()
+        os.makedirs(self.path("r1"))
+        dc.write_json(os.path.join(self.path("r1"), "codex.pid"),
+                      {"pid": codex.pid, "start": dc.proc_start(codex.pid),
+                       "wrapper_pid": wrapper.pid})
+        self.codex_row("r1", None, event="pending", wrapper_pid=wrapper.pid)
+        p = self.start("--codex", "r1")
+        self.waiting(p)
+        self.end(wrapper)
+        time.sleep(0.3)
+        self.assertIsNone(p.poll())
+        self.end(codex)
+        out, _ = self.finish(p, 0)
+        self.assertIn("stub finalized r1", out)
+
     def test_a_pending_run_waits_for_its_wrapper(self):
-        # A wrapper that dies while its row is still pending never started Codex: there is
-        # nothing to finalize, so the waiter says so and leaves the watch open (exit 70).
+        # A wrapper that dies while its row is still pending, with no codex.pid, never started
+        # Codex: there is nothing to finalize, so the waiter says so and leaves the watch open
+        # (exit 70).
         wrapper = self.job()
         self.codex_row("r1", None, event="pending", wrapper_pid=wrapper.pid)
         p = self.start("--codex", "r1")

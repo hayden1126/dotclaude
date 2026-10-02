@@ -114,6 +114,12 @@ def max_wait(minutes):
     return minutes
 
 
+def poll_s(seconds):
+    if not dc.is_positive(seconds):
+        die("--poll takes positive seconds")
+    return seconds
+
+
 def seconds(spec):
     m = re.fullmatch(r"(\d+)([smh]?)", str(spec))
     if not m:
@@ -245,7 +251,7 @@ def audit(thread_id, since_epoch):
 
 # ---------------------------------------------------------------- run / resume
 
-def claim_watch(run_id, take_over):
+def claim_watch(run_id, take_over, poll):
     """This wrapper as the waiter of a watch on its run, recorded before Codex starts: a new
     watch, or with `take_over` (a resume), the run's open watch whose waiter is gone. A live
     waiter on the run refuses it, so two wrappers on one run can't both start Codex; a resume
@@ -257,7 +263,7 @@ def claim_watch(run_id, take_over):
     dc.prune_watches()
     session = dc.wait_session()
     w = dc.codex_watch(run_id) if take_over else None
-    waiter = dc.Waiter(w["id"] if w else dc.new_watch_id(), dc.WAIT_POLL_S, session)
+    waiter = dc.Waiter(w["id"] if w else dc.new_watch_id(), poll, session)
     new = None if w else {"id": waiter.wid, "session_id": session,
                           "condition": {"codex": run_id}, "created": dc.now_iso(),
                           "description": dc.condition_text({"codex": run_id})}
@@ -300,7 +306,10 @@ def stream(cmd, cwd, out, row, prompt, start_event, waiter, wait_min):
         offset = ev.tell()
         proc = subprocess.Popen(cmd, cwd=cwd, stdin=subprocess.PIPE, stdout=ev, stderr=err,
                                 text=True, start_new_session=True)
-    # The prompt never enters row, so a signal can't write it to the ledger.
+    # First, Codex's pid where a reader finds it even if this wrapper is SIGKILLed before
+    # thread.started (dc.codex_proc). The prompt never enters row, so a signal can't write it.
+    dc.write_json(dc.codex_pid_path(out), {"pid": proc.pid, "start": dc.proc_start(proc.pid),
+                                           **wrapper_fields()})
     signal.signal(signal.SIGINT, lambda *_: proc.send_signal(signal.SIGINT))
     for sig in (signal.SIGTERM, signal.SIGHUP):
         signal.signal(sig, lambda *_: (dc.append_row(dict(
@@ -507,7 +516,7 @@ def cmd_run(a):
            "dir": workdir, "out": out, "network": a.network, "effort": a.effort}
     cmd = wrap(exec_cmd(model, workdir, out, a.network, a.effort),
                seconds(a.timeout), a.mem, not a.no_scope)
-    waiter = claim_watch(run_id, take_over=False)
+    waiter = claim_watch(run_id, False, poll_s(a.poll))
     try:
         dc.append_row(dict(row, ts=dc.now_iso(), event="pending", **wrapper_fields()))
         launch_line(run_id, waiter)
@@ -542,7 +551,7 @@ def cmd_resume(a):
     run_id = e["run_id"]
     if dc.codex_live(e):
         w = dc.codex_watch(run_id)
-        alive = (f"codex pid {e.get('pid')}" if dc.pid_alive(e.get("pid")) else
+        alive = (f"codex pid {dc.codex_proc(e)[0]}" if dc.codex_running(e) else
                  f"its wrapper, pid {e.get('wrapper_pid')}, is starting it")
         wait = (f"delegation-ledger wait --resume {w['id']}" if w else
                 f"delegation-ledger wait --codex {run_id}")
@@ -562,7 +571,7 @@ def cmd_resume(a):
                                  "thread_id")}
     cmd = wrap(resume_cmd(e["thread_id"], model, e["dir"], e["out"], e.get("network"),
                           e.get("effort")), seconds(a.timeout), a.mem, not a.no_scope)
-    waiter = claim_watch(run_id, take_over=True)
+    waiter = claim_watch(run_id, True, poll_s(a.poll))
     row.update(model=model, **wrapper_fields())
     try:
         # A row before Codex starts, so the run's latest isn't the previous turn's stop.
@@ -639,8 +648,9 @@ def finalize_run(run_id, stream):
         e = lookup(run_id)
         if e.get("event") == "stop":
             return None
-        if dc.pid_alive(e.get("pid")):
-            die(f"run {run_id} is still running (pid {e.get('pid')}); finalize it after it ends")
+        if dc.codex_running(e):
+            die(f"run {run_id} is still running (pid {dc.codex_proc(e)[0]}); finalize it after "
+                "it ends")
         if dc.codex_wrapper_alive(e):
             die(f"run {run_id}'s wrapper (pid {e.get('wrapper_pid')}) is still running; it "
                 "records the stop row itself")
@@ -649,7 +659,7 @@ def finalize_run(run_id, stream):
                 f"there is nothing to finalize: {dc.codex_restart(e)}")
         row = {k: e.get(k) for k in ("runner", "id", "run_id", "dir", "out", "network",
                                      "effort", "model")}
-        thread_id = e.get("thread_id") or events_thread_id(e["out"])
+        thread_id = e.get("thread_id") or dc.events_thread_id(e["out"])
         return finish(row, None, thread_id, dc.parse_iso(e["first_ts"]).timestamp(), e["out"],
                       stream)
 
@@ -660,25 +670,6 @@ def cmd_finalize(a):
     if code is None:
         die(f"run {run_id} already has a stop row", 0)
     return code
-
-
-def events_thread_id(out):
-    """The thread id in <out>/events.jsonl's thread.started, or None. A wrapper that left
-    before Codex started its thread (at --max-wait, or killed) never recorded it."""
-    try:
-        with open(os.path.join(out, "events.jsonl")) as f:
-            for line in f:
-                if '"thread.started"' not in line:
-                    continue
-                try:
-                    e = json.loads(line)
-                except ValueError:
-                    continue
-                if e.get("type") == "thread.started" and e.get("thread_id"):
-                    return e["thread_id"]
-    except OSError:
-        pass
-    return None
 
 
 def cmd_audit(a):
@@ -702,6 +693,7 @@ def main(argv=None):
     r.add_argument("--network", action="store_true")
     r.add_argument("--no-scope", action="store_true", help="skip the systemd-run memory cap")
     r.add_argument("--max-wait", type=float, default=dc.MAX_WAIT_MIN, metavar="MIN")
+    r.add_argument("--poll", type=float, default=dc.WAIT_POLL_S, help=argparse.SUPPRESS)
     r.set_defaults(fn=cmd_run)
     s = sub.add_parser("resume")
     s.add_argument("run")
@@ -711,6 +703,7 @@ def main(argv=None):
     s.add_argument("--mem", default="8G")
     s.add_argument("--no-scope", action="store_true")
     s.add_argument("--max-wait", type=float, default=dc.MAX_WAIT_MIN, metavar="MIN")
+    s.add_argument("--poll", type=float, default=dc.WAIT_POLL_S, help=argparse.SUPPRESS)
     s.set_defaults(fn=cmd_resume)
     st = sub.add_parser("status")
     st.add_argument("run", nargs="?")

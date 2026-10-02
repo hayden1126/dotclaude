@@ -463,6 +463,15 @@ class Kills(GuardEnv):
         self.assertEqual(self.decide(), self.block(self.lapse_reason(
             "w-b", desc="codex run r2 ends", cond="codex run r2 ends")))
 
+    def test_a_pending_run_with_a_live_codex_pid_file_is_running(self):
+        out = self.path("r1-out")
+        dc.write_json(os.path.join(out, "codex.pid"), {"pid": os.getpid(), "wrapper_pid": DEAD,
+                                                       "start": dc.proc_start(os.getpid())})
+        self.codex_row("r1", event="pending", out=out)  # its wrapper SIGKILLed after the Popen
+        self.watch(cond={"codex": "r1"}, desc="codex run r1 ends")
+        self.assertEqual(self.decide(), self.block(self.lapse_reason(
+            desc="codex run r1 ends", cond="codex run r1 ends")))  # neither unstarted nor ended
+
     def test_an_unstarted_codex_run_says_to_resume_it_again(self):
         self.codex_row("r1", event="pending", thread_id="th-1")  # its wrapper died first
         self.watch(cond={"codex": "r1"}, desc="codex run r1 ends")
