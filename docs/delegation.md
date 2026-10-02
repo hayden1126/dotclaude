@@ -869,6 +869,8 @@ Its once-per-item rules:
   another hook's block can't swallow this one.
 - It fails open. An error on one item is logged to `delegation-ledger.err` and skips that item;
   any other error lets the stop through.
+- Where it can't see pids outside its own (a sandboxed run, `pids_visible`), it says nothing,
+  since every waiter and Claude process would read as dead.
 
 **The live re-arm is a manual check.** `claude -p` kills background shells about 5 s after its
 final result, so `tests/delegation/run.py` can't hold a wait across turns. A dated item in
@@ -1247,12 +1249,19 @@ hook fail closed, so wiring a hook before its script is reachable blocks every d
    - the prompts are unchanged.
 5. **The watch guard.** Add the `Stop` entry for `watch-guard.sh` (timeout 5) and the
    `permissions.allow` rule `Bash(delegation-ledger wait *)`. The guard fails open, so its order
-   among the Stop hooks doesn't matter. Then smoke-test it, with each command run bare:
+   among the Stop hooks doesn't matter. Then smoke-test it from inside a Claude Code session:
    - start a detached `sleep 300` outside the sandbox, and run
-     `delegation-ledger wait --pid <its pid> --max 0.05`, which exits 75 with no prompt;
-   - `echo "{\"session_id\":\"$CLAUDE_CODE_SESSION_ID\",\"prompt_id\":\"x\"}" | bash
-     ~/.claude/hooks/watch-guard.sh` prints a block naming that watch;
+     `delegation-ledger wait --pid <its pid> --max 0.05` as a bare command, which exits 75 with
+     no prompt;
+   - with the sandbox off for that one command (`dangerouslyDisableSandbox`), run
+     `echo "{\"session_id\":\"$CLAUDE_CODE_SESSION_ID\",\"prompt_id\":\"x\"}" | bash
+     ~/.claude/hooks/watch-guard.sh`, which prints a block naming that watch;
    - `delegation-ledger wait --drop <id>` ends it.
+
+   Why it runs that way: a pipe isn't a bare command, so it matches no sandbox exclusion and runs
+   sandboxed, where the state dir is read-only and no pid outside the sandbox is visible, so the
+   guard says nothing. A plain terminal has no `CLAUDE_CODE_SESSION_ID`, so the payload would
+   name no session.
 6. **The due checks.** Add the SessionStart entry (`delegation-due.sh`), then run
    `delegation-ledger canary` outside the sandbox, in the background. When it is green, a new session
    prints nothing unless something is due, and `delegation-ledger due` shows the state. The hook fails

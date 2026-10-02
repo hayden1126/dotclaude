@@ -683,7 +683,11 @@ def render(items):
 def decide(data, now, clock=time.monotonic):
     """None to let the stop through, else the hook output: a block whose reason numbers every
     new item, a systemMessage for the lapses it lets through, or both. It gathers within
-    BUDGET_S (by `clock`), then commits all it gathered, so what it records it also returns."""
+    BUDGET_S (by `clock`), then commits all it gathered, so what it records it also returns.
+    In a sandbox's PID namespace (pids_visible) every waiter and Claude process reads as dead,
+    so it says nothing there."""
+    if not dc.pids_visible():
+        return None
     if not isinstance(data, dict) or data.get("agent_id"):
         return None
     sid = data.get("session_id")

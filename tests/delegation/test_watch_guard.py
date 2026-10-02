@@ -75,6 +75,9 @@ class GuardEnv(unittest.TestCase):
         env.start()
         self.addCleanup(env.stop)
         os.environ.pop("DELEGATION_LEDGER", None)
+        # Inside the sandbox the lead's CLAUDE_PID is inherited but invisible, which would make
+        # the guard say nothing. The sandbox test sets it on purpose.
+        os.environ.pop("CLAUDE_PID", None)
         self.watches = os.path.join(self.state, "dotclaude", "watches")
         self.transcript = self.path("s1.jsonl")
         self.now = time.time()
@@ -329,6 +332,15 @@ class Watches(GuardEnv):
         self.assertIn("budget is spent", self.err_log())
         self.assertEqual(self.decide(), self.block(self.lapse_reason("w-2"),
                                                    self.kill_reason("the make")))
+
+    def test_a_sandboxed_guard_says_nothing_and_records_nothing(self):
+        # Its own PID namespace hides every pid outside, so every waiter would read as lapsed.
+        self.watch()
+        self.lines(notice("bk1", "toolu_1", "the make", self.now - 60))
+        with mock.patch.dict(os.environ, {"CLAUDE_PID": str(DEAD)}):
+            self.assertIsNone(self.decide())
+        self.assertIsNone(self.read()["blocked_at"])
+        self.assertFalse(os.path.exists(os.path.join(self.state, "dotclaude", "kills")))
 
     def test_stop_hook_active_doesnt_stop_a_fresh_lapse_blocking(self):
         self.watch()
