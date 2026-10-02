@@ -556,16 +556,39 @@ class Orphans(StateTest):
                       "w-3 (job 3) and 2 more. Pick one up", msg)
         self.assertNotIn("w-4", msg)
 
-    def test_a_damaged_watch_file_drops_this_nudge_only(self):
-        self.watch()
-        with open(os.path.join(self.watches, "w-torn.json"), "w") as f:
+    def torn(self, wid="w-torn"):
+        with open(os.path.join(self.watches, f"{wid}.json"), "w") as f:
             f.write("{torn")
-        self.write_due('[[item]]\ndate = 2020-01-01\ndo = "check the thing"\n')
-        msg = self.message()
-        self.assertIn("check the thing", msg)
-        self.assertNotIn("session that ended", msg)
+
+    def errors(self):
         with open(checks.state_path("delegation-ledger.err")) as f:
-            self.assertIn("w-torn: damaged file", f.read())
+            return f.read()
+
+    def test_a_damaged_file_is_counted_and_the_healthy_orphan_still_listed(self):
+        self.watch()
+        self.torn()
+        self.assertEqual(self.message(), (
+            "Delegation checks: (1) 1 watch from a session that ended: w-1 (the build). Pick "
+            "one up with `delegation-ledger wait --resume <id>`, or drop it with "
+            "`delegation-ledger wait --drop <id>`. (1 watch file couldn't be read; see "
+            "delegation-ledger.err)"))
+        self.assertIn("w-torn: damaged file", self.errors())
+
+    def test_only_damaged_files_give_the_count_alone(self):
+        self.torn()
+        self.watch("w-odd", session_id=["not", "an", "id"])  # parses, but can't be judged
+        self.assertEqual(self.message(), "Delegation checks: (1) 2 watch files couldn't be "
+                                         "read; see delegation-ledger.err.")
+        self.assertIn("w-odd.json: TypeError", self.errors())
+
+    def test_an_error_outside_the_file_reads_drops_only_this_nudge(self):
+        self.watch()
+        self.write_due('[[item]]\ndate = 2020-01-01\ndo = "check the thing"\n')
+        with mock.patch.object(checks, "live_session_ids", side_effect=OSError("no sessions")):
+            msg = self.message()
+        self.assertIn("check the thing", msg)
+        self.assertNotIn("watch", msg)
+        self.assertIn("no sessions", self.errors())
 
     def test_a_headless_session_prints_nothing(self):
         self.watch()
