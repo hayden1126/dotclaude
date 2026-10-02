@@ -449,6 +449,18 @@ class Codex(WaitEnv):
                                    "codex-delegate finalize r1 exited 4\n")
         self.assertEqual(w["state"], "failed")
 
+    def test_a_live_wrapper_records_the_stop_before_any_finalize(self):
+        # Codex has ended but its wrapper is still writing the stop row; finalizing then would
+        # record a second one, so the waiter waits for the wrapper too.
+        wrapper = self.job()
+        self.codex_row("r1", DEAD, wrapper_pid=wrapper.pid)
+        p = self.start("--codex", "r1")
+        self.waiting(p)
+        time.sleep(0.3)
+        self.assertIsNone(p.poll())
+        self.codex_row("r1", DEAD, wrapper_pid=wrapper.pid, event="stop")
+        self.finish(p, 0)
+
     def test_a_pending_run_waits_for_its_wrapper(self):
         wrapper = self.job()
         self.codex_row("r1", None, event="pending", wrapper_pid=wrapper.pid)

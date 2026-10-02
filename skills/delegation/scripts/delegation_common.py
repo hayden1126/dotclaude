@@ -581,16 +581,18 @@ def watch_verdict(w, cursor=None, now=None):
     None while it still waits, and why says what it rests on. Every given part must hold for
     done; pids that all exited with another part unmet is failed. Pass the same `cursor` dict
     on every poll to read a log incrementally; without one the whole log is read. For a codex
-    watch, done means Codex has ended: its waiter then runs `codex-delegate finalize`, whose
-    exit decides done or failed."""
+    watch, done means the run has a stop row, or Codex and its wrapper are both gone (a live
+    wrapper writes the stop row itself, and a finalize then would write a second one). Its
+    waiter then runs `codex-delegate finalize`, whose exit decides done or failed."""
     c = w.get("condition") or {}
     now = time.time() if now is None else now
     if "codex" in c:
         e = fold(read_rows()).get(("codex", c["codex"]))
         if e is None:
             return "failed", f"codex run {c['codex']} is not in the ledger"
-        live = e.get("event") != "stop" and codex_live(e)
-        return (None if live else "done"), condition_text(c)
+        going = e.get("event") != "stop" and (pid_alive(e.get("pid"))
+                                              or pid_alive(e.get("wrapper_pid")))
+        return (None if going else "done"), condition_text(c)
     cursor = {"offset": 0, "done": False} if cursor is None else cursor
     # The pids first: a job writes its file or its last log line before it exits, so a check
     # made after the exit can't miss them. A pid with no start was gone before the wait.
