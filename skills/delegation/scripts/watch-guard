@@ -8,9 +8,11 @@ to wake it. This hook is the enforcement:
 
 - Watches (`delegation-ledger wait`; delegation_common documents the file). For each of this
   session's open or acknowledged watches:
-  - a live waiter, or a background shell whose command holds the watch id, allows;
-  - else a met condition is recorded done and allows, except a codex one, whose finalize is
-    still owed, so it is a lapse whose reason says resuming finalizes it;
+  - a live waiter, or a background shell whose command holds the watch id, allows (the waiter
+    records the end itself);
+  - else a met condition is recorded done and blocks once with "check the result and report
+    it", since the dead waiter's notification never came. A codex one is the exception: its
+    finalize is still owed, so it is a lapse whose reason says resuming finalizes it;
   - else it has lapsed (a failed or stale condition too: a resumed waiter reports it). A lapse
     blocks once (blocked_at, set under the lock); the next stop on it allows, marks it
     acknowledged and warns in a systemMessage, and later stops say nothing more.
@@ -49,6 +51,8 @@ WATCH_REASON = ("Watch {id} ({desc}) has no live waiter and {unmet}. If a comman
                 "--resume {id}, with run_in_background and timeout 7200000. To stop watching "
                 "it: delegation-ledger wait --drop {id}.")
 CODEX_ENDED = "(the run has ended; resuming finalizes it)"
+MET_REASON = ("Watch {id} ({desc}): {cond} is met, but its waiter had stopped, so no "
+              "notification came. Check the result and report it.")
 KILL_REASON = ('Background command "{desc}" was stopped at its time limit. If it was waiting '
                "on a job that's still running, don't re-run it: wait with delegation-ledger "
                "wait (--pid, --file or --log), with run_in_background and timeout 7200000. If "
@@ -91,11 +95,19 @@ def check_watch(w, shells, now):
     verdict, _ = dc.watch_verdict(w, now=now)  # Undecidable propagates: the item is skipped
     codex = "codex" in (w.get("condition") or {})
     if verdict == "done" and not codex:
+        # The job finished but its waiter had died, so nothing told the lead: say it once,
+        # in the block, and record done in the same locked update, which keeps it once.
+        recorded = False
+
         def done(cur):
+            nonlocal recorded
             if cur.get("state") in dc.UNRESOLVED and not dc.waiter_alive(cur, now):
                 cur.update(state="done", ended=iso(now))
+                recorded = True
         dc.update_watch(wid, done)
-        return None, None
+        return ("block", MET_REASON.format(
+            id=wid, desc=w.get("description") or "",
+            cond=dc.condition_text(w.get("condition") or {}))) if recorded else (None, None)
     outcome = None
 
     def mark(cur):
@@ -196,7 +208,7 @@ def new_kills(sid, notices, now):
     doubled guard gets each one once. The first run creates the record with since 10 minutes
     back; a notice older than since is never new."""
     path, fresh = kills_path(sid), []
-    with dc._lock(kills_dir()):
+    with dc.dir_lock(kills_dir()):
         prune_kills(now)
         try:
             with open(path) as f:

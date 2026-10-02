@@ -98,7 +98,7 @@ def _agent_path(aid):
 
 
 @contextlib.contextmanager
-def _lock(directory):
+def dir_lock(directory):
     """An exclusive flock on <directory>/.lock, which read-modify-writes there hold."""
     os.makedirs(directory, exist_ok=True)
     with open(os.path.join(directory, ".lock"), "a") as lock:
@@ -141,7 +141,7 @@ def update_agent_state(aid, fn):
     and changes it in place or returns a new one. The result goes to a temp file that is then
     os.replace'd, so a reader never sees a torn file."""
     path = _agent_path(aid)
-    with _lock(agents_dir()):
+    with dir_lock(agents_dir()):
         cur = read_agent_state(aid)
         new = fn(cur)
         new = cur if new is None else new
@@ -154,7 +154,7 @@ def prune_agent_states(days=7):
     are program-owned: only the ledger hook writes an agent's file, at its starts and stops
     and at its deadline nudge."""
     cutoff = time.time() - days * 86400
-    with _lock(agents_dir()):
+    with dir_lock(agents_dir()):
         for p in (glob.glob(os.path.join(agents_dir(), "*.json"))
                   + glob.glob(os.path.join(agents_dir(), ".*.tmp"))):
             with contextlib.suppress(OSError):
@@ -586,7 +586,7 @@ def update_watch(wid, fn):
     current dict ({} for a new watch) and changes it in place or returns a new one. The file
     is written only when fn changed it, so a no-op keeps its mtime (the prune clock)."""
     path = watch_path(wid)
-    with _lock(watches_dir()):
+    with dir_lock(watches_dir()):
         cur = read_watch(wid) or {}
         before = copy.deepcopy(cur)
         new = fn(cur)
@@ -600,7 +600,7 @@ def prune_watches():
     """Remove temp files a killed write left (over PRUNE_TMP_DAYS old) and watch files that
     ended (ENDED) over PRUNE_ENDED_DAYS ago, by mtime: a watch's last write is its end."""
     now = time.time()
-    with _lock(watches_dir()):
+    with dir_lock(watches_dir()):
         for p in glob.glob(os.path.join(watches_dir(), ".*.tmp")):
             with contextlib.suppress(OSError):
                 if os.path.getmtime(p) < now - PRUNE_TMP_DAYS * 86400:

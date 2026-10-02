@@ -161,13 +161,22 @@ class Watches(GuardEnv):
                   "description": "re-arm", "command": "delegation-ledger wait --resume w-1"}]
         self.assertIsNone(self.decide(background_tasks=tasks))
 
-    def test_a_met_condition_is_recorded_done(self):
+    def test_a_met_condition_with_a_dead_waiter_blocks_once_and_is_recorded_done(self):
         open(self.path("never"), "w").close()
         self.watch()
-        self.assertIsNone(self.decide())
+        self.assertEqual(self.decide(), self.block(
+            f"Watch w-1 (the build): {self.path('never')} exists is met, but its waiter had "
+            "stopped, so no notification came. Check the result and report it."))
         w = self.read()
         self.assertEqual(w["state"], "done")
         dc.parse_iso(w["ended"])
+        self.assertIsNone(self.decide())
+
+    def test_a_met_condition_with_a_live_waiter_is_left_to_the_waiter(self):
+        open(self.path("never"), "w").close()
+        self.watch(live=True)
+        self.assertIsNone(self.decide())
+        self.assertEqual(self.read()["state"], "open")  # the waiter records the end itself
 
     def test_a_codex_run_that_ended_blocks_with_resume_and_isnt_recorded_done(self):
         ledger = os.path.join(self.state, "dotclaude", "delegations.jsonl")
