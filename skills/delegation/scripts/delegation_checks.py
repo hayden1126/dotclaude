@@ -18,6 +18,8 @@ upgraded three times in three days (2.1.284 to 2.1.286), so the checks split by 
 it fails open (it always exits 0; an error goes to delegation-ledger.err). Anything that would
 leave the checks unable to run (an unreadable version, a malformed due.toml, a crashing audit)
 becomes a nudge itself, so the checks can't go quiet.
+`due --hook` also names the watches (`delegation-ledger wait`) left by a session that ended:
+no watch guard reads them again, since each guard reads only its own session's watches.
 
 State lives in $XDG_STATE_HOME/dotclaude: canary.json (quick, full, green_full), audit.json
 (the last audit's WARN lines, whether a session start has shown them, and when the last
@@ -27,6 +29,7 @@ background job last started), checks.lock (one background job at a time), state.
 import contextlib
 import datetime
 import fcntl
+import glob
 import json
 import math
 import mmap
@@ -365,14 +368,67 @@ MONTHLY_NUDGE = ("the monthly audit is due: run `delegation-ledger audit --month
                  "the samples (it marks the rest too few to retune).")
 
 
+ORPHANS_LISTED = 3
+
+
+def live_session_ids():
+    """The sessionIds of Claude processes still running, decided as delegation-ledger's
+    live_sessions decides them: a ~/.claude/sessions/*.json entry whose pid runs with its
+    procStart, so a reused pid doesn't keep a gone session alive."""
+    out = set()
+    for p in glob.glob(os.path.expanduser("~/.claude/sessions/*.json")):
+        try:
+            with open(p) as f:
+                d = json.load(f)
+        except (OSError, ValueError):
+            continue
+        sid = d.get("sessionId") if isinstance(d, dict) else None
+        if isinstance(sid, str) and sid and dc.pid_alive(d.get("pid"), d.get("procStart")):
+            out.add(sid)
+    return out
+
+
+def orphaned_watches(current=None, now=None):
+    """The open or acknowledged watches nobody waits on: their session isn't running and their
+    waiter isn't alive. `current` (the starting session's id) counts as running. A watch whose
+    waiter lives is still waited on, even with its session gone. A damaged watch file raises,
+    so the caller skips the nudge. Where pids can't be seen (a sandboxed run) every waiter and
+    session would read as dead, so there are none."""
+    if not dc.pids_visible():
+        return []
+    live = live_session_ids()
+    if isinstance(current, str) and current:
+        live.add(current)
+    found = []
+    for p in sorted(glob.glob(os.path.join(dc.watches_dir(), "*.json"))):
+        w = dc.read_watch(os.path.basename(p)[:-len(".json")])
+        if (w and w.get("state") in dc.UNRESOLVED and w.get("session_id") not in live
+                and not dc.waiter_alive(w, now)):
+            found.append(w)
+    return sorted(found, key=lambda w: str(w.get("created")))
+
+
+def orphans_nudge(orphans):
+    n = len(orphans)
+    named = [f"{w.get('id')} ({w['description']})" if w.get("description") else str(w.get("id"))
+             for w in orphans[:ORPHANS_LISTED]]
+    more = f" and {n - ORPHANS_LISTED} more" if n > ORPHANS_LISTED else ""
+    return (f"{n} {'watch' if n == 1 else 'watches'} from a session that ended: "
+            f"{', '.join(named)}{more}. Pick one up with `delegation-ledger wait --resume "
+            "<id>`, or drop it with `delegation-ledger wait --drop <id>`.")
+
+
 def evaluate(version, canary_st, audit_st, due_st, items, now=None, today=None,
-             items_error=None, ledger_since=None):
+             items_error=None, ledger_since=None, orphans=()):
     """(nudges, jobs, warns) from the state, without side effects. `warns` are the audit
-    warnings the nudges show, for mark_shown. `ledger_since` is the ledger's first ts."""
+    warnings the nudges show, for mark_shown. `ledger_since` is the ledger's first ts.
+    `orphans` are the watches a session left (orphaned_watches), oldest first."""
     now = time.time() if now is None else now
     today = today or datetime.date.today()
     canary_st, audit_st, due_st = _d(canary_st), _d(audit_st), _d(due_st)
     nudges, jobs = [], []
+    if orphans:  # first: a finished job's result may be waiting on it
+        nudges.append(orphans_nudge(list(orphans)))
     may_launch = _age(due_st.get("bg_started"), now) > RELAUNCH_MIN * 60
     quick, full, green = (_d(canary_st.get(k)) for k in ("quick", "full", "green_full"))
     if not version:
@@ -449,14 +505,24 @@ def mark_shown(displayed):
 
 
 def hook_main(stdin_text="", out=print):
-    """The SessionStart body. Fails open: it always returns 0, and an error is logged."""
+    """The SessionStart body. Fails open: it always returns 0, and an error is logged. An
+    error reading the watches drops only their nudge."""
+    try:
+        session = _d(json.loads(stdin_text or "{}")).get("session_id")
+    except ValueError:
+        session = None  # the payload only spares this session's own watches
+    try:
+        orphans = orphaned_watches(session)
+    except Exception:  # noqa: BLE001
+        log_error()
+        orphans = []
     try:
         version = cc_version(timeout=2)  # the hook itself gets 5 s
         items, items_error = read_items()
         nudges, jobs, warns = evaluate(version, read_state("canary.json"),
                                        read_state("audit.json"), read_state("due.json"),
                                        items, items_error=items_error,
-                                       ledger_since=dc.first_row_ts())
+                                       ledger_since=dc.first_row_ts(), orphans=orphans)
     except Exception:  # noqa: BLE001  a reminder must never get in the way of a session
         log_error()
         return 0
