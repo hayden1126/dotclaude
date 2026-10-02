@@ -28,7 +28,8 @@ cause of every drift case in the 2026-09-29 evaluation (`docs/delegation.md` in 
   - messaged persona readers (staged-reader-review).
 
   Read-only work belongs to Explore, researcher or reviewer, and changes belong to writer.
-  In the 2026-09-29 evaluation, every misbehaving general-purpose agent was a read-only review.
+  In the 2026-09-29 evaluation, all 5 general-purpose subagents that misbehaved had read-only
+  briefs (4 were reviews or audits).
   general-purpose runs under the same sandbox and policy as every delegated agent (section 1b).
 - A writer spawned without `isolation` on the call is denied by `agent-spawn-guard`. With
   agent teams on, a named spawn would otherwise start as a teammate in the main checkout,
