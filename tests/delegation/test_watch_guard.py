@@ -536,6 +536,45 @@ class Watches(GuardEnv):
         self.assertEqual((self.read()["state"], self.read()["reported"]), ("done", True))
         self.assertIsNone(self.decide(prompt_id="p2"))
 
+    def hold_watches_lock(self):
+        """Take watches/.lock from another open file, as a busy twin would, until cleanup."""
+        held = open(os.path.join(self.watches, ".lock"), "a")
+        self.addCleanup(held.close)
+        fcntl.flock(held, fcntl.LOCK_EX)
+        self.addCleanup(fcntl.flock, held, fcntl.LOCK_UN)
+
+    def test_adoption_and_the_items_are_one_update(self):
+        # A twin takes watches/.lock right after the first update: a second would find it busy.
+        self.watch(live=True, claude_pid=DEAD, claude_start=None, created="2026-10-02T10:00:00Z")
+        self.watch("w-2", created="2026-10-02T10:00:01Z")
+        self.lines()
+        self.as_claude()
+        real, calls = guard.dc.update_watches, []
+
+        def update_watches(fns, until=None, clock=time.monotonic):
+            if calls:
+                raise guard.dc.LockBusy("watches/.lock")
+            calls.append(fns)
+            out = real(fns, until, clock)
+            self.hold_watches_lock()
+            return out
+        with mock.patch.object(guard.dc, "update_watches", update_watches):
+            self.assertEqual(self.decide(), self.block(self.unheard_reason(),
+                                                       self.lapse_reason("w-2")))
+        self.assertEqual(sorted(calls[0]), ["w-1", "w-2"])
+
+    def test_a_busy_watches_lock_adopts_nothing(self):
+        self.watch(live=True, claude_pid=DEAD, claude_start=None)
+        self.lines()
+        self.as_claude()
+        self.hold_watches_lock()
+        with mock.patch.object(guard, "BUDGET_S", 0.1), \
+                mock.patch.object(guard, "LOCK_GRACE_S", 0.1):
+            self.assertIsNone(self.decide())
+        self.assertEqual((self.read()["claude_pid"], self.read().get("waiter_unheard")),
+                         (DEAD, None))
+        self.assertIn("nothing was taken this stop", self.err_log())
+
     def test_an_undecidable_watch_is_skipped_and_the_other_still_blocks(self):
         self.watch(wid="w-gone", cond={"codex": "r-gone"}, desc="codex run r-gone ends")
         self.watch(wid="w-2")

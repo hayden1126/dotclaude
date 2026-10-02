@@ -498,16 +498,18 @@ def crashed(w, sid, me):
     return me is not None and w.get("session_id") == sid and dc.claude_gone(w)
 
 
-def adopt(sid, wids, me, now, until, clock):
-    """Adopt the watches gathered for it, log each, and return the ids of those whose waiter
-    still runs but reports to nobody. Each is checked again under the lock:
-    - one /clear left (dc.left_by_clear) moves into this session. One another session re-armed, or
-      whose old session came back, since it was gathered stays where it is;
+def adoption(sid, me, now):
+    """The adoption step of the commit pass, as (adopt, settle). adopt(wid) is the update that
+    adopts watch wid, checked again under the lock:
+    - one /clear left (dc.left_by_clear) moves into this session. One another session re-armed,
+      or whose old session came back, since it was gathered stays where it is;
     - a crashed one records this process as its Claude process, and a waiter still running is
-      marked waiter_unheard: its exit goes to the process that ended."""
+      marked waiter_unheard: its exit goes to the process that ended.
+    settle(lost) logs each adoption whose watch was written (not in `lost`) and returns the ids
+    of those whose waiter still runs but reports to nobody."""
     moved, revived, unheard = [], [], []
 
-    def fn(wid):
+    def adopt(wid):
         def move(cur):
             if cur.get("state") not in dc.UNRESOLVED:
                 return
@@ -522,19 +524,26 @@ def adopt(sid, wids, me, now, until, clock):
                     cur["waiter_unheard"] = True
                     unheard.append(wid)
         return move
-    _, failed = dc.update_watches({wid: fn(wid) for wid in wids}, until, clock)
-    lost = {wid for wid, _ in failed}  # unwritten, so not adopted
-    for wid, old in moved:
-        if wid not in lost:
-            checks.log_error(f"watch-guard: adopted watch {wid} from session {old}: the same "
-                             "Claude process (a /clear)")
-    for wid, old in revived:
-        if wid not in lost:
-            checks.log_error(f"watch-guard: adopted watch {wid} from Claude process {old}, which "
-                             "has ended (a crash, then claude --continue)")
-    for wid, exc in failed:
-        log(f"adopt {wid}", exc)
-    return [wid for wid in unheard if wid not in lost]
+
+    def settle(lost):
+        for wid, old in moved:
+            if wid not in lost:
+                checks.log_error(f"watch-guard: adopted watch {wid} from session {old}: the "
+                                 "same Claude process (a /clear)")
+        for wid, old in revived:
+            if wid not in lost:
+                checks.log_error(f"watch-guard: adopted watch {wid} from Claude process {old}, "
+                                 "which has ended (a crash, then claude --continue)")
+        return [wid for wid in unheard if wid not in lost]
+    return adopt, settle
+
+
+def then(first, second):
+    """One watch update that runs `first`, then `second`, on the same read of the watch."""
+    def fn(cur):
+        first(cur)
+        second(cur)
+    return fn
 
 
 def ended_unheard(w, sid, now):
@@ -561,11 +570,12 @@ def later_stop(cur, stop, size, now):
 def commit(sid, transcript, adopted, me, pendings, kills, scan_out, stop, size, now, until,
            clock):
     """Record everything gathered in one pass, under kills/<sid>.lock and then watches/.lock
-    (each wait bounded by `until`), and return (items, acks). Each watch is re-read under the
-    lock, so a waiter that re-armed meanwhile, a twin guard that recorded first, or a watch
-    that wasn't adopted after all (it's in another session), wins. A watch whose update fails
-    is logged and unsaid, and comes up again next stop; the rest, and the kills, go on.
-    LockBusy means nothing is recorded or said this stop."""
+    (each wait bounded by `until`), and return (items, acks). The adoptions and every watch's
+    item go in one update_watches, so LockBusy, which only a lock wait raises, means nothing is
+    recorded or said this stop. Each watch is re-read under the lock, so a waiter that re-armed
+    meanwhile, a twin guard that recorded first, or a watch that wasn't adopted after all (it's
+    in another session), wins. A watch whose update fails is logged and unsaid, adoption
+    included, and comes up again next stop; the rest, and the kills, go on."""
     items, acks, itemized, outcomes = [], [], set(), {}
 
     def record(p):
@@ -591,15 +601,19 @@ def commit(sid, transcript, adopted, me, pendings, kills, scan_out, stop, size, 
                 outcomes[wid] = "ack"
         return fn
 
+    adopt, settle = adoption(sid, me, now)
+    fns = {wid: adopt(wid) for wid in adopted}
+    for p in pendings:  # an adopted watch's item runs on what its adoption left
+        wid = p.w["id"]
+        fns[wid] = then(fns[wid], record(p)) if wid in fns else record(p)
     with dc.file_lock(kills_path(sid, ".lock"), until, clock):
-        for wid in adopt(sid, adopted, me, now, until, clock) if adopted else []:
+        _, failed = dc.update_watches(fns, until, clock) if fns else ({}, [])
+        for wid in settle({wid for wid, _ in failed}):
             items.append(UNHEARD_REASON.format(id=wid))
             itemized.add(wid)
-        if pendings:
-            _, failed = dc.update_watches({p.w["id"]: record(p) for p in pendings}, until, clock)
-            for wid, exc in failed:
-                outcomes.pop(wid, None)
-                log(f"watch {wid}", exc)
+        for wid, exc in failed:
+            outcomes.pop(wid, None)
+            log(f"watch {wid}", exc)
         for p in pendings:
             outcome = outcomes.get(p.w["id"])
             if outcome == "block":

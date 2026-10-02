@@ -879,7 +879,9 @@ records each pid's command name, so a wrong one that slips through shows in `wat
   Once the budget is spent it takes no new item, and a kill whose launch lookup was cut off gets
   the plain reason.
 - **Commit**, in one pass under `kills/<session>.lock` and then `watches/.lock`, each wait
-  bounded. Each watch is re-read under the lock, so a waiter that re-armed meanwhile wins.
+  bounded. The adoptions and every watch's item are one update of the watches, so a busy lock
+  means nothing is recorded or said this stop. Each watch is re-read under the lock, so a
+  waiter that re-armed meanwhile wins.
 - **Print**: one block that numbers every new item, and a `systemMessage` for the lapses it
   acknowledged.
 
