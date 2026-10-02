@@ -5,7 +5,7 @@
 > decisions ([[dotclaude-handoff-skill]], [[dotclaude-research-sourcing-skill]],
 > [[dotclaude-chrome-devtools-wsl]]). Per-effort design rationale lives in its plan under `~/.claude/plans/`.
 
-Last updated: 2026-10-01
+Last updated: 2026-10-02
 Base: `main`. For branch / PR / push state, run `gh pr list` and `git log main..HEAD` (derive it; not
 stored here).
 
@@ -29,47 +29,28 @@ stored here).
   history was deliberately left as-is (Hayden's call).
 
 ## In flight
-- **The delegation write-up: the post is drafted** (2026-10-02). `docs/prose-is-not-a-permission.md`
-  is a Medium-style post of about 2,400 words. It is on branch `docs/delegation-post`, which is
-  stacked on `docs/scrub-private-names`. Nothing is pushed.
-  - **Hayden's calls (2026-10-01/02):**
-    - title "Prose Is Not a Permission", about 2,500 words, for Claude Code users who delegate;
-    - Medium conventions, modeled on a reference article Hayden pasted;
-    - the Codex models named for now (decide again later);
-    - the aborted-launch beat and the shadow-week beat cut (the launch beat is deferred, not
-      dropped);
-    - one diagram, plus a hero-image slot (an HTML comment at the top of the post).
-  - **The diagram:** `docs/images/delegation-layers.svg` is the source and `.png` is a 2x render.
-    It shows the tool-call flow and the known escape. Its spec is in
-    `~/.claude/plans/writeup-immutable-trinket.md`. To re-render, wrap the SVG in HTML and run
-    Playwright's `chrome-headless-shell` with `--force-device-scale-factor=2
-    --window-size=980,620 --screenshot`.
-  - **The scrub** (`7ed72e9`, on `docs/scrub-private-names`):
-    - `docs/delegation.md` describes what each private name does instead of naming it;
-    - its general-purpose numbers are corrected (recomputed from the eval's extract).
-
-    The post's links pin to that commit. **Merge with a merge commit, not a squash,** or the
-    pinned SHA disappears from `main`.
-  - **The shape:** `~/scratch/delegation-writeup/SHAPE.md` cites every number in the post to its
-    source. It is private, and never goes in git.
-  - **Before publishing:**
+- **The delegation write-up: the post is drafted** (2026-10-02, range `a31b738..0f3f4b7`).
+  - **Where it is:** `docs/prose-is-not-a-permission.md`, plus `docs/images/delegation-layers.svg`
+    and its `.png`, on `docs/delegation-post`.
+  - **Its base:** that branch is stacked on `docs/scrub-private-names` (`7ed72e9`). That commit
+    scrubs private names from `docs/delegation.md` and corrects its general-purpose numbers.
+  - **Derive the push and PR state:** `git status -sb` and `gh pr list`.
+  - **Merge both with merge commits, scrub first.** The post's code links pin to `7ed72e9`, and a
+    squash would drop it from `main`.
+  - **Before publishing on Medium:**
     - Hayden reads the post;
     - run SHAPE.md §6's grep on it;
-    - decide whether to keep the model names;
-    - make the hero image.
-  - **Sources, in order of use:**
-    - `docs/delegation.md` in this repo: the findings, decisions, verified facts and test results
-      for Stage 2 and 3, already written for readers. The history is in PRs #35 to #56.
-    - `~/scratch/delegation-eval/` (2026-09-29 eval): `DECISION.md` (the decision, revised after
-      review), `out/final.md`, `findings/` (landscape, transcripts, capabilities), and `data/`
-      (`extract.py`, `analyze.py`, 384 extracted and classified agent records), with `tests/`.
-    - `~/scratch/delegation-writeup/evidence/`: harness logs (`harness1.txt` to `harness3.txt`,
-      `harness-codex.txt`) and three probe dirs (`sbprobe/`, `envprobe/`, `a2-step0/`).
-  - **Privacy.** Raw transcripts embed private context, so never publish them as-is. Check
-    `data/*.jsonl` and the harness logs for session ids, project names and paths before quoting
-    them. `~/scratch/delegation-writeup/` also holds backups of `.zshrc`, `.zshenv` and `.mcp.json`
-    from 2026-09-30: shell and MCP config that can carry tokens, so they stay out of anything
-    published, and nobody has read them for this.
+    - make the hero image (its slot is the HTML comment at the top);
+    - decide whether to keep the Codex model names (they're named for now).
+
+    The aborted-first-launch beat is deferred, not dropped.
+  - **Sources:** `~/scratch/delegation-writeup/SHAPE.md` cites every number in the post to its
+    source. It is private and never goes in git. The diagram's spec is in
+    `~/.claude/plans/writeup-immutable-trinket.md`; how to render it is in memory
+    ([[svg-to-png-headless-render]]).
+  - **Privacy:** never publish raw transcripts or the eval data. `~/scratch/delegation-writeup/`
+    also holds backups of `.zshrc`, `.zshenv` and `.mcp.json` (2026-09-30). They can carry tokens,
+    nobody has read them, and they stay out of anything published.
 - **Delegation hardening: what is live on HAYPC** (Stage 2, plus the Stage 3 steps under Done;
   `docs/delegation.md`;
   `skills/delegation/SKILL.md` is the operating guide). Open items:
@@ -110,7 +91,8 @@ stored here).
     The plan file owns block numbering only, and must not leak "S<n>" into shipped artifacts.
 
 ## Blocked / decisions needed
-- None open.
+- **Whether to scrub `HAYPC`, `hq` and `~/vault` from STATUS.md, `skills/delegation/SKILL.md` and
+  `BRIEF.md`.** The scrub left them in, because sessions and agents act on those files.
 
 ## Notes for next session
 - **Verify delegation before touching it:**
