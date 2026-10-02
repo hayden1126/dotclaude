@@ -8,6 +8,9 @@ and rollouts they already live in.
 Beside it, agents/<id>.json is the per-agent liveness index: the latest state of each Claude
 agent, rewritten at its starts and stops (and once per activation by the deadline nudge), so a
 reader gets one agent's state without folding the whole ledger.
+
+watches/<id>.json is a long wait that `delegation-ledger wait` records and the watch guard (a
+Stop hook) reads; the comment above WATCH_STATES documents its fields.
 """
 import contextlib
 import datetime
@@ -77,22 +80,49 @@ def agents_dir():
     return os.path.join(state_dir(), "agents")
 
 
+def watches_dir():
+    return os.path.join(state_dir(), "watches")
+
+
+def _id_path(directory, xid, what):
+    """<directory>/<xid>.json, for an id that is a plain basename (not empty, no dot first)."""
+    xid = str(xid)
+    if not xid or xid.startswith(".") or os.path.basename(xid) != xid:
+        raise ValueError(f"not {what}: {xid!r}")
+    return os.path.join(directory, f"{xid}.json")
+
+
 def _agent_path(aid):
-    aid = str(aid)
-    if not aid or aid.startswith(".") or os.path.basename(aid) != aid:
-        raise ValueError(f"not an agent id: {aid!r}")
-    return os.path.join(agents_dir(), f"{aid}.json")
+    return _id_path(agents_dir(), aid, "an agent id")
 
 
 @contextlib.contextmanager
-def _agents_lock():
-    os.makedirs(agents_dir(), exist_ok=True)
-    with open(os.path.join(agents_dir(), ".lock"), "a") as lock:
+def _lock(directory):
+    """An exclusive flock on <directory>/.lock, which read-modify-writes there hold."""
+    os.makedirs(directory, exist_ok=True)
+    with open(os.path.join(directory, ".lock"), "a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         try:
             yield
         finally:
             fcntl.flock(lock, fcntl.LOCK_UN)
+
+
+def write_json(path, obj):
+    """Write obj to a temp file beside path, then os.replace it in, so a reader never sees a
+    torn file."""
+    directory = os.path.dirname(path)
+    os.makedirs(directory, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=directory, prefix=f".{os.path.basename(path)}.",
+                               suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w") as f:
+            json.dump(obj, f, sort_keys=True)
+        os.replace(tmp, path)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp)
+        raise
 
 
 def read_agent_state(aid):
@@ -110,19 +140,11 @@ def update_agent_state(aid, fn):
     and changes it in place or returns a new one. The result goes to a temp file that is then
     os.replace'd, so a reader never sees a torn file."""
     path = _agent_path(aid)
-    with _agents_lock():
+    with _lock(agents_dir()):
         cur = read_agent_state(aid)
         new = fn(cur)
         new = cur if new is None else new
-        fd, tmp = tempfile.mkstemp(dir=agents_dir(), prefix=f".{aid}.", suffix=".tmp")
-        try:
-            with os.fdopen(fd, "w") as f:
-                json.dump(new, f, sort_keys=True)
-            os.replace(tmp, path)
-        except BaseException:
-            with contextlib.suppress(OSError):
-                os.unlink(tmp)
-            raise
+        write_json(path, new)
     return new
 
 
@@ -131,7 +153,7 @@ def prune_agent_states(days=7):
     are program-owned: only the ledger hook writes an agent's file, at its starts and stops
     and at its deadline nudge."""
     cutoff = time.time() - days * 86400
-    with _agents_lock():
+    with _lock(agents_dir()):
         for p in (glob.glob(os.path.join(agents_dir(), "*.json"))
                   + glob.glob(os.path.join(agents_dir(), ".*.tmp"))):
             with contextlib.suppress(OSError):
