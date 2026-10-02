@@ -265,17 +265,25 @@ from 60 to 5,000 requests an hour.
 - **A met condition is judged on a log's last 1 MB.** A `--done` line further back reads as unmet
   to the guard, so the watch lapses instead of ending. The re-armed waiter reads the whole log.
 - **The duplicate refusal is per run, across sessions.** A second `wait --codex` on a run that
-  any session watches is refused. The way in is `wait --resume <id>`, which moves the watch to
-  the caller's session.
+  any session watches is refused. While that watch's waiter is alive and its session is live,
+  the refusal says the waiter will notify its session. Otherwise it names `wait --resume <id>`,
+  which moves the watch to the caller's session.
 - **An acknowledged lapse goes quiet.** After one block and one warning, a lapsed watch stays
-  open and says nothing more in that session. The session-start nudge lists it once its session
-  has ended.
+  open and says nothing more in that session until it ends: it blocks once more when its
+  condition is met, or when its codex run gets a stop row or turns out never to have started.
+  The session-start nudge lists it once its session has ended.
 - **A live waiter can read as lapsed.** A waiter whose heartbeat is older than two polls plus a
   second (a suspended VM, say) counts as dead: the guard blocks on it, and a `--resume` can take
   the watch over. The old waiter steps aside at its next beat.
-- **A killed waiter's fold is a heuristic.** It needs the watch its `--resume` names, or one watch
-  created within 120 s after the launch, told apart by `--pid`, `--file` or `--log`. When that
-  names no single watch, the stop says the kill and the lapse as two items.
+- **A killed waiter's fold falls back to a heuristic.** It folds by the launch line in the
+  command's output file. With no launch line there (the waiter was killed before it printed
+  one), it needs the watch its `--resume` names, or one watch created within 120 s after the
+  launch, told apart by `--pid`, `--file` or `--log`. When that names no single watch, the stop
+  says the kill and the lapse as two items.
+- **Adoption after `/clear` needs the Claude process.** A watch records `claude_pid` only when the
+  waiter saw `CLAUDE_PID`, and the guard finds its own process from `CLAUDE_PID` or a sessions
+  file at most 6 levels up its parents. A watch made outside Claude Code, or a guard that finds
+  neither, adopts nothing.
 - **The re-arm across turns isn't in the live harness.** `claude -p` kills background shells
   about 5 s after its final result, so no waiter outlives a `-p` turn. A dated item in `due.toml`
   asks for the check by hand in an interactive session.
@@ -380,7 +388,7 @@ sonnet sessions a day. The checks therefore split by cost (Hayden's call, 2026-0
 
 | Check | What it runs | When |
 |---|---|---|
-| Quick canary (`canary --quick`, about 20 s, no model calls) | the unit suites; `claude sandbox status` (the sandbox on, Bash auto-allow off); the strings our hooks read (`CANARY_STRINGS`), searched in the `claude` binary | by itself, in the background, on the first session of a new version |
+| Quick canary (`canary --quick`, about 20 s, no model calls) | the unit suites; `claude sandbox status` (the sandbox on, Bash auto-allow off); the strings our hooks read (`CANARY_STRINGS`), searched in the `claude` binary; the installed `watch-guard.sh`, run with a no-op main-thread payload, which must exit 0 and add nothing to `delegation-ledger.err` (proving the link and the import) | by itself, in the background, on the first session of a new version |
 | Audit (`audit`) | the enforcement audit above, over the window since the last one | by itself, once a day |
 | Full canary (`canary`) | the quick tier, then the whole live harness (`run.py --runner claude`, all stages) | a reminder, when no green run is on record or the version has moved and the last green run is 7 or more days old, and after a failed run until one passes |
 | Monthly audit (`audit --monthly`) | the audit over 30 days, plus the usage sections (A6) | a reminder, once the ledger and the last monthly run are both a month old |
@@ -730,29 +738,48 @@ the fix is enforcement. `PLAN.md` has the design history and the options weighed
     `--log PATH --done RE` (a matching line; `--fail RE` fails it and `--stale MIN` ends it as
     stale), and `--codex RUN_ID` (Codex has ended; the waiter then runs `codex-delegate finalize`
     itself and decides by the stop row's `exit`).
+  - Before it polls, it prints a launch line, flushed: `delegation-ledger: watch <id>. If this
+    command is stopped, re-arm with delegation-ledger wait --resume <id> (run_in_background,
+    timeout 7200000)`. The guard folds a killed waiter by it.
   - `--max MIN` defaults to 110 and can't go higher, which leaves room for a 5-minute finalize
-    under the 120-minute cap. `--resume <id>` takes a watch over, but not from a live waiter.
-    `--drop <id>` ends it.
+    under the 120-minute cap. `--drop <id>` ends a watch. `--resume <id>` takes one over, but not
+    from a live waiter whose session is live: a live waiter of a dead session reports to nobody,
+    so it is taken over, and it steps aside (exit 3) at its next beat.
+  - A new wait whose condition equals an unresolved watch's in the same session takes that watch
+    over and says so, so a rerun after a kill doesn't leave the guard pointing at a second
+    watch. A codex condition keeps its refusal instead.
+  - It records the session and the Claude Code process (`claude_pid`, from `CLAUDE_PID`, with its
+    procStart). `/clear` keeps the process but starts a new session id, and the guard adopts
+    the watch into the new session (below).
   - It refuses to run sandboxed, where its pids would belong to another PID namespace. It refuses
-    a `--pid` that is pid 1, a kernel thread, another user's, or not running, and a second watch
-    on a codex run, naming the existing watch's `--resume`.
+    a `--pid` that is pid 1, a kernel thread, another user's, or not running. It refuses a second
+    watch on a codex run, naming the existing watch's `--resume` when that watch's waiter is dead
+    or its session is gone.
 - **The watch guard**, a main-thread Stop hook (`watch-guard`). For each of the session's open or
   acknowledged watches with no live waiter (its pid with its procStart, and a heartbeat no older
   than two polls plus a second; a background shell whose command holds the watch id counts too):
   - a met condition is recorded done and blocks once, since the waiter's notification never came,
     with "Check the result and report it". A codex watch with a stop row is done on exit 0, failed
     otherwise;
+  - a codex run that never started (its wrapper died before Codex did, leaving no `codex.pid`) is
+    recorded failed and blocks once, saying to run `codex-delegate resume <id>` again, or for a
+    first turn to run `codex-delegate run` again, which gets a new run id;
   - anything else is a lapse, which blocks once with the re-arm and drop commands. For a codex run
-    that ended without a stop row, it adds that resuming finalizes it; for one whose wrapper died
-    before Codex started, it says to start the run again.
+    that ended without a stop row, it adds that resuming finalizes it;
+  - first, it adopts any unresolved watch recorded under its own Claude Code process with another
+    session id (a `/clear`), moving it into this session in the commit pass and logging it. It
+    finds that process from `CLAUDE_PID`, or the nearest parent with a
+    `~/.claude/sessions/<pid>.json`, 6 levels up at most.
 - **The kill catch**, in the same hook. Each stop reads the transcript on from where the last one
   stopped (`kills/<session>.json` holds the offset), searching the raw bytes for
   `task-notification`. A notice with `<status>killed</status>` at the background time limit blocks
-  once per task id. A killed `delegation-ledger wait` folds into its watch's item: the watch its
-  `--resume` names, else the one created within 120 s after the launch, told apart by `--pid`,
-  `--file` or `--log` when several were. A killed `codex-delegate` folds into the watch its launch
-  line names, read from the first line of the command's output file. Unfolded, a codex kill says
-  Codex keeps running and gives the run's watch to re-arm, or `wait --codex` when it has none.
+  once per task id. A killed `delegation-ledger wait` or `codex-delegate` folds into the watch
+  its launch line names, found anywhere in the first 4 KB of the command's output file. A waiter
+  with no launch line there falls back to the watch its `--resume` names, else the one created
+  within 120 s after the launch, told apart by `--pid`, `--file` or `--log` when several were.
+  Unfolded, a codex kill says Codex keeps running and gives the run's watch to re-arm, or
+  `wait --codex` with the run id when it has no watch, or `codex-delegate status` to find the run
+  when even the run id is unknown.
 - **`codex-delegate`'s own watch.** `run` and `resume` record a `{codex: run_id}` watch whose
   waiter is the wrapper itself. Before Codex starts they print the launch line,
   `codex-delegate: run <run_id>, watch <watch_id>. If this command is stopped, Codex keeps running:
@@ -764,9 +791,16 @@ the fix is enforcement. `PLAN.md` has the design history and the options weighed
 - **The allow rule.** The baseline's `permissions.allow` holds `Bash(delegation-ledger wait *)`,
   so a re-arm never stops at a permission prompt. The waiter must run as a bare command: a `cd`,
   a redirect or `$(...)` keeps the call in the sandbox, where it refuses to run.
-- **The session-start nudge.** `delegation-ledger due --hook` lists the open or acknowledged
-  watches whose session has ended and whose waiter is dead, with their `--resume` and `--drop`
-  commands, in its numbered line (`delegation_checks.orphaned_watches`).
+- **The session-start nudge.** `delegation-ledger due --hook` names, in its numbered line, up to
+  three of the open or acknowledged watches nobody will hear from, oldest first, with a count of
+  the rest, and one `wait --resume <id>` and `wait --drop <id>` template
+  (`delegation_checks.orphaned_watches`). A watch is nobody's when its session isn't live and
+  its Claude process is gone, whatever its waiter's state, since a bare waiter can outlive a
+  SIGKILLed Claude Code; a live waiter is marked "its waiter is still running". A watch with no
+  session counts only once its waiter is dead.
+- **The shim logs.** `hooks/watch-guard.sh` appends Python's stderr to `delegation-ledger.err`,
+  falling back to `/dev/null` when that file can't be written, so a missing link or an import
+  error shows there and in the quick canary instead of leaving the guard silently off.
 
 **Exit codes.**
 - `wait`: 0 done; 1 the job failed (a `--fail` match, its pids exited with another condition
@@ -774,9 +808,11 @@ the fix is enforcement. `PLAN.md` has the design history and the options weighed
   aside (its watch was taken over, dropped or deleted); 64 bad usage, including a sandboxed call;
   70 an internal error, or nothing could be decided, with the watch left open; 75 still running at
   `--max`, with the re-arm line.
-- `codex-delegate` adds three to SKILL §5's list: 5, stopped at `--max-wait` with its watch
-  dropped or taken over; 75, still running at `--max-wait`; 143, killed by SIGTERM or SIGHUP, after
-  an `interrupted` row, with the watch left open for the guard.
+- Beyond the codes in SKILL §5, `codex-delegate` exits 5 when it stopped at `--max-wait` with
+  its watch dropped or taken over, and 75 when it stopped there still running. While Codex runs,
+  SIGTERM or SIGHUP makes it append an `interrupted` row with Codex's pid and exit 143, leaving
+  the watch open for the guard. Outside that window (before its `Popen`, or while it finishes)
+  the signal kills it with no row, and a shell reports 143 for SIGTERM, 129 for SIGHUP.
 
 **How a lead uses it.** Launch every waiter, and every `codex-delegate run` or `resume`, with
 `run_in_background` and `timeout: 7200000`, so it exits on its own before the cap:
@@ -816,7 +852,9 @@ Its once-per-item rules:
 
 **The live re-arm is a manual check.** `claude -p` kills background shells about 5 s after its
 final result, so `tests/delegation/run.py` can't hold a wait across turns. A dated item in
-`due.toml` asks for it by hand in an interactive session, a month out and after each upgrade.
+`due.toml` asks for it by hand in an interactive session, a month out. A dated item fires by
+date only, so the session-start line that says the full canary is due after an upgrade names
+the re-arm check too.
 
 ## Verified facts the design rests on
 
@@ -1129,10 +1167,11 @@ numbers decide whether A1's thresholds and A2's budgets move.
 
     The code fixes each came with a test.
 - **Results on 2026-10-02 (the watch guard, T1 to T6):**
-  - unit: 453 tests, plus 20 in `tests/setup`. The new files are `test_wait.py` (the waiter, 63)
-    and `test_watch_guard.py` (the guard and the kill catch, 55). `test_codex_delegate.py` (35)
-    covers the wrapper's watch, and `test_checks.py` (70) the orphaned-watch nudge and the
-    guard's canary strings;
+  - unit: 469 tests, plus 21 in `tests/setup`. The new files are `test_wait.py` (the waiter, 68)
+    and `test_watch_guard.py` (the guard and the kill catch, 60). `test_codex_delegate.py` (35)
+    covers the wrapper's watch, and `test_checks.py` (76) the orphaned-watch nudge, the guard's
+    canary strings and the shim check. A sandboxed run from this worktree ran 400 of them; the
+    69 policy tests need the sandbox off here;
   - the quick canary's string check passes on both 2.1.286 and 2.1.287 with the guard's strings
     added (27 in all). The kill summary isn't one string in the binary, so the canary checks
     `stopped after reaching its background time limit`;
@@ -1179,18 +1218,23 @@ hook fail closed, so wiring a hook before its script is reachable blocks every d
    - the prompts are unchanged.
 5. **The watch guard.** Add the `Stop` entry for `watch-guard.sh` (timeout 5) and the
    `permissions.allow` rule `Bash(delegation-ledger wait *)`. The guard fails open, so its order
-   among the Stop hooks doesn't matter. Then `delegation-ledger wait --file <an existing file>`,
-   run bare, exits 0 with no prompt.
+   among the Stop hooks doesn't matter. Then smoke-test it, with each command run bare:
+   - start a detached `sleep 300` outside the sandbox, and run
+     `delegation-ledger wait --pid <its pid> --max 0.05`, which exits 75 with no prompt;
+   - `echo "{\"session_id\":\"$CLAUDE_CODE_SESSION_ID\",\"prompt_id\":\"x\"}" | bash
+     ~/.claude/hooks/watch-guard.sh` prints a block naming that watch;
+   - `delegation-ledger wait --drop <id>` ends it.
 6. **The due checks.** Add the SessionStart entry (`delegation-due.sh`), then run
    `delegation-ledger canary` outside the sandbox, in the background. When it is green, a new session
    prints nothing unless something is due, and `delegation-ledger due` shows the state. The hook fails
    open, so its order doesn't matter.
 
 **Permissions.** The baseline now has a `permissions` object (the re-arm allow rule), so
-`setup.sh` replaces a live `permissions` object with the baseline's. `merge-settings.py` names
-the reset on stderr only when the machine has an overlay or live-only keys; without either, the
-baseline goes in verbatim and the reset is silent. Personal permission rules go in
-`settings.machine.json`, whose lists append to the baseline's.
+`setup.sh` replaces a live `permissions` object with the baseline's, and `merge-settings.py`
+names the reset on stderr. `setup.sh` moves the replaced copy to
+`~/.claude/backups/pre-dotclaude-<ts>/` and prints "backing up" as it does, so a lost rule is
+recovered from there. Personal permission rules go in `settings.machine.json`, whose lists
+append to the baseline's.
 
 **If Claude Code won't start** because the sandbox can't (a missing bwrap after an upgrade, say), set
 `"enabled": false` under `sandbox` in `~/.claude/settings.json` with an editor. That also takes

@@ -141,7 +141,10 @@ ships but is opt-in, see its entry):
   at its timeout (2 hours at most), and its wake-up note says not to restart it. The guard blocks
   a stop once when a watch from `delegation-ledger wait` (or `codex-delegate`) has lapsed with no
   waiter, or a background command was killed at its time limit, and gives the exact re-arm
-  command. The next stop goes through with a warning. `permissions.allow` holds
+  command. After a lapse, the next stop goes through with one warning; a kill or an ended job
+  is said once. A plain kill (not a waiter or `codex-delegate`) names no watch: it says how to
+  wait with `delegation-ledger wait`. Python's errors go to `delegation-ledger.err`, and the
+  quick canary runs the installed shim. `permissions.allow` holds
   `Bash(delegation-ledger wait *)`, so a re-arm never stops at a prompt. Fails open
   (`docs/delegation.md`, "Long waits").
 - **PreToolUse(`SubagentHandback`) and SubagentStop: `report-check.sh`** (in this repo). It sends a
