@@ -20,31 +20,33 @@ stored here).
   (`policy.toml` `[deadline]`). `audit --monthly` shows the numbers for retuning both, and `due`
   asks for it once the ledger is a month old.
   `docs/delegation.md` "Stage 3" holds the findings, the decisions and the test counts.
-- Older (git, the PRs and memory hold the detail): `setup.sh` keeps the live settings' own keys
-  (PR #47, [[dotclaude-setup-install-model]]), the machine overlay `settings.machine.json`
-  (PR #40, README "Quickstart"), delegation Stage 2 (PRs #35 to #38, `docs/delegation.md`,
-  [[cc-sandbox-linux-facts]]), client deck data removed from the tree (PR #28;
-  history deliberately left as-is, Hayden's call), Codex `config.toml` merged, not symlinked (PR #27)
-  and the Codex CLI integration (both in `docs/codex.md`), session-summary prompt-injection hardening
-  (2026-08-24), tab title decoupled from `ai-title` (PR #22,
-  [[cc-ai-title-suppressed-by-custom-title]]), the session-summary status-line row (PR #21,
-  [[dotclaude-session-summary-statusline]]), loose decisions (PR #20: danger-guard opt-in, the
-  parallel-edits carve-out), the tab title hook, `frontend-ui-discipline` (PR #25), the handoff
-  CLAUDE.md trigger, `vetting-sources`, `deck-production` S1, and earlier work back to PR #10.
+- **Small fixes** (PR #56, range `f3014c0..58a9b9d`): `setup.sh` links the portable skills into
+  Codex, the `.mcp.json` stub is ignored, the status line's dead ai-title fallback is gone, and two
+  history docs are corrected. Installed on HAYPC with `setup.sh`; the live `settings.json` didn't
+  change.
+- Older: `git log` and the PRs back to #10 hold it, and memory holds the decisions behind them.
+  One stays here because git can't show it: client deck data left the tree in PR #28, and its
+  history was deliberately left as-is (Hayden's call).
 
 ## In flight
-- **Small fixes, on branch `chore/small-fixes`** (base `f3014c0`; state: `gh pr list --head
-  chore/small-fixes`): Codex skills wired into `setup.sh`, the `.mcp.json` stub ignored, the
-  status line's dead ai-title fallback dropped, two history docs corrected. After it merges:
-  `git pull` in `~/dotclaude`, then `./setup.sh`, both outside the sandbox, to link Codex's skills
-  and reinstall the ignore block. Copy `~/.claude/settings.json` first and diff it after
-  ([[dotclaude-setup-install-model]]). Then remove `.claude/worktrees/small-fixes` and the branch.
-- **Next: the delegation write-up** (Hayden wants it; next after the small fixes). The first call
-  is the format: a blog post or a public repo, which sets how much of the evidence must be
-  cleaned of private context. The evidence (probe settings, prompts and outputs, harness logs) is
-  in `~/scratch/delegation-writeup/evidence/`, and the older eval is in `~/scratch/delegation-eval/`.
-  Raw transcripts embed private context, so never publish them as-is. `docs/delegation.md` holds
-  the findings and decisions to draw on.
+- **Next: the delegation write-up** (Hayden wants it). Stage 2 and 3 are done, so the findings
+  are complete.
+  - **First call: the format.** A blog post (quotes and numbers, no raw evidence shipped) or a
+    public repo (the harness and probes runnable, so far more must be scrubbed). Settle it before
+    outlining. A new public repo is a new project, so place it with the `hq` skill.
+  - **Sources, in order of use:**
+    - `docs/delegation.md` in this repo: the findings, decisions, verified facts and test results
+      for Stage 2 and 3, already written for readers. The history is in PRs #35 to #56.
+    - `~/scratch/delegation-eval/` (2026-09-29 eval): `DECISION.md` (the decision, revised after
+      review), `out/final.md`, `findings/` (landscape, transcripts, capabilities), and `data/`
+      (`extract.py`, `analyze.py`, 384 extracted and classified agent records), with `tests/`.
+    - `~/scratch/delegation-writeup/evidence/`: harness logs (`harness1.txt` to `harness3.txt`,
+      `harness-codex.txt`) and three probe dirs (`sbprobe/`, `envprobe/`, `a2-step0/`).
+  - **Privacy.** Raw transcripts embed private context, so never publish them as-is. Check
+    `data/*.jsonl` and the harness logs for session ids, project names and paths before quoting
+    them. `~/scratch/delegation-writeup/` also holds backups of `.zshrc`, `.zshenv` and `.mcp.json`
+    from 2026-09-30: shell and MCP config that can carry tokens, so they stay out of anything
+    published, and nobody has read them for this.
 - **Delegation hardening: what is live on HAYPC** (Stage 2, plus the Stage 3 steps under Done;
   `docs/delegation.md`;
   `skills/delegation/SKILL.md` is the operating guide). Open items:
