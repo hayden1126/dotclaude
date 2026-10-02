@@ -446,9 +446,9 @@ class FullRun(unittest.TestCase):
         self.assertEqual(p.returncode, 2)
         self.assertIn(f"run codex-delegate resume {run_id} again", p.stderr)
         w = self.ledger_run("wait", "--codex", run_id, "--poll", "0.2")
-        self.assertEqual(w.returncode, 70, w.stderr)
-        self.assertIn(f"never started, since its wrapper stopped before Codex did: run "
-                      f"codex-delegate resume {run_id} again", w.stderr)
+        self.assertEqual(w.returncode, 1, w.stderr)
+        self.assertIn(f"codex run {run_id} never started: run codex-delegate resume {run_id} "
+                      "again", w.stdout)
         self.assertEqual([r["event"] for r in self.ledger()].count("stop"), 1)
 
     def test_max_wait_with_its_watch_dropped_exits_5_without_a_rearm(self):

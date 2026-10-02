@@ -1143,7 +1143,7 @@ WAIT_AT_MAX = 75  # EX_TEMPFAIL: still running, so re-arm
 WAIT_EXIT_HELP = """exit codes:
   0   done
   1   the job failed: a --fail match, its pids exited with another condition unmet, or the
-      codex run stopped with a nonzero exit
+      codex run stopped with a nonzero exit or never started
   2   the log went stale (--stale)
   3   this waiter stepped aside: a --resume took the watch over, it was dropped, or its file
       is gone; the line printed says which
@@ -1152,7 +1152,7 @@ WAIT_EXIT_HELP = """exit codes:
       a second watch on a codex run that a watch already waits on, resuming an ended watch,
       or a run inside the sandbox
   70  internal error, or nothing could be decided (a finalize recorded no stop row, the codex
-      run left the ledger or never started): the watch stays open for a --resume; details in
+      run left the ledger): the watch stays open for a --resume; details in
       delegation-ledger.err
   75  still running at --max: re-arm with the command printed"""
 WAIT_CONDITIONS = ("pid", "file", "log", "done", "fail", "stale", "codex")

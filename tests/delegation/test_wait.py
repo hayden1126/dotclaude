@@ -867,8 +867,7 @@ class Codex(WaitEnv):
 
     def test_a_pending_run_waits_for_its_wrapper(self):
         # A wrapper that dies while its row is still pending, with no codex.pid, never started
-        # Codex: there is nothing to finalize, so the waiter says so and leaves the watch open
-        # (exit 70).
+        # Codex: nothing will finish, so the watch fails (exit 1) and nothing is finalized.
         wrapper = self.job()
         self.codex_row("r1", None, event="pending", wrapper_pid=wrapper.pid)
         p = self.start("--codex", "r1")
@@ -876,7 +875,9 @@ class Codex(WaitEnv):
         time.sleep(0.3)
         self.assertIsNone(p.poll())
         self.end(wrapper)
-        self.finish(p, 70)
+        out, _ = self.finish(p, 1)
+        self.assertIn("codex run r1 never started: run codex-delegate resume r1 again", out)
+        self.assertEqual(self.only()["state"], "failed")
         self.assertFalse(os.path.exists(self.argv_file))  # no finalize ran
 
 

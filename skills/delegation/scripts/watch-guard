@@ -79,7 +79,7 @@ WATCH_REASON = ("Watch {id} ({desc}) has no live waiter and {unmet}. If a comman
                 "it: delegation-ledger wait --drop {id}.")
 CODEX_ENDED = "(the run has ended; resuming finalizes it)"
 CODEX_UNSTARTED = ("Watch {id} ({desc}): codex run {run} never started, since its wrapper "
-                   "stopped before Codex did, so there is nothing to wait on or finalize: "
+                   "stopped before Codex did, so the watch is recorded failed. To retry, "
                    "{restart}, with run_in_background and timeout 7200000.")
 MET_REASON = ("Watch {id} ({desc}): {cond} is met, but its waiter had stopped, so no "
               "notification came. Check the result and report it.")
@@ -177,8 +177,8 @@ def watch_pending(w, shells, now):
             return Pending("end", w, CODEX_FAILED.format(run=cond["codex"], exit=e.get("exit")),
                            "failed")
         if stage == "unstarted":
-            lapsed = CODEX_UNSTARTED.format(id=wid, desc=desc, run=cond["codex"],
-                                            restart=dc.codex_restart(e))
+            return Pending("end", w, CODEX_UNSTARTED.format(
+                id=wid, desc=desc, run=cond["codex"], restart=dc.codex_restart(e)), "failed")
         if stage == "ended":
             lapsed = lapsed.replace(" is unmet.", f" is unmet {CODEX_ENDED}.", 1)
         return Pending("lapse", w, lapsed, None)

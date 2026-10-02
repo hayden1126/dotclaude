@@ -570,9 +570,10 @@ def codex_unstarted(e):
 
 
 def codex_restart(e):
-    """What to do about an unstarted run (codex_unstarted)."""
+    """What to do about an unstarted run (codex_unstarted): resume a later turn again, or rerun a
+    first one, which mints a new run id."""
     return (f"run codex-delegate resume {e.get('run_id')} again" if e.get("thread_id")
-            else "start it again with codex-delegate run")
+            else "run codex-delegate run again; it gets a new run id")
 
 
 def find_codex(key):
@@ -631,8 +632,8 @@ def codex_stopped(e):
 # row, a `codex-delegate finalize` is still owed. So the guard must not record a codex watch as
 # done; it sends the lead to `wait --resume`, whose waiter finalizes and then decides by the
 # stop row's `exit` (0 done, else failed). A stop row with a nonzero exit is failed at once.
-# When nothing can be decided (the run left the ledger; it never started, its wrapper gone
-# with its row still pending; a finalize recorded no stop row),
+# A run that never started (its wrapper gone with its row still pending, and no codex.pid) is
+# failed. When nothing can be decided (the run left the ledger; a finalize recorded no stop row),
 # watch_verdict raises Undecidable or the waiter exits 70, and the watch stays open. A
 # `codex-delegate resume` appends a pending row before Codex starts, so a waiter never mistakes
 # the previous turn's stop row for this one's.
@@ -867,9 +868,8 @@ def watch_verdict(w, cursor=None, now=None):
         stage, e = codex_progress(c["codex"])
         if stage == "stopped":
             return codex_stopped(e)
-        if stage == "unstarted":
-            raise Undecidable(f"codex run {c['codex']} never started, since its wrapper stopped "
-                              f"before Codex did: {codex_restart(e)}")
+        if stage == "unstarted":  # a definite end: nothing ran, so nothing will finish
+            return "failed", f"codex run {c['codex']} never started: {codex_restart(e)}"
         return (None if stage == "running" else "done"), condition_text(c)
     cursor = log_cursor() if cursor is None else cursor
     # The pids first: a job writes its file or its last log line before it exits, so a check

@@ -524,13 +524,21 @@ class Kills(GuardEnv):
         self.assertEqual(self.decide(), self.block(self.lapse_reason(
             "w-b", desc="codex run r2 ends", cond="codex run r2 ends")))
 
-    def test_an_unstarted_codex_run_says_to_resume_it_again(self):
-        self.codex_row("r1", event="pending", thread_id="th-1")  # its wrapper died first
-        self.watch(cond={"codex": "r1"}, desc="codex run r1 ends")
+    def test_an_unstarted_codex_run_fails_its_watch_once(self):
+        self.codex_row("r1", event="pending", thread_id="th-1")  # a resume's wrapper died first
+        self.codex_row("r2", event="pending")  # a first turn's
+        self.watch(cond={"codex": "r1"}, desc="codex run r1 ends", created="2026-10-02T10:00:00Z")
+        self.watch("w-2", cond={"codex": "r2"}, desc="codex run r2 ends",
+                   created="2026-10-02T10:00:01Z")
+        unstarted = ("Watch {} (codex run {} ends): codex run {} never started, since its wrapper "
+                     "stopped before Codex did, so the watch is recorded failed. To retry, {}, "
+                     "with run_in_background and timeout 7200000.")
         self.assertEqual(self.decide(), self.block(
-            "Watch w-1 (codex run r1 ends): codex run r1 never started, since its wrapper "
-            "stopped before Codex did, so there is nothing to wait on or finalize: run "
-            "codex-delegate resume r1 again, with run_in_background and timeout 7200000."))
+            unstarted.format("w-1", "r1", "r1", "run codex-delegate resume r1 again"),
+            unstarted.format("w-2", "r2", "r2",
+                             "run codex-delegate run again; it gets a new run id")))
+        self.assertEqual((self.read()["state"], self.read("w-2")["state"]), ("failed", "failed"))
+        self.assertIsNone(self.decide(at=self.now + 90, last_assistant_message="later"))
 
     def test_an_unfolded_codex_kill_re_arms_the_runs_open_watch(self):
         self.codex_row("r1", pid=os.getpid())
