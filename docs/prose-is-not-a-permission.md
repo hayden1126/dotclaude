@@ -30,8 +30,8 @@ Claude Code was close to its weekly limit. Transcripts can hold private email an
 the rule was strict: one script, `extract.py`, reads them and writes out a fixed list of fields,
 and the analysis touches nothing else. It covered September 19 to 29.
 
-The evaluation hit the problems it was measuring. A WSL restart killed it partway through, and
-what survived was what it had already written to disk. That's why every brief I write now names
+The evaluation hit the problems it was measuring. A restart killed it partway through, and what
+survived was what it had already written to disk. That's why every brief I write now names
 an artifact path the agent fills as it goes.
 
 Its other rules (use only `gpt-5.6-sol` or `gpt-5.6-terra`, and the data rule) held only because
@@ -47,9 +47,10 @@ or a sibling repo instead.
 
 The breakdown by type is blunter. Counting teammates by the role they were spawned as, eleven of
 the twelve were *general-purpose* agents, the do-anything type: five subagents and six teammates.
-The twelfth was the built-in *Explore*, which forbids writes in its prompt but keeps Bash. Of the
-118 general-purpose subagents, 47 edited files and fewer than a third stayed read-only. The five
-that misbehaved all had read-only briefs, and four of them were reviews or audits.
+The twelfth was the built-in *Explore*, which forbids writes in its prompt but keeps Bash. Most of
+the 118 general-purpose subagents changed things: 47 edited files, and fewer than a third only
+read. Yet the five that misbehaved all had read-only briefs, and four of them were reviews or
+audits.
 
 Claude Code's [permissions docs](https://code.claude.com/docs/en/permissions) show that even deny
 rules can't stop this: the path rules don't apply to arbitrary subprocesses. An agent that can run
