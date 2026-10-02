@@ -1,18 +1,26 @@
 """codex-delegate: model gate, command contract, recursive audit, and full runs against a
 fake `codex` on PATH (no real Codex is launched)."""
 import datetime
+import fcntl
+import glob
 import json
 import os
+import re
+import shutil
+import signal
 import subprocess
 import sys
 import tempfile
 import textwrap
+import time
 import unittest
 
 from _paths import SCRIPTS, load_script
 
 CD = os.path.join(SCRIPTS, "codex-delegate")
+LEDGER = os.path.join(SCRIPTS, "delegation-ledger")
 cd = load_script("codex-delegate")
+DEAD = 2 ** 22 + 12345  # beyond pid_max on this box, so never alive
 
 FAKE_CODEX = textwrap.dedent('''\
     #!/usr/bin/env python3
@@ -36,11 +44,16 @@ FAKE_CODEX = textwrap.dedent('''\
     rollout(tid, None, model)
     if os.environ.get("FAKE_CHILD_MODEL"):
         rollout(tid + "-child", tid, os.environ["FAKE_CHILD_MODEL"])
+    ledger = os.path.join(os.environ["XDG_STATE_HOME"], "dotclaude", "delegations.jsonl")
+    with open(ledger) as f:
+        last = json.loads(f.readlines()[-1])["event"]  # the row written before the launch
     with open(os.environ["FAKE_ARGV_LOG"], "a") as f:
-        f.write(json.dumps({"argv": a, "prompt_head": prompt[:80]}) + "\\n")
+        f.write(json.dumps({"argv": a, "prompt_head": prompt[:80], "ledger_last": last})
+                + "\\n")
+    import time
+    time.sleep(float(os.environ.get("FAKE_START_DELAY", "0")))
     print(json.dumps({"type": "thread.started", "thread_id": tid}), flush=True)
     print(json.dumps({"type": "item.completed", "item": {"type": "file_change"}}), flush=True)
-    import time
     time.sleep(float(os.environ.get("FAKE_SLEEP", "0")))
     report = os.environ.get("FAKE_REPORT", "valid")
     if report == "valid":
@@ -167,7 +180,11 @@ class FullRun(unittest.TestCase):
         self.env = dict(os.environ, PATH=bindir + os.pathsep + os.environ["PATH"],
                         CODEX_HOME=os.path.join(t, "codex"),
                         XDG_STATE_HOME=os.path.join(t, "state"),
-                        FAKE_THREAD="th-1", FAKE_ARGV_LOG=self.argv_log)
+                        FAKE_THREAD="th-1", FAKE_ARGV_LOG=self.argv_log,
+                        CLAUDE_CODE_SESSION_ID="s1")
+        # Inside the sandbox the lead's CLAUDE_PID is inherited but invisible, which would make
+        # every pid look hidden.
+        self.env.pop("CLAUDE_PID", None)
 
     def tearDown(self):
         self.tmp.cleanup()
@@ -181,14 +198,68 @@ class FullRun(unittest.TestCase):
         with open(path) as f:
             return [json.loads(l) for l in f]
 
-    def run_ok(self, **env):
+    def run_ok(self, *args, **env):
         return self.run_cd("run", "--model", "terra", "--dir", self.work, "--brief", self.brief,
-                           "--no-scope", **env)
+                           "--no-scope", *args, **env)
+
+    def start(self, *args, **env):
+        """A run in the background, its stdout a pipe."""
+        return subprocess.Popen([sys.executable, CD, "run", "--model", "sol", "--dir", self.work,
+                                 "--brief", self.brief, "--no-scope", *args],
+                                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
+                                env=dict(self.env, **env))
+
+    @staticmethod
+    def summary(p):
+        """The JSON summary that follows the launch line."""
+        return json.loads(p.stdout.split("\n", 1)[1])
+
+    def launch_ids(self, line):
+        m = re.fullmatch(r"codex-delegate: run (\S+), watch (\S+)\. If this command is "
+                         r"stopped, Codex keeps running: delegation-ledger wait --resume (\S+)\n",
+                         line)
+        self.assertIsNotNone(m, line)
+        self.assertEqual(m.group(2), m.group(3))
+        return m.group(1), m.group(2)
+
+    def watches(self):
+        out = []
+        for path in glob.glob(os.path.join(self.tmp.name, "state", "dotclaude", "watches",
+                                           "*.json")):
+            with open(path) as f:
+                out.append(json.load(f))
+        return {w["id"]: w for w in out}
+
+    def write_watch(self, wid, run_id, live=False):
+        w = {"id": wid, "session_id": "s0", "state": "open", "description": "d",
+             "condition": {"codex": run_id}, "created": cd.dc.now_iso(),
+             "waiter_pid": os.getpid() if live else DEAD,
+             "waiter_start": cd.dc.proc_start(os.getpid()) if live else None,
+             "waiter_heartbeat": cd.dc.now_iso(), "poll_s": 15, "blocked_at": None}
+        cd.dc.write_json(os.path.join(self.tmp.name, "state", "dotclaude", "watches",
+                                      f"{wid}.json"), w)
+
+    def wait_gone(self, pid):
+        deadline = time.time() + 15
+        while time.time() < deadline and cd.dc.pid_alive(pid):
+            time.sleep(0.1)
+
+    def ledger_run(self, *args):
+        return subprocess.run([sys.executable, LEDGER, *args], capture_output=True, text=True,
+                              env=self.env, timeout=60)
+
+    def drop_stop_row(self):
+        """As if the wrapper had been killed before it wrote the stop row."""
+        rows = self.ledger()
+        with open(os.path.join(self.tmp.name, "state", "dotclaude", "delegations.jsonl"),
+                  "w") as f:
+            f.writelines(json.dumps(r) + "\n" for r in rows[:-1])
+        return rows[0]["run_id"]
 
     def test_clean_run(self):
         p = self.run_ok()
         self.assertEqual(p.returncode, 0, p.stderr)
-        summary = json.loads(p.stdout)
+        summary = self.summary(p)
         self.assertTrue(summary["report_ok"] and summary["audit_ok"])
         self.assertEqual([r["event"] for r in self.ledger()], ["pending", "start", "stop"])
         self.assertEqual(self.ledger()[1]["thread_id"], "th-1")
@@ -216,25 +287,21 @@ class FullRun(unittest.TestCase):
     def test_codex_failure_exits_1_with_its_code_in_the_summary(self):
         p = self.run_ok(FAKE_RC="7")
         self.assertEqual(p.returncode, 1)
-        self.assertEqual(json.loads(p.stdout)["rc"], 7)
+        self.assertEqual(self.summary(p)["rc"], 7)
         self.assertEqual(self.ledger()[-1]["rc"], 7)
+        self.assertEqual([w["state"] for w in self.watches().values()], ["failed"])
 
     def test_finalize_records_a_run_whose_wrapper_died(self):
         self.run_ok()
-        path = os.path.join(self.tmp.name, "state", "dotclaude", "delegations.jsonl")
-        rows = self.ledger()
-        with open(path, "w") as f:  # drop the stop row, as if the wrapper had been killed
-            f.writelines(json.dumps(r) + "\n" for r in rows[:-1])
+        run_id = self.drop_stop_row()
         self.assertIn("ended without a stop row", self.run_cd("status").stdout)
-        p = self.run_cd("finalize", rows[0]["run_id"])
+        p = self.run_cd("finalize", run_id)
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertEqual(self.ledger()[-1]["event"], "stop")
         self.assertIsNone(self.ledger()[-1]["rc"])
-        self.assertEqual(self.run_cd("finalize", rows[0]["run_id"]).returncode, 0)  # idempotent
+        self.assertEqual(self.run_cd("finalize", run_id).returncode, 0)  # idempotent
 
     def test_codex_survives_a_killed_wrapper(self):
-        import signal
-        import time
         proc = subprocess.Popen(
             [sys.executable, CD, "run", "--model", "sol", "--dir", self.work, "--brief",
              self.brief, "--no-scope"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
@@ -246,8 +313,12 @@ class FullRun(unittest.TestCase):
                 break
             time.sleep(0.1)
         proc.send_signal(signal.SIGTERM)
-        proc.wait(timeout=10)
+        self.assertEqual(proc.wait(timeout=10), 143)
         self.assertEqual(self.ledger()[-1]["event"], "interrupted")
+        [w] = self.watches().values()  # left open with a dead waiter, for the guard to lapse
+        self.assertEqual((w["state"], w["waiter_pid"]), ("open", proc.pid))
+        self.assertFalse(cd.dc.waiter_alive(w))
+        self.assertNotIn("_prompt", json.dumps(self.ledger()))
         codex_pid = self.ledger()[-1]["pid"]
         deadline = time.time() + 15
         while time.time() < deadline and cd.dc.pid_alive(codex_pid):
@@ -265,7 +336,7 @@ class FullRun(unittest.TestCase):
         self.assertFalse(os.path.exists(self.argv_log))
 
     def test_resume_by_run_or_thread_id(self):
-        run_id = json.loads(self.run_ok().stdout)["run_id"]
+        run_id = self.summary(self.run_ok())["run_id"]
         for key in (run_id, "th-1"):
             p = self.run_cd("resume", key, "--no-scope")
             self.assertEqual(p.returncode, 0, p.stderr)
@@ -274,6 +345,229 @@ class FullRun(unittest.TestCase):
         self.assertEqual(calls[1]["argv"][:3], ["exec", "resume", "th-1"])
         self.assertIn("--output-schema", calls[1]["argv"])
         self.assertTrue(calls[1]["prompt_head"].startswith("(codex-delegate resume"))
+
+    def test_a_run_prints_the_launch_line_and_waits_on_its_own_watch(self):
+        proc = self.start(FAKE_SLEEP="3")
+        run_id, wid = self.launch_ids(proc.stdout.readline())  # printed before Codex ends
+        w = self.watches()[wid]
+        self.assertEqual((w["condition"], w["state"], w["session_id"], w["waiter_pid"]),
+                         ({"codex": run_id}, "open", "s1", proc.pid))
+        self.assertTrue(cd.dc.waiter_alive(w))
+        self.assertEqual(self.ledger()[0]["run_id"], run_id)
+        self.assertEqual(proc.wait(timeout=20), 0)
+        proc.stdout.close()
+        self.assertEqual(self.watches()[wid]["state"], "done")
+
+    def test_max_wait_exits_75_and_a_resumed_waiter_finalizes_the_run(self):
+        p = self.run_ok("--max-wait", "0.02", FAKE_SLEEP="5")
+        self.assertEqual(p.returncode, 75, p.stderr)
+        launch, rearm = p.stdout.splitlines()
+        run_id, wid = self.launch_ids(launch + "\n")
+        self.assertEqual(rearm, f"still running: re-arm with delegation-ledger wait --resume "
+                                f"{wid} (run_in_background, timeout 7200000)")
+        self.assertEqual(self.watches()[wid]["state"], "open")
+        rows = self.ledger()
+        self.assertNotIn("stop", [r["event"] for r in rows])
+        self.assertTrue(cd.dc.pid_alive(rows[-1]["pid"]))  # Codex runs on
+        self.assertIn(f"`delegation-ledger wait --resume {wid}` waits and finalizes",
+                      self.run_cd("status").stdout)
+        w = self.ledger_run("wait", "--resume", wid, "--poll", "0.2")
+        self.assertEqual(w.returncode, 0, w.stderr)
+        self.assertEqual([r["event"] for r in self.ledger()].count("stop"), 1)
+        self.assertTrue(self.ledger()[-1]["report_ok"])
+        self.assertEqual(self.watches()[wid]["state"], "done")
+
+    def test_a_run_detached_before_its_thread_started_finalizes_with_a_passing_audit(self):
+        p = self.run_ok("--max-wait", "0.01", FAKE_START_DELAY="2")
+        self.assertEqual(p.returncode, 75, p.stderr)
+        detached = self.ledger()[-1]
+        self.assertEqual((detached["event"], detached["thread_id"]), ("detached", None))
+        deadline = time.time() + 15
+        while time.time() < deadline and cd.dc.pid_alive(detached["pid"]):
+            time.sleep(0.1)
+        f = self.run_cd("finalize", detached["run_id"])
+        self.assertEqual(f.returncode, 0, f.stderr)
+        stop = self.ledger()[-1]
+        self.assertEqual((stop["event"], stop["thread_id"], stop["audit_ok"]),
+                         ("stop", "th-1", True))
+
+    def test_a_sandboxed_run_records_no_watch_and_never_detaches(self):
+        # Its own pid unseen: a sandbox PID namespace, which Codex could die with at exit 75.
+        p = self.run_ok("--max-wait", "0.01", CLAUDE_PID=str(DEAD), FAKE_SLEEP="1.5")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("codex-delegate: running sandboxed, so no watch is recorded and --max-wait "
+                      "is ignored (Codex would die with this command); run it as a bare "
+                      "command\n", p.stderr)
+        self.assertNotIn("detached", [r["event"] for r in self.ledger()])
+        self.assertEqual(self.watches(), {})
+        self.assertTrue(json.loads(p.stdout)["report_ok"])  # the summary alone, as before
+
+    def test_resume_refuses_a_running_codex_then_finalizes_the_ended_turn_first(self):
+        p = self.run_ok("--max-wait", "0.02", FAKE_SLEEP="5")
+        self.assertEqual(p.returncode, 75, p.stderr)
+        _, wid = self.launch_ids(p.stdout.splitlines()[0] + "\n")
+        run_id, pid = self.ledger()[0]["run_id"], self.ledger()[-1]["pid"]
+        r = self.run_cd("resume", run_id, "--no-scope")
+        self.assertEqual(r.returncode, 2)
+        self.assertIn(f"run {run_id} is still running (codex pid {pid}). Wait on it: "
+                      f"delegation-ledger wait --resume {wid}; resume once it ends", r.stderr)
+        with open(self.argv_log) as f:
+            self.assertEqual(len(f.readlines()), 1)  # no second Codex on the thread
+        self.wait_gone(pid)
+        r = self.run_cd("resume", run_id, "--no-scope")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual([r["event"] for r in self.ledger()],
+                         ["pending", "start", "detached", "stop", "pending", "resume", "stop"])
+        self.assertIsNone(self.ledger()[3]["rc"])  # the first turn, finalized
+        self.assertEqual(self.watches()[wid]["state"], "done")  # the resume took it over
+
+    def test_a_resume_that_fails_to_launch_ends_its_turn_failed(self):
+        run_id = self.summary(self.run_ok("--out", os.path.join(self.tmp.name, "out")))["run_id"]
+        shutil.rmtree(self.work)  # so the resume's Popen, run in --dir, fails
+        p = self.run_cd("resume", run_id, "--no-scope")
+        self.assertEqual(p.returncode, 1)
+        self.assertIn("codex-delegate: FileNotFoundError", p.stderr)
+        stop = self.ledger()[-1]
+        self.assertEqual((stop["event"], stop["exit"], stop["report_ok"], stop["audit_ok"]),
+                         ("stop", 1, False, False))
+        self.assertIn("FileNotFoundError", stop["error"])
+        _, wid = self.launch_ids(p.stdout.split("\n", 1)[0] + "\n")
+        self.assertEqual(self.watches()[wid]["state"], "failed")
+        self.assertNotEqual(self.ledger_run("wait", "--resume", wid).returncode, 0)
+
+    def test_a_run_whose_wrapper_died_before_codex_started_is_not_finalized(self):
+        run_id = self.summary(self.run_ok())["run_id"]
+        with open(os.path.join(self.tmp.name, "state", "dotclaude", "delegations.jsonl"),
+                  "a") as f:  # a resume's pending row, its wrapper gone before the Popen
+            f.write(json.dumps({"runner": "codex", "id": run_id, "run_id": run_id,
+                                "event": "pending", "ts": cd.dc.now_iso(), "thread_id": "th-1",
+                                "wrapper_pid": DEAD}) + "\n")
+        p = self.run_cd("finalize", run_id)
+        self.assertEqual(p.returncode, 2)
+        self.assertIn(f"run codex-delegate resume {run_id} again", p.stderr)
+        w = self.ledger_run("wait", "--codex", run_id, "--poll", "0.2")
+        self.assertEqual(w.returncode, 70, w.stderr)
+        self.assertIn(f"never started, since its wrapper stopped before Codex did: run "
+                      f"codex-delegate resume {run_id} again", w.stderr)
+        self.assertEqual([r["event"] for r in self.ledger()].count("stop"), 1)
+
+    def test_max_wait_with_its_watch_dropped_exits_5_without_a_rearm(self):
+        proc = self.start("--max-wait", "0.05", FAKE_SLEEP="6")
+        _, wid = self.launch_ids(proc.stdout.readline())
+        d = self.ledger_run("wait", "--drop", wid)
+        self.assertEqual(d.returncode, 0, d.stderr)
+        self.assertEqual(proc.wait(timeout=20), 5)
+        self.assertEqual(proc.stdout.read(), f"watch {wid} was dropped; Codex keeps running\n")
+        proc.stdout.close()
+        self.wait_gone(self.ledger()[-1]["pid"])
+
+    def codex_pid(self):
+        """The pid in the run's codex.pid, once the wrapper has written it."""
+        path = os.path.join(self.ledger()[0]["out"], "codex.pid")
+        deadline = time.time() + 10
+        while not os.path.exists(path) and time.time() < deadline:
+            time.sleep(0.05)
+        with open(path) as f:
+            return json.load(f)["pid"]
+
+    def test_a_wrapper_killed_before_thread_started_leaves_a_running_run(self):
+        # SIGKILL writes no row, so only codex.pid says Codex was launched.
+        proc = self.start(FAKE_START_DELAY="3")
+        run_id, wid = self.launch_ids(proc.stdout.readline())
+        codex = self.codex_pid()
+        proc.kill()
+        proc.wait(timeout=10)
+        proc.stdout.close()
+        self.assertEqual([r["event"] for r in self.ledger()], ["pending"])
+        self.assertTrue(cd.dc.pid_alive(codex))
+        r = self.run_cd("resume", run_id, "--no-scope")
+        self.assertEqual(r.returncode, 2)
+        self.assertIn(f"run {run_id} is still running (codex pid {codex})", r.stderr)
+        w = subprocess.Popen([sys.executable, LEDGER, "wait", "--resume", wid, "--poll", "0.2"],
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                             env=self.env)
+        time.sleep(1)
+        self.assertIsNone(w.poll())  # it waits on the live Codex, not "never started"
+        _, err = w.communicate(timeout=60)
+        self.assertEqual(w.returncode, 0, err)
+        self.assertEqual([r["event"] for r in self.ledger()], ["pending", "stop"])
+        stop = self.ledger()[-1]
+        self.assertEqual((stop["thread_id"], stop["audit_ok"]), ("th-1", True))
+
+    def test_the_wrapper_heartbeats_while_it_finishes(self):
+        proc = self.start("--poll", "0.4", FAKE_SLEEP="1")
+        run_id, wid = self.launch_ids(proc.stdout.readline())
+        lock = os.path.join(self.tmp.name, "state", "dotclaude", "codex-finalize",
+                            f"{run_id}.lock")
+        os.makedirs(os.path.dirname(lock), exist_ok=True)
+        with open(lock, "a") as held:
+            fcntl.flock(held, fcntl.LOCK_EX)  # the finish waits on it
+            self.wait_gone(self.codex_pid())
+            beats = set()
+            for _ in range(12):
+                beats.add(self.watches()[wid]["waiter_heartbeat"])
+                time.sleep(0.25)
+            self.assertIsNone(proc.poll())
+            self.assertEqual(self.watches()[wid]["state"], "open")
+            self.assertGreaterEqual(len(beats), 2)  # stamps are whole seconds
+            fcntl.flock(held, fcntl.LOCK_UN)
+        self.assertEqual(proc.wait(timeout=20), 0)
+        proc.stdout.close()
+        w = self.watches()[wid]
+        self.assertEqual(w["state"], "done")
+        time.sleep(1.2)
+        self.assertEqual(self.watches()[wid], w)  # no beat after the finish
+
+    def test_max_wait_is_at_most_110_minutes(self):
+        for bad in ("111", "0", "nan"):
+            self.assertEqual(self.run_ok("--max-wait", bad).returncode, 2, bad)
+        self.assertFalse(os.path.exists(self.argv_log))
+
+    def test_resume_writes_its_row_before_codex_starts(self):
+        run_id = self.summary(self.run_ok())["run_id"]
+        self.assertEqual(self.run_cd("resume", run_id, "--no-scope").returncode, 0)
+        with open(self.argv_log) as f:
+            calls = [json.loads(l) for l in f]
+        self.assertEqual([c["ledger_last"] for c in calls], ["pending", "pending"])
+        self.assertEqual([r["event"] for r in self.ledger()],
+                         ["pending", "start", "stop", "pending", "resume", "stop"])
+
+    def test_resume_takes_over_an_open_watch_whose_waiter_is_gone(self):
+        run_id = self.summary(self.run_ok())["run_id"]
+        self.write_watch("w-old", run_id)
+        p = self.run_cd("resume", run_id, "--no-scope")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(self.launch_ids(p.stdout.split("\n", 1)[0] + "\n")[1], "w-old")
+        self.assertEqual(self.watches()["w-old"]["state"], "done")
+        self.assertEqual(len(self.watches()), 2)  # the run's own, and the one it took over
+
+    def test_resume_is_refused_while_a_live_waiter_holds_the_runs_watch(self):
+        run_id = self.summary(self.run_ok())["run_id"]
+        self.write_watch("w-live", run_id, live=True)
+        rows = len(self.ledger())
+        p = self.run_cd("resume", run_id, "--no-scope")
+        self.assertEqual(p.returncode, 2)
+        self.assertIn("watch w-live already has a live waiter", p.stderr)
+        self.assertEqual(len(self.ledger()), rows)  # no pending row, and no Codex
+        with open(self.argv_log) as f:
+            self.assertEqual(len(f.readlines()), 1)
+
+    def test_two_finalizes_at_once_write_one_stop_row(self):
+        self.run_ok()
+        run_id = self.drop_stop_row()
+        procs = [subprocess.Popen([sys.executable, CD, "finalize", run_id],
+                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                  env=self.env) for _ in range(2)]
+        self.assertEqual([p.wait(timeout=30) for p in procs], [0, 0])
+        self.assertEqual([r["event"] for r in self.ledger()].count("stop"), 1)
+
+    def test_status_with_pids_hidden_says_so_instead_of_died(self):
+        self.run_ok(FAKE_REPORT="none")
+        self.drop_stop_row()
+        self.assertIn("died", self.run_cd("status").stdout)
+        out = self.run_cd("status", CLAUDE_PID=str(DEAD)).stdout
+        self.assertIn("pid not visible in the sandbox", out)
+        self.assertNotIn("died", out)
 
     def test_status_shows_the_stop(self):
         self.run_ok()

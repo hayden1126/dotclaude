@@ -371,23 +371,6 @@ MONTHLY_NUDGE = ("the monthly audit is due: run `delegation-ledger audit --month
 ORPHANS_LISTED = 3
 
 
-def live_session_ids():
-    """The sessionIds of Claude processes still running, decided as delegation-ledger's
-    live_sessions decides them: a ~/.claude/sessions/*.json entry whose pid runs with its
-    procStart, so a reused pid doesn't keep a gone session alive."""
-    out = set()
-    for p in glob.glob(os.path.expanduser("~/.claude/sessions/*.json")):
-        try:
-            with open(p) as f:
-                d = json.load(f)
-        except (OSError, ValueError):
-            continue
-        sid = d.get("sessionId") if isinstance(d, dict) else None
-        if isinstance(sid, str) and sid and dc.pid_alive(d.get("pid"), d.get("procStart")):
-            out.add(sid)
-    return out
-
-
 def orphaned_watches(current=None, now=None):
     """(watches, unreadable): the open or acknowledged watches nobody waits on, oldest first,
     and how many watch files couldn't be read. A watch is nobody's when its session isn't
@@ -398,7 +381,7 @@ def orphaned_watches(current=None, now=None):
     none."""
     if not dc.pids_visible():
         return [], 0
-    live = live_session_ids()
+    live = set(dc.live_sessions())
     if isinstance(current, str) and current:
         live.add(current)
     found, unreadable = [], 0

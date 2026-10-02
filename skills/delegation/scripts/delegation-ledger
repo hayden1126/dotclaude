@@ -112,7 +112,6 @@ import json
 import math
 import os
 import re
-import secrets
 import subprocess
 import sys
 import time
@@ -308,21 +307,6 @@ def nudge(data, now):
     dc.append_row({"ts": dc.now_iso(), "runner": "claude", "event": "nudge", "id": aid,
                    "agent_type": role, "session_id": data.get("session_id"),
                    "minutes": round(age / 60, 1)})
-
-
-def live_sessions():
-    """sessionId -> pid for Claude processes that are still running. A session file's
-    procStart must match the process too, so a reused pid doesn't keep a gone session alive."""
-    out = {}
-    for p in glob.glob(os.path.expanduser("~/.claude/sessions/*.json")):
-        try:
-            with open(p) as f:
-                d = json.load(f)
-        except (OSError, ValueError):
-            continue
-        if dc.pid_alive(d.get("pid"), d.get("procStart")):
-            out[d.get("sessionId")] = d.get("pid")
-    return out
 
 
 def agent_transcript(entry):
@@ -571,7 +555,7 @@ def liveness_context():
     limits, warning = load_liveness()
     visible = dc.pids_visible()
     warnings = ([] if visible else [SANDBOX_WARNING]) + ([warning] if warning else [])
-    return limits, warnings, visible, (live_sessions() if visible else None)
+    return limits, warnings, visible, (dc.live_sessions() if visible else None)
 
 
 def state_of(runner, e, ctx, now):
@@ -1149,14 +1133,11 @@ def cmd_tail(args):
 
 WAIT_SANDBOXED = ("run delegation-ledger wait as a bare command (the sandbox hides other "
                   "processes)")
-WAIT_REARM = ("still running: re-arm with delegation-ledger wait --resume {} "
-              "(run_in_background, timeout 7200000)")
 WAIT_EXITS = {"done": 0, "failed": 1, "stale": 2}  # how the watch's condition ended
 WAIT_ASIDE = 3    # this waiter stepped aside; the watch goes on, or was dropped
 WAIT_USAGE = 64   # EX_USAGE
 WAIT_ERROR = 70   # EX_SOFTWARE: nothing decided, the watch left open; see delegation-ledger.err
 WAIT_AT_MAX = 75  # EX_TEMPFAIL: still running, so re-arm
-WAIT_MAX_MIN = 110  # --max's ceiling: with a 5-minute finalize, under the 120-minute Bash cap
 WAIT_EXIT_HELP = """exit codes:
   0   done
   1   the job failed: a --fail match, its pids exited with another condition unmet, or the
@@ -1169,7 +1150,7 @@ WAIT_EXIT_HELP = """exit codes:
       a second watch on a codex run that a watch already waits on, resuming an ended watch,
       or a run inside the sandbox
   70  internal error, or nothing could be decided (a finalize recorded no stop row, the codex
-      run left the ledger): the watch stays open for a --resume; details in
+      run left the ledger or never started): the watch stays open for a --resume; details in
       delegation-ledger.err
   75  still running at --max: re-arm with the command printed"""
 WAIT_CONDITIONS = ("pid", "file", "log", "done", "fail", "stale", "codex")
@@ -1177,60 +1158,42 @@ CODEX_DELEGATE = os.path.join(os.path.dirname(os.path.realpath(__file__)), "code
 FINALIZE_TIMEOUT_S = 300  # finalize checks a report and walks rollouts; the cap is 5 min off
 
 
-class WaitRefused(Exception):
-    """Bad usage, or a watch `wait` can't act on: it exits WAIT_USAGE with this message."""
-
-
-class StepAside(Exception):
-    """This waiter no longer owns its watch: it exits WAIT_ASIDE, printing this message."""
-
-
-def wait_session():
-    """The session a watch belongs to: CLAUDE_CODE_SESSION_ID, else the live session whose pid
-    is CLAUDE_PID, else "unknown"."""
-    sid = os.environ.get("CLAUDE_CODE_SESSION_ID")
-    if sid:
-        return sid
-    pid = os.environ.get("CLAUDE_PID")
-    return next((s for s, p in live_sessions().items() if pid and str(p) == pid), "unknown")
-
-
 def wait_condition(args):
     """The condition the options give, as the watch file stores it."""
     if args.codex is not None:
         if any(getattr(args, o) is not None for o in WAIT_CONDITIONS if o != "codex"):
-            raise WaitRefused("--codex takes no other condition")
+            raise dc.WaitRefused("--codex takes no other condition")
         e = dc.find_codex(args.codex)
         if e is None:
-            raise WaitRefused(f"no codex run {args.codex!r} in the ledger ({dc.ledger_path()})")
+            raise dc.WaitRefused(f"no codex run {args.codex!r} in the ledger ({dc.ledger_path()})")
         return {"codex": e["run_id"]}
     for opt in ("done", "fail", "stale"):
         if getattr(args, opt) is not None and args.log is None:
-            raise WaitRefused(f"--{opt} needs --log")
+            raise dc.WaitRefused(f"--{opt} needs --log")
     if args.log is not None and args.done is None and args.fail is None and args.stale is None:
-        raise WaitRefused("--log needs --done, --fail or --stale")
+        raise dc.WaitRefused("--log needs --done, --fail or --stale")
     for opt in ("done", "fail"):
         pattern = getattr(args, opt)
         if pattern == "":
-            raise WaitRefused(f"--{opt} needs a pattern; an empty one matches every line")
+            raise dc.WaitRefused(f"--{opt} needs a pattern; an empty one matches every line")
         try:
             if pattern is not None:
                 re.compile(pattern)
         except re.error as ex:
-            raise WaitRefused(f"--{opt} {pattern!r} is not a pattern ({ex})") from None
+            raise dc.WaitRefused(f"--{opt} {pattern!r} is not a pattern ({ex})") from None
     if not (args.pid or args.file or args.done):
-        raise WaitRefused("give what to wait for: --pid, --file, --log with --done, or --codex")
+        raise dc.WaitRefused("give what to wait for: --pid, --file, --log with --done, or --codex")
     if args.stale is not None and not dc.is_positive(args.stale):
-        raise WaitRefused("--stale takes positive minutes")
+        raise dc.WaitRefused("--stale takes positive minutes")
     if args.pid and min(args.pid) <= 0:
-        raise WaitRefused("--pid takes a positive pid")
+        raise dc.WaitRefused("--pid takes a positive pid")
     cond = {}
     if args.pid:
         cond["pids"] = []
         for pid in dict.fromkeys(args.pid):
             why = dc.unwatchable(pid)
             if why:
-                raise WaitRefused(f"pid {pid} {why}; a pid echoed from a sandboxed command "
+                raise dc.WaitRefused(f"pid {pid} {why}; a pid echoed from a sandboxed command "
                                   "comes from another PID namespace")
             cond["pids"].append({"pid": pid, "start": dc.proc_start(pid),
                                  "comm": dc.proc_comm(pid)})
@@ -1247,9 +1210,9 @@ def existing_watch(wid):
     try:
         w = dc.read_watch(wid)
     except ValueError as ex:  # a bad id or a damaged file
-        raise WaitRefused(str(ex)) from None
+        raise dc.WaitRefused(str(ex)) from None
     if w is None:
-        raise WaitRefused(f"no watch {wid!r}")
+        raise dc.WaitRefused(f"no watch {wid!r}")
     return w
 
 
@@ -1259,79 +1222,8 @@ def stop_row(run_id):
     return e if e.get("event") == "stop" else None
 
 
-class Waiter:
-    """This process as one watch's waiter: it takes the watch over, polls its condition with a
-    heartbeat, and records how it ended. Each write checks under the lock that it still owns
-    the watch, and steps aside (StepAside) when it doesn't."""
-
-    def __init__(self, wid, poll, session):
-        self.wid, self.poll, self.session, self.me = wid, poll, session, os.getpid()
-        self.start = dc.proc_start(self.me)
-
-    def own(self, w):
-        """Raise StepAside unless this waiter still owns the watch."""
-        if not w:
-            raise StepAside(f"watch {self.wid}'s file is gone, so there is nothing left to wait "
-                            "on; this waiter stepped aside")
-        if w.get("state") == "dropped":
-            raise StepAside(f"watch {self.wid} was dropped; this waiter stepped aside")
-        if w.get("waiter_pid") != self.me:
-            raise StepAside(f"watch {self.wid} was taken over by pid {w.get('waiter_pid')} (a "
-                            "--resume); this waiter stepped aside, and the watch goes on")
-
-    @staticmethod
-    def refuse_a_live_waiter(w):
-        """WaitRefused when the watch's waiter is alive: it will notify its own session. A
-        waiter whose heartbeat went stale (a suspended VM, say) can still be taken over."""
-        if dc.waiter_alive(w):
-            raise WaitRefused(f"watch {w.get('id')} already has a live waiter (pid "
-                              f"{w.get('waiter_pid')}); it will notify its session")
-
-    @classmethod
-    def refuse_a_second_codex_watch(cls, new):
-        """WaitRefused when any session already has an unresolved watch on new's codex run,
-        since each watch's waiter could finalize it. Called under the watches lock, so two
-        waits started together can't both pass."""
-        run = new["condition"].get("codex")
-        for w in dc.all_watches() if run is not None else ():
-            if (w.get("state") in dc.UNRESOLVED
-                    and (w.get("condition") or {}).get("codex") == run):
-                cls.refuse_a_live_waiter(w)
-                raise WaitRefused(f"watch {w.get('id')} already waits on {run}: "
-                                  f"delegation-ledger wait --resume {w.get('id')}")
-
-    def take(self, new):
-        """Become the watch's waiter, creating it from `new` when given."""
-        def take(w):
-            if new is not None:
-                self.refuse_a_second_codex_watch(new)
-                w.update(new)
-            elif not w:
-                raise WaitRefused(f"no watch {self.wid!r}")
-            elif w.get("state") not in dc.UNRESOLVED:
-                raise WaitRefused(f"watch {self.wid} is {w.get('state')}; start a new wait")
-            else:
-                self.refuse_a_live_waiter(w)
-            # A resume moves the watch to the caller's session, so one a crashed session left
-            # is guarded in the session that re-armed it; a caller with none leaves it be.
-            if self.session != "unknown":
-                w["session_id"] = self.session
-            w.pop("blocked_size", None)
-            w.pop("blocked_stop", None)
-            w.update(waiter_pid=self.me, waiter_start=self.start, poll_s=self.poll,
-                     waiter_heartbeat=dc.now_iso(), state="open", blocked_at=None)
-        return dc.update_watch(self.wid, take)
-
-    def beat(self):
-        """Refresh the heartbeat. A waiter that polls is live, so a lapse the guard saw meanwhile
-        is over."""
-        def beat(w):
-            self.own(w)
-            if w.get("state") in dc.UNRESOLVED:
-                w.pop("blocked_size", None)
-                w.pop("blocked_stop", None)
-                w.update(waiter_heartbeat=dc.now_iso(), state="open", blocked_at=None)
-        return dc.update_watch(self.wid, beat)
+class Waiter(dc.Waiter):
+    """dc.Waiter polling a condition: `wait`'s loop, and the finalize a codex watch owes."""
 
     def run(self, max_min, new=None):
         """Poll until the condition ends or max_min passes; the exit code."""
@@ -1346,7 +1238,7 @@ class Waiter:
                 return self.record(verdict, why)
             left = deadline - time.monotonic()
             if left <= 0:
-                print(WAIT_REARM.format(self.wid))
+                print(dc.REARM.format(self.wid))
                 return WAIT_AT_MAX
             time.sleep(min(self.poll, left))
             w = self.beat()
@@ -1410,7 +1302,7 @@ class Waiter:
             if beating:
                 try:
                     self.beat()
-                except StepAside as ex:
+                except dc.StepAside as ex:
                     aside, beating = ex, False
                 except Exception:  # noqa: BLE001  logged; finalize is still waited on
                     checks().log_error()
@@ -1423,10 +1315,7 @@ class Waiter:
 
     def record(self, verdict, why):
         """Record how the watch ended, print it, and return the exit code."""
-        def record(w):
-            self.own(w)
-            w.update(state=verdict, ended=dc.now_iso())
-        dc.update_watch(self.wid, record)
+        self.end(verdict)
         print(f"watch {self.wid} {verdict}: {why}")
         return WAIT_EXITS[verdict]
 
@@ -1440,7 +1329,7 @@ def drop_watch(wid):
         # an ended watch isn't rewritten (update_watch skips a no-op), keeping its prune clock.
         nonlocal prior
         if not w:
-            raise WaitRefused(f"no watch {wid!r}")
+            raise dc.WaitRefused(f"no watch {wid!r}")
         prior = w.get("state")
         if prior in dc.UNRESOLVED:
             w.update(state="dropped", ended=dc.now_iso())
@@ -1457,33 +1346,33 @@ def cmd_wait(args):
     wid = args.resume
     try:
         if not (dc.is_positive(args.max) and dc.is_positive(args.poll)):
-            raise WaitRefused("--max and --poll take positive numbers")
-        if args.max > WAIT_MAX_MIN:
-            raise WaitRefused(f"--max must be at most {WAIT_MAX_MIN}, under the Bash tool's "
+            raise dc.WaitRefused("--max and --poll take positive numbers")
+        if args.max > dc.MAX_WAIT_MIN:
+            raise dc.WaitRefused(f"--max must be at most {dc.MAX_WAIT_MIN}, under the Bash tool's "
                               "120-minute cap with room for a finalize")
         given = args.resume if args.resume is not None else args.drop
         if given is not None and (args.desc is not None or any(
                 getattr(args, o) is not None for o in WAIT_CONDITIONS)):
-            raise WaitRefused("--resume and --drop take no condition or --desc")
+            raise dc.WaitRefused("--resume and --drop take no condition or --desc")
         cond = wait_condition(args) if given is None else None
         dc.prune_watches()
         if args.drop is not None:
             return drop_watch(args.drop)
         if args.resume is not None:
             existing_watch(wid)
-            return Waiter(wid, args.poll, wait_session()).run(args.max)
-        wid = "w-" + time.strftime("%Y%m%dT%H%M%S") + "-" + secrets.token_hex(3)
-        session = wait_session()
+            return Waiter(wid, args.poll, dc.wait_session()).run(args.max)
+        wid = dc.new_watch_id()
+        session = dc.wait_session()
         if session == "unknown":
             print("no Claude Code session: the watch guard won't see this watch",
                   file=sys.stderr, flush=True)
         return Waiter(wid, args.poll, session).run(args.max, new={
             "id": wid, "session_id": session, "condition": cond,
             "description": args.desc or dc.condition_text(cond), "created": dc.now_iso()})
-    except WaitRefused as ex:
+    except dc.WaitRefused as ex:
         print(f"wait: {ex}", file=sys.stderr)
         return WAIT_USAGE
-    except StepAside as ex:
+    except dc.StepAside as ex:
         print(ex)
         return WAIT_ASIDE
     except dc.Undecidable as ex:
@@ -1564,9 +1453,9 @@ def main(argv=None):
                     help="wait for the codex run to end, finalize it unless it has a stop "
                          "row, and exit by the stop row's exit")
     wt.add_argument("--desc", help="what the watch is for (default: its condition)")
-    wt.add_argument("--max", type=float, default=WAIT_MAX_MIN, metavar="MIN",
+    wt.add_argument("--max", type=float, default=dc.MAX_WAIT_MIN, metavar="MIN",
                     help=f"exit 75 with the re-arm command after this long (default and most: "
-                         f"{WAIT_MAX_MIN})")
+                         f"{dc.MAX_WAIT_MIN})")
     wt.add_argument("--poll", type=float, default=dc.WAIT_POLL_S, help=argparse.SUPPRESS)
     again = wt.add_mutually_exclusive_group()
     again.add_argument("--resume", metavar="ID", help="take over this watch and wait on")

@@ -203,11 +203,18 @@ validated (`report_ok`).
 
 ## 5. Codex runs
 
-**Always launch `run` and `resume` with the Bash tool's `run_in_background`.** A foreground Bash
-command is stopped after 10 minutes, and a Codex run takes longer. The exit notification wakes
-you, so there is no need to poll. If the wrapper does get killed anyway, Codex keeps running
-(it writes its own event log in its own session). `status` then says so, and `finalize`
-records the result once Codex ends.
+**Always launch `run` and `resume` with the Bash tool's `run_in_background` and `timeout:
+7200000`.** A foreground Bash command is stopped after 10 minutes, and a Codex run takes longer.
+Before Codex starts, the wrapper prints a launch line with the run id and its watch id. It
+waits as that watch's waiter, and its exit notification wakes you when the run ends, so there
+is no need to poll.
+
+A run can outlast the Bash tool's 2-hour cap. The wrapper exits first: at `--max-wait` (110
+minutes) it prints the re-arm command and exits 75, and Codex keeps running. Run the command it
+printed, in the background with the same timeout; that waiter finalizes the run once Codex
+ends. If the wrapper is killed anyway, Codex keeps running too (it writes its own event log in
+its own session), and the watch guard blocks your next stop with the same re-arm command.
+`status` says where a run is, and `finalize` records the result by hand.
 
 ```bash
 codex-delegate run --model sol --dir ~/some/repo --brief brief.md [--network] [--timeout 3h]
@@ -224,9 +231,12 @@ codex-delegate audit <thread_id>   # every model the thread and its sub-agents u
 - **Exit codes:**
   - 0: ok;
   - 1: Codex failed (its own code is `rc` in the summary);
-  - 2: refused, or bad usage;
+  - 2: refused, or bad usage (a resume while Codex still runs, too);
   - 3: the model audit failed;
   - 4: the report is missing or invalid;
-  - 124: timed out.
+  - 5: stopped waiting with its watch dropped or taken over; Codex keeps running;
+  - 75: still running: re-arm with the printed command;
+  - 124: timed out;
+  - 143: killed by SIGTERM or SIGHUP; Codex keeps running, and the watch guard re-arms it.
 - **Scope:** send Codex only the work it does better, such as anything about its own
   configuration. Claude does the rest.

@@ -9,8 +9,9 @@ Beside it, agents/<id>.json is the per-agent liveness index: the latest state of
 agent, rewritten at its starts and stops (and once per activation by the deadline nudge), so a
 reader gets one agent's state without folding the whole ledger.
 
-watches/<id>.json is a long wait that `delegation-ledger wait` records and the watch guard (a
-Stop hook) reads; the comment above WATCH_STATES documents its fields.
+watches/<id>.json is a long wait that `delegation-ledger wait` or a codex-delegate wrapper
+records and the watch guard (a Stop hook) reads; the comment above WATCH_STATES documents its
+fields, and Waiter makes a waiter's changes.
 """
 import contextlib
 import copy
@@ -21,6 +22,7 @@ import json
 import math
 import os
 import re
+import secrets
 import tempfile
 import time
 
@@ -454,38 +456,114 @@ def codex_state(e, visible=True):
     out = e.get("out") or ""
     events = os.path.join(out, "events.jsonl")
     age = ((time.time() - os.path.getmtime(events)) / 60) if os.path.exists(events) else None
-    codex_alive = pid_alive(e.get("pid"))
-    wrapper_alive = pid_alive(e.get("wrapper_pid"))
+    codex_pid = codex_proc(e)[0]
+    codex_alive = codex_running(e)
+    wrapper_alive = codex_wrapper_alive(e)
     has_report = os.path.exists(os.path.join(out, "report.json"))
     run = e.get("run_id")
     if event == "stop":
         verdict = "finished"
     elif not visible:
         verdict = "pid not visible in the sandbox"
+    elif codex_alive and wrapper_alive:
+        verdict = "running"
     elif codex_alive:
-        verdict = "running" + ("" if wrapper_alive else " (its wrapper is gone; "
-                               f"`codex-delegate finalize {run}` once it ends)")
-    elif event == "pending":
-        verdict = ("starting" if wrapper_alive else
-                   "never started a thread: rerun it with `codex-delegate run`")
+        w = codex_watch(run)
+        verdict = ("running (its wrapper is gone; " + (
+            f"`delegation-ledger wait --resume {w['id']}` waits and finalizes)" if w else
+            f"`codex-delegate finalize {run}` once it ends)"))
+    elif event == "pending" and wrapper_alive:
+        verdict = "starting"
+    elif codex_unstarted(e) and e.get("thread_id"):  # a resume's wrapper died before Codex
+        verdict = f"never restarted its thread: `codex-delegate resume {run}`"
+    elif codex_unstarted(e):
+        verdict = "never started a thread: rerun it with `codex-delegate run`"
     elif has_report:
         verdict = f"ended without a stop row: `codex-delegate finalize {run}`"
     else:
         verdict = f"died: `codex-delegate resume {run}`"
-    pids = (f"codex pid {e.get('pid')} {'alive' if codex_alive else 'gone'}, "
+    pids = (f"codex pid {codex_pid} {'alive' if codex_alive else 'gone'}, "
             f"wrapper {'alive' if wrapper_alive else 'gone'}" if visible else
-            f"codex pid {e.get('pid')} and its wrapper not visible in the sandbox")
+            f"codex pid {codex_pid} and its wrapper not visible in the sandbox")
     evidence = (f"{pids}, "
                 + (f"last event {age:.0f} min ago" if age is not None else "no events file")
                 + (", report.json present" if has_report else ""))
     return verdict, evidence
 
 
+def codex_wrapper_alive(e):
+    """Whether a folded codex entry's latest wrapper runs: its wrapper_pid, with the
+    wrapper_start its pending row recorded (older rows have none, so only the pid counts)."""
+    return pid_alive(e.get("wrapper_pid"), e.get("wrapper_start"))
+
+
+def codex_pid_path(out):
+    return os.path.join(out or "", "codex.pid")
+
+
+def codex_proc(e):
+    """(pid, procStart) of the Codex process of a folded codex entry's current turn, procStart
+    None when unknown; (None, None) when none is known to have started. The wrapper writes
+    <out>/codex.pid right after its Popen, before the ledger hears of Codex (a wrapper
+    SIGKILLed before thread.started writes no row with the pid), so that file counts when the
+    entry's latest wrapper wrote it. Else a row past pending names the pid: a pending row
+    carries none, and a folded one's is the previous turn's."""
+    try:
+        with open(codex_pid_path(e.get("out"))) as f:
+            d = json.load(f)
+    except (OSError, ValueError):
+        d = None
+    if (isinstance(d, dict) and d.get("wrapper_pid") is not None
+            and d.get("wrapper_pid") == e.get("wrapper_pid")
+            and (e.get("wrapper_start") is None
+                 or str(d.get("wrapper_start")) == str(e.get("wrapper_start")))):
+        return d.get("pid"), d.get("start")
+    return (None, None) if e.get("event") == "pending" else (e.get("pid"), None)
+
+
+def codex_running(e):
+    """Whether the Codex process of the entry's current turn runs (codex_proc)."""
+    return pid_alive(*codex_proc(e))
+
+
 def codex_live(e):
-    """Whether a folded codex entry's run is still going: its Codex pid runs, or a pending
-    row's wrapper does (Codex hasn't started a thread yet)."""
-    return pid_alive(e.get("pid")) or (e.get("event") == "pending"
-                                       and pid_alive(e.get("wrapper_pid")))
+    """Whether a folded codex entry's run is still going: its Codex runs, or a pending row's
+    wrapper does (Codex hasn't started yet)."""
+    return codex_running(e) or (e.get("event") == "pending" and codex_wrapper_alive(e))
+
+
+def events_thread_id(out):
+    """The thread id in <out>/events.jsonl's thread.started, or None. A wrapper that left
+    before Codex started its thread (at --max-wait, or killed) never recorded it."""
+    try:
+        with open(os.path.join(out or "", "events.jsonl")) as f:
+            for line in f:
+                if '"thread.started"' not in line:
+                    continue
+                try:
+                    e = json.loads(line)
+                except ValueError:
+                    continue
+                if e.get("type") == "thread.started" and e.get("thread_id"):
+                    return e["thread_id"]
+    except OSError:
+        pass
+    return None
+
+
+def codex_unstarted(e):
+    """Whether a codex run's latest row is a pending one whose wrapper died before it launched
+    Codex: nothing runs, and there is nothing to finalize. That means no codex.pid from this
+    wrapper, and for a first turn no thread.started in events.jsonl (a resume's file holds the
+    earlier turns', so only the pid file tells there)."""
+    return (e.get("event") == "pending" and not codex_live(e) and codex_proc(e)[0] is None
+            and (bool(e.get("thread_id")) or events_thread_id(e.get("out")) is None))
+
+
+def codex_restart(e):
+    """What to do about an unstarted run (codex_unstarted)."""
+    return (f"run codex-delegate resume {e.get('run_id')} again" if e.get("thread_id")
+            else "start it again with codex-delegate run")
 
 
 def find_codex(key):
@@ -503,8 +581,9 @@ def codex_stopped(e):
     return "failed", f"codex run {e.get('run_id')} stopped with exit {e.get('exit')}"
 
 
-# A watch is one long wait, at watches/<id>.json. `delegation-ledger wait` writes it and the
-# watch guard (a Stop hook) reads it, so these fields are the contract between them:
+# A watch is one long wait, at watches/<id>.json. A waiter writes it (`delegation-ledger wait`,
+# or a codex-delegate wrapper for its own run) and the watch guard (a Stop hook) reads it, so
+# these fields are the contract between them:
 #   id, session_id, description, created
 #                   set once; session_id is "unknown" when the waiter found no session
 #   condition       what it waits for: {"codex": run_id} alone, or any of "pids" (a list of
@@ -539,14 +618,18 @@ def codex_stopped(e):
 # row, a `codex-delegate finalize` is still owed. So the guard must not record a codex watch as
 # done; it sends the lead to `wait --resume`, whose waiter finalizes and then decides by the
 # stop row's `exit` (0 done, else failed). A stop row with a nonzero exit is failed at once.
-# When nothing can be decided (the run left the ledger; a finalize recorded no stop row),
-# watch_verdict raises Undecidable or the waiter exits 70, and the watch stays open.
-# Known gap until T3: `codex-delegate resume` writes no row until Codex's thread.started, so a
-# `wait --codex` started in that window sees the previous run's stop row and ends at once.
+# When nothing can be decided (the run left the ledger; it never started, its wrapper gone
+# with its row still pending; a finalize recorded no stop row),
+# watch_verdict raises Undecidable or the waiter exits 70, and the watch stays open. A
+# `codex-delegate resume` appends a pending row before Codex starts, so a waiter never mistakes
+# the previous turn's stop row for this one's.
 WATCH_STATES = ("open", "acknowledged", "done", "failed", "stale", "dropped")
 UNRESOLVED = ("open", "acknowledged")  # the states a waiter may take over
 ENDED = ("done", "failed", "stale", "dropped")
 WAIT_POLL_S = 15  # the waiter's default seconds between polls
+MAX_WAIT_MIN = 110  # a waiter's ceiling: with a 5-minute finalize, under the 120-minute Bash cap
+REARM = ("still running: re-arm with delegation-ledger wait --resume {} "
+         "(run_in_background, timeout 7200000)")
 PRUNE_TMP_DAYS, PRUNE_ENDED_DAYS = 1, 7
 PF_KTHREAD = 0x00200000  # the per-process flags bit (stat field 9) of a kernel thread
 
@@ -701,16 +784,19 @@ def condition_text(c):
 
 def codex_progress(run_id):
     """(stage, entry) for a watched codex run: "stopped" when it has a stop row, "running"
-    while Codex or its wrapper is alive (a live wrapper writes the stop row itself), else
-    "ended", with a finalize owed. Undecidable when the run is no longer in the ledger (it was
-    there when the wait began)."""
+    while Codex or its wrapper is alive (a live wrapper writes the stop row itself),
+    "unstarted" when a pending row's wrapper died before Codex started (codex_unstarted:
+    nothing to finalize), else "ended", with a finalize owed. Undecidable when the run is no
+    longer in the ledger (it was there when the wait began)."""
     e = fold(read_rows()).get(("codex", run_id))
     if e is None:
         raise Undecidable(f"codex run {run_id} is no longer in the ledger ({ledger_path()})")
     if e.get("event") == "stop":
         return "stopped", e
-    if pid_alive(e.get("pid")) or pid_alive(e.get("wrapper_pid")):
+    if codex_running(e) or codex_wrapper_alive(e):
         return "running", e
+    if codex_unstarted(e):
+        return "unstarted", e
     return "ended", e
 
 
@@ -768,6 +854,9 @@ def watch_verdict(w, cursor=None, now=None):
         stage, e = codex_progress(c["codex"])
         if stage == "stopped":
             return codex_stopped(e)
+        if stage == "unstarted":
+            raise Undecidable(f"codex run {c['codex']} never started, since its wrapper stopped "
+                              f"before Codex did: {codex_restart(e)}")
         return (None if stage == "running" else "done"), condition_text(c)
     cursor = log_cursor() if cursor is None else cursor
     # The pids first: a job writes its file or its last log line before it exits, so a check
@@ -810,3 +899,132 @@ def waiter_alive(w, now=None):
         return now - parse_iso(w["waiter_heartbeat"]).timestamp() <= 2 * poll + 1
     except (KeyError, TypeError, ValueError):
         return False
+
+
+class WaitRefused(Exception):
+    """Bad usage, or a watch a waiter can't take: `wait` exits 64 with this message, and
+    codex-delegate refuses (exit 2)."""
+
+
+class StepAside(Exception):
+    """This waiter no longer owns its watch (taken over, dropped or deleted): `wait` exits 3,
+    printing this message, and a codex-delegate wrapper stops heartbeating."""
+
+
+def live_sessions():
+    """sessionId -> pid for Claude processes that are still running. A session file's
+    procStart must match the process too, so a reused pid doesn't keep a gone session alive."""
+    out = {}
+    for p in glob.glob(os.path.expanduser("~/.claude/sessions/*.json")):
+        try:
+            with open(p) as f:
+                d = json.load(f)
+        except (OSError, ValueError):
+            continue
+        sid = d.get("sessionId") if isinstance(d, dict) else None
+        if isinstance(sid, str) and sid and pid_alive(d.get("pid"), d.get("procStart")):
+            out[sid] = d.get("pid")
+    return out
+
+
+def wait_session():
+    """The session a watch belongs to: CLAUDE_CODE_SESSION_ID, else the live session whose pid
+    is CLAUDE_PID, else "unknown"."""
+    sid = os.environ.get("CLAUDE_CODE_SESSION_ID")
+    if sid:
+        return sid
+    pid = os.environ.get("CLAUDE_PID")
+    return next((s for s, p in live_sessions().items() if pid and str(p) == pid), "unknown")
+
+
+def new_watch_id():
+    return "w-" + time.strftime("%Y%m%dT%H%M%S") + "-" + secrets.token_hex(3)
+
+
+def codex_watch(run_id):
+    """The unresolved watch on a codex run, or None. There is one at most: a second is refused
+    (Waiter.refuse_a_second_codex_watch)."""
+    return next((w for w in all_watches() if w.get("state") in UNRESOLVED
+                 and (w.get("condition") or {}).get("codex") == run_id), None)
+
+
+class Waiter:
+    """This process as one watch's waiter: it takes the watch over, heartbeats it, and records
+    how it ended. Each write checks under the lock that it still owns the watch, and steps aside
+    (StepAside) when it doesn't. `delegation-ledger wait` polls a condition with it, and a
+    codex-delegate wrapper is the waiter of its own run's watch."""
+
+    def __init__(self, wid, poll, session):
+        self.wid, self.poll, self.session, self.me = wid, poll, session, os.getpid()
+        self.start = proc_start(self.me)
+
+    def own(self, w):
+        """Raise StepAside unless this waiter still owns the watch."""
+        if not w:
+            raise StepAside(f"watch {self.wid}'s file is gone, so there is nothing left to wait "
+                            "on; this waiter stepped aside")
+        if w.get("state") == "dropped":
+            raise StepAside(f"watch {self.wid} was dropped; this waiter stepped aside")
+        if w.get("waiter_pid") != self.me:
+            raise StepAside(f"watch {self.wid} was taken over by pid {w.get('waiter_pid')} (a "
+                            "--resume); this waiter stepped aside, and the watch goes on")
+
+    @staticmethod
+    def refuse_a_live_waiter(w):
+        """WaitRefused when the watch's waiter is alive: it will notify its own session. A
+        waiter whose heartbeat went stale (a suspended VM, say) can still be taken over."""
+        if waiter_alive(w):
+            raise WaitRefused(f"watch {w.get('id')} already has a live waiter (pid "
+                              f"{w.get('waiter_pid')}); it will notify its session")
+
+    @classmethod
+    def refuse_a_second_codex_watch(cls, new):
+        """WaitRefused when any session already has an unresolved watch on new's codex run,
+        since each watch's waiter could finalize it. Called under the watches lock, so two
+        waits started together can't both pass."""
+        run = new["condition"].get("codex")
+        w = codex_watch(run) if run is not None else None
+        if w is not None:
+            cls.refuse_a_live_waiter(w)
+            raise WaitRefused(f"watch {w.get('id')} already waits on {run}: "
+                              f"delegation-ledger wait --resume {w.get('id')}")
+
+    def take(self, new):
+        """Become the watch's waiter, creating it from `new` when given."""
+        def take(w):
+            if new is not None:
+                self.refuse_a_second_codex_watch(new)
+                w.update(new)
+            elif not w:
+                raise WaitRefused(f"no watch {self.wid!r}")
+            elif w.get("state") not in UNRESOLVED:
+                raise WaitRefused(f"watch {self.wid} is {w.get('state')}; start a new wait")
+            else:
+                self.refuse_a_live_waiter(w)
+            # A resume moves the watch to the caller's session, so one a crashed session left
+            # is guarded in the session that re-armed it; a caller with none leaves it be.
+            if self.session != "unknown":
+                w["session_id"] = self.session
+            w.pop("blocked_size", None)
+            w.pop("blocked_stop", None)
+            w.update(waiter_pid=self.me, waiter_start=self.start, poll_s=self.poll,
+                     waiter_heartbeat=now_iso(), state="open", blocked_at=None)
+        return update_watch(self.wid, take)
+
+    def beat(self):
+        """Refresh the heartbeat. A waiter that polls is live, so a lapse the guard saw meanwhile
+        is over."""
+        def beat(w):
+            self.own(w)
+            if w.get("state") in UNRESOLVED:
+                w.pop("blocked_size", None)
+                w.pop("blocked_stop", None)
+                w.update(waiter_heartbeat=now_iso(), state="open", blocked_at=None)
+        return update_watch(self.wid, beat)
+
+    def end(self, verdict):
+        """Record how the watch ended: done, failed or stale."""
+        def end(w):
+            self.own(w)
+            w.update(state=verdict, ended=now_iso())
+        return update_watch(self.wid, end)
