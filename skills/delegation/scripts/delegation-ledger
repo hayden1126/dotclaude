@@ -95,7 +95,8 @@ steps aside at its next poll. Its exit codes:
   70 internal error, or nothing could be decided (a codex finalize recorded no stop row, or the
   run left the ledger), with the watch left open for a --resume and the details in
   delegation-ledger.err; 75 still running at --max (at most 110 minutes, leaving the 5-minute
-  finalize room under the cap). A session gets one unresolved watch per codex run.
+  finalize room under the cap). A codex run gets one unresolved watch, whatever the session,
+  and a --resume moves the watch to the resuming session.
 While it finalizes a codex run the waiter keeps its heartbeat, and it marks the watch as
 finalizing, so a waiter that takes over meanwhile waits for that stop row instead of writing
 a second one.
@@ -1165,7 +1166,7 @@ WAIT_EXIT_HELP = """exit codes:
       is gone; the line printed says which
   64  bad usage: no condition, an unknown or malformed id, an unknown codex run, a --pid that
       isn't watchable (not running, pid 1, a kernel thread, another user's), --max over 110,
-      a second watch on a codex run this session already watches, resuming an ended watch,
+      a second watch on a codex run that a watch already waits on, resuming an ended watch,
       or a run inside the sandbox
   70  internal error, or nothing could be decided (a finalize recorded no stop row, the codex
       run left the ledger): the watch stays open for a --resume; details in
@@ -1263,8 +1264,8 @@ class Waiter:
     heartbeat, and records how it ended. Each write checks under the lock that it still owns
     the watch, and steps aside (StepAside) when it doesn't."""
 
-    def __init__(self, wid, poll):
-        self.wid, self.poll, self.me = wid, poll, os.getpid()
+    def __init__(self, wid, poll, session):
+        self.wid, self.poll, self.session, self.me = wid, poll, session, os.getpid()
         self.start = dc.proc_start(self.me)
 
     def own(self, w):
@@ -1280,12 +1281,12 @@ class Waiter:
 
     @staticmethod
     def refuse_a_second_codex_watch(new):
-        """WaitRefused when the session already has an unresolved watch on new's codex run,
+        """WaitRefused when any session already has an unresolved watch on new's codex run,
         since each watch's waiter could finalize it. Called under the watches lock, so two
         waits started together can't both pass."""
         run = new["condition"].get("codex")
         for w in dc.all_watches() if run is not None else ():
-            if (w.get("session_id") == new["session_id"] and w.get("state") in dc.UNRESOLVED
+            if (w.get("state") in dc.UNRESOLVED
                     and (w.get("condition") or {}).get("codex") == run):
                 raise WaitRefused(f"watch {w.get('id')} already waits on {run}: "
                                   f"delegation-ledger wait --resume {w.get('id')}")
@@ -1300,8 +1301,11 @@ class Waiter:
                 raise WaitRefused(f"no watch {self.wid!r}")
             elif w.get("state") not in dc.UNRESOLVED:
                 raise WaitRefused(f"watch {self.wid} is {w.get('state')}; start a new wait")
+            # A resume re-owns the watch to the caller's session, so one a crashed session
+            # left is guarded in the session that took it over.
             w.update(waiter_pid=self.me, waiter_start=self.start, poll_s=self.poll,
-                     waiter_heartbeat=dc.now_iso(), state="open", blocked_at=None)
+                     waiter_heartbeat=dc.now_iso(), state="open", blocked_at=None,
+                     session_id=self.session)
         return dc.update_watch(self.wid, take)
 
     def beat(self):
@@ -1451,10 +1455,11 @@ def cmd_wait(args):
             return drop_watch(args.drop)
         if args.resume is not None:
             existing_watch(wid)
-            return Waiter(wid, args.poll).run(args.max)
+            return Waiter(wid, args.poll, wait_session()).run(args.max)
         wid = "w-" + time.strftime("%Y%m%dT%H%M%S") + "-" + secrets.token_hex(3)
-        return Waiter(wid, args.poll).run(args.max, new={
-            "id": wid, "session_id": wait_session(), "condition": cond,
+        session = wait_session()
+        return Waiter(wid, args.poll, session).run(args.max, new={
+            "id": wid, "session_id": session, "condition": cond,
             "description": args.desc or dc.condition_text(cond), "created": dc.now_iso()})
     except WaitRefused as ex:
         print(f"wait: {ex}", file=sys.stderr)

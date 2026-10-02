@@ -656,6 +656,21 @@ def condition_text(c):
     return " and ".join(text for _, text in _clauses(c))
 
 
+def codex_progress(run_id):
+    """(stage, entry) for a watched codex run: "stopped" when it has a stop row, "running"
+    while Codex or its wrapper is alive (a live wrapper writes the stop row itself), else
+    "ended", with a finalize owed. Undecidable when the run is no longer in the ledger (it was
+    there when the wait began)."""
+    e = fold(read_rows()).get(("codex", run_id))
+    if e is None:
+        raise Undecidable(f"codex run {run_id} is no longer in the ledger ({ledger_path()})")
+    if e.get("event") == "stop":
+        return "stopped", e
+    if pid_alive(e.get("pid")) or pid_alive(e.get("wrapper_pid")):
+        return "running", e
+    return "ended", e
+
+
 def log_cursor():
     """A fresh scan_log cursor: how far the log has been read, whether a done line was seen,
     and the log's size at the previous scan."""
@@ -707,14 +722,10 @@ def watch_verdict(w, cursor=None, now=None):
     c = w.get("condition") or {}
     now = time.time() if now is None else now
     if "codex" in c:
-        e = fold(read_rows()).get(("codex", c["codex"]))
-        if e is None:  # it was there when the wait began
-            raise Undecidable(f"codex run {c['codex']} is no longer in the ledger "
-                              f"({ledger_path()})")
-        if e.get("event") == "stop":
+        stage, e = codex_progress(c["codex"])
+        if stage == "stopped":
             return codex_stopped(e)
-        going = pid_alive(e.get("pid")) or pid_alive(e.get("wrapper_pid"))
-        return (None if going else "done"), condition_text(c)
+        return (None if stage == "running" else "done"), condition_text(c)
     cursor = log_cursor() if cursor is None else cursor
     # The pids first: a job writes its file or its last log line before it exits, so a check
     # made after the exit can't miss them.

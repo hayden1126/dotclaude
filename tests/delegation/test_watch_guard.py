@@ -1,6 +1,7 @@
 """watch-guard: the main-thread Stop hook blocks once per lapsed watch and once per killed
 task, records everything it blocks on, and always fails open. Transcripts here are synthetic,
 in the 2.1.287 format."""
+import itertools
 import json
 import os
 import subprocess
@@ -106,8 +107,26 @@ class GuardEnv(unittest.TestCase):
         return dict({"hook_event_name": "Stop", "session_id": sid, "stop_hook_active": False,
                      "transcript_path": self.transcript, "background_tasks": []}, **kw)
 
-    def decide(self, **kw):
-        return guard.decide(self.payload(**kw), self.now)
+    def decide(self, at=None, **kw):
+        return guard.decide(self.payload(**kw), self.now if at is None else at)
+
+    def append(self, *entries, raw=""):
+        with open(self.transcript, "a") as f:
+            f.writelines(json.dumps(e) + "\n" for e in entries)
+            f.write(raw)
+
+    def codex_row(self, rid="r1", **kw):
+        ledger = os.path.join(self.state, "dotclaude", "delegations.jsonl")
+        os.makedirs(os.path.dirname(ledger), exist_ok=True)
+        with open(ledger, "a") as f:
+            f.write(json.dumps(dict({"runner": "codex", "id": rid, "run_id": rid,
+                                     "event": "start", "ts": dc.now_iso(), "pid": DEAD,
+                                     "wrapper_pid": DEAD}, **kw)) + "\n")
+
+    def met_reason(self, wid="w-1", desc="the build", cond=None):
+        cond = cond or f"{self.path('never')} exists"
+        return (f"Watch {wid} ({desc}): {cond} is met, but its waiter had stopped, so no "
+                "notification came. Check the result and report it.")
 
     def err_log(self):
         try:
@@ -164,9 +183,7 @@ class Watches(GuardEnv):
     def test_a_met_condition_with_a_dead_waiter_blocks_once_and_is_recorded_done(self):
         open(self.path("never"), "w").close()
         self.watch()
-        self.assertEqual(self.decide(), self.block(
-            f"Watch w-1 (the build): {self.path('never')} exists is met, but its waiter had "
-            "stopped, so no notification came. Check the result and report it."))
+        self.assertEqual(self.decide(), self.block(self.met_reason()))
         w = self.read()
         self.assertEqual(w["state"], "done")
         dc.parse_iso(w["ended"])
@@ -179,30 +196,73 @@ class Watches(GuardEnv):
         self.assertEqual(self.read()["state"], "open")  # the waiter records the end itself
 
     def test_a_codex_run_that_ended_blocks_with_resume_and_isnt_recorded_done(self):
-        ledger = os.path.join(self.state, "dotclaude", "delegations.jsonl")
-        os.makedirs(os.path.dirname(ledger), exist_ok=True)
-        with open(ledger, "w") as f:
-            f.write(json.dumps({"runner": "codex", "id": "r1", "run_id": "r1", "event": "start",
-                                "ts": dc.now_iso(), "pid": DEAD, "wrapper_pid": DEAD}) + "\n")
+        self.codex_row()
         self.watch(cond={"codex": "r1"}, desc="codex run r1 ends")
         self.assertEqual(self.decide(), self.block(self.lapse_reason(
             desc="codex run r1 ends", cond="codex run r1 ends", codex_ended=True)))
         self.assertEqual(self.read()["state"], "open")
 
+    def test_a_running_codex_run_with_a_dead_waiter_is_a_plain_lapse(self):
+        self.codex_row(pid=os.getpid())
+        self.watch(cond={"codex": "r1"}, desc="codex run r1 ends")
+        self.assertEqual(self.decide(), self.block(self.lapse_reason(
+            desc="codex run r1 ends", cond="codex run r1 ends")))
+
+    def test_a_codex_stop_row_decides_done_or_failed_for_a_dead_waiter(self):
+        self.codex_row("r1", event="stop", exit=0)
+        self.codex_row("r2", event="stop", exit=4)
+        self.watch(cond={"codex": "r1"}, desc="codex run r1 ends", created="2026-10-02T10:00:00Z")
+        self.watch("w-2", cond={"codex": "r2"}, desc="codex run r2 ends",
+                   created="2026-10-02T10:00:01Z")
+        self.assertEqual(self.decide(), self.block(
+            self.met_reason(desc="codex run r1 ends", cond="codex run r1 ends"),
+            "codex run r2 ended with exit 4, but its waiter had stopped, so no notification "
+            "came. Check its report and report it."))
+        self.assertEqual((self.read()["state"], self.read("w-2")["state"]), ("done", "failed"))
+        self.assertIsNone(self.decide())
+
     def test_a_lapse_blocks_once_then_is_acknowledged_with_a_warning(self):
         self.watch()
         self.assertEqual(self.decide(), self.block(self.lapse_reason()))
         dc.parse_iso(self.read()["blocked_at"])
-        self.assertEqual(self.decide(), {"systemMessage": (
+        self.assertEqual(self.decide(at=self.now + 30), {"systemMessage": (
             "Watch w-1 (the build) still has no waiter; it's acknowledged. Re-arm with "
             "delegation-ledger wait --resume w-1, or drop it.")})
         self.assertEqual(self.read()["state"], "acknowledged")
-        self.assertIsNone(self.decide())  # said once; `watch` and `open` still list it
+        self.assertIsNone(self.decide(at=self.now + 60))  # said once; the views still list it
 
-    def test_a_doubled_guard_blocks_once_in_total(self):
+    def test_a_doubled_guard_blocks_once_and_doesnt_ack_its_own_block(self):
+        # Two guards in one stop: the second sees a blocked_at seconds old, which is this
+        # stop's block, so it says nothing; a real next stop acknowledges it.
         self.watch()
-        outs = [self.decide(), self.decide()]
-        self.assertEqual(sum("decision" in (o or {}) for o in outs), 1)
+        self.assertEqual(self.decide(), self.block(self.lapse_reason()))
+        self.assertIsNone(self.decide())
+        self.assertEqual(self.read()["state"], "open")
+        self.assertIn("systemMessage", self.decide(at=self.now + 30))
+
+    def test_a_log_condition_is_checked_in_the_logs_last_megabyte(self):
+        log = self.path("job.log")
+        with open(log, "w") as f:
+            f.write("BUILD OK\n" + ("x" * 1023 + "\n") * (guard.LOG_TAIL // 1024 + 10))
+        self.watch(cond={"log": log, "done": "^BUILD OK$"}, desc="the log")
+        cond = f"{log} has a line matching /^BUILD OK$/"
+        self.assertEqual(self.decide(), self.block(self.lapse_reason(desc="the log", cond=cond)))
+        with open(log, "a") as f:
+            f.write("BUILD OK\n")  # now inside the last megabyte
+        self.assertEqual(self.decide(), self.block(self.met_reason(desc="the log", cond=cond)))
+
+    def test_a_spent_budget_takes_no_more_items_and_records_none_it_wont_print(self):
+        self.watch(created="2026-10-02T10:00:00Z")
+        self.watch("w-2", created="2026-10-02T10:00:01Z")
+        self.lines(launch("toolu_1", "bk1", "make", "the make", self.now - 7200),
+                   notice("bk1", "toolu_1", "the make", self.now - 60))
+        ticks = itertools.chain([0, 0], itertools.repeat(10))  # spent after the first watch
+        out = guard.decide(self.payload(), self.now, clock=lambda: next(ticks))
+        self.assertEqual(out, self.block(self.lapse_reason()))
+        self.assertIsNone(self.read("w-2")["blocked_at"])
+        self.assertIn("budget is spent", self.err_log())
+        self.assertEqual(self.decide(), self.block(self.lapse_reason("w-2"),
+                                                   self.kill_reason("the make")))
 
     def test_stop_hook_active_doesnt_stop_a_fresh_lapse_blocking(self):
         self.watch()
@@ -262,12 +322,40 @@ class Kills(GuardEnv):
                    notice("bk1", "toolu_1", "re-arm", self.now - 60))
         self.assertEqual(self.decide(), self.block(self.lapse_reason()))
 
-    def test_a_killed_first_waiter_folds_into_the_one_lapsed_watch(self):
-        self.watch()
+    def test_a_killed_first_waiter_folds_into_the_watch_it_created(self):
+        launched = self.now - 7200
+        self.watch(created=iso(launched + 2)[:19] + "Z")
+        self.watch("w-old", created=iso(launched - 3600)[:19] + "Z")  # an older lapse
         self.lines(launch("toolu_1", "bk1", f"delegation-ledger wait --file {self.path('x')}",
-                          "wait for the build", self.now - 7200),
+                          "wait for the build", launched),
                    notice("bk1", "toolu_1", "wait for the build", self.now - 60))
-        self.assertEqual(self.decide(), self.block(self.lapse_reason()))
+        self.assertEqual(self.decide(), self.block(self.lapse_reason("w-old"),
+                                                   self.lapse_reason()))
+
+    def test_a_killed_waiter_with_no_item_this_stop_is_a_plain_kill(self):
+        # Its watch is skipped as Undecidable, so the kill must still be said.
+        self.watch("w-gone", cond={"codex": "r-gone"}, desc="codex run r-gone ends")
+        self.lines(launch("toolu_1", "bk1", "delegation-ledger wait --resume w-gone", "re-arm",
+                          self.now - 7200),
+                   notice("bk1", "toolu_1", "re-arm", self.now - 60))
+        self.assertEqual(self.decide(), self.block(self.kill_reason("re-arm")))
+
+    def test_a_killed_codex_wrapper_says_codex_keeps_running(self):
+        # The fold no longer guesses: an acknowledged watch with a dead waiter doesn't swallow
+        # an unrelated codex kill.
+        self.watch(state="acknowledged", blocked_at="2026-10-02T09:00:00Z")
+        self.lines(launch("toolu_1", "bk1", "codex-delegate run --model terra --dir . --brief b",
+                          "codex job", self.now - 7200),
+                   launch("toolu_2", "bk2", "codex-delegate resume r7 --prompt p", "codex resume",
+                          self.now - 7000),
+                   notice("bk1", "toolu_1", "codex job", self.now - 60),
+                   notice("bk2", "toolu_2", "codex resume", self.now - 50))
+        codex = ('Codex wrapper "{}" was stopped at its time limit, but Codex keeps running. '
+                 "Don't re-run it. Wait on it with delegation-ledger wait --codex {} "
+                 "(codex-delegate status lists the run), with run_in_background and timeout "
+                 "7200000.")
+        self.assertEqual(self.decide(), self.block(codex.format("codex job", "<run_id>"),
+                                                   codex.format("codex resume", "r7")))
 
     def test_a_kill_and_a_lapse_are_numbered_in_one_block(self):
         self.watch()
@@ -275,7 +363,46 @@ class Kills(GuardEnv):
                    notice("bk1", "toolu_1", "the make", self.now - 60))
         self.assertEqual(self.decide(), self.block(self.lapse_reason(),
                                                    self.kill_reason("the make")))
-        self.assertIsNone(self.decide().get("decision"))  # the ack's systemMessage only
+        self.assertNotIn("decision", self.decide(at=self.now + 30))  # the ack's message only
+
+    def test_a_mid_turn_attachment_notice_counts_once(self):
+        text = notification("bk1", "toolu_1", "mid-turn")
+        at = iso(self.now - 60)
+        self.lines({"type": "attachment", "timestamp": at, "uuid": "u1",
+                    "attachment": {"type": "queued_command", "prompt": text, "timestamp": at,
+                                   "origin": {"kind": "task-notification",
+                                              "producer": "session-task"},
+                                   "source_uuid": "s", "delivery_id": "d"},
+                    "rendered": f"<system-reminder>{text}</system-reminder>"},
+                   notice("bk1", "toolu_1", "mid-turn", self.now - 30))
+        self.assertEqual(self.decide(), self.block(self.kill_reason("mid-turn")))
+
+    def test_a_notice_followed_by_more_than_the_tail_is_caught_next_stop(self):
+        self.lines()
+        self.assertIsNone(self.decide())  # the first run records offset 0
+        pad = {"type": "assistant", "timestamp": iso(self.now), "message": {"content": "x" * 900}}
+        self.append(notice("bk1", "toolu_1", "buried", self.now - 60),
+                    *[pad] * (300 * 1024 // 900))
+        self.assertGreater(os.path.getsize(self.transcript), 300 * 1024)
+        self.assertEqual(self.decide(), self.block(self.kill_reason("buried")))
+
+    def test_a_line_still_being_written_is_read_once_complete(self):
+        self.lines()
+        line = json.dumps(notice("bk1", "toolu_1", "straddling", self.now - 60))
+        self.append(raw=line[:100])  # half of it, as a stop might find it
+        self.assertIsNone(self.decide())
+        self.append(raw=line[100:] + "\n")
+        self.assertEqual(self.decide(), self.block(self.kill_reason("straddling")))
+
+    def test_more_than_the_scan_cap_is_skipped_and_logged(self):
+        self.lines()
+        self.decide()
+        pad = {"type": "assistant", "timestamp": iso(self.now), "message": {"content": "x" * 90}}
+        self.append(notice("bk0", "toolu_0", "skipped", self.now - 60), *[pad] * 50,
+                    notice("bk1", "toolu_1", "kept", self.now - 60))
+        with mock.patch.object(guard, "SCAN_CAP", 2000):
+            self.assertEqual(self.decide(), self.block(self.kill_reason("kept")))
+        self.assertIn("past the 2000 byte cap", self.err_log())
 
     def test_another_sessions_kill_is_ignored(self):
         other = self.path("s2.jsonl")
@@ -343,6 +470,14 @@ class FailsOpen(GuardEnv):
         self.assertEqual((p.returncode, p.stdout), (0, ""))
         self.assertEqual(self.run_hook(self.payload(), cmd=["bash", SHIM], env=env),
                          self.block(self.lapse_reason()))
+
+    def test_a_nested_agent_id_doesnt_skip_a_main_thread_stop(self):
+        # background_tasks can hold a stale teammate; only a top-level agent_id is a subagent.
+        self.watch()
+        tasks = [{"id": "t1", "type": "in_process_teammate", "status": "running",
+                  "description": "mate", "agent_id": "amate-0123456789abcdef"}]
+        self.assertEqual(self.run_hook(self.payload(background_tasks=tasks), cmd=["bash", SHIM],
+                                       env=self.shim_home()), self.block(self.lapse_reason()))
 
     def test_the_shim_exits_0_when_the_script_is_missing(self):
         with tempfile.TemporaryDirectory() as home:

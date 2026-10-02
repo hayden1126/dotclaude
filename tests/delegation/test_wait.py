@@ -29,6 +29,9 @@ FINALIZE_STUB = """#!/bin/sh
 printf '%s\\n' "$*" >> "$STUB_ARGV"
 [ -n "$STUB_PIDFILE" ] && echo $$ > "$STUB_PIDFILE"
 [ -n "$STUB_SLEEP" ] && sleep "$STUB_SLEEP"
+if [ -n "$STUB_RELEASE" ]; then
+  while [ ! -e "$STUB_RELEASE" ]; do sleep 0.02; done
+fi
 echo "stub finalized $2"
 if [ -z "$STUB_NO_ROW" ]; then
   printf '{"runner": "codex", "id": "%s", "run_id": "%s", "event": "stop", "exit": %s}\\n' \\
@@ -352,6 +355,16 @@ class Exits(WaitEnv):
         first = self.waiting(p)["waiter_heartbeat"]
         self.until(lambda: self.all_watches()[0]["waiter_heartbeat"] > first, timeout=5)
 
+    def test_resume_moves_the_watch_to_the_resuming_session(self):
+        # A watch a crashed session left must be guarded in the session that re-arms it.
+        job = self.job()
+        p = self.run_("--pid", str(job.pid), "--max", "0.002", CLAUDE_CODE_SESSION_ID="s-old")
+        self.assertEqual(p.returncode, AT_MAX, p.stderr)
+        self.assertEqual(self.only()["session_id"], "s-old")
+        p = self.run_("--resume", self.only()["id"], "--max", "0.002")
+        self.assertEqual(p.returncode, AT_MAX, p.stderr)
+        self.assertEqual(self.only()["session_id"], "s1")
+
     def test_resume_takes_over_and_clears_blocked_at(self):
         job = self.job()
         wid = self.lapsed(job)
@@ -660,27 +673,29 @@ class Codex(WaitEnv):
         self.assertTrue(dc.waiter_alive(w))
         self.finish(p, 0)
 
-    def test_a_second_watch_on_a_run_is_refused_in_the_same_session(self):
+    def test_a_second_watch_on_a_run_is_refused_in_any_session(self):
         codex = self.job()
         self.codex_row("r1", codex.pid)
         p = self.start("--codex", "r1")
         wid = self.waiting(p)["id"]
-        again = self.run_("--codex", "r1")
-        self.assertEqual((again.returncode, again.stderr),
-                         (USAGE, f"wait: watch {wid} already waits on r1: delegation-ledger "
-                                 f"wait --resume {wid}\n"))
-        other = self.run_("--codex", "r1", "--max", "0.002", CLAUDE_CODE_SESSION_ID="s9")
-        self.assertEqual(other.returncode, AT_MAX, other.stderr)
+        refusal = (USAGE, f"wait: watch {wid} already waits on r1: delegation-ledger wait "
+                          f"--resume {wid}\n")
+        for env in ({}, {"CLAUDE_CODE_SESSION_ID": "s9"}):
+            again = self.run_("--codex", "r1", **env)
+            self.assertEqual((again.returncode, again.stderr), refusal, env)
 
     def test_a_beat_that_fails_mid_finalize_still_waits_for_it(self):
+        # The stub finalize holds until the test releases it, which it does only once the
+        # failed heartbeat is in the error log, so the order doesn't depend on timing.
         self.codex_row("r1", DEAD)
-        pidfile = self.path("stub.pid")
-        p = self.start("--codex", "r1", STUB_SLEEP="1", STUB_PIDFILE=pidfile)
+        pidfile, release = self.path("stub.pid"), self.path("release")
+        p = self.start("--codex", "r1", STUB_PIDFILE=pidfile, STUB_RELEASE=release)
         self.until(lambda: os.path.exists(pidfile) and os.path.getsize(pidfile))
         os.chmod(self.watches, 0o500)  # the next heartbeat can't write: an OSError
         self.addCleanup(os.chmod, self.watches, 0o700)
-        self.until(lambda: "PermissionError" in self.err_log(), timeout=5)
+        self.until(lambda: "PermissionError" in self.err_log(), timeout=10)
         os.chmod(self.watches, 0o700)  # so the end can be recorded
+        open(release, "w").close()
         out, _ = self.finish(p, 0)
         self.assertTrue(out.endswith("done: codex run r1 ends\n"), out)
         with open(pidfile) as f:
