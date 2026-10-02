@@ -13,6 +13,7 @@ watches/<id>.json is a long wait that `delegation-ledger wait` records and the w
 Stop hook) reads; the comment above WATCH_STATES documents its fields.
 """
 import contextlib
+import copy
 import datetime
 import fcntl
 import glob
@@ -489,25 +490,32 @@ def codex_stopped(e):
 #   id, session_id, description, created
 #                   set once; session_id is "unknown" when the waiter found no session
 #   condition       what it waits for: {"codex": run_id} alone, or any of "pids" (a list of
-#                   {"pid", "start"}, where start is the procStart seen when the wait began;
-#                   a pid not running then is refused), "file", and "log" with "done" and
-#                   "fail" (regexes) and "stale_min"; watch_verdict reads it
+#                   {"pid", "start", "comm"}: the procStart and command name seen when the
+#                   wait began, since a pid unwatchable then is refused), "file", and "log"
+#                   with "done" and "fail" (regexes) and "stale_min"; watch_verdict reads it
 #   waiter_pid, waiter_start, waiter_heartbeat, poll_s
 #                   the current waiter: its pid and procStart, its last poll (ISO), and the
-#                   seconds between polls; waiter_alive reads them
+#                   seconds between polls; waiter_alive reads them. A waiter heartbeats while it
+#                   runs a codex finalize too
+#   finalizing      {"pid", "start"} of the waiter that started `codex-delegate finalize` for
+#                   a codex watch; absent before. Another waiter doesn't finalize while that
+#                   pid is alive: it waits for the stop row
 #   state           one of WATCH_STATES
 #   blocked_at      when the guard blocked a stop on this lapse (ISO), else null; a waiter
 #                   that takes the watch over, or polls it, clears it
 #   ended           when it left UNRESOLVED (ISO); absent until then
 # open is waiting; acknowledged is a lapse the guard let a stop through on; done, failed and
 # stale are how the waiter saw the condition end (it exits 0, 1, 2); dropped is `wait --drop`.
-# Every change goes through update_watch, under watches/.lock, written atomically. Each wait
-# start prunes temp files a crash left (over a day old) and watches that ended over 7 days ago.
+# Every change goes through update_watch, under watches/.lock, written atomically and only when
+# something changed. Each wait start prunes temp files a crash left (over a day old) and
+# watches that ended over 7 days ago.
 #
 # A codex watch: watch_verdict's "done" means Codex has ended, and unless the run has a stop
 # row, a `codex-delegate finalize` is still owed. So the guard must not record a codex watch as
 # done; it sends the lead to `wait --resume`, whose waiter finalizes and then decides by the
 # stop row's `exit` (0 done, else failed). A stop row with a nonzero exit is failed at once.
+# When nothing can be decided (the run left the ledger; a finalize recorded no stop row),
+# watch_verdict raises Undecidable or the waiter exits 70, and the watch stays open.
 # Known gap until T3: `codex-delegate resume` writes no row until Codex's thread.started, so a
 # `wait --codex` started in that window sees the previous run's stop row and ends at once.
 WATCH_STATES = ("open", "acknowledged", "done", "failed", "stale", "dropped")
@@ -515,6 +523,43 @@ UNRESOLVED = ("open", "acknowledged")  # the states a waiter may take over
 ENDED = ("done", "failed", "stale", "dropped")
 WAIT_POLL_S = 15  # the waiter's default seconds between polls
 PRUNE_TMP_DAYS, PRUNE_ENDED_DAYS = 1, 7
+PF_KTHREAD = 0x00200000  # the per-process flags bit (stat field 9) of a kernel thread
+
+
+class Undecidable(Exception):
+    """A watch's condition can't be decided now (its codex run left the ledger, or a finalize
+    recorded no stop row); nothing is recorded, so the watch stays open for a resume."""
+
+
+def proc_comm(pid):
+    """/proc/<pid>/comm, the process's command name, or None."""
+    try:
+        with open(f"/proc/{int(pid)}/comm") as f:
+            return f.read().strip()
+    except (OSError, TypeError, ValueError):
+        return None
+
+
+def unwatchable(pid):
+    """Why a pid can't be a watch's job, or None. A sandboxed command's pids start at 1, so a
+    pid echoed from one can name, outside, pid 1, a kernel thread or another user's daemon,
+    none of which ends, or nothing at all."""
+    fields = _stat_fields(pid)
+    if fields is None or not pid_alive(pid):
+        return "isn't running here"
+    if int(pid) == 1:
+        return "is the init process"
+    try:
+        kernel = int(fields[6]) & PF_KTHREAD  # field 9, counted from field 3 (state)
+    except (ValueError, IndexError):
+        kernel = 0
+    if kernel:
+        return "is a kernel thread"
+    try:
+        owner = os.stat(f"/proc/{int(pid)}").st_uid
+    except OSError:
+        return "isn't running here"
+    return None if owner == os.getuid() else "belongs to another user"
 
 
 def watch_path(wid):
@@ -538,13 +583,16 @@ def read_watch(wid):
 
 def update_watch(wid, fn):
     """Read-modify-write a watch under watches/.lock, as update_agent_state does: fn gets the
-    current dict ({} for a new watch) and changes it in place or returns a new one."""
+    current dict ({} for a new watch) and changes it in place or returns a new one. The file
+    is written only when fn changed it, so a no-op keeps its mtime (the prune clock)."""
     path = watch_path(wid)
     with _lock(watches_dir()):
         cur = read_watch(wid) or {}
+        before = copy.deepcopy(cur)
         new = fn(cur)
         new = cur if new is None else new
-        write_json(path, new)
+        if new != before:
+            write_json(path, new)
     return new
 
 
@@ -581,13 +629,19 @@ def all_watches():
     return sorted(out, key=lambda w: str(w.get("created")))
 
 
+def _pid_names(pids):
+    """"pid 12 (sleep)" or "pids 12 (sleep), 13 (make)", so a wrong pid shows."""
+    names = ", ".join(f"{p.get('pid')} ({p['comm']})" if p.get("comm") else str(p.get("pid"))
+                      for p in pids)
+    return f"pid {names}" if len(pids) == 1 else f"pids {names}"
+
+
 def _clauses(c):
     """(key, clause) for each part of a condition that isn't a codex one."""
     out = []
-    pids = [str(p.get("pid")) for p in c.get("pids") or []]
+    pids = c.get("pids") or []
     if pids:
-        out.append(("pids", f"pid {pids[0]} exits" if len(pids) == 1 else
-                    f"pids {', '.join(pids)} exit"))
+        out.append(("pids", f"{_pid_names(pids)} {'exits' if len(pids) == 1 else 'exit'}"))
     if c.get("file"):
         out.append(("file", f"{c['file']} exists"))
     if c.get("done"):
@@ -648,13 +702,15 @@ def watch_verdict(w, cursor=None, now=None):
     on every poll (log_cursor) to read a log incrementally; without one the whole log is read.
     For a codex watch, a stop row decides by its `exit`; with none, done means Codex and its
     wrapper are both gone (a live wrapper writes the stop row itself, and a finalize then would
-    write a second one), and a finalize is still owed: see the comment above WATCH_STATES."""
+    write a second one), and a finalize is still owed: see the comment above WATCH_STATES. A
+    codex run that has left the ledger raises Undecidable."""
     c = w.get("condition") or {}
     now = time.time() if now is None else now
     if "codex" in c:
         e = fold(read_rows()).get(("codex", c["codex"]))
-        if e is None:
-            return "failed", f"codex run {c['codex']} is not in the ledger"
+        if e is None:  # it was there when the wait began
+            raise Undecidable(f"codex run {c['codex']} is no longer in the ledger "
+                              f"({ledger_path()})")
         if e.get("event") == "stop":
             return codex_stopped(e)
         going = pid_alive(e.get("pid")) or pid_alive(e.get("wrapper_pid"))
@@ -674,9 +730,7 @@ def watch_verdict(w, cursor=None, now=None):
     if not unmet:
         return "done", condition_text(c)
     if pids and not running:
-        gone = (f"pid {pids[0]['pid']} exited" if len(pids) == 1 else
-                f"pids {', '.join(str(p['pid']) for p in pids)} exited")
-        return "failed", f"{gone}, but {' and '.join(unmet)} is unmet"
+        return "failed", f"{_pid_names(pids)} exited, but {' and '.join(unmet)} is unmet"
     if c.get("stale_min"):
         try:
             changed = os.path.getmtime(c["log"])

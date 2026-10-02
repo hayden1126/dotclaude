@@ -79,8 +79,9 @@ bare call runs outside the sandbox and is exact; a piped one stays inside and wa
 and its wake-up note then says not to restart it. The waiter records a watch
 (watches/<id>.json; delegation_common documents its fields, which the watch guard reads), polls
 every 15 s and refreshes the watch's heartbeat each time. Every condition given must hold for
-done, and the pids all exiting with another part unmet is failed. A --pid must be running when
-the wait starts. A log line is matched once complete (a last line without a newline, once the
+done, and the pids all exiting with another part unmet is failed. A --pid must be watchable
+when the wait starts: running, this user's, and not pid 1 or a kernel thread (a pid echoed from
+a sandboxed command can name any of those out here), and its command name is recorded. A log line is matched once complete (a last line without a newline, once the
 job is over). --codex stands alone: once Codex and its wrapper are gone, the waiter runs the
 `codex-delegate` beside this script as `finalize <run_id>` unless the run has a stop row, and
 the stop row's exit decides. No option or variable runs a command of the caller's, since the
@@ -91,7 +92,12 @@ running: re-arm with delegation-ledger wait --resume <id> (run_in_background, ti
 blocked_at; --drop marks it dropped. A waiter whose watch was taken over, dropped or deleted
 steps aside at its next poll. Its exit codes:
   0 done; 1 the job failed; 2 the log went stale; 3 this waiter stepped aside; 64 bad usage;
-  70 internal error (traceback in delegation-ledger.err); 75 still running at --max.
+  70 internal error, or nothing could be decided (a codex finalize recorded no stop row, or the
+  run left the ledger), with the watch left open for a --resume and the details in
+  delegation-ledger.err; 75 still running at --max (at most 115 minutes).
+While it finalizes a codex run the waiter keeps its heartbeat, and it marks the watch as
+finalizing, so a waiter that takes over meanwhile waits for that stop row instead of writing
+a second one.
 `watch` and `open` list unresolved watches in a block of their own, printed only when there
 are some. Each wait start prunes ended watches over 7 days old.
 """
@@ -616,10 +622,13 @@ def watch_block(ctx, now, horizon, detail):
         rearm = f"re-arm: delegation-ledger wait --resume {wid}"
         alive = dc.waiter_alive(w, now) if visible else None
         ack = "  (acknowledged)" if w.get("state") == "acknowledged" else ""
+        cond = dc.condition_text(w.get("condition") or {})
         if not detail:
             status = ("waiter not visible in the sandbox" if alive is None else
                       "waiter alive" if alive else f"no live waiter ⚠ {rearm}")
-            lines.append(f"  {wid}  {desc!r}  {status}{ack}")
+            # A --desc hides the condition, so it's shown too: a wrong pid's name stands out.
+            what = "" if w.get("description") == cond else f"  {cond}"
+            lines.append(f"  {wid}  {desc!r}{what}  {status}{ack}")
             continue
         session = ("unknown" if sessions is None else
                    "alive" if w.get("session_id") in sessions else "gone")
@@ -633,8 +642,7 @@ def watch_block(ctx, now, horizon, detail):
                     " min ago")
         except (KeyError, TypeError, ValueError):
             beat = "no heartbeat"
-        lines.append(f"  {wid}  {w.get('state')}  {desc!r}  waiting for "
-                     f"{dc.condition_text(w.get('condition') or {})}")
+        lines.append(f"  {wid}  {w.get('state')}  {desc!r}  waiting for {cond}")
         lines.append(f"         session {w.get('session_id')} {session}, {waiter}, {beat}"
                      + ("" if alive else f"; {rearm}"))
     return ["open watches:"] + lines if lines else []
@@ -1144,8 +1152,9 @@ WAIT_REARM = ("still running: re-arm with delegation-ledger wait --resume {} "
 WAIT_EXITS = {"done": 0, "failed": 1, "stale": 2}  # how the watch's condition ended
 WAIT_ASIDE = 3    # this waiter stepped aside; the watch goes on, or was dropped
 WAIT_USAGE = 64   # EX_USAGE
-WAIT_ERROR = 70   # EX_SOFTWARE: an internal error, its traceback in delegation-ledger.err
+WAIT_ERROR = 70   # EX_SOFTWARE: nothing decided, the watch left open; see delegation-ledger.err
 WAIT_AT_MAX = 75  # EX_TEMPFAIL: still running, so re-arm
+WAIT_MAX_MIN = 115  # --max's ceiling, under the Bash tool's 120-minute cap
 WAIT_EXIT_HELP = """exit codes:
   0   done
   1   the job failed: a --fail match, its pids exited with another condition unmet, or the
@@ -1153,13 +1162,16 @@ WAIT_EXIT_HELP = """exit codes:
   2   the log went stale (--stale)
   3   this waiter stepped aside: a --resume took the watch over, it was dropped, or its file
       is gone; the line printed says which
-  64  bad usage: no condition, an unknown or malformed id, a --pid not running, resuming an
-      ended watch, or a run inside the sandbox
-  70  internal error, its traceback in delegation-ledger.err
+  64  bad usage: no condition, an unknown or malformed id, an unknown codex run, a --pid that
+      isn't watchable (not running, pid 1, a kernel thread, another user's), --max over 115,
+      resuming an ended watch, or a run inside the sandbox
+  70  internal error, or nothing could be decided (a finalize recorded no stop row, the codex
+      run left the ledger): the watch stays open for a --resume; details in
+      delegation-ledger.err
   75  still running at --max: re-arm with the command printed"""
 WAIT_CONDITIONS = ("pid", "file", "log", "done", "fail", "stale", "codex")
 CODEX_DELEGATE = os.path.join(os.path.dirname(os.path.realpath(__file__)), "codex-delegate")
-FINALIZE_TIMEOUT_S = 300  # finalize checks a report and walks rollouts; the cap is 10 min off
+FINALIZE_TIMEOUT_S = 300  # finalize checks a report and walks rollouts; the cap is 5 min off
 
 
 class WaitRefused(Exception):
@@ -1213,11 +1225,12 @@ def wait_condition(args):
     if args.pid:
         cond["pids"] = []
         for pid in dict.fromkeys(args.pid):
-            start = dc.proc_start(pid)
-            if start is None or not dc.pid_alive(pid, start):
-                raise WaitRefused(f"pid {pid} isn't running here; a pid echoed from a sandboxed "
-                                  "command comes from another PID namespace")
-            cond["pids"].append({"pid": pid, "start": start})
+            why = dc.unwatchable(pid)
+            if why:
+                raise WaitRefused(f"pid {pid} {why}; a pid echoed from a sandboxed command "
+                                  "comes from another PID namespace")
+            cond["pids"].append({"pid": pid, "start": dc.proc_start(pid),
+                                 "comm": dc.proc_comm(pid)})
     if args.file:
         cond["file"] = os.path.abspath(args.file)
     if args.log:
@@ -1237,94 +1250,146 @@ def existing_watch(wid):
     return w
 
 
-def finalize(run_id):
-    """Run the `codex-delegate` beside this script as `finalize <run_id>`, a fixed argv, with
-    its output passed on: None when it exits 0, else why it failed."""
-    sys.stdout.flush()
-    try:
-        rc = subprocess.run([CODEX_DELEGATE, "finalize", run_id], stdin=subprocess.DEVNULL,
-                            timeout=FINALIZE_TIMEOUT_S).returncode
-    except (OSError, subprocess.SubprocessError) as ex:
-        return f"codex-delegate finalize {run_id} didn't run ({ex})"
-    return None if rc == 0 else f"codex-delegate finalize {run_id} exited {rc}"
-
-
 def stop_row(run_id):
     """The folded codex entry when its latest row is a stop, else None."""
     e = dc.fold(dc.read_rows()).get(("codex", run_id)) or {}
     return e if e.get("event") == "stop" else None
 
 
-def codex_end(run_id):
-    """(verdict, why) once a codex run has ended: finalize it unless it has a stop row, then
-    decide by the stop row's exit."""
-    e, failure = stop_row(run_id), None
-    if e is None:
-        failure = finalize(run_id)
-        e = stop_row(run_id)
-    if e is not None:
-        return dc.codex_stopped(e)
-    return "failed", failure or f"codex-delegate finalize {run_id} recorded no stop row"
+class Waiter:
+    """This process as one watch's waiter: it takes the watch over, polls its condition with a
+    heartbeat, and records how it ended. Each write checks under the lock that it still owns
+    the watch, and steps aside (StepAside) when it doesn't."""
 
+    def __init__(self, wid, poll):
+        self.wid, self.poll, self.me = wid, poll, os.getpid()
+        self.start = dc.proc_start(self.me)
 
-def end_watch(w, verdict, why, own):
-    """Record how the watch ended, print it, and return the exit code."""
-    if verdict == "done" and "codex" in w["condition"]:
-        verdict, why = codex_end(w["condition"]["codex"])
-
-    def record(s):
-        own(s)
-        s.update(state=verdict, ended=dc.now_iso())
-    dc.update_watch(w["id"], record)
-    print(f"watch {w['id']} {verdict}: {why}")
-    return WAIT_EXITS[verdict]
-
-
-def run_waiter(wid, poll, max_min, new=None):
-    """Become the watch's waiter (creating it from `new`), then poll until its condition ends,
-    max_min passes, or this waiter has to step aside."""
-    me = os.getpid()
-    deadline = time.monotonic() + max_min * 60
-
-    def take(w):
-        if new is not None:
-            w.update(new)
-        elif not w:
-            raise WaitRefused(f"no watch {wid!r}")
-        elif w.get("state") not in dc.UNRESOLVED:
-            raise WaitRefused(f"watch {wid} is {w.get('state')}; start a new wait")
-        w.update(waiter_pid=me, waiter_start=dc.proc_start(me), waiter_heartbeat=dc.now_iso(),
-                 poll_s=poll, state="open", blocked_at=None)
-
-    def own(w):
-        """Raise StepAside unless this waiter still owns the watch; checked under the lock."""
+    def own(self, w):
+        """Raise StepAside unless this waiter still owns the watch."""
         if not w:
-            raise StepAside(f"watch {wid}'s file is gone, so there is nothing left to wait on; "
-                            "this waiter stepped aside")
+            raise StepAside(f"watch {self.wid}'s file is gone, so there is nothing left to wait "
+                            "on; this waiter stepped aside")
         if w.get("state") == "dropped":
-            raise StepAside(f"watch {wid} was dropped; this waiter stepped aside")
-        if w.get("waiter_pid") != me:
-            raise StepAside(f"watch {wid} was taken over by pid {w.get('waiter_pid')} (a "
+            raise StepAside(f"watch {self.wid} was dropped; this waiter stepped aside")
+        if w.get("waiter_pid") != self.me:
+            raise StepAside(f"watch {self.wid} was taken over by pid {w.get('waiter_pid')} (a "
                             "--resume); this waiter stepped aside, and the watch goes on")
 
-    def beat(w):
-        own(w)
-        # A waiter that polls is live, so a lapse the guard saw meanwhile is over.
-        if w.get("state") in dc.UNRESOLVED:
-            w.update(waiter_heartbeat=dc.now_iso(), state="open", blocked_at=None)
+    def take(self, new):
+        """Become the watch's waiter, creating it from `new` when given."""
+        def take(w):
+            if new is not None:
+                w.update(new)
+            elif not w:
+                raise WaitRefused(f"no watch {self.wid!r}")
+            elif w.get("state") not in dc.UNRESOLVED:
+                raise WaitRefused(f"watch {self.wid} is {w.get('state')}; start a new wait")
+            w.update(waiter_pid=self.me, waiter_start=self.start, poll_s=self.poll,
+                     waiter_heartbeat=dc.now_iso(), state="open", blocked_at=None)
+        return dc.update_watch(self.wid, take)
 
-    w = dc.update_watch(wid, take)
-    cursor = dc.log_cursor()
-    while True:
-        verdict, why = dc.watch_verdict(w, cursor)
-        if verdict:
-            return end_watch(w, verdict, why, own)
-        left = deadline - time.monotonic()
-        if left <= 0:
-            print(WAIT_REARM.format(wid))
-            return WAIT_AT_MAX
-        time.sleep(min(poll, left))
-        w = dc.update_watch(wid, beat)
+    def beat(self):
+        """Refresh the heartbeat. A waiter that polls is live, so a lapse the guard saw meanwhile
+        is over."""
+        def beat(w):
+            self.own(w)
+            if w.get("state") in dc.UNRESOLVED:
+                w.update(waiter_heartbeat=dc.now_iso(), state="open", blocked_at=None)
+        return dc.update_watch(self.wid, beat)
+
+    def run(self, max_min, new=None):
+        """Poll until the condition ends or max_min passes; the exit code."""
+        deadline = time.monotonic() + max_min * 60
+        w = self.take(new)
+        cursor = dc.log_cursor()
+        while True:
+            verdict, why = dc.watch_verdict(w, cursor)
+            if verdict == "done" and "codex" in w["condition"]:
+                verdict, why = self.codex_end(w["condition"]["codex"])
+            if verdict:
+                return self.record(verdict, why)
+            left = deadline - time.monotonic()
+            if left <= 0:
+                print(WAIT_REARM.format(self.wid))
+                return WAIT_AT_MAX
+            time.sleep(min(self.poll, left))
+            w = self.beat()
+
+    def codex_end(self, run_id):
+        """(verdict, why) once a codex run has ended: finalize it unless it has a stop row, then
+        decide by the stop row's exit. (None, why) while another live waiter finalizes it."""
+        e = stop_row(run_id)
+        if e is None:
+            if not self.claim_finalize():
+                return None, f"codex run {run_id} is being finalized by another waiter"
+            failure = self.finalize(run_id)
+            e = stop_row(run_id)
+            if e is None:
+                raise dc.Undecidable(failure or f"codex-delegate finalize {run_id} exited 0 "
+                                     "but recorded no stop row")
+        return dc.codex_stopped(e)
+
+    def claim_finalize(self):
+        """Mark this waiter as the watch's finalizer, after checking under the lock that it
+        still owns the watch; False when another live waiter is finalizing it."""
+        claimed = False
+
+        def claim(w):
+            nonlocal claimed
+            self.own(w)
+            other = w.get("finalizing") or {}
+            if other.get("pid") != self.me and dc.pid_alive(other.get("pid"),
+                                                            other.get("start")):
+                return
+            w.update(finalizing={"pid": self.me, "start": self.start},
+                     waiter_heartbeat=dc.now_iso())
+            claimed = True
+        dc.update_watch(self.wid, claim)
+        return claimed
+
+    def finalize(self, run_id):
+        """Run the codex-delegate beside this script as `finalize <run_id>`, a fixed argv with
+        its output passed on, heartbeating every poll while it runs: None when it exits 0, else
+        why not. Taken over or dropped meanwhile, it lets finalize finish (the other waiter
+        reads the stop row it writes), then steps aside."""
+        sys.stdout.flush()
+        try:
+            proc = subprocess.Popen([CODEX_DELEGATE, "finalize", run_id],
+                                    stdin=subprocess.DEVNULL)
+        except OSError as ex:
+            return f"codex-delegate finalize {run_id} didn't run ({ex})"
+        deadline, aside, rc = time.monotonic() + FINALIZE_TIMEOUT_S, None, None
+        while rc is None:
+            try:
+                rc = proc.wait(timeout=max(0.0, min(self.poll, deadline - time.monotonic())))
+                break
+            except subprocess.TimeoutExpired:
+                pass
+            if time.monotonic() >= deadline:
+                proc.kill()
+                proc.wait()
+                if aside is None:
+                    return (f"codex-delegate finalize {run_id} was stopped after "
+                            f"{FINALIZE_TIMEOUT_S} s")
+                break
+            if aside is None:
+                try:
+                    self.beat()
+                except StepAside as ex:
+                    aside = ex
+        if aside is not None:
+            raise aside
+        return None if rc == 0 else f"codex-delegate finalize {run_id} exited {rc}"
+
+    def record(self, verdict, why):
+        """Record how the watch ended, print it, and return the exit code."""
+        def record(w):
+            self.own(w)
+            w.update(state=verdict, ended=dc.now_iso())
+        dc.update_watch(self.wid, record)
+        print(f"watch {self.wid} {verdict}: {why}")
+        return WAIT_EXITS[verdict]
 
 
 def drop_watch(wid):
@@ -1332,7 +1397,8 @@ def drop_watch(wid):
     prior = None
 
     def drop(w):
-        # Decided under the lock, so a waiter that just ended the watch keeps its verdict.
+        # Decided under the lock, so a waiter that just ended the watch keeps its verdict, and
+        # an ended watch isn't rewritten (update_watch skips a no-op), keeping its prune clock.
         nonlocal prior
         if not w:
             raise WaitRefused(f"no watch {wid!r}")
@@ -1349,9 +1415,13 @@ def cmd_wait(args):
     if not dc.pids_visible():
         print(WAIT_SANDBOXED, file=sys.stderr)
         return WAIT_USAGE
+    wid = args.resume
     try:
         if not (dc.is_positive(args.max) and dc.is_positive(args.poll)):
             raise WaitRefused("--max and --poll take positive numbers")
+        if args.max > WAIT_MAX_MIN:
+            raise WaitRefused(f"--max must be at most {WAIT_MAX_MIN}, under the Bash tool's "
+                              "120-minute cap")
         given = args.resume if args.resume is not None else args.drop
         if given is not None and (args.desc is not None or any(
                 getattr(args, o) is not None for o in WAIT_CONDITIONS)):
@@ -1361,10 +1431,10 @@ def cmd_wait(args):
         if args.drop is not None:
             return drop_watch(args.drop)
         if args.resume is not None:
-            existing_watch(args.resume)
-            return run_waiter(args.resume, args.poll, args.max)
+            existing_watch(wid)
+            return Waiter(wid, args.poll).run(args.max)
         wid = "w-" + time.strftime("%Y%m%dT%H%M%S") + "-" + secrets.token_hex(3)
-        return run_waiter(wid, args.poll, args.max, new={
+        return Waiter(wid, args.poll).run(args.max, new={
             "id": wid, "session_id": wait_session(), "condition": cond,
             "description": args.desc or dc.condition_text(cond), "created": dc.now_iso()})
     except WaitRefused as ex:
@@ -1373,6 +1443,11 @@ def cmd_wait(args):
     except StepAside as ex:
         print(ex)
         return WAIT_ASIDE
+    except dc.Undecidable as ex:
+        checks().log_error(f"wait {wid}: {ex}; the watch stays open")
+        print(f"wait: {ex}; watch {wid} stays open, so `delegation-ledger wait --resume {wid}` "
+              "tries again", file=sys.stderr)
+        return WAIT_ERROR
     except Exception as ex:  # noqa: BLE001  logged, and the watch stays for a resume
         checks().log_error()
         print(f"wait: {type(ex).__name__}: {ex} (traceback in "
@@ -1447,7 +1522,8 @@ def main(argv=None):
                          "row, and exit by the stop row's exit")
     wt.add_argument("--desc", help="what the watch is for (default: its condition)")
     wt.add_argument("--max", type=float, default=110, metavar="MIN",
-                    help="exit 75 with the re-arm command after this long (default 110)")
+                    help="exit 75 with the re-arm command after this long (default 110, at "
+                         f"most {WAIT_MAX_MIN})")
     wt.add_argument("--poll", type=float, default=dc.WAIT_POLL_S, help=argparse.SUPPRESS)
     again = wt.add_mutually_exclusive_group()
     again.add_argument("--resume", metavar="ID", help="take over this watch and wait on")
