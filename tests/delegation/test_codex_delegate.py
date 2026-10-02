@@ -361,6 +361,15 @@ class FullRun(unittest.TestCase):
         proc.stdout.close()
         self.assertEqual(self.watches()[wid]["state"], "done")
 
+    def test_only_a_run_with_no_claude_process_says_the_guard_wont_see_it(self):
+        note = "codex-delegate: no Claude Code session: the watch guard won't see this watch"
+        p = self.run_ok(CLAUDE_CODE_SESSION_ID="")  # a process: its guard adopts the watch
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertNotIn(note, p.stderr)
+        p = self.run_ok(CLAUDE_CODE_SESSION_ID="", CLAUDE_PID="")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn(note, p.stderr)
+
     def test_max_wait_exits_75_and_a_resumed_waiter_finalizes_the_run(self):
         p = self.run_ok("--max-wait", "0.02", FAKE_SLEEP="5")
         self.assertEqual(p.returncode, 75, p.stderr)

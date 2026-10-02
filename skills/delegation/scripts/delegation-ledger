@@ -1231,17 +1231,19 @@ def existing_watch(wid):
 
 def same_watch(identity, cond):
     """The caller's unresolved watch on exactly this condition, or None. `identity` is the
-    caller's claude_identity(). The watch is in its session, or one its Claude process left
-    under an earlier session id (dc.left_by_clear), since a rerun after /clear may come before
-    the guard's first stop adopts it. A codex condition is left to the codex refusal (one watch
-    per run), and a caller with no session has none."""
+    caller's claude_identity(). The watch is in its session, or one its Claude process left in
+    a session that isn't live (dc.left_by_clear): an earlier session id, since a rerun after
+    /clear may come before the guard's first stop adopts it, or "unknown", which matches by
+    the process alone. A codex condition is left to the codex refusal (one watch per run), and
+    a caller with neither a session nor a process has none."""
     me, session = identity
-    if "codex" in cond or session == "unknown":
+    if "codex" in cond or (session == "unknown" and me is None):
         return None
     live = dc.live_sessions() if me is not None else {}
     return next((w for w in dc.all_watches() if w.get("state") in dc.UNRESOLVED
                  and w.get("condition") == cond
-                 and (w.get("session_id") == session or dc.left_by_clear(w, me, live))), None)
+                 and ((session != "unknown" and w.get("session_id") == session)
+                      or dc.left_by_clear(w, me, live))), None)
 
 
 def stop_row(run_id):
@@ -1401,7 +1403,7 @@ def cmd_wait(args):
             return Waiter(same["id"], args.poll, identity).run(
                 args.max, taken=f"watch {same['id']} already waits on this; taking it over")
         wid = dc.new_watch_id()
-        if identity[1] == "unknown":
+        if identity[0] is None:  # with a process, its guard adopts even an "unknown" session
             print("no Claude Code session: the watch guard won't see this watch",
                   file=sys.stderr, flush=True)
         return Waiter(wid, args.poll, identity).run(args.max, new={

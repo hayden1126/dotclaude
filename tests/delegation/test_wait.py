@@ -569,10 +569,39 @@ class Exits(WaitEnv):
     def test_a_wait_with_no_session_says_the_guard_wont_see_it(self):
         target = self.path("out")
         open(target, "w").close()
-        p = self.run_("--file", target, CLAUDE_CODE_SESSION_ID="")
+        p = self.run_("--file", target, CLAUDE_CODE_SESSION_ID="", CLAUDE_PID="")
         self.assertEqual((p.returncode, p.stderr),
                          (0, "no Claude Code session: the watch guard won't see this watch\n"))
         self.assertEqual(self.only()["session_id"], "unknown")
+        self.assertNotIn("claude_pid", self.only())
+
+    def test_a_process_with_no_session_says_nothing(self):
+        # Its guard adopts the watch by the process: "unknown" is never live (left_by_clear).
+        target = self.path("out")
+        open(target, "w").close()
+        p = self.run_("--file", target, CLAUDE_CODE_SESSION_ID="")
+        self.assertEqual((p.returncode, p.stderr), (0, ""))
+        self.assertEqual((self.only()["session_id"], self.only()["claude_pid"]),
+                         ("unknown", os.getpid()))
+
+    def test_a_rerun_with_no_session_finds_its_watch_by_the_process(self):
+        job = self.job()
+        first = self.run_("--pid", str(job.pid), "--max", "0.002", CLAUDE_CODE_SESSION_ID="")
+        self.assertEqual(first.returncode, AT_MAX, first.stderr)
+        wid = self.only()["id"]
+        p = self.run_("--pid", str(job.pid), "--max", "0.002", CLAUDE_CODE_SESSION_ID="")
+        self.assertEqual((p.returncode, p.stdout),
+                         (AT_MAX, f"watch {wid} already waits on this; taking it over\n"
+                                  + REARM.format(wid)))
+        self.assertEqual(self.only()["id"], wid)
+
+    def test_a_rerun_with_neither_session_nor_process_makes_its_own_watch(self):
+        job = self.job()
+        none = {"CLAUDE_CODE_SESSION_ID": "", "CLAUDE_PID": ""}
+        for _ in range(2):
+            self.assertEqual(self.run_("--pid", str(job.pid), "--max", "0.002",
+                                       **none).returncode, AT_MAX)
+        self.assertEqual(len(self.all_watches()), 2)
 
     def test_a_stale_waiter_is_taken_over_and_then_steps_aside(self):
         job = self.job()

@@ -776,15 +776,18 @@ the fix is enforcement. `PLAN.md` has the design history and the options weighed
     so it is taken over, and it steps aside (exit 3) at its next beat.
   - A new wait whose condition equals an unresolved watch's takes that watch over and says so,
     once it has, so a rerun after a kill doesn't leave the guard pointing at a second watch. The
-    watch is the caller's: in its session, or left by its Claude process under a session id that
-    is no longer live (a rerun after `/clear`, before the guard's first stop adopts it). A codex
-    condition keeps its refusal instead.
+    watch is the caller's: in its session, or left by its Claude process in a session that isn't
+    live. That covers a rerun after `/clear`, before the guard's first stop adopts it, and a
+    caller whose session is `unknown`, matched by its process alone. A caller with neither gets
+    a new watch. A codex condition keeps its refusal instead.
   - It records the Claude Code process its exit notifies (`claude_pid` with its procStart) and
     that process's session, both from the parent walk in the known gaps. A waiter outside Claude
-    Code records no process, dropping the last waiter's, and the session `unknown`, and says the
-    guard won't see the watch. `/clear` keeps the process but starts a new session id,
-    and the guard adopts the watch into the new session (below). When it ends, it records
-    `reported`: true while that process runs, else false.
+    Code records no process, dropping the last waiter's. A new wait with no process found
+    records the session `unknown` and says the guard won't see the watch. One with a process but
+    no session found records `unknown` and says nothing, since that process's guard adopts the
+    watch by the process (`unknown` is never live). `/clear` keeps the process but starts a new
+    session id, and the guard adopts the watch into the new session (below). When it ends, it
+    records `reported`: true while that process runs, else false.
   - It refuses to run sandboxed, where its pids would belong to another PID namespace. It refuses
     a `--pid` that is pid 1, a kernel thread, another user's, or not running. It refuses a second
     watch on a codex run, naming the existing watch's `--resume` when that watch's waiter is dead
