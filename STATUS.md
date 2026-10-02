@@ -29,14 +29,10 @@ stored here).
   history was deliberately left as-is (Hayden's call).
 
 ## In flight
-- **The delegation write-up: the post is drafted** (2026-10-02, range `a31b738..0f3f4b7`).
-  - **Where it is:** `docs/prose-is-not-a-permission.md`, plus `docs/images/delegation-layers.svg`
-    and its `.png`, on `docs/delegation-post`.
-  - **Its base:** that branch is stacked on `docs/scrub-private-names` (`7ed72e9`). That commit
-    scrubs private names from `docs/delegation.md` and corrects its general-purpose numbers.
-  - **Derive the push and PR state:** `git status -sb` and `gh pr list`.
-  - **Merge both with merge commits, scrub first.** The post's code links pin to `7ed72e9`, and a
-    squash would drop it from `main`.
+- **The delegation post: merged, not yet on Medium** (PRs #58 and #59, range `a31b738..8ba422c`).
+  `docs/prose-is-not-a-permission.md` and `docs/images/delegation-layers.svg` (with its `.png`)
+  are on `main`. Its code links pin to `7ed72e9` (#58), which is already on `main`, so a later
+  edit to the post can merge any way.
   - **Before publishing on Medium:**
     - Hayden reads the post;
     - run SHAPE.md §6's grep on it;
