@@ -1115,6 +1115,20 @@ class ClaudeProcess(unittest.TestCase):
             self.assertTrue(dc.pids_visible())  # only stale: a live Claude process is above
 
 
+class WaiterIdentity(unittest.TestCase):
+    def test_a_waiter_records_the_identity_it_was_given_without_walking_again(self):
+        # The command walks once (claude_identity), so the process and session come from the
+        # same walk; take() mustn't walk a second time.
+        with tempfile.TemporaryDirectory() as d, \
+                mock.patch.dict(os.environ, {"XDG_STATE_HOME": d}), \
+                mock.patch.object(dc, "claude_identity", side_effect=AssertionError("walked")):
+            waiter = dc.Waiter("w-1", 15, ((4321, 99), "s9"))
+            waiter.take({"id": "w-1", "session_id": "s9", "condition": {"file": "/x"},
+                         "created": dc.now_iso(), "description": "x"})
+            w = dc.read_watch("w-1")
+        self.assertEqual((w["session_id"], w["claude_pid"], w["claude_start"]), ("s9", 4321, 99))
+
+
 class Views(WaitEnv):
     def test_open_watches_print_in_their_own_block(self):
         wid = self.lapsed(self.job())

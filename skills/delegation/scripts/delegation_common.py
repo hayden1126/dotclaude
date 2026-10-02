@@ -1017,11 +1017,6 @@ def claude_identity():
     return (env_pid, proc_start(env_pid)), env_sid or "unknown"
 
 
-def wait_session():
-    """The session a watch belongs to (claude_identity), or "unknown"."""
-    return claude_identity()[1]
-
-
 def claude_process():
     """(pid, procStart) of the Claude Code process this command runs under (claude_identity),
     or None."""
@@ -1101,10 +1096,13 @@ class Waiter:
     """This process as one watch's waiter: it takes the watch over, heartbeats it, and records
     how it ended. Each write checks under the lock that it still owns the watch, and steps aside
     (StepAside) when it doesn't. `delegation-ledger wait` polls a condition with it, and a
-    codex-delegate wrapper is the waiter of its own run's watch."""
+    codex-delegate wrapper is the waiter of its own run's watch. `identity` is
+    claude_identity(), found once per command, so the watch's process and session come from
+    the same walk."""
 
-    def __init__(self, wid, poll, session):
-        self.wid, self.poll, self.session, self.me = wid, poll, session, os.getpid()
+    def __init__(self, wid, poll, identity):
+        self.wid, self.poll, self.me = wid, poll, os.getpid()
+        self.claude, self.session = identity
         self.start = proc_start(self.me)
 
     def own(self, w):
@@ -1156,9 +1154,8 @@ class Waiter:
                 w["session_id"] = self.session
             # The process this waiter's exit notifies, so its guard adopts the watch after a
             # /clear; none outside Claude Code, where the exit reaches whoever ran it.
-            claude = claude_process()
-            if claude is not None:
-                w.update(claude_pid=claude[0], claude_start=claude[1])
+            if self.claude is not None:
+                w.update(claude_pid=self.claude[0], claude_start=self.claude[1])
             else:
                 w.pop("claude_pid", None)
                 w.pop("claude_start", None)

@@ -263,17 +263,17 @@ def claim_watch(run_id, take_over, poll):
         print(SANDBOXED, file=sys.stderr, flush=True)
         return None
     dc.prune_watches()
-    session = dc.wait_session()
+    identity = dc.claude_identity()  # one walk: the watch's process and session agree
     w = dc.codex_watch(run_id) if take_over else None
-    waiter = dc.Waiter(w["id"] if w else dc.new_watch_id(), poll, session)
-    new = None if w else {"id": waiter.wid, "session_id": session,
+    waiter = dc.Waiter(w["id"] if w else dc.new_watch_id(), poll, identity)
+    new = None if w else {"id": waiter.wid, "session_id": identity[1],
                           "condition": {"codex": run_id}, "created": dc.now_iso(),
                           "description": dc.condition_text({"codex": run_id})}
     try:
         waiter.take(new)
     except dc.WaitRefused as ex:
         die(str(ex))
-    if session == "unknown":
+    if identity[1] == "unknown":
         print("codex-delegate: no Claude Code session: the watch guard won't see this watch",
               file=sys.stderr, flush=True)
     return waiter
