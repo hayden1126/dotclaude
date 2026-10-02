@@ -1,6 +1,8 @@
 # PLAN: re-arm long background waits (the watch guard)
 
-> Written 2026-10-02 for a fresh implementer. The planner is not the implementer.
+> Written 2026-10-02 and revised the same day after the T0 probes. It's built in the session that
+> planned it, so the planner isn't the implementer: a `writer` builds each task in a worktree, a
+> fresh `reviewer` checks each diff, and the lead runs the suites and merges.
 
 ## Approach
 
@@ -8,11 +10,12 @@
 - A Bash command run with `run_in_background` is stopped at its timeout (30 minutes by default,
   2 hours at most), and Claude Code then wakes the agent once. A `Monitor` watch stops at 30
   minutes. Both specs come from the tool descriptions.
-- On 2026-10-02 a main-thread agent watching a long detached job hit the 2-hour cap. It read "the
-  longest allowed" as the end of the watch and ended its turn. Nothing woke it when the job
-  finished.
-- Monitor's spec says to re-arm at expiry. The Bash spec doesn't, so nothing in the agent's view
-  told it to.
+- On 2026-10-02 a main-thread agent watching a long detached job hit the 2-hour cap and ended its
+  turn. Nothing woke it when the job finished.
+- **It was told to stop** (probe P-b). The wake-up notification says: "If the work in progress
+  still needs it, start it again with `run_in_background` and a longer `timeout`. If it already
+  had the longest `timeout` allowed, do not restart it." At the 2-hour cap, the agent followed
+  that note.
 
 **The same gap in dotclaude's own Codex flow.**
 - SKILL §5 says to launch `codex-delegate run` with `run_in_background`, and that "the exit
@@ -23,18 +26,22 @@
 
 **The fix is enforcement, not prose.** Waiting is liveness, which the delegation design's rule
 puts on the machine. The pieces:
-1. A waiter, `delegation-ledger wait`:
+1. **A waiter, `delegation-ledger wait`:**
    - it records a *watch*;
-   - it exits before the cap with the exact re-arm command;
+   - it exits before the cap with the exact re-arm command, so it never gets the "do not
+     restart" note;
    - it runs outside the sandbox (the ledger is already in `excludedCommands`), because every
      sandboxed command gets its own PID namespace and can't see processes started elsewhere.
-2. A main-thread Stop hook, the *watch guard*. It blocks a turn from ending while one of the
-   session's watches has lapsed: the condition is unmet and no waiter is alive.
-3. `codex-delegate` records its own watch.
-4. An allow rule, so a re-arm never stops at a permission prompt.
+2. **A main-thread Stop hook, the *watch guard*.** It blocks a turn from ending in two cases:
+   - one of the session's watches has lapsed (its condition is unmet and no waiter is alive);
+   - a background command was killed at its time limit, even with no watch recorded (the *kill
+     catch*). This covers the original failure, where no waiter was used.
+3. **`codex-delegate` records its own watch**, and it stops waiting before the cap.
+4. **An allow rule**, so a re-arm never stops at a permission prompt.
 
 **Why C over the alternatives** (evaluated 2026-10-02 against every situation found):
-- **Prose alone (A)** relies on the judgment that already failed.
+- **Prose alone (A)** relies on the judgment that already failed, and the notification's own
+  prose points the other way.
 - **A waiter with no hook (B)** improves the odds, but it still asks.
 - **A `CronCreate` heartbeat (D)** is rejected:
   - its jobs live only in the session, so a restart loses them;
@@ -43,14 +50,19 @@ puts on the machine. The pieces:
   - a forgotten job fires for 7 days.
 - **D adds nothing C lacks.** Every way a waiter can end wakes the agent: done, failed, at the cap,
   or killed. The stop that follows runs the guard.
+- **Unexplored:** a command hook with `async: true` and `asyncRewake` "runs in the background and
+  wakes Claude on exit code 2" (the hooks reference). Its time limit and restart behavior are
+  unknown. It is noted here, not pursued.
 
 **Decisions taken:**
 - **Option C:** Hayden chose it.
-- **How hard the guard pushes: block once per lapse.** This was recommended; Hayden deferred to the
-  evaluation.
+- **The kill catch:** Hayden chose it over watches only and over a launch-time warning.
+- **How hard the guard pushes: block once per lapse, and once per killed task.**
   - It blocks the first stop with the re-arm command.
-  - When Claude Code sets `stop_hook_active` on the next stop, the guard lets it through, warns,
-    and records the lapse as acknowledged.
+  - The next stop goes through, with a `systemMessage` warning, and the lapse is recorded as
+    acknowledged.
+  - The guard decides by its own record (`blocked_at`, under a lock), not by `stop_hook_active`.
+    So a hook registered twice can't loop, and a block from another hook can't swallow this one.
   - Blocking until a drop would wedge the session on a broken waiter, or on a re-arm stuck at a
     permission prompt.
 
@@ -60,141 +72,227 @@ puts on the machine. The pieces:
 - Teammates.
 
 **Reuse:**
-- the ledger's state dir and helpers (`skills/delegation/scripts/delegation_common.py`);
-- the session-from-pid rule that `delegation-ledger open` uses (`~/.claude/sessions/<pid>.json`
-  plus `/proc`);
-- `codex-delegate status` for a Codex run's state;
-- the live harness, `tests/delegation/run.py`.
+- `skills/delegation/scripts/delegation_common.py`:
+  - `state_dir`, `pid_alive`, `proc_start`, `pids_visible`, `fold`, `read_rows`, `codex_state`;
+  - `update_agent_state`'s mkstemp plus `os.replace` pattern, for a new `write_json`;
+  - `_agent_path`'s basename guard.
+- `delegation-ledger`:
+  - its argparse layout (`sub.add_parser`, `set_defaults(fn=cmd_x)`, the docstring usage block);
+  - `live_sessions()`, for the sessions-file fields.
+- `delegation_checks.log_error`, which appends to `delegation-ledger.err`.
+- `report-check`, as the template for a Stop script (`decide` plus a fail-open `main`).
+- `delegation_checks.evaluate` and `render`, for the session-start line.
+- The live harness, `tests/delegation/run.py`.
 
 ## Tasks (bite-sized, ordered, independently verifiable)
 
-### T0: Probe the assumptions C rests on (a gate)
-- Files: none committed. Results go in `docs/delegation.md`'s verified facts, dated, with the
-  Claude Code version.
-- Change: four probes.
-  - **P-a.** In an interactive session (not `-p`, whose handling of background notifications is
-    unverified), install a temporary Stop hook that logs its payload and blocks once while a marker
-    file exists. Run `sleep 20` with `run_in_background`. Check:
-    - the hook fires on the turn the completion notice starts;
-    - `{"decision": "block", "reason": ...}` makes the agent continue;
-    - the next stop carries `stop_hook_active: true`.
-
-    Record the payload's fields (`session_id`, `transcript_path`, `stop_hook_active`).
-  - **P-b.** Run `sleep 60` with `run_in_background` and `timeout: 15000`. Record what the agent
-    sees when the tool stops it (status and text).
-  - **P-c.** With `Bash(delegation-ledger wait *)` in `permissions.allow`, check that the excluded
-    command runs without a prompt in default mode. Note auto mode's behavior too.
-  - **P-d.** Check whether Bash commands get a session-id env var. If not, the waiter resolves its
-    session through its ancestor pids.
-- Verify: each probe's result is written down. **If P-a fails, stop and tell Hayden.** The fallback
-  is B plus a session-start notice, and Hayden decides.
-- Depends on: none.
+### T0: Probe the assumptions C rests on (done 2026-10-02, Claude Code 2.1.287)
+All of these ran in an interactive session with a temporary Stop hook in the project's
+`.claude/settings.local.json`, which was removed afterward. Hook edits load live, as the
+settings docs say.
+- **P-a, passed.** The Stop hook fires on a turn that a background notification started.
+  `{"decision": "block", "reason": ...}` keeps that turn going, and the reason arrives as a
+  system reminder. The stop after the block carries `stop_hook_active: true`.
+- **The Stop payload's keys:** `background_tasks`, `cwd`, `effort`, `hook_event_name`,
+  `last_assistant_message`, `permission_mode`, `prompt_id`, `scratchpad_dir`, `session_crons`,
+  `session_id`, `stop_hook_active`, `transcript_path`. There is no `turn_number` or
+  `had_tool_use`, although the docs list them.
+- **`background_tasks`** lists running tasks only, each with `id`, `type`, `status` and
+  `description`, plus `command` for a shell task. A killed or finished task drops out, so the
+  list can't show a kill. It also holds stale teammates from earlier in the session.
+- **P-b, done.** A command stopped at its `timeout` gets a notification with `status: killed`,
+  the summary "Background command \"<description>\" was stopped after reaching its background
+  time limit", and the note quoted under the gap.
+- **P-e, passed.** At the stop of the turn the kill notice started, the notice is already in
+  the transcript. It's an entry with `type: "user"` and `origin: {"kind": "task-notification",
+  "producer": "session-task"}`, holding the `<task-id>`, `<status>killed</status>` and the
+  summary. A `queue-operation` entry sits beside it.
+- **P-c, answered by the docs.**
+  - "An excluded command goes through the regular permission flow", and an allow rule covers it.
+  - Auto mode keeps a narrow rule like `Bash(delegation-ledger wait *)` and sends the rest to its
+    classifier.
+  - `$(...)`, `cd` or a redirect keeps a call sandboxed, so the waiter must be launched bare.
+  - T4 checks the rule live.
+- **P-d, done.** `CLAUDE_CODE_SESSION_ID` is set to the session id in Bash, inside the sandbox
+  and outside it. `CLAUDE_PID` is set in both, too.
 
 ### T1: `delegation-ledger wait`
-- Files: `skills/delegation/scripts/delegation-ledger` (a new `wait` subcommand), and
-  `tests/delegation/test_wait.py`.
-- **Watch file:** `<ledger state>/watches/<id>.json` holds:
+- **Files:**
+  - `skills/delegation/scripts/delegation-ledger`: a new `wait` subcommand and its usage line;
+  - `skills/delegation/scripts/delegation_common.py`: a new `write_json(path, obj)`;
+  - `tests/delegation/test_wait.py`.
+- **The watch file**, at `<ledger state>/watches/<id>.json`, holds:
   - `id`, `session_id`, `description`, `condition`, `created`;
-  - `waiter_pid`, `waiter_heartbeat`;
-  - `state`: open, done, failed, stale, dropped or acknowledged.
+  - `waiter_pid`, `waiter_start` (its `procStart`), `waiter_heartbeat`;
+  - `state` (open, done, failed, stale, dropped or acknowledged), and `blocked_at`.
+- **The session:** `CLAUDE_CODE_SESSION_ID`. If it's unset, the `~/.claude/sessions/*.json` entry
+  whose `pid` is `CLAUDE_PID`.
+- **It refuses to run sandboxed.** If `dc.pids_visible()` is false, it prints "run
+  delegation-ledger wait as a bare command" and exits 2 before recording anything.
 - **What it waits for** (at least one):
   - `--pid N` (repeatable): done when all have exited;
   - `--file PATH`: done when it exists;
   - `--log PATH --done RE [--fail RE]`: a fail match makes exit 1;
   - `--stale MIN`: exit 2 when the log hasn't changed for that long;
-  - `--codex RUN_ID`: done when `codex-delegate status` reports the run ended.
+  - `--codex RUN_ID`: done when the Codex pid is gone (`dc.codex_state`). The waiter then runs
+    `codex-delegate finalize <run_id>` itself, with a fixed argv, and passes its output on.
+    `finalize` is idempotent.
 - **No arbitrary `--cmd`.** It would run unsandboxed, so it would be a sandbox escape.
 - **Its limit:** `--max MIN` (default 110, under the 120-minute cap; fractions allowed for tests).
-  It polls every 15 s.
+  It polls every 15 s and updates the heartbeat on each poll.
 - **Exits:**
   - 0 when done;
   - 1 when it fails;
-  - 2 when the log goes stale;
+  - 2 when the log goes stale, or on bad usage;
   - 75 at `--max`, printing one line: `still running: re-arm with delegation-ledger wait --resume
     <id> (run_in_background, timeout 7200000)`.
-- **`--resume <id>`** reloads the condition, and **`--drop <id>`** marks the watch dropped.
-- **`watch` and `open`** list open watches beside the delegations.
-- Verify: unit tests for each condition, each exit code, the re-arm line, resume, drop, and a
-  heartbeat update. Use fractional `--max`.
-- Depends on: T0 (P-d decides how the session is resolved).
+- **`--resume <id>`** reloads the condition, takes over as the waiter and clears `blocked_at`.
+  **`--drop <id>`** marks the watch dropped.
+- **Watch ids** pass a basename guard. Writes are atomic, and errors go to
+  `delegation-ledger.err`.
+- **`watch` and `open`** print open watches as a separate block after the delegations, and only
+  when there are any. So `watch --summary` and the pinned "no live delegations" text don't
+  change.
+- **Verify:** unit tests for each condition, each exit code, the re-arm line, resume, drop, the
+  heartbeat, and the sandbox refusal.
+  - Copy `LedgerEnv` and `LiveSession` from `test_ledger.py`.
+  - A real `Popen` child stands in for the job.
+  - Use fractional `--max`.
+- **Depends on:** T0.
 
 ### T2: The watch guard (a Stop hook)
-- Files:
-  - `hooks/watch-guard.sh`. Its bash fast path exits 0 when the watches dir is missing, so a
-    session with no watches pays for one stat;
+- **Files:**
+  - `hooks/watch-guard.sh`. It skips a payload with `agent_id`, then runs the script with
+    `2>/dev/null; exit 0`. `setup.sh` links `hooks/*.sh` by glob, so setup needs no edit;
   - `skills/delegation/scripts/watch-guard`;
-  - the `Stop` entry in `settings.json`;
-  - the install line in `setup.sh` (follow how the other hooks are linked);
-  - `tests/delegation/test_watch_guard.py`.
-- Change. For the payload's session, take each watch in state open:
+  - a third `Stop` group in `settings.json`, with timeout 5;
+  - `tests/delegation/test_watch_guard.py`, and a wiring test in `test_settings.py`.
+- **Watches.** For each watch of the payload's session that is in state open:
   1. Re-check its condition. If it's met, record done and allow.
-  2. If its waiter is alive (pid plus a fresh heartbeat), allow.
+  2. If its waiter is alive (pid plus `procStart`, and a heartbeat younger than 2 polls), allow.
+     A shell task in `background_tasks` whose command holds the watch id also counts.
   3. Otherwise it has lapsed:
-     - without `stop_hook_active`, print `{"decision": "block", "reason": "Watch <id> (<desc>)
-       lapsed while <condition> is still unmet. Re-arm: delegation-ledger wait --resume <id>,
-       with run_in_background and timeout 7200000. Or drop it: delegation-ledger wait --drop
-       <id>."}`;
-     - with `stop_hook_active`, allow, record the lapse as acknowledged, and print a
+     - with no `blocked_at`, set it and block, with this reason: "Watch <id> (<desc>) has no
+       live waiter and <condition> is unmet. If a command was stopped at its time limit, don't
+       re-run it. Re-arm the watch: `delegation-ledger wait --resume <id>`, with
+       `run_in_background` and `timeout: 7200000`. To stop watching it: `delegation-ledger wait
+       --drop <id>`.";
+     - with `blocked_at` set, allow, record the watch as acknowledged, and print a
        `systemMessage` warning.
-
-  Any exception means exit 0: it fails open, and the error goes to the ledger log.
-- Verify: unit tests for:
-  - no dir; no watches; another session's watch;
+- **The kill catch (T2b):**
+  - **Finding kills:** read the last 256 KB of `transcript_path`, and parse each line. A kill is
+    an entry with `origin.kind == "task-notification"` whose text holds `<status>killed</status>`
+    and "background time limit". Take its `<task-id>` and its summary.
+  - **Once per task:** each killed task blocks one stop, recorded in
+    `<state>/kills/<session_id>.json`.
+  - **No double block:** skip a task whose summary names a waiter or wrapper for a recorded
+    watch, since the watch path already covers it.
+  - **The reason:** "Background command <description> was stopped at its time limit. If it was
+    waiting on a job that's still running, don't re-run it: wait with `delegation-ledger wait`
+    (`--pid`, `--file` or `--log`), with `run_in_background` and `timeout: 7200000`. If it was
+    the job itself, report that it was stopped. If you've already handled it, end your turn."
+- **Fail-open.** Any exception means exit 0, and the error goes to `delegation-ledger.err`.
+- **Verify:** unit tests for these cases:
+  - no state dir; no watches; another session's watch;
   - a live waiter; a met condition;
-  - a lapse, which blocks; a lapse with `stop_hook_active`, which allows and warns;
-  - a dropped watch; a malformed payload, which allows.
-- Depends on: T0 (P-a), T1.
+  - a lapse, which blocks; a second stop on the same lapse, which allows and warns;
+  - a doubled guard, which blocks once;
+  - a dropped watch;
+  - a killed task, which blocks once and then allows;
+  - a killed waiter of a recorded watch, which blocks once, not twice;
+  - another session's kill, which is ignored;
+  - a malformed payload, which allows.
+- **Depends on:** T1.
 
 ### T3: Codex records its own watch
-- Files: `skills/delegation/scripts/codex-delegate`, and `skills/delegation/SKILL.md` §5.
-- Change:
-  - `run` and `resume` record a `--codex <run_id>` watch, with the wrapper as its waiter. When
-    the Bash cap stops the wrapper, the guard has the lead re-arm through `wait --resume`.
-  - §5: launch with `run_in_background` and `timeout: 7200000`. Replace "the exit notification
-    wakes you" with what happens past the cap.
-- Verify:
-  - a unit test that a run records the watch;
-  - a hand check: a Codex run under a short Bash timeout makes the guard block, and the re-arm
-    finishes the run.
-- Depends on: T1, T2.
+- **Files:**
+  - `skills/delegation/scripts/codex-delegate`;
+  - `skills/delegation/SKILL.md` §5;
+  - `tests/delegation/test_codex_delegate.py`.
+- **The change:**
+  - **A launch line:** `run` and `resume` print one flushed line with the run id and the watch
+    id, after the `pending` row and before the `Popen`. Today the run id prints only after Codex
+    ends.
+  - **The watch:** they record a `--codex <run_id>` watch whose waiter is the wrapper's own pid.
+    The ledger's `wrapper_pid` isn't used, because it's stale on a resume until
+    `thread.started`.
+  - **`--max-wait MIN`** (default 110): the wrapper stops waiting and exits 75 with the re-arm
+    line, leaving Codex running. Launched with `timeout: 7200000`, it never reaches the cap. If
+    the lead forgot the timeout, the guard covers it.
+  - **`status`:** passes `dc.pids_visible()` to `codex_state`, as `open` does.
+  - **§5:**
+    - launch with `run_in_background` and `timeout: 7200000`;
+    - add exit 75 to the exit codes;
+    - replace "the exit notification wakes you" with what happens past the cap.
+- **Verify:**
+  - a `FullRun` test that a run records the watch and prints the launch line;
+  - a test that `--max-wait` exits 75 while the fake Codex keeps running;
+  - a test that the waiter finalizes;
+  - a watch is a file, not a ledger row, so `test_clean_run`'s pinned `pending, start, stop`
+    holds.
+- **Depends on:** T1, T2.
 
 ### T4: The allow rule, and crash recovery
-- Files: `settings.json`, and `hooks/delegation-due.sh` (or the SessionStart path it uses).
-- Change:
-  - `permissions.allow` gains `Bash(delegation-ledger wait *)`, if P-c showed it's needed;
-  - at session start, one line lists open watches whose session is gone, with the
-    `wait --resume` command.
-- Verify: `tests/setup` still passes. A watch left by a killed session shows at the next start.
-- Depends on: T1.
+- **Files:**
+  - `settings.json`, edited by the lead, since a writer can't write it;
+  - `skills/delegation/scripts/delegation_checks.py`;
+  - `docs/delegation.md`'s install section.
+- **The change:**
+  - **The allow rule:** the baseline gains `permissions.allow: ["Bash(delegation-ledger wait
+    *)"]`.
+    - `setup.sh` replaces a live `permissions` object with the baseline's, and says so on
+      stderr. So the install notes say personal rules go in `settings.machine.json`.
+    - On the machine that planned this (2026-10-02), neither the live file nor the overlay had a
+      `permissions` object.
+  - **Crash recovery:** a new nudge in `delegation_checks.evaluate` lists open watches whose
+    session is gone, with the `wait --resume` command. It joins the numbered session-start
+    `systemMessage`.
+- **Verify:**
+  - `tests/setup` still passes;
+  - a watch left by a killed session shows in `evaluate`'s output;
+  - live, `claude -p --permission-mode default` runs `delegation-ledger wait --file <existing>`
+    with the rule, and is refused without it.
+- **Depends on:** T1.
 
 ### T5: The docs and the one CLAUDE.md line
-- Files:
-  - `docs/delegation.md`: a "Long waits" section; the probe results under the verified facts;
-    rows in "What ships";
+- **Files:**
+  - `docs/delegation.md`: a "Long waits" section, the T0 results under the verified facts (with
+    the version), and rows in "What ships";
   - `skills/delegation/SKILL.md` §4;
   - `README.md`, if new files ship;
   - `CLAUDE.md`, through `/revise-claude-md` with Hayden's approval. The line: "A wait that may
     outlast 30 minutes goes through `delegation-ledger wait`: Bash background commands stop at 30
     minutes by default and 2 hours at most, Monitor at 30."
-- Verify: a fresh `reviewer` checks the docs against the code.
-- Depends on: T1 to T4.
+- **Verify:** a fresh `reviewer` checks the docs against the code.
+- **Depends on:** T1 to T4.
 
 ### T6: A live re-arm case and the canary
-- Files: `tests/delegation/run.py` (a `rearm` case), and the canary list.
-- Change:
+- **Files:**
+  - `tests/delegation/run.py`, for a `rearm` case;
+  - the canary's list of binary strings.
+- **The change:**
   1. A background `sleep 90` job, then `delegation-ledger wait --pid <pid> --max 0.33` launched
      with `timeout: 30000`.
   2. Expect a waiter exit of 75, a block from the guard, and a re-arm. Then the job ends, the
      waiter exits 0, and the agent reports.
-  3. If `-p` can't host this (P-a), make it a dated manual check in `due.toml` instead.
-- Verify: the transcript shows two or more re-arms and a final done, with no human input.
-- Depends on: T1 to T3.
+  3. `-p` kills background shells about 5 s after its final result, so if it can't host this,
+     make it a dated manual check in `due.toml` instead.
+  4. Add the strings the guard depends on to the canary's binary strings: the note's "do not
+     restart it", "background time limit", and `task-notification`.
+- **Verify:** the transcript shows a re-arm and a final done, with no human input.
+- **Depends on:** T1 to T3.
 
 ## Verification target (whole feature)
 
 The feature is done when all of these hold:
-- the unit suites are green (`python3 -m unittest discover -s tests/delegation -t
-  tests/delegation`, and `tests/setup`);
-- the `rearm` live case, or its manual check, passes;
-- a hand-run Codex job over the Bash timeout is woken and finalized without anyone asking for
-  status.
+- **Unit suites:** green (`python3 -m unittest discover -s tests/delegation -t
+  tests/delegation`, and `tests/setup`).
+- **Live waits in an interactive session:**
+  - a waiter exits 75;
+  - ending the turn without a re-arm is blocked once;
+  - the re-armed waiter exits 0.
+- **The live kill catch:** a plain background sleep killed at a 15 s timeout gets its stop blocked
+  once.
+- **Codex:** a hand-run job launched with a short Bash timeout is finalized without anyone asking
+  for status.
+- **The `rearm` case:** it passes, or its manual check does.
