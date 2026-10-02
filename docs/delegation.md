@@ -271,7 +271,7 @@ from 60 to 5,000 requests an hour.
 - **An acknowledged lapse goes quiet.** After one block and one warning, a lapsed watch stays
   open and says nothing more in that session until it ends: it blocks once more when its
   condition is met, or when its codex run gets a stop row or turns out never to have started.
-  The session-start nudge lists it once its session has ended.
+  The session-start nudge lists it once its Claude Code process has ended.
 - **A live waiter can read as lapsed.** A waiter whose heartbeat is older than two polls plus a
   second (a suspended VM, say) counts as dead: the guard blocks on it, and a `--resume` can take
   the watch over. The old waiter steps aside at its next beat.
@@ -833,9 +833,11 @@ the fix is enforcement. `PLAN.md` has the design history and the options weighed
 - **The session-start nudge.** `delegation-ledger due --hook` names, in its numbered line, up to
   three of the open or acknowledged watches nobody will hear from, oldest first, with a count of
   the rest, and one `wait --resume <id>` and `wait --drop <id>` template
-  (`delegation_checks.left_watches`). A watch is nobody's when the Claude process it was
-  recorded under has ended, even if its session runs on in a new process (`claude --continue`),
-  or, with no process recorded, when its session isn't live. That holds whatever its waiter's
+  (`delegation_checks.left_watches`): "<n> watch(es) left by a Claude Code process that has
+  ended: <id> (<desc>), ... Pick one up with ..." It says process, not session, since after a
+  crash and `claude --continue` the session runs on. A watch is nobody's when the Claude
+  process it was recorded under has ended, even if its session runs on in a new process, or,
+  with no process recorded, when its session isn't live. That holds whatever its waiter's
   state, since a bare waiter can outlive a SIGKILLed Claude Code; a live waiter is marked "its
   waiter is still running". A watch with no session counts only once its waiter is dead.
   - A second line names up to three watches that ended (done, failed or stale) in the last 7

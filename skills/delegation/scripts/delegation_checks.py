@@ -18,8 +18,9 @@ upgraded three times in three days (2.1.284 to 2.1.286), so the checks split by 
 it fails open (it always exits 0; an error goes to delegation-ledger.err). Anything that would
 leave the checks unable to run (an unreadable version, a malformed due.toml, a crashing audit)
 becomes a nudge itself, so the checks can't go quiet.
-`due --hook` also names the watches (`delegation-ledger wait`) left by a session that ended:
-no watch guard reads them again, since each guard reads only its own session's watches.
+`due --hook` also names the watches (`delegation-ledger wait`) left by a Claude Code process
+that has ended: no watch guard reads them again, since each guard reads only its own session's
+watches.
 
 State lives in $XDG_STATE_HOME/dotclaude: canary.json (quick, full, green_full), audit.json
 (the last audit's WARN lines, whether a session start has shown them, and when the last
@@ -463,7 +464,8 @@ def orphans_nudge(orphans, unreadable=0):
     n = len(orphans)
     named = [orphan_name(w) for w in orphans[:ORPHANS_LISTED]]
     more = f" and {n - ORPHANS_LISTED} more" if n > ORPHANS_LISTED else ""
-    text = (f"{n} {'watch' if n == 1 else 'watches'} from a session that ended: "
+    text = (f"{n} {'watch' if n == 1 else 'watches'} left by a Claude Code process that has "
+            "ended: "
             f"{', '.join(named)}{more}. Pick one up with `delegation-ledger wait --resume "
             "<id>`, or drop it with `delegation-ledger wait --drop <id>`.")
     return f"{text} ({bad})" if bad else text
