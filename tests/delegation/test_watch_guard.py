@@ -71,13 +71,17 @@ class GuardEnv(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.state = os.path.join(self.tmp.name, "state")
-        env = mock.patch.dict(os.environ, {"XDG_STATE_HOME": self.state})
+        # A temp HOME, so the walk to a Claude process finds only the sessions files a test
+        # writes there.
+        self.home = os.path.join(self.tmp.name, "home")
+        env = mock.patch.dict(os.environ, {"XDG_STATE_HOME": self.state, "HOME": self.home})
         env.start()
         self.addCleanup(env.stop)
         os.environ.pop("DELEGATION_LEDGER", None)
-        # Inside the sandbox the lead's CLAUDE_PID is inherited but invisible, which would make
-        # the guard say nothing. The sandbox test sets it on purpose.
+        # Inside the sandbox the lead's CLAUDE_PID is inherited but invisible, and SANDBOX_RUNTIME
+        # is set, either of which would make the guard say nothing. The sandbox tests set them.
         os.environ.pop("CLAUDE_PID", None)
+        os.environ.pop("SANDBOX_RUNTIME", None)
         self.watches = os.path.join(self.state, "dotclaude", "watches")
         self.transcript = self.path("s1.jsonl")
         self.now = time.time()
@@ -342,6 +346,42 @@ class Watches(GuardEnv):
         self.assertIsNone(self.read()["blocked_at"])
         self.assertFalse(os.path.exists(os.path.join(self.state, "dotclaude", "kills")))
 
+    def test_sandbox_runtime_makes_the_guard_say_nothing(self):
+        self.watch()
+        with mock.patch.dict(os.environ, {"SANDBOX_RUNTIME": "1"}):
+            self.assertIsNone(self.decide())
+        self.assertIsNone(self.read()["blocked_at"])
+
+    def session_file(self, pid, sid="s-claude"):
+        """A sessions file for pid, as Claude Code writes one, in the test's HOME."""
+        sessions = os.path.join(self.home, ".claude", "sessions")
+        os.makedirs(sessions, exist_ok=True)
+        with open(os.path.join(sessions, f"{pid}.json"), "w") as f:
+            json.dump({"pid": pid, "procStart": dc.proc_start(pid), "sessionId": sid}, f)
+
+    def test_a_stale_claude_pid_under_a_live_claude_process_still_guards(self):
+        # A CLAUDE_PID inherited from a process that has ended, while the walk finds the live
+        # Claude process this hook runs under (this test's parent stands in for it).
+        self.session_file(os.getppid())
+        self.watch()
+        with mock.patch.dict(os.environ, {"CLAUDE_PID": str(DEAD)}):
+            self.assertEqual(self.decide(), self.block(self.lapse_reason()))
+
+    def test_an_inherited_claude_pid_doesnt_make_a_nested_guard_adopt_the_leads_watch(self):
+        # A nested claude -p (this test's parent) inherited the lead's CLAUDE_PID; after the
+        # lead's /clear, the lead's old session isn't live.
+        lead = subprocess.Popen(["sleep", "60"])
+        self.addCleanup(lambda: (lead.kill(), lead.wait()))
+        self.session_file(lead.pid, "s-lead-new")
+        self.session_file(os.getppid(), "s1")
+        self.watch(sid="s-lead-old", claude_pid=lead.pid, claude_start=dc.proc_start(lead.pid))
+        self.lines()
+        with mock.patch.dict(os.environ, {"CLAUDE_PID": str(lead.pid)}):
+            self.assertEqual(guard.dc.claude_process(), (os.getppid(),
+                                                         dc.proc_start(os.getppid())))
+            self.assertIsNone(self.decide())
+        self.assertEqual(self.read()["session_id"], "s-lead-old")
+
     def test_stop_hook_active_doesnt_stop_a_fresh_lapse_blocking(self):
         self.watch()
         self.assertEqual(self.decide(stop_hook_active=True), self.block(self.lapse_reason()))
@@ -459,7 +499,7 @@ class Watches(GuardEnv):
     def test_without_its_own_process_the_guard_adopts_no_crashed_watch(self):
         self.watch(live=True, claude_pid=DEAD, claude_start=None)
         self.lines()
-        with mock.patch.object(guard, "own_claude", return_value=None):
+        with mock.patch.object(guard.dc, "claude_process", return_value=None):
             self.assertIsNone(self.decide())
         self.assertEqual(self.read()["claude_pid"], DEAD)
 

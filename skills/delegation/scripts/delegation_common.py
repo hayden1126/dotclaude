@@ -446,13 +446,48 @@ def pid_alive(pid, start=None):
     return start is None or str(_start_of(fields)) == str(start)
 
 
+SESSION_WALK = 6  # how many parents up claude_ancestor looks for a sessions file
+
+
+def ancestors():
+    """This process's pid, then its parent's and so on up, short of pid 1, nearest first."""
+    out, pid = [], os.getpid()
+    while pid is not None and pid > 1 and pid not in out and len(out) < 64:
+        out.append(pid)
+        pid = proc_ppid(pid)
+    return out
+
+
+def claude_ancestor(chain=None):
+    """(pid, procStart) of the nearest process in `chain` (ancestors(), this process first), at
+    most SESSION_WALK parents up, whose ~/.claude/sessions/<pid>.json names that pid and its
+    procStart: the Claude Code process this one runs under. None when there is none (outside
+    Claude Code, or sandboxed, where no pid outside the sandbox can be seen). A `claude -p` run
+    writes its own sessions file, so a nested one finds itself, not its parent."""
+    for pid in (ancestors() if chain is None else chain)[:SESSION_WALK + 1]:
+        try:
+            with open(os.path.expanduser(f"~/.claude/sessions/{pid}.json")) as f:
+                d = json.load(f)
+        except (OSError, ValueError):
+            continue
+        start = proc_start(pid)
+        if (isinstance(d, dict) and d.get("pid") == pid
+                and (d.get("procStart") is None or str(d["procStart"]) == str(start))):
+            return pid, start
+    return None
+
+
 def pids_visible():
-    """False when this process can't see its own Claude session's pid. Claude Code sets
-    CLAUDE_PID in the Bash tool's env, and that process is alive by definition, so not seeing
-    it means a sandbox PID namespace (each sandboxed command gets its own), where no pid check
-    means anything. True when CLAUDE_PID is unset (tmux, a plain terminal)."""
+    """False inside the sandbox, whose PID namespace (each sandboxed command gets its own) hides
+    every pid outside it, so no pid check means anything there. SANDBOX_RUNTIME=1, set only
+    inside, says so. So does a CLAUDE_PID that can't be seen, unless claude_ancestor finds a live
+    Claude process anyway: then CLAUDE_PID is only stale, inherited from a process that has
+    ended (a tmux server started from a Claude Bash call, say). True when CLAUDE_PID is unset
+    (tmux, a plain terminal)."""
+    if os.environ.get("SANDBOX_RUNTIME") == "1":
+        return False
     pid = os.environ.get("CLAUDE_PID")
-    return not pid or pid_alive(pid)
+    return not pid or pid_alive(pid) or claude_ancestor() is not None
 
 
 def codex_state(e, visible=True):
@@ -618,11 +653,11 @@ def codex_stopped(e):
 #                   blocked_at
 #   session_id      a --resume moves the watch to the resuming session, unless it has none
 #   claude_pid, claude_start
-#                   the Claude Code process (CLAUDE_PID) and its procStart that the waiter runs
-#                   under, which its exit notifies; absent outside Claude Code. /clear keeps the
-#                   process but starts a new session id, so that process's watch guard adopts
-#                   the watch. After a crash and `claude --continue`, the new process's guard
-#                   records itself here
+#                   the Claude Code process (claude_process) and its procStart that the waiter
+#                   runs under, which its exit notifies; absent outside Claude Code. /clear
+#                   keeps the process but starts a new session id, so that process's watch
+#                   guard adopts the watch. After a crash and `claude --continue`, the new
+#                   process's guard records itself here
 #   waiter_unheard  true when the guard recorded itself as claude_pid while the waiter still
 #                   ran under a process that had ended: that waiter's exit reaches nobody, so it
 #                   may be taken over, and its end is reported by the guard. Taking the watch
@@ -959,13 +994,20 @@ def wait_session():
 
 
 def claude_process():
-    """(pid, procStart) of the Claude Code process this command runs under, from CLAUDE_PID, or
-    None when it's unset or not visible (sandboxed)."""
+    """(pid, procStart) of the Claude Code process this command runs under, or None. The
+    ancestor walk decides (claude_ancestor). CLAUDE_PID counts only when the walk finds nothing
+    and it names an ancestor of this process, since it is inherited: a nested `claude -p`
+    started from the lead's Bash may carry the lead's, and a tmux server started from a Claude
+    Bash call carries one that goes stale."""
+    chain = ancestors()
+    found = claude_ancestor(chain)
+    if found is not None:
+        return found
     try:
         pid = int(os.environ.get("CLAUDE_PID") or "")
     except ValueError:
         return None
-    return (pid, proc_start(pid)) if pid_alive(pid) else None
+    return (pid, proc_start(pid)) if pid in chain else None
 
 
 def claude_alive(w):

@@ -541,9 +541,10 @@ class Orphans(StateTest):
         patcher = mock.patch.dict(os.environ, {"HOME": home})
         patcher.start()
         self.addCleanup(patcher.stop)
-        # Inside the sandbox the lead's CLAUDE_PID is inherited but invisible, which would hide
-        # every watch. The sandbox test sets it on purpose.
+        # Inside the sandbox the lead's CLAUDE_PID is inherited but invisible, and SANDBOX_RUNTIME
+        # is set, either of which would hide every watch. The sandbox test sets CLAUDE_PID.
         os.environ.pop("CLAUDE_PID", None)
+        os.environ.pop("SANDBOX_RUNTIME", None)
         for name in ("cc_version", "launch_background"):
             self.addCleanup(setattr, checks, name, getattr(checks, name))
         checks.cc_version = lambda timeout=10: "2.1.300"

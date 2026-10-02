@@ -280,13 +280,16 @@ from 60 to 5,000 requests an hour.
   one), it needs the watch its `--resume` names, or one watch created within 120 s after the
   launch, told apart by `--pid`, `--file` or `--log`. When that names no single watch, the stop
   says the kill and the lapse as two items.
-- **Adoption after `/clear` needs the Claude process.** A watch records `claude_pid` only when the
-  waiter saw `CLAUDE_PID`, and the guard finds its own process from `CLAUDE_PID` or a sessions
-  file at most 6 levels up its parents. A watch made outside Claude Code, or a guard that finds
-  neither, adopts nothing. It also rests on the sessions file naming the new session id after a
-  `/clear`, so the old one stops being live (see the verified facts). Were that to change, the old
-  session would read as live and nothing would be adopted: safe, but the watch would go
-  unguarded.
+- **Adoption after `/clear` needs the Claude process.** A waiter and the guard each find their
+  Claude process by walking up their parents, 6 levels at most, to the nearest one whose
+  `~/.claude/sessions/<pid>.json` names its pid and procStart (`claude_process`). `CLAUDE_PID`
+  counts only when the walk finds nothing and it names one of those parents, since it is
+  inherited: a nested `claude -p` started from the lead's Bash may carry the lead's, and a tmux
+  server started from a Claude Bash call carries one that goes stale. A watch made outside
+  Claude Code records no process, and a guard that finds none adopts nothing. Adoption also
+  rests on the sessions file naming the new session id after a `/clear`, so the old one stops
+  being live (see the verified facts). Were that to change, the old session would read as live
+  and nothing would be adopted: safe, but the watch would go unguarded.
 - **A crash, then `claude --continue`, rests on the session id.** The guard adopts a crashed
   process's watch only in the session that has its id, so this assumes `--continue` keeps the
   session id. That isn't verified here; the manual re-arm check in `due.toml` asks for it. With a
@@ -542,11 +545,14 @@ fixes:
 - `delegation-ledger *` is in `sandbox.excludedCommands`, so a bare call runs outside the sandbox
   and is exact. The live settings are a copy, so a machine set up before A3 needs `./setup.sh`
   again (see "Installing on a machine that is already set up"). Delegated agents get `excluded-command` for it from the policy, and never need it.
-- A self-check covers the calls that still run inside, such as a piped one. The caller's own
-  Claude process is alive by definition, so when `CLAUDE_PID` is set but not alive, no pid check
-  means anything. Both views then print a warning first and call each session `unknown` instead of
-  gone, and `open` says `pid not visible in the sandbox` for a Codex row instead of `died`. With
-  `CLAUDE_PID` unset (tmux, a plain terminal), the check passes.
+- A self-check (`pids_visible`) covers the calls that still run inside, such as a piped one.
+  `SANDBOX_RUNTIME=1`, set only inside, fails it. So does a `CLAUDE_PID` that is set but not
+  alive, since the caller's own Claude process is alive by definition, unless the parent walk
+  (`claude_process`, in the known gaps) finds a live Claude process anyway: then `CLAUDE_PID`
+  was only stale, inherited from a process that has ended. When it fails, no pid check means anything, so both views print a
+  warning first and call each session `unknown` instead of gone, and `open` says `pid not
+  visible in the sandbox` for a Codex row instead of `died`. With `CLAUDE_PID` unset (tmux, a
+  plain terminal) and no `SANDBOX_RUNTIME`, the check passes.
 
 A session file's `procStart` must now match the pid's start time too, so a pid the kernel reused
 for another process no longer keeps a gone session alive.
@@ -760,11 +766,11 @@ the fix is enforcement. `PLAN.md` has the design history and the options weighed
     watch is the caller's: in its session, or left by its Claude process under a session id that
     is no longer live (a rerun after `/clear`, before the guard's first stop adopts it). A codex
     condition keeps its refusal instead.
-  - It records the session and the Claude Code process its exit notifies (`claude_pid`, from
-    `CLAUDE_PID`, with its procStart); a waiter outside Claude Code records none, dropping the
-    last waiter's. `/clear` keeps the process but starts a new session id, and the guard adopts
-    the watch into the new session (below). A waiter that ends while that process runs records
-    `reported`.
+  - It records the session and the Claude Code process its exit notifies (`claude_pid` with its
+    procStart, from the parent walk in the known gaps); a waiter outside Claude Code records
+    none, dropping the last waiter's. `/clear` keeps the process but starts a new session id,
+    and the guard adopts the watch into the new session (below). A waiter that ends while that
+    process runs records `reported`.
   - It refuses to run sandboxed, where its pids would belong to another PID namespace. It refuses
     a `--pid` that is pid 1, a kernel thread, another user's, or not running. It refuses a second
     watch on a codex run, naming the existing watch's `--resume` when that watch's waiter is dead
@@ -783,9 +789,9 @@ the fix is enforcement. `PLAN.md` has the design history and the options weighed
   - first, it adopts any unresolved watch recorded under its own Claude Code process with another
     session id that is no longer live (a `/clear`), moving it into this session in the commit
     pass and logging it. A live session's watch is never adopted, whatever the pids say, and the
-    commit checks the process and the liveness again under the lock. It finds its process from
-    `CLAUDE_PID`, or the nearest parent with a `~/.claude/sessions/<pid>.json`, 6 levels up at
-    most;
+    commit checks the process and the liveness again under the lock. It finds its process by
+    the same parent walk as the waiter, so a nested `claude -p` that inherited the lead's
+    `CLAUDE_PID` finds itself, not the lead;
   - it also adopts this session's watches whose Claude process has ended (a crash, then
     `claude --continue`), recording itself as their Claude process. A waiter still running there
     reports to a process that's gone, so the watch is marked `waiter_unheard` and blocks once:
@@ -878,8 +884,10 @@ Its once-per-item rules:
   another hook's block can't swallow this one.
 - It fails open. An error on one item is logged to `delegation-ledger.err` and skips that item;
   any other error lets the stop through.
-- Where it can't see pids outside its own (a sandboxed run, `pids_visible`), it says nothing,
-  since every waiter and Claude process would read as dead.
+- Where it can't see pids outside its own (a sandboxed run, `pids_visible`: `SANDBOX_RUNTIME=1`,
+  or an unseen `CLAUDE_PID` with no live Claude process among its parents), it says nothing,
+  since every waiter and Claude process would read as dead. A stale inherited `CLAUDE_PID`
+  under a live Claude process doesn't silence it.
 
 **The live re-arm is a manual check.** `claude -p` kills background shells about 5 s after its
 final result, so `tests/delegation/run.py` can't hold a wait across turns. A dated item in
@@ -997,7 +1005,8 @@ wins.
   `CLAUDE_PID` in the lead's Bash env, inside the sandbox and outside it, and it names the
   session's Claude process. Each sandboxed command gets its own PID namespace, so
   `/proc/$CLAUDE_PID` exists outside the sandbox and is missing inside it, where no session's pid
-  is visible. `SANDBOX_RUNTIME=1` is set only inside; A3 doesn't rely on it.
+  is visible. `SANDBOX_RUNTIME=1` is set only inside, and `pids_visible` reads it, so a stale
+  inherited `CLAUDE_PID` outside the sandbox isn't taken for it.
 - **`procStart`** (same day): a session file `~/.claude/sessions/<pid>.json` carries `procStart`,
   which equals field 22 (starttime) of `/proc/<pid>/stat`. The command name in that file may hold
   spaces, so the fields are split after the last `") "`.

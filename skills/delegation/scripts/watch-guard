@@ -493,23 +493,6 @@ def stop_digest(data):
     return hashlib.sha256(raw).hexdigest()[:16]
 
 
-def own_claude():
-    """(pid, procStart) of the Claude Code process running this hook: CLAUDE_PID when it's set
-    and alive, else the nearest ancestor, 6 levels up at most, with a
-    ~/.claude/sessions/<pid>.json. None when neither works, and then nothing is adopted."""
-    me = dc.claude_process()
-    if me is not None:
-        return me
-    pid = os.getppid()
-    for _ in range(6):
-        if pid is None or pid <= 1:
-            return None
-        if os.path.exists(os.path.expanduser(f"~/.claude/sessions/{pid}.json")):
-            return pid, dc.proc_start(pid)
-        pid = dc.proc_ppid(pid)
-    return None
-
-
 def crashed(w, sid, me):
     """Whether watch w is this session's and the Claude process it was recorded under has
     ended (a crash, then `claude --continue` in this process, `me`)."""
@@ -696,7 +679,7 @@ def decide(data, now, clock=time.monotonic):
         prune_kills(now, sid)
     except Exception:  # noqa: BLE001
         log("prune")
-    me = own_claude()
+    me = dc.claude_process()  # this hook's Claude process; with none, nothing is adopted
     live = dc.live_sessions() if me is not None else {}
     every = [w for w in dc.all_watches() if isinstance(w.get("id"), str)]
     watches = [w for w in every if w.get("state") in dc.UNRESOLVED

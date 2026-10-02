@@ -71,7 +71,8 @@ dead Codex run gets one footer line that points at `open`, and the tmux token ne
 it. It reads only the ledger's last 1 MiB, so a 3-second poll stays cheap as the ledger grows.
 
 Inside the Bash sandbox no session pid is visible: each sandboxed command gets its own PID
-namespace. Both views detect that (CLAUDE_PID is set but not alive), print a warning first, and
+namespace. Both views detect that (dc.pids_visible: SANDBOX_RUNTIME=1, or a CLAUDE_PID that
+isn't alive with no live Claude process among the caller's parents), print a warning first, and
 call a session unknown instead of gone. delegation-ledger is in sandbox.excludedCommands, so a
 bare call runs outside the sandbox and is exact; a piped one stays inside and warns.
 

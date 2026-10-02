@@ -62,6 +62,7 @@ class WaitEnv(unittest.TestCase):
         # Inside the sandbox the lead's CLAUDE_PID is inherited but invisible, which would make
         # every wait refuse to run. The Sandbox test sets it on purpose.
         self.env.pop("CLAUDE_PID", None)
+        self.env.pop("SANDBOX_RUNTIME", None)  # set inside the sandbox; the Sandbox test sets it
         self.env.pop("DELEGATION_LEDGER", None)
         sessions = os.path.join(self.tmp.name, ".claude", "sessions")
         os.makedirs(sessions)
@@ -996,6 +997,63 @@ class PidAlive(unittest.TestCase):
     def test_an_unreadable_stat_with_a_proc_entry_is_alive(self):
         with mock.patch.object(dc, "_stat_fields", return_value=None):
             self.assertTrue(dc.pid_alive(os.getpid()))
+
+
+class ClaudeProcess(unittest.TestCase):
+    """dc.claude_process and dc.pids_visible, in process, under a temp HOME whose sessions files
+    the tests write."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.sessions = os.path.join(tmp.name, ".claude", "sessions")
+        os.makedirs(self.sessions)
+        env = mock.patch.dict(os.environ, {"HOME": tmp.name})
+        env.start()
+        self.addCleanup(env.stop)
+        os.environ.pop("CLAUDE_PID", None)
+        os.environ.pop("SANDBOX_RUNTIME", None)
+
+    def session_file(self, pid, start=None):
+        with open(os.path.join(self.sessions, f"{pid}.json"), "w") as f:
+            json.dump({"pid": pid, "procStart": start or dc.proc_start(pid), "sessionId": "s"}, f)
+
+    def other(self):
+        """A live process that isn't an ancestor of this one."""
+        p = subprocess.Popen(["sleep", "60"])
+        self.addCleanup(lambda: (p.kill(), p.wait()))
+        return p.pid
+
+    def env(self, **kw):
+        return mock.patch.dict(os.environ, {k: str(v) for k, v in kw.items()})
+
+    def test_the_nearest_ancestor_with_a_sessions_file_wins_over_claude_pid(self):
+        ppid = os.getppid()
+        self.session_file(ppid)
+        other = self.other()
+        self.session_file(other)
+        with self.env(CLAUDE_PID=other):
+            self.assertEqual(dc.claude_process(), (ppid, dc.proc_start(ppid)))
+
+    def test_a_sessions_file_whose_procstart_differs_doesnt_count(self):
+        # A pid the kernel reused: the file was another process's.
+        self.session_file(os.getppid(), start=1)
+        self.assertIsNone(dc.claude_process())
+
+    def test_claude_pid_counts_only_when_it_names_an_ancestor(self):
+        with self.env(CLAUDE_PID=os.getppid()):
+            self.assertEqual(dc.claude_process(), (os.getppid(), dc.proc_start(os.getppid())))
+        with self.env(CLAUDE_PID=self.other()):  # a tmux server's, inherited
+            self.assertIsNone(dc.claude_process())
+
+    def test_pids_visible(self):
+        self.assertTrue(dc.pids_visible())
+        with self.env(SANDBOX_RUNTIME=1):
+            self.assertFalse(dc.pids_visible())
+        with self.env(CLAUDE_PID=DEAD):
+            self.assertFalse(dc.pids_visible())  # the sandbox: nothing outside it shows
+            self.session_file(os.getppid())
+            self.assertTrue(dc.pids_visible())  # only stale: a live Claude process is above
 
 
 class Views(WaitEnv):

@@ -177,14 +177,16 @@ class FullRun(unittest.TestCase):
         with open(self.brief, "w") as f:
             f.write("Do the thing.\n")
         self.argv_log = os.path.join(t, "argv.jsonl")
-        self.env = dict(os.environ, PATH=bindir + os.pathsep + os.environ["PATH"],
+        # HOME is the temp dir too, so the walk to a Claude process finds no real session.
+        self.env = dict(os.environ, PATH=bindir + os.pathsep + os.environ["PATH"], HOME=t,
                         CODEX_HOME=os.path.join(t, "codex"),
                         XDG_STATE_HOME=os.path.join(t, "state"),
                         FAKE_THREAD="th-1", FAKE_ARGV_LOG=self.argv_log,
                         CLAUDE_CODE_SESSION_ID="s1")
-        # Inside the sandbox the lead's CLAUDE_PID is inherited but invisible, which would make
-        # every pid look hidden.
+        # Inside the sandbox the lead's CLAUDE_PID is inherited but invisible, and SANDBOX_RUNTIME
+        # is set, either of which would make every pid look hidden.
         self.env.pop("CLAUDE_PID", None)
+        self.env.pop("SANDBOX_RUNTIME", None)
 
     def tearDown(self):
         self.tmp.cleanup()
