@@ -18,9 +18,9 @@ found:
   while it held full Bash.
 - **"Stalls":** these were long, silent teammate turns (10 of 118 teammates went over 30 minutes), not
   lost reports. Ordinary subagents lost 1 report in 266.
-- **general-purpose:** 118 general-purpose subagents ran. 47 edited files, and fewer than a third
-  stayed read-only (how many of the rest ran mutating shell commands depends on what counts as
-  mutating). All 5 that misbehaved had read-only briefs, and 4 of them were reviews or audits.
+- **general-purpose:** 118 general-purpose subagents ran. 47 edited files, 43 to 50 more
+  ran mutating shell commands (depending on what counts as mutating), and fewer than a quarter only
+  read. All 5 that misbehaved had read-only briefs, and 4 of them were reviews or audits.
   Counting teammates by the role they were spawned as, 11 of the 12 drift cases were
   general-purpose agents. The twelfth was the built-in Explore, which also keeps Bash.
   (Recomputed from the eval's extract on 2026-10-01.)

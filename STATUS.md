@@ -3,54 +3,47 @@
 > Living state. Update at the end of every working block so a fresh session can resume after `/clear`.
 > Forward-looking only: current state and next steps. Git holds the history; memory holds durable
 > decisions ([[dotclaude-handoff-skill]], [[dotclaude-research-sourcing-skill]],
-> [[dotclaude-chrome-devtools-wsl]]). Per-effort design rationale lives in its plan under `~/.claude/plans/`.
+> [[dotclaude-chrome-devtools-wsl]]). Per-effort design lives in the repo's `PLAN.md` or its doc,
+> not only under `~/.claude/plans/`, which the next plan overwrites ([[plan-file-not-durable]]).
 
 Last updated: 2026-10-02
 Base: `main`. For branch / PR / push state, run `gh pr list` and `git log main..HEAD` (derive it; not
 stored here).
 
 ## Done (recent; git, the linked plans and memory hold the detail)
-- **Delegation hardening Stage 3, complete and live on HAYPC** (2026-09-30 to 10-01; PRs #42 to
-  #46, range `d46449b..ce16b8a`; A1 is PR #48, range `c0a3241..1d09748`; A3 is PR #49, range
-  `1d09748..65e7297`; A2 is PRs #51 and #52, range `0aa08f8..270dcb8`; A6 is PR #55, range
-  `e4b790a..f3014c0`, with the legacy probes excluded and the quick canary green). Named spawns
-  need a `team-` prefix; teammates are policed by role; `delegation-ledger canary`/`due`
-  re-verify enforcement on their own; `open` and `watch` read liveness from the transcript, and
-  `watch --summary` feeds the tmux bar. A2 nudges, then stops, an agent past its role's budget
-  (`policy.toml` `[deadline]`). `audit --monthly` shows the numbers for retuning both, and `due`
-  asks for it once the ledger is a month old.
-  `docs/delegation.md` "Stage 3" holds the findings, the decisions and the test counts.
-- **Small fixes** (PR #56, range `f3014c0..58a9b9d`): `setup.sh` links the portable skills into
-  Codex, the `.mcp.json` stub is ignored, the status line's dead ai-title fallback is gone, and two
-  history docs are corrected. Installed on HAYPC with `setup.sh`; the live `settings.json` didn't
-  change.
-- Older: `git log` and the PRs back to #10 hold it, and memory holds the decisions behind them.
+- **Delegation hardening Stage 3, complete and live on HAYPC** (2026-09-30 to 10-01, PRs #42 to
+  #55). `docs/delegation.md` "Stage 3" holds the findings, the decisions and the test counts.
+- Older: `git log` and the PRs back to #10 hold it (#56 was small fixes), and memory holds the
+  decisions behind them.
   One stays here because git can't show it: client deck data left the tree in PR #28, and its
   history was deliberately left as-is (Hayden's call).
 
 ## In flight
-- **The delegation write-up: the post is drafted** (2026-10-02, range `a31b738..0f3f4b7`).
-  - **Where it is:** `docs/prose-is-not-a-permission.md`, plus `docs/images/delegation-layers.svg`
-    and its `.png`, on `docs/delegation-post`.
-  - **Its base:** that branch is stacked on `docs/scrub-private-names` (`7ed72e9`). That commit
-    scrubs private names from `docs/delegation.md` and corrects its general-purpose numbers.
-  - **Derive the push and PR state:** `git status -sb` and `gh pr list`.
-  - **Merge both with merge commits, scrub first.** The post's code links pin to `7ed72e9`, and a
-    squash would drop it from `main`.
+- **The delegation post: on `main`, revised in PR #60, not yet on Medium.**
+  - **Files:** `docs/prose-is-not-a-permission.md` and `docs/images/delegation-layers.*`. The code
+    links pin to `7ed72e9`, which is on `main`, so any merge style works.
+  - **PR #60** (base `8ba422c`) applies a staged reader review and two verification rounds. The
+    findings are in `~/scratch/delegation-writeup/prose-is-not-a-permission.reader-review.md`.
+    The last round's fixes were checked by tests and greps, not by a fresh reviewer.
   - **Before publishing on Medium:**
-    - Hayden reads the post;
-    - run SHAPE.md §6's grep on it;
-    - make the hero image (its slot is the HTML comment at the top);
-    - decide whether to keep the Codex model names (they're named for now).
+    - Hayden reads it, and decides whether to cut it back toward the 2,500-word target Hayden set
+      (it's about 3,750);
+    - rerun SHAPE.md §6's grep after any edit;
+    - make the hero image (the HTML comment at the top);
+    - decide on the Codex model names.
 
-    The aborted-first-launch beat is deferred, not dropped.
-  - **Sources:** `~/scratch/delegation-writeup/SHAPE.md` cites every number in the post to its
-    source. It is private and never goes in git. The diagram's spec is in
-    `~/.claude/plans/writeup-immutable-trinket.md`; how to render it is in memory
-    ([[svg-to-png-headless-render]]).
-  - **Privacy:** never publish raw transcripts or the eval data. `~/scratch/delegation-writeup/`
-    also holds backups of `.zshrc`, `.zshenv` and `.mcp.json` (2026-09-30). They can carry tokens,
-    nobody has read them, and they stay out of anything published.
+    The aborted-first-launch beat is deferred.
+  - **Sources and privacy:**
+    - `~/scratch/delegation-writeup/SHAPE.md` (private, never in git) cites every number and
+      holds the diagram spec (§8); [[svg-to-png-headless-render]] covers rendering it;
+    - never publish raw transcripts or the eval data;
+    - the `.zshrc`, `.zshenv` and `.mcp.json` backups beside SHAPE.md stay unread.
+- **Background waits: the watch guard** (planned 2026-10-02, not started).
+  - **The gap:** a Bash background command stops at 30 minutes by default (2 hours at most), and
+    nothing re-arms it. That also breaks Codex runs longer than the cap (SKILL §5).
+  - **The plan:** `PLAN.md` holds the design, the options it beat, and tasks T0 to T6.
+  - **Next step:** T0, the four probes, on a branch off `main`. If P-a fails (a Stop hook firing
+    and blocking on a turn that a background notice started), stop and ask Hayden.
 - **Delegation hardening: what is live on HAYPC** (Stage 2, plus the Stage 3 steps under Done;
   `docs/delegation.md`;
   `skills/delegation/SKILL.md` is the operating guide). Open items:
@@ -67,11 +60,9 @@ stored here).
       first and diff it after.
     - Without a `settings.machine.json` overlay, install by hand per the docs' install order:
       the policy hook fails closed.
-- **Codex setup shared with a friend** (Hayden's ask, 2026-09-29). The share page is BUILT and private:
-  https://claude.ai/artifact/KWwrPkLsbMUi7Ugjfskqsz (source was a session scratchpad; republish by that
-  URL). It links only four clean skills (coding-practices, research-discipline, ui-alignment,
-  vetting-sources) and tells the friend never to run `setup.sh`. It is ready to share
-  (`/codex:review` ran end to end on 2026-10-01).
+- **Codex setup shared with a friend** (2026-09-29): built, private and ready to share at
+  https://claude.ai/artifact/KWwrPkLsbMUi7Ugjfskqsz (republish by that URL). It links four clean
+  skills and says never to run `setup.sh`.
 - **`deck-production` blocks S2-S6** (plan: `~/.claude/plans/explore-our-entire-workflow-bright-shamir.md`,
   missing from HAYPC's `~/.claude/plans/` on 2026-10-01; find it on the machine that wrote it, or
   rebuild it from this block).
@@ -128,3 +119,5 @@ stored here).
   native tasks (the session-summary line already grounds "what/where", and a blanket nudge fights the
   fast lane). Revisit (c) only if a 4-6 step job with no tasks shows up, scoped to multi-step work.
 - A fresh WSL clone needs `./setup-chrome-wsl.sh` once ([[dotclaude-chrome-devtools-wsl]]).
+- An untracked, empty `.claude/tmpawe4wybu` was left by a hook-sketch test on 2026-10-02. Remove
+  it once Hayden approves.
