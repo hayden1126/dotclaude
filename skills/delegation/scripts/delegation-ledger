@@ -1133,6 +1133,8 @@ def cmd_tail(args):
 
 WAIT_SANDBOXED = ("run delegation-ledger wait as a bare command (the sandbox hides other "
                   "processes)")
+WAIT_LAUNCH = ("delegation-ledger: watch {0}. If this command is stopped, re-arm with "
+               "delegation-ledger wait --resume {0} (run_in_background, timeout 7200000)")
 WAIT_EXITS = {"done": 0, "failed": 1, "stale": 2}  # how the watch's condition ended
 WAIT_ASIDE = 3    # this waiter stepped aside; the watch goes on, or was dropped
 WAIT_USAGE = 64   # EX_USAGE
@@ -1216,6 +1218,15 @@ def existing_watch(wid):
     return w
 
 
+def same_watch(session, cond):
+    """The session's unresolved watch on exactly this condition, or None. A codex condition is
+    left to the codex refusal (one watch per run), and a caller with no session has none."""
+    if session == "unknown" or "codex" in cond:
+        return None
+    return next((w for w in dc.all_watches() if w.get("state") in dc.UNRESOLVED
+                 and w.get("session_id") == session and w.get("condition") == cond), None)
+
+
 def stop_row(run_id):
     """The folded codex entry when its latest row is a stop, else None."""
     e = dc.fold(dc.read_rows()).get(("codex", run_id)) or {}
@@ -1229,6 +1240,8 @@ class Waiter(dc.Waiter):
         """Poll until the condition ends or max_min passes; the exit code."""
         deadline = time.monotonic() + max_min * 60
         w = self.take(new)
+        # First, so a kill notice's output file names the watch (the guard folds by it).
+        print(WAIT_LAUNCH.format(self.wid), flush=True)
         cursor = dc.log_cursor()
         while True:
             verdict, why = dc.watch_verdict(w, cursor)
@@ -1361,8 +1374,14 @@ def cmd_wait(args):
         if args.resume is not None:
             existing_watch(wid)
             return Waiter(wid, args.poll, dc.wait_session()).run(args.max)
-        wid = dc.new_watch_id()
         session = dc.wait_session()
+        same = same_watch(session, cond)
+        if same is not None:
+            # A rerun of a killed waiter: carry on with its watch, which the guard names.
+            print(f"watch {same['id']} already waits on this; taking it over", flush=True)
+            wid = same["id"]
+            return Waiter(wid, args.poll, session).run(args.max)
+        wid = dc.new_watch_id()
         if session == "unknown":
             print("no Claude Code session: the watch guard won't see this watch",
                   file=sys.stderr, flush=True)

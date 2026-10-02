@@ -28,8 +28,9 @@ to wake it. This hook is the enforcement:
   task id, in either shape: a user entry between turns, or a mid-turn attachment entry. The
   first run records since as 10 minutes back, so older kills never block. A killed
   `delegation-ledger wait` folds into its watch's item when that watch has one in this stop:
-  the watch a --resume names, else the one watch created within 120 s after the launch (more
-  than one: the one whose condition the command's --pid, --file or --log names). A killed
+  the watch its launch line names (the output file's first lines), else the one a --resume
+  names, else the one watch created within 120 s after the launch (more than one: the one
+  whose condition the command's --pid, --file or --log names). A killed
   `codex-delegate run|resume` folds the same way into the watch its wrapper waited as, which
   its launch line names (the first line of the command's output file). With none (a
   sandboxed run), it doesn't fold; its reason says Codex keeps running, and re-arms the run's
@@ -101,6 +102,7 @@ TASK_RE = re.compile(r"<task-id>([^<]+)</task-id>")
 TOOL_USE_RE = re.compile(r"<tool-use-id>([^<]+)</tool-use-id>")
 OUTPUT_RE = re.compile(r"<output-file>([^<]+)</output-file>")
 LAUNCH_RE = re.compile(r"codex-delegate: run (\S+), watch (\S+)\. ")
+WAIT_LAUNCH_RE = re.compile(r"delegation-ledger: watch (\S+)\. If this command is stopped")
 LAUNCH_BYTES = 4096         # a launch line is the output file's first line, well under this
 SUMMARY_RE = re.compile(r"<summary>(.*?)</summary>", re.S)
 DESC_RE = re.compile(r'^Background command "(.*)" was stopped', re.S)
@@ -372,18 +374,23 @@ def created_after(watches, at):
     return fits
 
 
-def launch_of(output, spent):
-    """(run, watch) from a codex-delegate's launch line, the first line it writes to the
-    command's output file before Codex starts; (None, None) with none (a sandboxed run, or one
-    refused before it launched) or once the budget is spent."""
+def output_head(output, spent):
+    """The first LAUNCH_BYTES of a killed command's output file, where a waiter or a
+    codex-delegate prints its launch line before anything slow; "" with none, or once the
+    budget is spent."""
     if not output or spent():
-        return None, None
+        return ""
     try:
         with open(output, "rb") as f:
-            first = f.read(LAUNCH_BYTES).split(b"\n", 1)[0].decode("utf-8", "replace")
+            return f.read(LAUNCH_BYTES).decode("utf-8", "replace")
     except OSError:
-        return None, None
-    m = LAUNCH_RE.match(first)
+        return ""
+
+
+def launch_of(output, spent):
+    """(run, watch) from a codex-delegate's launch line; (None, None) with none (a sandboxed
+    run, or one refused before it launched)."""
+    m = LAUNCH_RE.search(output_head(output, spent))
     return (m.group(1), m.group(2)) if m else (None, None)
 
 
@@ -411,7 +418,9 @@ def map_kill(n, transcript, watches, cwd, spent):
         return plain
     command, at = found or ("", None)
     if WAITER_RE.search(command):
-        return plain._replace(fold=fold_target(command, at, watches, cwd))
+        named = WAIT_LAUNCH_RE.search(output_head(n.output, spent))
+        return plain._replace(fold=named.group(1) if named else
+                              fold_target(command, at, watches, cwd))
     codex = CODEX_RE.search(command)
     if codex:
         fold, run = codex_target(codex, n.output, spent)

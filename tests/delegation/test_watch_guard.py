@@ -408,6 +408,21 @@ class Kills(GuardEnv):
                    notice("bk1", "toolu_1", "re-arm", self.now - 60))
         self.assertEqual(self.decide(), self.block(self.lapse_reason()))
 
+    def test_a_killed_waiter_folds_into_the_watch_its_launch_line_names(self):
+        # Two watches created in the launch window: only the launch line tells them apart, and
+        # w-a's live waiter means a kill folded into it would still be said.
+        launched = self.now - 7200
+        made = iso(launched + 1)[:19] + "Z"
+        self.watch("w-a", created=made, live=True)
+        self.watch("w-b", created=made)
+        output = self.path("bk1.output")
+        with open(output, "w") as f:
+            f.write("delegation-ledger: watch w-b. If this command is stopped, re-arm with "
+                    "delegation-ledger wait --resume w-b (run_in_background, timeout 7200000)\n")
+        self.lines(launch("toolu_1", "bk1", "delegation-ledger wait --pid 123", "wait", launched),
+                   notice("bk1", "toolu_1", "wait", self.now - 60, output=output))
+        self.assertEqual(self.decide(), self.block(self.lapse_reason("w-b")))
+
     def test_a_killed_first_waiter_folds_into_the_watch_it_created(self):
         launched = self.now - 7200
         self.watch(created=iso(launched + 2)[:19] + "Z")
