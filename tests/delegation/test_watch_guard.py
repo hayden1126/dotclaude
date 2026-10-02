@@ -28,20 +28,22 @@ def iso(t):
     return time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime(t))
 
 
-def notification(task, tool_use, desc, status="killed"):
+def notification(task, tool_use, desc, status="killed", output=None):
     summary = (f'Background command "{desc}" was stopped after reaching its background time '
                "limit" if status == "killed" else f'Background command "{desc}" completed '
                "(exit code 0)")
     return (f"<task-notification>\n<task-id>{task}</task-id>\n<tool-use-id>{tool_use}"
-            f"</tool-use-id>\n<output-file>/tmp/x/tasks/{task}.output</output-file>\n<status>"
+            f"</tool-use-id>\n<output-file>{output or f'/tmp/x/tasks/{task}.output'}"
+            f"</output-file>\n<status>"
             f"{status}</status>\n<summary>{summary}</summary>\n<note>{NOTE}</note>\n"
             "</task-notification>")
 
 
-def notice(task, tool_use, desc, at, status="killed"):
+def notice(task, tool_use, desc, at, status="killed", output=None):
     return {"type": "user", "timestamp": iso(at),
             "origin": {"kind": "task-notification", "producer": "session-task"},
-            "message": {"role": "user", "content": notification(task, tool_use, desc, status)}}
+            "message": {"role": "user",
+                        "content": notification(task, tool_use, desc, status, output)}}
 
 
 def queued(task, tool_use, desc, at):
@@ -441,20 +443,33 @@ class Kills(GuardEnv):
         self.assertEqual(self.decide(), self.block(codex.format("codex job", "<run_id>"),
                                                    codex.format("codex resume", "r7")))
 
-    def test_a_killed_codex_wrapper_folds_into_its_runs_watch(self):
-        # A run's by the launch window; a resume's by the thread id it names.
+    def test_a_killed_codex_wrapper_folds_into_the_watch_its_launch_line_names(self):
+        # Two codex watches made in the launch window: the launch line tells them apart. w-a's
+        # waiter lives, so it has no item, and a kill folded into it would still be said.
         launched = self.now - 7200
-        self.codex_row("r1", thread_id="th-9", pid=os.getpid())  # Codex runs on
-        self.watch("w-c", cond={"codex": "r1"}, desc="codex run r1 ends",
-                   created=iso(launched + 1)[:19] + "Z")
+        made = iso(launched + 1)[:19] + "Z"
+        self.codex_row("r1", pid=os.getpid())
+        self.codex_row("r2", pid=os.getpid())  # Codex runs on
+        self.watch("w-a", cond={"codex": "r1"}, desc="codex run r1 ends", created=made,
+                   live=True)
+        self.watch("w-b", cond={"codex": "r2"}, desc="codex run r2 ends", created=made)
+        output = self.path("bk1.output")
+        with open(output, "w") as f:
+            f.write("codex-delegate: run r2, watch w-b. If this command is stopped, Codex keeps "
+                    "running: delegation-ledger wait --resume w-b\n")
         self.lines(launch("toolu_1", "bk1", "codex-delegate run --model sol --dir . --brief b",
                           "codex job", launched),
-                   launch("toolu_2", "bk2", "codex-delegate resume th-9 --prompt p",
-                          "codex resume", self.now - 3000),
-                   notice("bk1", "toolu_1", "codex job", self.now - 60),
-                   notice("bk2", "toolu_2", "codex resume", self.now - 50))
+                   notice("bk1", "toolu_1", "codex job", self.now - 60, output=output))
         self.assertEqual(self.decide(), self.block(self.lapse_reason(
-            "w-c", desc="codex run r1 ends", cond="codex run r1 ends")))
+            "w-b", desc="codex run r2 ends", cond="codex run r2 ends")))
+
+    def test_an_unstarted_codex_run_says_to_resume_it_again(self):
+        self.codex_row("r1", event="pending", thread_id="th-1")  # its wrapper died first
+        self.watch(cond={"codex": "r1"}, desc="codex run r1 ends")
+        self.assertEqual(self.decide(), self.block(
+            "Watch w-1 (codex run r1 ends): codex run r1 never started, since its wrapper "
+            "stopped before Codex did, so there is nothing to wait on or finalize: run "
+            "codex-delegate resume r1 again, with run_in_background and timeout 7200000."))
 
     def test_an_unfolded_codex_kill_re_arms_the_runs_open_watch(self):
         self.codex_row("r1", pid=os.getpid())

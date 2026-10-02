@@ -231,10 +231,12 @@ codex-delegate audit <thread_id>   # every model the thread and its sub-agents u
 - **Exit codes:**
   - 0: ok;
   - 1: Codex failed (its own code is `rc` in the summary);
-  - 2: refused, or bad usage;
+  - 2: refused, or bad usage (a resume while Codex still runs, too);
   - 3: the model audit failed;
   - 4: the report is missing or invalid;
+  - 5: stopped waiting with its watch dropped or taken over; Codex keeps running;
   - 75: still running: re-arm with the printed command;
-  - 124: timed out.
+  - 124: timed out;
+  - 143: killed by SIGTERM or SIGHUP; Codex keeps running, and the watch guard re-arms it.
 - **Scope:** send Codex only the work it does better, such as anything about its own
   configuration. Claude does the rest.

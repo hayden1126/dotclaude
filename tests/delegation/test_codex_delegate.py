@@ -5,6 +5,7 @@ import glob
 import json
 import os
 import re
+import shutil
 import signal
 import subprocess
 import sys
@@ -237,6 +238,15 @@ class FullRun(unittest.TestCase):
         cd.dc.write_json(os.path.join(self.tmp.name, "state", "dotclaude", "watches",
                                       f"{wid}.json"), w)
 
+    def wait_gone(self, pid):
+        deadline = time.time() + 15
+        while time.time() < deadline and cd.dc.pid_alive(pid):
+            time.sleep(0.1)
+
+    def ledger_run(self, *args):
+        return subprocess.run([sys.executable, LEDGER, *args], capture_output=True, text=True,
+                              env=self.env, timeout=60)
+
     def drop_stop_row(self):
         """As if the wrapper had been killed before it wrote the stop row."""
         rows = self.ledger()
@@ -358,8 +368,9 @@ class FullRun(unittest.TestCase):
         rows = self.ledger()
         self.assertNotIn("stop", [r["event"] for r in rows])
         self.assertTrue(cd.dc.pid_alive(rows[-1]["pid"]))  # Codex runs on
-        w = subprocess.run([sys.executable, LEDGER, "wait", "--resume", wid, "--poll", "0.2"],
-                           capture_output=True, text=True, env=self.env, timeout=60)
+        self.assertIn(f"`delegation-ledger wait --resume {wid}` waits and finalizes",
+                      self.run_cd("status").stdout)
+        w = self.ledger_run("wait", "--resume", wid, "--poll", "0.2")
         self.assertEqual(w.returncode, 0, w.stderr)
         self.assertEqual([r["event"] for r in self.ledger()].count("stop"), 1)
         self.assertTrue(self.ledger()[-1]["report_ok"])
@@ -379,13 +390,75 @@ class FullRun(unittest.TestCase):
         self.assertEqual((stop["event"], stop["thread_id"], stop["audit_ok"]),
                          ("stop", "th-1", True))
 
-    def test_a_sandboxed_run_records_no_watch_and_goes_on(self):
-        p = self.run_ok(CLAUDE_PID=str(DEAD))  # its own pid unseen: a sandbox PID namespace
+    def test_a_sandboxed_run_records_no_watch_and_never_detaches(self):
+        # Its own pid unseen: a sandbox PID namespace, which Codex could die with at exit 75.
+        p = self.run_ok("--max-wait", "0.01", CLAUDE_PID=str(DEAD), FAKE_SLEEP="1.5")
         self.assertEqual(p.returncode, 0, p.stderr)
-        self.assertIn("codex-delegate: running sandboxed, so no watch is recorded; run it as a "
-                      "bare command\n", p.stderr)
+        self.assertIn("codex-delegate: running sandboxed, so no watch is recorded and --max-wait "
+                      "is ignored (Codex would die with this command); run it as a bare "
+                      "command\n", p.stderr)
+        self.assertNotIn("detached", [r["event"] for r in self.ledger()])
         self.assertEqual(self.watches(), {})
         self.assertTrue(json.loads(p.stdout)["report_ok"])  # the summary alone, as before
+
+    def test_resume_refuses_a_running_codex_then_finalizes_the_ended_turn_first(self):
+        p = self.run_ok("--max-wait", "0.02", FAKE_SLEEP="5")
+        self.assertEqual(p.returncode, 75, p.stderr)
+        _, wid = self.launch_ids(p.stdout.splitlines()[0] + "\n")
+        run_id, pid = self.ledger()[0]["run_id"], self.ledger()[-1]["pid"]
+        r = self.run_cd("resume", run_id, "--no-scope")
+        self.assertEqual(r.returncode, 2)
+        self.assertIn(f"run {run_id} is still running (codex pid {pid}). Wait on it: "
+                      f"delegation-ledger wait --resume {wid}; resume once it ends", r.stderr)
+        with open(self.argv_log) as f:
+            self.assertEqual(len(f.readlines()), 1)  # no second Codex on the thread
+        self.wait_gone(pid)
+        r = self.run_cd("resume", run_id, "--no-scope")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual([r["event"] for r in self.ledger()],
+                         ["pending", "start", "detached", "stop", "pending", "resume", "stop"])
+        self.assertIsNone(self.ledger()[3]["rc"])  # the first turn, finalized
+        self.assertEqual(self.watches()[wid]["state"], "done")  # the resume took it over
+
+    def test_a_resume_that_fails_to_launch_ends_its_turn_failed(self):
+        run_id = self.summary(self.run_ok("--out", os.path.join(self.tmp.name, "out")))["run_id"]
+        shutil.rmtree(self.work)  # so the resume's Popen, run in --dir, fails
+        p = self.run_cd("resume", run_id, "--no-scope")
+        self.assertEqual(p.returncode, 1)
+        self.assertIn("codex-delegate: FileNotFoundError", p.stderr)
+        stop = self.ledger()[-1]
+        self.assertEqual((stop["event"], stop["exit"], stop["report_ok"], stop["audit_ok"]),
+                         ("stop", 1, False, False))
+        self.assertIn("FileNotFoundError", stop["error"])
+        _, wid = self.launch_ids(p.stdout.split("\n", 1)[0] + "\n")
+        self.assertEqual(self.watches()[wid]["state"], "failed")
+        self.assertNotEqual(self.ledger_run("wait", "--resume", wid).returncode, 0)
+
+    def test_a_run_whose_wrapper_died_before_codex_started_is_not_finalized(self):
+        run_id = self.summary(self.run_ok())["run_id"]
+        with open(os.path.join(self.tmp.name, "state", "dotclaude", "delegations.jsonl"),
+                  "a") as f:  # a resume's pending row, its wrapper gone before the Popen
+            f.write(json.dumps({"runner": "codex", "id": run_id, "run_id": run_id,
+                                "event": "pending", "ts": cd.dc.now_iso(), "thread_id": "th-1",
+                                "wrapper_pid": DEAD}) + "\n")
+        p = self.run_cd("finalize", run_id)
+        self.assertEqual(p.returncode, 2)
+        self.assertIn(f"run codex-delegate resume {run_id} again", p.stderr)
+        w = self.ledger_run("wait", "--codex", run_id, "--poll", "0.2")
+        self.assertEqual(w.returncode, 70, w.stderr)
+        self.assertIn(f"never started, since its wrapper stopped before Codex did: run "
+                      f"codex-delegate resume {run_id} again", w.stderr)
+        self.assertEqual([r["event"] for r in self.ledger()].count("stop"), 1)
+
+    def test_max_wait_with_its_watch_dropped_exits_5_without_a_rearm(self):
+        proc = self.start("--max-wait", "0.05", FAKE_SLEEP="6")
+        _, wid = self.launch_ids(proc.stdout.readline())
+        d = self.ledger_run("wait", "--drop", wid)
+        self.assertEqual(d.returncode, 0, d.stderr)
+        self.assertEqual(proc.wait(timeout=20), 5)
+        self.assertEqual(proc.stdout.read(), f"watch {wid} was dropped; Codex keeps running\n")
+        proc.stdout.close()
+        self.wait_gone(self.ledger()[-1]["pid"])
 
     def test_max_wait_is_at_most_110_minutes(self):
         for bad in ("111", "0", "nan"):

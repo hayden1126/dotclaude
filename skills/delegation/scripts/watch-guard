@@ -30,9 +30,9 @@ to wake it. This hook is the enforcement:
   `delegation-ledger wait` folds into its watch's item when that watch has one in this stop:
   the watch a --resume names, else the one watch created within 120 s after the launch (more
   than one: the one whose condition the command's --pid, --file or --log names). A killed
-  `codex-delegate run|resume` folds the same way into the watch its wrapper waited as: a
-  resume's by the run or thread id it names, a run's the one codex watch created within 120 s
-  after the launch. Unfolded, its reason says Codex keeps running, and re-arms the run's
+  `codex-delegate run|resume` folds the same way into the watch its wrapper waited as, which
+  its launch line names (the first line of the command's output file). With none (a
+  sandboxed run), it doesn't fold; its reason says Codex keeps running, and re-arms the run's
   watch when one is open.
 
 Each stop runs in three phases, so what it records it also says. Gather is read-only and
@@ -76,6 +76,9 @@ WATCH_REASON = ("Watch {id} ({desc}) has no live waiter and {unmet}. If a comman
                 "--resume {id}, with run_in_background and timeout 7200000. To stop watching "
                 "it: delegation-ledger wait --drop {id}.")
 CODEX_ENDED = "(the run has ended; resuming finalizes it)"
+CODEX_UNSTARTED = ("Watch {id} ({desc}): codex run {run} never started, since its wrapper "
+                   "stopped before Codex did, so there is nothing to wait on or finalize: "
+                   "{restart}, with run_in_background and timeout 7200000.")
 MET_REASON = ("Watch {id} ({desc}): {cond} is met, but its waiter had stopped, so no "
               "notification came. Check the result and report it.")
 CODEX_FAILED = ("codex run {run} ended with exit {exit}, but its waiter had stopped, so no "
@@ -96,6 +99,9 @@ ACK_MESSAGE = ("Watch {id} ({desc}) still has no waiter; it's acknowledged. Re-a
                "delegation-ledger wait --resume {id}, or drop it.")
 TASK_RE = re.compile(r"<task-id>([^<]+)</task-id>")
 TOOL_USE_RE = re.compile(r"<tool-use-id>([^<]+)</tool-use-id>")
+OUTPUT_RE = re.compile(r"<output-file>([^<]+)</output-file>")
+LAUNCH_RE = re.compile(r"codex-delegate: run (\S+), watch (\S+)\. ")
+LAUNCH_BYTES = 4096         # a launch line is the output file's first line, well under this
 SUMMARY_RE = re.compile(r"<summary>(.*?)</summary>", re.S)
 DESC_RE = re.compile(r'^Background command "(.*)" was stopped', re.S)
 WAITER_RE = re.compile(r"\bdelegation-ledger\s+wait\b")
@@ -103,7 +109,7 @@ RESUME_RE = re.compile(r"\bdelegation-ledger\s+wait\b.*?--resume[=\s]+['\"]?([^\
 CODEX_RE = re.compile(r"\bcodex-delegate\s+(run|resume)\b(?:\s+['\"]?([^\s'\"]+))?")
 ARG_RE = {opt: re.compile(rf"--{opt}[=\s]+['\"]?([^\s'\"]+)") for opt in ("pid", "file", "log")}
 
-Notice = collections.namedtuple("Notice", "task tool_use desc ts pos")
+Notice = collections.namedtuple("Notice", "task tool_use desc ts pos output")
 # A watch's gathered item: kind "end" (the job ended unnoticed: record `state`, say `text`) or
 # "lapse" (block once with `text`, or acknowledge).
 Pending = collections.namedtuple("Pending", "kind w text state")
@@ -163,6 +169,9 @@ def watch_pending(w, shells, now):
         if stage == "stopped":
             return Pending("end", w, CODEX_FAILED.format(run=cond["codex"], exit=e.get("exit")),
                            "failed")
+        if stage == "unstarted":
+            lapsed = CODEX_UNSTARTED.format(id=wid, desc=desc, run=cond["codex"],
+                                            restart=dc.codex_restart(e))
         if stage == "ended":
             lapsed = lapsed.replace(" is unmet.", f" is unmet {CODEX_ENDED}.", 1)
         return Pending("lapse", w, lapsed, None)
@@ -219,9 +228,11 @@ def parse_notice(line, pos):
             or task is None or ts is None):
         return None
     tool, summary = TOOL_USE_RE.search(text), SUMMARY_RE.search(text)
+    output = OUTPUT_RE.search(text)
     named = DESC_RE.match(summary.group(1)) if summary else None
     desc = named.group(1) if named else (summary.group(1) if summary else task.group(1))
-    return Notice(task.group(1), tool.group(1) if tool else None, desc, ts, pos)
+    return Notice(task.group(1), tool.group(1) if tool else None, desc, ts, pos,
+                  output.group(1) if output else None)
 
 
 def scan(path, start, cut):
@@ -361,24 +372,33 @@ def created_after(watches, at):
     return fits
 
 
-def codex_run(w):
-    return (w.get("condition") or {}).get("codex")
+def launch_of(output, spent):
+    """(run, watch) from a codex-delegate's launch line, the first line it writes to the
+    command's output file before Codex starts; (None, None) with none (a sandboxed run, or one
+    refused before it launched) or once the budget is spent."""
+    if not output or spent():
+        return None, None
+    try:
+        with open(output, "rb") as f:
+            first = f.read(LAUNCH_BYTES).split(b"\n", 1)[0].decode("utf-8", "replace")
+    except OSError:
+        return None, None
+    m = LAUNCH_RE.match(first)
+    return (m.group(1), m.group(2)) if m else (None, None)
 
 
-def codex_target(match, at, watches):
-    """(fold, run) for a killed `codex-delegate run|resume` (its CODEX_RE match): the watch
-    its wrapper waited as, and the run id when known. A resume names its run or thread; a run
-    mints its id, so its watch is the one codex watch created within FOLD_WINDOW_S after the
-    launch."""
-    if match.group(1) == "resume":
-        key = match.group(2) if match.group(2) and not match.group(2).startswith("-") else None
-        e = dc.find_codex(key) if key else None
-        run = e["run_id"] if e else key
-        fits = [w for w in watches if run is not None and codex_run(w) == run]
-    else:
-        fits = [w for w in created_after(watches, at) if codex_run(w) is not None]
-        run = codex_run(fits[0]) if len(fits) == 1 else None
-    return (fits[0]["id"] if len(fits) == 1 else None), run
+def codex_target(match, output, spent):
+    """(fold, run) for a killed `codex-delegate run|resume` (its CODEX_RE match): the watch and
+    run its launch line names. With no launch line it doesn't fold, and a resume's run is the
+    one its run or thread id names."""
+    run, wid = launch_of(output, spent)
+    if wid is not None:
+        return wid, run
+    if match.group(1) != "resume":
+        return None, None
+    key = match.group(2) if match.group(2) and not match.group(2).startswith("-") else None
+    e = dc.find_codex(key) if key else None
+    return None, (e["run_id"] if e else key)
 
 
 def map_kill(n, transcript, watches, cwd, spent):
@@ -394,7 +414,7 @@ def map_kill(n, transcript, watches, cwd, spent):
         return plain._replace(fold=fold_target(command, at, watches, cwd))
     codex = CODEX_RE.search(command)
     if codex:
-        fold, run = codex_target(codex, at, watches)
+        fold, run = codex_target(codex, n.output, spent)
         open_watch = dc.codex_watch(run) if fold is None and run else None
         wid = fold or (open_watch or {}).get("id")
         text = (CODEX_REARM.format(desc=n.desc, wid=wid) if wid else

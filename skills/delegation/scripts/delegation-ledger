@@ -1150,7 +1150,7 @@ WAIT_EXIT_HELP = """exit codes:
       a second watch on a codex run that a watch already waits on, resuming an ended watch,
       or a run inside the sandbox
   70  internal error, or nothing could be decided (a finalize recorded no stop row, the codex
-      run left the ledger): the watch stays open for a --resume; details in
+      run left the ledger or never started): the watch stays open for a --resume; details in
       delegation-ledger.err
   75  still running at --max: re-arm with the command printed"""
 WAIT_CONDITIONS = ("pid", "file", "log", "done", "fail", "stale", "codex")
