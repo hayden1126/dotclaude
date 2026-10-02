@@ -413,6 +413,77 @@ class Watches(GuardEnv):
         self.assertIsNone(self.decide())
         self.assertEqual(self.read()["session_id"], "s-before")
 
+    def unheard_reason(self, wid="w-1"):
+        return (f"Watch {wid}'s waiter was started by a Claude Code process that has ended, so "
+                f"its exit won't reach you. Re-arm it: delegation-ledger wait --resume {wid}, "
+                "with run_in_background and timeout 7200000.")
+
+    def ended_reason(self, state="done", wid="w-1", desc="the build"):
+        return (f"Watch {wid} ({desc}) ended ({state}) while no Claude Code process was "
+                "listening. Check the result and report it.")
+
+    def test_a_crashed_processs_live_waiter_is_adopted_and_blocks_once(self):
+        # A crash, then claude --continue: the same session id in a new Claude process.
+        self.watch(live=True, claude_pid=DEAD, claude_start=None)
+        self.lines()
+        self.as_claude()
+        self.assertEqual(self.decide(), self.block(self.unheard_reason()))
+        w = self.read()
+        self.assertEqual((w["claude_pid"], w["claude_start"], w["waiter_unheard"]),
+                         (os.getpid(), dc.proc_start(os.getpid()), True))
+        self.assertIn(f"adopted watch w-1 from Claude process {DEAD}, which has ended",
+                      self.err_log())
+        self.assertIsNone(self.decide(prompt_id="p2"))
+
+    def test_a_crashed_processs_dead_waiter_is_adopted_and_lapses(self):
+        self.watch(claude_pid=DEAD, claude_start=None)
+        self.lines()
+        self.as_claude()
+        self.assertEqual(self.decide(), self.block(self.lapse_reason()))
+        w = self.read()
+        self.assertEqual(w["claude_pid"], os.getpid())
+        self.assertNotIn("waiter_unheard", w)
+
+    def test_without_its_own_process_the_guard_adopts_no_crashed_watch(self):
+        self.watch(live=True, claude_pid=DEAD, claude_start=None)
+        self.lines()
+        with mock.patch.object(guard, "own_claude", return_value=None):
+            self.assertIsNone(self.decide())
+        self.assertEqual(self.read()["claude_pid"], DEAD)
+
+    def test_a_watch_that_ended_while_nobody_listened_blocks_once(self):
+        self.watch(state="done", ended=guard.iso(self.now - 3600), claude_pid=DEAD,
+                   claude_start=None, created="2026-10-02T10:00:00Z")
+        self.watch("w-2", state="stale", ended=guard.iso(self.now - 60), claude_pid=os.getpid(),
+                   claude_start=dc.proc_start(os.getpid()), waiter_unheard=True,
+                   created="2026-10-02T10:00:01Z")
+        self.lines()
+        self.assertEqual(self.decide(), self.block(self.ended_reason(),
+                                                   self.ended_reason("stale", "w-2")))
+        self.assertEqual((self.read()["reported"], self.read("w-2")["reported"]), (True, True))
+        self.assertIsNone(self.decide(prompt_id="p2"))
+
+    def test_an_ended_watch_someone_heard_or_could_says_nothing(self):
+        dead = {"claude_pid": DEAD, "claude_start": None}
+        self.watch("w-1", state="done", ended=guard.iso(self.now - 60), reported=True, **dead)
+        self.watch("w-2", state="failed", ended=guard.iso(self.now - 8 * 86400), **dead)
+        self.watch("w-3", state="done", ended=guard.iso(self.now - 60), claude_pid=os.getpid(),
+                   claude_start=dc.proc_start(os.getpid()))  # heard, its process runs
+        self.watch("w-4", state="dropped", ended=guard.iso(self.now - 60), **dead)
+        self.watch("w-5", sid="s-other", state="done", ended=guard.iso(self.now - 60), **dead)
+        self.watch("w-6", state="done", ended=guard.iso(self.now - 60))  # no process recorded
+        self.lines()
+        self.assertIsNone(self.decide())
+
+    def test_an_end_the_guard_says_is_recorded_reported(self):
+        target = self.path("out")
+        open(target, "w").close()
+        self.watch(cond={"file": target}, claude_pid=DEAD, claude_start=None)
+        self.lines()
+        self.assertEqual(self.decide(), self.block(self.met_reason(cond=f"{target} exists")))
+        self.assertEqual((self.read()["state"], self.read()["reported"]), ("done", True))
+        self.assertIsNone(self.decide(prompt_id="p2"))
+
     def test_an_undecidable_watch_is_skipped_and_the_other_still_blocks(self):
         self.watch(wid="w-gone", cond={"codex": "r-gone"}, desc="codex run r-gone ends")
         self.watch(wid="w-2")

@@ -23,6 +23,13 @@ to wake it. This hook is the enforcement:
     A twin guard in the same stop has the same digest and says nothing, even when the
     transcript grew between them. Only a payload with neither field falls back to the size
     (grown means later), then to age (over 60 s).
+  - a watch of this session recorded under a Claude process that has ended (a crash, then
+    `claude --continue`) is adopted too: this process records itself as the watch's. A waiter
+    still running there reports to nobody, so it is marked waiter_unheard and blocks once
+    with the re-arm command; a dead one is a lapse, as above.
+  - a watch of this session that ended (done, failed or stale) in the last 7 days while no
+    Claude process was listening (its waiter was unheard, or its Claude process has ended),
+    and isn't reported yet, blocks once and is recorded reported.
 - Kills. Each stop reads the transcript on from where the last one stopped (kills/<sid>.json
   holds the offset; a session's first scan starts 256 KB back), searching the raw bytes for
   task notifications. One whose status is killed at the background time limit blocks once per
@@ -78,6 +85,12 @@ WATCH_REASON = ("Watch {id} ({desc}) has no live waiter and {unmet}. If a comman
                 "--resume {id}, with run_in_background and timeout 7200000. To stop watching "
                 "it: delegation-ledger wait --drop {id}.")
 CODEX_ENDED = "(the run has ended; resuming finalizes it)"
+UNHEARD_REASON = ("Watch {id}'s waiter was started by a Claude Code process that has ended, so "
+                  "its exit won't reach you. Re-arm it: delegation-ledger wait --resume {id}, "
+                  "with run_in_background and timeout 7200000.")
+ENDED_UNHEARD = ("Watch {id} ({desc}) ended ({state}) while no Claude Code process was "
+                 "listening. Check the result and report it.")
+REPORTED_STATES = ("done", "failed", "stale")  # how a waiter ends; dropped is the lead's own
 CODEX_UNSTARTED = ("Watch {id} ({desc}): codex run {run} never started, since its wrapper "
                    "stopped before Codex did, so the watch is recorded failed. To retry, "
                    "{restart}, with run_in_background and timeout 7200000.")
@@ -117,8 +130,9 @@ CODEX_RE = re.compile(r"\bcodex-delegate\s+(run|resume)\b(?:\s+['\"]?([^\s'\"]+)
 ARG_RE = {opt: re.compile(rf"--{opt}[=\s]+['\"]?([^\s'\"]+)") for opt in ("pid", "file", "log")}
 
 Notice = collections.namedtuple("Notice", "task tool_use desc ts pos output")
-# A watch's gathered item: kind "end" (the job ended unnoticed: record `state`, say `text`) or
-# "lapse" (block once with `text`, or acknowledge).
+# A watch's gathered item: kind "end" (the job ended unnoticed: record `state`, say `text`),
+# "lapse" (block once with `text`, or acknowledge) or "report" (an ended watch nobody heard:
+# record it reported, say `text`).
 Pending = collections.namedtuple("Pending", "kind w text state")
 # A kill's gathered item: its notice, its text, and the watch it folds into (or None).
 Kill = collections.namedtuple("Kill", "notice text fold")
@@ -507,25 +521,62 @@ def adoptable(w, me, live):
             and str(w.get("claude_start")) == str(me[1]) and w.get("session_id") not in live)
 
 
-def adopt(sid, wids, me, until, clock):
-    """Move the watches /clear left into this session, and log each. Each is checked again
-    under the lock (adoptable), so one another session re-armed, or whose old session came
-    back, since it was gathered stays where it is."""
-    moved = []
+def crashed(w, sid, me):
+    """Whether watch w is this session's and the Claude process it was recorded under has
+    ended (a crash, then `claude --continue` in this process, `me`)."""
+    return me is not None and w.get("session_id") == sid and dc.claude_gone(w)
+
+
+def adopt(sid, wids, me, now, until, clock):
+    """Adopt the watches gathered for it, log each, and return the ids of those whose waiter
+    still runs but reports to nobody. Each is checked again under the lock:
+    - one /clear left (adoptable) moves into this session. One another session re-armed, or
+      whose old session came back, since it was gathered stays where it is;
+    - a crashed one records this process as its Claude process, and a waiter still running is
+      marked waiter_unheard: its exit goes to the process that ended."""
+    moved, revived, unheard = [], [], []
 
     def fn(wid):
         def move(cur):
-            if (cur.get("state") in dc.UNRESOLVED and cur.get("session_id") != sid
-                    and adoptable(cur, me, dc.live_sessions())):
-                moved.append((wid, cur.get("session_id")))
-                cur["session_id"] = sid
+            if cur.get("state") not in dc.UNRESOLVED:
+                return
+            if cur.get("session_id") != sid:
+                if adoptable(cur, me, dc.live_sessions()):
+                    moved.append((wid, cur.get("session_id")))
+                    cur["session_id"] = sid
+            elif crashed(cur, sid, me):
+                revived.append((wid, cur.get("claude_pid")))
+                cur.update(claude_pid=me[0], claude_start=me[1])
+                if dc.waiter_alive(cur, now):
+                    cur["waiter_unheard"] = True
+                    unheard.append(wid)
         return move
     _, failed = dc.update_watches({wid: fn(wid) for wid in wids}, until, clock)
+    lost = {wid for wid, _ in failed}  # unwritten, so not adopted
     for wid, old in moved:
-        checks.log_error(f"watch-guard: adopted watch {wid} from session {old}: the same Claude "
-                         "process (a /clear)")
+        if wid not in lost:
+            checks.log_error(f"watch-guard: adopted watch {wid} from session {old}: the same "
+                             "Claude process (a /clear)")
+    for wid, old in revived:
+        if wid not in lost:
+            checks.log_error(f"watch-guard: adopted watch {wid} from Claude process {old}, which "
+                             "has ended (a crash, then claude --continue)")
     for wid, exc in failed:
         log(f"adopt {wid}", exc)
+    return [wid for wid in unheard if wid not in lost]
+
+
+def ended_unheard(w, sid, now):
+    """Whether watch w, of this session, ended (REPORTED_STATES) in the last
+    dc.PRUNE_ENDED_DAYS while no Claude process was listening, and isn't reported yet: its
+    waiter was marked unheard, or the Claude process it ran under has ended."""
+    if (w.get("state") not in REPORTED_STATES or w.get("session_id") != sid
+            or w.get("reported") or not (w.get("waiter_unheard") or dc.claude_gone(w))):
+        return False
+    try:
+        return now - dc.parse_iso(w["ended"]).timestamp() <= dc.PRUNE_ENDED_DAYS * 86400
+    except (KeyError, TypeError, ValueError):
+        return False
 
 
 def later_stop(cur, stop, size, now):
@@ -549,20 +600,25 @@ def commit(sid, transcript, adopted, me, pendings, kills, scan_out, stop, size, 
     """Record everything gathered in one pass, under kills/<sid>.lock and then watches/.lock
     (each wait bounded by `until`), and return (items, acks). Each watch is re-read under the
     lock, so a waiter that re-armed meanwhile, a twin guard that recorded first, or a watch
-    that wasn't adopted after all (it's in another session), wins. A
-    watch whose update fails is logged and unsaid, and comes up again next stop; the rest, and
-    the kills, go on. LockBusy means nothing is recorded or said this stop."""
+    that wasn't adopted after all (it's in another session), wins. A watch whose update fails
+    is logged and unsaid, and comes up again next stop; the rest, and the kills, go on.
+    LockBusy means nothing is recorded or said this stop."""
     items, acks, itemized, outcomes = [], [], set(), {}
 
     def record(p):
         wid = p.w["id"]
 
         def fn(cur):
+            if p.kind == "report":
+                if ended_unheard(cur, sid, now):
+                    cur["reported"] = True
+                    outcomes[wid] = "block"
+                return
             if (cur.get("state") not in dc.UNRESOLVED or dc.waiter_alive(cur, now)
                     or cur.get("session_id") != sid):
                 return  # dropped, ended, re-armed or not adopted since it was gathered
             if p.kind == "end":
-                cur.update(state=p.state, ended=iso(now))
+                cur.update(state=p.state, ended=iso(now), reported=True)
                 outcomes[wid] = "block"
             elif cur.get("blocked_at") is None:
                 cur.update(blocked_at=iso(now), blocked_stop=stop, blocked_size=size)
@@ -573,8 +629,9 @@ def commit(sid, transcript, adopted, me, pendings, kills, scan_out, stop, size, 
         return fn
 
     with dc.file_lock(kills_path(sid, ".lock"), until, clock):
-        if adopted:
-            adopt(sid, adopted, me, until, clock)
+        for wid in adopt(sid, adopted, me, now, until, clock) if adopted else []:
+            items.append(UNHEARD_REASON.format(id=wid))
+            itemized.add(wid)
         if pendings:
             _, failed = dc.update_watches({p.w["id"]: record(p) for p in pendings}, until, clock)
             for wid, exc in failed:
@@ -648,10 +705,10 @@ def decide(data, now, clock=time.monotonic):
         log("prune")
     me = own_claude()
     live = dc.live_sessions() if me is not None else {}
-    watches = [w for w in dc.all_watches() if w.get("state") in dc.UNRESOLVED
-               and isinstance(w.get("id"), str)
+    every = [w for w in dc.all_watches() if isinstance(w.get("id"), str)]
+    watches = [w for w in every if w.get("state") in dc.UNRESOLVED
                and (w.get("session_id") == sid or adoptable(w, me, live))]
-    adopted = [w["id"] for w in watches if w.get("session_id") != sid]
+    adopted = [w["id"] for w in watches if w.get("session_id") != sid or crashed(w, sid, me)]
     pendings = []
     for i, w in enumerate(watches):
         if spent():
@@ -665,6 +722,9 @@ def decide(data, now, clock=time.monotonic):
             continue
         if p is not None:
             pendings.append(p)
+    pendings += [Pending("report", w, ENDED_UNHEARD.format(
+        id=w["id"], desc=w.get("description") or "", state=w["state"]), None)
+        for w in every if not spent() and ended_unheard(w, sid, now)]
     kills, scan_out = [], None
     if transcript and not spent():
         try:

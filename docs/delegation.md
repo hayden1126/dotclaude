@@ -287,6 +287,10 @@ from 60 to 5,000 requests an hour.
   `/clear`, so the old one stops being live (see the verified facts). Were that to change, the old
   session would read as live and nothing would be adopted: safe, but the watch would go
   unguarded.
+- **A crash, then `claude --continue`, rests on the session id.** The guard adopts a crashed
+  process's watch only in the session that has its id, so this assumes `--continue` keeps the
+  session id. That isn't verified here; the manual re-arm check in `due.toml` asks for it. With a
+  new id, the watch shows in the session-start line instead, and nothing blocks.
 - **The re-arm across turns isn't in the live harness.** `claude -p` kills background shells
   about 5 s after its final result, so no waiter outlives a `-p` turn. A dated item in `due.toml`
   asks for the check by hand in an interactive session.
@@ -774,7 +778,17 @@ the fix is enforcement. `PLAN.md` has the design history and the options weighed
     pass and logging it. A live session's watch is never adopted, whatever the pids say, and the
     commit checks the process and the liveness again under the lock. It finds its process from
     `CLAUDE_PID`, or the nearest parent with a `~/.claude/sessions/<pid>.json`, 6 levels up at
-    most.
+    most;
+  - it also adopts this session's watches whose Claude process has ended (a crash, then
+    `claude --continue`), recording itself as their Claude process. A waiter still running there
+    reports to a process that's gone, so the watch is marked `waiter_unheard` and blocks once:
+    "Watch <id>'s waiter was started by a Claude Code process that has ended, so its exit won't
+    reach you. Re-arm it", with the `--resume` command. A dead waiter is a lapse, as above;
+  - a watch of this session that ended (done, failed or stale) in the last 7 days while no Claude
+    process listened blocks once, "Check the result and report it", and is recorded `reported`.
+    Nobody listened when its waiter was `waiter_unheard` or its Claude process has ended. A
+    waiter records `reported` itself when its Claude process runs as it ends, and so does the
+    guard for an end it says, so a crash after the news arrived doesn't repeat it.
 - **The kill catch**, in the same hook. Each stop reads the transcript on from where the last one
   stopped (`kills/<session>.json` holds the offset), searching the raw bytes for
   `task-notification`. A notice with `<status>killed</status>` at the background time limit blocks
@@ -799,10 +813,11 @@ the fix is enforcement. `PLAN.md` has the design history and the options weighed
 - **The session-start nudge.** `delegation-ledger due --hook` names, in its numbered line, up to
   three of the open or acknowledged watches nobody will hear from, oldest first, with a count of
   the rest, and one `wait --resume <id>` and `wait --drop <id>` template
-  (`delegation_checks.orphaned_watches`). A watch is nobody's when its session isn't live and
-  its Claude process is gone, whatever its waiter's state, since a bare waiter can outlive a
-  SIGKILLed Claude Code; a live waiter is marked "its waiter is still running". A watch with no
-  session counts only once its waiter is dead.
+  (`delegation_checks.orphaned_watches`). A watch is nobody's when the Claude process it was
+  recorded under has ended, even if its session runs on in a new process (`claude --continue`),
+  or, with no process recorded, when its session isn't live. That holds whatever its waiter's
+  state, since a bare waiter can outlive a SIGKILLed Claude Code; a live waiter is marked "its
+  waiter is still running". A watch with no session counts only once its waiter is dead.
 - **The shim logs.** `hooks/watch-guard.sh` appends Python's stderr to `delegation-ledger.err`,
   falling back to `/dev/null` when that file can't be written, so a missing link or an import
   error shows there and in the quick canary instead of leaving the guard silently off.

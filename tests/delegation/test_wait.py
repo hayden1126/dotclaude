@@ -449,6 +449,38 @@ class Exits(WaitEnv):
         out, _ = self.finish(first, 3)
         self.assertIn(f"watch {wid} was taken over by pid {p.pid}", out)
 
+    def test_resume_takes_a_live_waiter_over_once_its_claude_process_ended(self):
+        # A crash, then claude --continue: the session id runs on, but the waiter's exit goes
+        # to the Claude process that ended.
+        first = self.start("--pid", str(self.job().pid), CLAUDE_PID=str(os.getpid()))
+        wid = self.waiting(first)["id"]
+        self.update(wid, claude_pid=DEAD, claude_start=None)
+        p = self.start("--resume", wid)
+        w = self.waiting(p)
+        self.assertNotIn("claude_pid", w)  # this waiter runs outside Claude Code
+        out, _ = self.finish(first, 3)
+        self.assertIn(f"watch {wid} was taken over by pid {p.pid}", out)
+
+    def test_resume_takes_over_a_waiter_the_guard_marked_unheard(self):
+        first = self.start("--pid", str(self.job().pid))
+        wid = self.waiting(first)["id"]
+        self.update(wid, waiter_unheard=True)
+        p = self.start("--resume", wid)
+        self.assertNotIn("waiter_unheard", self.waiting(p))
+        self.finish(first, 3)
+
+    def test_an_end_its_claude_process_hears_is_recorded_reported(self):
+        target = self.path("out")
+        open(target, "w").close()
+        self.assertEqual(self.run_("--file", target, CLAUDE_PID=str(os.getpid())).returncode, 0)
+        self.assertIs(self.only()["reported"], True)
+
+    def test_an_end_outside_claude_code_isnt_recorded_reported(self):
+        target = self.path("out")
+        open(target, "w").close()
+        self.assertEqual(self.run_("--file", target).returncode, 0)
+        self.assertNotIn("reported", self.only())
+
     def test_a_watch_records_its_claude_process(self):
         # So that process's guard adopts it after a /clear, under a new session id.
         target = self.path("out")

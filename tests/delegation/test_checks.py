@@ -588,6 +588,12 @@ class Orphans(StateTest):
         self.watch(claude_pid=os.getpid(), claude_start=checks.dc.proc_start(os.getpid()))
         self.assertEqual(self.message(), "")
 
+    def test_a_watch_whose_claude_process_ended_is_named_even_in_a_live_session(self):
+        # A crash, then claude --continue: the session runs on, but its waiter's exit is lost.
+        self.watch(sid="s1", live=True, claude_pid=DEAD, claude_start=None)
+        self.assertIn("w-1 (the build; its waiter is still running)", self.message())
+        self.assertIn("w-1 (the build", self.message(json.dumps({"session_id": "s1"})))
+
     def test_a_live_waiter_of_an_ended_session_is_named_too(self):
         # A bare waiter outlives a SIGKILLed Claude Code, and its exit reaches nobody.
         self.watch(live=True)
