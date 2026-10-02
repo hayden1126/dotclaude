@@ -138,8 +138,14 @@ settings docs say.
     `codex-delegate finalize <run_id>` itself, with a fixed argv, and passes its output on.
     `finalize` is idempotent.
 - **No arbitrary `--cmd`.** It would run unsandboxed, so it would be a sandbox escape.
-- **Its limit:** `--max MIN` (default 110, under the 120-minute cap; fractions allowed for tests).
-  It polls every 15 s and updates the heartbeat on each poll.
+- **Its limit:** `--max MIN` (default and maximum 110, which leaves room for a 5-minute finalize
+  under the 120-minute cap; fractions allowed for tests). It polls every 15 s and updates the
+  heartbeat on each poll, including while a finalize runs.
+- **Pids it refuses:** pid 1, a kernel thread, another user's process, and one that isn't
+  running. A sandboxed command's pids start near 1, and on the host those are root daemons.
+  Each watched pid records its `comm`, so a wrong pid is visible.
+- **One watch per Codex run:** a second `wait --codex` on a run that already has an open watch
+  is refused, with that watch's `--resume` command.
 - **Exits** (0 must only ever mean the job finished, since the lead reads the notification):
   - 0 when done;
   - 1 when the job failed: a `--fail` match, a pid exited with another condition unmet, or a
@@ -210,7 +216,11 @@ settings docs say.
     waiting on a job that's still running, don't re-run it: wait with `delegation-ledger wait`
     (`--pid`, `--file` or `--log`), with `run_in_background` and `timeout: 7200000`. If it was
     the job itself, report that it was stopped. If you've already handled it, end your turn."
-- **Fail-open.** Any exception means exit 0, and the error goes to `delegation-ledger.err`.
+- **Fail-open, per item.** An error on one watch or one kill (for example `dc.Undecidable`, when
+  a codex run has left the ledger) skips that item and logs it. It doesn't skip the others. Any
+  other exception means exit 0, and the error goes to `delegation-ledger.err`.
+- **Reuse T1's helpers:** `dc.all_watches`, `dc.watch_verdict`, `dc.waiter_alive` and
+  `dc.condition_text`. Write only through `dc.update_watch`.
 - **Verify:** unit tests for these cases:
   - no state dir; no watches; another session's watch;
   - a live waiter; a met condition;
@@ -243,9 +253,14 @@ settings docs say.
     until `thread.started`, so a waiter started in between sees the old stop row and exits 0
     while Codex is running.
   - **`lookup`** reuses `dc.find_codex` (from T1), not a copy of it.
-  - **`finalize` takes a per-run lock** and re-checks for a stop row inside it. A waiter
-    SIGKILLed mid-finalize leaves its finalize child running, so a later waiter could otherwise
-    start a second one and write two stop rows.
+  - **`finalize` takes a per-run lock** and re-checks for a stop row inside it. Without the
+    lock, two finalizes of one run can both append a stop row:
+    - a waiter SIGKILLed mid-finalize leaves its finalize child running, and a later waiter
+      starts another;
+    - a lead runs the `codex-delegate finalize` that `open` and `watch` suggest while a waiter is
+      finalizing.
+
+    (T1 refuses a second open watch on one run.)
   - **§5:**
     - launch with `run_in_background` and `timeout: 7200000`;
     - add exit 75 to the exit codes;
