@@ -72,6 +72,59 @@ class Strings(unittest.TestCase):
         for s, who in checks.CANARY_STRINGS:
             self.assertTrue(s and who, s)
 
+    def test_the_watch_guards_strings_are_checked(self):
+        # Found in the 2.1.286 binary. The whole summary, 'was stopped after reaching its
+        # background time limit', isn't one string there: 'was' is joined in at runtime.
+        names = {s for s, _ in checks.CANARY_STRINGS}
+        for s in ("do not restart it", "background time limit", "task-notification",
+                  "queued_command", "stopped after reaching its background time limit",
+                  "tool-use-id", "background_tasks", "prompt_id", "CLAUDE_CODE_SESSION_ID"):
+            self.assertIn(s, names)
+
+
+class GuardShim(StateTest):
+    """check_guard_shim against a shim script written here, in the test's state dir."""
+
+    def shim(self, body):
+        path = os.path.join(self.tmp.name, "watch-guard.sh")
+        with open(path, "w") as f:
+            f.write(body)
+        return path
+
+    def test_a_clean_run_passes(self):
+        ok, detail = checks.check_guard_shim(self.shim("cat >/dev/null; exit 0\n"))
+        self.assertTrue(ok, detail)
+
+    def test_a_logged_error_fails_and_is_quoted(self):
+        # Where the real shim logs: its own XDG_STATE_HOME's delegation-ledger.err.
+        ok, detail = checks.check_guard_shim(self.shim(
+            'cat >/dev/null; d="$XDG_STATE_HOME/dotclaude"; mkdir -p "$d"; '
+            'echo "ModuleNotFoundError: x" >>"$d/delegation-ledger.err"; exit 0\n'))
+        self.assertFalse(ok)
+        self.assertTrue(detail.endswith(" exited 0 and printed 0 chars, and logged: "
+                                        "ModuleNotFoundError: x"), detail)
+
+    def test_another_writer_of_the_real_log_doesnt_fail_it(self):
+        # A guard's routine line (an adoption, say) lands in the real log meanwhile.
+        err = checks.state_path("delegation-ledger.err")
+        os.makedirs(os.path.dirname(err), exist_ok=True)
+        ok, detail = checks.check_guard_shim(self.shim(
+            f"cat >/dev/null; echo 'watch-guard: adopted watch w-1' >>{err}; exit 0\n"))
+        self.assertTrue(ok, detail)
+
+    def test_a_missing_shim_fails(self):
+        ok, detail = checks.check_guard_shim(os.path.join(self.tmp.name, "nope.sh"))
+        self.assertEqual((ok, detail), (False, f"{os.path.join(self.tmp.name, 'nope.sh')} is "
+                                               "missing"))
+
+    def test_the_real_shim_runs_clean_against_this_checkout(self):
+        home = os.path.join(self.tmp.name, "home")
+        os.makedirs(os.path.join(home, ".claude", "skills", "delegation"))
+        os.symlink(SCRIPTS, os.path.join(home, ".claude", "skills", "delegation", "scripts"))
+        with mock.patch.dict(os.environ, {"HOME": home}):
+            ok, detail = checks.check_guard_shim(os.path.join(HOOKS, "watch-guard.sh"))
+        self.assertTrue(ok, detail)
+
 
 class FakeClaude(unittest.TestCase):
     """A fake `claude` on PATH that answers --version and `sandbox status`."""
@@ -140,12 +193,14 @@ class Canary(StateTest):
     def setUp(self):
         super().setUp()
         os.environ.pop("SANDBOX_RUNTIME", None)  # restored by StateTest's patch.dict
-        for name in ("cc_version", "check_units", "check_posture", "check_strings", "run_live"):
+        for name in ("cc_version", "check_units", "check_posture", "check_strings",
+                     "check_guard_shim", "run_live"):
             self.addCleanup(setattr, checks, name, getattr(checks, name))
         checks.cc_version = lambda timeout=10: "2.1.300"
         checks.check_units = lambda: (True, "units stub")
         checks.check_posture = lambda: (True, "posture stub")
         checks.check_strings = lambda: (True, "strings stub")
+        checks.check_guard_shim = lambda: (True, "guard stub")
         checks.run_live = lambda log: self.fail("the live tier ran without a stub")
         self.out = []
 
@@ -280,6 +335,10 @@ class Evaluate(unittest.TestCase):
         self.assertIn("full canary is due", self.ev(self.green("2.1.290", 8))[0][0])
         self.assertEqual(self.ev(self.green("2.1.290", 3))[0], [])
         self.assertEqual(self.ev(self.green(self.V, 30))[0], [])  # same version: nothing new
+
+    def test_a_due_full_canary_asks_for_the_manual_rearm_check_too(self):
+        self.assertIn("and so is the manual watch-guard re-arm check (docs/delegation.md, Long "
+                      "waits)", self.ev(self.green("2.1.290", 8))[0][0])
 
     def test_a_failed_full_run_nudges_until_one_passes_even_after_an_upgrade(self):
         canary = self.green("2.1.285", 2)
@@ -533,9 +592,22 @@ class Orphans(StateTest):
         self.assertIn("w-1 (the build)", self.message(json.dumps({"session_id": "s3"})))
         self.assertIn("w-1 (the build)", self.message("not json"))  # nothing to spare
 
-    def test_a_live_waiter_is_still_waiting_with_its_session_gone(self):
-        self.watch(live=True)
+    def test_a_watch_whose_claude_process_runs_is_not_named(self):
+        # That process adopts it at its next stop, under its new session id (a /clear).
+        self.watch(claude_pid=os.getpid(), claude_start=checks.dc.proc_start(os.getpid()))
         self.assertEqual(self.message(), "")
+
+    def test_a_watch_whose_claude_process_ended_is_named_even_in_a_live_session(self):
+        # A crash, then claude --continue: the session runs on, but its waiter's exit is lost.
+        self.watch(sid="s1", live=True, claude_pid=DEAD, claude_start=None)
+        self.assertIn("w-1 (the build; its waiter is still running)", self.message())
+        self.assertIn("w-1 (the build", self.message(json.dumps({"session_id": "s1"})))
+
+    def test_a_live_waiter_of_an_ended_session_is_named_too(self):
+        # A bare waiter outlives a SIGKILLed Claude Code, and its exit reaches nobody.
+        self.watch(live=True)
+        self.assertIn("1 watch from a session that ended: w-1 (the build; its waiter is still "
+                      "running).", self.message())
 
     def test_an_unknown_session_counts_only_once_its_waiter_is_dead(self):
         self.watch(sid="unknown", live=True)

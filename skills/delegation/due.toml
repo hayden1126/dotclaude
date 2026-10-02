@@ -13,3 +13,7 @@
 [[item]]
 date = 2026-10-07
 do = "Run `delegation-ledger sandbox-denials --days 7` and add the hosts that were actually needed to sandbox.network.allowedDomains in settings.json, then remove this item."
+
+[[item]]
+date = 2026-11-02
+do = "Check the watch guard's re-arm live, by hand: claude -p kills background shells about 5 s after its final result, so the live harness can't hold a wait across turns. In an interactive session, start a detached `sleep 240` outside the sandbox (its pid must be the host's), and note its pid. Run `delegation-ledger wait --pid <pid> --max 0.5` with run_in_background, and see it exit 75 with a re-arm line. End the turn and see the watch guard block it once. Re-arm with the printed command, and see it exit 0 once the sleep ends. Also check that `claude --continue` keeps the session id: echo CLAUDE_CODE_SESSION_ID before quitting and after continuing, since the watch guard's crash adoption rests on it. Then move this date a month on, and run it again after each Claude Code upgrade."

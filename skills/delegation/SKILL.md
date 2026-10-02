@@ -197,9 +197,26 @@ validated (`report_ok`).
   long command runs in the foreground (up to the Bash tool's 10-minute limit). A longer one
   runs in the background, and the agent waits on its output before reporting. `BRIEF.md`'s
   Budget section says so; keep that line.
+- **Your own wait that may outlast 30 minutes goes through `delegation-ledger wait`.** A
+  background Bash command stops at its timeout (30 minutes by default, 2 hours at most), and the
+  wake-up note then says not to restart it. Launch the waiter as a bare command with
+  `run_in_background` and `timeout: 7200000`: `delegation-ledger wait --pid <pid>` (or `--file`,
+  `--log <path> --done <regex>`, `--codex <run_id>`). Before it polls, it prints a line naming
+  the watch and the re-arm command. It exits 0 done, 1 failed, 2 stale. At 75 it prints a re-arm
+  line: run exactly that, not the original command (though a rerun of the same wait takes the
+  same watch over). The watch guard blocks your stop once when a watch has lapsed with no
+  waiter, or a background command was killed at its time limit. To stop
+  watching, `delegation-ledger wait --drop <id>`.
 - **After a crash or restart,** run `delegation-ledger open --hours 24`.
   - For each orphaned agent, look at its artifact path and redo only the unfinished part.
-  - For Codex, run `codex-delegate status`, then `codex-delegate resume <run_id>`.
+  - The session-start line lists the watches nobody will hear from: a dead session's, or one
+    whose Claude Code process ended (a crash, then `claude --continue`). Pick one up with
+    `delegation-ledger wait --resume <id>`, or drop it. The watch guard blocks once on such a
+    watch in your session, and once on one that ended while no Claude process listened.
+  - For Codex, run `codex-delegate status`. A running run whose wrapper is gone names the
+    `delegation-ledger wait --resume` that re-arms its watch, or, with no watch, says to finalize
+    it once it ends. `codex-delegate resume <run_id>` continues an ended run, and finalizes its
+    last turn first if that has no stop row.
 
 ## 5. Codex runs
 
@@ -237,6 +254,7 @@ codex-delegate audit <thread_id>   # every model the thread and its sub-agents u
   - 5: stopped waiting with its watch dropped or taken over; Codex keeps running;
   - 75: still running: re-arm with the printed command;
   - 124: timed out;
-  - 143: killed by SIGTERM or SIGHUP; Codex keeps running, and the watch guard re-arms it.
+  - 143: killed by SIGTERM or SIGHUP while Codex ran; Codex keeps running, and the watch
+    guard's next block prints the re-arm command.
 - **Scope:** send Codex only the work it does better, such as anything about its own
   configuration. Claude does the rest.

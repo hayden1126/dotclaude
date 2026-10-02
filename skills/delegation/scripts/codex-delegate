@@ -41,7 +41,9 @@ did before Codex ended (the stop row's `error` says why); 2 refused or bad usage
 a run whose Codex still runs, too); 3 the model audit failed; 4 the report is missing or
 invalid; 5 stopped waiting at --max-wait with its watch dropped or taken over (Codex keeps
 running); 75 still running at --max-wait (re-arm with the command printed); 124 timed out;
-143 killed by SIGTERM or SIGHUP (Codex keeps running, and the watch guard re-arms it).
+143 killed by SIGTERM or SIGHUP while Codex runs, after an `interrupted` row (Codex keeps
+running, and the watch guard's next block prints the re-arm command). Outside that window the
+signal kills the wrapper with no row (a shell reports 143 for SIGTERM, 129 for SIGHUP).
 """
 import argparse
 import contextlib

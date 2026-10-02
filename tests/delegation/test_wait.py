@@ -3,6 +3,7 @@ and the watches block in `watch` and `open`."""
 import glob
 import json
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -22,6 +23,13 @@ USAGE, ASIDE, ERROR, AT_MAX = 64, 3, 70, 75
 REARM = ("still running: re-arm with delegation-ledger wait --resume {} (run_in_background, "
          "timeout 7200000)\n")
 SANDBOXED = "run delegation-ledger wait as a bare command (the sandbox hides other processes)\n"
+LAUNCH = re.compile(r"delegation-ledger: watch (w-\S+)\. If this command is stopped, re-arm with "
+                    r"delegation-ledger wait --resume \1 \(run_in_background, timeout 7200000\)\n")
+
+
+def unlaunched(out):
+    """The waiter's output without its launch line, which the launch tests check."""
+    return LAUNCH.sub("", out, count=1)
 # A stand-in for codex-delegate beside a copy of the ledger: `finalize` appends its argv (one
 # line per run), takes STUB_SLEEP seconds, and, like the real one, appends the run's stop row
 # with its exit code, then exits with that code.
@@ -92,8 +100,10 @@ class WaitEnv(unittest.TestCase):
         p.stderr.close()
 
     def run_(self, *argv, poll=True, **env):
-        return subprocess.run(self.argv(*argv, poll=poll), capture_output=True, text=True,
-                              env=dict(self.env, **env), timeout=30)
+        p = subprocess.run(self.argv(*argv, poll=poll), capture_output=True, text=True,
+                           env=dict(self.env, **env), timeout=30)
+        p.stdout = unlaunched(p.stdout)
+        return p
 
     def cli(self, *argv):
         p = subprocess.run(["python3", self.script, *argv], capture_output=True, text=True,
@@ -104,7 +114,7 @@ class WaitEnv(unittest.TestCase):
     def finish(self, p, code):
         out, err = p.communicate(timeout=30)
         self.assertEqual(p.returncode, code, (out, err))
-        return out, err
+        return unlaunched(out), err
 
     def all_watches(self):
         out = []
@@ -429,6 +439,119 @@ class Exits(WaitEnv):
                          (USAGE, f"wait: watch {wid} already has a live waiter (pid "
                                  f"{first.pid}); it will notify its session\n"))
         self.assertIsNone(first.poll())
+
+    def test_resume_takes_a_live_waiter_over_once_its_session_is_gone(self):
+        # A bare waiter can outlive a SIGKILLed Claude Code; its exit would reach nobody.
+        first = self.start("--pid", str(self.job().pid), CLAUDE_CODE_SESSION_ID="s-dead")
+        wid = self.waiting(first)["id"]
+        p = self.start("--resume", wid)
+        self.assertEqual(self.waiting(p)["session_id"], "s1")
+        out, _ = self.finish(first, 3)
+        self.assertIn(f"watch {wid} was taken over by pid {p.pid}", out)
+
+    def test_resume_takes_a_live_waiter_over_once_its_claude_process_ended(self):
+        # A crash, then claude --continue: the session id runs on, but the waiter's exit goes
+        # to the Claude process that ended.
+        first = self.start("--pid", str(self.job().pid), CLAUDE_PID=str(os.getpid()))
+        wid = self.waiting(first)["id"]
+        self.update(wid, claude_pid=DEAD, claude_start=None)
+        p = self.start("--resume", wid)
+        w = self.waiting(p)
+        self.assertNotIn("claude_pid", w)  # this waiter runs outside Claude Code
+        out, _ = self.finish(first, 3)
+        self.assertIn(f"watch {wid} was taken over by pid {p.pid}", out)
+
+    def test_resume_takes_over_a_waiter_the_guard_marked_unheard(self):
+        first = self.start("--pid", str(self.job().pid))
+        wid = self.waiting(first)["id"]
+        self.update(wid, waiter_unheard=True)
+        p = self.start("--resume", wid)
+        self.assertNotIn("waiter_unheard", self.waiting(p))
+        self.finish(first, 3)
+
+    def test_an_end_its_claude_process_hears_is_recorded_reported(self):
+        target = self.path("out")
+        open(target, "w").close()
+        self.assertEqual(self.run_("--file", target, CLAUDE_PID=str(os.getpid())).returncode, 0)
+        self.assertIs(self.only()["reported"], True)
+
+    def test_an_end_outside_claude_code_isnt_recorded_reported(self):
+        target = self.path("out")
+        open(target, "w").close()
+        self.assertEqual(self.run_("--file", target).returncode, 0)
+        self.assertNotIn("reported", self.only())
+
+    def test_a_watch_records_its_claude_process(self):
+        # So that process's guard adopts it after a /clear, under a new session id.
+        target = self.path("out")
+        open(target, "w").close()
+        self.assertEqual(self.run_("--file", target, CLAUDE_PID=str(os.getpid())).returncode, 0)
+        w = self.only()
+        self.assertEqual((w["claude_pid"], w["claude_start"]),
+                         (os.getpid(), dc.proc_start(os.getpid())))
+
+    def test_a_waiter_prints_its_launch_line_first(self):
+        target = self.path("out")
+        open(target, "w").close()
+        p = subprocess.run(self.argv("--file", target), capture_output=True, text=True,
+                           env=self.env, timeout=30)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        first = p.stdout.splitlines(keepends=True)[0]
+        self.assertEqual(LAUNCH.fullmatch(first).group(1), self.only()["id"])
+
+    def test_a_rerun_of_the_same_wait_takes_its_watch_over(self):
+        # After a kill at the time limit, a lead may rerun the command instead of --resume.
+        job = self.job()
+        wid = self.lapsed(job)
+        p = self.run_("--pid", str(job.pid), "--max", "0.002")
+        self.assertEqual(p.returncode, AT_MAX, p.stderr)
+        self.assertEqual(p.stdout, f"watch {wid} already waits on this; taking it over\n"
+                                   + REARM.format(wid))
+        self.assertEqual(self.only()["id"], wid)
+
+    def test_a_refused_rerun_doesnt_say_it_took_the_watch_over(self):
+        job = self.job()
+        first = self.start("--pid", str(job.pid))
+        wid = self.waiting(first)["id"]
+        p = self.run_("--pid", str(job.pid))
+        self.assertEqual((p.returncode, p.stdout, p.stderr),
+                         (USAGE, "", f"wait: watch {wid} already has a live waiter (pid "
+                                     f"{first.pid}); it will notify its session\n"))
+
+    def lapsed_before_clear(self, job):
+        """A lapsed watch this Claude process (the test) left in session s-before."""
+        p = self.run_("--pid", str(job.pid), "--max", "0.002", CLAUDE_CODE_SESSION_ID="s-before",
+                      CLAUDE_PID=str(os.getpid()))
+        self.assertEqual(p.returncode, AT_MAX, p.stderr)
+        return self.only()["id"]
+
+    def test_a_rerun_after_clear_takes_its_processs_watch_over(self):
+        # Before the guard's first stop in the new session has adopted it.
+        job = self.job()
+        wid = self.lapsed_before_clear(job)
+        p = self.run_("--pid", str(job.pid), "--max", "0.002", CLAUDE_PID=str(os.getpid()))
+        self.assertEqual((p.returncode, p.stdout),
+                         (AT_MAX, f"watch {wid} already waits on this; taking it over\n"
+                                  + REARM.format(wid)))
+        self.assertEqual((self.only()["id"], self.only()["session_id"]), (wid, "s1"))
+
+    def test_a_rerun_doesnt_take_a_live_sessions_watch_whatever_the_pids_say(self):
+        job = self.job()
+        self.lapsed_before_clear(job)
+        with open(os.path.join(self.tmp.name, ".claude", "sessions", "2.json"), "w") as f:
+            json.dump({"pid": os.getpid(), "sessionId": "s-before"}, f)
+        p = self.run_("--pid", str(job.pid), "--max", "0.002", CLAUDE_PID=str(os.getpid()))
+        self.assertEqual(p.returncode, AT_MAX, p.stderr)
+        self.assertEqual(sorted(w["session_id"] for w in self.all_watches()), ["s-before", "s1"])
+
+    def test_another_condition_or_session_gets_its_own_watch(self):
+        job = self.job()
+        self.lapsed(job)
+        self.assertEqual(self.run_("--pid", str(job.pid), "--max", "0.002",
+                                   CLAUDE_CODE_SESSION_ID="s2").returncode, AT_MAX)
+        self.assertEqual(self.run_("--pid", str(job.pid), "--file", self.path("x"), "--max",
+                                   "0.002").returncode, AT_MAX)
+        self.assertEqual(len(self.all_watches()), 3)
 
     def test_resume_with_no_session_keeps_the_watchs_session(self):
         wid = self.lapsed(self.job())
@@ -811,8 +934,7 @@ class Codex(WaitEnv):
 
     def test_a_pending_run_waits_for_its_wrapper(self):
         # A wrapper that dies while its row is still pending, with no codex.pid, never started
-        # Codex: there is nothing to finalize, so the waiter says so and leaves the watch open
-        # (exit 70).
+        # Codex: nothing will finish, so the watch fails (exit 1) and nothing is finalized.
         wrapper = self.job()
         self.codex_row("r1", None, event="pending", wrapper_pid=wrapper.pid)
         p = self.start("--codex", "r1")
@@ -820,7 +942,9 @@ class Codex(WaitEnv):
         time.sleep(0.3)
         self.assertIsNone(p.poll())
         self.end(wrapper)
-        self.finish(p, 70)
+        out, _ = self.finish(p, 1)
+        self.assertIn("codex run r1 never started: run codex-delegate resume r1 again", out)
+        self.assertEqual(self.only()["state"], "failed")
         self.assertFalse(os.path.exists(self.argv_file))  # no finalize ran
 
 

@@ -7,7 +7,8 @@ then says not to restart it, so a lead waiting on a long job can end its turn wi
 to wake it. This hook is the enforcement:
 
 - Watches (`delegation-ledger wait`; delegation_common documents the file). For each of this
-  session's open or acknowledged watches:
+  session's open or acknowledged watches, including those this Claude process recorded under
+  an earlier session id that is no longer live (a /clear), which it adopts:
   - a live waiter, or a background shell whose command holds the watch id, allows (the waiter
     records the end itself);
   - else a met condition is recorded done and blocks once: the dead waiter's notification
@@ -22,18 +23,25 @@ to wake it. This hook is the enforcement:
     A twin guard in the same stop has the same digest and says nothing, even when the
     transcript grew between them. Only a payload with neither field falls back to the size
     (grown means later), then to age (over 60 s).
+  - a watch of this session recorded under a Claude process that has ended (a crash, then
+    `claude --continue`) is adopted too: this process records itself as the watch's. A waiter
+    still running there reports to nobody, so it is marked waiter_unheard and blocks once
+    with the re-arm command; a dead one is a lapse, as above.
+  - a watch of this session that ended (done, failed or stale) in the last 7 days while no
+    Claude process was listening (its waiter was unheard, or its Claude process has ended),
+    and isn't reported yet, blocks once and is recorded reported.
 - Kills. Each stop reads the transcript on from where the last one stopped (kills/<sid>.json
   holds the offset; a session's first scan starts 256 KB back), searching the raw bytes for
   task notifications. One whose status is killed at the background time limit blocks once per
   task id, in either shape: a user entry between turns, or a mid-turn attachment entry. The
   first run records since as 10 minutes back, so older kills never block. A killed
   `delegation-ledger wait` folds into its watch's item when that watch has one in this stop:
-  the watch a --resume names, else the one watch created within 120 s after the launch (more
-  than one: the one whose condition the command's --pid, --file or --log names). A killed
+  the watch its launch line names (anywhere in the output file's first 4 KB), else the one a
+  --resume names, else the one watch created within 120 s after the launch (more than one:
+  the one whose condition the command's --pid, --file or --log names). A killed
   `codex-delegate run|resume` folds the same way into the watch its wrapper waited as, which
-  its launch line names (the first line of the command's output file). With none (a
-  sandboxed run), it doesn't fold; its reason says Codex keeps running, and re-arms the run's
-  watch when one is open.
+  its launch line names, found the same way. With none (a sandboxed run), it doesn't fold;
+  its reason says Codex keeps running, and re-arms the run's watch when one is open.
 
 Each stop runs in three phases, so what it records it also says. Gather is read-only and
 budgeted (3 s): no new item once that's spent, and a kill whose launch lookup the deadline cut
@@ -76,8 +84,14 @@ WATCH_REASON = ("Watch {id} ({desc}) has no live waiter and {unmet}. If a comman
                 "--resume {id}, with run_in_background and timeout 7200000. To stop watching "
                 "it: delegation-ledger wait --drop {id}.")
 CODEX_ENDED = "(the run has ended; resuming finalizes it)"
+UNHEARD_REASON = ("Watch {id}'s waiter was started by a Claude Code process that has ended, so "
+                  "its exit won't reach you. Re-arm it: delegation-ledger wait --resume {id}, "
+                  "with run_in_background and timeout 7200000.")
+ENDED_UNHEARD = ("Watch {id} ({desc}) ended ({state}) while no Claude Code process was "
+                 "listening. Check the result and report it.")
+REPORTED_STATES = ("done", "failed", "stale")  # how a waiter ends; dropped is the lead's own
 CODEX_UNSTARTED = ("Watch {id} ({desc}): codex run {run} never started, since its wrapper "
-                   "stopped before Codex did, so there is nothing to wait on or finalize: "
+                   "stopped before Codex did, so the watch is recorded failed. To retry, "
                    "{restart}, with run_in_background and timeout 7200000.")
 MET_REASON = ("Watch {id} ({desc}): {cond} is met, but its waiter had stopped, so no "
               "notification came. Check the result and report it.")
@@ -92,6 +106,10 @@ CODEX_KILL = ('Codex wrapper "{desc}" was stopped at its time limit, but Codex k
               "Don't re-run it. Wait on it with delegation-ledger wait --codex {run} "
               "(codex-delegate status lists the run), with run_in_background and timeout "
               "7200000.")
+CODEX_UNKNOWN = ('Codex wrapper "{desc}" was stopped at its time limit, but Codex keeps '
+                 "running. Don't re-run it. Find the run with codex-delegate status, then wait on "
+                 "it with delegation-ledger wait --codex and its run id, with run_in_background "
+                 "and timeout 7200000.")
 CODEX_REARM = ('Codex wrapper "{desc}" was stopped at its time limit, but Codex keeps running. '
                "Don't re-run it. Re-arm the run's watch: `delegation-ledger wait --resume "
                "{wid}`, with run_in_background and timeout 7200000.")
@@ -101,7 +119,8 @@ TASK_RE = re.compile(r"<task-id>([^<]+)</task-id>")
 TOOL_USE_RE = re.compile(r"<tool-use-id>([^<]+)</tool-use-id>")
 OUTPUT_RE = re.compile(r"<output-file>([^<]+)</output-file>")
 LAUNCH_RE = re.compile(r"codex-delegate: run (\S+), watch (\S+)\. ")
-LAUNCH_BYTES = 4096         # a launch line is the output file's first line, well under this
+WAIT_LAUNCH_RE = re.compile(r"delegation-ledger: watch (\S+)\. If this command is stopped")
+LAUNCH_BYTES = 4096         # a launch line is looked for this far into a killed command's output
 SUMMARY_RE = re.compile(r"<summary>(.*?)</summary>", re.S)
 DESC_RE = re.compile(r'^Background command "(.*)" was stopped', re.S)
 WAITER_RE = re.compile(r"\bdelegation-ledger\s+wait\b")
@@ -110,8 +129,9 @@ CODEX_RE = re.compile(r"\bcodex-delegate\s+(run|resume)\b(?:\s+['\"]?([^\s'\"]+)
 ARG_RE = {opt: re.compile(rf"--{opt}[=\s]+['\"]?([^\s'\"]+)") for opt in ("pid", "file", "log")}
 
 Notice = collections.namedtuple("Notice", "task tool_use desc ts pos output")
-# A watch's gathered item: kind "end" (the job ended unnoticed: record `state`, say `text`) or
-# "lapse" (block once with `text`, or acknowledge).
+# A watch's gathered item: kind "end" (the job ended unnoticed: record `state`, say `text`),
+# "lapse" (block once with `text`, or acknowledge) or "report" (an ended watch nobody heard:
+# record it reported, say `text`).
 Pending = collections.namedtuple("Pending", "kind w text state")
 # A kill's gathered item: its notice, its text, and the watch it folds into (or None).
 Kill = collections.namedtuple("Kill", "notice text fold")
@@ -170,8 +190,8 @@ def watch_pending(w, shells, now):
             return Pending("end", w, CODEX_FAILED.format(run=cond["codex"], exit=e.get("exit")),
                            "failed")
         if stage == "unstarted":
-            lapsed = CODEX_UNSTARTED.format(id=wid, desc=desc, run=cond["codex"],
-                                            restart=dc.codex_restart(e))
+            return Pending("end", w, CODEX_UNSTARTED.format(
+                id=wid, desc=desc, run=cond["codex"], restart=dc.codex_restart(e)), "failed")
         if stage == "ended":
             lapsed = lapsed.replace(" is unmet.", f" is unmet {CODEX_ENDED}.", 1)
         return Pending("lapse", w, lapsed, None)
@@ -372,18 +392,23 @@ def created_after(watches, at):
     return fits
 
 
-def launch_of(output, spent):
-    """(run, watch) from a codex-delegate's launch line, the first line it writes to the
-    command's output file before Codex starts; (None, None) with none (a sandboxed run, or one
-    refused before it launched) or once the budget is spent."""
+def output_head(output, spent):
+    """The first LAUNCH_BYTES of a killed command's output file, where a waiter or a
+    codex-delegate prints its launch line before anything slow; "" with none, or once the
+    budget is spent."""
     if not output or spent():
-        return None, None
+        return ""
     try:
         with open(output, "rb") as f:
-            first = f.read(LAUNCH_BYTES).split(b"\n", 1)[0].decode("utf-8", "replace")
+            return f.read(LAUNCH_BYTES).decode("utf-8", "replace")
     except OSError:
-        return None, None
-    m = LAUNCH_RE.match(first)
+        return ""
+
+
+def launch_of(output, spent):
+    """(run, watch) from a codex-delegate's launch line; (None, None) with none (a sandboxed
+    run, or one refused before it launched)."""
+    m = LAUNCH_RE.search(output_head(output, spent))
     return (m.group(1), m.group(2)) if m else (None, None)
 
 
@@ -411,14 +436,17 @@ def map_kill(n, transcript, watches, cwd, spent):
         return plain
     command, at = found or ("", None)
     if WAITER_RE.search(command):
-        return plain._replace(fold=fold_target(command, at, watches, cwd))
+        named = WAIT_LAUNCH_RE.search(output_head(n.output, spent))
+        return plain._replace(fold=named.group(1) if named else
+                              fold_target(command, at, watches, cwd))
     codex = CODEX_RE.search(command)
     if codex:
         fold, run = codex_target(codex, n.output, spent)
         open_watch = dc.codex_watch(run) if fold is None and run else None
         wid = fold or (open_watch or {}).get("id")
         text = (CODEX_REARM.format(desc=n.desc, wid=wid) if wid else
-                CODEX_KILL.format(desc=n.desc, run=run or "<run_id>"))
+                CODEX_KILL.format(desc=n.desc, run=run) if run else
+                CODEX_UNKNOWN.format(desc=n.desc))
         return Kill(n, text, fold)
     return plain
 
@@ -465,6 +493,81 @@ def stop_digest(data):
     return hashlib.sha256(raw).hexdigest()[:16]
 
 
+def own_claude():
+    """(pid, procStart) of the Claude Code process running this hook: CLAUDE_PID when it's set
+    and alive, else the nearest ancestor, 6 levels up at most, with a
+    ~/.claude/sessions/<pid>.json. None when neither works, and then nothing is adopted."""
+    me = dc.claude_process()
+    if me is not None:
+        return me
+    pid = os.getppid()
+    for _ in range(6):
+        if pid is None or pid <= 1:
+            return None
+        if os.path.exists(os.path.expanduser(f"~/.claude/sessions/{pid}.json")):
+            return pid, dc.proc_start(pid)
+        pid = dc.proc_ppid(pid)
+    return None
+
+
+def crashed(w, sid, me):
+    """Whether watch w is this session's and the Claude process it was recorded under has
+    ended (a crash, then `claude --continue` in this process, `me`)."""
+    return me is not None and w.get("session_id") == sid and dc.claude_gone(w)
+
+
+def adopt(sid, wids, me, now, until, clock):
+    """Adopt the watches gathered for it, log each, and return the ids of those whose waiter
+    still runs but reports to nobody. Each is checked again under the lock:
+    - one /clear left (dc.left_by_clear) moves into this session. One another session re-armed, or
+      whose old session came back, since it was gathered stays where it is;
+    - a crashed one records this process as its Claude process, and a waiter still running is
+      marked waiter_unheard: its exit goes to the process that ended."""
+    moved, revived, unheard = [], [], []
+
+    def fn(wid):
+        def move(cur):
+            if cur.get("state") not in dc.UNRESOLVED:
+                return
+            if cur.get("session_id") != sid:
+                if dc.left_by_clear(cur, me, dc.live_sessions()):
+                    moved.append((wid, cur.get("session_id")))
+                    cur["session_id"] = sid
+            elif crashed(cur, sid, me):
+                revived.append((wid, cur.get("claude_pid")))
+                cur.update(claude_pid=me[0], claude_start=me[1])
+                if dc.waiter_alive(cur, now):
+                    cur["waiter_unheard"] = True
+                    unheard.append(wid)
+        return move
+    _, failed = dc.update_watches({wid: fn(wid) for wid in wids}, until, clock)
+    lost = {wid for wid, _ in failed}  # unwritten, so not adopted
+    for wid, old in moved:
+        if wid not in lost:
+            checks.log_error(f"watch-guard: adopted watch {wid} from session {old}: the same "
+                             "Claude process (a /clear)")
+    for wid, old in revived:
+        if wid not in lost:
+            checks.log_error(f"watch-guard: adopted watch {wid} from Claude process {old}, which "
+                             "has ended (a crash, then claude --continue)")
+    for wid, exc in failed:
+        log(f"adopt {wid}", exc)
+    return [wid for wid in unheard if wid not in lost]
+
+
+def ended_unheard(w, sid, now):
+    """Whether watch w, of this session, ended (REPORTED_STATES) in the last
+    dc.PRUNE_ENDED_DAYS while no Claude process was listening, and isn't reported yet: its
+    waiter was marked unheard, or the Claude process it ran under has ended."""
+    if (w.get("state") not in REPORTED_STATES or w.get("session_id") != sid
+            or w.get("reported") or not (w.get("waiter_unheard") or dc.claude_gone(w))):
+        return False
+    try:
+        return now - dc.parse_iso(w["ended"]).timestamp() <= dc.PRUNE_ENDED_DAYS * 86400
+    except (KeyError, TypeError, ValueError):
+        return False
+
+
 def later_stop(cur, stop, size, now):
     """Whether this stop comes after the one that blocked on the watch: its digest differs.
     Only when either stop's payload had neither field, the transcript grew, or, with no size
@@ -481,22 +584,30 @@ def later_stop(cur, stop, size, now):
         return True
 
 
-def commit(sid, transcript, pendings, kills, scan_out, stop, size, now, until, clock):
+def commit(sid, transcript, adopted, me, pendings, kills, scan_out, stop, size, now, until,
+           clock):
     """Record everything gathered in one pass, under kills/<sid>.lock and then watches/.lock
     (each wait bounded by `until`), and return (items, acks). Each watch is re-read under the
-    lock, so a waiter that re-armed meanwhile, or a twin guard that recorded first, wins. A
-    watch whose update fails is logged and unsaid, and comes up again next stop; the rest, and
-    the kills, go on. LockBusy means nothing is recorded or said this stop."""
+    lock, so a waiter that re-armed meanwhile, a twin guard that recorded first, or a watch
+    that wasn't adopted after all (it's in another session), wins. A watch whose update fails
+    is logged and unsaid, and comes up again next stop; the rest, and the kills, go on.
+    LockBusy means nothing is recorded or said this stop."""
     items, acks, itemized, outcomes = [], [], set(), {}
 
     def record(p):
         wid = p.w["id"]
 
         def fn(cur):
-            if cur.get("state") not in dc.UNRESOLVED or dc.waiter_alive(cur, now):
-                return  # dropped, ended or re-armed since it was gathered
+            if p.kind == "report":
+                if ended_unheard(cur, sid, now):
+                    cur["reported"] = True
+                    outcomes[wid] = "block"
+                return
+            if (cur.get("state") not in dc.UNRESOLVED or dc.waiter_alive(cur, now)
+                    or cur.get("session_id") != sid):
+                return  # dropped, ended, re-armed or not adopted since it was gathered
             if p.kind == "end":
-                cur.update(state=p.state, ended=iso(now))
+                cur.update(state=p.state, ended=iso(now), reported=True)
                 outcomes[wid] = "block"
             elif cur.get("blocked_at") is None:
                 cur.update(blocked_at=iso(now), blocked_stop=stop, blocked_size=size)
@@ -507,6 +618,9 @@ def commit(sid, transcript, pendings, kills, scan_out, stop, size, now, until, c
         return fn
 
     with dc.file_lock(kills_path(sid, ".lock"), until, clock):
+        for wid in adopt(sid, adopted, me, now, until, clock) if adopted else []:
+            items.append(UNHEARD_REASON.format(id=wid))
+            itemized.add(wid)
         if pendings:
             _, failed = dc.update_watches({p.w["id"]: record(p) for p in pendings}, until, clock)
             for wid, exc in failed:
@@ -558,7 +672,11 @@ def render(items):
 def decide(data, now, clock=time.monotonic):
     """None to let the stop through, else the hook output: a block whose reason numbers every
     new item, a systemMessage for the lapses it lets through, or both. It gathers within
-    BUDGET_S (by `clock`), then commits all it gathered, so what it records it also returns."""
+    BUDGET_S (by `clock`), then commits all it gathered, so what it records it also returns.
+    In a sandbox's PID namespace (pids_visible) every waiter and Claude process reads as dead,
+    so it says nothing there."""
+    if not dc.pids_visible():
+        return None
     if not isinstance(data, dict) or data.get("agent_id"):
         return None
     sid = data.get("session_id")
@@ -578,8 +696,12 @@ def decide(data, now, clock=time.monotonic):
         prune_kills(now, sid)
     except Exception:  # noqa: BLE001
         log("prune")
-    watches = [w for w in dc.all_watches() if w.get("session_id") == sid
-               and w.get("state") in dc.UNRESOLVED and isinstance(w.get("id"), str)]
+    me = own_claude()
+    live = dc.live_sessions() if me is not None else {}
+    every = [w for w in dc.all_watches() if isinstance(w.get("id"), str)]
+    watches = [w for w in every if w.get("state") in dc.UNRESOLVED
+               and (w.get("session_id") == sid or dc.left_by_clear(w, me, live))]
+    adopted = [w["id"] for w in watches if w.get("session_id") != sid or crashed(w, sid, me)]
     pendings = []
     for i, w in enumerate(watches):
         if spent():
@@ -593,17 +715,20 @@ def decide(data, now, clock=time.monotonic):
             continue
         if p is not None:
             pendings.append(p)
+    pendings += [Pending("report", w, ENDED_UNHEARD.format(
+        id=w["id"], desc=w.get("description") or "", state=w["state"]), None)
+        for w in every if not spent() and ended_unheard(w, sid, now)]
     kills, scan_out = [], None
     if transcript and not spent():
         try:
             kills, scan_out = kill_pending(sid, transcript, now, spent, watches, cwd)
         except Exception:  # noqa: BLE001  the kill catch is skipped; the watches stand
             log("kills")
-    if not pendings and scan_out is None:
+    if not pendings and scan_out is None and not adopted:
         return None
     try:
-        items, acks = commit(sid, transcript, pendings, kills, scan_out, stop, size, now,
-                             max(deadline, clock() + LOCK_GRACE_S), clock)
+        items, acks = commit(sid, transcript, adopted, me, pendings, kills, scan_out, stop, size,
+                             now, max(deadline, clock() + LOCK_GRACE_S), clock)
     except dc.LockBusy as ex:
         checks.log_error(f"watch-guard: {ex} stayed locked; nothing was taken this stop")
         return None

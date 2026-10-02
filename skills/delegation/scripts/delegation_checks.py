@@ -70,7 +70,7 @@ CANARY_STRINGS = [
     ("SubagentHandback", "report-check; delegation-ledger handback_message"),
     ("agent_id", "the policy hook's filter in settings.json"),
     ("agent_transcript_path", "delegation-ledger stop rows"),
-    ("last_assistant_message", "delegation-ledger, report-check"),
+    ("last_assistant_message", "delegation-ledger, report-check, watch-guard stop_digest"),
     ("customAgentType", "delegation_common.agent_role"),
     ("teamName", "delegation-ledger, report-check: teammate rows"),
     ("worktreePath", "subagent-policy: a writer's root"),
@@ -80,6 +80,16 @@ CANARY_STRINGS = [
     ("excludedCommands", "settings.json sandbox"),
     ("teammateMode", "settings.json"),
     ("CLAUDE_ASYNC_AGENT_STALL_TIMEOUT_MS", "SKILL.md §1b: the stall timer"),
+    ("do not restart it", "the kill notice's note: the gap the watch guard closes"),
+    ("background time limit", "watch-guard parse_notice: a kill at the time limit"),
+    ("stopped after reaching its background time limit",
+     "watch-guard parse_notice and DESC_RE: the kill summary naming the command"),
+    ("task-notification", "watch-guard: the notice's origin kind, and scan's byte search"),
+    ("queued_command", "watch-guard parse_notice: a mid-turn notice is this attachment"),
+    ("tool-use-id", "watch-guard map_kill: a notice's launching tool_use"),
+    ("background_tasks", "watch-guard watch_pending: a shell holding a watch id"),
+    ("prompt_id", "watch-guard stop_digest: a later stop acknowledges a lapse"),
+    ("CLAUDE_CODE_SESSION_ID", "delegation_common.wait_session: a watch's session"),
 ]
 
 
@@ -246,10 +256,42 @@ def check_strings(path=None, strings=CANARY_STRINGS):
     return True, f"all {len(strings)} strings present in {path}"
 
 
+GUARD_SHIM = os.path.expanduser("~/.claude/hooks/watch-guard.sh")
+NOOP_STOP = '{"hook_event_name": "Stop", "stop_hook_active": false}'  # no session: nothing to do
+
+
+def check_guard_shim(shim=None):
+    """The installed watch-guard shim runs clean: a main-thread Stop payload with no session id
+    (the guard does nothing for it) exits 0, prints nothing, and logs nothing to the
+    delegation-ledger.err where the shim sends Python's stderr. That proves the link and the
+    import, which would otherwise fail silently. It runs with a throwaway XDG_STATE_HOME, so the
+    real log's other writers (a guard's routine adoption line, say) can't fail it; the detail
+    quotes the last line it logged, since that log goes with the temp dir."""
+    shim = shim or GUARD_SHIM
+    if not os.path.exists(shim):
+        return False, f"{shim} is missing"
+    with tempfile.TemporaryDirectory() as state:
+        try:
+            p = subprocess.run(["bash", shim], input=NOOP_STOP, capture_output=True, text=True,
+                               timeout=10, env=dict(os.environ, XDG_STATE_HOME=state))
+        except (OSError, subprocess.TimeoutExpired) as e:
+            return False, f"{shim} didn't run ({type(e).__name__}: {e})"
+        try:
+            with open(os.path.join(state, "dotclaude", "delegation-ledger.err")) as f:
+                logged = f.read().strip()
+        except OSError:
+            logged = ""
+    if p.returncode or p.stdout.strip() or logged:
+        last = f", and logged: {logged.splitlines()[-1][:200]}" if logged else ""
+        return False, (f"{shim} exited {p.returncode} and printed {len(p.stdout.strip())} "
+                       f"chars{last}")
+    return True, f"{shim} ran clean"
+
+
 def run_quick(version):
     results = []
     for name, fn in (("units", check_units), ("posture", check_posture),
-                     ("strings", check_strings)):
+                     ("strings", check_strings), ("guard", check_guard_shim)):
         try:
             ok, detail = fn()
         except Exception as e:  # noqa: BLE001  a crashed check is a failed check
@@ -372,29 +414,36 @@ ORPHANS_LISTED = 3
 
 
 def orphaned_watches(current=None, now=None):
-    """(watches, unreadable): the open or acknowledged watches nobody waits on, oldest first,
-    and how many watch files couldn't be read. A watch is nobody's when its session isn't
-    running and its waiter isn't alive; `current` (the starting session's id) counts as
-    running, and a watch whose waiter lives is still waited on, even with its session gone.
-    A file that can't be read or judged is logged and counted, and the rest go on. Where pids
-    can't be seen (a sandboxed run) every waiter and session would read as dead, so there are
-    none."""
+    """(watches, unreadable): the open or acknowledged watches nobody will hear from
+    (dc.watch_orphaned), oldest first, and how many watch files couldn't be read. A watch is
+    nobody's when its session isn't running and its Claude process is gone, even if its waiter
+    still runs (a bare waiter outlives a SIGKILLed Claude Code); `current` (the starting
+    session's id) counts as running. A file that can't be read or judged is logged and counted,
+    and the rest go on. Where pids can't be seen (a sandboxed run) every waiter and session
+    would read as dead, so there are none."""
     if not dc.pids_visible():
         return [], 0
     live = set(dc.live_sessions())
-    if isinstance(current, str) and current:
-        live.add(current)
+    current = current if isinstance(current, str) and current else None
     found, unreadable = [], 0
     for p in sorted(glob.glob(os.path.join(dc.watches_dir(), "*.json"))):
         try:
             w = dc.read_watch(os.path.basename(p)[:-len(".json")])
-            if (w and w.get("state") in dc.UNRESOLVED and w.get("session_id") not in live
-                    and not dc.waiter_alive(w, now)):
-                found.append(w)
+            if w and w.get("state") in dc.UNRESOLVED and dc.watch_orphaned(w, current, live, now):
+                found.append(dict(w, waiter_running=dc.waiter_alive(w, now)))
         except Exception as e:  # noqa: BLE001  one bad file mustn't hide the others
             log_error(f"watch file {p}: {type(e).__name__}: {e}")
             unreadable += 1
     return sorted(found, key=lambda w: str(w.get("created"))), unreadable
+
+
+def orphan_name(w):
+    """"w-1 (the build)", saying so when its waiter still runs (orphaned_watches judged it, so
+    evaluate stays pure): its result reaches nobody."""
+    notes = [w["description"]] if w.get("description") else []
+    if w.get("waiter_running"):
+        notes.append("its waiter is still running")
+    return f"{w.get('id')} ({'; '.join(notes)})" if notes else str(w.get("id"))
 
 
 def orphans_nudge(orphans, unreadable=0):
@@ -403,8 +452,7 @@ def orphans_nudge(orphans, unreadable=0):
     if not orphans:
         return f"{bad}."
     n = len(orphans)
-    named = [f"{w.get('id')} ({w['description']})" if w.get("description") else str(w.get("id"))
-             for w in orphans[:ORPHANS_LISTED]]
+    named = [orphan_name(w) for w in orphans[:ORPHANS_LISTED]]
     more = f" and {n - ORPHANS_LISTED} more" if n > ORPHANS_LISTED else ""
     text = (f"{n} {'watch' if n == 1 else 'watches'} from a session that ended: "
             f"{', '.join(named)}{more}. Pick one up with `delegation-ledger wait --resume "
@@ -450,8 +498,10 @@ def evaluate(version, canary_st, audit_st, due_st, items, now=None, today=None,
                            and _age(green.get("ts"), now) >= FULL_EVERY_DAYS * 86400):
             last = (f"last green: {green.get('version')} on {str(green.get('ts'))[:10]}"
                     if green else "none on record")
-            nudges.append(f"the full canary is due for Claude Code {version} ({last}). Run "
-                          "`delegation-ledger canary` outside the sandbox and in the "
+            # The re-arm across turns can't run under claude -p, so the upgrade asks for it too.
+            nudges.append(f"the full canary is due for Claude Code {version} ({last}), and so "
+                          "is the manual watch-guard re-arm check (docs/delegation.md, Long "
+                          "waits). Run `delegation-ledger canary` outside the sandbox and in the "
                           f"background: {FULL_COST}.")
     if _age(audit_st.get("ts"), now) >= AUDIT_EVERY_HOURS * 3600 and may_launch:
         jobs.append("audit")

@@ -230,8 +230,8 @@ class FullRun(unittest.TestCase):
                 out.append(json.load(f))
         return {w["id"]: w for w in out}
 
-    def write_watch(self, wid, run_id, live=False):
-        w = {"id": wid, "session_id": "s0", "state": "open", "description": "d",
+    def write_watch(self, wid, run_id, live=False, sid="s0"):
+        w = {"id": wid, "session_id": sid, "state": "open", "description": "d",
              "condition": {"codex": run_id}, "created": cd.dc.now_iso(),
              "waiter_pid": os.getpid() if live else DEAD,
              "waiter_start": cd.dc.proc_start(os.getpid()) if live else None,
@@ -446,9 +446,9 @@ class FullRun(unittest.TestCase):
         self.assertEqual(p.returncode, 2)
         self.assertIn(f"run codex-delegate resume {run_id} again", p.stderr)
         w = self.ledger_run("wait", "--codex", run_id, "--poll", "0.2")
-        self.assertEqual(w.returncode, 70, w.stderr)
-        self.assertIn(f"never started, since its wrapper stopped before Codex did: run "
-                      f"codex-delegate resume {run_id} again", w.stderr)
+        self.assertEqual(w.returncode, 1, w.stderr)
+        self.assertIn(f"codex run {run_id} never started: run codex-delegate resume {run_id} "
+                      "again", w.stdout)
         self.assertEqual([r["event"] for r in self.ledger()].count("stop"), 1)
 
     def test_max_wait_with_its_watch_dropped_exits_5_without_a_rearm(self):
@@ -543,7 +543,7 @@ class FullRun(unittest.TestCase):
 
     def test_resume_is_refused_while_a_live_waiter_holds_the_runs_watch(self):
         run_id = self.summary(self.run_ok())["run_id"]
-        self.write_watch("w-live", run_id, live=True)
+        self.write_watch("w-live", run_id, live=True, sid="s1")  # its session is live
         rows = len(self.ledger())
         p = self.run_cd("resume", run_id, "--no-scope")
         self.assertEqual(p.returncode, 2)
