@@ -29,11 +29,34 @@ stored here).
   history was deliberately left as-is (Hayden's call).
 
 ## In flight
-- **Next: the delegation write-up** (Hayden wants it). Stage 2 and 3 are done, so the findings
-  are complete.
-  - **First call: the format.** A blog post (quotes and numbers, no raw evidence shipped) or a
-    public repo (the harness and probes runnable, so far more must be scrubbed). Settle it before
-    outlining. A new public repo is a new project, so place it with the `hq` skill.
+- **The delegation write-up: the post is drafted** (2026-10-02). `docs/prose-is-not-a-permission.md`
+  is a Medium-style post of about 2,400 words. It is on branch `docs/delegation-post`, which is
+  stacked on `docs/scrub-private-names`. Nothing is pushed.
+  - **Hayden's calls (2026-10-01/02):**
+    - title "Prose Is Not a Permission", about 2,500 words, for Claude Code users who delegate;
+    - Medium conventions, modeled on a reference article Hayden pasted;
+    - the Codex models named for now (decide again later);
+    - the aborted-launch beat and the shadow-week beat cut (the launch beat is deferred, not
+      dropped);
+    - one diagram, plus a hero-image slot (an HTML comment at the top of the post).
+  - **The diagram:** `docs/images/delegation-layers.svg` is the source and `.png` is a 2x render.
+    It shows the tool-call flow and the known escape. Its spec is in
+    `~/.claude/plans/writeup-immutable-trinket.md`. To re-render, wrap the SVG in HTML and run
+    Playwright's `chrome-headless-shell` with `--force-device-scale-factor=2
+    --window-size=980,620 --screenshot`.
+  - **The scrub** (`7ed72e9`, on `docs/scrub-private-names`):
+    - `docs/delegation.md` describes what each private name does instead of naming it;
+    - its general-purpose numbers are corrected (recomputed from the eval's extract).
+
+    The post's links pin to that commit. **Merge with a merge commit, not a squash,** or the
+    pinned SHA disappears from `main`.
+  - **The shape:** `~/scratch/delegation-writeup/SHAPE.md` cites every number in the post to its
+    source. It is private, and never goes in git.
+  - **Before publishing:**
+    - Hayden reads the post;
+    - run SHAPE.md §6's grep on it;
+    - decide whether to keep the model names;
+    - make the hero image.
   - **Sources, in order of use:**
     - `docs/delegation.md` in this repo: the findings, decisions, verified facts and test results
       for Stage 2 and 3, already written for readers. The history is in PRs #35 to #56.
