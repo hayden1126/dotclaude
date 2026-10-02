@@ -321,6 +321,17 @@ class Evaluate(unittest.TestCase):
         nudges, _, warns = self.ev(canary, audit={"ts": iso(NOW), "warns": ["x"], "shown": True})
         self.assertEqual((nudges, warns), ([], []))
 
+    def test_the_monthly_audit_is_due_once_the_ledger_is_a_month_old(self):
+        canary, old = self.green(self.V, 0), iso(NOW - 31 * DAY)
+        self.assertIn("monthly audit is due", self.ev(canary, ledger_since=old)[0][0])
+        self.assertEqual(self.ev(canary, ledger_since=iso(NOW - 10 * DAY))[0], [])
+        self.assertEqual(self.ev(canary, ledger_since=None)[0], [])
+        fresh = {"ts": iso(NOW), "monthly": iso(NOW - 2 * DAY)}
+        self.assertEqual(self.ev(canary, audit=fresh, ledger_since=old)[0], [])
+        stale = {"ts": iso(NOW), "monthly": iso(NOW - 31 * DAY)}
+        self.assertIn("monthly audit is due",
+                      self.ev(canary, audit=stale, ledger_since=old)[0][0])
+
     def test_wrong_shaped_state_does_not_silence_the_dated_items(self):
         items = [(datetime.date(2020, 1, 1), "still shown")]
         for canary, audit in (({"quick": "x", "full": [1], "green_full": 3}, {"warns": "x"}),
@@ -391,6 +402,35 @@ class Hook(StateTest):
         self.assertEqual(len(self.out), 1)
         with open(checks.state_path("delegation-ledger.err")) as f:
             self.assertIn("fork failed", f.read())
+
+    def ledger(self, *lines):
+        os.makedirs(checks.dc.state_dir(), exist_ok=True)
+        with open(checks.dc.ledger_path(), "w") as f:
+            f.writelines(line + "\n" for line in lines)
+
+    def test_a_month_old_ledger_asks_for_the_monthly_audit(self):
+        self.settled()
+        self.ledger(json.dumps({"ts": iso(checks.time.time() - 31 * DAY)}),
+                    json.dumps({"ts": checks.dc.now_iso()}))
+        checks.hook_main("{}", out=self.out.append)
+        (line,) = self.out
+        self.assertIn("monthly audit is due", json.loads(line)["systemMessage"])
+        checks.update_state("audit.json", monthly=checks.dc.now_iso())
+        self.out.clear()
+        checks.hook_main("{}", out=self.out.append)
+        self.assertEqual(self.out, [])
+
+    def test_first_row_ts_reads_one_line_and_fails_soft(self):
+        self.assertIsNone(checks.dc.first_row_ts())  # no ledger
+        self.ledger()
+        self.assertIsNone(checks.dc.first_row_ts())  # empty
+        self.ledger("not json", "[1]", json.dumps({"ts": "x"}))
+        self.assertIsNone(checks.dc.first_row_ts())  # nothing with a valid ts
+        # A damaged head neither silences the nudge nor fires it early: the first row with a
+        # valid ts wins.
+        self.ledger("torn {", json.dumps({"ts": "x"}), json.dumps({"ts": "2026-09-30T05:16:58Z"}),
+                    json.dumps({"ts": "2026-10-01T00:00:00Z"}))
+        self.assertEqual(checks.dc.first_row_ts(), "2026-09-30T05:16:58Z")
 
     def test_a_malformed_due_file_is_named_not_silent(self):
         self.settled()
