@@ -119,5 +119,3 @@ stored here).
   native tasks (the session-summary line already grounds "what/where", and a blanket nudge fights the
   fast lane). Revisit (c) only if a 4-6 step job with no tasks shows up, scoped to multi-step work.
 - A fresh WSL clone needs `./setup-chrome-wsl.sh` once ([[dotclaude-chrome-devtools-wsl]]).
-- An untracked, empty `.claude/tmpawe4wybu` was left by a hook-sketch test on 2026-10-02. Remove
-  it once Hayden approves.
