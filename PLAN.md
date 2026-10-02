@@ -202,7 +202,12 @@ settings docs say.
     an entry with `origin.kind == "task-notification"` whose text holds `<status>killed</status>`
     and "background time limit". Take its `<task-id>` and its summary.
   - **Once per task:** each killed task blocks one stop, recorded in
-    `<state>/kills/<session_id>.json`.
+    `<state>/kills/<session_id>.json` with a `since` time. On the guard's first run in a
+    session, `since` is set 10 minutes back, so kills from before the install don't block.
+  - **Mapping a kill to its command:** the notice's `<tool-use-id>` names the Bash `tool_use`
+    that launched it, whose `input.command` is the command. Its result also carries
+    `toolUseResult.backgroundTaskId`. The launch can be hours back, so the guard searches the
+    whole file for that id, and only when there's a new kill.
   - **No double block:** a stop blocks at most once, with one reason that lists every new
     lapse and every new kill, and all of them are recorded together. The next stop goes
     through. A kill notice carries the Bash description, not the command, so to tell a killed
