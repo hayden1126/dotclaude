@@ -509,6 +509,15 @@ class Exits(WaitEnv):
                                    + REARM.format(wid))
         self.assertEqual(self.only()["id"], wid)
 
+    def test_a_refused_rerun_doesnt_say_it_took_the_watch_over(self):
+        job = self.job()
+        first = self.start("--pid", str(job.pid))
+        wid = self.waiting(first)["id"]
+        p = self.run_("--pid", str(job.pid))
+        self.assertEqual((p.returncode, p.stdout, p.stderr),
+                         (USAGE, "", f"wait: watch {wid} already has a live waiter (pid "
+                                     f"{first.pid}); it will notify its session\n"))
+
     def test_another_condition_or_session_gets_its_own_watch(self):
         job = self.job()
         self.lapsed(job)

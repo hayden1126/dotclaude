@@ -1236,12 +1236,15 @@ def stop_row(run_id):
 class Waiter(dc.Waiter):
     """dc.Waiter polling a condition: `wait`'s loop, and the finalize a codex watch owes."""
 
-    def run(self, max_min, new=None):
-        """Poll until the condition ends or max_min passes; the exit code."""
+    def run(self, max_min, new=None, taken=None):
+        """Poll until the condition ends or max_min passes; the exit code. `taken` is printed
+        once the watch is this waiter's, after its launch line."""
         deadline = time.monotonic() + max_min * 60
         w = self.take(new)
         # First, so a kill notice's output file names the watch (the guard folds by it).
         print(WAIT_LAUNCH.format(self.wid), flush=True)
+        if taken:
+            print(taken, flush=True)
         cursor = dc.log_cursor()
         while True:
             verdict, why = dc.watch_verdict(w, cursor)
@@ -1378,9 +1381,8 @@ def cmd_wait(args):
         same = same_watch(session, cond)
         if same is not None:
             # A rerun of a killed waiter: carry on with its watch, which the guard names.
-            print(f"watch {same['id']} already waits on this; taking it over", flush=True)
-            wid = same["id"]
-            return Waiter(wid, args.poll, session).run(args.max)
+            return Waiter(same["id"], args.poll, session).run(
+                args.max, taken=f"watch {same['id']} already waits on this; taking it over")
         wid = dc.new_watch_id()
         if session == "unknown":
             print("no Claude Code session: the watch guard won't see this watch",
