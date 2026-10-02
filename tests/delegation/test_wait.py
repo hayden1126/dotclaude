@@ -139,6 +139,13 @@ class WaitEnv(unittest.TestCase):
             return [w for w in self.all_watches() if w["waiter_pid"] == p.pid]
         return self.until(mine)[0]
 
+    def suspend(self, p):
+        """SIGSTOP a waiter, as a suspended VM would, until its heartbeat reads as stale."""
+        p.send_signal(signal.SIGSTOP)
+        self.addCleanup(lambda: p.poll() is None and p.send_signal(signal.SIGCONT))
+        self.until(lambda: not dc.waiter_alive(
+            [w for w in self.all_watches() if w["waiter_pid"] == p.pid][0]), timeout=10)
+
     def update(self, wid, **fields):
         with mock.patch.dict(os.environ, {"XDG_STATE_HOME": self.state}):
             return dc.update_watch(wid, lambda w: w.update(fields))
@@ -410,12 +417,37 @@ class Exits(WaitEnv):
         self.until(lambda: [(w["state"], w["blocked_at"]) for w in self.all_watches()]
                    == [("open", None)])
 
-    def test_resume_makes_the_running_waiter_step_aside(self):
+    def test_resume_is_refused_while_the_waiter_is_alive(self):
+        first = self.start("--pid", str(self.job().pid))
+        wid = self.waiting(first)["id"]
+        p = self.run_("--resume", wid)
+        self.assertEqual((p.returncode, p.stderr),
+                         (USAGE, f"wait: watch {wid} already has a live waiter (pid "
+                                 f"{first.pid}); it will notify its session\n"))
+        self.assertIsNone(first.poll())
+
+    def test_resume_with_no_session_keeps_the_watchs_session(self):
+        wid = self.lapsed(self.job())
+        p = self.run_("--resume", wid, "--max", "0.002", CLAUDE_CODE_SESSION_ID="")
+        self.assertEqual(p.returncode, AT_MAX, p.stderr)
+        self.assertEqual(self.only()["session_id"], "s1")
+
+    def test_a_wait_with_no_session_says_the_guard_wont_see_it(self):
+        target = self.path("out")
+        open(target, "w").close()
+        p = self.run_("--file", target, CLAUDE_CODE_SESSION_ID="")
+        self.assertEqual((p.returncode, p.stderr),
+                         (0, "no Claude Code session: the watch guard won't see this watch\n"))
+        self.assertEqual(self.only()["session_id"], "unknown")
+
+    def test_a_stale_waiter_is_taken_over_and_then_steps_aside(self):
         job = self.job()
         first = self.start("--pid", str(job.pid))
         wid = self.waiting(first)["id"]
+        self.suspend(first)
         second = self.start("--resume", wid)
         self.waiting(second)
+        first.send_signal(signal.SIGCONT)
         out, _ = self.finish(first, ASIDE)
         self.assertEqual(out, f"watch {wid} was taken over by pid {second.pid} (a --resume); "
                               "this waiter stepped aside, and the watch goes on\n")
@@ -678,11 +710,17 @@ class Codex(WaitEnv):
         self.codex_row("r1", codex.pid)
         p = self.start("--codex", "r1")
         wid = self.waiting(p)["id"]
-        refusal = (USAGE, f"wait: watch {wid} already waits on r1: delegation-ledger wait "
-                          f"--resume {wid}\n")
+        live = (USAGE, f"wait: watch {wid} already has a live waiter (pid {p.pid}); it will "
+                       "notify its session\n")
         for env in ({}, {"CLAUDE_CODE_SESSION_ID": "s9"}):
             again = self.run_("--codex", "r1", **env)
-            self.assertEqual((again.returncode, again.stderr), refusal, env)
+            self.assertEqual((again.returncode, again.stderr), live, env)
+        p.kill()  # with its waiter gone, the refusal points at a resume
+        p.wait()
+        again = self.run_("--codex", "r1")
+        self.assertEqual((again.returncode, again.stderr),
+                         (USAGE, f"wait: watch {wid} already waits on r1: delegation-ledger "
+                                 f"wait --resume {wid}\n"))
 
     def test_a_beat_that_fails_mid_finalize_still_waits_for_it(self):
         # The stub finalize holds until the test releases it, which it does only once the
@@ -703,17 +741,25 @@ class Codex(WaitEnv):
         self.assertEqual((self.finalized(), len(self.stops())), ("finalize r1\n", 1))
 
     def test_a_resume_during_a_finalize_doesnt_finalize_again(self):
+        # Only a stale waiter can be taken over. Its finalize still runs to the end, and the
+        # new waiter, seeing a live finalizer, reads that stop row instead of writing another.
         self.codex_row("r1", DEAD)
-        first = self.start("--codex", "r1", STUB_SLEEP="1")
-        self.until(lambda: os.path.exists(self.argv_file))
+        release = self.path("release")
+        first = self.start("--codex", "r1", STUB_RELEASE=release)
+        self.until(lambda: os.path.exists(self.argv_file))  # finalize has begun
         wid = self.only()["id"]
+        self.suspend(first)
         second = self.start("--resume", wid)
+        self.waiting(second)
+        time.sleep(0.3)  # it polls past the finalizer marker without finalizing
+        open(release, "w").close()
+        out, _ = self.finish(second, 0)
+        self.assertEqual(out, f"watch {wid} done: codex run r1 ends\n")
+        first.send_signal(signal.SIGCONT)
         out, _ = self.finish(first, ASIDE)
         self.assertTrue(out.endswith(f"watch {wid} was taken over by pid {second.pid} (a "
                                      "--resume); this waiter stepped aside, and the watch goes "
                                      "on\n"), out)
-        out, _ = self.finish(second, 0)  # it read the first finalize's stop row
-        self.assertEqual(out, f"watch {wid} done: codex run r1 ends\n")
         self.assertEqual(self.finalized(), "finalize r1\n")
         self.assertEqual(len(self.stops()), 1)
 

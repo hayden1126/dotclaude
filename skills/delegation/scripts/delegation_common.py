@@ -97,16 +97,34 @@ def _agent_path(aid):
     return _id_path(agents_dir(), aid, "an agent id")
 
 
+class LockBusy(Exception):
+    """A bounded file_lock wait ran out before the lock came free."""
+
+
 @contextlib.contextmanager
-def dir_lock(directory):
-    """An exclusive flock on <directory>/.lock, which read-modify-writes there hold."""
-    os.makedirs(directory, exist_ok=True)
-    with open(os.path.join(directory, ".lock"), "a") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
+def file_lock(path, until=None, clock=time.monotonic):
+    """An exclusive flock on path. With `until` (a clock() deadline) it never blocks: it
+    retries until then and raises LockBusy if the lock didn't come free."""
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "a") as lock:
+        while True:
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX if until is None
+                            else fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if clock() >= until:
+                    raise LockBusy(path) from None
+                time.sleep(0.01)
         try:
             yield
         finally:
             fcntl.flock(lock, fcntl.LOCK_UN)
+
+
+def dir_lock(directory, until=None, clock=time.monotonic):
+    """file_lock on <directory>/.lock, which read-modify-writes there hold."""
+    return file_lock(os.path.join(directory, ".lock"), until, clock)
 
 
 def write_json(path, obj):
@@ -503,6 +521,10 @@ def codex_stopped(e):
 #   state           one of WATCH_STATES
 #   blocked_at      when the guard blocked a stop on this lapse (ISO), else null; a waiter
 #                   that takes the watch over, or polls it, clears it
+#   blocked_size    the session transcript's size in bytes at that block (null if unknown),
+#                   set and cleared with blocked_at: a later stop has a longer transcript, a
+#                   second guard in the same stop doesn't
+#   session_id      a --resume moves the watch to the resuming session, unless it has none
 #   ended           when it left UNRESOLVED (ISO); absent until then
 # open is waiting; acknowledged is a lapse the guard let a stop through on; done, failed and
 # stale are how the waiter saw the condition end (it exits 0, 1, 2); dropped is `wait --drop`.
@@ -585,15 +607,22 @@ def update_watch(wid, fn):
     """Read-modify-write a watch under watches/.lock, as update_agent_state does: fn gets the
     current dict ({} for a new watch) and changes it in place or returns a new one. The file
     is written only when fn changed it, so a no-op keeps its mtime (the prune clock)."""
-    path = watch_path(wid)
-    with dir_lock(watches_dir()):
-        cur = read_watch(wid) or {}
-        before = copy.deepcopy(cur)
-        new = fn(cur)
-        new = cur if new is None else new
-        if new != before:
-            write_json(path, new)
-    return new
+    return update_watches({wid: fn})[wid]
+
+
+def update_watches(fns, until=None, clock=time.monotonic):
+    """update_watch for several watches ({wid: fn}) in one hold of watches/.lock, returning
+    {wid: new}; with `until`, the lock wait is bounded (LockBusy)."""
+    out = {}
+    with dir_lock(watches_dir(), until, clock):
+        for wid, fn in fns.items():
+            cur = read_watch(wid) or {}
+            before = copy.deepcopy(cur)
+            new = fn(cur)
+            out[wid] = new = cur if new is None else new
+            if new != before:
+                write_json(watch_path(wid), new)
+    return out
 
 
 def prune_watches():

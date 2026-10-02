@@ -12,33 +12,39 @@ to wake it. This hook is the enforcement:
     records the end itself);
   - else a met condition is recorded done and blocks once: the dead waiter's notification
     never came, so the lead is told to check the result and report it. A --log condition is
-    checked against the log's last 1 MB only, to keep a stop cheap;
+    checked in the log's last 1 MB only, to keep a stop cheap;
   - a codex run with a stop row is the same, done on exit 0 and failed otherwise; one that
     ended without a stop row, or still runs, is a lapse (its finalize is still owed);
   - else it has lapsed (a failed or stale condition too: a resumed waiter reports it). A lapse
-    blocks once (blocked_at, set under the lock). A stop more than 10 s later allows, marks it
-    acknowledged and warns in a systemMessage; later stops say nothing more. A doubled guard
-    in one stop, inside those 10 s, says nothing.
-- Kills. Each stop reads the transcript on from where the last one stopped (kills/<session>.json
-  holds the offset; a session's first scan starts 256 KB back, and a stop reads at most 16 MB).
-  A task notification whose status is killed at the background time limit blocks once per task
-  id, in either shape: a user entry between turns, or a mid-turn attachment entry. The first
-  run records since as 10 minutes back, so older kills never block. A killed `delegation-ledger
-  wait` folds into its watch's item when that watch has one in this stop: the watch a --resume
-  names, else the one watch created within 120 s after the launch. A killed `codex-delegate
-  run|resume` gets its own reason: Codex keeps running.
+    blocks once, recording blocked_at and the transcript's size. A later stop, whose transcript
+    has grown (or, with no size, one over 60 s later), allows, marks it acknowledged and warns
+    in a systemMessage; later stops say nothing more. A twin guard in the same stop sees the
+    same size and says nothing.
+- Kills. Each stop reads the transcript on from where the last one stopped (kills/<sid>.json
+  holds the offset; a session's first scan starts 256 KB back), searching the raw bytes for
+  task notifications. One whose status is killed at the background time limit blocks once per
+  task id, in either shape: a user entry between turns, or a mid-turn attachment entry. The
+  first run records since as 10 minutes back, so older kills never block. A killed
+  `delegation-ledger wait` folds into its watch's item when that watch has one in this stop:
+  the watch a --resume names, else the one watch created within 120 s after the launch (more
+  than one: the one whose condition the command's --pid, --file or --log names). A killed
+  `codex-delegate run|resume` gets its own reason: Codex keeps running.
 
-A stop blocks at most once, with one numbered reason, and everything in it is recorded first,
-within a 3 s budget: once that's spent no more items are taken, and what's left waits for the
-next stop. The guard decides by its own records, not by stop_hook_active, so a hook registered
-twice can't loop and another hook's block can't swallow this one. It FAILS OPEN: an error on
-one item is logged to delegation-ledger.err and skips that item, and any other error allows.
+Each stop runs in three phases, so what it records it also says. Gather is read-only and
+budgeted (3 s): no new item once that's spent, and a kill whose launch lookup the deadline cut
+off gets the plain reason. Commit records every gathered item in one pass under
+kills/<sid>.lock and watches/.lock, whose waits are bounded: a busy lock means nothing is taken
+this stop. Then it prints. It decides by its own records, not stop_hook_active, so a hook
+registered twice can't loop and another hook's block can't swallow this one. It FAILS OPEN:
+an error on one item is logged to delegation-ledger.err and skips that item, and any other
+error allows the stop.
 """
 import collections
 import datetime
 import glob
 import json
 import math
+import mmap
 import os
 import re
 import sys
@@ -50,14 +56,15 @@ sys.path.insert(0, HERE)
 import delegation_common as dc  # noqa: E402
 import delegation_checks as checks  # noqa: E402
 
-TAIL_BYTES = 256 * 1024       # a session's first transcript scan starts this far back
-SCAN_CAP = 16 * 1024 * 1024   # the most transcript one stop reads
-LOG_TAIL = 1024 * 1024        # a --log condition is checked in the log's last 1 MB
-BUDGET_S = 3.0                # under the hook's 5 s timeout
-ACK_AFTER_S = 10              # a younger blocked_at is this stop's own block, from a twin guard
+TAIL_BYTES = 256 * 1024     # a session's first transcript scan starts this far back
+LOG_TAIL = 1024 * 1024      # a --log condition is checked in the log's last 1 MB
+BUDGET_S = 3.0              # for gathering, under the hook's 5 s timeout
+LOCK_GRACE_S = 0.5          # the commit's lock wait when gathering spent the budget
+ACK_UNKNOWN_AGE_S = 60      # with no transcript size, a later stop is one this much later
 FIRST_RUN_LOOKBACK_S = 600
-FOLD_WINDOW_S = 120           # a fresh waiter creates its watch this soon after its launch
+FOLD_WINDOW_S = 120         # a fresh waiter creates its watch this soon after its launch
 KILLS_PRUNE_DAYS, KILLS_TMP_DAYS = 7, 1
+MARK = b"task-notification"
 WATCH_REASON = ("Watch {id} ({desc}) has no live waiter and {unmet}. If a command was stopped "
                 "at its time limit, don't re-run it. Re-arm the watch: delegation-ledger wait "
                 "--resume {id}, with run_in_background and timeout 7200000. To stop watching "
@@ -85,8 +92,14 @@ DESC_RE = re.compile(r'^Background command "(.*)" was stopped', re.S)
 WAITER_RE = re.compile(r"\bdelegation-ledger\s+wait\b")
 RESUME_RE = re.compile(r"\bdelegation-ledger\s+wait\b.*?--resume[=\s]+['\"]?([^\s'\"]+)")
 CODEX_RE = re.compile(r"\bcodex-delegate\s+(run|resume)\b(?:\s+['\"]?([^\s'\"]+))?")
+ARG_RE = {opt: re.compile(rf"--{opt}[=\s]+['\"]?([^\s'\"]+)") for opt in ("pid", "file", "log")}
 
 Notice = collections.namedtuple("Notice", "task tool_use desc ts pos")
+# A watch's gathered item: kind "end" (the job ended unnoticed: record `state`, say `text`) or
+# "lapse" (block once with `text`, or acknowledge).
+Pending = collections.namedtuple("Pending", "kind w text state")
+# A kill's gathered item: its notice, its text, and the watch it folds into (or None).
+Kill = collections.namedtuple("Kill", "notice text fold")
 
 
 def iso(t):
@@ -97,7 +110,14 @@ def log(what):
     checks.log_error(f"watch-guard: {what}: {traceback.format_exc(limit=3)}")
 
 
-# ---- watches ----
+def file_size(path):
+    try:
+        return os.path.getsize(path)
+    except (OSError, TypeError):
+        return None
+
+
+# ---- gather: watches ----
 
 def log_tail_cursor(cond):
     """A scan_log cursor at the first whole line of the log's last LOG_TAIL bytes."""
@@ -114,73 +134,33 @@ def log_tail_cursor(cond):
     return cursor
 
 
-def end_item(w, now, state, text):
-    """Record that the job ended (done or failed) unnoticed, and the one item that says so."""
-    recorded = False
-
-    def end(cur):
-        nonlocal recorded
-        if cur.get("state") in dc.UNRESOLVED and not dc.waiter_alive(cur, now):
-            cur.update(state=state, ended=iso(now))
-            recorded = True
-    dc.update_watch(w["id"], end)
-    return ("block", text) if recorded else (None, None)
-
-
-def lapse(w, now, codex_ended=False):
-    """Block once on a lapse; a later stop acknowledges it, and later ones are quiet."""
-    outcome = None
-
-    def mark(cur):
-        nonlocal outcome
-        if cur.get("state") not in dc.UNRESOLVED or dc.waiter_alive(cur, now):
-            return  # dropped, ended or re-armed since the guard read it
-        if cur.get("blocked_at") is None:
-            cur["blocked_at"] = iso(now)
-            outcome = "block"
-            return
-        try:
-            age = now - dc.parse_iso(cur["blocked_at"]).timestamp()
-        except (TypeError, ValueError):
-            age = math.inf
-        if cur.get("state") == "open" and age > ACK_AFTER_S:
-            cur["state"] = "acknowledged"
-            outcome = "ack"
-    dc.update_watch(w["id"], mark)
-    desc = w.get("description") or ""
-    if outcome == "block":
-        unmet = f"{dc.condition_text(w.get('condition') or {})} is unmet"
-        return outcome, WATCH_REASON.format(
-            id=w["id"], desc=desc, unmet=f"{unmet} {CODEX_ENDED}" if codex_ended else unmet)
-    if outcome == "ack":
-        return outcome, ACK_MESSAGE.format(id=w["id"], desc=desc)
-    return None, None
-
-
-def check_watch(w, shells, now):
-    """(outcome, text) for one watch: outcome is "block", "ack" or None (allow quietly). Every
-    write re-reads the watch under the lock, so a waiter that re-armed meanwhile wins. A codex
-    run gone from the ledger raises Undecidable, which skips this watch."""
+def watch_pending(w, shells, now):
+    """What one watch would add, read-only: None, or a Pending. A codex run gone from the
+    ledger raises Undecidable, which skips this watch."""
     wid, cond = w["id"], w.get("condition") or {}
     if dc.waiter_alive(w, now) or any(wid in c for c in shells):
-        return None, None
-    met = MET_REASON.format(id=wid, desc=w.get("description") or "",
-                            cond=dc.condition_text(cond))
+        return None
+    desc = w.get("description") or ""
+    met = MET_REASON.format(id=wid, desc=desc, cond=dc.condition_text(cond))
+    lapsed = WATCH_REASON.format(id=wid, desc=desc,
+                                 unmet=f"{dc.condition_text(cond)} is unmet")
     if "codex" in cond:
         stage, e = dc.codex_progress(cond["codex"])
         if stage == "stopped" and e.get("exit") == 0:
-            return end_item(w, now, "done", met)
+            return Pending("end", w, met, "done")
         if stage == "stopped":
-            return end_item(w, now, "failed",
-                            CODEX_FAILED.format(run=cond["codex"], exit=e.get("exit")))
-        return lapse(w, now, codex_ended=stage == "ended")
+            return Pending("end", w, CODEX_FAILED.format(run=cond["codex"], exit=e.get("exit")),
+                           "failed")
+        if stage == "ended":
+            lapsed = lapsed.replace(" is unmet.", f" is unmet {CODEX_ENDED}.", 1)
+        return Pending("lapse", w, lapsed, None)
     verdict, _ = dc.watch_verdict(w, log_tail_cursor(cond) if cond.get("log") else None, now)
     if verdict == "done":
-        return end_item(w, now, "done", met)
-    return lapse(w, now)
+        return Pending("end", w, met, "done")
+    return Pending("lapse", w, lapsed, None)
 
 
-# ---- kills ----
+# ---- gather: kills ----
 
 def entry_time(e):
     """An entry's timestamp in epoch seconds, or None (it carries milliseconds)."""
@@ -235,106 +215,80 @@ def parse_notice(line, pos):
 def scan(path, start, cut):
     """(notices, end) for the complete lines of the transcript from byte `start` on: its kill
     notices, one per task id with its line's offset, and the offset just past the last complete
-    line. With `cut`, start may fall inside a line, which is then skipped."""
+    line. With `cut`, start may fall inside a line, which is then skipped. It searches the raw
+    bytes and parses only the lines holding a task notification, so a long region is cheap."""
     with open(path, "rb") as f:
-        f.seek(max(0, start - 1) if cut else start)
-        if cut and start > 0 and f.read(1) != b"\n":
-            f.readline()
-        begin = f.tell()
-        data = f.read()
-    whole = data[:data.rfind(b"\n") + 1]
-    notices, pos = {}, begin
-    for raw in whole.split(b"\n")[:-1]:
-        if b"task-notification" in raw:
-            n = parse_notice(raw.decode("utf-8", "replace"), pos)
-            if n is not None and n.task not in notices:
-                notices[n.task] = n
-        pos += len(raw) + 1
-    return sorted(notices.values(), key=lambda n: n.pos), begin + len(whole)
+        if os.fstat(f.fileno()).st_size <= start:
+            return [], start
+        with mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ) as m:
+            begin = start
+            if cut and start > 0 and m[start - 1:start] != b"\n":
+                nl = m.find(b"\n", start)
+                begin = len(m) if nl < 0 else nl + 1
+            last = m.rfind(b"\n", begin)
+            end = begin if last < 0 else last + 1
+            notices, hit = {}, m.find(MARK, begin, end)
+            while hit >= 0:
+                head = m.rfind(b"\n", begin, hit)
+                head = begin if head < 0 else head + 1
+                tail = m.find(b"\n", hit, end)
+                n = parse_notice(m[head:tail].decode("utf-8", "replace"), head)
+                if n is not None and n.task not in notices:
+                    notices[n.task] = n
+                hit = m.find(MARK, tail + 1, end)
+    return sorted(notices.values(), key=lambda n: n.pos), end
 
 
 def kills_dir():
     return os.path.join(dc.state_dir(), "kills")
 
 
-def kills_path(sid):
+def kills_path(sid, ext=".json"):
     safe = re.sub(r"[^A-Za-z0-9._-]", "_", sid).lstrip(".") or "_"
-    return os.path.join(kills_dir(), f"{safe}.json")
+    return os.path.join(kills_dir(), safe + ext)
+
+
+def read_kill_record(sid):
+    try:
+        with open(kills_path(sid)) as f:
+            rec = json.load(f)
+    except (OSError, ValueError):
+        return {}
+    return rec if isinstance(rec, dict) else {}
+
+
+def record_offset(rec, transcript):
+    o = rec.get("offset") if rec.get("transcript") == transcript else None
+    return o if isinstance(o, int) and not isinstance(o, bool) and o >= 0 else None
 
 
 def prune_kills(now):
-    for pattern, days in (("*.json", KILLS_PRUNE_DAYS), (".*.tmp", KILLS_TMP_DAYS)):
+    """Remove records (and their locks) unwritten for KILLS_PRUNE_DAYS, orphan locks as old,
+    and temp files over a day old."""
+    old = now - KILLS_PRUNE_DAYS * 86400
+    for pattern, cutoff in (("*.json", old), ("*.lock", old),
+                            (".*.tmp", now - KILLS_TMP_DAYS * 86400)):
         for p in glob.glob(os.path.join(kills_dir(), pattern)):
             try:
-                if os.path.getmtime(p) < now - days * 86400:
-                    os.remove(p)
+                if os.path.getmtime(p) >= cutoff:
+                    continue
+                if p.endswith(".lock") and os.path.exists(p[:-5] + ".json"):
+                    continue  # its session still records kills
+                os.remove(p)
             except OSError:
                 pass
 
 
-def take_kills(sid, transcript, now, spent, item_for):
-    """The block items for this session's new kills. Under kills/.lock, it reads the transcript
-    on from the recorded offset and takes each notice not seen and not older than since, until
-    the budget is spent. A taken notice is recorded as seen, and the offset stops at the first
-    one left, so the next stop reads it again. The record is {"session_id", "since", "seen",
-    "transcript", "offset"}."""
-    path, items = kills_path(sid), []
-    with dc.dir_lock(kills_dir()):
-        prune_kills(now)
-        try:
-            with open(path) as f:
-                rec = json.load(f)
-        except (OSError, ValueError):
-            rec = {}
-        rec = rec if isinstance(rec, dict) else {}
-        try:
-            since = dc.parse_iso(rec["since"]).timestamp()
-        except (KeyError, TypeError, ValueError):
-            since = now - FIRST_RUN_LOOKBACK_S
-        seen = {s for s in rec.get("seen") or [] if isinstance(s, str)}
-        stored = rec.get("offset") if rec.get("transcript") == transcript else None
-        if not isinstance(stored, int) or isinstance(stored, bool) or stored < 0:
-            stored = None
-        try:
-            size = os.path.getsize(transcript)
-        except OSError:
-            size = None
-        notices, end = [], stored
-        if size is not None:
-            if stored is not None and stored > size:
-                stored = 0  # rewritten or replaced: read it again from the top
-            start, cut = (stored, False) if stored is not None else (max(0, size - TAIL_BYTES),
-                                                                    True)
-            if size - start > SCAN_CAP:
-                checks.log_error(f"watch-guard: {transcript}: skipped "
-                                 f"{size - start - SCAN_CAP} bytes past the {SCAN_CAP} byte cap")
-                start, cut = size - SCAN_CAP, True
-            notices, end = scan(transcript, start, cut)
-        for n in notices:
-            if n.task in seen or n.ts < since:
-                continue
-            if spent():
-                end = n.pos
-                break
-            seen.add(n.task)
-            text = item_for(n)
-            if text:
-                items.append(text)
-        new = {"session_id": sid, "since": iso(since), "seen": sorted(seen),
-               "transcript": transcript, "offset": end}
-        if new != rec:
-            dc.write_json(path, new)
-    return items
-
-
-def launched(path, tool_use):
+def launched(path, tool_use, spent):
     """(command, epoch) of the Bash tool_use with this id, searched through the whole
-    transcript (the launch can be hours back); None when it isn't there. Only a new kill gets
-    here, so the full read is rare."""
+    transcript (the launch can be hours back); None when it isn't there or the budget ran out
+    on the way."""
     if not tool_use:
         return None
     with open(path, errors="replace") as f:
-        for line in f:
+        for i, line in enumerate(f):
+            if i % 512 == 0 and spent():
+                return None
             if tool_use not in line or '"tool_use"' not in line:
                 continue
             try:
@@ -349,9 +303,26 @@ def launched(path, tool_use):
     return None
 
 
-def fold_target(command, at, watches):
+def names_condition(command, w, cwd):
+    """Whether the waiter command's --pid, --file and --log (at least one) all match watch
+    w's condition; relative paths resolve against the session's cwd."""
+    cond = w.get("condition") or {}
+    args = {opt: rx.findall(command) for opt, rx in ARG_RE.items()}
+    if not any(args.values()):
+        return False
+
+    def path(p):
+        return os.path.normpath(os.path.join(cwd or "", os.path.expanduser(p)))
+    pids = {p.get("pid") for p in cond.get("pids") or []}
+    return (all(p.isdigit() and int(p) in pids for p in args["pid"])
+            and all(path(p) == cond.get("file") for p in args["file"])
+            and all(path(p) == cond.get("log") for p in args["log"]))
+
+
+def fold_target(command, at, watches, cwd):
     """The watch a killed `delegation-ledger wait` waited on: the one its --resume names, else
-    the session's one unresolved watch created within FOLD_WINDOW_S after its launch."""
+    the session's one unresolved watch created within FOLD_WINDOW_S after its launch, and when
+    several were, the one whose condition the command names."""
     named = RESUME_RE.search(command)
     if named:
         return named.group(1)
@@ -364,29 +335,135 @@ def fold_target(command, at, watches):
         except (KeyError, TypeError, ValueError):
             continue
         if math.floor(at) <= created <= at + FOLD_WINDOW_S:
-            fits.append(w["id"])
-    return fits[0] if len(fits) == 1 else None
+            fits.append(w)
+    if len(fits) > 1:
+        fits = [w for w in fits if names_condition(command, w, cwd)]
+    return fits[0]["id"] if len(fits) == 1 else None
 
 
-def kill_item(n, transcript, watches, itemized):
-    """The block item for one new kill, or None when its watch's item in this stop covers it."""
+def map_kill(n, transcript, watches, cwd, spent):
+    """A Kill for one new notice: the plain reason when its launch can't be found in time."""
+    plain = Kill(n, KILL_REASON.format(desc=n.desc), None)
     try:
-        found = launched(transcript, n.tool_use)
+        found = launched(transcript, n.tool_use, spent)
     except Exception:  # noqa: BLE001  can't map it, so say it as a plain kill
         log(f"kill {n.task}")
-        return KILL_REASON.format(desc=n.desc)
+        return plain
     command, at = found or ("", None)
     if WAITER_RE.search(command):
-        if fold_target(command, at, watches) in itemized:
-            return None
-        return KILL_REASON.format(desc=n.desc)
+        return plain._replace(fold=fold_target(command, at, watches, cwd))
     codex = CODEX_RE.search(command)
     if codex:
         # `resume` names its run; `run` mints one the wrapper hadn't printed yet.
         run = codex.group(2) if codex.group(1) == "resume" else None
-        return CODEX_KILL.format(desc=n.desc, run=run if run and not run.startswith("-")
-                                 else "<run_id>")
-    return KILL_REASON.format(desc=n.desc)
+        return plain._replace(text=CODEX_KILL.format(
+            desc=n.desc, run=run if run and not run.startswith("-") else "<run_id>"))
+    return plain
+
+
+def kill_pending(sid, transcript, now, spent, watches, cwd):
+    """(kills, scan) read-only: the new kills from the transcript, read on from the recorded
+    offset, and {"since", "end"} for the commit. It takes notices until the budget is spent;
+    end then stops at the first one left, so the next stop reads it again."""
+    rec = read_kill_record(sid)
+    try:
+        since = dc.parse_iso(rec["since"]).timestamp()
+    except (KeyError, TypeError, ValueError):
+        since = now - FIRST_RUN_LOOKBACK_S
+    seen = {s for s in rec.get("seen") or [] if isinstance(s, str)}
+    stored, size = record_offset(rec, transcript), file_size(transcript)
+    notices, end = [], stored
+    if size is not None:
+        if stored is not None and stored > size:
+            stored = 0  # rewritten or replaced: read it again from the top
+        start, cut = ((stored, False) if stored is not None
+                      else (max(0, size - TAIL_BYTES), True))
+        notices, end = scan(transcript, start, cut)
+    kills = []
+    for n in notices:
+        if n.task in seen or n.ts < since:
+            continue
+        if spent():
+            end = n.pos
+            break
+        kills.append(map_kill(n, transcript, watches, cwd, spent))
+    return kills, {"since": since, "end": end}
+
+
+# ---- commit ----
+
+def later_stop(cur, size, now):
+    """Whether this stop comes after the one that blocked on the watch: the transcript grew,
+    or, with no size to compare, the block is over ACK_UNKNOWN_AGE_S old."""
+    blocked = cur.get("blocked_size")
+    if isinstance(size, int) and isinstance(blocked, int):
+        return size > blocked
+    try:
+        return now - dc.parse_iso(cur["blocked_at"]).timestamp() > ACK_UNKNOWN_AGE_S
+    except (KeyError, TypeError, ValueError):
+        return True
+
+
+def commit(sid, transcript, pendings, kills, scan_out, size, now, until, clock):
+    """Record everything gathered in one pass, under kills/<sid>.lock and then watches/.lock
+    (each wait bounded by `until`), and return (items, acks). Each watch is re-read under the
+    lock, so a waiter that re-armed meanwhile, or a twin guard that recorded first, wins.
+    LockBusy means nothing is recorded or said this stop."""
+    items, acks, itemized, outcomes = [], [], set(), {}
+
+    def record(p):
+        wid = p.w["id"]
+
+        def fn(cur):
+            if cur.get("state") not in dc.UNRESOLVED or dc.waiter_alive(cur, now):
+                return  # dropped, ended or re-armed since it was gathered
+            if p.kind == "end":
+                cur.update(state=p.state, ended=iso(now))
+                outcomes[wid] = "block"
+            elif cur.get("blocked_at") is None:
+                cur.update(blocked_at=iso(now), blocked_size=size)
+                outcomes[wid] = "block"
+            elif cur.get("state") == "open" and later_stop(cur, size, now):
+                cur["state"] = "acknowledged"
+                outcomes[wid] = "ack"
+        return fn
+
+    with dc.file_lock(kills_path(sid, ".lock"), until, clock):
+        if pendings:
+            dc.update_watches({p.w["id"]: record(p) for p in pendings}, until, clock)
+        for p in pendings:
+            outcome = outcomes.get(p.w["id"])
+            if outcome == "block":
+                items.append(p.text)
+                itemized.add(p.w["id"])
+            elif outcome == "ack":
+                acks.append(ACK_MESSAGE.format(id=p.w["id"], desc=p.w.get("description") or ""))
+        if scan_out is not None:
+            try:
+                items += commit_kills(sid, transcript, kills, scan_out, size, itemized)
+            except Exception:  # noqa: BLE001  unrecorded, so unsaid; the watches stand
+                log("kills")
+    return items, acks
+
+
+def commit_kills(sid, transcript, kills, scan_out, size, itemized):
+    """Record the gathered kills as seen and move the offset on, and return their items. The
+    record is re-read first: a twin guard may have taken some already."""
+    rec = read_kill_record(sid)
+    seen = {s for s in rec.get("seen") or [] if isinstance(s, str)}
+    taken = [k for k in kills if k.notice.task not in seen]
+    offsets = [o for o in (record_offset(rec, transcript), scan_out["end"])
+               if o is not None and (size is None or o <= size)]
+    try:
+        since = iso(dc.parse_iso(rec["since"]).timestamp())
+    except (KeyError, TypeError, ValueError):
+        since = iso(scan_out["since"])
+    new = {"session_id": sid, "since": since, "transcript": transcript,
+           "seen": sorted(seen | {k.notice.task for k in taken}),
+           "offset": max(offsets) if offsets else None}
+    if new != rec:
+        dc.write_json(kills_path(sid), new)
+    return [k.text for k in taken if k.fold not in itemized]
 
 
 # ---- the hook ----
@@ -397,8 +474,8 @@ def render(items):
 
 def decide(data, now, clock=time.monotonic):
     """None to let the stop through, else the hook output: a block whose reason numbers every
-    new item, a systemMessage for the lapses it lets through, or both. It takes no new item once
-    BUDGET_S (by `clock`) is spent, so what it records it also returns."""
+    new item, a systemMessage for the lapses it lets through, or both. It gathers within
+    BUDGET_S (by `clock`), then commits all it gathered, so what it records it also returns."""
     if not isinstance(data, dict) or data.get("agent_id"):
         return None
     sid = data.get("session_id")
@@ -410,31 +487,43 @@ def decide(data, now, clock=time.monotonic):
         return clock() >= deadline
     shells = [t["command"] for t in data.get("background_tasks") or []
               if isinstance(t, dict) and isinstance(t.get("command"), str)]
+    cwd = data.get("cwd") if isinstance(data.get("cwd"), str) else None
+    transcript = data.get("transcript_path")
+    transcript = transcript if isinstance(transcript, str) else None
+    size = file_size(transcript)
+    try:
+        prune_kills(now)
+    except Exception:  # noqa: BLE001
+        log("prune")
     watches = [w for w in dc.all_watches() if w.get("session_id") == sid
                and w.get("state") in dc.UNRESOLVED and isinstance(w.get("id"), str)]
-    items, acks, itemized = [], [], set()
+    pendings = []
     for i, w in enumerate(watches):
         if spent():
             checks.log_error(f"watch-guard: the {BUDGET_S:g} s budget is spent; "
                              f"{len(watches) - i} watch(es) wait for the next stop")
             break
         try:
-            outcome, text = check_watch(w, shells, now)
+            p = watch_pending(w, shells, now)
         except Exception:  # noqa: BLE001  dc.Undecidable or worse: skip this watch only
             log(f"watch {w['id']}")
             continue
-        if outcome == "block":
-            items.append(text)
-            itemized.add(w["id"])
-        elif outcome == "ack":
-            acks.append(text)
-    transcript = data.get("transcript_path")
-    if isinstance(transcript, str):
+        if p is not None:
+            pendings.append(p)
+    kills, scan_out = [], None
+    if transcript and not spent():
         try:
-            items += take_kills(sid, transcript, now, spent,
-                                lambda n: kill_item(n, transcript, watches, itemized))
+            kills, scan_out = kill_pending(sid, transcript, now, spent, watches, cwd)
         except Exception:  # noqa: BLE001  the kill catch is skipped; the watches stand
             log("kills")
+    if not pendings and scan_out is None:
+        return None
+    try:
+        items, acks = commit(sid, transcript, pendings, kills, scan_out, size, now,
+                             max(deadline, clock() + LOCK_GRACE_S), clock)
+    except dc.LockBusy as ex:
+        checks.log_error(f"watch-guard: {ex} stayed locked; nothing was taken this stop")
+        return None
     out = {"decision": "block", "reason": render(items)} if items else {}
     if acks:
         out["systemMessage"] = " ".join(acks)

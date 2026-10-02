@@ -1280,7 +1280,15 @@ class Waiter:
                             "--resume); this waiter stepped aside, and the watch goes on")
 
     @staticmethod
-    def refuse_a_second_codex_watch(new):
+    def refuse_a_live_waiter(w):
+        """WaitRefused when the watch's waiter is alive: it will notify its own session. A
+        waiter whose heartbeat went stale (a suspended VM, say) can still be taken over."""
+        if dc.waiter_alive(w):
+            raise WaitRefused(f"watch {w.get('id')} already has a live waiter (pid "
+                              f"{w.get('waiter_pid')}); it will notify its session")
+
+    @classmethod
+    def refuse_a_second_codex_watch(cls, new):
         """WaitRefused when any session already has an unresolved watch on new's codex run,
         since each watch's waiter could finalize it. Called under the watches lock, so two
         waits started together can't both pass."""
@@ -1288,6 +1296,7 @@ class Waiter:
         for w in dc.all_watches() if run is not None else ():
             if (w.get("state") in dc.UNRESOLVED
                     and (w.get("condition") or {}).get("codex") == run):
+                cls.refuse_a_live_waiter(w)
                 raise WaitRefused(f"watch {w.get('id')} already waits on {run}: "
                                   f"delegation-ledger wait --resume {w.get('id')}")
 
@@ -1301,11 +1310,15 @@ class Waiter:
                 raise WaitRefused(f"no watch {self.wid!r}")
             elif w.get("state") not in dc.UNRESOLVED:
                 raise WaitRefused(f"watch {self.wid} is {w.get('state')}; start a new wait")
-            # A resume re-owns the watch to the caller's session, so one a crashed session
-            # left is guarded in the session that took it over.
+            else:
+                self.refuse_a_live_waiter(w)
+            # A resume moves the watch to the caller's session, so one a crashed session left
+            # is guarded in the session that re-armed it; a caller with none leaves it be.
+            if self.session != "unknown":
+                w["session_id"] = self.session
+            w.pop("blocked_size", None)
             w.update(waiter_pid=self.me, waiter_start=self.start, poll_s=self.poll,
-                     waiter_heartbeat=dc.now_iso(), state="open", blocked_at=None,
-                     session_id=self.session)
+                     waiter_heartbeat=dc.now_iso(), state="open", blocked_at=None)
         return dc.update_watch(self.wid, take)
 
     def beat(self):
@@ -1314,6 +1327,7 @@ class Waiter:
         def beat(w):
             self.own(w)
             if w.get("state") in dc.UNRESOLVED:
+                w.pop("blocked_size", None)
                 w.update(waiter_heartbeat=dc.now_iso(), state="open", blocked_at=None)
         return dc.update_watch(self.wid, beat)
 
@@ -1458,6 +1472,9 @@ def cmd_wait(args):
             return Waiter(wid, args.poll, wait_session()).run(args.max)
         wid = "w-" + time.strftime("%Y%m%dT%H%M%S") + "-" + secrets.token_hex(3)
         session = wait_session()
+        if session == "unknown":
+            print("no Claude Code session: the watch guard won't see this watch",
+                  file=sys.stderr, flush=True)
         return Waiter(wid, args.poll, session).run(args.max, new={
             "id": wid, "session_id": session, "condition": cond,
             "description": args.desc or dc.condition_text(cond), "created": dc.now_iso()})

@@ -1,6 +1,7 @@
 """watch-guard: the main-thread Stop hook blocks once per lapsed watch and once per killed
 task, records everything it blocks on, and always fails open. Transcripts here are synthetic,
 in the 2.1.287 format."""
+import fcntl
 import itertools
 import json
 import os
@@ -221,24 +222,43 @@ class Watches(GuardEnv):
         self.assertEqual((self.read()["state"], self.read("w-2")["state"]), ("done", "failed"))
         self.assertIsNone(self.decide())
 
+    ACK = ("Watch w-1 (the build) still has no waiter; it's acknowledged. Re-arm with "
+           "delegation-ledger wait --resume w-1, or drop it.")
+
+    def grow(self):
+        """What a later stop's transcript looks like: the turn went on."""
+        self.append({"type": "assistant", "timestamp": iso(self.now), "message": {"content": "."}})
+
     def test_a_lapse_blocks_once_then_is_acknowledged_with_a_warning(self):
         self.watch()
+        self.lines()
         self.assertEqual(self.decide(), self.block(self.lapse_reason()))
-        dc.parse_iso(self.read()["blocked_at"])
-        self.assertEqual(self.decide(at=self.now + 30), {"systemMessage": (
-            "Watch w-1 (the build) still has no waiter; it's acknowledged. Re-arm with "
-            "delegation-ledger wait --resume w-1, or drop it.")})
+        w = self.read()
+        dc.parse_iso(w["blocked_at"])
+        self.assertEqual(w["blocked_size"], os.path.getsize(self.transcript))
+        self.grow()
+        self.assertEqual(self.decide(at=self.now + 3), {"systemMessage": self.ACK})
         self.assertEqual(self.read()["state"], "acknowledged")
-        self.assertIsNone(self.decide(at=self.now + 60))  # said once; the views still list it
+        self.grow()
+        self.assertIsNone(self.decide(at=self.now + 6))  # said once; the views still list it
 
-    def test_a_doubled_guard_blocks_once_and_doesnt_ack_its_own_block(self):
-        # Two guards in one stop: the second sees a blocked_at seconds old, which is this
-        # stop's block, so it says nothing; a real next stop acknowledges it.
+    def test_a_twin_guard_in_the_same_stop_neither_blocks_nor_acknowledges(self):
+        # It sees the transcript the first guard saw, so it knows the block is this stop's.
         self.watch()
+        self.lines()
         self.assertEqual(self.decide(), self.block(self.lapse_reason()))
         self.assertIsNone(self.decide())
+        self.assertIsNone(self.decide(at=self.now + 30))  # same size: still the same stop
         self.assertEqual(self.read()["state"], "open")
-        self.assertIn("systemMessage", self.decide(at=self.now + 30))
+        self.grow()
+        self.assertEqual(self.decide(at=self.now + 31), {"systemMessage": self.ACK})
+
+    def test_with_no_transcript_size_a_minute_later_is_a_later_stop(self):
+        self.watch()  # no transcript at all
+        self.assertEqual(self.decide(), self.block(self.lapse_reason()))
+        self.assertIsNone(self.read()["blocked_size"])
+        self.assertIsNone(self.decide(at=self.now + 30))
+        self.assertEqual(self.decide(at=self.now + 90), {"systemMessage": self.ACK})
 
     def test_a_log_condition_is_checked_in_the_logs_last_megabyte(self):
         log = self.path("job.log")
@@ -363,7 +383,7 @@ class Kills(GuardEnv):
                    notice("bk1", "toolu_1", "the make", self.now - 60))
         self.assertEqual(self.decide(), self.block(self.lapse_reason(),
                                                    self.kill_reason("the make")))
-        self.assertNotIn("decision", self.decide(at=self.now + 30))  # the ack's message only
+        self.assertNotIn("decision", self.decide(at=self.now + 30) or {})  # each said once
 
     def test_a_mid_turn_attachment_notice_counts_once(self):
         text = notification("bk1", "toolu_1", "mid-turn")
@@ -394,15 +414,57 @@ class Kills(GuardEnv):
         self.append(raw=line[100:] + "\n")
         self.assertEqual(self.decide(), self.block(self.kill_reason("straddling")))
 
-    def test_more_than_the_scan_cap_is_skipped_and_logged(self):
+    def test_a_notice_after_more_than_16_mb_is_still_caught(self):
         self.lines()
         self.decide()
-        pad = {"type": "assistant", "timestamp": iso(self.now), "message": {"content": "x" * 90}}
-        self.append(notice("bk0", "toolu_0", "skipped", self.now - 60), *[pad] * 50,
-                    notice("bk1", "toolu_1", "kept", self.now - 60))
-        with mock.patch.object(guard, "SCAN_CAP", 2000):
-            self.assertEqual(self.decide(), self.block(self.kill_reason("kept")))
-        self.assertIn("past the 2000 byte cap", self.err_log())
+        with open(self.transcript, "ab") as f:
+            f.write(b'{"type": "progress", "x": "' + b"x" * (17 << 20) + b'"}\n')
+        self.append(notice("bk1", "toolu_1", "far down", self.now - 60))
+        self.assertEqual(self.decide(), self.block(self.kill_reason("far down")))
+
+    def test_two_waits_launched_together_fold_by_their_condition(self):
+        launched = self.now - 7200
+        made = iso(launched + 2)[:19] + "Z"
+        self.watch("w-a", cond={"file": self.path("a")}, created=made)
+        self.watch("w-b", cond={"file": self.path("b")}, created=made)
+        self.lines(launch("toolu_1", "bk1", "delegation-ledger wait --file b", "wait for b",
+                          launched),
+                   notice("bk1", "toolu_1", "wait for b", self.now - 60))
+        out = self.decide(cwd=self.tmp.name)  # --file b is relative to the session's cwd
+        self.assertEqual(out["reason"].count("\n"), 2, out)  # two lapses, the kill folded
+        self.assertNotIn("was stopped at its time limit.", out["reason"])
+
+    def test_a_slow_lookup_past_the_budget_records_only_what_it_says(self):
+        self.lines(notice("bk1", "toolu_1", "first", self.now - 60),
+                   notice("bk2", "toolu_2", "second", self.now - 50))
+
+        def slow(path, tool_use, spent):
+            time.sleep(0.4)  # longer than the whole budget
+            return None
+        start = time.monotonic()
+        with mock.patch.object(guard, "BUDGET_S", 0.3), mock.patch.object(guard, "launched",
+                                                                           slow):
+            out = self.decide()
+        self.assertLess(time.monotonic() - start, 0.3 + 0.4 + 0.5)
+        self.assertEqual(out, self.block(self.kill_reason("first")))
+        with open(os.path.join(self.state, "dotclaude", "kills", "s1.json")) as f:
+            self.assertEqual(json.load(f)["seen"], ["bk1"])  # bk2 waits, unsaid and unseen
+        self.assertEqual(self.decide(), self.block(self.kill_reason("second")))
+
+    def test_a_held_lock_means_nothing_is_taken_this_stop(self):
+        self.watch()
+        self.lines(notice("bk1", "toolu_1", "held", self.now - 60))
+        lock_path = os.path.join(self.state, "dotclaude", "kills", "s1.lock")
+        os.makedirs(os.path.dirname(lock_path), exist_ok=True)
+        with open(lock_path, "a") as held:
+            fcntl.flock(held, fcntl.LOCK_EX)
+            with mock.patch.object(guard, "BUDGET_S", 0.1), \
+                    mock.patch.object(guard, "LOCK_GRACE_S", 0.1):
+                self.assertIsNone(self.decide())
+            fcntl.flock(held, fcntl.LOCK_UN)
+        self.assertIsNone(self.read()["blocked_at"])
+        self.assertIn("nothing was taken this stop", self.err_log())
+        self.assertEqual(self.decide(), self.block(self.lapse_reason(), self.kill_reason("held")))
 
     def test_another_sessions_kill_is_ignored(self):
         other = self.path("s2.jsonl")
