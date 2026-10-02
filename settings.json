@@ -216,6 +216,15 @@
             "timeout": 10
           }
         ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$HOME/.claude/hooks/watch-guard.sh\"",
+            "timeout": 5
+          }
+        ]
       }
     ],
     "Notification": [
