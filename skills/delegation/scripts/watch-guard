@@ -89,7 +89,6 @@ UNHEARD_REASON = ("Watch {id}'s waiter was started by a Claude Code process that
                   "with run_in_background and timeout 7200000.")
 ENDED_UNHEARD = ("Watch {id} ({desc}) ended ({state}) while no Claude Code process was "
                  "listening. Check the result and report it.")
-REPORTED_STATES = ("done", "failed", "stale")  # how a waiter ends; dropped is the lead's own
 CODEX_UNSTARTED = ("Watch {id} ({desc}): codex run {run} never started, since its wrapper "
                    "stopped before Codex did, so the watch is recorded failed. To retry, "
                    "{restart}, with run_in_background and timeout 7200000.")
@@ -539,16 +538,8 @@ def adopt(sid, wids, me, now, until, clock):
 
 
 def ended_unheard(w, sid, now):
-    """Whether watch w, of this session, ended (REPORTED_STATES) in the last
-    dc.PRUNE_ENDED_DAYS while no Claude process was listening, and isn't reported yet: its
-    waiter was marked unheard, or the Claude process it ran under has ended."""
-    if (w.get("state") not in REPORTED_STATES or w.get("session_id") != sid
-            or w.get("reported") or not (w.get("waiter_unheard") or dc.claude_gone(w))):
-        return False
-    try:
-        return now - dc.parse_iso(w["ended"]).timestamp() <= dc.PRUNE_ENDED_DAYS * 86400
-    except (KeyError, TypeError, ValueError):
-        return False
+    """Whether watch w is this session's and ended while nobody listened (dc.ended_unheard)."""
+    return w.get("session_id") == sid and dc.ended_unheard(w, now)
 
 
 def later_stop(cur, stop, size, now):

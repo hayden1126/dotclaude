@@ -683,6 +683,7 @@ def codex_stopped(e):
 WATCH_STATES = ("open", "acknowledged", "done", "failed", "stale", "dropped")
 UNRESOLVED = ("open", "acknowledged")  # the states a waiter may take over
 ENDED = ("done", "failed", "stale", "dropped")
+REPORTED_STATES = ("done", "failed", "stale")  # how a waiter ends; dropped is the lead's own
 WAIT_POLL_S = 15  # the waiter's default seconds between polls
 MAX_WAIT_MIN = 110  # a waiter's ceiling: with a 5-minute finalize, under the 120-minute Bash cap
 REARM = ("still running: re-arm with delegation-ledger wait --resume {} "
@@ -1033,6 +1034,21 @@ def claude_gone(w):
     exit reaches nobody, even when the session runs on in another process (a crash, then
     `claude --continue`)."""
     return w.get("claude_pid") is not None and not claude_alive(w)
+
+
+def ended_unheard(w, now=None):
+    """Whether watch w ended (REPORTED_STATES) in the last PRUNE_ENDED_DAYS while no Claude Code
+    process was listening, and nobody has reported it since: it isn't `reported`, and its
+    waiter was marked waiter_unheard or the Claude process it ran under has ended. The watch
+    guard says it in that session, and the session-start nudge and the views anywhere else."""
+    now = time.time() if now is None else now
+    if (w.get("state") not in REPORTED_STATES or w.get("reported")
+            or not (w.get("waiter_unheard") or claude_gone(w))):
+        return False
+    try:
+        return now - parse_iso(w["ended"]).timestamp() <= PRUNE_ENDED_DAYS * 86400
+    except (KeyError, TypeError, ValueError):
+        return False
 
 
 def watch_orphaned(w, current=None, live=None, now=None):

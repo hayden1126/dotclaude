@@ -293,7 +293,8 @@ from 60 to 5,000 requests an hour.
 - **A crash, then `claude --continue`, rests on the session id.** The guard adopts a crashed
   process's watch only in the session that has its id, so this assumes `--continue` keeps the
   session id. That isn't verified here; the manual re-arm check in `due.toml` asks for it. With a
-  new id, the watch shows in the session-start line instead, and nothing blocks.
+  new id, nothing blocks, but the session-start line shows the watch instead: an unresolved one
+  as nobody's, and one whose waiter ended meanwhile as an end nobody heard, once.
 - **The re-arm across turns isn't in the live harness.** `claude -p` kills background shells
   about 5 s after its final result, so no waiter outlives a `-p` turn. A dated item in `due.toml`
   asks for the check by hand in an interactive session.
@@ -826,11 +827,20 @@ the fix is enforcement. `PLAN.md` has the design history and the options weighed
 - **The session-start nudge.** `delegation-ledger due --hook` names, in its numbered line, up to
   three of the open or acknowledged watches nobody will hear from, oldest first, with a count of
   the rest, and one `wait --resume <id>` and `wait --drop <id>` template
-  (`delegation_checks.orphaned_watches`). A watch is nobody's when the Claude process it was
+  (`delegation_checks.left_watches`). A watch is nobody's when the Claude process it was
   recorded under has ended, even if its session runs on in a new process (`claude --continue`),
   or, with no process recorded, when its session isn't live. That holds whatever its waiter's
   state, since a bare waiter can outlive a SIGKILLed Claude Code; a live waiter is marked "its
   waiter is still running". A watch with no session counts only once its waiter is dead.
+  - A second line names up to three watches that ended (done, failed or stale) in the last 7
+    days while no Claude process was listening and aren't reported yet (`dc.ended_unheard`),
+    oldest end first: "<n> watch(es) ended while no Claude Code process was listening: <id>
+    (<desc>, <state>), ... Check the results." It records the ones it names `reported`, so each
+    shows once; a headless `-p` session records nothing. The starting session's own are left to
+    its watch guard, which says them to the model at its first stop. So after a crash, a plain
+    `claude`, with a new session id, still hears of a leftover waiter's end.
+  - `delegation-ledger watch` and `open` list those ended watches too, in the same `watches:`
+    block as the unresolved ones, until they're reported.
 - **The shim logs.** `hooks/watch-guard.sh` appends Python's stderr to `delegation-ledger.err`,
   falling back to `/dev/null` when that file can't be written, so a missing link or an import
   error shows there and in the quick canary instead of leaving the guard silently off. The

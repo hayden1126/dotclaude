@@ -211,8 +211,9 @@ validated (`report_ok`).
   - For each orphaned agent, look at its artifact path and redo only the unfinished part.
   - The session-start line lists the watches nobody will hear from: a dead session's, or one
     whose Claude Code process ended (a crash, then `claude --continue`). Pick one up with
-    `delegation-ledger wait --resume <id>`, or drop it. The watch guard blocks once on such a
-    watch in your session, and once on one that ended while no Claude process listened.
+    `delegation-ledger wait --resume <id>`, or drop it. It also names, once, the watches that
+    ended while no Claude process listened; check each result. The watch guard blocks once on
+    either kind in your own session.
   - For Codex, run `codex-delegate status`. A running run whose wrapper is gone names the
     `delegation-ledger wait --resume` that re-arms its watch, or, with no watch, says to finalize
     it once it ends. `codex-delegate resume <run_id>` continues an ended run, and finalizes its

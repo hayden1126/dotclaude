@@ -1062,13 +1062,13 @@ class Views(WaitEnv):
         lines = self.cli("watch").splitlines()
         self.assertEqual(lines[0], "no live delegations")
         self.assertEqual(lines[1:], [
-            "open watches:",
+            "watches:",
             f"  {wid}  'pid {self.only()['condition']['pids'][0]['pid']} (sleep) exits'  no live "
             f"waiter ⚠ re-arm: delegation-ledger wait --resume {wid}"])
         self.assertEqual(self.cli("watch", "--summary"), "\n")
         out = self.cli("open").splitlines()
         self.assertEqual(out[0], "no unfinished delegations in the last 48h")
-        self.assertEqual(out[1], "open watches:")
+        self.assertEqual(out[1], "watches:")
         self.assertTrue(out[2].startswith(f"  {wid}  open  'pid "), out)
         self.assertIn("session s1 alive, waiter pid", out[3])
         self.assertIn(f"re-arm: delegation-ledger wait --resume {wid}", out[3])
@@ -1079,6 +1079,23 @@ class Views(WaitEnv):
         wid = self.waiting(p)["id"]
         self.assertIn(f"  {wid}  'the build'  pid {job.pid} (sleep) exits  waiter alive",
                       self.cli("watch").splitlines())
+
+    def test_an_end_nobody_heard_shows_until_it_is_reported(self):
+        target = self.path("out")
+        open(target, "w").close()
+        self.assertEqual(self.run_("--file", target).returncode, 0)
+        wid = self.only()["id"]
+        self.update(wid, claude_pid=DEAD, claude_start=None)  # its Claude process has ended
+        self.assertEqual(self.cli("watch").splitlines()[1:], [
+            "watches:", f"  {wid}  '{target} exists'  ended done while no Claude Code process "
+                        "was listening ⚠ check the result"])
+        out = self.cli("open").splitlines()
+        self.assertEqual(out[1:3], ["watches:", f"  {wid}  done  '{target} exists'  waited for "
+                                                f"{target} exists"])
+        self.assertTrue(out[3].startswith("         ended done while no Claude Code process was "
+                                          "listening ⚠ check the result (ended "), out)
+        self.update(wid, reported=True)
+        self.assertEqual(self.cli("watch"), "no live delegations\n")
 
     def test_finished_watches_leave_the_output_unchanged(self):
         target = self.path("out")

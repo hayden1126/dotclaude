@@ -621,6 +621,45 @@ class Orphans(StateTest):
             self.watch(f"w-{state}", state=state)
         self.assertEqual(self.message(), "")
 
+    def unheard(self, wid="w-1", sid="gone", state="done", ended=None, **fields):
+        """A watch that ended while its Claude process was gone, so nobody heard."""
+        self.watch(wid, sid=sid, state=state, ended=ended or checks.dc.now_iso(),
+                   claude_pid=DEAD, claude_start=None, **fields)
+
+    def read(self, wid="w-1"):
+        return checks.dc.read_watch(wid)
+
+    def test_an_end_nobody_heard_is_named_once(self):
+        # After a crash, a plain `claude` starts a new session id, so no guard says it.
+        self.unheard()
+        self.assertEqual(self.message(json.dumps({"session_id": "s-new"})), (
+            "Delegation checks: (1) 1 watch ended while no Claude Code process was listening: "
+            "w-1 (the build, done). Check the results."))
+        self.assertIs(self.read()["reported"], True)
+        self.assertEqual(self.message(json.dumps({"session_id": "s-new"})), "")
+
+    def test_the_starting_sessions_own_unheard_end_is_left_to_its_guard(self):
+        # claude --continue keeps the id, and its guard says it to the model at the first stop.
+        self.unheard(sid="s2")
+        self.assertEqual(self.message(json.dumps({"session_id": "s2"})), "")
+        self.assertNotIn("reported", self.read())
+
+    def test_a_headless_session_doesnt_use_up_an_unheard_end(self):
+        self.unheard()
+        with mock.patch.dict(os.environ, {"CLAUDE_CODE_SESSION_ATTENDED": "0"}):
+            self.assertEqual(self.message(), "")
+        self.assertNotIn("reported", self.read())
+
+    def test_only_the_named_unheard_ends_are_marked(self):
+        now = datetime.datetime.now(datetime.timezone.utc).timestamp()
+        for i in (4, 3, 2, 1):  # w-1 ended first
+            self.unheard(f"w-{i}", desc=f"job {i}", ended=iso(now - 60 + i),
+                         state="failed" if i == 2 else "done")
+        self.assertIn("4 watches ended while no Claude Code process was listening: w-1 (job 1, "
+                      "done), w-2 (job 2, failed), w-3 (job 3, done) and 1 more.", self.message())
+        self.assertEqual([self.read(f"w-{i}").get("reported") for i in (1, 2, 3, 4)],
+                         [True, True, True, None])
+
     def test_more_than_three_list_the_three_oldest_and_count_the_rest(self):
         for i in (5, 4, 3, 2, 1):
             self.watch(f"w-{i}", desc=f"job {i}", created=iso(NOW + i))

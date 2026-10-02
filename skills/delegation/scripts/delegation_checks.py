@@ -413,32 +413,41 @@ MONTHLY_NUDGE = ("the monthly audit is due: run `delegation-ledger audit --month
 ORPHANS_LISTED = 3
 
 
-def orphaned_watches(current=None, now=None):
-    """(watches, unreadable): the open or acknowledged watches nobody will hear from
-    (dc.watch_orphaned), oldest first, and how many watch files couldn't be read. A watch is
-    nobody's when its session isn't running and its Claude process is gone, even if its waiter
-    still runs (a bare waiter outlives a SIGKILLed Claude Code); `current` (the starting
-    session's id) counts as running. A file that can't be read or judged is logged and counted,
-    and the rest go on. Where pids can't be seen (a sandboxed run) every waiter and session
-    would read as dead, so there are none."""
+def left_watches(current=None, now=None):
+    """(orphans, unheard, unreadable) for the session-start nudge, and how many watch files
+    couldn't be read:
+    - orphans: the open or acknowledged watches nobody will hear from (dc.watch_orphaned),
+      oldest first. A watch is nobody's when its session isn't running and its Claude process
+      is gone, even if its waiter still runs (a bare waiter outlives a SIGKILLed Claude Code);
+      `current` (the starting session's id) counts as running;
+    - unheard: the watches that ended while no Claude process was listening (dc.ended_unheard),
+      oldest end first. The starting session's own are left to its watch guard, which says them
+      to the model at its first stop.
+    A file that can't be read or judged is logged and counted, and the rest go on. Where pids
+    can't be seen (a sandboxed run) every waiter and session would read as dead, so there are
+    none."""
     if not dc.pids_visible():
-        return [], 0
+        return [], [], 0
     live = set(dc.live_sessions())
     current = current if isinstance(current, str) and current else None
-    found, unreadable = [], 0
+    orphans, unheard, unreadable = [], [], 0
     for p in sorted(glob.glob(os.path.join(dc.watches_dir(), "*.json"))):
         try:
             w = dc.read_watch(os.path.basename(p)[:-len(".json")])
             if w and w.get("state") in dc.UNRESOLVED and dc.watch_orphaned(w, current, live, now):
-                found.append(dict(w, waiter_running=dc.waiter_alive(w, now)))
+                orphans.append(dict(w, waiter_running=dc.waiter_alive(w, now)))
+            elif (w and dc.ended_unheard(w, now) and isinstance(w.get("id"), str)
+                  and (current is None or w.get("session_id") != current)):
+                unheard.append(w)
         except Exception as e:  # noqa: BLE001  one bad file mustn't hide the others
             log_error(f"watch file {p}: {type(e).__name__}: {e}")
             unreadable += 1
-    return sorted(found, key=lambda w: str(w.get("created"))), unreadable
+    return (sorted(orphans, key=lambda w: str(w.get("created"))),
+            sorted(unheard, key=lambda w: str(w.get("ended"))), unreadable)
 
 
 def orphan_name(w):
-    """"w-1 (the build)", saying so when its waiter still runs (orphaned_watches judged it, so
+    """"w-1 (the build)", saying so when its waiter still runs (left_watches judged it, so
     evaluate stays pure): its result reaches nobody."""
     notes = [w["description"]] if w.get("description") else []
     if w.get("waiter_running"):
@@ -460,18 +469,47 @@ def orphans_nudge(orphans, unreadable=0):
     return f"{text} ({bad})" if bad else text
 
 
+def unheard_nudge(unheard):
+    """The line for the watches that ended while nobody listened, naming ORPHANS_LISTED of them
+    (hook_main records those reported)."""
+    n = len(unheard)
+    named = [f"{w.get('id')} ({', '.join(x for x in (w.get('description'), w.get('state')) if x)})"
+             for w in unheard[:ORPHANS_LISTED]]
+    more = f" and {n - ORPHANS_LISTED} more" if n > ORPHANS_LISTED else ""
+    return (f"{n} {'watch' if n == 1 else 'watches'} ended while no Claude Code process was "
+            f"listening: {', '.join(named)}{more}. Check the results.")
+
+
+def mark_reported(watches, now=None):
+    """Record the watches the nudge named as reported, so they show once. Each is checked again
+    under the lock; a busy lock or a failed write is logged, and the watch shows again."""
+    def report(cur):
+        if dc.ended_unheard(cur, now):
+            cur["reported"] = True
+    try:
+        _, failed = dc.update_watches({w["id"]: report for w in watches}, time.monotonic() + 1)
+    except dc.LockBusy as e:
+        log_error(f"the watch nudge couldn't record what it named: {e}")
+        return
+    for wid, e in failed:
+        log_error(f"watch {wid} not recorded reported: {type(e).__name__}: {e}")
+
+
 def evaluate(version, canary_st, audit_st, due_st, items, now=None, today=None,
-             items_error=None, ledger_since=None, orphans=(), unreadable=0):
+             items_error=None, ledger_since=None, orphans=(), unreadable=0, unheard=()):
     """(nudges, jobs, warns) from the state, without side effects. `warns` are the audit
     warnings the nudges show, for mark_shown. `ledger_since` is the ledger's first ts.
-    `orphans` and `unreadable` are orphaned_watches' result: the watches a session left,
-    oldest first, and how many watch files couldn't be read."""
+    `orphans`, `unheard` and `unreadable` are left_watches' result: the watches a session left,
+    oldest first, the ones that ended while nobody listened, and how many watch files couldn't
+    be read."""
     now = time.time() if now is None else now
     today = today or datetime.date.today()
     canary_st, audit_st, due_st = _d(canary_st), _d(audit_st), _d(due_st)
     nudges, jobs = [], []
     if orphans or unreadable:  # first: a finished job's result may be waiting on it
         nudges.append(orphans_nudge(list(orphans), unreadable))
+    if unheard:
+        nudges.append(unheard_nudge(list(unheard)))
     may_launch = _age(due_st.get("bg_started"), now) > RELAUNCH_MIN * 60
     quick, full, green = (_d(canary_st.get(k)) for k in ("quick", "full", "green_full"))
     if not version:
@@ -558,10 +596,10 @@ def hook_main(stdin_text="", out=print):
     except ValueError:
         session = None  # the payload only spares this session's own watches
     try:
-        orphans, unreadable = orphaned_watches(session)
+        orphans, unheard, unreadable = left_watches(session)
     except Exception:  # noqa: BLE001
         log_error()
-        orphans, unreadable = [], 0
+        orphans, unheard, unreadable = [], [], 0
     try:
         version = cc_version(timeout=2)  # the hook itself gets 5 s
         items, items_error = read_items()
@@ -569,7 +607,7 @@ def hook_main(stdin_text="", out=print):
                                        read_state("audit.json"), read_state("due.json"),
                                        items, items_error=items_error,
                                        ledger_since=dc.first_row_ts(), orphans=orphans,
-                                       unreadable=unreadable)
+                                       unreadable=unreadable, unheard=unheard)
     except Exception:  # noqa: BLE001  a reminder must never get in the way of a session
         log_error()
         return 0
@@ -579,6 +617,8 @@ def hook_main(stdin_text="", out=print):
     if nudges and attended:
         out(json.dumps(render(nudges)))  # first, so a failure below can't drop the nudges
     try:
+        if unheard and attended:
+            mark_reported(unheard[:ORPHANS_LISTED])
         if warns and attended:
             mark_shown(warns)
         if jobs:
