@@ -150,6 +150,10 @@ validated (`report_ok`).
   A session start runs it once a day and shows a warning once; run it yourself any time.
   `delegation-ledger sandbox-denials` lists the hosts and paths the sandbox refused, which feed
   `sandbox.network.allowedDomains`.
+- `delegation-ledger audit --monthly` adds a month of usage (role shares, minutes per
+  activation, the longest calls and silences) against `[deadline]` and `liveness.toml`, for
+  retuning; `due` asks for it monthly. After a probe run by hand in a live session,
+  `delegation-ledger exclude --id <id> --why probe` keeps it out of those numbers.
 - **After a Claude Code upgrade,** the first session runs the quick canary in the background:
   the unit tests, the sandbox posture, and the strings our hooks read from the binary. You hear
   about it only if it fails. When the session-start line says the full canary is due (weekly, once

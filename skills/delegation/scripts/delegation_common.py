@@ -227,14 +227,34 @@ def read_rows(tail=None):
     return rows
 
 
-NOT_LIFECYCLE = ("policy", "nudge")
+def first_row_ts(limit=100):
+    """The ts of the ledger's first row that has a valid one, or None. It reads at most `limit`
+    lines, so a session start can afford it, and a damaged head can neither silence the monthly
+    nudge nor fire it early."""
+    try:
+        with open(ledger_path(), "rb") as f:
+            for _, line in zip(range(limit), f):
+                try:
+                    ts = json.loads(line).get("ts")
+                    parse_iso(ts)
+                    return ts
+                except (ValueError, AttributeError, TypeError):
+                    continue
+    except OSError:
+        pass
+    return None
+
+
+NOT_LIFECYCLE = ("policy", "nudge", "exclude")
+MONTH_DAYS = 30  # the monthly audit's window, and how often `due` asks for it
 
 
 def fold(rows):
     """Latest row per (runner, id), plus the first-seen timestamp. SubagentStart fires on
     every teammate message, so an id can have many start/stop pairs; the latest wins.
-    subagent-policy's `policy` rows and the deadline's `nudge` rows are skipped here (tail
-    shows them, and audit counts the denials)."""
+    subagent-policy's `policy` rows, the deadline's `nudge` rows and `exclude` rows are skipped
+    here (tail shows them, audit counts the denials, and the monthly audit reads the
+    exclusions)."""
     out = {}
     for r in rows:
         key = (r.get("runner"), r.get("id"))

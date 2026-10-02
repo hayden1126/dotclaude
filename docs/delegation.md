@@ -69,7 +69,7 @@ Each layer covers what the others can't.
 | Sandbox | `settings.json` `sandbox` | Enforces (OS): the write roots, `denyRead` (the credential barrier), `denyWrite` (the enforcement sources), and the network allowlist. `failIfUnavailable`, and `autoAllowBashIfSandboxed: false`, so Hayden's prompts stay as they were |
 | Subagent policy | `hooks/subagent-policy.sh`, `skills/delegation/scripts/subagent-policy`, `skills/delegation/policy.toml` | Enforces: see "Subagent policy" below. Fails closed for the tools it polices |
 | Report check | `hooks/report-check.sh`, `skills/delegation/scripts/report-check` | Enforces acceptance: a schema-invalid report is sent back twice at most. Fails open |
-| Ledger | `hooks/delegation-ledger.sh`, `skills/delegation/scripts/delegation-ledger`, `skills/delegation/liveness.toml` | Observes: start and stop rows (`agent_type` is the resolved role; a teammate adds `name` and `teammate`), `report_ok`, denial rows, the main-checkout hash for a worktree agent; the per-agent liveness index (`agents/<id>.json`); `open` (the tool in flight and since when, thresholds in `liveness.toml`); `watch` (one line per live delegation, and a token like `2▶ 1⚠` for the tmux bar); `audit`; `sandbox-denials`. Persuades: the deadline nudge, one PostToolUse `additionalContext` per activation past the role's `nudge_min`, and a `nudge` row. Fails open |
+| Ledger | `hooks/delegation-ledger.sh`, `skills/delegation/scripts/delegation-ledger`, `skills/delegation/liveness.toml` | Observes: start and stop rows (`agent_type` is the resolved role; a teammate adds `name` and `teammate`), `report_ok`, denial rows, the main-checkout hash for a worktree agent; the per-agent liveness index (`agents/<id>.json`); `open` (the tool in flight and since when, thresholds in `liveness.toml`); `watch` (one line per live delegation, and a token like `2▶ 1⚠` for the tmux bar); `audit` (`--monthly` adds a month of usage for retuning, and `exclude` keeps probes out of it); `sandbox-denials`. Persuades: the deadline nudge, one PostToolUse `additionalContext` per activation past the role's `nudge_min`, and a `nudge` row. Fails open |
 | Canary and due checks | `hooks/delegation-due.sh`, `skills/delegation/scripts/delegation_checks.py`, `skills/delegation/due.toml` | Observes: `delegation-ledger canary` re-verifies enforcement on this Claude Code version; `due` runs the cheap checks at session start and shows Hayden what needs him. Fails open |
 | Public GitHub client | `skills/delegation/scripts/gh-public` | GET-only access to api.github.com for delegated agents, optionally with a public-read token |
 | Brief and report | `skills/delegation/BRIEF.md`, `report.schema.json` | Persuades (the brief); checks (the schema) |
@@ -243,8 +243,8 @@ from 60 to 5,000 requests an hour.
 ## Stage 3
 
 Stage 3 makes the setup check itself instead of relying on someone remembering. It runs in steps,
-Step 0 and then A0 to A6, planned in `~/.claude/plans/lets-move-on-to-refactored-pascal.md`. Step 0,
-A0, A4, A5, A1, A3 and A2 are done.
+Step 0 and then A0 to A6, planned in `~/.claude/plans/lets-move-on-to-refactored-pascal.md`. All of it is
+done: Step 0, A0, A4, A5, A1, A3, A2 and A6.
 
 **Step 0** came first because everything after it rests on assumptions Stage 2 made but never
 tested live. It is four probes:
@@ -340,6 +340,7 @@ sonnet sessions a day. The checks therefore split by cost (Hayden's call, 2026-0
 | Quick canary (`canary --quick`, about 20 s, no model calls) | the unit suites; `claude sandbox status` (the sandbox on, Bash auto-allow off); the strings our hooks read (`CANARY_STRINGS`), searched in the `claude` binary | by itself, in the background, on the first session of a new version |
 | Audit (`audit`) | the enforcement audit above, over the window since the last one | by itself, once a day |
 | Full canary (`canary`) | the quick tier, then the whole live harness (`run.py --runner claude`, all stages) | a reminder, when no green run is on record or the version has moved and the last green run is 7 or more days old, and after a failed run until one passes |
+| Monthly audit (`audit --monthly`) | the audit over 30 days, plus the usage sections (A6) | a reminder, once the ledger's first row and the last monthly run are both 30 or more days old |
 | Dated items (`skills/delegation/due.toml`) | whatever the item says | a reminder from its date on, until the item is removed |
 
 **How it runs.** `hooks/delegation-due.sh` runs `delegation-ledger due --hook` at SessionStart
@@ -516,7 +517,7 @@ A1's `⚠` fires, and nothing stops it. A2 gives each role a time budget per act
 
 The 2026-09-29 eval measured subagents at p50 3.8 and p90 13.2 minutes. Explore's nudge sits
 below that p90, since a read-only search that runs past 10 minutes is usually lost; the others sit
-at 1.5 to 2.3 times it. A6 retunes the numbers against the ledger. `stop_min` defaults to twice
+at 1.5 to 2.3 times it. A6's `audit --monthly` measures them against the ledger. `stop_min` defaults to twice
 `nudge_min`, and fractions are allowed, which lets the live case run in seconds.
 
 **The clock** is the liveness index's `activation_start`. Every SubagentStart begins an
@@ -599,6 +600,73 @@ on the next one. The main thread is exempt. Codex keeps `codex-delegate --timeou
 - **A teammate of a built-in type has no role.** Its meta.json carries no `customAgentType`, and
   its `agentType` is its name, so its budget is `default` and the messages name it. Harmless
   today, since general-purpose's budget is `default`. Our own roles do carry `customAgentType`.
+
+### Monthly audit (A6)
+
+`delegation-ledger audit --monthly` is where A1's thresholds (`liveness.toml`) and A2's budgets
+(`policy.toml [deadline]`) get retuned. It runs the enforcement checks above over 30 days, then
+adds usage sections computed from the ledger and the agent transcripts, which replaces the eval's
+scratch scripts. It shows distributions against the current numbers and never suggests new ones:
+picking them stays a human call.
+
+| Section | What it answers |
+|---|---|
+| coverage | how many agents and codex runs it counted, what it left out and why, and how many activations had a readable transcript |
+| agents by type | the share of each role; `WARN` when general-purpose is over 25%, since it gets every tool and no report contract |
+| teammates, named-spawn denials | is the `team-` prefix becoming a habit, and is A0 fighting real needs? |
+| minutes per activation | per role: n, p50, p90 and max against its `[deadline]` budget, and how many ran past the nudge and the stop |
+| longest call, longest silence | per kind, against `liveness.toml`'s `tool_min` and `silent_min` |
+| reports | `report_ok` per checked role, from each agent's last stop |
+| deadline | the agents nudged and the agents stopped, per role |
+
+**An activation runs from a start to the last stop before the next start.** An agent that ends
+with plain text in auto mode stops twice (P3 above), so its first stop isn't the end. A Codex run
+stops once, so its stop closes it, and a resume that fails before it begins can't stretch the run
+before. A stop with no start (an agent older than the ledger, or that failed resume) is counted,
+not timed, and so is a start that no stop closed. Claude Code's helper agents aren't delegations,
+so the audit skips their rows (an empty `agent_type`, from before the ledger skipped them).
+
+**Agents count by distinct id, activations by start.** On 2026-10-01 reviewer had 30 agents and
+34 activations, since a SendMessage resume starts a new activation. A teammate with no recorded
+role (a built-in type, so its `agent_type` is its name) counts as general-purpose: it gets the
+default policy, which is what the share warns about.
+
+**Probes are excluded with an annotation** (Hayden's call, 2026-10-01). `delegation-ledger exclude
+--id <id> --why probe` appends an `exclude` row, and the usage sections leave out every row that
+matches all the keys it carries (`--id`, `--session`, `--name`). The exclusions live in the ledger,
+beside this machine's data, not in the public repo. A `session_id` that isn't a UUID is hand-fed
+hook input (an install check), and it drops out without one.
+
+**`exclude` refuses what it can't match,** so a typo can't silently do nothing. `--session` with
+`--name` singles out a main-thread `named-spawn` row, whose id is just `main`. Delegated agents
+can't run it: `delegation-ledger` is in `excludedCommands`, which the policy denies them.
+
+**After a hand-run live probe, exclude it.** The canary harness writes to its fixture's own state
+dir and never touches the live ledger, but a probe run by hand in a live session does. The first
+exclusions on HAYPC cover `policy-check`, `team-probe`, `team-probe-2`, the `install-check` Explore
+and the `install-probe` denial. `poster-audit` stays in: it was real work.
+
+**The enforcement checks read every row.** A probe the policy hook missed is still a miss, so the
+exclusions apply only to the usage sections. One side effect: the 30-day window shows again a
+main-checkout warning that a daily audit already showed.
+
+**Silence is measured from the transcripts when the audit runs.** The longest call runs from a
+`tool_use` to its `tool_result`, or to the stop. The longest silence is a gap between entries while
+no call is open. Recording both in the stop row would outlive transcript cleanup, but it would put
+work on every SubagentStop. `cleanupPeriodDays` is unset, so Claude Code keeps transcripts for its
+default 30 days, and a 30-day window loses only its oldest edge; the coverage line counts what it
+read. The liveness index can't help, since it is pruned after 7 days.
+
+**Two thresholds are constants, not config.** `GP_WARN_SHARE` (0.25) and `MIN_SAMPLE` (20) sit in
+`delegation-ledger`. The Stage 3 plan put the share in `policy.toml`, but a parse error there
+blocks every delegated call, and these values only inform. A group with fewer than 20 activations
+is marked `too few to retune`.
+
+**Retuning waits for a month of ledger.** `due` asks for `audit --monthly` once the ledger's first
+row is 30 days old and so is the last full monthly run (`audit.json` `monthly`), so the first
+request lands on 2026-10-30. A run with a narrower `--hours` doesn't count. On 2026-10-01 only
+reviewer, researcher and Explore had 20 activations; one reviewer ran past its 20-minute nudge, and
+no subagent crossed `tool_min` or `silent_min`.
 
 ## Verified facts the design rests on
 
@@ -794,11 +862,10 @@ acting for Anthropic or OpenAI.
 
 ## Next
 
-**Stage 3 (watch)** is planned in `~/.claude/plans/lets-move-on-to-refactored-pascal.md`, which
-replaced the bullets that stood here. Its order: Step 0 probes, then A0 (named spawns off),
-A4 and A5 (due nudges, a one-command canary), A1 (per-agent liveness state), A3 (one watch view),
-A2 (deadline nudge, then hard stop), A6 (monthly audit). "Stage 3" above says which are done. A6
-is next, and it retunes A2's budgets against the ledger.
+**Stage 3 (watch) is done.** It was planned in `~/.claude/plans/lets-move-on-to-refactored-pascal.md`,
+with A6 in `~/.claude/plans/a6-jazzy-sloth.md`. What's left is data, not code: from 2026-10-30,
+`due` asks for `audit --monthly`, and its numbers decide whether A1's thresholds and A2's budgets
+move.
 
 ## Tests
 
@@ -866,6 +933,17 @@ is next, and it retunes A2's budgets against the ledger.
   - the next `deadline` run went 6 of 9: the agent obeyed the nudge, handed back after step 1, and
     never reached the stop. The nudge now names the nudge and the stop apart, and the case tells
     the agent the reminder is expected and to carry on.
+- **Results on 2026-10-01 (A6, 2.1.287):**
+  - unit: 302 tests, plus 19 in `tests/setup`;
+  - the live harness has no `audit` or `due` case, so A6 adds no live checks, and a full canary
+    run still has 65;
+  - `audit --monthly` against a copy of HAYPC's state, with the five legacy exclusions, took
+    0.31 s and 39 MB: 105 agents and 114 activations over two days, transcripts read for 111;
+  - a `reviewer` pass found 7 low defects and nothing higher. All 7 are fixed, each with a test:
+    a failed Codex resume stretched the run before it, a role-less teammate escaped the
+    general-purpose share, an activation with no transcript entries read as silent throughout, a
+    damaged ledger head could silence or misfire the monthly nudge, and the transcript cache held
+    full tool output (agent transcripts from 30 days come to 1.7 GB here).
 
 ## Installing on a machine that is already set up
 

@@ -31,26 +31,31 @@ stored here).
   CLAUDE.md trigger, `vetting-sources`, `deck-production` S1, and earlier work back to PR #10.
 
 ## In flight
-- **Delegation hardening Stage 3: next is A6 (monthly audit and GP share).** A2 is done, and the
-  full canary is green on 2.1.287 (65/65; counts and timing in `docs/delegation.md` "Tests").
-  - **Before building,** run `delegation-ledger due`. Its "reports failing the contract: 3" is
-    three known pre-fix rows from 2026-09-30, gone from the window on 2026-10-07.
-  - **A6's spec** is the Stage 3 plan's A6 section: `audit --monthly` computed from the ledger and
-    the index, with no scratch scripts. It also counts `nudge` rows and `deadline` denials, to
-    retune A2's budgets. Two calls for its plan: probe rows (`policy-check`, `team-probe*`,
-    `poster-audit`) sit in the live ledger beside real work and would skew every share and
-    duration, so it needs an exclusion rule first; and the ledger is days old and mostly
-    harness, so build the tool now but retune the budgets only after weeks of real use.
-  - **Plans:** Stage 3 is `~/.claude/plans/lets-move-on-to-refactored-pascal.md` (A1/A3 in
-    `woolly-jingling-cookie.md`, A2 in `deep-moseying-koala.md`); A2's decisions are in
-    `docs/delegation.md` "Deadline (A2)".
-  - Build each step on a fresh branch from `main` in a worktree, so the live hooks stay
-    untouched while it is edited.
+- **Delegation hardening Stage 3: A6 (monthly audit) is built, the last step.** Branch
+  `feat/a6-monthly-audit`: `delegation-ledger audit --monthly` (usage for retuning `[deadline]`
+  and `liveness.toml`), `delegation-ledger exclude` (keeps probes out of those numbers), and a
+  `due` nudge for the monthly run. Design and decisions: `~/.claude/plans/a6-jazzy-sloth.md` and
+  `docs/delegation.md` "Monthly audit (A6)". After it merges:
+  - `git pull` in `~/dotclaude`, outside the sandbox. A6 changes no `settings.json`, so
+    `setup.sh` isn't needed: the CLI and the hooks are symlinks.
+  - With Hayden's go-ahead, append the legacy exclusions on HAYPC, each as a bare command:
+    `delegation-ledger exclude --id apolicy-check-50aa2e0cfe57efc9 --why probe`, the same for
+    `ateam-probe-4965ec049f19323d` and `ateam-probe-2-d512254be0629b3d`, then
+    `--id a572ffd9d3102036e --why "install check"` and
+    `--session c9df7b29-0f66-4fc4-a932-253715942860 --name install-probe --why probe`.
+    `poster-audit` stays in: it was real work.
+  - Run `delegation-ledger canary --quick`, bare, so the merged code's quick tier is on record.
+  - **Retune later, not now.** From 2026-10-30, `due` asks for `audit --monthly`. Retune only the
+    groups it doesn't mark `too few to retune`. The live ledger is real work across 13 repos, not
+    harness (the harness writes to its own fixture state), but on 2026-10-01 only reviewer,
+    researcher and Explore had 20 activations.
+  - The "reports failing the contract: 3" in the daily audit is three known pre-fix rows from
+    2026-09-30, gone from its window on 2026-10-07.
 - **Delegation hardening: what is live on HAYPC** (Stage 2, plus the Stage 3 steps under Done;
   `docs/delegation.md`;
   `skills/delegation/SKILL.md` is the operating guide). Open items:
   - **Other machines:** `git pull` in `~/dotclaude`, then `./setup.sh`, both outside the sandbox
-    (A4 and A3 changed `settings.json`, and A2 adds a PostToolUse hook to it).
+    (A4 and A3 changed `settings.json`, and A2 adds a PostToolUse hook to it; A6 changes none).
     - A baseline key still wins over the live file's value, so copy `~/.claude/settings.json`
       first and diff it after.
     - Without a `settings.machine.json` overlay, install by hand per the docs' install order:

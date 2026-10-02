@@ -927,5 +927,331 @@ class ProcStart(LedgerEnv):
         self.assertEqual(dc.proc_start(os.getpid()), start)
 
 
+S1 = "11111111-1111-4111-8111-111111111111"
+S2 = "22222222-2222-4222-8222-222222222222"
+T0 = 1_900_000_000.0  # a fixed clock for the monthly audit's pure helpers
+MATE = "ateam-a-0123456789abcdef"  # a teammate id: a<name>-<16 hex>
+
+
+def lts(t):
+    """A ledger timestamp (whole seconds) for epoch t."""
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(t))
+
+
+def tts(t):
+    """A transcript timestamp (milliseconds) for epoch t."""
+    return lts(int(t))[:-1] + f".{round((t % 1) * 1000):03d}Z"
+
+
+def life(event, aid, t, role="Explore", sid=S1, **kw):
+    return dict({"runner": "claude", "event": event, "id": aid, "agent_type": role,
+                 "session_id": sid, "ts": lts(t)}, **kw)
+
+
+class Activations(unittest.TestCase):
+    def acts(self, *rows):
+        return ledger_mod.activations(list(rows))
+
+    def test_a_doubled_stop_is_one_activation_timed_to_the_last_stop(self):
+        acts, unstarted, unstopped = self.acts(life("start", "a1", T0),
+                                               life("stop", "a1", T0 + 60),
+                                               life("stop", "a1", T0 + 90))
+        self.assertEqual([(a.start, a.end) for a in acts], [(T0, T0 + 90)])
+        self.assertEqual((unstarted, unstopped), ({}, {}))
+
+    def test_a_resume_is_a_second_activation(self):
+        acts, _, _ = self.acts(life("start", "a1", T0), life("stop", "a1", T0 + 60),
+                               life("start", "a1", T0 + 600), life("stop", "a1", T0 + 660))
+        self.assertEqual([a.end - a.start for a in acts], [60, 60])
+
+    def test_unpaired_rows_are_counted_not_timed(self):
+        acts, unstarted, unstopped = self.acts(
+            life("stop", "b1", T0), life("stop", "b1", T0 + 5), life("start", "c1", T0),
+            life("start", "d1", T0), life("start", "d1", T0 + 60), life("stop", "d1", T0 + 120))
+        self.assertEqual([(a.key[1], a.end - a.start) for a in acts], [("d1", 60)])
+        self.assertEqual(set(unstarted), {("claude", "b1")})
+        self.assertEqual(set(unstopped), {("claude", "c1"), ("claude", "d1")})
+
+    def test_kinds_roles_and_helpers(self):
+        acts, _, _ = self.acts(
+            life("start", MATE, T0, role="researcher"), life("stop", MATE, T0 + 1, role="researcher"),
+            life("start", "a2", T0, role="writer"),
+            life("stop", "a2", T0 + 1, role="writer", teammate=True),
+            {"runner": "codex", "id": "r1", "event": "pending", "ts": lts(T0)},
+            {"runner": "codex", "id": "r1", "event": "start", "ts": lts(T0 + 1)},
+            {"runner": "codex", "id": "r1", "event": "stop", "ts": lts(T0 + 61)},
+            life("start", "h1", T0, role=""), life("stop", "h1", T0 + 1, role=""))
+        self.assertEqual(sorted((a.key[1], a.role, a.kind, a.end - a.start) for a in acts),
+                         [("a2", "writer", "teammate", 1), (MATE, "researcher", "teammate", 1),
+                          ("r1", "codex", "codex", 60)])
+
+    def test_a_codex_stop_closes_its_run(self):
+        # A resume that fails before thread.started writes a stop but no resume row; codex
+        # never stops twice, so that stop mustn't stretch the earlier run.
+        codex = lambda event, t: {"runner": "codex", "id": "r1", "event": event,  # noqa: E731
+                                  "ts": lts(t)}
+        acts, unstarted, _ = self.acts(codex("start", T0), codex("stop", T0 + 60),
+                                       codex("stop", T0 + 2 * 86400))
+        self.assertEqual([a.end - a.start for a in acts], [60])
+        self.assertEqual(set(unstarted), {("codex", "r1")})
+
+    def test_the_transcript_comes_from_the_stop_row_or_the_parent(self):
+        acts, _, _ = self.acts(life("start", "a1", T0, parent_transcript="/p/s.jsonl"),
+                               life("stop", "a1", T0 + 1),
+                               life("start", "a2", T0, parent_transcript="/p/s.jsonl"),
+                               life("stop", "a2", T0 + 1, agent_transcript="/t/a2.jsonl"))
+        self.assertEqual([a.transcript for a in acts],
+                         ["/p/s/subagents/agent-a1.jsonl", "/t/a2.jsonl"])
+
+
+class Exclusion(unittest.TestCase):
+    def test_every_key_of_an_exclude_row_must_match(self):
+        spawn = {"runner": "claude", "event": "policy", "id": "main", "session_id": S1,
+                 "rule": "named-spawn", "ts": lts(T0)}
+        rows = [life("start", "a1", T0), life("start", "a2", T0, sid=S2),
+                dict(spawn, name="probe-x"), dict(spawn, name="real"),
+                {"event": "exclude", "id": "a1", "why": "probe", "ts": lts(T0)},
+                {"event": "exclude", "session_id": S1, "name": "probe-x", "why": "probe",
+                 "ts": lts(T0)}]
+        self.assertEqual(ledger_mod.excluded(rows), {0: "probe", 2: "probe"})
+
+    def test_hand_fed_hook_input_is_left_out(self):
+        rows = [life("start", "a-install", T0, sid="install-check"),
+                {"runner": "codex", "id": "r1", "event": "start", "ts": lts(T0)}]
+        self.assertEqual(ledger_mod.excluded(rows), {0: ledger_mod.SYNTHETIC})
+
+    def test_exclude_rows_are_not_lifecycle_events(self):
+        rows = [life("start", "a1", T0), {"event": "exclude", "id": "a1", "runner": "claude",
+                                          "why": "probe", "ts": lts(T0 + 1)}]
+        self.assertEqual(dc.fold(rows)[("claude", "a1")]["event"], "start")
+
+
+class TranscriptGaps(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.path = os.path.join(self.tmp.name, "agent-a1.jsonl")
+
+    def write(self, *entries):
+        with open(self.path, "w") as f:
+            for kind, t, *i in entries:
+                e = {"prompt": {"type": "user", "message": {"content": "go"}},
+                     "use": {"type": "assistant", "message": {"stop_reason": "tool_use",
+                             "content": [{"type": "tool_use", "id": i and i[0], "name": "Bash",
+                                          "input": {}}]}},
+                     "result": {"type": "user", "message": {"content": [
+                         {"type": "tool_result", "tool_use_id": i and i[0], "content": "x"}]}},
+                     "end": {"type": "assistant", "message": {"stop_reason": "end_turn",
+                             "content": [{"type": "text", "text": "done"}]}}}[kind]
+                f.write(json.dumps(dict(e, timestamp=tts(t))) + "\n")
+                f.write(json.dumps({"type": "attachment", "timestamp": tts(t + 1000)}) + "\n")
+
+    def gaps(self, t0, t1):
+        return ledger_mod.transcript_gaps(self.path, t0, t1)
+
+    def test_longest_call_and_longest_silence(self):
+        self.write(("prompt", T0), ("use", T0 + 10, "t1"), ("result", T0 + 70, "t1"),
+                   ("use", T0 + 370, "t2"), ("result", T0 + 375, "t2"), ("end", T0 + 380))
+        self.assertEqual(self.gaps(T0, T0 + 381), (60, 300))
+
+    def test_a_call_still_open_runs_to_the_stop(self):
+        self.write(("prompt", T0), ("use", T0 + 5, "t1"))
+        self.assertEqual(self.gaps(T0, T0 + 605), (600, 5))
+
+    def test_a_new_prompt_ends_an_aborted_call(self):
+        self.write(("prompt", T0), ("use", T0 + 5, "t1"), ("prompt", T0 + 65), ("end", T0 + 70))
+        self.assertEqual(self.gaps(T0, T0 + 70), (60, 5))
+
+    def test_only_entries_inside_the_activation_count(self):
+        self.write(("use", T0 - 1000, "t0"), ("result", T0 - 10, "t0"), ("prompt", T0),
+                   ("end", T0 + 20))
+        self.assertEqual(self.gaps(T0, T0 + 20), (0, 20))
+
+    def test_no_entry_inside_the_activation_is_unread_not_silent(self):
+        self.write(("prompt", T0 - 600), ("end", T0 - 500))
+        self.assertIsNone(self.gaps(T0, T0 + 3600))
+
+    def test_an_unreadable_transcript_is_none(self):
+        self.assertIsNone(self.gaps(T0, T0 + 1))
+        self.assertIsNone(ledger_mod.transcript_gaps(None, T0, T0 + 1))
+
+
+DEADLINE = {"deadline": {"allow": list(dc.REPORT_PATH), "default": {"nudge_min": 30},
+                         "Explore": {"nudge_min": 10}}}
+
+
+def act(aid, role, minutes, kind="subagent", transcript=None):
+    return ledger_mod.Activation(("claude", aid), role, kind, T0, T0 + minutes * 60, transcript)
+
+
+class Tables(unittest.TestCase):
+    def test_durations_against_the_deadline(self):
+        rows = ledger_mod.duration_table(
+            [act("a1", "Explore", 5), act("a2", "Explore", 15), act("a3", "Explore", 25),
+             act("m1", "Explore", 12, kind="teammate"), act("m2", "writer", 12, kind="teammate"),
+             ledger_mod.Activation(("codex", "r1"), "codex", "codex", T0, T0 + 600, None)],
+            DEADLINE)
+        self.assertEqual([r["label"] for r in rows], ["Explore", "teammates", "codex"])
+        explore, mates, codex = rows
+        self.assertEqual({k: explore[k] for k in ("n", "p50", "p90", "max", "budget",
+                                                  "past_nudge", "past_stop", "few")},
+                         {"n": 3, "p50": 15, "p90": 25, "max": 25, "budget": "10/20",
+                          "past_nudge": 2, "past_stop": 1, "few": True})
+        self.assertEqual((mates["budget"], mates["past_nudge"]), ("per role", 1))
+        self.assertEqual((codex["budget"], codex["past_nudge"], codex["max"]), (None, None, 10))
+
+    def test_an_unreadable_deadline_leaves_the_budget_columns_empty(self):
+        (row,) = ledger_mod.duration_table([act("a1", "Explore", 5)], None)
+        self.assertEqual((row["budget"], row["past_nudge"], row["past_stop"]), (None, None, None))
+
+    def test_enough_samples_drop_the_marker(self):
+        (row,) = ledger_mod.duration_table(
+            [act(f"a{i}", "writer", 1) for i in range(ledger_mod.MIN_SAMPLE)], DEADLINE)
+        self.assertFalse(row["few"])
+
+    def test_silence_per_kind_with_coverage(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        path = os.path.join(tmp.name, "agent-a1.jsonl")
+        with open(path, "w") as f:  # a 40-minute call, then 4 quiet minutes before the stop
+            for e in ({"type": "user", "timestamp": tts(T0), "message": {"content": "go"}},
+                      dict(use("t1", "Bash", 0), timestamp=tts(T0 + 60)),
+                      dict(result("t1", 0), timestamp=tts(T0 + 60 + 40 * 60))):
+                f.write(json.dumps(e) + "\n")
+        limits = {"subagent": {"silent_min": 15, "tool_min": 30},
+                  "teammate": {"silent_min": 30, "tool_min": 30}}
+        (row,) = ledger_mod.silence_table(
+            [act("a1", "Explore", 45, transcript=path),
+             act("a2", "Explore", 1, transcript=os.path.join(tmp.name, "gone.jsonl"))],
+            limits, {})
+        self.assertEqual({k: row[k] for k in ("kind", "n", "read", "call_max", "past_tool",
+                                              "quiet_max", "past_silent")},
+                         {"kind": "subagent", "n": 2, "read": 1, "call_max": 40,
+                          "past_tool": 1, "quiet_max": 4, "past_silent": 0})
+
+
+class MonthlyAudit(LedgerEnv):
+    """`audit --monthly` and `exclude`, through the CLI."""
+
+    def setUp(self):
+        super().setUp()
+        policy = os.path.join(self.tmp.name, "policy.toml")
+        with open(policy, "w") as f:
+            f.write('[spawn]\nteam_prefix = "team-"\n[roles]\n'
+                    'report_checked = ["Explore", "writer"]\n[deadline]\n'
+                    'allow = ["SubagentHandback", "SendMessage", "ToolSearch"]\n'
+                    'default = { nudge_min = 30 }\nExplore = { nudge_min = 10 }\n')
+        self.env["DELEGATION_POLICY"] = policy
+        self.now = time.time()
+
+    def append(self, *rows):
+        os.makedirs(os.path.dirname(self.ledger), exist_ok=True)
+        with open(self.ledger, "a") as f:
+            f.writelines(json.dumps(r) + "\n" for r in rows)
+
+    def agent(self, aid, role="Explore", minutes=1, sid=S1, ok=True, **kw):
+        t = self.now - 3600
+        self.append(life("start", aid, t, role=role, sid=sid, **kw),
+                    life("stop", aid, t + minutes * 60, role=role, sid=sid, report_ok=ok, **kw))
+
+    def run_(self, *argv):
+        return subprocess.run(["python3", LEDGER, *argv], capture_output=True, text=True,
+                              env=self.env)
+
+    def audit(self, *argv):
+        return self.run_("audit", "--monthly", *argv)
+
+    def test_a_general_purpose_share_over_the_threshold_warns(self):
+        for i in range(3):
+            self.agent(f"g{i}", "general-purpose")
+        self.agent("e1")
+        p = self.audit()
+        self.assertIn("WARN general-purpose share 75%", p.stdout)
+        self.assertEqual(p.returncode, 1, p.stdout)
+
+    def test_a_low_share_is_ok(self):
+        self.agent("g1", "general-purpose")
+        for i in range(4):
+            self.agent(f"e{i}")
+        p = self.audit()
+        self.assertIn("ok   general-purpose share 20%", p.stdout)
+        self.assertEqual(p.returncode, 0, p.stdout)
+
+    def test_excluded_agents_leave_the_usage_sections_but_not_the_checks(self):
+        self.agent("a1")
+        self.agent("a2", sid="install-check", ok=False)
+        self.agent("a3")
+        p = self.run_("exclude", "--id", "a3", "--why", "probe")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(self.rows()[-1]["event"], "exclude")
+        out = self.audit().stdout
+        self.assertIn("reports failing the contract: 1", out)  # a2, though it is left out below
+        self.assertIn("left out: hand-fed hook input 1, probe 1", out)
+        self.assertRegex(out, r"\n +1 +100% +Explore\n")
+
+    def test_a_teammate_with_no_role_counts_as_general_purpose(self):
+        # A built-in-type teammate has no customAgentType, so its agent_type is its name; it
+        # gets the default policy, as general-purpose does.
+        for i in range(3):
+            self.agent(f"e{i}")
+        for name in ("team-x", "team-y"):
+            self.agent(f"a{name}-0123456789abcdef", role=name, name=name, teammate=True)
+        p = self.audit()
+        self.assertIn("WARN general-purpose share 40%", p.stdout)
+        self.assertRegex(p.stdout, r"\n +2 +40% +general-purpose\n")
+        self.assertIn("teammates: 2 (2 with the team- prefix): team-x, team-y", p.stdout)
+
+    def test_exclude_takes_the_hook_form_of_an_id(self):
+        self.agent("a1")
+        self.assertEqual(self.run_("exclude", "--id", "agent-a1", "--why", "probe").returncode, 0)
+        self.assertEqual(self.rows()[-1]["id"], "a1")
+
+    def test_exclude_needs_a_key_and_a_match(self):
+        self.agent("a1")
+        before = self.rows()
+        self.assertEqual(self.run_("exclude", "--why", "probe").returncode, 2)
+        p = self.run_("exclude", "--id", "a9", "--why", "probe")
+        self.assertEqual(p.returncode, 2)
+        self.assertIn("no ledger row matches", p.stderr)
+        self.assertEqual(self.rows(), before)
+
+    def test_the_sections_report_durations_teammates_spawns_reports_and_deadlines(self):
+        self.agent("a1", minutes=15)
+        self.agent("a2", ok=False)
+        self.agent(MATE, role="researcher", name="team-a", teammate=True, ok=False)
+        t = self.now - 600
+        self.append({"runner": "claude", "event": "policy", "id": "main", "session_id": S1,
+                     "rule": "named-spawn", "name": "helper", "subagent_type": "Explore",
+                     "ts": lts(t)},
+                    life("nudge", "a1", t), life("nudge", "a1", t + 1),
+                    life("policy", "a1", t + 2, rule="deadline"),
+                    life("policy", "a1", t + 3, rule="deadline"))
+        out = self.audit().stdout
+        self.assertIn("teammates: 1 (1 with the team- prefix): team-a", out)
+        self.assertIn("named-spawn denials: 1: helper (Explore)", out)
+        self.assertRegex(out, r"\n +Explore +2 .* 10/20 +1 +0  too few to retune\n")
+        self.assertIn("reports passing the contract (each agent's last stop; teammates left "
+                      "out): Explore 1/2", out)
+        self.assertIn("deadline: nudged Explore 1; stopped Explore 1", out)
+
+    def test_plain_audit_has_no_usage_sections(self):
+        self.agent("a1")
+        self.assertNotIn("agents by type", self.run_("audit").stdout)
+
+    def test_only_a_full_monthly_run_stamps_the_monthly_audit(self):
+        stamp = os.path.join(self.tmp.name, "state", "dotclaude", "audit.json")
+
+        def monthly():
+            with open(stamp) as f:
+                return json.load(f).get("monthly")
+        self.agent("a1")
+        self.run_("audit")
+        self.assertIsNone(monthly())
+        self.audit("--hours", "24")
+        self.assertIsNone(monthly())
+        self.audit()
+        self.assertIsNotNone(monthly())
+
+
 if __name__ == "__main__":
     unittest.main()

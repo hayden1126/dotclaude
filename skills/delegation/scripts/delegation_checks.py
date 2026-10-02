@@ -10,14 +10,18 @@ upgraded three times in three days (2.1.284 to 2.1.286), so the checks split by 
 - the full tier (the live harness, about 15 sonnet `claude -p` sessions) is nudged when the
   version has moved and the last green full run is 7 or more days old, and again after any
   failed run until one passes;
-- dated items in due.toml are nudged from their date on, until they are removed.
+- dated items in due.toml are nudged from their date on, until they are removed;
+- `audit --monthly` (the numbers for retuning liveness.toml and [deadline]) is nudged once the
+  ledger holds a month of rows and the last monthly run is a month old, so the first numbers
+  rest on weeks of real use.
 `due --hook` is the SessionStart body: it prints one line only when something needs Hayden, and
 it fails open (it always exits 0; an error goes to delegation-ledger.err). Anything that would
 leave the checks unable to run (an unreadable version, a malformed due.toml, a crashing audit)
 becomes a nudge itself, so the checks can't go quiet.
 
 State lives in $XDG_STATE_HOME/dotclaude: canary.json (quick, full, green_full), audit.json
-(the last audit's WARN lines and whether a session start has shown them), due.json (when the
+(the last audit's WARN lines, whether a session start has shown them, and when the last
+`audit --monthly` ran), due.json (when the
 background job last started), checks.lock (one background job at a time), state.lock.
 """
 import contextlib
@@ -356,10 +360,15 @@ def read_items():
         return [], f"{type(e).__name__}: {e}"
 
 
+MONTHLY_NUDGE = ("the monthly audit is due: run `delegation-ledger audit --monthly` as a bare "
+                 "command, then retune policy.toml [deadline] and liveness.toml where it has "
+                 "the samples (it marks the rest too few to retune).")
+
+
 def evaluate(version, canary_st, audit_st, due_st, items, now=None, today=None,
-             items_error=None):
+             items_error=None, ledger_since=None):
     """(nudges, jobs, warns) from the state, without side effects. `warns` are the audit
-    warnings the nudges show, for mark_shown."""
+    warnings the nudges show, for mark_shown. `ledger_since` is the ledger's first ts."""
     now = time.time() if now is None else now
     today = today or datetime.date.today()
     canary_st, audit_st, due_st = _d(canary_st), _d(audit_st), _d(due_st)
@@ -401,6 +410,10 @@ def evaluate(version, canary_st, audit_st, due_st, items, now=None, today=None,
                       + " (`delegation-ledger audit` has the detail)")
     else:
         warns = []
+    month = dc.MONTH_DAYS * 86400
+    if (ledger_since and _age(ledger_since, now) >= month
+            and _age(audit_st.get("monthly"), now) >= month):
+        nudges.append(MONTHLY_NUDGE)
     if items_error:
         nudges.append(f"skills/delegation/due.toml is malformed, so the dated reminders are off "
                       f"until it is fixed: {items_error}")
@@ -442,7 +455,8 @@ def hook_main(stdin_text="", out=print):
         items, items_error = read_items()
         nudges, jobs, warns = evaluate(version, read_state("canary.json"),
                                        read_state("audit.json"), read_state("due.json"),
-                                       items, items_error=items_error)
+                                       items, items_error=items_error,
+                                       ledger_since=dc.first_row_ts())
     except Exception:  # noqa: BLE001  a reminder must never get in the way of a session
         log_error()
         return 0
@@ -512,7 +526,9 @@ def status(out=print):
     version = cc_version()
     c, a, d = read_state("canary.json"), read_state("audit.json"), read_state("due.json")
     items, items_error = read_items()
-    nudges, jobs, _ = evaluate(version, c, a, d, items, items_error=items_error)
+    since = dc.first_row_ts()
+    nudges, jobs, _ = evaluate(version, c, a, d, items, items_error=items_error,
+                               ledger_since=since)
     out(f"Claude Code {version or '(no version)'}")
     for key in ("quick", "full", "green_full"):
         r = _d(c.get(key))
@@ -524,6 +540,8 @@ def status(out=print):
         out(f"  {key:10} {r.get('version')} at {r.get('ts')}{verdict}{score}")
     unseen = 0 if a.get("shown") else len(_l(a.get("warns")))
     out("  audit      " + (f"{a.get('ts')}, {unseen} unseen warning(s)" if a else "never run"))
+    out("  monthly    " + (str(a.get("monthly")) if a.get("monthly") else "never run")
+        + (f" (ledger since {str(since)[:10]})" if since else " (no ledger)"))
     for date, do in items:
         out(f"  dated      {date.isoformat()}: {do}")
     if jobs:

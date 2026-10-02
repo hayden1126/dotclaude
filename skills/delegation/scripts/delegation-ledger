@@ -11,9 +11,14 @@
                                     prints a token like `2▶ 1⚠` for the tmux status bar
   delegation-ledger tail [-n N]     the last N rows (including policy and spawn-guard denials,
                                     and deadline nudges)
-  delegation-ledger audit [--hours N]
+  delegation-ledger audit [--hours N] [--monthly]
                                     is enforcement still binding? policy heartbeat, writers that
-                                    changed the main checkout, rejected reports, denials
+                                    changed the main checkout, rejected reports, denials;
+                                    --monthly covers 30 days and adds the usage sections for
+                                    retuning liveness.toml and [deadline]
+  delegation-ledger exclude [--id ID] [--session SID] [--name NAME] --why TEXT
+                                    leave matching rows (a probe, say) out of --monthly's usage
+                                    sections; appends an `exclude` row
   delegation-ledger sandbox-denials [--days N]
                                     hosts and paths the sandbox refused, from the transcripts
   delegation-ledger canary [--quick] [--accept-fewer]
@@ -65,6 +70,7 @@ import datetime
 import glob
 import hashlib
 import json
+import math
 import os
 import re
 import subprocess
@@ -309,6 +315,23 @@ def entry_kind(e, msg, kinds):
     return "thinking" if "thinking" in kinds else "text"
 
 
+def records(lines):
+    """(ts, kind, blocks) for each user and assistant entry in transcript lines; ts may be
+    None. Claude Code's attachment entries are skipped, and so is a line that doesn't parse (a
+    window may cut the first one)."""
+    for line in lines:
+        try:
+            e = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(e, dict) or e.get("type") not in ("user", "assistant"):
+            continue
+        msg = e.get("message") if isinstance(e.get("message"), dict) else {}
+        content = msg.get("content")
+        blocks = [c for c in content if isinstance(c, dict)] if isinstance(content, list) else []
+        yield entry_ts(e), entry_kind(e, msg, {c.get("type") for c in blocks}), blocks
+
+
 def scan_transcript(path):
     """What an agent transcript says about liveness, from its last 1 MiB (the bound
     handback_message uses). Returns a dict:
@@ -327,18 +350,7 @@ def scan_transcript(path):
         return {"open": [], "last": "no transcript", "last_ts": None}
     uses, done = {}, set()
     last, last_ts = "unreadable", None
-    for line in lines:
-        try:
-            e = json.loads(line)
-        except ValueError:
-            continue  # the window may cut the first line
-        if not isinstance(e, dict) or e.get("type") not in ("user", "assistant"):
-            continue
-        msg = e.get("message") if isinstance(e.get("message"), dict) else {}
-        content = msg.get("content")
-        blocks = [c for c in content if isinstance(c, dict)] if isinstance(content, list) else []
-        ts = entry_ts(e)
-        kind = entry_kind(e, msg, {c.get("type") for c in blocks})
+    for ts, kind, blocks in records(lines):
         if kind == "prompt":
             # A new prompt (a SendMessage resume, a teammate's next message) starts a new
             # turn, so a call an abort left without a tool_result is not in flight any more.
@@ -601,9 +613,29 @@ def used_tools(path):
         return False
 
 
+def read_policy():
+    """policy.toml as a dict, or {} when it can't be read. The audits only report, so they fail
+    open on it, unlike subagent-policy."""
+    try:
+        with open(dc.policy_path(), "rb") as f:
+            return tomllib.load(f)
+    except (OSError, ValueError):  # a TOMLDecodeError is a ValueError
+        return {}
+
+
+def report_roles(policy):
+    table = policy.get("roles")
+    roles = table.get("report_checked") if isinstance(table, dict) else None
+    return set(roles) if isinstance(roles, list) else {"Explore", "researcher", "reviewer",
+                                                       "writer"}
+
+
 def cmd_audit(args):
-    """Is enforcement still binding? Prints findings; exits 1 if any warning."""
-    horizon = time.time() - args.hours * 3600
+    """Is enforcement still binding? Prints findings; exits 1 if any warning. --monthly widens
+    the window to a month and adds the usage sections (see `usage`)."""
+    hours = args.hours if args.hours is not None else (dc.MONTH_DAYS * 24 if args.monthly
+                                                       else 168)
+    horizon = time.time() - hours * 3600
     every = dc.read_rows()
     rows = [r for r in every if r.get("ts") and dc.parse_iso(r["ts"]).timestamp() >= horizon]
     warn = 0
@@ -641,27 +673,345 @@ def cmd_audit(args):
             "(evidence, not proof: the lead may have edited too). Inspect `git status` there.")
     if not moved:
         say("ok   no worktree agent coincided with a main-checkout change")
-    try:
-        with open(dc.policy_path(), "rb") as f:
-            roles = set(tomllib.load(f)["roles"]["report_checked"])
-    except (OSError, ValueError, KeyError):
-        roles = {"Explore", "researcher", "reviewer", "writer"}
+    policy = read_policy()
+    roles = report_roles(policy)
     bad = [e for e in folded.values() if e.get("event") == "stop" and e.get("report_ok") is False
            and e.get("agent_type") in roles and not e.get("teammate")]
     say(f"{'WARN' if bad else 'ok  '} reports failing the contract: {len(bad)}")
     warn += bool(bad)
     denials = collections.Counter((r.get("agent_type"), r.get("rule")) for r in rows
                                   if r.get("event") == "policy")
-    say(f"info policy denials in the last {args.hours:g}h: {sum(denials.values())}")
+    say(f"info policy denials in the last {hours:g}h: {sum(denials.values())}")
     for (atype, rule), n in denials.most_common(10):
         say(f"       {n:3}  {atype}  {rule}")
+    if args.monthly:
+        warn += usage(every, horizon, hours, policy, say)
     try:
-        checks().stamp_audit(args.hours, lines, shown=not args.unshown)
+        checks().stamp_audit(hours, lines, shown=not args.unshown)
+        if args.monthly and hours >= dc.MONTH_DAYS * 24:
+            # A narrower run doesn't count, so it can't silence `due`'s monthly nudge.
+            checks().update_state("audit.json", monthly=dc.now_iso())
     except OSError:
         pass  # the sandbox's read-only state dir: a manual audit there just isn't stamped
     except Exception:  # noqa: BLE001  the stamp is for `due`; the audit itself stands
         checks().log_error()
     return 1 if warn else 0
+
+
+# The monthly audit: what delegation looked like over a month, the numbers for retuning
+# liveness.toml and policy.toml [deadline]. It only shows them; picking new values stays a
+# human call. These two thresholds only inform, so they live here, not in policy.toml, whose
+# parse error would block every delegated call.
+GP_WARN_SHARE = 0.25  # general-purpose agents get every tool and no report contract
+MIN_SAMPLE = 20       # activations a group needs before its numbers are worth retuning on
+SYNTHETIC = "hand-fed hook input"
+UUID_RE = re.compile(r"^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$")
+TEAMMATE_ID_RE = re.compile(r"^a.+-[0-9a-f]{16}$")  # a teammate's id embeds its name
+EXCLUDE_KEYS = {"id": "id", "session": "session_id", "name": "name"}  # option -> row field
+START_EVENTS = ("start", "resume")  # codex-delegate's resume starts a run too
+SLACK = 1  # seconds: ledger stamps are whole seconds, transcript ones carry milliseconds
+
+Activation = collections.namedtuple("Activation", "key role kind start end transcript")
+
+
+def excluded(rows):
+    """{row index: why} for the rows the usage sections leave out. A row matching every key of
+    an `exclude` row takes its `why`. A claude row whose session_id isn't a UUID is hand-fed
+    hook input (an install check run by hand, say), not a session. The exclude rows themselves
+    aren't listed: nothing that reads lifecycle rows reads them."""
+    rules = [({k: r[k] for k in EXCLUDE_KEYS.values() if r.get(k) is not None},
+              r.get("why") or "excluded") for r in rows if r.get("event") == "exclude"]
+    out = {}
+    for i, r in enumerate(rows):
+        if r.get("event") == "exclude":
+            continue
+        why = next((w for keys, w in rules
+                    if keys and all(r.get(k) == v for k, v in keys.items())), None)
+        if why is None and r.get("runner") == "claude" and not UUID_RE.match(
+                str(r.get("session_id") or "")):
+            why = SYNTHETIC
+        if why:
+            out[i] = why
+    return out
+
+
+def kind_of(row):
+    if row.get("runner") == "codex":
+        return "codex"
+    return ("teammate" if row.get("teammate") or TEAMMATE_ID_RE.match(str(row.get("id") or ""))
+            else "subagent")
+
+
+def role_of(entry):
+    """The role the audit counts a folded entry under. A teammate of a built-in type has no
+    customAgentType, so its agent_type is its name (docs/delegation.md, A2's known gaps). It
+    gets the default policy, as general-purpose does, so it counts as general-purpose."""
+    atype = entry.get("agent_type")
+    if kind_of(entry) == "teammate" and (atype == entry.get("name") or str(
+            entry.get("id") or "").startswith(f"a{atype}-")):
+        return "general-purpose"
+    return atype
+
+
+def row_ts(row):
+    try:
+        return dc.parse_iso(row["ts"]).timestamp()
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def activations(rows):
+    """([Activation], unstarted, unstopped) from ledger rows in order. An activation runs from
+    a start to the last stop before that agent's next start: an agent that ends with plain text
+    in auto mode stops twice (P3 in docs/delegation.md). A codex run stops once, so its stop
+    closes it. Agents with a stop but no start, or a
+    start that no stop closed, come back as {key: ts}, counted but not timed. Claude Code's
+    helper agents (an empty agent_type, logged before the ledger skipped them) are left out."""
+    acts, cur, unstarted, unstopped = [], {}, {}, {}
+
+    def close(key):
+        a = cur.pop(key)
+        if a["end"] is None:
+            unstopped[key] = a["start"]
+        else:
+            acts.append(Activation(key, a["role"], a["kind"], a["start"], a["end"],
+                                   a["transcript"]))
+
+    for r in rows:
+        event, key, t = r.get("event"), (r.get("runner"), r.get("id")), row_ts(r)
+        role = "codex" if key[0] == "codex" else r.get("agent_type")
+        if key[1] is None or t is None or not role or event not in START_EVENTS + ("stop",):
+            continue
+        if event != "stop":
+            if key in cur:
+                close(key)
+            cur[key] = {"role": role, "kind": kind_of(r), "start": t, "end": None,
+                        "transcript": agent_transcript(r)}
+        elif key in cur:
+            a = cur[key]
+            # The stop row has the role meta.json resolved, and only it may say `teammate`.
+            a.update(end=t, role=role, transcript=agent_transcript(r) or a["transcript"],
+                     kind="teammate" if "teammate" in (a["kind"], kind_of(r)) else a["kind"])
+            if key[0] == "codex":
+                close(key)  # codex never stops twice: a later stop is a failed resume's
+        else:
+            unstarted[key] = t
+    for key in list(cur):
+        close(key)
+    return acts, unstarted, unstopped
+
+
+def transcript_gaps(path, t0, t1, cache=None):
+    """(longest call, longest silence) in seconds, over the transcript entries inside one
+    activation [t0, t1]; None when there are none to read. A call runs from its tool_use
+    to its tool_result, to a new prompt (which ends an aborted call), or to t1. Silence is a
+    gap between entries, from t0 up to t1, while no call is open: what liveness.toml's
+    silent_min watches for. An activation with no entry in its window is unread too (a wrong
+    path), not one long silence. `cache` keeps each file's timestamps and tool ids, not its
+    content, since a teammate's activations share one transcript."""
+    cache = {} if cache is None else cache
+    if path not in cache:
+        try:
+            with open(path, "rb") as f:
+                lines = f.read().decode("utf-8", "replace").splitlines()
+        except (OSError, TypeError):
+            lines = None
+        cache[path] = None if lines is None else [
+            (ts, kind, [(c["type"], c.get("id") if c["type"] == "tool_use" else
+                         c.get("tool_use_id")) for c in blocks
+                        if c.get("type") in ("tool_use", "tool_result")])
+            for ts, kind, blocks in records(lines) if ts is not None]
+    entries = [e for e in cache[path] or () if t0 - SLACK <= e[0] <= t1 + SLACK]
+    if not entries:
+        return None
+    calls, call, silence, prev = {}, 0.0, 0.0, t0
+    for ts, kind, tools in entries:
+        if not calls:
+            silence = max(silence, ts - prev)
+        if kind == "prompt":
+            call = max([call] + [ts - s for s in calls.values()])
+            calls.clear()
+        for typ, cid in tools:
+            if typ == "tool_use":
+                calls[cid] = ts
+            elif cid in calls:
+                call = max(call, ts - calls.pop(cid))
+        prev = ts
+    call = max([call] + [t1 - s for s in calls.values()])
+    if not calls:
+        silence = max(silence, t1 - prev)
+    return call, silence
+
+
+def pct(values, p):
+    """The nearest-rank percentile of a non-empty list."""
+    s = sorted(values)
+    return s[max(0, math.ceil(p * len(s)) - 1)]
+
+
+def duration_table(acts, policy):
+    """One row per subagent role, busiest first, then teammates and codex: the activation
+    count, p50, p90 and max in minutes, the [deadline] budget (nudge/stop, or "per role" for
+    teammates of mixed roles), and how many activations ran past each. With policy None (an
+    unreadable [deadline]) or for codex, which keeps its own --timeout, the budget columns are
+    None."""
+    groups = collections.defaultdict(list)
+    for a in acts:
+        groups[a.role if a.kind == "subagent" else
+               {"teammate": "teammates", "codex": "codex"}[a.kind]].append(a)
+    out = []
+    for label, group in sorted(groups.items(), key=lambda kv: (
+            kv[0] in ("teammates", "codex"), kv[0] == "codex", -len(kv[1]), kv[0])):
+        mins = [(a.end - a.start) / 60 for a in group]
+        row = {"label": label, "n": len(mins), "p50": pct(mins, .5), "p90": pct(mins, .9),
+               "max": max(mins), "few": len(mins) < MIN_SAMPLE, "budget": None,
+               "past_nudge": None, "past_stop": None}
+        if policy is not None and label != "codex":
+            budgets = [dc.deadline_for(policy, a.role) for a in group]
+            row["past_nudge"] = sum(m * 60 >= b[0] for m, b in zip(mins, budgets))
+            row["past_stop"] = sum(m * 60 >= b[1] for m, b in zip(mins, budgets))
+            row["budget"] = (f"{dc.minutes_text(budgets[0][0])}/{dc.minutes_text(budgets[0][1])}"
+                             if len(set(budgets)) == 1 else "per role")
+        out.append(row)
+    return out
+
+
+def silence_table(acts, limits, cache):
+    """Per kind (subagent, teammate): the activations, how many had a readable transcript,
+    and over those the p90 and max of the longest call and the longest silence in minutes,
+    with how many crossed liveness.toml's tool_min and silent_min."""
+    out = []
+    for kind in ("subagent", "teammate"):
+        group = [a for a in acts if a.kind == kind]
+        if not group:
+            continue
+        gaps = [g for g in (transcript_gaps(a.transcript, a.start, a.end, cache) for a in group)
+                if g is not None]
+        row = {"kind": kind, "n": len(group), "read": len(gaps)}
+        if gaps:
+            calls, quiet, lim = [c / 60 for c, _ in gaps], [s / 60 for _, s in gaps], limits[kind]
+            row.update(call_p90=pct(calls, .9), call_max=max(calls), tool_min=lim["tool_min"],
+                       past_tool=sum(c >= lim["tool_min"] for c in calls),
+                       quiet_p90=pct(quiet, .9), quiet_max=max(quiet),
+                       silent_min=lim["silent_min"],
+                       past_silent=sum(q >= lim["silent_min"] for q in quiet))
+        out.append(row)
+    return out
+
+
+def usage(every, horizon, hours, policy, say):
+    """The monthly audit's usage sections, over the window and without the excluded rows (the
+    enforcement checks above read every row: a probe the policy hook missed is still a miss).
+    Returns 1 when the general-purpose share warned, else 0."""
+    skip = excluded(every)
+    in_window = lambda r: (row_ts(r) or 0) >= horizon  # noqa: E731
+    taken = {(w, every[i].get("runner"), every[i].get("id")) for i, w in skip.items()
+             if in_window(every[i])}
+    left = collections.Counter(w for w, _, _ in taken)  # distinct agents per reason
+    rows = [r for i, r in enumerate(every) if i not in skip]
+    agents = {k: e for k, e in dc.fold(rows).items()
+              if in_window(e) and (k[0] == "codex" or e.get("agent_type"))}
+    claude = [e for k, e in agents.items() if k[0] == "claude"]
+    acts, unstarted, unstopped = activations(rows)
+    acts = [a for a in acts if a.end >= horizon]
+    silence = silence_table(acts, load_liveness()[0], {})
+
+    say(f"info usage over the last {hours / 24:g} days, without the excluded rows")
+    say(f"info coverage: {len(claude)} agents, {len(agents) - len(claude)} codex runs; left out: "
+        + (", ".join(f"{w} {n}" for w, n in sorted(left.items())) or "none")
+        + f"; transcripts read for {sum(r['read'] for r in silence)}/"
+        f"{sum(r['n'] for r in silence)} activations")
+
+    types = collections.Counter(role_of(e) for e in claude)
+    say("info agents by type:")
+    for atype, n in types.most_common():
+        say(f"       {n:4}  {n / len(claude):4.0%}  {atype}")
+    share = types.get("general-purpose", 0) / len(claude) if claude else 0
+    warn = share > GP_WARN_SHARE
+    say(f"{'WARN' if warn else 'ok  '} general-purpose share {share:.0%} (warns over "
+        f"{GP_WARN_SHARE:.0%}): it gets every tool and no report contract; a teammate with no "
+        "recorded role counts here")
+    spawn = policy.get("spawn")
+    prefix = spawn.get("team_prefix") if isinstance(spawn, dict) else None
+    prefix = prefix if isinstance(prefix, str) and prefix else "team-"
+    mates = sorted(e.get("name") or e.get("agent_type") for e in claude
+                   if kind_of(e) == "teammate")
+    say(f"info teammates: {len(mates)} ({sum(m.startswith(prefix) for m in mates)} with the "
+        f"{prefix} prefix)" + (": " + ", ".join(mates) if mates else ""))
+    spawns = collections.Counter(f"{r.get('name')} ({r.get('subagent_type')})" for r in rows
+                                 if r.get("event") == "policy" and r.get("rule") == "named-spawn"
+                                 and in_window(r))
+    say(f"info named-spawn denials: {sum(spawns.values())}" + (": " + ", ".join(
+        s + (f" x{n}" if n > 1 else "") for s, n in sorted(spawns.items())) if spawns else ""))
+
+    say("info minutes per activation, against policy.toml [deadline] (nudge/stop):")
+    say(f"       {'':18}{'n':>5}{'p50':>7}{'p90':>7}{'max':>7}{'budget':>9}{'>nudge':>8}"
+        f"{'>stop':>7}")
+    for r in duration_table(acts, load_deadline()):
+        dash = lambda v: "-" if v is None else v  # noqa: E731
+        say(f"       {r['label']:18}{r['n']:5}{r['p50']:7.1f}{r['p90']:7.1f}{r['max']:7.1f}"
+            f"{dash(r['budget']):>9}{dash(r['past_nudge']):>8}{dash(r['past_stop']):>7}"
+            + ("  too few to retune" if r["few"] else ""))
+    unstarted = sum(t >= horizon for t in unstarted.values())
+    unstopped = sum(t >= horizon for t in unstopped.values())
+    if unstarted or unstopped:
+        say(f"       not timed: {unstarted} agent(s) with a stop but no start, {unstopped} with a "
+            "start that no stop closed")
+    say("info longest call and longest silence per activation, minutes, against liveness.toml:")
+    for r in silence:
+        if not r["read"]:
+            say(f"       {r['kind']:10} no readable transcript for its {r['n']} activations")
+            continue
+        say(f"       {r['kind']:10} {r['read']} read: call p90 {r['call_p90']:.1f} max "
+            f"{r['call_max']:.1f}, {r['past_tool']} past tool_min {r['tool_min']:g}; silence "
+            f"p90 {r['quiet_p90']:.1f} max {r['quiet_max']:.1f}, {r['past_silent']} past "
+            f"silent_min {r['silent_min']:g}" + ("  too few to retune" if r["read"] < MIN_SAMPLE
+                                                else ""))
+
+    roles = report_roles(policy)
+    stops = [e for e in claude if e.get("event") == "stop" and kind_of(e) != "teammate"
+             and e.get("agent_type") in roles]
+    rates = collections.defaultdict(lambda: [0, 0])
+    for e in stops:
+        rates[e["agent_type"]][0] += e.get("report_ok") is True
+        rates[e["agent_type"]][1] += 1
+    say("info reports passing the contract (each agent's last stop; teammates left out): "
+        + (", ".join(f"{t} {ok}/{n}" for t, (ok, n) in sorted(rates.items())) or "none"))
+
+    def per_role(event, rule=None):
+        seen = {(r.get("agent_type"), r.get("id")) for r in rows if r.get("event") == event
+                and (rule is None or r.get("rule") == rule) and in_window(r)}
+        return ", ".join(f"{t} {n}" for t, n in sorted(
+            collections.Counter(t for t, _ in seen).items())) or "none"
+    say(f"info deadline: nudged {per_role('nudge')}; stopped {per_role('policy', 'deadline')} "
+        "(distinct agents)")
+    return int(warn)
+
+
+def cmd_exclude(args):
+    """Append an `exclude` row, so the monthly audit's usage sections leave the matching rows
+    out. It refuses a key-less or unmatched exclusion, so a typo can't silently do nothing."""
+    keys = {field: getattr(args, opt) for opt, field in EXCLUDE_KEYS.items()
+            if getattr(args, opt) is not None}
+    if "id" in keys:
+        keys["id"] = dc.norm_id(keys["id"])  # the ledger keys agents without `agent-`
+    if not keys:
+        print("exclude: give --id, --session or --name", file=sys.stderr)
+        return 2
+    hits = [r for r in dc.read_rows() if r.get("event") != "exclude"
+            and all(r.get(k) == v for k, v in keys.items())]
+    if not hits:
+        print(f"exclude: no ledger row matches {json.dumps(keys)}", file=sys.stderr)
+        return 2
+    try:
+        dc.append_row(dict(keys, ts=dc.now_iso(), event="exclude", why=args.why))
+    except OSError as ex:
+        print(f"exclude: can't write the ledger ({ex}); inside the Bash sandbox the state dir "
+              "is read-only, so run it as a bare command", file=sys.stderr)
+        return 1
+    print(f"excluded {len(hits)} row(s) of {len({r.get('id') for r in hits})} agent(s) from "
+          f"audit --monthly's usage sections: {args.why}")
+    return 0
 
 
 VIOLATION_RE = re.compile(r"deny (network-outbound|file-write|file-read)\S* ([^\s()\\\"]+)")
@@ -725,9 +1075,18 @@ def main(argv=None):
     t.add_argument("-n", type=int, default=20)
     t.set_defaults(fn=cmd_tail)
     a = sub.add_parser("audit")
-    a.add_argument("--hours", type=float, default=168)
+    a.add_argument("--hours", type=float, default=None,
+                   help="the window: 168 by default, 720 with --monthly")
+    a.add_argument("--monthly", action="store_true",
+                   help="a month's window, plus the usage sections for retuning")
     a.add_argument("--unshown", action="store_true", help=argparse.SUPPRESS)  # due's daily run
     a.set_defaults(fn=cmd_audit)
+    x = sub.add_parser("exclude")
+    x.add_argument("--id", help="an agent id (or codex run id)")
+    x.add_argument("--session", help="a session id")
+    x.add_argument("--name", help="a name, as a teammate or a named-spawn denial records it")
+    x.add_argument("--why", required=True, help="the reason audit --monthly prints, like probe")
+    x.set_defaults(fn=cmd_exclude)
     s = sub.add_parser("sandbox-denials")
     s.add_argument("--days", type=float, default=7)
     s.set_defaults(fn=cmd_sandbox_denials)
