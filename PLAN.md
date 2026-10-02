@@ -140,12 +140,24 @@ settings docs say.
 - **No arbitrary `--cmd`.** It would run unsandboxed, so it would be a sandbox escape.
 - **Its limit:** `--max MIN` (default 110, under the 120-minute cap; fractions allowed for tests).
   It polls every 15 s and updates the heartbeat on each poll.
-- **Exits:**
+- **Exits** (0 must only ever mean the job finished, since the lead reads the notification):
   - 0 when done;
-  - 1 when it fails;
-  - 2 when the log goes stale, or on bad usage;
+  - 1 when the job failed: a `--fail` match, a pid exited with another condition unmet, or a
+    codex stop row with a nonzero `exit`;
+  - 2 when the log goes stale;
+  - 3 when this waiter stepped aside: the watch was taken over by `--resume`, dropped, or its
+    file is gone;
+  - 64 on bad usage: an unknown id, no condition, a sandboxed call, a `--pid` that isn't running
+    at the start (a pid echoed from a sandboxed command is from another PID namespace), or a
+    resume of an ended watch;
+  - 70 on an internal error;
   - 75 at `--max`, printing one line: `still running: re-arm with delegation-ledger wait --resume
     <id> (run_in_background, timeout 7200000)`.
+- **Matching a log:** only complete lines count. A final unterminated line counts once the
+  watched pids are gone, or once the log hasn't grown for one poll.
+- **Pruning:** at start, it removes temp files older than a day and ended watches older than 7
+  days.
+- **`dc.pid_alive`** treats a zombie (state Z or X in `/proc/<pid>/stat`) as gone.
 - **`--resume <id>`** reloads the condition, takes over as the waiter and clears `blocked_at`.
   **`--drop <id>`** marks the watch dropped.
 - **Watch ids** pass a basename guard. Writes are atomic, and errors go to
@@ -185,8 +197,15 @@ settings docs say.
     and "background time limit". Take its `<task-id>` and its summary.
   - **Once per task:** each killed task blocks one stop, recorded in
     `<state>/kills/<session_id>.json`.
-  - **No double block:** skip a task whose summary names a waiter or wrapper for a recorded
-    watch, since the watch path already covers it.
+  - **No double block:** a stop blocks at most once, with one reason that lists every new
+    lapse and every new kill, and all of them are recorded together. The next stop goes
+    through. A kill notice carries the Bash description, not the command, so to tell a killed
+    waiter from a killed job, map the `<task-id>` to its command through the transcript (the
+    tool result "running in background with ID: <task-id>" and its `tool_use` input). A killed
+    `delegation-ledger wait` or `codex-delegate` folds into its watch's item.
+  - **Codex watches:** a `watch_verdict` of done for a codex watch means Codex ended, but its
+    finalize is still owed. The guard never records it as done; it sends the lead to `--resume`,
+    whose waiter finalizes.
   - **The reason:** "Background command <description> was stopped at its time limit. If it was
     waiting on a job that's still running, don't re-run it: wait with `delegation-ledger wait`
     (`--pid`, `--file` or `--log`), with `run_in_background` and `timeout: 7200000`. If it was
@@ -220,6 +239,10 @@ settings docs say.
     line, leaving Codex running. Launched with `timeout: 7200000`, it never reaches the cap. If
     the lead forgot the timeout, the guard covers it.
   - **`status`:** passes `dc.pids_visible()` to `codex_state`, as `open` does.
+  - **The resume window:** `resume` writes a row before its `Popen`. Today it writes nothing
+    until `thread.started`, so a waiter started in between sees the old stop row and exits 0
+    while Codex is running.
+  - **`lookup`** reuses `dc.find_codex` (from T1), not a copy of it.
   - **§5:**
     - launch with `run_in_background` and `timeout: 7200000`;
     - add exit 75 to the exit codes;
