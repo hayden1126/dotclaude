@@ -395,7 +395,7 @@ sonnet sessions a day. The checks therefore split by cost (Hayden's call, 2026-0
 
 | Check | What it runs | When |
 |---|---|---|
-| Quick canary (`canary --quick`, about 20 s, no model calls) | the unit suites; `claude sandbox status` (the sandbox on, Bash auto-allow off); the strings our hooks read (`CANARY_STRINGS`), searched in the `claude` binary; the installed `watch-guard.sh`, run with a no-op main-thread payload, which must exit 0 and add nothing to `delegation-ledger.err` (proving the link and the import) | by itself, in the background, on the first session of a new version |
+| Quick canary (`canary --quick`, about 20 s, no model calls) | the unit suites; `claude sandbox status` (the sandbox on, Bash auto-allow off); the strings our hooks read (`CANARY_STRINGS`), searched in the `claude` binary; the installed `watch-guard.sh`, run with a no-op main-thread payload and a throwaway state dir, which must exit 0 and log nothing (proving the link and the import) | by itself, in the background, on the first session of a new version |
 | Audit (`audit`) | the enforcement audit above, over the window since the last one | by itself, once a day |
 | Full canary (`canary`) | the quick tier, then the whole live harness (`run.py --runner claude`, all stages) | a reminder, when no green run is on record or the version has moved and the last green run is 7 or more days old, and after a failed run until one passes |
 | Monthly audit (`audit --monthly`) | the audit over 30 days, plus the usage sections (A6) | a reminder, once the ledger and the last monthly run are both a month old |
