@@ -7,7 +7,8 @@ then says not to restart it, so a lead waiting on a long job can end its turn wi
 to wake it. This hook is the enforcement:
 
 - Watches (`delegation-ledger wait`; delegation_common documents the file). For each of this
-  session's open or acknowledged watches:
+  session's open or acknowledged watches, including those this Claude process recorded under
+  an earlier session id (a /clear), which it adopts:
   - a live waiter, or a background shell whose command holds the watch id, allows (the waiter
     records the end itself);
   - else a met condition is recorded done and blocks once: the dead waiter's notification
@@ -474,6 +475,48 @@ def stop_digest(data):
     return hashlib.sha256(raw).hexdigest()[:16]
 
 
+def own_claude():
+    """(pid, procStart) of the Claude Code process running this hook: CLAUDE_PID when it's set
+    and alive, else the nearest ancestor, 6 levels up at most, with a
+    ~/.claude/sessions/<pid>.json. None when neither works, and then nothing is adopted."""
+    me = dc.claude_process()
+    if me is not None:
+        return me
+    pid = os.getppid()
+    for _ in range(6):
+        if pid is None or pid <= 1:
+            return None
+        if os.path.exists(os.path.expanduser(f"~/.claude/sessions/{pid}.json")):
+            return pid, dc.proc_start(pid)
+        pid = dc.proc_ppid(pid)
+    return None
+
+
+def adoptable(w, me):
+    """Whether watch w was recorded under this hook's Claude process (`me`): after /clear that
+    process runs on under a new session id, and this guard takes the watch over."""
+    return (me is not None and w.get("claude_pid") == me[0]
+            and str(w.get("claude_start")) == str(me[1]))
+
+
+def adopt(sid, wids, until, clock):
+    """Move the watches /clear left (adoptable) into this session, and log each."""
+    moved = []
+
+    def fn(wid):
+        def move(cur):
+            if cur.get("state") in dc.UNRESOLVED and cur.get("session_id") != sid:
+                moved.append((wid, cur.get("session_id")))
+                cur["session_id"] = sid
+        return move
+    _, failed = dc.update_watches({wid: fn(wid) for wid in wids}, until, clock)
+    for wid, old in moved:
+        checks.log_error(f"watch-guard: adopted watch {wid} from session {old}: the same Claude "
+                         "process (a /clear)")
+    for wid, exc in failed:
+        log(f"adopt {wid}", exc)
+
+
 def later_stop(cur, stop, size, now):
     """Whether this stop comes after the one that blocked on the watch: its digest differs.
     Only when either stop's payload had neither field, the transcript grew, or, with no size
@@ -490,7 +533,7 @@ def later_stop(cur, stop, size, now):
         return True
 
 
-def commit(sid, transcript, pendings, kills, scan_out, stop, size, now, until, clock):
+def commit(sid, transcript, adopted, pendings, kills, scan_out, stop, size, now, until, clock):
     """Record everything gathered in one pass, under kills/<sid>.lock and then watches/.lock
     (each wait bounded by `until`), and return (items, acks). Each watch is re-read under the
     lock, so a waiter that re-armed meanwhile, or a twin guard that recorded first, wins. A
@@ -516,6 +559,8 @@ def commit(sid, transcript, pendings, kills, scan_out, stop, size, now, until, c
         return fn
 
     with dc.file_lock(kills_path(sid, ".lock"), until, clock):
+        if adopted:
+            adopt(sid, adopted, until, clock)
         if pendings:
             _, failed = dc.update_watches({p.w["id"]: record(p) for p in pendings}, until, clock)
             for wid, exc in failed:
@@ -587,8 +632,11 @@ def decide(data, now, clock=time.monotonic):
         prune_kills(now, sid)
     except Exception:  # noqa: BLE001
         log("prune")
-    watches = [w for w in dc.all_watches() if w.get("session_id") == sid
-               and w.get("state") in dc.UNRESOLVED and isinstance(w.get("id"), str)]
+    me = own_claude()
+    watches = [w for w in dc.all_watches() if w.get("state") in dc.UNRESOLVED
+               and isinstance(w.get("id"), str)
+               and (w.get("session_id") == sid or adoptable(w, me))]
+    adopted = [w["id"] for w in watches if w.get("session_id") != sid]
     pendings = []
     for i, w in enumerate(watches):
         if spent():
@@ -608,10 +656,10 @@ def decide(data, now, clock=time.monotonic):
             kills, scan_out = kill_pending(sid, transcript, now, spent, watches, cwd)
         except Exception:  # noqa: BLE001  the kill catch is skipped; the watches stand
             log("kills")
-    if not pendings and scan_out is None:
+    if not pendings and scan_out is None and not adopted:
         return None
     try:
-        items, acks = commit(sid, transcript, pendings, kills, scan_out, stop, size, now,
+        items, acks = commit(sid, transcript, adopted, pendings, kills, scan_out, stop, size, now,
                              max(deadline, clock() + LOCK_GRACE_S), clock)
     except dc.LockBusy as ex:
         checks.log_error(f"watch-guard: {ex} stayed locked; nothing was taken this stop")

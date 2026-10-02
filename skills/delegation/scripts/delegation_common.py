@@ -407,6 +407,15 @@ def _stat_fields(pid):
         return None
 
 
+def proc_ppid(pid):
+    """The parent pid of pid (stat field 4), or None."""
+    fields = _stat_fields(pid)
+    try:
+        return int(fields[1])
+    except (TypeError, ValueError, IndexError):
+        return None
+
+
 def _start_of(fields):
     """Field 22 (starttime, in clock ticks since boot) from _stat_fields' list, or None."""
     try:
@@ -607,6 +616,10 @@ def codex_stopped(e):
 #                   the fallback when there is no blocked_stop; both are set and cleared with
 #                   blocked_at
 #   session_id      a --resume moves the watch to the resuming session, unless it has none
+#   claude_pid, claude_start
+#                   the Claude Code process (CLAUDE_PID) and its procStart when the waiter took
+#                   the watch; absent outside Claude Code. /clear keeps the process but starts a
+#                   new session id, so that process's watch guard adopts the watch
 #   ended           when it left UNRESOLVED (ISO); absent until then
 # open is waiting; acknowledged is a lapse the guard let a stop through on; done, failed and
 # stale are how the waiter saw the condition end (it exits 0, 1, 2); dropped is `wait --drop`.
@@ -937,6 +950,16 @@ def wait_session():
     return next((s for s, p in live_sessions().items() if pid and str(p) == pid), "unknown")
 
 
+def claude_process():
+    """(pid, procStart) of the Claude Code process this command runs under, from CLAUDE_PID, or
+    None when it's unset or not visible (sandboxed)."""
+    try:
+        pid = int(os.environ.get("CLAUDE_PID") or "")
+    except ValueError:
+        return None
+    return (pid, proc_start(pid)) if pid_alive(pid) else None
+
+
 def claude_alive(w):
     """Whether the Claude Code process a watch was recorded under (claude_pid with its
     claude_start) still runs. After /clear it runs on under a new session id, and its watch guard
@@ -1026,6 +1049,9 @@ class Waiter:
             # is guarded in the session that re-armed it; a caller with none leaves it be.
             if self.session != "unknown":
                 w["session_id"] = self.session
+            claude = claude_process()  # so its guard adopts the watch after a /clear
+            if claude is not None:
+                w.update(claude_pid=claude[0], claude_start=claude[1])
             w.pop("blocked_size", None)
             w.pop("blocked_stop", None)
             w.update(waiter_pid=self.me, waiter_start=self.start, poll_s=self.poll,

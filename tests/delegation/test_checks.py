@@ -542,6 +542,11 @@ class Orphans(StateTest):
         self.assertIn("w-1 (the build)", self.message(json.dumps({"session_id": "s3"})))
         self.assertIn("w-1 (the build)", self.message("not json"))  # nothing to spare
 
+    def test_a_watch_whose_claude_process_runs_is_not_named(self):
+        # That process adopts it at its next stop, under its new session id (a /clear).
+        self.watch(claude_pid=os.getpid(), claude_start=checks.dc.proc_start(os.getpid()))
+        self.assertEqual(self.message(), "")
+
     def test_a_live_waiter_of_an_ended_session_is_named_too(self):
         # A bare waiter outlives a SIGKILLed Claude Code, and its exit reaches nobody.
         self.watch(live=True)

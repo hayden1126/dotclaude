@@ -449,6 +449,15 @@ class Exits(WaitEnv):
         out, _ = self.finish(first, 3)
         self.assertIn(f"watch {wid} was taken over by pid {p.pid}", out)
 
+    def test_a_watch_records_its_claude_process(self):
+        # So that process's guard adopts it after a /clear, under a new session id.
+        target = self.path("out")
+        open(target, "w").close()
+        self.assertEqual(self.run_("--file", target, CLAUDE_PID=str(os.getpid())).returncode, 0)
+        w = self.only()
+        self.assertEqual((w["claude_pid"], w["claude_start"]),
+                         (os.getpid(), dc.proc_start(os.getpid())))
+
     def test_a_waiter_prints_its_launch_line_first(self):
         target = self.path("out")
         open(target, "w").close()

@@ -345,6 +345,23 @@ class Watches(GuardEnv):
         self.watch(live=True)  # what a --resume's take() writes: blocked_at cleared
         self.assertIsNone(self.decide())
 
+    def test_a_watch_left_by_clear_is_adopted_and_guarded(self):
+        # /clear starts a new session id in the same Claude process.
+        self.watch(sid="s-before", claude_pid=os.getpid(),
+                   claude_start=dc.proc_start(os.getpid()))
+        self.lines()
+        with mock.patch.dict(os.environ, {"CLAUDE_PID": str(os.getpid())}):
+            self.assertEqual(self.decide(), self.block(self.lapse_reason()))
+        self.assertEqual(self.read()["session_id"], "s1")
+        self.assertIn("adopted watch w-1 from session s-before", self.err_log())
+
+    def test_a_watch_of_a_dead_claude_process_isnt_adopted(self):
+        self.watch(sid="s-before", claude_pid=DEAD, claude_start=None)
+        self.lines()
+        with mock.patch.dict(os.environ, {"CLAUDE_PID": str(os.getpid())}):
+            self.assertIsNone(self.decide())
+        self.assertEqual(self.read()["session_id"], "s-before")
+
     def test_an_undecidable_watch_is_skipped_and_the_other_still_blocks(self):
         self.watch(wid="w-gone", cond={"codex": "r-gone"}, desc="codex run r-gone ends")
         self.watch(wid="w-2")
