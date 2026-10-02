@@ -243,6 +243,17 @@ settings docs say.
   - The transcript's size (`blocked_size`) is the fallback when the payload lacks both, since
     it can grow between twins.
 - **One failed write skips only its own watch:** the commit pass catches errors per item.
+- **The whole-branch review's changes:**
+  - a watch whose session is gone is orphaned even while its waiter lives, and `--resume` can
+    take it over then;
+  - the waiter prints a launch line with its watch id, and a new `wait` on an equal condition
+    takes over the unresolved watch instead of making a second one;
+  - each watch records its Claude Code process, so after `/clear` (a new session id in the same
+    process) the guard adopts it;
+  - a Codex run that never started is a failure, not undecidable, so its watch closes;
+  - the hook shim logs Python's errors instead of dropping them, and the quick canary runs the
+    installed shim;
+  - the upgrade nudge names the manual re-arm check.
 - **`--resume` doesn't take a watch from a live waiter**, and a caller with no Claude Code
   session keeps the watch's existing session.
 - **Fail-open, per item.** An error on one watch or one kill (for example `dc.Undecidable`, when
