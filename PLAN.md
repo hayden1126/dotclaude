@@ -231,6 +231,16 @@ settings docs say.
     waiting on a job that's still running, don't re-run it: wait with `delegation-ledger wait`
     (`--pid`, `--file` or `--log`), with `run_in_background` and `timeout: 7200000`. If it was
     the job itself, report that it was stopped. If you've already handled it, end your turn."
+- **Two phases, so a timeout loses nothing.** The guard first gathers every item read-only,
+  within a 3 s budget: verdicts, the transcript scan, the launch lookups, the log tails. It then
+  records them all in one quick locked pass, and prints. Lock waits are bounded by the same
+  deadline, and the kill record's lock is per session. The scan has no size cap: a byte search
+  for `task-notification` picks the lines worth parsing.
+- **Acknowledging a lapse:** on a stop after the block, detected by a transcript longer than at
+  the block (`blocked_size`), not by elapsed time. A doubled guard in the same stop sees the
+  same size and doesn't acknowledge.
+- **`--resume` doesn't take a watch from a live waiter**, and a caller with no Claude Code
+  session keeps the watch's existing session.
 - **Fail-open, per item.** An error on one watch or one kill (for example `dc.Undecidable`, when
   a codex run has left the ledger) skips that item and logs it. It doesn't skip the others. Any
   other exception means exit 0, and the error goes to `delegation-ledger.err`.
