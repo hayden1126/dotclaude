@@ -186,7 +186,10 @@ settings docs say.
   - a third `Stop` group in `settings.json`, with timeout 5;
   - `tests/delegation/test_watch_guard.py`, and a wiring test in `test_settings.py`.
 - **Watches.** For each watch of the payload's session that is in state open:
-  1. Re-check its condition. If it's met, record done and allow.
+  1. Re-check its condition. If it's met and its waiter is alive, allow; the waiter records it.
+     If it's met and the waiter is dead, no notification came, so it's an item in this stop's
+     block ("<condition> is met, but its waiter had stopped, so no notification came. Check the
+     result and report it."), recorded done at the same time.
   2. If its waiter is alive (pid plus `procStart`, and a heartbeat younger than 2 polls), allow.
      A shell task in `background_tasks` whose command holds the watch id also counts.
   3. Otherwise it has lapsed:
