@@ -243,6 +243,9 @@ settings docs say.
     until `thread.started`, so a waiter started in between sees the old stop row and exits 0
     while Codex is running.
   - **`lookup`** reuses `dc.find_codex` (from T1), not a copy of it.
+  - **`finalize` takes a per-run lock** and re-checks for a stop row inside it. A waiter
+    SIGKILLed mid-finalize leaves its finalize child running, so a later waiter could otherwise
+    start a second one and write two stop rows.
   - **§5:**
     - launch with `run_in_background` and `timeout: 7200000`;
     - add exit 75 to the exit codes;
