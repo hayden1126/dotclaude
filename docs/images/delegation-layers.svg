@@ -44,7 +44,7 @@
     <text x="252" y="83" font-size="14" font-weight="700" fill="#ffffff" text-anchor="middle">1</text>
     <text x="272" y="84" font-size="18" font-weight="600">Policy hook</text>
     <text x="246" y="108" font-size="15" fill="#52525b">PreToolUse, on every call</text>
-    <text x="246" y="145" font-size="15">command rules, no escape</text>
+    <text x="246" y="145" font-size="15">command rules, no opt-out</text>
     <text x="246" y="205" font-size="15" fill="#c2410c">can't read code: allowed</text>
     <text x="246" y="255" font-size="15">no credential paths, /proc</text>
     <text x="246" y="330" font-size="15">read-only MCP tools only</text>
