@@ -3,6 +3,9 @@
 # add regular files"). Directory names are ignored only when they aren't directories (`/x`,
 # then `!/x/`), so a real new .vscode/ or .claude/skills/ still shows up. A real new FILE with
 # one of these names (say a first .claude/settings.json) needs `git add -f`.
+# The patterns are anchored to the repo root on purpose: a Bash command run from a subdirectory
+# gets its own stubs there (say tests/.mcp.json), which still show. Unanchored patterns would hide
+# real nested files with these names, so stage with `git add -u` or run Bash from the root.
 /.bash_profile
 /.bashrc
 /.profile
@@ -10,6 +13,7 @@
 /.zshrc
 /.gitconfig
 /.gitmodules
+/.mcp.json
 /.ripgreprc
 /.claude/launch.json
 /.claude/loop.md

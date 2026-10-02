@@ -5,11 +5,10 @@ Renders a plain-language "what is this session doing, and where does it stand"
 line under the metrics row, so a developer juggling several Claude terminals can
 re-orient after switching back to one. The text is produced out-of-band by the
 Stop hook (hooks/session-summary.sh -> Haiku) and cached per session; this widget
-only reads that cache. Before the first summary lands (or if generation is off or
-failed) it falls back to Claude Code's own ai-title from the transcript. NOTE: that
-ai-title is now usually absent (CC 2.1.237 stopped generating it once a custom
-session title is set, which session-title.sh does on turn 1), so this fallback
-rarely fires and a fresh session may show nothing until the first Stop summary lands.
+only reads that cache. Until the first summary lands (or if generation is off or
+failed) it prints nothing, which collapses both rows. It once fell back to Claude
+Code's own ai-title, but CC 2.1.237 stopped writing that once a custom session title
+is set, which session-title.sh does on turn 1.
 
 The summary can run to two visual rows. ccstatusline renders one widget per line,
 so this script is wired twice -- `--row 1` on line 2, `--row 2` on line 3 -- and
@@ -72,36 +71,6 @@ def read_cached_summary(cfg, session_id):
         return ""
 
 
-def scan_ai_title(transcript, cwd, chunk=262144):
-    """Freshest ai-title from the transcript tail: a zero-cost fallback for before
-    the Haiku summary lands. NOTE: since CC 2.1.237 the ai-title is generated only
-    when no custom session title is set, and session-title.sh sets one on turn 1, so
-    this record is now usually absent. This widget is the last reader of it;
-    session-title.sh no longer scans ai-title (it reads the .title.txt label)."""
-    if not transcript:
-        return ""
-    path = transcript
-    if not os.path.isabs(path):
-        path = os.path.join(cwd or "", path)
-    try:
-        size = os.path.getsize(path)
-        with open(path, "rb") as f:
-            if size > chunk:
-                f.seek(size - chunk)
-            blob = f.read()
-    except OSError:
-        return ""
-    for line in reversed(blob.decode("utf-8", "ignore").splitlines()):
-        if '"ai-title"' in line:
-            try:
-                o = json.loads(line)
-                if o.get("type") == "ai-title" and o.get("aiTitle"):
-                    return " ".join(str(o["aiTitle"]).split())
-            except Exception:
-                pass
-    return ""
-
-
 def flex_reserve():
     """Width ccstatusline holds back from every line per its flexMode, then hard
     -truncates anything longer. Read from the sibling ccstatusline settings.json
@@ -162,10 +131,9 @@ def main():
         fail()
     session_id = data.get("session_id")
     transcript = data.get("transcript_path")
-    cwd = data.get("cwd") or ""
     cfg = config_dir(transcript)
 
-    summary = read_cached_summary(cfg, session_id) or scan_ai_title(transcript, cwd)
+    summary = read_cached_summary(cfg, session_id)
     if not summary:
         fail()
     summary = strip_markdown(summary)
