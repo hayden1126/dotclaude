@@ -72,6 +72,15 @@ class Strings(unittest.TestCase):
         for s, who in checks.CANARY_STRINGS:
             self.assertTrue(s and who, s)
 
+    def test_the_watch_guards_strings_are_checked(self):
+        # Found in the 2.1.286 binary. The whole summary, 'was stopped after reaching its
+        # background time limit', isn't one string there: 'was' is joined in at runtime.
+        names = {s for s, _ in checks.CANARY_STRINGS}
+        for s in ("do not restart it", "background time limit", "task-notification",
+                  "queued_command", "stopped after reaching its background time limit",
+                  "tool-use-id", "background_tasks", "prompt_id", "CLAUDE_CODE_SESSION_ID"):
+            self.assertIn(s, names)
+
 
 class FakeClaude(unittest.TestCase):
     """A fake `claude` on PATH that answers --version and `sandbox status`."""

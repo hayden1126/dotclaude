@@ -197,9 +197,21 @@ validated (`report_ok`).
   long command runs in the foreground (up to the Bash tool's 10-minute limit). A longer one
   runs in the background, and the agent waits on its output before reporting. `BRIEF.md`'s
   Budget section says so; keep that line.
+- **Your own wait that may outlast 30 minutes goes through `delegation-ledger wait`.** A
+  background Bash command stops at its timeout (30 minutes by default, 2 hours at most), and the
+  wake-up note then says not to restart it. Launch the waiter as a bare command with
+  `run_in_background` and `timeout: 7200000`: `delegation-ledger wait --pid <pid>` (or `--file`,
+  `--log <path> --done <regex>`, `--codex <run_id>`). It exits 0 done, 1 failed, 2 stale. At
+  75 it prints a re-arm line: run exactly that. The watch guard blocks your stop once when a
+  watch has lapsed with no waiter, or a background command was killed at its time limit. To stop
+  watching, `delegation-ledger wait --drop <id>`.
 - **After a crash or restart,** run `delegation-ledger open --hours 24`.
   - For each orphaned agent, look at its artifact path and redo only the unfinished part.
-  - For Codex, run `codex-delegate status`, then `codex-delegate resume <run_id>`.
+  - The session-start line lists the watches a dead session left. Pick one up with
+    `delegation-ledger wait --resume <id>`, or drop it.
+  - For Codex, run `codex-delegate status`. A running run whose wrapper is gone names the
+    `delegation-ledger wait --resume` that re-arms its watch. `codex-delegate resume <run_id>`
+    continues an ended run, and finalizes its last turn first if that has no stop row.
 
 ## 5. Codex runs
 

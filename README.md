@@ -54,6 +54,7 @@ it drops; put a value in the overlay to keep it.
 | `hooks/delegation-ledger.sh` | SubagentStart/SubagentStop hook: appends a pointer row per delegated agent to the delegation ledger; as a PostToolUse hook, sends a delegated agent its deadline nudge; never blocks | symlink `~/.claude/hooks/delegation-ledger.sh` |
 | `hooks/delegation-due.sh` | SessionStart hook: runs the cheap delegation checks in the background (the quick canary on a new Claude Code version, a daily audit) and shows a line only when something is due; fails open | symlink `~/.claude/hooks/delegation-due.sh` |
 | `hooks/subagent-policy.sh` | PreToolUse(*) policy for delegated agents only (rules in `skills/delegation/policy.toml`): no leaving the sandbox, no destructive git, no MCP writes, protected paths, the researcher allowlist, writers held to their worktree; fails closed | symlink `~/.claude/hooks/subagent-policy.sh` |
+| `hooks/watch-guard.sh` | Stop hook (main thread): blocks a stop once when a `delegation-ledger wait` watch has lapsed or a background command was killed at its time limit, with the re-arm command (`skills/delegation/scripts/watch-guard`); fails open | symlink `~/.claude/hooks/watch-guard.sh` |
 | `hooks/report-check.sh` | PreToolUse(SubagentHandback)/SubagentStop hook: sends a delegated role's malformed report back, at most twice; fails open | symlink `~/.claude/hooks/report-check.sh` |
 | `hooks/danger-guard.sh` | PreToolUse(Bash) guard: two-tier confirmation for destructive git and `rm` ops | symlink `~/.claude/hooks/danger-guard.sh` |
 | `hooks/handoff-reminder.sh` | UserPromptSubmit hook: on a wrap-up / handoff / clear-memory signal, reminds me to invoke the `handoff` skill instead of improvising it | symlink `~/.claude/hooks/handoff-reminder.sh` |
@@ -136,6 +137,13 @@ ships but is opt-in, see its entry):
   deadline: past `stop_min`, every tool but the handback, SendMessage and ToolSearch is denied.
   **Fails closed** for the tools it polices: a missing link, a crash or a hang blocks the delegated
   call. Needs python3 3.12 or newer.
+- **Stop: `watch-guard.sh`** (in this repo), for the main thread. A background Bash command stops
+  at its timeout (2 hours at most), and its wake-up note says not to restart it. The guard blocks
+  a stop once when a watch from `delegation-ledger wait` (or `codex-delegate`) has lapsed with no
+  waiter, or a background command was killed at its time limit, and gives the exact re-arm
+  command. The next stop goes through with a warning. `permissions.allow` holds
+  `Bash(delegation-ledger wait *)`, so a re-arm never stops at a prompt. Fails open
+  (`docs/delegation.md`, "Long waits").
 - **PreToolUse(`SubagentHandback`) and SubagentStop: `report-check.sh`** (in this repo). It sends a
   report from `Explore`, `researcher`, `reviewer` or `writer` back when it doesn't match
   `report.schema.json`, at most twice. **Fails open**: a broken checker never swallows a report.

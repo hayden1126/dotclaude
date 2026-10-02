@@ -70,7 +70,7 @@ CANARY_STRINGS = [
     ("SubagentHandback", "report-check; delegation-ledger handback_message"),
     ("agent_id", "the policy hook's filter in settings.json"),
     ("agent_transcript_path", "delegation-ledger stop rows"),
-    ("last_assistant_message", "delegation-ledger, report-check"),
+    ("last_assistant_message", "delegation-ledger, report-check, watch-guard stop_digest"),
     ("customAgentType", "delegation_common.agent_role"),
     ("teamName", "delegation-ledger, report-check: teammate rows"),
     ("worktreePath", "subagent-policy: a writer's root"),
@@ -80,6 +80,16 @@ CANARY_STRINGS = [
     ("excludedCommands", "settings.json sandbox"),
     ("teammateMode", "settings.json"),
     ("CLAUDE_ASYNC_AGENT_STALL_TIMEOUT_MS", "SKILL.md §1b: the stall timer"),
+    ("do not restart it", "the kill notice's note: the gap the watch guard closes"),
+    ("background time limit", "watch-guard parse_notice: a kill at the time limit"),
+    ("stopped after reaching its background time limit",
+     "watch-guard parse_notice and DESC_RE: the kill summary naming the command"),
+    ("task-notification", "watch-guard: the notice's origin kind, and scan's byte search"),
+    ("queued_command", "watch-guard parse_notice: a mid-turn notice is this attachment"),
+    ("tool-use-id", "watch-guard map_kill: a notice's launching tool_use"),
+    ("background_tasks", "watch-guard watch_pending: a shell holding a watch id"),
+    ("prompt_id", "watch-guard stop_digest: a later stop acknowledges a lapse"),
+    ("CLAUDE_CODE_SESSION_ID", "delegation_common.wait_session: a watch's session"),
 ]
 
 
