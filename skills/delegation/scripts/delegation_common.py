@@ -97,16 +97,34 @@ def _agent_path(aid):
     return _id_path(agents_dir(), aid, "an agent id")
 
 
+class LockBusy(Exception):
+    """A bounded file_lock wait ran out before the lock came free."""
+
+
 @contextlib.contextmanager
-def _lock(directory):
-    """An exclusive flock on <directory>/.lock, which read-modify-writes there hold."""
-    os.makedirs(directory, exist_ok=True)
-    with open(os.path.join(directory, ".lock"), "a") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
+def file_lock(path, until=None, clock=time.monotonic):
+    """An exclusive flock on path. With `until` (a clock() deadline) it never blocks: it
+    retries until then and raises LockBusy if the lock didn't come free."""
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "a") as lock:
+        while True:
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX if until is None
+                            else fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if clock() >= until:
+                    raise LockBusy(path) from None
+                time.sleep(0.01)
         try:
             yield
         finally:
             fcntl.flock(lock, fcntl.LOCK_UN)
+
+
+def dir_lock(directory, until=None, clock=time.monotonic):
+    """file_lock on <directory>/.lock, which read-modify-writes there hold."""
+    return file_lock(os.path.join(directory, ".lock"), until, clock)
 
 
 def write_json(path, obj):
@@ -141,7 +159,7 @@ def update_agent_state(aid, fn):
     and changes it in place or returns a new one. The result goes to a temp file that is then
     os.replace'd, so a reader never sees a torn file."""
     path = _agent_path(aid)
-    with _lock(agents_dir()):
+    with dir_lock(agents_dir()):
         cur = read_agent_state(aid)
         new = fn(cur)
         new = cur if new is None else new
@@ -154,7 +172,7 @@ def prune_agent_states(days=7):
     are program-owned: only the ledger hook writes an agent's file, at its starts and stops
     and at its deadline nudge."""
     cutoff = time.time() - days * 86400
-    with _lock(agents_dir()):
+    with dir_lock(agents_dir()):
         for p in (glob.glob(os.path.join(agents_dir(), "*.json"))
                   + glob.glob(os.path.join(agents_dir(), ".*.tmp"))):
             with contextlib.suppress(OSError):
@@ -503,6 +521,13 @@ def codex_stopped(e):
 #   state           one of WATCH_STATES
 #   blocked_at      when the guard blocked a stop on this lapse (ISO), else null; a waiter
 #                   that takes the watch over, or polls it, clears it
+#   blocked_stop    a digest of the blocking stop's prompt_id and last_assistant_message
+#                   (null when the payload had neither): twin guards in one stop get the same
+#                   payload, a later stop doesn't
+#   blocked_size    the session transcript's size in bytes at that block (null if unknown),
+#                   the fallback when there is no blocked_stop; both are set and cleared with
+#                   blocked_at
+#   session_id      a --resume moves the watch to the resuming session, unless it has none
 #   ended           when it left UNRESOLVED (ISO); absent until then
 # open is waiting; acknowledged is a lapse the guard let a stop through on; done, failed and
 # stale are how the waiter saw the condition end (it exits 0, 1, 2); dropped is `wait --drop`.
@@ -584,23 +609,41 @@ def read_watch(wid):
 def update_watch(wid, fn):
     """Read-modify-write a watch under watches/.lock, as update_agent_state does: fn gets the
     current dict ({} for a new watch) and changes it in place or returns a new one. The file
-    is written only when fn changed it, so a no-op keeps its mtime (the prune clock)."""
-    path = watch_path(wid)
-    with _lock(watches_dir()):
-        cur = read_watch(wid) or {}
-        before = copy.deepcopy(cur)
-        new = fn(cur)
-        new = cur if new is None else new
-        if new != before:
-            write_json(path, new)
-    return new
+    is written only when fn changed it, so a no-op keeps its mtime (the prune clock). An error
+    from fn (a waiter's StepAside, say) or from the write is raised."""
+    out, failed = update_watches({wid: fn})
+    if failed:
+        raise failed[0][1]
+    return out[wid]
+
+
+def update_watches(fns, until=None, clock=time.monotonic):
+    """update_watch for several watches ({wid: fn}) in one hold of watches/.lock. Returns
+    ({wid: new}, [(wid, exception)]): one watch's error (a bad id, a damaged file, a full disk,
+    or one fn raised) leaves that watch unwritten and the others go on. With `until`, the lock
+    wait is bounded (LockBusy)."""
+    out, failed = {}, []
+    with dir_lock(watches_dir(), until, clock):
+        for wid, fn in fns.items():
+            try:
+                cur = read_watch(wid) or {}
+                before = copy.deepcopy(cur)
+                new = fn(cur)
+                new = cur if new is None else new
+                if new != before:
+                    write_json(watch_path(wid), new)
+            except Exception as ex:  # noqa: BLE001  the caller decides; the rest go on
+                failed.append((wid, ex))
+                continue
+            out[wid] = new
+    return out, failed
 
 
 def prune_watches():
     """Remove temp files a killed write left (over PRUNE_TMP_DAYS old) and watch files that
     ended (ENDED) over PRUNE_ENDED_DAYS ago, by mtime: a watch's last write is its end."""
     now = time.time()
-    with _lock(watches_dir()):
+    with dir_lock(watches_dir()):
         for p in glob.glob(os.path.join(watches_dir(), ".*.tmp")):
             with contextlib.suppress(OSError):
                 if os.path.getmtime(p) < now - PRUNE_TMP_DAYS * 86400:
@@ -656,6 +699,21 @@ def condition_text(c):
     return " and ".join(text for _, text in _clauses(c))
 
 
+def codex_progress(run_id):
+    """(stage, entry) for a watched codex run: "stopped" when it has a stop row, "running"
+    while Codex or its wrapper is alive (a live wrapper writes the stop row itself), else
+    "ended", with a finalize owed. Undecidable when the run is no longer in the ledger (it was
+    there when the wait began)."""
+    e = fold(read_rows()).get(("codex", run_id))
+    if e is None:
+        raise Undecidable(f"codex run {run_id} is no longer in the ledger ({ledger_path()})")
+    if e.get("event") == "stop":
+        return "stopped", e
+    if pid_alive(e.get("pid")) or pid_alive(e.get("wrapper_pid")):
+        return "running", e
+    return "ended", e
+
+
 def log_cursor():
     """A fresh scan_log cursor: how far the log has been read, whether a done line was seen,
     and the log's size at the previous scan."""
@@ -707,14 +765,10 @@ def watch_verdict(w, cursor=None, now=None):
     c = w.get("condition") or {}
     now = time.time() if now is None else now
     if "codex" in c:
-        e = fold(read_rows()).get(("codex", c["codex"]))
-        if e is None:  # it was there when the wait began
-            raise Undecidable(f"codex run {c['codex']} is no longer in the ledger "
-                              f"({ledger_path()})")
-        if e.get("event") == "stop":
+        stage, e = codex_progress(c["codex"])
+        if stage == "stopped":
             return codex_stopped(e)
-        going = pid_alive(e.get("pid")) or pid_alive(e.get("wrapper_pid"))
-        return (None if going else "done"), condition_text(c)
+        return (None if stage == "running" else "done"), condition_text(c)
     cursor = log_cursor() if cursor is None else cursor
     # The pids first: a job writes its file or its last log line before it exits, so a check
     # made after the exit can't miss them.

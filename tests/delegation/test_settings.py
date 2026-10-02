@@ -106,6 +106,18 @@ class Baseline(unittest.TestCase):
         self.assertLessEqual(h["timeout"], 10)  # the first reply waits for SessionStart hooks
         self.assertTrue(os.access(os.path.join(REPO, "hooks", "delegation-due.sh"), os.X_OK))
 
+    def test_the_watch_guard_is_wired_on_stop_and_fails_open(self):
+        (entry,) = [e for e in S["hooks"]["Stop"]
+                    if any("watch-guard.sh" in h["command"] for h in e["hooks"])]
+        (h,) = entry["hooks"]
+        self.assertEqual(h["command"], 'bash "$HOME/.claude/hooks/watch-guard.sh"')
+        self.assertNotIn("exit 2", h["command"])  # it blocks by JSON, never by exit code
+        self.assertLessEqual(h["timeout"], 10)  # every stop waits for it
+        self.assertTrue(os.access(os.path.join(REPO, "hooks", "watch-guard.sh"), os.X_OK))
+
+    def test_a_rearm_never_waits_on_a_permission_prompt(self):
+        self.assertIn("Bash(delegation-ledger wait *)", S["permissions"]["allow"])
+
     def test_the_stop_sound_rings_for_the_main_session_only(self):
         # Stop fires for subagents too; an inline sound rang for every one of them.
         stops = commands("Stop")
