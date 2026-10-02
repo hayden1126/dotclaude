@@ -18,9 +18,12 @@ found:
   while it held full Bash.
 - **"Stalls":** these were long, silent teammate turns (10 of 118 teammates went over 30 minutes), not
   lost reports. Ordinary subagents lost 1 report in 266.
-- **general-purpose:** 118 general-purpose agents ran. 47 edited files, 35 ran mutating shell commands,
-  and 36 were read-only. All 5 of its misbehaviors were read-only reviews that wrote scratch files or
-  ran code.
+- **general-purpose:** 118 general-purpose subagents ran. 47 edited files, and fewer than a third
+  stayed read-only (how many of the rest ran mutating shell commands depends on what counts as
+  mutating). All 5 that misbehaved had read-only briefs, and 4 of them were reviews or audits.
+  Counting teammates by the role they were spawned as, 11 of the 12 drift cases were
+  general-purpose agents. The twelfth was the built-in Explore, which also keeps Bash.
+  (Recomputed from the eval's extract on 2026-10-01.)
 
 ## Layers
 
@@ -213,9 +216,10 @@ from 60 to 5,000 requests an hour.
   (`~/.secrets.env`, which the baseline's `denyRead` hides from sandboxed commands), and start
   each MCP server that needs one through a wrapper that reads the file and passes that server
   only the names it needs. A new secret is then protected by default, and no variable name
-  appears in any settings file. hq's `bin/hq-mcp-env` is one such wrapper. An `envVars` deny list
-  is the fallback; it names each variable, so it belongs in the private live settings, not this
-  baseline.
+  appears in any settings file. One such wrapper lives in a separate project-registry repo: each
+  MCP server's launch command runs through it, and it exports only that server's variables. An
+  `envVars` deny list is the fallback; it names each variable, so it belongs in the private live
+  settings, not this baseline.
 - **A program the same command line creates is denied.** In `uv venv .venv && .venv/bin/python
   -c ...`, the policy checks `.venv/bin/python` before `.venv` exists, so it can't resolve it and
   denies it as `unknown-command`. Seen once in the live harness (2026-09-30), from a writer that
@@ -237,9 +241,9 @@ from 60 to 5,000 requests an hour.
   Code doesn't wake the agent when the task ends (probe, 2.1.286), so the result is lost to it.
   `BRIEF.md` tells agents not to end a turn with a background command running, and SKILL §4
   explains why.
-- **Vault.** There is deliberately no vault read deny. A session-wide deny would break hq's vault
-  routing and vault's own sessions, and Bash writes to vault from other sessions are already
-  outside the write roots.
+- **The private notes repo.** There is deliberately no read deny on it. A session-wide deny would
+  break the project registry, which routes notes into it, and the sessions that run inside the
+  notes repo itself. Bash writes to it from other sessions are already outside the write roots.
 
 ## Stage 3
 
@@ -644,8 +648,8 @@ can't run it: `delegation-ledger` is in `excludedCommands`, which the policy den
 
 **After a hand-run live probe, exclude it.** The canary harness writes to its fixture's own state
 dir and never touches the live ledger, but a probe run by hand in a live session does. The probes
-already in HAYPC's ledger from before A6 are excluded once, by hand. `poster-audit` isn't one of
-them: it was real work, so it stays in.
+already in the main machine's ledger from before A6 are excluded once, by hand. One agent there
+reads like a probe by its name but was a real audit run, so it stays in.
 
 **The enforcement checks read every row.** A probe the policy hook missed is still a miss, so the
 exclusions apply only to the usage sections. One side effect: the 30-day window shows again a
@@ -938,8 +942,8 @@ numbers decide whether A1's thresholds and A2's budgets move.
   - unit: 302 tests, plus 19 in `tests/setup`;
   - the live harness has no `audit` or `due` case, so A6 adds no live checks, and a full canary
     run still has 65;
-  - `audit --monthly` against a copy of HAYPC's state, with the five legacy exclusions, took
-    0.31 s and 39 MB: 105 agents and 114 activations over two days, transcripts read for 111;
+  - `audit --monthly` against a copy of the main machine's state, with the five legacy exclusions,
+    took 0.31 s and 39 MB: 105 agents and 114 activations over two days, transcripts read for 111;
   - a `reviewer` pass found 7 low defects and nothing higher, and all 7 are fixed:
     - a failed Codex resume stretched the run before it;
     - a role-less teammate escaped the general-purpose share;
