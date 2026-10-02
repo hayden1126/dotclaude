@@ -937,6 +937,27 @@ def wait_session():
     return next((s for s, p in live_sessions().items() if pid and str(p) == pid), "unknown")
 
 
+def claude_alive(w):
+    """Whether the Claude Code process a watch was recorded under (claude_pid with its
+    claude_start) still runs. After /clear it runs on under a new session id, and its watch guard
+    adopts the watch."""
+    return w.get("claude_pid") is not None and pid_alive(w.get("claude_pid"),
+                                                         w.get("claude_start"))
+
+
+def watch_orphaned(w, current=None, live=None, now=None):
+    """Whether nobody will hear from an unresolved watch, whatever its waiter's state: its
+    session isn't `current` (the caller's) or live, and its Claude process (claude_alive) is
+    gone. A watch with no session ("unknown") was started outside Claude Code and reports to
+    whoever ran it, so only a dead waiter orphans it. `live` is live_sessions(), if read."""
+    sid = w.get("session_id")
+    if sid in (None, "unknown"):
+        return not waiter_alive(w, now)
+    if (current and sid == current) or claude_alive(w):
+        return False
+    return sid not in (live_sessions() if live is None else live)
+
+
 def new_watch_id():
     return "w-" + time.strftime("%Y%m%dT%H%M%S") + "-" + secrets.token_hex(3)
 
@@ -969,23 +990,23 @@ class Waiter:
             raise StepAside(f"watch {self.wid} was taken over by pid {w.get('waiter_pid')} (a "
                             "--resume); this waiter stepped aside, and the watch goes on")
 
-    @staticmethod
-    def refuse_a_live_waiter(w):
-        """WaitRefused when the watch's waiter is alive: it will notify its own session. A
-        waiter whose heartbeat went stale (a suspended VM, say) can still be taken over."""
-        if waiter_alive(w):
+    def refuse_a_live_waiter(self, w):
+        """WaitRefused when the watch's waiter is alive and someone will hear from it
+        (watch_orphaned). A waiter whose heartbeat went stale (a suspended VM, say) can still be
+        taken over, and so can a live one whose session is gone: its exit would reach nobody,
+        and it steps aside at its next beat."""
+        if waiter_alive(w) and not watch_orphaned(w, self.session):
             raise WaitRefused(f"watch {w.get('id')} already has a live waiter (pid "
                               f"{w.get('waiter_pid')}); it will notify its session")
 
-    @classmethod
-    def refuse_a_second_codex_watch(cls, new):
+    def refuse_a_second_codex_watch(self, new):
         """WaitRefused when any session already has an unresolved watch on new's codex run,
         since each watch's waiter could finalize it. Called under the watches lock, so two
         waits started together can't both pass."""
         run = new["condition"].get("codex")
         w = codex_watch(run) if run is not None else None
         if w is not None:
-            cls.refuse_a_live_waiter(w)
+            self.refuse_a_live_waiter(w)
             raise WaitRefused(f"watch {w.get('id')} already waits on {run}: "
                               f"delegation-ledger wait --resume {w.get('id')}")
 

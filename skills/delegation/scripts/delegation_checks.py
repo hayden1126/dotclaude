@@ -382,29 +382,36 @@ ORPHANS_LISTED = 3
 
 
 def orphaned_watches(current=None, now=None):
-    """(watches, unreadable): the open or acknowledged watches nobody waits on, oldest first,
-    and how many watch files couldn't be read. A watch is nobody's when its session isn't
-    running and its waiter isn't alive; `current` (the starting session's id) counts as
-    running, and a watch whose waiter lives is still waited on, even with its session gone.
-    A file that can't be read or judged is logged and counted, and the rest go on. Where pids
-    can't be seen (a sandboxed run) every waiter and session would read as dead, so there are
-    none."""
+    """(watches, unreadable): the open or acknowledged watches nobody will hear from
+    (dc.watch_orphaned), oldest first, and how many watch files couldn't be read. A watch is
+    nobody's when its session isn't running and its Claude process is gone, even if its waiter
+    still runs (a bare waiter outlives a SIGKILLed Claude Code); `current` (the starting
+    session's id) counts as running. A file that can't be read or judged is logged and counted,
+    and the rest go on. Where pids can't be seen (a sandboxed run) every waiter and session
+    would read as dead, so there are none."""
     if not dc.pids_visible():
         return [], 0
     live = set(dc.live_sessions())
-    if isinstance(current, str) and current:
-        live.add(current)
+    current = current if isinstance(current, str) and current else None
     found, unreadable = [], 0
     for p in sorted(glob.glob(os.path.join(dc.watches_dir(), "*.json"))):
         try:
             w = dc.read_watch(os.path.basename(p)[:-len(".json")])
-            if (w and w.get("state") in dc.UNRESOLVED and w.get("session_id") not in live
-                    and not dc.waiter_alive(w, now)):
-                found.append(w)
+            if w and w.get("state") in dc.UNRESOLVED and dc.watch_orphaned(w, current, live, now):
+                found.append(dict(w, waiter_running=dc.waiter_alive(w, now)))
         except Exception as e:  # noqa: BLE001  one bad file mustn't hide the others
             log_error(f"watch file {p}: {type(e).__name__}: {e}")
             unreadable += 1
     return sorted(found, key=lambda w: str(w.get("created"))), unreadable
+
+
+def orphan_name(w):
+    """"w-1 (the build)", saying so when its waiter still runs (orphaned_watches judged it, so
+    evaluate stays pure): its result reaches nobody."""
+    notes = [w["description"]] if w.get("description") else []
+    if w.get("waiter_running"):
+        notes.append("its waiter is still running")
+    return f"{w.get('id')} ({'; '.join(notes)})" if notes else str(w.get("id"))
 
 
 def orphans_nudge(orphans, unreadable=0):
@@ -413,8 +420,7 @@ def orphans_nudge(orphans, unreadable=0):
     if not orphans:
         return f"{bad}."
     n = len(orphans)
-    named = [f"{w.get('id')} ({w['description']})" if w.get("description") else str(w.get("id"))
-             for w in orphans[:ORPHANS_LISTED]]
+    named = [orphan_name(w) for w in orphans[:ORPHANS_LISTED]]
     more = f" and {n - ORPHANS_LISTED} more" if n > ORPHANS_LISTED else ""
     text = (f"{n} {'watch' if n == 1 else 'watches'} from a session that ended: "
             f"{', '.join(named)}{more}. Pick one up with `delegation-ledger wait --resume "

@@ -430,6 +430,15 @@ class Exits(WaitEnv):
                                  f"{first.pid}); it will notify its session\n"))
         self.assertIsNone(first.poll())
 
+    def test_resume_takes_a_live_waiter_over_once_its_session_is_gone(self):
+        # A bare waiter can outlive a SIGKILLed Claude Code; its exit would reach nobody.
+        first = self.start("--pid", str(self.job().pid), CLAUDE_CODE_SESSION_ID="s-dead")
+        wid = self.waiting(first)["id"]
+        p = self.start("--resume", wid)
+        self.assertEqual(self.waiting(p)["session_id"], "s1")
+        out, _ = self.finish(first, 3)
+        self.assertIn(f"watch {wid} was taken over by pid {p.pid}", out)
+
     def test_resume_with_no_session_keeps_the_watchs_session(self):
         wid = self.lapsed(self.job())
         p = self.run_("--resume", wid, "--max", "0.002", CLAUDE_CODE_SESSION_ID="")

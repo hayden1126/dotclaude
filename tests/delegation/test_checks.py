@@ -542,9 +542,11 @@ class Orphans(StateTest):
         self.assertIn("w-1 (the build)", self.message(json.dumps({"session_id": "s3"})))
         self.assertIn("w-1 (the build)", self.message("not json"))  # nothing to spare
 
-    def test_a_live_waiter_is_still_waiting_with_its_session_gone(self):
+    def test_a_live_waiter_of_an_ended_session_is_named_too(self):
+        # A bare waiter outlives a SIGKILLed Claude Code, and its exit reaches nobody.
         self.watch(live=True)
-        self.assertEqual(self.message(), "")
+        self.assertIn("1 watch from a session that ended: w-1 (the build; its waiter is still "
+                      "running).", self.message())
 
     def test_an_unknown_session_counts_only_once_its_waiter_is_dead(self):
         self.watch(sid="unknown", live=True)
