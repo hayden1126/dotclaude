@@ -752,9 +752,11 @@ the fix is enforcement. `PLAN.md` has the design history and the options weighed
     under the 120-minute cap. `--drop <id>` ends a watch. `--resume <id>` takes one over, but not
     from a live waiter whose session is live: a live waiter of a dead session reports to nobody,
     so it is taken over, and it steps aside (exit 3) at its next beat.
-  - A new wait whose condition equals an unresolved watch's in the same session takes that watch
-    over and says so, so a rerun after a kill doesn't leave the guard pointing at a second
-    watch. A codex condition keeps its refusal instead.
+  - A new wait whose condition equals an unresolved watch's takes that watch over and says so,
+    once it has, so a rerun after a kill doesn't leave the guard pointing at a second watch. The
+    watch is the caller's: in its session, or left by its Claude process under a session id that
+    is no longer live (a rerun after `/clear`, before the guard's first stop adopts it). A codex
+    condition keeps its refusal instead.
   - It records the session and the Claude Code process (`claude_pid`, from `CLAUDE_PID`, with its
     procStart). `/clear` keeps the process but starts a new session id, and the guard adopts
     the watch into the new session (below).

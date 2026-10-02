@@ -511,16 +511,6 @@ def own_claude():
     return None
 
 
-def adoptable(w, me, live):
-    """Whether /clear left watch w: it was recorded under this hook's Claude process (`me`), in
-    a session that isn't live (not in `live`, from live_sessions()). After /clear that process
-    runs on under a new session id, and its sessions file names the new one, so the old id
-    leaves the live set. A live session's watch is never adopted, whatever the pids say: that
-    session's own guard has it."""
-    return (me is not None and w.get("claude_pid") == me[0]
-            and str(w.get("claude_start")) == str(me[1]) and w.get("session_id") not in live)
-
-
 def crashed(w, sid, me):
     """Whether watch w is this session's and the Claude process it was recorded under has
     ended (a crash, then `claude --continue` in this process, `me`)."""
@@ -530,7 +520,7 @@ def crashed(w, sid, me):
 def adopt(sid, wids, me, now, until, clock):
     """Adopt the watches gathered for it, log each, and return the ids of those whose waiter
     still runs but reports to nobody. Each is checked again under the lock:
-    - one /clear left (adoptable) moves into this session. One another session re-armed, or
+    - one /clear left (dc.left_by_clear) moves into this session. One another session re-armed, or
       whose old session came back, since it was gathered stays where it is;
     - a crashed one records this process as its Claude process, and a waiter still running is
       marked waiter_unheard: its exit goes to the process that ended."""
@@ -541,7 +531,7 @@ def adopt(sid, wids, me, now, until, clock):
             if cur.get("state") not in dc.UNRESOLVED:
                 return
             if cur.get("session_id") != sid:
-                if adoptable(cur, me, dc.live_sessions()):
+                if dc.left_by_clear(cur, me, dc.live_sessions()):
                     moved.append((wid, cur.get("session_id")))
                     cur["session_id"] = sid
             elif crashed(cur, sid, me):
@@ -711,7 +701,7 @@ def decide(data, now, clock=time.monotonic):
     live = dc.live_sessions() if me is not None else {}
     every = [w for w in dc.all_watches() if isinstance(w.get("id"), str)]
     watches = [w for w in every if w.get("state") in dc.UNRESOLVED
-               and (w.get("session_id") == sid or adoptable(w, me, live))]
+               and (w.get("session_id") == sid or dc.left_by_clear(w, me, live))]
     adopted = [w["id"] for w in watches if w.get("session_id") != sid or crashed(w, sid, me)]
     pendings = []
     for i, w in enumerate(watches):

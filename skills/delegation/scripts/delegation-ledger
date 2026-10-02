@@ -1219,12 +1219,17 @@ def existing_watch(wid):
 
 
 def same_watch(session, cond):
-    """The session's unresolved watch on exactly this condition, or None. A codex condition is
-    left to the codex refusal (one watch per run), and a caller with no session has none."""
+    """The caller's unresolved watch on exactly this condition, or None: one in its session, or
+    one its Claude process left under an earlier session id (dc.left_by_clear), since a rerun
+    after /clear may come before the guard's first stop adopts it. A codex condition is left to
+    the codex refusal (one watch per run), and a caller with no session has none."""
     if session == "unknown" or "codex" in cond:
         return None
+    me = dc.claude_process()
+    live = dc.live_sessions() if me is not None else {}
     return next((w for w in dc.all_watches() if w.get("state") in dc.UNRESOLVED
-                 and w.get("session_id") == session and w.get("condition") == cond), None)
+                 and w.get("condition") == cond
+                 and (w.get("session_id") == session or dc.left_by_clear(w, me, live))), None)
 
 
 def stop_row(run_id):

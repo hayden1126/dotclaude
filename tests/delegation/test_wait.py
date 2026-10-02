@@ -518,6 +518,32 @@ class Exits(WaitEnv):
                          (USAGE, "", f"wait: watch {wid} already has a live waiter (pid "
                                      f"{first.pid}); it will notify its session\n"))
 
+    def lapsed_before_clear(self, job):
+        """A lapsed watch this Claude process (the test) left in session s-before."""
+        p = self.run_("--pid", str(job.pid), "--max", "0.002", CLAUDE_CODE_SESSION_ID="s-before",
+                      CLAUDE_PID=str(os.getpid()))
+        self.assertEqual(p.returncode, AT_MAX, p.stderr)
+        return self.only()["id"]
+
+    def test_a_rerun_after_clear_takes_its_processs_watch_over(self):
+        # Before the guard's first stop in the new session has adopted it.
+        job = self.job()
+        wid = self.lapsed_before_clear(job)
+        p = self.run_("--pid", str(job.pid), "--max", "0.002", CLAUDE_PID=str(os.getpid()))
+        self.assertEqual((p.returncode, p.stdout),
+                         (AT_MAX, f"watch {wid} already waits on this; taking it over\n"
+                                  + REARM.format(wid)))
+        self.assertEqual((self.only()["id"], self.only()["session_id"]), (wid, "s1"))
+
+    def test_a_rerun_doesnt_take_a_live_sessions_watch_whatever_the_pids_say(self):
+        job = self.job()
+        self.lapsed_before_clear(job)
+        with open(os.path.join(self.tmp.name, ".claude", "sessions", "2.json"), "w") as f:
+            json.dump({"pid": os.getpid(), "sessionId": "s-before"}, f)
+        p = self.run_("--pid", str(job.pid), "--max", "0.002", CLAUDE_PID=str(os.getpid()))
+        self.assertEqual(p.returncode, AT_MAX, p.stderr)
+        self.assertEqual(sorted(w["session_id"] for w in self.all_watches()), ["s-before", "s1"])
+
     def test_another_condition_or_session_gets_its_own_watch(self):
         job = self.job()
         self.lapsed(job)
