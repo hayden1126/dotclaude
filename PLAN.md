@@ -236,9 +236,13 @@ settings docs say.
   records them all in one quick locked pass, and prints. Lock waits are bounded by the same
   deadline, and the kill record's lock is per session. The scan has no size cap: a byte search
   for `task-notification` picks the lines worth parsing.
-- **Acknowledging a lapse:** on a stop after the block, detected by a transcript longer than at
-  the block (`blocked_size`), not by elapsed time. A doubled guard in the same stop sees the
-  same size and doesn't acknowledge.
+- **Acknowledging a lapse:** on a stop after the block, never on the stop that blocked.
+  - Stops are told apart by a digest of the payload's `prompt_id` and
+    `last_assistant_message` (`blocked_stop`), which twin guards receive identically, not by
+    elapsed time.
+  - The transcript's size (`blocked_size`) is the fallback when the payload lacks both, since
+    it can grow between twins.
+- **One failed write skips only its own watch:** the commit pass catches errors per item.
 - **`--resume` doesn't take a watch from a live waiter**, and a caller with no Claude Code
   session keeps the watch's existing session.
 - **Fail-open, per item.** An error on one watch or one kill (for example `dc.Undecidable`, when
