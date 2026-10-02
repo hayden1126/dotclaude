@@ -561,7 +561,7 @@ fixes:
 - A self-check (`pids_visible`) covers the calls that still run inside, such as a piped one.
   `SANDBOX_RUNTIME=1`, set only inside, fails it. So does a `CLAUDE_PID` that is set but not
   alive, since the caller's own Claude process is alive by definition, unless the parent walk
-  (`claude_identity`, in the known gaps) finds a live Claude process anyway: then `CLAUDE_PID`
+  (`claude_ancestor`, in the known gaps) finds a live Claude process anyway: then `CLAUDE_PID`
   was only stale, inherited from a process that has ended. When it fails, no pid check means
   anything, so both views print a warning first and call each session `unknown` instead of
   gone, and `open` says `pid not visible in the sandbox` for a Codex row instead of `died`. With
@@ -785,7 +785,9 @@ the fix is enforcement. `PLAN.md` has the design history and the options weighed
     Code records no process, dropping the last waiter's. A new wait with no process found
     records the session `unknown` and says the guard won't see the watch. One with a process but
     no session found records `unknown` and says nothing, since that process's guard adopts the
-    watch by the process (`unknown` is never live). `/clear` keeps the process but starts a new
+    watch by the process (`unknown` is never live). A `--resume` outside Claude Code keeps the
+    watch's session, drops its `claude_pid` and says nothing; only a new wait records `unknown`
+    and warns. `/clear` keeps the process but starts a new
     session id, and the guard adopts the watch into the new session (below). When it ends, it
     records `reported`: true while that process runs, else false.
   - It refuses to run sandboxed, where its pids would belong to another PID namespace. It refuses
@@ -845,9 +847,10 @@ the fix is enforcement. `PLAN.md` has the design history and the options weighed
 - **The session-start nudge.** `delegation-ledger due --hook` names, in its numbered line, up to
   three of the open or acknowledged watches nobody will hear from, oldest first, with a count of
   the rest, and one `wait --resume <id>` and `wait --drop <id>` template
-  (`delegation_checks.left_watches`): "<n> watch(es) left by a Claude Code process that has
-  ended: <id> (<desc>), ... Pick one up with ..." It says process, not session, since after a
-  crash and `claude --continue` the session runs on. A watch is nobody's when the Claude
+  (`delegation_checks.left_watches`): "<n> watch(es) no running Claude Code session is
+  guarding: <id> (<desc>), ... Pick one up with ..." It doesn't say the session ended: after a
+  crash and `claude --continue` the session runs on, and a watch with no process recorded may
+  never have had a session. A watch is nobody's when the Claude
   process it was recorded under has ended, even if its session runs on in a new process, or,
   with no process recorded, when its session isn't live. That holds whatever its waiter's
   state, since a bare waiter can outlive a SIGKILLed Claude Code; a live waiter is marked "its

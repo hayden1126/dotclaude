@@ -409,7 +409,7 @@ class Evaluate(unittest.TestCase):
                                   side_effect=AssertionError("evaluate checked a pid")):
             nudges, _, _ = self.ev(self.green(self.V, 0), orphans=orphans)
         self.assertEqual(nudges, [
-            "2 watches left by a Claude Code process that has ended: w-1 (the build), w-2. "
+            "2 watches no running Claude Code session is guarding: w-1 (the build), w-2. "
             "Pick one up with `delegation-ledger wait --resume <id>`, or drop it with "
             "`delegation-ledger wait --drop <id>`."])
 
@@ -527,7 +527,7 @@ class Hook(StateTest):
 
 
 class Orphans(StateTest):
-    """Watches left by a Claude Code process that has ended. A temp HOME whose one live
+    """Watches no running Claude Code session is guarding. A temp HOME whose one live
     session, s1, is this process; every other check is settled, so the watch nudge is the only
     one."""
 
@@ -576,13 +576,13 @@ class Orphans(StateTest):
     def test_an_orphaned_open_watch_is_named_with_its_commands(self):
         self.watch()
         self.assertEqual(self.message(), (
-            "Delegation checks: (1) 1 watch left by a Claude Code process that has ended: w-1 "
+            "Delegation checks: (1) 1 watch no running Claude Code session is guarding: w-1 "
             "(the build). Pick one up with `delegation-ledger wait --resume <id>`, or drop it "
             "with `delegation-ledger wait --drop <id>`."))
 
     def test_an_acknowledged_watch_is_named_too(self):
         self.watch(state="acknowledged")
-        self.assertIn("1 watch left by a Claude Code process that has ended: w-1 (the build).",
+        self.assertIn("1 watch no running Claude Code session is guarding: w-1 (the build).",
                       self.message())
 
     def test_a_live_sessions_watch_is_not_named(self):
@@ -609,7 +609,7 @@ class Orphans(StateTest):
     def test_a_live_waiter_of_an_ended_session_is_named_too(self):
         # A bare waiter outlives a SIGKILLed Claude Code, and its exit reaches nobody.
         self.watch(live=True)
-        self.assertIn("1 watch left by a Claude Code process that has ended: w-1 (the build; "
+        self.assertIn("1 watch no running Claude Code session is guarding: w-1 (the build; "
                       "its waiter is still running).", self.message())
 
     def test_an_unknown_session_counts_only_once_its_waiter_is_dead(self):
@@ -670,7 +670,7 @@ class Orphans(StateTest):
         for i in (5, 4, 3, 2, 1):
             self.watch(f"w-{i}", desc=f"job {i}", created=iso(NOW + i))
         msg = self.message()
-        self.assertIn("5 watches left by a Claude Code process that has ended: w-1 (job 1), "
+        self.assertIn("5 watches no running Claude Code session is guarding: w-1 (job 1), "
                       "w-2 (job 2), w-3 (job 3) and 2 more. Pick one up", msg)
         self.assertNotIn("w-4", msg)
 
@@ -686,7 +686,7 @@ class Orphans(StateTest):
         self.watch()
         self.torn()
         self.assertEqual(self.message(), (
-            "Delegation checks: (1) 1 watch left by a Claude Code process that has ended: w-1 "
+            "Delegation checks: (1) 1 watch no running Claude Code session is guarding: w-1 "
             "(the build). Pick one up with `delegation-ledger wait --resume <id>`, or drop it "
             "with `delegation-ledger wait --drop <id>`. (1 watch file couldn't be read; see "
             "delegation-ledger.err)"))

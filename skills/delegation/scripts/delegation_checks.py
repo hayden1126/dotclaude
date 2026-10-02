@@ -18,9 +18,11 @@ upgraded three times in three days (2.1.284 to 2.1.286), so the checks split by 
 it fails open (it always exits 0; an error goes to delegation-ledger.err). Anything that would
 leave the checks unable to run (an unreadable version, a malformed due.toml, a crashing audit)
 becomes a nudge itself, so the checks can't go quiet.
-`due --hook` also names the watches (`delegation-ledger wait`) left by a Claude Code process
-that has ended: no watch guard reads them again, since each guard reads only its own session's
-watches.
+`due --hook` also names the watches (`delegation-ledger wait`) no running Claude Code session
+is guarding (dc.watch_orphaned). A watch guard reads its own session's watches and those its own
+Claude process left under another session id (a /clear), and a session continued after a crash
+adopts its own at its first stop. A watch whose Claude process has ended in a session nobody
+continued, or whose session has ended with no process recorded, has no guard at all.
 
 State lives in $XDG_STATE_HOME/dotclaude: canary.json (quick, full, green_full), audit.json
 (the last audit's WARN lines, whether a session start has shown them, and when the last
@@ -420,9 +422,11 @@ def left_watches(current=None, now=None):
     """(orphans, unheard, unreadable) for the session-start nudge, and how many watch files
     couldn't be read:
     - orphans: the open or acknowledged watches nobody will hear from (dc.watch_orphaned),
-      oldest first. A watch is nobody's when its session isn't running and its Claude process
-      is gone, even if its waiter still runs (a bare waiter outlives a SIGKILLed Claude Code);
-      `current` (the starting session's id) counts as running;
+      oldest first, even if their waiter still runs (a bare waiter outlives a SIGKILLed Claude
+      Code). A watch is nobody's when the Claude process it was recorded under has ended, even
+      if its session runs on; with no process recorded, when its session isn't running
+      (`current`, the starting session's id, counts as running); with no session, once its
+      waiter is dead;
     - unheard: the watches that ended while no Claude process was listening (dc.ended_unheard),
       oldest end first. The starting session's own are left to its watch guard, which says them
       to the model at its first stop.
@@ -466,8 +470,8 @@ def orphans_nudge(orphans, unreadable=0):
     n = len(orphans)
     named = [orphan_name(w) for w in orphans[:ORPHANS_LISTED]]
     more = f" and {n - ORPHANS_LISTED} more" if n > ORPHANS_LISTED else ""
-    text = (f"{n} {'watch' if n == 1 else 'watches'} left by a Claude Code process that has "
-            "ended: "
+    text = (f"{n} {'watch' if n == 1 else 'watches'} no running Claude Code session is "
+            "guarding: "
             f"{', '.join(named)}{more}. Pick one up with `delegation-ledger wait --resume "
             "<id>`, or drop it with `delegation-ledger wait --drop <id>`.")
     return f"{text} ({bad})" if bad else text
