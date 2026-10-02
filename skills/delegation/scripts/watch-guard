@@ -36,13 +36,12 @@ to wake it. This hook is the enforcement:
   task id, in either shape: a user entry between turns, or a mid-turn attachment entry. The
   first run records since as 10 minutes back, so older kills never block. A killed
   `delegation-ledger wait` folds into its watch's item when that watch has one in this stop:
-  the watch its launch line names (the output file's first lines), else the one a --resume
-  names, else the one watch created within 120 s after the launch (more than one: the one
-  whose condition the command's --pid, --file or --log names). A killed
+  the watch its launch line names (anywhere in the output file's first 4 KB), else the one a
+  --resume names, else the one watch created within 120 s after the launch (more than one:
+  the one whose condition the command's --pid, --file or --log names). A killed
   `codex-delegate run|resume` folds the same way into the watch its wrapper waited as, which
-  its launch line names (the first line of the command's output file). With none (a
-  sandboxed run), it doesn't fold; its reason says Codex keeps running, and re-arms the run's
-  watch when one is open.
+  its launch line names, found the same way. With none (a sandboxed run), it doesn't fold;
+  its reason says Codex keeps running, and re-arms the run's watch when one is open.
 
 Each stop runs in three phases, so what it records it also says. Gather is read-only and
 budgeted (3 s): no new item once that's spent, and a kill whose launch lookup the deadline cut
@@ -121,7 +120,7 @@ TOOL_USE_RE = re.compile(r"<tool-use-id>([^<]+)</tool-use-id>")
 OUTPUT_RE = re.compile(r"<output-file>([^<]+)</output-file>")
 LAUNCH_RE = re.compile(r"codex-delegate: run (\S+), watch (\S+)\. ")
 WAIT_LAUNCH_RE = re.compile(r"delegation-ledger: watch (\S+)\. If this command is stopped")
-LAUNCH_BYTES = 4096         # a launch line is the output file's first line, well under this
+LAUNCH_BYTES = 4096         # a launch line is looked for this far into a killed command's output
 SUMMARY_RE = re.compile(r"<summary>(.*?)</summary>", re.S)
 DESC_RE = re.compile(r'^Background command "(.*)" was stopped', re.S)
 WAITER_RE = re.compile(r"\bdelegation-ledger\s+wait\b")

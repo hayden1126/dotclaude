@@ -749,8 +749,11 @@ the fix is enforcement. `PLAN.md` has the design history and the options weighed
     command is stopped, re-arm with delegation-ledger wait --resume <id> (run_in_background,
     timeout 7200000)`. The guard folds a killed waiter by it.
   - `--max MIN` defaults to 110 and can't go higher, which leaves room for a 5-minute finalize
-    under the 120-minute cap. `--drop <id>` ends a watch. `--resume <id>` takes one over, but not
-    from a live waiter whose session is live: a live waiter of a dead session reports to nobody,
+    under the 120-minute cap. `--drop <id>` ends a watch. `--resume <id>` takes one over, but
+    refuses a live waiter someone will hear from: its Claude process is live, or, with no process
+    recorded, its session is live (the caller's counts); a live waiter with no session is refused
+    too. A live waiter whose Claude process has ended (a crash; the guard then marks it
+    `waiter_unheard`), or whose session has ended with no process recorded, reports to nobody,
     so it is taken over, and it steps aside (exit 3) at its next beat.
   - A new wait whose condition equals an unresolved watch's takes that watch over and says so,
     once it has, so a rerun after a kill doesn't leave the guard pointing at a second watch. The
