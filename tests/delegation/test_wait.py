@@ -57,11 +57,12 @@ class WaitEnv(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.state = os.path.join(self.tmp.name, "state")
+        # This test process stands in for the Claude process: it is every waiter's parent, so
+        # CLAUDE_PID names an ancestor, and with no sessions file named by its pid the walk
+        # finds nothing, so CLAUDE_CODE_SESSION_ID is the session. (The lead's inherited
+        # CLAUDE_PID is invisible inside the sandbox, which would make every wait refuse.)
         self.env = dict(os.environ, HOME=self.tmp.name, XDG_STATE_HOME=self.state,
-                        CLAUDE_CODE_SESSION_ID="s1")
-        # Inside the sandbox the lead's CLAUDE_PID is inherited but invisible, which would make
-        # every wait refuse to run. The Sandbox test sets it on purpose.
-        self.env.pop("CLAUDE_PID", None)
+                        CLAUDE_CODE_SESSION_ID="s1", CLAUDE_PID=str(os.getpid()))
         self.env.pop("SANDBOX_RUNTIME", None)  # set inside the sandbox; the Sandbox test sets it
         self.env.pop("DELEGATION_LEDGER", None)
         sessions = os.path.join(self.tmp.name, ".claude", "sessions")
@@ -175,7 +176,9 @@ class Conditions(WaitEnv):
         w = self.waiting(p)
         self.assertEqual(set(w), {"id", "session_id", "description", "condition", "created",
                                   "waiter_pid", "waiter_start", "waiter_heartbeat", "poll_s",
-                                  "state", "blocked_at"})
+                                  "state", "blocked_at", "claude_pid", "claude_start"})
+        self.assertEqual((w["claude_pid"], w["claude_start"]),
+                         (os.getpid(), dc.proc_start(os.getpid())))
         self.assertRegex(w["id"], r"^w-\d{8}T\d{6}-[0-9a-f]{6}$")
         self.assertEqual((w["session_id"], w["description"], w["state"], w["blocked_at"]),
                          ("s1", "the long build", "open", None))
@@ -442,9 +445,11 @@ class Exits(WaitEnv):
         self.assertIsNone(first.poll())
 
     def test_resume_takes_a_live_waiter_over_once_its_session_is_gone(self):
-        # A bare waiter can outlive a SIGKILLed Claude Code; its exit would reach nobody.
+        # A bare waiter can outlive a SIGKILLed Claude Code; its exit would reach nobody. With
+        # no Claude process recorded (a watch from before claude_pid), the session decides.
         first = self.start("--pid", str(self.job().pid), CLAUDE_CODE_SESSION_ID="s-dead")
         wid = self.waiting(first)["id"]
+        self.update(wid, claude_pid=None, claude_start=None)
         p = self.start("--resume", wid)
         self.assertEqual(self.waiting(p)["session_id"], "s1")
         out, _ = self.finish(first, 3)
@@ -453,12 +458,12 @@ class Exits(WaitEnv):
     def test_resume_takes_a_live_waiter_over_once_its_claude_process_ended(self):
         # A crash, then claude --continue: the session id runs on, but the waiter's exit goes
         # to the Claude process that ended.
-        first = self.start("--pid", str(self.job().pid), CLAUDE_PID=str(os.getpid()))
+        first = self.start("--pid", str(self.job().pid))
         wid = self.waiting(first)["id"]
         self.update(wid, claude_pid=DEAD, claude_start=None)
         p = self.start("--resume", wid)
         w = self.waiting(p)
-        self.assertNotIn("claude_pid", w)  # this waiter runs outside Claude Code
+        self.assertEqual(w["claude_pid"], os.getpid())  # the resuming waiter's process
         out, _ = self.finish(first, 3)
         self.assertIn(f"watch {wid} was taken over by pid {p.pid}", out)
 
@@ -479,8 +484,9 @@ class Exits(WaitEnv):
     def test_an_end_outside_claude_code_isnt_recorded_reported(self):
         target = self.path("out")
         open(target, "w").close()
-        self.assertEqual(self.run_("--file", target).returncode, 0)
+        self.assertEqual(self.run_("--file", target, CLAUDE_PID="").returncode, 0)
         self.assertIs(self.only()["reported"], False)
+        self.assertNotIn("claude_pid", self.only())
 
     def test_a_watch_records_its_claude_process(self):
         # So that process's guard adopts it after a /clear, under a new session id.
@@ -723,11 +729,36 @@ class Session(WaitEnv):
             os.remove(path)
         return sid
 
-    def test_the_session_comes_from_the_env_then_the_sessions_file(self):
-        env = {k: v for k, v in self.env.items() if k != "CLAUDE_CODE_SESSION_ID"}
-        self.assertEqual(self.session_of(**dict(env, CLAUDE_CODE_SESSION_ID="s7")), "s7")
-        self.assertEqual(self.session_of(**dict(env, CLAUDE_PID=str(os.getpid()))), "s1")
-        self.assertEqual(self.session_of(**env), "unknown")
+    def claude_ancestor(self, sid):
+        """Make this test process a Claude process the walk finds: a sessions file named by
+        its pid, as Claude Code writes one."""
+        path = os.path.join(self.tmp.name, ".claude", "sessions", f"{os.getpid()}.json")
+        with open(path, "w") as f:
+            json.dump({"pid": os.getpid(), "procStart": dc.proc_start(os.getpid()),
+                       "sessionId": sid}, f)
+
+    def test_with_no_claude_ancestor_the_env_counts_only_through_claude_pid(self):
+        self.assertEqual(self.session_of(**self.env), "s1")  # CLAUDE_PID names the parent
+        self.assertEqual(self.session_of(**dict(self.env, CLAUDE_CODE_SESSION_ID="")), "unknown")
+
+    def test_an_inherited_session_id_with_no_claude_ancestor_is_unknown(self):
+        # A tmux server started from a Claude Bash call: its panes carry that session's
+        # CLAUDE_CODE_SESSION_ID and a CLAUDE_PID that isn't their ancestor.
+        lead = self.job()
+        env = dict(self.env, CLAUDE_CODE_SESSION_ID="s-lead", CLAUDE_PID=str(lead.pid))
+        target = self.path("out")
+        open(target, "w").close()
+        p = subprocess.run(self.argv("--file", target), capture_output=True, text=True,
+                           env=env, timeout=30)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("no Claude Code session: the watch guard won't see this watch", p.stderr)
+        self.assertEqual(self.only()["session_id"], "unknown")
+        self.assertNotIn("claude_pid", self.only())
+
+    def test_a_claude_ancestors_session_wins_over_the_env(self):
+        self.claude_ancestor("s-real")
+        self.assertEqual(self.session_of(**dict(self.env, CLAUDE_CODE_SESSION_ID="s-other",
+                                                CLAUDE_PID=str(DEAD))), "s-real")
 
 
 class Codex(WaitEnv):
@@ -1085,7 +1116,8 @@ class Views(WaitEnv):
         open(target, "w").close()
         self.assertEqual(self.run_("--file", target).returncode, 0)
         wid = self.only()["id"]
-        self.update(wid, claude_pid=DEAD, claude_start=None)  # its Claude process has ended
+        # Its Claude process ended before the waiter did, so the end went unheard.
+        self.update(wid, claude_pid=DEAD, claude_start=None, reported=False)
         self.assertEqual(self.cli("watch").splitlines()[1:], [
             "watches:", f"  {wid}  '{target} exists'  ended done while no Claude Code process "
                         "was listening ⚠ check the result"])

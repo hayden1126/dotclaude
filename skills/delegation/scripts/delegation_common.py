@@ -459,11 +459,12 @@ def ancestors():
 
 
 def claude_ancestor(chain=None):
-    """(pid, procStart) of the nearest process in `chain` (ancestors(), this process first), at
-    most SESSION_WALK parents up, whose ~/.claude/sessions/<pid>.json names that pid and its
-    procStart: the Claude Code process this one runs under. None when there is none (outside
-    Claude Code, or sandboxed, where no pid outside the sandbox can be seen). A `claude -p` run
-    writes its own sessions file, so a nested one finds itself, not its parent."""
+    """(pid, procStart, sessionId) of the nearest process in `chain` (ancestors(), this process
+    first), at most SESSION_WALK parents up, whose ~/.claude/sessions/<pid>.json names that pid
+    and its procStart: the Claude Code process this one runs under, and its session as that
+    file names it (None when it names none). None when there is no such process (outside Claude
+    Code, or sandboxed, where no pid outside the sandbox can be seen). A `claude -p` run writes
+    its own sessions file, so a nested one finds itself, not its parent."""
     for pid in (ancestors() if chain is None else chain)[:SESSION_WALK + 1]:
         try:
             with open(os.path.expanduser(f"~/.claude/sessions/{pid}.json")) as f:
@@ -473,7 +474,8 @@ def claude_ancestor(chain=None):
         start = proc_start(pid)
         if (isinstance(d, dict) and d.get("pid") == pid
                 and (d.get("procStart") is None or str(d["procStart"]) == str(start))):
-            return pid, start
+            sid = d.get("sessionId")
+            return pid, start, (sid if isinstance(sid, str) and sid else None)
     return None
 
 
@@ -986,31 +988,39 @@ def live_sessions():
     return out
 
 
-def wait_session():
-    """The session a watch belongs to: CLAUDE_CODE_SESSION_ID, else the live session whose pid
-    is CLAUDE_PID, else "unknown"."""
-    sid = os.environ.get("CLAUDE_CODE_SESSION_ID")
-    if sid:
-        return sid
-    pid = os.environ.get("CLAUDE_PID")
-    return next((s for s, p in live_sessions().items() if pid and str(p) == pid), "unknown")
-
-
-def claude_process():
-    """(pid, procStart) of the Claude Code process this command runs under, or None. The
-    ancestor walk decides (claude_ancestor). CLAUDE_PID counts only when the walk finds nothing
-    and it names an ancestor of this process, since it is inherited: a nested `claude -p`
-    started from the lead's Bash may carry the lead's, and a tmux server started from a Claude
-    Bash call carries one that goes stale."""
+def claude_identity():
+    """(process, session): the Claude Code process this command runs under ((pid, procStart),
+    or None) and its session id ("unknown" when none can be trusted), from one walk. The
+    ancestor walk decides (claude_ancestor): the process it finds is the one, and that
+    process's sessions file names the session. Only when it finds nothing do the env vars
+    count, and only when CLAUDE_PID names an ancestor of this process: then that is the
+    process, and CLAUDE_CODE_SESSION_ID the session. Both are inherited, so on their own they
+    can name another process's session: a nested `claude -p` started from the lead's Bash may
+    carry the lead's, and a tmux server started from a Claude Bash call carries ones that go
+    stale."""
     chain = ancestors()
     found = claude_ancestor(chain)
     if found is not None:
-        return found
+        pid, start, sid = found
+        return (pid, start), sid or "unknown"
     try:
         pid = int(os.environ.get("CLAUDE_PID") or "")
     except ValueError:
-        return None
-    return (pid, proc_start(pid)) if pid in chain else None
+        return None, "unknown"
+    if pid not in chain:
+        return None, "unknown"
+    return (pid, proc_start(pid)), os.environ.get("CLAUDE_CODE_SESSION_ID") or "unknown"
+
+
+def wait_session():
+    """The session a watch belongs to (claude_identity), or "unknown"."""
+    return claude_identity()[1]
+
+
+def claude_process():
+    """(pid, procStart) of the Claude Code process this command runs under (claude_identity),
+    or None."""
+    return claude_identity()[0]
 
 
 def claude_alive(w):

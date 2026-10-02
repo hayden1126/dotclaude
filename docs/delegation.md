@@ -282,11 +282,14 @@ from 60 to 5,000 requests an hour.
   says the kill and the lapse as two items.
 - **Adoption after `/clear` needs the Claude process.** A waiter and the guard each find their
   Claude process by walking up their parents, 6 levels at most, to the nearest one whose
-  `~/.claude/sessions/<pid>.json` names its pid and procStart (`claude_process`). `CLAUDE_PID`
-  counts only when the walk finds nothing and it names one of those parents, since it is
-  inherited: a nested `claude -p` started from the lead's Bash may carry the lead's, and a tmux
-  server started from a Claude Bash call carries one that goes stale. A watch made outside
-  Claude Code records no process, and a guard that finds none adopts nothing. Adoption also
+  `~/.claude/sessions/<pid>.json` names its pid and procStart (`claude_identity`). A waiter's
+  session comes from the same walk: the `sessionId` in that file. Only when the walk finds
+  nothing do the env vars count, and only when `CLAUDE_PID` names one of those parents: then it
+  is the process, and `CLAUDE_CODE_SESSION_ID` the session. Both are inherited, so on their own
+  they can name another process's session: a nested `claude -p` started from the lead's Bash
+  may carry the lead's, and a tmux server started from a Claude Bash call carries ones that go
+  stale. A watch made outside Claude Code records no process and the session `unknown`, and a
+  guard that finds no process adopts nothing. Adoption also
   rests on the sessions file naming the new session id after a `/clear`, so the old one stops
   being live (see the verified facts). Were that to change, the old session would read as live
   and nothing would be adopted: safe, but the watch would go unguarded.
@@ -549,11 +552,11 @@ fixes:
 - A self-check (`pids_visible`) covers the calls that still run inside, such as a piped one.
   `SANDBOX_RUNTIME=1`, set only inside, fails it. So does a `CLAUDE_PID` that is set but not
   alive, since the caller's own Claude process is alive by definition, unless the parent walk
-  (`claude_process`, in the known gaps) finds a live Claude process anyway: then `CLAUDE_PID`
-  was only stale, inherited from a process that has ended. When it fails, no pid check means anything, so both views print a
-  warning first and call each session `unknown` instead of gone, and `open` says `pid not
-  visible in the sandbox` for a Codex row instead of `died`. With `CLAUDE_PID` unset (tmux, a
-  plain terminal) and no `SANDBOX_RUNTIME`, the check passes.
+  (`claude_identity`, in the known gaps) finds a live Claude process anyway: then `CLAUDE_PID`
+  was only stale, inherited from a process that has ended. When it fails, no pid check means
+  anything, so both views print a warning first and call each session `unknown` instead of
+  gone, and `open` says `pid not visible in the sandbox` for a Codex row instead of `died`. With
+  `CLAUDE_PID` unset (tmux, a plain terminal) and no `SANDBOX_RUNTIME`, the check passes.
 
 A session file's `procStart` must now match the pid's start time too, so a pid the kernel reused
 for another process no longer keeps a gone session alive.
@@ -767,9 +770,10 @@ the fix is enforcement. `PLAN.md` has the design history and the options weighed
     watch is the caller's: in its session, or left by its Claude process under a session id that
     is no longer live (a rerun after `/clear`, before the guard's first stop adopts it). A codex
     condition keeps its refusal instead.
-  - It records the session and the Claude Code process its exit notifies (`claude_pid` with its
-    procStart, from the parent walk in the known gaps); a waiter outside Claude Code records
-    none, dropping the last waiter's. `/clear` keeps the process but starts a new session id,
+  - It records the Claude Code process its exit notifies (`claude_pid` with its procStart) and
+    that process's session, both from the parent walk in the known gaps. A waiter outside Claude
+    Code records no process, dropping the last waiter's, and the session `unknown`, and says the
+    guard won't see the watch. `/clear` keeps the process but starts a new session id,
     and the guard adopts the watch into the new session (below). When it ends, it records
     `reported`: true while that process runs, else false.
   - It refuses to run sandboxed, where its pids would belong to another PID namespace. It refuses

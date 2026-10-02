@@ -182,10 +182,11 @@ class FullRun(unittest.TestCase):
                         CODEX_HOME=os.path.join(t, "codex"),
                         XDG_STATE_HOME=os.path.join(t, "state"),
                         FAKE_THREAD="th-1", FAKE_ARGV_LOG=self.argv_log,
-                        CLAUDE_CODE_SESSION_ID="s1")
-        # Inside the sandbox the lead's CLAUDE_PID is inherited but invisible, and SANDBOX_RUNTIME
-        # is set, either of which would make every pid look hidden.
-        self.env.pop("CLAUDE_PID", None)
+                        CLAUDE_CODE_SESSION_ID="s1", CLAUDE_PID=str(os.getpid()))
+        # This test process stands in for the Claude process (it is each wrapper's parent, so
+        # CLAUDE_PID names an ancestor and CLAUDE_CODE_SESSION_ID is the session). The lead's
+        # inherited CLAUDE_PID is invisible inside the sandbox, and SANDBOX_RUNTIME is set
+        # there, either of which would make every pid look hidden.
         self.env.pop("SANDBOX_RUNTIME", None)
 
     def tearDown(self):
