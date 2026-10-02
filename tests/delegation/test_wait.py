@@ -480,7 +480,7 @@ class Exits(WaitEnv):
         target = self.path("out")
         open(target, "w").close()
         self.assertEqual(self.run_("--file", target).returncode, 0)
-        self.assertNotIn("reported", self.only())
+        self.assertIs(self.only()["reported"], False)
 
     def test_a_watch_records_its_claude_process(self):
         # So that process's guard adopts it after a /clear, under a new session id.

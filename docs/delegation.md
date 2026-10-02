@@ -770,8 +770,8 @@ the fix is enforcement. `PLAN.md` has the design history and the options weighed
   - It records the session and the Claude Code process its exit notifies (`claude_pid` with its
     procStart, from the parent walk in the known gaps); a waiter outside Claude Code records
     none, dropping the last waiter's. `/clear` keeps the process but starts a new session id,
-    and the guard adopts the watch into the new session (below). A waiter that ends while that
-    process runs records `reported`.
+    and the guard adopts the watch into the new session (below). When it ends, it records
+    `reported`: true while that process runs, else false.
   - It refuses to run sandboxed, where its pids would belong to another PID namespace. It refuses
     a `--pid` that is pid 1, a kernel thread, another user's, or not running. It refuses a second
     watch on a codex run, naming the existing watch's `--resume` when that watch's waiter is dead
@@ -800,9 +800,11 @@ the fix is enforcement. `PLAN.md` has the design history and the options weighed
     reach you. Re-arm it", with the `--resume` command. A dead waiter is a lapse, as above;
   - a watch of this session that ended (done, failed or stale) in the last 7 days while no Claude
     process listened blocks once, "Check the result and report it", and is recorded `reported`.
-    Nobody listened when its waiter was `waiter_unheard` or its Claude process has ended. A
-    waiter records `reported` itself when its Claude process runs as it ends, and so does the
-    guard for an end it says, so a crash after the news arrived doesn't repeat it.
+    Nobody listened when its waiter was `waiter_unheard` or its Claude process has ended, and
+    `reported` is false. A waiter records it true when its Claude process runs as it ends, and
+    so does the guard for an end it says, so a crash after the news arrived doesn't repeat it.
+    A watch with no `reported` at all ended before the field existed, and counts as reported,
+    so it never shows.
 - **The kill catch**, in the same hook. Each stop reads the transcript on from where the last one
   stopped (`kills/<session>.json` holds the offset), searching the raw bytes for
   `task-notification`. A notice with `<status>killed</status>` at the background time limit blocks

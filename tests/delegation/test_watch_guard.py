@@ -505,10 +505,10 @@ class Watches(GuardEnv):
 
     def test_a_watch_that_ended_while_nobody_listened_blocks_once(self):
         self.watch(state="done", ended=guard.iso(self.now - 3600), claude_pid=DEAD,
-                   claude_start=None, created="2026-10-02T10:00:00Z")
+                   claude_start=None, created="2026-10-02T10:00:00Z", reported=False)
         self.watch("w-2", state="stale", ended=guard.iso(self.now - 60), claude_pid=os.getpid(),
                    claude_start=dc.proc_start(os.getpid()), waiter_unheard=True,
-                   created="2026-10-02T10:00:01Z")
+                   created="2026-10-02T10:00:01Z", reported=False)
         self.lines()
         self.assertEqual(self.decide(), self.block(self.ended_reason(),
                                                    self.ended_reason("stale", "w-2")))
@@ -516,16 +516,26 @@ class Watches(GuardEnv):
         self.assertIsNone(self.decide(prompt_id="p2"))
 
     def test_an_ended_watch_someone_heard_or_could_says_nothing(self):
-        dead = {"claude_pid": DEAD, "claude_start": None}
-        self.watch("w-1", state="done", ended=guard.iso(self.now - 60), reported=True, **dead)
+        dead = {"claude_pid": DEAD, "claude_start": None, "reported": False}
+        self.watch("w-1", state="done", ended=guard.iso(self.now - 60),
+                   **dict(dead, reported=True))
         self.watch("w-2", state="failed", ended=guard.iso(self.now - 8 * 86400), **dead)
         self.watch("w-3", state="done", ended=guard.iso(self.now - 60), claude_pid=os.getpid(),
-                   claude_start=dc.proc_start(os.getpid()))  # heard, its process runs
+                   claude_start=dc.proc_start(os.getpid()), reported=False)  # its process runs
         self.watch("w-4", state="dropped", ended=guard.iso(self.now - 60), **dead)
         self.watch("w-5", sid="s-other", state="done", ended=guard.iso(self.now - 60), **dead)
-        self.watch("w-6", state="done", ended=guard.iso(self.now - 60))  # no process recorded
+        self.watch("w-6", state="done", ended=guard.iso(self.now - 60),
+                   reported=False)  # no process recorded
         self.lines()
         self.assertIsNone(self.decide())
+
+    def test_a_watch_that_ended_before_reported_existed_counts_as_reported(self):
+        # No `reported` key at all: an end recorded before this field, which it can't judge.
+        self.watch(state="done", ended=guard.iso(self.now - 60), claude_pid=DEAD,
+                   claude_start=None)
+        self.lines()
+        self.assertIsNone(self.decide())
+        self.assertNotIn("reported", self.read())
 
     def test_an_end_the_guard_says_is_recorded_reported(self):
         target = self.path("out")

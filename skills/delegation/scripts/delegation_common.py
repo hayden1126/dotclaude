@@ -663,8 +663,10 @@ def codex_stopped(e):
 #                   may be taken over, and its end is reported by the guard. Taking the watch
 #                   over clears it
 #   ended           when it left UNRESOLVED (ISO); absent until then
-#   reported        true once a live Claude Code process has heard how the watch ended: its
-#                   waiter's Claude process ran when it recorded the end, or a guard said it
+#   reported        set when the watch ends: true once a live Claude Code process has heard
+#                   how it ended (its waiter's Claude process ran when it recorded the end, or a
+#                   guard or the session-start nudge said it), else false. A watch that ended
+#                   before the field existed has none, and counts as reported
 # open is waiting; acknowledged is a lapse the guard let a stop through on; done, failed and
 # stale are how the waiter saw the condition end (it exits 0, 1, 2); dropped is `wait --drop`.
 # Every change goes through update_watch, under watches/.lock, written atomically and only when
@@ -1038,11 +1040,13 @@ def claude_gone(w):
 
 def ended_unheard(w, now=None):
     """Whether watch w ended (REPORTED_STATES) in the last PRUNE_ENDED_DAYS while no Claude Code
-    process was listening, and nobody has reported it since: it isn't `reported`, and its
-    waiter was marked waiter_unheard or the Claude process it ran under has ended. The watch
-    guard says it in that session, and the session-start nudge and the views anywhere else."""
+    process was listening, and nobody has reported it since: `reported` is false, and its
+    waiter was marked waiter_unheard or the Claude process it ran under has ended. A watch with
+    no `reported` ended before the field existed, so it counts as reported and never shows. The
+    watch guard says it in that session, and the session-start nudge and the views anywhere
+    else."""
     now = time.time() if now is None else now
-    if (w.get("state") not in REPORTED_STATES or w.get("reported")
+    if (w.get("state") not in REPORTED_STATES or w.get("reported", True)
             or not (w.get("waiter_unheard") or claude_gone(w))):
         return False
     try:
@@ -1162,11 +1166,10 @@ class Waiter:
         return update_watch(self.wid, beat)
 
     def end(self, verdict):
-        """Record how the watch ended: done, failed or stale, and that it's reported when this
-        waiter's exit notifies a live Claude process."""
+        """Record how the watch ended: done, failed or stale, and whether it's reported: true
+        when this waiter's exit notifies a live Claude process, else false."""
         def end(w):
             self.own(w)
-            w.update(state=verdict, ended=now_iso())
-            if claude_alive(w) and not w.get("waiter_unheard"):
-                w["reported"] = True
+            w.update(state=verdict, ended=now_iso(),
+                     reported=claude_alive(w) and not w.get("waiter_unheard"))
         return update_watch(self.wid, end)
