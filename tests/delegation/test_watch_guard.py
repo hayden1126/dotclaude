@@ -242,8 +242,51 @@ class Watches(GuardEnv):
         self.grow()
         self.assertIsNone(self.decide(at=self.now + 6))  # said once; the views still list it
 
+    def test_a_lapse_is_acknowledged_by_a_stop_with_another_digest(self):
+        self.watch()
+        self.lines()
+        stop = {"prompt_id": "p1", "last_assistant_message": "Waiting on the build."}
+        self.assertEqual(self.decide(**stop), self.block(self.lapse_reason()))
+        w = self.read()
+        self.assertEqual(w["blocked_stop"], guard.stop_digest(self.payload(**stop)))
+        self.assertRegex(w["blocked_stop"], r"^[0-9a-f]{16}$")
+        self.assertEqual(self.decide(at=self.now + 90, prompt_id="p1",
+                                     last_assistant_message="Still no waiter."),
+                         {"systemMessage": self.ACK})
+        self.assertEqual(self.read()["state"], "acknowledged")
+
+    def test_a_twin_guard_with_the_same_payload_doesnt_acknowledge_though_the_transcript_grew(
+            self):
+        self.watch()
+        self.lines()
+        stop = {"prompt_id": "p1", "last_assistant_message": "Waiting on the build."}
+        self.assertEqual(self.decide(**stop), self.block(self.lapse_reason()))
+        self.grow()  # a line landed between the twins
+        self.assertIsNone(self.decide(at=self.now + 1, **stop))
+        self.assertIsNone(self.decide(at=self.now + 90, **stop))  # nor does age, with a digest
+        self.assertEqual(self.read()["state"], "open")
+        self.assertEqual(self.decide(at=self.now + 91, prompt_id="p1",
+                                     last_assistant_message="Still no waiter."),
+                         {"systemMessage": self.ACK})
+
+    def test_a_new_prompt_alone_is_a_later_stop(self):
+        self.watch()
+        self.lines()
+        self.decide(prompt_id="p1", last_assistant_message="Done.")
+        self.assertEqual(self.decide(prompt_id="p2", last_assistant_message="Done."),
+                         {"systemMessage": self.ACK})
+
+    def test_a_stop_with_neither_field_falls_back_to_the_size(self):
+        self.watch()
+        self.lines()
+        self.decide(prompt_id="p1", last_assistant_message="Waiting on the build.")
+        self.assertIsNone(self.decide(at=self.now + 90))  # same size: the same stop
+        self.grow()
+        self.assertEqual(self.decide(at=self.now + 91), {"systemMessage": self.ACK})
+
     def test_a_twin_guard_in_the_same_stop_neither_blocks_nor_acknowledges(self):
-        # It sees the transcript the first guard saw, so it knows the block is this stop's.
+        # With neither prompt_id nor last_assistant_message in the payload, it sees the
+        # transcript the first guard saw, so it knows the block is this stop's.
         self.watch()
         self.lines()
         self.assertEqual(self.decide(), self.block(self.lapse_reason()))
@@ -254,9 +297,10 @@ class Watches(GuardEnv):
         self.assertEqual(self.decide(at=self.now + 31), {"systemMessage": self.ACK})
 
     def test_with_no_transcript_size_a_minute_later_is_a_later_stop(self):
-        self.watch()  # no transcript at all
+        self.watch()  # no transcript at all, and neither stop field
         self.assertEqual(self.decide(), self.block(self.lapse_reason()))
         self.assertIsNone(self.read()["blocked_size"])
+        self.assertIsNone(self.read()["blocked_stop"])
         self.assertIsNone(self.decide(at=self.now + 30))
         self.assertEqual(self.decide(at=self.now + 90), {"systemMessage": self.ACK})
 
@@ -306,6 +350,26 @@ class Watches(GuardEnv):
         self.assertIn("watch-guard: watch w-gone", self.err_log())
         self.assertIn("no longer in the ledger", self.err_log())
         self.assertIsNone(self.read("w-gone")["blocked_at"])
+
+    def test_a_watch_whose_write_fails_is_unsaid_and_the_rest_go_on(self):
+        self.watch(created="2026-10-02T10:00:00Z")
+        before = self.watch("w-2", created="2026-10-02T10:00:01Z")
+        self.lines(notice("bk1", "toolu_1", "the make", self.now - 60))
+        real = guard.dc.write_json
+
+        def write_json(path, obj):
+            if path.endswith("w-2.json"):
+                raise OSError(28, "No space left on device")
+            return real(path, obj)
+        with mock.patch.object(guard.dc, "write_json", write_json):
+            out = self.decide(prompt_id="p1", last_assistant_message="m1")
+        self.assertEqual(out, self.block(self.lapse_reason(), self.kill_reason("the make")))
+        self.assertEqual(self.read("w-2"), before)
+        self.assertIn("watch-guard: watch w-2", self.err_log())
+        self.assertIn("No space left on device", self.err_log())
+        out = self.decide(prompt_id="p1", last_assistant_message="m2")  # the next stop
+        self.assertEqual(out, dict(self.block(self.lapse_reason("w-2")),
+                                   systemMessage=self.ACK))
 
 
 class Kills(GuardEnv):
@@ -493,6 +557,30 @@ class Kills(GuardEnv):
         self.lines()
         self.decide()
         self.assertFalse(os.path.exists(stale))
+
+    def test_this_sessions_old_record_and_lock_arent_pruned(self):
+        # A session idle for a week keeps what it has seen: pruning its record would block on
+        # the same kill again.
+        self.lines(notice("bk1", "toolu_1", "seen", self.now - 60))
+        kills = os.path.join(self.state, "dotclaude", "kills")
+        os.makedirs(kills)
+        record, lock = os.path.join(kills, "s1.json"), os.path.join(kills, "s1.lock")
+        with open(record, "w") as f:
+            json.dump({"session_id": "s1", "since": iso(self.now - 600), "seen": ["bk1"],
+                       "transcript": self.transcript, "offset": 0}, f)
+        open(lock, "w").close()
+        for p in (record, lock):
+            os.utime(p, (self.now - 8 * 86400,) * 2)
+        self.assertIsNone(self.decide())
+        self.assertTrue(os.path.exists(record) and os.path.exists(lock))
+
+    def test_the_offset_is_checked_against_what_the_scan_read(self):
+        # A size read before the last lines landed doesn't drop the scan's end offset.
+        self.lines(notice("bk1", "toolu_1", "late", self.now - 60))
+        with mock.patch.object(guard, "file_size", lambda path: 10):
+            self.assertEqual(self.decide(), self.block(self.kill_reason("late")))
+        with open(os.path.join(self.state, "dotclaude", "kills", "s1.json")) as f:
+            self.assertEqual(json.load(f)["offset"], os.path.getsize(self.transcript))
 
 
 class FailsOpen(GuardEnv):

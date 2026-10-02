@@ -521,9 +521,12 @@ def codex_stopped(e):
 #   state           one of WATCH_STATES
 #   blocked_at      when the guard blocked a stop on this lapse (ISO), else null; a waiter
 #                   that takes the watch over, or polls it, clears it
+#   blocked_stop    a digest of the blocking stop's prompt_id and last_assistant_message
+#                   (null when the payload had neither): twin guards in one stop get the same
+#                   payload, a later stop doesn't
 #   blocked_size    the session transcript's size in bytes at that block (null if unknown),
-#                   set and cleared with blocked_at: a later stop has a longer transcript, a
-#                   second guard in the same stop doesn't
+#                   the fallback when there is no blocked_stop; both are set and cleared with
+#                   blocked_at
 #   session_id      a --resume moves the watch to the resuming session, unless it has none
 #   ended           when it left UNRESOLVED (ISO); absent until then
 # open is waiting; acknowledged is a lapse the guard let a stop through on; done, failed and
@@ -606,23 +609,34 @@ def read_watch(wid):
 def update_watch(wid, fn):
     """Read-modify-write a watch under watches/.lock, as update_agent_state does: fn gets the
     current dict ({} for a new watch) and changes it in place or returns a new one. The file
-    is written only when fn changed it, so a no-op keeps its mtime (the prune clock)."""
-    return update_watches({wid: fn})[wid]
+    is written only when fn changed it, so a no-op keeps its mtime (the prune clock). An error
+    from fn (a waiter's StepAside, say) or from the write is raised."""
+    out, failed = update_watches({wid: fn})
+    if failed:
+        raise failed[0][1]
+    return out[wid]
 
 
 def update_watches(fns, until=None, clock=time.monotonic):
-    """update_watch for several watches ({wid: fn}) in one hold of watches/.lock, returning
-    {wid: new}; with `until`, the lock wait is bounded (LockBusy)."""
-    out = {}
+    """update_watch for several watches ({wid: fn}) in one hold of watches/.lock. Returns
+    ({wid: new}, [(wid, exception)]): one watch's error (a bad id, a damaged file, a full disk,
+    or one fn raised) leaves that watch unwritten and the others go on. With `until`, the lock
+    wait is bounded (LockBusy)."""
+    out, failed = {}, []
     with dir_lock(watches_dir(), until, clock):
         for wid, fn in fns.items():
-            cur = read_watch(wid) or {}
-            before = copy.deepcopy(cur)
-            new = fn(cur)
-            out[wid] = new = cur if new is None else new
-            if new != before:
-                write_json(watch_path(wid), new)
-    return out
+            try:
+                cur = read_watch(wid) or {}
+                before = copy.deepcopy(cur)
+                new = fn(cur)
+                new = cur if new is None else new
+                if new != before:
+                    write_json(watch_path(wid), new)
+            except Exception as ex:  # noqa: BLE001  the caller decides; the rest go on
+                failed.append((wid, ex))
+                continue
+            out[wid] = new
+    return out, failed
 
 
 def prune_watches():

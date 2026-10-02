@@ -375,10 +375,12 @@ class Exits(WaitEnv):
     def test_resume_takes_over_and_clears_blocked_at(self):
         job = self.job()
         wid = self.lapsed(job)
-        before = self.update(wid, blocked_at=dc.now_iso())
+        before = self.update(wid, blocked_at=dc.now_iso(), blocked_stop="0123456789abcdef",
+                             blocked_size=10)
         p = self.start("--resume", wid)
         w = self.waiting(p)
         self.assertEqual((w["state"], w["blocked_at"]), ("open", None))
+        self.assertFalse({"blocked_stop", "blocked_size"} & set(w))
         self.assertEqual(w["waiter_start"], dc.proc_start(p.pid))
         for k in ("id", "session_id", "description", "condition", "created"):
             self.assertEqual(w[k], before[k], k)
@@ -413,9 +415,11 @@ class Exits(WaitEnv):
         # waiter that polls again is live, so the lapse is over.
         p = self.start("--pid", str(self.job().pid))
         wid = self.waiting(p)["id"]
-        self.update(wid, state="acknowledged", blocked_at=dc.now_iso())
-        self.until(lambda: [(w["state"], w["blocked_at"]) for w in self.all_watches()]
-                   == [("open", None)])
+        self.update(wid, state="acknowledged", blocked_at=dc.now_iso(),
+                    blocked_stop="0123456789abcdef", blocked_size=10)
+        self.until(lambda: [(w["state"], w["blocked_at"], w.get("blocked_stop"),
+                             w.get("blocked_size")) for w in self.all_watches()]
+                   == [("open", None, None, None)])
 
     def test_resume_is_refused_while_the_waiter_is_alive(self):
         first = self.start("--pid", str(self.job().pid))

@@ -1317,6 +1317,7 @@ class Waiter:
             if self.session != "unknown":
                 w["session_id"] = self.session
             w.pop("blocked_size", None)
+            w.pop("blocked_stop", None)
             w.update(waiter_pid=self.me, waiter_start=self.start, poll_s=self.poll,
                      waiter_heartbeat=dc.now_iso(), state="open", blocked_at=None)
         return dc.update_watch(self.wid, take)
@@ -1328,6 +1329,7 @@ class Waiter:
             self.own(w)
             if w.get("state") in dc.UNRESOLVED:
                 w.pop("blocked_size", None)
+                w.pop("blocked_stop", None)
                 w.update(waiter_heartbeat=dc.now_iso(), state="open", blocked_at=None)
         return dc.update_watch(self.wid, beat)
 

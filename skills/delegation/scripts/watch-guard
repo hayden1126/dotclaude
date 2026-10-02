@@ -16,10 +16,12 @@ to wake it. This hook is the enforcement:
   - a codex run with a stop row is the same, done on exit 0 and failed otherwise; one that
     ended without a stop row, or still runs, is a lapse (its finalize is still owed);
   - else it has lapsed (a failed or stale condition too: a resumed waiter reports it). A lapse
-    blocks once, recording blocked_at and the transcript's size. A later stop, whose transcript
-    has grown (or, with no size, one over 60 s later), allows, marks it acknowledged and warns
-    in a systemMessage; later stops say nothing more. A twin guard in the same stop sees the
-    same size and says nothing.
+    blocks once, recording blocked_at, a digest of the stop (its prompt_id and
+    last_assistant_message) and the transcript's size. A later stop, whose digest differs,
+    allows, marks it acknowledged and warns in a systemMessage; later stops say nothing more.
+    A twin guard in the same stop has the same digest and says nothing, even when the
+    transcript grew between them. Only a payload with neither field falls back to the size
+    (grown means later), then to age (over 60 s).
 - Kills. Each stop reads the transcript on from where the last one stopped (kills/<sid>.json
   holds the offset; a session's first scan starts 256 KB back), searching the raw bytes for
   task notifications. One whose status is killed at the background time limit blocks once per
@@ -42,6 +44,7 @@ error allows the stop.
 import collections
 import datetime
 import glob
+import hashlib
 import json
 import math
 import mmap
@@ -106,8 +109,11 @@ def iso(t):
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(t))
 
 
-def log(what):
-    checks.log_error(f"watch-guard: {what}: {traceback.format_exc(limit=3)}")
+def log(what, exc=None):
+    """Log the exception being handled, or `exc`, with a short traceback."""
+    tb = ("".join(traceback.format_exception(exc, limit=3)) if exc is not None
+          else traceback.format_exc(limit=3))
+    checks.log_error(f"watch-guard: {what}: {tb}")
 
 
 def file_size(path):
@@ -213,14 +219,17 @@ def parse_notice(line, pos):
 
 
 def scan(path, start, cut):
-    """(notices, end) for the complete lines of the transcript from byte `start` on: its kill
-    notices, one per task id with its line's offset, and the offset just past the last complete
-    line. With `cut`, start may fall inside a line, which is then skipped. It searches the raw
-    bytes and parses only the lines holding a task notification, so a long region is cheap."""
+    """(notices, end, length) for the complete lines of the transcript from byte `start` on:
+    its kill notices, one per task id with its line's offset, the offset just past the last
+    complete line, and the length it read (a line may land after decide read the size). With
+    `cut`, start may fall inside a line, which is then skipped. It searches the raw bytes and
+    parses only the lines holding a task notification, so a long region is cheap."""
     with open(path, "rb") as f:
-        if os.fstat(f.fileno()).st_size <= start:
-            return [], start
+        size = os.fstat(f.fileno()).st_size
+        if size <= start:
+            return [], start, size
         with mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ) as m:
+            length = len(m)
             begin = start
             if cut and start > 0 and m[start - 1:start] != b"\n":
                 nl = m.find(b"\n", start)
@@ -236,7 +245,7 @@ def scan(path, start, cut):
                 if n is not None and n.task not in notices:
                     notices[n.task] = n
                 hit = m.find(MARK, tail + 1, end)
-    return sorted(notices.values(), key=lambda n: n.pos), end
+    return sorted(notices.values(), key=lambda n: n.pos), end, length
 
 
 def kills_dir():
@@ -262,15 +271,16 @@ def record_offset(rec, transcript):
     return o if isinstance(o, int) and not isinstance(o, bool) and o >= 0 else None
 
 
-def prune_kills(now):
+def prune_kills(now, sid):
     """Remove records (and their locks) unwritten for KILLS_PRUNE_DAYS, orphan locks as old,
-    and temp files over a day old."""
-    old = now - KILLS_PRUNE_DAYS * 86400
+    and temp files over a day old. It runs unlocked, so it never touches this session's own
+    record or lock, which a twin guard may hold."""
+    old, own = now - KILLS_PRUNE_DAYS * 86400, {kills_path(sid), kills_path(sid, ".lock")}
     for pattern, cutoff in (("*.json", old), ("*.lock", old),
                             (".*.tmp", now - KILLS_TMP_DAYS * 86400)):
         for p in glob.glob(os.path.join(kills_dir(), pattern)):
             try:
-                if os.path.getmtime(p) >= cutoff:
+                if p in own or os.path.getmtime(p) >= cutoff:
                     continue
                 if p.endswith(".lock") and os.path.exists(p[:-5] + ".json"):
                     continue  # its session still records kills
@@ -363,8 +373,9 @@ def map_kill(n, transcript, watches, cwd, spent):
 
 def kill_pending(sid, transcript, now, spent, watches, cwd):
     """(kills, scan) read-only: the new kills from the transcript, read on from the recorded
-    offset, and {"since", "end"} for the commit. It takes notices until the budget is spent;
-    end then stops at the first one left, so the next stop reads it again."""
+    offset, and {"since", "end", "length"} for the commit, length being what the scan read.
+    It takes notices until the budget is spent; end then stops at the first one left, so the
+    next stop reads it again."""
     rec = read_kill_record(sid)
     try:
         since = dc.parse_iso(rec["since"]).timestamp()
@@ -372,13 +383,13 @@ def kill_pending(sid, transcript, now, spent, watches, cwd):
         since = now - FIRST_RUN_LOOKBACK_S
     seen = {s for s in rec.get("seen") or [] if isinstance(s, str)}
     stored, size = record_offset(rec, transcript), file_size(transcript)
-    notices, end = [], stored
+    notices, end, length = [], stored, None
     if size is not None:
         if stored is not None and stored > size:
             stored = 0  # rewritten or replaced: read it again from the top
         start, cut = ((stored, False) if stored is not None
                       else (max(0, size - TAIL_BYTES), True))
-        notices, end = scan(transcript, start, cut)
+        notices, end, length = scan(transcript, start, cut)
     kills = []
     for n in notices:
         if n.task in seen or n.ts < since:
@@ -387,14 +398,28 @@ def kill_pending(sid, transcript, now, spent, watches, cwd):
             end = n.pos
             break
         kills.append(map_kill(n, transcript, watches, cwd, spent))
-    return kills, {"since": since, "end": end}
+    return kills, {"since": since, "end": end, "length": length}
 
 
 # ---- commit ----
 
-def later_stop(cur, size, now):
-    """Whether this stop comes after the one that blocked on the watch: the transcript grew,
-    or, with no size to compare, the block is over ACK_UNKNOWN_AGE_S old."""
+def stop_digest(data):
+    """The stop's identity: sha256 (first 16 hex) of its prompt_id and last_assistant_message,
+    the same for twin guards in one stop. None when the payload has neither."""
+    parts = [data.get(k) for k in ("prompt_id", "last_assistant_message")]
+    if all(p is None for p in parts):
+        return None
+    raw = json.dumps(parts, ensure_ascii=False, default=str).encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()[:16]
+
+
+def later_stop(cur, stop, size, now):
+    """Whether this stop comes after the one that blocked on the watch: its digest differs.
+    Only when either stop's payload had neither field, the transcript grew, or, with no size
+    to compare, the block is over ACK_UNKNOWN_AGE_S old."""
+    blocked_stop = cur.get("blocked_stop")
+    if stop is not None and blocked_stop is not None:
+        return stop != blocked_stop
     blocked = cur.get("blocked_size")
     if isinstance(size, int) and isinstance(blocked, int):
         return size > blocked
@@ -404,11 +429,12 @@ def later_stop(cur, size, now):
         return True
 
 
-def commit(sid, transcript, pendings, kills, scan_out, size, now, until, clock):
+def commit(sid, transcript, pendings, kills, scan_out, stop, size, now, until, clock):
     """Record everything gathered in one pass, under kills/<sid>.lock and then watches/.lock
     (each wait bounded by `until`), and return (items, acks). Each watch is re-read under the
-    lock, so a waiter that re-armed meanwhile, or a twin guard that recorded first, wins.
-    LockBusy means nothing is recorded or said this stop."""
+    lock, so a waiter that re-armed meanwhile, or a twin guard that recorded first, wins. A
+    watch whose update fails is logged and unsaid, and comes up again next stop; the rest, and
+    the kills, go on. LockBusy means nothing is recorded or said this stop."""
     items, acks, itemized, outcomes = [], [], set(), {}
 
     def record(p):
@@ -421,16 +447,19 @@ def commit(sid, transcript, pendings, kills, scan_out, size, now, until, clock):
                 cur.update(state=p.state, ended=iso(now))
                 outcomes[wid] = "block"
             elif cur.get("blocked_at") is None:
-                cur.update(blocked_at=iso(now), blocked_size=size)
+                cur.update(blocked_at=iso(now), blocked_stop=stop, blocked_size=size)
                 outcomes[wid] = "block"
-            elif cur.get("state") == "open" and later_stop(cur, size, now):
+            elif cur.get("state") == "open" and later_stop(cur, stop, size, now):
                 cur["state"] = "acknowledged"
                 outcomes[wid] = "ack"
         return fn
 
     with dc.file_lock(kills_path(sid, ".lock"), until, clock):
         if pendings:
-            dc.update_watches({p.w["id"]: record(p) for p in pendings}, until, clock)
+            _, failed = dc.update_watches({p.w["id"]: record(p) for p in pendings}, until, clock)
+            for wid, exc in failed:
+                outcomes.pop(wid, None)
+                log(f"watch {wid}", exc)
         for p in pendings:
             outcome = outcomes.get(p.w["id"])
             if outcome == "block":
@@ -440,20 +469,22 @@ def commit(sid, transcript, pendings, kills, scan_out, size, now, until, clock):
                 acks.append(ACK_MESSAGE.format(id=p.w["id"], desc=p.w.get("description") or ""))
         if scan_out is not None:
             try:
-                items += commit_kills(sid, transcript, kills, scan_out, size, itemized)
+                items += commit_kills(sid, transcript, kills, scan_out, itemized)
             except Exception:  # noqa: BLE001  unrecorded, so unsaid; the watches stand
                 log("kills")
     return items, acks
 
 
-def commit_kills(sid, transcript, kills, scan_out, size, itemized):
+def commit_kills(sid, transcript, kills, scan_out, itemized):
     """Record the gathered kills as seen and move the offset on, and return their items. The
-    record is re-read first: a twin guard may have taken some already."""
+    record is re-read first: a twin guard may have taken some already. An offset past what the
+    scan read (a rewritten transcript) is dropped."""
     rec = read_kill_record(sid)
     seen = {s for s in rec.get("seen") or [] if isinstance(s, str)}
     taken = [k for k in kills if k.notice.task not in seen]
+    length = scan_out["length"]
     offsets = [o for o in (record_offset(rec, transcript), scan_out["end"])
-               if o is not None and (size is None or o <= size)]
+               if o is not None and (length is None or o <= length)]
     try:
         since = iso(dc.parse_iso(rec["since"]).timestamp())
     except (KeyError, TypeError, ValueError):
@@ -490,9 +521,9 @@ def decide(data, now, clock=time.monotonic):
     cwd = data.get("cwd") if isinstance(data.get("cwd"), str) else None
     transcript = data.get("transcript_path")
     transcript = transcript if isinstance(transcript, str) else None
-    size = file_size(transcript)
+    size, stop = file_size(transcript), stop_digest(data)
     try:
-        prune_kills(now)
+        prune_kills(now, sid)
     except Exception:  # noqa: BLE001
         log("prune")
     watches = [w for w in dc.all_watches() if w.get("session_id") == sid
@@ -519,7 +550,7 @@ def decide(data, now, clock=time.monotonic):
     if not pendings and scan_out is None:
         return None
     try:
-        items, acks = commit(sid, transcript, pendings, kills, scan_out, size, now,
+        items, acks = commit(sid, transcript, pendings, kills, scan_out, stop, size, now,
                              max(deadline, clock() + LOCK_GRACE_S), clock)
     except dc.LockBusy as ex:
         checks.log_error(f"watch-guard: {ex} stayed locked; nothing was taken this stop")
