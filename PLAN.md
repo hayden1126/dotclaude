@@ -282,6 +282,16 @@ settings docs say.
     until `thread.started`, so a waiter started in between sees the old stop row and exits 0
     while Codex is running.
   - **`lookup`** reuses `dc.find_codex` (from T1), not a copy of it.
+  - **Shared helpers:** the waiter's core moved into `delegation_common`, so the wrapper and
+    `wait` share it: take, beat, end, the refusals, session resolution and the re-arm line.
+  - **A `detached` row** is written at `--max-wait` with Codex's pid. Without it, a wrapper that
+    left before `thread.started` would leave no pid, and the next waiter would finalize while
+    Codex still ran.
+  - **`finalize` refuses while the wrapper is alive**, and runs under the per-run lock. If the
+    run has no thread id, it reads one from `events.jsonl`.
+  - **A wrapper run inside the sandbox records no watch**, since its pids would be from another
+    namespace. It says so on stderr.
+  - **The guard folds a killed wrapper into its run's watch**, as it does a killed waiter.
   - **`finalize` takes a per-run lock** and re-checks for a stop row inside it. Without the
     lock, two finalizes of one run can both append a stop row:
     - a waiter SIGKILLed mid-finalize leaves its finalize child running, and a later waiter
