@@ -31,11 +31,12 @@ stored here).
   CLAUDE.md trigger, `vetting-sources`, `deck-production` S1, and earlier work back to PR #10.
 
 ## In flight
-- **Delegation hardening Stage 3: A6 (monthly audit) is built, the last step.** Branch
-  `feat/a6-monthly-audit`: `delegation-ledger audit --monthly` (usage for retuning `[deadline]`
-  and `liveness.toml`), `delegation-ledger exclude` (keeps probes out of those numbers), and a
-  `due` nudge for the monthly run. Design and decisions: `~/.claude/plans/a6-jazzy-sloth.md` and
-  `docs/delegation.md` "Monthly audit (A6)". After it merges:
+- **Delegation hardening Stage 3: A6 (monthly audit), the last step, is PR #55** (range
+  `e4b790a..feat/a6-monthly-audit`; state: `gh pr view 55 --json state,mergedAt`). It adds
+  `delegation-ledger audit --monthly` (usage for retuning `[deadline]` and `liveness.toml`),
+  `delegation-ledger exclude` (keeps probes out of those numbers), and a `due` nudge for the
+  monthly run. Design and decisions: `~/.claude/plans/a6-jazzy-sloth.md` and `docs/delegation.md`
+  "Monthly audit (A6)". After it merges:
   - `git pull` in `~/dotclaude`, outside the sandbox. A6 changes no `settings.json`, so
     `setup.sh` isn't needed: the CLI and the hooks are symlinks.
   - With Hayden's go-ahead, append the legacy exclusions on HAYPC, each as a bare command:
@@ -45,10 +46,11 @@ stored here).
     `--session c9df7b29-0f66-4fc4-a932-253715942860 --name install-probe --why probe`.
     `poster-audit` stays in: it was real work.
   - Run `delegation-ledger canary --quick`, bare, so the merged code's quick tier is on record.
-  - **Retune later, not now.** From 2026-10-30, `due` asks for `audit --monthly`. Retune only the
-    groups it doesn't mark `too few to retune`. The live ledger is real work across 13 repos, not
-    harness (the harness writes to its own fixture state), but on 2026-10-01 only reviewer,
-    researcher and Explore had 20 activations.
+  - **Retune later, not now.** Once the ledger is a month old, `due` asks for `audit --monthly`
+    (the date and the first sample sizes are in that docs section). Retune only the groups it
+    doesn't mark `too few to retune`. The live ledger is real work, not harness: the harness
+    writes to its own fixture state.
+  - Then remove the worktree (`git worktree remove .claude/worktrees/a6`, outside the sandbox).
   - The "reports failing the contract: 3" in the daily audit is three known pre-fix rows from
     2026-09-30, gone from its window on 2026-10-07.
 - **Delegation hardening: what is live on HAYPC** (Stage 2, plus the Stage 3 steps under Done;
@@ -67,13 +69,13 @@ stored here).
 - **Codex setup shared with a friend** (Hayden's ask, 2026-09-29). The share page is BUILT and private:
   https://claude.ai/artifact/KWwrPkLsbMUi7Ugjfskqsz (source was a session scratchpad; republish by that
   URL). It links only four clean skills (coding-practices, research-discipline, ui-alignment,
-  vetting-sources) and tells the friend never to run `setup.sh`. It is ready to share:
-  `/codex:review` ran end to end on 2026-10-01 (a review of A2; its one finding is fixed on
-  branch `fix/deadline-allow-floor`). The first try hit OpenAI's transient "model at capacity" on
-  `gpt-5.6-sol`; a retry worked. Separate, Hayden-side: wire Codex skills into
+  vetting-sources) and tells the friend never to run `setup.sh`. It is ready to share
+  (`/codex:review` ran end to end on 2026-10-01). Separate, Hayden-side: wire Codex skills into
   `setup.sh` (today `~/.codex/skills/{coding-practices,frontend-ui-discipline}` are hand-made
   symlinks, so a fresh setup gives Codex no skills; `writing-voice` is Hayden's own voice, exclude).
-- **`deck-production` blocks S2-S6** (plan: `~/.claude/plans/explore-our-entire-workflow-bright-shamir.md`).
+- **`deck-production` blocks S2-S6** (plan: `~/.claude/plans/explore-our-entire-workflow-bright-shamir.md`,
+  missing from HAYPC's `~/.claude/plans/` on 2026-10-01; find it on the machine that wrote it, or
+  rebuild it from this block).
   S1 shipped and verified (base `8602081`); the skill has the phase model and the core loop but no
   orchestration layer, so an agent cannot yet run a deck end to end.
   - **Next concrete step: block S3, the geometry gate** (`geometry.py` + `geometry_probe.js` + a
@@ -90,6 +92,12 @@ stored here).
     The plan file owns block numbering only, and must not leak "S<n>" into shipped artifacts.
 
 ## Blocked / decisions needed
+- **Sandbox stubs slip past the managed git ignore.** `git/install-ignore.py` writes root-anchored
+  patterns (`/x`) and leaves out `.mcp.json`. So `.mcp.json` shows as untracked, and a Bash
+  command run from a subdirectory gets its own `/dev/null` mounts there (`tests/.mcp.json`,
+  `tests/delegation/.claude/*`), which `git add -A` then trips on. Workaround: `git add -u`, and
+  run Bash from the repo root. Decide: add `/.mcp.json` to the list (cheap), and whether to
+  unanchor the patterns, which would also hide real nested files with those names.
 - **Status-line widget's `ai-title` fallback is now dead.** `statusline/session-summary.py`
   (`scan_ai_title`) still falls back to Claude's `ai-title` before the first Stop summary lands, but
   the title work above suppresses `ai-title` generation, so that record is now generally never

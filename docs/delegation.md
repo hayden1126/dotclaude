@@ -41,7 +41,8 @@ Each layer covers what the others can't.
 3. **The report check** covers acceptance. It sends a malformed report from one of our roles back
    to the agent at most twice.
 4. **Observation.**
-   - The ledger records every start, stop, denial and deadline nudge.
+   - The ledger records every start, stop, denial and deadline nudge, and the exclusions that
+     keep probes out of `audit --monthly`.
    - `audit` flags a hook that stopped seeing agents, and a writer run that coincided with a
      main-checkout change.
    - `sandbox-denials` lists what the sandbox refused.
@@ -340,15 +341,15 @@ sonnet sessions a day. The checks therefore split by cost (Hayden's call, 2026-0
 | Quick canary (`canary --quick`, about 20 s, no model calls) | the unit suites; `claude sandbox status` (the sandbox on, Bash auto-allow off); the strings our hooks read (`CANARY_STRINGS`), searched in the `claude` binary | by itself, in the background, on the first session of a new version |
 | Audit (`audit`) | the enforcement audit above, over the window since the last one | by itself, once a day |
 | Full canary (`canary`) | the quick tier, then the whole live harness (`run.py --runner claude`, all stages) | a reminder, when no green run is on record or the version has moved and the last green run is 7 or more days old, and after a failed run until one passes |
-| Monthly audit (`audit --monthly`) | the audit over 30 days, plus the usage sections (A6) | a reminder, once the ledger's first row and the last monthly run are both 30 or more days old |
+| Monthly audit (`audit --monthly`) | the audit over 30 days, plus the usage sections (A6) | a reminder, once the ledger and the last monthly run are both a month old |
 | Dated items (`skills/delegation/due.toml`) | whatever the item says | a reminder from its date on, until the item is removed |
 
 **How it runs.** `hooks/delegation-due.sh` runs `delegation-ledger due --hook` at SessionStart
 (`startup` and `resume`) in about 50 ms, and fails open:
-- It reads `canary.json`, `audit.json` and `due.toml`.
+- It reads `canary.json`, `audit.json`, `due.toml` and the ledger's first row.
 - It starts the cheap checks as a detached job, so the session doesn't wait for them.
 - It prints a line only when something needs Hayden: a failed check, a due full run, unseen audit
-  warnings, or a dated item.
+  warnings, a due monthly audit, or a dated item.
 - The line goes out as `systemMessage`, which Claude Code shows to the user and the model never
   sees, so an upkeep note doesn't steer an unrelated session.
 - A headless `claude -p` session (`CLAUDE_CODE_SESSION_ATTENDED=0`) still starts the cheap checks,
@@ -642,9 +643,9 @@ hook input (an install check), and it drops out without one.
 can't run it: `delegation-ledger` is in `excludedCommands`, which the policy denies them.
 
 **After a hand-run live probe, exclude it.** The canary harness writes to its fixture's own state
-dir and never touches the live ledger, but a probe run by hand in a live session does. The first
-exclusions on HAYPC cover `policy-check`, `team-probe`, `team-probe-2`, the `install-check` Explore
-and the `install-probe` denial. `poster-audit` stays in: it was real work.
+dir and never touches the live ledger, but a probe run by hand in a live session does. The probes
+already in HAYPC's ledger from before A6 are excluded once, by hand. `poster-audit` isn't one of
+them: it was real work, so it stays in.
 
 **The enforcement checks read every row.** A probe the policy hook missed is still a miss, so the
 exclusions apply only to the usage sections. One side effect: the 30-day window shows again a
@@ -863,9 +864,9 @@ acting for Anthropic or OpenAI.
 ## Next
 
 **Stage 3 (watch) is done.** It was planned in `~/.claude/plans/lets-move-on-to-refactored-pascal.md`,
-with A6 in `~/.claude/plans/a6-jazzy-sloth.md`. What's left is data, not code: from 2026-10-30,
-`due` asks for `audit --monthly`, and its numbers decide whether A1's thresholds and A2's budgets
-move.
+with A6 in `~/.claude/plans/a6-jazzy-sloth.md`. What's left is data, not code: once the ledger
+is a month old, `due` asks for `audit --monthly` ("Monthly audit (A6)" has the date), and its
+numbers decide whether A1's thresholds and A2's budgets move.
 
 ## Tests
 
@@ -939,11 +940,17 @@ move.
     run still has 65;
   - `audit --monthly` against a copy of HAYPC's state, with the five legacy exclusions, took
     0.31 s and 39 MB: 105 agents and 114 activations over two days, transcripts read for 111;
-  - a `reviewer` pass found 7 low defects and nothing higher. All 7 are fixed, each with a test:
-    a failed Codex resume stretched the run before it, a role-less teammate escaped the
-    general-purpose share, an activation with no transcript entries read as silent throughout, a
-    damaged ledger head could silence or misfire the monthly nudge, and the transcript cache held
-    full tool output (agent transcripts from 30 days come to 1.7 GB here).
+  - a `reviewer` pass found 7 low defects and nothing higher, and all 7 are fixed:
+    - a failed Codex resume stretched the run before it;
+    - a role-less teammate escaped the general-purpose share;
+    - an activation with no transcript entries read as silent throughout;
+    - a damaged ledger head could silence the monthly nudge or fire it early;
+    - the transcript cache held full tool output (agent transcripts from 30 days come to 1.7 GB
+      here);
+    - the docs said helper agents' stops were counted, while the code skips them;
+    - the new SKILL.md bullet swallowed the `sandbox-denials` sentence.
+
+    The code fixes each came with a test.
 
 ## Installing on a machine that is already set up
 

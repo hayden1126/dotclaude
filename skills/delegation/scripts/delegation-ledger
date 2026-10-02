@@ -10,7 +10,7 @@
                                     one line per live delegation, Claude and Codex; --summary
                                     prints a token like `2▶ 1⚠` for the tmux status bar
   delegation-ledger tail [-n N]     the last N rows (including policy and spawn-guard denials,
-                                    and deadline nudges)
+                                    deadline nudges and exclusions)
   delegation-ledger audit [--hours N] [--monthly]
                                     is enforcement still binding? policy heartbeat, writers that
                                     changed the main checkout, rejected reports, denials;
@@ -25,8 +25,9 @@
                                     re-verify enforcement on this Claude Code version: the quick
                                     tier (unit tests, sandbox posture, strings in the binary),
                                     then the live harness; records the result for `due`
-  delegation-ledger due [--hook]    what is due (canary, audit, dated items in due.toml); --hook
-                                    is the SessionStart body, which also starts the cheap checks
+  delegation-ledger due [--hook]    what is due (canary, audit, the monthly audit, dated items in
+                                    due.toml); --hook is the SessionStart body, which also starts
+                                    the cheap checks
 
 The hook always exits 0, so a ledger bug can never block an agent (failing open is correct
 here, unlike the spawn guard). Its own errors go to

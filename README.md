@@ -124,8 +124,9 @@ ships but is opt-in, see its entry):
   quick canary in the background (unit tests, sandbox posture, strings in the binary; no model
   calls), and once a day it starts `audit`. It prints one line (a `systemMessage`, for you, not the
   model) only when a check failed or can't run, the daily audit warned, the full
-  `delegation-ledger canary` is due (weekly, when the version moved), or a dated item in
-  `skills/delegation/due.toml` is due. Fails open: always exits 0.
+  `delegation-ledger canary` is due (weekly, when the version moved), the monthly
+  `delegation-ledger audit --monthly` is due, or a dated item in `skills/delegation/due.toml` is
+  due. Fails open: always exits 0.
 - **PreToolUse(`*`): `subagent-policy.sh`** (in this repo). Runs only for tool calls made inside a
   subagent or teammate (the settings command exits before Python when the input has no
   `agent_id`, so the main thread is never policed). The rules live in
