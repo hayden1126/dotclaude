@@ -82,6 +82,41 @@ class Strings(unittest.TestCase):
             self.assertIn(s, names)
 
 
+class GuardShim(StateTest):
+    """check_guard_shim against a shim script written here, in the test's state dir."""
+
+    def shim(self, body):
+        path = os.path.join(self.tmp.name, "watch-guard.sh")
+        with open(path, "w") as f:
+            f.write(body)
+        return path
+
+    def test_a_clean_run_passes(self):
+        ok, detail = checks.check_guard_shim(self.shim("cat >/dev/null; exit 0\n"))
+        self.assertTrue(ok, detail)
+
+    def test_a_logged_error_fails(self):
+        err = checks.state_path("delegation-ledger.err")
+        os.makedirs(os.path.dirname(err), exist_ok=True)
+        ok, detail = checks.check_guard_shim(self.shim(
+            f"cat >/dev/null; echo 'ModuleNotFoundError: x' >>{err}; exit 0\n"))
+        self.assertFalse(ok)
+        self.assertIn("see delegation-ledger.err", detail)
+
+    def test_a_missing_shim_fails(self):
+        ok, detail = checks.check_guard_shim(os.path.join(self.tmp.name, "nope.sh"))
+        self.assertEqual((ok, detail), (False, f"{os.path.join(self.tmp.name, 'nope.sh')} is "
+                                               "missing"))
+
+    def test_the_real_shim_runs_clean_against_this_checkout(self):
+        home = os.path.join(self.tmp.name, "home")
+        os.makedirs(os.path.join(home, ".claude", "skills", "delegation"))
+        os.symlink(SCRIPTS, os.path.join(home, ".claude", "skills", "delegation", "scripts"))
+        with mock.patch.dict(os.environ, {"HOME": home}):
+            ok, detail = checks.check_guard_shim(os.path.join(HOOKS, "watch-guard.sh"))
+        self.assertTrue(ok, detail)
+
+
 class FakeClaude(unittest.TestCase):
     """A fake `claude` on PATH that answers --version and `sandbox status`."""
 
@@ -149,12 +184,14 @@ class Canary(StateTest):
     def setUp(self):
         super().setUp()
         os.environ.pop("SANDBOX_RUNTIME", None)  # restored by StateTest's patch.dict
-        for name in ("cc_version", "check_units", "check_posture", "check_strings", "run_live"):
+        for name in ("cc_version", "check_units", "check_posture", "check_strings",
+                     "check_guard_shim", "run_live"):
             self.addCleanup(setattr, checks, name, getattr(checks, name))
         checks.cc_version = lambda timeout=10: "2.1.300"
         checks.check_units = lambda: (True, "units stub")
         checks.check_posture = lambda: (True, "posture stub")
         checks.check_strings = lambda: (True, "strings stub")
+        checks.check_guard_shim = lambda: (True, "guard stub")
         checks.run_live = lambda log: self.fail("the live tier ran without a stub")
         self.out = []
 

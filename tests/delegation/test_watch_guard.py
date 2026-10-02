@@ -739,11 +739,19 @@ class FailsOpen(GuardEnv):
         self.assertEqual(self.run_hook(self.payload(background_tasks=tasks), cmd=["bash", SHIM],
                                        env=self.shim_home()), self.block(self.lapse_reason()))
 
-    def test_the_shim_exits_0_when_the_script_is_missing(self):
+    def test_the_shim_exits_0_when_the_script_is_missing_and_logs_why(self):
         with tempfile.TemporaryDirectory() as home:
             p = subprocess.run(["bash", SHIM], input=json.dumps(self.payload()),
                                capture_output=True, text=True, env=dict(os.environ, HOME=home))
         self.assertEqual((p.returncode, p.stdout), (0, ""))
+        self.assertIn("No such file or directory", self.err_log())
+
+    def test_the_shim_still_runs_the_guard_when_its_log_cant_be_written(self):
+        self.watch()
+        env = dict(self.shim_home(), XDG_STATE_HOME=self.state)
+        os.makedirs(os.path.join(self.state, "dotclaude", "delegation-ledger.err"))  # a dir
+        self.assertEqual(self.run_hook(self.payload(), cmd=["bash", SHIM], env=env),
+                         self.block(self.lapse_reason()))
 
 
 if __name__ == "__main__":

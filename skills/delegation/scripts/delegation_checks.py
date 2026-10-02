@@ -256,10 +256,42 @@ def check_strings(path=None, strings=CANARY_STRINGS):
     return True, f"all {len(strings)} strings present in {path}"
 
 
+GUARD_SHIM = os.path.expanduser("~/.claude/hooks/watch-guard.sh")
+NOOP_STOP = '{"hook_event_name": "Stop", "stop_hook_active": false}'  # no session: nothing to do
+
+
+def check_guard_shim(shim=None):
+    """The installed watch-guard shim runs clean: a main-thread Stop payload with no session id
+    (the guard does nothing for it) exits 0, prints nothing, and adds nothing to
+    delegation-ledger.err, where the shim sends Python's stderr. That proves the link and the
+    import, which would otherwise fail silently."""
+    shim = shim or GUARD_SHIM
+    if not os.path.exists(shim):
+        return False, f"{shim} is missing"
+    err = state_path("delegation-ledger.err")
+
+    def size():
+        try:
+            return os.path.getsize(err)
+        except OSError:
+            return 0
+    before = size()
+    try:
+        p = subprocess.run(["bash", shim], input=NOOP_STOP, capture_output=True, text=True,
+                           timeout=10)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return False, f"{shim} didn't run ({type(e).__name__}: {e})"
+    grew = size() - before
+    if p.returncode or p.stdout.strip() or grew > 0:
+        return False, (f"{shim} exited {p.returncode}, printed {len(p.stdout.strip())} chars "
+                       f"and logged {max(grew, 0)} bytes; see delegation-ledger.err")
+    return True, f"{shim} ran clean"
+
+
 def run_quick(version):
     results = []
     for name, fn in (("units", check_units), ("posture", check_posture),
-                     ("strings", check_strings)):
+                     ("strings", check_strings), ("guard", check_guard_shim)):
         try:
             ok, detail = fn()
         except Exception as e:  # noqa: BLE001  a crashed check is a failed check
