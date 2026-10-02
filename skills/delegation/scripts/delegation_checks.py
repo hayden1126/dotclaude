@@ -498,8 +498,10 @@ def evaluate(version, canary_st, audit_st, due_st, items, now=None, today=None,
                            and _age(green.get("ts"), now) >= FULL_EVERY_DAYS * 86400):
             last = (f"last green: {green.get('version')} on {str(green.get('ts'))[:10]}"
                     if green else "none on record")
-            nudges.append(f"the full canary is due for Claude Code {version} ({last}). Run "
-                          "`delegation-ledger canary` outside the sandbox and in the "
+            # The re-arm across turns can't run under claude -p, so the upgrade asks for it too.
+            nudges.append(f"the full canary is due for Claude Code {version} ({last}), and so "
+                          "is the manual watch-guard re-arm check (docs/delegation.md, Long "
+                          "waits). Run `delegation-ledger canary` outside the sandbox and in the "
                           f"background: {FULL_COST}.")
     if _age(audit_st.get("ts"), now) >= AUDIT_EVERY_HOURS * 3600 and may_launch:
         jobs.append("audit")
