@@ -22,8 +22,10 @@ set -uo pipefail
 
 input=$(cat 2>/dev/null)
 
-generate() {
-  python3 - "$1" <<'PY'
+# The script goes to python3 as -c and the event on stdin: passed as one argv string, an event
+# over 128 KiB (a long last_assistant_message) would fail the exec and skip the summary. -I
+# keeps the current directory off sys.path, so a project's own json.py can't run here.
+IFS= read -r -d '' src <<'PY'
 import sys, os, json, re, urllib.request, urllib.error
 
 # ---- tunables -------------------------------------------------------------
@@ -42,7 +44,9 @@ def die():
     sys.exit(0)
 
 try:
-    data = json.loads(sys.argv[1]) if len(sys.argv) > 1 and sys.argv[1] else {}
+    data = json.loads(sys.stdin.read() or "{}")
+    if not isinstance(data, dict):
+        die()
 except Exception:
     die()
 
@@ -94,6 +98,25 @@ try:
 except OSError:
     pass
 
+# Injected content (a background task's notice, another agent's message, a slash command's
+# echo, a skill body) is stored as a user entry too, but the user didn't say it: leave it out,
+# so it neither takes a RECENT_MSGS slot nor gets summarized as the user's request. isMeta always
+# drops it; otherwise origin.kind decides when present ("human" for a typed prompt, "peer" or
+# "task-notification" otherwise), and the markers only for an entry without one. Keep INJECTED
+# in sync with handoff-reminder.sh's rule 1 (tests/setup/test_hook_payloads.py checks).
+INJECTED = ("[system notification", "not user input", "<task-notification", "<system-reminder",
+            "</system-reminder", "automated background-task", "hook success", "<command-name>",
+            "<command-message>", "<local-command", "<agent-message", "[subagent hand-back]",
+            "<cross-session-message", "<teammate-message")
+
+def injected(o, text):
+    if o.get("isMeta"):
+        return True
+    kind = (o.get("origin") or {}).get("kind")
+    if kind is not None:
+        return kind != "human"
+    return any(m in text.lower() for m in INJECTED)
+
 def recent_dialogue(path, chunk=131072):
     """Last RECENT_MSGS user/assistant text messages from the transcript tail."""
     try:
@@ -120,6 +143,8 @@ def recent_dialogue(path, chunk=131072):
             text = " ".join(b["text"] for b in content
                             if isinstance(b, dict) and b.get("type") == "text" and b.get("text"))
         text = " ".join(text.split())
+        if o["type"] == "user" and injected(o, text):
+            continue
         if text:
             msgs.append((o["type"], text[:MSG_CLIP]))
     msgs = msgs[-RECENT_MSGS:]
@@ -243,7 +268,7 @@ try:
 except OSError:
     die()
 PY
-}
+generate() { printf '%s' "$1" | python3 -I -c "$src"; }
 
 # Detach fully so Stop returns immediately; orphan the job via ( ... & ).
 ( generate "$input" >/dev/null 2>&1 & )

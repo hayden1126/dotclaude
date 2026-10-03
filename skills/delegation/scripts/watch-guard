@@ -129,7 +129,7 @@ DETACHED_SLACK_S = 600  # a detached waiter that ran this close to its max reach
 CODEX_UNSTARTED = ("Watch {id} ({desc}): codex run {run} never started, since its wrapper "
                    "stopped before Codex did, so the watch is recorded failed. To retry, "
                    "{restart}, with run_in_background and timeout 7200000.")
-MET_REASON = ("Watch {id} ({desc}): {cond} is met, but its waiter had stopped, so no "
+MET_REASON = ("Watch {id} ({desc}): \"{cond}\" is met, but its waiter had stopped, so no "
               "notification came. Check the result and report it.")
 JOB_ENDED = ("Watch {id} ({desc}) ended {state}: {why}. Its waiter had stopped, so no "
              "notification came. Check the result and report it.")
@@ -247,7 +247,7 @@ def watch_pending(w, shells, now):
     desc = w.get("description") or ""
     met = MET_REASON.format(id=wid, desc=desc, cond=dc.condition_text(cond))
     lapsed = WATCH_REASON.format(id=wid, desc=desc,
-                                 unmet=f"{dc.condition_text(cond)} is unmet")
+                                 unmet=f'"{dc.condition_text(cond)}" is unmet')
     if "codex" in cond:
         run = cond["codex"]
         try:
@@ -269,7 +269,8 @@ def watch_pending(w, shells, now):
     cursor = log_tail_cursor(cond) if cond.get("log") else None
     # Final, so a last line with no newline yet is never matched here (unfinished says it).
     verdict, why = dc.watch_verdict(w, cursor, now, settle=False)
-    looks = f"{why} is met" if verdict == "done" else f"{why} is unmet" if not verdict else why
+    # A condition is a clause ("pid 12 exits"): quoted, it reads as the subject of "is met".
+    looks = f'"{why}" is met' if verdict == "done" else f'"{why}" is unmet' if not verdict else why
     lines = unseen(verdict, cond, cursor)
     if lines:
         return Pending("ended", w, UNCERTAIN.format(

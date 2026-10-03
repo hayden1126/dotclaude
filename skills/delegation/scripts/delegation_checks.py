@@ -98,6 +98,14 @@ CANARY_STRINGS = [
      "CLAUDE_PID is the Claude process the walk found, or no process was found and CLAUDE_PID "
      "is an ancestor"),
     ("CLAUDE_PID", "delegation_common.claude_identity (the env or the file) and pids_visible"),
+    # Injected content arrives as a UserPromptSubmit prompt. A renamed marker makes these hooks
+    # take a subagent's report or a task notice for the user's own words again.
+    *[(s, "INJECTED in handoff-reminder, session-title, session-summary: injected content")
+      for s in ("[SYSTEM NOTIFICATION", "NOT USER INPUT", "<task-notification", "<system-reminder",
+                "</system-reminder", "automated background-task", "hook success", "<command-name>",
+                "<command-message>", "<local-command", "<agent-message", "[Subagent hand-back]",
+                "<cross-session-message", "<teammate-message")],
+    ("isMeta", "session-summary injected(): a skill body or agent message in the transcript"),
 ]
 
 

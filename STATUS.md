@@ -11,6 +11,9 @@ Base: `main`. For branch / PR / push state, run `gh pr list` and `git log main..
 stored here).
 
 ## Done (recent; git, the linked plans and memory hold the detail)
+- **The watch guard (background waits), merged in PR #62 and installed on HAYPC** (2026-10-02 to
+  10-03). The behavior is in `docs/delegation.md` "Long waits", its open checks in that doc's
+  "Next", and the decisions in `PLAN.md` (now history).
 - **Delegation hardening Stage 3, complete and live on HAYPC** (2026-09-30 to 10-01, PRs #42 to
   #55). `docs/delegation.md` "Stage 3" holds the findings, the decisions and the test counts.
 - Older: `git log` and the PRs back to #10 hold it (#56 was small fixes), and memory holds the
@@ -33,28 +36,19 @@ stored here).
     - decide on the Codex model names.
 
     The aborted-first-launch beat is deferred.
-  - **Sources and privacy:**
-    - `~/scratch/delegation-writeup/SHAPE.md` (private, never in git) cites every number and
-      holds the diagram spec (§8); [[svg-to-png-headless-render]] covers rendering it;
-    - never publish raw transcripts or the eval data;
-    - the `.zshrc`, `.zshenv` and `.mcp.json` backups beside SHAPE.md stay unread.
-- **The watch guard (background waits): built and installed on HAYPC, not yet pushed.**
-  - **Where:** branch `feat/watch-guard` (merge-base `5f965ba`; derive its state with
-    `git log main..feat/watch-guard` and `gh pr list`).
-    - The decisions are in `PLAN.md`, now history.
-    - The behavior is in `docs/delegation.md` "Long waits".
-    - Its open checks are in that doc's "Next".
-  - **Next step:** Hayden approves the push. Then `git push -u origin feat/watch-guard` and
-    `gh pr create`, the latter with the sandbox off (a multi-line body isn't a bare command).
-  - **After the merge:**
-    - ask before removing the worktrees `.claude/worktrees/agent-a2d2c1a84ebc99719` and
-      `agent-a12852ea4e431c3d2` (outside the sandbox);
-    - fast-lane fix `hooks/handoff-reminder.sh`, which fires on subagent reports: rule 3 matches
-      `/clear` in a prompt of any length, and rule 1 doesn't skip `<agent-message`.
-  - **An unnamed flaky test** erred twice under load on 2026-10-03, and didn't reproduce in 9
-    runs. If it recurs, run with `-v` and name it.
-- **Delegation hardening: what is live on HAYPC** (Stage 2, plus the Stage 3 steps under Done;
-  `docs/delegation.md`;
+  - **Sources and privacy:** `~/scratch/delegation-writeup/SHAPE.md` (private, never in git) cites
+    every number and holds the diagram spec (§8; [[svg-to-png-headless-render]]). Never publish
+    raw transcripts or the eval data; the `.zshrc`, `.zshenv` and `.mcp.json` backups beside
+    SHAPE.md stay unread.
+- **Hook payload sweep, on branch `fix/handoff-reminder-subagents`** (base `main` at `4b3d0c4`;
+  `gh pr list --head fix/handoff-reminder-subagents`). Commit messages hold the why, README's hook
+  entries the behavior, `tests/setup/` the cases. **Next:** Hayden merges; nothing to install,
+  since the hooks are symlinked (already live while this branch is checked out; switching to
+  `main` first reverts them). After any change to handoff-reminder, run
+  `python3 tests/setup/replay_history.py` and read every disagreement and near-miss (main thread
+  only: the history holds private names). Accepted: "I think we should wrap up" doesn't fire;
+  "handoff then commit hooks run twice" does.
+- **Delegation hardening: what is live on HAYPC** (Stage 2 and 3, `docs/delegation.md`;
   `skills/delegation/SKILL.md` is the operating guide). Open items:
   - **Retune later, not now.** When `due` asks for `audit --monthly` (the date and the first
     sample sizes are in `docs/delegation.md` "Monthly audit (A6)"), retune `[deadline]` and
@@ -64,8 +58,8 @@ stored here).
     2026-09-30, gone from its window on 2026-10-07.
   - **Other machines:** `git pull` in `~/dotclaude`, then `./setup.sh`, both outside the sandbox
     (A4 and A3 changed `settings.json`, A2 adds a PostToolUse hook to it, and `setup.sh` now links
-    Codex's skills). Once merged, the watch guard adds a Stop hook and a baseline `permissions`
-    object, which replaces a live one, so personal allow rules go in `settings.machine.json`.
+    Codex's skills). The watch guard adds a Stop hook and a baseline `permissions` object, which
+    replaces a live one, so personal allow rules go in `settings.machine.json`.
     - A baseline key still wins over the live file's value, so copy `~/.claude/settings.json`
       first and diff it after.
     - Without a `settings.machine.json` overlay, install by hand per the docs' install order:
@@ -104,7 +98,8 @@ stored here).
   (`tests/delegation/run.py --runner claude`, which spends model calls), and records the result. Run
   it outside the sandbox, in the background, after changing a role, a hook or `codex-delegate`;
   after an upgrade, the session-start line says when. Counts and results live in
-  `docs/delegation.md`, "Tests".
+  `docs/delegation.md`, "Tests". An unnamed delegation test erred twice under load on 2026-10-03
+  and didn't reproduce in 9 runs: if it recurs, run with `-v` and name it.
 - **Verify `deck-production` before touching it:** run `deckkit regress` as the README in the
   private client repo's `decks/_parity/` shows; it must print `parity: green`. `--config` and
   `--goldens` are required, because no fixtures ship in this public repo. It runs read-only and asserts
@@ -118,9 +113,8 @@ stored here).
   tooling yet reads a slide and decides whether a number is a forward target, so the default `false`
   means "nobody has said", not "no targets". Revisit when the storyboard MUST/NEVER grammar is enforced
   in S3.
-- research-sourcing follow-ups (all optional): the thorough-tier planted-fabrication spot-check is
-  specified but never exercised end to end; only tested with Agent-tool subagents, not a real
-  Workflow-tool run.
+- research-sourcing (optional): the thorough-tier planted-fabrication spot-check was never run end
+  to end, and only Agent-tool subagents were tested, not a real Workflow run.
 - Deferred handoff work (the PreCompact/Stop safety net, the loop-engineering handoff) is in
   [[dotclaude-handoff-skill]].
 - Evaluated and SKIPPED, do not re-raise: (a) wiring `handoff-reminder.sh` into the loop-engineering

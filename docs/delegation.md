@@ -403,12 +403,6 @@ from 60 to 5,000 requests an hour.
   session id. That isn't verified here; the manual re-arm check in `due.toml` asks for it. With a
   new id, nothing blocks, but the session-start line shows the watch instead: an unresolved one
   as nobody's, and one whose waiter ended meanwhile as an end nobody heard, once.
-- **The guard's ack rests on Claude Code's docs.** That a Stop hook's `systemMessage` is shown
-  to the user comes from Claude Code's hooks docs, and it is unprobed: only SessionStart's was
-  probed (the verified facts, "SessionStart output"). Everything Hayden hears from the guard
-  rests on it: the ack of a lapse, and the note that a detached waiter started. Were it not
-  shown, an acknowledged lapse would reach Hayden only through the session-start nudge, and
-  the model only through the detached waiter's end or the guard's later blocks.
 - **The re-arm across turns isn't in the live harness.** `claude -p` kills background shells
   about 5 s after its final result, so no waiter outlives a `-p` turn. A dated item in `due.toml`
   asks for the check by hand in an interactive session.
@@ -1172,9 +1166,9 @@ Its once-per-item rules:
 **Who hears a watch.** The rule is redundancy over silence: every lapse and every end reaches
 the model or Hayden at least once, and a duplicate notice is cheap. The model hears a waiter's
 exit notice (a background command that ends starts a turn) and the guard's blocks. Hayden hears
-the guard's ack (its Stop `systemMessage`, which Claude Code's docs say is shown to the user;
-unprobed, see the known gap "The guard's ack rests on Claude Code's docs") and the
-session-start nudge (`due --hook`'s `systemMessage`, at `startup` and `resume`). "Its Claude
+the guard's ack (its Stop `systemMessage`) and the session-start nudge (`due --hook`'s
+`systemMessage`, at `startup` and `resume`). Hayden also sees every block the guard makes, so
+a block in "The model hears" reaches both (the verified facts, "Stop output"). "Its Claude
 process" is the one the watch was recorded under (`claude_pid`).
 
 | Situation | The model hears | Hayden hears | Code path |
@@ -1332,6 +1326,10 @@ wins.
   `claude -p` too (`source: "startup"`), and there the hook's environment has
   `CLAUDE_CODE_ENTRYPOINT=sdk-cli` and `CLAUDE_CODE_SESSION_ATTENDED=0`, against `cli` and `1` in
   an interactive session.
+- **Stop output** (interactive probe, 2.1.286, 2026-10-03): a Stop hook's `systemMessage` shows
+  on screen under the last assistant message as `Stop says: <text>`. A block shows on screen
+  too, as `Ran N stop hooks` over `Stop hook error: <reason>`, and the reason reaches the model
+  as `Stop hook feedback`. So both the guard's ack and its blocks reach Hayden.
 - **meta.json timing:** a plain subagent's meta.json doesn't exist yet at SubagentStart; it does by
   SubagentStop. A named plain subagent's meta.json carries `name`.
 - **A doubled SubagentStop:** in auto mode, an agent that ends with plain text stops, then Claude
@@ -1487,9 +1485,9 @@ numbers decide whether A1's thresholds and A2's budgets move.
 2026-11-02: the live re-arm across turns (with whether `claude --continue` keeps the session id)
 and the Codex kill probe. The open assumptions are in the known gaps: that `--continue` keeps
 the session id ("A crash, then `claude --continue`, rests on the session id"), a hook's
-`CLAUDE_PID` ("A hook's `CLAUDE_PID` isn't verified"), a waiter's exit notice across a `/clear`
-("A waiter's exit across a `/clear` or an in-process `/resume` is assumed to reach the model"),
-and the Stop `systemMessage` ( + GAP_TITLE + ).
+`CLAUDE_PID` ("A hook's `CLAUDE_PID` isn't verified"), and a waiter's exit notice across a
+`/clear` ("A waiter's exit across a `/clear` or an in-process `/resume` is assumed to reach the
+model").
 
 ## Tests
 
@@ -1575,8 +1573,8 @@ and the Stop `systemMessage` ( + GAP_TITLE + ).
 
     The code fixes each came with a test.
 - **Results on 2026-10-02 (the watch guard, T1 to T6):**
-  - unit: 604 tests in `tests/delegation`, plus 21 in `tests/setup`, as of 2026-10-03 (run the
-    suites for per-file counts; they drifted within a day). The new files are `test_wait.py`
+  - unit: 604 tests in `tests/delegation`, plus 21 in `tests/setup`, at the watch guard's merge
+    (PR #62; run the suites for current counts, which drift within a day). The new files are `test_wait.py`
     (the waiter) and `test_watch_guard.py` (the guard and the kill catch); `test_codex_delegate.py`
     covers the wrapper's watch, and `test_checks.py` the watch nudges, the guard's canary strings
     and the shim check. A sandboxed run from a worktree runs 535 of them; the 69 policy tests

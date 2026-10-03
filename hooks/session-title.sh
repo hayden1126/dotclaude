@@ -30,9 +30,10 @@
 # only the transcript TAIL for the DEDUP check, so cost is flat on any transcript size.
 set -uo pipefail
 
-input=$(cat 2>/dev/null)
-
-python3 - "$input" <<'PY' 2>/dev/null || exit 0
+# The script goes to python3 as -c and the event on stdin: passed as one argv string, an event
+# over 128 KiB (a big paste) would fail the exec and silently skip the hook. -I keeps the
+# current directory off sys.path, so a project's own json.py can't run here.
+IFS= read -r -d '' src <<'PY'
 import sys, os, json
 
 # ---- tunables -------------------------------------------------------------
@@ -52,13 +53,31 @@ def fail_open():
     sys.exit(0)  # exit 0, no stdout
 
 try:
-    data = json.loads(sys.argv[1]) if len(sys.argv) > 1 and sys.argv[1] else {}
+    raw = sys.stdin.read()
+    data = json.loads(raw) if raw.strip() else {}
+    if not isinstance(data, dict):
+        fail_open()
 except Exception:
     fail_open()
+
+if data.get("agent_id"):
+    fail_open()  # a subagent's or teammate's prompt never retitles the lead's tab
 
 cwd        = (data.get("cwd") or "").strip()
 transcript = (data.get("transcript_path") or "").strip()
 prompt     = data.get("prompt") or ""
+if not isinstance(prompt, str):
+    prompt = ""
+
+# Injected content (a background task's notice, another agent's message, a slash command's
+# echo) arrives as the prompt too, but it isn't the user's: leave the title as it stands. Keep
+# in sync with handoff-reminder.sh's rule 1 (tests/setup/test_hook_payloads.py checks).
+INJECTED = ("[system notification", "not user input", "<task-notification", "<system-reminder",
+            "</system-reminder", "automated background-task", "hook success", "<command-name>",
+            "<command-message>", "<local-command", "<agent-message", "[subagent hand-back]",
+            "<cross-session-message", "<teammate-message")
+if any(m in prompt.lower() for m in INJECTED):
+    fail_open()
 
 def find_repo_root(start):
     """(root, is_git). Walk up for a .git entry; dir=repo, file=worktree/submodule."""
@@ -208,3 +227,4 @@ sys.stdout.write(json.dumps(
     ensure_ascii=False,
 ))
 PY
+python3 -I -c "$src" 2>/dev/null || exit 0

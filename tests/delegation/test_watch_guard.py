@@ -163,7 +163,7 @@ class GuardEnv(unittest.TestCase):
 
     def met_reason(self, wid="w-1", desc="the build", cond=None):
         cond = cond or f"{self.path('never')} exists"
-        return (f"Watch {wid} ({desc}): {cond} is met, but its waiter had stopped, so no "
+        return (f"Watch {wid} ({desc}): \"{cond}\" is met, but its waiter had stopped, so no "
                 "notification came. Check the result and report it.")
 
     def err_log(self):
@@ -175,7 +175,7 @@ class GuardEnv(unittest.TestCase):
 
     def lapse_reason(self, wid="w-1", desc="the build", cond=None):
         cond = cond or f"{self.path('never')} exists"
-        unmet = f"{cond} is unmet"
+        unmet = f'"{cond}" is unmet'
         return (f"Watch {wid} ({desc}) has no live waiter and {unmet}. If a command was stopped "
                 "at its time limit, don't re-run it. Re-arm the watch: delegation-ledger wait "
                 f"--resume {wid}, with run_in_background and timeout 7200000. To stop watching "
@@ -269,7 +269,7 @@ class Watches(GuardEnv):
                    cond={"log": log, "done": "^OK$", "stale_min": 1})
         self.lines()
         self.assertEqual(self.decide(), self.block(
-            f"Watch w-1 (the build) ended failed: pid {DEAD} (sleep) exited, but {never} exists "
+            f"Watch w-1 (the build) ended failed: pid {DEAD} (sleep) exited, but \"{never} exists\" "
             "is unmet. Its waiter had stopped, so no notification came. Check the result and "
             "report it.",
             f"Watch w-2 (the build) ended stale: {log} unchanged for 1 min. Its waiter had "
@@ -464,7 +464,7 @@ class Watches(GuardEnv):
                    cond={"pids": [{"pid": DEAD, "start": None, "comm": "make"}], "log": log,
                          "done": "^OK$"})
         self.assert_said_once(self.uncertain_reason(
-            "failed", f"pid {DEAD} (make) exited, but {log} has a line matching /^OK$/ is unmet",
+            "failed", f"pid {DEAD} (make) exited, but \"{log} has a line matching /^OK$/\" is unmet",
             "/^OK$/", log), "acknowledged")
 
     def test_an_acknowledged_log_that_goes_stale_with_its_log_cut_blocks_once_as_uncertain(self):
@@ -502,7 +502,7 @@ class Watches(GuardEnv):
         self.watch(cond=cond)
         self.lines()
         self.assertEqual(self.decide(prompt_id="p1"), self.block(self.uncertain_reason(
-            "done", f"{dc.condition_text(cond)} is met", "/^Traceback/", log)))
+            "done", f'"{dc.condition_text(cond)}" is met', "/^Traceback/", log)))
         # Acknowledged, it gets a detached waiter, which reads the whole log and decides.
         self.assertEqual(self.decide(prompt_id="p2"), {"systemMessage": self.ACK})
         self.assertEqual(self.spawned, ["w-1"])
@@ -521,8 +521,8 @@ class Watches(GuardEnv):
                    created="2026-10-02T10:00:01Z")
         self.lines()
         self.assertEqual(self.decide(), self.block(
-            self.uncertain_reason("done", f"pid {DEAD} (make) exits is met", "/^ERROR$/", log),
-            self.uncertain_reason("done", f"{made} exists is met", "/^ERROR$/", log,
+            self.uncertain_reason("done", f'"pid {DEAD} (make) exits" is met', "/^ERROR$/", log),
+            self.uncertain_reason("done", f'"{made} exists" is met', "/^ERROR$/", log,
                                   wid="w-2")))
 
     def test_a_rearm_clears_the_uncertain_block(self):
@@ -532,7 +532,7 @@ class Watches(GuardEnv):
                          "done": "^OK$"})
         self.lines()
         reason = self.uncertain_reason(
-            "failed", f"pid {DEAD} (make) exited, but {log} has a line matching /^OK$/ is unmet",
+            "failed", f"pid {DEAD} (make) exited, but \"{log} has a line matching /^OK$/\" is unmet",
             "/^OK$/", log)
         self.assertEqual(self.decide(prompt_id="p1"), self.block(reason))
         dc.update_watch("w-1", dc.unblock)  # what take() and beat() do
@@ -576,8 +576,8 @@ class Watches(GuardEnv):
         self.assertEqual(self.decide(), self.block(
             f"Watch w-1 (the build) ended failed: {log} has a line matching /^ERROR$/. Its "
             "waiter had stopped, so no notification came. Check the result and report it.",
-            f"Watch w-2 (the build) ended failed: pid {DEAD} (make) exited, but {short} has a "
-            "line matching /^OK$/ is unmet. Its waiter had stopped, so no notification came. "
+            f"Watch w-2 (the build) ended failed: pid {DEAD} (make) exited, but \"{short} has a "
+            "line matching /^OK$/\" is unmet. Its waiter had stopped, so no notification came. "
             "Check the result and report it."))
         self.assertEqual([self.read(w)["state"] for w in ("w-1", "w-2")], ["failed", "failed"])
 
@@ -612,7 +612,7 @@ class Watches(GuardEnv):
                     f.write(text)
                 self.watch(cond=cond)
                 self.assertEqual(self.decide(prompt_id="p1"), self.block(
-                    f"Watch w-1 (the build) looks unmet ({log} has a line matching /^OK$/ is "
+                    f"Watch w-1 (the build) looks unmet (\"{log} has a line matching /^OK$/\" is "
                     f"unmet). But {log}'s last line has no newline yet and matches {lines}, and "
                     "it may be the start of a longer line, so the guard can't tell. Re-arm the "
                     "watch and its waiter reads that line once it settles and reports the "
@@ -1474,7 +1474,7 @@ class DetachedWaiters(GuardEnv):
                    detached_at=dc.now_iso(), end_error=why)
         self.assertEqual(self.decide(prompt_id="p1"), self.block(
             self.failed_reason(why) + " "
-            f"Watch w-1 (the build) looks unmet ({log} has a line matching /^OK$/ is unmet). "
+            f"Watch w-1 (the build) looks unmet (\"{log} has a line matching /^OK$/\" is unmet). "
             f"But {log}'s last line has no newline yet and matches /FAILED/, and it may be the "
             "start of a longer line, so the guard can't tell. Re-arm the watch and its waiter "
             "reads that line once it settles and reports the outcome: delegation-ledger wait "

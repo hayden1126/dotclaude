@@ -3,10 +3,12 @@
 The units step and the live tier are replaced in every test, so nothing here recurses into the
 suite or launches `claude -p`; a fake `claude` on PATH stands in for the binary. Every test also
 runs with DELEGATION_CHECKS_CHILD set, so even a missed stub can't start a background job."""
+import ast
 import datetime
 import fcntl
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -81,6 +83,16 @@ class Strings(unittest.TestCase):
                   "tool-use-id", "background_tasks", "prompt_id", "CLAUDE_CODE_SESSION_ID",
                   "CLAUDE_PID"):
             self.assertIn(s, names)
+
+    def test_every_injected_content_marker_is_checked(self):
+        # The hooks keep their markers lowercase; the binary has them in their own case.
+        names = {s.lower() for s, _ in checks.CANARY_STRINGS}
+        for hook in ("handoff-reminder.sh", "session-title.sh", "session-summary.sh"):
+            with open(os.path.join(HOOKS, hook)) as f:
+                body = re.search(r"^INJECTED = (\(.*?\))$", f.read(), re.S | re.M).group(1)
+            for marker in ast.literal_eval(body):
+                with self.subTest(hook=hook, marker=marker):
+                    self.assertIn(marker, names)
 
 
 class GuardShim(StateTest):

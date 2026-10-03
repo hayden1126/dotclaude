@@ -78,7 +78,7 @@ in `settings.machine.json`, whose lists append.
 | `docs/prose-is-not-a-permission.md` | Blog post on the delegation work: why a prompt can't limit an agent's authority, and the layers that can | reference |
 | `docs/images/` | The post's diagram: `delegation-layers.svg` (source) and `delegation-layers.png` (2x render) | reference |
 | `tests/delegation/` | Unit tests for the delegation pieces (no model calls) and `run.py`, a live harness that spends model calls | run from the repo root |
-| `tests/setup/` | Unit tests for `merge-settings.py` and `git/install-ignore.py` | `python3 -m unittest discover -s tests/setup -t tests/setup` |
+| `tests/setup/` | Unit tests for `merge-settings.py`, `git/install-ignore.py`, and the prompt and session hooks (`handoff-reminder.sh`, `session-title.sh`, `session-summary.sh`, `danger-guard.sh`) | `python3 -m unittest discover -s tests/setup -t tests/setup` |
 | `docs/chrome-devtools-wsl.md` | WSL2-only: how to make `chrome-devtools-mcp` work (Strategy A headless Linux Chrome, plus B to attach to your Windows Chrome) | reference |
 | `chrome-debug.ps1` | Windows launcher for Strategy B (Chrome with a remote-debugging port) | run on Windows when needed |
 | `setup-chrome-wsl.sh` | Opt-in WSL2 installer: installs Chrome for Testing and registers the user-scoped `chrome-devtools` override | run once on WSL2; not called by `setup.sh` |
@@ -166,9 +166,17 @@ ships but is opt-in, see its entry):
   wrap-up or context-reset command (`hand off`, `wrap up`, `stop here`, `clear context`, `/clear`),
   it injects a one-line reminder
   to invoke the `handoff` skill rather than improvising its steps (which kept dropping the
-  curate-memory step). Precision-first: it stays silent when "handoff" is just a topic (discussing
-  the skill or this hook) and on injected system content (task notifications). Advisory only: it adds context, it cannot run the skill; silent no-op
-  otherwise; always exits 0 so it can never block a prompt. Fail-open if `jq` is absent.
+  curate-memory step). "handoff" fires the way it's typed in practice, as one action in a list
+  ("emailed. handoff", "commit, handoff and push", "deploy handoff and push"), but not in a
+  question about it, praise, a delegation ("hand off X to Y") or `/handoff` itself. Generic phrases
+  ("wrap up", "stop here", "clear the context") count only as a whole clause, so "don't wrap up
+  yet", "clear the session cache" and "stop here, then explain why" stay silent. It also stays
+  silent when "handoff" is just a topic (discussing the skill or this hook), on injected content
+  (task notifications, subagent and cross-session messages), and on a subagent's or teammate's
+  own prompt. Advisory only: it adds context, it cannot run the skill; silent no-op
+  otherwise; always exits 0 so it can never block a prompt. It reads the prompt with python3 and
+  stays silent if that fails. After changing it, replay your own typed prompts through it with
+  `python3 tests/setup/replay_history.py` (local only: the history holds private names).
 - **UserPromptSubmit: `session-title.sh`** (in this repo). Sets the session title (the terminal tab
   title) to `[<repo>] <label>` so tabs are tellable apart. It emits the supported
   `hookSpecificOutput.sessionTitle`, not raw OSC escapes, so the title has display precedence over
@@ -177,8 +185,9 @@ ships but is opt-in, see its entry):
   label (`session-summaries/<id>.title.txt`), else the first line of the current prompt, else the
   first clause of the long summary, else the bare `[<repo>]`. (It used to read Claude Code's own
   `ai-title`, but CC 2.1.237 stops generating that once a custom title is set, so the hook was
-  suppressing the very record it read; it now owns the label instead.) Fail-open (exit 0, no output
-  on any error). Needs python3 on PATH.
+  suppressing the very record it read; it now owns the label instead.) A subagent's or teammate's
+  prompt, or injected content (a task notification, another agent's message), leaves the title as
+  it is. Fail-open (exit 0, no output on any error). Needs python3 on PATH.
 - **PreToolUse(Bash): `danger-guard.sh`** (in this repo, **ships but not wired by default**).
   The script is symlinked into `~/.claude/hooks/` so it is ready to use, but `settings.json`
   intentionally carries no `PreToolUse` entry for `Bash` (dropped in `8602081`: `setup.sh` would
@@ -204,7 +213,9 @@ ships but is opt-in, see its entry):
   a little 5h/7d subscription quota per turn but skips the system-prompt overhead of a headless
   `claude -p`. Detached so Stop never blocks the turn; fails open (exit 0) on a missing/expired token
   or a failed call, leaving the prior summary in place. A cadence gate skips regeneration when the
-  transcript grew < 2KB, and the prior summary is fed back in. Needs python3 on PATH.
+  transcript grew < 2KB, and the prior summary is fed back in. Task notifications, agent messages
+  and skill bodies are left out of the dialogue it sends, so they aren't summarized as the user's
+  request. Needs python3 on PATH.
 - **Stop / Notification sounds**: play a Windows sound and (on permission prompts) a toast. The
   Notification sound is inline in `settings.json`. The Stop sound is `stop-ring.sh`, which rings only
   when the main session finishes: Stop also fires for every subagent and background agent, and those
