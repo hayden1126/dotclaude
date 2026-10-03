@@ -101,8 +101,10 @@ steps aside at its next poll. Its exit codes:
 While it finalizes a codex run the waiter keeps its heartbeat, and it marks the watch as
 finalizing, so a waiter that takes over meanwhile waits for that stop row instead of writing
 a second one.
-`watch` and `open` list unresolved watches in a block of their own, printed only when there
-are some. Each wait start prunes ended watches over 7 days old.
+`watch` and `open` list every unresolved watch, however old, and the ended ones nobody heard,
+in a block of their own, printed only when there are some; a watch whose waiter is dead, or
+alive but heard by nobody, shows its re-arm command. Each wait start prunes ended watches over
+7 days old.
 """
 import argparse
 import collections

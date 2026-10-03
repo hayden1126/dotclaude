@@ -19,10 +19,10 @@ it fails open (it always exits 0; an error goes to delegation-ledger.err). Anyth
 leave the checks unable to run (an unreadable version, a malformed due.toml, a crashing audit)
 becomes a nudge itself, so the checks can't go quiet.
 `due --hook` also names, to Hayden, every unresolved watch whose waiter's exit reaches nobody
-(dc.watch_orphaned): its Claude process has ended, or with no process recorded its session has,
-or with neither its waiter died. It names one even when a running session's guard will adopt it
-(a crash, then `claude --continue`): a duplicate notice is cheap, and a missed one is the bug
-this exists for. It also names, once, the watches that ended while no Claude process listened,
+(dc.watch_orphaned): the guard marked its waiter unheard, its Claude process has ended, or with
+no process recorded its session has, or with neither its waiter died. It names one even when a
+running session's guard will adopt it (a crash, then `claude --continue`): a duplicate notice is
+cheap, and a missed one is the bug this exists for. It also names, once, the watches that ended while no Claude process listened,
 except the starting session's own, which this process's guard says to the model at its next
 stop.
 
@@ -426,11 +426,12 @@ def left_watches(current=None, now=None):
     couldn't be read:
     - orphans: the open or acknowledged watches whose waiter's exit reaches nobody
       (dc.watch_orphaned), oldest first, even if their waiter still runs (a bare waiter outlives
-      a SIGKILLed Claude Code): the Claude process the watch was recorded under has ended; with
-      no process recorded, its session isn't running (`current`, the starting session's id,
-      counts as running); with neither a process nor a session, its waiter is dead. That
-      includes a watch a running session's guard will adopt, as after a crash and `claude
-      --continue`: redundancy over silence;
+      a SIGKILLed Claude Code): the guard marked the waiter waiter_unheard, even once a
+      continued process adopted the watch; the Claude process the watch was recorded under has
+      ended; with no process recorded, its session isn't running (`current`, the starting
+      session's id, counts as running); with neither a process nor a session, its waiter is
+      dead. That includes a watch a running session's guard will adopt, as after a crash and
+      `claude --continue`: redundancy over silence;
     - unheard: the watches that ended while no Claude process was listening (dc.ended_unheard),
       oldest end first, except the starting session's own, which this process's guard says to
       the model at its next stop.
