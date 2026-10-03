@@ -1,9 +1,11 @@
-"""The settings baseline: the sandbox posture, the teammate pin and the hook wiring.
+"""The settings baseline: the sandbox posture, the teammate pin, the hook wiring and the
+permission rules.
 
 A wrong type or a missing suffix here fails silently in Claude Code (an unknown value is
 ignored; a hook that exits non-2 doesn't block), so the baseline is pinned by test."""
 import json
 import os
+import re
 import unittest
 
 from _paths import REPO, load_script
@@ -117,6 +119,35 @@ class Baseline(unittest.TestCase):
 
     def test_a_rearm_never_waits_on_a_permission_prompt(self):
         self.assertIn("Bash(delegation-ledger wait *)", S["permissions"]["allow"])
+
+    def test_destructive_git_is_denied_and_push_and_rm_ask(self):
+        # Claude Code matches a Bash rule as a glob whose * spans spaces, and checks each part
+        # of a compound command (verified live on 2.1.288, in default and auto mode). Deny
+        # beats ask. sh -c, zsh -c and eval wrappers are left to auto mode's classifier.
+        def hit(kind, command):
+            for rule in S["permissions"][kind]:
+                pattern = re.escape(rule[len("Bash("):-1]).replace(r"\*", ".*")
+                if re.fullmatch(pattern, command):
+                    return True
+            return False
+
+        denied = ["git push --force origin feat", "git push origin feat --force",
+                  "git push -f origin feat", "git push --force-with-lease origin feat",
+                  "git -C . push --force origin feat", "git -C ../x push origin feat -f",
+                  "git reset --hard", "git reset HEAD --hard", "git -C . reset --hard",
+                  "git clean -fd", "git clean -d -f", "git -C . clean -fd",
+                  'bash -c "git push --force origin feat"', 'bash -c "git reset --hard"']
+        asked = ["git push", "git push origin feat", "git -C . push origin feat",
+                 "git push origin feat --follow-tags", "git push origin feat-force-fix",
+                 "rm -rf build", "rm build -r", "rm -f a.txt", "rm -R build"]
+        neither = ['git commit -am "push --force docs"', "rm a.txt", "git status"]
+        for c in denied:
+            self.assertTrue(hit("deny", c), c)
+        for c in asked:
+            self.assertFalse(hit("deny", c), c)
+            self.assertTrue(hit("ask", c), c)
+        for c in neither:
+            self.assertFalse(hit("deny", c) or hit("ask", c), c)
 
     def test_the_stop_sound_rings_for_the_main_session_only(self):
         # Stop fires for subagents too; an inline sound rang for every one of them.
