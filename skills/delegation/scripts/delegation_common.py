@@ -713,6 +713,15 @@ def codex_stopped(e):
 #                   session and Claude process. Its exit reaches no one, so its end is recorded
 #                   unreported, for the guard or the nudge to say; any other waiter may take the
 #                   watch over from it, which clears the flag. Absent otherwise
+#   detached_at     when the detached waiter took the watch (ISO), with waiter_detached: the
+#                   guard starts another only after one that ran to DETACHED_MAX_MIN, so one
+#                   that dies early isn't started again and again
+#   end_why         how the waiter saw the condition end, the line it prints (`watch <id>
+#                   failed: <why>`), set with the end: the guard says it for a detached
+#                   waiter's end, whose output nobody reads
+#   end_error       why the detached waiter stopped with no end (an error, or nothing it could
+#                   decide), for the guard's next block to say; a waiter that takes the watch
+#                   over clears it
 #   ended           when it left UNRESOLVED (ISO); absent until then
 #   reported        set when the watch ends: true once a live Claude Code process has heard
 #                   how it ended (its waiter's Claude process ran when it recorded the end, or a
@@ -740,6 +749,8 @@ UNRESOLVED = ("open", "acknowledged")  # the states a waiter may take over
 ENDED = ("done", "failed", "stale", "dropped")
 REPORTED_STATES = ("done", "failed", "stale")  # how a waiter ends; dropped is the lead's own
 WAIT_POLL_S = 15  # the waiter's default seconds between polls
+DETACHED_MAX_MIN = 24 * 60  # the guard's detached waiter's --max: no Bash cap applies to it
+SCAN_CHUNK = 8 * 1024 * 1024  # scan_log reads a log this much at a time
 MAX_WAIT_MIN = 110  # a waiter's ceiling: with a 5-minute finalize, under the 120-minute Bash cap
 REARM = ("still running: re-arm with delegation-ledger wait --resume {} "
          "(run_in_background, timeout 7200000)")
@@ -915,50 +926,69 @@ def codex_progress(run_id):
 
 def log_cursor():
     """A fresh scan_log cursor: how far the log has been read, whether a done line was seen,
-    whether a fail line was, and which file was read ((st_dev, st_ino), None before a read)."""
-    return {"offset": 0, "done": False, "failed": False, "file": None}
+    whether a fail line was, which file was read ((st_dev, st_ino), None before a read), and
+    the last line with no newline yet, as the latest scan left it."""
+    return {"offset": 0, "done": False, "failed": False, "file": None, "partial": ""}
 
 
-def scan_log(path, done, fail, cursor, pids_gone=None, quiet_s=WAIT_POLL_S, now=None):
+def scan_log(path, done, fail, cursor, pids_gone=None, quiet_s=WAIT_POLL_S, now=None,
+             settle=True, between=None):
     """Read the log from cursor["offset"] on: "failed" on a line matching `fail`, else "done"
-    once a line has matched `done`, else None. Lines are matched once complete. A last line
-    with no newline yet may still be being written, so it is matched only once the job is over:
-    when the watch's pids are gone (`pids_gone`), or, for a watch with no pids (None), when the
-    log hasn't been modified for a poll (`quiet_s`) before `now`. A size that held between two
-    scans doesn't count, since a writer whose output is buffered can pause mid-line. A log that
-    shrank, or is another file than the one read (rewritten as a new file, rotated, a symlink
-    re-pointed), is read again from the start. Each pattern is compiled once a scan."""
+    once a line has matched `done`, else None. Lines are matched once complete. The last line,
+    with no newline yet, is left in cursor["partial"]; it may be a fragment whose writer hasn't
+    flushed the rest, and an end-anchored pattern (`^OK$`, `error$`) could match the fragment
+    alone. So it is matched only when `settle` and the job is over: the watch's pids are gone
+    (`pids_gone`), or, for a watch with no pids (None), the log hasn't been modified for a poll
+    (`quiet_s`) before `now`. That catches a writer still writing; one that pauses mid-line for
+    longer than a poll can still be cut, so a final verdict (the guard's) passes settle=False.
+    A log that shrank was rewritten in place, so it is read again from the start, and what was
+    seen is forgotten. One that is another file than the one read (rotated by a rename, a
+    symlink re-pointed) is read from its start too, but a line seen stays seen. The log is
+    read SCAN_CHUNK at a time, so memory stays bounded, with `between()` called after each
+    chunk (the waiter beats there). Each pattern is compiled once a scan."""
     try:
-        with open(path, "rb") as f:
-            st = os.fstat(f.fileno())
-            ident = (st.st_dev, st.st_ino)
-            if st.st_size < cursor["offset"] or cursor["file"] not in (None, ident):
-                cursor.update(offset=0, done=False)
-            cursor["file"] = ident
-            f.seek(cursor["offset"])
-            data = f.read()
+        f = open(path, "rb")
     except OSError:
         return None  # no log yet
+    with f:
+        st = os.fstat(f.fileno())
+        ident = (st.st_dev, st.st_ino)
+        if st.st_size < cursor["offset"]:
+            cursor.update(offset=0, done=False)
+        elif cursor["file"] not in (None, ident):
+            cursor["offset"] = 0
+        cursor["file"] = ident
+        f.seek(cursor["offset"])
+        fail_re, done_re = (re.compile(p) if p else None for p in (fail, done))
+        carry = b""
+        while True:
+            chunk = f.read(SCAN_CHUNK)
+            if not chunk:
+                break
+            whole, newline, carry = (carry + chunk).rpartition(b"\n")
+            for line in whole.decode("utf-8", "replace").splitlines():
+                if fail_re and fail_re.search(line):
+                    cursor["failed"] = True
+                    return "failed"
+                if done_re and done_re.search(line):
+                    cursor["done"] = True
+            cursor["offset"] += len(whole) + len(newline)
+            if between is not None:
+                between()
+    cursor["partial"] = partial = carry.decode("utf-8", "replace")
     now = time.time() if now is None else now
-    settled = pids_gone if pids_gone is not None else now - st.st_mtime >= quiet_s
-    whole, newline, partial = data.rpartition(b"\n")
-    cursor["offset"] += len(whole) + len(newline)
-    lines = [(line, True) for line in whole.decode("utf-8", "replace").splitlines()]
+    settled = settle and (pids_gone if pids_gone is not None
+                          else now - st.st_mtime >= quiet_s)
     if partial and settled:
-        lines.append((partial.decode("utf-8", "replace"), False))
-    fail_re, done_re = (re.compile(p) if p else None for p in (fail, done))
-    seen = False
-    for line, consumed in lines:
-        if fail_re and fail_re.search(line):
+        if fail_re and fail_re.search(partial):
             cursor["failed"] = True
             return "failed"
-        if done_re and done_re.search(line):
-            seen = True
-            cursor["done"] = cursor["done"] or consumed
-    return "done" if seen or cursor["done"] else None
+        if done_re and done_re.search(partial):
+            return "done"
+    return "done" if cursor["done"] else None
 
 
-def watch_verdict(w, cursor=None, now=None):
+def watch_verdict(w, cursor=None, now=None, settle=True, between=None):
     """(verdict, why) for a watch's condition now: verdict is "done", "failed", "stale", or
     None while it still waits, and why says what it rests on. Every given part must hold for
     done; pids that all exited with another part unmet is failed. Pass the same `cursor` dict
@@ -983,7 +1013,8 @@ def watch_verdict(w, cursor=None, now=None):
     running = [p for p in pids if pid_alive(p.get("pid"), p.get("start"))]
     poll = w.get("poll_s") if is_positive(w.get("poll_s")) else WAIT_POLL_S
     log = (scan_log(c["log"], c.get("done"), c.get("fail"), cursor,
-                    pids_gone=not running if pids else None, quiet_s=poll, now=now)
+                    pids_gone=not running if pids else None, quiet_s=poll, now=now,
+                    settle=settle, between=between)
            if c.get("log") else None)
     if log == "failed":
         return "failed", f"{c['log']} has a line matching /{c['fail']}/"
@@ -1257,10 +1288,12 @@ class Waiter:
                 w.pop("claude_pid", None)
                 w.pop("claude_start", None)
             w.pop("waiter_unheard", None)
+            w.pop("end_error", None)
             if self.detached:
-                w["waiter_detached"] = True
+                w.update(waiter_detached=True, detached_at=now_iso())
             else:
                 w.pop("waiter_detached", None)
+                w.pop("detached_at", None)
             unblock(w)
             w.update(waiter_pid=self.me, waiter_start=self.start, poll_s=self.poll,
                      waiter_heartbeat=now_iso())
@@ -1276,13 +1309,23 @@ class Waiter:
                 w["waiter_heartbeat"] = now_iso()
         return update_watch(self.wid, beat)
 
-    def end(self, verdict):
-        """Record how the watch ended: done, failed or stale, and whether it's reported: true
-        when this waiter's exit notifies a live Claude process, else false. A detached
-        waiter's notifies no one."""
+    def end(self, verdict, why=None):
+        """Record how the watch ended: done, failed or stale, `why` (end_why), and whether it's
+        reported: true when this waiter's exit notifies a live Claude process, else false. A
+        detached waiter's notifies no one."""
         def end(w):
             self.own(w)
             w.update(state=verdict, ended=now_iso(),
                      reported=(claude_alive(w) and not w.get("waiter_unheard")
                                and not w.get("waiter_detached")))
+            if why:
+                w["end_why"] = why
         return update_watch(self.wid, end)
+
+    def fail(self, why):
+        """Record why this waiter stops with no end (end_error), while it still owns the
+        watch: a detached waiter's error reaches no one otherwise."""
+        def fail(w):
+            self.own(w)
+            w["end_error"] = why
+        return update_watch(self.wid, fail)

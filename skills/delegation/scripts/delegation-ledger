@@ -1182,7 +1182,6 @@ WAIT_EXIT_HELP = """exit codes:
 WAIT_CONDITIONS = ("pid", "file", "log", "done", "fail", "stale", "codex")
 CODEX_DELEGATE = os.path.join(os.path.dirname(os.path.realpath(__file__)), "codex-delegate")
 FINALIZE_TIMEOUT_S = 300  # finalize checks a report and walks rollouts; the cap is 5 min off
-DETACHED_MAX_MIN = 24 * 60  # the guard's detached waiter's --max: no Bash cap applies to it
 SESSION_RE = re.compile(r"[\w.-]+")
 
 
@@ -1280,8 +1279,11 @@ class Waiter(dc.Waiter):
         if taken:
             print(taken, flush=True)
         cursor = dc.log_cursor()
+        self.next_beat = time.monotonic() + self.poll
         while True:
-            verdict, why = dc.watch_verdict(w, cursor)
+            # A long first read beats between its chunks, so the guard never takes this waiter
+            # for dead while it reads.
+            verdict, why = dc.watch_verdict(w, cursor, between=self.beat_if_due)
             if verdict == "done" and "codex" in w["condition"]:
                 verdict, why = self.codex_end(w["condition"]["codex"])
             if verdict:
@@ -1292,6 +1294,13 @@ class Waiter(dc.Waiter):
                 return WAIT_AT_MAX
             time.sleep(min(self.poll, left))
             w = self.beat()
+            self.next_beat = time.monotonic() + self.poll
+
+    def beat_if_due(self):
+        """Beat when a poll has passed since the last beat: scan_log calls it between chunks."""
+        if time.monotonic() >= self.next_beat:
+            self.beat()
+            self.next_beat = time.monotonic() + self.poll
 
     def codex_end(self, run_id):
         """(verdict, why) once a codex run has ended: finalize it unless it has a stop row, then
@@ -1365,7 +1374,7 @@ class Waiter(dc.Waiter):
 
     def record(self, verdict, why):
         """Record how the watch ended, print it, and return the exit code."""
-        self.end(verdict)
+        self.end(verdict, why)
         print(f"watch {self.wid} {verdict}: {why}")
         return WAIT_EXITS[verdict]
 
@@ -1412,7 +1421,7 @@ def cmd_wait(args):
             return drop_watch(args.drop)
         if args.detached is not None:
             return Waiter(wid, args.poll, detached_identity(args), detached=True).run(
-                DETACHED_MAX_MIN)
+                dc.DETACHED_MAX_MIN)
         identity = dc.claude_identity()  # one walk: the watch's process and session agree
         if args.resume is not None:
             existing_watch(wid)
@@ -1441,12 +1450,25 @@ def cmd_wait(args):
         checks().log_error(f"wait {wid}: {ex}; the watch stays open")
         print(f"wait: {ex}; watch {wid} stays open, so `delegation-ledger wait --resume {wid}` "
               "tries again", file=sys.stderr)
+        detached_failed(args, wid, str(ex))
         return WAIT_ERROR
     except Exception as ex:  # noqa: BLE001  logged, and the watch stays for a resume
         checks().log_error()
         print(f"wait: {type(ex).__name__}: {ex} (traceback in "
               f"{os.path.join(dc.state_dir(), 'delegation-ledger.err')})", file=sys.stderr)
+        detached_failed(args, wid, f"{type(ex).__name__}: {ex}")
         return WAIT_ERROR
+
+
+def detached_failed(args, wid, why):
+    """For a detached waiter stopping with no end: record why in its watch (end_error), for the
+    guard's next block to say, since its own output goes to /dev/null. Logged if that fails."""
+    if args.detached is None or wid is None:
+        return
+    try:
+        dc.Waiter(wid, args.poll, (None, args.detached), detached=True).fail(why)
+    except Exception:  # noqa: BLE001  it may no longer own the watch; nothing to record then
+        checks().log_error()
 
 
 def detached_identity(args):

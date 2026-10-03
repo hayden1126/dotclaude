@@ -105,9 +105,20 @@ UNHEARD_REASON = ("Watch {id}'s waiter was started by a Claude Code process that
                   "with run_in_background and timeout 7200000.")
 ENDED_UNHEARD = ("Watch {id} ({desc}) ended ({state}) while no Claude Code process was "
                  "listening. Check the result and report it.")
-DETACHED_ENDED = ("Watch {id} ({desc}) ended ({state}). The waiter the guard left watching it "
-                  "when its lapse was acknowledged recorded that, but its exit reaches no one. "
-                  "Check the result and report it.")
+DETACHED_ENDED = ("Watch {id} ({desc}) ended {state}: {why}. The waiter the guard left watching "
+                  "it when its lapse was acknowledged recorded that, but its exit reaches no "
+                  "one. Check the result and report it.{codex}")
+DETACHED_CODEX = (" For codex run {run}: codex-delegate status {run} shows it, and its report is "
+                  "{report}.")
+DETACHED_FAILED = ("Watch {id} ({desc}): the guard's detached waiter failed: {why}. Re-arm to see "
+                   "the error: delegation-ledger wait --resume {id}, with run_in_background and "
+                   "timeout 7200000. Or drop the watch: delegation-ledger wait --drop {id}.")
+PARTIAL = ("Watch {id} ({desc}) looks {looks} ({why}). But {log}'s last line has no newline yet "
+           "and matches {lines}, and it may be the start of a longer line, so the guard can't "
+           "tell. Re-arm the watch and its waiter reads that line once it settles and reports "
+           "the outcome: delegation-ledger wait --resume {id}, with run_in_background and "
+           "timeout 7200000. To stop watching it: delegation-ledger wait --drop {id}.")
+DETACHED_SLACK_S = 600  # a detached waiter that ran this close to its max reached it
 CODEX_UNSTARTED = ("Watch {id} ({desc}): codex run {run} never started, since its wrapper "
                    "stopped before Codex did, so the watch is recorded failed. To retry, "
                    "{restart}, with run_in_background and timeout 7200000.")
@@ -145,9 +156,9 @@ CODEX_REARM = ('Codex wrapper "{desc}" was stopped at its time limit, but Codex 
 ACK_MESSAGE = ("Watch {id} ({desc}) still has no waiter; it's acknowledged. Re-arm with "
                "delegation-ledger wait --resume {id}, or drop it.")
 DETACHED_ACK = ("Watch {id} ({desc}) still has no waiter of the lead's; it's acknowledged, and "
-                "the guard left a detached waiter watching it, whose end a later stop says. To "
-                "be woken when it ends instead, re-arm with delegation-ledger wait --resume "
-                "{id}, or drop it.")
+                "the guard started a detached waiter on it, whose end a later stop says (it "
+                "logs a refusal or an error to delegation-ledger.err). To be woken when it ends "
+                "instead, re-arm with delegation-ledger wait --resume {id}, or drop it.")
 TASK_RE = re.compile(r"<task-id>([^<]+)</task-id>")
 TOOL_USE_RE = re.compile(r"<tool-use-id>([^<]+)</tool-use-id>")
 OUTPUT_RE = re.compile(r"<output-file>([^<]+)</output-file>")
@@ -225,6 +236,8 @@ def watch_pending(w, shells, now):
     met = MET_REASON.format(id=wid, desc=desc, cond=dc.condition_text(cond))
     lapsed = WATCH_REASON.format(id=wid, desc=desc,
                                  unmet=f"{dc.condition_text(cond)} is unmet")
+    if w.get("waiter_detached") and w.get("end_error"):  # it says why, and re-arm or drop
+        lapsed = DETACHED_FAILED.format(id=wid, desc=desc, why=w["end_error"])
     if "codex" in cond:
         run = cond["codex"]
         stage, e = dc.codex_progress(run)
@@ -236,16 +249,23 @@ def watch_pending(w, shells, now):
             return Pending("end", w, CODEX_UNSTARTED.format(
                 id=wid, desc=desc, run=run, restart=dc.codex_restart(e)), "failed")
         if stage == "ended":  # watch_verdict's done: Codex has ended, its finalize still owed
-            return Pending("ended", w, CODEX_ENDED.format(id=wid, desc=desc, run=run), None)
+            return Pending("ended", w, lapsed if w.get("end_error") else CODEX_ENDED.format(
+                id=wid, desc=desc, run=run), None)
         return Pending("lapse", w, lapsed, None)
     cursor = log_tail_cursor(cond) if cond.get("log") else None
-    verdict, why = dc.watch_verdict(w, cursor, now)
+    # Final, so a last line with no newline yet is never matched here (unfinished says it).
+    verdict, why = dc.watch_verdict(w, cursor, now, settle=False)
+    looks = f"{why} is met" if verdict == "done" else why
     lines = unseen(verdict, cond, cursor)
     if lines:
         return Pending("ended", w, UNCERTAIN.format(
-            id=wid, desc=desc, looks=verdict, why=f"{why} is met" if verdict == "done" else why,
-            log=cond["log"], lines="a line matching " + " or ".join(f"/{p}/" for p in lines)),
-            None)
+            id=wid, desc=desc, looks=verdict, why=looks, log=cond["log"],
+            lines="a line matching " + " or ".join(f"/{p}/" for p in lines)), None)
+    lines = unfinished(verdict, cond, cursor)
+    if lines:
+        return Pending("ended", w, PARTIAL.format(
+            id=wid, desc=desc, looks=verdict, why=looks, log=cond["log"],
+            lines=" or ".join(f"/{p}/" for p in lines)), None)
     if verdict == "done":
         return Pending("end", w, met, "done")
     if verdict:  # failed or stale
@@ -275,6 +295,46 @@ def unseen(verdict, cond, cursor):
     return [p for p in found if p]
 
 
+def unfinished(verdict, cond, cursor):
+    """The --done and --fail patterns that the log's last line, with no newline yet, matches
+    and that would change an ended `verdict` if that line is finished as it stands. The guard
+    never matches such a line itself (scan_log's settle=False), since its verdict is final and
+    the line may be a fragment the writer hasn't flushed the rest of: for done, a fail line;
+    for failed, the done line when it is all the condition lacks; for stale, either."""
+    partial = cursor.get("partial") if cursor else ""
+    if verdict is None or not partial or cursor["failed"]:
+        return []
+    done, fail = cond.get("done"), cond.get("fail")
+    hit = {p: bool(p and re.search(p, partial)) for p in (done, fail)}
+    only_done = (hit[done] and not cursor["done"]
+                 and (not cond.get("file") or os.path.exists(cond["file"]))
+                 and not any(dc.pid_alive(p.get("pid"), p.get("start"))
+                             for p in cond.get("pids") or []))
+    found = {"done": [hit[fail] and fail], "failed": [only_done and done],
+             "stale": [only_done and done, hit[fail] and fail]}[verdict]
+    return [p for p in found if p]
+
+
+def respawn_refused(w):
+    """Why the guard mustn't start a detached waiter on acknowledged watch w, or None. One is
+    started for a watch that never had one, and again only after the last one ran to its max
+    (DETACHED_MAX_MIN, by its last heartbeat since detached_at): a detached waiter that died
+    early (an error, nothing it could decide, a SIGKILL) would die again, and each death is
+    another lapse block."""
+    if not w.get("waiter_detached"):
+        return None
+    try:
+        ran = (dc.parse_iso(w["waiter_heartbeat"]).timestamp()
+               - dc.parse_iso(w["detached_at"]).timestamp())
+    except (KeyError, TypeError, ValueError):
+        ran = 0
+    if ran >= dc.DETACHED_MAX_MIN * 60 - DETACHED_SLACK_S:
+        return None
+    why = f": {w['end_error']}" if w.get("end_error") else ""
+    return (f"its detached waiter stopped after {ran / 60:.0f} min, before its "
+            f"{dc.DETACHED_MAX_MIN} min max{why}; not starting another")
+
+
 def spawn_waiter(w, sid, me):
     """Start a detached waiter on watch w, which this stop acknowledged: `delegation-ledger
     wait --resume <id> --detached <sid>`, with --claude <pid>:<procStart> when this hook knows
@@ -301,6 +361,9 @@ def spawn_waiter(w, sid, me):
                 os.setsid()
                 if os.fork() == 0:
                     exec_detached(argv, report)
+            except BaseException as ex:  # noqa: BLE001  said down the pipe: no waiter started
+                with contextlib.suppress(OSError):
+                    os.write(report, f"{type(ex).__name__}: {ex}".encode())
             finally:
                 os._exit(0)
         os.close(report)
@@ -708,6 +771,22 @@ def then(first, second):
     return fn
 
 
+def ended_text(w):
+    """What the guard says of watch w, which ended while nobody listened: a detached waiter's
+    end with how it ended (end_why), and for a codex run, where to look."""
+    desc = w.get("description") or ""
+    if not w.get("waiter_detached"):
+        return ENDED_UNHEARD.format(id=w["id"], desc=desc, state=w["state"])
+    run, codex = (w.get("condition") or {}).get("codex"), ""
+    if run is not None:
+        e = dc.find_codex(run) or {}
+        report = (os.path.join(e["out"], "report.json") if e.get("out")
+                  else "named by codex-delegate status")
+        codex = DETACHED_CODEX.format(run=run, report=report)
+    return DETACHED_ENDED.format(id=w["id"], desc=desc, state=w["state"],
+                                 why=w.get("end_why") or "no reason recorded", codex=codex)
+
+
 def ended_unheard(w, sid, me, live, now):
     """Whether watch w ended while nobody listened (dc.ended_unheard) and is this guard's to
     say: this session's, or one this Claude process left in a session that isn't live
@@ -879,10 +958,8 @@ def decide(data, now, clock=time.monotonic):
             continue
         if p is not None:
             pendings.append(p)
-    pendings += [Pending("report", w, (DETACHED_ENDED if w.get("waiter_detached") else
-                                       ENDED_UNHEARD).format(
-        id=w["id"], desc=w.get("description") or "", state=w["state"]), None)
-        for w in every if not spent() and ended_unheard(w, sid, me, live, now)]
+    pendings += [Pending("report", w, ended_text(w), None)
+                 for w in every if not spent() and ended_unheard(w, sid, me, live, now)]
     kills, scan_out = [], None
     if transcript and not spent():
         try:
@@ -898,8 +975,14 @@ def decide(data, now, clock=time.monotonic):
         checks.log_error(f"watch-guard: {ex} stayed locked; nothing was taken this stop")
         return None
     # After the commit, so the detached waiter finds the watch acknowledged and the lock free.
-    acks = [(DETACHED_ACK if spawn_waiter(w, sid, me) else ACK_MESSAGE).format(
-        id=w["id"], desc=w.get("description") or "") for w in acked]
+    acks = []
+    for w in acked:
+        refused = respawn_refused(w)
+        if refused:
+            checks.log_error(f"watch-guard: watch {w['id']}: {refused}")
+        started = not refused and spawn_waiter(w, sid, me)
+        acks.append((DETACHED_ACK if started else ACK_MESSAGE).format(
+            id=w["id"], desc=w.get("description") or ""))
     out = {"decision": "block", "reason": render(items)} if items else {}
     if acks:
         out["systemMessage"] = " ".join(acks)

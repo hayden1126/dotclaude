@@ -334,9 +334,11 @@ class Watches(GuardEnv):
         self.assertIsNone(self.decide())
 
     ACK = ("Watch w-1 (the build) still has no waiter of the lead's; it's acknowledged, and "
-           "the guard left a detached waiter watching it, whose end a later stop says. To be "
-           "woken when it ends instead, re-arm with delegation-ledger wait --resume w-1, or "
-           "drop it.")
+           "the guard started a detached waiter on it, whose end a later stop says (it logs a "
+           "refusal or an error to delegation-ledger.err). To be woken when it ends instead, "
+           "re-arm with delegation-ledger wait --resume w-1, or drop it.")
+    PLAIN_ACK = ("Watch w-1 (the build) still has no waiter; it's acknowledged. Re-arm with "
+                 "delegation-ledger wait --resume w-1, or drop it.")
 
     def grow(self):
         """What a later stop's transcript looks like: the turn went on."""
@@ -579,20 +581,24 @@ class Watches(GuardEnv):
             "Check the result and report it."))
         self.assertEqual([self.read(w)["state"] for w in ("w-1", "w-2")], ["failed", "failed"])
 
-    def test_an_old_unterminated_done_line_is_done_not_stale(self):
-        # A first read has no earlier scan to compare, so the line counts as finished once the
-        # log has been quiet for a poll.
+    def test_an_unterminated_last_line_is_never_matched_but_makes_an_end_uncertain(self):
+        # The guard's verdict is final, and "OK" may be the start of "OKAY": so neither done
+        # nor stale is recorded, and the re-armed waiter, which settles the line, decides.
         log = self.path("job.log")
         with open(log, "w") as f:
-            f.write("OK")
+            f.write("building\nOK")
         old = self.now - 7200
         os.utime(log, (old, old))
-        cond = {"log": log, "done": "^OK$", "stale_min": 1}
-        self.watch(cond=cond, created=guard.iso(old))
+        self.watch(cond={"log": log, "done": "^OK$", "stale_min": 1}, created=guard.iso(old))
         self.lines()
-        self.assertEqual(self.decide(), self.block(self.met_reason(
-            cond=dc.condition_text(cond))))
-        self.assertEqual(self.read()["state"], "done")
+        self.assertEqual(self.decide(), self.block(
+            f"Watch w-1 (the build) looks stale ({log} unchanged for 1 min). But {log}'s last "
+            "line has no newline yet and matches /^OK$/, and it may be the start of a longer "
+            "line, so the guard can't tell. Re-arm the watch and its waiter reads that line "
+            "once it settles and reports the outcome: delegation-ledger wait --resume w-1, "
+            "with run_in_background and timeout 7200000. To stop watching it: "
+            "delegation-ledger wait --drop w-1."))
+        self.assertEqual(self.read()["state"], "open")
 
     def test_a_spent_budget_takes_no_more_items_and_records_none_it_wont_print(self):
         self.watch(created="2026-10-02T10:00:00Z")
@@ -963,7 +969,7 @@ class OutcomeMatrix(GuardEnv):
     does and, before each stop, reads the whole condition once (DetachedWaiters runs the real
     one)."""
 
-    STOPS = ("p1", "p2", "p3", "p4")
+    STOPS = ("p1", "p2", "p3", "p4", "p5", "p6")
     STATES = ("open", "blocked", "acknowledged", "after /clear", "after a crash",
               "end blocked, /clear", "acked, then ends")
     # The blocks each outcome gets across STOPS, by the watch's state when its job ends: open
@@ -983,24 +989,32 @@ class OutcomeMatrix(GuardEnv):
         "codex ended": (2,    2,       1,     2,      2,     2,           2),
         "uncertain":   (2,    2,       1,     2,      2,     2,           2),
         "running":     (1,    0,       0,     1,      1,     1,           1),
+        "detached fails": (2, 1,       0,     2,      2,     2,           2),
     }
+    # "detached fails" is a job still running whose detached waiter stops with an error right
+    # after it takes the watch: the next stop says the error, and no other is started.
     ENDS = {"met": "done", "failed": "failed", "stale": "stale", "codex ended": "done",
             "uncertain": "done"}  # as the guard or the detached waiter records them
 
     def spawn_stand_in(self, w, sid, me):
-        """The detached waiter, in process: it takes the watch as the real one does."""
+        """The detached waiter, in process: it takes the watch as the real one does. For
+        "detached fails" it then records an error and exits, as the real one does on exit 70."""
         waiter = dc.Waiter(w["id"], 15, (me, sid), detached=True)
         waiter.take(None)
-        self.detached.append(waiter)
+        if self.failing:
+            waiter.fail("Undecidable: codex run r1 is no longer in the ledger")
+            dc.update_watch(w["id"], lambda cur: cur.update(waiter_pid=DEAD))
+        else:
+            self.detached.append(waiter)
         return True
 
     def poll_stand_ins(self):
         """One poll by each stand-in: the whole condition, read as any waiter reads it, and the
         end recorded once it has ended. A codex run that has ended counts as finalized done."""
         for waiter in list(self.detached):
-            verdict, _ = dc.watch_verdict(dc.read_watch(waiter.wid))
+            verdict, why = dc.watch_verdict(dc.read_watch(waiter.wid))
             if verdict:
-                waiter.end(verdict)
+                waiter.end(verdict, why)
                 self.detached.remove(waiter)
             else:
                 waiter.beat()
@@ -1014,7 +1028,7 @@ class OutcomeMatrix(GuardEnv):
         self.watches = os.path.join(self.state, "dotclaude", "watches")
         self.transcript = os.path.join(d, "s1.jsonl")
         self.lines()
-        self.detached = []
+        self.detached, self.failing = [], outcome == "detached fails"
         old = self.now - 7200
         never, log = os.path.join(d, "never"), os.path.join(d, "build.log")
         later = state == "acked, then ends"
@@ -1026,7 +1040,7 @@ class OutcomeMatrix(GuardEnv):
         else:
             pids = [{"pid": DEAD, "start": None, "comm": "make"}]
         desc, end_it = "the build", None
-        if outcome in ("met", "running"):
+        if outcome in ("met", "running", "detached fails"):
             cond = {"file": never}
             if outcome == "met" and later:
                 end_it = lambda: open(never, "w").close()  # noqa: E731
@@ -1090,7 +1104,11 @@ class OutcomeMatrix(GuardEnv):
                         if out and out.get("decision") == "block":
                             blocks.append(out["reason"])
                     said = [r for r in blocks if "has no live waiter" not in r]
-                    if outcome == "running":
+                    if outcome == "detached fails":
+                        self.assertLessEqual(len(blocks), 2, blocks)
+                        errors = [r for r in blocks if "detached waiter failed: Undecidable" in r]
+                        self.assertEqual(len(errors), 1 if self.spawned else 0, blocks)
+                    elif outcome == "running":
                         self.assertLessEqual(len(blocks), 1, blocks)
                         self.assertFalse(said, blocks)
                     else:
@@ -1101,8 +1119,8 @@ class OutcomeMatrix(GuardEnv):
                     w = self.read()
                     # Adopted, where it was another session's or another process's.
                     self.assertEqual((w["session_id"], w["claude_pid"]), ("s1", os.getpid()))
-                    if outcome == "running" or (outcome in ("codex ended", "uncertain")
-                                                and not self.spawned):
+                    if outcome in ("running", "detached fails") or (
+                            outcome in ("codex ended", "uncertain") and not self.spawned):
                         self.assertIn(w["state"], dc.UNRESOLVED)
                     else:
                         self.assertEqual((w["state"], w["reported"]),
@@ -1150,10 +1168,10 @@ class DetachedWaiters(GuardEnv):
     def gone(self, pid, start):
         self.until(lambda: not dc.pid_alive(pid, start))
 
-    def ended_reason(self, state, wid="w-1", desc="the build"):
-        return (f"Watch {wid} ({desc}) ended ({state}). The waiter the guard left watching it "
-                "when its lapse was acknowledged recorded that, but its exit reaches no one. "
-                "Check the result and report it.")
+    def ended_reason(self, state, why, wid="w-1", desc="the build", codex=""):
+        return (f"Watch {wid} ({desc}) ended {state}: {why}. The waiter the guard left watching "
+                "it when its lapse was acknowledged recorded that, but its exit reaches no one. "
+                f"Check the result and report it.{codex}")
 
     def ack_and_detach(self):
         """The lapse's block, then the stop that acknowledges it and starts the detached
@@ -1173,7 +1191,8 @@ class DetachedWaiters(GuardEnv):
         done = self.until(lambda: self.read()["state"] == "done" and self.read())
         self.assertIs(done["reported"], False)  # its exit reaches no one
         self.gone(w["waiter_pid"], w["waiter_start"])
-        self.assertEqual(self.decide(prompt_id="p4"), self.block(self.ended_reason("done")))
+        self.assertEqual(self.decide(prompt_id="p4"), self.block(self.ended_reason(
+            "done", f"{never} exists")))
         self.assertIs(self.read()["reported"], True)
         self.assertIsNone(self.decide(prompt_id="p5"))
 
@@ -1190,7 +1209,7 @@ class DetachedWaiters(GuardEnv):
         self.assertEqual(self.until(lambda: self.read()["state"] == "done" and self.read())
                          ["reported"], False)
         self.assertEqual(self.decide(prompt_id="p3"), self.block(self.ended_reason(
-            "done", desc="the server")))
+            "done", dc.condition_text(cond), desc="the server")))
 
     def test_a_rearm_takes_over_the_detached_waiter_which_ends_nothing(self):
         self.mine(cond={"file": self.path("never")})
@@ -1207,10 +1226,8 @@ class DetachedWaiters(GuardEnv):
     def test_a_spawn_that_fails_is_logged_and_the_plain_ack_still_comes(self):
         self.mine(cond={"file": self.path("never")})
         self.assertEqual(self.decide(prompt_id="p1"), self.block(self.lapse_reason()))
-        plain = ("Watch w-1 (the build) still has no waiter; it's acknowledged. Re-arm with "
-                 "delegation-ledger wait --resume w-1, or drop it.")
         with mock.patch.object(guard.os, "fork", side_effect=OSError(11, "Resource busy")):
-            self.assertEqual(self.decide(prompt_id="p2"), {"systemMessage": plain})
+            self.assertEqual(self.decide(prompt_id="p2"), {"systemMessage": Watches.PLAIN_ACK})
         self.assertIn("watch-guard: watch w-1: starting its detached waiter", self.err_log())
         self.assertEqual(self.read()["state"], "acknowledged")
 
@@ -1227,9 +1244,48 @@ class DetachedWaiters(GuardEnv):
         self.watch(sid="s-before", state="done", ended=dc.now_iso(), reported=False,
                    waiter_detached=True, claude_pid=os.getpid(),
                    claude_start=dc.proc_start(os.getpid()))
-        self.assertEqual(self.decide(), self.block(self.ended_reason("done")))
+        self.assertEqual(self.decide(), self.block(self.ended_reason(
+            "done", "no reason recorded")))
         self.assertIs(self.read()["reported"], True)
         self.assertIsNone(self.decide(prompt_id="p2"))
+
+    def test_a_detached_codex_end_says_how_and_where_to_look(self):
+        # Named by its run id even under a --desc, with its report's path from the ledger.
+        self.codex_row(out=self.path("out"))
+        self.watch(desc="the migration", cond={"codex": "r1"}, state="failed",
+                   ended=dc.now_iso(), reported=False, waiter_detached=True,
+                   end_why="codex run r1 stopped with exit 4", claude_pid=os.getpid(),
+                   claude_start=dc.proc_start(os.getpid()))
+        report = os.path.join(self.path("out"), "report.json")
+        self.assertEqual(self.decide(), self.block(self.ended_reason(
+            "failed", "codex run r1 stopped with exit 4", desc="the migration",
+            codex=f" For codex run r1: codex-delegate status r1 shows it, and its report is "
+                  f"{report}.")))
+
+    def test_a_detached_waiter_that_dies_early_isnt_started_again(self):
+        # It took the watch (unblocking it) and stopped with an error: the next stop says the
+        # error, and the one after acknowledges with the plain text, starting none.
+        self.spawner = self.record_spawn
+        self.watch(waiter_detached=True, detached_at=dc.now_iso(),
+                   waiter_heartbeat=dc.now_iso(),
+                   end_error="Undecidable: codex run r1 is no longer in the ledger")
+        self.assertEqual(self.decide(prompt_id="p1"), self.block(
+            "Watch w-1 (the build): the guard's detached waiter failed: Undecidable: codex run "
+            "r1 is no longer in the ledger. Re-arm to see the error: delegation-ledger wait "
+            "--resume w-1, with run_in_background and timeout 7200000. Or drop the watch: "
+            "delegation-ledger wait --drop w-1."))
+        self.assertEqual(self.decide(prompt_id="p2"), {"systemMessage": Watches.PLAIN_ACK})
+        self.assertEqual(self.spawned, [])
+        self.assertIn("watch-guard: watch w-1: its detached waiter stopped after 0 min, before "
+                      "its 1440 min max: Undecidable", self.err_log())
+        self.assertIsNone(self.decide(prompt_id="p3"))
+
+    def test_a_middle_process_that_fails_is_said_and_the_plain_ack_comes(self):
+        self.mine(cond={"file": self.path("never")})
+        self.decide(prompt_id="p1")
+        with mock.patch.object(guard.os, "setsid", side_effect=OSError(1, "Not permitted")):
+            self.assertEqual(self.decide(prompt_id="p2"), {"systemMessage": Watches.PLAIN_ACK})
+        self.assertIn("its detached waiter didn't start: PermissionError", self.err_log())
 
     def test_the_guard_starts_one_detached_waiter_per_acknowledgment(self):
         self.spawner = self.record_spawn
@@ -1249,7 +1305,8 @@ class DetachedWaiters(GuardEnv):
         self.decide(prompt_id="p2")
         def lapsed_at_max(w):  # what its beats, then its exit at --max, leave
             dc.unblock(w)
-            w["waiter_detached"] = True
+            w.update(waiter_detached=True, waiter_heartbeat=dc.now_iso(),
+                     detached_at=guard.iso(time.time() - dc.DETACHED_MAX_MIN * 60))
         dc.update_watch("w-1", lapsed_at_max)
         self.assertEqual(self.decide(prompt_id="p3"), self.block(self.lapse_reason()))
         self.decide(prompt_id="p4")

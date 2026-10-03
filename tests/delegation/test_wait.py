@@ -402,6 +402,28 @@ class ScanLog(unittest.TestCase):
         cur["done"] = False
         self.assertEqual(dc.scan_log(link, "^OK$", None, cur), "done")
 
+    def test_a_log_is_read_in_chunks_with_a_beat_between_and_a_line_across_two_matches(self):
+        with open(self.log, "w") as f:
+            f.write("x" * 30 + "\nBUILD OK\n" + "y" * 30 + "\n")
+        beats = []
+        with mock.patch.object(dc, "SCAN_CHUNK", 16):  # "BUILD OK" straddles a boundary
+            cur = dc.log_cursor()
+            self.assertEqual(dc.scan_log(self.log, "^BUILD OK$", None, cur,
+                                         between=lambda: beats.append(1)), "done")
+        self.assertEqual(len(beats), 5)  # one after each of the 5 chunks
+        self.assertEqual(cur["offset"], os.path.getsize(self.log))
+
+    def test_a_rotation_after_the_done_line_keeps_it_seen(self):
+        # Seen while the pid ran; renamed away, a new log started; the pid then exits.
+        with open(self.log, "w") as f:
+            f.write("OK\n")
+        cur = dc.log_cursor()
+        self.assertEqual(self.scan(cur, pids_gone=False), "done")
+        os.rename(self.log, self.log + ".1")
+        with open(self.log, "w") as f:
+            f.write("new run\n")
+        self.assertEqual(self.scan(cur, pids_gone=True), "done")
+
     def test_each_pattern_is_compiled_once_a_scan(self):
         with open(self.log, "w") as f:
             f.write("line\n" * 500)
@@ -448,7 +470,8 @@ class Detached(WaitEnv):
         self.assertEqual(p.returncode, 0, p.stderr)
         w = self.only()
         self.assertEqual((w["state"], w["reported"], w["waiter_detached"], w["session_id"],
-                          w["claude_pid"]), ("done", False, True, "s1", os.getpid()))
+                          w["claude_pid"], w["end_why"]),
+                         ("done", False, True, "s1", os.getpid(), f"{self.path('never')} exists"))
         self.assertTrue(dc.ended_unheard(w))  # for the guard, or the nudge, to say
 
     def test_it_refuses_a_watch_that_isnt_an_acknowledged_lapse_left_to_it(self):
@@ -471,6 +494,21 @@ class Detached(WaitEnv):
                       self.err_log())
         self.assertIn("is not a session id", self.err_log())
         self.assertEqual(self.only()["waiter_pid"], DEAD)
+
+    def test_an_error_is_recorded_in_the_watch_for_the_guard_to_say(self):
+        # A codex run gone from the ledger: nothing can be decided, and nobody reads its output.
+        self.acked(condition={"codex": "r-gone"})
+        p = self.detached()
+        self.assertEqual(p.returncode, ERROR, p.stderr)
+        w = self.only()
+        self.assertTrue(w.get("waiter_detached") and w.get("detached_at"))
+        self.assertIn("r-gone", w["end_error"])
+
+    def test_a_take_clears_an_earlier_detached_waiters_error(self):
+        self.acked(waiter_detached=True, end_error="boom", detached_at=dc.now_iso())
+        p = self.run_("--resume", "w-1", "--max", "0.002")
+        self.assertEqual(p.returncode, AT_MAX, p.stderr)
+        self.assertFalse({"end_error", "waiter_detached", "detached_at"} & set(self.only()))
 
     def test_a_resume_takes_over_a_live_detached_waiter(self):
         # The lead re-arming wants the end itself, so the guard's waiter isn't a refusal.
