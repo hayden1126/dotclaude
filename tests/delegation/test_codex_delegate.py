@@ -219,6 +219,26 @@ class TurnRows(unittest.TestCase):
         cd.append_turn_row(self.row, "resume", "th-1", 1, other)
         self.assertEqual(self.events(), ["pending", "stop", "pending", "resume"])
 
+    def test_an_older_stop_row_with_no_status_doesnt_inherit_a_cancels(self):
+        # A resume's stop row written before stop rows carried a status: its turn finished, so
+        # the cancel before it mustn't make the run read cancelled.
+        rows = [dict(event="pending", **self.owner),
+                dict(event="stop", status="cancelled", exit=1,
+                     error="cancelled by codex-delegate cancel"),
+                dict(event="pending", wrapper_pid=4322, wrapper_start=100),
+                dict(event="resume", thread_id="th-1", pid=1),
+                dict(event="stop", exit=0, report_ok=True)]
+        for r in rows:
+            cd.dc.append_row(dict(self.row, ts=cd.dc.now_iso(), **r))
+        e = cd.dc.find_codex("r1")
+        self.assertNotIn("status", e)
+        self.assertNotIn("error", e)
+        self.assertEqual(cd.dc.codex_state(e)[0], "finished")
+        # An older crash row keeps its own error.
+        cd.dc.append_row(dict(self.row, ts=cd.dc.now_iso(), event="stop", exit=1,
+                              error="OSError: no codex"))
+        self.assertEqual(cd.dc.find_codex("r1")["error"], "OSError: no codex")
+
     def test_cancel_on_a_busy_lock_says_to_run_cancel_again(self):
         cd.dc.append_row(dict(self.row, ts=cd.dc.now_iso(), event="pending", **self.owner))
         lock = cd.finalize_lock_path("r1")

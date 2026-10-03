@@ -934,9 +934,11 @@ the fix is enforcement. `PLAN.md` has the design history and the options weighed
     an unknown run, one that has ended, one whose Codex hasn't started or can't be verified (no
     procStart recorded), or when the run's finalize lock stays busy past 4 minutes (it then
     says to run cancel again). A wrapper still polling leaves that stop row be: it writes no
-    start, detached or stop row for the turn after it, and exits 1. Every stop row carries a
+    start, detached or stop row for the turn after it, and exits 1. A stop row carries a
     `status` (`finished`, `crashed` or `cancelled`), so a later turn's stop replaces a
-    cancel's in `status`, `open` and `watch`.
+    cancel's in `status`, `open` and `watch`. An older codex-delegate's finish and crash rows
+    carry none, and `fold` reads a stop row without one as clearing an earlier cancel's
+    `status` and `error`, so a run resumed after a cancel doesn't read cancelled.
 - **The allow rule.** The baseline's `permissions.allow` holds `Bash(delegation-ledger wait *)`,
   so a re-arm never stops at a permission prompt. The waiter must run as a bare command: a `cd`,
   a redirect or `$(...)` keeps the call in the sandbox, where it refuses to run.
