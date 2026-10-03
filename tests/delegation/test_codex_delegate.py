@@ -541,6 +541,89 @@ class FullRun(unittest.TestCase):
         proc.wait(timeout=20)
         proc.stdout.close()
 
+    def test_cancel_doesnt_claim_a_watch_that_ended_after_it_looked(self):
+        # The watch's waiter records its end between cancel's codex_watch and its update: the
+        # drop then changes nothing, so the message mustn't say it dropped the watch.
+        proc = self.start(FAKE_SLEEP="60")
+        run_id, wid = self.launch_ids(proc.stdout.readline())
+        self.pid_file()
+        real = cd.dc.update_watch
+
+        def update_watch(w, fn):
+            real(w, lambda cur: cur.update(state="done", ended=cd.dc.now_iso()))
+            return real(w, fn)
+        out = io.StringIO()
+        with mock.patch.dict(os.environ, self.env), \
+                mock.patch.object(cd.dc, "update_watch", update_watch), \
+                contextlib.redirect_stdout(out):
+            self.assertEqual(cd.main(["cancel", run_id]), 0)
+        self.assertIn(f"codex-delegate: run {run_id} cancelled", out.getvalue())
+        self.assertNotIn("dropped watch", out.getvalue())
+        self.assertEqual(self.watches()[wid]["state"], "done")  # the waiter's end stands
+        self.assertEqual(proc.wait(timeout=20), 1)
+        proc.stdout.close()
+
+    def wait_for_start(self):
+        deadline = time.time() + 10
+        while time.time() < deadline:
+            if any(r["event"] == "start" for r in self.ledger()):
+                return
+            time.sleep(0.1)
+        self.fail("the wrapper wrote no start row")
+
+    def stop_codex(self, rec):
+        """End the fake Codex a test left running, checked by its procStart, and wait for its
+        supervisor to record it."""
+        if cd.dc.pid_alive(rec["pid"], rec["start"]):
+            kill_tree(rec["pid"])
+        self.wait_gone(rec["pid"])
+        self.wait_gone(rec["supervisor_pid"])
+
+    def test_a_sigterm_after_a_cancels_stop_row_writes_no_detached_row(self):
+        # The wrapper reads its turn's stop row only once Codex ends, so it is still polling
+        # when the signal comes: detach() must find the stop row and write nothing.
+        proc = self.start(FAKE_SLEEP="60")
+        run_id, _ = self.launch_ids(proc.stdout.readline())
+        rec = self.pid_file()
+        try:
+            self.wait_for_start()
+            with open(os.path.join(self.tmp.name, "state", "dotclaude", "delegations.jsonl"),
+                      "a") as f:
+                f.write(json.dumps({"runner": "codex", "id": run_id, "run_id": run_id,
+                                    "ts": cd.dc.now_iso(), "event": "stop",
+                                    "status": "cancelled", "exit": 1}) + "\n")
+            proc.send_signal(signal.SIGTERM)
+            self.assertEqual(proc.wait(timeout=10), 143)
+            proc.stdout.close()
+            self.assertEqual([r["event"] for r in self.ledger()], ["pending", "start", "stop"])
+        finally:
+            self.stop_codex(rec)
+
+    def test_a_sigterm_while_a_cancel_holds_the_lock_exits_143_within_detach_lock_s(self):
+        # Claude Code SIGKILLs a few seconds after its SIGTERM (the verified facts), so the
+        # detached row waits DETACH_LOCK_S for the lock at most, then exits with no row.
+        self.assertLessEqual(cd.DETACH_LOCK_S, 1)
+        proc = self.start(FAKE_SLEEP="60")
+        run_id, wid = self.launch_ids(proc.stdout.readline())
+        rec = self.pid_file()
+        try:
+            self.wait_for_start()
+            with mock.patch.dict(os.environ, {"XDG_STATE_HOME": self.env["XDG_STATE_HOME"]}):
+                lock = cd.finalize_lock_path(run_id)
+            with open(lock, "a") as held:
+                fcntl.flock(held, fcntl.LOCK_EX)  # as a cancel holds it
+                t0 = time.monotonic()
+                proc.send_signal(signal.SIGTERM)
+                self.assertEqual(proc.wait(timeout=10), 143)
+                took = time.monotonic() - t0
+            proc.stdout.close()
+            self.assertGreaterEqual(took, cd.DETACH_LOCK_S * 0.9)  # it did wait for the lock
+            self.assertLess(took, cd.DETACH_LOCK_S + 2)
+            self.assertEqual([r["event"] for r in self.ledger()], ["pending", "start"])
+            self.assertEqual(self.watches()[wid]["state"], "open")  # for the guard to lapse
+        finally:
+            self.stop_codex(rec)
+
     def test_cancel_refuses_an_unknown_run_and_one_that_isnt_running(self):
         p = self.run_cd("cancel", "no-such-run")
         self.assertEqual(p.returncode, 2)
@@ -664,8 +747,8 @@ class FullRun(unittest.TestCase):
         self.assertEqual(p.returncode, 1)
         self.assertIn("codex-delegate: FileNotFoundError", p.stderr)
         stop = self.ledger()[-1]
-        self.assertEqual((stop["event"], stop["exit"], stop["report_ok"], stop["audit_ok"]),
-                         ("stop", 1, False, False))
+        self.assertEqual((stop["event"], stop["status"], stop["exit"], stop["report_ok"],
+                          stop["audit_ok"]), ("stop", "crashed", 1, False, False))
         self.assertIn("FileNotFoundError", stop["error"])
         _, wid = self.launch_ids(p.stdout.split("\n", 1)[0] + "\n")
         self.assertEqual(self.watches()[wid]["state"], "failed")
