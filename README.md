@@ -175,7 +175,8 @@ ships but is opt-in, see its entry):
   (task notifications, subagent and cross-session messages), and on a subagent's or teammate's
   own prompt. Advisory only: it adds context, it cannot run the skill; silent no-op
   otherwise; always exits 0 so it can never block a prompt. It reads the prompt with python3 and
-  stays silent if that fails.
+  stays silent if that fails. After changing it, replay your own typed prompts through it with
+  `python3 tests/setup/replay_history.py` (local only: the history holds private names).
 - **UserPromptSubmit: `session-title.sh`** (in this repo). Sets the session title (the terminal tab
   title) to `[<repo>] <label>` so tabs are tellable apart. It emits the supported
   `hookSpecificOutput.sessionTitle`, not raw OSC escapes, so the title has display precedence over

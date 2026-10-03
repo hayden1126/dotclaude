@@ -44,10 +44,10 @@ stored here).
   `gh pr list --head fix/handoff-reminder-subagents`). Commit messages hold the why, README's hook
   entries the behavior, `tests/setup/` the cases. **Next:** Hayden merges; nothing to install,
   since the hooks are symlinked (already live while this branch is checked out; switching to
-  `main` first reverts them). After any change to handoff-reminder, rerun it over the real prompt
-  history (`~/.claude/history.jsonl`, `display`, main thread only: it holds private names) and
-  read every fire and near-miss. Accepted: "I think we should wrap up" doesn't fire; "handoff
-  then commit hooks run twice" does.
+  `main` first reverts them). After any change to handoff-reminder, run
+  `python3 tests/setup/replay_history.py` and read every disagreement and near-miss (main thread
+  only: the history holds private names). Accepted: "I think we should wrap up" doesn't fire;
+  "handoff then commit hooks run twice" does.
 - **Delegation hardening: what is live on HAYPC** (Stage 2 and 3, `docs/delegation.md`;
   `skills/delegation/SKILL.md` is the operating guide). Open items:
   - **Retune later, not now.** When `due` asks for `audit --monthly` (the date and the first
