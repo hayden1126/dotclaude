@@ -612,6 +612,16 @@ class Orphans(StateTest):
         self.assertIn("1 watch no running Claude Code session is guarding: w-1 (the build; "
                       "its waiter is still running).", self.message())
 
+    def test_an_unknown_sessions_watch_with_a_live_process_is_not_named(self):
+        # Its process's guard adopts it (left_by_clear), whatever its waiter's state.
+        self.watch(sid="unknown", claude_pid=os.getpid(),
+                   claude_start=checks.dc.proc_start(os.getpid()))
+        self.assertEqual(self.message(), "")
+
+    def test_an_unknown_sessions_watch_whose_process_ended_is_named(self):
+        self.watch(sid="unknown", live=True, claude_pid=DEAD, claude_start=None)
+        self.assertIn("w-1 (the build; its waiter is still running)", self.message())
+
     def test_an_unknown_session_counts_only_once_its_waiter_is_dead(self):
         self.watch(sid="unknown", live=True)
         self.assertEqual(self.message(), "")

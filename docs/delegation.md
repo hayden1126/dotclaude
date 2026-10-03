@@ -769,11 +769,12 @@ the fix is enforcement. `PLAN.md` has the design history and the options weighed
     timeout 7200000)`. The guard folds a killed waiter by it.
   - `--max MIN` defaults to 110 and can't go higher, which leaves room for a 5-minute finalize
     under the 120-minute cap. `--drop <id>` ends a watch. `--resume <id>` takes one over, but
-    refuses a live waiter someone will hear from: its Claude process is live, or, with no process
-    recorded, its session is live (the caller's counts); a live waiter with no session is refused
-    too. A live waiter whose Claude process has ended (a crash; the guard then marks it
-    `waiter_unheard`), or whose session has ended with no process recorded, reports to nobody,
-    so it is taken over, and it steps aside (exit 3) at its next beat.
+    refuses a live waiter someone will hear from: its Claude process is live, whatever its
+    session; or, with no process recorded, its session is live (the caller's counts), or it has
+    no session either. A live waiter whose Claude process has ended (a crash; the guard then
+    marks it `waiter_unheard`), whatever its session, or whose session has ended with no process
+    recorded, reports to nobody, so it is taken over, and it steps aside (exit 3) at its next
+    beat.
   - A new wait whose condition equals an unresolved watch's takes that watch over and says so,
     once it has, so a rerun after a kill doesn't leave the guard pointing at a second watch. The
     watch is the caller's: in its session, or left by its Claude process in a session that isn't
@@ -854,7 +855,8 @@ the fix is enforcement. `PLAN.md` has the design history and the options weighed
   process it was recorded under has ended, even if its session runs on in a new process, or,
   with no process recorded, when its session isn't live. That holds whatever its waiter's
   state, since a bare waiter can outlive a SIGKILLed Claude Code; a live waiter is marked "its
-  waiter is still running". A watch with no session counts only once its waiter is dead.
+  waiter is still running". A watch with neither a session nor a process counts only once its
+  waiter is dead.
   - A second line names up to three watches that ended (done, failed or stale) in the last 7
     days while no Claude process was listening and aren't reported yet (`dc.ended_unheard`),
     oldest end first: "<n> watch(es) ended while no Claude Code process was listening: <id>

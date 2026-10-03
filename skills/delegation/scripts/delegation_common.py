@@ -1066,17 +1066,19 @@ def ended_unheard(w, now=None):
 
 
 def watch_orphaned(w, current=None, live=None, now=None):
-    """Whether nobody will hear from an unresolved watch, whatever its waiter's state: the
-    Claude process it was recorded under has ended (claude_gone), or, with none recorded, its
-    session isn't `current` (the caller's) or live. A watch with no session ("unknown") was
-    started outside Claude Code and reports to whoever ran it, so only a dead waiter orphans
-    it. `live` is live_sessions(), if read."""
+    """Whether nobody will hear from an unresolved watch's waiter, whatever its state. With a
+    Claude process recorded, that process decides, whatever the session: gone (claude_gone),
+    nobody hears its waiter's exit; alive, it does, and its guard adopts the watch (its own
+    session's, or left_by_clear, which covers an "unknown" session too). With none recorded,
+    the session decides: not while it is `current` (the caller's) or live. A watch with no
+    session and no process was started outside Claude Code and reports to whoever ran it, so
+    only a dead waiter orphans it. `live` is live_sessions(), if read."""
+    if w.get("claude_pid") is not None:
+        return not claude_alive(w)
     sid = w.get("session_id")
     if sid in (None, "unknown"):
         return not waiter_alive(w, now)
-    if claude_gone(w):
-        return True
-    if (current and sid == current) or claude_alive(w):
+    if current and sid == current:
         return False
     return sid not in (live_sessions() if live is None else live)
 

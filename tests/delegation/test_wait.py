@@ -467,6 +467,16 @@ class Exits(WaitEnv):
         out, _ = self.finish(first, 3)
         self.assertIn(f"watch {wid} was taken over by pid {p.pid}", out)
 
+    def test_resume_takes_over_an_unknown_sessions_waiter_once_its_process_ended(self):
+        # The process decides, even with no session: its exit reaches nobody now.
+        first = self.start("--pid", str(self.job().pid), CLAUDE_CODE_SESSION_ID="")
+        wid = self.waiting(first)["id"]
+        self.update(wid, claude_pid=DEAD, claude_start=None)
+        p = self.start("--resume", wid)
+        self.assertEqual(self.waiting(p)["session_id"], "s1")  # the resuming caller's
+        out, _ = self.finish(first, 3)
+        self.assertIn(f"watch {wid} was taken over by pid {p.pid}", out)
+
     def test_resume_takes_over_a_waiter_the_guard_marked_unheard(self):
         first = self.start("--pid", str(self.job().pid))
         wid = self.waiting(first)["id"]
