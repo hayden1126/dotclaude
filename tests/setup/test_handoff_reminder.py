@@ -33,12 +33,17 @@ class HandoffReminder(unittest.TestCase):
                        "thanks let's wrap up", "it's time to wrap up", "let\u2019s wrap up",
                        "let's wrap up today", "let's wrap up \U0001F44D",
                        "sweep fixes, handoff then push", "handoff", "great work\u2014let's wrap up",
-                       "let's wrap up :)", "let's wrap up now and push", "let's stop here then"):
+                       "let's wrap up :)", "let's wrap up now and push", "let's stop here then",
+                       "let's wrap up and push the branch",
+                       "let's stop here and commit what we have", "wrap up and clear",
+                       "let's wrap up for this session", "done for the day", "handoff, then push.",
+                       "calling it a day"):
             with self.subTest(prompt=prompt):
                 self.assertTrue(fires(prompt))
 
     def test_clear_next_to_punctuation_fires(self):
-        for prompt in ("/clear?", "/clear,", "about to /clear.", "`/clear`"):
+        for prompt in ("/clear?", "/clear,", "about to /clear.", "`/clear`",
+                       "tests pass, no changes needed /clear", "merged without conflicts /clear"):
             with self.subTest(prompt=prompt):
                 self.assertTrue(fires(prompt))
 
@@ -67,7 +72,10 @@ class HandoffReminder(unittest.TestCase):
                        "stop here then explain why the test fails",
                        "handoff now works with worktrees?",
                        "handoff and memory curation are separate steps, right?",
-                       "stop here's why", "wrap up/down"):
+                       "stop here's why", "wrap up/down", "handoff: does it update memory too?",
+                       "handoff, memory, docs: what order?", "calling it here, I get a 404",
+                       "what does `/clear` do?", "what about /clear?", "what does /clear do?",
+                       "stop here and clear the cache"):
             with self.subTest(prompt=prompt):
                 self.assertFalse(fires(prompt))
 

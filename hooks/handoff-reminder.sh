@@ -61,8 +61,10 @@ words="$(wc -w <<<"$prompt" | tr -d '[:space:]')"
 [ "${words:-999}" -gt 18 ] && exit 0
 
 # 4. Explicit context-reset command in a terse message, punctuation or backticks around it allowed,
-#    but not advice against it: a negation up to three words before it ("don't run /clear yet").
-NEG="(^|[^[:alnum:]])(don't|dont|do not|never|not|no|can't|cant|cannot|won't|without)([[:space:]]+[[:alnum:]'-]+){0,3}[[:space:]]+[\`\"(]?/clear"
+#    but not advice against it or a question about it: a negation or a question word up to three
+#    words before it ("don't run /clear yet", "what does /clear do?"), or "no" or "without" right
+#    before it ("no /clear yet", not "no changes needed /clear").
+NEG="(^|[^[:alnum:]])((don't|dont|do not|never|not|can't|cant|cannot|won't|what|how|why|when|where|which)([[:space:]]+[[:alnum:]'-]+){0,3}|no|without)[[:space:]]+[\`\"(]?/clear"
 if grep -qiE '(^|[[:space:]`"(])/clear([[:space:]`").,!?;:]|$)' <<<"$prompt" \
    && ! grep -qiE "$NEG" <<<"$prompt"; then
   emit; exit 0
@@ -79,14 +81,16 @@ fi
 A='(^|[.!?;:,]|—|–|[[:space:]]-[[:space:]])[[:space:]]*'
 P="((let'?s|lets|it'?s time to|time to|ok,?|okay,?|alright,?|so,?|please|just|i'?ll|i'?m|we'?re|we can|can we|should we|shall we|now,?|ready to|about to) +)"
 PI="((thanks|thank you|great|cool|perfect|nice|awesome)( work| job)?,? +)"
-W="(wrap(ping)? (this |it )?up|wrap(ping)? up (the |this )?session|call(ing)? it (a day|for the day|for the night|here|quits)|stop(ping)? here|stop for (the day|now|today)|end (of )?(the |this )?session|that'?s a wrap|wipe (the )?(context|memory)|clear (the )?(memory|context|session|chat|conversation)|hand[ -]off|hand[ -]?off (now|here|please|for real|time)|do a hand[ -]?off|hand (it|this|things) off)"
+W="(wrap(ping)? (this |it )?up|wrap(ping)? up (the |this )?session|call it (a day|for the day|for the night|here|quits)|calling it (a day|quits)|done for (the day|today|tonight|the night)|stop(ping)? here|stop for (the day|now|today)|end (of )?(the |this )?session|that'?s a wrap|wipe (the )?(context|memory)|clear (the )?(memory|context|session|chat|conversation)|hand[ -]off|hand[ -]?off (now|here|please|for real|time)|do a hand[ -]?off|hand (it|this|things) off)"
 END='[[:space:]]*([.!?;:,)]|$)'
-ENDNQ='[[:space:]]*([.!;:,)]|$)'
+ENDNQ='[[:space:]]*([.!)]|$)'
 SYM='[[:space:]]+[^[:alnum:][:space:]]+[[:space:]]*$'
-TAILW='(now|please|here|then|so|today|tonight|for (today|now|the day|tonight|the night))'
-NEXT='(and|then|so)( then| also)? (hand[ -]?off|push|commit|wrap( it| this)? up|call it a day|clear (the )?(context|session|chat)|end (the )?session|close (it )?out)'
+TAILW='(now|please|here|then|so|today|tonight|for (today|now|the day|tonight|the night|this session|the session))'
+# A next wrap-up step, with whatever object it takes ("and push the branch"); "clear", "end" and
+# "close" only in their wrap-up senses, so "stop here and clear the cache" stays silent.
+NEXT='(and|then|so)( then| also)? ((hand[ -]?off|push|commit|wrap( it| this)? up)([[:space:]]+[^.!?;:,]*)?|call it a day|clear( (the )?(context|session|chat|conversation|memory))?|end (the |this )?session|close (it |this )?out)'
 T="(${END}|${SYM}|([[:space:]]+${TAILW})+(${END}|${SYM})|([[:space:]]+${TAILW})*[[:space:]]+${NEXT}(${END}|${SYM}))"
-BARE="${ENDNQ}|([[:space:]]+(now|please|then|time))+${ENDNQ}|([[:space:]]+(now|then))*[[:space:]]+${NEXT}${ENDNQ}"
+BARE="${ENDNQ}|([[:space:]]+(now|please|then|time))+${ENDNQ}|,?([[:space:]]+(now|then))*[[:space:]]+${NEXT}${ENDNQ}"
 if grep -qiE "${A}(${PI}${P}+|${P}*)${W}${T}|${A}(${PI})?${P}+handoff${T}|${A}handoff(${BARE})" <<<"$prompt"; then
   emit; exit 0
 fi
