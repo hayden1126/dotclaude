@@ -37,13 +37,15 @@ class HandoffReminder(unittest.TestCase):
                        "let's wrap up and push the branch",
                        "let's stop here and commit what we have", "wrap up and clear",
                        "let's wrap up for this session", "done for the day", "handoff, then push.",
-                       "calling it a day"):
+                       "calling it a day", "calling it a night", "I'm calling it for the night.",
+                       "handoff, please", "handoff; then push", "let's wrap up and push everything"):
             with self.subTest(prompt=prompt):
                 self.assertTrue(fires(prompt))
 
     def test_clear_next_to_punctuation_fires(self):
         for prompt in ("/clear?", "/clear,", "about to /clear.", "`/clear`",
-                       "tests pass, no changes needed /clear", "merged without conflicts /clear"):
+                       "tests pass, no changes needed /clear", "merged without conflicts /clear",
+                       "how about we /clear", "what if we /clear", "when you're done I'll /clear"):
             with self.subTest(prompt=prompt):
                 self.assertTrue(fires(prompt))
 
@@ -75,7 +77,10 @@ class HandoffReminder(unittest.TestCase):
                        "stop here's why", "wrap up/down", "handoff: does it update memory too?",
                        "handoff, memory, docs: what order?", "calling it here, I get a 404",
                        "what does `/clear` do?", "what about /clear?", "what does /clear do?",
-                       "stop here and clear the cache"):
+                       "stop here and clear the cache", "handoff then commit hooks run twice",
+                       "handoff and push notifications are both broken",
+                       "stop here and push back on the reviewer's point", "no need to /clear yet",
+                       "keep going without a /clear", "what's /clear for?"):
             with self.subTest(prompt=prompt):
                 self.assertFalse(fires(prompt))
 

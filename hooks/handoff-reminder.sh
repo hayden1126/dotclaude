@@ -61,10 +61,12 @@ words="$(wc -w <<<"$prompt" | tr -d '[:space:]')"
 [ "${words:-999}" -gt 18 ] && exit 0
 
 # 4. Explicit context-reset command in a terse message, punctuation or backticks around it allowed,
-#    but not advice against it or a question about it: a negation or a question word up to three
-#    words before it ("don't run /clear yet", "what does /clear do?"), or "no" or "without" right
-#    before it ("no /clear yet", not "no changes needed /clear").
-NEG="(^|[^[:alnum:]])((don't|dont|do not|never|not|can't|cant|cannot|won't|what|how|why|when|where|which)([[:space:]]+[[:alnum:]'-]+){0,3}|no|without)[[:space:]]+[\`\"(]?/clear"
+#    but not advice against it or a question about it: a negation or a question up to three words
+#    before it ("don't run /clear yet", "what does /clear do?"), or "no", "no need to" or
+#    "without (a)" right before it ("no /clear yet", not "no changes needed /clear"). A proposal
+#    still fires ("how about we /clear", "when you're done I'll /clear").
+Q="what('s| is| does| do| about)|how (does|do|is)|why (does|do|is|would)|which|where"
+NEG="(^|[^[:alnum:]])((don't|dont|do not|never|not|can't|cant|cannot|won't|${Q})([[:space:]]+[[:alnum:]'-]+){0,3}|no|no need to|without( a| the)?)[[:space:]]+[\`\"(]?/clear"
 if grep -qiE '(^|[[:space:]`"(])/clear([[:space:]`").,!?;:]|$)' <<<"$prompt" \
    && ! grep -qiE "$NEG" <<<"$prompt"; then
   emit; exit 0
@@ -81,16 +83,23 @@ fi
 A='(^|[.!?;:,]|—|–|[[:space:]]-[[:space:]])[[:space:]]*'
 P="((let'?s|lets|it'?s time to|time to|ok,?|okay,?|alright,?|so,?|please|just|i'?ll|i'?m|we'?re|we can|can we|should we|shall we|now,?|ready to|about to) +)"
 PI="((thanks|thank you|great|cool|perfect|nice|awesome)( work| job)?,? +)"
-W="(wrap(ping)? (this |it )?up|wrap(ping)? up (the |this )?session|call it (a day|for the day|for the night|here|quits)|calling it (a day|quits)|done for (the day|today|tonight|the night)|stop(ping)? here|stop for (the day|now|today)|end (of )?(the |this )?session|that'?s a wrap|wipe (the )?(context|memory)|clear (the )?(memory|context|session|chat|conversation)|hand[ -]off|hand[ -]?off (now|here|please|for real|time)|do a hand[ -]?off|hand (it|this|things) off)"
+W="(wrap(ping)? (this |it )?up|wrap(ping)? up (the |this )?session|call it (a day|a night|for the day|for the night|here|quits)|calling it (a day|a night|for the day|for the night|quits)|done for (the day|today|tonight|the night)|stop(ping)? here|stop for (the day|now|today)|end (of )?(the |this )?session|that'?s a wrap|wipe (the )?(context|memory)|clear (the )?(memory|context|session|chat|conversation)|hand[ -]off|hand[ -]?off (now|here|please|for real|time)|do a hand[ -]?off|hand (it|this|things) off)"
 END='[[:space:]]*([.!?;:,)]|$)'
 ENDNQ='[[:space:]]*([.!)]|$)'
 SYM='[[:space:]]+[^[:alnum:][:space:]]+[[:space:]]*$'
 TAILW='(now|please|here|then|so|today|tonight|for (today|now|the day|tonight|the night|this session|the session))'
-# A next wrap-up step, with whatever object it takes ("and push the branch"); "clear", "end" and
-# "close" only in their wrap-up senses, so "stop here and clear the cache" stays silent.
-NEXT='(and|then|so)( then| also)? ((hand[ -]?off|push|commit|wrap( it| this)? up)([[:space:]]+[^.!?;:,]*)?|call it a day|clear( (the )?(context|session|chat|conversation|memory))?|end (the |this )?session|close (it |this )?out)'
-T="(${END}|${SYM}|([[:space:]]+${TAILW})+(${END}|${SYM})|([[:space:]]+${TAILW})*[[:space:]]+${NEXT}(${END}|${SYM}))"
-BARE="${ENDNQ}|([[:space:]]+(now|please|then|time))+${ENDNQ}|,?([[:space:]]+(now|then))*[[:space:]]+${NEXT}${ENDNQ}"
+# A next wrap-up step (STEP); after a phrase it may take a short object that starts with a
+# determiner ("and push the branch", "and commit what we have"), never "and push back on X".
+# "clear", "end" and "close" count only in their wrap-up senses ("stop here and clear the cache"
+# stays silent).
+STEP='(hand[ -]?off|push|commit|wrap( it| this)? up)'
+FIXED='(call it a day|clear( (the )?(context|session|chat|conversation|memory))?|end (the |this )?session|close (it |this )?out)'
+OBJ="([[:space:]]+(the|this|that|it|what|everything|all|my|our|your)([[:space:]]+[[:alnum:]'-]+){0,2})?"
+NEXT="(and|then|so)( then| also)? (${STEP}|${FIXED})"
+T="(${END}|${SYM}|([[:space:]]+${TAILW})+(${END}|${SYM})|([[:space:]]+${TAILW})*[[:space:]]+(and|then|so)( then| also)? (${STEP}${OBJ}|${FIXED})(${END}|${SYM}))"
+# A bare "handoff" takes no object after its next step: "handoff then commit hooks run twice" is a
+# bug report.
+BARE="${ENDNQ}|([,;]?[[:space:]]+(now|please|then|time))+${ENDNQ}|[,;]?([[:space:]]+(now|then))*[[:space:]]+${NEXT}${ENDNQ}"
 if grep -qiE "${A}(${PI}${P}+|${P}*)${W}${T}|${A}(${PI})?${P}+handoff${T}|${A}handoff(${BARE})" <<<"$prompt"; then
   emit; exit 0
 fi
