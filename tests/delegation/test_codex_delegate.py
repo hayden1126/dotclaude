@@ -553,6 +553,14 @@ class FullRun(unittest.TestCase):
         self.assertEqual(self.watches()["w-old"]["state"], "done")
         self.assertEqual(len(self.watches()), 2)  # the run's own, and the one it took over
 
+    def test_a_resume_with_no_claude_process_keeps_the_session_and_says_nothing(self):
+        run_id = self.summary(self.run_ok())["run_id"]
+        self.write_watch("w-old", run_id)
+        p = self.run_cd("resume", run_id, "--no-scope", CLAUDE_PID="", CLAUDE_CODE_SESSION_ID="")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertNotIn("the watch guard won't see this watch", p.stderr)
+        self.assertEqual(self.watches()["w-old"]["session_id"], "s0")
+
     def test_resume_is_refused_while_a_live_waiter_holds_the_runs_watch(self):
         run_id = self.summary(self.run_ok())["run_id"]
         self.write_watch("w-live", run_id, live=True, sid="s1")  # its session is live

@@ -792,8 +792,8 @@ the fix is enforcement. `PLAN.md` has the design history and the options weighed
     records the session `unknown` and says the guard won't see the watch. One with a process but
     no session found records `unknown` and says nothing, since that process's guard adopts the
     watch by the process (`unknown` is never live). A `--resume` outside Claude Code keeps the
-    watch's session, drops its `claude_pid` and says nothing; only a new wait records `unknown`
-    and warns. `/clear` keeps the process but starts a new
+    watch's session, drops its `claude_pid` and says nothing, and so does a `codex-delegate
+    resume` that takes its run's watch over; only a new watch records `unknown` and warns. `/clear` keeps the process but starts a new
     session id, and the guard adopts the watch into the new session (below). When it ends, it
     records `reported`: true while that process runs, else false.
   - It refuses to run sandboxed, where its pids would belong to another PID namespace. It refuses
