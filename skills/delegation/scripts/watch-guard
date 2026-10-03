@@ -14,14 +14,17 @@ to wake it. This hook is the enforcement:
   - else a condition that has ended is recorded so and blocks once, even after its lapse was
     acknowledged: the dead waiter's notification never came, so the lead is told to check the
     result and report it. That is a met condition (done), a failed or stale one, a codex run
-    with a stop row (done on exit 0, failed otherwise), or one that never started (failed). A
-    --log condition is checked in the log's last 1 MB only, to keep a stop cheap. So when the
-    log is longer than that and its tail has no --fail line, a failed or stale verdict is a
-    lapse instead: the done line may be further back, where the re-armed waiter reads;
-  - a codex run that ended without a stop row isn't recorded, since its outcome is unknown
-    until it is finalized: the watch stays open and blocks once (end_blocked_at), even after
-    its lapse was acknowledged, saying to re-arm it, since the re-armed waiter finalizes the
-    run. A first block on it is also the lapse's, so a later stop acknowledges it as below;
+    with a stop row (done on exit 0, failed otherwise), or one that never started (failed);
+  - a job that has ended in a way the guard can't judge is "ended": it isn't recorded, the
+    watch stays open and blocks once (end_blocked_at), even after its lapse was acknowledged,
+    saying to re-arm it, since the re-armed waiter decides. That is a codex run that ended
+    without a stop row (its outcome waits on a finalize, which the waiter does), and a --log
+    verdict the log's tail can't settle: the guard reads only the last 1 MB, to keep a stop
+    cheap. With the log cut, a failed or stale verdict whose tail has neither the --done line
+    nor a --fail line may be wrong when every other part holds (the done line may be further
+    back), and so may a done verdict when the watch has a --fail pattern (a fail line may be
+    further back). A first block on such a watch is also the lapse's, so a later stop
+    acknowledges it as below;
   - else it has lapsed: the condition is unmet, or the codex run still runs. A lapse
     blocks once, recording blocked_at, a digest of the stop (its prompt_id and
     last_assistant_message) and the transcript's size. A later stop, whose digest differs,
@@ -109,6 +112,13 @@ CODEX_ENDED = ("Watch {id} ({desc}): codex run {run} has ended, but its waiter h
                "so the run isn't finalized. Re-arm the watch and its waiter finalizes it: "
                "delegation-ledger wait --resume {id}, with run_in_background and timeout "
                "7200000. To stop watching it: delegation-ledger wait --drop {id}.")
+UNCERTAIN = ("Watch {id} ({desc}): {what}, but {log} is longer than the last 1 MB the guard "
+             "reads, so it can't tell whether the job succeeded or failed. Re-arm the watch and "
+             "its waiter reads the whole log and reports done or failed: delegation-ledger wait "
+             "--resume {id}, with run_in_background and timeout 7200000. To stop watching it: "
+             "delegation-ledger wait --drop {id}.")
+UNCERTAIN_WHAT = {"failed": "its job has ended", "stale": "its log has gone quiet",
+                  "done": "its log has the done line"}
 CODEX_FAILED = ("codex run {run} ended with exit {exit}, but its waiter had stopped, so no "
                 "notification came. Check its report and report it.")
 KILL_REASON = ('Background command "{desc}" was stopped at its time limit. If it was waiting '
@@ -192,10 +202,12 @@ def log_tail_cursor(cond):
 def watch_pending(w, shells, now):
     """What one watch would add, read-only: None, or a Pending. Every way its condition can end
     that the guard can judge is an end, which blocks once and resolves the watch even after its
-    lapse was acknowledged, so a job that ends badly is said too. A codex run that ended with
-    no stop row is "ended": its outcome waits on a finalize, which a re-armed waiter does, so
-    the watch stays open. Only a condition still unmet is a lapse. A codex run gone from the
-    ledger raises Undecidable, which skips this watch."""
+    lapse was acknowledged, so a job that ends badly is said too. One it can't judge is
+    "ended", which blocks once too, acknowledged or not, and leaves the watch open for the
+    re-armed waiter to decide: a codex run that ended with no stop row (its finalize is owed),
+    and a --log verdict that the log's last LOG_TAIL bytes can't settle (uncertain). Only a
+    condition still unmet is a lapse. A codex run gone from the ledger raises Undecidable,
+    which skips this watch."""
     wid, cond = w["id"], w.get("condition") or {}
     if dc.waiter_alive(w, now) or any(wid in c for c in shells):
         return None
@@ -218,16 +230,35 @@ def watch_pending(w, shells, now):
         return Pending("lapse", w, lapsed, None)
     cursor = log_tail_cursor(cond) if cond.get("log") else None
     verdict, why = dc.watch_verdict(w, cursor, now)
+    if verdict and uncertain(verdict, cond, cursor):
+        return Pending("ended", w, UNCERTAIN.format(
+            id=wid, desc=desc, what=UNCERTAIN_WHAT[verdict], log=cond["log"]), None)
     if verdict == "done":
         return Pending("end", w, met, "done")
-    if verdict and cursor and cursor["tail"] and not cursor["failed"]:
-        # Read from the tail alone, with no --fail line there: the done line may be further
-        # back, so only the re-armed waiter, which reads the whole log, can say failed or stale.
-        return Pending("lapse", w, lapsed, None)
     if verdict:  # failed or stale
         return Pending("end", w, JOB_ENDED.format(id=wid, desc=desc, state=verdict, why=why),
                        verdict)
     return Pending("lapse", w, lapsed, None)
+
+
+def uncertain(verdict, cond, cursor):
+    """Whether a verdict read from the log's tail alone could be wrong, so only the re-armed
+    waiter, which reads the whole log, can decide. With the log cut (cursor["tail"]): a done
+    verdict when the condition has a --fail pattern (a fail line may be further back), and a
+    failed or stale one when the done line is all it lacks: a --done pattern the tail didn't
+    match, no --fail line there, its pids gone and its --file there (a done line further back
+    would make it done). A --fail line in the tail fails it whatever lies further back, and a
+    condition with no --done pattern, a done line in the tail, a missing --file or a pid still
+    running leaves it unmet whatever the whole log says."""
+    if not (cursor and cursor["tail"]):
+        return False
+    if verdict == "done":
+        return bool(cond.get("fail"))
+    if not cond.get("done") or cursor["failed"] or cursor["done"]:
+        return False
+    if cond.get("file") and not os.path.exists(cond["file"]):
+        return False
+    return not any(dc.pid_alive(p.get("pid"), p.get("start")) for p in cond.get("pids") or [])
 
 
 # ---- gather: kills ----

@@ -398,36 +398,101 @@ class Watches(GuardEnv):
             f.write("BUILD OK\n")  # now inside the last megabyte
         self.assertEqual(self.decide(), self.block(self.met_reason(desc="the log", cond=cond)))
 
-    def long_log(self, *tail):
+    def long_log(self, *tail, name="build.log"):
         """A log whose first line is OK, then more than the guard's 1 MB of filler, then
         `tail`."""
-        log = self.path("build.log")
+        log = self.path(name)
         with open(log, "w") as f:
             f.write("OK\n" + ("x" * 1023 + "\n") * (guard.LOG_TAIL // 1024 + 10))
             f.writelines(line + "\n" for line in tail)
         return log
 
-    def test_a_failed_verdict_the_logs_tail_cant_settle_is_a_lapse(self):
-        # OK is further back than the guard reads, and the pid has exited. Recorded failed, the
-        # watch would refuse the re-armed waiter, which reads the whole log and says done.
-        cond = {"pids": [{"pid": DEAD, "start": None, "comm": "make"}], "log": self.long_log(),
-                "done": "^OK$"}
-        self.watch(cond=cond)
-        self.lines()
-        self.assertEqual(self.decide(), self.block(
-            self.lapse_reason(cond=dc.condition_text(cond))))
-        self.assertEqual(self.read()["state"], "open")
+    def uncertain_reason(self, what, log, wid="w-1", desc="the build"):
+        return (f"Watch {wid} ({desc}): {what}, but {log} is longer than the last 1 MB the "
+                "guard reads, so it can't tell whether the job succeeded or failed. Re-arm the "
+                "watch and its waiter reads the whole log and reports done or failed: "
+                f"delegation-ledger wait --resume {wid}, with run_in_background and timeout "
+                f"7200000. To stop watching it: delegation-ledger wait --drop {wid}.")
 
-    def test_a_stale_verdict_the_logs_tail_cant_settle_is_a_lapse(self):
+    def assert_uncertain_once(self, what, log, state):
+        """One block saying the outcome is uncertain, then silence; the watch stays `state`."""
+        self.lines()
+        self.assertEqual(self.decide(prompt_id="p1"), self.block(
+            self.uncertain_reason(what, log)))
+        out = [self.decide(prompt_id=p) for p in ("p2", "p3")]
+        self.assertFalse([o for o in out if o and o.get("decision")], out)  # no second block
+        self.assertEqual(self.read()["state"], state)
+        dc.parse_iso(self.read()["end_blocked_at"])
+
+    def test_an_acknowledged_job_that_ends_with_its_log_cut_blocks_once_as_uncertain(self):
+        # OK is further back than the guard reads, and the pid has exited. Recorded failed, the
+        # watch would refuse the re-armed waiter, which reads the whole log and says done; a
+        # plain lapse would say nothing, since this one was acknowledged.
+        log = self.long_log()
+        self.watch(state="acknowledged", blocked_at=guard.iso(self.now - 600),
+                   cond={"pids": [{"pid": DEAD, "start": None, "comm": "make"}], "log": log,
+                         "done": "^OK$"})
+        self.assert_uncertain_once("its job has ended", log, "acknowledged")
+
+    def test_an_acknowledged_log_that_goes_stale_with_its_log_cut_blocks_once_as_uncertain(self):
         log = self.long_log()
         old = self.now - 7200
         os.utime(log, (old, old))
-        cond = {"log": log, "done": "^OK$", "stale_min": 1}
-        self.watch(cond=cond, created=guard.iso(old))
+        self.watch(state="acknowledged", blocked_at=guard.iso(old), created=guard.iso(old),
+                   cond={"log": log, "done": "^OK$", "stale_min": 1})
+        self.assert_uncertain_once("its log has gone quiet", log, "acknowledged")
+
+    def test_a_done_line_with_a_fail_line_maybe_further_back_is_uncertain_not_done(self):
+        # The waiter, reading the whole log, would find the traceback and say failed.
+        log = self.path("build.log")
+        with open(log, "w") as f:
+            f.write("Traceback (most recent call last):\n"
+                    + ("x" * 1023 + "\n") * (guard.LOG_TAIL // 1024 + 10) + "BUILD OK\n")
+        self.watch(cond={"pids": [{"pid": DEAD, "start": None, "comm": "make"}], "log": log,
+                         "done": "^BUILD OK$", "fail": "^Traceback"})
         self.lines()
-        self.assertEqual(self.decide(), self.block(
-            self.lapse_reason(cond=dc.condition_text(cond))))
-        self.assertEqual(self.read()["state"], "open")
+        self.assertEqual(self.decide(prompt_id="p1"), self.block(
+            self.uncertain_reason("its log has the done line", log)))
+        self.assertEqual(self.decide(prompt_id="p2"), {"systemMessage": self.ACK})
+        self.assertIsNone(self.decide(prompt_id="p3"))
+        self.assertEqual(self.read()["state"], "acknowledged")  # not recorded done
+
+    def test_a_rearm_clears_the_uncertain_block(self):
+        log = self.long_log()
+        self.watch(state="acknowledged", blocked_at=guard.iso(self.now - 600),
+                   cond={"pids": [{"pid": DEAD, "start": None, "comm": "make"}], "log": log,
+                         "done": "^OK$"})
+        self.lines()
+        self.assertEqual(self.decide(prompt_id="p1"), self.block(
+            self.uncertain_reason("its job has ended", log)))
+        dc.update_watch("w-1", dc.unblock)  # what take() and beat() do
+        self.assertEqual(self.decide(prompt_id="p2"), self.block(
+            self.uncertain_reason("its job has ended", log)))
+
+    def test_a_cut_log_whose_verdict_the_whole_log_cant_change_still_ends_the_watch(self):
+        # Each lacks more than a done line further back could give: so failed or stale stands.
+        never = self.path("never")
+        dead = [{"pid": DEAD, "start": None, "comm": "make"}]
+        log = self.long_log("OK")  # the done line in the tail, the file missing
+        self.watch(cond={"pids": dead, "log": log, "done": "^OK$", "file": never},
+                   created="2026-10-02T10:00:00Z")
+        log2 = self.long_log(name="other.log")  # no done line in the tail, the file missing
+        self.watch("w-2", cond={"pids": dead, "log": log2, "done": "^OK$", "file": never},
+                   created="2026-10-02T10:00:01Z")
+        log3 = self.long_log(name="quiet.log")  # quiet, but its pid still runs
+        old = self.now - 7200
+        os.utime(log3, (old, old))
+        me = [{"pid": os.getpid(), "start": dc.proc_start(os.getpid()), "comm": "python3"}]
+        self.watch("w-3", cond={"pids": me, "log": log3, "done": "^OK$", "stale_min": 1},
+                   created=guard.iso(old))
+        self.lines()
+        out = self.decide()
+        self.assertEqual(out["decision"], "block")
+        for wid, state in (("w-1", "failed"), ("w-2", "failed"), ("w-3", "stale")):
+            self.assertIn(f"Watch {wid} (the build) ended {state}", out["reason"])
+        self.assertNotIn("can't tell", out["reason"])
+        self.assertEqual([self.read(w)["state"] for w in ("w-1", "w-2", "w-3")],
+                         ["failed", "failed", "stale"])
 
     def test_a_fail_line_in_the_tail_or_a_short_logs_verdict_still_ends_the_watch(self):
         log = self.long_log("ERROR")
