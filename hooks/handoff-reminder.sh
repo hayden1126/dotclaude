@@ -2,19 +2,26 @@
 # UserPromptSubmit hook: when the user signals a genuine session wrap-up / handoff / context reset,
 # inject a reminder to INVOKE the `handoff` skill rather than improvising its steps. Advisory only:
 # it adds context, it cannot run the skill. Silent no-op on anything else; always exits 0 so it can
-# never block a prompt. Reads the prompt with jq, else python3, else greps the raw payload (where a
-# quoted "/clear" has no spaces around it, so rule 4 can't see it).
+# never block a prompt. Reads the prompt with python3 (every hook here needs it; jq isn't on every
+# machine). If that fails it stays silent: grepping the raw JSON payload instead misfired on " /clear "
+# inside a report and never matched a bare "/clear", which sits between quotes there.
 #
 # Precision-first (this hook was over-firing on the word "handoff" used as a TOPIC). It fires only on
 # a clear wrap-up COMMAND, never on discussion of handoff / the skill / this hook, and never on
-# injected system content.
+# injected system content. A wrap-up phrase counts only at the start of a clause, so "don't wrap up
+# yet" and "add an end session button" stay silent; the cost is that "I think we should wrap up"
+# does too.
 set -uo pipefail
 
-payload="$(cat)"
-prompt="$(printf '%s' "$payload" | jq -r '.prompt // empty' 2>/dev/null || true)"
-[ -z "$prompt" ] && prompt="$(printf '%s' "$payload" | python3 -c \
-  'import json, sys; print(json.load(sys.stdin).get("prompt") or "")' 2>/dev/null || true)"
-[ -z "$prompt" ] && prompt="$payload"
+# A subagent's or teammate's payload carries agent_id: never theirs to hand off.
+prompt="$(python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+if d.get("agent_id"):
+    sys.exit(3)
+p = d.get("prompt")
+sys.stdout.buffer.write((p if isinstance(p, str) else "").encode("utf-8", "replace"))
+' 2>/dev/null)" || exit 0
 
 emit() {
   cat <<'MSG'
@@ -26,33 +33,41 @@ durable to carry, the skill itself says skip it, but make that an explicit judgm
 MSG
 }
 
+# Here-strings, not printf | grep -q: with pipefail, grep quitting early on a long prompt would
+# SIGPIPE printf and read as "no match".
+
 # 1. Never fire on injected / non-user content (task notifications, system reminders, hook echoes,
 #    slash-command stdout, a subagent's or another session's message). These are not the user
 #    asking to wrap up.
-if printf '%s' "$prompt" | grep -qiE '\[SYSTEM NOTIFICATION|NOT USER INPUT|<task-notification|<system-reminder|</system-reminder|automated background-task|hook success|<command-name>|<command-message>|<local-command|<agent-message|\[Subagent hand-back\]|<cross-session-message|<teammate-message'; then
+if grep -qiE '\[SYSTEM NOTIFICATION|NOT USER INPUT|<task-notification|<system-reminder|</system-reminder|automated background-task|hook success|<command-name>|<command-message>|<local-command|<agent-message|\[Subagent hand-back\]|<cross-session-message|<teammate-message' <<<"$prompt"; then
   exit 0
 fi
 
 # 2. Never fire when the user is talking ABOUT handoff (as a topic/noun) or about the skill/hook,
 #    rather than asking to hand off. Catches: "the/this/that handoff", "handoff <noun>" (skill, hook,
 #    issue, problem, ...), "the skill/hook/reminder", "false positive", "the hook fires/regex", etc.
-if printf '%s' "$prompt" | grep -qiE 'handoff[ -]?reminder|handoff\.sh|false[ -]?positive|\b(the|this|that|its|our|your) hand[ -]?off\b|hand[ -]?off (skill|hook|procedure|process|step|doc|rule|reminder|trigger|logic|mechanism|issue|problem|thing|bug|stuff|situation|behaviou?r|feature|note|change|fix|word|part|regex|line|matcher)|\b(the|this|that|a|an) (skill|hook|reminder)\b|(skill|hook|reminder) (is|was|fires|fired|triggers|triggered|matched|regex)'; then
+if grep -qiE 'handoff[ -]?reminder|handoff\.sh|false[ -]?positive|\b(the|this|that|its|our|your) hand[ -]?off\b|hand[ -]?off (skill|hook|procedure|process|step|doc|rule|reminder|trigger|logic|mechanism|issue|problem|thing|bug|stuff|situation|behaviou?r|feature|note|change|fix|word|part|regex|line|matcher)|\b(the|this|that|a|an) (skill|hook|reminder)\b|(skill|hook|reminder) (is|was|fires|fired|triggers|triggered|matched|regex)' <<<"$prompt"; then
   exit 0
 fi
 
 # 3. Long messages are discussion, not a command: a long prompt that mentions /clear is talking about
-#    it (an agent's report on /clear handling tripped this when rule 3 ignored length).
-words="$(printf '%s' "$prompt" | wc -w | tr -d '[:space:]')"
+#    it (an agent's report on /clear handling tripped this when this check came after rule 4).
+words="$(wc -w <<<"$prompt" | tr -d '[:space:]')"
 [ "${words:-999}" -gt 18 ] && exit 0
 
-# 4. Explicit context-reset command in a terse message.
-if printf '%s' "$prompt" | grep -qiE '(^|[[:space:]])/clear([[:space:]]|$)'; then
+# 4. Explicit context-reset command in a terse message, punctuation or backticks around it allowed.
+if grep -qiE '(^|[[:space:]`"(])/clear([[:space:]`").,!?;:]|$)' <<<"$prompt"; then
   emit; exit 0
 fi
 
-# 5. Otherwise fire only on an intent-bearing wrap-up phrase, plus "hand off" only in COMMAND form
-#    (imperative), never the bare topic word.
-if printf '%s' "$prompt" | grep -qiE "(let'?s |lets |time to |ok,? |okay,? |please |i'?ll |we can |can we |now,? |ready to |about to )?(wrap(ping)? (this |it )?up|wrap up|call it (a day|for the day|for the night|here|quits)|stop(ping)? here|stop for (the day|now|today)|end (of )?(the |this )?session|that'?s a wrap|wipe (the )?(context|memory)|clear (the )?(memory|context|session|chat|conversation))|(let'?s |lets |ok,? |okay,? |now,? |please |time to |ready to |we can |i'?ll )hand[ -]?off|^hand[ -]off\b|hand[ -]?off( now| here| please| for real)\b|hand (it|this|things) off|do a hand[ -]?off|hand[ -]?off time"; then
+# 5. Otherwise fire only on an intent-bearing wrap-up phrase at the start of a clause (A), after
+#    optional lead-ins (P), ending its clause (T). "hand off" counts only in COMMAND form: spaced or
+#    hyphenated at a clause start, with a suffix, or the closed "handoff" after a lead-in.
+A='(^|[.!?;:,])[[:space:]]*'
+P="((let'?s|lets|time to|ok,?|okay,?|alright,?|so,?|please|just|i'?ll|i'?m|we'?re|we can|can we|should we|shall we|now,?|ready to|about to) +)"
+W="(wrap(ping)? (this |it )?up|wrap(ping)? up (the |this )?session|call(ing)? it (a day|for the day|for the night|here|quits)|stop(ping)? here|stop for (the day|now|today)|end (of )?(the |this )?session|that'?s a wrap|wipe (the )?(context|memory)|clear (the )?(memory|context|session|chat|conversation)|hand[ -]off|hand[ -]?off (now|here|please|for real|time)|do a hand[ -]?off|hand (it|this|things) off)"
+T='([[:space:]]*([.!?;:,]|$)|[[:space:]]+(and|now|please|then|here|for|so)([^[:alnum:]]|$))'
+if grep -qiE "${A}${P}*${W}${T}|${A}${P}+handoff${T}" <<<"$prompt"; then
   emit; exit 0
 fi
 
