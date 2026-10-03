@@ -38,14 +38,17 @@ stored here).
       holds the diagram spec (§8); [[svg-to-png-headless-render]] covers rendering it;
     - never publish raw transcripts or the eval data;
     - the `.zshrc`, `.zshenv` and `.mcp.json` backups beside SHAPE.md stay unread.
-- **The watch guard (background waits): built and installed on HAYPC, not yet pushed.**
-  - **Where:** branch `feat/watch-guard` (merge-base `5f965ba`; derive its state with
-    `git log main..feat/watch-guard` and `gh pr list`).
+- **The watch guard (background waits): built and installed on HAYPC; PR #62.**
+  - **Where:** branch `feat/watch-guard` (merge-base `5f965ba`). Derive the PR's state with
+    `gh pr view 62 --json state,mergedAt`.
     - The decisions are in `PLAN.md`, now history.
     - The behavior is in `docs/delegation.md` "Long waits".
     - Its open checks are in that doc's "Next".
-  - **Next step:** Hayden approves the push. Then `git push -u origin feat/watch-guard` and
-    `gh pr create`, the latter with the sandbox off (a multi-line body isn't a bare command).
+  - **Next step:** Hayden reviews and merges PR #62, squash-merging it so commit `d05c9cc` (which
+    named a machine in PLAN.md) stays out of `main`, then deletes the branch.
+  - **Open question:** does a Stop hook's `systemMessage` reach Hayden? The one ack this session
+    sent came around 01:11 on 2026-10-03. If Hayden saw it, close the docs' gap "The guard's ack
+    rests on Claude Code's docs".
   - **After the merge:**
     - ask before removing the worktrees `.claude/worktrees/agent-a2d2c1a84ebc99719` and
       `agent-a12852ea4e431c3d2` (outside the sandbox);
