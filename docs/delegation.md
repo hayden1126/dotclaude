@@ -825,8 +825,9 @@ the fix is enforcement. `PLAN.md` has the design history and the options weighed
     watch's session, drops its `claude_pid` and says nothing, and so does a `codex-delegate
     resume` that takes its run's watch over; only a new watch records `unknown` and warns.
     `/clear` keeps the process but starts a new session id, and the guard adopts the watch into
-    the new session (below). When it ends, it records `reported`: true while that process runs,
-    else false.
+    the new session (below). When it ends, it records `reported`: true while the watch's Claude
+    process runs and the guard hasn't marked the waiter `waiter_unheard`, else false, so a
+    waiter that outlived a crash has its end said by the guard and the nudge.
   - It refuses to run sandboxed, where its pids would belong to another PID namespace. It refuses
     a `--pid` that is pid 1, a kernel thread, another user's, or not running. It refuses a second
     watch on a codex run, naming the existing watch's `--resume` when nobody will hear that
