@@ -42,18 +42,22 @@ it drops; put a value in the overlay to keep it. The baseline now owns a `permis
 `setup.sh` replaces the live one (`merge-settings.py` names it on stderr): personal allow rules go
 in `settings.machine.json`, whose lists append.
 
-The baseline's `permissions` deny destructive git and ask before any `git push`, `rm -r` or
-`rm -f`. Denied: force-push, `reset --hard`, `reset --merge` and `git clean -f`, plain or through
-`git -C`, plus a `bash -c` that runs `push --force` or `reset --hard`. A force the deny rules miss
-(`+branch`, `-uf`) still asks, as every push does. Other wrappers (`bash -lc`, `sh -c`, `eval`,
-`git -c k=v`) and `checkout`, `switch`, `restore` and `revert` are left to auto mode's
-classifier. Why rules at all: on 2.1.288, auto mode ran a force-push and a `reset --hard` on a
-dirty tree when the prompt named them.
+The baseline's `permissions` deny destructive git and ask before `git push`, `rm -r` and `rm -f`,
+in auto mode too. Denied: force-push, `reset --hard`, `reset --merge` and `git clean -f`, plain or
+through `git -C`, plus the literal `bash -c "git push --force ..."` and
+`bash -c "git reset --hard ..."`. Asked: `git push` and `git -C <dir> push` with any arguments, so
+a force the deny rules miss (`+branch`, `-uf`) still prompts, and `rm` with a `-r`, `-R` or `-f`
+flag. Everything else goes to auto mode's classifier: other wrappers (`bash -c` running anything
+else, `bash -lc`, `sh -c`, `eval`), git global options other than `-C` (`-c k=v`, `--git-dir`,
+`--no-pager`), soft, mixed and `--keep` resets, and `checkout`, `switch`, `restore` and `revert`.
+Why rules at all: on 2.1.288, auto mode ran a force-push and a `reset --hard` on a dirty tree when
+the prompt named them.
 
-A rule's `*` spans words, so two safe forms are denied too: a `git -C` command whose message
-mentions a guarded phrase (commit with `-F <file>`, or from inside the repo), and a
-`git clean -n` dry run on a path containing `f`. Permission rules apply to delegated agents as
-well, so expect a writer's `rm -rf build` to ask (not yet checked live).
+A rule's `*` spans words, so some safe commands are caught too. Denied: a `git -C` command whose
+message mentions a guarded phrase (commit with `-F <file>`, or from inside the repo), and a
+`git clean -n` dry run on a path containing `f`. Asked: any `git -C` command with `push` later in
+it, such as `git -C <dir> stash push`. Permission rules apply to delegated agents as well, so
+expect a writer's `rm -rf build` or `git -C <dir> stash push` to ask (not yet checked live).
 `tests/delegation/test_settings.py` pins each rule with a case only it catches.
 
 ## What's in here

@@ -41,12 +41,14 @@ stored here).
     SHAPE.md stay unread.
 - **danger-guard retired; permission rules replace it** (branch `chore/post-63-decisions`,
   2026-10-03). The baseline `permissions` deny destructive git and ask before `git push`, `rm -r`
-  and `rm -f`; README's paragraph on them says what's covered, and commit `6bdddec` holds the
-  probe evidence. **Next:** Hayden merges, then installs. `settings.json` is copied, not linked,
-  so the rules aren't live until then: copy `~/.claude/settings.json`, run `./setup.sh` outside the
-  sandbox, and diff the two ([[dotclaude-setup-install-model]]). Then:
-  - Check that a delegated writer's `rm -rf build` in its worktree now asks (README says it
-    should; not checked live). If that breaks delegation, revisit the `rm` ask rules.
+  and `rm -f`; README's two paragraphs on them say what's covered and what's caught by mistake,
+  and [[dotclaude-danger-guard-retired]] holds the probe evidence. **Next:** Hayden merges, then
+  installs. `settings.json` is copied, not linked, so the rules aren't live until then: copy
+  `~/.claude/settings.json`, run `./setup.sh` outside the sandbox, and diff the two
+  ([[dotclaude-setup-install-model]]). Then:
+  - Check that a delegated writer's `rm -rf build` and `git -C <dir> stash push` in its
+    worktree now ask (README says they should; not checked live). If that breaks delegation,
+    revisit the `rm` and `git -C` push ask rules.
   - On each other machine, after `git pull`: `setup.sh` never removes old links, so
     `~/.claude/hooks/danger-guard.sh` dangles. Remove it (ask first), and any
     `settings.machine.json` hook that names it, which would now fail on every Bash call. HAYPC is
