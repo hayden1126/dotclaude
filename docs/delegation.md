@@ -1573,8 +1573,8 @@ model").
 
     The code fixes each came with a test.
 - **Results on 2026-10-02 (the watch guard, T1 to T6):**
-  - unit: 604 tests in `tests/delegation`, plus 21 in `tests/setup`, as of 2026-10-03 (run the
-    suites for per-file counts; they drifted within a day). The new files are `test_wait.py`
+  - unit: 604 tests in `tests/delegation`, plus 21 in `tests/setup`, at the watch guard's merge
+    (PR #62; run the suites for current counts, which drift within a day). The new files are `test_wait.py`
     (the waiter) and `test_watch_guard.py` (the guard and the kill catch); `test_codex_delegate.py`
     covers the wrapper's watch, and `test_checks.py` the watch nudges, the guard's canary strings
     and the shim check. A sandboxed run from a worktree runs 535 of them; the 69 policy tests

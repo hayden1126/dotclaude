@@ -36,19 +36,17 @@ stored here).
     - decide on the Codex model names.
 
     The aborted-first-launch beat is deferred.
-  - **Sources and privacy:**
-    - `~/scratch/delegation-writeup/SHAPE.md` (private, never in git) cites every number and
-      holds the diagram spec (§8); [[svg-to-png-headless-render]] covers rendering it;
-    - never publish raw transcripts or the eval data;
-    - the `.zshrc`, `.zshenv` and `.mcp.json` backups beside SHAPE.md stay unread.
-- **Watch guard follow-ups** (the guard itself is under Done).
-  - **An unnamed flaky test** erred twice under load on 2026-10-03, and didn't reproduce in 9
-    runs. If it recurs, run with `-v` and name it.
-- **`hooks/handoff-reminder.sh` fix, on branch `fix/handoff-reminder-subagents`** (derive its PR
-  with `gh pr list`). It no longer fires on subagent or cross-session reports, and reads the
-  prompt with python3 when jq is missing. Tests: `tests/setup/test_handoff_reminder.py`.
-- **Delegation hardening: what is live on HAYPC** (Stage 2, plus the Stage 3 steps under Done;
-  `docs/delegation.md`;
+  - **Sources and privacy:** `~/scratch/delegation-writeup/SHAPE.md` (private, never in git) cites
+    every number and holds the diagram spec (§8; [[svg-to-png-headless-render]]). Never publish
+    raw transcripts or the eval data; the `.zshrc`, `.zshenv` and `.mcp.json` backups beside
+    SHAPE.md stay unread.
+- **Hook payload sweep, on branch `fix/handoff-reminder-subagents`** (base `main` at `4b3d0c4`;
+  `gh pr list --head fix/handoff-reminder-subagents`). Commit messages hold the why, README's hook
+  entries the behavior, `tests/setup/` the cases. **Next:** Hayden merges; nothing to install,
+  since the hooks are symlinked (already live while this branch is checked out; switching to
+  `main` first reverts them). Accepted: "I think we should wrap up" no longer fires; "stop here,
+  then explain why the test fails" still does, as on `main`.
+- **Delegation hardening: what is live on HAYPC** (Stage 2 and 3, `docs/delegation.md`;
   `skills/delegation/SKILL.md` is the operating guide). Open items:
   - **Retune later, not now.** When `due` asks for `audit --monthly` (the date and the first
     sample sizes are in `docs/delegation.md` "Monthly audit (A6)"), retune `[deadline]` and
@@ -98,7 +96,8 @@ stored here).
   (`tests/delegation/run.py --runner claude`, which spends model calls), and records the result. Run
   it outside the sandbox, in the background, after changing a role, a hook or `codex-delegate`;
   after an upgrade, the session-start line says when. Counts and results live in
-  `docs/delegation.md`, "Tests".
+  `docs/delegation.md`, "Tests". An unnamed delegation test erred twice under load on 2026-10-03
+  and didn't reproduce in 9 runs: if it recurs, run with `-v` and name it.
 - **Verify `deck-production` before touching it:** run `deckkit regress` as the README in the
   private client repo's `decks/_parity/` shows; it must print `parity: green`. `--config` and
   `--goldens` are required, because no fixtures ship in this public repo. It runs read-only and asserts
@@ -112,9 +111,8 @@ stored here).
   tooling yet reads a slide and decides whether a number is a forward target, so the default `false`
   means "nobody has said", not "no targets". Revisit when the storyboard MUST/NEVER grammar is enforced
   in S3.
-- research-sourcing follow-ups (all optional): the thorough-tier planted-fabrication spot-check is
-  specified but never exercised end to end; only tested with Agent-tool subagents, not a real
-  Workflow-tool run.
+- research-sourcing (optional): the thorough-tier planted-fabrication spot-check was never run end
+  to end, and only Agent-tool subagents were tested, not a real Workflow run.
 - Deferred handoff work (the PreCompact/Stop safety net, the loop-engineering handoff) is in
   [[dotclaude-handoff-skill]].
 - Evaluated and SKIPPED, do not re-raise: (a) wiring `handoff-reminder.sh` into the loop-engineering
