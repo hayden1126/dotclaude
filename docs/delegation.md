@@ -265,9 +265,13 @@ from 60 to 5,000 requests an hour.
 - **A met condition is judged on a log's last 1 MB.** A `--done` line further back reads as unmet
   to the guard, so the watch lapses instead of ending. The re-armed waiter reads the whole log.
 - **The duplicate refusal is per run, across sessions.** A second `wait --codex` on a run that
-  any session watches is refused. While that watch's waiter is alive and its session is live,
-  the refusal says the waiter will notify its session. Otherwise it names `wait --resume <id>`,
-  which moves the watch to the caller's session.
+  any session watches is refused. While that watch's waiter is alive and someone will hear it,
+  the refusal says the waiter will notify its session. Someone will hear it while its Claude
+  process runs, whatever its session (after a `/clear`, say); with no process recorded, while
+  its session is live; with neither, always. Otherwise, when its Claude process has ended (even
+  in a session that runs on after a crash), the guard marked it `waiter_unheard`, or its waiter
+  is dead, the refusal names `wait --resume <id>`, which moves the watch to the caller's
+  session.
 - **An acknowledged lapse goes quiet.** After one block and one warning, a lapsed watch stays
   open and says nothing more in that session until it ends: it blocks once more when its
   condition is met, or when its codex run gets a stop row or turns out never to have started.
@@ -803,8 +807,9 @@ the fix is enforcement. `PLAN.md` has the design history and the options weighed
     else false.
   - It refuses to run sandboxed, where its pids would belong to another PID namespace. It refuses
     a `--pid` that is pid 1, a kernel thread, another user's, or not running. It refuses a second
-    watch on a codex run, naming the existing watch's `--resume` when that watch's waiter is dead
-    or its session is gone.
+    watch on a codex run, naming the existing watch's `--resume` when nobody will hear that
+    watch's waiter, by the `--resume` rule above: the waiter is dead, its Claude process has
+    ended, or, with no process recorded, its session has.
 - **The watch guard**, a main-thread Stop hook (`watch-guard`). For each of the session's open or
   acknowledged watches with no live waiter (its pid with its procStart, and a heartbeat no older
   than two polls plus a second; a background shell whose command holds the watch id counts too):

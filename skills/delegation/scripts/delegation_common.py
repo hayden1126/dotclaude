@@ -1123,9 +1123,12 @@ class Waiter:
 
     def refuse_a_live_waiter(self, w):
         """WaitRefused when the watch's waiter is alive and someone will hear from it
-        (watch_orphaned). A waiter whose heartbeat went stale (a suspended VM, say) can still be
-        taken over, and so can a live one nobody hears: its Claude process has ended, the guard
-        marked it waiter_unheard, or its session is gone. It steps aside at its next beat."""
+        (watch_orphaned, which goes by the Claude process first): its process runs, whatever
+        its session; with no process recorded, its session is the caller's or live; with
+        neither, always. A waiter whose heartbeat went stale (a suspended VM, say) can still be
+        taken over, and so can a live one nobody hears: its Claude process has ended, even in a
+        session that runs on, the guard marked it waiter_unheard, or, with no process recorded,
+        its session is gone. It steps aside at its next beat."""
         if waiter_alive(w) and not w.get("waiter_unheard") and not watch_orphaned(w, self.session):
             raise WaitRefused(f"watch {w.get('id')} already has a live waiter (pid "
                               f"{w.get('waiter_pid')}); it will notify its session")
