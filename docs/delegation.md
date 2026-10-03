@@ -288,12 +288,14 @@ from 60 to 5,000 requests an hour.
   on their own they can name another process's session: a nested `claude -p` started from the
   lead's Bash may carry the lead's, and a tmux server started from a Claude Bash call carries
   ones that go stale. So:
-  - when `CLAUDE_PID` is the process the walk found, that process set both vars for this Bash
-    call, and `CLAUDE_CODE_SESSION_ID` is the session. The env follows a session change (see the
-    verified facts), and nothing verified says the sessions file is rewritten before the first
-    Bash call after a `/clear`. A nested `claude -p` sets its own vars, so this holds there too;
-  - when the walk finds a process that isn't `CLAUDE_PID`, its sessions file's `sessionId` is
-    the session (`unknown` without one), and the env isn't read;
+  - when `CLAUDE_PID` is the process the walk found and `CLAUDE_CODE_SESSION_ID` is set, that
+    process set both vars for this Bash call, and the env's id is the session. The env follows a
+    session change (see the verified facts), and nothing verified says the sessions file is
+    rewritten before the first Bash call after a `/clear`. A nested `claude -p` sets its own
+    vars, so this holds there too;
+  - otherwise, when the walk finds a process, its sessions file's `sessionId` is the session
+    (`unknown` without one). The file decides whenever the env can't: the walked process isn't
+    `CLAUDE_PID`, so the env may be another process's, or the env names no session;
   - when the walk finds nothing, the env counts only when `CLAUDE_PID` is an ancestor of the
     command, at any level: then it is the process, and `CLAUDE_CODE_SESSION_ID` the session.
 

@@ -825,6 +825,12 @@ class Session(WaitEnv):
         self.assertEqual((w["session_id"], (w["claude_pid"], w["claude_start"])),
                          ("s-env", self.mine()))
 
+    def test_the_walked_process_with_no_env_session_takes_its_file(self):
+        self.claude_ancestor("s-file")
+        w = self.watch_of(**dict(self.env, CLAUDE_CODE_SESSION_ID="",
+                                 CLAUDE_PID=str(os.getpid())))
+        self.assertEqual((w["session_id"], w["claude_pid"]), ("s-file", os.getpid()))
+
     def test_a_nested_claude_takes_its_own_file_not_the_inherited_env(self):
         # A nested claude -p (this test) inherited the lead's env: CLAUDE_PID names a farther
         # ancestor (this test's parent stands in for the lead), and the session id is the lead's.
