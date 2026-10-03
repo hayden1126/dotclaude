@@ -278,6 +278,17 @@ settings docs say.
   - another session's kill, which is ignored;
   - a malformed payload, which allows.
 - **Depends on:** T1.
+- **Decision (Hayden, 2026-10-03): a detached waiter after an acknowledged lapse.**
+  - **What led here:**
+    - Rounds 12 to 16 had the guard judge an acknowledged lapse's end by reading its log.
+    - Round 16's persistent cursor turned the guard into a log scanner on a 3 s fail-open budget. The cost: an 8 MB scan with a slow regex can overrun the 5 s hook timeout at every stop, and the guard is then silently off; a replaced log was read from a stale offset.
+  - **The decision:** the guard goes back to round 15's fresh 1 MB tail.
+    - When a lapse is acknowledged, the guard double-forks a guard-owned waiter. It reads the whole log with no budget and records its end unheard, and the guard's ENDED_UNHEARD path says it at the next stop.
+    - A model re-arm takes it over. The first lapse block still asks for the re-arm, since only a background waiter wakes an idle session.
+  - **Rejected:**
+    - fixing the cursor (the guard stays a log scanner);
+    - reverting and naming the gap (a known silence).
+  - **Verified (2.1.286, 2026-10-03):** a double-forked child of a Stop hook survives the hook being killed at its timeout. The child was adopted by pid 553 and ticked for 18+ s after the 2 s timeout.
 
 ### T3: Codex records its own watch
 - **Files:**
