@@ -11,6 +11,9 @@ Base: `main`. For branch / PR / push state, run `gh pr list` and `git log main..
 stored here).
 
 ## Done (recent; git, the linked plans and memory hold the detail)
+- **The watch guard (background waits), merged in PR #62 and installed on HAYPC** (2026-10-02 to
+  10-03). The behavior is in `docs/delegation.md` "Long waits", its open checks in that doc's
+  "Next", and the decisions in `PLAN.md` (now history).
 - **Delegation hardening Stage 3, complete and live on HAYPC** (2026-09-30 to 10-01, PRs #42 to
   #55). `docs/delegation.md` "Stage 3" holds the findings, the decisions and the test counts.
 - Older: `git log` and the PRs back to #10 hold it (#56 was small fixes), and memory holds the
@@ -38,24 +41,15 @@ stored here).
       holds the diagram spec (§8); [[svg-to-png-headless-render]] covers rendering it;
     - never publish raw transcripts or the eval data;
     - the `.zshrc`, `.zshenv` and `.mcp.json` backups beside SHAPE.md stay unread.
-- **The watch guard (background waits): built and installed on HAYPC; PR #62.**
-  - **Where:** branch `feat/watch-guard` (merge-base `5f965ba`). Derive the PR's state with
-    `gh pr view 62 --json state,mergedAt`.
-    - The decisions are in `PLAN.md`, now history.
-    - The behavior is in `docs/delegation.md` "Long waits".
-    - Its open checks are in that doc's "Next".
-  - **Next step:** Hayden reviews and merges PR #62, squash-merging it so commit `d05c9cc` (which
-    named a machine in PLAN.md) stays out of `main`, then deletes the branch.
-  - **Open question:** does a Stop hook's `systemMessage` reach Hayden? The one ack this session
-    sent came around 01:11 on 2026-10-03. If Hayden saw it, close the docs' gap "The guard's ack
-    rests on Claude Code's docs".
-  - **After the merge:**
-    - ask before removing the worktrees `.claude/worktrees/agent-a2d2c1a84ebc99719` and
-      `agent-a12852ea4e431c3d2` (outside the sandbox);
-    - fast-lane fix `hooks/handoff-reminder.sh`, which fires on subagent reports: rule 3 matches
-      `/clear` in a prompt of any length, and rule 1 doesn't skip `<agent-message`.
+- **Watch guard follow-ups** (the guard itself is under Done).
+  - **Open question:** does a Stop hook's `systemMessage` reach Hayden? The one live ack, around
+    01:11 on 2026-10-03, went unseen (Hayden was away). Next: a one-minute live demo with Hayden
+    watching; if the ack shows, close the docs' gap "The guard's ack rests on Claude Code's docs".
   - **An unnamed flaky test** erred twice under load on 2026-10-03, and didn't reproduce in 9
     runs. If it recurs, run with `-v` and name it.
+- **`hooks/handoff-reminder.sh` fix, on branch `fix/handoff-reminder-subagents`** (derive its PR
+  with `gh pr list`). It no longer fires on subagent or cross-session reports, and reads the
+  prompt with python3 when jq is missing. Tests: `tests/setup/test_handoff_reminder.py`.
 - **Delegation hardening: what is live on HAYPC** (Stage 2, plus the Stage 3 steps under Done;
   `docs/delegation.md`;
   `skills/delegation/SKILL.md` is the operating guide). Open items:
@@ -67,8 +61,8 @@ stored here).
     2026-09-30, gone from its window on 2026-10-07.
   - **Other machines:** `git pull` in `~/dotclaude`, then `./setup.sh`, both outside the sandbox
     (A4 and A3 changed `settings.json`, A2 adds a PostToolUse hook to it, and `setup.sh` now links
-    Codex's skills). Once merged, the watch guard adds a Stop hook and a baseline `permissions`
-    object, which replaces a live one, so personal allow rules go in `settings.machine.json`.
+    Codex's skills). The watch guard adds a Stop hook and a baseline `permissions` object, which
+    replaces a live one, so personal allow rules go in `settings.machine.json`.
     - A baseline key still wins over the live file's value, so copy `~/.claude/settings.json`
       first and diff it after.
     - Without a `settings.machine.json` overlay, install by hand per the docs' install order:
