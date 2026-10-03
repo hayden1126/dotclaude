@@ -52,8 +52,10 @@ Each layer covers what the others can't.
    - The canary re-verifies all of this on a new Claude Code version, and a SessionStart check
      runs the cheap checks itself and reminds Hayden of the rest ("Stage 3", A4 and A5).
 5. **The watch guard** covers the main thread's liveness. A Stop hook blocks a turn's end once
-   when a long wait has lapsed or a background command was killed at its time limit ("Long
-   waits (the watch guard)").
+   when a long wait has lapsed, a watched job ended unnoticed, a watch was adopted after a
+   `/clear` or a crash, or a background command was killed at its time limit, and once more
+   for the end or the failure of the detached waiter it starts when a lapse is acknowledged
+   ("Long waits (the watch guard)").
 
 | Actor | Sandbox | Policy hook | Report check |
 |---|---|---|---|
@@ -77,12 +79,12 @@ Each layer covers what the others can't.
 | Subagent policy | `hooks/subagent-policy.sh`, `skills/delegation/scripts/subagent-policy`, `skills/delegation/policy.toml` | Enforces: see "Subagent policy" below. Fails closed for the tools it polices |
 | Report check | `hooks/report-check.sh`, `skills/delegation/scripts/report-check` | Enforces acceptance: a schema-invalid report is sent back twice at most. Fails open |
 | Ledger | `hooks/delegation-ledger.sh`, `skills/delegation/scripts/delegation-ledger`, `skills/delegation/liveness.toml` | Observes: start and stop rows (`agent_type` is the resolved role; a teammate adds `name` and `teammate`), `report_ok`, denial rows, the main-checkout hash for a worktree agent; the per-agent liveness index (`agents/<id>.json`); `open` (the tool in flight and since when, thresholds in `liveness.toml`); `watch` (one line per live delegation, and a token like `2▶ 1⚠` for the tmux bar); `audit` (`--monthly` adds a month of usage for retuning, and `exclude` keeps probes out of it); `sandbox-denials`. Persuades: the deadline nudge, one PostToolUse `additionalContext` per activation past the role's `nudge_min`, and a `nudge` row. Fails open |
-| Canary and due checks | `hooks/delegation-due.sh`, `skills/delegation/scripts/delegation_checks.py`, `skills/delegation/due.toml` | Observes: `delegation-ledger canary` re-verifies enforcement on this Claude Code version; `due` runs the cheap checks at session start and shows Hayden what needs their attention. Fails open |
+| Canary and due checks | `hooks/delegation-due.sh`, `skills/delegation/scripts/delegation_checks.py`, `skills/delegation/due.toml` | Observes: `delegation-ledger canary` re-verifies enforcement on this Claude Code version; `due` runs the cheap checks at session start (the quick tier includes a run of the installed watch-guard shim) and shows Hayden what needs their attention, including the watch nudges: unresolved watches whose waiter's exit reaches nobody, and watches that ended while no Claude process listened. Fails open |
 | Public GitHub client | `skills/delegation/scripts/gh-public` | GET-only access to api.github.com for delegated agents, optionally with a public-read token |
 | Brief and report | `skills/delegation/BRIEF.md`, `report.schema.json` | Persuades (the brief); checks (the schema) |
 | Codex wrapper | `skills/delegation/scripts/codex-delegate` | Enforces: model gate, sandbox, memory cap (via systemd-run when available, otherwise a warning), timeout, schema, and a recursive model audit. Records its own watch, with itself as the waiter, and exits 75 at `--max-wait`, before the Bash cap. Runs Codex under a detached supervisor, double-forked out of its own process tree, so a killed wrapper leaves Codex running; `cancel` stops a run on purpose |
 | Waiter | `delegation-ledger wait` | Enforces liveness: records a watch, polls it with a heartbeat, and exits before the Bash cap with the exact re-arm line. Refuses to run sandboxed. With `--detached`, the waiter the watch guard starts when it acknowledges a lapse: up to a day, its end said at a later stop |
-| Watch guard | `hooks/watch-guard.sh`, `skills/delegation/scripts/watch-guard`, a `Stop` entry in `settings.json` (timeout 5) | Enforces liveness on the main thread: blocks a stop once per lapsed watch and once per command killed at its time limit. Fails open |
+| Watch guard | `hooks/watch-guard.sh`, `skills/delegation/scripts/watch-guard`, a `Stop` entry in `settings.json` (timeout 5) | Enforces liveness on the main thread: blocks a stop once per lapsed watch, once per job that ended unnoticed, once per adoption (after a `/clear` or a crash), once per command killed at its time limit, and once for a detached waiter's end or failure. Acknowledging a lapse, it starts that detached waiter. Fails open |
 | Re-arm allow rule | `settings.json` `permissions.allow`: `Bash(delegation-ledger wait *)` | A re-arm never stops at a permission prompt |
 | `worktree.baseRef: "head"` | `settings.json` | A writer's worktree branches from the current branch, not from `main` |
 | `teammateMode: "in-process"` | `settings.json` | Pins the default: split-pane teammates are separate processes whose hook input has no `agent_id`, so the policy would never see them |
@@ -401,6 +403,12 @@ from 60 to 5,000 requests an hour.
   session id. That isn't verified here; the manual re-arm check in `due.toml` asks for it. With a
   new id, nothing blocks, but the session-start line shows the watch instead: an unresolved one
   as nobody's, and one whose waiter ended meanwhile as an end nobody heard, once.
+- **The guard's ack rests on Claude Code's docs.** That a Stop hook's `systemMessage` is shown
+  to the user comes from Claude Code's hooks docs, and it is unprobed: only SessionStart's was
+  probed (the verified facts, "SessionStart output"). Everything Hayden hears from the guard
+  rests on it: the ack of a lapse, and the note that a detached waiter started. Were it not
+  shown, an acknowledged lapse would reach Hayden only through the session-start nudge, and
+  the model only through the detached waiter's end or the guard's later blocks.
 - **The re-arm across turns isn't in the live harness.** `claude -p` kills background shells
   about 5 s after its final result, so no waiter outlives a `-p` turn. A dated item in `due.toml`
   asks for the check by hand in an interactive session.
@@ -846,8 +854,10 @@ default and 2 hours at most, and Claude Code then wakes the agent once. The wake
 start it again with a longer `timeout`, and ends: "If it already had the longest `timeout`
 allowed, do not restart it." On 2026-10-02 a lead watching a long detached job hit the 2-hour cap,
 followed that note, and ended its turn. Nothing woke it when the job finished. `codex-delegate`
-had the same gap: the wrapper was stopped at the cap while Codex ran on. Waiting is liveness, so
-the fix is enforcement. `PLAN.md` has the design history and the options weighed.
+had the same gap, worse: the wrapper stopped at the cap took Codex with it, since the kill takes
+the command's whole process tree (the verified facts, 2026-10-02). Codex survives a stopped
+wrapper only since the detached supervisor. Waiting is liveness, so the fix is enforcement.
+`PLAN.md` has the design history and the options weighed.
 
 **The parts.**
 - **The waiter, `delegation-ledger wait`.** It records a *watch* (`<state>/watches/<id>.json`; the
@@ -1051,15 +1061,16 @@ the fix is enforcement. `PLAN.md` has the design history and the options weighed
     task no longer stops Codex. Under the run's finalize lock it checks Codex's pid by its
     procStart, sends SIGTERM (the `timeout` heading the command passes it to Codex's process
     group), and SIGKILLs the group after 5 s. It writes a stop row with `status: cancelled`
-    and drops the run's watch, so neither the guard nor the nudge names it. It exits 2 for
-    an unknown run, one that has ended, one whose Codex hasn't started or can't be verified (no
-    procStart recorded), or when the run's finalize lock stays busy past 4 minutes (it then
-    says to run cancel again). A wrapper still polling leaves that stop row be: it writes no
-    start, detached or stop row for the turn after it, and exits 1. A stop row carries a
-    `status` (`finished`, `crashed` or `cancelled`), so a later turn's stop replaces a
-    cancel's in `status`, `open` and `watch`. An older codex-delegate's finish and crash rows
-    carry none, and `fold` reads a stop row without one as clearing an earlier cancel's
-    `status` and `error`, so a run resumed after a cancel doesn't read cancelled.
+    and drops the run's watch, so neither the guard nor the nudge names it. It exits 0 once
+    the run is stopped, and 2 for an unknown run, one that has ended, one whose Codex hasn't
+    started or can't be verified (no procStart recorded), or when the run's finalize lock
+    stays busy past 4 minutes (it then says to run cancel again). A wrapper still polling
+    leaves that stop row be: it writes no start, detached or stop row for the turn after it,
+    and exits 1. A stop row carries a `status` (`finished`, `crashed` or `cancelled`), so a
+    later turn's stop replaces a cancel's in `status`, `open` and `watch`. An older
+    codex-delegate's finish and crash rows carry none, and `fold` reads a stop row without one
+    as clearing an earlier cancel's `status` and `error`, so a run resumed after a cancel
+    doesn't read cancelled.
 - **The allow rule.** The baseline's `permissions.allow` holds `Bash(delegation-ledger wait *)`,
   so a re-arm never stops at a permission prompt. The waiter must run as a bare command: a `cd`,
   a redirect or `$(...)` keeps the call in the sandbox, where it refuses to run.
@@ -1098,11 +1109,12 @@ the fix is enforcement. `PLAN.md` has the design history and the options weighed
 
 **Exit codes.**
 - `wait`: 0 done; 1 the job failed (a `--fail` match, its pids exited with another condition
-  unmet, or a codex stop row with a nonzero `exit`); 2 the log went stale; 3 this waiter stepped
+  unmet, a codex stop row with a nonzero `exit`, or the codex run never started); 2 the log went
+  stale; 3 this waiter stepped
   aside (its watch was taken over, dropped or deleted); 64 bad usage, including a sandboxed call;
   70 an internal error, or nothing could be decided, with the watch left open; 75 still running at
   `--max`, with the re-arm line.
-- Beyond the codes in SKILL §5, `codex-delegate` exits 5 when it stopped at `--max-wait` with
+- The details behind SKILL §5's list: `codex-delegate` exits 5 when it stopped at `--max-wait` with
   its watch dropped or taken over, and 75 when it stopped there still running. While Codex runs,
   SIGTERM or SIGHUP makes it exit 143, leaving the watch open for the guard; Codex runs on. It
   appends a `detached` row with Codex's pid first only when the run's finalize lock comes free
@@ -1111,10 +1123,7 @@ the fix is enforcement. `PLAN.md` has the design history and the options weighed
   ended the turn) writes no row. Outside
   that window (before Codex starts, or while it finishes) the signal kills it with no row, and
   a shell reports 143 for SIGTERM, 129 for SIGHUP. A wrapper whose run was cancelled meanwhile
-  exits 1. `cancel` exits 0 once the run
-  is stopped, and 2 for an unknown run, one that has ended, one whose Codex hasn't started or
-  can't be verified (no procStart recorded), or when the run's finalize lock stays busy past 4
-  minutes.
+  exits 1. `cancel`'s exits are under "To stop a run on purpose", above.
 
 **How a lead uses it.** Launch every waiter, and every `codex-delegate run` or `resume`, with
 `run_in_background` and `timeout: 7200000`, so it exits on its own before the cap:
@@ -1163,7 +1172,8 @@ Its once-per-item rules:
 **Who hears a watch.** The rule is redundancy over silence: every lapse and every end reaches
 the model or Hayden at least once, and a duplicate notice is cheap. The model hears a waiter's
 exit notice (a background command that ends starts a turn) and the guard's blocks. Hayden hears
-the guard's ack (its Stop `systemMessage`, which Claude Code shows to the user) and the
+the guard's ack (its Stop `systemMessage`, which Claude Code's docs say is shown to the user;
+unprobed, see the known gap "The guard's ack rests on Claude Code's docs") and the
 session-start nudge (`due --hook`'s `systemMessage`, at `startup` and `resume`). "Its Claude
 process" is the one the watch was recorded under (`claude_pid`).
 
@@ -1468,6 +1478,14 @@ with A6 in `~/.claude/plans/a6-jazzy-sloth.md`. What's left is data, not code: o
 is a month old, `due` asks for `audit --monthly` ("Monthly audit (A6)" has the date), and its
 numbers decide whether A1's thresholds and A2's budgets move.
 
+**The watch guard's open checks.** Two dated manual checks in `due.toml` come due on
+2026-11-02: the live re-arm across turns (with whether `claude --continue` keeps the session id)
+and the Codex kill probe. The open assumptions are in the known gaps: that `--continue` keeps
+the session id ("A crash, then `claude --continue`, rests on the session id"), a hook's
+`CLAUDE_PID` ("A hook's `CLAUDE_PID` isn't verified"), a waiter's exit notice across a `/clear`
+("A waiter's exit across a `/clear` or an in-process `/resume` is assumed to reach the model"),
+and the Stop `systemMessage` ( + GAP_TITLE + ).
+
 ## Tests
 
 - **Unit:** `python3 -m unittest discover -s tests/delegation -t tests/delegation`. They make no model
@@ -1552,14 +1570,16 @@ numbers decide whether A1's thresholds and A2's budgets move.
 
     The code fixes each came with a test.
 - **Results on 2026-10-02 (the watch guard, T1 to T6):**
-  - unit: 469 tests, plus 21 in `tests/setup`. The new files are `test_wait.py` (the waiter, 68)
-    and `test_watch_guard.py` (the guard and the kill catch, 60). `test_codex_delegate.py` (35)
-    covers the wrapper's watch, and `test_checks.py` (76) the orphaned-watch nudge, the guard's
-    canary strings and the shim check. A sandboxed run from this worktree ran 400 of them; the
-    69 policy tests need the sandbox off here;
-  - the quick canary's string check passes on both 2.1.286 and 2.1.287 with the guard's strings
-    added (27 in all). The kill summary isn't one string in the binary, so the canary checks
-    `stopped after reaching its background time limit`;
+  - unit: 604 tests in `tests/delegation`, plus 21 in `tests/setup`, as of 2026-10-03 (run the
+    suites for per-file counts; they drifted within a day). The new files are `test_wait.py`
+    (the waiter) and `test_watch_guard.py` (the guard and the kill catch); `test_codex_delegate.py`
+    covers the wrapper's watch, and `test_checks.py` the watch nudges, the guard's canary strings
+    and the shim check. A sandboxed run from a worktree runs 535 of them; the 69 policy tests
+    refuse to import there and need the sandbox off;
+  - the quick canary's string check passed on both 2.1.286 and 2.1.287 with the guard's strings
+    added (the 27 strings then; `CANARY_STRINGS` in `delegation_checks.py` has the current
+    list). The kill summary isn't one string in the binary, so the canary checks `stopped after
+    reaching its background time limit`;
   - the live re-arm across turns is a manual check (see "Long waits").
 
 ## Installing on a machine that is already set up

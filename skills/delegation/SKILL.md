@@ -156,12 +156,12 @@ validated (`report_ok`).
   retuning; `due` asks for it monthly. After a probe run by hand in a live session,
   `delegation-ledger exclude --id <id> --why probe` keeps it out of those numbers.
 - **After a Claude Code upgrade,** the first session runs the quick canary in the background:
-  the unit tests, the sandbox posture, and the strings our hooks read from the binary. A
-  failure shows in the session-start line, which only Hayden sees. Run `delegation-ledger due`
-  to see what is pending, including the dated items in `due.toml`. When it says the full
-  canary is due (weekly, once the version has moved), run `delegation-ledger canary` outside
-  the sandbox and with `run_in_background`: it takes about 6 minutes, and a slow run can pass
-  the 10-minute foreground limit.
+  the unit tests, the sandbox posture, the strings our hooks read from the binary, and a run of
+  the installed watch-guard shim. A failure shows in the session-start line, which only Hayden
+  sees. Run `delegation-ledger due` to see what is pending, including the dated items in
+  `due.toml`. When it says the full canary is due (weekly, once the version has moved), run
+  `delegation-ledger canary` outside the sandbox and with `run_in_background`: it takes about
+  6 minutes, and a slow run can pass the 10-minute foreground limit.
 - `delegation-ledger open` lists delegations whose latest event isn't a stop. Each row
   shows its evidence:
   - whether the session is alive;
@@ -201,18 +201,21 @@ validated (`report_ok`).
   background Bash command stops at its timeout (30 minutes by default, 2 hours at most), and the
   wake-up note then says not to restart it. Launch the waiter as a bare command with
   `run_in_background` and `timeout: 7200000`: `delegation-ledger wait --pid <pid>` (or `--file`,
-  `--log <path> --done <regex>`, `--codex <run_id>`). Before it polls, it prints a line naming
-  the watch and the re-arm command. It exits 0 done, 1 failed, 2 stale. At 75 it prints a re-arm
+  `--log <path> --done <regex>`, `--codex <run_id>`). Take the pid from a command run outside
+  the sandbox: a sandboxed command's pids name other processes here. Before it polls, it prints
+  a line naming the watch and the re-arm command. It exits 0 done, 1 failed, 2 stale, 3 when it
+  stepped aside (the watch was taken over or dropped), 64 when refused (the message says why),
+  and 70 when it couldn't decide (the watch stays open: re-arm it). At 75 it prints a re-arm
   line: run exactly that, not the original command (though a rerun of the same wait takes the
   same watch over). The watch guard blocks your stop once when a watch has lapsed with no
   waiter, its job ended (done, failed or stale) with no waiter to tell you, or a background
   command was killed at its time limit. After that one block, a lapse goes quiet: a later stop
   lets you through and Hayden sees one warning. If you didn't re-arm, the guard starts a
-  detached waiter of its own then, which watches the whole condition (the whole log too); its
-  end blocks a later stop once, saying how it ended, so check the result and report it. If it
-  fails instead, a later stop says why; re-arm to see the error, or drop the watch. Only a
-  waiter you re-arm in the background wakes an idle session when the job ends, so re-arm or
-  drop it when it blocks.
+  detached waiter of its own then, unless its start fails or one already died early on that
+  watch. It watches the whole condition (the whole log too); its end blocks a later stop once,
+  saying how it ended, so check the result and report it. If it fails instead, a later stop
+  says why; re-arm to see the error, or drop the watch. Only a waiter you re-arm in the
+  background wakes an idle session when the job ends, so re-arm or drop it when it blocks.
   When the guard can't tell how a job ended (its log's outcome may be further back than the
   last 1 MB it reads, or a Codex run isn't finalized yet), its block says to re-arm the watch,
   and the re-armed waiter reports the result. After a `/clear`, your first stop blocks once
@@ -267,7 +270,8 @@ codex-delegate audit <thread_id>   # every model the thread and its sub-agents u
 - **Models:** Sol or Terra only; the wrapper refuses anything else before launch. Use Terra
   for fetch-and-summarize.
 - **Output:** everything lands in `<dir>/.codex-delegate/<run_id>/`: `report.json`,
-  `events.jsonl` and `stderr.log`.
+  `events.jsonl`, `stderr.log`, and `codex.pid` and `codex.rc` (Codex's pid and exit code,
+  written by its detached supervisor).
 - **Exit codes:**
   - 0: ok;
   - 1: Codex failed (its own code is `rc` in the summary);
