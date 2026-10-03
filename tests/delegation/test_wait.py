@@ -482,6 +482,17 @@ class Exits(WaitEnv):
         out, _ = self.finish(first, 3)
         self.assertIn(f"watch {wid} was taken over by pid {p.pid}", out)
 
+    def test_a_resume_clears_the_guards_block_record_and_its_end_block(self):
+        # take() goes through dc.unblock, so a later lapse or codex end blocks again.
+        wid = self.lapsed(self.job())
+        self.update(wid, state="acknowledged", blocked_at=dc.now_iso(), blocked_stop="0123",
+                    blocked_size=1, end_blocked_at=dc.now_iso())
+        self.assertEqual(self.run_("--resume", wid, "--max", "0.002").returncode, AT_MAX)
+        w = self.only()
+        self.assertEqual((w["state"], w["blocked_at"]), ("open", None))
+        for key in ("blocked_stop", "blocked_size", "end_blocked_at"):
+            self.assertNotIn(key, w)
+
     def test_resume_takes_over_a_waiter_the_guard_marked_unheard(self):
         first = self.start("--pid", str(self.job().pid))
         wid = self.waiting(first)["id"]

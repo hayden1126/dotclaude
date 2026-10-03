@@ -1,7 +1,9 @@
 """codex-delegate: model gate, command contract, recursive audit, and full runs against a
 fake `codex` on PATH (no real Codex is launched)."""
+import contextlib
 import datetime
 import fcntl
+import io
 import glob
 import json
 import os
@@ -14,6 +16,8 @@ import tempfile
 import textwrap
 import time
 import unittest
+
+from unittest import mock
 
 from _paths import SCRIPTS, load_script
 
@@ -185,6 +189,65 @@ class Audit(unittest.TestCase):
     def test_missing_root_fails(self):
         res = cd.audit("nope", 0)
         self.assertEqual((res["ok"], res["root_found"]), (False, False))
+
+
+class TurnRows(unittest.TestCase):
+    """The rows a wrapper writes for its turn, and the supervisor's exit code, in process
+    against a temp state dir."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        env = mock.patch.dict(os.environ, {"XDG_STATE_HOME": os.path.join(self.tmp.name, "st")})
+        env.start()
+        self.addCleanup(env.stop)
+        self.owner = {"wrapper_pid": 4321, "wrapper_start": 99}
+        self.row = {"runner": "codex", "id": "r1", "run_id": "r1"}
+
+    def events(self):
+        return [r["event"] for r in cd.dc.read_rows()]
+
+    def test_no_start_or_detached_row_follows_a_cancels_stop_row(self):
+        cd.dc.append_row(dict(self.row, ts=cd.dc.now_iso(), event="pending", **self.owner))
+        cd.dc.append_row(dict(self.row, ts=cd.dc.now_iso(), event="stop", status="cancelled"))
+        cd.append_turn_row(self.row, "start", "th-1", 1, self.owner)
+        self.assertTrue(cd.locked_turn_row(self.row, "detached", "th-1", 1, self.owner, 1))
+        self.assertEqual(self.events(), ["pending", "stop"])
+        # Another wrapper's turn (a resume) gets its rows.
+        other = {"wrapper_pid": 4322, "wrapper_start": 100}
+        cd.dc.append_row(dict(self.row, ts=cd.dc.now_iso(), event="pending", **other))
+        cd.append_turn_row(self.row, "resume", "th-1", 1, other)
+        self.assertEqual(self.events(), ["pending", "stop", "pending", "resume"])
+
+    def test_cancel_on_a_busy_lock_says_to_run_cancel_again(self):
+        cd.dc.append_row(dict(self.row, ts=cd.dc.now_iso(), event="pending", **self.owner))
+        lock = cd.finalize_lock_path("r1")
+        os.makedirs(os.path.dirname(lock), exist_ok=True)
+        err = io.StringIO()
+        with open(lock, "a") as held, mock.patch.object(cd, "FINALIZE_LOCK_S", 0.05), \
+                contextlib.redirect_stderr(err):
+            fcntl.flock(held, fcntl.LOCK_EX)
+            with self.assertRaises(SystemExit) as ex:
+                cd.main(["cancel", "r1"])
+        self.assertEqual(ex.exception.code, 2)
+        self.assertIn("run r1 is being finalized elsewhere; run cancel again once that ends",
+                      err.getvalue())
+
+    def test_a_supervisor_whose_wrapper_is_gone_still_writes_codex_rc(self):
+        # The wrapper died before it read the record: the write to it fails with EPIPE.
+        out = os.path.join(self.tmp.name, "out")
+        os.makedirs(out)
+        r, w = os.pipe()
+        os.close(r)
+        child = os.fork()
+        if child == 0:  # supervisor() never returns: it ends this process
+            cd.supervisor([sys.executable, "-c", "import sys; sys.stdin.read(); sys.exit(3)"],
+                          self.tmp.name, out, "the prompt", self.owner, w)
+        os.close(w)
+        os.waitpid(child, 0)
+        with open(os.path.join(out, "codex.rc")) as f:
+            rec = json.load(f)
+        self.assertEqual((rec["rc"], rec["wrapper_pid"]), (3, 4321))
 
 
 class FullRun(unittest.TestCase):
@@ -432,6 +495,31 @@ class FullRun(unittest.TestCase):
         self.assertEqual([r["event"] for r in self.ledger()].count("stop"), 1)
         self.assertEqual(self.ledger()[-1]["status"], "cancelled")  # no start row after it
         self.assertIn("cancelled", self.run_cd("status", run_id).stdout)
+
+    def test_a_resume_after_a_cancel_says_finished_again(self):
+        proc = self.start(FAKE_SLEEP="60")
+        run_id, _ = self.launch_ids(proc.stdout.readline())
+        self.pid_file()
+        self.assertEqual(self.run_cd("cancel", run_id).returncode, 0)
+        self.assertEqual(proc.wait(timeout=20), 1)
+        proc.stdout.close()
+        r = self.run_cd("resume", run_id, "--no-scope")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        out = self.run_cd("status", run_id).stdout
+        self.assertIn("stop: finished", out)
+        self.assertNotIn("cancelled", out)
+        self.assertIsNone(self.ledger()[-1]["error"])
+
+    def test_cancel_with_no_watch_left_to_drop_doesnt_claim_one(self):
+        proc = self.start(FAKE_SLEEP="60")
+        run_id, wid = self.launch_ids(proc.stdout.readline())
+        self.pid_file()
+        self.assertEqual(self.ledger_run("wait", "--drop", wid).returncode, 0)
+        c = self.run_cd("cancel", run_id)
+        self.assertEqual(c.returncode, 0, c.stderr)
+        self.assertNotIn("dropped watch", c.stdout)
+        proc.wait(timeout=20)
+        proc.stdout.close()
 
     def test_cancel_refuses_an_unknown_run_and_one_that_isnt_running(self):
         p = self.run_cd("cancel", "no-such-run")
