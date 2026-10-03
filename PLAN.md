@@ -328,6 +328,22 @@ settings docs say.
   - a watch is a file, not a ledger row, so `test_clean_run`'s pinned `pending, start, stop`
     holds.
 - **Depends on:** T1, T2.
+- **Live result (2026-10-02, 2.1.286): a killed wrapper takes Codex with it.**
+  - **The run:** a Terra job (a 90 s sleep) launched with `timeout: 60000` died with its wrapper.
+    `status` said "codex pid gone, wrapper gone". The guard folded the kill into the watch and
+    blocked once, and the re-arm finalized the run (exit 4, no report) with no status call. So
+    nothing went silent, but the work was lost.
+  - **Codex writes only to files** (stdout to `events.jsonl`, stderr to `stderr.log`, stdin closed
+    after the prompt), so it isn't a broken pipe.
+  - **A probe settled the cause.** Claude Code's time-limit kill takes the command's whole
+    descendant tree: a `start_new_session` child died with its parent. A double-forked child,
+    reparented away (to WSL's init relay, pid 553), survived.
+  - **A normal exit is safe.** A `start_new_session` child outlived its parent's normal exit, and
+    was adopted by pid 553, so Claude Code isn't a subreaper. The `--max-wait` exit 75 therefore
+    leaves Codex running, as designed.
+  - **False claims:** the launch line's "If this command is stopped, Codex keeps running", and
+    SKILL §5's "If the wrapper does get killed anyway, Codex keeps running". The second was
+    false before this branch too.
 
 ### T4: The allow rule, and crash recovery
 - **Files:**
