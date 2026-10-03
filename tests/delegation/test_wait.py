@@ -424,6 +424,106 @@ class ScanLog(unittest.TestCase):
             f.write("new run\n")
         self.assertEqual(self.scan(cur, pids_gone=True), "done")
 
+    def test_a_rotation_to_a_shorter_file_keeps_the_done_line_seen(self):
+        # The inode is checked before the size: a new file shorter than the old offset is
+        # another file, not the old one rewritten. The same file rewritten shorter forgets.
+        with open(self.log, "w") as f:
+            f.write("x" * 99 + "\nOK\n")
+        cur = dc.log_cursor()
+        self.assertEqual(self.scan(cur, pids_gone=False), "done")
+        new = os.path.join(self.tmp.name, "new.log")
+        with open(new, "w") as f:
+            f.write("x\n")
+        os.replace(new, self.log)
+        self.assertEqual(self.scan(cur, pids_gone=True), "done")
+        self.assertEqual(cur["offset"], 2)
+        with open(self.log, "w") as f:  # truncated in place: the same inode
+            f.write("x" * 99 + "\nOK\n")
+        cur = dc.log_cursor()
+        self.assertEqual(self.scan(cur), "done")
+        with open(self.log, "w") as f:
+            f.write("x\n")
+        self.assertIsNone(self.scan(cur))
+        self.assertEqual(cur["offset"], 2)
+
+    def test_a_run_with_no_newline_past_max_line_is_matched_then_dropped(self):
+        # A progress bar's carriage returns: 3 MB with no newline isn't held, or copied, whole.
+        size = 3 * 1024 * 1024
+        with open(self.log, "w") as f:
+            f.write("OK" + "\r" * (size - 2))
+        cur = dc.log_cursor()
+        self.assertEqual(dc.scan_log(self.log, "OK", None, cur, settle=False), "done")
+        self.assertEqual((cur["offset"], cur["partial"]), (size, ""))
+        with open(self.log, "a") as f:
+            f.write("still going")
+        self.assertEqual(dc.scan_log(self.log, "OK", None, cur, settle=False), "done")
+        self.assertEqual((cur["offset"], cur["partial"]), (size, "still going"))
+        with mock.patch.object(dc, "SCAN_CHUNK", 64 * 1024):  # each chunk adds to the run
+            cur = dc.log_cursor()
+            self.assertIsNone(dc.scan_log(self.log, "^never", None, cur, settle=False))
+        self.assertLessEqual(len(cur["partial"]), dc.MAX_LINE)
+        self.assertGreater(cur["offset"], size - dc.MAX_LINE)
+        self.assertEqual(cur["offset"] + len(cur["partial"]), size + len("still going"))
+
+    def test_a_run_cut_at_max_line_splits_at_carriage_returns_as_a_line_does(self):
+        # A progress bar redrawn past 1 MB, its last redraw OK, then the newline flushed.
+        run = "building 50%\r" * (dc.MAX_LINE // 12) + "\rOK"
+        with open(self.log, "w") as f:
+            f.write(run)
+        cur = dc.log_cursor()
+        self.assertEqual(self.scan(cur, settle=False), "done")  # matched at the cut
+        with open(self.log, "a") as f:
+            f.write("\n")
+        self.assertEqual(self.scan(cur, settle=False), "done")
+        self.assertEqual(cur["offset"], len(run) + 1)
+
+    def test_a_settled_last_line_splits_at_carriage_returns_as_a_line_does(self):
+        with open(self.log, "w") as f:
+            f.write("seen\nbuilding 50%\rOK")
+        self.age(60)
+        self.assertEqual(self.scan(dc.log_cursor()), "done")
+
+    def test_a_log_gone_after_its_done_line_keeps_it_seen(self):
+        # Deleted at the job's exit: the done line seen while it ran still counts, so the
+        # verdict is done, not "the pid exited, but the done line is unmet".
+        job = subprocess.Popen(["sleep", "60"])
+        self.addCleanup(lambda: (job.kill(), job.wait()))
+        w = {"condition": {"pids": [{"pid": job.pid, "start": dc.proc_start(job.pid),
+                                     "comm": "sleep"}], "log": self.log, "done": "^OK$"},
+             "poll_s": 15}
+        with open(self.log, "w") as f:
+            f.write("OK\n")
+        cur = dc.log_cursor()
+        self.assertIsNone(dc.watch_verdict(w, cur)[0])  # the pid still runs
+        os.remove(self.log)
+        job.kill()
+        job.wait()
+        self.assertEqual(dc.watch_verdict(w, cur)[0], "done")
+        self.assertIsNone(self.scan(dc.log_cursor()))  # a fresh cursor has seen nothing
+        failed = dict(dc.log_cursor(), failed=True)
+        self.assertEqual(self.scan(failed), "failed")
+
+    def test_a_log_gone_with_its_pids_settles_the_last_line_it_held(self):
+        # The job writes its last line with no newline, deletes its log and exits: that line
+        # counts, as it would have once the log was quiet.
+        for text, verdict in (("OK", "done"), ("FAILED", "failed")):
+            with self.subTest(text=text):
+                job = subprocess.Popen(["sleep", "60"])
+                self.addCleanup(lambda job=job: (job.kill(), job.wait()))
+                w = {"condition": {"pids": [{"pid": job.pid, "start": dc.proc_start(job.pid),
+                                             "comm": "sleep"}],
+                                   "log": self.log, "done": "^OK$", "fail": "^FAILED$"},
+                     "poll_s": 15}
+                with open(self.log, "w") as f:
+                    f.write(text)
+                cur = dc.log_cursor()
+                self.assertIsNone(dc.watch_verdict(w, cur)[0])  # the pid runs: not settled
+                self.assertEqual(cur["partial"], text)
+                os.remove(self.log)
+                job.kill()
+                job.wait()
+                self.assertEqual(dc.watch_verdict(w, cur)[0], verdict)
+
     def test_each_pattern_is_compiled_once_a_scan(self):
         with open(self.log, "w") as f:
             f.write("line\n" * 500)
@@ -503,6 +603,21 @@ class Detached(WaitEnv):
         w = self.only()
         self.assertTrue(w.get("waiter_detached") and w.get("detached_at"))
         self.assertIn("r-gone", w["end_error"])
+
+    def test_a_failure_reopens_a_watch_a_guard_blocked_since_the_last_beat(self):
+        # The guard saw a stale heartbeat and blocked on the lapse; the waiter then fails. Its
+        # error must come as a first block, so the failure reopens the watch.
+        self.acked()
+        me = (os.getpid(), dc.proc_start(os.getpid()))
+        waiter = dc.Waiter("w-1", 15, (me, "s1"), detached=True)
+        with mock.patch.dict(os.environ, {"XDG_STATE_HOME": self.state}):
+            waiter.take(None)
+            self.update("w-1", state="acknowledged", blocked_at=dc.now_iso(), blocked_stop="ab")
+            waiter.fail("OSError: boom")
+        w = self.only()
+        self.assertEqual((w["state"], w["blocked_at"], w["end_error"]),
+                         ("open", None, "OSError: boom"))
+        self.assertNotIn("blocked_stop", w)
 
     def test_a_take_clears_an_earlier_detached_waiters_error(self):
         self.acked(waiter_detached=True, end_error="boom", detached_at=dc.now_iso())

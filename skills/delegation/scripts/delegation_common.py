@@ -691,11 +691,14 @@ def codex_stopped(e):
 #                   the fallback when there is no blocked_stop; both are set and cleared with
 #                   blocked_at
 #   end_blocked_at  when the guard blocked a stop on an end it couldn't judge (ISO); absent
-#                   before: a codex run that ended with its finalize owed, or a --log verdict
+#                   before: a codex run that ended with its finalize owed, a --log verdict
 #                   that a line further back than the log's last 1 MB, which is all the guard
-#                   reads, could change (the guard's `unseen`). It blocks on that once, even
-#                   after the lapse was acknowledged, and unblock clears it with blocked_at. An
-#                   end the guard can judge is recorded instead, which resolves the watch
+#                   reads, could change (the guard's `unseen`), or a --log verdict, ended or
+#                   unmet, that the log's last line, with no newline yet, could change if it
+#                   is finished as it stands (`unfinished`, its PARTIAL block). It blocks on
+#                   that once, even after the lapse was acknowledged, and unblock clears it
+#                   with blocked_at. An end the guard can judge is recorded instead, which
+#                   resolves the watch
 #   session_id      a --resume moves the watch to the resuming session, unless it has none
 #   claude_pid, claude_start
 #                   the Claude Code process (claude_process) and its procStart that the waiter
@@ -720,8 +723,11 @@ def codex_stopped(e):
 #                   failed: <why>`), set with the end: the guard says it for a detached
 #                   waiter's end, whose output nobody reads
 #   end_error       why the detached waiter stopped with no end (an error, or nothing it could
-#                   decide), for the guard's next block to say; a waiter that takes the watch
-#                   over clears it
+#                   decide), for the guard's next block to say, with that block's own message
+#                   (a lapse, a codex run ended unfinalized, a log's uncertain or partial
+#                   outcome); a recorded end replaces it. Recording it reopens the watch
+#                   (unblock), so that block is a first one. A waiter that takes the watch over
+#                   clears it
 #   ended           when it left UNRESOLVED (ISO); absent until then
 #   reported        set when the watch ends: true once a live Claude Code process has heard
 #                   how it ended (its waiter's Claude process ran when it recorded the end, or a
@@ -751,6 +757,7 @@ REPORTED_STATES = ("done", "failed", "stale")  # how a waiter ends; dropped is t
 WAIT_POLL_S = 15  # the waiter's default seconds between polls
 DETACHED_MAX_MIN = 24 * 60  # the guard's detached waiter's --max: no Bash cap applies to it
 SCAN_CHUNK = 8 * 1024 * 1024  # scan_log reads a log this much at a time
+MAX_LINE = 1024 * 1024  # a longer run with no newline scan_log matches as it stands, then drops
 MAX_WAIT_MIN = 110  # a waiter's ceiling: with a 5-minute finalize, under the 120-minute Bash cap
 REARM = ("still running: re-arm with delegation-ledger wait --resume {} "
          "(run_in_background, timeout 7200000)")
@@ -941,51 +948,74 @@ def scan_log(path, done, fail, cursor, pids_gone=None, quiet_s=WAIT_POLL_S, now=
     (`pids_gone`), or, for a watch with no pids (None), the log hasn't been modified for a poll
     (`quiet_s`) before `now`. That catches a writer still writing; one that pauses mid-line for
     longer than a poll can still be cut, so a final verdict (the guard's) passes settle=False.
-    A log that shrank was rewritten in place, so it is read again from the start, and what was
-    seen is forgotten. One that is another file than the one read (rotated by a rename, a
-    symlink re-pointed) is read from its start too, but a line seen stays seen. The log is
-    read SCAN_CHUNK at a time, so memory stays bounded, with `between()` called after each
-    chunk (the waiter beats there). Each pattern is compiled once a scan."""
+    A log that is another file than the one read (rotated by a rename, a symlink re-pointed)
+    is read from its start, but a line seen stays seen, whatever the new file's size. The same
+    file grown shorter was rewritten in place, so it is read again from the start too, and what
+    was seen is forgotten. The log is read SCAN_CHUNK at a time, with `between()` called after
+    each chunk (the waiter beats there). A run of more than MAX_LINE bytes with no newline (a
+    progress bar's carriage returns, say) is matched as it stands, settled or not, then dropped
+    and read past, so memory stays bounded; a pattern can miss, or match, where that cut falls.
+    Such a run, and a settled last line, split into lines as a complete one does (splitlines:
+    at a carriage return too). Each pattern is compiled once a scan. A log that is gone (not
+    written yet, deleted at exit, renamed away with no new one yet) keeps what was seen, and
+    once the pids are gone (`settle`), the last line it held with no newline is settled too:
+    the job wrote it, deleted its log and exited. What was written after the last scan is lost
+    with the log."""
+    fail_re, done_re = (re.compile(p) if p else None for p in (fail, done))
+
+    def settled(partial):
+        """The verdict a settled last line gives, split as a complete line is, else None."""
+        lines = partial.splitlines()
+        if fail_re and any(fail_re.search(line) for line in lines):
+            cursor["failed"] = True
+            return "failed"
+        if done_re and any(done_re.search(line) for line in lines):
+            return "done"
+        return None
+
     try:
         f = open(path, "rb")
-    except OSError:
-        return None  # no log yet
+    except OSError:  # no log now: what was seen stands, and a fresh cursor has seen nothing
+        held = cursor.get("partial")
+        if not cursor["failed"] and held and settle and pids_gone:
+            verdict = settled(held)
+            if verdict:
+                return verdict
+        return "failed" if cursor["failed"] else "done" if cursor["done"] else None
     with f:
         st = os.fstat(f.fileno())
         ident = (st.st_dev, st.st_ino)
-        if st.st_size < cursor["offset"]:
-            cursor.update(offset=0, done=False)
-        elif cursor["file"] not in (None, ident):
+        if cursor["file"] not in (None, ident):  # another file: what was seen stays seen
             cursor["offset"] = 0
+        elif st.st_size < cursor["offset"]:  # rewritten in place: what was seen is forgotten
+            cursor.update(offset=0, done=False)
         cursor["file"] = ident
         f.seek(cursor["offset"])
-        fail_re, done_re = (re.compile(p) if p else None for p in (fail, done))
         carry = b""
         while True:
             chunk = f.read(SCAN_CHUNK)
             if not chunk:
                 break
             whole, newline, carry = (carry + chunk).rpartition(b"\n")
-            for line in whole.decode("utf-8", "replace").splitlines():
+            lines = whole.decode("utf-8", "replace").splitlines()
+            read = len(whole) + len(newline)
+            if len(carry) > MAX_LINE:  # no newline in sight: matched as it stands, then dropped
+                lines += carry.decode("utf-8", "replace").splitlines()
+                read, carry = read + len(carry), b""
+            for line in lines:
                 if fail_re and fail_re.search(line):
                     cursor["failed"] = True
                     return "failed"
                 if done_re and done_re.search(line):
                     cursor["done"] = True
-            cursor["offset"] += len(whole) + len(newline)
+            cursor["offset"] += read
             if between is not None:
                 between()
     cursor["partial"] = partial = carry.decode("utf-8", "replace")
     now = time.time() if now is None else now
-    settled = settle and (pids_gone if pids_gone is not None
-                          else now - st.st_mtime >= quiet_s)
-    if partial and settled:
-        if fail_re and fail_re.search(partial):
-            cursor["failed"] = True
-            return "failed"
-        if done_re and done_re.search(partial):
-            return "done"
-    return "done" if cursor["done"] else None
+    quiet = settle and (pids_gone if pids_gone is not None else now - st.st_mtime >= quiet_s)
+    verdict = settled(partial) if partial and quiet else None
+    return verdict or ("done" if cursor["done"] else None)
 
 
 def watch_verdict(w, cursor=None, now=None, settle=True, between=None):
@@ -1324,8 +1354,12 @@ class Waiter:
 
     def fail(self, why):
         """Record why this waiter stops with no end (end_error), while it still owns the
-        watch: a detached waiter's error reaches no one otherwise."""
+        watch: a detached waiter's error reaches no one otherwise. It reopens the watch
+        (unblock), as its beats do, so the guard's next block is a first one and says the
+        error, even when a guard blocked on the watch since its last beat."""
         def fail(w):
             self.own(w)
             w["end_error"] = why
+            if w.get("state") in UNRESOLVED:
+                unblock(w)
         return update_watch(self.wid, fail)

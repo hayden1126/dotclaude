@@ -18,10 +18,12 @@ to wake it. This hook is the enforcement:
   - a job that has ended in a way the guard can't judge is "ended": it isn't recorded, the
     watch stays open and blocks once (end_blocked_at), even after its lapse was acknowledged,
     saying to re-arm it, since the re-armed waiter decides. That is a codex run that ended
-    without a stop row (its outcome waits on a finalize, which the waiter does), and a --log
+    without a stop row (its outcome waits on a finalize, which the waiter does), a --log
     verdict that a line further back than the guard reads could change (unseen): it reads only
-    the log's last 1 MB, to keep a stop cheap. A first block on such a watch is also the
-    lapse's, so a later stop acknowledges it as below;
+    the log's last 1 MB, to keep a stop cheap, and a --log verdict, ended or unmet, that the
+    log's last line, with no newline yet, would change if it is finished as it stands
+    (unfinished, said as PARTIAL): the guard never matches such a line itself. A first block
+    on such a watch is also the lapse's, so a later stop acknowledges it as below;
   - else it has lapsed: the condition is unmet, or the codex run still runs. A lapse
     blocks once, recording blocked_at, a digest of the stop (its prompt_id and
     last_assistant_message) and the transcript's size. A later stop, whose digest differs,
@@ -31,7 +33,12 @@ to wake it. This hook is the enforcement:
     (grown means later), then to age (over 60 s). Acknowledging it, the guard also starts a
     detached waiter on it (spawn_waiter), which watches the whole condition as any waiter does,
     for up to a day. Its exit reaches no one, so it records the end unreported, and a later
-    stop says that end (below). A re-arm by the lead takes the watch over from it.
+    stop says that end (below). A re-arm by the lead takes the watch over from it. One that
+    stops early records why (end_error) and reopens the watch, so the next stop's block says
+    that error once, with the block's own message (due_text: the lapse's, a codex run's that
+    ended unfinalized, or a log's uncertain or partial one; also on a codex run that has left
+    the ledger). A recorded end replaces it: the error's re-arm or drop is moot once the watch
+    has ended, and the job's outcome is said. The guard starts no other (respawn_refused).
   - a watch of this session recorded under a Claude process that has ended (a crash, then
     `claude --continue`) is adopted too: this process records itself as the watch's. A waiter
     whose process still runs (even with a stale heartbeat) reports to nobody, so it is marked
@@ -175,9 +182,12 @@ ARG_RE = {opt: re.compile(rf"--{opt}[=\s]+['\"]?([^\s'\"]+)") for opt in ("pid",
 Notice = collections.namedtuple("Notice", "task tool_use desc ts pos output")
 # A watch's gathered item: kind "end" (the job ended unnoticed: record `state`, say `text`),
 # "lapse" (block once with `text`, or acknowledge), "ended" (an end the guard can't judge: a
-# codex run ended with its finalize owed, or a --log verdict a line further back than it reads
-# could change; block once with `text`, acknowledged or not, by end_blocked_at, then as a
-# lapse) or "report" (an ended watch nobody heard: record it reported, say `text`).
+# codex run ended with its finalize owed, a --log verdict a line further back than it reads
+# could change (UNCERTAIN), or one the log's unterminated last line could (PARTIAL); block once
+# with `text`, acknowledged or not, by end_blocked_at, then as a lapse) or "report" (an ended
+# watch nobody heard: record it reported, say `text`). A lapse's or an "ended" item's `text` is
+# its own message only: the commit adds the detached waiter's error when it is due (due_text),
+# from the watch as it re-reads it under the lock, so an error recorded since is said too.
 Pending = collections.namedtuple("Pending", "kind w text state")
 # A kill's gathered item: its notice, its text (None when it isn't said), and the watch it
 # folds into (or None).
@@ -226,9 +236,11 @@ def watch_pending(w, shells, now):
     lapse was acknowledged, so a job that ends badly is said too. One it can't judge is
     "ended", which blocks once too, acknowledged or not, and leaves the watch open for the
     re-armed waiter to decide: a codex run that ended with no stop row (its finalize is owed),
-    and a --log verdict that a line further back than the log's last LOG_TAIL bytes could
-    change (unseen). Only a condition still unmet is a lapse. A codex run gone from the ledger
-    raises Undecidable, which skips this watch."""
+    a --log verdict that a line further back than the log's last LOG_TAIL bytes could change
+    (unseen), and one, ended or unmet, that the log's last line, with no newline yet, could
+    (unfinished). Only a condition still unmet is a lapse. A codex run gone from the ledger
+    raises Undecidable, which skips this watch, unless its detached waiter recorded an error,
+    which the commit then says with the lapse (due_text)."""
     wid, cond = w["id"], w.get("condition") or {}
     if dc.waiter_alive(w, now) or any(wid in c for c in shells):
         return None
@@ -236,11 +248,14 @@ def watch_pending(w, shells, now):
     met = MET_REASON.format(id=wid, desc=desc, cond=dc.condition_text(cond))
     lapsed = WATCH_REASON.format(id=wid, desc=desc,
                                  unmet=f"{dc.condition_text(cond)} is unmet")
-    if w.get("waiter_detached") and w.get("end_error"):  # it says why, and re-arm or drop
-        lapsed = DETACHED_FAILED.format(id=wid, desc=desc, why=w["end_error"])
     if "codex" in cond:
         run = cond["codex"]
-        stage, e = dc.codex_progress(run)
+        try:
+            stage, e = dc.codex_progress(run)
+        except dc.Undecidable:
+            if not detached_failure(w):
+                raise
+            return Pending("lapse", w, lapsed, None)  # most likely why it failed: say it
         if stage == "stopped" and e.get("exit") == 0:
             return Pending("end", w, met, "done")
         if stage == "stopped":
@@ -249,13 +264,12 @@ def watch_pending(w, shells, now):
             return Pending("end", w, CODEX_UNSTARTED.format(
                 id=wid, desc=desc, run=run, restart=dc.codex_restart(e)), "failed")
         if stage == "ended":  # watch_verdict's done: Codex has ended, its finalize still owed
-            return Pending("ended", w, lapsed if w.get("end_error") else CODEX_ENDED.format(
-                id=wid, desc=desc, run=run), None)
+            return Pending("ended", w, CODEX_ENDED.format(id=wid, desc=desc, run=run), None)
         return Pending("lapse", w, lapsed, None)
     cursor = log_tail_cursor(cond) if cond.get("log") else None
     # Final, so a last line with no newline yet is never matched here (unfinished says it).
     verdict, why = dc.watch_verdict(w, cursor, now, settle=False)
-    looks = f"{why} is met" if verdict == "done" else why
+    looks = f"{why} is met" if verdict == "done" else f"{why} is unmet" if not verdict else why
     lines = unseen(verdict, cond, cursor)
     if lines:
         return Pending("ended", w, UNCERTAIN.format(
@@ -264,7 +278,7 @@ def watch_pending(w, shells, now):
     lines = unfinished(verdict, cond, cursor)
     if lines:
         return Pending("ended", w, PARTIAL.format(
-            id=wid, desc=desc, looks=verdict, why=looks, log=cond["log"],
+            id=wid, desc=desc, looks=verdict or "unmet", why=looks, log=cond["log"],
             lines=" or ".join(f"/{p}/" for p in lines)), None)
     if verdict == "done":
         return Pending("end", w, met, "done")
@@ -297,22 +311,47 @@ def unseen(verdict, cond, cursor):
 
 def unfinished(verdict, cond, cursor):
     """The --done and --fail patterns that the log's last line, with no newline yet, matches
-    and that would change an ended `verdict` if that line is finished as it stands. The guard
-    never matches such a line itself (scan_log's settle=False), since its verdict is final and
-    the line may be a fragment the writer hasn't flushed the rest of: for done, a fail line;
-    for failed, the done line when it is all the condition lacks; for stale, either."""
+    and that would change `verdict` if that line is finished as it stands. The guard never
+    matches such a line itself (scan_log's settle=False), since its verdict is final and the
+    line may be a fragment the writer hasn't flushed the rest of: for done, a fail line; for
+    failed, the done line when it is all the condition lacks; for stale or unmet (None),
+    either. Unmet matters on a watch with no pids and no --stale, whose verdict nothing else
+    ends while the line waits for a newline."""
     partial = cursor.get("partial") if cursor else ""
-    if verdict is None or not partial or cursor["failed"]:
+    if not partial or cursor["failed"]:
         return []
     done, fail = cond.get("done"), cond.get("fail")
-    hit = {p: bool(p and re.search(p, partial)) for p in (done, fail)}
+    lines = partial.splitlines()  # as scan_log matches it, once settled
+    hit = {p: bool(p and any(re.search(p, line) for line in lines)) for p in (done, fail)}
     only_done = (hit[done] and not cursor["done"]
                  and (not cond.get("file") or os.path.exists(cond["file"]))
                  and not any(dc.pid_alive(p.get("pid"), p.get("start"))
                              for p in cond.get("pids") or []))
-    found = {"done": [hit[fail] and fail], "failed": [only_done and done],
-             "stale": [only_done and done, hit[fail] and fail]}[verdict]
+    either = [only_done and done, hit[fail] and fail]
+    found = {"done": [hit[fail] and fail], "failed": [only_done and done], "stale": either,
+             None: either}[verdict]
     return [p for p in found if p]
+
+
+def detached_failure(w):
+    """DETACHED_FAILED for watch w when the guard's detached waiter recorded why it stopped
+    with no end (end_error), else None."""
+    if w.get("waiter_detached") and w.get("end_error"):
+        return DETACHED_FAILED.format(id=w["id"], desc=w.get("description") or "",
+                                      why=w["end_error"])
+    return None
+
+
+def due_text(w, text):
+    """A lapse's or an "ended" item's block text for watch w: every message due for it at
+    this stop, so none hides another. That is its detached waiter's failure (detached_failure)
+    while no block has said it: blocked_at unset, since the failure reopened the watch and the
+    first block after it sets blocked_at. Then `text`, the block's own message: the lapse's,
+    CODEX_ENDED, UNCERTAIN or PARTIAL, each still said once by its own marker (blocked_at,
+    end_blocked_at). A recorded end says only its own text, which replaces the failure: the
+    watch is over, so the re-arm or drop the failure asks for is moot."""
+    failure = detached_failure(w) if w.get("blocked_at") is None else None
+    return " ".join(t for t in (failure, text) if t)
 
 
 def respawn_refused(w):
@@ -320,8 +359,9 @@ def respawn_refused(w):
     started for a watch that never had one, and again only after the last one ran to its max
     (DETACHED_MAX_MIN, by its last heartbeat since detached_at): a detached waiter that died
     early (an error, nothing it could decide, a SIGKILL) would die again, and each death is
-    another lapse block."""
-    if not w.get("waiter_detached"):
+    another lapse block. One recorded before detached_at existed counts as having run to its
+    max."""
+    if not w.get("waiter_detached") or w.get("detached_at") is None:
         return None
     try:
         ran = (dc.parse_iso(w["waiter_heartbeat"]).timestamp()
@@ -779,10 +819,13 @@ def ended_text(w):
         return ENDED_UNHEARD.format(id=w["id"], desc=desc, state=w["state"])
     run, codex = (w.get("condition") or {}).get("codex"), ""
     if run is not None:
-        e = dc.find_codex(run) or {}
-        report = (os.path.join(e["out"], "report.json") if e.get("out")
-                  else "named by codex-delegate status")
-        codex = DETACHED_CODEX.format(run=run, report=report)
+        try:
+            e = dc.find_codex(run) or {}
+            report = (os.path.join(e["out"], "report.json") if e.get("out")
+                      else "named by codex-delegate status")
+            codex = DETACHED_CODEX.format(run=run, report=report)
+        except Exception:  # noqa: BLE001  the end is still said, without where to look
+            log(f"watch {w['id']}: codex run {run}'s report")
     return DETACHED_ENDED.format(id=w["id"], desc=desc, state=w["state"],
                                  why=w.get("end_why") or "no reason recorded", codex=codex)
 
@@ -822,7 +865,7 @@ def commit(sid, transcript, adopted, me, pendings, kills, scan_out, stop, size, 
     meanwhile, a twin guard that recorded first, or a watch that wasn't adopted after all (it's
     in another session), wins. A watch whose update fails is logged and unsaid, adoption
     included, and comes up again next stop; the rest, and the kills, go on."""
-    items, acked, itemized, outcomes, ended = [], [], set(), {}, set()
+    items, acked, itemized, outcomes, ended, texts = [], [], set(), {}, set(), {}
 
     def record(p):
         wid = p.w["id"]
@@ -841,12 +884,15 @@ def commit(sid, transcript, adopted, me, pendings, kills, scan_out, stop, size, 
                 outcomes[wid] = "block"
                 ended.add(wid)
             elif p.kind == "ended" and cur.get("end_blocked_at") is None:
+                # Every message due, by the watch as it is now, before this block marks them.
+                texts[wid] = due_text(cur, p.text)
                 # This stop is the block now, so a twin guard in it doesn't acknowledge, and a
                 # first block on the watch is also its lapse's.
                 cur.update(end_blocked_at=iso(now), blocked_at=iso(now), blocked_stop=stop,
                            blocked_size=size)
                 outcomes[wid] = "block"
             elif cur.get("blocked_at") is None:
+                texts[wid] = due_text(cur, p.text)  # as above
                 cur.update(blocked_at=iso(now), blocked_stop=stop, blocked_size=size)
                 outcomes[wid] = "block"
             elif cur.get("state") == "open" and later_stop(cur, stop, size, now):
@@ -871,7 +917,7 @@ def commit(sid, transcript, adopted, me, pendings, kills, scan_out, stop, size, 
         for p in pendings:
             outcome = outcomes.get(p.w["id"])
             if outcome == "block":
-                items.append(p.text)
+                items.append(texts.get(p.w["id"], p.text))
                 itemized.add(p.w["id"])
             elif outcome == "ack":
                 acked.append(p.w)
