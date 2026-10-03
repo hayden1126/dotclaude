@@ -600,11 +600,17 @@ class Orphans(StateTest):
         self.watch(claude_pid=os.getpid(), claude_start=checks.dc.proc_start(os.getpid()))
         self.assertEqual(self.message(), "")
 
-    def test_a_watch_whose_claude_process_ended_is_named_even_in_a_live_session(self):
-        # A crash, then claude --continue: the session runs on, but its waiter's exit is lost.
-        self.watch(sid="s1", live=True, claude_pid=DEAD, claude_start=None)
+    def test_a_gone_processs_watch_in_a_running_session_is_left_to_its_guard(self):
+        # A crash, then claude --continue: the session runs on in a new process, whose guard
+        # adopts the watch at its next stop.
+        self.watch(sid="s1", live=True, claude_pid=DEAD, claude_start=None)  # s1 is live
+        self.assertEqual(self.message(), "")
+        self.watch(sid="s2", live=True, claude_pid=DEAD, claude_start=None)  # s2 is starting
+        self.assertEqual(self.message(json.dumps({"session_id": "s2"})), "")
+
+    def test_a_gone_processs_watch_in_an_ended_session_is_named(self):
+        self.watch(live=True, claude_pid=DEAD, claude_start=None)  # session "gone"
         self.assertIn("w-1 (the build; its waiter is still running)", self.message())
-        self.assertIn("w-1 (the build", self.message(json.dumps({"session_id": "s1"})))
 
     def test_a_live_waiter_of_an_ended_session_is_named_too(self):
         # A bare waiter outlives a SIGKILLed Claude Code, and its exit reaches nobody.
@@ -654,6 +660,12 @@ class Orphans(StateTest):
         # claude --continue keeps the id, and its guard says it to the model at the first stop.
         self.unheard(sid="s2")
         self.assertEqual(self.message(json.dumps({"session_id": "s2"})), "")
+        self.assertIs(self.read()["reported"], False)
+
+    def test_a_live_sessions_unheard_end_is_left_to_its_guard_too(self):
+        # s1 runs on in another process (claude --continue elsewhere), whose guard says it.
+        self.unheard(sid="s1")
+        self.assertEqual(self.message(json.dumps({"session_id": "s-new"})), "")
         self.assertIs(self.read()["reported"], False)
 
     def test_a_headless_session_doesnt_use_up_an_unheard_end(self):

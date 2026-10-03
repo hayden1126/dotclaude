@@ -19,10 +19,12 @@ it fails open (it always exits 0; an error goes to delegation-ledger.err). Anyth
 leave the checks unable to run (an unreadable version, a malformed due.toml, a crashing audit)
 becomes a nudge itself, so the checks can't go quiet.
 `due --hook` also names the watches (`delegation-ledger wait`) no running Claude Code session
-is guarding (dc.watch_orphaned). A watch guard reads its own session's watches and those its own
-Claude process left under another session id (a /clear), and a session continued after a crash
-adopts its own at its first stop. A watch whose Claude process has ended in a session nobody
-continued, or whose session has ended with no process recorded, has no guard at all.
+is guarding. A watch guard reads its own session's watches, adopting one whose Claude process
+has ended (a crash, then `claude --continue`), and those its own process left in a session that
+isn't live (a /clear, or a watch recorded with no session). So the line names a watch nobody
+will hear from (dc.watch_orphaned) whose session isn't live: its Claude process has ended in a
+session nobody runs, its session has ended with no process recorded, or it has neither and its
+waiter died. It also names, once, the watches that ended while nobody listened.
 
 State lives in $XDG_STATE_HOME/dotclaude: canary.json (quick, full, green_full), audit.json
 (the last audit's WARN lines, whether a session start has shown them, and when the last
@@ -421,15 +423,16 @@ ORPHANS_LISTED = 3
 def left_watches(current=None, now=None):
     """(orphans, unheard, unreadable) for the session-start nudge, and how many watch files
     couldn't be read:
-    - orphans: the open or acknowledged watches nobody will hear from (dc.watch_orphaned),
-      oldest first, even if their waiter still runs (a bare waiter outlives a SIGKILLed Claude
-      Code). A watch is nobody's when the Claude process it was recorded under has ended, even
-      if its session runs on; with no process recorded, when its session isn't running
-      (`current`, the starting session's id, counts as running); with no session, once its
-      waiter is dead;
+    - orphans: the open or acknowledged watches nobody will hear from (dc.watch_orphaned) and
+      no running session's guard will pick up, oldest first, even if their waiter still runs (a
+      bare waiter outlives a SIGKILLed Claude Code). A watch is nobody's when the Claude process
+      it was recorded under has ended; with no process recorded, when its session isn't
+      running; with neither a process nor a session, once its waiter is dead. One whose session
+      is running (`current`, the starting session's id, or live) is left out: that session's
+      guard adopts it at its next stop, as after a crash and `claude --continue`;
     - unheard: the watches that ended while no Claude process was listening (dc.ended_unheard),
-      oldest end first. The starting session's own are left to its watch guard, which says them
-      to the model at its first stop.
+      oldest end first. Those of a running session are left to its watch guard, which says them
+      to the model at its next stop.
     A file that can't be read or judged is logged and counted, and the rest go on. Where pids
     can't be seen (a sandboxed run) every waiter and session would read as dead, so there are
     none."""
@@ -437,14 +440,16 @@ def left_watches(current=None, now=None):
         return [], [], 0
     live = set(dc.live_sessions())
     current = current if isinstance(current, str) and current else None
+    running = live | ({current} if current else set())  # their guards pick their watches up
     orphans, unheard, unreadable = [], [], 0
     for p in sorted(glob.glob(os.path.join(dc.watches_dir(), "*.json"))):
         try:
             w = dc.read_watch(os.path.basename(p)[:-len(".json")])
-            if w and w.get("state") in dc.UNRESOLVED and dc.watch_orphaned(w, current, live, now):
+            if not w or w.get("session_id") in running:
+                continue
+            if w.get("state") in dc.UNRESOLVED and dc.watch_orphaned(w, current, live, now):
                 orphans.append(dict(w, waiter_running=dc.waiter_alive(w, now)))
-            elif (w and dc.ended_unheard(w, now) and isinstance(w.get("id"), str)
-                  and (current is None or w.get("session_id") != current)):
+            elif dc.ended_unheard(w, now) and isinstance(w.get("id"), str):
                 unheard.append(w)
         except Exception as e:  # noqa: BLE001  one bad file mustn't hide the others
             log_error(f"watch file {p}: {type(e).__name__}: {e}")

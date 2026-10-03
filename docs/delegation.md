@@ -271,7 +271,8 @@ from 60 to 5,000 requests an hour.
 - **An acknowledged lapse goes quiet.** After one block and one warning, a lapsed watch stays
   open and says nothing more in that session until it ends: it blocks once more when its
   condition is met, or when its codex run gets a stop row or turns out never to have started.
-  The session-start nudge lists it once its Claude Code process has ended.
+  The session-start nudge lists it once no running session holds it: its Claude Code process
+  has ended, and nobody continued its session.
 - **A live waiter can read as lapsed.** A waiter whose heartbeat is older than two polls plus a
   second (a suspended VM, say) counts as dead: the guard blocks on it, and a `--resume` can take
   the watch over. The old waiter steps aside at its next beat.
@@ -846,24 +847,29 @@ the fix is enforcement. `PLAN.md` has the design history and the options weighed
   so a re-arm never stops at a permission prompt. The waiter must run as a bare command: a `cd`,
   a redirect or `$(...)` keeps the call in the sandbox, where it refuses to run.
 - **The session-start nudge.** `delegation-ledger due --hook` names, in its numbered line, up to
-  three of the open or acknowledged watches nobody will hear from, oldest first, with a count of
-  the rest, and one `wait --resume <id>` and `wait --drop <id>` template
+  three of the open or acknowledged watches no running session's guard will pick up, oldest
+  first, with a count of the rest, and one `wait --resume <id>` and `wait --drop <id>` template
   (`delegation_checks.left_watches`): "<n> watch(es) no running Claude Code session is
   guarding: <id> (<desc>), ... Pick one up with ..." It doesn't say the session ended: after a
   crash and `claude --continue` the session runs on, and a watch with no process recorded may
-  never have had a session. A watch is nobody's when the Claude
-  process it was recorded under has ended, even if its session runs on in a new process, or,
-  with no process recorded, when its session isn't live. That holds whatever its waiter's
-  state, since a bare waiter can outlive a SIGKILLed Claude Code; a live waiter is marked "its
-  waiter is still running". A watch with neither a session nor a process counts only once its
-  waiter is dead.
+  never have had a session.
+  - A watch is named when nobody will hear from its waiter (`dc.watch_orphaned`) and its
+    session isn't running. Nobody will hear from it when the Claude process it was recorded
+    under has ended; with no process recorded, when its session isn't live; with neither a
+    process nor a session, once its waiter is dead. That holds whatever its waiter's state,
+    since a bare waiter can outlive a SIGKILLed Claude Code; a live waiter is marked "its
+    waiter is still running".
+  - A watch whose session is running (the starting one, or live in another process) isn't
+    named, even with its Claude process gone: that session's guard adopts it at its next stop,
+    as after a crash and `claude --continue`.
   - A second line names up to three watches that ended (done, failed or stale) in the last 7
     days while no Claude process was listening and aren't reported yet (`dc.ended_unheard`),
     oldest end first: "<n> watch(es) ended while no Claude Code process was listening: <id>
     (<desc>, <state>), ... Check the results." It records the ones it names `reported`, so each
-    shows once; a headless `-p` session records nothing. The starting session's own are left to
-    its watch guard, which says them to the model at its first stop. So after a crash, a plain
-    `claude`, with a new session id, still hears of a leftover waiter's end.
+    shows once; a headless `-p` session records nothing. A running session's own (the starting
+    one, or one live in another process) are left to its watch guard, which says them to the
+    model at its next stop. So after a crash, a plain `claude`, with a new session id, still
+    hears of a leftover waiter's end.
   - `delegation-ledger watch` and `open` list those ended watches too, in the same `watches:`
     block as the unresolved ones, until they're reported.
 - **The shim logs.** `hooks/watch-guard.sh` appends Python's stderr to `delegation-ledger.err`,
