@@ -89,6 +89,17 @@ class GuardEnv(unittest.TestCase):
     def path(self, name):
         return os.path.join(self.tmp.name, name)
 
+    def filler(self, n):
+        """About n bytes of 1 KB lines that match nothing."""
+        return ("x" * 1023 + "\n") * (n // 1024 + 1)
+
+    def small_cap(self):
+        """Make the guard read at most 64 KB of a log a stop, so a cut log stays small."""
+        if guard.LOG_CAP != 64 * 1024:
+            cap = mock.patch.object(guard, "LOG_CAP", 64 * 1024)
+            cap.start()
+            self.addCleanup(cap.stop)
+
     def watch(self, wid="w-1", sid="s1", state="open", live=False, cond=None, desc="the build",
               **fields):
         w = {"id": wid, "session_id": sid, "state": state, "description": desc,
@@ -387,52 +398,228 @@ class Watches(GuardEnv):
         self.assertIsNone(self.decide(at=self.now + 30))
         self.assertEqual(self.decide(at=self.now + 90), {"systemMessage": self.ACK})
 
-    def test_a_log_condition_is_checked_in_the_logs_last_megabyte(self):
-        log = self.path("job.log")
-        with open(log, "w") as f:
-            f.write("BUILD OK\n" + ("x" * 1023 + "\n") * (guard.LOG_TAIL // 1024 + 10))
-        self.watch(cond={"log": log, "done": "^BUILD OK$"}, desc="the log")
-        cond = f"{log} has a line matching /^BUILD OK$/"
-        self.assertEqual(self.decide(), self.block(self.lapse_reason(desc="the log", cond=cond)))
-        with open(log, "a") as f:
-            f.write("BUILD OK\n")  # now inside the last megabyte
-        self.assertEqual(self.decide(), self.block(self.met_reason(desc="the log", cond=cond)))
-
     def long_log(self, *tail, name="build.log"):
-        """A log whose first line is OK, then more than the guard's 1 MB of filler, then
-        `tail`."""
+        """A log whose first line is OK, then more filler than the guard reads at once (with
+        its cap made small), then `tail`: read from the start, it is cut."""
+        self.small_cap()
         log = self.path(name)
         with open(log, "w") as f:
-            f.write("OK\n" + ("x" * 1023 + "\n") * (guard.LOG_TAIL // 1024 + 10))
+            f.write("OK\n" + self.filler(guard.LOG_CAP + 10 * 1024))
             f.writelines(line + "\n" for line in tail)
         return log
 
-    def uncertain_reason(self, what, log, wid="w-1", desc="the build"):
-        return (f"Watch {wid} ({desc}): {what}, but {log} is longer than the last 1 MB the "
-                "guard reads, so it can't tell whether the job succeeded or failed. Re-arm the "
-                "watch and its waiter reads the whole log and reports done or failed: "
-                f"delegation-ledger wait --resume {wid}, with run_in_background and timeout "
-                f"7200000. To stop watching it: delegation-ledger wait --drop {wid}.")
+    def read_to_end(self, log):
+        """A log_cursor at the log's end, as a waiter records at its heartbeat."""
+        size = os.path.getsize(log)
+        return {"offset": size, "done": False, "failed": False, "size": size, "cut": False}
 
-    def assert_uncertain_once(self, what, log, state):
-        """One block saying the outcome is uncertain, then silence; the watch stays `state`."""
+    def uncertain_reason(self, looks, why, lines, log, wid="w-1", desc="the build"):
+        cap = f"{guard.LOG_CAP / 2 ** 20:g} MB"
+        return (f"Watch {wid} ({desc}) looks {looks} ({why}). But the guard skipped part of "
+                f"{log}, since it reads at most {cap} of a log per stop and more came, or the "
+                f"log was rotated, and a line matching {lines} could be there, so it can't "
+                "tell. Re-arm the watch and its waiter reads the whole log and reports the "
+                f"outcome: delegation-ledger wait --resume {wid}, with run_in_background and "
+                f"timeout 7200000. To stop watching it: delegation-ledger wait --drop {wid}.")
+
+    def assert_said_once(self, reason, state, marker="end_blocked_at"):
+        """One block with `reason`, then silence; the watch stays `state` with `marker` set."""
         self.lines()
-        self.assertEqual(self.decide(prompt_id="p1"), self.block(
-            self.uncertain_reason(what, log)))
+        self.assertEqual(self.decide(prompt_id="p1"), self.block(reason))
         out = [self.decide(prompt_id=p) for p in ("p2", "p3")]
         self.assertFalse([o for o in out if o and o.get("decision")], out)  # no second block
         self.assertEqual(self.read()["state"], state)
-        dc.parse_iso(self.read()["end_blocked_at"])
+        dc.parse_iso(self.read()[marker])
+
+    def test_an_acknowledged_log_watch_hears_a_done_line_that_scrolled_past(self):
+        # The waiter's last cursor is before the done line, and over 1 MB more came after it
+        # before the stop. Read from the cursor on, not as a tail, the line is found.
+        log = self.path("server.log")
+        with open(log, "w") as f:
+            f.write("starting\n")
+        cond = {"log": log, "done": "Listening"}
+        self.watch(state="acknowledged", blocked_at=guard.iso(self.now - 600), cond=cond,
+                   desc="the server", log_cursor=self.read_to_end(log))
+        with open(log, "a") as f:
+            f.write("Listening on :8080\n" + self.filler(1100 * 1024))
+        self.lines()
+        self.assertEqual(self.decide(), self.block(self.met_reason(
+            desc="the server", cond=dc.condition_text(cond))))
+        self.assertEqual(self.read()["state"], "done")
+
+    def test_each_stop_records_how_far_it_read_and_reads_on_from_there(self):
+        # No waiter cursor at all: the guard's own, recorded at a silent stop, carries it on.
+        log = self.path("server.log")
+        with open(log, "w") as f:
+            f.write("starting\n")
+        cond = {"log": log, "done": "Listening", "fail": "^ERROR"}
+        self.watch(state="acknowledged", blocked_at=guard.iso(self.now - 600), cond=cond,
+                   desc="the server")
+        self.lines()
+        self.assertIsNone(self.decide(prompt_id="p1"))  # an acknowledged lapse says nothing
+        self.assertEqual(self.read()["log_cursor"]["offset"], len("starting\n"))
+        with open(log, "a") as f:
+            f.write("ERROR: port in use\n" + self.filler(1100 * 1024))
+        self.assertEqual(self.decide(prompt_id="p2"), self.block(
+            f"Watch w-1 (the server) ended failed: {log} has a line matching /^ERROR/. Its "
+            "waiter had stopped, so no notification came. Check the result and report it."))
+        self.assertEqual(self.read()["state"], "failed")
+
+    def test_a_long_log_read_a_little_at_a_time_is_never_cut(self):
+        # Over the cap in all, but read up to its end before: only what came since is read, so
+        # a done line there settles it, though the watch has a --fail pattern.
+        self.small_cap()
+        log = self.path("server.log")
+        with open(log, "w") as f:
+            f.write(self.filler(2 * guard.LOG_CAP))
+        cond = {"log": log, "done": "Listening", "fail": "^ERROR"}
+        self.watch(state="acknowledged", blocked_at=guard.iso(self.now - 600), cond=cond,
+                   desc="the server", log_cursor=self.read_to_end(log))
+        with open(log, "a") as f:
+            f.write("Listening on :8080\n")
+        self.lines()
+        self.assertEqual(self.decide(), self.block(self.met_reason(
+            desc="the server", cond=dc.condition_text(cond))))
+        self.assertEqual(self.read()["state"], "done")
+
+    def test_a_done_line_read_while_its_pid_ran_is_remembered_past_a_flood(self):
+        # Read at one stop, when the pid still ran; then more than the cap came, and the pid
+        # exited. The line is far behind, but the cursor kept that it was seen.
+        self.small_cap()
+        job = subprocess.Popen(["sleep", "60"])
+        self.addCleanup(lambda: (job.kill(), job.wait()))
+        log = self.path("build.log")
+        with open(log, "w") as f:
+            f.write("OK\n")
+        cond = {"pids": [{"pid": job.pid, "start": dc.proc_start(job.pid), "comm": "sleep"}],
+                "log": log, "done": "^OK$"}
+        self.watch(state="acknowledged", blocked_at=guard.iso(self.now - 600), cond=cond)
+        self.lines()
+        self.assertIsNone(self.decide(prompt_id="p1"))
+        self.assertIs(self.read()["log_cursor"]["done"], True)
+        with open(log, "a") as f:
+            f.write(self.filler(guard.LOG_CAP + 10 * 1024))
+        job.kill()
+        job.wait()
+        self.assertEqual(self.decide(prompt_id="p2"), self.block(self.met_reason(
+            cond=dc.condition_text(cond))))
+        self.assertEqual(self.read()["state"], "done")
+
+    def test_a_cursor_a_waiter_moved_after_gather_isnt_overwritten(self):
+        log = self.path("server.log")
+        with open(log, "w") as f:
+            f.write("starting\n")
+        self.watch(cond={"log": log, "done": "Listening"}, desc="the server")
+        self.lines()
+        theirs = dict(self.read_to_end(log), offset=3)
+        real = guard.watch_pending
+
+        def watch_pending(w, shells, now):
+            p = real(w, shells, now)  # then a waiter beats once and dies
+            dc.update_watch("w-1", lambda cur: cur.update(log_cursor=theirs))
+            return p
+        with mock.patch.object(guard, "watch_pending", watch_pending):
+            self.decide()
+        self.assertEqual(self.read()["log_cursor"], theirs)
+
+    def test_more_than_the_cap_since_the_cursor_blocks_once_as_uncertain(self):
+        # The done line may be in what the guard skipped, and with no pids or --stale nothing
+        # else would end the watch, so a lapse already acknowledged would say nothing ever.
+        self.small_cap()
+        log = self.path("server.log")
+        with open(log, "w") as f:
+            f.write("starting\n")
+        cond = {"log": log, "done": "Listening"}
+        self.watch(state="acknowledged", blocked_at=guard.iso(self.now - 600), cond=cond,
+                   log_cursor=self.read_to_end(log))
+        with open(log, "a") as f:
+            f.write("Listening on :8080\n" + self.filler(guard.LOG_CAP + 10 * 1024))
+        self.assert_said_once(self.uncertain_reason(
+            "unfinished", f"{log} has a line matching /Listening/ is unmet", "/Listening/",
+            log), "acknowledged", marker="cut_blocked_at")
+        self.assertIs(self.read()["log_cursor"]["cut"], True)
+        self.assertNotIn("end_blocked_at", self.read())
+
+    def test_a_cut_stays_cut_until_a_waiter_reads_the_whole_log(self):
+        # Cut while its pid runs, then the pid exits: that stop reads only what came since, but
+        # the done line may still be in the part skipped before, so failed would be a guess.
+        self.small_cap()
+        job = subprocess.Popen(["sleep", "60"])
+        self.addCleanup(lambda: (job.kill(), job.wait()))
+        log = self.path("build.log")
+        with open(log, "w") as f:
+            f.write("OK\n" + self.filler(guard.LOG_CAP + 10 * 1024))
+        pids = [{"pid": job.pid, "start": dc.proc_start(job.pid), "comm": "sleep"}]
+        self.watch(state="acknowledged", blocked_at=guard.iso(self.now - 600),
+                   cond={"pids": pids, "log": log, "done": "^OK$"})
+        self.lines()
+        self.assertIsNone(self.decide(prompt_id="p1"))  # still running: an acknowledged lapse
+        self.assertIs(self.read()["log_cursor"]["cut"], True)
+        job.kill()
+        job.wait()
+        self.assertEqual(self.decide(prompt_id="p2"), self.block(self.uncertain_reason(
+            "failed", f"pid {job.pid} (sleep) exited, but {log} has a line matching /^OK$/ is "
+            "unmet", "/^OK$/", log)))
+        self.assertEqual(self.read()["state"], "acknowledged")
+
+    def test_an_end_after_a_cut_block_still_blocks_once(self):
+        # The cut's block and an end the guard can't judge later are two things to say: each
+        # has its own marker, so the first doesn't silence the second.
+        self.small_cap()
+        log = self.path("server.log")
+        with open(log, "w") as f:
+            f.write("starting\n")
+        cond = {"log": log, "done": "Listening", "fail": "^ERROR"}
+        self.watch(state="acknowledged", blocked_at=guard.iso(self.now - 600), cond=cond,
+                   log_cursor=self.read_to_end(log))
+        with open(log, "a") as f:
+            f.write(self.filler(guard.LOG_CAP + 10 * 1024))
+        self.lines()
+        self.assertEqual(self.decide(prompt_id="p1"), self.block(self.uncertain_reason(
+            "unfinished", f"{log} has a line matching /Listening/ is unmet",
+            "/Listening/ or /^ERROR/", log)))
+        self.assertIsNone(self.decide(prompt_id="p2"))
+        with open(log, "a") as f:
+            f.write("Listening on :8080\n")
+        self.assertEqual(self.decide(prompt_id="p3"), self.block(self.uncertain_reason(
+            "done", f"{dc.condition_text(cond)} is met", "/^ERROR/", log)))
+        self.assertIsNone(self.decide(prompt_id="p4"))
+        self.assertEqual(self.read()["state"], "acknowledged")
+
+    def test_a_rotated_log_is_read_again_from_its_start_as_a_cut(self):
+        # Shorter than the cursor: what came after the last read went with the old file.
+        old = {"offset": 5000, "done": False, "failed": False, "size": 5000, "cut": False}
+        log = self.path("server.log")
+        with open(log, "w") as f:
+            f.write("Listening on :8080\n")
+        cond = {"log": log, "done": "Listening"}
+        self.watch(state="acknowledged", blocked_at=guard.iso(self.now - 600), cond=cond,
+                   log_cursor=old, created="2026-10-02T10:00:00Z")
+        log2 = self.path("other.log")
+        with open(log2, "w") as f:
+            f.write("rotated\n")
+        cond2 = {"log": log2, "done": "Listening"}
+        self.watch("w-2", state="acknowledged", blocked_at=guard.iso(self.now - 600),
+                   cond=cond2, log_cursor=old, created="2026-10-02T10:00:01Z")
+        self.lines()
+        self.assertEqual(self.decide(), self.block(
+            self.met_reason(cond=dc.condition_text(cond)),
+            self.uncertain_reason("unfinished", f"{log2} has a line matching /Listening/ is "
+                                  "unmet", "/Listening/", log2, wid="w-2")))
+        self.assertEqual(self.read()["state"], "done")
+        self.assertEqual(self.read("w-2")["log_cursor"]["offset"], len("rotated\n"))
 
     def test_an_acknowledged_job_that_ends_with_its_log_cut_blocks_once_as_uncertain(self):
-        # OK is further back than the guard reads, and the pid has exited. Recorded failed, the
-        # watch would refuse the re-armed waiter, which reads the whole log and says done; a
-        # plain lapse would say nothing, since this one was acknowledged.
+        # OK is in what the guard skipped, and the pid has exited. Recorded failed, the watch
+        # would refuse the re-armed waiter, which reads the whole log and says done; a plain
+        # lapse would say nothing, since this one was acknowledged.
         log = self.long_log()
-        self.watch(state="acknowledged", blocked_at=guard.iso(self.now - 600),
-                   cond={"pids": [{"pid": DEAD, "start": None, "comm": "make"}], "log": log,
-                         "done": "^OK$"})
-        self.assert_uncertain_once("its job has ended", log, "acknowledged")
+        cond = {"pids": [{"pid": DEAD, "start": None, "comm": "make"}], "log": log,
+                "done": "^OK$"}
+        self.watch(state="acknowledged", blocked_at=guard.iso(self.now - 600), cond=cond)
+        self.assert_said_once(self.uncertain_reason(
+            "failed", f"pid {DEAD} (make) exited, but {log} has a line matching /^OK$/ is unmet",
+            "/^OK$/", log), "acknowledged")
 
     def test_an_acknowledged_log_that_goes_stale_with_its_log_cut_blocks_once_as_uncertain(self):
         log = self.long_log()
@@ -440,22 +627,57 @@ class Watches(GuardEnv):
         os.utime(log, (old, old))
         self.watch(state="acknowledged", blocked_at=guard.iso(old), created=guard.iso(old),
                    cond={"log": log, "done": "^OK$", "stale_min": 1})
-        self.assert_uncertain_once("its log has gone quiet", log, "acknowledged")
+        self.assert_said_once(self.uncertain_reason(
+            "stale", f"{log} unchanged for 1 min", "/^OK$/", log), "acknowledged")
 
-    def test_a_done_line_with_a_fail_line_maybe_further_back_is_uncertain_not_done(self):
+    def test_a_stale_verdict_a_skipped_fail_line_would_make_failed_is_uncertain(self):
+        # Its pid still runs, so a done line couldn't end it, but the waiter, reading the whole
+        # log, would find the fail line first and say failed, not stale.
+        self.small_cap()
+        log = self.path("build.log")
+        with open(log, "w") as f:
+            f.write("ERROR\n" + self.filler(guard.LOG_CAP + 10 * 1024))
+        old = self.now - 7200
+        os.utime(log, (old, old))
+        me = [{"pid": os.getpid(), "start": dc.proc_start(os.getpid()), "comm": "python3"}]
+        self.watch(state="acknowledged", blocked_at=guard.iso(old), created=guard.iso(old),
+                   cond={"pids": me, "log": log, "done": "^OK$", "fail": "^ERROR$",
+                         "stale_min": 1})
+        self.assert_said_once(self.uncertain_reason(
+            "stale", f"{log} unchanged for 1 min", "/^ERROR$/", log), "acknowledged")
+
+    def test_a_done_line_with_a_fail_line_maybe_skipped_is_uncertain_not_done(self):
         # The waiter, reading the whole log, would find the traceback and say failed.
+        self.small_cap()
         log = self.path("build.log")
         with open(log, "w") as f:
             f.write("Traceback (most recent call last):\n"
-                    + ("x" * 1023 + "\n") * (guard.LOG_TAIL // 1024 + 10) + "BUILD OK\n")
-        self.watch(cond={"pids": [{"pid": DEAD, "start": None, "comm": "make"}], "log": log,
-                         "done": "^BUILD OK$", "fail": "^Traceback"})
+                    + self.filler(guard.LOG_CAP + 10 * 1024) + "BUILD OK\n")
+        cond = {"pids": [{"pid": DEAD, "start": None, "comm": "make"}], "log": log,
+                "done": "^BUILD OK$", "fail": "^Traceback"}
+        self.watch(cond=cond)
         self.lines()
-        self.assertEqual(self.decide(prompt_id="p1"), self.block(
-            self.uncertain_reason("its log has the done line", log)))
+        self.assertEqual(self.decide(prompt_id="p1"), self.block(self.uncertain_reason(
+            "done", f"{dc.condition_text(cond)} is met", "/^Traceback/", log)))
         self.assertEqual(self.decide(prompt_id="p2"), {"systemMessage": self.ACK})
         self.assertIsNone(self.decide(prompt_id="p3"))
         self.assertEqual(self.read()["state"], "acknowledged")  # not recorded done
+
+    def test_a_done_verdict_from_pids_or_a_file_says_what_was_met(self):
+        # No --done: the pid's exit or the file meets it, and only a fail line could undo that.
+        dead = [{"pid": DEAD, "start": None, "comm": "make"}]
+        log = self.long_log()
+        self.watch(cond={"pids": dead, "log": log, "fail": "^ERROR$"},
+                   created="2026-10-02T10:00:00Z")
+        made = self.path("made")
+        open(made, "w").close()
+        self.watch("w-2", cond={"file": made, "log": log, "fail": "^ERROR$"},
+                   created="2026-10-02T10:00:01Z")
+        self.lines()
+        self.assertEqual(self.decide(), self.block(
+            self.uncertain_reason("done", f"pid {DEAD} (make) exits is met", "/^ERROR$/", log),
+            self.uncertain_reason("done", f"{made} exists is met", "/^ERROR$/", log,
+                                  wid="w-2")))
 
     def test_a_rearm_clears_the_uncertain_block(self):
         log = self.long_log()
@@ -463,20 +685,23 @@ class Watches(GuardEnv):
                    cond={"pids": [{"pid": DEAD, "start": None, "comm": "make"}], "log": log,
                          "done": "^OK$"})
         self.lines()
-        self.assertEqual(self.decide(prompt_id="p1"), self.block(
-            self.uncertain_reason("its job has ended", log)))
+        reason = self.uncertain_reason(
+            "failed", f"pid {DEAD} (make) exited, but {log} has a line matching /^OK$/ is unmet",
+            "/^OK$/", log)
+        self.assertEqual(self.decide(prompt_id="p1"), self.block(reason))
+        self.assertIsNone(self.decide(prompt_id="p2"))  # the cut is kept in its cursor
         dc.update_watch("w-1", dc.unblock)  # what take() and beat() do
-        self.assertEqual(self.decide(prompt_id="p2"), self.block(
-            self.uncertain_reason("its job has ended", log)))
+        self.assertEqual(self.decide(prompt_id="p3"), self.block(reason))
 
     def test_a_cut_log_whose_verdict_the_whole_log_cant_change_still_ends_the_watch(self):
-        # Each lacks more than a done line further back could give: so failed or stale stands.
+        # Each lacks more than a done line in the skipped part could give: so failed or stale
+        # stands.
         never = self.path("never")
         dead = [{"pid": DEAD, "start": None, "comm": "make"}]
-        log = self.long_log("OK")  # the done line in the tail, the file missing
+        log = self.long_log("OK")  # the done line read, the file missing
         self.watch(cond={"pids": dead, "log": log, "done": "^OK$", "file": never},
                    created="2026-10-02T10:00:00Z")
-        log2 = self.long_log(name="other.log")  # no done line in the tail, the file missing
+        log2 = self.long_log(name="other.log")  # no done line read, the file missing
         self.watch("w-2", cond={"pids": dead, "log": log2, "done": "^OK$", "file": never},
                    created="2026-10-02T10:00:01Z")
         log3 = self.long_log(name="quiet.log")  # quiet, but its pid still runs
@@ -494,7 +719,7 @@ class Watches(GuardEnv):
         self.assertEqual([self.read(w)["state"] for w in ("w-1", "w-2", "w-3")],
                          ["failed", "failed", "stale"])
 
-    def test_a_fail_line_in_the_tail_or_a_short_logs_verdict_still_ends_the_watch(self):
+    def test_a_fail_line_read_or_a_short_logs_verdict_still_ends_the_watch(self):
         log = self.long_log("ERROR")
         self.watch(cond={"log": log, "done": "^OK$", "fail": "^ERROR$"},
                    created="2026-10-02T10:00:00Z")
@@ -511,6 +736,21 @@ class Watches(GuardEnv):
             "line matching /^OK$/ is unmet. Its waiter had stopped, so no notification came. "
             "Check the result and report it."))
         self.assertEqual([self.read(w)["state"] for w in ("w-1", "w-2")], ["failed", "failed"])
+
+    def test_an_old_unterminated_done_line_is_done_not_stale(self):
+        # A first read has no earlier size to compare, so the line counts as finished once the
+        # log has been quiet for a poll.
+        log = self.path("job.log")
+        with open(log, "w") as f:
+            f.write("OK")
+        old = self.now - 7200
+        os.utime(log, (old, old))
+        cond = {"log": log, "done": "^OK$", "stale_min": 1}
+        self.watch(cond=cond, created=guard.iso(old))
+        self.lines()
+        self.assertEqual(self.decide(), self.block(self.met_reason(
+            cond=dc.condition_text(cond))))
+        self.assertEqual(self.read()["state"], "done")
 
     def test_a_spent_budget_takes_no_more_items_and_records_none_it_wont_print(self):
         self.watch(created="2026-10-02T10:00:00Z")
@@ -880,24 +1120,36 @@ class OutcomeMatrix(GuardEnv):
     still running is said at most once, as a lapse."""
 
     STOPS = ("p1", "p2", "p3", "p4")
-    STATES = ("open", "blocked", "acknowledged", "after /clear", "after a crash")
+    STATES = ("open", "blocked", "acknowledged", "after /clear", "after a crash",
+              "end blocked, /clear")
     # The blocks each outcome gets across STOPS, by the watch's state when its job ends: open
     # and unblocked; open and blocked once, not yet acknowledged; acknowledged; adopted after a
-    # /clear; adopted after a crash. A cell a known gap in docs/delegation.md covers holds the
-    # gap's name instead, and isn't run. None does today.
+    # /clear; adopted after a crash; and adopted after a /clear with its end_blocked_at and
+    # cut_blocked_at already set (an uncertain end said to the old conversation). A cell a
+    # known gap in docs/delegation.md covers holds the gap's name instead, and isn't run. None
+    # does today.
     MATRIX = {
-        #               open  blocked  acknowledged  after /clear  after a crash
-        "met":         (1,    1,       1,            1,            1),
-        "failed":      (1,    1,       1,            1,            1),
-        "stale":       (1,    1,       1,            1,            1),
-        "codex ended": (1,    1,       1,            1,            1),
-        "uncertain":   (1,    1,       1,            1,            1),
-        "running":     (1,    0,       0,            1,            1),
+        #                    open  blocked  acked  /clear  crash  end blocked, /clear
+        "met":              (1,    1,       1,     1,      1,     1),
+        "failed":           (1,    1,       1,     1,      1,     1),
+        "stale":            (1,    1,       1,     1,      1,     1),
+        "codex ended":      (1,    1,       1,     1,      1,     1),
+        "uncertain":        (1,    1,       1,     1,      1,     1),
+        "done scrolled":    (1,    1,       1,     1,      1,     1),
+        "fail scrolled":    (1,    1,       1,     1,      1,     1),
+        "cut, unmet":       (1,    1,       1,     1,      1,     1),
+        "running":          (1,    0,       0,     1,      1,     1),
     }
-    RECORDED = {"met": "done", "failed": "failed", "stale": "stale"}  # the rest stay unresolved
+    # The rest stay unresolved: their outcome is the re-armed waiter's to decide.
+    RECORDED = {"met": "done", "failed": "failed", "stale": "stale", "done scrolled": "done",
+                "fail scrolled": "failed"}
 
     def arrange(self, outcome, state):
-        """A fresh state dir and transcript, and watch w-1 with `outcome`'s job in `state`."""
+        """A fresh state dir and transcript, and watch w-1 with `outcome`'s job in `state`.
+        "uncertain" is a job that exited with its log's done line in a part the guard skips;
+        "done scrolled" and "fail scrolled" are log-only watches (no pids, no --stale), over
+        the cap and read to their end, whose done or fail line came after that read, with more
+        lines behind it; "cut, unmet" is one with more than the cap since its last read."""
         d = tempfile.mkdtemp(dir=self.tmp.name)
         self.state = os.path.join(d, "state")
         os.environ["XDG_STATE_HOME"] = self.state  # setUp's patch.dict restores it
@@ -907,7 +1159,9 @@ class OutcomeMatrix(GuardEnv):
         old = self.now - 7200
         never, log = os.path.join(d, "never"), os.path.join(d, "build.log")
         dead = [{"pid": DEAD, "start": None, "comm": "make"}]
-        desc = "the build"
+        desc, fields = "the build", {}
+        cap = guard.LOG_CAP
+        filler = ("x" * 1023 + "\n") * (cap // 2048)  # half the cap: read whole
         if outcome == "met":
             open(never, "w").close()
             cond = {"file": never}
@@ -920,24 +1174,39 @@ class OutcomeMatrix(GuardEnv):
         elif outcome == "codex ended":  # no stop row, Codex and its wrapper gone
             self.codex_row()
             cond, desc = {"codex": "r1"}, "codex run r1 ends"
-        elif outcome == "uncertain":  # the done line is further back than the guard reads
+        elif outcome == "uncertain":
             with open(log, "w") as f:
-                f.write("OK\n" + ("x" * 1023 + "\n") * (guard.LOG_TAIL // 1024 + 10))
+                f.write("OK\n" + filler * 3)
             cond = {"pids": dead, "log": log, "done": "^OK$"}
-        else:  # running
+        elif outcome == "running":
             cond = {"file": never}
+        else:  # read up to its end, over the cap already, then the rest came
+            with open(log, "w") as f:
+                f.write("starting\n" + filler * 3)
+            size = os.path.getsize(log)
+            fields["log_cursor"] = {"offset": size, "done": False, "failed": False,
+                                    "size": size, "cut": False}
+            line = {"done scrolled": "OK\n", "fail scrolled": "ERROR\n",
+                    "cut, unmet": ""}[outcome]
+            with open(log, "a") as f:
+                f.write(line + filler * (3 if outcome == "cut, unmet" else 1))
+            cond = {"log": log, "done": "^OK$", "fail": "^ERROR$"}
         me = {"claude_pid": os.getpid(), "claude_start": dc.proc_start(os.getpid())}
         blocked = {"blocked_at": guard.iso(self.now - 600), "blocked_stop": "0123",
                    "blocked_size": 1}
         acked = dict(blocked, state="acknowledged")
-        sid, fields = {"open": ("s1", me), "blocked": ("s1", dict(me, **blocked)),
-                       "acknowledged": ("s1", dict(me, **acked)),
-                       "after /clear": ("s-before", dict(me, **acked)),
-                       "after a crash": ("s1", dict(acked, claude_pid=DEAD, claude_start=None)),
-                       }[state]
-        self.watch(sid=sid, cond=cond, desc=desc, created=guard.iso(old), **fields)
+        ended = dict(acked, end_blocked_at=guard.iso(self.now - 600),
+                     cut_blocked_at=guard.iso(self.now - 600))
+        sid, extra = {"open": ("s1", me), "blocked": ("s1", dict(me, **blocked)),
+                      "acknowledged": ("s1", dict(me, **acked)),
+                      "after /clear": ("s-before", dict(me, **acked)),
+                      "after a crash": ("s1", dict(acked, claude_pid=DEAD, claude_start=None)),
+                      "end blocked, /clear": ("s-before", dict(me, **ended)),
+                      }[state]
+        self.watch(sid=sid, cond=cond, desc=desc, created=guard.iso(old), **fields, **extra)
 
     def test_every_end_is_said_once_or_twice_and_a_running_job_at_most_once(self):
+        self.small_cap()
         env = mock.patch.dict(os.environ, {"CLAUDE_PID": str(os.getpid())})
         sessions = mock.patch.object(guard.dc, "live_sessions",
                                      return_value={"s1": os.getpid()})
@@ -965,7 +1234,8 @@ class OutcomeMatrix(GuardEnv):
                         self.assertTrue(said, blocks)  # said as an end, not only as a lapse
                     self.assertEqual(len(blocks), expected, blocks)
                     w = self.read()
-                    self.assertEqual(w["session_id"], "s1")  # adopted, where it was another's
+                    # Adopted, where it was another session's or another process's.
+                    self.assertEqual((w["session_id"], w["claude_pid"]), ("s1", os.getpid()))
                     if outcome in self.RECORDED:
                         self.assertEqual(w["state"], self.RECORDED[outcome])
                     else:

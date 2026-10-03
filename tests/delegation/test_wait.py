@@ -265,6 +265,18 @@ class Conditions(WaitEnv):
         self.end(job)
         self.finish(p, 0)
 
+    def test_the_waiter_records_how_far_it_read_at_each_heartbeat(self):
+        # So a guard that finds it gone reads on from there, not from a tail.
+        log = self.path("job.log")
+        with open(log, "w") as f:
+            f.write("step 1\n")
+        p = self.start("--log", log, "--done", "DONE")
+        self.waiting(p)
+        w = self.until(lambda: (self.only().get("log_cursor") or {}).get("offset") == 7
+                       and self.only())
+        self.assertEqual(w["log_cursor"], {"offset": 7, "done": False, "failed": False,
+                                           "size": 7, "cut": False})
+
     def test_log_fail_line_exits_1(self):
         log = self.path("job.log")
         p = self.start("--log", log, "--done", "DONE", "--fail", "Traceback")

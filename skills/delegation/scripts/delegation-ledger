@@ -1284,7 +1284,7 @@ class Waiter(dc.Waiter):
                 print(dc.REARM.format(self.wid))
                 return WAIT_AT_MAX
             time.sleep(min(self.poll, left))
-            w = self.beat()
+            w = self.beat(cursor if w["condition"].get("log") else None)
 
     def codex_end(self, run_id):
         """(verdict, why) once a codex run has ended: finalize it unless it has a stop row, then

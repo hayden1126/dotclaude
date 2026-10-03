@@ -19,12 +19,14 @@ to wake it. This hook is the enforcement:
     watch stays open and blocks once (end_blocked_at), even after its lapse was acknowledged,
     saying to re-arm it, since the re-armed waiter decides. That is a codex run that ended
     without a stop row (its outcome waits on a finalize, which the waiter does), and a --log
-    verdict the log's tail can't settle: the guard reads only the last 1 MB, to keep a stop
-    cheap. With the log cut, a failed or stale verdict whose tail has neither the --done line
-    nor a --fail line may be wrong when every other part holds (the done line may be further
-    back), and so may a done verdict when the watch has a --fail pattern (a fail line may be
-    further back). A first block on such a watch is also the lapse's, so a later stop
-    acknowledges it as below;
+    verdict that a line in a part of the log the guard skipped could change (unseen). Like the
+    waiter, the guard reads each byte of a log once: on from its log_cursor (the waiter's, or
+    an earlier stop's), recording how far it got. It reads at most LOG_CAP bytes a stop, to
+    keep a stop cheap: when more came, or the log shrank (rotated), it skips to the last
+    LOG_CAP bytes, and the cursor stays cut until a waiter records its own. A --log condition
+    still unmet after a cut, with no pids or stale_min to end it later, blocks once the same
+    way (cut_blocked_at), since its done or fail line may have been skipped. A first block on
+    such a watch is also the lapse's, so a later stop acknowledges it as below;
   - else it has lapsed: the condition is unmet, or the codex run still runs. A lapse
     blocks once, recording blocked_at, a digest of the stop (its prompt_id and
     last_assistant_message) and the transcript's size. A later stop, whose digest differs,
@@ -84,7 +86,7 @@ import delegation_common as dc  # noqa: E402
 import delegation_checks as checks  # noqa: E402
 
 TAIL_BYTES = 256 * 1024     # a session's first transcript scan starts this far back
-LOG_TAIL = 1024 * 1024      # a --log condition is checked in the log's last 1 MB
+LOG_CAP = 8 * 1024 * 1024   # the most of a --log condition's log one stop reads
 BUDGET_S = 3.0              # for gathering, under the hook's 5 s timeout
 LOCK_GRACE_S = 0.5          # the commit's lock wait when gathering spent the budget
 ACK_UNKNOWN_AGE_S = 60      # with no transcript size, a later stop is one this much later
@@ -112,13 +114,12 @@ CODEX_ENDED = ("Watch {id} ({desc}): codex run {run} has ended, but its waiter h
                "so the run isn't finalized. Re-arm the watch and its waiter finalizes it: "
                "delegation-ledger wait --resume {id}, with run_in_background and timeout "
                "7200000. To stop watching it: delegation-ledger wait --drop {id}.")
-UNCERTAIN = ("Watch {id} ({desc}): {what}, but {log} is longer than the last 1 MB the guard "
-             "reads, so it can't tell whether the job succeeded or failed. Re-arm the watch and "
-             "its waiter reads the whole log and reports done or failed: delegation-ledger wait "
+UNCERTAIN = ("Watch {id} ({desc}) looks {looks} ({why}). But the guard skipped part of {log}, "
+             "since it reads at most {cap} of a log per stop and more came, or the log was "
+             "rotated, and {lines} could be there, so it can't tell. Re-arm the watch and its "
+             "waiter reads the whole log and reports the outcome: delegation-ledger wait "
              "--resume {id}, with run_in_background and timeout 7200000. To stop watching it: "
              "delegation-ledger wait --drop {id}.")
-UNCERTAIN_WHAT = {"failed": "its job has ended", "stale": "its log has gone quiet",
-                  "done": "its log has the done line"}
 CODEX_FAILED = ("codex run {run} ended with exit {exit}, but its waiter had stopped, so no "
                 "notification came. Check its report and report it.")
 KILL_REASON = ('Background command "{desc}" was stopped at its time limit. If it was waiting '
@@ -154,10 +155,13 @@ ARG_RE = {opt: re.compile(rf"--{opt}[=\s]+['\"]?([^\s'\"]+)") for opt in ("pid",
 
 Notice = collections.namedtuple("Notice", "task tool_use desc ts pos output")
 # A watch's gathered item: kind "end" (the job ended unnoticed: record `state`, say `text`),
-# "lapse" (block once with `text`, or acknowledge), "ended" (a codex run ended with its
-# finalize owed: block once with `text`, acknowledged or not, then as a lapse) or "report" (an
-# ended watch nobody heard: record it reported, say `text`).
-Pending = collections.namedtuple("Pending", "kind w text state")
+# "lapse" (block once with `text`, or acknowledge), "ended" (an end the guard can't judge: a
+# codex run ended with its finalize owed, or a --log verdict a skipped line could change; block
+# once with `text`, acknowledged or not, by the marker field `state` names, end_blocked_at or
+# cut_blocked_at, then as a lapse) or "report" (an ended watch nobody heard: record it
+# reported, say `text`). `cursor` is the log_cursor this stop read up to, recorded with the
+# item, or None.
+Pending = collections.namedtuple("Pending", "kind w text state cursor", defaults=(None,))
 # A kill's gathered item: its notice, its text (None when it isn't said), and the watch it
 # folds into (or None).
 Kill = collections.namedtuple("Kill", "notice text fold")
@@ -183,17 +187,28 @@ def file_size(path):
 
 # ---- gather: watches ----
 
-def log_tail_cursor(cond):
-    """A scan_log cursor at the first whole line of the log's last LOG_TAIL bytes, with "tail"
-    True when that cut anything off."""
-    cursor = dict(dc.log_cursor(), tail=False)
+def read_from(w, cond):
+    """The scan_log cursor this stop reads the watch's log from, with "cut" (log_cursor in
+    delegation_common): its recorded log_cursor, the waiter's or an earlier stop's, else a
+    fresh one, from the start. A log now shorter than the cursor's offset was rewritten or
+    rotated, so what was written since the last read is gone: it reads from the start, cut.
+    When more than LOG_CAP bytes lie past the offset, it skips to the first whole line of the
+    last LOG_CAP, cut."""
+    cursor = dict(dc.log_cursor(), cut=False)
+    rec = w.get("log_cursor")
+    if isinstance(rec, dict) and isinstance(rec.get("offset"), int) and rec["offset"] >= 0:
+        cursor.update(offset=rec["offset"], done=rec.get("done") is True,
+                      failed=rec.get("failed") is True, cut=rec.get("cut") is True,
+                      size=rec["size"] if isinstance(rec.get("size"), int) else None)
     try:
         with open(cond["log"], "rb") as f:
             size = os.fstat(f.fileno()).st_size
-            if size > LOG_TAIL:
-                f.seek(size - LOG_TAIL - 1)
+            if size < cursor["offset"]:
+                cursor = dict(dc.log_cursor(), cut=True)
+            if size - cursor["offset"] > LOG_CAP:
+                f.seek(size - LOG_CAP - 1)
                 f.readline()  # the rest of the line the cut fell in, or just a newline
-                cursor.update(offset=f.tell(), tail=True)
+                cursor.update(offset=f.tell(), size=None, cut=True)
     except OSError:
         pass  # no log yet: scan_log says so
     return cursor
@@ -205,9 +220,11 @@ def watch_pending(w, shells, now):
     lapse was acknowledged, so a job that ends badly is said too. One it can't judge is
     "ended", which blocks once too, acknowledged or not, and leaves the watch open for the
     re-armed waiter to decide: a codex run that ended with no stop row (its finalize is owed),
-    and a --log verdict that the log's last LOG_TAIL bytes can't settle (uncertain). Only a
-    condition still unmet is a lapse. A codex run gone from the ledger raises Undecidable,
-    which skips this watch."""
+    and a --log verdict that a line in a skipped part of the log could change (unseen),
+    including an unmet one nothing else would end. Only a condition still unmet is a lapse. A
+    codex run gone from the ledger raises Undecidable, which skips this watch. A --log
+    condition is read on from where it was last read (read_from), and the item carries how far
+    this read got, for commit to record."""
     wid, cond = w["id"], w.get("condition") or {}
     if dc.waiter_alive(w, now) or any(wid in c for c in shells):
         return None
@@ -226,39 +243,55 @@ def watch_pending(w, shells, now):
             return Pending("end", w, CODEX_UNSTARTED.format(
                 id=wid, desc=desc, run=run, restart=dc.codex_restart(e)), "failed")
         if stage == "ended":  # watch_verdict's done: Codex has ended, its finalize still owed
-            return Pending("ended", w, CODEX_ENDED.format(id=wid, desc=desc, run=run), None)
+            return Pending("ended", w, CODEX_ENDED.format(id=wid, desc=desc, run=run),
+                           "end_blocked_at")
         return Pending("lapse", w, lapsed, None)
-    cursor = log_tail_cursor(cond) if cond.get("log") else None
+    cursor = read_from(w, cond) if cond.get("log") else None
     verdict, why = dc.watch_verdict(w, cursor, now)
-    if verdict and uncertain(verdict, cond, cursor):
+    read = {k: cursor[k] for k in ("offset", "done", "failed", "size", "cut")} if cursor else None
+    lines = unseen(verdict, cond, cursor)
+    if lines:
+        looks = {"done": f"{why} is met", None: f"{why} is unmet"}.get(verdict, why)
         return Pending("ended", w, UNCERTAIN.format(
-            id=wid, desc=desc, what=UNCERTAIN_WHAT[verdict], log=cond["log"]), None)
+            id=wid, desc=desc, looks=verdict or "unfinished", why=looks, log=cond["log"],
+            cap=f"{LOG_CAP / 2 ** 20:g} MB",
+            lines="a line matching " + " or ".join(f"/{p}/" for p in lines)),
+            "end_blocked_at" if verdict else "cut_blocked_at", read)
     if verdict == "done":
-        return Pending("end", w, met, "done")
+        return Pending("end", w, met, "done", read)
     if verdict:  # failed or stale
         return Pending("end", w, JOB_ENDED.format(id=wid, desc=desc, state=verdict, why=why),
-                       verdict)
-    return Pending("lapse", w, lapsed, None)
+                       verdict, read)
+    return Pending("lapse", w, lapsed, None, read)
 
 
-def uncertain(verdict, cond, cursor):
-    """Whether a verdict read from the log's tail alone could be wrong, so only the re-armed
-    waiter, which reads the whole log, can decide. With the log cut (cursor["tail"]): a done
-    verdict when the condition has a --fail pattern (a fail line may be further back), and a
-    failed or stale one when the done line is all it lacks: a --done pattern the tail didn't
-    match, no --fail line there, its pids gone and its --file there (a done line further back
-    would make it done). A --fail line in the tail fails it whatever lies further back, and a
-    condition with no --done pattern, a done line in the tail, a missing --file or a pid still
-    running leaves it unmet whatever the whole log says."""
-    if not (cursor and cursor["tail"]):
-        return False
+def unseen(verdict, cond, cursor):
+    """The --done and --fail patterns whose line, in a part of the log the guard skipped
+    (cursor["cut"]), would change `verdict`, so only the re-armed waiter, which reads the whole
+    log, can decide: [] when nothing was skipped or nothing there could change it. A fail line
+    read fails it whatever was skipped. Otherwise: for done, a fail line; for failed, the done
+    line when it is all the condition lacks (none read, its pids gone, its --file there); for
+    stale, that done line, and a fail line, which the waiter would put first; for an unmet
+    condition with no pids and no stale_min, either line, since nothing else would end it and a
+    skipped line is never read again. An unmet one with pids or stale_min is judged when they
+    end it."""
+    if not (cursor and cursor["cut"]) or cursor["failed"]:
+        return []
+    done, fail, pids = cond.get("done"), cond.get("fail"), cond.get("pids") or []
+    only_done = (done and not cursor["done"]
+                 and (not cond.get("file") or os.path.exists(cond["file"]))
+                 and not any(dc.pid_alive(p.get("pid"), p.get("start")) for p in pids))
     if verdict == "done":
-        return bool(cond.get("fail"))
-    if not cond.get("done") or cursor["failed"] or cursor["done"]:
-        return False
-    if cond.get("file") and not os.path.exists(cond["file"]):
-        return False
-    return not any(dc.pid_alive(p.get("pid"), p.get("start")) for p in cond.get("pids") or [])
+        found = [fail]
+    elif verdict == "failed":
+        found = [only_done and done]
+    elif verdict == "stale":
+        found = [only_done and done, fail]
+    elif not pids and not cond.get("stale_min"):
+        found = [not cursor["done"] and done, fail]
+    else:
+        found = []
+    return [p for p in found if p]
 
 
 # ---- gather: kills ----
@@ -678,14 +711,16 @@ def commit(sid, transcript, adopted, me, pendings, kills, scan_out, stop, size, 
             if (cur.get("state") not in dc.UNRESOLVED or dc.waiter_alive(cur, now)
                     or cur.get("session_id") != sid):
                 return  # dropped, ended, re-armed or not adopted since it was gathered
+            if p.cursor is not None and cur.get("log_cursor") == p.w.get("log_cursor"):
+                cur["log_cursor"] = p.cursor  # unless a waiter or a twin guard moved it since
             if p.kind == "end":
                 cur.update(state=p.state, ended=iso(now), reported=True)
                 outcomes[wid] = "block"
                 ended.add(wid)
-            elif p.kind == "ended" and cur.get("end_blocked_at") is None:
+            elif p.kind == "ended" and cur.get(p.state) is None:
                 # This stop is the block now, so a twin guard in it doesn't acknowledge, and a
                 # first block on the watch is also its lapse's.
-                cur.update(end_blocked_at=iso(now), blocked_at=iso(now), blocked_stop=stop,
+                cur.update({p.state: iso(now)}, blocked_at=iso(now), blocked_stop=stop,
                            blocked_size=size)
                 outcomes[wid] = "block"
             elif cur.get("blocked_at") is None:

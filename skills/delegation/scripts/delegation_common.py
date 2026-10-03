@@ -690,9 +690,22 @@ def codex_stopped(e):
 #   blocked_size    the session transcript's size in bytes at that block (null if unknown),
 #                   the fallback when there is no blocked_stop; both are set and cleared with
 #                   blocked_at
-#   end_blocked_at  when the guard blocked a stop because the watch's codex run had ended with
-#                   its finalize owed (ISO); absent before. It blocks on that once, even after
-#                   the lapse was acknowledged, and unblock clears it with blocked_at
+#   end_blocked_at  when the guard blocked a stop on an end it couldn't judge (ISO); absent
+#                   before: a codex run that ended with its finalize owed, or a --log verdict
+#                   that a line in a skipped part of the log could change (the guard's
+#                   `unseen`). It blocks on that once, even after the lapse was acknowledged,
+#                   and unblock clears it with blocked_at. An end the guard can judge is
+#                   recorded instead, which resolves the watch
+#   cut_blocked_at  the same for a --log condition still unmet after the guard skipped part of
+#                   the log, when nothing else (no pids, no stale_min) would end it later: the
+#                   skipped part may have held its done or fail line. Kept apart from
+#                   end_blocked_at, so an end judged later still blocks once
+#   log_cursor      for a --log condition, how far the log has been read: scan_log's cursor
+#                   ({"offset", "done", "failed", "size"}) plus "cut", true once some of the
+#                   log was skipped unread. The waiter records its own at each heartbeat (never
+#                   cut: it reads every byte), and a guard that finds no live waiter reads on
+#                   from it and records its progress, so each byte is read once. Absent until
+#                   one of them records it
 #   session_id      a --resume moves the watch to the resuming session, unless it has none
 #   claude_pid, claude_start
 #                   the Claude Code process (claude_process) and its procStart that the waiter
@@ -1141,10 +1154,10 @@ def watch_orphaned(w, current=None, live=None, now=None):
 
 def unblock(w):
     """Clear an unresolved watch's lapse record (blocked_at, blocked_stop, blocked_size,
-    end_blocked_at) and its acknowledgment, so the guard's next block on it is a first one: a
-    waiter that takes it over or polls it is live again, and a conversation that adopts it never
-    saw the old block."""
-    for key in ("blocked_size", "blocked_stop", "end_blocked_at"):
+    end_blocked_at, cut_blocked_at) and its acknowledgment, so the guard's next block on it is
+    a first one: a waiter that takes it over or polls it is live again, and a conversation that
+    adopts it never saw the old block."""
+    for key in ("blocked_size", "blocked_stop", "end_blocked_at", "cut_blocked_at"):
         w.pop(key, None)
     w.update(state="open", blocked_at=None)
 
@@ -1236,14 +1249,17 @@ class Waiter:
                      waiter_heartbeat=now_iso())
         return update_watch(self.wid, take)
 
-    def beat(self):
-        """Refresh the heartbeat. A waiter that polls is live, so a lapse the guard saw meanwhile
-        is over."""
+    def beat(self, cursor=None):
+        """Refresh the heartbeat, and record `cursor`, a --log condition's scan_log cursor, as
+        log_cursor, so a guard that finds this waiter gone reads on from there. A waiter that
+        polls is live, so a lapse the guard saw meanwhile is over."""
         def beat(w):
             self.own(w)
             if w.get("state") in UNRESOLVED:
                 unblock(w)
                 w["waiter_heartbeat"] = now_iso()
+                if cursor is not None:
+                    w["log_cursor"] = dict(cursor, cut=False)
         return update_watch(self.wid, beat)
 
     def end(self, verdict):
