@@ -837,9 +837,13 @@ the fix is enforcement. `PLAN.md` has the design history and the options weighed
   log has been quiet for a poll (its mtime): that catches a writer still writing, though not
   one that pauses mid-line for longer. The guard, whose verdict is final, never matches such
   a line; one that would change an ended verdict makes it uncertain instead ("its last line
-  has no newline yet ..."), for a waiter to settle. A log rewritten in place is read again
-  from the start, forgetting what was seen; one replaced by another file (a new inode, as a
-  rotation by rename leaves) is read from its start, but a done line already seen stays seen.
+  has no newline yet ..."), for a waiter to settle. A run of more than 1 MB with no newline
+  (`MAX_LINE`: a progress bar's carriage returns, say) is the exception, for both: it is
+  matched as it stands, then dropped and read past, so memory stays bounded, and a pattern
+  can miss, or match, where that cut falls. A log replaced by another file (a new inode, as a
+  rotation by rename leaves) is read from its start, but a done line already seen stays seen,
+  whatever the new file's size; the same file rewritten shorter is read again from the start,
+  forgetting what was seen.
   - Conditions: `--pid N` (repeatable: all have exited), `--file PATH` (it exists),
     `--log PATH --done RE` (a matching line; `--fail RE` fails it and `--stale MIN` ends it as
     stale), and `--codex RUN_ID` (Codex has ended; the waiter then runs `codex-delegate finalize`
@@ -921,7 +925,8 @@ the fix is enforcement. `PLAN.md` has the design history and the options weighed
     (`DETACHED_MAX_MIN`), reading the whole condition as any waiter does, and records its end
     with `reported` false and how it ended (`end_why`, the line its exit would have printed),
     since its exit reaches no one. It reads a log 8 MB at a time (`SCAN_CHUNK`), beating
-    between chunks, so a long first read neither holds the log in memory nor goes stale.
+    between chunks, so a long first read doesn't go stale, and holds at most 1 MB of a line
+    with no newline (`MAX_LINE`, above), so it doesn't hold the log in memory either.
     `dc.ended_unheard` counts the flag, so the guard's next stop in that session says the end
     ("ended <state>: <why>. The waiter the guard left watching it ..."; for a codex run, also
     `codex-delegate status <run>` and the report's path, by run id whatever the `--desc`),

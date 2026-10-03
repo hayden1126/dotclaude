@@ -751,6 +751,7 @@ REPORTED_STATES = ("done", "failed", "stale")  # how a waiter ends; dropped is t
 WAIT_POLL_S = 15  # the waiter's default seconds between polls
 DETACHED_MAX_MIN = 24 * 60  # the guard's detached waiter's --max: no Bash cap applies to it
 SCAN_CHUNK = 8 * 1024 * 1024  # scan_log reads a log this much at a time
+MAX_LINE = 1024 * 1024  # a longer run with no newline scan_log matches as it stands, then drops
 MAX_WAIT_MIN = 110  # a waiter's ceiling: with a 5-minute finalize, under the 120-minute Bash cap
 REARM = ("still running: re-arm with delegation-ledger wait --resume {} "
          "(run_in_background, timeout 7200000)")
@@ -941,11 +942,14 @@ def scan_log(path, done, fail, cursor, pids_gone=None, quiet_s=WAIT_POLL_S, now=
     (`pids_gone`), or, for a watch with no pids (None), the log hasn't been modified for a poll
     (`quiet_s`) before `now`. That catches a writer still writing; one that pauses mid-line for
     longer than a poll can still be cut, so a final verdict (the guard's) passes settle=False.
-    A log that shrank was rewritten in place, so it is read again from the start, and what was
-    seen is forgotten. One that is another file than the one read (rotated by a rename, a
-    symlink re-pointed) is read from its start too, but a line seen stays seen. The log is
-    read SCAN_CHUNK at a time, so memory stays bounded, with `between()` called after each
-    chunk (the waiter beats there). Each pattern is compiled once a scan."""
+    A log that is another file than the one read (rotated by a rename, a symlink re-pointed)
+    is read from its start, but a line seen stays seen, whatever the new file's size. The same
+    file grown shorter was rewritten in place, so it is read again from the start too, and what
+    was seen is forgotten. The log is read SCAN_CHUNK at a time, with `between()` called after
+    each chunk (the waiter beats there). A run of more than MAX_LINE bytes with no newline (a
+    progress bar's carriage returns, say) is matched as it stands, settled or not, then dropped
+    and read past, so memory stays bounded; a pattern can miss, or match, where that cut falls.
+    Each pattern is compiled once a scan."""
     try:
         f = open(path, "rb")
     except OSError:
@@ -953,10 +957,10 @@ def scan_log(path, done, fail, cursor, pids_gone=None, quiet_s=WAIT_POLL_S, now=
     with f:
         st = os.fstat(f.fileno())
         ident = (st.st_dev, st.st_ino)
-        if st.st_size < cursor["offset"]:
-            cursor.update(offset=0, done=False)
-        elif cursor["file"] not in (None, ident):
+        if cursor["file"] not in (None, ident):  # another file: what was seen stays seen
             cursor["offset"] = 0
+        elif st.st_size < cursor["offset"]:  # rewritten in place: what was seen is forgotten
+            cursor.update(offset=0, done=False)
         cursor["file"] = ident
         f.seek(cursor["offset"])
         fail_re, done_re = (re.compile(p) if p else None for p in (fail, done))
@@ -966,13 +970,18 @@ def scan_log(path, done, fail, cursor, pids_gone=None, quiet_s=WAIT_POLL_S, now=
             if not chunk:
                 break
             whole, newline, carry = (carry + chunk).rpartition(b"\n")
-            for line in whole.decode("utf-8", "replace").splitlines():
+            lines = whole.decode("utf-8", "replace").splitlines()
+            read = len(whole) + len(newline)
+            if len(carry) > MAX_LINE:  # no newline in sight: matched as it stands, then dropped
+                lines.append(carry.decode("utf-8", "replace"))
+                read, carry = read + len(carry), b""
+            for line in lines:
                 if fail_re and fail_re.search(line):
                     cursor["failed"] = True
                     return "failed"
                 if done_re and done_re.search(line):
                     cursor["done"] = True
-            cursor["offset"] += len(whole) + len(newline)
+            cursor["offset"] += read
             if between is not None:
                 between()
     cursor["partial"] = partial = carry.decode("utf-8", "replace")

@@ -424,6 +424,47 @@ class ScanLog(unittest.TestCase):
             f.write("new run\n")
         self.assertEqual(self.scan(cur, pids_gone=True), "done")
 
+    def test_a_rotation_to_a_shorter_file_keeps_the_done_line_seen(self):
+        # The inode is checked before the size: a new file shorter than the old offset is
+        # another file, not the old one rewritten. The same file rewritten shorter forgets.
+        with open(self.log, "w") as f:
+            f.write("x" * 99 + "\nOK\n")
+        cur = dc.log_cursor()
+        self.assertEqual(self.scan(cur, pids_gone=False), "done")
+        new = os.path.join(self.tmp.name, "new.log")
+        with open(new, "w") as f:
+            f.write("x\n")
+        os.replace(new, self.log)
+        self.assertEqual(self.scan(cur, pids_gone=True), "done")
+        self.assertEqual(cur["offset"], 2)
+        with open(self.log, "w") as f:  # truncated in place: the same inode
+            f.write("x" * 99 + "\nOK\n")
+        cur = dc.log_cursor()
+        self.assertEqual(self.scan(cur), "done")
+        with open(self.log, "w") as f:
+            f.write("x\n")
+        self.assertIsNone(self.scan(cur))
+        self.assertEqual(cur["offset"], 2)
+
+    def test_a_run_with_no_newline_past_max_line_is_matched_then_dropped(self):
+        # A progress bar's carriage returns: 3 MB with no newline isn't held, or copied, whole.
+        size = 3 * 1024 * 1024
+        with open(self.log, "w") as f:
+            f.write("OK" + "\r" * (size - 2))
+        cur = dc.log_cursor()
+        self.assertEqual(dc.scan_log(self.log, "OK", None, cur, settle=False), "done")
+        self.assertEqual((cur["offset"], cur["partial"]), (size, ""))
+        with open(self.log, "a") as f:
+            f.write("still going")
+        self.assertEqual(dc.scan_log(self.log, "OK", None, cur, settle=False), "done")
+        self.assertEqual((cur["offset"], cur["partial"]), (size, "still going"))
+        with mock.patch.object(dc, "SCAN_CHUNK", 64 * 1024):  # each chunk adds to the run
+            cur = dc.log_cursor()
+            self.assertIsNone(dc.scan_log(self.log, "^never", None, cur, settle=False))
+        self.assertLessEqual(len(cur["partial"]), dc.MAX_LINE)
+        self.assertGreater(cur["offset"], size - dc.MAX_LINE)
+        self.assertEqual(cur["offset"] + len(cur["partial"]), size + len("still going"))
+
     def test_each_pattern_is_compiled_once_a_scan(self):
         with open(self.log, "w") as f:
             f.write("line\n" * 500)
