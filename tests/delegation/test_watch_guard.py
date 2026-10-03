@@ -422,6 +422,15 @@ class Watches(GuardEnv):
         self.assertEqual(self.read()["session_id"], "s1")
         self.assertIn("adopted watch w-1 from session s-before", self.err_log())
 
+    def test_a_watch_this_process_recorded_with_no_session_is_adopted(self):
+        self.mine(sid="unknown")
+        self.lines()
+        self.as_claude()
+        self.assertEqual(self.decide(), self.block(self.lapse_reason()))
+        self.assertEqual(self.read()["session_id"], "s1")
+        self.assertIn("adopted watch w-1 from session unknown: the same Claude process (a "
+                      "/clear, or a watch recorded with no session)", self.err_log())
+
     def test_a_live_sessions_watch_isnt_adopted_even_when_the_process_matches(self):
         self.mine()
         self.lines()

@@ -812,12 +812,12 @@ the fix is enforcement. `PLAN.md` has the design history and the options weighed
     first turn to run `codex-delegate run` again, which gets a new run id;
   - anything else is a lapse, which blocks once with the re-arm and drop commands. For a codex run
     that ended without a stop row, it adds that resuming finalizes it;
-  - first, it adopts any unresolved watch recorded under its own Claude Code process with another
-    session id that is no longer live (a `/clear`), moving it into this session in the commit
-    pass and logging it. A live session's watch is never adopted, whatever the pids say, and the
-    commit checks the process and the liveness again under the lock. It finds its process by
-    the same parent walk as the waiter, so a nested `claude -p` that inherited the lead's
-    `CLAUDE_PID` finds itself, not the lead;
+  - first, it adopts any unresolved watch recorded under its own Claude Code process in a
+    session that isn't live (a `/clear`, or a watch recorded with no session), moving it into
+    this session in the commit pass and logging it. A live session's watch is never adopted,
+    whatever the pids say, and the commit checks the process and the liveness again under the
+    lock. It finds its process by the same parent walk as the waiter, so a nested `claude -p`
+    that inherited the lead's `CLAUDE_PID` finds itself, not the lead;
   - it also adopts this session's watches whose Claude process has ended (a crash, then
     `claude --continue`), recording itself as their Claude process. A waiter still running there
     reports to a process that's gone, so the watch is marked `waiter_unheard` and blocks once:

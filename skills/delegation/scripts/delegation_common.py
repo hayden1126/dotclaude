@@ -1034,10 +1034,11 @@ def claude_alive(w):
 
 
 def left_by_clear(w, me, live):
-    """Whether /clear left watch w in the Claude process `me` ((pid, procStart), or None): it
-    was recorded under that process, in a session that isn't live (not in `live`, from
-    live_sessions()). After /clear the process runs on under a new session id, and its sessions
-    file names the new one, so the old id leaves the live set. A live session's watch never
+    """Whether watch w was left in the Claude process `me` ((pid, procStart), or None): it was
+    recorded under that process, in a session that isn't live (not in `live`, from
+    live_sessions()). That is a watch from before a /clear, since the process runs on under a
+    new session id and its sessions file names the new one, so the old id leaves the live set;
+    or one recorded with no session ("unknown", never live). A live session's watch never
     counts, whatever the pids say: that session has it."""
     return (me is not None and w.get("claude_pid") == me[0]
             and str(w.get("claude_start")) == str(me[1]) and w.get("session_id") not in live)

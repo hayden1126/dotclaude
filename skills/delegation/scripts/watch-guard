@@ -7,8 +7,8 @@ then says not to restart it, so a lead waiting on a long job can end its turn wi
 to wake it. This hook is the enforcement:
 
 - Watches (`delegation-ledger wait`; delegation_common documents the file). For each of this
-  session's open or acknowledged watches, including those this Claude process recorded under
-  an earlier session id that is no longer live (a /clear), which it adopts:
+  session's open or acknowledged watches, including those this Claude process recorded in a
+  session that isn't live (a /clear, or a watch recorded with no session), which it adopts:
   - a live waiter, or a background shell whose command holds the watch id, allows (the waiter
     records the end itself);
   - else a met condition is recorded done and blocks once: the dead waiter's notification
@@ -501,7 +501,8 @@ def crashed(w, sid, me):
 def adoption(sid, me, now):
     """The adoption step of the commit pass, as (adopt, settle). adopt(wid) is the update that
     adopts watch wid, checked again under the lock:
-    - one /clear left (dc.left_by_clear) moves into this session. One another session re-armed,
+    - one this process left in a session that isn't live (dc.left_by_clear: a /clear, or a
+      watch recorded with no session) moves into this session. One another session re-armed,
       or whose old session came back, since it was gathered stays where it is;
     - a crashed one records this process as its Claude process, and a waiter still running is
       marked waiter_unheard: its exit goes to the process that ended.
@@ -529,7 +530,8 @@ def adoption(sid, me, now):
         for wid, old in moved:
             if wid not in lost:
                 checks.log_error(f"watch-guard: adopted watch {wid} from session {old}: the "
-                                 "same Claude process (a /clear)")
+                                 "same Claude process (a /clear, or a watch recorded with no "
+                                 "session)")
         for wid, old in revived:
             if wid not in lost:
                 checks.log_error(f"watch-guard: adopted watch {wid} from Claude process {old}, "
