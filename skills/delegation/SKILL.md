@@ -156,12 +156,12 @@ validated (`report_ok`).
   retuning; `due` asks for it monthly. After a probe run by hand in a live session,
   `delegation-ledger exclude --id <id> --why probe` keeps it out of those numbers.
 - **After a Claude Code upgrade,** the first session runs the quick canary in the background:
-  the unit tests, the sandbox posture, and the strings our hooks read from the binary. You hear
-  about it only if it fails. When the session-start line says the full canary is due (weekly, once
-  the version has moved), run `delegation-ledger canary` outside the sandbox and with
-  `run_in_background`: it takes about 6 minutes, and a slow run can pass the 10-minute
-  foreground limit. `delegation-ledger due` shows what is
-  pending, including the dated items in `due.toml`.
+  the unit tests, the sandbox posture, and the strings our hooks read from the binary. A
+  failure shows in the session-start line, which only Hayden sees. Run `delegation-ledger due`
+  to see what is pending, including the dated items in `due.toml`. When it says the full
+  canary is due (weekly, once the version has moved), run `delegation-ledger canary` outside
+  the sandbox and with `run_in_background`: it takes about 6 minutes, and a slow run can pass
+  the 10-minute foreground limit.
 - `delegation-ledger open` lists delegations whose latest event isn't a stop. Each row
   shows its evidence:
   - whether the session is alive;
@@ -205,19 +205,22 @@ validated (`report_ok`).
   the watch and the re-arm command. It exits 0 done, 1 failed, 2 stale. At 75 it prints a re-arm
   line: run exactly that, not the original command (though a rerun of the same wait takes the
   same watch over). The watch guard blocks your stop once when a watch has lapsed with no
-  waiter, its job ended with no waiter to tell you, or a background command was killed at its
-  time limit. After that one block, a lapse goes quiet: a later stop lets you through, Hayden
-  sees one warning, and nothing more comes until its job ends. So re-arm or drop it when it
-  blocks. To stop watching, `delegation-ledger wait --drop <id>`.
+  waiter, its job ended (done, failed or stale) with no waiter to tell you, or a background
+  command was killed at its time limit. After that one block, a lapse goes quiet: a later stop
+  lets you through, Hayden sees one warning, and nothing more comes until its job ends, however
+  it ends, which blocks once more. So re-arm or drop it when it blocks. After a `/clear`, your
+  first stop blocks once again on each lapse from before it. To stop watching,
+  `delegation-ledger wait --drop <id>`.
 - **After a crash or restart,** run `delegation-ledger open --hours 24`.
   - For each orphaned agent, look at its artifact path and redo only the unfinished part.
-  - Its `watches:` block lists the unresolved watches and the ones that ended while no Claude
-    process listened. Re-arm one with no live waiter by the `--resume` command it prints, or
-    drop it; for an ended one, check the result.
+  - Its `watches:` block lists every unresolved watch, however old, and the ones that ended
+    while no Claude process listened. One that needs re-arming (its waiter is dead, or alive
+    but its exit reaches nobody) shows its `--resume` command: run it, or drop the watch. For
+    an ended one, check the result.
   - In a session you continued (`claude --continue`), the watch guard blocks your first stop
     once for each watch the crash left: a waiter that still runs (its exit won't reach you, so
-    re-arm it), a lapse, or an end nobody heard (check the result). One whose lapse was already
-    acknowledged says nothing; find it in the `watches:` block.
+    re-arm it), a lapse (even one acknowledged before the crash), or a job that ended while
+    nobody listened (check the result).
   - Hayden, not you, sees the session-start line. It names every unresolved watch whose
     waiter's exit reaches nobody, at each start, and once, each watch that ended while no
     Claude process listened. If they pass one on, handle it the same way.
@@ -237,8 +240,11 @@ is no need to poll.
 A run can outlast the Bash tool's 2-hour cap. The wrapper exits first: at `--max-wait` (110
 minutes) it prints the re-arm command and exits 75, and Codex keeps running. Run the command it
 printed, in the background with the same timeout; that waiter finalizes the run once Codex
-ends. If the wrapper is killed anyway, Codex keeps running too (it writes its own event log in
-its own session), and the watch guard blocks your next stop with the same re-arm command.
+ends. If the wrapper is killed anyway, Codex keeps running too (it runs under a supervisor
+detached from the wrapper's process tree), and the watch guard blocks your next stop with the
+same re-arm command. If Codex has ended by then, that block still says to re-arm: the waiter
+finalizes the run and its exit notice carries the result. Stopping the background task no
+longer stops Codex; `codex-delegate cancel <run_id>` does.
 `status` says where a run is, and `finalize` records the result by hand.
 
 ```bash
@@ -246,6 +252,7 @@ codex-delegate run --model sol --dir ~/some/repo --brief brief.md [--network] [-
 codex-delegate status              # verdict with evidence, phase, exit/report/audit results
 codex-delegate resume <run_id> --prompt fix.md
 codex-delegate finalize <run_id>   # a run whose wrapper died: report check, audit, stop row
+codex-delegate cancel <run_id>     # stop a running run on purpose; drops its watch
 codex-delegate audit <thread_id>   # every model the thread and its sub-agents used
 ```
 
@@ -263,6 +270,8 @@ codex-delegate audit <thread_id>   # every model the thread and its sub-agents u
   - 75: still running: re-arm with the printed command;
   - 124: timed out;
   - 143: killed by SIGTERM or SIGHUP while Codex ran; Codex keeps running, and the watch
-    guard's next block prints the re-arm command.
+    guard's next block prints the re-arm command;
+  - `cancel` exits 0 once the run is stopped, and 2 for an unknown run or one that isn't
+    running. The cancelled run's wrapper, if still running, exits 1.
 - **Scope:** send Codex only the work it does better, such as anything about its own
   configuration. Claude does the rest.

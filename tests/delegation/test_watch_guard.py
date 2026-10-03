@@ -145,13 +145,19 @@ class GuardEnv(unittest.TestCase):
         except FileNotFoundError:
             return ""
 
-    def lapse_reason(self, wid="w-1", desc="the build", cond=None, codex_ended=False):
+    def lapse_reason(self, wid="w-1", desc="the build", cond=None):
         cond = cond or f"{self.path('never')} exists"
-        unmet = f"{cond} is unmet" + (f" {guard.CODEX_ENDED}" if codex_ended else "")
+        unmet = f"{cond} is unmet"
         return (f"Watch {wid} ({desc}) has no live waiter and {unmet}. If a command was stopped "
                 "at its time limit, don't re-run it. Re-arm the watch: delegation-ledger wait "
                 f"--resume {wid}, with run_in_background and timeout 7200000. To stop watching "
                 f"it: delegation-ledger wait --drop {wid}.")
+
+    def codex_ended(self, wid="w-1", run="r1"):
+        return (f"Watch {wid} (codex run {run} ends): codex run {run} has ended, but its waiter "
+                "had stopped, so the run isn't finalized. Re-arm the watch and its waiter "
+                f"finalizes it: delegation-ledger wait --resume {wid}, with run_in_background "
+                f"and timeout 7200000. To stop watching it: delegation-ledger wait --drop {wid}.")
 
     def kill_reason(self, desc):
         return (f'Background command "{desc}" was stopped at its time limit. If it was waiting '
@@ -206,11 +212,67 @@ class Watches(GuardEnv):
         self.assertEqual(self.read()["state"], "open")  # the waiter records the end itself
 
     def test_a_codex_run_that_ended_blocks_with_resume_and_isnt_recorded_done(self):
+        # Its outcome is unknown until it is finalized, and the re-armed waiter finalizes it,
+        # so the watch stays open: one block, then the lapse's acknowledgment.
         self.codex_row()
         self.watch(cond={"codex": "r1"}, desc="codex run r1 ends")
-        self.assertEqual(self.decide(), self.block(self.lapse_reason(
-            desc="codex run r1 ends", cond="codex run r1 ends", codex_ended=True)))
-        self.assertEqual(self.read()["state"], "open")
+        self.lines()
+        self.assertEqual(self.decide(prompt_id="p1"), self.block(self.codex_ended()))
+        w = self.read()
+        self.assertEqual(w["state"], "open")
+        dc.parse_iso(w["end_blocked_at"])
+        dc.parse_iso(w["blocked_at"])
+        self.assertEqual(self.decide(prompt_id="p2"), {"systemMessage": self.ACK.replace(
+            "w-1 (the build)", "w-1 (codex run r1 ends)")})
+        self.assertIsNone(self.decide(prompt_id="p3"))
+        self.assertEqual(self.read()["state"], "acknowledged")
+
+    def test_an_acknowledged_lapse_whose_job_fails_or_goes_stale_ends_and_blocks_once(self):
+        # An acknowledged lapse says nothing more, so a job that ends badly must be an end, not
+        # another lapse, or nobody hears of it.
+        log = self.path("build.log")
+        open(log, "w").close()
+        old = self.now - 7200
+        os.utime(log, (old, old))
+        never = self.path("never")
+        self.watch(state="acknowledged", blocked_at=guard.iso(old), created=guard.iso(old - 60),
+                   cond={"pids": [{"pid": DEAD, "start": None, "comm": "sleep"}], "file": never})
+        self.watch("w-2", state="acknowledged", blocked_at=guard.iso(old), created=guard.iso(old),
+                   cond={"log": log, "done": "^OK$", "stale_min": 1})
+        self.lines()
+        self.assertEqual(self.decide(), self.block(
+            f"Watch w-1 (the build) ended failed: pid {DEAD} (sleep) exited, but {never} exists "
+            "is unmet. Its waiter had stopped, so no notification came. Check the result and "
+            "report it.",
+            f"Watch w-2 (the build) ended stale: {log} unchanged for 1 min. Its waiter had "
+            "stopped, so no notification came. Check the result and report it."))
+        self.assertEqual([(w["state"], w["reported"]) for w in (self.read(), self.read("w-2"))],
+                         [("failed", True), ("stale", True)])
+        self.assertIsNone(self.decide(prompt_id="p2"))
+
+    def test_an_acknowledged_codex_lapse_whose_run_ends_blocks_once_and_stays_open(self):
+        # An acknowledged lapse says nothing more, so the run's end needs its own block.
+        self.codex_row()
+        self.watch(state="acknowledged", blocked_at=guard.iso(self.now - 600),
+                   cond={"codex": "r1"}, desc="codex run r1 ends")
+        self.lines()
+        self.assertEqual(self.decide(prompt_id="p1"), self.block(self.codex_ended()))
+        self.assertEqual(self.read()["state"], "acknowledged")
+        self.assertIsNone(self.decide(prompt_id="p2"))
+        self.assertIsNone(self.decide(prompt_id="p3"))
+        self.assertEqual(self.read()["state"], "acknowledged")
+
+    def test_a_rearm_clears_the_runs_end_block(self):
+        # A waiter that takes the watch over (unblock) lets a later end block again.
+        self.codex_row()
+        self.watch(state="acknowledged", blocked_at=guard.iso(self.now - 600),
+                   end_blocked_at=guard.iso(self.now - 300), blocked_stop="0123",
+                   cond={"codex": "r1"}, desc="codex run r1 ends")
+        self.lines()
+        self.assertIsNone(self.decide(prompt_id="p1"))
+        dc.update_watch("w-1", dc.unblock)  # what take() and beat() do
+        self.assertNotIn("end_blocked_at", self.read())
+        self.assertEqual(self.decide(prompt_id="p2"), self.block(self.codex_ended()))
 
     def test_a_running_codex_run_with_a_dead_waiter_is_a_plain_lapse(self):
         self.codex_row(pid=os.getpid())
@@ -431,6 +493,40 @@ class Watches(GuardEnv):
         self.assertIn("adopted watch w-1 from session unknown: the same Claude process (a "
                       "/clear, or a watch recorded with no session)", self.err_log())
 
+    def ack(self, wid):
+        return (f"Watch {wid} (the build) still has no waiter; it's acknowledged. Re-arm with "
+                f"delegation-ledger wait --resume {wid}, or drop it.")
+
+    def assert_blocks_afresh_then_acks(self):
+        """w-1 (acknowledged) and w-2 (blocked, still open), both adopted at this stop: each
+        blocks once, as a first lapse, then acknowledges, then says nothing."""
+        self.assertEqual(self.decide(prompt_id="p1"), self.block(
+            self.lapse_reason(), self.lapse_reason("w-2")))
+        self.assertEqual([self.read(w)["state"] for w in ("w-1", "w-2")], ["open", "open"])
+        self.assertEqual(self.decide(prompt_id="p2"),
+                         {"systemMessage": f"{self.ack('w-1')} {self.ack('w-2')}"})
+        self.assertIsNone(self.decide(prompt_id="p3"))
+
+    def test_a_clear_adoption_blocks_on_an_old_lapse_again(self):
+        # The conversation after /clear never saw the old block or its ack.
+        old = {"blocked_at": guard.iso(self.now - 600), "blocked_stop": "0123", "blocked_size": 1}
+        self.mine(state="acknowledged", created="2026-10-02T10:00:00Z", **old)
+        self.mine(wid="w-2", created="2026-10-02T10:00:01Z", **old)
+        self.lines()
+        self.as_claude()
+        self.assert_blocks_afresh_then_acks()
+        self.assertEqual(self.read("w-2")["session_id"], "s1")
+
+    def test_a_crash_adoption_blocks_on_an_old_lapse_again(self):
+        old = {"blocked_at": guard.iso(self.now - 600), "blocked_stop": "0123",
+               "claude_pid": DEAD, "claude_start": None}
+        self.watch(state="acknowledged", created="2026-10-02T10:00:00Z", **old)
+        self.watch("w-2", created="2026-10-02T10:00:01Z", **old)
+        self.lines()
+        self.as_claude()
+        self.assert_blocks_afresh_then_acks()
+        self.assertEqual(self.read("w-2")["claude_pid"], os.getpid())
+
     def test_a_live_sessions_watch_isnt_adopted_even_when_the_process_matches(self):
         self.mine()
         self.lines()
@@ -506,6 +602,23 @@ class Watches(GuardEnv):
         out = self.decide()
         self.assertIn(self.unheard_reason(), out["reason"])
         self.assertIs(self.read()["waiter_unheard"], True)
+        # It resumes and beats again. A --resume elsewhere may still take it over, and its own
+        # end is recorded unreported, so the guard and the nudge say it.
+        dc.update_watch("w-1", lambda w: w.update(waiter_heartbeat=dc.now_iso()))
+        dc.Waiter("w-1", 15, (None, "s2")).refuse_a_live_waiter(self.read())
+        me = (os.getpid(), dc.proc_start(os.getpid()))
+        dc.Waiter("w-1", 15, (me, "s1")).end("done")
+        self.assertIs(self.read()["reported"], False)
+
+    def test_a_crashed_processs_stale_waiter_whose_condition_is_met_says_only_the_end(self):
+        # "Re-arm it" would contradict the end, and --resume refuses a done watch.
+        open(self.path("never"), "w").close()
+        self.watch(live=True, claude_pid=DEAD, claude_start=None,
+                   waiter_heartbeat=guard.iso(self.now - 3600))
+        self.lines()
+        self.as_claude()
+        self.assertEqual(self.decide(), self.block(self.met_reason()))
+        self.assertEqual(self.read()["state"], "done")
 
     def test_a_crashed_processs_dead_waiter_is_adopted_and_lapses(self):
         self.watch(claude_pid=DEAD, claude_start=None)

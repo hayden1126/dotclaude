@@ -66,6 +66,33 @@ FAKE_CODEX = textwrap.dedent('''\
 ''')
 
 
+def kill_tree(pid):
+    """SIGKILL pid and every descendant, found by walking /proc/*/stat ppids, as Claude Code's
+    time-limit kill does (probed 2026-10-02): only a process reparented out of the tree escapes
+    it. Returns the pids it signalled."""
+    children = {}
+    for name in os.listdir("/proc"):
+        if not name.isdigit():
+            continue
+        try:
+            with open(f"/proc/{name}/stat") as f:
+                ppid = int(f.read().rsplit(")", 1)[1].split()[1])
+        except (OSError, ValueError, IndexError):
+            continue
+        children.setdefault(ppid, []).append(int(name))
+    tree, todo = [], [pid]
+    while todo:
+        p = todo.pop()
+        tree.append(p)
+        todo += children.get(p, [])
+    for p in tree:
+        try:
+            os.kill(p, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+    return tree
+
+
 class Gate(unittest.TestCase):
     def test_only_sol_and_terra(self):
         self.assertEqual(cd.pin("sol"), "gpt-5.6-sol")
@@ -301,7 +328,7 @@ class FullRun(unittest.TestCase):
         p = self.run_cd("finalize", run_id)
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertEqual(self.ledger()[-1]["event"], "stop")
-        self.assertIsNone(self.ledger()[-1]["rc"])
+        self.assertEqual(self.ledger()[-1]["rc"], 0)  # from codex.rc, which the supervisor wrote
         self.assertEqual(self.run_cd("finalize", run_id).returncode, 0)  # idempotent
 
     def test_codex_survives_a_killed_wrapper(self):
@@ -317,7 +344,7 @@ class FullRun(unittest.TestCase):
             time.sleep(0.1)
         proc.send_signal(signal.SIGTERM)
         self.assertEqual(proc.wait(timeout=10), 143)
-        self.assertEqual(self.ledger()[-1]["event"], "interrupted")
+        self.assertEqual(self.ledger()[-1]["event"], "detached")  # Codex runs on
         [w] = self.watches().values()  # left open with a dead waiter, for the guard to lapse
         self.assertEqual((w["state"], w["waiter_pid"]), ("open", proc.pid))
         self.assertFalse(cd.dc.waiter_alive(w))
@@ -332,6 +359,95 @@ class FullRun(unittest.TestCase):
         p = self.run_cd("finalize", run_id)
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertTrue(self.ledger()[-1]["audit_ok"])
+        self.assertEqual(self.ledger()[-1]["rc"], 0)
+
+    def pid_file(self):
+        """The run's codex.pid record, once the supervisor has written it."""
+        path = os.path.join(self.ledger()[0]["out"], "codex.pid")
+        deadline = time.time() + 10
+        while not os.path.exists(path) and time.time() < deadline:
+            time.sleep(0.05)
+        with open(path) as f:
+            return json.load(f)
+
+    def test_codex_survives_a_kill_of_the_wrappers_whole_tree(self):
+        # Claude Code's time-limit kill takes the command's descendants. The supervisor was
+        # double-forked out of them, so Codex runs on, and the re-arm gets its exit code.
+        proc = self.start(FAKE_SLEEP="2", FAKE_RC="7")
+        run_id, wid = self.launch_ids(proc.stdout.readline())
+        rec = self.pid_file()
+        killed = kill_tree(proc.pid)
+        proc.wait(timeout=10)
+        proc.stdout.close()
+        self.assertNotIn(rec["supervisor_pid"], killed)
+        self.assertNotIn(rec["pid"], killed)
+        self.assertTrue(cd.dc.pid_alive(rec["pid"], rec["start"]))  # Codex runs on
+        w = self.ledger_run("wait", "--resume", wid, "--poll", "0.2")
+        self.assertEqual(w.returncode, 1, w.stderr)  # Codex exited 7, so the run failed
+        stop = self.ledger()[-1]
+        self.assertEqual((stop["event"], stop["rc"], stop["exit"], stop["report_ok"]),
+                         ("stop", 7, 1, True))
+        self.assertEqual(self.watches()[wid]["state"], "failed")
+
+    def test_a_supervisor_killed_while_codex_runs_leaves_the_exit_code_unknown(self):
+        proc = self.start(FAKE_SLEEP="2")
+        run_id, _ = self.launch_ids(proc.stdout.readline())
+        rec = self.pid_file()
+        kill_tree(proc.pid)
+        proc.wait(timeout=10)
+        proc.stdout.close()
+        os.kill(rec["supervisor_pid"], signal.SIGKILL)
+        self.assertTrue(cd.dc.pid_alive(rec["pid"], rec["start"]))  # orphaned, it runs on
+        self.wait_gone(rec["pid"])
+        f = self.run_cd("finalize", run_id)
+        self.assertEqual(f.returncode, 0, f.stderr)  # the report and audit still decide
+        self.assertIsNone(self.ledger()[-1]["rc"])
+        self.assertFalse(os.path.exists(os.path.join(self.ledger()[0]["out"], "codex.rc")))
+
+    def test_a_wrapper_whose_supervisor_is_killed_records_the_exit_code_unknown(self):
+        proc = self.start(FAKE_SLEEP="2")
+        self.launch_ids(proc.stdout.readline())
+        os.kill(self.pid_file()["supervisor_pid"], signal.SIGKILL)
+        self.assertEqual(proc.wait(timeout=30), 0)  # it waits out the orphaned Codex
+        proc.stdout.close()
+        stop = self.ledger()[-1]
+        self.assertEqual((stop["event"], stop["rc"]), ("stop", None))
+
+    def test_cancel_stops_a_live_run_writes_its_stop_row_and_drops_its_watch(self):
+        proc = self.start(FAKE_SLEEP="60")
+        run_id, wid = self.launch_ids(proc.stdout.readline())
+        rec = self.pid_file()
+        c = self.run_cd("cancel", run_id)
+        self.assertEqual(c.returncode, 0, c.stderr)
+        self.assertIn(f"codex-delegate: run {run_id} cancelled (Codex pid {rec['pid']}", c.stdout)
+        self.assertIn(f"dropped watch {wid}", c.stdout)
+        self.assertFalse(cd.dc.pid_alive(rec["pid"], rec["start"]))
+        stop = self.ledger()[-1]
+        self.assertEqual((stop["event"], stop["status"], stop["exit"], stop["report_ok"]),
+                         ("stop", "cancelled", 1, False))
+        self.assertEqual(self.watches()[wid]["state"], "dropped")
+        self.assertEqual(proc.wait(timeout=20), 1)  # its wrapper leaves the stop row be
+        self.assertIn(f"run {run_id} was cancelled; its stop row stands", proc.stdout.read())
+        proc.stdout.close()
+        self.assertEqual([r["event"] for r in self.ledger()].count("stop"), 1)
+        self.assertEqual(self.ledger()[-1]["status"], "cancelled")  # no start row after it
+        self.assertIn("cancelled", self.run_cd("status", run_id).stdout)
+
+    def test_cancel_refuses_an_unknown_run_and_one_that_isnt_running(self):
+        p = self.run_cd("cancel", "no-such-run")
+        self.assertEqual(p.returncode, 2)
+        self.assertIn("no codex run 'no-such-run'", p.stderr)
+        run_id = self.summary(self.run_ok())["run_id"]
+        p = self.run_cd("cancel", run_id)
+        self.assertEqual(p.returncode, 2)
+        self.assertIn(f"run {run_id} isn't running: it has ended, with a stop row", p.stderr)
+        self.drop_stop_row()  # its wrapper gone before the stop row: Codex has ended
+        pid = self.pid_file()["pid"]
+        p = self.run_cd("cancel", run_id)
+        self.assertEqual(p.returncode, 2)
+        self.assertIn(f"run {run_id} isn't running: Codex (pid {pid}) has ended; record it with "
+                      f"codex-delegate finalize {run_id}", p.stderr)
+        self.assertEqual([r["event"] for r in self.ledger()], ["pending", "start"])
 
     def test_astra_refused_before_anything_runs(self):
         p = self.run_cd("run", "--model", "astra", "--dir", self.work, "--brief", self.brief)
@@ -430,7 +546,7 @@ class FullRun(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual([r["event"] for r in self.ledger()],
                          ["pending", "start", "detached", "stop", "pending", "resume", "stop"])
-        self.assertIsNone(self.ledger()[3]["rc"])  # the first turn, finalized
+        self.assertEqual(self.ledger()[3]["rc"], 0)  # the first turn, finalized from codex.rc
         self.assertEqual(self.watches()[wid]["state"], "done")  # the resume took it over
 
     def test_a_resume_that_fails_to_launch_ends_its_turn_failed(self):

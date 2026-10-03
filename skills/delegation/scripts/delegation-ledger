@@ -101,8 +101,10 @@ steps aside at its next poll. Its exit codes:
 While it finalizes a codex run the waiter keeps its heartbeat, and it marks the watch as
 finalizing, so a waiter that takes over meanwhile waits for that stop row instead of writing
 a second one.
-`watch` and `open` list unresolved watches in a block of their own, printed only when there
-are some. Each wait start prunes ended watches over 7 days old.
+`watch` and `open` list every unresolved watch, however old, and the ended ones nobody heard,
+in a block of their own, printed only when there are some; a watch whose waiter is dead, or
+alive but heard by nobody, shows its re-arm command. Each wait start prunes ended watches over
+7 days old.
 """
 import argparse
 import collections
@@ -597,18 +599,21 @@ def last_seen(w):
 
 
 def watch_block(ctx, now, horizon, detail):
-    """The unresolved watches seen since `horizon`, and those that ended while no Claude process
-    was listening and aren't reported yet (dc.ended_unheard, where pids are visible), as lines
-    under a `watches:` header: one each for `watch`, two with the evidence for `open`
-    (`detail`). [] when there are none, so neither view's output changes."""
+    """Every unresolved watch, however old, and those seen since `horizon` that ended while no
+    Claude process was listening and aren't reported yet (dc.ended_unheard, where pids are
+    visible), as lines under a `watches:` header: one each for `watch`, two with the evidence
+    for `open` (`detail`). A watch whose waiter is dead, or alive but heard by nobody
+    (dc.watch_orphaned: its Claude process ended, or the guard marked it waiter_unheard), gets
+    the re-arm command. [] when there are none, so neither view's output changes."""
     _, _, visible, sessions = ctx
     lines = []
     for w in dc.all_watches():
-        if last_seen(w) < horizon:
-            continue
+        unresolved = w.get("state") in dc.UNRESOLVED
+        if not unresolved and last_seen(w) < horizon:
+            continue  # an unresolved one shows however old: it may still need re-arming
         wid, desc = w.get("id"), (w.get("description") or "")[:40]
         cond = dc.condition_text(w.get("condition") or {})
-        if w.get("state") not in dc.UNRESOLVED:
+        if not unresolved:
             if visible and dc.ended_unheard(w, now):
                 news = (f"ended {w.get('state')} while no Claude Code process was listening ⚠ "
                         "check the result")
@@ -619,9 +624,11 @@ def watch_block(ctx, now, horizon, detail):
             continue
         rearm = f"re-arm: delegation-ledger wait --resume {wid}"
         alive = dc.waiter_alive(w, now) if visible else None
+        unheard = bool(alive) and dc.watch_orphaned(w, live=sessions, now=now)
         ack = "  (acknowledged)" if w.get("state") == "acknowledged" else ""
         if not detail:
             status = ("waiter not visible in the sandbox" if alive is None else
+                      f"waiter alive, but its exit reaches nobody ⚠ {rearm}" if unheard else
                       "waiter alive" if alive else f"no live waiter ⚠ {rearm}")
             # A --desc hides the condition, so it's shown too: a wrong pid's name stands out.
             what = "" if w.get("description") == cond else f"  {cond}"
@@ -641,7 +648,8 @@ def watch_block(ctx, now, horizon, detail):
             beat = "no heartbeat"
         lines.append(f"  {wid}  {w.get('state')}  {desc!r}  waiting for {cond}")
         lines.append(f"         session {w.get('session_id')} {session}, {waiter}, {beat}"
-                     + ("" if alive else f"; {rearm}"))
+                     + ("" if alive and not unheard else
+                        f"; its exit reaches nobody; {rearm}" if unheard else f"; {rearm}"))
     return ["watches:"] + lines if lines else []
 
 

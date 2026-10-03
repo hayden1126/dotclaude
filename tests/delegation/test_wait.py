@@ -1217,6 +1217,37 @@ class Views(WaitEnv):
         self.assertIn(f"  {wid}  'the build'  pid {job.pid} (sleep) exits  waiter alive",
                       self.cli("watch").splitlines())
 
+    def test_an_unresolved_watch_shows_however_old_it_is(self):
+        wid = self.lapsed(self.job())
+        old = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 72 * 3600))
+        self.update(wid, created=old, waiter_heartbeat=old)
+        self.assertIn(f"no live waiter ⚠ re-arm: delegation-ledger wait --resume {wid}",
+                      self.cli("watch").splitlines()[2])
+        out = self.cli("open", "--hours", "1").splitlines()
+        self.assertEqual(out[1], "watches:")
+        self.assertIn(f"re-arm: delegation-ledger wait --resume {wid}", out[3])
+
+    def test_a_live_waiter_nobody_hears_gets_the_re_arm_line(self):
+        job = self.job()
+        p = self.start("--pid", str(job.pid), "--desc", "the build")
+        wid = self.waiting(p)["id"]
+        rearm = f"re-arm: delegation-ledger wait --resume {wid}"
+        # A crash, then a plain `claude`: its Claude process ended, the waiter runs on.
+        self.update(wid, claude_pid=DEAD, claude_start=None)
+        self.assertIn(f"  {wid}  'the build'  pid {job.pid} (sleep) exits  waiter alive, but its "
+                      f"exit reaches nobody ⚠ {rearm}", self.cli("watch").splitlines())
+        line = self.cli("open").splitlines()[3]
+        self.assertIn("session s1 alive, waiter pid", line)
+        self.assertTrue(line.endswith(f"; its exit reaches nobody; {rearm}"), line)
+        # A crash, then claude --continue: adopted by a live process, but marked unheard.
+        self.update(wid, claude_pid=os.getpid(), claude_start=dc.proc_start(os.getpid()),
+                    waiter_unheard=True)
+        self.assertTrue(self.cli("open").splitlines()[3].endswith(
+            f"; its exit reaches nobody; {rearm}"))
+        self.update(wid, waiter_unheard=False)
+        self.assertIn(f"  {wid}  'the build'  pid {job.pid} (sleep) exits  waiter alive",
+                      self.cli("watch").splitlines())
+
     def test_an_end_nobody_heard_shows_until_it_is_reported(self):
         target = self.path("out")
         open(target, "w").close()

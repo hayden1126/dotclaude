@@ -337,9 +337,10 @@ class Evaluate(unittest.TestCase):
         self.assertEqual(self.ev(self.green("2.1.290", 3))[0], [])
         self.assertEqual(self.ev(self.green(self.V, 30))[0], [])  # same version: nothing new
 
-    def test_a_due_full_canary_asks_for_the_manual_rearm_check_too(self):
-        self.assertIn("and so is the manual watch-guard re-arm check (docs/delegation.md, Long "
-                      "waits)", self.ev(self.green("2.1.290", 8))[0][0])
+    def test_a_due_full_canary_asks_for_the_manual_checks_too(self):
+        self.assertIn("and so are the manual watch-guard re-arm check and the Codex kill probe "
+                      "(docs/delegation.md, Long waits; due.toml)",
+                      self.ev(self.green("2.1.290", 8))[0][0])
 
     def test_a_failed_full_run_nudges_until_one_passes_even_after_an_upgrade(self):
         canary = self.green("2.1.285", 2)
@@ -603,8 +604,8 @@ class Orphans(StateTest):
 
     def test_an_acknowledged_lapse_left_by_a_crash_is_named_in_the_continuing_session(self):
         # P1 lapsed, blocked once and acknowledged, then crashed; claude --continue starts P2
-        # in the same session. P2's adoption is silent (it was blocked before), so this line
-        # is the one notice.
+        # in the same session. P2's guard blocks on it again at its first stop, and this line
+        # names it before that: redundancy over silence.
         self.watch(sid="s2", state="acknowledged", blocked_at=checks.dc.now_iso(),
                    claude_pid=DEAD, claude_start=None)
         self.assertIn("1 watch whose waiter's exit reaches nobody: w-1 (the build).",
@@ -613,6 +614,14 @@ class Orphans(StateTest):
     def test_a_gone_processs_watch_in_a_session_live_elsewhere_is_named(self):
         self.watch(sid="s1", live=True, claude_pid=DEAD, claude_start=None)  # s1 is live
         self.assertIn("w-1 (the build; its waiter is still running)", self.message())
+
+    def test_an_adopted_watch_whose_waiter_nobody_hears_is_named(self):
+        # A crash, then claude --continue: this process adopted the watch, so its Claude
+        # process is live, but the waiter's exit still goes to the one that ended.
+        self.watch(sid="s1", live=True, claude_pid=os.getpid(),
+                   claude_start=checks.dc.proc_start(os.getpid()), waiter_unheard=True)
+        self.assertIn("w-1 (the build; its waiter is still running)",
+                      self.message(json.dumps({"session_id": "s1"})))
 
     def test_a_gone_processs_watch_in_an_ended_session_is_named(self):
         self.watch(live=True, claude_pid=DEAD, claude_start=None)  # session "gone"
