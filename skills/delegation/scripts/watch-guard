@@ -35,9 +35,10 @@ to wake it. This hook is the enforcement:
     for up to a day. Its exit reaches no one, so it records the end unreported, and a later
     stop says that end (below). A re-arm by the lead takes the watch over from it. One that
     stops early records why (end_error) and reopens the watch, so the next stop's block says
-    that error once, whatever else it says (due_text: a lapse, a codex end, an uncertain or
-    partial log; also on a codex run that has left the ledger), and the guard starts no other
-    (respawn_refused).
+    that error once, with the block's own message (due_text: the lapse's, a codex run's that
+    ended unfinalized, or a log's uncertain or partial one; also on a codex run that has left
+    the ledger). A recorded end replaces it: the error's re-arm or drop is moot once the watch
+    has ended, and the job's outcome is said. The guard starts no other (respawn_refused).
   - a watch of this session recorded under a Claude process that has ended (a crash, then
     `claude --continue`) is adopted too: this process records itself as the watch's. A waiter
     whose process still runs (even with a stale heartbeat) reports to nobody, so it is marked
@@ -342,13 +343,13 @@ def detached_failure(w):
 
 
 def due_text(w, text):
-    """A block's text for watch w: every message due for it at this stop, so none hides
-    another. That is its detached waiter's failure (detached_failure) while no block has said
-    it: blocked_at unset, since the failure reopened the watch and the first block after it
-    sets blocked_at. Then `text`, the block's own message: the lapse's, CODEX_ENDED,
-    UNCERTAIN or PARTIAL, each still said once by its own marker (blocked_at, end_blocked_at).
-    A recorded end says only its own text: the watch is over, and a re-arm, which the failure
-    asks for, would be refused."""
+    """A lapse's or an "ended" item's block text for watch w: every message due for it at
+    this stop, so none hides another. That is its detached waiter's failure (detached_failure)
+    while no block has said it: blocked_at unset, since the failure reopened the watch and the
+    first block after it sets blocked_at. Then `text`, the block's own message: the lapse's,
+    CODEX_ENDED, UNCERTAIN or PARTIAL, each still said once by its own marker (blocked_at,
+    end_blocked_at). A recorded end says only its own text, which replaces the failure: the
+    watch is over, so the re-arm or drop the failure asks for is moot."""
     failure = detached_failure(w) if w.get("blocked_at") is None else None
     return " ".join(t for t in (failure, text) if t)
 

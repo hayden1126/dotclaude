@@ -723,9 +723,11 @@ def codex_stopped(e):
 #                   failed: <why>`), set with the end: the guard says it for a detached
 #                   waiter's end, whose output nobody reads
 #   end_error       why the detached waiter stopped with no end (an error, or nothing it could
-#                   decide), for the guard's next block to say, with anything else due then;
-#                   recording it reopens the watch (unblock), so that block is a first one. A
-#                   waiter that takes the watch over clears it
+#                   decide), for the guard's next block to say, with that block's own message
+#                   (a lapse, a codex run ended unfinalized, a log's uncertain or partial
+#                   outcome); a recorded end replaces it. Recording it reopens the watch
+#                   (unblock), so that block is a first one. A waiter that takes the watch over
+#                   clears it
 #   ended           when it left UNRESOLVED (ISO); absent until then
 #   reported        set when the watch ends: true once a live Claude Code process has heard
 #                   how it ended (its waiter's Claude process ran when it recorded the end, or a

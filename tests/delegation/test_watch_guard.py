@@ -1374,6 +1374,9 @@ class DetachedWaiters(GuardEnv):
                       "its 1440 min max: Undecidable", self.err_log())
         self.assertIsNone(self.decide(prompt_id="p3"))
 
+    CODEX_ACK = ("Watch w-1 (codex run r1 ends) still has no waiter; it's acknowledged. Re-arm "
+                 "with delegation-ledger wait --resume w-1, or drop it.")
+
     def failed_reason(self, why, wid="w-1", desc="the build"):
         return (f"Watch {wid} ({desc}): the guard's detached waiter failed: {why}. Re-arm to see "
                 f"the error: delegation-ledger wait --resume {wid}, with run_in_background and "
@@ -1402,9 +1405,8 @@ class DetachedWaiters(GuardEnv):
         self.assertEqual(self.decide(prompt_id="p1"), self.block(
             self.failed_reason(why, desc="codex run r1 ends") + " "
             + self.lapse_reason(desc="codex run r1 ends", cond="codex run r1 ends")))
-        out = self.decide(prompt_id="p2")
-        self.assertNotIn("decision", out)
-        self.assertIn("still has no waiter; it's acknowledged", out["systemMessage"])
+        self.assertEqual(self.decide(prompt_id="p2"), {"systemMessage": self.CODEX_ACK})
+        self.assertEqual(self.spawned, [])
         self.codex_row(pid=DEAD)  # Codex ends, with no stop row
         self.assertEqual(self.decide(prompt_id="p3"), self.block(self.codex_ended()))
         self.assertIsNone(self.decide(prompt_id="p4"))
@@ -1425,9 +1427,8 @@ class DetachedWaiters(GuardEnv):
         # the run unfinalized, and nothing would say so.
         both = self.failed_codex_ended("OSError: [Errno 5] Input/output error")
         self.assertEqual(self.decide(prompt_id="p1"), both)
-        self.assertEqual(self.decide(prompt_id="p2"), {"systemMessage": (
-            "Watch w-1 (codex run r1 ends) still has no waiter; it's acknowledged. Re-arm with "
-            "delegation-ledger wait --resume w-1, or drop it.")})
+        self.assertEqual(self.decide(prompt_id="p2"), {"systemMessage": self.CODEX_ACK})
+        self.assertEqual(self.spawned, [])
         for prompt_id in ("p3", "p4"):  # CODEX_ENDED is never said again, nor the error
             self.assertIsNone(self.decide(prompt_id=prompt_id))
         w = self.read()
@@ -1448,8 +1449,20 @@ class DetachedWaiters(GuardEnv):
         with mock.patch.object(guard, "watch_pending", watch_pending):
             self.assertIsNone(self.decide(prompt_id="p1"))
         self.assertEqual(twin, [both])
-        self.assertNotIn("decision", self.decide(prompt_id="p2"))
+        self.assertEqual(self.decide(prompt_id="p2"), {"systemMessage": self.CODEX_ACK})
+        self.assertEqual(self.spawned, [])
         self.assertIsNone(self.decide(prompt_id="p3"))
+
+    def test_a_recorded_end_replaces_the_detached_failure(self):
+        # The error asks for a re-arm or a drop, both moot once the watch has ended: the end
+        # alone is said, and the watch is recorded done.
+        never = self.path("never")
+        open(never, "w").close()
+        self.watch(cond={"file": never}, waiter_detached=True, detached_at=dc.now_iso(),
+                   end_error="OSError: [Errno 5] Input/output error")
+        self.assertEqual(self.decide(prompt_id="p1"), self.block(self.met_reason()))
+        self.assertEqual(self.read()["state"], "done")
+        self.assertIsNone(self.decide(prompt_id="p2"))
 
     def test_a_detached_failure_then_a_partial_fail_line_says_both_in_one_block(self):
         self.spawner = self.record_spawn
@@ -1518,7 +1531,8 @@ class DetachedWaiters(GuardEnv):
         with self.error_after_gather(why):
             self.assertEqual(self.decide(prompt_id="p1"), self.block(
                 self.failed_reason(why, desc="codex run r1 ends") + " " + self.codex_ended()))
-        self.assertNotIn("decision", self.decide(prompt_id="p2"))
+        self.assertEqual(self.decide(prompt_id="p2"), {"systemMessage": self.CODEX_ACK})
+        self.assertEqual(self.spawned, [])
         self.assertIsNone(self.decide(prompt_id="p3"))
 
     def test_a_middle_process_that_fails_is_said_and_the_plain_ack_comes(self):
