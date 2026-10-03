@@ -289,8 +289,9 @@ from 60 to 5,000 requests an hour.
   lead's Bash may carry the lead's, and a tmux server started from a Claude Bash call carries
   ones that go stale. So:
   - when `CLAUDE_PID` is the process the walk found, that process set both vars for this Bash
-    call, and `CLAUDE_CODE_SESSION_ID` is the session. The env follows a session change at once
-    (observed on this machine), where the sessions file might lag right after a `/clear`;
+    call, and `CLAUDE_CODE_SESSION_ID` is the session. The env follows a session change (see the
+    verified facts), and nothing verified says the sessions file is rewritten before the first
+    Bash call after a `/clear`. A nested `claude -p` sets its own vars, so this holds there too;
   - when the walk finds a process that isn't `CLAUDE_PID`, its sessions file's `sessionId` is
     the session (`unknown` without one), and the env isn't read;
   - when the walk finds nothing, the env counts only when `CLAUDE_PID` is an ancestor of the
@@ -1133,7 +1134,13 @@ wins.
   output dir and an older memory note carry. Its `~/.claude/sessions/<pid>.json` now names the
   id in its current `CLAUDE_CODE_SESSION_ID`, under the same pid. So when a process's session id
   changes, as on `/clear`, the old id leaves `live_sessions()`, which lets the guard adopt only
-  from a session that isn't live. The guard checks liveness anyway.
+  from a session that isn't live. The guard checks liveness anyway. The env follows the change
+  too, since it named the new id; this doesn't show which of the two updates first.
+- **A nested `claude -p` sets its own `CLAUDE_PID` and `CLAUDE_CODE_SESSION_ID`** (2026-10-02, a
+  2.1.287 run nested under a 2.1.286 lead, both read from `CLAUDE_CODE_EXECPATH`). Started from
+  the lead's Bash, its own Bash calls showed pid 9759 and session `0502d8ef...`, against the
+  lead's 36985 and `a8352a78...`. So `claude_identity` takes a nested run's session from its
+  env too: the walk finds the nested process, which is its `CLAUDE_PID`.
 - **A `claude -p` run writes its own sessions file** (same day), with `entrypoint: sdk-cli` and
   `kind` set. So the guard's parent walk, run from a nested `-p` session's hook, stops at the
   child's process, not its parent's.

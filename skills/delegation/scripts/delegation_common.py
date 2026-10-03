@@ -996,8 +996,9 @@ def claude_identity():
     and a tmux server started from a Claude Bash call carries ones that go stale. So the
     ancestor walk decides (claude_ancestor):
     - it finds process A, and CLAUDE_PID is A: A set both vars for this Bash call, so they are
-      fresh, and CLAUDE_CODE_SESSION_ID is the session. The env follows a session change at
-      once, where A's sessions file might lag right after /clear;
+      its own, and CLAUDE_CODE_SESSION_ID is the session. The env follows a session change
+      (observed), and nothing verified says A's sessions file is rewritten before the first
+      Bash call after /clear;
     - it finds A otherwise: A's sessions file names the session ("unknown" when it names
       none), and the env isn't read, since it may be another process's;
     - it finds nothing: the env counts only when CLAUDE_PID names an ancestor of this process,
