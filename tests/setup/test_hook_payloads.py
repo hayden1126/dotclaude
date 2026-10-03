@@ -1,6 +1,5 @@
-"""session-title.sh, session-summary.sh and danger-guard.sh: the event arrives on stdin at any
-size, and injected content (task notices, agent messages, skill bodies) is never taken for the
-user (stdlib only)."""
+"""session-title.sh and session-summary.sh: the event arrives on stdin at any size, and injected
+content (task notices, agent messages, skill bodies) is never taken for the user (stdlib only)."""
 import ast
 import json
 import os
@@ -35,7 +34,6 @@ class Workspace(unittest.TestCase):
         self.transcript = os.path.join(self.tmp.name, "cfg", "projects", "slug", "sid.jsonl")
         open(self.transcript, "w").close()
         self.env = {**os.environ, "HOME": self.tmp.name}
-        self.env.pop("DANGER_GUARD_AUTO", None)
 
 
 class SessionTitle(Workspace):
@@ -61,19 +59,6 @@ class SessionTitle(Workspace):
 
     def test_a_huge_prompt_still_titles(self):
         self.assertEqual(self.title(prompt="fix the parser " + BIG)[:22], "[proj] fix the parser ")
-
-
-class DangerGuard(Workspace):
-    def decision(self, command):
-        out = hook("danger-guard.sh", {"tool_name": "Bash", "tool_input": {"command": command}},
-                   env=self.env)
-        return json.loads(out)["hookSpecificOutput"]["permissionDecision"] if out else None
-
-    def test_a_push_asks(self):
-        self.assertEqual(self.decision("git push origin x"), "ask")
-
-    def test_a_huge_command_is_still_checked(self):
-        self.assertEqual(self.decision(f"git push origin x && echo '{BIG}'"), "ask")
 
 
 class SessionSummary(Workspace):
@@ -155,9 +140,7 @@ class ProjectFilesStayOut(Workspace):
             f.write(f"open({ran!r}, 'a').write(__name__)\n")
         events = {"handoff-reminder.sh": {"prompt": "let's wrap up"},
                   "session-title.sh": {"cwd": self.cwd, "transcript_path": self.transcript,
-                                       "prompt": "fix the parser"},
-                  "danger-guard.sh": {"tool_name": "Bash",
-                                      "tool_input": {"command": "git push origin x"}}}
+                                       "prompt": "fix the parser"}}
         for name, event in events.items():
             with self.subTest(hook=name):
                 p = subprocess.run(["bash", os.path.join(HOOKS, name)], input=json.dumps(event),

@@ -1,9 +1,11 @@
-"""The settings baseline: the sandbox posture, the teammate pin and the hook wiring.
+"""The settings baseline: the sandbox posture, the teammate pin, the hook wiring and the
+permission rules.
 
 A wrong type or a missing suffix here fails silently in Claude Code (an unknown value is
 ignored; a hook that exits non-2 doesn't block), so the baseline is pinned by test."""
 import json
 import os
+import re
 import unittest
 
 from _paths import REPO, load_script
@@ -117,6 +119,48 @@ class Baseline(unittest.TestCase):
 
     def test_a_rearm_never_waits_on_a_permission_prompt(self):
         self.assertIn("Bash(delegation-ledger wait *)", S["permissions"]["allow"])
+
+    def test_destructive_git_is_denied_and_push_and_rm_ask(self):
+        # Claude Code matches a Bash rule as a glob whose * spans spaces, and deny beats ask
+        # (verified live on 2.1.288 in default and auto mode). Each part of a compound command
+        # is checked on its own (verified in default mode). Wrappers other than these bash -c
+        # forms (bash -lc, sh -c, eval, git -c k=v) are left to auto mode's classifier.
+        def matching(kind, command):
+            return [rule for rule in S["permissions"][kind]
+                    if re.fullmatch(re.escape(rule[len("Bash("):-1]).replace(r"\*", ".*"),
+                                    command)]
+
+        denied = ["git push --force origin feat", "git push -f origin feat",
+                  "git push origin feat --force", "git push origin feat -f",
+                  "git push --force-with-lease origin feat",
+                  "git -C . push --force origin feat", "git -C . push -f origin feat",
+                  "git -C . push origin feat --force", "git -C . push origin feat -f",
+                  "git reset --hard", "git reset HEAD --hard",
+                  "git -C . reset --hard", "git -C . reset HEAD --hard",
+                  # --merge drops a staged change too; --keep refuses to.
+                  "git reset --merge", "git reset HEAD --merge",
+                  "git -C . reset --merge", "git -C . reset HEAD --merge",
+                  "git clean -fd", "git clean -d -f", "git -C . clean -fd",
+                  'bash -c "git push --force origin feat"', 'bash -c "git reset --hard"']
+        asked = ["git push", "git push origin feat", "git -C . push", "git -C . push origin feat",
+                 "git push origin feat --follow-tags", "git push origin feat-force-fix",
+                 # A force the deny rules miss still asks, as every push does.
+                 "git push origin +feat", "git push -uf origin feat",
+                 "rm -r build", "rm -rf build", "rm -R build", "rm -f a.txt",
+                 "rm build -r", "rm build -R", "rm a.txt -f"]
+        neither = ['git commit -am "push --force docs"', "rm a.txt", "git status",
+                   "git reset --keep HEAD~1", "git reset --soft HEAD~1"]
+        for c in denied:
+            self.assertTrue(matching("deny", c), c)
+        for c in asked:
+            self.assertFalse(matching("deny", c), c)
+            self.assertTrue(matching("ask", c), c)
+        for c in neither:
+            self.assertFalse(matching("deny", c) + matching("ask", c), c)
+        # Every rule is the only one of its kind that catches some case, so dropping one fails.
+        for kind, cases in (("deny", denied), ("ask", asked)):
+            for rule in S["permissions"][kind]:
+                self.assertIn([rule], [matching(kind, c) for c in cases], rule)
 
     def test_the_stop_sound_rings_for_the_main_session_only(self):
         # Stop fires for subagents too; an inline sound rang for every one of them.

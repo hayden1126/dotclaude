@@ -23,6 +23,40 @@
   "permissions": {
     "allow": [
       "Bash(delegation-ledger wait *)"
+    ],
+    "ask": [
+      "Bash(git push)",
+      "Bash(git push *)",
+      "Bash(git -C * push)",
+      "Bash(git -C * push *)",
+      "Bash(rm -*r*)",
+      "Bash(rm -*R*)",
+      "Bash(rm -*f*)",
+      "Bash(rm * -*r*)",
+      "Bash(rm * -*R*)",
+      "Bash(rm * -*f*)"
+    ],
+    "deny": [
+      "Bash(git push --force*)",
+      "Bash(git push -f*)",
+      "Bash(git push * --force*)",
+      "Bash(git push * -f*)",
+      "Bash(git -C * push --force*)",
+      "Bash(git -C * push -f*)",
+      "Bash(git -C * push * --force*)",
+      "Bash(git -C * push * -f*)",
+      "Bash(git reset --hard*)",
+      "Bash(git reset * --hard*)",
+      "Bash(git -C * reset --hard*)",
+      "Bash(git -C * reset * --hard*)",
+      "Bash(git reset --merge*)",
+      "Bash(git reset * --merge*)",
+      "Bash(git -C * reset --merge*)",
+      "Bash(git -C * reset * --merge*)",
+      "Bash(git clean -*f*)",
+      "Bash(git -C * clean -*f*)",
+      "Bash(bash -c *git push*--force*)",
+      "Bash(bash -c *git reset*--hard*)"
     ]
   },
   "sandbox": {

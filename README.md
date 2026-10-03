@@ -42,12 +42,31 @@ it drops; put a value in the overlay to keep it. The baseline now owns a `permis
 `setup.sh` replaces the live one (`merge-settings.py` names it on stderr): personal allow rules go
 in `settings.machine.json`, whose lists append.
 
+The baseline's `permissions` deny destructive git and ask before `git push`, `rm -r` and `rm -f`,
+in auto mode too. Denied: force-push, `reset --hard`, `reset --merge` and `git clean -f`, plain or
+through `git -C`, plus a `bash -c` whose text has `git push` then `--force`, or `git reset` then
+`--hard`. Asked: `git push` and `git -C <dir> push` with any arguments, so a force the deny rules
+miss (`+branch`, `-uf`) still prompts, and `rm` with a `-r`, `-R` or `-f` flag. Everything else
+goes to auto mode's classifier: other wrappers (any other `bash -c`, such as one running
+`push -f`, and `bash -lc`, `sh -c`, `eval`), git global options other than `-C` (`-c k=v`,
+`--git-dir`, `--no-pager`), soft, mixed and `--keep` resets, and `checkout`, `switch`, `restore`
+and `revert`. Why rules at all: on 2.1.288, auto mode ran a force-push and a `reset --hard` on a
+dirty tree when the prompt named them.
+
+A rule's `*` spans words, so some safe commands are caught too. Denied: a `git -C` command whose
+message mentions a guarded phrase (commit with `-F <file>`, or from inside the repo), and a
+`git clean -n` dry run on a path containing `f`. Asked: any `git -C` command with `push` as a
+later word, such as `git -C <dir> stash push`, and an `rm` with any flag when a later path
+contains `r` or `f` (`rm -v draft.txt`). Permission rules apply to delegated agents as well, so
+expect a writer's `rm -rf build` or `git -C <dir> stash push` to ask (not yet checked live).
+`tests/delegation/test_settings.py` pins each rule with a case only it catches.
+
 ## What's in here
 
 | Path | What it is | Installs to |
 |---|---|---|
 | `CLAUDE.md` | Global instructions: working partnership, boundaries, voice, the explore -> spec -> plan -> execute -> verify -> review workflow | symlink `~/.claude/CLAUDE.md` |
-| `settings.json` | Hooks, status line, env vars, enabled plugins, and the Bash sandbox (curated baseline; see docs/delegation.md for the sandbox) | **copy** to `~/.claude/settings.json` (runtime-managed, not symlinked), merged with `~/.claude/settings.machine.json` when present |
+| `settings.json` | Hooks, status line, env vars, enabled plugins, permission rules, and the Bash sandbox (curated baseline; see docs/delegation.md for the sandbox) | **copy** to `~/.claude/settings.json` (runtime-managed, not symlinked), merged with `~/.claude/settings.machine.json` when present |
 | `merge-settings.py` | Merges the machine overlay into the baseline and keeps the live file's own top-level keys, for `setup.sh` | run by `setup.sh` |
 | `git/sandbox-stubs.ignore` | Git ignore patterns for the `/dev/null` mounts the Bash sandbox puts over protected dotfiles a repo lacks (they break `git add -A`) | upserted by `git/install-ignore.py` between markers in the global git excludes file (`core.excludesFile`, else `~/.config/git/ignore`); Linux only |
 | `skills/` | The skills I authored: `coding-practices`, `research-discipline`, `research-sourcing`, `writing-voice`, `staged-reader-review`, `ebook-extract`, `deck-production`, `vetting-sources`, `handoff`, `frontend-ui-discipline`, `ui-alignment`, `delegation` | symlink per dir into `~/.claude/skills/`; a skill's `scripts/` CLI also symlinks into `~/.local/bin` when that dir exists (`deck-production` ships `deckkit`; `delegation` ships `codex-delegate`, `delegation-ledger` and `gh-public`); the portable ones (`CODEX_SKILLS` in `setup.sh`) also link into `~/.codex/skills/` |
@@ -58,7 +77,6 @@ in `settings.machine.json`, whose lists append.
 | `hooks/subagent-policy.sh` | PreToolUse(*) policy for delegated agents only (rules in `skills/delegation/policy.toml`): no leaving the sandbox, no destructive git, no MCP writes, protected paths, the researcher allowlist, writers held to their worktree; fails closed | symlink `~/.claude/hooks/subagent-policy.sh` |
 | `hooks/watch-guard.sh` | Stop hook (main thread): blocks a stop once when a `delegation-ledger wait` watch has lapsed or a background command was killed at its time limit, with the re-arm command (`skills/delegation/scripts/watch-guard`); fails open | symlink `~/.claude/hooks/watch-guard.sh` |
 | `hooks/report-check.sh` | PreToolUse(SubagentHandback)/SubagentStop hook: sends a delegated role's malformed report back, at most twice; fails open | symlink `~/.claude/hooks/report-check.sh` |
-| `hooks/danger-guard.sh` | PreToolUse(Bash) guard: two-tier confirmation for destructive git and `rm` ops | symlink `~/.claude/hooks/danger-guard.sh` |
 | `hooks/handoff-reminder.sh` | UserPromptSubmit hook: on a wrap-up / handoff / clear-memory signal, reminds me to invoke the `handoff` skill instead of improvising it | symlink `~/.claude/hooks/handoff-reminder.sh` |
 | `hooks/session-title.sh` | UserPromptSubmit hook: sets the terminal tab title to `[<repo>] <label>` via `sessionTitle`, so tabs are tellable apart; the label comes from the Stop-hook Haiku cache (`.title.txt`), falling back to the current prompt's first line | symlink `~/.claude/hooks/session-title.sh` |
 | `hooks/stop-ring.sh` | Stop hook: plays the Windows notify sound when the main session finishes, not when a subagent or background agent stops | symlink `~/.claude/hooks/stop-ring.sh` |
@@ -78,7 +96,7 @@ in `settings.machine.json`, whose lists append.
 | `docs/prose-is-not-a-permission.md` | Blog post on the delegation work: why a prompt can't limit an agent's authority, and the layers that can | reference |
 | `docs/images/` | The post's diagram: `delegation-layers.svg` (source) and `delegation-layers.png` (2x render) | reference |
 | `tests/delegation/` | Unit tests for the delegation pieces (no model calls) and `run.py`, a live harness that spends model calls | run from the repo root |
-| `tests/setup/` | Unit tests for `merge-settings.py`, `git/install-ignore.py`, and the prompt and session hooks (`handoff-reminder.sh`, `session-title.sh`, `session-summary.sh`, `danger-guard.sh`) | `python3 -m unittest discover -s tests/setup -t tests/setup` |
+| `tests/setup/` | Unit tests for `merge-settings.py`, `git/install-ignore.py`, and the prompt and session hooks (`handoff-reminder.sh`, `session-title.sh`, `session-summary.sh`); `replay_history.py` is a local-only replay tool, not a unit test | `python3 -m unittest discover -s tests/setup -t tests/setup` |
 | `docs/chrome-devtools-wsl.md` | WSL2-only: how to make `chrome-devtools-mcp` work (Strategy A headless Linux Chrome, plus B to attach to your Windows Chrome) | reference |
 | `chrome-debug.ps1` | Windows launcher for Strategy B (Chrome with a remote-debugging port) | run on Windows when needed |
 | `setup-chrome-wsl.sh` | Opt-in WSL2 installer: installs Chrome for Testing and registers the user-scoped `chrome-devtools` override | run once on WSL2; not called by `setup.sh` |
@@ -100,8 +118,7 @@ need nothing extra.
 
 ## Hooks
 
-`settings.json` wires these lifecycle hooks (all run by default except `danger-guard`, which
-ships but is opt-in, see its entry):
+`settings.json` wires these lifecycle hooks:
 
 - **PreToolUse(`Agent|Task`): `agent-spawn-guard.sh`** (in this repo). Denies a `writer` spawn that
   doesn't pass `isolation` on the Agent call. With agent teams on, a named spawn would otherwise start
@@ -188,21 +205,6 @@ ships but is opt-in, see its entry):
   suppressing the very record it read; it now owns the label instead.) A subagent's or teammate's
   prompt, or injected content (a task notification, another agent's message), leaves the title as
   it is. Fail-open (exit 0, no output on any error). Needs python3 on PATH.
-- **PreToolUse(Bash): `danger-guard.sh`** (in this repo, **ships but not wired by default**).
-  The script is symlinked into `~/.claude/hooks/` so it is ready to use, but `settings.json`
-  intentionally carries no `PreToolUse` entry for `Bash` (dropped in `8602081`: `setup.sh` would
-  otherwise silently re-enable a guard some machines want off). Opt in by adding a `Bash` matcher that
-  runs it to the existing `PreToolUse` array. Once wired it works in two tiers: it hard-blocks
-  (`deny`) never-legitimate ops (force-push, `reset --hard`, `git clean -f`) and prompts
-  (`ask`) for routine-but-sensitive ops (plain push, checkout, switch, revert, `rm -rf`).
-  Token-aware, so it does not trip on `git commit -m "push fix"`, and it recurses into
-  `bash -c "..."` and `eval` wrappers. Fires for the main agent and all subagents. Fail-open
-  on any parse error. Needs python3 on PATH.
-  An optional **auto mode** flips the guard to allow-by-default: every dangerous op (both
-  tiers) is downgraded to a single `ask` prompt and every other bash command is auto-approved
-  (`allow`). So force-push still needs an explicit yes, but nothing is hard-blocked and routine
-  commands stop prompting. Toggle it live with `touch ~/.claude/.danger-guard-auto` (`rm` to
-  disable), or at launch with `DANGER_GUARD_AUTO=1 claude`.
 - **Stop: `session-summary.sh`** (in this repo). On each substantive turn it (re)generates a 1-2
   sentence "what is this session doing, and where does it stand" summary and caches it for the
   status-line widget, so a developer juggling several Claude terminals can re-orient after switching
