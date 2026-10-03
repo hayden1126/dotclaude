@@ -207,12 +207,14 @@ validated (`report_ok`).
   same watch over). The watch guard blocks your stop once when a watch has lapsed with no
   waiter, its job ended (done, failed or stale) with no waiter to tell you, or a background
   command was killed at its time limit. After that one block, a lapse goes quiet: a later stop
-  lets you through, Hayden sees one warning, and nothing more comes until its job ends, however
-  it ends, which blocks once more. When the guard can't tell how the job ended (more than 8 MB
-  of a log came between two of its reads, or a Codex run isn't finalized yet), that block says
-  to re-arm the watch, and the re-armed waiter reports the result. So re-arm or drop it when it
-  blocks. After a `/clear`, your first stop blocks once again on each lapse from before it. To
-  stop watching, `delegation-ledger wait --drop <id>`.
+  lets you through and Hayden sees one warning. If you didn't re-arm, the guard starts a
+  detached waiter of its own then, which watches the whole condition (the whole log too); its
+  end blocks a later stop once, so check the result and report it. Only a waiter you re-arm in
+  the background wakes an idle session when the job ends, so re-arm or drop it when it blocks.
+  When the guard can't tell how a job ended (its log's outcome may be further back than the
+  last 1 MB it reads, or a Codex run isn't finalized yet), its block says to re-arm the watch,
+  and the re-armed waiter reports the result. After a `/clear`, your first stop blocks once
+  again on each lapse from before it. To stop watching, `delegation-ledger wait --drop <id>`.
 - **After a crash or restart,** run `delegation-ledger open --hours 24`.
   - For each orphaned agent, look at its artifact path and redo only the unfinished part.
   - Its `watches:` block lists every unresolved watch, however old, and the ones that ended
