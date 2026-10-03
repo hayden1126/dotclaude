@@ -38,7 +38,9 @@ with it merged in. Objects merge key by key, lists append (skipping items alread
 other value replaces the baseline's (`merge-settings.py`). Top-level keys only the live copy sets
 (what `/config`, `/model` and auto mode write, such as `autoMode` and `model`) are kept. `setup.sh`
 names every live value the baseline overrides (such as `effortLevel`) and every live hook command
-it drops; put a value in the overlay to keep it.
+it drops; put a value in the overlay to keep it. The baseline now owns a `permissions` object, so
+`setup.sh` replaces the live one (`merge-settings.py` names it on stderr): personal allow rules go
+in `settings.machine.json`, whose lists append.
 
 ## What's in here
 
@@ -52,7 +54,7 @@ it drops; put a value in the overlay to keep it.
 | `agents/` | Delegation roles: `Explore` (overrides the built-in with a no-shell reader), `researcher`, `reviewer`, `writer`; see docs/delegation.md | symlink per file into `~/.claude/agents/` |
 | `hooks/agent-spawn-guard.sh` | PreToolUse(Agent) guard: denies a `writer` spawn that doesn't pass `isolation` on the call, and a named spawn without the `team-` prefix; fails closed | symlink `~/.claude/hooks/agent-spawn-guard.sh` |
 | `hooks/delegation-ledger.sh` | SubagentStart/SubagentStop hook: appends a pointer row per delegated agent to the delegation ledger; as a PostToolUse hook, sends a delegated agent its deadline nudge; never blocks | symlink `~/.claude/hooks/delegation-ledger.sh` |
-| `hooks/delegation-due.sh` | SessionStart hook: runs the cheap delegation checks in the background (the quick canary on a new Claude Code version, a daily audit) and shows a line only when something is due; fails open | symlink `~/.claude/hooks/delegation-due.sh` |
+| `hooks/delegation-due.sh` | SessionStart hook: runs the cheap delegation checks in the background (the quick canary on a new Claude Code version, a daily audit) and shows a line only when something is due, or when a watch needs Hayden: one whose waiter's exit reaches nobody, or one that ended while no Claude process listened; fails open | symlink `~/.claude/hooks/delegation-due.sh` |
 | `hooks/subagent-policy.sh` | PreToolUse(*) policy for delegated agents only (rules in `skills/delegation/policy.toml`): no leaving the sandbox, no destructive git, no MCP writes, protected paths, the researcher allowlist, writers held to their worktree; fails closed | symlink `~/.claude/hooks/subagent-policy.sh` |
 | `hooks/watch-guard.sh` | Stop hook (main thread): blocks a stop once when a `delegation-ledger wait` watch has lapsed or a background command was killed at its time limit, with the re-arm command (`skills/delegation/scripts/watch-guard`); fails open | symlink `~/.claude/hooks/watch-guard.sh` |
 | `hooks/report-check.sh` | PreToolUse(SubagentHandback)/SubagentStop hook: sends a delegated role's malformed report back, at most twice; fails open | symlink `~/.claude/hooks/report-check.sh` |
@@ -124,12 +126,14 @@ ships but is opt-in, see its entry):
   nudge; `subagent-policy` enforces the stop.
 - **SessionStart (`startup|resume`): `delegation-due.sh`** (in this repo). Runs
   `delegation-ledger due --hook`: on the first session of a new Claude Code version it starts the
-  quick canary in the background (unit tests, sandbox posture, strings in the binary; no model
-  calls), and once a day it starts `audit`. It prints one line (a `systemMessage`, for you, not the
-  model) only when a check failed or can't run, the daily audit warned, the full
-  `delegation-ledger canary` is due (weekly, when the version moved), the monthly
-  `delegation-ledger audit --monthly` is due, or a dated item in `skills/delegation/due.toml` is
-  due. Fails open: always exits 0.
+  quick canary in the background (unit tests, sandbox posture, strings in the binary, and a check
+  that the installed watch-guard shim runs clean; no model calls), and once a day it starts
+  `audit`. It prints one line (a `systemMessage`, for you, not the model) only when a check failed
+  or can't run, the daily audit warned, the full `delegation-ledger canary` is due (weekly, when
+  the version moved), the monthly `delegation-ledger audit --monthly` is due, a dated item in
+  `skills/delegation/due.toml` is due, an unresolved watch's waiter's exit reaches nobody (named
+  at every start until it is re-armed or dropped), or a watch ended while no Claude process
+  listened (named once). Fails open: always exits 0.
 - **PreToolUse(`*`): `subagent-policy.sh`** (in this repo). Runs only for tool calls made inside a
   subagent or teammate (the settings command exits before Python when the input has no
   `agent_id`, so the main thread is never policed). The rules live in
@@ -143,10 +147,18 @@ ships but is opt-in, see its entry):
   waiter, or a background command was killed at its time limit, and gives the exact re-arm
   command. After a lapse, the next stop goes through with one warning; a kill or an ended job
   is said once. A plain kill (not a waiter or `codex-delegate`) names no watch: it says how to
-  wait with `delegation-ledger wait`. Python's errors go to `delegation-ledger.err`, and the
-  quick canary runs the installed shim. `permissions.allow` holds
-  `Bash(delegation-ledger wait *)`, so a re-arm never stops at a prompt. Fails open
-  (`docs/delegation.md`, "Long waits").
+  wait with `delegation-ledger wait`. The stop that acknowledges a lapse also starts a detached
+  waiter of the guard's own, which watches the whole condition for up to a day; a later stop
+  says its end, or its failure. After a `/clear` or a `claude --continue`, the new session's
+  first stop adopts the old session's watches: a lapse blocks once more there, and after a
+  crash a waiter that still runs blocks once, since its exit reaches nobody. `codex-delegate`
+  runs Codex under a detached supervisor, so a killed wrapper leaves Codex running for the
+  re-arm, and `codex-delegate cancel` stops a run on purpose. Python's errors go to
+  `delegation-ledger.err`, and the quick canary runs the installed shim. `permissions.allow`
+  holds `Bash(delegation-ledger wait *)`, so a re-arm never stops at a prompt. Fails open
+  (`docs/delegation.md`, "Long waits"). Needs python3 3.11 or newer (it imports `tomllib`
+  through `delegation_checks`); with an older one the guard is off, and the error shows in
+  `delegation-ledger.err` and the quick canary.
 - **PreToolUse(`SubagentHandback`) and SubagentStop: `report-check.sh`** (in this repo). It sends a
   report from `Explore`, `researcher`, `reviewer` or `writer` back when it doesn't match
   `report.schema.json`, at most twice. **Fails open**: a broken checker never swallows a report.
