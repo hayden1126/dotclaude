@@ -1415,6 +1415,11 @@ wins.
     killed at 60 s and `status` said `detached: running (its wrapper is gone; ...)`. The guard
     blocked once with the kill folded in, and the re-arm finalized the run with `rc` 0 from
     `codex.rc`, the report done and the audit ok. The work was right.
+  - Rerun on the final branch build (3ee2086, 2.1.286, 2026-10-03), with the same result:
+    - the wrapper was killed at 60 s, and `status` showed Codex alive with its wrapper gone;
+    - the guard blocked once;
+    - the re-arm finalized the run with `rc` 0, the report done and the audit ok, and the work
+      was right.
   - A live end-to-end run of the guard's detached waiter (2.1.286, read from the session's
     `CLAUDE_CODE_EXECPATH`, 2026-10-03): a waiter lapsed at its `--max`, the next stop blocked
     once, and the stop after acknowledged the lapse and started the detached waiter (pid
