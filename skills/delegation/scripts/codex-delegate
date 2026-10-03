@@ -273,8 +273,11 @@ def claim_watch(run_id, take_over, poll):
         waiter.take(new)
     except dc.WaitRefused as ex:
         die(str(ex))
-    # Only a new watch can go unseen: with a process, its guard adopts even an "unknown"
-    # session, and a watch taken over keeps its session, whose guard reads it (as wait --resume).
+    # Only a new watch warns. With a process, its guard adopts even an "unknown" session. A
+    # watch taken over outside Claude Code keeps its session and loses its claude_pid (as wait
+    # --resume): a real session's guard still reads it, but no guard reads an "unknown" one,
+    # unwarned. That one's exit reaches whoever ran this, and the session-start nudge names it
+    # once this wrapper dies with it unresolved.
     if identity[0] is None and w is None:
         print("codex-delegate: no Claude Code session: the watch guard won't see this watch",
               file=sys.stderr, flush=True)

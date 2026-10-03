@@ -1055,9 +1055,9 @@ def ended_unheard(w, now=None):
     """Whether watch w ended (REPORTED_STATES) in the last PRUNE_ENDED_DAYS while no Claude Code
     process was listening, and nobody has reported it since: `reported` is false, and its
     waiter was marked waiter_unheard or the Claude process it ran under has ended. A watch with
-    no `reported` ended before the field existed, so it counts as reported and never shows. The
-    watch guard says it in that session, and the session-start nudge and the views anywhere
-    else."""
+    no `reported` ended before the field existed, so it counts as reported and never shows.
+    The watch guard of its session says it at a stop, the session-start nudge at the start of
+    any session but its own, and the views (watch, open) until it is reported."""
     now = time.time() if now is None else now
     if (w.get("state") not in REPORTED_STATES or w.get("reported", True)
             or not (w.get("waiter_unheard") or claude_gone(w))):
