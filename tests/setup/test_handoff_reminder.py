@@ -5,6 +5,7 @@ import os
 import shutil
 import subprocess
 import tempfile
+import time
 import unittest
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -56,7 +57,7 @@ class HandoffReminder(unittest.TestCase):
                        "add an end session button", "clear the session cache on logout",
                        "don't wrap up yet", "no, don't wrap up", "hand off the parser to the API",
                        'what does "wrap up" trigger?', "wrap up the loop engineering doc",
-                       "a handoff would help here", "handoff?", "/clearance", "src/clear/x",
+                       "a handoff would help here", "/clearance", "src/clear/x",
                        "stop here and explain why the test fails",
                        "clear the context for each subagent", "hand off for review",
                        "don't /clear yet", "don't run /clear yet", "no /clear yet",
@@ -77,12 +78,95 @@ class HandoffReminder(unittest.TestCase):
                        "stop here's why", "wrap up/down", "handoff: does it update memory too?",
                        "handoff, memory, docs: what order?", "calling it here, I get a 404",
                        "what does `/clear` do?", "what about /clear?", "what does /clear do?",
-                       "stop here and clear the cache", "handoff then commit hooks run twice",
+                       "stop here and clear the cache",
                        "handoff and push notifications are both broken",
                        "stop here and push back on the reviewer's point", "no need to /clear yet",
                        "keep going without a /clear", "what's /clear for?"):
             with self.subTest(prompt=prompt):
                 self.assertFalse(fires(prompt))
+
+    def test_handoff_as_typed_in_an_action_list_fires(self):
+        # How "handoff" is typed in practice: one action among others, often after a status line,
+        # with or without commas.
+        for prompt in ("emailed. handoff", "commit, handoff and push", "push and handoff",
+                       "Merge the PRs and handoff", "handoff, commit and push", "handoff?",
+                       "Save memory and hand off to a fresh session.", "Handoff while we wait.",
+                       "handoff first", "handoff so we start with phase D next.",
+                       "deploy handoff and push", "proceed handoff and push all",
+                       "yes remove it, then do the handoff", "merged, check deploy and full handoff",
+                       "proceed with the plan, but handoff to do it", "handoff, probably not on main?",
+                       "[Image #4] handoff everything to a new session", "Hand off to a new session.",
+                       "hand off if there is anything left", "What's next? Handoff",
+                       "Can you do a quick handoff here for a fresh session.", "hand it off",
+                       "I'll tell you the features first, then you handoff",
+                       "also can we handoff before the next step?", "Good commit and handoff"):
+            with self.subTest(prompt=prompt):
+                self.assertTrue(fires(prompt))
+
+    def test_a_long_status_that_ends_in_handoff_fires(self):
+        status = ("checked the profile, added the link to the bio, sent the email to the group and "
+                  "updated the sheet with the new numbers")
+        self.assertTrue(fires(status + ". handoff"))
+        self.assertTrue(fires(status + ", then commit and handoff"))
+        self.assertTrue(fires(status + ". handoff, then push"))
+        self.assertTrue(fires(status + ". handoff, thanks"))
+        # Only the last clauses count, and a statement about it never does.
+        self.assertFalse(fires(status + " and we talked about whether to handoff earlier"))
+        self.assertFalse(fires(status + " and handoff updated the wrong file again"))
+
+    def test_a_question_praise_or_delegation_about_handoff_is_silent(self):
+        for prompt in ("do we need to handoff?", "was handoff ran recently?", "Good handoff.",
+                       "/handoff", "merged, run /handoff", "So hand off is done? If yes push",
+                       "hand off to another agent in another directory to test this",
+                       "handoff needed?", "Anything we need to handoff for?",
+                       "Another session needs to handoff, what is the best way to do it?",
+                       "Handoff here, don't load the skill", "Did a full handoff run there?"):
+            with self.subTest(prompt=prompt):
+                self.assertFalse(fires(prompt))
+
+    def test_more_command_forms_fire(self):
+        for prompt in ("Do the handoff.", "do a quick handoff", "run the handoff", "run your handoff",
+                       "merged the hook PR. handoff", "push the skill fix, then handoff",
+                       "hand off to a new chat", "handoff everything to a fresh agent",
+                       "handoff and push what is left", "handoff so the next session is clean",
+                       "emailed. handoff. next session: start phase D", "handoff. back at 10:30",
+                       "done \u2014 handoff", "hand this off", "hand everything off",
+                       "tests pass lets wrap up", "redeploy, and fully wrap up without losing anything",
+                       "stop here, then also push"):
+            with self.subTest(prompt=prompt):
+                self.assertTrue(fires(prompt))
+
+    def test_statements_delegations_and_examples_are_silent(self):
+        for prompt in ("handoff doesn't work", "handoff didn't update STATUS.md", "Handoff looks good.",
+                       "handoff not needed, just push", "handoff can wait",
+                       "Handoff complete. Continue from STATUS.md", "hand off to Codex",
+                       "hand off the parser to Codex", "hand off to another agent",
+                       "we need to properly wrap up the stream before closing",
+                       "I don't think it's time to wrap up",
+                       "Should we make a skill for deploys? eg check bugs, then handoff, then PR?",
+                       "a release checklist, e.g. fix the tests and handoff"):
+            with self.subTest(prompt=prompt):
+                self.assertFalse(fires(prompt))
+
+    def test_adversarial_input_is_fast(self):
+        for prompt in ("a" + "=" * 50000 + " b", "let" + "!" * 200000 + "s wrap up",
+                       "x " * 9 + "-" * 100000):
+            with self.subTest(size=len(prompt)):
+                start = time.time()
+                fires(prompt)
+                self.assertLess(time.time() - start, 2)
+
+    def test_a_comma_then_another_task_is_not_a_wrap_up(self):
+        self.assertFalse(fires("stop here, then explain why the test fails"))
+        self.assertFalse(fires("stop here, and explain why the test fails"))
+        self.assertFalse(fires("just stop here, then explain why the test fails"))
+        self.assertFalse(fires("stop here, then clear the cache"))
+        self.assertFalse(fires("stop here, then push back on X"))
+        self.assertFalse(fires("stop here. Why did you change the config?"))
+        for prompt in ("stop here, then push", "stop here, thanks",
+                       "let's stop here, then explain what's left"):
+            with self.subTest(prompt=prompt):
+                self.assertTrue(fires(prompt))
 
     def test_talk_about_the_handoff_skill_is_silent(self):
         self.assertFalse(fires("the handoff skill fires too often"))

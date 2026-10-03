@@ -166,11 +166,14 @@ ships but is opt-in, see its entry):
   wrap-up or context-reset command (`hand off`, `wrap up`, `stop here`, `clear context`, `/clear`),
   it injects a one-line reminder
   to invoke the `handoff` skill rather than improvising its steps (which kept dropping the
-  curate-memory step). Precision-first: a wrap-up phrase counts only at the start of a clause and
-  only when it ends that clause, so "don't wrap up yet" and "clear the session cache" stay silent.
-  It also stays silent when "handoff" is just a topic (discussing the skill or this hook), on
-  injected content (task notifications, subagent and cross-session messages), and on a subagent's
-  or teammate's own prompt. Advisory only: it adds context, it cannot run the skill; silent no-op
+  curate-memory step). "handoff" fires the way it's typed in practice, as one action in a list
+  ("emailed. handoff", "commit, handoff and push", "deploy handoff and push"), but not in a
+  question about it, praise, a delegation ("hand off X to Y") or `/handoff` itself. Generic phrases
+  ("wrap up", "stop here", "clear the context") count only as a whole clause, so "don't wrap up
+  yet", "clear the session cache" and "stop here, then explain why" stay silent. It also stays
+  silent when "handoff" is just a topic (discussing the skill or this hook), on injected content
+  (task notifications, subagent and cross-session messages), and on a subagent's or teammate's
+  own prompt. Advisory only: it adds context, it cannot run the skill; silent no-op
   otherwise; always exits 0 so it can never block a prompt. It reads the prompt with python3 and
   stays silent if that fails.
 - **UserPromptSubmit: `session-title.sh`** (in this repo). Sets the session title (the terminal tab

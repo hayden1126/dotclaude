@@ -169,18 +169,19 @@ class ProjectFilesStayOut(Workspace):
 
 
 class InjectedMarkers(unittest.TestCase):
-    """handoff-reminder's rule 1, session-title and session-summary skip the same markers."""
+    """handoff-reminder, session-title and session-summary skip the same markers."""
 
     def test_the_three_lists_agree(self):
-        src = open(os.path.join(HOOKS, "handoff-reminder.sh")).read()
-        rule1 = re.search(r"grep -qiE '(\\\[SYSTEM NOTIFICATION[^']*)'", src).group(1)
-        expected = {m.replace("\\[", "[").replace("\\]", "]").lower() for m in rule1.split("|")}
-        for name in ("session-title.sh", "session-summary.sh"):
+        lists = {}
+        for name in ("handoff-reminder.sh", "session-title.sh", "session-summary.sh"):
+            body = re.search(r"^INJECTED = (\(.*?\))$",
+                             open(os.path.join(HOOKS, name)).read(), re.S | re.M).group(1)
+            lists[name] = set(ast.literal_eval(body))
+        first = lists.pop("handoff-reminder.sh")
+        self.assertGreater(len(first), 10)
+        for name, markers in lists.items():
             with self.subTest(hook=name):
-                body = re.search(r"^INJECTED = (\(.*?\))$",
-                                 open(os.path.join(HOOKS, name)).read(), re.S | re.M).group(1)
-                self.assertEqual(set(ast.literal_eval(body)), expected)
-
+                self.assertEqual(markers, first)
 
 if __name__ == "__main__":
     unittest.main()
