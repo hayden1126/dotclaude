@@ -205,15 +205,22 @@ validated (`report_ok`).
   the watch and the re-arm command. It exits 0 done, 1 failed, 2 stale. At 75 it prints a re-arm
   line: run exactly that, not the original command (though a rerun of the same wait takes the
   same watch over). The watch guard blocks your stop once when a watch has lapsed with no
-  waiter, or a background command was killed at its time limit. To stop
-  watching, `delegation-ledger wait --drop <id>`.
+  waiter, its job ended with no waiter to tell you, or a background command was killed at its
+  time limit. After that one block, a lapse goes quiet: a later stop lets you through, Hayden
+  sees one warning, and nothing more comes until its job ends. So re-arm or drop it when it
+  blocks. To stop watching, `delegation-ledger wait --drop <id>`.
 - **After a crash or restart,** run `delegation-ledger open --hours 24`.
   - For each orphaned agent, look at its artifact path and redo only the unfinished part.
-  - The session-start line lists the watches no running session is guarding, such as one a
-    crash left when you started a plain `claude` (a new session id). Pick one up with
-    `delegation-ledger wait --resume <id>`, or drop it. It also names, once, the watches that
-    ended while no Claude process listened; check each result. In a session you continued
-    (`claude --continue`), the watch guard blocks once on either kind instead.
+  - Its `watches:` block lists the unresolved watches and the ones that ended while no Claude
+    process listened. Re-arm one with no live waiter by the `--resume` command it prints, or
+    drop it; for an ended one, check the result.
+  - In a session you continued (`claude --continue`), the watch guard blocks your first stop
+    once for each watch the crash left: a waiter that still runs (its exit won't reach you, so
+    re-arm it), a lapse, or an end nobody heard (check the result). One whose lapse was already
+    acknowledged says nothing; find it in the `watches:` block.
+  - Hayden, not you, sees the session-start line. It names every unresolved watch whose
+    waiter's exit reaches nobody, at each start, and once, each watch that ended while no
+    Claude process listened. If they pass one on, handle it the same way.
   - For Codex, run `codex-delegate status`. A running run whose wrapper is gone names the
     `delegation-ledger wait --resume` that re-arms its watch, or, with no watch, says to finalize
     it once it ends. `codex-delegate resume <run_id>` continues an ended run, and finalizes its
