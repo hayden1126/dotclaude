@@ -78,7 +78,8 @@ class Strings(unittest.TestCase):
         names = {s for s, _ in checks.CANARY_STRINGS}
         for s in ("do not restart it", "background time limit", "task-notification",
                   "queued_command", "stopped after reaching its background time limit",
-                  "tool-use-id", "background_tasks", "prompt_id", "CLAUDE_CODE_SESSION_ID"):
+                  "tool-use-id", "background_tasks", "prompt_id", "CLAUDE_CODE_SESSION_ID",
+                  "CLAUDE_PID"):
             self.assertIn(s, names)
 
 
@@ -409,8 +410,8 @@ class Evaluate(unittest.TestCase):
                                   side_effect=AssertionError("evaluate checked a pid")):
             nudges, _, _ = self.ev(self.green(self.V, 0), orphans=orphans)
         self.assertEqual(nudges, [
-            "2 watches from a session that ended: w-1 (the build), w-2. Pick one up with "
-            "`delegation-ledger wait --resume <id>`, or drop it with "
+            "2 watches whose waiter's exit reaches nobody: w-1 (the build), w-2. "
+            "Pick one up with `delegation-ledger wait --resume <id>`, or drop it with "
             "`delegation-ledger wait --drop <id>`."])
 
 
@@ -527,8 +528,9 @@ class Hook(StateTest):
 
 
 class Orphans(StateTest):
-    """Watches left by a session that ended. A temp HOME whose one live session, s1, is this
-    process; every other check is settled, so the watch nudge is the only one."""
+    """Watches whose waiter's exit reaches nobody. A temp HOME whose one live
+    session, s1, is this process; every other check is settled, so the watch nudge is the only
+    one."""
 
     def setUp(self):
         super().setUp()
@@ -541,9 +543,10 @@ class Orphans(StateTest):
         patcher = mock.patch.dict(os.environ, {"HOME": home})
         patcher.start()
         self.addCleanup(patcher.stop)
-        # Inside the sandbox the lead's CLAUDE_PID is inherited but invisible, which would hide
-        # every watch. The sandbox test sets it on purpose.
+        # Inside the sandbox the lead's CLAUDE_PID is inherited but invisible, and SANDBOX_RUNTIME
+        # is set, either of which would hide every watch. The sandbox test sets CLAUDE_PID.
         os.environ.pop("CLAUDE_PID", None)
+        os.environ.pop("SANDBOX_RUNTIME", None)
         for name in ("cc_version", "launch_background"):
             self.addCleanup(setattr, checks, name, getattr(checks, name))
         checks.cc_version = lambda timeout=10: "2.1.300"
@@ -574,13 +577,14 @@ class Orphans(StateTest):
     def test_an_orphaned_open_watch_is_named_with_its_commands(self):
         self.watch()
         self.assertEqual(self.message(), (
-            "Delegation checks: (1) 1 watch from a session that ended: w-1 (the build). Pick "
-            "one up with `delegation-ledger wait --resume <id>`, or drop it with "
-            "`delegation-ledger wait --drop <id>`."))
+            "Delegation checks: (1) 1 watch whose waiter's exit reaches nobody: w-1 "
+            "(the build). Pick one up with `delegation-ledger wait --resume <id>`, or drop it "
+            "with `delegation-ledger wait --drop <id>`."))
 
     def test_an_acknowledged_watch_is_named_too(self):
         self.watch(state="acknowledged")
-        self.assertIn("1 watch from a session that ended: w-1 (the build).", self.message())
+        self.assertIn("1 watch whose waiter's exit reaches nobody: w-1 (the build).",
+                      self.message())
 
     def test_a_live_sessions_watch_is_not_named(self):
         self.watch(sid="s1")
@@ -597,17 +601,38 @@ class Orphans(StateTest):
         self.watch(claude_pid=os.getpid(), claude_start=checks.dc.proc_start(os.getpid()))
         self.assertEqual(self.message(), "")
 
-    def test_a_watch_whose_claude_process_ended_is_named_even_in_a_live_session(self):
-        # A crash, then claude --continue: the session runs on, but its waiter's exit is lost.
-        self.watch(sid="s1", live=True, claude_pid=DEAD, claude_start=None)
+    def test_an_acknowledged_lapse_left_by_a_crash_is_named_in_the_continuing_session(self):
+        # P1 lapsed, blocked once and acknowledged, then crashed; claude --continue starts P2
+        # in the same session. P2's adoption is silent (it was blocked before), so this line
+        # is the one notice.
+        self.watch(sid="s2", state="acknowledged", blocked_at=checks.dc.now_iso(),
+                   claude_pid=DEAD, claude_start=None)
+        self.assertIn("1 watch whose waiter's exit reaches nobody: w-1 (the build).",
+                      self.message(json.dumps({"session_id": "s2"})))
+
+    def test_a_gone_processs_watch_in_a_session_live_elsewhere_is_named(self):
+        self.watch(sid="s1", live=True, claude_pid=DEAD, claude_start=None)  # s1 is live
         self.assertIn("w-1 (the build; its waiter is still running)", self.message())
-        self.assertIn("w-1 (the build", self.message(json.dumps({"session_id": "s1"})))
+
+    def test_a_gone_processs_watch_in_an_ended_session_is_named(self):
+        self.watch(live=True, claude_pid=DEAD, claude_start=None)  # session "gone"
+        self.assertIn("w-1 (the build; its waiter is still running)", self.message())
 
     def test_a_live_waiter_of_an_ended_session_is_named_too(self):
         # A bare waiter outlives a SIGKILLed Claude Code, and its exit reaches nobody.
         self.watch(live=True)
-        self.assertIn("1 watch from a session that ended: w-1 (the build; its waiter is still "
-                      "running).", self.message())
+        self.assertIn("1 watch whose waiter's exit reaches nobody: w-1 (the build; "
+                      "its waiter is still running).", self.message())
+
+    def test_an_unknown_sessions_watch_with_a_live_process_is_not_named(self):
+        # Its process's guard adopts it (left_by_clear), whatever its waiter's state.
+        self.watch(sid="unknown", claude_pid=os.getpid(),
+                   claude_start=checks.dc.proc_start(os.getpid()))
+        self.assertEqual(self.message(), "")
+
+    def test_an_unknown_sessions_watch_whose_process_ended_is_named(self):
+        self.watch(sid="unknown", live=True, claude_pid=DEAD, claude_start=None)
+        self.assertIn("w-1 (the build; its waiter is still running)", self.message())
 
     def test_an_unknown_session_counts_only_once_its_waiter_is_dead(self):
         self.watch(sid="unknown", live=True)
@@ -620,12 +645,62 @@ class Orphans(StateTest):
             self.watch(f"w-{state}", state=state)
         self.assertEqual(self.message(), "")
 
+    def unheard(self, wid="w-1", sid="gone", state="done", ended=None, **fields):
+        """A watch that ended while its Claude process was gone, so nobody heard."""
+        self.watch(wid, sid=sid, state=state, ended=ended or checks.dc.now_iso(),
+                   claude_pid=DEAD, claude_start=None, **dict({"reported": False}, **fields))
+
+    def read(self, wid="w-1"):
+        return checks.dc.read_watch(wid)
+
+    def test_an_end_nobody_heard_is_named_once(self):
+        # After a crash, a plain `claude` starts a new session id, so no guard says it.
+        self.unheard()
+        self.assertEqual(self.message(json.dumps({"session_id": "s-new"})), (
+            "Delegation checks: (1) 1 watch ended while no Claude Code process was listening: "
+            "w-1 (the build, done). Check the results."))
+        self.assertIs(self.read()["reported"], True)
+        self.assertEqual(self.message(json.dumps({"session_id": "s-new"})), "")
+
+    def test_the_starting_sessions_own_unheard_end_is_left_to_its_guard(self):
+        # claude --continue keeps the id, and its guard says it to the model at the first stop.
+        self.unheard(sid="s2")
+        self.assertEqual(self.message(json.dumps({"session_id": "s2"})), "")
+        self.assertIs(self.read()["reported"], False)
+
+    def test_a_live_sessions_unheard_end_is_named_too(self):
+        # s1 runs on in another process, whose guard would say it only at its next stop.
+        self.unheard(sid="s1")
+        self.assertIn("1 watch ended while no Claude Code process was listening: w-1",
+                      self.message(json.dumps({"session_id": "s-new"})))
+        self.assertIs(self.read()["reported"], True)
+
+    def test_a_headless_session_doesnt_use_up_an_unheard_end(self):
+        self.unheard()
+        with mock.patch.dict(os.environ, {"CLAUDE_CODE_SESSION_ATTENDED": "0"}):
+            self.assertEqual(self.message(), "")
+        self.assertIs(self.read()["reported"], False)
+
+    def test_only_the_named_unheard_ends_are_marked(self):
+        now = datetime.datetime.now(datetime.timezone.utc).timestamp()
+        for i in (4, 3, 2, 1):  # w-1 ended first
+            self.unheard(f"w-{i}", desc=f"job {i}", ended=iso(now - 60 + i),
+                         state="failed" if i == 2 else "done")
+        self.assertIn("4 watches ended while no Claude Code process was listening: w-1 (job 1, "
+                      "done), w-2 (job 2, failed), w-3 (job 3, done) and 1 more.", self.message())
+        self.assertEqual([self.read(f"w-{i}")["reported"] for i in (1, 2, 3, 4)],
+                         [True, True, True, False])
+
+    def test_an_end_from_before_reported_existed_isnt_named(self):
+        self.watch(state="done", ended=checks.dc.now_iso(), claude_pid=DEAD, claude_start=None)
+        self.assertEqual(self.message(), "")
+
     def test_more_than_three_list_the_three_oldest_and_count_the_rest(self):
         for i in (5, 4, 3, 2, 1):
             self.watch(f"w-{i}", desc=f"job {i}", created=iso(NOW + i))
         msg = self.message()
-        self.assertIn("5 watches from a session that ended: w-1 (job 1), w-2 (job 2), "
-                      "w-3 (job 3) and 2 more. Pick one up", msg)
+        self.assertIn("5 watches whose waiter's exit reaches nobody: w-1 (job 1), "
+                      "w-2 (job 2), w-3 (job 3) and 2 more. Pick one up", msg)
         self.assertNotIn("w-4", msg)
 
     def torn(self, wid="w-torn"):
@@ -640,9 +715,9 @@ class Orphans(StateTest):
         self.watch()
         self.torn()
         self.assertEqual(self.message(), (
-            "Delegation checks: (1) 1 watch from a session that ended: w-1 (the build). Pick "
-            "one up with `delegation-ledger wait --resume <id>`, or drop it with "
-            "`delegation-ledger wait --drop <id>`. (1 watch file couldn't be read; see "
+            "Delegation checks: (1) 1 watch whose waiter's exit reaches nobody: w-1 "
+            "(the build). Pick one up with `delegation-ledger wait --resume <id>`, or drop it "
+            "with `delegation-ledger wait --drop <id>`. (1 watch file couldn't be read; see "
             "delegation-ledger.err)"))
         self.assertIn("w-torn: damaged file", self.errors())
 

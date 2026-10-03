@@ -177,14 +177,17 @@ class FullRun(unittest.TestCase):
         with open(self.brief, "w") as f:
             f.write("Do the thing.\n")
         self.argv_log = os.path.join(t, "argv.jsonl")
-        self.env = dict(os.environ, PATH=bindir + os.pathsep + os.environ["PATH"],
+        # HOME is the temp dir too, so the walk to a Claude process finds no real session.
+        self.env = dict(os.environ, PATH=bindir + os.pathsep + os.environ["PATH"], HOME=t,
                         CODEX_HOME=os.path.join(t, "codex"),
                         XDG_STATE_HOME=os.path.join(t, "state"),
                         FAKE_THREAD="th-1", FAKE_ARGV_LOG=self.argv_log,
-                        CLAUDE_CODE_SESSION_ID="s1")
-        # Inside the sandbox the lead's CLAUDE_PID is inherited but invisible, which would make
-        # every pid look hidden.
-        self.env.pop("CLAUDE_PID", None)
+                        CLAUDE_CODE_SESSION_ID="s1", CLAUDE_PID=str(os.getpid()))
+        # This test process stands in for the Claude process (it is each wrapper's parent, so
+        # CLAUDE_PID names an ancestor and CLAUDE_CODE_SESSION_ID is the session). The lead's
+        # inherited CLAUDE_PID is invisible inside the sandbox, and SANDBOX_RUNTIME is set
+        # there, either of which would make every pid look hidden.
+        self.env.pop("SANDBOX_RUNTIME", None)
 
     def tearDown(self):
         self.tmp.cleanup()
@@ -357,6 +360,15 @@ class FullRun(unittest.TestCase):
         self.assertEqual(proc.wait(timeout=20), 0)
         proc.stdout.close()
         self.assertEqual(self.watches()[wid]["state"], "done")
+
+    def test_only_a_run_with_no_claude_process_says_the_guard_wont_see_it(self):
+        note = "codex-delegate: no Claude Code session: the watch guard won't see this watch"
+        p = self.run_ok(CLAUDE_CODE_SESSION_ID="")  # a process: its guard adopts the watch
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertNotIn(note, p.stderr)
+        p = self.run_ok(CLAUDE_CODE_SESSION_ID="", CLAUDE_PID="")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn(note, p.stderr)
 
     def test_max_wait_exits_75_and_a_resumed_waiter_finalizes_the_run(self):
         p = self.run_ok("--max-wait", "0.02", FAKE_SLEEP="5")
@@ -540,6 +552,14 @@ class FullRun(unittest.TestCase):
         self.assertEqual(self.launch_ids(p.stdout.split("\n", 1)[0] + "\n")[1], "w-old")
         self.assertEqual(self.watches()["w-old"]["state"], "done")
         self.assertEqual(len(self.watches()), 2)  # the run's own, and the one it took over
+
+    def test_a_resume_with_no_claude_process_keeps_the_session_and_says_nothing(self):
+        run_id = self.summary(self.run_ok())["run_id"]
+        self.write_watch("w-old", run_id)
+        p = self.run_cd("resume", run_id, "--no-scope", CLAUDE_PID="", CLAUDE_CODE_SESSION_ID="")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertNotIn("the watch guard won't see this watch", p.stderr)
+        self.assertEqual(self.watches()["w-old"]["session_id"], "s0")
 
     def test_resume_is_refused_while_a_live_waiter_holds_the_runs_watch(self):
         run_id = self.summary(self.run_ok())["run_id"]

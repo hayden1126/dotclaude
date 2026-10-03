@@ -71,7 +71,8 @@ dead Codex run gets one footer line that points at `open`, and the tmux token ne
 it. It reads only the ledger's last 1 MiB, so a 3-second poll stays cheap as the ledger grows.
 
 Inside the Bash sandbox no session pid is visible: each sandboxed command gets its own PID
-namespace. Both views detect that (CLAUDE_PID is set but not alive), print a warning first, and
+namespace. Both views detect that (dc.pids_visible: SANDBOX_RUNTIME=1, or a CLAUDE_PID that
+isn't alive with no live Claude process among the caller's parents), print a warning first, and
 call a session unknown instead of gone. delegation-ledger is in sandbox.excludedCommands, so a
 bare call runs outside the sandbox and is exact; a piped one stays inside and warns.
 
@@ -596,19 +597,29 @@ def last_seen(w):
 
 
 def watch_block(ctx, now, horizon, detail):
-    """The unresolved watches seen since `horizon`, as lines under an `open watches:` header:
-    one each for `watch`, two with the evidence for `open` (`detail`). [] when there are none,
-    so neither view's output changes."""
+    """The unresolved watches seen since `horizon`, and those that ended while no Claude process
+    was listening and aren't reported yet (dc.ended_unheard, where pids are visible), as lines
+    under a `watches:` header: one each for `watch`, two with the evidence for `open`
+    (`detail`). [] when there are none, so neither view's output changes."""
     _, _, visible, sessions = ctx
     lines = []
     for w in dc.all_watches():
-        if w.get("state") not in dc.UNRESOLVED or last_seen(w) < horizon:
+        if last_seen(w) < horizon:
             continue
         wid, desc = w.get("id"), (w.get("description") or "")[:40]
+        cond = dc.condition_text(w.get("condition") or {})
+        if w.get("state") not in dc.UNRESOLVED:
+            if visible and dc.ended_unheard(w, now):
+                news = (f"ended {w.get('state')} while no Claude Code process was listening ⚠ "
+                        "check the result")
+                lines += ([f"  {wid}  {desc!r}  {news}"] if not detail else
+                          [f"  {wid}  {w.get('state')}  {desc!r}  waited for {cond}",
+                           f"         {news} (ended {w.get('ended')}, session "
+                           f"{w.get('session_id')})"])
+            continue
         rearm = f"re-arm: delegation-ledger wait --resume {wid}"
         alive = dc.waiter_alive(w, now) if visible else None
         ack = "  (acknowledged)" if w.get("state") == "acknowledged" else ""
-        cond = dc.condition_text(w.get("condition") or {})
         if not detail:
             status = ("waiter not visible in the sandbox" if alive is None else
                       "waiter alive" if alive else f"no live waiter ⚠ {rearm}")
@@ -631,7 +642,7 @@ def watch_block(ctx, now, horizon, detail):
         lines.append(f"  {wid}  {w.get('state')}  {desc!r}  waiting for {cond}")
         lines.append(f"         session {w.get('session_id')} {session}, {waiter}, {beat}"
                      + ("" if alive else f"; {rearm}"))
-    return ["open watches:"] + lines if lines else []
+    return ["watches:"] + lines if lines else []
 
 
 WATCH_HOURS = 48
@@ -1218,18 +1229,21 @@ def existing_watch(wid):
     return w
 
 
-def same_watch(session, cond):
-    """The caller's unresolved watch on exactly this condition, or None: one in its session, or
-    one its Claude process left under an earlier session id (dc.left_by_clear), since a rerun
-    after /clear may come before the guard's first stop adopts it. A codex condition is left to
-    the codex refusal (one watch per run), and a caller with no session has none."""
-    if session == "unknown" or "codex" in cond:
+def same_watch(identity, cond):
+    """The caller's unresolved watch on exactly this condition, or None. `identity` is the
+    caller's claude_identity(). The watch is in its session, or one its Claude process left in
+    a session that isn't live (dc.left_by_clear): an earlier session id, since a rerun after
+    /clear may come before the guard's first stop adopts it, or "unknown", which matches by
+    the process alone. A codex condition is left to the codex refusal (one watch per run), and
+    a caller with neither a session nor a process has none."""
+    me, session = identity
+    if "codex" in cond or (session == "unknown" and me is None):
         return None
-    me = dc.claude_process()
     live = dc.live_sessions() if me is not None else {}
     return next((w for w in dc.all_watches() if w.get("state") in dc.UNRESOLVED
                  and w.get("condition") == cond
-                 and (w.get("session_id") == session or dc.left_by_clear(w, me, live))), None)
+                 and ((session != "unknown" and w.get("session_id") == session)
+                      or dc.left_by_clear(w, me, live))), None)
 
 
 def stop_row(run_id):
@@ -1379,21 +1393,21 @@ def cmd_wait(args):
         dc.prune_watches()
         if args.drop is not None:
             return drop_watch(args.drop)
+        identity = dc.claude_identity()  # one walk: the watch's process and session agree
         if args.resume is not None:
             existing_watch(wid)
-            return Waiter(wid, args.poll, dc.wait_session()).run(args.max)
-        session = dc.wait_session()
-        same = same_watch(session, cond)
+            return Waiter(wid, args.poll, identity).run(args.max)
+        same = same_watch(identity, cond)
         if same is not None:
             # A rerun of a killed waiter: carry on with its watch, which the guard names.
-            return Waiter(same["id"], args.poll, session).run(
+            return Waiter(same["id"], args.poll, identity).run(
                 args.max, taken=f"watch {same['id']} already waits on this; taking it over")
         wid = dc.new_watch_id()
-        if session == "unknown":
+        if identity[0] is None:  # with a process, its guard adopts even an "unknown" session
             print("no Claude Code session: the watch guard won't see this watch",
                   file=sys.stderr, flush=True)
-        return Waiter(wid, args.poll, session).run(args.max, new={
-            "id": wid, "session_id": session, "condition": cond,
+        return Waiter(wid, args.poll, identity).run(args.max, new={
+            "id": wid, "session_id": identity[1], "condition": cond,
             "description": args.desc or dc.condition_text(cond), "created": dc.now_iso()})
     except dc.WaitRefused as ex:
         print(f"wait: {ex}", file=sys.stderr)

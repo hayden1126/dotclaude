@@ -71,13 +71,17 @@ class GuardEnv(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.state = os.path.join(self.tmp.name, "state")
-        env = mock.patch.dict(os.environ, {"XDG_STATE_HOME": self.state})
+        # A temp HOME, so the walk to a Claude process finds only the sessions files a test
+        # writes there.
+        self.home = os.path.join(self.tmp.name, "home")
+        env = mock.patch.dict(os.environ, {"XDG_STATE_HOME": self.state, "HOME": self.home})
         env.start()
         self.addCleanup(env.stop)
         os.environ.pop("DELEGATION_LEDGER", None)
-        # Inside the sandbox the lead's CLAUDE_PID is inherited but invisible, which would make
-        # the guard say nothing. The sandbox test sets it on purpose.
+        # Inside the sandbox the lead's CLAUDE_PID is inherited but invisible, and SANDBOX_RUNTIME
+        # is set, either of which would make the guard say nothing. The sandbox tests set them.
         os.environ.pop("CLAUDE_PID", None)
+        os.environ.pop("SANDBOX_RUNTIME", None)
         self.watches = os.path.join(self.state, "dotclaude", "watches")
         self.transcript = self.path("s1.jsonl")
         self.now = time.time()
@@ -342,6 +346,42 @@ class Watches(GuardEnv):
         self.assertIsNone(self.read()["blocked_at"])
         self.assertFalse(os.path.exists(os.path.join(self.state, "dotclaude", "kills")))
 
+    def test_sandbox_runtime_makes_the_guard_say_nothing(self):
+        self.watch()
+        with mock.patch.dict(os.environ, {"SANDBOX_RUNTIME": "1"}):
+            self.assertIsNone(self.decide())
+        self.assertIsNone(self.read()["blocked_at"])
+
+    def session_file(self, pid, sid="s-claude"):
+        """A sessions file for pid, as Claude Code writes one, in the test's HOME."""
+        sessions = os.path.join(self.home, ".claude", "sessions")
+        os.makedirs(sessions, exist_ok=True)
+        with open(os.path.join(sessions, f"{pid}.json"), "w") as f:
+            json.dump({"pid": pid, "procStart": dc.proc_start(pid), "sessionId": sid}, f)
+
+    def test_a_stale_claude_pid_under_a_live_claude_process_still_guards(self):
+        # A CLAUDE_PID inherited from a process that has ended, while the walk finds the live
+        # Claude process this hook runs under (this test's parent stands in for it).
+        self.session_file(os.getppid())
+        self.watch()
+        with mock.patch.dict(os.environ, {"CLAUDE_PID": str(DEAD)}):
+            self.assertEqual(self.decide(), self.block(self.lapse_reason()))
+
+    def test_an_inherited_claude_pid_doesnt_make_a_nested_guard_adopt_the_leads_watch(self):
+        # A nested claude -p (this test's parent) inherited the lead's CLAUDE_PID; after the
+        # lead's /clear, the lead's old session isn't live.
+        lead = subprocess.Popen(["sleep", "60"])
+        self.addCleanup(lambda: (lead.kill(), lead.wait()))
+        self.session_file(lead.pid, "s-lead-new")
+        self.session_file(os.getppid(), "s1")
+        self.watch(sid="s-lead-old", claude_pid=lead.pid, claude_start=dc.proc_start(lead.pid))
+        self.lines()
+        with mock.patch.dict(os.environ, {"CLAUDE_PID": str(lead.pid)}):
+            self.assertEqual(guard.dc.claude_process(), (os.getppid(),
+                                                         dc.proc_start(os.getppid())))
+            self.assertIsNone(self.decide())
+        self.assertEqual(self.read()["session_id"], "s-lead-old")
+
     def test_stop_hook_active_doesnt_stop_a_fresh_lapse_blocking(self):
         self.watch()
         self.assertEqual(self.decide(stop_hook_active=True), self.block(self.lapse_reason()))
@@ -381,6 +421,15 @@ class Watches(GuardEnv):
         self.assertEqual(self.decide(), self.block(self.lapse_reason()))
         self.assertEqual(self.read()["session_id"], "s1")
         self.assertIn("adopted watch w-1 from session s-before", self.err_log())
+
+    def test_a_watch_this_process_recorded_with_no_session_is_adopted(self):
+        self.mine(sid="unknown")
+        self.lines()
+        self.as_claude()
+        self.assertEqual(self.decide(), self.block(self.lapse_reason()))
+        self.assertEqual(self.read()["session_id"], "s1")
+        self.assertIn("adopted watch w-1 from session unknown: the same Claude process (a "
+                      "/clear, or a watch recorded with no session)", self.err_log())
 
     def test_a_live_sessions_watch_isnt_adopted_even_when_the_process_matches(self):
         self.mine()
@@ -447,6 +496,17 @@ class Watches(GuardEnv):
                       self.err_log())
         self.assertIsNone(self.decide(prompt_id="p2"))
 
+    def test_a_crashed_processs_waiter_with_a_stale_heartbeat_is_marked_unheard(self):
+        # Its process runs (a suspended VM made the heartbeat stale), so when it resumes its exit
+        # goes to the ended process: --resume must be able to take it over.
+        self.watch(live=True, claude_pid=DEAD, claude_start=None,
+                   waiter_heartbeat=guard.iso(self.now - 3600))
+        self.lines()
+        self.as_claude()
+        out = self.decide()
+        self.assertIn(self.unheard_reason(), out["reason"])
+        self.assertIs(self.read()["waiter_unheard"], True)
+
     def test_a_crashed_processs_dead_waiter_is_adopted_and_lapses(self):
         self.watch(claude_pid=DEAD, claude_start=None)
         self.lines()
@@ -459,16 +519,16 @@ class Watches(GuardEnv):
     def test_without_its_own_process_the_guard_adopts_no_crashed_watch(self):
         self.watch(live=True, claude_pid=DEAD, claude_start=None)
         self.lines()
-        with mock.patch.object(guard, "own_claude", return_value=None):
+        with mock.patch.object(guard.dc, "claude_process", return_value=None):
             self.assertIsNone(self.decide())
         self.assertEqual(self.read()["claude_pid"], DEAD)
 
     def test_a_watch_that_ended_while_nobody_listened_blocks_once(self):
         self.watch(state="done", ended=guard.iso(self.now - 3600), claude_pid=DEAD,
-                   claude_start=None, created="2026-10-02T10:00:00Z")
+                   claude_start=None, created="2026-10-02T10:00:00Z", reported=False)
         self.watch("w-2", state="stale", ended=guard.iso(self.now - 60), claude_pid=os.getpid(),
                    claude_start=dc.proc_start(os.getpid()), waiter_unheard=True,
-                   created="2026-10-02T10:00:01Z")
+                   created="2026-10-02T10:00:01Z", reported=False)
         self.lines()
         self.assertEqual(self.decide(), self.block(self.ended_reason(),
                                                    self.ended_reason("stale", "w-2")))
@@ -476,16 +536,26 @@ class Watches(GuardEnv):
         self.assertIsNone(self.decide(prompt_id="p2"))
 
     def test_an_ended_watch_someone_heard_or_could_says_nothing(self):
-        dead = {"claude_pid": DEAD, "claude_start": None}
-        self.watch("w-1", state="done", ended=guard.iso(self.now - 60), reported=True, **dead)
+        dead = {"claude_pid": DEAD, "claude_start": None, "reported": False}
+        self.watch("w-1", state="done", ended=guard.iso(self.now - 60),
+                   **dict(dead, reported=True))
         self.watch("w-2", state="failed", ended=guard.iso(self.now - 8 * 86400), **dead)
         self.watch("w-3", state="done", ended=guard.iso(self.now - 60), claude_pid=os.getpid(),
-                   claude_start=dc.proc_start(os.getpid()))  # heard, its process runs
+                   claude_start=dc.proc_start(os.getpid()), reported=False)  # its process runs
         self.watch("w-4", state="dropped", ended=guard.iso(self.now - 60), **dead)
         self.watch("w-5", sid="s-other", state="done", ended=guard.iso(self.now - 60), **dead)
-        self.watch("w-6", state="done", ended=guard.iso(self.now - 60))  # no process recorded
+        self.watch("w-6", state="done", ended=guard.iso(self.now - 60),
+                   reported=False)  # no process recorded
         self.lines()
         self.assertIsNone(self.decide())
+
+    def test_a_watch_that_ended_before_reported_existed_counts_as_reported(self):
+        # No `reported` key at all: an end recorded before this field, which it can't judge.
+        self.watch(state="done", ended=guard.iso(self.now - 60), claude_pid=DEAD,
+                   claude_start=None)
+        self.lines()
+        self.assertIsNone(self.decide())
+        self.assertNotIn("reported", self.read())
 
     def test_an_end_the_guard_says_is_recorded_reported(self):
         target = self.path("out")
@@ -495,6 +565,45 @@ class Watches(GuardEnv):
         self.assertEqual(self.decide(), self.block(self.met_reason(cond=f"{target} exists")))
         self.assertEqual((self.read()["state"], self.read()["reported"]), ("done", True))
         self.assertIsNone(self.decide(prompt_id="p2"))
+
+    def hold_watches_lock(self):
+        """Take watches/.lock from another open file, as a busy twin would, until cleanup."""
+        held = open(os.path.join(self.watches, ".lock"), "a")
+        self.addCleanup(held.close)
+        fcntl.flock(held, fcntl.LOCK_EX)
+        self.addCleanup(fcntl.flock, held, fcntl.LOCK_UN)
+
+    def test_adoption_and_the_items_are_one_update(self):
+        # A twin takes watches/.lock right after the first update: a second would find it busy.
+        self.watch(live=True, claude_pid=DEAD, claude_start=None, created="2026-10-02T10:00:00Z")
+        self.watch("w-2", created="2026-10-02T10:00:01Z")
+        self.lines()
+        self.as_claude()
+        real, calls = guard.dc.update_watches, []
+
+        def update_watches(fns, until=None, clock=time.monotonic):
+            if calls:
+                raise guard.dc.LockBusy("watches/.lock")
+            calls.append(fns)
+            out = real(fns, until, clock)
+            self.hold_watches_lock()
+            return out
+        with mock.patch.object(guard.dc, "update_watches", update_watches):
+            self.assertEqual(self.decide(), self.block(self.unheard_reason(),
+                                                       self.lapse_reason("w-2")))
+        self.assertEqual(sorted(calls[0]), ["w-1", "w-2"])
+
+    def test_a_busy_watches_lock_adopts_nothing(self):
+        self.watch(live=True, claude_pid=DEAD, claude_start=None)
+        self.lines()
+        self.as_claude()
+        self.hold_watches_lock()
+        with mock.patch.object(guard, "BUDGET_S", 0.1), \
+                mock.patch.object(guard, "LOCK_GRACE_S", 0.1):
+            self.assertIsNone(self.decide())
+        self.assertEqual((self.read()["claude_pid"], self.read().get("waiter_unheard")),
+                         (DEAD, None))
+        self.assertIn("nothing was taken this stop", self.err_log())
 
     def test_an_undecidable_watch_is_skipped_and_the_other_still_blocks(self):
         self.watch(wid="w-gone", cond={"codex": "r-gone"}, desc="codex run r-gone ends")

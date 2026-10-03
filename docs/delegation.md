@@ -265,13 +265,18 @@ from 60 to 5,000 requests an hour.
 - **A met condition is judged on a log's last 1 MB.** A `--done` line further back reads as unmet
   to the guard, so the watch lapses instead of ending. The re-armed waiter reads the whole log.
 - **The duplicate refusal is per run, across sessions.** A second `wait --codex` on a run that
-  any session watches is refused. While that watch's waiter is alive and its session is live,
-  the refusal says the waiter will notify its session. Otherwise it names `wait --resume <id>`,
-  which moves the watch to the caller's session.
+  any session watches is refused. While that watch's waiter is alive and someone will hear it,
+  the refusal says the waiter will notify its session. Someone will hear it while its Claude
+  process runs, whatever its session (after a `/clear`, say); with no process recorded, while
+  its session is live; with neither, always. Otherwise, when its Claude process has ended (even
+  in a session that runs on after a crash), the guard marked it `waiter_unheard`, or its waiter
+  is dead, the refusal names `wait --resume <id>`, which moves the watch to the caller's
+  session.
 - **An acknowledged lapse goes quiet.** After one block and one warning, a lapsed watch stays
   open and says nothing more in that session until it ends: it blocks once more when its
   condition is met, or when its codex run gets a stop row or turns out never to have started.
-  The session-start nudge lists it once its session has ended.
+  The session-start nudge lists it to Hayden at every session start once its Claude Code
+  process has ended, even if a continued session's guard adopts it silently.
 - **A live waiter can read as lapsed.** A waiter whose heartbeat is older than two polls plus a
   second (a suspended VM, say) counts as dead: the guard blocks on it, and a `--resume` can take
   the watch over. The old waiter steps aside at its next beat.
@@ -280,17 +285,53 @@ from 60 to 5,000 requests an hour.
   one), it needs the watch its `--resume` names, or one watch created within 120 s after the
   launch, told apart by `--pid`, `--file` or `--log`. When that names no single watch, the stop
   says the kill and the lapse as two items.
-- **Adoption after `/clear` needs the Claude process.** A watch records `claude_pid` only when the
-  waiter saw `CLAUDE_PID`, and the guard finds its own process from `CLAUDE_PID` or a sessions
-  file at most 6 levels up its parents. A watch made outside Claude Code, or a guard that finds
-  neither, adopts nothing. It also rests on the sessions file naming the new session id after a
-  `/clear`, so the old one stops being live (see the verified facts). Were that to change, the old
-  session would read as live and nothing would be adopted: safe, but the watch would go
-  unguarded.
+- **Adoption after `/clear` needs the Claude process.** A waiter and the guard each find their
+  Claude process by walking up their parents, 6 levels at most, to the nearest one whose
+  `~/.claude/sessions/<pid>.json` names its pid and procStart (`claude_ancestor`, which returns
+  that process and the file's `sessionId`). `claude_identity` decides from there, and a
+  waiter's session comes from the same walk. `CLAUDE_PID` and `CLAUDE_CODE_SESSION_ID` are
+  inherited, so on their own they can name another process's session: a nested `claude -p`
+  started from the lead's Bash may carry the lead's, and a tmux server started from a Claude
+  Bash call carries ones that go stale. So:
+  - when `CLAUDE_PID` is the process the walk found and `CLAUDE_CODE_SESSION_ID` is set, that
+    process set both vars for this Bash call, and the env's id is the session. The env follows a
+    session change (see the verified facts), and nothing verified says the sessions file is
+    rewritten before the first Bash call after a `/clear`. A nested `claude -p` sets its own
+    vars, so this holds there too;
+  - otherwise, when the walk finds a process, its sessions file's `sessionId` is the session
+    (`unknown` without one). The file decides whenever the env can't: the walked process isn't
+    `CLAUDE_PID`, so the env may be another process's, or the env names no session;
+  - when the walk finds nothing, the env counts only when `CLAUDE_PID` is an ancestor of the
+    command, at any level: then it is the process, and `CLAUDE_CODE_SESSION_ID` the session.
+
+  A watch made outside Claude Code records no process and the session `unknown`, and a guard
+  that finds no process adopts nothing. Adoption also rests on the sessions file naming the new
+  session id after a `/clear` (see the verified facts). The file still decides which sessions
+  are live (`live_sessions`), so it decides when the old id stops being live and its watch can
+  be adopted, and it names the session of a walked process that isn't `CLAUDE_PID`. Were the
+  rewrite to stop, the old session would read as live and nothing would be adopted: safe, but
+  the old watch would go unguarded. A new watch would still get the new id, from the env.
+- **A hook's `CLAUDE_PID` isn't verified.** When the walk finds nothing, the process comes from
+  `CLAUDE_PID`, and whether a Stop hook's env carries it is unchecked. A hook finds its process
+  by the walk first, and every Claude process writes a sessions file, so this matters only with
+  no sessions file, which hasn't been seen. With no sessions file and no `CLAUDE_PID` in the
+  hook's env, the guard has no process (`claude_process` returns None), so it adopts nothing.
+  A watch whose Claude process is alive but whose session is `unknown` (its waiter found the
+  process from `CLAUDE_PID`, with no session in the env) is then seen by nobody: no guard
+  adopts it, and the nudge doesn't name it while its process runs (`watch_orphaned`). A dead
+  waiter's lapse there reaches nobody until that process ends. Unseen in practice, since it
+  needs a Claude process with no sessions file.
+- **A waiter's exit across a `/clear` is assumed to reach the model.** `/clear` keeps the Claude
+  process that ran the waiter, so the design assumes Claude Code delivers the waiter's exit
+  notice into the new conversation; that isn't verified. A waiter that ends then records
+  `reported` true, since its Claude process runs, so if the notice were dropped, neither the
+  guard nor the nudge would repeat the end. Were `/clear` to stop the waiter instead, the guard
+  would adopt the watch at the next stop and block on it as a lapse.
 - **A crash, then `claude --continue`, rests on the session id.** The guard adopts a crashed
   process's watch only in the session that has its id, so this assumes `--continue` keeps the
   session id. That isn't verified here; the manual re-arm check in `due.toml` asks for it. With a
-  new id, the watch shows in the session-start line instead, and nothing blocks.
+  new id, nothing blocks, but the session-start line shows the watch instead: an unresolved one
+  as nobody's, and one whose waiter ended meanwhile as an end nobody heard, once.
 - **The re-arm across turns isn't in the live harness.** `claude -p` kills background shells
   about 5 s after its final result, so no waiter outlives a `-p` turn. A dated item in `due.toml`
   asks for the check by hand in an interactive session.
@@ -542,11 +583,14 @@ fixes:
 - `delegation-ledger *` is in `sandbox.excludedCommands`, so a bare call runs outside the sandbox
   and is exact. The live settings are a copy, so a machine set up before A3 needs `./setup.sh`
   again (see "Installing on a machine that is already set up"). Delegated agents get `excluded-command` for it from the policy, and never need it.
-- A self-check covers the calls that still run inside, such as a piped one. The caller's own
-  Claude process is alive by definition, so when `CLAUDE_PID` is set but not alive, no pid check
-  means anything. Both views then print a warning first and call each session `unknown` instead of
+- A self-check (`pids_visible`) covers the calls that still run inside, such as a piped one.
+  `SANDBOX_RUNTIME=1`, set only inside, fails it. So does a `CLAUDE_PID` that is set but not
+  alive, since the caller's own Claude process is alive by definition, unless the parent walk
+  (`claude_ancestor`, in the known gaps) finds a live Claude process anyway: then `CLAUDE_PID`
+  was only stale, inherited from a process that has ended. When it fails, no pid check means
+  anything, so both views print a warning first and call each session `unknown` instead of
   gone, and `open` says `pid not visible in the sandbox` for a Codex row instead of `died`. With
-  `CLAUDE_PID` unset (tmux, a plain terminal), the check passes.
+  `CLAUDE_PID` unset (tmux, a plain terminal) and no `SANDBOX_RUNTIME`, the check passes.
 
 A session file's `procStart` must now match the pid's start time too, so a pid the kernel reused
 for another process no longer keeps a gone session alive.
@@ -750,25 +794,34 @@ the fix is enforcement. `PLAN.md` has the design history and the options weighed
     timeout 7200000)`. The guard folds a killed waiter by it.
   - `--max MIN` defaults to 110 and can't go higher, which leaves room for a 5-minute finalize
     under the 120-minute cap. `--drop <id>` ends a watch. `--resume <id>` takes one over, but
-    refuses a live waiter someone will hear from: its Claude process is live, or, with no process
-    recorded, its session is live (the caller's counts); a live waiter with no session is refused
-    too. A live waiter whose Claude process has ended (a crash; the guard then marks it
-    `waiter_unheard`), or whose session has ended with no process recorded, reports to nobody,
-    so it is taken over, and it steps aside (exit 3) at its next beat.
+    refuses a live waiter someone will hear from: its Claude process is live, whatever its
+    session; or, with no process recorded, its session is live (the caller's counts), or it has
+    no session either. A live waiter whose Claude process has ended (a crash; the guard then
+    marks it `waiter_unheard`), whatever its session, or whose session has ended with no process
+    recorded, reports to nobody, so it is taken over, and it steps aside (exit 3) at its next
+    beat.
   - A new wait whose condition equals an unresolved watch's takes that watch over and says so,
     once it has, so a rerun after a kill doesn't leave the guard pointing at a second watch. The
-    watch is the caller's: in its session, or left by its Claude process under a session id that
-    is no longer live (a rerun after `/clear`, before the guard's first stop adopts it). A codex
-    condition keeps its refusal instead.
-  - It records the session and the Claude Code process its exit notifies (`claude_pid`, from
-    `CLAUDE_PID`, with its procStart); a waiter outside Claude Code records none, dropping the
-    last waiter's. `/clear` keeps the process but starts a new session id, and the guard adopts
-    the watch into the new session (below). A waiter that ends while that process runs records
-    `reported`.
+    watch is the caller's: in its session, or left by its Claude process in a session that isn't
+    live. That covers a rerun after `/clear`, before the guard's first stop adopts it, and a
+    caller whose session is `unknown`, matched by its process alone. A caller with neither gets
+    a new watch. A codex condition keeps its refusal instead.
+  - It records the Claude Code process its exit notifies (`claude_pid` with its procStart) and
+    that process's session, both from the parent walk in the known gaps. A waiter outside Claude
+    Code records no process, dropping the last waiter's. A new wait with no process found
+    records the session `unknown` and says the guard won't see the watch. One with a process but
+    no session found records `unknown` and says nothing, since that process's guard adopts the
+    watch by the process (`unknown` is never live). A `--resume` outside Claude Code keeps the
+    watch's session, drops its `claude_pid` and says nothing, and so does a `codex-delegate
+    resume` that takes its run's watch over; only a new watch records `unknown` and warns.
+    `/clear` keeps the process but starts a new session id, and the guard adopts the watch into
+    the new session (below). When it ends, it records `reported`: true while that process runs,
+    else false.
   - It refuses to run sandboxed, where its pids would belong to another PID namespace. It refuses
     a `--pid` that is pid 1, a kernel thread, another user's, or not running. It refuses a second
-    watch on a codex run, naming the existing watch's `--resume` when that watch's waiter is dead
-    or its session is gone.
+    watch on a codex run, naming the existing watch's `--resume` when nobody will hear that
+    watch's waiter, by the `--resume` rule above: the waiter is dead, its Claude process has
+    ended, or, with no process recorded, its session has.
 - **The watch guard**, a main-thread Stop hook (`watch-guard`). For each of the session's open or
   acknowledged watches with no live waiter (its pid with its procStart, and a heartbeat no older
   than two polls plus a second; a background shell whose command holds the watch id counts too):
@@ -780,22 +833,26 @@ the fix is enforcement. `PLAN.md` has the design history and the options weighed
     first turn to run `codex-delegate run` again, which gets a new run id;
   - anything else is a lapse, which blocks once with the re-arm and drop commands. For a codex run
     that ended without a stop row, it adds that resuming finalizes it;
-  - first, it adopts any unresolved watch recorded under its own Claude Code process with another
-    session id that is no longer live (a `/clear`), moving it into this session in the commit
-    pass and logging it. A live session's watch is never adopted, whatever the pids say, and the
-    commit checks the process and the liveness again under the lock. It finds its process from
-    `CLAUDE_PID`, or the nearest parent with a `~/.claude/sessions/<pid>.json`, 6 levels up at
-    most;
+  - first, it adopts any unresolved watch recorded under its own Claude Code process in a
+    session that isn't live (a `/clear`, or a watch recorded with no session), moving it into
+    this session in the commit pass and logging it. A live session's watch is never adopted,
+    whatever the pids say, and the commit checks the process and the liveness again under the
+    lock. It finds its process by the same parent walk as the waiter, so a nested `claude -p`
+    that inherited the lead's `CLAUDE_PID` finds itself, not the lead;
   - it also adopts this session's watches whose Claude process has ended (a crash, then
-    `claude --continue`), recording itself as their Claude process. A waiter still running there
-    reports to a process that's gone, so the watch is marked `waiter_unheard` and blocks once:
-    "Watch <id>'s waiter was started by a Claude Code process that has ended, so its exit won't
-    reach you. Re-arm it", with the `--resume` command. A dead waiter is a lapse, as above;
+    `claude --continue`), recording itself as their Claude process. A waiter whose process
+    still runs reports to a process that's gone, so the watch is marked `waiter_unheard` and
+    blocks once: "Watch <id>'s waiter was started by a Claude Code process that has ended, so its
+    exit won't reach you. Re-arm it", with the `--resume` command. That goes by the waiter's
+    process, not its heartbeat, so one a suspended VM left stale is marked too, and `--resume`
+    can take it over. A dead waiter is a lapse, as above;
   - a watch of this session that ended (done, failed or stale) in the last 7 days while no Claude
     process listened blocks once, "Check the result and report it", and is recorded `reported`.
-    Nobody listened when its waiter was `waiter_unheard` or its Claude process has ended. A
-    waiter records `reported` itself when its Claude process runs as it ends, and so does the
-    guard for an end it says, so a crash after the news arrived doesn't repeat it.
+    Nobody listened when its waiter was `waiter_unheard` or its Claude process has ended, and
+    `reported` is false. A waiter records it true when its Claude process runs as it ends, and
+    so does the guard for an end it says, so a crash after the news arrived doesn't repeat it.
+    A watch with no `reported` at all ended before the field existed, and counts as reported,
+    so it never shows.
 - **The kill catch**, in the same hook. Each stop reads the transcript on from where the last one
   stopped (`kills/<session>.json` holds the offset), searching the raw bytes for
   `task-notification`. A notice with `<status>killed</status>` at the background time limit blocks
@@ -817,14 +874,29 @@ the fix is enforcement. `PLAN.md` has the design history and the options weighed
 - **The allow rule.** The baseline's `permissions.allow` holds `Bash(delegation-ledger wait *)`,
   so a re-arm never stops at a permission prompt. The waiter must run as a bare command: a `cd`,
   a redirect or `$(...)` keeps the call in the sandbox, where it refuses to run.
-- **The session-start nudge.** `delegation-ledger due --hook` names, in its numbered line, up to
-  three of the open or acknowledged watches nobody will hear from, oldest first, with a count of
-  the rest, and one `wait --resume <id>` and `wait --drop <id>` template
-  (`delegation_checks.orphaned_watches`). A watch is nobody's when the Claude process it was
-  recorded under has ended, even if its session runs on in a new process (`claude --continue`),
-  or, with no process recorded, when its session isn't live. That holds whatever its waiter's
-  state, since a bare waiter can outlive a SIGKILLed Claude Code; a live waiter is marked "its
-  waiter is still running". A watch with no session counts only once its waiter is dead.
+- **The session-start nudge**, a systemMessage for Hayden, not the model. `delegation-ledger due
+  --hook` names, in its numbered line, up to three of the open or acknowledged watches whose
+  waiter's exit reaches nobody, oldest first, with a count of the rest, and one
+  `wait --resume <id>` and `wait --drop <id>` template (`delegation_checks.left_watches`): "<n>
+  watch(es) whose waiter's exit reaches nobody: <id> (<desc>), ... Pick one up with ..."
+  - A watch is named when `dc.watch_orphaned` says so: the Claude process it was recorded under
+    has ended; with no process recorded, its session isn't live (the starting one counts as
+    live); with neither a process nor a session, its waiter is dead. That holds whatever its
+    waiter's state, since a bare waiter can outlive a SIGKILLed Claude Code; a live waiter is
+    marked "its waiter is still running".
+  - It names a watch even when a running session's guard will adopt it, as after a crash and
+    `claude --continue`. That guard can stay silent (an acknowledged lapse), so the line is the
+    notice that can't be missed: redundancy over silence. It names the same watches at every
+    session start until each is re-armed or dropped.
+  - A second line names up to three watches that ended (done, failed or stale) in the last 7
+    days while no Claude process was listening and aren't reported yet (`dc.ended_unheard`),
+    oldest end first: "<n> watch(es) ended while no Claude Code process was listening: <id>
+    (<desc>, <state>), ... Check the results." It records the ones it names `reported`, so each
+    shows once; a headless `-p` session records nothing. It leaves out only the starting
+    session's own, which this process's guard says to the model at its next stop. So after a
+    crash, a plain `claude`, with a new session id, still hears of a leftover waiter's end.
+  - `delegation-ledger watch` and `open` list those ended watches too, in the same `watches:`
+    block as the unresolved ones, until they're reported.
 - **The shim logs.** `hooks/watch-guard.sh` appends Python's stderr to `delegation-ledger.err`,
   falling back to `/dev/null` when that file can't be written, so a missing link or an import
   error shows there and in the quick canary instead of leaving the guard silently off. The
@@ -863,7 +935,9 @@ records each pid's command name, so a wrong one that slips through shows in `wat
   Once the budget is spent it takes no new item, and a kill whose launch lookup was cut off gets
   the plain reason.
 - **Commit**, in one pass under `kills/<session>.lock` and then `watches/.lock`, each wait
-  bounded. Each watch is re-read under the lock, so a waiter that re-armed meanwhile wins.
+  bounded. The adoptions and every watch's item are one update of the watches, so a busy lock
+  means nothing is recorded or said this stop. Each watch is re-read under the lock, so a
+  waiter that re-armed meanwhile wins.
 - **Print**: one block that numbers every new item, and a `systemMessage` for the lapses it
   acknowledged.
 
@@ -878,8 +952,31 @@ Its once-per-item rules:
   another hook's block can't swallow this one.
 - It fails open. An error on one item is logged to `delegation-ledger.err` and skips that item;
   any other error lets the stop through.
-- Where it can't see pids outside its own (a sandboxed run, `pids_visible`), it says nothing,
-  since every waiter and Claude process would read as dead.
+- Where it can't see pids outside its own (a sandboxed run, `pids_visible`: `SANDBOX_RUNTIME=1`,
+  or an unseen `CLAUDE_PID` with no live Claude process among its parents), it says nothing,
+  since every waiter and Claude process would read as dead. A stale inherited `CLAUDE_PID`
+  under a live Claude process doesn't silence it.
+
+**Who hears a watch.** The rule is redundancy over silence: every lapse and every end reaches
+the model or Hayden at least once, and a duplicate notice is cheap. The model hears a waiter's
+exit notice (a background command that ends starts a turn) and the guard's blocks. Hayden hears
+the guard's ack (its Stop `systemMessage`, which Claude Code shows to the user) and the
+session-start nudge (`due --hook`'s `systemMessage`, at `startup` and `resume`). "Its Claude
+process" is the one the watch was recorded under (`claude_pid`).
+
+| Situation | The model hears | Hayden hears | Code path |
+|---|---|---|---|
+| A normal exit: the waiter ends done, failed or stale while its Claude process runs | The waiter's exit notice, which starts a turn if the session is idle | Nothing | `Waiter.end` records `reported` true; the guard reads only unresolved watches and unreported ends |
+| A lapse at `--max` | The exit-75 notice with the re-arm line. If the lead stops without re-arming, one block with the re-arm and drop commands | The ack at the next stop after that block, then the nudge at every session start once its Claude process has ended | `watch_pending` (a lapse), `commit`'s `record` (`blocked_at`, then `later_stop` and `ACK_MESSAGE`); `left_watches` (`watch_orphaned`) |
+| A lapse already acknowledged | Nothing until a stop finds its condition met, or its codex run stopped or never started; that blocks once more. Known gap: "An acknowledged lapse goes quiet" | The nudge at every session start once its Claude process has ended | `record` (nothing for an acknowledged lapse), `watch_pending` (an end); `left_watches` (`watch_orphaned`) |
+| A kill at the time limit (a waiter or `codex-delegate` launched with a shorter `timeout`) | Claude Code's kill notice, then one block at that turn's stop: the kill folded into the watch's lapse item, or the kill alone when the watch blocked before | As for a lapse: the ack, then the nudge once its Claude process has ended | `kill_pending`, `map_kill` (the fold, by the launch line), `commit_kills`; `watch_pending`, `record` |
+| `/clear`, then a stop | A live waiter's exit notice, to the same Claude process (assumed across the `/clear`; see the known gaps). A dead waiter's watch is adopted into the new session at the first stop and blocks once as a lapse; an acknowledged one stays quiet | Nothing: the nudge runs at `startup` and `resume`, not at `clear`, and a running Claude process orphans none of its watches | `left_by_clear` (in `decide` and `adoption`), `watch_pending`, `record`; `watch_orphaned` |
+| A crash, then `claude --continue` | At the first stop, the new process adopts the session's watches. A waiter whose process still runs is marked `waiter_unheard` and blocks once (re-arm it); a dead waiter blocks once as a lapse, or says nothing if its lapse was acknowledged; a watch that ended meanwhile blocks once (check the result). Known gap: this rests on `--continue` keeping the session id | The nudge at the new process's start names the session's unresolved watches, even those the guard will adopt. It leaves the session's unreported ends to the guard | `crashed`, `adoption` (`UNHEARD_REASON`), `watch_pending`, the guard's `ended_unheard` (`ENDED_UNHEARD`); `left_watches` |
+| A crash with nobody continuing | Nothing | The nudge at the next start of any session: the unresolved watches at every start until each is re-armed or dropped, and, once, each end a waiter recorded after the crash | `Waiter.end` (`reported` false: its Claude process is gone), `left_watches` (`watch_orphaned`, `dc.ended_unheard`), `mark_reported` |
+| A crash, then `--continue`, then `/clear` before the first stop | Nothing: the new process's guard runs in the new session, where it adopts neither the crashed process's watch (`left_by_clear` needs its own process) nor the old session's (`crashed` needs its own session) | The nudge names the unresolved watches at the continued start and at every start after. An end in the crashed session waits for a later start: another session's nudge names it, or, if Hayden resumes that session, its guard says it to the model. Delayed, not silent | `left_by_clear`, `crashed`; `left_watches` (it skips the starting session's ends) |
+| A wait outside Claude Code (a plain terminal, a tmux pane) | Nothing for a new watch, which records the session `unknown` and warns that the guard won't see it. A `--resume` there keeps the watch's session: a running session's guard still blocks on its lapse, but no guard sees an `unknown` one's | Its exit, in that terminal. The nudge names the watch at every session start once nobody will hear it: an `unknown` one once its waiter has died unresolved, a session's while that session isn't running. A normal end isn't named: whoever ran it heard it | `claude_identity` (no process), `Waiter.take` (drops `claude_pid`), `watch_orphaned` (no process: the session, else the waiter, decides), `dc.ended_unheard` (needs a process) |
+| A codex run detached at `--max-wait` | The wrapper's exit-75 notice with the re-arm line, while Codex runs on. If the lead stops without re-arming, one block: a lapse, which adds that resuming finalizes the run once Codex has ended | As for a lapse: the ack, then the nudge once its Claude process has ended | `codex-delegate`'s `supervise` (`AT_MAX_WAIT`); `watch_pending` (`codex_progress`, `CODEX_ENDED`), `record` |
+| An end while the session sits idle forever | The waiter's exit notice starts a turn, and that turn's stop runs the guard. An end only the guard would say (an unheard waiter's, or a met condition with no waiter) waits for a stop, which an idle session doesn't have | An end nobody heard (its waiter `waiter_unheard`, or its Claude process gone): the nudge at the next start of another session, once. A met condition after an acknowledged lapse: the nudge only once the Claude process has ended (the acknowledged-lapse gap) | `Waiter.end`; the guard runs only at a stop; `left_watches` (`dc.ended_unheard`, `watch_orphaned`) |
 
 **The live re-arm is a manual check.** `claude -p` kills background shells about 5 s after its
 final result, so `tests/delegation/run.py` can't hold a wait across turns. A dated item in
@@ -997,7 +1094,8 @@ wins.
   `CLAUDE_PID` in the lead's Bash env, inside the sandbox and outside it, and it names the
   session's Claude process. Each sandboxed command gets its own PID namespace, so
   `/proc/$CLAUDE_PID` exists outside the sandbox and is missing inside it, where no session's pid
-  is visible. `SANDBOX_RUNTIME=1` is set only inside; A3 doesn't rely on it.
+  is visible. `SANDBOX_RUNTIME=1` is set only inside, and `pids_visible` reads it, so a stale
+  inherited `CLAUDE_PID` outside the sandbox isn't taken for it.
 - **`procStart`** (same day): a session file `~/.claude/sessions/<pid>.json` carries `procStart`,
   which equals field 22 (starttime) of `/proc/<pid>/stat`. The command name in that file may hold
   spaces, so the fields are split after the last `") "`.
@@ -1081,7 +1179,13 @@ wins.
   output dir and an older memory note carry. Its `~/.claude/sessions/<pid>.json` now names the
   id in its current `CLAUDE_CODE_SESSION_ID`, under the same pid. So when a process's session id
   changes, as on `/clear`, the old id leaves `live_sessions()`, which lets the guard adopt only
-  from a session that isn't live. The guard checks liveness anyway.
+  from a session that isn't live. The guard checks liveness anyway. The env follows the change
+  too, since it named the new id; this doesn't show which of the two updates first.
+- **A nested `claude -p` sets its own `CLAUDE_PID` and `CLAUDE_CODE_SESSION_ID`** (2026-10-02, a
+  2.1.287 run nested under a 2.1.286 lead, both read from `CLAUDE_CODE_EXECPATH`). Started from
+  the lead's Bash, its own Bash calls showed pid 9759 and session `0502d8ef...`, against the
+  lead's 36985 and `a8352a78...`. So `claude_identity` takes a nested run's session from its
+  env too: the walk finds the nested process, which is its `CLAUDE_PID`.
 - **A `claude -p` run writes its own sessions file** (same day), with `entrypoint: sdk-cli` and
   `kind` set. So the guard's parent walk, run from a nested `-p` session's hook, stops at the
   child's process, not its parent's.

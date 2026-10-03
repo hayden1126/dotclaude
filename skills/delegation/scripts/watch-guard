@@ -7,8 +7,8 @@ then says not to restart it, so a lead waiting on a long job can end its turn wi
 to wake it. This hook is the enforcement:
 
 - Watches (`delegation-ledger wait`; delegation_common documents the file). For each of this
-  session's open or acknowledged watches, including those this Claude process recorded under
-  an earlier session id that is no longer live (a /clear), which it adopts:
+  session's open or acknowledged watches, including those this Claude process recorded in a
+  session that isn't live (a /clear, or a watch recorded with no session), which it adopts:
   - a live waiter, or a background shell whose command holds the watch id, allows (the waiter
     records the end itself);
   - else a met condition is recorded done and blocks once: the dead waiter's notification
@@ -25,8 +25,8 @@ to wake it. This hook is the enforcement:
     (grown means later), then to age (over 60 s).
   - a watch of this session recorded under a Claude process that has ended (a crash, then
     `claude --continue`) is adopted too: this process records itself as the watch's. A waiter
-    still running there reports to nobody, so it is marked waiter_unheard and blocks once
-    with the re-arm command; a dead one is a lapse, as above.
+    whose process still runs (even with a stale heartbeat) reports to nobody, so it is marked
+    waiter_unheard and blocks once with the re-arm command; a dead one is a lapse, as above.
   - a watch of this session that ended (done, failed or stale) in the last 7 days while no
     Claude process was listening (its waiter was unheard, or its Claude process has ended),
     and isn't reported yet, blocks once and is recorded reported.
@@ -89,7 +89,6 @@ UNHEARD_REASON = ("Watch {id}'s waiter was started by a Claude Code process that
                   "with run_in_background and timeout 7200000.")
 ENDED_UNHEARD = ("Watch {id} ({desc}) ended ({state}) while no Claude Code process was "
                  "listening. Check the result and report it.")
-REPORTED_STATES = ("done", "failed", "stale")  # how a waiter ends; dropped is the lead's own
 CODEX_UNSTARTED = ("Watch {id} ({desc}): codex run {run} never started, since its wrapper "
                    "stopped before Codex did, so the watch is recorded failed. To retry, "
                    "{restart}, with run_in_background and timeout 7200000.")
@@ -493,39 +492,26 @@ def stop_digest(data):
     return hashlib.sha256(raw).hexdigest()[:16]
 
 
-def own_claude():
-    """(pid, procStart) of the Claude Code process running this hook: CLAUDE_PID when it's set
-    and alive, else the nearest ancestor, 6 levels up at most, with a
-    ~/.claude/sessions/<pid>.json. None when neither works, and then nothing is adopted."""
-    me = dc.claude_process()
-    if me is not None:
-        return me
-    pid = os.getppid()
-    for _ in range(6):
-        if pid is None or pid <= 1:
-            return None
-        if os.path.exists(os.path.expanduser(f"~/.claude/sessions/{pid}.json")):
-            return pid, dc.proc_start(pid)
-        pid = dc.proc_ppid(pid)
-    return None
-
-
 def crashed(w, sid, me):
     """Whether watch w is this session's and the Claude process it was recorded under has
     ended (a crash, then `claude --continue` in this process, `me`)."""
     return me is not None and w.get("session_id") == sid and dc.claude_gone(w)
 
 
-def adopt(sid, wids, me, now, until, clock):
-    """Adopt the watches gathered for it, log each, and return the ids of those whose waiter
-    still runs but reports to nobody. Each is checked again under the lock:
-    - one /clear left (dc.left_by_clear) moves into this session. One another session re-armed, or
-      whose old session came back, since it was gathered stays where it is;
-    - a crashed one records this process as its Claude process, and a waiter still running is
-      marked waiter_unheard: its exit goes to the process that ended."""
+def adoption(sid, me, now):
+    """The adoption step of the commit pass, as (adopt, settle). adopt(wid) is the update that
+    adopts watch wid, checked again under the lock:
+    - one this process left in a session that isn't live (dc.left_by_clear: a /clear, or a
+      watch recorded with no session) moves into this session. One another session re-armed,
+      or whose old session came back, since it was gathered stays where it is;
+    - a crashed one records this process as its Claude process, and a waiter whose process
+      still runs, even with a stale heartbeat, is marked waiter_unheard: its exit goes to the
+      process that ended.
+    settle(lost) logs each adoption whose watch was written (not in `lost`) and returns the ids
+    of those whose waiter still runs but reports to nobody."""
     moved, revived, unheard = [], [], []
 
-    def fn(wid):
+    def adopt(wid):
         def move(cur):
             if cur.get("state") not in dc.UNRESOLVED:
                 return
@@ -536,36 +522,38 @@ def adopt(sid, wids, me, now, until, clock):
             elif crashed(cur, sid, me):
                 revived.append((wid, cur.get("claude_pid")))
                 cur.update(claude_pid=me[0], claude_start=me[1])
-                if dc.waiter_alive(cur, now):
+                # By its process, not its heartbeat: a waiter suspended past its heartbeat (a
+                # paused VM) still exits to the ended process when it resumes.
+                if dc.pid_alive(cur.get("waiter_pid"), cur.get("waiter_start")):
                     cur["waiter_unheard"] = True
                     unheard.append(wid)
         return move
-    _, failed = dc.update_watches({wid: fn(wid) for wid in wids}, until, clock)
-    lost = {wid for wid, _ in failed}  # unwritten, so not adopted
-    for wid, old in moved:
-        if wid not in lost:
-            checks.log_error(f"watch-guard: adopted watch {wid} from session {old}: the same "
-                             "Claude process (a /clear)")
-    for wid, old in revived:
-        if wid not in lost:
-            checks.log_error(f"watch-guard: adopted watch {wid} from Claude process {old}, which "
-                             "has ended (a crash, then claude --continue)")
-    for wid, exc in failed:
-        log(f"adopt {wid}", exc)
-    return [wid for wid in unheard if wid not in lost]
+
+    def settle(lost):
+        for wid, old in moved:
+            if wid not in lost:
+                checks.log_error(f"watch-guard: adopted watch {wid} from session {old}: the "
+                                 "same Claude process (a /clear, or a watch recorded with no "
+                                 "session)")
+        for wid, old in revived:
+            if wid not in lost:
+                checks.log_error(f"watch-guard: adopted watch {wid} from Claude process {old}, "
+                                 "which has ended (a crash, then claude --continue)")
+        return [wid for wid in unheard if wid not in lost]
+    return adopt, settle
+
+
+def then(first, second):
+    """One watch update that runs `first`, then `second`, on the same read of the watch."""
+    def fn(cur):
+        first(cur)
+        second(cur)
+    return fn
 
 
 def ended_unheard(w, sid, now):
-    """Whether watch w, of this session, ended (REPORTED_STATES) in the last
-    dc.PRUNE_ENDED_DAYS while no Claude process was listening, and isn't reported yet: its
-    waiter was marked unheard, or the Claude process it ran under has ended."""
-    if (w.get("state") not in REPORTED_STATES or w.get("session_id") != sid
-            or w.get("reported") or not (w.get("waiter_unheard") or dc.claude_gone(w))):
-        return False
-    try:
-        return now - dc.parse_iso(w["ended"]).timestamp() <= dc.PRUNE_ENDED_DAYS * 86400
-    except (KeyError, TypeError, ValueError):
-        return False
+    """Whether watch w is this session's and ended while nobody listened (dc.ended_unheard)."""
+    return w.get("session_id") == sid and dc.ended_unheard(w, now)
 
 
 def later_stop(cur, stop, size, now):
@@ -587,11 +575,12 @@ def later_stop(cur, stop, size, now):
 def commit(sid, transcript, adopted, me, pendings, kills, scan_out, stop, size, now, until,
            clock):
     """Record everything gathered in one pass, under kills/<sid>.lock and then watches/.lock
-    (each wait bounded by `until`), and return (items, acks). Each watch is re-read under the
-    lock, so a waiter that re-armed meanwhile, a twin guard that recorded first, or a watch
-    that wasn't adopted after all (it's in another session), wins. A watch whose update fails
-    is logged and unsaid, and comes up again next stop; the rest, and the kills, go on.
-    LockBusy means nothing is recorded or said this stop."""
+    (each wait bounded by `until`), and return (items, acks). The adoptions and every watch's
+    item go in one update_watches, so LockBusy, which only a lock wait raises, means nothing is
+    recorded or said this stop. Each watch is re-read under the lock, so a waiter that re-armed
+    meanwhile, a twin guard that recorded first, or a watch that wasn't adopted after all (it's
+    in another session), wins. A watch whose update fails is logged and unsaid, adoption
+    included, and comes up again next stop; the rest, and the kills, go on."""
     items, acks, itemized, outcomes = [], [], set(), {}
 
     def record(p):
@@ -617,15 +606,19 @@ def commit(sid, transcript, adopted, me, pendings, kills, scan_out, stop, size, 
                 outcomes[wid] = "ack"
         return fn
 
+    adopt, settle = adoption(sid, me, now)
+    fns = {wid: adopt(wid) for wid in adopted}
+    for p in pendings:  # an adopted watch's item runs on what its adoption left
+        wid = p.w["id"]
+        fns[wid] = then(fns[wid], record(p)) if wid in fns else record(p)
     with dc.file_lock(kills_path(sid, ".lock"), until, clock):
-        for wid in adopt(sid, adopted, me, now, until, clock) if adopted else []:
+        _, failed = dc.update_watches(fns, until, clock) if fns else ({}, [])
+        for wid in settle({wid for wid, _ in failed}):
             items.append(UNHEARD_REASON.format(id=wid))
             itemized.add(wid)
-        if pendings:
-            _, failed = dc.update_watches({p.w["id"]: record(p) for p in pendings}, until, clock)
-            for wid, exc in failed:
-                outcomes.pop(wid, None)
-                log(f"watch {wid}", exc)
+        for wid, exc in failed:
+            outcomes.pop(wid, None)
+            log(f"watch {wid}", exc)
         for p in pendings:
             outcome = outcomes.get(p.w["id"])
             if outcome == "block":
@@ -696,7 +689,7 @@ def decide(data, now, clock=time.monotonic):
         prune_kills(now, sid)
     except Exception:  # noqa: BLE001
         log("prune")
-    me = own_claude()
+    me = dc.claude_process()  # this hook's Claude process; with none, nothing is adopted
     live = dc.live_sessions() if me is not None else {}
     every = [w for w in dc.all_watches() if isinstance(w.get("id"), str)]
     watches = [w for w in every if w.get("state") in dc.UNRESOLVED

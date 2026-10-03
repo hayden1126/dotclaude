@@ -446,13 +446,50 @@ def pid_alive(pid, start=None):
     return start is None or str(_start_of(fields)) == str(start)
 
 
+SESSION_WALK = 6  # how many parents up claude_ancestor looks for a sessions file
+
+
+def ancestors():
+    """This process's pid, then its parent's and so on up, short of pid 1, nearest first."""
+    out, pid = [], os.getpid()
+    while pid is not None and pid > 1 and pid not in out and len(out) < 64:
+        out.append(pid)
+        pid = proc_ppid(pid)
+    return out
+
+
+def claude_ancestor(chain=None):
+    """(pid, procStart, sessionId) of the nearest process in `chain` (ancestors(), this process
+    first), at most SESSION_WALK parents up, whose ~/.claude/sessions/<pid>.json names that pid
+    and its procStart: the Claude Code process this one runs under, and its session as that
+    file names it (None when it names none). None when there is no such process (outside Claude
+    Code, or sandboxed, where no pid outside the sandbox can be seen). A `claude -p` run writes
+    its own sessions file, so a nested one finds itself, not its parent."""
+    for pid in (ancestors() if chain is None else chain)[:SESSION_WALK + 1]:
+        try:
+            with open(os.path.expanduser(f"~/.claude/sessions/{pid}.json")) as f:
+                d = json.load(f)
+        except (OSError, ValueError):
+            continue
+        start = proc_start(pid)
+        if (isinstance(d, dict) and d.get("pid") == pid
+                and (d.get("procStart") is None or str(d["procStart"]) == str(start))):
+            sid = d.get("sessionId")
+            return pid, start, (sid if isinstance(sid, str) and sid else None)
+    return None
+
+
 def pids_visible():
-    """False when this process can't see its own Claude session's pid. Claude Code sets
-    CLAUDE_PID in the Bash tool's env, and that process is alive by definition, so not seeing
-    it means a sandbox PID namespace (each sandboxed command gets its own), where no pid check
-    means anything. True when CLAUDE_PID is unset (tmux, a plain terminal)."""
+    """False inside the sandbox, whose PID namespace (each sandboxed command gets its own) hides
+    every pid outside it, so no pid check means anything there. SANDBOX_RUNTIME=1, set only
+    inside, says so. So does a CLAUDE_PID that can't be seen, unless claude_ancestor finds a live
+    Claude process anyway: then CLAUDE_PID is only stale, inherited from a process that has
+    ended (a tmux server started from a Claude Bash call, say). True when CLAUDE_PID is unset
+    (tmux, a plain terminal)."""
+    if os.environ.get("SANDBOX_RUNTIME") == "1":
+        return False
     pid = os.environ.get("CLAUDE_PID")
-    return not pid or pid_alive(pid)
+    return not pid or pid_alive(pid) or claude_ancestor() is not None
 
 
 def codex_state(e, visible=True):
@@ -618,18 +655,20 @@ def codex_stopped(e):
 #                   blocked_at
 #   session_id      a --resume moves the watch to the resuming session, unless it has none
 #   claude_pid, claude_start
-#                   the Claude Code process (CLAUDE_PID) and its procStart that the waiter runs
-#                   under, which its exit notifies; absent outside Claude Code. /clear keeps the
-#                   process but starts a new session id, so that process's watch guard adopts
-#                   the watch. After a crash and `claude --continue`, the new process's guard
-#                   records itself here
+#                   the Claude Code process (claude_process) and its procStart that the waiter
+#                   runs under, which its exit notifies; absent outside Claude Code. /clear
+#                   keeps the process but starts a new session id, so that process's watch
+#                   guard adopts the watch. After a crash and `claude --continue`, the new
+#                   process's guard records itself here
 #   waiter_unheard  true when the guard recorded itself as claude_pid while the waiter still
 #                   ran under a process that had ended: that waiter's exit reaches nobody, so it
 #                   may be taken over, and its end is reported by the guard. Taking the watch
 #                   over clears it
 #   ended           when it left UNRESOLVED (ISO); absent until then
-#   reported        true once a live Claude Code process has heard how the watch ended: its
-#                   waiter's Claude process ran when it recorded the end, or a guard said it
+#   reported        set when the watch ends: true once a live Claude Code process has heard
+#                   how it ended (its waiter's Claude process ran when it recorded the end, or a
+#                   guard or the session-start nudge said it), else false. A watch that ended
+#                   before the field existed has none, and counts as reported
 # open is waiting; acknowledged is a lapse the guard let a stop through on; done, failed and
 # stale are how the waiter saw the condition end (it exits 0, 1, 2); dropped is `wait --drop`.
 # Every change goes through update_watch, under watches/.lock, written atomically and only when
@@ -648,6 +687,7 @@ def codex_stopped(e):
 WATCH_STATES = ("open", "acknowledged", "done", "failed", "stale", "dropped")
 UNRESOLVED = ("open", "acknowledged")  # the states a waiter may take over
 ENDED = ("done", "failed", "stale", "dropped")
+REPORTED_STATES = ("done", "failed", "stale")  # how a waiter ends; dropped is the lead's own
 WAIT_POLL_S = 15  # the waiter's default seconds between polls
 MAX_WAIT_MIN = 110  # a waiter's ceiling: with a 5-minute finalize, under the 120-minute Bash cap
 REARM = ("still running: re-arm with delegation-ledger wait --resume {} "
@@ -948,24 +988,41 @@ def live_sessions():
     return out
 
 
-def wait_session():
-    """The session a watch belongs to: CLAUDE_CODE_SESSION_ID, else the live session whose pid
-    is CLAUDE_PID, else "unknown"."""
-    sid = os.environ.get("CLAUDE_CODE_SESSION_ID")
-    if sid:
-        return sid
-    pid = os.environ.get("CLAUDE_PID")
-    return next((s for s, p in live_sessions().items() if pid and str(p) == pid), "unknown")
+def claude_identity():
+    """(process, session): the Claude Code process this command runs under ((pid, procStart),
+    or None) and its session id ("unknown" when none can be trusted), from one walk.
+    CLAUDE_PID and CLAUDE_CODE_SESSION_ID are inherited, so on their own they can name another
+    process's session: a nested `claude -p` started from the lead's Bash may carry the lead's,
+    and a tmux server started from a Claude Bash call carries ones that go stale. So the
+    ancestor walk decides (claude_ancestor):
+    - it finds process A, CLAUDE_PID is A, and CLAUDE_CODE_SESSION_ID is set: A set both vars
+      for this Bash call, so they are its own, and that id is the session. The env follows a
+      session change (observed), and nothing verified says A's sessions file is rewritten
+      before the first Bash call after /clear;
+    - it finds A otherwise: A's sessions file names the session ("unknown" when it names
+      none). The env can't: CLAUDE_PID isn't A, so the env may be another process's, or it
+      names no session;
+    - it finds nothing: the env counts only when CLAUDE_PID names an ancestor of this process,
+      at any level. Then that is the process, and CLAUDE_CODE_SESSION_ID the session."""
+    chain = ancestors()
+    found = claude_ancestor(chain)
+    try:
+        env_pid = int(os.environ.get("CLAUDE_PID") or "")
+    except ValueError:
+        env_pid = None
+    env_sid = os.environ.get("CLAUDE_CODE_SESSION_ID") or None
+    if found is not None:
+        pid, start, sid = found
+        return (pid, start), (env_sid if env_pid == pid and env_sid else sid) or "unknown"
+    if env_pid is None or env_pid not in chain:
+        return None, "unknown"
+    return (env_pid, proc_start(env_pid)), env_sid or "unknown"
 
 
 def claude_process():
-    """(pid, procStart) of the Claude Code process this command runs under, from CLAUDE_PID, or
-    None when it's unset or not visible (sandboxed)."""
-    try:
-        pid = int(os.environ.get("CLAUDE_PID") or "")
-    except ValueError:
-        return None
-    return (pid, proc_start(pid)) if pid_alive(pid) else None
+    """(pid, procStart) of the Claude Code process this command runs under (claude_identity),
+    or None."""
+    return claude_identity()[0]
 
 
 def claude_alive(w):
@@ -977,10 +1034,11 @@ def claude_alive(w):
 
 
 def left_by_clear(w, me, live):
-    """Whether /clear left watch w in the Claude process `me` ((pid, procStart), or None): it
-    was recorded under that process, in a session that isn't live (not in `live`, from
-    live_sessions()). After /clear the process runs on under a new session id, and its sessions
-    file names the new one, so the old id leaves the live set. A live session's watch never
+    """Whether watch w was left in the Claude process `me` ((pid, procStart), or None): it was
+    recorded under that process, in a session that isn't live (not in `live`, from
+    live_sessions()). That is a watch from before a /clear, since the process runs on under a
+    new session id and its sessions file names the new one, so the old id leaves the live set;
+    or one recorded with no session ("unknown", never live). A live session's watch never
     counts, whatever the pids say: that session has it."""
     return (me is not None and w.get("claude_pid") == me[0]
             and str(w.get("claude_start")) == str(me[1]) and w.get("session_id") not in live)
@@ -993,18 +1051,37 @@ def claude_gone(w):
     return w.get("claude_pid") is not None and not claude_alive(w)
 
 
+def ended_unheard(w, now=None):
+    """Whether watch w ended (REPORTED_STATES) in the last PRUNE_ENDED_DAYS while no Claude Code
+    process was listening, and nobody has reported it since: `reported` is false, and its
+    waiter was marked waiter_unheard or the Claude process it ran under has ended. A watch with
+    no `reported` ended before the field existed, so it counts as reported and never shows.
+    The watch guard of its session says it at a stop, the session-start nudge at the start of
+    any session but its own, and the views (watch, open) until it is reported."""
+    now = time.time() if now is None else now
+    if (w.get("state") not in REPORTED_STATES or w.get("reported", True)
+            or not (w.get("waiter_unheard") or claude_gone(w))):
+        return False
+    try:
+        return now - parse_iso(w["ended"]).timestamp() <= PRUNE_ENDED_DAYS * 86400
+    except (KeyError, TypeError, ValueError):
+        return False
+
+
 def watch_orphaned(w, current=None, live=None, now=None):
-    """Whether nobody will hear from an unresolved watch, whatever its waiter's state: the
-    Claude process it was recorded under has ended (claude_gone), or, with none recorded, its
-    session isn't `current` (the caller's) or live. A watch with no session ("unknown") was
-    started outside Claude Code and reports to whoever ran it, so only a dead waiter orphans
-    it. `live` is live_sessions(), if read."""
+    """Whether nobody will hear from an unresolved watch's waiter, whatever its state. With a
+    Claude process recorded, that process decides, whatever the session: gone (claude_gone),
+    nobody hears its waiter's exit; alive, it does, and its guard adopts the watch (its own
+    session's, or left_by_clear, which covers an "unknown" session too). With none recorded,
+    the session decides: not while it is `current` (the caller's) or live. A watch with no
+    session and no process was started outside Claude Code and reports to whoever ran it, so
+    only a dead waiter orphans it. `live` is live_sessions(), if read."""
+    if w.get("claude_pid") is not None:
+        return not claude_alive(w)
     sid = w.get("session_id")
     if sid in (None, "unknown"):
         return not waiter_alive(w, now)
-    if claude_gone(w):
-        return True
-    if (current and sid == current) or claude_alive(w):
+    if current and sid == current:
         return False
     return sid not in (live_sessions() if live is None else live)
 
@@ -1024,10 +1101,13 @@ class Waiter:
     """This process as one watch's waiter: it takes the watch over, heartbeats it, and records
     how it ended. Each write checks under the lock that it still owns the watch, and steps aside
     (StepAside) when it doesn't. `delegation-ledger wait` polls a condition with it, and a
-    codex-delegate wrapper is the waiter of its own run's watch."""
+    codex-delegate wrapper is the waiter of its own run's watch. `identity` is
+    claude_identity(), found once per command, so the watch's process and session come from
+    the same walk."""
 
-    def __init__(self, wid, poll, session):
-        self.wid, self.poll, self.session, self.me = wid, poll, session, os.getpid()
+    def __init__(self, wid, poll, identity):
+        self.wid, self.poll, self.me = wid, poll, os.getpid()
+        self.claude, self.session = identity
         self.start = proc_start(self.me)
 
     def own(self, w):
@@ -1043,9 +1123,12 @@ class Waiter:
 
     def refuse_a_live_waiter(self, w):
         """WaitRefused when the watch's waiter is alive and someone will hear from it
-        (watch_orphaned). A waiter whose heartbeat went stale (a suspended VM, say) can still be
-        taken over, and so can a live one nobody hears: its Claude process has ended, the guard
-        marked it waiter_unheard, or its session is gone. It steps aside at its next beat."""
+        (watch_orphaned, which goes by the Claude process first): its process runs, whatever
+        its session; with no process recorded, its session is the caller's or live; with
+        neither, always. A waiter whose heartbeat went stale (a suspended VM, say) can still be
+        taken over, and so can a live one nobody hears: its Claude process has ended, even in a
+        session that runs on, the guard marked it waiter_unheard, or, with no process recorded,
+        its session is gone. It steps aside at its next beat."""
         if waiter_alive(w) and not w.get("waiter_unheard") and not watch_orphaned(w, self.session):
             raise WaitRefused(f"watch {w.get('id')} already has a live waiter (pid "
                               f"{w.get('waiter_pid')}); it will notify its session")
@@ -1079,9 +1162,8 @@ class Waiter:
                 w["session_id"] = self.session
             # The process this waiter's exit notifies, so its guard adopts the watch after a
             # /clear; none outside Claude Code, where the exit reaches whoever ran it.
-            claude = claude_process()
-            if claude is not None:
-                w.update(claude_pid=claude[0], claude_start=claude[1])
+            if self.claude is not None:
+                w.update(claude_pid=self.claude[0], claude_start=self.claude[1])
             else:
                 w.pop("claude_pid", None)
                 w.pop("claude_start", None)
@@ -1104,11 +1186,10 @@ class Waiter:
         return update_watch(self.wid, beat)
 
     def end(self, verdict):
-        """Record how the watch ended: done, failed or stale, and that it's reported when this
-        waiter's exit notifies a live Claude process."""
+        """Record how the watch ended: done, failed or stale, and whether it's reported: true
+        when this waiter's exit notifies a live Claude process, else false."""
         def end(w):
             self.own(w)
-            w.update(state=verdict, ended=now_iso())
-            if claude_alive(w) and not w.get("waiter_unheard"):
-                w["reported"] = True
+            w.update(state=verdict, ended=now_iso(),
+                     reported=claude_alive(w) and not w.get("waiter_unheard"))
         return update_watch(self.wid, end)
