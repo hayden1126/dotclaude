@@ -692,20 +692,10 @@ def codex_stopped(e):
 #                   blocked_at
 #   end_blocked_at  when the guard blocked a stop on an end it couldn't judge (ISO); absent
 #                   before: a codex run that ended with its finalize owed, or a --log verdict
-#                   that a line in a skipped part of the log could change (the guard's
-#                   `unseen`). It blocks on that once, even after the lapse was acknowledged,
-#                   and unblock clears it with blocked_at. An end the guard can judge is
-#                   recorded instead, which resolves the watch
-#   cut_blocked_at  the same for a --log condition still unmet after the guard skipped part of
-#                   the log, when nothing else (no pids, no stale_min) would end it later: the
-#                   skipped part may have held its done or fail line. Kept apart from
-#                   end_blocked_at, so an end judged later still blocks once
-#   log_cursor      for a --log condition, how far the log has been read: scan_log's cursor
-#                   ({"offset", "done", "failed", "size"}) plus "cut", true once some of the
-#                   log was skipped unread. The waiter records its own at each heartbeat (never
-#                   cut: it reads every byte), and a guard that finds no live waiter reads on
-#                   from it and records its progress, so each byte is read once. Absent until
-#                   one of them records it
+#                   that a line further back than the log's last 1 MB, which is all the guard
+#                   reads, could change (the guard's `unseen`). It blocks on that once, even
+#                   after the lapse was acknowledged, and unblock clears it with blocked_at. An
+#                   end the guard can judge is recorded instead, which resolves the watch
 #   session_id      a --resume moves the watch to the resuming session, unless it has none
 #   claude_pid, claude_start
 #                   the Claude Code process (claude_process) and its procStart that the waiter
@@ -717,6 +707,12 @@ def codex_stopped(e):
 #                   ran under a process that had ended: that waiter's exit reaches nobody, so it
 #                   may be taken over, and its end is reported by the guard. Taking the watch
 #                   over clears it
+#   waiter_detached true when the watch's waiter is, or was when it recorded the end, the
+#                   guard's detached one: watch-guard starts it (spawn_waiter) when it
+#                   acknowledges a lapse, double-forked away from the hook, with the guard's
+#                   session and Claude process. Its exit reaches no one, so its end is recorded
+#                   unreported, for the guard or the nudge to say; any other waiter may take the
+#                   watch over from it, which clears the flag. Absent otherwise
 #   ended           when it left UNRESOLVED (ISO); absent until then
 #   reported        set when the watch ends: true once a live Claude Code process has heard
 #                   how it ended (its waiter's Claude process ran when it recorded the end, or a
@@ -1116,13 +1112,14 @@ def claude_gone(w):
 def ended_unheard(w, now=None):
     """Whether watch w ended (REPORTED_STATES) in the last PRUNE_ENDED_DAYS while no Claude Code
     process was listening, and nobody has reported it since: `reported` is false, and its
-    waiter was marked waiter_unheard or the Claude process it ran under has ended. A watch with
-    no `reported` ended before the field existed, so it counts as reported and never shows.
-    The watch guard of its session says it at a stop, the session-start nudge at the start of
-    any session but its own, and the views (watch, open) until it is reported."""
+    waiter was marked waiter_unheard or was the guard's detached one (whose exit reaches no
+    one), or the Claude process it ran under has ended. A watch with no `reported` ended before
+    the field existed, so it counts as reported and never shows. The watch guard of its session
+    says it at a stop, the session-start nudge at the start of any session but its own, and the
+    views (watch, open) until it is reported."""
     now = time.time() if now is None else now
     if (w.get("state") not in REPORTED_STATES or w.get("reported", True)
-            or not (w.get("waiter_unheard") or claude_gone(w))):
+            or not (w.get("waiter_unheard") or w.get("waiter_detached") or claude_gone(w))):
         return False
     try:
         return now - parse_iso(w["ended"]).timestamp() <= PRUNE_ENDED_DAYS * 86400
@@ -1154,10 +1151,10 @@ def watch_orphaned(w, current=None, live=None, now=None):
 
 def unblock(w):
     """Clear an unresolved watch's lapse record (blocked_at, blocked_stop, blocked_size,
-    end_blocked_at, cut_blocked_at) and its acknowledgment, so the guard's next block on it is
-    a first one: a waiter that takes it over or polls it is live again, and a conversation that
-    adopts it never saw the old block."""
-    for key in ("blocked_size", "blocked_stop", "end_blocked_at", "cut_blocked_at"):
+    end_blocked_at) and its acknowledgment, so the guard's next block on it is a first one: a
+    waiter that takes it over or polls it is live again, and a conversation that adopts it never
+    saw the old block."""
+    for key in ("blocked_size", "blocked_stop", "end_blocked_at"):
         w.pop(key, None)
     w.update(state="open", blocked_at=None)
 
@@ -1179,12 +1176,14 @@ class Waiter:
     (StepAside) when it doesn't. `delegation-ledger wait` polls a condition with it, and a
     codex-delegate wrapper is the waiter of its own run's watch. `identity` is
     claude_identity(), found once per command, so the watch's process and session come from
-    the same walk."""
+    the same walk; for a `detached` waiter (the guard's, after it acknowledged a lapse) it is
+    the guard's, which the guard passed on."""
 
-    def __init__(self, wid, poll, identity):
+    def __init__(self, wid, poll, identity, detached=False):
         self.wid, self.poll, self.me = wid, poll, os.getpid()
         self.claude, self.session = identity
         self.start = proc_start(self.me)
+        self.detached = detached
 
     def own(self, w):
         """Raise StepAside unless this waiter still owns the watch."""
@@ -1204,8 +1203,10 @@ class Waiter:
         neither, always. A waiter whose heartbeat went stale (a suspended VM, say) can still be
         taken over, and so can a live one nobody hears: the guard marked it waiter_unheard, its
         Claude process has ended, even in a session that runs on, or, with no process recorded,
-        its session is gone. It steps aside at its next beat."""
-        if waiter_alive(w) and not watch_orphaned(w, self.session):
+        its session is gone. It steps aside at its next beat. So does the guard's detached
+        waiter, which anyone may take over: a lead that re-arms wants the end itself."""
+        if (waiter_alive(w) and not w.get("waiter_detached")
+                and not watch_orphaned(w, self.session)):
             raise WaitRefused(f"watch {w.get('id')} already has a live waiter (pid "
                               f"{w.get('waiter_pid')}); it will notify its session")
 
@@ -1220,6 +1221,15 @@ class Waiter:
             raise WaitRefused(f"watch {w.get('id')} already waits on {run}: "
                               f"delegation-ledger wait --resume {w.get('id')}")
 
+    def refuse_unless_left_to_the_guard(self, w):
+        """For a detached waiter: WaitRefused unless the watch is as the guard left it when it
+        started this waiter: acknowledged, in the guard's session, with no live waiter. A
+        re-arm since, or a twin guard's detached waiter, has it."""
+        if (w.get("state") != "acknowledged" or w.get("session_id") != self.session
+                or waiter_alive(w)):
+            raise WaitRefused(f"watch {self.wid} is no longer an acknowledged lapse with no "
+                              f"waiter in session {self.session}, so no detached waiter is due")
+
     def take(self, new):
         """Become the watch's waiter, creating it from `new` when given."""
         def take(w):
@@ -1230,6 +1240,8 @@ class Waiter:
                 raise WaitRefused(f"no watch {self.wid!r}")
             elif w.get("state") not in UNRESOLVED:
                 raise WaitRefused(f"watch {self.wid} is {w.get('state')}; start a new wait")
+            elif self.detached:
+                self.refuse_unless_left_to_the_guard(w)
             else:
                 self.refuse_a_live_waiter(w)
             # A resume moves the watch to the caller's session, so one a crashed session left
@@ -1244,29 +1256,32 @@ class Waiter:
                 w.pop("claude_pid", None)
                 w.pop("claude_start", None)
             w.pop("waiter_unheard", None)
+            if self.detached:
+                w["waiter_detached"] = True
+            else:
+                w.pop("waiter_detached", None)
             unblock(w)
             w.update(waiter_pid=self.me, waiter_start=self.start, poll_s=self.poll,
                      waiter_heartbeat=now_iso())
         return update_watch(self.wid, take)
 
-    def beat(self, cursor=None):
-        """Refresh the heartbeat, and record `cursor`, a --log condition's scan_log cursor, as
-        log_cursor, so a guard that finds this waiter gone reads on from there. A waiter that
-        polls is live, so a lapse the guard saw meanwhile is over."""
+    def beat(self):
+        """Refresh the heartbeat. A waiter that polls is live, so a lapse the guard saw meanwhile
+        is over."""
         def beat(w):
             self.own(w)
             if w.get("state") in UNRESOLVED:
                 unblock(w)
                 w["waiter_heartbeat"] = now_iso()
-                if cursor is not None:
-                    w["log_cursor"] = dict(cursor, cut=False)
         return update_watch(self.wid, beat)
 
     def end(self, verdict):
         """Record how the watch ended: done, failed or stale, and whether it's reported: true
-        when this waiter's exit notifies a live Claude process, else false."""
+        when this waiter's exit notifies a live Claude process, else false. A detached
+        waiter's notifies no one."""
         def end(w):
             self.own(w)
             w.update(state=verdict, ended=now_iso(),
-                     reported=claude_alive(w) and not w.get("waiter_unheard"))
+                     reported=(claude_alive(w) and not w.get("waiter_unheard")
+                               and not w.get("waiter_detached")))
         return update_watch(self.wid, end)

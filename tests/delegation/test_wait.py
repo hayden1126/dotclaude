@@ -265,18 +265,6 @@ class Conditions(WaitEnv):
         self.end(job)
         self.finish(p, 0)
 
-    def test_the_waiter_records_how_far_it_read_at_each_heartbeat(self):
-        # So a guard that finds it gone reads on from there, not from a tail.
-        log = self.path("job.log")
-        with open(log, "w") as f:
-            f.write("step 1\n")
-        p = self.start("--log", log, "--done", "DONE")
-        self.waiting(p)
-        w = self.until(lambda: (self.only().get("log_cursor") or {}).get("offset") == 7
-                       and self.only())
-        self.assertEqual(w["log_cursor"], {"offset": 7, "done": False, "failed": False,
-                                           "size": 7, "cut": False})
-
     def test_log_fail_line_exits_1(self):
         log = self.path("job.log")
         p = self.start("--log", log, "--done", "DONE", "--fail", "Traceback")
@@ -408,6 +396,70 @@ class FirstScan(unittest.TestCase):
         w = {"condition": {"log": self.log, "done": "^OK$", "stale_min": 1}, "created": old,
              "poll_s": 15}
         self.assertEqual(dc.watch_verdict(w, now=self.now)[0], "done")
+
+
+class Detached(WaitEnv):
+    """`wait --resume <id> --detached <session> [--claude <pid>:<procStart>]`: the waiter
+    watch-guard starts when it acknowledges a lapse (spawn_waiter). Its own output goes to
+    /dev/null, so it logs a refusal."""
+
+    def acked(self, **fields):
+        """An acknowledged lapse in session s1, its waiter dead."""
+        self.update("w-1", **dict({
+            "id": "w-1", "session_id": "s1", "state": "acknowledged", "description": "the build",
+            "condition": {"file": self.path("never")}, "created": dc.now_iso(),
+            "waiter_pid": DEAD, "waiter_start": None, "waiter_heartbeat": dc.now_iso(),
+            "poll_s": 15, "blocked_at": dc.now_iso()}, **fields))
+
+    def detached(self, *extra):
+        me = f"{os.getpid()}:{dc.proc_start(os.getpid())}"
+        return self.run_("--resume", "w-1", "--detached", "s1", "--claude", me, *extra)
+
+    def err_log(self):
+        try:
+            with open(os.path.join(self.state, "dotclaude", "delegation-ledger.err")) as f:
+                return f.read()
+        except FileNotFoundError:
+            return ""
+
+    def test_it_takes_the_lapse_as_the_guards_and_records_its_end_unreported(self):
+        self.acked()
+        open(self.path("never"), "w").close()
+        p = self.detached()
+        self.assertEqual(p.returncode, 0, p.stderr)
+        w = self.only()
+        self.assertEqual((w["state"], w["reported"], w["waiter_detached"], w["session_id"],
+                          w["claude_pid"]), ("done", False, True, "s1", os.getpid()))
+        self.assertTrue(dc.ended_unheard(w))  # for the guard, or the nudge, to say
+
+    def test_it_refuses_a_watch_that_isnt_an_acknowledged_lapse_left_to_it(self):
+        live = {"waiter_pid": os.getpid(), "waiter_start": dc.proc_start(os.getpid())}
+        for fields in ({"state": "open"}, {"session_id": "s2"}, live):
+            with self.subTest(fields=fields):
+                self.acked(**fields)
+                p = self.detached()
+                self.assertEqual(p.returncode, USAGE, p.stderr)
+                self.assertIn("no longer an acknowledged lapse", self.err_log())
+                self.assertNotIn("waiter_detached", self.only())
+
+    def test_it_refuses_a_claude_process_that_isnt_running_or_a_bad_session(self):
+        self.acked()
+        p = self.run_("--resume", "w-1", "--detached", "s1", "--claude", f"{DEAD}:1")
+        self.assertEqual(p.returncode, USAGE)
+        p = self.run_("--resume", "w-1", "--detached", "s1; rm -rf x")
+        self.assertEqual(p.returncode, USAGE)
+        self.assertIn(f"--claude '{DEAD}:1' names no running Claude Code process",
+                      self.err_log())
+        self.assertIn("is not a session id", self.err_log())
+        self.assertEqual(self.only()["waiter_pid"], DEAD)
+
+    def test_a_resume_takes_over_a_live_detached_waiter(self):
+        # The lead re-arming wants the end itself, so the guard's waiter isn't a refusal.
+        self.acked(waiter_pid=os.getpid(), waiter_start=dc.proc_start(os.getpid()),
+                   waiter_detached=True, state="open")
+        p = self.run_("--resume", "w-1", "--max", "0.002")
+        self.assertEqual(p.returncode, AT_MAX, p.stderr)
+        self.assertNotIn("waiter_detached", self.only())
 
 
 class Exits(WaitEnv):
@@ -1271,6 +1323,17 @@ class Views(WaitEnv):
         wid = self.waiting(p)["id"]
         self.assertIn(f"  {wid}  'the build'  pid {job.pid} (sleep) exits  waiter alive",
                       self.cli("watch").splitlines())
+
+    def test_the_guards_detached_waiter_shows_as_its_with_the_re_arm_line(self):
+        job = self.job()
+        p = self.start("--pid", str(job.pid), "--desc", "the build")
+        wid = self.waiting(p)["id"]
+        self.update(wid, waiter_detached=True)
+        rearm = f"re-arm: delegation-ledger wait --resume {wid}"
+        self.assertIn(f"  {wid}  'the build'  pid {job.pid} (sleep) exits  the guard's detached "
+                      f"waiter alive; a later stop says its end, or {rearm} to be woken",
+                      self.cli("watch").splitlines())
+        self.assertIn("the guard's detached waiter pid", self.cli("open").splitlines()[3])
 
     def test_an_unresolved_watch_shows_however_old_it_is(self):
         wid = self.lapsed(self.job())

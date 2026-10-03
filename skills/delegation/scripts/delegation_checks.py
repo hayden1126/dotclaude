@@ -494,9 +494,13 @@ def unheard_nudge(unheard):
 
 def mark_reported(watches, now=None):
     """Record the watches the nudge named as reported, so they show once. Each is checked again
-    under the lock; a busy lock or a failed write is logged, and the watch shows again."""
+    under the lock; a busy lock or a failed write is logged, and the watch shows again. A
+    detached waiter's end whose Claude process still runs is left unreported: that process's
+    guard says it to the model at its next stop, and the nudge, to Hayden, names it again
+    until then."""
     def report(cur):
-        if dc.ended_unheard(cur, now):
+        if dc.ended_unheard(cur, now) and not (cur.get("waiter_detached")
+                                               and dc.claude_alive(cur)):
             cur["reported"] = True
     try:
         _, failed = dc.update_watches({w["id"]: report for w in watches}, time.monotonic() + 1)
