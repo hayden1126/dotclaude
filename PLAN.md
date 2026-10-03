@@ -4,6 +4,17 @@
 > planned it, so the planner isn't the implementer: a `writer` builds each task in a worktree, a
 > fresh `reviewer` checks each diff, and the lead runs the suites and merges.
 
+> **Status (2026-10-03): built** on `feat/watch-guard`, in 21 writer rounds, each checked by a
+> fresh reviewer, and installed on HAYPC.
+> - **What shipped:** T1 to T5. T6 shipped as the dated manual checks in `skills/delegation/due.toml`
+>   plus the canary strings; `run.py` has no `rearm` case.
+> - **Where the as-built design lives:** `docs/delegation.md` "Long waits" (its "Who hears a watch"
+>   table and the known gaps), and the code.
+> - **This file is now history.** The task text below is the plan as written; where it differs, the
+>   code and the docs win. The dated **Decision** and **Live result** notes record why it changed:
+>   the kill catch, Codex detached from its wrapper, and the detached waiter after an acknowledged
+>   lapse.
+
 ## Approach
 
 **The gap.**
@@ -352,9 +363,10 @@ settings docs say.
   - **A normal exit is safe.** A `start_new_session` child outlived its parent's normal exit, and
     was adopted by pid 553, so Claude Code isn't a subreaper. The `--max-wait` exit 75 therefore
     leaves Codex running, as designed.
-  - **False claims:** the launch line's "If this command is stopped, Codex keeps running", and
-    SKILL §5's "If the wrapper does get killed anyway, Codex keeps running". The second was
-    false before this branch too.
+  - **False claims at the time:** the launch line's "If this command is stopped, Codex keeps
+    running", and SKILL §5's "If the wrapper does get killed anyway, Codex keeps running". The
+    second was false before this branch too. Both are true since the detach (the Decision below,
+    rerun live on the installed build).
 - **Decision (Hayden, 2026-10-02): detach Codex.**
   - **The supervisor:** a double-forked process runs Codex, writes `codex.pid` and then
     `codex.rc`, and the wrapper polls for them. A killed wrapper leaves Codex running, and the
