@@ -637,8 +637,9 @@ def finish(row, rc, thread_id, since_epoch, out, stream=None):
     try:
         with open(os.path.join(out, "report.json")) as f:
             obj = json.load(f)
-        errs = dc.validate_report(obj)
-        report_ok, report_status = not errs, obj.get("status")
+        errs = dc.validate_report(obj)  # a list or a string is an error there, not a crash
+        report_ok = not errs
+        report_status = obj.get("status") if isinstance(obj, dict) else None
         report_error = errs[0] if errs else None
     except (OSError, ValueError) as e:
         report_error = f"report.json unreadable ({type(e).__name__})"

@@ -347,23 +347,176 @@ class Unwatchable(unittest.TestCase):
 
 
 class ScanLog(unittest.TestCase):
-    def test_a_partial_line_matches_once_it_settles_or_the_pids_are_gone(self):
-        with tempfile.TemporaryDirectory() as d:
-            log = os.path.join(d, "job.log")
-            with open(log, "w") as f:
-                f.write("seen\nOK")
+    """scan_log: a partial last line counts as finished only once the log has been quiet for a
+    poll (its mtime), or its pids are gone; a replaced file is read from its start."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.log = os.path.join(self.tmp.name, "job.log")
+        with open(self.log, "w") as f:
+            f.write("seen\nOK")
+        self.now = time.time()
+
+    def age(self, s, path=None):
+        os.utime(path or self.log, (self.now - s, self.now - s))
+
+    def scan(self, cur, **kw):
+        return dc.scan_log(self.log, "^OK$", None, cur, quiet_s=15, now=self.now, **kw)
+
+    def test_a_partial_line_matches_once_quiet_for_a_poll_or_its_pids_are_gone(self):
+        self.age(1)  # just written: it may still be being written
+        cur = dc.log_cursor()
+        for _ in range(2):  # a size that held between scans isn't quiet: output can buffer
+            self.assertIsNone(self.scan(cur))
+        self.age(15)
+        self.assertEqual(self.scan(cur), "done")
+        cur = dc.log_cursor()
+        for _ in range(2):  # the pids still run: a partial line may not be finished
+            self.assertIsNone(self.scan(cur, pids_gone=False))
+        self.assertEqual(self.scan(cur, pids_gone=True), "done")
+        with open(self.log, "a") as f:
+            f.write("AY")
+        self.age(60)
+        self.assertIsNone(self.scan(dc.log_cursor()))  # the finished line is OKAY
+
+    def test_a_log_replaced_by_another_file_is_read_from_its_start(self):
+        with open(self.log, "w") as f:
+            f.write("old run\n")
+        cur = dc.log_cursor()
+        self.assertIsNone(self.scan(cur))
+        new = os.path.join(self.tmp.name, "new.log")
+        with open(new, "w") as f:
+            f.write("OK\nand the new run goes on past the old offset\n")
+        os.replace(new, self.log)  # `> log` from a new process, or a rotation
+        self.assertEqual(self.scan(cur), "done")
+        link = os.path.join(self.tmp.name, "current.log")
+        os.symlink(self.log, link)
+        cur = dc.log_cursor()
+        self.assertEqual(dc.scan_log(link, "^OK$", None, cur), "done")
+        other = os.path.join(self.tmp.name, "other.log")
+        with open(other, "w") as f:
+            f.write("a longer first line, then the done line\nOK\n")
+        os.remove(link)
+        os.symlink(other, link)  # re-pointed
+        cur["done"] = False
+        self.assertEqual(dc.scan_log(link, "^OK$", None, cur), "done")
+
+    def test_a_log_is_read_in_chunks_with_a_beat_between_and_a_line_across_two_matches(self):
+        with open(self.log, "w") as f:
+            f.write("x" * 30 + "\nBUILD OK\n" + "y" * 30 + "\n")
+        beats = []
+        with mock.patch.object(dc, "SCAN_CHUNK", 16):  # "BUILD OK" straddles a boundary
             cur = dc.log_cursor()
-            self.assertIsNone(dc.scan_log(log, "^OK$", None, cur))           # a new size
-            self.assertEqual(dc.scan_log(log, "^OK$", None, cur), "done")    # unchanged a poll
-            cur = dc.log_cursor()
-            for _ in range(2):  # the pids still run: a partial line may not be finished
-                self.assertIsNone(dc.scan_log(log, "^OK$", None, cur, pids_gone=False))
-            self.assertEqual(dc.scan_log(log, "^OK$", None, cur, pids_gone=True), "done")
-            with open(log, "a") as f:
-                f.write("AY")
-            cur = dc.log_cursor()
-            for _ in range(2):  # the finished line is OKAY, which doesn't match
-                self.assertIsNone(dc.scan_log(log, "^OK$", None, cur))
+            self.assertEqual(dc.scan_log(self.log, "^BUILD OK$", None, cur,
+                                         between=lambda: beats.append(1)), "done")
+        self.assertEqual(len(beats), 5)  # one after each of the 5 chunks
+        self.assertEqual(cur["offset"], os.path.getsize(self.log))
+
+    def test_a_rotation_after_the_done_line_keeps_it_seen(self):
+        # Seen while the pid ran; renamed away, a new log started; the pid then exits.
+        with open(self.log, "w") as f:
+            f.write("OK\n")
+        cur = dc.log_cursor()
+        self.assertEqual(self.scan(cur, pids_gone=False), "done")
+        os.rename(self.log, self.log + ".1")
+        with open(self.log, "w") as f:
+            f.write("new run\n")
+        self.assertEqual(self.scan(cur, pids_gone=True), "done")
+
+    def test_each_pattern_is_compiled_once_a_scan(self):
+        with open(self.log, "w") as f:
+            f.write("line\n" * 500)
+        with mock.patch.object(dc.re, "compile", wraps=dc.re.compile) as compiled:
+            dc.scan_log(self.log, "^OK$", "^ERROR", dc.log_cursor())
+        self.assertEqual(compiled.call_count, 2)
+
+    def test_an_old_unterminated_done_line_is_done_not_stale(self):
+        self.age(7200)
+        old = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(self.now - 7200))
+        w = {"condition": {"log": self.log, "done": "^OK$", "stale_min": 1}, "created": old,
+             "poll_s": 15}
+        self.assertEqual(dc.watch_verdict(w, now=self.now)[0], "done")
+
+
+class Detached(WaitEnv):
+    """`wait --resume <id> --detached <session> [--claude <pid>:<procStart>]`: the waiter
+    watch-guard starts when it acknowledges a lapse (spawn_waiter). Its own output goes to
+    /dev/null, so it logs a refusal."""
+
+    def acked(self, **fields):
+        """An acknowledged lapse in session s1, its waiter dead."""
+        self.update("w-1", **dict({
+            "id": "w-1", "session_id": "s1", "state": "acknowledged", "description": "the build",
+            "condition": {"file": self.path("never")}, "created": dc.now_iso(),
+            "waiter_pid": DEAD, "waiter_start": None, "waiter_heartbeat": dc.now_iso(),
+            "poll_s": 15, "blocked_at": dc.now_iso()}, **fields))
+
+    def detached(self, *extra):
+        me = f"{os.getpid()}:{dc.proc_start(os.getpid())}"
+        return self.run_("--resume", "w-1", "--detached", "s1", "--claude", me, *extra)
+
+    def err_log(self):
+        try:
+            with open(os.path.join(self.state, "dotclaude", "delegation-ledger.err")) as f:
+                return f.read()
+        except FileNotFoundError:
+            return ""
+
+    def test_it_takes_the_lapse_as_the_guards_and_records_its_end_unreported(self):
+        self.acked()
+        open(self.path("never"), "w").close()
+        p = self.detached()
+        self.assertEqual(p.returncode, 0, p.stderr)
+        w = self.only()
+        self.assertEqual((w["state"], w["reported"], w["waiter_detached"], w["session_id"],
+                          w["claude_pid"], w["end_why"]),
+                         ("done", False, True, "s1", os.getpid(), f"{self.path('never')} exists"))
+        self.assertTrue(dc.ended_unheard(w))  # for the guard, or the nudge, to say
+
+    def test_it_refuses_a_watch_that_isnt_an_acknowledged_lapse_left_to_it(self):
+        live = {"waiter_pid": os.getpid(), "waiter_start": dc.proc_start(os.getpid())}
+        for fields in ({"state": "open"}, {"session_id": "s2"}, live):
+            with self.subTest(fields=fields):
+                self.acked(**fields)
+                p = self.detached()
+                self.assertEqual(p.returncode, USAGE, p.stderr)
+                self.assertIn("no longer an acknowledged lapse", self.err_log())
+                self.assertNotIn("waiter_detached", self.only())
+
+    def test_it_refuses_a_claude_process_that_isnt_running_or_a_bad_session(self):
+        self.acked()
+        p = self.run_("--resume", "w-1", "--detached", "s1", "--claude", f"{DEAD}:1")
+        self.assertEqual(p.returncode, USAGE)
+        p = self.run_("--resume", "w-1", "--detached", "s1; rm -rf x")
+        self.assertEqual(p.returncode, USAGE)
+        self.assertIn(f"--claude '{DEAD}:1' names no running Claude Code process",
+                      self.err_log())
+        self.assertIn("is not a session id", self.err_log())
+        self.assertEqual(self.only()["waiter_pid"], DEAD)
+
+    def test_an_error_is_recorded_in_the_watch_for_the_guard_to_say(self):
+        # A codex run gone from the ledger: nothing can be decided, and nobody reads its output.
+        self.acked(condition={"codex": "r-gone"})
+        p = self.detached()
+        self.assertEqual(p.returncode, ERROR, p.stderr)
+        w = self.only()
+        self.assertTrue(w.get("waiter_detached") and w.get("detached_at"))
+        self.assertIn("r-gone", w["end_error"])
+
+    def test_a_take_clears_an_earlier_detached_waiters_error(self):
+        self.acked(waiter_detached=True, end_error="boom", detached_at=dc.now_iso())
+        p = self.run_("--resume", "w-1", "--max", "0.002")
+        self.assertEqual(p.returncode, AT_MAX, p.stderr)
+        self.assertFalse({"end_error", "waiter_detached", "detached_at"} & set(self.only()))
+
+    def test_a_resume_takes_over_a_live_detached_waiter(self):
+        # The lead re-arming wants the end itself, so the guard's waiter isn't a refusal.
+        self.acked(waiter_pid=os.getpid(), waiter_start=dc.proc_start(os.getpid()),
+                   waiter_detached=True, state="open")
+        p = self.run_("--resume", "w-1", "--max", "0.002")
+        self.assertEqual(p.returncode, AT_MAX, p.stderr)
+        self.assertNotIn("waiter_detached", self.only())
 
 
 class Exits(WaitEnv):
@@ -1227,6 +1380,17 @@ class Views(WaitEnv):
         wid = self.waiting(p)["id"]
         self.assertIn(f"  {wid}  'the build'  pid {job.pid} (sleep) exits  waiter alive",
                       self.cli("watch").splitlines())
+
+    def test_the_guards_detached_waiter_shows_as_its_with_the_re_arm_line(self):
+        job = self.job()
+        p = self.start("--pid", str(job.pid), "--desc", "the build")
+        wid = self.waiting(p)["id"]
+        self.update(wid, waiter_detached=True)
+        rearm = f"re-arm: delegation-ledger wait --resume {wid}"
+        self.assertIn(f"  {wid}  'the build'  pid {job.pid} (sleep) exits  the guard's detached "
+                      f"waiter alive; a later stop says its end, or {rearm} to be woken",
+                      self.cli("watch").splitlines())
+        self.assertIn("the guard's detached waiter pid", self.cli("open").splitlines()[3])
 
     def test_an_unresolved_watch_shows_however_old_it_is(self):
         wid = self.lapsed(self.job())

@@ -404,6 +404,19 @@ class FullRun(unittest.TestCase):
         self.assertEqual(self.ledger()[-1]["rc"], 7)
         self.assertEqual([w["state"] for w in self.watches().values()], ["failed"])
 
+    def test_a_report_that_isnt_an_object_is_invalid_not_a_crash(self):
+        p = self.run_ok(FAKE_SLEEP="0")
+        run_id = self.drop_stop_row()
+        with open(os.path.join(self.ledger()[0]["out"], "report.json"), "w") as f:
+            f.write("[]")
+        f = self.run_cd("finalize", run_id)
+        self.assertEqual(f.returncode, 4, f.stderr)
+        stop = self.ledger()[-1]
+        self.assertEqual((stop["event"], stop["exit"], stop["report_ok"], stop["report_error"]),
+                         ("stop", 4, False, "report is not a JSON object"))
+        self.assertIsNone(stop["report_status"])
+        self.assertEqual(p.returncode, 0)
+
     def test_finalize_records_a_run_whose_wrapper_died(self):
         self.run_ok()
         run_id = self.drop_stop_row()

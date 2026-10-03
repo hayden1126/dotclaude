@@ -604,7 +604,8 @@ def watch_block(ctx, now, horizon, detail):
     visible), as lines under a `watches:` header: one each for `watch`, two with the evidence
     for `open` (`detail`). A watch whose waiter is dead, or alive but heard by nobody
     (dc.watch_orphaned: its Claude process ended, or the guard marked it waiter_unheard), gets
-    the re-arm command. [] when there are none, so neither view's output changes."""
+    the re-arm command, and so does one the guard's detached waiter holds, which wakes no one.
+    [] when there are none, so neither view's output changes."""
     _, _, visible, sessions = ctx
     lines = []
     for w in dc.all_watches():
@@ -626,9 +627,12 @@ def watch_block(ctx, now, horizon, detail):
         alive = dc.waiter_alive(w, now) if visible else None
         unheard = bool(alive) and dc.watch_orphaned(w, live=sessions, now=now)
         ack = "  (acknowledged)" if w.get("state") == "acknowledged" else ""
+        detached = "the guard's detached " if w.get("waiter_detached") else ""
         if not detail:
             status = ("waiter not visible in the sandbox" if alive is None else
                       f"waiter alive, but its exit reaches nobody ⚠ {rearm}" if unheard else
+                      f"{detached}waiter alive; a later stop says its end, or {rearm} to be "
+                      "woken" if alive and detached else
                       "waiter alive" if alive else f"no live waiter ⚠ {rearm}")
             # A --desc hides the condition, so it's shown too: a wrong pid's name stands out.
             what = "" if w.get("description") == cond else f"  {cond}"
@@ -640,7 +644,8 @@ def watch_block(ctx, now, horizon, detail):
             waiter = f"waiter pid {w.get('waiter_pid')} not visible in the sandbox"
         else:
             running = dc.pid_alive(w.get("waiter_pid"), w.get("waiter_start"))
-            waiter = f"waiter pid {w.get('waiter_pid')} {'running' if running else 'gone'}"
+            waiter = (f"{detached}waiter pid {w.get('waiter_pid')} "
+                      f"{'running' if running else 'gone'}")
         try:
             beat = (f"heartbeat {int(minutes(dc.parse_iso(w['waiter_heartbeat']).timestamp(), now))}"
                     " min ago")
@@ -1177,6 +1182,7 @@ WAIT_EXIT_HELP = """exit codes:
 WAIT_CONDITIONS = ("pid", "file", "log", "done", "fail", "stale", "codex")
 CODEX_DELEGATE = os.path.join(os.path.dirname(os.path.realpath(__file__)), "codex-delegate")
 FINALIZE_TIMEOUT_S = 300  # finalize checks a report and walks rollouts; the cap is 5 min off
+SESSION_RE = re.compile(r"[\w.-]+")
 
 
 def wait_condition(args):
@@ -1273,8 +1279,11 @@ class Waiter(dc.Waiter):
         if taken:
             print(taken, flush=True)
         cursor = dc.log_cursor()
+        self.next_beat = time.monotonic() + self.poll
         while True:
-            verdict, why = dc.watch_verdict(w, cursor)
+            # A long first read beats between its chunks, so the guard never takes this waiter
+            # for dead while it reads.
+            verdict, why = dc.watch_verdict(w, cursor, between=self.beat_if_due)
             if verdict == "done" and "codex" in w["condition"]:
                 verdict, why = self.codex_end(w["condition"]["codex"])
             if verdict:
@@ -1285,6 +1294,13 @@ class Waiter(dc.Waiter):
                 return WAIT_AT_MAX
             time.sleep(min(self.poll, left))
             w = self.beat()
+            self.next_beat = time.monotonic() + self.poll
+
+    def beat_if_due(self):
+        """Beat when a poll has passed since the last beat: scan_log calls it between chunks."""
+        if time.monotonic() >= self.next_beat:
+            self.beat()
+            self.next_beat = time.monotonic() + self.poll
 
     def codex_end(self, run_id):
         """(verdict, why) once a codex run has ended: finalize it unless it has a stop row, then
@@ -1358,7 +1374,7 @@ class Waiter(dc.Waiter):
 
     def record(self, verdict, why):
         """Record how the watch ended, print it, and return the exit code."""
-        self.end(verdict)
+        self.end(verdict, why)
         print(f"watch {self.wid} {verdict}: {why}")
         return WAIT_EXITS[verdict]
 
@@ -1385,6 +1401,8 @@ def drop_watch(wid):
 def cmd_wait(args):
     if not dc.pids_visible():
         print(WAIT_SANDBOXED, file=sys.stderr)
+        if args.detached is not None:  # its stderr is /dev/null
+            checks().log_error(f"wait --detached: {WAIT_SANDBOXED}")
         return WAIT_USAGE
     wid = args.resume
     try:
@@ -1401,6 +1419,9 @@ def cmd_wait(args):
         dc.prune_watches()
         if args.drop is not None:
             return drop_watch(args.drop)
+        if args.detached is not None:
+            return Waiter(wid, args.poll, detached_identity(args), detached=True).run(
+                dc.DETACHED_MAX_MIN)
         identity = dc.claude_identity()  # one walk: the watch's process and session agree
         if args.resume is not None:
             existing_watch(wid)
@@ -1419,6 +1440,8 @@ def cmd_wait(args):
             "description": args.desc or dc.condition_text(cond), "created": dc.now_iso()})
     except dc.WaitRefused as ex:
         print(f"wait: {ex}", file=sys.stderr)
+        if args.detached is not None:  # its stderr is /dev/null
+            checks().log_error(f"wait --detached: {ex}")
         return WAIT_USAGE
     except dc.StepAside as ex:
         print(ex)
@@ -1427,12 +1450,42 @@ def cmd_wait(args):
         checks().log_error(f"wait {wid}: {ex}; the watch stays open")
         print(f"wait: {ex}; watch {wid} stays open, so `delegation-ledger wait --resume {wid}` "
               "tries again", file=sys.stderr)
+        detached_failed(args, wid, str(ex))
         return WAIT_ERROR
     except Exception as ex:  # noqa: BLE001  logged, and the watch stays for a resume
         checks().log_error()
         print(f"wait: {type(ex).__name__}: {ex} (traceback in "
               f"{os.path.join(dc.state_dir(), 'delegation-ledger.err')})", file=sys.stderr)
+        detached_failed(args, wid, f"{type(ex).__name__}: {ex}")
         return WAIT_ERROR
+
+
+def detached_failed(args, wid, why):
+    """For a detached waiter stopping with no end: record why in its watch (end_error), for the
+    guard's next block to say, since its own output goes to /dev/null. Logged if that fails."""
+    if args.detached is None or wid is None:
+        return
+    try:
+        dc.Waiter(wid, args.poll, (None, args.detached), detached=True).fail(why)
+    except Exception:  # noqa: BLE001  it may no longer own the watch; nothing to record then
+        checks().log_error()
+
+
+def detached_identity(args):
+    """The (process, session) a detached waiter takes its watch under: the guard's, which it
+    passed as --claude <pid>:<procStart> and --detached <session>, since the double fork left
+    the waiter no parent chain to walk. WaitRefused without --resume, for a session that isn't
+    a plain id, or for a process that no longer runs with that procStart."""
+    if args.resume is None:
+        raise dc.WaitRefused("--detached goes with --resume")
+    if not SESSION_RE.fullmatch(args.detached):
+        raise dc.WaitRefused(f"--detached {args.detached!r} is not a session id")
+    if args.claude is None:
+        return None, args.detached
+    pid, _, start = args.claude.partition(":")
+    if not (pid.isdigit() and start.isdigit() and dc.pid_alive(int(pid), start)):
+        raise dc.WaitRefused(f"--claude {args.claude!r} names no running Claude Code process")
+    return (int(pid), int(start)), args.detached
 
 
 class Parser(argparse.ArgumentParser):
@@ -1505,6 +1558,9 @@ def main(argv=None):
                     help=f"exit 75 with the re-arm command after this long (default and most: "
                          f"{dc.MAX_WAIT_MIN})")
     wt.add_argument("--poll", type=float, default=dc.WAIT_POLL_S, help=argparse.SUPPRESS)
+    # watch-guard's detached waiter (spawn_waiter): its session, and its Claude process.
+    wt.add_argument("--detached", metavar="SESSION", help=argparse.SUPPRESS)
+    wt.add_argument("--claude", metavar="PID:START", help=argparse.SUPPRESS)
     again = wt.add_mutually_exclusive_group()
     again.add_argument("--resume", metavar="ID", help="take over this watch and wait on")
     again.add_argument("--drop", metavar="ID", help="stop watching it")

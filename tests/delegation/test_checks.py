@@ -700,6 +700,22 @@ class Orphans(StateTest):
         self.assertEqual([self.read(f"w-{i}")["reported"] for i in (1, 2, 3, 4)],
                          [True, True, True, False])
 
+    def test_a_detached_waiters_end_is_named_but_left_to_its_live_process_to_mark(self):
+        # Its Claude process runs, whose guard says it to the model at its next stop; the nudge
+        # names it to Hayden meanwhile, and again at each start until that stop.
+        self.watch(sid="s1", state="done", ended=checks.dc.now_iso(), reported=False,
+                   waiter_detached=True, claude_pid=os.getpid(),
+                   claude_start=checks.dc.proc_start(os.getpid()))
+        for _ in range(2):
+            self.assertIn("1 watch ended while no Claude Code process was listening: w-1",
+                          self.message(json.dumps({"session_id": "s-new"})))
+            self.assertIs(self.read()["reported"], False)
+        # Once that process has ended, no guard will say it, so the nudge's naming counts.
+        self.watch(sid="s1", state="done", ended=checks.dc.now_iso(), reported=False,
+                   waiter_detached=True, claude_pid=DEAD, claude_start=None)
+        self.assertIn("w-1", self.message(json.dumps({"session_id": "s-new"})))
+        self.assertIs(self.read()["reported"], True)
+
     def test_an_end_from_before_reported_existed_isnt_named(self):
         self.watch(state="done", ended=checks.dc.now_iso(), claude_pid=DEAD, claude_start=None)
         self.assertEqual(self.message(), "")
