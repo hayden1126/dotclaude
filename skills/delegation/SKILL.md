@@ -214,9 +214,9 @@ validated (`report_ok`).
 - **After a crash or restart,** run `delegation-ledger open --hours 24`.
   - For each orphaned agent, look at its artifact path and redo only the unfinished part.
   - Its `watches:` block lists every unresolved watch, however old, and the ones that ended
-    while no Claude process listened. One that needs re-arming (its waiter is dead, or alive
-    but its exit reaches nobody) shows its `--resume` command: run it, or drop the watch. For
-    an ended one, check the result.
+    within the `--hours` horizon while no Claude process listened. One that needs re-arming
+    (its waiter is dead, or alive but its exit reaches nobody) shows its `--resume` command:
+    run it, or drop the watch. For an ended one, check the result.
   - In a session you continued (`claude --continue`), the watch guard blocks your first stop
     once for each watch the crash left: a waiter that still runs (its exit won't reach you, so
     re-arm it), a lapse (even one acknowledged before the crash), or a job that ended while
@@ -244,7 +244,8 @@ ends. If the wrapper is killed anyway, Codex keeps running too (it runs under a 
 detached from the wrapper's process tree), and the watch guard blocks your next stop with the
 same re-arm command. If Codex has ended by then, that block still says to re-arm: the waiter
 finalizes the run and its exit notice carries the result. Stopping the background task no
-longer stops Codex; `codex-delegate cancel <run_id>` does.
+longer stops Codex; `codex-delegate cancel <run_id>` does. Ctrl-C at a terminal still stops it
+too.
 `status` says where a run is, and `finalize` records the result by hand.
 
 ```bash
@@ -271,7 +272,9 @@ codex-delegate audit <thread_id>   # every model the thread and its sub-agents u
   - 124: timed out;
   - 143: killed by SIGTERM or SIGHUP while Codex ran; Codex keeps running, and the watch
     guard's next block prints the re-arm command;
-  - `cancel` exits 0 once the run is stopped, and 2 for an unknown run or one that isn't
-    running. The cancelled run's wrapper, if still running, exits 1.
+  - `cancel` exits 0 once the run is stopped, and 2 for an unknown run, one that has ended,
+    one whose Codex hasn't started or can't be verified (no procStart recorded), or when the
+    run's finalize lock stays busy past 4 minutes. The cancelled run's wrapper, if still
+    running, exits 1.
 - **Scope:** send Codex only the work it does better, such as anything about its own
   configuration. Claude does the rest.
