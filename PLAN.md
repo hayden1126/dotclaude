@@ -5,7 +5,7 @@
 > fresh `reviewer` checks each diff, and the lead runs the suites and merges.
 
 > **Status (2026-10-03): built** on `feat/watch-guard`, in 21 writer rounds, each checked by a
-> fresh reviewer, and installed on HAYPC.
+> fresh reviewer, and installed.
 > - **What shipped:** T1 to T5. T6 shipped as the dated manual checks in `skills/delegation/due.toml`
 >   plus the canary strings; `run.py` has no `rearm` case.
 > - **Where the as-built design lives:** `docs/delegation.md` "Long waits" (its "Who hears a watch"
