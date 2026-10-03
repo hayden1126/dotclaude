@@ -22,9 +22,9 @@ becomes a nudge itself, so the checks can't go quiet.
 (dc.watch_orphaned): the guard marked its waiter unheard, its Claude process has ended, or with
 no process recorded its session has, or with neither its waiter died. It names one even when a
 running session's guard will adopt it (a crash, then `claude --continue`): a duplicate notice is
-cheap, and a missed one is the bug this exists for. It also names, once, the watches that ended while no Claude process listened,
-except the starting session's own, which this process's guard says to the model at its next
-stop.
+cheap, and a missed one is the bug this exists for. It also names, once, the watches that
+ended while no Claude process listened, except the starting session's own, which this
+process's guard says to the model at its next stop.
 
 State lives in $XDG_STATE_HOME/dotclaude: canary.json (quick, full, green_full), audit.json
 (the last audit's WARN lines, whether a session start has shown them, and when the last
