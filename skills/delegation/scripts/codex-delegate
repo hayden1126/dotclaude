@@ -3,15 +3,31 @@
 
   codex-delegate run --model sol|terra --dir DIR --brief FILE|- [--out DIR]
                      [--timeout 3h] [--mem 8G] [--effort high] [--network] [--no-scope]
+                     [--max-wait 110]
   codex-delegate resume RUN_OR_THREAD [--prompt FILE|-] [--model sol|terra] [--timeout 1h]
+                        [--max-wait 110]
   codex-delegate status [RUN_OR_THREAD]
   codex-delegate finalize RUN_OR_THREAD   record a run whose wrapper died before it ended
+  codex-delegate cancel RUN_OR_THREAD     stop a running run on purpose
   codex-delegate audit THREAD_ID [--since ISO]
 
-Launch it in the background (the Bash tool's run_in_background): a run takes minutes to
-hours and Claude's Bash tool stops a foreground command at 10 minutes. Codex writes its
-events straight to <out>/events.jsonl and runs in its own session, so it survives a killed
-wrapper; `status` then says so and `finalize` records the stop row, report check and audit.
+Launch run and resume in the background (the Bash tool's run_in_background, with timeout
+7200000): a run takes minutes to hours, and the Bash tool stops a background command at its
+timeout (2 hours at most). Before Codex starts, each records a watch on the run whose waiter is
+the wrapper itself (delegation_common's Waiter, heartbeating every poll), and prints a launch
+line naming it. Codex runs under a detached supervisor, double-forked out of the wrapper's
+process tree, which writes <out>/codex.pid, sends Codex's events straight to
+<out>/events.jsonl, and writes Codex's exit code to <out>/codex.rc when it ends. So Codex
+survives a killed wrapper, even a kill of the wrapper's whole process tree, which is how Claude
+Code stops a background command at its time limit. At --max-wait minutes (110 at most, so
+under the cap) the wrapper stops waiting: it prints the re-arm command and exits 75, and Codex
+runs on. Either way the watch stays open with no waiter: the watch guard blocks the lead's next
+stop with the re-arm, and `delegation-ledger wait --resume` finalizes the run once Codex ends.
+`status` says where a run is, and `finalize` records the stop row, report check and audit.
+Stopping the background task no longer stops Codex; `cancel` does: it stops Codex, writes a
+stop row with status `cancelled`, and drops the run's watch. Ctrl-C at a terminal still stops
+Codex too: the wrapper passes SIGINT on. (Claude Code stops a background command with SIGTERM,
+then SIGKILL, never SIGINT, so that can't undo the detach.)
 
 The contract every run gets, whatever the brief says:
 - Model: only gpt-5.6-sol or gpt-5.6-terra. Hayden's rule; Codex's own default is
@@ -28,13 +44,27 @@ The contract every run gets, whatever the brief says:
   with the thread id and pid, stop with exit code, report and audit results.
 - Prompt via stdin only, never argv, so brief text is never parsed as CLI options.
 
-Exit status: 0 ok; 1 Codex failed (its own code is in the summary's `rc`); 2 refused or
-bad usage; 3 the model audit failed; 4 the report is missing or invalid; 124 timed out.
+Exit status: 0 ok; 1 Codex failed (its own code is in the summary's `rc`), or the wrapper
+did before Codex ended (the stop row's `error` says why); 2 refused or bad usage (a resume of
+a run whose Codex still runs, too); 3 the model audit failed; 4 the report is missing or
+invalid; 5 stopped waiting at --max-wait with its watch dropped or taken over (Codex keeps
+running); 75 still running at --max-wait (re-arm with the command printed); 124 timed out;
+143 killed by SIGTERM or SIGHUP while Codex runs (Codex keeps running, and the watch guard's
+next block prints the re-arm command). It appends a `detached` row first only when the run's
+finalize lock comes free within DETACH_LOCK_S and the turn has no stop row, so a signal
+during a cancel (which holds that lock) or after one (whose stop row ended the turn) writes
+none. Outside that window the signal kills the wrapper with no row (a shell reports 143 for
+SIGTERM, 129 for SIGHUP). A wrapper
+whose run was cancelled meanwhile exits with the cancel's stop row's exit, 1. `cancel` exits 0
+once the run is stopped, and 2 for an unknown run, one that has ended, one whose Codex hasn't
+started or can't be verified, or when the run's finalize lock stays busy.
 """
 import argparse
+import contextlib
 import datetime
 import glob
 import json
+import math
 import os
 import re
 import secrets
@@ -42,6 +72,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import threading
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
@@ -67,6 +98,23 @@ PREAMBLE = """# Delegation contract (set by codex-delegate; it overrides anythin
 RESUME_NOTE = ("(codex-delegate resume: the same delegation contract applies. Your final "
                "message must match the output schema.)\n\n")
 
+LAUNCH = ("codex-delegate: run {run}, watch {wid}. If this command is stopped, Codex keeps "
+          "running: delegation-ledger wait --resume {wid}")
+AT_MAX_WAIT = 75       # EX_TEMPFAIL, as `delegation-ledger wait` at --max: re-arm
+STEPPED_ASIDE = 5      # at --max-wait with the watch no longer this wrapper's
+FINALIZE_LOCK_S = 240  # under the 5 minutes a waiter gives its finalize
+START_POLL_S = 0.2     # how often the events file is read until thread.started
+END_POLL_S = 0.5       # how often the wrapper looks for Codex's end
+CANCEL_GRACE_S = 5     # cancel's wait between SIGTERM and SIGKILL
+RC_WAIT_S = 2          # how long cancel waits for the supervisor to record Codex's exit code
+DETACH_LOCK_S = 1      # how long a detached row waits for the run's finalize lock
+SANDBOXED = ("codex-delegate: running sandboxed, so no watch is recorded and --max-wait is "
+             "ignored (Codex would die with this command); run it as a bare command")
+
+
+class LaunchFailed(Exception):
+    """The supervisor couldn't start Codex; the message is its error, `Name: detail`."""
+
 
 def die(msg, code=2):
     print(f"codex-delegate: {msg}", file=sys.stderr)
@@ -81,6 +129,19 @@ def pin(model):
         die(f"model {model!r} refused: only {', '.join(MODELS)} "
             f"({', '.join(sorted(ALLOWED))}) are allowed")
     return MODELS[model]
+
+
+def max_wait(minutes):
+    if not dc.is_positive(minutes) or minutes > dc.MAX_WAIT_MIN:
+        die(f"--max-wait takes minutes, above 0 and at most {dc.MAX_WAIT_MIN} (under the Bash "
+            "tool's 120-minute cap)")
+    return minutes
+
+
+def poll_s(seconds):
+    if not dc.is_positive(seconds):
+        die("--poll takes positive seconds")
+    return seconds
 
 
 def seconds(spec):
@@ -214,61 +275,371 @@ def audit(thread_id, since_epoch):
 
 # ---------------------------------------------------------------- run / resume
 
-def stream(cmd, cwd, out, row, start_event):
-    """Run cmd with its JSONL events going straight to out/events.jsonl, and record start
-    with the thread id once `thread.started` appears there. Codex gets its own session and
-    never writes through this process, so killing the wrapper (SIGTERM, SIGHUP, a group
-    kill) leaves Codex running; Ctrl-C (SIGINT) is forwarded, since that is a person
-    asking it to stop. Returns (rc, thread_id)."""
+def claim_watch(run_id, take_over, poll):
+    """This wrapper as the waiter of a watch on its run, recorded before Codex starts: a new
+    watch, or with `take_over` (a resume), the run's open watch whose waiter is gone. A live
+    waiter on the run refuses it, so two wrappers on one run can't both start Codex; a resume
+    refuses a run whose Codex still runs before it gets here (cmd_resume). None in the sandbox,
+    whose pids mean nothing outside it: the run goes on with no watch."""
+    if not dc.pids_visible():
+        print(SANDBOXED, file=sys.stderr, flush=True)
+        return None
+    dc.prune_watches()
+    identity = dc.claude_identity()  # one walk: the watch's process and session agree
+    w = dc.codex_watch(run_id) if take_over else None
+    waiter = dc.Waiter(w["id"] if w else dc.new_watch_id(), poll, identity)
+    new = None if w else {"id": waiter.wid, "session_id": identity[1],
+                          "condition": {"codex": run_id}, "created": dc.now_iso(),
+                          "description": dc.condition_text({"codex": run_id})}
+    try:
+        waiter.take(new)
+    except dc.WaitRefused as ex:
+        die(str(ex))
+    # Only a new watch warns. With a process, its guard adopts even an "unknown" session. A
+    # watch taken over outside Claude Code keeps its session and loses its claude_pid (as wait
+    # --resume): a real session's guard still reads it, but no guard reads an "unknown" one,
+    # unwarned. That one's exit reaches whoever ran this, and the session-start nudge names it
+    # once this wrapper dies with it unresolved.
+    if identity[0] is None and w is None:
+        print("codex-delegate: no Claude Code session: the watch guard won't see this watch",
+              file=sys.stderr, flush=True)
+    return waiter
+
+
+def finalize_lock_path(run_id):
+    safe = re.sub(r"[^A-Za-z0-9._-]", "_", run_id).lstrip(".") or "_"
+    return os.path.join(dc.state_dir(), "codex-finalize", safe + ".lock")
+
+
+@contextlib.contextmanager
+def finalize_lock(run_id, again="finalize"):
+    """codex-finalize/<run_id>.lock, held while a run's stop row is decided and written, so a
+    wrapper, a waiter's finalize, a hand-run one and a cancel never write two. A wait past
+    FINALIZE_LOCK_S refuses (exit 2), saying to run `again` once the other ends."""
+    try:
+        with dc.file_lock(finalize_lock_path(run_id), time.monotonic() + FINALIZE_LOCK_S):
+            yield
+    except dc.LockBusy:
+        die(f"run {run_id} is being finalized elsewhere; run {again} again once that ends")
+
+
+def launch(cmd, cwd, out, prompt, owner):
+    """Start Codex under a detached supervisor and return the record it wrote to codex.pid,
+    once Codex runs and has its prompt. The supervisor is double-forked (fork, setsid, fork, and
+    the middle process exits at once), so it is reparented away from this wrapper's process
+    tree: Claude Code's time-limit kill takes a background command's whole descendant tree,
+    and a Codex inside it died with its wrapper. `owner` is this wrapper's wrapper_fields(),
+    taken before the fork. LaunchFailed when Codex couldn't start."""
+    r, w = os.pipe()
+    sys.stdout.flush()
+    sys.stderr.flush()
+    if os.fork() == 0:  # the middle process
+        try:
+            os.close(r)
+            os.setsid()
+            if os.fork() == 0:
+                supervisor(cmd, cwd, out, prompt, owner, w)
+        finally:
+            os._exit(0)
+    os.close(w)
+    os.wait()  # the middle process, which exits at once
+    with os.fdopen(r, "rb") as f:
+        msg = f.read().decode("utf-8", "replace")
+    try:
+        rec = json.loads(msg)
+    except ValueError:
+        rec = None
+    if not isinstance(rec, dict):
+        raise LaunchFailed(msg or "the Codex supervisor exited before Codex started")
+    return rec
+
+
+def supervisor(cmd, cwd, out, prompt, owner, ready):
+    """The detached process that runs Codex as the wrapper used to: stdout to events.jsonl,
+    stderr to stderr.log, the prompt on stdin, then stdin closed. It writes codex.pid, sends
+    that record down `ready`, waits for Codex, writes codex.rc ({"rc", "ended"}, with the
+    wrapper's fields, as codex.pid has) and exits. It holds none of the wrapper's descriptors,
+    so whoever reads the wrapper's output sees it end with the wrapper. Never returns."""
+    try:
+        for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
+            signal.signal(sig, signal.SIG_DFL)
+        null = os.open(os.devnull, os.O_RDWR)
+        for fd in (0, 1, 2):
+            os.dup2(null, fd)
+        os.closerange(3, ready)
+        os.closerange(ready + 1, os.sysconf("SC_OPEN_MAX"))
+        with open(os.path.join(out, "events.jsonl"), "a") as ev, \
+                open(os.path.join(out, "stderr.log"), "a") as err:
+            proc = subprocess.Popen(cmd, cwd=cwd, stdin=subprocess.PIPE, stdout=ev, stderr=err,
+                                    text=True)
+        me = os.getpid()
+        # First, where a reader finds it even if the wrapper is SIGKILLed before
+        # thread.started (dc.codex_proc).
+        rec = {"pid": proc.pid, "start": dc.proc_start(proc.pid), "supervisor_pid": me,
+               "supervisor_start": dc.proc_start(me), **owner}
+        dc.write_json(dc.codex_pid_path(out), rec)
+        try:
+            proc.stdin.write(prompt)
+            proc.stdin.close()
+        except BrokenPipeError:
+            pass  # Codex ended before it read the prompt; its exit code says so
+        try:
+            os.write(ready, json.dumps(rec).encode())
+        except OSError:
+            pass  # the wrapper is gone (EPIPE); Codex runs on, and codex.rc still gets its code
+        os.close(ready)
+        ready = None
+        rc = proc.wait()
+        dc.write_json(dc.codex_rc_path(out), {"rc": rc, "ended": dc.now_iso(), **owner})
+    except BaseException as ex:  # noqa: BLE001  told to the wrapper while it still listens
+        if ready is not None:
+            try:
+                os.write(ready, f"{type(ex).__name__}: {ex}".encode())
+            except OSError:
+                pass
+    finally:
+        os._exit(0)
+
+
+def stream(cmd, cwd, out, row, prompt, start_event, waiter, wait_min):
+    """Start Codex (launch), heartbeat the watch every poll, and poll for the end: the
+    supervisor's codex.rc, or Codex and its supervisor both gone without one (the supervisor
+    was killed, so the exit code is unknown). Once `thread.started` appears in
+    out/events.jsonl it records start with the thread id (locked_turn_row). Codex is out of this
+    wrapper's process tree, so a kill of the wrapper, or of its whole tree, leaves Codex
+    running; SIGTERM or SIGHUP exits 143, leaving the watch open with no waiter, after a
+    `detached` row when the finalize lock comes free within DETACH_LOCK_S and the turn has no
+    stop row (none during or after a cancel). Ctrl-C (SIGINT) is forwarded to Codex, since
+    that is a person asking it to stop. The prompt never enters row, so a signal can't write
+    it. Returns (rc, thread_id, pid, start_owed), rc None when unknown and start_owed True when
+    thread.started was seen but not yet recorded; or None at `wait_min` minutes, after a
+    `detached` row: Codex runs on, and the watch's next waiter finalizes it. With no watch
+    (sandboxed) it never detaches: Codex dies with the sandbox's PID namespace."""
     events_path = os.path.join(out, "events.jsonl")
     thread_id = row.get("thread_id")
-    with open(events_path, "a") as ev, open(os.path.join(out, "stderr.log"), "a") as err:
+    with open(events_path, "a") as ev:
         offset = ev.tell()
-        proc = subprocess.Popen(cmd, cwd=cwd, stdin=subprocess.PIPE, stdout=ev, stderr=err,
-                                text=True, start_new_session=True)
-    signal.signal(signal.SIGINT, lambda *_: proc.send_signal(signal.SIGINT))
+    owner = wrapper_fields()
+    turn = dict(owner, out=out)
+    rec = launch(cmd, cwd, out, prompt, owner)
+    pid, start = rec.get("pid"), rec.get("start")
+    sup = (rec.get("supervisor_pid"), rec.get("supervisor_start"))
+
+    def detach():
+        locked_turn_row(row, "detached", thread_id, pid, owner, DETACH_LOCK_S)
+
+    def interrupt(*_):  # Ctrl-C: a person asking Codex to stop
+        if dc.pid_alive(pid, start):
+            os.kill(pid, signal.SIGINT)
+    signal.signal(signal.SIGINT, interrupt)
     for sig in (signal.SIGTERM, signal.SIGHUP):
-        signal.signal(sig, lambda *_: (dc.append_row(dict(
-            row, ts=dc.now_iso(), event="interrupted", thread_id=thread_id, pid=proc.pid)),
-            os._exit(143)))
-    proc.stdin.write(row.pop("_prompt"))
-    proc.stdin.close()
-    started, buf = False, ""
+        signal.signal(sig, lambda *_: (detach(), os._exit(143)))
+    deadline = time.monotonic() + wait_min * 60 if waiter else math.inf
+    poll = waiter.poll if waiter else dc.WAIT_POLL_S
+    next_beat, beating, buf = time.monotonic() + poll, bool(waiter), ""
+    seen = started = detached = False
+    ended = None
     with open(events_path) as rd:
         rd.seek(offset)
-        while not started:
-            chunk = rd.readline()
-            if not chunk:
-                if proc.poll() is not None:
-                    break
-                time.sleep(0.2)
-                continue
-            buf += chunk
-            if not buf.endswith("\n"):
-                continue  # a partial line; the rest is still being written
-            line, buf = buf, ""
-            try:
-                e = json.loads(line)
-            except ValueError:
-                continue
-            if e.get("type") == "thread.started":
-                thread_id = e.get("thread_id") or thread_id
-                dc.append_row(dict(row, ts=dc.now_iso(), event=start_event,
-                                   thread_id=thread_id, pid=proc.pid))
-                started = True
-    rc = proc.wait()
+
+        def read_start():
+            """Read the complete lines written so far: True once thread.started was among
+            them, taking its thread id."""
+            nonlocal buf, thread_id
+            for chunk in iter(rd.readline, ""):
+                buf += chunk
+                if not buf.endswith("\n"):
+                    continue  # a partial line; the rest is still being written
+                line, buf = buf, ""
+                try:
+                    e = json.loads(line)
+                except ValueError:
+                    continue
+                if e.get("type") == "thread.started":
+                    thread_id = e.get("thread_id") or thread_id
+                    return True
+            return False
+
+        while True:
+            seen = seen or read_start()
+            if seen and not started:
+                started = locked_turn_row(row, start_event, thread_id, pid, owner,
+                                          START_POLL_S)
+            ended = dc.codex_rc(turn)
+            if ended is None and not dc.pid_alive(pid, start) and not dc.pid_alive(*sup):
+                ended = dc.codex_rc(turn) or {"rc": None}  # the supervisor was killed first
+            if ended is not None:
+                break
+            now = time.monotonic()
+            if now >= deadline:
+                detach()
+                detached = True
+                break
+            if beating and now >= next_beat:
+                beating, next_beat = beat(waiter), now + poll
+            wake = min(deadline, next_beat if beating else math.inf, now + min(END_POLL_S, poll))
+            if not started:
+                wake = min(wake, now + START_POLL_S)
+            time.sleep(max(0.0, wake - now))
+        if not detached and not seen:
+            seen = read_start()  # Codex may have started and ended between two reads
     for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
         signal.signal(sig, signal.SIG_DFL)
-    return rc, thread_id
+    return None if detached else (ended.get("rc"), thread_id, pid, seen and not started)
 
 
-def finish(row, rc, thread_id, since_epoch, out):
+def locked_turn_row(row, event, thread_id, pid, owner, wait_s):
+    """append_turn_row under the run's finalize lock, waiting `wait_s` for it: False if it
+    stayed busy (no row then), so a caller that polls tries again and its heartbeat goes on
+    meanwhile; True once done."""
+    try:
+        with dc.file_lock(finalize_lock_path(row["run_id"]), time.monotonic() + wait_s):
+            append_turn_row(row, event, thread_id, pid, owner)
+    except dc.LockBusy:
+        return False
+    return True
+
+
+def append_turn_row(row, event, thread_id, pid, owner):
+    """Append the turn's `event` row (start, resume or detached) unless the turn has a stop
+    row: codex-delegate cancel may have written one, and a row after it would make the run read
+    as going again. The caller holds the run's finalize lock, which cancel holds too."""
+    if turn_stop(row["run_id"], owner) is None:
+        dc.append_row(dict(row, ts=dc.now_iso(), event=event, thread_id=thread_id, pid=pid))
+
+
+def beat(waiter):
+    """Heartbeat the watch; False to stop beating. A wrapper whose watch was dropped or taken
+    over (StepAside) leaves it to its new owner, and one whose beat failed says so."""
+    try:
+        waiter.beat()
+        return True
+    except dc.StepAside:
+        return False
+    except Exception as ex:  # noqa: BLE001  Codex runs on; the guard sees a stale heartbeat
+        print(f"codex-delegate: watch {waiter.wid}: heartbeat failed ({ex}); it stops",
+              file=sys.stderr, flush=True)
+        return False
+
+
+@contextlib.contextmanager
+def heartbeat(waiter):
+    """Heartbeat the watch every poll from a daemon thread while the body runs (the finalize
+    lock's wait, the report check and the audit), so a long finish doesn't read as a lapse. A
+    beat that steps aside or fails ends the thread."""
+    if waiter is None:
+        yield
+        return
+    stop = threading.Event()
+
+    def run():
+        while not stop.wait(waiter.poll) and beat(waiter):
+            pass
+    thread = threading.Thread(target=run, daemon=True)
+    thread.start()
+    try:
+        yield
+    finally:
+        stop.set()
+        thread.join()
+
+
+def end_watch(waiter, verdict):
+    """Record the watch's end, unless this wrapper no longer owns it: then its new waiter
+    decides by the stop row."""
+    if waiter is None:
+        return
+    try:
+        waiter.end(verdict)
+    except dc.StepAside:
+        pass
+    except Exception as ex:  # noqa: BLE001  the stop row stands; the guard reads it
+        print(f"codex-delegate: watch {waiter.wid} not recorded ({ex}); the watch guard "
+              "reads the stop row instead", file=sys.stderr)
+
+
+def lost_watch(waiter):
+    """Why this wrapper no longer owns its watch, or None."""
+    try:
+        w = dc.read_watch(waiter.wid)
+    except ValueError as ex:
+        return str(ex)
+    if not w:
+        return f"watch {waiter.wid} is gone"
+    if w.get("state") == "dropped":
+        return f"watch {waiter.wid} was dropped"
+    return None if w.get("waiter_pid") == waiter.me else f"watch {waiter.wid} was taken over"
+
+
+def supervise(cmd, cwd, out, row, prompt, start_event, waiter, wait_min):
+    """Run Codex (stream), then record the stop row and the watch's end under the run's
+    finalize lock, heartbeating meanwhile, and return the exit code. At --max-wait, with Codex
+    running and the watch open: the re-arm line and AT_MAX_WAIT, or, when the watch is no
+    longer this wrapper's, why and STEPPED_ASIDE."""
+    since = time.time()
+    res = stream(cmd, cwd, out, row, prompt, start_event, waiter, wait_min)
+    if res is None:
+        why = lost_watch(waiter)
+        print(f"{why}; Codex keeps running" if why else dc.REARM.format(waiter.wid), flush=True)
+        return STEPPED_ASIDE if why else AT_MAX_WAIT
+    rc, thread_id, pid, start_owed = res
+    owner = wrapper_fields()
+    with heartbeat(waiter), finalize_lock(row["run_id"]):
+        if start_owed:  # the lock was busy whenever stream tried
+            append_turn_row(row, start_event, thread_id, pid, owner)
+        e = turn_stop(row["run_id"], owner)
+        if e is not None:  # written meanwhile, by codex-delegate cancel
+            print(f"codex-delegate: run {row['run_id']} was "
+                  f"{'cancelled' if e.get('status') == 'cancelled' else 'recorded elsewhere'}; "
+                  "its stop row stands", flush=True)
+            return e["exit"] if isinstance(e.get("exit"), int) else 1
+        code = finish(row, rc, thread_id, since, out)
+        end_watch(waiter, dc.codex_stopped({"run_id": row["run_id"], "exit": code})[0])
+    return code
+
+
+def turn_stop(run_id, owner):
+    """The stop row written for this wrapper's turn of the run, or None: one after the pending
+    row whose wrapper fields are `owner` (this wrapper's). Only codex-delegate cancel writes one
+    while the wrapper runs, and the wrapper writes nothing for the turn after it."""
+    mine = False
+    for r in dc.read_rows():
+        if r.get("runner") != "codex" or r.get("run_id") != run_id:
+            continue
+        if r.get("event") == "pending":
+            mine = (r.get("wrapper_pid") == owner["wrapper_pid"]
+                    and str(r.get("wrapper_start")) == str(owner["wrapper_start"]))
+        elif mine and r.get("event") == "stop":
+            return r
+    return None
+
+
+def crashed(row, waiter, ex):
+    """A wrapper error after its pending row (Codex that couldn't start, say): end the turn as
+    failed, so no reader takes the run as unstarted, or grades the previous turn's report as
+    this one's. A stop row that got written first stands."""
+    err = str(ex) if isinstance(ex, LaunchFailed) else f"{type(ex).__name__}: {ex}"
+    with finalize_lock(row["run_id"]):
+        e = dc.find_codex(row["run_id"]) or {}
+        if e.get("event") != "stop":
+            e = dict(row, ts=dc.now_iso(), event="stop", status="crashed", rc=None, exit=1,
+                     timed_out=False, report_ok=False, report_status=None, audit_ok=False,
+                     models=[], disallowed=[],
+                     report_error="the wrapper failed before Codex ended", error=err)
+            dc.append_row(e)
+        end_watch(waiter, dc.codex_stopped(e)[0])
+    print(f"codex-delegate: {err}", file=sys.stderr)
+    return 1
+
+
+def finish(row, rc, thread_id, since_epoch, out, stream=None):
     report_ok, report_status, report_error = False, None, "no report.json"
     try:
         with open(os.path.join(out, "report.json")) as f:
             obj = json.load(f)
-        errs = dc.validate_report(obj)
-        report_ok, report_status = not errs, obj.get("status")
+        errs = dc.validate_report(obj)  # a list or a string is an error there, not a crash
+        report_ok = not errs
+        report_status = obj.get("status") if isinstance(obj, dict) else None
         report_error = errs[0] if errs else None
     except (OSError, ValueError) as e:
         report_error = f"report.json unreadable ({type(e).__name__})"
@@ -282,11 +653,14 @@ def finish(row, rc, thread_id, since_epoch, out):
                "timed_out": rc == 124, "report_ok": report_ok, "report_status": report_status,
                "report_error": report_error, "audit_ok": aud["ok"], "models": aud["models"],
                "disallowed": aud["disallowed"], "out": out}
-    dc.append_row(dict(row, ts=dc.now_iso(), event="stop", thread_id=thread_id,
+    # status and error are set even when plain: fold merges rows, so an earlier turn's
+    # cancel or crash would otherwise still show.
+    dc.append_row(dict(row, ts=dc.now_iso(), event="stop", status="finished", error=None,
+                       thread_id=thread_id,
                        **{k: summary[k] for k in ("rc", "exit", "timed_out", "report_ok",
                                                   "report_status", "report_error", "audit_ok",
                                                   "models", "disallowed")}))
-    print(json.dumps(summary, indent=2))
+    print(json.dumps(summary, indent=2), file=stream or sys.stdout)
     return code
 
 
@@ -299,6 +673,7 @@ def read_text(path):
 
 def cmd_run(a):
     model = pin(a.model)
+    wait_min = max_wait(a.max_wait)
     workdir = os.path.realpath(a.dir)
     if not os.path.isdir(workdir):
         die(f"--dir {a.dir} is not a directory")
@@ -310,39 +685,73 @@ def cmd_run(a):
     os.makedirs(out, exist_ok=True)
     row = {"runner": "codex", "id": run_id, "run_id": run_id, "model": model,
            "dir": workdir, "out": out, "network": a.network, "effort": a.effort}
-    dc.append_row(dict(row, ts=dc.now_iso(), event="pending", wrapper_pid=os.getpid()))
     cmd = wrap(exec_cmd(model, workdir, out, a.network, a.effort),
                seconds(a.timeout), a.mem, not a.no_scope)
-    since = time.time()
-    rc, thread_id = stream(cmd, workdir, out,
-                           dict(row, _prompt=PREAMBLE.format(out=out) + brief), "start")
-    return finish(row, rc, thread_id, since, out)
+    waiter = claim_watch(run_id, False, poll_s(a.poll))
+    try:
+        dc.append_row(dict(row, ts=dc.now_iso(), event="pending", **wrapper_fields()))
+        launch_line(run_id, waiter)
+        return supervise(cmd, workdir, out, row, PREAMBLE.format(out=out) + brief, "start",
+                         waiter, wait_min)
+    except Exception as ex:  # noqa: BLE001  ended as failed, not left looking unstarted
+        return crashed(row, waiter, ex)
+
+
+def wrapper_fields():
+    """This wrapper's pid and procStart, for its pending row."""
+    return {"wrapper_pid": os.getpid(), "wrapper_start": dc.proc_start(os.getpid())}
+
+
+def launch_line(run_id, waiter):
+    """Print the run and its watch, flushed, before Codex starts. With no watch (sandboxed),
+    nothing: the summary is the only output, as before watches."""
+    if waiter:
+        print(LAUNCH.format(run=run_id, wid=waiter.wid), flush=True)
 
 
 def lookup(key):
-    for (runner, _rid), e in dc.fold(dc.read_rows()).items():
-        if runner == "codex" and key in (e.get("run_id"), e.get("thread_id")):
-            return e
-    die(f"no codex run {key!r} in the ledger ({dc.ledger_path()})")
+    e = dc.find_codex(key)
+    if e is None:
+        die(f"no codex run {key!r} in the ledger ({dc.ledger_path()})")
+    return e
 
 
 def cmd_resume(a):
+    wait_min = max_wait(a.max_wait)
     e = lookup(a.run)
+    run_id = e["run_id"]
+    if dc.codex_live(e):
+        w = dc.codex_watch(run_id)
+        alive = (f"codex pid {dc.codex_proc(e)[0]}" if dc.codex_running(e) else
+                 f"its wrapper, pid {e.get('wrapper_pid')}, is starting it")
+        wait = (f"delegation-ledger wait --resume {w['id']}" if w else
+                f"delegation-ledger wait --codex {run_id}")
+        die(f"run {run_id} is still running ({alive}). Wait on it: {wait}; resume once it ends")
+    if e.get("event") != "stop" and not dc.codex_unstarted(e):
+        print(f"codex-delegate: run {run_id} ended without a stop row; finalizing it first",
+              file=sys.stderr, flush=True)
+        finalize_run(run_id, sys.stderr)
+        e = lookup(run_id)
     if not e.get("thread_id"):
         die(f"run {e['run_id']} never started a thread; start it again with run")
     model = pin(a.model) if a.model else e["model"]
     if model not in ALLOWED:
         die(f"ledger model {model!r} is not allowed")
     prompt = read_text(a.prompt) if a.prompt else "Continue the task from where you stopped."
-    row = {k: e.get(k) for k in ("runner", "id", "run_id", "dir", "out", "network", "effort")}
-    row.update(model=model, wrapper_pid=os.getpid())
+    row = {k: e.get(k) for k in ("runner", "id", "run_id", "dir", "out", "network", "effort",
+                                 "thread_id")}
     cmd = wrap(resume_cmd(e["thread_id"], model, e["dir"], e["out"], e.get("network"),
                           e.get("effort")), seconds(a.timeout), a.mem, not a.no_scope)
-    since = time.time()
-    rc, thread_id = stream(cmd, e["dir"], e["out"],
-                           dict(row, thread_id=e["thread_id"], _prompt=RESUME_NOTE + prompt),
-                           "resume")
-    return finish(row, rc, thread_id or e["thread_id"], since, e["out"])
+    waiter = claim_watch(run_id, True, poll_s(a.poll))
+    row.update(model=model, **wrapper_fields())
+    try:
+        # A row before Codex starts, so the run's latest isn't the previous turn's stop.
+        dc.append_row(dict(row, ts=dc.now_iso(), event="pending"))
+        launch_line(run_id, waiter)
+        return supervise(cmd, e["dir"], e["out"], row, RESUME_NOTE + prompt, "resume", waiter,
+                         wait_min)
+    except Exception as ex:  # noqa: BLE001  ended as failed, not left looking unstarted
+        return crashed(row, waiter, ex)
 
 
 # ---------------------------------------------------------------- status / audit
@@ -389,8 +798,9 @@ def cmd_status(a):
     if not entries:
         print("no codex runs in the ledger")
         return 0
+    visible = dc.pids_visible()
     for e in sorted(entries, key=lambda e: e.get("ts", "")):
-        verdict, evidence = dc.codex_state(e)
+        verdict, evidence = dc.codex_state(e, visible)
         extra = (f" exit={e.get('exit')} report_ok={e.get('report_ok')} "
                  f"audit_ok={e.get('audit_ok')}" if e.get("event") == "stop" else "")
         print(f"{e['run_id']}  {e.get('model')}  {e.get('event')}: {verdict}  "
@@ -399,18 +809,112 @@ def cmd_status(a):
     return 0
 
 
-def cmd_finalize(a):
+def finalize_run(run_id, stream):
     """The stop row, report check and audit for a run whose wrapper died before Codex
-    ended. Codex's exit code is unknown by then, so it is recorded as null."""
-    e = lookup(a.run)
-    if e.get("event") == "stop":
-        die(f"run {e['run_id']} already has a stop row", 0)
-    if dc.pid_alive(e.get("pid")):
-        die(f"run {e['run_id']} is still running (pid {e.get('pid')}); finalize it after it ends")
-    row = {k: e.get(k) for k in ("runner", "id", "run_id", "dir", "out", "network", "effort",
-                                 "model")}
-    return finish(row, None, e.get("thread_id"), dc.parse_iso(e["first_ts"]).timestamp(),
-                  e["out"])
+    ended, its summary printed to `stream`: finish's exit code, or None when the run already
+    has a stop row. Codex's exit code comes from codex.rc, which its supervisor wrote when it
+    ended; with none (the supervisor was killed first) it is recorded as null. It runs under
+    the run's finalize lock and reads the run again inside it, so two finalizes write one stop.
+    A run still going, or one that never started, is refused (exit 2)."""
+    with finalize_lock(run_id):
+        e = lookup(run_id)
+        if e.get("event") == "stop":
+            return None
+        if dc.codex_running(e):
+            die(f"run {run_id} is still running (pid {dc.codex_proc(e)[0]}); finalize it after "
+                "it ends")
+        if dc.codex_wrapper_alive(e):
+            die(f"run {run_id}'s wrapper (pid {e.get('wrapper_pid')}) is still running; it "
+                "records the stop row itself")
+        if dc.codex_unstarted(e):
+            die(f"run {run_id} never started, since its wrapper stopped before Codex did, so "
+                f"there is nothing to finalize: {dc.codex_restart(e)}")
+        row = {k: e.get(k) for k in ("runner", "id", "run_id", "dir", "out", "network",
+                                     "effort", "model")}
+        thread_id = e.get("thread_id") or dc.events_thread_id(e["out"])
+        return finish(row, (dc.codex_rc(e) or {}).get("rc"), thread_id,
+                      dc.parse_iso(e["first_ts"]).timestamp(), e["out"], stream)
+
+
+def cmd_finalize(a):
+    run_id = lookup(a.run)["run_id"]
+    code = finalize_run(run_id, sys.stdout)
+    if code is None:
+        die(f"run {run_id} already has a stop row", 0)
+    return code
+
+
+def wait_gone(pid, start, seconds):
+    """Whether pid (with its procStart) has ended within `seconds`."""
+    deadline = time.monotonic() + seconds
+    while dc.pid_alive(pid, start):
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.1)
+    return True
+
+
+def cmd_cancel(a):
+    """Stop a running run on purpose: Codex, verified by its procStart, gets SIGTERM, and its
+    process group SIGKILL after CANCEL_GRACE_S. Then a stop row with status `cancelled`, and
+    the run's watch is dropped, so neither the watch guard nor the session-start nudge names
+    it. All under the run's finalize lock, so its wrapper, still polling, leaves the stop row
+    be. Exit 2 for an unknown run, one that has ended, one whose Codex hasn't started or can't
+    be verified (no procStart), or when the lock stays busy past FINALIZE_LOCK_S."""
+    run_id = lookup(a.run)["run_id"]
+    dropped = None
+    with finalize_lock(run_id, again="cancel"):
+        e = lookup(run_id)
+        pid, start = dc.codex_proc(e)
+        if e.get("event") == "stop":
+            die(f"run {run_id} isn't running: it has ended, with a stop row")
+        if pid is None:
+            die(f"run {run_id} isn't running: Codex hasn't started")
+        if start is None:
+            die(f"run {run_id}: Codex's pid {pid} can't be verified (no procStart recorded), so "
+                "it is left alone")
+        if not dc.pid_alive(pid, start):
+            die(f"run {run_id} isn't running: Codex (pid {pid}) has ended; record it with "
+                f"codex-delegate finalize {run_id}")
+        os.kill(pid, signal.SIGTERM)  # `timeout`, which heads the command, passes it on
+        killed = not wait_gone(pid, start, CANCEL_GRACE_S)
+        if killed and dc.pid_alive(pid, start):
+            try:  # its process group: Codex and everything it started
+                if os.getpgid(pid) == pid:
+                    os.killpg(pid, signal.SIGKILL)
+                else:
+                    os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            wait_gone(pid, start, CANCEL_GRACE_S)
+        deadline = time.monotonic() + RC_WAIT_S
+        while dc.codex_rc(e) is None and time.monotonic() < deadline:
+            time.sleep(0.1)
+        rc = (dc.codex_rc(e) or {}).get("rc")
+        thread_id = e.get("thread_id") or dc.events_thread_id(e.get("out"))
+        aud = audit(thread_id, dc.parse_iso(e["first_ts"]).timestamp()) if thread_id else {
+            "ok": False, "models": [], "disallowed": []}
+        dc.append_row({**{k: e.get(k) for k in ("runner", "id", "run_id", "model", "dir", "out",
+                                                 "network", "effort")},
+                       "ts": dc.now_iso(), "event": "stop", "status": "cancelled",
+                       "thread_id": thread_id, "rc": rc, "exit": 1, "timed_out": False,
+                       "report_ok": False, "report_status": None,
+                       "report_error": "cancelled before it reported",
+                       "audit_ok": aud["ok"], "models": aud["models"],
+                       "disallowed": aud["disallowed"],
+                       "error": "cancelled by codex-delegate cancel"})
+        w = dc.codex_watch(run_id)
+        if w is not None:
+            def drop(cur):
+                nonlocal dropped
+                if cur.get("state") in dc.UNRESOLVED:  # under the lock: a waiter's end stands
+                    cur.update(state="dropped", ended=dc.now_iso())
+                    dropped = w["id"]
+            dc.update_watch(w["id"], drop)
+    print(f"codex-delegate: run {run_id} cancelled (Codex pid {pid}"
+          + (", killed after the grace period" if killed else "") + ")"
+          + (f"; dropped watch {dropped}" if dropped else ""))
+    return 0
 
 
 def cmd_audit(a):
@@ -433,6 +937,8 @@ def main(argv=None):
     r.add_argument("--effort")
     r.add_argument("--network", action="store_true")
     r.add_argument("--no-scope", action="store_true", help="skip the systemd-run memory cap")
+    r.add_argument("--max-wait", type=float, default=dc.MAX_WAIT_MIN, metavar="MIN")
+    r.add_argument("--poll", type=float, default=dc.WAIT_POLL_S, help=argparse.SUPPRESS)
     r.set_defaults(fn=cmd_run)
     s = sub.add_parser("resume")
     s.add_argument("run")
@@ -441,6 +947,8 @@ def main(argv=None):
     s.add_argument("--timeout", default="1h")
     s.add_argument("--mem", default="8G")
     s.add_argument("--no-scope", action="store_true")
+    s.add_argument("--max-wait", type=float, default=dc.MAX_WAIT_MIN, metavar="MIN")
+    s.add_argument("--poll", type=float, default=dc.WAIT_POLL_S, help=argparse.SUPPRESS)
     s.set_defaults(fn=cmd_resume)
     st = sub.add_parser("status")
     st.add_argument("run", nargs="?")
@@ -448,6 +956,9 @@ def main(argv=None):
     fz = sub.add_parser("finalize")
     fz.add_argument("run")
     fz.set_defaults(fn=cmd_finalize)
+    ca = sub.add_parser("cancel")
+    ca.add_argument("run")
+    ca.set_defaults(fn=cmd_cancel)
     au = sub.add_parser("audit")
     au.add_argument("thread")
     au.add_argument("--since")

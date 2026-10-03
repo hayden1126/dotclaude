@@ -84,12 +84,22 @@ def main(argv):
         return 1
     base = json.loads(text)
     keep = {k: v for k, v in live.items() if k not in base and k not in overlay}
-    if not keep and not (overlay_path and os.path.exists(overlay_path)):
-        sys.stdout.write(text)  # verbatim, so a machine without an overlay installs the file as is
-        return 0
-    out = merge(base, overlay)
+    verbatim = not keep and not (overlay_path and os.path.exists(overlay_path))
+    out = base if verbatim else merge(base, overlay)
     if keep:
         sys.stderr.write(f"merge-settings: kept the live-only keys {', '.join(sorted(keep))}\n")
+    report_resets(live, out)  # on the verbatim path too, so a reset is never silent
+    if verbatim:
+        sys.stdout.write(text)  # verbatim, so a machine without an overlay installs the file as is
+        return 0
+    json.dump(dict(out, **keep), sys.stdout, indent=2, ensure_ascii=False)
+    sys.stdout.write("\n")
+    return 0
+
+
+def report_resets(live, out):
+    """Name on stderr each live value the installed file `out` changes, and each live hook
+    command it drops."""
     changed = sorted(k for k in live if k in out and k != "hooks" and live[k] != out[k])
     if changed:
         sys.stderr.write("merge-settings: the baseline resets "
@@ -102,9 +112,6 @@ def main(argv):
     if lost:
         sys.stderr.write("merge-settings: these live hook commands are not in the baseline or "
                          "the overlay and are dropped: " + "; ".join(lost) + "\n")
-    json.dump(dict(out, **keep), sys.stdout, indent=2, ensure_ascii=False)
-    sys.stdout.write("\n")
-    return 0
 
 
 if __name__ == "__main__":

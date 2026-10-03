@@ -6,7 +6,7 @@
 > [[dotclaude-chrome-devtools-wsl]]). Per-effort design lives in the repo's `PLAN.md` or its doc,
 > not only under `~/.claude/plans/`, which the next plan overwrites ([[plan-file-not-durable]]).
 
-Last updated: 2026-10-02
+Last updated: 2026-10-03
 Base: `main`. For branch / PR / push state, run `gh pr list` and `git log main..HEAD` (derive it; not
 stored here).
 
@@ -38,12 +38,21 @@ stored here).
       holds the diagram spec (§8); [[svg-to-png-headless-render]] covers rendering it;
     - never publish raw transcripts or the eval data;
     - the `.zshrc`, `.zshenv` and `.mcp.json` backups beside SHAPE.md stay unread.
-- **Background waits: the watch guard** (planned 2026-10-02, not started).
-  - **The gap:** a Bash background command stops at 30 minutes by default (2 hours at most), and
-    nothing re-arms it. That also breaks Codex runs longer than the cap (SKILL §5).
-  - **The plan:** `PLAN.md` holds the design, the options it beat, and tasks T0 to T6.
-  - **Next step:** T0, the four probes, on a branch off `main`. If P-a fails (a Stop hook firing
-    and blocking on a turn that a background notice started), stop and ask Hayden.
+- **The watch guard (background waits): built and installed on HAYPC, not yet pushed.**
+  - **Where:** branch `feat/watch-guard` (merge-base `5f965ba`; derive its state with
+    `git log main..feat/watch-guard` and `gh pr list`).
+    - The decisions are in `PLAN.md`, now history.
+    - The behavior is in `docs/delegation.md` "Long waits".
+    - Its open checks are in that doc's "Next".
+  - **Next step:** Hayden approves the push. Then `git push -u origin feat/watch-guard` and
+    `gh pr create`, the latter with the sandbox off (a multi-line body isn't a bare command).
+  - **After the merge:**
+    - ask before removing the worktrees `.claude/worktrees/agent-a2d2c1a84ebc99719` and
+      `agent-a12852ea4e431c3d2` (outside the sandbox);
+    - fast-lane fix `hooks/handoff-reminder.sh`, which fires on subagent reports: rule 3 matches
+      `/clear` in a prompt of any length, and rule 1 doesn't skip `<agent-message`.
+  - **An unnamed flaky test** erred twice under load on 2026-10-03, and didn't reproduce in 9
+    runs. If it recurs, run with `-v` and name it.
 - **Delegation hardening: what is live on HAYPC** (Stage 2, plus the Stage 3 steps under Done;
   `docs/delegation.md`;
   `skills/delegation/SKILL.md` is the operating guide). Open items:
@@ -55,7 +64,8 @@ stored here).
     2026-09-30, gone from its window on 2026-10-07.
   - **Other machines:** `git pull` in `~/dotclaude`, then `./setup.sh`, both outside the sandbox
     (A4 and A3 changed `settings.json`, A2 adds a PostToolUse hook to it, and `setup.sh` now links
-    Codex's skills).
+    Codex's skills). Once merged, the watch guard adds a Stop hook and a baseline `permissions`
+    object, which replaces a live one, so personal allow rules go in `settings.machine.json`.
     - A baseline key still wins over the live file's value, so copy `~/.claude/settings.json`
       first and diff it after.
     - Without a `settings.machine.json` overlay, install by hand per the docs' install order:

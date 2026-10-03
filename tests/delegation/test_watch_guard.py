@@ -1,0 +1,1965 @@
+"""watch-guard: the main-thread Stop hook blocks once per lapsed watch and once per killed
+task, records everything it blocks on, and always fails open. Transcripts here are synthetic,
+in the 2.1.287 format."""
+import fcntl
+import glob
+import itertools
+import json
+import os
+import signal
+import subprocess
+import sys
+import tempfile
+import time
+import unittest
+from unittest import mock
+
+from _paths import HOOKS, SCRIPTS, load_script
+
+SCRIPT = os.path.join(SCRIPTS, "watch-guard")
+SHIM = os.path.join(HOOKS, "watch-guard.sh")
+LEDGER = os.path.join(SCRIPTS, "delegation-ledger")
+dc = load_script("delegation_common.py")
+guard = load_script("watch-guard")
+REAL_SPAWN = guard.spawn_waiter  # GuardEnv records the call instead; DetachedWaiters runs it
+
+DEAD = 2 ** 22 + 12345  # beyond pid_max on this box, so never alive
+NOTE = ("If the work in progress still needs it, start it again with `run_in_background` and a "
+        "longer `timeout`. If it already had the longest `timeout` allowed, do not restart it. "
+        "Either way, report that it was stopped.")
+
+
+def iso(t):
+    return time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime(t))
+
+
+def notification(task, tool_use, desc, status="killed", output=None):
+    summary = (f'Background command "{desc}" was stopped after reaching its background time '
+               "limit" if status == "killed" else f'Background command "{desc}" completed '
+               "(exit code 0)")
+    return (f"<task-notification>\n<task-id>{task}</task-id>\n<tool-use-id>{tool_use}"
+            f"</tool-use-id>\n<output-file>{output or f'/tmp/x/tasks/{task}.output'}"
+            f"</output-file>\n<status>"
+            f"{status}</status>\n<summary>{summary}</summary>\n<note>{NOTE}</note>\n"
+            "</task-notification>")
+
+
+def notice(task, tool_use, desc, at, status="killed", output=None):
+    return {"type": "user", "timestamp": iso(at),
+            "origin": {"kind": "task-notification", "producer": "session-task"},
+            "message": {"role": "user",
+                        "content": notification(task, tool_use, desc, status, output)}}
+
+
+def queued(task, tool_use, desc, at):
+    return {"type": "queue-operation", "timestamp": iso(at),
+            "content": notification(task, tool_use, desc)}
+
+
+def launch(tool_use, task, command, desc, at):
+    """The assistant's background Bash call and its tool result."""
+    return [{"type": "assistant", "timestamp": iso(at), "message": {"content": [
+                {"type": "tool_use", "id": tool_use, "name": "Bash", "input": {
+                    "command": command, "description": desc, "timeout": 7200000,
+                    "run_in_background": True}}]}},
+            {"type": "user", "timestamp": iso(at), "toolUseResult": {"backgroundTaskId": task},
+             "message": {"content": [{"type": "tool_result", "tool_use_id": tool_use,
+                                      "content": f"Command running in background with ID: "
+                                                 f"{task}. Output is being written to: /tmp/x"}]}}]
+
+
+class GuardEnv(unittest.TestCase):
+    """A temp state dir, decide() run in process against it, and helpers to write watches,
+    transcripts and ledger rows."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.state = os.path.join(self.tmp.name, "state")
+        # A temp HOME, so the walk to a Claude process finds only the sessions files a test
+        # writes there.
+        self.home = os.path.join(self.tmp.name, "home")
+        env = mock.patch.dict(os.environ, {"XDG_STATE_HOME": self.state, "HOME": self.home})
+        env.start()
+        self.addCleanup(env.stop)
+        os.environ.pop("DELEGATION_LEDGER", None)
+        # Inside the sandbox the lead's CLAUDE_PID is inherited but invisible, and SANDBOX_RUNTIME
+        # is set, either of which would make the guard say nothing. The sandbox tests set them.
+        os.environ.pop("CLAUDE_PID", None)
+        os.environ.pop("SANDBOX_RUNTIME", None)
+        self.watches = os.path.join(self.state, "dotclaude", "watches")
+        self.transcript = self.path("s1.jsonl")
+        self.now = time.time()
+        # Each acknowledgment starts a detached waiter (spawn_waiter). Here that is recorded
+        # instead, and reads as started, unless a test sets self.spawner to another function.
+        self.spawned, self.spawner = [], self.record_spawn
+        spawn = mock.patch.object(guard, "spawn_waiter", lambda *a: self.spawner(*a))
+        spawn.start()
+        self.addCleanup(spawn.stop)
+
+    def record_spawn(self, w, sid, me):
+        self.spawned.append(w["id"])
+        return True
+
+    def path(self, name):
+        return os.path.join(self.tmp.name, name)
+
+    def until(self, pred, timeout=15):
+        """Poll until pred() is truthy and return it; fail at the timeout."""
+        end = time.monotonic() + timeout
+        while time.monotonic() < end:
+            try:
+                got = pred()
+            except (OSError, ValueError, KeyError, TypeError):
+                got = None
+            if got:
+                return got
+            time.sleep(0.02)
+        self.fail("condition never held")
+
+    def watch(self, wid="w-1", sid="s1", state="open", live=False, cond=None, desc="the build",
+              **fields):
+        w = {"id": wid, "session_id": sid, "state": state, "description": desc,
+             "condition": cond or {"file": self.path("never")}, "created": dc.now_iso(),
+             "waiter_pid": os.getpid() if live else DEAD,
+             "waiter_start": dc.proc_start(os.getpid()) if live else None,
+             "waiter_heartbeat": dc.now_iso(), "poll_s": 15, "blocked_at": None}
+        w.update(fields)
+        dc.write_json(os.path.join(self.watches, f"{wid}.json"), w)
+        return w
+
+    def read(self, wid="w-1"):
+        return dc.read_watch(wid)
+
+    def lines(self, *entries, raw_first=None):
+        with open(self.transcript, "w") as f:
+            if raw_first is not None:
+                f.write(raw_first + "\n")
+            for e in entries:
+                if isinstance(e, list):
+                    f.writelines(json.dumps(x) + "\n" for x in e)
+                else:
+                    f.write(json.dumps(e) + "\n")
+
+    def payload(self, sid="s1", **kw):
+        return dict({"hook_event_name": "Stop", "session_id": sid, "stop_hook_active": False,
+                     "transcript_path": self.transcript, "background_tasks": []}, **kw)
+
+    def decide(self, at=None, **kw):
+        return guard.decide(self.payload(**kw), self.now if at is None else at)
+
+    def append(self, *entries, raw=""):
+        with open(self.transcript, "a") as f:
+            f.writelines(json.dumps(e) + "\n" for e in entries)
+            f.write(raw)
+
+    def codex_row(self, rid="r1", **kw):
+        ledger = os.path.join(self.state, "dotclaude", "delegations.jsonl")
+        os.makedirs(os.path.dirname(ledger), exist_ok=True)
+        with open(ledger, "a") as f:
+            f.write(json.dumps(dict({"runner": "codex", "id": rid, "run_id": rid,
+                                     "event": "start", "ts": dc.now_iso(), "pid": DEAD,
+                                     "wrapper_pid": DEAD}, **kw)) + "\n")
+
+    def met_reason(self, wid="w-1", desc="the build", cond=None):
+        cond = cond or f"{self.path('never')} exists"
+        return (f"Watch {wid} ({desc}): {cond} is met, but its waiter had stopped, so no "
+                "notification came. Check the result and report it.")
+
+    def err_log(self):
+        try:
+            with open(os.path.join(self.state, "dotclaude", "delegation-ledger.err")) as f:
+                return f.read()
+        except FileNotFoundError:
+            return ""
+
+    def lapse_reason(self, wid="w-1", desc="the build", cond=None):
+        cond = cond or f"{self.path('never')} exists"
+        unmet = f"{cond} is unmet"
+        return (f"Watch {wid} ({desc}) has no live waiter and {unmet}. If a command was stopped "
+                "at its time limit, don't re-run it. Re-arm the watch: delegation-ledger wait "
+                f"--resume {wid}, with run_in_background and timeout 7200000. To stop watching "
+                f"it: delegation-ledger wait --drop {wid}.")
+
+    def codex_ended(self, wid="w-1", run="r1"):
+        return (f"Watch {wid} (codex run {run} ends): codex run {run} has ended, but its waiter "
+                "had stopped, so the run isn't finalized. Re-arm the watch and its waiter "
+                f"finalizes it: delegation-ledger wait --resume {wid}, with run_in_background "
+                f"and timeout 7200000. To stop watching it: delegation-ledger wait --drop {wid}.")
+
+    def kill_reason(self, desc):
+        return (f'Background command "{desc}" was stopped at its time limit. If it was waiting '
+                "on a job that's still running, don't re-run it: wait with delegation-ledger "
+                "wait (--pid, --file or --log), with run_in_background and timeout 7200000. If "
+                "it was the job itself, report that it was stopped. If you've already handled "
+                "it, end your turn.")
+
+    def block(self, *reasons):
+        return {"decision": "block", "reason": "[watch-guard]\n" + "\n".join(
+            f"{n}. {r}" for n, r in enumerate(reasons, 1))}
+
+
+class Watches(GuardEnv):
+    def test_no_state_dir_and_no_transcript_allow(self):
+        self.assertIsNone(self.decide())
+
+    def test_no_watches_allow(self):
+        os.makedirs(self.watches)
+        self.lines()
+        self.assertIsNone(self.decide())
+
+    def test_another_sessions_watch_is_left_alone(self):
+        self.watch(sid="s2")
+        self.assertIsNone(self.decide())
+        self.assertIsNone(self.read()["blocked_at"])
+
+    def test_a_live_waiter_allows(self):
+        self.watch(live=True)
+        self.assertIsNone(self.decide())
+        self.assertIsNone(self.read()["blocked_at"])
+
+    def test_a_background_shell_holding_the_watch_id_counts_as_a_waiter(self):
+        self.watch()
+        tasks = [{"id": "b1", "type": "local_bash", "status": "running",
+                  "description": "re-arm", "command": "delegation-ledger wait --resume w-1"}]
+        self.assertIsNone(self.decide(background_tasks=tasks))
+
+    def test_a_met_condition_with_a_dead_waiter_blocks_once_and_is_recorded_done(self):
+        open(self.path("never"), "w").close()
+        self.watch()
+        self.assertEqual(self.decide(), self.block(self.met_reason()))
+        w = self.read()
+        self.assertEqual(w["state"], "done")
+        dc.parse_iso(w["ended"])
+        self.assertIsNone(self.decide())
+
+    def test_a_met_condition_with_a_live_waiter_is_left_to_the_waiter(self):
+        open(self.path("never"), "w").close()
+        self.watch(live=True)
+        self.assertIsNone(self.decide())
+        self.assertEqual(self.read()["state"], "open")  # the waiter records the end itself
+
+    def test_a_codex_run_that_ended_blocks_with_resume_and_isnt_recorded_done(self):
+        # Its outcome is unknown until it is finalized, and the re-armed waiter finalizes it,
+        # so the watch stays open: one block, then the lapse's acknowledgment.
+        self.codex_row()
+        self.watch(cond={"codex": "r1"}, desc="codex run r1 ends")
+        self.lines()
+        self.assertEqual(self.decide(prompt_id="p1"), self.block(self.codex_ended()))
+        w = self.read()
+        self.assertEqual(w["state"], "open")
+        dc.parse_iso(w["end_blocked_at"])
+        dc.parse_iso(w["blocked_at"])
+        self.assertEqual(self.decide(prompt_id="p2"), {"systemMessage": self.ACK.replace(
+            "w-1 (the build)", "w-1 (codex run r1 ends)")})
+        self.assertIsNone(self.decide(prompt_id="p3"))
+        self.assertEqual(self.read()["state"], "acknowledged")
+
+    def test_an_acknowledged_lapse_whose_job_fails_or_goes_stale_ends_and_blocks_once(self):
+        # An acknowledged lapse says nothing more, so a job that ends badly must be an end, not
+        # another lapse, or nobody hears of it.
+        log = self.path("build.log")
+        open(log, "w").close()
+        old = self.now - 7200
+        os.utime(log, (old, old))
+        never = self.path("never")
+        self.watch(state="acknowledged", blocked_at=guard.iso(old), created=guard.iso(old - 60),
+                   cond={"pids": [{"pid": DEAD, "start": None, "comm": "sleep"}], "file": never})
+        self.watch("w-2", state="acknowledged", blocked_at=guard.iso(old), created=guard.iso(old),
+                   cond={"log": log, "done": "^OK$", "stale_min": 1})
+        self.lines()
+        self.assertEqual(self.decide(), self.block(
+            f"Watch w-1 (the build) ended failed: pid {DEAD} (sleep) exited, but {never} exists "
+            "is unmet. Its waiter had stopped, so no notification came. Check the result and "
+            "report it.",
+            f"Watch w-2 (the build) ended stale: {log} unchanged for 1 min. Its waiter had "
+            "stopped, so no notification came. Check the result and report it."))
+        self.assertEqual([(w["state"], w["reported"]) for w in (self.read(), self.read("w-2"))],
+                         [("failed", True), ("stale", True)])
+        self.assertIsNone(self.decide(prompt_id="p2"))
+
+    def test_an_acknowledged_codex_lapse_whose_run_ends_blocks_once_and_stays_open(self):
+        # An acknowledged lapse says nothing more, so the run's end needs its own block.
+        self.codex_row()
+        self.watch(state="acknowledged", blocked_at=guard.iso(self.now - 600),
+                   cond={"codex": "r1"}, desc="codex run r1 ends")
+        self.lines()
+        self.assertEqual(self.decide(prompt_id="p1"), self.block(self.codex_ended()))
+        self.assertEqual(self.read()["state"], "acknowledged")
+        self.assertIsNone(self.decide(prompt_id="p2"))
+        self.assertIsNone(self.decide(prompt_id="p3"))
+        self.assertEqual(self.read()["state"], "acknowledged")
+
+    def test_twin_guards_at_the_runs_end_stop_block_once_and_dont_acknowledge(self):
+        # The lapse blocked at an earlier stop and isn't acknowledged yet; the run then ends.
+        self.codex_row()
+        self.watch(blocked_at=guard.iso(self.now - 600), blocked_stop="0123",
+                   cond={"codex": "r1"}, desc="codex run r1 ends")
+        self.lines()
+        self.assertEqual(self.decide(prompt_id="p5"), self.block(self.codex_ended()))
+        self.assertIsNone(self.decide(prompt_id="p5"))  # its twin, in the same stop
+        self.assertEqual(self.read()["state"], "open")
+        self.assertEqual(self.decide(prompt_id="p6"), {"systemMessage": self.ACK.replace(
+            "w-1 (the build)", "w-1 (codex run r1 ends)")})
+
+    def test_a_rearm_clears_the_runs_end_block(self):
+        # A waiter that takes the watch over (unblock) lets a later end block again.
+        self.codex_row()
+        self.watch(state="acknowledged", blocked_at=guard.iso(self.now - 600),
+                   end_blocked_at=guard.iso(self.now - 300), blocked_stop="0123",
+                   cond={"codex": "r1"}, desc="codex run r1 ends")
+        self.lines()
+        self.assertIsNone(self.decide(prompt_id="p1"))
+        dc.update_watch("w-1", dc.unblock)  # what take() and beat() do
+        self.assertNotIn("end_blocked_at", self.read())
+        self.assertEqual(self.decide(prompt_id="p2"), self.block(self.codex_ended()))
+
+    def test_a_running_codex_run_with_a_dead_waiter_is_a_plain_lapse(self):
+        self.codex_row(pid=os.getpid())
+        self.watch(cond={"codex": "r1"}, desc="codex run r1 ends")
+        self.assertEqual(self.decide(), self.block(self.lapse_reason(
+            desc="codex run r1 ends", cond="codex run r1 ends")))
+
+    def test_a_codex_stop_row_decides_done_or_failed_for_a_dead_waiter(self):
+        self.codex_row("r1", event="stop", exit=0)
+        self.codex_row("r2", event="stop", exit=4)
+        self.watch(cond={"codex": "r1"}, desc="codex run r1 ends", created="2026-10-02T10:00:00Z")
+        self.watch("w-2", cond={"codex": "r2"}, desc="codex run r2 ends",
+                   created="2026-10-02T10:00:01Z")
+        self.assertEqual(self.decide(), self.block(
+            self.met_reason(desc="codex run r1 ends", cond="codex run r1 ends"),
+            "codex run r2 ended with exit 4, but its waiter had stopped, so no notification "
+            "came. Check its report and report it."))
+        self.assertEqual((self.read()["state"], self.read("w-2")["state"]), ("done", "failed"))
+        self.assertIsNone(self.decide())
+
+    ACK = ("Watch w-1 (the build) still has no waiter of the lead's; it's acknowledged, and "
+           "the guard started a detached waiter on it, whose end a later stop says (it logs a "
+           "refusal or an error to delegation-ledger.err). To be woken when it ends instead, "
+           "re-arm with delegation-ledger wait --resume w-1, or drop it.")
+    PLAIN_ACK = ("Watch w-1 (the build) still has no waiter; it's acknowledged. Re-arm with "
+                 "delegation-ledger wait --resume w-1, or drop it.")
+
+    def grow(self):
+        """What a later stop's transcript looks like: the turn went on."""
+        self.append({"type": "assistant", "timestamp": iso(self.now), "message": {"content": "."}})
+
+    def test_a_lapse_blocks_once_then_is_acknowledged_with_a_warning(self):
+        self.watch()
+        self.lines()
+        self.assertEqual(self.decide(), self.block(self.lapse_reason()))
+        w = self.read()
+        dc.parse_iso(w["blocked_at"])
+        self.assertEqual(w["blocked_size"], os.path.getsize(self.transcript))
+        self.grow()
+        self.assertEqual(self.decide(at=self.now + 3), {"systemMessage": self.ACK})
+        self.assertEqual(self.read()["state"], "acknowledged")
+        self.grow()
+        self.assertIsNone(self.decide(at=self.now + 6))  # said once; the views still list it
+
+    def test_a_lapse_is_acknowledged_by_a_stop_with_another_digest(self):
+        self.watch()
+        self.lines()
+        stop = {"prompt_id": "p1", "last_assistant_message": "Waiting on the build."}
+        self.assertEqual(self.decide(**stop), self.block(self.lapse_reason()))
+        w = self.read()
+        self.assertEqual(w["blocked_stop"], guard.stop_digest(self.payload(**stop)))
+        self.assertRegex(w["blocked_stop"], r"^[0-9a-f]{16}$")
+        self.assertEqual(self.decide(at=self.now + 90, prompt_id="p1",
+                                     last_assistant_message="Still no waiter."),
+                         {"systemMessage": self.ACK})
+        self.assertEqual(self.read()["state"], "acknowledged")
+
+    def test_a_twin_guard_with_the_same_payload_doesnt_acknowledge_though_the_transcript_grew(
+            self):
+        self.watch()
+        self.lines()
+        stop = {"prompt_id": "p1", "last_assistant_message": "Waiting on the build."}
+        self.assertEqual(self.decide(**stop), self.block(self.lapse_reason()))
+        self.grow()  # a line landed between the twins
+        self.assertIsNone(self.decide(at=self.now + 1, **stop))
+        self.assertIsNone(self.decide(at=self.now + 90, **stop))  # nor does age, with a digest
+        self.assertEqual(self.read()["state"], "open")
+        self.assertEqual(self.decide(at=self.now + 91, prompt_id="p1",
+                                     last_assistant_message="Still no waiter."),
+                         {"systemMessage": self.ACK})
+
+    def test_a_new_prompt_alone_is_a_later_stop(self):
+        self.watch()
+        self.lines()
+        self.decide(prompt_id="p1", last_assistant_message="Done.")
+        self.assertEqual(self.decide(prompt_id="p2", last_assistant_message="Done."),
+                         {"systemMessage": self.ACK})
+
+    def test_a_stop_with_neither_field_falls_back_to_the_size(self):
+        self.watch()
+        self.lines()
+        self.decide(prompt_id="p1", last_assistant_message="Waiting on the build.")
+        self.assertIsNone(self.decide(at=self.now + 90))  # same size: the same stop
+        self.grow()
+        self.assertEqual(self.decide(at=self.now + 91), {"systemMessage": self.ACK})
+
+    def test_a_twin_guard_in_the_same_stop_neither_blocks_nor_acknowledges(self):
+        # With neither prompt_id nor last_assistant_message in the payload, it sees the
+        # transcript the first guard saw, so it knows the block is this stop's.
+        self.watch()
+        self.lines()
+        self.assertEqual(self.decide(), self.block(self.lapse_reason()))
+        self.assertIsNone(self.decide())
+        self.assertIsNone(self.decide(at=self.now + 30))  # same size: still the same stop
+        self.assertEqual(self.read()["state"], "open")
+        self.grow()
+        self.assertEqual(self.decide(at=self.now + 31), {"systemMessage": self.ACK})
+
+    def test_with_no_transcript_size_a_minute_later_is_a_later_stop(self):
+        self.watch()  # no transcript at all, and neither stop field
+        self.assertEqual(self.decide(), self.block(self.lapse_reason()))
+        self.assertIsNone(self.read()["blocked_size"])
+        self.assertIsNone(self.read()["blocked_stop"])
+        self.assertIsNone(self.decide(at=self.now + 30))
+        self.assertEqual(self.decide(at=self.now + 90), {"systemMessage": self.ACK})
+
+    def test_a_log_condition_is_checked_in_the_logs_last_megabyte(self):
+        log = self.path("job.log")
+        with open(log, "w") as f:
+            f.write("BUILD OK\n" + ("x" * 1023 + "\n") * (guard.LOG_TAIL // 1024 + 10))
+        self.watch(cond={"log": log, "done": "^BUILD OK$"}, desc="the log")
+        cond = f"{log} has a line matching /^BUILD OK$/"
+        self.assertEqual(self.decide(), self.block(self.lapse_reason(desc="the log", cond=cond)))
+        with open(log, "a") as f:
+            f.write("BUILD OK\n")  # now inside the last megabyte
+        self.assertEqual(self.decide(), self.block(self.met_reason(desc="the log", cond=cond)))
+
+    def long_log(self, *tail, name="build.log"):
+        """A log whose first line is OK, then more than the guard's 1 MB of filler, then
+        `tail`."""
+        log = self.path(name)
+        with open(log, "w") as f:
+            f.write("OK\n" + ("x" * 1023 + "\n") * (guard.LOG_TAIL // 1024 + 10))
+            f.writelines(line + "\n" for line in tail)
+        return log
+
+    def uncertain_reason(self, looks, why, lines, log, wid="w-1", desc="the build"):
+        return (f"Watch {wid} ({desc}) looks {looks} ({why}). But {log} is longer than the last "
+                f"1 MB the guard reads, and a line matching {lines} could be further back, so it "
+                "can't tell. Re-arm the watch and its waiter reads the whole log and reports the "
+                f"outcome: delegation-ledger wait --resume {wid}, with run_in_background and "
+                f"timeout 7200000. To stop watching it: delegation-ledger wait --drop {wid}.")
+
+    def assert_said_once(self, reason, state):
+        """One block with `reason`, then silence; the watch stays `state` with end_blocked_at."""
+        self.lines()
+        self.assertEqual(self.decide(prompt_id="p1"), self.block(reason))
+        out = [self.decide(prompt_id=p) for p in ("p2", "p3")]
+        self.assertFalse([o for o in out if o and o.get("decision")], out)  # no second block
+        self.assertEqual(self.read()["state"], state)
+        dc.parse_iso(self.read()["end_blocked_at"])
+
+    def test_an_acknowledged_job_that_ends_with_its_log_cut_blocks_once_as_uncertain(self):
+        # OK is further back than the guard reads, and the pid has exited. Recorded failed, the
+        # watch would refuse the re-armed waiter, which reads the whole log and says done; a
+        # plain lapse would say nothing, since this one was acknowledged.
+        log = self.long_log()
+        self.watch(state="acknowledged", blocked_at=guard.iso(self.now - 600),
+                   cond={"pids": [{"pid": DEAD, "start": None, "comm": "make"}], "log": log,
+                         "done": "^OK$"})
+        self.assert_said_once(self.uncertain_reason(
+            "failed", f"pid {DEAD} (make) exited, but {log} has a line matching /^OK$/ is unmet",
+            "/^OK$/", log), "acknowledged")
+
+    def test_an_acknowledged_log_that_goes_stale_with_its_log_cut_blocks_once_as_uncertain(self):
+        log = self.long_log()
+        old = self.now - 7200
+        os.utime(log, (old, old))
+        self.watch(state="acknowledged", blocked_at=guard.iso(old), created=guard.iso(old),
+                   cond={"log": log, "done": "^OK$", "stale_min": 1})
+        self.assert_said_once(self.uncertain_reason(
+            "stale", f"{log} unchanged for 1 min", "/^OK$/", log), "acknowledged")
+
+    def test_a_stale_verdict_a_fail_line_further_back_would_make_failed_is_uncertain(self):
+        # Its pid still runs, so a done line couldn't end it, but the waiter, reading the whole
+        # log, would find the fail line and say failed, not stale.
+        log = self.path("build.log")
+        with open(log, "w") as f:
+            f.write("ERROR\n" + ("x" * 1023 + "\n") * (guard.LOG_TAIL // 1024 + 10))
+        old = self.now - 7200
+        os.utime(log, (old, old))
+        me = [{"pid": os.getpid(), "start": dc.proc_start(os.getpid()), "comm": "python3"}]
+        self.watch(state="acknowledged", blocked_at=guard.iso(old), created=guard.iso(old),
+                   cond={"pids": me, "log": log, "done": "^OK$", "fail": "^ERROR$",
+                         "stale_min": 1})
+        self.assert_said_once(self.uncertain_reason(
+            "stale", f"{log} unchanged for 1 min", "/^ERROR$/", log), "acknowledged")
+
+    def test_a_done_line_with_a_fail_line_maybe_further_back_is_uncertain_not_done(self):
+        # The waiter, reading the whole log, would find the traceback and say failed.
+        log = self.path("build.log")
+        with open(log, "w") as f:
+            f.write("Traceback (most recent call last):\n"
+                    + ("x" * 1023 + "\n") * (guard.LOG_TAIL // 1024 + 10) + "BUILD OK\n")
+        cond = {"pids": [{"pid": DEAD, "start": None, "comm": "make"}], "log": log,
+                "done": "^BUILD OK$", "fail": "^Traceback"}
+        self.watch(cond=cond)
+        self.lines()
+        self.assertEqual(self.decide(prompt_id="p1"), self.block(self.uncertain_reason(
+            "done", f"{dc.condition_text(cond)} is met", "/^Traceback/", log)))
+        # Acknowledged, it gets a detached waiter, which reads the whole log and decides.
+        self.assertEqual(self.decide(prompt_id="p2"), {"systemMessage": self.ACK})
+        self.assertEqual(self.spawned, ["w-1"])
+        self.assertIsNone(self.decide(prompt_id="p3"))
+        self.assertEqual(self.read()["state"], "acknowledged")  # not recorded done
+
+    def test_a_done_verdict_from_pids_or_a_file_says_what_was_met(self):
+        # No --done: the pid's exit or the file meets it, and only a fail line could undo that.
+        dead = [{"pid": DEAD, "start": None, "comm": "make"}]
+        log = self.long_log()
+        self.watch(cond={"pids": dead, "log": log, "fail": "^ERROR$"},
+                   created="2026-10-02T10:00:00Z")
+        made = self.path("made")
+        open(made, "w").close()
+        self.watch("w-2", cond={"file": made, "log": log, "fail": "^ERROR$"},
+                   created="2026-10-02T10:00:01Z")
+        self.lines()
+        self.assertEqual(self.decide(), self.block(
+            self.uncertain_reason("done", f"pid {DEAD} (make) exits is met", "/^ERROR$/", log),
+            self.uncertain_reason("done", f"{made} exists is met", "/^ERROR$/", log,
+                                  wid="w-2")))
+
+    def test_a_rearm_clears_the_uncertain_block(self):
+        log = self.long_log()
+        self.watch(state="acknowledged", blocked_at=guard.iso(self.now - 600),
+                   cond={"pids": [{"pid": DEAD, "start": None, "comm": "make"}], "log": log,
+                         "done": "^OK$"})
+        self.lines()
+        reason = self.uncertain_reason(
+            "failed", f"pid {DEAD} (make) exited, but {log} has a line matching /^OK$/ is unmet",
+            "/^OK$/", log)
+        self.assertEqual(self.decide(prompt_id="p1"), self.block(reason))
+        dc.update_watch("w-1", dc.unblock)  # what take() and beat() do
+        self.assertEqual(self.decide(prompt_id="p2"), self.block(reason))
+
+    def test_a_cut_log_whose_verdict_the_whole_log_cant_change_still_ends_the_watch(self):
+        # Each lacks more than a done line further back could give: so failed or stale stands.
+        never = self.path("never")
+        dead = [{"pid": DEAD, "start": None, "comm": "make"}]
+        log = self.long_log("OK")  # the done line in the tail, the file missing
+        self.watch(cond={"pids": dead, "log": log, "done": "^OK$", "file": never},
+                   created="2026-10-02T10:00:00Z")
+        log2 = self.long_log(name="other.log")  # no done line in the tail, the file missing
+        self.watch("w-2", cond={"pids": dead, "log": log2, "done": "^OK$", "file": never},
+                   created="2026-10-02T10:00:01Z")
+        log3 = self.long_log(name="quiet.log")  # quiet, but its pid still runs
+        old = self.now - 7200
+        os.utime(log3, (old, old))
+        me = [{"pid": os.getpid(), "start": dc.proc_start(os.getpid()), "comm": "python3"}]
+        self.watch("w-3", cond={"pids": me, "log": log3, "done": "^OK$", "stale_min": 1},
+                   created=guard.iso(old))
+        self.lines()
+        out = self.decide()
+        self.assertEqual(out["decision"], "block")
+        for wid, state in (("w-1", "failed"), ("w-2", "failed"), ("w-3", "stale")):
+            self.assertIn(f"Watch {wid} (the build) ended {state}", out["reason"])
+        self.assertNotIn("can't tell", out["reason"])
+        self.assertEqual([self.read(w)["state"] for w in ("w-1", "w-2", "w-3")],
+                         ["failed", "failed", "stale"])
+
+    def test_a_fail_line_in_the_tail_or_a_short_logs_verdict_still_ends_the_watch(self):
+        log = self.long_log("ERROR")
+        self.watch(cond={"log": log, "done": "^OK$", "fail": "^ERROR$"},
+                   created="2026-10-02T10:00:00Z")
+        short = self.path("short.log")
+        with open(short, "w") as f:
+            f.write("building\n")
+        self.watch("w-2", cond={"pids": [{"pid": DEAD, "start": None, "comm": "make"}],
+                                "log": short, "done": "^OK$"}, created="2026-10-02T10:00:01Z")
+        self.lines()
+        self.assertEqual(self.decide(), self.block(
+            f"Watch w-1 (the build) ended failed: {log} has a line matching /^ERROR$/. Its "
+            "waiter had stopped, so no notification came. Check the result and report it.",
+            f"Watch w-2 (the build) ended failed: pid {DEAD} (make) exited, but {short} has a "
+            "line matching /^OK$/ is unmet. Its waiter had stopped, so no notification came. "
+            "Check the result and report it."))
+        self.assertEqual([self.read(w)["state"] for w in ("w-1", "w-2")], ["failed", "failed"])
+
+    def test_an_unterminated_last_line_is_never_matched_but_makes_an_end_uncertain(self):
+        # The guard's verdict is final, and "OK" may be the start of "OKAY": so neither done
+        # nor stale is recorded, and the re-armed waiter, which settles the line, decides.
+        log = self.path("job.log")
+        with open(log, "w") as f:
+            f.write("building\nOK")
+        old = self.now - 7200
+        os.utime(log, (old, old))
+        self.watch(cond={"log": log, "done": "^OK$", "stale_min": 1}, created=guard.iso(old))
+        self.lines()
+        self.assertEqual(self.decide(), self.block(
+            f"Watch w-1 (the build) looks stale ({log} unchanged for 1 min). But {log}'s last "
+            "line has no newline yet and matches /^OK$/, and it may be the start of a longer "
+            "line, so the guard can't tell. Re-arm the watch and its waiter reads that line "
+            "once it settles and reports the outcome: delegation-ledger wait --resume w-1, "
+            "with run_in_background and timeout 7200000. To stop watching it: "
+            "delegation-ledger wait --drop w-1."))
+        self.assertEqual(self.read()["state"], "open")
+
+    def test_an_unterminated_last_line_of_an_unmet_log_blocks_once(self):
+        # No pids and no --stale, so nothing else ends the verdict while the line waits for its
+        # newline: a fail line, or the done line when it is all the condition lacks, is said.
+        log = self.path("job.log")
+        for text, cond, lines in (
+                ("building\nFAILED", {"log": log, "done": "^OK$", "fail": "FAILED"}, "/FAILED/"),
+                ("building\nOK", {"log": log, "done": "^OK$"}, "/^OK$/")):
+            with self.subTest(text=text):
+                with open(log, "w") as f:
+                    f.write(text)
+                self.watch(cond=cond)
+                self.assertEqual(self.decide(prompt_id="p1"), self.block(
+                    f"Watch w-1 (the build) looks unmet ({log} has a line matching /^OK$/ is "
+                    f"unmet). But {log}'s last line has no newline yet and matches {lines}, and "
+                    "it may be the start of a longer line, so the guard can't tell. Re-arm the "
+                    "watch and its waiter reads that line once it settles and reports the "
+                    "outcome: delegation-ledger wait --resume w-1, with run_in_background and "
+                    "timeout 7200000. To stop watching it: delegation-ledger wait --drop w-1."))
+                self.assertEqual(self.decide(prompt_id="p2"), {"systemMessage": self.ACK})
+                self.assertIsNone(self.decide(prompt_id="p3"))
+                self.assertEqual(self.read()["state"], "acknowledged")
+        # The done line with its --file still missing isn't all the condition lacks: a lapse.
+        cond = {"log": log, "done": "^OK$", "file": self.path("never")}
+        self.watch(cond=cond)
+        self.assertEqual(self.decide(prompt_id="p1"), self.block(self.lapse_reason(
+            cond=dc.condition_text(cond))))
+
+    def test_an_unterminated_last_line_splits_at_carriage_returns_as_a_waiter_reads_it(self):
+        # A progress bar's last redraw: the waiter, once it settles, matches /^FAILED$/ on the
+        # part after the carriage return, so the guard must see that the line could fail it.
+        log = self.path("job.log")
+        with open(log, "w") as f:
+            f.write("building 50%\rFAILED")
+        self.watch(cond={"log": log, "done": "^OK$", "fail": "^FAILED$"})
+        self.assertIn("has no newline yet and matches /^FAILED$/",
+                      self.decide(prompt_id="p1")["reason"])
+
+    def test_a_spent_budget_takes_no_more_items_and_records_none_it_wont_print(self):
+        self.watch(created="2026-10-02T10:00:00Z")
+        self.watch("w-2", created="2026-10-02T10:00:01Z")
+        self.lines(launch("toolu_1", "bk1", "make", "the make", self.now - 7200),
+                   notice("bk1", "toolu_1", "the make", self.now - 60))
+        ticks = itertools.chain([0, 0], itertools.repeat(10))  # spent after the first watch
+        out = guard.decide(self.payload(), self.now, clock=lambda: next(ticks))
+        self.assertEqual(out, self.block(self.lapse_reason()))
+        self.assertIsNone(self.read("w-2")["blocked_at"])
+        self.assertIn("budget is spent", self.err_log())
+        self.assertEqual(self.decide(), self.block(self.lapse_reason("w-2"),
+                                                   self.kill_reason("the make")))
+
+    def test_a_sandboxed_guard_says_nothing_and_records_nothing(self):
+        # Its own PID namespace hides every pid outside, so every waiter would read as lapsed.
+        self.watch()
+        self.lines(notice("bk1", "toolu_1", "the make", self.now - 60))
+        with mock.patch.dict(os.environ, {"CLAUDE_PID": str(DEAD)}):
+            self.assertIsNone(self.decide())
+        self.assertIsNone(self.read()["blocked_at"])
+        self.assertFalse(os.path.exists(os.path.join(self.state, "dotclaude", "kills")))
+
+    def test_sandbox_runtime_makes_the_guard_say_nothing(self):
+        self.watch()
+        with mock.patch.dict(os.environ, {"SANDBOX_RUNTIME": "1"}):
+            self.assertIsNone(self.decide())
+        self.assertIsNone(self.read()["blocked_at"])
+
+    def session_file(self, pid, sid="s-claude"):
+        """A sessions file for pid, as Claude Code writes one, in the test's HOME."""
+        sessions = os.path.join(self.home, ".claude", "sessions")
+        os.makedirs(sessions, exist_ok=True)
+        with open(os.path.join(sessions, f"{pid}.json"), "w") as f:
+            json.dump({"pid": pid, "procStart": dc.proc_start(pid), "sessionId": sid}, f)
+
+    def test_a_stale_claude_pid_under_a_live_claude_process_still_guards(self):
+        # A CLAUDE_PID inherited from a process that has ended, while the walk finds the live
+        # Claude process this hook runs under (this test's parent stands in for it).
+        self.session_file(os.getppid())
+        self.watch()
+        with mock.patch.dict(os.environ, {"CLAUDE_PID": str(DEAD)}):
+            self.assertEqual(self.decide(), self.block(self.lapse_reason()))
+
+    def test_an_inherited_claude_pid_doesnt_make_a_nested_guard_adopt_the_leads_watch(self):
+        # A nested claude -p (this test's parent) inherited the lead's CLAUDE_PID; after the
+        # lead's /clear, the lead's old session isn't live.
+        lead = subprocess.Popen(["sleep", "60"])
+        self.addCleanup(lambda: (lead.kill(), lead.wait()))
+        self.session_file(lead.pid, "s-lead-new")
+        self.session_file(os.getppid(), "s1")
+        self.watch(sid="s-lead-old", claude_pid=lead.pid, claude_start=dc.proc_start(lead.pid))
+        self.lines()
+        with mock.patch.dict(os.environ, {"CLAUDE_PID": str(lead.pid)}):
+            self.assertEqual(guard.dc.claude_process(), (os.getppid(),
+                                                         dc.proc_start(os.getppid())))
+            self.assertIsNone(self.decide())
+        self.assertEqual(self.read()["session_id"], "s-lead-old")
+
+    def test_stop_hook_active_doesnt_stop_a_fresh_lapse_blocking(self):
+        self.watch()
+        self.assertEqual(self.decide(stop_hook_active=True), self.block(self.lapse_reason()))
+
+    def test_a_dropped_or_ended_watch_is_ignored(self):
+        self.watch(state="dropped")
+        self.watch(wid="w-2", state="done")
+        self.assertIsNone(self.decide())
+
+    def test_a_rearmed_waiter_resets_the_block(self):
+        self.watch()
+        self.decide()
+        self.watch(live=True)  # what a --resume's take() writes: blocked_at cleared
+        self.assertIsNone(self.decide())
+
+    def mine(self, sid="s-before", **fields):
+        """A watch recorded under this test's process, which plays the Claude process."""
+        return self.watch(sid=sid, claude_pid=os.getpid(),
+                          claude_start=dc.proc_start(os.getpid()), **fields)
+
+    def as_claude(self, live=("s1",)):
+        """Run as the Claude process (CLAUDE_PID is this test), with `live` the live sessions.
+        Returns the live_sessions mock."""
+        env = mock.patch.dict(os.environ, {"CLAUDE_PID": str(os.getpid())})
+        sessions = mock.patch.object(guard.dc, "live_sessions",
+                                     return_value={s: os.getpid() for s in live})
+        env.start()
+        self.addCleanup(env.stop)
+        self.addCleanup(sessions.stop)
+        return sessions.start()
+
+    def test_a_watch_left_by_clear_is_adopted_and_guarded(self):
+        # /clear starts a new session id in the same Claude process, and the old id isn't live.
+        self.mine()
+        self.lines()
+        self.as_claude()
+        self.assertEqual(self.decide(), self.block(self.lapse_reason()))
+        self.assertEqual(self.read()["session_id"], "s1")
+        self.assertIn("adopted watch w-1 from session s-before", self.err_log())
+
+    def test_a_watch_this_process_recorded_with_no_session_is_adopted(self):
+        self.mine(sid="unknown")
+        self.lines()
+        self.as_claude()
+        self.assertEqual(self.decide(), self.block(self.lapse_reason()))
+        self.assertEqual(self.read()["session_id"], "s1")
+        self.assertIn("adopted watch w-1 from session unknown: the same Claude process (a "
+                      "/clear, or a watch recorded with no session)", self.err_log())
+
+    def ack(self, wid):
+        return self.ACK.replace("w-1", wid)
+
+    def assert_blocks_afresh_then_acks(self):
+        """w-1 (acknowledged) and w-2 (blocked, still open), both adopted at this stop: each
+        blocks once, as a first lapse, then acknowledges, then says nothing."""
+        self.assertEqual(self.decide(prompt_id="p1"), self.block(
+            self.lapse_reason(), self.lapse_reason("w-2")))
+        self.assertEqual([self.read(w)["state"] for w in ("w-1", "w-2")], ["open", "open"])
+        self.assertEqual(self.decide(prompt_id="p2"),
+                         {"systemMessage": f"{self.ack('w-1')} {self.ack('w-2')}"})
+        self.assertIsNone(self.decide(prompt_id="p3"))
+
+    def test_a_clear_adoption_blocks_on_an_old_lapse_again(self):
+        # The conversation after /clear never saw the old block or its ack.
+        old = {"blocked_at": guard.iso(self.now - 600), "blocked_stop": "0123", "blocked_size": 1}
+        self.mine(state="acknowledged", created="2026-10-02T10:00:00Z", **old)
+        self.mine(wid="w-2", created="2026-10-02T10:00:01Z", **old)
+        self.lines()
+        self.as_claude()
+        self.assert_blocks_afresh_then_acks()
+        self.assertEqual(self.read("w-2")["session_id"], "s1")
+
+    def test_a_crash_adoption_blocks_on_an_old_lapse_again(self):
+        old = {"blocked_at": guard.iso(self.now - 600), "blocked_stop": "0123",
+               "claude_pid": DEAD, "claude_start": None}
+        self.watch(state="acknowledged", created="2026-10-02T10:00:00Z", **old)
+        self.watch("w-2", created="2026-10-02T10:00:01Z", **old)
+        self.lines()
+        self.as_claude()
+        self.assert_blocks_afresh_then_acks()
+        self.assertEqual(self.read("w-2")["claude_pid"], os.getpid())
+
+    def test_a_live_sessions_watch_isnt_adopted_even_when_the_process_matches(self):
+        self.mine()
+        self.lines()
+        self.as_claude(live=("s1", "s-before"))
+        self.assertIsNone(self.decide())
+        self.assertEqual(self.read()["session_id"], "s-before")
+        self.assertNotIn("adopted", self.err_log())
+
+    def test_adoption_is_checked_again_under_the_lock(self):
+        # Between gather and commit, the old session came back (claude --resume elsewhere).
+        self.mine()
+        self.lines()
+        sessions = self.as_claude()
+        calls = itertools.count()
+        sessions.side_effect = lambda: ({"s1": 1} if next(calls) == 0
+                                        else {"s1": 1, "s-before": 2})
+        self.assertIsNone(self.decide())
+        self.assertEqual(self.read()["session_id"], "s-before")
+        self.assertIsNone(self.read()["blocked_at"])
+        self.assertNotIn("adopted", self.err_log())
+
+    def test_a_watch_re_armed_elsewhere_after_gather_isnt_adopted(self):
+        self.mine()
+        self.lines()
+        self.as_claude()
+        real = guard.watch_pending
+
+        def watch_pending(w, shells, now):
+            p = real(w, shells, now)  # then another session's --resume takes the watch
+            self.watch(sid="s-other", claude_pid=DEAD, claude_start=None)
+            return p
+        with mock.patch.object(guard, "watch_pending", watch_pending):
+            self.assertIsNone(self.decide())
+        self.assertEqual(self.read()["session_id"], "s-other")
+        self.assertIsNone(self.read()["blocked_at"])
+
+    def test_a_watch_of_a_dead_claude_process_isnt_adopted(self):
+        self.watch(sid="s-before", claude_pid=DEAD, claude_start=None)
+        self.lines()
+        self.as_claude()
+        self.assertIsNone(self.decide())
+        self.assertEqual(self.read()["session_id"], "s-before")
+
+    def unheard_reason(self, wid="w-1"):
+        return (f"Watch {wid}'s waiter was started by a Claude Code process that has ended, so "
+                f"its exit won't reach you. Re-arm it: delegation-ledger wait --resume {wid}, "
+                "with run_in_background and timeout 7200000.")
+
+    def ended_reason(self, state="done", wid="w-1", desc="the build"):
+        return (f"Watch {wid} ({desc}) ended ({state}) while no Claude Code process was "
+                "listening. Check the result and report it.")
+
+    def test_a_crashed_processs_live_waiter_is_adopted_and_blocks_once(self):
+        # A crash, then claude --continue: the same session id in a new Claude process.
+        self.watch(live=True, claude_pid=DEAD, claude_start=None)
+        self.lines()
+        self.as_claude()
+        self.assertEqual(self.decide(), self.block(self.unheard_reason()))
+        w = self.read()
+        self.assertEqual((w["claude_pid"], w["claude_start"], w["waiter_unheard"]),
+                         (os.getpid(), dc.proc_start(os.getpid()), True))
+        self.assertIn(f"adopted watch w-1 from Claude process {DEAD}, which has ended",
+                      self.err_log())
+        self.assertIsNone(self.decide(prompt_id="p2"))
+
+    def test_a_crashed_processs_waiter_with_a_stale_heartbeat_is_marked_unheard(self):
+        # Its process runs (a suspended VM made the heartbeat stale), so when it resumes its exit
+        # goes to the ended process: --resume must be able to take it over.
+        self.watch(live=True, claude_pid=DEAD, claude_start=None,
+                   waiter_heartbeat=guard.iso(self.now - 3600))
+        self.lines()
+        self.as_claude()
+        out = self.decide()
+        self.assertIn(self.unheard_reason(), out["reason"])
+        self.assertIs(self.read()["waiter_unheard"], True)
+        # It resumes and beats again. A --resume elsewhere may still take it over, and its own
+        # end is recorded unreported, so the guard and the nudge say it.
+        dc.update_watch("w-1", lambda w: w.update(waiter_heartbeat=dc.now_iso()))
+        dc.Waiter("w-1", 15, (None, "s2")).refuse_a_live_waiter(self.read())
+        me = (os.getpid(), dc.proc_start(os.getpid()))
+        dc.Waiter("w-1", 15, (me, "s1")).end("done")
+        self.assertIs(self.read()["reported"], False)
+
+    def test_a_crashed_processs_stale_waiter_whose_condition_is_met_says_only_the_end(self):
+        # "Re-arm it" would contradict the end, and --resume refuses a done watch.
+        open(self.path("never"), "w").close()
+        self.watch(live=True, claude_pid=DEAD, claude_start=None,
+                   waiter_heartbeat=guard.iso(self.now - 3600))
+        self.lines()
+        self.as_claude()
+        self.assertEqual(self.decide(), self.block(self.met_reason()))
+        self.assertEqual(self.read()["state"], "done")
+
+    def test_a_crashed_processs_dead_waiter_is_adopted_and_lapses(self):
+        self.watch(claude_pid=DEAD, claude_start=None)
+        self.lines()
+        self.as_claude()
+        self.assertEqual(self.decide(), self.block(self.lapse_reason()))
+        w = self.read()
+        self.assertEqual(w["claude_pid"], os.getpid())
+        self.assertNotIn("waiter_unheard", w)
+
+    def test_without_its_own_process_the_guard_adopts_no_crashed_watch(self):
+        self.watch(live=True, claude_pid=DEAD, claude_start=None)
+        self.lines()
+        with mock.patch.object(guard.dc, "claude_process", return_value=None):
+            self.assertIsNone(self.decide())
+        self.assertEqual(self.read()["claude_pid"], DEAD)
+
+    def test_a_watch_that_ended_while_nobody_listened_blocks_once(self):
+        self.watch(state="done", ended=guard.iso(self.now - 3600), claude_pid=DEAD,
+                   claude_start=None, created="2026-10-02T10:00:00Z", reported=False)
+        self.watch("w-2", state="stale", ended=guard.iso(self.now - 60), claude_pid=os.getpid(),
+                   claude_start=dc.proc_start(os.getpid()), waiter_unheard=True,
+                   created="2026-10-02T10:00:01Z", reported=False)
+        self.lines()
+        self.assertEqual(self.decide(), self.block(self.ended_reason(),
+                                                   self.ended_reason("stale", "w-2")))
+        self.assertEqual((self.read()["reported"], self.read("w-2")["reported"]), (True, True))
+        self.assertIsNone(self.decide(prompt_id="p2"))
+
+    def test_an_ended_watch_someone_heard_or_could_says_nothing(self):
+        dead = {"claude_pid": DEAD, "claude_start": None, "reported": False}
+        self.watch("w-1", state="done", ended=guard.iso(self.now - 60),
+                   **dict(dead, reported=True))
+        self.watch("w-2", state="failed", ended=guard.iso(self.now - 8 * 86400), **dead)
+        self.watch("w-3", state="done", ended=guard.iso(self.now - 60), claude_pid=os.getpid(),
+                   claude_start=dc.proc_start(os.getpid()), reported=False)  # its process runs
+        self.watch("w-4", state="dropped", ended=guard.iso(self.now - 60), **dead)
+        self.watch("w-5", sid="s-other", state="done", ended=guard.iso(self.now - 60), **dead)
+        self.watch("w-6", state="done", ended=guard.iso(self.now - 60),
+                   reported=False)  # no process recorded
+        self.lines()
+        self.assertIsNone(self.decide())
+
+    def test_a_watch_that_ended_before_reported_existed_counts_as_reported(self):
+        # No `reported` key at all: an end recorded before this field, which it can't judge.
+        self.watch(state="done", ended=guard.iso(self.now - 60), claude_pid=DEAD,
+                   claude_start=None)
+        self.lines()
+        self.assertIsNone(self.decide())
+        self.assertNotIn("reported", self.read())
+
+    def test_an_end_the_guard_says_is_recorded_reported(self):
+        target = self.path("out")
+        open(target, "w").close()
+        self.watch(cond={"file": target}, claude_pid=DEAD, claude_start=None)
+        self.lines()
+        self.assertEqual(self.decide(), self.block(self.met_reason(cond=f"{target} exists")))
+        self.assertEqual((self.read()["state"], self.read()["reported"]), ("done", True))
+        self.assertIsNone(self.decide(prompt_id="p2"))
+
+    def hold_watches_lock(self):
+        """Take watches/.lock from another open file, as a busy twin would, until cleanup."""
+        held = open(os.path.join(self.watches, ".lock"), "a")
+        self.addCleanup(held.close)
+        fcntl.flock(held, fcntl.LOCK_EX)
+        self.addCleanup(fcntl.flock, held, fcntl.LOCK_UN)
+
+    def test_adoption_and_the_items_are_one_update(self):
+        # A twin takes watches/.lock right after the first update: a second would find it busy.
+        self.watch(live=True, claude_pid=DEAD, claude_start=None, created="2026-10-02T10:00:00Z")
+        self.watch("w-2", created="2026-10-02T10:00:01Z")
+        self.lines()
+        self.as_claude()
+        real, calls = guard.dc.update_watches, []
+
+        def update_watches(fns, until=None, clock=time.monotonic):
+            if calls:
+                raise guard.dc.LockBusy("watches/.lock")
+            calls.append(fns)
+            out = real(fns, until, clock)
+            self.hold_watches_lock()
+            return out
+        with mock.patch.object(guard.dc, "update_watches", update_watches):
+            self.assertEqual(self.decide(), self.block(self.unheard_reason(),
+                                                       self.lapse_reason("w-2")))
+        self.assertEqual(sorted(calls[0]), ["w-1", "w-2"])
+
+    def test_a_busy_watches_lock_adopts_nothing(self):
+        self.watch(live=True, claude_pid=DEAD, claude_start=None)
+        self.lines()
+        self.as_claude()
+        self.hold_watches_lock()
+        with mock.patch.object(guard, "BUDGET_S", 0.1), \
+                mock.patch.object(guard, "LOCK_GRACE_S", 0.1):
+            self.assertIsNone(self.decide())
+        self.assertEqual((self.read()["claude_pid"], self.read().get("waiter_unheard")),
+                         (DEAD, None))
+        self.assertIn("nothing was taken this stop", self.err_log())
+
+    def test_an_undecidable_watch_is_skipped_and_the_other_still_blocks(self):
+        self.watch(wid="w-gone", cond={"codex": "r-gone"}, desc="codex run r-gone ends")
+        self.watch(wid="w-2")
+        self.assertEqual(self.decide(), self.block(self.lapse_reason(wid="w-2")))
+        self.assertIn("watch-guard: watch w-gone", self.err_log())
+        self.assertIn("no longer in the ledger", self.err_log())
+        self.assertIsNone(self.read("w-gone")["blocked_at"])
+
+    def test_a_watch_whose_write_fails_is_unsaid_and_the_rest_go_on(self):
+        self.watch(created="2026-10-02T10:00:00Z")
+        before = self.watch("w-2", created="2026-10-02T10:00:01Z")
+        self.lines(notice("bk1", "toolu_1", "the make", self.now - 60))
+        real = guard.dc.write_json
+
+        def write_json(path, obj):
+            if path.endswith("w-2.json"):
+                raise OSError(28, "No space left on device")
+            return real(path, obj)
+        with mock.patch.object(guard.dc, "write_json", write_json):
+            out = self.decide(prompt_id="p1", last_assistant_message="m1")
+        self.assertEqual(out, self.block(self.lapse_reason(), self.kill_reason("the make")))
+        self.assertEqual(self.read("w-2"), before)
+        self.assertIn("watch-guard: watch w-2", self.err_log())
+        self.assertIn("No space left on device", self.err_log())
+        out = self.decide(prompt_id="p1", last_assistant_message="m2")  # the next stop
+        self.assertEqual(out, dict(self.block(self.lapse_reason("w-2")),
+                                   systemMessage=self.ACK))
+
+
+class OutcomeMatrix(GuardEnv):
+    """Every way a watch's job can end, in every state its watch can be in when it does, across
+    a run of stops by the lead, who never re-arms: each end and each uncertain outcome is said
+    (a block that says it, not only a lapse) at least once and at most twice, and a job still
+    running is said at most once, as a lapse. When a stop acknowledges a lapse, the guard's
+    detached waiter starts: here an in-process stand-in that takes the watch as the real one
+    does and, before each stop, reads the whole condition once (DetachedWaiters runs the real
+    one)."""
+
+    STOPS = ("p1", "p2", "p3", "p4", "p5", "p6")
+    STATES = ("open", "blocked", "acknowledged", "after /clear", "after a crash",
+              "end blocked, /clear", "acked, then ends")
+    # The blocks each outcome gets across STOPS, by the watch's state when its job ends: open
+    # and unblocked; open and blocked once, not yet acknowledged; acknowledged; adopted after a
+    # /clear; adopted after a crash; adopted after a /clear with end_blocked_at already set;
+    # and acked, then ends: open and running, so the first stop blocks on the lapse and the
+    # second acknowledges it and starts the detached waiter, and the job ends after that. A
+    # codex run ended unfinalized, or an uncertain log, blocks once as such; a stop that then
+    # acknowledges it starts the detached waiter, which decides it, and the stop after says
+    # its end: twice. A cell a known gap in docs/delegation.md covers holds the gap's name
+    # instead, and isn't run. None does today.
+    MATRIX = {
+        #               open  blocked  acked  /clear  crash  end blocked  acked, then ends
+        "met":         (1,    1,       1,     1,      1,     1,           2),
+        "failed":      (1,    1,       1,     1,      1,     1,           2),
+        "stale":       (1,    1,       1,     1,      1,     1,           2),
+        "codex ended": (2,    2,       1,     2,      2,     2,           2),
+        "uncertain":   (2,    2,       1,     2,      2,     2,           2),
+        "running":     (1,    0,       0,     1,      1,     1,           1),
+        "detached fails": (2, 1,       0,     2,      2,     2,           2),
+        "detached fails, codex gone": (2, 1, 0, 2,    2,     2,           2),
+        "detached fails, then codex ends": (2, 1, 0, 2, 2,   2,           2),
+        "detached fails, then a partial line": (2, 1, 0, 2, 2, 2,         2),
+        "unterminated": (1,   1,       1,     1,      1,     1,           2),
+    }
+    # "detached fails" is a job still running whose detached waiter stops with an error right
+    # after it takes the watch: the next stop says the error, and no other is started. ", codex
+    # gone" is a running codex run that then leaves the ledger, which is the error: the guard
+    # can't decide the run either, but says the error. ", then ..." is a job that ends before
+    # the stop after the error: a codex run that ends unfinalized, or a --log watch whose last
+    # line, with no newline, then matches --fail. That stop's one block says both the error and
+    # the end. "unterminated" is a --log watch with no pids and no --stale whose last line, with
+    # no newline, matches --fail, and no detached waiter starts (its spawn fails): only the
+    # guard can say it, once, as uncertain.
+    ENDS = {"met": "done", "failed": "failed", "stale": "stale", "codex ended": "done",
+            "uncertain": "done"}  # as the guard or the detached waiter records them
+    UNENDED = ("running", "detached fails", "detached fails, codex gone",
+               "detached fails, then codex ends", "detached fails, then a partial line",
+               "unterminated")
+    THEN = {"detached fails, then codex ends": "has ended, but its waiter had stopped",
+            "detached fails, then a partial line": "last line has no newline yet"}
+
+    def spawn_stand_in(self, w, sid, me):
+        """The detached waiter, in process: it takes the watch as the real one does. For
+        "detached fails" it then records an error and exits, as the real one does: for a codex
+        run, the Undecidable its read of the run raises once the run has left the ledger. For
+        "unterminated" none starts."""
+        if self.unstarted:
+            return False
+        waiter = dc.Waiter(w["id"], 15, (me, sid), detached=True)
+        waiter.take(None)
+        if self.outcome == "detached fails, codex gone":
+            open(os.path.join(self.state, "dotclaude", "delegations.jsonl"), "w").close()
+            with self.assertRaises(dc.Undecidable) as raised:
+                dc.watch_verdict(dc.read_watch(w["id"]))
+            waiter.fail(f"Undecidable: {raised.exception}")
+        elif self.failing:
+            waiter.fail("OSError: [Errno 5] Input/output error")
+        else:
+            self.detached.append(waiter)
+            return True
+        dc.update_watch(w["id"], lambda cur: cur.update(waiter_pid=DEAD))
+        if self.after_failure:
+            self.after_failure()  # the job ends before the next stop
+        return True
+
+    def poll_stand_ins(self):
+        """One poll by each stand-in: the whole condition, read as any waiter reads it, and the
+        end recorded once it has ended. A codex run that has ended counts as finalized done."""
+        for waiter in list(self.detached):
+            verdict, why = dc.watch_verdict(dc.read_watch(waiter.wid))
+            if verdict:
+                waiter.end(verdict, why)
+                self.detached.remove(waiter)
+            else:
+                waiter.beat()
+
+    def arrange(self, outcome, state):
+        """A fresh state dir and transcript, and watch w-1 with `outcome`'s job in `state`.
+        Returns what makes the job end, for "acked, then ends", else None."""
+        d = tempfile.mkdtemp(dir=self.tmp.name)
+        self.state = os.path.join(d, "state")
+        os.environ["XDG_STATE_HOME"] = self.state  # setUp's patch.dict restores it
+        self.watches = os.path.join(self.state, "dotclaude", "watches")
+        self.transcript = os.path.join(d, "s1.jsonl")
+        self.lines()
+        self.detached, self.failing = [], outcome.startswith("detached fails")
+        self.outcome, self.unstarted, self.after_failure = outcome, outcome == "unterminated", None
+        old = self.now - 7200
+        never, log = os.path.join(d, "never"), os.path.join(d, "build.log")
+        later = state == "acked, then ends"
+        if later and outcome in ("failed", "uncertain"):
+            job = subprocess.Popen(["sleep", "60"])
+            self.addCleanup(lambda: (job.kill(), job.wait()))
+            pids = [{"pid": job.pid, "start": dc.proc_start(job.pid), "comm": "sleep"}]
+            end = lambda: (job.kill(), job.wait())  # noqa: E731
+        else:
+            pids = [{"pid": DEAD, "start": None, "comm": "make"}]
+        desc, end_it = "the build", None
+        if outcome in ("met", "running", "detached fails"):
+            cond = {"file": never}
+            if outcome == "met" and later:
+                end_it = lambda: open(never, "w").close()  # noqa: E731
+            elif outcome == "met":
+                open(never, "w").close()
+        elif outcome == "failed":
+            cond, end_it = {"pids": pids, "file": never}, end if later else None
+        elif outcome == "stale":
+            open(log, "w").close()
+            if later:
+                end_it = lambda: os.utime(log, (old, old))  # noqa: E731
+            else:
+                os.utime(log, (old, old))
+            cond = {"log": log, "done": "^OK$", "stale_min": 1}
+        elif outcome == "detached fails, codex gone":  # running until it leaves the ledger
+            self.codex_row(pid=os.getpid())
+            cond, desc = {"codex": "r1"}, "codex run r1 ends"
+        elif outcome == "detached fails, then codex ends":  # Codex runs until after the error
+            self.codex_row(pid=os.getpid())
+            self.after_failure = lambda: self.codex_row(pid=DEAD)  # noqa: E731
+            cond, desc = {"codex": "r1"}, "codex run r1 ends"
+        elif outcome == "detached fails, then a partial line":
+            with open(log, "w") as f:
+                f.write("building\n")
+
+            def after_failure():
+                with open(log, "a") as f:
+                    f.write("FAILED")
+            self.after_failure = after_failure
+            cond = {"log": log, "done": "^OK$", "fail": "FAILED"}
+        elif outcome == "unterminated":
+            with open(log, "w") as f:
+                f.write("building\n" if later else "building\nFAILED")
+            if later:
+                def end_it():
+                    with open(log, "a") as f:
+                        f.write("FAILED")
+            cond = {"log": log, "done": "^OK$", "fail": "FAILED"}
+        elif outcome == "codex ended":  # no stop row, Codex and its wrapper gone
+            self.codex_row(pid=os.getpid() if later else DEAD)
+            if later:
+                end_it = lambda: self.codex_row(pid=DEAD)  # noqa: E731
+            cond, desc = {"codex": "r1"}, "codex run r1 ends"
+        else:  # uncertain: the done line further back than the guard reads
+            with open(log, "w") as f:
+                f.write("OK\n" + ("x" * 1023 + "\n") * (guard.LOG_TAIL // 1024 + 10))
+            cond, end_it = {"pids": pids, "log": log, "done": "^OK$"}, end if later else None
+        me = {"claude_pid": os.getpid(), "claude_start": dc.proc_start(os.getpid())}
+        blocked = {"blocked_at": guard.iso(self.now - 600), "blocked_stop": "0123",
+                   "blocked_size": 1}
+        acked = dict(blocked, state="acknowledged")
+        sid, fields = {"open": ("s1", me), "blocked": ("s1", dict(me, **blocked)),
+                       "acknowledged": ("s1", dict(me, **acked)),
+                       "after /clear": ("s-before", dict(me, **acked)),
+                       "after a crash": ("s1", dict(acked, claude_pid=DEAD, claude_start=None)),
+                       "end blocked, /clear": ("s-before", dict(
+                           me, end_blocked_at=guard.iso(self.now - 600), **acked)),
+                       "acked, then ends": ("s1", me),
+                       }[state]
+        self.watch(sid=sid, cond=cond, desc=desc, created=guard.iso(old), **fields)
+        return end_it
+
+    def test_every_end_is_said_once_or_twice_and_a_running_job_at_most_once(self):
+        env = mock.patch.dict(os.environ, {"CLAUDE_PID": str(os.getpid())})
+        sessions = mock.patch.object(guard.dc, "live_sessions",
+                                     return_value={"s1": os.getpid()})
+        env.start()
+        self.addCleanup(env.stop)
+        sessions.start()
+        self.addCleanup(sessions.stop)
+        self.spawner = lambda *a: (self.spawned.append(a[0]["id"]), self.spawn_stand_in(*a))[1]
+        for outcome, row in self.MATRIX.items():
+            for state, expected in zip(self.STATES, row):
+                if isinstance(expected, str):
+                    continue  # a known gap, named in the cell
+                with self.subTest(outcome=outcome, state=state):
+                    self.spawned = []
+                    end_it = self.arrange(outcome, state)
+                    blocks = []
+                    for n, prompt_id in enumerate(self.STOPS):
+                        if n == 2 and end_it:
+                            end_it()  # after the stop that acknowledged the lapse
+                        self.poll_stand_ins()
+                        out = self.decide(prompt_id=prompt_id)
+                        if out and out.get("decision") == "block":
+                            blocks.append(out["reason"])
+                    said = [r for r in blocks if "has no live waiter" not in r]
+                    if self.failing:
+                        self.assertLessEqual(len(blocks), 2, blocks)
+                        errors = [r for r in blocks if "detached waiter failed: " in r]
+                        self.assertEqual(len(errors), 1 if self.spawned else 0, blocks)
+                        if outcome in self.THEN:  # the end, in the error's block
+                            self.assertEqual([r for r in errors if self.THEN[outcome] in r],
+                                             errors, blocks)
+                    elif outcome == "running":
+                        self.assertLessEqual(len(blocks), 1, blocks)
+                        self.assertFalse(said, blocks)
+                    else:
+                        self.assertTrue(1 <= len(blocks) <= 2, blocks)
+                        self.assertTrue(said, blocks)  # said as an end, not only as a lapse
+                    self.assertEqual(len(blocks), expected, blocks)
+                    self.assertLessEqual(len(self.spawned), 1, self.spawned)
+                    w = self.read()
+                    # Adopted, where it was another session's or another process's.
+                    self.assertEqual((w["session_id"], w["claude_pid"]), ("s1", os.getpid()))
+                    if outcome in self.UNENDED or (
+                            outcome in ("codex ended", "uncertain") and not self.spawned):
+                        self.assertIn(w["state"], dc.UNRESOLVED)
+                    else:
+                        self.assertEqual((w["state"], w["reported"]),
+                                         (self.ENDS[outcome], True))
+
+
+class DetachedWaiters(GuardEnv):
+    """The waiter the guard starts when it acknowledges a lapse, run for real: double-forked
+    and exec'd as `delegation-ledger wait --resume <id> --detached <session>`, in this test's
+    state dir, with this test process as its Claude process."""
+
+    def setUp(self):
+        super().setUp()
+        self.spawner = REAL_SPAWN
+        env = mock.patch.dict(os.environ, {"CLAUDE_PID": str(os.getpid()),
+                                           "CLAUDE_CODE_SESSION_ID": "s1"})
+        sessions = mock.patch.object(guard.dc, "live_sessions",
+                                     return_value={"s1": os.getpid()})
+        env.start()
+        self.addCleanup(env.stop)
+        sessions.start()
+        self.addCleanup(sessions.stop)
+        self.addCleanup(self.kill_detached)
+        self.lines()
+
+    def kill_detached(self):
+        """Kill a detached waiter a test left running, checked by its procStart."""
+        for path in glob.glob(os.path.join(self.watches, "*.json")):
+            with open(path) as f:
+                w = json.load(f)
+            if dc.pid_alive(w.get("waiter_pid"), w.get("waiter_start")) and (
+                    w.get("waiter_pid") != os.getpid()):
+                os.kill(w["waiter_pid"], signal.SIGKILL)
+
+    def mine(self, **fields):
+        return self.watch(claude_pid=os.getpid(), claude_start=dc.proc_start(os.getpid()),
+                          poll_s=0.1, **fields)
+
+    def detached_live(self):
+        """The watch once a detached waiter (not this process) holds it and polls."""
+        return self.until(lambda: (self.read().get("waiter_detached")
+                                   and self.read()["waiter_pid"] != os.getpid()
+                                   and dc.waiter_alive(self.read()) and self.read()))
+
+    def gone(self, pid, start):
+        self.until(lambda: not dc.pid_alive(pid, start))
+
+    def ended_reason(self, state, why, wid="w-1", desc="the build", codex=""):
+        return (f"Watch {wid} ({desc}) ended {state}: {why}. The waiter the guard left watching "
+                "it when its lapse was acknowledged recorded that, but its exit reaches no one. "
+                f"Check the result and report it.{codex}")
+
+    def ack_and_detach(self):
+        """The lapse's block, then the stop that acknowledges it and starts the detached
+        waiter; the watch as that waiter holds it."""
+        self.assertEqual(self.decide(prompt_id="p1"), self.block(self.lapse_reason()))
+        self.assertEqual(self.decide(prompt_id="p2"), {"systemMessage": Watches.ACK})
+        return self.detached_live()
+
+    def test_an_acknowledged_lapses_detached_waiter_records_the_end_and_a_stop_says_it(self):
+        never = self.path("never")
+        self.mine(cond={"file": never})
+        w = self.ack_and_detach()
+        self.assertEqual((w["session_id"], w["claude_pid"], w["state"]),
+                         ("s1", os.getpid(), "open"))
+        self.assertIsNone(self.decide(prompt_id="p3"))  # its waiter is alive
+        open(never, "w").close()
+        done = self.until(lambda: self.read()["state"] == "done" and self.read())
+        self.assertIs(done["reported"], False)  # its exit reaches no one
+        self.gone(w["waiter_pid"], w["waiter_start"])
+        self.assertEqual(self.decide(prompt_id="p4"), self.block(self.ended_reason(
+            "done", f"{never} exists")))
+        self.assertIs(self.read()["reported"], True)
+        self.assertIsNone(self.decide(prompt_id="p5"))
+
+    def test_a_detached_waiter_reads_the_whole_log_the_guard_only_tails(self):
+        # The case that started this: a log-only watch whose done line is more than 1 MB back.
+        log = self.path("server.log")
+        with open(log, "w") as f:
+            f.write("Listening on :8080\n" + ("x" * 1023 + "\n") * (guard.LOG_TAIL // 1024 + 10))
+        cond = {"log": log, "done": "Listening"}
+        self.mine(cond=cond, desc="the server")
+        self.assertEqual(self.decide(prompt_id="p1"), self.block(self.lapse_reason(
+            desc="the server", cond=dc.condition_text(cond))))
+        self.decide(prompt_id="p2")
+        self.assertEqual(self.until(lambda: self.read()["state"] == "done" and self.read())
+                         ["reported"], False)
+        self.assertEqual(self.decide(prompt_id="p3"), self.block(self.ended_reason(
+            "done", dc.condition_text(cond), desc="the server")))
+
+    def test_a_rearm_takes_over_the_detached_waiter_which_ends_nothing(self):
+        self.mine(cond={"file": self.path("never")})
+        w = self.ack_and_detach()
+        p = subprocess.run([sys.executable, LEDGER, "wait", "--resume", "w-1", "--max", "0.005",
+                            "--poll", "0.05"], capture_output=True, text=True, timeout=30)
+        self.assertEqual(p.returncode, 75, p.stderr)  # it took the watch, then reached --max
+        self.gone(w["waiter_pid"], w["waiter_start"])  # the detached one stepped aside
+        after = self.read()
+        self.assertNotIn("waiter_detached", after)
+        self.assertNotIn("ended", after)
+        self.assertEqual(after["state"], "open")
+
+    def test_a_spawn_that_fails_is_logged_and_the_plain_ack_still_comes(self):
+        self.mine(cond={"file": self.path("never")})
+        self.assertEqual(self.decide(prompt_id="p1"), self.block(self.lapse_reason()))
+        with mock.patch.object(guard.os, "fork", side_effect=OSError(11, "Resource busy")):
+            self.assertEqual(self.decide(prompt_id="p2"), {"systemMessage": Watches.PLAIN_ACK})
+        self.assertIn("watch-guard: watch w-1: starting its detached waiter", self.err_log())
+        self.assertEqual(self.read()["state"], "acknowledged")
+
+    def test_an_exec_that_fails_is_said_down_the_pipe_and_logged(self):
+        self.mine(cond={"file": self.path("never")})
+        self.decide(prompt_id="p1")
+        with mock.patch.object(guard.sys, "executable", self.path("no-such-python")):
+            out = self.decide(prompt_id="p2")
+        self.assertIn("still has no waiter; it's acknowledged", out["systemMessage"])
+        self.assertIn("its detached waiter didn't start: FileNotFoundError", self.err_log())
+
+    def test_a_detached_end_left_in_the_session_before_a_clear_is_said(self):
+        # It ended after the /clear, before the new session's first stop moved the watch.
+        self.watch(sid="s-before", state="done", ended=dc.now_iso(), reported=False,
+                   waiter_detached=True, claude_pid=os.getpid(),
+                   claude_start=dc.proc_start(os.getpid()))
+        self.assertEqual(self.decide(), self.block(self.ended_reason(
+            "done", "no reason recorded")))
+        self.assertIs(self.read()["reported"], True)
+        self.assertIsNone(self.decide(prompt_id="p2"))
+
+    def test_a_detached_codex_end_says_how_and_where_to_look(self):
+        # Named by its run id even under a --desc, with its report's path from the ledger.
+        self.codex_row(out=self.path("out"))
+        self.watch(desc="the migration", cond={"codex": "r1"}, state="failed",
+                   ended=dc.now_iso(), reported=False, waiter_detached=True,
+                   end_why="codex run r1 stopped with exit 4", claude_pid=os.getpid(),
+                   claude_start=dc.proc_start(os.getpid()))
+        report = os.path.join(self.path("out"), "report.json")
+        self.assertEqual(self.decide(), self.block(self.ended_reason(
+            "failed", "codex run r1 stopped with exit 4", desc="the migration",
+            codex=f" For codex run r1: codex-delegate status r1 shows it, and its report is "
+                  f"{report}.")))
+
+    def test_a_detached_waiter_that_dies_early_isnt_started_again(self):
+        # It took the watch (unblocking it) and stopped with an error: the next stop says the
+        # error with the lapse, and the one after acknowledges with the plain text, starting
+        # none.
+        self.spawner = self.record_spawn
+        self.watch(waiter_detached=True, detached_at=dc.now_iso(),
+                   waiter_heartbeat=dc.now_iso(),
+                   end_error="Undecidable: codex run r1 is no longer in the ledger")
+        self.assertEqual(self.decide(prompt_id="p1"), self.block(
+            "Watch w-1 (the build): the guard's detached waiter failed: Undecidable: codex run "
+            "r1 is no longer in the ledger. Re-arm to see the error: delegation-ledger wait "
+            "--resume w-1, with run_in_background and timeout 7200000. Or drop the watch: "
+            "delegation-ledger wait --drop w-1. " + self.lapse_reason()))
+        self.assertEqual(self.decide(prompt_id="p2"), {"systemMessage": Watches.PLAIN_ACK})
+        self.assertEqual(self.spawned, [])
+        self.assertIn("watch-guard: watch w-1: its detached waiter stopped after 0 min, before "
+                      "its 1440 min max: Undecidable", self.err_log())
+        self.assertIsNone(self.decide(prompt_id="p3"))
+
+    CODEX_ACK = ("Watch w-1 (codex run r1 ends) still has no waiter; it's acknowledged. Re-arm "
+                 "with delegation-ledger wait --resume w-1, or drop it.")
+
+    def failed_reason(self, why, wid="w-1", desc="the build"):
+        return (f"Watch {wid} ({desc}): the guard's detached waiter failed: {why}. Re-arm to see "
+                f"the error: delegation-ledger wait --resume {wid}, with run_in_background and "
+                f"timeout 7200000. Or drop the watch: delegation-ledger wait --drop {wid}.")
+
+    def test_a_detached_failure_on_a_codex_run_gone_from_the_ledger_is_said_once(self):
+        # Where the run is can't be decided (Undecidable), but the error that says so can.
+        self.spawner = self.record_spawn
+        why = "Undecidable: codex run r1 is no longer in the ledger"
+        self.watch(cond={"codex": "r1"}, waiter_detached=True, detached_at=dc.now_iso(),
+                   end_error=why)
+        self.assertEqual(self.decide(prompt_id="p1"), self.block(
+            self.failed_reason(why) + " " + self.lapse_reason(cond="codex run r1 ends")))
+        self.assertEqual(self.decide(prompt_id="p2"), {"systemMessage": Watches.PLAIN_ACK})
+        self.assertIsNone(self.decide(prompt_id="p3"))
+        self.assertEqual(self.spawned, [])
+
+    def test_a_detached_failure_then_codex_ending_says_each_once(self):
+        # The error comes with the lapse's block, so the run's end, after the acknowledgment,
+        # says CODEX_ENDED, not the error again.
+        self.spawner = self.record_spawn
+        why = "OSError: [Errno 5] Input/output error"
+        self.codex_row(pid=os.getpid())  # Codex runs
+        self.watch(cond={"codex": "r1"}, desc="codex run r1 ends", waiter_detached=True,
+                   detached_at=dc.now_iso(), end_error=why)
+        self.assertEqual(self.decide(prompt_id="p1"), self.block(
+            self.failed_reason(why, desc="codex run r1 ends") + " "
+            + self.lapse_reason(desc="codex run r1 ends", cond="codex run r1 ends")))
+        self.assertEqual(self.decide(prompt_id="p2"), {"systemMessage": self.CODEX_ACK})
+        self.assertEqual(self.spawned, [])
+        self.codex_row(pid=DEAD)  # Codex ends, with no stop row
+        self.assertEqual(self.decide(prompt_id="p3"), self.block(self.codex_ended()))
+        self.assertIsNone(self.decide(prompt_id="p4"))
+        self.assertEqual(self.read()["state"], "acknowledged")
+
+    def failed_codex_ended(self, why):
+        """A codex watch whose detached waiter failed while Codex ran, Codex having ended since
+        with no stop row, before any stop: the watch as the session left it, idle."""
+        self.spawner = self.record_spawn
+        self.codex_row(pid=DEAD)
+        self.watch(cond={"codex": "r1"}, desc="codex run r1 ends", waiter_detached=True,
+                   detached_at=dc.now_iso(), end_error=why)
+        return self.block(self.failed_reason(why, desc="codex run r1 ends") + " "
+                          + self.codex_ended())
+
+    def test_a_detached_failure_then_codex_ending_says_both_in_one_block(self):
+        # Neither hides the other: the error alone would leave a lead who drops the watch with
+        # the run unfinalized, and nothing would say so.
+        both = self.failed_codex_ended("OSError: [Errno 5] Input/output error")
+        self.assertEqual(self.decide(prompt_id="p1"), both)
+        self.assertEqual(self.decide(prompt_id="p2"), {"systemMessage": self.CODEX_ACK})
+        self.assertEqual(self.spawned, [])
+        for prompt_id in ("p3", "p4"):  # CODEX_ENDED is never said again, nor the error
+            self.assertIsNone(self.decide(prompt_id=prompt_id))
+        w = self.read()
+        self.assertEqual((w["state"], bool(w.get("end_blocked_at"))), ("acknowledged", True))
+
+    def test_twin_guards_say_a_detached_failure_and_codex_ending_once(self):
+        # B gathers, then its twin A runs the whole stop and commits, then B commits: B finds
+        # the block recorded and says nothing, so the pair says both messages once.
+        both = self.failed_codex_ended("OSError: [Errno 5] Input/output error")
+        real, twin = guard.watch_pending, []
+
+        def watch_pending(w, shells, now):
+            p = real(w, shells, now)
+            if not twin:
+                twin.append(None)
+                twin[0] = guard.decide(self.payload(prompt_id="p1"), self.now)
+            return p
+        with mock.patch.object(guard, "watch_pending", watch_pending):
+            self.assertIsNone(self.decide(prompt_id="p1"))
+        self.assertEqual(twin, [both])
+        self.assertEqual(self.decide(prompt_id="p2"), {"systemMessage": self.CODEX_ACK})
+        self.assertEqual(self.spawned, [])
+        self.assertIsNone(self.decide(prompt_id="p3"))
+
+    def test_a_recorded_end_replaces_the_detached_failure(self):
+        # The error asks for a re-arm or a drop, both moot once the watch has ended: the end
+        # alone is said, and the watch is recorded done.
+        never = self.path("never")
+        open(never, "w").close()
+        self.watch(cond={"file": never}, waiter_detached=True, detached_at=dc.now_iso(),
+                   end_error="OSError: [Errno 5] Input/output error")
+        self.assertEqual(self.decide(prompt_id="p1"), self.block(self.met_reason()))
+        self.assertEqual(self.read()["state"], "done")
+        self.assertIsNone(self.decide(prompt_id="p2"))
+
+    def test_a_detached_failure_then_a_partial_fail_line_says_both_in_one_block(self):
+        self.spawner = self.record_spawn
+        why = "OSError: [Errno 5] Input/output error"
+        log = self.path("job.log")
+        with open(log, "w") as f:
+            f.write("building\nFAILED")
+        self.watch(cond={"log": log, "done": "^OK$", "fail": "FAILED"}, waiter_detached=True,
+                   detached_at=dc.now_iso(), end_error=why)
+        self.assertEqual(self.decide(prompt_id="p1"), self.block(
+            self.failed_reason(why) + " "
+            f"Watch w-1 (the build) looks unmet ({log} has a line matching /^OK$/ is unmet). "
+            f"But {log}'s last line has no newline yet and matches /FAILED/, and it may be the "
+            "start of a longer line, so the guard can't tell. Re-arm the watch and its waiter "
+            "reads that line once it settles and reports the outcome: delegation-ledger wait "
+            "--resume w-1, with run_in_background and timeout 7200000. To stop watching it: "
+            "delegation-ledger wait --drop w-1."))
+        self.assertEqual(self.decide(prompt_id="p2"), {"systemMessage": Watches.PLAIN_ACK})
+        self.assertIsNone(self.decide(prompt_id="p3"))
+
+    def test_a_detached_codex_end_whose_ledger_cant_be_read_is_still_said(self):
+        self.watch(desc="the migration", cond={"codex": "r1"}, state="failed",
+                   ended=dc.now_iso(), reported=False, waiter_detached=True,
+                   end_why="codex run r1 stopped with exit 4", claude_pid=os.getpid(),
+                   claude_start=dc.proc_start(os.getpid()))
+        with mock.patch.object(guard.dc, "find_codex", side_effect=OSError(5, "I/O error")):
+            self.assertEqual(self.decide(), self.block(self.ended_reason(
+                "failed", "codex run r1 stopped with exit 4", desc="the migration")))
+        self.assertIs(self.read()["reported"], True)
+        self.assertIn("watch-guard: watch w-1: codex run r1's report", self.err_log())
+
+    def test_a_detached_waiter_from_before_detached_at_is_started_again(self):
+        # Recorded by an older guard, with no detached_at: it counts as having run to its max.
+        self.spawner = self.record_spawn
+        self.watch(waiter_detached=True, waiter_heartbeat=dc.now_iso())
+        self.assertEqual(self.decide(prompt_id="p1"), self.block(self.lapse_reason()))
+        self.assertEqual(self.decide(prompt_id="p2"), {"systemMessage": Watches.ACK})
+        self.assertEqual(self.spawned, ["w-1"])
+
+    def error_after_gather(self, why):
+        """The detached waiter records its error between this stop's gather and its commit,
+        as a twin guard's stop, or a waiter whose heartbeat went stale, can see it."""
+        real = guard.watch_pending
+
+        def watch_pending(w, shells, now):
+            p = real(w, shells, now)
+            dc.update_watch(w["id"], lambda cur: cur.update(end_error=why))
+            return p
+        return mock.patch.object(guard, "watch_pending", watch_pending)
+
+    def test_an_error_recorded_after_the_gather_is_what_the_lapse_block_says(self):
+        self.spawner = self.record_spawn
+        why = "OSError: [Errno 5] Input/output error"
+        self.watch(waiter_detached=True, detached_at=dc.now_iso())
+        with self.error_after_gather(why):
+            self.assertEqual(self.decide(prompt_id="p1"), self.block(
+                self.failed_reason(why) + " " + self.lapse_reason()))
+        self.assertEqual(self.decide(prompt_id="p2"), {"systemMessage": Watches.PLAIN_ACK})
+
+    def test_an_error_recorded_after_the_gather_is_what_the_codex_end_block_says(self):
+        self.spawner = self.record_spawn
+        why = "OSError: [Errno 5] Input/output error"
+        self.codex_row(pid=DEAD)  # Codex has ended, with no stop row
+        self.watch(cond={"codex": "r1"}, desc="codex run r1 ends", waiter_detached=True,
+                   detached_at=dc.now_iso())
+        with self.error_after_gather(why):
+            self.assertEqual(self.decide(prompt_id="p1"), self.block(
+                self.failed_reason(why, desc="codex run r1 ends") + " " + self.codex_ended()))
+        self.assertEqual(self.decide(prompt_id="p2"), {"systemMessage": self.CODEX_ACK})
+        self.assertEqual(self.spawned, [])
+        self.assertIsNone(self.decide(prompt_id="p3"))
+
+    def test_a_middle_process_that_fails_is_said_and_the_plain_ack_comes(self):
+        self.mine(cond={"file": self.path("never")})
+        self.decide(prompt_id="p1")
+        with mock.patch.object(guard.os, "setsid", side_effect=OSError(1, "Not permitted")):
+            self.assertEqual(self.decide(prompt_id="p2"), {"systemMessage": Watches.PLAIN_ACK})
+        self.assertIn("its detached waiter didn't start: PermissionError", self.err_log())
+
+    def test_the_guard_starts_one_detached_waiter_per_acknowledgment(self):
+        self.spawner = self.record_spawn
+        self.watch()
+        self.decide(prompt_id="p1")
+        self.decide(prompt_id="p2")
+        self.decide(prompt_id="p2")  # its twin, in the same stop
+        self.decide(prompt_id="p3")
+        self.assertEqual(self.spawned, ["w-1"])
+
+    def test_a_detached_waiter_that_lapses_is_started_again_after_the_next_lapse(self):
+        # At its --max it lapses like any waiter, its beats having reopened the watch: the next
+        # stop blocks on that lapse, and the one after acknowledges it and starts another.
+        self.spawner = self.record_spawn
+        self.watch()
+        self.decide(prompt_id="p1")
+        self.decide(prompt_id="p2")
+        def lapsed_at_max(w):  # what its beats, then its exit at --max, leave
+            dc.unblock(w)
+            w.update(waiter_detached=True, waiter_heartbeat=dc.now_iso(),
+                     detached_at=guard.iso(time.time() - dc.DETACHED_MAX_MIN * 60))
+        dc.update_watch("w-1", lapsed_at_max)
+        self.assertEqual(self.decide(prompt_id="p3"), self.block(self.lapse_reason()))
+        self.decide(prompt_id="p4")
+        self.assertEqual(self.spawned, ["w-1", "w-1"])
+
+
+class Kills(GuardEnv):
+    def test_a_killed_task_blocks_once_then_allows(self):
+        self.lines(launch("toolu_1", "bk1", "sleep 9000", "long sleep", self.now - 7200),
+                   notice("bk1", "toolu_1", "long sleep", self.now - 60))
+        self.assertEqual(self.decide(), self.block(self.kill_reason("long sleep")))
+        self.assertIsNone(self.decide())
+        with open(os.path.join(self.state, "dotclaude", "kills", "s1.json")) as f:
+            rec = json.load(f)
+        self.assertEqual((rec["session_id"], rec["seen"]), ("s1", ["bk1"]))
+        dc.parse_iso(rec["since"])
+
+    def test_a_kill_older_than_the_first_runs_lookback_is_ignored(self):
+        self.lines(notice("bk1", "toolu_1", "old", self.now - 3600))
+        self.assertIsNone(self.decide())
+
+    def test_since_holds_after_the_first_run(self):
+        self.lines()
+        self.assertIsNone(self.decide())  # the first run records since = now - 10 min
+        later = self.now + 1800
+        self.lines(notice("bk1", "toolu_1", "slow", later - 900))  # after since, before later
+        self.assertEqual(guard.decide(self.payload(), later), self.block(self.kill_reason("slow")))
+
+    def test_a_completed_task_and_a_queue_entry_are_ignored(self):
+        self.lines(notice("bk1", "toolu_1", "quick", self.now - 60, status="completed"),
+                   queued("bk2", "toolu_2", "queued", self.now - 60))
+        self.assertIsNone(self.decide())
+
+    def test_a_killed_waiter_folds_into_its_watchs_item(self):
+        self.watch()
+        self.lines(launch("toolu_1", "bk1", "delegation-ledger wait --resume w-1", "re-arm",
+                          self.now - 7200),
+                   notice("bk1", "toolu_1", "re-arm", self.now - 60))
+        self.assertEqual(self.decide(), self.block(self.lapse_reason()))
+
+    def test_a_killed_waiter_folds_into_the_watch_its_launch_line_names(self):
+        # Two watches created in the launch window: only the launch line tells them apart, and
+        # w-a's live waiter means a kill folded into it would still be said.
+        launched = self.now - 7200
+        made = iso(launched + 1)[:19] + "Z"
+        self.watch("w-a", created=made, live=True)
+        self.watch("w-b", created=made)
+        output = self.path("bk1.output")
+        with open(output, "w") as f:
+            f.write("delegation-ledger: watch w-b. If this command is stopped, re-arm with "
+                    "delegation-ledger wait --resume w-b (run_in_background, timeout 7200000)\n")
+        self.lines(launch("toolu_1", "bk1", "delegation-ledger wait --pid 123", "wait", launched),
+                   notice("bk1", "toolu_1", "wait", self.now - 60, output=output))
+        self.assertEqual(self.decide(), self.block(self.lapse_reason("w-b")))
+
+    def test_a_killed_first_waiter_folds_into_the_watch_it_created(self):
+        launched = self.now - 7200
+        self.watch(created=iso(launched + 2)[:19] + "Z")
+        self.watch("w-old", created=iso(launched - 3600)[:19] + "Z")  # an older lapse
+        self.lines(launch("toolu_1", "bk1", f"delegation-ledger wait --file {self.path('x')}",
+                          "wait for the build", launched),
+                   notice("bk1", "toolu_1", "wait for the build", self.now - 60))
+        self.assertEqual(self.decide(), self.block(self.lapse_reason("w-old"),
+                                                   self.lapse_reason()))
+
+    def test_a_killed_waiter_with_no_item_this_stop_is_a_plain_kill(self):
+        # Its watch is skipped as Undecidable, so the kill must still be said.
+        self.watch("w-gone", cond={"codex": "r-gone"}, desc="codex run r-gone ends")
+        self.lines(launch("toolu_1", "bk1", "delegation-ledger wait --resume w-gone", "re-arm",
+                          self.now - 7200),
+                   notice("bk1", "toolu_1", "re-arm", self.now - 60))
+        self.assertEqual(self.decide(), self.block(self.kill_reason("re-arm")))
+
+    def test_a_killed_codex_wrapper_says_codex_keeps_running(self):
+        # The fold no longer guesses: an acknowledged watch with a dead waiter doesn't swallow
+        # an unrelated codex kill.
+        self.watch(state="acknowledged", blocked_at="2026-10-02T09:00:00Z")
+        self.lines(launch("toolu_1", "bk1", "codex-delegate run --model terra --dir . --brief b",
+                          "codex job", self.now - 7200),
+                   launch("toolu_2", "bk2", "codex-delegate resume r7 --prompt p", "codex resume",
+                          self.now - 7000),
+                   notice("bk1", "toolu_1", "codex job", self.now - 60),
+                   notice("bk2", "toolu_2", "codex resume", self.now - 50))
+        codex = ('Codex wrapper "{}" was stopped at its time limit, but Codex keeps running. '
+                 "Don't re-run it. Wait on it with delegation-ledger wait --codex {} "
+                 "(codex-delegate status lists the run), with run_in_background and timeout "
+                 "7200000.")
+        unknown = ('Codex wrapper "codex job" was stopped at its time limit, but Codex keeps '
+                   "running. Don't re-run it. Find the run with codex-delegate status, then wait "
+                   "on it with delegation-ledger wait --codex and its run id, with "
+                   "run_in_background and timeout 7200000.")
+        self.assertEqual(self.decide(), self.block(unknown, codex.format("codex resume", "r7")))
+
+    def test_a_killed_codex_wrapper_folds_into_the_watch_its_launch_line_names(self):
+        # Two codex watches made in the launch window: the launch line tells them apart. w-a's
+        # waiter lives, so it has no item, and a kill folded into it would still be said.
+        launched = self.now - 7200
+        made = iso(launched + 1)[:19] + "Z"
+        self.codex_row("r1", pid=os.getpid())
+        self.codex_row("r2", pid=os.getpid())  # Codex runs on
+        self.watch("w-a", cond={"codex": "r1"}, desc="codex run r1 ends", created=made,
+                   live=True)
+        self.watch("w-b", cond={"codex": "r2"}, desc="codex run r2 ends", created=made)
+        output = self.path("bk1.output")
+        with open(output, "w") as f:
+            f.write("codex-delegate: run r2, watch w-b. If this command is stopped, Codex keeps "
+                    "running: delegation-ledger wait --resume w-b\n")
+        self.lines(launch("toolu_1", "bk1", "codex-delegate run --model sol --dir . --brief b",
+                          "codex job", launched),
+                   notice("bk1", "toolu_1", "codex job", self.now - 60, output=output))
+        self.assertEqual(self.decide(), self.block(self.lapse_reason(
+            "w-b", desc="codex run r2 ends", cond="codex run r2 ends")))
+
+    def test_a_kill_whose_watch_was_resolved_isnt_said(self):
+        # codex-delegate cancel dropped the run's watch in the turn its wrapper was killed, and a
+        # waiter's watch ended: a re-arm would be refused, so neither kill is said.
+        launched = self.now - 7200
+        self.codex_row("r2", pid=os.getpid())
+        self.watch("w-b", state="dropped", ended=dc.now_iso(), cond={"codex": "r2"},
+                   desc="codex run r2 ends")
+        self.watch("w-c", state="done", ended=dc.now_iso(), reported=True)
+        codex_out, wait_out = self.path("bk1.output"), self.path("bk2.output")
+        with open(codex_out, "w") as f:
+            f.write("codex-delegate: run r2, watch w-b. If this command is stopped, Codex keeps "
+                    "running: delegation-ledger wait --resume w-b\n")
+        with open(wait_out, "w") as f:
+            f.write("delegation-ledger: watch w-c. If this command is stopped, re-arm with "
+                    "delegation-ledger wait --resume w-c (run_in_background, timeout 7200000)\n")
+        self.lines(launch("toolu_1", "bk1", "codex-delegate run --model sol --dir . --brief b",
+                          "codex job", launched),
+                   launch("toolu_2", "bk2", "delegation-ledger wait --resume w-c", "the wait",
+                          launched),
+                   notice("bk1", "toolu_1", "codex job", self.now - 60, output=codex_out),
+                   notice("bk2", "toolu_2", "the wait", self.now - 50, output=wait_out))
+        self.assertIsNone(self.decide())
+        log = self.err_log()
+        self.assertIn("kill of task bk1 folds into watch w-b, which is dropped, so it isn't said",
+                      log)
+        self.assertIn("kill of task bk2 folds into watch w-c, which is done, so it isn't said",
+                      log)
+        self.assertIsNone(self.decide(prompt_id="p2"))
+        self.assertEqual(log, self.err_log())  # recorded seen, so not judged again
+
+    def test_a_pending_run_with_a_live_codex_pid_file_is_running(self):
+        out = self.path("r1-out")
+        dc.write_json(os.path.join(out, "codex.pid"), {"pid": os.getpid(), "wrapper_pid": DEAD,
+                                                       "start": dc.proc_start(os.getpid())})
+        self.codex_row("r1", event="pending", out=out)  # its wrapper SIGKILLed after the Popen
+        self.watch(cond={"codex": "r1"}, desc="codex run r1 ends")
+        self.assertEqual(self.decide(), self.block(self.lapse_reason(
+            desc="codex run r1 ends", cond="codex run r1 ends")))  # neither unstarted nor ended
+
+    def test_a_codex_launch_line_after_other_output_still_folds(self):
+        # A resume's finalize-first summary, or wrap()'s systemd-run warning, can come first.
+        self.codex_row("r2", pid=os.getpid())
+        self.watch("w-b", cond={"codex": "r2"}, desc="codex run r2 ends")
+        output = self.path("bk1.output")
+        with open(output, "w") as f:
+            f.write("codex-delegate: systemd-run not found, running without a memory cap\n"
+                    "codex-delegate: run r2 ended without a stop row; finalizing it first\n"
+                    '{\n  "run_id": "r2"\n}\n'
+                    "codex-delegate: run r2, watch w-b. If this command is stopped, Codex keeps "
+                    "running: delegation-ledger wait --resume w-b\n")
+        self.lines(launch("toolu_1", "bk1", "codex-delegate resume r2", "codex resume",
+                          self.now - 3000),
+                   notice("bk1", "toolu_1", "codex resume", self.now - 60, output=output))
+        self.assertEqual(self.decide(), self.block(self.lapse_reason(
+            "w-b", desc="codex run r2 ends", cond="codex run r2 ends")))
+
+    def test_an_unstarted_codex_run_fails_its_watch_once(self):
+        self.codex_row("r1", event="pending", thread_id="th-1")  # a resume's wrapper died first
+        self.codex_row("r2", event="pending")  # a first turn's
+        self.watch(cond={"codex": "r1"}, desc="codex run r1 ends", created="2026-10-02T10:00:00Z")
+        self.watch("w-2", cond={"codex": "r2"}, desc="codex run r2 ends",
+                   created="2026-10-02T10:00:01Z")
+        unstarted = ("Watch {} (codex run {} ends): codex run {} never started, since its wrapper "
+                     "stopped before Codex did, so the watch is recorded failed. To retry, {}, "
+                     "with run_in_background and timeout 7200000.")
+        self.assertEqual(self.decide(), self.block(
+            unstarted.format("w-1", "r1", "r1", "run codex-delegate resume r1 again"),
+            unstarted.format("w-2", "r2", "r2",
+                             "run codex-delegate run again; it gets a new run id")))
+        self.assertEqual((self.read()["state"], self.read("w-2")["state"]), ("failed", "failed"))
+        self.assertIsNone(self.decide(at=self.now + 90, last_assistant_message="later"))
+
+    def test_an_unfolded_codex_kill_re_arms_the_runs_open_watch(self):
+        self.codex_row("r1", pid=os.getpid())
+        self.watch("w-c", sid="s2", cond={"codex": "r1"}, desc="codex run r1 ends")  # not ours
+        self.lines(launch("toolu_1", "bk1", "codex-delegate resume r1", "codex resume",
+                          self.now - 3000),
+                   notice("bk1", "toolu_1", "codex resume", self.now - 60))
+        self.assertEqual(self.decide(), self.block(
+            'Codex wrapper "codex resume" was stopped at its time limit, but Codex keeps '
+            "running. Don't re-run it. Re-arm the run's watch: `delegation-ledger wait "
+            "--resume w-c`, with run_in_background and timeout 7200000."))
+
+    def test_a_kill_and_a_lapse_are_numbered_in_one_block(self):
+        self.watch()
+        self.lines(launch("toolu_1", "bk1", "make all", "the make", self.now - 7200),
+                   notice("bk1", "toolu_1", "the make", self.now - 60))
+        self.assertEqual(self.decide(), self.block(self.lapse_reason(),
+                                                   self.kill_reason("the make")))
+        self.assertNotIn("decision", self.decide(at=self.now + 30) or {})  # each said once
+
+    def test_a_mid_turn_attachment_notice_counts_once(self):
+        text = notification("bk1", "toolu_1", "mid-turn")
+        at = iso(self.now - 60)
+        self.lines({"type": "attachment", "timestamp": at, "uuid": "u1",
+                    "attachment": {"type": "queued_command", "prompt": text, "timestamp": at,
+                                   "origin": {"kind": "task-notification",
+                                              "producer": "session-task"},
+                                   "source_uuid": "s", "delivery_id": "d"},
+                    "rendered": f"<system-reminder>{text}</system-reminder>"},
+                   notice("bk1", "toolu_1", "mid-turn", self.now - 30))
+        self.assertEqual(self.decide(), self.block(self.kill_reason("mid-turn")))
+
+    def test_a_notice_followed_by_more_than_the_tail_is_caught_next_stop(self):
+        self.lines()
+        self.assertIsNone(self.decide())  # the first run records offset 0
+        pad = {"type": "assistant", "timestamp": iso(self.now), "message": {"content": "x" * 900}}
+        self.append(notice("bk1", "toolu_1", "buried", self.now - 60),
+                    *[pad] * (300 * 1024 // 900))
+        self.assertGreater(os.path.getsize(self.transcript), 300 * 1024)
+        self.assertEqual(self.decide(), self.block(self.kill_reason("buried")))
+
+    def test_a_line_still_being_written_is_read_once_complete(self):
+        self.lines()
+        line = json.dumps(notice("bk1", "toolu_1", "straddling", self.now - 60))
+        self.append(raw=line[:100])  # half of it, as a stop might find it
+        self.assertIsNone(self.decide())
+        self.append(raw=line[100:] + "\n")
+        self.assertEqual(self.decide(), self.block(self.kill_reason("straddling")))
+
+    def test_a_notice_after_more_than_16_mb_is_still_caught(self):
+        self.lines()
+        self.decide()
+        with open(self.transcript, "ab") as f:
+            f.write(b'{"type": "progress", "x": "' + b"x" * (17 << 20) + b'"}\n')
+        self.append(notice("bk1", "toolu_1", "far down", self.now - 60))
+        self.assertEqual(self.decide(), self.block(self.kill_reason("far down")))
+
+    def test_two_waits_launched_together_fold_by_their_condition(self):
+        launched = self.now - 7200
+        made = iso(launched + 2)[:19] + "Z"
+        self.watch("w-a", cond={"file": self.path("a")}, created=made)
+        self.watch("w-b", cond={"file": self.path("b")}, created=made)
+        self.lines(launch("toolu_1", "bk1", "delegation-ledger wait --file b", "wait for b",
+                          launched),
+                   notice("bk1", "toolu_1", "wait for b", self.now - 60))
+        out = self.decide(cwd=self.tmp.name)  # --file b is relative to the session's cwd
+        self.assertEqual(out["reason"].count("\n"), 2, out)  # two lapses, the kill folded
+        self.assertNotIn("was stopped at its time limit.", out["reason"])
+
+    def test_a_slow_lookup_past_the_budget_records_only_what_it_says(self):
+        self.lines(notice("bk1", "toolu_1", "first", self.now - 60),
+                   notice("bk2", "toolu_2", "second", self.now - 50))
+
+        def slow(path, tool_use, spent):
+            time.sleep(0.4)  # longer than the whole budget
+            return None
+        start = time.monotonic()
+        with mock.patch.object(guard, "BUDGET_S", 0.3), mock.patch.object(guard, "launched",
+                                                                           slow):
+            out = self.decide()
+        self.assertLess(time.monotonic() - start, 0.3 + 0.4 + 0.5)
+        self.assertEqual(out, self.block(self.kill_reason("first")))
+        with open(os.path.join(self.state, "dotclaude", "kills", "s1.json")) as f:
+            self.assertEqual(json.load(f)["seen"], ["bk1"])  # bk2 waits, unsaid and unseen
+        self.assertEqual(self.decide(), self.block(self.kill_reason("second")))
+
+    def test_a_held_lock_means_nothing_is_taken_this_stop(self):
+        self.watch()
+        self.lines(notice("bk1", "toolu_1", "held", self.now - 60))
+        lock_path = os.path.join(self.state, "dotclaude", "kills", "s1.lock")
+        os.makedirs(os.path.dirname(lock_path), exist_ok=True)
+        with open(lock_path, "a") as held:
+            fcntl.flock(held, fcntl.LOCK_EX)
+            with mock.patch.object(guard, "BUDGET_S", 0.1), \
+                    mock.patch.object(guard, "LOCK_GRACE_S", 0.1):
+                self.assertIsNone(self.decide())
+            fcntl.flock(held, fcntl.LOCK_UN)
+        self.assertIsNone(self.read()["blocked_at"])
+        self.assertIn("nothing was taken this stop", self.err_log())
+        self.assertEqual(self.decide(), self.block(self.lapse_reason(), self.kill_reason("held")))
+
+    def test_another_sessions_kill_is_ignored(self):
+        other = self.path("s2.jsonl")
+        with open(other, "w") as f:
+            f.write(json.dumps(notice("bk1", "toolu_1", "theirs", self.now - 60)) + "\n")
+        self.lines()
+        self.assertIsNone(self.decide())
+        self.assertIsNotNone(self.decide(sid="s2", transcript_path=other))
+        self.assertIsNone(self.decide())
+
+    def test_only_the_tail_is_scanned_and_a_torn_first_line_is_skipped(self):
+        old = notice("bk0", "toolu_0", "beyond the tail", self.now - 60)
+        pad = {"type": "assistant", "timestamp": iso(self.now), "message": {"content": "x" * 900}}
+        self.lines(old, [pad] * (guard.TAIL_BYTES // 900 + 5),
+                   notice("bk1", "toolu_1", "in the tail", self.now - 60))
+        self.assertEqual(self.decide(), self.block(self.kill_reason("in the tail")))
+        self.lines(notice("bk2", "toolu_2", "after junk", self.now - 60), raw_first='{"torn')
+        self.assertEqual(self.decide(), self.block(self.kill_reason("after junk")))
+
+    def test_old_kill_records_are_pruned(self):
+        os.makedirs(os.path.join(self.state, "dotclaude", "kills"))
+        stale = os.path.join(self.state, "dotclaude", "kills", "s9.json")
+        with open(stale, "w") as f:
+            json.dump({"session_id": "s9", "since": dc.now_iso(), "seen": []}, f)
+        os.utime(stale, (self.now - 8 * 86400,) * 2)
+        self.lines()
+        self.decide()
+        self.assertFalse(os.path.exists(stale))
+
+    def test_this_sessions_old_record_and_lock_arent_pruned(self):
+        # A session idle for a week keeps what it has seen: pruning its record would block on
+        # the same kill again.
+        self.lines(notice("bk1", "toolu_1", "seen", self.now - 60))
+        kills = os.path.join(self.state, "dotclaude", "kills")
+        os.makedirs(kills)
+        record, lock = os.path.join(kills, "s1.json"), os.path.join(kills, "s1.lock")
+        with open(record, "w") as f:
+            json.dump({"session_id": "s1", "since": iso(self.now - 600), "seen": ["bk1"],
+                       "transcript": self.transcript, "offset": 0}, f)
+        open(lock, "w").close()
+        for p in (record, lock):
+            os.utime(p, (self.now - 8 * 86400,) * 2)
+        self.assertIsNone(self.decide())
+        self.assertTrue(os.path.exists(record) and os.path.exists(lock))
+
+    def test_the_offset_is_checked_against_what_the_scan_read(self):
+        # A size read before the last lines landed doesn't drop the scan's end offset.
+        self.lines(notice("bk1", "toolu_1", "late", self.now - 60))
+        with mock.patch.object(guard, "file_size", lambda path: 10):
+            self.assertEqual(self.decide(), self.block(self.kill_reason("late")))
+        with open(os.path.join(self.state, "dotclaude", "kills", "s1.json")) as f:
+            self.assertEqual(json.load(f)["offset"], os.path.getsize(self.transcript))
+
+
+class FailsOpen(GuardEnv):
+    def run_hook(self, payload, raw=False, cmd=None, env=None):
+        p = subprocess.run(cmd or ["python3", SCRIPT],
+                           input=payload if raw else json.dumps(payload), capture_output=True,
+                           text=True, env=env or dict(os.environ))
+        self.assertEqual(p.returncode, 0, p.stderr)
+        return json.loads(p.stdout) if p.stdout.strip() else None
+
+    def test_malformed_payloads_allow(self):
+        self.watch()
+        for raw in ("not json", "", "[]", '{"session_id": 7}'):
+            self.assertIsNone(self.run_hook(raw, raw=True), raw)
+        self.assertIsNone(self.read()["blocked_at"])
+
+    def test_a_missing_transcript_still_checks_the_watches(self):
+        self.watch()
+        out = self.run_hook(self.payload(transcript_path=self.path("missing.jsonl")))
+        self.assertEqual(out, self.block(self.lapse_reason()))
+
+    def test_a_subagents_stop_is_skipped(self):
+        self.watch()
+        self.assertIsNone(self.run_hook(self.payload(agent_id="a1", agent_type="writer")))
+
+    def shim_home(self):
+        home = self.path("home")
+        os.makedirs(os.path.join(home, ".claude", "skills", "delegation"))
+        os.symlink(SCRIPTS, os.path.join(home, ".claude", "skills", "delegation", "scripts"))
+        return dict(os.environ, HOME=home)
+
+    def test_the_shim_runs_the_guard_and_skips_an_agent_payload(self):
+        self.watch()
+        env = self.shim_home()
+        p = subprocess.run(["bash", SHIM], input=json.dumps(self.payload(agent_id="a1")),
+                           capture_output=True, text=True, env=env)
+        self.assertEqual((p.returncode, p.stdout), (0, ""))
+        self.assertEqual(self.run_hook(self.payload(), cmd=["bash", SHIM], env=env),
+                         self.block(self.lapse_reason()))
+
+    def test_a_nested_agent_id_doesnt_skip_a_main_thread_stop(self):
+        # background_tasks can hold a stale teammate; only a top-level agent_id is a subagent.
+        self.watch()
+        tasks = [{"id": "t1", "type": "in_process_teammate", "status": "running",
+                  "description": "mate", "agent_id": "amate-0123456789abcdef"}]
+        self.assertEqual(self.run_hook(self.payload(background_tasks=tasks), cmd=["bash", SHIM],
+                                       env=self.shim_home()), self.block(self.lapse_reason()))
+
+    def test_the_shim_exits_0_when_the_script_is_missing_and_logs_why(self):
+        with tempfile.TemporaryDirectory() as home:
+            p = subprocess.run(["bash", SHIM], input=json.dumps(self.payload()),
+                               capture_output=True, text=True, env=dict(os.environ, HOME=home))
+        self.assertEqual((p.returncode, p.stdout), (0, ""))
+        self.assertIn("No such file or directory", self.err_log())
+
+    def test_the_shim_still_runs_the_guard_when_its_log_cant_be_written(self):
+        self.watch()
+        env = dict(self.shim_home(), XDG_STATE_HOME=self.state)
+        os.makedirs(os.path.join(self.state, "dotclaude", "delegation-ledger.err"))  # a dir
+        self.assertEqual(self.run_hook(self.payload(), cmd=["bash", SHIM], env=env),
+                         self.block(self.lapse_reason()))
+
+
+if __name__ == "__main__":
+    unittest.main()

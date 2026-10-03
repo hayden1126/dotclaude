@@ -130,6 +130,16 @@ class MergeCli(unittest.TestCase):
         self.assertIn("dropped: hand-added", r.stderr)
         self.assertNotIn("base;", r.stderr)
 
+    def test_a_reset_is_named_on_the_verbatim_path_too(self):
+        # No overlay and no live-only keys: the baseline goes in byte for byte, and a live
+        # permissions object it replaces must still be named.
+        with open(self.base, "w") as f:
+            f.write('{"permissions": {"allow": ["a"]}}\n')
+        live = self.live({"permissions": {"allow": ["a", "mine"]}})
+        r = run(MERGE, self.base, os.path.join(self.dir.name, "absent.json"), live)
+        self.assertEqual(r.stdout, '{"permissions": {"allow": ["a"]}}\n')
+        self.assertIn("the baseline resets permissions", r.stderr)
+
     def test_reordered_hooks_are_not_reported(self):
         with open(self.base, "w") as f:
             json.dump({"hooks": {"Stop": [{"hooks": [{"command": "x"}]}]}}, f)

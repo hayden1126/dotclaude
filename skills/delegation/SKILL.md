@@ -156,12 +156,12 @@ validated (`report_ok`).
   retuning; `due` asks for it monthly. After a probe run by hand in a live session,
   `delegation-ledger exclude --id <id> --why probe` keeps it out of those numbers.
 - **After a Claude Code upgrade,** the first session runs the quick canary in the background:
-  the unit tests, the sandbox posture, and the strings our hooks read from the binary. You hear
-  about it only if it fails. When the session-start line says the full canary is due (weekly, once
-  the version has moved), run `delegation-ledger canary` outside the sandbox and with
-  `run_in_background`: it takes about 6 minutes, and a slow run can pass the 10-minute
-  foreground limit. `delegation-ledger due` shows what is
-  pending, including the dated items in `due.toml`.
+  the unit tests, the sandbox posture, the strings our hooks read from the binary, and a run of
+  the installed watch-guard shim. A failure shows in the session-start line, which only Hayden
+  sees. Run `delegation-ledger due` to see what is pending, including the dated items in
+  `due.toml`. When it says the full canary is due (weekly, once the version has moved), run
+  `delegation-ledger canary` outside the sandbox and with `run_in_background`: it takes about
+  6 minutes, and a slow run can pass the 10-minute foreground limit.
 - `delegation-ledger open` lists delegations whose latest event isn't a stop. Each row
   shows its evidence:
   - whether the session is alive;
@@ -197,36 +197,96 @@ validated (`report_ok`).
   long command runs in the foreground (up to the Bash tool's 10-minute limit). A longer one
   runs in the background, and the agent waits on its output before reporting. `BRIEF.md`'s
   Budget section says so; keep that line.
+- **Your own wait that may outlast 30 minutes goes through `delegation-ledger wait`.** A
+  background Bash command stops at its timeout (30 minutes by default, 2 hours at most), and the
+  wake-up note then says not to restart it. Launch the waiter as a bare command with
+  `run_in_background` and `timeout: 7200000`: `delegation-ledger wait --pid <pid>` (or `--file`,
+  `--log <path> --done <regex>`, `--codex <run_id>`). Take the pid from a command run outside
+  the sandbox: a sandboxed command's pids name other processes here. Before it polls, it prints
+  a line naming the watch and the re-arm command. It exits 0 done, 1 failed, 2 stale, 3 when it
+  stepped aside (the watch was taken over or dropped), 64 when refused (the message says why),
+  and 70 when it couldn't decide (the watch stays open: re-arm it). At 75 it prints a re-arm
+  line: run exactly that, not the original command (though a rerun of the same wait takes the
+  same watch over). The watch guard blocks your stop once when a watch has lapsed with no
+  waiter, its job ended (done, failed or stale) with no waiter to tell you, or a background
+  command was killed at its time limit. After that one block, a lapse goes quiet: a later stop
+  lets you through and Hayden sees one warning. If you didn't re-arm, the guard starts a
+  detached waiter of its own then, unless its start fails or one already died early on that
+  watch. It watches the whole condition (the whole log too); its end blocks a later stop once,
+  saying how it ended, so check the result and report it. If it fails instead, a later stop
+  says why; re-arm to see the error, or drop the watch. Only a waiter you re-arm in the
+  background wakes an idle session when the job ends, so re-arm or drop it when it blocks.
+  When the guard can't tell how a job ended (its log's outcome may be further back than the
+  last 1 MB it reads, or a Codex run isn't finalized yet), its block says to re-arm the watch,
+  and the re-armed waiter reports the result. After a `/clear`, your first stop blocks once
+  again on each lapse from before it, except one a detached waiter is watching, whose end is
+  said when it comes. To stop watching, `delegation-ledger wait --drop <id>`.
 - **After a crash or restart,** run `delegation-ledger open --hours 24`.
   - For each orphaned agent, look at its artifact path and redo only the unfinished part.
-  - For Codex, run `codex-delegate status`, then `codex-delegate resume <run_id>`.
+  - Its `watches:` block lists every unresolved watch, however old, and the ones that ended
+    within the `--hours` horizon while no Claude process listened. One that needs re-arming
+    (its waiter is dead, or alive but its exit reaches nobody) shows its `--resume` command:
+    run it, or drop the watch. For an ended one, check the result.
+  - In a session you continued (`claude --continue`), the watch guard blocks your first stop
+    once for each watch the crash left: a waiter that still runs (its exit won't reach you, so
+    re-arm it), a lapse (even one acknowledged before the crash), or a job that ended while
+    nobody listened (check the result).
+  - Hayden, not you, sees the session-start line. It names every unresolved watch whose
+    waiter's exit reaches nobody, at each start, and once, each watch that ended while no
+    Claude process listened. If they pass one on, handle it the same way.
+  - For Codex, run `codex-delegate status`. A running run whose wrapper is gone names the
+    `delegation-ledger wait --resume` that re-arms its watch, or, with no watch, says to finalize
+    it once it ends. `codex-delegate resume <run_id>` continues an ended run, and finalizes its
+    last turn first if that has no stop row.
 
 ## 5. Codex runs
 
-**Always launch `run` and `resume` with the Bash tool's `run_in_background`.** A foreground Bash
-command is stopped after 10 minutes, and a Codex run takes longer. The exit notification wakes
-you, so there is no need to poll. If the wrapper does get killed anyway, Codex keeps running
-(it writes its own event log in its own session). `status` then says so, and `finalize`
-records the result once Codex ends.
+**Always launch `run` and `resume` with the Bash tool's `run_in_background` and `timeout:
+7200000`.** A foreground Bash command is stopped after 10 minutes, and a Codex run takes longer.
+Before Codex starts, the wrapper prints a launch line with the run id and its watch id. It
+waits as that watch's waiter, and its exit notification wakes you when the run ends, so there
+is no need to poll.
+
+A run can outlast the Bash tool's 2-hour cap. The wrapper exits first: at `--max-wait` (110
+minutes) it prints the re-arm command and exits 75, and Codex keeps running. Run the command it
+printed, in the background with the same timeout; that waiter finalizes the run once Codex
+ends. If the wrapper is killed anyway, Codex keeps running too (it runs under a supervisor
+detached from the wrapper's process tree), and the watch guard blocks your next stop with the
+same re-arm command. If Codex has ended by then, that block still says to re-arm: the waiter
+finalizes the run and its exit notice carries the result. Stopping the background task no
+longer stops Codex; `codex-delegate cancel <run_id>` does. Ctrl-C at a terminal still stops it
+too.
+`status` says where a run is, and `finalize` records the result by hand.
 
 ```bash
 codex-delegate run --model sol --dir ~/some/repo --brief brief.md [--network] [--timeout 3h]
 codex-delegate status              # verdict with evidence, phase, exit/report/audit results
 codex-delegate resume <run_id> --prompt fix.md
 codex-delegate finalize <run_id>   # a run whose wrapper died: report check, audit, stop row
+codex-delegate cancel <run_id>     # stop a running run on purpose; drops its watch
 codex-delegate audit <thread_id>   # every model the thread and its sub-agents used
 ```
 
 - **Models:** Sol or Terra only; the wrapper refuses anything else before launch. Use Terra
   for fetch-and-summarize.
 - **Output:** everything lands in `<dir>/.codex-delegate/<run_id>/`: `report.json`,
-  `events.jsonl` and `stderr.log`.
+  `events.jsonl`, `stderr.log`, and `codex.pid` and `codex.rc` (Codex's pid and exit code,
+  written by its detached supervisor).
 - **Exit codes:**
   - 0: ok;
   - 1: Codex failed (its own code is `rc` in the summary);
-  - 2: refused, or bad usage;
+  - 2: refused, or bad usage (a resume while Codex still runs, too);
   - 3: the model audit failed;
   - 4: the report is missing or invalid;
-  - 124: timed out.
+  - 5: stopped waiting with its watch dropped or taken over; Codex keeps running;
+  - 75: still running: re-arm with the printed command;
+  - 124: timed out;
+  - 143: killed by SIGTERM or SIGHUP while Codex ran; Codex keeps running, and the watch
+    guard's next block prints the re-arm command (during or after a `cancel`, neither: the run
+    is stopped and its watch dropped);
+  - `cancel` exits 0 once the run is stopped, and 2 for an unknown run, one that has ended,
+    one whose Codex hasn't started or can't be verified (no procStart recorded), or when the
+    run's finalize lock stays busy past 4 minutes. The cancelled run's wrapper, if still
+    running, exits 1.
 - **Scope:** send Codex only the work it does better, such as anything about its own
   configuration. Claude does the rest.

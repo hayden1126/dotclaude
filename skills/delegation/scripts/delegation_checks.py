@@ -18,6 +18,13 @@ upgraded three times in three days (2.1.284 to 2.1.286), so the checks split by 
 it fails open (it always exits 0; an error goes to delegation-ledger.err). Anything that would
 leave the checks unable to run (an unreadable version, a malformed due.toml, a crashing audit)
 becomes a nudge itself, so the checks can't go quiet.
+`due --hook` also names, to Hayden, every unresolved watch whose waiter's exit reaches nobody
+(dc.watch_orphaned): the guard marked its waiter unheard, its Claude process has ended, or with
+no process recorded its session has, or with neither its waiter died. It names one even when a
+running session's guard will adopt it (a crash, then `claude --continue`): a duplicate notice is
+cheap, and a missed one is the bug this exists for. It also names, once, the watches that
+ended while no Claude process listened, except the starting session's own, which this
+process's guard says to the model at its next stop.
 
 State lives in $XDG_STATE_HOME/dotclaude: canary.json (quick, full, green_full), audit.json
 (the last audit's WARN lines, whether a session start has shown them, and when the last
@@ -27,6 +34,7 @@ background job last started), checks.lock (one background job at a time), state.
 import contextlib
 import datetime
 import fcntl
+import glob
 import json
 import math
 import mmap
@@ -67,7 +75,7 @@ CANARY_STRINGS = [
     ("SubagentHandback", "report-check; delegation-ledger handback_message"),
     ("agent_id", "the policy hook's filter in settings.json"),
     ("agent_transcript_path", "delegation-ledger stop rows"),
-    ("last_assistant_message", "delegation-ledger, report-check"),
+    ("last_assistant_message", "delegation-ledger, report-check, watch-guard stop_digest"),
     ("customAgentType", "delegation_common.agent_role"),
     ("teamName", "delegation-ledger, report-check: teammate rows"),
     ("worktreePath", "subagent-policy: a writer's root"),
@@ -77,6 +85,19 @@ CANARY_STRINGS = [
     ("excludedCommands", "settings.json sandbox"),
     ("teammateMode", "settings.json"),
     ("CLAUDE_ASYNC_AGENT_STALL_TIMEOUT_MS", "SKILL.md §1b: the stall timer"),
+    ("do not restart it", "the kill notice's note: the gap the watch guard closes"),
+    ("background time limit", "watch-guard parse_notice: a kill at the time limit"),
+    ("stopped after reaching its background time limit",
+     "watch-guard parse_notice and DESC_RE: the kill summary naming the command"),
+    ("task-notification", "watch-guard: the notice's origin kind, and scan's byte search"),
+    ("queued_command", "watch-guard parse_notice: a mid-turn notice is this attachment"),
+    ("tool-use-id", "watch-guard map_kill: a notice's launching tool_use"),
+    ("background_tasks", "watch-guard watch_pending: a shell holding a watch id"),
+    ("prompt_id", "watch-guard stop_digest: a later stop acknowledges a lapse"),
+    ("CLAUDE_CODE_SESSION_ID", "delegation_common.claude_identity: a watch's session, when "
+     "CLAUDE_PID is the Claude process the walk found, or no process was found and CLAUDE_PID "
+     "is an ancestor"),
+    ("CLAUDE_PID", "delegation_common.claude_identity (the env or the file) and pids_visible"),
 ]
 
 
@@ -243,10 +264,42 @@ def check_strings(path=None, strings=CANARY_STRINGS):
     return True, f"all {len(strings)} strings present in {path}"
 
 
+GUARD_SHIM = os.path.expanduser("~/.claude/hooks/watch-guard.sh")
+NOOP_STOP = '{"hook_event_name": "Stop", "stop_hook_active": false}'  # no session: nothing to do
+
+
+def check_guard_shim(shim=None):
+    """The installed watch-guard shim runs clean: a main-thread Stop payload with no session id
+    (the guard does nothing for it) exits 0, prints nothing, and logs nothing to the
+    delegation-ledger.err where the shim sends Python's stderr. That proves the link and the
+    import, which would otherwise fail silently. It runs with a throwaway XDG_STATE_HOME, so the
+    real log's other writers (a guard's routine adoption line, say) can't fail it; the detail
+    quotes the last line it logged, since that log goes with the temp dir."""
+    shim = shim or GUARD_SHIM
+    if not os.path.exists(shim):
+        return False, f"{shim} is missing"
+    with tempfile.TemporaryDirectory() as state:
+        try:
+            p = subprocess.run(["bash", shim], input=NOOP_STOP, capture_output=True, text=True,
+                               timeout=10, env=dict(os.environ, XDG_STATE_HOME=state))
+        except (OSError, subprocess.TimeoutExpired) as e:
+            return False, f"{shim} didn't run ({type(e).__name__}: {e})"
+        try:
+            with open(os.path.join(state, "dotclaude", "delegation-ledger.err")) as f:
+                logged = f.read().strip()
+        except OSError:
+            logged = ""
+    if p.returncode or p.stdout.strip() or logged:
+        last = f", and logged: {logged.splitlines()[-1][:200]}" if logged else ""
+        return False, (f"{shim} exited {p.returncode} and printed {len(p.stdout.strip())} "
+                       f"chars{last}")
+    return True, f"{shim} ran clean"
+
+
 def run_quick(version):
     results = []
     for name, fn in (("units", check_units), ("posture", check_posture),
-                     ("strings", check_strings)):
+                     ("strings", check_strings), ("guard", check_guard_shim)):
         try:
             ok, detail = fn()
         except Exception as e:  # noqa: BLE001  a crashed check is a failed check
@@ -365,14 +418,114 @@ MONTHLY_NUDGE = ("the monthly audit is due: run `delegation-ledger audit --month
                  "the samples (it marks the rest too few to retune).")
 
 
+ORPHANS_LISTED = 3
+
+
+def left_watches(current=None, now=None):
+    """(orphans, unheard, unreadable) for the session-start nudge, and how many watch files
+    couldn't be read:
+    - orphans: the open or acknowledged watches whose waiter's exit reaches nobody
+      (dc.watch_orphaned), oldest first, even if their waiter still runs (a bare waiter outlives
+      a SIGKILLed Claude Code): the guard marked the waiter waiter_unheard, even once a
+      continued process adopted the watch; the Claude process the watch was recorded under has
+      ended; with no process recorded, its session isn't running (`current`, the starting
+      session's id, counts as running); with neither a process nor a session, its waiter is
+      dead. That includes a watch a running session's guard will adopt, as after a crash and
+      `claude --continue`: redundancy over silence;
+    - unheard: the watches that ended while no Claude process was listening (dc.ended_unheard),
+      oldest end first, except the starting session's own, which this process's guard says to
+      the model at its next stop.
+    A file that can't be read or judged is logged and counted, and the rest go on. Where pids
+    can't be seen (a sandboxed run) every waiter and session would read as dead, so there are
+    none."""
+    if not dc.pids_visible():
+        return [], [], 0
+    live = set(dc.live_sessions())
+    current = current if isinstance(current, str) and current else None
+    orphans, unheard, unreadable = [], [], 0
+    for p in sorted(glob.glob(os.path.join(dc.watches_dir(), "*.json"))):
+        try:
+            w = dc.read_watch(os.path.basename(p)[:-len(".json")])
+            if w and w.get("state") in dc.UNRESOLVED and dc.watch_orphaned(w, current, live, now):
+                orphans.append(dict(w, waiter_running=dc.waiter_alive(w, now)))
+            elif (w and dc.ended_unheard(w, now) and isinstance(w.get("id"), str)
+                  and (current is None or w.get("session_id") != current)):
+                unheard.append(w)
+        except Exception as e:  # noqa: BLE001  one bad file mustn't hide the others
+            log_error(f"watch file {p}: {type(e).__name__}: {e}")
+            unreadable += 1
+    return (sorted(orphans, key=lambda w: str(w.get("created"))),
+            sorted(unheard, key=lambda w: str(w.get("ended"))), unreadable)
+
+
+def orphan_name(w):
+    """"w-1 (the build)", saying so when its waiter still runs (left_watches judged it, so
+    evaluate stays pure): its result reaches nobody."""
+    notes = [w["description"]] if w.get("description") else []
+    if w.get("waiter_running"):
+        notes.append("its waiter is still running")
+    return f"{w.get('id')} ({'; '.join(notes)})" if notes else str(w.get("id"))
+
+
+def orphans_nudge(orphans, unreadable=0):
+    bad = (f"{unreadable} watch {'file' if unreadable == 1 else 'files'} couldn't be read; see "
+           "delegation-ledger.err") if unreadable else ""
+    if not orphans:
+        return f"{bad}."
+    n = len(orphans)
+    named = [orphan_name(w) for w in orphans[:ORPHANS_LISTED]]
+    more = f" and {n - ORPHANS_LISTED} more" if n > ORPHANS_LISTED else ""
+    text = (f"{n} {'watch' if n == 1 else 'watches'} whose waiter's exit reaches nobody: "
+            f"{', '.join(named)}{more}. Pick one up with `delegation-ledger wait --resume "
+            "<id>`, or drop it with `delegation-ledger wait --drop <id>`.")
+    return f"{text} ({bad})" if bad else text
+
+
+def unheard_nudge(unheard):
+    """The line for the watches that ended while nobody listened, naming ORPHANS_LISTED of them
+    (hook_main records those reported)."""
+    n = len(unheard)
+    named = [f"{w.get('id')} ({', '.join(x for x in (w.get('description'), w.get('state')) if x)})"
+             for w in unheard[:ORPHANS_LISTED]]
+    more = f" and {n - ORPHANS_LISTED} more" if n > ORPHANS_LISTED else ""
+    return (f"{n} {'watch' if n == 1 else 'watches'} ended while no Claude Code process was "
+            f"listening: {', '.join(named)}{more}. Check the results.")
+
+
+def mark_reported(watches, now=None):
+    """Record the watches the nudge named as reported, so they show once. Each is checked again
+    under the lock; a busy lock or a failed write is logged, and the watch shows again. A
+    detached waiter's end whose Claude process still runs is left unreported: that process's
+    guard says it to the model at its next stop, and the nudge, to Hayden, names it again
+    until then."""
+    def report(cur):
+        if dc.ended_unheard(cur, now) and not (cur.get("waiter_detached")
+                                               and dc.claude_alive(cur)):
+            cur["reported"] = True
+    try:
+        _, failed = dc.update_watches({w["id"]: report for w in watches}, time.monotonic() + 1)
+    except dc.LockBusy as e:
+        log_error(f"the watch nudge couldn't record what it named: {e}")
+        return
+    for wid, e in failed:
+        log_error(f"watch {wid} not recorded reported: {type(e).__name__}: {e}")
+
+
 def evaluate(version, canary_st, audit_st, due_st, items, now=None, today=None,
-             items_error=None, ledger_since=None):
+             items_error=None, ledger_since=None, orphans=(), unreadable=0, unheard=()):
     """(nudges, jobs, warns) from the state, without side effects. `warns` are the audit
-    warnings the nudges show, for mark_shown. `ledger_since` is the ledger's first ts."""
+    warnings the nudges show, for mark_shown. `ledger_since` is the ledger's first ts.
+    `orphans`, `unheard` and `unreadable` are left_watches' result: the watches a session left,
+    oldest first, the ones that ended while nobody listened, and how many watch files couldn't
+    be read."""
     now = time.time() if now is None else now
     today = today or datetime.date.today()
     canary_st, audit_st, due_st = _d(canary_st), _d(audit_st), _d(due_st)
     nudges, jobs = [], []
+    if orphans or unreadable:  # first: a finished job's result may be waiting on it
+        nudges.append(orphans_nudge(list(orphans), unreadable))
+    if unheard:
+        nudges.append(unheard_nudge(list(unheard)))
     may_launch = _age(due_st.get("bg_started"), now) > RELAUNCH_MIN * 60
     quick, full, green = (_d(canary_st.get(k)) for k in ("quick", "full", "green_full"))
     if not version:
@@ -399,9 +552,12 @@ def evaluate(version, canary_st, audit_st, due_st, items, now=None, today=None,
                            and _age(green.get("ts"), now) >= FULL_EVERY_DAYS * 86400):
             last = (f"last green: {green.get('version')} on {str(green.get('ts'))[:10]}"
                     if green else "none on record")
-            nudges.append(f"the full canary is due for Claude Code {version} ({last}). Run "
-                          "`delegation-ledger canary` outside the sandbox and in the "
-                          f"background: {FULL_COST}.")
+            # Neither the re-arm across turns nor Claude Code's time-limit kill can be checked
+            # under claude -p, so the upgrade asks for both by hand too (due.toml has the steps).
+            nudges.append(f"the full canary is due for Claude Code {version} ({last}), and so "
+                          "are the manual watch-guard re-arm check and the Codex kill probe "
+                          "(docs/delegation.md, Long waits; due.toml). Run `delegation-ledger "
+                          f"canary` outside the sandbox and in the background: {FULL_COST}.")
     if _age(audit_st.get("ts"), now) >= AUDIT_EVERY_HOURS * 3600 and may_launch:
         jobs.append("audit")
     warns = [str(w) for w in _l(audit_st.get("warns"))]
@@ -449,14 +605,26 @@ def mark_shown(displayed):
 
 
 def hook_main(stdin_text="", out=print):
-    """The SessionStart body. Fails open: it always returns 0, and an error is logged."""
+    """The SessionStart body. Fails open: it always returns 0, and an error is logged. A
+    watch file that can't be read is counted in the watch nudge; any other error reading the
+    watches drops only that nudge."""
+    try:
+        session = _d(json.loads(stdin_text or "{}")).get("session_id")
+    except ValueError:
+        session = None  # the payload only spares this session's own watches
+    try:
+        orphans, unheard, unreadable = left_watches(session)
+    except Exception:  # noqa: BLE001
+        log_error()
+        orphans, unheard, unreadable = [], [], 0
     try:
         version = cc_version(timeout=2)  # the hook itself gets 5 s
         items, items_error = read_items()
         nudges, jobs, warns = evaluate(version, read_state("canary.json"),
                                        read_state("audit.json"), read_state("due.json"),
                                        items, items_error=items_error,
-                                       ledger_since=dc.first_row_ts())
+                                       ledger_since=dc.first_row_ts(), orphans=orphans,
+                                       unreadable=unreadable, unheard=unheard)
     except Exception:  # noqa: BLE001  a reminder must never get in the way of a session
         log_error()
         return 0
@@ -466,6 +634,8 @@ def hook_main(stdin_text="", out=print):
     if nudges and attended:
         out(json.dumps(render(nudges)))  # first, so a failure below can't drop the nudges
     try:
+        if unheard and attended:
+            mark_reported(unheard[:ORPHANS_LISTED])
         if warns and attended:
             mark_shown(warns)
         if jobs:

@@ -80,9 +80,11 @@ class LedgerEnv(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.env = dict(os.environ, HOME=self.tmp.name,
                         XDG_STATE_HOME=os.path.join(self.tmp.name, "state"))
-        # Inside the sandbox the lead's CLAUDE_PID is inherited but invisible, which would put
-        # every `open` here in the no-pid-visible mode. The Sandbox tests set it on purpose.
+        # Inside the sandbox the lead's CLAUDE_PID is inherited but invisible, and SANDBOX_RUNTIME
+        # is set, either of which would put every `open` here in the no-pid-visible mode. The
+        # Sandbox tests set CLAUDE_PID on purpose.
         self.env.pop("CLAUDE_PID", None)
+        self.env.pop("SANDBOX_RUNTIME", None)
         self.ledger = os.path.join(self.tmp.name, "state", "dotclaude", "delegations.jsonl")
 
     def tearDown(self):

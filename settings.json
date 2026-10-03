@@ -20,6 +20,11 @@
     "baseRef": "head"
   },
   "teammateMode": "in-process",
+  "permissions": {
+    "allow": [
+      "Bash(delegation-ledger wait *)"
+    ]
+  },
   "sandbox": {
     "enabled": true,
     "failIfUnavailable": true,
@@ -209,6 +214,15 @@
             "type": "command",
             "command": "bash \"$HOME/.claude/hooks/session-summary.sh\"",
             "timeout": 10
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$HOME/.claude/hooks/watch-guard.sh\"",
+            "timeout": 5
           }
         ]
       }
