@@ -42,12 +42,19 @@ it drops; put a value in the overlay to keep it. The baseline now owns a `permis
 `setup.sh` replaces the live one (`merge-settings.py` names it on stderr): personal allow rules go
 in `settings.machine.json`, whose lists append.
 
-The baseline's `permissions` deny destructive git (force-push, `reset --hard` and `git clean -f`,
-also through `git -C`; the first two through `bash -c` too) and ask before any `git push`, `rm -r`
-or `rm -f`. Verified on 2.1.288 in default and auto mode: without the rules, auto mode ran a
-force-push and a `reset --hard` on a dirty tree when the prompt named them. Other wrappers
-(`sh -c`, `zsh -c`, `eval`) are left to auto mode's classifier. `tests/delegation/test_settings.py`
-pins what each rule must and must not catch.
+The baseline's `permissions` deny destructive git and ask before any `git push`, `rm -r` or
+`rm -f`. Denied: force-push, `reset --hard`, `reset --merge` and `git clean -f`, plain or through
+`git -C`, plus a `bash -c` that runs `push --force` or `reset --hard`. A force the deny rules miss
+(`+branch`, `-uf`) still asks, as every push does. Other wrappers (`bash -lc`, `sh -c`, `eval`,
+`git -c k=v`) and `checkout`, `switch`, `restore` and `revert` are left to auto mode's
+classifier. Why rules at all: on 2.1.288, auto mode ran a force-push and a `reset --hard` on a
+dirty tree when the prompt named them.
+
+A rule's `*` spans words, so two safe forms are denied too: a `git -C` command whose message
+mentions a guarded phrase (commit with `-F <file>`, or from inside the repo), and a
+`git clean -n` dry run on a path containing `f`. Permission rules apply to delegated agents as
+well, so expect a writer's `rm -rf build` to ask (not yet checked live).
+`tests/delegation/test_settings.py` pins each rule with a case only it catches.
 
 ## What's in here
 

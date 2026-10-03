@@ -44,7 +44,13 @@ stored here).
   and `rm -f`; README's paragraph on them says what's covered, and commit `6bdddec` holds the
   probe evidence. **Next:** Hayden merges, then installs. `settings.json` is copied, not linked,
   so the rules aren't live until then: copy `~/.claude/settings.json`, run `./setup.sh` outside the
-  sandbox, and diff the two ([[dotclaude-setup-install-model]]).
+  sandbox, and diff the two ([[dotclaude-setup-install-model]]). Then:
+  - Check that a delegated writer's `rm -rf build` in its worktree now asks (README says it
+    should; not checked live). If that breaks delegation, revisit the `rm` ask rules.
+  - On each other machine, after `git pull`: `setup.sh` never removes old links, so
+    `~/.claude/hooks/danger-guard.sh` dangles. Remove it (ask first), and any
+    `settings.machine.json` hook that names it, which would now fail on every Bash call. HAYPC is
+    already clean.
 - **New-device parity audit** (queued 2026-10-03; [[hayden-new-device-goal]]). List HAYPC's
   local-only pieces and sort each into repo, opt-in installer, overlay template or private:
   `settings.machine.json`, `~/.claude/hooks/tmux-state.sh`, `~/bin/tmux-claude-status`, the
