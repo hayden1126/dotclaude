@@ -11,6 +11,10 @@ Base: `main`. For branch / PR / push state, run `gh pr list` and `git log main..
 stored here).
 
 ## Done (recent; git, the linked plans and memory hold the detail)
+- **The hook payload sweep, merged in PR #63** (2026-10-03). The hooks are symlinked, so it's
+  live. Commit messages hold the why, README's hook entries the behavior and the replay step,
+  `tests/setup/` the cases. Accepted: "I think we should wrap up" doesn't fire; "handoff then
+  commit hooks run twice" does.
 - **The watch guard (background waits), merged in PR #62 and installed on HAYPC** (2026-10-02 to
   10-03). The behavior is in `docs/delegation.md` "Long waits", its open checks in that doc's
   "Next", and the decisions in `PLAN.md` (now history).
@@ -35,19 +39,29 @@ stored here).
     every number and holds the diagram spec (§8; [[svg-to-png-headless-render]]). Never publish
     raw transcripts or the eval data; the `.zshrc`, `.zshenv` and `.mcp.json` backups beside
     SHAPE.md stay unread.
-- **Hook payload sweep: PR #63** (branch `fix/handoff-reminder-subagents`, base `main` at
-  `4b3d0c4`; `gh pr view 63 --json state,mergedAt`). Commit messages hold the why, README's hook
-  entries the behavior and the replay step, `tests/setup/` the cases. **Next:** Hayden merges;
-  nothing to install, since the hooks are symlinked (live while this branch is checked out;
-  switching to `main` first reverts them). Accepted: "I think we should wrap up" doesn't fire;
-  "handoff then commit hooks run twice" does.
+- **danger-guard retired; permission rules replace it** (branch `chore/post-63-decisions`,
+  2026-10-03). The baseline `permissions` deny destructive git and ask before `git push`, `rm -r`
+  and `rm -f`; README's paragraph on them says what's covered, and commit `6bdddec` holds the
+  probe evidence. **Next:** Hayden merges, then installs. `settings.json` is copied, not linked,
+  so the rules aren't live until then: copy `~/.claude/settings.json`, run `./setup.sh` outside the
+  sandbox, and diff the two ([[dotclaude-setup-install-model]]).
+- **New-device parity audit** (queued 2026-10-03; [[hayden-new-device-goal]]). List HAYPC's
+  local-only pieces and sort each into repo, opt-in installer, overlay template or private:
+  `settings.machine.json`, `~/.claude/hooks/tmux-state.sh`, `~/bin/tmux-claude-status`, the
+  `@claude_state` lines in `~/.tmux.conf`, user-scope MCP servers, plugins against
+  `plugins/enabled.json`, the shell rc files. Then build the installers, tmux first, with
+  `setup-chrome-wsl.sh` as the precedent (opt-in, not called by `setup.sh`). Remote access
+  (`~/bin/tmux-remote`, the port-22 ForceCommand, `~/hq/docs/local/remote-access.md`) stays
+  private. A drift check would fit the `setup.sh` doctor idea in [[deepseek-harness-eval]]. Both
+  tmux scripts got `python3 -I` on 2026-10-03.
 - **Hook follow-ups, after PR #63** (proposed 2026-10-03, not started):
   - **Move handoff-reminder's classifier into an importable module** (`hooks/handoff_reminder.py`
     behind the `.sh` shim), with one shared INJECTED list for the three prompt hooks. Tests and the
-    replay would then run in seconds (the setup suite spends most of its 18 s spawning bash).
+    replay would then run in seconds (the setup suite spends most of its 25 s spawning bash).
     `setup.sh` links only `hooks/*.sh`: link the module too, or have the shim find its own path.
-  - **Probe the UserPromptSubmit payload** for an origin field like the transcript's
-    `origin.kind` ("human" for a typed prompt); if it has one, it replaces the marker lists.
+  - The marker lists stay: the UserPromptSubmit payload has no origin field, and the prompt's
+    transcript entry is written after the hook runs (probed 2026-10-03,
+    [[cc-hook-payload-pitfalls]]).
 - **Delegation hardening: what is live on HAYPC** (Stage 2 and 3, `docs/delegation.md`;
   `skills/delegation/SKILL.md` is the operating guide). Open items:
   - **Retune later, not now.** When `due` asks for `audit --monthly` (date and first sample sizes:
@@ -59,9 +73,8 @@ stored here).
   - **Other machines:** `git pull` in `~/dotclaude`, then `./setup.sh`, both outside the sandbox
     (it now also links Codex's skills). The baseline `settings.json` carries the delegation hooks,
     the watch guard's Stop hook and a `permissions` object that replaces a live one, so personal
-    allow rules go in
-    `settings.machine.json`. Copy `~/.claude/settings.json` first and diff it after (a baseline key
-    still wins). Without an overlay, install by hand per the docs' install order: the policy hook
+    allow rules go in `settings.machine.json`. Copy `~/.claude/settings.json` first and diff it
+    after (a baseline key still wins). Without an overlay, install by hand per the docs' install order: the policy hook
     fails closed.
 - **Codex setup shared with a friend** (2026-09-29): built, private and ready to share at
   https://claude.ai/artifact/KWwrPkLsbMUi7Ugjfskqsz (republish by that URL). It links four clean
@@ -84,16 +97,7 @@ stored here).
     `false` means "nobody has said". Revisit when S3 enforces the storyboard MUST/NEVER grammar.
 
 ## Blocked / decisions needed
-- **Whether to scrub `HAYPC`, `hq` and `~/vault` from STATUS.md, `skills/delegation/SKILL.md` and
-  `BRIEF.md`.** The scrub left them in, because sessions and agents act on those files.
-- **danger-guard: retire or keep?** It ships unwired (out of `settings.json` since 2026-07-22; the
-  old wiring sits in the live-only `~/.claude/hooks/danger-guard.disabled.json`) and overlaps the
-  sandbox, auto mode and the subagent policy. Retiring means deleting `hooks/danger-guard.sh`, its
-  README entry, its cases in `tests/setup/test_hook_payloads.py` and that `.json`, each confirmed.
-- **`tmux-state.sh`: version it or keep it local?** HAYPC's `settings.machine.json` wires
-  `~/.claude/hooks/tmux-state.sh` (a tmux window busy/wait/idle indicator), as the overlay is meant
-  to, but the script has no copy in git. In `hooks/` it would be a no-op outside tmux. Either way,
-  its idle path runs `python3 -c` without `-I`: the `json.py` exposure the sweep fixed elsewhere.
+- None open.
 
 ## Notes for next session
 - **Verify delegation before touching it:** `python3 -m unittest discover -s tests/delegation -t
@@ -120,5 +124,7 @@ stored here).
   loop-engineering inner loop (its one machine prompt has no wrap-up phrase); (b) cross-platform
   notifiers for the toast (YAGNI on WSL-only); (c) a CLAUDE.md nudge to create more native tasks
   (the session-summary line already grounds "what/where"; revisit only if a 4-6 step job with no
-  tasks shows up, scoped to multi-step work).
+  tasks shows up, scoped to multi-step work); (d) scrubbing `HAYPC`, `hq` and `~/vault` from
+  STATUS.md, `skills/delegation/SKILL.md` and `BRIEF.md` (the post's code links pin `7ed72e9`,
+  which already shows them, and agents act on the exact paths).
 - A fresh WSL clone needs `./setup-chrome-wsl.sh` once ([[dotclaude-chrome-devtools-wsl]]).
