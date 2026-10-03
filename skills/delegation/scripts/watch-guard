@@ -11,12 +11,14 @@ to wake it. This hook is the enforcement:
   session that isn't live (a /clear, or a watch recorded with no session), which it adopts:
   - a live waiter, or a background shell whose command holds the watch id, allows (the waiter
     records the end itself);
-  - else a met condition is recorded done and blocks once: the dead waiter's notification
-    never came, so the lead is told to check the result and report it. A --log condition is
-    checked in the log's last 1 MB only, to keep a stop cheap;
-  - a codex run with a stop row is the same, done on exit 0 and failed otherwise; one that
-    ended without a stop row, or still runs, is a lapse (its finalize is still owed);
-  - else it has lapsed (a failed or stale condition too: a resumed waiter reports it). A lapse
+  - else a condition that has ended is recorded so and blocks once, even after its lapse was
+    acknowledged: the dead waiter's notification never came, so the lead is told to check the
+    result and report it. That is a met condition (done), a failed or stale one, a codex run
+    with a stop row (done on exit 0, failed otherwise), or one that never started (failed). A
+    codex run that ended without a stop row is recorded done (Codex has ended), and the lead
+    is told to finalize it. A --log condition is checked in the log's last 1 MB only, to keep
+    a stop cheap;
+  - else it has lapsed: the condition is unmet, or the codex run still runs. A lapse
     blocks once, recording blocked_at, a digest of the stop (its prompt_id and
     last_assistant_message) and the transcript's size. A later stop, whose digest differs,
     allows, marks it acknowledged and warns in a systemMessage; later stops say nothing more.
@@ -26,7 +28,11 @@ to wake it. This hook is the enforcement:
   - a watch of this session recorded under a Claude process that has ended (a crash, then
     `claude --continue`) is adopted too: this process records itself as the watch's. A waiter
     whose process still runs (even with a stale heartbeat) reports to nobody, so it is marked
-    waiter_unheard and blocks once with the re-arm command; a dead one is a lapse, as above.
+    waiter_unheard and blocks once with the re-arm command, unless this stop records the
+    watch's end; a dead one is a lapse, as above.
+  - adoption, either kind, clears the watch's lapse record and reopens an acknowledged one:
+    the adopting conversation never saw the old block, so a lapse blocks once again there.
+    It can't repeat, since an adopted watch is this process's in this session.
   - a watch of this session that ended (done, failed or stale) in the last 7 days while no
     Claude process was listening (its waiter was unheard, or its Claude process has ended),
     and isn't reported yet, blocks once and is recorded reported.
@@ -83,7 +89,6 @@ WATCH_REASON = ("Watch {id} ({desc}) has no live waiter and {unmet}. If a comman
                 "at its time limit, don't re-run it. Re-arm the watch: delegation-ledger wait "
                 "--resume {id}, with run_in_background and timeout 7200000. To stop watching "
                 "it: delegation-ledger wait --drop {id}.")
-CODEX_ENDED = "(the run has ended; resuming finalizes it)"
 UNHEARD_REASON = ("Watch {id}'s waiter was started by a Claude Code process that has ended, so "
                   "its exit won't reach you. Re-arm it: delegation-ledger wait --resume {id}, "
                   "with run_in_background and timeout 7200000.")
@@ -94,6 +99,11 @@ CODEX_UNSTARTED = ("Watch {id} ({desc}): codex run {run} never started, since it
                    "{restart}, with run_in_background and timeout 7200000.")
 MET_REASON = ("Watch {id} ({desc}): {cond} is met, but its waiter had stopped, so no "
               "notification came. Check the result and report it.")
+JOB_ENDED = ("Watch {id} ({desc}) ended {state}: {why}. Its waiter had stopped, so no "
+             "notification came. Check the result and report it.")
+CODEX_UNFINALIZED = ("Watch {id} ({desc}): codex run {run} has ended, but its waiter had "
+                     "stopped, so nobody finalized it. Run codex-delegate finalize {run}, then "
+                     "check its report and report it.")
 CODEX_FAILED = ("codex run {run} ended with exit {exit}, but its waiter had stopped, so no "
                 "notification came. Check its report and report it.")
 KILL_REASON = ('Background command "{desc}" was stopped at its time limit. If it was waiting '
@@ -172,8 +182,10 @@ def log_tail_cursor(cond):
 
 
 def watch_pending(w, shells, now):
-    """What one watch would add, read-only: None, or a Pending. A codex run gone from the
-    ledger raises Undecidable, which skips this watch."""
+    """What one watch would add, read-only: None, or a Pending. Every way its condition can end
+    is an end, which blocks once and resolves the watch even after its lapse was acknowledged,
+    so a job that ends badly is said too; only a condition still unmet is a lapse. A codex run
+    gone from the ledger raises Undecidable, which skips this watch."""
     wid, cond = w["id"], w.get("condition") or {}
     if dc.waiter_alive(w, now) or any(wid in c for c in shells):
         return None
@@ -182,21 +194,25 @@ def watch_pending(w, shells, now):
     lapsed = WATCH_REASON.format(id=wid, desc=desc,
                                  unmet=f"{dc.condition_text(cond)} is unmet")
     if "codex" in cond:
-        stage, e = dc.codex_progress(cond["codex"])
+        run = cond["codex"]
+        stage, e = dc.codex_progress(run)
         if stage == "stopped" and e.get("exit") == 0:
             return Pending("end", w, met, "done")
         if stage == "stopped":
-            return Pending("end", w, CODEX_FAILED.format(run=cond["codex"], exit=e.get("exit")),
-                           "failed")
+            return Pending("end", w, CODEX_FAILED.format(run=run, exit=e.get("exit")), "failed")
         if stage == "unstarted":
             return Pending("end", w, CODEX_UNSTARTED.format(
-                id=wid, desc=desc, run=cond["codex"], restart=dc.codex_restart(e)), "failed")
-        if stage == "ended":
-            lapsed = lapsed.replace(" is unmet.", f" is unmet {CODEX_ENDED}.", 1)
+                id=wid, desc=desc, run=run, restart=dc.codex_restart(e)), "failed")
+        if stage == "ended":  # watch_verdict's done: Codex has ended, its finalize still owed
+            return Pending("end", w, CODEX_UNFINALIZED.format(id=wid, desc=desc, run=run),
+                           "done")
         return Pending("lapse", w, lapsed, None)
-    verdict, _ = dc.watch_verdict(w, log_tail_cursor(cond) if cond.get("log") else None, now)
+    verdict, why = dc.watch_verdict(w, log_tail_cursor(cond) if cond.get("log") else None, now)
     if verdict == "done":
         return Pending("end", w, met, "done")
+    if verdict:  # failed or stale
+        return Pending("end", w, JOB_ENDED.format(id=wid, desc=desc, state=verdict, why=why),
+                       verdict)
     return Pending("lapse", w, lapsed, None)
 
 
@@ -507,6 +523,9 @@ def adoption(sid, me, now):
     - a crashed one records this process as its Claude process, and a waiter whose process
       still runs, even with a stale heartbeat, is marked waiter_unheard: its exit goes to the
       process that ended.
+    Either way the watch's lapse record is cleared and an acknowledged lapse reopened
+    (dc.unblock), since the adopting conversation never saw them: the guard blocks once on it
+    afresh. That can't repeat, since an adopted watch is this process's, in this session.
     settle(lost) logs each adoption whose watch was written (not in `lost`) and returns the ids
     of those whose waiter still runs but reports to nobody."""
     moved, revived, unheard = [], [], []
@@ -519,9 +538,11 @@ def adoption(sid, me, now):
                 if dc.left_by_clear(cur, me, dc.live_sessions()):
                     moved.append((wid, cur.get("session_id")))
                     cur["session_id"] = sid
+                    dc.unblock(cur)
             elif crashed(cur, sid, me):
                 revived.append((wid, cur.get("claude_pid")))
                 cur.update(claude_pid=me[0], claude_start=me[1])
+                dc.unblock(cur)
                 # By its process, not its heartbeat: a waiter suspended past its heartbeat (a
                 # paused VM) still exits to the ended process when it resumes.
                 if dc.pid_alive(cur.get("waiter_pid"), cur.get("waiter_start")):
@@ -581,7 +602,7 @@ def commit(sid, transcript, adopted, me, pendings, kills, scan_out, stop, size, 
     meanwhile, a twin guard that recorded first, or a watch that wasn't adopted after all (it's
     in another session), wins. A watch whose update fails is logged and unsaid, adoption
     included, and comes up again next stop; the rest, and the kills, go on."""
-    items, acks, itemized, outcomes = [], [], set(), {}
+    items, acks, itemized, outcomes, ended = [], [], set(), {}, set()
 
     def record(p):
         wid = p.w["id"]
@@ -598,6 +619,7 @@ def commit(sid, transcript, adopted, me, pendings, kills, scan_out, stop, size, 
             if p.kind == "end":
                 cur.update(state=p.state, ended=iso(now), reported=True)
                 outcomes[wid] = "block"
+                ended.add(wid)
             elif cur.get("blocked_at") is None:
                 cur.update(blocked_at=iso(now), blocked_stop=stop, blocked_size=size)
                 outcomes[wid] = "block"
@@ -614,8 +636,9 @@ def commit(sid, transcript, adopted, me, pendings, kills, scan_out, stop, size, 
     with dc.file_lock(kills_path(sid, ".lock"), until, clock):
         _, failed = dc.update_watches(fns, until, clock) if fns else ({}, [])
         for wid in settle({wid for wid, _ in failed}):
-            items.append(UNHEARD_REASON.format(id=wid))
-            itemized.add(wid)
+            if wid not in ended:  # "re-arm it" would contradict the end said below
+                items.append(UNHEARD_REASON.format(id=wid))
+                itemized.add(wid)
         for wid, exc in failed:
             outcomes.pop(wid, None)
             log(f"watch {wid}", exc)
