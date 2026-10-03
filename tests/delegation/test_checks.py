@@ -78,7 +78,8 @@ class Strings(unittest.TestCase):
         names = {s for s, _ in checks.CANARY_STRINGS}
         for s in ("do not restart it", "background time limit", "task-notification",
                   "queued_command", "stopped after reaching its background time limit",
-                  "tool-use-id", "background_tasks", "prompt_id", "CLAUDE_CODE_SESSION_ID"):
+                  "tool-use-id", "background_tasks", "prompt_id", "CLAUDE_CODE_SESSION_ID",
+                  "CLAUDE_PID"):
             self.assertIn(s, names)
 
 

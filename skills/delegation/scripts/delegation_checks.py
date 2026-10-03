@@ -97,6 +97,7 @@ CANARY_STRINGS = [
     ("CLAUDE_CODE_SESSION_ID", "delegation_common.claude_identity: a watch's session, when "
      "CLAUDE_PID is the Claude process the walk found, or no process was found and CLAUDE_PID "
      "is an ancestor"),
+    ("CLAUDE_PID", "delegation_common.claude_identity (the env or the file) and pids_visible"),
 ]
 
 
