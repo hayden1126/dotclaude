@@ -873,6 +873,105 @@ class Watches(GuardEnv):
                                    systemMessage=self.ACK))
 
 
+class OutcomeMatrix(GuardEnv):
+    """Every way a watch's job can end, in every state its watch can be in when it does, across
+    a run of stops by the lead with no waiter alive: each end and each uncertain outcome is
+    said (a block that says it, not only a lapse) at least once and at most twice, and a job
+    still running is said at most once, as a lapse."""
+
+    STOPS = ("p1", "p2", "p3", "p4")
+    STATES = ("open", "blocked", "acknowledged", "after /clear", "after a crash")
+    # The blocks each outcome gets across STOPS, by the watch's state when its job ends: open
+    # and unblocked; open and blocked once, not yet acknowledged; acknowledged; adopted after a
+    # /clear; adopted after a crash. A cell a known gap in docs/delegation.md covers holds the
+    # gap's name instead, and isn't run. None does today.
+    MATRIX = {
+        #               open  blocked  acknowledged  after /clear  after a crash
+        "met":         (1,    1,       1,            1,            1),
+        "failed":      (1,    1,       1,            1,            1),
+        "stale":       (1,    1,       1,            1,            1),
+        "codex ended": (1,    1,       1,            1,            1),
+        "uncertain":   (1,    1,       1,            1,            1),
+        "running":     (1,    0,       0,            1,            1),
+    }
+    RECORDED = {"met": "done", "failed": "failed", "stale": "stale"}  # the rest stay unresolved
+
+    def arrange(self, outcome, state):
+        """A fresh state dir and transcript, and watch w-1 with `outcome`'s job in `state`."""
+        d = tempfile.mkdtemp(dir=self.tmp.name)
+        self.state = os.path.join(d, "state")
+        os.environ["XDG_STATE_HOME"] = self.state  # setUp's patch.dict restores it
+        self.watches = os.path.join(self.state, "dotclaude", "watches")
+        self.transcript = os.path.join(d, "s1.jsonl")
+        self.lines()
+        old = self.now - 7200
+        never, log = os.path.join(d, "never"), os.path.join(d, "build.log")
+        dead = [{"pid": DEAD, "start": None, "comm": "make"}]
+        desc = "the build"
+        if outcome == "met":
+            open(never, "w").close()
+            cond = {"file": never}
+        elif outcome == "failed":
+            cond = {"pids": dead, "file": never}
+        elif outcome == "stale":
+            open(log, "w").close()
+            os.utime(log, (old, old))
+            cond = {"log": log, "done": "^OK$", "stale_min": 1}
+        elif outcome == "codex ended":  # no stop row, Codex and its wrapper gone
+            self.codex_row()
+            cond, desc = {"codex": "r1"}, "codex run r1 ends"
+        elif outcome == "uncertain":  # the done line is further back than the guard reads
+            with open(log, "w") as f:
+                f.write("OK\n" + ("x" * 1023 + "\n") * (guard.LOG_TAIL // 1024 + 10))
+            cond = {"pids": dead, "log": log, "done": "^OK$"}
+        else:  # running
+            cond = {"file": never}
+        me = {"claude_pid": os.getpid(), "claude_start": dc.proc_start(os.getpid())}
+        blocked = {"blocked_at": guard.iso(self.now - 600), "blocked_stop": "0123",
+                   "blocked_size": 1}
+        acked = dict(blocked, state="acknowledged")
+        sid, fields = {"open": ("s1", me), "blocked": ("s1", dict(me, **blocked)),
+                       "acknowledged": ("s1", dict(me, **acked)),
+                       "after /clear": ("s-before", dict(me, **acked)),
+                       "after a crash": ("s1", dict(acked, claude_pid=DEAD, claude_start=None)),
+                       }[state]
+        self.watch(sid=sid, cond=cond, desc=desc, created=guard.iso(old), **fields)
+
+    def test_every_end_is_said_once_or_twice_and_a_running_job_at_most_once(self):
+        env = mock.patch.dict(os.environ, {"CLAUDE_PID": str(os.getpid())})
+        sessions = mock.patch.object(guard.dc, "live_sessions",
+                                     return_value={"s1": os.getpid()})
+        env.start()
+        self.addCleanup(env.stop)
+        sessions.start()
+        self.addCleanup(sessions.stop)
+        for outcome, row in self.MATRIX.items():
+            for state, expected in zip(self.STATES, row):
+                if isinstance(expected, str):
+                    continue  # a known gap, named in the cell
+                with self.subTest(outcome=outcome, state=state):
+                    self.arrange(outcome, state)
+                    blocks = []
+                    for prompt_id in self.STOPS:
+                        out = self.decide(prompt_id=prompt_id)
+                        if out and out.get("decision") == "block":
+                            blocks.append(out["reason"])
+                    said = [r for r in blocks if "has no live waiter" not in r]
+                    if outcome == "running":
+                        self.assertLessEqual(len(blocks), 1, blocks)
+                        self.assertFalse(said, blocks)
+                    else:
+                        self.assertTrue(1 <= len(blocks) <= 2, blocks)
+                        self.assertTrue(said, blocks)  # said as an end, not only as a lapse
+                    self.assertEqual(len(blocks), expected, blocks)
+                    w = self.read()
+                    self.assertEqual(w["session_id"], "s1")  # adopted, where it was another's
+                    if outcome in self.RECORDED:
+                        self.assertEqual(w["state"], self.RECORDED[outcome])
+                    else:
+                        self.assertIn(w["state"], dc.UNRESOLVED)
+
+
 class Kills(GuardEnv):
     def test_a_killed_task_blocks_once_then_allows(self):
         self.lines(launch("toolu_1", "bk1", "sleep 9000", "long sleep", self.now - 7200),
