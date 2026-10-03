@@ -42,9 +42,6 @@ stored here).
     - never publish raw transcripts or the eval data;
     - the `.zshrc`, `.zshenv` and `.mcp.json` backups beside SHAPE.md stay unread.
 - **Watch guard follow-ups** (the guard itself is under Done).
-  - **Open question:** does a Stop hook's `systemMessage` reach Hayden? The one live ack, around
-    01:11 on 2026-10-03, went unseen (Hayden was away). Next: a one-minute live demo with Hayden
-    watching; if the ack shows, close the docs' gap "The guard's ack rests on Claude Code's docs".
   - **An unnamed flaky test** erred twice under load on 2026-10-03, and didn't reproduce in 9
     runs. If it recurs, run with `-v` and name it.
 - **`hooks/handoff-reminder.sh` fix, on branch `fix/handoff-reminder-subagents`** (derive its PR
