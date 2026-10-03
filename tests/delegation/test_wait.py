@@ -366,6 +366,38 @@ class ScanLog(unittest.TestCase):
                 self.assertIsNone(dc.scan_log(log, "^OK$", None, cur))
 
 
+class FirstScan(unittest.TestCase):
+    """A first scan has no earlier size to compare, so a partial last line counts as finished
+    once the log has been quiet for a poll: a re-armed waiter, or the guard, reading a log
+    whose last line is an unterminated done line."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.log = os.path.join(self.tmp.name, "job.log")
+        with open(self.log, "w") as f:
+            f.write("seen\nOK")
+        self.now = time.time()
+
+    def age(self, s):
+        os.utime(self.log, (self.now - s, self.now - s))
+
+    def test_a_partial_line_quiet_for_a_poll_matches_on_a_first_scan(self):
+        self.age(1)  # just written: it may still be being written
+        self.assertIsNone(dc.scan_log(self.log, "^OK$", None, dc.log_cursor(), quiet_s=15,
+                                      now=self.now))
+        self.age(15)
+        self.assertEqual(dc.scan_log(self.log, "^OK$", None, dc.log_cursor(), quiet_s=15,
+                                     now=self.now), "done")
+
+    def test_an_old_unterminated_done_line_is_done_not_stale(self):
+        self.age(7200)
+        old = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(self.now - 7200))
+        w = {"condition": {"log": self.log, "done": "^OK$", "stale_min": 1}, "created": old,
+             "poll_s": 15}
+        self.assertEqual(dc.watch_verdict(w, now=self.now)[0], "done")
+
+
 class Exits(WaitEnv):
     def test_max_prints_only_the_rearm_line_and_leaves_the_watch_open(self):
         job = self.job()

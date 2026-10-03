@@ -910,23 +910,27 @@ def log_cursor():
     return {"offset": 0, "done": False, "failed": False, "size": None}
 
 
-def scan_log(path, done, fail, cursor, pids_gone=None):
+def scan_log(path, done, fail, cursor, pids_gone=None, quiet_s=WAIT_POLL_S, now=None):
     """Read the log from cursor["offset"] on: "failed" on a line matching `fail`, else "done"
     once a line has matched `done`, else None. Lines are matched once complete. A last line
     with no newline yet may still be being written, so it is matched only once the job is over:
     when the watch's pids are gone (`pids_gone`), or, for a watch with no pids (None), when the
-    log's size hasn't changed since the previous scan. A log that shrank (rewritten or rotated)
-    is read again from the start."""
+    log hasn't changed for a poll: its size is the previous scan's, or, on a cursor with none
+    (a first scan), it was last modified `quiet_s` or more before `now`. A log that shrank
+    (rewritten or rotated) is read again from the start."""
     try:
         with open(path, "rb") as f:
-            size = os.fstat(f.fileno()).st_size
+            st = os.fstat(f.fileno())
+            size = st.st_size
             if size < cursor["offset"]:
                 cursor.update(offset=0, done=False)
             f.seek(cursor["offset"])
             data = f.read()
     except OSError:
         return None  # no log yet
-    settled = pids_gone if pids_gone is not None else size == cursor["size"]
+    now = time.time() if now is None else now
+    settled = (pids_gone if pids_gone is not None else size == cursor["size"]
+               or (cursor["size"] is None and now - st.st_mtime >= quiet_s))
     cursor["size"] = size
     whole, newline, partial = data.rpartition(b"\n")
     cursor["offset"] += len(whole) + len(newline)
@@ -967,8 +971,10 @@ def watch_verdict(w, cursor=None, now=None):
     # made after the exit can't miss them.
     pids = c.get("pids") or []
     running = [p for p in pids if pid_alive(p.get("pid"), p.get("start"))]
+    poll = w.get("poll_s") if is_positive(w.get("poll_s")) else WAIT_POLL_S
     log = (scan_log(c["log"], c.get("done"), c.get("fail"), cursor,
-                    pids_gone=not running if pids else None) if c.get("log") else None)
+                    pids_gone=not running if pids else None, quiet_s=poll, now=now)
+           if c.get("log") else None)
     if log == "failed":
         return "failed", f"{c['log']} has a line matching /{c['fail']}/"
     met = {"pids": not running, "file": bool(c.get("file")) and os.path.exists(c["file"]),
