@@ -15,9 +15,11 @@ to wake it. This hook is the enforcement:
     acknowledged: the dead waiter's notification never came, so the lead is told to check the
     result and report it. That is a met condition (done), a failed or stale one, a codex run
     with a stop row (done on exit 0, failed otherwise), or one that never started (failed). A
-    codex run that ended without a stop row is recorded done (Codex has ended), and the lead
-    is told to finalize it. A --log condition is checked in the log's last 1 MB only, to keep
-    a stop cheap;
+    --log condition is checked in the log's last 1 MB only, to keep a stop cheap;
+  - a codex run that ended without a stop row isn't recorded, since its outcome is unknown
+    until it is finalized: the watch stays open and blocks once (end_blocked_at), even after
+    its lapse was acknowledged, saying to re-arm it, since the re-armed waiter finalizes the
+    run. A first block on it is also the lapse's, so a later stop acknowledges it as below;
   - else it has lapsed: the condition is unmet, or the codex run still runs. A lapse
     blocks once, recording blocked_at, a digest of the stop (its prompt_id and
     last_assistant_message) and the transcript's size. A later stop, whose digest differs,
@@ -101,9 +103,10 @@ MET_REASON = ("Watch {id} ({desc}): {cond} is met, but its waiter had stopped, s
               "notification came. Check the result and report it.")
 JOB_ENDED = ("Watch {id} ({desc}) ended {state}: {why}. Its waiter had stopped, so no "
              "notification came. Check the result and report it.")
-CODEX_UNFINALIZED = ("Watch {id} ({desc}): codex run {run} has ended, but its waiter had "
-                     "stopped, so nobody finalized it. Run codex-delegate finalize {run}, then "
-                     "check its report and report it.")
+CODEX_ENDED = ("Watch {id} ({desc}): codex run {run} has ended, but its waiter had stopped, "
+               "so the run isn't finalized. Re-arm the watch and its waiter finalizes it: "
+               "delegation-ledger wait --resume {id}, with run_in_background and timeout "
+               "7200000. To stop watching it: delegation-ledger wait --drop {id}.")
 CODEX_FAILED = ("codex run {run} ended with exit {exit}, but its waiter had stopped, so no "
                 "notification came. Check its report and report it.")
 KILL_REASON = ('Background command "{desc}" was stopped at its time limit. If it was waiting '
@@ -139,8 +142,9 @@ ARG_RE = {opt: re.compile(rf"--{opt}[=\s]+['\"]?([^\s'\"]+)") for opt in ("pid",
 
 Notice = collections.namedtuple("Notice", "task tool_use desc ts pos output")
 # A watch's gathered item: kind "end" (the job ended unnoticed: record `state`, say `text`),
-# "lapse" (block once with `text`, or acknowledge) or "report" (an ended watch nobody heard:
-# record it reported, say `text`).
+# "lapse" (block once with `text`, or acknowledge), "ended" (a codex run ended with its
+# finalize owed: block once with `text`, acknowledged or not, then as a lapse) or "report" (an
+# ended watch nobody heard: record it reported, say `text`).
 Pending = collections.namedtuple("Pending", "kind w text state")
 # A kill's gathered item: its notice, its text, and the watch it folds into (or None).
 Kill = collections.namedtuple("Kill", "notice text fold")
@@ -183,9 +187,11 @@ def log_tail_cursor(cond):
 
 def watch_pending(w, shells, now):
     """What one watch would add, read-only: None, or a Pending. Every way its condition can end
-    is an end, which blocks once and resolves the watch even after its lapse was acknowledged,
-    so a job that ends badly is said too; only a condition still unmet is a lapse. A codex run
-    gone from the ledger raises Undecidable, which skips this watch."""
+    that the guard can judge is an end, which blocks once and resolves the watch even after its
+    lapse was acknowledged, so a job that ends badly is said too. A codex run that ended with
+    no stop row is "ended": its outcome waits on a finalize, which a re-armed waiter does, so
+    the watch stays open. Only a condition still unmet is a lapse. A codex run gone from the
+    ledger raises Undecidable, which skips this watch."""
     wid, cond = w["id"], w.get("condition") or {}
     if dc.waiter_alive(w, now) or any(wid in c for c in shells):
         return None
@@ -204,8 +210,7 @@ def watch_pending(w, shells, now):
             return Pending("end", w, CODEX_UNSTARTED.format(
                 id=wid, desc=desc, run=run, restart=dc.codex_restart(e)), "failed")
         if stage == "ended":  # watch_verdict's done: Codex has ended, its finalize still owed
-            return Pending("end", w, CODEX_UNFINALIZED.format(id=wid, desc=desc, run=run),
-                           "done")
+            return Pending("ended", w, CODEX_ENDED.format(id=wid, desc=desc, run=run), None)
         return Pending("lapse", w, lapsed, None)
     verdict, why = dc.watch_verdict(w, log_tail_cursor(cond) if cond.get("log") else None, now)
     if verdict == "done":
@@ -620,6 +625,11 @@ def commit(sid, transcript, adopted, me, pendings, kills, scan_out, stop, size, 
                 cur.update(state=p.state, ended=iso(now), reported=True)
                 outcomes[wid] = "block"
                 ended.add(wid)
+            elif p.kind == "ended" and cur.get("end_blocked_at") is None:
+                cur["end_blocked_at"] = iso(now)
+                if cur.get("blocked_at") is None:  # also the lapse's first block
+                    cur.update(blocked_at=iso(now), blocked_stop=stop, blocked_size=size)
+                outcomes[wid] = "block"
             elif cur.get("blocked_at") is None:
                 cur.update(blocked_at=iso(now), blocked_stop=stop, blocked_size=size)
                 outcomes[wid] = "block"

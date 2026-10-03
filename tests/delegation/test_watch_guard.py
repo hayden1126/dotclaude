@@ -153,10 +153,11 @@ class GuardEnv(unittest.TestCase):
                 f"--resume {wid}, with run_in_background and timeout 7200000. To stop watching "
                 f"it: delegation-ledger wait --drop {wid}.")
 
-    def unfinalized(self, wid="w-1", run="r1"):
+    def codex_ended(self, wid="w-1", run="r1"):
         return (f"Watch {wid} (codex run {run} ends): codex run {run} has ended, but its waiter "
-                f"had stopped, so nobody finalized it. Run codex-delegate finalize {run}, then "
-                "check its report and report it.")
+                "had stopped, so the run isn't finalized. Re-arm the watch and its waiter "
+                f"finalizes it: delegation-ledger wait --resume {wid}, with run_in_background "
+                f"and timeout 7200000. To stop watching it: delegation-ledger wait --drop {wid}.")
 
     def kill_reason(self, desc):
         return (f'Background command "{desc}" was stopped at its time limit. If it was waiting '
@@ -210,14 +211,21 @@ class Watches(GuardEnv):
         self.assertIsNone(self.decide())
         self.assertEqual(self.read()["state"], "open")  # the waiter records the end itself
 
-    def test_a_codex_run_that_ended_without_a_stop_row_ends_and_says_to_finalize_it(self):
-        # Codex has ended (watch_verdict's done); the guard can't finalize within a stop, so it
-        # says to, once, and resolves the watch.
+    def test_a_codex_run_that_ended_blocks_with_resume_and_isnt_recorded_done(self):
+        # Its outcome is unknown until it is finalized, and the re-armed waiter finalizes it,
+        # so the watch stays open: one block, then the lapse's acknowledgment.
         self.codex_row()
         self.watch(cond={"codex": "r1"}, desc="codex run r1 ends")
-        self.assertEqual(self.decide(), self.block(self.unfinalized()))
-        self.assertEqual((self.read()["state"], self.read()["reported"]), ("done", True))
-        self.assertIsNone(self.decide())
+        self.lines()
+        self.assertEqual(self.decide(prompt_id="p1"), self.block(self.codex_ended()))
+        w = self.read()
+        self.assertEqual(w["state"], "open")
+        dc.parse_iso(w["end_blocked_at"])
+        dc.parse_iso(w["blocked_at"])
+        self.assertEqual(self.decide(prompt_id="p2"), {"systemMessage": self.ACK.replace(
+            "w-1 (the build)", "w-1 (codex run r1 ends)")})
+        self.assertIsNone(self.decide(prompt_id="p3"))
+        self.assertEqual(self.read()["state"], "acknowledged")
 
     def test_an_acknowledged_lapse_whose_job_fails_or_goes_stale_ends_and_blocks_once(self):
         # An acknowledged lapse says nothing more, so a job that ends badly must be an end, not
@@ -242,13 +250,29 @@ class Watches(GuardEnv):
                          [("failed", True), ("stale", True)])
         self.assertIsNone(self.decide(prompt_id="p2"))
 
-    def test_an_acknowledged_codex_lapse_whose_run_ends_blocks_once(self):
+    def test_an_acknowledged_codex_lapse_whose_run_ends_blocks_once_and_stays_open(self):
+        # An acknowledged lapse says nothing more, so the run's end needs its own block.
         self.codex_row()
         self.watch(state="acknowledged", blocked_at=guard.iso(self.now - 600),
                    cond={"codex": "r1"}, desc="codex run r1 ends")
-        self.assertEqual(self.decide(), self.block(self.unfinalized()))
-        self.assertEqual(self.read()["state"], "done")
+        self.lines()
+        self.assertEqual(self.decide(prompt_id="p1"), self.block(self.codex_ended()))
+        self.assertEqual(self.read()["state"], "acknowledged")
         self.assertIsNone(self.decide(prompt_id="p2"))
+        self.assertIsNone(self.decide(prompt_id="p3"))
+        self.assertEqual(self.read()["state"], "acknowledged")
+
+    def test_a_rearm_clears_the_runs_end_block(self):
+        # A waiter that takes the watch over (unblock) lets a later end block again.
+        self.codex_row()
+        self.watch(state="acknowledged", blocked_at=guard.iso(self.now - 600),
+                   end_blocked_at=guard.iso(self.now - 300), blocked_stop="0123",
+                   cond={"codex": "r1"}, desc="codex run r1 ends")
+        self.lines()
+        self.assertIsNone(self.decide(prompt_id="p1"))
+        dc.update_watch("w-1", dc.unblock)  # what take() and beat() do
+        self.assertNotIn("end_blocked_at", self.read())
+        self.assertEqual(self.decide(prompt_id="p2"), self.block(self.codex_ended()))
 
     def test_a_running_codex_run_with_a_dead_waiter_is_a_plain_lapse(self):
         self.codex_row(pid=os.getpid())
