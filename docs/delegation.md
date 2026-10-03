@@ -296,6 +296,12 @@ from 60 to 5,000 requests an hour.
   fail line can let a later done line end it done. A pattern anchored to a line's start or end
   can also match at the cut. Such runs are mostly progress bars redrawn with carriage returns,
   which a condition shouldn't key on.
+- **A log deleted at the job's exit loses its last poll.** A waiter reads the log once a poll,
+  and a job that deletes its log as it exits takes with it whatever it wrote since that read.
+  So with `--fail`, a fail line written after a done line already seen, within one poll of
+  the log's deletion and the job's exit, is missed, and the watch ends done. What the waiter
+  had read still counts: a done or fail line, and, once the pids are gone, a last line with
+  no newline (`scan_log`).
 - **The duplicate refusal is per run, across sessions.** A second `wait --codex` on a run that
   any session watches is refused. While that watch's waiter is alive and someone will hear it,
   the refusal says the waiter will notify its session. Someone will hear it while its Claude
@@ -859,7 +865,10 @@ the fix is enforcement. `PLAN.md` has the design history and the options weighed
   rotation by rename leaves) is read from its start, but a done line already seen stays seen,
   whatever the new file's size; the same file rewritten shorter is read again from the start,
   forgetting what was seen. A log that is gone (deleted at the job's exit, or renamed away
-  with no new one yet) keeps what was seen, so a done line seen before still counts.
+  with no new one yet) keeps what was seen, so a done line seen before still counts, and once
+  the watch's pids are gone, so does a last line with no newline that the waiter had read,
+  matched as settled. What the job wrote after the waiter's last read is lost with the log
+  (the known gap "A log deleted at the job's exit loses its last poll").
   - Conditions: `--pid N` (repeatable: all have exited), `--file PATH` (it exists),
     `--log PATH --done RE` (a matching line; `--fail RE` fails it and `--stale MIN` ends it as
     stale), and `--codex RUN_ID` (Codex has ended; the waiter then runs `codex-delegate finalize`

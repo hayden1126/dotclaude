@@ -503,6 +503,27 @@ class ScanLog(unittest.TestCase):
         failed = dict(dc.log_cursor(), failed=True)
         self.assertEqual(self.scan(failed), "failed")
 
+    def test_a_log_gone_with_its_pids_settles_the_last_line_it_held(self):
+        # The job writes its last line with no newline, deletes its log and exits: that line
+        # counts, as it would have once the log was quiet.
+        for text, verdict in (("OK", "done"), ("FAILED", "failed")):
+            with self.subTest(text=text):
+                job = subprocess.Popen(["sleep", "60"])
+                self.addCleanup(lambda job=job: (job.kill(), job.wait()))
+                w = {"condition": {"pids": [{"pid": job.pid, "start": dc.proc_start(job.pid),
+                                             "comm": "sleep"}],
+                                   "log": self.log, "done": "^OK$", "fail": "^FAILED$"},
+                     "poll_s": 15}
+                with open(self.log, "w") as f:
+                    f.write(text)
+                cur = dc.log_cursor()
+                self.assertIsNone(dc.watch_verdict(w, cur)[0])  # the pid runs: not settled
+                self.assertEqual(cur["partial"], text)
+                os.remove(self.log)
+                job.kill()
+                job.wait()
+                self.assertEqual(dc.watch_verdict(w, cur)[0], verdict)
+
     def test_each_pattern_is_compiled_once_a_scan(self):
         with open(self.log, "w") as f:
             f.write("line\n" * 500)

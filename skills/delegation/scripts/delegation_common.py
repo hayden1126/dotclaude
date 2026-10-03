@@ -957,10 +957,30 @@ def scan_log(path, done, fail, cursor, pids_gone=None, quiet_s=WAIT_POLL_S, now=
     and read past, so memory stays bounded; a pattern can miss, or match, where that cut falls.
     Such a run, and a settled last line, split into lines as a complete one does (splitlines:
     at a carriage return too). Each pattern is compiled once a scan. A log that is gone (not
-    written yet, deleted at exit, renamed away with no new one yet) keeps what was seen."""
+    written yet, deleted at exit, renamed away with no new one yet) keeps what was seen, and
+    once the pids are gone (`settle`), the last line it held with no newline is settled too:
+    the job wrote it, deleted its log and exited. What was written after the last scan is lost
+    with the log."""
+    fail_re, done_re = (re.compile(p) if p else None for p in (fail, done))
+
+    def settled(partial):
+        """The verdict a settled last line gives, split as a complete line is, else None."""
+        lines = partial.splitlines()
+        if fail_re and any(fail_re.search(line) for line in lines):
+            cursor["failed"] = True
+            return "failed"
+        if done_re and any(done_re.search(line) for line in lines):
+            return "done"
+        return None
+
     try:
         f = open(path, "rb")
     except OSError:  # no log now: what was seen stands, and a fresh cursor has seen nothing
+        held = cursor.get("partial")
+        if not cursor["failed"] and held and settle and pids_gone:
+            verdict = settled(held)
+            if verdict:
+                return verdict
         return "failed" if cursor["failed"] else "done" if cursor["done"] else None
     with f:
         st = os.fstat(f.fileno())
@@ -971,7 +991,6 @@ def scan_log(path, done, fail, cursor, pids_gone=None, quiet_s=WAIT_POLL_S, now=
             cursor.update(offset=0, done=False)
         cursor["file"] = ident
         f.seek(cursor["offset"])
-        fail_re, done_re = (re.compile(p) if p else None for p in (fail, done))
         carry = b""
         while True:
             chunk = f.read(SCAN_CHUNK)
@@ -994,16 +1013,9 @@ def scan_log(path, done, fail, cursor, pids_gone=None, quiet_s=WAIT_POLL_S, now=
                 between()
     cursor["partial"] = partial = carry.decode("utf-8", "replace")
     now = time.time() if now is None else now
-    settled = settle and (pids_gone if pids_gone is not None
-                          else now - st.st_mtime >= quiet_s)
-    if partial and settled:
-        lines = partial.splitlines()
-        if fail_re and any(fail_re.search(line) for line in lines):
-            cursor["failed"] = True
-            return "failed"
-        if done_re and any(done_re.search(line) for line in lines):
-            return "done"
-    return "done" if cursor["done"] else None
+    quiet = settle and (pids_gone if pids_gone is not None else now - st.st_mtime >= quiet_s)
+    verdict = settled(partial) if partial and quiet else None
+    return verdict or ("done" if cursor["done"] else None)
 
 
 def watch_verdict(w, cursor=None, now=None, settle=True, between=None):
