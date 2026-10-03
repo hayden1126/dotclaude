@@ -297,7 +297,9 @@ def fold(rows):
     every teammate message, so an id can have many start/stop pairs; the latest wins.
     subagent-policy's `policy` rows, the deadline's `nudge` rows and `exclude` rows are skipped
     here (tail shows them, audit counts the denials, and the monthly audit reads the
-    exclusions)."""
+    exclusions). A stop row with no `status` (an older codex-delegate's finish or crash row)
+    clears the status and the error a cancelled turn before it left: it ended its own turn,
+    which finished or crashed."""
     out = {}
     for r in rows:
         key = (r.get("runner"), r.get("id"))
@@ -306,6 +308,10 @@ def fold(rows):
         first = out.get(key, {}).get("first_ts", r.get("ts"))
         merged = dict(out.get(key, {}))
         merged.update(r)  # None overrides too: a clean resume must clear an old error
+        if r.get("event") == "stop" and "status" not in r:
+            merged.pop("status", None)
+            if "error" not in r:
+                merged.pop("error", None)
         merged["first_ts"] = first
         merged["event"] = r.get("event")
         out[key] = merged
@@ -900,8 +906,8 @@ def codex_progress(run_id):
 
 def log_cursor():
     """A fresh scan_log cursor: how far the log has been read, whether a done line was seen,
-    and the log's size at the previous scan."""
-    return {"offset": 0, "done": False, "size": None}
+    whether a fail line was, and the log's size at the previous scan."""
+    return {"offset": 0, "done": False, "failed": False, "size": None}
 
 
 def scan_log(path, done, fail, cursor, pids_gone=None):
@@ -930,6 +936,7 @@ def scan_log(path, done, fail, cursor, pids_gone=None):
     seen = False
     for line, consumed in lines:
         if fail and re.search(fail, line):
+            cursor["failed"] = True
             return "failed"
         if done and re.search(done, line):
             seen = True
