@@ -307,6 +307,10 @@ from 60 to 5,000 requests an hour.
   be adopted, and it names the session of a walked process that isn't `CLAUDE_PID`. Were the
   rewrite to stop, the old session would read as live and nothing would be adopted: safe, but
   the old watch would go unguarded. A new watch would still get the new id, from the env.
+- **A hook's `CLAUDE_PID` isn't verified.** When the walk finds nothing, the process comes from
+  `CLAUDE_PID`, and whether a Stop hook's env carries it is unchecked. A hook finds its process
+  by the walk first, and every Claude process writes a sessions file, so this matters only with
+  no sessions file, which hasn't been seen.
 - **A crash, then `claude --continue`, rests on the session id.** The guard adopts a crashed
   process's watch only in the session that has its id, so this assumes `--continue` keeps the
   session id. That isn't verified here; the manual re-arm check in `due.toml` asks for it. With a
