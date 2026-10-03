@@ -273,15 +273,28 @@ from 60 to 5,000 requests an hour.
 - **One stop can skip an item.** A watch whose write fails mid-commit is logged and skipped for
   that stop, and comes up at the next. A lock still busy after the gather budget skips the whole
   stop. An item past the 3 s gather budget waits for the next stop.
-- **A log condition is judged on the log's last 1 MB.** When the log is longer than that, the
-  guard can't see a `--done` or `--fail` line further back. A `--fail` line in the tail still
-  ends the watch failed. A verdict the cut could change isn't recorded: a failed or stale one
-  whose only unmet part is the done line (no done line in the tail, the pids gone, any `--file`
-  there), or a done one on a watch with a `--fail` pattern. The guard blocks once on it instead,
-  even after the lapse was acknowledged, saying it can't tell whether the job succeeded or
-  failed and to re-arm the watch: the re-armed waiter reads the whole log and decides. Until
-  the lead re-arms or drops it, the watch stays open, and the nudge and the `watches:` block
-  list it.
+- **A log condition is read at most 8 MB a stop.** Like the waiter, the guard reads each byte
+  of a `--log` condition's log once: on from where the waiter or an earlier stop last read
+  (the watch's `log_cursor`), so a done or fail line followed by any amount of output before
+  the next stop is still read. A watch with no cursor yet (recorded before it existed, or whose
+  waiter died before its first heartbeat) reads from the log's start. To keep a stop cheap it
+  reads at most 8 MB (`LOG_CAP`): when more came since the last read, or the log was rotated
+  (it is shorter than the last read), it skips to the last 8 MB, and the cursor stays cut until
+  a waiter reads the whole log. A `--fail` line read still ends the watch failed. A verdict a
+  skipped line could change isn't recorded:
+  - a done one on a watch with a `--fail` pattern;
+  - a failed or stale one whose only unmet part is the done line (none read, the pids gone, any
+    `--file` there);
+  - a stale one on a watch with a `--fail` pattern, which the waiter would call failed;
+  - an unmet one on a log-only watch (no pids, no `--stale`), which nothing else would end.
+
+  The guard blocks once on it instead, even after the lapse was acknowledged, naming the lines
+  that could be in the skipped part and saying to re-arm the watch: the re-armed waiter reads
+  the whole log and decides. Until the lead re-arms or drops it, the watch stays open, and the
+  nudge and the `watches:` block list it. The gap that remains: more than 8 MB written between
+  two stops on a log-only watch, after its lapse was acknowledged, gets that one block and then
+  quiet. A done or fail line in the skipped part is never read again by the guard, only by a
+  re-armed waiter.
 - **The duplicate refusal is per run, across sessions.** A second `wait --codex` on a run that
   any session watches is refused. While that watch's waiter is alive and someone will hear it,
   the refusal says the waiter will notify its session. Someone will hear it while its Claude
@@ -292,10 +305,11 @@ from 60 to 5,000 requests an hour.
   session.
 - **An acknowledged lapse goes quiet.** After one block and one warning, a lapsed watch stays
   open and says nothing more in that conversation until its condition ends, however it ends
-  (met, failed, stale, its codex run stopped, ended or never started, or its job ended with a
-  log too long for the guard to read the outcome), which blocks once more. That resolves it,
-  except a codex run that ended with no stop row and an outcome the log's last 1 MB can't
-  settle, which stay open for the re-arm that decides. A `/clear`, or a crash and
+  (met, failed, stale, its codex run stopped, ended or never started, or an outcome a skipped
+  part of its log could change), which blocks once more. That resolves it, except a codex run
+  that ended with no stop row and an outcome a skipped part of the log could change, which
+  stay open for the re-arm that decides. A log-only watch whose log was cut blocks once for
+  that as well (the gap above). A `/clear`, or a crash and
   `claude --continue`, hands it to a new conversation, whose guard blocks once on it again.
   Meanwhile the session-start nudge lists it to Hayden at every session start once its Claude
   Code process has ended, and the `watches:` block lists it with its re-arm command.
@@ -813,7 +827,8 @@ the fix is enforcement. `PLAN.md` has the design history and the options weighed
 - **The waiter, `delegation-ledger wait`.** It records a *watch* (`<state>/watches/<id>.json`; the
   comment above `WATCH_STATES` in `delegation_common.py` documents its fields), polls the
   condition every 15 s with a heartbeat, and exits before the cap with the exact re-arm command,
-  so it never gets the "do not restart" note.
+  so it never gets the "do not restart" note. Each heartbeat records how far it has read a
+  `--log` condition's log (`log_cursor`), so a guard that finds it gone reads on from there.
   - Conditions: `--pid N` (repeatable: all have exited), `--file PATH` (it exists),
     `--log PATH --done RE` (a matching line; `--fail RE` fails it and `--stale MIN` ends it as
     stale), and `--codex RUN_ID` (Codex has ended; the waiter then runs `codex-delegate finalize`
@@ -867,13 +882,17 @@ the fix is enforcement. `PLAN.md` has the design history and the options weighed
     waiter finalizes it", with the `--resume` command. It records `end_blocked_at` so that
     block doesn't repeat; a first block on the watch is also its lapse's, acknowledged at a
     later stop. A re-arm or an adoption clears it (`dc.unblock`);
-  - a `--log` verdict the log's last 1 MB can't settle (`uncertain`) stays open and blocks
-    once the same way, by `end_blocked_at`: "<what>, but <log> is longer than the last 1 MB
-    the guard reads, so it can't tell whether the job succeeded or failed. Re-arm the watch and
-    its waiter reads the whole log and reports done or failed", with the `--resume` command.
-    That is a failed or stale verdict whose only unmet part is the done line, with neither a
-    `--done` nor a `--fail` line in the tail, and a done verdict on a watch with a `--fail`
-    pattern. A `--fail` line in the tail still ends it failed;
+  - a `--log` verdict that a line in a skipped part of the log could change (`unseen`) stays
+    open and blocks once the same way, by `end_blocked_at`: "Watch <id> (<desc>) looks <done,
+    failed or stale> (<why>). But the guard skipped part of <log>, since it reads at most 8 MB
+    of a log per stop and more came, or the log was rotated, and a line matching /<re>/ could
+    be there, so it can't tell. Re-arm the watch and its waiter reads the whole log and reports
+    the outcome", with the `--resume` command. A log-only condition still unmet after a cut
+    ("looks unfinished") blocks once by its own `cut_blocked_at`, so an end judged later still
+    blocks once. The guard reads each log on from the watch's `log_cursor` and records how far
+    it got, unless a waiter or a twin guard moved it meanwhile (the known gap "A log condition
+    is read at most 8 MB a stop" lists the verdicts). A `--fail` line read still ends it
+    failed;
   - a codex run that never started (its wrapper died before Codex did, leaving no `codex.pid`) is
     recorded failed and blocks once, saying to run `codex-delegate resume <id>` again, or for a
     first turn to run `codex-delegate run` again, which gets a new run id;
@@ -1062,7 +1081,7 @@ process" is the one the watch was recorded under (`claude_pid`).
 |---|---|---|---|
 | A normal exit: the waiter ends done, failed or stale while its Claude process runs | The waiter's exit notice, which starts a turn if the session is idle | Nothing | `Waiter.end` records `reported` true; the guard reads only unresolved watches and unreported ends |
 | A lapse at `--max` | The exit-75 notice with the re-arm line. If the lead stops without re-arming, one block with the re-arm and drop commands | The ack at the next stop after that block, then the nudge at every session start once its Claude process has ended | `watch_pending` (a lapse), `commit`'s `record` (`blocked_at`, then `later_stop` and `ACK_MESSAGE`); `left_watches` (`watch_orphaned`) |
-| A lapse already acknowledged | Nothing until a stop finds its condition ended, however it ended (met, failed, stale, its codex run stopped, ended or never started, or a job whose log is too long for the guard to read the outcome); that blocks once more. It resolves the watch, except a codex run that ended with no stop row, whose block says to re-arm the watch so its waiter finalizes the run, and an outcome the log's last 1 MB can't settle, whose block says to re-arm it so its waiter reads the whole log. A `/clear`, or a crash and `--continue`, gives the new conversation one block again (rows 5 and 6). Known gap: "An acknowledged lapse goes quiet" | The nudge at every session start once its Claude process has ended | `record` (nothing for an acknowledged lapse), `watch_pending` (an end: `MET_REASON`, `JOB_ENDED`; a codex run ended unfinalized: `CODEX_ENDED`; an uncertain log verdict: `uncertain`, `UNCERTAIN`; each once, by `end_blocked_at`); `left_watches` (`watch_orphaned`) |
+| A lapse already acknowledged | Nothing until a stop finds its condition ended, however it ended (met, failed, stale, its codex run stopped, ended or never started, or an outcome a skipped part of its log could change); that blocks once more. A done or fail line is found however much output followed it, since the guard reads the log on from its last read. It resolves the watch, except a codex run that ended with no stop row, whose block says to re-arm the watch so its waiter finalizes the run, and an outcome a skipped part of the log could change, whose block says to re-arm it so its waiter reads the whole log. A `/clear`, or a crash and `--continue`, gives the new conversation one block again (rows 5 and 6). Known gaps: "An acknowledged lapse goes quiet", "A log condition is read at most 8 MB a stop" | The nudge at every session start once its Claude process has ended | `record` (nothing more for an acknowledged lapse but its `log_cursor`); `watch_pending`: an end it records, which resolves the watch (`MET_REASON`, `JOB_ENDED`), or one it can't judge, left open and said once by `end_blocked_at` (a codex run ended unfinalized, `CODEX_ENDED`; a log verdict a skipped line could change, `unseen`, `UNCERTAIN`); `left_watches` (`watch_orphaned`) |
 | A kill at the time limit (a waiter or `codex-delegate` launched with a shorter `timeout`) | Claude Code's kill notice, then one block at that turn's stop: the kill folded into the watch's lapse item, or the kill alone when the watch blocked before | As for a lapse: the ack, then the nudge once its Claude process has ended | `kill_pending`, `map_kill` (the fold, by the launch line), `commit_kills`; `watch_pending`, `record` |
 | `/clear` (or an in-process `/resume`), then a stop | A live waiter's exit notice, to the same Claude process (assumed across the switch; see the known gaps). A dead waiter's watch is adopted into the new session at the first stop and blocks once as a lapse, even if it was blocked or acknowledged before: adoption clears that record | Nothing: the nudge runs at `startup` and `resume`, not at `clear`, and a running Claude process orphans none of its watches | `left_by_clear` (in `decide` and `adoption`), `dc.unblock`, `watch_pending`, `record`; `watch_orphaned` |
 | A crash, then `claude --continue` | At the first stop, the new process adopts the session's watches and clears their lapse records. A waiter whose process still runs is marked `waiter_unheard` and blocks once (re-arm it), unless the same stop records the watch's end, which it says instead; a dead waiter blocks once as a lapse, even one acknowledged before the crash; a watch that ended meanwhile blocks once (check the result). Known gap: this rests on `--continue` keeping the session id | The nudge at the new process's start names the session's unresolved watches, even those the guard will adopt, and keeps naming one whose waiter is `waiter_unheard` at every start until it is re-armed, dropped or ended. It leaves the session's unreported ends to the guard | `crashed`, `adoption` (`dc.unblock`; `UNHEARD_REASON` unless the commit records the end), `watch_pending`, the guard's `ended_unheard` (`ENDED_UNHEARD`); `left_watches` (`watch_orphaned`, which counts `waiter_unheard`) |
@@ -1070,7 +1089,7 @@ process" is the one the watch was recorded under (`claude_pid`).
 | A crash, then `--continue`, then `/clear` before the first stop | Nothing: the new process's guard runs in the new session, where it adopts neither the crashed process's watch (`left_by_clear` needs its own process) nor the old session's (`crashed` needs its own session) | The nudge names the unresolved watches at the continued start and at every start after. An end in the crashed session waits for a later start: another session's nudge names it, or, if Hayden resumes that session, its guard says it to the model. Delayed, not silent | `left_by_clear`, `crashed`; `left_watches` (it skips the starting session's ends) |
 | A wait outside Claude Code (a plain terminal, a tmux pane) | Nothing for a new watch, which records the session `unknown` and warns that the guard won't see it. A `--resume` there keeps the watch's session: a running session's guard still blocks on its lapse, but no guard sees an `unknown` one's | Its exit, in that terminal. The nudge names the watch at every session start once nobody will hear it: an `unknown` one once its waiter has died unresolved, a session's while that session isn't running. A normal end isn't named: whoever ran it heard it | `claude_identity` (no process), `Waiter.take` (drops `claude_pid`), `watch_orphaned` (no process: the session, else the waiter, decides), `dc.ended_unheard` (needs a process) |
 | A codex run detached at `--max-wait` | The wrapper's exit-75 notice with the re-arm line, while Codex runs on. If the lead stops without re-arming, one block while Codex runs (a lapse), and once Codex has ended with no stop row, one block saying to re-arm so the waiter finalizes the run, even after the lapse was acknowledged; a first block on the watch counts as both. The re-armed waiter's exit notice carries the full result | As for a lapse: the ack, then the nudge once its Claude process has ended | `codex-delegate`'s `supervise` (`AT_MAX_WAIT`); `watch_pending` (`codex_progress`, `CODEX_ENDED`), `record` (`end_blocked_at`); the waiter's `codex_end` (`codex-delegate finalize`, rc from `codex.rc`) |
-| A `--log` job that ends with its log longer than 1 MB, no waiter alive | One block, even after the lapse was acknowledged, when the outcome turns on a line further back than the guard reads: a failed or stale verdict lacking only the done line, or a done one on a watch with a `--fail` pattern. It says the guard can't tell whether the job succeeded or failed, and to re-arm the watch or drop it; a first block on the watch counts as the lapse's too. The re-armed waiter reads the whole log, and its exit notice says done or failed. A `--fail` line in the tail, or a verdict the cut can't change, is an end as usual. Known gap: "A log condition is judged on the log's last 1 MB" | As for a lapse: the ack, then the nudge once its Claude process has ended | `log_tail_cursor`, `watch_pending` (`uncertain`, `UNCERTAIN`), `record` (`end_blocked_at`); `dc.unblock` (a re-arm or an adoption clears it) |
+| A `--log` job whose log outran the guard's read (more than 8 MB between two of its reads, or rotated), no waiter alive | One block, even after the lapse was acknowledged, when a line in the skipped part could change the verdict: a done one with a `--fail` pattern, a failed or stale one lacking only the done line, a stale one with a `--fail` pattern, or an unmet log-only one. It says what the guard saw, which lines could be in the skipped part, and to re-arm the watch or drop it; a first block on the watch counts as the lapse's too. An unmet log-only watch's block has its own marker, so an end judged later still blocks once. The re-armed waiter reads the whole log, and its exit notice says how it ended. A `--fail` line read, or a verdict a skipped line can't change, is an end as usual. Known gap: "A log condition is read at most 8 MB a stop" | As for a lapse: the ack, then the nudge once its Claude process has ended | `read_from` (`log_cursor`, `LOG_CAP`), `watch_pending` (`unseen`, `UNCERTAIN`), `record` (`end_blocked_at`, `cut_blocked_at`, the cursor); `Waiter.beat` (its cursor); `dc.unblock` (a re-arm or an adoption clears both markers) |
 | A `codex-delegate` wrapper killed (at the time limit, or its whole process tree) | Claude Code's kill notice, then one block saying to re-arm the watch: the watch's lapse item, with the kill folded into it, or unfolded, the kill's own item, which says Codex keeps running. Codex does keep running, since its supervisor is out of the killed tree, and the re-armed waiter finalizes the run with its exit code and delivers the result | As for a lapse: the ack, then the nudge once its Claude process has ended | `launch` (the double fork), `supervisor` (`codex.rc`); `kill_pending`, `map_kill` (`CODEX_REARM`), `watch_pending`; `codex-delegate finalize` |
 | An end while the session sits idle forever | The waiter's exit notice starts a turn, and that turn's stop runs the guard. An end only the guard would say (an unheard waiter's, or a condition that ended with no waiter) waits for a stop, which an idle session doesn't have | A `waiter_unheard` watch: named at every start while it is unresolved, then its end once, at the next start of another session (within 7 days). An end nobody heard otherwise (its Claude process gone): that same once. A condition that ends after an acknowledged lapse: the nudge only once the Claude process has ended (the acknowledged-lapse gap) | `Waiter.end`; the guard runs only at a stop; `left_watches` (`watch_orphaned`, `dc.ended_unheard`) |
 
