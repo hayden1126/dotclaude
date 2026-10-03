@@ -344,6 +344,19 @@ settings docs say.
   - **False claims:** the launch line's "If this command is stopped, Codex keeps running", and
     SKILL §5's "If the wrapper does get killed anyway, Codex keeps running". The second was
     false before this branch too.
+- **Decision (Hayden, 2026-10-02): detach Codex.**
+  - **The supervisor:** a double-forked process runs Codex, writes `codex.pid` and then
+    `codex.rc`, and the wrapper polls for them. A killed wrapper leaves Codex running, and the
+    re-arm finalizes the full result.
+  - **Stopping on purpose:** `codex-delegate cancel <run_id>` replaces stopping the background
+    task.
+  - **Rejected, keep it coupled and fix the claims:** a short timeout, or quitting Claude Code,
+    would lose the run's work.
+  - **The cost:** it relies on Claude Code killing by process tree, not by session, process group
+    or cgroup. A dated `due.toml` check reruns the kill probe after upgrades.
+- **A codex run that ended unfinalized stays open.** Its watch isn't recorded `done`, since the
+  outcome is unknown until finalize, and `done` would make `--resume` refuse it. A marker makes
+  the guard block once on "re-arm to finalize", and the re-arm delivers the summary.
 
 ### T4: The allow rule, and crash recovery
 - **Files:**
