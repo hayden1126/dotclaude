@@ -494,9 +494,10 @@ def pids_visible():
 
 def codex_state(e, visible=True):
     """(verdict, evidence) for a folded codex ledger entry, shared by `delegation-ledger
-    open` and `watch` and by `codex-delegate status`. Codex writes its events straight to the file, so it
-    can outlive a wrapper that was killed (Claude's Bash tool stops a foreground command at
-    10 minutes); a run with no stop row is therefore not necessarily dead. With `visible`
+    open` and `watch` and by `codex-delegate status`. Codex runs under a detached supervisor
+    and writes its events straight to the file, so it outlives a wrapper that was killed
+    (Claude's Bash tool stops a command at its time limit, with its whole process tree); a run
+    with no stop row is therefore not necessarily dead. With `visible`
     False (see pids_visible), the pid checks mean nothing, so it says that instead."""
     event = e.get("event")
     out = e.get("out") or ""
@@ -508,7 +509,7 @@ def codex_state(e, visible=True):
     has_report = os.path.exists(os.path.join(out, "report.json"))
     run = e.get("run_id")
     if event == "stop":
-        verdict = "finished"
+        verdict = "cancelled" if e.get("status") == "cancelled" else "finished"
     elif not visible:
         verdict = "pid not visible in the sandbox"
     elif codex_alive and wrapper_alive:
@@ -547,29 +548,58 @@ def codex_pid_path(out):
     return os.path.join(out or "", "codex.pid")
 
 
-def codex_proc(e):
-    """(pid, procStart) of the Codex process of a folded codex entry's current turn, procStart
-    None when unknown; (None, None) when none is known to have started. The wrapper writes
-    <out>/codex.pid right after its Popen, before the ledger hears of Codex (a wrapper
-    SIGKILLed before thread.started writes no row with the pid), so that file counts when the
-    entry's latest wrapper wrote it. Else a row past pending names the pid: a pending row
-    carries none, and a folded one's is the previous turn's."""
+def codex_rc_path(out):
+    return os.path.join(out or "", "codex.rc")
+
+
+def _codex_turn_file(path, e):
+    """The JSON object at path when the entry's latest wrapper wrote it (its wrapper_pid and,
+    when the entry has one, wrapper_start match), else None: <out> holds every turn's files,
+    and a resume's wrapper is a new one."""
     try:
-        with open(codex_pid_path(e.get("out"))) as f:
+        with open(path) as f:
             d = json.load(f)
     except (OSError, ValueError):
-        d = None
+        return None
     if (isinstance(d, dict) and d.get("wrapper_pid") is not None
             and d.get("wrapper_pid") == e.get("wrapper_pid")
             and (e.get("wrapper_start") is None
                  or str(d.get("wrapper_start")) == str(e.get("wrapper_start")))):
+        return d
+    return None
+
+
+def codex_proc(e):
+    """(pid, procStart) of the Codex process of a folded codex entry's current turn, procStart
+    None when unknown; (None, None) when none is known to have started. The detached supervisor
+    writes <out>/codex.pid right after its Popen, before the ledger hears of Codex (a wrapper
+    SIGKILLed before thread.started writes no row with the pid), so that file counts when it
+    names the entry's latest wrapper. Else a row past pending names the pid: a pending row
+    carries none, and a folded one's is the previous turn's."""
+    d = _codex_turn_file(codex_pid_path(e.get("out")), e)
+    if d is not None:
         return d.get("pid"), d.get("start")
     return (None, None) if e.get("event") == "pending" else (e.get("pid"), None)
 
 
+def codex_supervisor(e):
+    """(pid, procStart) of the detached process that runs the entry's current turn's Codex and
+    writes codex.rc when it ends, from codex.pid; (None, None) when unknown."""
+    d = _codex_turn_file(codex_pid_path(e.get("out")), e) or {}
+    return d.get("supervisor_pid"), d.get("supervisor_start")
+
+
+def codex_rc(e):
+    """{"rc", "ended"} for the entry's current turn, which its supervisor writes to
+    <out>/codex.rc once Codex ends; None while Codex runs, or when the supervisor was killed
+    first and Codex's exit code is unknown."""
+    return _codex_turn_file(codex_rc_path(e.get("out")), e)
+
+
 def codex_running(e):
-    """Whether the Codex process of the entry's current turn runs (codex_proc)."""
-    return pid_alive(*codex_proc(e))
+    """Whether the entry's current turn still runs: its Codex process (codex_proc), or the
+    supervisor that is about to record Codex's exit code (codex_supervisor)."""
+    return pid_alive(*codex_proc(e)) or pid_alive(*codex_supervisor(e))
 
 
 def codex_live(e):
