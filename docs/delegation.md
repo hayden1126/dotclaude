@@ -983,10 +983,13 @@ the fix is enforcement. `PLAN.md` has the design history and the options weighed
   `--max`, with the re-arm line.
 - Beyond the codes in SKILL §5, `codex-delegate` exits 5 when it stopped at `--max-wait` with
   its watch dropped or taken over, and 75 when it stopped there still running. While Codex runs,
-  SIGTERM or SIGHUP makes it append a `detached` row with Codex's pid and exit 143, leaving the
-  watch open for the guard; Codex runs on. Outside that window (before Codex starts, or while
-  it finishes) the signal kills it with no row, and a shell reports 143 for SIGTERM, 129 for
-  SIGHUP. A wrapper whose run was cancelled meanwhile exits 1. `cancel` exits 0 once the run
+  SIGTERM or SIGHUP makes it exit 143, leaving the watch open for the guard; Codex runs on. It
+  appends a `detached` row with Codex's pid first only when the run's finalize lock comes free
+  within a second (`DETACH_LOCK_S`) and the turn has no stop row, so a signal during a cancel
+  (which holds that lock) or after one (whose stop row ended the turn) writes no row. Outside
+  that window (before Codex starts, or while it finishes) the signal kills it with no row, and
+  a shell reports 143 for SIGTERM, 129 for SIGHUP. A wrapper whose run was cancelled meanwhile
+  exits 1. `cancel` exits 0 once the run
   is stopped, and 2 for an unknown run, one that has ended, one whose Codex hasn't started or
   can't be verified (no procStart recorded), or when the run's finalize lock stays busy past 4
   minutes.

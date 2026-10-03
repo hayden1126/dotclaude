@@ -49,9 +49,12 @@ did before Codex ended (the stop row's `error` says why); 2 refused or bad usage
 a run whose Codex still runs, too); 3 the model audit failed; 4 the report is missing or
 invalid; 5 stopped waiting at --max-wait with its watch dropped or taken over (Codex keeps
 running); 75 still running at --max-wait (re-arm with the command printed); 124 timed out;
-143 killed by SIGTERM or SIGHUP while Codex runs, after a `detached` row (Codex keeps running,
-and the watch guard's next block prints the re-arm command). Outside that window the signal
-kills the wrapper with no row (a shell reports 143 for SIGTERM, 129 for SIGHUP). A wrapper
+143 killed by SIGTERM or SIGHUP while Codex runs (Codex keeps running, and the watch guard's
+next block prints the re-arm command). It appends a `detached` row first only when the run's
+finalize lock comes free within DETACH_LOCK_S and the turn has no stop row, so a signal
+during a cancel (which holds that lock) or after one (whose stop row ended the turn) writes
+none. Outside that window the signal kills the wrapper with no row (a shell reports 143 for
+SIGTERM, 129 for SIGHUP). A wrapper
 whose run was cancelled meanwhile exits with the cancel's stop row's exit, 1. `cancel` exits 0
 once the run is stopped, and 2 for an unknown run, one that has ended, one whose Codex hasn't
 started or can't be verified, or when the run's finalize lock stays busy.
@@ -404,13 +407,14 @@ def stream(cmd, cwd, out, row, prompt, start_event, waiter, wait_min):
     was killed, so the exit code is unknown). Once `thread.started` appears in
     out/events.jsonl it records start with the thread id (locked_turn_row). Codex is out of this
     wrapper's process tree, so a kill of the wrapper, or of its whole tree, leaves Codex
-    running; SIGTERM or SIGHUP appends a `detached` row and exits 143, leaving the watch open
-    with no waiter. Ctrl-C (SIGINT) is forwarded to Codex, since that is a person asking it to
-    stop. The prompt never enters row, so a signal can't write it. Returns (rc, thread_id, pid,
-    start_owed), rc None when unknown and start_owed True when thread.started was seen but not
-    yet recorded; or None at `wait_min` minutes, after a `detached` row: Codex runs on, and the
-    watch's next waiter finalizes it. With no watch (sandboxed) it never detaches: Codex dies
-    with the sandbox's PID namespace."""
+    running; SIGTERM or SIGHUP exits 143, leaving the watch open with no waiter, after a
+    `detached` row when the finalize lock comes free within DETACH_LOCK_S and the turn has no
+    stop row (none during or after a cancel). Ctrl-C (SIGINT) is forwarded to Codex, since
+    that is a person asking it to stop. The prompt never enters row, so a signal can't write
+    it. Returns (rc, thread_id, pid, start_owed), rc None when unknown and start_owed True when
+    thread.started was seen but not yet recorded; or None at `wait_min` minutes, after a
+    `detached` row: Codex runs on, and the watch's next waiter finalizes it. With no watch
+    (sandboxed) it never detaches: Codex dies with the sandbox's PID namespace."""
     events_path = os.path.join(out, "events.jsonl")
     thread_id = row.get("thread_id")
     with open(events_path, "a") as ev:
