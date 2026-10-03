@@ -13,14 +13,20 @@
 # does too.
 set -uo pipefail
 
-# A subagent's or teammate's payload carries agent_id: never theirs to hand off.
-prompt="$(python3 -c '
-import json, sys
+# A subagent's or teammate's payload carries agent_id: never theirs to hand off. -I keeps the
+# current directory off sys.path, so a project's own json.py can't run here. A curly apostrophe
+# reads as a straight one, and a dash between words as a clause break ("great work — wrap up").
+prompt="$(python3 -I -c '
+import json, re, sys
 d = json.load(sys.stdin)
 if d.get("agent_id"):
     sys.exit(3)
 p = d.get("prompt")
-sys.stdout.buffer.write((p if isinstance(p, str) else "").encode("utf-8", "replace"))
+p = p if isinstance(p, str) else ""
+dashes = chr(0x2013) + chr(0x2014)  # en and em dash; chr keeps the source ASCII, quote-free
+p = p.replace(chr(0x2019), chr(39))
+p = re.sub(r"\s[-" + dashes + r"]+\s|[" + dashes + "]", ", ", p)
+sys.stdout.buffer.write(p.encode("utf-8", "replace"))
 ' 2>/dev/null)" || exit 0
 
 emit() {
@@ -38,7 +44,8 @@ MSG
 
 # 1. Never fire on injected / non-user content (task notifications, system reminders, hook echoes,
 #    slash-command stdout, a subagent's or another session's message). These are not the user
-#    asking to wrap up.
+#    asking to wrap up. session-title.sh and session-summary.sh keep the same markers (INJECTED);
+#    tests/setup/test_hook_payloads.py checks the three agree.
 if grep -qiE '\[SYSTEM NOTIFICATION|NOT USER INPUT|<task-notification|<system-reminder|</system-reminder|automated background-task|hook success|<command-name>|<command-message>|<local-command|<agent-message|\[Subagent hand-back\]|<cross-session-message|<teammate-message' <<<"$prompt"; then
   exit 0
 fi
@@ -55,19 +62,24 @@ fi
 words="$(wc -w <<<"$prompt" | tr -d '[:space:]')"
 [ "${words:-999}" -gt 18 ] && exit 0
 
-# 4. Explicit context-reset command in a terse message, punctuation or backticks around it allowed.
-if grep -qiE '(^|[[:space:]`"(])/clear([[:space:]`").,!?;:]|$)' <<<"$prompt"; then
+# 4. Explicit context-reset command in a terse message, punctuation or backticks around it allowed,
+#    but not advice against it ("don't /clear yet").
+if grep -qiE '(^|[[:space:]`"(])/clear([[:space:]`").,!?;:]|$)' <<<"$prompt" \
+   && ! grep -qiE "(don'?t|do not|never|not|no need to|without)[[:space:]]+(to[[:space:]]+)?[\`\"(]?/clear" <<<"$prompt"; then
   emit; exit 0
 fi
 
 # 5. Otherwise fire only on an intent-bearing wrap-up phrase at the start of a clause (A), after
-#    optional lead-ins (P), ending its clause (T). "hand off" counts only in COMMAND form: spaced or
-#    hyphenated at a clause start, with a suffix, or the closed "handoff" after a lead-in.
+#    optional lead-ins (P), ending its clause (T): punctuation, the end, or a word that keeps it a
+#    wrap-up ("now", "for today", "and push"), never "stop here and explain why". "hand off" counts
+#    only in COMMAND form: spaced or hyphenated at a clause start, with a suffix, the closed
+#    "handoff" after a lead-in, or alone in its clause ("handoff then push"; not "handoff?").
 A='(^|[.!?;:,])[[:space:]]*'
-P="((let'?s|lets|time to|ok,?|okay,?|alright,?|so,?|please|just|i'?ll|i'?m|we'?re|we can|can we|should we|shall we|now,?|ready to|about to) +)"
+P="((let'?s|lets|it'?s|time to|ok,?|okay,?|alright,?|so,?|thanks,?|thank you,?|great,?|cool,?|perfect,?|nice,?|please|just|i'?ll|i'?m|we'?re|we can|can we|should we|shall we|now,?|ready to|about to) +)"
 W="(wrap(ping)? (this |it )?up|wrap(ping)? up (the |this )?session|call(ing)? it (a day|for the day|for the night|here|quits)|stop(ping)? here|stop for (the day|now|today)|end (of )?(the |this )?session|that'?s a wrap|wipe (the )?(context|memory)|clear (the )?(memory|context|session|chat|conversation)|hand[ -]off|hand[ -]?off (now|here|please|for real|time)|do a hand[ -]?off|hand (it|this|things) off)"
-T='([[:space:]]*([.!?;:,]|$)|[[:space:]]+(and|now|please|then|here|for|so)([^[:alnum:]]|$))'
-if grep -qiE "${A}${P}*${W}${T}|${A}${P}+handoff${T}" <<<"$prompt"; then
+T='([[:space:]]*([^[:alnum:][:space:]]|$)|[[:space:]]+(now|please|then|here|so|today|tonight|for (today|now|the day|tonight|the night)|and (then |also )?(hand|push|commit|stop|close|end|clear|wrap|call))([^[:alnum:]]|$))'
+BARE='[[:space:]]*([.!]|$)|[[:space:]]+(now|please|then|and|time)([^[:alnum:]]|$)'
+if grep -qiE "${A}${P}*${W}${T}|${A}${P}+handoff${T}|${A}handoff(${BARE})" <<<"$prompt"; then
   emit; exit 0
 fi
 

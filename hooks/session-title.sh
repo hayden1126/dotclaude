@@ -31,7 +31,8 @@
 set -uo pipefail
 
 # The script goes to python3 as -c and the event on stdin: passed as one argv string, an event
-# over 128 KiB (a big paste) would fail the exec and silently skip the hook.
+# over 128 KiB (a big paste) would fail the exec and silently skip the hook. -I keeps the
+# current directory off sys.path, so a project's own json.py can't run here.
 IFS= read -r -d '' src <<'PY'
 import sys, os, json
 
@@ -69,12 +70,14 @@ if not isinstance(prompt, str):
     prompt = ""
 
 # Injected content (a background task's notice, another agent's message, a slash command's
-# echo) arrives as the prompt too, but it isn't the user's: never seed the title with it.
+# echo) arrives as the prompt too, but it isn't the user's: leave the title as it stands. Keep
+# in sync with handoff-reminder.sh's rule 1 (tests/setup/test_hook_payloads.py checks).
 INJECTED = ("[system notification", "not user input", "<task-notification", "<system-reminder",
-            "<command-name>", "<command-message>", "<local-command", "<agent-message",
-            "[subagent hand-back]", "<cross-session-message", "<teammate-message")
+            "</system-reminder", "automated background-task", "hook success", "<command-name>",
+            "<command-message>", "<local-command", "<agent-message", "[subagent hand-back]",
+            "<cross-session-message", "<teammate-message")
 if any(m in prompt.lower() for m in INJECTED):
-    prompt = ""
+    fail_open()
 
 def find_repo_root(start):
     """(root, is_git). Walk up for a .git entry; dir=repo, file=worktree/submodule."""
@@ -224,4 +227,4 @@ sys.stdout.write(json.dumps(
     ensure_ascii=False,
 ))
 PY
-python3 -c "$src" 2>/dev/null || exit 0
+python3 -I -c "$src" 2>/dev/null || exit 0

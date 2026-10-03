@@ -23,7 +23,8 @@ set -uo pipefail
 input=$(cat 2>/dev/null)
 
 # The script goes to python3 as -c and the event on stdin: passed as one argv string, an event
-# over 128 KiB (a long last_assistant_message) would fail the exec and skip the summary.
+# over 128 KiB (a long last_assistant_message) would fail the exec and skip the summary. -I
+# keeps the current directory off sys.path, so a project's own json.py can't run here.
 IFS= read -r -d '' src <<'PY'
 import sys, os, json, re, urllib.request, urllib.error
 
@@ -99,10 +100,20 @@ except OSError:
 
 # Injected content (a background task's notice, another agent's message, a slash command's
 # echo, a skill body) is stored as a user entry too, but the user didn't say it: leave it out,
-# so it neither takes a RECENT_MSGS slot nor gets summarized as the user's request.
+# so it neither takes a RECENT_MSGS slot nor gets summarized as the user's request. origin.kind
+# decides when present ("human" for a typed prompt, "peer" or "task-notification" otherwise);
+# isMeta and the markers only for an entry without one. Keep INJECTED in sync with
+# handoff-reminder.sh's rule 1 (tests/setup/test_hook_payloads.py checks).
 INJECTED = ("[system notification", "not user input", "<task-notification", "<system-reminder",
-            "<command-name>", "<command-message>", "<local-command", "<agent-message",
-            "[subagent hand-back]", "<cross-session-message", "<teammate-message")
+            "</system-reminder", "automated background-task", "hook success", "<command-name>",
+            "<command-message>", "<local-command", "<agent-message", "[subagent hand-back]",
+            "<cross-session-message", "<teammate-message")
+
+def injected(o, text):
+    kind = (o.get("origin") or {}).get("kind")
+    if kind is not None:
+        return kind != "human"
+    return bool(o.get("isMeta")) or any(m in text.lower() for m in INJECTED)
 
 def recent_dialogue(path, chunk=131072):
     """Last RECENT_MSGS user/assistant text messages from the transcript tail."""
@@ -130,10 +141,7 @@ def recent_dialogue(path, chunk=131072):
             text = " ".join(b["text"] for b in content
                             if isinstance(b, dict) and b.get("type") == "text" and b.get("text"))
         text = " ".join(text.split())
-        # origin.kind is "human" for a typed prompt, "peer" or "task-notification" otherwise.
-        if o["type"] == "user" and (o.get("isMeta")
-                                    or (o.get("origin") or {}).get("kind") not in (None, "human")
-                                    or any(m in text.lower() for m in INJECTED)):
+        if o["type"] == "user" and injected(o, text):
             continue
         if text:
             msgs.append((o["type"], text[:MSG_CLIP]))
@@ -258,7 +266,7 @@ try:
 except OSError:
     die()
 PY
-generate() { printf '%s' "$1" | python3 -c "$src"; }
+generate() { printf '%s' "$1" | python3 -I -c "$src"; }
 
 # Detach fully so Stop returns immediately; orphan the job via ( ... & ).
 ( generate "$input" >/dev/null 2>&1 & )

@@ -28,7 +28,11 @@ class HandoffReminder(unittest.TestCase):
                        "okay let's wrap up", "great work. let's call it a day",
                        "can we stop here?", "handoff now", "let's handoff",
                        "please do a handoff", "let's wrap this up and hand off",
-                       "clear the context please", "wrap up the session", "I'm wrapping up"):
+                       "clear the context please", "wrap up the session", "I'm wrapping up",
+                       "great work \u2014 let's wrap up", "ok - let's wrap up",
+                       "thanks let's wrap up", "it's time to wrap up", "let\u2019s wrap up",
+                       "let's wrap up today", "let's wrap up \U0001F44D",
+                       "sweep fixes, handoff then push", "handoff"):
             with self.subTest(prompt=prompt):
                 self.assertTrue(fires(prompt))
 
@@ -44,7 +48,10 @@ class HandoffReminder(unittest.TestCase):
                        "add an end session button", "clear the session cache on logout",
                        "don't wrap up yet", "no, don't wrap up", "hand off the parser to the API",
                        'what does "wrap up" trigger?', "wrap up the loop engineering doc",
-                       "a handoff would help here", "handoff?", "/clearance", "src/clear/x"):
+                       "a handoff would help here", "handoff?", "/clearance", "src/clear/x",
+                       "stop here and explain why the test fails",
+                       "clear the context for each subagent", "hand off for review",
+                       "don't /clear yet"):
             with self.subTest(prompt=prompt):
                 self.assertFalse(fires(prompt))
 

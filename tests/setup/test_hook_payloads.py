@@ -1,10 +1,13 @@
 """session-title.sh, session-summary.sh and danger-guard.sh: the event arrives on stdin at any
 size, and injected content (task notices, agent messages, skill bodies) is never taken for the
 user (stdlib only)."""
+import ast
 import json
 import os
+import re
 import subprocess
 import tempfile
+import time
 import unittest
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -44,12 +47,14 @@ class SessionTitle(Workspace):
     def test_a_prompt_seeds_the_title(self):
         self.assertEqual(self.title(prompt="fix the parser\nmore"), "[proj] fix the parser")
 
-    def test_injected_content_never_seeds_the_title(self):
+    def test_injected_content_leaves_the_title_alone(self):
+        # No output at all: falling through to a bare "[proj]" would overwrite the title the
+        # user's own prompt set.
         for prompt in ("<task-notification><status>killed</status></task-notification>",
                        '<agent-message from="a1">[Subagent hand-back] done</agent-message>',
                        "[SYSTEM NOTIFICATION - NOT USER INPUT] a background task ended"):
             with self.subTest(prompt=prompt):
-                self.assertEqual(self.title(prompt=prompt), "[proj]")
+                self.assertIsNone(self.title(prompt=prompt))
 
     def test_a_subagent_or_teammate_prompt_never_retitles(self):
         self.assertIsNone(self.title(prompt="fix the parser", agent_id="a1"))
@@ -102,10 +107,15 @@ class SessionSummary(Workspace):
             user("[SYSTEM NOTIFICATION - NOT USER INPUT] a task ended"),
             {"type": "assistant", "message": {"content": [{"type": "text", "text": "Fixed."}]}},
             user("an older prompt with no origin"),
+            # A typed prompt is the user's even when it quotes a marker: origin.kind decides.
+            user("why did <task-notification> say killed?", origin={"kind": "human"}),
+            user("these args are not user input", origin={"kind": "human"}),
         ]
         self.assertEqual(self.dialogue(entries).splitlines(),
                          ["User: fix the parser", "Assistant: Fixed.",
-                          "User: an older prompt with no origin"])
+                          "User: an older prompt with no origin",
+                          "User: why did <task-notification> say killed?",
+                          "User: these args are not user input"])
 
     def test_a_huge_event_is_still_read(self):
         entries = [{"type": "user", "origin": {"kind": "human"},
@@ -113,12 +123,61 @@ class SessionSummary(Workspace):
         self.assertEqual(self.dialogue(entries, last_assistant_message=BIG),
                          "User: fix the parser")
 
-    def test_the_hook_returns_at_once(self):
-        # It detaches the summary job; with no credentials under HOME that job just exits.
-        self.assertEqual(hook("session-summary.sh", {"session_id": "sid",
-                                                     "transcript_path": self.transcript,
-                                                     "last_assistant_message": BIG},
-                              env=self.env), "")
+    def test_the_detached_job_gets_the_whole_event_on_stdin(self):
+        # A python3 shim records its first argument and how many bytes reached its stdin, so
+        # this covers the shell wiring (the detached generate) that the tests above skip.
+        shim_dir = os.path.join(self.tmp.name, "shim")
+        os.makedirs(shim_dir)
+        out = os.path.join(self.tmp.name, "shim.out")
+        with open(os.path.join(shim_dir, "python3"), "w") as f:
+            f.write('#!/bin/bash\n{ printf "%s\\n" "$1"; wc -c; } > "$SHIM_OUT.tmp"\n'
+                    'mv "$SHIM_OUT.tmp" "$SHIM_OUT"\n')
+        os.chmod(os.path.join(shim_dir, "python3"), 0o755)
+        event = {"session_id": "sid", "transcript_path": self.transcript,
+                 "last_assistant_message": BIG}
+        env = {**self.env, "PATH": shim_dir + os.pathsep + os.environ["PATH"], "SHIM_OUT": out}
+        self.assertEqual(hook("session-summary.sh", event, env=env), "")
+        deadline = time.time() + 10
+        while not os.path.exists(out) and time.time() < deadline:
+            time.sleep(0.05)
+        with open(out) as f:
+            self.assertEqual(f.read().split(), ["-I", str(len(json.dumps(event).encode()))])
+
+
+class ProjectFilesStayOut(Workspace):
+    """A hook runs in the project's directory: a json.py there must not replace the stdlib's."""
+
+    def test_a_projects_json_py_never_runs(self):
+        ran = os.path.join(self.tmp.name, "ran")
+        with open(os.path.join(self.cwd, "json.py"), "w") as f:
+            f.write(f"open({ran!r}, 'a').write(__name__)\n")
+        events = {"handoff-reminder.sh": {"prompt": "let's wrap up"},
+                  "session-title.sh": {"cwd": self.cwd, "transcript_path": self.transcript,
+                                       "prompt": "fix the parser"},
+                  "danger-guard.sh": {"tool_name": "Bash",
+                                      "tool_input": {"command": "git push origin x"}}}
+        for name, event in events.items():
+            with self.subTest(hook=name):
+                p = subprocess.run(["bash", os.path.join(HOOKS, name)], input=json.dumps(event),
+                                   capture_output=True, text=True, timeout=20, cwd=self.cwd,
+                                   env=self.env)
+                self.assertEqual(p.returncode, 0, p.stderr)
+                self.assertFalse(os.path.exists(ran), f"{name} imported the project's json.py")
+                self.assertTrue(p.stdout, f"{name} printed nothing")
+
+
+class InjectedMarkers(unittest.TestCase):
+    """handoff-reminder's rule 1, session-title and session-summary skip the same markers."""
+
+    def test_the_three_lists_agree(self):
+        src = open(os.path.join(HOOKS, "handoff-reminder.sh")).read()
+        rule1 = re.search(r"grep -qiE '(\\\[SYSTEM NOTIFICATION[^']*)'", src).group(1)
+        expected = {m.replace("\\[", "[").replace("\\]", "]").lower() for m in rule1.split("|")}
+        for name in ("session-title.sh", "session-summary.sh"):
+            with self.subTest(hook=name):
+                body = re.search(r"^INJECTED = (\(.*?\))$",
+                                 open(os.path.join(HOOKS, name)).read(), re.S | re.M).group(1)
+                self.assertEqual(set(ast.literal_eval(body)), expected)
 
 
 if __name__ == "__main__":

@@ -168,7 +168,8 @@ ships but is opt-in, see its entry):
   to invoke the `handoff` skill rather than improvising its steps (which kept dropping the
   curate-memory step). Precision-first: it stays silent when "handoff" is just a topic (discussing
   the skill or this hook) and on injected system content (task notifications). Advisory only: it adds context, it cannot run the skill; silent no-op
-  otherwise; always exits 0 so it can never block a prompt. Fail-open if `jq` is absent.
+  otherwise; always exits 0 so it can never block a prompt. It reads the prompt with python3 and
+  stays silent if that fails.
 - **UserPromptSubmit: `session-title.sh`** (in this repo). Sets the session title (the terminal tab
   title) to `[<repo>] <label>` so tabs are tellable apart. It emits the supported
   `hookSpecificOutput.sessionTitle`, not raw OSC escapes, so the title has display precedence over

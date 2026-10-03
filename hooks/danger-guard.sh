@@ -28,7 +28,9 @@
 # cannot be resolved statically and are not caught.
 
 # The script goes to python3 as -c and the event on stdin: passed as one argv string, an event
-# over 128 KiB (a long heredoc command) would fail the exec and skip the guard.
+# over 128 KiB (a long heredoc command) would fail the exec and skip the guard. -I keeps the
+# current directory off sys.path: a project's own json.py or shlex.py would otherwise run here,
+# or break the parse so every command is allowed.
 IFS= read -r -d '' src <<'PY'
 import sys, json, shlex, os, re
 
@@ -158,4 +160,4 @@ print(json.dumps({
 }))
 sys.exit(0)
 PY
-python3 -c "$src" 2>/dev/null || exit 0
+python3 -I -c "$src" 2>/dev/null || exit 0
