@@ -823,10 +823,12 @@ the fix is enforcement. `PLAN.md` has the design history and the options weighed
     lock. It finds its process by the same parent walk as the waiter, so a nested `claude -p`
     that inherited the lead's `CLAUDE_PID` finds itself, not the lead;
   - it also adopts this session's watches whose Claude process has ended (a crash, then
-    `claude --continue`), recording itself as their Claude process. A waiter still running there
-    reports to a process that's gone, so the watch is marked `waiter_unheard` and blocks once:
-    "Watch <id>'s waiter was started by a Claude Code process that has ended, so its exit won't
-    reach you. Re-arm it", with the `--resume` command. A dead waiter is a lapse, as above;
+    `claude --continue`), recording itself as their Claude process. A waiter whose process
+    still runs reports to a process that's gone, so the watch is marked `waiter_unheard` and
+    blocks once: "Watch <id>'s waiter was started by a Claude Code process that has ended, so its
+    exit won't reach you. Re-arm it", with the `--resume` command. That goes by the waiter's
+    process, not its heartbeat, so one a suspended VM left stale is marked too, and `--resume`
+    can take it over. A dead waiter is a lapse, as above;
   - a watch of this session that ended (done, failed or stale) in the last 7 days while no Claude
     process listened blocks once, "Check the result and report it", and is recorded `reported`.
     Nobody listened when its waiter was `waiter_unheard` or its Claude process has ended, and

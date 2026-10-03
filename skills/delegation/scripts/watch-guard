@@ -25,8 +25,8 @@ to wake it. This hook is the enforcement:
     (grown means later), then to age (over 60 s).
   - a watch of this session recorded under a Claude process that has ended (a crash, then
     `claude --continue`) is adopted too: this process records itself as the watch's. A waiter
-    still running there reports to nobody, so it is marked waiter_unheard and blocks once
-    with the re-arm command; a dead one is a lapse, as above.
+    whose process still runs (even with a stale heartbeat) reports to nobody, so it is marked
+    waiter_unheard and blocks once with the re-arm command; a dead one is a lapse, as above.
   - a watch of this session that ended (done, failed or stale) in the last 7 days while no
     Claude process was listening (its waiter was unheard, or its Claude process has ended),
     and isn't reported yet, blocks once and is recorded reported.
@@ -504,8 +504,9 @@ def adoption(sid, me, now):
     - one this process left in a session that isn't live (dc.left_by_clear: a /clear, or a
       watch recorded with no session) moves into this session. One another session re-armed,
       or whose old session came back, since it was gathered stays where it is;
-    - a crashed one records this process as its Claude process, and a waiter still running is
-      marked waiter_unheard: its exit goes to the process that ended.
+    - a crashed one records this process as its Claude process, and a waiter whose process
+      still runs, even with a stale heartbeat, is marked waiter_unheard: its exit goes to the
+      process that ended.
     settle(lost) logs each adoption whose watch was written (not in `lost`) and returns the ids
     of those whose waiter still runs but reports to nobody."""
     moved, revived, unheard = [], [], []
@@ -521,7 +522,9 @@ def adoption(sid, me, now):
             elif crashed(cur, sid, me):
                 revived.append((wid, cur.get("claude_pid")))
                 cur.update(claude_pid=me[0], claude_start=me[1])
-                if dc.waiter_alive(cur, now):
+                # By its process, not its heartbeat: a waiter suspended past its heartbeat (a
+                # paused VM) still exits to the ended process when it resumes.
+                if dc.pid_alive(cur.get("waiter_pid"), cur.get("waiter_start")):
                     cur["waiter_unheard"] = True
                     unheard.append(wid)
         return move

@@ -496,6 +496,17 @@ class Watches(GuardEnv):
                       self.err_log())
         self.assertIsNone(self.decide(prompt_id="p2"))
 
+    def test_a_crashed_processs_waiter_with_a_stale_heartbeat_is_marked_unheard(self):
+        # Its process runs (a suspended VM made the heartbeat stale), so when it resumes its exit
+        # goes to the ended process: --resume must be able to take it over.
+        self.watch(live=True, claude_pid=DEAD, claude_start=None,
+                   waiter_heartbeat=guard.iso(self.now - 3600))
+        self.lines()
+        self.as_claude()
+        out = self.decide()
+        self.assertIn(self.unheard_reason(), out["reason"])
+        self.assertIs(self.read()["waiter_unheard"], True)
+
     def test_a_crashed_processs_dead_waiter_is_adopted_and_lapses(self):
         self.watch(claude_pid=DEAD, claude_start=None)
         self.lines()
