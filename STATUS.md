@@ -39,28 +39,20 @@ stored here).
     - never publish raw transcripts or the eval data;
     - the `.zshrc`, `.zshenv` and `.mcp.json` backups beside SHAPE.md stay unread.
 - **The watch guard (background waits): built and installed on HAYPC, not yet pushed.**
-  - **Where:**
-    - **The branch:** `feat/watch-guard` off `main` (merge-base `5f965ba`). Derive its state with
-      `git log main..feat/watch-guard` and `gh pr list`.
-    - **The design and decisions:** `PLAN.md`, now history (see its status banner).
-    - **The behavior:** `docs/delegation.md` "Long waits", with its "Who hears a watch" table and
-      the known gaps.
-    - **The model's guide:** SKILL §4 and §5.
-  - **Next step:** Hayden approves the push. Then `git push -u origin feat/watch-guard`, and
-    `gh pr create` with the sandbox off (its multi-line body breaks the bare-command match).
+  - **Where:** branch `feat/watch-guard` (merge-base `5f965ba`; derive its state with
+    `git log main..feat/watch-guard` and `gh pr list`).
+    - The decisions are in `PLAN.md`, now history.
+    - The behavior is in `docs/delegation.md` "Long waits".
+    - Its open checks are in that doc's "Next".
+  - **Next step:** Hayden approves the push. Then `git push -u origin feat/watch-guard` and
+    `gh pr create`, the latter with the sandbox off (a multi-line body isn't a bare command).
   - **After the merge:**
-    - ask before removing the writer worktrees `.claude/worktrees/agent-a2d2c1a84ebc99719` and
-      `agent-a12852ea4e431c3d2` (`git worktree remove` outside the sandbox);
-    - fix `hooks/handoff-reminder.sh` (fast lane, on its own branch). It fires on subagent
-      reports: rule 3 matches `/clear` anywhere in a prompt of any length, and rule 1 doesn't
-      skip `<agent-message`.
-  - **Open checks:**
-    - the two `due.toml` items dated 2026-11-02 (the live re-arm with the `--continue` session
-      id, and the Codex kill probe);
-    - the open assumptions in docs/delegation.md "Next".
-  - **An unnamed flaky test:** one delegation test erred once under load, in a 122 s full run on
-    2026-10-03 (the writer saw one too). It didn't reproduce in 9 runs, including under 12 CPU
-    hogs and verbose, unsandboxed. If it recurs, run with `-v` and name it.
+    - ask before removing the worktrees `.claude/worktrees/agent-a2d2c1a84ebc99719` and
+      `agent-a12852ea4e431c3d2` (outside the sandbox);
+    - fast-lane fix `hooks/handoff-reminder.sh`, which fires on subagent reports: rule 3 matches
+      `/clear` in a prompt of any length, and rule 1 doesn't skip `<agent-message`.
+  - **An unnamed flaky test** erred twice under load on 2026-10-03, and didn't reproduce in 9
+    runs. If it recurs, run with `-v` and name it.
 - **Delegation hardening: what is live on HAYPC** (Stage 2, plus the Stage 3 steps under Done;
   `docs/delegation.md`;
   `skills/delegation/SKILL.md` is the operating guide). Open items:
