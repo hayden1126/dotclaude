@@ -208,8 +208,10 @@ validated (`report_ok`).
   waiter, its job ended (done, failed or stale) with no waiter to tell you, or a background
   command was killed at its time limit. After that one block, a lapse goes quiet: a later stop
   lets you through, Hayden sees one warning, and nothing more comes until its job ends, however
-  it ends, which blocks once more. So re-arm or drop it when it blocks. After a `/clear`, your
-  first stop blocks once again on each lapse from before it. To stop watching,
+  it ends, which blocks once more. When the guard can't tell how the job ended (a log longer
+  than the last 1 MB it reads, or a Codex run not yet finalized), that block says to re-arm the
+  watch, and the re-armed waiter reports the result. So re-arm or drop it when it blocks. After
+  a `/clear`, your first stop blocks once again on each lapse from before it. To stop watching,
   `delegation-ledger wait --drop <id>`.
 - **After a crash or restart,** run `delegation-ledger open --hours 24`.
   - For each orphaned agent, look at its artifact path and redo only the unfinished part.
@@ -271,7 +273,8 @@ codex-delegate audit <thread_id>   # every model the thread and its sub-agents u
   - 75: still running: re-arm with the printed command;
   - 124: timed out;
   - 143: killed by SIGTERM or SIGHUP while Codex ran; Codex keeps running, and the watch
-    guard's next block prints the re-arm command;
+    guard's next block prints the re-arm command (during or after a `cancel`, neither: the run
+    is stopped and its watch dropped);
   - `cancel` exits 0 once the run is stopped, and 2 for an unknown run, one that has ended,
     one whose Codex hasn't started or can't be verified (no procStart recorded), or when the
     run's finalize lock stays busy past 4 minutes. The cancelled run's wrapper, if still
