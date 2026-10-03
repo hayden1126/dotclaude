@@ -691,11 +691,14 @@ def codex_stopped(e):
 #                   the fallback when there is no blocked_stop; both are set and cleared with
 #                   blocked_at
 #   end_blocked_at  when the guard blocked a stop on an end it couldn't judge (ISO); absent
-#                   before: a codex run that ended with its finalize owed, or a --log verdict
+#                   before: a codex run that ended with its finalize owed, a --log verdict
 #                   that a line further back than the log's last 1 MB, which is all the guard
-#                   reads, could change (the guard's `unseen`). It blocks on that once, even
-#                   after the lapse was acknowledged, and unblock clears it with blocked_at. An
-#                   end the guard can judge is recorded instead, which resolves the watch
+#                   reads, could change (the guard's `unseen`), or a --log verdict, ended or
+#                   unmet, that the log's last line, with no newline yet, could change if it
+#                   is finished as it stands (`unfinished`, its PARTIAL block). It blocks on
+#                   that once, even after the lapse was acknowledged, and unblock clears it
+#                   with blocked_at. An end the guard can judge is recorded instead, which
+#                   resolves the watch
 #   session_id      a --resume moves the watch to the resuming session, unless it has none
 #   claude_pid, claude_start
 #                   the Claude Code process (claude_process) and its procStart that the waiter

@@ -600,6 +600,33 @@ class Watches(GuardEnv):
             "delegation-ledger wait --drop w-1."))
         self.assertEqual(self.read()["state"], "open")
 
+    def test_an_unterminated_last_line_of_an_unmet_log_blocks_once(self):
+        # No pids and no --stale, so nothing else ends the verdict while the line waits for its
+        # newline: a fail line, or the done line when it is all the condition lacks, is said.
+        log = self.path("job.log")
+        for text, cond, lines in (
+                ("building\nFAILED", {"log": log, "done": "^OK$", "fail": "FAILED"}, "/FAILED/"),
+                ("building\nOK", {"log": log, "done": "^OK$"}, "/^OK$/")):
+            with self.subTest(text=text):
+                with open(log, "w") as f:
+                    f.write(text)
+                self.watch(cond=cond)
+                self.assertEqual(self.decide(prompt_id="p1"), self.block(
+                    f"Watch w-1 (the build) looks unmet ({log} has a line matching /^OK$/ is "
+                    f"unmet). But {log}'s last line has no newline yet and matches {lines}, and "
+                    "it may be the start of a longer line, so the guard can't tell. Re-arm the "
+                    "watch and its waiter reads that line once it settles and reports the "
+                    "outcome: delegation-ledger wait --resume w-1, with run_in_background and "
+                    "timeout 7200000. To stop watching it: delegation-ledger wait --drop w-1."))
+                self.assertEqual(self.decide(prompt_id="p2"), {"systemMessage": self.ACK})
+                self.assertIsNone(self.decide(prompt_id="p3"))
+                self.assertEqual(self.read()["state"], "acknowledged")
+        # The done line with its --file still missing isn't all the condition lacks: a lapse.
+        cond = {"log": log, "done": "^OK$", "file": self.path("never")}
+        self.watch(cond=cond)
+        self.assertEqual(self.decide(prompt_id="p1"), self.block(self.lapse_reason(
+            cond=dc.condition_text(cond))))
+
     def test_a_spent_budget_takes_no_more_items_and_records_none_it_wont_print(self):
         self.watch(created="2026-10-02T10:00:00Z")
         self.watch("w-2", created="2026-10-02T10:00:01Z")
@@ -990,22 +1017,39 @@ class OutcomeMatrix(GuardEnv):
         "uncertain":   (2,    2,       1,     2,      2,     2,           2),
         "running":     (1,    0,       0,     1,      1,     1,           1),
         "detached fails": (2, 1,       0,     2,      2,     2,           2),
+        "detached fails, codex gone": (2, 1, 0, 2,    2,     2,           2),
+        "unterminated": (1,   1,       1,     1,      1,     1,           2),
     }
     # "detached fails" is a job still running whose detached waiter stops with an error right
-    # after it takes the watch: the next stop says the error, and no other is started.
+    # after it takes the watch: the next stop says the error, and no other is started. ", codex
+    # gone" is a running codex run that then leaves the ledger, which is the error: the guard
+    # can't decide the run either, but says the error. "unterminated" is a --log watch with no
+    # pids and no --stale whose last line, with no newline, matches --fail, and no detached
+    # waiter starts (its spawn fails): only the guard can say it, once, as uncertain.
     ENDS = {"met": "done", "failed": "failed", "stale": "stale", "codex ended": "done",
             "uncertain": "done"}  # as the guard or the detached waiter records them
+    UNENDED = ("running", "detached fails", "detached fails, codex gone", "unterminated")
 
     def spawn_stand_in(self, w, sid, me):
         """The detached waiter, in process: it takes the watch as the real one does. For
-        "detached fails" it then records an error and exits, as the real one does on exit 70."""
+        "detached fails" it then records an error and exits, as the real one does: for a codex
+        run, the Undecidable its read of the run raises once the run has left the ledger. For
+        "unterminated" none starts."""
+        if self.unstarted:
+            return False
         waiter = dc.Waiter(w["id"], 15, (me, sid), detached=True)
         waiter.take(None)
-        if self.failing:
-            waiter.fail("Undecidable: codex run r1 is no longer in the ledger")
-            dc.update_watch(w["id"], lambda cur: cur.update(waiter_pid=DEAD))
+        if self.failing and "codex" in w["condition"]:
+            open(os.path.join(self.state, "dotclaude", "delegations.jsonl"), "w").close()
+            with self.assertRaises(dc.Undecidable) as raised:
+                dc.watch_verdict(dc.read_watch(w["id"]))
+            waiter.fail(f"Undecidable: {raised.exception}")
+        elif self.failing:
+            waiter.fail("OSError: [Errno 5] Input/output error")
         else:
             self.detached.append(waiter)
+            return True
+        dc.update_watch(w["id"], lambda cur: cur.update(waiter_pid=DEAD))
         return True
 
     def poll_stand_ins(self):
@@ -1028,7 +1072,8 @@ class OutcomeMatrix(GuardEnv):
         self.watches = os.path.join(self.state, "dotclaude", "watches")
         self.transcript = os.path.join(d, "s1.jsonl")
         self.lines()
-        self.detached, self.failing = [], outcome == "detached fails"
+        self.detached, self.failing = [], outcome.startswith("detached fails")
+        self.unstarted = outcome == "unterminated"
         old = self.now - 7200
         never, log = os.path.join(d, "never"), os.path.join(d, "build.log")
         later = state == "acked, then ends"
@@ -1055,6 +1100,17 @@ class OutcomeMatrix(GuardEnv):
             else:
                 os.utime(log, (old, old))
             cond = {"log": log, "done": "^OK$", "stale_min": 1}
+        elif outcome == "detached fails, codex gone":  # running until it leaves the ledger
+            self.codex_row(pid=os.getpid())
+            cond, desc = {"codex": "r1"}, "codex run r1 ends"
+        elif outcome == "unterminated":
+            with open(log, "w") as f:
+                f.write("building\n" if later else "building\nFAILED")
+            if later:
+                def end_it():
+                    with open(log, "a") as f:
+                        f.write("FAILED")
+            cond = {"log": log, "done": "^OK$", "fail": "FAILED"}
         elif outcome == "codex ended":  # no stop row, Codex and its wrapper gone
             self.codex_row(pid=os.getpid() if later else DEAD)
             if later:
@@ -1104,9 +1160,9 @@ class OutcomeMatrix(GuardEnv):
                         if out and out.get("decision") == "block":
                             blocks.append(out["reason"])
                     said = [r for r in blocks if "has no live waiter" not in r]
-                    if outcome == "detached fails":
+                    if self.failing:
                         self.assertLessEqual(len(blocks), 2, blocks)
-                        errors = [r for r in blocks if "detached waiter failed: Undecidable" in r]
+                        errors = [r for r in blocks if "detached waiter failed: " in r]
                         self.assertEqual(len(errors), 1 if self.spawned else 0, blocks)
                     elif outcome == "running":
                         self.assertLessEqual(len(blocks), 1, blocks)
@@ -1119,7 +1175,7 @@ class OutcomeMatrix(GuardEnv):
                     w = self.read()
                     # Adopted, where it was another session's or another process's.
                     self.assertEqual((w["session_id"], w["claude_pid"]), ("s1", os.getpid()))
-                    if outcome in ("running", "detached fails") or (
+                    if outcome in self.UNENDED or (
                             outcome in ("codex ended", "uncertain") and not self.spawned):
                         self.assertIn(w["state"], dc.UNRESOLVED)
                     else:
@@ -1278,6 +1334,88 @@ class DetachedWaiters(GuardEnv):
         self.assertEqual(self.spawned, [])
         self.assertIn("watch-guard: watch w-1: its detached waiter stopped after 0 min, before "
                       "its 1440 min max: Undecidable", self.err_log())
+        self.assertIsNone(self.decide(prompt_id="p3"))
+
+    def failed_reason(self, why, wid="w-1", desc="the build"):
+        return (f"Watch {wid} ({desc}): the guard's detached waiter failed: {why}. Re-arm to see "
+                f"the error: delegation-ledger wait --resume {wid}, with run_in_background and "
+                f"timeout 7200000. Or drop the watch: delegation-ledger wait --drop {wid}.")
+
+    def test_a_detached_failure_on_a_codex_run_gone_from_the_ledger_is_said_once(self):
+        # Where the run is can't be decided (Undecidable), but the error that says so can.
+        self.spawner = self.record_spawn
+        why = "Undecidable: codex run r1 is no longer in the ledger"
+        self.watch(cond={"codex": "r1"}, waiter_detached=True, detached_at=dc.now_iso(),
+                   end_error=why)
+        self.assertEqual(self.decide(prompt_id="p1"), self.block(self.failed_reason(why)))
+        self.assertEqual(self.decide(prompt_id="p2"), {"systemMessage": Watches.PLAIN_ACK})
+        self.assertIsNone(self.decide(prompt_id="p3"))
+        self.assertEqual(self.spawned, [])
+
+    def test_a_detached_failure_then_codex_ending_says_each_once(self):
+        # The error comes as the lapse's block, so the run's end, after the acknowledgment,
+        # says CODEX_ENDED, not the error again.
+        self.spawner = self.record_spawn
+        why = "OSError: [Errno 5] Input/output error"
+        self.codex_row(pid=os.getpid())  # Codex runs
+        self.watch(cond={"codex": "r1"}, desc="codex run r1 ends", waiter_detached=True,
+                   detached_at=dc.now_iso(), end_error=why)
+        self.assertEqual(self.decide(prompt_id="p1"), self.block(self.failed_reason(
+            why, desc="codex run r1 ends")))
+        out = self.decide(prompt_id="p2")
+        self.assertNotIn("decision", out)
+        self.assertIn("still has no waiter; it's acknowledged", out["systemMessage"])
+        self.codex_row(pid=DEAD)  # Codex ends, with no stop row
+        self.assertEqual(self.decide(prompt_id="p3"), self.block(self.codex_ended()))
+        self.assertIsNone(self.decide(prompt_id="p4"))
+        self.assertEqual(self.read()["state"], "acknowledged")
+
+    def test_a_detached_codex_end_whose_ledger_cant_be_read_is_still_said(self):
+        self.watch(desc="the migration", cond={"codex": "r1"}, state="failed",
+                   ended=dc.now_iso(), reported=False, waiter_detached=True,
+                   end_why="codex run r1 stopped with exit 4", claude_pid=os.getpid(),
+                   claude_start=dc.proc_start(os.getpid()))
+        with mock.patch.object(guard.dc, "find_codex", side_effect=OSError(5, "I/O error")):
+            self.assertEqual(self.decide(), self.block(self.ended_reason(
+                "failed", "codex run r1 stopped with exit 4", desc="the migration")))
+        self.assertIs(self.read()["reported"], True)
+        self.assertIn("watch-guard: watch w-1: codex run r1's report", self.err_log())
+
+    def test_a_detached_waiter_from_before_detached_at_is_started_again(self):
+        # Recorded by an older guard, with no detached_at: it counts as having run to its max.
+        self.spawner = self.record_spawn
+        self.watch(waiter_detached=True, waiter_heartbeat=dc.now_iso())
+        self.assertEqual(self.decide(prompt_id="p1"), self.block(self.lapse_reason()))
+        self.assertEqual(self.decide(prompt_id="p2"), {"systemMessage": Watches.ACK})
+        self.assertEqual(self.spawned, ["w-1"])
+
+    def error_after_gather(self, why):
+        """The detached waiter records its error between this stop's gather and its commit,
+        as a twin guard's stop, or a waiter whose heartbeat went stale, can see it."""
+        real = guard.watch_pending
+
+        def watch_pending(w, shells, now):
+            p = real(w, shells, now)
+            dc.update_watch(w["id"], lambda cur: cur.update(end_error=why))
+            return p
+        return mock.patch.object(guard, "watch_pending", watch_pending)
+
+    def test_an_error_recorded_after_the_gather_is_what_the_lapse_block_says(self):
+        self.spawner = self.record_spawn
+        why = "OSError: [Errno 5] Input/output error"
+        self.watch(waiter_detached=True, detached_at=dc.now_iso())
+        with self.error_after_gather(why):
+            self.assertEqual(self.decide(prompt_id="p1"), self.block(self.failed_reason(why)))
+        self.assertEqual(self.decide(prompt_id="p2"), {"systemMessage": Watches.PLAIN_ACK})
+
+    def test_an_error_recorded_after_the_gather_is_what_the_codex_end_block_says(self):
+        self.spawner = self.record_spawn
+        why = "OSError: [Errno 5] Input/output error"
+        self.codex_row(pid=DEAD)  # Codex has ended, with no stop row
+        self.watch(cond={"codex": "r1"}, waiter_detached=True, detached_at=dc.now_iso())
+        with self.error_after_gather(why):
+            self.assertEqual(self.decide(prompt_id="p1"), self.block(self.failed_reason(why)))
+        self.assertEqual(self.decide(prompt_id="p2"), {"systemMessage": Watches.PLAIN_ACK})
         self.assertIsNone(self.decide(prompt_id="p3"))
 
     def test_a_middle_process_that_fails_is_said_and_the_plain_ack_comes(self):
