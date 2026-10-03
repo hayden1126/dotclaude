@@ -337,9 +337,10 @@ class Evaluate(unittest.TestCase):
         self.assertEqual(self.ev(self.green("2.1.290", 3))[0], [])
         self.assertEqual(self.ev(self.green(self.V, 30))[0], [])  # same version: nothing new
 
-    def test_a_due_full_canary_asks_for_the_manual_rearm_check_too(self):
-        self.assertIn("and so is the manual watch-guard re-arm check (docs/delegation.md, Long "
-                      "waits)", self.ev(self.green("2.1.290", 8))[0][0])
+    def test_a_due_full_canary_asks_for_the_manual_checks_too(self):
+        self.assertIn("and so are the manual watch-guard re-arm check and the Codex kill probe "
+                      "(docs/delegation.md, Long waits; due.toml)",
+                      self.ev(self.green("2.1.290", 8))[0][0])
 
     def test_a_failed_full_run_nudges_until_one_passes_even_after_an_upgrade(self):
         canary = self.green("2.1.285", 2)
