@@ -900,8 +900,8 @@ def codex_progress(run_id):
 
 def log_cursor():
     """A fresh scan_log cursor: how far the log has been read, whether a done line was seen,
-    and the log's size at the previous scan."""
-    return {"offset": 0, "done": False, "size": None}
+    whether a fail line was, and the log's size at the previous scan."""
+    return {"offset": 0, "done": False, "failed": False, "size": None}
 
 
 def scan_log(path, done, fail, cursor, pids_gone=None):
@@ -930,6 +930,7 @@ def scan_log(path, done, fail, cursor, pids_gone=None):
     seen = False
     for line, consumed in lines:
         if fail and re.search(fail, line):
+            cursor["failed"] = True
             return "failed"
         if done and re.search(done, line):
             seen = True

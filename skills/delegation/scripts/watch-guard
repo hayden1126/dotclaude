@@ -15,7 +15,9 @@ to wake it. This hook is the enforcement:
     acknowledged: the dead waiter's notification never came, so the lead is told to check the
     result and report it. That is a met condition (done), a failed or stale one, a codex run
     with a stop row (done on exit 0, failed otherwise), or one that never started (failed). A
-    --log condition is checked in the log's last 1 MB only, to keep a stop cheap;
+    --log condition is checked in the log's last 1 MB only, to keep a stop cheap. So when the
+    log is longer than that and its tail has no --fail line, a failed or stale verdict is a
+    lapse instead: the done line may be further back, where the re-armed waiter reads;
   - a codex run that ended without a stop row isn't recorded, since its outcome is unknown
     until it is finalized: the watch stays open and blocks once (end_blocked_at), even after
     its lapse was acknowledged, saying to re-arm it, since the re-armed waiter finalizes the
@@ -146,7 +148,8 @@ Notice = collections.namedtuple("Notice", "task tool_use desc ts pos output")
 # finalize owed: block once with `text`, acknowledged or not, then as a lapse) or "report" (an
 # ended watch nobody heard: record it reported, say `text`).
 Pending = collections.namedtuple("Pending", "kind w text state")
-# A kill's gathered item: its notice, its text, and the watch it folds into (or None).
+# A kill's gathered item: its notice, its text (None when it isn't said), and the watch it
+# folds into (or None).
 Kill = collections.namedtuple("Kill", "notice text fold")
 
 
@@ -171,15 +174,16 @@ def file_size(path):
 # ---- gather: watches ----
 
 def log_tail_cursor(cond):
-    """A scan_log cursor at the first whole line of the log's last LOG_TAIL bytes."""
-    cursor = dc.log_cursor()
+    """A scan_log cursor at the first whole line of the log's last LOG_TAIL bytes, with "tail"
+    True when that cut anything off."""
+    cursor = dict(dc.log_cursor(), tail=False)
     try:
         with open(cond["log"], "rb") as f:
             size = os.fstat(f.fileno()).st_size
             if size > LOG_TAIL:
                 f.seek(size - LOG_TAIL - 1)
                 f.readline()  # the rest of the line the cut fell in, or just a newline
-                cursor["offset"] = f.tell()
+                cursor.update(offset=f.tell(), tail=True)
     except OSError:
         pass  # no log yet: scan_log says so
     return cursor
@@ -212,9 +216,14 @@ def watch_pending(w, shells, now):
         if stage == "ended":  # watch_verdict's done: Codex has ended, its finalize still owed
             return Pending("ended", w, CODEX_ENDED.format(id=wid, desc=desc, run=run), None)
         return Pending("lapse", w, lapsed, None)
-    verdict, why = dc.watch_verdict(w, log_tail_cursor(cond) if cond.get("log") else None, now)
+    cursor = log_tail_cursor(cond) if cond.get("log") else None
+    verdict, why = dc.watch_verdict(w, cursor, now)
     if verdict == "done":
         return Pending("end", w, met, "done")
+    if verdict and cursor and cursor["tail"] and not cursor["failed"]:
+        # Read from the tail alone, with no --fail line there: the done line may be further
+        # back, so only the re-armed waiter, which reads the whole log, can say failed or stale.
+        return Pending("lapse", w, lapsed, None)
     if verdict:  # failed or stale
         return Pending("end", w, JOB_ENDED.format(id=wid, desc=desc, state=verdict, why=why),
                        verdict)
@@ -457,11 +466,13 @@ def map_kill(n, transcript, watches, cwd, spent):
     command, at = found or ("", None)
     if WAITER_RE.search(command):
         named = WAIT_LAUNCH_RE.search(output_head(n.output, spent))
-        return plain._replace(fold=named.group(1) if named else
-                              fold_target(command, at, watches, cwd))
+        fold = named.group(1) if named else fold_target(command, at, watches, cwd)
+        return plain._replace(fold=fold, text=None if resolved(n, fold) else plain.text)
     codex = CODEX_RE.search(command)
     if codex:
         fold, run = codex_target(codex, n.output, spent)
+        if resolved(n, fold):
+            return Kill(n, None, fold)
         open_watch = dc.codex_watch(run) if fold is None and run else None
         wid = fold or (open_watch or {}).get("id")
         text = (CODEX_REARM.format(desc=n.desc, wid=wid) if wid else
@@ -469,6 +480,21 @@ def map_kill(n, transcript, watches, cwd, spent):
                 CODEX_UNKNOWN.format(desc=n.desc))
         return Kill(n, text, fold)
     return plain
+
+
+def resolved(n, wid):
+    """Whether the watch a kill folds into is resolved (dropped, or ended): the lead already
+    handled it, by a codex-delegate cancel or a drop, so saying the kill would only ask for a
+    re-arm that is refused. Logged when so."""
+    try:
+        w = dc.read_watch(wid) if wid else None
+    except ValueError:
+        return False
+    if w and w.get("state") not in dc.UNRESOLVED:
+        checks.log_error(f"watch-guard: kill of task {n.task} folds into watch {wid}, which is "
+                         f"{w.get('state')}, so it isn't said")
+        return True
+    return False
 
 
 def kill_pending(sid, transcript, now, spent, watches, cwd):
@@ -626,9 +652,10 @@ def commit(sid, transcript, adopted, me, pendings, kills, scan_out, stop, size, 
                 outcomes[wid] = "block"
                 ended.add(wid)
             elif p.kind == "ended" and cur.get("end_blocked_at") is None:
-                cur["end_blocked_at"] = iso(now)
-                if cur.get("blocked_at") is None:  # also the lapse's first block
-                    cur.update(blocked_at=iso(now), blocked_stop=stop, blocked_size=size)
+                # This stop is the block now, so a twin guard in it doesn't acknowledge, and a
+                # first block on the watch is also its lapse's.
+                cur.update(end_blocked_at=iso(now), blocked_at=iso(now), blocked_stop=stop,
+                           blocked_size=size)
                 outcomes[wid] = "block"
             elif cur.get("blocked_at") is None:
                 cur.update(blocked_at=iso(now), blocked_stop=stop, blocked_size=size)
@@ -686,7 +713,7 @@ def commit_kills(sid, transcript, kills, scan_out, itemized):
            "offset": max(offsets) if offsets else None}
     if new != rec:
         dc.write_json(kills_path(sid), new)
-    return [k.text for k in taken if k.fold not in itemized]
+    return [k.text for k in taken if k.text is not None and k.fold not in itemized]
 
 
 # ---- the hook ----
