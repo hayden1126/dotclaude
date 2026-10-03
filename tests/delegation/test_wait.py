@@ -605,6 +605,20 @@ class Exits(WaitEnv):
                                   + REARM.format(wid)))
         self.assertEqual(self.only()["id"], wid)
 
+    def test_an_unknown_session_alone_doesnt_match_another_callers_watch(self):
+        # A watch made outside Claude Code is "unknown" too, but it isn't this process's.
+        job = self.job()
+        outside = self.run_("--pid", str(job.pid), "--max", "0.002", CLAUDE_PID="",
+                            CLAUDE_CODE_SESSION_ID="")
+        self.assertEqual(outside.returncode, AT_MAX, outside.stderr)
+        first = self.only()["id"]
+        p = self.run_("--pid", str(job.pid), "--max", "0.002", CLAUDE_CODE_SESSION_ID="")
+        self.assertEqual(p.returncode, AT_MAX, p.stderr)
+        self.assertNotIn("taking it over", p.stdout)
+        watches = {w["id"]: w for w in self.all_watches()}
+        self.assertEqual(len(watches), 2)
+        self.assertNotIn("claude_pid", watches[first])
+
     def test_a_rerun_with_neither_session_nor_process_makes_its_own_watch(self):
         job = self.job()
         none = {"CLAUDE_CODE_SESSION_ID": "", "CLAUDE_PID": ""}
