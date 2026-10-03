@@ -326,6 +326,11 @@ class Unwatchable(unittest.TestCase):
     def setUp(self):
         self.child = subprocess.Popen(["sleep", "60"])
         self.addCleanup(lambda: (self.child.kill(), self.child.wait()))
+        # Popen can return once exec has replaced the child's memory but before the kernel
+        # renames it, so its name can still read "python3" for a moment.
+        end = time.monotonic() + 2
+        while dc.proc_comm(self.child.pid) != "sleep" and time.monotonic() < end:
+            time.sleep(0.01)
 
     def test_a_child_of_this_process_is_watchable_and_named(self):
         self.assertIsNone(dc.unwatchable(self.child.pid))
