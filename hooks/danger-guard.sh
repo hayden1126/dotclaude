@@ -27,13 +27,15 @@
 # error allows the command (exit 0, no decision). Limitation: shell aliases (`g push`)
 # cannot be resolved statically and are not caught.
 
-input=$(cat 2>/dev/null)
-
-python3 - "$input" <<'PY' 2>/dev/null || exit 0
+# The script goes to python3 as -c and the event on stdin: passed as one argv string, an event
+# over 128 KiB (a long heredoc command) would fail the exec and skip the guard.
+IFS= read -r -d '' src <<'PY'
 import sys, json, shlex, os, re
 
 try:
-    data = json.loads(sys.argv[1]) if len(sys.argv) > 1 and sys.argv[1] else {}
+    data = json.loads(sys.stdin.read() or "{}")
+    if not isinstance(data, dict):
+        sys.exit(0)
 except Exception:
     sys.exit(0)
 
@@ -156,3 +158,4 @@ print(json.dumps({
 }))
 sys.exit(0)
 PY
+python3 -c "$src" 2>/dev/null || exit 0
