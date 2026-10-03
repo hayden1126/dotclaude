@@ -32,7 +32,8 @@ class HandoffReminder(unittest.TestCase):
                        "great work \u2014 let's wrap up", "ok - let's wrap up",
                        "thanks let's wrap up", "it's time to wrap up", "let\u2019s wrap up",
                        "let's wrap up today", "let's wrap up \U0001F44D",
-                       "sweep fixes, handoff then push", "handoff"):
+                       "sweep fixes, handoff then push", "handoff", "great work\u2014let's wrap up",
+                       "let's wrap up :)", "let's wrap up now and push", "let's stop here then"):
             with self.subTest(prompt=prompt):
                 self.assertTrue(fires(prompt))
 
@@ -51,7 +52,22 @@ class HandoffReminder(unittest.TestCase):
                        "a handoff would help here", "handoff?", "/clearance", "src/clear/x",
                        "stop here and explain why the test fails",
                        "clear the context for each subagent", "hand off for review",
-                       "don't /clear yet"):
+                       "don't /clear yet", "don't run /clear yet", "no /clear yet",
+                       "can't /clear, it's greyed out"):
+            with self.subTest(prompt=prompt):
+                self.assertFalse(fires(prompt))
+
+    def test_praise_and_identifiers_are_not_commands(self):
+        # A phrase glued to an identifier, praise for a handoff, or a task that follows it.
+        for prompt in ("clear the session_id on logout", "clear the context-menu listeners",
+                       "wipe the memory-mapped cache", "clear the context \u2013 per subagent",
+                       "great handoff!", "nice handoff, thanks", "perfect handoff.",
+                       "nice wrap up!", "the loop exits early: it's stopping here.",
+                       "stop here and call the parser on the fixture",
+                       "stop here then explain why the test fails",
+                       "handoff now works with worktrees?",
+                       "handoff and memory curation are separate steps, right?",
+                       "stop here's why", "wrap up/down"):
             with self.subTest(prompt=prompt):
                 self.assertFalse(fires(prompt))
 

@@ -110,6 +110,8 @@ class SessionSummary(Workspace):
             # A typed prompt is the user's even when it quotes a marker: origin.kind decides.
             user("why did <task-notification> say killed?", origin={"kind": "human"}),
             user("these args are not user input", origin={"kind": "human"}),
+            # isMeta always drops: a skill body is never the user's words, whatever its origin.
+            user("Base directory for this skill: y", origin={"kind": "human"}, isMeta=True),
         ]
         self.assertEqual(self.dialogue(entries).splitlines(),
                          ["User: fix the parser", "Assistant: Fixed.",

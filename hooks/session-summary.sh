@@ -100,20 +100,22 @@ except OSError:
 
 # Injected content (a background task's notice, another agent's message, a slash command's
 # echo, a skill body) is stored as a user entry too, but the user didn't say it: leave it out,
-# so it neither takes a RECENT_MSGS slot nor gets summarized as the user's request. origin.kind
-# decides when present ("human" for a typed prompt, "peer" or "task-notification" otherwise);
-# isMeta and the markers only for an entry without one. Keep INJECTED in sync with
-# handoff-reminder.sh's rule 1 (tests/setup/test_hook_payloads.py checks).
+# so it neither takes a RECENT_MSGS slot nor gets summarized as the user's request. isMeta always
+# drops it; otherwise origin.kind decides when present ("human" for a typed prompt, "peer" or
+# "task-notification" otherwise), and the markers only for an entry without one. Keep INJECTED
+# in sync with handoff-reminder.sh's rule 1 (tests/setup/test_hook_payloads.py checks).
 INJECTED = ("[system notification", "not user input", "<task-notification", "<system-reminder",
             "</system-reminder", "automated background-task", "hook success", "<command-name>",
             "<command-message>", "<local-command", "<agent-message", "[subagent hand-back]",
             "<cross-session-message", "<teammate-message")
 
 def injected(o, text):
+    if o.get("isMeta"):
+        return True
     kind = (o.get("origin") or {}).get("kind")
     if kind is not None:
         return kind != "human"
-    return bool(o.get("isMeta")) or any(m in text.lower() for m in INJECTED)
+    return any(m in text.lower() for m in INJECTED)
 
 def recent_dialogue(path, chunk=131072):
     """Last RECENT_MSGS user/assistant text messages from the transcript tail."""

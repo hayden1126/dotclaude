@@ -15,17 +15,15 @@ set -uo pipefail
 
 # A subagent's or teammate's payload carries agent_id: never theirs to hand off. -I keeps the
 # current directory off sys.path, so a project's own json.py can't run here. A curly apostrophe
-# reads as a straight one, and a dash between words as a clause break ("great work — wrap up").
+# reads as a straight one.
 prompt="$(python3 -I -c '
-import json, re, sys
+import json, sys
 d = json.load(sys.stdin)
 if d.get("agent_id"):
     sys.exit(3)
 p = d.get("prompt")
 p = p if isinstance(p, str) else ""
-dashes = chr(0x2013) + chr(0x2014)  # en and em dash; chr keeps the source ASCII, quote-free
-p = p.replace(chr(0x2019), chr(39))
-p = re.sub(r"\s[-" + dashes + r"]+\s|[" + dashes + "]", ", ", p)
+p = p.replace(chr(0x2019), chr(39))  # chr keeps this block ASCII and free of a quote
 sys.stdout.buffer.write(p.encode("utf-8", "replace"))
 ' 2>/dev/null)" || exit 0
 
@@ -63,23 +61,33 @@ words="$(wc -w <<<"$prompt" | tr -d '[:space:]')"
 [ "${words:-999}" -gt 18 ] && exit 0
 
 # 4. Explicit context-reset command in a terse message, punctuation or backticks around it allowed,
-#    but not advice against it ("don't /clear yet").
+#    but not advice against it: a negation up to three words before it ("don't run /clear yet").
+NEG="(^|[^[:alnum:]])(don't|dont|do not|never|not|no|can't|cant|cannot|won't|without)([[:space:]]+[[:alnum:]'-]+){0,3}[[:space:]]+[\`\"(]?/clear"
 if grep -qiE '(^|[[:space:]`"(])/clear([[:space:]`").,!?;:]|$)' <<<"$prompt" \
-   && ! grep -qiE "(don'?t|do not|never|not|no need to|without)[[:space:]]+(to[[:space:]]+)?[\`\"(]?/clear" <<<"$prompt"; then
+   && ! grep -qiE "$NEG" <<<"$prompt"; then
   emit; exit 0
 fi
 
-# 5. Otherwise fire only on an intent-bearing wrap-up phrase at the start of a clause (A), after
-#    optional lead-ins (P), ending its clause (T): punctuation, the end, or a word that keeps it a
-#    wrap-up ("now", "for today", "and push"), never "stop here and explain why". "hand off" counts
-#    only in COMMAND form: spaced or hyphenated at a clause start, with a suffix, the closed
-#    "handoff" after a lead-in, or alone in its clause ("handoff then push"; not "handoff?").
-A='(^|[.!?;:,])[[:space:]]*'
-P="((let'?s|lets|it'?s|time to|ok,?|okay,?|alright,?|so,?|thanks,?|thank you,?|great,?|cool,?|perfect,?|nice,?|please|just|i'?ll|i'?m|we'?re|we can|can we|should we|shall we|now,?|ready to|about to) +)"
+# 5. Otherwise fire only on an intent-bearing wrap-up phrase (W) at the start of a clause (A, where
+#    a dash between words also starts one), after optional lead-ins (P; an interjection like
+#    "great" or "thanks" only before one, so "nice wrap up!" stays praise), and ending its clause
+#    (T): clause punctuation, the end, an emoji, a word that keeps it a wrap-up ("now", "for
+#    today"), or a next wrap-up step ("and push"), never "stop here and explain why" or "clear the
+#    session_id". "hand off" counts only in COMMAND form: spaced or hyphenated at a clause start,
+#    with a suffix, the closed "handoff" after a lead-in, or alone in its clause ("handoff then
+#    push"; not "handoff?" or "handoff now works?").
+A='(^|[.!?;:,]|—|–|[[:space:]]-[[:space:]])[[:space:]]*'
+P="((let'?s|lets|it'?s time to|time to|ok,?|okay,?|alright,?|so,?|please|just|i'?ll|i'?m|we'?re|we can|can we|should we|shall we|now,?|ready to|about to) +)"
+PI="((thanks|thank you|great|cool|perfect|nice|awesome)( work| job)?,? +)"
 W="(wrap(ping)? (this |it )?up|wrap(ping)? up (the |this )?session|call(ing)? it (a day|for the day|for the night|here|quits)|stop(ping)? here|stop for (the day|now|today)|end (of )?(the |this )?session|that'?s a wrap|wipe (the )?(context|memory)|clear (the )?(memory|context|session|chat|conversation)|hand[ -]off|hand[ -]?off (now|here|please|for real|time)|do a hand[ -]?off|hand (it|this|things) off)"
-T='([[:space:]]*([^[:alnum:][:space:]]|$)|[[:space:]]+(now|please|then|here|so|today|tonight|for (today|now|the day|tonight|the night)|and (then |also )?(hand|push|commit|stop|close|end|clear|wrap|call))([^[:alnum:]]|$))'
-BARE='[[:space:]]*([.!]|$)|[[:space:]]+(now|please|then|and|time)([^[:alnum:]]|$)'
-if grep -qiE "${A}${P}*${W}${T}|${A}${P}+handoff${T}|${A}handoff(${BARE})" <<<"$prompt"; then
+END='[[:space:]]*([.!?;:,)]|$)'
+ENDNQ='[[:space:]]*([.!;:,)]|$)'
+SYM='[[:space:]]+[^[:alnum:][:space:]]+[[:space:]]*$'
+TAILW='(now|please|here|then|so|today|tonight|for (today|now|the day|tonight|the night))'
+NEXT='(and|then|so)( then| also)? (hand[ -]?off|push|commit|wrap( it| this)? up|call it a day|clear (the )?(context|session|chat)|end (the )?session|close (it )?out)'
+T="(${END}|${SYM}|([[:space:]]+${TAILW})+(${END}|${SYM})|([[:space:]]+${TAILW})*[[:space:]]+${NEXT}(${END}|${SYM}))"
+BARE="${ENDNQ}|([[:space:]]+(now|please|then|time))+${ENDNQ}|([[:space:]]+(now|then))*[[:space:]]+${NEXT}${ENDNQ}"
+if grep -qiE "${A}(${PI}${P}+|${P}*)${W}${T}|${A}(${PI})?${P}+handoff${T}|${A}handoff(${BARE})" <<<"$prompt"; then
   emit; exit 0
 fi
 
