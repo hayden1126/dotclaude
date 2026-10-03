@@ -915,8 +915,8 @@ def codex_progress(run_id):
 
 def log_cursor():
     """A fresh scan_log cursor: how far the log has been read, whether a done line was seen,
-    whether a fail line was, and the log's size at the previous scan."""
-    return {"offset": 0, "done": False, "failed": False, "size": None}
+    whether a fail line was, and which file was read ((st_dev, st_ino), None before a read)."""
+    return {"offset": 0, "done": False, "failed": False, "file": None}
 
 
 def scan_log(path, done, fail, cursor, pids_gone=None, quiet_s=WAIT_POLL_S, now=None):
@@ -924,34 +924,35 @@ def scan_log(path, done, fail, cursor, pids_gone=None, quiet_s=WAIT_POLL_S, now=
     once a line has matched `done`, else None. Lines are matched once complete. A last line
     with no newline yet may still be being written, so it is matched only once the job is over:
     when the watch's pids are gone (`pids_gone`), or, for a watch with no pids (None), when the
-    log hasn't changed for a poll: its size is the previous scan's, or, on a cursor with none
-    (a first scan), it was last modified `quiet_s` or more before `now`. A log that shrank
-    (rewritten or rotated) is read again from the start."""
+    log hasn't been modified for a poll (`quiet_s`) before `now`. A size that held between two
+    scans doesn't count, since a writer whose output is buffered can pause mid-line. A log that
+    shrank, or is another file than the one read (rewritten as a new file, rotated, a symlink
+    re-pointed), is read again from the start. Each pattern is compiled once a scan."""
     try:
         with open(path, "rb") as f:
             st = os.fstat(f.fileno())
-            size = st.st_size
-            if size < cursor["offset"]:
+            ident = (st.st_dev, st.st_ino)
+            if st.st_size < cursor["offset"] or cursor["file"] not in (None, ident):
                 cursor.update(offset=0, done=False)
+            cursor["file"] = ident
             f.seek(cursor["offset"])
             data = f.read()
     except OSError:
         return None  # no log yet
     now = time.time() if now is None else now
-    settled = (pids_gone if pids_gone is not None else size == cursor["size"]
-               or (cursor["size"] is None and now - st.st_mtime >= quiet_s))
-    cursor["size"] = size
+    settled = pids_gone if pids_gone is not None else now - st.st_mtime >= quiet_s
     whole, newline, partial = data.rpartition(b"\n")
     cursor["offset"] += len(whole) + len(newline)
     lines = [(line, True) for line in whole.decode("utf-8", "replace").splitlines()]
     if partial and settled:
         lines.append((partial.decode("utf-8", "replace"), False))
+    fail_re, done_re = (re.compile(p) if p else None for p in (fail, done))
     seen = False
     for line, consumed in lines:
-        if fail and re.search(fail, line):
+        if fail_re and fail_re.search(line):
             cursor["failed"] = True
             return "failed"
-        if done and re.search(done, line):
+        if done_re and done_re.search(line):
             seen = True
             cursor["done"] = cursor["done"] or consumed
     return "done" if seen or cursor["done"] else None

@@ -347,29 +347,8 @@ class Unwatchable(unittest.TestCase):
 
 
 class ScanLog(unittest.TestCase):
-    def test_a_partial_line_matches_once_it_settles_or_the_pids_are_gone(self):
-        with tempfile.TemporaryDirectory() as d:
-            log = os.path.join(d, "job.log")
-            with open(log, "w") as f:
-                f.write("seen\nOK")
-            cur = dc.log_cursor()
-            self.assertIsNone(dc.scan_log(log, "^OK$", None, cur))           # a new size
-            self.assertEqual(dc.scan_log(log, "^OK$", None, cur), "done")    # unchanged a poll
-            cur = dc.log_cursor()
-            for _ in range(2):  # the pids still run: a partial line may not be finished
-                self.assertIsNone(dc.scan_log(log, "^OK$", None, cur, pids_gone=False))
-            self.assertEqual(dc.scan_log(log, "^OK$", None, cur, pids_gone=True), "done")
-            with open(log, "a") as f:
-                f.write("AY")
-            cur = dc.log_cursor()
-            for _ in range(2):  # the finished line is OKAY, which doesn't match
-                self.assertIsNone(dc.scan_log(log, "^OK$", None, cur))
-
-
-class FirstScan(unittest.TestCase):
-    """A first scan has no earlier size to compare, so a partial last line counts as finished
-    once the log has been quiet for a poll: a re-armed waiter, or the guard, reading a log
-    whose last line is an unterminated done line."""
+    """scan_log: a partial last line counts as finished only once the log has been quiet for a
+    poll (its mtime), or its pids are gone; a replaced file is read from its start."""
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -379,16 +358,56 @@ class FirstScan(unittest.TestCase):
             f.write("seen\nOK")
         self.now = time.time()
 
-    def age(self, s):
-        os.utime(self.log, (self.now - s, self.now - s))
+    def age(self, s, path=None):
+        os.utime(path or self.log, (self.now - s, self.now - s))
 
-    def test_a_partial_line_quiet_for_a_poll_matches_on_a_first_scan(self):
+    def scan(self, cur, **kw):
+        return dc.scan_log(self.log, "^OK$", None, cur, quiet_s=15, now=self.now, **kw)
+
+    def test_a_partial_line_matches_once_quiet_for_a_poll_or_its_pids_are_gone(self):
         self.age(1)  # just written: it may still be being written
-        self.assertIsNone(dc.scan_log(self.log, "^OK$", None, dc.log_cursor(), quiet_s=15,
-                                      now=self.now))
+        cur = dc.log_cursor()
+        for _ in range(2):  # a size that held between scans isn't quiet: output can buffer
+            self.assertIsNone(self.scan(cur))
         self.age(15)
-        self.assertEqual(dc.scan_log(self.log, "^OK$", None, dc.log_cursor(), quiet_s=15,
-                                     now=self.now), "done")
+        self.assertEqual(self.scan(cur), "done")
+        cur = dc.log_cursor()
+        for _ in range(2):  # the pids still run: a partial line may not be finished
+            self.assertIsNone(self.scan(cur, pids_gone=False))
+        self.assertEqual(self.scan(cur, pids_gone=True), "done")
+        with open(self.log, "a") as f:
+            f.write("AY")
+        self.age(60)
+        self.assertIsNone(self.scan(dc.log_cursor()))  # the finished line is OKAY
+
+    def test_a_log_replaced_by_another_file_is_read_from_its_start(self):
+        with open(self.log, "w") as f:
+            f.write("old run\n")
+        cur = dc.log_cursor()
+        self.assertIsNone(self.scan(cur))
+        new = os.path.join(self.tmp.name, "new.log")
+        with open(new, "w") as f:
+            f.write("OK\nand the new run goes on past the old offset\n")
+        os.replace(new, self.log)  # `> log` from a new process, or a rotation
+        self.assertEqual(self.scan(cur), "done")
+        link = os.path.join(self.tmp.name, "current.log")
+        os.symlink(self.log, link)
+        cur = dc.log_cursor()
+        self.assertEqual(dc.scan_log(link, "^OK$", None, cur), "done")
+        other = os.path.join(self.tmp.name, "other.log")
+        with open(other, "w") as f:
+            f.write("a longer first line, then the done line\nOK\n")
+        os.remove(link)
+        os.symlink(other, link)  # re-pointed
+        cur["done"] = False
+        self.assertEqual(dc.scan_log(link, "^OK$", None, cur), "done")
+
+    def test_each_pattern_is_compiled_once_a_scan(self):
+        with open(self.log, "w") as f:
+            f.write("line\n" * 500)
+        with mock.patch.object(dc.re, "compile", wraps=dc.re.compile) as compiled:
+            dc.scan_log(self.log, "^OK$", "^ERROR", dc.log_cursor())
+        self.assertEqual(compiled.call_count, 2)
 
     def test_an_old_unterminated_done_line_is_done_not_stale(self):
         self.age(7200)
