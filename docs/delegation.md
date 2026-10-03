@@ -289,12 +289,13 @@ from 60 to 5,000 requests an hour.
   the guard starts when it acknowledges a lapse, read the whole log (the gap "An acknowledged
   lapse is heard at a stop, not at the moment").
 - **A run of over 1 MB with no newline is cut.** A waiter, and the guard, hold at most 1 MB of
-  a log line that has no newline (`MAX_LINE`); past that they match the run as it stands, then
-  drop it and read on, so memory stays bounded. A `--done` or `--fail` match that spans the cut
-  is missed, which leaves the condition unmet (a lapse, said once, then silent once
-  acknowledged), and a pattern anchored to a line's start or end can match at the cut. Such
-  runs are mostly progress bars redrawn with carriage returns, which a condition shouldn't key
-  on.
+  a log line that has no newline (`MAX_LINE`); past that they match the run as it stands, split
+  at its carriage returns as a complete line is, then drop it and read on, so memory stays
+  bounded. A `--done` or `--fail` match that spans the cut is missed. A missed done line can
+  end the watch failed (its `--pid` exits with the line unseen) or stale (`--stale`); a missed
+  fail line can let a later done line end it done. A pattern anchored to a line's start or end
+  can also match at the cut. Such runs are mostly progress bars redrawn with carriage returns,
+  which a condition shouldn't key on.
 - **The duplicate refusal is per run, across sessions.** A second `wait --codex` on a run that
   any session watches is refused. While that watch's waiter is alive and someone will hear it,
   the refusal says the waiter will notify its session. Someone will hear it while its Claude
@@ -846,14 +847,16 @@ the fix is enforcement. `PLAN.md` has the design history and the options weighed
   so it never gets the "do not restart" note. A last log line with no newline counts once the
   log has been quiet for a poll (its mtime): that catches a writer still writing, though not
   one that pauses mid-line for longer. The guard, whose verdict is final, never matches such
-  a line; one that would change an ended verdict makes it uncertain instead ("its last line
-  has no newline yet ..."), for a waiter to settle. A run of more than 1 MB with no newline
+  a line; one that would change the verdict, ended or unmet, makes it uncertain instead ("its
+  last line has no newline yet ..."), for a waiter to settle. A last line, matched, splits at
+  its carriage returns as a complete line does. A run of more than 1 MB with no newline
   (`MAX_LINE`: a progress bar's carriage returns, say) is the exception, for both: it is
   matched as it stands, then dropped and read past, so memory stays bounded, and a pattern
   can miss, or match, where that cut falls. A log replaced by another file (a new inode, as a
   rotation by rename leaves) is read from its start, but a done line already seen stays seen,
   whatever the new file's size; the same file rewritten shorter is read again from the start,
-  forgetting what was seen.
+  forgetting what was seen. A log that is gone (deleted at the job's exit, or renamed away
+  with no new one yet) keeps what was seen, so a done line seen before still counts.
   - Conditions: `--pid N` (repeatable: all have exited), `--file PATH` (it exists),
     `--log PATH --done RE` (a matching line; `--fail RE` fails it and `--stale MIN` ends it as
     stale), and `--codex RUN_ID` (Codex has ended; the waiter then runs `codex-delegate finalize`
@@ -1380,11 +1383,11 @@ wins.
     killed at 60 s and `status` said `detached: running (its wrapper is gone; ...)`. The guard
     blocked once with the kill folded in, and the re-arm finalized the run with `rc` 0 from
     `codex.rc`, the report done and the audit ok. The work was right.
-  - A live end-to-end run of the guard's detached waiter (2026-10-03; the version wasn't
-    recorded): a waiter lapsed at its `--max`, the next stop blocked once, and the stop after
-    acknowledged the lapse and started the detached waiter (pid 68383). About 23 s after the
-    job ended, that waiter recorded the watch done, with `reported: false` and its `end_why`,
-    and the next stop said it once (`DETACHED_ENDED`).
+  - A live end-to-end run of the guard's detached waiter (2.1.286, read from the session's
+    `CLAUDE_CODE_EXECPATH`, 2026-10-03): a waiter lapsed at its `--max`, the next stop blocked
+    once, and the stop after acknowledged the lapse and started the detached waiter (pid
+    68383). About 23 s after the job ended, that waiter recorded the watch done, with
+    `reported: false` and its `end_why`, and the next stop said it once (`DETACHED_ENDED`).
 - **Claude Code stops a background command with SIGTERM, then SIGKILL** (2.1.286, 2026-10-02,
   a signal-logging background command outside the sandbox). Both a manual stop (TaskStop) and
   the time-limit kill sent SIGTERM only. The logger handled it and was gone within about 2 s,

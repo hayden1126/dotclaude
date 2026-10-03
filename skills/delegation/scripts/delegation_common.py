@@ -952,11 +952,13 @@ def scan_log(path, done, fail, cursor, pids_gone=None, quiet_s=WAIT_POLL_S, now=
     each chunk (the waiter beats there). A run of more than MAX_LINE bytes with no newline (a
     progress bar's carriage returns, say) is matched as it stands, settled or not, then dropped
     and read past, so memory stays bounded; a pattern can miss, or match, where that cut falls.
-    Each pattern is compiled once a scan."""
+    Such a run, and a settled last line, split into lines as a complete one does (splitlines:
+    at a carriage return too). Each pattern is compiled once a scan. A log that is gone (not
+    written yet, deleted at exit, renamed away with no new one yet) keeps what was seen."""
     try:
         f = open(path, "rb")
-    except OSError:
-        return None  # no log yet
+    except OSError:  # no log now: what was seen stands, and a fresh cursor has seen nothing
+        return "failed" if cursor["failed"] else "done" if cursor["done"] else None
     with f:
         st = os.fstat(f.fileno())
         ident = (st.st_dev, st.st_ino)
@@ -976,7 +978,7 @@ def scan_log(path, done, fail, cursor, pids_gone=None, quiet_s=WAIT_POLL_S, now=
             lines = whole.decode("utf-8", "replace").splitlines()
             read = len(whole) + len(newline)
             if len(carry) > MAX_LINE:  # no newline in sight: matched as it stands, then dropped
-                lines.append(carry.decode("utf-8", "replace"))
+                lines += carry.decode("utf-8", "replace").splitlines()
                 read, carry = read + len(carry), b""
             for line in lines:
                 if fail_re and fail_re.search(line):
@@ -992,10 +994,11 @@ def scan_log(path, done, fail, cursor, pids_gone=None, quiet_s=WAIT_POLL_S, now=
     settled = settle and (pids_gone if pids_gone is not None
                           else now - st.st_mtime >= quiet_s)
     if partial and settled:
-        if fail_re and fail_re.search(partial):
+        lines = partial.splitlines()
+        if fail_re and any(fail_re.search(line) for line in lines):
             cursor["failed"] = True
             return "failed"
-        if done_re and done_re.search(partial):
+        if done_re and any(done_re.search(line) for line in lines):
             return "done"
     return "done" if cursor["done"] else None
 
@@ -1336,8 +1339,12 @@ class Waiter:
 
     def fail(self, why):
         """Record why this waiter stops with no end (end_error), while it still owns the
-        watch: a detached waiter's error reaches no one otherwise."""
+        watch: a detached waiter's error reaches no one otherwise. It reopens the watch
+        (unblock), as its beats do, so the guard's next block is a first one and says the
+        error, even when a guard blocked on the watch since its last beat."""
         def fail(w):
             self.own(w)
             w["end_error"] = why
+            if w.get("state") in UNRESOLVED:
+                unblock(w)
         return update_watch(self.wid, fail)
