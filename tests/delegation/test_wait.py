@@ -301,8 +301,8 @@ class Conditions(WaitEnv):
         w = self.waiting(p)
         self.end(job)
         out, _ = self.finish(p, 1)
-        self.assertEqual(out, f"watch {w['id']} failed: pid {job.pid} (sleep) exited, but "
-                              f"{self.path('never')} exists is unmet\n")
+        self.assertEqual(out, f"watch {w['id']} failed: pid {job.pid} (sleep) exited, but \""
+                              f"{self.path('never')} exists\" is unmet\n")
 
     def test_a_pid_not_running_at_the_start_is_refused(self):
         p = self.run_("--pid", str(DEAD))
@@ -1549,7 +1549,7 @@ class Views(WaitEnv):
             "watches:", f"  {wid}  '{target} exists'  ended done while no Claude Code process "
                         "was listening ⚠ check the result"])
         out = self.cli("open").splitlines()
-        self.assertEqual(out[1:3], ["watches:", f"  {wid}  done  '{target} exists'  waited for "
+        self.assertEqual(out[1:3], ["watches:", f"  {wid}  done  '{target} exists'  waited until "
                                                 f"{target} exists"])
         self.assertTrue(out[3].startswith("         ended done while no Claude Code process was "
                                           "listening ⚠ check the result (ended "), out)

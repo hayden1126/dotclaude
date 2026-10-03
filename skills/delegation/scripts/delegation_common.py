@@ -1054,7 +1054,7 @@ def watch_verdict(w, cursor=None, now=None, settle=True, between=None):
     if not unmet:
         return "done", condition_text(c)
     if pids and not running:
-        return "failed", f"{_pid_names(pids)} exited, but {' and '.join(unmet)} is unmet"
+        return "failed", f"{_pid_names(pids)} exited, but \"{' and '.join(unmet)}\" is unmet"
     if c.get("stale_min"):
         try:
             changed = os.path.getmtime(c["log"])

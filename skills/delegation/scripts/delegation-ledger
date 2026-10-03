@@ -619,7 +619,7 @@ def watch_block(ctx, now, horizon, detail):
                 news = (f"ended {w.get('state')} while no Claude Code process was listening ⚠ "
                         "check the result")
                 lines += ([f"  {wid}  {desc!r}  {news}"] if not detail else
-                          [f"  {wid}  {w.get('state')}  {desc!r}  waited for {cond}",
+                          [f"  {wid}  {w.get('state')}  {desc!r}  waited until {cond}",
                            f"         {news} (ended {w.get('ended')}, session "
                            f"{w.get('session_id')})"])
             continue
@@ -651,7 +651,7 @@ def watch_block(ctx, now, horizon, detail):
                     " min ago")
         except (KeyError, TypeError, ValueError):
             beat = "no heartbeat"
-        lines.append(f"  {wid}  {w.get('state')}  {desc!r}  waiting for {cond}")
+        lines.append(f"  {wid}  {w.get('state')}  {desc!r}  waiting until {cond}")
         lines.append(f"         session {w.get('session_id')} {session}, {waiter}, {beat}"
                      + ("" if alive and not unheard else
                         f"; its exit reaches nobody; {rearm}" if unheard else f"; {rearm}"))
