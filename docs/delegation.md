@@ -286,7 +286,15 @@ from 60 to 5,000 requests an hour.
   that could be further back and saying to re-arm the watch: the re-armed waiter reads the
   whole log and decides. An unmet condition is a lapse, so a done line already out of the tail
   is missed by the guard. The waiters close that: a re-armed waiter, and the detached waiter
-  the guard starts when it acknowledges a lapse, read the whole log (the next gap).
+  the guard starts when it acknowledges a lapse, read the whole log (the gap "An acknowledged
+  lapse is heard at a stop, not at the moment").
+- **A run of over 1 MB with no newline is cut.** A waiter, and the guard, hold at most 1 MB of
+  a log line that has no newline (`MAX_LINE`); past that they match the run as it stands, then
+  drop it and read on, so memory stays bounded. A `--done` or `--fail` match that spans the cut
+  is missed, which leaves the condition unmet (a lapse, said once, then silent once
+  acknowledged), and a pattern anchored to a line's start or end can match at the cut. Such
+  runs are mostly progress bars redrawn with carriage returns, which a condition shouldn't key
+  on.
 - **The duplicate refusal is per run, across sessions.** A second `wait --codex` on a run that
   any session watches is refused. While that watch's waiter is alive and someone will hear it,
   the refusal says the waiter will notify its session. Someone will hear it while its Claude
