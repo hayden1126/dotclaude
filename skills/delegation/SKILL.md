@@ -240,10 +240,11 @@ is no need to poll.
 A run can outlast the Bash tool's 2-hour cap. The wrapper exits first: at `--max-wait` (110
 minutes) it prints the re-arm command and exits 75, and Codex keeps running. Run the command it
 printed, in the background with the same timeout; that waiter finalizes the run once Codex
-ends. If the wrapper is killed anyway, Codex keeps running too (it writes its own event log in
-its own session), and the watch guard blocks your next stop with the same re-arm command.
-If Codex has ended by then with nobody to finalize it, that block says to run
-`codex-delegate finalize <run_id>` instead.
+ends. If the wrapper is killed anyway, Codex keeps running too (it runs under a supervisor
+detached from the wrapper's process tree), and the watch guard blocks your next stop with the
+same re-arm command. If Codex has ended by then, that block still says to re-arm: the waiter
+finalizes the run and its exit notice carries the result. Stopping the background task no
+longer stops Codex; `codex-delegate cancel <run_id>` does.
 `status` says where a run is, and `finalize` records the result by hand.
 
 ```bash
@@ -251,6 +252,7 @@ codex-delegate run --model sol --dir ~/some/repo --brief brief.md [--network] [-
 codex-delegate status              # verdict with evidence, phase, exit/report/audit results
 codex-delegate resume <run_id> --prompt fix.md
 codex-delegate finalize <run_id>   # a run whose wrapper died: report check, audit, stop row
+codex-delegate cancel <run_id>     # stop a running run on purpose; drops its watch
 codex-delegate audit <thread_id>   # every model the thread and its sub-agents used
 ```
 
@@ -268,6 +270,8 @@ codex-delegate audit <thread_id>   # every model the thread and its sub-agents u
   - 75: still running: re-arm with the printed command;
   - 124: timed out;
   - 143: killed by SIGTERM or SIGHUP while Codex ran; Codex keeps running, and the watch
-    guard's next block prints the re-arm command.
+    guard's next block prints the re-arm command;
+  - `cancel` exits 0 once the run is stopped, and 2 for an unknown run or one that isn't
+    running. The cancelled run's wrapper, if still running, exits 1.
 - **Scope:** send Codex only the work it does better, such as anything about its own
   configuration. Claude does the rest.
