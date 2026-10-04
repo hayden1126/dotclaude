@@ -11,6 +11,10 @@ Base: `main`. For branch / PR / push state, run `gh pr list` and `git log main..
 stored here).
 
 ## Done (recent; git, the linked plans and memory hold the detail)
+- **`rm` no longer asks, merged in PR #65 and installed on HAYPC** (2026-10-03, Hayden's call).
+  The deletion rule in `CLAUDE.md` and `codex/AGENTS.md` is scoped to match. README holds the
+  snippet that brings the asks back per machine; [[dotclaude-danger-guard-retired]] holds why a
+  hook couldn't exempt agents instead. Other machines take it per "Other machines" below.
 - **Permission rules replaced danger-guard** (PR #64, installed on HAYPC): deny destructive git,
   ask before `git push`. README says what's covered and what's caught by mistake.
 - **Also merged and live:** the hook payload sweep (PR #63; README's hook entries,
@@ -23,11 +27,6 @@ stored here).
   https://claude.ai/artifact/KWwrPkLsbMUi7Ugjfskqsz (republish by that URL).
 
 ## In flight
-- **`rm` no longer asks: on its own PR, already installed on HAYPC** (2026-10-03, Hayden's call). The
-  six `rm` ask rules are gone, and the deletion rule in `CLAUDE.md` and `codex/AGENTS.md` is
-  scoped to match. **Next: merge the PR** (`gh pr list`); other machines then take it per "Other
-  machines" below. README holds the snippet that brings the asks back per machine;
-  [[dotclaude-danger-guard-retired]] holds why a hook couldn't exempt agents instead.
 - **The delegation post: on `main`, revised in PR #60, not yet on Medium.**
   - **Files:** `docs/prose-is-not-a-permission.md` and `docs/images/delegation-layers.*`; the code
     links pin to `7ed72e9`, on `main`.
