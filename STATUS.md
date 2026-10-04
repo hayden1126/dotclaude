@@ -6,11 +6,17 @@
 > [[dotclaude-chrome-devtools-wsl]]). Per-effort design lives in the repo's `PLAN.md` or its doc,
 > not only under `~/.claude/plans/`, which the next plan overwrites ([[plan-file-not-durable]]).
 
-Last updated: 2026-10-03
+Last updated: 2026-10-04
 Base: `main`. For branch / PR / push state, run `gh pr list` and `git log main..HEAD` (derive it; not
 stored here).
 
 ## Done (recent; git, the linked plans and memory hold the detail)
+- **Sandbox gap fixes, on branch `fix/sandbox-gaps` and installed on HAYPC** (2026-10-04, not yet
+  pushed). `denyWrite` now covers the repo files that run outside the sandbox (`statusline/`,
+  `notify-toast.ps1`, `codex/`, `setup.sh` and the scripts and lists it installs from), and
+  `denyRead` covers tool tokens and shell history; `test_settings.py` pins both. Hayden's calls
+  and the findings: `~/scratch/sandbox-audit/FINDINGS.md` (private). Verified live: `test -w`
+  fails on all 14 files, and a sandboxed `npm config get registry` still works.
 - **`rm` no longer asks, merged in PR #65 and installed on HAYPC** (2026-10-03, Hayden's call).
   The deletion rule in `CLAUDE.md` and `codex/AGENTS.md` is scoped to match. README holds the
   snippet that brings the asks back per machine; [[dotclaude-danger-guard-retired]] holds why a
@@ -88,15 +94,15 @@ stored here).
     `false` means "nobody has said". Revisit when S3 enforces the storyboard MUST/NEVER grammar.
 
 ## Blocked / decisions needed
-- **Sandbox gap audit (2026-10-04): Hayden chooses, the next session fixes.** Two fixes need no
-  decision (sandbox `denyWrite` gaps); four need Hayden's call. The findings, each with its check
-  command and a recommendation, are private (this repo is public) in
-  `~/scratch/sandbox-audit/FINDINGS.md`, next to the `rm` scan script. Re-verify each finding
-  before fixing; ship the fixes as one branch with `tests/delegation/test_settings.py` pins.
+- **Push `fix/sandbox-gaps` and open its PR** (Hayden approves the push). It carries the two
+  STATUS commits from `chore/status-after-65`, which can then be deleted.
+- **Rescan the `rm` gap around 2026-11-04** (kept as a known gap, Hayden's call):
+  `python3 -I ~/scratch/sandbox-audit/rm_scan.py 2026-11-04`. Sending the drafted
+  `$CLAUDE_JOB_DIR/tmp` bug report is Hayden's call; `CLAUDE.md` carries the workaround.
 
 ## Notes for next session
-- **Next:** the sandbox gap decisions and fixes (Blocked / decisions needed). Then the new-device
-  parity audit (In flight), starting with the inventory of HAYPC's local-only pieces. The
+- **Next:** the new-device parity audit (In flight), starting with the inventory of HAYPC's
+  local-only pieces. Other machines pick up the sandbox fixes with the usual `./setup.sh`. The
   delegation post waits on Hayden's read.
 - **Verify delegation before touching it:** `python3 -m unittest discover -s tests/delegation -t
   tests/delegation` and the same for `tests/setup` make no model calls and pass inside the sandbox
