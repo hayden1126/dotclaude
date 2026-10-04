@@ -76,9 +76,11 @@ copy_managed "$MERGED_SETTINGS" "$CLAUDE_DIR/settings.json"
 link "$REPO_DIR/CLAUDE.md"       "$CLAUDE_DIR/CLAUDE.md"
 link "$REPO_DIR/notify-toast.ps1" "$CLAUDE_DIR/notify-toast.ps1"
 
-# hooks/ — per-file so plugin-installed hooks in ~/.claude/hooks/ are left alone
+# hooks/ — per-file so plugin-installed hooks in ~/.claude/hooks/ are left alone. The .py
+# modules beside the shims link too: where `ln -s` copies (git-bash without winsymlinks), a shim
+# finds its module next to the copy.
 chmod +x "$REPO_DIR"/hooks/*.sh
-for f in "$REPO_DIR"/hooks/*.sh; do
+for f in "$REPO_DIR"/hooks/*.sh "$REPO_DIR"/hooks/*.py; do
   [[ -e "$f" ]] || continue
   link "$f" "$CLAUDE_DIR/hooks/$(basename "$f")"
 done
@@ -324,10 +326,11 @@ cat <<'EOF'
      inside Claude Code with /mcp.
 
  4.  Windows/WSL only: the Stop + Notification hooks call powershell.exe. The
-     sound hooks are inline in settings.json; the toast goes through
-     hooks/notify.sh (WSL via wslpath, native Windows via cygpath) and renders
-     notify-toast.ps1. On macOS/Linux, swap them for your platform's notifier
-     (osascript / notify-send).
+     sounds come from hooks/stop-ring.sh and hooks/notify.sh, only for a session
+     you see (hooks/session-pane.sh); the toast goes through hooks/notify.sh
+     (WSL via wslpath, native Windows via cygpath) and renders notify-toast.ps1.
+     On macOS/Linux, swap them for your platform's notifier (osascript /
+     notify-send). For the tmux window indicator, run ./setup-tmux.sh once.
 
  5.  The session-title hook (hooks/session-title.sh) needs python3 on PATH;
      if absent it fails open (leaves the title unchanged).

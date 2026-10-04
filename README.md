@@ -246,7 +246,8 @@ need nothing extra.
 - **tmux indicator**: `tmux-state.sh` marks the session's window busy (◐) on a prompt or tool
   call, waiting (✳) on a Notification and idle on Stop. A background session's environment has no
   `TMUX_PANE` (`claude daemon` hosts it), so `session-pane.sh` walks its process ancestry to the
-  tab it's attached to; a `claude -p` run inherits its tab's `TMUX_PANE` and is skipped. Run
+  tab it's attached to (when its daemon hosts more than one session, which tab shows which can't
+  be told, so none counts); a `claude -p` run inherits its tab's `TMUX_PANE` and is skipped. Run
   `./setup-tmux.sh` once for the tmux side.
 
 ## Status line

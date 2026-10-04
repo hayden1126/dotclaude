@@ -181,7 +181,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"$HOME/.claude/hooks/tmux-state.sh\" busy"
+            "command": "bash \"$HOME/.claude/hooks/tmux-state.sh\" busy",
+            "timeout": 5
           }
         ]
       }
@@ -201,7 +202,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"$HOME/.claude/hooks/tmux-state.sh\" busy"
+            "command": "bash \"$HOME/.claude/hooks/tmux-state.sh\" busy",
+            "timeout": 5
           }
         ]
       }
@@ -268,7 +270,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"$HOME/.claude/hooks/tmux-state.sh\" busy"
+            "command": "bash \"$HOME/.claude/hooks/tmux-state.sh\" busy",
+            "timeout": 5
           }
         ]
       }
@@ -304,7 +307,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"$HOME/.claude/hooks/tmux-state.sh\" idle"
+            "command": "bash \"$HOME/.claude/hooks/tmux-state.sh\" idle",
+            "timeout": 5
           }
         ]
       }
@@ -323,7 +327,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"$HOME/.claude/hooks/tmux-state.sh\" wait"
+            "command": "bash \"$HOME/.claude/hooks/tmux-state.sh\" wait",
+            "timeout": 5
           }
         ]
       }

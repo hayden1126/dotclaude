@@ -84,7 +84,9 @@ class Hooks(unittest.TestCase):
         return self.seen("notify-toast.ps1")
 
     def no_ring(self):
-        return not any("SoundPlayer" in c for c in self.calls(settle=0.3))
+        # ring.log is written before the hook exits, so its last line is the decision.
+        log = self.ring_log()
+        return bool(log) and " quiet " in log[-1]
 
     def ring_log(self):
         path = os.path.join(self.state, "dotclaude", "ring.log")
@@ -107,6 +109,43 @@ class Hooks(unittest.TestCase):
         self.assertEqual(self.window_writes(),
                          [f"tmux set-option -w -t %9 @claude_state {s}"
                           for s in ("busy", "wait", "idle")])
+
+    def run_under_daemon(self, name, sessions, args=(), payload=None):
+        # Fake the real chain: hook <- `claude daemon run` <- this test process (the pane's
+        # shell), the daemon hosting `sessions` pty hosts plus a spare one.
+        script = "".join(
+            f'(exec -a "claude bg-pty-host --bg-pty-host /d/pty/s{i}.sock 80 24" sleep 30) &\n'
+            for i in range(sessions))
+        script += ('(exec -a "claude bg-pty-host --bg-pty-host /d/spare/x.pty.sock" sleep 30) &\n'
+                   'sleep 0.2\nbash "$HOOK" "$@" <<< "$PAYLOAD"; rc=$?\n'
+                   'pkill -P $$ sleep; exit $rc\n')
+        env = {**self.env, **BG, "HOOK": os.path.join(HOOKS, name),
+               "PAYLOAD": json.dumps(payload or {}),
+               "STUB_PANES": f"{os.getpid()} %9"}
+        p = subprocess.run(["claude daemon run --origin transient", "-c", script, "x", *args],
+                           executable="/bin/bash", env=env, capture_output=True, text=True,
+                           timeout=10)
+        self.assertEqual(p.returncode, 0, p.stderr)
+
+    def test_a_daemon_hosting_one_session_resolves_to_its_tab(self):
+        self.run_under_daemon("tmux-state.sh", 1, args=("busy",))
+        self.assertEqual(self.window_writes(), ["tmux set-option -w -t %9 @claude_state busy"])
+
+    def test_a_daemon_hosting_two_sessions_is_ambiguous_and_writes_nothing(self):
+        # Which of the two the tab's client shows can't be seen from outside, so neither owns it.
+        self.run_under_daemon("tmux-state.sh", 2, args=("busy",))
+        self.assertEqual(self.window_writes(), [])
+        self.run_under_daemon("stop-ring.sh", 2)
+        self.assertTrue(self.no_ring())
+
+    def test_a_p_run_started_from_a_background_session_stays_off_tab(self):
+        # It inherits KIND=bg from its parent session, and ATTENDED=0 must still win.
+        self.env["STUB_PANES"] = f"{os.getpid()} %9"
+        p_from_bg = {**BG, "CLAUDE_CODE_SESSION_ATTENDED": "0"}
+        self.run_hook("tmux-state.sh", p_from_bg, args=("idle",))
+        self.assertEqual(self.window_writes(), [])
+        self.run_hook("stop-ring.sh", p_from_bg)
+        self.assertTrue(self.no_ring())
 
     def test_an_unattached_background_session_writes_nothing(self):
         self.env["STUB_PANES"] = "999999 %9"

@@ -89,8 +89,12 @@ class Baseline(unittest.TestCase):
                 "Stop": "idle", "Notification": "wait"}
         for event, state in want.items():
             with self.subTest(event=event):
-                tmux = [c for c in commands(event) if "tmux-state.sh" in c]
-                self.assertEqual(tmux, [f'bash "$HOME/.claude/hooks/tmux-state.sh" {state}'])
+                tmux = [h for e in S["hooks"][event] for h in e["hooks"]
+                        if "tmux-state.sh" in h["command"]]
+                self.assertEqual([h["command"] for h in tmux],
+                                 [f'bash "$HOME/.claude/hooks/tmux-state.sh" {state}'])
+                # It runs on every tool call: a stuck tmux server may cost 5 s, not the default.
+                self.assertEqual(tmux[0]["timeout"], 5)
         every = [c for entries in S["hooks"].values() for e in entries for c in
                  (h["command"] for h in e["hooks"])]
         self.assertFalse([c for c in every if "SoundPlayer" in c])

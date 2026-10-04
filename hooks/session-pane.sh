@@ -3,29 +3,35 @@
 # session is shown, so its tmux state lands on the right window and only sessions a person sees
 # ring. tests/setup/test_tmux_hooks.py holds the cases.
 #
+# - A `claude -p` run (CLAUDE_CODE_SESSION_ATTENDED=0, probed on 2.1.289) inherits the tab's
+#   TMUX_PANE, or KIND=bg from a background parent, from whatever started it, such as the
+#   delegation canary: no pane, never rings. Checked first for that reason.
 # - A tab: $TMUX_PANE.
 # - A background session (CLAUDE_CODE_SESSION_KIND=bg) runs under `claude daemon`, whose env
 #   has no TMUX_PANE. When it is attached to a tab, its ancestry still reaches that pane's shell
 #   (session <- bg-pty-host <- daemon <- `claude --continue` <- the pane's shell), so walk up to
-#   a pane pid. An unattached one reaches init: no pane.
-# - A `claude -p` run (CLAUDE_CODE_SESSION_ATTENDED=0, probed on 2.1.289) inherits the tab's
-#   TMUX_PANE from whatever started it, such as the delegation canary: no pane, never rings.
+#   a pane pid. An unattached one reaches init: no pane. The daemon is per client (`--origin
+#   transient`), but a client can dispatch more than one session into it, and nothing outside
+#   shows which one the tab displays. So a daemon hosting more than one session (`/pty/` hosts;
+#   `/spare/` is a pre-warmed one) gives no pane: off-tab beats ringing for the wrong session.
 
 # Print the pane id this session is shown in, or nothing.
 session_pane() {
-  if [ "${CLAUDE_CODE_SESSION_KIND:-}" = bg ]; then
+  if [ "${CLAUDE_CODE_SESSION_ATTENDED:-}" = 0 ]; then
+    return 0
+  elif [ "${CLAUDE_CODE_SESSION_KIND:-}" = bg ]; then
     _pane_by_ancestry
-  elif [ "${CLAUDE_CODE_SESSION_ATTENDED:-}" != 0 ]; then
+  else
     printf '%s' "${TMUX_PANE:-}"
   fi
 }
 
 # True when a person sees this session: a tab, a plain terminal, or an attached background one.
 session_in_view() {
-  if [ "${CLAUDE_CODE_SESSION_KIND:-}" = bg ]; then
+  if [ "${CLAUDE_CODE_SESSION_ATTENDED:-}" = 0 ]; then
+    return 1
+  elif [ "${CLAUDE_CODE_SESSION_KIND:-}" = bg ]; then
     [ -n "$(_pane_by_ancestry)" ]
-  else
-    [ "${CLAUDE_CODE_SESSION_ATTENDED:-}" != 0 ]
   fi
 }
 
@@ -35,6 +41,11 @@ _pane_by_ancestry() {
   for _ in 1 2 3 4 5 6 7 8 9 10 11 12; do
     hit=$(awk -v p="$cur" '$1 == p { print $2; exit }' <<<"$panes")
     if [ -n "$hit" ]; then printf '%s' "$hit"; return 0; fi
+    case "$(tr '\0' ' ' < "/proc/$cur/cmdline" 2>/dev/null)" in
+      *"claude daemon run"*)
+        [ "$(ps -o args= --ppid "$cur" 2>/dev/null | grep -c -- '--bg-pty-host [^ ]*/pty/')" -gt 1 ] \
+          && return 0 ;;
+    esac
     # /proc/<pid>/stat is "pid (comm) state ppid ..."; comm may hold spaces or parens.
     ppid=$(awk '{ sub(/^.*\) /, ""); print $2 }' "/proc/$cur/stat" 2>/dev/null)
     case "$ppid" in ''|0|1) return 0 ;; esac
