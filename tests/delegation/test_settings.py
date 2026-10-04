@@ -100,6 +100,10 @@ class Baseline(unittest.TestCase):
         self.assertFalse([c for c in every if "SoundPlayer" in c])
         self.assertEqual(commands("Notification", "permission_prompt"),
                          ['bash "$HOME/.claude/hooks/notify.sh"'])
+        # Both sound hooks ask tmux where a background session is shown; bound them too.
+        for event, script in (("Stop", "stop-ring.sh"), ("Notification", "notify.sh")):
+            (h,) = [h for e in S["hooks"][event] for h in e["hooks"] if script in h["command"]]
+            self.assertEqual(h["timeout"], 5, script)
 
     def test_allow_write_holds_caches_not_bin_dirs(self):
         for p in S["sandbox"]["filesystem"]["allowWrite"]:

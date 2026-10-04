@@ -37,7 +37,8 @@ session_in_view() {
 
 _pane_by_ancestry() {
   local panes cur=$PPID hit ppid _
-  panes=$(tmux list-panes -a -F '#{pane_pid} #{pane_id}' 2>/dev/null) || return 0
+  # Bounded: Stop and permission prompts wait on this, and a stuck tmux server must not hold them.
+  panes=$(timeout 2 tmux list-panes -a -F '#{pane_pid} #{pane_id}' 2>/dev/null) || return 0
   for _ in 1 2 3 4 5 6 7 8 9 10 11 12; do
     hit=$(awk -v p="$cur" '$1 == p { print $2; exit }' <<<"$panes")
     if [ -n "$hit" ]; then printf '%s' "$hit"; return 0; fi

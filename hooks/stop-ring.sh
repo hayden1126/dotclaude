@@ -16,10 +16,11 @@ try: d = json.load(sys.stdin)
 except Exception: d = {}
 print("1" if isinstance(d, dict) and (d.get("agent_id") or d.get("agent_type")) else "")' 2>/dev/null)
 
+pane=$(session_pane)
 if [ -z "$spawned" ] && session_in_view; then
   play_ring
-  ring_log stop rang "$(session_pane)"
+  ring_log stop rang "$pane"
 else
-  ring_log stop quiet "$(session_pane)"
+  ring_log stop quiet "$pane"
 fi
 exit 0

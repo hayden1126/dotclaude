@@ -53,6 +53,7 @@ class Hooks(unittest.TestCase):
 
     def run_hook(self, name, session, payload=None, args=()):
         env = {**self.env, **session}
+        self.logged_before = len(self.ring_log())
         p = subprocess.run(["bash", os.path.join(HOOKS, name), *args],
                            input=json.dumps(payload or {}), capture_output=True, text=True,
                            timeout=10, env=env)
@@ -84,9 +85,9 @@ class Hooks(unittest.TestCase):
         return self.seen("notify-toast.ps1")
 
     def no_ring(self):
-        # ring.log is written before the hook exits, so its last line is the decision.
+        # ring.log is written before the hook exits, so the run's own new line is the decision.
         log = self.ring_log()
-        return bool(log) and " quiet " in log[-1]
+        return len(log) == self.logged_before + 1 and " quiet " in log[-1]
 
     def ring_log(self):
         path = os.path.join(self.state, "dotclaude", "ring.log")
@@ -119,6 +120,7 @@ class Hooks(unittest.TestCase):
         script += ('(exec -a "claude bg-pty-host --bg-pty-host /d/spare/x.pty.sock" sleep 30) &\n'
                    'sleep 0.2\nbash "$HOOK" "$@" <<< "$PAYLOAD"; rc=$?\n'
                    'pkill -P $$ sleep; exit $rc\n')
+        self.logged_before = len(self.ring_log())
         env = {**self.env, **BG, "HOOK": os.path.join(HOOKS, name),
                "PAYLOAD": json.dumps(payload or {}),
                "STUB_PANES": f"{os.getpid()} %9"}
@@ -188,7 +190,6 @@ class Hooks(unittest.TestCase):
         for session, payload in ((BG, {}), (P_RUN, {}), (TAB, {"agent_id": "a1"}),
                                  (TAB, {"agent_type": "writer"})):
             with self.subTest(session=session, payload=payload):
-                open(self.log, "w").close()
                 self.run_hook("stop-ring.sh", session, payload)
                 self.assertTrue(self.no_ring())
 

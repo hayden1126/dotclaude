@@ -281,7 +281,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"$HOME/.claude/hooks/stop-ring.sh\""
+            "command": "bash \"$HOME/.claude/hooks/stop-ring.sh\"",
+            "timeout": 5
           }
         ]
       },
@@ -319,7 +320,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"$HOME/.claude/hooks/notify.sh\""
+            "command": "bash \"$HOME/.claude/hooks/notify.sh\"",
+            "timeout": 5
           }
         ]
       },
