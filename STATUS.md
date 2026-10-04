@@ -61,9 +61,7 @@ stored here).
     behind the `.sh` shim), with one shared INJECTED list for the three prompt hooks. Tests and the
     replay would then run in seconds (the setup suite spends most of its 25 s spawning bash).
     `setup.sh` links only `hooks/*.sh`: link the module too, or have the shim find its own path.
-  - The marker lists stay: the UserPromptSubmit payload has no origin field, and the prompt's
-    transcript entry is written after the hook runs (probed 2026-10-03,
-    [[cc-hook-payload-pitfalls]]).
+  - The marker lists stay ([[cc-hook-payload-pitfalls]] has why).
 - **Delegation hardening: what is live on HAYPC** (Stage 2 and 3, `docs/delegation.md`;
   `skills/delegation/SKILL.md` is the operating guide). Open items:
   - **Retune later, not now.** When `due` asks for `audit --monthly` (date and first sample sizes:
@@ -90,11 +88,16 @@ stored here).
     `false` means "nobody has said". Revisit when S3 enforces the storyboard MUST/NEVER grammar.
 
 ## Blocked / decisions needed
-- None open.
+- **Sandbox gap audit (2026-10-04): Hayden chooses, the next session fixes.** Two fixes need no
+  decision (sandbox `denyWrite` gaps); four need Hayden's call. The findings, each with its check
+  command and a recommendation, are private (this repo is public) in
+  `~/scratch/sandbox-audit/FINDINGS.md`, next to the `rm` scan script. Re-verify each finding
+  before fixing; ship the fixes as one branch with `tests/delegation/test_settings.py` pins.
 
 ## Notes for next session
-- **Suggested next:** the new-device parity audit (In flight); its first step is the inventory of
-  HAYPC's local-only pieces. The delegation post waits on Hayden's read.
+- **Next:** the sandbox gap decisions and fixes (Blocked / decisions needed). Then the new-device
+  parity audit (In flight), starting with the inventory of HAYPC's local-only pieces. The
+  delegation post waits on Hayden's read.
 - **Verify delegation before touching it:** `python3 -m unittest discover -s tests/delegation -t
   tests/delegation` and the same for `tests/setup` make no model calls and pass inside the sandbox
   (except from a checkout under `.claude/worktrees/`, where the policy tests need the sandbox off).
