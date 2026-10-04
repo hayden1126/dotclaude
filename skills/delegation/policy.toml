@@ -158,7 +158,7 @@ write_denied = ["~/.claude", "~/.gitconfig", "~/.config/git", "~/.zshrc", "~/.zs
   "~/dotclaude/statusline", "~/dotclaude/notify-toast.ps1", "~/dotclaude/setup.sh",
   "~/dotclaude/merge-settings.py", "~/dotclaude/setup-chrome-wsl.sh", "~/dotclaude/sync.sh",
   "~/dotclaude/chrome-debug.ps1", "~/dotclaude/git", "~/dotclaude/plugins",
-  "~/dotclaude/tools.json",
+  "~/dotclaude/tools.json", "~/dotclaude/tmux", "~/dotclaude/setup-tmux.sh",
   # The ledger and the liveness index: an agent that rewrote its own index could reset its
   # deadline clock. The sandbox already keeps Bash out; this covers the file tools.
   "{state_dir}"]

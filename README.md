@@ -91,8 +91,10 @@ sees it.
 | `hooks/report-check.sh` | PreToolUse(SubagentHandback)/SubagentStop hook: sends a delegated role's malformed report back, at most twice; fails open | symlink `~/.claude/hooks/report-check.sh` |
 | `hooks/handoff-reminder.sh` | UserPromptSubmit hook: on a wrap-up / handoff / clear-memory signal, reminds me to invoke the `handoff` skill instead of improvising it | symlink `~/.claude/hooks/handoff-reminder.sh` |
 | `hooks/session-title.sh` | UserPromptSubmit hook: sets the terminal tab title to `[<repo>] <label>` via `sessionTitle`, so tabs are tellable apart; the label comes from the Stop-hook Haiku cache (`.title.txt`), falling back to the current prompt's first line | symlink `~/.claude/hooks/session-title.sh` |
-| `hooks/stop-ring.sh` | Stop hook: plays the Windows notify sound when the main session finishes, not when a subagent or background agent stops | symlink `~/.claude/hooks/stop-ring.sh` |
-| `hooks/notify.sh` | Notification(permission_prompt) hook: pops a Windows toast, resolving the toast path per platform (WSL via `wslpath`, native Windows git-bash via `cygpath`) | symlink `~/.claude/hooks/notify.sh` |
+| `hooks/stop-ring.sh` | Stop hook: plays the Windows notify sound when a session you see finishes (a tab, a plain terminal, an attached background session), not a subagent, an unattached background session or a `claude -p` run; logs each decision to `ring.log` | symlink `~/.claude/hooks/stop-ring.sh` |
+| `hooks/notify.sh` | Notification(permission_prompt) hook: pops a Windows toast, resolving the toast path per platform (WSL via `wslpath`, native Windows git-bash via `cygpath`), and rings like `stop-ring.sh` | symlink `~/.claude/hooks/notify.sh` |
+| `hooks/tmux-state.sh` | Prompt, tool, Stop and Notification hook: sets `@claude_state` (busy, wait, idle) on the tmux window the session is shown in, for the indicator in `tmux/claude.conf`; does nothing outside tmux | symlink `~/.claude/hooks/tmux-state.sh` |
+| `hooks/session-pane.sh` | Sourced by the three hooks above, not a hook: finds the tmux pane a session is shown in (a background session's through its process ancestry), and whether a person sees it | symlink `~/.claude/hooks/session-pane.sh` |
 | `hooks/session-summary.sh` | Stop hook: regenerates a 1-2 sentence session summary via a direct Haiku Messages-API call (Claude subscription OAuth token, stdlib urllib, no API key/jq), detached so it never blocks; caches the summary to `<config-dir>/session-summaries/<session_id>.txt` for the status-line widget and a short (`<=32`-char) tab label to `<session_id>.title.txt` for `session-title.sh` | symlink `~/.claude/hooks/session-summary.sh` |
 | `templates/` | `SPEC.md`, `PLAN.md`, `STATUS.md` scaffolds for full-lane work that survive `/clear` | symlink per file into `~/.claude/templates/` |
 | `codex/` | Codex CLI config (config.toml baseline + AGENTS.md + merge-config.py); see docs/codex.md | symlink `AGENTS.md` into `~/.codex/`; merge `config.toml`'s keys into the local `~/.codex/config.toml` (Codex writes to it, so it is never linked; `auth.json` stays local) |
@@ -111,6 +113,8 @@ sees it.
 | `tests/setup/` | Unit tests for `merge-settings.py`, `git/install-ignore.py`, and the prompt and session hooks (`handoff-reminder.sh`, `session-title.sh`, `session-summary.sh`); `replay_history.py` is a local-only replay tool, not a unit test | `python3 -m unittest discover -s tests/setup -t tests/setup` |
 | `docs/chrome-devtools-wsl.md` | WSL2-only: how to make `chrome-devtools-mcp` work (Strategy A headless Linux Chrome, plus B to attach to your Windows Chrome) | reference |
 | `chrome-debug.ps1` | Windows launcher for Strategy B (Chrome with a remote-debugging port) | run on Windows when needed |
+| `tmux/` | The tmux side of the indicator: `claude.conf` (titles, status bar, the ◐ busy and ✳ waiting glyphs), the optional `base.conf` (mouse, splits, the Ctrl-b Enter menu), `cheatsheet.txt`, and `tmux-claude-status`, the backstop the status bar runs | sourced and linked by `setup-tmux.sh` |
+| `setup-tmux.sh` | Opt-in tmux installer: links `tmux-claude-status` into `~/.local/bin` and keeps a marked `source-file` block in `~/.tmux.conf` (`--base` adds `base.conf` and the cheatsheet) | run once per machine that uses tmux; not called by `setup.sh` |
 | `setup-chrome-wsl.sh` | Opt-in WSL2 installer: installs Chrome for Testing and registers the user-scoped `chrome-devtools` override | run once on WSL2; not called by `setup.sh` |
 | `setup.sh` | The installer | run once per machine |
 | `sync.sh` | Regenerates the derived plugin lists from live `~/.claude/` | run after plugin changes |
@@ -230,12 +234,20 @@ need nothing extra.
   transcript grew < 2KB, and the prior summary is fed back in. Task notifications, agent messages
   and skill bodies are left out of the dialogue it sends, so they aren't summarized as the user's
   request. Needs python3 on PATH.
-- **Stop / Notification sounds**: play a Windows sound and (on permission prompts) a toast. The
-  Notification sound is inline in `settings.json`. The Stop sound is `stop-ring.sh`, which rings only
-  when the main session finishes: Stop also fires for every subagent and background agent, and those
-  carry `agent_id`. The toast goes through `notify.sh`, which resolves the path for both WSL (`wslpath`) and
-  native Windows git-bash (`cygpath`) and renders `notify-toast.ps1`. Windows-only: on macOS/Linux,
-  swap for your platform's notifier (`osascript` / `notify-send`).
+- **Stop / Notification sounds**: play a Windows sound and (on permission prompts) a toast. Both
+  sounds ring only for a session a person sees: a tab, a plain terminal, or a background session
+  attached to a tab (`session-pane.sh`). Subagents (`agent_id` in the event), unattached background
+  sessions and `claude -p` runs (`CLAUDE_CODE_SESSION_ATTENDED=0`, such as the delegation canary)
+  stay quiet; a permission prompt still pops the toast, so a stuck background session shows up.
+  Each decision is a line in `$XDG_STATE_HOME/dotclaude/ring.log`. The toast goes through
+  `notify.sh`, which resolves the path for both WSL (`wslpath`) and native Windows git-bash
+  (`cygpath`) and renders `notify-toast.ps1`; Windows' Do Not Disturb hides it. Windows-only: on
+  macOS/Linux, swap for your platform's notifier (`osascript` / `notify-send`).
+- **tmux indicator**: `tmux-state.sh` marks the session's window busy (◐) on a prompt or tool
+  call, waiting (✳) on a Notification and idle on Stop. A background session's environment has no
+  `TMUX_PANE` (`claude daemon` hosts it), so `session-pane.sh` walks its process ancestry to the
+  tab it's attached to; a `claude -p` run inherits its tab's `TMUX_PANE` and is skipped. Run
+  `./setup-tmux.sh` once for the tmux side.
 
 ## Status line
 

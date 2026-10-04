@@ -113,6 +113,8 @@
         "~/dotclaude/git",
         "~/dotclaude/plugins",
         "~/dotclaude/tools.json",
+        "~/dotclaude/tmux",
+        "~/dotclaude/setup-tmux.sh",
         "~/.claude/settings.json",
         "~/.claude/hooks",
         "~/.claude/skills",
@@ -174,6 +176,14 @@
             "timeout": 10
           }
         ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$HOME/.claude/hooks/tmux-state.sh\" busy"
+          }
+        ]
       }
     ],
     "PostToolUse": [
@@ -184,6 +194,14 @@
             "type": "command",
             "command": "i=$(cat); case \"$i\" in *'\"agent_id\"'*) printf '%s' \"$i\" | bash \"$HOME/.claude/hooks/delegation-ledger.sh\" ;; esac",
             "timeout": 5
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$HOME/.claude/hooks/tmux-state.sh\" busy"
           }
         ]
       }
@@ -245,6 +263,14 @@
             "timeout": 5
           }
         ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$HOME/.claude/hooks/tmux-state.sh\" busy"
+          }
+        ]
       }
     ],
     "Stop": [
@@ -273,6 +299,14 @@
             "timeout": 5
           }
         ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$HOME/.claude/hooks/tmux-state.sh\" idle"
+          }
+        ]
       }
     ],
     "Notification": [
@@ -281,11 +315,15 @@
         "hooks": [
           {
             "type": "command",
-            "command": "( powershell.exe -c \"(New-Object Media.SoundPlayer 'C:\\\\Windows\\\\Media\\\\notify.wav').PlaySync()\" >/dev/null 2>&1 & ) ; exit 0"
-          },
+            "command": "bash \"$HOME/.claude/hooks/notify.sh\""
+          }
+        ]
+      },
+      {
+        "hooks": [
           {
             "type": "command",
-            "command": "bash \"$HOME/.claude/hooks/notify.sh\""
+            "command": "bash \"$HOME/.claude/hooks/tmux-state.sh\" wait"
           }
         ]
       }

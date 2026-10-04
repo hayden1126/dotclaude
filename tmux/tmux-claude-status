@@ -1,0 +1,89 @@
+#!/usr/bin/env bash
+# Reconcile the per-window @claude_state that hooks maintain (hooks/tmux-state.sh).
+# Hooks own live transitions (busy/wait/idle) and are instant. This backstop, run from
+# status-left #() (only while attached) and rate-limited ~3s, does ONLY what hooks can't:
+#   - CLEAR @claude_state for a window where Claude is no longer running (crash / kill / a
+#     Stop that never reached the hook), so a glyph can't get stuck.
+#   - FILL @claude_state once for a window running Claude that has no state yet (cold start:
+#     you attached to a session that was already going). This is the ONLY branch that queries
+#     the supervisor, so after warm-up it never spawns `claude`.
+# It NEVER overwrites an existing busy/wait/idle value → no clobber, no flicker, no lag.
+set -uo pipefail
+
+stamp="/tmp/.tmux-claude-status.$(id -u).stamp"
+cache="/tmp/.tmux-claude-status.$(id -u).watch"
+if [ -f "$stamp" ] && [ "$(( $(date +%s) - $(stat -c %Y "$stamp" 2>/dev/null || echo 0) ))" -lt 3 ]; then
+  cat "$cache" 2>/dev/null   # repeat the last delegation token between real runs
+  exit 0
+fi
+: > "$stamp"
+# Delegation liveness (`delegation-ledger watch --summary`, e.g. "2▶ 1⚠"; empty when none).
+# tmux (3.7c) shows each run's output, empty included, so the runs skipped above repeat the
+# cache. CLAUDE_PID unset: a server started from a Claude Bash call would carry a dead one,
+# which trips the ledger's sandbox self-check. This is the script's only output.
+timeout 2 env -u CLAUDE_PID "$HOME/.local/bin/delegation-ledger" watch --summary 2>/dev/null | tee "$cache"
+
+# window -> current @claude_state (window option; same for every pane in the window).
+declare -A win_state
+while read -r wid state; do
+  [ -n "$wid" ] && win_state[$wid]="$state"
+done < <(tmux list-windows -a -F '#{window_id} #{@claude_state}' 2>/dev/null)
+
+# window -> whether ANY pane in it runs claude (not just the active pane — windows can be split).
+declare -A win_has_claude
+while read -r wid cmd; do
+  [ "$cmd" = "claude" ] && win_has_claude[$wid]=1
+done < <(tmux list-panes -a -F '#{window_id} #{pane_current_command}' 2>/dev/null)
+
+need_fill=()
+for wid in "${!win_state[@]}"; do
+  if [ -n "${win_has_claude[$wid]:-}" ]; then
+    [ -z "${win_state[$wid]}" ] && need_fill+=("$wid")                              # claude running, no state -> cold start
+  else
+    [ -n "${win_state[$wid]}" ] && tmux set-option -uw -t "$wid" @claude_state 2>/dev/null  # no claude -> clear stale
+  fi
+done
+
+[ ${#need_fill[@]} -eq 0 ] && exit 0                             # nothing to fill -> no supervisor query
+
+json="$(claude agents --json 2>/dev/null)" || exit 0
+[ -n "$json" ] || exit 0
+
+# supervisor pid -> bucketed state
+declare -A pid_state
+while read -r pid st; do
+  [ -n "$pid" ] && pid_state[$pid]="$st"
+done < <(
+  printf '%s' "$json" | python3 -I -c 'import sys,json
+try: d=json.load(sys.stdin)
+except Exception: sys.exit(0)
+BUSY={"busy","running"}; WAIT={"waiting","blocked","needs_input"}
+for a in d:
+    p=a.get("pid"); s=a.get("status")
+    if not p: continue
+    print(p, "busy" if s in BUSY else "wait" if s in WAIT else "idle")' 2>/dev/null
+)
+
+# pane_pid -> window_id (covers every pane, active or not)
+declare -A pane_win
+while read -r pid wid; do
+  [ -n "$pid" ] && pane_win[$pid]="$wid"
+done < <(tmux list-panes -a -F '#{pane_pid} #{window_id}' 2>/dev/null)
+
+declare -A fill; for w in "${need_fill[@]}"; do fill[$w]=1; done
+for p in "${!pid_state[@]}"; do
+  cur="$p"
+  for _ in $(seq 1 12); do
+    if [ -n "${pane_win[$cur]:-}" ]; then
+      wid="${pane_win[$cur]}"
+      [ -n "${fill[$wid]:-}" ] && tmux set-option -w -t "$wid" @claude_state "${pid_state[$p]}" 2>/dev/null
+      break
+    fi
+    # /proc/<pid>/stat is "pid (comm) state ppid ..."; comm may contain spaces/parens, so
+    # strip through the last ") " before reading fields (field 2 of the remainder is ppid).
+    ppid="$(awk '{sub(/^.*\) /,""); print $2}' "/proc/$cur/stat" 2>/dev/null)" || break
+    { [ -z "$ppid" ] || [ "$ppid" = 0 ] || [ "$ppid" = 1 ]; } && break
+    cur="$ppid"
+  done
+done
+exit 0

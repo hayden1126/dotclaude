@@ -69,7 +69,7 @@ class Baseline(unittest.TestCase):
         deny = S["sandbox"]["filesystem"]["denyWrite"]
         for p in ("statusline", "notify-toast.ps1", "codex", "setup.sh", "merge-settings.py",
                   "setup-chrome-wsl.sh", "sync.sh", "chrome-debug.ps1", "git", "plugins",
-                  "tools.json"):
+                  "tools.json", "tmux", "setup-tmux.sh"):
             self.assertIn("~/dotclaude/" + p, deny)
 
     def test_tool_credentials_and_shell_history_are_read_protected(self):
@@ -80,6 +80,22 @@ class Baseline(unittest.TestCase):
                   "~/.azure", "~/.claude.json", "~/.codex/config.toml", "~/.zsh_history",
                   "~/.bash_history"):
             self.assertIn(p, deny)
+
+    def test_tmux_state_and_sounds_are_wired_once(self):
+        # tmux-state.sh exits at once outside a tab, so every machine carries it. The permission
+        # sound lives in notify.sh, gated like stop-ring.sh: an inline one would ring for every
+        # session, the canary's `claude -p` runs included.
+        want = {"UserPromptSubmit": "busy", "PreToolUse": "busy", "PostToolUse": "busy",
+                "Stop": "idle", "Notification": "wait"}
+        for event, state in want.items():
+            with self.subTest(event=event):
+                tmux = [c for c in commands(event) if "tmux-state.sh" in c]
+                self.assertEqual(tmux, [f'bash "$HOME/.claude/hooks/tmux-state.sh" {state}'])
+        every = [c for entries in S["hooks"].values() for e in entries for c in
+                 (h["command"] for h in e["hooks"])]
+        self.assertFalse([c for c in every if "SoundPlayer" in c])
+        self.assertEqual(commands("Notification", "permission_prompt"),
+                         ['bash "$HOME/.claude/hooks/notify.sh"'])
 
     def test_allow_write_holds_caches_not_bin_dirs(self):
         for p in S["sandbox"]["filesystem"]["allowWrite"]:
@@ -96,7 +112,8 @@ class Baseline(unittest.TestCase):
         # PostToolUse fires on every call, the main thread's too: the same prefilter as the
         # policy hook keeps Python off the main thread's path. A nudge is advice, so nothing
         # here may block a call.
-        (entry,) = S["hooks"]["PostToolUse"]
+        (entry,) = [e for e in S["hooks"]["PostToolUse"]
+                    if any("delegation-ledger" in h["command"] for h in e["hooks"])]
         self.assertEqual(entry["matcher"], "*")
         (h,) = entry["hooks"]
         self.assertIn("""case "$i" in *'"agent_id"'*)""", h["command"])
