@@ -156,11 +156,11 @@ class InjectedMarkers(unittest.TestCase):
 
     def test_the_three_lists_agree(self):
         lists = {}
-        for name in ("handoff-reminder.sh", "session-title.sh", "session-summary.sh"):
+        for name in ("handoff_reminder.py", "session-title.sh", "session-summary.sh"):
             body = re.search(r"^INJECTED = (\(.*?\))$",
                              open(os.path.join(HOOKS, name)).read(), re.S | re.M).group(1)
             lists[name] = set(ast.literal_eval(body))
-        first = lists.pop("handoff-reminder.sh")
+        first = lists.pop("handoff_reminder.py")
         self.assertGreater(len(first), 10)
         for name, markers in lists.items():
             with self.subTest(hook=name):
