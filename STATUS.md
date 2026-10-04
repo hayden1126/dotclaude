@@ -11,21 +11,23 @@ Base: `main`. For branch / PR / push state, run `gh pr list` and `git log main..
 stored here).
 
 ## Done (recent; git, the linked plans and memory hold the detail)
-- **The hook payload sweep, merged in PR #63** (2026-10-03). The hooks are symlinked, so it's
-  live. Commit messages hold the why, README's hook entries the behavior and the replay step,
-  `tests/setup/` the cases. Accepted: "I think we should wrap up" doesn't fire; "handoff then
-  commit hooks run twice" does.
-- **The watch guard (background waits), merged in PR #62 and installed on HAYPC** (2026-10-02 to
-  10-03). The behavior is in `docs/delegation.md` "Long waits", its open checks in that doc's
-  "Next", and the decisions in `PLAN.md` (now history).
-- **Delegation hardening Stage 3, complete and live on HAYPC** (2026-09-30 to 10-01, PRs #42 to
-  #55). `docs/delegation.md` "Stage 3" holds the findings, the decisions and the test counts.
-- Older: `git log` and the PRs back to #10 hold it (#56 was small fixes), and memory holds the
-  decisions behind them.
-  One stays here because git can't show it: client deck data left the tree in PR #28, and its
-  history was deliberately left as-is (Hayden's call).
+- **Permission rules replaced danger-guard** (PR #64, installed on HAYPC): deny destructive git,
+  ask before `git push`. README says what's covered and what's caught by mistake.
+- **Also merged and live:** the hook payload sweep (PR #63; README's hook entries,
+  `tests/setup/`), the watch guard (PR #62; `docs/delegation.md` "Long waits"), delegation
+  hardening Stage 3 (PRs #42 to #55; `docs/delegation.md` "Stage 3").
+- Older: `git log` and the PRs back to #10, and memory for the decisions. One stays here because
+  git can't show it: client deck data left the tree in PR #28, and its history was deliberately
+  left as-is (Hayden's call).
+- **Codex setup shared with a friend** (2026-09-29): private, ready to share at
+  https://claude.ai/artifact/KWwrPkLsbMUi7Ugjfskqsz (republish by that URL).
 
 ## In flight
+- **`rm` no longer asks: on its own PR, already installed on HAYPC** (2026-10-03, Hayden's call). The
+  six `rm` ask rules are gone, and the deletion rule in `CLAUDE.md` and `codex/AGENTS.md` is
+  scoped to match. **Next: merge the PR** (`gh pr list`); other machines then take it per "Other
+  machines" below. README holds the snippet that brings the asks back per machine;
+  [[dotclaude-danger-guard-retired]] holds why a hook couldn't exempt agents instead.
 - **The delegation post: on `main`, revised in PR #60, not yet on Medium.**
   - **Files:** `docs/prose-is-not-a-permission.md` and `docs/images/delegation-layers.*`; the code
     links pin to `7ed72e9`, on `main`.
@@ -39,20 +41,13 @@ stored here).
     every number and holds the diagram spec (§8; [[svg-to-png-headless-render]]). Never publish
     raw transcripts or the eval data; the `.zshrc`, `.zshenv` and `.mcp.json` backups beside
     SHAPE.md stay unread.
-- **danger-guard retired; permission rules replace it** (branch `chore/post-63-decisions`,
-  2026-10-03). The baseline `permissions` deny destructive git and ask before `git push`, `rm -r`
-  and `rm -f`; README's two paragraphs on them say what's covered and what's caught by mistake,
-  and [[dotclaude-danger-guard-retired]] holds the probe evidence. **Next:** Hayden merges, then
-  installs. `settings.json` is copied, not linked, so the rules aren't live until then: copy
-  `~/.claude/settings.json`, run `./setup.sh` outside the sandbox, and diff the two
-  ([[dotclaude-setup-install-model]]). Then:
-  - Check that a delegated writer's `rm -rf build` and `git -C <dir> stash push` in its
-    worktree now ask (README says they should; not checked live). If that breaks delegation,
-    revisit the `rm` and `git -C` push ask rules.
-  - On each other machine, after `git pull`: `setup.sh` never removes old links, so
-    `~/.claude/hooks/danger-guard.sh` dangles. Remove it (ask first), and any
-    `settings.machine.json` hook that names it, which would now fail on every Bash call. HAYPC is
-    already clean.
+- **Other machines:** `git pull` in `~/dotclaude`, then `./setup.sh`, both outside the sandbox.
+  Copy `~/.claude/settings.json` first and diff it after: the baseline's `permissions` object
+  replaces the live one (personal allow rules go in `settings.machine.json`), and a baseline key
+  still wins. Without an overlay, install by hand per the docs' install order: the policy hook
+  fails closed. Then remove the dangling `~/.claude/hooks/danger-guard.sh` link (`setup.sh`
+  never removes old links; ask first) and any `settings.machine.json` hook naming it. HAYPC is
+  done.
 - **New-device parity audit** (queued 2026-10-03; [[hayden-new-device-goal]]). List HAYPC's
   local-only pieces and sort each into repo, opt-in installer, overlay template or private:
   `settings.machine.json`, `~/.claude/hooks/tmux-state.sh`, `~/bin/tmux-claude-status`, the
@@ -78,15 +73,6 @@ stored here).
     `delegation-ledger exclude --id <id> --why probe`.
   - The daily audit's "reports failing the contract: 3" is three known pre-fix rows from
     2026-09-30, gone from its window on 2026-10-07.
-  - **Other machines:** `git pull` in `~/dotclaude`, then `./setup.sh`, both outside the sandbox
-    (it now also links Codex's skills). The baseline `settings.json` carries the delegation hooks,
-    the watch guard's Stop hook and a `permissions` object that replaces a live one, so personal
-    allow rules go in `settings.machine.json`. Copy `~/.claude/settings.json` first and diff it
-    after (a baseline key still wins). Without an overlay, install by hand per the docs' install order: the policy hook
-    fails closed.
-- **Codex setup shared with a friend** (2026-09-29): built, private and ready to share at
-  https://claude.ai/artifact/KWwrPkLsbMUi7Ugjfskqsz (republish by that URL). It links four clean
-  skills and says never to run `setup.sh`.
 - **`deck-production` blocks S2-S6** (plan: `~/.claude/plans/explore-our-entire-workflow-bright-shamir.md`,
   missing from HAYPC on 2026-10-01; find it on the machine that wrote it, or rebuild it from here).
   S1 shipped and verified (base `8602081`): the skill has the phase model and the core loop but no
@@ -108,6 +94,8 @@ stored here).
 - None open.
 
 ## Notes for next session
+- **Suggested next:** the new-device parity audit (In flight); its first step is the inventory of
+  HAYPC's local-only pieces. The delegation post waits on Hayden's read.
 - **Verify delegation before touching it:** `python3 -m unittest discover -s tests/delegation -t
   tests/delegation` and the same for `tests/setup` make no model calls and pass inside the sandbox
   (except from a checkout under `.claude/worktrees/`, where the policy tests need the sandbox off).

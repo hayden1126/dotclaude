@@ -13,7 +13,9 @@ Global preferences for any agent working in Hayden's repos. Project-level `AGENT
   a direction; don't waffle.
 
 ## Boundaries (ask first)
-- Propose and confirm before any deletion. Never delete without explicit approval.
+- Delete freely what this session made, build output, and anything under temp or an agent
+  worktree. Propose and confirm before deleting tracked files, uncommitted work, or anything
+  outside the repo.
 - Never `git push` without explicit approval, and push only what was approved.
 - Never run `git checkout`, `git reset`, or any revert/rebase without confirmation.
 - Don't suggest restarting servers or "did you save the file?" — assume the obvious is done
