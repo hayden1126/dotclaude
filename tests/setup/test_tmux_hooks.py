@@ -180,6 +180,15 @@ class Hooks(unittest.TestCase):
         self.run_hook("stop-ring.sh", {})
         self.assertTrue(self.rang())
 
+    def test_a_background_session_asks_tmux_once_per_hook(self):
+        # Stop and permission prompts wait on these hooks, each tmux call bounded at 2 s.
+        self.env["STUB_PANES"] = f"{os.getpid()} %9"
+        for name in ("stop-ring.sh", "notify.sh"):
+            with self.subTest(hook=name):
+                open(self.log, "w").close()
+                self.run_hook(name, BG, {"message": "m"})
+                self.assertEqual(sum(c.startswith("tmux list-panes") for c in self.calls()), 1)
+
     def test_an_attached_background_session_rings(self):
         self.env["STUB_PANES"] = f"{os.getpid()} %9"
         self.run_hook("stop-ring.sh", BG)

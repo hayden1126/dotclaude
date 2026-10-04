@@ -27,11 +27,12 @@ session_pane() {
 }
 
 # True when a person sees this session: a tab, a plain terminal, or an attached background one.
+# $1 is session_pane's result, so a background session asks tmux once per hook.
 session_in_view() {
   if [ "${CLAUDE_CODE_SESSION_ATTENDED:-}" = 0 ]; then
     return 1
   elif [ "${CLAUDE_CODE_SESSION_KIND:-}" = bg ]; then
-    [ -n "$(_pane_by_ancestry)" ]
+    [ -n "${1:-}" ]
   fi
 }
 

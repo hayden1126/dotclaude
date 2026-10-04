@@ -17,11 +17,12 @@ set -uo pipefail
 input=$(cat 2>/dev/null)
 
 if . "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/session-pane.sh" 2>/dev/null; then
-  if session_in_view; then
+  pane=$(session_pane)
+  if session_in_view "$pane"; then
     play_ring
-    ring_log permission rang "$(session_pane)"
+    ring_log permission rang "$pane"
   else
-    ring_log permission quiet "$(session_pane)"
+    ring_log permission quiet "$pane"
   fi
 fi
 

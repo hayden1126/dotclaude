@@ -11,8 +11,18 @@ Base: `main`. For branch / PR / push state, run `gh pr list` and `git log main..
 stored here).
 
 ## Done (recent; git, the linked plans and memory hold the detail)
-- **Sandbox gap fixes, on branch `fix/sandbox-gaps` and installed on HAYPC** (2026-10-04, not yet
-  pushed). `denyWrite` now covers the repo files that run outside the sandbox (`statusline/`,
+- **tmux indicator and sounds fixed; tmux versioned; handoff-reminder module** (2026-10-04, branch
+  `feat/tmux-parity`, stacked on `fix/sandbox-gaps`). A background session (`claude daemon`) has no
+  `TMUX_PANE`, so its window froze; a `claude -p` run wrote its parent tab's state; both rang like
+  tabs. `hooks/session-pane.sh` now resolves the real tab (ancestry for background sessions, none
+  for `-p` or a daemon hosting several), each ring decision lands in
+  `$XDG_STATE_HOME/dotclaude/ring.log`, and off-tab sessions get the toast without sound.
+  `tmux-state.sh` moved into the repo with baseline wiring; `setup-tmux.sh` (opt-in) installs
+  `tmux/claude.conf` and, with `--base`, `tmux/base.conf`. The handoff classifier is
+  `hooks/handoff_reminder.py` behind the `.sh` shim: its tests went from 6.1 s to 0.3 s, and the
+  history replay showed 0 disagreements over 3,212 prompts. Three review rounds, all findings fixed.
+- **Sandbox gap fixes, pushed as branch `fix/sandbox-gaps` (no PR, Hayden's call) and installed on
+  HAYPC** (2026-10-04). `denyWrite` now covers the repo files that run outside the sandbox (`statusline/`,
   `notify-toast.ps1`, `codex/`, `setup.sh` and the scripts and lists it installs from), and
   `denyRead` covers tool tokens and shell history; `test_settings.py` pins both. Hayden's calls
   and the findings: `~/scratch/sandbox-audit/FINDINGS.md` (private). Verified live: `test -w`
@@ -53,21 +63,14 @@ stored here).
   fails closed. Then remove the dangling `~/.claude/hooks/danger-guard.sh` link (`setup.sh`
   never removes old links; ask first) and any `settings.machine.json` hook naming it. HAYPC is
   done.
-- **New-device parity audit** (queued 2026-10-03; [[hayden-new-device-goal]]). List HAYPC's
-  local-only pieces and sort each into repo, opt-in installer, overlay template or private:
-  `settings.machine.json`, `~/.claude/hooks/tmux-state.sh`, `~/bin/tmux-claude-status`, the
-  `@claude_state` lines in `~/.tmux.conf`, user-scope MCP servers, plugins against
-  `plugins/enabled.json`, the shell rc files. Then build the installers, tmux first, with
-  `setup-chrome-wsl.sh` as the precedent (opt-in, not called by `setup.sh`). Remote access
-  (`~/bin/tmux-remote`, the port-22 ForceCommand, `~/hq/docs/local/remote-access.md`) stays
-  private. A drift check would fit the `setup.sh` doctor idea in [[deepseek-harness-eval]]. Both
-  tmux scripts got `python3 -I` on 2026-10-03.
-- **Hook follow-ups, after PR #63** (proposed 2026-10-03, not started):
-  - **Move handoff-reminder's classifier into an importable module** (`hooks/handoff_reminder.py`
-    behind the `.sh` shim), with one shared INJECTED list for the three prompt hooks. Tests and the
-    replay would then run in seconds (the setup suite spends most of its 25 s spawning bash).
-    `setup.sh` links only `hooks/*.sh`: link the module too, or have the shim find its own path.
-  - The marker lists stay ([[cc-hook-payload-pitfalls]] has why).
+- **New-device parity audit: tmux done, the rest sorted.** The inventory and a recommendation per
+  piece are private in `~/scratch/parity-audit/INVENTORY.md` ([[hayden-new-device-goal]]). Hayden
+  decides the rest from there; the cheapest next steps it lists: Codex into the baseline
+  `enabledPlugins`, an overlay example in README, bumping the chrome-devtools pin (1.5.0 against
+  the plugin's 1.9.0). A drift check would fit the `setup.sh` doctor idea in
+  [[deepseek-harness-eval]].
+- **Hook follow-up:** the INJECTED marker lists stay one per prompt hook, kept equal by
+  `test_the_three_lists_agree` ([[cc-hook-payload-pitfalls]] has why).
 - **Delegation hardening: what is live on HAYPC** (Stage 2 and 3, `docs/delegation.md`;
   `skills/delegation/SKILL.md` is the operating guide). Open items:
   - **Retune later, not now.** When `due` asks for `audit --monthly` (date and first sample sizes:
@@ -94,15 +97,19 @@ stored here).
     `false` means "nobody has said". Revisit when S3 enforces the storyboard MUST/NEVER grammar.
 
 ## Blocked / decisions needed
-- **Push `fix/sandbox-gaps` and open its PR** (Hayden approves the push). It carries the two
-  STATUS commits from `chore/status-after-65`, which can then be deleted.
+- **Push `feat/tmux-parity`** (Hayden approves; push only, no PR, like `fix/sandbox-gaps`).
+  The local `chore/status-after-65` is redundant (its commits are in both branches): delete it
+  on Hayden's OK.
 - **Rescan the `rm` gap around 2026-11-04** (kept as a known gap, Hayden's call):
   `python3 -I ~/scratch/sandbox-audit/rm_scan.py 2026-11-04`. Sending the drafted
   `$CLAUDE_JOB_DIR/tmp` bug report is Hayden's call; `CLAUDE.md` carries the workaround.
 
 ## Notes for next session
-- **Next:** the new-device parity audit (In flight), starting with the inventory of HAYPC's
-  local-only pieces. Other machines pick up the sandbox fixes with the usual `./setup.sh`. The
+- **Next:** Hayden's calls on the parity inventory (In flight). Other machines pick up these
+  branches with the usual `./setup.sh`, plus `./setup-tmux.sh` where tmux is used; drop any
+  `tmux-state.sh` entries from their `settings.machine.json` first, or they fire twice.
+- **A ring from an unexpected session:** read the last lines of
+  `$XDG_STATE_HOME/dotclaude/ring.log` (session id, kind, attended, pane, dir) before guessing. The
   delegation post waits on Hayden's read.
 - **Verify delegation before touching it:** `python3 -m unittest discover -s tests/delegation -t
   tests/delegation` and the same for `tests/setup` make no model calls and pass inside the sandbox
