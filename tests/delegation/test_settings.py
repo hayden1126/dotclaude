@@ -120,7 +120,7 @@ class Baseline(unittest.TestCase):
     def test_a_rearm_never_waits_on_a_permission_prompt(self):
         self.assertIn("Bash(delegation-ledger wait *)", S["permissions"]["allow"])
 
-    def test_destructive_git_is_denied_and_push_and_rm_ask(self):
+    def test_destructive_git_is_denied_and_push_asks(self):
         # Claude Code matches a Bash rule as a glob whose * spans spaces, and deny beats ask
         # (verified live on 2.1.288 in default and auto mode). Each part of a compound command
         # is checked on its own (verified in default mode). Wrappers other than these bash -c
@@ -145,11 +145,13 @@ class Baseline(unittest.TestCase):
         asked = ["git push", "git push origin feat", "git -C . push", "git -C . push origin feat",
                  "git push origin feat --follow-tags", "git push origin feat-force-fix",
                  # A force the deny rules miss still asks, as every push does.
-                 "git push origin +feat", "git push -uf origin feat",
-                 "rm -r build", "rm -rf build", "rm -R build", "rm -f a.txt",
-                 "rm build -r", "rm build -R", "rm a.txt -f"]
-        neither = ['git commit -am "push --force docs"', "rm a.txt", "git status",
-                   "git reset --keep HEAD~1", "git reset --soft HEAD~1"]
+                 "git push origin +feat", "git push -uf origin feat"]
+        # rm never asks: the sandbox bounds where it writes, and subagent-policy keeps a
+        # delegated rm -r in its root (README has the overlay that brings the asks back).
+        neither = ['git commit -am "push --force docs"', "git status",
+                   "git reset --keep HEAD~1", "git reset --soft HEAD~1",
+                   "rm a.txt", "rm -rf build", "rm -R build", "rm -f a.txt", "rm build -r",
+                   "rm -v draft.txt"]
         for c in denied:
             self.assertTrue(matching("deny", c), c)
         for c in asked:

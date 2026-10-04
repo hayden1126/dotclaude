@@ -28,13 +28,7 @@
       "Bash(git push)",
       "Bash(git push *)",
       "Bash(git -C * push)",
-      "Bash(git -C * push *)",
-      "Bash(rm -*r*)",
-      "Bash(rm -*R*)",
-      "Bash(rm -*f*)",
-      "Bash(rm * -*r*)",
-      "Bash(rm * -*R*)",
-      "Bash(rm * -*f*)"
+      "Bash(git -C * push *)"
     ],
     "deny": [
       "Bash(git push --force*)",

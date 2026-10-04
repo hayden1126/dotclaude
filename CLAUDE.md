@@ -7,7 +7,7 @@
 - On a design or architectural fork, present the options clearly and ask before implementing. Pick a direction, do not waffle.
 
 ## Boundaries (ask first)
-- Propose and confirm before any deletion. Never delete without explicit approval.
+- Delete freely what this session made, build output, and anything under temp or an agent worktree. Propose and confirm before deleting tracked files, uncommitted work, or anything outside the repo.
 - Never `git push` without explicit approval, and push only the changes I approved.
 - Never run `git checkout`, reset, or any revert without confirmation.
 - Do not suggest restarting servers, checking whether services run, or "did you save the file?". I have verified the obvious; assume the bug is in the code.

@@ -11,9 +11,15 @@ Base: `main`. For branch / PR / push state, run `gh pr list` and `git log main..
 stored here).
 
 ## Done (recent; git, the linked plans and memory hold the detail)
+- **`rm` no longer asks** (branch `chore/rm-no-ask`, 2026-10-03, Hayden's call). The six `rm`
+  ask rules stopped sessions and stalled writers; a hook can't exempt agents (an ask rule prompts
+  even when a PreToolUse hook returns `allow`; only a mod's `tool.check` can approve past one).
+  README gives the `settings.machine.json` snippet that brings them back. CLAUDE.md's deletion
+  rule is scoped the same way: delete session-made, build and temp files freely; confirm tracked,
+  uncommitted or out-of-repo deletions.
 - **danger-guard retired for permission rules, merged in PR #64 and installed on HAYPC**
-  (2026-10-03). The baseline `permissions` deny destructive git and ask before `git push`, `rm -r`
-  and `rm -f`; README's two paragraphs say what's covered and what's caught by mistake, and
+  (2026-10-03). The baseline `permissions` deny destructive git and ask before `git push`;
+  README's paragraphs say what's covered and what's caught by mistake, and
   [[dotclaude-danger-guard-retired]] holds the probe evidence. Live in a running session: a
   `bash -c` echo naming `git reset --hard` was denied right after `setup.sh`.
 - **The hook payload sweep, merged in PR #63** (2026-10-03). The hooks are symlinked, so it's
@@ -44,14 +50,6 @@ stored here).
     every number and holds the diagram spec (§8; [[svg-to-png-headless-render]]). Never publish
     raw transcripts or the eval data; the `.zshrc`, `.zshenv` and `.mcp.json` backups beside
     SHAPE.md stay unread.
-- **Exempt a delegated agent's in-root `rm` from the ask rules** (queued 2026-10-03, Hayden's
-  call). The `rm -r`/`rm -f` ask rules reach delegated writers: a writer's `rm -rf build` in its
-  own worktree waited about 3 minutes on Hayden's prompt, burning its deadline, though
-  `subagent-policy` already confines its `rm -r` to its root or temp. Plan: `subagent-policy`
-  returns `allow` for an `rm -r`/`-f` it has already confined there, so only the main thread asks.
-  First probe whether a PreToolUse hook's `allow` overrides an ask rule; if it doesn't, keep the
-  prompts and say so here. (A writer's `git -C` never reaches the push ask rule: the worktree
-  isolation check refuses any `git -C` first.)
 - **Other machines, after `git pull` and `./setup.sh`:** `setup.sh` never removes old links, so
   `~/.claude/hooks/danger-guard.sh` dangles. Remove it (ask first), and any
   `settings.machine.json` hook that names it, which would now fail on every Bash call. HAYPC is

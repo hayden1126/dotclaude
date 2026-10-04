@@ -42,23 +42,34 @@ it drops; put a value in the overlay to keep it. The baseline now owns a `permis
 `setup.sh` replaces the live one (`merge-settings.py` names it on stderr): personal allow rules go
 in `settings.machine.json`, whose lists append.
 
-The baseline's `permissions` deny destructive git and ask before `git push`, `rm -r` and `rm -f`,
-in auto mode too. Denied: force-push, `reset --hard`, `reset --merge` and `git clean -f`, plain or
-through `git -C`, plus a `bash -c` whose text has `git push` then `--force`, or `git reset` then
-`--hard`. Asked: `git push` and `git -C <dir> push` with any arguments, so a force the deny rules
-miss (`+branch`, `-uf`) still prompts, and `rm` with a `-r`, `-R` or `-f` flag. Everything else
-goes to auto mode's classifier: other wrappers (any other `bash -c`, such as one running
+The baseline's `permissions` deny destructive git and ask before `git push`, in auto mode too.
+Denied: force-push, `reset --hard`, `reset --merge` and `git clean -f`, plain or through `git -C`,
+plus a `bash -c` whose text has `git push` then `--force`, or `git reset` then `--hard`. Asked:
+`git push` and `git -C <dir> push` with any arguments, so a force the deny rules miss (`+branch`,
+`-uf`) still prompts. Everything else goes to auto mode's classifier: other wrappers (any other `bash -c`, such as one running
 `push -f`, and `bash -lc`, `sh -c`, `eval`), git global options other than `-C` (`-c k=v`,
 `--git-dir`, `--no-pager`), soft, mixed and `--keep` resets, and `checkout`, `switch`, `restore`
 and `revert`. Why rules at all: on 2.1.288, auto mode ran a force-push and a `reset --hard` on a
 dirty tree when the prompt named them.
 
+`rm` never asks. Ask rules for `rm -r` and `rm -f` stopped sessions and stalled delegated writers
+mid-task, and a hook can't exempt agents from them: an ask rule prompts even when a PreToolUse
+hook returns `allow`. The sandbox bounds where `rm` can write (the project, temp and the cache
+dirs), `subagent-policy` keeps a delegated `rm -r` in its root or temp, and git holds committed
+work. What's exposed: uncommitted work in the project, and an `rm` run outside the sandbox, which
+only auto mode's classifier sees. To bring the asks back on one machine, put this in
+`settings.machine.json` and re-run `setup.sh`:
+
+```json
+{"permissions": {"ask": ["Bash(rm -*r*)", "Bash(rm -*R*)", "Bash(rm -*f*)",
+                         "Bash(rm * -*r*)", "Bash(rm * -*R*)", "Bash(rm * -*f*)"]}}
+```
+
 A rule's `*` spans words, so some safe commands are caught too. Denied: a `git -C` command whose
 message mentions a guarded phrase (commit with `-F <file>`, or from inside the repo), and a
 `git clean -n` dry run on a path containing `f`. Asked: any `git -C` command with `push` as a
-later word, such as `git -C <dir> stash push`, and an `rm` with any flag when a later path
-contains `r` or `f` (`rm -v draft.txt`). Permission rules apply to delegated agents as well, so
-expect a writer's `rm -rf build` or `git -C <dir> stash push` to ask (not yet checked live).
+later word, such as `git -C <dir> stash push`. Permission rules apply to delegated agents as well,
+though `subagent-policy` refuses a writer's `git -C` before the push rule sees it.
 `tests/delegation/test_settings.py` pins each rule with a case only it catches.
 
 ## What's in here
