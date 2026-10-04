@@ -62,6 +62,25 @@ class Baseline(unittest.TestCase):
         self.assertLessEqual({p for p in fs["denyWrite"] if p.startswith("~/dotclaude")},
                              set(POLICY["protect"]["write_denied"]))
 
+    def test_code_that_runs_outside_the_sandbox_is_write_protected(self):
+        # Sandbox audit, 2026-10-04. ccstatusline and the Notification hook run these unsandboxed
+        # on every refresh or toast; setup.sh runs or installs the rest, including the plugins
+        # and tools its JSON lists.
+        deny = S["sandbox"]["filesystem"]["denyWrite"]
+        for p in ("statusline", "notify-toast.ps1", "codex", "setup.sh", "merge-settings.py",
+                  "setup-chrome-wsl.sh", "sync.sh", "chrome-debug.ps1", "git", "plugins",
+                  "tools.json"):
+            self.assertIn("~/dotclaude/" + p, deny)
+
+    def test_tool_credentials_and_shell_history_are_read_protected(self):
+        # Sandbox audit, 2026-10-04. `claude` and `codex` run outside the sandbox, so they
+        # still reach their own files.
+        deny = S["sandbox"]["filesystem"]["denyRead"]
+        for p in ("~/.npmrc", "~/.docker/config.json", "~/.config/.wrangler", "~/.supabase",
+                  "~/.azure", "~/.claude.json", "~/.codex/config.toml", "~/.zsh_history",
+                  "~/.bash_history"):
+            self.assertIn(p, deny)
+
     def test_allow_write_holds_caches_not_bin_dirs(self):
         for p in S["sandbox"]["filesystem"]["allowWrite"]:
             self.assertNotIn("/bin", p, p)
