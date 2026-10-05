@@ -89,7 +89,7 @@ sees it.
 | `hooks/subagent-policy.sh` | PreToolUse(*) policy for delegated agents only (rules in `skills/delegation/policy.toml`): no leaving the sandbox, no destructive git, no MCP writes, protected paths, the researcher allowlist, writers held to their worktree; fails closed | symlink `~/.claude/hooks/subagent-policy.sh` |
 | `hooks/watch-guard.sh` | Stop hook (main thread): blocks a stop once when a `delegation-ledger wait` watch has lapsed or a background command was killed at its time limit, with the re-arm command (`skills/delegation/scripts/watch-guard`); fails open | symlink `~/.claude/hooks/watch-guard.sh` |
 | `hooks/report-check.sh` | PreToolUse(SubagentHandback)/SubagentStop hook: sends a delegated role's malformed report back, at most twice; fails open | symlink `~/.claude/hooks/report-check.sh` |
-| `hooks/handoff-reminder.sh` | UserPromptSubmit hook: on a wrap-up / handoff / clear-memory signal, reminds me to invoke the `handoff` skill instead of improvising it | symlink `~/.claude/hooks/handoff-reminder.sh` |
+| `hooks/handoff-reminder.sh` | UserPromptSubmit hook: on a wrap-up / handoff / clear-memory signal, reminds me to invoke the `handoff` skill instead of improvising it; a shim over `hooks/handoff_reminder.py`, which holds the classifier | symlink `~/.claude/hooks/handoff-reminder.sh` and `handoff_reminder.py` |
 | `hooks/session-title.sh` | UserPromptSubmit hook: sets the terminal tab title to `[<repo>] <label>` via `sessionTitle`, so tabs are tellable apart; the label comes from the Stop-hook Haiku cache (`.title.txt`), falling back to the current prompt's first line | symlink `~/.claude/hooks/session-title.sh` |
 | `hooks/stop-ring.sh` | Stop hook: plays the Windows notify sound when a session you see finishes (a tab or a plain terminal), not a subagent, a background session or a `claude -p` run; logs each decision to `ring.log` | symlink `~/.claude/hooks/stop-ring.sh` |
 | `hooks/notify.sh` | Notification(permission_prompt) hook: pops a Windows toast, resolving the toast path per platform (WSL via `wslpath`, native Windows git-bash via `cygpath`), and rings like `stop-ring.sh` | symlink `~/.claude/hooks/notify.sh` |
@@ -110,7 +110,7 @@ sees it.
 | `docs/prose-is-not-a-permission.md` | Blog post on the delegation work: why a prompt can't limit an agent's authority, and the layers that can | reference |
 | `docs/images/` | The post's diagram: `delegation-layers.svg` (source) and `delegation-layers.png` (2x render) | reference |
 | `tests/delegation/` | Unit tests for the delegation pieces (no model calls) and `run.py`, a live harness that spends model calls | run from the repo root |
-| `tests/setup/` | Unit tests for `merge-settings.py`, `git/install-ignore.py`, and the prompt and session hooks (`handoff-reminder.sh`, `session-title.sh`, `session-summary.sh`); `replay_history.py` is a local-only replay tool, not a unit test | `python3 -m unittest discover -s tests/setup -t tests/setup` |
+| `tests/setup/` | Unit tests for `merge-settings.py`, `git/install-ignore.py`, and the prompt and session hooks (`handoff_reminder.py`, `session-title.sh`, `session-summary.sh`), the tmux and sound hooks (`test_tmux_hooks.py`) and `setup-tmux.sh`; `replay_history.py` is a local-only replay tool, not a unit test | `python3 -m unittest discover -s tests/setup -t tests/setup` |
 | `docs/chrome-devtools-wsl.md` | WSL2-only: how to make `chrome-devtools-mcp` work (Strategy A headless Linux Chrome, plus B to attach to your Windows Chrome) | reference |
 | `chrome-debug.ps1` | Windows launcher for Strategy B (Chrome with a remote-debugging port) | run on Windows when needed |
 | `tmux/` | The tmux side of the indicator: `claude.conf` (titles, status bar, the ◐ busy and ✳ waiting glyphs), the optional `base.conf` (mouse, splits, the Ctrl-b Enter menu), `cheatsheet.txt`, and `tmux-claude-status`, the backstop the status bar runs | sourced and linked by `setup-tmux.sh` |
@@ -207,8 +207,8 @@ need nothing extra.
   silent when "handoff" is just a topic (discussing the skill or this hook), on injected content
   (task notifications, subagent and cross-session messages), and on a subagent's or teammate's
   own prompt. Advisory only: it adds context, it cannot run the skill; silent no-op
-  otherwise; always exits 0 so it can never block a prompt. It reads the prompt with python3 and
-  stays silent if that fails. After changing it, replay your own typed prompts through it with
+  otherwise; always exits 0 so it can never block a prompt. The shim runs
+  `hooks/handoff_reminder.py` with python3 and stays silent if that fails. After changing it, replay your own typed prompts through it with
   `python3 tests/setup/replay_history.py` (local only: the history holds private names).
 - **UserPromptSubmit: `session-title.sh`** (in this repo). Sets the session title (the terminal tab
   title) to `[<repo>] <label>` so tabs are tellable apart. It emits the supported
@@ -235,19 +235,19 @@ need nothing extra.
   and skill bodies are left out of the dialogue it sends, so they aren't summarized as the user's
   request. Needs python3 on PATH.
 - **Stop / Notification sounds**: play a Windows sound and (on permission prompts) a toast. Both
-  sounds ring only for a session a person sees: a tab or a plain terminal (`session-pane.sh`).
-  Subagents (`agent_id` in the event), background sessions and `claude -p` runs (both carry
-  `CLAUDE_CODE_SESSION_ATTENDED=0`; the delegation canary is a `-p` run) stay quiet; a permission
-  prompt still pops the toast, so a stuck background session shows up. Each decision is a line in
+  sounds ring only for a session a person sees: a tab or a plain terminal. Subagents, background
+  sessions and `claude -p` runs (the delegation canary is one) stay quiet; a permission prompt
+  still pops the toast, so a stuck background session shows up. `hooks/session-pane.sh`'s header
+  has the rules and the hook env they read. Each decision is a line in
   `$XDG_STATE_HOME/dotclaude/ring.log`. The toast goes through `notify.sh`, which resolves the path
   for both WSL (`wslpath`) and native Windows git-bash (`cygpath`) and renders `notify-toast.ps1`;
   Windows' Do Not Disturb hides it. Windows-only: on macOS/Linux, swap for your platform's notifier
   (`osascript` / `notify-send`).
 - **tmux indicator**: `tmux-state.sh` marks the session's window busy (◐) on a prompt or tool
-  call, waiting (✳) on a Notification and idle on Stop. A `claude -p` run inherits its tab's
-  `TMUX_PANE` and is skipped. A background session (`claude daemon` hosts it) has no `TMUX_PANE`,
-  and one shared daemon hosts them all, so nothing in its hook says which tab shows it: its window
-  gets no live state yet. Run `./setup-tmux.sh` once for the tmux side.
+  call, waiting (✳) on a Notification and idle on Stop. `claude -p` runs and background sessions
+  don't set it (see `session-pane.sh`), so a background session's window gets no live state yet.
+  Run `./setup-tmux.sh` once for the tmux side. A machine whose `settings.machine.json` still wires
+  `tmux-state.sh` should drop those entries before `./setup.sh`, or they fire twice.
 
 ## Status line
 

@@ -11,31 +11,21 @@ Base: `main`. For branch / PR / push state, run `gh pr list` and `git log main..
 stored here).
 
 ## Done (recent; git, the linked plans and memory hold the detail)
-- **tmux indicator and sounds fixed; tmux versioned; handoff-reminder module** (2026-10-04, branch
-  `feat/tmux-parity`, stacked on `fix/sandbox-gaps`). A background session (`claude daemon`) has no
-  `TMUX_PANE`, so its window froze; a `claude -p` run wrote its parent tab's state; both rang like
-  tabs. `hooks/session-pane.sh` now resolves the real tab (ancestry for background sessions, none
-  for `-p` or a daemon hosting several), each ring decision lands in
-  `$XDG_STATE_HOME/dotclaude/ring.log`, and off-tab sessions get the toast without sound.
-  `tmux-state.sh` moved into the repo with baseline wiring; `setup-tmux.sh` (opt-in) installs
-  `tmux/claude.conf` and, with `--base`, `tmux/base.conf`. The handoff classifier is
-  `hooks/handoff_reminder.py` behind the `.sh` shim: its tests went from 6.1 s to 0.3 s, and the
-  history replay showed 0 disagreements over 3,212 prompts. Three review rounds, all findings fixed.
-- **Sandbox gap fixes, pushed as branch `fix/sandbox-gaps` (no PR, Hayden's call) and installed on
-  HAYPC** (2026-10-04). `denyWrite` now covers the repo files that run outside the sandbox (`statusline/`,
-  `notify-toast.ps1`, `codex/`, `setup.sh` and the scripts and lists it installs from), and
-  `denyRead` covers tool tokens and shell history; `test_settings.py` pins both. Hayden's calls
-  and the findings: `~/scratch/sandbox-audit/FINDINGS.md` (private). Verified live: `test -w`
-  fails on all 14 files, and a sandboxed `npm config get registry` still works.
-- **`rm` no longer asks, merged in PR #65 and installed on HAYPC** (2026-10-03, Hayden's call).
-  The deletion rule in `CLAUDE.md` and `codex/AGENTS.md` is scoped to match. README holds the
-  snippet that brings the asks back per machine; [[dotclaude-danger-guard-retired]] holds why a
-  hook couldn't exempt agents instead. Other machines take it per "Other machines" below.
-- **Permission rules replaced danger-guard** (PR #64, installed on HAYPC): deny destructive git,
-  ask before `git push`. README says what's covered and what's caught by mistake.
-- **Also merged and live:** the hook payload sweep (PR #63; README's hook entries,
-  `tests/setup/`), the watch guard (PR #62; `docs/delegation.md` "Long waits"), delegation
-  hardening Stage 3 (PRs #42 to #55; `docs/delegation.md` "Stage 3").
+- **tmux indicator and sounds: tabs and `-p` fixed; tmux versioned; handoff-reminder module**
+  (2026-10-04, branch `feat/tmux-parity` on top of `fix/sandbox-gaps`, range `9c0bfb2..` its head;
+  installed on HAYPC). `hooks/session-pane.sh` treats `ATTENDED=0` (a `claude -p` run or a
+  background session) as off-tab: no tab state, no sound, toast only; its header holds the rules.
+  Verified live: a `-p` run from a tab no longer clobbers that tab or rings; tabs ring and set
+  their window. `tmux-state.sh` is baseline-wired; `setup-tmux.sh --base` installed the tmux side
+  (`~/.tmux.conf` is its header comment plus the dotclaude block; backups beside it). The handoff
+  classifier is `hooks/handoff_reminder.py` (tests 6.1 s to 0.3 s; replay of 3,212 prompts: 0
+  disagreements). Ring decisions: `$XDG_STATE_HOME/dotclaude/ring.log`.
+- **Sandbox gap fixes** (2026-10-04, branch `fix/sandbox-gaps`, no PR by Hayden's call; installed
+  on HAYPC): code that runs outside the sandbox is `denyWrite`, tool tokens and shell history are
+  `denyRead`. Findings and Hayden's calls: `~/scratch/sandbox-audit/FINDINGS.md` (private).
+- **Merged and live:** `rm` never asks (PR #65; [[dotclaude-danger-guard-retired]]), permission
+  rules for destructive git (PR #64), the hook payload sweep (PR #63), the watch guard (PR #62),
+  delegation hardening Stage 3 (PRs #42 to #55). README and `docs/delegation.md` hold the detail.
 - Older: `git log` and the PRs back to #10, and memory for the decisions. One stays here because
   git can't show it: client deck data left the tree in PR #28, and its history was deliberately
   left as-is (Hayden's call).
@@ -97,17 +87,27 @@ stored here).
     `false` means "nobody has said". Revisit when S3 enforces the storyboard MUST/NEVER grammar.
 
 ## Blocked / decisions needed
-- **Push `feat/tmux-parity`** (Hayden approves; push only, no PR, like `fix/sandbox-gaps`).
-  The local `chore/status-after-65` is redundant (its commits are in both branches): delete it
-  on Hayden's OK.
+- The local `chore/status-after-65` is redundant (its commits are in both pushed branches):
+  delete it on Hayden's OK. Branch state: `git status -sb`, `git log origin/main..HEAD`.
 - **Rescan the `rm` gap around 2026-11-04** (kept as a known gap, Hayden's call):
   `python3 -I ~/scratch/sandbox-audit/rm_scan.py 2026-11-04`. Sending the drafted
   `$CLAUDE_JOB_DIR/tmp` bug report is Hayden's call; `CLAUDE.md` carries the workaround.
 
 ## Notes for next session
-- **Next:** Hayden's calls on the parity inventory (In flight). Other machines pick up these
-  branches with the usual `./setup.sh`, plus `./setup-tmux.sh` where tmux is used; drop any
-  `tmux-state.sh` entries from their `settings.machine.json` first, or they fire twice.
+- **Next: map background sessions to their tab by directory** (Hayden chose this 2026-10-04;
+  [[dotclaude-tmux-indicator]], [[cc-background-sessions]]). Background sessions (dna_to_text is
+  one) still get no live indicator and no sound, because a hook can't tell which tab shows them
+  (one shared daemon hosts all; ancestry points at its first client). Plan:
+  `tmux/tmux-claude-status` (already queries `claude agents --json` on cold start) maps each
+  running background session to the one pane whose `claude` is a client, not itself a listed
+  interactive session, with the same cwd; ambiguous (two in one dir) means unmapped. Each run it
+  sets that window's state from the session's status (fixing the stale glyph within ~3 s) and
+  writes `$XDG_STATE_HOME/dotclaude/tabs.json` (session id to pane). `session-pane.sh` then reads
+  it for a session with `CLAUDE_JOB_DIR` set, for instant updates and the ring. Tests first, with
+  `claude agents --json` stubbed; verify live on dna_to_text. Cost: one `claude agents --json` per
+  ~3 s, only while a background session runs.
+- Then Hayden's calls on the parity inventory (In flight). Other machines pick up these branches
+  with `./setup.sh`, plus `./setup-tmux.sh` where tmux is used (README has the overlay caveat).
 - **A ring from an unexpected session:** read the last lines of
   `$XDG_STATE_HOME/dotclaude/ring.log` (session id, kind, attended, pane, dir) before guessing. The
   delegation post waits on Hayden's read.
