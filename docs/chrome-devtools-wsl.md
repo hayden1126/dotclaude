@@ -39,7 +39,7 @@ scope) while leaving the plugin's skills intact:
 
 ```bash
 claude mcp add chrome-devtools --scope user -- \
-  npx chrome-devtools-mcp@1.5.0 \
+  npx chrome-devtools-mcp@1.9.0 \
   --executablePath=/home/$USER/chrome/current \
   --headless \
   --chromeArg=--no-sandbox \
@@ -70,9 +70,15 @@ Prefer an auto-updating system Chrome instead? Install it once with sudo
 (`google-chrome-stable`, path `/usr/bin/google-chrome`) and change
 `--executablePath` to that path.
 
-**Bumping the MCP version:** the override pins `chrome-devtools-mcp@1.5.0` for
+**Bumping the MCP version:** the override pins `chrome-devtools-mcp@1.9.0` for
 reproducible startup. To move up, re-run `claude mcp add` (it overwrites) with a
 newer version or `@latest`.
+
+**Restored tabs:** the persistent profile reopens its last session on launch and
+gains a tab each time Chrome exits uncleanly. 1.9.0 enables Network on every tab
+for `list_pages`, so a few dozen dead tabs time it out (`Network.enable timed
+out`). `setup-chrome-wsl.sh` clears `Default/Sessions` in the profile, which
+drops the tabs and keeps logins; re-run it if the error comes back.
 
 ## Strategy B (switch): attach to your real Windows Chrome
 
@@ -100,7 +106,7 @@ a debug port on a profile that is already running.
 ```bash
 claude mcp remove chrome-devtools -s user
 claude mcp add chrome-devtools --scope user -- \
-  npx chrome-devtools-mcp@1.5.0 --browserUrl=http://localhost:9222
+  npx chrome-devtools-mcp@1.9.0 --browserUrl=http://localhost:9222
 ```
 
 Restart Claude Code. The MCP now attaches to the running Windows Chrome; it will

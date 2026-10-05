@@ -8,11 +8,18 @@
 # docs/chrome-devtools-wsl.md for the full explanation and for Strategy B
 # (attach to your real, logged-in Windows Chrome).
 #
-#   CDT_VERSION=1.5.0 ./setup-chrome-wsl.sh    # override the pinned MCP version
+#   CDT_VERSION=1.9.0 ./setup-chrome-wsl.sh    # override the pinned MCP version
+#
+# In 1.9.0 (not 1.5.0) every page tool takes a pageId, and list_pages enables Network on
+# every open tab. The persistent profile restores its last session on launch and
+# gains a tab per unclean shutdown (35 on HAYPC by 2026-10-04), which made
+# list_pages fail with "Network.enable timed out". Step 4 clears the saved
+# session; logins and cookies stay. Re-run this script if the tabs build up again.
 
 set -euo pipefail
 
-CDT_VERSION="${CDT_VERSION:-1.5.0}"
+CDT_VERSION="${CDT_VERSION:-1.9.0}"
+PROFILE="$HOME/.cache/chrome-devtools-mcp/chrome-profile"
 CHROME_DIR="$HOME/chrome"
 
 say()  { printf "\033[1;36m==>\033[0m %s\n" "$*"; }
@@ -50,7 +57,15 @@ say "smoke test: headless load of example.com"
   --dump-dom https://example.com 2>/dev/null | grep -q "<title>" \
   || die "Headless Chrome failed to render. Re-run the command without 2>/dev/null to see why."
 
-# 4. Register the user-scoped override (idempotent: remove, then add) --------
+# 4. Clear the profile's restored tabs (keeps logins) ------------------------
+if pgrep -f -- "--user-data-dir=$PROFILE( |$)" >/dev/null; then
+  warn "a Chrome is using $PROFILE; left its saved tabs alone (close Claude Code sessions, re-run)"
+elif [ -d "$PROFILE/Default/Sessions" ]; then
+  rm -rf "$PROFILE/Default/Sessions"
+  say "cleared the restored tabs in $PROFILE"
+fi
+
+# 5. Register the user-scoped override (idempotent: remove, then add) --------
 say "registering user-scoped 'chrome-devtools' override (pinned @$CDT_VERSION)"
 claude mcp remove chrome-devtools -s user >/dev/null 2>&1 || true
 claude mcp add chrome-devtools --scope user -- \
