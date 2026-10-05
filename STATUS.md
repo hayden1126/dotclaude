@@ -28,11 +28,16 @@ stored here).
 - **`deck-production`: the geometry gate is built** (`feat/deck-geometry`; design and the figures in
   `PLAN.md`, now history; behavior in SKILL.md "The geometry gate"). `deckkit geometry` drives
   headless Chrome over CDP (stdlib only) at every fragment step: contrast measured on pixels, AA by
-  default, frozen at regulated rigor. Verified: 83 tests green five runs in a row, the reference
-  deck's fixed map slide passes and its pre-fix version fails, whole-deck runs are identical.
-  - **Golden:** captured in the private repo on branch `chore/geometry-golden`; its
-    `decks/_parity/README.md` lists the deck's real findings for that repo's session to fix
-    (Hayden's call: record here, fix there).
+  default, frozen at regulated rigor. Verified: 89 tests green, the reference deck's fixed map
+  slide passes and its pre-fix version fails, whole-deck runs are identical (four regress runs on
+  2026-10-05 gave the same geometry counts). The wiring (parity_check, doctor, SKILL.md, template,
+  tests) had one review on 2026-10-05; its two real findings are fixed. Not taken: a reading near
+  the contrast bar could flip golden counts (no flip seen; revisit only if regress ever flaps).
+  - **Golden:** captured in the private repo on branch `chore/geometry-golden` (unmerged there);
+    its `decks/_parity/README.md` lists the deck's real findings for that repo's session to fix
+    (Hayden's call: record here, fix there). Until that branch merges, regress is green only with
+    `--config`/`--goldens` pointed at that branch's `decks/_parity/` files; the private master's
+    goldens have no geometry facts.
   - **Deferred, known:** gradient text (`background-clip:text`) is never judged; a color the canvas
     can't serialize reads as black; isolated glyph shots drop `filter`.
   - **Next block: S2 (fonts + PDF)**, then S4 (SKILL references + Workflow scripts), S5 (ingest +
@@ -70,21 +75,28 @@ stored here).
   contract: 3" are pre-fix rows from 2026-09-30, gone from its window on 2026-10-07.
 
 ## Blocked / decisions needed
-- **Branches waiting on Hayden's PR call** (pushed, no PRs): `chore/cdt-1.9.0` (the pin, the
-  CLAUDE.md kill rule), `feat/deck-geometry` (stacked on it), `fix/tmux-wait-subagent` (off `main`:
-  a subagent's busy no longer covers a question's wait glyph, and a Stop with an agent or shell
-  still running doesn't ring; neither is live until merged and pulled). An early commit on
-  `feat/deck-geometry` (138c611) names two of the reference deck's selectors; squash-merge keeps
-  them off `main`.
+- **Branches ready, Hayden merges** (`gh pr list` for their state): `chore/cdt-1.9.0` (the pin,
+  the CLAUDE.md kill rule; normal merge first), then `feat/deck-geometry` (stacked on it; **squash**,
+  because 138c611 names two of the reference deck's selectors), and `fix/tmux-wait-subagent` any
+  time (off `main`: a subagent's busy no longer covers a question's wait glyph, and a Stop with an
+  agent or shell still running doesn't ring; neither is live until merged and pulled).
+  - **After the merges:** outside the sandbox, `git fetch origin main:main` while still on
+    `feat/deck-geometry`, then `git switch main`. Remove the old scratchpad worktree `tmuxfix`
+    (`git worktree list`; it holds `fix/tmux-wait-subagent`), then delete the three local branches
+    (`feat/deck-geometry` needs `-D` after a squash: confirm main's tree matches it first). Ask
+    before removing the private repo's golden worktree (same old scratchpad; it holds
+    `chore/geometry-golden`, which is pushed). No setup.sh.
 - **Rescan the `rm` gap around 2026-11-04** (Hayden's call):
   `python3 -I ~/scratch/sandbox-audit/rm_scan.py 2026-11-04`. Sending the drafted
   `$CLAUDE_JOB_DIR/tmp` bug report is Hayden's call; `CLAUDE.md` carries the workaround.
 
 ## Notes for next session
-- **Next: deck-production S2** (In flight). Last session's range: `a52c798..feat/deck-geometry`
-  and `a52c798..fix/tmux-wait-subagent`.
+- **Next: the post-merge cleanup** (Blocked), **then deck-production S2** (In flight). Recent
+  ranges: `a52c798..fix/tmux-wait-subagent`, `a52c798..feat/deck-geometry` (its last three commits
+  are the 2026-10-05 wiring fixes, after `f6eb927`).
 - **Verify `deck-production` before touching it:** `deckkit regress` green (the config and goldens
-  are in the private repo's `decks/_parity/`, README there has the command) and
+  are in the private repo's `decks/_parity/`, README there has the command; see "Golden" above
+  for which branch) and
   `python3 -m unittest discover -s tests/deck_production -t tests/deck_production` (needs the
   Puppeteer headless shell; full Chrome aborts inside the sandbox).
 - **Verify delegation before touching it:** `tests/delegation` and `tests/setup` pass sandboxed;
