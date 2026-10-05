@@ -73,6 +73,25 @@ function geometryProbe(opts) {
     return out;
   };
 
+  // Is this box moved off the place its formatting context gave it, or does
+  // its content spill out of it? A float, a transform (or translate, rotate,
+  // scale), a relative offset, a negative margin, or content overflowing a
+  // fixed size with overflow visible. Two text items whose paths up to their
+  // common ancestor hold none of these are lines and boxes the layout engine
+  // stacked: they cannot collide, however tight the leading (geometry.py's
+  // Slide.one_flow). SVG content is placed by coordinates and never counts.
+  const displaced = (el, cs) => {
+    if (el instanceof SVGElement) return false;
+    if (cs.float !== 'none') return true;
+    if (['transform', 'translate', 'rotate', 'scale'].some(k => cs[k] && cs[k] !== 'none')) return true;
+    if (cs.position === 'relative' &&
+        ['top', 'right', 'bottom', 'left'].some(k => cs[k] !== 'auto' && parseFloat(cs[k]) !== 0)) return true;
+    if (['marginTop', 'marginRight', 'marginBottom', 'marginLeft'].some(k => parseFloat(cs[k]) < 0)) return true;
+    if (cs.display === 'inline' || cs.display === 'contents') return false;   // no box of its own
+    return (cs.overflowX === 'visible' && el.scrollWidth > el.clientWidth + 1) ||
+           (cs.overflowY === 'visible' && el.scrollHeight > el.clientHeight + 1);
+  };
+
   // The node table. Ancestors register first, so `parent` always resolves;
   // the section itself is the implicit root (parent null).
   const ids = new Map();
@@ -86,6 +105,7 @@ function geometryProbe(opts) {
     ids.set(el, id);
     elements.push({
       parent, token: token(el), tag: el.localName, position: cs.position, display: cs.display,
+      displaced: displaced(el, cs),
       fontSize: parseFloat(cs.fontSize), fontWeight: parseInt(cs.fontWeight, 10) || 400,
       paints: paints(el), box: norm(el.getBoundingClientRect()),
     });
@@ -110,7 +130,9 @@ function geometryProbe(opts) {
 
   // The color glyphs are painted with, as sRGB [r, g, b, a], via a 1x1 canvas
   // so any color syntax (oklch, lab, color-mix) resolves the browser's way.
-  // Ancestor opacity folds into alpha. Text whose glyphs show a background
+  // Alpha is the glyph's own (the color's, times fill-opacity in SVG); group
+  // opacity and overlays above the text are measured on the screenshots
+  // instead (geometryContrast). Text whose glyphs show a background
   // (background-clip: text) or no fill has no single color: null.
   const swatch = document.createElement('canvas');
   swatch.width = swatch.height = 1;
@@ -125,8 +147,7 @@ function geometryProbe(opts) {
     sctx.fillStyle = paint;
     sctx.fillRect(0, 0, 1, 1);
     const d = sctx.getImageData(0, 0, 1, 1).data;
-    let a = d[3] / 255;
-    for (let n = el; n && n !== sec; n = n.parentElement) a *= parseFloat(getComputedStyle(n).opacity);
+    const a = d[3] / 255 * (el instanceof SVGElement ? parseFloat(cs.fillOpacity) : 1);
     return a > 0 ? [d[0], d[1], d[2], r2(a)] : null;
   };
 
@@ -158,27 +179,22 @@ function geometryProbe(opts) {
     textEls.push(el);
   }
 
-  // Fit test for text in an absolutely positioned box: is the box's width
-  // decided by this text, and does it run to the containing block's edge?
-  // Shorten the text to one character, then lengthen it by a long run of
-  // words, and compare the box. A box that does not move has a declared
-  // width or insets. One that moves but stops short of the containing block
-  // has a max-width. One that runs to the containing block's edge is bounded
-  // by nothing of its own; that includes a content-sized box that already
-  // wraps at the container, which a lengthen-only test would call bounded.
+  // Fit test for text in an absolutely positioned box: is its width decided
+  // by this text, and does growth stop only where the room runs out? Shorten
+  // the text to one character, then lengthen it by a long run of words, and
+  // compare the box's layout width. A box that does not move has a declared
+  // width or insets. One that moves is then compared with its room: the width
+  // the same box takes stretched to fill what is available from its anchor
+  // (the containing block the browser resolves, minus the insets, in every
+  // growth direction, so a centered box counts both sides). A lengthened box
+  // that fills its room is bounded by nothing of its own, wherever its anchor
+  // sits; one that stops short has a max-width.
   const positionedRoot = el => {
     for (let n = el; n && n !== sec; n = n.parentElement) {
       const pos = getComputedStyle(n).position;
       if (pos === 'absolute' || pos === 'fixed') return n;
     }
     return null;
-  };
-  const containingBlock = el => {
-    for (let n = el.parentElement; n && n !== sec; n = n.parentElement) {
-      const cs = getComputedStyle(n);
-      if (cs.position !== 'static' || cs.transform !== 'none') return n;
-    }
-    return sec;
   };
   texts.forEach((t, i) => {
     const el = textEls[i];
@@ -188,20 +204,18 @@ function geometryProbe(opts) {
     const own = [...el.childNodes].filter(n => n.nodeType === Node.TEXT_NODE);
     const saved = own.map(n => n.nodeValue);
     own.forEach((n, k) => { n.nodeValue = k === 0 ? 'x' : ''; });
-    const short = root.getBoundingClientRect();
+    const short = root.offsetWidth;
     own.forEach((n, k) => { n.nodeValue = saved[k]; });
     const extra = document.createTextNode(' ' + 'lengthen the measure '.repeat(30));
     el.appendChild(extra);
-    const long = root.getBoundingClientRect();
+    const long = root.offsetWidth;
+    const style = root.getAttribute('style');
+    root.style.setProperty('width', '-webkit-fill-available', 'important');
+    root.style.setProperty('max-width', 'none', 'important');
+    const room = root.offsetWidth;
+    if (style === null) root.removeAttribute('style'); else root.setAttribute('style', style);
     extra.remove();
-    const cb = containingBlock(root);
-    const cR = cb.getBoundingClientRect();
-    const left = cR.left + cb.clientLeft * scale, right = left + cb.clientWidth * scale;
-    const movesL = Math.abs(long.left - short.left) > scale;
-    const movesR = Math.abs(long.right - short.right) > scale;
-    t.fit = { content: movesL || movesR,
-              edge: (movesR && long.right >= right - 2 * scale) ||
-                    (movesL && long.left <= left + 2 * scale) };
+    t.fit = { content: Math.abs(long - short) > 1, edge: long >= room - 2 };
   });
 
   const boxed = el => {
@@ -244,17 +258,25 @@ function geometryProbe(opts) {
 }
 
 // Contrast of each text against its rendered backdrop, from three PNGs of
-// the canvas: glyphs forced black, forced white, and invisible (text-shadows
-// kept in all three: a shadow is part of what the glyph sits on). Where the
-// black and white shots differ is where glyphs paint, whatever the backdrop's
-// color: coverage = (white - black) / 255. Only pixels at least half covered
-// are judged, so a box edge a fraction of a pixel past a panel, or the gaps
-// between letters, do not count, while white glyphs on a white patch still
-// do. Each judged pixel composites the text color over the invisible-glyph
-// backdrop and takes the WCAG 2.x ratio; the result is 101 quantiles
-// (0th..100th percentile), so the percentile to judge stays a rule parameter.
-// The PNGs are decoded by the browser into a canvas: native and fast, where a
-// Python decoder would loop over every byte.
+// the canvas: glyph fill forced black, forced white, and invisible. Only the
+// fill is forced: text-shadows, SVG halos, group opacity and anything painted
+// above the text stay as rendered in all three, because the reader sees them.
+// Per pixel, with B, W and H those shots:
+//   - W - B is how much of the glyph reaches the screen (e, 0..1): its
+//     coverage times every group opacity and overlay between it and the
+//     reader. The item's strongest e is taken as full coverage (top): what
+//     a glyph core shows through the group and the overlays.
+//   - B + e * fill is the glyph as rendered at this pixel's coverage; the
+//     text's color is judged at full coverage, as WCAG means it, so the
+//     difference from H is scaled by top / e, and by the text's own alpha.
+//     The backdrop is H.
+// Judged pixels are at least half covered (e >= top / 2), so the gaps
+// between letters do not count, whatever opacity the whole item is under.
+// An item that reaches the screen
+// nowhere (covered, fully transparent) is not measured. The result is 101
+// quantiles (0th..100th percentile) of the WCAG 2.x ratio, so the percentile
+// to judge stays a rule parameter. The PNGs are decoded by the browser into a
+// canvas: native and fast, where a Python decoder would loop over every byte.
 async function geometryContrast(blackUrl, whiteUrl, hiddenUrl, items, scale) {
   const decode = async url => {
     const img = new Image();
@@ -276,6 +298,8 @@ async function geometryContrast(blackUrl, whiteUrl, hiddenUrl, items, scale) {
     lin[i] = c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
   }
   const lum = (r, g, b) => 0.2126 * lin[r] + 0.7152 * lin[g] + 0.0722 * lin[b];
+  const byte = v => Math.max(0, Math.min(255, Math.round(v)));
+  const reach = i => (white[i] - black[i] + white[i + 1] - black[i + 1] + white[i + 2] - black[i + 2]) / 765;
   return items.map(({ lines, color }) => {
     if (!color) return null;
     const [fr, fg, fb, fa] = color;
@@ -283,29 +307,32 @@ async function geometryContrast(blackUrl, whiteUrl, hiddenUrl, items, scale) {
     const boxes = lines.map(l => [
       Math.max(0, Math.round(l.x * scale)), Math.max(0, Math.round(l.y * scale)),
       Math.min(W, Math.round((l.x + l.w) * scale)), Math.min(H, Math.round((l.y + l.h) * scale))]);
-    const judge = glyphsOnly => {
-      const bins = new Uint32Array(2001);      // ratio 1.00..21.00 in 0.01 steps
-      let n = 0;
-      for (const [x0, y0, x1, y1] of boxes) {
-        for (let y = y0; y < y1; y++) {
-          for (let x = x0; x < x1; x++) {
-            const i = (y * W + x) * 4;
-            const br = px[i], bg = px[i + 1], bb = px[i + 2];
-            if (glyphsOnly && (white[i] - black[i]) + (white[i + 1] - black[i + 1]) +
-                              (white[i + 2] - black[i + 2]) < 3 * 128) continue;
-            const tl = lum(Math.round(fa * fr + (1 - fa) * br), Math.round(fa * fg + (1 - fa) * bg),
-                           Math.round(fa * fb + (1 - fa) * bb));
-            const bl = lum(br, bg, bb);
-            const ratio = (Math.max(tl, bl) + 0.05) / (Math.min(tl, bl) + 0.05);
-            bins[Math.min(2000, Math.round((ratio - 1) * 100))]++;
-            n++;
-          }
+    let top = 0;
+    for (const [x0, y0, x1, y1] of boxes) {
+      for (let y = y0; y < y1; y++) {
+        for (let x = x0; x < x1; x++) top = Math.max(top, reach((y * W + x) * 4));
+      }
+    }
+    if (top < 0.02) return null;
+    const bins = new Uint32Array(2001);        // ratio 1.00..21.00 in 0.01 steps
+    let n = 0;
+    for (const [x0, y0, x1, y1] of boxes) {
+      for (let y = y0; y < y1; y++) {
+        for (let x = x0; x < x1; x++) {
+          const i = (y * W + x) * 4;
+          const e = reach(i);
+          if (e < top / 2) continue;
+          const full = fa * top / e;
+          const glyph = (k, f) => px[i + k] + full *
+            (black[i + k] + (white[i + k] - black[i + k]) * f / 255 - px[i + k]);
+          const tr = byte(glyph(0, fr)), tg = byte(glyph(1, fg)), tb = byte(glyph(2, fb));
+          const tl = lum(tr, tg, tb), bl = lum(px[i], px[i + 1], px[i + 2]);
+          const ratio = (Math.max(tl, bl) + 0.05) / (Math.min(tl, bl) + 0.05);
+          bins[Math.min(2000, Math.round((ratio - 1) * 100))]++;
+          n++;
         }
       }
-      return [bins, n];
-    };
-    let [bins, n] = judge(true);
-    if (!n) [bins, n] = judge(false);
+    }
     if (!n) return null;
     const q = [];
     let cum = 0, k = 0;

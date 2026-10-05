@@ -32,6 +32,12 @@
     #good .label-south::before { content: ''; position: absolute; inset: 0; z-index: -1;
                                border-radius: 8px;
                                background: linear-gradient(rgba(11, 19, 32, 0.6), rgba(11, 19, 32, 0.9)); }
+    /* a display headline set tight: its em boxes overlap by design, its lines
+       are stacked by one flow; and a fragment, measured in its final state */
+    #good .display { margin: 24px 0 0; font-size: 100px; line-height: .85; font-weight: 700;
+                     color: #f2efe8; text-transform: none; }
+    #good .display .accent { color: #e8b04a; }
+    #good .note { margin: 24px 0 0; font-size: 22px; line-height: 1.3; color: #ffffff; }
     /* a vector overlay (leader lines) crossing the labels: drawing, not media */
     .reveal .overlay-lines { position: absolute; left: 0; top: 0; width: 1920px; height: 1080px; }
 
@@ -45,6 +51,35 @@
                                 background: rgba(0, 0, 0, 0.85); }
     #contrast .shadow-halo { left: 1000px; top: 600px; color: #ffffff;
                              text-shadow: 0 0 3px #000, 0 0 3px #000, 0 0 3px #000; }
+
+    /* anchors: captions centered on an anchor, no measure of their own; the
+       east one never reaches an edge, it stops where its room runs out */
+    #anchors .anchor { position: absolute; margin: 0; transform: translateX(-50%);
+                       font-size: 22px; line-height: 1.35; text-align: center; }
+    #anchors .anchor-east { left: 70%; top: 400px; }
+    #anchors .anchor-west { left: 30%; top: 700px; }
+
+    /* svg: map labels; a halo (stroke painted under the fill) is backdrop */
+    #svg .map { position: absolute; left: 0; top: 0; width: 1920px; height: 1080px; }
+    #svg text { font-size: 28px; font-family: sans-serif; }
+    #svg .halo, #svg .arc-label { fill: #ffffff; stroke: #0b1320; stroke-width: 8px;
+                                  paint-order: stroke; stroke-linejoin: round; }
+
+    /* veil: group opacity and an overlay above the text reach the reader */
+    #veil .t { position: absolute; left: 200px; width: 900px; margin: 0; font-size: 22px;
+               line-height: 1.3; color: #ffffff; }
+    #veil .group40 { opacity: .4; }
+    #veil .group55 { opacity: .55; }
+    #veil .op40 { top: 300px; }
+    #veil .op55 { top: 450px; }
+    #veil .under-veil { top: 600px; }
+    #veil .veil-overlay { position: absolute; left: 150px; top: 580px; width: 1000px; height: 80px;
+                          background: rgba(0, 0, 0, 0.6); }
+
+    /* bright-bg: a reveal slide background, loaded only when the slide is reached */
+    .reveal .slides section#bright-bg { background: none; }
+    #bright-bg .on-bright { position: absolute; left: 200px; top: 400px; width: 900px; margin: 0;
+                            font-size: 22px; color: #ffffff; }
 
     /* centered: auto height, so reveal's center layout shifts it down; its
        last line lands in the canvas's bottom margin, not the section's */
@@ -74,7 +109,9 @@
       </section>
 
       <section id="good">
-        <div class="wrap"><h2>Where the network reaches</h2></div>
+        <div class="wrap"><h2>Where the network reaches</h2>
+          <h1 class="display"><span>Grow</span><br><span class="accent">faster</span></h1>
+          <p class="fragment note">A note shown as a fragment</p></div>
         <img class="globe" src="media/globe.svg" alt="">
         <svg class="overlay-lines" viewBox="0 0 1920 1080" aria-hidden="true">
           <line x1="300" y1="360" x2="1380" y2="440" stroke="#8a6d3b" stroke-width="2"/>
@@ -104,6 +141,32 @@
       <section id="centered">
         <div style="height: 880px"></div>
         <p class="low">A last line measured from the canvas</p>
+      </section>
+
+      <section id="anchors">
+        <p class="anchor anchor-east">A caption centered on its anchor, unbounded</p>
+        <p class="anchor anchor-west">A caption centered on its anchor, unbounded</p>
+      </section>
+
+      <section id="svg">
+        <svg class="map" viewBox="0 0 1920 1080">
+          <defs><path id="arc" d="M 300 700 Q 700 600 1100 700"/></defs>
+          <rect x="200" y="200" width="1000" height="600" fill="#f4efe2"/>
+          <text class="halo" x="260" y="320">Label with a dark halo on a bright map</text>
+          <text class="arc-label"><textPath href="#arc" fill="#ffffff">Curved label with its own fill</textPath></text>
+          <text class="faint-wrap" x="1300" y="320"><tspan class="faint" fill="#ffffff" fill-opacity="0.3">Faint label at 30 percent</tspan></text>
+        </svg>
+      </section>
+
+      <section id="veil">
+        <div class="group40"><p class="t op40">White type in a group at 40 percent opacity</p></div>
+        <div class="group55"><p class="t op55">White type in a group at 55 percent opacity</p></div>
+        <p class="under-veil t">White type under a dark overlay at 60 percent</p>
+        <div class="veil-overlay"></div>
+      </section>
+
+      <section id="bright-bg" data-background-image="media/bright.png" data-background-size="cover">
+        <p class="on-bright">White type on a bright slide background</p>
       </section>
     </div>
   </div>

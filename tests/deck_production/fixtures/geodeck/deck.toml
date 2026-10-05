@@ -1,6 +1,7 @@
-# Synthetic fixture for the geometry gate. Two slides: `bad` reproduces the
+# Synthetic fixture for the geometry gate. `bad` reproduces the
 # colliding-label defect (right-anchored captions, no max-width, no panel,
-# anchors 95px apart, over an image); `good` is its fixed twin.
+# anchors 95px apart, over an image); `good` is its fixed twin. The other
+# slides each pin one probe principle (see tests/deck_production/test_geometry.py).
 
 [deck]
 slug  = "geodeck"

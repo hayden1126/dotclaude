@@ -29,7 +29,10 @@ A deck tunes them in deck.toml: `[geometry] disable = [ids]`, and
 `[geometry.<id>]` for severity, enabled or any param.
 
 Exit 1 on any error-severity violation; warnings alone exit 0. A browser that
-is missing or dies exits 3; a config the page rejects (a bad selector) exits 2.
+is missing or dies exits 3; a config the page rejects (a bad selector), or a
+font or image that does not load within the slide's settle budget, exits 2.
+A text-contrast bar lowered below WCAG AA needs a `reason`, printed on every
+run, and is refused at regulated rigor.
 """
 from __future__ import annotations
 
@@ -61,6 +64,9 @@ RULES_FILE = HERE / "geometry.rules.toml"
 PROBE_FILE = HERE / "geometry_probe.js"
 SEVERITIES = ("error", "warn")
 HEADINGS = ("h1", "h2", "h3")
+AA = {"min_small": 4.5, "min_large": 3.0}   # WCAG 2.x AA, text-contrast's floor
+EVAL_TIMEOUT = 30.0     # s for one in-page evaluate
+SETTLE_BUDGET = 20.0    # s per slide for fonts, images, backgrounds; below EVAL_TIMEOUT
 HEADLESS_SHELLS = pathlib.Path.home() / ".cache" / "puppeteer" / "chrome-headless-shell"
 INSTALL_HINT = ("npx @puppeteer/browsers install chrome-headless-shell@stable "
                 "--path ~/.cache/puppeteer   (or set [env] chrome / DECKKIT_ENV_CHROME)")
@@ -80,6 +86,11 @@ class ProtocolError(BrowserError):
 
 class PageError(Exception):
     """Script evaluated in the page threw."""
+
+
+class SlowResource(Exception):
+    """A font or image did not settle within SETTLE_BUDGET: the slide cannot
+    be measured as it would render."""
 
 
 @dataclass
@@ -145,6 +156,34 @@ class Slide:
             if outer in path:
                 return not any(self.positioned(n) for n in path[:path.index(outer)])
         return False
+
+    def one_flow(self, a: int, b: int) -> bool:
+        """Are these two items lines or boxes the layout engine stacked in one
+        formatting context? Then they cannot collide, however tight the
+        leading: a display headline at line-height .85 overlaps its em boxes
+        by design. The test: below their nearest common ancestor, no box on
+        either path is positioned or displaced (a float, a transform, a
+        relative offset, a negative margin, content spilling out of a fixed
+        size: the probe's `displaced`), and the two branches under that
+        ancestor are inline content of one line run, or boxes that do not
+        intersect (grid items placed in one cell do). SVG text is placed by
+        coordinates and is never one flow."""
+        if self.svg(a) is not None or self.svg(b) is not None:
+            return False
+        up_a, up_b = self.up(a), self.up(b)
+        common = next((n for n in up_a if n in up_b), None)
+        if common in (a, b):
+            return False                 # nested: nested() decides
+        branch_a = up_a[:up_a.index(common)] if common is not None else up_a
+        branch_b = up_b[:up_b.index(common)] if common is not None else up_b
+        if any(self.positioned(n) or self.el[n].get("displaced")
+               for n in branch_a + branch_b):
+            return False
+        top_a, top_b = branch_a[-1], branch_b[-1]
+        if "inline" in (self.el[top_a]["display"], self.el[top_b]["display"]):
+            return True
+        w, h = intersect(self.el[top_a]["box"], self.el[top_b]["box"])
+        return not (w > 0.5 and h > 0.5)
 
     def root(self, node: int) -> int | None:
         """Nearest absolutely or fixed positioned ancestor-or-self; None = the section."""
@@ -263,11 +302,12 @@ def _texts(s: Slide, rule: str) -> list[dict]:
 
 
 def rule_text_overlap(s: Slide, p: dict, rid: str):
-    # Every pair counts, in flow or not: a fixed-height card that overflows,
-    # a negative margin, a transform or two grid items in one cell all stack
-    # ink. Only an item and what is nested in its own flow are exempt.
+    # In flow or not: a fixed-height card that overflows, a negative margin,
+    # a transform or two grid items in one cell all stack ink. Skipped: an
+    # item and what is nested in its own flow, and lines one flow stacked
+    # (Slide.one_flow), whose em boxes may overlap by the font's design.
     for a, b in itertools.combinations(_texts(s, rid), 2):
-        if s.nested(a["node"], b["node"]):
+        if s.nested(a["node"], b["node"]) or s.one_flow(a["node"], b["node"]):
             continue
         w, h = worst_overlap(s.ink(a), s.ink(b))
         if w * h > p["min_area"] and min(w, h) >= p["min_depth"]:
@@ -320,7 +360,7 @@ def rule_text_contrast(s: Slide, p: dict, rid: str):
             continue
         ratio = quantiles[pct]
         node = t["node"]
-        need = p["large_ratio"] if s.large(node, p) else p["small_ratio"]
+        need = p["min_large"] if s.large(node, p) else p["min_small"]
         if ratio < need:
             size = round(s.el[node]["fontSize"])
             yield s.path(node), (f"{ratio:.2f}:1 at the {pct}th percentile, needs "
@@ -365,20 +405,23 @@ def edge_panel(s: Slide, node: int, side: str, p: dict) -> bool:
 
 
 def rule_clearance(s: Slide, p: dict, rid: str):
-    # Ink closer than min_gap between independently placed items. An overlap
-    # counts as 0 px apart: a shallow one that text-overlap does not report
-    # lands here (evaluate() drops pairs text-overlap already reports).
+    # An overlap counts as 0 px apart, for every pair text-overlap compares:
+    # a shallow one it does not report lands here (evaluate() drops the pairs
+    # it does report). A near miss (gap > 0) counts only between items placed
+    # independently: blocks in one positioned box sit close by design, and so
+    # do the labels of one svg drawing, placed against each other by
+    # coordinates.
     for a, b in itertools.combinations(_texts(s, rid), 2):
-        if s.nested(a["node"], b["node"]) or s.flow_root(a["node"]) == s.flow_root(b["node"]):
-            continue
-        # Inside one drawing every label is placed against the others by
-        # coordinates: a near miss there is the drawing's design.
-        if s.svg(a["node"]) is not None and s.svg(a["node"]) == s.svg(b["node"]):
+        if s.nested(a["node"], b["node"]) or s.one_flow(a["node"], b["node"]):
             continue
         ink_a, ink_b = s.ink(a), s.ink(b)
         w, h = worst_overlap(ink_a, ink_b)
         if w and h:
             yield pair(s, a, b), f"ink overlaps by {px(w, h)}"
+            continue
+        if s.flow_root(a["node"]) == s.flow_root(b["node"]):
+            continue
+        if s.svg(a["node"]) is not None and s.svg(a["node"]) == s.svg(b["node"]):
             continue
         nearest = min(gap(x, y) for x, y in itertools.product(ink_a, ink_b))
         if nearest < p["min_gap"]:
@@ -462,7 +505,7 @@ def parse_rules(text: str, source: str) -> list[dict]:
 
 
 def apply_overrides(rules: list[dict], deck_geometry: dict, disable: list[str],
-                    source: str) -> list[dict]:
+                    source: str, rigor: str = "standard") -> list[dict]:
     """deck.toml's [geometry] on top of the rules file. Typos fail loudly: a
     misspelled rule id or param would otherwise be a silently ignored override."""
     by_id = {r["id"]: r for r in rules}
@@ -493,11 +536,31 @@ def apply_overrides(rules: list[dict], deck_geometry: dict, disable: list[str],
                                           f"got {type(value).__name__}")
             else:
                 rule["params"][key] = value
-    pct = by_id.get("text-contrast", {}).get("params", {}).get("percentile")
+    contrast = by_id.get("text-contrast", {}).get("params", {})
+    pct = contrast.get("percentile")
     if pct is not None and not (isinstance(pct, int) and 0 <= pct <= 100):
         raise deckcfg.ConfigError(f"{source}: [geometry.text-contrast] percentile must be "
                                   f"an integer 0-100, got {pct!r}")
+    lowered = lowered_contrast(rules)
+    if lowered:
+        where = f"{source}: [geometry.text-contrast] " + ", ".join(
+            f"{k} = {contrast[k]}" for k in lowered)
+        if rigor == "regulated":
+            raise deckcfg.ConfigError(f"{where}: below WCAG AA "
+                                      f"({', '.join(f'{k} {AA[k]}' for k in lowered)}), "
+                                      "refused at regulated rigor")
+        if not str(contrast.get("reason", "")).strip():
+            raise deckcfg.ConfigError(f"{where}: below WCAG AA needs a non-empty `reason` "
+                                      "in the same table")
     return rules
+
+
+def lowered_contrast(rules: list[dict]) -> list[str]:
+    """The text-contrast bars set below WCAG AA, while the rule is on."""
+    rule = next((r for r in rules if r["id"] == "text-contrast"), None)
+    if rule is None or not rule["enabled"]:
+        return []
+    return [k for k, floor in AA.items() if rule["params"].get(k, floor) < floor]
 
 
 def compatible(key: str, value, default) -> bool:
@@ -519,7 +582,8 @@ def load_rules(cfg: deckcfg.DeckConfig) -> list[dict]:
         raise deckcfg.ConfigError(f"geometry.rules: {path} does not exist")
     rules = parse_rules(path.read_text(encoding="utf-8"), str(path))
     deck_geometry = cfg.tree.get("geometry", {})
-    return apply_overrides(rules, deck_geometry, cfg.get("geometry.disable"), cfg.source)
+    return apply_overrides(rules, deck_geometry, cfg.get("geometry.disable"), cfg.source,
+                           cfg.derive_rigor())
 
 
 # ================================================================ browser
@@ -670,7 +734,7 @@ class Page:
     def call(self, method: str, params: dict | None = None, timeout: float = 30.0) -> dict:
         return self.browser.call(method, params, self.session, timeout)
 
-    def evaluate(self, expression: str, timeout: float = 30.0):
+    def evaluate(self, expression: str, timeout: float = EVAL_TIMEOUT):
         result = self.call("Runtime.evaluate", {"expression": expression, "awaitPromise": True,
                                                 "returnByValue": True}, timeout)
         if "exceptionDetails" in result:
@@ -701,43 +765,101 @@ BAD_SELECTORS_JS = """((pairs) => pairs.filter(([, sel]) => {
   catch (e) { return true; }
 }))(%s)"""
 
+# Transitions and animations off for the whole run, so every state is final
+# the moment it is set: reveal's `.fragment { transition: all .2s }` would
+# otherwise leave a fragment mid-fade when probed, and animate the forced
+# glyph fills of the contrast shots (a transition beats !important).
+STILL_JS = """(() => {
+  const s = document.createElement('style');
+  s.id = 'deckkit-geometry-still';
+  s.textContent = '*, *::before, *::after { transition: none !important; ' +
+                  'animation: none !important; }';
+  document.head.appendChild(s);
+  return true;
+})()"""
+
 # Go to a slide with every fragment shown (their final state), then wait for
-# the fonts its text uses (document.fonts.ready can resolve before a face used
-# only on this slide starts loading), images, and two frames.
-GOTO_JS = """(async (h, v) => {
+# what it paints with: the fonts its text uses, loaded for that text (a face
+# split by unicode-range loads only the subsets its characters need), its
+# images, and every url() background in it, the reveal slide background
+# included (reveal sets those only when the slide is reached). One deadline
+# covers all of it, below the evaluate timeout, so a hang is named, not lost.
+# Returns {id, slow: [what did not settle]}.
+GOTO_JS = """(async (h, v, budget) => {
+  const deadline = performance.now() + budget;
+  const slow = [];
+  const settle = (p, what) => new Promise(done => {
+    const t = setTimeout(() => { slow.push(what); done(); },
+                         Math.max(0, deadline - performance.now()));
+    Promise.resolve(p).then(() => { clearTimeout(t); done(); },
+                            () => { clearTimeout(t); done(); });
+  });
   Reveal.slide(h, v);
   for (let guard = 0; guard < 500 && Reveal.nextFragment(); guard++) {}
-  const settle = (p) => Promise.race([p, new Promise(r => setTimeout(r, 10000))]);
-  const faces = new Set();
-  for (const el of Reveal.getCurrentSlide().querySelectorAll('*')) {
-    const cs = getComputedStyle(el);
-    faces.add(`${cs.fontStyle} ${cs.fontWeight} ${cs.fontSize} ${cs.fontFamily}`);
+  for (const a of document.getAnimations()) { try { a.finish(); } catch (e) { a.cancel(); } }
+  const sec = Reveal.getCurrentSlide();
+  const face = cs => `${cs.fontStyle} ${cs.fontWeight} ${cs.fontSize} ${cs.fontFamily}`;
+  const faces = new Map();
+  for (const el of [sec, ...sec.querySelectorAll('*')]) {
+    const f = face(getComputedStyle(el));
+    let text = faces.get(f) || '';
+    for (const n of el.childNodes) if (n.nodeType === Node.TEXT_NODE) text += n.nodeValue;
+    faces.set(f, text);
   }
-  await settle(Promise.all([...faces].map(f => document.fonts.load(f).catch(() => null))));
-  await settle(document.fonts.ready);
-  await settle(Promise.all([...document.images].map(img => img.complete ? null :
-    new Promise(r => { img.addEventListener('load', r); img.addEventListener('error', r); }))));
-  const frame = () => settle(new Promise(r => requestAnimationFrame(r)));
+  await Promise.all([...faces].map(([f, text]) =>
+    settle(document.fonts.load(f, [...new Set(text.replace(/\\s/g, ''))].join('') || ' '),
+           `font ${f}`)));
+  await settle(document.fonts.ready, 'document.fonts.ready');
+  const painted = [sec, ...sec.querySelectorAll('*')];
+  const bg = Reveal.getSlideBackground ? Reveal.getSlideBackground(h, v) : null;
+  if (bg) painted.push(bg, ...bg.querySelectorAll('*'));
+  const urls = new Set();
+  for (const el of painted) {
+    for (const pseudo of [null, '::before', '::after']) {
+      const image = getComputedStyle(el, pseudo).backgroundImage;
+      for (const m of image.matchAll(/url\\((['"]?)(.*?)\\1\\)/g)) urls.add(m[2]);
+    }
+  }
+  const decoded = src => { const img = new Image(); img.src = src; return img.decode(); };
+  await Promise.all([
+    ...[...sec.querySelectorAll('img')].map(img =>
+      settle(img.decode().catch(() => null), `image ${img.currentSrc || img.src}`)),
+    ...[...urls].map(u => settle(decoded(u).catch(() => null), `background ${u}`)),
+  ]);
+  const frame = () => settle(new Promise(r => requestAnimationFrame(r)), 'a rendered frame');
   await frame(); await frame();
-  return Reveal.getCurrentSlide().id;
-})(%d, %d)"""
+  return { id: sec.id, slow };
+})(%d, %d, %d)"""
 
 # Glyphs painted in one forced fill (black, white, or transparent to hide
-# them), everything else (text-shadows included) kept. The fill color is what
-# paints glyphs; `color` stays, so borders, currentColor icons and
-# default-colored shadows are untouched. SVG text paints with `fill`.
+# them), everything else kept: text-shadows, group opacity, overlays, and an
+# SVG halo (a stroke that paint-order puts under the fill). The fill color is
+# what paints glyphs; `color` stays, so borders, currentColor icons and
+# default-colored shadows are untouched. SVG text paints with `fill`, on
+# text, tspan and textPath alike (each may set its own); a stroke painted
+# over the fill is part of the glyph and is hidden with it.
 FILL_JS = """(async (fill) => {
+  const sec = Reveal.getCurrentSlide();
+  for (const el of sec.querySelectorAll('text, tspan, textPath')) {
+    const order = getComputedStyle(el).paintOrder.split(/\\s+/).filter(k => k !== 'normal');
+    for (const k of ['fill', 'stroke', 'markers']) if (!order.includes(k)) order.push(k);
+    el.toggleAttribute('data-deckkit-glyph-stroke', order.indexOf('stroke') > order.indexOf('fill'));
+  }
   const s = document.getElementById('deckkit-geometry-fill') || document.createElement('style');
   s.id = 'deckkit-geometry-fill';
-  s.textContent = '.reveal .slides section.present, .reveal .slides section.present * ' +
-    `{ -webkit-text-fill-color: ${fill} !important; caret-color: transparent !important; }` +
-    '.reveal .slides section.present text, .reveal .slides section.present tspan ' +
-    `{ fill: ${fill} !important; stroke: transparent !important; }`;
+  const at = '.reveal .slides section.present';
+  s.textContent = `${at}, ${at} * { -webkit-text-fill-color: ${fill} !important; ` +
+    'caret-color: transparent !important; }' +
+    `${at} text, ${at} tspan, ${at} textPath { fill: ${fill} !important; ` +
+    'fill-opacity: 1 !important; }' +
+    `${at} [data-deckkit-glyph-stroke] { stroke: transparent !important; }`;
   document.head.appendChild(s);
   for (let i = 0; i < 2; i++) await new Promise(r => requestAnimationFrame(r));
   return true;
 })(%s)"""
-UNFILL_JS = "(document.getElementById('deckkit-geometry-fill') || {remove() {}}).remove(), true"
+UNFILL_JS = """((document.getElementById('deckkit-geometry-fill') || {remove() {}}).remove(),
+  document.querySelectorAll('[data-deckkit-glyph-stroke]')
+    .forEach(el => el.removeAttribute('data-deckkit-glyph-stroke')), true)"""
 
 
 class QuietServer(serve.ReusableServer):
@@ -829,6 +951,7 @@ def measure(cfg: deckcfg.DeckConfig, browser_info: tuple[str, bool], wanted: lis
             raise deckcfg.ConfigError("; ".join(f"{key}: invalid CSS selector {sel!r}"
                                                 for key, sel in bad))
         page.evaluate(probe_src)         # defines geometryProbe and geometryContrast
+        page.evaluate(STILL_JS)
 
         slides = page.evaluate(SLIDES_JS)
         labels = [slide_label(s) for s in slides]
@@ -836,13 +959,18 @@ def measure(cfg: deckcfg.DeckConfig, browser_info: tuple[str, bool], wanted: lis
         if unknown:
             raise deckcfg.ConfigError(f"--slides: no slide {', '.join(map(repr, unknown))} "
                                       f"(have: {', '.join(labels)})")
+        contrast = by_id.get("text-contrast", {}).get("enabled", False)
         order, probes = [], {}
         for entry, label in zip(slides, labels):
             if wanted and label not in wanted:
                 continue
-            page.evaluate(GOTO_JS % (entry["h"], entry["v"]))
+            settled = page.evaluate(GOTO_JS % (entry["h"], entry["v"], SETTLE_BUDGET * 1000))
+            if settled["slow"]:
+                raise SlowResource(f"slide {label}: not loaded within {SETTLE_BUDGET:g} s: "
+                                   + "; ".join(settled["slow"]))
             probe = page.evaluate(f"geometryProbe({json.dumps(opts)})")
-            measure_contrast(page, probe)
+            if contrast:
+                measure_contrast(page, probe)
             probes[label] = probe
             order.append(label)
         return order, probes
@@ -866,6 +994,11 @@ def main() -> int:
     if args.slides is not None:
         cfg.set("geometry.slides", [s.strip() for s in args.slides.split(",") if s.strip()])
     rules = load_rules(cfg)
+    lowered = lowered_contrast(rules)
+    if lowered:
+        params = next(r for r in rules if r["id"] == "text-contrast")["params"]
+        print(f"geometry: text-contrast below WCAG AA "
+              f"({', '.join(f'{k} {params[k]}' for k in lowered)}): {params['reason']}")
 
     found = find_browser(cfg)
     if found is None:
@@ -880,6 +1013,8 @@ def main() -> int:
         return deckcfg.EXIT_ENV
     except PageError as exc:
         deckcfg.bail(f"the probe failed in the page: {exc}")
+    except SlowResource as exc:
+        deckcfg.bail(str(exc))
 
     violations: list[Violation] = []
     per_slide = {}
