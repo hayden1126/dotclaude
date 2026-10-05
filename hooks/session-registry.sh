@@ -1,12 +1,15 @@
 #!/usr/bin/env bash
 # Keep a record of which Claude session is open in which tmux tab, so tmux/claude-restore can
-# reopen the tabs after a reboot. Wired in settings.json:
+# reopen the tabs after their tmux server dies (a reboot, `wsl --terminate`, `tmux kill-server`).
+# Wired in settings.json:
 #   SessionStart (startup, resume, clear, compact)  write or refresh the session's entry
 #   SessionEnd                                      delete it, or mark it on reason `other`
 # One file per session: $XDG_STATE_HOME/dotclaude/open-sessions/<session_id>.json, holding
-# {session_id, cwd, transcript_path, pane, window_index, boot_id, ts}, written as tmp plus rename.
+# {session_id, cwd, transcript_path, pane, window_index, socket, server_start, ts}, written as an
+# fsynced tmp file plus rename. socket and server_start (tmux's #{socket_path} and #{start_time})
+# name the server the tab lives in: claude inherits the pane's TMUX, so `tmux display` reaches it.
 # Only a tab counts: no TMUX_PANE, a `claude -p` run (ATTENDED=0, even with an inherited
-# TMUX_PANE) and a subagent payload (agent_id) write nothing.
+# TMUX_PANE), a subagent payload (agent_id), an empty cwd or an unreadable server write nothing.
 #
 # What ends a session (probed 2026-10-05): /exit sends `prompt_input_exit`, /clear sends `clear`
 # for the old id and then a SessionStart `clear` for the new one. Those and any other named reason
@@ -22,15 +25,16 @@ case "$input" in *'"agent_id"'*) exit 0 ;; esac
 case "$input" in
   *'"SessionStart"'*)
     [ -n "${TMUX_PANE:-}" ] || exit 0
-    window=$(tmux display -p -t "$TMUX_PANE" '#{window_index}' 2>/dev/null) ;;
-  *'"SessionEnd"'*) window="" ;;
+    # "<start_time> <window_index> <socket_path>": the path last, since it may hold a space.
+    server=$(tmux display -p -t "$TMUX_PANE" '#{start_time} #{window_index} #{socket_path}' 2>/dev/null)
+    [ -n "$server" ] || exit 0 ;;
+  *'"SessionEnd"'*) server="" ;;
   *) exit 0 ;;
 esac
 
 printf '%s' "$input" | \
   REG_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/dotclaude/open-sessions" \
-  REG_BOOT="${DOTCLAUDE_BOOT_ID_FILE:-/proc/sys/kernel/random/boot_id}" \
-  REG_WINDOW="$window" REG_PANE="${TMUX_PANE:-}" python3 -I -c '
+  REG_SERVER="$server" REG_PANE="${TMUX_PANE:-}" python3 -I -c '
 import json, os, re, sys, tempfile, time
 try:
     d = json.load(sys.stdin)
@@ -49,21 +53,22 @@ def write(entry):
     fd, tmp = tempfile.mkstemp(dir=reg, prefix=".tmp-")
     with os.fdopen(fd, "w") as f:
         json.dump(entry, f)
+        f.flush()
+        os.fsync(f.fileno())
     os.replace(tmp, path)
 
 event = d.get("hook_event_name")
 if event == "SessionStart":
-    try:
-        with open(os.environ["REG_BOOT"]) as f:
-            boot = f.read().strip()
-    except OSError:
-        boot = ""
-    window = os.environ.get("REG_WINDOW", "")
-    write({"session_id": sid, "cwd": d.get("cwd") or "",
+    m = re.fullmatch(r"(\d+) (\d*) (.+)", os.environ.get("REG_SERVER", "").rstrip("\n"))
+    cwd = d.get("cwd")
+    if not m or not isinstance(cwd, str) or not cwd:
+        sys.exit(0)
+    write({"session_id": sid, "cwd": cwd,
            "transcript_path": d.get("transcript_path") or "",
            "pane": os.environ.get("REG_PANE", ""),
-           "window_index": int(window) if window.isdigit() else None,
-           "boot_id": boot, "ts": round(time.time(), 3)})
+           "window_index": int(m.group(2)) if m.group(2) else None,
+           "socket": m.group(3), "server_start": int(m.group(1)),
+           "ts": round(time.time(), 3)})
 elif event == "SessionEnd":
     if d.get("reason") == "other":
         try:

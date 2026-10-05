@@ -2,32 +2,40 @@
 for tmux/claude-restore (stdlib only).
 
 SessionStart writes $XDG_STATE_HOME/dotclaude/open-sessions/<session_id>.json for a tab
-(TMUX_PANE set, ATTENDED not 0, not a subagent). SessionEnd deletes it on an explicit end
-(/exit, /clear, logout) and only marks it on `other`, which a window kill, a SIGTERM and a tmux
-server kill all send (probed 2026-10-05), so a shutdown can't be told from a closed window at
-hook time. A stub tmux answers `display` with a window index and records every call."""
+(TMUX_PANE set, ATTENDED not 0, not a subagent), naming the tmux server it runs under (socket
+path and start time) so claude-restore can tell which tabs died with an earlier server.
+SessionEnd deletes the entry on an explicit end (/exit, /clear, logout) and only marks it on
+`other`, which a window kill, a SIGTERM and a tmux server kill all send (probed 2026-10-05), so a
+shutdown can't be told from a closed window at hook time. A stub tmux answers `display` and logs
+each call's argv, one argument per field."""
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
+import time
 import unittest
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 HOOK = os.path.join(REPO, "hooks", "session-registry.sh")
 
 STUB = """#!/usr/bin/env bash
-printf '%s\\n' "$(basename "$0") $*" >> "$STUB_LOG"
+{ printf '%s' "$(basename "$0")"; printf '\\x1f%s' "$@"; printf '\\n'; } >> "$STUB_LOG"
 case "$1" in
-  display|display-message) printf '%s\\n' "${STUB_WINDOW:-3}" ;;
+  display|display-message)
+    [ -z "${STUB_NO_SERVER:-}" ] || exit 1
+    printf '%s %s %s\\n' "$STUB_START" "${STUB_WINDOW:-3}" "$STUB_SOCKET" ;;
 esac
 exit 0
 """
 
 SID = "0b6f2a1e-1111-4c2d-9e3f-aaaaaaaaaaaa"
 NEW = "7c1d9e2f-2222-4a5b-8c6d-bbbbbbbbbbbb"
-BOOT = "11111111-2222-3333-4444-555555555555"
-TAB = {"TMUX": "/tmp/tmux-stub,1,0", "TMUX_PANE": "%7", "CLAUDE_CODE_SESSION_ATTENDED": "1"}
+SOCKET = "/tmp/tmux-1000/my socket"   # a space: the path is the rest of the display line
+START = 1791222157
+TAB = {"TMUX": "/tmp/tmux-1000/default,1,0", "TMUX_PANE": "%7",
+       "CLAUDE_CODE_SESSION_ATTENDED": "1"}
 
 
 class Registry(unittest.TestCase):
@@ -39,9 +47,6 @@ class Registry(unittest.TestCase):
         with open(os.path.join(stubs, "tmux"), "w") as f:
             f.write(STUB)
         os.chmod(os.path.join(stubs, "tmux"), 0o755)
-        boot = os.path.join(self.tmp, "boot_id")
-        with open(boot, "w") as f:
-            f.write(BOOT + "\n")
         self.log = os.path.join(self.tmp, "calls.log")
         self.dir = os.path.join(self.tmp, "state", "dotclaude", "open-sessions")
         # The test may itself run inside a Claude session in a tmux tab: start from a clean env.
@@ -49,7 +54,7 @@ class Registry(unittest.TestCase):
                     if not k.startswith(("CLAUDE", "TMUX"))}
         self.env.update(PATH=stubs + os.pathsep + self.env["PATH"], STUB_LOG=self.log,
                         XDG_STATE_HOME=os.path.join(self.tmp, "state"),
-                        DOTCLAUDE_BOOT_ID_FILE=boot)
+                        STUB_START=str(START), STUB_SOCKET=SOCKET)
 
     def fire(self, event, session=TAB, **payload):
         body = {"session_id": SID, "hook_event_name": event, "cwd": "/home/u/code/dna",
@@ -61,7 +66,7 @@ class Registry(unittest.TestCase):
         self.assertEqual((p.stdout, p.stderr), ("", ""))
 
     def start(self, session=TAB, **payload):
-        self.fire("SessionStart", session, source="startup", **payload)
+        self.fire("SessionStart", session, **{"source": "startup", **payload})
 
     def end(self, reason, **payload):
         self.fire("SessionEnd", reason=reason, **payload)
@@ -76,25 +81,37 @@ class Registry(unittest.TestCase):
                     out[name[:-5]] = json.load(f)
         return out
 
+    def calls(self):
+        if not os.path.exists(self.log):
+            return []
+        with open(self.log) as f:
+            return [line.split("\x1f") for line in f.read().splitlines()]
+
     def test_a_tab_start_writes_its_entry(self):
         self.start()
         e = self.entries()[SID]
         self.assertEqual({k: e[k] for k in ("session_id", "cwd", "pane", "window_index",
-                                             "boot_id")},
+                                             "socket", "server_start")},
                          {"session_id": SID, "cwd": "/home/u/code/dna", "pane": "%7",
-                          "window_index": 3, "boot_id": BOOT})
+                          "window_index": 3, "socket": SOCKET, "server_start": START})
+        self.assertNotIn("boot_id", e)
         self.assertTrue(e["transcript_path"].endswith(SID + ".jsonl"))
         self.assertIsInstance(e["ts"], (int, float))
         self.assertNotIn("ended_other_at", e)
-        with open(self.log) as f:
-            self.assertIn("tmux display -p -t %7 #{window_index}", f.read())
+        self.assertEqual(self.calls(), [["tmux", "display", "-p", "-t", "%7",
+                                         "#{start_time} #{window_index} #{socket_path}"]])
         self.assertEqual(sorted(os.listdir(self.dir)), [SID + ".json"])  # no tmp left behind
 
     def test_every_source_refreshes_the_entry(self):
-        for source in ("startup", "resume", "compact"):
+        self.start()
+        last = self.entries()[SID]["ts"]
+        for source in ("resume", "clear", "compact"):
             with self.subTest(source=source):
+                time.sleep(0.01)
                 self.fire("SessionStart", source=source)
-                self.assertIn(SID, self.entries())
+                ts = self.entries()[SID]["ts"]
+                self.assertGreater(ts, last)
+                last = ts
 
     def test_a_restart_clears_an_old_end_mark(self):
         self.start()
@@ -104,6 +121,15 @@ class Registry(unittest.TestCase):
 
     def test_no_entry_outside_tmux(self):
         self.start(session={"CLAUDE_CODE_SESSION_ATTENDED": "1"})
+        self.assertEqual(self.entries(), {})
+
+    def test_no_entry_when_the_server_cannot_be_read(self):
+        self.env["STUB_NO_SERVER"] = "1"
+        self.start()
+        self.assertEqual(self.entries(), {})
+
+    def test_no_entry_without_a_directory(self):
+        self.start(cwd="")
         self.assertEqual(self.entries(), {})
 
     def test_no_entry_for_a_p_run(self):
@@ -140,7 +166,7 @@ class Registry(unittest.TestCase):
         self.end("other")
         e = self.entries()[SID]
         self.assertIsInstance(e["ended_other_at"], (int, float))
-        self.assertEqual(e["pane"], "%7")
+        self.assertEqual((e["pane"], e["server_start"]), ("%7", START))
 
     def test_an_end_for_an_unknown_session_writes_nothing(self):
         self.end("other")
@@ -153,6 +179,25 @@ class Registry(unittest.TestCase):
                                    timeout=10, env={**self.env, **TAB})
                 self.assertEqual((p.returncode, p.stdout, p.stderr), (0, "", ""))
         self.assertEqual(self.entries(), {})
+
+
+class Wiring(unittest.TestCase):
+    def test_the_baseline_runs_the_hook_on_start_and_end(self):
+        with open(os.path.join(REPO, "settings.json")) as f:
+            hooks = json.load(f)["hooks"]
+
+        def matchers(event):
+            return [g.get("matcher") for g in hooks.get(event, [])
+                    if any("session-registry.sh" in h.get("command", "")
+                           for h in g.get("hooks", []))]
+
+        start = matchers("SessionStart")
+        self.assertEqual(len(start), 1)
+        for source in ("startup", "resume", "clear", "compact"):
+            with self.subTest(source=source):
+                self.assertTrue(start[0] is None or re.fullmatch(start[0], source) or
+                                source in start[0].split("|"))
+        self.assertEqual(len(matchers("SessionEnd")), 1)
 
 
 if __name__ == "__main__":
