@@ -81,10 +81,7 @@ stored here).
   `$CLAUDE_JOB_DIR/tmp` bug report is Hayden's call; `CLAUDE.md` carries the workaround.
 
 ## Notes for next session
-- **First:** push the private repo's `chore/geometry-golden` if it isn't on its remote yet (check:
-  `git -C ~/code/bella ls-remote origin chore/geometry-golden`; push outside the sandbox). Its
-  push timed out on the network on 2026-10-05.
-- **Then: deck-production S2** (In flight). Last session's range: `a52c798..feat/deck-geometry`
+- **Next: deck-production S2** (In flight). Last session's range: `a52c798..feat/deck-geometry`
   and `a52c798..fix/tmux-wait-subagent`.
 - **Verify `deck-production` before touching it:** `deckkit regress` green (the config and goldens
   are in the private repo's `decks/_parity/`, README there has the command) and
