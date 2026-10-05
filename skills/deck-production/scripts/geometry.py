@@ -1216,9 +1216,8 @@ def evaluate_steps(probed: dict, rules: list[dict], label: str) -> list[Violatio
         step = "" if final else f"{state['steps'][0] + 2}/{probed['total']}"
         for v in evaluate(state["probe"], rules, label):
             v.step = step
-            key = (v.key, v.subject) if not v.key else v.key
-            if key not in found or (final and found[key].step):
-                found[key] = v
+            if v.key not in found or (final and found[v.key].step):
+                found[v.key] = v
     return list(found.values())
 
 

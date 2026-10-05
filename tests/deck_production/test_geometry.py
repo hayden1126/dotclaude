@@ -849,10 +849,14 @@ class GeometryEndToEnd(unittest.TestCase):
         self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
         self.assertEqual(self.found(out), {("text-overlap", ".base x .rise")})
 
-    def test_lines_stacked_half_an_em_deep_collide(self):
+    def test_lines_one_flow_stacked_into_each_other_collide(self):
+        # Line-height .5: half an em deep, past flow_overlap. And an inline
+        # raised 14 px by vertical-align (line-height 0, so its line does not
+        # grow): .15 em deep, under flow_overlap, caught as displaced.
         p, out = self.run_gate("--slides", "flow")
         self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
-        self.assertEqual(self.found(out), {("text-overlap", ".tight .t1 x .tight .t2")})
+        self.assertEqual(self.found(out), {("text-overlap", ".tight .t1 x .tight .t2"),
+                                           ("text-overlap", ".va .v1 x .va .v2")})
 
     def test_a_slide_background_is_loaded_before_it_is_measured(self):
         # Reveal sets a data-background-image only when its slide is reached;

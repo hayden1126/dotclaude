@@ -110,6 +110,11 @@
 
     /* flow: lines one flow stacked at line-height .5, half an em deep */
     #flow .tight { margin-top: 40px; font-size: 40px; line-height: .5; }
+    /* and an inline raised 14 px off its line, line-height 0 so the line box
+       does not grow: .15 em into the line above, under flow_overlap, caught
+       as displaced */
+    #flow .va { margin-top: 120px; font-size: 40px; line-height: 1.2; }
+    #flow .va .v2 { vertical-align: 14px; line-height: 0; }
 
     /* bright-bg: a reveal slide background, loaded only when the slide is reached,
        over a navy background color: measured before it loads, the type passes */
@@ -226,7 +231,8 @@
       </section>
 
       <section id="flow">
-        <div class="wrap"><div class="tight"><span class="t1">Stacked tight</span><br><span class="t2">Into each other</span></div></div>
+        <div class="wrap"><div class="tight"><span class="t1">Stacked tight</span><br><span class="t2">Into each other</span></div>
+          <div class="va"><span class="v1">A line set plainly</span><br><span class="v2">A line raised into it</span></div></div>
       </section>
 
       <section id="bright-bg" data-background-color="#0b1320" data-background-image="media/bright.png"

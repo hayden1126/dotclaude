@@ -1,9 +1,10 @@
 // geometry_probe.js: measures the present reveal slide and returns plain JSON.
 //
 // It holds no rules. geometry.py evaluates this file once in the page (with
-// Runtime.evaluate, which defines both functions globally), then calls
-// geometryProbe per slide and geometryContrast on that slide's screenshot,
-// and applies geometry.rules.toml to what comes back.
+// Runtime.evaluate, which defines its functions globally), then calls
+// geometryProbe per slide and fragment step, geometryContrast on a step's
+// screenshots, and geometrySettle to wait for what a slide paints with, and
+// applies geometry.rules.toml to what comes back.
 //
 // Every box is in canvas pixels: the client rect divided by Reveal.getScale(),
 // minus the origin of the .slides element, which is the canvas. Not the
