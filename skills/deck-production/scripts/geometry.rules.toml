@@ -1,0 +1,156 @@
+# Geometry gate rules, evaluated by geometry.py over what geometry_probe.js
+# measured. Every box is in canvas pixels (the deck's [canvas] size).
+#
+# A deck overrides these in its deck.toml, never by editing this file:
+#
+#   [geometry]
+#   disable = ["clearance"]          # rule ids to skip
+#   [geometry.text-overlap]
+#   min_area = 10                    # any param below, plus severity/enabled
+#
+# severity: "error" fails the gate (exit 1); "warn" prints and exits 0.
+# Every rule also takes `exempt`, a list of CSS selectors: a text item inside a
+# match is skipped by that rule (for text that sits there by design).
+#
+# A slide with fragments is measured at every fragment step. The geometry
+# rules run on each step; text-contrast and covered-text judge each text at
+# the step where it is most visible, then least hidden (a caption a later
+# fragment covers is judged where it showed).
+#
+# "Ink" below is a text line's rect trimmed to the em box: a Range rect is the
+# font's content area, taller than the glyphs, so stacked lines whose content
+# areas touch do not collide on screen.
+
+[[rule]]
+id = "text-overlap"
+severity = "error"
+enabled = true
+# The ink of two text items intersects by more than min_area px², at least
+# min_depth px deep on both axes. In flow or not: an overflowing fixed-height
+# card, a negative margin, a relative offset, a transform or two grid items in
+# one cell all stack ink. Not compared: an item and the text nested in its own
+# flow (an absolutely positioned descendant, a badge on a title, still
+# counts), and lines one flow stacked: below the two items' common ancestor
+# nothing is positioned, floated, transformed, offset (a relative offset, a
+# stuck sticky box, a length vertical-align), negatively margined or spilling
+# out of a fixed size, and the two branches are one run of inline content or
+# boxes that do not intersect. Their em boxes overlap by tight leading (a
+# display headline at line-height .85 overlaps .15 em), which is design up to
+# flow_overlap em of the smaller text; deeper (line-height .5) glyphs collide
+# and count. A shallower overlap is reported by `clearance`.
+min_area = 4
+min_depth = 3
+flow_overlap = 0.3
+
+[[rule]]
+id = "covers-marker"
+severity = "error"
+enabled = true
+# CSS selectors for map pins and similar markers that text must not sit on.
+markers = [".pin", "[data-geo=marker]"]
+min_area = 0
+
+[[rule]]
+id = "unbounded-abs-text"
+severity = "error"
+enabled = true
+# Running text in an absolutely positioned box with no measure of its own.
+# Measured, not inferred: the probe shortens and lengthens the text. A box
+# that changes width with it and, lengthened, fills all the width available
+# from its anchor (in every direction it grows: a box centered with
+# translateX(-50%) grows both ways) is bounded by nothing of its own, wherever
+# that anchor sits; one that stops short has a max-width, a width or insets. Headings (h1-h3) and labels of at most
+# label_chars characters (kickers, names) set their own width by design. Font
+# size is not the test: large text can still be a long unbounded caption.
+label_chars = 24
+
+[[rule]]
+id = "text-contrast"
+severity = "error"
+enabled = true
+# WCAG 2.x contrast, measured on pixels. The slide is screenshotted with the
+# glyphs invisible (the backdrop: text-shadows and SVG halos are part of what
+# a glyph sits on), and with each glyph painted as an opaque black, then
+# white, swatch in place, everything else as rendered: group opacity, masks
+# and overlays above the text are part of what reaches the reader, and the
+# swatches measure what they do to a color, pixel by pixel (a scrim over half
+# a caption darkens that half). The text's declared color, composited at its
+# alpha and carried through that, is judged against the backdrop under each
+# glyph core pixel (found from the glyph shape rendered alone), so
+# anti-aliasing never enters and a thin weight is judged at its color. On a
+# flat ground the reading is the analytic ratio. The ratio at the given
+# percentile of those pixels must reach min_small, or min_large for WCAG
+# large text (large_px, or large_bold_px at bold_weight). Compared
+# unrounded. A low percentile: a few stray dots do not fail a line, a band of
+# bad backdrop does. Below min_pixels judged pixels the percentile sets
+# aside no stray dot, so a failing item is an error only if its median fails
+# too, else a warning. Every visible text is measured, whatever is behind
+# it, once the slide has loaded what it paints with: fonts (pseudo-element
+# content too), images and svg <image>s, videos (first frame or poster), and
+# url() backgrounds, masks, border-images, list images and content, the
+# reveal slide background and its video included.
+#
+# The bars default to WCAG AA. A deck may lower them in deck.toml, with a
+# `reason` in the same table, printed on every run. At regulated rigor
+# ([deck] rigor, or derived) this rule and covered-text are frozen as shipped
+# here: a deck may only raise min_small and min_large (and lower covered-text's
+# min_hidden). Any other key in either table, disabling either, a [geometry]
+# slides list or another rules file is a config error.
+percentile = 5
+min_small = 4.5
+min_large = 3.0
+reason = ""
+large_px = 24
+large_bold_px = 18.66
+bold_weight = 700
+min_pixels = 40
+# Decorative type is meant to recede.
+exempt = ["[data-decor]"]
+
+[[rule]]
+id = "covered-text"
+severity = "error"
+enabled = true
+# Visible text whose glyphs are hidden by something painted above it: an
+# opaque panel, an image or a shape stacked over a caption. Measured with
+# text-contrast's shots: of the glyph's core pixels, at least min_hidden of
+# them show nothing of it. A veil that lets the glyph through is
+# text-contrast's to judge.
+min_hidden = 0.02
+exempt = ["[data-decor]"]
+
+[[rule]]
+id = "safe-area"
+severity = "warn"
+enabled = true
+# Text that runs into the canvas margin. "auto" reads the --margin-slide token
+# (resolved by the browser, so rem, % and calc() work), else fallback_margin.
+# Text on a painted panel (at least panel_alpha opaque) whose own box hugs the
+# edge the text is near (a side column, a band) is measured by that panel's
+# inset and skipped for that edge. A full-canvas panel excuses no edge.
+margin = "auto"
+fallback_margin = 96
+tolerance = 2
+panel_alpha = 0.35
+# Source lines and decorative type sit in the margin on purpose.
+exempt = ["footer.src", "[data-decor]"]
+
+[[rule]]
+id = "clearance"
+severity = "warn"
+enabled = true
+# Two text items whose ink overlaps, shallower than text-overlap's min_depth
+# (reported as overlapping, 0 px apart), for every pair text-overlap compares,
+# svg labels and items in one positioned box included. A near miss, ink
+# closer than min_gap px, only between items laid out independently
+# (different positioned boxes): blocks in one box sit close by design, and so
+# do the labels of one svg drawing, placed against each other by coordinates.
+min_gap = 8
+
+[[rule]]
+id = "clipped-text"
+severity = "error"
+enabled = true
+# A text line that runs past an overflow:hidden/clip ancestor's box by more
+# than this many px.
+tolerance = 2

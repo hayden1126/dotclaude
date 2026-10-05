@@ -39,7 +39,7 @@ COMMANDS: dict[str, tuple[str, str, bool, str]] = {
     "fonts":       ("subset_fonts.py", "fonttools", True,  "subset and rename the theme faces to woff2"),
     "package":     ("package.py",      "self",      True,  "runtime-only site + zip, presenter notes stripped"),
     "serve":       ("serve.py",        "self",      True,  "range-capable static server for the iteration loop"),
-    "geometry":    ("geometry.py",     "self",      True,  "overlap, overflow, and clearance gate"),
+    "geometry":    ("geometry.py",     "self",      True,  "overlap, contrast, coverage, and bounds gate"),
     "fingerprint": ("fingerprint.py",  "self",      True,  "regression fingerprint, diffed at every phase exit"),
     "pdf":         ("pdf.py",          "self",      True,  "decktape capture off ?export"),
     "pptx":        ("export_pptx.py",  "pptx",      True,  "PowerPoint picture + editable pair"),

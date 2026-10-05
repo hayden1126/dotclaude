@@ -1,0 +1,4 @@
+reveal.js 6.0.1
+npm pack reveal.js@6.0.1
+sha256 7a3bc5096c435b893fd7488ff444c1c1c232e1e6987b6de68696e706437d0a4f
+vendored 2026-10-04 (reveal.js, reveal.css and LICENSE only: the fixture uses no plugins)
