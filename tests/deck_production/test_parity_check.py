@@ -108,7 +108,6 @@ class CollectRunsGeometry(unittest.TestCase):
 
     def fake_run(self, argv, timeout=600):
         self.calls.append(argv)
-        self.timeouts[pathlib.Path(argv[0]).name] = timeout
         script = pathlib.Path(argv[0]).name
         if script == "build.py":
             return 0, json.dumps({"rows": 3, "built": 3, "sha256": "ab", "would_change": False})
@@ -123,7 +122,7 @@ class CollectRunsGeometry(unittest.TestCase):
         raise AssertionError(f"unexpected tool {script}")
 
     def collect(self, geometry_result):
-        self.calls, self.timeouts = [], {}
+        self.calls = []
         self.geometry_result = geometry_result
         with tempfile.TemporaryDirectory() as tmp:
             ref, config = pathlib.Path(tmp, "ref"), pathlib.Path(tmp, "parity.toml")
@@ -145,9 +144,33 @@ class CollectRunsGeometry(unittest.TestCase):
                       parity_check.geometry_line(facts))
 
     def test_geometry_gets_its_own_longer_timeout(self):
-        self.collect((0, geometry_output([], {"s01": {}}, 0)))
-        self.assertEqual(self.timeouts["geometry.py"], parity_check.GEOMETRY_TIMEOUT)
-        self.assertGreater(parity_check.GEOMETRY_TIMEOUT, self.timeouts["build.py"])
+        """Patches subprocess.run, not run(), so the timeout is checked where
+        it takes effect: what run() hands the child process."""
+        self.assertEqual(parity_check.GEOMETRY_TIMEOUT, 1800)
+        outputs = {
+            "build.py": json.dumps({"rows": 3, "built": 3, "sha256": "ab",
+                                    "would_change": False}),
+            "lint.py": "lint: 0 errors, 0 warnings, 0 FLAG\n",
+            "package.py": json.dumps({"note_blocks_stripped": 0, "byte_delta": 0}),
+            "geometry.py": geometry_output([], {"s01": {}}, 0),
+        }
+        timeouts: dict[str, list] = {}
+
+        def fake_subprocess_run(argv, **kwargs):
+            script = pathlib.Path(argv[1]).name
+            timeouts.setdefault(script, []).append(kwargs.get("timeout"))
+            return subprocess.CompletedProcess(argv, 0, stdout=outputs[script], stderr="")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            ref, config = pathlib.Path(tmp, "ref"), pathlib.Path(tmp, "parity.toml")
+            ref.mkdir()
+            with mock.patch.object(parity_check.subprocess, "run", fake_subprocess_run):
+                facts = parity_check.collect(ref, config, pathlib.Path(tmp, "work"))
+        self.assertEqual(facts["geometry"]["exit"], 0)
+        self.assertEqual(timeouts["geometry.py"], [1800])
+        self.assertEqual(timeouts["build.py"], [600])
+        self.assertEqual(timeouts["lint.py"], [600])
+        self.assertEqual(timeouts["package.py"], [600, 600])
 
     def test_a_geometry_timeout_is_recorded_not_raised(self):
         facts = self.collect(subprocess.TimeoutExpired(["geometry.py"], 1800))
