@@ -26,23 +26,44 @@ stored here).
   https://claude.ai/artifact/KWwrPkLsbMUi7Ugjfskqsz (republish by that URL).
 
 ## In flight
-- **`deck-production`: the geometry gate is merged (#68)**; behavior in SKILL.md "The geometry
-  gate", design in `PLAN.md` (history now). Not taken from its wiring review: a reading near the
-  contrast bar could flip golden counts (four identical regress runs; revisit only if regress
-  ever flaps).
-  - **Golden:** captured in the private repo on branch `chore/geometry-golden` (unmerged there;
-    no worktree now); its `decks/_parity/README.md` lists the deck's real findings for that repo's
-    session to fix (Hayden's call: record here, fix there). The private master's goldens have no
-    geometry facts, so until that branch merges, regress is green only with `--config`/`--goldens`
-    taken from that branch (check it out in a temp worktree).
-  - **Deferred, known:** gradient text (`background-clip:text`) is never judged; a color the canvas
-    can't serialize reads as black; isolated glyph shots drop `filter`.
-  - **Next block: S2 (fonts + PDF)**, then S4 (SKILL references + Workflow scripts), S5 (ingest +
-    theme extractor), S6 (pptx export). S1-S4 is the usable product. The S2-S6 plan file is lost:
-    write S2's plan into `PLAN.md`, replacing the geometry one.
-  - Owners: SKILL.md (phases, gates), `deckkit` `COMMANDS` (CLI), `deckcfg.derive_rigor`, the
-    private `decks/_parity/` goldens; no "S<n>" in shipped artifacts. Known gap:
-    `deck.forward_targets` is declared, not detected; revisit when MUST/NEVER are enforced.
+- **tmux tabs come back after a server death** (PR #70, `feat/tmux-restore`; design and
+  the situations table in `PLAN.md`, behavior in README "Tabs come back after a reboot").
+  `hooks/session-registry.sh` records each open tab (session id, cwd, pane, window, tmux server
+  socket + start + pid); `tmux/claude-restore` reopens a dead server's tabs when `main` is created
+  (a `session-created` hook in `claude.conf`), `--resume` or a fresh `claude` when there is no
+  transcript yet. Hayden's calls: trigger on `main`'s creation (nothing starts tmux at Windows
+  logon; KeepWSLAlive only boots the VM), resume the conversation, interactive tmux tabs only (no
+  `--bg`), and any server death counts (reboot, `wsl --terminate`, `kill-server`). Four review
+  rounds; verified by `tests/setup` (167) and isolated two-server e2e runs on `tmux -L e2e`.
+  - **To ship:** merge #70, `git fetch origin main:main`, switch to `main`, `./setup-tmux.sh`
+    (links `claude-restore`), then `./setup.sh` for the SessionStart/SessionEnd hooks (copy
+    `~/.claude/settings.json` first, diff after). Then delete the worktree
+    `.claude/worktrees/agent-adfd457732b22fc90` and its branch.
+  - **After install:** open tabs aren't recorded until each is restarted or `/clear`ed (hooks
+    load at session start). The real test is Hayden's: `wsl --shutdown` from Windows, connect,
+    and check the tabs return (`claude-restore --list` beforehand; `restore.log` after).
+  - **Known limits (accepted):** a window killed right before an idle hard reboot comes back;
+    right after a `kill-server`, a still-exiting claude can read as live and its tab is skipped;
+    tmux's own new shell is window 1, so restored tabs start at 2; one unreproduced test-suite
+    failure during the build (34 later runs clean). The validation gate (6cf8f39) had no fresh
+    reviewer, only its own failing-then-passing test, the suite and the e2e.
+- **Push and merge permissions** (PR #71, `chore/push-perms`; Hayden's call 2026-10-05):
+  `git push origin <branch>` and `gh pr create` run without a prompt; anything that can reach
+  `main` and merges (`gh pr merge`) ask. Rules only (README "permissions" paragraph; pinned in
+  `tests/delegation/test_settings.py`). Live after merge plus `./setup.sh` (settings are copied).
+  Its policy tests must run sandbox-off from a worktree under `.claude/worktrees/`.
+- **`deck-production`: deferred (Hayden, 2026-10-05: workflow improvements first).** The geometry
+  gate is merged (#68): behavior in SKILL.md "The geometry gate", design in git history (`PLAN.md`
+  before the tmux-restore design). Its golden is on the private repo's unmerged
+  `chore/geometry-golden` (its `decks/_parity/README.md` lists the deck's findings, fixed there);
+  until it merges, regress needs `--config`/`--goldens` from that branch. Deferred gaps: gradient
+  text is never judged, an unserializable color reads as black, isolated glyph shots drop
+  `filter`; a reading near the contrast bar could flip golden counts (revisit only if regress
+  flaps). Next block when resumed: S2 (fonts + PDF; decide whether `fingerprint` joins it), then
+  S4 (references + Workflow scripts), S5 (ingest + theme), S6 (pptx); S1-S4 is the usable
+  product. The S2-S6 plan is lost: write S2's into `PLAN.md`. Owners: SKILL.md (phases, gates),
+  `deckkit` `COMMANDS`, `deckcfg.derive_rigor`, the private goldens; no "S<n>" in shipped
+  artifacts. `deck.forward_targets` is declared, not detected.
 - **New-device parity audit: done except a `shell/` snippet** (only if a second device is coming).
   Inventory: `~/scratch/parity-audit/INVENTORY.md` (private; [[hayden-new-device-goal]]). The WSL
   override pins `chrome-devtools-mcp@1.9.0` (`setup-chrome-wsl.sh`'s header has why it also clears
@@ -77,10 +98,12 @@ stored here).
   `$CLAUDE_JOB_DIR/tmp` bug report is Hayden's call; `CLAUDE.md` carries the workaround.
 
 ## Notes for next session
-- **Next: deck-production S2** (In flight). Recent work: PRs #67 to #69.
+- **Next: Hayden merges #70 and #71, then install both** (In flight, "To ship"; one `./setup.sh`
+  covers both), then Hayden picks the next workflow improvement; deck-production S2 is deferred.
+  Recent work: PRs #67 to #69, `main..feat/tmux-restore`.
 - **Verify `deck-production` before touching it:** `deckkit regress` green (the config and goldens
-  are in the private repo's `decks/_parity/`, README there has the command; "Golden" above
-  says which branch) and
+  are in the private repo's `decks/_parity/`, README there has the command; the deck-production
+  item says which branch) and
   `python3 -m unittest discover -s tests/deck_production -t tests/deck_production` (needs the
   Puppeteer headless shell; full Chrome aborts inside the sandbox).
 - **Verify delegation before touching it:** `tests/delegation` and `tests/setup` pass sandboxed;

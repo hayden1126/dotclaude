@@ -1,17 +1,20 @@
 #!/usr/bin/env bash
 # setup-tmux.sh: the tmux side of the per-window Claude indicator (◐ busy, ✳ waiting) and the
 # delegation token in the status bar, and what lets a background session's hooks find its tab
-# (tmux-claude-status writes that map). Opt-in and idempotent; setup.sh never calls it. The hook
-# side (hooks/tmux-state.sh) is wired by setup.sh on every machine and does nothing outside tmux.
+# (tmux-claude-status writes that map), plus claude-restore, which reopens main's Claude tabs
+# after the tmux server dies. Opt-in and idempotent; setup.sh never calls it. The hook side
+# (hooks/tmux-state.sh, hooks/session-registry.sh) is wired by setup.sh on every machine and does
+# nothing outside tmux.
 #
-#   ./setup-tmux.sh           link tmux-claude-status, source tmux/claude.conf from ~/.tmux.conf
+#   ./setup-tmux.sh           link tmux-claude-status and claude-restore into ~/.local/bin,
+#                             source tmux/claude.conf from ~/.tmux.conf
 #   ./setup-tmux.sh --base    also source tmux/base.conf (mouse, splits, the Ctrl-b Enter menu)
 #                             and link the Ctrl-b h cheatsheet
 #
 # The source-file lines live between markers in ~/.tmux.conf, and each run rewrites that block to
 # match its flags (a run without --base drops base.conf). Your own lines outside it are kept;
 # the block sits at the end, so its settings win. ~/.tmux.conf is backed up before any change.
-# To remove: delete the marked block and the two links.
+# To remove: delete the marked block and the links (two, three with --base).
 
 set -euo pipefail
 
@@ -26,7 +29,7 @@ base=0
 for arg in "$@"; do
   case "$arg" in
     --base) base=1 ;;
-    -h|--help) sed -n '2,15p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,18p' "$0"; exit 0 ;;
     *) die "unknown argument: $arg (try --help)" ;;
   esac
 done
@@ -47,6 +50,7 @@ link() {
 }
 
 link "$REPO_DIR/tmux/tmux-claude-status" "$HOME/.local/bin/tmux-claude-status"
+link "$REPO_DIR/tmux/claude-restore" "$HOME/.local/bin/claude-restore"
 [ "$base" = 1 ] && link "$REPO_DIR/tmux/cheatsheet.txt" "$HOME/.tmux-cheatsheet.txt"
 
 python3 -I - "$HOME/.tmux.conf" "$REPO_DIR" "$base" "$TS" <<'PY'

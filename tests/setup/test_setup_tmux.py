@@ -1,4 +1,4 @@
-"""setup-tmux.sh: links the status script, upserts one marked source-file block into
+"""setup-tmux.sh: links the status and restore scripts, upserts one marked source-file block into
 ~/.tmux.conf, keeps the user's own lines, and is idempotent (stdlib only)."""
 import glob
 import os
@@ -36,14 +36,16 @@ class SetupTmux(unittest.TestCase):
 
     def test_the_installers_are_executable(self):
         # README says ./setup-tmux.sh; the other tests call it through bash, which hides a mode bug.
-        for path in (SCRIPT, os.path.join(REPO, "tmux", "tmux-claude-status")):
+        for path in (SCRIPT, os.path.join(REPO, "tmux", "tmux-claude-status"),
+                     os.path.join(REPO, "tmux", "claude-restore")):
             with self.subTest(path=path):
                 self.assertTrue(os.access(path, os.X_OK))
 
     def test_a_fresh_home_gets_the_link_and_the_claude_block(self):
         self.run_setup()
-        link = os.path.join(self.home, ".local", "bin", "tmux-claude-status")
-        self.assertEqual(os.readlink(link), os.path.join(REPO, "tmux", "tmux-claude-status"))
+        for name in ("tmux-claude-status", "claude-restore"):
+            link = os.path.join(self.home, ".local", "bin", name)
+            self.assertEqual(os.readlink(link), os.path.join(REPO, "tmux", name))
         conf = self.read()
         self.assertIn(f'source-file "{REPO}/tmux/claude.conf"', conf)
         self.assertNotIn("base.conf", conf)
