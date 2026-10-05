@@ -89,6 +89,25 @@ wrap_archetypes     = true
 storyboard_approved = true
 allow_naked_years   = true
 
+# The geometry gate (`deckkit geometry`) runs the rules in the skill's
+# scripts/geometry.rules.toml, which names every rule and param. Tune them
+# here, never there; a misspelled rule id or param is a config error.
+# [geometry]
+# disable = ["clearance"]           # rule ids to skip
+# slides  = []                      # slide ids to measure; empty = every slide
+#
+# [geometry.text-overlap]
+# min_area = 10                     # any param, plus severity and enabled
+#
+# [geometry.safe-area]
+# exempt = ["footer.src", "[data-decor]", ".bleed"]   # text sitting there by design
+#
+# The contrast bars default to WCAG AA (4.5 small, 3.0 large). Lowering one
+# needs a reason, printed on every run, and is refused at regulated rigor.
+# [geometry.text-contrast]
+# min_small = 4.0
+# reason    = "brand accent measures 4.2:1 on the paper tone; signed off by the client"
+
 [env]
 # Font work needs fontTools, usually in the system python. pptx work needs
 # python-pptx, usually in a project .venv. deckkit picks the right one.

@@ -36,14 +36,14 @@ Those three answers select exactly one row of the phase table. Load that row's r
 
 ## The phase model
 
-Every phase exits the same way: **gate green, fingerprint unchanged or delta documented.** Gate green means the rebuild is deterministic, lint is 0 errors and 0 warnings, and geometry has 0 violations on every touched slide.
+Every phase exits the same way: **gate green, fingerprint unchanged or delta documented.** Gate green means the rebuild is deterministic, lint is 0 errors and 0 warnings, and `deckkit geometry` reports 0 errors and 0 warnings on every touched slide.
 
 | Phase | Produces | Exit gate | Human gate |
 |---|---|---|---|
 | **0** Ingest *(optional)* | `sources/` with provenance filenames, renders, verbatim text, media, keyframes | substrate lint passes | G0 substrate accepted |
 | **A** Frame | facts packs, `storyboard.md`, preflight ledger | every row has an archetype, an act, a hero, and a source line; every cited ID resolves | G1 brief and tier · **G2 storyboard approval (HARD STOP)** |
 | **B** Scaffold | deck tree, theme, subset fonts, vendored reveal, css trio, `index.html` with `?export` | `build --allow-draft` and `lint --allow-draft` clean; 3 proof slides screenshot correctly | G3 parallelism consent · G4 theme proof |
-| **C** Build | `slides/*.html` in batches, one verifier record per slide | every manifest row reads `reviewed`; lint 0/0; geometry 0; every finding triaged | G5 first-batch taste check |
+| **C** Build | `slides/*.html` in batches, one verifier record per slide | every manifest row reads `reviewed`; lint 0/0; `deckkit geometry` 0/0; every finding triaged | G5 first-batch taste check |
 | **D** Harden | `reviews/hardening.md`, FLAG baseline, contact sheets, media play-test | the nine-point acceptance gate | G6 decision ledger, one batched message |
 | **E** Ship | PDF from `?export`, notes-stripped site zip, export record | PDF pages equal slide count; zero notes in the distributable, source retains them | G7 ship artifacts · G8 distribution |
 | **F** Variants *(optional)* | pptx pair, translated or re-targeted decks | variant-diff sweep green; glyph coverage green for the new language | G2 re-runs on the diff only |
@@ -71,7 +71,7 @@ rigor = regulated   if issuer_listed, or audience is external-investor or
 
 A human may raise the tier freely. Lowering it moves one step and must write `rigor_reason` into the review record. An agent may never lower it.
 
-A `regulated` 50-slide deck runs six preflight lenses, verifies every finding, sweeps every slide at high effort, and passes all nine human gates. A `sketch` 12-slide deck runs one facts agent, no preflight lenses, no sweep, geometry on the slides that use absolute positioning, and three human gates. Same shape, roughly a tenth of the agents.
+A `regulated` 50-slide deck runs six preflight lenses, verifies every finding, sweeps every slide at high effort, and passes all nine human gates. A `sketch` 12-slide deck runs one facts agent, no preflight lenses, no sweep, `deckkit geometry` on the slides that use absolute positioning, and three human gates. Same shape, roughly a tenth of the agents.
 
 Batch sizing is mechanical too: write batches never split an act and cap at 18 slides, and **the first batch caps at 4** because it is G5's evidence. Read-only batches are fixed at 10.
 
@@ -103,14 +103,29 @@ deckkit <command> --help     # flags for one command
 
 **There is deliberately no copy of the CLI surface in this file.** The dispatcher generates its list from the scripts actually present, so it can never advertise a tool that has not been written, and each subcommand's flags come from its own argparse. Read it from the tool, not from here.
 
-The loop you will run most: `deckkit build` then `deckkit lint`, then `deckkit serve` and look at it. `deckkit build --check` writes nothing and diffs, which is the determinism assertion every phase exit needs. `deckkit regress --ref-deck PATH --config PATH --goldens FILE` is the gate to run green before editing any script in this skill; the config and goldens live beside the reference deck in its own private repo, not in this skill.
+The loop you will run most: `deckkit build` then `deckkit lint` and `deckkit geometry`, then `deckkit serve` and look at it. `deckkit build --check` writes nothing and diffs, which is the determinism assertion every phase exit needs. `deckkit regress --ref-deck PATH --config PATH --goldens FILE` is the gate to run green before editing any script in this skill; the config and goldens live beside the reference deck in its own private repo, not in this skill.
 
 If `deckkit` is not on your PATH, it is at `~/.claude/skills/deck-production/scripts/deckkit`. `setup.sh` symlinks it into `~/.local/bin` when that directory exists.
+
+## The geometry gate
+
+`deckkit geometry` serves the built deck, drives headless Chrome over it, and measures what actually rendered, in canvas pixels. Errors fail the gate and warnings print; gate green holds both at zero. The rules:
+
+- `text-overlap`: the glyphs of two text items collide. Tight leading inside one flow is design; a positioned, offset or overflowing box is not.
+- `covers-marker`: text sits on a map pin or other marker.
+- `unbounded-abs-text`: running text in an absolutely positioned box that widens with its content. Found by lengthening the text and watching the box, not by reading CSS.
+- `text-contrast`: WCAG contrast of each text's color against the pixels under its glyphs, measured on a screenshot, so photos, scrims, overlays and slide backgrounds all count.
+- `covered-text`: text hidden by something painted above it, measured on the same screenshots.
+- `safe-area` (warning): text running into the canvas margin.
+- `clearance` (warning): text items closer than a minimum gap, or touching too shallowly to count as overlap.
+- `clipped-text`: text cut off by an overflow-hidden ancestor.
+
+The contrast bar is WCAG AA by default (4.5:1, and 3:1 for large text). A deck may lower it in `deck.toml` only with a `reason`, which prints on every run; at `regulated` rigor it cannot be lowered at all. A slide with fragments is probed at every fragment step, so a fragment that collides only while it is current still fails, and contrast is judged where each text is most visible. A finding outside the final state names its step, and the JSON report carries it as `step`. Tune rules under `[geometry]` in `deck.toml`, never in the shipped rules file. With no usable browser the gate exits 3; `deckkit doctor` names the browser it would use and how to install one.
 
 ## The three failures that cost the most
 
 1. **reveal writes an inline `display: block` on the presented section.** Inline style beats every selector including `#id`, so `display: grid` on a `<section>` is dead CSS on the live slide. A fragment previewed on its own still looks right, which is exactly what hides the bug. All slide layout attaches to a direct child `div.wrap`. Lint enforces both halves, in fragment styles and in shared CSS.
-2. **Screenshots do not reveal overlap.** Query real geometry and assert numerically before judging pixels. After a ground-changing fix, re-check the slide and both neighbours, and iterate to convergence: on the one occasion this was skipped, each fix created new overlap and it took four rounds.
+2. **Screenshots do not reveal overlap.** Run `deckkit geometry`, which measures the rendered slides and asserts numerically, before judging pixels. After a ground-changing fix, re-check the slide and both neighbours, and iterate to convergence: on the one occasion this was skipped, each fix created new overlap and it took four rounds.
 3. **Records go stale, including your own.** A prior session recorded a fix that had never been applied; the hardening sweep caught it. Any assertion entering an acceptance gate is re-derived from files in the same session.
 
 ## Common Mistakes
@@ -133,10 +148,12 @@ If `deckkit` is not on your PATH, it is at `~/.claude/skills/deck-production/scr
 | Skipping the subsetter after a copy change | New glyphs tofu silently. Lint catches it only if you run it |
 | Using a reference render as a pixel target or a number source | It is layout and atmosphere reference only |
 | Shipping a review record or presenter notes | The packager copies an allowlist; keep it that way |
+| Calling a slide clean because its screenshot looks clean | Run `deckkit geometry`; colliding labels and low-contrast captions pass by eye |
+| Exempting a slide the geometry gate flags | The rule found a defect or is mis-scoped; settle which. Tune rules by principle in `deck.toml`, never per slide or in the shipped rules file |
 | Editing a script without running `deckkit regress` | The gate exists because the reference deck is not migrated |
 
 ## Reference material
 
 Detail belongs beside the phase that needs it, in `references/`, loaded one at a time.
 
-**`references/` does not exist yet.** Until it does, the operational detail lives in three places that are current by construction: the phase model above, `BUILD-CONTRACT.md` instantiated inside a scaffolded deck, and `deckkit doctor` for anything environmental. Run `deckkit` to see which tools exist; the phases that depend on the missing ones (geometry gate, PDF, pptx, ingest, theme extraction) cannot be executed yet.
+**`references/` does not exist yet.** Until it does, the operational detail lives in three places that are current by construction: the phase model above, `BUILD-CONTRACT.md` instantiated inside a scaffolded deck, and `deckkit doctor` for anything environmental. Run `deckkit` to see which tools exist; the phases that depend on the missing ones (PDF, pptx, ingest, theme extraction) cannot be executed yet.

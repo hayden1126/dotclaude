@@ -20,6 +20,7 @@ import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import deckcfg  # noqa: E402
+import geometry  # noqa: E402
 
 OK, WARN, BAD = "ok", "optional", "missing"
 
@@ -59,6 +60,25 @@ def probe_binary(name: str, args: list[str] | None = None) -> dict:
         except Exception:  # noqa: BLE001
             return {"state": OK, "detail": found}
     return {"state": OK, "detail": found}
+
+
+def probe_geometry_browser(cfg: deckcfg.DeckConfig) -> dict:
+    """The browser `deckkit geometry` would drive, found by geometry.py itself
+    so the two can never disagree. The headless shell is preferred: full
+    Chrome aborts inside the Claude Code sandbox."""
+    found = geometry.find_browser(cfg)
+    if found is None:
+        return {"state": BAD, "detail": "no headless Chrome found", "hint": geometry.INSTALL_HINT}
+    binary, headless_shell = found
+    source = " (from [env] chrome)" if cfg.get("env.chrome") else ""
+    if not (pathlib.Path(binary).exists() or shutil.which(binary)):
+        return {"state": BAD, "detail": f"{binary}{source} does not exist",
+                "hint": geometry.INSTALL_HINT}
+    if headless_shell:
+        return {"state": OK, "detail": f"headless shell {binary}{source}"}
+    return {"state": WARN, "detail": f"Chrome {binary}{source}; the headless shell is "
+                                     "preferred (full Chrome aborts in a sandbox)",
+            "hint": geometry.INSTALL_HINT}
 
 
 HINTS = {
@@ -113,6 +133,7 @@ def main() -> int:
     chrome = deckcfg.find_chrome(cfg)
     checks["chrome"] = ({"state": OK, "detail": chrome} if chrome
                         else {"state": BAD, "detail": "no chrome found"})
+    checks["geometry browser"] = probe_geometry_browser(cfg)
     checks["ffmpeg"] = probe_binary("ffmpeg", ["-version"])
     checks["ffprobe"] = probe_binary("ffprobe", ["-version"])
     checks["powershell.exe (WSL pptx render)"] = probe_binary("powershell.exe")
@@ -150,10 +171,11 @@ def main() -> int:
     for name, result in checks.items():
         for module in result.get("missing", []):
             gaps.append(f"{module}: {HINTS.get(module, 'pip install ' + module)}")
-        if result["state"] == BAD:
-            key = name.split()[0]
-            if key in HINTS:
-                gaps.append(f"{key}: {HINTS[key]}")
+        key = name.split()[0]
+        if "hint" in result:
+            gaps.append(f"{key}: {result['hint']}")
+        elif result["state"] == BAD and key in HINTS:
+            gaps.append(f"{key}: {HINTS[key]}")
     if gaps:
         print("\nto install")
         for gap in dict.fromkeys(gaps):

@@ -57,6 +57,38 @@ def snapshot(root: pathlib.Path) -> dict[str, str]:
     return digests
 
 
+def geometry_facts(code: int, out: str) -> dict:
+    """The geometry gate's findings as counts: per slide, per rule, errors and
+    warnings, plus totals and the exit code. Counts only, never ratios,
+    subjects or timings: contrast readings move by hundredths across renders,
+    and a golden must not. A run that printed no report (exit 3 without a
+    usable browser, exit 2 on a config or settle failure) records its exit
+    code alone, and the golden diff shows it."""
+    payload = None
+    for line in reversed(out.strip().splitlines()):
+        if line.startswith("{"):
+            with contextlib.suppress(json.JSONDecodeError):
+                payload = json.loads(line)
+            break
+    if not isinstance(payload, dict) or "slides" not in payload:
+        return {"exit": code}
+    slides: dict = {label: {} for label in payload["slides"]}
+    for v in payload["violations"]:
+        counts = slides.setdefault(v["slide"], {}).setdefault(
+            v["rule"], {"errors": 0, "warnings": 0})
+        counts["errors" if v["severity"] == "error" else "warnings"] += 1
+    return {"slides": slides, "errors": payload["errors"],
+            "warnings": payload["warnings"], "exit": code}
+
+
+def geometry_line(observed: dict) -> str:
+    g = observed["geometry"]
+    if "slides" not in g:
+        return f"  geometry not measured (exit {g['exit']})"
+    return (f"  geometry {g['errors']} errors, {g['warnings']} warnings "
+            f"on {len(g['slides'])} slides")
+
+
 def collect(ref: pathlib.Path, config: pathlib.Path, workdir: pathlib.Path) -> dict:
     """Every observation the gate asserts on. Pure measurement, no comparison."""
     facts: dict = {}
@@ -96,6 +128,11 @@ def collect(ref: pathlib.Path, config: pathlib.Path, workdir: pathlib.Path) -> d
         facts["package"]["top_level"] = sorted({f.split("/")[0] for f in files})
         shipped = site / "index.html"
         facts["package"]["shipped_sha256"] = hashlib.sha256(shipped.read_bytes()).hexdigest()
+
+    # --- geometry gate: rendered collisions and contrast, as counts
+    code, out = run([str(SCRIPTS / "geometry.py"), str(ref), "--config", str(config),
+                     "--json"])
+    facts["geometry"] = geometry_facts(code, out)
 
     # --- shipped font faces, if the reference deck has any
     fonts = sorted((ref / "fonts").glob("*.woff2"))
@@ -169,6 +206,7 @@ def main() -> int:
               f"{observed['package_check']['note_blocks_stripped']} notes stripped, "
               f"{observed['package_check']['byte_delta']} byte delta")
         print(f"  fonts   {len(observed['fonts'])} woff2 faces")
+        print(geometry_line(observed))
         return deckcfg.EXIT_OK
 
     if not goldens_path.exists():
@@ -192,6 +230,7 @@ def main() -> int:
               f"{observed['package_check']['note_blocks_stripped']} notes stripped, "
               f"{observed['package_check']['byte_delta']} byte delta")
         print(f"  fonts   {len(observed['fonts'])} woff2 faces")
+        print(geometry_line(observed))
         if diffs:
             print(f"\n{len(diffs)} regression(s):")
             for diff in diffs:
