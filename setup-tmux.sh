@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # setup-tmux.sh: the tmux side of the per-window Claude indicator (◐ busy, ✳ waiting) and the
-# delegation token in the status bar. Opt-in and idempotent; setup.sh never calls it. The hook
+# delegation token in the status bar, and what lets a background session's hooks find its tab
+# (tmux-claude-status writes that map). Opt-in and idempotent; setup.sh never calls it. The hook
 # side (hooks/tmux-state.sh) is wired by setup.sh on every machine and does nothing outside tmux.
 #
 #   ./setup-tmux.sh           link tmux-claude-status, source tmux/claude.conf from ~/.tmux.conf

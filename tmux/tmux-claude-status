@@ -12,9 +12,10 @@
 #     map goes by directory: the one client pane (a `claude` pane no interactive session's
 #     ancestry reaches) in the session's cwd, if exactly one background session runs there. A
 #     mapping is kept while its pane still qualifies and the session is still alone in its dir,
-#     so a claude just started there (not listed yet, so it looks like a client) doesn't drop it. $XDG_STATE_HOME/dotclaude/tabs
-#     holds "server <tmux pid>" then "<session id> <pane> <window>" lines for
-#     hooks/session-pane.sh, whose hooks then write that window themselves.
+#     so a claude just started there (not listed yet, so it looks like a client) doesn't drop
+#     it. A client's cwd is where it was launched, not which session it shows.
+#     $XDG_STATE_HOME/dotclaude/tabs holds "server <tmux pid>" then "<session id> <pane>
+#     <window>" lines for hooks/session-pane.sh, whose hooks then write that window themselves.
 # It never overwrites a live busy/wait/idle value, with two exceptions that hand a window over:
 # a new mapping (or its pane moving to a cold window, or a map old enough that hooks ignored
 # it: tmux detached or queries failing) fills it from the session's status, and a
@@ -26,8 +27,8 @@
 # daemon's pty hosts or the tmux server changed, or every 60 s while hosts run (a new background
 # session claims a pre-warmed host, whose argv doesn't change, and the daemon warms a
 # replacement). A failed query backs off 20 s: under the 30 s between that refresh and the 90 s
-# after which hooks ignore the map, so one failure doesn't blind them. Two tmux servers at once would each replace the
-# other's map every run: one server is assumed.
+# after which hooks ignore the map, so one failure doesn't blind them. Two tmux servers at once
+# would each replace the other's map every run: one server is assumed.
 set -uo pipefail
 # tmux's server PATH is whatever started it and often lacks ~/.local/bin, where the claude
 # launcher and delegation-ledger live; without this the supervisor query silently never ran.

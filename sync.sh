@@ -8,7 +8,9 @@
 # Everything else (CLAUDE.md, skills/, hooks/, templates/, notify-toast.ps1)
 # is symlinked by setup.sh, so the repo IS the live copy — no sync needed.
 # settings.json is the exception: setup.sh COPIES it (the runtime rewrites its
-# own copy), so the repo file is a curated baseline that can drift from live.
+# own copy), so the repo file is a curated baseline that can drift from live. Its
+# enabledPlugins must equal plugins/enabled.json (tests/setup/test_install_helpers.py):
+# after a sync that changes the plugin list, copy the change into the baseline by hand.
 # codex/config.toml is the same kind of baseline: setup.sh merges its keys into
 # ~/.codex/config.toml, and Codex's own entries there never come back here.
 # Safe to re-run; reports a diff but never auto-commits.

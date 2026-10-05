@@ -53,8 +53,9 @@ A typical overlay sets a preference and the machine's own tools:
 
 `effortLevel` replaces the baseline's `medium`. `excludedCommands` appends to the baseline's list:
 name your own CLIs that must run outside the sandbox (say, ones that write outside the project),
-one pattern per command. A pattern must match the whole command, so a call through a pipe, `&&`
-or `cd` still runs sandboxed.
+one pattern per command shape (`mytool *` for calls with arguments, `mytool` for the bare call).
+A pattern must match the whole command, so a call through a pipe, `&&` or `cd` still runs
+sandboxed.
 
 The baseline's `permissions` deny destructive git and ask before `git push`, in auto mode too.
 Denied: force-push, `reset --hard`, `reset --merge` and `git clean -f`, plain or through `git -C`,
@@ -114,7 +115,7 @@ sees it.
 | `codex/` | Codex CLI config (config.toml baseline + AGENTS.md + merge-config.py); see docs/codex.md | symlink `AGENTS.md` into `~/.codex/`; merge `config.toml`'s keys into the local `~/.codex/config.toml` (Codex writes to it, so it is never linked; `auth.json` stays local) |
 | `notify-toast.ps1` | Windows toast script that `notify.sh` renders for the Notification hook | symlink `~/.claude/notify-toast.ps1` |
 | `plugins/marketplaces.json` | Marketplaces to register | consumed by `setup.sh` |
-| `plugins/enabled.json` | Plugins to install and enable | consumed by `setup.sh` |
+| `plugins/enabled.json` | Plugins to install and enable (must equal the baseline `settings.json`'s `enabledPlugins`; a test pins it) | consumed by `setup.sh` |
 | `statusline/ctx-breakdown.py` | ccstatusline widget: colored per-category context chips (system prompt, tools, agents, memory, skills, MCP, messages) | symlink `~/.config/ccstatusline/ctx-breakdown.py` |
 | `statusline/session-summary.py` | ccstatusline widget: renders the cached session summary (nothing until the first one lands), word-wrapped across two dim rows on status lines 2-3 (`--row 1` / `--row 2`) | symlink `~/.config/ccstatusline/session-summary.py` |
 | `statusline/ccstatusline-settings.json` | ccstatusline layout baseline that wires the ctx-breakdown and session-summary widgets in | installed by `setup.sh` to `~/.config/ccstatusline/settings.json` (paths patched per machine) |
@@ -124,10 +125,10 @@ sees it.
 | `docs/prose-is-not-a-permission.md` | Blog post on the delegation work: why a prompt can't limit an agent's authority, and the layers that can | reference |
 | `docs/images/` | The post's diagram: `delegation-layers.svg` (source) and `delegation-layers.png` (2x render) | reference |
 | `tests/delegation/` | Unit tests for the delegation pieces (no model calls) and `run.py`, a live harness that spends model calls | run from the repo root |
-| `tests/setup/` | Unit tests for `merge-settings.py`, `git/install-ignore.py`, and the prompt and session hooks (`handoff_reminder.py`, `session-title.sh`, `session-summary.sh`), the tmux and sound hooks (`test_tmux_hooks.py`) and `setup-tmux.sh`; `replay_history.py` is a local-only replay tool, not a unit test | `python3 -m unittest discover -s tests/setup -t tests/setup` |
+| `tests/setup/` | Unit tests for `merge-settings.py`, `git/install-ignore.py`, and the prompt and session hooks (`handoff_reminder.py`, `session-title.sh`, `session-summary.sh`), the tmux and sound hooks (`test_tmux_hooks.py`), `tmux/tmux-claude-status` (`test_tmux_claude_status.py`) and `setup-tmux.sh`; `replay_history.py` is a local-only replay tool, not a unit test | `python3 -m unittest discover -s tests/setup -t tests/setup` |
 | `docs/chrome-devtools-wsl.md` | WSL2-only: how to make `chrome-devtools-mcp` work (Strategy A headless Linux Chrome, plus B to attach to your Windows Chrome) | reference |
 | `chrome-debug.ps1` | Windows launcher for Strategy B (Chrome with a remote-debugging port) | run on Windows when needed |
-| `tmux/` | The tmux side of the indicator: `claude.conf` (titles, status bar, the ◐ busy and ✳ waiting glyphs), the optional `base.conf` (mouse, splits, the Ctrl-b Enter menu), `cheatsheet.txt`, and `tmux-claude-status`, the backstop the status bar runs | sourced and linked by `setup-tmux.sh` |
+| `tmux/` | The tmux side of the indicator: `claude.conf` (titles, status bar, the ◐ busy and ✳ waiting glyphs), the optional `base.conf` (mouse, splits, the Ctrl-b Enter menu), `cheatsheet.txt`, and `tmux-claude-status`, the backstop the status bar runs (it also maps background sessions to their tab) | sourced and linked by `setup-tmux.sh` |
 | `setup-tmux.sh` | Opt-in tmux installer: links `tmux-claude-status` into `~/.local/bin` and keeps a marked `source-file` block in `~/.tmux.conf` (`--base` adds `base.conf` and the cheatsheet) | run once per machine that uses tmux; not called by `setup.sh` |
 | `setup-chrome-wsl.sh` | Opt-in WSL2 installer: installs Chrome for Testing and registers the user-scoped `chrome-devtools` override | run once on WSL2; not called by `setup.sh` |
 | `setup.sh` | The installer | run once per machine |

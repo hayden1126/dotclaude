@@ -11,23 +11,13 @@ Base: `main`. For branch / PR / push state, run `gh pr list` and `git log main..
 stored here).
 
 ## Done (recent; git, the linked plans and memory hold the detail)
-- **tmux indicator and sounds: tabs and `-p` fixed; tmux versioned; handoff-reminder module**
-  (2026-10-04, branch `feat/tmux-parity` on top of `fix/sandbox-gaps`, range `9c0bfb2..` its head;
-  installed on HAYPC). `hooks/session-pane.sh` treats `ATTENDED=0` (a `claude -p` run or a
-  background session) as off-tab: no tab state, no sound, toast only; its header holds the rules.
-  Verified live: a `-p` run from a tab no longer clobbers that tab or rings; tabs ring and set
-  their window. `tmux-state.sh` is baseline-wired; `setup-tmux.sh --base` installed the tmux side
-  (`~/.tmux.conf` is its header comment plus the dotclaude block; backups beside it). The handoff
-  classifier is `hooks/handoff_reminder.py` (tests 6.1 s to 0.3 s; replay of 3,212 prompts: 0
-  disagreements). Ring decisions: `$XDG_STATE_HOME/dotclaude/ring.log`.
-- **Background sessions mapped to their tab** (2026-10-04, same branch; live via the symlinks).
-  `tmux/tmux-claude-status` maps each background session to the one client pane in its cwd
-  (`$XDG_STATE_HOME/dotclaude/tabs`); `session-pane.sh` looks up the event's `session_id`, so the
-  session's own hooks set its window and ring. Verified live: dna_to_text rang with `pane=%2` and
-  its hooks drive `@2`. Also fixed: the tmux server's PATH lacked `~/.local/bin`, so the cold fill
-  had never run from tmux. Three review rounds, all findings fixed; the script header lists the
-  accepted limits (fill race, one tmux server, client cwd = launch dir).
-- **Sandbox gap fixes** (2026-10-04, branch `fix/sandbox-gaps`, no PR by Hayden's call; installed
+- **tmux indicator and sounds, background sessions mapped to their tab** (2026-10-04, live on
+  HAYPC). `hooks/session-pane.sh` decides tab vs off-tab (its header holds the rules): a
+  `claude -p` run or an unmapped background session gets the toast only; `tmux-claude-status`
+  maps a background session to the one client pane in its cwd (`$XDG_STATE_HOME/dotclaude/tabs`,
+  limits in its header). Verified live: a `-p` run no longer clobbers its tab, dna_to_text rang
+  with `pane=%2`. Handoff classifier: `hooks/handoff_reminder.py`. Ring decisions: `ring.log`.
+- **Sandbox gap fixes** (2026-10-04, installed
   on HAYPC): code that runs outside the sandbox is `denyWrite`, tool tokens and shell history are
   `denyRead`. Findings and Hayden's calls: `~/scratch/sandbox-audit/FINDINGS.md` (private).
 - **Merged and live:** `rm` never asks (PR #65; [[dotclaude-danger-guard-retired]]), permission
@@ -98,6 +88,8 @@ stored here).
 
 ## Notes for next session
 - **Next: the chrome-devtools pin check** (parity audit, In flight), then deck-production S3.
+  The tmux and sandbox work goes up as one PR against `main` (Hayden's call); `gh pr list` for
+  its state. Last session's range: `7f48ac6..` this handoff commit.
   Other machines pick up these branches with `./setup.sh`, plus `./setup-tmux.sh` where tmux is
   used (README has the overlay caveat).
 - **A wrong or missing tmux glyph:** compare `~/.local/state/dotclaude/tabs` with `claude agents
