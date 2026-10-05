@@ -47,6 +47,11 @@ stored here).
     tmux's own new shell is window 1, so restored tabs start at 2; one unreproduced test-suite
     failure during the build (34 later runs clean). The validation gate (6cf8f39) had no fresh
     reviewer, only its own failing-then-passing test, the suite and the e2e.
+- **Push and merge permissions** (`chore/push-perms`, off `main`; Hayden's call 2026-10-05):
+  `git push origin <branch>` and `gh pr create` run without a prompt; anything that can reach
+  `main` and merges (`gh pr merge`) ask. Rules only (README "permissions" paragraph; pinned in
+  `tests/delegation/test_settings.py`). Live after merge plus `./setup.sh` (settings are copied).
+  Its policy tests must run sandbox-off from a worktree under `.claude/worktrees/`.
 - **`deck-production`: deferred (Hayden, 2026-10-05: workflow improvements first).** The geometry
   gate is merged (#68): behavior in SKILL.md "The geometry gate", design in git history (`PLAN.md`
   before the tmux-restore design). Its golden is on the private repo's unmerged
