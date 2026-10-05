@@ -60,12 +60,13 @@ stored here).
   fails closed. Then remove the dangling `~/.claude/hooks/danger-guard.sh` link (`setup.sh`
   never removes old links; ask first) and any `settings.machine.json` hook naming it. HAYPC is
   done.
-- **New-device parity audit: tmux done, the rest sorted.** The inventory and a recommendation per
-  piece are private in `~/scratch/parity-audit/INVENTORY.md` ([[hayden-new-device-goal]]). Hayden
-  decides the rest from there; the cheapest next steps it lists: Codex into the baseline
-  `enabledPlugins`, an overlay example in README, bumping the chrome-devtools pin (1.5.0 against
-  the plugin's 1.9.0). A drift check would fit the `setup.sh` doctor idea in
-  [[deepseek-harness-eval]].
+- **New-device parity audit: tmux, Codex and the overlay example done.** The inventory and a
+  recommendation per piece are private in `~/scratch/parity-audit/INVENTORY.md`
+  ([[hayden-new-device-goal]]). Codex is in the baseline `enabledPlugins` (a test pins it to
+  `plugins/enabled.json`) and out of HAYPC's overlay; README shows an overlay example. Left:
+  bump the chrome-devtools pin (1.5.0 against the plugin's 1.9.0) after checking 1.9.0 under
+  `setup-chrome-wsl.sh`, and a `shell/` snippet only if a second device is coming. A drift check
+  would fit the `setup.sh` doctor idea in [[deepseek-harness-eval]].
 - **Hook follow-up:** the INJECTED marker lists stay one per prompt hook, kept equal by
   `test_the_three_lists_agree` ([[cc-hook-payload-pitfalls]] has why).
 - **Delegation hardening: what is live on HAYPC** (Stage 2 and 3, `docs/delegation.md`;
@@ -96,9 +97,9 @@ stored here).
   `$CLAUDE_JOB_DIR/tmp` bug report is Hayden's call; `CLAUDE.md` carries the workaround.
 
 ## Notes for next session
-- **Next: Hayden's calls on the parity inventory** (In flight). Other machines pick up these
-  branches with `./setup.sh`, plus `./setup-tmux.sh` where tmux is used (README has the overlay
-  caveat).
+- **Next: the chrome-devtools pin check** (parity audit, In flight), then deck-production S3.
+  Other machines pick up these branches with `./setup.sh`, plus `./setup-tmux.sh` where tmux is
+  used (README has the overlay caveat).
 - **A wrong or missing tmux glyph:** compare `~/.local/state/dotclaude/tabs` with `claude agents
   --json` and `tmux list-panes -a -F '#{pane_id} #{pane_current_command} #{pane_current_path}'`.
   Unprobed: whether `/clear` inside a background session changes the `sessionId` it lists.

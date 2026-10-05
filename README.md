@@ -42,6 +42,20 @@ it drops; put a value in the overlay to keep it. The baseline now owns a `permis
 `setup.sh` replaces the live one (`merge-settings.py` names it on stderr): personal allow rules go
 in `settings.machine.json`, whose lists append.
 
+A typical overlay sets a preference and the machine's own tools:
+
+```json
+{
+  "effortLevel": "high",
+  "sandbox": {"excludedCommands": ["mytool *", "mytool"]}
+}
+```
+
+`effortLevel` replaces the baseline's `medium`. `excludedCommands` appends to the baseline's list:
+name your own CLIs that must run outside the sandbox (say, ones that write outside the project),
+one pattern per command. A pattern must match the whole command, so a call through a pipe, `&&`
+or `cd` still runs sandboxed.
+
 The baseline's `permissions` deny destructive git and ask before `git push`, in auto mode too.
 Denied: force-push, `reset --hard`, `reset --merge` and `git clean -f`, plain or through `git -C`,
 plus a `bash -c` whose text has `git push` then `--force`, or `git reset` then `--hard`. Asked:
