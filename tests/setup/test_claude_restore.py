@@ -182,12 +182,19 @@ class Restore(unittest.TestCase):
         self.run_restore()
         self.assertEqual(self.resumed(), [(a, sid(1))])
 
-    def test_a_missing_transcript_is_skipped_and_logged(self):
-        self.entry(1, window=1, transcript=False)
+    def test_a_tab_with_no_transcript_reopens_as_a_fresh_claude(self):
+        # A session writes no transcript before its first input (a tab fresh from /clear).
+        a = self.entry(1, window=1)
+        b = self.entry(2, window=2, transcript=False)
         self.run_restore()
-        self.assertEqual(self.resumed(), [])
+        calls = [c for c in self.calls() if "new-window" in c or "send-keys" in c]
+        self.assertEqual(len(calls), 4)
+        self.assertIn(f"-c {a}", calls[0])
+        self.assertTrue(calls[1].endswith(f"claude --resume {sid(1)} Enter"), calls[1])
+        self.assertIn(f"-c {b}", calls[2])
+        self.assertEqual(calls[3].split()[4:], ["claude", "Enter"])
         self.assertTrue(any("transcript" in line for line in self.restore_log()))
-        self.assertEqual(self.registry("restored"), [sid(1) + ".json"])
+        self.assertEqual(self.registry("restored"), [sid(1) + ".json", sid(2) + ".json"])
 
     def test_a_missing_directory_is_skipped_and_logged(self):
         self.entry(1, window=1, cwd=False)
@@ -264,7 +271,7 @@ class Restore(unittest.TestCase):
 
     def test_every_decision_is_logged(self):
         self.entry(1, window=1)
-        self.entry(2, window=2, transcript=False)
+        self.entry(2, window=2, cwd=False)
         self.run_restore()
         log = self.restore_log()
         self.assertEqual(len(log), 2)

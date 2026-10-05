@@ -15,8 +15,9 @@
 #   - its SessionEnd `other` mark is within 120 s of L (a shutdown that signalled claude).
 # A mark older than that is a window closed while work went on elsewhere, so it stays closed.
 # Also skipped: an older session in the same pane (the newest wins), a session that is already
-# running (`claude agents --json`), a deleted transcript or directory, an id that isn't a plain
-# token. Every candidate, restored or not, moves to open-sessions/restored/ (which keeps only the
+# running (`claude agents --json`), a deleted directory, an id that isn't a plain token. A tab
+# with no transcript yet (fresh from startup or /clear: a session writes none until its first
+# input) reopens as a plain `claude` in its directory, since there is nothing to resume. Every candidate, restored or not, moves to open-sessions/restored/ (which keeps only the
 # last restore) before any window opens, so a resumed session's fresh entry is never swept up.
 # Each decision is a line in $XDG_STATE_HOME/dotclaude/restore.log. A flock on
 # open-sessions/.lock keeps a second run (a grouped view of main, a manual run racing the hook)
@@ -120,14 +121,16 @@ for name, e in cands:
         why = "skip", "an older session in pane %s (newer: %s)" % (pane, str(newest[pane][1].get("session_id"))[:8])
     elif sid in live:
         why = "skip", "already running"
-    elif mtime(e) is None:
-        why = "skip", "transcript gone"
     elif not isinstance(cwd, str) or not os.path.isdir(cwd):
         why = "skip", "directory gone"
     elif re.search(r"[\t\n\r]", cwd):
         why = "skip", "directory name has a tab or newline"
     elif ended is not None and ended < last - 120:
         why = "skip", "window closed %ds before the old boot ended" % (last - ended)
+    elif mtime(e) is None:
+        # A session has no transcript until its first input (probed): a tab fresh from startup
+        # or /clear. Nothing to resume, so the tab reopens as a new session in its directory.
+        why = "fresh", "no transcript yet, so a new session"
     elif ended is not None:
         why = "restore", "ended in the shutdown"
     else:
@@ -173,7 +176,7 @@ while IFS=$'\t' read -r _ _ _ _ file; do
 done <<< "$plan"
 
 while IFS=$'\t' read -r decision sid cwd why _; do
-  if [ "$decision" != restore ]; then
+  if [ "$decision" != restore ] && [ "$decision" != fresh ]; then
     note skipped "$sid" "$cwd" "$why"
     continue
   fi
@@ -182,7 +185,11 @@ while IFS=$'\t' read -r decision sid cwd why _; do
     note failed "$sid" "$cwd" "tmux new-window failed"
     continue
   fi
-  printf -v cmd 'claude --resume %q' "$sid"
+  if [ "$decision" = fresh ]; then
+    cmd=claude
+  else
+    printf -v cmd 'claude --resume %q' "$sid"
+  fi
   if tmux send-keys -t "$pane" "$cmd" Enter; then
     note restored "$sid" "$cwd" "$why, in pane $pane"
   else

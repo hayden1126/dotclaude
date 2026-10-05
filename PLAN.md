@@ -62,7 +62,8 @@ fail-open, always exits 0).
 - **Which entries.** It reads the registry and keeps entries whose `boot_id` is not the current
   one. It dedupes by pane (newest `ts` wins), skips any id already running (`claude agents
   --json`, entries with a `pid`; if the call fails it carries on), and skips an entry whose
-  transcript or directory is gone.
+  directory is gone. An entry with no transcript (a session writes none until its first input,
+  so a tab fresh from startup or `/clear`) reopens as a plain `claude` in its directory.
 - **Each restore,** in old `window_index` order: `tmux new-window -d -P -F '#{pane_id}' -t =main:
   -c <cwd>`, then `send-keys` of `claude --resume <id>` and Enter to that pane. The tab gets a
   real login shell (PATH, nvm), and the shell stays when claude exits, as tabs do today. Window
@@ -98,7 +99,8 @@ file.
 | Two tabs in one repo | Exact ids, so each resumes its own conversation |
 | `claude -p` / canary inside a pane | Skipped (ATTENDED=0) |
 | `main` and a view created together, or a manual run racing | flock + boot_id + live check: restored once |
-| Transcript or directory deleted | Logged and skipped |
+| Tab fresh from startup or `/clear` (no transcript yet) | Reopens as a plain `claude` in its directory |
+| Directory deleted | Logged and skipped |
 
 `tests/setup/test_session_registry.py` and `tests/setup/test_claude_restore.py` cover each row
 with stub `tmux` and `claude` on PATH and a temp `XDG_STATE_HOME`.

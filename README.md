@@ -282,8 +282,9 @@ need nothing extra.
   an earlier boot and opens one window per tab, in the old order, running
   `claude --resume <id>` in its directory. A marked tab comes back only if it ended within 120 s
   of the old boot's last activity (the shutdown itself); one closed earlier stays closed. It skips
-  a session already running, a deleted transcript or directory, and an older session in the
-  same pane. `claude-restore --list` shows what it would do and why; `claude-restore` with no
+  a session already running, a deleted directory, and an older session in the same pane. A tab
+  with no transcript yet (fresh from startup or `/clear`: a session writes none until its first
+  input) reopens as a plain `claude` in its directory. `claude-restore --list` shows what it would do and why; `claude-restore` with no
   flag restores now. Each decision is a line in `$XDG_STATE_HOME/dotclaude/restore.log`, and
   the last restore's files stay in `open-sessions/restored/`. Known limit: a window killed just
   before the machine sits idle until a hard reboot is in that final 120 s, so it comes back. An
