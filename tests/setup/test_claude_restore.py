@@ -1,11 +1,13 @@
-"""tmux/claude-restore: reopen, after a reboot, the Claude tabs that were open in tmux `main`, each
-running `claude --resume <id>` in its own directory (stdlib only).
+"""tmux/claude-restore: reopen, after the tmux server dies (a reboot, `wsl --terminate`, `tmux
+kill-server`), the Claude tabs that were open in it, each running `claude --resume <id>` in its
+own directory (stdlib only).
 
 hooks/session-registry.sh keeps one entry per open tab in
-$XDG_STATE_HOME/dotclaude/open-sessions/. An entry from an earlier boot is a candidate. One with
-no end mark is restored; one marked by SessionEnd `other` is restored only if it ended in the old
-boot's final 120 s (a shutdown), not earlier (a window closed while work went on). Stubs stand in
-for tmux and claude and record every call."""
+$XDG_STATE_HOME/dotclaude/open-sessions/, naming its server by socket path and start time. An
+entry from the current socket but an earlier server is a candidate; other sockets are never
+touched. One with no end mark is restored; one marked by SessionEnd `other` is restored only if
+it ended in the old server's final 120 s (a shutdown), not earlier (a window closed while work
+went on). Stubs stand in for tmux and claude and log each call's argv, one argument per field."""
 import fcntl
 import json
 import os
@@ -19,10 +21,12 @@ REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 SCRIPT = os.path.join(REPO, "tmux", "claude-restore")
 
 STUB = """#!/usr/bin/env bash
-printf '%s\\n' "$(basename "$0") $*" >> "$STUB_LOG"
+{ printf '%s' "$(basename "$0")"; printf '\\x1f%s' "$@"; printf '\\n'; } >> "$STUB_LOG"
 case "$(basename "$0") $1" in
   "tmux has-session") [ -n "${STUB_HAS_MAIN:-}" ] ;;
+  "tmux display") printf '%s %s\\n' "$STUB_START" "$STUB_SOCKET" ;;
   "tmux new-window")
+    [ -z "${STUB_FAIL_NEW_WINDOW:-}" ] || exit 1
     n=$(( $(cat "$STUB_LOG.panes" 2>/dev/null || echo 100) + 1 ))
     echo "$n" > "$STUB_LOG.panes"
     printf '%%%s\\n' "$n" ;;
@@ -30,8 +34,8 @@ case "$(basename "$0") $1" in
 esac
 """
 
-OLD = "00000000-0000-0000-0000-00000000000a"
-NOW_BOOT = "00000000-0000-0000-0000-00000000000b"
+SOCKET = "/tmp/tmux-1000/default"
+OLD_START = 1_700_000_000
 
 
 def sid(n):
@@ -52,42 +56,47 @@ class Restore(unittest.TestCase):
             with open(path, "w") as f:
                 f.write(STUB)
             os.chmod(path, 0o755)
-        boot = os.path.join(self.tmp, "boot_id")
-        with open(boot, "w") as f:
-            f.write(NOW_BOOT + "\n")
         self.log = os.path.join(self.tmp, "calls.log")
         self.state = os.path.join(self.tmp, "state", "dotclaude")
         self.reg = os.path.join(self.state, "open-sessions")
         os.makedirs(self.reg)
+        self.now = time.time()
+        # The old server died an hour ago; the current one started a minute ago.
+        self.died = self.now - 3600
+        self.start = int(self.now - 60)
         self.env = {k: v for k, v in os.environ.items()
                     if not k.startswith(("CLAUDE", "TMUX"))}
         self.env.update(PATH=stubs + os.pathsep + "/usr/bin:/bin", HOME=home, STUB_LOG=self.log,
-                        XDG_STATE_HOME=os.path.join(self.tmp, "state"),
-                        DOTCLAUDE_BOOT_ID_FILE=boot, STUB_HAS_MAIN="1")
-        self.now = time.time()
+                        XDG_STATE_HOME=os.path.join(self.tmp, "state"), STUB_HAS_MAIN="1",
+                        STUB_START=str(self.start), STUB_SOCKET=SOCKET)
 
     # --- fixtures -----------------------------------------------------------------------
 
-    def entry(self, n, window, pane=None, age=600, ended=None, boot=OLD, transcript=True,
-              cwd=True, transcript_age=None):
-        """Write a registry entry for session n, `age` seconds old, in a real cwd."""
-        path = os.path.join(self.tmp, "code", f"repo{n}")
+    def entry(self, n, window, pane=None, age=600, ended=None, transcript=True, cwd=True,
+              transcript_age=None, socket=SOCKET, server_start=OLD_START, dirname=None):
+        """Write an entry for session n, its times `age`/`ended` seconds before the old server
+        died, in a real cwd."""
+        path = os.path.join(self.tmp, "code", dirname or f"repo{n}")
         if cwd:
             os.makedirs(path, exist_ok=True)
         tpath = os.path.join(self.tmp, "projects", f"{sid(n)}.jsonl")
         if transcript:
             os.makedirs(os.path.dirname(tpath), exist_ok=True)
             open(tpath, "w").close()
-            t = self.now - (age if transcript_age is None else transcript_age)
+            t = self.died - (age if transcript_age is None else transcript_age)
             os.utime(tpath, (t, t))
         e = {"session_id": sid(n), "cwd": path, "transcript_path": tpath,
-             "pane": pane or f"%{n}", "window_index": window, "boot_id": boot,
-             "ts": self.now - age}
+             "pane": pane or f"%{n}", "window_index": window, "socket": socket,
+             "server_start": server_start, "ts": self.died - age}
         if ended is not None:
-            e["ended_other_at"] = self.now - ended
+            e["ended_other_at"] = self.died - ended
         with open(os.path.join(self.reg, sid(n) + ".json"), "w") as f:
             json.dump(e, f)
         return path
+
+    def touch(self, n, when):
+        tpath = os.path.join(self.tmp, "projects", f"{sid(n)}.jsonl")
+        os.utime(tpath, (when, when))
 
     def run_restore(self, *args):
         p = subprocess.run(["bash", SCRIPT, *args], capture_output=True, text=True,
@@ -95,29 +104,32 @@ class Restore(unittest.TestCase):
         self.assertEqual(p.returncode, 0, p.stderr)
         return p
 
-    def calls(self, prefix="tmux"):
+    def calls(self, *prefix):
+        """Each logged call as its argv list; with a prefix, only calls starting with it."""
         if not os.path.exists(self.log):
             return []
         with open(self.log) as f:
-            return [c for c in f.read().splitlines() if c.startswith(prefix)]
+            argvs = [line.split("\x1f") for line in f.read().splitlines()]
+        return [a for a in argvs if a[:len(prefix)] == list(prefix)]
 
     def resumed(self):
-        """The (cwd, session id) pairs restored, in order, with each send-keys on its new pane."""
-        out, pane_cwd = [], {}
-        for c in self.calls():
-            if c.startswith("tmux new-window"):
-                words = c.split()
-                self.assertIn("-d", words)
-                self.assertEqual(words[words.index("-t") + 1], "=main:")
-                pane_cwd[None] = words[words.index("-c") + 1]
-            elif c.startswith("tmux send-keys"):
-                words = c.split()
-                self.assertEqual(words[-1], "Enter")
-                self.assertEqual(words[4:6], ["claude", "--resume"])
-                out.append((pane_cwd.pop(None), words[6], words[3]))
-        panes = [p for _, _, p in out]
-        self.assertEqual(panes, [f"%{101 + i}" for i in range(len(out))])  # each on its own pane
-        return [(cwd, s) for cwd, s, _ in out]
+        """The (cwd, session id) pairs restored, in order, each typed into its own new pane."""
+        out, cwd, panes = [], None, []
+        for a in self.calls("tmux"):
+            if a[1] == "new-window":
+                self.assertEqual(a[:7], ["tmux", "new-window", "-d", "-P", "-F", "#{pane_id}",
+                                         "-t"])
+                self.assertEqual(a[7:9], ["=main:", "-c"])
+                cwd = a[9]
+            elif a[1] == "send-keys":
+                self.assertEqual(len(a), 6, a)   # the command is ONE argument, then Enter
+                self.assertEqual((a[2], a[5]), ("-t", "Enter"))
+                panes.append(a[3])
+                words = a[4].split(" ")
+                self.assertEqual(words[:2], ["claude", "--resume"], a)
+                out.append((cwd, words[2]))
+        self.assertEqual(panes, [f"%{101 + i}" for i in range(len(panes))])
+        return out
 
     def registry(self, sub=""):
         d = os.path.join(self.reg, sub)
@@ -139,6 +151,12 @@ class Restore(unittest.TestCase):
         self.run_restore()
         self.assertEqual(self.resumed(), [(b, sid(2)), (c, sid(3)), (a, sid(1))])
 
+    def test_send_keys_types_the_command_as_one_argument(self):
+        self.entry(1, window=1)
+        self.run_restore()
+        self.assertEqual([a[4:] for a in self.calls("tmux", "send-keys")],
+                         [[f"claude --resume {sid(1)}", "Enter"]])
+
     def test_a_tab_killed_in_the_final_batch_comes_back(self):
         # A shutdown that signals claude marks every tab `other` within seconds of the end.
         a = self.entry(1, window=1, age=300, ended=5)
@@ -147,7 +165,7 @@ class Restore(unittest.TestCase):
         self.assertEqual(self.resumed(), [(a, sid(1)), (b, sid(2))])
 
     def test_a_tab_closed_earlier_stays_closed(self):
-        # Window 1 was killed 15 minutes before the end; tab 2 kept working until the reboot.
+        # Window 1 was killed 15 minutes before the end; tab 2 kept working until the death.
         self.entry(1, window=1, age=1200, ended=900)
         b = self.entry(2, window=2, age=600, transcript_age=10)
         self.run_restore()
@@ -161,11 +179,43 @@ class Restore(unittest.TestCase):
         self.run_restore()
         self.assertEqual(self.resumed(), [(a, sid(1)), (b, sid(2))])
 
-    def test_entries_from_this_boot_are_left_alone(self):
-        self.entry(1, window=1, boot=NOW_BOOT)
+    def test_activity_after_the_new_server_started_is_not_the_old_end(self):
+        # Both tabs died in the shutdown. Since then something touched tab 1's transcript (a
+        # `claude --resume` by hand under the new server): that is not the old server's end.
+        a = self.entry(1, window=1, age=300, ended=5)
+        b = self.entry(2, window=2, age=300, ended=4)
+        self.touch(1, self.now - 5)
+        self.run_restore()
+        self.assertEqual(self.resumed(), [(a, sid(1)), (b, sid(2))])
+
+    def test_entries_from_the_current_server_are_left_alone(self):
+        self.entry(1, window=1, server_start=self.start)
         self.run_restore()
         self.assertEqual(self.resumed(), [])
         self.assertEqual(self.registry(), [sid(1) + ".json"])
+
+    def test_entries_from_another_socket_are_never_touched(self):
+        # A `tmux -L probe` server's tabs aren't main's.
+        self.entry(1, window=1, socket="/tmp/tmux-1000/probe")
+        b = self.entry(2, window=2)
+        self.run_restore()
+        self.assertEqual(self.resumed(), [(b, sid(2))])
+        self.assertEqual(self.registry(), [sid(1) + ".json"])
+        self.assertEqual(self.registry("restored"), [sid(2) + ".json"])
+        self.assertFalse(any(sid(1)[:8] in line for line in self.restore_log()))
+
+    def test_another_socket_in_the_same_pane_does_not_hide_the_tab(self):
+        # Pane ids restart at %0 on every server, so a newer probe entry can share the pane.
+        self.entry(1, window=1, pane="%3", age=900)
+        self.entry(2, window=1, pane="%3", age=100, socket="/tmp/tmux-1000/probe")
+        self.run_restore()
+        self.assertEqual([s for _, s in self.resumed()], [sid(1)])
+
+    def test_the_same_pane_on_two_old_servers_is_two_tabs(self):
+        a = self.entry(1, window=1, pane="%3", age=900, server_start=OLD_START - 86400)
+        b = self.entry(2, window=2, pane="%3", age=100)
+        self.run_restore()
+        self.assertEqual(self.resumed(), [(a, sid(1)), (b, sid(2))])
 
     def test_a_live_session_is_not_resumed_twice(self):
         self.entry(1, window=1)
@@ -187,12 +237,12 @@ class Restore(unittest.TestCase):
         a = self.entry(1, window=1)
         b = self.entry(2, window=2, transcript=False)
         self.run_restore()
-        calls = [c for c in self.calls() if "new-window" in c or "send-keys" in c]
+        calls = [x for x in self.calls("tmux") if x[1] in ("new-window", "send-keys")]
         self.assertEqual(len(calls), 4)
-        self.assertIn(f"-c {a}", calls[0])
-        self.assertTrue(calls[1].endswith(f"claude --resume {sid(1)} Enter"), calls[1])
-        self.assertIn(f"-c {b}", calls[2])
-        self.assertEqual(calls[3].split()[4:], ["claude", "Enter"])
+        self.assertEqual(calls[0][9], a)
+        self.assertEqual(calls[1][4:], [f"claude --resume {sid(1)}", "Enter"])
+        self.assertEqual(calls[2][9], b)
+        self.assertEqual(calls[3][4:], ["claude", "Enter"])
         self.assertTrue(any("transcript" in line for line in self.restore_log()))
         self.assertEqual(self.registry("restored"), [sid(1) + ".json", sid(2) + ".json"])
 
@@ -200,7 +250,22 @@ class Restore(unittest.TestCase):
         self.entry(1, window=1, cwd=False)
         self.run_restore()
         self.assertEqual(self.resumed(), [])
-        self.assertTrue(any("cwd" in line or "directory" in line for line in self.restore_log()))
+        self.assertTrue(any("directory" in line for line in self.restore_log()))
+
+    def test_a_hash_in_the_directory_is_skipped(self):
+        # tmux format-expands new-window -c, so #{...} in a path would open somewhere else.
+        self.entry(1, window=1, dirname="c#{pane_id}")
+        b = self.entry(2, window=2)
+        self.run_restore()
+        self.assertEqual(self.resumed(), [(b, sid(2))])
+        self.assertTrue(any(sid(1)[:8] in line and "#" in line for line in self.restore_log()))
+
+    def test_a_tab_in_the_directory_name_keeps_the_fields_apart(self):
+        a = self.entry(1, window=1, dirname="a\tb")
+        self.run_restore()
+        self.assertEqual(self.resumed(), [])  # skipped, not opened in a shifted directory
+        self.assertEqual(self.registry("restored"), [sid(1) + ".json"])
+        self.assertTrue(os.path.isdir(a))
 
     def test_one_pane_restores_its_newest_session(self):
         # Claude crashed and a new claude started in the same pane.
@@ -209,34 +274,74 @@ class Restore(unittest.TestCase):
         self.run_restore()
         self.assertEqual(self.resumed(), [(b, sid(2))])
 
+    def test_a_closed_newer_session_does_not_hide_the_open_one(self):
+        # The newer session in pane %5 was closed long before the end; the dedupe runs only
+        # among entries that would come back, so the older one still does.
+        a = self.entry(1, window=1, pane="%5", age=1000)
+        self.entry(2, window=1, pane="%5", age=950, ended=900)
+        self.entry(3, window=2, age=600, transcript_age=10)
+        self.run_restore()
+        self.assertIn((a, sid(1)), self.resumed())
+
     def test_an_unsafe_id_in_the_registry_is_never_typed(self):
         path = os.path.join(self.reg, "bad.json")
         with open(path, "w") as f:
             json.dump({"session_id": "x; rm -rf ~", "cwd": self.tmp, "pane": "%1",
-                       "window_index": 1, "boot_id": OLD, "ts": self.now,
-                       "transcript_path": "/nonexistent"}, f)
+                       "window_index": 1, "socket": SOCKET, "server_start": OLD_START,
+                       "ts": self.died, "transcript_path": "/nonexistent"}, f)
         self.run_restore()
-        self.assertEqual(self.calls("tmux send-keys"), [])
+        self.assertEqual(self.calls("tmux", "send-keys"), [])
+
+    # --- failures and retries -----------------------------------------------------------
+
+    def test_a_failed_window_puts_the_entry_back_for_the_next_run(self):
+        a = self.entry(1, window=1)
+        self.env["STUB_FAIL_NEW_WINDOW"] = "1"
+        self.run_restore()
+        self.assertEqual(self.registry(), [sid(1) + ".json"])
+        self.assertTrue(any("failed" in line for line in self.restore_log()))
+        del self.env["STUB_FAIL_NEW_WINDOW"]
+        self.run_restore()
+        self.assertEqual(self.resumed(), [(a, sid(1))])
+        self.assertEqual(self.registry(), [])
+
+    def test_each_entry_moves_just_before_its_own_window(self):
+        # A kill mid-loop must leave the unprocessed entries for the next run: when tab 1's
+        # window opens, tab 2's entry is still in place.
+        self.entry(1, window=1)
+        self.entry(2, window=2)
+        stub = os.path.join(self.tmp, "bin", "tmux")
+        with open(stub) as f:
+            text = f.read()
+        with open(stub, "w") as f:
+            f.write(text.replace('"tmux new-window")',
+                                 '"tmux new-window")\n    ls "$REG" | tr "\\n" " " >> "$STUB_LOG.ls"'
+                                 '; echo >> "$STUB_LOG.ls"'))
+        self.env["REG"] = self.reg
+        self.run_restore()
+        with open(self.log + ".ls") as f:
+            first = f.read().splitlines()[0]
+        self.assertNotIn(sid(1) + ".json", first)
+        self.assertIn(sid(2) + ".json", first)
 
     # --- modes --------------------------------------------------------------------------
 
     def test_list_changes_nothing(self):
         self.entry(1, window=1)
-        self.entry(2, window=2, transcript=False)
+        self.entry(2, window=2, cwd=False)
         p = self.run_restore("--list")
-        self.assertEqual([c for c in self.calls() if "new-window" in c or "send-keys" in c
-                          or "new-session" in c], [])
+        self.assertEqual([a for a in self.calls("tmux")
+                          if a[1] in ("new-window", "send-keys", "new-session")], [])
         self.assertEqual(self.registry(), [sid(1) + ".json", sid(2) + ".json"])
         self.assertEqual(self.registry("restored"), [])
         self.assertIn(sid(1)[:8], p.stdout)
-        self.assertIn("transcript", p.stdout)
+        self.assertIn("directory", p.stdout)
         self.assertEqual(self.restore_log(), [])
 
     def test_auto_for_another_session_does_nothing(self):
         self.entry(1, window=1)
         self.run_restore("--auto", "view-123")
         self.assertEqual(self.calls(), [])
-        self.assertEqual(self.calls("claude"), [])
         self.assertEqual(self.registry(), [sid(1) + ".json"])
 
     def test_auto_for_main_restores(self):
@@ -244,21 +349,21 @@ class Restore(unittest.TestCase):
         self.run_restore("--auto", "main")
         self.assertEqual(self.resumed(), [(a, sid(1))])
 
-    def test_a_manual_run_creates_main_when_absent(self):
+    def test_a_manual_run_creates_main_before_reading_the_server(self):
         self.entry(1, window=1)
         del self.env["STUB_HAS_MAIN"]
         self.run_restore()
-        tmux = self.calls()
-        self.assertIn("tmux new-session -d -s main", tmux)
-        self.assertLess(tmux.index("tmux new-session -d -s main"),
-                        next(i for i, c in enumerate(tmux) if c.startswith("tmux new-window")))
+        tmux = [a[1] for a in self.calls("tmux")]
+        self.assertIn(["tmux", "new-session", "-d", "-s", "main"], self.calls("tmux"))
+        self.assertLess(tmux.index("new-session"), tmux.index("display"))
+        self.assertLess(tmux.index("display"), tmux.index("new-window"))
 
     def test_a_second_run_restores_nothing(self):
         self.entry(1, window=1)
         self.run_restore()
-        first = len(self.calls("tmux send-keys"))
         self.run_restore()
-        self.assertEqual((first, len(self.calls("tmux send-keys"))), (1, 1))
+        self.assertEqual(len(self.calls("tmux", "send-keys")), 1)
+        self.assertEqual(self.registry("restored"), [sid(1) + ".json"])
 
     def test_restored_holds_only_the_last_restore(self):
         self.entry(1, window=1)
@@ -285,14 +390,14 @@ class Restore(unittest.TestCase):
         with open(os.path.join(self.reg, ".lock"), "w") as lock:
             fcntl.flock(lock, fcntl.LOCK_EX)
             self.run_restore("--auto", "main")
-        self.assertEqual(self.calls("tmux send-keys"), [])
+        self.assertEqual(self.calls("tmux", "send-keys"), [])
         self.assertEqual(self.registry(), [sid(1) + ".json"])
 
     def test_no_registry_is_quiet(self):
         shutil.rmtree(self.reg)
         p = self.run_restore("--auto", "main")
         self.assertEqual((p.stdout, p.stderr), ("", ""))
-        self.assertEqual(self.calls("tmux new-window"), [])
+        self.assertEqual(self.calls("tmux", "new-window"), [])
 
     def test_the_script_is_executable(self):
         self.assertTrue(os.access(SCRIPT, os.X_OK))
