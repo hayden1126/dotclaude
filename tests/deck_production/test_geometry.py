@@ -3,8 +3,10 @@
 Most cases call evaluate() on canned probe JSON, an outcome x rule matrix with
 no browser. GeometryEndToEnd drives headless Chrome over the fixture deck and
 skips, with the reason, when no browser is installed. The probe-side
-principles (vector svg is not media, a ::before scrim is seen through its host,
-the growth test) are exercised there, on the fixture's good and bad slides."""
+principles are pinned there, on the fixture's slides: measured contrast over a
+generated raster (bright, busy, scrimmed, haloed), the fit test (a short
+caption under a max-width it never reaches is bounded), canvas-origin margins
+on a slide reveal centers, and a margin token in rem."""
 import contextlib
 import importlib.util
 import io
@@ -29,12 +31,16 @@ _spec.loader.exec_module(geometry)
 deckcfg = geometry.deckcfg
 
 TRANSPARENT = "rgba(0, 0, 0, 0)"
-NAVY = "rgba(11, 19, 32, 0.92)"
-SHADOW = "rgb(0, 0, 0) 0px 2px 8px"
+NAVY = "rgb(28, 31, 68)"
 
 
 def box(x, y, w, h):
     return {"x": x, "y": y, "w": w, "h": h}
+
+
+def flat(ratio):
+    """A contrast distribution where every judged pixel has this ratio."""
+    return [ratio] * 101
 
 
 class Probe:
@@ -44,47 +50,34 @@ class Probe:
 
     def __init__(self, margin=96):
         self.data = {"canvas": {"w": 1920, "h": 1080}, "scale": 1, "margin": margin,
-                     "elements": [], "texts": [], "markers": [], "media": [], "clipping": []}
+                     "elements": [], "texts": [], "markers": [], "clipping": []}
 
     def el(self, parent=None, token=None, tag="div", position="static", display="block",
-           maxWidth="none", textShadow="none", fontSize=20, fontWeight=400,
-           bg=TRANSPARENT, image="none", pseudo=(), rect=None):
+           fontSize=20, fontWeight=400, bg=TRANSPARENT, image="none", rect=None):
         node = len(self.data["elements"])
         self.data["elements"].append({
             "parent": parent, "token": token or f".n{node}", "tag": tag, "position": position,
-            "display": display, "maxWidth": maxWidth, "textShadow": textShadow,
-            "fontSize": fontSize, "fontWeight": fontWeight,
-            "paints": [[bg, image], *pseudo], "box": rect or box(0, 0, 0, 0)})
+            "display": display, "fontSize": fontSize, "fontWeight": fontWeight,
+            "paints": [[bg, image]], "box": rect or box(0, 0, 0, 0)})
         return node
 
     def label(self, *lines, text=None, **root):
         """An absolutely positioned label holding one text item. Text styles
-        (font, shadow) go in `text`: the probe reads them computed on the text."""
+        go in `text`: the probe reads them computed on the text element."""
         node = self.el(self.el(position="absolute", **root), **(text or {}))
         return self.text(node, *lines)
 
-    def text(self, node, *lines, exempt=(), grows=None, chars=40):
-        self.data["texts"].append({"node": node, "lines": list(lines), "samples": [],
-                                   "exempt": list(exempt), "grows": grows, "chars": chars,
-                                   "text": "x"})
+    def text(self, node, *lines, exempt=(), chars=40, fit=None, contrast=None):
+        self.data["texts"].append({"node": node, "lines": list(lines), "exempt": list(exempt),
+                                   "chars": chars, "fit": fit, "contrast": contrast,
+                                   "color": [255, 255, 255, 1], "text": "x"})
         return node
 
     def item(self, node):
         return next(t for t in self.data["texts"] if t["node"] == node)
 
-    def over(self, node, *stack, points=5):
-        """Paint stacks under a text item, topmost first: the text, then what
-        lies below it down to (and past) the media."""
-        self.item(node)["samples"] = [[node, *stack] for _ in range(points)]
-
     def marker(self, rect, parent=None):
         self.data["markers"].append({"node": self.el(parent), "box": rect})
-
-    def media(self, rect=None, parent=None, tag="img", scrimmed=False):
-        node = self.el(parent, tag=tag)
-        self.data["media"].append({"node": node, "box": rect or box(800, 100, 800, 800),
-                                   "scrimmed": scrimmed})
-        return node
 
     def clip(self, node, rect, x=True, y=True):
         self.data["clipping"].append({"node": node, "box": rect, "x": x, "y": y})
@@ -94,8 +87,15 @@ def shipped_rules():
     return geometry.parse_rules(pathlib.Path(geometry.RULES_FILE).read_text(), "test")
 
 
+def violations(probe, rules=None):
+    return geometry.evaluate(probe.data, rules or shipped_rules(), "s1")
+
+
 def fired(probe, rules=None):
-    return [v.rule for v in geometry.evaluate(probe.data, rules or shipped_rules(), "s1")]
+    return [v.rule for v in violations(probe, rules)]
+
+
+UNBOUNDED = {"content": True, "edge": True}
 
 
 def overlap_bad():
@@ -126,23 +126,16 @@ def marker_good():
     return p
 
 
-def unbounded_bad():
+def unbounded(fit, chars=40, **text):
     p = Probe()
-    p.item(p.label(box(200, 200, 900, 30)))["grows"] = 600
+    t = p.item(p.label(box(200, 200, 900, 30), text=text))
+    t["fit"], t["chars"] = fit, chars
     return p
 
 
-def unbounded_good():
+def contrast(ratio, **text):
     p = Probe()
-    p.item(p.label(box(200, 200, 400, 30)))["grows"] = 0
-    return p
-
-
-def media_case(**root):
-    p = Probe()
-    m = p.media()
-    t = p.label(box(900, 300, 300, 30), **root)
-    p.over(t, p.data["elements"][t]["parent"], m)
+    p.item(p.label(box(200, 200, 300, 30), text=text))["contrast"] = flat(ratio)
     return p
 
 
@@ -184,8 +177,9 @@ def clip_good():
 MATRIX = {
     "text-overlap": (overlap_bad, overlap_good),
     "covers-marker": (marker_bad, marker_good),
-    "unbounded-abs-text": (unbounded_bad, unbounded_good),
-    "text-on-media": (media_case, lambda: media_case(bg=NAVY)),
+    "unbounded-abs-text": (lambda: unbounded(UNBOUNDED),
+                           lambda: unbounded({"content": True, "edge": False})),
+    "text-contrast": (lambda: contrast(3.2), lambda: contrast(4.6)),
     "safe-area": (safe_bad, safe_good),
     "clearance": (clearance_bad, overlap_good),
     "clipped-text": (clip_bad, clip_good),
@@ -221,13 +215,27 @@ class TextOverlapScope(unittest.TestCase):
         p.text(p.el(outer), box(200, 200, 300, 30))
         self.assertNotIn("text-overlap", fired(p))
 
-    def test_in_flow_siblings_under_one_positioned_box_never_overlap(self):
-        # A flex column's name and caption: one layout pass places both.
+    def test_in_flow_items_under_one_box_still_count(self):
+        # An overflowing fixed-height card, a negative margin, two grid items
+        # in one cell: one layout pass, and still ink on ink.
         p = Probe()
-        col = p.el(p.el(position="absolute"), display="flex")
-        p.text(p.el(col), box(200, 200, 300, 30))
-        p.text(p.el(col), box(200, 210, 300, 30))
-        self.assertNotIn("text-overlap", fired(p))
+        card = p.el(p.el(position="absolute"), display="grid")
+        p.text(p.el(card), box(200, 200, 300, 30))
+        p.text(p.el(card), box(200, 210, 300, 30))
+        self.assertIn("text-overlap", fired(p))
+
+    def test_a_slide_with_no_positioned_boxes_is_checked(self):
+        p = Probe()
+        p.text(p.el(), box(200, 200, 300, 30))
+        p.text(p.el(), box(250, 210, 300, 30))
+        self.assertIn("text-overlap", fired(p))
+
+    def test_a_positioned_descendant_over_its_ancestors_text_counts(self):
+        # A badge absolutely placed over a card title is not in its flow.
+        p = Probe()
+        title = p.text(p.el(), box(200, 200, 300, 30))
+        p.text(p.el(title, position="absolute"), box(260, 205, 80, 30))
+        self.assertIn("text-overlap", fired(p))
 
     def test_two_svg_labels_are_placed_independently(self):
         p = Probe()
@@ -237,122 +245,124 @@ class TextOverlapScope(unittest.TestCase):
         self.assertIn("text-overlap", fired(p))
 
     def test_content_areas_touching_is_not_ink_on_ink(self):
-        # Two stacked lines whose content areas overlap by 7 px; their em
-        # boxes do not meet (23 px type, 33 px content area, 26 px apart).
+        # 23 px type, 33 px content areas, lines 26 px apart: the rects overlap
+        # by 7 px, the em boxes do not meet.
         p = Probe()
         svg = p.el(tag="svg", display="inline")
         p.text(p.el(svg, tag="text", fontSize=23), box(124, 490, 52, 33))
         p.text(p.el(svg, tag="text", fontSize=23), box(124, 516, 52, 33))
-        self.assertNotIn("text-overlap", fired(p))
+        self.assertEqual(fired(p), [])
 
-    def test_a_sliver_under_min_depth_does_not_count(self):
+    def test_a_sliver_under_min_depth_is_clearance_not_overlap(self):
         p = Probe()
-        p.label(box(200, 200, 300, 20), text={"fontSize": 20})
-        p.label(box(200, 218, 300, 20), text={"fontSize": 20})   # 300x2 px of em box
-        self.assertNotIn("text-overlap", fired(p))
+        p.label(box(200, 200, 300, 20))
+        p.label(box(200, 218, 300, 20))          # ink overlaps 300x2 px
+        found = violations(p)
+        self.assertEqual([v.rule for v in found], ["clearance"])
+        self.assertIn("overlaps", found[0].detail)
         p = Probe()
-        p.label(box(200, 200, 300, 20), text={"fontSize": 20})
-        p.label(box(200, 216, 300, 20), text={"fontSize": 20})   # 4 px deep
-        self.assertIn("text-overlap", fired(p))
+        p.label(box(200, 200, 300, 20))
+        p.label(box(200, 216, 300, 20))          # 4 px deep: overlap, reported once
+        self.assertEqual(fired(p), ["text-overlap"])
 
 
 class UnboundedScope(unittest.TestCase):
-    def outcome(self, grows, chars=40, **text):
+    def test_the_fit_outcomes(self):
+        cases = {
+            "content-sized, runs to the container's edge": (UNBOUNDED, True),
+            "content-sized, stops short (a max-width)": ({"content": True, "edge": False}, False),
+            "does not move (a width, or both insets)": ({"content": False, "edge": False}, False),
+            "not in a positioned box": (None, False),
+        }
+        for name, (fit, fires) in cases.items():
+            with self.subTest(case=name):
+                self.assertEqual("unbounded-abs-text" in fired(unbounded(fit)), fires)
+
+    def test_large_type_is_no_exemption(self):
+        # A 120-character caption at 24 px still needs a measure.
+        self.assertIn("unbounded-abs-text", fired(unbounded(UNBOUNDED, chars=120, fontSize=24)))
+
+    def test_headings_and_short_labels_set_their_own_width(self):
+        self.assertNotIn("unbounded-abs-text", fired(unbounded(UNBOUNDED, chars=16)))
         p = Probe()
-        p.item(p.label(box(200, 200, 500, 30), text=text))["grows"] = grows
-        p.item(p.data["texts"][0]["node"])["chars"] = chars
-        return "unbounded-abs-text" in fired(p)
-
-    def test_small_running_text_whose_box_grows_fires(self):
-        self.assertTrue(self.outcome(300))
-
-    def test_a_box_that_does_not_grow_is_bounded(self):
-        self.assertFalse(self.outcome(0))
-        self.assertFalse(self.outcome(1))                # within tolerance
-
-    def test_large_text_sets_its_own_width(self):
-        self.assertFalse(self.outcome(300, fontSize=24))
-        self.assertFalse(self.outcome(300, fontSize=19, fontWeight=700))
-        self.assertTrue(self.outcome(300, fontSize=19, fontWeight=400))
-
-    def test_a_short_label_sets_its_own_width(self):
-        self.assertFalse(self.outcome(300, chars=16))
-
-    def test_text_outside_any_positioned_box_is_not_judged(self):
-        p = Probe()
-        p.text(p.el(), box(200, 200, 900, 30), grows=None)
+        t = p.item(p.text(p.el(p.el(position="absolute"), tag="h2", fontSize=60),
+                          box(96, 96, 1275, 70)))
+        t["fit"], t["chars"] = UNBOUNDED, 80
         self.assertNotIn("unbounded-abs-text", fired(p))
 
     def test_one_finding_per_positioned_box_naming_the_widest_line(self):
         p = Probe()
         root = p.el(position="absolute")
-        p.text(p.el(root), box(200, 200, 100, 30), grows=50)
-        p.text(p.el(root), box(200, 240, 600, 30), grows=50)
-        found = [v for v in geometry.evaluate(p.data, shipped_rules(), "s1")
-                 if v.rule == "unbounded-abs-text"]
+        p.text(p.el(root), box(200, 200, 100, 30), fit=UNBOUNDED)
+        p.text(p.el(root), box(200, 240, 600, 30), fit=UNBOUNDED)
+        found = [v for v in violations(p) if v.rule == "unbounded-abs-text"]
         self.assertEqual(len(found), 1)
         self.assertIn("runs 600 px wide", found[0].detail)
 
 
-class TextOnMediaScope(unittest.TestCase):
-    def test_wcag_split_for_text_shadow(self):
+class ContrastScope(unittest.TestCase):
+    def test_wcag_thresholds_by_size_and_weight(self):
         cases = {
-            "small, shadow only": ({"textShadow": SHADOW}, True),
-            "large, shadow": ({"textShadow": SHADOW, "fontSize": 24}, False),
-            "large bold, shadow": ({"textShadow": SHADOW, "fontSize": 19, "fontWeight": 700}, False),
-            "large, no shadow": ({"fontSize": 30}, True),
+            "small at 4.4": (4.4, {}, True),
+            "small at 4.5": (4.5, {}, False),
+            "24 px at 3.1": (3.1, {"fontSize": 24}, False),
+            "19 px bold at 3.1": (3.1, {"fontSize": 19, "fontWeight": 700}, False),
+            "19 px regular at 3.1": (3.1, {"fontSize": 19}, True),
+            "large at 2.9": (2.9, {"fontSize": 40}, True),
         }
-        for name, (text, fires) in cases.items():
+        for name, (ratio, text, fires) in cases.items():
             with self.subTest(case=name):
-                p = Probe()
-                m = p.media()
-                t = p.label(box(900, 300, 300, 30), text=text)
-                p.over(t, p.data["elements"][t]["parent"], m)
-                self.assertEqual("text-on-media" in fired(p), fires)
+                self.assertEqual("text-contrast" in fired(contrast(ratio, **text)), fires)
 
-    def test_what_counts_as_a_panel_or_scrim(self):
-        cases = {
-            "opaque panel": (dict(bg=NAVY), False),
-            "faint panel": (dict(bg="rgba(0, 0, 0, 0.2)"), True),
-            "gradient scrim": (dict(image="linear-gradient(rgba(0, 0, 0, 0) 40%, "
-                                          "rgba(0, 0, 0, 0.55) 100%)"), False),
-            "faint gradient": (dict(image="radial-gradient(rgba(0, 0, 0, 0.1), "
-                                          "rgba(0, 0, 0, 0))"), True),
-            "::before scrim": (dict(pseudo=[[TRANSPARENT, "linear-gradient(rgba(0, 0, 0, 0.8), "
-                                                          "rgba(0, 0, 0, 0.6))"]]), False),
-        }
-        for name, (root, fires) in cases.items():
-            with self.subTest(case=name):
-                self.assertEqual("text-on-media" in fired(media_case(**root)), fires)
-
-    def test_a_sibling_overlay_between_text_and_media_is_a_scrim(self):
+    def test_the_judged_percentile_is_a_param(self):
         p = Probe()
-        m = p.media()
-        scrim = p.el(image="linear-gradient(rgba(0, 0, 0, 0), rgba(0, 0, 0, 0.9))")
-        t = p.label(box(900, 300, 300, 30))
-        p.over(t, p.data["elements"][t]["parent"], scrim, m)
-        self.assertNotIn("text-on-media", fired(p))
+        q = [1.0] * 3 + [10.0] * 98              # a few stray dots, else crisp
+        p.item(p.label(box(200, 200, 300, 30)))["contrast"] = q
+        self.assertNotIn("text-contrast", fired(p))
+        rules = shipped_rules()
+        next(r for r in rules if r["id"] == "text-contrast")["params"]["percentile"] = 0
+        self.assertIn("text-contrast", fired(p, rules))
 
-    def test_a_panel_below_the_media_is_no_panel(self):
+    def test_unmeasurable_text_is_not_judged(self):
         p = Probe()
-        card = p.el(bg="rgb(255, 255, 255)")
-        m = p.media(parent=card)
-        t = p.text(p.el(card), box(900, 300, 300, 30))
-        p.over(t, m, card)
-        self.assertIn("text-on-media", fired(p))
+        p.label(box(200, 200, 300, 30))          # contrast None (no single color)
+        self.assertNotIn("text-contrast", fired(p))
 
-    def test_a_url_background_with_its_own_gradient_layer_is_scrimmed(self):
-        p = Probe()
-        m = p.media(tag="div", scrimmed=True)
-        t = p.label(box(900, 300, 300, 30))
-        p.over(t, p.data["elements"][t]["parent"], m)
-        self.assertNotIn("text-on-media", fired(p))
+    def test_decorative_type_is_exempt(self):
+        p = contrast(1.2)
+        p.data["texts"][0]["exempt"] = ["text-contrast"]
+        self.assertNotIn("text-contrast", fired(p))
 
-    def test_text_not_sampled_over_media_is_not_judged(self):
+
+class SafeAreaScope(unittest.TestCase):
+    def test_exempt_and_the_margin_token(self):
         p = Probe()
-        p.media()
-        p.label(box(100, 300, 300, 30))           # no samples: no line over media
-        self.assertNotIn("text-on-media", fired(p))
+        p.text(p.el(tag="footer"), box(96, 1040, 300, 20), exempt=["safe-area"])
+        self.assertNotIn("safe-area", fired(p))
+        p = Probe(margin=40)
+        p.text(p.el(), box(40, 200, 300, 30))
+        self.assertNotIn("safe-area", fired(p))
+        p = Probe(margin=0)                          # a 0 token means 0, not "unset"
+        p.text(p.el(), box(10, 200, 300, 30))
+        self.assertNotIn("safe-area", fired(p))
+        p = Probe(margin=None)                       # no token: fallback_margin 96
+        p.text(p.el(), box(40, 200, 300, 30))
+        self.assertIn("safe-area", fired(p))
+
+    def test_a_panel_excuses_only_the_edge_it_hugs(self):
+        side = box(0, 0, 640, 1080)                  # a left column, full height
+        p = Probe()
+        p.text(p.el(p.el(bg=NAVY, rect=side)), box(64, 200, 300, 30))
+        self.assertNotIn("safe-area", fired(p))
+        p = Probe()                                  # same column, text in its top margin
+        p.text(p.el(p.el(bg=NAVY, rect=box(0, 300, 640, 780))), box(120, 40, 300, 30))
+        self.assertIn("safe-area", fired(p))
+        p = Probe()                                  # a full-canvas wrapper excuses nothing
+        p.text(p.el(p.el(bg=NAVY, rect=box(0, 0, 1920, 1080))), box(64, 200, 300, 30))
+        self.assertIn("safe-area", fired(p))
+        p = Probe()                                  # a floating card hugs no edge
+        p.text(p.el(p.el(bg=NAVY, rect=box(40, 160, 400, 200))), box(64, 200, 300, 30))
+        self.assertIn("safe-area", fired(p))
 
 
 class RuleScopes(unittest.TestCase):
@@ -363,28 +373,7 @@ class RuleScopes(unittest.TestCase):
         p.text(p.el(pin), box(200, 200, 300, 30))
         self.assertNotIn("covers-marker", fired(p))
 
-    def test_safe_area_honours_exempt_and_the_margin_token(self):
-        p = Probe()
-        p.text(p.el(tag="footer"), box(96, 1040, 300, 20), exempt=["safe-area"])
-        self.assertNotIn("safe-area", fired(p))
-        p = Probe(margin=40)
-        p.text(p.el(), box(40, 200, 300, 30))
-        self.assertNotIn("safe-area", fired(p))
-        p = Probe(margin=None)                       # no token: fallback_margin 96
-        p.text(p.el(), box(40, 200, 300, 30))
-        self.assertIn("safe-area", fired(p))
-
-    def test_safe_area_skips_text_on_a_panel_that_reaches_the_edge(self):
-        p = Probe()
-        side = p.el(bg="rgb(28, 31, 68)", rect=box(0, 0, 640, 1080))
-        p.text(p.el(side), box(64, 200, 300, 30))
-        self.assertNotIn("safe-area", fired(p))
-        p = Probe()
-        card = p.el(bg="rgb(28, 31, 68)", rect=box(40, 160, 400, 200))   # floats: no edge
-        p.text(p.el(card), box(64, 200, 300, 30))
-        self.assertIn("safe-area", fired(p))
-
-    def test_clearance_skips_one_flow_one_drawing_and_overlaps(self):
+    def test_clearance_skips_one_flow_and_one_drawing(self):
         p = Probe()
         tag = p.el(position="absolute")
         p.text(p.el(tag), box(200, 200, 300, 30))
@@ -395,7 +384,6 @@ class RuleScopes(unittest.TestCase):
         p.text(p.el(svg, tag="text"), box(200, 200, 300, 30))
         p.text(p.el(svg, tag="text"), box(200, 222, 300, 30))
         self.assertNotIn("clearance", fired(p))
-        self.assertNotIn("clearance", fired(overlap_bad()))
 
     def test_clipping_checks_only_the_clipped_axis(self):
         p = Probe()
@@ -422,11 +410,11 @@ class SeverityAndConfig(unittest.TestCase):
         self.assertEqual(geometry.exit_code([]), deckcfg.EXIT_OK)
 
     def test_deck_toml_disables_and_tunes_rules(self):
-        rules = self.deck('[geometry]\ndisable = ["text-on-media"]\n'
+        rules = self.deck('[geometry]\ndisable = ["text-contrast"]\n'
                           '[geometry.clearance]\nmin_gap = 1\n'
                           '[geometry.safe-area]\nseverity = "error"\nmargin = 20\n'
                           '[geometry.text-overlap]\nenabled = false\n')
-        self.assertNotIn("text-on-media", fired(media_case(), rules))
+        self.assertNotIn("text-contrast", fired(contrast(1.5), rules))
         self.assertNotIn("clearance", fired(clearance_bad(), rules))
         self.assertNotIn("text-overlap", fired(overlap_bad(), rules))
         self.assertNotIn("safe-area", fired(safe_bad(), rules))       # 40 px clears a 20 margin
@@ -443,6 +431,7 @@ class SeverityAndConfig(unittest.TestCase):
             "unknown param": "[geometry.clearance]\nmin_gapp = 9\n",
             "wrong param type": '[geometry.clearance]\nmin_gap = "9"\n',
             "bad severity": '[geometry.clearance]\nseverity = "fatal"\n',
+            "percentile out of range": "[geometry.text-contrast]\npercentile = 120\n",
         }
         for name, toml in bad.items():
             with self.subTest(case=name):
@@ -465,21 +454,41 @@ class SeverityAndConfig(unittest.TestCase):
         self.assertEqual(geometry.split_layers("none"), [])
 
 
-class MissingBrowser(unittest.TestCase):
-    def test_no_browser_exits_3_with_the_install_hint(self):
+class BrowserFailures(unittest.TestCase):
+    def run_main(self, *argv, **patches):
         err = io.StringIO()
-        with mock.patch.object(geometry, "find_browser", return_value=None), \
-                mock.patch.object(sys, "argv", ["geometry.py", FIXTURE]), \
-                contextlib.redirect_stderr(err):
-            code = geometry.main()
+        with mock.patch.object(sys, "argv", ["geometry.py", FIXTURE, *argv]), \
+                contextlib.redirect_stderr(err), contextlib.ExitStack() as stack:
+            for name, value in patches.items():
+                stack.enter_context(mock.patch.object(geometry, name, value))
+            try:
+                code = geometry.main()
+            except SystemExit as exc:
+                code = exc.code
+        return code, err.getvalue()
+
+    def test_no_browser_exits_3_with_the_install_hint(self):
+        code, err = self.run_main(find_browser=lambda cfg: None)
         self.assertEqual(code, deckcfg.EXIT_ENV)
-        self.assertIn("chrome-headless-shell", err.getvalue())
+        self.assertIn("chrome-headless-shell", err)
+
+    def test_a_browser_that_dies_exits_3_at_once(self):
+        def dies(*args, **kwargs):
+            raise geometry.BrowserDied("the browser exited")
+        code, err = self.run_main(measure=dies, find_browser=lambda cfg: ("x", True))
+        self.assertEqual(code, deckcfg.EXIT_ENV)
+        self.assertIn("the browser exited", err)
+
+    def test_a_page_error_is_not_an_environment_problem(self):
+        def throws(*args, **kwargs):
+            raise geometry.PageError("TypeError: boom")
+        code, err = self.run_main(measure=throws, find_browser=lambda cfg: ("x", True))
+        self.assertEqual(code, deckcfg.EXIT_USAGE)
+        self.assertNotIn("install", err)
 
 
 class GeometryEndToEnd(unittest.TestCase):
-    """The real path: Chrome over the fixture, through the CLI. The good slide
-    carries a vector overlay svg across its labels (not media), and one label
-    over the globe image darkened by a ::before gradient (a scrim)."""
+    """The real path: Chrome over the fixture, through the CLI."""
 
     @classmethod
     def setUpClass(cls):
@@ -488,41 +497,58 @@ class GeometryEndToEnd(unittest.TestCase):
 
     def run_gate(self, *args):
         p = subprocess.run([sys.executable, SCRIPT, FIXTURE, *args, "--json"],
-                           capture_output=True, text=True, timeout=120)
+                           capture_output=True, text=True, timeout=180)
         return p, json.loads(p.stdout.strip().splitlines()[-1]) if p.stdout.strip() else None
+
+    def found(self, out):
+        return {(v["rule"], v["subject"]) for v in out["violations"]}
 
     def test_the_colliding_labels_fail(self):
         p, out = self.run_gate("--slides", "bad")
         self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
-        found = {(v["rule"], v["subject"]) for v in out["violations"]}
-        self.assertIn(("text-overlap", ".label-north .l-cap x .label-south .l-name"), found)
-        # the growth test: both caption boxes widen with their content
-        self.assertIn(("unbounded-abs-text", ".label-north"), found)
-        self.assertIn(("unbounded-abs-text", ".label-south"), found)
-        self.assertIn(("text-on-media", ".label-north .l-cap on .globe"), found)
+        self.assertEqual(self.found(out), {
+            ("text-overlap", ".label-north .l-cap x .label-south .l-name"),
+            ("unbounded-abs-text", ".label-north"),
+            ("unbounded-abs-text", ".label-south"),
+        })
 
     def test_the_fixed_twin_passes_clean(self):
+        # Includes a short caption under a max-width it never reaches: the
+        # box widens when the text grows, but stops short of the container.
         p, out = self.run_gate("--slides", "good")
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         self.assertIn("geometry: 0 errors, 0 warnings on 1 slides", p.stdout)
-        self.assertEqual(out["slides"], {"good": {"errors": 0, "warnings": 0}})
         self.assertNotIn("Traceback", p.stderr)
 
-    def test_the_scrim_is_what_passes_the_label_over_the_image(self):
+    def test_contrast_is_measured_on_pixels(self):
+        # One raster: dark ink on its bright half passes; light small type on
+        # its checkerboard fails; the same type on a dark scrim passes, and so
+        # does a dense dark halo (measured, the halo is the backdrop).
+        p, out = self.run_gate("--slides", "contrast")
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertEqual(self.found(out), {("text-contrast", ".light-on-busy")})
+
+    def test_margins_are_the_canvas_not_a_centered_section(self):
+        # Reveal centers this short slide, so its last line sits in the
+        # canvas's bottom margin; the margin token is in rem.
+        p, out = self.run_gate("--slides", "centered")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertEqual(self.found(out), {("safe-area", ".low")})
+        self.assertIn("96 px bottom margin", out["violations"][0]["detail"])
+
+    def test_a_bad_selector_is_a_config_error_naming_the_key(self):
         tmp = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, tmp)
-        strict = pathlib.Path(tmp, "deck.toml")
-        strict.write_text("[substrate]\ntier = \"none\"\n"
-                          "[geometry.text-on-media]\nmin_panel_alpha = 0.95\n")
-        p, out = self.run_gate("--slides", "good", "--config", str(strict))
-        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
-        self.assertEqual({v["subject"] for v in out["violations"]},
-                         {".label-south .l-name on .globe", ".label-south .l-cap on .globe"})
+        cfg = pathlib.Path(tmp, "deck.toml")
+        cfg.write_text('[substrate]\ntier = "none"\n[geometry.covers-marker]\nmarkers = ["[[x"]\n')
+        p, _ = self.run_gate("--slides", "good", "--config", str(cfg))
+        self.assertEqual(p.returncode, 2, p.stdout + p.stderr)
+        self.assertIn("[geometry.covers-marker] markers", p.stderr)
 
     def test_an_unknown_slide_is_a_usage_error(self):
         p, _ = self.run_gate("--slides", "nope")
         self.assertEqual(p.returncode, 2, p.stdout + p.stderr)
-        self.assertIn("have: bad, good", p.stderr)
+        self.assertIn("have: bad, good, contrast, centered", p.stderr)
 
 
 if __name__ == "__main__":

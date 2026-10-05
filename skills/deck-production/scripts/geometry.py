@@ -7,19 +7,20 @@ Usage: python3 geometry.py <deck-dir> [--slides id,...] [--json] [--config PATH]
 Screenshots miss the defect this targets: two labels whose captions have no
 max-width and no panel, anchored close together, so their text runs into each
 other. A reviewer sees it only when looking at the right slide at full size.
-This drives headless Chrome over the deck, measures every text line, marker and
-media box in canvas pixels (geometry_probe.js), and evaluates
-geometry.rules.toml against the numbers.
+This drives headless Chrome over the deck, measures every text line and marker
+in canvas pixels (geometry_probe.js), measures each text's contrast against
+the pixels it is rendered on, and evaluates geometry.rules.toml against the
+numbers.
 
 The driver speaks the DevTools protocol over --remote-debugging-pipe, so it
 needs no node, Puppeteer or websocket library. The deck is served over http
 with serve.py's handler on an ephemeral port, never file://.
 
 Rules (ids, severities and params live in geometry.rules.toml):
-   text-overlap        line rects of two text items intersect
+   text-overlap        the ink of two text items intersects
    covers-marker       a text line sits on a marker (map pin)
-   unbounded-abs-text  small running text in a box that widens with content
-   text-on-media       small text over raster media with no panel or scrim
+   unbounded-abs-text  running text in a box that widens with its content
+   text-contrast       measured WCAG contrast against the rendered backdrop
    safe-area           text outside the canvas margin (warn)
    clearance           independently placed text closer than min_gap (warn)
    clipped-text        text cut off by an overflow-hidden ancestor
@@ -27,7 +28,8 @@ Rules (ids, severities and params live in geometry.rules.toml):
 A deck tunes them in deck.toml: `[geometry] disable = [ids]`, and
 `[geometry.<id>]` for severity, enabled or any param.
 
-Exit 1 on any error-severity violation; warnings alone exit 0.
+Exit 1 on any error-severity violation; warnings alone exit 0. A browser that
+is missing or dies exits 3; a config the page rejects (a bad selector) exits 2.
 """
 from __future__ import annotations
 
@@ -58,13 +60,26 @@ import serve  # noqa: E402
 RULES_FILE = HERE / "geometry.rules.toml"
 PROBE_FILE = HERE / "geometry_probe.js"
 SEVERITIES = ("error", "warn")
+HEADINGS = ("h1", "h2", "h3")
 HEADLESS_SHELLS = pathlib.Path.home() / ".cache" / "puppeteer" / "chrome-headless-shell"
 INSTALL_HINT = ("npx @puppeteer/browsers install chrome-headless-shell@stable "
                 "--path ~/.cache/puppeteer   (or set [env] chrome / DECKKIT_ENV_CHROME)")
 
 
 class BrowserError(Exception):
-    """The browser died, timed out, or refused a command."""
+    """The browser could not be started or used: an environment problem."""
+
+
+class BrowserDied(BrowserError):
+    """The browser exited or stopped answering."""
+
+
+class ProtocolError(BrowserError):
+    """The browser answered a command with an error (often a page mid-load)."""
+
+
+class PageError(Exception):
+    """Script evaluated in the page threw."""
 
 
 @dataclass
@@ -84,6 +99,18 @@ class Violation:
 # Pure: probe JSON + resolved rules -> violations. No browser, so the tests
 # exercise every rule on canned probe output.
 
+def ink_lines(lines: list[dict], font_size: float) -> list[dict]:
+    """Line rects trimmed to the em box. A Range rect is the font's content
+    area (ascent + descent + line gap), taller than the glyphs; ink sits within
+    the em, so two stacked lines whose content areas touch do not collide."""
+    out = []
+    for line in lines:
+        if line["h"] > font_size:
+            line = {**line, "y": line["y"] + (line["h"] - font_size) / 2, "h": font_size}
+        out.append(line)
+    return out
+
+
 class Slide:
     """The probe's node table with the ancestor walks the rules share."""
 
@@ -91,7 +118,6 @@ class Slide:
         self.probe = probe
         self.el = probe["elements"]
         self.texts = probe["texts"]
-        self.media = {m["node"]: m for m in probe["media"]}
 
     def chain(self, node: int) -> list[int]:
         """Ancestors, nearest first, excluding the node itself and the section."""
@@ -105,31 +131,47 @@ class Slide:
     def up(self, node: int) -> list[int]:
         return [node, *self.chain(node)]
 
-    def related(self, a: int, b: int) -> bool:
-        return a == b or a in self.chain(b) or b in self.chain(a)
+    def positioned(self, node: int) -> bool:
+        return self.el[node]["position"] in ("absolute", "fixed")
+
+    def nested(self, a: int, b: int) -> bool:
+        """Is one item inside the other's flow? An absolutely positioned
+        descendant (a badge on a card title) is placed on its own, so it is
+        not nested in that sense and still counts."""
+        for outer, inner in ((a, b), (b, a)):
+            if outer == inner:
+                return True
+            path = self.up(inner)
+            if outer in path:
+                return not any(self.positioned(n) for n in path[:path.index(outer)])
+        return False
 
     def root(self, node: int) -> int | None:
         """Nearest absolutely or fixed positioned ancestor-or-self; None = the section."""
-        for n in self.up(node):
-            if self.el[n]["position"] in ("absolute", "fixed"):
-                return n
-        return None
+        return next((n for n in self.up(node) if self.positioned(n)), None)
+
+    def svg(self, node: int) -> int | None:
+        return next((n for n in self.up(node) if self.el[n]["tag"] == "svg"), None)
 
     def flow_root(self, node: int) -> int | None:
-        """What lays this text out. Everything in flow under one positioned box
-        (blocks, flex and grid items, inline runs) is placed by one layout
-        pass, which does not stack lines on each other. Inside an svg nothing
-        flows: each <text> is placed by its own coordinates."""
+        """What lays this text out: the nearest positioned box, or inside an
+        svg the <text> element itself (svg text is placed by coordinates)."""
         chain = self.up(node)
-        if any(self.el[n]["tag"] == "svg" for n in chain):
+        if self.svg(node) is not None:
             return next((n for n in chain if self.el[n]["tag"] == "text"), node)
         return self.root(node)
+
+    def heading(self, node: int) -> bool:
+        return any(self.el[n]["tag"] in HEADINGS for n in self.up(node))
 
     def large(self, node: int, p: dict) -> bool:
         """WCAG large text: at least large_px, or large_bold_px at bold weight."""
         e = self.el[node]
         return e["fontSize"] >= p["large_px"] or (
             e["fontSize"] >= p["large_bold_px"] and e["fontWeight"] >= p["bold_weight"])
+
+    def ink(self, t: dict) -> list[dict]:
+        return ink_lines(t["lines"], self.el[t["node"]]["fontSize"])
 
     def paints_panel(self, node: int, min_alpha: float) -> bool:
         """Does the element (or its ::before/::after) paint a background at
@@ -140,34 +182,6 @@ class Slide:
             for layer in split_layers(image):
                 if "gradient(" in layer and gradient_alpha(layer) >= min_alpha:
                     return True
-        return False
-
-    def ink(self, t: dict) -> list[dict]:
-        """Line rects trimmed to the em box. A Range rect is the font's content
-        area (ascent + descent + line gap), taller than the glyphs; ink sits
-        within the em, so two stacked lines whose content areas touch do not
-        collide on screen."""
-        fs = self.el[t["node"]]["fontSize"]
-        out = []
-        for line in t["lines"]:
-            if line["h"] > fs:
-                line = {**line, "y": line["y"] + (line["h"] - fs) / 2, "h": fs}
-            out.append(line)
-        return out
-
-    def svg(self, node: int) -> int | None:
-        return next((n for n in self.up(node) if self.el[n]["tag"] == "svg"), None)
-
-    def edge_panel(self, node: int, min_alpha: float) -> bool:
-        """Is the text on a painted panel that reaches a canvas edge (a side
-        column, a band)? Such a panel sets its own inset."""
-        width, height = self.probe["canvas"]["w"], self.probe["canvas"]["h"]
-        for n in self.up(node):
-            b = self.el[n]["box"]
-            touches = b["x"] <= 1 or b["y"] <= 1 or b["x"] + b["w"] >= width - 1 \
-                or b["y"] + b["h"] >= height - 1
-            if touches and self.paints_panel(n, min_alpha):
-                return True
         return False
 
     def path(self, node: int) -> str:
@@ -210,7 +224,7 @@ def split_layers(image: str) -> list[str]:
 
 
 def gradient_alpha(layer: str) -> float:
-    """The strongest stop of a gradient: a scrim is judged where it is darkest."""
+    """The strongest stop of a gradient: a panel is judged where it is darkest."""
     stops = COLOR_RE.findall(layer)
     return max((alpha(c) for c in stops), default=1.0)
 
@@ -240,26 +254,30 @@ def px(w: float, h: float) -> str:
     return f"{round(w)}x{round(h)} px"
 
 
+def pair(s: Slide, a: dict, b: dict) -> str:
+    return f"{s.path(a['node'])} x {s.path(b['node'])}"
+
+
 def _texts(s: Slide, rule: str) -> list[dict]:
     return [t for t in s.texts if rule not in t.get("exempt", [])]
 
 
 def rule_text_overlap(s: Slide, p: dict, rid: str):
-    items = _texts(s, rid)
-    for a, b in itertools.combinations(items, 2):
-        if s.related(a["node"], b["node"]) or s.flow_root(a["node"]) == s.flow_root(b["node"]):
+    # Every pair counts, in flow or not: a fixed-height card that overflows,
+    # a negative margin, a transform or two grid items in one cell all stack
+    # ink. Only an item and what is nested in its own flow are exempt.
+    for a, b in itertools.combinations(_texts(s, rid), 2):
+        if s.nested(a["node"], b["node"]):
             continue
-        # Compared on the em box (see Slide.ink), and a sliver under
-        # min_depth on either axis is not ink on ink either.
         w, h = worst_overlap(s.ink(a), s.ink(b))
         if w * h > p["min_area"] and min(w, h) >= p["min_depth"]:
-            yield f"{s.path(a['node'])} x {s.path(b['node'])}", px(w, h)
+            yield pair(s, a, b), px(w, h)
 
 
 def rule_covers_marker(s: Slide, p: dict, rid: str):
     for t in _texts(s, rid):
         for m in s.probe["markers"]:
-            if s.related(t["node"], m["node"]):
+            if s.nested(t["node"], m["node"]):
                 continue
             w, h = worst_overlap(t["lines"], [m["box"]])
             if w * h > p["min_area"]:
@@ -267,14 +285,17 @@ def rule_covers_marker(s: Slide, p: dict, rid: str):
 
 
 def rule_unbounded_abs_text(s: Slide, p: dict, rid: str):
-    # Small running text needs a declared measure. Large display text
-    # (headlines) and short labels (kickers, names) set their own width by
-    # design. "Unbounded" is measured, not inferred: the probe lengthened the
-    # text and its positioned box widened.
+    # Running text needs a declared measure. The probe measured it: the text
+    # was shortened and lengthened, and its positioned box changed width with
+    # it ("content") and, lengthened, ran to the containing block's edge
+    # ("edge") instead of stopping at a max-width, width or insets. Headings
+    # and short labels (kickers, names) set their own width by design.
     widest: dict[int, tuple[float, dict]] = {}
     for t in _texts(s, rid):
-        if t.get("grows") is None or t["grows"] <= p["tolerance"] or s.large(t["node"], p) \
-                or t.get("chars", 0) <= p["label_chars"]:
+        fit = t.get("fit")
+        if not fit or not (fit["content"] and fit["edge"]):
+            continue
+        if t.get("chars", 0) <= p["label_chars"] or s.heading(t["node"]):
             continue
         root = s.root(t["node"])
         w = max(line["w"] for line in t["lines"])
@@ -282,72 +303,86 @@ def rule_unbounded_abs_text(s: Slide, p: dict, rid: str):
             widest[root] = (w, t)
     for root, (w, t) in widest.items():
         size = s.el[t["node"]]["fontSize"]
-        yield (s.path(root), f"width set by content; {s.path(t['node'])} "
-                             f"({round(size)} px text) runs {round(w)} px wide")
+        yield (s.path(root), f"width set by content, up to the container's edge; "
+                             f"{s.path(t['node'])} ({round(size)} px text) runs {round(w)} px wide")
 
 
-def rule_text_on_media(s: Slide, p: dict, rid: str):
-    # Small text over a raster needs something painted between it and the
-    # picture (a panel or a scrim). WCAG large text may rely on a text-shadow.
+def rule_text_contrast(s: Slide, p: dict, rid: str):
+    # Judged on pixels: the backdrop was screenshotted with every glyph made
+    # invisible (text-shadows kept, they are part of what the glyph sits on),
+    # and the text's color was composited over each backdrop pixel under its
+    # ink. A low percentile, so a few stray dots do not fail a line but a band
+    # of bad backdrop does.
+    pct = p["percentile"]
     for t in _texts(s, rid):
-        node = t["node"]
-        shadow = s.el[node]["textShadow"] != "none"
-        if shadow and s.large(node, p):
+        quantiles = t.get("contrast")
+        if not quantiles:
             continue
-        bare, over, media = 0, 0, None
-        for stack in t.get("samples", []):
-            if node not in stack:
-                continue
-            below = stack[stack.index(node):]          # the text, then what it sits on
-            hit = next((i for i, n in enumerate(below) if n in s.media), None)
-            if hit is None:
-                continue
-            over += 1
-            m = below[hit]
-            if s.media[m]["scrimmed"] or any(s.paints_panel(n, p["min_panel_alpha"])
-                                             for n in below[:hit]):
-                continue
-            bare += 1
-            media = m if media is None else media
-        if bare:
+        ratio = quantiles[pct]
+        node = t["node"]
+        need = p["large_ratio"] if s.large(node, p) else p["small_ratio"]
+        if ratio < need:
             size = round(s.el[node]["fontSize"])
-            why = f"{size} px text, shadow only" if shadow else "no panel or shadow"
-            yield f"{s.path(node)} on {s.path(media)}", f"{why}; bare at {bare} of {over} points"
+            yield s.path(node), (f"{ratio:.2f}:1 at the {pct}th percentile, needs "
+                                 f"{need}:1 for {size} px text")
 
 
 def rule_safe_area(s: Slide, p: dict, rid: str):
     margin = p["margin"]
     if margin == "auto":
-        margin = s.probe.get("margin") or p["fallback_margin"]
+        token = s.probe.get("margin")
+        margin = p["fallback_margin"] if token is None else token
     width, height = s.probe["canvas"]["w"], s.probe["canvas"]["h"]
     for t in _texts(s, rid):
-        if s.edge_panel(t["node"], p["panel_alpha"]):
-            continue
-        worst = 0.0
+        sides = {"left": 0.0, "top": 0.0, "right": 0.0, "bottom": 0.0}
         for line in t["lines"]:
-            worst = max(worst, margin - line["x"], margin - line["y"],
-                        line["x"] + line["w"] - (width - margin),
-                        line["y"] + line["h"] - (height - margin))
-        if worst > p["tolerance"]:
-            yield s.path(t["node"]), f"{round(worst)} px into the {round(margin)} px margin"
+            sides["left"] = max(sides["left"], margin - line["x"])
+            sides["top"] = max(sides["top"], margin - line["y"])
+            sides["right"] = max(sides["right"], line["x"] + line["w"] - (width - margin))
+            sides["bottom"] = max(sides["bottom"], line["y"] + line["h"] - (height - margin))
+        breached = {side: depth for side, depth in sides.items()
+                    if depth > p["tolerance"] and not edge_panel(s, t["node"], side, p)}
+        if breached:
+            side, depth = max(breached.items(), key=lambda kv: kv[1])
+            yield s.path(t["node"]), f"{round(depth)} px into the {round(margin)} px {side} margin"
+
+
+def edge_panel(s: Slide, node: int, side: str, p: dict) -> bool:
+    """Is the text on a painted panel whose own box hugs the canvas edge it is
+    near (a side column, a band)? That panel sets its own inset. A full-canvas
+    panel (an inset: 0 wrapper) hugs every edge and so excuses none."""
+    width, height = s.probe["canvas"]["w"], s.probe["canvas"]["h"]
+    for n in s.up(node):
+        b = s.el[n]["box"]
+        if b["w"] >= width - 2 and b["h"] >= height - 2:
+            continue
+        hugs = {"left": b["x"] <= 1, "top": b["y"] <= 1,
+                "right": b["x"] + b["w"] >= width - 1,
+                "bottom": b["y"] + b["h"] >= height - 1}[side]
+        if hugs and s.paints_panel(n, p["panel_alpha"]):
+            return True
+    return False
 
 
 def rule_clearance(s: Slide, p: dict, rid: str):
-    items = _texts(s, rid)
-    for a, b in itertools.combinations(items, 2):
-        if s.related(a["node"], b["node"]) or s.flow_root(a["node"]) == s.flow_root(b["node"]):
+    # Ink closer than min_gap between independently placed items. An overlap
+    # counts as 0 px apart: a shallow one that text-overlap does not report
+    # lands here (evaluate() drops pairs text-overlap already reports).
+    for a, b in itertools.combinations(_texts(s, rid), 2):
+        if s.nested(a["node"], b["node"]) or s.flow_root(a["node"]) == s.flow_root(b["node"]):
             continue
         # Inside one drawing every label is placed against the others by
-        # coordinates: a near miss there is the drawing's design (a collision
-        # is still text-overlap's).
+        # coordinates: a near miss there is the drawing's design.
         if s.svg(a["node"]) is not None and s.svg(a["node"]) == s.svg(b["node"]):
             continue
         ink_a, ink_b = s.ink(a), s.ink(b)
-        if worst_overlap(ink_a, ink_b) != (0.0, 0.0):
-            continue   # overlapping is text-overlap's finding, not this one
+        w, h = worst_overlap(ink_a, ink_b)
+        if w and h:
+            yield pair(s, a, b), f"ink overlaps by {px(w, h)}"
+            continue
         nearest = min(gap(x, y) for x, y in itertools.product(ink_a, ink_b))
         if nearest < p["min_gap"]:
-            yield f"{s.path(a['node'])} x {s.path(b['node'])}", f"{round(nearest, 1)} px apart"
+            yield pair(s, a, b), f"{round(nearest, 1)} px apart"
 
 
 def rule_clipped_text(s: Slide, p: dict, rid: str):
@@ -375,7 +410,7 @@ RULES = {
     "text-overlap": rule_text_overlap,
     "covers-marker": rule_covers_marker,
     "unbounded-abs-text": rule_unbounded_abs_text,
-    "text-on-media": rule_text_on_media,
+    "text-contrast": rule_text_contrast,
     "safe-area": rule_safe_area,
     "clearance": rule_clearance,
     "clipped-text": rule_clipped_text,
@@ -392,7 +427,8 @@ def evaluate(probe: dict, rules: list[dict], slide: str) -> list[Violation]:
             continue
         for subject, detail in RULES[rule["id"]](s, rule["params"], rule["id"]):
             out.append(Violation(slide, rule["id"], rule["severity"], subject, detail))
-    return out
+    overlaps = {v.subject for v in out if v.rule == "text-overlap"}
+    return [v for v in out if not (v.rule == "clearance" and v.subject in overlaps)]
 
 
 def exit_code(violations: list[Violation]) -> int:
@@ -457,6 +493,10 @@ def apply_overrides(rules: list[dict], deck_geometry: dict, disable: list[str],
                                           f"got {type(value).__name__}")
             else:
                 rule["params"][key] = value
+    pct = by_id.get("text-contrast", {}).get("params", {}).get("percentile")
+    if pct is not None and not (isinstance(pct, int) and 0 <= pct <= 100):
+        raise deckcfg.ConfigError(f"{source}: [geometry.text-contrast] percentile must be "
+                                  f"an integer 0-100, got {pct!r}")
     return rules
 
 
@@ -560,18 +600,21 @@ class Browser:
             return ""
         return "\n".join(text.strip().splitlines()[-5:])
 
+    def _died(self, what: str) -> BrowserDied:
+        tail = self.stderr_tail()
+        return BrowserDied(what + (f":\n{tail}" if tail else ""))
+
     def _message(self, deadline: float) -> dict:
         while b"\0" not in self._buf:
             left = deadline - time.monotonic()
             if left <= 0:
-                raise BrowserError("timed out waiting for the browser")
+                raise self._died("the browser stopped answering")
             ready, _, _ = select.select([self._out_r], [], [], left)
             if not ready:
                 continue
             chunk = os.read(self._out_r, 1 << 20)
             if not chunk:
-                raise BrowserError("the browser exited" +
-                                   (f":\n{self.stderr_tail()}" if self.stderr_tail() else ""))
+                raise self._died("the browser exited")
             self._buf += chunk
         raw, self._buf = self._buf.split(b"\0", 1)
         return json.loads(raw)
@@ -587,14 +630,14 @@ class Browser:
             while data:
                 data = data[os.write(self._cmd_w, data):]
         except BrokenPipeError:
-            raise BrowserError("the browser exited") from None
+            raise self._died("the browser exited") from None
         deadline = time.monotonic() + timeout
         while True:
             reply = self._message(deadline)
             if reply.get("id") != mid:
                 continue                 # an event, or a reply nobody waits for
             if "error" in reply:
-                raise BrowserError(f"{method}: {reply['error'].get('message', reply['error'])}")
+                raise ProtocolError(f"{method}: {reply['error'].get('message', reply['error'])}")
             return reply.get("result", {})
 
     def close(self):
@@ -633,11 +676,11 @@ class Page:
         if "exceptionDetails" in result:
             details = result["exceptionDetails"]
             text = details.get("exception", {}).get("description") or details.get("text")
-            raise BrowserError(f"in-page error: {text}")
+            raise PageError(text)
         return result["result"].get("value")
 
 
-# In-page snippets. Each returns a promise; Runtime.evaluate awaits it.
+# In-page snippets. Each returns a value or a promise; Runtime.evaluate awaits it.
 READY_JS = """new Promise(done => {
   const t0 = performance.now();
   (function tick() {
@@ -652,19 +695,49 @@ SLIDES_JS = """Promise.resolve(Reveal.getSlides().map(s => {
   return {id: s.id || '', h: i.h, v: i.v || 0};
 }))"""
 
+# Selectors that cannot parse, so a config typo is named before the probe trips on it.
+BAD_SELECTORS_JS = """((pairs) => pairs.filter(([, sel]) => {
+  try { document.createDocumentFragment().querySelector(sel); return false; }
+  catch (e) { return true; }
+}))(%s)"""
+
 # Go to a slide with every fragment shown (their final state), then wait for
-# fonts and images, then two frames so layout has settled.
+# the fonts its text uses (document.fonts.ready can resolve before a face used
+# only on this slide starts loading), images, and two frames.
 GOTO_JS = """(async (h, v) => {
   Reveal.slide(h, v);
   for (let guard = 0; guard < 500 && Reveal.nextFragment(); guard++) {}
-  await document.fonts.ready;
   const settle = (p) => Promise.race([p, new Promise(r => setTimeout(r, 10000))]);
+  const faces = new Set();
+  for (const el of Reveal.getCurrentSlide().querySelectorAll('*')) {
+    const cs = getComputedStyle(el);
+    faces.add(`${cs.fontStyle} ${cs.fontWeight} ${cs.fontSize} ${cs.fontFamily}`);
+  }
+  await settle(Promise.all([...faces].map(f => document.fonts.load(f).catch(() => null))));
+  await settle(document.fonts.ready);
   await settle(Promise.all([...document.images].map(img => img.complete ? null :
     new Promise(r => { img.addEventListener('load', r); img.addEventListener('error', r); }))));
   const frame = () => settle(new Promise(r => requestAnimationFrame(r)));
   await frame(); await frame();
   return Reveal.getCurrentSlide().id;
 })(%d, %d)"""
+
+# Glyphs painted in one forced fill (black, white, or transparent to hide
+# them), everything else (text-shadows included) kept. The fill color is what
+# paints glyphs; `color` stays, so borders, currentColor icons and
+# default-colored shadows are untouched. SVG text paints with `fill`.
+FILL_JS = """(async (fill) => {
+  const s = document.getElementById('deckkit-geometry-fill') || document.createElement('style');
+  s.id = 'deckkit-geometry-fill';
+  s.textContent = '.reveal .slides section.present, .reveal .slides section.present * ' +
+    `{ -webkit-text-fill-color: ${fill} !important; caret-color: transparent !important; }` +
+    '.reveal .slides section.present text, .reveal .slides section.present tspan ' +
+    `{ fill: ${fill} !important; stroke: transparent !important; }`;
+  document.head.appendChild(s);
+  for (let i = 0; i < 2; i++) await new Promise(r => requestAnimationFrame(r));
+  return true;
+})(%s)"""
+UNFILL_JS = "(document.getElementById('deckkit-geometry-fill') || {remove() {}}).remove(), true"
 
 
 class QuietServer(serve.ReusableServer):
@@ -682,6 +755,36 @@ def slide_label(entry: dict) -> str:
     return f"{entry['h'] + 1}" + (f".{entry['v'] + 1}" if entry["v"] else "")
 
 
+def measure_contrast(page: Page, probe: dict) -> None:
+    """Screenshot the canvas three times, glyphs forced black, white, and
+    invisible, then let the page compare each text's color with the backdrop
+    where its glyphs paint. Adds `contrast` (101 quantiles of the per-pixel
+    WCAG ratio, or None) to every text item."""
+    items = [{"lines": ink_lines(t["lines"], probe["elements"][t["node"]]["fontSize"]),
+              "color": t["color"]} for t in probe["texts"]]
+    if not items:
+        return
+    origin = probe["origin"]
+    clip = {"x": origin["x"], "y": origin["y"], "width": origin["w"], "height": origin["h"],
+            "scale": 1}
+
+    def shot() -> str:
+        data = page.call("Page.captureScreenshot", {"format": "png", "clip": clip})["data"]
+        return json.dumps("data:image/png;base64," + data)
+
+    shots = []
+    try:
+        for fill in ("#000", "#fff", "transparent"):
+            page.evaluate(FILL_JS % json.dumps(fill))
+            shots.append(shot())
+    finally:
+        page.evaluate(UNFILL_JS)
+    ratios = page.evaluate(f"geometryContrast({', '.join(shots)}, {json.dumps(items)}, "
+                           f"{probe['scale']})", timeout=60)
+    for t, q in zip(probe["texts"], ratios):
+        t["contrast"] = q
+
+
 def measure(cfg: deckcfg.DeckConfig, browser_info: tuple[str, bool], wanted: list[str],
             rules: list[dict]) -> tuple[list[str], dict[str, dict]]:
     """Serve the deck, drive Chrome over it, return (slide order, probe per slide)."""
@@ -694,6 +797,9 @@ def measure(cfg: deckcfg.DeckConfig, browser_info: tuple[str, bool], wanted: lis
         "markers": by_id["covers-marker"]["params"]["markers"] if "covers-marker" in by_id else [],
         "exempt": {r["id"]: r["params"]["exempt"] for r in rules if r["params"]["exempt"]},
     }
+    selectors = [("[geometry.covers-marker] markers", sel) for sel in opts["markers"]]
+    selectors += [(f"[geometry.{rid}] exempt", sel)
+                  for rid, sels in opts["exempt"].items() for sel in sels]
     probe_src = PROBE_FILE.read_text(encoding="utf-8")
 
     # The browser starts before the server thread: Popen's preexec_fn is only
@@ -712,11 +818,17 @@ def measure(cfg: deckcfg.DeckConfig, browser_info: tuple[str, bool], wanted: lis
             try:
                 if page.evaluate(READY_JS):
                     break
-            except BrowserError:
+            except (ProtocolError, PageError):
                 time.sleep(0.1)          # the context was replaced mid-load: retry
             if time.monotonic() > deadline:
                 raise deckcfg.ConfigError(f"{url}: Reveal never became ready in 30 s "
                                           "(does index.html load vendor/reveal?)")
+
+        bad = page.evaluate(BAD_SELECTORS_JS % json.dumps(selectors))
+        if bad:
+            raise deckcfg.ConfigError("; ".join(f"{key}: invalid CSS selector {sel!r}"
+                                                for key, sel in bad))
+        page.evaluate(probe_src)         # defines geometryProbe and geometryContrast
 
         slides = page.evaluate(SLIDES_JS)
         labels = [slide_label(s) for s in slides]
@@ -729,7 +841,9 @@ def measure(cfg: deckcfg.DeckConfig, browser_info: tuple[str, bool], wanted: lis
             if wanted and label not in wanted:
                 continue
             page.evaluate(GOTO_JS % (entry["h"], entry["v"]))
-            probes[label] = page.evaluate(f"{probe_src}\n;geometryProbe({json.dumps(opts)})")
+            probe = page.evaluate(f"geometryProbe({json.dumps(opts)})")
+            measure_contrast(page, probe)
+            probes[label] = probe
             order.append(label)
         return order, probes
     finally:
@@ -764,6 +878,8 @@ def main() -> int:
         print(f"environment: {found[0]}: {exc}", file=sys.stderr)
         print(f"  install a working one: {INSTALL_HINT}", file=sys.stderr)
         return deckcfg.EXIT_ENV
+    except PageError as exc:
+        deckcfg.bail(f"the probe failed in the page: {exc}")
 
     violations: list[Violation] = []
     per_slide = {}

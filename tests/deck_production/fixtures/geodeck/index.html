@@ -6,7 +6,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <link rel="stylesheet" href="vendor/reveal/reveal.css">
   <style>
-    :root { --margin-slide: 96px; }
+    :root { --margin-slide: 6rem; }
     .reveal { font-family: sans-serif; color: #f2efe8; }
     .reveal .slides section { padding: 0; height: 1080px; box-sizing: border-box;
                               text-align: left; background: #0b1320; }
@@ -34,6 +34,22 @@
                                background: linear-gradient(rgba(11, 19, 32, 0.6), rgba(11, 19, 32, 0.9)); }
     /* a vector overlay (leader lines) crossing the labels: drawing, not media */
     .reveal .overlay-lines { position: absolute; left: 0; top: 0; width: 1920px; height: 1080px; }
+
+    /* contrast: one raster, bright on the left, a black/white checkerboard on the right */
+    #contrast .photo { position: absolute; left: 96px; top: 200px; width: 1728px; height: 720px;
+                       image-rendering: pixelated; }
+    #contrast .t { position: absolute; width: 420px; margin: 0; font-size: 18px; line-height: 1.4; }
+    #contrast .dark-on-bright { left: 200px; top: 400px; color: #14161c; }
+    #contrast .light-on-busy { left: 1000px; top: 260px; color: #ffffff; }
+    #contrast .light-on-scrim { left: 1000px; top: 420px; color: #ffffff; padding: 12px;
+                                background: rgba(0, 0, 0, 0.85); }
+    #contrast .shadow-halo { left: 1000px; top: 600px; color: #ffffff;
+                             text-shadow: 0 0 3px #000, 0 0 3px #000, 0 0 3px #000; }
+
+    /* centered: auto height, so reveal's center layout shifts it down; its
+       last line lands in the canvas's bottom margin, not the section's */
+    .reveal .slides section#centered { height: auto; }
+    #centered .low { margin: 0 96px; font-size: 24px; line-height: 1.2; }
   </style>
 </head>
 <body>
@@ -68,14 +84,26 @@
         <div class="pin" style="left: 1420px; top: 535px"></div>
         <div class="label label-north">
           <div class="l-name">Northport</div>
-          <div class="l-cap">Regional hub since 2019, serving 41 partner sites across
-            the northern corridor, with 1,240 deliveries a week</div>
+          <div class="l-cap">Regional hub with 41 partner sites</div>
         </div>
         <div class="label label-south">
           <div class="l-name">Lowmere</div>
           <div class="l-cap">Second hub, opened in 2023 with 18 partner sites and a
             shared depot for the southern routes</div>
         </div>
+      </section>
+
+      <section id="contrast">
+        <img class="photo" src="media/contrast.png" alt="">
+        <p class="t dark-on-bright">Dark ink on the bright part of the picture</p>
+        <p class="t light-on-busy">Light small type over the busy part</p>
+        <p class="t light-on-scrim">Light small type on a dark scrim</p>
+        <p class="t shadow-halo">Light small type with a dense dark halo</p>
+      </section>
+
+      <section id="centered">
+        <div style="height: 880px"></div>
+        <p class="low">A last line measured from the canvas</p>
       </section>
     </div>
   </div>
