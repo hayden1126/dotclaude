@@ -327,8 +327,8 @@ def rule_covers_marker(s: Slide, p: dict, rid: str):
 def rule_unbounded_abs_text(s: Slide, p: dict, rid: str):
     # Running text needs a declared measure. The probe measured it: the text
     # was shortened and lengthened, and its positioned box changed width with
-    # it ("content") and, lengthened, ran to the containing block's edge
-    # ("edge") instead of stopping at a max-width, width or insets. Headings
+    # it ("content") and, lengthened, filled all the width available from its
+    # anchor ("edge") instead of stopping at a max-width or width. Headings
     # and short labels (kickers, names) set their own width by design.
     widest: dict[int, tuple[float, dict]] = {}
     for t in _texts(s, rid):
@@ -343,7 +343,7 @@ def rule_unbounded_abs_text(s: Slide, p: dict, rid: str):
             widest[root] = (w, t)
     for root, (w, t) in widest.items():
         size = s.el[t["node"]]["fontSize"]
-        yield (s.path(root), f"width set by content, up to the container's edge; "
+        yield (s.path(root), f"width set by content, up to all the room its anchor leaves; "
                              f"{s.path(t['node'])} ({round(size)} px text) runs {round(w)} px wide")
 
 

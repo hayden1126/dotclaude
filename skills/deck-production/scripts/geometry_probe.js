@@ -270,8 +270,11 @@ function geometryProbe(opts) {
 //     text's color is judged at full coverage, as WCAG means it, so the
 //     difference from H is scaled by top / e, and by the text's own alpha.
 //     The backdrop is H.
-// Judged pixels are at least half covered (e >= top / 2), so the gaps
-// between letters do not count, whatever opacity the whole item is under.
+// Judged pixels are the glyph's cores (e >= 0.9 * top), whatever opacity
+// the whole item is under. Edge pixels are left out: text is anti-aliased
+// with a mask the renderer gamma-adjusts per text luminance, so the black and
+// white shots cover an edge pixel differently, and scaling such a pixel to
+// full coverage would amplify that difference into a false low ratio.
 // An item that reaches the screen
 // nowhere (covered, fully transparent) is not measured. The result is 101
 // quantiles (0th..100th percentile) of the WCAG 2.x ratio, so the percentile
@@ -321,7 +324,7 @@ async function geometryContrast(blackUrl, whiteUrl, hiddenUrl, items, scale) {
         for (let x = x0; x < x1; x++) {
           const i = (y * W + x) * 4;
           const e = reach(i);
-          if (e < top / 2) continue;
+          if (e < 0.9 * top) continue;
           const full = fa * top / e;
           const glyph = (k, f) => px[i + k] + full *
             (black[i + k] + (white[i + k] - black[i + k]) * f / 255 - px[i + k]);
