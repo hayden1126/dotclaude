@@ -220,7 +220,7 @@ class Watches(GuardEnv):
 
     def test_a_background_shell_holding_the_watch_id_counts_as_a_waiter(self):
         self.watch()
-        tasks = [{"id": "b1", "type": "local_bash", "status": "running",
+        tasks = [{"id": "b1", "type": "shell", "status": "running",
                   "description": "re-arm", "command": "delegation-ledger wait --resume w-1"}]
         self.assertIsNone(self.decide(background_tasks=tasks))
 
@@ -1941,7 +1941,7 @@ class FailsOpen(GuardEnv):
     def test_a_nested_agent_id_doesnt_skip_a_main_thread_stop(self):
         # background_tasks can hold a stale teammate; only a top-level agent_id is a subagent.
         self.watch()
-        tasks = [{"id": "t1", "type": "in_process_teammate", "status": "running",
+        tasks = [{"id": "t1", "type": "teammate", "status": "running",
                   "description": "mate", "agent_id": "amate-0123456789abcdef"}]
         self.assertEqual(self.run_hook(self.payload(background_tasks=tasks), cmd=["bash", SHIM],
                                        env=self.shim_home()), self.block(self.lapse_reason()))

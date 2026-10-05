@@ -151,7 +151,7 @@ class Hooks(unittest.TestCase):
         self.run_hook("stop-ring.sh", BG, {"session_id": "nested-run"})
         self.assertEqual(self.window_writes(), [])
         self.assertTrue(self.no_ring())
-        self.assertIn("quiet session=nested-r ", self.ring_log()[-1])  # its own id, not the env's
+        self.assertIn("quiet tasks=- session=nested-r ", self.ring_log()[-1])  # its own id, not the env's
 
     def test_a_stale_map_is_ignored(self):
         # Only a running tmux-claude-status refreshes the map (at least every 60 s while
@@ -205,26 +205,37 @@ class Hooks(unittest.TestCase):
 
     def test_a_stop_with_background_work_in_flight_stays_quiet(self):
         # The turn ended but the session is paused on work that will wake it (an agent, a
-        # shell): it is neither done nor waiting on the person, so no ring (2026-10-04).
-        for task in ({"id": "a1", "type": "local_agent", "status": "running"},
-                     {"id": "b1", "type": "local_bash", "status": "running"},
-                     {"id": "w1", "type": "local_workflow", "status": "pending"},
-                     {"id": "r1", "type": "remote_agent", "status": "running"}):
+        # shell): it is neither done nor waiting on the person, so no ring (2026-10-04). The
+        # payload's `type` is Claude Code's friendly label, not the internal task name
+        # (2.1.289: local_bash -> "shell", local_agent -> "subagent", and so on).
+        for task in ({"id": "a1", "type": "subagent", "status": "running"},
+                     {"id": "b1", "type": "shell", "status": "running"},
+                     {"id": "w1", "type": "workflow", "status": "pending"},
+                     {"id": "r1", "type": "cloud session", "status": "running"}):
             with self.subTest(task=task["type"]):
                 self.run_hook("stop-ring.sh", TAB, {"background_tasks": [task]})
                 self.assertTrue(self.no_ring())
-                self.assertIn("stop quiet", self.ring_log()[-1])
-                self.assertIn("busy=1", self.ring_log()[-1])
+                self.assertIn("stop quiet busy=1", self.ring_log()[-1])
+                self.assertIn(f"tasks={task['type'].replace(' ', '_')}", self.ring_log()[-1])
 
     def test_a_stop_rings_when_only_lingering_tasks_remain(self):
         # Teammates linger in the list after they finish, dream is memory upkeep and a monitor
         # can run for hours: none of them means the person's work is still running.
-        tasks = [{"id": "t1", "type": "in_process_teammate", "status": "running"},
+        tasks = [{"id": "t1", "type": "teammate", "status": "running"},
                  {"id": "d1", "type": "dream", "status": "running"},
-                 {"id": "m1", "type": "monitor_mcp", "status": "running"}]
+                 {"id": "m1", "type": "monitor", "status": "running"}]
         self.run_hook("stop-ring.sh", TAB, {"background_tasks": tasks})
         self.assertTrue(self.rang())
+        self.assertIn("tasks=teammate,dream,monitor", self.ring_log()[-1])
         self.run_hook("stop-ring.sh", TAB, {"background_tasks": []})
+        self.assertTrue(self.rang())
+        self.assertIn("tasks=-", self.ring_log()[-1])
+
+    def test_internal_task_names_are_not_labels(self):
+        # The payload never sends `local_bash` for a shell (only unmapped types fall back to
+        # their internal name), so matching on it would keep the ring on forever, as #69 did.
+        self.run_hook("stop-ring.sh", TAB,
+                      {"background_tasks": [{"id": "b1", "type": "local_bash", "status": "running"}]})
         self.assertTrue(self.rang())
 
     def test_a_plain_terminal_rings_on_stop(self):
@@ -242,7 +253,7 @@ class Hooks(unittest.TestCase):
         self.map_tabs("server 42\nabcdef12-0000 %9 @9\n")
         self.run_hook("stop-ring.sh", BG)
         self.assertTrue(self.rang())
-        self.assertIn("rang session=abcdef12 kind=background attended=0 pane=%9", self.ring_log()[-1])
+        self.assertIn("rang tasks=- session=abcdef12 kind=background attended=0 pane=%9", self.ring_log()[-1])
         self.run_hook("stop-ring.sh", BG, {"agent_id": "a1"})
         self.assertTrue(self.no_ring())
 
@@ -258,7 +269,7 @@ class Hooks(unittest.TestCase):
         self.assertIn("quiet", log[1])
         self.assertIn("kind=print attended=0", log[1])
         self.run_hook("stop-ring.sh", BG)
-        self.assertIn("quiet session=abcdef12 kind=background", self.ring_log()[-1])
+        self.assertIn("quiet tasks=- session=abcdef12 kind=background", self.ring_log()[-1])
 
     def test_the_ring_log_stays_bounded(self):
         for _ in range(3):
