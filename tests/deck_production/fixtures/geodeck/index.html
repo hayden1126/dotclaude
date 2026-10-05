@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Geometry fixture</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" href="vendor/reveal/reveal.css">
+  <style>
+    :root { --margin-slide: 96px; }
+    .reveal { font-family: sans-serif; color: #f2efe8; }
+    .reveal .slides section { padding: 0; height: 1080px; box-sizing: border-box;
+                              text-align: left; background: #0b1320; }
+    .reveal .wrap { padding: 96px; }
+    .reveal h2 { margin: 0; font-size: 56px; line-height: 1.2; color: #f2efe8; text-transform: none; }
+    .reveal .globe { position: absolute; left: 1000px; top: 140px; width: 800px; height: 800px; }
+    .reveal .pin { position: absolute; width: 14px; height: 14px; margin: -7px 0 0 -7px;
+                   border-radius: 50%; background: #e8b04a; }
+    .reveal .t-name { font-size: 26px; font-weight: 700; line-height: 1.25; }
+    .reveal .t-cap { font-size: 22px; line-height: 1.35; color: #c9d2de; }
+
+    /* bad: right-anchored columns, no max-width, no panel, no shadow */
+    #bad .tag { position: absolute; right: 560px; text-align: right; }
+    #bad .tag-north { top: 420px; }
+    #bad .tag-south { top: 515px; }
+
+    /* good: bounded captions on panel cards, clear of each other and the pins */
+    #good .tag { position: absolute; right: 1000px; max-width: 420px; padding: 18px 22px;
+                 background: rgba(11, 19, 32, 0.92); border-radius: 8px; text-align: right; }
+    #good .tag-north { top: 300px; }
+    #good .tag-south { top: 600px; }
+  </style>
+</head>
+<body>
+  <div class="reveal">
+    <div class="slides">
+      <section id="bad">
+        <div class="wrap"><h2>Where the network reaches</h2></div>
+        <svg class="globe" viewBox="0 0 800 800" aria-hidden="true">
+          <circle cx="400" cy="400" r="390" fill="#1d3a5c"/>
+          <ellipse cx="400" cy="400" rx="390" ry="140" fill="none" stroke="#2f5680" stroke-width="3"/>
+          <ellipse cx="400" cy="400" rx="140" ry="390" fill="none" stroke="#2f5680" stroke-width="3"/>
+        </svg>
+        <div class="pin" style="left: 1380px; top: 440px"></div>
+        <div class="pin" style="left: 1420px; top: 535px"></div>
+        <div class="tag tag-north">
+          <div class="t-name">Northport</div>
+          <div class="t-cap">Regional hub since 2019, serving 41 partner sites<br>
+            across the northern corridor and the coastal belt<br>
+            with 1,240 deliveries a week</div>
+        </div>
+        <div class="tag tag-south">
+          <div class="t-name">Lowmere</div>
+          <div class="t-cap">Second hub, opened in 2023 with 18 partner sites<br>
+            and a shared depot for the southern routes</div>
+        </div>
+      </section>
+
+      <section id="good">
+        <div class="wrap"><h2>Where the network reaches</h2></div>
+        <svg class="globe" viewBox="0 0 800 800" aria-hidden="true">
+          <circle cx="400" cy="400" r="390" fill="#1d3a5c"/>
+          <ellipse cx="400" cy="400" rx="390" ry="140" fill="none" stroke="#2f5680" stroke-width="3"/>
+          <ellipse cx="400" cy="400" rx="140" ry="390" fill="none" stroke="#2f5680" stroke-width="3"/>
+        </svg>
+        <div class="pin" style="left: 1380px; top: 440px"></div>
+        <div class="pin" style="left: 1420px; top: 535px"></div>
+        <div class="tag tag-north">
+          <div class="t-name">Northport</div>
+          <div class="t-cap">Regional hub since 2019, serving 41 partner sites across
+            the northern corridor, with 1,240 deliveries a week</div>
+        </div>
+        <div class="tag tag-south">
+          <div class="t-name">Lowmere</div>
+          <div class="t-cap">Second hub, opened in 2023 with 18 partner sites and a
+            shared depot for the southern routes</div>
+        </div>
+      </section>
+    </div>
+  </div>
+  <script src="vendor/reveal/reveal.js"></script>
+  <script>
+    // ?export -> capture mode, as in the deck template: no transitions.
+    const EXPORT_MODE = new URLSearchParams(location.search).has('export');
+    Reveal.initialize({
+      width: 1920, height: 1080, margin: 0,
+      hash: false, controls: false, progress: false,
+      transition: EXPORT_MODE ? 'none' : 'fade',
+      backgroundTransition: 'none',
+    });
+  </script>
+</body>
+</html>

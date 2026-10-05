@@ -1,0 +1,14 @@
+# Synthetic fixture for the geometry gate. Two slides: `bad` reproduces the
+# colliding-label defect (right-anchored captions, no max-width, no panel,
+# anchors 95px apart, over an image); `good` is its fixed twin.
+
+[deck]
+slug  = "geodeck"
+title = "Geometry fixture"
+
+[canvas]
+width  = 1920
+height = 1080
+
+[substrate]
+tier = "none"

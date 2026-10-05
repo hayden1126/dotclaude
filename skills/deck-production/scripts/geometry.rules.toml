@@ -1,0 +1,78 @@
+# Geometry gate rules, evaluated by geometry.py over what geometry_probe.js
+# measured. Every box is in canvas pixels (the deck's [canvas] size).
+#
+# A deck overrides these in its deck.toml, never by editing this file:
+#
+#   [geometry]
+#   disable = ["clearance"]          # rule ids to skip
+#   [geometry.text-overlap]
+#   min_area = 10                    # any param below, plus severity/enabled
+#
+# severity: "error" fails the gate (exit 1); "warn" prints and exits 0.
+# Every rule also takes `exempt`, a list of CSS selectors: a text item inside a
+# match is skipped by that rule (for text that sits there by design).
+
+[[rule]]
+id = "text-overlap"
+severity = "error"
+enabled = true
+# Line rects of two different text items intersect by more than this many px².
+# An item never overlaps itself, its ancestors or its descendants, and two
+# items in the same block flow are laid out together by the browser, so they
+# never count either.
+min_area = 4
+
+[[rule]]
+id = "covers-marker"
+severity = "error"
+enabled = true
+# CSS selectors for map pins and similar markers that text must not sit on.
+markers = [".pin", "[data-geo=marker]"]
+min_area = 0
+
+[[rule]]
+id = "unbounded-abs-text"
+severity = "error"
+enabled = true
+# An absolutely positioned element whose text width nothing bounds: no
+# max-width and no specified width from the text up to the positioned element,
+# and the element is not pinned by both left and right. Its text then runs as
+# wide as its content.
+
+[[rule]]
+id = "text-on-media"
+severity = "error"
+enabled = true
+# A text line over an img/video/canvas/svg with neither a panel behind it nor a
+# text-shadow. A panel is the first ancestor below the section with a
+# background-image or a background-color at least this opaque.
+min_panel_alpha = 0.6
+min_area = 4
+
+[[rule]]
+id = "safe-area"
+severity = "warn"
+enabled = true
+# "auto" reads the --margin-slide token off the section, else fallback_margin.
+margin = "auto"
+fallback_margin = 96
+tolerance = 2
+# Source lines and decorative type sit in the margin on purpose.
+exempt = ["footer.src", "[data-decor]"]
+
+[[rule]]
+id = "clearance"
+severity = "warn"
+enabled = true
+# Two text items closer than min_gap px without overlapping. Only between items
+# positioned independently (different absolutely positioned roots): stacked
+# blocks in one flow sit close by design.
+min_gap = 8
+
+[[rule]]
+id = "clipped-text"
+severity = "error"
+enabled = true
+# A text line that runs past an overflow:hidden/clip ancestor's box by more
+# than this many px.
+tolerance = 2
