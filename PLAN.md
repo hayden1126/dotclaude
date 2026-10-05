@@ -111,6 +111,11 @@ Round 1 passed its synthetic fixture and failed the reference deck: 21 errors on
   becomes `text-contrast`: hide the glyphs (keep their shadows), screenshot the slide, and compute
   the WCAG ratio of each text item's color against the pixels under its ink (4.5:1 small, 3:1
   large, on a low percentile so stray dots don't fail a line).
+- **The bar is WCAG AA by default; a deck may lower it** (Hayden's call). `[geometry.text-contrast]
+  min_small` / `min_large` below AA need a non-empty `reason`, printed on every run like
+  `rigor_reason`, and are refused (config error) when the deck's rigor is `regulated`. Measured on
+  the reference deck: 114 errors, 86 of them two palette colors (an accent at 2.94:1, a source
+  ink at 4.05:1), the rest photo captions, sources and kickers at 2.1 to 4.3:1.
 - **Real finds on the reference deck are recorded, not fixed here** (Hayden's call). The golden
   holds them as known findings; the fixes belong to the deck's own repo and session.
 
