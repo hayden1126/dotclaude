@@ -21,6 +21,7 @@ STUB = """#!/usr/bin/env bash
 printf '%s\\n' "$(basename "$0") $*" >> "$STUB_LOG"
 case "$(basename "$0") $1" in
   "tmux list-panes") printf '%s\\n' "$STUB_PANES" ;;
+  "tmux show-option") printf '%s\\n' "${STUB_WINDOW_STATE:-}" ;;
   "wslpath -w") printf 'C:\\\\stub\\\\%s\\n' "$(basename "$2")" ;;
 esac
 exit 0
@@ -179,6 +180,17 @@ class Hooks(unittest.TestCase):
         self.run_hook("tmux-state.sh", TAB, {"agent_type": "writer"}, args=("idle",))
         self.assertEqual(self.window_writes(), [])
         self.run_hook("tmux-state.sh", TAB, {"agent_id": "a1"}, args=("busy",))
+        self.assertEqual(len(self.window_writes()), 1)
+
+    def test_a_subagent_does_not_cover_a_question_waiting_on_the_user(self):
+        # A background subagent keeps making tool calls while the main session asks a question;
+        # its busy must not overwrite the main session's wait (2026-10-04, AskUserQuestion).
+        self.env["STUB_WINDOW_STATE"] = "wait"
+        self.run_hook("tmux-state.sh", TAB, {"agent_id": "a1"}, args=("busy",))
+        self.run_hook("tmux-state.sh", TAB, {"agent_type": "reviewer"}, args=("busy",))
+        self.assertEqual(self.window_writes(), [])
+        # The main session's own next event (the answer, its next tool call) clears it.
+        self.run_hook("tmux-state.sh", TAB, args=("busy",))
         self.assertEqual(len(self.window_writes()), 1)
 
     def test_outside_tmux_nothing_is_written(self):
