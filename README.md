@@ -252,7 +252,8 @@ need nothing extra.
 - **Stop / Notification sounds**: play a Windows sound and (on permission prompts) a toast. Both
   sounds ring only for a session a person sees: a tab, a plain terminal, or a background session
   mapped to its tab (see the tmux indicator). Subagents, unmapped background sessions and
-  `claude -p` runs (the delegation canary is one) stay quiet; a permission prompt still pops the
+  `claude -p` runs (the delegation canary is one) stay quiet, and so does a Stop while an agent or
+  shell it started is still running (`ring.log` marks it `quiet busy=1`); a permission prompt still pops the
   toast, so a stuck background session shows up. `hooks/session-pane.sh`'s header
   has the rules and the hook env they read. Each decision is a line in
   `$XDG_STATE_HOME/dotclaude/ring.log`. The toast goes through `notify.sh`, which resolves the path
@@ -260,7 +261,8 @@ need nothing extra.
   Windows' Do Not Disturb hides it. Windows-only: on macOS/Linux, swap for your platform's notifier
   (`osascript` / `notify-send`).
 - **tmux indicator**: `tmux-state.sh` marks the session's window busy (◐) on a prompt or tool
-  call, waiting (✳) on a Notification and idle on Stop. `claude -p` runs never set it. A
+  call, waiting (✳) on a Notification and idle on Stop; a background subagent's tool calls leave
+  a waiting window alone. `claude -p` runs never set it. A
   background session has no pane of its own, so `tmux/tmux-claude-status` maps it by directory to
   the one client pane in its cwd (two background sessions in one directory map nothing, and a new
   mapping also needs a single client pane there) and writes
