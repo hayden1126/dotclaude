@@ -723,6 +723,39 @@ class BrowserFailures(unittest.TestCase):
         self.assertNotIn("install", err)
 
 
+# The flat slide: (text rgb, alpha, ground) per text, by its words.
+GROUNDS = {"cream": (248, 246, 243), "navy": (28, 31, 68)}
+FLAT = {
+    'Flat dark 1.0 at 15 px regular': ((76, 78, 105), 1.0, 'cream'),
+    'Flat dark 1.0 at 28 px bold': ((76, 78, 105), 1.0, 'cream'),
+    'Flat dark 0.75 at 15 px regular': ((76, 78, 105), 0.75, 'cream'),
+    'Flat dark 0.75 at 28 px bold': ((76, 78, 105), 0.75, 'cream'),
+    'Flat dark 0.55 at 15 px regular': ((76, 78, 105), 0.55, 'cream'),
+    'Flat dark 0.55 at 28 px bold': ((76, 78, 105), 0.55, 'cream'),
+    'Flat light 1.0 at 15 px regular': ((248, 246, 243), 1.0, 'navy'),
+    'Flat light 1.0 at 28 px bold': ((248, 246, 243), 1.0, 'navy'),
+    'Flat light 0.75 at 15 px regular': ((248, 246, 243), 0.75, 'navy'),
+    'Flat light 0.75 at 28 px bold': ((248, 246, 243), 0.75, 'navy'),
+    'Flat light 0.55 at 15 px regular': ((248, 246, 243), 0.55, 'navy'),
+    'Flat light 0.55 at 28 px bold': ((248, 246, 243), 0.55, 'navy'),
+    'Flat spanning box, glyphs on cream': ((76, 78, 105), 0.75, 'cream'),
+    'Flat hairline in mid gray': ((118, 118, 118), 1.0, 'cream'),
+}
+
+
+def wcag(fg, bg):
+    def lum(c):
+        lin = [(v / 255 / 12.92 if v / 255 <= 0.04045 else ((v / 255 + 0.055) / 1.055) ** 2.4)
+               for v in c]
+        return 0.2126 * lin[0] + 0.7152 * lin[1] + 0.0722 * lin[2]
+    a, b = lum(fg), lum(bg)
+    return (max(a, b) + 0.05) / (min(a, b) + 0.05)
+
+
+def composite(fg, alpha, bg):
+    return [alpha * f + (1 - alpha) * b for f, b in zip(fg, bg)]
+
+
 class GeometryEndToEnd(unittest.TestCase):
     """The real path: Chrome over the fixture, through the CLI."""
 
@@ -789,7 +822,7 @@ class GeometryEndToEnd(unittest.TestCase):
         p, _ = self.run_gate("--slides", "nope")
         self.assertEqual(p.returncode, 2, p.stdout + p.stderr)
         self.assertIn("have: bad, good, contrast, centered, anchors, svg, veil, thin, covered, "
-                      "steps, rest, flow, bright-bg", p.stderr)
+                      "steps, rest, flow, flat, bright-bg", p.stderr)
 
     def test_a_centered_caption_is_judged_by_its_room_not_an_edge(self):
         # Both captions sit at translateX(-50%) with no max-width. The west one
@@ -817,6 +850,27 @@ class GeometryEndToEnd(unittest.TestCase):
         self.assertEqual(self.found(out), {("text-contrast", ".group40 .t"),
                                            ("text-contrast", ".under-veil"),
                                            ("text-contrast", ".half-veil")})
+
+    def test_on_a_flat_ground_the_reading_is_the_analytic_ratio(self):
+        # The invariant: text on one flat color reads, at the judged
+        # percentile, the WCAG ratio of its color alpha-composited on that
+        # ground, within 0.03. Dark on cream and light on navy, at alpha 1,
+        # .75 and .55, 15 px regular and 28 px bold; a box that spans both
+        # grounds with every glyph on cream; a hairline weight.
+        cfg = deckcfg.load(FIXTURE)
+        rules = geometry.load_rules(cfg)
+        _order, probes = geometry.measure(cfg, geometry.find_browser(cfg), ["flat"], rules)
+        probe = probes["flat"]["states"][-1]["probe"]
+        pct = next(r for r in rules if r["id"] == "text-contrast")["params"]["percentile"]
+        seen = set()
+        for t in probe["texts"]:
+            fg, alpha, ground = FLAT[t["text"]]
+            seen.add(t["text"])
+            bg = GROUNDS[ground]
+            with self.subTest(text=t["text"]):
+                expected = wcag(composite(fg, alpha, bg), bg)
+                self.assertAlmostEqual(t["contrast"]["q"][pct], expected, delta=0.03)
+        self.assertEqual(seen, set(FLAT))
 
     def test_a_thin_weight_is_judged_at_its_color_and_the_bar_unrounded(self):
         # #767676 at weight 200, 14 px, on white is 4.54:1: never fully

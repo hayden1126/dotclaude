@@ -176,12 +176,20 @@ function geometryProbe(opts) {
     if (`${cs.backgroundClip} ${cs.webkitBackgroundClip}`.includes('text')) return null;
     const paint = el instanceof SVGElement ? cs.fill : (cs.webkitTextFillColor || cs.color);
     if (!paint || /^(url|none|context)/.test(paint)) return null;
+    const svgAlpha = el instanceof SVGElement ? parseFloat(cs.fillOpacity) : 1;
+    // rgb()/rgba() exactly: a canvas stores a translucent color
+    // premultiplied, and reads it back up to a byte off.
+    const exact = paint.match(/^rgba?\(\s*([\d.]+),\s*([\d.]+),\s*([\d.]+)(?:,\s*([\d.]+))?\s*\)$/);
+    if (exact) {
+      const a = (exact[4] === undefined ? 1 : parseFloat(exact[4])) * svgAlpha;
+      return a > 0 ? [+exact[1], +exact[2], +exact[3], a] : null;
+    }
     sctx.clearRect(0, 0, 1, 1);
     sctx.fillStyle = '#000';
     sctx.fillStyle = paint;
     sctx.fillRect(0, 0, 1, 1);
     const d = sctx.getImageData(0, 0, 1, 1).data;
-    const a = d[3] / 255 * (el instanceof SVGElement ? parseFloat(cs.fillOpacity) : 1);
+    const a = d[3] / 255 * svgAlpha;
     return a > 0 ? [d[0], d[1], d[2], r2(a)] : null;
   };
 
@@ -299,45 +307,37 @@ function geometryProbe(opts) {
   };
 }
 
-// Contrast of each text against its rendered backdrop, from seven PNGs of
-// the canvas. Three as rendered, with only the glyph fill forced: black (B),
-// white (W), and invisible (H). Text-shadows, SVG halos, group opacity,
-// masks and anything painted above the text stay as rendered, because the
-// reader sees them. Four isolated, with everything that could veil a glyph
-// taken away (opacity, masks, filters, blend modes, and every image, video,
-// canvas, background, border, shadow and svg shape): glyphs white and black
-// on a black page, and white and black on a white page. Per pixel:
-//   - The isolated pairs give the glyph's own coverage, its shape alone
-//     (anti-aliasing, a hairline stroke's thinness, a clip): cw for a white
-//     glyph (white minus black on black) and cb for a black one (the same on
-//     white). The renderer gamma-adjusts coverage by glyph color, so the two
-//     differ at partial coverage. Anything the fill does not change (an
-//     emoji, a static paint) cancels in each difference.
-//   - e = W - B is how much of the glyph reaches the screen. Unveiled, it
-//     is cw over a dark backdrop and cb over a light one: exactly
-//     C = cw * (1 - h) + cb * h, with h the backdrop H's level. Veiled, it is
-//     C times the transmission t of whatever lies between the glyph and the
-//     reader (group opacity, a veil, a gradient scrim, a mask fade), so
-//     t = e / C, pixel by pixel. A veil over half a caption darkens that
-//     half only.
-//   - B + e * fill is the glyph as rendered at this pixel's coverage; the
-//     text's color is judged at full coverage, as WCAG means it, so the
-//     difference from H is scaled by 1 / C and by the text's own alpha. A
-//     thin weight that never reaches full coverage is judged at its declared
-//     color, not as if it were group opacity. The backdrop is H.
-// Judged pixels are the glyph's cores (its shape, the mean of cw and cb, at
-// least 0.9 of the item's strongest).
-// Edge pixels are left out: text is anti-aliased with a mask the renderer
-// gamma-adjusts per text luminance, so the shots cover an edge pixel
-// differently, and scaling such a pixel to full coverage would amplify that
-// difference into a false low ratio. A core pixel where nothing of the
-// glyph reaches the screen (t < 0.1: under an opaque panel or image) is
-// counted as hidden, not judged. Per item the result is {q, n, hidden}: 101
-// quantiles (0th..100th percentile) of the WCAG 2.x ratio over the n judged
-// pixels, unrounded, so the percentile and any rounding stay geometry.py's;
-// and the share of core pixels hidden. An item with no glyph pixels at all,
-// or passed as null, is null. The PNGs are decoded by the browser into a
-// canvas: native and fast, where a Python decoder would loop over every byte.
+// Contrast of each text against its rendered backdrop, from five PNGs of
+// the canvas, each with only the glyphs changed:
+//   H         glyph fill invisible: the backdrop. Text-shadows and SVG halos
+//             under the glyph stay, they are what it sits on.
+//   SB, SW    each glyph painted black, then white, and stroked 4 px thick
+//             in the same color: an opaque swatch exactly where, and in the
+//             stacking order where, the glyph paints. Group opacity, masks
+//             and anything painted above the text stay as rendered.
+//   IB, IW    the glyphs alone on a black page, everything that could veil or
+//             cover them taken away.
+// Per pixel and channel, whatever lies between the glyph and the reader
+// (group opacity, a veil, a gradient scrim, a mask fade, or nothing) maps a
+// glyph color x to a*x + b, and the swatches measure that map: b = SB,
+// a = (SW - SB) / 255. So the text's own color f, painted at full coverage
+// and composited at its alpha fa over the backdrop it hides, reaches the
+// reader as H + fa * (SB + a * f - H). That is the color judged against H,
+// as WCAG means it: the declared color, not the anti-aliased one, so no
+// coverage enters (a thin weight is judged at its color, and the renderer's
+// per-color gamma at glyph edges cannot bias it), and a veil over half a
+// caption maps that half only.
+// The glyph's pixels come from the isolated pair: s = IW - IB is its shape,
+// whatever covers it (anything the fill does not change, an emoji or a
+// static paint, cancels). Judged pixels are its cores, s at least 0.9 of the
+// item's strongest. A core where the swatch does not reach the screen
+// (a < 0.1: under an opaque panel or image) is counted as hidden, not
+// judged. Per item the result is {q, n, hidden}: 101 quantiles (0th..100th
+// percentile) of the WCAG 2.x ratio over the n judged pixels, unrounded, so
+// the percentile and any rounding stay geometry.py's; and the share of core
+// pixels hidden. An item with no glyph pixels at all, or passed as null, is
+// null. The PNGs are decoded by the browser into a canvas: native and fast,
+// where a Python decoder would loop over every byte.
 async function geometryContrast(shots, items, scale) {
   const decode = async url => {
     const img = new Image();
@@ -350,63 +350,47 @@ async function geometryContrast(shots, items, scale) {
     ctx.drawImage(img, 0, 0);
     return ctx.getImageData(0, 0, cv.width, cv.height);
   };
-  const black = (await decode(shots.black)).data, white = (await decode(shots.white)).data;
-  const wOnK = (await decode(shots.whiteOnBlack)).data, kOnK = (await decode(shots.blackOnBlack)).data;
-  const wOnW = (await decode(shots.whiteOnWhite)).data, kOnW = (await decode(shots.blackOnWhite)).data;
+  const sb = (await decode(shots.swatchBlack)).data, sw = (await decode(shots.swatchWhite)).data;
+  const ib = (await decode(shots.shapeBlack)).data, iw = (await decode(shots.shapeWhite)).data;
   const hidden = await decode(shots.hidden);
   const W = hidden.width, H = hidden.height, px = hidden.data;
-  const lin = new Float64Array(256);
-  for (let i = 0; i < 256; i++) {
-    const c = i / 255;
-    lin[i] = c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
-  }
-  const lum = (r, g, b) => 0.2126 * lin[r] + 0.7152 * lin[g] + 0.0722 * lin[b];
-  const byte = v => Math.max(0, Math.min(255, Math.round(v)));
+  // In floats: the judged color is not rounded to a byte, which on a dark
+  // color would move the ratio by up to a tenth.
+  const lin = v => {
+    const c = Math.max(0, Math.min(255, v)) / 255;
+    return c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+  };
+  const lum = (r, g, b) => 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b);
   const diff = (a, b, i) => (a[i] - b[i] + a[i + 1] - b[i + 1] + a[i + 2] - b[i + 2]) / 765;
-  const shape = i => (diff(wOnK, kOnK, i) + diff(wOnW, kOnW, i)) / 2;
   return items.map(item => {
     if (!item) return null;
-    // No single glyph color (background-clip: text): coverage only.
-    const [fr, fg, fb, fa] = item.color || [0, 0, 0, 1];
     // Pixel-center rule: a pixel belongs to a rect when its center is inside.
-    const boxes = item.lines.map(l => [
-      Math.max(0, Math.round(l.x * scale)), Math.max(0, Math.round(l.y * scale)),
-      Math.min(W, Math.round((l.x + l.w) * scale)), Math.min(H, Math.round((l.y + l.h) * scale))]);
+    const pixels = [];
+    for (const l of item.lines) {
+      const x0 = Math.max(0, Math.round(l.x * scale)), y0 = Math.max(0, Math.round(l.y * scale));
+      const x1 = Math.min(W, Math.round((l.x + l.w) * scale));
+      const y1 = Math.min(H, Math.round((l.y + l.h) * scale));
+      for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) pixels.push((y * W + x) * 4);
+    }
     let top = 0;
-    for (const [x0, y0, x1, y1] of boxes) {
-      for (let y = y0; y < y1; y++) {
-        for (let x = x0; x < x1; x++) top = Math.max(top, shape((y * W + x) * 4));
-      }
-    }
+    for (const i of pixels) top = Math.max(top, diff(iw, ib, i));
     if (top < 0.02) return null;
-    const ratios = [];
-    let covered = 0, seen = 0;
-    for (const [x0, y0, x1, y1] of boxes) {
-      for (let y = y0; y < y1; y++) {
-        for (let x = x0; x < x1; x++) {
-          const i = (y * W + x) * 4;
-          if (shape(i) < 0.9 * top) continue;
-          const h = (px[i] + px[i + 1] + px[i + 2]) / 765;
-          const c = diff(wOnK, kOnK, i) * (1 - h) + diff(wOnW, kOnW, i) * h;
-          const e = diff(white, black, i);
-          if (e < 0.1 * c) { covered++; continue; }
-          if (!item.color) { seen++; continue; }
-          const full = fa / Math.max(c, e);
-          const glyph = (k, f) => px[i + k] + full *
-            (black[i + k] + (white[i + k] - black[i + k]) * f / 255 - px[i + k]);
-          const tr = byte(glyph(0, fr)), tg = byte(glyph(1, fg)), tb = byte(glyph(2, fb));
-          const tl = lum(tr, tg, tb), bl = lum(px[i], px[i + 1], px[i + 2]);
-          ratios.push((Math.max(tl, bl) + 0.05) / (Math.min(tl, bl) + 0.05));
-        }
-      }
-    }
-    const n = ratios.length;
-    const share = covered / (covered + n + seen);
-    if (!n) return { q: null, n: 0, hidden: Math.round(share * 1000) / 1000 };
-    const sorted = Float64Array.from(ratios).sort();
+    const cores = pixels.filter(i => diff(iw, ib, i) >= 0.9 * top);
+    const shown = cores.filter(i => diff(sw, sb, i) >= 0.1);
+    const share = Math.round((cores.length - shown.length) / cores.length * 1000) / 1000;
+    // No single glyph color (background-clip: text): coverage only.
+    if (!item.color || !shown.length) return { q: null, n: 0, hidden: share };
+    const [fr, fg, fb, fa] = item.color;
+    const seen = (i, k, f) => px[i + k] + fa * (sb[i + k] + (sw[i + k] - sb[i + k]) * f / 255 - px[i + k]);
+    const sorted = Float64Array.from(shown, i => {
+      const tl = lum(seen(i, 0, fr), seen(i, 1, fg), seen(i, 2, fb));
+      const bl = lum(px[i], px[i + 1], px[i + 2]);
+      return (Math.max(tl, bl) + 0.05) / (Math.min(tl, bl) + 0.05);
+    }).sort();
+    const n = sorted.length;
     const q = [];
     for (let p = 0; p <= 100; p++) q.push(sorted[Math.max(1, Math.ceil(p / 100 * n)) - 1]);
-    return { q, n, hidden: Math.round(share * 1000) / 1000 };
+    return { q, n, hidden: share };
   });
 }
 

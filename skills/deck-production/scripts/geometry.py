@@ -1036,10 +1036,12 @@ GOTO_JS = r"""(async (h, v, f, budget) => {
 # what paints glyphs; `color` stays, so borders, currentColor icons and
 # default-colored shadows are untouched. SVG text paints with `fill`, on
 # text, tspan and textPath alike (each may set its own); a stroke painted
-# over the fill is part of the glyph and is hidden with it. With `iso`, the
-# glyphs are isolated: everything that could veil or cover them is taken
-# away (see geometryContrast), so the shot shows the glyph shape alone.
-FILL_JS = """(async (fill, iso) => {  // iso: null, or the page color
+# over the fill is part of the glyph and is hidden with it. Two modes
+# change more (see geometryContrast). "swatch": each glyph is also stroked
+# 4 px thick in the fill, an opaque patch exactly where and in the stacking
+# order the glyph paints, everything else kept. "iso": the glyphs alone on a
+# black page, everything that could veil or cover them taken away.
+FILL_JS = """(async (fill, mode) => {
   const sec = Reveal.getCurrentSlide();
   for (const el of sec.querySelectorAll('text, tspan, textPath')) {
     const order = getComputedStyle(el).paintOrder.split(/\\s+/).filter(k => k !== 'normal');
@@ -1051,7 +1053,7 @@ FILL_JS = """(async (fill, iso) => {  // iso: null, or the page color
   sec.setAttribute('data-deckkit-at', '');
   const old = document.getElementById('deckkit-geometry-fill');
   if (old) old.remove();
-  if (iso) {
+  if (mode === 'iso') {
     // Read with no override in place: what is invisible by opacity stays so.
     for (const el of sec.querySelectorAll('*')) {
       el.toggleAttribute('data-deckkit-zero', parseFloat(getComputedStyle(el).opacity) === 0);
@@ -1063,11 +1065,18 @@ FILL_JS = """(async (fill, iso) => {  // iso: null, or the page color
   let css = `${at}, ${at} * { -webkit-text-fill-color: ${fill} !important; ` +
     'caret-color: transparent !important; }' +
     `${at} text, ${at} tspan, ${at} textPath { fill: ${fill} !important; ` +
-    'fill-opacity: 1 !important; }' +
-    `${at} [data-deckkit-glyph-stroke] { stroke: transparent !important; }`;
-  if (iso) {
+    'fill-opacity: 1 !important; }';
+  if (mode === 'swatch') {
+    css += `${at}, ${at} * { -webkit-text-stroke: 4px ${fill} !important; }` +
+      `${at} text, ${at} tspan, ${at} textPath { stroke: ${fill} !important; ` +
+      'stroke-width: 4px !important; stroke-opacity: 1 !important; ' +
+      'stroke-linejoin: round !important; stroke-dasharray: none !important; }';
+  } else {
+    css += `${at} [data-deckkit-glyph-stroke] { stroke: transparent !important; }`;
+  }
+  if (mode === 'iso') {
     const all = `${at}, ${at} *, ${at}::before, ${at}::after, ${at} *::before, ${at} *::after`;
-    css += `html, body, .reveal-viewport, .reveal { background: ${iso} !important; }` +
+    css += 'html, body, .reveal-viewport, .reveal { background: #000 !important; }' +
       '.reveal .backgrounds { visibility: hidden !important; }' +
       `${all} { background: none !important; border-color: transparent !important; ` +
       'border-image-source: none !important; outline-color: transparent !important; ' +
@@ -1109,16 +1118,15 @@ def slide_label(entry: dict) -> str:
     return f"{entry['h'] + 1}" + (f".{entry['v'] + 1}" if entry["v"] else "")
 
 
-# (name, glyph fill, page color when isolated)
-SHOTS = (("black", "#000", None), ("white", "#fff", None), ("hidden", "transparent", None),
-         ("whiteOnBlack", "#fff", "#000"), ("blackOnBlack", "#000", "#000"),
-         ("whiteOnWhite", "#fff", "#fff"), ("blackOnWhite", "#000", "#fff"))
+# (name, glyph fill, FILL_JS mode)
+SHOTS = (("hidden", "transparent", None),
+         ("swatchBlack", "#000", "swatch"), ("swatchWhite", "#fff", "swatch"),
+         ("shapeBlack", "#000", "iso"), ("shapeWhite", "#fff", "iso"))
 
 
 def measure_contrast(page: Page, probe: dict, wanted: set[int] | None = None) -> None:
-    """Screenshot the canvas seven times (glyphs forced black, white and
-    invisible as rendered, then white and black isolated on a black page and
-    on a white one) and let the page
+    """Screenshot the canvas five times (glyphs invisible as rendered; as
+    thick black and white swatches; black and white isolated) and let the page
     compare each text's color with the backdrop where its glyphs paint.
     Adds `contrast` ({q, n, hidden}, or None) to every text item in `wanted`
     (indices into probe["texts"]; all when None)."""
@@ -1132,8 +1140,8 @@ def measure_contrast(page: Page, probe: dict, wanted: set[int] | None = None) ->
             "scale": 1}
     shots = {}
     try:
-        for name, fill, iso in SHOTS:
-            page.evaluate(f"{FILL_JS}({json.dumps(fill)}, {json.dumps(iso)})")
+        for name, fill, mode in SHOTS:
+            page.evaluate(f"{FILL_JS}({json.dumps(fill)}, {json.dumps(mode)})")
             shots[name] = "data:image/png;base64," + page.call(
                 "Page.captureScreenshot",
                 {"format": "png", "clip": clip, "optimizeForSpeed": True})["data"]
