@@ -29,6 +29,10 @@ stored here).
   [[dotclaude-tmux-restore]]). Open tabs are recorded only once restarted or `/clear`ed after
   install. **Untested for real:** Hayden's `wsl --shutdown`, then connect; `claude-restore --list`
   before, `$XDG_STATE_HOME/dotclaude/restore.log` after. Accepted limits are in PR #70.
+- **Stop ring quiet-while-busy, fixed for real** (PR #72, 2026-10-05): #69 matched internal task
+  names, but `background_tasks[].type` is a friendly label (`shell`, `subagent`), so it never
+  fired. Live on HAYPC now because the checkout sits on `fix/stop-ring-task-labels`. Verified
+  live (`quiet busy=1 tasks=shell`). Lesson in [[cc-stop-hook-facts]].
 - **Push and merge permissions** (PR #71, installed 2026-10-05): `git push origin <branch>` and
   `gh pr create` run; anything that can reach `main` and merges ask (README "permissions"
   paragraph). Claude still asks in chat first (CLAUDE.md).
@@ -80,8 +84,12 @@ stored here).
   `$CLAUDE_JOB_DIR/tmp` bug report is Hayden's call; `CLAUDE.md` carries the workaround.
 
 ## Notes for next session
-- **Next: Hayden picks the next workflow improvement**; deck-production S2 is deferred. First
-  real check of #70: the next reboot (see Done). Recent work: PRs #67 to #71.
+- **Next: merge PR #72** (`gh pr view 72 --json state,mergedAt`), then put the live checkout
+  back on `main` sandbox-off: `git switch main && git pull --ff-only` (protected `hooks/` files,
+  [[dotclaude-sandbox-git-protected-files]]). Until then every session runs hooks from the fix
+  branch. Then Hayden picks the next workflow improvement; deck-production S2 is deferred. First
+  real check of #70: the next reboot (see Done). Recent work: PRs #67 to #72
+  (`main..fix/stop-ring-task-labels` is #72).
 - **Verify `deck-production` before touching it:** `deckkit regress` green (the config and goldens
   are in the private repo's `decks/_parity/`, README there has the command; the deck-production
   item says which branch) and
@@ -91,7 +99,7 @@ stored here).
   after changing a role, a hook or `codex-delegate`, run `delegation-ledger canary` outside the
   sandbox in the background (`docs/delegation.md` "The canary and the due checks").
 - **A wrong tmux glyph or an unexpected ring:** read the last lines of
-  `$XDG_STATE_HOME/dotclaude/ring.log`, and compare `~/.local/state/dotclaude/tabs` with `claude
+  `$XDG_STATE_HOME/dotclaude/ring.log` (stop lines carry `tasks=<labels>` in flight), and compare `~/.local/state/dotclaude/tabs` with `claude
   agents --json` and `tmux list-panes -a -F '#{pane_id} #{pane_current_command}
   #{pane_current_path}'`. Unprobed: whether `/clear` in a background session changes its sessionId.
 - research-sourcing (optional): the thorough-tier planted-fabrication spot-check was never run end
