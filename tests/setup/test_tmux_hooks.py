@@ -203,6 +203,30 @@ class Hooks(unittest.TestCase):
         self.run_hook("stop-ring.sh", TAB)
         self.assertTrue(self.rang())
 
+    def test_a_stop_with_background_work_in_flight_stays_quiet(self):
+        # The turn ended but the session is paused on work that will wake it (an agent, a
+        # shell): it is neither done nor waiting on the person, so no ring (2026-10-04).
+        for task in ({"id": "a1", "type": "local_agent", "status": "running"},
+                     {"id": "b1", "type": "local_bash", "status": "running"},
+                     {"id": "w1", "type": "local_workflow", "status": "pending"},
+                     {"id": "r1", "type": "remote_agent", "status": "running"}):
+            with self.subTest(task=task["type"]):
+                self.run_hook("stop-ring.sh", TAB, {"background_tasks": [task]})
+                self.assertTrue(self.no_ring())
+                self.assertIn("stop quiet", self.ring_log()[-1])
+                self.assertIn("busy=1", self.ring_log()[-1])
+
+    def test_a_stop_rings_when_only_lingering_tasks_remain(self):
+        # Teammates linger in the list after they finish, dream is memory upkeep and a monitor
+        # can run for hours: none of them means the person's work is still running.
+        tasks = [{"id": "t1", "type": "in_process_teammate", "status": "running"},
+                 {"id": "d1", "type": "dream", "status": "running"},
+                 {"id": "m1", "type": "monitor_mcp", "status": "running"}]
+        self.run_hook("stop-ring.sh", TAB, {"background_tasks": tasks})
+        self.assertTrue(self.rang())
+        self.run_hook("stop-ring.sh", TAB, {"background_tasks": []})
+        self.assertTrue(self.rang())
+
     def test_a_plain_terminal_rings_on_stop(self):
         self.run_hook("stop-ring.sh", {})
         self.assertTrue(self.rang())
