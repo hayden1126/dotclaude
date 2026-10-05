@@ -71,8 +71,8 @@ stored here).
     `delegation-ledger exclude --id <id> --why probe`.
   - The daily audit's "reports failing the contract: 3" is three known pre-fix rows from
     2026-09-30, gone from its window on 2026-10-07.
-- **`deck-production` blocks S2-S6** (plan: `~/.claude/plans/explore-our-entire-workflow-bright-shamir.md`,
-  missing from HAYPC on 2026-10-01; find it on the machine that wrote it, or rebuild it from here).
+- **`deck-production` blocks S2-S6** (the S2-S6 plan file is lost; S3's design is `PLAN.md` on
+  `feat/deck-geometry`, the rest rebuilds from here).
   S1 shipped and verified (base `8602081`): the skill has the phase model and the core loop but no
   orchestration layer, so an agent can't yet run a deck end to end.
   - **Next: block S3, the geometry gate** (`geometry.py` + `geometry_probe.js` + a declarative
