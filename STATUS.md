@@ -31,8 +31,7 @@ stored here).
   before, `$XDG_STATE_HOME/dotclaude/restore.log` after. Accepted limits are in PR #70.
 - **Stop ring quiet-while-busy, fixed for real** (PR #72, 2026-10-05): #69 matched internal task
   names, but `background_tasks[].type` is a friendly label (`shell`, `subagent`), so it never
-  fired. Live on HAYPC now because the checkout sits on `fix/stop-ring-task-labels`. Verified
-  live (`quiet busy=1 tasks=shell`). Lesson in [[cc-stop-hook-facts]].
+  fired. Merged and live on HAYPC; verified live (`quiet busy=1 tasks=shell`). Lesson in [[cc-stop-hook-facts]].
 - **Push and merge permissions** (PR #71, installed 2026-10-05): `git push origin <branch>` and
   `gh pr create` run; anything that can reach `main` and merges ask (README "permissions"
   paragraph). Claude still asks in chat first (CLAUDE.md).
@@ -84,12 +83,8 @@ stored here).
   `$CLAUDE_JOB_DIR/tmp` bug report is Hayden's call; `CLAUDE.md` carries the workaround.
 
 ## Notes for next session
-- **Next: merge PR #72** (`gh pr view 72 --json state,mergedAt`), then put the live checkout
-  back on `main` sandbox-off: `git switch main && git pull --ff-only` (protected `hooks/` files,
-  [[dotclaude-sandbox-git-protected-files]]). Until then every session runs hooks from the fix
-  branch. Then Hayden picks the next workflow improvement; deck-production S2 is deferred. First
-  real check of #70: the next reboot (see Done). Recent work: PRs #67 to #72
-  (`main..fix/stop-ring-task-labels` is #72).
+- **Next: Hayden picks the next workflow improvement**; deck-production S2 is deferred. First
+  real check of #70: the next reboot (see Done). Recent work: PRs #67 to #72.
 - **Verify `deck-production` before touching it:** `deckkit regress` green (the config and goldens
   are in the private repo's `decks/_parity/`, README there has the command; the deck-production
   item says which branch) and
