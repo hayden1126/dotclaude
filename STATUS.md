@@ -6,7 +6,7 @@
 > [[dotclaude-chrome-devtools-wsl]]). Per-effort design lives in the repo's `PLAN.md` or its doc,
 > not only under `~/.claude/plans/`, which the next plan overwrites ([[plan-file-not-durable]]).
 
-Last updated: 2026-10-04
+Last updated: 2026-10-05
 Base: `main`. For branch / PR / push state, run `gh pr list` and `git log main..HEAD` (derive it; not
 stored here).
 
@@ -71,19 +71,25 @@ stored here).
     `delegation-ledger exclude --id <id> --why probe`.
   - The daily audit's "reports failing the contract: 3" is three known pre-fix rows from
     2026-09-30, gone from its window on 2026-10-07.
-- **`deck-production` blocks S2-S6** (the S2-S6 plan file is lost; S3's design is `PLAN.md` on
-  `feat/deck-geometry`, the rest rebuilds from here).
-  S1 shipped and verified (base `8602081`): the skill has the phase model and the core loop but no
-  orchestration layer, so an agent can't yet run a deck end to end.
-  - **Next: block S3, the geometry gate** (`geometry.py` + `geometry_probe.js` + a declarative
-    `geometry.rules.toml`), because it catches the defect class screenshots miss. It must FAIL on a
-    fixture reproducing the reference deck's s17 overlap (unbounded caption `max-width`, no panel
-    background, anchors ~95px apart) and PASS on the real s17 as it stands.
-  - Then S2 (fonts + PDF), S4 (SKILL references + 6 Workflow scripts), S5 (ingest + theme
-    extractor), S6 (pptx export). S1-S4 is the usable product.
+- **`deck-production`: the geometry gate is built** (`feat/deck-geometry`, 2026-10-05; design and
+  as-built in `PLAN.md`, behavior in SKILL.md "The geometry gate"). `deckkit geometry` drives
+  headless Chrome over CDP (stdlib only) and checks overlap, unbounded text, measured WCAG contrast
+  (AA by default; frozen at regulated rigor), covered text, safe area, clearance and clipping, at
+  every fragment step. Verified: 83 tests green five runs in a row; the reference deck's fixed map
+  slide passes and its pre-fix version fails; two whole-deck runs identical. Four review rounds,
+  each finding fixed.
+  - **Golden:** `regress` records per-slide counts (114 errors, 13 warnings, mostly two palette
+    colors below AA). Captured in the private repo on branch `chore/geometry-golden` (worktree in
+    this session's scratchpad); its `decks/_parity/README.md` lists the real findings for the
+    deck's own session to fix (Hayden's call: record here, fix there).
+  - **Deferred, known:** gradient text (`background-clip:text`) is never judged; a color the
+    canvas can't serialize reads as black; isolated glyph shots drop `filter`.
+  - **Next block: S2 (fonts + PDF)**, then S4 (SKILL references + Workflow scripts), S5 (ingest +
+    theme extractor), S6 (pptx export). S1-S4 is the usable product. The original S2-S6 plan file
+    is lost; rebuild each block's plan in `PLAN.md` (mark the geometry one as history first).
   - Owners: SKILL.md (phases, gates), `deckkit` `COMMANDS` (CLI), `deckcfg.derive_rigor`, the
     private `decks/_parity/` goldens; no "S<n>" in shipped artifacts. Known gap:
-    `deck.forward_targets` is declared, not detected; revisit when S3 enforces MUST/NEVER.
+    `deck.forward_targets` is declared, not detected; revisit when MUST/NEVER are enforced.
 
 ## Blocked / decisions needed
 - **Rescan the `rm` gap around 2026-11-04** (kept as a known gap, Hayden's call):
@@ -91,10 +97,13 @@ stored here).
   `$CLAUDE_JOB_DIR/tmp` bug report is Hayden's call; `CLAUDE.md` carries the workaround.
 
 ## Notes for next session
-- **Next: deck-production S3, the geometry gate** (In flight has the target; its design goes in
-  `PLAN.md` on `feat/deck-geometry`, stacked on `chore/cdt-1.9.0`). Branch `chore/cdt-1.9.0` (the pin and a CLAUDE.md kill rule) waits on Hayden's PR
-  call. Other machines pick up main with `./setup.sh`, plus `./setup-tmux.sh` where tmux is used
-  (README has the overlay caveat).
+- **Branches from 2026-10-04/05, pushed without PRs (Hayden opens them):**
+  `chore/cdt-1.9.0` (the chrome-devtools pin, the CLAUDE.md kill rule), `feat/deck-geometry`
+  (stacked on it), and `fix/tmux-wait-subagent` (off `main`: a subagent's busy no longer covers a
+  question's wait glyph, and a Stop with an agent or shell still running doesn't ring). Neither tmux
+  fix is live until that branch is merged and pulled. Other machines pick up main with
+  `./setup.sh`, plus `./setup-tmux.sh` where tmux is used (README has the overlay caveat).
+- **Next: deck-production S2** (In flight).
 - **A wrong or missing tmux glyph:** compare `~/.local/state/dotclaude/tabs` with `claude agents
   --json` and `tmux list-panes -a -F '#{pane_id} #{pane_current_command} #{pane_current_path}'`.
   Unprobed: whether `/clear` inside a background session changes the `sessionId` it lists.
