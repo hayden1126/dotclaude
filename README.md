@@ -126,11 +126,11 @@ sees it.
 | `docs/prose-is-not-a-permission.md` | Blog post on the delegation work: why a prompt can't limit an agent's authority, and the layers that can | reference |
 | `docs/images/` | The post's diagram: `delegation-layers.svg` (source) and `delegation-layers.png` (2x render) | reference |
 | `tests/delegation/` | Unit tests for the delegation pieces (no model calls) and `run.py`, a live harness that spends model calls | run from the repo root |
-| `tests/setup/` | Unit tests for `merge-settings.py`, `git/install-ignore.py`, and the prompt and session hooks (`handoff_reminder.py`, `session-title.sh`, `session-summary.sh`), the tmux and sound hooks (`test_tmux_hooks.py`), `tmux/tmux-claude-status` (`test_tmux_claude_status.py`), the restore after a reboot (`test_session_registry.py`, `test_claude_restore.py`) and `setup-tmux.sh`; `replay_history.py` is a local-only replay tool, not a unit test | `python3 -m unittest discover -s tests/setup -t tests/setup` |
+| `tests/setup/` | Unit tests for `merge-settings.py`, `git/install-ignore.py`, and the prompt and session hooks (`handoff_reminder.py`, `session-title.sh`, `session-summary.sh`), the tmux and sound hooks (`test_tmux_hooks.py`), `tmux/tmux-claude-status` (`test_tmux_claude_status.py`), the restore after tmux dies (`test_session_registry.py`, `test_claude_restore.py`) and `setup-tmux.sh`; `replay_history.py` is a local-only replay tool, not a unit test | `python3 -m unittest discover -s tests/setup -t tests/setup` |
 | `tests/deck_production/` | Unit tests for `deck-production`'s `deckkit geometry` gate (rule matrix on canned probe output, plus an end-to-end run over the synthetic `fixtures/geodeck` that skips without a headless Chrome) `deckkit regress`'s geometry facts, and `deckkit doctor`'s exit codes | `python3 -m unittest discover -s tests/deck_production -t tests/deck_production` |
 | `docs/chrome-devtools-wsl.md` | WSL2-only: how to make `chrome-devtools-mcp` work (Strategy A headless Linux Chrome, plus B to attach to your Windows Chrome) | reference |
 | `chrome-debug.ps1` | Windows launcher for Strategy B (Chrome with a remote-debugging port) | run on Windows when needed |
-| `tmux/` | The tmux side of the indicator: `claude.conf` (titles, status bar, the ◐ busy and ✳ waiting glyphs), the optional `base.conf` (mouse, splits, the Ctrl-b Enter menu), `cheatsheet.txt`, `tmux-claude-status`, the backstop the status bar runs (it also maps background sessions to their tab), and `claude-restore`, which reopens `main`'s Claude tabs after a reboot | sourced and linked by `setup-tmux.sh` |
+| `tmux/` | The tmux side of the indicator: `claude.conf` (titles, status bar, the ◐ busy and ✳ waiting glyphs), the optional `base.conf` (mouse, splits, the Ctrl-b Enter menu), `cheatsheet.txt`, `tmux-claude-status`, the backstop the status bar runs (it also maps background sessions to their tab), and `claude-restore`, which reopens `main`'s Claude tabs after the tmux server dies | sourced and linked by `setup-tmux.sh` |
 | `setup-tmux.sh` | Opt-in tmux installer: links `tmux-claude-status` and `claude-restore` into `~/.local/bin` and keeps a marked `source-file` block in `~/.tmux.conf` (`--base` adds `base.conf` and the cheatsheet) | run once per machine that uses tmux; not called by `setup.sh` |
 | `setup-chrome-wsl.sh` | Opt-in WSL2 installer: installs Chrome for Testing and registers the user-scoped `chrome-devtools` override | run once on WSL2; not called by `setup.sh` |
 | `setup.sh` | The installer | run once per machine |
@@ -272,22 +272,25 @@ need nothing extra.
   sessions split into one window share a glyph.
   Run `./setup-tmux.sh` once for the tmux side. A machine whose `settings.machine.json` still wires
   `tmux-state.sh` should drop those entries before `./setup.sh`, or they fire twice.
-- **Tabs come back after a reboot**: a Windows restart or `wsl --shutdown` kills the tmux server
-  and every Claude tab in `main`. `session-registry.sh` keeps one file per open tab in
-  `$XDG_STATE_HOME/dotclaude/open-sessions/`: the session id, its directory, transcript, pane,
-  window index and the VM's boot id. `/exit` and `/clear` delete the old id's file (a `/clear`d
-  tab is recorded again under its new id). Killing the window, claude or the tmux server only
-  marks it, since a shutdown that signals claude looks the same to a hook. When `main` is next
-  created, tmux's `session-created` hook runs `claude-restore --auto main`. It takes the files from
-  an earlier boot and opens one window per tab, in the old order, running
-  `claude --resume <id>` in its directory. A marked tab comes back only if it ended within 120 s
-  of the old boot's last activity (the shutdown itself); one closed earlier stays closed. It skips
-  a session already running, a deleted directory, and an older session in the same pane. A tab
-  with no transcript yet (fresh from startup or `/clear`: a session writes none until its first
-  input) reopens as a plain `claude` in its directory. `claude-restore --list` shows what it would do and why; `claude-restore` with no
-  flag restores now. Each decision is a line in `$XDG_STATE_HOME/dotclaude/restore.log`, and
+- **Tabs come back after tmux dies**: a Windows restart, `wsl --shutdown`, `wsl --terminate` or
+  `tmux kill-server` ends the tmux server and every Claude tab in `main`. `session-registry.sh`
+  keeps one file per open tab in `$XDG_STATE_HOME/dotclaude/open-sessions/`: the session id, its
+  directory, transcript, pane, window index, and the tmux server it runs under (socket path and
+  start time). `/exit` and `/clear` delete the old id's file (a `/clear`d tab is recorded again
+  under its new id). Killing the window, claude or the tmux server only marks it, since a
+  shutdown that signals claude looks the same to a hook. When `main` is next created, tmux's
+  `session-created` hook runs `claude-restore --auto main`. It takes the files from the same
+  socket but an earlier server start (other sockets, like a `tmux -L` test server, are left
+  alone) and opens one window per tab, in the old order, running `claude --resume <id>` in its
+  directory. A marked tab comes back only if it ended within 120 s of the old server's last
+  activity (the shutdown itself); one closed earlier stays closed. It skips a session already
+  running, a deleted directory, a directory name with a `#` (tmux would expand it), and an older
+  session in the same pane. A tab with no transcript yet (fresh from startup or `/clear`: a
+  session writes none until its first input) reopens as a plain `claude` in its directory.
+  `claude-restore --list` shows what it would do and why; `claude-restore` with no flag restores
+  now. If tmux fails to open a window, the entry stays for the next run. Each decision is a line in `$XDG_STATE_HOME/dotclaude/restore.log`, and
   the last restore's files stay in `open-sessions/restored/`. Known limit: a window killed just
-  before the machine sits idle until a hard reboot is in that final 120 s, so it comes back. An
+  before tmux dies with nothing else running is in that final 120 s, so it comes back. An
   extra tab is cheap; losing every tab is what this exists to prevent. Background (`--bg`)
   sessions are not restored.
 

@@ -2,7 +2,7 @@
 # setup-tmux.sh: the tmux side of the per-window Claude indicator (◐ busy, ✳ waiting) and the
 # delegation token in the status bar, and what lets a background session's hooks find its tab
 # (tmux-claude-status writes that map), plus claude-restore, which reopens main's Claude tabs
-# after a reboot. Opt-in and idempotent; setup.sh never calls it. The hook side
+# after the tmux server dies. Opt-in and idempotent; setup.sh never calls it. The hook side
 # (hooks/tmux-state.sh, hooks/session-registry.sh) is wired by setup.sh on every machine and does
 # nothing outside tmux.
 #
