@@ -275,17 +275,17 @@ need nothing extra.
 - **Tabs come back after tmux dies**: a Windows restart, `wsl --shutdown`, `wsl --terminate` or
   `tmux kill-server` ends the tmux server and every Claude tab in `main`. `session-registry.sh`
   keeps one file per open tab in `$XDG_STATE_HOME/dotclaude/open-sessions/`: the session id, its
-  directory, transcript, pane, window index, and the tmux server it runs under (socket path and
-  start time). `/exit` and `/clear` delete the old id's file (a `/clear`d tab is recorded again
+  directory, transcript, pane, window index, and the tmux server it runs under (socket path,
+  start time and pid). `/exit` and `/clear` delete the old id's file (a `/clear`d tab is recorded again
   under its new id). Killing the window, claude or the tmux server only marks it, since a
   shutdown that signals claude looks the same to a hook. When `main` is next created, tmux's
   `session-created` hook runs `claude-restore --auto main`. It takes the files from the same
-  socket but an earlier server start (other sockets, like a `tmux -L` test server, are left
-  alone) and opens one window per tab, in the old order, running `claude --resume <id>` in its
-  directory. A marked tab comes back only if it ended within 120 s of the old server's last
-  activity (the shutdown itself); one closed earlier stays closed. It skips a session already
-  running, a deleted directory, a directory name with a `#` (tmux would expand it), and an older
-  session in the same pane. A tab with no transcript yet (fresh from startup or `/clear`: a
+  socket but an earlier server (other sockets, like a `tmux -L` test server, are left alone) and opens one window per tab, in the old order, running `claude --resume <id>` in its
+  directory. A marked tab comes back only if it ended within 120 s of its own server's
+  last activity (the shutdown itself); one closed earlier stays closed. It skips a session
+  already running, a deleted directory, and an older session in the same pane (one claude runs
+  in a pane at a time, so only the newest can be a live tab). A directory name with a `#` is
+  skipped (tmux would expand it), and so is one with a control character. A tab with no transcript yet (fresh from startup or `/clear`: a
   session writes none until its first input) reopens as a plain `claude` in its directory.
   `claude-restore --list` shows what it would do and why; `claude-restore` with no flag restores
   now. If tmux fails to open a window, the entry stays for the next run. Each decision is a line in `$XDG_STATE_HOME/dotclaude/restore.log`, and

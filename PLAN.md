@@ -37,16 +37,18 @@ Rejected:
 **1. Registry, kept by hooks.** `hooks/session-registry.sh` (bash, `python3 -I` for JSON;
 fail-open, always exits 0).
 - **Where.** One file per session: `$XDG_STATE_HOME/dotclaude/open-sessions/<session_id>.json`,
-  holding `{session_id, cwd, transcript_path, pane, window_index, socket, server_start, ts}`.
-  One file per session means no locking, and a write is an fsynced tmp file plus rename.
-  `socket` and `server_start` are tmux's `#{socket_path}` and `#{start_time}`: together they
-  name the server, so a new start on the same socket means the old server died. (A boot id was
+  holding `{session_id, cwd, transcript_path, pane, window_index, socket, server_start,
+  server_pid, ts}`. One file per session means no locking, and a write is an fsynced tmp file
+  plus rename. `socket`, `server_start` and `server_pid` are tmux's `#{socket_path}`,
+  `#{start_time}` and `#{pid}`: together they name the server, so another (start, pid) on the
+  same socket means the old server died. The pid tells apart two servers started in the same
+  second. (A boot id was
   the first design; it missed `wsl --terminate` and `kill-server`, and let a `tmux -L probe`
   server's entries compete with `main`'s.)
 - **SessionStart** (startup, resume, clear, compact) writes or refreshes the file. It skips a
   session with no `TMUX_PANE`, a `-p` run (`CLAUDE_CODE_SESSION_ATTENDED=0`), a payload carrying
   `agent_id`, a `session_id` that isn't a plain token, an empty cwd, and a server it can't
-  read. One call, `tmux display -p -t $TMUX_PANE '#{start_time} #{window_index} #{socket_path}'`,
+  read. One call, `tmux display -p -t $TMUX_PANE '#{start_time} #{pid} #{window_index} #{socket_path}'`,
   gives the server and the window (claude inherits the pane's TMUX; the path goes last, since it
   may hold a space).
 - **SessionEnd** deletes the file on `prompt_input_exit` (`/exit`), `logout`, `clear`, or any
@@ -55,23 +57,28 @@ fail-open, always exits 0).
   The probe (2026-10-05) showed that `kill-window`, SIGTERM to claude and `kill-server` all fire
   SessionEnd `other`, with the hook still running. A shutdown that signals claude therefore looks
   the same as a deliberate window kill at hook time.
-- **At restore, the old server's last activity** is
-  `L = max(ts, ended_other_at, transcript mtime)` over the candidates, ignoring any value later
-  than the current server's start (a transcript resumed by hand since is not the old end). An entry with no end mark is restored. A marked entry is restored only if
-  `ended_other_at >= L - 120 s`: it died in the final batch, a shutdown. A window killed earlier,
+- **At restore, each old server's last activity** is
+  `L = max(ts, ended_other_at, transcript mtime)` over that server's entries. A marked entry's
+  transcript mtime is capped at its own mark (a `claude --continue` outside tmux after the death
+  is not the server's end), and any value later than the current server's start is ignored. L
+  is per server: pooled, one server's later activity would hide another's shutdown. An entry
+  with no end mark is restored. A marked entry is restored only if
+  `ended_other_at >= L - 120 s` for its own server: it died in the final batch, a shutdown. A window killed earlier,
   with later activity after it, stays closed. The bias: restoring one tab too many is cheap;
   wiping every tab is the failure the feature exists to prevent.
 - **Registered in the settings baseline** (`settings.json`): a SessionStart group with matcher
   `startup|resume|clear|compact` (separate from `delegation-due.sh`'s), and a SessionEnd group.
 
 **2. `tmux/claude-restore`** (bash; linked into `~/.local/bin` by `setup-tmux.sh`).
-- **Which entries.** It reads the current server's socket and start (`tmux display`; by
-  hand, after creating `main`). Candidates are entries with the same socket and a different
-  start. Entries from another socket are never touched: not moved, not logged. It skips any id
-  already running (`claude agents --json`, entries with a `pid`; if the call fails it carries
-  on), a directory that is gone or holds a `#` (tmux format-expands `new-window -c`), and a
-  marked entry outside the final batch. Then, among the survivors, it keeps the newest `ts` per
-  (server start, pane). An entry with no transcript (a session writes none until its first input,
+- **Which entries.** It reads the current server's socket, start and pid (`tmux display`;
+  by hand, after creating `main`). Candidates are entries with the same socket and another
+  (start, pid). Entries from another socket are never touched: not moved, not logged. In each pane of each old
+  server, keyed (start, pid, pane), only the newest entry can be a live tab: a pane runs one
+  claude at a time, so an older entry there is a dead session even when the newest is skipped.
+  It also skips any id already running (`claude agents --json`, entries with a `pid`; if the
+  call fails it carries on), a directory that is gone or holds a `#` (tmux format-expands
+  `new-window -c`) or a control character, and a marked entry outside its server's final
+  batch. An entry with no transcript (a session writes none until its first input,
   so a tab fresh from startup or `/clear`) reopens as a plain `claude` in its directory.
 - **Each restore,** in old `window_index` order: `tmux new-window -d -P -F '#{pane_id}' -t =main:
   -c <cwd>`, then `send-keys` of `claude --resume <id>` and Enter to that pane. The tab gets a
@@ -109,8 +116,12 @@ file.
 | `/exit`, Ctrl-D | Deleted, not restored |
 | Window killed (Ctrl-b &), work continues elsewhere | Marked, and older than the final batch, so not restored |
 | Window killed, then the machine idles until tmux dies | Marked, and in the final batch, so restored (accepted: one extra tab) |
-| Claude crashes, new claude in same pane | Dedupe by (server start, pane) keeps the newest |
+| Claude crashes, new claude in same pane | Dedupe by (server start, pid, pane) keeps the newest |
+| Two old servers on one socket (killed, then a new one also died) | Each has its own last activity, so both servers' tabs return |
+| Two servers started in the same second | The pid tells them apart |
+| `claude --continue` outside tmux after the death | A marked entry's transcript counts only up to its mark |
 | A transcript resumed by hand after the new server started | Ignored for the old server's last activity |
+| `tmux new-session` starts the server, or `claude agents` the daemon | Each runs with the lock fd closed, so the lock never outlives the run |
 | tmux fails to open a window, or the run is killed midway | The entry stays (or moves back) for the next run |
 | A `#` in the directory name | Logged and skipped |
 | Two tabs in one repo | Exact ids, so each resumes its own conversation |
