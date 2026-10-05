@@ -752,7 +752,9 @@ class Browser:
         args = [binary, "--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage",
                 "--hide-scrollbars", "--no-first-run", "--no-default-browser-check",
                 f"--window-size={width},{height}", f"--user-data-dir={self.profile}",
-                "--remote-debugging-pipe"]
+                # Animated images (GIF, WebP, APNG) hold their first frame, as videos
+                # are paused at theirs (GOTO_JS): 2 is kImageAnimationPolicyNoAnimation.
+                "--blink-settings=imageAnimationPolicy=2", "--remote-debugging-pipe"]
         if not headless_shell:
             args.insert(1, "--headless=new")
         try:
@@ -915,7 +917,9 @@ STILL_JS = """(() => {
 # list markers, content), the reveal slide background and its video
 # included, which reveal sets only when the slide is reached. All of it is
 # started at once and held to one deadline below the evaluate timeout
-# (geometrySettle), so a hang is named, not lost. Returns {id, slow: [what
+# (geometrySettle), so a hang is named, not lost. Then every video is paused
+# at its first frame (animated images are held there by the browser's
+# imageAnimationPolicy, see Browser). Returns {id, slow: [what
 # was still pending at the deadline], last: highest fragment index or -1}.
 GOTO_JS = r"""(async (h, v, f, budget) => {
   Reveal.slide(h, v, f);
@@ -998,6 +1002,24 @@ GOTO_JS = r"""(async (h, v, f, budget) => {
     }), `video ${vid.currentSrc || vid.src || (vid.querySelector('source') || {}).src}`]);
   }
   const slow = await geometrySettle(tasks, budget);
+  // Time-based media frozen at their first frame, so every run measures the
+  // same pixels: a playing video (a reveal background video autoplays and
+  // loops) would be shot at whatever frame is current. Reveal may start one
+  // as its data arrives, so this repeats until none plays.
+  for (let round = 0; round < 3; round++) {
+    const seeks = [];
+    for (const vid of videos) {
+      if (vid.readyState < 1) continue;       // no metadata: it shows its poster
+      vid.pause();
+      if (vid.currentTime === 0 && !vid.seeking) continue;
+      seeks.push([new Promise(ok => vid.addEventListener('seeked', ok, { once: true })),
+                  `video seek ${vid.currentSrc || vid.src}`]);
+      vid.currentTime = 0;
+    }
+    slow.push(...await geometrySettle(seeks, budget));
+    await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+    if (videos.every(vid => vid.paused && vid.currentTime === 0)) break;
+  }
   rest();
   const frames = new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
   slow.push(...await geometrySettle([[frames, 'a rendered frame']], 2000));

@@ -10,24 +10,29 @@ background, at a hairline weight and a hair under AA; text covered by an
 image; the fit test (a short caption under a max-width it never reaches is
 bounded, a centered one that fills its room is not); fragments probed at
 every step and judged where most visible; an entrance animation measured at
-rest; a tight display headline that one flow stacks, and lines stacked half
+rest; a looping background video and an animated image measured at their
+first frame, run after run; a tight display headline that one flow stacks, and lines stacked half
 an em deep that collide; canvas-origin margins on a slide reveal centers,
 and a margin token in rem; slow fonts, backgrounds and media named."""
+import base64
 import contextlib
 import http.server
 import importlib.util
 import io
 import json
+import math
 import os
 import pathlib
 import shutil
 import socket
+import struct
 import subprocess
 import sys
 import tempfile
 import threading
 import time
 import unittest
+import zlib
 from unittest import mock
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -780,6 +785,54 @@ def composite(fg, alpha, bg):
     return [alpha * f + (1 - alpha) * b for f, b in zip(fg, bg)]
 
 
+# Moving media for the first-frame test: gray 200, down to black and back up
+# over one second at 30 frames, as a looping animated PNG and a WebM recorded
+# from a canvas in the browser (no encoder needed here).
+MEDIA_GRAYS = [round(100 + 100 * math.cos(2 * math.pi * i / 30)) for i in range(30)]
+RECORD_WEBM_JS = """(async (grays) => {
+  const c = document.createElement('canvas'); c.width = 64; c.height = 36;
+  document.body.appendChild(c);
+  const ctx = c.getContext('2d');
+  const paint = v => { ctx.fillStyle = `rgb(${v},${v},${v})`; ctx.fillRect(0, 0, 64, 36); };
+  paint(grays[0]);
+  const rec = new MediaRecorder(c.captureStream(30), {mimeType: 'video/webm;codecs=vp8'});
+  const parts = []; rec.ondataavailable = e => parts.push(e.data);
+  const stopped = new Promise(r => rec.onstop = r);
+  rec.start();
+  const t0 = performance.now();
+  await new Promise(r => (function draw() {
+    const t = (performance.now() - t0) / 1000;
+    if (t > 1) return r();
+    paint(grays[Math.floor(t * 30) % 30]);
+    requestAnimationFrame(draw);
+  })());
+  rec.stop(); await stopped;
+  const bytes = new Uint8Array(await new Blob(parts).arrayBuffer());
+  let s = ''; for (const b of bytes) s += String.fromCharCode(b);
+  return btoa(s);
+})(GRAYS)""".replace("GRAYS", json.dumps(MEDIA_GRAYS))
+
+
+def apng(grays, w, h, fps=30):
+    """A looping animated PNG of flat gray frames."""
+    def chunk(kind, data):
+        body = kind + data
+        return struct.pack(">I", len(data)) + body + struct.pack(">I", zlib.crc32(body))
+    out = b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0))
+    out += chunk(b"acTL", struct.pack(">II", len(grays), 0))
+    seq = 0
+    for i, v in enumerate(grays):
+        out += chunk(b"fcTL", struct.pack(">IIIIIHHBB", seq, w, h, 0, 0, 1, fps, 0, 0))
+        seq += 1
+        data = zlib.compress((b"\x00" + bytes([v, v, v]) * w) * h)
+        if i == 0:
+            out += chunk(b"IDAT", data)
+        else:
+            out += chunk(b"fdAT", struct.pack(">I", seq) + data)
+            seq += 1
+    return out + chunk(b"IEND", b"")
+
+
 class GeometryEndToEnd(unittest.TestCase):
     """The real path: Chrome over the fixture, through the CLI."""
 
@@ -1079,6 +1132,46 @@ class GeometryEndToEnd(unittest.TestCase):
                                   SETTLE_BUDGET=10.0)
         self.assertEqual(code, deckcfg.EXIT_FAIL, out + err)
         self.assertIn("ERROR bright-bg text-contrast  .on-bright", out)
+
+    def test_time_based_media_are_measured_at_their_first_frame(self):
+        # A muted, looping, autoplaying background video and an animated
+        # background image, each cycling gray 200 down to black and back
+        # (MEDIA_GRAYS), under a white caption. Shot at whatever frame is
+        # current, its ratio and verdict change from run to run; frozen at
+        # the first frame, five runs report identical JSON, failing at the
+        # ratio of white on gray 200.
+        browser = geometry.Browser(*geometry.find_browser(deckcfg.load(FIXTURE)), 320, 240)
+        try:
+            webm = base64.b64decode(geometry.Page(browser, 320, 240).evaluate(RECORD_WEBM_JS))
+        finally:
+            browser.close()
+        slides = ''.join(
+            f'<section id="{sid}" data-background-color="#000" {attr}="media/{name}" '
+            f'{extra} style="background: none"><p class="on-media" style="position: absolute; left: 200px; top: 400px; max-width: 900px; '
+            f'font: 700 40px sans-serif; color: #fff">White caption over moving media</p>'
+            f'</section>\n'
+            for sid, attr, name, extra in (
+                ("media-video", "data-background-video", "loop.webm",
+                 "data-background-video-loop data-background-video-muted"),
+                ("media-image", "data-background-image", "loop.png",
+                 'data-background-size="cover"')))
+        deck = self.deck_copy(lambda html: html.replace(
+            '<section id="bright-bg"', slides + '<section id="bright-bg"', 1))
+        pathlib.Path(deck, "media", "loop.webm").write_bytes(webm)
+        pathlib.Path(deck, "media", "loop.png").write_bytes(apng(MEDIA_GRAYS, 64, 36))
+        runs = []
+        for _ in range(5):
+            code, out, err = run_main("--slides", "media-video,media-image", "--json", deck=deck)
+            self.assertEqual(code, deckcfg.EXIT_FAIL, out + err)
+            runs.append(json.loads(out.strip().splitlines()[-1]))
+        self.assertEqual(runs, [runs[0]] * 5)
+        first = wcag((255, 255, 255), (MEDIA_GRAYS[0],) * 3)
+        self.assertEqual({(v["slide"], v["rule"]) for v in runs[0]["violations"]},
+                         {("media-video", "text-contrast"), ("media-image", "text-contrast")})
+        for v in runs[0]["violations"]:
+            with self.subTest(slide=v["slide"]):
+                ratio = float(v["detail"].split(":1")[0])
+                self.assertAlmostEqual(ratio, first, delta=0.15)
 
     def test_a_slide_background_that_never_answers_is_named(self):
         port = self.hanging_socket()
