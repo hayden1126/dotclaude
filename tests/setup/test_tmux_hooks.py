@@ -1,11 +1,10 @@
 """hooks/tmux-state.sh, hooks/stop-ring.sh and hooks/notify.sh: which tmux window a session's
 state lands on, and which sessions ring (stdlib only).
 
-A session is in view when a person sees it: a tmux tab, a plain terminal, or a background
-session attached to a tab. A background session's own environment has no TMUX_PANE (the daemon
-hosts it), so its pane is found by walking its process ancestry to a pane's shell. A `claude -p`
-run inherits the tab's TMUX_PANE but marks itself CLAUDE_CODE_SESSION_ATTENDED=0; it writes no
-tab state and never rings. Stubs for tmux, powershell.exe and wslpath record every call."""
+A session is in view when a person sees it: a tmux tab or a plain terminal. A `claude -p` run
+inherits the tab's TMUX_PANE, and a background session (claude daemon) has none; both carry
+CLAUDE_CODE_SESSION_ATTENDED=0 in a hook's env (probed on 2.1.289), so neither writes tab state
+nor rings. Stubs for tmux, powershell.exe and wslpath record every call."""
 import json
 import os
 import shutil
@@ -28,7 +27,8 @@ exit 0
 
 TAB = {"TMUX": "/tmp/tmux-stub,1,0", "TMUX_PANE": "%7"}
 P_RUN = {**TAB, "CLAUDE_CODE_SESSION_ATTENDED": "0"}
-BG = {"CLAUDE_CODE_SESSION_KIND": "bg"}
+# A background session's hook env, as probed: no TMUX_PANE, no SESSION_KIND.
+BG = {"CLAUDE_CODE_SESSION_ATTENDED": "0", "CLAUDE_JOB_DIR": "/tmp/job"}
 
 
 class Hooks(unittest.TestCase):
@@ -102,57 +102,14 @@ class Hooks(unittest.TestCase):
         self.run_hook("tmux-state.sh", TAB, args=("busy",))
         self.assertEqual(self.window_writes(), ["tmux set-option -w -t %7 @claude_state busy"])
 
-    def test_an_attached_background_session_finds_its_tab_through_its_ancestry(self):
-        # The stub reports this test process as a pane's shell, so the hook's parent matches.
-        self.env["STUB_PANES"] = f"1 %1\n{os.getpid()} %9"
+    def test_a_background_session_writes_no_tab_state(self):
+        # One shared daemon hosts every background session, so even an ancestry that reaches a
+        # pane (as this stub's does) names the daemon's first client, not the tab showing it.
+        self.env["STUB_PANES"] = f"{os.getpid()} %9"
         for state in ("busy", "wait", "idle"):
             self.run_hook("tmux-state.sh", BG, args=(state,))
-        self.assertEqual(self.window_writes(),
-                         [f"tmux set-option -w -t %9 @claude_state {s}"
-                          for s in ("busy", "wait", "idle")])
-
-    def run_under_daemon(self, name, sessions, args=(), payload=None):
-        # Fake the real chain: hook <- `claude daemon run` <- this test process (the pane's
-        # shell), the daemon hosting `sessions` pty hosts plus a spare one.
-        script = "".join(
-            f'(exec -a "claude bg-pty-host --bg-pty-host /d/pty/s{i}.sock 80 24" sleep 30) &\n'
-            for i in range(sessions))
-        script += ('(exec -a "claude bg-pty-host --bg-pty-host /d/spare/x.pty.sock" sleep 30) &\n'
-                   'sleep 0.2\nbash "$HOOK" "$@" <<< "$PAYLOAD"; rc=$?\n'
-                   'pkill -P $$ sleep; exit $rc\n')
-        self.logged_before = len(self.ring_log())
-        env = {**self.env, **BG, "HOOK": os.path.join(HOOKS, name),
-               "PAYLOAD": json.dumps(payload or {}),
-               "STUB_PANES": f"{os.getpid()} %9"}
-        p = subprocess.run(["claude daemon run --origin transient", "-c", script, "x", *args],
-                           executable="/bin/bash", env=env, capture_output=True, text=True,
-                           timeout=10)
-        self.assertEqual(p.returncode, 0, p.stderr)
-
-    def test_a_daemon_hosting_one_session_resolves_to_its_tab(self):
-        self.run_under_daemon("tmux-state.sh", 1, args=("busy",))
-        self.assertEqual(self.window_writes(), ["tmux set-option -w -t %9 @claude_state busy"])
-
-    def test_a_daemon_hosting_two_sessions_is_ambiguous_and_writes_nothing(self):
-        # Which of the two the tab's client shows can't be seen from outside, so neither owns it.
-        self.run_under_daemon("tmux-state.sh", 2, args=("busy",))
         self.assertEqual(self.window_writes(), [])
-        self.run_under_daemon("stop-ring.sh", 2)
-        self.assertTrue(self.no_ring())
-
-    def test_a_p_run_started_from_a_background_session_stays_off_tab(self):
-        # It inherits KIND=bg from its parent session, and ATTENDED=0 must still win.
-        self.env["STUB_PANES"] = f"{os.getpid()} %9"
-        p_from_bg = {**BG, "CLAUDE_CODE_SESSION_ATTENDED": "0"}
-        self.run_hook("tmux-state.sh", p_from_bg, args=("idle",))
-        self.assertEqual(self.window_writes(), [])
-        self.run_hook("stop-ring.sh", p_from_bg)
-        self.assertTrue(self.no_ring())
-
-    def test_an_unattached_background_session_writes_nothing(self):
-        self.env["STUB_PANES"] = "999999 %9"
-        self.run_hook("tmux-state.sh", BG, args=("busy",))
-        self.assertEqual(self.window_writes(), [])
+        self.assertFalse([c for c in self.calls() if c.startswith("tmux")])
 
     def test_a_p_run_inside_a_tab_leaves_the_tab_alone(self):
         for state in ("busy", "idle", "wait"):
@@ -180,22 +137,7 @@ class Hooks(unittest.TestCase):
         self.run_hook("stop-ring.sh", {})
         self.assertTrue(self.rang())
 
-    def test_a_background_session_asks_tmux_once_per_hook(self):
-        # Stop and permission prompts wait on these hooks, each tmux call bounded at 2 s.
-        self.env["STUB_PANES"] = f"{os.getpid()} %9"
-        for name in ("stop-ring.sh", "notify.sh"):
-            with self.subTest(hook=name):
-                open(self.log, "w").close()
-                self.run_hook(name, BG, {"message": "m"})
-                self.assertEqual(sum(c.startswith("tmux list-panes") for c in self.calls()), 1)
-
-    def test_an_attached_background_session_rings(self):
-        self.env["STUB_PANES"] = f"{os.getpid()} %9"
-        self.run_hook("stop-ring.sh", BG)
-        self.assertTrue(self.rang())
-
     def test_off_tab_sessions_and_subagents_stay_quiet(self):
-        self.env["STUB_PANES"] = "999999 %9"
         for session, payload in ((BG, {}), (P_RUN, {}), (TAB, {"agent_id": "a1"}),
                                  (TAB, {"agent_type": "writer"})):
             with self.subTest(session=session, payload=payload):
@@ -207,11 +149,14 @@ class Hooks(unittest.TestCase):
         self.run_hook("stop-ring.sh", P_RUN)
         log = self.ring_log()
         self.assertEqual(len(log), 2, log)
+        self.assertIn("kind=tab", log[0])
         self.assertIn("rang", log[0])
         self.assertIn("pane=%7", log[0])
         self.assertIn("abcdef12", log[0])
         self.assertIn("quiet", log[1])
-        self.assertIn("attended=0", log[1])
+        self.assertIn("kind=print attended=0", log[1])
+        self.run_hook("stop-ring.sh", BG)
+        self.assertIn("quiet session=abcdef12 kind=background", self.ring_log()[-1])
 
     def test_the_ring_log_stays_bounded(self):
         for _ in range(3):
@@ -231,7 +176,6 @@ class Hooks(unittest.TestCase):
         self.assertTrue(self.toasted())
 
     def test_an_off_tab_permission_prompt_toasts_without_a_sound(self):
-        self.env["STUB_PANES"] = "999999 %9"
         self.run_hook("notify.sh", BG, {"message": "Claude needs your permission"})
         self.assertTrue(self.no_ring())
         self.assertTrue(self.toasted())

@@ -4,8 +4,8 @@
 #   busy  <- UserPromptSubmit, PreToolUse, PostToolUse   (a turn started / work is happening)
 #   wait  <- Notification                                (Claude needs your input)
 #   idle  <- Stop                                        (turn finished), main session only
-# session-pane.sh finds the window: a tab's own pane, an attached background session's tab, or
-# none (outside tmux, an unattached background session, a `claude -p` run). A subagent's Stop
+# session-pane.sh finds the window: a tab's own pane, or none (outside tmux, a background
+# session, a `claude -p` run). A subagent's Stop
 # carries agent_id/agent_type and must not clear the window while the main turn still runs.
 # tmux/tmux-claude-status is the backstop for what hooks can't see (a crash, a cold attach).
 # Fail-open: always exits 0.

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Stop hook: ring the notify sound when a session a person sees finishes its turn: a tab, a plain
-# terminal, or a background session attached to a tab (session-pane.sh decides). Quiet for a
-# subagent or background agent (agent_id/agent_type in the event), an unattached background
-# session, and a `claude -p` run such as the delegation canary. Every decision goes to ring.log.
+# Stop hook: ring the notify sound when a session a person sees finishes its turn: a tab or a
+# plain terminal (session-pane.sh decides). Quiet for a subagent or background agent
+# (agent_id/agent_type in the event), a background session, and a `claude -p` run such as the
+# delegation canary. Every decision goes to ring.log.
 #
 # settings.json invokes this as `bash "$HOME/.claude/hooks/stop-ring.sh"`. Event JSON arrives
 # on stdin. Fail-open: any error skips the sound (exit 0), never blocks.
