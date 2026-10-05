@@ -25,7 +25,7 @@ STUB = """#!/usr/bin/env bash
 case "$1" in
   display|display-message)
     [ -z "${STUB_NO_SERVER:-}" ] || exit 1
-    printf '%s %s %s\\n' "$STUB_START" "${STUB_WINDOW:-3}" "$STUB_SOCKET" ;;
+    printf '%s %s %s %s\\n' "$STUB_START" "$STUB_PID" "${STUB_WINDOW:-3}" "$STUB_SOCKET" ;;
 esac
 exit 0
 """
@@ -34,6 +34,7 @@ SID = "0b6f2a1e-1111-4c2d-9e3f-aaaaaaaaaaaa"
 NEW = "7c1d9e2f-2222-4a5b-8c6d-bbbbbbbbbbbb"
 SOCKET = "/tmp/tmux-1000/my socket"   # a space: the path is the rest of the display line
 START = 1791222157
+PID = 4321
 TAB = {"TMUX": "/tmp/tmux-1000/default,1,0", "TMUX_PANE": "%7",
        "CLAUDE_CODE_SESSION_ATTENDED": "1"}
 
@@ -54,7 +55,7 @@ class Registry(unittest.TestCase):
                     if not k.startswith(("CLAUDE", "TMUX"))}
         self.env.update(PATH=stubs + os.pathsep + self.env["PATH"], STUB_LOG=self.log,
                         XDG_STATE_HOME=os.path.join(self.tmp, "state"),
-                        STUB_START=str(START), STUB_SOCKET=SOCKET)
+                        STUB_START=str(START), STUB_PID=str(PID), STUB_SOCKET=SOCKET)
 
     def fire(self, event, session=TAB, **payload):
         body = {"session_id": SID, "hook_event_name": event, "cwd": "/home/u/code/dna",
@@ -91,15 +92,16 @@ class Registry(unittest.TestCase):
         self.start()
         e = self.entries()[SID]
         self.assertEqual({k: e[k] for k in ("session_id", "cwd", "pane", "window_index",
-                                             "socket", "server_start")},
+                                             "socket", "server_start", "server_pid")},
                          {"session_id": SID, "cwd": "/home/u/code/dna", "pane": "%7",
-                          "window_index": 3, "socket": SOCKET, "server_start": START})
+                          "window_index": 3, "socket": SOCKET, "server_start": START,
+                          "server_pid": PID})
         self.assertNotIn("boot_id", e)
         self.assertTrue(e["transcript_path"].endswith(SID + ".jsonl"))
         self.assertIsInstance(e["ts"], (int, float))
         self.assertNotIn("ended_other_at", e)
         self.assertEqual(self.calls(), [["tmux", "display", "-p", "-t", "%7",
-                                         "#{start_time} #{window_index} #{socket_path}"]])
+                                         "#{start_time} #{pid} #{window_index} #{socket_path}"]])
         self.assertEqual(sorted(os.listdir(self.dir)), [SID + ".json"])  # no tmp left behind
 
     def test_every_source_refreshes_the_entry(self):

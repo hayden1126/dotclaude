@@ -5,9 +5,10 @@
 #   SessionStart (startup, resume, clear, compact)  write or refresh the session's entry
 #   SessionEnd                                      delete it, or mark it on reason `other`
 # One file per session: $XDG_STATE_HOME/dotclaude/open-sessions/<session_id>.json, holding
-# {session_id, cwd, transcript_path, pane, window_index, socket, server_start, ts}, written as an
-# fsynced tmp file plus rename. socket and server_start (tmux's #{socket_path} and #{start_time})
-# name the server the tab lives in: claude inherits the pane's TMUX, so `tmux display` reaches it.
+# {session_id, cwd, transcript_path, pane, window_index, socket, server_start, server_pid, ts},
+# written as an fsynced tmp file plus rename. socket, server_start and server_pid (tmux's
+# #{socket_path}, #{start_time} and #{pid}; the pid tells apart two servers started in the same
+# second) name the server the tab lives in: claude inherits the pane's TMUX, so `tmux display` reaches it.
 # Only a tab counts: no TMUX_PANE, a `claude -p` run (ATTENDED=0, even with an inherited
 # TMUX_PANE), a subagent payload (agent_id), an empty cwd or an unreadable server write nothing.
 #
@@ -25,8 +26,8 @@ case "$input" in *'"agent_id"'*) exit 0 ;; esac
 case "$input" in
   *'"SessionStart"'*)
     [ -n "${TMUX_PANE:-}" ] || exit 0
-    # "<start_time> <window_index> <socket_path>": the path last, since it may hold a space.
-    server=$(tmux display -p -t "$TMUX_PANE" '#{start_time} #{window_index} #{socket_path}' 2>/dev/null)
+    # "<start_time> <pid> <window_index> <socket_path>": the path last, since it may hold a space.
+    server=$(tmux display -p -t "$TMUX_PANE" '#{start_time} #{pid} #{window_index} #{socket_path}' 2>/dev/null)
     [ -n "$server" ] || exit 0 ;;
   *'"SessionEnd"'*) server="" ;;
   *) exit 0 ;;
@@ -59,15 +60,16 @@ def write(entry):
 
 event = d.get("hook_event_name")
 if event == "SessionStart":
-    m = re.fullmatch(r"(\d+) (\d*) (.+)", os.environ.get("REG_SERVER", "").rstrip("\n"))
+    m = re.fullmatch(r"(\d+) (\d+) (\d*) (.+)", os.environ.get("REG_SERVER", "").rstrip("\n"))
     cwd = d.get("cwd")
     if not m or not isinstance(cwd, str) or not cwd:
         sys.exit(0)
     write({"session_id": sid, "cwd": cwd,
            "transcript_path": d.get("transcript_path") or "",
            "pane": os.environ.get("REG_PANE", ""),
-           "window_index": int(m.group(2)) if m.group(2) else None,
-           "socket": m.group(3), "server_start": int(m.group(1)),
+           "window_index": int(m.group(3)) if m.group(3) else None,
+           "socket": m.group(4), "server_start": int(m.group(1)),
+           "server_pid": int(m.group(2)),
            "ts": round(time.time(), 3)})
 elif event == "SessionEnd":
     if d.get("reason") == "other":
