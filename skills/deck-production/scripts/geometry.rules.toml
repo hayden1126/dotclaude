@@ -91,11 +91,10 @@ enabled = true
 #
 # The bars default to WCAG AA. A deck may lower them in deck.toml, with a
 # `reason` in the same table, printed on every run. At regulated rigor
-# ([deck] rigor, or derived) the floor holds: a bar below AA, the rule
-# disabled or a warning, a percentile above 5, large_px, large_bold_px or
-# bold_weight below WCAG's, a rules file without it, an exempt selector that
-# takes most of a slide's text, or a declared rigor below the derived one
-# without a rigor_reason are config errors.
+# ([deck] rigor, or derived) this rule and covered-text are frozen as shipped
+# here: a deck may only raise min_small and min_large (and lower covered-text's
+# min_hidden). Any other key in either table, disabling either, a [geometry]
+# slides list or another rules file is a config error.
 percentile = 5
 min_small = 4.5
 min_large = 3.0

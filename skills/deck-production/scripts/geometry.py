@@ -41,12 +41,11 @@ Exit 1 on any error-severity violation; warnings alone exit 0. A browser that
 is missing or dies exits 3; a config the page rejects (a bad selector), or a
 font or image that does not load within the slide's settle budget, exits 2.
 A text-contrast bar lowered below WCAG AA needs a `reason`, printed on every
-run, and is refused at regulated rigor. At regulated rigor the contrast floor
-cannot be loosened any other way either: text-contrast must be on, an error,
-at the shipped percentile or stricter, with WCAG's large-text sizes, its
-exemptions targeted (none may take most of a slide's text), and a declared
-tier below the derived one needs a rigor_reason. Each breach is a config
-error (exit 2) naming its key.
+run. At regulated rigor text-contrast and covered-text are frozen as shipped:
+a deck may only make them stricter (FROZEN), and any other change to them, a
+[geometry] slides key or a rules file other than the shipped one is a config
+error (exit 2) naming its key. A declared tier below the derived one needs a
+rigor_reason.
 """
 from __future__ import annotations
 
@@ -79,16 +78,13 @@ RULES_FILE = HERE / "geometry.rules.toml"
 PROBE_FILE = HERE / "geometry_probe.js"
 SEVERITIES = ("error", "warn")
 HEADINGS = ("h1", "h2", "h3")
-AA = {"min_small": 4.5, "min_large": 3.0}   # WCAG 2.x AA, text-contrast's floor
-# WCAG's large-text line (24 px, or 18.66 px at bold): a deck may raise these
-# (fewer texts count as large, a stricter bar), never lower them at regulated
-# rigor. The percentile may only go down from the shipped one: a higher one
-# judges past more of the glyph.
-LARGE_FLOOR = {"large_px": 24, "large_bold_px": 18.66, "bold_weight": 700}
-PERCENTILE_MAX = 5
-# An exemption that takes more than this share of a slide's measured text,
-# and at least this many items, is not decorative type: it is the slide.
-EXEMPT_SHARE, EXEMPT_MIN = 0.5, 3
+AA = {"min_small": 4.5, "min_large": 3.0}   # WCAG 2.x AA, text-contrast's default
+# At regulated rigor these rules are frozen as shipped. A deck may only make
+# them stricter, through these keys and in this direction: +1 raise only (a
+# higher contrast bar), -1 lower only (covered-text fails at min_hidden or
+# more, so a lower share fails sooner). Anything else is refused.
+FROZEN = {"text-contrast": {"min_small": +1, "min_large": +1},
+          "covered-text": {"min_hidden": -1}}
 EVAL_TIMEOUT = 30.0     # s for one in-page evaluate
 SETTLE_BUDGET = 20.0    # s per slide for fonts, images, backgrounds; below EVAL_TIMEOUT
 HEADLESS_SHELLS = pathlib.Path.home() / ".cache" / "puppeteer" / "chrome-headless-shell"
@@ -593,8 +589,7 @@ def parse_rules(text: str, source: str) -> list[dict]:
 
 
 def apply_overrides(rules: list[dict], deck_geometry: dict, disable: list[str],
-                    source: str, rigor: str = "standard",
-                    rules_source: str = "geometry.rules.toml") -> list[dict]:
+                    source: str) -> list[dict]:
     """deck.toml's [geometry] on top of the rules file. Typos fail loudly: a
     misspelled rule id or param would otherwise be a silently ignored override."""
     by_id = {r["id"]: r for r in rules}
@@ -634,65 +629,42 @@ def apply_overrides(rules: list[dict], deck_geometry: dict, disable: list[str],
     if lowered:
         where = f"{source}: [geometry.text-contrast] " + ", ".join(
             f"{k} = {contrast[k]}" for k in lowered)
-        if rigor == "regulated":
-            raise deckcfg.ConfigError(f"{where}: below WCAG AA "
-                                      f"({', '.join(f'{k} {AA[k]}' for k in lowered)}), "
-                                      "refused at regulated rigor")
         if not deckcfg.meaningful(contrast.get("reason", "")):
             raise deckcfg.ConfigError(f"{where}: below WCAG AA needs a `reason` (some letters "
                                       "or digits) in the same table")
-    if rigor == "regulated":
-        regulated_floor(by_id, deck_geometry.get("text-contrast", {}), disable, source,
-                        rules_source)
     return rules
 
 
-def regulated_floor(by_id: dict, table: dict, disable: list[str], source: str,
-                    rules_source: str) -> None:
-    """At regulated rigor the contrast floor holds whatever the config says:
-    text-contrast on, an error, judged at the shipped percentile or lower,
-    with WCAG's large-text line. Each breach names the key that made it, in
-    deck.toml or in the rules file."""
-    why = "refused at regulated rigor (the contrast floor is not lowered there)"
-    rule = by_id.get("text-contrast")
-    if rule is None:
-        raise deckcfg.ConfigError(f"{rules_source}: has no text-contrast rule; {why}")
-    if "text-contrast" in disable:
-        raise deckcfg.ConfigError(f"{source}: [geometry] disable names text-contrast; {why}")
-
-    def where(key):
-        return (f"{source}: [geometry.text-contrast] {key}" if key in table
-                else f"{rules_source}: text-contrast {key}")
-    if not rule["enabled"]:
-        raise deckcfg.ConfigError(f"{where('enabled')} = false; {why}")
-    if rule["severity"] != "error":
-        raise deckcfg.ConfigError(f"{where('severity')} = {rule['severity']!r}; {why}")
-    params = rule["params"]
-    pct = params.get("percentile")
-    if not isinstance(pct, int) or pct > PERCENTILE_MAX:
-        raise deckcfg.ConfigError(f"{where('percentile')} = {pct!r}: above {PERCENTILE_MAX} "
-                                  f"judges past more of the glyph; {why}")
-    for key, floor in LARGE_FLOOR.items():
-        value = params.get(key)
-        if not isinstance(value, (int, float)) or value < floor:
-            raise deckcfg.ConfigError(f"{where(key)} = {value!r}: below WCAG's {floor}; {why}")
-
-
-def broad_exemptions(probe: dict, rules: list[dict], slide: str, source: str) -> None:
-    """At regulated rigor, a text-contrast exemption must target decorative
-    type. One that takes more than EXEMPT_SHARE of a slide's measured text
-    (and at least EXEMPT_MIN items) is exempting the slide: a config error
-    naming the selector, found where it bites, at run time."""
-    rule = next((r for r in rules if r["id"] == "text-contrast"), None)
-    if rule is None or not rule["enabled"]:
-        return
-    total = len(probe["texts"])
-    for sel, hits in probe.get("exemptHits", {}).get("text-contrast", {}).items():
-        if hits >= EXEMPT_MIN and hits > EXEMPT_SHARE * total:
-            raise deckcfg.ConfigError(
-                f"{source}: [geometry.text-contrast] exempt {sel!r} takes {hits} of the "
-                f"{total} text items on slide {slide} out of the contrast floor; at regulated "
-                "rigor an exemption must target decorative type, not the slide")
+def frozen_at_regulated(rules: list[dict], deck_geometry: dict, disable: list[str],
+                        source: str, rules_path: pathlib.Path) -> None:
+    """At regulated rigor the contrast and coverage rules hold as shipped: the
+    deck may only make them stricter (FROZEN). Checked against the shipped
+    rules before any override; each refusal names the key that asked."""
+    why = "frozen at regulated rigor"
+    if rules_path.resolve() != RULES_FILE.resolve():
+        raise deckcfg.ConfigError(f"{source}: [geometry] rules = {str(rules_path)!r}: a rules "
+                                  f"file other than the shipped one; {why}")
+    if "slides" in deck_geometry:
+        raise deckcfg.ConfigError(f"{source}: [geometry] slides: a persisted slide list leaves "
+                                  f"the rest unjudged; {why} (pass --slides for an ad-hoc run)")
+    for rid in FROZEN:
+        if rid in disable:
+            raise deckcfg.ConfigError(f"{source}: [geometry] disable names {rid}; {why}")
+    shipped = {r["id"]: r["params"] for r in rules}
+    for rid, stricter in FROZEN.items():
+        table = deck_geometry.get(rid)
+        for key, value in (table.items() if isinstance(table, dict) else ()):
+            where = f"{source}: [geometry.{rid}] {key}"
+            if key not in stricter:
+                allowed = ", ".join(f"{k} ({'raise' if d > 0 else 'lower'} only)"
+                                    for k, d in stricter.items())
+                raise deckcfg.ConfigError(f"{where}: {why}; a deck may only tighten {allowed}")
+            if not isinstance(value, (int, float)) or isinstance(value, bool):
+                raise deckcfg.ConfigError(f"{where} must be a number, got {type(value).__name__}")
+            base = shipped[rid][key]
+            if (value - base) * stricter[key] < 0:
+                raise deckcfg.ConfigError(f"{where} = {value}: looser than the shipped {base}; "
+                                          f"{why}")
 
 
 def lowered_contrast(rules: list[dict]) -> list[str]:
@@ -722,6 +694,7 @@ def load_rules(cfg: deckcfg.DeckConfig) -> list[dict]:
         raise deckcfg.ConfigError(f"geometry.rules: {path} does not exist")
     rules = parse_rules(path.read_text(encoding="utf-8"), str(path))
     deck_geometry = cfg.tree.get("geometry", {})
+    disable = cfg.get("geometry.disable")
     lowered = cfg.unexplained_lowering()
     if lowered and lowered[1] == "regulated":
         # Only the regulated line changes what this gate holds, and the
@@ -731,8 +704,9 @@ def load_rules(cfg: deckcfg.DeckConfig) -> list[dict]:
             f"{cfg.source}: [deck] rigor = {lowered[0]!r} is below the {lowered[1]!r} the "
             "deck's audience, issuer_listed or forward_targets derive; lowering it needs a "
             "rigor_reason")
-    return apply_overrides(rules, deck_geometry, cfg.get("geometry.disable"), cfg.source,
-                           cfg.derive_rigor(), str(path))
+    if cfg.derive_rigor() == "regulated":
+        frozen_at_regulated(rules, deck_geometry, disable, cfg.source, path)
+    return apply_overrides(rules, deck_geometry, disable, cfg.source)
 
 
 # ================================================================ browser
@@ -1331,11 +1305,6 @@ def main() -> int:
         deckcfg.bail(f"the probe failed in the page: {exc}")
     except SlowResource as exc:
         deckcfg.bail(str(exc))
-
-    if cfg.derive_rigor() == "regulated":
-        for label in order:
-            for state in probes[label]["states"]:
-                broad_exemptions(state["probe"], rules, label, cfg.source)
 
     violations: list[Violation] = []
     per_slide = {}

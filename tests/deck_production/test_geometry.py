@@ -105,6 +105,11 @@ def shipped_rules():
     return geometry.parse_rules(pathlib.Path(geometry.RULES_FILE).read_text(), "test")
 
 
+def toml_value(value):
+    """A shipped param back as TOML, for restating it in a deck.toml."""
+    return json.dumps(value) if not isinstance(value, bool) else str(value).lower()
+
+
 def violations(probe, rules=None):
     return geometry.evaluate(probe.data, rules or shipped_rules(), "s1")
 
@@ -596,39 +601,69 @@ class SeverityAndConfig(unittest.TestCase):
             self.deck(f'[deck]\nrigor = "standard"\nrigor_reason = "{zwsp} "\n'
                       'audience = "external-investor"\n')
 
-    def test_the_regulated_floor_cannot_be_loosened(self):
+    def test_contrast_and_coverage_are_frozen_at_regulated_rigor(self):
+        # Every key the shipped file gives either rule, plus severity and
+        # enabled, set to its own shipped value: a deck that merely restates
+        # a frozen key is refused, so no new key can open a bypass. So are
+        # disabling either rule, a persisted slide list and another rules
+        # file. Each names its key; below regulated all of them load.
         reg = '[deck]\nrigor = "regulated"\n'
-        bad = {
-            "severity warn": ("[geometry.text-contrast]\nseverity = \"warn\"\n", "severity"),
-            "enabled false": ("[geometry.text-contrast]\nenabled = false\n", "enabled"),
-            "disabled": ('[geometry]\ndisable = ["text-contrast"]\n', "disable"),
-            "percentile up": ("[geometry.text-contrast]\npercentile = 10\n", "percentile"),
-            "large_px down": ("[geometry.text-contrast]\nlarge_px = 18\n", "large_px"),
-            "large_bold_px down": ("[geometry.text-contrast]\nlarge_bold_px = 14\n",
-                                   "large_bold_px"),
-            "bold_weight down": ("[geometry.text-contrast]\nbold_weight = 400\n",
-                                 "bold_weight"),
-        }
-        for name, (toml, key) in bad.items():
-            with self.subTest(case=name):
-                with self.assertRaisesRegex(deckcfg.ConfigError, f"{key}.*regulated"):
-                    self.deck(reg + toml)
-                self.deck('[deck]\nrigor = "standard"\n' + toml)    # allowed below it
-        # Stricter is always allowed.
-        self.deck(reg + "[geometry.text-contrast]\npercentile = 2\nlarge_px = 30\n")
-
-    def test_a_regulated_deck_needs_text_contrast_in_its_rules_file(self):
+        shipped = {r["id"]: r for r in shipped_rules()}
+        cases = {}
+        for rid in geometry.FROZEN:
+            rule = shipped[rid]
+            for key, value in {"severity": rule["severity"], "enabled": rule["enabled"],
+                               **rule["params"]}.items():
+                if key in geometry.FROZEN[rid]:
+                    continue
+                cases[f"{rid} {key}"] = (f"[geometry.{rid}]\n{key} = {toml_value(value)}\n",
+                                         rf"\[geometry\.{rid}\] {key}")
+            cases[f"disable {rid}"] = (f'[geometry]\ndisable = ["{rid}"]\n',
+                                       f"disable names {rid}")
+        self.assertIn("text-contrast exempt", cases)
+        self.assertIn("covered-text exempt", cases)
+        self.assertIn("text-contrast percentile", cases)
+        cases["slides"] = ('[geometry]\nslides = ["s1"]\n', r"\[geometry\] slides")
         tmp = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, tmp)
-        rules = pathlib.Path(tmp, "rules.toml")
-        rules.write_text('[[rule]]\nid = "clearance"\nseverity = "warn"\nenabled = true\n'
-                         'min_gap = 8\n')
-        with self.assertRaisesRegex(deckcfg.ConfigError, "rules.toml: has no text-contrast"):
-            self.deck(f'[deck]\nrigor = "regulated"\n[geometry]\nrules = "{rules}"\n')
-        rules.write_text(pathlib.Path(geometry.RULES_FILE).read_text().replace(
-            "large_px = 24", "large_px = 12"))
-        with self.assertRaisesRegex(deckcfg.ConfigError, "rules.toml: text-contrast large_px"):
-            self.deck(f'[deck]\nrigor = "regulated"\n[geometry]\nrules = "{rules}"\n')
+        copy = pathlib.Path(tmp, "rules.toml")
+        copy.write_text(pathlib.Path(geometry.RULES_FILE).read_text())
+        cases["rules file"] = (f'[geometry]\nrules = "{copy}"\n', r"\[geometry\] rules")
+        for name, (toml, where) in cases.items():
+            with self.subTest(case=name):
+                with self.assertRaisesRegex(deckcfg.ConfigError,
+                                            where + ".*frozen at regulated rigor"):
+                    self.deck(reg + toml)
+                self.deck('[deck]\nrigor = "standard"\n' + toml)    # allowed below it
+
+    def test_frozen_rules_may_only_get_stricter(self):
+        reg = '[deck]\nrigor = "regulated"\n'
+        for toml in ("[geometry.text-contrast]\nmin_small = 3.0\n",
+                     "[geometry.text-contrast]\nmin_large = 2.9\n",
+                     "[geometry.covered-text]\nmin_hidden = 0.05\n"):
+            with self.subTest(looser=toml):
+                with self.assertRaisesRegex(deckcfg.ConfigError,
+                                            "looser than the shipped.*frozen at regulated"):
+                    self.deck(reg + toml)
+        with self.assertRaisesRegex(deckcfg.ConfigError, "min_small must be a number"):
+            self.deck(reg + '[geometry.text-contrast]\nmin_small = "7"\n')
+        rules = self.deck(reg + "[geometry.text-contrast]\nmin_small = 7.0\nmin_large = 4.5\n"
+                          "[geometry.covered-text]\nmin_hidden = 0.01\n"
+                          '[geometry]\ndisable = ["clearance"]\n'
+                          "[geometry.safe-area]\nmargin = 64\n")
+        by_id = {r["id"]: r for r in rules}
+        self.assertEqual(by_id["text-contrast"]["params"]["min_small"], 7.0)
+        self.assertEqual(by_id["covered-text"]["params"]["min_hidden"], 0.01)
+        self.assertFalse(by_id["clearance"]["enabled"])
+        # The shipped rules file named explicitly is the shipped one.
+        self.deck(reg + f'[geometry]\nrules = "{geometry.RULES_FILE}"\n')
+        # --slides on the command line is an ad-hoc run, not the deck's config.
+        tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, tmp)
+        pathlib.Path(tmp, "deck.toml").write_text(reg)
+        cfg = deckcfg.load(tmp)
+        cfg.set("geometry.slides", ["s1"])
+        geometry.load_rules(cfg)
 
     def test_declaring_a_tier_below_the_derived_one_needs_a_reason(self):
         facts = 'audience = "external-investor"\n'
@@ -639,17 +674,6 @@ class SeverityAndConfig(unittest.TestCase):
                           'reason = "draft palette"\n')
         self.assertEqual(geometry.lowered_contrast(rules), ["min_small"])
         self.deck('[deck]\nrigor = "regulated"\n' + facts)          # lowers nothing
-
-    def test_an_exemption_that_takes_the_slide_is_refused_at_regulated_rigor(self):
-        rules = shipped_rules()
-        p = Probe()
-        for i in range(4):
-            p.label(box(200, 100 + 60 * i, 300, 30))
-        p.data["exemptHits"] = {"text-contrast": {"[data-decor]": 1, "section *": 4}}
-        with self.assertRaisesRegex(deckcfg.ConfigError, "exempt 'section \\*' takes 4 of the 4"):
-            geometry.broad_exemptions(p.data, rules, "s1", "deck.toml")
-        p.data["exemptHits"] = {"text-contrast": {"[data-decor]": 1}}
-        geometry.broad_exemptions(p.data, rules, "s1", "deck.toml")
 
     def test_a_rules_file_cannot_name_a_rule_without_an_evaluator(self):
         with self.assertRaises(deckcfg.ConfigError):

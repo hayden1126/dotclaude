@@ -16,8 +16,8 @@
 //   exempt:  {ruleId: [css selectors]},   // a text item inside a match is
 // }                                       // tagged with that rule id
 //
-// Returns {canvas, scale, origin, margin, elements, texts, markers, clipping,
-// exemptHits}. `elements` is a table indexed by node id; everything else
+// Returns {canvas, scale, origin, margin, elements, texts, markers, clipping}.
+// `elements` is a table indexed by node id; everything else
 // points into it, so geometry.py can walk ancestors without the DOM. Each
 // element also carries a `uid`, stable across calls in one page: the same
 // element probed at two fragment steps has the same uid, and two elements
@@ -292,18 +292,10 @@ function geometryProbe(opts) {
     });
   }
 
-  // How many measured text items each exempt selector takes out of a rule,
-  // so geometry.py can tell a targeted exemption from one that empties it.
-  const exemptHits = {};
-  for (const [rule, sels] of Object.entries(opts.exempt || {})) {
-    exemptHits[rule] = {};
-    for (const sel of sels) exemptHits[rule][sel] = textEls.filter(el => !!el.closest(sel)).length;
-  }
-
   return {
     canvas: { w: config.width, h: config.height }, scale,
     origin: { x: oR.left, y: oR.top, w: oR.width, h: oR.height },
-    margin, elements, texts, markers, clipping, exemptHits,
+    margin, elements, texts, markers, clipping,
   };
 }
 
