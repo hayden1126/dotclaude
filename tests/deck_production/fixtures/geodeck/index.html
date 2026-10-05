@@ -123,6 +123,12 @@
     #flat .navy { left: 960px; width: 960px; background: rgb(28, 31, 68); }
     #flat .f { position: absolute; margin: 0; line-height: 1.3; white-space: nowrap; }
 
+    /* stack: an r-stack whose picture arrives over its caption at the next step;
+       judged where it is most visible and least hidden, the caption is clean */
+    #stack .r-stack { position: absolute; left: 200px; top: 300px; width: 900px; height: 400px; }
+    #stack .cap { margin: 0; font: 700 40px sans-serif; color: #ffffff; }
+    #stack img { width: 900px; height: 400px; }
+
     /* bright-bg: a reveal slide background, loaded only when the slide is reached,
        over a navy background color: measured before it loads, the type passes */
     .reveal .slides section#bright-bg { background: none; }
@@ -258,6 +264,13 @@
         <p class="f" style="left: 1100px; top: 470px; font: 700 28px sans-serif; color: rgba(248, 246, 243, 0.55)">Flat light 0.55 at 28 px bold</p>
         <p class="f" style="left: 96px; right: 96px; top: 640px; font: 400 15px sans-serif; color: rgba(76, 78, 105, 0.75)">Flat spanning box, glyphs on cream</p>
         <p class="f" style="left: 140px; top: 720px; font: 200 14px &quot;Ubuntu Sans&quot;, sans-serif; color: #767676">Flat hairline in mid gray</p>
+      </section>
+
+      <section id="stack">
+        <div class="r-stack">
+          <p class="cap fragment">A caption the next picture covers</p>
+          <img class="fragment" src="media/bright.png" alt="">
+        </div>
       </section>
 
       <section id="bright-bg" data-background-color="#0b1320" data-background-image="media/bright.png"

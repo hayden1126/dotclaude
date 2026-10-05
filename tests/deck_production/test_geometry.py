@@ -899,7 +899,7 @@ class GeometryEndToEnd(unittest.TestCase):
         p, _ = self.run_gate("--slides", "nope")
         self.assertEqual(p.returncode, 2, p.stdout + p.stderr)
         self.assertIn("have: bad, good, contrast, centered, anchors, svg, veil, thin, covered, "
-                      "steps, rest, flow, flat, bright-bg", p.stderr)
+                      "steps, rest, flow, flat, stack, bright-bg", p.stderr)
 
     def test_a_centered_caption_is_judged_by_its_room_not_an_edge(self):
         # Both captions sit at translateX(-50%) with no max-width. The west one
@@ -972,6 +972,14 @@ class GeometryEndToEnd(unittest.TestCase):
         self.assertEqual([(v["rule"], v["subject"], v["step"]) for v in out["violations"]],
                          [("text-overlap", ".flash x .joins", "3/4")])
         self.assertIn("ERROR steps step 3/4 text-overlap", p.stdout)
+
+    def test_a_caption_a_later_fragment_covers_is_judged_where_it_shows(self):
+        # An r-stack: the caption arrives, then a picture over it. At full
+        # opacity at both steps, it is judged at the one where it is least
+        # hidden, not at the final state, where the picture covers it.
+        p, out = self.run_gate("--slides", "stack")
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertIn("geometry: 0 errors, 0 warnings on 1 slides", p.stdout)
 
     def test_an_entrance_animation_is_measured_at_rest(self):
         # It rises from opacity 0 and 40 px down onto the base caption; at

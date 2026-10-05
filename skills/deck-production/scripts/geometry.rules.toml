@@ -14,7 +14,8 @@
 #
 # A slide with fragments is measured at every fragment step. The geometry
 # rules run on each step; text-contrast and covered-text judge each text at
-# the step where it is most visible.
+# the step where it is most visible, then least hidden (a caption a later
+# fragment covers is judged where it showed).
 #
 # "Ink" below is a text line's rect trimmed to the em box: a Range rect is the
 # font's content area, taller than the glyphs, so stacked lines whose content

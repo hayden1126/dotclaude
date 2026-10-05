@@ -81,7 +81,8 @@ The swatches measure what group opacity, masks and overlays above the text do to
 by pixel; the isolated shapes find each glyph's core pixels, so anti-aliasing never enters. The
 text's declared color, carried through that map, is compared with the backdrop under each core
 pixel, and the ratio at a low percentile must reach the bar. Each text is judged at the step
-where it is most visible, so a fragment dimmed by design is judged at full strength.
+where it is most visible, then least hidden, so a fragment dimmed by design is judged at full
+strength and a caption a later fragment covers (an r-stack) where it showed.
 
 **Rules: `scripts/geometry.rules.toml`**, declarative, evaluated in Python. Each `[[rule]]` has
 `id`, `severity` (`error` or `warn`), `enabled`, its own params, and `exempt` (CSS selectors whose

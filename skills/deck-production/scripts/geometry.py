@@ -33,8 +33,9 @@ A slide with fragments is probed at every fragment step (before the first,
 then each index in turn), skipping steps that change nothing measured. The
 geometry rules run on each step, so a fragment that collides only while it is
 current is caught; contrast and coverage judge each text at the step where it
-is most visible, so a fragment dimmed by design (semi-fade-out) is judged at
-full strength. A finding outside the final state names its step (`s07 step
+is most visible, then least hidden, so a fragment dimmed by design
+(semi-fade-out) is judged at full strength and a caption a later fragment
+covers (an r-stack) where it showed. A finding outside the final state names its step (`s07 step
 2/4`, steps counted from 1 = before any fragment).
 
 Exit 1 on any error-severity violation; warnings alone exit 0. A browser that
@@ -1171,11 +1172,14 @@ def probe_steps(page: Page, entry: dict, label: str, opts: dict, shots: bool) ->
     """Probe a slide at each fragment step. Returns {"total": steps, "last":
     highest fragment index, "states": [{"steps": [f, ...], "probe": ...}]},
     one state per distinct measured step, in step order. With `shots`, each
-    text item's contrast is measured at the step where it is most visible
-    (its group opacity, read from computed styles; ties go to the final
-    state, then the latest step), so a fragment dimmed by design is judged at
-    full strength and a step is screenshotted only if some item is judged
-    there."""
+    text item's contrast and coverage are judged at one step: where it is
+    most visible (its group opacity, read from computed styles), then least
+    hidden under what is painted above it, then the final state, then the
+    latest step. So a fragment dimmed by design is judged at full strength,
+    and a caption a later fragment covers (a picture in an r-stack) where it
+    showed. The hidden share is measured, so an item hidden at its first
+    candidate step is measured at the next, until one hides none of it; a
+    step is screenshotted only if some item is measured there."""
     last = goto(page, entry, label, -1)["last"]
     states, seen, at = [], {}, -1
     for f in range(-1, last + 1):
@@ -1190,23 +1194,43 @@ def probe_steps(page: Page, entry: dict, label: str, opts: dict, shots: bool) ->
         seen[key] = {"steps": [f], "probe": probe}
         states.append(seen[key])
     if shots:
-        best: dict[int, tuple] = {}
+        # Per item, its candidate steps, one by one: a state merges steps
+        # that differ only in what is painted (a picture arriving over a
+        # caption), so coverage is measured per step, not per state. The
+        # most visible first, then the final step, then the latest.
+        found: dict[int, list[tuple]] = defaultdict(list)
         for si, state in enumerate(states):
-            final = last in state["steps"]
             for ti, t in enumerate(state["probe"]["texts"]):
                 uid = state["probe"]["elements"][t["node"]]["uid"]
-                score = (t.get("shown", 1), final, max(state["steps"]))
-                if uid not in best or score > best[uid][0]:
-                    best[uid] = (score, si, ti)
-        wanted = defaultdict(set)
-        for _score, si, ti in best.values():
-            wanted[si].add(ti)
-        for si in sorted(wanted, key=lambda i: at not in states[i]["steps"]):
-            state = states[si]
-            if at not in state["steps"]:
-                at = state["steps"][0]
-                goto(page, entry, label, at)
-            measure_contrast(page, state["probe"], wanted[si])
+                found[uid] += [(t.get("shown", 1), f == last, f, si, ti) for f in state["steps"]]
+        queue = {uid: [(si, f, ti) for shown, _final, f, si, ti in sorted(c, reverse=True)
+                       if shown == max(x[0] for x in c)] for uid, c in found.items()}
+        chosen: dict[int, tuple] = {}            # uid -> (hidden, si, ti, contrast)
+        pending = {uid: q.pop(0) for uid, q in queue.items()}
+        while pending:
+            wanted: dict[int, tuple[int, set]] = {}
+            for si, f, ti in pending.values():
+                wanted.setdefault(f, (si, set()))[1].add(ti)
+            got = {}
+            for f in sorted(wanted, key=lambda step: step != at):
+                if f != at:
+                    goto(page, entry, label, f)
+                    at = f
+                si, tis = wanted[f]
+                measure_contrast(page, states[si]["probe"], tis)
+                for ti in tis:
+                    got[f, ti] = states[si]["probe"]["texts"][ti].pop("contrast", None)
+            following = {}
+            for uid, (si, f, ti) in pending.items():
+                measured = got[f, ti]
+                hidden = measured["hidden"] if measured else 0.0
+                if uid not in chosen or hidden < chosen[uid][0]:
+                    chosen[uid] = (hidden, si, ti, measured)
+                if chosen[uid][0] > 0 and queue[uid]:
+                    following[uid] = queue[uid].pop(0)
+            pending = following
+        for _hidden, si, ti, measured in chosen.values():
+            states[si]["probe"]["texts"][ti]["contrast"] = measured
     return {"total": last + 2, "last": last, "states": states}
 
 
