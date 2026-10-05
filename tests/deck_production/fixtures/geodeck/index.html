@@ -75,6 +75,41 @@
     #veil .under-veil { top: 600px; }
     #veil .veil-overlay { position: absolute; left: 150px; top: 580px; width: 1000px; height: 80px;
                           background: rgba(0, 0, 0, 0.6); }
+    /* a veil over the left half of a caption only: that half is judged */
+    #veil .half-veil { top: 750px; }
+    #veil .half-overlay { position: absolute; left: 150px; top: 730px; width: 500px; height: 80px;
+                          background: rgba(0, 0, 0, 0.6); }
+
+    /* thin: a hairline weight at a color that passes (4.54:1) and a color
+       just under AA (4.4955:1) that a rounded comparison would pass */
+    .reveal .slides section#thin { background: #ffffff; }
+    #thin .t { position: absolute; left: 200px; width: 1200px; margin: 0; line-height: 1.4; }
+    #thin .hairline { top: 300px; color: #767676; font: 200 14px "Ubuntu Sans", sans-serif; }
+    #thin .edge-ratio { top: 420px; color: #83746a; font-size: 22px; }
+
+    /* covered: an image stacked above the middle of a caption */
+    #covered .t { position: absolute; left: 200px; top: 400px; width: 1200px; margin: 0;
+                  font-size: 22px; color: #ffffff; }
+    #covered .cover { position: absolute; left: 400px; top: 380px; width: 300px; height: 80px;
+                      z-index: 2; }
+
+    /* steps: a semi-fade-out fragment, dimmed by design after its step, and
+       a current-visible fragment that collides only while it is current */
+    #steps .t { position: absolute; width: 900px; margin: 0; font-size: 22px; line-height: 1.3; }
+    #steps .dim { left: 200px; top: 200px; color: #969696; }
+    #steps .flash { left: 200px; top: 500px; }
+    #steps .joins { left: 210px; top: 506px; }
+    #steps .later { left: 200px; top: 800px; }
+
+    /* rest: an entrance animation that ends on top of another caption */
+    @keyframes rise { to { opacity: 1; transform: none; } }
+    #rest .t { position: absolute; left: 200px; width: 900px; margin: 0; font-size: 22px; }
+    #rest .base { top: 500px; }
+    #rest .rise { top: 506px; left: 210px; opacity: 0; transform: translateY(40px);
+                  animation: rise .6s ease-out forwards; }
+
+    /* flow: lines one flow stacked at line-height .5, half an em deep */
+    #flow .tight { margin-top: 40px; font-size: 40px; line-height: .5; }
 
     /* bright-bg: a reveal slide background, loaded only when the slide is reached */
     .reveal .slides section#bright-bg { background: none; }
@@ -163,6 +198,34 @@
         <div class="group55"><p class="t op55">White type in a group at 55 percent opacity</p></div>
         <p class="under-veil t">White type under a dark overlay at 60 percent</p>
         <div class="veil-overlay"></div>
+        <p class="half-veil t">White type with a dark overlay on its left half only</p>
+        <div class="half-overlay"></div>
+      </section>
+
+      <section id="thin">
+        <p class="t hairline">A hairline caption in mid gray on white, set small and light</p>
+        <p class="t edge-ratio">A caption a hair under the AA bar on white</p>
+      </section>
+
+      <section id="covered">
+        <p class="t">White type with a picture stacked over the middle of it</p>
+        <img class="cover" src="media/bright.png" alt="">
+      </section>
+
+      <section id="steps">
+        <p class="t dim fragment semi-fade-out" data-fragment-index="0">Gray type dimmed to half once its step has passed</p>
+        <p class="t flash fragment current-visible" data-fragment-index="1">A note shown only while it is current</p>
+        <p class="t joins fragment" data-fragment-index="1">A caption arriving at the same step</p>
+        <p class="t later fragment" data-fragment-index="2">A last caption well clear of the rest</p>
+      </section>
+
+      <section id="rest">
+        <p class="t base">A caption that is on the slide from the start</p>
+        <p class="t rise">A caption that rises into place</p>
+      </section>
+
+      <section id="flow">
+        <div class="wrap"><div class="tight"><span class="t1">Stacked tight</span><br><span class="t2">Into each other</span></div></div>
       </section>
 
       <section id="bright-bg" data-background-image="media/bright.png" data-background-size="cover">

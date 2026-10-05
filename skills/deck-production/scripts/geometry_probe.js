@@ -15,9 +15,19 @@
 //   exempt:  {ruleId: [css selectors]},   // a text item inside a match is
 // }                                       // tagged with that rule id
 //
-// Returns {canvas, scale, origin, margin, elements, texts, markers, clipping}.
-// `elements` is a table indexed by node id; everything else points into it,
-// so geometry.py can walk ancestors without the DOM.
+// Returns {canvas, scale, origin, margin, elements, texts, markers, clipping,
+// exemptHits}. `elements` is a table indexed by node id; everything else
+// points into it, so geometry.py can walk ancestors without the DOM. Each
+// element also carries a `uid`, stable across calls in one page: the same
+// element probed at two fragment steps has the same uid, and two elements
+// with identical selectors never share one.
+
+var geometryUids = new WeakMap();
+var geometryNextUid = 0;
+var geometryUid = el => {
+  if (!geometryUids.has(el)) geometryUids.set(el, geometryNextUid++);
+  return geometryUids.get(el);
+};
 
 function geometryProbe(opts) {
   const scale = Reveal.getScale();
@@ -75,8 +85,10 @@ function geometryProbe(opts) {
 
   // Is this box moved off the place its formatting context gave it, or does
   // its content spill out of it? A float, a transform (or translate, rotate,
-  // scale), a relative offset, a negative margin, or content overflowing a
-  // fixed size with overflow visible. Two text items whose paths up to their
+  // scale), a relative offset, a sticky box stuck away from its place, a
+  // length or percentage vertical-align (an inline raised or lowered off its
+  // line), a negative margin, or content overflowing a fixed size with
+  // overflow visible. Two text items whose paths up to their
   // common ancestor hold none of these are lines and boxes the layout engine
   // stacked: they cannot collide, however tight the leading (geometry.py's
   // Slide.one_flow). SVG content is placed by coordinates and never counts.
@@ -87,6 +99,17 @@ function geometryProbe(opts) {
     if (cs.position === 'relative' &&
         ['top', 'right', 'bottom', 'left'].some(k => cs[k] !== 'auto' && parseFloat(cs[k]) !== 0)) return true;
     if (['marginTop', 'marginRight', 'marginBottom', 'marginLeft'].some(k => parseFloat(cs[k]) < 0)) return true;
+    if (/^-?[\d.]+(px|%)$/.test(cs.verticalAlign) && parseFloat(cs.verticalAlign) !== 0) return true;
+    if (cs.position === 'sticky') {
+      // Stuck or not: compare with where the box sits unstuck. Sticky keeps
+      // its place in flow, so switching it to static moves nothing else.
+      const before = el.getBoundingClientRect();
+      const style = el.getAttribute('style');
+      el.style.setProperty('position', 'static', 'important');
+      const after = el.getBoundingClientRect();
+      if (style === null) el.removeAttribute('style'); else el.setAttribute('style', style);
+      if (Math.abs(before.left - after.left) > 0.5 || Math.abs(before.top - after.top) > 0.5) return true;
+    }
     if (cs.display === 'inline' || cs.display === 'contents') return false;   // no box of its own
     return (cs.overflowX === 'visible' && el.scrollWidth > el.clientWidth + 1) ||
            (cs.overflowY === 'visible' && el.scrollHeight > el.clientHeight + 1);
@@ -104,7 +127,7 @@ function geometryProbe(opts) {
     const id = elements.length;
     ids.set(el, id);
     elements.push({
-      parent, token: token(el), tag: el.localName, position: cs.position, display: cs.display,
+      parent, uid: geometryUid(el), token: token(el), tag: el.localName, position: cs.position, display: cs.display,
       displaced: displaced(el, cs),
       fontSize: parseFloat(cs.fontSize), fontWeight: parseInt(cs.fontWeight, 10) || 400,
       paints: paints(el), box: norm(el.getBoundingClientRect()),
@@ -127,6 +150,16 @@ function geometryProbe(opts) {
   const exemptFor = el => Object.entries(opts.exempt || {})
     .filter(([, sels]) => sels.some(sel => !!el.closest(sel)))
     .map(([rule]) => rule);
+
+  // How much of the text reaches the reader through group opacity: the
+  // product of every opacity from the element up to the section. Read from
+  // computed styles, not inferred from pixels, so a fragment step can be
+  // chosen where the item is most visible.
+  const shown = el => {
+    let v = 1;
+    for (let n = el; n && n !== sec.parentElement; n = n.parentElement) v *= parseFloat(getComputedStyle(n).opacity);
+    return r2(v);
+  };
 
   // The color glyphs are painted with, as sRGB [r, g, b, a], via a 1x1 canvas
   // so any color syntax (oklch, lab, color-mix) resolves the browser's way.
@@ -175,7 +208,7 @@ function geometryProbe(opts) {
     if (!lines.length) continue;
     const text = el.textContent.trim().replace(/\s+/g, ' ');
     texts.push({ node: register(el), lines, exempt: exemptFor(el), color: textColor(el),
-                 text: text.slice(0, 60), chars: text.length });
+                 shown: shown(el), text: text.slice(0, 60), chars: text.length });
     textEls.push(el);
   }
 
@@ -250,37 +283,61 @@ function geometryProbe(opts) {
     });
   }
 
+  // How many measured text items each exempt selector takes out of a rule,
+  // so geometry.py can tell a targeted exemption from one that empties it.
+  const exemptHits = {};
+  for (const [rule, sels] of Object.entries(opts.exempt || {})) {
+    exemptHits[rule] = {};
+    for (const sel of sels) exemptHits[rule][sel] = textEls.filter(el => !!el.closest(sel)).length;
+  }
+
   return {
     canvas: { w: config.width, h: config.height }, scale,
     origin: { x: oR.left, y: oR.top, w: oR.width, h: oR.height },
-    margin, elements, texts, markers, clipping,
+    margin, elements, texts, markers, clipping, exemptHits,
   };
 }
 
-// Contrast of each text against its rendered backdrop, from three PNGs of
-// the canvas: glyph fill forced black, forced white, and invisible. Only the
-// fill is forced: text-shadows, SVG halos, group opacity and anything painted
-// above the text stay as rendered in all three, because the reader sees them.
-// Per pixel, with B, W and H those shots:
-//   - W - B is how much of the glyph reaches the screen (e, 0..1): its
-//     coverage times every group opacity and overlay between it and the
-//     reader. The item's strongest e is taken as full coverage (top): what
-//     a glyph core shows through the group and the overlays.
+// Contrast of each text against its rendered backdrop, from seven PNGs of
+// the canvas. Three as rendered, with only the glyph fill forced: black (B),
+// white (W), and invisible (H). Text-shadows, SVG halos, group opacity,
+// masks and anything painted above the text stay as rendered, because the
+// reader sees them. Four isolated, with everything that could veil a glyph
+// taken away (opacity, masks, filters, blend modes, and every image, video,
+// canvas, background, border, shadow and svg shape): glyphs white and black
+// on a black page, and white and black on a white page. Per pixel:
+//   - The isolated pairs give the glyph's own coverage, its shape alone
+//     (anti-aliasing, a hairline stroke's thinness, a clip): cw for a white
+//     glyph (white minus black on black) and cb for a black one (the same on
+//     white). The renderer gamma-adjusts coverage by glyph color, so the two
+//     differ at partial coverage. Anything the fill does not change (an
+//     emoji, a static paint) cancels in each difference.
+//   - e = W - B is how much of the glyph reaches the screen. Unveiled, it
+//     is cw over a dark backdrop and cb over a light one: exactly
+//     C = cw * (1 - h) + cb * h, with h the backdrop H's level. Veiled, it is
+//     C times the transmission t of whatever lies between the glyph and the
+//     reader (group opacity, a veil, a gradient scrim, a mask fade), so
+//     t = e / C, pixel by pixel. A veil over half a caption darkens that
+//     half only.
 //   - B + e * fill is the glyph as rendered at this pixel's coverage; the
 //     text's color is judged at full coverage, as WCAG means it, so the
-//     difference from H is scaled by top / e, and by the text's own alpha.
-//     The backdrop is H.
-// Judged pixels are the glyph's cores (e >= 0.9 * top), whatever opacity
-// the whole item is under. Edge pixels are left out: text is anti-aliased
-// with a mask the renderer gamma-adjusts per text luminance, so the black and
-// white shots cover an edge pixel differently, and scaling such a pixel to
-// full coverage would amplify that difference into a false low ratio.
-// An item that reaches the screen
-// nowhere (covered, fully transparent) is not measured. The result is 101
-// quantiles (0th..100th percentile) of the WCAG 2.x ratio, so the percentile
-// to judge stays a rule parameter. The PNGs are decoded by the browser into a
+//     difference from H is scaled by 1 / C and by the text's own alpha. A
+//     thin weight that never reaches full coverage is judged at its declared
+//     color, not as if it were group opacity. The backdrop is H.
+// Judged pixels are the glyph's cores (its shape, the mean of cw and cb, at
+// least 0.9 of the item's strongest).
+// Edge pixels are left out: text is anti-aliased with a mask the renderer
+// gamma-adjusts per text luminance, so the shots cover an edge pixel
+// differently, and scaling such a pixel to full coverage would amplify that
+// difference into a false low ratio. A core pixel where nothing of the
+// glyph reaches the screen (t < 0.1: under an opaque panel or image) is
+// counted as hidden, not judged. Per item the result is {q, n, hidden}: 101
+// quantiles (0th..100th percentile) of the WCAG 2.x ratio over the n judged
+// pixels, unrounded, so the percentile and any rounding stay geometry.py's;
+// and the share of core pixels hidden. An item with no glyph pixels at all,
+// or passed as null, is null. The PNGs are decoded by the browser into a
 // canvas: native and fast, where a Python decoder would loop over every byte.
-async function geometryContrast(blackUrl, whiteUrl, hiddenUrl, items, scale) {
+async function geometryContrast(shots, items, scale) {
   const decode = async url => {
     const img = new Image();
     img.src = url;
@@ -292,8 +349,10 @@ async function geometryContrast(blackUrl, whiteUrl, hiddenUrl, items, scale) {
     ctx.drawImage(img, 0, 0);
     return ctx.getImageData(0, 0, cv.width, cv.height);
   };
-  const black = (await decode(blackUrl)).data, white = (await decode(whiteUrl)).data;
-  const hidden = await decode(hiddenUrl);
+  const black = (await decode(shots.black)).data, white = (await decode(shots.white)).data;
+  const wOnK = (await decode(shots.whiteOnBlack)).data, kOnK = (await decode(shots.blackOnBlack)).data;
+  const wOnW = (await decode(shots.whiteOnWhite)).data, kOnW = (await decode(shots.blackOnWhite)).data;
+  const hidden = await decode(shots.hidden);
   const W = hidden.width, H = hidden.height, px = hidden.data;
   const lin = new Float64Array(256);
   for (let i = 0; i < 256; i++) {
@@ -302,48 +361,66 @@ async function geometryContrast(blackUrl, whiteUrl, hiddenUrl, items, scale) {
   }
   const lum = (r, g, b) => 0.2126 * lin[r] + 0.7152 * lin[g] + 0.0722 * lin[b];
   const byte = v => Math.max(0, Math.min(255, Math.round(v)));
-  const reach = i => (white[i] - black[i] + white[i + 1] - black[i + 1] + white[i + 2] - black[i + 2]) / 765;
-  return items.map(({ lines, color }) => {
-    if (!color) return null;
-    const [fr, fg, fb, fa] = color;
+  const diff = (a, b, i) => (a[i] - b[i] + a[i + 1] - b[i + 1] + a[i + 2] - b[i + 2]) / 765;
+  const shape = i => (diff(wOnK, kOnK, i) + diff(wOnW, kOnW, i)) / 2;
+  return items.map(item => {
+    if (!item) return null;
+    // No single glyph color (background-clip: text): coverage only.
+    const [fr, fg, fb, fa] = item.color || [0, 0, 0, 1];
     // Pixel-center rule: a pixel belongs to a rect when its center is inside.
-    const boxes = lines.map(l => [
+    const boxes = item.lines.map(l => [
       Math.max(0, Math.round(l.x * scale)), Math.max(0, Math.round(l.y * scale)),
       Math.min(W, Math.round((l.x + l.w) * scale)), Math.min(H, Math.round((l.y + l.h) * scale))]);
     let top = 0;
     for (const [x0, y0, x1, y1] of boxes) {
       for (let y = y0; y < y1; y++) {
-        for (let x = x0; x < x1; x++) top = Math.max(top, reach((y * W + x) * 4));
+        for (let x = x0; x < x1; x++) top = Math.max(top, shape((y * W + x) * 4));
       }
     }
     if (top < 0.02) return null;
-    const bins = new Uint32Array(2001);        // ratio 1.00..21.00 in 0.01 steps
-    let n = 0;
+    const ratios = [];
+    let covered = 0, seen = 0;
     for (const [x0, y0, x1, y1] of boxes) {
       for (let y = y0; y < y1; y++) {
         for (let x = x0; x < x1; x++) {
           const i = (y * W + x) * 4;
-          const e = reach(i);
-          if (e < 0.9 * top) continue;
-          const full = fa * top / e;
+          if (shape(i) < 0.9 * top) continue;
+          const h = (px[i] + px[i + 1] + px[i + 2]) / 765;
+          const c = diff(wOnK, kOnK, i) * (1 - h) + diff(wOnW, kOnW, i) * h;
+          const e = diff(white, black, i);
+          if (e < 0.1 * c) { covered++; continue; }
+          if (!item.color) { seen++; continue; }
+          const full = fa / Math.max(c, e);
           const glyph = (k, f) => px[i + k] + full *
             (black[i + k] + (white[i + k] - black[i + k]) * f / 255 - px[i + k]);
           const tr = byte(glyph(0, fr)), tg = byte(glyph(1, fg)), tb = byte(glyph(2, fb));
           const tl = lum(tr, tg, tb), bl = lum(px[i], px[i + 1], px[i + 2]);
-          const ratio = (Math.max(tl, bl) + 0.05) / (Math.min(tl, bl) + 0.05);
-          bins[Math.min(2000, Math.round((ratio - 1) * 100))]++;
-          n++;
+          ratios.push((Math.max(tl, bl) + 0.05) / (Math.min(tl, bl) + 0.05));
         }
       }
     }
-    if (!n) return null;
+    const n = ratios.length;
+    const share = covered / (covered + n + seen);
+    if (!n) return { q: null, n: 0, hidden: Math.round(share * 1000) / 1000 };
+    const sorted = Float64Array.from(ratios).sort();
     const q = [];
-    let cum = 0, k = 0;
-    for (let p = 0; p <= 100; p++) {
-      const target = Math.max(1, Math.ceil(p / 100 * n));
-      while (cum < target && k < 2001) cum += bins[k++];
-      q.push(Math.round(100 + (k - 1)) / 100);
-    }
-    return q;
+    for (let p = 0; p <= 100; p++) q.push(sorted[Math.max(1, Math.ceil(p / 100 * n)) - 1]);
+    return { q, n, hidden: Math.round(share * 1000) / 1000 };
   });
+}
+
+// Wait for a set of things a slide paints with, all started before the
+// deadline, and name the ones still pending when it passes. One deadline for
+// all, started once: a resource is reported slow only if it was still
+// pending at the deadline, never because a later wait found no budget left.
+// tasks = [[promise, what], ...]; rejections count as settled.
+async function geometrySettle(tasks, budget) {
+  const pending = new Map(tasks.map(([, what], i) => [i, what]));
+  const done = tasks.map(([p], i) =>
+    Promise.resolve(p).then(() => pending.delete(i), () => pending.delete(i)));
+  let timer;
+  const deadline = new Promise(r => { timer = setTimeout(r, Math.max(0, budget)); });
+  await Promise.race([Promise.all(done), deadline]);
+  clearTimeout(timer);
+  return [...new Set(pending.values())];
 }

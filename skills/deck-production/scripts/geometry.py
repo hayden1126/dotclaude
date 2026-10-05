@@ -21,6 +21,7 @@ Rules (ids, severities and params live in geometry.rules.toml):
    covers-marker       a text line sits on a marker (map pin)
    unbounded-abs-text  running text in a box that widens with its content
    text-contrast       measured WCAG contrast against the rendered backdrop
+   covered-text        text hidden under something painted above it
    safe-area           text outside the canvas margin (warn)
    clearance           independently placed text closer than min_gap (warn)
    clipped-text        text cut off by an overflow-hidden ancestor
@@ -28,11 +29,24 @@ Rules (ids, severities and params live in geometry.rules.toml):
 A deck tunes them in deck.toml: `[geometry] disable = [ids]`, and
 `[geometry.<id>]` for severity, enabled or any param.
 
+A slide with fragments is probed at every fragment step (before the first,
+then each index in turn), skipping steps that change nothing measured. The
+geometry rules run on each step, so a fragment that collides only while it is
+current is caught; contrast and coverage judge each text at the step where it
+is most visible, so a fragment dimmed by design (semi-fade-out) is judged at
+full strength. A finding outside the final state names its step (`s07 step
+2/4`, steps counted from 1 = before any fragment).
+
 Exit 1 on any error-severity violation; warnings alone exit 0. A browser that
 is missing or dies exits 3; a config the page rejects (a bad selector), or a
 font or image that does not load within the slide's settle budget, exits 2.
 A text-contrast bar lowered below WCAG AA needs a `reason`, printed on every
-run, and is refused at regulated rigor.
+run, and is refused at regulated rigor. At regulated rigor the contrast floor
+cannot be loosened any other way either: text-contrast must be on, an error,
+at the shipped percentile or stricter, with WCAG's large-text sizes, its
+exemptions targeted (none may take most of a slide's text), and a declared
+tier below the derived one needs a rigor_reason. Each breach is a config
+error (exit 2) naming its key.
 """
 from __future__ import annotations
 
@@ -53,7 +67,8 @@ import tempfile
 import threading
 import time
 import tomllib
-from dataclasses import asdict, dataclass
+from collections import defaultdict
+from dataclasses import asdict, dataclass, field
 
 HERE = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
@@ -65,6 +80,15 @@ PROBE_FILE = HERE / "geometry_probe.js"
 SEVERITIES = ("error", "warn")
 HEADINGS = ("h1", "h2", "h3")
 AA = {"min_small": 4.5, "min_large": 3.0}   # WCAG 2.x AA, text-contrast's floor
+# WCAG's large-text line (24 px, or 18.66 px at bold): a deck may raise these
+# (fewer texts count as large, a stricter bar), never lower them at regulated
+# rigor. The percentile may only go down from the shipped one: a higher one
+# judges past more of the glyph.
+LARGE_FLOOR = {"large_px": 24, "large_bold_px": 18.66, "bold_weight": 700}
+PERCENTILE_MAX = 5
+# An exemption that takes more than this share of a slide's measured text,
+# and at least this many items, is not decorative type: it is the slide.
+EXEMPT_SHARE, EXEMPT_MIN = 0.5, 3
 EVAL_TIMEOUT = 30.0     # s for one in-page evaluate
 SETTLE_BUDGET = 20.0    # s per slide for fonts, images, backgrounds; below EVAL_TIMEOUT
 HEADLESS_SHELLS = pathlib.Path.home() / ".cache" / "puppeteer" / "chrome-headless-shell"
@@ -100,9 +124,19 @@ class Violation:
     severity: str
     subject: str
     detail: str
+    step: str = ""               # "2/4" outside a slide's final state
+    # The rule and the element uids it concerns: identity, where subjects
+    # (selector paths) can repeat across identical structures.
+    key: tuple = field(default=(), repr=False, compare=False)
 
     def line(self) -> str:
-        return f"{self.severity.upper()} {self.slide} {self.rule}  {self.subject}  ({self.detail})"
+        where = self.slide + (f" step {self.step}" if self.step else "")
+        return f"{self.severity.upper()} {where} {self.rule}  {self.subject}  ({self.detail})"
+
+    def public(self) -> dict:
+        out = asdict(self)
+        del out["key"]
+        return out
 
 
 # ===================================================================== rules
@@ -141,6 +175,15 @@ class Slide:
 
     def up(self, node: int) -> list[int]:
         return [node, *self.chain(node)]
+
+    def uid(self, node: int) -> int:
+        """The element's identity across probes of one page (the node index
+        in canned probes that carry none)."""
+        return self.el[node].get("uid", node)
+
+    def key(self, *items) -> tuple:
+        """Identity of what a finding concerns: text items or node ids."""
+        return tuple(self.uid(i["node"] if isinstance(i, dict) else i) for i in items)
 
     def positioned(self, node: int) -> bool:
         return self.el[node]["position"] in ("absolute", "fixed")
@@ -304,14 +347,20 @@ def _texts(s: Slide, rule: str) -> list[dict]:
 def rule_text_overlap(s: Slide, p: dict, rid: str):
     # In flow or not: a fixed-height card that overflows, a negative margin,
     # a transform or two grid items in one cell all stack ink. Skipped: an
-    # item and what is nested in its own flow, and lines one flow stacked
-    # (Slide.one_flow), whose em boxes may overlap by the font's design.
+    # item and what is nested in its own flow. Lines one flow stacked
+    # (Slide.one_flow) overlap their em boxes by tight leading, by design up
+    # to flow_overlap em of the smaller text (a display headline at
+    # line-height .85 overlaps .15 em); deeper than that, glyphs collide.
     for a, b in itertools.combinations(_texts(s, rid), 2):
-        if s.nested(a["node"], b["node"]) or s.one_flow(a["node"], b["node"]):
+        if s.nested(a["node"], b["node"]):
             continue
         w, h = worst_overlap(s.ink(a), s.ink(b))
+        if s.one_flow(a["node"], b["node"]):
+            em = min(s.el[a["node"]]["fontSize"], s.el[b["node"]]["fontSize"])
+            if h <= p["flow_overlap"] * em:
+                continue
         if w * h > p["min_area"] and min(w, h) >= p["min_depth"]:
-            yield pair(s, a, b), px(w, h)
+            yield pair(s, a, b), px(w, h), s.key(a, b)
 
 
 def rule_covers_marker(s: Slide, p: dict, rid: str):
@@ -321,7 +370,7 @@ def rule_covers_marker(s: Slide, p: dict, rid: str):
                 continue
             w, h = worst_overlap(t["lines"], [m["box"]])
             if w * h > p["min_area"]:
-                yield f"{s.path(t['node'])} on {s.path(m['node'])}", px(w, h)
+                yield f"{s.path(t['node'])} on {s.path(m['node'])}", px(w, h), s.key(t, m)
 
 
 def rule_unbounded_abs_text(s: Slide, p: dict, rid: str):
@@ -344,7 +393,14 @@ def rule_unbounded_abs_text(s: Slide, p: dict, rid: str):
     for root, (w, t) in widest.items():
         size = s.el[t["node"]]["fontSize"]
         yield (s.path(root), f"width set by content, up to all the room its anchor leaves; "
-                             f"{s.path(t['node'])} ({round(size)} px text) runs {round(w)} px wide")
+                             f"{s.path(t['node'])} ({round(size)} px text) runs {round(w)} px wide",
+               s.key(root))
+
+
+def ratio_text(ratio: float) -> str:
+    """A contrast ratio for display, truncated: 4.499 shows as 4.49, never
+    as a 4.50 that would read as passing. Comparisons use the raw value."""
+    return f"{math.floor(ratio * 100 + 1e-9) / 100:.2f}"
 
 
 def rule_text_contrast(s: Slide, p: dict, rid: str):
@@ -352,19 +408,43 @@ def rule_text_contrast(s: Slide, p: dict, rid: str):
     # invisible (text-shadows kept, they are part of what the glyph sits on),
     # and the text's color was composited over each backdrop pixel under its
     # ink. A low percentile, so a few stray dots do not fail a line but a band
-    # of bad backdrop does.
+    # of bad backdrop does. A percentile of n pixels sets aside the worst
+    # p*n/100 of them, none at all below 100/p pixels, where one stray dot
+    # would decide. So below min_pixels a failing percentile is an error only
+    # when the median fails too (most of the glyph is on bad backdrop), and
+    # otherwise a warning that the item is too small to judge.
     pct = p["percentile"]
     for t in _texts(s, rid):
-        quantiles = t.get("contrast")
-        if not quantiles:
+        measured = t.get("contrast")
+        if not measured or not measured.get("q"):
             continue
+        quantiles, n = measured["q"], measured["n"]
         ratio = quantiles[pct]
         node = t["node"]
         need = p["min_large"] if s.large(node, p) else p["min_small"]
-        if ratio < need:
-            size = round(s.el[node]["fontSize"])
-            yield s.path(node), (f"{ratio:.2f}:1 at the {pct}th percentile, needs "
-                                 f"{need}:1 for {size} px text")
+        if ratio >= need:
+            continue
+        size = round(s.el[node]["fontSize"])
+        if n < p["min_pixels"] and quantiles[50] >= need:
+            yield s.path(node), (f"{ratio_text(ratio)}:1 at the {pct}th percentile of only {n} "
+                                 f"glyph pixels, too few to tell a band of bad backdrop from "
+                                 f"stray dots (median {ratio_text(quantiles[50])}:1); needs "
+                                 f"{need}:1 for {size} px text"), s.key(t), "warn"
+            continue
+        yield s.path(node), (f"{ratio_text(ratio)}:1 at the {pct}th percentile, needs "
+                             f"{need}:1 for {size} px text"), s.key(t)
+
+
+def rule_covered_text(s: Slide, p: dict, rid: str):
+    # Measured with the contrast shots: of the glyph's core pixels (its shape
+    # rendered alone), the share where nothing of it reaches the screen,
+    # because an opaque panel, image or shape is painted above it.
+    for t in _texts(s, rid):
+        measured = t.get("contrast")
+        if not measured or measured.get("hidden", 0) < p["min_hidden"]:
+            continue
+        yield s.path(t["node"]), (f"{round(measured['hidden'] * 100)}% of its glyphs hidden "
+                                  f"under something painted above it"), s.key(t)
 
 
 def rule_safe_area(s: Slide, p: dict, rid: str):
@@ -384,7 +464,8 @@ def rule_safe_area(s: Slide, p: dict, rid: str):
                     if depth > p["tolerance"] and not edge_panel(s, t["node"], side, p)}
         if breached:
             side, depth = max(breached.items(), key=lambda kv: kv[1])
-            yield s.path(t["node"]), f"{round(depth)} px into the {round(margin)} px {side} margin"
+            yield (s.path(t["node"]), f"{round(depth)} px into the {round(margin)} px {side} margin",
+                   s.key(t))
 
 
 def edge_panel(s: Slide, node: int, side: str, p: dict) -> bool:
@@ -417,7 +498,7 @@ def rule_clearance(s: Slide, p: dict, rid: str):
         ink_a, ink_b = s.ink(a), s.ink(b)
         w, h = worst_overlap(ink_a, ink_b)
         if w and h:
-            yield pair(s, a, b), f"ink overlaps by {px(w, h)}"
+            yield pair(s, a, b), f"ink overlaps by {px(w, h)}", s.key(a, b)
             continue
         if s.flow_root(a["node"]) == s.flow_root(b["node"]):
             continue
@@ -425,7 +506,7 @@ def rule_clearance(s: Slide, p: dict, rid: str):
             continue
         nearest = min(gap(x, y) for x, y in itertools.product(ink_a, ink_b))
         if nearest < p["min_gap"]:
-            yield pair(s, a, b), f"{round(nearest, 1)} px apart"
+            yield pair(s, a, b), f"{round(nearest, 1)} px apart", s.key(a, b)
 
 
 def rule_clipped_text(s: Slide, p: dict, rid: str):
@@ -446,7 +527,8 @@ def rule_clipped_text(s: Slide, p: dict, rid: str):
                 if over > worst:
                     worst, culprit = over, t
         if worst > tol:
-            yield s.path(c["node"]), f"{s.path(culprit['node'])} runs {round(worst)} px past the clip"
+            yield (s.path(c["node"]), f"{s.path(culprit['node'])} runs {round(worst)} px past the clip",
+                   s.key(c["node"]))
 
 
 RULES = {
@@ -454,6 +536,7 @@ RULES = {
     "covers-marker": rule_covers_marker,
     "unbounded-abs-text": rule_unbounded_abs_text,
     "text-contrast": rule_text_contrast,
+    "covered-text": rule_covered_text,
     "safe-area": rule_safe_area,
     "clearance": rule_clearance,
     "clipped-text": rule_clipped_text,
@@ -462,16 +545,21 @@ RULE_META = ("id", "severity", "enabled")
 
 
 def evaluate(probe: dict, rules: list[dict], slide: str) -> list[Violation]:
-    """Apply resolved rules to one slide's probe output."""
+    """Apply resolved rules to one slide's probe output. A rule yields
+    (subject, detail, key), plus "warn" when a finding is weaker evidence
+    than the rule's severity. Clearance drops the pairs text-overlap reports,
+    matched by element identity, not by subject text."""
     s = Slide(probe)
     out = []
     for rule in rules:
         if not rule["enabled"]:
             continue
-        for subject, detail in RULES[rule["id"]](s, rule["params"], rule["id"]):
-            out.append(Violation(slide, rule["id"], rule["severity"], subject, detail))
-    overlaps = {v.subject for v in out if v.rule == "text-overlap"}
-    return [v for v in out if not (v.rule == "clearance" and v.subject in overlaps)]
+        for subject, detail, key, *weaker in RULES[rule["id"]](s, rule["params"], rule["id"]):
+            severity = "warn" if weaker else rule["severity"]
+            out.append(Violation(slide, rule["id"], severity, subject, detail,
+                                 key=(rule["id"], *key)))
+    overlaps = {v.key[1:] for v in out if v.rule == "text-overlap"}
+    return [v for v in out if not (v.rule == "clearance" and v.key[1:] in overlaps)]
 
 
 def exit_code(violations: list[Violation]) -> int:
@@ -505,7 +593,8 @@ def parse_rules(text: str, source: str) -> list[dict]:
 
 
 def apply_overrides(rules: list[dict], deck_geometry: dict, disable: list[str],
-                    source: str, rigor: str = "standard") -> list[dict]:
+                    source: str, rigor: str = "standard",
+                    rules_source: str = "geometry.rules.toml") -> list[dict]:
     """deck.toml's [geometry] on top of the rules file. Typos fail loudly: a
     misspelled rule id or param would otherwise be a silently ignored override."""
     by_id = {r["id"]: r for r in rules}
@@ -549,10 +638,61 @@ def apply_overrides(rules: list[dict], deck_geometry: dict, disable: list[str],
             raise deckcfg.ConfigError(f"{where}: below WCAG AA "
                                       f"({', '.join(f'{k} {AA[k]}' for k in lowered)}), "
                                       "refused at regulated rigor")
-        if not str(contrast.get("reason", "")).strip():
-            raise deckcfg.ConfigError(f"{where}: below WCAG AA needs a non-empty `reason` "
-                                      "in the same table")
+        if not deckcfg.meaningful(contrast.get("reason", "")):
+            raise deckcfg.ConfigError(f"{where}: below WCAG AA needs a `reason` (some letters "
+                                      "or digits) in the same table")
+    if rigor == "regulated":
+        regulated_floor(by_id, deck_geometry.get("text-contrast", {}), disable, source,
+                        rules_source)
     return rules
+
+
+def regulated_floor(by_id: dict, table: dict, disable: list[str], source: str,
+                    rules_source: str) -> None:
+    """At regulated rigor the contrast floor holds whatever the config says:
+    text-contrast on, an error, judged at the shipped percentile or lower,
+    with WCAG's large-text line. Each breach names the key that made it, in
+    deck.toml or in the rules file."""
+    why = "refused at regulated rigor (the contrast floor is not lowered there)"
+    rule = by_id.get("text-contrast")
+    if rule is None:
+        raise deckcfg.ConfigError(f"{rules_source}: has no text-contrast rule; {why}")
+    if "text-contrast" in disable:
+        raise deckcfg.ConfigError(f"{source}: [geometry] disable names text-contrast; {why}")
+
+    def where(key):
+        return (f"{source}: [geometry.text-contrast] {key}" if key in table
+                else f"{rules_source}: text-contrast {key}")
+    if not rule["enabled"]:
+        raise deckcfg.ConfigError(f"{where('enabled')} = false; {why}")
+    if rule["severity"] != "error":
+        raise deckcfg.ConfigError(f"{where('severity')} = {rule['severity']!r}; {why}")
+    params = rule["params"]
+    pct = params.get("percentile")
+    if not isinstance(pct, int) or pct > PERCENTILE_MAX:
+        raise deckcfg.ConfigError(f"{where('percentile')} = {pct!r}: above {PERCENTILE_MAX} "
+                                  f"judges past more of the glyph; {why}")
+    for key, floor in LARGE_FLOOR.items():
+        value = params.get(key)
+        if not isinstance(value, (int, float)) or value < floor:
+            raise deckcfg.ConfigError(f"{where(key)} = {value!r}: below WCAG's {floor}; {why}")
+
+
+def broad_exemptions(probe: dict, rules: list[dict], slide: str, source: str) -> None:
+    """At regulated rigor, a text-contrast exemption must target decorative
+    type. One that takes more than EXEMPT_SHARE of a slide's measured text
+    (and at least EXEMPT_MIN items) is exempting the slide: a config error
+    naming the selector, found where it bites, at run time."""
+    rule = next((r for r in rules if r["id"] == "text-contrast"), None)
+    if rule is None or not rule["enabled"]:
+        return
+    total = len(probe["texts"])
+    for sel, hits in probe.get("exemptHits", {}).get("text-contrast", {}).items():
+        if hits >= EXEMPT_MIN and hits > EXEMPT_SHARE * total:
+            raise deckcfg.ConfigError(
+                f"{source}: [geometry.text-contrast] exempt {sel!r} takes {hits} of the "
+                f"{total} text items on slide {slide} out of the contrast floor; at regulated "
+                "rigor an exemption must target decorative type, not the slide")
 
 
 def lowered_contrast(rules: list[dict]) -> list[str]:
@@ -582,8 +722,17 @@ def load_rules(cfg: deckcfg.DeckConfig) -> list[dict]:
         raise deckcfg.ConfigError(f"geometry.rules: {path} does not exist")
     rules = parse_rules(path.read_text(encoding="utf-8"), str(path))
     deck_geometry = cfg.tree.get("geometry", {})
+    lowered = cfg.unexplained_lowering()
+    if lowered and lowered[1] == "regulated":
+        # Only the regulated line changes what this gate holds, and the
+        # facts that derive it (audience, issuer_listed, forward_targets) do
+        # not depend on slide counts this gate cannot see.
+        raise deckcfg.ConfigError(
+            f"{cfg.source}: [deck] rigor = {lowered[0]!r} is below the {lowered[1]!r} the "
+            "deck's audience, issuer_listed or forward_targets derive; lowering it needs a "
+            "rigor_reason")
     return apply_overrides(rules, deck_geometry, cfg.get("geometry.disable"), cfg.source,
-                           cfg.derive_rigor())
+                           cfg.derive_rigor(), str(path))
 
 
 # ================================================================ browser
@@ -765,71 +914,121 @@ BAD_SELECTORS_JS = """((pairs) => pairs.filter(([, sel]) => {
   catch (e) { return true; }
 }))(%s)"""
 
-# Transitions and animations off for the whole run, so every state is final
-# the moment it is set: reveal's `.fragment { transition: all .2s }` would
-# otherwise leave a fragment mid-fade when probed, and animate the forced
-# glyph fills of the contrast shots (a transition beats !important).
+# Transitions off for the whole run, so every state is final the moment it
+# is set: reveal's `.fragment { transition: all .2s }` would otherwise leave a
+# fragment mid-fade when probed, and animate the forced glyph fills of the
+# contrast shots (a transition beats !important). Animations are not blocked
+# here: blocked before they run, an entrance animation (opacity 0 to 1 with
+# fill-mode forwards) would be measured at its start. GOTO_JS finishes them.
 STILL_JS = """(() => {
   const s = document.createElement('style');
   s.id = 'deckkit-geometry-still';
-  s.textContent = '*, *::before, *::after { transition: none !important; ' +
-                  'animation: none !important; }';
+  s.textContent = '*, *::before, *::after { transition: none !important; }';
   document.head.appendChild(s);
   return true;
 })()"""
 
-# Go to a slide with every fragment shown (their final state), then wait for
-# what it paints with: the fonts its text uses, loaded for that text (a face
-# split by unicode-range loads only the subsets its characters need), its
-# images, and every url() background in it, the reveal slide background
-# included (reveal sets those only when the slide is reached). One deadline
-# covers all of it, below the evaluate timeout, so a hang is named, not lost.
-# Returns {id, slow: [what did not settle]}.
-GOTO_JS = """(async (h, v, budget) => {
-  const deadline = performance.now() + budget;
-  const slow = [];
-  const settle = (p, what) => new Promise(done => {
-    const t = setTimeout(() => { slow.push(what); done(); },
-                         Math.max(0, deadline - performance.now()));
-    Promise.resolve(p).then(() => { clearTimeout(t); done(); },
-                            () => { clearTimeout(t); done(); });
-  });
-  Reveal.slide(h, v);
-  for (let guard = 0; guard < 500 && Reveal.nextFragment(); guard++) {}
-  for (const a of document.getAnimations()) { try { a.finish(); } catch (e) { a.cancel(); } }
+# Go to a slide at fragment index f (-1: before the first; reveal shows
+# every fragment at or below f), then let it come to rest and wait for what
+# it paints with. Rest: every animation finished, so an entrance animation
+# stands at its end state (with fill-mode forwards, as it stays on screen)
+# and an infinite one, which cannot finish, is cancelled to its base style;
+# repeated while finishing starts more. Paint: the fonts its text uses,
+# pseudo-element content included, loaded for that text in its style, weight,
+# stretch and size (a face split by unicode-range loads only the subsets its
+# characters need); its images, svg <image>s and videos (the first frame, or
+# the poster); every url() it paints with (backgrounds, masks, border-images,
+# list markers, content), the reveal slide background and its video
+# included, which reveal sets only when the slide is reached. All of it is
+# started at once and held to one deadline below the evaluate timeout
+# (geometrySettle), so a hang is named, not lost. Returns {id, slow: [what
+# was still pending at the deadline], last: highest fragment index or -1}.
+GOTO_JS = r"""(async (h, v, f, budget) => {
+  Reveal.slide(h, v, f);
   const sec = Reveal.getCurrentSlide();
-  const face = cs => `${cs.fontStyle} ${cs.fontWeight} ${cs.fontSize} ${cs.fontFamily}`;
+  const rest = () => {
+    for (let round = 0; round < 5; round++) {
+      const running = document.getAnimations()
+        .filter(a => a.playState === 'running' || a.playState === 'paused');
+      if (!running.length) return;
+      for (const a of running) { try { a.finish(); } catch (e) { a.cancel(); } }
+    }
+  };
+  rest();
+  const indices = [...sec.querySelectorAll('.fragment')]
+    .map(el => parseInt(el.getAttribute('data-fragment-index'), 10)).filter(Number.isFinite);
+  const last = indices.length ? Math.max(...indices) : -1;
+
+  // The font shorthand takes stretch only as a keyword; computed style
+  // gives a percentage. The nearest keyword selects the same face.
+  const STRETCH = [[50, 'ultra-condensed'], [62.5, 'extra-condensed'], [75, 'condensed'],
+                   [87.5, 'semi-condensed'], [100, 'normal'], [112.5, 'semi-expanded'],
+                   [125, 'expanded'], [150, 'extra-expanded'], [200, 'ultra-expanded']];
+  const stretch = v => {
+    const n = parseFloat(v);
+    if (!Number.isFinite(n)) return v || 'normal';
+    return STRETCH.reduce((a, b) => Math.abs(b[0] - n) < Math.abs(a[0] - n) ? b : a)[1];
+  };
+  const face = cs => `${cs.fontStyle} ${cs.fontWeight} ${stretch(cs.fontStretch)} ` +
+                     `${cs.fontSize} ${cs.fontFamily}`;
+  const quoted = c => [...c.matchAll(/"((?:[^"\\]|\\.)*)"|'((?:[^'\\]|\\.)*)'/g)]
+    .map(m => m[1] !== undefined ? m[1] : m[2]).join('');
   const faces = new Map();
-  for (const el of [sec, ...sec.querySelectorAll('*')]) {
-    const f = face(getComputedStyle(el));
-    let text = faces.get(f) || '';
+  const addText = (cs, text) => { const k = face(cs); faces.set(k, (faces.get(k) || '') + text); };
+  const all = [sec, ...sec.querySelectorAll('*')];
+  for (const el of all) {
+    let text = '';
     for (const n of el.childNodes) if (n.nodeType === Node.TEXT_NODE) text += n.nodeValue;
-    faces.set(f, text);
-  }
-  await Promise.all([...faces].map(([f, text]) =>
-    settle(document.fonts.load(f, [...new Set(text.replace(/\\s/g, ''))].join('') || ' '),
-           `font ${f}`)));
-  await settle(document.fonts.ready, 'document.fonts.ready');
-  const painted = [sec, ...sec.querySelectorAll('*')];
-  const bg = Reveal.getSlideBackground ? Reveal.getSlideBackground(h, v) : null;
-  if (bg) painted.push(bg, ...bg.querySelectorAll('*'));
-  const urls = new Set();
-  for (const el of painted) {
-    for (const pseudo of [null, '::before', '::after']) {
-      const image = getComputedStyle(el, pseudo).backgroundImage;
-      for (const m of image.matchAll(/url\\((['"]?)(.*?)\\1\\)/g)) urls.add(m[2]);
+    addText(getComputedStyle(el), text);
+    for (const pseudo of ['::before', '::after', '::marker']) {
+      const cs = getComputedStyle(el, pseudo);
+      if (cs.content && cs.content !== 'none' && cs.content !== 'normal') addText(cs, quoted(cs.content));
     }
   }
+  const tasks = [...faces].map(([k, text]) =>
+    [document.fonts.load(k, [...new Set(text.replace(/\s/g, ''))].join('') || ' '), `font ${k}`]);
+  tasks.push([document.fonts.ready, 'document.fonts.ready']);
+
+  const painted = [...all];
+  const bg = Reveal.getSlideBackground ? Reveal.getSlideBackground(h, v) : null;
+  if (bg) painted.push(bg, ...bg.querySelectorAll('*'));
+  const urls = new Map();            // url -> what paints it, for the message
+  const add = (u, kind) => { if (u && !urls.has(u)) urls.set(u, kind); };
+  for (const el of painted) {
+    for (const pseudo of [null, '::before', '::after', '::marker']) {
+      const cs = getComputedStyle(el, pseudo);
+      for (const [kind, value] of [['background', cs.backgroundImage], ['mask', cs.maskImage],
+                                   ['mask', cs.webkitMaskImage], ['border-image', cs.borderImageSource],
+                                   ['list-image', cs.listStyleImage], ['content', cs.content]]) {
+        for (const m of (value || '').matchAll(/url\((['"]?)(.*?)\1\)/g)) add(m[2], kind);
+      }
+    }
+  }
+  const videos = painted.filter(el => el.localName === 'video');
+  for (const vid of videos) add(vid.poster, 'poster');
+  for (const im of sec.querySelectorAll('image')) {
+    const href = im.href && im.href.baseVal;
+    if (href) add(new URL(href, document.baseURI).href, 'svg image');
+  }
   const decoded = src => { const img = new Image(); img.src = src; return img.decode(); };
-  await Promise.all([
-    ...[...sec.querySelectorAll('img')].map(img =>
-      settle(img.decode().catch(() => null), `image ${img.currentSrc || img.src}`)),
-    ...[...urls].map(u => settle(decoded(u).catch(() => null), `background ${u}`)),
-  ]);
-  const frame = () => settle(new Promise(r => requestAnimationFrame(r)), 'a rendered frame');
-  await frame(); await frame();
-  return { id: sec.id, slow };
-})(%d, %d, %d)"""
+  for (const img of sec.querySelectorAll('img')) tasks.push([img.decode(), `image ${img.currentSrc || img.src}`]);
+  for (const [u, kind] of urls) tasks.push([decoded(u), `${kind} ${u}`]);
+  // A video shows its first frame once it has current data; one that will
+  // not fetch any (preload none, no autoplay) shows its poster, awaited above.
+  for (const vid of videos) {
+    if (vid.readyState >= 2 || vid.networkState === 3) continue;
+    if (vid.preload === 'none' && !vid.autoplay) continue;
+    tasks.push([new Promise(ok => {
+      vid.addEventListener('loadeddata', ok, { once: true });
+      vid.addEventListener('error', ok, { once: true, capture: true });
+    }), `video ${vid.currentSrc || vid.src || (vid.querySelector('source') || {}).src}`]);
+  }
+  const slow = await geometrySettle(tasks, budget);
+  rest();
+  const frames = new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+  slow.push(...await geometrySettle([[frames, 'a rendered frame']], 2000));
+  return { id: sec.id, slow, last };
+})"""
 
 # Glyphs painted in one forced fill (black, white, or transparent to hide
 # them), everything else kept: text-shadows, group opacity, overlays, and an
@@ -837,29 +1036,62 @@ GOTO_JS = """(async (h, v, budget) => {
 # what paints glyphs; `color` stays, so borders, currentColor icons and
 # default-colored shadows are untouched. SVG text paints with `fill`, on
 # text, tspan and textPath alike (each may set its own); a stroke painted
-# over the fill is part of the glyph and is hidden with it.
-FILL_JS = """(async (fill) => {
+# over the fill is part of the glyph and is hidden with it. With `iso`, the
+# glyphs are isolated: everything that could veil or cover them is taken
+# away (see geometryContrast), so the shot shows the glyph shape alone.
+FILL_JS = """(async (fill, iso) => {  // iso: null, or the page color
   const sec = Reveal.getCurrentSlide();
   for (const el of sec.querySelectorAll('text, tspan, textPath')) {
     const order = getComputedStyle(el).paintOrder.split(/\\s+/).filter(k => k !== 'normal');
     for (const k of ['fill', 'stroke', 'markers']) if (!order.includes(k)) order.push(k);
     el.toggleAttribute('data-deckkit-glyph-stroke', order.indexOf('stroke') > order.indexOf('fill'));
   }
-  const s = document.getElementById('deckkit-geometry-fill') || document.createElement('style');
+  // The current slide by attribute: `section.present` also matches the stack
+  // around a vertical slide, and with it that stack's other slides.
+  sec.setAttribute('data-deckkit-at', '');
+  const old = document.getElementById('deckkit-geometry-fill');
+  if (old) old.remove();
+  if (iso) {
+    // Read with no override in place: what is invisible by opacity stays so.
+    for (const el of sec.querySelectorAll('*')) {
+      el.toggleAttribute('data-deckkit-zero', parseFloat(getComputedStyle(el).opacity) === 0);
+    }
+  }
+  const s = document.createElement('style');
   s.id = 'deckkit-geometry-fill';
-  const at = '.reveal .slides section.present';
-  s.textContent = `${at}, ${at} * { -webkit-text-fill-color: ${fill} !important; ` +
+  const at = '[data-deckkit-at]';
+  let css = `${at}, ${at} * { -webkit-text-fill-color: ${fill} !important; ` +
     'caret-color: transparent !important; }' +
     `${at} text, ${at} tspan, ${at} textPath { fill: ${fill} !important; ` +
     'fill-opacity: 1 !important; }' +
     `${at} [data-deckkit-glyph-stroke] { stroke: transparent !important; }`;
+  if (iso) {
+    const all = `${at}, ${at} *, ${at}::before, ${at}::after, ${at} *::before, ${at} *::after`;
+    css += `html, body, .reveal-viewport, .reveal { background: ${iso} !important; }` +
+      '.reveal .backgrounds { visibility: hidden !important; }' +
+      `${all} { background: none !important; border-color: transparent !important; ` +
+      'border-image-source: none !important; outline-color: transparent !important; ' +
+      'box-shadow: none !important; text-shadow: none !important; ' +
+      'text-decoration-color: transparent !important; ' +
+      '-webkit-text-stroke-color: transparent !important; ' +
+      'column-rule-color: transparent !important; filter: none !important; ' +
+      'backdrop-filter: none !important; mix-blend-mode: normal !important; ' +
+      'mask: none !important; -webkit-mask: none !important; }' +
+      `${at}, ${at} *:not([data-deckkit-zero]) { opacity: 1 !important; }` +
+      `${at} :is(img, video, canvas, iframe, embed, object, image) ` +
+      '{ visibility: hidden !important; }' +
+      `${at} svg *:not(text, tspan, textPath) { fill: transparent !important; }` +
+      `${at} svg * { stroke: transparent !important; }` +
+      `${at} *::marker { color: transparent !important; }`;
+  }
+  s.textContent = css;
   document.head.appendChild(s);
   for (let i = 0; i < 2; i++) await new Promise(r => requestAnimationFrame(r));
   return true;
-})(%s)"""
+})"""
 UNFILL_JS = """((document.getElementById('deckkit-geometry-fill') || {remove() {}}).remove(),
-  document.querySelectorAll('[data-deckkit-glyph-stroke]')
-    .forEach(el => el.removeAttribute('data-deckkit-glyph-stroke')), true)"""
+  ['data-deckkit-glyph-stroke', 'data-deckkit-zero', 'data-deckkit-at'].forEach(a =>
+    document.querySelectorAll(`[${a}]`).forEach(el => el.removeAttribute(a))), true)"""
 
 
 class QuietServer(serve.ReusableServer):
@@ -877,39 +1109,123 @@ def slide_label(entry: dict) -> str:
     return f"{entry['h'] + 1}" + (f".{entry['v'] + 1}" if entry["v"] else "")
 
 
-def measure_contrast(page: Page, probe: dict) -> None:
-    """Screenshot the canvas three times, glyphs forced black, white, and
-    invisible, then let the page compare each text's color with the backdrop
-    where its glyphs paint. Adds `contrast` (101 quantiles of the per-pixel
-    WCAG ratio, or None) to every text item."""
+# (name, glyph fill, page color when isolated)
+SHOTS = (("black", "#000", None), ("white", "#fff", None), ("hidden", "transparent", None),
+         ("whiteOnBlack", "#fff", "#000"), ("blackOnBlack", "#000", "#000"),
+         ("whiteOnWhite", "#fff", "#fff"), ("blackOnWhite", "#000", "#fff"))
+
+
+def measure_contrast(page: Page, probe: dict, wanted: set[int] | None = None) -> None:
+    """Screenshot the canvas seven times (glyphs forced black, white and
+    invisible as rendered, then white and black isolated on a black page and
+    on a white one) and let the page
+    compare each text's color with the backdrop where its glyphs paint.
+    Adds `contrast` ({q, n, hidden}, or None) to every text item in `wanted`
+    (indices into probe["texts"]; all when None)."""
     items = [{"lines": ink_lines(t["lines"], probe["elements"][t["node"]]["fontSize"]),
-              "color": t["color"]} for t in probe["texts"]]
-    if not items:
+              "color": t["color"]} if wanted is None or i in wanted else None
+             for i, t in enumerate(probe["texts"])]
+    if not any(items):
         return
     origin = probe["origin"]
     clip = {"x": origin["x"], "y": origin["y"], "width": origin["w"], "height": origin["h"],
             "scale": 1}
-
-    def shot() -> str:
-        data = page.call("Page.captureScreenshot", {"format": "png", "clip": clip})["data"]
-        return json.dumps("data:image/png;base64," + data)
-
-    shots = []
+    shots = {}
     try:
-        for fill in ("#000", "#fff", "transparent"):
-            page.evaluate(FILL_JS % json.dumps(fill))
-            shots.append(shot())
+        for name, fill, iso in SHOTS:
+            page.evaluate(f"{FILL_JS}({json.dumps(fill)}, {json.dumps(iso)})")
+            shots[name] = "data:image/png;base64," + page.call(
+                "Page.captureScreenshot",
+                {"format": "png", "clip": clip, "optimizeForSpeed": True})["data"]
     finally:
         page.evaluate(UNFILL_JS)
-    ratios = page.evaluate(f"geometryContrast({', '.join(shots)}, {json.dumps(items)}, "
-                           f"{probe['scale']})", timeout=60)
-    for t, q in zip(probe["texts"], ratios):
-        t["contrast"] = q
+    measured = page.evaluate(f"geometryContrast({json.dumps(shots)}, {json.dumps(items)}, "
+                             f"{probe['scale']})", timeout=60)
+    for item, t, m in zip(items, probe["texts"], measured):
+        if item is not None:
+            t["contrast"] = m
+
+
+def goto(page: Page, entry: dict, label: str, f: int) -> dict:
+    settled = page.evaluate(f"{GOTO_JS}({entry['h']}, {entry['v']}, {f}, "
+                            f"{SETTLE_BUDGET * 1000:.0f})")
+    if settled["slow"]:
+        raise SlowResource(f"slide {label}" + (f" at fragment {f}" if f >= 0 else "")
+                           + f": not loaded within {SETTLE_BUDGET:g} s: "
+                           + "; ".join(settled["slow"]))
+    return settled
+
+
+def fingerprint(probe: dict) -> str:
+    """What the rules measure on a step: a later step equal to an earlier one
+    in all of it adds nothing and is not measured again."""
+    return json.dumps([probe["texts"], probe["markers"], probe["clipping"],
+                       [e["displaced"] for e in probe["elements"]]], sort_keys=True)
+
+
+def probe_steps(page: Page, entry: dict, label: str, opts: dict, shots: bool) -> dict:
+    """Probe a slide at each fragment step. Returns {"total": steps, "last":
+    highest fragment index, "states": [{"steps": [f, ...], "probe": ...}]},
+    one state per distinct measured step, in step order. With `shots`, each
+    text item's contrast is measured at the step where it is most visible
+    (its group opacity, read from computed styles; ties go to the final
+    state, then the latest step), so a fragment dimmed by design is judged at
+    full strength and a step is screenshotted only if some item is judged
+    there."""
+    last = goto(page, entry, label, -1)["last"]
+    states, seen, at = [], {}, -1
+    for f in range(-1, last + 1):
+        if f != at:
+            goto(page, entry, label, f)
+            at = f
+        probe = page.evaluate(f"geometryProbe({json.dumps(opts)})")
+        key = fingerprint(probe)
+        if key in seen:
+            seen[key]["steps"].append(f)
+            continue
+        seen[key] = {"steps": [f], "probe": probe}
+        states.append(seen[key])
+    if shots:
+        best: dict[int, tuple] = {}
+        for si, state in enumerate(states):
+            final = last in state["steps"]
+            for ti, t in enumerate(state["probe"]["texts"]):
+                uid = state["probe"]["elements"][t["node"]]["uid"]
+                score = (t.get("shown", 1), final, max(state["steps"]))
+                if uid not in best or score > best[uid][0]:
+                    best[uid] = (score, si, ti)
+        wanted = defaultdict(set)
+        for _score, si, ti in best.values():
+            wanted[si].add(ti)
+        for si in sorted(wanted, key=lambda i: at not in states[i]["steps"]):
+            state = states[si]
+            if at not in state["steps"]:
+                at = state["steps"][0]
+                goto(page, entry, label, at)
+            measure_contrast(page, state["probe"], wanted[si])
+    return {"total": last + 2, "last": last, "states": states}
+
+
+def evaluate_steps(probed: dict, rules: list[dict], label: str) -> list[Violation]:
+    """Rules on every measured step of a slide, each finding once. One that
+    holds in the final state is reported there, unmarked; one seen only at
+    earlier steps names the first of them."""
+    found: dict[tuple, Violation] = {}
+    for state in probed["states"]:
+        final = probed["last"] in state["steps"]
+        step = "" if final else f"{state['steps'][0] + 2}/{probed['total']}"
+        for v in evaluate(state["probe"], rules, label):
+            v.step = step
+            key = (v.key, v.subject) if not v.key else v.key
+            if key not in found or (final and found[key].step):
+                found[key] = v
+    return list(found.values())
 
 
 def measure(cfg: deckcfg.DeckConfig, browser_info: tuple[str, bool], wanted: list[str],
             rules: list[dict]) -> tuple[list[str], dict[str, dict]]:
-    """Serve the deck, drive Chrome over it, return (slide order, probe per slide)."""
+    """Serve the deck, drive Chrome over it, return (slide order, probe_steps
+    result per slide)."""
     width, height = cfg.canvas
     index = cfg.get("build.index")
     if not (cfg.deck / index).exists():
@@ -950,7 +1266,7 @@ def measure(cfg: deckcfg.DeckConfig, browser_info: tuple[str, bool], wanted: lis
         if bad:
             raise deckcfg.ConfigError("; ".join(f"{key}: invalid CSS selector {sel!r}"
                                                 for key, sel in bad))
-        page.evaluate(probe_src)         # defines geometryProbe and geometryContrast
+        page.evaluate(probe_src)         # defines geometryProbe, geometryContrast, geometrySettle
         page.evaluate(STILL_JS)
 
         slides = page.evaluate(SLIDES_JS)
@@ -959,19 +1275,12 @@ def measure(cfg: deckcfg.DeckConfig, browser_info: tuple[str, bool], wanted: lis
         if unknown:
             raise deckcfg.ConfigError(f"--slides: no slide {', '.join(map(repr, unknown))} "
                                       f"(have: {', '.join(labels)})")
-        contrast = by_id.get("text-contrast", {}).get("enabled", False)
+        shots = any(by_id.get(r, {}).get("enabled", False) for r in ("text-contrast", "covered-text"))
         order, probes = [], {}
         for entry, label in zip(slides, labels):
             if wanted and label not in wanted:
                 continue
-            settled = page.evaluate(GOTO_JS % (entry["h"], entry["v"], SETTLE_BUDGET * 1000))
-            if settled["slow"]:
-                raise SlowResource(f"slide {label}: not loaded within {SETTLE_BUDGET:g} s: "
-                                   + "; ".join(settled["slow"]))
-            probe = page.evaluate(f"geometryProbe({json.dumps(opts)})")
-            if contrast:
-                measure_contrast(page, probe)
-            probes[label] = probe
+            probes[label] = probe_steps(page, entry, label, opts, shots)
             order.append(label)
         return order, probes
     finally:
@@ -1016,10 +1325,15 @@ def main() -> int:
     except SlowResource as exc:
         deckcfg.bail(str(exc))
 
+    if cfg.derive_rigor() == "regulated":
+        for label in order:
+            for state in probes[label]["states"]:
+                broad_exemptions(state["probe"], rules, label, cfg.source)
+
     violations: list[Violation] = []
     per_slide = {}
     for label in order:
-        found_here = evaluate(probes[label], rules, label)
+        found_here = evaluate_steps(probes[label], rules, label)
         violations += found_here
         per_slide[label] = {"errors": sum(v.severity == "error" for v in found_here),
                             "warnings": sum(v.severity == "warn" for v in found_here)}
@@ -1033,7 +1347,7 @@ def main() -> int:
     code = exit_code(violations)
     if args.json:
         print(json.dumps({"errors": errors, "warnings": warnings, "slides": per_slide,
-                          "violations": [asdict(v) for v in violations], "exit": code}))
+                          "violations": [v.public() for v in violations], "exit": code}))
     return code
 
 

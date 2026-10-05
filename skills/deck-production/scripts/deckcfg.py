@@ -20,6 +20,7 @@ import re
 import shutil
 import sys
 import tomllib
+import unicodedata
 
 EXIT_OK, EXIT_FAIL, EXIT_USAGE, EXIT_ENV = 0, 1, 2, 3
 
@@ -105,6 +106,15 @@ REGISTRY_CHECKS = ("lint.fid_chain", "lint.fid_registry_flags", "lint.naked_numb
 
 class ConfigError(Exception):
     """Raised with a dotted field path so the message points at the fix."""
+
+
+RIGOR_TIERS = ("sketch", "standard", "regulated")    # lowest to highest
+
+
+def meaningful(text) -> bool:
+    """Does a reason say anything? At least one letter or digit (Unicode
+    categories L* and N*): blank, punctuation or a zero-width space is not one."""
+    return any(unicodedata.category(c)[0] in "LN" for c in str(text or ""))
 
 
 def _dig(tree: dict, dotted: str):
@@ -245,12 +255,17 @@ class DeckConfig:
         """
         declared = self.get("deck.rigor")
         if declared:
-            if declared not in ("sketch", "standard", "regulated"):
+            if declared not in RIGOR_TIERS:
                 raise ConfigError(
                     f"{self.source}: [deck.rigor] must be sketch|standard|regulated, "
                     f"got {declared!r}"
                 )
             return declared
+        return self.derived_rigor(slide_count, external_refs, forward_targets)
+
+    def derived_rigor(self, slide_count: int = 0, external_refs: int = 0,
+                      forward_targets: bool | None = None) -> str:
+        """The tier the deck's own facts derive, a declared tier ignored."""
         if forward_targets is None:
             forward_targets = bool(self.get("deck.forward_targets"))
         audience = self.get("deck.audience")
@@ -260,6 +275,18 @@ class DeckConfig:
         if slide_count and slide_count <= 15 and audience == "internal" and external_refs == 0:
             return "sketch"
         return "standard"
+
+    def unexplained_lowering(self, **facts) -> tuple[str, str] | None:
+        """(declared, derived) when [deck] rigor is declared below the tier the
+        deck's facts derive and no meaningful rigor_reason says why; else None.
+        A declared tier may lower the derived one only with a reason."""
+        if not self.get("deck.rigor"):
+            return None
+        declared, derived = self.derive_rigor(**facts), self.derived_rigor(**facts)
+        if (RIGOR_TIERS.index(declared) < RIGOR_TIERS.index(derived)
+                and not meaningful(self.get("deck.rigor_reason"))):
+            return declared, derived
+        return None
 
     # ------------------------------------------------------- environment
 

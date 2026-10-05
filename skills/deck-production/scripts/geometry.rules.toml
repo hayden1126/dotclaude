@@ -12,6 +12,10 @@
 # Every rule also takes `exempt`, a list of CSS selectors: a text item inside a
 # match is skipped by that rule (for text that sits there by design).
 #
+# A slide with fragments is measured at every fragment step. The geometry
+# rules run on each step; text-contrast and covered-text judge each text at
+# the step where it is most visible.
+#
 # "Ink" below is a text line's rect trimmed to the em box: a Range rect is the
 # font's content area, taller than the glyphs, so stacked lines whose content
 # areas touch do not collide on screen.
@@ -26,13 +30,16 @@ enabled = true
 # one cell all stack ink. Not compared: an item and the text nested in its own
 # flow (an absolutely positioned descendant, a badge on a title, still
 # counts), and lines one flow stacked: below the two items' common ancestor
-# nothing is positioned, floated, transformed, offset, negatively margined or
-# spilling out of a fixed size, and the two branches are one run of inline
-# content or boxes that do not intersect. Those cannot collide; their em boxes
-# overlap only by tight leading (a display headline at line-height .85). A
-# shallower overlap is reported by `clearance`.
+# nothing is positioned, floated, transformed, offset (a relative offset, a
+# stuck sticky box, a length vertical-align), negatively margined or spilling
+# out of a fixed size, and the two branches are one run of inline content or
+# boxes that do not intersect. Their em boxes overlap by tight leading (a
+# display headline at line-height .85 overlaps .15 em), which is design up to
+# flow_overlap em of the smaller text; deeper (line-height .5) glyphs collide
+# and count. A shallower overlap is reported by `clearance`.
 min_area = 4
 min_depth = 3
+flow_overlap = 0.3
 
 [[rule]]
 id = "covers-marker"
@@ -63,17 +70,29 @@ enabled = true
 # WCAG 2.x contrast, measured on pixels. The slide is screenshotted with the
 # glyph fill forced black, white and invisible; everything else stays as
 # rendered (text-shadows and SVG halos are part of what the glyph sits on;
-# group opacity and overlays above the text are part of what reaches the
-# reader). The rendered glyph color is judged against the backdrop under each
-# glyph pixel, and the ratio at the given percentile of those pixels must
-# reach min_small, or min_large for WCAG large text (large_px, or
-# large_bold_px at bold_weight). A low percentile: a few stray dots do not
-# fail a line, a band of bad backdrop does. Every visible text is measured,
-# whatever is behind it: photos, video frames, reveal backgrounds, gradients.
+# group opacity, masks and overlays above the text are part of what reaches
+# the reader). Two more shots isolate the glyph shape, so a veil is measured
+# pixel by pixel (a scrim over half a caption darkens that half) and a thin
+# weight is judged at its declared color. The glyph color is judged against
+# the backdrop under each glyph core pixel, and the ratio at the given
+# percentile of those pixels must reach min_small, or min_large for WCAG
+# large text (large_px, or large_bold_px at bold_weight). Compared
+# unrounded. A low percentile: a few stray dots do not fail a line, a band of
+# bad backdrop does. Below min_pixels judged pixels the percentile sets
+# aside no stray dot, so a failing item is an error only if its median fails
+# too, else a warning. Every visible text is measured, whatever is behind
+# it, once the slide has loaded what it paints with: fonts (pseudo-element
+# content too), images and svg <image>s, videos (first frame or poster), and
+# url() backgrounds, masks, border-images, list images and content, the
+# reveal slide background and its video included.
 #
 # The bars default to WCAG AA. A deck may lower them in deck.toml, with a
-# non-empty `reason` in the same table, printed on every run; at regulated
-# rigor ([deck] rigor, or derived) a bar below AA is a config error.
+# `reason` in the same table, printed on every run. At regulated rigor
+# ([deck] rigor, or derived) the floor holds: a bar below AA, the rule
+# disabled or a warning, a percentile above 5, large_px, large_bold_px or
+# bold_weight below WCAG's, a rules file without it, an exempt selector that
+# takes most of a slide's text, or a declared rigor below the derived one
+# without a rigor_reason are config errors.
 percentile = 5
 min_small = 4.5
 min_large = 3.0
@@ -81,7 +100,20 @@ reason = ""
 large_px = 24
 large_bold_px = 18.66
 bold_weight = 700
+min_pixels = 40
 # Decorative type is meant to recede.
+exempt = ["[data-decor]"]
+
+[[rule]]
+id = "covered-text"
+severity = "error"
+enabled = true
+# Visible text whose glyphs are hidden by something painted above it: an
+# opaque panel, an image or a shape stacked over a caption. Measured with
+# text-contrast's shots: of the glyph's core pixels, at least min_hidden of
+# them show nothing of it. A veil that lets the glyph through is
+# text-contrast's to judge.
+min_hidden = 0.02
 exempt = ["[data-decor]"]
 
 [[rule]]

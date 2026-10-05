@@ -4,13 +4,17 @@ Most cases call evaluate() on canned probe JSON, an outcome x rule matrix with
 no browser. GeometryEndToEnd drives headless Chrome over the fixture deck and
 skips, with the reason, when no browser is installed. The probe-side
 principles are pinned there, on the fixture's slides: measured contrast over a
-generated raster (bright, busy, scrimmed, haloed), through group opacity and
-an overlay, on SVG halos, and on a reveal slide background; the fit test (a
-short caption under a max-width it never reaches is bounded, a centered one
-that fills its room is not); a fragment measured in its final state; a tight
-display headline that one flow stacks; canvas-origin margins on a slide
-reveal centers, and a margin token in rem."""
+generated raster (bright, busy, scrimmed, haloed), through group opacity, an
+overlay and a veil over half a caption, on SVG halos, on a reveal slide
+background, at a hairline weight and a hair under AA; text covered by an
+image; the fit test (a short caption under a max-width it never reaches is
+bounded, a centered one that fills its room is not); fragments probed at
+every step and judged where most visible; an entrance animation measured at
+rest; a tight display headline that one flow stacks, and lines stacked half
+an em deep that collide; canvas-origin margins on a slide reveal centers,
+and a margin token in rem; slow fonts, backgrounds and media named."""
 import contextlib
+import http.server
 import importlib.util
 import io
 import json
@@ -21,6 +25,8 @@ import socket
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 import unittest
 from unittest import mock
 
@@ -42,9 +48,9 @@ def box(x, y, w, h):
     return {"x": x, "y": y, "w": w, "h": h}
 
 
-def flat(ratio):
-    """A contrast distribution where every judged pixel has this ratio."""
-    return [ratio] * 101
+def flat(ratio, n=1000, hidden=0.0):
+    """A contrast measurement where every judged pixel has this ratio."""
+    return {"q": [ratio] * 101, "n": n, "hidden": hidden}
 
 
 class Probe:
@@ -151,6 +157,12 @@ def contrast(ratio, **text):
     return p
 
 
+def covered(share):
+    p = Probe()
+    p.item(p.label(box(200, 200, 300, 30)))["contrast"] = flat(7.0, hidden=share)
+    return p
+
+
 def safe_bad():
     p = Probe()
     p.text(p.el(), box(40, 200, 300, 30))
@@ -192,6 +204,7 @@ MATRIX = {
     "unbounded-abs-text": (lambda: unbounded(UNBOUNDED),
                            lambda: unbounded({"content": True, "edge": False})),
     "text-contrast": (lambda: contrast(3.2), lambda: contrast(4.6)),
+    "covered-text": (lambda: covered(0.3), lambda: covered(0.0)),
     "safe-area": (safe_bad, safe_good),
     "clearance": (clearance_bad, overlap_good),
     "clipped-text": (clip_bad, clip_good),
@@ -324,6 +337,33 @@ class TextOverlapScope(unittest.TestCase):
         self.assertEqual(fired(p), ["clearance"])
 
 
+    def test_lines_one_flow_stacked_half_an_em_deep_collide(self):
+        # One flow, no displacement: tight leading up to flow_overlap em is
+        # design (a display face at .85), deeper is glyph on glyph.
+        for depth, hit in ((3, False), (12, True)):
+            with self.subTest(depth=depth):
+                p = Probe()
+                block = p.el()
+                p.text(p.el(block, display="inline"), box(100, 100, 300, 30))
+                p.text(p.el(block, display="inline"), box(100, 120 - depth, 300, 30))
+                self.assertEqual("text-overlap" in fired(p), hit)
+
+    def test_identical_structures_are_told_apart_by_identity(self):
+        # Two cards built alike: one pair of captions collides deep
+        # (text-overlap), the other only shallowly (clearance). Same subject
+        # text, different elements: the shallow one must not be dropped as
+        # if text-overlap had reported it.
+        p = Probe()
+        for top, shift in ((100, 10), (400, 18)):
+            card = p.el(position="absolute", token=".card")
+            p.text(p.el(card, token=".a"), box(100, top, 300, 30))
+            p.text(p.el(p.el(card, token=".b-wrap", position="absolute"), token=".b"),
+                   box(100, top + shift, 300, 30))
+        found = [(v.rule, v.subject) for v in violations(p)]
+        self.assertIn(("text-overlap", ".card .a x .b-wrap .b"), found)
+        self.assertIn(("clearance", ".card .a x .b-wrap .b"), found)
+
+
 class UnboundedScope(unittest.TestCase):
     def test_the_fit_outcomes(self):
         cases = {
@@ -375,7 +415,7 @@ class ContrastScope(unittest.TestCase):
     def test_the_judged_percentile_is_a_param(self):
         p = Probe()
         q = [1.0] * 3 + [10.0] * 98              # a few stray dots, else crisp
-        p.item(p.label(box(200, 200, 300, 30)))["contrast"] = q
+        p.item(p.label(box(200, 200, 300, 30)))["contrast"] = {"q": q, "n": 1000, "hidden": 0}
         self.assertNotIn("text-contrast", fired(p))
         rules = shipped_rules()
         next(r for r in rules if r["id"] == "text-contrast")["params"]["percentile"] = 0
@@ -385,6 +425,30 @@ class ContrastScope(unittest.TestCase):
         p = Probe()
         p.label(box(200, 200, 300, 30))          # contrast None (no single color)
         self.assertNotIn("text-contrast", fired(p))
+
+    def test_a_ratio_a_hair_under_the_bar_fails_and_never_shows_as_passing(self):
+        found = violations(contrast(4.4999))
+        self.assertEqual([v.rule for v in found], ["text-contrast"])
+        self.assertIn("4.49:1", found[0].detail)
+
+    def test_too_few_pixels_decide_only_when_the_median_fails(self):
+        # Below min_pixels the 5th percentile is the worst pixel or two: a
+        # stray dot. Median passing: a warning; median failing: an error.
+        q = [3.0] * 50 + [6.0] * 51
+        cases = {"few, median passes": ({"q": q, "n": 12, "hidden": 0}, "warn"),
+                 "few, median fails": ({"q": [3.0] * 101, "n": 12, "hidden": 0}, "error"),
+                 "many": ({"q": q, "n": 900, "hidden": 0}, "error")}
+        for name, (measured, severity) in cases.items():
+            with self.subTest(case=name):
+                p = Probe()
+                p.item(p.label(box(200, 200, 300, 30)))["contrast"] = measured
+                found = violations(p)
+                self.assertEqual([(v.rule, v.severity) for v in found],
+                                 [("text-contrast", severity)])
+
+    def test_covered_text_is_its_own_finding(self):
+        self.assertEqual(fired(covered(0.3)), ["covered-text"])
+        self.assertEqual(fired(covered(0.01)), [])
 
     def test_decorative_type_is_exempt(self):
         p = contrast(1.2)
@@ -524,6 +588,69 @@ class SeverityAndConfig(unittest.TestCase):
         self.assertEqual(geometry.lowered_contrast(self.deck(
             '[geometry]\ndisable = ["text-contrast"]\n')), [])
 
+    def test_a_zero_width_reason_is_no_reason(self):
+        zwsp = chr(0x200B)
+        with self.assertRaisesRegex(deckcfg.ConfigError, "reason"):
+            self.deck(f'[geometry.text-contrast]\nmin_small = 3.0\nreason = "{zwsp}"\n')
+        with self.assertRaisesRegex(deckcfg.ConfigError, "rigor_reason"):
+            self.deck(f'[deck]\nrigor = "standard"\nrigor_reason = "{zwsp} "\n'
+                      'audience = "external-investor"\n')
+
+    def test_the_regulated_floor_cannot_be_loosened(self):
+        reg = '[deck]\nrigor = "regulated"\n'
+        bad = {
+            "severity warn": ("[geometry.text-contrast]\nseverity = \"warn\"\n", "severity"),
+            "enabled false": ("[geometry.text-contrast]\nenabled = false\n", "enabled"),
+            "disabled": ('[geometry]\ndisable = ["text-contrast"]\n', "disable"),
+            "percentile up": ("[geometry.text-contrast]\npercentile = 10\n", "percentile"),
+            "large_px down": ("[geometry.text-contrast]\nlarge_px = 18\n", "large_px"),
+            "large_bold_px down": ("[geometry.text-contrast]\nlarge_bold_px = 14\n",
+                                   "large_bold_px"),
+            "bold_weight down": ("[geometry.text-contrast]\nbold_weight = 400\n",
+                                 "bold_weight"),
+        }
+        for name, (toml, key) in bad.items():
+            with self.subTest(case=name):
+                with self.assertRaisesRegex(deckcfg.ConfigError, f"{key}.*regulated"):
+                    self.deck(reg + toml)
+                self.deck('[deck]\nrigor = "standard"\n' + toml)    # allowed below it
+        # Stricter is always allowed.
+        self.deck(reg + "[geometry.text-contrast]\npercentile = 2\nlarge_px = 30\n")
+
+    def test_a_regulated_deck_needs_text_contrast_in_its_rules_file(self):
+        tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, tmp)
+        rules = pathlib.Path(tmp, "rules.toml")
+        rules.write_text('[[rule]]\nid = "clearance"\nseverity = "warn"\nenabled = true\n'
+                         'min_gap = 8\n')
+        with self.assertRaisesRegex(deckcfg.ConfigError, "rules.toml: has no text-contrast"):
+            self.deck(f'[deck]\nrigor = "regulated"\n[geometry]\nrules = "{rules}"\n')
+        rules.write_text(pathlib.Path(geometry.RULES_FILE).read_text().replace(
+            "large_px = 24", "large_px = 12"))
+        with self.assertRaisesRegex(deckcfg.ConfigError, "rules.toml: text-contrast large_px"):
+            self.deck(f'[deck]\nrigor = "regulated"\n[geometry]\nrules = "{rules}"\n')
+
+    def test_declaring_a_tier_below_the_derived_one_needs_a_reason(self):
+        facts = 'audience = "external-investor"\n'
+        with self.assertRaisesRegex(deckcfg.ConfigError, r"rigor = 'standard'.*rigor_reason"):
+            self.deck('[deck]\nrigor = "standard"\n' + facts)
+        rules = self.deck('[deck]\nrigor = "standard"\nrigor_reason = "internal dry run"\n'
+                          + facts + '[geometry.text-contrast]\nmin_small = 3.0\n'
+                          'reason = "draft palette"\n')
+        self.assertEqual(geometry.lowered_contrast(rules), ["min_small"])
+        self.deck('[deck]\nrigor = "regulated"\n' + facts)          # lowers nothing
+
+    def test_an_exemption_that_takes_the_slide_is_refused_at_regulated_rigor(self):
+        rules = shipped_rules()
+        p = Probe()
+        for i in range(4):
+            p.label(box(200, 100 + 60 * i, 300, 30))
+        p.data["exemptHits"] = {"text-contrast": {"[data-decor]": 1, "section *": 4}}
+        with self.assertRaisesRegex(deckcfg.ConfigError, "exempt 'section \\*' takes 4 of the 4"):
+            geometry.broad_exemptions(p.data, rules, "s1", "deck.toml")
+        p.data["exemptHits"] = {"text-contrast": {"[data-decor]": 1}}
+        geometry.broad_exemptions(p.data, rules, "s1", "deck.toml")
+
     def test_a_rules_file_cannot_name_a_rule_without_an_evaluator(self):
         with self.assertRaises(deckcfg.ConfigError):
             geometry.parse_rules('[[rule]]\nid = "x"\nseverity = "error"\nenabled = true\n', "t")
@@ -661,8 +788,8 @@ class GeometryEndToEnd(unittest.TestCase):
     def test_an_unknown_slide_is_a_usage_error(self):
         p, _ = self.run_gate("--slides", "nope")
         self.assertEqual(p.returncode, 2, p.stdout + p.stderr)
-        self.assertIn("have: bad, good, contrast, centered, anchors, svg, veil, bright-bg",
-                      p.stderr)
+        self.assertIn("have: bad, good, contrast, centered, anchors, svg, veil, thin, covered, "
+                      "steps, rest, flow, bright-bg", p.stderr)
 
     def test_a_centered_caption_is_judged_by_its_room_not_an_edge(self):
         # Both captions sit at translateX(-50%) with no max-width. The west one
@@ -683,11 +810,49 @@ class GeometryEndToEnd(unittest.TestCase):
 
     def test_contrast_is_judged_through_group_opacity_and_overlays(self):
         # White on navy: in a group at opacity .4 fails, at .55 passes, and
-        # under a 0.6-alpha black overlay painted above it fails.
+        # under a 0.6-alpha black overlay painted above it fails, also when
+        # the overlay covers only its left half (the veil is per pixel).
         p, out = self.run_gate("--slides", "veil")
         self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
         self.assertEqual(self.found(out), {("text-contrast", ".group40 .t"),
-                                           ("text-contrast", ".under-veil")})
+                                           ("text-contrast", ".under-veil"),
+                                           ("text-contrast", ".half-veil")})
+
+    def test_a_thin_weight_is_judged_at_its_color_and_the_bar_unrounded(self):
+        # #767676 at weight 200, 14 px, on white is 4.54:1: never fully
+        # covered, but not group opacity either. #83746a is 4.4955:1, which a
+        # comparison rounded to 0.01 would pass.
+        p, out = self.run_gate("--slides", "thin")
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertEqual(self.found(out), {("text-contrast", ".edge-ratio")})
+        self.assertIn("4.49:1", out["violations"][0]["detail"])
+
+    def test_text_under_an_image_is_covered(self):
+        p, out = self.run_gate("--slides", "covered")
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertEqual(self.found(out), {("covered-text", ".t")})
+
+    def test_every_fragment_step_is_probed(self):
+        # A current-visible note collides with a caption only at its own step
+        # (3 of 4); a semi-fade-out line at half opacity in the final state
+        # would fail, and is judged at full strength, where it passes.
+        p, out = self.run_gate("--slides", "steps")
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertEqual([(v["rule"], v["subject"], v["step"]) for v in out["violations"]],
+                         [("text-overlap", ".flash x .joins", "3/4")])
+        self.assertIn("ERROR steps step 3/4 text-overlap", p.stdout)
+
+    def test_an_entrance_animation_is_measured_at_rest(self):
+        # It rises from opacity 0 and 40 px down onto the base caption; at
+        # its start it is invisible and clear of it.
+        p, out = self.run_gate("--slides", "rest")
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertEqual(self.found(out), {("text-overlap", ".base x .rise")})
+
+    def test_lines_stacked_half_an_em_deep_collide(self):
+        p, out = self.run_gate("--slides", "flow")
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertEqual(self.found(out), {("text-overlap", ".tight .t1 x .tight .t2")})
 
     def test_a_slide_background_is_loaded_before_it_is_measured(self):
         # Reveal sets a data-background-image only when its slide is reached;
@@ -697,11 +862,11 @@ class GeometryEndToEnd(unittest.TestCase):
         self.assertEqual(self.found(out), {("text-contrast", ".on-bright")})
 
     def test_no_contrast_shots_when_the_rule_is_off(self):
-        tmp, cfg = config('[geometry]\ndisable = ["text-contrast"]\n')
+        tmp, cfg = config('[geometry]\ndisable = ["text-contrast", "covered-text"]\n')
         self.addCleanup(shutil.rmtree, tmp)
 
         def shots(*args):
-            raise AssertionError("contrast measured with text-contrast disabled")
+            raise AssertionError("contrast measured with text-contrast and covered-text off")
         code, out, err = run_main("--slides", "veil", "--config", cfg, measure_contrast=shots)
         self.assertEqual(code, 0, out + err)
         self.assertIn("geometry: 0 errors, 0 warnings on 1 slides", out)
@@ -727,6 +892,105 @@ class GeometryEndToEnd(unittest.TestCase):
         self.assertEqual(code, deckcfg.EXIT_USAGE, out + err)
         self.assertRegex(err, r"slide good: not loaded within 2 s: font .*Hang")
         self.assertNotIn("install", err)
+
+    def hanging_socket(self):
+        hang = socket.socket()
+        hang.bind(("127.0.0.1", 0))
+        hang.listen(8)                   # accepted by the kernel, never answered
+        self.addCleanup(hang.close)
+        return hang.getsockname()[1]
+
+    def deck_copy(self, edit):
+        """A copy of the fixture with index.html passed through edit()."""
+        tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, tmp)
+        deck = os.path.join(tmp, "geodeck")
+        shutil.copytree(FIXTURE, deck)
+        index = pathlib.Path(deck, "index.html")
+        index.write_text(edit(index.read_text()))
+        return deck
+
+    def test_fonts_are_loaded_for_pseudo_content_and_by_stretch(self):
+        # Named by face, not left to document.fonts.ready: a face used only by
+        # ::after content, and a condensed face beside a normal one.
+        port = self.hanging_socket()
+        cases = {
+            "pseudo": ("@font-face { font-family: HangPseudo; src: url(http://127.0.0.1:%d/p.woff2); }"
+                       " #good .wrap::after { content: 'x'; font-family: HangPseudo; }",
+                       r"font [^;]*HangPseudo"),
+            "stretch": ("@font-face { font-family: Wide; src: local(Nope); }"
+                        " @font-face { font-family: Wide; font-stretch: 75%%;"
+                        " src: url(http://127.0.0.1:%d/c.woff2); }"
+                        " #good h2 { font-family: Wide; font-stretch: condensed; }",
+                        r"font [^;]*condensed [^;]*Wide"),
+        }
+        for name, (css, pattern) in cases.items():
+            with self.subTest(case=name):
+                deck = self.deck_copy(lambda html: html.replace(
+                    "</style>", (css % port) + "\n  </style>", 1))
+                code, out, err = run_main("--slides", "good", deck=deck, SETTLE_BUDGET=2.0)
+                self.assertEqual(code, deckcfg.EXIT_USAGE, out + err)
+                self.assertRegex(err, pattern)
+
+    def test_media_beyond_img_and_backgrounds_is_awaited(self):
+        # An svg <image>, a mask-image and a video poster that never answer.
+        port = self.hanging_socket()
+        base = f"http://127.0.0.1:{port}"
+        markup = (f'<svg width="10" height="10"><image href="{base}/svg.png" width="10" '
+                  f'height="10"/></svg><div style="width:10px;height:10px;'
+                  f'mask-image:url({base}/mask.png)"></div>'
+                  f'<video poster="{base}/poster.png" preload="none"></video>')
+        deck = self.deck_copy(lambda html: html.replace(
+            '<p class="fragment note">', markup + '<p class="fragment note">', 1))
+        code, out, err = run_main("--slides", "good", deck=deck, SETTLE_BUDGET=2.0)
+        self.assertEqual(code, deckcfg.EXIT_USAGE, out + err)
+        for what in ("svg image", "mask", "poster"):
+            self.assertIn(f"{what} {base}/", err)
+
+    def slow_server(self, delay):
+        """A threaded server that answers every request with bright.png after
+        `delay` seconds, uncacheable. Returns its port."""
+        body = pathlib.Path(FIXTURE, "media", "bright.png").read_bytes()
+
+        class Slow(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                time.sleep(delay)
+                self.send_response(200)
+                self.send_header("Content-Type", "image/png")
+                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *args):
+                pass
+
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Slow)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        return server.server_address[1]
+
+    def test_a_slow_slide_background_is_awaited_before_it_is_measured(self):
+        # 3 s late, inside a 10 s budget: measured once it is painted, so the
+        # white type on it fails.
+        port = self.slow_server(3)
+        deck = self.deck_copy(lambda html: html.replace(
+            'data-background-image="media/bright.png"',
+            f'data-background-image="http://127.0.0.1:{port}/bright.png"'))
+        code, out, err = run_main("--slides", "bright-bg", "--json", deck=deck,
+                                  SETTLE_BUDGET=10.0)
+        self.assertEqual(code, deckcfg.EXIT_FAIL, out + err)
+        self.assertIn("ERROR bright-bg text-contrast  .on-bright", out)
+
+    def test_a_slide_background_that_never_answers_is_named(self):
+        port = self.hanging_socket()
+        deck = self.deck_copy(lambda html: html.replace(
+            'data-background-image="media/bright.png"',
+            f'data-background-image="http://127.0.0.1:{port}/bright.png"'))
+        code, out, err = run_main("--slides", "bright-bg", deck=deck, SETTLE_BUDGET=2.0)
+        self.assertEqual(code, deckcfg.EXIT_USAGE, out + err)
+        self.assertIn("background http://127.0.0.1:", err)
 
 
 if __name__ == "__main__":
