@@ -640,6 +640,12 @@ class SeverityAndConfig(unittest.TestCase):
                                             where + ".*frozen at regulated rigor"):
                     self.deck(reg + toml)
                 self.deck('[deck]\nrigor = "standard"\n' + toml)    # allowed below it
+        # The environment's slide list persists across runs like the key does.
+        with mock.patch.dict(os.environ, {geometry.SLIDES_ENV: "s1"}):
+            with self.assertRaisesRegex(deckcfg.ConfigError,
+                                        "DECKKIT_GEOMETRY_SLIDES.*frozen at regulated rigor"):
+                self.deck(reg)
+            self.deck('[deck]\nrigor = "standard"\n')
 
     def test_frozen_rules_may_only_get_stricter(self):
         reg = '[deck]\nrigor = "regulated"\n'
@@ -1146,8 +1152,10 @@ class GeometryEndToEnd(unittest.TestCase):
         # background image, each cycling gray 200 down to black and back
         # (MEDIA_GRAYS), under a white caption. Shot at whatever frame is
         # current, its ratio and verdict change from run to run; frozen at
-        # the first frame, five runs report identical JSON, failing at the
-        # ratio of white on gray 200.
+        # the first frame, eight runs report identical JSON, failing at the
+        # ratio of white on gray 200, as does the same video autoplaying in
+        # the slide. With a dark poster it is measured at its poster, as an
+        # export shows it, and passes.
         browser = geometry.Browser(*geometry.find_browser(deckcfg.load(FIXTURE)), 320, 240)
         try:
             webm = base64.b64decode(geometry.Page(browser, 320, 240).evaluate(RECORD_WEBM_JS))
@@ -1155,7 +1163,8 @@ class GeometryEndToEnd(unittest.TestCase):
             browser.close()
         slides = ''.join(
             f'<section id="{sid}" data-background-color="#000" {attr}="media/{name}" '
-            f'{extra} style="background: none"><p class="on-media" style="position: absolute; left: 200px; top: 400px; max-width: 900px; '
+            f'{extra} style="background: none"><p class="on-media" style="position: absolute; '
+            f'left: 200px; top: 400px; max-width: 900px; '
             f'font: 700 40px sans-serif; color: #fff">White caption over moving media</p>'
             f'</section>\n'
             for sid, attr, name, extra in (
@@ -1163,19 +1172,30 @@ class GeometryEndToEnd(unittest.TestCase):
                  "data-background-video-loop data-background-video-muted"),
                 ("media-image", "data-background-image", "loop.png",
                  'data-background-size="cover"')))
+        slides += ''.join(
+            f'<section id="{sid}" style="background: none"><video src="media/loop.webm" '
+            f'{poster} autoplay muted loop style="position: absolute; left: 0; top: 0; '
+            'width: 1920px; height: 1080px; object-fit: cover"></video><p class="on-media" '
+            'style="position: absolute; left: 200px; top: 400px; max-width: 900px; '
+            'font: 700 40px sans-serif; color: #fff">White caption over a video</p></section>\n'
+            for sid, poster in (("media-inslide", ""), ("media-poster", 'poster="media/dark.png"')))
         deck = self.deck_copy(lambda html: html.replace(
             '<section id="bright-bg"', slides + '<section id="bright-bg"', 1))
         pathlib.Path(deck, "media", "loop.webm").write_bytes(webm)
         pathlib.Path(deck, "media", "loop.png").write_bytes(apng(MEDIA_GRAYS, 64, 36))
+        pathlib.Path(deck, "media", "dark.png").write_bytes(apng([40], 64, 36))
         runs = []
-        for _ in range(5):
-            code, out, err = run_main("--slides", "media-video,media-image", "--json", deck=deck)
+        for _ in range(8):
+            code, out, err = run_main("--slides", "media-video,media-image,media-inslide,media-poster", "--json",
+                                      deck=deck)
             self.assertEqual(code, deckcfg.EXIT_FAIL, out + err)
             runs.append(json.loads(out.strip().splitlines()[-1]))
-        self.assertEqual(runs, [runs[0]] * 5)
+        self.assertEqual(runs, [runs[0]] * 8)
         first = wcag((255, 255, 255), (MEDIA_GRAYS[0],) * 3)
         self.assertEqual({(v["slide"], v["rule"]) for v in runs[0]["violations"]},
-                         {("media-video", "text-contrast"), ("media-image", "text-contrast")})
+                         {("media-video", "text-contrast"), ("media-image", "text-contrast"),
+                          ("media-inslide", "text-contrast")})
+        self.assertEqual(runs[0]["slides"]["media-poster"], {"errors": 0, "warnings": 0})
         for v in runs[0]["violations"]:
             with self.subTest(slide=v["slide"]):
                 ratio = float(v["detail"].split(":1")[0])

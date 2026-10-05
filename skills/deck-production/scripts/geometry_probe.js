@@ -386,6 +386,52 @@ async function geometryContrast(shots, items, scale) {
   });
 }
 
+// Freeze the current slide's videos (its reveal background's included) so
+// every run measures the same pixels: a playing video (a reveal background
+// video autoplays and loops) would be shot at whatever frame is current.
+// Each is stopped for the rest of the run (play() does nothing, autoplay
+// off: reveal plays a slide's media again after it settles) and reloaded,
+// so it never plays again. A seek to 0 is not enough: measured, a video
+// paused mid-loop and seeked still showed a later frame now and then. Once
+// reloaded, a video with a poster shows its poster, as a print or PDF export
+// does, and fetches nothing (the poster was awaited with the slide); one
+// without shows its first frame, awaited until presented
+// (requestVideoFrameCallback). Called after the slide settles and again
+// before its screenshots; a video already frozen and untouched since is left
+// alone. Returns what did not settle within budget.
+var geometryFrozen = new WeakSet();
+async function geometryFreezeMedia(budget) {
+  const sec = Reveal.getCurrentSlide();
+  const at = Reveal.getIndices(sec);
+  const bg = Reveal.getSlideBackground ? Reveal.getSlideBackground(at.h, at.v) : null;
+  const videos = [...sec.querySelectorAll('video'), ...(bg ? bg.querySelectorAll('video') : [])];
+  const waits = [];
+  for (const vid of videos) {
+    if (geometryFrozen.has(vid) && vid.paused && !vid.seeking && !vid.played.length) continue;
+    geometryFrozen.add(vid);
+    vid.play = () => Promise.resolve();
+    vid.autoplay = false;
+    vid.pause();
+    if (!vid.currentSrc && !vid.src && !vid.querySelector('source')) continue;
+    if (vid.poster || vid.preload === 'none') {
+      vid.preload = 'none';                 // the poster, or nothing: no frame to wait for
+      vid.load();
+      continue;
+    }
+    vid.preload = 'auto';
+    const shown = new Promise(ok => {
+      if (!vid.requestVideoFrameCallback) return ok();
+      vid.requestVideoFrameCallback(() => ok());
+    });
+    const failed = new Promise(ok => vid.addEventListener('error', ok, { once: true, capture: true }));
+    vid.load();
+    waits.push([Promise.race([shown, failed]), `video first frame ${vid.currentSrc || vid.src}`]);
+  }
+  const slow = await geometrySettle(waits, budget);
+  await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+  return slow;
+}
+
 // Wait for a set of things a slide paints with, all started before the
 // deadline, and name the ones still pending when it passes. One deadline for
 // all, started once: a resource is reported slow only if it was still

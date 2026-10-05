@@ -84,6 +84,7 @@ AA = {"min_small": 4.5, "min_large": 3.0}   # WCAG 2.x AA, text-contrast's defau
 # them stricter, through these keys and in this direction: +1 raise only (a
 # higher contrast bar), -1 lower only (covered-text fails at min_hidden or
 # more, so a lower share fails sooner). Anything else is refused.
+SLIDES_ENV = "DECKKIT_GEOMETRY_SLIDES"   # deckcfg's env override of geometry.slides
 FROZEN = {"text-contrast": {"min_small": +1, "min_large": +1},
           "covered-text": {"min_hidden": -1}}
 EVAL_TIMEOUT = 30.0     # s for one in-page evaluate
@@ -648,6 +649,9 @@ def frozen_at_regulated(rules: list[dict], deck_geometry: dict, disable: list[st
     if "slides" in deck_geometry:
         raise deckcfg.ConfigError(f"{source}: [geometry] slides: a persisted slide list leaves "
                                   f"the rest unjudged; {why} (pass --slides for an ad-hoc run)")
+    if SLIDES_ENV in os.environ:
+        raise deckcfg.ConfigError(f"{SLIDES_ENV}: a slide list that persists across runs leaves "
+                                  f"the rest unjudged; {why} (pass --slides for an ad-hoc run)")
     for rid in FROZEN:
         if rid in disable:
             raise deckcfg.ConfigError(f"{source}: [geometry] disable names {rid}; {why}")
@@ -994,6 +998,10 @@ GOTO_JS = r"""(async (h, v, f, budget) => {
   for (const [u, kind] of urls) tasks.push([decoded(u), `${kind} ${u}`]);
   // A video shows its first frame once it has current data; one that will
   // not fetch any (preload none, no autoplay) shows its poster, awaited above.
+  // A video reveal has just built (a slide background) reports no source
+  // (networkState 3) until its resource selection runs, after this task:
+  // read before that, it would be passed over here, and play once loaded.
+  await new Promise(r => setTimeout(r, 0));
   for (const vid of videos) {
     if (vid.readyState >= 2 || vid.networkState === 3) continue;
     if (vid.preload === 'none' && !vid.autoplay) continue;
@@ -1003,24 +1011,7 @@ GOTO_JS = r"""(async (h, v, f, budget) => {
     }), `video ${vid.currentSrc || vid.src || (vid.querySelector('source') || {}).src}`]);
   }
   const slow = await geometrySettle(tasks, budget);
-  // Time-based media frozen at their first frame, so every run measures the
-  // same pixels: a playing video (a reveal background video autoplays and
-  // loops) would be shot at whatever frame is current. Reveal may start one
-  // as its data arrives, so this repeats until none plays.
-  for (let round = 0; round < 3; round++) {
-    const seeks = [];
-    for (const vid of videos) {
-      if (vid.readyState < 1) continue;       // no metadata: it shows its poster
-      vid.pause();
-      if (vid.currentTime === 0 && !vid.seeking) continue;
-      seeks.push([new Promise(ok => vid.addEventListener('seeked', ok, { once: true })),
-                  `video seek ${vid.currentSrc || vid.src}`]);
-      vid.currentTime = 0;
-    }
-    slow.push(...await geometrySettle(seeks, budget));
-    await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
-    if (videos.every(vid => vid.paused && vid.currentTime === 0)) break;
-  }
+  slow.push(...await geometryFreezeMedia(budget));
   rest();
   const frames = new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
   slow.push(...await geometrySettle([[frames, 'a rendered frame']], 2000));
@@ -1135,6 +1126,10 @@ def measure_contrast(page: Page, probe: dict, wanted: set[int] | None = None) ->
     origin = probe["origin"]
     clip = {"x": origin["x"], "y": origin["y"], "width": origin["w"], "height": origin["h"],
             "scale": 1}
+    # Reveal may restart a video after the slide settled: freeze it again.
+    slow = page.evaluate(f"geometryFreezeMedia({SETTLE_BUDGET * 1000:.0f})")
+    if slow:
+        raise SlowResource(f"not frozen within {SETTLE_BUDGET:g} s: " + "; ".join(slow))
     shots = {}
     try:
         for name, fill, mode in SHOTS:
