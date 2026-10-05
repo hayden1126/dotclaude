@@ -221,6 +221,23 @@ class Restore(unittest.TestCase):
         self.assertEqual(self.resumed(), [(b, sid(2))])
         self.assertEqual(self.registry(), [sid(1) + ".json", sid(3) + ".json", sid(4) + ".json"])
 
+    def test_an_entry_with_a_poisoned_value_is_ignored_not_fatal(self):
+        # A NUL in a path, a non-finite time and a lone surrogate each used to crash the whole
+        # restore; one bad file must never block the rest.
+        for n, field, raw in ((1, "transcript_path", '"/tmp/x\\u0000y"'),
+                              (3, "ended_other_at", "-Infinity"),
+                              (4, "cwd", '"\\ud800"')):
+            self.entry(n, window=n)
+            path = os.path.join(self.reg, sid(n) + ".json")
+            with open(path) as f:
+                e = json.load(f)
+            e[field] = "@@"
+            with open(path, "w") as f:
+                f.write(json.dumps(e).replace('"@@"', raw))
+        b = self.entry(5, window=5)
+        self.run_restore()
+        self.assertEqual(self.resumed(), [(b, sid(5))])
+
     def test_another_socket_in_the_same_pane_does_not_hide_the_tab(self):
         # Pane ids restart at %0 on every server, so a newer probe entry can share the pane.
         self.entry(1, window=1, pane="%3", age=900)

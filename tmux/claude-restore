@@ -100,6 +100,31 @@ def num(v):
 def isint(v):
     return isinstance(v, int) and not isinstance(v, bool)
 
+def text(v):
+    # A string the later steps can handle: no NUL (os calls raise on it) and valid UTF-8 (print
+    # raises on a lone surrogate). Other control characters get a logged skip further down.
+    if not isinstance(v, str) or "\x00" in v:
+        return False
+    try:
+        v.encode("utf-8")
+    except UnicodeError:
+        return False
+    return True
+
+def when(v):
+    # A time: a finite number in a sane epoch range (json accepts Infinity and 1e400).
+    return v is None or (num(v) is not None and 0 <= v < 1e11)
+
+def valid(e):
+    # Every field checked once, here: a corrupt or hand-edited file is ignored like an
+    # unreadable one, so one bad file can never block the rest of the restore.
+    return (isinstance(e, dict)
+            and all(text(e.get(k)) for k in ("socket", "session_id", "cwd", "pane"))
+            and (e.get("transcript_path") in (None, "") or text(e.get("transcript_path")))
+            and isint(e.get("server_start")) and isint(e.get("server_pid"))
+            and (e.get("window_index") is None or isint(e.get("window_index")))
+            and all(when(e.get(k)) for k in ("ts", "ended_other_at")))
+
 cands = []
 for name in sorted(os.listdir(reg)):
     if not name.endswith(".json") or name.startswith(".") or re.search(r"[\x00-\x1f]", name):
@@ -109,10 +134,7 @@ for name in sorted(os.listdir(reg)):
             e = json.load(f)
     except Exception:
         continue
-    # Malformed server fields (a corrupt or hand-edited file) are ignored like an unreadable one,
-    # so one bad file can never block the rest.
-    if not (isinstance(e, dict) and e.get("socket") == socket and isint(e.get("server_start"))
-            and isint(e.get("server_pid")) and isinstance(e.get("pane", ""), str)):
+    if not (valid(e) and e["socket"] == socket):
         continue
     if (e["server_start"], e["server_pid"]) != (start, pid):
         cands.append((name, e))
@@ -133,7 +155,7 @@ def mtime(e):
     p = e.get("transcript_path")
     try:
         return os.path.getmtime(p) if isinstance(p, str) and p else None
-    except OSError:
+    except (OSError, ValueError):
         return None
 
 # The last activity of each old server, L. For a marked entry, the transcript counts only up to
