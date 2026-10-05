@@ -22,13 +22,26 @@
   "teammateMode": "in-process",
   "permissions": {
     "allow": [
-      "Bash(delegation-ledger wait *)"
+      "Bash(delegation-ledger wait *)",
+      "Bash(git push origin *)",
+      "Bash(gh pr create *)"
     ],
     "ask": [
       "Bash(git push)",
-      "Bash(git push *)",
+      "Bash(git push origin)",
+      "Bash(git push -*)",
+      "Bash(git push origin -*)",
+      "Bash(git push *main*)",
+      "Bash(git push *HEAD*)",
+      "Bash(git push *@*)",
+      "Bash(git push *--all*)",
+      "Bash(git push *--mirror*)",
+      "Bash(git push * :*)",
+      "Bash(git push *+*)",
       "Bash(git -C * push)",
-      "Bash(git -C * push *)"
+      "Bash(git -C * push *)",
+      "Bash(gh pr merge*)",
+      "Bash(gh api *merge*)"
     ],
     "deny": [
       "Bash(git push --force*)",

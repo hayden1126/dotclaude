@@ -164,11 +164,16 @@ class Baseline(unittest.TestCase):
     def test_a_rearm_never_waits_on_a_permission_prompt(self):
         self.assertIn("Bash(delegation-ledger wait *)", S["permissions"]["allow"])
 
-    def test_destructive_git_is_denied_and_push_asks(self):
-        # Claude Code matches a Bash rule as a glob whose * spans spaces, and deny beats ask
-        # (verified live on 2.1.288 in default and auto mode). Each part of a compound command
-        # is checked on its own (verified in default mode). Wrappers other than these bash -c
-        # forms (bash -lc, sh -c, eval, git -c k=v) are left to auto mode's classifier.
+    def test_destructive_git_is_denied_and_anything_that_can_reach_main_asks(self):
+        # Claude Code matches a Bash rule as a glob whose * spans spaces, deny beats ask, and
+        # ask beats allow (verified live on 2.1.288 in default and auto mode). Each part of a
+        # compound command is checked on its own (verified in default mode). Wrappers other than
+        # these bash -c forms (bash -lc, sh -c, eval, git -c k=v) are left to auto mode's
+        # classifier. A rule can't see the current branch, so every push form that could land
+        # on main without naming it (no refspec, HEAD, @, --all, --mirror, a leading flag) asks;
+        # the explicit `git push origin <branch>` runs. Merges ask. Leaks, accepted (Hayden,
+        # 2026-10-05): a refspec-less push with a flag after the branch-less remote is caught,
+        # but `git push origin feat -u`-style trailing flags and other remotes are not checked.
         def matching(kind, command):
             return [rule for rule in S["permissions"][kind]
                     if re.fullmatch(re.escape(rule[len("Bash("):-1]).replace(r"\*", ".*"),
@@ -186,10 +191,17 @@ class Baseline(unittest.TestCase):
                   "git -C . reset --merge", "git -C . reset HEAD --merge",
                   "git clean -fd", "git clean -d -f", "git -C . clean -fd",
                   'bash -c "git push --force origin feat"', 'bash -c "git reset --hard"']
-        asked = ["git push", "git push origin feat", "git -C . push", "git -C . push origin feat",
-                 "git push origin feat --follow-tags", "git push origin feat-force-fix",
-                 # A force the deny rules miss still asks, as every push does.
-                 "git push origin +feat", "git push -uf origin feat"]
+        asked = ["git push", "git push origin", "git push --no-verify", "git push -u origin feat",
+                 "git push origin --no-verify", "git push origin main", "git push origin feat:main",
+                 "git push origin HEAD", "git push origin @", "git push origin feat --all",
+                 "git push origin feat --mirror", "git push origin :feat",
+                 "git -C . push", "git -C . push origin feat",
+                 # A force the deny rules miss still asks.
+                 "git push origin +feat", "git push -uf origin feat",
+                 "gh pr merge 5 --squash", "gh api -X PUT repos/o/r/pulls/5/merge"]
+        # Pushes to a named branch and opening a PR run (Hayden still approves each in words).
+        allowed = ["git push origin feat/x", "git push origin feat-force-fix",
+                   "git push origin fix/x --follow-tags", "gh pr create --base main --head feat/x"]
         # rm never asks: the sandbox bounds where it writes, and subagent-policy keeps a
         # delegated rm -r in its root (README has the overlay that brings the asks back).
         neither = ['git commit -am "push --force docs"', "git status",
@@ -203,6 +215,11 @@ class Baseline(unittest.TestCase):
             self.assertTrue(matching("ask", c), c)
         for c in neither:
             self.assertFalse(matching("deny", c) + matching("ask", c), c)
+        for c in allowed:
+            self.assertFalse(matching("deny", c) + matching("ask", c), c)
+            self.assertTrue(matching("allow", c), c)
+        for c in asked:  # ask beats allow, so an allow rule may cover these too
+            self.assertTrue(matching("ask", c), c)
         # Every rule is the only one of its kind that catches some case, so dropping one fails.
         for kind, cases in (("deny", denied), ("ask", asked)):
             for rule in S["permissions"][kind]:
