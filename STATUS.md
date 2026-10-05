@@ -26,7 +26,7 @@ stored here).
   https://claude.ai/artifact/KWwrPkLsbMUi7Ugjfskqsz (republish by that URL).
 
 ## In flight
-- **tmux tabs come back after a server death** (`feat/tmux-restore`, pushed, no PR yet; design and
+- **tmux tabs come back after a server death** (PR #70, `feat/tmux-restore`; design and
   the situations table in `PLAN.md`, behavior in README "Tabs come back after a reboot").
   `hooks/session-registry.sh` records each open tab (session id, cwd, pane, window, tmux server
   socket + start + pid); `tmux/claude-restore` reopens a dead server's tabs when `main` is created
@@ -35,7 +35,7 @@ stored here).
   logon; KeepWSLAlive only boots the VM), resume the conversation, interactive tmux tabs only (no
   `--bg`), and any server death counts (reboot, `wsl --terminate`, `kill-server`). Four review
   rounds; verified by `tests/setup` (167) and isolated two-server e2e runs on `tmux -L e2e`.
-  - **To ship:** PR, merge, `git fetch origin main:main`, switch to `main`, `./setup-tmux.sh`
+  - **To ship:** merge #70, `git fetch origin main:main`, switch to `main`, `./setup-tmux.sh`
     (links `claude-restore`), then `./setup.sh` for the SessionStart/SessionEnd hooks (copy
     `~/.claude/settings.json` first, diff after). Then delete the worktree
     `.claude/worktrees/agent-adfd457732b22fc90` and its branch.
@@ -47,7 +47,7 @@ stored here).
     tmux's own new shell is window 1, so restored tabs start at 2; one unreproduced test-suite
     failure during the build (34 later runs clean). The validation gate (6cf8f39) had no fresh
     reviewer, only its own failing-then-passing test, the suite and the e2e.
-- **Push and merge permissions** (`chore/push-perms`, off `main`; Hayden's call 2026-10-05):
+- **Push and merge permissions** (PR #71, `chore/push-perms`; Hayden's call 2026-10-05):
   `git push origin <branch>` and `gh pr create` run without a prompt; anything that can reach
   `main` and merges (`gh pr merge`) ask. Rules only (README "permissions" paragraph; pinned in
   `tests/delegation/test_settings.py`). Live after merge plus `./setup.sh` (settings are copied).
@@ -98,8 +98,9 @@ stored here).
   `$CLAUDE_JOB_DIR/tmp` bug report is Hayden's call; `CLAUDE.md` carries the workaround.
 
 ## Notes for next session
-- **Next: ship tmux restore** (In flight, "To ship"), then Hayden picks the next workflow
-  improvement; deck-production S2 is deferred. Recent work: PRs #67 to #69, `main..feat/tmux-restore`.
+- **Next: Hayden merges #70 and #71, then install both** (In flight, "To ship"; one `./setup.sh`
+  covers both), then Hayden picks the next workflow improvement; deck-production S2 is deferred.
+  Recent work: PRs #67 to #69, `main..feat/tmux-restore`.
 - **Verify `deck-production` before touching it:** `deckkit regress` green (the config and goldens
   are in the private repo's `decks/_parity/`, README there has the command; the deck-production
   item says which branch) and
