@@ -43,8 +43,14 @@ SKILL = pathlib.Path(__file__).resolve().parent.parent
 SCRIPTS = SKILL / "scripts"
 
 
-def run(argv: list[str]) -> tuple[int, str]:
-    result = subprocess.run([sys.executable, *argv], capture_output=True, text=True, timeout=600)
+# The geometry gate drives a browser over every slide, five screenshots per
+# measured fragment step: a whole deck takes minutes, not seconds.
+GEOMETRY_TIMEOUT = 1800
+
+
+def run(argv: list[str], timeout: float = 600) -> tuple[int, str]:
+    result = subprocess.run([sys.executable, *argv], capture_output=True, text=True,
+                            timeout=timeout)
     return result.returncode, result.stdout + result.stderr
 
 
@@ -130,9 +136,12 @@ def collect(ref: pathlib.Path, config: pathlib.Path, workdir: pathlib.Path) -> d
         facts["package"]["shipped_sha256"] = hashlib.sha256(shipped.read_bytes()).hexdigest()
 
     # --- geometry gate: rendered collisions and contrast, as counts
-    code, out = run([str(SCRIPTS / "geometry.py"), str(ref), "--config", str(config),
-                     "--json"])
-    facts["geometry"] = geometry_facts(code, out)
+    try:
+        code, out = run([str(SCRIPTS / "geometry.py"), str(ref), "--config", str(config),
+                         "--json"], timeout=GEOMETRY_TIMEOUT)
+        facts["geometry"] = geometry_facts(code, out)
+    except subprocess.TimeoutExpired:
+        facts["geometry"] = {"exit": "timeout"}
 
     # --- shipped font faces, if the reference deck has any
     fonts = sorted((ref / "fonts").glob("*.woff2"))

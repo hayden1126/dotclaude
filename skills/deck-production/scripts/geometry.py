@@ -1320,7 +1320,7 @@ def measure(cfg: deckcfg.DeckConfig, browser_info: tuple[str, bool], wanted: lis
 # =================================================================== main
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Geometry gate: overlap, overflow, clearance")
+    parser = argparse.ArgumentParser(description="Geometry gate: overlap, contrast, coverage, bounds")
     deckcfg.add_common_args(parser)
     parser.add_argument("--slides", help="comma-separated slide ids (default: all, "
                                          "or [geometry] slides)")

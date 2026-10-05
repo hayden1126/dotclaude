@@ -8,6 +8,7 @@ import importlib.util
 import json
 import os
 import pathlib
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -105,8 +106,9 @@ class CollectRunsGeometry(unittest.TestCase):
     """collect() runs geometry.py on the reference deck with the parity
     config and --json, and stores its facts; the other tools are stubbed."""
 
-    def fake_run(self, argv):
+    def fake_run(self, argv, timeout=600):
         self.calls.append(argv)
+        self.timeouts[pathlib.Path(argv[0]).name] = timeout
         script = pathlib.Path(argv[0]).name
         if script == "build.py":
             return 0, json.dumps({"rows": 3, "built": 3, "sha256": "ab", "would_change": False})
@@ -115,11 +117,13 @@ class CollectRunsGeometry(unittest.TestCase):
         if script == "package.py":
             return 0, json.dumps({"note_blocks_stripped": 0, "byte_delta": 0})
         if script == "geometry.py":
+            if isinstance(self.geometry_result, Exception):
+                raise self.geometry_result
             return self.geometry_result
         raise AssertionError(f"unexpected tool {script}")
 
     def collect(self, geometry_result):
-        self.calls = []
+        self.calls, self.timeouts = [], {}
         self.geometry_result = geometry_result
         with tempfile.TemporaryDirectory() as tmp:
             ref, config = pathlib.Path(tmp, "ref"), pathlib.Path(tmp, "parity.toml")
@@ -139,6 +143,16 @@ class CollectRunsGeometry(unittest.TestCase):
                          {"text-overlap": {"errors": 1, "warnings": 0}})
         self.assertIn("geometry 3 errors, 1 warnings on 3 slides",
                       parity_check.geometry_line(facts))
+
+    def test_geometry_gets_its_own_longer_timeout(self):
+        self.collect((0, geometry_output([], {"s01": {}}, 0)))
+        self.assertEqual(self.timeouts["geometry.py"], parity_check.GEOMETRY_TIMEOUT)
+        self.assertGreater(parity_check.GEOMETRY_TIMEOUT, self.timeouts["build.py"])
+
+    def test_a_geometry_timeout_is_recorded_not_raised(self):
+        facts = self.collect(subprocess.TimeoutExpired(["geometry.py"], 1800))
+        self.assertEqual(facts["geometry"], {"exit": "timeout"})
+        self.assertIn("not measured (exit timeout)", parity_check.geometry_line(facts))
 
     def test_no_browser_does_not_crash_the_harness(self):
         facts = self.collect((3, "environment: no headless Chrome found\n"))
