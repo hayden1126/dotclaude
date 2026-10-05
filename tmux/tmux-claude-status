@@ -5,14 +5,42 @@
 #   - CLEAR @claude_state for a window where Claude is no longer running (crash / kill / a
 #     Stop that never reached the hook), so a glyph can't get stuck.
 #   - FILL @claude_state once for a window running Claude that has no state yet (cold start:
-#     you attached to a session that was already going). This is the ONLY branch that queries
-#     the supervisor, so after warm-up it never spawns `claude`.
-# It NEVER overwrites an existing busy/wait/idle value → no clobber, no flicker, no lag.
+#     you attached to a session that was already going). A window nothing accounts for gets
+#     "idle" (no glyph), so it isn't re-queried every run.
+#   - MAP each background session to the tab showing it. A background session has no
+#     TMUX_PANE, and its ancestry reaches whichever client started the shared daemon, so the
+#     map goes by directory: the one client pane (a `claude` pane no interactive session's
+#     ancestry reaches) in the session's cwd, if exactly one background session runs there. A
+#     mapping is kept while its pane still qualifies and the session is still alone in its dir,
+#     so a claude just started there (not listed yet, so it looks like a client) doesn't drop it. $XDG_STATE_HOME/dotclaude/tabs
+#     holds "server <tmux pid>" then "<session id> <pane> <window>" lines for
+#     hooks/session-pane.sh, whose hooks then write that window themselves.
+# It never overwrites a live busy/wait/idle value, with two exceptions that hand a window over:
+# a new mapping (or its pane moving to a cold window, or a map old enough that hooks ignored
+# it: tmux detached or queries failing) fills it from the session's status, and a
+# vanished mapping clears its window or, if an interactive session shares it, sets that
+# session's status. A status read just before a turn ends can still be filled stale until the
+# next hook (the cold fill always had this ~0.3 s race).
+#
+# `claude agents --json` (0.2 s of CPU) runs only to fill, or when the claude panes, the
+# daemon's pty hosts or the tmux server changed, or every 60 s while hosts run (a new background
+# session claims a pre-warmed host, whose argv doesn't change, and the daemon warms a
+# replacement). A failed query backs off 20 s: under the 30 s between that refresh and the 90 s
+# after which hooks ignore the map, so one failure doesn't blind them. Two tmux servers at once would each replace the
+# other's map every run: one server is assumed.
 set -uo pipefail
+# tmux's server PATH is whatever started it and often lacks ~/.local/bin, where the claude
+# launcher and delegation-ledger live; without this the supervisor query silently never ran.
+PATH="$HOME/.local/bin:$PATH"
 
-stamp="/tmp/.tmux-claude-status.$(id -u).stamp"
-cache="/tmp/.tmux-claude-status.$(id -u).watch"
-if [ -f "$stamp" ] && [ "$(( $(date +%s) - $(stat -c %Y "$stamp" 2>/dev/null || echo 0) ))" -lt 3 ]; then
+run_dir="${TMUX_CLAUDE_STATUS_DIR:-/tmp}"
+stamp="$run_dir/.tmux-claude-status.$(id -u).stamp"
+cache="$run_dir/.tmux-claude-status.$(id -u).watch"
+sig_file="$run_dir/.tmux-claude-status.$(id -u).sig"
+fail_file="$run_dir/.tmux-claude-status.$(id -u).fail"
+tabs="${XDG_STATE_HOME:-$HOME/.local/state}/dotclaude/tabs"
+age() { echo $(( $(date +%s) - $(stat -c %Y "$1" 2>/dev/null || echo 0) )); }
+if [ -f "$stamp" ] && [ "$(age "$stamp")" -lt 3 ]; then
   cat "$cache" 2>/dev/null   # repeat the last delegation token between real runs
   exit 0
 fi
@@ -25,15 +53,20 @@ timeout 2 env -u CLAUDE_PID "$HOME/.local/bin/delegation-ledger" watch --summary
 
 # window -> current @claude_state (window option; same for every pane in the window).
 declare -A win_state
-while read -r wid state; do
-  [ -n "$wid" ] && win_state[$wid]="$state"
-done < <(tmux list-windows -a -F '#{window_id} #{@claude_state}' 2>/dev/null)
+server=""
+while read -r pid wid state; do
+  [ -n "$wid" ] && win_state[$wid]="$state" && server="$pid"
+done < <(tmux list-windows -a -F '#{pid} #{window_id} #{@claude_state}' 2>/dev/null)
+[ -n "$server" ] || exit 0       # tmux answered nothing: don't rewrite the map from it
+
+# Every pane: id, window, shell pid, command, cwd (last: it may hold spaces).
+panes="$(tmux list-panes -a -F '#{pane_id} #{window_id} #{pane_pid} #{pane_current_command} #{pane_current_path}' 2>/dev/null)"
 
 # window -> whether ANY pane in it runs claude (not just the active pane — windows can be split).
 declare -A win_has_claude
-while read -r wid cmd; do
+while read -r _ wid _ cmd _; do
   [ "$cmd" = "claude" ] && win_has_claude[$wid]=1
-done < <(tmux list-panes -a -F '#{window_id} #{pane_current_command}' 2>/dev/null)
+done <<< "$panes"
 
 need_fill=()
 for wid in "${!win_state[@]}"; do
@@ -44,46 +77,145 @@ for wid in "${!win_state[@]}"; do
   fi
 done
 
-[ ${#need_fill[@]} -eq 0 ] && exit 0                             # nothing to fill -> no supervisor query
+# The daemon's pty hosts (each background session runs under one, plus pre-warmed spares).
+hosts="$(pgrep -f 'bg-pty-host --bg-pty-host' 2>/dev/null | sort | tr '\n' ' ')"
+sig="$server|$hosts|$(awk '$4 == "claude"' <<< "$panes")"
+map_server=""
+[ -s "$tabs" ] && read -r _ map_server < "$tabs" 2>/dev/null
+remap=""
+if [ -n "$hosts" ]; then
+  if [ "$sig" != "$(cat "$sig_file" 2>/dev/null)" ] || [ "$(age "$sig_file")" -ge 60 ] ||
+     [ "$map_server" != "$server" ]; then
+    remap=1
+  fi
+elif [ -s "$tabs" ] && [ -n "$(sed -n 2p "$tabs" 2>/dev/null)" ]; then
+  remap=1                                                        # no hosts: empty the map
+fi
+[ ${#need_fill[@]} -eq 0 ] && [ -z "$remap" ] && exit 0         # nothing to do -> no supervisor query
+[ -f "$fail_file" ] && [ "$(age "$fail_file")" -lt 20 ] && exit 0   # a recent failure: back off
 
-json="$(claude agents --json 2>/dev/null)" || exit 0
-[ -n "$json" ] || exit 0
+json="[]"
+if [ ${#need_fill[@]} -gt 0 ] || [ -n "$hosts" ]; then
+  json="$(timeout 3 claude agents --json 2>/dev/null)"
+fi
 
-# supervisor pid -> bucketed state
-declare -A pid_state
-while read -r pid st; do
-  [ -n "$pid" ] && pid_state[$pid]="$st"
-done < <(
-  printf '%s' "$json" | python3 -I -c 'import sys,json
-try: d=json.load(sys.stdin)
-except Exception: sys.exit(0)
-BUSY={"busy","running"}; WAIT={"waiting","blocked","needs_input"}
-for a in d:
-    p=a.get("pid"); s=a.get("status")
-    if not p: continue
-    print(p, "busy" if s in BUSY else "wait" if s in WAIT else "idle")' 2>/dev/null
-)
+# Reads the agents JSON on stdin; prints "set <window> <state>" / "unset <window>" lines and
+# rewrites the map. Exits 1 on bad JSON, leaving the map alone.
+read -r -d '' decide <<'PY'
+import json, os, sys, tempfile
 
-# pane_pid -> window_id (covers every pane, active or not)
-declare -A pane_win
-while read -r pid wid; do
-  [ -n "$pid" ] && pane_win[$pid]="$wid"
-done < <(tmux list-panes -a -F '#{pane_pid} #{window_id}' 2>/dev/null)
+try:
+    agents = json.load(sys.stdin)
+    assert isinstance(agents, list)
+except Exception:
+    sys.exit(1)
+agents = [a for a in agents if isinstance(a, dict) and a.get("pid")]   # running sessions only
+need_fill = set(os.environ["NEED_FILL"].split())
+tabs, server = os.environ["TABS"], os.environ["SERVER"]
+# Hooks ignore a map this old (hooks/session-pane.sh), so its windows may have missed writes.
+stale = int(os.environ["MAP_AGE"]) >= 90
 
-declare -A fill; for w in "${need_fill[@]}"; do fill[$w]=1; done
-for p in "${!pid_state[@]}"; do
-  cur="$p"
-  for _ in $(seq 1 12); do
-    if [ -n "${pane_win[$cur]:-}" ]; then
-      wid="${pane_win[$cur]}"
-      [ -n "${fill[$wid]:-}" ] && tmux set-option -w -t "$wid" @claude_state "${pid_state[$p]}" 2>/dev/null
-      break
-    fi
-    # /proc/<pid>/stat is "pid (comm) state ppid ..."; comm may contain spaces/parens, so
-    # strip through the last ") " before reading fields (field 2 of the remainder is ppid).
-    ppid="$(awk '{sub(/^.*\) /,""); print $2}' "/proc/$cur/stat" 2>/dev/null)" || break
-    { [ -z "$ppid" ] || [ "$ppid" = 0 ] || [ "$ppid" = 1 ]; } && break
-    cur="$ppid"
-  done
-done
+panes = []                       # (pane_id, window_id, shell_pid, command, cwd)
+for line in os.environ["PANES"].splitlines():
+    f = line.split(" ", 4)
+    if len(f) == 5 and f[2].isdigit():
+        panes.append((f[0], f[1], int(f[2]), f[3], f[4]))
+by_shell = {p[2]: p for p in panes}
+windows = {p[1] for p in panes}
+
+def bucket(a):
+    s = a.get("status")
+    return "busy" if s in ("busy", "running") else \
+        "wait" if s in ("waiting", "blocked", "needs_input") else "idle"
+
+def pane_of(pid):
+    """The pane whose shell is an ancestor of pid, or None."""
+    for _ in range(12):
+        if pid in by_shell:
+            return by_shell[pid]
+        try:
+            # /proc/<pid>/stat is "pid (comm) state ppid ..."; comm may hold spaces or parens.
+            with open(f"/proc/{pid}/stat") as f:
+                pid = int(f.read().rsplit(") ", 1)[1].split()[1])
+        except (OSError, IndexError, ValueError):
+            return None
+        if pid <= 1:
+            return None
+    return None
+
+fills = {}
+session_panes = set()
+window_session = {}              # window -> status of an interactive session shown in it
+for a in agents:
+    if a.get("kind") != "interactive":
+        continue                 # a background session's ancestry names the daemon's first client
+    p = pane_of(a["pid"])
+    if p:
+        session_panes.add(p[0])
+        window_session[p[1]] = bucket(a)
+        if p[1] in need_fill:
+            fills[p[1]] = bucket(a)
+
+old = {}                         # session id -> (pane, window), from this tmux server only
+try:
+    with open(tabs) as f:
+        lines = [l.split() for l in f]
+    if lines and lines[0] == ["server", server]:
+        old = {w[0]: (w[1], w[2]) for w in lines[1:] if len(w) == 3}
+except OSError:
+    pass
+
+clients = {p[0]: p for p in panes if p[3] == "claude" and p[0] not in session_panes}
+background = [a for a in agents if a.get("kind") == "background" and a.get("sessionId")]
+mapping = {}                     # session id -> (pane, window, state)
+for a in background:
+    sid, cwd = a["sessionId"], a.get("cwd")
+    if sum(b.get("cwd") == cwd for b in background) != 1:
+        continue                 # the client may show either session
+    kept = clients.get(old.get(sid, ("",))[0])
+    if kept and kept[4] == cwd:
+        mapping[sid] = (kept[0], kept[1], bucket(a))
+        continue
+    here = [c for c in clients.values() if c[4] == cwd]
+    if len(here) == 1:
+        mapping[sid] = (here[0][0], here[0][1], bucket(a))
+
+for sid, (pane, wid, state) in mapping.items():
+    if old.get(sid, ("", ""))[0] != pane or wid in need_fill or stale:
+        fills[wid] = state       # a new mapping or a cold window: fill once, then hooks own it
+handback = {}
+for sid, (pane, wid) in old.items():
+    if (sid not in mapping or mapping[sid][:2] != (pane, wid)) and wid in windows:
+        handback[wid] = window_session.get(wid)
+for wid in need_fill:
+    fills.setdefault(wid, "idle")
+
+os.makedirs(os.path.dirname(tabs), exist_ok=True)
+fd, tmp = tempfile.mkstemp(dir=os.path.dirname(tabs), prefix=".tabs.")
+with os.fdopen(fd, "w") as f:
+    f.write(f"server {server}\n")
+    f.writelines(f"{sid} {pane} {wid}\n" for sid, (pane, wid, _) in sorted(mapping.items()))
+os.replace(tmp, tabs)
+
+mapped_windows = {wid for _, wid, _ in mapping.values()}
+for wid, state in sorted(handback.items()):
+    if wid not in fills and wid not in mapped_windows:
+        print(f"set {wid} {state}" if state else f"unset {wid}")
+for wid, state in sorted(fills.items()):
+    print("set", wid, state)
+PY
+
+if ! out="$(printf '%s' "$json" | PANES="$panes" NEED_FILL="${need_fill[*]}" TABS="$tabs" \
+    SERVER="$server" MAP_AGE="$(age "$tabs")" python3 -I -c "$decide" 2>/dev/null)"; then
+  : > "$fail_file"
+  exit 0
+fi
+rm -f "$fail_file"
+printf '%s' "$sig" > "$sig_file"
+while read -r op wid state; do
+  case "$op" in
+    set) tmux set-option -w -t "$wid" @claude_state "$state" 2>/dev/null ;;
+    unset) tmux set-option -uw -t "$wid" @claude_state 2>/dev/null ;;
+  esac
+done <<< "$out"
 exit 0

@@ -20,6 +20,13 @@ stored here).
   (`~/.tmux.conf` is its header comment plus the dotclaude block; backups beside it). The handoff
   classifier is `hooks/handoff_reminder.py` (tests 6.1 s to 0.3 s; replay of 3,212 prompts: 0
   disagreements). Ring decisions: `$XDG_STATE_HOME/dotclaude/ring.log`.
+- **Background sessions mapped to their tab** (2026-10-04, same branch; live via the symlinks).
+  `tmux/tmux-claude-status` maps each background session to the one client pane in its cwd
+  (`$XDG_STATE_HOME/dotclaude/tabs`); `session-pane.sh` looks up the event's `session_id`, so the
+  session's own hooks set its window and ring. Verified live: dna_to_text rang with `pane=%2` and
+  its hooks drive `@2`. Also fixed: the tmux server's PATH lacked `~/.local/bin`, so the cold fill
+  had never run from tmux. Three review rounds, all findings fixed; the script header lists the
+  accepted limits (fill race, one tmux server, client cwd = launch dir).
 - **Sandbox gap fixes** (2026-10-04, branch `fix/sandbox-gaps`, no PR by Hayden's call; installed
   on HAYPC): code that runs outside the sandbox is `denyWrite`, tool tokens and shell history are
   `denyRead`. Findings and Hayden's calls: `~/scratch/sandbox-audit/FINDINGS.md` (private).
@@ -89,20 +96,12 @@ stored here).
   `$CLAUDE_JOB_DIR/tmp` bug report is Hayden's call; `CLAUDE.md` carries the workaround.
 
 ## Notes for next session
-- **Next: map background sessions to their tab by directory** (Hayden chose this 2026-10-04;
-  [[dotclaude-tmux-indicator]], [[cc-background-sessions]]). Background sessions (dna_to_text is
-  one) still get no live indicator and no sound, because a hook can't tell which tab shows them
-  (one shared daemon hosts all; ancestry points at its first client). Plan:
-  `tmux/tmux-claude-status` (already queries `claude agents --json` on cold start) maps each
-  running background session to the one pane whose `claude` is a client, not itself a listed
-  interactive session, with the same cwd; ambiguous (two in one dir) means unmapped. Each run it
-  sets that window's state from the session's status (fixing the stale glyph within ~3 s) and
-  writes `$XDG_STATE_HOME/dotclaude/tabs.json` (session id to pane). `session-pane.sh` then reads
-  it for a session with `CLAUDE_JOB_DIR` set, for instant updates and the ring. Tests first, with
-  `claude agents --json` stubbed; verify live on dna_to_text. Cost: one `claude agents --json` per
-  ~3 s, only while a background session runs.
-- Then Hayden's calls on the parity inventory (In flight). Other machines pick up these branches
-  with `./setup.sh`, plus `./setup-tmux.sh` where tmux is used (README has the overlay caveat).
+- **Next: Hayden's calls on the parity inventory** (In flight). Other machines pick up these
+  branches with `./setup.sh`, plus `./setup-tmux.sh` where tmux is used (README has the overlay
+  caveat).
+- **A wrong or missing tmux glyph:** compare `~/.local/state/dotclaude/tabs` with `claude agents
+  --json` and `tmux list-panes -a -F '#{pane_id} #{pane_current_command} #{pane_current_path}'`.
+  Unprobed: whether `/clear` inside a background session changes the `sessionId` it lists.
 - **A ring from an unexpected session:** read the last lines of
   `$XDG_STATE_HOME/dotclaude/ring.log` (session id, kind, attended, pane, dir) before guessing.
 - The delegation post waits on Hayden's read.

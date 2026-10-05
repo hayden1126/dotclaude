@@ -673,7 +673,10 @@ redraws every 2, so a rate-limited run repeats the last token from a cache file.
 blank the token on every other redraw. An empty token from `watch --summary` itself just clears
 the bar, which is what we want. The script also runs it with `CLAUDE_PID` unset. A `#()` job
 inherits the tmux server's environment, so a server started from a Claude Bash call would carry
-that session's `CLAUDE_PID` after it died, and that would trip the sandbox self-check.
+that session's `CLAUDE_PID` after it died, and that would trip the sandbox self-check. That
+environment's `PATH` also often lacks `~/.local/bin`, so the script prepends it before calling
+`claude agents --json` (the indicator's cold fill and background-session map; its header has the
+rules).
 
 ### Deadline (A2)
 

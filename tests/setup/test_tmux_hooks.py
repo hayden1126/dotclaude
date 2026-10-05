@@ -4,7 +4,8 @@ state lands on, and which sessions ring (stdlib only).
 A session is in view when a person sees it: a tmux tab or a plain terminal. A `claude -p` run
 inherits the tab's TMUX_PANE, and a background session (claude daemon) has none; both carry
 CLAUDE_CODE_SESSION_ATTENDED=0 in a hook's env (probed on 2.1.289), so neither writes tab state
-nor rings. Stubs for tmux, powershell.exe and wslpath record every call."""
+nor rings, unless tmux/tmux-claude-status mapped the background session to the tab showing it
+($XDG_STATE_HOME/dotclaude/tabs). Stubs for tmux, powershell.exe and wslpath record every call."""
 import json
 import os
 import shutil
@@ -53,11 +54,14 @@ class Hooks(unittest.TestCase):
 
     def run_hook(self, name, session, payload=None, args=()):
         env = {**self.env, **session}
+        # Every event carries the session's id; the map is keyed by it.
+        payload = {"session_id": env.get("CLAUDE_CODE_SESSION_ID", ""), **(payload or {})}
         self.logged_before = len(self.ring_log())
         p = subprocess.run(["bash", os.path.join(HOOKS, name), *args],
-                           input=json.dumps(payload or {}), capture_output=True, text=True,
+                           input=json.dumps(payload), capture_output=True, text=True,
                            timeout=10, env=env)
         self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(p.stderr, "")
         return p
 
     def calls(self, settle=0.0):
@@ -96,6 +100,15 @@ class Hooks(unittest.TestCase):
         with open(path) as f:
             return f.read().splitlines()
 
+    def map_tabs(self, text, age=0):
+        """Write the map tmux-claude-status keeps: a server line, then "<session> <pane> <window>"."""
+        path = os.path.join(self.state, "dotclaude", "tabs")
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as f:
+            f.write(text)
+        then = time.time() - age
+        os.utime(path, (then, then))
+
     # --- tmux-state.sh: which window gets the state --------------------------------------
 
     def test_a_tab_writes_its_own_pane(self):
@@ -110,6 +123,51 @@ class Hooks(unittest.TestCase):
             self.run_hook("tmux-state.sh", BG, args=(state,))
         self.assertEqual(self.window_writes(), [])
         self.assertFalse([c for c in self.calls() if c.startswith("tmux")])
+
+    def test_a_mapped_background_session_writes_its_tab(self):
+        self.map_tabs("server 42\nother-id %3 @3\nabcdef12-0000 %9 @9\n")
+        for state in ("busy", "wait", "idle"):
+            self.run_hook("tmux-state.sh", BG, args=(state,))
+        self.assertEqual(self.window_writes(), [
+            f"tmux set-option -w -t %9 @claude_state {s}" for s in ("busy", "wait", "idle")])
+
+    def test_a_mapped_background_subagent_stop_does_not_clear_its_tab(self):
+        self.map_tabs("server 42\nabcdef12-0000 %9 @9\n")
+        self.run_hook("tmux-state.sh", BG, {"agent_id": "a1"}, args=("idle",))
+        self.assertEqual(self.window_writes(), [])
+
+    def test_the_map_is_only_for_background_sessions(self):
+        # A `claude -p` run has no CLAUDE_JOB_DIR: even with its id in the map it stays off-tab.
+        self.map_tabs("server 42\nabcdef12-0000 %9 @9\n")
+        self.run_hook("tmux-state.sh", P_RUN, args=("busy",))
+        self.assertEqual(self.window_writes(), [])
+
+    def test_a_p_run_inside_a_background_session_stays_off_tab(self):
+        # It inherits the background session's CLAUDE_JOB_DIR and may inherit its session id
+        # env, but its events carry its own session_id.
+        self.map_tabs("server 42\nabcdef12-0000 %9 @9\n")
+        self.run_hook("tmux-state.sh", BG, {"session_id": "nested-run"}, args=("busy",))
+        self.run_hook("stop-ring.sh", BG, {"session_id": "nested-run"})
+        self.assertEqual(self.window_writes(), [])
+        self.assertTrue(self.no_ring())
+        self.assertIn("quiet session=nested-r ", self.ring_log()[-1])  # its own id, not the env's
+
+    def test_a_stale_map_is_ignored(self):
+        # Only a running tmux-claude-status refreshes the map (at least every 60 s while
+        # background sessions run): after tmux exits or detaches, nobody sees the session.
+        self.map_tabs("server 42\nabcdef12-0000 %9 @9\n", age=120)
+        self.run_hook("tmux-state.sh", BG, args=("busy",))
+        self.run_hook("stop-ring.sh", BG)
+        self.assertEqual(self.window_writes(), [])
+        self.assertTrue(self.no_ring())
+
+    def test_a_missing_or_garbled_map_leaves_a_background_session_off_tab(self):
+        for text in (None, "", "garbage\n\n", "abcdef12 %9 @9\n", "abcdef12-0000\n"):
+            with self.subTest(text=text):
+                if text is not None:
+                    self.map_tabs(text)
+                self.run_hook("tmux-state.sh", BG, args=("busy",))
+                self.assertEqual(self.window_writes(), [])
 
     def test_a_p_run_inside_a_tab_leaves_the_tab_alone(self):
         for state in ("busy", "idle", "wait"):
@@ -143,6 +201,14 @@ class Hooks(unittest.TestCase):
             with self.subTest(session=session, payload=payload):
                 self.run_hook("stop-ring.sh", session, payload)
                 self.assertTrue(self.no_ring())
+
+    def test_a_mapped_background_session_rings_on_stop(self):
+        self.map_tabs("server 42\nabcdef12-0000 %9 @9\n")
+        self.run_hook("stop-ring.sh", BG)
+        self.assertTrue(self.rang())
+        self.assertIn("rang session=abcdef12 kind=background attended=0 pane=%9", self.ring_log()[-1])
+        self.run_hook("stop-ring.sh", BG, {"agent_id": "a1"})
+        self.assertTrue(self.no_ring())
 
     def test_each_ring_decision_is_logged(self):
         self.run_hook("stop-ring.sh", TAB)
@@ -178,6 +244,12 @@ class Hooks(unittest.TestCase):
     def test_an_off_tab_permission_prompt_toasts_without_a_sound(self):
         self.run_hook("notify.sh", BG, {"message": "Claude needs your permission"})
         self.assertTrue(self.no_ring())
+        self.assertTrue(self.toasted())
+
+    def test_a_mapped_background_permission_prompt_toasts_and_rings(self):
+        self.map_tabs("server 42\nabcdef12-0000 %9 @9\n")
+        self.run_hook("notify.sh", BG, {"message": "Claude needs your permission"})
+        self.assertTrue(self.rang())
         self.assertTrue(self.toasted())
 
     def test_a_missing_session_id_still_rings_and_toasts(self):

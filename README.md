@@ -91,7 +91,7 @@ sees it.
 | `hooks/report-check.sh` | PreToolUse(SubagentHandback)/SubagentStop hook: sends a delegated role's malformed report back, at most twice; fails open | symlink `~/.claude/hooks/report-check.sh` |
 | `hooks/handoff-reminder.sh` | UserPromptSubmit hook: on a wrap-up / handoff / clear-memory signal, reminds me to invoke the `handoff` skill instead of improvising it; a shim over `hooks/handoff_reminder.py`, which holds the classifier | symlink `~/.claude/hooks/handoff-reminder.sh` and `handoff_reminder.py` |
 | `hooks/session-title.sh` | UserPromptSubmit hook: sets the terminal tab title to `[<repo>] <label>` via `sessionTitle`, so tabs are tellable apart; the label comes from the Stop-hook Haiku cache (`.title.txt`), falling back to the current prompt's first line | symlink `~/.claude/hooks/session-title.sh` |
-| `hooks/stop-ring.sh` | Stop hook: plays the Windows notify sound when a session you see finishes (a tab or a plain terminal), not a subagent, a background session or a `claude -p` run; logs each decision to `ring.log` | symlink `~/.claude/hooks/stop-ring.sh` |
+| `hooks/stop-ring.sh` | Stop hook: plays the Windows notify sound when a session you see finishes (a tab, a plain terminal or a mapped background session), not a subagent, an unmapped background session or a `claude -p` run; logs each decision to `ring.log` | symlink `~/.claude/hooks/stop-ring.sh` |
 | `hooks/notify.sh` | Notification(permission_prompt) hook: pops a Windows toast, resolving the toast path per platform (WSL via `wslpath`, native Windows git-bash via `cygpath`), and rings like `stop-ring.sh` | symlink `~/.claude/hooks/notify.sh` |
 | `hooks/tmux-state.sh` | Prompt, tool, Stop and Notification hook: sets `@claude_state` (busy, wait, idle) on the tmux window the session is shown in, for the indicator in `tmux/claude.conf`; does nothing outside tmux | symlink `~/.claude/hooks/tmux-state.sh` |
 | `hooks/session-pane.sh` | Sourced by the three hooks above, not a hook: finds the tmux pane a session is shown in, and whether a person sees it | symlink `~/.claude/hooks/session-pane.sh` |
@@ -235,17 +235,22 @@ need nothing extra.
   and skill bodies are left out of the dialogue it sends, so they aren't summarized as the user's
   request. Needs python3 on PATH.
 - **Stop / Notification sounds**: play a Windows sound and (on permission prompts) a toast. Both
-  sounds ring only for a session a person sees: a tab or a plain terminal. Subagents, background
-  sessions and `claude -p` runs (the delegation canary is one) stay quiet; a permission prompt
-  still pops the toast, so a stuck background session shows up. `hooks/session-pane.sh`'s header
+  sounds ring only for a session a person sees: a tab, a plain terminal, or a background session
+  mapped to its tab (see the tmux indicator). Subagents, unmapped background sessions and
+  `claude -p` runs (the delegation canary is one) stay quiet; a permission prompt still pops the
+  toast, so a stuck background session shows up. `hooks/session-pane.sh`'s header
   has the rules and the hook env they read. Each decision is a line in
   `$XDG_STATE_HOME/dotclaude/ring.log`. The toast goes through `notify.sh`, which resolves the path
   for both WSL (`wslpath`) and native Windows git-bash (`cygpath`) and renders `notify-toast.ps1`;
   Windows' Do Not Disturb hides it. Windows-only: on macOS/Linux, swap for your platform's notifier
   (`osascript` / `notify-send`).
 - **tmux indicator**: `tmux-state.sh` marks the session's window busy (◐) on a prompt or tool
-  call, waiting (✳) on a Notification and idle on Stop. `claude -p` runs and background sessions
-  don't set it (see `session-pane.sh`), so a background session's window gets no live state yet.
+  call, waiting (✳) on a Notification and idle on Stop. `claude -p` runs never set it. A
+  background session has no pane of its own, so `tmux/tmux-claude-status` maps it by directory to
+  the one client pane in its cwd (two background sessions in one directory map nothing, and a new
+  mapping also needs a single client pane there) and writes
+  `$XDG_STATE_HOME/dotclaude/tabs`, which `session-pane.sh` reads. State is per window, so two
+  sessions split into one window share a glyph.
   Run `./setup-tmux.sh` once for the tmux side. A machine whose `settings.machine.json` still wires
   `tmux-state.sh` should drop those entries before `./setup.sh`, or they fire twice.
 

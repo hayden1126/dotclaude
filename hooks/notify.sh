@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Notification(permission_prompt) hook. Pops a Windows toast showing the prompt
 # message, on BOTH native Windows (git-bash/MSYS) and WSL, and rings the notify sound when a
-# person sees the session (session-pane.sh: a tab or a plain terminal). A background session
-# blocked on a prompt gets the toast only.
+# person sees the session (session-pane.sh: a tab, a plain terminal, or a background session
+# mapped to its tab). An unmapped background session blocked on a prompt gets the toast only.
 #
 # settings.json invokes this as `bash "$HOME/.claude/hooks/notify.sh"`, so the
 # command in settings stays platform-agnostic and all OS detection lives here.
@@ -17,12 +17,12 @@ set -uo pipefail
 input=$(cat 2>/dev/null)
 
 if . "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/session-pane.sh" 2>/dev/null; then
-  pane=$(session_pane)
+  pane=$(session_pane "$input")
   if session_in_view "$pane"; then
     play_ring
-    ring_log permission rang "$pane"
+    ring_log permission rang "$pane" "$input"
   else
-    ring_log permission quiet "$pane"
+    ring_log permission quiet "$pane" "$input"
   fi
 fi
 
