@@ -170,6 +170,17 @@ class MergeCli(unittest.TestCase):
                 self.assertEqual((r.returncode, r.stdout), (1, ""))
 
 
+class BaselinePlugins(unittest.TestCase):
+    def test_the_baseline_enables_exactly_what_setup_installs(self):
+        # setup.sh installs plugins/enabled.json; a plugin missing from the baseline's
+        # enabledPlugins is installed but off unless a machine's overlay turns it on.
+        with open(os.path.join(REPO, "settings.json")) as f:
+            baseline = json.load(f)["enabledPlugins"]
+        with open(os.path.join(REPO, "plugins", "enabled.json")) as f:
+            installed = json.load(f)
+        self.assertEqual(baseline, installed)
+
+
 class IgnoreBlock(unittest.TestCase):
     def setUp(self):
         self.dir = tempfile.TemporaryDirectory()

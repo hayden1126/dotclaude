@@ -153,6 +153,12 @@ write_denied = ["~/.claude", "~/.gitconfig", "~/.config/git", "~/.zshrc", "~/.zs
   "~/.config/gh", "~/.ssh", "~/.local/bin",
   "~/dotclaude/settings.json", "~/dotclaude/hooks", "~/dotclaude/skills", "~/dotclaude/agents",
   "~/dotclaude/CLAUDE.md", "~/dotclaude/codex", "~/.codex",
+  # Run or installed outside the sandbox: ccstatusline, the Notification hook, setup.sh and
+  # what it reads.
+  "~/dotclaude/statusline", "~/dotclaude/notify-toast.ps1", "~/dotclaude/setup.sh",
+  "~/dotclaude/merge-settings.py", "~/dotclaude/setup-chrome-wsl.sh", "~/dotclaude/sync.sh",
+  "~/dotclaude/chrome-debug.ps1", "~/dotclaude/git", "~/dotclaude/plugins",
+  "~/dotclaude/tools.json", "~/dotclaude/tmux", "~/dotclaude/setup-tmux.sh",
   # The ledger and the liveness index: an agent that rewrote its own index could reset its
   # deadline clock. The sandbox already keeps Bash out; this covers the file tools.
   "{state_dir}"]
@@ -163,7 +169,9 @@ root_write_allowed = [".claude/worktrees"]
 # so the two lists can't drift apart; these stay even where no sandbox is configured).
 read_denied = ["~/.config/gh", "~/.ssh", "~/.netrc", "~/.aws", "~/.claude/.credentials.json",
   "~/.codex/auth.json", "~/.google_workspace_mcp", "~/.git-credentials", "~/.docker/config.json",
-  "~/.npmrc", "~/.pypirc", "~/.config/gcloud", "~/.secrets.env",
+  "~/.npmrc", "~/.pypirc", "~/.config/gcloud", "~/.secrets.env", "~/.config/.wrangler",
+  "~/.supabase", "~/.azure", "~/.claude.json", "~/.codex/config.toml", "~/.zsh_history",
+  "~/.bash_history",
   # A file tool runs in Claude Code's own process, so /proc/self/environ is its whole environment.
   "/proc"]
 

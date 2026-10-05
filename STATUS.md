@@ -6,16 +6,23 @@
 > [[dotclaude-chrome-devtools-wsl]]). Per-effort design lives in the repo's `PLAN.md` or its doc,
 > not only under `~/.claude/plans/`, which the next plan overwrites ([[plan-file-not-durable]]).
 
-Last updated: 2026-10-03
+Last updated: 2026-10-04
 Base: `main`. For branch / PR / push state, run `gh pr list` and `git log main..HEAD` (derive it; not
 stored here).
 
 ## Done (recent; git, the linked plans and memory hold the detail)
-- **Permission rules replaced danger-guard** (PR #64, installed on HAYPC): deny destructive git,
-  ask before `git push`. README says what's covered and what's caught by mistake.
-- **Also merged and live:** the hook payload sweep (PR #63; README's hook entries,
-  `tests/setup/`), the watch guard (PR #62; `docs/delegation.md` "Long waits"), delegation
-  hardening Stage 3 (PRs #42 to #55; `docs/delegation.md` "Stage 3").
+- **tmux indicator and sounds, background sessions mapped to their tab** (2026-10-04, live on
+  HAYPC). `hooks/session-pane.sh` decides tab vs off-tab (its header holds the rules): a
+  `claude -p` run or an unmapped background session gets the toast only; `tmux-claude-status`
+  maps a background session to the one client pane in its cwd (`$XDG_STATE_HOME/dotclaude/tabs`,
+  limits in its header). Verified live: a `-p` run no longer clobbers its tab, dna_to_text rang
+  with `pane=%2`. Handoff classifier: `hooks/handoff_reminder.py`. Ring decisions: `ring.log`.
+- **Sandbox gap fixes** (2026-10-04, installed
+  on HAYPC): code that runs outside the sandbox is `denyWrite`, tool tokens and shell history are
+  `denyRead`. Findings and Hayden's calls: `~/scratch/sandbox-audit/FINDINGS.md` (private).
+- **Merged and live:** `rm` never asks (PR #65; [[dotclaude-danger-guard-retired]]), permission
+  rules for destructive git (PR #64), the hook payload sweep (PR #63), the watch guard (PR #62),
+  delegation hardening Stage 3 (PRs #42 to #55). README and `docs/delegation.md` hold the detail.
 - Older: `git log` and the PRs back to #10, and memory for the decisions. One stays here because
   git can't show it: client deck data left the tree in PR #28, and its history was deliberately
   left as-is (Hayden's call).
@@ -23,11 +30,6 @@ stored here).
   https://claude.ai/artifact/KWwrPkLsbMUi7Ugjfskqsz (republish by that URL).
 
 ## In flight
-- **`rm` no longer asks: on its own PR, already installed on HAYPC** (2026-10-03, Hayden's call). The
-  six `rm` ask rules are gone, and the deletion rule in `CLAUDE.md` and `codex/AGENTS.md` is
-  scoped to match. **Next: merge the PR** (`gh pr list`); other machines then take it per "Other
-  machines" below. README holds the snippet that brings the asks back per machine;
-  [[dotclaude-danger-guard-retired]] holds why a hook couldn't exempt agents instead.
 - **The delegation post: on `main`, revised in PR #60, not yet on Medium.**
   - **Files:** `docs/prose-is-not-a-permission.md` and `docs/images/delegation-layers.*`; the code
     links pin to `7ed72e9`, on `main`.
@@ -48,23 +50,15 @@ stored here).
   fails closed. Then remove the dangling `~/.claude/hooks/danger-guard.sh` link (`setup.sh`
   never removes old links; ask first) and any `settings.machine.json` hook naming it. HAYPC is
   done.
-- **New-device parity audit** (queued 2026-10-03; [[hayden-new-device-goal]]). List HAYPC's
-  local-only pieces and sort each into repo, opt-in installer, overlay template or private:
-  `settings.machine.json`, `~/.claude/hooks/tmux-state.sh`, `~/bin/tmux-claude-status`, the
-  `@claude_state` lines in `~/.tmux.conf`, user-scope MCP servers, plugins against
-  `plugins/enabled.json`, the shell rc files. Then build the installers, tmux first, with
-  `setup-chrome-wsl.sh` as the precedent (opt-in, not called by `setup.sh`). Remote access
-  (`~/bin/tmux-remote`, the port-22 ForceCommand, `~/hq/docs/local/remote-access.md`) stays
-  private. A drift check would fit the `setup.sh` doctor idea in [[deepseek-harness-eval]]. Both
-  tmux scripts got `python3 -I` on 2026-10-03.
-- **Hook follow-ups, after PR #63** (proposed 2026-10-03, not started):
-  - **Move handoff-reminder's classifier into an importable module** (`hooks/handoff_reminder.py`
-    behind the `.sh` shim), with one shared INJECTED list for the three prompt hooks. Tests and the
-    replay would then run in seconds (the setup suite spends most of its 25 s spawning bash).
-    `setup.sh` links only `hooks/*.sh`: link the module too, or have the shim find its own path.
-  - The marker lists stay: the UserPromptSubmit payload has no origin field, and the prompt's
-    transcript entry is written after the hook runs (probed 2026-10-03,
-    [[cc-hook-payload-pitfalls]]).
+- **New-device parity audit: tmux, Codex and the overlay example done.** The inventory and a
+  recommendation per piece are private in `~/scratch/parity-audit/INVENTORY.md`
+  ([[hayden-new-device-goal]]). Codex is in the baseline `enabledPlugins` (a test pins it to
+  `plugins/enabled.json`) and out of HAYPC's overlay; README shows an overlay example. Left:
+  bump the chrome-devtools pin (1.5.0 against the plugin's 1.9.0) after checking 1.9.0 under
+  `setup-chrome-wsl.sh`, and a `shell/` snippet only if a second device is coming. A drift check
+  would fit the `setup.sh` doctor idea in [[deepseek-harness-eval]].
+- **Hook follow-up:** the INJECTED marker lists stay one per prompt hook, kept equal by
+  `test_the_three_lists_agree` ([[cc-hook-payload-pitfalls]] has why).
 - **Delegation hardening: what is live on HAYPC** (Stage 2 and 3, `docs/delegation.md`;
   `skills/delegation/SKILL.md` is the operating guide). Open items:
   - **Retune later, not now.** When `due` asks for `audit --monthly` (date and first sample sizes:
@@ -83,35 +77,34 @@ stored here).
     background, anchors ~95px apart) and PASS on the real s17 as it stands.
   - Then S2 (fonts + PDF), S4 (SKILL references + 6 Workflow scripts), S5 (ingest + theme
     extractor), S6 (pptx export). S1-S4 is the usable product.
-  - Ownership: SKILL.md owns the phase model, gates and batch constants; `deckkit`'s `COMMANDS`
-    owns the CLI surface (help is generated); `deckcfg.derive_rigor` owns the rigor rule; the
-    goldens in the private client repo's `decks/_parity/` own the reference numbers. The plan
-    owns block numbering only; no "S<n>" in shipped artifacts.
-  - Known gap: `deck.forward_targets` is declared in `deck.toml`, not detected, so its default
-    `false` means "nobody has said". Revisit when S3 enforces the storyboard MUST/NEVER grammar.
+  - Owners: SKILL.md (phases, gates), `deckkit` `COMMANDS` (CLI), `deckcfg.derive_rigor`, the
+    private `decks/_parity/` goldens; no "S<n>" in shipped artifacts. Known gap:
+    `deck.forward_targets` is declared, not detected; revisit when S3 enforces MUST/NEVER.
 
 ## Blocked / decisions needed
-- None open.
+- **Rescan the `rm` gap around 2026-11-04** (kept as a known gap, Hayden's call):
+  `python3 -I ~/scratch/sandbox-audit/rm_scan.py 2026-11-04`. Sending the drafted
+  `$CLAUDE_JOB_DIR/tmp` bug report is Hayden's call; `CLAUDE.md` carries the workaround.
 
 ## Notes for next session
-- **Suggested next:** the new-device parity audit (In flight); its first step is the inventory of
-  HAYPC's local-only pieces. The delegation post waits on Hayden's read.
-- **Verify delegation before touching it:** `python3 -m unittest discover -s tests/delegation -t
-  tests/delegation` and the same for `tests/setup` make no model calls and pass inside the sandbox
-  (except from a checkout under `.claude/worktrees/`, where the policy tests need the sandbox off).
-  `delegation-ledger canary` runs them, then the live harness (`tests/delegation/run.py --runner
-  claude`, which spends model calls), and records the result: run it outside the sandbox, in the
-  background, after changing a role, a hook or `codex-delegate`; after an upgrade, the
-  session-start line says when. Counts live in `docs/delegation.md` "Tests". An unnamed delegation
-  test erred twice under load on 2026-10-03 and didn't reproduce in 9 runs: if it recurs, run with
-  `-v` and name it.
-- **Verify `deck-production` before touching it:** `deckkit regress` as the README in the private
-  client repo's `decks/_parity/` shows (`--config` and `--goldens` required) must print `parity:
-  green`; it runs read-only and asserts the reference tree is unmodified. The reference deck is
-  deliberately NOT migrated, so skipping this lets it drift silently. Smoke test: `deckkit new /tmp/x
-  --title T --slides 6`, approve the storyboard frontmatter, then `deckkit build /tmp/x && deckkit
-  lint /tmp/x && deckkit package /tmp/x` (expect lint 0/0); `deckkit` is on PATH via
-  `~/.local/bin`, else `~/.claude/skills/deck-production/scripts/deckkit`.
+- **Next: the chrome-devtools pin check** (parity audit, In flight), then deck-production S3.
+  The tmux and sandbox work goes up as one PR against `main` (Hayden's call); `gh pr list` for
+  its state. Last session's range: `7f48ac6..` this handoff commit.
+  Other machines pick up these branches with `./setup.sh`, plus `./setup-tmux.sh` where tmux is
+  used (README has the overlay caveat).
+- **A wrong or missing tmux glyph:** compare `~/.local/state/dotclaude/tabs` with `claude agents
+  --json` and `tmux list-panes -a -F '#{pane_id} #{pane_current_command} #{pane_current_path}'`.
+  Unprobed: whether `/clear` inside a background session changes the `sessionId` it lists.
+- **A ring from an unexpected session:** read the last lines of
+  `$XDG_STATE_HOME/dotclaude/ring.log` (session id, kind, attended, pane, dir) before guessing.
+- The delegation post waits on Hayden's read.
+- **Verify delegation before touching it:** both unit suites (`tests/delegation`, `tests/setup`)
+  pass sandboxed; after changing a role, a hook or `codex-delegate`, run `delegation-ledger canary`
+  outside the sandbox in the background (`docs/delegation.md` "The canary and the due checks"). An
+  unnamed delegation test erred twice under load on 2026-10-03: if it recurs, run `-v` and name it.
+- **Verify `deck-production` before touching it:** `deckkit regress` green (SKILL.md; the config
+  and goldens are in the private client repo's `decks/_parity/`). Smoke: `deckkit new /tmp/x
+  --title T --slides 6`, approve the storyboard, then `build`, `lint` (expect 0/0), `package`.
 - research-sourcing (optional): the thorough-tier planted-fabrication spot-check was never run end
   to end, and only Agent-tool subagents were tested, not a real Workflow run.
 - Deferred handoff work (the PreCompact/Stop safety net, the loop-engineering handoff) is in

@@ -87,7 +87,7 @@ class Strings(unittest.TestCase):
     def test_every_injected_content_marker_is_checked(self):
         # The hooks keep their markers lowercase; the binary has them in their own case.
         names = {s.lower() for s, _ in checks.CANARY_STRINGS}
-        for hook in ("handoff-reminder.sh", "session-title.sh", "session-summary.sh"):
+        for hook in ("handoff_reminder.py", "session-title.sh", "session-summary.sh"):
             with open(os.path.join(HOOKS, hook)) as f:
                 body = re.search(r"^INJECTED = (\(.*?\))$", f.read(), re.S | re.M).group(1)
             for marker in ast.literal_eval(body):

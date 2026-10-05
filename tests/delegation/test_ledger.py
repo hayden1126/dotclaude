@@ -549,7 +549,8 @@ class Nudge(LedgerEnv):
         # Wired as settings.json wires it: the agent_id prefilter, then the shim, which must
         # pass the script's stdout on.
         with open(os.path.join(REPO, "settings.json")) as f:
-            (entry,) = json.load(f)["hooks"]["PostToolUse"]
+            (entry,) = [e for e in json.load(f)["hooks"]["PostToolUse"]
+                        if any("delegation-ledger" in h["command"] for h in e["hooks"])]
         hooks = os.path.join(self.tmp.name, ".claude", "hooks")
         os.makedirs(hooks)
         os.symlink(os.path.join(HOOKS, "delegation-ledger.sh"),

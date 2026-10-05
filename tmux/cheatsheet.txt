@@ -1,0 +1,31 @@
+
+  tmux keys   (q to close)
+
+  MENUS
+    C-b Enter    action menu (do things)
+    C-b ?        all keys (raw tmux list)
+
+  WINDOWS  (one per repo)
+    C-b c        new window (keeps dir)
+    C-b ,        rename window
+    C-b 1..9     jump to window N
+    C-b n / p    next / prev window
+    S-Left/Right prev / next, no prefix
+    C-b w        pick from a list
+
+  PANES  (splits)
+    C-b |        split right
+    C-b -        split down
+    C-b <arrow>  move between panes
+    C-b z        zoom pane / back
+
+  SCROLL & COPY
+    wheel or C-b [   enter, q exits
+    drag to select   -> clipboard
+
+  SESSION
+    C-b d        detach (keeps running)
+    C-b s        list / switch sessions
+
+  CONFIG
+    C-b r        reload ~/.tmux.conf

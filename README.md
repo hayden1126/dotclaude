@@ -42,6 +42,21 @@ it drops; put a value in the overlay to keep it. The baseline now owns a `permis
 `setup.sh` replaces the live one (`merge-settings.py` names it on stderr): personal allow rules go
 in `settings.machine.json`, whose lists append.
 
+A typical overlay sets a preference and the machine's own tools:
+
+```json
+{
+  "effortLevel": "high",
+  "sandbox": {"excludedCommands": ["mytool *", "mytool"]}
+}
+```
+
+`effortLevel` replaces the baseline's `medium`. `excludedCommands` appends to the baseline's list:
+name your own CLIs that must run outside the sandbox (say, ones that write outside the project),
+one pattern per command shape (`mytool *` for calls with arguments, `mytool` for the bare call).
+A pattern must match the whole command, so a call through a pipe, `&&` or `cd` still runs
+sandboxed.
+
 The baseline's `permissions` deny destructive git and ask before `git push`, in auto mode too.
 Denied: force-push, `reset --hard`, `reset --merge` and `git clean -f`, plain or through `git -C`,
 plus a `bash -c` whose text has `git push` then `--force`, or `git reset` then `--hard`. Asked:
@@ -89,16 +104,18 @@ sees it.
 | `hooks/subagent-policy.sh` | PreToolUse(*) policy for delegated agents only (rules in `skills/delegation/policy.toml`): no leaving the sandbox, no destructive git, no MCP writes, protected paths, the researcher allowlist, writers held to their worktree; fails closed | symlink `~/.claude/hooks/subagent-policy.sh` |
 | `hooks/watch-guard.sh` | Stop hook (main thread): blocks a stop once when a `delegation-ledger wait` watch has lapsed or a background command was killed at its time limit, with the re-arm command (`skills/delegation/scripts/watch-guard`); fails open | symlink `~/.claude/hooks/watch-guard.sh` |
 | `hooks/report-check.sh` | PreToolUse(SubagentHandback)/SubagentStop hook: sends a delegated role's malformed report back, at most twice; fails open | symlink `~/.claude/hooks/report-check.sh` |
-| `hooks/handoff-reminder.sh` | UserPromptSubmit hook: on a wrap-up / handoff / clear-memory signal, reminds me to invoke the `handoff` skill instead of improvising it | symlink `~/.claude/hooks/handoff-reminder.sh` |
+| `hooks/handoff-reminder.sh` | UserPromptSubmit hook: on a wrap-up / handoff / clear-memory signal, reminds me to invoke the `handoff` skill instead of improvising it; a shim over `hooks/handoff_reminder.py`, which holds the classifier | symlink `~/.claude/hooks/handoff-reminder.sh` and `handoff_reminder.py` |
 | `hooks/session-title.sh` | UserPromptSubmit hook: sets the terminal tab title to `[<repo>] <label>` via `sessionTitle`, so tabs are tellable apart; the label comes from the Stop-hook Haiku cache (`.title.txt`), falling back to the current prompt's first line | symlink `~/.claude/hooks/session-title.sh` |
-| `hooks/stop-ring.sh` | Stop hook: plays the Windows notify sound when the main session finishes, not when a subagent or background agent stops | symlink `~/.claude/hooks/stop-ring.sh` |
-| `hooks/notify.sh` | Notification(permission_prompt) hook: pops a Windows toast, resolving the toast path per platform (WSL via `wslpath`, native Windows git-bash via `cygpath`) | symlink `~/.claude/hooks/notify.sh` |
+| `hooks/stop-ring.sh` | Stop hook: plays the Windows notify sound when a session you see finishes (a tab, a plain terminal or a mapped background session), not a subagent, an unmapped background session or a `claude -p` run; logs each decision to `ring.log` | symlink `~/.claude/hooks/stop-ring.sh` |
+| `hooks/notify.sh` | Notification(permission_prompt) hook: pops a Windows toast, resolving the toast path per platform (WSL via `wslpath`, native Windows git-bash via `cygpath`), and rings like `stop-ring.sh` | symlink `~/.claude/hooks/notify.sh` |
+| `hooks/tmux-state.sh` | Prompt, tool, Stop and Notification hook: sets `@claude_state` (busy, wait, idle) on the tmux window the session is shown in, for the indicator in `tmux/claude.conf`; does nothing outside tmux | symlink `~/.claude/hooks/tmux-state.sh` |
+| `hooks/session-pane.sh` | Sourced by the three hooks above, not a hook: finds the tmux pane a session is shown in, and whether a person sees it | symlink `~/.claude/hooks/session-pane.sh` |
 | `hooks/session-summary.sh` | Stop hook: regenerates a 1-2 sentence session summary via a direct Haiku Messages-API call (Claude subscription OAuth token, stdlib urllib, no API key/jq), detached so it never blocks; caches the summary to `<config-dir>/session-summaries/<session_id>.txt` for the status-line widget and a short (`<=32`-char) tab label to `<session_id>.title.txt` for `session-title.sh` | symlink `~/.claude/hooks/session-summary.sh` |
 | `templates/` | `SPEC.md`, `PLAN.md`, `STATUS.md` scaffolds for full-lane work that survive `/clear` | symlink per file into `~/.claude/templates/` |
 | `codex/` | Codex CLI config (config.toml baseline + AGENTS.md + merge-config.py); see docs/codex.md | symlink `AGENTS.md` into `~/.codex/`; merge `config.toml`'s keys into the local `~/.codex/config.toml` (Codex writes to it, so it is never linked; `auth.json` stays local) |
 | `notify-toast.ps1` | Windows toast script that `notify.sh` renders for the Notification hook | symlink `~/.claude/notify-toast.ps1` |
 | `plugins/marketplaces.json` | Marketplaces to register | consumed by `setup.sh` |
-| `plugins/enabled.json` | Plugins to install and enable | consumed by `setup.sh` |
+| `plugins/enabled.json` | Plugins to install and enable (must equal the baseline `settings.json`'s `enabledPlugins`; a test pins it) | consumed by `setup.sh` |
 | `statusline/ctx-breakdown.py` | ccstatusline widget: colored per-category context chips (system prompt, tools, agents, memory, skills, MCP, messages) | symlink `~/.config/ccstatusline/ctx-breakdown.py` |
 | `statusline/session-summary.py` | ccstatusline widget: renders the cached session summary (nothing until the first one lands), word-wrapped across two dim rows on status lines 2-3 (`--row 1` / `--row 2`) | symlink `~/.config/ccstatusline/session-summary.py` |
 | `statusline/ccstatusline-settings.json` | ccstatusline layout baseline that wires the ctx-breakdown and session-summary widgets in | installed by `setup.sh` to `~/.config/ccstatusline/settings.json` (paths patched per machine) |
@@ -108,9 +125,11 @@ sees it.
 | `docs/prose-is-not-a-permission.md` | Blog post on the delegation work: why a prompt can't limit an agent's authority, and the layers that can | reference |
 | `docs/images/` | The post's diagram: `delegation-layers.svg` (source) and `delegation-layers.png` (2x render) | reference |
 | `tests/delegation/` | Unit tests for the delegation pieces (no model calls) and `run.py`, a live harness that spends model calls | run from the repo root |
-| `tests/setup/` | Unit tests for `merge-settings.py`, `git/install-ignore.py`, and the prompt and session hooks (`handoff-reminder.sh`, `session-title.sh`, `session-summary.sh`); `replay_history.py` is a local-only replay tool, not a unit test | `python3 -m unittest discover -s tests/setup -t tests/setup` |
+| `tests/setup/` | Unit tests for `merge-settings.py`, `git/install-ignore.py`, and the prompt and session hooks (`handoff_reminder.py`, `session-title.sh`, `session-summary.sh`), the tmux and sound hooks (`test_tmux_hooks.py`), `tmux/tmux-claude-status` (`test_tmux_claude_status.py`) and `setup-tmux.sh`; `replay_history.py` is a local-only replay tool, not a unit test | `python3 -m unittest discover -s tests/setup -t tests/setup` |
 | `docs/chrome-devtools-wsl.md` | WSL2-only: how to make `chrome-devtools-mcp` work (Strategy A headless Linux Chrome, plus B to attach to your Windows Chrome) | reference |
 | `chrome-debug.ps1` | Windows launcher for Strategy B (Chrome with a remote-debugging port) | run on Windows when needed |
+| `tmux/` | The tmux side of the indicator: `claude.conf` (titles, status bar, the ◐ busy and ✳ waiting glyphs), the optional `base.conf` (mouse, splits, the Ctrl-b Enter menu), `cheatsheet.txt`, and `tmux-claude-status`, the backstop the status bar runs (it also maps background sessions to their tab) | sourced and linked by `setup-tmux.sh` |
+| `setup-tmux.sh` | Opt-in tmux installer: links `tmux-claude-status` into `~/.local/bin` and keeps a marked `source-file` block in `~/.tmux.conf` (`--base` adds `base.conf` and the cheatsheet) | run once per machine that uses tmux; not called by `setup.sh` |
 | `setup-chrome-wsl.sh` | Opt-in WSL2 installer: installs Chrome for Testing and registers the user-scoped `chrome-devtools` override | run once on WSL2; not called by `setup.sh` |
 | `setup.sh` | The installer | run once per machine |
 | `sync.sh` | Regenerates the derived plugin lists from live `~/.claude/` | run after plugin changes |
@@ -203,8 +222,8 @@ need nothing extra.
   silent when "handoff" is just a topic (discussing the skill or this hook), on injected content
   (task notifications, subagent and cross-session messages), and on a subagent's or teammate's
   own prompt. Advisory only: it adds context, it cannot run the skill; silent no-op
-  otherwise; always exits 0 so it can never block a prompt. It reads the prompt with python3 and
-  stays silent if that fails. After changing it, replay your own typed prompts through it with
+  otherwise; always exits 0 so it can never block a prompt. The shim runs
+  `hooks/handoff_reminder.py` with python3 and stays silent if that fails. After changing it, replay your own typed prompts through it with
   `python3 tests/setup/replay_history.py` (local only: the history holds private names).
 - **UserPromptSubmit: `session-title.sh`** (in this repo). Sets the session title (the terminal tab
   title) to `[<repo>] <label>` so tabs are tellable apart. It emits the supported
@@ -230,12 +249,25 @@ need nothing extra.
   transcript grew < 2KB, and the prior summary is fed back in. Task notifications, agent messages
   and skill bodies are left out of the dialogue it sends, so they aren't summarized as the user's
   request. Needs python3 on PATH.
-- **Stop / Notification sounds**: play a Windows sound and (on permission prompts) a toast. The
-  Notification sound is inline in `settings.json`. The Stop sound is `stop-ring.sh`, which rings only
-  when the main session finishes: Stop also fires for every subagent and background agent, and those
-  carry `agent_id`. The toast goes through `notify.sh`, which resolves the path for both WSL (`wslpath`) and
-  native Windows git-bash (`cygpath`) and renders `notify-toast.ps1`. Windows-only: on macOS/Linux,
-  swap for your platform's notifier (`osascript` / `notify-send`).
+- **Stop / Notification sounds**: play a Windows sound and (on permission prompts) a toast. Both
+  sounds ring only for a session a person sees: a tab, a plain terminal, or a background session
+  mapped to its tab (see the tmux indicator). Subagents, unmapped background sessions and
+  `claude -p` runs (the delegation canary is one) stay quiet; a permission prompt still pops the
+  toast, so a stuck background session shows up. `hooks/session-pane.sh`'s header
+  has the rules and the hook env they read. Each decision is a line in
+  `$XDG_STATE_HOME/dotclaude/ring.log`. The toast goes through `notify.sh`, which resolves the path
+  for both WSL (`wslpath`) and native Windows git-bash (`cygpath`) and renders `notify-toast.ps1`;
+  Windows' Do Not Disturb hides it. Windows-only: on macOS/Linux, swap for your platform's notifier
+  (`osascript` / `notify-send`).
+- **tmux indicator**: `tmux-state.sh` marks the session's window busy (◐) on a prompt or tool
+  call, waiting (✳) on a Notification and idle on Stop. `claude -p` runs never set it. A
+  background session has no pane of its own, so `tmux/tmux-claude-status` maps it by directory to
+  the one client pane in its cwd (two background sessions in one directory map nothing, and a new
+  mapping also needs a single client pane there) and writes
+  `$XDG_STATE_HOME/dotclaude/tabs`, which `session-pane.sh` reads. State is per window, so two
+  sessions split into one window share a glyph.
+  Run `./setup-tmux.sh` once for the tmux side. A machine whose `settings.machine.json` still wires
+  `tmux-state.sh` should drop those entries before `./setup.sh`, or they fire twice.
 
 ## Status line
 

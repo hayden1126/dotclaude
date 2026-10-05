@@ -62,6 +62,49 @@ class Baseline(unittest.TestCase):
         self.assertLessEqual({p for p in fs["denyWrite"] if p.startswith("~/dotclaude")},
                              set(POLICY["protect"]["write_denied"]))
 
+    def test_code_that_runs_outside_the_sandbox_is_write_protected(self):
+        # Sandbox audit, 2026-10-04. ccstatusline and the Notification hook run these unsandboxed
+        # on every refresh or toast; setup.sh runs or installs the rest, including the plugins
+        # and tools its JSON lists.
+        deny = S["sandbox"]["filesystem"]["denyWrite"]
+        for p in ("statusline", "notify-toast.ps1", "codex", "setup.sh", "merge-settings.py",
+                  "setup-chrome-wsl.sh", "sync.sh", "chrome-debug.ps1", "git", "plugins",
+                  "tools.json", "tmux", "setup-tmux.sh"):
+            self.assertIn("~/dotclaude/" + p, deny)
+
+    def test_tool_credentials_and_shell_history_are_read_protected(self):
+        # Sandbox audit, 2026-10-04. `claude` and `codex` run outside the sandbox, so they
+        # still reach their own files.
+        deny = S["sandbox"]["filesystem"]["denyRead"]
+        for p in ("~/.npmrc", "~/.docker/config.json", "~/.config/.wrangler", "~/.supabase",
+                  "~/.azure", "~/.claude.json", "~/.codex/config.toml", "~/.zsh_history",
+                  "~/.bash_history"):
+            self.assertIn(p, deny)
+
+    def test_tmux_state_and_sounds_are_wired_once(self):
+        # tmux-state.sh exits at once outside a tab, so every machine carries it. The permission
+        # sound lives in notify.sh, gated like stop-ring.sh: an inline one would ring for every
+        # session, the canary's `claude -p` runs included.
+        want = {"UserPromptSubmit": "busy", "PreToolUse": "busy", "PostToolUse": "busy",
+                "Stop": "idle", "Notification": "wait"}
+        for event, state in want.items():
+            with self.subTest(event=event):
+                tmux = [h for e in S["hooks"][event] for h in e["hooks"]
+                        if "tmux-state.sh" in h["command"]]
+                self.assertEqual([h["command"] for h in tmux],
+                                 [f'bash "$HOME/.claude/hooks/tmux-state.sh" {state}'])
+                # It runs on every tool call: a stuck tmux server may cost 5 s, not the default.
+                self.assertEqual(tmux[0]["timeout"], 5)
+        every = [c for entries in S["hooks"].values() for e in entries for c in
+                 (h["command"] for h in e["hooks"])]
+        self.assertFalse([c for c in every if "SoundPlayer" in c])
+        self.assertEqual(commands("Notification", "permission_prompt"),
+                         ['bash "$HOME/.claude/hooks/notify.sh"'])
+        # Both sound hooks ask tmux where a background session is shown; bound them too.
+        for event, script in (("Stop", "stop-ring.sh"), ("Notification", "notify.sh")):
+            (h,) = [h for e in S["hooks"][event] for h in e["hooks"] if script in h["command"]]
+            self.assertEqual(h["timeout"], 5, script)
+
     def test_allow_write_holds_caches_not_bin_dirs(self):
         for p in S["sandbox"]["filesystem"]["allowWrite"]:
             self.assertNotIn("/bin", p, p)
@@ -77,7 +120,8 @@ class Baseline(unittest.TestCase):
         # PostToolUse fires on every call, the main thread's too: the same prefilter as the
         # policy hook keeps Python off the main thread's path. A nudge is advice, so nothing
         # here may block a call.
-        (entry,) = S["hooks"]["PostToolUse"]
+        (entry,) = [e for e in S["hooks"]["PostToolUse"]
+                    if any("delegation-ledger" in h["command"] for h in e["hooks"])]
         self.assertEqual(entry["matcher"], "*")
         (h,) = entry["hooks"]
         self.assertIn("""case "$i" in *'"agent_id"'*)""", h["command"])

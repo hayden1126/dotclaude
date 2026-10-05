@@ -85,7 +85,16 @@
         "~/.claude/.credentials.json",
         "~/.codex/auth.json",
         "~/.google_workspace_mcp",
-        "~/.secrets.env"
+        "~/.secrets.env",
+        "~/.npmrc",
+        "~/.docker/config.json",
+        "~/.config/.wrangler",
+        "~/.supabase",
+        "~/.azure",
+        "~/.claude.json",
+        "~/.codex/config.toml",
+        "~/.zsh_history",
+        "~/.bash_history"
       ],
       "denyWrite": [
         "~/dotclaude/settings.json",
@@ -93,6 +102,19 @@
         "~/dotclaude/skills",
         "~/dotclaude/agents",
         "~/dotclaude/CLAUDE.md",
+        "~/dotclaude/statusline",
+        "~/dotclaude/notify-toast.ps1",
+        "~/dotclaude/codex",
+        "~/dotclaude/setup.sh",
+        "~/dotclaude/merge-settings.py",
+        "~/dotclaude/setup-chrome-wsl.sh",
+        "~/dotclaude/sync.sh",
+        "~/dotclaude/chrome-debug.ps1",
+        "~/dotclaude/git",
+        "~/dotclaude/plugins",
+        "~/dotclaude/tools.json",
+        "~/dotclaude/tmux",
+        "~/dotclaude/setup-tmux.sh",
         "~/.claude/settings.json",
         "~/.claude/hooks",
         "~/.claude/skills",
@@ -154,6 +176,15 @@
             "timeout": 10
           }
         ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$HOME/.claude/hooks/tmux-state.sh\" busy",
+            "timeout": 5
+          }
+        ]
       }
     ],
     "PostToolUse": [
@@ -163,6 +194,15 @@
           {
             "type": "command",
             "command": "i=$(cat); case \"$i\" in *'\"agent_id\"'*) printf '%s' \"$i\" | bash \"$HOME/.claude/hooks/delegation-ledger.sh\" ;; esac",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$HOME/.claude/hooks/tmux-state.sh\" busy",
             "timeout": 5
           }
         ]
@@ -225,6 +265,15 @@
             "timeout": 5
           }
         ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$HOME/.claude/hooks/tmux-state.sh\" busy",
+            "timeout": 5
+          }
+        ]
       }
     ],
     "Stop": [
@@ -232,7 +281,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"$HOME/.claude/hooks/stop-ring.sh\""
+            "command": "bash \"$HOME/.claude/hooks/stop-ring.sh\"",
+            "timeout": 5
           }
         ]
       },
@@ -253,6 +303,15 @@
             "timeout": 5
           }
         ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$HOME/.claude/hooks/tmux-state.sh\" idle",
+            "timeout": 5
+          }
+        ]
       }
     ],
     "Notification": [
@@ -261,11 +320,17 @@
         "hooks": [
           {
             "type": "command",
-            "command": "( powershell.exe -c \"(New-Object Media.SoundPlayer 'C:\\\\Windows\\\\Media\\\\notify.wav').PlaySync()\" >/dev/null 2>&1 & ) ; exit 0"
-          },
+            "command": "bash \"$HOME/.claude/hooks/notify.sh\"",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "hooks": [
           {
             "type": "command",
-            "command": "bash \"$HOME/.claude/hooks/notify.sh\""
+            "command": "bash \"$HOME/.claude/hooks/tmux-state.sh\" wait",
+            "timeout": 5
           }
         ]
       }
@@ -278,6 +343,7 @@
     "claude-md-management@claude-plugins-official": true,
     "hookify@claude-plugins-official": true,
     "context7@claude-plugins-official": true,
-    "chrome-devtools-mcp@claude-plugins-official": true
+    "chrome-devtools-mcp@claude-plugins-official": true,
+    "codex@openai-codex": true
   }
 }

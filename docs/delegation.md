@@ -75,7 +75,7 @@ Each layer covers what the others can't.
 | `reviewer` | `agents/reviewer.md` | Enforces: Read, Grep and Glob only |
 | `writer` | `agents/writer.md` | Enforces: `isolation: worktree`, no Agent tool, and the policy's worktree root |
 | Spawn guard | `hooks/agent-spawn-guard.sh`, `skills/delegation/scripts/agent-spawn-guard` | Enforces: denies a `writer` spawn without `isolation` on the call, and a named spawn without the `team-` prefix. Fails closed |
-| Sandbox | `settings.json` `sandbox` | Enforces (OS): the write roots, `denyRead` (the credential barrier), `denyWrite` (the enforcement sources), and the network allowlist. `failIfUnavailable`, and `autoAllowBashIfSandboxed: false`, so Hayden's prompts stay as they were |
+| Sandbox | `settings.json` `sandbox` | Enforces (OS): the write roots, `denyRead` (the credential barrier, plus tool tokens and shell history), `denyWrite` (the enforcement sources, and the repo files that run outside the sandbox: `statusline/`, `notify-toast.ps1`, `codex/`, `tmux/`, `setup-tmux.sh`, and `setup.sh` with the scripts and lists it installs from), and the network allowlist. A sandboxed `git switch` or `merge` that touches a `denyWrite` file fails; `git pull` already runs outside. `failIfUnavailable`, and `autoAllowBashIfSandboxed: false`, so Hayden's prompts stay as they were |
 | Subagent policy | `hooks/subagent-policy.sh`, `skills/delegation/scripts/subagent-policy`, `skills/delegation/policy.toml` | Enforces: see "Subagent policy" below. Fails closed for the tools it polices |
 | Report check | `hooks/report-check.sh`, `skills/delegation/scripts/report-check` | Enforces acceptance: a schema-invalid report is sent back twice at most. Fails open |
 | Ledger | `hooks/delegation-ledger.sh`, `skills/delegation/scripts/delegation-ledger`, `skills/delegation/liveness.toml` | Observes: start and stop rows (`agent_type` is the resolved role; a teammate adds `name` and `teammate`), `report_ok`, denial rows, the main-checkout hash for a worktree agent; the per-agent liveness index (`agents/<id>.json`); `open` (the tool in flight and since when, thresholds in `liveness.toml`); `watch` (one line per live delegation, and a token like `2▶ 1⚠` for the tmux bar); `audit` (`--monthly` adds a month of usage for retuning, and `exclude` keeps probes out of it); `sandbox-denials`. Persuades: the deadline nudge, one PostToolUse `additionalContext` per activation past the role's `nudge_min`, and a `nudge` row. Fails open |
@@ -666,14 +666,17 @@ fixes:
 A session file's `procStart` must now match the pid's start time too, so a pid the kernel reused
 for another process no longer keeps a gone session alive.
 
-**tmux.** `~/bin/tmux-claude-status` is machine-local and only renders the token; the repo owns
-the `watch --summary` contract. The script is rate-limited to 3 seconds while the status line
+**tmux.** `tmux/tmux-claude-status` (linked into `~/.local/bin` by `setup-tmux.sh`) renders the
+token and reconciles the window indicator; the ledger owns the `watch --summary` contract. The script is rate-limited to 3 seconds while the status line
 redraws every 2, so a rate-limited run repeats the last token from a cache file. tmux replaces a
 `#()` job's text with each run's output, an empty one included, so printing nothing there would
 blank the token on every other redraw. An empty token from `watch --summary` itself just clears
 the bar, which is what we want. The script also runs it with `CLAUDE_PID` unset. A `#()` job
 inherits the tmux server's environment, so a server started from a Claude Bash call would carry
-that session's `CLAUDE_PID` after it died, and that would trip the sandbox self-check.
+that session's `CLAUDE_PID` after it died, and that would trip the sandbox self-check. That
+environment's `PATH` also often lacks `~/.local/bin`, so the script prepends it before calling
+`claude agents --json` (the indicator's cold fill and background-session map; its header has the
+rules).
 
 ### Deadline (A2)
 
@@ -1589,8 +1592,8 @@ model").
 
 `setup.sh` links everything below. It also **resets** `~/.claude/settings.json` to this repo's
 baseline plus `settings.machine.json`, keeping only the top-level keys the baseline doesn't set (see
-the README). So a hook that is only in the live file (for example `tmux-state.sh`) is lost unless it
-is in the overlay. On a machine without that overlay, do it by hand, **in this order**. The spawn guard and the policy
+the README). So a hook that is only in the live file (one a machine added for its own scripts) is lost
+unless it is in the overlay. On a machine without that overlay, do it by hand, **in this order**. The spawn guard and the policy
 hook fail closed, so wiring a hook before its script is reachable blocks every delegated call.
 
 1. **Links.**

@@ -70,7 +70,7 @@ Division of labor: Claude for architecture, implementation, and long-context or 
 ## On/off control
 
 - Nothing auto-runs. The plugin only acts on an explicit `/codex:*` command, and the Codex runtime starts lazily on first use, so an enabled plugin costs nothing at rest.
-- The plugin off or on: the `/plugin` menu, disable or enable `codex@openai-codex`. This doesn't affect `codex-delegate`, which calls `codex exec` directly. Disabling removes the commands, the `codex-rescue` subagent, and the broker hooks. To make a choice the durable default across machines, set `"codex@openai-codex"` in `plugins/enabled.json`.
+- The plugin off or on: the `/plugin` menu, disable or enable `codex@openai-codex`. This doesn't affect `codex-delegate`, which calls `codex exec` directly. Disabling removes the commands, the `codex-rescue` subagent, and the broker hooks. To make a choice the durable default across machines, set `"codex@openai-codex"` in both `plugins/enabled.json` and the baseline `settings.json`'s `enabledPlugins`; a test keeps them equal.
 - The one automatic pathway is opt-in and off by default: the stop-time review gate. Turn it on with `/codex:setup --enable-review-gate` and off with `--disable-review-gate`. When on, Codex reviews each edit-producing turn and can block a stop until issues are resolved.
 - Codex standalone in a terminal is never affected by the plugin's state.
 
