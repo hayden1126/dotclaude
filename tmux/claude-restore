@@ -9,20 +9,23 @@
 #   claude-restore --auto <name>   hook mode: silent, and a no-op unless <name> is main
 #
 # hooks/session-registry.sh keeps one entry per open tab in
-# $XDG_STATE_HOME/dotclaude/open-sessions/<id>.json, naming its tmux server by socket path and
-# start time. A candidate is an entry from the current server's socket but an earlier start: its
-# server died. Entries from other sockets (a `tmux -L probe` server) are never touched. Let L be
-# the last activity before the current server started: the newest ts, ended_other_at or
-# transcript mtime over all candidates, ignoring anything later than that start. A candidate
-# comes back when:
+# $XDG_STATE_HOME/dotclaude/open-sessions/<id>.json, naming its tmux server by socket path,
+# start time and pid (the pid tells apart two servers started in the same second). A candidate
+# is an entry from the current server's socket but another (start, pid): its server died.
+# Entries from other sockets (a `tmux -L probe` server) are never touched. For each old server,
+# let L be its last activity: the newest ts, ended_other_at or transcript mtime over its
+# entries, with a marked entry's transcript capped at its mark and anything later than the
+# current server's start ignored. A candidate comes back when:
 #   - it has no end mark (its server died before any hook ran), or
-#   - its SessionEnd `other` mark is within 120 s of L (a shutdown that signalled claude).
+#   - its SessionEnd `other` mark is within 120 s of its own server's L (a shutdown that
+#     signalled claude).
 # A mark older than that is a window closed while work went on elsewhere, so it stays closed.
-# Also skipped: a session already running (`claude agents --json`), a deleted directory, a
-# directory name with a # (tmux format-expands `new-window -c`) or a control character, an id
-# that isn't a plain token, and, among the tabs that would come back, an older session in the
-# same pane of the same server (the newest wins). A tab with no transcript yet (fresh from
-# startup or /clear: a session writes none until its first input) reopens as a plain `claude`.
+# Also skipped: an older entry in the same pane of the same server (one claude per pane, so only
+# the newest can be a live tab, even when the newest is skipped), a session already running
+# (`claude agents --json`), a deleted directory, a directory name with a # (tmux format-expands
+# `new-window -c`) or a control character, and an id that isn't a plain token. A tab with no
+# transcript yet (fresh from startup or /clear: a session writes none until its first input)
+# reopens as a plain `claude`.
 #
 # Each entry moves to open-sessions/restored/ just before its window opens (still before
 # `claude --resume` runs, so the resumed session's fresh entry is never swept up), and back if
@@ -35,6 +38,12 @@ set -uo pipefail
 
 # tmux's server PATH is whatever started it and often lacks ~/.local/bin, where claude lives.
 PATH="$HOME/.local/bin:$PATH"
+
+# The lock (fd 9, below) must die with this script: `tmux new-session` may start the server and
+# `claude agents` the daemon, and a child that kept fd 9 would hold the lock and block every later
+# run. So every tmux and claude call goes through these, with fd 9 closed.
+tmux() { command tmux "$@" 9>&-; }
+claude() { command claude "$@" 9>&-; }
 
 mode=restore
 case "${1:-}" in
@@ -68,9 +77,10 @@ if [ "$mode" = restore ] && ! tmux has-session -t =main 2>/dev/null; then
 fi
 
 # The current server. In hook mode run-shell's TMUX names it; by hand, the shell's TMUX or the
-# default socket. The socket path goes last, since it may hold a space.
-read -r start socket < <(tmux display -p '#{start_time} #{socket_path}' 2>/dev/null)
-if [[ ! "${start:-}" =~ ^[0-9]+$ ]] || [ -z "${socket:-}" ]; then
+# default socket. Start time and pid name it (two servers can start in the same second); the
+# socket path goes last, since it may hold a space.
+read -r start pid socket < <(tmux display -p '#{start_time} #{pid} #{socket_path}' 2>/dev/null)
+if [[ ! "${start:-}" =~ ^[0-9]+$ ]] || [[ ! "${pid:-}" =~ ^[0-9]+$ ]] || [ -z "${socket:-}" ]; then
   say "no tmux server to restore into"
   exit 0
 fi
@@ -81,7 +91,8 @@ fi
 decide() {
   python3 -I -c '
 import json, os, re, sys
-reg, socket, start, live_mode = sys.argv[1], sys.argv[2], int(sys.argv[3]), sys.argv[4] == "live"
+reg, socket, start, pid = sys.argv[1], sys.argv[2], int(sys.argv[3]), int(sys.argv[4])
+live_mode = sys.argv[5] == "live"
 
 def num(v):
     return v if isinstance(v, (int, float)) and not isinstance(v, bool) else None
@@ -96,8 +107,11 @@ for name in sorted(os.listdir(reg)):
     except Exception:
         continue
     if isinstance(e, dict) and e.get("socket") == socket and num(e.get("server_start")) is not None \
-            and e["server_start"] != start:
+            and (e["server_start"], e.get("server_pid")) != (start, pid):
         cands.append((name, e))
+
+def server(e):
+    return e["server_start"], e.get("server_pid")
 if not live_mode:
     print("yes" if cands else "")
     sys.exit(0)
@@ -115,19 +129,40 @@ def mtime(e):
     except OSError:
         return None
 
-# Activity after the current server started (a transcript resumed by hand since) is not the
-# time the old server ended.
-marks = []
+# The last activity of each old server, L. For a marked entry, the transcript counts only up to
+# the mark (a `claude --continue` outside tmux after the death is not when the server ended), and
+# nothing after the current server started counts at all.
+last = {}
 for _, e in cands:
-    marks += [num(e.get("ts")), num(e.get("ended_other_at")), mtime(e)]
-last = max([m for m in marks if m is not None and m <= start], default=0)
+    ended = num(e.get("ended_other_at"))
+    t = mtime(e)
+    if t is not None and ended is not None:
+        t = min(t, ended)
+    for m in (num(e.get("ts")), ended, t):
+        if m is not None and m <= start:
+            last[server(e)] = max(last.get(server(e), m), m)
+
+# One claude per pane at a time, so in each pane of each old server only the newest entry can be
+# a live tab; an older one is a dead session (claude crashed, a new one started), even when the
+# newest is skipped. Pane ids restart on every server, so the server is part of the key.
+newest = {}
+for name, e in cands:
+    key = server(e) + (e.get("pane"),)
+    if e.get("pane") and (key not in newest or
+                          (num(e.get("ts")) or 0) > (num(newest[key][1].get("ts")) or 0)):
+        newest[key] = (name, e)
 
 rows = []
 for name, e in cands:
     sid, cwd = e.get("session_id"), e.get("cwd")
     ended = num(e.get("ended_other_at"))
+    key = server(e) + (e.get("pane"),)
+    end = last.get(server(e), 0)
     if not isinstance(sid, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{7,127}", sid):
         why = "skip", "not a plain session id"
+    elif key in newest and newest[key][0] != name:
+        why = "skip", "an older session in pane %s (newer: %s)" % (
+            e.get("pane"), str(newest[key][1].get("session_id"))[:8])
     elif sid in live:
         why = "skip", "already running"
     elif not isinstance(cwd, str) or not cwd or not os.path.isdir(cwd):
@@ -136,8 +171,8 @@ for name, e in cands:
         why = "skip", "directory name has a # (tmux would expand it)"
     elif re.search(r"[\x00-\x1f]", cwd):
         why = "skip", "directory name has a control character"
-    elif ended is not None and ended < last - 120:
-        why = "skip", "window closed %ds before the old server ended" % (last - ended)
+    elif ended is not None and ended < end - 120:
+        why = "skip", "window closed %ds before its server ended" % (end - ended)
     elif mtime(e) is None:
         # A session has no transcript until its first input (probed): a tab fresh from startup
         # or /clear. Nothing to resume, so the tab reopens as a new session in its directory.
@@ -148,24 +183,6 @@ for name, e in cands:
         why = "restore", "open when its server died"
     rows.append([name, e, why])
 
-# One tab per pane of a server: among the tabs that would come back, the newest session wins
-# (claude crashed and a new one started in the same pane). Pane ids restart on every server.
-newest = {}
-for row in rows:
-    name, e, why = row
-    pane = e.get("pane")
-    if why[0] == "skip" or not pane:
-        continue
-    key = (e["server_start"], pane)
-    if key not in newest or (num(e.get("ts")) or 0) > (num(newest[key][1].get("ts")) or 0):
-        newest[key] = row
-for row in rows:
-    name, e, why = row
-    key = (e["server_start"], e.get("pane"))
-    if why[0] != "skip" and key in newest and newest[key] is not row:
-        row[2] = "skip", "an older session in pane %s (newer: %s)" % (
-            e.get("pane"), str(newest[key][1].get("session_id"))[:8])
-
 def clean(s):
     return re.sub(r"[\x00-\x1f]", " ", str(s))
 
@@ -175,14 +192,14 @@ def order(row):
 
 for name, e, why in sorted(rows, key=order):
     print("\x1f".join((why[0], clean(e.get("session_id")), clean(e.get("cwd")), clean(why[1]), name)))
-' "$reg" "$socket" "$start" "$1"
+' "$reg" "$socket" "$start" "$pid" "$1"
 }
 
 [ -n "$(decide count </dev/null 2>/dev/null)" ] || {
   say "nothing from an earlier tmux server to restore"
   exit 0
 }
-plan=$(timeout 5 claude agents --json 2>/dev/null | decide live 2>/dev/null)
+plan=$(timeout 5 claude agents --json 2>/dev/null 9>&- | decide live 2>/dev/null)
 [ -n "$plan" ] || exit 0
 
 if [ "$mode" = list ]; then

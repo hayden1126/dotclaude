@@ -22,9 +22,11 @@ SCRIPT = os.path.join(REPO, "tmux", "claude-restore")
 
 STUB = """#!/usr/bin/env bash
 { printf '%s' "$(basename "$0")"; printf '\\x1f%s' "$@"; printf '\\n'; } >> "$STUB_LOG"
+# The fds this call inherited: the restore's lock must not outlive it in a server or daemon.
+{ printf '%s' "$(basename "$0") $1:"; ls /proc/$$/fd | tr '\\n' ' '; echo; } >> "$STUB_LOG.fds"
 case "$(basename "$0") $1" in
   "tmux has-session") [ -n "${STUB_HAS_MAIN:-}" ] ;;
-  "tmux display") printf '%s %s\\n' "$STUB_START" "$STUB_SOCKET" ;;
+  "tmux display") printf '%s %s %s\\n' "$STUB_START" "$STUB_PID" "$STUB_SOCKET" ;;
   "tmux new-window")
     [ -z "${STUB_FAIL_NEW_WINDOW:-}" ] || exit 1
     n=$(( $(cat "$STUB_LOG.panes" 2>/dev/null || echo 100) + 1 ))
@@ -36,6 +38,8 @@ esac
 
 SOCKET = "/tmp/tmux-1000/default"
 OLD_START = 1_700_000_000
+OLD_PID = 111
+CUR_PID = 222
 
 
 def sid(n):
@@ -68,14 +72,17 @@ class Restore(unittest.TestCase):
                     if not k.startswith(("CLAUDE", "TMUX"))}
         self.env.update(PATH=stubs + os.pathsep + "/usr/bin:/bin", HOME=home, STUB_LOG=self.log,
                         XDG_STATE_HOME=os.path.join(self.tmp, "state"), STUB_HAS_MAIN="1",
-                        STUB_START=str(self.start), STUB_SOCKET=SOCKET)
+                        STUB_START=str(self.start), STUB_PID=str(CUR_PID),
+                        STUB_SOCKET=SOCKET)
 
     # --- fixtures -----------------------------------------------------------------------
 
     def entry(self, n, window, pane=None, age=600, ended=None, transcript=True, cwd=True,
-              transcript_age=None, socket=SOCKET, server_start=OLD_START, dirname=None):
-        """Write an entry for session n, its times `age`/`ended` seconds before the old server
-        died, in a real cwd."""
+              transcript_age=None, socket=SOCKET, server_start=OLD_START, server_pid=OLD_PID,
+              dirname=None, died=None):
+        """Write an entry for session n, its times `age`/`ended` seconds before its server
+        died (`died`, default the old server's), in a real cwd."""
+        died = self.died if died is None else died
         path = os.path.join(self.tmp, "code", dirname or f"repo{n}")
         if cwd:
             os.makedirs(path, exist_ok=True)
@@ -83,13 +90,13 @@ class Restore(unittest.TestCase):
         if transcript:
             os.makedirs(os.path.dirname(tpath), exist_ok=True)
             open(tpath, "w").close()
-            t = self.died - (age if transcript_age is None else transcript_age)
+            t = died - (age if transcript_age is None else transcript_age)
             os.utime(tpath, (t, t))
         e = {"session_id": sid(n), "cwd": path, "transcript_path": tpath,
              "pane": pane or f"%{n}", "window_index": window, "socket": socket,
-             "server_start": server_start, "ts": self.died - age}
+             "server_start": server_start, "server_pid": server_pid, "ts": died - age}
         if ended is not None:
-            e["ended_other_at"] = self.died - ended
+            e["ended_other_at"] = died - ended
         with open(os.path.join(self.reg, sid(n) + ".json"), "w") as f:
             json.dump(e, f)
         return path
@@ -189,7 +196,7 @@ class Restore(unittest.TestCase):
         self.assertEqual(self.resumed(), [(a, sid(1)), (b, sid(2))])
 
     def test_entries_from_the_current_server_are_left_alone(self):
-        self.entry(1, window=1, server_start=self.start)
+        self.entry(1, window=1, server_start=self.start, server_pid=CUR_PID)
         self.run_restore()
         self.assertEqual(self.resumed(), [])
         self.assertEqual(self.registry(), [sid(1) + ".json"])
@@ -274,20 +281,62 @@ class Restore(unittest.TestCase):
         self.run_restore()
         self.assertEqual(self.resumed(), [(b, sid(2))])
 
-    def test_a_closed_newer_session_does_not_hide_the_open_one(self):
-        # The newer session in pane %5 was closed long before the end; the dedupe runs only
-        # among entries that would come back, so the older one still does.
-        a = self.entry(1, window=1, pane="%5", age=1000)
+    def test_an_older_session_in_a_pane_stays_dead_when_the_newer_was_closed(self):
+        # A pane runs one claude at a time, so the older entry in pane %5 is a dead session,
+        # even though the newer one was closed long before the end and stays closed too.
+        self.entry(1, window=1, pane="%5", age=1000)
         self.entry(2, window=1, pane="%5", age=950, ended=900)
-        self.entry(3, window=2, age=600, transcript_age=10)
+        c = self.entry(3, window=2, age=600, transcript_age=10)
         self.run_restore()
-        self.assertIn((a, sid(1)), self.resumed())
+        self.assertEqual(self.resumed(), [(c, sid(3))])
+
+    def test_each_old_server_has_its_own_last_activity(self):
+        # Server A was killed (tabs marked within seconds); server B started on the same socket,
+        # its tab worked for an hour more, and then B died unsignalled. Both servers' tabs return.
+        a_died = self.died - 3600
+        a1 = self.entry(1, window=1, age=300, ended=5, server_start=OLD_START - 7200,
+                        server_pid=101, died=a_died)
+        a2 = self.entry(2, window=2, age=300, ended=4, server_start=OLD_START - 7200,
+                        server_pid=101, died=a_died)
+        b = self.entry(3, window=3, age=600, transcript_age=10)
+        self.run_restore()
+        self.assertEqual(self.resumed(), [(a1, sid(1)), (a2, sid(2)), (b, sid(3))])
+
+    def test_a_same_second_restart_is_told_apart_by_pid(self):
+        a = self.entry(1, window=1, server_start=self.start, server_pid=OLD_PID)
+        self.run_restore()
+        self.assertEqual(self.resumed(), [(a, sid(1))])
+
+    def test_a_transcript_written_after_its_mark_does_not_move_the_end(self):
+        # After the shutdown, `claude --continue` outside tmux wrote tab 1's transcript 600 s
+        # later (still before the current server started): its mark still counts as the end.
+        a = self.entry(1, window=1, age=300, ended=5)
+        b = self.entry(2, window=2, age=300, ended=4)
+        c = self.entry(3, window=3, age=300, ended=3)
+        self.touch(1, self.died + 600)
+        self.run_restore()
+        self.assertEqual(self.resumed(), [(a, sid(1)), (b, sid(2)), (c, sid(3))])
+
+    def test_the_lock_never_reaches_tmux_or_claude(self):
+        # tmux new-session may start the server and claude agents the daemon: a lock fd they
+        # inherit would outlive this run and block every later one.
+        self.entry(1, window=1)
+        del self.env["STUB_HAS_MAIN"]
+        self.run_restore()
+        with open(self.log + ".fds") as f:
+            lines = f.read().splitlines()
+        self.assertTrue(any(line.startswith("tmux new-session:") for line in lines))
+        self.assertTrue(any(line.startswith("claude agents:") for line in lines))
+        for line in lines:
+            with self.subTest(call=line.split(":")[0]):
+                self.assertNotIn("9", line.split(":", 1)[1].split())
 
     def test_an_unsafe_id_in_the_registry_is_never_typed(self):
         path = os.path.join(self.reg, "bad.json")
         with open(path, "w") as f:
             json.dump({"session_id": "x; rm -rf ~", "cwd": self.tmp, "pane": "%1",
                        "window_index": 1, "socket": SOCKET, "server_start": OLD_START,
+                       "server_pid": OLD_PID,
                        "ts": self.died, "transcript_path": "/nonexistent"}, f)
         self.run_restore()
         self.assertEqual(self.calls("tmux", "send-keys"), [])
