@@ -18,8 +18,8 @@ with serve.py's handler on an ephemeral port, never file://.
 Rules (ids, severities and params live in geometry.rules.toml):
    text-overlap        line rects of two text items intersect
    covers-marker       a text line sits on a marker (map pin)
-   unbounded-abs-text  absolutely positioned text whose width nothing bounds
-   text-on-media       text over an image with no panel and no shadow
+   unbounded-abs-text  small running text in a box that widens with content
+   text-on-media       small text over raster media with no panel or scrim
    safe-area           text outside the canvas margin (warn)
    clearance           independently placed text closer than min_gap (warn)
    clipped-text        text cut off by an overflow-hidden ancestor
@@ -91,6 +91,7 @@ class Slide:
         self.probe = probe
         self.el = probe["elements"]
         self.texts = probe["texts"]
+        self.media = {m["node"]: m for m in probe["media"]}
 
     def chain(self, node: int) -> list[int]:
         """Ancestors, nearest first, excluding the node itself and the section."""
@@ -107,18 +108,6 @@ class Slide:
     def related(self, a: int, b: int) -> bool:
         return a == b or a in self.chain(b) or b in self.chain(a)
 
-    def block(self, node: int) -> int | None:
-        """The flow the text lives in: its nearest non-inline ancestor-or-self.
-        SVG does not flow (every <text> is placed by coordinates), so inside an
-        svg each <text> is its own block and a <tspan> belongs to its <text>."""
-        chain = self.up(node)
-        if any(self.el[n]["tag"] == "svg" for n in chain):
-            return next((n for n in chain if self.el[n]["tag"] == "text"), node)
-        for n in chain:
-            if self.el[n]["display"] not in ("inline", "contents"):
-                return n
-        return None
-
     def root(self, node: int) -> int | None:
         """Nearest absolutely or fixed positioned ancestor-or-self; None = the section."""
         for n in self.up(node):
@@ -126,28 +115,58 @@ class Slide:
                 return n
         return None
 
-    def bounded(self, node: int) -> bool:
-        """Does anything from the text up to its positioned root cap the line width?"""
-        root = self.root(node)
-        if root is None:
-            return True
-        for n in self.up(node):
-            if self.el[n]["maxWidth"] != "none" or definite(self.el[n]["width"]):
-                return True
-            if n == root:
-                break
-        return definite(self.el[root]["left"]) and definite(self.el[root]["right"])
+    def flow_root(self, node: int) -> int | None:
+        """What lays this text out. Everything in flow under one positioned box
+        (blocks, flex and grid items, inline runs) is placed by one layout
+        pass, which does not stack lines on each other. Inside an svg nothing
+        flows: each <text> is placed by its own coordinates."""
+        chain = self.up(node)
+        if any(self.el[n]["tag"] == "svg" for n in chain):
+            return next((n for n in chain if self.el[n]["tag"] == "text"), node)
+        return self.root(node)
 
-    def panel(self, node: int, media: int, min_alpha: float) -> bool:
-        """A background between the text and the media: an ancestor-or-self that
-        paints one, and does not also contain the media (whose pixels would sit
-        on top of that background)."""
-        media_chain = set(self.up(media))
+    def large(self, node: int, p: dict) -> bool:
+        """WCAG large text: at least large_px, or large_bold_px at bold weight."""
+        e = self.el[node]
+        return e["fontSize"] >= p["large_px"] or (
+            e["fontSize"] >= p["large_bold_px"] and e["fontWeight"] >= p["bold_weight"])
+
+    def paints_panel(self, node: int, min_alpha: float) -> bool:
+        """Does the element (or its ::before/::after) paint a background at
+        least min_alpha opaque: a color, or a gradient whose strongest stop is?"""
+        for color, image in self.el[node]["paints"]:
+            if alpha(color) >= min_alpha:
+                return True
+            for layer in split_layers(image):
+                if "gradient(" in layer and gradient_alpha(layer) >= min_alpha:
+                    return True
+        return False
+
+    def ink(self, t: dict) -> list[dict]:
+        """Line rects trimmed to the em box. A Range rect is the font's content
+        area (ascent + descent + line gap), taller than the glyphs; ink sits
+        within the em, so two stacked lines whose content areas touch do not
+        collide on screen."""
+        fs = self.el[t["node"]]["fontSize"]
+        out = []
+        for line in t["lines"]:
+            if line["h"] > fs:
+                line = {**line, "y": line["y"] + (line["h"] - fs) / 2, "h": fs}
+            out.append(line)
+        return out
+
+    def svg(self, node: int) -> int | None:
+        return next((n for n in self.up(node) if self.el[n]["tag"] == "svg"), None)
+
+    def edge_panel(self, node: int, min_alpha: float) -> bool:
+        """Is the text on a painted panel that reaches a canvas edge (a side
+        column, a band)? Such a panel sets its own inset."""
+        width, height = self.probe["canvas"]["w"], self.probe["canvas"]["h"]
         for n in self.up(node):
-            if n in media_chain:
-                continue
-            e = self.el[n]
-            if e["backgroundImage"] or alpha(e["background"]) >= min_alpha:
+            b = self.el[n]["box"]
+            touches = b["x"] <= 1 or b["y"] <= 1 or b["x"] + b["w"] >= width - 1 \
+                or b["y"] + b["h"] >= height - 1
+            if touches and self.paints_panel(n, min_alpha):
                 return True
         return False
 
@@ -159,20 +178,14 @@ class Slide:
             tokens.insert(0, self.el[parent]["token"])
         return " ".join(tokens)
 
-    def full_path(self, node: int) -> str:
-        return " ".join(self.el[n]["token"] for n in reversed(self.up(node)))
 
-
-def definite(value: str) -> bool:
-    """A specified width or inset that is a length, not content-decided."""
-    return value not in ("", "auto", "none", "fit-content", "max-content",
-                         "min-content", "initial", "unset", "inherit")
+COLOR_RE = re.compile(r"rgba?\([^)]*\)|color\([^)]*\)|transparent")
 
 
 def alpha(color: str) -> float:
     """Alpha of a computed color: rgb() is opaque, rgba()/'/ a' carry it."""
     color = color.strip()
-    if color in ("", "transparent"):
+    if color in ("", "transparent", "none"):
         return 0.0
     if "/" in color:
         tail = color.rsplit("/", 1)[1].strip(" )")
@@ -181,6 +194,25 @@ def alpha(color: str) -> float:
     if color.startswith("rgba") and len(nums) == 4:
         return float(nums[3])
     return 1.0
+
+
+def split_layers(image: str) -> list[str]:
+    """A computed background-image list, split on its top-level commas."""
+    layers, depth, start = [], 0, 0
+    for i, ch in enumerate(image):
+        depth += ch == "("
+        depth -= ch == ")"
+        if ch == "," and depth == 0:
+            layers.append(image[start:i].strip())
+            start = i + 1
+    layers.append(image[start:].strip())
+    return [layer for layer in layers if layer and layer != "none"]
+
+
+def gradient_alpha(layer: str) -> float:
+    """The strongest stop of a gradient: a scrim is judged where it is darkest."""
+    stops = COLOR_RE.findall(layer)
+    return max((alpha(c) for c in stops), default=1.0)
 
 
 def intersect(a: dict, b: dict) -> tuple[float, float]:
@@ -215,10 +247,12 @@ def _texts(s: Slide, rule: str) -> list[dict]:
 def rule_text_overlap(s: Slide, p: dict, rid: str):
     items = _texts(s, rid)
     for a, b in itertools.combinations(items, 2):
-        if s.related(a["node"], b["node"]) or s.block(a["node"]) == s.block(b["node"]):
+        if s.related(a["node"], b["node"]) or s.flow_root(a["node"]) == s.flow_root(b["node"]):
             continue
-        w, h = worst_overlap(a["lines"], b["lines"])
-        if w * h > p["min_area"]:
+        # Compared on the em box (see Slide.ink), and a sliver under
+        # min_depth on either axis is not ink on ink either.
+        w, h = worst_overlap(s.ink(a), s.ink(b))
+        if w * h > p["min_area"] and min(w, h) >= p["min_depth"]:
             yield f"{s.path(a['node'])} x {s.path(b['node'])}", px(w, h)
 
 
@@ -233,32 +267,52 @@ def rule_covers_marker(s: Slide, p: dict, rid: str):
 
 
 def rule_unbounded_abs_text(s: Slide, p: dict, rid: str):
-    # One finding per positioned element, naming its widest unbounded line.
+    # Small running text needs a declared measure. Large display text
+    # (headlines) and short labels (kickers, names) set their own width by
+    # design. "Unbounded" is measured, not inferred: the probe lengthened the
+    # text and its positioned box widened.
     widest: dict[int, tuple[float, dict]] = {}
     for t in _texts(s, rid):
-        root = s.root(t["node"])
-        if root is None or s.bounded(t["node"]):
+        if t.get("grows") is None or t["grows"] <= p["tolerance"] or s.large(t["node"], p) \
+                or t.get("chars", 0) <= p["label_chars"]:
             continue
+        root = s.root(t["node"])
         w = max(line["w"] for line in t["lines"])
-        if root not in widest or w > widest[root][0]:
+        if root is not None and (root not in widest or w > widest[root][0]):
             widest[root] = (w, t)
     for root, (w, t) in widest.items():
-        e = s.el[root]
-        yield (s.path(root), f"max-width {e['maxWidth']}, width {e['width']}; "
-                             f"{s.path(t['node'])} runs {round(w)} px wide")
+        size = s.el[t["node"]]["fontSize"]
+        yield (s.path(root), f"width set by content; {s.path(t['node'])} "
+                             f"({round(size)} px text) runs {round(w)} px wide")
 
 
 def rule_text_on_media(s: Slide, p: dict, rid: str):
+    # Small text over a raster needs something painted between it and the
+    # picture (a panel or a scrim). WCAG large text may rely on a text-shadow.
     for t in _texts(s, rid):
-        if s.el[t["node"]]["textShadow"] != "none":
+        node = t["node"]
+        shadow = s.el[node]["textShadow"] != "none"
+        if shadow and s.large(node, p):
             continue
-        for m in s.probe["media"]:
-            if s.related(t["node"], m["node"]):
+        bare, over, media = 0, 0, None
+        for stack in t.get("samples", []):
+            if node not in stack:
                 continue
-            w, h = worst_overlap(t["lines"], [m["box"]])
-            if w * h > p["min_area"] and not s.panel(t["node"], m["node"], p["min_panel_alpha"]):
-                yield f"{s.path(t['node'])} on {s.path(m['node'])}", f"{px(w, h)}, no panel or shadow"
-                break
+            below = stack[stack.index(node):]          # the text, then what it sits on
+            hit = next((i for i, n in enumerate(below) if n in s.media), None)
+            if hit is None:
+                continue
+            over += 1
+            m = below[hit]
+            if s.media[m]["scrimmed"] or any(s.paints_panel(n, p["min_panel_alpha"])
+                                             for n in below[:hit]):
+                continue
+            bare += 1
+            media = m if media is None else media
+        if bare:
+            size = round(s.el[node]["fontSize"])
+            why = f"{size} px text, shadow only" if shadow else "no panel or shadow"
+            yield f"{s.path(node)} on {s.path(media)}", f"{why}; bare at {bare} of {over} points"
 
 
 def rule_safe_area(s: Slide, p: dict, rid: str):
@@ -267,6 +321,8 @@ def rule_safe_area(s: Slide, p: dict, rid: str):
         margin = s.probe.get("margin") or p["fallback_margin"]
     width, height = s.probe["canvas"]["w"], s.probe["canvas"]["h"]
     for t in _texts(s, rid):
+        if s.edge_panel(t["node"], p["panel_alpha"]):
+            continue
         worst = 0.0
         for line in t["lines"]:
             worst = max(worst, margin - line["x"], margin - line["y"],
@@ -279,11 +335,17 @@ def rule_safe_area(s: Slide, p: dict, rid: str):
 def rule_clearance(s: Slide, p: dict, rid: str):
     items = _texts(s, rid)
     for a, b in itertools.combinations(items, 2):
-        if s.related(a["node"], b["node"]) or s.root(a["node"]) == s.root(b["node"]):
+        if s.related(a["node"], b["node"]) or s.flow_root(a["node"]) == s.flow_root(b["node"]):
             continue
-        if worst_overlap(a["lines"], b["lines"]) != (0.0, 0.0):
+        # Inside one drawing every label is placed against the others by
+        # coordinates: a near miss there is the drawing's design (a collision
+        # is still text-overlap's).
+        if s.svg(a["node"]) is not None and s.svg(a["node"]) == s.svg(b["node"]):
+            continue
+        ink_a, ink_b = s.ink(a), s.ink(b)
+        if worst_overlap(ink_a, ink_b) != (0.0, 0.0):
             continue   # overlapping is text-overlap's finding, not this one
-        nearest = min(gap(x, y) for x, y in itertools.product(a["lines"], b["lines"]))
+        nearest = min(gap(x, y) for x, y in itertools.product(ink_a, ink_b))
         if nearest < p["min_gap"]:
             yield f"{s.path(a['node'])} x {s.path(b['node'])}", f"{round(nearest, 1)} px apart"
 
@@ -605,6 +667,15 @@ GOTO_JS = """(async (h, v) => {
 })(%d, %d)"""
 
 
+class QuietServer(serve.ReusableServer):
+    """Chrome drops connections it no longer needs (an image it has, a video
+    it will not play); the resulting reset is not worth a traceback."""
+
+    def handle_error(self, request, client_address):
+        if not isinstance(sys.exc_info()[1], (ConnectionResetError, BrokenPipeError)):
+            super().handle_error(request, client_address)
+
+
 def slide_label(entry: dict) -> str:
     if entry["id"]:
         return entry["id"]
@@ -631,7 +702,7 @@ def measure(cfg: deckcfg.DeckConfig, browser_info: tuple[str, bool], wanted: lis
     server = None
     try:
         handler = functools.partial(serve.RangeHandler, directory=str(cfg.deck))
-        server = serve.ReusableServer(("127.0.0.1", 0), handler)
+        server = QuietServer(("127.0.0.1", 0), handler)
         threading.Thread(target=server.serve_forever, daemon=True).start()
         page = Page(browser, width, height)
         url = f"http://127.0.0.1:{server.server_address[1]}/{index}?export"

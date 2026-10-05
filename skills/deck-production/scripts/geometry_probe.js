@@ -29,35 +29,6 @@ function geometryProbe(opts) {
   });
   const visibleRect = r => r.width / scale >= 0.5 && r.height / scale >= 0.5;
 
-  // Specified (not computed) values. getComputedStyle resolves `width: auto`
-  // and an absolute element's `left: auto` to used pixels, which hides exactly
-  // what the bounded-width rule needs to know. Inline style first, then the
-  // last matching style rule in document order. Specificity is not weighed:
-  // good enough for deck CSS, where the slide-scoped rule also comes last.
-  const styleRules = [];
-  const collect = list => {
-    for (const rule of list) {
-      if (rule instanceof CSSStyleRule) styleRules.push(rule);
-      else if (rule.cssRules && (!rule.media || matchMedia(rule.media.mediaText).matches)) {
-        collect(rule.cssRules);
-      }
-    }
-  };
-  for (const sheet of document.styleSheets) {
-    try { collect(sheet.cssRules); } catch (e) { /* cross-origin sheet: unreadable */ }
-  }
-  const specified = (el, prop) => {
-    const inline = el.style ? el.style.getPropertyValue(prop) : '';
-    if (inline) return inline.trim();
-    let value = '';
-    for (const rule of styleRules) {
-      const v = rule.style.getPropertyValue(prop);
-      if (!v) continue;
-      try { if (el.matches(rule.selectorText)) value = v; } catch (e) { /* bad selector */ }
-    }
-    return (value || 'auto').trim();
-  };
-
   // A selector token per element: #id, else the first class no sibling
   // shares, else its first class (or tag) with :nth-child.
   const token = el => {
@@ -73,12 +44,26 @@ function geometryProbe(opts) {
     return clash ? `${base}:nth-child(${[...parent.children].indexOf(el) + 1})` : base;
   };
 
+  // What an element paints behind content: its own background and those of
+  // its ::before/::after, as raw computed [color, image] pairs. A scrim is
+  // often a pseudo-element, and hit testing reports a pseudo as its host.
+  const paints = el => {
+    const out = [];
+    const add = cs => out.push([cs.backgroundColor, cs.backgroundImage]);
+    add(getComputedStyle(el));
+    for (const pseudo of ['::before', '::after']) {
+      const cs = getComputedStyle(el, pseudo);
+      if (cs.content !== 'none' && cs.content !== 'normal' && cs.display !== 'none') add(cs);
+    }
+    return out;
+  };
+
   // The node table. Ancestors register first, so `parent` always resolves;
   // the section itself is the implicit root (parent null).
   const ids = new Map();
   const elements = [];
   const register = el => {
-    if (el === sec) return null;
+    if (el === sec || !sec.contains(el)) return null;
     if (ids.has(el)) return ids.get(el);
     const parent = register(el.parentElement);
     const cs = getComputedStyle(el);
@@ -86,12 +71,10 @@ function geometryProbe(opts) {
     ids.set(el, id);
     elements.push({
       parent, token: token(el), tag: el.localName,
-      position: cs.position, display: cs.display,
-      maxWidth: cs.maxWidth, width: specified(el, 'width'),
-      left: specified(el, 'left'), right: specified(el, 'right'),
-      textShadow: cs.textShadow, background: cs.backgroundColor,
-      backgroundImage: cs.backgroundImage !== 'none',
-      box: norm(el.getBoundingClientRect()),
+      position: cs.position, display: cs.display, maxWidth: cs.maxWidth,
+      textShadow: cs.textShadow, fontSize: parseFloat(cs.fontSize),
+      fontWeight: parseInt(cs.fontWeight, 10) || 400,
+      paints: paints(el), box: norm(el.getBoundingClientRect()),
     });
     return id;
   };
@@ -112,6 +95,29 @@ function geometryProbe(opts) {
     .filter(([, sels]) => sels.some(sel => { try { return !!el.closest(sel); } catch (e) { return false; } }))
     .map(([rule]) => rule);
 
+  const boxed = el => {
+    const r = el.getBoundingClientRect();
+    return visibleRect(r) && !hidden(el) ? { node: register(el), box: norm(r) } : null;
+  };
+
+  // Media is raster: img, video, canvas, an svg that embeds an <image>, and an
+  // element with a url() background. A vector svg (lines, charts, leader
+  // strokes) is drawing, not a picture, and text over it stays legible.
+  // `scrimmed` marks a url() background with a gradient layer painted above it.
+  const media = [];
+  for (const el of sec.querySelectorAll('img, video, canvas, svg')) {
+    if (el.localName === 'svg' && (!el.querySelector('image') || el.parentElement.closest('svg'))) continue;
+    const item = boxed(el);
+    if (item) media.push({ ...item, scrimmed: false });
+  }
+  for (const el of sec.querySelectorAll('*')) {
+    const layers = getComputedStyle(el).backgroundImage.split(/,(?![^(]*\))/).map(s => s.trim());
+    const firstUrl = layers.findIndex(s => s.startsWith('url('));
+    if (firstUrl < 0) continue;
+    const item = boxed(el);
+    if (item) media.push({ ...item, scrimmed: layers.slice(0, firstUrl).some(s => s.includes('gradient(')) });
+  }
+
   // Text items: every element with a direct non-whitespace text node. Boxes are
   // the line rects of those text nodes, not the element box: a block's box
   // spans its container and would report overlaps that are not on screen.
@@ -124,7 +130,27 @@ function geometryProbe(opts) {
     if (!byElement.has(el)) byElement.set(el, []);
     byElement.get(el).push(node);
   }
-  const texts = [];
+
+  // Hit testing skips pointer-events:none, which overlays and scrims usually
+  // set. Lift it for the probe and restore it after.
+  const lift = document.createElement('style');
+  lift.textContent = '.reveal .slides section.present, .reveal .slides section.present *,' +
+    '.reveal .slides section.present *::before, .reveal .slides section.present *::after' +
+    '{ pointer-events: auto !important; }';
+  document.head.appendChild(lift);
+  const toClient = (x, y) => [secR.left + x * scale, secR.top + y * scale];
+  const stackAt = (x, y) => {
+    const out = [];
+    for (const hit of document.elementsFromPoint(...toClient(x, y))) {
+      if (hit === sec || !sec.contains(hit)) break;
+      out.push(register(hit));
+    }
+    return out;
+  };
+  const overlapsMedia = line => media.some(({ box: m }) =>
+    line.x < m.x + m.w && m.x < line.x + line.w && line.y < m.y + m.h && m.y < line.y + line.h);
+
+  const texts = [], textEls = [];
   for (const [el, nodes] of byElement) {
     if (hidden(el)) continue;
     const lines = [];
@@ -134,14 +160,41 @@ function geometryProbe(opts) {
       for (const r of range.getClientRects()) if (visibleRect(r)) lines.push(norm(r));
     }
     if (!lines.length) continue;
-    texts.push({ node: register(el), lines, exempt: exemptFor(el),
-                 text: el.textContent.trim().replace(/\s+/g, ' ').slice(0, 60) });
+    // Paint stacks (topmost first) at points along each line that sits over
+    // media, so geometry.py can see what lies between the text and the media.
+    const samples = [];
+    for (const line of lines.filter(overlapsMedia)) {
+      for (const f of [0.05, 0.25, 0.5, 0.75, 0.95]) {
+        samples.push(stackAt(line.x + line.w * f, line.y + line.h / 2));
+      }
+    }
+    const text = el.textContent.trim().replace(/\s+/g, ' ');
+    texts.push({ node: register(el), lines, samples, exempt: exemptFor(el),
+                 text: text.slice(0, 60), chars: text.length });
+    textEls.push(el);
   }
+  lift.remove();
 
-  const boxed = el => {
-    const r = el.getBoundingClientRect();
-    return visibleRect(r) && !hidden(el) ? { node: register(el), box: norm(r) } : null;
-  };
+  // Growth test: does this text's absolutely positioned box widen when the
+  // text gets longer? Append a long run of words, compare the box width,
+  // restore. It answers "is the width decided by content" directly, with the
+  // cascade fully applied, where reading width/max-width declarations would
+  // have to re-implement specificity, insets and shrink-to-fit.
+  texts.forEach((t, i) => {
+    const el = textEls[i];
+    let root = null;
+    for (let n = el; n && n !== sec; n = n.parentElement) {
+      const pos = getComputedStyle(n).position;
+      if (pos === 'absolute' || pos === 'fixed') { root = n; break; }
+    }
+    if (!root) { t.grows = null; return; }
+    const before = root.getBoundingClientRect().width / scale;
+    const extra = document.createTextNode(' ' + 'lengthen the measure '.repeat(30));
+    el.appendChild(extra);
+    const after = root.getBoundingClientRect().width / scale;
+    extra.remove();
+    t.grows = r2(after - before);
+  });
 
   const markers = [];
   if ((opts.markers || []).length) {
@@ -149,19 +202,6 @@ function geometryProbe(opts) {
       const item = boxed(el);
       if (item) markers.push(item);
     }
-  }
-
-  // Media: an inline icon svg sitting in a run of text is part of the text,
-  // and an svg nested in an svg is part of its parent.
-  const hasDirectText = el => [...el.childNodes].some(
-    n => n.nodeType === Node.TEXT_NODE && n.nodeValue.trim());
-  const media = [];
-  for (const el of sec.querySelectorAll('img, video, canvas, svg')) {
-    if (el.localName === 'svg' && (el.parentElement.closest('svg') || hasDirectText(el.parentElement))) {
-      continue;
-    }
-    const item = boxed(el);
-    if (item) media.push(item);
   }
 
   // Clipping candidates: overflow hidden/clip, content larger than the box,
