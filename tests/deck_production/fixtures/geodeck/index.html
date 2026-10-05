@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Geometry fixture</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" href="vendor/reveal/reveal.css">
+  <style>
+    :root { --margin-slide: 6rem; }
+    .reveal { font-family: sans-serif; color: #f2efe8; }
+    .reveal .slides section { padding: 0; height: 1080px; box-sizing: border-box;
+                              text-align: left; background: #0b1320; }
+    .reveal .wrap { padding: 96px; }
+    .reveal h2 { margin: 0; font-size: 56px; line-height: 1.2; color: #f2efe8; text-transform: none; }
+    .reveal .globe { position: absolute; left: 1000px; top: 140px; width: 800px; height: 800px; }
+    .reveal .pin { position: absolute; width: 14px; height: 14px; margin: -7px 0 0 -7px;
+                   border-radius: 50%; background: #e8b04a; }
+    .reveal .l-name { font-size: 26px; font-weight: 700; line-height: 1.25; }
+    .reveal .l-cap { font-size: 22px; line-height: 1.35; color: #c9d2de; }
+
+    /* bad: right-anchored columns, no max-width, no panel, no shadow */
+    #bad .label { position: absolute; right: 560px; text-align: right; }
+    #bad .label-north { top: 420px; }
+    #bad .label-south { top: 515px; }
+
+    /* good: bounded captions on panel cards, clear of each other and the pins */
+    #good .label { position: absolute; right: 1000px; max-width: 420px; padding: 18px 22px;
+                 background: rgba(11, 19, 32, 0.92); border-radius: 8px; text-align: right; }
+    #good .label-north { top: 300px; }
+    /* over the globe, darkened by a gradient scrim on ::before, not a panel */
+    #good .label-south { right: auto; left: 1100px; top: 640px; z-index: 1; background: none; }
+    #good .label-south::before { content: ''; position: absolute; inset: 0; z-index: -1;
+                               border-radius: 8px;
+                               background: linear-gradient(rgba(11, 19, 32, 0.6), rgba(11, 19, 32, 0.9)); }
+    /* a vector overlay (leader lines) crossing the labels: drawing, not media */
+    .reveal .overlay-lines { position: absolute; left: 0; top: 0; width: 1920px; height: 1080px; }
+
+    /* contrast: one raster, bright on the left, a black/white checkerboard on the right */
+    #contrast .photo { position: absolute; left: 96px; top: 200px; width: 1728px; height: 720px;
+                       image-rendering: pixelated; }
+    #contrast .t { position: absolute; width: 420px; margin: 0; font-size: 18px; line-height: 1.4; }
+    #contrast .dark-on-bright { left: 200px; top: 400px; color: #14161c; }
+    #contrast .light-on-busy { left: 1000px; top: 260px; color: #ffffff; }
+    #contrast .light-on-scrim { left: 1000px; top: 420px; color: #ffffff; padding: 12px;
+                                background: rgba(0, 0, 0, 0.85); }
+    #contrast .shadow-halo { left: 1000px; top: 600px; color: #ffffff;
+                             text-shadow: 0 0 3px #000, 0 0 3px #000, 0 0 3px #000; }
+
+    /* centered: auto height, so reveal's center layout shifts it down; its
+       last line lands in the canvas's bottom margin, not the section's */
+    .reveal .slides section#centered { height: auto; }
+    #centered .low { margin: 0 96px; font-size: 24px; line-height: 1.2; }
+  </style>
+</head>
+<body>
+  <div class="reveal">
+    <div class="slides">
+      <section id="bad">
+        <div class="wrap"><h2>Where the network reaches</h2></div>
+        <img class="globe" src="media/globe.svg" alt="">
+        <div class="pin" style="left: 1380px; top: 440px"></div>
+        <div class="pin" style="left: 1420px; top: 535px"></div>
+        <div class="label label-north">
+          <div class="l-name">Northport</div>
+          <div class="l-cap">Regional hub since 2019, serving 41 partner sites<br>
+            across the northern corridor and the coastal belt<br>
+            with 1,240 deliveries a week</div>
+        </div>
+        <div class="label label-south">
+          <div class="l-name">Lowmere</div>
+          <div class="l-cap">Second hub, opened in 2023 with 18 partner sites<br>
+            and a shared depot for the southern routes</div>
+        </div>
+      </section>
+
+      <section id="good">
+        <div class="wrap"><h2>Where the network reaches</h2></div>
+        <img class="globe" src="media/globe.svg" alt="">
+        <svg class="overlay-lines" viewBox="0 0 1920 1080" aria-hidden="true">
+          <line x1="300" y1="360" x2="1380" y2="440" stroke="#8a6d3b" stroke-width="2"/>
+          <line x1="1300" y1="700" x2="1420" y2="535" stroke="#8a6d3b" stroke-width="2"/>
+        </svg>
+        <div class="pin" style="left: 1380px; top: 440px"></div>
+        <div class="pin" style="left: 1420px; top: 535px"></div>
+        <div class="label label-north">
+          <div class="l-name">Northport</div>
+          <div class="l-cap">Regional hub with 41 partner sites</div>
+        </div>
+        <div class="label label-south">
+          <div class="l-name">Lowmere</div>
+          <div class="l-cap">Second hub, opened in 2023 with 18 partner sites and a
+            shared depot for the southern routes</div>
+        </div>
+      </section>
+
+      <section id="contrast">
+        <img class="photo" src="media/contrast.png" alt="">
+        <p class="t dark-on-bright">Dark ink on the bright part of the picture</p>
+        <p class="t light-on-busy">Light small type over the busy part</p>
+        <p class="t light-on-scrim">Light small type on a dark scrim</p>
+        <p class="t shadow-halo">Light small type with a dense dark halo</p>
+      </section>
+
+      <section id="centered">
+        <div style="height: 880px"></div>
+        <p class="low">A last line measured from the canvas</p>
+      </section>
+    </div>
+  </div>
+  <script src="vendor/reveal/reveal.js"></script>
+  <script>
+    // ?export -> capture mode, as in the deck template: no transitions.
+    const EXPORT_MODE = new URLSearchParams(location.search).has('export');
+    Reveal.initialize({
+      width: 1920, height: 1080, margin: 0,
+      hash: false, controls: false, progress: false,
+      transition: EXPORT_MODE ? 'none' : 'fade',
+      backgroundTransition: 'none',
+    });
+  </script>
+</body>
+</html>

@@ -89,6 +89,10 @@ DEFAULTS: dict = {
     "lint.storyboard_approved": True,
     "lint.allow_naked_years": True,
     "lint.naked_number_window": 250,
+    "geometry.rules": "",            # rules file relative to the deck; empty = the
+                                     # shipped scripts/geometry.rules.toml
+    "geometry.slides": [],           # slide ids to measure; empty = every slide
+    "geometry.disable": [],          # rule ids to skip ([geometry.<id>] tunes one)
     "env.fonttools_python": "/usr/bin/python3",
     "env.pptx_python": "",           # resolved to <repo>/.venv/bin/python when empty
     "env.chrome": "",
