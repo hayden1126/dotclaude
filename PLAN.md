@@ -9,7 +9,7 @@
 
 `deck-production` has a phase model and a core loop, but its "gate green" (SKILL.md) requires
 "geometry has 0 violations on every touched slide", and no tool checks that. Screenshots miss the
-defect class it targets (SKILL.md failure 2): in the reference deck, the globe slide shipped city
+defect class it targets (SKILL.md failure 2): in the reference deck, a map slide shipped place
 labels whose captions had no `max-width` and no panel behind them, anchored about 95px apart, so
 two labels' text ran into each other. It took four review rounds by eye. The gate measures the
 rendered DOM and asserts numerically.
@@ -17,7 +17,7 @@ rendered DOM and asserts numerically.
 ## Target
 
 - `deckkit geometry <deck> [--slides id,...] [--json]` exits 1 on a slide reproducing that defect
-  and 0 on the fixed version. On the private reference deck: the pre-fix commit's globe slide
+  and 0 on the fixed version. On the private reference deck: the pre-fix commit's map slide
   fails, the slide as it stands passes, and every other slide's result is recorded as a golden.
 - Stdlib-only Python, like every deckkit tool. No node, Puppeteer or Playwright.
 
@@ -73,7 +73,7 @@ starting set:
 | `clipped-text` | text cut off by an overflow-hidden ancestor | error |
 
 Exit 1 on any `error`; `warn` prints but exits 0, like lint. Output, one line per violation:
-`ERROR s17-globe text-overlap  .tag-ny .t-cap x .tag-la .t-name  (31x18 px)`, then
+`ERROR s05-map text-overlap  .label-a .caption x .label-b .name  (31x18 px)`, then
 `geometry: E errors, W warnings on N slides`. `--json` prints one JSON object per run on the last
 line (lint's convention).
 
@@ -98,6 +98,22 @@ synthetic: same geometry (right-anchored label columns, captions without `max-wi
 anchors 95px apart, over an image) and a fixed twin (bounded captions on panel cards). The real
 slide's before-and-after check and its golden stay in the private repo's `decks/_parity/`.
 
+## Decisions after the first real-deck run (2026-10-04)
+
+Round 1 passed its synthetic fixture and failed the reference deck: 21 errors on the fixed slide,
+104 across a deck that shipped through review, and no rule saw the pre-fix defect. What changed:
+- **Rules are judged by principle against the real deck**, never by per-slide exemptions. Small
+  vs large text follows WCAG's large-text line; media means raster; in-flow siblings and ink depth
+  replace raw box overlap; width bounds are found by a growth test (append words, see whether the
+  box widens), not by reading stylesheets.
+- **Contrast is measured, not inferred** (Hayden's call). `text-on-media`'s panel, scrim and
+  shadow checks failed dark text on a bright photo and could not see Reveal slide backgrounds. It
+  becomes `text-contrast`: hide the glyphs (keep their shadows), screenshot the slide, and compute
+  the WCAG ratio of each text item's color against the pixels under its ink (4.5:1 small, 3:1
+  large, on a low percentile so stray dots don't fail a line).
+- **Real finds on the reference deck are recorded, not fixed here** (Hayden's call). The golden
+  holds them as known findings; the fixes belong to the deck's own repo and session.
+
 ## Rounds
 
 1. **Core** (writer): `geometry.py`, `geometry_probe.js`, `geometry.rules.toml`, `deckcfg`
@@ -114,5 +130,5 @@ slide's before-and-after check and its golden stay in the private repo's `decks/
   over the fixture and skips with a reason if no browser is found.
 - `deckkit geometry <fixture> --slides bad` exits 1 with `text-overlap` and `unbounded-abs-text`;
   `--slides good` exits 0.
-- Reference deck: pre-fix globe slide fails, current slide 0 errors, `deckkit regress` green
+- Reference deck: pre-fix map slide fails, current slide 0 errors, `deckkit regress` green
   after the golden is captured, `deckkit lint` output unchanged.
