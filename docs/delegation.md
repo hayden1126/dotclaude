@@ -1377,7 +1377,10 @@ wins.
     `session_id`, `stop_hook_active` and `transcript_path`. There is no `turn_number` or
     `had_tool_use`, though the docs list them;
   - `background_tasks` lists running tasks only, each with `id`, `type`, `status` and
-    `description`, plus `command` for a shell. A killed or finished task drops out, so the list
+    `description`, plus `command` for a shell. `type` is Claude Code's friendly label
+    (`subagent`, `shell`, `workflow`, `cloud session`, `teammate`, `dream`, `monitor`), not the
+    internal task name (`local_agent`, `local_bash`, ...), which shows only for a type with no
+    label (2.1.289; `shell` confirmed live 2026-10-05). A killed or finished task drops out, so the list
     can't show a kill. It also holds stale teammates from earlier in the session;
   - a command stopped at its `timeout` gets a notification with `status: killed`, the summary
     `Background command "<description>" was stopped after reaching its background time limit`,
