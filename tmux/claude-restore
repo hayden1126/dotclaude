@@ -97,6 +97,9 @@ live_mode = sys.argv[5] == "live"
 def num(v):
     return v if isinstance(v, (int, float)) and not isinstance(v, bool) else None
 
+def isint(v):
+    return isinstance(v, int) and not isinstance(v, bool)
+
 cands = []
 for name in sorted(os.listdir(reg)):
     if not name.endswith(".json") or name.startswith(".") or re.search(r"[\x00-\x1f]", name):
@@ -106,12 +109,16 @@ for name in sorted(os.listdir(reg)):
             e = json.load(f)
     except Exception:
         continue
-    if isinstance(e, dict) and e.get("socket") == socket and num(e.get("server_start")) is not None \
-            and (e["server_start"], e.get("server_pid")) != (start, pid):
+    # Malformed server fields (a corrupt or hand-edited file) are ignored like an unreadable one,
+    # so one bad file can never block the rest.
+    if not (isinstance(e, dict) and e.get("socket") == socket and isint(e.get("server_start"))
+            and isint(e.get("server_pid")) and isinstance(e.get("pane", ""), str)):
+        continue
+    if (e["server_start"], e["server_pid"]) != (start, pid):
         cands.append((name, e))
 
 def server(e):
-    return e["server_start"], e.get("server_pid")
+    return e["server_start"], e["server_pid"]
 if not live_mode:
     print("yes" if cands else "")
     sys.exit(0)

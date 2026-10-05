@@ -211,6 +211,16 @@ class Restore(unittest.TestCase):
         self.assertEqual(self.registry("restored"), [sid(2) + ".json"])
         self.assertFalse(any(sid(1)[:8] in line for line in self.restore_log()))
 
+    def test_an_entry_with_malformed_server_fields_is_ignored_not_fatal(self):
+        # A corrupt or hand-edited file (or one missing server_pid) must not block the rest.
+        self.entry(1, window=1, server_pid=[1])
+        self.entry(3, window=3, server_pid=None)
+        self.entry(4, window=4, pane=["%4"])
+        b = self.entry(2, window=2)
+        self.run_restore()
+        self.assertEqual(self.resumed(), [(b, sid(2))])
+        self.assertEqual(self.registry(), [sid(1) + ".json", sid(3) + ".json", sid(4) + ".json"])
+
     def test_another_socket_in_the_same_pane_does_not_hide_the_tab(self):
         # Pane ids restart at %0 on every server, so a newer probe entry can share the pane.
         self.entry(1, window=1, pane="%3", age=900)
