@@ -10,6 +10,7 @@
 - Delete freely what this session made, build output, and anything under temp or an agent worktree. Propose and confirm before deleting tracked files, uncommitted work, or anything outside the repo.
 - Never `git push` without explicit approval, and push only the changes I approved.
 - Never run `git checkout`, reset, or any revert without confirmation.
+- Kill only processes this session started, proven by the PID I recorded or a parent chain back to my own command, never by name, start time, or "looks orphaned": other Claude sessions run the same tools on this machine.
 - Do not suggest restarting servers, checking whether services run, or "did you save the file?". I have verified the obvious; assume the bug is in the code.
 
 ## Voice
