@@ -79,16 +79,11 @@ stored here).
     background, anchors ~95px apart) and PASS on the real s17 as it stands.
   - Then S2 (fonts + PDF), S4 (SKILL references + 6 Workflow scripts), S5 (ingest + theme
     extractor), S6 (pptx export). S1-S4 is the usable product.
-  - Ownership: SKILL.md owns the phase model, gates and batch constants; `deckkit`'s `COMMANDS`
-    owns the CLI surface (help is generated); `deckcfg.derive_rigor` owns the rigor rule; the
-    goldens in the private client repo's `decks/_parity/` own the reference numbers. The plan
-    owns block numbering only; no "S<n>" in shipped artifacts.
-  - Known gap: `deck.forward_targets` is declared in `deck.toml`, not detected, so its default
-    `false` means "nobody has said". Revisit when S3 enforces the storyboard MUST/NEVER grammar.
+  - Owners: SKILL.md (phases, gates), `deckkit` `COMMANDS` (CLI), `deckcfg.derive_rigor`, the
+    private `decks/_parity/` goldens; no "S<n>" in shipped artifacts. Known gap:
+    `deck.forward_targets` is declared, not detected; revisit when S3 enforces MUST/NEVER.
 
 ## Blocked / decisions needed
-- The local `chore/status-after-65` is redundant (its commits are in both pushed branches):
-  delete it on Hayden's OK. Branch state: `git status -sb`, `git log origin/main..HEAD`.
 - **Rescan the `rm` gap around 2026-11-04** (kept as a known gap, Hayden's call):
   `python3 -I ~/scratch/sandbox-audit/rm_scan.py 2026-11-04`. Sending the drafted
   `$CLAUDE_JOB_DIR/tmp` bug report is Hayden's call; `CLAUDE.md` carries the workaround.
@@ -109,24 +104,15 @@ stored here).
 - Then Hayden's calls on the parity inventory (In flight). Other machines pick up these branches
   with `./setup.sh`, plus `./setup-tmux.sh` where tmux is used (README has the overlay caveat).
 - **A ring from an unexpected session:** read the last lines of
-  `$XDG_STATE_HOME/dotclaude/ring.log` (session id, kind, attended, pane, dir) before guessing. The
-  delegation post waits on Hayden's read.
-- **Verify delegation before touching it:** `python3 -m unittest discover -s tests/delegation -t
-  tests/delegation` and the same for `tests/setup` make no model calls and pass inside the sandbox
-  (except from a checkout under `.claude/worktrees/`, where the policy tests need the sandbox off).
-  `delegation-ledger canary` runs them, then the live harness (`tests/delegation/run.py --runner
-  claude`, which spends model calls), and records the result: run it outside the sandbox, in the
-  background, after changing a role, a hook or `codex-delegate`; after an upgrade, the
-  session-start line says when. Counts live in `docs/delegation.md` "Tests". An unnamed delegation
-  test erred twice under load on 2026-10-03 and didn't reproduce in 9 runs: if it recurs, run with
-  `-v` and name it.
-- **Verify `deck-production` before touching it:** `deckkit regress` as the README in the private
-  client repo's `decks/_parity/` shows (`--config` and `--goldens` required) must print `parity:
-  green`; it runs read-only and asserts the reference tree is unmodified. The reference deck is
-  deliberately NOT migrated, so skipping this lets it drift silently. Smoke test: `deckkit new /tmp/x
-  --title T --slides 6`, approve the storyboard frontmatter, then `deckkit build /tmp/x && deckkit
-  lint /tmp/x && deckkit package /tmp/x` (expect lint 0/0); `deckkit` is on PATH via
-  `~/.local/bin`, else `~/.claude/skills/deck-production/scripts/deckkit`.
+  `$XDG_STATE_HOME/dotclaude/ring.log` (session id, kind, attended, pane, dir) before guessing.
+- The delegation post waits on Hayden's read.
+- **Verify delegation before touching it:** both unit suites (`tests/delegation`, `tests/setup`)
+  pass sandboxed; after changing a role, a hook or `codex-delegate`, run `delegation-ledger canary`
+  outside the sandbox in the background (`docs/delegation.md` "The canary and the due checks"). An
+  unnamed delegation test erred twice under load on 2026-10-03: if it recurs, run `-v` and name it.
+- **Verify `deck-production` before touching it:** `deckkit regress` green (SKILL.md; the config
+  and goldens are in the private client repo's `decks/_parity/`). Smoke: `deckkit new /tmp/x
+  --title T --slides 6`, approve the storyboard, then `build`, `lint` (expect 0/0), `package`.
 - research-sourcing (optional): the thorough-tier planted-fabrication spot-check was never run end
   to end, and only Agent-tool subagents were tested, not a real Workflow run.
 - Deferred handoff work (the PreCompact/Stop safety net, the loop-engineering handoff) is in
