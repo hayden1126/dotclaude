@@ -108,8 +108,7 @@ def collect(ref: pathlib.Path, config: pathlib.Path, workdir: pathlib.Path) -> d
                       "exit": code}
 
     # --- lint
-    code, out = run([str(deckcfg.DEFAULTS["env.fonttools_python"])] and
-                    [str(SCRIPTS / "lint.py"), str(ref), "--config", str(config)])
+    code, out = run([str(SCRIPTS / "lint.py"), str(ref), "--config", str(config)])
     tail = re.search(r"lint: (\d+) errors, (\d+) warnings, (\d+) FLAG", out)
     flags = sorted(re.findall(r"^  FLAG (\S+ \S+) \[([^\]]+)\]", out, re.M))
     facts["lint"] = {
