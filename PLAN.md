@@ -1,10 +1,11 @@
 # PLAN: deck-production geometry gate
 
-> **Status (2026-10-04): built.** `deckkit geometry` (`scripts/geometry.py`, `geometry_probe.js`,
+> **Status (2026-10-05): built.** `deckkit geometry` (`scripts/geometry.py`, `geometry_probe.js`,
 > `geometry.rules.toml`) and `tests/deck_production/` landed on `feat/deck-geometry` over several
 > review rounds, and the wiring round connected it to `deckkit regress`, SKILL.md, `deckkit
-> doctor`, the `deck.toml` template and README's test table. Still open: round 3 below, the
-> lead's reference-deck run and golden capture in the private repo. The as-built design lives in
+> doctor`, the `deck.toml` template and README's test table. Round 3 is done: the reference
+> deck passes as it stands, fails at its pre-fix commit, and its golden is captured in the private
+> repo. The as-built design lives in
 > `geometry.py`'s docstring, the comments in `geometry.rules.toml` (one block per rule, every
 > param) and SKILL.md's "The geometry gate"; this file is now history. Design below is corrected
 > to what was built.
@@ -44,7 +45,8 @@ rendered DOM and asserts numerically.
   session hangs. The browser starts before the server thread, since `preexec_fn` is only safe
   while the process has one thread.
 - Flags: `--no-sandbox --disable-gpu --disable-dev-shm-usage --hide-scrollbars --no-first-run
-  --no-default-browser-check --user-data-dir=<tempdir> --remote-debugging-pipe`, window and
+  --no-default-browser-check --blink-settings=imageAnimationPolicy=2 --user-data-dir=<tempdir>
+  --remote-debugging-pipe` (the blink setting holds animated images on their first frame), window and
   viewport at the canvas size. Close with `Browser.close`; kill only the process we started.
 - Serve the deck with `serve.py`'s handler on an ephemeral port (`127.0.0.1:0`) in a thread.
   Never `file://` (serve.py's docstring says why).
@@ -168,7 +170,7 @@ Round 1 passed its synthetic fixture and failed the reference deck: 21 errors on
    defaults, the fixture deck, `tests/deck_production/`. Reviewer passes.
 2. **Wiring** (writer, done): `parity_check`, SKILL.md, `doctor.py`, the `deck.toml` template,
    README's test table. Reviewer pass.
-3. **Lead (open):** run the reference deck at its pre-fix commit (a temporary worktree of the
+3. **Lead (done):** run the reference deck at its pre-fix commit (a temporary worktree of the
    private repo) and as it stands, then capture the golden and run `deckkit regress`.
 
 ## Verification
