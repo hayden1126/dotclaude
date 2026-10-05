@@ -103,10 +103,11 @@ error. `deckcfg.DEFAULTS` holds `geometry.rules` (the path), `geometry.slides` a
 | `clipped-text` | a text line runs past an overflow hidden or clip ancestor by more than `tolerance` (2) | error |
 
 `text-on-media` was replaced by `text-contrast` and `covered-text` (see the decisions below).
-The contrast bars below AA need a `reason`, printed every run. At regulated rigor the floor
-holds: a bar below AA, the rule off or a warning, a percentile above 5, large-text sizes below
-WCAG's, an exemption taking most of a slide's text, or a declared rigor below the derived one
-without `rigor_reason` is a config error.
+The contrast bars below AA need a `reason`, printed every run. At regulated rigor `text-contrast`
+and `covered-text` are frozen as shipped (a whitelist, after per-bypass checks kept leaking): a
+deck may only raise `min_small`/`min_large` or lower `min_hidden`, and any other key in either
+table, disabling either, a persisted `[geometry] slides` or another rules file is a config error,
+as is a declared rigor below the derived one without `rigor_reason`.
 
 Exit 0 clean or warnings only, 1 on any `error`, 2 on a config error or a slide that does not
 settle, 3 when no browser is found or it dies. Output, one line per violation:
