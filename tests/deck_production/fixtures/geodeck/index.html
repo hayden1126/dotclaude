@@ -111,7 +111,8 @@
     /* flow: lines one flow stacked at line-height .5, half an em deep */
     #flow .tight { margin-top: 40px; font-size: 40px; line-height: .5; }
 
-    /* bright-bg: a reveal slide background, loaded only when the slide is reached */
+    /* bright-bg: a reveal slide background, loaded only when the slide is reached,
+       over a navy background color: measured before it loads, the type passes */
     .reveal .slides section#bright-bg { background: none; }
     #bright-bg .on-bright { position: absolute; left: 200px; top: 400px; width: 900px; margin: 0;
                             font-size: 22px; color: #ffffff; }
@@ -228,7 +229,8 @@
         <div class="wrap"><div class="tight"><span class="t1">Stacked tight</span><br><span class="t2">Into each other</span></div></div>
       </section>
 
-      <section id="bright-bg" data-background-image="media/bright.png" data-background-size="cover">
+      <section id="bright-bg" data-background-color="#0b1320" data-background-image="media/bright.png"
+               data-background-size="cover">
         <p class="on-bright">White type on a bright slide background</p>
       </section>
     </div>

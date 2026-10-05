@@ -893,6 +893,21 @@ class GeometryEndToEnd(unittest.TestCase):
         self.assertRegex(err, r"slide good: not loaded within 2 s: font .*Hang")
         self.assertNotIn("install", err)
 
+    def test_settle_names_only_what_is_pending_at_the_deadline(self):
+        # One deadline for every wait, all started before it: a resource that
+        # resolves (or fails) in time is never named, however late in the
+        # list it comes; only one still pending when the deadline passes is.
+        browser = geometry.Browser(*geometry.find_browser(deckcfg.load(FIXTURE)), 800, 600)
+        self.addCleanup(browser.close)
+        page = geometry.Page(browser, 800, 600)
+        page.evaluate(pathlib.Path(geometry.PROBE_FILE).read_text())
+        slow = page.evaluate(
+            "geometrySettle([[new Promise(() => {}), 'never'],"
+            " [new Promise(r => setTimeout(r, 150)), 'late but in time'],"
+            " [Promise.reject(new Error('gone')), 'failed'],"
+            " [new Promise(r => requestAnimationFrame(r)), 'a frame']], 400)")
+        self.assertEqual(slow, ["never"])
+
     def hanging_socket(self):
         hang = socket.socket()
         hang.bind(("127.0.0.1", 0))
