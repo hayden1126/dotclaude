@@ -4,8 +4,10 @@
 Usage: python3 doctor.py [<deck-dir>] [--json] [--config PATH]
 
 Reports rather than fixes. Exit 3 if something required for the core loop is
-missing; optional gaps are reported and exit 0, because a deck that never ships
-a PDF does not need decktape.
+missing: the fonts python, or any browser for `deckkit geometry`, whose 0/0 is
+part of every exit gate from phase C on. Optional gaps are reported and exit 0,
+because a deck that never ships a PDF does not need decktape; full Chrome in
+place of the headless shell is one of them. --json exits the same way.
 
 Stdlib only.
 """
@@ -152,9 +154,13 @@ def main() -> int:
         deck_checks["subset fonts"] = ({"state": OK, "detail": f"{len(fonts)} woff2"} if fonts
                                        else {"state": WARN, "detail": "none yet; run `deckkit fonts`"})
 
+    core = (f"python for fonts ({fonttools_py})", "geometry browser")
+    exit_code = (deckcfg.EXIT_ENV if any(checks[name]["state"] == BAD for name in core)
+                 else deckcfg.EXIT_OK)
+
     if args.json:
         print(json.dumps({"tools": checks, "deck": deck_checks}, indent=2))
-        return deckcfg.EXIT_OK
+        return exit_code
 
     width = max(len(k) for k in {**checks, **deck_checks})
     print("environment")
@@ -185,8 +191,7 @@ def main() -> int:
     for note in NOTES:
         print(f"  - {note}")
 
-    core_broken = checks[f"python for fonts ({fonttools_py})"]["state"] == BAD
-    return deckcfg.EXIT_ENV if core_broken else deckcfg.EXIT_OK
+    return exit_code
 
 
 if __name__ == "__main__":
