@@ -57,11 +57,17 @@ one pattern per command shape (`mytool *` for calls with arguments, `mytool` for
 A pattern must match the whole command, so a call through a pipe, `&&` or `cd` still runs
 sandboxed.
 
-The baseline's `permissions` deny destructive git and ask before `git push`, in auto mode too.
-Denied: force-push, `reset --hard`, `reset --merge` and `git clean -f`, plain or through `git -C`,
-plus a `bash -c` whose text has `git push` then `--force`, or `git reset` then `--hard`. Asked:
-`git push` and `git -C <dir> push` with any arguments, so a force the deny rules miss (`+branch`,
-`-uf`) still prompts. Everything else goes to auto mode's classifier: other wrappers (any other
+The baseline's `permissions` deny destructive git and ask before anything that can reach `main`,
+in auto mode too. Denied: force-push, `reset --hard`, `reset --merge` and `git clean -f`, plain or
+through `git -C`, plus a `bash -c` whose text has `git push` then `--force`, or `git reset` then
+`--hard`. Asked: a push whose text has `main`, `HEAD`, `@`, `--all` or `--mirror`, one that names
+no branch (`git push`, `git push origin`), one starting with a flag (`git push -u ...`,
+`git push origin --no-verify`), a remote delete (`origin :branch`), a `+` force the deny rules
+miss, any `git -C <dir> push`, and merges (`gh pr merge`, `gh api ...merge`). Allowed without a
+prompt: `git push origin <branch>` and `gh pr create`; CLAUDE.md still has Claude ask in words
+first. A rule can't see the current branch, which is why every form that could land on `main`
+without naming it asks. Not checked (accepted): flags after the branch and remotes other than
+`origin`. Everything else goes to auto mode's classifier: other wrappers (any other
 `bash -c`, such as one running `push -f`, and `bash -lc`, `sh -c`, `eval`), git global options
 other than `-C` (`-c k=v`, `--git-dir`, `--no-pager`), soft, mixed and `--keep` resets, and
 `checkout`, `switch`, `restore` and `revert`. Why rules at all: on 2.1.288, auto mode ran a
@@ -83,7 +89,8 @@ only auto mode's classifier sees. To bring the asks back on one machine, put thi
 A rule's `*` spans words, so some safe commands are caught too. Denied: a `git -C` command whose
 message mentions a guarded phrase (commit with `-F <file>`, or from inside the repo), and a
 `git clean -n` dry run on a path containing `f`. Asked: any `git -C` command with `push` as a
-later word, such as `git -C <dir> stash push`. Permission rules apply to delegated agents as well,
+later word, such as `git -C <dir> stash push`, and a push to a branch whose name contains `main`,
+`HEAD`, `@` or `+`. Permission rules apply to delegated agents as well,
 though `subagent-policy` refuses a writer's `git -C` outside its worktree before the push rule
 sees it.
 `tests/delegation/test_settings.py` pins each rule with a case only it catches.
