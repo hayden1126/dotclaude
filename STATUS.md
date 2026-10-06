@@ -6,7 +6,7 @@
 > [[dotclaude-chrome-devtools-wsl]]). Per-effort design lives in the repo's `PLAN.md` or its doc,
 > not only under `~/.claude/plans/`, which the next plan overwrites ([[plan-file-not-durable]]).
 
-Last updated: 2026-10-05
+Last updated: 2026-10-06
 Base: `main`. For branch / PR / push state, run `gh pr list` and `git log main..HEAD` (derive it; not
 stored here).
 
@@ -32,6 +32,9 @@ stored here).
 - **Stop ring quiet-while-busy, fixed for real** (PR #72, 2026-10-05): #69 matched internal task
   names, but `background_tasks[].type` is a friendly label (`shell`, `subagent`), so it never
   fired. Merged and live on HAYPC; verified live (`quiet busy=1 tasks=shell`). Lesson in [[cc-stop-hook-facts]].
+- **Stop ring settles 1 s for a queued restart** (PR #73, `main..fix/stop-ring-queued-turn`): a
+  task finishing during the final reply is queued and missing from `background_tasks`, so the Stop
+  rang; now it logs `quiet resumed=1` when a dequeue follows. Live-verified on the branch checkout.
 - **Push and merge permissions** (PR #71, installed 2026-10-05): `git push origin <branch>` and
   `gh pr create` run; anything that can reach `main` and merges ask (README "permissions"
   paragraph). Claude still asks in chat first (CLAUDE.md).
@@ -83,8 +86,10 @@ stored here).
   `$CLAUDE_JOB_DIR/tmp` bug report is Hayden's call; `CLAUDE.md` carries the workaround.
 
 ## Notes for next session
-- **Next: Hayden picks the next workflow improvement**; deck-production S2 is deferred. First
-  real check of #70: the next reboot (see Done). Recent work: PRs #67 to #72.
+- **Next: merge PR #73** (`gh pr view 73 --json state`), then put `~/dotclaude` back on `main`
+  (`git fetch origin main:main` first; [[dotclaude-setup-install-model]]): HAYPC's hooks run
+  from this checkout, now on the fix branch. Then Hayden picks the next workflow improvement;
+  deck-production S2 is deferred. First real check of #70: the next reboot (see Done).
 - **Verify `deck-production` before touching it:** `deckkit regress` green (the config and goldens
   are in the private repo's `decks/_parity/`, README there has the command; the deck-production
   item says which branch) and
@@ -94,7 +99,8 @@ stored here).
   after changing a role, a hook or `codex-delegate`, run `delegation-ledger canary` outside the
   sandbox in the background (`docs/delegation.md` "The canary and the due checks").
 - **A wrong tmux glyph or an unexpected ring:** read the last lines of
-  `$XDG_STATE_HOME/dotclaude/ring.log` (stop lines carry `tasks=<labels>` in flight), and compare `~/.local/state/dotclaude/tabs` with `claude
+  `$XDG_STATE_HOME/dotclaude/ring.log` (stop lines carry `tasks=<labels>` in flight; `quiet resumed=1` means a queued input restarted
+  the turn within the settle second), and compare `~/.local/state/dotclaude/tabs` with `claude
   agents --json` and `tmux list-panes -a -F '#{pane_id} #{pane_current_command}
   #{pane_current_path}'`. Unprobed: whether `/clear` in a background session changes its sessionId.
 - research-sourcing (optional): the thorough-tier planted-fabrication spot-check was never run end

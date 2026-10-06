@@ -1382,6 +1382,12 @@ wins.
     internal task name (`local_agent`, `local_bash`, ...), which shows only for a type with no
     label (2.1.289; `shell` confirmed live 2026-10-05). A killed or finished task drops out, so the list
     can't show a kill. It also holds stale teammates from earlier in the session;
+  - a task that finishes mid-turn drops out of `background_tasks` while its notice still waits
+    in the input queue, so a Stop can show no tasks with the next turn already due. The transcript
+    logs the queue as `type: queue-operation` entries (`enqueue`, `dequeue`, `remove` with
+    `reason: absorbed_mid_turn`, `popAll`); the `dequeue` that starts the next turn follows the
+    Stop hooks within 0.3 s in 99% of 117 past cases (2026-10-06). `hooks/stop-ring.sh` waits
+    a second for it before ringing;
   - a command stopped at its `timeout` gets a notification with `status: killed`, the summary
     `Background command "<description>" was stopped after reaching its background time limit`,
     and a note that ends "If it already had the longest `timeout` allowed, do not restart it.";

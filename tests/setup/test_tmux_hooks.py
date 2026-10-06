@@ -51,9 +51,9 @@ class Hooks(unittest.TestCase):
                     if not k.startswith(("CLAUDE", "TMUX"))}
         self.env.update(PATH=stubs + os.pathsep + self.env["PATH"], STUB_LOG=self.log,
                         XDG_STATE_HOME=self.state, STUB_PANES="1 %1",
-                        CLAUDE_CODE_SESSION_ID="abcdef12-0000")
+                        CLAUDE_CODE_SESSION_ID="abcdef12-0000", DOTCLAUDE_RING_SETTLE="0.3")
 
-    def run_hook(self, name, session, payload=None, args=()):
+    def run_hook(self, name, session, payload=None, args=(), wait=True):
         env = {**self.env, **session}
         # Every event carries the session's id; the map is keyed by it.
         payload = {"session_id": env.get("CLAUDE_CODE_SESSION_ID", ""), **(payload or {})}
@@ -63,7 +63,24 @@ class Hooks(unittest.TestCase):
                            timeout=10, env=env)
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertEqual(p.stderr, "")
+        if name == "stop-ring.sh" and wait:
+            self.decided()
         return p
+
+    def decided(self):
+        """Wait for the run's ring.log line: stop-ring logs a ring after its settle, detached."""
+        deadline = time.time() + 3
+        while len(self.ring_log()) == self.logged_before and time.time() < deadline:
+            time.sleep(0.05)
+        self.assertNotEqual(len(self.ring_log()), self.logged_before, "no decision logged")
+
+    def transcript(self, *entries):
+        """Write a transcript of JSON lines; return its path."""
+        path = os.path.join(self.tmp, "transcript.jsonl")
+        with open(path, "a") as f:
+            for e in entries:
+                f.write(json.dumps(e, separators=(",", ":")) + "\n")
+        return path
 
     def calls(self, settle=0.0):
         time.sleep(settle)  # the sound and the toast run detached, after the hook exits
@@ -90,7 +107,8 @@ class Hooks(unittest.TestCase):
         return self.seen("notify-toast.ps1")
 
     def no_ring(self):
-        # ring.log is written before the hook exits, so the run's own new line is the decision.
+        # The run's own new line is the decision: notify.sh logs before it exits, and run_hook
+        # waits (decided) for stop-ring.sh's detached child to log after its settle.
         log = self.ring_log()
         return len(log) == self.logged_before + 1 and " quiet " in log[-1]
 
@@ -237,6 +255,44 @@ class Hooks(unittest.TestCase):
         self.run_hook("stop-ring.sh", TAB,
                       {"background_tasks": [{"id": "b1", "type": "local_bash", "status": "running"}]})
         self.assertTrue(self.rang())
+
+    DEQUEUE = {"type": "queue-operation", "operation": "dequeue",
+               "timestamp": "2026-10-06T19:26:22.917Z", "sessionId": "abcdef12-0000"}
+
+    def test_a_stop_that_a_queued_input_resumes_stays_quiet(self):
+        # karaoke, 2026-10-06: a subagent finished mid-turn, so background_tasks was empty at
+        # the Stop while its notice waited in the queue; the dequeue started the next turn 0.5 s
+        # later. Shape copied from that transcript.
+        path = self.transcript({"type": "assistant", "message": {"content": "done"}})
+        self.run_hook("stop-ring.sh", TAB, {"transcript_path": path}, wait=False)
+        self.transcript(self.DEQUEUE)
+        self.decided()
+        self.assertIn("stop quiet resumed=1 tasks=- session=abcdef12", self.ring_log()[-1])
+        self.assertFalse(self.seen("SoundPlayer"))
+
+    def test_a_stop_rings_when_no_queued_input_follows(self):
+        # An enqueue alone is a notice still waiting; only a dequeue (or popAll) starts a turn.
+        # A dequeue from before the Stop doesn't count.
+        path = self.transcript(self.DEQUEUE)
+        self.run_hook("stop-ring.sh", TAB, {"transcript_path": path}, wait=False)
+        self.transcript({"type": "queue-operation", "operation": "enqueue", "content": "x"},
+                        {"type": "system", "subtype": "stop_hook_summary"})
+        self.decided()
+        self.assertTrue(self.rang())
+        self.assertIn("rang tasks=-", self.ring_log()[-1])
+
+    def test_a_popall_counts_as_resumed(self):
+        path = self.transcript()
+        self.run_hook("stop-ring.sh", TAB, {"transcript_path": path}, wait=False)
+        self.transcript({"type": "queue-operation", "operation": "popAll"})
+        self.decided()
+        self.assertIn("quiet resumed=1", self.ring_log()[-1])
+
+    def test_an_unreadable_transcript_still_rings(self):
+        for path in (os.path.join(self.tmp, "missing.jsonl"), 7, ""):
+            with self.subTest(path=path):
+                self.run_hook("stop-ring.sh", TAB, {"transcript_path": path})
+                self.assertIn("rang tasks=-", self.ring_log()[-1])
 
     def test_a_plain_terminal_rings_on_stop(self):
         self.run_hook("stop-ring.sh", {})

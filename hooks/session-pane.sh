@@ -63,7 +63,8 @@ play_ring() {
 
 # Append one ring decision to $XDG_STATE_HOME/dotclaude/ring.log, kept under 2,000 lines, so a
 # ring from an unexpected session can be traced. Args: event, status (rang|quiet; stop-ring.sh
-# adds `busy=1` and `tasks=<labels>`: comma-joined, spaces as `_`, `-` for none), pane, event
+# adds `busy=1` or `resumed=1` (a queued input restarted the turn) and `tasks=<labels>`:
+# comma-joined, spaces as `_`, `-` for none), pane, event
 # JSON. The id is the event's (a nested `claude -p` may inherit its parent's CLAUDE_CODE_SESSION_ID).
 ring_log() {
   local dir="${XDG_STATE_HOME:-$HOME/.local/state}/dotclaude" log sid kind
