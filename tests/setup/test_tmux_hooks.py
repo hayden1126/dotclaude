@@ -107,7 +107,8 @@ class Hooks(unittest.TestCase):
         return self.seen("notify-toast.ps1")
 
     def no_ring(self):
-        # ring.log is written before the hook exits, so the run's own new line is the decision.
+        # The run's own new line is the decision: notify.sh logs before it exits, and run_hook
+        # waits (decided) for stop-ring.sh's detached child to log after its settle.
         log = self.ring_log()
         return len(log) == self.logged_before + 1 and " quiet " in log[-1]
 
