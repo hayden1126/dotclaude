@@ -45,6 +45,12 @@ stored here).
   paragraph). Claude still asks in chat first (CLAUDE.md).
 
 ## In flight
+- **Next: guard against blind overwrites (brief, 2026-10-06, untracked until this work commits it):**
+  `docs/blind-overwrite-brief.md`. A karaoke session wrote a placeholder over an unread memory file
+  (the built-in read-before-write check did not fire; memory has no backstop) and stated a job's
+  state from inference. The brief holds the evidence, three experiments to run first, the design
+  space (overwrite-guard hook, memory under git, a CLAUDE.md clause) and acceptance tests. Start
+  with its "Settle first", then brainstorm with Hayden.
 - **`deck-production`: deferred (Hayden, 2026-10-05: workflow improvements first).** The geometry
   gate is merged (#68): behavior in SKILL.md "The geometry gate", design in git history (`PLAN.md`
   before the tmux-restore design). Its golden is on the private repo's unmerged
