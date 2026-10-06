@@ -105,6 +105,15 @@ class Baseline(unittest.TestCase):
             (h,) = [h for e in S["hooks"][event] for h in e["hooks"] if script in h["command"]]
             self.assertEqual(h["timeout"], 5, script)
 
+    def test_wait_glyph_needs_a_real_ask(self):
+        # An unmatched Notification hook painted the green wait glyph on idle_prompt too, so a
+        # session that stopped with a shell still running (stop-ring quiet) turned green while
+        # waiting on the shell, not on the person (karaoke, 2026-10-06).
+        (entry,) = [e for e in S["hooks"]["Notification"]
+                    if any("tmux-state.sh" in h["command"] for h in e["hooks"])]
+        self.assertEqual(entry.get("matcher"), "permission_prompt|elicitation_dialog")
+        self.assertNotIn("idle_prompt", entry["matcher"])
+
     def test_allow_write_holds_caches_not_bin_dirs(self):
         for p in S["sandbox"]["filesystem"]["allowWrite"]:
             self.assertNotIn("/bin", p, p)

@@ -35,6 +35,11 @@ stored here).
 - **Stop ring settles 1 s for a queued restart** (PR #73, merged and live 2026-10-06): a
   task finishing during the final reply is queued and missing from `background_tasks`, so the Stop
   rang; now it logs `quiet resumed=1` when a dequeue follows. Verified live (15:37:38).
+- **Green only for a real ask** (branch `fix/tmux-wait-matcher`, PR in review; install needs
+  `./setup.sh`, see Other machines): the wait hook matches `permission_prompt|elicitation_dialog`,
+  so an `idle_prompt` no longer paints ✳ on a session waiting on a background shell (karaoke,
+  2026-10-06). The cause is inferred (the idle notification), not proven; if a window goes green
+  again with no ask, log `notification_type` in `tmux-state.sh`.
 - **Push and merge permissions** (PR #71, installed 2026-10-05): `git push origin <branch>` and
   `gh pr create` run; anything that can reach `main` and merges ask (README "permissions"
   paragraph). Claude still asks in chat first (CLAUDE.md).
@@ -87,7 +92,7 @@ stored here).
 
 ## Notes for next session
 - **Next: Hayden picks the next workflow improvement**; deck-production S2 is deferred. First
-  real check of #70: the next reboot (see Done). Recent work: PRs #67 to #73.
+  real check of #70: the next reboot (see Done). Recent work: PRs #67 to #73, then the wait-matcher fix. After it merges: copy `~/.claude/settings.json`, run `./setup.sh`, diff.
 - **Verify `deck-production` before touching it:** `deckkit regress` green (the config and goldens
   are in the private repo's `decks/_parity/`, README there has the command; the deck-production
   item says which branch) and
