@@ -272,7 +272,7 @@ need nothing extra.
   Windows' Do Not Disturb hides it. Windows-only: on macOS/Linux, swap for your platform's notifier
   (`osascript` / `notify-send`).
 - **tmux indicator**: `tmux-state.sh` marks the session's window busy (◐) on a prompt or tool
-  call, waiting (✳) on a Notification and idle on Stop; a background subagent's tool calls leave
+  call, waiting (✳) on a permission prompt or a question (not `idle_prompt`) and idle on Stop; a background subagent's tool calls leave
   a waiting window alone. `claude -p` runs never set it. A
   background session has no pane of its own, so `tmux/tmux-claude-status` maps it by directory to
   the one client pane in its cwd (two background sessions in one directory map nothing, and a new
