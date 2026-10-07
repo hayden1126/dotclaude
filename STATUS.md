@@ -45,6 +45,18 @@ stored here).
   paragraph). Claude still asks in chat first (CLAUDE.md).
 
 ## In flight
+- **Overwrite guard and memory under git** (branch `feat/overwrite-guard`, not pushed; 2026-10-06).
+  `docs/blind-overwrite-brief.md` holds the incidents, and its "Results" section holds the
+  experiments and Hayden's calls. Built: `hooks/overwrite-guard.sh` (PreToolUse Write: read-proof
+  plus shrink), `hooks/memory-git.sh` (SessionStart/Stop), `bin/claude-file-history`, and a
+  CLAUDE.md clause on job state. Tests pass (`tests/setup`, `tests/delegation`).
+  - **Next:** Hayden approves the push and PR. After the merge, copy `~/.claude/settings.json`, run
+    `./setup.sh` outside the sandbox, and diff.
+  - **Live smoke after install:** a fresh session's blind Write over a scratch file is denied, and
+    `memory.git` has a commit after one Stop.
+  - **Watch:** `overwrite-guard.log` for denies that were really reads (the replay predicts about 6%
+    of overwrites). The Write tool's own check is gone since 2.1.286; if Anthropic restores it,
+    read-proof becomes redundant but harmless.
 - **`deck-production`: deferred (Hayden, 2026-10-05: workflow improvements first).** The geometry
   gate is merged (#68): behavior in SKILL.md "The geometry gate", design in git history (`PLAN.md`
   before the tmux-restore design). Its golden is on the private repo's unmerged

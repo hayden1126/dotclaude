@@ -119,6 +119,9 @@ sees it.
 | `hooks/session-pane.sh` | Sourced by the three hooks above, not a hook: finds the tmux pane a session is shown in, and whether a person sees it | symlink `~/.claude/hooks/session-pane.sh` |
 | `hooks/session-registry.sh` | SessionStart/SessionEnd hook: records which session is open in which tmux tab (`$XDG_STATE_HOME/dotclaude/open-sessions/`), for `claude-restore`; deletes the entry on `/exit` or `/clear`, marks it when the window or claude is killed; does nothing outside tmux | symlink `~/.claude/hooks/session-registry.sh` |
 | `hooks/session-summary.sh` | Stop hook: regenerates a 1-2 sentence session summary via a direct Haiku Messages-API call (Claude subscription OAuth token, stdlib urllib, no API key/jq), detached so it never blocks; caches the summary to `<config-dir>/session-summaries/<session_id>.txt` for the status-line widget and a short (`<=32`-char) tab label to `<session_id>.title.txt` for `session-title.sh` | symlink `~/.claude/hooks/session-summary.sh` |
+| `hooks/overwrite-guard.sh` | PreToolUse(Write) hook: denies a Write over a file this session hasn't read, or one that cuts a file of 1 KB or more to under a fifth; a shim over `hooks/overwrite_guard.py`; fails open | symlink `~/.claude/hooks/overwrite-guard.sh` and `overwrite_guard.py` |
+| `hooks/memory-git.sh` | SessionStart/Stop hook: commits every project's auto-memory to a local-only git repo (`$XDG_STATE_HOME/dotclaude/memory.git`); never blocks | symlink `~/.claude/hooks/memory-git.sh` |
+| `bin/claude-file-history` | Lists and restores Claude Code's own backups of a file (`~/.claude/file-history`), found through the transcripts | symlink `~/.local/bin/claude-file-history` when that dir exists |
 | `templates/` | `SPEC.md`, `PLAN.md`, `STATUS.md` scaffolds for full-lane work that survive `/clear` | symlink per file into `~/.claude/templates/` |
 | `codex/` | Codex CLI config (config.toml baseline + AGENTS.md + merge-config.py); see docs/codex.md | symlink `AGENTS.md` into `~/.codex/`; merge `config.toml`'s keys into the local `~/.codex/config.toml` (Codex writes to it, so it is never linked; `auth.json` stays local) |
 | `notify-toast.ps1` | Windows toast script that `notify.sh` renders for the Notification hook | symlink `~/.claude/notify-toast.ps1` |
@@ -133,8 +136,9 @@ sees it.
 | `docs/prose-is-not-a-permission.md` | Blog post on the delegation work: why a prompt can't limit an agent's authority, and the layers that can | reference |
 | `docs/images/` | The post's diagram: `delegation-layers.svg` (source) and `delegation-layers.png` (2x render) | reference |
 | `tests/delegation/` | Unit tests for the delegation pieces (no model calls) and `run.py`, a live harness that spends model calls | run from the repo root |
-| `tests/setup/` | Unit tests for `merge-settings.py`, `git/install-ignore.py`, and the prompt and session hooks (`handoff_reminder.py`, `session-title.sh`, `session-summary.sh`), the tmux and sound hooks (`test_tmux_hooks.py`), `tmux/tmux-claude-status` (`test_tmux_claude_status.py`), the restore after tmux dies (`test_session_registry.py`, `test_claude_restore.py`) and `setup-tmux.sh`; `replay_history.py` is a local-only replay tool, not a unit test | `python3 -m unittest discover -s tests/setup -t tests/setup` |
+| `tests/setup/` | Unit tests for `merge-settings.py`, `git/install-ignore.py`, and the prompt and session hooks (`handoff_reminder.py`, `session-title.sh`, `session-summary.sh`), the tmux and sound hooks (`test_tmux_hooks.py`), `tmux/tmux-claude-status` (`test_tmux_claude_status.py`), the restore after tmux dies (`test_session_registry.py`, `test_claude_restore.py`), `setup-tmux.sh`, the overwrite guard, `memory-git.sh` and `claude-file-history`; `replay_history.py` is a local-only replay tool, not a unit test | `python3 -m unittest discover -s tests/setup -t tests/setup` |
 | `tests/deck_production/` | Unit tests for `deck-production`'s `deckkit geometry` gate (rule matrix on canned probe output, plus an end-to-end run over the synthetic `fixtures/geodeck` that skips without a headless Chrome) `deckkit regress`'s geometry facts, and `deckkit doctor`'s exit codes | `python3 -m unittest discover -s tests/deck_production -t tests/deck_production` |
+| `docs/blind-overwrite-brief.md` | Why the overwrite guard and `memory-git.sh` exist: two incidents (a blind overwrite of a memory file, a job's state inferred instead of read), the experiments and the design calls | reference |
 | `docs/chrome-devtools-wsl.md` | WSL2-only: how to make `chrome-devtools-mcp` work (Strategy A headless Linux Chrome, plus B to attach to your Windows Chrome) | reference |
 | `chrome-debug.ps1` | Windows launcher for Strategy B (Chrome with a remote-debugging port) | run on Windows when needed |
 | `tmux/` | The tmux side of the indicator: `claude.conf` (titles, status bar, the ◐ busy and ✳ waiting glyphs), the optional `base.conf` (mouse, splits, the Ctrl-b Enter menu), `cheatsheet.txt`, `tmux-claude-status`, the backstop the status bar runs (it also maps background sessions to their tab), and `claude-restore`, which reopens `main`'s Claude tabs after the tmux server dies | sourced and linked by `setup-tmux.sh` |
@@ -302,6 +306,35 @@ need nothing extra.
   before tmux dies with nothing else running is in that final 120 s, so it comes back. An
   extra tab is cheap; losing every tab is what this exists to prevent. Background (`--bg`)
   sessions are not restored.
+- **PreToolUse(`Write`): `overwrite-guard.sh`** (in this repo). The Write tool's own "File has not
+  been read yet" check last fired in Claude Code 2.1.285, and on 2.1.289 a Write of `PLACEHOLDER`
+  replaced an unread 6 KB memory file (`docs/blind-overwrite-brief.md`). The guard denies a Write
+  over an existing, non-empty file in two cases:
+  - this session's transcript shows no successful Read, Write, Edit, MultiEdit or NotebookEdit of
+    that path, no successful Bash command naming its path, no @-mention of it, and no loaded
+    instructions file at that path (*read-proof*);
+  - the Write would cut a file of 1 KB or more to under a fifth of its size, even after a Read
+    (*shrink*).
+
+  A Bash command counts when it names the file's path (absolute, `~/`, or relative to the cwd it ran
+  in), so `cat README.md` in one repo proves nothing about another repo's README.md. A subagent is
+  judged by its own transcript. Replayed over 292 real overwrites, the guard would have denied 17
+  (16 read-proof, 1 shrink), the incident among them. Each deny costs one Read. Fails open: an
+  error allows the Write, and a transcript it can't find skips read-proof (shrink still applies).
+  Errors and denies are logged to `$XDG_STATE_HOME/dotclaude/overwrite-guard.log`.
+- **SessionStart / Stop: `memory-git.sh`** (in this repo). Commits every project's auto-memory
+  (`~/.claude/projects/*/memory/`) to a local-only git repo at
+  `$XDG_STATE_HOME/dotclaude/memory.git`, so a memory file broken by any means, a Bash heredoc
+  included, can be restored. Transcripts are never tracked, and the repo has no remote. A
+  session that finds another one mid-commit skips, and the next trigger commits. Never blocks.
+
+**A file got overwritten?** Claude Code backs up a file before each tool write, outside the
+working directory too, for as long as the session's transcript is kept (about 30 days). Bash
+writes are not covered.
+- `claude-file-history <path>` lists every backup across sessions. `--show N` prints one, and
+  `--restore N` puts one back after saving the current file beside it.
+- For memory, `git --git-dir="${XDG_STATE_HOME:-$HOME/.local/state}/dotclaude/memory.git" log
+  --stat` goes back further and covers Bash edits.
 
 ## Status line
 

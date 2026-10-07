@@ -69,7 +69,7 @@ class Baseline(unittest.TestCase):
         deny = S["sandbox"]["filesystem"]["denyWrite"]
         for p in ("statusline", "notify-toast.ps1", "codex", "setup.sh", "merge-settings.py",
                   "setup-chrome-wsl.sh", "sync.sh", "chrome-debug.ps1", "git", "plugins",
-                  "tools.json", "tmux", "setup-tmux.sh"):
+                  "tools.json", "tmux", "setup-tmux.sh", "bin"):
             self.assertIn("~/dotclaude/" + p, deny)
 
     def test_tool_credentials_and_shell_history_are_read_protected(self):
@@ -169,6 +169,28 @@ class Baseline(unittest.TestCase):
         self.assertNotIn("exit 2", h["command"])  # it blocks by JSON, never by exit code
         self.assertLessEqual(h["timeout"], 10)  # every stop waits for it
         self.assertTrue(os.access(os.path.join(REPO, "hooks", "watch-guard.sh"), os.X_OK))
+
+    def test_the_overwrite_guard_is_wired_on_write_and_fails_open(self):
+        # The Write tool's own read-before-write check last fired in 2.1.285. The guard runs
+        # on every Write, the main thread's included, and denies by JSON, never by exit code.
+        (cmd,) = commands("PreToolUse", "Write")
+        self.assertEqual(cmd, 'bash "$HOME/.claude/hooks/overwrite-guard.sh"')
+        (entry,) = [e for e in S["hooks"]["PreToolUse"] if e.get("matcher") == "Write"]
+        self.assertLessEqual(entry["hooks"][0]["timeout"], 5)
+        self.assertTrue(os.access(os.path.join(REPO, "hooks", "overwrite-guard.sh"), os.X_OK))
+
+    def test_memory_is_committed_at_session_start_and_stop(self):
+        # Every SessionStart source (a /clear too) and every Stop: Bash edits to memory are
+        # caught within a turn. Never blocks.
+        for event in ("SessionStart", "Stop"):
+            with self.subTest(event=event):
+                (entry,) = [e for e in S["hooks"][event]
+                            if any("memory-git.sh" in h["command"] for h in e["hooks"])]
+                self.assertNotIn("matcher", entry)
+                (h,) = entry["hooks"]
+                self.assertEqual(h["command"], 'bash "$HOME/.claude/hooks/memory-git.sh"')
+                self.assertLessEqual(h["timeout"], 5)
+        self.assertTrue(os.access(os.path.join(REPO, "hooks", "memory-git.sh"), os.X_OK))
 
     def test_a_rearm_never_waits_on_a_permission_prompt(self):
         self.assertIn("Bash(delegation-ledger wait *)", S["permissions"]["allow"])
