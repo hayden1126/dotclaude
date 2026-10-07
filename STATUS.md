@@ -50,6 +50,12 @@ stored here).
   session ran the once-denied `gh pr checks --watch` on 2026-10-07). The live `autoMode` block was
   rewritten by hand the same day ([[cc-auto-mode-config-facts]]).
 
+- **Dead `git push * :*` ask rule removed** (`fix/push-colon-rule`; installed from the branch on
+  HAYPC 2026-10-07, and a fresh session starts with no permission warning). A trailing `:*` is
+  Claude Code's legacy prefix form, so the rule never matched. Probes and Hayden's call to accept
+  the leak (non-main `origin :branch` deletes run) are in [[dotclaude-danger-guard-retired]]. The
+  test now rejects any `:*`.
+
 ## In flight
 - **`deck-production`: deferred (Hayden, 2026-10-05: workflow improvements first).** The geometry
   gate is merged (#68): behavior in SKILL.md "The geometry gate", design in git history (`PLAN.md`

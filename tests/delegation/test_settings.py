@@ -215,6 +215,8 @@ class Baseline(unittest.TestCase):
         # the explicit `git push origin <branch>` runs. Merges ask. Leaks, accepted (Hayden,
         # 2026-10-05): a refspec-less push with a flag after the branch-less remote is caught,
         # but `git push origin feat -u`-style trailing flags and other remotes are not checked.
+        # Also accepted (Hayden, 2026-10-07): deleting a non-main branch with `origin :feat`,
+        # since no rule can catch ` :` without a :* (see the lint test below).
         def matching(kind, command):
             return [rule for rule in S["permissions"][kind]
                     if re.fullmatch(re.escape(rule[len("Bash("):-1]).replace(r"\*", ".*"),
@@ -235,14 +237,15 @@ class Baseline(unittest.TestCase):
         asked = ["git push", "git push origin", "git push --no-verify", "git push -u origin feat",
                  "git push origin --no-verify", "git push origin main", "git push origin feat:main",
                  "git push origin HEAD", "git push origin @", "git push origin feat --all",
-                 "git push origin feat --mirror", "git push origin :feat",
+                 "git push origin feat --mirror", "git push origin :main",
                  "git -C . push", "git -C . push origin feat",
                  # A force the deny rules miss still asks.
                  "git push origin +feat", "git push -uf origin feat",
                  "gh pr merge 5 --squash", "gh api -X PUT repos/o/r/pulls/5/merge"]
         # Pushes to a named branch and opening a PR run (Hayden still approves each in words).
         allowed = ["git push origin feat/x", "git push origin feat-force-fix",
-                   "git push origin fix/x --follow-tags", "gh pr create --base main --head feat/x"]
+                   "git push origin fix/x --follow-tags", "gh pr create --base main --head feat/x",
+                   "git push origin :feat"]
         # rm never asks: the sandbox bounds where it writes, and subagent-policy keeps a
         # delegated rm -r in its root (README has the overlay that brings the asks back).
         neither = ['git commit -am "push --force docs"', "git status",
@@ -265,6 +268,14 @@ class Baseline(unittest.TestCase):
         for kind, cases in (("deny", denied), ("ask", asked)):
             for rule in S["permissions"][kind]:
                 self.assertIn([rule], [matching(kind, c) for c in cases], rule)
+
+    def test_no_rule_uses_the_colon_star_forms(self):
+        # The glob model above is only true without a :*. Live probe, 2.1.293: a trailing :* is
+        # the legacy prefix form (its other * stays literal, so `git push * :*` never matched),
+        # and any other :* prints a warning at every start. `\:*` and `[:]*` don't escape it.
+        for kind in ("allow", "ask", "deny"):
+            for rule in S["permissions"][kind]:
+                self.assertNotIn(":*", rule, f"{kind}: {rule}")
 
     def test_the_stop_sound_rings_for_the_main_session_only(self):
         # Stop fires for subagents too; an inline sound rang for every one of them.
