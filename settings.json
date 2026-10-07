@@ -202,6 +202,16 @@
         ]
       },
       {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "i=$(cat); case \"$i\" in *'\"dangerouslyDisableSandbox\":true'*|*'\"dangerouslyDisableSandbox\": true'*) printf '%s' \"$i\" | bash \"$HOME/.claude/hooks/delete-guard.sh\" ;; esac",
+            "timeout": 5
+          }
+        ]
+      },
+      {
         "hooks": [
           {
             "type": "command",

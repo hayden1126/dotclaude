@@ -349,8 +349,8 @@ cat <<'EOF'
      FAILS CLOSED for delegated agents only; the main thread never runs it.
      The report check (hooks/report-check.sh) fails open. See
      docs/delegation.md for what each layer binds. The overwrite guard
-     (hooks/overwrite-guard.sh) needs python3 and fails open; memory-git.sh
-     needs git and never blocks.
+     (hooks/overwrite-guard.sh) and the delete guard (hooks/delete-guard.sh)
+     need python3 and fail open; memory-git.sh needs git and never blocks.
 
 ============================================================
 

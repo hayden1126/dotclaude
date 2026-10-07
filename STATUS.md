@@ -30,24 +30,23 @@ stored here).
   `PLAN.md`, behavior in README "Tabs come back after a reboot", decisions in
   [[dotclaude-tmux-restore]]). **Untested for real:** Hayden's `wsl --shutdown`, then connect;
   `claude-restore --list` before, `$XDG_STATE_HOME/dotclaude/restore.log` after.
-- **Green only for a real ask** (PR #74, merged 2026-10-06; its `settings.json` matcher installs with
-  #75's `./setup.sh`, see In flight): the wait hook matches
+- **Green only for a real ask** (PR #74, live on HAYPC): the wait hook matches
   `permission_prompt|elicitation_dialog`. The cause is inferred, not proven; if a window goes green
   again with no ask, log `notification_type` in `tmux-state.sh`.
+- **Overwrite guard and memory under git** (PR #75; installed and smoke-tested on HAYPC
+  2026-10-06: a fresh session's blind Write was denied, and `memory.git` took its first commit).
+  The brief's "Results" holds the experiments and Hayden's calls. **Watch:** `overwrite-guard.log`
+  for denies that were really reads (the replay predicts about 6% of overwrites). The Write tool's
+  own check is gone since 2.1.286; if Anthropic restores it, read-proof becomes redundant but
+  harmless.
+- **Delete guard for sandbox-off commands** (PR #78; installed from its branch and smoke-tested on
+  HAYPC 2026-10-06: a fresh session's sandbox-off `rm -rf "$TMPDIR"/...` was
+  denied before it ran). Rules and accepted limits: `hooks/delete_guard.py`'s docstring.
+  Its replay numbers are in that docstring. **Watch:** `delete-guard.log` for a
+  deny of a safe command. Same PR: the finish-before-merge rule (CLAUDE.md Boundaries, handoff
+  step 5).
 
 ## In flight
-- **Overwrite guard and memory under git** (PR #75, merged 2026-10-07; not yet installed).
-  `docs/blind-overwrite-brief.md` holds the incidents, and its "Results" section holds the
-  experiments and Hayden's calls. Built: `hooks/overwrite-guard.sh` (PreToolUse Write: read-proof
-  plus shrink), `hooks/memory-git.sh` (SessionStart/Stop), `bin/claude-file-history`, and a
-  CLAUDE.md clause on job state. Tests pass (`tests/setup`, `tests/delegation`).
-  - **Next:** `git fetch origin main:main` (sandbox-off), then copy `~/.claude/settings.json`, run
-    `./setup.sh` outside the sandbox (this also installs #74's matcher), and diff.
-  - **Live smoke after install:** a fresh session's blind Write over a scratch file is denied, and
-    `memory.git` has a commit after one Stop.
-  - **Watch:** `overwrite-guard.log` for denies that were really reads (the replay predicts about 6%
-    of overwrites). The Write tool's own check is gone since 2.1.286; if Anthropic restores it,
-    read-proof becomes redundant but harmless.
 - **`deck-production`: deferred (Hayden, 2026-10-05: workflow improvements first).** The geometry
   gate is merged (#68): behavior in SKILL.md "The geometry gate", design in git history (`PLAN.md`
   before the tmux-restore design). Its golden is on the private repo's unmerged
@@ -89,16 +88,16 @@ stored here).
   contract: 3" are pre-fix rows from 2026-09-30, gone from its window on 2026-10-07.
 
 ## Blocked / decisions needed
-- **Rescan the `rm` gap around 2026-11-04** (Hayden's call):
+- **Rescan the `rm` gap around 2026-11-04** (Hayden's call; the delete guard covers only
+  sandbox-off deletes, so the sandboxed gap stands):
   `python3 -I ~/scratch/sandbox-audit/rm_scan.py 2026-11-04`. Sending the drafted
   `$CLAUDE_JOB_DIR/tmp` bug report is Hayden's call; `CLAUDE.md` carries the workaround.
 - **Two Write-tool bug drafts wait in `/feedback`** (Hayden's call to send): this session's has the
   `claude -p` repro and the 2.1.285 boundary; the karaoke session's has the incident.
 
 ## Notes for next session
-- **Next: install #75 and smoke-test it** (In flight has the steps). Then Hayden picks the next
-  workflow improvement; deck-production S2 is deferred. First real check of #70: the next reboot
-  (see Done). Recent work: PRs #67 to #75.
+- **Next: Hayden picks the next workflow improvement**; deck-production S2 is deferred. First real
+  check of #70: the next reboot (see Done). Recent work: PRs #67 to #76 and #78 (#77 folded into #78).
 - **Verify the overwrite guard before touching it:** `python3 -m unittest discover -s tests/setup
   -t tests/setup` (`test_overwrite_guard.py`, `test_memory_git.py`, `test_claude_file_history.py`),
   then replay real history the way the brief's Results describes (a would-be deny rate near 17 in
