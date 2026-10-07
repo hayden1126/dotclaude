@@ -20,8 +20,10 @@ stored here).
   rules, `rm` never asks, tmux and sandbox fixes, the chrome-devtools 1.9.0 pin, the deck geometry
   gate, the Stop ring's quiet-while-busy (#72) and 1 s settle for a queued restart (#73), push and
   merge permissions (#71: `git push origin <branch>` and `gh pr create` run, anything that can
-  reach `main` asks)), delegation hardening Stage 3 (PRs #42 to #55). README and
-  `docs/delegation.md` hold the detail; lessons in [[cc-stop-hook-facts]].
+  reach `main` asks)), read-only `gh` allow rules (#79), the dead `git push * :*` rule dropped
+  (#80), delegation hardening Stage 3 (PRs #42 to #55). README and `docs/delegation.md` hold the
+  detail; lessons in [[cc-stop-hook-facts]], [[cc-auto-mode-config-facts]],
+  [[dotclaude-danger-guard-retired]].
 - Older: `git log` and the PRs back to #10. One stays here because git can't show it: client deck
   data left the tree in PR #28, and its history was deliberately left as-is (Hayden's call).
 - **Codex setup shared with a friend** (2026-09-29): private, ready to share at
@@ -45,19 +47,9 @@ stored here).
   Its replay numbers are in that docstring. **Watch:** `delete-guard.log` for a
   deny of a safe command. Same PR: the finish-before-merge rule (CLAUDE.md Boundaries, handoff
   step 5).
-
-- **Read-only `gh` skips the classifier** (PR #79; installed from its branch, and a fresh auto-mode
-  session ran the once-denied `gh pr checks --watch` on 2026-10-07). The live `autoMode` block was
-  rewritten by hand the same day ([[cc-auto-mode-config-facts]]).
-
-- **Dead `git push * :*` ask rule removed** (PR #80; a fresh session started with no warning on
-  2026-10-07). Why, the probes and the accepted leak: [[dotclaude-danger-guard-retired]]. The test
-  now rejects any `:*`.
-
 - **Read-only git and pipe filters skip the classifier** (`fix/git-read-allow`; installed from its
   branch, and a fresh auto-mode session ran the once-denied `git status -sb | head -1` by rule on
-  2026-10-07, while `git log --output=` asked). Each part of a pipe needs its own rule, hence
-  `head`, `tail`, `wc`, `grep`. Unproven: a `cd X && ...` prefix (the probe model dropped it).
+  2026-10-07, while `git log --output=` asked). The rules and their `cd`/`-C` limits: README.
   The classifier refuses edits that add allow rules ("Self-Modification"): Hayden applies those.
 
 ## In flight
@@ -110,8 +102,9 @@ stored here).
 
 ## Notes for next session
 - **Next: Hayden picks the next workflow improvement**; deck-production S2 is deferred. First real
-  check of #70: the next reboot (see Done). Recent work: PRs #67 to #76, #78 (#77 folded in), #79, #80 and
-  `fix/git-read-allow` (`gh pr list --head fix/git-read-allow` for its number).
+  check of #70: the next reboot (see Done). Recent work: PRs #67 to #76, #78 (#77 folded in), #79,
+  #80 and `fix/git-read-allow` (`gh pr list --head fix/git-read-allow` for its number; its work
+  is `git log main..fix/git-read-allow`).
 - **Verify the overwrite guard before touching it:** `python3 -m unittest discover -s tests/setup
   -t tests/setup` (`test_overwrite_guard.py`, `test_memory_git.py`, `test_claude_file_history.py`),
   then replay real history the way the brief's Results describes (a would-be deny rate near 17 in

@@ -66,19 +66,21 @@ no branch (`git push`, `git push origin`), one starting with a flag (`git push -
 merges (`gh pr merge`, `gh api ...merge`). Allowed without a prompt: `git push origin <branch>`
 and `gh pr create`; CLAUDE.md still has Claude ask in words first. Also allowed, because the
 classifier once refused a CI watch with no reason given: the read-only `gh pr checks`, `view`,
-`list`, `status` and `diff`, and `gh run list`, `view` and `watch`. The same goes for read-only
-git (`status`, `log`, `diff`, `show`, `rev-parse`, refused once as an "unrequested commit") and
-the pipe filters `head`, `tail`, `wc` and `grep`, since every part of a pipe needs its own rule.
-`git ... --output` writes a file, so it asks. A rule can't see the current
-branch, which is why every form that could land on `main` without naming it asks. Not checked
-(accepted): flags after the branch, remotes other than `origin`, and deleting a branch other than
-`main` with `origin :branch` (no rule can match ` :` without a `:*`, which Claude Code reads as
-its legacy prefix form or warns about at every start). Everything else goes to auto mode's
-classifier: other wrappers (any other `bash -c`, such as one running `push -f`, and `bash -lc`,
-`sh -c`, `eval`), git global options
-other than `-C` (`-c k=v`, `--git-dir`, `--no-pager`), soft, mixed and `--keep` resets, and
-`checkout`, `switch`, `restore` and `revert`. Why rules at all: on 2.1.288, auto mode ran a
-force-push and a `reset --hard` on a dirty tree when the prompt named them.
+`list`, `status` and `diff`, and `gh run list`, `view` and `watch`. Read-only git (`status`,
+`log`, `diff`, `show`, `rev-parse`; the classifier once refused one as an "unrequested commit")
+is allowed too, with the pipe filters `head`, `tail`, `wc` and `grep`, since every part of a pipe
+needs its own rule. `git ... --output` writes a file, so it asks. A `cd <dir> && git ...` still
+goes to the classifier, even with a `Bash(cd *)` rule: Claude Code sends `cd` plus `git` there
+whatever the rules say. `git -C <dir> status` and the other `-C` reads go there too, since a
+`git -C * log*` rule would also match a commit. A rule can't see the current branch, which is
+why every form that could land on `main` without naming it asks. Not checked (accepted): flags
+after the branch, remotes other than `origin`, and deleting a branch other than `main` with
+`origin :branch` (no rule can match ` :` without a `:*`, which Claude Code reads as its legacy
+prefix form or warns about at every start). Everything else goes to auto mode's classifier: other
+wrappers (any other `bash -c`, such as one running `push -f`, and `bash -lc`, `sh -c`, `eval`),
+git global options other than `-C` (`-c k=v`, `--git-dir`, `--no-pager`), soft, mixed and
+`--keep` resets, and `checkout`, `switch`, `restore` and `revert`. Why rules at all: on 2.1.288,
+auto mode ran a force-push and a `reset --hard` on a dirty tree when the prompt named them.
 
 `rm` never asks. Ask rules for `rm -r` and `rm -f` stopped sessions and stalled delegated writers
 mid-task, and a hook can't exempt agents from them: an ask rule prompts even when a PreToolUse
