@@ -11,16 +11,20 @@ one of its paths
     `read X`, `set --` for $1 and $@), or one whose value was built from such a variable
     (`D="$TMPDIR/x"`). HOME and USER count as set unless the command reassigns them;
   - uses an operator expansion (`${X:-/tmp}`, `${X%/*}`), whose result can differ from how it
-    reads;
-  - would widen if a command substitution (or a variable holding one) came back empty: to a
-    directory (`"$HOME/$d"` becomes `$HOME/`), an absolute path (`"$d"/x` becomes `/x`), a bare
-    glob (`"$d"/*` becomes `/*`) or `.`/`..`. A lone `"$d"` only empties the argument, and
-    `"$d".txt` stays in the working directory, so both pass;
+    reads. `${X:?}` (bash stops on an empty X) and `${X[@]}` read as plain X;
+  - would widen if a command substitution, a `read` line, or a variable holding one came back
+    empty: to a directory (`"$HOME/$d"` becomes `$HOME/`), an absolute path (`"$d"/x` becomes
+    `/x`), a bare glob (`"$d"/*` becomes `/*`) or `.`/`..`. A lone `"$d"` only empties the
+    argument, and `"$d".txt` stays in the working directory, so both pass;
   - is, after the command's own values, ~ and brace expansion, a catastrophic target: /, a
     top-level system directory, the home directory or one of its main trees (~/.claude, ~/code,
-    ...), or a glob directly inside one (`~/*`, `~/.*`, `/tmp/?*`);
-  - is relative, after a `cd` into an untrusted path (`cd "$TMPDIR" && rm -rf ./*`) or into a
-    catastrophic target.
+    ..., and a Windows home /mnt/c/Users/<name>), or a glob matching everything directly inside
+    one (`~/*`, `~/.*`, `/tmp/?*`; a narrower `/tmp/pytest-*` is ordinary cleanup);
+  - is relative, by its value (`for f in *; do rm -rf "$f"`), after a `cd` into an untrusted or
+    possibly empty path (`cd "$TMPDIR" && rm -rf ./*`) or into a catastrophic target.
+
+A find that filters what it deletes (-name, -path, -mtime, ...) is held only to the untrusted
+rule: `find ~/code -name __pycache__ -exec rm -rf {} +` is ordinary cleanup.
 
 Replayed over a month of transcripts (4367 sandbox-off Bash calls, 247 with a delete), it would
 have denied 6, all a path built from $TMPDIR (directly, through a variable, or `${TMPDIR:-/tmp}`)
@@ -32,7 +36,8 @@ comments, skips heredoc bodies, and replaces each $(...), `...`, $((...)) and $'
 placeholder; then shlex splits the result into simple commands. Accepted limits (accidents, not
 an adversary, are the target): `xargs rm` (its paths come from stdin), a delete inside
 `bash -c`, `eval`, a function or a script, a single-quoted '$X' (read as a variable: it can only
-over-deny), and a glob two levels down (`~/*/*`).
+over-deny), a glob two levels down (`~/*/*`), an array assigned from an unset variable
+(`a=($X)`), more than 64 brace or loop values, and a `)` inside `$(case ...)`.
 
 Fails open: an error or an unparsable command allows the call and is logged, as is every deny,
 to $XDG_STATE_HOME/dotclaude/delete-guard.log.
@@ -59,7 +64,8 @@ EMPTYABLE = object()  # a lone command substitution, which can come back empty
 UNKNOWN = object()    # set by the command, value unknown (read, a for over a substitution)
 VAR = re.compile(r"\$(?:\{([^}]*)\}|([A-Za-z_][A-Za-z0-9_]*)|([0-9@*#?!-]))")
 ASSIGN = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)=(.*)$", re.S)
-GLOB = re.compile(r"[*?\[]")
+FIND_FILTERS = {"-name", "-iname", "-path", "-ipath", "-wholename", "-iwholename", "-regex",
+                "-iregex", "-newer", "-mtime", "-mmin", "-user", "-size", "-empty"}
 MAX_CANDIDATES = 64
 
 
@@ -245,7 +251,7 @@ def command_words(words):
             w, base = words[j], os.path.basename(words[j])
             if w.startswith("-"):
                 after_option = True
-            elif ASSIGN.match(w) or w.isdigit():
+            elif ASSIGN.match(w) or re.fullmatch(r"\d+(\.\d+)?[smhd]?", w):  # `timeout 30s`
                 after_option = False
             elif after_option and base not in DELETERS | {"find"} | WRAPPERS:
                 after_option = False  # the option's own argument (`-u x`)
@@ -260,17 +266,28 @@ def command_words(words):
 
 # --- Judging values ---------------------------------------------------------------------------
 
+PLAIN_BRACE = re.compile(r"([A-Za-z_]\w*)(:?\?[^}]*|\[[^\]]*\])?")
+
+
+def key_of(brace, name, special):
+    """The variable a reference reads: $1, $@ map to #pos; ${X:?} and ${X[@]} read X."""
+    if special:
+        return "#pos" if special.isdigit() or special in "@*" else "$" + special
+    if brace:
+        m = PLAIN_BRACE.fullmatch(brace)
+        return m.group(1) if m else re.match(r"[A-Za-z_]\w*|", brace).group()
+    return name
+
+
 def refs(text):
-    """The variables text reads: (key, operator expansion?) per reference; $1, $@ map to #pos."""
+    """The variables text reads: (key, operator expansion?, guarded?) per reference. ${X:?} is
+    guarded (bash stops on an empty X, so it can't widen a path); ${X[@]} reads the array X; any
+    other operator (${X:-/tmp}, ${X%/*}) can come back other than it reads."""
     out = []
     for brace, name, special in VAR.findall(text):
-        if special:
-            out.append(("#pos" if special.isdigit() or special in "@*" else "$" + special, False))
-        elif brace:
-            plain = re.fullmatch(r"[A-Za-z_]\w*", brace)
-            out.append((brace if plain else re.match(r"[A-Za-z_]\w*|", brace).group(), not plain))
-        else:
-            out.append((name, False))
+        m = PLAIN_BRACE.fullmatch(brace) if brace else None
+        out.append((key_of(brace, name, special), bool(brace) and not m,
+                    bool(m and m.group(2) and "?" in m.group(2))))
     return out
 
 
@@ -278,7 +295,7 @@ def problem(text, state):
     """Why text can't be trusted as a path, or None."""
     vals = state["vars"]
     empty = []
-    for key, operator in refs(text):
+    for key, operator, guarded in refs(text):
         if operator:
             return f"an expansion with an operator, ${{{key}...}}, whose result can differ from how it reads"
         if key.startswith("$") and key not in ("$$",):
@@ -293,7 +310,7 @@ def problem(text, state):
         if vals[key] is TAINT:
             return (f"${key if key != '#pos' else '1'}, whose value was built from an untrusted "
                     "part (a variable this command doesn't set)")
-        if vals[key] is EMPTYABLE:
+        if vals[key] is EMPTYABLE and not guarded:
             empty.append(key)
     if (empty or SUBST in text) and widens(text, empty, state):
         what = "a command substitution" if SUBST in text and not empty else \
@@ -331,7 +348,7 @@ def value_of(text, state):
     """What an assignment stores: TAINT, EMPTYABLE, or the candidate values of its text."""
     if problem(text, state):
         return TAINT
-    keys = [k for k, _ in refs(text)]
+    keys = [k for k, _, _ in refs(text)]
     if text == SUBST or (SUBST in text and not text.replace(SUBST, "")) or \
             any(state["vars"].get(k) is EMPTYABLE for k in keys):
         return EMPTYABLE
@@ -353,7 +370,7 @@ def candidates(text, state, expand_home=True):
                 nxt.append(t)
                 continue
             brace, name, special = m.groups()
-            key = "#pos" if special and (special.isdigit() or special in "@*") else (brace or name)
+            key = key_of(brace, name, special)
             if key in STABLE and key not in vals:
                 values = [os.environ.get(key, "")]
             else:
@@ -395,21 +412,24 @@ def catastrophic():
 
 
 def is_catastrophic(target):
-    """A top-level or home tree itself, or a glob directly inside one (`~/*`, `~/.*`)."""
+    """A top-level or home tree itself (a Windows home, /mnt/c/Users/<name>, too), or a glob that
+    matches everything directly inside one (`~/*`, `~/.*`, `/tmp/?*`). A narrower glob
+    (`/tmp/pytest-*`) is ordinary cleanup."""
     target = os.path.expanduser(target)
     if not target.startswith("/"):
         return False
     target = "/" + os.path.normpath(target).lstrip("/")
-    if GLOB.search(os.path.basename(target)):
+    if re.fullmatch(r"[*?.\[\]!]*", os.path.basename(target)):
         target = os.path.dirname(target) or "/"
-    return target in catastrophic()
+    return target in catastrophic() or bool(re.fullmatch(r"/mnt/[a-z]/Users/[^/]+", target))
 
 
 # --- The walk ---------------------------------------------------------------------------------
 
 def judge(command):
     """None to allow, or (reason, note) to deny."""
-    state = {"vars": {}, "cwd": None}  # cwd: None (unchanged), TAINT, or a known path
+    # cwd: None (unchanged or unknown), TAINT, or a known path. $_ (the last argument) is set.
+    state = {"vars": {"_": UNKNOWN}, "cwd": None}
     for words in segments(command):
         name, args, prefix = command_words(words)
         if name is None:  # a pure assignment persists; a prefix one doesn't reach its command
@@ -436,26 +456,43 @@ def judge(command):
         if name in ("read", "mapfile", "readarray"):
             for a in args:
                 if re.fullmatch(r"[A-Za-z_]\w*", a):
-                    vals[a] = UNKNOWN
+                    vals[a] = EMPTYABLE  # a blank line reads as empty
             continue
         if name in ("cd", "pushd"):
-            target = next((a for a in args if not a.startswith("-")), "~")
-            if problem(target, state):
-                state["cwd"] = TAINT
-            else:
-                known = candidates(target, state)
-                state["cwd"] = known[0] if len(known) == 1 else None
+            state["cwd"] = cd_target(args, state)
             continue
+        filtered = False
         if name in DELETERS:
             paths = [a for a in args if not a.startswith("-") or a == "-"]
         elif name == "find" and deletes(args):
             paths = find_roots(args)
+            filtered = any(a in FIND_FILTERS for a in args)
         else:
             continue
-        verdict = check(name, paths, state)
+        verdict = check(name, paths, state, filtered)
         if verdict:
             return verdict
     return None
+
+
+def cd_target(args, state):
+    """The cwd after a cd: TAINT into an untrusted or possibly empty path (`cd "$(mktemp -d)"`
+    stays put when mktemp prints nothing), a known path, or None when it can't be told."""
+    target = next((a for a in args if not a.startswith("-") or a == "-"), "~")
+    if target == "-":
+        return None
+    keys = [k for k, _, _ in refs(target)]
+    if problem(target, state) or SUBST in target or \
+            any(state["vars"].get(k) is EMPTYABLE for k in keys):
+        return TAINT
+    known = candidates(target, state)
+    if len(known) != 1:
+        return None
+    if known[0].startswith("/"):
+        return os.path.normpath(known[0])
+    cwd = state["cwd"]
+    return cwd if cwd is TAINT else (os.path.normpath(os.path.join(cwd, known[0]))
+                                     if isinstance(cwd, str) else None)
 
 
 def loop_value(items, state):
@@ -493,28 +530,37 @@ def deletes(find_args):
     return False
 
 
-def check(name, paths, state):
+def check(name, paths, state, filtered=False):
+    """A deny for the first untrusted or catastrophic path. A find that filters what it deletes
+    (`-name`, `-path`, ...) is only held to the untrusted rule: `find ~/code -name __pycache__
+    -exec rm -rf {} +` is ordinary cleanup."""
     for p in paths:
         why = problem(p, state)
         if why:
             return (f"delete-guard: this sandbox-off {name} deletes {p}, built from {why}. Spell "
                     "out the absolute path, or run the delete sandboxed.",
                     f"deny untrusted {name} {p}")
-        for target in candidates(p, state):
+        if filtered:
+            continue
+        cands = candidates(p, state)
+        for target in cands:
             if is_catastrophic(target):
                 return (f"delete-guard: this sandbox-off {name} would delete {p} ({target}), a "
                         "top-level or home tree. Name the specific path inside it.",
                         f"deny catastrophic {name} {target}")
-        if not p.startswith(("/", "~", "$")):
-            cwd = state["cwd"]
-            if cwd is TAINT:
-                return (f"delete-guard: this sandbox-off {name} deletes {p} relative to a cd into "
-                        "a path this command doesn't set. Spell out the absolute path.",
-                        f"deny untrusted-cwd {name} {p}")
-            if isinstance(cwd, str) and is_catastrophic(os.path.join(cwd, p)):
+        # Relative paths, judged by their values: `for f in *; do rm -rf "$f"` deletes relative ones.
+        relative = [c for c in cands if not c.startswith("/")] if cands else \
+            ([p] if not p.startswith(("/", "~", "$")) else [])
+        cwd = state["cwd"]
+        if relative and cwd is TAINT:
+            return (f"delete-guard: this sandbox-off {name} deletes {p} relative to a cd into a "
+                    "path this command doesn't set, or one that can come back empty. Spell out "
+                    "the absolute path.", f"deny untrusted-cwd {name} {p}")
+        for rel in relative if isinstance(cwd, str) else []:
+            if is_catastrophic(os.path.join(cwd, rel)):
                 return (f"delete-guard: this sandbox-off {name} would delete {p} inside {cwd}, a "
                         "top-level or home tree. Name the specific path inside it.",
-                        f"deny catastrophic {name} {os.path.join(cwd, p)}")
+                        f"deny catastrophic {name} {os.path.join(cwd, rel)}")
     return None
 
 

@@ -338,6 +338,9 @@ need nothing extra.
     `set --`;
   - is relative, after a `cd` into an untrusted path or a top-level tree (`cd "$TMPDIR" && rm -rf ./*`).
 
+  Ordinary cleanup passes: a narrower glob (`rm -rf /tmp/pytest-*`), `"${dir:?}"/*`, and a
+  `find` that filters what it deletes (`find ~/code -name __pycache__ -exec rm -rf {} +`).
+
   Replayed over a month of transcripts (4367 sandbox-off calls), it would have denied 6, every one
   a path built from `$TMPDIR` where it was `/tmp`. Normal `rm` never asks. Not covered:
   `xargs rm`, a delete inside `bash -c`, `eval`, a function or a script, and a glob two levels

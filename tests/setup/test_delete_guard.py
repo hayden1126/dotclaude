@@ -129,6 +129,28 @@ class DeleteGuard(unittest.TestCase):
             with self.subTest(command=command):
                 self.assertFalse(self.denied(command))
 
+    def test_common_agent_shapes(self):
+        # Final review (2026-10-06): loops after a cd, blank lines from read, prefix cleanups,
+        # ${X:?}, arrays and filtered finds.
+        for command in ("cd \"$TMPDIR\" && for f in *; do rm -rf \"$f\"; done",
+                        "cd /tmp && for f in *; do rm -rf \"$f\"; done",
+                        "while read -r d; do rm -rf \"$d\"/*; done < dirs.txt",
+                        "cd \"$(mktemp -d)\" && rm -rf *", "timeout 30s rm -rf $X",
+                        "rm -rf /mnt/c/Users/hayde", "find ~/code -exec rm -rf {} +",
+                        "cd ~ && cd code && rm -rf *"):
+            with self.subTest(command=command):
+                self.assertTrue(self.denied(command))
+        for command in ("rm -rf /tmp/pytest-*", "rm -f /tmp/*.log", "rm -rf ~/scratch/old-*",
+                        "cd /tmp && rm -rf claude-test-*", "dir=/x/y; rm -rf \"${dir:?}\"/*",
+                        "d=$(mktemp -d); rm -rf \"${d:?}\"/build",
+                        "files=(a.txt b.txt); rm -f \"${files[@]}\"",
+                        "find /tmp -maxdepth 1 -name 'pytest-*' -exec rm -rf {} +",
+                        "find ~/code -name __pycache__ -exec rm -rf {} +",
+                        "mkdir -p /x/y && cd $_ && rm -rf z",
+                        "cd /tmp/claude-1000/w && for f in *; do rm -rf \"$f\"; done"):
+            with self.subTest(command=command):
+                self.assertFalse(self.denied(command))
+
     def test_variables_the_command_sets_are_fine(self):
         for command in ("S=/tmp/claude-1000/x; rm -rf $S/a", "export S=/a/b && rm -rf \"$S\"",
                         "for d in a b; do rm -rf $d; done",
