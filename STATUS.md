@@ -36,14 +36,13 @@ stored here).
   again with no ask, log `notification_type` in `tmux-state.sh`.
 
 ## In flight
-- **Overwrite guard and memory under git** (PR #75, base `986ba4b`; state: `gh pr view 75 --json
-  state,mergedAt`; 2026-10-06).
+- **Overwrite guard and memory under git** (PR #75, merged 2026-10-07; not yet installed).
   `docs/blind-overwrite-brief.md` holds the incidents, and its "Results" section holds the
   experiments and Hayden's calls. Built: `hooks/overwrite-guard.sh` (PreToolUse Write: read-proof
   plus shrink), `hooks/memory-git.sh` (SessionStart/Stop), `bin/claude-file-history`, and a
   CLAUDE.md clause on job state. Tests pass (`tests/setup`, `tests/delegation`).
-  - **Next:** Hayden reviews and merges #75. Then copy `~/.claude/settings.json`, run `./setup.sh`
-    outside the sandbox (this also installs #74's matcher), and diff.
+  - **Next:** `git fetch origin main:main` (sandbox-off), then copy `~/.claude/settings.json`, run
+    `./setup.sh` outside the sandbox (this also installs #74's matcher), and diff.
   - **Live smoke after install:** a fresh session's blind Write over a scratch file is denied, and
     `memory.git` has a commit after one Stop.
   - **Watch:** `overwrite-guard.log` for denies that were really reads (the replay predicts about 6%
@@ -97,7 +96,7 @@ stored here).
   `claude -p` repro and the 2.1.285 boundary; the karaoke session's has the incident.
 
 ## Notes for next session
-- **Next: merge #75, install, smoke-test** (In flight has the steps). Then Hayden picks the next
+- **Next: install #75 and smoke-test it** (In flight has the steps). Then Hayden picks the next
   workflow improvement; deck-production S2 is deferred. First real check of #70: the next reboot
   (see Done). Recent work: PRs #67 to #75.
 - **Verify the overwrite guard before touching it:** `python3 -m unittest discover -s tests/setup
