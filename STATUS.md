@@ -6,7 +6,7 @@
 > [[dotclaude-chrome-devtools-wsl]]). Per-effort design lives in the repo's `PLAN.md` or its doc,
 > not only under `~/.claude/plans/`, which the next plan overwrites ([[plan-file-not-durable]]).
 
-Last updated: 2026-10-06
+Last updated: 2026-10-07
 Base: `main`. For branch / PR / push state, run `gh pr list` and `git log main..HEAD` (derive it; not
 stored here).
 
@@ -46,11 +46,9 @@ stored here).
   deny of a safe command. Same PR: the finish-before-merge rule (CLAUDE.md Boundaries, handoff
   step 5).
 
-- **Read-only `gh` skips the classifier** (PR #79; installed from its branch and smoke-tested on
-  HAYPC 2026-10-07: a fresh auto-mode session ran the once-denied
-  `gh pr checks 128 --repo TheProjectCapella/vulcan --watch` with no denial). Same day, by hand
-  (live-only key): the live `autoMode.environment` now lists the trusted GitHub owners instead of
-  one private repo ([[cc-auto-mode-config-facts]]).
+- **Read-only `gh` skips the classifier** (PR #79; installed from its branch, and a fresh auto-mode
+  session ran the once-denied `gh pr checks --watch` on 2026-10-07). The live `autoMode` block was
+  rewritten by hand the same day ([[cc-auto-mode-config-facts]]).
 
 ## In flight
 - **`deck-production`: deferred (Hayden, 2026-10-05: workflow improvements first).** The geometry
@@ -90,8 +88,7 @@ stored here).
 - **Delegation hardening: live on HAYPC** (`docs/delegation.md`; `skills/delegation/SKILL.md` is the
   operating guide). Retune `[deadline]` and `liveness.toml` only when `due` asks for `audit
   --monthly`, and only for groups not marked `too few to retune`. After a probe run by hand,
-  `delegation-ledger exclude --id <id> --why probe`. The daily audit's "reports failing the
-  contract: 3" are pre-fix rows from 2026-09-30, gone from its window on 2026-10-07.
+  `delegation-ledger exclude --id <id> --why probe`.
 
 ## Blocked / decisions needed
 - **Rescan the `rm` gap around 2026-11-04** (Hayden's call; the delete guard covers only
@@ -103,7 +100,7 @@ stored here).
 
 ## Notes for next session
 - **Next: Hayden picks the next workflow improvement**; deck-production S2 is deferred. First real
-  check of #70: the next reboot (see Done). Recent work: PRs #67 to #76 and #78 (#77 folded into #78).
+  check of #70: the next reboot (see Done). Recent work: PRs #67 to #76, #78 (#77 folded in) and #79.
 - **Verify the overwrite guard before touching it:** `python3 -m unittest discover -s tests/setup
   -t tests/setup` (`test_overwrite_guard.py`, `test_memory_git.py`, `test_claude_file_history.py`),
   then replay real history the way the brief's Results describes (a would-be deny rate near 17 in
