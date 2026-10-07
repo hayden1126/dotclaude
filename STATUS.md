@@ -46,6 +46,12 @@ stored here).
   deny of a safe command. Same PR: the finish-before-merge rule (CLAUDE.md Boundaries, handoff
   step 5).
 
+- **Read-only `gh` skips the classifier** (PR #79; installed from its branch and smoke-tested on
+  HAYPC 2026-10-07: a fresh auto-mode session ran the once-denied
+  `gh pr checks 128 --repo TheProjectCapella/vulcan --watch` with no denial). Same day, by hand
+  (live-only key): the live `autoMode.environment` now lists the trusted GitHub owners instead of
+  one private repo ([[cc-auto-mode-config-facts]]).
+
 ## In flight
 - **`deck-production`: deferred (Hayden, 2026-10-05: workflow improvements first).** The geometry
   gate is merged (#68): behavior in SKILL.md "The geometry gate", design in git history (`PLAN.md`
