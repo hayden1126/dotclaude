@@ -24,7 +24,15 @@
     "allow": [
       "Bash(delegation-ledger wait *)",
       "Bash(git push origin *)",
-      "Bash(gh pr create *)"
+      "Bash(gh pr create *)",
+      "Bash(gh pr checks *)",
+      "Bash(gh pr view *)",
+      "Bash(gh pr list*)",
+      "Bash(gh pr status*)",
+      "Bash(gh pr diff *)",
+      "Bash(gh run list*)",
+      "Bash(gh run view *)",
+      "Bash(gh run watch *)"
     ],
     "ask": [
       "Bash(git push)",

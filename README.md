@@ -65,7 +65,9 @@ no branch (`git push`, `git push origin`), one starting with a flag (`git push -
 `git push origin --no-verify`), a remote delete (`origin :branch`), a `+` force the deny rules
 miss, any `git -C <dir> push`, and merges (`gh pr merge`, `gh api ...merge`). Allowed without a
 prompt: `git push origin <branch>` and `gh pr create`; CLAUDE.md still has Claude ask in words
-first. A rule can't see the current branch, which is why every form that could land on `main`
+first. Also allowed, because the classifier once refused a CI watch with no reason given: the
+read-only `gh pr checks`, `view`, `list`, `status` and `diff`, and `gh run list`, `view` and
+`watch`. A rule can't see the current branch, which is why every form that could land on `main`
 without naming it asks. Not checked (accepted): flags after the branch and remotes other than
 `origin`. Everything else goes to auto mode's classifier: other wrappers (any other
 `bash -c`, such as one running `push -f`, and `bash -lc`, `sh -c`, `eval`), git global options
