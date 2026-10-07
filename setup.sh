@@ -348,7 +348,9 @@ cat <<'EOF'
      The subagent policy hook (hooks/subagent-policy.sh, python3 >= 3.12)
      FAILS CLOSED for delegated agents only; the main thread never runs it.
      The report check (hooks/report-check.sh) fails open. See
-     docs/delegation.md for what each layer binds.
+     docs/delegation.md for what each layer binds. The overwrite guard
+     (hooks/overwrite-guard.sh) needs python3 and fails open; memory-git.sh
+     needs git and never blocks.
 
 ============================================================
 

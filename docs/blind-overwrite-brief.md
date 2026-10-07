@@ -5,6 +5,10 @@
 > work on it there"). The job: run the experiments in "Settle first", then `superpowers:brainstorming`
 > with Hayden on the design space, then `writing-plans`, then implement on a branch. Push and PR only
 > with his approval (CLAUDE.md).
+>
+> **Status: built 2026-10-06 on `feat/overwrite-guard`. "Results" at the end is authoritative.**
+> The design space and acceptance tests below are the original proposal: the snapshot store, Edit
+> coverage and the PostToolUse trigger were dropped once E2 found Claude Code's own file-history.
 
 ## The problem
 
@@ -174,7 +178,7 @@ transcript line of the Write carries `"version":"2.1.289"`. And a backstop **did
 
 **E1: the Write tool's check is gone; Edit's is not.** Across every transcript on this machine,
 "File has not been read yet" fired on Write through 2.1.285 (last on 2026-09-30) and never after.
-On Edit, it still fires through 2.1.289. A fresh `claude -p` on 2.1.292 overwrote an unread
+On Edit, it still fires through 2.1.289. A fresh `claude -p` on 2.1.292 (the probe's version, not the incident's) overwrote an unread
 2250-byte file and answered "updated successfully". Memory paths are not exempt: the check refused
 an Edit of this same memory file on 2026-09-28. The karaoke session queued a feedback draft.
 
