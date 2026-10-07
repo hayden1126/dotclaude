@@ -101,10 +101,12 @@ for f in "$REPO_DIR"/agents/*.md; do
 done
 
 # A skill that ships a CLI gets it on PATH, so the invocations printed in its
-# SKILL.md and by its own tools actually resolve. Opt-in by directory: if
-# ~/.local/bin does not exist, the skill still works via its absolute path.
+# SKILL.md and by its own tools actually resolve; so does each standalone tool in
+# bin/ (claude-file-history). Opt-in by directory: if ~/.local/bin does not exist,
+# each still works via its absolute path.
 if [[ -d "$HOME/.local/bin" ]]; then
-  for exe in "$REPO_DIR"/skills/*/scripts/deckkit \
+  chmod +x "$REPO_DIR"/bin/* 2>/dev/null || true
+  for exe in "$REPO_DIR"/bin/* "$REPO_DIR"/skills/*/scripts/deckkit \
              "$REPO_DIR"/skills/delegation/scripts/{codex-delegate,delegation-ledger,gh-public}; do
     [[ -x "$exe" ]] || continue
     link "$exe" "$HOME/.local/bin/$(basename "$exe")"

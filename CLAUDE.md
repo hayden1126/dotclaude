@@ -26,7 +26,7 @@
 - A bare `git push`, `fetch`, `pull` or `gh` that fails with `Failed to connect ... after N ms` or `Could not resolve host` hit the network, not the sandbox: a sandboxed one fails at once with `could not read Username`. Retry the same bare command once; don't switch to `dangerouslyDisableSandbox` for it.
 - In Bash, write temp files to `$TMPDIR`, not `$CLAUDE_JOB_DIR/tmp`: the sandbox write-protects `~/.claude/jobs`, whatever Claude Code's docs say.
 - A wait that may outlast 30 minutes goes through `delegation-ledger wait` (run_in_background, timeout 7200000): Bash background commands stop at 30 minutes by default and 2 hours at most, Monitor at 30.
-- Always give yourself a runnable verification target (tests, build, lint, screenshot). Show evidence, not assertions.
+- Always give yourself a runnable verification target (tests, build, lint, screenshot). Show evidence, not assertions. A job's state comes from its own finish marker (the field or log line its script checks), never from timestamps or its likeness to an earlier run.
 - If I have corrected you twice on the same thing, the context is polluted: stop, reload from the durable files, and start fresh.
 
 ## Memory

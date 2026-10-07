@@ -19,7 +19,7 @@ delegation. A guard that matters has to be a hook.
 
 ## Incident 1: the blind overwrite
 
-**Timeline** (2026-10-06, EDT; Claude Code 2.1.292; karaoke session
+**Timeline** (2026-10-06, EDT; Claude Code 2.1.289 (corrected from 2.1.292, see Results); karaoke session
 `4c9dfc5e-45ab-47c6-8a18-8c674f3ff52b`, started by a `/clear` at about 19:13):
 - **19:29.** Right after plan approval, the model called `Write` on
   `~/.claude/projects/-home-hayden-code-karaoke/memory/karaoke-personal-product.md` with the content
@@ -28,8 +28,8 @@ delegation. A guard that matters has to be a hook.
 - **The damage.** The file held Hayden's product vision, setup, wants and dated decisions (6284 bytes,
   74 lines). It became 11 bytes. The tool answered "updated successfully".
 - **The built-in guard did not fire.** The Write tool's contract says overwriting a file not read in
-  the session fails. This session had never read that file. Why it passed is unknown (see E1).
-- **No backstop.** Memory directories are not under git, not snapshotted, and outside every repo.
+  the session fails. This session had never read that file. (Results: the Write tool's check stopped firing after 2.1.285.)
+- **No backstop** (wrong: see Results, E2; file-history held the original). Memory directories are not under git, not snapshotted, and outside every repo.
   `~/.claude/backups` holds only `.claude.json` copies.
 
 **Recovery**, 10 to 30 minutes later:
@@ -43,9 +43,9 @@ delegation. A guard that matters has to be a hook.
   names the file.
 - **The restore.** Writing back needed `dangerouslyDisableSandbox`, because `~/.claude/projects` is
   write-denied inside the sandbox.
-- **No second copy existed.** Terrarium's memory has a file with the same name, but it is a different
+- **No second copy existed** (wrong: see Results, E2). Terrarium's memory has a file with the same name, but it is a different
   memory (the class-project boundary), not a backup.
-- **Luck, not design.** Recovery worked only because some session had once read the whole file
+- **Luck, not design** (for Bash edits only: see Results, E2). Recovery worked only because some session had once read the whole file
   through the Read tool. Earlier karaoke sessions edited memory files with Python heredocs in Bash, so
   a file touched only that way would have been unrecoverable.
 
@@ -166,3 +166,41 @@ memory. Settle D after E2.
 
 Recovering past overwrites beyond this incident; syncing memory across machines; any change to the
 karaoke repo.
+
+## Results (2026-10-06, branch `feat/overwrite-guard`)
+
+Two claims above were wrong. The incident ran on Claude Code **2.1.289**, not 2.1.292: the
+transcript line of the Write carries `"version":"2.1.289"`. And a backstop **did** exist.
+
+**E1: the Write tool's check is gone; Edit's is not.** Across every transcript on this machine,
+"File has not been read yet" fired on Write through 2.1.285 (last on 2026-09-30) and never after.
+On Edit, it still fires through 2.1.289. A fresh `claude -p` on 2.1.292 overwrote an unread
+2250-byte file and answered "updated successfully". Memory paths are not exempt: the check refused
+an Edit of this same memory file on 2026-09-28. The karaoke session queued a feedback draft.
+
+**E2: file-history had the file.** Claude Code backed up the full original (6283 bytes) to
+`~/.claude/file-history/4c9dfc5e…/7d1be6026214695c@v1` at 23:29:41.324Z, milliseconds before the
+Write, and logged it in the transcript as a `file-history-delta` with its `trackingPath`. The
+Write's own result also carries the old content as `toolUseResult.originalFile`. So the restore
+was one `cp` away, and the paths outside the working directory are covered too. What it misses:
+Bash writes, and anything older than the transcript's retention (about 30 days). Whether
+`/rewind` restores such a file is unchecked; nothing depends on it now.
+
+**E3: hooks run outside the Bash sandbox.** A Stop hook writes `~/.local/state/dotclaude/ring.log`,
+which the sandbox's write list lacks.
+
+**What was built** (Hayden's calls):
+- **A, cut down.** `hooks/overwrite-guard.sh` denies a Write over an unread file (read-proof, from
+  the session's transcript) or a drastic shrink. There is no snapshot store, since file-history
+  already is one.
+  - A successful Bash command naming the file's path counts as proof: absolute, `~/`, or relative
+    to the cwd it ran in, as a whole shell token. A bare basename matched too much: one session's
+    `grep … README.md` in another repo proved `~/dotclaude/README.md`. Replayed over the 292 real
+    Write-over-existing-file calls in the transcripts, read-proof would have denied 16 (34 without
+    the Bash rule). The incident is denied either way.
+  - Shrink would also have denied one deliberate rewrite after a Read (8.6 KB to 1.3 KB).
+- **B, on SessionStart and Stop only.** `hooks/memory-git.sh`. No PostToolUse trigger, since
+  file-history covers tool writes in between.
+- **C**, as worded above, in global `CLAUDE.md`.
+- **D, made cheap by E2.** `bin/claude-file-history <path>` lists and restores the backups. On the
+  incident's file it lists 18 versions across 4 sessions in about 5 seconds.

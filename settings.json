@@ -128,6 +128,7 @@
         "~/dotclaude/tools.json",
         "~/dotclaude/tmux",
         "~/dotclaude/setup-tmux.sh",
+        "~/dotclaude/bin",
         "~/.claude/settings.json",
         "~/.claude/hooks",
         "~/.claude/skills",
@@ -191,6 +192,16 @@
         ]
       },
       {
+        "matcher": "Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$HOME/.claude/hooks/overwrite-guard.sh\"",
+            "timeout": 5
+          }
+        ]
+      },
+      {
         "hooks": [
           {
             "type": "command",
@@ -238,6 +249,15 @@
           {
             "type": "command",
             "command": "bash \"$HOME/.claude/hooks/session-registry.sh\"",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$HOME/.claude/hooks/memory-git.sh\"",
             "timeout": 5
           }
         ]
@@ -334,6 +354,15 @@
           {
             "type": "command",
             "command": "bash \"$HOME/.claude/hooks/watch-guard.sh\"",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$HOME/.claude/hooks/memory-git.sh\"",
             "timeout": 5
           }
         ]
