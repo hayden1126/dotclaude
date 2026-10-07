@@ -327,12 +327,18 @@ need nothing extra.
   `dangerouslyDisableSandbox` only (the settings command skips Python for every other call).
   Inside the sandbox a delete reaches only the working directory and `$TMPDIR`; outside it reaches
   everything, and `$TMPDIR` is plain `/tmp`, which once aimed an `rm -rf "$TMPDIR"/...` at shared
-  `/tmp`. The guard denies a delete (`rm`, `rmdir`, `shred`, `unlink`, `find -delete`) when a
-  path uses a variable the command didn't set before it (other than `HOME`, `USER`, `PWD`), uses
-  a command substitution, or is a top-level or home tree (`/`, `/tmp/*`, `~`, `~/.claude`,
-  `~/code`, ...). Replayed over a month of transcripts (4341 sandbox-off calls), it would have
-  denied 2, both that `$TMPDIR` slip. Normal `rm` never asks. Not covered: `xargs rm` and a
-  delete inside `bash -c`, `eval` or a script. Fails open; denies go to
+  `/tmp`. The guard denies a delete (`rm`, `rmdir`, `shred`, `unlink`, `find -delete` or
+  `-exec rm`) when a path:
+  - uses a variable the command didn't set before it (other than `HOME` and `USER`), a
+    positional parameter nothing set, or a variable built from one (`D="$TMPDIR/x"`);
+  - uses an operator expansion (`${X:-/tmp}`), or a command substitution that would widen the
+    path if it came back empty (`"$(mktemp -d)"/*` becomes `/*`; a lone `"$dir"` is fine);
+  - is a top-level or home tree, or a glob directly inside one (`/`, `/tmp/*`, `~`, `~/.*`,
+    `~/.claude`, `~/code`, ...).
+
+  Replayed over a month of transcripts (4346 sandbox-off calls), it would have denied 6, every one
+  a path built from `$TMPDIR` where it was `/tmp`. Normal `rm` never asks. Not covered:
+  `xargs rm` and a delete inside `bash -c`, `eval` or a script. Fails open; denies go to
   `$XDG_STATE_HOME/dotclaude/delete-guard.log`.
 - **SessionStart / Stop: `memory-git.sh`** (in this repo). Commits every project's auto-memory
   (`~/.claude/projects/*/memory/`) to a local-only git repo at
