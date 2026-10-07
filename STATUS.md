@@ -50,6 +50,10 @@ stored here).
   session ran the once-denied `gh pr checks --watch` on 2026-10-07). The live `autoMode` block was
   rewritten by hand the same day ([[cc-auto-mode-config-facts]]).
 
+- **Dead `git push * :*` ask rule removed** (`fix/push-colon-rule`; installed from its branch, and a
+  fresh session started with no warning on 2026-10-07). Why, the probes and the accepted leak:
+  [[dotclaude-danger-guard-retired]]. The test now rejects any `:*`.
+
 ## In flight
 - **`deck-production`: deferred (Hayden, 2026-10-05: workflow improvements first).** The geometry
   gate is merged (#68): behavior in SKILL.md "The geometry gate", design in git history (`PLAN.md`
@@ -100,7 +104,8 @@ stored here).
 
 ## Notes for next session
 - **Next: Hayden picks the next workflow improvement**; deck-production S2 is deferred. First real
-  check of #70: the next reboot (see Done). Recent work: PRs #67 to #76, #78 (#77 folded in) and #79.
+  check of #70: the next reboot (see Done). Recent work: PRs #67 to #76, #78 (#77 folded in), #79 and
+  `fix/push-colon-rule` (`gh pr list --head fix/push-colon-rule` for its number).
 - **Verify the overwrite guard before touching it:** `python3 -m unittest discover -s tests/setup
   -t tests/setup` (`test_overwrite_guard.py`, `test_memory_git.py`, `test_claude_file_history.py`),
   then replay real history the way the brief's Results describes (a would-be deny rate near 17 in

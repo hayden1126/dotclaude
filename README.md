@@ -62,15 +62,17 @@ in auto mode too. Denied: force-push, `reset --hard`, `reset --merge` and `git c
 through `git -C`, plus a `bash -c` whose text has `git push` then `--force`, or `git reset` then
 `--hard`. Asked: a push whose text has `main`, `HEAD`, `@`, `--all` or `--mirror`, one that names
 no branch (`git push`, `git push origin`), one starting with a flag (`git push -u ...`,
-`git push origin --no-verify`), a remote delete (`origin :branch`), a `+` force the deny rules
-miss, any `git -C <dir> push`, and merges (`gh pr merge`, `gh api ...merge`). Allowed without a
-prompt: `git push origin <branch>` and `gh pr create`; CLAUDE.md still has Claude ask in words
-first. Also allowed, because the classifier once refused a CI watch with no reason given: the
-read-only `gh pr checks`, `view`, `list`, `status` and `diff`, and `gh run list`, `view` and
-`watch`. A rule can't see the current branch, which is why every form that could land on `main`
-without naming it asks. Not checked (accepted): flags after the branch and remotes other than
-`origin`. Everything else goes to auto mode's classifier: other wrappers (any other
-`bash -c`, such as one running `push -f`, and `bash -lc`, `sh -c`, `eval`), git global options
+`git push origin --no-verify`), a `+` force the deny rules miss, any `git -C <dir> push`, and
+merges (`gh pr merge`, `gh api ...merge`). Allowed without a prompt: `git push origin <branch>`
+and `gh pr create`; CLAUDE.md still has Claude ask in words first. Also allowed, because the
+classifier once refused a CI watch with no reason given: the read-only `gh pr checks`, `view`,
+`list`, `status` and `diff`, and `gh run list`, `view` and `watch`. A rule can't see the current
+branch, which is why every form that could land on `main` without naming it asks. Not checked
+(accepted): flags after the branch, remotes other than `origin`, and deleting a branch other than
+`main` with `origin :branch` (no rule can match ` :` without a `:*`, which Claude Code reads as
+its legacy prefix form or warns about at every start). Everything else goes to auto mode's
+classifier: other wrappers (any other `bash -c`, such as one running `push -f`, and `bash -lc`,
+`sh -c`, `eval`), git global options
 other than `-C` (`-c k=v`, `--git-dir`, `--no-pager`), soft, mixed and `--keep` resets, and
 `checkout`, `switch`, `restore` and `revert`. Why rules at all: on 2.1.288, auto mode ran a
 force-push and a `reset --hard` on a dirty tree when the prompt named them.
