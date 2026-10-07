@@ -39,10 +39,10 @@ stored here).
   for denies that were really reads (the replay predicts about 6% of overwrites). The Write tool's
   own check is gone since 2.1.286; if Anthropic restores it, read-proof becomes redundant but
   harmless.
-- **Delete guard for sandbox-off commands** (branch `feat/delete-guard`; installed from the branch
-  and smoke-tested on HAYPC 2026-10-06: a fresh session's sandbox-off `rm -rf "$TMPDIR"/...` was
+- **Delete guard for sandbox-off commands** (PR #78; installed from its branch and smoke-tested on
+  HAYPC 2026-10-06: a fresh session's sandbox-off `rm -rf "$TMPDIR"/...` was
   denied before it ran). Rules and accepted limits: `hooks/delete_guard.py`'s docstring.
-  Replayed over 4368 sandbox-off calls it denies 6, all real. **Watch:** `delete-guard.log` for a
+  Its replay numbers are in that docstring. **Watch:** `delete-guard.log` for a
   deny of a safe command. Same PR: the finish-before-merge rule (CLAUDE.md Boundaries, handoff
   step 5).
 
@@ -97,7 +97,7 @@ stored here).
 
 ## Notes for next session
 - **Next: Hayden picks the next workflow improvement**; deck-production S2 is deferred. First real
-  check of #70: the next reboot (see Done). Recent work: PRs #67 to #76, then the delete guard.
+  check of #70: the next reboot (see Done). Recent work: PRs #67 to #76 and #78 (#77 folded into #78).
 - **Verify the overwrite guard before touching it:** `python3 -m unittest discover -s tests/setup
   -t tests/setup` (`test_overwrite_guard.py`, `test_memory_git.py`, `test_claude_file_history.py`),
   then replay real history the way the brief's Results describes (a would-be deny rate near 17 in
