@@ -120,6 +120,7 @@ sees it.
 | `hooks/session-registry.sh` | SessionStart/SessionEnd hook: records which session is open in which tmux tab (`$XDG_STATE_HOME/dotclaude/open-sessions/`), for `claude-restore`; deletes the entry on `/exit` or `/clear`, marks it when the window or claude is killed; does nothing outside tmux | symlink `~/.claude/hooks/session-registry.sh` |
 | `hooks/session-summary.sh` | Stop hook: regenerates a 1-2 sentence session summary via a direct Haiku Messages-API call (Claude subscription OAuth token, stdlib urllib, no API key/jq), detached so it never blocks; caches the summary to `<config-dir>/session-summaries/<session_id>.txt` for the status-line widget and a short (`<=32`-char) tab label to `<session_id>.title.txt` for `session-title.sh` | symlink `~/.claude/hooks/session-summary.sh` |
 | `hooks/overwrite-guard.sh` | PreToolUse(Write) hook: denies a Write over a file this session hasn't read, or one that cuts a file of 1 KB or more to under a fifth; a shim over `hooks/overwrite_guard.py`; fails open | symlink `~/.claude/hooks/overwrite-guard.sh` and `overwrite_guard.py` |
+| `hooks/delete-guard.sh` | PreToolUse(Bash) hook, sandbox-off commands only: denies a delete whose path uses a variable the command didn't set, a command substitution, or a top-level or home tree; a shim over `hooks/delete_guard.py`; fails open | symlink `~/.claude/hooks/delete-guard.sh` and `delete_guard.py` |
 | `hooks/memory-git.sh` | SessionStart/Stop hook: commits every project's auto-memory to a local-only git repo (`$XDG_STATE_HOME/dotclaude/memory.git`); never blocks | symlink `~/.claude/hooks/memory-git.sh` |
 | `bin/claude-file-history` | Lists and restores Claude Code's own backups of a file (`~/.claude/file-history`), found through the transcripts | symlink `~/.local/bin/claude-file-history` when that dir exists |
 | `templates/` | `SPEC.md`, `PLAN.md`, `STATUS.md` scaffolds for full-lane work that survive `/clear` | symlink per file into `~/.claude/templates/` |
@@ -136,7 +137,7 @@ sees it.
 | `docs/prose-is-not-a-permission.md` | Blog post on the delegation work: why a prompt can't limit an agent's authority, and the layers that can | reference |
 | `docs/images/` | The post's diagram: `delegation-layers.svg` (source) and `delegation-layers.png` (2x render) | reference |
 | `tests/delegation/` | Unit tests for the delegation pieces (no model calls) and `run.py`, a live harness that spends model calls | run from the repo root |
-| `tests/setup/` | Unit tests for `merge-settings.py`, `git/install-ignore.py`, and the prompt and session hooks (`handoff_reminder.py`, `session-title.sh`, `session-summary.sh`), the tmux and sound hooks (`test_tmux_hooks.py`), `tmux/tmux-claude-status` (`test_tmux_claude_status.py`), the restore after tmux dies (`test_session_registry.py`, `test_claude_restore.py`), `setup-tmux.sh`, the overwrite guard, `memory-git.sh` and `claude-file-history`; `replay_history.py` is a local-only replay tool, not a unit test | `python3 -m unittest discover -s tests/setup -t tests/setup` |
+| `tests/setup/` | Unit tests for `merge-settings.py`, `git/install-ignore.py`, and the prompt and session hooks (`handoff_reminder.py`, `session-title.sh`, `session-summary.sh`), the tmux and sound hooks (`test_tmux_hooks.py`), `tmux/tmux-claude-status` (`test_tmux_claude_status.py`), the restore after tmux dies (`test_session_registry.py`, `test_claude_restore.py`), `setup-tmux.sh`, the overwrite and delete guards, `memory-git.sh` and `claude-file-history`; `replay_history.py` is a local-only replay tool, not a unit test | `python3 -m unittest discover -s tests/setup -t tests/setup` |
 | `tests/deck_production/` | Unit tests for `deck-production`'s `deckkit geometry` gate (rule matrix on canned probe output, plus an end-to-end run over the synthetic `fixtures/geodeck` that skips without a headless Chrome) `deckkit regress`'s geometry facts, and `deckkit doctor`'s exit codes | `python3 -m unittest discover -s tests/deck_production -t tests/deck_production` |
 | `docs/blind-overwrite-brief.md` | Why the overwrite guard and `memory-git.sh` exist: two incidents (a blind overwrite of a memory file, a job's state inferred instead of read), the experiments and the design calls | reference |
 | `docs/chrome-devtools-wsl.md` | WSL2-only: how to make `chrome-devtools-mcp` work (Strategy A headless Linux Chrome, plus B to attach to your Windows Chrome) | reference |
@@ -322,6 +323,17 @@ need nothing extra.
   (16 read-proof, 1 shrink), the incident among them. Each deny costs one Read. Fails open: an
   error allows the Write, and a transcript it can't find skips read-proof (shrink still applies).
   Errors and denies are logged to `$XDG_STATE_HOME/dotclaude/overwrite-guard.log`.
+- **PreToolUse(`Bash`): `delete-guard.sh`** (in this repo), for commands run with
+  `dangerouslyDisableSandbox` only (the settings command skips Python for every other call).
+  Inside the sandbox a delete reaches only the working directory and `$TMPDIR`; outside it reaches
+  everything, and `$TMPDIR` is plain `/tmp`, which once aimed an `rm -rf "$TMPDIR"/...` at shared
+  `/tmp`. The guard denies a delete (`rm`, `rmdir`, `shred`, `unlink`, `find -delete`) when a
+  path uses a variable the command didn't set before it (other than `HOME`, `USER`, `PWD`), uses
+  a command substitution, or is a top-level or home tree (`/`, `/tmp/*`, `~`, `~/.claude`,
+  `~/code`, ...). Replayed over a month of transcripts (4341 sandbox-off calls), it would have
+  denied 2, both that `$TMPDIR` slip. Normal `rm` never asks. Not covered: `xargs rm` and a
+  delete inside `bash -c`, `eval` or a script. Fails open; denies go to
+  `$XDG_STATE_HOME/dotclaude/delete-guard.log`.
 - **SessionStart / Stop: `memory-git.sh`** (in this repo). Commits every project's auto-memory
   (`~/.claude/projects/*/memory/`) to a local-only git repo at
   `$XDG_STATE_HOME/dotclaude/memory.git`, so a memory file broken by any means, a Bash heredoc

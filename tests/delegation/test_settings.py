@@ -179,6 +179,16 @@ class Baseline(unittest.TestCase):
         self.assertLessEqual(entry["hooks"][0]["timeout"], 5)
         self.assertTrue(os.access(os.path.join(REPO, "hooks", "overwrite-guard.sh"), os.X_OK))
 
+    def test_the_delete_guard_runs_on_sandbox_off_bash_only_and_fails_open(self):
+        # Every Bash call passes the matcher; the prefilter keeps Python off the sandboxed ones,
+        # which can only reach the cwd and $TMPDIR. The guard denies by JSON, never by exit code.
+        (cmd,) = commands("PreToolUse", "Bash")
+        self.assertIn("""*'"dangerouslyDisableSandbox":true'*""", cmd)
+        self.assertIn("""*'"dangerouslyDisableSandbox": true'*""", cmd)
+        self.assertIn('bash "$HOME/.claude/hooks/delete-guard.sh"', cmd)
+        self.assertNotIn("exit 2", cmd)
+        self.assertTrue(os.access(os.path.join(REPO, "hooks", "delete-guard.sh"), os.X_OK))
+
     def test_memory_is_committed_at_session_start_and_stop(self):
         # Every SessionStart source (a /clear too) and every Stop: Bash edits to memory are
         # caught within a turn. Never blocks.
