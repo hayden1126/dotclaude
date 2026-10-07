@@ -120,7 +120,7 @@ sees it.
 | `hooks/session-registry.sh` | SessionStart/SessionEnd hook: records which session is open in which tmux tab (`$XDG_STATE_HOME/dotclaude/open-sessions/`), for `claude-restore`; deletes the entry on `/exit` or `/clear`, marks it when the window or claude is killed; does nothing outside tmux | symlink `~/.claude/hooks/session-registry.sh` |
 | `hooks/session-summary.sh` | Stop hook: regenerates a 1-2 sentence session summary via a direct Haiku Messages-API call (Claude subscription OAuth token, stdlib urllib, no API key/jq), detached so it never blocks; caches the summary to `<config-dir>/session-summaries/<session_id>.txt` for the status-line widget and a short (`<=32`-char) tab label to `<session_id>.title.txt` for `session-title.sh` | symlink `~/.claude/hooks/session-summary.sh` |
 | `hooks/overwrite-guard.sh` | PreToolUse(Write) hook: denies a Write over a file this session hasn't read, or one that cuts a file of 1 KB or more to under a fifth; a shim over `hooks/overwrite_guard.py`; fails open | symlink `~/.claude/hooks/overwrite-guard.sh` and `overwrite_guard.py` |
-| `hooks/delete-guard.sh` | PreToolUse(Bash) hook, sandbox-off commands only: denies a delete whose path uses a variable the command didn't set, a command substitution, or a top-level or home tree; a shim over `hooks/delete_guard.py`; fails open | symlink `~/.claude/hooks/delete-guard.sh` and `delete_guard.py` |
+| `hooks/delete-guard.sh` | PreToolUse(Bash) hook, sandbox-off commands only: denies a delete whose path uses a variable the command didn't set, a command substitution that would widen it if empty, or a top-level or home tree; a shim over `hooks/delete_guard.py`; fails open | symlink `~/.claude/hooks/delete-guard.sh` and `delete_guard.py` |
 | `hooks/memory-git.sh` | SessionStart/Stop hook: commits every project's auto-memory to a local-only git repo (`$XDG_STATE_HOME/dotclaude/memory.git`); never blocks | symlink `~/.claude/hooks/memory-git.sh` |
 | `bin/claude-file-history` | Lists and restores Claude Code's own backups of a file (`~/.claude/file-history`), found through the transcripts | symlink `~/.local/bin/claude-file-history` when that dir exists |
 | `templates/` | `SPEC.md`, `PLAN.md`, `STATUS.md` scaffolds for full-lane work that survive `/clear` | symlink per file into `~/.claude/templates/` |
@@ -334,11 +334,14 @@ need nothing extra.
   - uses an operator expansion (`${X:-/tmp}`), or a command substitution that would widen the
     path if it came back empty (`"$(mktemp -d)"/*` becomes `/*`; a lone `"$dir"` is fine);
   - is a top-level or home tree, or a glob directly inside one (`/`, `/tmp/*`, `~`, `~/.*`,
-    `~/.claude`, `~/code`, ...).
+    `~/{code,vault}`, `~/.claude`, ...), following the command's own values, `for` loops and
+    `set --`;
+  - is relative, after a `cd` into an untrusted path or a top-level tree (`cd "$TMPDIR" && rm -rf ./*`).
 
-  Replayed over a month of transcripts (4346 sandbox-off calls), it would have denied 6, every one
+  Replayed over a month of transcripts (4367 sandbox-off calls), it would have denied 6, every one
   a path built from `$TMPDIR` where it was `/tmp`. Normal `rm` never asks. Not covered:
-  `xargs rm` and a delete inside `bash -c`, `eval` or a script. Fails open; denies go to
+  `xargs rm`, a delete inside `bash -c`, `eval`, a function or a script, and a glob two levels
+  down (`~/*/*`). Fails open; denies go to
   `$XDG_STATE_HOME/dotclaude/delete-guard.log`.
 - **SessionStart / Stop: `memory-git.sh`** (in this repo). Commits every project's auto-memory
   (`~/.claude/projects/*/memory/`) to a local-only git repo at

@@ -1,8 +1,10 @@
 """hooks/delete-guard.sh: deletes in sandbox-off Bash commands (stdlib only).
 
 For a command run with dangerouslyDisableSandbox, a delete (rm, rmdir, shred, unlink, find
--delete) is denied when a path uses a variable the command didn't set, a command substitution, or
-a top-level or home tree. A sandboxed command and every non-delete pass untouched. The first case
+-delete) is denied when a path uses a variable the command didn't set (or one built from such), a
+command substitution that would widen the path if it came back empty, a top-level or home tree,
+or a relative path after a cd into one of those. A sandboxed command and every non-delete pass
+untouched; delete_guard.py's docstring has the full rules. The first case
 is the slip that prompted it: `rm -rf "$TMPDIR"/...` outside the sandbox, where $TMPDIR is /tmp."""
 import json
 import os
@@ -92,10 +94,38 @@ class DeleteGuard(unittest.TestCase):
                         "find $Q -exec /bin/rm {} \\;", "find $Q -execdir rm {} +"):
             with self.subTest(command=command):
                 self.assertTrue(self.denied(command))
+        # Each layout must parse, not fail open: a safe delete passes, and an unsafe one on the
+        # next line is still caught.
         for command in ("echo $((1<<3)); rm -rf /tmp/claude-1000/x",
+                        "(( y = 1<<3 )); rm -rf /tmp/claude-1000/x",
                         "cat <<< \"$X\"; rm -f /tmp/claude-1000/y",
                         "echo \"# not a comment $X\"; rm -f /tmp/claude-1000/z",
-                        "x=$(gh run list --jq '.[] | \"\\(.status)\"'); rm -f /tmp/claude-1000/w"):
+                        "x=$(gh run list --jq '.[] | \"\\(.status)\"'); rm -f /tmp/claude-1000/w",
+                        "python3 -c 'print(1<<n)'; rm -f /tmp/claude-1000/v",
+                        "printf $'it\\'s\\n'; rm -f /tmp/claude-1000/u; echo don\\'t",
+                        "x=$(ls # don't\n); rm -f /tmp/claude-1000/t",
+                        "cat <<'EOF' > f\nrm -rf $NOPE\nEOF\nrm -f /tmp/claude-1000/s",
+                        # A PR body: a heredoc with apostrophes inside "$(...)".
+                        "gh pr create --body \"$(cat <<'EOF'\nthe payload's type\nEOF\n)\"; "
+                        "rm -f /tmp/claude-1000/r"):
+            with self.subTest(command=command):
+                self.assertFalse(self.denied(command))
+                self.assertTrue(self.denied(command + "\nrm -rf \"$TMPDIR\"/x"))
+
+    def test_values_are_followed_through_loops_braces_cd_and_reassignment(self):
+        for command in ("for d in ~/*; do rm -rf \"$d\"; done", "set -- ~; rm -rf \"$1\"",
+                        "rm -rf ~/{code,vault}", "rm -rf /{tmp,var}",
+                        "set -- $(cmd); job=$1; rm -rf \"$job\"/*",
+                        "rm -rf \"$HOME/$(cat name)\"", "d=$(mktemp -d); rm -rf \"$HOME/$d\"",
+                        "R=~/code; d=$(cmd); rm -rf \"$R/$d\"", "HOME=$TMPDIR; rm -rf $HOME/x",
+                        "cd \"$TMPDIR\" && rm -rf ./*", "cd && rm -rf *", "find -L $Q -delete",
+                        "rm -rf \"\" \"$TMPDIR\"/x", "sudo nice rm -rf $Q"):
+            with self.subTest(command=command):
+                self.assertTrue(self.denied(command))
+        for command in ("sudo git rm -r --cached $X",                 # git rm, not rm
+                        "p=/tmp/claude-1000/run; rm -rf \"$p$(date +%s)\"",
+                        "X=/a; rm -f \"$X$((1))\"", "set -- $(cmd); rm -rf \"$1\"",
+                        "cd /tmp/claude-1000/x && rm -rf ./*"):
             with self.subTest(command=command):
                 self.assertFalse(self.denied(command))
 
@@ -126,10 +156,13 @@ class DeleteGuard(unittest.TestCase):
                 self.assertFalse(self.denied(command))
 
     def test_the_settings_prefilter_passes_both_payload_spacings_and_nothing_else(self):
-        # Run the real settings.json command with a HOME whose hooks dir links to this repo's.
+        # Run the real settings.json command against a stand-in hook that only reports it ran, so
+        # the test sees the prefilter's choice itself, not the guard's verdict.
         home = os.path.join(self.tmp, "home")
-        os.makedirs(os.path.join(home, ".claude"))
-        os.symlink(os.path.join(REPO, "hooks"), os.path.join(home, ".claude", "hooks"))
+        hooks = os.path.join(home, ".claude", "hooks")
+        os.makedirs(hooks)
+        with open(os.path.join(hooks, "delete-guard.sh"), "w") as f:
+            f.write("cat >/dev/null; echo RAN\n")
         with open(os.path.join(REPO, "settings.json")) as f:
             (cmd,) = [h["command"] for e in json.load(f)["hooks"]["PreToolUse"]
                       if e.get("matcher") == "Bash" for h in e["hooks"]]
@@ -137,17 +170,18 @@ class DeleteGuard(unittest.TestCase):
         event = {"tool_name": "Bash", "tool_input": {"command": 'rm -rf "$TMPDIR"/x',
                                                      "dangerouslyDisableSandbox": True}}
         sandboxed = {"tool_name": "Bash", "tool_input": {"command": 'rm -rf "$TMPDIR"/x'}}
-        for payload, want in ((json.dumps(event, separators=(",", ":")), True),
-                              (json.dumps(event), True),
-                              (json.dumps(sandboxed), False),
-                              (json.dumps({"tool_name": "Bash", "tool_input": {
-                                  "command": 'echo \'"dangerouslyDisableSandbox":true\'; rm -rf $T'}}),
-                               False)):
+        quoted = {"tool_name": "Bash", "tool_input": {
+            "command": 'echo \'"dangerouslyDisableSandbox":true\'; rm -rf $T'}}
+        for payload, ran in ((json.dumps(event, separators=(",", ":")), True),
+                             (json.dumps(event), True),
+                             (json.dumps(sandboxed), False),
+                             (json.dumps(quoted), False),    # the text inside a command is escaped
+                             (json.dumps(quoted, separators=(",", ":")), False)):
             with self.subTest(payload=payload[:60]):
                 p = subprocess.run(["sh", "-c", cmd], input=payload, capture_output=True,
                                    text=True, env=env, timeout=10)
                 self.assertEqual(p.returncode, 0, p.stderr)
-                self.assertEqual('"deny"' in p.stdout, want, p.stdout)
+                self.assertEqual("RAN" in p.stdout, ran, p.stdout)
 
     def test_fails_open(self):
         self.assertIsNone(self.fire("x", raw="not json"))

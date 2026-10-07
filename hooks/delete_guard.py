@@ -4,30 +4,40 @@ Inside the sandbox a delete can only reach the working directory and $TMPDIR. A 
 dangerouslyDisableSandbox can reach everything, and its variables can mean something else:
 $TMPDIR is the sandbox's own directory only inside the sandbox, and plain /tmp outside it, so
 there `rm -rf "$TMPDIR"/x` aims at /tmp/x (2026-10-06). So, for a sandbox-off command only, a
-delete (rm, rmdir, shred, unlink, or find with -delete or -exec/-execdir rm) is denied when one
-of its paths
+delete (rm, rmdir, shred, unlink, or find with -delete or -exec/-execdir/-ok rm) is denied when
+one of its paths
 
   - uses a variable the command didn't set before the delete (`X=...`, `export X=`, `for X in`,
-    `read X`), a positional parameter ($1, $@), or a variable whose own value came from one
-    (`D="$TMPDIR/x"; rm -rf "$D"`). HOME and USER count as set: they are the same everywhere;
-  - uses a command substitution or a ${X...} expansion with an operator: either can come back
-    empty or other than it reads;
-  - is, after the command's own literal assignments and ~, a catastrophic target: /, a top-level
-    system directory, the home directory or one of its main trees (~/.claude, ~/code, ...), or a
-    glob directly inside one of those (`~/*`, `~/.*`, `/tmp/?*`).
+    `read X`, `set --` for $1 and $@), or one whose value was built from such a variable
+    (`D="$TMPDIR/x"`). HOME and USER count as set unless the command reassigns them;
+  - uses an operator expansion (`${X:-/tmp}`, `${X%/*}`), whose result can differ from how it
+    reads;
+  - would widen if a command substitution (or a variable holding one) came back empty: to a
+    directory (`"$HOME/$d"` becomes `$HOME/`), an absolute path (`"$d"/x` becomes `/x`), a bare
+    glob (`"$d"/*` becomes `/*`) or `.`/`..`. A lone `"$d"` only empties the argument, and
+    `"$d".txt` stays in the working directory, so both pass;
+  - is, after the command's own values, ~ and brace expansion, a catastrophic target: /, a
+    top-level system directory, the home directory or one of its main trees (~/.claude, ~/code,
+    ...), or a glob directly inside one (`~/*`, `~/.*`, `/tmp/?*`);
+  - is relative, after a `cd` into an untrusted path (`cd "$TMPDIR" && rm -rf ./*`) or into a
+    catastrophic target.
 
-Replayed over a month of transcripts (4346 sandbox-off Bash calls, 247 with a delete), it would
+Replayed over a month of transcripts (4367 sandbox-off Bash calls, 247 with a delete), it would
 have denied 6, all a path built from $TMPDIR (directly, through a variable, or `${TMPDIR:-/tmp}`)
-in a command where $TMPDIR was /tmp. A sandboxed command is never judged, and neither is any other
-command: normal rm runs without prompts. A pre-pass joins backslash-newline continuations, drops
-comments and replaces each $(...), `...` and $((...)) with a placeholder, outside single
-quotes; heredoc bodies are skipped. Not covered: `xargs rm` (its paths come from stdin), a delete
-inside `bash -c`, `eval` or a script, and quoting subtleties (a single-quoted `'$X'` is treated
-as a variable, which can only over-deny).
+in a command where $TMPDIR was /tmp. A sandboxed command is never judged, and neither is any
+other command: normal rm runs without prompts.
+
+How it reads a command: one quote-aware pre-pass joins backslash-newline continuations, drops `#`
+comments, skips heredoc bodies, and replaces each $(...), `...`, $((...)) and $'...' with a
+placeholder; then shlex splits the result into simple commands. Accepted limits (accidents, not
+an adversary, are the target): `xargs rm` (its paths come from stdin), a delete inside
+`bash -c`, `eval`, a function or a script, a single-quoted '$X' (read as a variable: it can only
+over-deny), and a glob two levels down (`~/*/*`).
 
 Fails open: an error or an unparsable command allows the call and is logged, as is every deny,
 to $XDG_STATE_HOME/dotclaude/delete-guard.log.
 """
+import itertools
 import json
 import os
 import re
@@ -41,12 +51,16 @@ KEYWORDS = {"do", "then", "else", "elif", "if", "while", "until", "!", "{", "tim
 WRAPPERS = {"sudo", "doas", "command", "nohup", "env", "builtin", "exec", "timeout", "nice",
             "ionice", "stdbuf", "chronic"}
 STABLE = {"HOME", "USER"}
-SUBST = "__SUBST__"
-TAINT = object()  # the value of a variable built from an unset one
-EMPTYABLE = object()  # the value of a lone command substitution, which can come back empty
+# Placeholders. They start with a character no variable name can hold, so `$p$(date)` stays two
+# parts; shlex keeps % inside a word.
+SUBST, ANSI, ARITH = "%SUBST%", "%ANSI%", "%ARITH%"
+TAINT = object()      # a value built from something untrusted
+EMPTYABLE = object()  # a lone command substitution, which can come back empty
+UNKNOWN = object()    # set by the command, value unknown (read, a for over a substitution)
 VAR = re.compile(r"\$(?:\{([^}]*)\}|([A-Za-z_][A-Za-z0-9_]*)|([0-9@*#?!-]))")
 ASSIGN = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)=(.*)$", re.S)
-HEREDOC = re.compile(r"(?<!<)<<-?(?!<)\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1")
+GLOB = re.compile(r"[*?\[]")
+MAX_CANDIDATES = 64
 
 
 def log(line):
@@ -60,76 +74,134 @@ def log(line):
         pass
 
 
-def strip_heredocs(command):
-    """Drop heredoc bodies: their text is data for another program, not shell words. A `<<`
-    inside $((...)) is a shift, and `<<<` a here-string, not a heredoc."""
-    out, lines, i = [], command.split("\n"), 0
-    while i < len(lines):
-        line = lines[i]
-        out.append(line)
-        ends = [m.group(2) for m in HEREDOC.finditer(line)
-                if line.count("$((", 0, m.start()) <= line.count("))", 0, m.start())]
-        i += 1
-        for end in ends:
-            while i < len(lines) and lines[i].strip() != end:
-                i += 1
-            i += 1
-    return "\n".join(out)
+# --- Reading the command ----------------------------------------------------------------------
 
-
-def closing(s, i, open_, close):
-    """Index just past the bracket that closes the one opened before i (nesting counted; a
-    bracket inside quotes, like jq's '"\\(.status)"', doesn't count)."""
-    depth, quote = 1, None
-    while i < len(s) and depth:
-        c = s[i]
-        if quote == "'":
-            quote = None if c == "'" else quote
-        elif c == "\\":
-            i += 1
-        elif c in "'\"" and quote in (None, c):
-            quote = None if quote else c
-        elif quote is None and c == open_:
-            depth += 1
-        elif quote is None and c == close:
-            depth -= 1
+def skip_quoted(s, i, quote, escapes=None):
+    """Index just past the quote that closes one opened before i. Backslash escapes count except
+    in single quotes; $'...' passes escapes=True, since there \\' is an escaped quote."""
+    escapes = quote != "'" if escapes is None else escapes
+    while i < len(s):
+        if s[i] == "\\" and escapes:
+            i += 2
+            continue
+        if s[i] == quote:
+            return i + 1
         i += 1
     return i
 
 
+def closing(s, i):
+    """Index just past the `)` that closes a `$(` opened before i: nested parentheses count,
+    while quotes, comments, escapes and heredoc bodies are skipped."""
+    depth, pending = 1, []
+    while i < len(s) and depth:
+        c = s[i]
+        if c == "\\":
+            i += 2
+            continue
+        if c in "'\"`":
+            i = skip_quoted(s, i + 1, c)
+            continue
+        if c == "#" and (s[i - 1] in " \t\n;&|("):
+            while i < len(s) and s[i] != "\n":
+                i += 1
+            continue
+        if s.startswith("<<<", i):
+            i += 3
+            continue
+        if s.startswith("<<", i):
+            m = HEREDOC.match(s, i)
+            if m:
+                pending.append(delimiter(m))
+                i = m.end()
+                continue
+        if c == "\n" and pending:
+            i = skip_bodies(s, i + 1, pending)
+            pending = []
+            continue
+        depth += c == "("
+        depth -= c == ")"
+        i += 1
+    return i
+
+
+def delimiter(m):
+    return next(g for g in m.groups()[1:] if g is not None)
+
+
+def skip_bodies(s, i, pending):
+    """Index just past the heredoc bodies that start at i, one per pending delimiter: each runs
+    to a line holding only its delimiter."""
+    for end in pending:
+        while i < len(s):
+            j = s.find("\n", i)
+            line, i = (s[i:], len(s)) if j == -1 else (s[i:j], j + 1)
+            if line.strip() == end:
+                break
+    return i
+
+
+HEREDOC = re.compile(r"<<(-?)\s*(?:'([^']*)'|\"([^\"]*)\"|\\?([A-Za-z_0-9.-]+))")
+
+
 def prepass(command):
-    """Join continuations, drop comments, and turn substitutions into one placeholder word,
-    tracking quotes so none of it happens inside single quotes."""
-    s, out, i, quote = strip_heredocs(command), [], 0, None
+    """The command with continuations joined, comments dropped, heredoc bodies skipped, and each
+    $(...), `...`, $((...)) and $'...' replaced by a placeholder, all outside single quotes."""
+    s, out, i, quote, pending = command, [], 0, None, []
     while i < len(s):
         c = s[i]
-        if quote != "'" and c == "\\":
+        if quote == "'":
+            quote = None if c == "'" else quote
+            out.append(c)
+            i += 1
+            continue
+        if c == "\\":
             if s[i + 1:i + 2] == "\n":
                 i += 2
                 continue
             out.append(s[i:i + 2])
             i += 2
             continue
-        if quote == "'":
-            quote = None if c == "'" else quote
-        elif c in "'\"" and (quote is None or quote == c):
-            quote = None if quote else c
+        if c == '"':
+            quote = None if quote == '"' else '"'
+        elif quote is None and c == "'":
+            quote = "'"
+        elif quote is None and s.startswith("$'", i):
+            i = skip_quoted(s, i + 2, "'", escapes=True)
+            out.append(ANSI)
+            continue
         elif quote is None and c == "#" and (i == 0 or s[i - 1] in " \t\n;&|("):
             while i < len(s) and s[i] != "\n":
                 i += 1
             continue
-        elif s.startswith("$((", i):
-            i = closing(s, i + 3, "(", ")")
-            i += s[i:i + 1] == ")"
-            out.append("0")
+        elif quote is None and s.startswith("<<<", i):  # a here-string, not a heredoc
+            out.append("<<<")
+            i += 3
             continue
-        elif s.startswith("$(", i):
-            i = closing(s, i + 2, "(", ")")
+        elif quote is None and s.startswith("<<", i):
+            line = "".join(out).rsplit("\n", 1)[-1]
+            m = None if line.count("((") > line.count("))") else HEREDOC.match(s, i)  # a shift
+            if m:
+                pending.append(delimiter(m))
+                out.append(" ")
+                i = m.end()
+                continue
+        elif quote is None and c == "\n" and pending:
+            out.append("\n")
+            i = skip_bodies(s, i + 1, pending)
+            pending = []
+            continue
+        if s.startswith("$((", i):
+            i = closing(s, i + 3)
+            i += s[i:i + 1] == ")"
+            out.append(ARITH)
+            continue
+        if s.startswith("$(", i):
+            i = closing(s, i + 2)
             out.append(SUBST)
             continue
-        elif c == "`":
-            j = s.find("`", i + 1)
-            i = len(s) if j == -1 else j + 1
+        if c == "`":
+            i = skip_quoted(s, i + 1, "`")
             out.append(SUBST)
             continue
         out.append(c)
@@ -145,7 +217,7 @@ def segments(command):
     lex.commenters = ""
     seg = []
     for tok in lex:
-        if tok == "\n" or set(tok) <= set(";&|()"):
+        if tok == "\n" or (tok and set(tok) <= set(";&|()")):
             if seg:
                 yield seg
             seg = []
@@ -155,78 +227,11 @@ def segments(command):
         yield seg
 
 
-def problem(text, assigned):
-    """Why text can't be trusted as a path in this command, or None.
-
-    A variable the command never set (or one built from such), a positional parameter nothing
-    set, and an operator expansion are untrusted outright. A command substitution, or a variable
-    holding one, may come back empty: alone that only empties the argument (`rm -rf ""` fails
-    harmlessly), but with more path after it, `"$dir"/*` becomes `/*`, so that is untrusted."""
-    empty = []
-    for brace, name, special in VAR.findall(text):
-        if special:
-            if special.isdigit() or special in "@*":
-                if "#positional" in assigned:
-                    if assigned["#positional"] is TAINT:
-                        return f"${special}, set from a variable this command doesn't set"
-                    empty.append(f"${special}")
-                    continue
-            return f"${special}, which this command doesn't set"
-        if brace:
-            if not re.fullmatch(r"[A-Za-z_]\w*", brace):
-                return f"${{{brace}}}, an expansion that can come back other than it reads"
-            name = brace
-        if name in STABLE:
-            continue
-        if name not in assigned:
-            hint = " (outside the sandbox $TMPDIR is plain /tmp)" if name == "TMPDIR" else ""
-            return f"${name}, which this command doesn't set{hint}"
-        if assigned[name] is TAINT:
-            return (f"${name}, whose value was built from an untrusted part (a variable this "
-                    "command doesn't set, or a substitution that can come back empty)")
-        if assigned[name] is EMPTYABLE:
-            empty.append(f"${name}")
-    empty += [SUBST] * text.count(SUBST)
-    if empty and widens(text, empty):
-        what = "a command substitution" if empty[0] == SUBST else f"{empty[0]}, set from one,"
-        return f"{what} that can come back empty, which turns this path into {residue(text, empty)!r}"
-    return None
-
-
-def residue(text, empty):
-    """The path as it reads if every emptyable part comes back empty."""
-    for ref in sorted(set(empty), key=len, reverse=True):
-        name = ref[1:]
-        text = text.replace(ref, "") if ref == SUBST else \
-            re.sub(r"\$(\{%s\}|%s(?![A-Za-z0-9_]))" % (re.escape(name), re.escape(name)), "", text)
-    return text
-
-
-def widens(text, empty):
-    """Whether an empty result would aim the delete somewhere broader: an absolute or home path,
-    a glob, or `.`/`..` (`"$dir"/*` becomes `/*`). A lone `"$dir"` becomes `""`, which rm
-    refuses, and `$dir.txt` becomes `.txt` in the working directory."""
-    rest = residue(text, empty)
-    if not rest:
-        return False
-    first = rest.split("/")[0]
-    return rest.startswith(("/", "~")) or first in (".", "..") or bool(re.search(r"[*?\[]", first))
-
-
-def value_of(text, assigned):
-    """What an assignment stores: TAINT if built from something untrusted, EMPTYABLE if it is a
-    lone substitution (or a lone variable holding one), else its text."""
-    if problem(text, assigned):
-        return TAINT
-    refs = [brace or name for brace, name, _ in VAR.findall(text)]
-    if SUBST in text or any(assigned.get(n) is EMPTYABLE for n in refs):
-        return EMPTYABLE
-    return text
-
-
 def command_words(words):
-    """(name, args) of the segment's command after assignments, keywords and wrappers, plus the
-    segment's prefix assignments; name is None for a pure assignment."""
+    """(name, args, prefix assignments) of a simple command; name is None for a pure assignment.
+    Through wrappers (`sudo -u x rm`, `timeout 60 rm`, `nice rm`), the wrapped command counts: an
+    option, an assignment and a count are skipped, and so is the word after an option unless it
+    names a deleter."""
     prefix, i = [], 0
     while i < len(words) and (ASSIGN.match(words[i]) or words[i] in KEYWORDS):
         if ASSIGN.match(words[i]):
@@ -234,83 +239,149 @@ def command_words(words):
         i += 1
     if i >= len(words):
         return None, [], prefix
-    if os.path.basename(words[i]) in WRAPPERS:
-        # A wrapper's own options and arguments vary; the deleter is the first later word.
-        for j in range(i + 1, len(words)):
-            if os.path.basename(words[j]) in DELETERS | {"find"}:
-                return os.path.basename(words[j]), words[j + 1:], prefix
-        return os.path.basename(words[i]), words[i + 1:], prefix
+    while os.path.basename(words[i]) in WRAPPERS:
+        j, after_option = i + 1, False
+        while j < len(words):
+            w, base = words[j], os.path.basename(words[j])
+            if w.startswith("-"):
+                after_option = True
+            elif ASSIGN.match(w) or w.isdigit():
+                after_option = False
+            elif after_option and base not in DELETERS | {"find"} | WRAPPERS:
+                after_option = False  # the option's own argument (`-u x`)
+            else:
+                break
+            j += 1
+        if j >= len(words):
+            break
+        i = j
     return os.path.basename(words[i]), words[i + 1:], prefix
 
 
-def judge(command):
-    """None to allow, or (reason, note) to deny."""
-    assigned = {}
-    for words in segments(command):
-        name, args, prefix = command_words(words)
-        if name is None:  # a pure assignment persists
-            for var, val in prefix:
-                assigned[var] = value_of(val, assigned)
-            continue
-        # A prefix assignment (`X=1 rm $X`) doesn't reach this command's own words.
-        if name in ("export", "local", "declare", "readonly", "typeset"):
-            for a in args:
-                m = ASSIGN.match(a)
-                if m:
-                    assigned[m.group(1)] = value_of(m.group(2), assigned)
-            continue
-        if name == "for" and args:
-            items = args[2:] if len(args) > 1 and args[1] == "in" else []
-            assigned[args[0]] = TAINT if any(problem(w, assigned) for w in items) else None
-            continue
-        if name == "set" and args and (args[0] == "--" or not args[0].startswith(("-", "+"))):
-            items = args[1:] if args[0] == "--" else args
-            assigned["#positional"] = TAINT if any(problem(w, assigned) for w in items) else None
-            continue
-        if name in ("read", "mapfile", "readarray"):
-            for a in args:
-                if re.fullmatch(r"[A-Za-z_]\w*", a):
-                    assigned[a] = None
-            continue
-        if name in DELETERS:
-            paths = [a for a in args if not a.startswith("-") or a == "-"]
-        elif name == "find" and deletes(args):
-            paths = []
-            for a in args:
-                if a.startswith(("-", "(", "!")):
-                    break
-                paths.append(a)
+# --- Judging values ---------------------------------------------------------------------------
+
+def refs(text):
+    """The variables text reads: (key, operator expansion?) per reference; $1, $@ map to #pos."""
+    out = []
+    for brace, name, special in VAR.findall(text):
+        if special:
+            out.append(("#pos" if special.isdigit() or special in "@*" else "$" + special, False))
+        elif brace:
+            plain = re.fullmatch(r"[A-Za-z_]\w*", brace)
+            out.append((brace if plain else re.match(r"[A-Za-z_]\w*|", brace).group(), not plain))
         else:
+            out.append((name, False))
+    return out
+
+
+def problem(text, state):
+    """Why text can't be trusted as a path, or None."""
+    vals = state["vars"]
+    empty = []
+    for key, operator in refs(text):
+        if operator:
+            return f"an expansion with an operator, ${{{key}...}}, whose result can differ from how it reads"
+        if key.startswith("$") and key not in ("$$",):
+            return f"{key}, which this command doesn't set"
+        if key in STABLE and key not in vals:
             continue
-        verdict = check(name, paths, assigned)
-        if verdict:
-            return verdict
+        if key not in vals:
+            if key == "#pos":
+                return "a positional parameter ($1, $@) this command doesn't set"
+            hint = " (outside the sandbox $TMPDIR is plain /tmp)" if key == "TMPDIR" else ""
+            return f"${key}, which this command doesn't set{hint}"
+        if vals[key] is TAINT:
+            return (f"${key if key != '#pos' else '1'}, whose value was built from an untrusted "
+                    "part (a variable this command doesn't set)")
+        if vals[key] is EMPTYABLE:
+            empty.append(key)
+    if (empty or SUBST in text) and widens(text, empty, state):
+        what = "a command substitution" if SUBST in text and not empty else \
+            f"${empty[0]}, which holds a command substitution,"
+        return f"{what} that can come back empty and widen this path to {residue(text, empty)!r}"
     return None
 
 
-def deletes(find_args):
-    for k, a in enumerate(find_args):
-        if a == "-delete":
-            return True
-        if a in ("-exec", "-execdir", "-ok", "-okdir") and k + 1 < len(find_args) \
-                and os.path.basename(find_args[k + 1]) in DELETERS:
+def residue(text, empty):
+    """The path as it reads if every emptyable part comes back empty."""
+    text = text.replace(SUBST, "")
+    for key in empty:
+        pat = r"\$(?:[0-9@*]|\{[0-9@*]\})" if key == "#pos" else \
+            r"\$(?:\{%s\}|%s(?![A-Za-z0-9_]))" % (re.escape(key), re.escape(key))
+        text = re.sub(pat, "", text)
+    return text
+
+
+def widens(text, empty, state):
+    rest = residue(text, empty)
+    if not rest:
+        return False  # the argument itself becomes empty, which rm refuses
+    starts_empty = text.startswith(SUBST) or (empty and re.match(r"\$\{?(%s)(?![A-Za-z0-9_])" % "|".join(
+        re.escape(k) if k != "#pos" else r"[0-9@*]" for k in empty), text))
+    for cand in candidates(rest, state) or [rest]:
+        first = cand.split("/")[0]
+        if (cand.endswith("/") or (starts_empty and cand.startswith(("/", "~")))
+                or first in (".", "..") or re.fullmatch(r"[*?.\[\]]*", os.path.basename(cand))
+                or is_catastrophic(cand)):
             return True
     return False
 
 
-def check(name, paths, assigned):
-    for p in paths:
-        why = problem(p, assigned)
-        if why:
-            return (f"delete-guard: this sandbox-off {name} deletes {p}, built from {why}. Spell "
-                    "out the absolute path, or run the delete sandboxed.",
-                    f"deny untrusted {name} {p}")
-        target = expand(p, assigned)
-        if target is not None and is_catastrophic(target):
-            return (f"delete-guard: this sandbox-off {name} would delete {p} ({target}), a "
-                    "top-level or home tree. Name the specific path inside it.",
-                    f"deny catastrophic {name} {target}")
-    return None
+def value_of(text, state):
+    """What an assignment stores: TAINT, EMPTYABLE, or the candidate values of its text."""
+    if problem(text, state):
+        return TAINT
+    keys = [k for k, _ in refs(text)]
+    if text == SUBST or (SUBST in text and not text.replace(SUBST, "")) or \
+            any(state["vars"].get(k) is EMPTYABLE for k in keys):
+        return EMPTYABLE
+    if SUBST in text or any(state["vars"].get(k) is UNKNOWN for k in keys):
+        return UNKNOWN
+    return tuple(candidates(text, state, expand_home=False)) or UNKNOWN
+
+
+def candidates(text, state, expand_home=True):
+    """Every value text can take with the command's known values, brace expansion and ~; empty
+    when some part is unknown."""
+    vals = state["vars"]
+    options = [text]
+    for _ in range(8):  # values can name other variables
+        nxt = []
+        for t in options:
+            m = VAR.search(t)
+            if not m:
+                nxt.append(t)
+                continue
+            brace, name, special = m.groups()
+            key = "#pos" if special and (special.isdigit() or special in "@*") else (brace or name)
+            if key in STABLE and key not in vals:
+                values = [os.environ.get(key, "")]
+            else:
+                v = vals.get(key)
+                if not isinstance(v, tuple):
+                    return []
+                values = list(v)
+                if special and special.isdigit() and special != "0":
+                    k = int(special) - 1
+                    values = [v[k]] if k < len(v) else [""]
+            nxt += [t[:m.start()] + x + t[m.end():] for x in values]
+        options = nxt[:MAX_CANDIDATES]
+    if any(VAR.search(t) for t in options):
+        return []
+    out = []
+    for t in options:
+        for b in braces(t):
+            out.append(os.path.expanduser(b) if expand_home else b)
+    return out[:MAX_CANDIDATES]
+
+
+def braces(text):
+    """Bash brace expansion of the simple comma form: `~/{code,vault}` -> two paths."""
+    m = re.search(r"\{([^{}]*,[^{}]*)\}", text)
+    if not m:
+        return [text]
+    return list(itertools.chain.from_iterable(
+        braces(text[:m.start()] + part + text[m.end():]) for part in m.group(1).split(",")))
 
 
 def catastrophic():
@@ -325,28 +396,126 @@ def catastrophic():
 
 def is_catastrophic(target):
     """A top-level or home tree itself, or a glob directly inside one (`~/*`, `~/.*`)."""
-    target = "/" + os.path.normpath(target).lstrip("/") if target.startswith("/") else \
-        os.path.normpath(target)
-    if re.search(r"[*?\[]", os.path.basename(target)):
+    target = os.path.expanduser(target)
+    if not target.startswith("/"):
+        return False
+    target = "/" + os.path.normpath(target).lstrip("/")
+    if GLOB.search(os.path.basename(target)):
         target = os.path.dirname(target) or "/"
     return target in catastrophic()
 
 
-def expand(p, assigned):
-    """The path with ~ and the command's literal assignments (or HOME, USER) filled in; None when
-    a value isn't known from the command text."""
-    values = dict({v: os.environ.get(v) for v in STABLE}, **assigned)
+# --- The walk ---------------------------------------------------------------------------------
 
-    def literal(m):
-        value = values.get(m.group(1) or m.group(2))
-        if not isinstance(value, str) or "$" in value or SUBST in value:
-            raise LookupError
-        return value
-    try:
-        p = re.sub(r"\$\{([A-Za-z_]\w*)\}|\$([A-Za-z_]\w*)", literal, p)
-    except LookupError:
-        return None
-    return os.path.expanduser(p)
+def judge(command):
+    """None to allow, or (reason, note) to deny."""
+    state = {"vars": {}, "cwd": None}  # cwd: None (unchanged), TAINT, or a known path
+    for words in segments(command):
+        name, args, prefix = command_words(words)
+        if name is None:  # a pure assignment persists; a prefix one doesn't reach its command
+            for var, val in prefix:
+                state["vars"][var] = value_of(val, state)
+            continue
+        vals = state["vars"]
+        if name in ("export", "local", "declare", "readonly", "typeset"):
+            for a in args:
+                m = ASSIGN.match(a)
+                if m:
+                    vals[m.group(1)] = value_of(m.group(2), state)
+            continue
+        if name == "for" and args:
+            items = args[2:] if len(args) > 1 and args[1] == "in" else []
+            vals[args[0]] = loop_value(items, state)
+            continue
+        if name == "set" and args and (args[0] == "--" or not args[0].startswith(("-", "+"))):
+            items = args[1:] if args[0] == "--" else args
+            vals["#pos"] = loop_value(items, state)
+            if vals["#pos"] is UNKNOWN and any(SUBST in w for w in items):
+                vals["#pos"] = EMPTYABLE  # `set -- $(cmd)` leaves $1 empty when cmd prints nothing
+            continue
+        if name in ("read", "mapfile", "readarray"):
+            for a in args:
+                if re.fullmatch(r"[A-Za-z_]\w*", a):
+                    vals[a] = UNKNOWN
+            continue
+        if name in ("cd", "pushd"):
+            target = next((a for a in args if not a.startswith("-")), "~")
+            if problem(target, state):
+                state["cwd"] = TAINT
+            else:
+                known = candidates(target, state)
+                state["cwd"] = known[0] if len(known) == 1 else None
+            continue
+        if name in DELETERS:
+            paths = [a for a in args if not a.startswith("-") or a == "-"]
+        elif name == "find" and deletes(args):
+            paths = find_roots(args)
+        else:
+            continue
+        verdict = check(name, paths, state)
+        if verdict:
+            return verdict
+    return None
+
+
+def loop_value(items, state):
+    """The value a for variable (or $1, $@ after set --) takes over items."""
+    if any(problem(w, state) for w in items):
+        return TAINT
+    values = []
+    for w in items:
+        c = candidates(w, state, expand_home=False)
+        if not c or SUBST in w:
+            return UNKNOWN
+        values += c
+    return tuple(values)
+
+
+def find_roots(args):
+    roots, k = [], 0
+    while k < len(args) and args[k] in ("-L", "-H", "-P", "-D", "-O") or \
+            (k < len(args) and re.fullmatch(r"-O\d", args[k])):
+        k += 2 if args[k] == "-D" else 1
+    for a in args[k:]:
+        if a.startswith(("-", "(", "!")):
+            break
+        roots.append(a)
+    return roots or ["."]
+
+
+def deletes(find_args):
+    for k, a in enumerate(find_args):
+        if a == "-delete":
+            return True
+        if a in ("-exec", "-execdir", "-ok", "-okdir") and k + 1 < len(find_args) \
+                and os.path.basename(find_args[k + 1]) in DELETERS:
+            return True
+    return False
+
+
+def check(name, paths, state):
+    for p in paths:
+        why = problem(p, state)
+        if why:
+            return (f"delete-guard: this sandbox-off {name} deletes {p}, built from {why}. Spell "
+                    "out the absolute path, or run the delete sandboxed.",
+                    f"deny untrusted {name} {p}")
+        for target in candidates(p, state):
+            if is_catastrophic(target):
+                return (f"delete-guard: this sandbox-off {name} would delete {p} ({target}), a "
+                        "top-level or home tree. Name the specific path inside it.",
+                        f"deny catastrophic {name} {target}")
+        if not p.startswith(("/", "~", "$")):
+            cwd = state["cwd"]
+            if cwd is TAINT:
+                return (f"delete-guard: this sandbox-off {name} deletes {p} relative to a cd into "
+                        "a path this command doesn't set. Spell out the absolute path.",
+                        f"deny untrusted-cwd {name} {p}")
+            if isinstance(cwd, str) and is_catastrophic(os.path.join(cwd, p)):
+                return (f"delete-guard: this sandbox-off {name} would delete {p} inside {cwd}, a "
+                        "top-level or home tree. Name the specific path inside it.",
+                        f"deny catastrophic {name} {os.path.join(cwd, p)}")
+    return None
 
 
 def main():
