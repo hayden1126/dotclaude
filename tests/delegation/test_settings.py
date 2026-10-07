@@ -241,11 +241,23 @@ class Baseline(unittest.TestCase):
                  "git -C . push", "git -C . push origin feat",
                  # A force the deny rules miss still asks.
                  "git push origin +feat", "git push -uf origin feat",
-                 "gh pr merge 5 --squash", "gh api -X PUT repos/o/r/pulls/5/merge"]
+                 "gh pr merge 5 --squash", "gh api -X PUT repos/o/r/pulls/5/merge",
+                 # --output writes a file, which the read-only git allows below must not cover.
+                 "git log --output=README.md", "git diff --output=x"]
         # Pushes to a named branch and opening a PR run (Hayden still approves each in words).
+        # Read-only git and pipe filters skip the classifier, which once refused a
+        # `git status -sb | head -1` as an unrequested commit. Each part of a pipe needs its
+        # own rule (live probe, 2.1.293), hence head, tail, wc and grep.
         allowed = ["git push origin feat/x", "git push origin feat-force-fix",
                    "git push origin fix/x --follow-tags", "gh pr create --base main --head feat/x",
-                   "git push origin :feat"]
+                   "git push origin :feat",
+                   "git status", "git status -sb", "git log", "git log --oneline -5",
+                   "git diff", "git diff HEAD", "git show", "git show HEAD:README.md",
+                   "git rev-parse HEAD", "head", "head -1", "tail -n 5", "wc -l", "grep -n x a"]
+        # No -C forms and no verb prefix: * spans spaces, so `git -C * log*` or `git diff*`
+        # would let a commit, a branch delete or difftool through.
+        not_allowed = ["git difftool", 'git -C . commit -m "log"', 'git commit -m "git status"',
+                       "git branch -D feat", "git -C . status", "git statusx"]
         # rm never asks: the sandbox bounds where it writes, and subagent-policy keeps a
         # delegated rm -r in its root (README has the overlay that brings the asks back).
         neither = ['git commit -am "push --force docs"', "git status",
@@ -262,6 +274,8 @@ class Baseline(unittest.TestCase):
         for c in allowed:
             self.assertFalse(matching("deny", c) + matching("ask", c), c)
             self.assertTrue(matching("allow", c), c)
+        for c in not_allowed:
+            self.assertFalse(matching("allow", c), c)
         for c in asked:  # ask beats allow, so an allow rule may cover these too
             self.assertTrue(matching("ask", c), c)
         # Every rule is the only one of its kind that catches some case, so dropping one fails.
