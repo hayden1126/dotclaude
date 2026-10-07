@@ -66,7 +66,10 @@ no branch (`git push`, `git push origin`), one starting with a flag (`git push -
 merges (`gh pr merge`, `gh api ...merge`). Allowed without a prompt: `git push origin <branch>`
 and `gh pr create`; CLAUDE.md still has Claude ask in words first. Also allowed, because the
 classifier once refused a CI watch with no reason given: the read-only `gh pr checks`, `view`,
-`list`, `status` and `diff`, and `gh run list`, `view` and `watch`. A rule can't see the current
+`list`, `status` and `diff`, and `gh run list`, `view` and `watch`. The same goes for read-only
+git (`status`, `log`, `diff`, `show`, `rev-parse`, refused once as an "unrequested commit") and
+the pipe filters `head`, `tail`, `wc` and `grep`, since every part of a pipe needs its own rule.
+`git ... --output` writes a file, so it asks. A rule can't see the current
 branch, which is why every form that could land on `main` without naming it asks. Not checked
 (accepted): flags after the branch, remotes other than `origin`, and deleting a branch other than
 `main` with `origin :branch` (no rule can match ` :` without a `:*`, which Claude Code reads as
