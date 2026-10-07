@@ -16,42 +16,33 @@ stored here).
   maps a background session to its tab. Ring decisions: `ring.log`.
 - **Sandbox gap fixes** (installed on HAYPC): code that runs outside the sandbox is `denyWrite`, tool
   tokens and shell history are `denyRead`. Findings: `~/scratch/sandbox-audit/FINDINGS.md` (private).
-- **Merged and live:** PRs #62 to #69 (watch guard, hook payload sweep, git permission rules, `rm`
-  never asks, tmux and sandbox fixes, the chrome-devtools 1.9.0 pin, the deck geometry gate, the
-  tmux wait and quiet-busy-stop fixes), delegation hardening Stage 3 (PRs #42 to #55). README and
-  `docs/delegation.md` hold the detail.
+- **Merged and live:** PRs #62 to #73 (watch guard, hook payload sweep, git permission
+  rules, `rm` never asks, tmux and sandbox fixes, the chrome-devtools 1.9.0 pin, the deck geometry
+  gate, the Stop ring's quiet-while-busy (#72) and 1 s settle for a queued restart (#73), push and
+  merge permissions (#71: `git push origin <branch>` and `gh pr create` run, anything that can
+  reach `main` asks)), delegation hardening Stage 3 (PRs #42 to #55). README and
+  `docs/delegation.md` hold the detail; lessons in [[cc-stop-hook-facts]].
 - Older: `git log` and the PRs back to #10. One stays here because git can't show it: client deck
   data left the tree in PR #28, and its history was deliberately left as-is (Hayden's call).
 - **Codex setup shared with a friend** (2026-09-29): private, ready to share at
   https://claude.ai/artifact/KWwrPkLsbMUi7Ugjfskqsz (republish by that URL).
 - **tmux tabs come back after their server dies** (PR #70, installed 2026-10-05; design in
   `PLAN.md`, behavior in README "Tabs come back after a reboot", decisions in
-  [[dotclaude-tmux-restore]]). Open tabs are recorded only once restarted or `/clear`ed after
-  install. **Untested for real:** Hayden's `wsl --shutdown`, then connect; `claude-restore --list`
-  before, `$XDG_STATE_HOME/dotclaude/restore.log` after. Accepted limits are in PR #70.
-- **Stop ring quiet-while-busy, fixed for real** (PR #72, 2026-10-05): #69 matched internal task
-  names, but `background_tasks[].type` is a friendly label (`shell`, `subagent`), so it never
-  fired. Merged and live on HAYPC; verified live (`quiet busy=1 tasks=shell`). Lesson in [[cc-stop-hook-facts]].
-- **Stop ring settles 1 s for a queued restart** (PR #73, merged and live 2026-10-06): a
-  task finishing during the final reply is queued and missing from `background_tasks`, so the Stop
-  rang; now it logs `quiet resumed=1` when a dequeue follows. Verified live (15:37:38).
-- **Green only for a real ask** (branch `fix/tmux-wait-matcher`, PR in review; install needs
-  `./setup.sh`, see Other machines): the wait hook matches `permission_prompt|elicitation_dialog`,
-  so an `idle_prompt` no longer paints ✳ on a session waiting on a background shell (karaoke,
-  2026-10-06). The cause is inferred (the idle notification), not proven; if a window goes green
+  [[dotclaude-tmux-restore]]). **Untested for real:** Hayden's `wsl --shutdown`, then connect;
+  `claude-restore --list` before, `$XDG_STATE_HOME/dotclaude/restore.log` after.
+- **Green only for a real ask** (PR #74, merged 2026-10-06; its `settings.json` matcher installs with
+  #75's `./setup.sh`, see In flight): the wait hook matches
+  `permission_prompt|elicitation_dialog`. The cause is inferred, not proven; if a window goes green
   again with no ask, log `notification_type` in `tmux-state.sh`.
-- **Push and merge permissions** (PR #71, installed 2026-10-05): `git push origin <branch>` and
-  `gh pr create` run; anything that can reach `main` and merges ask (README "permissions"
-  paragraph). Claude still asks in chat first (CLAUDE.md).
 
 ## In flight
-- **Overwrite guard and memory under git** (branch `feat/overwrite-guard`, not pushed; 2026-10-06).
+- **Overwrite guard and memory under git** (PR #75, merged 2026-10-07; not yet installed).
   `docs/blind-overwrite-brief.md` holds the incidents, and its "Results" section holds the
   experiments and Hayden's calls. Built: `hooks/overwrite-guard.sh` (PreToolUse Write: read-proof
   plus shrink), `hooks/memory-git.sh` (SessionStart/Stop), `bin/claude-file-history`, and a
   CLAUDE.md clause on job state. Tests pass (`tests/setup`, `tests/delegation`).
-  - **Next:** Hayden approves the push and PR. After the merge, copy `~/.claude/settings.json`, run
-    `./setup.sh` outside the sandbox, and diff.
+  - **Next:** `git fetch origin main:main` (sandbox-off), then copy `~/.claude/settings.json`, run
+    `./setup.sh` outside the sandbox (this also installs #74's matcher), and diff.
   - **Live smoke after install:** a fresh session's blind Write over a scratch file is denied, and
     `memory.git` has a commit after one Stop.
   - **Watch:** `overwrite-guard.log` for denies that were really reads (the replay predicts about 6%
@@ -101,10 +92,17 @@ stored here).
 - **Rescan the `rm` gap around 2026-11-04** (Hayden's call):
   `python3 -I ~/scratch/sandbox-audit/rm_scan.py 2026-11-04`. Sending the drafted
   `$CLAUDE_JOB_DIR/tmp` bug report is Hayden's call; `CLAUDE.md` carries the workaround.
+- **Two Write-tool bug drafts wait in `/feedback`** (Hayden's call to send): this session's has the
+  `claude -p` repro and the 2.1.285 boundary; the karaoke session's has the incident.
 
 ## Notes for next session
-- **Next: Hayden picks the next workflow improvement**; deck-production S2 is deferred. First
-  real check of #70: the next reboot (see Done). Recent work: PRs #67 to #73, then the wait-matcher fix. After it merges: copy `~/.claude/settings.json`, run `./setup.sh`, diff.
+- **Next: install #75 and smoke-test it** (In flight has the steps). Then Hayden picks the next
+  workflow improvement; deck-production S2 is deferred. First real check of #70: the next reboot
+  (see Done). Recent work: PRs #67 to #75.
+- **Verify the overwrite guard before touching it:** `python3 -m unittest discover -s tests/setup
+  -t tests/setup` (`test_overwrite_guard.py`, `test_memory_git.py`, `test_claude_file_history.py`),
+  then replay real history the way the brief's Results describes (a would-be deny rate near 17 in
+  292 overwrites; a big jump means the proof rules broke).
 - **Verify `deck-production` before touching it:** `deckkit regress` green (the config and goldens
   are in the private repo's `decks/_parity/`, README there has the command; the deck-production
   item says which branch) and
