@@ -50,9 +50,15 @@ stored here).
   session ran the once-denied `gh pr checks --watch` on 2026-10-07). The live `autoMode` block was
   rewritten by hand the same day ([[cc-auto-mode-config-facts]]).
 
-- **Dead `git push * :*` ask rule removed** (`fix/push-colon-rule`; installed from its branch, and a
-  fresh session started with no warning on 2026-10-07). Why, the probes and the accepted leak:
-  [[dotclaude-danger-guard-retired]]. The test now rejects any `:*`.
+- **Dead `git push * :*` ask rule removed** (PR #80; a fresh session started with no warning on
+  2026-10-07). Why, the probes and the accepted leak: [[dotclaude-danger-guard-retired]]. The test
+  now rejects any `:*`.
+
+- **Read-only git and pipe filters skip the classifier** (`fix/git-read-allow`; installed from its
+  branch, and a fresh auto-mode session ran the once-denied `git status -sb | head -1` by rule on
+  2026-10-07, while `git log --output=` asked). Each part of a pipe needs its own rule, hence
+  `head`, `tail`, `wc`, `grep`. Unproven: a `cd X && ...` prefix (the probe model dropped it).
+  The classifier refuses edits that add allow rules ("Self-Modification"): Hayden applies those.
 
 ## In flight
 - **`deck-production`: deferred (Hayden, 2026-10-05: workflow improvements first).** The geometry
@@ -104,8 +110,8 @@ stored here).
 
 ## Notes for next session
 - **Next: Hayden picks the next workflow improvement**; deck-production S2 is deferred. First real
-  check of #70: the next reboot (see Done). Recent work: PRs #67 to #76, #78 (#77 folded in), #79 and
-  `fix/push-colon-rule` (`gh pr list --head fix/push-colon-rule` for its number).
+  check of #70: the next reboot (see Done). Recent work: PRs #67 to #76, #78 (#77 folded in), #79, #80 and
+  `fix/git-read-allow` (`gh pr list --head fix/git-read-allow` for its number).
 - **Verify the overwrite guard before touching it:** `python3 -m unittest discover -s tests/setup
   -t tests/setup` (`test_overwrite_guard.py`, `test_memory_git.py`, `test_claude_file_history.py`),
   then replay real history the way the brief's Results describes (a would-be deny rate near 17 in
