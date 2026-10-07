@@ -39,6 +39,12 @@ stored here).
   for denies that were really reads (the replay predicts about 6% of overwrites). The Write tool's
   own check is gone since 2.1.286; if Anthropic restores it, read-proof becomes redundant but
   harmless.
+- **Delete guard for sandbox-off commands** (branch `feat/delete-guard`; installed from the branch
+  and smoke-tested on HAYPC 2026-10-06: a fresh session's sandbox-off `rm -rf "$TMPDIR"/...` was
+  denied before it ran). Rules and accepted limits: `hooks/delete_guard.py`'s docstring.
+  Replayed over 4368 sandbox-off calls it denies 6, all real. **Watch:** `delete-guard.log` for a
+  deny of a safe command. Same PR: the finish-before-merge rule (CLAUDE.md Boundaries, handoff
+  step 5).
 
 ## In flight
 - **`deck-production`: deferred (Hayden, 2026-10-05: workflow improvements first).** The geometry
@@ -82,15 +88,16 @@ stored here).
   contract: 3" are pre-fix rows from 2026-09-30, gone from its window on 2026-10-07.
 
 ## Blocked / decisions needed
-- **Rescan the `rm` gap around 2026-11-04** (Hayden's call):
+- **Rescan the `rm` gap around 2026-11-04** (Hayden's call; the delete guard covers only
+  sandbox-off deletes, so the sandboxed gap stands):
   `python3 -I ~/scratch/sandbox-audit/rm_scan.py 2026-11-04`. Sending the drafted
   `$CLAUDE_JOB_DIR/tmp` bug report is Hayden's call; `CLAUDE.md` carries the workaround.
 - **Two Write-tool bug drafts wait in `/feedback`** (Hayden's call to send): this session's has the
   `claude -p` repro and the 2.1.285 boundary; the karaoke session's has the incident.
 
 ## Notes for next session
-- **Next: Hayden picks the next workflow improvement**; deck-production S2 is deferred. First real check of #70: the next reboot
-  (see Done). Recent work: PRs #67 to #76.
+- **Next: Hayden picks the next workflow improvement**; deck-production S2 is deferred. First real
+  check of #70: the next reboot (see Done). Recent work: PRs #67 to #76, then the delete guard.
 - **Verify the overwrite guard before touching it:** `python3 -m unittest discover -s tests/setup
   -t tests/setup` (`test_overwrite_guard.py`, `test_memory_git.py`, `test_claude_file_history.py`),
   then replay real history the way the brief's Results describes (a would-be deny rate near 17 in
