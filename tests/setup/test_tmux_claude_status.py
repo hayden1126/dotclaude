@@ -68,6 +68,7 @@ class Status(unittest.TestCase):
         self.panes = []     # (pane_id, window_id, pane_pid, command, path)
         self.windows = {}   # window_id -> @claude_state
         self.stars = set()  # pane_ids with claude-saved's @claude_star (a pane option)
+        self.away = set()   # pane_ids marked @claude_star_away (★ cleared while not claude)
 
     # --- fixtures -----------------------------------------------------------------------
 
@@ -96,9 +97,11 @@ class Status(unittest.TestCase):
         return child
 
     def run_status(self, agents, hosts="501 502", raw=None, **env):
-        # list-panes puts claude-saved's ★ (1 or 0) between the command and the path.
+        # list-panes puts claude-saved's ★ and away mark (1 or 0 each) between the command and
+        # the path.
         self.env["STUB_PANES"] = "\n".join(
-            f"{p[0]} {p[1]} {p[2]} {p[3]} {int(p[0] in self.stars)} {p[4]}" for p in self.panes)
+            f"{p[0]} {p[1]} {p[2]} {p[3]} {int(p[0] in self.stars)} {int(p[0] in self.away)} {p[4]}"
+            for p in self.panes)
         self.env["STUB_WINDOWS"] = "\n".join(f"{self.server} {w} {s}"
                                              for w, s in self.windows.items())
         self.env["STUB_AGENTS"] = raw if raw is not None else json.dumps(agents)
@@ -407,7 +410,26 @@ class Status(unittest.TestCase):
         self.pane("%5", "@5", "/y", state="idle")
         self.stars |= {"%4", "%5", "%6"}
         self.run_status([], hosts="")
-        self.assertEqual(self.writes(), ["tmux set-option -pu -t %4 @claude_star"])
+        self.assertEqual(self.writes(), ["tmux set-option -p -t %4 @claude_star_away 1",
+                                         "tmux set-option -pu -t %4 @claude_star"])
+
+    def test_a_claude_back_from_ctrl_z_syncs_its_star_even_when_not_cold(self):
+        # Ctrl-Z mid-turn, then fg: a hook set the window busy before this ran, so no cold
+        # fill; the away mark still gets the pane its ★ back, once.
+        self.saved_stub()
+        self.pane("%4", "@4", "/x", state="busy")
+        self.pane("%5", "@5", "/y", command="zsh")   # still suspended: waits
+        self.away |= {"%4", "%5"}
+        self.run_status([], hosts="")
+        self.assertEqual([c for c in self.calls() if c.startswith("claude-saved")],
+                         ["claude-saved sync %4"])
+        self.assertEqual(self.writes(), ["tmux set-option -pu -t %4 @claude_star_away"])
+
+    def test_the_away_mark_clears_without_claude_saved(self):
+        self.pane("%4", "@4", "/x", state="busy")
+        self.away.add("%4")
+        self.run_status([], hosts="")
+        self.assertEqual(self.writes(), ["tmux set-option -pu -t %4 @claude_star_away"])
 
     def saved_stub(self, tail="exit 0\n"):
         """A claude-saved in ~/.local/bin that logs its calls like the other stubs, then runs

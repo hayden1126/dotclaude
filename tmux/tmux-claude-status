@@ -5,7 +5,9 @@
 #   - CLEAR @claude_state for a window where Claude is no longer running (crash / kill / a
 #     Stop that never reached the hook), so a glyph can't get stuck, and claude-saved's ★ (the
 #     pane option @claude_star) on any pane not running claude (including one suspended with
-#     Ctrl-Z).
+#     Ctrl-Z). Such a pane is marked @claude_star_away, and once it runs claude again (`fg`)
+#     it gets `claude-saved sync`, which sets its ★ back if its chat is starred, whether or not
+#     a hook has already set the window's state.
 #   - FILL @claude_state once for a window running Claude that has no state yet (cold start:
 #     you attached to a session that was already going). A window nothing accounts for gets
 #     "idle" (no glyph), so it isn't re-queried every run. Each claude pane in such a window
@@ -63,17 +65,28 @@ while read -r pid wid state; do
 done < <(tmux list-windows -a -F '#{pid} #{window_id} #{@claude_state}' 2>/dev/null)
 [ -n "$server" ] || exit 0       # tmux answered nothing: don't rewrite the map from it
 
-# Every pane: id, window, shell pid, command, claude-saved's ★ (1 or 0), cwd (last: it may hold
-# spaces). The ★ is dropped from $panes, which the map code reads in that shape.
+# Every pane: id, window, shell pid, command, claude-saved's ★ and away mark (1 or 0 each), cwd
+# (last: it may hold spaces). The marks are dropped from $panes, which the map code reads in
+# that shape.
+saved="$HOME/.local/bin/claude-saved"
 declare -A win_has_claude        # window -> whether ANY pane in it runs claude (windows split)
 panes=""
-while read -r pane wid shell cmd star path; do
+while read -r pane wid shell cmd star away path; do
   [ -n "$pane" ] || continue
   [ "$cmd" = "claude" ] && win_has_claude[$wid]=1
-  # A ★ on a pane no longer running claude (it died, exited unseen, or is suspended) goes.
-  [ "$star" = 1 ] && [ "$cmd" != "claude" ] && tmux set-option -pu -t "$pane" @claude_star 2>/dev/null
+  if [ "$star" = 1 ] && [ "$cmd" != "claude" ]; then
+    # A ★ on a pane no longer running claude (it died, exited unseen, or is suspended) goes,
+    # and the pane is marked so a claude back from Ctrl-Z gets it checked again.
+    tmux set-option -pu -t "$pane" @claude_star 2>/dev/null
+    tmux set-option -p -t "$pane" @claude_star_away 1 2>/dev/null
+  elif [ "$away" = 1 ] && [ "$cmd" = "claude" ]; then
+    # Back (`fg`, or a new claude): a hook may already have set the window's state, so this
+    # can't wait for a cold fill. Fail-open and bounded; output never reaches the bar.
+    [ -x "$saved" ] && timeout 2 "$saved" sync "$pane" >/dev/null 2>&1
+    tmux set-option -pu -t "$pane" @claude_star_away 2>/dev/null
+  fi
   panes+="$pane $wid $shell $cmd $path"$'\n'
-done < <(tmux list-panes -a -F '#{pane_id} #{window_id} #{pane_pid} #{pane_current_command} #{?@claude_star,1,0} #{pane_current_path}' 2>/dev/null)
+done < <(tmux list-panes -a -F '#{pane_id} #{window_id} #{pane_pid} #{pane_current_command} #{?@claude_star,1,0} #{?@claude_star_away,1,0} #{pane_current_path}' 2>/dev/null)
 panes="${panes%$'\n'}"
 
 need_fill=()
@@ -85,9 +98,8 @@ for wid in "${!win_state[@]}"; do
   fi
 done
 
-# A cold window's claude panes get their ★ back from claude-saved's list (a claude back from
-# Ctrl-Z had it cleared above while suspended). Fail-open and bounded; output never reaches the bar.
-saved="$HOME/.local/bin/claude-saved"
+# A cold window's claude panes (a session that was already going) get their ★ from claude-saved's
+# list. Fail-open and bounded; output never reaches the bar.
 if [ ${#need_fill[@]} -gt 0 ] && [ -x "$saved" ]; then
   while read -r pane wid _ cmd _; do
     [ "$cmd" = "claude" ] && [[ " ${need_fill[*]} " == *" $wid "* ]] &&

@@ -105,9 +105,12 @@ since run-shell shows output in the pane.
 
 **3b. `tmux/tmux-claude-status`** (the status-bar backstop). Its `list-panes` reads each pane's
 `#{?@claude_star,1,0}` and clears the ★ of any pane whose `#{pane_current_command}` isn't
-`claude` (a crash with no SessionEnd, a missed exit, Ctrl-Z). When it cold-fills a window (a
-claude with no `@claude_state`, as after `fg`), it runs `claude-saved sync <pane>` for each claude
-pane there (`timeout 2`, fail-open, output dropped), which puts a starred chat's ★ back.
+`claude` (a crash with no SessionEnd, a missed exit, Ctrl-Z) and marks that pane
+`@claude_star_away`. Once a marked pane runs claude again (`fg`), it runs `claude-saved sync
+<pane>` (`timeout 2`, fail-open, output dropped), which puts a starred chat's ★ back, and drops
+the mark. That can't wait for a cold fill: after a mid-turn Ctrl-Z, the turn's next hook sets the
+window's state first. A cold-filled window (a session already going when a client attached) gets
+the same sync for each claude pane.
 
 **4. Hook wiring.** `hooks/session-registry.sh` ends by piping the same SessionStart and
 SessionEnd payload to `~/.local/bin/claude-saved hook` when that is executable and `TMUX_PANE` is
@@ -151,7 +154,7 @@ state glyph.
 | SessionEnd `prompt_input_exit` or `logout` | `set -pu @claude_star`, title refreshed when the pane is readable |
 | Any other SessionEnd (an in-session `/resume`, a window kill) | Title refreshed, ★ left to the next SessionStart or the backstop |
 | claude dies without SessionEnd, or is suspended with Ctrl-Z | tmux-claude-status clears that pane's ★ (only that pane's, in a split) |
-| `fg` after Ctrl-Z | The backstop's cold fill runs `claude-saved sync`, which sets the ★ again for a starred chat |
+| `fg` after Ctrl-Z, idle or mid-turn | The pane's away mark makes the backstop run `claude-saved sync`, which sets the ★ again for a starred chat |
 | Shelve | Entry shelved, registry entry deleted, kill-window (in a split: ★ unset, then kill-pane) |
 | Shelve while busy | `confirm-before` issued, nothing written; `--force` does it |
 | Shelve with no transcript | A message, nothing written, no kill |
@@ -182,8 +185,8 @@ pane's process, so the `/proc` ancestry check runs for real).
   active shows no ★ in the status bar.
 - A claude that dies without SessionEnd keeps its ★ until `tmux-claude-status` sees no claude in
   that pane (a few seconds, while a client is attached).
-- After Ctrl-Z and `fg` in a split whose other pane still runs claude, the window keeps its
-  `@claude_state`, so no cold fill runs and the ★ stays off until the chat's next SessionStart.
+- The backstop runs only while a client is attached, every 3 s or so: a ★ can be off for that
+  long after `fg`.
 - The menu shows at most 35 chats (one per key), fewer on a short client; `claude-saved list`
   shows all.
 
