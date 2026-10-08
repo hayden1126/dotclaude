@@ -785,7 +785,8 @@ class Wiring(unittest.TestCase):
                    if "window-status-" in line and "format" in line]
         self.assertEqual(len(formats), 2)
         for line in formats:
-            self.assertIn(",}}#{?@claude_star,★ ,}#{?pane_title,", line)
+            # Before the state glyph: Windows Terminal draws ✳ two cells wide over its space.
+            self.assertIn("#I #{?@claude_star,★ ,}#{?#{==:#{@claude_state},busy}", line)
             self.assertIn("#{s/✳ //:pane_title}", line)
 
 
