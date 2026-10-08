@@ -3,7 +3,8 @@
 # the tab stays open and shows ★, and the chat stays saved until unstarred, however the tab later
 # closes) or shelve it (save the chat and close the tab now). The shelf menu reopens either kind.
 # Linked into ~/.local/bin by setup-tmux.sh; tmux/claude.conf calls it from the tab's right-click
-# menu and Ctrl-b S, and hooks/session-registry.sh hands it each SessionStart and SessionEnd.
+# menu and Ctrl-b S, tmux/base.conf from the Ctrl-b Enter menu, and hooks/session-registry.sh
+# hands it each SessionStart and SessionEnd.
 #
 #   claude-saved star <pane> [client]              star the tab's chat, or unstar it
 #   claude-saved shelve [--force] <pane> [client]  save the chat and close its tab

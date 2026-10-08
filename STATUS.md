@@ -56,15 +56,13 @@ stored here).
   ran it without `--base`, which then meant "drop base.conf"; the live server kept `mouse on` until
   a reboot brought up a server with no mouse, click-to-tab or Ctrl-b Enter menu. `--no-base` now
   drops it.
-- **Star and Shelve Claude tabs** (`feat/tmux-shelf`; installed from its branch 2026-10-08:
-  `setup-tmux.sh` linked `claude-saved` and reloaded tmux, and the live right-click menu and
-  Ctrl-b S call it). Right-click a tab: Star (★, stays on the shelf until unstarred, follows
-  the tab across `/clear`) or Shelve (save and close; restore skips it; reopening takes it off).
-  Design, situations and known limits: `PLAN.md`; behavior: README "Star and Shelve keep a chat after its tab closes". Verified
-  end to end on a `tmux -L e2e` server with real sessions and real right-clicks; three review
-  rounds, every finding fixed. **Smoke test:** Hayden's right-click Star and Shelve on a real tab.
-  Pane to session comes from `~/.claude/sessions/<pid>.json` (undocumented; the registry is the
-  fallback) ([[cc-session-lifecycle-facts]]).
+- **Star and Shelve Claude tabs** (PR #83, `feat/tmux-shelf`; installed from its branch and
+  smoke-tested by Hayden on HAYPC 2026-10-08: right-click Star and Shelve, the Shelf, reopen).
+  Right-click a tab, Ctrl-b S or Ctrl-b Enter: Star (★, a bookmark that follows the tab across
+  `/clear`) or Shelve (save and close; restore skips it; reopening takes it off). Design,
+  situations, limits: `PLAN.md`; behavior: README "Star and Shelve keep a chat after its tab
+  closes"; decisions and traps: [[dotclaude-tmux-shelf]]. Pane to session comes from
+  `~/.claude/sessions/<pid>.json` (undocumented; the registry is the fallback).
 
 ## In flight
 - **`deck-production`: deferred (Hayden, 2026-10-05: workflow improvements first).** The geometry
@@ -115,12 +113,13 @@ stored here).
   `claude -p` repro and the 2.1.285 boundary; the karaoke session's has the incident.
 
 ## Notes for next session
-- **Next: finish `feat/tmux-shelf`** (Hayden's smoke test, then mark the draft PR ready and
-  merge; `~/dotclaude` is on that branch until then: switch back to `main` after the merge).
+- **Next: merge #83 once Hayden approves** (`gh pr view 83 --json state,mergedAt`), then put
+  `~/dotclaude` back on `main`, outside the sandbox (it holds every session's live hooks):
+  `git fetch origin main:main` (fine while the feature branch is checked out), then
+  `git switch main`. Work: `git log 0bce6f8..feat/tmux-shelf`. Flaky, not this branch's:
+  `test_tmux_hooks` `test_each_ring_decision_is_logged` failed once in a full run, then passed.
   Then Hayden picks the next workflow improvement; deck-production S2 is deferred. First real
-  check of #70: the next reboot (see Done). Recent work: PRs #67 to #76, #78 (#77 folded in), #79,
-  #80 and `fix/git-read-allow` (`gh pr list --head fix/git-read-allow` for its number; its work
-  is `git log main..fix/git-read-allow`).
+  check of #70: the next reboot (see Done). Recent work: `gh pr list --state merged --limit 10`.
 - **Verify the overwrite guard before touching it:** `python3 -m unittest discover -s tests/setup
   -t tests/setup` (`test_overwrite_guard.py`, `test_memory_git.py`, `test_claude_file_history.py`),
   then replay real history the way the brief's Results describes (a would-be deny rate near 17 in

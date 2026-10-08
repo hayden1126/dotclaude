@@ -1,8 +1,7 @@
 # PLAN: Star and Shelve for Claude tmux tabs
 
-> **Status (2026-10-08): built on the writer branch `feat/tmux-shelf`; the first build passed a
-> real-tmux end-to-end run, and two review rounds' fixes are in (the second tested with stubs);
-> not yet installed.** The previous PLAN.md (the tmux restore
+> **Status:** STATUS.md holds where this stands (build, review, install, smoke test). The
+> previous PLAN.md (the tmux restore
 > design) is in git (`git show 0bce6f8:PLAN.md`), and README "Tabs come back after tmux dies"
 > holds its as-built behavior.
 
@@ -118,8 +117,10 @@ set, under `timeout 3`, output dropped, fail-open. No new settings.json entry.
 
 **5. tmux.** `tmux/claude.conf` replaces the right-click window menu with tmux 3.7c's default
 plus Star/Unstar (`*`), Shelve (`v`), both dim without `@claude_state`, and Shelf… (`S`);
-`bind S` opens the shelf. Both `window-status-format`s show `#{?@claude_star,★ ,}` after the
-state glyph.
+`bind S` opens the shelf, and `tmux/base.conf`'s Ctrl-b Enter menu ends with Star chat (`*`),
+Shelve chat (`v`) and Shelf… (`S`), for a keyboard path with no Shift (Hayden's Ctrl-b S
+arrived as Ctrl-b s). Both `window-status-format`s show `#{?@claude_star,★ ,}` right after the
+window number, before the state glyph (claude.conf's comment says why).
 
 **Deviations from the brief.**
 - `confirm-before -t <client>`, not `-c`: in tmux 3.7c `-c` is the confirm key (man page). And
@@ -198,6 +199,6 @@ pane's process, so the `/proc` ancestry check runs for real).
   new binding parses.
 - In real tmux (a `tmux -L probe` server, then live): right-click a Claude tab, Star (★ shows),
   `/clear` (★ stays, `claude-saved list` shows the new id), Shelve (the tab closes), Ctrl-b S
-  (both rows, ages, keys), open each, and Remove…. Check that `display-menu -c` and
+  and Ctrl-b Enter → Shelf… (both rows, ages, keys), open each, and Remove…. Check that `display-menu -c` and
   `confirm-before -b -t` from inside run-shell behave as assumed, and that Shelf… from the
   right-click menu gets the right client.
