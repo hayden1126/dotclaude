@@ -514,7 +514,8 @@ class Wiring(unittest.TestCase):
                 self.assertIn("run-shell " + call + action + '"', conf)
         self.assertIn("bind -n MouseDown3Status display-menu", conf)
         self.assertIn('bind S run-shell ' + call + 'menu #{client_name}"', conf)
-        formats = [line for line in conf.splitlines() if "window-status-" in line and "format" in line]
+        formats = [line for line in conf.splitlines()
+                   if "window-status-" in line and "format" in line]
         self.assertEqual(len(formats), 2)
         for line in formats:
             self.assertIn(",}}#{?@claude_star,★ ,}#{?pane_title,", line)

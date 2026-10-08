@@ -1,150 +1,144 @@
-# PLAN: relaunch open Claude tabs in tmux after a restart
+# PLAN: Star and Shelve for Claude tmux tabs
 
-> **Status (2026-10-05): built on a writer branch, not yet reviewed or live.** The previous
-> PLAN.md (the deck-production geometry gate) is history; it lives in git
-> (`git show 8591133:PLAN.md`), and its as-built design is in `geometry.py`'s docstring and
-> deck-production's SKILL.md.
+> **Status (2026-10-08): built on the writer branch `feat/tmux-shelf`, tested with stubs only;
+> not yet reviewed, checked in real tmux, or installed.** The previous PLAN.md (the tmux restore
+> design) is in git (`git show 0bce6f8:PLAN.md`), and README "Tabs come back after tmux dies"
+> holds its as-built behavior.
 
 ## Context
 
-After a Windows restart or `wsl --shutdown`, the tmux server is gone, and so is every Claude tab
-in `main`, one window per repo. The goal is to get them back automatically, each one resuming its
-own conversation.
+A Claude chat lives in a tmux tab. Close the tab and the chat is reachable only by digging its
+id out of `claude --resume`'s picker. Hayden wants to keep chosen chats one click away, from the
+tab's right-click menu:
 
-What existed before:
-- `KeepWSLAlive` boots the VM at Windows logon. Nothing starts tmux.
-- `main` is created by the first client to connect: `~/bin/tmux-remote` (ssh from the phone or
-  laptop) or the PC's Windows Terminal profile (`tmux new-session -A -s main`).
-- No file recorded which session ran in which tab. Hooks only knew the live `TMUX_PANE`. There was
-  no SessionEnd hook, and nothing ran `claude --resume`.
-- Session ids change on `/clear`, so a periodic snapshot would go stale.
+- **Star**: a bookmark. The tab stays open and shows ★; the chat stays on a saved list until
+  unstarred, however the tab later closes.
+- **Shelve**: save the chat to the list and close its tab now. Reopening takes it off the list.
+  It must not come back on a tmux restore.
+- On `/clear` in a starred tab, the star follows the tab: the new session id becomes starred and
+  the old one drops off (Hayden's call).
 
-Decisions:
-- Trigger: when `main` is created on a new tmux server, after any death of the old one (a
-  reboot, `wsl --terminate`, `tmux kill-server`). `claude-restore` can also be run by hand.
-- Each tab runs `claude --resume <id>` in its own directory.
-- Scope: only interactive tmux tabs still open at the restart. A tab closed on purpose stays
-  closed. Background (`--bg`) sessions are out.
-
-Rejected:
-- tmux-resurrect/continuum: its 15-minute snapshots miss `/clear`. It can only `--continue`,
-  which picks the wrong conversation when two tabs share a repo. And it adds TPM.
-- Snapshotting from `tmux-claude-status`: it only runs while a client is attached, and it would
-  mix persistence into the indicator.
+When the brief left a case open, the rule was: keep the chat reachable without a surprising
+reopen.
 
 ## Design
 
-**1. Registry, kept by hooks.** `hooks/session-registry.sh` (bash, `python3 -I` for JSON;
-fail-open, always exits 0).
-- **Where.** One file per session: `$XDG_STATE_HOME/dotclaude/open-sessions/<session_id>.json`,
-  holding `{session_id, cwd, transcript_path, pane, window_index, socket, server_start,
-  server_pid, ts}`. One file per session means no locking, and a write is an fsynced tmp file
-  plus rename. `socket`, `server_start` and `server_pid` are tmux's `#{socket_path}`,
-  `#{start_time}` and `#{pid}`: together they name the server, so another (start, pid) on the
-  same socket means the old server died. The pid tells apart two servers started in the same
-  second. (A boot id was
-  the first design; it missed `wsl --terminate` and `kill-server`, and let a `tmux -L probe`
-  server's entries compete with `main`'s.)
-- **SessionStart** (startup, resume, clear, compact) writes or refreshes the file. It skips a
-  session with no `TMUX_PANE`, a `-p` run (`CLAUDE_CODE_SESSION_ATTENDED=0`), a payload carrying
-  `agent_id`, a `session_id` that isn't a plain token, an empty cwd, and a server it can't
-  read. One call, `tmux display -p -t $TMUX_PANE '#{start_time} #{pid} #{window_index} #{socket_path}'`,
-  gives the server and the window (claude inherits the pane's TMUX; the path goes last, since it
-  may hold a space).
-- **SessionEnd** deletes the file on `prompt_input_exit` (`/exit`), `logout`, `clear`, or any
-  other named reason. On `other` it only adds `ended_other_at`.
+**1. Store.** `$XDG_STATE_HOME/dotclaude/saved/<session_id>.json` (default `~/.local/state`),
+holding `{session_id, cwd, title, transcript_path, starred, shelved, saved_at, tab: {socket,
+server_start, server_pid, pane}}`, written as an fsynced tmp file plus rename. A file exists
+only while `starred or shelved`. `title` is the pane title at save time with Claude's leading
+glyph stripped (✳ idle, a braille spinner busy, ◐ ours). Session ids must match
+`[A-Za-z0-9][A-Za-z0-9_-]{7,127}` everywhere, as in claude-restore.
 
-  The probe (2026-10-05) showed that `kill-window`, SIGTERM to claude and `kill-server` all fire
-  SessionEnd `other`, with the hook still running. A shutdown that signals claude therefore looks
-  the same as a deliberate window kill at hook time.
-- **At restore, each old server's last activity** is
-  `L = max(ts, ended_other_at, transcript mtime)` over that server's entries. A marked entry's
-  transcript mtime is capped at its own mark (a `claude --continue` outside tmux after the death
-  is not the server's end), and any value later than the current server's start is ignored. L
-  is per server: pooled, one server's later activity would hide another's shutdown. An entry
-  with no end mark is restored. A marked entry is restored only if
-  `ended_other_at >= L - 120 s` for its own server: it died in the final batch, a shutdown. A window killed earlier,
-  with later activity after it, stays closed. The bias: restoring one tab too many is cheap;
-  wiping every tab is the failure the feature exists to prevent.
-- **Registered in the settings baseline** (`settings.json`): a SessionStart group with matcher
-  `startup|resume|clear|compact` (separate from `delegation-due.sh`'s), and a SessionEnd group.
+**2. Which chat is in a pane.** First Claude's own live-session files,
+`~/.claude/sessions/<pid>.json`: an `interactive` session whose pid is alive (`os.kill(pid, 0)`)
+and whose `tmux` field (`main:@4.%4`) ends in the pane id. Its `sessionId` is updated after
+`/clear`, and a tab with no registry entry still has one (verified on HAYPC 2026-10-08). This is
+undocumented Claude internals, so the fallback is the registry
+(`hooks/session-registry.sh`'s `open-sessions/`): the newest entry for that pane on this tmux
+server with no SessionEnd `other` mark. The transcript is the registry's `transcript_path` when
+that file exists, else the first `~/.claude/projects/*/<sid>.jsonl`.
 
-**2. `tmux/claude-restore`** (bash; linked into `~/.local/bin` by `setup-tmux.sh`).
-- **Which entries.** It reads the current server's socket, start and pid (`tmux display`;
-  by hand, after creating `main`). Candidates are entries with the same socket and another
-  (start, pid). Entries from another socket are never touched: not moved, not logged. In each pane of each old
-  server, keyed (start, pid, pane), only the newest entry can be a live tab: a pane runs one
-  claude at a time, so an older entry there is a dead session even when the newest is skipped.
-  It also skips any id already running (`claude agents --json`, entries with a `pid`; if the
-  call fails it carries on), a directory that is gone or holds a `#` (tmux format-expands
-  `new-window -c`) or a control character, and a marked entry outside its server's final
-  batch. An entry with no transcript (a session writes none until its first input,
-  so a tab fresh from startup or `/clear`) reopens as a plain `claude` in its directory.
-- **Each restore,** in old `window_index` order: `tmux new-window -d -P -F '#{pane_id}' -t =main:
-  -c <cwd>`, then `send-keys` of `claude --resume <id>` and Enter to that pane. The tab gets a
-  real login shell (PATH, nvm), and the shell stays when claude exits, as tabs do today. Window
-  names follow Claude's title through `claude.conf`.
-- **Per entry,** its file moves to `open-sessions/restored/` just before its window opens.
-  That is still before `claude --resume` runs, so the resumed session's fresh entry (it may keep
-  the same id) is never swept up. If `new-window` or `send-keys` fails, it moves back, and a run
-  killed midway leaves the rest in place; the next run retries both. Skipped entries move there
-  too. A run with candidates first empties `restored/`, so it holds only the last restore. The
-  plan passes from Python to bash with `\x1f` between fields (not a whitespace character under
-  IFS, so an empty field can't shift the rest). Every decision goes to `restore.log`.
-- **Flags:** `--list` (dry run, changes nothing), `--auto <name>` (hook mode: silent, and a no-op
-  unless the new session is `main`), none (restore now, creating `main` detached if absent).
-  `flock -n` on `open-sessions/.lock`, so `main` plus a grouped view, or a manual run racing the
-  hook, restore only once.
+**3. `tmux/claude-saved`** (bash, `python3 -I` for JSON; linked into `~/.local/bin` by
+`setup-tmux.sh`). Every message goes to the client's status line through
+`display-message -c <client>` (a run-shell has no client of its own), and nothing is printed,
+since run-shell shows output in the pane.
+- `star <pane> [client]` toggles. Star records the tab and title and sets the window option
+  `@claude_star`; unstar deletes the entry unless shelved and unsets the option.
+- `shelve [--force] <pane> [client]` refuses a chat with no transcript ("no messages yet,
+  nothing to shelve"). While `@claude_state` is `busy`, it asks with `confirm-before -b`, whose
+  yes runs `shelve --force`. It writes the entry, deletes the chat's `open-sessions` file (so
+  claude-restore won't reopen it, and the SessionEnd `other` the kill sends marks nothing), then
+  kills the window, or only the pane in a split.
+- `menu [--remove] [client]` builds one `display-menu` as an argv array: Star (or Unstar) and
+  Shelve for the client's current tab (dim when no chat is found there), then one row per saved
+  chat, newest first, `★` starred or `▤` shelved, title (else the repo name) and age, keys `1-9`
+  then `a-z`, then Remove…, which opens the same rows running `rm`. `#` in user text is doubled,
+  since tmux format-expands menu names.
+- `open <sid> [client]` goes to the chat's pane if it runs in this server (select the window in
+  the client's session, or switch the client when another session holds it), stops if it runs
+  elsewhere, and otherwise checks the directory with claude-restore's rules (exists, no `#`, no
+  control character) and opens a selected window in the client's session typing
+  `claude --resume <id>`, or a plain `claude` (and drops the entry) when there is no transcript.
+  Then it clears `shelved` and deletes the entry unless starred.
+- `rm <sid> [client]`, `list`, `-h`.
+- `hook` (the payload on stdin; skips subagents). SessionStart: on `source == clear`, a starred
+  entry whose tab is this pane on this server is re-keyed to the new id. Any other starred entry
+  whose tab is this pane loses its tab (another chat runs there now, so a later `/clear` there
+  isn't its). A shelved chat that starts anywhere in tmux leaves the shelf. If this chat is
+  starred, its tab is refreshed and ★ set; else ★ is unset. SessionEnd unsets ★ and refreshes a
+  saved chat's title when the pane is still readable.
 
-**3. Trigger.** `tmux/claude.conf`:
-`set-hook -g session-created[42] 'run-shell -b "$HOME/.local/bin/claude-restore --auto #{q:session_name}"'`.
-The index keeps any session-created hook of the user's own. A full path, because tmux's PATH
-lacks `~/.local/bin`. `#{q:}` shell-quotes the session name.
+**4. Hook wiring.** `hooks/session-registry.sh` ends by piping the same SessionStart and
+SessionEnd payload to `~/.local/bin/claude-saved hook` when that is executable and `TMUX_PANE` is
+set, under `timeout 3`, output dropped, fail-open. No new settings.json entry.
 
-**4. Docs.** The README tmux section and file table, `setup-tmux.sh`'s header, STATUS, and this
-file.
+**5. tmux.** `tmux/claude.conf` replaces the right-click window menu with tmux 3.7c's default
+plus Star/Unstar (`*`), Shelve (`v`), both dim without `@claude_state`, and Shelf… (`S`);
+`bind S` opens the shelf. Both `window-status-format`s show `#{?@claude_star,★ ,}` after the
+state glyph.
+
+**Deviations from the brief.**
+- `confirm-before -t <client>`, not `-c`: in tmux 3.7c `-c` is the confirm key (man page). And
+  `-b`, so the nested tmux call returns at once instead of holding the run-shell until answered.
+- The client's current pane and session come from `list-clients -F`, not
+  `display -p -c <client>`: `-c` picks where a message shows, while the format's pane follows
+  `-t`'s default target (the best client).
+- A live pane in the client's session is selected with `select-window -t <session>:<window>`
+  plus `select-pane`, so a grouped view session moves its own current window, not `main`'s.
+- Registry entries with an `ended_other_at` mark are ignored when resolving a pane: their claude
+  was killed, so the pane runs something else.
+- In the shelf menu, Shelve this tab uses key `V`, since `v` is a row key past row 30.
 
 ## Situations it must handle
 
 | Situation | Outcome |
 |---|---|
-| Reboot / `wsl --shutdown`, hooks never run | Files from the old server survive, and all are restored |
-| `wsl --terminate` or `tmux kill-server` | A new server start on the same socket: restored like a reboot |
-| A `tmux -L probe` server on the side | Another socket: its entries are never touched, and can't hide `main`'s tabs |
-| Shutdown where Claude does get SIGTERM | SessionEnd `other` marks every file within seconds; all are in the final batch, so all are restored |
-| `/clear` | SessionEnd `clear` deletes the old id; SessionStart writes the new one |
-| `/exit`, Ctrl-D | Deleted, not restored |
-| Window killed (Ctrl-b &), work continues elsewhere | Marked, and older than the final batch, so not restored |
-| Window killed, then the machine idles until tmux dies | Marked, and in the final batch, so restored (accepted: one extra tab) |
-| Claude crashes, new claude in same pane | Dedupe by (server start, pid, pane) keeps the newest |
-| Two old servers on one socket (killed, then a new one also died) | Each has its own last activity, so both servers' tabs return |
-| Two servers started in the same second | The pid tells them apart |
-| `claude --continue` outside tmux after the death | A marked entry's transcript counts only up to its mark |
-| A transcript resumed by hand after the new server started | Ignored for the old server's last activity |
-| `tmux new-session` starts the server, or `claude agents` the daemon | Each runs with the lock fd closed, so the lock never outlives the run |
-| tmux fails to open a window, or the run is killed midway | The entry stays (or moves back) for the next run |
-| A `#` in the directory name | Logged and skipped |
-| Two tabs in one repo | Exact ids, so each resumes its own conversation |
-| `claude -p` / canary inside a pane | Skipped (ATTENDED=0) |
-| `main` and a view created together, or a manual run racing | flock + server start + live check: restored once |
-| Tab fresh from startup or `/clear` (no transcript yet) | Reopens as a plain `claude` in its directory |
-| Directory deleted | Logged and skipped |
+| Star a tab (sessions-file lookup) | Entry starred, `set -w ... @claude_star 1` |
+| Star a tab with no sessions file (registry lookup) | Same, from the newest unmarked entry on this server |
+| Star a pane with no session anywhere | A message, no entry |
+| Unstar | Entry gone (kept if shelved), `set -wu` |
+| Star, then `/clear` in the same pane | Entry re-keyed to the new id, ★ set |
+| `/clear` in another pane, or the same pane id on another server | The starred entry is untouched |
+| `/resume` of another chat in a starred tab | The star stays on the old id, ★ unset, and a later `/clear` there doesn't take it |
+| A starred chat starts in a new pane (restore, reopen) | `tab` refreshed, ★ set |
+| A shelved chat is resumed by hand in a tab | Off the shelf |
+| SessionEnd | `set -wu @claude_star`, title refreshed when the pane is readable |
+| Shelve | Entry shelved, registry entry deleted, kill-window (kill-pane in a split) |
+| Shelve while busy | `confirm-before` issued, nothing written; `--force` does it |
+| Shelve with no transcript | A message, nothing written, no kill |
+| Open a shelved chat | A new window in the client's session running `claude --resume <id>`, entry removed |
+| Open a starred chat | Reopened, entry kept, still starred |
+| Open a chat already in a live pane | Its window selected (or the client switched), no new window |
+| Open a chat live outside tmux or in another tmux server | A message, no new window |
+| Open with no transcript | A plain `claude`, entry dropped |
+| Open with the directory gone, or a `#` in it | A message, entry kept |
+| Menu | Rows newest first, `★`/`▤`, keys, `#` escaped |
+| Menu with nothing saved | The "this tab" items and a disabled "(nothing saved)" |
+| Registry hook | Hands the payload on when claude-saved is executable and `TMUX_PANE` is set, skips otherwise, and still exits 0 (and cuts it off after 3 s) when claude-saved fails |
 
-`tests/setup/test_session_registry.py` and `tests/setup/test_claude_restore.py` cover each row
-with stub `tmux` and `claude` on PATH and a temp `XDG_STATE_HOME`.
+`tests/setup/test_claude_saved.py` and `tests/setup/test_session_registry.py` cover each row with
+a stub `tmux` on PATH, a temp `HOME` and `XDG_STATE_HOME`, and fake `~/.claude/sessions` files
+(the test's own pid as a live claude, a huge pid as a dead one).
+
+## Known limits
+
+- `@claude_star` is a window option, like `@claude_state`: in a split, any session starting in
+  the other pane sets or clears the window's ★.
+- A claude that dies without SessionEnd leaves its ★ until the next session in that window;
+  `tmux-claude-status` clears `@claude_state` then but not `@claude_star`.
+- The sessions file's `tmux` field doesn't name the server, so a live claude in `%4` of a
+  `tmux -L` server also matches `%4` here. Rare, and only for Star or Shelve on that pane id.
+- The menu shows the newest 35 chats (one per key); `claude-saved list` shows all.
 
 ## Verification
 
-- `python3 -m unittest discover -s tests/setup -t tests/setup` is green.
+- `python3 -m unittest discover -s tests/setup -t tests/setup` is green, and
+  `bash -n tmux/claude-saved hooks/session-registry.sh` passes.
 - `test_the_confs_parse_in_real_tmux` skips inside the Bash sandbox; run it outside to check the
-  `set-hook` line parses.
-- Isolated end-to-end on `tmux -L probe`:
-  1. Open two claude tabs (one of them `/clear`ed).
-  2. Kill the server, then create `main` on the same socket (a new start time).
-
-  No faking is needed: a new server on the same socket is exactly the trigger.
-
-  Expect both tabs back on the right conversations, once, with `restore.log` explaining each.
-  Also confirm `session-created` fires for the first session of a fresh server.
-- **The real test is Hayden's** (it kills every session): `wsl --shutdown` from Windows, connect,
-  and confirm the tabs return. Until then the shutdown path rests on the probe.
+  new binding parses.
+- In real tmux (a `tmux -L probe` server, then live): right-click a Claude tab, Star (★ shows),
+  `/clear` (★ stays, `claude-saved list` shows the new id), Shelve (the tab closes), Ctrl-b S
+  (both rows, ages, keys), open each, and Remove…. Check that `display-menu -c` and
+  `confirm-before -b -t` from inside run-shell behave as assumed, and that Shelf… from the
+  right-click menu gets the right client.

@@ -5,13 +5,13 @@
 # Linked into ~/.local/bin by setup-tmux.sh; tmux/claude.conf calls it from the tab's right-click
 # menu and Ctrl-b S, and hooks/session-registry.sh hands it each SessionStart and SessionEnd.
 #
-#   claude-saved star <pane> [client]            star the tab's chat, or unstar it
-#   claude-saved shelve [--force] <pane> [client] save the chat and close its tab
-#   claude-saved menu [--remove] [client]        the shelf menu (or the menu that removes entries)
-#   claude-saved open <sid> [client]             go to a saved chat, reopening it if it isn't running
-#   claude-saved rm <sid> [client]               drop a chat from the list
-#   claude-saved list                            print the list
-#   claude-saved hook                            the hook side: the payload on stdin
+#   claude-saved star <pane> [client]              star the tab's chat, or unstar it
+#   claude-saved shelve [--force] <pane> [client]  save the chat and close its tab
+#   claude-saved menu [--remove] [client]          the shelf menu (or the one that removes rows)
+#   claude-saved open <sid> [client]               go to a saved chat, reopening it if needed
+#   claude-saved rm <sid> [client]                 drop a chat from the list
+#   claude-saved list                              print the list
+#   claude-saved hook                              the hook side: the payload on stdin
 #
 # One file per saved chat: $XDG_STATE_HOME/dotclaude/saved/<session_id>.json, holding
 # {session_id, cwd, title, transcript_path, starred, shelved, saved_at, tab: {socket,
@@ -454,7 +454,8 @@ view() {
 pane_ok() { [[ "${1:-}" =~ ^%[0-9]+$ ]]; }
 sid_ok() { [[ "${1:-}" =~ ^[A-Za-z0-9][A-Za-z0-9_-]{7,127}$ ]]; }
 
-# Where sid runs now, as `live` (pane window in-client's-session) or `outside`; empty if not running.
+# Where sid runs now, into $live: `pane window 1-if-in-the-client's-session` (split by \x1f),
+# `outside`, or empty when it isn't running.
 locate() {
   live=$(tmux list-panes -a -F '#{session_id} #{window_id} #{pane_id}' 2>/dev/null |
     py live "$1" "$start" "$pid" "$socket" "$csess")
@@ -491,7 +492,8 @@ case "$cmd" in
     if [ "$force" = 0 ] && [ "$(tmux show -wqv -t "$pane" @claude_state 2>/dev/null)" = busy ]; then
       # -b: return now and let tmux run the command on y (a waiting prompt would hold run-shell).
       again=$(py run-shell "$self" shelve --force "$pane" ${client:+"$client"}) || exit 0
-      tmux confirm-before -b ${client:+-t "$client"} -p "Claude is working; shelve anyway? (y/n)" "$again"
+      tmux confirm-before -b ${client:+-t "$client"} \
+        -p "Claude is working; shelve anyway? (y/n)" "$again"
       exit 0
     fi
     IFS=$'\x1f' read -r result name < <(py shelve write "$pane" "$start" "$pid" "$socket" "$title")
@@ -513,7 +515,10 @@ case "$cmd" in
       sid=$(py resolve "$cpane" "$start" "$pid" "$socket")
     fi
     mapfile -d '' items < <(py menu "$removing" "$self" "$client" "$cpane" "$sid")
-    [ ${#items[@]} -gt 0 ] || { msg "can't build the menu (a quote or # in $self or the client name?)"; exit 0; }
+    if [ ${#items[@]} -eq 0 ]; then
+      msg "can't build the menu (a quote or # in $self or the client name?)"
+      exit 0
+    fi
     heading=Shelf
     [ "$removing" = 1 ] && heading="Remove from shelf"
     tmux display-menu "${cflag[@]}" -T "#[align=centre]$heading" -x C -y C "${items[@]}" ;;
