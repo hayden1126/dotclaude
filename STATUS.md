@@ -6,7 +6,7 @@
 > [[dotclaude-chrome-devtools-wsl]]). Per-effort design lives in the repo's `PLAN.md` or its doc,
 > not only under `~/.claude/plans/`, which the next plan overwrites ([[plan-file-not-durable]]).
 
-Last updated: 2026-10-07
+Last updated: 2026-10-08
 Base: `main`. For branch / PR / push state, run `gh pr list` and `git log main..HEAD` (derive it; not
 stored here).
 
@@ -56,6 +56,15 @@ stored here).
   ran it without `--base`, which then meant "drop base.conf"; the live server kept `mouse on` until
   a reboot brought up a server with no mouse, click-to-tab or Ctrl-b Enter menu. `--no-base` now
   drops it.
+- **Star and Shelve Claude tabs** (`feat/tmux-shelf`; installed from its branch 2026-10-08:
+  `setup-tmux.sh` linked `claude-saved` and reloaded tmux, and the live right-click menu and
+  Ctrl-b S call it). Right-click a tab: Star (★, stays on the shelf until unstarred, follows
+  the tab across `/clear`) or Shelve (save and close; restore skips it; reopening takes it off).
+  Design, situations and known limits: `PLAN.md`; behavior: README "Star and Shelve keep a chat after its tab closes". Verified
+  end to end on a `tmux -L e2e` server with real sessions and real right-clicks; three review
+  rounds, every finding fixed. **Smoke test:** Hayden's right-click Star and Shelve on a real tab.
+  Pane to session comes from `~/.claude/sessions/<pid>.json` (undocumented; the registry is the
+  fallback) ([[cc-session-lifecycle-facts]]).
 
 ## In flight
 - **`deck-production`: deferred (Hayden, 2026-10-05: workflow improvements first).** The geometry
@@ -106,7 +115,9 @@ stored here).
   `claude -p` repro and the 2.1.285 boundary; the karaoke session's has the incident.
 
 ## Notes for next session
-- **Next: Hayden picks the next workflow improvement**; deck-production S2 is deferred. First real
+- **Next: finish `feat/tmux-shelf`** (Hayden's smoke test, then mark the draft PR ready and
+  merge; `~/dotclaude` is on that branch until then: switch back to `main` after the merge).
+  Then Hayden picks the next workflow improvement; deck-production S2 is deferred. First real
   check of #70: the next reboot (see Done). Recent work: PRs #67 to #76, #78 (#77 folded in), #79,
   #80 and `fix/git-read-allow` (`gh pr list --head fix/git-read-allow` for its number; its work
   is `git log main..fix/git-read-allow`).
