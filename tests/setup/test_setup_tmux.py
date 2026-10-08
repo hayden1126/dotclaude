@@ -68,14 +68,32 @@ class SetupTmux(unittest.TestCase):
         self.assertIn("already up to date", p.stdout)
         self.assertEqual(first.count("dotclaude tmux (setup-tmux.sh)"), 1)
 
-    def test_base_adds_and_a_plain_run_removes_base_conf(self):
+    def test_base_adds_and_a_plain_run_keeps_base_conf(self):
+        # A plain re-run (say, to link a new script) once dropped base.conf, and the next tmux
+        # server came up with no mouse or menus.
         self.run_setup("--base")
         conf = self.read()
         self.assertLess(conf.index("base.conf"), conf.index("claude.conf"))
         cheat = os.path.join(self.home, ".tmux-cheatsheet.txt")
         self.assertEqual(os.readlink(cheat), os.path.join(REPO, "tmux", "cheatsheet.txt"))
-        self.run_setup()
-        self.assertNotIn("base.conf", self.read())
+        p = self.run_setup()
+        self.assertEqual(self.read(), conf)
+        self.assertIn("already up to date", p.stdout)
+        self.assertEqual(os.readlink(cheat), os.path.join(REPO, "tmux", "cheatsheet.txt"))
+
+    def test_no_base_removes_base_conf_and_the_cheatsheet_link(self):
+        self.run_setup("--base")
+        self.run_setup("--no-base")
+        conf = self.read()
+        self.assertNotIn("base.conf", conf)
+        self.assertIn("claude.conf", conf)
+        self.assertFalse(os.path.lexists(os.path.join(self.home, ".tmux-cheatsheet.txt")))
+
+    def test_base_and_no_base_together_are_rejected(self):
+        p = subprocess.run(["bash", SCRIPT, "--base", "--no-base"], capture_output=True,
+                           text=True, timeout=30, env=self.env)
+        self.assertNotEqual(p.returncode, 0)
+        self.assertFalse(os.path.exists(self.conf))
 
     def test_a_real_file_in_the_way_is_moved_aside(self):
         bin_dir = os.path.join(self.home, ".local", "bin")

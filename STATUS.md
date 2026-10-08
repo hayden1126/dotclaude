@@ -47,10 +47,15 @@ stored here).
   Its replay numbers are in that docstring. **Watch:** `delete-guard.log` for a
   deny of a safe command. Same PR: the finish-before-merge rule (CLAUDE.md Boundaries, handoff
   step 5).
-- **Read-only git and pipe filters skip the classifier** (`fix/git-read-allow`; installed from its
+- **Read-only git and pipe filters skip the classifier** (PR #81; installed from its
   branch, and a fresh auto-mode session ran the once-denied `git status -sb | head -1` by rule on
   2026-10-07, while `git log --output=` asked). The rules and their `cd`/`-C` limits: README.
   The classifier refuses edits that add allow rules ("Self-Modification"): Hayden applies those.
+- **A plain `setup-tmux.sh` re-run keeps `base.conf`** (`fix/tmux-base-sticky`; installed from its
+  branch 2026-10-07, and a plain re-run on HAYPC left `~/.tmux.conf` unchanged). The PR #70 install
+  ran it without `--base`, which then meant "drop base.conf"; the live server kept `mouse on` until
+  a reboot brought up a server with no mouse, click-to-tab or Ctrl-b Enter menu. `--no-base` now
+  drops it.
 
 ## In flight
 - **`deck-production`: deferred (Hayden, 2026-10-05: workflow improvements first).** The geometry

@@ -10,11 +10,13 @@
 #                             source tmux/claude.conf from ~/.tmux.conf
 #   ./setup-tmux.sh --base    also source tmux/base.conf (mouse, splits, the Ctrl-b Enter menu)
 #                             and link the Ctrl-b h cheatsheet
+#   ./setup-tmux.sh --no-base drop base.conf and the cheatsheet link
 #
-# The source-file lines live between markers in ~/.tmux.conf, and each run rewrites that block to
-# match its flags (a run without --base drops base.conf). Your own lines outside it are kept;
-# the block sits at the end, so its settings win. ~/.tmux.conf is backed up before any change.
-# To remove: delete the marked block and the links (two, three with --base).
+# The source-file lines live between markers in ~/.tmux.conf, and each run rewrites that block.
+# A run with neither flag keeps base.conf as the block already has it, so a plain re-run (to link
+# a new script) can't strip the mouse and menus from the next tmux server. Your own lines outside
+# the block are kept; the block sits at the end, so its settings win. ~/.tmux.conf is backed up
+# before any change. To remove: delete the marked block and the links (two, three with --base).
 
 set -euo pipefail
 
@@ -25,17 +27,31 @@ say()  { printf "\033[1;36m==>\033[0m %s\n" "$*"; }
 warn() { printf "\033[1;33m!!\033[0m  %s\n" "$*" >&2; }
 die()  { printf "\033[1;31mxx\033[0m  %s\n" "$*" >&2; exit 1; }
 
-base=0
+base=""
 for arg in "$@"; do
   case "$arg" in
-    --base) base=1 ;;
-    -h|--help) sed -n '2,18p' "$0"; exit 0 ;;
+    --base|--no-base)
+      want=1; [ "$arg" = --no-base ] && want=0
+      [ -n "$base" ] && [ "$base" != "$want" ] && die "--base and --no-base conflict"
+      base=$want ;;
+    -h|--help) sed -n '2,20p' "$0"; exit 0 ;;
     *) die "unknown argument: $arg (try --help)" ;;
   esac
 done
 
 command -v tmux >/dev/null || die "tmux not found. Install it first (sudo apt install tmux)."
 command -v python3 >/dev/null || die "python3 not found."
+
+# Neither flag: keep base.conf if the existing block sources it. (A variable, not sed | grep -q:
+# under pipefail, grep closing the pipe early fails the sed and misreads a match as none.)
+if [ -z "$base" ]; then
+  base=0
+  if [ -f "$HOME/.tmux.conf" ]; then
+    block="$(sed -n '/^# >>> dotclaude tmux (setup-tmux.sh) >>>$/,/^# <<< dotclaude tmux <<<$/p' \
+      "$HOME/.tmux.conf")"
+    case "$block" in *'/tmux/base.conf"'*) base=1 ;; esac
+  fi
+fi
 
 # Link src to dst, moving a real file at dst aside first.
 link() {
@@ -51,7 +67,13 @@ link() {
 
 link "$REPO_DIR/tmux/tmux-claude-status" "$HOME/.local/bin/tmux-claude-status"
 link "$REPO_DIR/tmux/claude-restore" "$HOME/.local/bin/claude-restore"
-[ "$base" = 1 ] && link "$REPO_DIR/tmux/cheatsheet.txt" "$HOME/.tmux-cheatsheet.txt"
+cheat="$HOME/.tmux-cheatsheet.txt"
+if [ "$base" = 1 ]; then
+  link "$REPO_DIR/tmux/cheatsheet.txt" "$cheat"
+elif [ -L "$cheat" ] && [ "$(readlink "$cheat")" = "$REPO_DIR/tmux/cheatsheet.txt" ]; then
+  rm "$cheat"
+  say "removed $cheat"
+fi
 
 python3 -I - "$HOME/.tmux.conf" "$REPO_DIR" "$base" "$TS" <<'PY'
 import os, re, sys
