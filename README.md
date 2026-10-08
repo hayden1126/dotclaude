@@ -151,7 +151,7 @@ sees it.
 | `docs/blind-overwrite-brief.md` | Why the overwrite guard and `memory-git.sh` exist: two incidents (a blind overwrite of a memory file, a job's state inferred instead of read), the experiments and the design calls | reference |
 | `docs/chrome-devtools-wsl.md` | WSL2-only: how to make `chrome-devtools-mcp` work (Strategy A headless Linux Chrome, plus B to attach to your Windows Chrome) | reference |
 | `chrome-debug.ps1` | Windows launcher for Strategy B (Chrome with a remote-debugging port) | run on Windows when needed |
-| `tmux/` | The tmux side of the indicator: `claude.conf` (titles, status bar, the ◐ busy and ✳ waiting glyphs), the optional `base.conf` (mouse, splits, the Ctrl-b Enter menu), `cheatsheet.txt`, `tmux-claude-status`, the backstop the status bar runs (it also maps background sessions to their tab), `claude-restore`, which reopens `main`'s Claude tabs after the tmux server dies, and `claude-saved`, which stars and shelves a tab's chat (the tab's right-click menu, Ctrl-b S) | sourced and linked by `setup-tmux.sh` |
+| `tmux/` | The tmux side of the indicator: `claude.conf` (titles, status bar, the ◐ busy and ✳ waiting glyphs), the optional `base.conf` (mouse, splits, the Ctrl-b Enter menu), `cheatsheet.txt`, `tmux-claude-status`, the backstop the status bar runs (it also maps background sessions to their tab), `claude-restore`, which reopens `main`'s Claude tabs after the tmux server dies, and `claude-saved`, which stars and shelves a tab's chat (the tab's right-click menu, Ctrl-b S, or Ctrl-b Enter) | sourced and linked by `setup-tmux.sh` |
 | `setup-tmux.sh` | Opt-in tmux installer: links `tmux-claude-status`, `claude-restore` and `claude-saved` into `~/.local/bin` and keeps a marked `source-file` block in `~/.tmux.conf` (`--base` adds `base.conf` and the cheatsheet, `--no-base` drops them, and a run with neither keeps what the block has) | run once per machine that uses tmux; not called by `setup.sh` |
 | `setup-chrome-wsl.sh` | Opt-in WSL2 installer: installs Chrome for Testing and registers the user-scoped `chrome-devtools` override | run once on WSL2; not called by `setup.sh` |
 | `setup.sh` | The installer | run once per machine |
@@ -319,7 +319,7 @@ need nothing extra.
 - **Star and Shelve keep a chat after its tab closes**: right-click a Claude tab for **Star** (a
   bookmark: the tab shows ★, and the chat stays saved until unstarred, however the tab closes)
   or **Shelve** (save the chat and close the tab now; it won't come back on a tmux restore).
-  **Shelf…** in the same menu, or Ctrl-b S, lists the saved chats newest first and reopens one
+  **Shelf…** in the same menu, Ctrl-b S, or the Ctrl-b Enter menu (which has all three, no Shift) lists the saved chats newest first and reopens one
   as `claude --resume <id>` in its directory, or goes to its pane if it is still running.
   Reopening takes a chat off the shelf; a starred one stays starred. On `/clear` in a starred tab
   the star follows the tab to the new session. Star and Shelve work only where Claude is running
