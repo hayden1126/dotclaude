@@ -67,7 +67,7 @@ class Status(unittest.TestCase):
         self.server = SERVER
         self.panes = []     # (pane_id, window_id, pane_pid, command, path)
         self.windows = {}   # window_id -> @claude_state
-        self.stars = set()  # window_ids with claude-saved's @claude_star
+        self.stars = set()  # pane_ids with claude-saved's @claude_star (a pane option)
 
     # --- fixtures -----------------------------------------------------------------------
 
@@ -96,8 +96,10 @@ class Status(unittest.TestCase):
         return child
 
     def run_status(self, agents, hosts="501 502", raw=None, **env):
-        self.env["STUB_PANES"] = "\n".join(" ".join(map(str, p)) for p in self.panes)
-        self.env["STUB_WINDOWS"] = "\n".join(f"{self.server} {w} {int(w in self.stars)} {s}"
+        # list-panes puts claude-saved's ★ (1 or 0) between the command and the path.
+        self.env["STUB_PANES"] = "\n".join(
+            f"{p[0]} {p[1]} {p[2]} {p[3]} {int(p[0] in self.stars)} {p[4]}" for p in self.panes)
+        self.env["STUB_WINDOWS"] = "\n".join(f"{self.server} {w} {s}"
                                              for w, s in self.windows.items())
         self.env["STUB_AGENTS"] = raw if raw is not None else json.dumps(agents)
         self.env["STUB_HOSTS"] = hosts
@@ -397,13 +399,39 @@ class Status(unittest.TestCase):
         self.assertEqual(self.writes(), ["tmux set-option -uw -t @4 @claude_state"])
         self.assertFalse(self.queried())
 
-    def test_a_star_a_dead_claude_left_is_cleared(self):
-        # claude died without SessionEnd: its ★ goes with the state; an idle window keeps it.
-        self.pane("%4", "@4", "/x", state="", command="zsh")
+    def test_a_star_on_a_pane_without_claude_is_cleared(self):
+        # claude died without SessionEnd, or is suspended (Ctrl-Z): the ★ is per pane, so in a
+        # split only that pane's goes, and a claude pane keeps its own.
+        self.pane("%4", "@4", "/x", state="idle", command="zsh")
+        self.pane("%6", "@4", "/x", state="idle")
         self.pane("%5", "@5", "/y", state="idle")
-        self.stars |= {"@4", "@5"}
+        self.stars |= {"%4", "%5", "%6"}
         self.run_status([], hosts="")
-        self.assertEqual(self.writes(), ["tmux set-option -uw -t @4 @claude_star"])
+        self.assertEqual(self.writes(), ["tmux set-option -pu -t %4 @claude_star"])
+
+    def saved_stub(self, tail="exit 0\n"):
+        """A claude-saved in ~/.local/bin that logs its calls like the other stubs, then runs
+        tail."""
+        path = os.path.join(self.tmp, "home", ".local", "bin", "claude-saved")
+        with open(path, "w") as f:
+            f.write('#!/usr/bin/env bash\nprintf "%s\\n" "claude-saved $*" >> "$STUB_LOG"\n' + tail)
+        os.chmod(path, 0o755)
+
+    def test_a_cold_window_syncs_the_star_of_each_claude_pane(self):
+        # Back from Ctrl-Z: the window's state and the pane's ★ were cleared while suspended.
+        self.saved_stub()
+        self.pane("%4", "@4", "/x")
+        self.pane("%6", "@4", "/x", command="zsh")
+        self.pane("%5", "@5", "/y", state="idle")   # not cold: left alone
+        self.run_status([], hosts="")
+        self.assertEqual([c for c in self.calls() if c.startswith("claude-saved")],
+                         ["claude-saved sync %4"])
+
+    def test_a_failing_claude_saved_does_not_reach_the_bar(self):
+        self.saved_stub("echo noise; echo more >&2; exit 3\n")
+        self.pane("%4", "@4", "/x")
+        self.run_status([], hosts="")   # asserts the bar shows only the delegation token
+        self.assertIn("tmux set-option -w -t @4 @claude_state idle", self.writes())
 
 
 if __name__ == "__main__":

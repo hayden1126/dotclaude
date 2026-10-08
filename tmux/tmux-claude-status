@@ -3,11 +3,13 @@
 # Hooks own live transitions (busy/wait/idle) and are instant. This backstop, run from
 # status-left #() (only while attached) and rate-limited ~3s, does ONLY what hooks can't:
 #   - CLEAR @claude_state for a window where Claude is no longer running (crash / kill / a
-#     Stop that never reached the hook), so a glyph can't get stuck; claude-saved's ★
-#     (@claude_star) goes with it.
+#     Stop that never reached the hook), so a glyph can't get stuck, and claude-saved's ★ (the
+#     pane option @claude_star) on any pane not running claude (including one suspended with
+#     Ctrl-Z).
 #   - FILL @claude_state once for a window running Claude that has no state yet (cold start:
 #     you attached to a session that was already going). A window nothing accounts for gets
-#     "idle" (no glyph), so it isn't re-queried every run.
+#     "idle" (no glyph), so it isn't re-queried every run. Each claude pane in such a window
+#     gets `claude-saved sync`, which sets its ★ back if its chat is starred (after `fg`).
 #   - MAP each background session to the tab showing it. A background session has no
 #     TMUX_PANE, and its ancestry reaches whichever client started the shared daemon, so the
 #     map goes by directory: the one client pane (a `claude` pane no interactive session's
@@ -53,24 +55,26 @@ fi
 # which trips the ledger's sandbox self-check. This is the script's only output.
 timeout 2 env -u CLAUDE_PID "$HOME/.local/bin/delegation-ledger" watch --summary 2>/dev/null | tee "$cache"
 
-# window -> current @claude_state (window option; same for every pane in the window), and the
-# windows showing claude-saved's ★ (the state goes last: it may be empty).
-declare -A win_state win_star
+# window -> current @claude_state (window option; same for every pane in the window).
+declare -A win_state
 server=""
-while read -r pid wid star state; do
+while read -r pid wid state; do
   [ -n "$wid" ] && win_state[$wid]="$state" && server="$pid"
-  [ "$star" = 1 ] && win_star[$wid]=1
-done < <(tmux list-windows -a -F '#{pid} #{window_id} #{?@claude_star,1,0} #{@claude_state}' 2>/dev/null)
+done < <(tmux list-windows -a -F '#{pid} #{window_id} #{@claude_state}' 2>/dev/null)
 [ -n "$server" ] || exit 0       # tmux answered nothing: don't rewrite the map from it
 
-# Every pane: id, window, shell pid, command, cwd (last: it may hold spaces).
-panes="$(tmux list-panes -a -F '#{pane_id} #{window_id} #{pane_pid} #{pane_current_command} #{pane_current_path}' 2>/dev/null)"
-
-# window -> whether ANY pane in it runs claude (not just the active pane — windows can be split).
-declare -A win_has_claude
-while read -r _ wid _ cmd _; do
+# Every pane: id, window, shell pid, command, claude-saved's ★ (1 or 0), cwd (last: it may hold
+# spaces). The ★ is dropped from $panes, which the map code reads in that shape.
+declare -A win_has_claude        # window -> whether ANY pane in it runs claude (windows split)
+panes=""
+while read -r pane wid shell cmd star path; do
+  [ -n "$pane" ] || continue
   [ "$cmd" = "claude" ] && win_has_claude[$wid]=1
-done <<< "$panes"
+  # A ★ on a pane no longer running claude (it died, exited unseen, or is suspended) goes.
+  [ "$star" = 1 ] && [ "$cmd" != "claude" ] && tmux set-option -pu -t "$pane" @claude_star 2>/dev/null
+  panes+="$pane $wid $shell $cmd $path"$'\n'
+done < <(tmux list-panes -a -F '#{pane_id} #{window_id} #{pane_pid} #{pane_current_command} #{?@claude_star,1,0} #{pane_current_path}' 2>/dev/null)
+panes="${panes%$'\n'}"
 
 need_fill=()
 for wid in "${!win_state[@]}"; do
@@ -78,9 +82,18 @@ for wid in "${!win_state[@]}"; do
     [ -z "${win_state[$wid]}" ] && need_fill+=("$wid")                              # claude running, no state -> cold start
   else
     [ -n "${win_state[$wid]}" ] && tmux set-option -uw -t "$wid" @claude_state 2>/dev/null  # no claude -> clear stale
-    [ -n "${win_star[$wid]:-}" ] && tmux set-option -uw -t "$wid" @claude_star 2>/dev/null   # and a star a dead claude left
   fi
 done
+
+# A cold window's claude panes get their ★ back from claude-saved's list (a claude back from
+# Ctrl-Z had it cleared above while suspended). Fail-open and bounded; output never reaches the bar.
+saved="$HOME/.local/bin/claude-saved"
+if [ ${#need_fill[@]} -gt 0 ] && [ -x "$saved" ]; then
+  while read -r pane wid _ cmd _; do
+    [ "$cmd" = "claude" ] && [[ " ${need_fill[*]} " == *" $wid "* ]] &&
+      timeout 2 "$saved" sync "$pane" >/dev/null 2>&1
+  done <<< "$panes"
+fi
 
 # The daemon's pty hosts (each background session runs under one, plus pre-warmed spares).
 hosts="$(pgrep -f 'bg-pty-host --bg-pty-host' 2>/dev/null | sort | tr '\n' ' ')"

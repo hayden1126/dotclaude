@@ -30,13 +30,15 @@ case "$1" in
       '#{start_time} #{pid} #{pane_pid} #{socket_path}')
         echo "$STUB_START $STUB_PID $STUB_PANE_PID $STUB_SOCKET" ;;
       '#{pane_title}') printf '%s\n' "$STUB_TITLE" ;;
+      '#{pane_current_command}') printf '%s\n' "$STUB_COMMAND" ;;
       '#{window_panes}') echo "${STUB_WINDOW_PANES:-1}" ;;
-      '#{pane_id} #{session_id} #{client_height}') echo "$STUB_CLIENT_PANE \$1 $STUB_HEIGHT" ;;
+      '#{pane_id} #{session_id} #{client_height} #{client_width}')
+        echo "$STUB_CLIENT_PANE \$1 $STUB_HEIGHT $STUB_WIDTH" ;;
     esac ;;
   show|show-options) printf '%s\n' "${STUB_STATE:-}" ;;
   list-clients)
-    printf '%%99 $9 50 /dev/pts/1\n%s $1 %s %s\n' \
-      "$STUB_CLIENT_PANE" "$STUB_HEIGHT" "$STUB_CLIENT" ;;
+    printf '%%99 $9 50 200 /dev/pts/1\n%s $1 %s %s %s\n' \
+      "$STUB_CLIENT_PANE" "$STUB_HEIGHT" "$STUB_WIDTH" "$STUB_CLIENT" ;;
   list-panes) printf '%b' "${STUB_PANES:-}" ;;
   new-window) echo %101 ;;
 esac
@@ -78,7 +80,8 @@ class Saved(unittest.TestCase):
                         STUB_LOG=self.log, XDG_STATE_HOME=os.path.join(self.tmp, "state"),
                         STUB_START=str(START), STUB_PID=str(PID), STUB_SOCKET=SOCKET,
                         STUB_TITLE=TITLE, STUB_CLIENT=CLIENT, STUB_CLIENT_PANE="%4",
-                        STUB_HEIGHT="50", STUB_STATE="idle",
+                        STUB_HEIGHT="50", STUB_WIDTH="200", STUB_STATE="idle",
+                        STUB_COMMAND="claude",
                         # The pane's first process: an ancestor of this test, whose own pid
                         # stands in for the claude in the pane.
                         STUB_PANE_PID=str(os.getppid()))
@@ -162,11 +165,10 @@ class Saved(unittest.TestCase):
         return [a[-1] for a in self.calls("tmux", "display-message")]
 
     def star_set(self, pane="%4"):
-        return ["tmux", "set", "-w", "-t", pane, "@claude_star", "1"] in self.calls("tmux")
+        return ["tmux", "set", "-p", "-t", pane, "@claude_star", "1"] in self.calls("tmux")
 
     def star_unset(self, pane="%4"):
-        return ["tmux", "set", "-wu", "-t", pane, "@claude_star"] in self.calls("tmux")
-
+        return ["tmux", "set", "-pu", "-t", pane, "@claude_star"] in self.calls("tmux")
     # --- star -----------------------------------------------------------------------------
 
     def test_star_finds_the_chat_from_claudes_session_file(self):
@@ -277,7 +279,7 @@ class Saved(unittest.TestCase):
         self.assertEqual(e["transcript_path"], f"/x/{sid(2)}.jsonl")
         self.assertEqual(e["title"], "[repo1] Fix the parser")
         self.assertEqual(self.calls("tmux", "set")[-1],
-                         ["tmux", "set", "-w", "-t", "%4", "@claude_star", "1"])
+                         ["tmux", "set", "-p", "-t", "%4", "@claude_star", "1"])
 
     def test_session_end_clear_does_nothing(self):
         # It races the SessionStart `clear` that follows: a title refresh could recreate the old
@@ -291,7 +293,7 @@ class Saved(unittest.TestCase):
         self.hook("SessionEnd", 1, reason="clear")   # late: must not bring the old id back
         self.assertEqual(list(self.saved()), [sid(2)])
         self.assertEqual(self.calls("tmux", "set")[-1],
-                         ["tmux", "set", "-w", "-t", "%4", "@claude_star", "1"])
+                         ["tmux", "set", "-p", "-t", "%4", "@claude_star", "1"])
 
     def test_clear_writes_the_new_entry_before_removing_the_old(self):
         # A failed write (here a directory in the way of the new file) must leave the old one.
@@ -377,7 +379,7 @@ class Saved(unittest.TestCase):
         self.assertEqual(self.calls("tmux", "kill-window"), [])
         # The window stays, so its ★ (this chat's) goes first.
         tail = [a[1:] for a in self.calls("tmux") if a[1] in ("set", "kill-pane")]
-        self.assertEqual(tail, [["set", "-wu", "-t", "%4", "@claude_star"],
+        self.assertEqual(tail, [["set", "-pu", "-t", "%4", "@claude_star"],
                                 ["kill-pane", "-t", "%4"]])
 
     def test_shelve_keeps_a_star(self):
@@ -450,7 +452,7 @@ class Saved(unittest.TestCase):
     def test_open_a_running_chat_goes_to_its_pane(self):
         self.put(1, starred=True)
         self.live(1, "%7")
-        self.env["STUB_PANES"] = f"$1 @3 %7 {self.ppid}\\n$1 @1 %4 1\\n"
+        self.env["STUB_PANES"] = f"$1 @3 %7 {self.ppid} claude\\n$1 @1 %4 1 claude\\n"
         self.run_saved("open", sid(1), CLIENT)
         self.assertEqual(self.opened(), [])
         self.assertIn(["tmux", "select-window", "-t", "$1:@3"], self.calls("tmux"))
@@ -462,7 +464,7 @@ class Saved(unittest.TestCase):
         self.put(1, shelved=True)
         self.transcript(1)
         self.live(1, "%7")
-        self.env["STUB_PANES"] = f"$1 @3 %7 {DEAD}\\n"
+        self.env["STUB_PANES"] = f"$1 @3 %7 {DEAD} claude\\n"
         self.run_saved("open", sid(1), CLIENT)
         self.assertEqual(self.opened(), [])
         self.assertNotIn("select-pane", [a[1] for a in self.calls("tmux")])
@@ -474,7 +476,7 @@ class Saved(unittest.TestCase):
         self.put(1, shelved=True)
         self.transcript(1)
         self.live(1, "%7", proc_start=1)
-        self.env["STUB_PANES"] = f"$1 @3 %7 {DEAD}\\n"
+        self.env["STUB_PANES"] = f"$1 @3 %7 {DEAD} claude\\n"
         self.run_saved("open", sid(1), CLIENT)
         self.assertEqual(len(self.opened()), 1)
 
@@ -484,7 +486,7 @@ class Saved(unittest.TestCase):
         self.put(1, shelved=True)
         self.transcript(1)
         self.live(1, "%7", proc_start=start)
-        self.env["STUB_PANES"] = f"$1 @3 %7 {self.ppid}\\n$1 @1 %4 1\\n"
+        self.env["STUB_PANES"] = f"$1 @3 %7 {self.ppid} claude\\n$1 @1 %4 1 claude\\n"
         self.run_saved("open", sid(1), CLIENT)
         self.assertEqual(self.opened(), [])
         self.assertIn(["tmux", "select-pane", "-t", "%7"], self.calls("tmux"))
@@ -492,7 +494,7 @@ class Saved(unittest.TestCase):
     def test_open_a_chat_running_in_another_session_switches_the_client(self):
         self.put(1, starred=True)
         self.registered(1, "%7")
-        self.env["STUB_PANES"] = f"$2 @3 %7 {self.ppid}\\n$1 @1 %4 1\\n"
+        self.env["STUB_PANES"] = f"$2 @3 %7 {self.ppid} claude\\n$1 @1 %4 1 claude\\n"
         self.run_saved("open", sid(1), CLIENT)
         self.assertEqual(self.opened(), [])
         self.assertIn(["tmux", "switch-client", "-c", CLIENT, "-t", "%7"], self.calls("tmux"))
@@ -501,7 +503,7 @@ class Saved(unittest.TestCase):
         self.put(1, shelved=True)
         self.transcript(1)
         self.live(1, "", tmux="")
-        self.env["STUB_PANES"] = "$1 @1 %4 1\\n"
+        self.env["STUB_PANES"] = "$1 @1 %4 1 claude\\n"
         self.run_saved("open", sid(1), CLIENT)
         self.assertEqual(self.opened(), [])
         self.assertIn("already running elsewhere", self.messages()[-1])
@@ -513,7 +515,7 @@ class Saved(unittest.TestCase):
         self.transcript(1)
         self.registered(1, "%7")
         self.live(1, "", tmux="")
-        self.env["STUB_PANES"] = "$1 @1 %4 1\\n"
+        self.env["STUB_PANES"] = "$1 @1 %4 1 claude\\n"
         self.run_saved("open", sid(1), CLIENT)
         self.assertEqual(self.opened(), [])
         self.assertIn("already running elsewhere", self.messages()[-1])
@@ -627,7 +629,7 @@ class Saved(unittest.TestCase):
     def test_rm_drops_the_entry_and_the_mark_where_it_runs(self):
         self.put(1, starred=True)
         self.live(1, "%7")
-        self.env["STUB_PANES"] = f"$1 @3 %7 {self.ppid}\\n"
+        self.env["STUB_PANES"] = f"$1 @3 %7 {self.ppid} claude\\n"
         self.run_saved("rm", sid(1), CLIENT)
         self.assertEqual(self.saved(), {})
         self.assertTrue(self.star_unset("%7"))
@@ -650,6 +652,119 @@ class Saved(unittest.TestCase):
             with self.subTest(args=args):
                 p = self.run_saved(*args)
                 self.assertEqual((p.stdout, p.stderr), ("", ""))
+
+    # --- round 2: stale registry entries, double opens, the per-pane star -------------------
+
+    def test_a_stale_registry_entry_is_not_the_tabs_chat(self):
+        # claude crashed in %4 (no SessionEnd) and the pane runs a shell now; a split pane's
+        # claude keeps the window's @claude_state set, so only the pane's command can tell.
+        self.registered(1, "%4")
+        self.transcript(1)
+        self.env["STUB_COMMAND"] = "zsh"
+        for action in ("star", "shelve"):
+            with self.subTest(action=action):
+                self.run_saved(action, "%4", CLIENT)
+                self.assertIn("no Claude session found", self.messages()[-1])
+        self.assertEqual(self.saved(), {})
+        self.assertEqual(self.calls("tmux", "kill-pane") + self.calls("tmux", "kill-window"), [])
+        items = self.menu(CLIENT)[10:]
+        self.assertEqual(items[:6], ["-Star this tab", "", "", "-Shelve this tab", "", ""])
+
+    def test_open_skips_a_stale_registry_pane(self):
+        # The registry says chat 1 is in %7, but %7 runs a shell, or another live chat.
+        for rows, other in (("$1 @3 %7 {ppid} zsh\\n", False), ("$1 @3 %7 {ppid} claude\\n", True)):
+            with self.subTest(other=other):
+                self.setUp()
+                self.put(1, shelved=True)
+                self.transcript(1)
+                self.registered(1, "%7")
+                if other:
+                    self.live(2, "%7")
+                self.env["STUB_PANES"] = rows.format(ppid=self.ppid)
+                self.run_saved("open", sid(1), CLIENT)
+                self.assertEqual(self.calls("tmux", "select-pane"), [])
+                self.assertEqual(len(self.opened()), 1)
+
+    def test_rm_leaves_a_stale_registry_pane_alone(self):
+        self.put(1, starred=True)
+        self.registered(1, "%7")
+        self.env["STUB_PANES"] = f"$1 @3 %7 {self.ppid} zsh\\n"
+        self.run_saved("rm", sid(1), CLIENT)
+        self.assertEqual(self.saved(), {})
+        self.assertEqual(self.calls("tmux", "set"), [])
+
+    def test_a_second_open_goes_to_the_window_the_first_made(self):
+        self.put(1, shelved=True)
+        self.transcript(1)
+        self.run_saved("open", sid(1), CLIENT)
+        opening = self.saved()[sid(1)]["opening"]
+        self.assertEqual({k: opening[k] for k in ("pane", "socket", "server_start", "server_pid")},
+                         {"pane": "%101", "socket": SOCKET, "server_start": START,
+                          "server_pid": PID})
+        # claude hasn't started yet (no sessions file, no SessionStart): %101 runs the shell.
+        self.env["STUB_PANES"] = "$1 @9 %101 1 zsh\\n$1 @1 %4 1 claude\\n"
+        self.run_saved("open", sid(1), CLIENT)
+        self.assertEqual(len(self.opened()), 1)
+        self.assertIn(["tmux", "select-pane", "-t", "%101"], self.calls("tmux"))
+        # Its SessionStart clears the note (and takes the chat off the shelf).
+        self.put(1, starred=True)
+        self.run_saved("open", sid(1), CLIENT)
+        self.hook("SessionStart", 1, pane="%101", source="resume")
+        self.assertNotIn("opening", self.saved()[sid(1)])
+
+    def test_an_old_opening_note_is_ignored(self):
+        self.put(1, shelved=True)
+        self.transcript(1)
+        self.run_saved("open", sid(1), CLIENT)
+        path = os.path.join(self.store, sid(1) + ".json")
+        with open(path) as f:
+            e = json.load(f)
+        e["opening"]["at"] -= 120   # the resume never started
+        with open(path, "w") as f:
+            json.dump(e, f)
+        self.env["STUB_PANES"] = "$1 @9 %101 1 zsh\\n"
+        self.run_saved("open", sid(1), CLIENT)
+        self.assertEqual(len(self.opened()), 2)
+
+    def test_only_a_real_exit_clears_the_star(self):
+        # An in-session /resume ends the old chat (reason `resume`) just before the next one's
+        # SessionStart sets the pane's ★; this end must not clear it after the fact.
+        self.put(1, starred=True)
+        for reason in ("resume", "other", "bypass_permissions_disabled"):
+            with self.subTest(reason=reason):
+                self.hook("SessionEnd", 1, reason=reason)
+                self.assertEqual(self.calls("tmux", "set"), [])
+        self.assertEqual(self.saved()[sid(1)]["title"], "[repo1] Fix the parser")
+        self.hook("SessionEnd", 1, reason="logout")
+        self.assertTrue(self.star_unset())
+
+    def test_sync_sets_the_star_from_the_list(self):
+        self.live(1, "%4")
+        self.put(1, starred=True)
+        self.run_saved("sync", "%4")
+        self.assertTrue(self.star_set())
+        self.put(1, shelved=True)
+        self.run_saved("sync", "%4")
+        self.assertTrue(self.star_unset())
+
+    def test_sync_without_a_chat_clears_the_star(self):
+        self.registered(1, "%4")
+        self.put(1, starred=True)
+        self.env["STUB_COMMAND"] = "zsh"   # the registry's claude is gone
+        p = self.run_saved("sync", "%4")
+        self.assertEqual((p.stdout, p.stderr), ("", ""))
+        self.assertTrue(self.star_unset())
+
+    def test_menu_titles_fit_the_client_width(self):
+        self.put(1, starred=True, title="abcdefghijklmnopqrstuvwxyz")
+        for width, name in (("30", "abcdefghijklm…"), ("10", "abcdefg…"),
+                            ("200", "abcdefghijklmnopqrstuvwxyz")):
+            with self.subTest(width=width):
+                if os.path.exists(self.log):
+                    os.remove(self.log)
+                self.env["STUB_WIDTH"] = width
+                rows = [n for n in self.names(self.menu(CLIENT)) if n.startswith("★")]
+                self.assertEqual(rows, [f"★ {name} · 1m"])
 
     def test_the_script_is_executable(self):
         self.assertTrue(os.access(SCRIPT, os.X_OK))
