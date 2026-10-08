@@ -152,7 +152,7 @@ sees it.
 | `docs/chrome-devtools-wsl.md` | WSL2-only: how to make `chrome-devtools-mcp` work (Strategy A headless Linux Chrome, plus B to attach to your Windows Chrome) | reference |
 | `chrome-debug.ps1` | Windows launcher for Strategy B (Chrome with a remote-debugging port) | run on Windows when needed |
 | `tmux/` | The tmux side of the indicator: `claude.conf` (titles, status bar, the ◐ busy and ✳ waiting glyphs), the optional `base.conf` (mouse, splits, the Ctrl-b Enter menu), `cheatsheet.txt`, `tmux-claude-status`, the backstop the status bar runs (it also maps background sessions to their tab), and `claude-restore`, which reopens `main`'s Claude tabs after the tmux server dies | sourced and linked by `setup-tmux.sh` |
-| `setup-tmux.sh` | Opt-in tmux installer: links `tmux-claude-status` and `claude-restore` into `~/.local/bin` and keeps a marked `source-file` block in `~/.tmux.conf` (`--base` adds `base.conf` and the cheatsheet) | run once per machine that uses tmux; not called by `setup.sh` |
+| `setup-tmux.sh` | Opt-in tmux installer: links `tmux-claude-status` and `claude-restore` into `~/.local/bin` and keeps a marked `source-file` block in `~/.tmux.conf` (`--base` adds `base.conf` and the cheatsheet, `--no-base` drops them, and a run with neither keeps what the block has) | run once per machine that uses tmux; not called by `setup.sh` |
 | `setup-chrome-wsl.sh` | Opt-in WSL2 installer: installs Chrome for Testing and registers the user-scoped `chrome-devtools` override | run once on WSL2; not called by `setup.sh` |
 | `setup.sh` | The installer | run once per machine |
 | `sync.sh` | Regenerates the derived plugin lists from live `~/.claude/` | run after plugin changes |
