@@ -1,0 +1,575 @@
+#!/usr/bin/env bash
+# claude-saved: keep a Claude chat reachable after its tmux tab closes. Star a tab (a bookmark:
+# the tab stays open and shows ★, and the chat stays saved until unstarred, however the tab later
+# closes) or shelve it (save the chat and close the tab now). The shelf menu reopens either kind.
+# Linked into ~/.local/bin by setup-tmux.sh; tmux/claude.conf calls it from the tab's right-click
+# menu and Ctrl-b S, and hooks/session-registry.sh hands it each SessionStart and SessionEnd.
+#
+#   claude-saved star <pane> [client]            star the tab's chat, or unstar it
+#   claude-saved shelve [--force] <pane> [client] save the chat and close its tab
+#   claude-saved menu [--remove] [client]        the shelf menu (or the menu that removes entries)
+#   claude-saved open <sid> [client]             go to a saved chat, reopening it if it isn't running
+#   claude-saved rm <sid> [client]               drop a chat from the list
+#   claude-saved list                            print the list
+#   claude-saved hook                            the hook side: the payload on stdin
+#
+# One file per saved chat: $XDG_STATE_HOME/dotclaude/saved/<session_id>.json, holding
+# {session_id, cwd, title, transcript_path, starred, shelved, saved_at, tab: {socket,
+# server_start, server_pid, pane}}, written as an fsynced tmp file plus rename. A file exists only
+# while the chat is starred or shelved. The session in a pane comes from Claude's own live-session
+# files (~/.claude/sessions/<pid>.json: an interactive session with a live pid whose `tmux` field
+# ends in the pane id; undocumented, but /clear updates it), else from the newest unmarked
+# open-sessions entry for that pane on this tmux server (hooks/session-registry.sh).
+#
+# The rules:
+#   - Shelve refuses a chat with no transcript yet (nothing to resume) and asks first while
+#     Claude is busy. It deletes the chat's open-sessions entry before killing the pane, so
+#     claude-restore won't bring it back and the SessionEnd `other` that follows marks nothing.
+#   - Open goes to the chat's pane when it is running in this server, stops when it runs
+#     elsewhere, and otherwise opens a window in the client's session in its directory (the
+#     directory must exist and hold no # or control character, as in claude-restore), running
+#     `claude --resume <id>`, or a plain `claude` (dropping the entry) when there is no transcript.
+#     A reopened chat leaves the shelf; a starred one stays starred.
+#   - The star follows the tab: on SessionStart `clear` a starred chat whose tab is this pane is
+#     re-keyed to the new session id. Any other session starting in that pane takes the tab from
+#     the starred chat (it stays starred, its ★ goes), and a shelved chat that starts anywhere in
+#     tmux leaves the shelf. SessionEnd clears the window's ★ and refreshes a saved title.
+# Messages go to the client's status line (run-shell has no client of its own); nothing is
+# printed, since run-shell shows any output in the pane. tests/setup/test_claude_saved.py holds
+# the cases.
+set -uo pipefail
+
+# tmux's server PATH is whatever started it and often lacks ~/.local/bin, where claude lives.
+PATH="$HOME/.local/bin:$PATH"
+
+self="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
+state="${XDG_STATE_HOME:-$HOME/.local/state}/dotclaude"
+cmd="${1:-}"
+[ $# -gt 0 ] && shift
+client=""
+cflag=()
+
+case "$cmd" in
+  -h|--help) sed -n '2,15p' "$0"; exit 0 ;;
+  list) ;;
+  star|shelve|menu|open|rm|hook) exec >/dev/null 2>&1 ;;
+  *) printf 'claude-saved: unknown command: %s (try --help)\n' "$cmd" >&2; exit 2 ;;
+esac
+
+IFS= read -r -d '' PY <<'EOF'
+import glob, json, os, re, sys, tempfile, time
+
+STORE, REG = os.environ["SAVED_DIR"], os.environ["REG_DIR"]
+SESSIONS, PROJECTS = os.environ["SESSIONS_DIR"], os.environ["PROJECTS_DIR"]
+SID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{7,127}")
+KEYS = "123456789abcdefghijklmnopqrstuvwxyz"
+NOW = time.time()
+
+def isint(v):
+    return isinstance(v, int) and not isinstance(v, bool)
+
+def num(v):
+    return v if isinstance(v, (int, float)) and not isinstance(v, bool) else 0
+
+def load(path):
+    try:
+        with open(path) as f:
+            v = json.load(f)
+    except (OSError, ValueError):
+        return None
+    return v if isinstance(v, dict) else None
+
+def write(path, obj):
+    d = os.path.dirname(path)
+    os.makedirs(d, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=d, prefix=".tmp-")
+    with os.fdopen(fd, "w") as f:
+        json.dump(obj, f)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, path)
+
+def remove(path):
+    try:
+        os.remove(path)
+    except OSError:
+        pass
+
+def spath(sid):
+    return os.path.join(STORE, sid + ".json")
+
+def entry(sid):
+    e = load(spath(sid))
+    ok = (e is not None and e.get("session_id") == sid and isinstance(e.get("cwd"), str)
+          and isinstance(e.get("starred"), bool) and isinstance(e.get("shelved"), bool))
+    return e if ok else None
+
+def entries():
+    """Every saved chat, newest first; a corrupt file is skipped."""
+    try:
+        names = os.listdir(STORE)
+    except OSError:
+        return []
+    found = (entry(n[:-5]) for n in names if n.endswith(".json") and SID.fullmatch(n[:-5]))
+    return sorted((e for e in found if e), key=lambda e: num(e.get("saved_at")), reverse=True)
+
+def save(e):
+    """Write e, or delete it once it is neither starred nor shelved."""
+    if e["starred"] or e["shelved"]:
+        write(spath(e["session_id"]), e)
+    else:
+        remove(spath(e["session_id"]))
+
+def alive(pid):
+    if not isint(pid) or pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except PermissionError:
+        return True
+    except (OSError, OverflowError):
+        return False
+    return True
+
+def live_sessions():
+    """Claude's own files for its running interactive sessions."""
+    for path in glob.glob(os.path.join(SESSIONS, "*.json")):
+        s = load(path)
+        if (s and s.get("kind") == "interactive" and isinstance(s.get("sessionId"), str)
+                and SID.fullmatch(s["sessionId"]) and alive(s.get("pid"))):
+            yield s
+
+def pane_of(s):
+    # `tmux` looks like main:@4.%4: the pane id follows the last dot.
+    t = s.get("tmux")
+    return t.rpartition(".")[2] if isinstance(t, str) and "." in t else None
+
+def registry():
+    """open-sessions entries still open (no SessionEnd `other` mark)."""
+    for path in glob.glob(os.path.join(REG, "*.json")):
+        e = load(path)
+        if (e and isinstance(e.get("session_id"), str) and SID.fullmatch(e["session_id"])
+                and "ended_other_at" not in e):
+            yield e
+
+def on_server(e, server):
+    return all(e.get(k) == server[k] for k in ("socket", "server_start", "server_pid"))
+
+def make_server(start, pid, socket):
+    """The tmux server (as session-registry.sh names it), or None when it couldn't be read."""
+    if not (start.isdigit() and pid.isdigit() and socket):
+        return None
+    return {"socket": socket, "server_start": int(start), "server_pid": int(pid)}
+
+def make_tab(pane, start, pid, socket):
+    """This pane on this tmux server, or None."""
+    server = make_server(start, pid, socket)
+    return dict(server, pane=pane) if server and re.fullmatch(r"%\d+", pane) else None
+
+def transcript(sid, hint=None):
+    if isinstance(hint, str) and hint and "\0" not in hint and os.path.isfile(hint):
+        return hint
+    for p in sorted(glob.glob(os.path.join(PROJECTS, "*", sid + ".jsonl"))):
+        if os.path.isfile(p):
+            return p
+    return ""
+
+def resolve(tab):
+    """The chat in a tab as (sid, cwd, transcript), or None."""
+    regs = {e["session_id"]: e for e in registry()}
+    live = [s for s in live_sessions() if pane_of(s) == tab["pane"]]
+    if live:
+        s = max(live, key=lambda s: num(s.get("updatedAt")) or num(s.get("startedAt")))
+        sid, cwd = s["sessionId"], s.get("cwd")
+        r = regs.get(sid, {})
+        if not isinstance(cwd, str) or not cwd:
+            cwd = r.get("cwd")
+    else:
+        mine = [e for e in regs.values() if e.get("pane") == tab["pane"] and on_server(e, tab)]
+        if not mine:
+            return None
+        r = max(mine, key=lambda e: num(e.get("ts")))
+        sid, cwd = r["session_id"], r.get("cwd")
+    if not isinstance(cwd, str) or not cwd:
+        return None
+    return sid, cwd, transcript(sid, r.get("transcript_path"))
+
+def clean_title(t):
+    # Claude's title starts with ✳ when idle and a braille spinner when busy; ◐ is ours.
+    t = re.sub(r"[\x00-\x1f\x7f]", " ", t).strip()
+    return re.sub(r"^(?:[✳◐⠀-⣿]\s*)+", "", t).strip()
+
+def label(e):
+    t = e.get("title") if isinstance(e.get("title"), str) else ""
+    return t or os.path.basename(e["cwd"].rstrip("/")) or e["session_id"][:8]
+
+def age(t):
+    s = max(0, int(NOW - num(t)))
+    if s < 60:
+        return "now"
+    if s < 3600:
+        return "%dm" % (s // 60)
+    if s < 86400:
+        return "%dh" % (s // 3600)
+    return "%dd" % (s // 86400)
+
+def run_shell(*args):
+    """A tmux command that runs args in sh: each arg sh-escaped, the whole in tmux single quotes,
+    which allow no escapes, so a quote, a # (tmux expands formats) or a control character in
+    any arg is refused."""
+    if any(re.search(r"['#\x00-\x1f]", a) for a in args):
+        raise SystemExit(1)
+    return "run-shell '%s'" % " ".join(re.sub(r"([^\w./%@:,+=-])", r"\\\1", a) for a in args)
+
+def save_tab(e, sid, cwd, tpath, title, tab):
+    e.update(session_id=sid, cwd=cwd, transcript_path=tpath, saved_at=round(NOW, 3), tab=tab)
+    title = clean_title(title)
+    if title or not isinstance(e.get("title"), str):
+        e["title"] = title
+
+def op_resolve(pane, start, pid, socket):
+    tab = make_tab(pane, start, pid, socket)
+    found = tab and resolve(tab)
+    if found:
+        print(found[0])
+
+def op_star(pane, start, pid, socket, title):
+    tab = make_tab(pane, start, pid, socket)
+    found = tab and resolve(tab)
+    if not found:
+        print("none")
+        return
+    sid, cwd, tpath = found
+    e = entry(sid)
+    if e and e["starred"]:
+        e["starred"] = False
+        save(e)
+        print("off\x1f" + label(e))
+        return
+    e = e or {"shelved": False}
+    save_tab(e, sid, cwd, tpath, title, tab)
+    e["starred"] = True
+    save(e)
+    print("on\x1f" + label(e))
+
+def op_shelve(mode, pane, start, pid, socket, title):
+    tab = make_tab(pane, start, pid, socket)
+    found = tab and resolve(tab)
+    if not found:
+        print("none")
+        return
+    sid, cwd, tpath = found
+    if not tpath:
+        print("empty")
+        return
+    if mode == "check":
+        print("ok")
+        return
+    e = entry(sid) or {"starred": False}
+    save_tab(e, sid, cwd, tpath, title, tab)
+    e["shelved"] = True
+    save(e)
+    # claude-restore must not reopen it, and the SessionEnd `other` the kill sends finds no file.
+    remove(os.path.join(REG, sid + ".json"))
+    print("ok\x1f" + label(e))
+
+def op_live(sid, start, pid, socket, csess):
+    """Where sid runs: `pane, window, 1 if the window is in the client's session` for a pane on
+    this server, `outside` when it runs but in no pane here, nothing when it isn't running."""
+    panes = {}
+    for line in sys.stdin.read().splitlines():
+        parts = line.split(" ")
+        if len(parts) == 3:
+            panes.setdefault(parts[2], (parts[1], set()))[1].add(parts[0])
+    running = [s for s in live_sessions() if s["sessionId"] == sid]
+    candidates = [pane_of(s) for s in running]
+    server = make_server(start, pid, socket)
+    r = load(os.path.join(REG, sid + ".json")) or {}
+    if server and on_server(r, server) and "ended_other_at" not in r:
+        candidates.append(r.get("pane"))
+    for p in candidates:
+        if p in panes:
+            window, sessions = panes[p]
+            print("\x1f".join((p, window, "1" if csess in sessions else "0")))
+            return
+    if running:
+        print("outside")
+
+def op_plan(sid):
+    e = entry(sid)
+    if not e:
+        print("bad\x1f%s is not saved" % sid[:8])
+        return
+    cwd = e["cwd"]
+    if re.search(r"[\x00-\x1f]", cwd):
+        why = "its directory name has a control character"
+    elif not cwd or not os.path.isdir(cwd):
+        why = "its directory is gone"
+    elif "#" in cwd:
+        why = "its directory name has a # (tmux would expand it)"
+    else:
+        mode = "resume" if transcript(sid, e.get("transcript_path")) else "fresh"
+        print("\x1f".join(("open", cwd, mode)))
+        return
+    print("bad\x1fcan't reopen %s: %s" % (label(e), why))
+
+def op_opened(sid, mode):
+    e = entry(sid)
+    if not e:
+        return
+    if mode == "fresh":
+        remove(spath(sid))   # nothing to resume: a plain claude, and the chat is gone
+        return
+    e["shelved"] = False
+    save(e)
+
+def op_rm(sid):
+    e = entry(sid)
+    if e:
+        remove(spath(sid))
+        print(label(e))
+
+def op_menu(removing, me, client, pane, sid):
+    tail = [client] if client else []
+    rows = entries()[:len(KEYS)]
+    items = []
+    if removing == "0":
+        if sid:
+            e = entry(sid)
+            items += ["Unstar this tab" if e and e["starred"] else "Star this tab", "*",
+                      run_shell(me, "star", pane, *tail),
+                      "Shelve this tab", "V", run_shell(me, "shelve", pane, *tail)]
+        else:
+            items += ["-Star this tab", "", "", "-Shelve this tab", "", ""]
+        items.append("")
+    for key, e in zip(KEYS, rows):
+        name = label(e)
+        name = name if len(name) <= 40 else name[:39] + "…"
+        mark = "★ " if e["starred"] else "▤ "
+        items += [mark + name.replace("#", "##") + " · " + age(e.get("saved_at")), key,
+                  run_shell(me, "rm" if removing == "1" else "open", e["session_id"], *tail)]
+    if not rows:
+        items += ["-(nothing saved)", "", ""]
+    elif removing == "0":
+        items += ["", "Remove…", "-", run_shell(me, "menu", "--remove", *tail)]
+    sys.stdout.write("".join(i + "\0" for i in items))
+
+def op_list():
+    for e in entries():
+        flag = "★" if e["starred"] else "▤"
+        repo = os.path.basename(e["cwd"].rstrip("/")) or "?"
+        print("%s %s %-20s %s" % (flag, e["session_id"][:8], repo, e.get("title") or ""))
+
+def op_hook(pane, start, pid, socket, title):
+    try:
+        d = json.load(sys.stdin)
+    except Exception:
+        return
+    if not isinstance(d, dict) or d.get("agent_id"):
+        return
+    sid = d.get("session_id")
+    if not isinstance(sid, str) or not SID.fullmatch(sid):
+        return
+    tab = make_tab(pane, start, pid, socket)
+    event = d.get("hook_event_name")
+    if event == "SessionEnd":
+        e = entry(sid)
+        if e and clean_title(title):
+            e["title"] = clean_title(title)
+            save(e)
+        print("off")
+        return
+    if event != "SessionStart":
+        return
+    if tab:
+        for e in entries():
+            if e["session_id"] == sid or not e["starred"] or e.get("tab") != tab:
+                continue
+            if d.get("source") == "clear" and not entry(sid):
+                # The star follows the tab: the chat /clear just left becomes the new one.
+                remove(spath(e["session_id"]))
+                e["session_id"] = sid
+                e["transcript_path"] = d.get("transcript_path") or ""
+                save(e)
+            else:
+                e["tab"] = None   # another chat runs in its tab now; a later /clear isn't its
+                save(e)
+    e = entry(sid)
+    if e and e["shelved"]:
+        e["shelved"] = False   # reopened, however: off the shelf
+        save(e)
+    if e and e["starred"]:
+        if tab:
+            e["tab"] = tab
+            save(e)
+        print("on")
+    else:
+        print("off")
+
+OPS = {"resolve": op_resolve, "star": op_star, "shelve": op_shelve, "live": op_live,
+       "plan": op_plan, "opened": op_opened, "rm": op_rm, "menu": op_menu, "list": op_list,
+       "hook": op_hook, "run-shell": lambda *a: print(run_shell(*a))}
+OPS[sys.argv[1]](*sys.argv[2:])
+EOF
+
+py() {
+  SAVED_DIR="$state/saved" REG_DIR="$state/open-sessions" SESSIONS_DIR="$HOME/.claude/sessions" \
+    PROJECTS_DIR="$HOME/.claude/projects" python3 -I -c "$PY" "$@"
+}
+
+# A message on the client's status line. tmux format-expands it, so # is doubled.
+msg() {
+  local text="claude-saved: $*"
+  tmux display-message "${cflag[@]}" "${text//#/##}" 2>/dev/null
+}
+
+set_client() {
+  client="${1:-}"
+  cflag=()
+  [ -z "$client" ] || cflag=(-c "$client")
+}
+
+# The tab's server (start, pid, socket) and title; fails when tmux can't read the pane.
+tab() {
+  start="" pid="" socket="" title=""
+  read -r start pid socket < <(tmux display -p -t "$1" '#{start_time} #{pid} #{socket_path}' 2>/dev/null)
+  title=$(tmux display -p -t "$1" '#{pane_title}' 2>/dev/null)
+  [[ "$start" =~ ^[0-9]+$ && "$pid" =~ ^[0-9]+$ && -n "$socket" ]]
+}
+
+# The pane and session the client is looking at; with no client, this shell's own tmux.
+# (display-message -c only says where a message shows: its formats follow -t's default target.)
+view() {
+  cpane="" csess=""
+  if [ -z "$client" ]; then
+    read -r cpane csess < <(tmux display -p '#{pane_id} #{session_id}' 2>/dev/null)
+    return
+  fi
+  local p s c
+  while read -r p s c; do
+    [ "$c" = "$client" ] && { cpane=$p csess=$s; return; }
+  done < <(tmux list-clients -F '#{pane_id} #{session_id} #{client_name}' 2>/dev/null)
+}
+
+pane_ok() { [[ "${1:-}" =~ ^%[0-9]+$ ]]; }
+sid_ok() { [[ "${1:-}" =~ ^[A-Za-z0-9][A-Za-z0-9_-]{7,127}$ ]]; }
+
+# Where sid runs now, as `live` (pane window in-client's-session) or `outside`; empty if not running.
+locate() {
+  live=$(tmux list-panes -a -F '#{session_id} #{window_id} #{pane_id}' 2>/dev/null |
+    py live "$1" "$start" "$pid" "$socket" "$csess")
+}
+
+case "$cmd" in
+  list) py list ;;
+
+  star)
+    pane_ok "${1:-}" || exit 0
+    pane=$1
+    set_client "${2:-}"
+    tab "$pane" || { msg "can't read tmux pane $pane"; exit 0; }
+    IFS=$'\x1f' read -r result name < <(py star "$pane" "$start" "$pid" "$socket" "$title")
+    case "${result:-}" in
+      on) tmux set -w -t "$pane" @claude_star 1; msg "starred: $name" ;;
+      off) tmux set -wu -t "$pane" @claude_star; msg "unstarred: $name" ;;
+      *) msg "no Claude session found in this tab" ;;
+    esac ;;
+
+  shelve)
+    force=0
+    [ "${1:-}" = --force ] && { force=1; shift; }
+    pane_ok "${1:-}" || exit 0
+    pane=$1
+    set_client "${2:-}"
+    tab "$pane" || { msg "can't read tmux pane $pane"; exit 0; }
+    case "$(py shelve check "$pane" "$start" "$pid" "$socket" "$title")" in
+      none) msg "no Claude session found in this tab"; exit 0 ;;
+      empty) msg "no messages yet, nothing to shelve"; exit 0 ;;
+      ok) ;;
+      *) exit 0 ;;
+    esac
+    if [ "$force" = 0 ] && [ "$(tmux show -wqv -t "$pane" @claude_state 2>/dev/null)" = busy ]; then
+      # -b: return now and let tmux run the command on y (a waiting prompt would hold run-shell).
+      again=$(py run-shell "$self" shelve --force "$pane" ${client:+"$client"}) || exit 0
+      tmux confirm-before -b ${client:+-t "$client"} -p "Claude is working; shelve anyway? (y/n)" "$again"
+      exit 0
+    fi
+    IFS=$'\x1f' read -r result name < <(py shelve write "$pane" "$start" "$pid" "$socket" "$title")
+    [ "${result:-}" = ok ] || exit 0
+    if [ "$(tmux display -p -t "$pane" '#{window_panes}' 2>/dev/null)" = 1 ]; then
+      tmux kill-window -t "$pane"
+    else
+      tmux kill-pane -t "$pane"
+    fi
+    msg "shelved: $name" ;;
+
+  menu)
+    removing=0
+    [ "${1:-}" = --remove ] && { removing=1; shift; }
+    set_client "${1:-}"
+    view
+    sid=""
+    if [ "$removing" = 0 ] && pane_ok "$cpane" && tab "$cpane"; then
+      sid=$(py resolve "$cpane" "$start" "$pid" "$socket")
+    fi
+    mapfile -d '' items < <(py menu "$removing" "$self" "$client" "$cpane" "$sid")
+    [ ${#items[@]} -gt 0 ] || { msg "can't build the menu (a quote or # in $self or the client name?)"; exit 0; }
+    heading=Shelf
+    [ "$removing" = 1 ] && heading="Remove from shelf"
+    tmux display-menu "${cflag[@]}" -T "#[align=centre]$heading" -x C -y C "${items[@]}" ;;
+
+  open)
+    sid_ok "${1:-}" || exit 0
+    sid=$1
+    set_client "${2:-}"
+    view
+    pane_ok "$cpane" && tab "$cpane" || { msg "no tmux client to open it in"; exit 0; }
+    locate "$sid"
+    if [ "$live" = outside ]; then
+      msg "that chat is already running outside this tmux server"
+      exit 0
+    elif [ -n "$live" ]; then
+      IFS=$'\x1f' read -r there window mine <<< "$live"
+      if [ "$mine" = 1 ]; then
+        tmux select-window -t "$csess:$window"
+        tmux select-pane -t "$there"
+      else
+        tmux switch-client "${cflag[@]}" -t "$there"
+      fi
+      exit 0
+    fi
+    IFS=$'\x1f' read -r decision dir mode < <(py plan "$sid")
+    [ "${decision:-}" = open ] || { msg "$dir"; exit 0; }
+    new=$(tmux new-window -P -F '#{pane_id}' -t "$csess:" -c "$dir" 2>/dev/null)
+    [ -n "$new" ] || { msg "tmux couldn't open a window"; exit 0; }
+    if [ "$mode" = fresh ]; then
+      line=claude
+    else
+      printf -v line 'claude --resume %q' "$sid"
+    fi
+    tmux send-keys -t "$new" "$line" Enter || { msg "tmux couldn't type into $new"; exit 0; }
+    py opened "$sid" "$mode" ;;
+
+  rm)
+    sid_ok "${1:-}" || exit 0
+    sid=$1
+    set_client "${2:-}"
+    name=$(py rm "$sid")
+    view
+    if pane_ok "$cpane" && tab "$cpane"; then
+      locate "$sid"
+      IFS=$'\x1f' read -r there _ <<< "$live"
+      pane_ok "$there" && tmux set -wu -t "$there" @claude_star
+    fi
+    [ -z "$name" ] || msg "removed: $name" ;;
+
+  hook)
+    [ "${CLAUDE_CODE_SESSION_ATTENDED:-}" != 0 ] && pane_ok "${TMUX_PANE:-}" || exit 0
+    input=$(cat)
+    tab "$TMUX_PANE"   # fails at SessionEnd when the window is already gone; py copes
+    case "$(printf '%s' "$input" | py hook "$TMUX_PANE" "$start" "$pid" "$socket" "$title")" in
+      on) tmux set -w -t "$TMUX_PANE" @claude_star 1 ;;
+      off) tmux set -wu -t "$TMUX_PANE" @claude_star ;;
+    esac ;;
+esac
+exit 0
