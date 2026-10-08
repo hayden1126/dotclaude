@@ -6,8 +6,9 @@ SessionStart writes $XDG_STATE_HOME/dotclaude/open-sessions/<session_id>.json fo
 path and start time) so claude-restore can tell which tabs died with an earlier server.
 SessionEnd deletes the entry on an explicit end (/exit, /clear, logout) and only marks it on
 `other`, which a window kill, a SIGTERM and a tmux server kill all send (probed 2026-10-05), so a
-shutdown can't be told from a closed window at hook time. A stub tmux answers `display` and logs
-each call's argv, one argument per field."""
+shutdown can't be told from a closed window at hook time. In a tab it then hands the payload to
+~/.local/bin/claude-saved, fail-open. A stub tmux answers `display` and logs each call's argv, one
+argument per field."""
 import json
 import os
 import re
@@ -53,8 +54,9 @@ class Registry(unittest.TestCase):
         # The test may itself run inside a Claude session in a tmux tab: start from a clean env.
         self.env = {k: v for k, v in os.environ.items()
                     if not k.startswith(("CLAUDE", "TMUX"))}
+        self.home = os.path.join(self.tmp, "home")   # never the real ~/.local/bin/claude-saved
         self.env.update(PATH=stubs + os.pathsep + self.env["PATH"], STUB_LOG=self.log,
-                        XDG_STATE_HOME=os.path.join(self.tmp, "state"),
+                        HOME=self.home, XDG_STATE_HOME=os.path.join(self.tmp, "state"),
                         STUB_START=str(START), STUB_PID=str(PID), STUB_SOCKET=SOCKET)
 
     def fire(self, event, session=TAB, **payload):
@@ -181,6 +183,57 @@ class Registry(unittest.TestCase):
                                    timeout=10, env={**self.env, **TAB})
                 self.assertEqual((p.returncode, p.stdout, p.stderr), (0, "", ""))
         self.assertEqual(self.entries(), {})
+
+    # --- the hand-off to claude-saved -------------------------------------------------------
+
+    def saved_stub(self, body="", mode=0o755):
+        """A claude-saved that logs its args and stdin, then runs body."""
+        path = os.path.join(self.home, ".local", "bin", "claude-saved")
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as f:
+            f.write('#!/usr/bin/env bash\n'
+                    '{ printf "%s\\n" "$*"; cat; printf "\\n"; } >> "$STUB_LOG.saved"\n' + body)
+        os.chmod(path, mode)
+
+    def handed(self):
+        """Each hand-off as (args, payload)."""
+        path = self.log + ".saved"
+        if not os.path.exists(path):
+            return []
+        with open(path) as f:
+            lines = f.read().splitlines()
+        return [(lines[i], json.loads(lines[i + 1])) for i in range(0, len(lines), 2)]
+
+    def test_a_tab_hands_each_start_and_end_to_claude_saved(self):
+        self.saved_stub()
+        self.start()
+        self.end("clear")
+        handed = self.handed()
+        self.assertEqual([(args, d["hook_event_name"], d["session_id"]) for args, d in handed],
+                         [("hook", "SessionStart", SID), ("hook", "SessionEnd", SID)])
+        self.assertEqual(handed[1][1]["reason"], "clear")
+
+    def test_no_hand_off_outside_a_tab_or_without_claude_saved(self):
+        self.saved_stub(mode=0o644)   # linked but not executable
+        self.start()
+        self.saved_stub()
+        self.fire("SessionEnd", session={"CLAUDE_CODE_SESSION_ATTENDED": "1"}, reason="other")
+        self.start(session={**TAB, "CLAUDE_CODE_SESSION_ATTENDED": "0"})
+        self.start(agent_id="a1")
+        self.assertEqual(self.handed(), [])
+
+    def test_a_failing_claude_saved_changes_nothing(self):
+        self.saved_stub('echo noise; echo more >&2; exit 3\n')
+        self.start()   # fire() asserts exit 0 and no output
+        self.assertIn(SID, self.entries())
+        self.assertEqual(len(self.handed()), 1)
+
+    def test_a_hung_claude_saved_is_cut_off(self):
+        self.saved_stub('exec sleep 30\n')
+        t = time.monotonic()
+        self.start()
+        self.assertLess(time.monotonic() - t, 8)
+        self.assertIn(SID, self.entries())
 
 
 class Wiring(unittest.TestCase):

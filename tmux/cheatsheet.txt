@@ -23,6 +23,11 @@
     wheel or C-b [   enter, q exits
     drag to select   -> clipboard
 
+  SHELF  (Claude chats, kept after the tab closes)
+    right-click a tab   Star (★, a bookmark) / Shelve (save + close) / Shelf…
+    C-b S        the shelf: reopen a starred or shelved chat
+    C-b Enter    Star / Shelve / Shelf… too (no Shift)
+
   SESSION
     C-b d        detach (keeps running)
     C-b s        list / switch sessions
