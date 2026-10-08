@@ -67,6 +67,7 @@ class Status(unittest.TestCase):
         self.server = SERVER
         self.panes = []     # (pane_id, window_id, pane_pid, command, path)
         self.windows = {}   # window_id -> @claude_state
+        self.stars = set()  # window_ids with claude-saved's @claude_star
 
     # --- fixtures -----------------------------------------------------------------------
 
@@ -96,7 +97,7 @@ class Status(unittest.TestCase):
 
     def run_status(self, agents, hosts="501 502", raw=None, **env):
         self.env["STUB_PANES"] = "\n".join(" ".join(map(str, p)) for p in self.panes)
-        self.env["STUB_WINDOWS"] = "\n".join(f"{self.server} {w} {s}"
+        self.env["STUB_WINDOWS"] = "\n".join(f"{self.server} {w} {int(w in self.stars)} {s}"
                                              for w, s in self.windows.items())
         self.env["STUB_AGENTS"] = raw if raw is not None else json.dumps(agents)
         self.env["STUB_HOSTS"] = hosts
@@ -395,6 +396,14 @@ class Status(unittest.TestCase):
         self.run_status([], hosts="")
         self.assertEqual(self.writes(), ["tmux set-option -uw -t @4 @claude_state"])
         self.assertFalse(self.queried())
+
+    def test_a_star_a_dead_claude_left_is_cleared(self):
+        # claude died without SessionEnd: its ★ goes with the state; an idle window keeps it.
+        self.pane("%4", "@4", "/x", state="", command="zsh")
+        self.pane("%5", "@5", "/y", state="idle")
+        self.stars |= {"@4", "@5"}
+        self.run_status([], hosts="")
+        self.assertEqual(self.writes(), ["tmux set-option -uw -t @4 @claude_star"])
 
 
 if __name__ == "__main__":

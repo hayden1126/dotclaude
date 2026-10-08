@@ -67,8 +67,9 @@ since run-shell shows output in the pane.
   back to `#[`), then `#` is doubled, since tmux format-expands menu names.
 - `open <sid> [client]` goes to the chat's pane if it runs in this server (a sessions file passes
   the same `#{pane_pid}` check; select the window in the client's session, or switch the client
-  when another session holds it), stops if it runs outside tmux (a live sessions file with no
-  `tmux` field), and otherwise checks the directory with claude-restore's rules (exists, no `#`,
+  when another session holds it), stops if it runs anywhere else (a live sessions file, its
+  `procStart` matching the pid's start time, that no pane here holds: outside tmux or another
+  tmux server; a second live copy of a chat is the one thing open must not make), and otherwise checks the directory with claude-restore's rules (exists, no `#`,
   no control character) and the transcript, then opens a selected window in the client's session
   typing `claude --resume <id>`. It never deletes the entry: the resumed session's SessionStart
   takes it off the shelf (keeping a star), so a resume that fails to start loses nothing.
@@ -127,7 +128,8 @@ state glyph.
 | Open a shelved chat | A new window in the client's session running `claude --resume <id>`; the entry stays until that session's SessionStart takes it off the shelf |
 | Open a starred chat | Reopened, entry kept, still starred |
 | Open a chat already in a live pane | Its window selected (or the client switched), no new window |
-| Open a chat live outside tmux | A message, no new window |
+| Open a chat live outside tmux or in another tmux server | A message, no new window |
+| A sessions file whose pid was reused after a restart | `procStart` doesn't match: not live, so it reopens |
 | Open a chat whose sessions file names a pane it doesn't run under | That file is ignored, so the chat reopens here |
 | Open with the transcript gone | A message, entry kept |
 | Open with the directory gone, or a `#` in it | A message, entry kept |
@@ -145,10 +147,8 @@ pane's process, so the `/proc` ancestry check runs for real).
 
 - `@claude_star` is a window option, like `@claude_state`: in a split, any session starting in
   the other pane sets or clears the window's ★.
-- A claude that dies without SessionEnd leaves its ★ until the next session in that window;
-  `tmux-claude-status` clears `@claude_state` then but not `@claude_star`.
-- A chat running in another tmux server (its sessions file names a pane there) is not detected
-  as running, so Open resumes it a second time here.
+- A claude that dies without SessionEnd keeps its ★ until `tmux-claude-status` sees no claude in
+  the window (a few seconds, while a client is attached).
 - The menu shows at most 35 chats (one per key), fewer on a short client; `claude-saved list`
   shows all.
 

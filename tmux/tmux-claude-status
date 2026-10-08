@@ -3,7 +3,8 @@
 # Hooks own live transitions (busy/wait/idle) and are instant. This backstop, run from
 # status-left #() (only while attached) and rate-limited ~3s, does ONLY what hooks can't:
 #   - CLEAR @claude_state for a window where Claude is no longer running (crash / kill / a
-#     Stop that never reached the hook), so a glyph can't get stuck.
+#     Stop that never reached the hook), so a glyph can't get stuck; claude-saved's ★
+#     (@claude_star) goes with it.
 #   - FILL @claude_state once for a window running Claude that has no state yet (cold start:
 #     you attached to a session that was already going). A window nothing accounts for gets
 #     "idle" (no glyph), so it isn't re-queried every run.
@@ -52,12 +53,14 @@ fi
 # which trips the ledger's sandbox self-check. This is the script's only output.
 timeout 2 env -u CLAUDE_PID "$HOME/.local/bin/delegation-ledger" watch --summary 2>/dev/null | tee "$cache"
 
-# window -> current @claude_state (window option; same for every pane in the window).
-declare -A win_state
+# window -> current @claude_state (window option; same for every pane in the window), and the
+# windows showing claude-saved's ★ (the state goes last: it may be empty).
+declare -A win_state win_star
 server=""
-while read -r pid wid state; do
+while read -r pid wid star state; do
   [ -n "$wid" ] && win_state[$wid]="$state" && server="$pid"
-done < <(tmux list-windows -a -F '#{pid} #{window_id} #{@claude_state}' 2>/dev/null)
+  [ "$star" = 1 ] && win_star[$wid]=1
+done < <(tmux list-windows -a -F '#{pid} #{window_id} #{?@claude_star,1,0} #{@claude_state}' 2>/dev/null)
 [ -n "$server" ] || exit 0       # tmux answered nothing: don't rewrite the map from it
 
 # Every pane: id, window, shell pid, command, cwd (last: it may hold spaces).
@@ -75,6 +78,7 @@ for wid in "${!win_state[@]}"; do
     [ -z "${win_state[$wid]}" ] && need_fill+=("$wid")                              # claude running, no state -> cold start
   else
     [ -n "${win_state[$wid]}" ] && tmux set-option -uw -t "$wid" @claude_state 2>/dev/null  # no claude -> clear stale
+    [ -n "${win_star[$wid]:-}" ] && tmux set-option -uw -t "$wid" @claude_star 2>/dev/null   # and a star a dead claude left
   fi
 done
 

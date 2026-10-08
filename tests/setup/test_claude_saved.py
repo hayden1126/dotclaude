@@ -98,11 +98,14 @@ class Saved(unittest.TestCase):
         open(path, "w").close()
         return path
 
-    def live(self, n, pane, pid=None, kind="interactive", tmux=None):
+    def live(self, n, pane, pid=None, kind="interactive", tmux=None, proc_start=None):
         """Claude's own live-session file for session n in pane."""
         self.n += 1
+        e = {}
+        if proc_start is not None:
+            e["procStart"] = proc_start
         with open(os.path.join(self.sessions, f"{self.n}.json"), "w") as f:
-            json.dump({"pid": os.getpid() if pid is None else pid, "sessionId": sid(n),
+            json.dump(e | {"pid": os.getpid() if pid is None else pid, "sessionId": sid(n),
                        "cwd": self.cwd(n), "kind": kind, "status": "idle",
                        "tmux": f"main:@1.{pane}" if tmux is None else tmux,
                        "updatedAt": self.n}, f)
@@ -453,16 +456,38 @@ class Saved(unittest.TestCase):
         self.assertIn(["tmux", "select-window", "-t", "$1:@3"], self.calls("tmux"))
         self.assertIn(["tmux", "select-pane", "-t", "%7"], self.calls("tmux"))
 
-    def test_open_ignores_a_sessions_file_not_under_its_pane(self):
-        # The file names %7, but its claude doesn't run under %7's process here (another
-        # server's %7, or a reused pid): not this chat's pane, and not "outside tmux" either.
+    def test_open_a_chat_live_in_another_tmux_server_stops(self):
+        # The file names %7, but its claude doesn't run under this server's %7: another server
+        # holds the chat. Resuming it here would make a second live copy.
         self.put(1, shelved=True)
         self.transcript(1)
         self.live(1, "%7")
         self.env["STUB_PANES"] = f"$1 @3 %7 {DEAD}\\n"
         self.run_saved("open", sid(1), CLIENT)
-        self.assertEqual(len(self.opened()), 1)
+        self.assertEqual(self.opened(), [])
         self.assertNotIn("select-pane", [a[1] for a in self.calls("tmux")])
+        self.assertIn("already running elsewhere", self.messages()[-1])
+
+    def test_a_reused_pid_is_not_the_chat(self):
+        # A sessions file left by a restart whose pid now names another process: its procStart
+        # doesn't match that process's start time, so the chat isn't running and it reopens.
+        self.put(1, shelved=True)
+        self.transcript(1)
+        self.live(1, "%7", proc_start=1)
+        self.env["STUB_PANES"] = f"$1 @3 %7 {DEAD}\\n"
+        self.run_saved("open", sid(1), CLIENT)
+        self.assertEqual(len(self.opened()), 1)
+
+    def test_a_matching_proc_start_counts_as_live(self):
+        with open(f"/proc/{os.getpid()}/stat") as f:
+            start = int(f.read().rpartition(")")[2].split()[19])
+        self.put(1, shelved=True)
+        self.transcript(1)
+        self.live(1, "%7", proc_start=start)
+        self.env["STUB_PANES"] = f"$1 @3 %7 {self.ppid}\\n$1 @1 %4 1\\n"
+        self.run_saved("open", sid(1), CLIENT)
+        self.assertEqual(self.opened(), [])
+        self.assertIn(["tmux", "select-pane", "-t", "%7"], self.calls("tmux"))
 
     def test_open_a_chat_running_in_another_session_switches_the_client(self):
         self.put(1, starred=True)
@@ -479,7 +504,7 @@ class Saved(unittest.TestCase):
         self.env["STUB_PANES"] = "$1 @1 %4 1\\n"
         self.run_saved("open", sid(1), CLIENT)
         self.assertEqual(self.opened(), [])
-        self.assertIn("already running outside", self.messages()[-1])
+        self.assertIn("already running elsewhere", self.messages()[-1])
         self.assertTrue(self.saved()[sid(1)]["shelved"])
 
     def test_a_registry_pane_that_is_gone_is_skipped(self):
@@ -491,7 +516,7 @@ class Saved(unittest.TestCase):
         self.env["STUB_PANES"] = "$1 @1 %4 1\\n"
         self.run_saved("open", sid(1), CLIENT)
         self.assertEqual(self.opened(), [])
-        self.assertIn("already running outside", self.messages()[-1])
+        self.assertIn("already running elsewhere", self.messages()[-1])
 
     def test_open_with_the_transcript_gone_keeps_the_entry(self):
         self.put(1, starred=True)

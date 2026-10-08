@@ -137,13 +137,17 @@ def alive(pid):
         return False
     return True
 
-def parent(pid):
-    """pid's parent, from /proc/<pid>/stat (the field after the parenthesized command name)."""
+def stat(pid, field):
+    """A numeric field of /proc/<pid>/stat, counted from 3 (the state) after the parenthesized
+    command name, which may hold spaces: 4 is the parent, 22 the start time."""
     try:
         with open("/proc/%d/stat" % pid) as f:
-            return int(f.read().rpartition(")")[2].split()[1])
+            return int(f.read().rpartition(")")[2].split()[field - 3])
     except (OSError, ValueError, IndexError):
         return None
+
+def parent(pid):
+    return stat(pid, 4)
 
 def descends(pid, ancestor):
     """True when pid is ancestor or runs under it, within 8 levels. A sessions file names its
@@ -162,7 +166,8 @@ def live_sessions():
     for path in glob.glob(os.path.join(SESSIONS, "*.json")):
         s = load(path)
         if (s and s.get("kind") == "interactive" and isinstance(s.get("sessionId"), str)
-                and SID.fullmatch(s["sessionId"]) and alive(s.get("pid"))):
+                and SID.fullmatch(s["sessionId"]) and alive(s.get("pid"))
+                and (not isint(s.get("procStart")) or stat(s["pid"], 22) == s["procStart"])):
             yield s
 
 def pane_of(s):
@@ -314,9 +319,10 @@ def op_shelve(mode, pane, start, pid, pane_pid, socket, title):
 
 def op_live(sid, start, pid, socket, csess):
     """Where sid runs: `pane, window, 1 if the window is in the client's session` for a pane on
-    this server, `outside` when it runs outside tmux, nothing otherwise. A sessions file counts
-    for a pane only when its claude runs under that pane's process; one that names a pane but
-    fails that check (another server's pane, a reused pid) is ignored."""
+    this server, `elsewhere` when it runs anywhere else (outside tmux, another tmux server),
+    nothing otherwise. A sessions file counts for a pane only when its claude runs under that
+    pane's process. Its procStart must match the pid's start time, so a pid reused after a
+    restart is not the chat; a second live copy of a chat is what this refuses to make."""
     panes = {}
     for line in sys.stdin.read().splitlines():
         parts = line.split(" ")
@@ -334,8 +340,8 @@ def op_live(sid, start, pid, socket, csess):
             window, _, sessions = panes[p]
             print("\x1f".join((p, window, "1" if csess in sessions else "0")))
             return
-    if any(not s.get("tmux") for s in running):
-        print("outside")
+    if running:
+        print("elsewhere")
 
 def op_plan(sid):
     e = entry(sid)
@@ -519,7 +525,7 @@ pane_ok() { [[ "${1:-}" =~ ^%[0-9]+$ ]]; }
 sid_ok() { [[ "${1:-}" =~ ^[A-Za-z0-9][A-Za-z0-9_-]{7,127}$ ]]; }
 
 # Where sid runs now, into $live: `pane window 1-if-in-the-client's-session` (split by \x1f),
-# `outside`, or empty when it isn't running.
+# `elsewhere`, or empty when it isn't running.
 locate() {
   live=$(tmux list-panes -a -F '#{session_id} #{window_id} #{pane_id} #{pane_pid}' 2>/dev/null |
     py live "$1" "$start" "$pid" "$socket" "$csess")
@@ -605,8 +611,8 @@ case "$cmd" in
     view
     pane_ok "$cpane" && tab "$cpane" || { msg "no tmux client to open it in"; exit 0; }
     locate "$sid"
-    if [ "$live" = outside ]; then
-      msg "that chat is already running outside this tmux server"
+    if [ "$live" = elsewhere ]; then
+      msg "that chat is already running elsewhere (outside tmux or in another tmux server)"
       exit 0
     elif [ -n "$live" ]; then
       IFS=$'\x1f' read -r there window mine <<< "$live"
