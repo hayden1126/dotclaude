@@ -322,8 +322,9 @@ need nothing extra.
   **Shelf…** in the same menu, or Ctrl-b S, lists the saved chats newest first and reopens one
   as `claude --resume <id>` in its directory, or goes to its pane if it is still running.
   Reopening takes a chat off the shelf; a starred one stays starred. On `/clear` in a starred tab
-  the star follows the tab to the new session. Shelve refuses a chat with no messages yet and
-  asks first while Claude is busy. `tmux/claude-saved` keeps one file per chat in
+  the star follows the tab to the new session. Star and Shelve work only where Claude is running
+  and refuse a chat with no messages yet; Shelve asks first while Claude is busy. A shelf too
+  tall for the terminal ends in "+N more". `tmux/claude-saved` keeps one file per chat in
   `$XDG_STATE_HOME/dotclaude/saved/` and finds a tab's chat from Claude's own
   `~/.claude/sessions/` files, falling back to the registry; `claude-saved list` prints the list.
 - **PreToolUse(`Write`): `overwrite-guard.sh`** (in this repo). The Write tool's own "File has not
