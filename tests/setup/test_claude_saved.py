@@ -503,5 +503,23 @@ class Saved(unittest.TestCase):
         self.assertTrue(os.access(SCRIPT, os.X_OK))
 
 
+class Wiring(unittest.TestCase):
+    def test_claude_conf_calls_the_script_and_shows_the_star(self):
+        with open(os.path.join(REPO, "tmux", "claude.conf")) as f:
+            conf = f.read()
+        call = '"$HOME/.local/bin/claude-saved '
+        for action in ("star #{pane_id} #{client_name}", "shelve #{pane_id} #{client_name}",
+                       "menu #{client_name}"):
+            with self.subTest(action=action):
+                self.assertIn("run-shell " + call + action + '"', conf)
+        self.assertIn("bind -n MouseDown3Status display-menu", conf)
+        self.assertIn('bind S run-shell ' + call + 'menu #{client_name}"', conf)
+        formats = [line for line in conf.splitlines() if "window-status-" in line and "format" in line]
+        self.assertEqual(len(formats), 2)
+        for line in formats:
+            self.assertIn(",}}#{?@claude_star,★ ,}#{?pane_title,", line)
+            self.assertIn("#{s/✳ //:pane_title}", line)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -16,8 +16,12 @@
 # for the old id and then a SessionStart `clear` for the new one. Those and any other named reason
 # delete the entry. A tmux kill-window, a SIGTERM to claude and a tmux kill-server all send
 # `other`, so a shutdown that signals claude looks like a closed window here: `other` only adds
-# ended_other_at, and claude-restore decides from the timing. tests/setup/test_session_registry.py
-# holds the cases. Fail-open: always exits 0.
+# ended_other_at, and claude-restore decides from the timing.
+#
+# Then, in a tab, it hands the same payload to ~/.local/bin/claude-saved (tmux/claude-saved,
+# linked by setup-tmux.sh), which keeps a starred chat's star on its tab across /clear. That call
+# is bounded by `timeout 3`, its output is dropped, and a failure changes nothing here.
+# tests/setup/test_session_registry.py holds the cases. Fail-open: always exits 0.
 set -uo pipefail
 
 [ "${CLAUDE_CODE_SESSION_ATTENDED:-}" != 0 ] || exit 0
@@ -87,4 +91,9 @@ elif event == "SessionEnd":
         except OSError:
             pass
 ' >/dev/null 2>&1
+
+saved="$HOME/.local/bin/claude-saved"
+if [ -n "${TMUX_PANE:-}" ] && [ -x "$saved" ]; then
+  printf '%s' "$input" | timeout 3 "$saved" hook >/dev/null 2>&1
+fi
 exit 0
