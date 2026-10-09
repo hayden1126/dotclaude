@@ -3,6 +3,7 @@ permission rules.
 
 A wrong type or a missing suffix here fails silently in Claude Code (an unknown value is
 ignored; a hook that exits non-2 doesn't block), so the baseline is pinned by test."""
+import glob
 import json
 import os
 import re
@@ -13,6 +14,13 @@ from _paths import REPO, load_script
 with open(os.path.join(REPO, "settings.json")) as f:
     S = json.load(f)
 POLICY = load_script("subagent-policy").load_policy()
+
+
+def matching(kind, command):
+    """The permission rules of this kind that match a Bash command. Claude Code matches a Bash
+    rule as a glob whose * spans spaces (verified live on 2.1.288)."""
+    return [rule for rule in S["permissions"][kind]
+            if re.fullmatch(re.escape(rule[len("Bash("):-1]).replace(r"\*", ".*"), command)]
 
 
 def commands(event, matcher=None):
@@ -217,11 +225,6 @@ class Baseline(unittest.TestCase):
         # but `git push origin feat -u`-style trailing flags and other remotes are not checked.
         # Also accepted (Hayden, 2026-10-07): deleting a non-main branch with `origin :feat`,
         # since no rule can catch ` :` without a :* (see the lint test below).
-        def matching(kind, command):
-            return [rule for rule in S["permissions"][kind]
-                    if re.fullmatch(re.escape(rule[len("Bash("):-1]).replace(r"\*", ".*"),
-                                    command)]
-
         denied = ["git push --force origin feat", "git push -f origin feat",
                   "git push origin feat --force", "git push origin feat -f",
                   "git push --force-with-lease origin feat",
@@ -244,12 +247,17 @@ class Baseline(unittest.TestCase):
                  "gh pr merge 5 --squash", "gh api -X PUT repos/o/r/pulls/5/merge",
                  # --output writes a file, which the read-only git allows below must not cover.
                  "git log --output=README.md", "git diff --output=x"]
-        # Pushes to a named branch and opening a PR run (Hayden still approves each in words).
+        # Pushes to a named branch and the PR lifecycle short of a merge run (Hayden still
+        # approves each in words; 2026-10-09 he extended his "perms for PR requests" to ready,
+        # edit, comment, close and reopen, after the classifier refused the handoff skill's own
+        # `gh pr ready` as an unrequested commit).
         # Read-only git and pipe filters skip the classifier, which once refused a
         # `git status -sb | head -1` as an unrequested commit. Each part of a pipe needs its
         # own rule (live probe, 2.1.293), hence head, tail, wc and grep.
         allowed = ["git push origin feat/x", "git push origin feat-force-fix",
                    "git push origin fix/x --follow-tags", "gh pr create --base main --head feat/x",
+                   "gh pr ready 5", "gh pr ready 5 --repo o/r", "gh pr edit 5 --body-file b.md",
+                   "gh pr comment 5 --body x", "gh pr close 5", "gh pr reopen 5",
                    "git push origin :feat",
                    "git status", "git status -sb", "git log", "git log --oneline -5",
                    "git diff", "git diff HEAD", "git show", "git show HEAD:README.md",
@@ -282,6 +290,25 @@ class Baseline(unittest.TestCase):
         for kind, cases in (("deny", denied), ("ask", asked)):
             for rule in S["permissions"][kind]:
                 self.assertIn([rule], [matching(kind, c) for c in cases], rule)
+
+    def test_every_gh_step_the_workflow_names_has_a_rule(self):
+        # Hayden's rule (2026-10-05): only merges and pushes to main need his click. The rules
+        # covered `gh pr create` alone, so the handoff skill's own `gh pr ready <n>` fell to the
+        # classifier, which passed it in one session and refused it in another (2026-10-09).
+        # Every `gh pr` or `gh run` verb that CLAUDE.md, a skill or an agent tells Claude to run
+        # needs an allow or ask rule, so a new workflow step fails here instead of in a session.
+        docs = ([os.path.join(REPO, "CLAUDE.md")]
+                + glob.glob(os.path.join(REPO, "skills", "**", "*.md"), recursive=True)
+                + glob.glob(os.path.join(REPO, "agents", "*.md")))
+        verbs = set()
+        for path in docs:
+            with open(path) as f:
+                verbs |= set(re.findall(r"\bgh (?:pr|run) [a-z]+", f.read()))
+        self.assertIn("gh pr ready", verbs)  # the scan still reaches the handoff skill
+        for verb in sorted(verbs):
+            with self.subTest(verb=verb):
+                command = verb + " 5"
+                self.assertTrue(matching("allow", command) or matching("ask", command), verb)
 
     def test_no_rule_uses_the_colon_star_forms(self):
         # The glob model above is only true without a :*. Live probe, 2.1.293: a trailing :* is
