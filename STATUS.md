@@ -56,6 +56,12 @@ stored here).
   ran it without `--base`, which then meant "drop base.conf"; the live server kept `mouse on` until
   a reboot brought up a server with no mouse, click-to-tab or Ctrl-b Enter menu. `--no-base` now
   drops it.
+- **The PR lifecycle short of a merge skips the classifier** (`fix/gh-pr-ready-allow`, Hayden's
+  call 2026-10-09; installed from its branch, and a fresh auto-mode `claude -p` ran
+  `gh pr ready 999999` straight to GitHub). `ready`, `edit`, `comment`, `close` and `reopen` join
+  `create`; merges still ask. The classifier had refused the handoff skill's own `gh pr ready`
+  in capella-studio. `test_settings.py` now fails when CLAUDE.md, a skill or an agent names a
+  `gh pr`/`gh run` step with no rule (README permissions paragraph).
 - **Star and Shelve Claude tabs** (PR #83, `feat/tmux-shelf`; installed from its branch and
   smoke-tested by Hayden on HAYPC 2026-10-08: right-click Star and Shelve, the Shelf, reopen).
   Right-click a tab, Ctrl-b S or Ctrl-b Enter: Star (★, a bookmark that follows the tab across
@@ -113,11 +119,10 @@ stored here).
   `claude -p` repro and the 2.1.285 boundary; the karaoke session's has the incident.
 
 ## Notes for next session
-- **Next: merge #83 once Hayden approves** (`gh pr view 83 --json state,mergedAt`), then put
-  `~/dotclaude` back on `main`, outside the sandbox (it holds every session's live hooks):
-  `git fetch origin main:main` (fine while the feature branch is checked out), then
-  `git switch main`. Work: `git log 0bce6f8..feat/tmux-shelf`. Flaky, not this branch's:
-  `test_tmux_hooks` `test_each_ring_decision_is_logged` failed once in a full run, then passed.
+- **Next: merge `fix/gh-pr-ready-allow` once Hayden approves** (`gh pr list --head
+  fix/gh-pr-ready-allow` for its number), then `git fetch origin main:main` and `git switch main`
+  outside the sandbox. #83 (Star and Shelve) is merged and installed. Flaky, not from these
+  branches: `test_tmux_hooks` `test_each_ring_decision_is_logged` failed once, then passed.
   Then Hayden picks the next workflow improvement; deck-production S2 is deferred. First real
   check of #70: the next reboot (see Done). Recent work: `gh pr list --state merged --limit 10`.
 - **Verify the overwrite guard before touching it:** `python3 -m unittest discover -s tests/setup
