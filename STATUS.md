@@ -58,10 +58,8 @@ stored here).
   drops it.
 - **The PR lifecycle short of a merge skips the classifier** (`fix/gh-pr-ready-allow`, Hayden's
   call 2026-10-09; installed from its branch, and a fresh auto-mode `claude -p` ran
-  `gh pr ready 999999` straight to GitHub). `ready`, `edit`, `comment`, `close` and `reopen` join
-  `create`; merges still ask. The classifier had refused the handoff skill's own `gh pr ready`
-  in capella-studio. `test_settings.py` now fails when CLAUDE.md, a skill or an agent names a
-  `gh pr`/`gh run` step with no rule (README permissions paragraph).
+  `gh pr ready 999999` straight to GitHub). The verbs and the test that ties rules to the
+  workflow docs: README's permissions paragraph; why: [[policy-to-complete-rules]].
 - **Star and Shelve Claude tabs** (PR #83, `feat/tmux-shelf`; installed from its branch and
   smoke-tested by Hayden on HAYPC 2026-10-08: right-click Star and Shelve, the Shelf, reopen).
   Right-click a tab, Ctrl-b S or Ctrl-b Enter: Star (★, a bookmark that follows the tab across
@@ -121,7 +119,10 @@ stored here).
 ## Notes for next session
 - **Next: merge `fix/gh-pr-ready-allow` once Hayden approves** (`gh pr list --head
   fix/gh-pr-ready-allow` for its number), then `git fetch origin main:main` and `git switch main`
-  outside the sandbox. #83 (Star and Shelve) is merged and installed. Flaky, not from these
+  outside the sandbox (work: `git log main..fix/gh-pr-ready-allow`). #83 (Star and Shelve) is
+  merged and installed. The working tree also holds an uncommitted `codex-delegate` edit that
+  admits `gpt-6-astra` (not from this branch; Hayden's to finish or drop): 4
+  `test_codex_delegate` tests fail until its tests change with it. Flaky, not from these
   branches: `test_tmux_hooks` `test_each_ring_decision_is_logged` failed once, then passed.
   Then Hayden picks the next workflow improvement; deck-production S2 is deferred. First real
   check of #70: the next reboot (see Done). Recent work: `gh pr list --state merged --limit 10`.

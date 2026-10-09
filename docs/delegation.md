@@ -1656,7 +1656,8 @@ hook fail closed, so wiring a hook before its script is reachable blocks every d
    prints nothing unless something is due, and `delegation-ledger due` shows the state. The hook fails
    open, so its order doesn't matter.
 
-**Permissions.** The baseline now has a `permissions` object (the re-arm allow rule), so
+**Permissions.** The baseline now has a `permissions` object (its allow, ask and deny rules, the
+re-arm allow rule among them; README's permissions paragraph lists the rest), so
 `setup.sh` replaces a live `permissions` object with the baseline's, and `merge-settings.py`
 names the reset on stderr. `setup.sh` moves the replaced copy to
 `~/.claude/backups/pre-dotclaude-<ts>/` and prints "backing up" as it does, so a lost rule is
