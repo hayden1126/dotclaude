@@ -9,7 +9,7 @@ OpenAI's Codex CLI paired with Claude Code, funded by the ChatGPT Pro subscripti
 **Layer B, the bridge (Claude driving Codex).** Two paths.
 - **Interactive:** the `codex-plugin-cc` plugin (`/codex:*`). It is toggleable, and it is how you ask for reviews and rescues.
 - **Scripted:** `codex-delegate` (from the `delegation` skill). It wraps `codex exec` directly, under a fixed contract:
-  - Sol or Terra only, with every sub-agent's model audited;
+  - Sol or Terra, or Astra when a run opts in with `--model astra`, with every sub-agent's model audited;
   - the workspace-write sandbox;
   - a memory cap (via systemd-run, when it is available) and a timeout;
   - a schema-checked report;
