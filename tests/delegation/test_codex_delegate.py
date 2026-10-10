@@ -98,13 +98,31 @@ def kill_tree(pid):
 
 
 class Gate(unittest.TestCase):
-    def test_only_sol_and_terra(self):
+    def test_sol_terra_and_astra_only(self):
         self.assertEqual(cd.pin("sol"), "gpt-5.6-sol")
         self.assertEqual(cd.pin("terra"), "gpt-5.6-terra")
+        self.assertEqual(cd.pin("astra"), "gpt-6-astra")
         self.assertEqual(cd.pin("gpt-5.6-sol"), "gpt-5.6-sol")
-        for bad in ("astra", "gpt-6-astra", "gpt-5.6", "sol ", ""):
+        self.assertEqual(cd.pin("gpt-6-astra"), "gpt-6-astra")
+        for bad in ("gpt-6", "gpt-5.6", "sol ", ""):
             with self.assertRaises(SystemExit):
                 cd.pin(bad)
+
+    def test_astra_is_allowed_only_in_a_run_that_chose_it(self):
+        base = {"gpt-5.6-sol", "gpt-5.6-terra"}
+        self.assertEqual(cd.allowed_for("gpt-5.6-sol"), base)
+        self.assertEqual(cd.allowed_for("gpt-5.6-terra"), base)
+        self.assertEqual(cd.allowed_for("gpt-6-astra"), base | {"gpt-6-astra"})
+
+    def test_preamble_names_astra_only_in_an_astra_run(self):
+        for model in ("gpt-5.6-sol", "gpt-5.6-terra"):
+            text = cd.preamble(model, "/o")
+            self.assertIn("gpt-5.6-sol", text)
+            self.assertIn("gpt-5.6-terra", text)
+            self.assertNotIn("astra", text)
+        text = cd.preamble("gpt-6-astra", "/o")
+        self.assertIn("gpt-6-astra", text)
+        self.assertIn("/o", text)
 
     def test_durations(self):
         self.assertEqual([cd.seconds(s) for s in ("90m", "3h", "600", "45s")],
@@ -178,13 +196,24 @@ class Audit(unittest.TestCase):
         self.assertEqual((res["ok"], res["threads"]), (True, 2))
         self.assertEqual(res["models"], ["gpt-5.6-sol", "gpt-5.6-terra"])
 
-    def test_astra_grandchild_fails(self):
+    def test_astra_grandchild_fails_a_sol_run(self):
         self.rollout("R", None, "gpt-5.6-sol")
         self.rollout("C", "R", "gpt-5.6-sol")
         self.rollout("G", "C", "gpt-6-astra")
-        res = cd.audit("R", 0)
+        res = cd.audit("R", 0, cd.allowed_for("gpt-5.6-sol"))
         self.assertEqual((res["ok"], res["threads"], res["disallowed"]),
                          (False, 3, ["gpt-6-astra"]))
+
+    def test_astra_family_passes_an_astra_run(self):
+        self.rollout("R", None, "gpt-6-astra")
+        self.rollout("C", "R", "gpt-6-astra")
+        self.rollout("G", "C", "gpt-5.6-terra")
+        res = cd.audit("R", 0, cd.allowed_for("gpt-6-astra"))
+        self.assertEqual((res["ok"], res["disallowed"]), (True, []))
+
+    def test_audit_defaults_to_sol_and_terra(self):
+        self.rollout("R", None, "gpt-6-astra")
+        self.assertEqual(cd.audit("R", 0)["disallowed"], ["gpt-6-astra"])
 
     def test_missing_root_fails(self):
         res = cd.audit("nope", 0)
@@ -392,10 +421,28 @@ class FullRun(unittest.TestCase):
     def test_missing_report_exits_4(self):
         self.assertEqual(self.run_ok(FAKE_REPORT="none").returncode, 4)
 
-    def test_astra_child_exits_3(self):
+    def test_astra_child_exits_3_in_a_terra_run(self):
         p = self.run_ok(FAKE_CHILD_MODEL="gpt-6-astra")
         self.assertEqual(p.returncode, 3)
         self.assertEqual(self.ledger()[-1]["disallowed"], ["gpt-6-astra"])
+
+    def test_astra_run_with_an_astra_child_passes(self):
+        p = self.run_cd("run", "--model", "astra", "--dir", self.work, "--brief", self.brief,
+                        "--no-scope", FAKE_CHILD_MODEL="gpt-6-astra")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        stop = self.ledger()[-1]
+        self.assertEqual((stop["model"], stop["audit_ok"], stop["disallowed"]),
+                         ("gpt-6-astra", True, []))
+
+    def test_finalize_audits_against_the_runs_own_model(self):
+        for model, ok in (("astra", True), ("sol", False)):
+            p = self.run_cd("run", "--model", model, "--dir", self.work, "--brief", self.brief,
+                            "--no-scope", FAKE_CHILD_MODEL="gpt-6-astra", FAKE_SLEEP="0")
+            run_id = self.summary(p)["run_id"]
+            self.drop_stop_row()
+            p = self.run_cd("finalize", run_id)
+            stop = self.ledger()[-1]
+            self.assertEqual((stop["run_id"], stop["audit_ok"]), (run_id, ok), (model, p.stderr))
 
     def test_codex_failure_exits_1_with_its_code_in_the_summary(self):
         p = self.run_ok(FAKE_RC="7")
@@ -653,8 +700,8 @@ class FullRun(unittest.TestCase):
                       f"codex-delegate finalize {run_id}", p.stderr)
         self.assertEqual([r["event"] for r in self.ledger()], ["pending", "start"])
 
-    def test_astra_refused_before_anything_runs(self):
-        p = self.run_cd("run", "--model", "astra", "--dir", self.work, "--brief", self.brief)
+    def test_unknown_model_refused_before_anything_runs(self):
+        p = self.run_cd("run", "--model", "gpt-6", "--dir", self.work, "--brief", self.brief)
         self.assertEqual(p.returncode, 2)
         self.assertFalse(os.path.exists(self.argv_log))
 
