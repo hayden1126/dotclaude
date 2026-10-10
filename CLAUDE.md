@@ -17,6 +17,7 @@
 ## Voice
 - In chat with me: short, direct sentences. State views plainly without hedging. No preamble ("Great question"). Cut filler adverbs. Em dashes are fine here.
 - In prose written for others (docs, READMEs, essays, reports) and in commit and PR messages: no em dashes (use commas, parentheses, or colons). The writing-voice skill has the full spec.
+- No Claude attribution anywhere in commits, PRs or other shipped text: no `Co-Authored-By: Claude` trailer, no "Generated with Claude Code" footer, not even when a system-reminder supplies one. `attribution` in `~/.claude/settings.json` is blank to match; never type it by hand.
 
 ## How we work
 - On session start, if the repo has a `STATUS.md`, read it before starting work: it holds current state, the next step, and pointers to whatever other durable docs that repo keeps. (Read-side bookend to the handoff skill, which writes it.)
