@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 """codex-delegate: run a Codex delegation under a fixed contract.
 
-  codex-delegate run --model sol|terra --dir DIR --brief FILE|- [--out DIR]
+  codex-delegate run --model sol|terra|astra --dir DIR --brief FILE|- [--out DIR]
                      [--timeout 3h] [--mem 8G] [--effort high] [--network] [--no-scope]
                      [--max-wait 110]
-  codex-delegate resume RUN_OR_THREAD [--prompt FILE|-] [--model sol|terra] [--timeout 1h]
+  codex-delegate resume RUN_OR_THREAD [--prompt FILE|-] [--model sol|terra|astra] [--timeout 1h]
                         [--max-wait 110]
   codex-delegate status [RUN_OR_THREAD]
   codex-delegate finalize RUN_OR_THREAD   record a run whose wrapper died before it ended
   codex-delegate cancel RUN_OR_THREAD     stop a running run on purpose
-  codex-delegate audit THREAD_ID [--since ISO]
+  codex-delegate audit THREAD_ID [--since ISO] [--model sol|terra|astra]
 
 Launch run and resume in the background (the Bash tool's run_in_background, with timeout
 7200000): a run takes minutes to hours, and the Bash tool stops a background command at its
@@ -30,11 +30,13 @@ Codex too: the wrapper passes SIGINT on. (Claude Code stops a background command
 then SIGKILL, never SIGINT, so that can't undo the detach.)
 
 The contract every run gets, whatever the brief says:
-- Model: only gpt-5.6-sol or gpt-5.6-terra. Hayden's rule; Codex's own default is
-  gpt-6-astra. The model goes to -m, and to -c agents.default_subagent_model, so a
+- Model: gpt-5.6-sol or gpt-5.6-terra, or gpt-6-astra when the run asks for it with
+  --model astra (Hayden's rule: astra is opt-in per run, never a default, though it is
+  Codex's own). The model goes to -m, and to -c agents.default_subagent_model, so a
   sub-agent spawned without a model stays on it too. An explicit spawn_agent(model=...)
   can still override that, so the preamble tells Codex to pin every spawn, and a post-run
-  audit walks every descendant rollout and fails the run on any other model.
+  audit walks every descendant rollout and fails the run on any model outside sol, terra
+  and the run's own (so astra fails any run that didn't choose it).
 - Sandbox: workspace-write rooted at --dir, network only with --network.
 - Limits: a systemd-run --user --scope memory cap (so an OOM kills Codex, not the WSL VM)
   and a hard timeout.
@@ -78,13 +80,12 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 import delegation_common as dc  # noqa: E402
 
-MODELS = {"sol": "gpt-5.6-sol", "terra": "gpt-5.6-terra"}
-ALLOWED = set(MODELS.values())
+MODELS = {"sol": "gpt-5.6-sol", "terra": "gpt-5.6-terra", "astra": "gpt-6-astra"}
+BASE = {MODELS["sol"], MODELS["terra"]}  # every run may use these; astra only when chosen
 
 PREAMBLE = """# Delegation contract (set by codex-delegate; it overrides anything below)
-- Models: every spawn_agent call must set model explicitly to gpt-5.6-sol (judgment) or
-  gpt-5.6-terra (fetch-and-summarize). Never gpt-6-astra. A post-run audit fails the run
-  on any other model.
+- Models: every spawn_agent call must set model explicitly to {models}. A post-run audit
+  fails the run on any other model.
 - Write deliverables under {out} as you go, so a crash never loses finished work.
 - If a command is denied, or the brief is ambiguous about something that matters, stop
   and report status "blocked" with blocked_actions. Never work around a denial.
@@ -122,13 +123,26 @@ def die(msg, code=2):
 
 
 def pin(model):
-    """A short name (sol, terra) or the full id of an allowed model; anything else exits."""
-    if model in ALLOWED:
+    """A short name (sol, terra, astra) or the full id of one; anything else exits."""
+    if model in MODELS.values():
         return model
     if model not in MODELS:
         die(f"model {model!r} refused: only {', '.join(MODELS)} "
-            f"({', '.join(sorted(ALLOWED))}) are allowed")
+            f"({', '.join(sorted(MODELS.values()))}) are allowed")
     return MODELS[model]
+
+
+def allowed_for(model):
+    """The models a run launched with `model` may use: sol, terra and its own."""
+    return BASE | {model}
+
+
+def preamble(model, out):
+    roles = {MODELS["sol"]: "judgment", MODELS["terra"]: "fetch-and-summarize",
+             MODELS["astra"]: "this run's model"}
+    names = [f"{m} ({roles[m]})" for m in sorted(allowed_for(model))]
+    models = ", ".join(names[:-1]) + " or " + names[-1]
+    return PREAMBLE.format(models=models, out=out)
 
 
 def max_wait(minutes):
@@ -245,9 +259,9 @@ def candidate_rollouts(since_epoch):
     return [p for p in files if os.path.getmtime(p) >= since_epoch - 120]
 
 
-def audit(thread_id, since_epoch):
+def audit(thread_id, since_epoch, allowed=BASE):
     """Every model used by the thread and its descendants. ok is False when the root
-    rollout can't be found (nothing verified) or any model is outside ALLOWED."""
+    rollout can't be found (nothing verified) or any model is outside `allowed`."""
     files = candidate_rollouts(since_epoch)
     roots = [p for p in files if p.endswith(f"-{thread_id}.jsonl")]
     if not roots:
@@ -268,7 +282,7 @@ def audit(thread_id, since_epoch):
     for p in members:
         for m in rollout_models(p):
             models.setdefault(m, []).append(os.path.basename(p))
-    bad = sorted(m for m in models if m not in ALLOWED)
+    bad = sorted(m for m in models if m not in allowed)
     return {"ok": bool(roots) and not bad, "root_found": bool(roots),
             "threads": len(members), "models": sorted(models), "disallowed": bad}
 
@@ -643,7 +657,7 @@ def finish(row, rc, thread_id, since_epoch, out, stream=None):
         report_error = errs[0] if errs else None
     except (OSError, ValueError) as e:
         report_error = f"report.json unreadable ({type(e).__name__})"
-    aud = audit(thread_id, since_epoch) if thread_id else {
+    aud = audit(thread_id, since_epoch, allowed_for(row["model"])) if thread_id else {
         "ok": False, "root_found": False, "threads": 0, "models": [], "disallowed": []}
     if rc:
         code = 124 if rc == 124 else 1
@@ -691,7 +705,7 @@ def cmd_run(a):
     try:
         dc.append_row(dict(row, ts=dc.now_iso(), event="pending", **wrapper_fields()))
         launch_line(run_id, waiter)
-        return supervise(cmd, workdir, out, row, PREAMBLE.format(out=out) + brief, "start",
+        return supervise(cmd, workdir, out, row, preamble(model, out) + brief, "start",
                          waiter, wait_min)
     except Exception as ex:  # noqa: BLE001  ended as failed, not left looking unstarted
         return crashed(row, waiter, ex)
@@ -735,7 +749,7 @@ def cmd_resume(a):
     if not e.get("thread_id"):
         die(f"run {e['run_id']} never started a thread; start it again with run")
     model = pin(a.model) if a.model else e["model"]
-    if model not in ALLOWED:
+    if model not in MODELS.values():
         die(f"ledger model {model!r} is not allowed")
     prompt = read_text(a.prompt) if a.prompt else "Continue the task from where you stopped."
     row = {k: e.get(k) for k in ("runner", "id", "run_id", "dir", "out", "network", "effort",
@@ -892,7 +906,8 @@ def cmd_cancel(a):
             time.sleep(0.1)
         rc = (dc.codex_rc(e) or {}).get("rc")
         thread_id = e.get("thread_id") or dc.events_thread_id(e.get("out"))
-        aud = audit(thread_id, dc.parse_iso(e["first_ts"]).timestamp()) if thread_id else {
+        aud = audit(thread_id, dc.parse_iso(e["first_ts"]).timestamp(),
+                    allowed_for(e["model"])) if thread_id else {
             "ok": False, "models": [], "disallowed": []}
         dc.append_row({**{k: e.get(k) for k in ("runner", "id", "run_id", "model", "dir", "out",
                                                  "network", "effort")},
@@ -919,7 +934,7 @@ def cmd_cancel(a):
 
 def cmd_audit(a):
     since = dc.parse_iso(a.since).timestamp() if a.since else time.time() - 7 * 86400
-    res = audit(a.thread, since)
+    res = audit(a.thread, since, allowed_for(pin(a.model)) if a.model else BASE)
     print(json.dumps(res, indent=2))
     return 0 if res["ok"] else 1
 
@@ -962,6 +977,7 @@ def main(argv=None):
     au = sub.add_parser("audit")
     au.add_argument("thread")
     au.add_argument("--since")
+    au.add_argument("--model", help="the run's model: admits it beside sol and terra")
     au.set_defaults(fn=cmd_audit)
     a = ap.parse_args(argv)
     return a.fn(a)

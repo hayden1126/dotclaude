@@ -19,7 +19,7 @@ cause of every drift case in the 2026-09-29 evaluation (`docs/delegation.md` in 
 | Read-only work that needs a shell: git history, public GitHub (`gh-public`, a shallow clone into temp), `curl` GET | `researcher` | Adds Bash, held to a read-only allowlist by the policy hook. No interpreters, no authenticated `gh` |
 | Review, audit, cross-file consistency | `reviewer` | Read, Grep, Glob. You run the tests |
 | Change files | `writer`, with `isolation: "worktree"` **on the Agent call** | Everything, inside its own worktree and branch. Commits, never pushes |
-| A long build, a second opinion, or anything about Codex itself | `codex-delegate run` | Pinned Sol or Terra, workspace-write sandbox, memory cap, schema report |
+| A long build, a second opinion, or anything about Codex itself | `codex-delegate run` | Pinned Sol or Terra (Astra opt-in), workspace-write sandbox, memory cap, schema report |
 
 - Use `general-purpose` only when no role fits, and say why in the brief. The three uses
   that have no role today:
@@ -264,11 +264,13 @@ codex-delegate status              # verdict with evidence, phase, exit/report/a
 codex-delegate resume <run_id> --prompt fix.md
 codex-delegate finalize <run_id>   # a run whose wrapper died: report check, audit, stop row
 codex-delegate cancel <run_id>     # stop a running run on purpose; drops its watch
-codex-delegate audit <thread_id>   # every model the thread and its sub-agents used
+codex-delegate audit <thread_id> [--model astra]   # every model the thread and its sub-agents used
 ```
 
-- **Models:** Sol or Terra only; the wrapper refuses anything else before launch. Use Terra
-  for fetch-and-summarize.
+- **Models:** Sol, Terra or Astra (`--model sol|terra|astra`); the wrapper refuses anything
+  else before launch. Use Terra for fetch-and-summarize. Astra is opt-in per run: the audit
+  admits it only in a run launched with `--model astra`, and fails any other run whose
+  sub-agents used it.
 - **Output:** everything lands in `<dir>/.codex-delegate/<run_id>/`: `report.json`,
   `events.jsonl`, `stderr.log`, and `codex.pid` and `codex.rc` (Codex's pid and exit code,
   written by its detached supervisor).
