@@ -270,7 +270,8 @@ codex-delegate audit <thread_id> [--model astra]   # every model the thread and 
 - **Models:** Sol, Terra or Astra (`--model sol|terra|astra`); the wrapper refuses anything
   else before launch. Use Terra for fetch-and-summarize. Astra is opt-in per run: the audit
   admits it only in a run launched with `--model astra`, and fails any other run whose
-  sub-agents used it.
+  sub-agents used it. Astra needs a ChatGPT plan that includes it: without one, the first turn
+  fails with a 400, "not supported when using Codex with a ChatGPT account" (exit 1).
 - **Output:** everything lands in `<dir>/.codex-delegate/<run_id>/`: `report.json`,
   `events.jsonl`, `stderr.log`, and `codex.pid` and `codex.rc` (Codex's pid and exit code,
   written by its detached supervisor).
