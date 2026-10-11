@@ -120,6 +120,14 @@ class PlainRepo(Check):
         self.write(os.path.join(self.main, ".claude", "worktrees", "loose.txt"), "x")
         self.assertPasses(self.check())
 
+    def test_sandbox_stubs_are_never_leftovers(self):
+        # The Bash sandbox mounts /dev/null over protected paths a repo lacks (.claude/hooks in
+        # dotclaude); git lists the stub as untracked. A link to /dev/null stands in for the
+        # mount, which a test can't make.
+        os.makedirs(os.path.join(self.main, ".claude"))
+        os.symlink(os.devnull, os.path.join(self.main, ".claude", "hooks"))
+        self.assertPasses(self.check())
+
     def test_a_leftover_needs_its_repo_relative_path(self):
         self.write(os.path.join(self.main, "src", "scratch.txt"), "x")
         self.commit("STATUS.md", GOOD + "- scratch.txt is a deliberate local probe.\n")

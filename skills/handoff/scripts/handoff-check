@@ -4,7 +4,7 @@
 Works in a lane (the record is <lane>/.lane/STATUS.md), in the main checkout of a lanes repo and
 in a plain repo (the root STATUS.md). Checks:
   clean      the tree is clean, or each leftover's repo-relative path is named in the status file;
-             agent worktrees (.claude/worktrees/) never count
+             agent worktrees (.claude/worktrees/) and sandbox /dev/null stubs never count
   fresh      the status file was written after HEAD's commit (or HEAD carries it) and after this
              session started: in a lane the latest lane.json sessions[].startedAt; elsewhere the
              session named by $CLAUDE_CODE_SESSION_ID, else the newest Claude session file whose
@@ -22,6 +22,7 @@ import argparse
 import json
 import os
 import re
+import stat
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "..", "lanes",
@@ -60,13 +61,24 @@ def session_start(repo: lanelib.Repo, lane: dict | None) -> tuple[float | None, 
 AGENT_WORKTREES = ".claude/worktrees/"
 
 
+def sandbox_stub(path: str) -> bool:
+    """A character device: the Bash sandbox's /dev/null mount over a protected path the repo
+    lacks (.claude/hooks, .bashrc). Never work, and gone outside the sandbox."""
+    try:
+        return stat.S_ISCHR(os.stat(path).st_mode)
+    except OSError:
+        return False
+
+
 def leftovers(repo: lanelib.Repo) -> list[str]:
-    """Uncommitted paths, repo-relative, minus agent worktrees (each is its own checkout)."""
+    """Uncommitted paths, repo-relative, minus agent worktrees (each is its own checkout) and
+    sandbox stubs."""
     p = git(["status", "--porcelain", "--untracked-files=all"], repo.toplevel, check=True)
     out = []
     for line in p.stdout.splitlines():
         path = line[3:].split(" -> ")[-1].strip('"')
-        if not path.startswith(AGENT_WORKTREES):
+        if not path.startswith(AGENT_WORKTREES) and not sandbox_stub(
+                os.path.join(repo.toplevel, path)):
             out.append(path)
     return out
 
