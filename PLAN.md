@@ -1,204 +1,455 @@
-# PLAN: Star and Shelve for Claude tmux tabs
+# PLAN: Lanes (parallel sessions in worktrees), handoff-check and /pass
 
-> **Status:** STATUS.md holds where this stands (build, review, install, smoke test). The
-> previous PLAN.md (the tmux restore
-> design) is in git (`git show 0bce6f8:PLAN.md`), and README "Tabs come back after tmux dies"
-> holds its as-built behavior.
+> **Status:** STATUS.md holds where this stands. Approved by Hayden 2026-10-11 (three PRs:
+> core `feat/lanes`, lead `feat/lanes-lead`, `/pass` `feat/pass`). The previous PLAN.md (Star and
+> Shelve) is in git (`git show fe56e56:PLAN.md`); README holds its as-built behavior.
 
 ## Context
 
-A Claude chat lives in a tmux tab. Close the tab and the chat is reachable only by digging its
-id out of `claude --resume`'s picker. Hayden wants to keep chosen chats one click away, from the
-tab's right-click menu:
+Hayden runs several Claude sessions on one repo (a private work repo, with hand-made sibling worktrees as lanes).
+Today's (2026-10-11) incident, reconstructed from the transcripts:
 
-- **Star**: a bookmark. The tab stays open and shows ★; the chat stays on a saved list until
-  unstarred, however the tab later closes.
-- **Shelve**: save the chat to the list and close its tab now. Reopening takes it off the list.
-  It must not come back on a tmux restore.
-- On `/clear` in a starred tab, the star follows the tab: the new session id becomes starred and
-  the old one drops off (Hayden's call).
+- Session A (one lane) wrote into the one shared, gitignored
+  `STATUS.md in the main checkout`: "#110 ... another session is building it". That meant
+  "a session Hayden will route it to".
+- Session B was that intended owner. It read the line as being about someone else. It
+  then matched the phrase to the wrong live session through ListAgents (session C, whose first
+  prompt read "another session working on request #110") and deferred #110. A mirror flip
+  ("another session's formatbar lane") happened earlier the same day.
 
-When the brief left a case open, the rule was: keep the chat reachable without a surprising
-reopen.
+So the root cause is not that a merged STATUS reached another lane. There are four causes:
+1. Relative identity words were written into a file that many writers share.
+2. An ownership claim was written by a session that was not the owner.
+3. There is one shared "Next" block that every session overwrites.
+4. Every session runs with cwd = the main checkout and reaches lanes by absolute path, so neither
+   the harness nor the hooks know which lane a session belongs to.
 
-## Design
+Other recurring friction from the transcripts:
+- Shared gates, ports and machine load collide.
+- Version numbers race at rebase.
+- Lane git commits need the sandbox off.
+- Agent worktrees start from a stale base.
+- Cleanup deletes the `work/` dirs other lanes depend on.
 
-**1. Store.** `$XDG_STATE_HOME/dotclaude/saved/<session_id>.json` (default `~/.local/state`),
-holding `{session_id, cwd, title, transcript_path, starred, shelved, saved_at, tab: {socket,
-server_start, server_pid, pane}}` (plus `opening` while a reopen starts, see `open`), written
-as an fsynced tmp file plus rename. A file exists
-only while `starred or shelved`. `title` is the pane title at save time with Claude's leading
-glyph stripped (✳ idle, a braille spinner busy, ◐ ours). Session ids must match
-`[A-Za-z0-9][A-Za-z0-9_-]{7,127}` everywhere, as in claude-restore.
+Research consensus: one worktree and one branch per lane, automated per-lane setup, merges
+serialized through PRs, and status kept out of the merged tree. There is no standard for status.
+The workable patterns are:
+- per-lane records keyed by branch or worktree;
+- a record written by a single writer;
+- records reconciled against `git worktree list` at read time.
 
-**2. Which chat is in a pane.** First Claude's own live-session files,
-`~/.claude/sessions/<pid>.json`: an `interactive` session whose pid is alive (`os.kill(pid, 0)`),
-whose `tmux` field (`main:@4.%4`) ends in the pane id, and whose pid runs under the pane's
-`#{pane_pid}` (the ppid chain from `/proc/<pid>/stat`, at most 8 levels; the field names no server
-and pids get reused, so the pane id alone can match another server's pane). Its `sessionId` is updated after
-`/clear`, and a tab with no registry entry still has one (verified on HAYPC 2026-10-08). This is
-undocumented Claude internals, so the fallback is the registry
-(`hooks/session-registry.sh`'s `open-sessions/`): the newest entry for that pane on this tmux
-server with no SessionEnd `other` mark, and only while the pane's `#{pane_current_command}` is
-`claude` and no live, verified sessions file puts a different chat in that pane. A claude that
-crashes sends no SessionEnd, so its entry outlives it and names a pane that now runs a shell or
-another chat; this gate applies everywhere the fallback is used (Star, Shelve, the menu's "this
-tab", Open's "already in a pane", `rm`). The transcript is the registry's `transcript_path` when
-that file exists, else the first `~/.claude/projects/*/<sid>.jsonl`.
+Native `claude --worktree` puts lanes inside the repo. That conflicts with the work repo's "never
+inside", and Codex sessions wouldn't get the convention.
 
-**The ★** is the pane option `@claude_star`, since a chat is per pane: `set -p -t <pane>
-@claude_star 1` and `set -pu`. `window-status-format` and the right-click menu read
-`#{?@claude_star,...}` through the window's active pane (verified in tmux 3.7c).
+**Hayden's calls** (2026-10-11):
+- Records live in `<git-common-dir>/lanes/`.
+- A `lane` CLI creates sibling-dir worktrees.
+- Enforcement is the skill and CLI plus two hooks.
+- An optional **lead** session triages requests, proposes a lane split, and on approval opens
+  each lane as a real top-level session in a tmux window (an `hq-open` analog).
+- Each lane merges its own PR (Hayden approves each merge), and the lead sets the order.
+- `/pass` (or a typed "handoff and pass") runs handoff, then `handoff-check`, then respawns the
+  pane. It resumes in plan mode unless the next step was already approved.
+- Opt-in auto-pass on context fill, on by default in lanes. The lead only nudges and never
+  respawns a lane.
+- The work ships as three PRs: core, lead, /pass. Then the work repo migrates in its own repo.
 
-**3. `tmux/claude-saved`** (bash, `python3 -I` for JSON; linked into `~/.local/bin` by
-`setup-tmux.sh`). Every message goes to the client's status line through
-`display-message -c <client>` (a run-shell has no client of its own), and nothing is printed,
-since run-shell shows output in the pane.
-- Star and Shelve act only in a window with a non-empty `@claude_state` (the signal that dims the
-  right-click items): a registry entry can outlive its claude, and must never get a shell window
-  killed. Elsewhere: "no Claude running in this tab". Both refuse a chat with no transcript yet
-  ("no messages yet"), so every saved chat has one.
-- `star <pane> [client]` toggles. Star records the tab and title and sets the pane's ★; unstar
-  deletes the entry unless shelved and unsets it.
-- `shelve [--force] <pane> [client]`: while `@claude_state` is `busy`, it asks with
-  `confirm-before -b`, whose yes runs `shelve --force`. It writes the entry, deletes the chat's
-  `open-sessions` file (so claude-restore won't reopen it, and the SessionEnd `other` the kill
-  sends marks nothing), then kills the window, or in a split unsets the pane's ★ and kills only
-  the pane.
-- `menu [--remove] [client]` builds one `display-menu` as an argv array: Star (or Unstar) and
-  Shelve for the client's current tab (dim when no chat is found there or no Claude runs), then
-  one row per saved chat, newest first, `★` starred or `▤` shelved, title (else the repo name)
-  and age, keys `1-9` then `a-z`, then Remove…, which opens the same rows running `rm`. Rows stop
-  where the client's height (`#{client_height}`, less two borders, the status line and the fixed
-  items) runs out, with a disabled "+N more: claude-saved list"; tmux shows no menu taller than
-  the client. Nor one wider: titles are cut to `#{client_width}` less about 16 columns (borders,
-  glyph, age, key), never below 8 characters, at most 40. Titles lose any `#[...]` style
-  sequence (doubling `#` isn't enough: `##[` expands back to `#[`), then `#` is doubled, since
-  tmux format-expands menu names.
-- `open <sid> [client]` goes to the chat's pane if it runs in this server (a sessions file passes
-  the same `#{pane_pid}` check; select the window in the client's session, or switch the client
-  when another session holds it), stops if it runs anywhere else (a live sessions file, its
-  `procStart` matching the pid's start time, that no pane here holds: outside tmux or another
-  tmux server; a second live copy of a chat is the one thing open must not make), and otherwise checks the directory with claude-restore's rules (exists, no `#`,
-  no control character) and the transcript, then opens a selected window in the client's session
-  typing `claude --resume <id>`. It never deletes the entry: the resumed session's SessionStart
-  takes it off the shelf (keeping a star), so a resume that fails to start loses nothing. After
-  a successful send-keys it records `opening: {pane, server_start, server_pid, socket, at}` in
-  the entry; until that SessionStart clears it, an `opening` younger than 60 s whose pane still
-  exists on this server counts as the chat's pane, so opening the same row twice goes to the
-  first window instead of starting a second `claude --resume <id>`.
-- `rm <sid> [client]`, `list`, `-h`.
-- `sync <pane>`: resolve the pane's chat and set its ★ if starred, else unset it; silent. Run by
-  tmux-claude-status (below).
-- `hook` (the payload on stdin; skips subagents). SessionStart: on `source == clear`, a starred
-  entry whose tab is this pane on this server is re-keyed to the new id (the new file written
-  before the old one is removed). Any other starred entry whose tab is this pane loses its tab
-  (another chat runs there now, so a later `/clear` there isn't its). A shelved chat that starts
-  anywhere in tmux leaves the shelf, and its `opening` note goes. If this chat is starred, its
-  tab is refreshed and ★ set; else ★ is unset. SessionEnd refreshes a saved chat's title when the
-  pane is still readable and the file still exists, and unsets ★ only on a real exit
-  (`prompt_input_exit`, `logout`): after any other end (an in-session `/resume`, say) the next
-  SessionStart sets or clears it, and an unset here could land after that. SessionEnd `clear`
-  does nothing at all: it races the SessionStart `clear` that follows, and could recreate the
-  old id or clear the new ★.
+## Invariants (the convention in five rules)
 
-**3b. `tmux/tmux-claude-status`** (the status-bar backstop). Its `list-panes` reads each pane's
-`#{?@claude_star,1,0}` and clears the ★ of any pane whose `#{pane_current_command}` isn't
-`claude` (a crash with no SessionEnd, a missed exit, Ctrl-Z) and marks that pane
-`@claude_star_away`. Once a marked pane runs claude again (`fg`), it runs `claude-saved sync
-<pane>` (`timeout 2`, fail-open, output dropped), which puts a starred chat's ★ back, and drops
-the mark. That can't wait for a cold fill: after a mid-turn Ctrl-Z, the turn's next hook sets the
-window's state first. A cold-filled window (a session already going when a client attached) gets
-the same sync for each claude pane.
+1. **Absolute identity.**
+   - A lane's id is its worktree directory's basename. Each session belongs to exactly one lane,
+     or to `main`, by its cwd.
+   - Status text names lanes by id and requests by number, never "another/this/other session" or
+     "my lane".
+2. **One writer per record.** After creation, only the lane's own sessions write
+   `.git/lanes/<id>/`. The lead writes a record only when it creates the lane, plus its own
+   backlog.
+3. **Only the owner claims.** A request is owned only when a live lane's record claims it
+   (`lane claim`). The answer to "who has #110?" comes only from `lane who #110`. It never comes
+   from prose, ListAgents first prompts or tab titles. "Hayden routed #110 away from lane X"
+   is recorded by lane X about itself.
+4. **Derive, don't store.** `lane ls` derives branch, ahead/behind `origin/main`, PR state,
+   session liveness and staleness live from git, gh and `~/.claude/sessions/*.json`.
+5. **STATUS.md is project direction, not lane state.** In a repo with lanes, STATUS.md holds
+   direction and a backlog keyed by request number. Each lane's next step lives in its own
+   record.
 
-**4. Hook wiring.** `hooks/session-registry.sh` ends by piping the same SessionStart and
-SessionEnd payload to `~/.local/bin/claude-saved hook` when that is executable and `TMUX_PANE` is
-set, under `timeout 3`, output dropped, fail-open. No new settings.json entry.
+## Communication model: what has to flow, and the one home for each
 
-**5. tmux.** `tmux/claude.conf` replaces the right-click window menu with tmux 3.7c's default
-plus Star/Unstar (`*`), Shelve (`v`), both dim without `@claude_state`, and Shelf… (`S`);
-`bind S` opens the shelf, and `tmux/base.conf`'s Ctrl-b Enter menu ends with Star chat (`*`),
-Shelve chat (`v`) and Shelf… (`S`), for a keyboard path with no Shift (Hayden's Ctrl-b S
-arrived as Ctrl-b s). Both `window-status-format`s show `#{?@claude_star,★ ,}` right after the
-window number, before the state glyph (claude.conf's comment says why).
+**Actors:**
+- Hayden;
+- the lead (optional);
+- lanes (each a series of sessions over time);
+- subagents inside a lane;
+- future sessions after `/clear` or `/pass`;
+- outside collaborators (through the tracker and PRs).
 
-**Deviations from the brief.**
-- `confirm-before -t <client>`, not `-c`: in tmux 3.7c `-c` is the confirm key (man page). And
-  `-b`, so the nested tmux call returns at once instead of holding the run-shell until answered.
-- The client's current pane and session come from `list-clients -F`, not
-  `display -p -c <client>`: `-c` picks where a message shows, while the format's pane follows
-  `-t`'s default target (the best client).
-- A live pane in the client's session is selected with `select-window -t <session>:<window>`
-  plus `select-pane`, so a grouped view session moves its own current window, not `main`'s.
-- Registry entries with an `ended_other_at` mark are ignored when resolving a pane: their claude
-  was killed, so the pane runs something else.
-- In the shelf menu, Shelve this tab uses key `V`, since `v` is a row key past row 30.
+**What flows:** every fact belongs to one of these flows. Each flow gets exactly one home and one
+writer, and every other place links to it.
 
-## Situations it must handle
+| # | Flow (the question it answers) | Type | Home (lanes repo) | Writer | Lifetime |
+|---|---|---|---|---|---|
+| 1 | How do we work here? | Conventions | `CLAUDE.md`, skills, `docs/` (the work repo's `guardrails.md` folds into the lanes skill and CLAUDE.md) | Hayden or a PR | durable |
+| 2 | What is wanted, and why? | Intent | the request tracker (source of truth); `SPEC.md` for a large effort | Hayden or outside people | durable |
+| 3 | What's queued and not started? | Backlog | the project `STATUS.md` Backlog, keyed by request #; it mirrors nothing the tracker already holds | main or lead | living |
+| 4 | Who is doing what? | Registry | `lane.json` claims, viewed through `lane ls` / `lane who` (derived, never prose) | the owning lane via the CLI | living |
+| 5 | What does this lane have to do? | Brief (down) | the lane record's opening section, from `templates/LANE.md`: goal, requests, expected files, overlaps with lanes by id, done criteria, constraints | the lead or creator, once | lane |
+| 6 | How will we build it? | Design | the lane's `.git/lanes/<id>/PLAN.md`; cross-lane design goes in the project `PLAN.md` or `docs/` | the lane, or the lead for cross-lane | lane / durable |
+| 7 | What was decided, by whom, and on what evidence? | Rulings | the record's "Decisions": `Hayden picked chip row + preview (2026-10-11); evidence: <artifact path>, session <id>`. Promoted at merge into the PR body; also to memory if it constrains future work | the lane | lane → durable |
+| 8 | Where does it stand, and what's next? | State + handoff | the record's State and Next. A shift-change note in SBAR order: situation, background, assessment, next step | the lane | lane |
+| 9 | What is this lane blocked on Hayden for? | Asks | the record's "Asks for Hayden" (a design pick, push or merge approval, a cleanup nod), shown by `lane asks` across lanes; one queue for everything the lead runs under Hayden's permission | the lane; cleared after Hayden answers | living |
+| 10 | What did a delegate produce? | Report (up) | a subagent's report JSON (the delegation contract); a lane's hand-back is a passing `handoff-check` plus a State summary; the PR body to outsiders | the delegate | ephemeral → PR |
+| 11 | Proof behind a claim | Evidence | `.git/lanes/<id>/artifacts/` (mocks, shots, gate logs), so it survives `worktree remove`, unlike `work/` today; rulings point here | the lane | archived with the record |
+| 12 | Shared machine resources | Env state | `lane.json` port, `lane lock` holders, live sessions (derived; the work repo's hand-kept "Machine state" list drifted, so it is retired) | the CLI | live |
+| 13 | Heads-up between peers | Message | SendMessage. A nudge only: anything that matters lands in a doc first, and a message never carries state or consent | anyone | ephemeral |
+| 14 | What did we learn? | Lessons | memory (Hayden's preferences, traps), `docs/` | any session | durable |
+| 15 | What happened? | History | git, PRs, transcripts. Never copied into a doc; docs point to them by SHA, PR # or session id | n/a | durable |
+| 16 | Tell the outside world | External | Hayden updates the tracker assignee from each lane's "started" claims (so a collaborator doesn't start the same request); PR comments | Hayden | durable |
 
-| Situation | Outcome |
-|---|---|
-| Star a tab (sessions-file lookup) | Entry starred, `set -p ... @claude_star 1` on the pane |
-| Star a tab with no sessions file (registry lookup) | Same, from the newest unmarked entry on this server |
-| A stale registry entry (its claude crashed; the pane runs a shell, or another live chat) | Not the pane's chat: Star and Shelve say "no Claude session found" and kill nothing, the menu dims "this tab", Open reopens instead of jumping there, `rm` leaves that pane's ★ alone |
-| Star a pane with no session anywhere | A message, no entry |
-| A sessions file for the pane id whose claude doesn't run under the pane's process | Ignored; the registry decides |
-| Star or Shelve where no Claude runs (stale registry entry, empty `@claude_state`) | "no Claude running in this tab", nothing written or killed; the shelf menu dims both items |
-| Star with no transcript | "no messages yet", no entry |
-| Unstar | Entry gone (kept if shelved), `set -pu` |
-| Star, then `/clear` in the same pane | Entry re-keyed to the new id (new file first), ★ set |
-| SessionEnd `clear`, before or after the SessionStart | Nothing: no title write, no ★ change |
-| `/clear` in another pane, or the same pane id on another server | The starred entry is untouched |
-| `/resume` of another chat in a starred tab | The star stays on the old id, ★ unset, and a later `/clear` there doesn't take it |
-| A starred chat starts in a new pane (restore, reopen) | `tab` refreshed, ★ set |
-| A shelved chat is resumed by hand in a tab | Off the shelf |
-| SessionEnd `prompt_input_exit` or `logout` | `set -pu @claude_star`, title refreshed when the pane is readable |
-| Any other SessionEnd (an in-session `/resume`, a window kill) | Title refreshed, ★ left to the next SessionStart or the backstop |
-| claude dies without SessionEnd, or is suspended with Ctrl-Z | tmux-claude-status clears that pane's ★ (only that pane's, in a split) |
-| `fg` after Ctrl-Z, idle or mid-turn | The pane's away mark makes the backstop run `claude-saved sync`, which sets the ★ again for a starred chat |
-| Shelve | Entry shelved, registry entry deleted, kill-window (in a split: ★ unset, then kill-pane) |
-| Shelve while busy | `confirm-before` issued, nothing written; `--force` does it |
-| Shelve with no transcript | A message, nothing written, no kill |
-| Open a shelved chat | A new window in the client's session running `claude --resume <id>`; the entry stays until that session's SessionStart takes it off the shelf |
-| Open a starred chat | Reopened, entry kept, still starred |
-| Open the same chat twice before its claude starts | The second open goes to the first window (its `opening` note, under 60 s); an older note is ignored |
-| Open a chat already in a live pane | Its window selected (or the client switched), no new window |
-| Open a chat live outside tmux or in another tmux server | A message, no new window |
-| A sessions file whose pid was reused after a restart | `procStart` doesn't match: not live, so it reopens |
-| Open a chat whose sessions file names a pane it doesn't run under | That file is ignored, so the chat reopens here |
-| Open with the transcript gone | A message, entry kept |
-| Open with the directory gone, or a `#` in it | A message, entry kept |
-| Menu | Rows newest first, `★`/`▤`, keys, `#` escaped, `#[...]` styles stripped from titles |
-| Menu taller than the client (35 chats, 20 lines) | 11 rows, then a disabled "+24 more: claude-saved list" |
-| Menu on a narrow client | Titles cut to the width less 16 columns, never below 8 characters |
-| Menu with nothing saved | The "this tab" items and a disabled "(nothing saved)" |
-| Registry hook | Hands the payload on when claude-saved is executable and `TMUX_PANE` is set, skips otherwise, and still exits 0 (and cuts it off after 3 s) when claude-saved fails |
+**Rules that make it work:**
+- **One home, one writer.** Every other place links. No doc carries an owner column, because
+  ownership lives only in claims.
+- **Lifetime decides the home.**
+  - Ephemeral (messages, live env) never holds state.
+  - Living (backlog, registry, state, asks) is overwritten in place.
+  - Durable (conventions, rulings, lessons) is append-only or goes through a PR.
+- **Promotion happens at fixed moments only:**
+  - at turn end, a message's content goes into the record;
+  - at handoff, the lane's state and next step are refreshed;
+  - at merge, rulings go into the PR body or memory, the outcome becomes one backlog line,
+    and the record is archived.
+  Nothing moves up by copying prose.
+- **Absolute names everywhere:** lane ids, request numbers, session ids, SHAs, dates.
+- **Pointers over copies:** a ruling cites its artifact or session; a status cites a PR number,
+  not its state.
+- **Read order at session start:**
+  1. identity (hook);
+  2. the lane record (Brief, Asks, Next);
+  3. the project STATUS (direction, backlog);
+  4. anything else only when a pointer leads there.
+- **A repo with no lanes is unchanged:** one STATUS.md (with Asks and Decisions sections) and
+  one PLAN.md.
 
-`tests/setup/test_claude_saved.py`, `tests/setup/test_session_registry.py` and
-`tests/setup/test_tmux_claude_status.py` (the backstop rows) cover each row with
-a stub `tmux` on PATH, a temp `HOME` and `XDG_STATE_HOME`, and fake `~/.claude/sessions` files
-(the test's own pid as a live claude, a huge pid as a dead one, and the test's parent as the
-pane's process, so the `/proc` ancestry check runs for real).
+### Where each type lives, by level
 
-## Known limits
+Today one `STATUS.md` holds four kinds of facts at once: direction, per-lane state, machine state
+and backlog. The repo `PLAN.md` would hit the same multi-writer bug the moment two lanes each
+plan. The fix is levels, each with exactly one owner. Lower levels never restate higher ones,
+and higher levels link to lower ones through a derived view, not through copied prose.
 
-- The ★ is per pane, but the tab shows the active pane's: in a split, a starred pane that isn't
-  active shows no ★ in the status bar.
-- A claude that dies without SessionEnd keeps its ★ until `tmux-claude-status` sees no claude in
-  that pane (a few seconds, while a client is attached).
-- The backstop runs only while a client is attached, every 3 s or so: a ★ can be off for that
-  long after `fg`.
-- The menu shows at most 35 chats (one per key), fewer on a short client; `claude-saved list`
-  shows all.
+| Level | Doc | Holds | Writer | Lifetime |
+|---|---|---|---|---|
+| Machine | `~/hq` REGISTRY / STATUS | where projects live | hq | living |
+| Project (living) | `STATUS.md` in the main checkout | direction, backlog keyed by request #, merge order, blocked; a "Lanes: `lane ls`" line in place of lane prose | the main checkout or lead session; at merge a lane appends one promotion line (lane id, PR, outcome) | living |
+| Project (durable) | `PLAN.md` (cross-lane design only), `docs/`, `CLAUDE.md`, memory | conventions, cross-lane design, lessons | whoever, through a PR or memory | durable |
+| Lane | `.git/lanes/<id>/STATUS.md` + `lane.json` | the lane's state, decisions with pointers, not-mine notes, next step | that lane's sessions | the lane's life, archived on `lane done` |
+| Lane | `.git/lanes/<id>/PLAN.md` | the lane's working design (replaces `~/.claude/plans/`, which the next plan overwrites) | that lane | same |
+| Session | none (transcript; the session id in `lane.json`) | nothing written | none | none |
 
-## Verification
+- **Derived views, never stored:** `lane ls` (the board) and `lane ls --requests` (request to
+  lane, from claims). No doc carries an owner column. Ownership lives once, in `lane.json`
+  claims.
+- **Promotion at lane close** (part of the lane handoff's after-merge step):
+  - a decision future work needs goes to memory or a committed doc, inside the lane's PR (the
+    no-STATUS-only-PR rule holds);
+  - the outcome goes up as one line in the project STATUS;
+  - the rest is archived with the record.
+- **A repo with no lanes is unchanged:** one STATUS.md and one PLAN.md, as today.
+- `templates/STATUS.md` is restructured as Direction / Backlog / Lanes (derived) / Blocked /
+  Notes. `templates/LANE.md` covers the lane level, and the lane PLAN reuses
+  `templates/PLAN.md`.
+- The guard's relative-phrase lint covers every status level.
 
-- `python3 -m unittest discover -s tests/setup -t tests/setup` is green, and
-  `bash -n tmux/claude-saved tmux/tmux-claude-status hooks/session-registry.sh` passes.
-- `test_the_confs_parse_in_real_tmux` skips inside the Bash sandbox; run it outside to check the
-  new binding parses.
-- In real tmux (a `tmux -L probe` server, then live): right-click a Claude tab, Star (★ shows),
-  `/clear` (★ stays, `claude-saved list` shows the new id), Shelve (the tab closes), Ctrl-b S
-  and Ctrl-b Enter → Shelf… (both rows, ages, keys), open each, and Remove…. Check that `display-menu -c` and
-  `confirm-before -b -t` from inside run-shell behave as assumed, and that Shelf… from the
-  right-click menu gets the right client.
+## Layout
+
+```
+<common-dir>/lanes/
+  config.toml          root (~/code/<repo>-lanes), setup cmd, port range, live-lane cap, base (origin/main)
+  .lock                flock for every CLI write (claims are atomic)
+  <id>/lane.json       CLI-owned: id, branch, path, base_sha, port, claims[], state, sessions[], created/updated
+  <id>/STATUS.md       the lane's prose (template): goal, decisions with pointers (artifact paths,
+                       session ids), not-mine notes, next step
+  <id>/PLAN.md         the lane's working design (optional)
+  <id>/artifacts/      evidence that rulings point at (mocks, shots, gate logs); survives worktree removal
+  _closed/<id>-<date>/ archived on `lane done` (decisions survive the worktree's removal)
+```
+
+JSON for the fields the CLI owns (models alter JSON less than Markdown; Anthropic's long-running
+harness post). Markdown for the prose.
+
+## PR 1: lanes core (dotclaude, `feat/lanes`)
+
+**Step 0, spikes (probe with `claude -p`, record the results in `docs/lanes.md`):**
+- S1: the narrowest sandbox `allowWrite` that lets a lane-rooted session run `git commit` and
+  write `.git/lanes/` while `.git/hooks` and `.git/config` stay denied. Writes to those two from
+  sandboxed code would be an escape route, because a later sandbox-off git runs hooks. Try
+  `objects`, `refs`, `logs`, `worktrees/<id>`, `lanes` first.
+- S2: whether Edit and Write on `<common-dir>/lanes/**` prompt or get blocked by `.git`
+  protections.
+- S4: whether SessionStart `compact` `additionalContext` reaches the model on 2.1.296. It is
+  documented, but an old memory notes bug #15174 (Dec 2025).
+  - If it works, `lane-identity.sh` (already matched on `compact`) is the safety net for an
+    unplanned auto-compact: it re-injects the lane identity plus "your record is at X; re-read it
+    before acting".
+  - If it doesn't, a PostCompact hook writes a flag that the next UserPromptSubmit turns into that
+    reminder.
+- S3: whether `lane` must be a bare `excludedCommands` entry, like `hq-open`. `git fetch` needs
+  the GitHub credential the sandbox hides, so likely yes.
+
+**New files:**
+- `skills/lanes/scripts/lane`: Python stdlib (`tomllib`, `fcntl`, `subprocess`), installed to
+  `~/.local/bin` by the existing `setup.sh:107-112` loop. Subcommands:
+  - `init --root --setup --ports --cap`
+  - `new <id> --branch <b> [--claim #n ...]`: fetch; `worktree add -b` from `origin/main`;
+    `--unset-upstream`; port; setup; record; print the `cd … && claude` line.
+  - `adopt <path>`: registers the work repo's existing lanes.
+  - `ls [--json]`: the board, with flags `stale` (worktree gone), `rebase` (behind after a merge),
+    `conflict` (a double claim), `orphan` (no live session).
+  - `whoami`, `claim`, `release`, `who <req>`, `note` (append a timestamped line to the lane's
+    STATUS.md).
+  - `done <id>`: refuse unless merged or `--abandon`; refuse if a process has its cwd inside the
+    lane (`/proc/*/cwd`); warn about references into `<lane>/work` from other lanes; archive the
+    record; `worktree remove` without `--force`; delete the branch.
+- `hooks/lane-identity.sh`, SessionStart `startup|resume|clear|compact`:
+  - It resolves the lane from the payload's `cwd` via `git rev-parse --path-format=absolute
+    --git-common-dir --show-toplevel` and the matching `lane.json`.
+  - In a lane, it injects: "You are lane `<id>`: branch, claims, port, your record path. Other
+    lanes' records are read-only. Ownership comes from `lane who`."
+  - It appends the session id to `sessions[]`.
+  - In a main checkout that has lanes, it injects a one-line board summary.
+  - With no lanes, it stays silent.
+- `hooks/lane-guard.sh` + `hooks/lane_guard.py`, PreToolUse `Edit|Write`:
+  - Deny writes to `<common-dir>/lanes/<other-id>/**` from a session whose lane is not
+    `<other-id>`.
+  - Deny relative-identity phrases in any write to `lanes/**` or to the STATUS.md of a repo with
+    lanes. The deny message says to name the lane id.
+  - Keep the phrase list tight: `(an)?other (claude )?session`, `this session`,
+    `the other (lane|session)`, `my (lane|session)`.
+  - Mirror `overwrite_guard.py`'s structure and logging (`lane-guard.log`).
+- `skills/lanes/SKILL.md`: the operating guide (the five invariants, lifecycle, a cheat sheet, and
+  what to write where). `docs/lanes.md`: the design, the spike results, and why (copied from this
+  plan, which the next plan overwrites; the communication-model table is its core).
+- `templates/LANE.md`, with sections Brief, State, Decisions, Asks for Hayden, Not mine, Next.
+- `templates/STATUS.md`, restructured as Direction, Backlog, Lanes (one derived line), Asks,
+  Decisions, Blocked, Notes. A repo with no lanes uses it as-is.
+- `lane asks` (all lanes' open asks, one list) and `lane ls --requests`. Both read records only.
+- `tests/lanes/`: unittest with a temporary bare origin plus clone, no network.
+  - `new`/`adopt`/`ls`/`done` round trip.
+  - Stale detection after a manual `worktree remove`.
+  - Claim conflict under concurrent `claim` calls (the lock).
+  - `whoami` from nested dirs and from `main`.
+  - Guard matrix: own record / other record / main STATUS × relative phrase / clean text.
+  - The identity hook's output for a lane, for main with lanes, and for a plain repo.
+
+**Edits:**
+- `settings.json`: register both hooks. Add `lane` to `excludedCommands` if S3 says so. Hayden
+  applies any allow-rule line the classifier refuses.
+- `CLAUDE.md:23`, session start: "if the SessionStart hook names your lane, read your lane record
+  first; STATUS.md is project direction, never your state". Also rename "fast lane / full lane"
+  to "fast track / full track" (in CLAUDE.md, `codex/AGENTS.md` and handoff SKILL.md:18) so
+  "lane" has one meaning.
+- `skills/handoff/SKILL.md` gets a worktree-aware mode. Hayden asked for this mid-plan: the lead
+  orchestrates sessions under his permission, so every lane must hand off completely, and that
+  has to be checkable rather than trusted.
+  - Step 0: detect the context with `lane whoami`: a lane, `main` with lanes, or a plain repo.
+  - Step 1: in a lane, the range is `origin/main..HEAD` on the lane's branch.
+  - Step 3: in a lane, update the lane's record: the Next block, decisions with pointers
+    (artifact paths, session ids), and not-mine notes. Do not update STATUS.md. Touch the global
+    STATUS only for backlog or direction items no lane owns, using absolute names.
+  - Step 5: commit on the lane branch. The record is outside the tree, so nothing to stage for it.
+  - After a merge ("merged, cleanup and handoff"):
+    1. Write the final outcome into the record.
+    2. Add one line to the global backlog naming the lane id and PR.
+    3. Propose `lane done <id>`. Cleanup still needs Hayden's nod.
+  - The last step is always `handoff-check`. Handoff is not done until it passes.
+  - Add Common Mistakes rows: "wrote 'another session': name the lane id"; "updated STATUS.md
+    from a lane"; "said done without running handoff-check".
+- `skills/handoff/scripts/handoff-check`, new. It works in a lane, in main with lanes, and in a
+  plain repo, so `/pass` can use it anywhere. It checks:
+  - the working tree is clean, or every leftover is named in the record;
+  - the status file (the lane record, else STATUS.md) was written after HEAD's commit time and
+    during this session (the session's start time comes from `~/.claude/sessions/<pid>.json`;
+    a spike confirms the field);
+  - a non-empty Next block exists;
+  - there is no relative-identity phrase (reuses `lane_guard`'s lint);
+  - in a lane, `lane.json` claims match the record, and an unpushed branch is noted in the record
+    (a warning, not a failure, since pushes need Hayden).
+  - It exits non-zero and lists each gap. Tests cover each check's pass and fail.
+- `lane ls` gets a `handoff?` flag: the lane's last commit, or its last session end, is newer
+  than its record. `lane-identity.sh` also stamps a session's end into `lane.json` (a SessionEnd
+  entry), so the lead sees a lane whose session ended without a handoff.
+- README: a "Lanes" section.
+
+**Verify:**
+- `python3 -m unittest discover -s tests/lanes -t tests/lanes`, plus the existing `tests/setup`
+  and `tests/delegation`.
+- Replay the guard's phrase list against the 270 real STATUS edits in the work repo's transcripts:
+  report the would-deny lines, and check each is a real relative claim (target: no false denies
+  on lane-free text).
+- Install from the branch, then smoke test in a scratch repo. `lane init`/`new`; open
+  `claude` in the lane. Confirm the identity line appears, a relative phrase is denied, an
+  edit to another lane's record is denied, and `git commit` works sandboxed with the S1 rule.
+
+## PR 2: the lead (`feat/lanes-lead`)
+
+- `lane open <id> [--focus]`: an `hq-open` clone. Run `tmux new-window -d -c <lane path> -n <id>
+  claude "<prompt>"`, where the prompt is "Read your lane record `<path>`, then plan the brief it
+  holds". Then record the window in `lane.json`.
+- `lane lock <name> -- <cmd>`: flock under `.git/lanes/locks/`, for shared gates (the
+  Chrome typing gate) and anything else that can't run twice. `config.toml` lists the known
+  resources, and the skill says to wrap gate runs.
+- The lead section of `skills/lanes/SKILL.md`:
+  - **Triage:** collect the requests, explore the code to estimate the files each touches, group
+    them by overlap, and pick lane ids and branches.
+  - **Propose:** show a table (lane, branch, requests, files, overlaps, merge order) and wait for
+    Hayden's approval.
+  - **Open:** `lane new --claim …` writes the brief into each new record, then `lane open`.
+  - **Cap:** keep a backlog beyond the live-lane cap, set in `config.toml` (default 4).
+  - **Hand-back gate:** the lead treats a lane as handed back only when that lane's
+    `handoff-check` passes and `lane ls` shows no `handoff?` flag. Otherwise it messages the lane
+    (or tells Hayden, if the session is gone) before it orders a merge or closes the lane.
+  - **Watch and order:** watch `lane ls`. Keep the merge order in the lead's backlog. After each
+    merge, message the remaining lanes ("main moved to `<sha>`, rebase; renumber the version if
+    taken"). The board's `rebase` flag is the truth, and the message is only a nudge.
+- **Context management across lanes.**
+  - Each lane manages itself through the PR 3 watcher, with `autopass = true` set in the lanes
+    config by default.
+  - The lead is the backstop, not the actor. `lane ls` shows each lane's context % (from the live
+    session's transcript, using the session id in `lane.json`) and its idle or working state.
+  - When a lane is high and idle at a clean boundary, the lead messages it: "context N%, run
+    /pass".
+  - The lead never respawns another lane's pane, because only the lane holds the context its
+    handoff needs. A lane whose session died with `handoff?` set goes to Hayden's asks.
+  - The lead passes itself the same way. Its state lives in the project STATUS and the board, so
+    a fresh lead resumes cleanly.
+  - This bullet lands with PR 3, since it needs the watcher.
+- Lanes still use `writer` subagents for short chunks. The skill notes the stale-base trap
+  (`worktree.baseRef` and the work repo's recipe).
+- **Verify:** unit tests for `lock` (a second holder blocks or times out) and for `open --print`.
+  A live run: the lead triages three fake requests in a scratch repo, proposes, opens two lanes,
+  and both sessions start with their identity line.
+
+## PR 3: `/pass` (`feat/pass`)
+
+- `skills/pass/SKILL.md` (user-invocable):
+  1. Refuse if background tasks are in flight or `$TMUX_PANE` is unset (then print the manual
+     line instead).
+  2. Run the handoff skill to completion (it commits).
+  3. Run `handoff-check`. If it fails, fix the named gaps and re-run it. Never respawn on a
+     failing check, because the respawn throws away the context that could fix it.
+  4. Run `pass-respawn`. It also runs `handoff-check` itself and refuses on a non-zero exit, so
+     the gate holds even if the skill's steps are skipped.
+- `skills/pass/scripts/pass-respawn`:
+  - Build the resume prompt. In a lane: "Read your lane record, plan the next step." Otherwise:
+    "Read STATUS.md (and PLAN.md if present), plan the next step."
+  - Detach (double fork), wait a short settle, then run
+    `tmux respawn-pane -k -t $TMUX_PANE -c <cwd> claude --permission-mode plan "<prompt>"`.
+  - Runs as a bare command in `excludedCommands` (it needs the tmux socket).
+  - **Resume mode** (Hayden's call, 2026-10-11): plan mode, unless the Next block carries
+    `(approved by Hayden <date>)` for that exact step. Then it resumes in the normal mode and
+    continues.
+    - The handoff skill writes that marker only when Hayden approved the step in this session,
+      citing the approval. It never infers one.
+    - `handoff-check` fails a marker with no date.
+    - Anything new or unapproved stops for Hayden's plan approval, so chained passes always hit
+      a human checkpoint at each new step.
+- **Two modes; a handoff always comes first in both.** Research (2026-10-11) says decide by
+  where the state lives: never rely on a summary for exact facts, and clear at a task boundary or
+  after about two failed corrections. Hayden's history: 108 `/compact` against 309 `/clear`,
+  usually as "handoff → /compact → continue", and sometimes "merged, cleanup → /compact →
+  continue on #110", which carries a finished task's beliefs into the next one.
+
+  | Mode | Mechanism | Use when |
+  |---|---|---|
+  | `pass` (clear, the default) | handoff → `handoff-check` → `respawn-pane` with a fresh `claude` | task boundary (merged, a new request), context poisoned (corrected twice), a lane at a boundary, an approved plan ready to run fresh |
+  | `pass compact` | handoff → `handoff-check` → (detached, after the turn goes idle) `tmux send-keys` types `/compact <focus>`, then the resume prompt | same task mid-flight with tacit state (ruled-out hypotheses, half-built understanding), background tasks in flight (they survive a compact and die on a respawn), waiting on a build |
+
+  - The model can't run `/compact` itself: built-ins aren't reachable through the Skill tool. So
+    the script types it.
+  - The focus text tells the summary to keep failed approaches, exact identifiers and the repro
+    command, and points at the record. The record holds the exact facts; the summary holds the
+    feel.
+  - **Plan mode for the compact variant:** the resume prompt tells the model to call
+    `EnterPlanMode` first, unless the Next step is pre-approved. That avoids flaky Shift+Tab
+    presses.
+  - **Idle detection:** the script waits for the pane's idle state, which the existing tmux state
+    hooks already set ([[dotclaude-tmux-indicator]]); a spike confirms it. Then it sends the
+    keys.
+  - The skill recommends a mode from the table, and Hayden can name one.
+- **Triggers.** `/pass` and a typed "handoff and pass" do the same thing, because pass includes
+  handoff. "pass compact" / "handoff and compact" select the compact mode. A bare "handoff" never
+  respawns or compacts.
+  - "pass" is a risky trigger word. 63 of 5,661 typed prompts use it, almost all as "a pass"
+    ("Handoff for a later pass to fix this", "a graphics/image pass").
+  - So the natural-language trigger only fires when "pass" is the bare last item of a terse list
+    ("handoff and pass", "commit, pass", "pass").
+  - The `handoff_reminder.py` classifier gets that end-anchored rule, and the skill's description
+    says the same.
+  - Gate: replay all of `history.jsonl` with zero hits in the "a pass" sense ([[hayden-prompt-style]],
+    [[fix-every-review-finding]]).
+- **Opt-in auto-pass on context** (Hayden's ask: pass at the end of a session without being told):
+  - `hooks/context-watch.sh`, Stop.
+    - Hooks get no context-fill field, but the statusline JSON documents
+      `context_window.used_percentage`.
+    - So a ccstatusline custom-command widget writes `used_percentage` per session to
+      `$XDG_STATE_HOME/dotclaude/ctx/<session_id>`, and the hook reads that file.
+    - Fallback: the transcript's last assistant `usage` (an internal format).
+    - The same file feeds `lane ls`'s context column.
+  - The nudge always says "run the pass skill", so a handoff always comes first. It names the
+    mode the table suggests. With background tasks in flight, it suggests only `pass compact`
+    instead of staying quiet.
+  - When auto-pass is on and the fill is at or above the threshold (default 60%, set in
+    `~/.config/dotclaude/pass.toml`, per repo in the lanes `config.toml`), it blocks the Stop once
+    per threshold crossing with: "Context at N%. If this is a clean boundary, run the pass skill;
+    if you just asked Hayden something or work is mid-step, finish that first."
+  - Stop `decision: block` keeps the turn going ([[cc-stop-hook-facts]]). The hook stays quiet
+    while `background_tasks` is non-empty.
+  - Turning it on: `/pass auto` (this session, a flag file keyed by session id), or
+    `autopass = true` in config (every session in that repo or lane).
+  - When it's off, the hook does nothing. The statusline already shows context.
+- Spike first:
+  - SessionEnd reason and the hooks on a respawn.
+  - Whether tmux-restore treats it as a death.
+  - Whether a Star follows the pane across it, as it does across `/clear`
+    ([[dotclaude-tmux-shelf]]).
+- **Verify:**
+  - Unit tests:
+    - `context-watch` on transcript fixtures: below the threshold; at it, once per crossing;
+      off; background tasks in flight.
+    - The resume-mode choice: approved, unapproved, a malformed marker.
+    - The trigger classifier, plus the full `history.jsonl` replay.
+  - A live run in a scratch tmux window: `/pass`, then the handoff commit; the pane comes back in
+    plan mode with the prompt. `ring.log` and the restore log stay sane, and a Star survives.
+  - A second run with an approved Next resumes in normal mode.
+  - `pass compact` with a background `python3 -I -c 'import time; time.sleep(120)'` in flight:
+    the handoff commits, `/compact` is typed only after idle, the background task survives, and
+    the resumed turn enters plan mode.
+  - An auto-pass at a lowered threshold (5%) fires once and ends in a passing `handoff-check`.
+
+## After: the work repo's migration (its own PR in that repo, after PR 1 and PR 2 merge)
+
+- `lane init` with the <repo>-lanes root, `install:ci`, ports 5191+, the typing gate as a lock.
+- `lane adopt` each live worktree.
+- Move each lane's paragraph out of STATUS.md into its record.
+- Shrink STATUS.md to direction and backlog.
+- Point the `lane worktree recipe` memory and `briefs/guardrails.md` at the skill (one
+  home per fact).
+- Add the S1 sandbox rule to its `.claude/settings.local.json` (Hayden applies it).
+
+## Critical files
+
+New: `skills/lanes/{SKILL.md,scripts/lane}`, `hooks/lane-identity.sh`,
+`hooks/{lane-guard.sh,lane_guard.py}`, `templates/LANE.md`, `docs/lanes.md`, `tests/lanes/`,
+`skills/pass/{SKILL.md,scripts/pass-respawn}`.
+Edited: `settings.json`, `CLAUDE.md`, `skills/handoff/SKILL.md`, `templates/STATUS.md`,
+`README.md`, `codex/AGENTS.md`, `setup.sh` (only if the bin loop needs the new paths).
+Patterns to reuse:
+- `hq/bin/hq-open`: the tmux launch and the excludedCommands rationale.
+- `hooks/overwrite_guard.py`: guard structure and logging.
+- `hooks/session-title.sh:82-128`: resolving a worktree's repo from `.git` files.
+- `hooks/session-registry.sh`: the session JSON.
+- `setup.sh:107-112`: installing to bin.
+
+Process: each PR runs as a full-track effort with a `writer` in a worktree and a fresh
+`reviewer` per fix round. It opens as a draft and is marked ready after docs, STATUS, install
+and the smoke test from the branch. Push and merge only on Hayden's approval.
