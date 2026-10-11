@@ -15,7 +15,7 @@ transcripts:
 - Session B was that intended owner. It read the line as being about someone else. It then
   matched the phrase to the wrong live session through ListAgents (session C, whose first prompt
   read "another session working on request #110") and deferred #110. A mirror flip ("another
-  session's formatbar lane") happened earlier the same day.
+  session's toolbar lane") happened earlier the same day.
 
 So the root cause is not that a merged STATUS reached another lane. There are four causes:
 
@@ -203,14 +203,23 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
   checkout's possibly unpulled HEAD.
 - **`hooks/lane-identity.sh`** (SessionStart, Stop, SessionEnd): the identity line, the
   `sessions[]` entry, the mirror and the end stamp. A compact keeps its session's entry, so the
-  session's start (which `handoff-check` uses) doesn't move.
+  session's start (which `handoff-check` uses) doesn't move. The mirror is crash-safe (build
+  `mirror.new`, swap, delete; a `mirror.old` left by a killed run is restored), copies what
+  symlinks point at, and skips the copy when nothing in `.lane/` changed.
 - **`hooks/lane-guard.sh`** (PreToolUse `Edit|Write|MultiEdit`): denies a write to another lane's
   `.lane/`, any Edit-tool write under `<common-dir>/lanes/` (the lane's own included: the CLI
-  owns that data), and a relative phrase added to a `.lane/` file or to a lanes repo's root
-  STATUS.md. The phrase list is tight on purpose: `(an)?other (claude )?session`, `this session`,
+  owns that data), and a relative phrase added to a `.lane/` file or to the root STATUS.md of
+  any checkout in a lanes repo (a lane's copy reaches main on merge). The phrase list is tight on purpose: `(an)?other (claude )?session`, `this session`,
   `the other (lane|session)`, `my (lane|session)`.
 - **`skills/handoff/scripts/handoff-check`**: makes "handoff done" checkable, in a lane, in main
   and in a plain repo. A status file counts as fresh against HEAD when it is newer than HEAD's
   commit, or when HEAD's commit carries it (a plain repo commits STATUS.md in the handoff
   commit). A lane's record is outside the tree, so its handoff writes the commit range into the
-  record after the commit.
+  record after the commit. Agent worktrees (`.claude/worktrees/`) never count as leftovers, and a
+  leftover must be named by its repo-relative path. Relative identity outside HTML comments and
+  code fails in a lanes repo and only warns in a plain one, where long-lived text has no peer
+  to mislead.
+- **`lane done`** validates the id and asserts its deletes stay inside `<common-dir>/lanes/`. It
+  needs commits past the lane's base, then either a merged PR whose head commit is the branch tip
+  (a squash merge) or the tip in the base. Sandboxed, it can't see other processes, so it
+  refuses and asks for a bare `lane done <id>`.

@@ -53,6 +53,13 @@ class Templates(unittest.TestCase):
                 self.assertEqual(lanelib.relative_phrases(f.read()), [], name)
 
 
+    def test_the_handoff_skill_calls_the_script_by_its_skill_path(self):
+        # The skill dir is linked live; the ~/.local/bin link waits for the next setup.sh.
+        with open(os.path.join(REPO, "skills", "handoff", "SKILL.md")) as f:
+            self.assertIn("~/.claude/skills/handoff/scripts/handoff-check", f.read())
+        self.assertTrue(os.access(HANDOFF_CHECK, os.X_OK))
+
+
 class PlainRepo(Check):
     init_lanes = False
 
