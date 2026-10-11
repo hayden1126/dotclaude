@@ -42,7 +42,8 @@ Native `claude --worktree` puts lanes inside the repo. That conflicts with the w
 inside", and Codex sessions wouldn't get the convention.
 
 **Hayden's calls** (2026-10-11):
-- Records live in `<git-common-dir>/lanes/`.
+- Records: CLI data in `<git-common-dir>/lanes/`; the lane's prose in its own `.lane/`, mirrored
+  into the common dir (moved there after spike S2).
 - A `lane` CLI creates sibling-dir worktrees.
 - Enforcement is the skill and CLI plus two hooks.
 - An optional **lead** session triages requests, proposes a lane split, and on approval opens
@@ -62,7 +63,7 @@ inside", and Codex sessions wouldn't get the convention.
    - Status text names lanes by id and requests by number, never "another/this/other session" or
      "my lane".
 2. **One writer per record.** After creation, only the lane's own sessions write
-   `.git/lanes/<id>/`. The lead writes a record only when it creates the lane, plus its own
+   `<lane>/.lane/` and `lanes/<id>/`. The lead writes a record only when it creates the lane, plus its own
    backlog.
 3. **Only the owner claims.** A request is owned only when a live lane's record claims it
    (`lane claim`). The answer to "who has #110?" comes only from `lane who #110`. It never comes
@@ -94,12 +95,12 @@ writer, and every other place links to it.
 | 3 | What's queued and not started? | Backlog | the project `STATUS.md` Backlog, keyed by request #; it mirrors nothing the tracker already holds | main or lead | living |
 | 4 | Who is doing what? | Registry | `lane.json` claims, viewed through `lane ls` / `lane who` (derived, never prose) | the owning lane via the CLI | living |
 | 5 | What does this lane have to do? | Brief (down) | the lane record's opening section, from `templates/LANE.md`: goal, requests, expected files, overlaps with lanes by id, done criteria, constraints | the lead or creator, once | lane |
-| 6 | How will we build it? | Design | the lane's `.git/lanes/<id>/PLAN.md`; cross-lane design goes in the project `PLAN.md` or `docs/` | the lane, or the lead for cross-lane | lane / durable |
+| 6 | How will we build it? | Design | the lane's `.lane/PLAN.md`; cross-lane design goes in the project `PLAN.md` or `docs/` | the lane, or the lead for cross-lane | lane / durable |
 | 7 | What was decided, by whom, and on what evidence? | Rulings | the record's "Decisions": `Hayden picked chip row + preview (2026-10-11); evidence: <artifact path>, session <id>`. Promoted at merge into the PR body; also to memory if it constrains future work | the lane | lane → durable |
 | 8 | Where does it stand, and what's next? | State + handoff | the record's State and Next. A shift-change note in SBAR order: situation, background, assessment, next step | the lane | lane |
 | 9 | What is this lane blocked on Hayden for? | Asks | the record's "Asks for Hayden" (a design pick, push or merge approval, a cleanup nod), shown by `lane asks` across lanes; one queue for everything the lead runs under Hayden's permission | the lane; cleared after Hayden answers | living |
 | 10 | What did a delegate produce? | Report (up) | a subagent's report JSON (the delegation contract); a lane's hand-back is a passing `handoff-check` plus a State summary; the PR body to outsiders | the delegate | ephemeral → PR |
-| 11 | Proof behind a claim | Evidence | `.git/lanes/<id>/artifacts/` (mocks, shots, gate logs), so it survives `worktree remove`, unlike `work/` today; rulings point here | the lane | archived with the record |
+| 11 | Proof behind a claim | Evidence | `.lane/artifacts/` (mocks, shots, gate logs), mirrored so it survives `worktree remove`, unlike `work/` today; rulings point here | the lane | archived with the record |
 | 12 | Shared machine resources | Env state | `lane.json` port, `lane lock` holders, live sessions (derived; the work repo's hand-kept "Machine state" list drifted, so it is retired) | the CLI | live |
 | 13 | Heads-up between peers | Message | SendMessage. A nudge only: anything that matters lands in a doc first, and a message never carries state or consent | anyone | ephemeral |
 | 14 | What did we learn? | Lessons | memory (Hayden's preferences, traps), `docs/` | any session | durable |
@@ -142,8 +143,8 @@ and higher levels link to lower ones through a derived view, not through copied 
 | Machine | `~/hq` REGISTRY / STATUS | where projects live | hq | living |
 | Project (living) | `STATUS.md` in the main checkout | direction, backlog keyed by request #, merge order, blocked; a "Lanes: `lane ls`" line in place of lane prose | the main checkout or lead session; at merge a lane appends one promotion line (lane id, PR, outcome) | living |
 | Project (durable) | `PLAN.md` (cross-lane design only), `docs/`, `CLAUDE.md`, memory | conventions, cross-lane design, lessons | whoever, through a PR or memory | durable |
-| Lane | `.git/lanes/<id>/STATUS.md` + `lane.json` | the lane's state, decisions with pointers, not-mine notes, next step | that lane's sessions | the lane's life, archived on `lane done` |
-| Lane | `.git/lanes/<id>/PLAN.md` | the lane's working design (replaces `~/.claude/plans/`, which the next plan overwrites) | that lane | same |
+| Lane | `<lane>/.lane/STATUS.md` + `lanes/<id>/lane.json` | the lane's state, decisions with pointers, not-mine notes, next step | that lane's sessions | the lane's life, archived on `lane done` |
+| Lane | `<lane>/.lane/PLAN.md` | the lane's working design (replaces `~/.claude/plans/`, which the next plan overwrites) | that lane | same |
 | Session | none (transcript; the session id in `lane.json`) | nothing written | none | none |
 
 - **Derived views, never stored:** `lane ls` (the board) and `lane ls --requests` (request to
@@ -162,16 +163,24 @@ and higher levels link to lower ones through a derived view, not through copied 
 
 ## Layout
 
+Changed after spike S2 (Hayden, 2026-10-11): Claude Code treats every path under `.git/` as a
+"sensitive file", so Edit/Write there always prompts and no allow rule lifts it. The prose
+therefore lives in the lane's own worktree, in the session's cwd, where the Edit tool works with
+no prompt. The CLI-owned data stays in the common dir, which sandboxed Bash can write (S1).
+
 ```
-<common-dir>/lanes/
-  config.toml          root (~/code/<repo>-lanes), setup cmd, port range, live-lane cap, base (origin/main)
-  .lock                flock for every CLI write (claims are atomic)
-  <id>/lane.json       CLI-owned: id, branch, path, base_sha, port, claims[], state, sessions[], created/updated
-  <id>/STATUS.md       the lane's prose (template): goal, decisions with pointers (artifact paths,
-                       session ids), not-mine notes, next step
-  <id>/PLAN.md         the lane's working design (optional)
-  <id>/artifacts/      evidence that rulings point at (mocks, shots, gate logs); survives worktree removal
-  _closed/<id>-<date>/ archived on `lane done` (decisions survive the worktree's removal)
+<lane worktree>/.lane/          hidden by `/.lane/` in the shared <common-dir>/info/exclude (no repo footprint)
+  STATUS.md                     the lane's prose (templates/LANE.md): Brief, State, Decisions, Asks for Hayden, Not mine, Next
+  PLAN.md                       the lane's working design (optional)
+  artifacts/                    evidence that rulings point at (mocks, shots, gate logs)
+
+<common-dir>/lanes/             CLI-owned; written by `lane` and by hooks, never by the Edit tool
+  config.toml                   root (~/code/<repo>-lanes), setup cmd, port range, live-lane cap, base (origin/main)
+  .lock                         flock for every CLI write (claims are atomic)
+  <id>/lane.json                id, branch, path, base_sha, port, claims[], state, sessions[], created/updated
+  <id>/mirror/                  copy of <lane>/.lane/, refreshed by a Stop and SessionEnd hook, so a raw
+                                `git worktree remove` (which deletes ignored files) loses nothing
+  _closed/<id>-<date>/          lane.json + .lane/ archived on `lane done`
 ```
 
 JSON for the fields the CLI owns (models alter JSON less than Markdown; Anthropic's long-running
@@ -179,29 +188,36 @@ harness post). Markdown for the prose.
 
 ## PR 1: lanes core (dotclaude, `feat/lanes`)
 
-**Step 0, spikes (probe with `claude -p`, record the results in `docs/lanes.md`):**
-- S1: the narrowest sandbox `allowWrite` that lets a lane-rooted session run `git commit` and
-  write `.git/lanes/` while `.git/hooks` and `.git/config` stay denied. Writes to those two from
-  sandboxed code would be an escape route, because a later sandbox-off git runs hooks. Try
-  `objects`, `refs`, `logs`, `worktrees/<id>`, `lanes` first.
-- S2: whether Edit and Write on `<common-dir>/lanes/**` prompt or get blocked by `.git`
-  protections.
-- S4: whether SessionStart `compact` `additionalContext` reaches the model on 2.1.296. It is
-  documented, but an old memory notes bug #15174 (Dec 2025).
-  - If it works, `lane-identity.sh` (already matched on `compact`) is the safety net for an
-    unplanned auto-compact: it re-injects the lane identity plus "your record is at X; re-read it
-    before acting".
-  - If it doesn't, a PostCompact hook writes a flag that the next UserPromptSubmit turns into that
-    reminder.
-- S3: whether `lane` must be a bare `excludedCommands` entry, like `hq-open`. `git fetch` needs
-  the GitHub credential the sandbox hides, so likely yes.
+**Step 0, spike results** (2026-10-11, Claude Code 2.1.296, `claude -p` in a scratch repo with a
+sibling lane; they go into `docs/lanes.md`):
+- S1, sandbox: a session rooted in the lane needs **no** `allowWrite` rule. Sandboxed Bash can
+  `git commit` and write `<common-dir>/lanes/`, while Claude Code itself keeps `.git/hooks`
+  ("Read-only file system") and `.git/config` (lock refused) unwritable. The old "lane commits need
+  the sandbox off" came from sessions rooted in the main checkout.
+- S2, Edit/Write under `.git/`: always "a sensitive file", prompting even with an
+  `Edit(//abs/.git/lanes/**)` or `Edit(**/.git/lanes/**)` allow rule (Write rules don't apply to
+  file checks at all). Hence the in-lane `.lane/` above. A Write to `<lane>/.lane/STATUS.md` in
+  acceptEdits mode succeeds with no prompt, and the shared `info/exclude` hides it
+  (`git status --ignored` shows `!! .lane/`).
+- S3, `excludedCommands`: `lane *` goes in, beside `delegation-ledger *` and `hq-open`. `lane new`
+  fetches and `lane ls` asks gh for PR state, and both need the credential the sandbox hides. A
+  sandboxed (piped) call still works for the local subcommands and says what it skipped.
+- S4, compaction: a SessionStart hook matched on `compact` gets its `additionalContext` to the
+  model after `/compact` (`/compact` piped into `claude -p --resume` triggers a real compaction).
+  `lane-identity.sh` on `compact` is therefore the safety net for an unplanned auto-compact.
+- Session facts for `handoff-check` and PR 3: `~/.claude/sessions/<pid>.json` carries `sessionId`,
+  `cwd`, `startedAt` (ms), `status` (`idle` and others), `tmux` (`session:@window.%pane`) and
+  `messagingSocketPath`.
 
 **New files:**
 - `skills/lanes/scripts/lane`: Python stdlib (`tomllib`, `fcntl`, `subprocess`), installed to
   `~/.local/bin` by the existing `setup.sh:107-112` loop. Subcommands:
   - `init --root --setup --ports --cap`
   - `new <id> --branch <b> [--claim #n ...]`: fetch; `worktree add -b` from `origin/main`;
-    `--unset-upstream`; port; setup; record; print the `cd … && claude` line.
+    `--unset-upstream`; copy the main checkout's files matched by `.worktreeinclude` (Claude Code's
+    own convention: gitignored files such as `.claude/settings.local.json`, so the lane session
+    keeps Hayden's local rules); seed `.lane/STATUS.md` from the template with the brief; port;
+    setup; record; print the `cd … && claude` line.
   - `adopt <path>`: registers the work repo's existing lanes.
   - `ls [--json]`: the board, with flags `stale` (worktree gone), `rebase` (behind after a merge),
     `conflict` (a double claim), `orphan` (no live session).
@@ -216,11 +232,13 @@ harness post). Markdown for the prose.
   - In a lane, it injects: "You are lane `<id>`: branch, claims, port, your record path. Other
     lanes' records are read-only. Ownership comes from `lane who`."
   - It appends the session id to `sessions[]`.
+  - The same script, registered on Stop and SessionEnd, refreshes `lanes/<id>/mirror/` from
+    `.lane/` (hooks run outside the sandbox) and stamps the session's end into `lane.json`.
   - In a main checkout that has lanes, it injects a one-line board summary.
   - With no lanes, it stays silent.
 - `hooks/lane-guard.sh` + `hooks/lane_guard.py`, PreToolUse `Edit|Write`:
-  - Deny writes to `<common-dir>/lanes/<other-id>/**` from a session whose lane is not
-    `<other-id>`.
+  - Deny writes to another lane's `.lane/**` (and to anything under `<common-dir>/lanes/`)
+    from a session whose lane is not that lane.
   - Deny relative-identity phrases in any write to `lanes/**` or to the STATUS.md of a repo with
     lanes. The deny message says to name the lane id.
   - Keep the phrase list tight: `(an)?other (claude )?session`, `this session`,
@@ -242,7 +260,7 @@ harness post). Markdown for the prose.
   - The identity hook's output for a lane, for main with lanes, and for a plain repo.
 
 **Edits:**
-- `settings.json`: register both hooks. Add `lane` to `excludedCommands` if S3 says so. Hayden
+- `settings.json`: register both hooks. Add `lane *` to `excludedCommands` (S3). Hayden
   applies any allow-rule line the classifier refuses.
 - `CLAUDE.md:23`, session start: "if the SessionStart hook names your lane, read your lane record
   first; STATUS.md is project direction, never your state". Also rename "fast lane / full lane"
@@ -288,14 +306,14 @@ harness post). Markdown for the prose.
   on lane-free text).
 - Install from the branch, then smoke test in a scratch repo. `lane init`/`new`; open
   `claude` in the lane. Confirm the identity line appears, a relative phrase is denied, an
-  edit to another lane's record is denied, and `git commit` works sandboxed with the S1 rule.
+  edit to another lane's record is denied, and `git commit` works sandboxed with no extra rule (S1).
 
 ## PR 2: the lead (`feat/lanes-lead`)
 
 - `lane open <id> [--focus]`: an `hq-open` clone. Run `tmux new-window -d -c <lane path> -n <id>
   claude "<prompt>"`, where the prompt is "Read your lane record `<path>`, then plan the brief it
   holds". Then record the window in `lane.json`.
-- `lane lock <name> -- <cmd>`: flock under `.git/lanes/locks/`, for shared gates (the
+- `lane lock <name> -- <cmd>`: flock under `<common-dir>/lanes/locks/`, for shared gates (the
   Chrome typing gate) and anything else that can't run twice. `config.toml` lists the known
   resources, and the skill says to wrap gate runs.
 - The lead section of `skills/lanes/SKILL.md`:
@@ -434,7 +452,7 @@ harness post). Markdown for the prose.
 - Shrink STATUS.md to direction and backlog.
 - Point the `lane worktree recipe` memory and `briefs/guardrails.md` at the skill (one
   home per fact).
-- Add the S1 sandbox rule to its `.claude/settings.local.json` (Hayden applies it).
+- Root new lane sessions in the lane (`lane open`), which S1 shows is all the sandbox needs.
 
 ## Critical files
 
