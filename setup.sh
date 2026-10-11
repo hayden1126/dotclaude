@@ -114,7 +114,7 @@ if [[ -d "$HOME/.local/bin" ]]; then
   done
 fi
 
-# templates/ — per-file (SPEC/PLAN/STATUS scaffolds for full-lane work)
+# templates/ — per-file (SPEC/PLAN/STATUS/LANE scaffolds for full-track work)
 for f in "$REPO_DIR"/templates/*.md; do
   [[ -e "$f" ]] || continue
   link "$f" "$CLAUDE_DIR/templates/$(basename "$f")"

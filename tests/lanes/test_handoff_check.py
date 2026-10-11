@@ -7,7 +7,9 @@ import sys
 import time
 import unittest
 
-from _fixture import HANDOFF_CHECK, LanesRepo
+from _fixture import HANDOFF_CHECK, REPO, LanesRepo
+
+import lanelib  # on sys.path through _fixture
 
 GOOD = """# STATUS: chart work
 
@@ -40,6 +42,15 @@ class Check(LanesRepo):
         code, out = result
         self.assertEqual(code, 0, out)
         self.assertIn("handoff complete", out)
+
+
+class Templates(unittest.TestCase):
+    def test_the_seeded_templates_pass_the_lint(self):
+        # Both seed status files the guard and handoff-check lint, so a relative phrase in a
+        # template would fail every handoff made from it.
+        for name in ("STATUS.md", "LANE.md"):
+            with open(os.path.join(REPO, "templates", name)) as f:
+                self.assertEqual(lanelib.relative_phrases(f.read()), [], name)
 
 
 class PlainRepo(Check):
