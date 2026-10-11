@@ -1,7 +1,9 @@
 """hooks/lane-guard.sh and hooks/lane-identity.sh, run as Claude Code runs them: the event JSON on
 stdin to the bash shim."""
 import os
+import shutil
 import subprocess
+import time
 import unittest
 
 from _fixture import HOOKS, LanesRepo
@@ -165,6 +167,46 @@ class IdentityHook(LanesRepo):
         subprocess.run(["git", "init", "-q", plain], check=True, env=self.env)
         self.assertIsNone(self.start(plain))
         self.assertIsNone(self.start(self.tmp))  # not a repo at all
+
+    def stop(self):
+        self.hook("lane-identity.sh", {"session_id": "sess-0001", "cwd": self.lane_dir,
+                                       "hook_event_name": "Stop"})
+
+    def mirror(self, *parts):
+        return os.path.join(self.common, "lanes", "chart-fix", "mirror", *parts)
+
+    def test_a_mirror_left_mid_swap_is_restored_not_deleted(self):
+        # A kill between the two renames leaves only mirror.old: the only copy once the worktree
+        # is gone. The next run must put it back.
+        old = self.mirror() + ".old"
+        self.write(os.path.join(old, "STATUS.md"), "the only copy\n")
+        shutil.rmtree(os.path.join(self.lane_dir, ".lane"))
+        self.stop()
+        self.assertEqual(self.read(self.mirror("STATUS.md")), "the only copy\n")
+        self.assertFalse(os.path.exists(old))
+
+    def test_the_mirror_copies_what_symlinks_point_at(self):
+        outside = os.path.join(self.tmp, "shot.png")
+        self.write(outside, "png")
+        os.makedirs(os.path.join(self.lane_dir, ".lane", "artifacts"))
+        os.symlink(outside, os.path.join(self.lane_dir, ".lane", "artifacts", "shot.png"))
+        self.stop()
+        copied = self.mirror("artifacts", "shot.png")
+        self.assertFalse(os.path.islink(copied))
+        self.assertEqual(self.read(copied), "png")
+
+    def test_an_unchanged_record_is_not_copied_again(self):
+        self.stop()
+        self.write(self.mirror("STATUS.md"), "marker\n")  # stands in for a copy the run skipped
+        self.stop()
+        self.assertEqual(self.read(self.mirror("STATUS.md")), "marker\n")
+        time.sleep(0.01)
+        self.write(self.record("chart-fix"), "# LANE: chart-fix\n## Next\n- ship\n")
+        self.stop()
+        self.assertEqual(self.read(self.mirror("STATUS.md")), "# LANE: chart-fix\n## Next\n- ship\n")
+        os.remove(self.record("chart-fix"))  # a deletion counts as a change too
+        self.stop()
+        self.assertFalse(os.path.exists(self.mirror("STATUS.md")))
 
     def test_stop_mirrors_the_record_and_session_end_stamps_it(self):
         self.start(self.lane_dir)

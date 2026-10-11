@@ -86,19 +86,46 @@ def start(repo: lanelib.Repo, lane: dict, event: dict) -> None:
         lanelib.update_lane(repo, lane["id"], append)
 
 
+def newest_mtime(root: str) -> float:
+    """The latest mtime under root, dirs included (a deletion touches its dir), following links."""
+    newest = os.stat(root).st_mtime
+    for d, dirs, files in os.walk(root, followlinks=True):
+        for name in dirs + files:
+            try:
+                newest = max(newest, os.stat(os.path.join(d, name)).st_mtime)
+            except OSError:  # a dangling link
+                continue
+    return newest
+
+
 def mirror(repo: lanelib.Repo, lane: dict) -> None:
+    """Copy <lane>/.lane/ to lanes/<id>/mirror/, crash-safe: build mirror.new, move mirror aside
+    to mirror.old, move mirror.new in, then drop mirror.old. A run killed between the moves
+    leaves mirror.old as the only copy, so the next run restores it before anything else.
+    Symlinks are copied as what they point at, so evidence outlives its target. Nothing changed
+    since the last copy (the stamp) means no copy, so a Stop on every turn stays cheap."""
+    dest = os.path.join(repo.lane_dir(lane["id"]), "mirror")
+    new, old, stamp = dest + ".new", dest + ".old", dest + ".stamp"
+    if not os.path.isdir(dest) and os.path.isdir(old):
+        os.rename(old, dest)
     src = lanelib.record_dir(lane)
     if not os.path.isdir(src):
         return
-    dest = os.path.join(repo.lane_dir(lane["id"]), "mirror")
-    tmp, old = dest + ".tmp", dest + ".old"
-    for d in (tmp, old):
-        shutil.rmtree(d, ignore_errors=True)
-    shutil.copytree(src, tmp, symlinks=True)
+    changed = newest_mtime(src)
+    try:
+        with open(stamp) as f:
+            if os.path.isdir(dest) and changed <= float(f.read()):
+                return
+    except (OSError, ValueError):
+        pass
+    shutil.rmtree(new, ignore_errors=True)
+    shutil.copytree(src, new, symlinks=False)
+    shutil.rmtree(old, ignore_errors=True)
     if os.path.isdir(dest):
         os.rename(dest, old)
-    os.rename(tmp, dest)
+    os.rename(new, dest)
     shutil.rmtree(old, ignore_errors=True)
+    lanelib.write_text(stamp, repr(changed))
 
 
 def end(repo: lanelib.Repo, lane: dict, event: dict) -> None:
