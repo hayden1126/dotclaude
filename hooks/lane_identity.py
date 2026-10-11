@@ -132,7 +132,10 @@ def main():
     name = event.get("hook_event_name")
     if name == "SessionStart":
         if kind == "lane":
-            start(repo, lane, event)
+            try:
+                start(repo, lane, event)
+            except (lanelib.LockTimeout, OSError, ValueError) as e:  # identity still matters
+                log(f"register skipped {type(e).__name__}: {e}")
             text = lane_context(lane, event.get("source") or "")
         elif kind == "main" and lanes:
             text = board_line(repo, lanes)
