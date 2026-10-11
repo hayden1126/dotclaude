@@ -12,6 +12,6 @@ project_doc_fallback_filenames = ["CLAUDE.md"]
 # isn't silently truncated.
 project_doc_max_bytes = 65536
 
-# Default model. Codex's built-in default (gpt-6-astra) is off-limits for Hayden; Sol is the
-# default and Terra the lighter option. Pass -m to pick Terra for a single run.
+# Default model. Codex's built-in default (gpt-6-astra) is opt-in per run for Hayden, never the
+# default; Sol is the default and Terra the lighter option. Pass -m to pick another for one run.
 model = "gpt-5.6-sol"

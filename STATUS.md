@@ -6,7 +6,7 @@
 > [[dotclaude-chrome-devtools-wsl]]). Per-effort design lives in the repo's `PLAN.md` or its doc,
 > not only under `~/.claude/plans/`, which the next plan overwrites ([[plan-file-not-durable]]).
 
-Last updated: 2026-10-08
+Last updated: 2026-10-10
 Base: `main`. For branch / PR / push state, run `gh pr list` and `git log main..HEAD` (derive it; not
 stored here).
 
@@ -117,14 +117,23 @@ stored here).
   `claude -p` repro and the 2.1.285 boundary; the karaoke session's has the incident.
 
 ## Notes for next session
-- **Next: merge `fix/gh-pr-ready-allow` once Hayden approves** (`gh pr list --head
-  fix/gh-pr-ready-allow` for its number), then `git fetch origin main:main` and `git switch main`
-  outside the sandbox (work: `git log main..fix/gh-pr-ready-allow`). #83 (Star and Shelve) is
-  merged and installed. The working tree also holds an uncommitted `codex-delegate` edit that
-  admits `gpt-6-astra` (not from this branch; Hayden's to finish or drop): 4
-  `test_codex_delegate` tests fail until its tests change with it. Flaky, not from these
-  branches: `test_tmux_hooks` `test_each_ring_decision_is_logged` failed once, then passed.
-  Then Hayden picks the next workflow improvement; deck-production S2 is deferred. First real
+- **Next: merge `feat/codex-astra` once Hayden approves** (`gh pr list --head
+  feat/codex-astra`), then `git fetch origin main:main` and `git switch main` outside the
+  sandbox. It makes `gpt-6-astra` opt-in per run (`--model astra`; the audit admits it only in
+  that run), allows Tectonic's `relay.fullyjustified.net` and its `data1b` mirror, and carries the no-attribution line.
+  **Astra waits on Hayden's plan:** two 2026-10-10 probes passed the audit (astra admitted,
+  nothing disallowed), but even after a fresh `codex login` the turn gets a 400, "gpt-6-astra
+  is not supported when using Codex with a ChatGPT account". Astra ran fine on 2026-09-29 and
+  2026-10-08, so the plan lapsing is the likely cause (Hayden's read). Once the plan is back,
+  rerun a one-line `--model astra` probe and `delegation-ledger exclude` it. The full canary
+  is green on 2.1.296 (live 65/65, 2026-10-10); the hand-run watch-guard re-arm and Codex kill
+  probe (`due.toml`) are still due for it. The delegation post still
+  names only Sol and Terra (decide before Medium). Kaggle hosts for the RSNA repo
+  (`api.kaggle.com`, `www.kaggleusercontent.com`) are not added: its `.claude/` has only
+  `settings.local.json`, Hayden's call. Flaky, not from these branches: `test_tmux_hooks`
+  `test_each_ring_decision_is_logged` failed once, then passed; `test_ledger`
+  `test_open_warns_first_and_calls_the_session_unknown` read 4 min for a 5-min call once
+  (a backward clock step, inferred). Then Hayden picks the next workflow improvement; deck-production S2 is deferred. First real
   check of #70: the next reboot (see Done). Recent work: `gh pr list --state merged --limit 10`.
 - **Verify the overwrite guard before touching it:** `python3 -m unittest discover -s tests/setup
   -t tests/setup` (`test_overwrite_guard.py`, `test_memory_git.py`, `test_claude_file_history.py`),

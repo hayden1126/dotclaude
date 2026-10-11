@@ -18,7 +18,7 @@ Stage 1 checks:
   guard       a writer spawned without isolation is denied, and nothing is written
   ledger      start and stop rows for every role that ran
   codex       exit 0, a valid report, pending/start/stop rows with the thread id, a clean
-              model audit, and --model astra refused before launch
+              model audit, and an unknown --model refused before launch
 
 Stage 2 checks (the fixture turns the sandbox on in its project settings, and passes
 excludedCommands through --settings, the tier Claude Code honors them from):
@@ -899,10 +899,10 @@ def run_codex(keep, cases):
           ",".join(r["event"] for r in rows))
     check("codex: thread id recorded", rows and rows[-1].get("thread_id"))
     n = len(rows)
-    p = subprocess.run([sys.executable, cd, "run", "--model", "astra", "--dir", root,
+    p = subprocess.run([sys.executable, cd, "run", "--model", "gpt-6", "--dir", root,
                         "--brief", brief], capture_output=True, text=True, env=env)
     rows = list(entries(os.path.join(state, "dotclaude", "delegations.jsonl")))
-    check("codex: astra refused before launch", p.returncode == 2 and len(rows) == n,
+    check("codex: unknown model refused before launch", p.returncode == 2 and len(rows) == n,
           p.stderr.strip()[:120])
     return root
 
