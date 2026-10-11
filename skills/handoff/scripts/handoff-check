@@ -1,0 +1,148 @@
+#!/usr/bin/env python3
+"""handoff-check: is this checkout's handoff complete? Exits 1 and lists each gap if not.
+
+Works in a lane (the record is <lane>/.lane/STATUS.md), in the main checkout of a lanes repo and
+in a plain repo (the root STATUS.md). Checks:
+  clean      the tree is clean, or each leftover path is named in the status file
+  fresh      the status file was written after HEAD's commit (or HEAD carries it) and after this
+             session started: in a lane the latest lane.json sessions[].startedAt; elsewhere the
+             session named by $CLAUDE_CODE_SESSION_ID, else the newest Claude session file whose
+             cwd is this checkout; skipped with a warning when none is found
+  next       a non-empty `## Next` (or `## Notes for next session`) section
+  absolute   no relative identity ("another session", "this session"; the guard's lint)
+  claims     in a lane, every lane.json claim is named in the record
+  pushed     in a lane, unpushed commits are noted in the record (a warning: pushes need Hayden)
+The handoff skill runs it last; a handoff is not done until it passes.
+"""
+import argparse
+import json
+import os
+import re
+import sys
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "..", "lanes",
+                                "scripts"))
+import lanelib  # noqa: E402
+from lanelib import git  # noqa: E402
+
+
+def session_start(repo: lanelib.Repo, lane: dict | None) -> tuple[float | None, str]:
+    """This session's start (epoch seconds) and where it came from."""
+    if lane is not None:
+        starts = [t for s in lane.get("sessions", []) if (t := lanelib.parse_iso(s.get("startedAt")))]
+        return (max(starts), "lane.json sessions[]") if starts else (None, "lane.json sessions[]")
+    sid = os.environ.get("CLAUDE_CODE_SESSION_ID")
+    files = []
+    for name in os.listdir(lanelib.sessions_dir()) if os.path.isdir(lanelib.sessions_dir()) else []:
+        if not name.endswith(".json"):
+            continue
+        try:
+            with open(os.path.join(lanelib.sessions_dir(), name)) as f:
+                files.append(json.load(f))
+        except (OSError, ValueError):
+            continue
+    files = [s for s in files if isinstance(s, dict) and isinstance(s.get("startedAt"), (int, float))]
+    if sid:
+        for s in files:
+            if s.get("sessionId") == sid:
+                return s["startedAt"] / 1000, f"session {sid}"
+    here = [s for s in files if os.path.realpath(s.get("cwd") or "/nonexistent") == repo.toplevel]
+    if here:
+        newest = max(here, key=lambda s: s["startedAt"])
+        return newest["startedAt"] / 1000, f"newest session in {repo.toplevel}"
+    return None, "no session found"
+
+
+def leftovers(repo: lanelib.Repo) -> list[str]:
+    p = git(["status", "--porcelain", "--untracked-files=all"], repo.toplevel, check=True)
+    out = []
+    for line in p.stdout.splitlines():
+        path = line[3:]
+        out.append(path.split(" -> ")[-1].strip('"'))
+    return out
+
+
+def head_carries(repo: lanelib.Repo, path: str) -> bool:
+    """Whether HEAD's commit changes the file (the handoff commit carried the status file)."""
+    rel = os.path.relpath(path, repo.toplevel)
+    if rel.startswith(".."):
+        return False
+    p = git(["diff-tree", "--root", "--no-commit-id", "--name-only", "-r", "HEAD"], repo.toplevel)
+    return rel in p.stdout.splitlines()
+
+
+def unpushed(repo: lanelib.Repo, lane: dict) -> int:
+    """Commits on the lane branch not on origin (its pushed copy, else the base)."""
+    branch = lane["branch"]
+    remote = f"refs/remotes/origin/{branch}"
+    has_remote = git(["rev-parse", "--verify", "--quiet", remote], repo.toplevel).returncode == 0
+    base = remote if has_remote else repo.config().get("base", "origin/main")
+    p = git(["rev-list", "--count", f"{base}..{branch}"], repo.toplevel)
+    return int(p.stdout.strip()) if p.returncode == 0 else 0
+
+
+def check(cwd: str) -> tuple[str, list[str], list[str]]:
+    """(header, failures, warnings) for the checkout holding cwd."""
+    repo = lanelib.resolve(cwd)
+    if repo is None:
+        return "handoff-check: not inside a git work tree", ["not a git work tree"], []
+    kind, lane = repo.identity()
+    status = lanelib.record_path(lane) if lane else os.path.join(repo.toplevel, "STATUS.md")
+    header = f"handoff-check: {lane['id'] if lane else kind} ({status})"
+    fails, warns = [], []
+    try:
+        with open(status) as f:
+            text = f.read()
+    except OSError:
+        return header, [f"no status file at {status}"], []
+
+    dirty = [p for p in leftovers(repo)
+             if p not in text and os.path.basename(p.rstrip("/")) not in text]
+    if dirty:
+        fails.append("uncommitted and not named in the status file: " + ", ".join(dirty))
+
+    mtime = os.path.getmtime(status)
+    head = git(["log", "-1", "--format=%ct"], repo.toplevel)
+    if head.returncode == 0 and head.stdout.strip():
+        if mtime < float(head.stdout.strip()) and not head_carries(repo, status):
+            fails.append("the status file is older than HEAD's commit: update it after the last "
+                         "commit (it should cite the commit range)")
+    start, source = session_start(repo, lane)
+    if start is None:
+        warns.append(f"session start unknown ({source}): freshness against this session skipped")
+    elif mtime < start:
+        fails.append(f"the status file was not written during this session ({source})")
+
+    if not lanelib.section(text, "Next", "Notes for next session"):
+        fails.append("no non-empty `## Next` (or `## Notes for next session`) section")
+
+    if found := lanelib.relative_phrases(text):
+        fails.append(f"relative identity: {', '.join(sorted(set(found)))}. {lanelib.RELATIVE_HINT}")
+
+    if lane:
+        missing = [c for c in lane.get("claims", [])
+                   if not re.search(re.escape(c) + r"(?![\w-])", text)]
+        if missing:
+            fails.append(f"claims not named in the record: {', '.join(missing)}")
+        if (n := unpushed(repo, lane)) and not re.search(r"unpushed|not pushed", text, re.I):
+            warns.append(f"branch {lane['branch']} has {n} unpushed commit(s): note it in the "
+                         "record (pushing needs Hayden)")
+    return header, fails, warns
+
+
+def main(argv=None) -> int:
+    ap = argparse.ArgumentParser(prog="handoff-check", description=__doc__.split("\n\n")[0])
+    ap.add_argument("-C", dest="cwd", default=os.getcwd(), help="check this dir's checkout")
+    args = ap.parse_args(argv)
+    header, fails, warns = check(args.cwd)
+    print(header)
+    for w in warns:
+        print(f"  warn  {w}")
+    for f in fails:
+        print(f"  FAIL  {f}")
+    print("  ok    handoff complete" if not fails else f"  {len(fails)} gap(s): fix and re-run")
+    return 1 if fails else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
