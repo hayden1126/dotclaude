@@ -32,7 +32,9 @@ class LanesRepo(unittest.TestCase):
         os.makedirs(os.path.join(self.home, ".claude", "sessions"))
         os.makedirs(fake_bin)
         with open(os.path.join(fake_bin, "gh"), "w") as f:
-            f.write("#!/bin/sh\necho 'gh: offline in tests' >&2\nexit 1\n")
+            # FAKE_GH_OUT, when set, is printed as the reply to any call (a test's canned JSON).
+            f.write('#!/bin/sh\nif [ -n "$FAKE_GH_OUT" ]; then printf "%s" "$FAKE_GH_OUT"; exit 0; fi\n'
+                    "echo 'gh: offline in tests' >&2\nexit 1\n")
         os.chmod(os.path.join(fake_bin, "gh"), 0o755)
         self.env = {k: v for k, v in os.environ.items()
                     if not k.startswith(("CLAUDE", "GIT_DIR", "GIT_WORK_TREE"))}

@@ -180,6 +180,11 @@ def common_dir_of(path: str) -> str | None:
     return os.path.realpath(p.stdout.strip()) if p.returncode == 0 and p.stdout.strip() else None
 
 
+def is_live(lane: dict) -> bool:
+    """A lane whose worktree still exists. A stale one's claims are void (invariant 3)."""
+    return os.path.isdir(lane.get("path") or "")
+
+
 def record_dir(lane: dict) -> str:
     return os.path.join(lane["path"], RECORD_DIR)
 

@@ -127,11 +127,26 @@ def worktrees(repo: Repo) -> dict[str, str]:
     return out
 
 
-def check_id(repo: Repo, lane_id: str) -> None:
-    if not lanelib.ID_RE.fullmatch(lane_id) or lane_id == "main":
-        raise LaneError(f"bad lane id {lane_id!r}: letters, digits, '.', '_', '-'; not 'main'")
+def check_id(lane_id: str) -> None:
+    """Every subcommand that takes an id checks it first: an id becomes a path under lanes/."""
+    if not lanelib.valid_id(lane_id):
+        raise LaneError(f"bad lane id {lane_id!r}: a slug of letters, digits, '.', '_', '-' that "
+                        "starts with a letter or digit, with no '..'; not 'main'")
+
+
+def check_unregistered(repo: Repo, lane_id: str) -> None:
+    check_id(lane_id)
     if os.path.exists(repo.lane_json(lane_id)):
         raise LaneError(f"lane {lane_id} is already registered")
+
+
+def lane_data_dir(repo: Repo, lane_id: str) -> str:
+    """lanes/<id>, asserted to sit directly inside lanes/ before anything deletes it."""
+    check_id(lane_id)
+    d = os.path.realpath(repo.lane_dir(lane_id))
+    if os.path.dirname(d) != os.path.realpath(repo.lanes_dir):
+        raise LaneError(f"refusing: {d} is not a lane dir inside {repo.lanes_dir}")
+    return d
 
 
 def free_port(repo: Repo, cfg: dict) -> int | None:
@@ -205,7 +220,7 @@ def claim_conflicts(repo: Repo, lane_id: str, reqs: list[str]) -> list[str]:
     """Requests a live lane other than lane_id already claims, as '#42 (chart-fix)'."""
     out = []
     for other in repo.lanes():
-        if other["id"] == lane_id or not os.path.isdir(other.get("path") or ""):
+        if other["id"] == lane_id or not lanelib.is_live(other):
             continue  # a stale lane (worktree gone) is not live, so its claims don't hold
         out += [f"{r} ({other['id']})" for r in reqs if r in other.get("claims", [])]
     return out
@@ -246,8 +261,8 @@ def cmd_new(args) -> None:
     base = cfg.get("base", "origin/main")
     fetch(repo)
     with lock(repo):
-        check_id(repo, args.id)
-        live = [x for x in repo.lanes() if os.path.isdir(x.get("path") or "")]
+        check_unregistered(repo, args.id)
+        live = list(filter(lanelib.is_live, repo.lanes()))
         if len(live) >= int(cfg.get("cap", DEFAULT_CAP)):
             raise LaneError(f"{len(live)} live lanes, at the cap of {cfg.get('cap')}: close one "
                             "with `lane done`, or raise it with `lane init --cap`")
@@ -264,11 +279,20 @@ def cmd_new(args) -> None:
         if p.returncode != 0:
             raise LaneError("git worktree add failed: " + p.stderr.strip())
         git(["branch", "--unset-upstream", branch], repo.toplevel)
+        # Registered the moment the worktree exists, so a failure below leaves a lane that
+        # `adopt` finishes or `done --abandon` removes, never an orphan worktree.
         lane = new_record(args.id, branch, os.path.realpath(path), base_sha, port, reqs)
-        copied = copy_includes(repo, lane["path"])
-        add_exclude(repo)
-        seed_record(lane, {ph: getattr(args, attr) for attr, ph in BRIEF.items()})
+        lane["state"] = "setup-failed"
         write_json(repo.lane_json(args.id), lane)
+        try:
+            copied = copy_includes(repo, lane["path"])
+            add_exclude(repo)
+            seed_record(lane, {ph: getattr(args, attr) for attr, ph in BRIEF.items()})
+        except (OSError, subprocess.CalledProcessError) as e:
+            raise LaneError(f"lane {args.id} is half made at {lane['path']} ({e}). Fix the cause, "
+                            f"then finish it with `lane adopt {lane['path']}`, or remove it with "
+                            f"`lane done {args.id} --abandon`")
+        lane = lanelib.update_lane(repo, args.id, lambda x: x.update(state="active"))
     say(f"lane {args.id}: branch {branch} from {base} ({base_sha[:12]}), port {port or 'none'}")
     if copied:
         say(f"  copied {len(copied)} file(s) from .worktreeinclude")
@@ -277,8 +301,11 @@ def cmd_new(args) -> None:
         env = dict(os.environ, LANE_ID=args.id, LANE_PORT=str(port or ""))
         say(f"  setup: {setup}")
         if subprocess.run(setup, shell=True, cwd=lane["path"], env=env).returncode != 0:
-            raise LaneError(f"setup failed in {lane['path']}; the lane is registered, so fix and "
-                            f"re-run it there, or `lane done {args.id} --abandon`")
+            with lock(repo):
+                lanelib.update_lane(repo, args.id, lambda x: x.update(state="setup-failed"))
+            raise LaneError(f"setup failed in {lane['path']}; the lane is registered (state "
+                            "setup-failed): fix and re-run it there, then `lane adopt "
+                            f"{lane['path']}`, or `lane done {args.id} --abandon`")
     say(f"cd {lane['path']} && claude")
 
 
@@ -295,9 +322,19 @@ def cmd_adopt(args) -> None:
     if not trees[path]:
         raise LaneError(f"{path} is on a detached HEAD: check out its branch first")
     with lock(repo):
-        check_id(repo, lane_id)
-        if repo.lane_at(path):
+        check_id(lane_id)
+        known = repo.lane_at(path)
+        if known and known.get("state") == "setup-failed":
+            copy_includes(repo, path)  # finish what `lane new` left half made
+            add_exclude(repo)
+            seed_record(known, {})
+            lane = lanelib.update_lane(repo, known["id"], lambda x: x.update(state="active"))
+            say(f"finished lane {lane['id']}: branch {lane['branch']}, port {lane['port'] or 'none'}")
+            say(f"  record {lanelib.record_path(lane)}")
+            return
+        if known:
             raise LaneError(f"{path} is already registered")
+        check_unregistered(repo, lane_id)
         base = cfg.get("base", "origin/main")
         mb = git(["merge-base", trees[path], base], repo.toplevel)
         claims = []
@@ -401,7 +438,7 @@ def cmd_ls(args) -> None:
     repo = lanes_repo()
     if args.requests:
         reqs = {}
-        for lane in repo.lanes():
+        for lane in filter(lanelib.is_live, repo.lanes()):  # a stale lane's claims are void
             for r in lane.get("claims", []):
                 reqs.setdefault(r, []).append(lane["id"])
         if args.json:
@@ -492,7 +529,7 @@ def cmd_who(args) -> None:
         say(f"{req}: unclaimed")
         return
     for lane in holders:
-        live = os.path.isdir(lane.get("path") or "")
+        live = lanelib.is_live(lane)
         say(f"{req}: lane {lane['id']}" + ("" if live else "  (stale: worktree gone, claim void)"))
 
 
@@ -568,7 +605,7 @@ def work_references(repo: Repo, lane: dict) -> list[str]:
         return []
     hits = []
     for other in repo.lanes():
-        if other["id"] == lane["id"] or not os.path.isdir(other.get("path") or ""):
+        if other["id"] == lane["id"] or not lanelib.is_live(other):
             continue
         text, _ = record_text(repo, other)
         if text and work in text:
@@ -583,35 +620,55 @@ def work_references(repo: Repo, lane: dict) -> list[str]:
     return hits
 
 
-def merged(repo: Repo, branch: str, fetched: bool) -> str | None:
-    """How the branch is known merged ('PR #n', 'in origin/main'), or None."""
+def merged(repo: Repo, lane: dict, fetched: bool) -> tuple[str | None, str]:
+    """(how the lane's work is known merged, or None; why not). Merged means the branch has
+    commits past its base and either a merged PR's head commit is the branch tip (a squash merge
+    leaves the tip out of the base) or the tip is in the base. An old PR from a same-named branch
+    at another commit proves nothing."""
+    branch = lane["branch"]
+    tip = rev(repo, branch)
+    if tip is None:
+        return None, f"branch {branch} does not exist"
+    base = repo.config().get("base", "origin/main")
+    fork = lane.get("base_sha") or tip
+    count = git(["rev-list", "--count", f"{fork}..{tip}"], repo.toplevel)
+    if count.returncode == 0 and count.stdout.strip() == "0":
+        return None, f"no commits past its base {fork[:12]}"
     try:
         p = subprocess.run(["gh", "pr", "list", "--head", branch, "--state", "merged", "--json",
-                            "number"], cwd=repo.toplevel, capture_output=True, text=True,
-                           timeout=30)
-        if p.returncode == 0 and (rows := json.loads(p.stdout or "[]")):
-            return f"PR #{rows[0]['number']} merged"
+                            "number,headRefOid"], cwd=repo.toplevel, capture_output=True,
+                           text=True, timeout=30)
+        rows = json.loads(p.stdout or "[]") if p.returncode == 0 else []
+        for row in rows:
+            if row.get("headRefOid") == tip:
+                return f"PR #{row.get('number')} merged", ""
     except (OSError, subprocess.SubprocessError, ValueError):
         pass
-    base = repo.config().get("base", "origin/main")
-    if git(["merge-base", "--is-ancestor", branch, base], repo.toplevel).returncode == 0:
-        return f"fully in {base}" + ("" if fetched else " (unfetched copy)")
-    return None
+    if git(["merge-base", "--is-ancestor", tip, base], repo.toplevel).returncode == 0:
+        return f"fully in {base}" + ("" if fetched else " (unfetched copy)"), ""
+    return None, f"no merged PR at its tip {tip[:12]}, and the tip is not in {base}"
 
 
 def cmd_done(args) -> None:
     repo = lanes_repo()
+    data_dir = lane_data_dir(repo, args.id)
     if not os.path.isfile(repo.lane_json(args.id)):
         raise LaneError(f"no lane {args.id}")
     with open(repo.lane_json(args.id)) as f:
         lane = json.load(f)
     path = os.path.realpath(lane["path"])
+    if path == repo.main:
+        raise LaneError(f"refusing: lane {args.id}'s path is the main checkout")
     present = os.path.isdir(path)
     fetched = fetch(repo)
-    how = merged(repo, lane["branch"], fetched)
+    how, why = merged(repo, lane, fetched)
     if not how and not args.abandon:
-        raise LaneError(f"branch {lane['branch']} is not merged (no merged PR, not in the base); "
-                        "pass --abandon to close it anyway")
+        raise LaneError(f"branch {lane['branch']} is not merged: {why}. Pass --abandon to close "
+                        "it anyway")
+    if present and not lanelib.pids_visible():
+        raise LaneError("sandboxed: this command can't see other processes, so it can't tell "
+                        f"whether a session still runs in {path}. Run it as a bare "
+                        f"`lane done {args.id}` (excludedCommands runs that outside the sandbox)")
     if present and (procs := processes_inside(path)):
         raise LaneError(f"processes still have their cwd in {path}: {', '.join(procs)}. Close "
                         "those sessions (or cd out) first")
@@ -626,7 +683,7 @@ def cmd_done(args) -> None:
             n += 1
         source = lanelib.record_dir(lane)
         if not os.path.isdir(source):
-            source = os.path.join(repo.lane_dir(args.id), "mirror")
+            source = os.path.join(data_dir, "mirror")
         if os.path.isdir(source):
             shutil.copytree(source, os.path.join(archive, lanelib.RECORD_DIR))
         lane.update(state="abandoned" if not how else "merged", closed=now_iso(),
@@ -637,7 +694,7 @@ def cmd_done(args) -> None:
             if p.returncode != 0:
                 shutil.rmtree(archive)
                 raise LaneError(f"git worktree remove refused: {p.stderr.strip()}")
-        shutil.rmtree(repo.lane_dir(args.id))
+        shutil.rmtree(data_dir)
     say(f"lane {args.id} closed ({how or 'abandoned'}); archived to {archive}")
     # With no upstream, -d judges against the main checkout's HEAD, which may not have pulled the
     # merge yet; the base as upstream makes it judge against what was actually merged.

@@ -62,7 +62,7 @@ def board_line(repo: lanelib.Repo, lanes: list[dict]) -> str:
     parts = []
     for lane in lanes:
         claims = ",".join(lane.get("claims", []))
-        stale = "" if os.path.isdir(lane.get("path") or "") else " stale"
+        stale = "" if lanelib.is_live(lane) else " stale"
         parts.append(f"{lane['id']}" + (f" ({claims})" if claims else "") + stale)
     return (f"Main checkout of a lanes repo; lanes: {'; '.join(parts)}. Board: `lane ls`; owner of "
             "a request: `lane who #<n>`. STATUS.md here is project direction; each lane's state "

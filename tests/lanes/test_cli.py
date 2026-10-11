@@ -111,6 +111,73 @@ class RoundTrip(LanesRepo):
         self.assertEqual(self.git("branch", "--list", "chart-fix"), "")
         self.assertEqual(json.loads(self.lane("ls", "--json")), [])
 
+    def test_done_validates_the_id_before_touching_anything(self):
+        self.lane("new", "chart-fix")
+        self.lane("done", "chart-fix", "--abandon")
+        closed = os.path.join(self.common, "lanes", "_closed")
+        (archive,) = os.listdir(closed)
+        for bad in (f"_closed/{archive}", os.path.join(closed, archive), "..", "a..b", "_closed",
+                    "x/y"):
+            with self.subTest(bad=bad):
+                p = self.run_lane("done", bad, "--abandon")
+                self.assertEqual(p.returncode, 1)
+                self.assertIn("bad lane id", p.stderr)
+        self.assertEqual(os.listdir(closed), [archive])
+        self.assertTrue(os.path.isfile(os.path.join(closed, archive, "lane.json")))
+
+    def test_a_lane_with_no_commits_is_not_merged(self):
+        # Its tip is the base it branched from, which is trivially "in origin/main".
+        self.lane("new", "empty")
+        p = self.run_lane("done", "empty")
+        self.assertEqual(p.returncode, 1)
+        self.assertIn("no commits", p.stderr)
+        self.assertTrue(os.path.isdir(self.lane_path("empty")))
+
+    def test_a_merged_pr_counts_only_for_the_current_tip(self):
+        self.lane("new", "chart-fix")
+        path = self.lane_path("chart-fix")
+        self.commit("chart.txt", "axis\n", cwd=path)
+        tip = self.git("rev-parse", "HEAD", cwd=path).strip()
+        # An old merged PR from a branch of the same name, at another commit: not this work.
+        self.env["FAKE_GH_OUT"] = json.dumps([{"number": 7, "headRefOid": "0" * 40}])
+        p = self.run_lane("done", "chart-fix")
+        self.assertEqual(p.returncode, 1, p.stdout)
+        self.assertIn("not merged", p.stderr)
+        # A squash merge leaves the tip out of origin/main; the PR's head commit proves it.
+        self.env["FAKE_GH_OUT"] = json.dumps([{"number": 8, "headRefOid": tip}])
+        out = self.lane("done", "chart-fix")
+        self.assertIn("PR #8 merged", out)
+        self.assertFalse(os.path.exists(path))
+
+    def test_done_refuses_when_it_cannot_see_other_processes(self):
+        # Sandboxed, its own claude has no /proc entry: a live session in the lane would be
+        # invisible, so it must refuse rather than pass.
+        self.lane("new", "chart-fix")
+        self.env["CLAUDE_PID"] = "999999999"
+        p = self.run_lane("done", "chart-fix", "--abandon")
+        self.assertEqual(p.returncode, 1)
+        self.assertIn("bare `lane done chart-fix`", p.stderr)
+        self.assertTrue(os.path.isdir(self.lane_path("chart-fix")))
+
+    def test_a_failed_copy_leaves_a_registered_lane_to_finish(self):
+        self.write(os.path.join(self.main, ".gitignore"), "local.cfg\n")
+        self.commit(".gitignore", "local.cfg\n")
+        self.git("push", "-q", "origin", "main")
+        self.write(os.path.join(self.main, ".worktreeinclude"), "local.cfg\n")
+        unreadable = os.path.join(self.main, "local.cfg")
+        self.write(unreadable, "x")
+        os.chmod(unreadable, 0)
+        self.addCleanup(os.chmod, unreadable, 0o644)
+        p = self.run_lane("new", "chart-fix")
+        self.assertEqual(p.returncode, 1)
+        self.assertNotIn("Traceback", p.stderr)
+        self.assertIn(f"lane adopt {self.lane_path('chart-fix')}", p.stderr)
+        self.assertEqual(self.lane_json("chart-fix")["state"], "setup-failed")
+        os.chmod(unreadable, 0o644)
+        self.lane("adopt", self.lane_path("chart-fix"))
+        self.assertEqual(self.lane_json("chart-fix")["state"], "active")
+        self.assertTrue(os.path.isfile(self.record("chart-fix")))
+
     def test_done_abandon_keeps_an_unmerged_branch(self):
         self.lane("new", "spike")
         self.commit("spike.txt", "try\n", cwd=self.lane_path("spike"))
@@ -151,6 +218,7 @@ class Stale(LanesRepo):
         self.assertIn("stale", rows["chart-fix"]["flags"])
         self.assertNotIn("stale", rows["api-docs"]["flags"])
         self.assertIn("stale", self.lane("who", "42"))
+        self.assertEqual(json.loads(self.lane("ls", "--requests", "--json")), {})
         # A stale lane is not live, so its claim does not block the owner-to-be.
         self.lane("claim", "42", cwd=self.lane_path("api-docs"))
         self.assertEqual(self.lane_json("api-docs")["claims"], ["#42"])
