@@ -31,8 +31,8 @@ ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
 RELATIVE = re.compile(
     r"\b(?:(?:an)?other\s+(?:claude\s+)?session|this\s+session|the\s+other\s+(?:lane|session)"
     r"|my\s+(?:lane|session))\b", re.IGNORECASE)
-RELATIVE_HINT = ("Name the lane by its id (`lane whoami`, `lane who #<n>`) or the session by its "
-                 "id instead; a relative name reads as someone else in every other lane.")
+RELATIVE_HINT = ("Write the lane id instead (`lane whoami`, `lane who #<n>`), or the session id; a "
+                 "relative name reads as someone else in every other lane.")
 
 
 def relative_phrases(text: str) -> list[str]:

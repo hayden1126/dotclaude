@@ -107,7 +107,8 @@ done
 if [[ -d "$HOME/.local/bin" ]]; then
   chmod +x "$REPO_DIR"/bin/* 2>/dev/null || true
   for exe in "$REPO_DIR"/bin/* "$REPO_DIR"/skills/*/scripts/deckkit \
-             "$REPO_DIR"/skills/delegation/scripts/{codex-delegate,delegation-ledger,gh-public}; do
+             "$REPO_DIR"/skills/delegation/scripts/{codex-delegate,delegation-ledger,gh-public} \
+             "$REPO_DIR"/skills/lanes/scripts/lane "$REPO_DIR"/skills/handoff/scripts/handoff-check; do
     [[ -x "$exe" ]] || continue
     link "$exe" "$HOME/.local/bin/$(basename "$exe")"
   done

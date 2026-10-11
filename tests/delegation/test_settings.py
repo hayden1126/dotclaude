@@ -187,6 +187,27 @@ class Baseline(unittest.TestCase):
         self.assertLessEqual(entry["hooks"][0]["timeout"], 5)
         self.assertTrue(os.access(os.path.join(REPO, "hooks", "overwrite-guard.sh"), os.X_OK))
 
+    def test_the_lane_hooks_are_wired_and_fail_open(self):
+        # docs/lanes.md: the guard on every file-tool write; identity on every context reset (a
+        # compact is the net for an unplanned auto-compact), and the mirror on Stop and
+        # SessionEnd. Both deny or speak by JSON, never by exit code.
+        guard = 'bash "$HOME/.claude/hooks/lane-guard.sh"'
+        ident = 'bash "$HOME/.claude/hooks/lane-identity.sh"'
+        self.assertEqual(commands("PreToolUse", "Edit|Write|MultiEdit"), [guard])
+        self.assertEqual(commands("SessionStart", "startup|resume|clear|compact").count(ident), 1)
+        for event in ("Stop", "SessionEnd"):
+            self.assertEqual(commands(event).count(ident), 1, event)
+        lane_hooks = [h for entries in S["hooks"].values() for e in entries for h in e["hooks"]
+                      if "lane-" in h["command"]]
+        self.assertEqual(len(lane_hooks), 4)
+        for h in lane_hooks:
+            self.assertNotIn("exit 2", h["command"])
+            self.assertLessEqual(h["timeout"], 5)
+        for script in ("lane-guard.sh", "lane-identity.sh"):
+            self.assertTrue(os.access(os.path.join(REPO, "hooks", script), os.X_OK), script)
+        # `lane new`, `ls` and `done` need the network and gh's credential (spike S3).
+        self.assertIn("lane *", S["sandbox"]["excludedCommands"])
+
     def test_the_delete_guard_runs_on_sandbox_off_bash_only_and_fails_open(self):
         # Every Bash call passes the matcher; the prefilter keeps Python off the sandboxed ones,
         # which can only reach the cwd and $TMPDIR. The guard denies by JSON, never by exit code.
