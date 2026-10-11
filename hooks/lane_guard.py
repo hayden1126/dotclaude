@@ -7,7 +7,8 @@ Two rules keep lane status single-writer and absolute (docs/lanes.md, invariants
             (<common-dir>/lanes/ exists). The main checkout is a different lane like any other.
   relative  relative-identity phrases ("another session", "this session", "the other lane",
             "my lane"; lanelib.RELATIVE) are denied in the new text of any file under a .lane/,
-            and of the main checkout's root STATUS.md when <common-dir>/lanes/config.toml exists.
+            and of the root STATUS.md of any checkout (main or a lane, whose copy reaches main on
+            merge) when <common-dir>/lanes/config.toml exists.
             New text is a Write's content, or an Edit's new_string minus the phrases its
             old_string already held (a MultiEdit's edits likewise), so an edit near an old line
             still passes.
@@ -108,8 +109,9 @@ def main():
              f"deny other-record {who} cwd={here} path={target}")
         return
 
+    # The root STATUS.md of any checkout: a lane's reaches main when its branch merges.
     is_status = (repo is not None and repo.has_lanes
-                 and target == os.path.join(repo.main, "STATUS.md"))
+                 and target == os.path.join(repo.toplevel, "STATUS.md"))
     if owner is None and not is_status:
         return
     if found := added_text(tool, inp):

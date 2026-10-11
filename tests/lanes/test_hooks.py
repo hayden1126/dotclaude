@@ -62,6 +62,14 @@ class Guard(LanesRepo):
         for kind in ("deny relative", "deny other-record", "deny cli-data"):
             self.assertIn(kind, log)
 
+    def test_a_lane_root_status_is_linted_since_it_merges_into_main(self):
+        lane = self.lane_path("chart-fix")
+        root_status = os.path.join(lane, "STATUS.md")
+        self.assertDenied(self.write_call(lane, root_status, RELATIVE), "relative identity")
+        self.assertIsNone(self.write_call(lane, root_status, CLEAN))
+        # Only the root one: a nested STATUS.md is ordinary content.
+        self.assertIsNone(self.write_call(lane, os.path.join(lane, "docs", "STATUS.md"), RELATIVE))
+
     def test_the_deny_names_the_fix_and_the_phrase(self):
         out = self.write_call(self.lane_path("chart-fix"), self.own, "The other lane owns it.")
         self.assertDenied(out, "the other lane")
