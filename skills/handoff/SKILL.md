@@ -39,7 +39,7 @@ Ordered. Doc-drift reconciliation is an early gate: the durable docs must match 
 
 6. **Leave next-session pointers.** Ensure the status doc's next-step block ("Notes for next session", or Next in a lane record) names the exact next concrete step and what to verify, and include the commit range so the next session can `git log` the work. In a lane, write the range into the record after the step-5 commit, so the record postdates it. Close with a short summary to Hayden: drift found and fixed or flagged, STATUS updated, memory changes, git and verification state.
 
-7. **Run `handoff-check`.** It checks a clean tree (or leftovers named in the status doc), a status doc written after HEAD's commit and during this session, a non-empty Next block, no relative identity and, in a lane, that every claim is named and an unpushed branch is noted. It exits non-zero and lists each gap: fix them and re-run. Say the handoff is done only after it passes.
+7. **Run `~/.claude/skills/handoff/scripts/handoff-check`** from the checkout, by that path: the skill dir is linked live, while the `~/.local/bin` link waits for the next `setup.sh`. It checks a clean tree (or leftovers named in the status doc by their repo-relative path; agent worktrees don't count), a status doc written after HEAD's commit and during this session, a non-empty Next block, no relative identity (a warning only in a repo with no lanes) and, in a lane, that every claim is named and an unpushed branch is noted. It exits non-zero and lists each gap: fix them and re-run. Say the handoff is done only after it passes.
 
 ### After a merge ("merged, cleanup and handoff")
 

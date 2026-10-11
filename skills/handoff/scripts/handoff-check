@@ -3,13 +3,17 @@
 
 Works in a lane (the record is <lane>/.lane/STATUS.md), in the main checkout of a lanes repo and
 in a plain repo (the root STATUS.md). Checks:
-  clean      the tree is clean, or each leftover path is named in the status file
+  clean      the tree is clean, or each leftover's repo-relative path is named in the status file;
+             agent worktrees (.claude/worktrees/) never count
   fresh      the status file was written after HEAD's commit (or HEAD carries it) and after this
              session started: in a lane the latest lane.json sessions[].startedAt; elsewhere the
              session named by $CLAUDE_CODE_SESSION_ID, else the newest Claude session file whose
              cwd is this checkout; skipped with a warning when none is found
-  next       a non-empty `## Next` (or `## Notes for next session`) section
-  absolute   no relative identity ("another session", "this session"; the guard's lint)
+  next       a non-empty section under a `##` heading starting with "Next", or "Notes for next
+             session"
+  absolute   no relative identity ("another session", "this session"; the guard's lint) outside
+             HTML comments and code. A failure in a lanes repo; in a plain repo, where no peer
+             misreads it, only a warning
   claims     in a lane, every lane.json claim is named in the record
   pushed     in a lane, unpushed commits are noted in the record (a warning: pushes need Hayden)
 The handoff skill runs it last; a handoff is not done until it passes.
@@ -53,13 +57,26 @@ def session_start(repo: lanelib.Repo, lane: dict | None) -> tuple[float | None, 
     return None, "no session found"
 
 
+AGENT_WORKTREES = ".claude/worktrees/"
+
+
 def leftovers(repo: lanelib.Repo) -> list[str]:
+    """Uncommitted paths, repo-relative, minus agent worktrees (each is its own checkout)."""
     p = git(["status", "--porcelain", "--untracked-files=all"], repo.toplevel, check=True)
     out = []
     for line in p.stdout.splitlines():
-        path = line[3:]
-        out.append(path.split(" -> ")[-1].strip('"'))
+        path = line[3:].split(" -> ")[-1].strip('"')
+        if not path.startswith(AGENT_WORKTREES):
+            out.append(path)
     return out
+
+
+def named(path: str, text: str) -> bool:
+    """Whether the status text names a leftover by its repo-relative path (a dir with or without
+    its trailing slash), as a whole path, not a substring of a longer one."""
+    forms = {path, path.rstrip("/")}
+    return any(re.search(r"(?<![\w./-])" + re.escape(f) + r"(?![\w-]|\.\w|/\w)", text)
+               for f in forms)
 
 
 def head_carries(repo: lanelib.Repo, path: str) -> bool:
@@ -96,8 +113,7 @@ def check(cwd: str) -> tuple[str, list[str], list[str]]:
     except OSError:
         return header, [f"no status file at {status}"], []
 
-    dirty = [p for p in leftovers(repo)
-             if p not in text and os.path.basename(p.rstrip("/")) not in text]
+    dirty = [p for p in leftovers(repo) if not named(p, text)]
     if dirty:
         fails.append("uncommitted and not named in the status file: " + ", ".join(dirty))
 
@@ -113,11 +129,12 @@ def check(cwd: str) -> tuple[str, list[str], list[str]]:
     elif mtime < start:
         fails.append(f"the status file was not written during this session ({source})")
 
-    if not lanelib.section(text, "Next", "Notes for next session"):
-        fails.append("no non-empty `## Next` (or `## Notes for next session`) section")
+    if not lanelib.section(text, "Notes for next session", prefixes=("next",)):
+        fails.append("no non-empty `## Next...` (or `## Notes for next session`) section")
 
-    if found := lanelib.relative_phrases(text):
-        fails.append(f"relative identity: {', '.join(sorted(set(found)))}. {lanelib.RELATIVE_HINT}")
+    if found := lanelib.relative_phrases(lanelib.prose_only(text)):
+        gap = f"relative identity: {', '.join(sorted(set(found)))}. {lanelib.RELATIVE_HINT}"
+        (fails if repo.has_lanes else warns).append(gap)
 
     if lane:
         missing = [c for c in lane.get("claims", [])

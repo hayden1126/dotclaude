@@ -98,9 +98,34 @@ class PlainRepo(Check):
                     "## Notes for next session\n<!-- the next step -->\n- <step>\n")
         self.assertGap(self.check(), "## Next")
 
-    def test_relative_identity_fails(self):
+    def test_relative_identity_only_warns_in_a_plain_repo(self):
+        # Old text in a repo with no lanes ("this session's ..." in a long-lived STATUS.md) must
+        # not fail every handoff there; with no peers, nobody misreads it.
         self.commit("STATUS.md", GOOD + "- Another session is building #43.\n")
-        self.assertGap(self.check(), "relative identity: another session")
+        code, out = self.check()
+        self.assertEqual(code, 0, out)
+        self.assertIn("warn  relative identity: another session", out)
+
+    def test_agent_worktrees_are_never_leftovers(self):
+        agent = os.path.join(self.main, ".claude", "worktrees", "agent-1234")
+        self.write(os.path.join(agent, "notes.txt"), "x")
+        subprocess.run(["git", "init", "-q", agent], check=True, env=self.env)
+        self.write(os.path.join(self.main, ".claude", "worktrees", "loose.txt"), "x")
+        self.assertPasses(self.check())
+
+    def test_a_leftover_needs_its_repo_relative_path(self):
+        self.write(os.path.join(self.main, "src", "scratch.txt"), "x")
+        self.commit("STATUS.md", GOOD + "- scratch.txt is a deliberate local probe.\n")
+        self.assertGap(self.check(), "src/scratch.txt")
+        self.commit("STATUS.md", GOOD + "- src/scratch.txt is a deliberate local probe.\n")
+        self.assertPasses(self.check())
+
+    def test_any_heading_starting_with_next_counts(self):
+        body = GOOD.split("## Notes")[0]
+        for heading in ("## Next session: start here", "## NEXT", "## Next steps"):
+            with self.subTest(heading=heading):
+                self.commit("STATUS.md", body + heading + "\n- Run the chart tests.\n")
+                self.assertPasses(self.check())
 
     def test_no_status_file_fails(self):
         self.git("rm", "-q", "STATUS.md")
@@ -130,6 +155,15 @@ class Lane(Check):
         self.finish()
         # From main, the root STATUS.md is the file, and there is none.
         self.assertGap(self.check(), "no status file")
+
+    def test_relative_identity_fails_in_a_lanes_repo(self):
+        self.finish("\nThe other lane owns #43.\n")
+        self.assertGap(self.check(cwd=self.path), "relative identity: the other lane")
+
+    def test_comments_and_code_are_not_linted(self):
+        self.finish("\n<!-- never write 'another session' -->\nThe guard denies `this session`.\n"
+                    "```\nmy lane: example only\n```\n")
+        self.assertPasses(self.check(cwd=self.path))
 
     def test_claims_must_be_named(self):
         self.body = self.body.replace("#42", "the request")

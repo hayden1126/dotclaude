@@ -40,6 +40,14 @@ def relative_phrases(text: str) -> list[str]:
     return [" ".join(m.group(0).lower().split()) for m in RELATIVE.finditer(text or "")]
 
 
+def prose_only(text: str) -> str:
+    """text without HTML comments, fenced code blocks and inline code: what quotes an example
+    rather than claiming anything."""
+    text = re.sub(r"<!--.*?-->", " ", text or "", flags=re.DOTALL)
+    text = re.sub(r"^\s*(```|~~~).*?^\s*\1[^\n]*$", " ", text, flags=re.DOTALL | re.MULTILINE)
+    return re.sub(r"`[^`\n]*`", " ", text)
+
+
 def added_phrases(old: str, new: str) -> list[str]:
     """The relative phrases new carries beyond those old already had (an Edit keeping one passes)."""
     left = relative_phrases(old)
@@ -246,20 +254,31 @@ def update_lane(repo: Repo, lane_id: str, change) -> dict:
     return lane
 
 
+def valid_id(lane_id: str) -> bool:
+    """A lane id is a slug: no path separator, no '..', no leading '_' (that is _closed)."""
+    return bool(ID_RE.fullmatch(lane_id or "")) and ".." not in lane_id and lane_id != "main"
+
+
 def norm_request(req: str) -> str:
     """'42' or '#42' -> '#42'; anything else is kept as given (a tracker key like ABC-7)."""
     req = req.strip()
     return "#" + req if req.isdigit() else req
 
 
-def section(text: str, *names: str) -> str | None:
-    """The body of the first `## <name>` section present (case-insensitive), with HTML comments
-    and template placeholder lines (`- <...>`) removed. None when no such heading exists."""
+def section(text: str,
+    *names: str,
+    prefixes: tuple[str, ...] = (),
+) -> str | None:
+    """The body of the first `## <heading>` section whose heading equals one of names or starts
+    with one of prefixes (case-insensitive), with HTML comments and template placeholder lines
+    (`- <...>`) removed. None when no such heading exists."""
     lines = (text or "").splitlines()
     wanted = {n.lower() for n in names}
+    starts = tuple(p.lower() for p in prefixes)
     for i, line in enumerate(lines):
         m = re.match(r"##\s+(.+?)\s*$", line)
-        if not m or m.group(1).lower() not in wanted:
+        heading = m.group(1).lower() if m else ""
+        if not m or not (heading in wanted or (starts and heading.startswith(starts))):
             continue
         body = []
         for nxt in lines[i + 1:]:
@@ -278,11 +297,16 @@ def sessions_dir() -> str:
                         "sessions")
 
 
-def live_sessions() -> list[dict] | None:
-    """Claude Code's per-process session files whose pid is alive; None when pids can't be seen
-    (a sandboxed command runs in its own pid namespace, so its own claude's /proc entry is gone)."""
+def pids_visible() -> bool:
+    """False inside the Bash sandbox: each sandboxed command runs in its own pid namespace, so
+    the claude that launched it has no /proc entry, and neither do other processes."""
     own = os.environ.get("CLAUDE_PID")
-    if own and own.isdigit() and not os.path.exists(f"/proc/{own}"):
+    return not (own and own.isdigit() and not os.path.exists(f"/proc/{own}"))
+
+
+def live_sessions() -> list[dict] | None:
+    """Claude Code's per-process session files whose pid is alive; None when pids can't be seen."""
+    if not pids_visible():
         return None
     out = []
     for path in glob.glob(os.path.join(sessions_dir(), "*.json")):
