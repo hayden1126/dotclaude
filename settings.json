@@ -119,6 +119,8 @@
       "lane ls *",
       "lane open *",
       "lane done *",
+      "pass-respawn",
+      "pass-respawn *",
       "codex *",
       "claude *",
       "tmux *",
