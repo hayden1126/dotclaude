@@ -16,7 +16,7 @@ import time
 TTL = 120                      # seconds: a startup later than this isn't the respawn
 MAX_LINES, MAX_BYTES = 40, 4096   # the whole banner, head and tail included (spike A2: 3.6 KiB)
 HEAD_ONE, HEAD_MANY = "Last reply before the pass:\n", "Last turn's replies:\n"
-POPUP = "~/.local/bin/pass-last"  # setup-tmux.sh links it; Ctrl-b P runs it
+POPUP = "~/.local/bin/pass-last"  # setup-tmux.sh links it; Ctrl-b Up runs it
 ELLIPSIS = chr(0x2026)
 # C0 controls but tab and newline, DEL and C1: an escape sequence in a reply stays out of the
 # terminal.
@@ -59,11 +59,11 @@ def size(text: str) -> int:
 
 
 def tail(left: int, where: str) -> str:
-    """The line after a cut banner: Ctrl-b P where setup-tmux.sh installed the popup, else the
+    """The line after a cut banner: Ctrl-b Up where setup-tmux.sh installed the popup, else the
     file (where) that holds every reply."""
     more = "%s %d more line%s" % (ELLIPSIS, left, "" if left == 1 else "s")
     if os.path.exists(os.path.expanduser(POPUP)):
-        return more + ": Ctrl-b P shows the whole reply"
+        return more + ": Ctrl-b Up shows the whole reply"
     return "%s in %s" % (more, where)
 
 
@@ -85,7 +85,7 @@ def newest_group(replies) -> list[str]:
 def banner(texts: list[str], where: str = "") -> str:
     """The banner: a head, then the texts with a blank line between, whole when they fit in
     MAX_LINES lines and MAX_BYTES bytes (head included). Otherwise as many lines as fit with
-    the tail ("N more lines: Ctrl-b P ...", or the file where) also inside MAX_BYTES. A first line longer than
+    the tail ("N more lines: Ctrl-b Up ...", or the file where) also inside MAX_BYTES. A first line longer than
     that is cut on a character boundary and counts as left."""
     head = HEAD_ONE if len(texts) == 1 else HEAD_MANY
     lines = "\n\n".join(clean(t).strip() for t in texts).split("\n")

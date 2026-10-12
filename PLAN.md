@@ -712,7 +712,7 @@ scale with the window:
   as a `systemMessage`, which Hayden sees and the model doesn't. It needs the same tab, an entry
   under 120 s old and `shown` false, and then sets `shown`.
 - **Popup:** `pass-last` opens the tab's message in `display-popup` with `less`. It is bound to
-  Ctrl-b P and has entries in the Ctrl-b Enter menu and the right-click tab menu.
+  Ctrl-b Up and has entries in the Ctrl-b Enter menu and the right-click tab menu.
 - **Everything since the last prompt, not only the last reply** (review round 1; Hayden's call,
   2026-10-12). One `last_message` per session loses the unread reply when auto-pass blocks a Stop
   and the continued turn ends on "pass armed". Spike A5: a hook-blocked Stop and the Stop that
@@ -752,7 +752,7 @@ scale with the window:
 | # | Question | Decides |
 |---|---|---|
 | A1 | Does UserPromptSubmit see `/autopass on` before it expands? Try it both undefined and defined. Does `decision: block` with a `reason` show the line and cost no model turn? | a hook, or a mod's slash command |
-| A2 | Is a SessionStart `systemMessage` shown on a `startup` respawned with a prompt argument, and where? Is a 3-4 KiB message truncated? | the whole reply in the banner, or a head plus "Ctrl-b P for the rest" |
+| A2 | Is a SessionStart `systemMessage` shown on a `startup` respawned with a prompt argument, and where? Is a 3-4 KiB message truncated? | the whole reply in the banner, or a head plus "Ctrl-b Up for the rest" |
 | A3 | Does the transcript's last main-chain assistant `usage` match the statusline's `current_usage` at a Stop and mid-turn? Is `isSidechain` set on subagent entries? | the parser and its fixture |
 | A4 | Does a PostToolUse `additionalContext` reach the model on a main-session tool call? | the wrap-up and hard tiers inside long turns |
 | A5 | Does a hook-blocked Stop share the payload's `prompt_id` with the Stop that ends its continuation? | how the banner groups replies into turns |
@@ -807,7 +807,7 @@ scale with the window:
 - The banner: a match, a stale entry, the wrong tab, shown once. `stop_ring.merge_replies` and its
   caps. `pass-respawn` writes `pass-last`.
 - A live run at lowered tiers fires each tier once and ends in a passing `handoff-check`.
-- A live `/pass` shows the banner with the old reply, Ctrl-b P reopens it, and a Star still
+- A live `/pass` shows the banner with the old reply, Ctrl-b Up reopens it, and a Star still
   carries.
 
 ## After: the work repo's migration (its own PR in that repo, after PR 1 and PR 2 merge)

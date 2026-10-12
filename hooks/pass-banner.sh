@@ -12,10 +12,10 @@
 #     `claude -p` run (CLAUDE_CODE_SESSION_ATTENDED=0) and not a subagent (agent_id);
 #   - the entry's tab matches this pane on this tmux server exactly (keyed as session-registry.sh
 #     and claude-saved key it), it was written under 120 s ago, and `shown` is false.
-# It then sets `shown` (an atomic rewrite). The file stays: Ctrl-b P (tmux/pass-last) reopens all
+# It then sets `shown` (an atomic rewrite). The file stays: Ctrl-b Up (tmux/pass-last) reopens all
 # the replies of the last 5 turns any time. The banner holds at most 40 lines of reply and 4 KiB
 # in all (its head and tail count toward the 4 KiB); past either, it says how many lines are left
-# and where to read them: Ctrl-b P once setup-tmux.sh installed it, else the pass-last file.
+# and where to read them: Ctrl-b Up once setup-tmux.sh installed it, else the pass-last file.
 #
 # This shim runs hooks/pass_banner.py, found beside this script's real path, with python3 -I.
 # tests/setup/test_pass_banner.py holds the cases. Fail-open: always exits 0.

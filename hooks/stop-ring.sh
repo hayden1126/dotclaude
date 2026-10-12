@@ -33,7 +33,7 @@ input=$(cat 2>/dev/null)
 # records older than 7 days once a day. pass-respawn's plain mode respawns only after a stop with
 # no task but dream, since in-process agents are no child process it could see; it reads the
 # transcript there and copies `replies` for the respawned session's banner
-# (hooks/pass-banner.sh) and Ctrl-b P (tmux/pass-last). hooks/stop_ring.py, beside this script's
+# (hooks/pass-banner.sh) and Ctrl-b Up (tmux/pass-last). hooks/stop_ring.py, beside this script's
 # real path and run with python3 -I, does all of this and has the details.
 read -r spawned busy tasks size transcript < <(printf '%s' "$input" | \
   python3 -I "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/stop_ring.py" 2>/dev/null)

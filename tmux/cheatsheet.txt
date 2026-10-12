@@ -29,7 +29,7 @@
     C-b Enter    Star / Shelve / Shelf… too (no Shift)
 
   AFTER /pass
-    C-b P        the replies before the pass (popup; also in both menus)
+    C-b Up       the replies before the pass (popup; also in both menus)
 
   SESSION
     C-b d        detach (keeps running)

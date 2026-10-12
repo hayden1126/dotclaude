@@ -11,7 +11,7 @@
 # oldest first, each under a header line with its time, and less opens at the end, on the last
 # turn (-+F: a LESS=-F in the environment would close a short popup at once). Only when the entry's tab is this pane on this tmux server (a pane number repeats on a
 # new server); otherwise it says there is none. Control characters (C0 but tab and newline, DEL,
-# C1) are dropped. Linked into ~/.local/bin by setup-tmux.sh; Ctrl-b P (tmux/claude.conf) opens
+# C1) are dropped. Linked into ~/.local/bin by setup-tmux.sh; Ctrl-b Up (tmux/claude.conf) opens
 # it in a popup, and the Ctrl-b Enter menu (tmux/base.conf) and the tab's right-click menu
 # (tmux/claude.conf) have an entry.
 # tests/setup/test_pass_last.py holds the cases.
@@ -20,7 +20,7 @@ set -uo pipefail
 case "${1:-}" in -h|--help) sed -n '2,5p' "$0"; exit 0 ;; esac
 state="${XDG_STATE_HOME:-$HOME/.local/state}/dotclaude"
 pane="${1:-}"
-# tmux's man page doesn't call a popup's command a format, so Ctrl-b P passes no pane.
+# tmux's man page doesn't call a popup's command a format, so Ctrl-b Up passes no pane.
 [ -n "$pane" ] || pane=$(tmux display -p '#{pane_id}' 2>/dev/null)
 server=""
 if [[ "$pane" =~ ^%[0-9]+$ ]]; then

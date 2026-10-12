@@ -3,7 +3,7 @@
 # delegation token in the status bar, and what lets a background session's hooks find its tab
 # (tmux-claude-status writes that map), plus claude-restore, which reopens main's Claude tabs
 # after the tmux server dies, claude-saved, which stars and shelves a tab's chat (the
-# right-click menu, Ctrl-b S), and pass-last, which shows what Claude said before a /pass (Ctrl-b P).
+# right-click menu, Ctrl-b S), and pass-last, which shows what Claude said before a /pass (Ctrl-b Up).
 # Opt-in and idempotent; setup.sh never calls it. The hook side
 # (hooks/tmux-state.sh, hooks/session-registry.sh) is wired by setup.sh on every machine and does
 # nothing outside tmux.

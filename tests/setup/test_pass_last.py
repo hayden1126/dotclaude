@@ -1,4 +1,4 @@
-"""tmux/pass-last: the Ctrl-b P popup that shows what a tab's Claude said before a plain /pass
+"""tmux/pass-last: the Ctrl-b Up popup that shows what a tab's Claude said before a plain /pass
 (stdlib only).
 
 It reads $XDG_STATE_HOME/dotclaude/pass-last/<pane number>.json and shows every reply, grouped by

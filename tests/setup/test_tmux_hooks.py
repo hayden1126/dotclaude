@@ -335,7 +335,7 @@ class Hooks(unittest.TestCase):
         self.assertNotIn("transcript_path", self.stop_record())
 
     def test_the_stop_record_keeps_everything_since_the_last_prompts(self):
-        # pass-respawn copies `replies` for the respawned session's banner and Ctrl-b P. A Stop
+        # pass-respawn copies `replies` for the respawned session's banner and Ctrl-b Up. A Stop
         # a hook blocked and the one ending the continued turn share a prompt_id (spike A5).
         self.run_hook("stop-ring.sh", TAB, {"prompt_id": "p1", "last_assistant_message": "One."})
         self.run_hook("stop-ring.sh", TAB, {"prompt_id": "p1", "stop_hook_active": True,

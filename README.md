@@ -162,7 +162,7 @@ sees it.
 | `docs/blind-overwrite-brief.md` | Why the overwrite guard and `memory-git.sh` exist: two incidents (a blind overwrite of a memory file, a job's state inferred instead of read), the experiments and the design calls | reference |
 | `docs/chrome-devtools-wsl.md` | WSL2-only: how to make `chrome-devtools-mcp` work (Strategy A headless Linux Chrome, plus B to attach to your Windows Chrome) | reference |
 | `chrome-debug.ps1` | Windows launcher for Strategy B (Chrome with a remote-debugging port) | run on Windows when needed |
-| `tmux/` | The tmux side of the indicator: `claude.conf` (titles, status bar, the ◐ busy and ✳ waiting glyphs), the optional `base.conf` (mouse, splits, the Ctrl-b Enter menu), `cheatsheet.txt`, `tmux-claude-status`, the backstop the status bar runs (it also maps background sessions to their tab), `claude-restore`, which reopens `main`'s Claude tabs after the tmux server dies, `claude-saved`, which stars and shelves a tab's chat (the tab's right-click menu, Ctrl-b S, or Ctrl-b Enter), and `pass-last`, which shows what Claude said before a `/pass` (Ctrl-b P, or either menu) | sourced and linked by `setup-tmux.sh` |
+| `tmux/` | The tmux side of the indicator: `claude.conf` (titles, status bar, the ◐ busy and ✳ waiting glyphs), the optional `base.conf` (mouse, splits, the Ctrl-b Enter menu), `cheatsheet.txt`, `tmux-claude-status`, the backstop the status bar runs (it also maps background sessions to their tab), `claude-restore`, which reopens `main`'s Claude tabs after the tmux server dies, `claude-saved`, which stars and shelves a tab's chat (the tab's right-click menu, Ctrl-b S, or Ctrl-b Enter), and `pass-last`, which shows what Claude said before a `/pass` (Ctrl-b Up, or either menu) | sourced and linked by `setup-tmux.sh` |
 | `setup-tmux.sh` | Opt-in tmux installer: links `tmux-claude-status`, `claude-restore`, `claude-saved` and `pass-last` into `~/.local/bin` and keeps a marked `source-file` block in `~/.tmux.conf` (`--base` adds `base.conf` and the cheatsheet, `--no-base` drops them, and a run with neither keeps what the block has) | run once per machine that uses tmux; not called by `setup.sh` |
 | `setup-chrome-wsl.sh` | Opt-in WSL2 installer: installs Chrome for Testing and registers the user-scoped `chrome-devtools` override | run once on WSL2; not called by `setup.sh` |
 | `setup.sh` | The installer | run once per machine |
@@ -477,7 +477,7 @@ idle, the script rechecks the handoff and respawns the pane with a fresh `claude
   would leave the screen. The fresh session shows what was said in the last turn once as a
   banner (at most 40 lines of reply and 4 KiB in all), which you see and the model doesn't. A
   turn is a run of replies to one prompt_id: a turn a background-task notice started counts as
-  its own, so the last turn isn't always your last prompt. Ctrl-b P shows the last 5 turns in a
+  its own, so the last turn isn't always your last prompt. Ctrl-b Up shows the last 5 turns in a
   popup at any time, opened at the last one, as does "Replies before pass" in the Ctrl-b Enter
   menu and the tab's right-click menu (`pass-last`, linked by `setup-tmux.sh`). Without
   `setup-tmux.sh`, a cut banner names the file instead. A compact keeps the conversation, so it

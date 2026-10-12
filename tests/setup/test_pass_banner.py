@@ -6,7 +6,7 @@ The entry is $XDG_STATE_HOME/dotclaude/pass-last/<pane number>.json, which pass-
 A stub tmux on PATH answers `display` with the server line ($STUB_SERVER; empty fails) and logs
 each call. The env starts scrubbed of CLAUDE* and TMUX*, since the test may run in a Claude tab.
 HOME is a temp dir holding a ~/.local/bin/pass-last, as setup-tmux.sh links it, so the tail names
-Ctrl-b P; one test removes it."""
+Ctrl-b Up; one test removes it."""
 import importlib.util
 import json
 import os
@@ -106,7 +106,7 @@ class Banner(unittest.TestCase):
         self.entry()
         self.assertEqual(self.start(), "Last reply before the pass:\n" + REPLY)
         self.assertIs(self.read()["shown"], True)
-        self.assertEqual(self.read()["replies"][0]["text"], REPLY)  # kept for Ctrl-b P
+        self.assertEqual(self.read()["replies"][0]["text"], REPLY)  # kept for Ctrl-b Up
         self.assertIsNone(self.start())                   # once
         self.assertEqual(os.listdir(self.dir), ["7.json"])  # renamed into place
 
@@ -233,7 +233,7 @@ class Banner(unittest.TestCase):
         lines = self.start().split("\n")
         self.assertEqual(lines[1], "line 1")
         self.assertEqual(lines[40], "line 40")
-        self.assertEqual(lines[41], chr(0x2026) + " 20 more lines: Ctrl-b P shows the whole reply")
+        self.assertEqual(lines[41], chr(0x2026) + " 20 more lines: Ctrl-b Up shows the whole reply")
         self.assertEqual(len(lines), 42)
 
     def test_the_whole_banner_stays_within_4_kib(self):
@@ -247,7 +247,7 @@ class Banner(unittest.TestCase):
         out = pass_banner.banner(["\n".join("x" * 199 for _ in range(30))]).split("\n")
         # head (28 bytes), 20 lines (3,999), tail (50): 4,077; a 21st line would pass 4 KiB.
         self.assertEqual(len(out), 22)
-        self.assertEqual(out[-1], chr(0x2026) + " 10 more lines: Ctrl-b P shows the whole reply")
+        self.assertEqual(out[-1], chr(0x2026) + " 10 more lines: Ctrl-b Up shows the whole reply")
         fits = "x" * (4096 - len("Last reply before the pass:\n"))  # exactly 4 KiB: no tail
         self.assertEqual(len(pass_banner.banner([fits]).encode()), 4096)
 
@@ -257,7 +257,7 @@ class Banner(unittest.TestCase):
         head, body, rest = out.split("\n")
         self.assertEqual(body, chr(0x00E9) * len(body))
         self.assertGreater(len(body), 1900)
-        self.assertEqual(rest, chr(0x2026) + " 1 more line: Ctrl-b P shows the whole reply")
+        self.assertEqual(rest, chr(0x2026) + " 1 more line: Ctrl-b Up shows the whole reply")
 
     def test_a_short_reply_is_whole_and_trailing_blank_lines_go(self):
         self.assertEqual(pass_banner.banner(["one\ntwo\n\n"]),

@@ -153,7 +153,7 @@ stored here).
      `XDG_CONFIG_HOME=~/scratch/autopass-smoke-conf`, whose `pass.toml` has `autopass = true`
      and `tiers = [60000, 75000, 90000]` and links `git` to `~/.config/git`. Check:
      - each tier fires once and a pass follows;
-     - `/pass` shows the banner, and Ctrl-b P plus both menu entries reopen it;
+     - `/pass` shows the banner, and Ctrl-b Up plus both menu entries reopen it;
      - a pass refused for a running Monitor is held, with the toast;
      - `lane ls` shows CTX and STATE.
   4. Open the draft PR, then mark it ready after STATUS. Push and merge only on Hayden's

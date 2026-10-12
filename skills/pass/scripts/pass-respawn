@@ -63,7 +63,7 @@ compact on a failing check: the respawn throws away the context that could fix t
   plain    write the Star carry marker (tmux/claude-saved re-keys a starred chat to the new
            session on its `startup`) and the replies of the last 5 turns
            (pass-last/<pane number>.json: the stop record's `replies` and the tab, for
-           hooks/pass-banner.sh's banner and the Ctrl-b P popup, tmux/pass-last; with no reply
+           hooks/pass-banner.sh's banner and the Ctrl-b Up popup, tmux/pass-last; with no reply
            text, any older one for the pane goes),
            then `tmux respawn-pane -k -t <pane> -c <toplevel> -- <abs claude>
            [--permission-mode plan] <prompt>`; both files are removed again when the respawn
@@ -1128,7 +1128,7 @@ def write_utf8_json(path: str, data) -> None:
 def write_last(plan: Plan, tab: dict | None) -> str | None:
     """What the old session said in its last 5 turns, for the respawned session's banner
     (hooks/pass-banner.sh, which shows the last turn and sets `shown`) and the popup
-    (tmux/pass-last, Ctrl-b P, which shows every turn): the stop record's `replies`,
+    (tmux/pass-last, Ctrl-b Up, which shows every turn): the stop record's `replies`,
     with the tab, at pass-last/<pane number>.json as {tab, from_session, written_at, replies,
     shown}. Not one-shot, and apart from the carry marker, which claude-saved consumes on the
     same SessionStart. Its path, or None when nothing was written: with no reply text or no tab,
