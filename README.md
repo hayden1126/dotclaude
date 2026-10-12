@@ -459,7 +459,9 @@ idle, the script rechecks the handoff and respawns the pane with a fresh `claude
   type (`partial`): it stays in the status line until a key press, and `pass.log` has it whole.
 - One pass may be pending per session. `pass-respawn -C <toplevel> --cancel` ends it, until the
   waiter has begun acting; then it finishes, and `--cancel` says `too-late` (also, naming the
-  outcome, when the waiter had already dropped or acted on its own).
+  outcome, when the waiter dropped or acted on its own while still holding its lock). Once the
+  waiter is gone, `--cancel` says nothing is pending (`outcome=none`) and `pass.log` has what it
+  did.
 - `pass-respawn` is in `excludedCommands` (it needs the tmux socket), so it runs bare, and the
   allow rule `Bash(pass-respawn -C *)` keeps the auto-mode classifier from refusing it. Each
   decision appends a line to `~/.local/state/dotclaude/pass.log`.

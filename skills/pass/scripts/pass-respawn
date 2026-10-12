@@ -106,7 +106,10 @@ the sandbox can write (docs/lanes.md S3). Every input, and why each is safe:
     counted: an accepted limit. So is the command line itself: the native install keeps
     claude's full argv there (seen live on Claude Code 2.1.296, a session launched with
     --settings), but an npm install may overwrite its process title, and then no session flag
-    is seen. Code can't tell "launched with no flags" from "title overwritten".
+    is seen. Code can't tell "launched with no flags" from "title overwritten". And the early
+    --settings check, made before git runs, knows only the dirs that need no git: a --settings
+    file in the main checkout of a lane session launched from the lane is caught only by the
+    late check, after lanelib's git has run once.
   - PATH is the call's, so it keeps only the absolute entries outside those dirs (as given and
     resolved). git, tmux and claude resolve through that PATH and must also resolve, as found
     and through their links, outside them; otherwise it refuses. The sanitized PATH replaces
@@ -769,7 +772,15 @@ def prepare(args: argparse.Namespace, procs, cmdline=proc_cmdline) -> Plan:
     sid = os.environ.get("CLAUDE_CODE_SESSION_ID") or ""
     sid = sid if SID_RE.fullmatch(sid) else ""  # it names files: a plain id or nothing
     claude_pid = session_claude(procs(), os.getpid())
-    session = load_session(claude_pid) if claude_pid else None
+    # These two refuse before anything runs sandbox-off: without its claude the session's own
+    # launch flags (--settings, --add-dir) can't be read, so the roots below would be short.
+    if claude_pid is None:
+        raise Refuse(1, "pass-respawn: can't find this session's claude process, so it can't "
+                     "tell when the turn ends. Run it bare (sandbox-off)", "no claude")
+    if not sid:
+        raise Refuse(1, "pass-respawn: CLAUDE_CODE_SESSION_ID is unset (or not a plain id), so "
+                     "it can't tell this session's file from another's", "no session id")
+    session = load_session(claude_pid)
     launch = session.get("cwd") if session and isinstance(session.get("cwd"), str) else None
     claude_argv = cmdline(claude_pid) if claude_pid else None
     early = writable_roots(None, args.cwd, launch, session_argv=claude_argv)
@@ -808,12 +819,6 @@ def prepare(args: argparse.Namespace, procs, cmdline=proc_cmdline) -> Plan:
     if code != 0:
         raise Refuse(1, out.rstrip() + "\npass-respawn: refused: handoff-check failed; fix the "
                      "gaps and run it again", "handoff-check failed")
-    if claude_pid is None:
-        raise Refuse(1, "pass-respawn: can't find this session's claude process, so it can't "
-                     "tell when the turn ends. Run it bare (sandbox-off)", "no claude")
-    if not sid:
-        raise Refuse(1, "pass-respawn: CLAUDE_CODE_SESSION_ID is unset (or not a plain id), so "
-                     "it can't tell this session's file from another's", "no session id")
     if why := session_problem(session, sid, claude_pid, None, pane):
         raise Refuse(1, f"pass-respawn: {why} (~/.claude/sessions/{claude_pid}.json, procStart "
                      "checked); it can't tell when this session's turn ends", why)
@@ -1024,8 +1029,9 @@ def run_waiter(plan: Plan, procs) -> str:
     except Cancelled:
         outcome = drop(plan, "cancelled", "on SIGTERM")
     except BaseException as e:  # noqa: BLE001  logged and shown, as nothing else can be
-        tmux(plan, "display-message", "-t", plan.pane, DROPS["error"])
+        plan.settled = True  # a SIGTERM from here on is only noted: the error still gets logged
         log(plan.mode, "error", plan.pane, f"{type(e).__name__}: {e}")
+        tmux(plan, "display-message", "-t", plan.pane, DROPS["error"])
         outcome = "error"
     finally:
         finish(plan, outcome)
@@ -1113,7 +1119,7 @@ def ended(fd: int, sid: str, pane: str | None, pid: int | None, signalled: bool)
     if (done is not None and done != "cancelled") or "acting" in marks:
         return too_late(pane, pid, done)
     print(f"pass-respawn: no pass pending for session {sid} (waiter {pid} had ended)")
-    log("cancel", "cancelled", pane, f"nothing pending: waiter {pid} had ended")
+    log("cancel", "none", pane, f"nothing pending: waiter {pid} had ended")
     return 0
 
 
@@ -1157,7 +1163,7 @@ def cancel() -> int:
                 held = False
         if fd is None or not held:
             print(f"pass-respawn: no pass pending for session {sid}")
-            log("cancel", "cancelled", pane, "nothing pending")
+            log("cancel", "none", pane, "nothing pending")
             return 0
         # The call takes the lock and the detached grandchild writes its pid a moment later, so
         # an empty or stale line on a held lock gets up to 2 s to name a live waiter.

@@ -161,6 +161,17 @@ class WritableRoots(Plain):
                          if os.path.exists(git_log) else "")
         self.assertEqual(self.calls("tmux"), [])
 
+    def test_no_claude_refuses_before_git_runs(self):
+        # Without its claude the session's launch flags can't be read, so the roots are short:
+        # nothing may run sandbox-off first.
+        git_log = self.logging_git()
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            code = self.mod.main(["--print", "-C", self.main],
+                                 procs=lambda: t.table(claude=False))
+        self.assertEqual(code, 1, out.getvalue())
+        self.assertIn("can't find this session's claude", out.getvalue())
+        self.assertFalse(os.path.exists(git_log))
+
     def test_session_flags_past_a_double_dash_still_count(self):
         # Claude Code's parser can take `--` as an option's value and parse a later --settings,
         # so the scan goes past it: a false hit only refuses more, or adds a root.
@@ -622,6 +633,9 @@ class Pending(Plain):
         code, out = self.run_pass("--cancel")
         self.assertEqual(code, 0, out)
         self.assertIn("no pass pending", out)
+        # A no-op isn't a cancel: grepping pass.log for cancels finds only real ones.
+        self.assertIn("mode=cancel outcome=none", self.log())
+        self.assertNotIn("outcome=cancelled", self.log())
 
     def test_cancel_refuses_a_pid_whose_start_does_not_match(self):
         sleeper = subprocess.Popen([sys.executable, "-I", "-c", "import time; time.sleep(30)"])

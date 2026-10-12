@@ -40,7 +40,7 @@ The record holds the exact facts and the fresh session re-reads it. So the hando
 
 6. **Say in one line what happens when the turn ends, then stop.** For example: "When this turn ends, the pane restarts fresh in plan mode and reads STATUS.md." Do nothing after the call. Any edit or commit after it makes the handoff stale, and the waiter drops the pass.
 
-7. **If Hayden says not to pass after the call**, run `pass-respawn -C <toplevel> --cancel`. It ends this session's pending waiter (logged `cancelled`), and says so when nothing was pending. A prompt he types mid-turn drops the pass anyway; `--cancel` makes it certain. Once the waiter has passed its last check and begun acting, it is too late: the waiter ignores the signal and finishes (the respawn, or the keys), and `--cancel` says `too-late` and exits 1. It says `too-late` too, naming the outcome, when the waiter had already ended on its own (a drop such as `stale`, or the act).
+7. **If Hayden says not to pass after the call**, run `pass-respawn -C <toplevel> --cancel`. It ends this session's pending waiter (logged `cancelled`), and says so when nothing was pending. A prompt he types mid-turn drops the pass anyway; `--cancel` makes it certain. Once the waiter has passed its last check and begun acting, it is too late: the waiter ignores the signal and finishes (the respawn, or the keys), and `--cancel` says `too-late` and exits 1. It says `too-late` too, naming the outcome, when the waiter dropped (`stale`, say) or acted on its own while still holding its lock. Once the waiter is gone, `--cancel` says nothing is pending; read `pass.log` for what it did.
 
 ## What happens after the turn
 
