@@ -11,9 +11,11 @@ import fcntl
 import io
 import json
 import os
+import signal
 import subprocess
 import sys
 import time
+from unittest import mock
 
 import test_pass_respawn as t
 
@@ -541,6 +543,88 @@ class Pending(Plain):
         self.assertIn("doesn't match", out)
         time.sleep(0.2)
         self.assertIsNone(sleeper.poll())
+
+    def term_during(self, action, *mode):
+        """A foreground run that gets SIGTERM (as --cancel sends) right after tmux runs action;
+        returns (exit code, the lock's text when action ran)."""
+        real, seen = self.mod.tmux, []
+
+        def tmux(plan, *args):
+            p = real(plan, *args)
+            if args[0] == action and not seen:
+                with open(self.lock()) as f:
+                    seen.append(f.read())
+                os.kill(os.getpid(), signal.SIGTERM)
+            return p
+        self.mod.tmux = tmux
+        code, out = self.run_pass(*mode, "--foreground")
+        self.assertEqual(len(seen), 1, out)
+        return code, seen[0]
+
+    def test_a_cancel_after_the_respawn_ran_keeps_the_respawn_and_its_carry(self):
+        code, lock = self.term_during("respawn-pane")
+        self.assertEqual(code, 0)
+        self.assertTrue(lock.rstrip().endswith(" acting"), lock)
+        self.assertEqual(len(self.calls("tmux", "respawn-pane")), 1)
+        self.assertTrue(os.path.exists(self.carry_marker()))
+        self.assertIn("mode=plain outcome=respawn", self.log())
+        self.assertIn("a --cancel came after acting began", self.log())
+        self.assertNotIn("outcome=cancelled", self.log())
+
+    def test_a_cancel_mid_compact_finishes_the_compact(self):
+        code, _ = self.term_during("send-keys", "--compact")
+        self.assertEqual(code, 0)
+        self.assertEqual(len(self.calls("tmux", "send-keys")), 4)
+        self.assertIn("mode=compact outcome=compact", self.log())
+        self.assertIn("a --cancel came after acting began", self.log())
+        self.assertNotIn("outcome=cancelled", self.log())
+
+    def test_a_cancel_before_acting_still_cancels(self):
+        code, _ = self.term_during("capture-pane")  # the final re-check's pane read
+        self.assertEqual(code, 1)
+        self.assertEqual(self.calls("tmux", "respawn-pane"), [])
+        self.assertFalse(os.path.exists(self.carry_marker()))
+        self.assertIn("mode=plain outcome=cancelled", self.log())
+
+    def hold_lock(self, acting):
+        os.makedirs(os.path.dirname(self.lock()), exist_ok=True)
+        fd = os.open(self.lock(), os.O_RDWR | os.O_CREAT, 0o600)
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        start = self.mod.proc_start(os.getpid())
+        os.write(fd, f"{os.getpid()} {start}{' acting' if acting else ''}\n".encode())
+        return fd
+
+    def catch_term(self):
+        got = []
+        old = signal.signal(signal.SIGTERM, lambda *a: got.append(1))
+        self.addCleanup(signal.signal, signal.SIGTERM, old)
+        return got
+
+    def test_cancel_once_the_waiter_acts_says_too_late(self):
+        got = self.catch_term()
+        fd = self.hold_lock(acting=True)
+        self.addCleanup(os.close, fd)
+        code, out = self.run_pass("--cancel")
+        self.assertEqual(code, 1, out)
+        self.assertIn("too late", out)
+        self.assertEqual(got, [], "it signalled a waiter that was already acting")
+        self.assertIn("mode=cancel outcome=too-late", self.log())
+
+    def test_cancel_that_races_the_act_says_too_late(self):
+        # The waiter begins acting between --cancel's read and its signal: SIGTERM is ignored,
+        # the act finishes and frees the lock, and --cancel reads the mark again.
+        self.catch_term()
+        fd = self.hold_lock(acting=False)
+
+        def kill(pid, sig):
+            os.pwrite(fd, f"{os.getpid()} {self.mod.proc_start(os.getpid())} acting\n".encode(), 0)
+            os.close(fd)
+        with mock.patch.object(self.mod.os, "kill", side_effect=kill):
+            code, out = self.run_pass("--cancel")
+        self.assertEqual(code, 1, out)
+        self.assertIn("too late", out)
+        self.assertIn("mode=cancel outcome=too-late", self.log())
+        self.assertNotIn("outcome=cancelled", self.log())
 
     def test_a_foreground_run_holds_then_frees_the_lock(self):
         code, out = self.run_pass("--foreground")

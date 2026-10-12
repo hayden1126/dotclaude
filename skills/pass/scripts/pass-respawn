@@ -17,7 +17,11 @@ time written in it, and a second call while it is held refuses (exit 1). Then it
 waiter (a double fork; a fork or setsid that fails exits 1 and logs `error`) and exits 0.
 --cancel ends this session's pending waiter: SIGTERM to the pid in the lock, only once that pid
 is a live pass-respawn with the start time written beside it; the waiter logs `cancelled` and
-exits. With nothing pending it says so and exits 0.
+exits. With nothing pending it says so and exits 0. Once the waiter passes its final re-check
+it is acting: it appends ` acting` to the lock's line and ignores SIGTERM, so the act (the
+respawn and its carry marker, or the keys) runs to its end and logs its own outcome, noting the
+late cancel. --cancel that finds ` acting`, before signalling or once the lock frees, says
+`too-late` and exits 1.
 
 The waiter polls that session file every 0.2 s until its status is `idle` (or `shell`, at the
 prompt with a background shell running) with a statusUpdatedAt
@@ -195,6 +199,9 @@ class Plan:
     transcript_size: int | None  # None: unreadable at the call
     timeout: float
     path: str = ""         # the sanitized PATH every child gets
+    lock_fd: int | None = None  # the pending lock the waiter holds (None: not taken)
+    acting: bool = False   # past the final re-check: SIGTERM no longer cancels
+    late_cancel: bool = False  # a SIGTERM came while acting, and was ignored
 
     @property
     def status_file(self) -> str:
@@ -857,6 +864,21 @@ def remove(path: str | None) -> None:
             os.unlink(path)
 
 
+def begin_acting(plan: Plan) -> None:
+    """From here the waiter acts: SIGTERM (`--cancel`) no longer cancels, since the respawn or
+    the keys may already be out and only the act's own outcome is true. The pending lock's line
+    gains ` acting`, so --cancel can say it came too late."""
+    plan.acting = True
+    if plan.lock_fd is not None:
+        with contextlib.suppress(OSError):
+            claim(plan.lock_fd, acting=True)
+
+
+def late(plan: Plan, detail: str) -> str:
+    """detail, noting a SIGTERM that came once acting had begun."""
+    return detail + ("; a --cancel came after acting began, ignored" if plan.late_cancel else "")
+
+
 def wait_and_act(plan: Plan, procs) -> str:
     """Wait for this session's turn to end, recheck, then act; returns the outcome logged."""
     deadline = time.monotonic() + plan.timeout
@@ -897,6 +919,7 @@ def wait_and_act(plan: Plan, procs) -> str:
         return drop(plan, "resumed", f"status {detail} at the final re-check")
     if why := pane_problem(plan):
         return drop(plan, "busy", f"busy: {why}", f"pass dropped: {why}; run /pass again")
+    begin_acting(plan)
     if plan.mode == "plain":
         carry = None
         try:
@@ -904,11 +927,13 @@ def wait_and_act(plan: Plan, procs) -> str:
             p = tmux(plan, *actions[0][1:])
             if p is None or p.returncode != 0:
                 remove(carry)
-                return drop(plan, "failed", (p.stderr.strip() if p else "tmux didn't run"))
+                return drop(plan, "failed", late(plan, p.stderr.strip() if p
+                                                 else "tmux didn't run"))
         except BaseException:
             remove(carry)
             raise
-        log(plan.mode, "respawn", plan.pane, "default mode" if approved else "plan mode")
+        log(plan.mode, "respawn", plan.pane,
+            late(plan, "default mode" if approved else "plan mode"))
         return "respawn"
     for i, argv in enumerate(actions):  # /compact <focus>, Enter, the prompt, Enter
         if i == 2:
@@ -916,20 +941,25 @@ def wait_and_act(plan: Plan, procs) -> str:
             if why := pane_problem(plan):  # copy mode or a draft came up during the gap
                 tmux(plan, "display-message", "-t", plan.pane,
                      f"compacted; type the resume prompt yourself: {argv[-1]}")
-                log(plan.mode, "partial", plan.pane, f"compacted, resume prompt not typed: {why}")
+                log(plan.mode, "partial", plan.pane,
+                    late(plan, f"compacted, resume prompt not typed: {why}"))
                 return "partial"
         p = tmux(plan, *argv[1:])
         if p is None or p.returncode != 0:
-            return drop(plan, "failed", f"send-keys {i + 1} of 4: "
-                        + (p.stderr.strip() if p else "tmux didn't run"))
-    log(plan.mode, "compact", plan.pane, "default mode" if approved else "plan mode")
+            return drop(plan, "failed", late(plan, f"send-keys {i + 1} of 4: "
+                                             + (p.stderr.strip() if p else "tmux didn't run")))
+    log(plan.mode, "compact", plan.pane, late(plan, "default mode" if approved else "plan mode"))
     return "compact"
 
 
 def run_waiter(plan: Plan, procs) -> str:
     """wait_and_act, with SIGTERM (`--cancel`) logged as `cancelled` and any exception as
-    `error` (in the detached waiter nothing else can see it)."""
+    `error` (in the detached waiter nothing else can see it). Once acting has begun, SIGTERM is
+    only noted (begin_acting): the act runs to its end and logs its own outcome."""
     def on_term(signum, frame):
+        if plan.acting:
+            plan.late_cancel = True
+            return
         raise Cancelled()
     old = signal.signal(signal.SIGTERM, on_term)
     try:
@@ -965,10 +995,21 @@ def take_pending(plan: Plan) -> int:
     return fd
 
 
-def claim(fd: int) -> None:
-    """Write the waiter's pid and start time into the lock it holds, for --cancel."""
-    os.ftruncate(fd, 0)
-    os.pwrite(fd, f"{os.getpid()} {proc_start(os.getpid())}\n".encode(), 0)
+def claim(fd: int, acting: bool = False) -> None:
+    """Write the waiter's pid and start time into the lock it holds, for --cancel, and ` acting`
+    once it acts. The acting line extends the first, so it overwrites it in place with no
+    truncation a reader could catch empty."""
+    if not acting:
+        os.ftruncate(fd, 0)
+    line = f"{os.getpid()} {proc_start(os.getpid())}" + (" acting" if acting else "")
+    os.pwrite(fd, (line + "\n").encode(), 0)
+
+
+def too_late(pane: str | None, pid: int | None) -> int:
+    print(f"pass-respawn: too late to cancel: waiter {pid} had begun acting (the respawn or "
+          "the keys may be out); see pass.log for what it did")
+    log("cancel", "too-late", pane, f"waiter {pid} was acting")
+    return 1
 
 
 def is_pass_respawn(pid: int, proc: str = "/proc") -> bool:
@@ -988,7 +1029,8 @@ def is_pass_respawn(pid: int, proc: str = "/proc") -> bool:
 def cancel() -> int:
     """End this session's pending waiter: SIGTERM to the pid in its lock, once that pid is a
     live pass-respawn with the start time written beside it (a reused pid is not), then wait
-    for the lock to free."""
+    for the lock to free. A waiter whose line says ` acting`, before the signal or once the lock
+    frees, had begun acting and ignores SIGTERM: that is `too-late` (exit 1), not a cancel."""
     sid = os.environ.get("CLAUDE_CODE_SESSION_ID") or ""
     pane = os.environ.get("TMUX_PANE")
     if not SID_RE.fullmatch(sid):
@@ -1019,6 +1061,8 @@ def cancel() -> int:
                   "pass-respawn started then; not signalling it")
             log("cancel", "refused", pane, f"pid {pid} doesn't match")
             return 1
+        if fields[2:3] == ["acting"]:
+            return too_late(pane, pid)
         os.kill(pid, signal.SIGTERM)
         for _ in range(50):
             try:
@@ -1030,6 +1074,8 @@ def cancel() -> int:
             print(f"pass-respawn: sent SIGTERM to waiter {pid}, but it still holds the lock")
             log("cancel", "error", pane, f"waiter {pid} still pending after SIGTERM")
             return 1
+        if os.pread(fd, 64, 0).decode("ascii", "replace").split()[2:3] == ["acting"]:
+            return too_late(pane, pid)
         print(f"pass-respawn: cancelled the pending pass (waiter {pid})")
         log("cancel", "cancelled", pane, f"waiter {pid}")
         return 0
@@ -1066,6 +1112,7 @@ def detach(plan: Plan, procs, lock: int) -> str:
                     os.closerange(low, os.sysconf("SC_OPEN_MAX"))
                     os.chdir("/")
                     claim(lock)
+                    plan.lock_fd = lock
                 except BaseException as e:  # noqa: BLE001  said down the pipe
                     with contextlib.suppress(OSError):
                         os.write(report, f"{type(e).__name__}: {e}".encode())
@@ -1118,6 +1165,7 @@ def main(argv=None, procs=proc_table, cmdline=proc_cmdline) -> int:
     if args.foreground:
         try:
             claim(lock)
+            plan.lock_fd = lock
             return 0 if run_waiter(plan, procs) in ("respawn", "compact") else 1
         finally:
             os.close(lock)
