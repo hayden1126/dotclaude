@@ -523,13 +523,13 @@ def listed_paths(path: str, keys: tuple[str, ...], base: str | None) -> list[str
 def session_flags(argv: list[str] | None) -> tuple[list[str], list[str]]:
     """The session claude's own --add-dir values and --settings values (a file or inline JSON),
     from its argv. --add-dir takes several values: every argument after it up to the next flag
-    counts (a prompt read as a dir only adds a root, which can only refuse more)."""
+    counts (a prompt read as a dir only adds a root, which can only refuse more). The scan goes
+    past `--`: Claude Code's parser can take it as an option's value and still parse a later
+    --settings, and a false hit only refuses more or adds a root."""
     dirs, settings, args, i = [], [], (argv or [])[1:], 0
     while i < len(args):
         arg = args[i]
         i += 1
-        if arg == "--":
-            break
         name, eq, value = arg.partition("=")
         if name == "--add-dir":
             if eq:

@@ -158,6 +158,23 @@ class WritableRoots(Plain):
                          if os.path.exists(git_log) else "")
         self.assertEqual(self.calls("tmux"), [])
 
+    def test_session_flags_past_a_double_dash_still_count(self):
+        # Claude Code's parser can take `--` as an option's value and parse a later --settings,
+        # so the scan goes past it: a false hit only refuses more, or adds a root.
+        writable = os.path.join(self.tmp, "w")
+        flagged = os.path.join(writable, "flags.json")
+        self.settings(flagged, sandbox={"filesystem": {"allowWrite": []}})
+        argv = ["claude", "--append-system-prompt", "--", "--settings", flagged,
+                "--add-dir", "/past-dd"]
+        self.assertEqual(self.mod.session_flags(argv), (["/past-dd"], [flagged]))
+        self.mod.writable_roots = lambda repo, cwd, launch=None, session_argv=None: (
+            [repo.toplevel, repo.main, writable] if repo else [writable])
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            code = self.mod.main(["--print", "-C", self.main], procs=t.table,
+                                 cmdline=lambda pid: argv)
+        self.assertEqual(code, 1, out.getvalue())
+        self.assertIn("a --settings file resolves to", out.getvalue())
+
     def test_deny_write_carves_out_only_from_the_user_and_managed_tiers(self):
         managed = os.path.join(self.tmp, "managed-settings.json")
         self.mod.MANAGED_SETTINGS = managed
