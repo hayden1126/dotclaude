@@ -85,6 +85,7 @@ class LedgerEnv(unittest.TestCase):
         # Sandbox tests set CLAUDE_PID on purpose.
         self.env.pop("CLAUDE_PID", None)
         self.env.pop("SANDBOX_RUNTIME", None)
+        self.env.pop("CLAUDE_CONFIG_DIR", None)  # the sessions dir lives in the fake home
         self.ledger = os.path.join(self.tmp.name, "state", "dotclaude", "delegations.jsonl")
 
     def tearDown(self):
@@ -364,6 +365,31 @@ class LedgerHook(LedgerEnv):
                            env=self.env)
         self.assertIn("ok   no worktree agent coincided with a change in the main checkout or "
                       "the parent session's checkout", p.stdout)
+
+    def audit(self):
+        return subprocess.run(["python3", LEDGER, "audit"], capture_output=True, text=True,
+                              env=self.env).stdout
+
+    def test_a_resume_compares_only_its_own_activation(self):
+        # fold keeps each field's latest value, so a resume's start must clear the last stop's
+        # *_after: an edit between activations is no agent's doing.
+        repo, wt, lane = self.lane_setup()
+        self.hook(dict(self.start("agent-w1"), cwd=wt, agent_type="writer"))
+        self.hook(dict(self.stop("w1"), cwd=wt, agent_type="writer"))
+        for d in (repo, lane):
+            with open(os.path.join(d, "between.txt"), "w") as f:
+                f.write("x")
+        self.hook(dict(self.start("agent-w1"), cwd=wt, agent_type="writer"))
+        out = self.audit()
+        self.assertNotIn("WARN", out)
+        for d in (repo, lane):
+            with open(os.path.join(d, "during.txt"), "w") as f:
+                f.write("x")
+        self.hook(dict(self.stop("w1"), cwd=wt, agent_type="writer"))
+        out = self.audit()
+        self.assertIn("WARN main checkout changed while writer w1", out)
+        self.assertIn(f"WARN {os.path.realpath(lane)} (the parent session's checkout) changed "
+                      "while writer w1", out)
 
     def test_the_stop_rehashes_the_checkout_its_start_recorded(self):
         _, wt, lane = self.lane_setup()

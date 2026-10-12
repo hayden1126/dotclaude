@@ -54,7 +54,8 @@ For an agent in a worktree, the start and stop rows also carry a hash of the mai
 `git status` (main_before, main_after). When the parent session runs in another checkout (a
 lane: a sibling worktree, while its writers' worktrees still land under the main checkout),
 they carry that checkout's path and hash too (parent_root, parent_before, parent_after; the
-stop re-hashes the path its start recorded). The sandbox lets a worktree agent's subprocess
+stop re-hashes the path its start recorded). A start row nulls the *_after fields, so a
+resumed agent's audit compares only its current activation. The sandbox lets a worktree agent's subprocess
 write anywhere in the session's write root, so a computed-path write into either checkout
 can't be stopped, only seen. `audit` reports a changed hash as evidence, not a verdict,
 because the lead may have been editing too.
@@ -219,10 +220,13 @@ def cmd_hook(_args):
                        parent_transcript=data.get("transcript_path"))
             main = main_checkout(data.get("cwd"))
             if main:
-                row["main_before"] = checkout_status(main)
+                # *_after: None, since fold keeps each field's latest value: a resume's audit
+                # must not compare this start with the previous activation's stop.
+                row.update(main_before=checkout_status(main), main_after=None)
                 parent = parent_checkout(base["session_id"], main)
                 if parent:
-                    row.update(parent_root=parent, parent_before=checkout_status(parent))
+                    row.update(parent_root=parent, parent_before=checkout_status(parent),
+                               parent_after=None)
         else:
             text, source = data.get("last_assistant_message") or "", "last_message"
             if not text.strip():
