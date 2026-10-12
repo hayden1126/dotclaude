@@ -15,7 +15,7 @@ Today's (2026-10-11) incident, reconstructed from the transcripts:
 - Session B was that intended owner. It read the line as being about someone else. It
   then matched the phrase to the wrong live session through ListAgents (session C, whose first
   prompt read "another session working on request #110") and deferred #110. A mirror flip
-  ("another session's formatbar lane") happened earlier the same day.
+  ("another session's toolbar lane") happened earlier the same day.
 
 So the root cause is not that a merged STATUS reached another lane. There are four causes:
 1. Relative identity words were written into a file that many writers share.
