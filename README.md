@@ -440,10 +440,11 @@ idle, the script rechecks the handoff and respawns the pane with a fresh `claude
 - `pass compact` keeps the session and types `/compact` and the resume prompt instead. Use it
   mid-task with tacit state or with background tasks in flight, which a respawn would kill (a
   plain pass drops while they run, an in-process teammate included).
-- Typed triggers: "pass" fires only as the bare last item of a terse list ("pass", "handoff and
-  pass", "commit, handoff and pass"). "pass compact", "handoff and compact" and "handoff and
-  pass compact" pick the compact mode. "a later pass" or "the tests pass" never fire, and a
-  bare "handoff" never passes.
+- Typed triggers: "pass" fires only as the bare last item of a terse list with an action before
+  it ("handoff and pass", "commit, pass", "commit, handoff and pass"). A one-word "pass" never
+  fires, since it is also a "no thanks" to an offer; `/pass` is the explicit form. "pass
+  compact", "handoff and compact" and "handoff and pass compact" pick the compact mode. "a
+  later pass" or "the tests pass" never fire, and a bare "handoff" never passes.
 - The fresh session starts in plan mode, unless the Next block's first item carries `(approved by
   Hayden YYYY-MM-DD)` dated within this session. The handoff skill writes that marker only for an
   approval given in the session, and `handoff-check` fails one with a bad, older or future
@@ -453,8 +454,11 @@ idle, the script rechecks the handoff and respawns the pane with a fresh `claude
   after the handoff (`stale`), Hayden typed or queued a prompt after the call (`resumed`), the
   stop listed any background task but memory upkeep, or the pane was in copy mode or held a
   draft in the input box (`busy`), the session or pane went away or changed (`gone`), or the
-  turn never ended (`timeout`). Fix the cause and run `/pass` again.
-- One pass may be pending per session. `pass-respawn -C <toplevel> --cancel` ends it.
+  turn never ended (`timeout`). Fix the cause and run `/pass` again. In compact mode, copy mode
+  or a draft that comes up between `/compact` and the resume prompt leaves the prompt in the
+  status line for you to type (`partial`).
+- One pass may be pending per session. `pass-respawn -C <toplevel> --cancel` ends it, until the
+  waiter has begun acting; then it finishes, and `--cancel` says `too-late`.
 - `pass-respawn` is in `excludedCommands` (it needs the tmux socket), so it runs bare, and the
   allow rule `Bash(pass-respawn -C *)` keeps the auto-mode classifier from refusing it. Each
   decision appends a line to `~/.local/state/dotclaude/pass.log`.

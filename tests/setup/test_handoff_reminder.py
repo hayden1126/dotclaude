@@ -252,15 +252,23 @@ class HandoffReminder(unittest.TestCase):
 
 
 class Pass(unittest.TestCase):
-    """"pass" fires only as the bare last item of a terse action list."""
+    """"pass" fires only as the bare last item of a terse action list with an item before it."""
 
     def test_pass_as_the_last_item_of_a_terse_list_fires(self):
-        for prompt in ("pass", "Pass.", "handoff and pass", "commit, pass", "commit, handoff and pass",
-                       "merged. pass", "ok, pass", "push, then pass", "hand off and pass",
-                       "merged, cleanup and pass", "commit and push and pass",
-                       "deployed, handoff, then pass", "pass now"):
+        for prompt in ("handoff and pass", "commit, pass", "commit, handoff and pass",
+                       "push, then pass", "hand off and pass", "merged, cleanup and pass",
+                       "commit and push and pass", "deployed, handoff, then pass", "Handoff and pass.",
+                       "ok, handoff and pass", "commit, pass now", "merged. handoff and pass"):
             with self.subTest(prompt=prompt):
                 self.assertEqual(fires(prompt), "pass")
+
+    def test_a_bare_pass_is_a_no_thanks_not_a_pass(self):
+        # "want me to also do X?" "pass": a one-word "pass" declines. The list must sit in the
+        # last sentence, so "merged. pass" is a bare pass too; /pass is the explicit form.
+        for prompt in ("pass", "Pass.", "PASS", "pass!", "Pass...", "ok, pass", "no thanks, pass",
+                       "nah, pass", "pass now", "merged. pass", "thanks. Pass."):
+            with self.subTest(prompt=prompt):
+                self.assertIsNone(fires(prompt))
 
     def test_compact_after_a_handoff_or_pass_fires_the_compact_mode(self):
         for prompt in ("pass compact", "handoff and compact", "handoff and pass compact",

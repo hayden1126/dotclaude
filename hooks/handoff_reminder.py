@@ -114,17 +114,20 @@ CLEAR_NOT = re.compile(rf"(?:^|[^\w])(?:(?:don'?t|dont|do not|never|not|can'?t|c
                        rf"(?:\s+[\w'-]+){{0,3}}|no|no need to|without(?: a| the)?)\s+[`\"(]?/clear", I)
 
 # 6. A pass: "pass" (or "pass compact", or "compact" right after a handoff) as the bare last item of
-# a terse action list ("pass", "commit, handoff and pass", "handoff and compact"). "pass" is mostly
-# a noun ("a later pass", "an image pass") or a verb with a subject ("the tests pass"), so every
-# earlier item comes from a closed list of actions and statuses, and a question never counts.
+# a terse action list ("commit, pass", "commit, handoff and pass", "handoff and compact"). "pass" is
+# mostly a noun ("a later pass", "an image pass") or a verb with a subject ("the tests pass"), so
+# every earlier item comes from a closed list of actions and statuses, and a question never counts.
+# A plain "pass" needs at least one item before it in the same sentence: a bare "pass" is also a
+# "no thanks" ("want me to also do X?" "pass"). "pass compact" names the mode, so it stands alone.
 ITEM = (rf"(?:commit(?:ted)?|push(?:ed)?|merged?|clean ?up|cleaned up|(?:re)?deploy(?:ed)?|rebased?"
         rf"|review(?:ed)?|verify|verified|fix(?:ed)?|done|sent|emailed|submitted|checked|approved"
         rf"|(?:open (?:a |the )?)?pr|{HWORD}(?: here)?)")
 PSEP = r"(?:\s*,\s*(?:and then\s+|and\s+|then\s+)?|\s+(?:and then|and|then)\s+)"
 PLEAD = (r"(?:(?:ok(?:ay)?|alright|great|good|nice|perfect|thanks|thank you|yes|now|then|please|just|so"
          r"|go ahead and|time to)\b[\s,]*)*")
-PASS = re.compile(rf"{PLEAD}(?:{ITEM}{PSEP})*(?:pass(?P<plain_compact>\s+compact)?"
-                  rf"|{HWORD}{PSEP}(?P<compact>compact))(?:\s+(?:now|please|here))?", I)
+PASS = re.compile(rf"{PLEAD}(?:(?:{ITEM}{PSEP})+pass(?P<plain_compact>\s+compact)?"
+                  rf"|pass\s+(?P<bare_compact>compact)"
+                  rf"|(?:{ITEM}{PSEP})*{HWORD}{PSEP}(?P<compact>compact))(?:\s+(?:now|please|here))?", I)
 
 
 def strip_leads(s):
@@ -234,7 +237,8 @@ def pass_kind(text):
     m = PASS.fullmatch(last)
     if not m:
         return None
-    return "compact" if m.group("plain_compact") or m.group("compact") else "pass"
+    compact = m.group("plain_compact") or m.group("bare_compact") or m.group("compact")
+    return "compact" if compact else "pass"
 
 
 def wants_handoff(text):
