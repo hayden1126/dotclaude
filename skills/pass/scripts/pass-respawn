@@ -1159,9 +1159,17 @@ def cancel() -> int:
             print(f"pass-respawn: no pass pending for session {sid}")
             log("cancel", "cancelled", pane, "nothing pending")
             return 0
-        fields = lock_fields(fd)
-        pid = int(fields[0]) if fields and fields[0].isdigit() else None
-        start = fields[1] if len(fields) > 1 else None
+        # The call takes the lock and the detached grandchild writes its pid a moment later, so
+        # an empty or stale line on a held lock gets up to 2 s to name a live waiter.
+        for _ in range(20):
+            fields = lock_fields(fd)
+            pid = int(fields[0]) if fields and fields[0].isdigit() else None
+            start = fields[1] if len(fields) > 1 else None
+            if pid is not None and str(proc_start(pid)) == start and is_pass_respawn(pid):
+                break
+            if wait_free(fd, tries=1):
+                return ended(fd, sid, pane, pid, signalled=False)
+            time.sleep(0.1)
         if pid is None or str(proc_start(pid)) != start or not is_pass_respawn(pid):
             # It may have acted (or dropped) and exited since the read: a freed lock holds
             # its last word.

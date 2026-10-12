@@ -16,6 +16,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import threading
 import time
 import unittest
 from unittest import mock
@@ -636,6 +637,31 @@ class Pending(Plain):
         self.assertIn("doesn't match", out)
         time.sleep(0.2)
         self.assertIsNone(sleeper.poll())
+
+    def test_cancel_waits_for_a_waiter_that_hasnt_written_its_pid_yet(self):
+        # The call takes the lock and the grandchild writes its pid a moment later: a cancel in
+        # that gap must wait for the line, not refuse an empty one.
+        sleeper = subprocess.Popen([sys.executable, "-I", "-c", "import time; time.sleep(30)"])
+        self.addCleanup(sleeper.wait)
+        self.addCleanup(sleeper.kill)
+        os.makedirs(os.path.dirname(self.lock()), exist_ok=True)
+        fd = os.open(self.lock(), os.O_RDWR | os.O_CREAT | os.O_TRUNC, 0o600)
+        self.addCleanup(os.close, fd)
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        start = self.mod.proc_start(sleeper.pid)
+
+        def late_waiter():
+            time.sleep(0.4)
+            os.write(fd, f"{sleeper.pid} {start}\n".encode())
+            sleeper.wait()
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        th = threading.Thread(target=late_waiter, daemon=True)
+        th.start()
+        code, out = self.run_pass("--cancel")
+        th.join(5)
+        self.assertEqual(code, 0, out)
+        self.assertIn("cancelled the pending pass", out)
+        self.assertIsNotNone(sleeper.poll())
 
     def term_during(self, action, *mode):
         """A foreground run that gets SIGTERM (as --cancel sends) right after tmux runs action;
