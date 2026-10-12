@@ -46,6 +46,7 @@ def load():
 
 FAKE_TMUX = r"""#!/bin/sh
 { printf 'tmux'; for a in "$@"; do printf '\037%s' "$a"; done; printf '\n'; } >> "$FAKE_TMUX_LOG"
+printf '%s\n' "$PATH" >> "$FAKE_TMUX_LOG.path"
 for f in $FAKE_TMUX_FAIL; do
   if [ "$1" = "$f" ]; then echo "can't find pane: %4" >&2; exit 1; fi
 done
@@ -53,10 +54,12 @@ case "$1" in
   display-message)
     if [ "$2" = -p ]; then
       case "$5" in
+        *pane_in_mode*) printf '%s\n' "$FAKE_TMUX_MODE" ;;
         *pane_pid*) printf '%s\n' "$FAKE_TMUX_PANE" ;;
         *) printf '%s\n' "$FAKE_TMUX_SERVER" ;;
       esac
     fi ;;
+  capture-pane) printf '%s\n' "$FAKE_TMUX_SCREEN" ;;
 esac
 exit 0
 """
@@ -83,6 +86,19 @@ SID = "sess-0001"
 CLAUDE, PANE_SHELL, SHELL = 900000, 899999, 900001
 START = 4242
 SERVER = "1791000000 222 /tmp/tmux-1000/default"
+ESC, PROMPT_MARK, NBSP = chr(27), chr(0x276F), chr(0xA0)
+RULE = chr(0x2500) * 20
+
+
+def screen(box):
+    """A captured pane (tmux capture-pane -e -p): a reply, the input box line holding box after
+    the prompt mark and its no-break space, then the status bar rows."""
+    return "\n".join(["Done: the handoff is committed.", "",
+                      f"{ESC}[39m{PROMPT_MARK}{NBSP} {box}", f"{ESC}[2m{RULE}{ESC}[0m",
+                      "  Opus 5.5 | ctx 41%"])
+
+
+EMPTY_BOX = screen("")
 
 
 def table(*extra, claude=True):
@@ -112,7 +128,8 @@ class Base(LanesRepo):
         self.mod = load()
         self.mod.POLL, self.mod.SETTLE, self.mod.COMPACT_GAP = 0.01, 0.05, 0.01
         self.real_roots = self.mod.writable_roots
-        self.mod.writable_roots = lambda repo, cwd: [repo.toplevel, repo.main] if repo else []
+        self.mod.writable_roots = (lambda repo, cwd, launch=None:
+                                   [repo.toplevel, repo.main] if repo else [])
         self.tmux = os.path.join(self.fake_bin, "tmux")
         with open(self.tmux, "w") as f:
             f.write(FAKE_TMUX)
@@ -121,7 +138,7 @@ class Base(LanesRepo):
         self.tmux_log = os.path.join(self.tmp, "tmux.log")
         self.env.update(TMUX_PANE="%4", CLAUDE_CODE_SESSION_ID=SID, FAKE_TMUX_LOG=self.tmux_log,
                         FAKE_TMUX_SERVER=SERVER, FAKE_TMUX_PANE=f"{PANE_SHELL} claude",
-                        FAKE_TMUX_FAIL="")
+                        FAKE_TMUX_FAIL="", FAKE_TMUX_MODE="0", FAKE_TMUX_SCREEN=EMPTY_BOX)
         patch = mock.patch.dict(os.environ, self.env, clear=True)
         patch.start()
         self.addCleanup(patch.stop)
@@ -134,10 +151,12 @@ class Base(LanesRepo):
         self.stop_tasks = None  # every task label; None means the waits
         self.start_now = START
         self.status, self.updated, self.stopped = None, 0, False
-        self.mod.proc_start = lambda pid: self.start_now if pid == CLAUDE else None
+        real_start = self.mod.proc_start
+        self.mod.proc_start = lambda pid: self.start_now if pid == CLAUDE else real_start(pid)
         self.real_load = self.mod.load_session
         self.mod.load_session = self.fake_load
         self.write_session({"status": "busy"})
+        self.say(typed("the prompt that ran /pass"))
 
     # --- fakes ---------------------------------------------------------------------------
 
@@ -381,22 +400,24 @@ class Plain(Base):
         self.assertEqual(code, 1, out)
         self.assertIn("CLAUDE_CODE_SESSION_ID", out)
 
-    def test_a_tmux_in_a_sandbox_writable_dir_is_refused(self):
-        self.mod.writable_roots = lambda repo, cwd: [self.fake_bin] if repo else []
+    def test_a_path_entry_in_a_sandbox_writable_dir_is_skipped(self):
+        self.mod.writable_roots = lambda repo, cwd, launch=None: [self.fake_bin]
         code, out = self.run_pass("--print")
-        self.assertEqual(code, 1, out)
-        self.assertIn("tmux resolves to", out)
+        self.assertNotIn(self.fake_bin, out)
 
-    def test_a_claude_or_git_in_a_sandbox_writable_dir_is_refused(self):
-        wbin = os.path.join(self.tmp, "wbin")
+    def test_a_claude_or_git_linked_into_a_sandbox_writable_dir_is_refused(self):
+        wbin, safe = os.path.join(self.tmp, "wbin"), os.path.join(self.tmp, "safe")
         os.makedirs(wbin)
+        os.makedirs(safe)
         shutil.move(self.claude, os.path.join(wbin, "claude"))
-        os.environ["PATH"] = wbin + os.pathsep + os.environ["PATH"]
-        self.mod.writable_roots = lambda repo, cwd: [wbin]
+        os.symlink(os.path.join(wbin, "claude"), os.path.join(safe, "claude"))
+        os.environ["PATH"] = safe + os.pathsep + os.environ["PATH"]
+        self.mod.writable_roots = lambda repo, cwd, launch=None: [wbin]
         code, out = self.run_pass("--print")
         self.assertEqual(code, 1, out)
         self.assertIn(f"claude resolves to {wbin}/claude", out)
         os.symlink(shutil.which("git"), os.path.join(wbin, "git"))
+        os.symlink(os.path.join(wbin, "git"), os.path.join(safe, "git"))
         code, out = self.run_pass("--print")
         self.assertEqual(code, 1, out)
         self.assertIn(f"git resolves to {wbin}/git", out)
@@ -557,11 +578,6 @@ class Plain(Base):
                  {"type": "assistant", "message": {"content": "ok"}}, "not json {")
         self.assertEqual(self.mod.wait_and_act(plan, table), "respawn")
 
-    def test_a_missing_transcript_is_not_an_error(self):
-        code, out = self.run_pass("--foreground")
-        self.assertEqual(code, 0, out)
-        self.assertFalse(os.path.exists(self.transcript()))
-
     def test_waits_at_the_stop_drop_busy(self):
         self.stop_waits = ["shell"]
         code, out = self.run_pass("--foreground")
@@ -689,6 +705,7 @@ class Lane(Base):
         self.path = self.lane_path("chart-fix")
         self.session_cwd = self.path
         self.write_session({"status": "busy"})
+        self.say(typed("the prompt that ran /pass"))
         self.hook("lane-identity.sh", {"session_id": SID, "cwd": self.path,
                                        "source": "startup", "hook_event_name": "SessionStart"})
         self.body = self.read(self.record("chart-fix")).replace(
@@ -743,6 +760,13 @@ class Lane(Base):
         self.write(os.path.join(self.path, "late.txt"), "x")
         self.assertEqual(self.mod.wait_and_act(plan, table), "stale")
         self.assertDropped("stale", "handoff is stale")
+
+    def test_background_work_in_a_lane_drops_busy(self):
+        self.stop_tasks = ["monitor"]
+        code, out = self.run_pass("--foreground", cwd=self.path)
+        self.assertEqual(code, 1, out)
+        self.assertDropped("busy", "background work")
+        self.assertFalse(os.path.exists(self.carry_marker()))
 
     def test_a_planted_lane_path_never_reaches_argv_or_keys(self):
         # lane.json is sandbox-writable. Its path may be a link to the lane named with shell

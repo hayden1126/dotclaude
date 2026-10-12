@@ -284,8 +284,9 @@ def typed_since(path: str | None, offset: int) -> bool:
 def stop_problem(plan: Plan) -> str | None:
     """Why the session's stop record doesn't clear a respawn, or None: it must be dated after
     the call and list no waits (stop-ring.sh's subagent, shell, workflow, cloud session) and no
-    teammate. stop-ring.sh doesn't count a teammate, since one lingers in the list after it
-    finishes, but a respawn kills an in-process teammate either way, so a plain pass doesn't."""
+    task at all but `dream` (memory upkeep). stop-ring.sh rings past a teammate or a monitor,
+    since one lingers or runs for hours, but a respawn kills either, and any type it doesn't
+    know (unlabeled ones included), so a plain pass doesn't."""
     path = os.path.join(lanelib.state_dir(), "stops", f"{plan.session_id}.json")
     try:
         with open(path) as f:
@@ -302,8 +303,8 @@ def stop_problem(plan: Plan) -> str | None:
     tasks = rec.get("tasks")
     if not isinstance(tasks, list):
         return "no task list in the stop record"
-    if "teammate" in tasks:
-        return "waits: teammate"
+    if others := [t for t in tasks if t != "dream"]:
+        return "waits: " + ", ".join(map(str, others))
     return None
 
 

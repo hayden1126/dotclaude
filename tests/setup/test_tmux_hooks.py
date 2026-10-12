@@ -281,6 +281,18 @@ class Hooks(unittest.TestCase):
         self.assertEqual(os.listdir(os.path.join(self.state, "dotclaude", "stops")),
                          ["abcdef12-0000.json"])  # renamed into place: no temp file left
 
+    def test_the_stop_record_names_the_transcript_and_unlabeled_tasks(self):
+        # pass-respawn reads the transcript path from it, and blocks a plain pass on any task.
+        self.run_hook("stop-ring.sh", TAB, {"transcript_path": "/x/t.jsonl", "background_tasks": [
+            {"id": "m1", "type": "monitor"}, {"id": "u1"}, {"id": "e1", "type": ""}, "junk"]})
+        rec = self.stop_record()
+        self.assertEqual(rec["transcript_path"], "/x/t.jsonl")
+        self.assertEqual(rec["tasks"], ["monitor", "unlabeled", "unlabeled", "unlabeled"])
+        self.assertEqual(rec["waits"], [])
+        self.assertIn("stop rang tasks=monitor", self.ring_log()[-1])
+        self.run_hook("stop-ring.sh", TAB, {"transcript_path": ["not", "a", "string"]})
+        self.assertNotIn("transcript_path", self.stop_record())
+
     def test_a_subagent_stop_or_an_unsafe_id_writes_no_stop_record(self):
         self.run_hook("stop-ring.sh", TAB, {"agent_id": "a1"})
         self.assertIsNone(self.stop_record())

@@ -28,9 +28,11 @@ input=$(cat 2>/dev/null)
 # upkeep and a monitor can run for hours, so those don't count.
 #
 # The same step writes the session's stop record, $XDG_STATE_HOME/dotclaude/stops/<session>.json
-# (time, the waits in flight, every task label), atomically, for every stop but a subagent's:
-# pass-respawn's plain mode respawns only after a stop with no waits, since in-process agents
-# are no child process it could see. A session id that isn't a plain name writes none.
+# (time, the waits in flight, every task's label, `unlabeled` for one with none, and the
+# transcript path when it is a string), atomically, for every stop but a subagent's:
+# pass-respawn's plain mode respawns only after a stop with no task but dream, since
+# in-process agents are no child process it could see, and it reads the transcript there. A
+# session id that isn't a plain name writes none.
 read -r spawned busy tasks size transcript < <(printf '%s' "$input" | python3 -I -c 'import sys, json, os, re, time, tempfile
 try: d = json.load(sys.stdin)
 except Exception: d = {}
@@ -46,8 +48,12 @@ if not spawned and isinstance(sid, str) and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9
         stops = os.path.join(os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state"), "dotclaude", "stops")
         os.makedirs(stops, exist_ok=True)
         fd, tmp = tempfile.mkstemp(dir=stops, prefix=".tmp-")
+        rec = {"session_id": sid, "time": time.time(), "waits": [t for t in types if t in waits],
+               "tasks": [t.get("type") if isinstance(t, dict) and isinstance(t.get("type"), str) and t.get("type") else "unlabeled" for t in (tasks if isinstance(tasks, list) else [])]}
+        if isinstance(d.get("transcript_path"), str):
+            rec["transcript_path"] = d["transcript_path"]
         with os.fdopen(fd, "w") as f:
-            json.dump({"session_id": sid, "time": time.time(), "waits": [t for t in types if t in waits], "tasks": [t for t in types if isinstance(t, str)]}, f)
+            json.dump(rec, f)
         os.replace(tmp, os.path.join(stops, sid + ".json"))
     except Exception:
         try: os.unlink(tmp)
