@@ -21,7 +21,8 @@ range (origin/main..<sha>) and PRs by number, not their state. -->
 
 ## Decisions
 <!-- One line each, with who and the evidence: "Hayden picked X (2026-10-11); evidence:
-.lane/artifacts/x.png, session <id>". Promoted into the PR body or memory at merge. -->
+.lane/artifacts/x.png, session <id>". Promoted into the PR body or memory at merge.
+Copy evidence into .lane/artifacts/, don't link it: links are archived as links. -->
 
 ## Asks for Hayden
 <!-- What this lane is blocked on Hayden for: a design pick, a push or merge approval, a

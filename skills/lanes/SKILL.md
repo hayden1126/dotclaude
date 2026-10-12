@@ -51,6 +51,8 @@ an unregistered worktree: `lane whoami` tells you which.
    the lane's session there, so its cwd is the lane.
 3. **Work.** Commit on the lane branch. Keep the record current (`lane note "<line>"` adds a
    timestamped State line). Put evidence under `.lane/artifacts/` and cite it in Decisions.
+   Copy it in, don't link it: the mirror and the archive keep a symlink as a link, never what
+   it points at, so a linked shot is gone once its target is.
 4. **Hand off** with the handoff skill. Its lane mode updates the record, not STATUS.md, and
    finishes with `handoff-check`, which must pass.
 5. **Merge** through the lane's own PR, on Hayden's approval. Then write the outcome into the

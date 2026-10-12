@@ -203,18 +203,22 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
   checkout's possibly unpulled HEAD.
 - **`hooks/lane-identity.sh`** (SessionStart, Stop, SessionEnd): the identity line, the
   `sessions[]` entry, the mirror and the end stamp. A compact keeps its session's entry, so the
-  session's start (which `handoff-check` uses) doesn't move. The mirror is crash-safe (build
-  `mirror.new`, swap, delete; a `mirror.old` left by a killed run is restored, by one helper
-  every reader shares), copies what symlinks point at (a dangling link or a loop stays a link),
-  and skips the copy when nothing in `.lane/` changed. A failed mirror never costs the
-  SessionEnd stamp.
+  session's start (which `handoff-check` uses) doesn't move. The mirror is crash-safe: it builds
+  `mirror.new`, swaps, then deletes. A `mirror.old` left by a killed run is restored under the
+  lock by the hook or `done`, and read in place by lock-free readers such as `lane asks`. It
+  copies every symlink as a link and never follows one, and skips the copy when nothing in
+  `.lane/` changed. Following links once copied whatever they reached (`../..`, a home dir) into
+  every archive, so evidence must be real files. SessionEnd stamps `endedAt` before it mirrors,
+  so a slow or failed mirror never costs the stamp.
 - **`hooks/lane-guard.sh`** (PreToolUse `Edit|Write|MultiEdit`): denies a write to another lane's
   `.lane/`, any Edit-tool write under `<common-dir>/lanes/` (the lane's own included: the CLI
   owns that data), and a relative phrase added to a `.lane/` file or to the root STATUS.md of
   any checkout in a lanes repo (a lane's copy reaches main on merge). The phrase list is tight
   on purpose: `(an)?other (claude )?session`, `this session`, `the other (lane|session)`,
   `my (lane|session)`. HTML comments and code are skipped, the same lint `handoff-check` runs:
-  a quoted example claims nothing.
+  a quoted example claims nothing. An Edit is judged on the whole file before and after (a
+  fragment that starts at a closing fence would read it as an opener), with the fragments as the
+  fallback when the file can't be read or replayed.
 - **`skills/handoff/scripts/handoff-check`**: makes "handoff done" checkable, in a lane, in main
   and in a plain repo. A status file counts as fresh against HEAD when it is newer than HEAD's
   commit, or when HEAD's commit carries it (a plain repo commits STATUS.md in the handoff
@@ -225,9 +229,10 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
   to mislead.
 - **`lane done`** validates the id and asserts its deletes stay inside `<common-dir>/lanes/`. It
   needs commits past the lane's base, then either a merged PR whose head commit is the branch tip
-  (a squash merge) or the tip in the base. An adopted lane is exempt from the first part: its
-  base is a merge-base, which a fast-forward merge turns into its tip. The archive is built
+  (a squash merge) or the tip in the base. An adopted lane's base is a merge-base: with nothing
+  past it, its tip is already in the base, so it closes without `--abandon` as "abandoned (no
+  work)" unless a merged PR names that tip. The archive is built
   under a `.tmp` name and renamed into place only when complete. Sandboxed, `done` can't see
   other processes, so it refuses and asks for a bare `lane done <id>`. It detects the sandbox by
-  pid 1 of its namespace (the sandbox's `apply-seccomp` launcher, not init), since `CLAUDE_PID`
-  is set both inside and out; `LANE_SANDBOXED=0|1` overrides the detection.
+  `SANDBOX_RUNTIME=1` or by pid 1 of its namespace (the sandbox's `apply-seccomp` launcher, not
+  init), since `CLAUDE_PID` is set both inside and out.
