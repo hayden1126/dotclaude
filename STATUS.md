@@ -80,15 +80,10 @@ stored here).
     `feat/lanes-lead`, merged in #87**: the lanes config lives in the state dir, and what the
     sandbox can still write is checked before sandbox-off code acts on it (docs/lanes.md S3).
     Step 1 is its own PR after PR 3 and before the work repo migration; step 2 later.
-  - **PR 3 `feat/pass` (#88): built, reviewed (five rounds; the last found nothing medium or worse),
-    installed from its branch and live-tested on HAYPC 2026-10-12.** `/pass`, `pass compact`,
-    `--cancel`, the trigger, the delta handoff, the Star carry. Live in a scratch window: a plain
-    pass respawned in plan mode with the Star carried; an approved first item resumed in the
-    default mode; compact typed `/compact` and the resume prompt, then plan mode; `--cancel`
-    ended a pending waiter. As built and why: PLAN.md PR 3 "As built". The allow rule
-    `Bash(pass-respawn -C *)` is installed too: the classifier refused my `setup.sh` run as
-    "Auto-Mode Bypass", so Hayden ran it (settings.json diff: that one line, 2026-10-12).
-  - **PR 4 `feat/autopass`: designed, after PR 3** (Hayden split it out 2026-10-12). Three token
+  - PR 3 (`/pass`) merged as #88 (`gh pr view 88`), installed with its allow rule; its live runs
+    and the as-built notes are in PLAN.md PR 3 "As built".
+  - **PR 4 `feat/autopass`: designed, branch cut from main, not started** (Hayden split it out
+    2026-10-12). Three token
     tiers from `autoCompactWindow` (300k soft, 480k wrap-up, 520k hard), read from the
     transcript; the calibration over his transcripts is in PLAN.md PR 4.
   - After PR 3: the release skill in the work repos gets its post-release Next block and a
@@ -143,12 +138,12 @@ stored here).
   `claude -p` repro and the 2.1.285 boundary; the karaoke session's has the incident.
 
 ## Notes for next session
-- **Next: Hayden merges PR 3, #88** (`gh pr view 88 --json state,mergedAt`; range
-  `main..feat/pass`, base `0ad597d`). After the merge: `git fetch origin main:main` and
-  `git switch main` outside the sandbox (the checkout is on `feat/pass` and live for every
-  session). Then PR 4 on `feat/autopass` (PLAN.md PR 4; step 0
-  spikes whether UserPromptSubmit sees a defined slash command), then the release-skill PR in
-  the work repos (PLAN.md PR 3 "Delta handoff"). Verify before touching `/pass`: `tests/pass`,
+- **Next: PR 4 on `feat/autopass`, spikes first** (PLAN.md "PR 4: auto-pass"). Step 0: does
+  UserPromptSubmit see a defined slash command (`/autopass on`) before it expands, so the toggle
+  costs no model turn? If not, a mod's slash command (`plugin-authoring` skill). Then plan the
+  build and get Hayden's approval. This branch already carries the post-#88 STATUS lines (a
+  fact known only after a merge rides in the next PR). Then the release-skill PR in the work
+  repos (PLAN.md PR 3 "Delta handoff"). Verify before touching `/pass`: `tests/pass`,
   `tests/lanes`, `tests/setup`, `tests/delegation`, from the main checkout
   (`test_subagent_policy` refuses to load under `.claude/worktrees/`).
 - **Astra waits on Hayden's plan** (`feat/codex-astra` merged as #85): two 2026-10-10 probes passed the audit (astra admitted,
