@@ -80,7 +80,7 @@ stored here).
     `feat/lanes-lead`, merged in #87**: the lanes config lives in the state dir, and what the
     sandbox can still write is checked before sandbox-off code acts on it (docs/lanes.md S3).
     Step 1 is its own PR after PR 3 and before the work repo migration; step 2 later.
-  - **PR 3 `feat/pass`: built, reviewed (three rounds plus a focused fourth on the last fixes),
+  - **PR 3 `feat/pass`: built, reviewed (five rounds; the last found nothing medium or worse),
     installed from its branch and live-tested on HAYPC 2026-10-12.** `/pass`, `pass compact`,
     `--cancel`, the trigger, the delta handoff, the Star carry. Live in a scratch window: a plain
     pass respawned in plan mode with the Star carried; an approved first item resumed in the

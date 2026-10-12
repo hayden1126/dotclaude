@@ -378,9 +378,10 @@ session):
 ## PR 3: `/pass` (`feat/pass`)
 
 **As built (2026-10-12), where it differs from the lists below.** The script's docstring and
-`skills/pass/SKILL.md` are the as-built reference. Three review rounds (23 findings: 22 fixed
-here, and one excludedCommands question left to the private sandbox follow-up's step 1)
-and live runs shaped these:
+`skills/pass/SKILL.md` are the as-built reference. Five review rounds (34 findings: 32 fixed
+here; one, the process command line, checked live and documented as a limit; one
+excludedCommands question left to the private sandbox follow-up's step 1; the last round found
+nothing medium or worse) and live runs shaped these:
 - **The turn's end comes from Claude Code's per-session file** (`~/.claude/sessions/<pid>.json`),
   not tmux's per-window `@claude_state`. The window state reads `idle` on a hook-blocked Stop,
   during a `/compact`, and for any split pane. At the prompt the file reads `idle`, or `shell`
