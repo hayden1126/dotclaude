@@ -525,7 +525,8 @@ before that (at most 47k), wrap-up 7% before hard (at most 40k), soft at half th
   a lane and the lanes repo's main checkout (the lead) are on (`autopass` in the repo's lanes
   config), and elsewhere `autopass = true` in
   `~/.config/dotclaude/pass.toml` turns it on (off by default). `tiers = [soft, wrap, hard]` in
-  that file overrides the tiers for live tests.
+  that file overrides the tiers for live tests; start the test session with its own
+  `XDG_CONFIG_HOME` so the override reaches only that session.
 - Nothing fires for a subagent, a `claude -p` or `--bg` session (no pane to respawn), or while
   a pass is already pending.
 

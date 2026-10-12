@@ -89,7 +89,8 @@ class Base(unittest.TestCase):
         self.state = os.path.join(self.tmp, "state")
         os.makedirs(os.path.join(self.home, ".claude"))
         self.transcript = os.path.join(self.tmp, "t.jsonl")
-        self.env = {k: v for k, v in os.environ.items() if not k.startswith(("CLAUDE", "TMUX"))}
+        self.env = {k: v for k, v in os.environ.items()
+                    if not k.startswith(("CLAUDE", "TMUX")) and k != "XDG_CONFIG_HOME"}
         self.env.update(PATH=stubs + os.pathsep + self.env["PATH"], HOME=self.home,
                         XDG_STATE_HOME=self.state, STUB_SERVER=SERVER,
                         CLAUDE_CODE_SESSION_ATTENDED="1")
@@ -98,6 +99,7 @@ class Base(unittest.TestCase):
         patch.start()
         self.addCleanup(patch.stop)
         os.environ.pop("CLAUDE_CODE_SESSION_ATTENDED", None)
+        os.environ.pop("XDG_CONFIG_HOME", None)  # the patch restores it
         self.cwd = self.tmp  # not a git repo: no lane
         self.stop_record([], [])  # no background work: a tool call gets the plain texts
 
@@ -261,6 +263,17 @@ class Off(Base):
     def test_off_with_background_tasks_says_pass_compact(self):
         self.assertEqual(self.stop(521_000, background_tasks=[{"type": "monitor"}]),
                          {"systemMessage": text("off_compact", "521k")})
+
+    def test_pass_toml_follows_xdg_config_home(self):
+        # A live test gives one session its own pass.toml without moving every other session's.
+        conf = os.path.join(self.tmp, "conf")
+        os.makedirs(os.path.join(conf, "dotclaude"))
+        with open(os.path.join(conf, "dotclaude", "pass.toml"), "w") as f:
+            f.write("autopass = true\ntiers = [100000, 150000, 200000]\n")
+        self.assertEqual(aps.pass_toml(), {})
+        os.environ["XDG_CONFIG_HOME"] = conf
+        self.assertEqual(aps.pass_toml_path(), os.path.join(conf, "dotclaude", "pass.toml"))
+        self.assertIs(aps.pass_toml()["autopass"], True)
 
     def test_pass_toml_false_is_off(self):
         self.pass_toml("autopass = false\n")

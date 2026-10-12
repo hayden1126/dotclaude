@@ -63,7 +63,10 @@ def state_dir() -> str:
 
 
 def pass_toml_path() -> str:
-    return os.path.expanduser("~/.config/dotclaude/pass.toml")
+    """$XDG_CONFIG_HOME/dotclaude/pass.toml (~/.config by default), so a live test can give one
+    session its own lowered tiers without moving every other session's."""
+    base = os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")
+    return os.path.join(base, "dotclaude", "pass.toml")
 
 
 def is_int(v) -> bool:
