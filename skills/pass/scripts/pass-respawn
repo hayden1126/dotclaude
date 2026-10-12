@@ -93,7 +93,8 @@ the sandbox can write (docs/lanes.md S3). Every input, and why each is safe:
     tier's is ignored, as a project file could forge it. The session's own launch flags count
     too, read from its claude's command line (/proc/<pid>/cmdline, the kernel's): every
     --add-dir value and each --settings file's (or inline JSON's) allowWrite and
-    additionalDirectories. A --settings file the sandbox can write refuses the pass: it may
+    additionalDirectories. A --settings file the sandbox can write refuses the pass, before
+    git or tmux runs (against the early roots, and again once the checkout is known): it may
     have been edited since launch, so what it listed then can't be read back. A dir added at
     runtime with /add-dir lives only in Claude Code's memory, so it can't be seen and isn't
     counted: an accepted limit.
@@ -648,6 +649,15 @@ def refuse_writable(name: str, found: str, roots: list[str], denies: list[str]) 
                          f"{root}; refusing to run it sandbox-off", f"{name} sandbox-writable")
 
 
+def refuse_writable_settings(argv: list[str] | None, base: str, roots: list[str]) -> None:
+    """Refuse when one of the session's --settings files sits in a sandbox-writable dir: it may
+    have been edited since launch, so the dirs it listed then (and the sandbox still honors)
+    can't be read back from it now. Run before git or tmux, which such a dir could plant."""
+    denies = deny_roots()
+    for flagged in flag_settings(argv, base)[0]:
+        refuse_writable("a --settings file", flagged, roots, denies)
+
+
 def safe_path(path: str, roots: list[str], denies: list[str]) -> str:
     """PATH less every entry that is relative or empty (it follows the cwd) or sits, as given or
     resolved, in a sandbox-writable dir."""
@@ -753,6 +763,7 @@ def prepare(args: argparse.Namespace, procs, cmdline=proc_cmdline) -> Plan:
     launch = session.get("cwd") if session and isinstance(session.get("cwd"), str) else None
     claude_argv = cmdline(claude_pid) if claude_pid else None
     early = writable_roots(None, args.cwd, launch, session_argv=claude_argv)
+    refuse_writable_settings(claude_argv, flag_base(None, args.cwd, launch), early)
     resolve_bin("git", early, pin(early))  # lanelib.resolve runs it next
     repo = lanelib.resolve(args.cwd)
     if repo is None:
@@ -775,10 +786,10 @@ def prepare(args: argparse.Namespace, procs, cmdline=proc_cmdline) -> Plan:
         raise Refuse(2, f"pass-respawn: not in a tmux pane. Do it by hand: {by_hand}, then: "
                      f"{prompt}", "no tmux pane")
     roots = writable_roots(repo, args.cwd, launch, session_argv=claude_argv)
-    # A --settings file the sandbox can write may have been edited since launch, so the dirs it
-    # listed then (and the sandbox still honors) can't be read back from it now.
-    for flagged in flag_settings(claude_argv, flag_base(repo, args.cwd, launch))[0]:
-        refuse_writable("a --settings file", flagged, roots, deny_roots())
+    # Again against the full roots: the main checkout and the toplevel's relative allowWrite
+    # entries are known only now, and without a launch dir a relative --settings value
+    # resolves against the toplevel, not the call's dir.
+    refuse_writable_settings(claude_argv, flag_base(repo, args.cwd, launch), roots)
     path = pin(roots)
     resolve_bin("git", roots, path)
     tmux = resolve_bin("tmux", roots, path)

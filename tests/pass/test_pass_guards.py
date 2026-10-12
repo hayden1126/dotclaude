@@ -11,6 +11,7 @@ import fcntl
 import io
 import json
 import os
+import shutil
 import signal
 import subprocess
 import sys
@@ -129,6 +130,33 @@ class WritableRoots(Plain):
                                  cmdline=lambda pid: ["claude", "--settings", flagged])
         self.assertEqual(code, 1, out.getvalue())
         self.assertIn("a --settings file resolves to", out.getvalue())
+
+    def logging_git(self):
+        """A fake git first on PATH that logs each call, then runs the real one; its log path."""
+        real, log = shutil.which("git"), os.path.join(self.tmp, "git.log")
+        path = os.path.join(self.fake_bin, "git")
+        with open(path, "w") as f:
+            f.write(f'#!/bin/sh\nprintf "%s\\n" "$*" >> {log}\nexec {real} "$@"\n')
+        os.chmod(path, 0o755)
+        return log
+
+    def test_a_writable_settings_file_refuses_before_git_or_tmux_runs(self):
+        # The file may hide a writable dir holding a planted git, so the refusal must come
+        # before any binary resolved from PATH runs: before lanelib.resolve's git.
+        writable = os.path.join(self.tmp, "w")
+        flagged = os.path.join(writable, "flags.json")
+        self.settings(flagged, sandbox={"filesystem": {"allowWrite": []}})
+        self.mod.writable_roots = lambda repo, cwd, launch=None, session_argv=None: (
+            [repo.toplevel, repo.main, writable] if repo else [writable])
+        git_log = self.logging_git()
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            code = self.mod.main(["--print", "-C", self.main], procs=t.table,
+                                 cmdline=lambda pid: ["claude", "--settings", flagged])
+        self.assertEqual(code, 1, out.getvalue())
+        self.assertIn("a --settings file resolves to", out.getvalue())
+        self.assertFalse(os.path.exists(git_log), open(git_log).read()
+                         if os.path.exists(git_log) else "")
+        self.assertEqual(self.calls("tmux"), [])
 
     def test_deny_write_carves_out_only_from_the_user_and_managed_tiers(self):
         managed = os.path.join(self.tmp, "managed-settings.json")
