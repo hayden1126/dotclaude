@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/python3
 """pass-respawn: restart this Claude session fresh in its tmux pane once the turn ends, but only on
 a passing handoff.
 
@@ -53,16 +53,26 @@ the sandbox can write (docs/lanes.md S3). Every input, and why each is safe:
     The prompts are fixed text with that path and nothing read from a file.
   - The checkout (cwd, git state) comes from the call, which the permission gate shows, and is
     read through handoff-check and lanelib, which run git with fixed argv and full refs.
-  - git, tmux and claude resolve through PATH, so each must resolve, both as found and through
-    its links, outside the sandbox-writable dirs; otherwise it refuses. Those dirs are the
-    checkout, the main checkout, /tmp, $TMPDIR and every settings file's
-    sandbox.filesystem.allowWrite: the user's (~/.claude/settings.json), managed
-    (/etc/claude-code/managed-settings.json and managed-settings.d/*.json) and the project's
-    (.claude/settings.json and .claude/settings.local.json at the top level). git is checked
-    once before the checkout is known (with the call's dir standing in) and again after.
-    tmux and claude run by absolute path, so the binary checked is the binary run; git runs
-    by name with the same PATH. tmux's PATH lacks ~/.local/bin, so the respawned claude is
-    named by absolute path too (spike S2).
+  - The interpreter is /usr/bin/python3, named in the shebang, so no PATH lookup picks it.
+  - This script (as invoked, which may be setup.sh's link, and its target), the handoff-check
+    it runs and the lanelib it imports must sit outside the sandbox-writable dirs, as found
+    and through their links; otherwise it refuses. Those dirs are the checkout, the main
+    checkout, the session's launch dir (its session file's cwd), /tmp, $TMPDIR, and every
+    settings file's sandbox.filesystem.allowWrite and permissions.additionalDirectories: the
+    user's (~/.claude/settings.json), managed (/etc/claude-code/managed-settings.json and
+    managed-settings.d/*.json) and the project's (.claude/settings.json and
+    .claude/settings.local.json at the top level and at the launch dir). A
+    sandbox.filesystem.denyWrite entry from the user or managed tier carves its path back
+    out (the user tier denies ~/dotclaude/skills, where this script lives); the project
+    tier's is ignored, as a project file could forge it.
+  - PATH is the call's, so it keeps only the absolute entries outside those dirs (as given and
+    resolved). git, tmux and claude resolve through that PATH and must also resolve, as found
+    and through their links, outside them; otherwise it refuses. The sanitized PATH replaces
+    the process's own (lanelib's git inherits it) and goes explicitly to every child:
+    handoff-check, tmux, at the call and in the waiter. It is computed once before the
+    checkout is known (with the call's dir standing in) and again after. tmux and claude run
+    by absolute path, so the binary checked is the binary run. tmux's PATH lacks
+    ~/.local/bin, so the respawned claude is named by absolute path too (spike S2).
   - The environment ($TMUX_PANE, $CLAUDE_CODE_SESSION_ID, $HOME, $XDG_STATE_HOME) is the Bash
     call's; TMUX_PANE must be `%<n>`, and the session id must match the session file.
   - The session file (~/.claude/sessions/<pid>.json) is Claude Code's, and the sandbox can't
@@ -90,6 +100,7 @@ import sys
 import tempfile
 import time
 
+INVOKED = os.path.abspath(sys.argv[0] if __name__ == "__main__" else __file__)
 HERE = os.path.dirname(os.path.realpath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "..", "lanes", "scripts"))
 import lanelib  # noqa: E402
@@ -142,6 +153,7 @@ class Plan:
     transcript: str | None
     transcript_size: int | None  # None: unreadable at the call
     timeout: float
+    path: str = ""         # the sanitized PATH every child gets
 
     @property
     def status_file(self) -> str:
@@ -407,43 +419,66 @@ def input_box(screen: str) -> str | None:
 
 # ---- inputs ----
 
-def allow_write(path: str, base: str) -> list[str]:
-    """A settings file's sandbox.filesystem.allowWrite entries as absolute paths; a relative one
-    resolves against base, and against the file's own dir too (either may be meant)."""
+SANDBOX_KEYS = ("sandbox", "filesystem")
+
+
+def listed_paths(path: str, keys: tuple[str, ...], base: str | None) -> list[str]:
+    """A settings file's list at keys as absolute paths (~ expanded). A relative one resolves
+    against base and against the file's own dir (either may be meant), or is skipped when base
+    is None."""
     try:
         with open(path) as f:
-            extra = json.load(f)["sandbox"]["filesystem"]["allowWrite"]
+            tree = json.load(f)
+        for key in keys:
+            tree = tree[key]
     except (OSError, ValueError, KeyError, TypeError):
         return []
     out = []
-    for p in extra if isinstance(extra, list) else []:
-        if not isinstance(p, str):
+    for p in tree if isinstance(tree, list) else []:
+        if not isinstance(p, str) or not p:
             continue
         p = os.path.expanduser(p)
         if p.startswith("/"):
             out.append(os.path.normpath("/" + p.lstrip("/")))
-        else:
+        elif base is not None:
             out += [os.path.normpath(os.path.join(base, p)),
                     os.path.normpath(os.path.join(os.path.dirname(path), p))]
     return out
 
 
-def writable_roots(repo: lanelib.Repo | None, cwd: str) -> list[str]:
+def tier_files() -> list[str]:
+    """The user's and the managed settings files: out of the sandbox's reach."""
+    return [os.path.join(config_dir(), "settings.json"), MANAGED_SETTINGS,
+            *sorted(glob.glob(os.path.join(MANAGED_DIR, "*.json")))]
+
+
+def writable_roots(repo: lanelib.Repo | None, cwd: str, launch: str | None = None) -> list[str]:
     """Dirs sandboxed Bash can write: the checkout and the main checkout (before git has found
-    them, the call's dir), the temp dirs and every settings file's allowWrite."""
+    them, the call's dir), the session's launch dir, the temp dirs, and every settings file's
+    allowWrite and additionalDirectories (the project's at the top level and the launch dir)."""
     top = repo.toplevel if repo else os.path.realpath(cwd)
     roots = [repo.toplevel, repo.main] if repo else [top]
+    dirs = [top]
+    if launch and os.path.isabs(launch):
+        roots.append(os.path.normpath(launch))
+        dirs.append(os.path.normpath(launch))
     roots += ["/tmp", tempfile.gettempdir()]
     if os.environ.get("TMPDIR"):
         roots.append(os.environ["TMPDIR"])
-    files = [os.path.join(config_dir(), "settings.json"), MANAGED_SETTINGS,
-             *sorted(glob.glob(os.path.join(MANAGED_DIR, "*.json")))]
-    if repo:
-        files += [os.path.join(top, ".claude", "settings.json"),
-                  os.path.join(top, ".claude", "settings.local.json")]
+    files = tier_files()
+    for d in dict.fromkeys(dirs):
+        files += [os.path.join(d, ".claude", "settings.json"),
+                  os.path.join(d, ".claude", "settings.local.json")]
     for path in files:
-        roots += allow_write(path, top)
+        roots += listed_paths(path, (*SANDBOX_KEYS, "allowWrite"), top)
+        roots += listed_paths(path, ("permissions", "additionalDirectories"), top)
     return roots
+
+
+def deny_roots() -> list[str]:
+    """sandbox.filesystem.denyWrite from the user and managed tiers, absolute entries only: the
+    paths the sandbox can't write inside a writable root. A project file's is never read."""
+    return [p for f in tier_files() for p in listed_paths(f, (*SANDBOX_KEYS, "denyWrite"), None)]
 
 
 def within(path: str, root: str) -> bool:
@@ -452,20 +487,64 @@ def within(path: str, root: str) -> bool:
     return path == root or path.startswith(root.rstrip(os.sep) + os.sep)
 
 
-def resolve_bin(name: str, roots: list[str]) -> str:
-    """name's absolute path on PATH, refused when it, or what it links to, sits in a dir the
-    sandbox can write (this runs sandbox-off, so a planted binary would too). The link itself
-    counts: it runs by that path, so the sandbox could repoint a link it can write."""
-    found = shutil.which(name)
-    if found is None:
-        raise Refuse(1, f"pass-respawn: {name} is not on PATH", f"no {name}")
-    found = os.path.abspath(found)
-    link = os.path.join(os.path.realpath(os.path.dirname(found)), os.path.basename(found))
-    for path in (link, os.path.realpath(found)):
-        if root := next((r for r in roots if within(path, r)), None):
+def writable_root(path: str, roots: list[str], denies: list[str]) -> str | None:
+    """The writable root holding path, or None (also when a denyWrite entry covers it)."""
+    if any(within(path, d) for d in denies):
+        return None
+    return next((r for r in roots if within(path, r)), None)
+
+
+def link_chain(path: str) -> list[str]:
+    """Each hop from path to the file it finally names: every link on the way (its own dir
+    resolved), then the target. A middle link counts as much as the first: the sandbox could
+    repoint one it can write."""
+    hops, p = [], os.path.abspath(path)
+    for _ in range(40):  # the kernel's own limit on a chain
+        hop = os.path.join(os.path.realpath(os.path.dirname(p)), os.path.basename(p))
+        hops.append(hop)
+        if not os.path.islink(hop):
+            break
+        p = os.path.join(os.path.dirname(hop), os.readlink(hop))
+    return hops + [os.path.realpath(path)]
+
+
+def refuse_writable(name: str, found: str, roots: list[str], denies: list[str]) -> None:
+    """Refuse when found, any link on its way, or the file it names sits in a dir the sandbox
+    can write (this runs sandbox-off, so a planted file would too)."""
+    for path in link_chain(found):
+        if root := writable_root(path, roots, denies):
             raise Refuse(1, f"pass-respawn: {name} resolves to {path}, inside the sandbox-writable "
                          f"{root}; refusing to run it sandbox-off", f"{name} sandbox-writable")
-    return found
+
+
+def safe_path(path: str, roots: list[str], denies: list[str]) -> str:
+    """PATH less every entry that is relative or empty (it follows the cwd) or sits, as given or
+    resolved, in a sandbox-writable dir."""
+    keep = [e for e in path.split(os.pathsep) if os.path.isabs(e)
+            and writable_root(os.path.normpath(e), roots, denies) is None
+            and writable_root(os.path.realpath(e), roots, denies) is None]
+    return os.pathsep.join(dict.fromkeys(keep))
+
+
+def pin(roots: list[str]) -> str:
+    """Refuse when this script, handoff-check or lanelib is sandbox-writable; then sanitize PATH
+    (safe_path), make it the process's own (lanelib's git inherits it) and return it."""
+    denies = deny_roots()
+    for name, path in (("pass-respawn", INVOKED), ("handoff-check", HANDOFF_CHECK),
+                       ("lanelib", lanelib.__file__)):
+        refuse_writable(name, path, roots, denies)
+    os.environ["PATH"] = safe_path(os.environ.get("PATH", ""), roots, denies)
+    return os.environ["PATH"]
+
+
+def resolve_bin(name: str, roots: list[str], path: str) -> str:
+    """name's absolute path on the sanitized PATH, refused when it, or what it links to, sits in
+    a dir the sandbox can write."""
+    found = shutil.which(name, path=path)
+    if found is None:
+        raise Refuse(1, f"pass-respawn: {name} is not on PATH", f"no {name}")
+    refuse_writable(name, found, roots, deny_roots())
+    return os.path.abspath(found)
 
 
 def resume_prompt(status_rel: str, in_lane: bool, approved: bool, compact: bool) -> str:
@@ -481,11 +560,11 @@ def compact_focus(status_rel: str) -> str:
             "it rather than trusting this summary.")
 
 
-def gate(toplevel: str) -> tuple[int, str]:
-    """handoff-check on the checkout: (exit code, its output)."""
+def gate(toplevel: str, path: str) -> tuple[int, str]:
+    """handoff-check on the checkout, with the sanitized PATH: (exit code, its output)."""
     try:
         p = subprocess.run([sys.executable, HANDOFF_CHECK, "-C", toplevel], capture_output=True,
-                           text=True, timeout=120)
+                           text=True, timeout=120, env=dict(os.environ, PATH=path))
     except (OSError, subprocess.SubprocessError) as e:
         return 1, f"handoff-check didn't run: {e}"
     return p.returncode, p.stdout + p.stderr
@@ -532,15 +611,17 @@ def prepare(args: argparse.Namespace, procs) -> Plan:
     """The checks at call time, then the plan; raises Refuse."""
     called = time.time()
     mode = "compact" if args.compact else "plain"
-    resolve_bin("git", writable_roots(None, args.cwd))  # lanelib.resolve runs it next
+    sid = os.environ.get("CLAUDE_CODE_SESSION_ID") or ""
+    claude_pid = session_claude(procs(), os.getpid())
+    session = load_session(claude_pid) if claude_pid else None
+    launch = session.get("cwd") if session and isinstance(session.get("cwd"), str) else None
+    early = writable_roots(None, args.cwd, launch)
+    resolve_bin("git", early, pin(early))  # lanelib.resolve runs it next
     repo = lanelib.resolve(args.cwd)
     if repo is None:
         raise Refuse(1, "pass-respawn: not inside a git work tree", "not a work tree")
     _, lane = repo.identity()
     status_rel = os.path.join(lanelib.RECORD_DIR, "STATUS.md") if lane else "STATUS.md"
-    sid = os.environ.get("CLAUDE_CODE_SESSION_ID") or ""
-    claude_pid = session_claude(procs(), os.getpid())
-    session = load_session(claude_pid) if claude_pid else None
     transcript = transcript_path(session, sid, stop_record(sid)) if session and sid else None
     try:
         size = os.path.getsize(transcript) if transcript else None
@@ -556,11 +637,12 @@ def prepare(args: argparse.Namespace, procs) -> Plan:
         by_hand = f"/compact {compact_focus(status_rel)}" if args.compact else "/clear"
         raise Refuse(2, f"pass-respawn: not in a tmux pane. Do it by hand: {by_hand}, then: "
                      f"{prompt}", "no tmux pane")
-    roots = writable_roots(repo, args.cwd)
-    resolve_bin("git", roots)
-    tmux = resolve_bin("tmux", roots)
-    claude = None if args.compact else resolve_bin("claude", roots)
-    code, out = gate(repo.toplevel)
+    roots = writable_roots(repo, args.cwd, launch)
+    path = pin(roots)
+    resolve_bin("git", roots, path)
+    tmux = resolve_bin("tmux", roots, path)
+    claude = None if args.compact else resolve_bin("claude", roots, path)
+    code, out = gate(repo.toplevel, path)
     if code != 0:
         raise Refuse(1, out.rstrip() + "\npass-respawn: refused: handoff-check failed; fix the "
                      "gaps and run it again", "handoff-check failed")
@@ -574,14 +656,16 @@ def prepare(args: argparse.Namespace, procs) -> Plan:
         raise Refuse(1, f"pass-respawn: {why} (~/.claude/sessions/{claude_pid}.json, procStart "
                      "checked); it can't tell when this session's turn ends", why)
     return Plan(mode, pane, repo.toplevel, lane is not None, status_rel, tmux, claude, claude_pid,
-                proc_start(claude_pid), sid, session, called, transcript, size, args.timeout)
+                proc_start(claude_pid), sid, session, called, transcript, size, args.timeout,
+                path)
 
 
 # ---- the waiter ----
 
 def tmux(plan: Plan, *args: str) -> subprocess.CompletedProcess | None:
     try:
-        return subprocess.run([plan.tmux, *args], capture_output=True, text=True, timeout=10)
+        return subprocess.run([plan.tmux, *args], capture_output=True, text=True, timeout=10,
+                              env=dict(os.environ, PATH=plan.path))
     except (OSError, subprocess.SubprocessError):
         return None
 
@@ -679,7 +763,7 @@ def wait_and_act(plan: Plan, procs) -> str:
         return drop(plan, "gone", detail)
     if state != "idle" or session["statusUpdatedAt"] != seen:
         return drop(plan, "resumed", f"status {detail} in the settle")
-    code, out = gate(plan.toplevel)
+    code, out = gate(plan.toplevel, plan.path)
     if code != 0:
         gaps = [ln.strip()[len("FAIL"):].strip() for ln in out.splitlines()
                 if ln.strip().startswith("FAIL")]

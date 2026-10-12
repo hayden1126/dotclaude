@@ -135,7 +135,7 @@ class PinnedPath(Plain):
         code, out = self.run_pass("--foreground")
         self.assertEqual(code, 0, out)
         (respawn,) = self.calls("tmux", "respawn-pane")
-        self.assertEqual(respawn[9], self.claude)
+        self.assertEqual(respawn[8], self.claude)
         self.assertFalse(os.path.exists(marker), "a planted binary ran")
         with open(self.tmux_log + ".path") as f:
             paths = f.read().splitlines()
