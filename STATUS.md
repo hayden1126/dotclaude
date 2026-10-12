@@ -79,10 +79,22 @@ stored here).
     rule, `handoff-check` failed an un-updated record, and `lane ls` flagged `handoff?`. Guard
     replay over the work repo's 273 real STATUS edits: 13 denies, all genuine relative claims, no
     false positives. PR #86 (`gh pr view 86`); commits `main..feat/lanes`.
-  - **PR 2 `feat/lanes-lead`** (lane open, lane lock, the lead's triage and merge order) and
-    **PR 3 `feat/pass`** (`/pass`, `pass compact`, opt-in auto-pass on context): not started;
-    PLAN.md has both. PR 2 also carries the delegation fix (PLAN.md "Delegation guardrails reach
-    the parent lane": a lane session's writer is watched against the main checkout, not the lane).
+  - PR 1 merged as #86.
+  - **PR 2 `feat/lanes-lead`: built, reviewed (four rounds, the last on 7ba04d3), installed
+    from its branch and smoke-tested on HAYPC 2026-10-11.** `lane open` (plan mode, window
+    derived from the live session, never stored), `lane lock` (sandboxed: `lane *` left
+    excludedCommands for six named subcommands), the lead's playbook in the skill, and the
+    delegation fix (a lane-rooted session's writer is held out of the lane; the audit names it).
+    Live: a `claude -p` lead triaged three requests, proposed, and on approval opened two lanes
+    whose sessions started in plan mode with their identity line and showed in `lane ls` WINDOW;
+    a fresh session's `lane lock` ran under `apply-seccomp`; a second holder waited and named the
+    first; a lane session's writer was denied `echo > <lane>/x` ("in the parent session's
+    checkout"). Found live: a new lane path stops at Claude Code's trust dialog, and trusting the
+    lanes root covers every lane under it (`lane init` prints the line). As-built deviations:
+    PLAN.md PR 2 "As built". Accepted limits: docs/lanes.md (`setup` runs sandbox-off via
+    `new`/`adopt`; lock signal edges) and docs/delegation.md (a lane under a temp root isn't held).
+  - **PR 3 `feat/pass`** (`/pass`, `pass compact`, opt-in auto-pass on context): not started;
+    PLAN.md has it, plus PR 2's deferred context-management bullet.
   - After PR 1 and 2 merge: migrate the work repo (its own PR there). The concrete values and the
     incident ids are in `~/scratch/lanes/PRIVATE.md` (private).
 - **`deck-production`: deferred (Hayden, 2026-10-05: workflow improvements first).** The geometry
@@ -133,12 +145,12 @@ stored here).
   `claude -p` repro and the 2.1.285 boundary; the karaoke session's has the incident.
 
 ## Notes for next session
-- **Next: Hayden merges PR #86** (`gh pr view 86 --json state`), then `git fetch origin
-  main:main` and `git switch main` outside the sandbox (the checkout is on `feat/lanes` and live
-  for every session). Then PR 2 on `feat/lanes-lead` from the new `main`: `lane open`, `lane lock`,
-  the lead section, and the delegation fix first (PLAN.md PR 2). Verify lanes before touching it:
-  `tests/lanes`, `tests/setup`, and `tests/delegation` from the main checkout
-  (`test_subagent_policy` refuses to load sandboxed under `.claude/worktrees/`).
+- **Next: Hayden merges PR 2** (`gh pr list --head feat/lanes-lead`), then `git fetch origin
+  main:main` and `git switch main` outside the sandbox (the checkout is on `feat/lanes-lead` and
+  live for every session). Then PR 3 on `feat/pass` from the new `main` (PLAN.md PR 3, spikes
+  first). Verify lanes before touching it: `tests/lanes`, `tests/setup`, and `tests/delegation`
+  from the main checkout (`test_subagent_policy` refuses to load sandboxed under
+  `.claude/worktrees/`).
 - **Astra waits on Hayden's plan** (`feat/codex-astra` merged as #85): two 2026-10-10 probes passed the audit (astra admitted,
   nothing disallowed), but even after a fresh `codex login` the turn gets a 400, "gpt-6-astra
   is not supported when using Codex with a ChatGPT account". Astra ran fine on 2026-09-29 and
