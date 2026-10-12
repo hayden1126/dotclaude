@@ -691,6 +691,71 @@ class Pending(Plain):
         self.assertIn("mode=cancel outcome=too-late", self.log())
         self.assertNotIn("outcome=cancelled", self.log())
 
+    def end_lock(self, fd, marks):
+        """The waiter's last write and its exit: the lock's line gains marks, then it frees."""
+        os.pwrite(fd, f"{os.getpid()} {self.mod.proc_start(os.getpid())} {marks}\n".encode(), 0)
+        os.close(fd)
+
+    def test_cancel_that_misses_an_act_that_already_ended_says_too_late(self):
+        # The waiter acts, finishes and exits between --cancel's read of the lock and its pid
+        # check: the pid no longer matches, but the freed lock says it acted.
+        fd = self.hold_lock(acting=False)
+
+        def gone(pid):
+            self.end_lock(fd, "acting done:respawn")
+            return False
+        self.mod.is_pass_respawn = gone
+        code, out = self.run_pass("--cancel")
+        self.assertEqual(code, 1, out)
+        self.assertIn("too late", out)
+        self.assertNotIn("doesn't match", out)
+        self.assertIn("mode=cancel outcome=too-late", self.log())
+        self.assertNotIn("outcome=refused", self.log())
+
+    def test_cancel_whose_waiter_is_gone_at_the_signal_says_too_late(self):
+        fd = self.hold_lock(acting=False)
+
+        def kill(pid, sig):
+            self.end_lock(fd, "acting done:compact")
+            raise ProcessLookupError(3, "No such process")
+        with mock.patch.object(self.mod.os, "kill", side_effect=kill):
+            code, out = self.run_pass("--cancel")
+        self.assertEqual(code, 1, out)
+        self.assertIn("too late to cancel (compact)", out)
+        self.assertIn("mode=cancel outcome=too-late", self.log())
+        self.assertNotIn("outcome=cancelled", self.log())
+
+    def test_cancel_after_the_waiters_own_drop_says_too_late(self):
+        # The waiter dropped (stale) and, its handler restored, the SIGTERM only ended it:
+        # --cancel reports that drop, and logs no second, false `cancelled`.
+        self.catch_term()
+        fd = self.hold_lock(acting=False)
+        with mock.patch.object(self.mod.os, "kill",
+                               side_effect=lambda pid, sig: self.end_lock(fd, "done:stale")):
+            code, out = self.run_pass("--cancel")
+        self.assertEqual(code, 1, out)
+        self.assertIn("too late to cancel (stale)", out)
+        self.assertNotIn("cancelled the pending pass", out)
+        self.assertIn("mode=cancel outcome=too-late", self.log())
+        self.assertNotIn("outcome=cancelled", self.log())
+
+    def test_the_waiter_records_its_outcome_in_the_lock(self):
+        def marks():
+            with open(self.lock()) as f:
+                return f.read().split()[2:]
+        code, out = self.run_pass("--foreground")
+        self.assertEqual(code, 0, out)
+        self.assertEqual(marks(), ["acting", "done:respawn"])
+        self.reset()
+        self.stop_waits = ["shell"]
+        code, out = self.run_pass("--foreground")
+        self.assertEqual(code, 1, out)
+        self.assertEqual(marks(), ["done:busy"])
+        self.reset()
+        self.stop_waits = []
+        self.term_during("capture-pane")
+        self.assertEqual(marks(), ["done:cancelled"])
+
     def test_a_foreground_run_holds_then_frees_the_lock(self):
         code, out = self.run_pass("--foreground")
         self.assertEqual(code, 0, out)

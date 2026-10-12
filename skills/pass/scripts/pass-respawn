@@ -20,8 +20,12 @@ is a live pass-respawn with the start time written beside it; the waiter logs `c
 exits. With nothing pending it says so and exits 0. Once the waiter passes its final re-check
 it is acting: it appends ` acting` to the lock's line and ignores SIGTERM, so the act (the
 respawn and its carry marker, or the keys) runs to its end and logs its own outcome, noting the
-late cancel. --cancel that finds ` acting`, before signalling or once the lock frees, says
-`too-late` and exits 1.
+late cancel. A drop settles the outcome too: SIGTERM after it is only noted. Last, before it
+lets the lock go, the waiter appends ` done:<outcome>`. --cancel that finds ` acting` or another
+outcome than `cancelled`, before signalling or once the lock frees, says `too-late` (naming the
+outcome when there is one) and exits 1, logging no `cancelled`. A pid that no longer matches,
+or one gone at the signal (ProcessLookupError), may be a waiter that just ended: --cancel reads
+a freed lock's marks the same way, and with none says nothing was pending.
 
 The waiter polls that session file every 0.2 s until its status is `idle` (or `shell`, at the
 prompt with a background shell running) with a statusUpdatedAt
@@ -207,6 +211,7 @@ class Plan:
     lock_fd: int | None = None  # the pending lock the waiter holds (None: not taken)
     acting: bool = False   # past the final re-check: SIGTERM no longer cancels
     late_cancel: bool = False  # a SIGTERM came while acting, and was ignored
+    settled: bool = False  # the outcome is decided (a drop, or the end): SIGTERM is only noted
 
     @property
     def status_file(self) -> str:
@@ -863,6 +868,7 @@ def pane_problem(plan: Plan) -> str | None:
 
 
 def drop(plan: Plan, outcome: str, detail: str = "", shown: str | None = None) -> str:
+    plan.settled = True
     tmux(plan, "display-message", "-t", plan.pane, shown or DROPS[outcome])
     log(plan.mode, outcome, plan.pane, detail)
     return outcome
@@ -905,7 +911,7 @@ def begin_acting(plan: Plan) -> None:
     plan.acting = True
     if plan.lock_fd is not None:
         with contextlib.suppress(OSError):
-            claim(plan.lock_fd, acting=True)
+            claim(plan.lock_fd, "acting")
 
 
 def late(plan: Plan, detail: str) -> str:
@@ -989,26 +995,39 @@ def wait_and_act(plan: Plan, procs) -> str:
     return "compact"
 
 
+def finish(plan: Plan, outcome: str) -> None:
+    """The waiter's last word, before it lets the lock go: ` done:<outcome>` on the lock's line,
+    so a --cancel whose SIGTERM came after a drop (or the act) reports that, not a cancel."""
+    plan.settled = True
+    if plan.lock_fd is not None:
+        with contextlib.suppress(OSError):
+            claim(plan.lock_fd, *(["acting"] if plan.acting else []), f"done:{outcome}")
+
+
 def run_waiter(plan: Plan, procs) -> str:
     """wait_and_act, with SIGTERM (`--cancel`) logged as `cancelled` and any exception as
-    `error` (in the detached waiter nothing else can see it). Once acting has begun, SIGTERM is
-    only noted (begin_acting): the act runs to its end and logs its own outcome."""
+    `error` (in the detached waiter nothing else can see it). Once acting has begun, or the
+    outcome is settled (a drop), SIGTERM is only noted: the act runs to its end and logs its
+    own outcome. The outcome goes into the lock's line last (finish)."""
     def on_term(signum, frame):
-        if plan.acting:
+        if plan.acting or plan.settled:
             plan.late_cancel = True
             return
         raise Cancelled()
     old = signal.signal(signal.SIGTERM, on_term)
+    outcome = "error"
     try:
-        return wait_and_act(plan, procs)
+        outcome = wait_and_act(plan, procs)
     except Cancelled:
-        return drop(plan, "cancelled", "on SIGTERM")
+        outcome = drop(plan, "cancelled", "on SIGTERM")
     except BaseException as e:  # noqa: BLE001  logged and shown, as nothing else can be
         tmux(plan, "display-message", "-t", plan.pane, DROPS["error"])
         log(plan.mode, "error", plan.pane, f"{type(e).__name__}: {e}")
-        return "error"
+        outcome = "error"
     finally:
+        finish(plan, outcome)
         signal.signal(signal.SIGTERM, old)
+    return outcome
 
 
 # ---- one pending pass per session ----
@@ -1032,21 +1051,67 @@ def take_pending(plan: Plan) -> int:
     return fd
 
 
-def claim(fd: int, acting: bool = False) -> None:
-    """Write the waiter's pid and start time into the lock it holds, for --cancel, and ` acting`
-    once it acts. The acting line extends the first, so it overwrites it in place with no
-    truncation a reader could catch empty."""
-    if not acting:
+def claim(fd: int, *marks: str) -> None:
+    """Write the waiter's pid and start time into the lock it holds, for --cancel, then its
+    marks as it goes: ` acting` once it acts, ` done:<outcome>` last (finish). Each later line
+    extends the one before, so it overwrites it in place with no truncation a reader could
+    catch empty."""
+    line = (" ".join([str(os.getpid()), str(proc_start(os.getpid())), *marks]) + "\n").encode()
+    if not marks:
         os.ftruncate(fd, 0)
-    line = f"{os.getpid()} {proc_start(os.getpid())}" + (" acting" if acting else "")
-    os.pwrite(fd, (line + "\n").encode(), 0)
+    os.pwrite(fd, line, 0)
+    os.ftruncate(fd, len(line))
 
 
-def too_late(pane: str | None, pid: int | None) -> int:
-    print(f"pass-respawn: too late to cancel: waiter {pid} had begun acting (the respawn or "
-          "the keys may be out); see pass.log for what it did")
-    log("cancel", "too-late", pane, f"waiter {pid} was acting")
+def lock_fields(fd: int) -> list[str]:
+    """The pending lock's line: pid, start time, then the waiter's marks."""
+    return os.pread(fd, 256, 0).decode("ascii", "replace").split()
+
+
+def done_mark(marks: list[str]) -> str | None:
+    """The outcome a ` done:<outcome>` mark records, or None."""
+    return next((m[len("done:"):] for m in marks if m.startswith("done:")), None)
+
+
+def wait_free(fd: int, tries: int = 50) -> bool:
+    """Whether the waiter let the pending lock go (this fd now holds it), polling 0.1 s."""
+    for i in range(tries):
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return True
+        except BlockingIOError:
+            if i + 1 < tries:
+                time.sleep(0.1)
+    return False
+
+
+def too_late(pane: str | None, pid: int | None, outcome: str | None = None) -> int:
+    if outcome:
+        print(f"pass-respawn: too late to cancel ({outcome}): waiter {pid} had already ended; "
+              "see pass.log for what it did")
+        log("cancel", "too-late", pane, f"({outcome}) waiter {pid} had ended")
+    else:
+        print(f"pass-respawn: too late to cancel: waiter {pid} had begun acting (the respawn or "
+              "the keys may be out); see pass.log for what it did")
+        log("cancel", "too-late", pane, f"waiter {pid} was acting")
     return 1
+
+
+def ended(fd: int, sid: str, pane: str | None, pid: int | None, signalled: bool) -> int:
+    """Report on a waiter whose lock has freed, from the marks it left: its outcome
+    (` done:<outcome>`), else ` acting`. A `cancelled` outcome, or no mark at all (it died on
+    the SIGTERM before its handler was in), is this cancel's only when it signalled."""
+    marks = lock_fields(fd)[2:]
+    done = done_mark(marks)
+    if signalled and (done == "cancelled" or (done is None and "acting" not in marks)):
+        print(f"pass-respawn: cancelled the pending pass (waiter {pid})")
+        log("cancel", "cancelled", pane, f"waiter {pid}")
+        return 0
+    if (done is not None and done != "cancelled") or "acting" in marks:
+        return too_late(pane, pid, done)
+    print(f"pass-respawn: no pass pending for session {sid} (waiter {pid} had ended)")
+    log("cancel", "cancelled", pane, f"nothing pending: waiter {pid} had ended")
+    return 0
 
 
 def is_pass_respawn(pid: int, proc: str = "/proc") -> bool:
@@ -1066,8 +1131,9 @@ def is_pass_respawn(pid: int, proc: str = "/proc") -> bool:
 def cancel() -> int:
     """End this session's pending waiter: SIGTERM to the pid in its lock, once that pid is a
     live pass-respawn with the start time written beside it (a reused pid is not), then wait
-    for the lock to free. A waiter whose line says ` acting`, before the signal or once the lock
-    frees, had begun acting and ignores SIGTERM: that is `too-late` (exit 1), not a cancel."""
+    for the lock to free and report from the marks the waiter left (ended). A waiter whose line
+    says ` acting` or ` done:<outcome>` (not `cancelled`), before the signal or once the lock
+    frees, had acted or dropped on its own: that is `too-late` (exit 1), not a cancel."""
     sid = os.environ.get("CLAUDE_CODE_SESSION_ID") or ""
     pane = os.environ.get("TMUX_PANE")
     if not SID_RE.fullmatch(sid):
@@ -1090,32 +1156,30 @@ def cancel() -> int:
             print(f"pass-respawn: no pass pending for session {sid}")
             log("cancel", "cancelled", pane, "nothing pending")
             return 0
-        fields = os.pread(fd, 64, 0).decode("ascii", "replace").split()
+        fields = lock_fields(fd)
         pid = int(fields[0]) if fields and fields[0].isdigit() else None
         start = fields[1] if len(fields) > 1 else None
         if pid is None or str(proc_start(pid)) != start or not is_pass_respawn(pid):
+            # It may have acted (or dropped) and exited since the read: a freed lock holds
+            # its last word.
+            if wait_free(fd, tries=1):
+                return ended(fd, sid, pane, pid, signalled=False)
             print(f"pass-respawn: the pending lock names pid {pid}, which doesn't match a live "
                   "pass-respawn started then; not signalling it")
             log("cancel", "refused", pane, f"pid {pid} doesn't match")
             return 1
-        if fields[2:3] == ["acting"]:
-            return too_late(pane, pid)
-        os.kill(pid, signal.SIGTERM)
-        for _ in range(50):
-            try:
-                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                break
-            except BlockingIOError:
-                time.sleep(0.1)
-        else:
+        if "acting" in fields[2:] or done_mark(fields[2:]) not in (None, "cancelled"):
+            return too_late(pane, pid, done_mark(fields[2:]))
+        try:
+            os.kill(pid, signal.SIGTERM)
+            signalled = True
+        except ProcessLookupError:  # gone since the check: its lock holds its last word
+            signalled = False
+        if not wait_free(fd):
             print(f"pass-respawn: sent SIGTERM to waiter {pid}, but it still holds the lock")
             log("cancel", "error", pane, f"waiter {pid} still pending after SIGTERM")
             return 1
-        if os.pread(fd, 64, 0).decode("ascii", "replace").split()[2:3] == ["acting"]:
-            return too_late(pane, pid)
-        print(f"pass-respawn: cancelled the pending pass (waiter {pid})")
-        log("cancel", "cancelled", pane, f"waiter {pid}")
-        return 0
+        return ended(fd, sid, pane, pid, signalled)
     finally:
         if fd is not None:
             os.close(fd)
