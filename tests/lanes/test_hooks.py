@@ -167,6 +167,15 @@ class GuardPlain(LanesRepo):
             "tool_input": {"file_path": os.path.join(self.main, "STATUS.md"), "content": RELATIVE}})
         self.assertIsNone(out)
 
+    def test_a_symlinked_lane_dir_in_a_repo_without_lanes_is_allowed(self):
+        # The symlink deny is for lanes repos only; elsewhere `.lane` is just a name.
+        os.symlink("..", os.path.join(self.main, ".lane"))
+        out = self.hook("lane-guard.sh", {
+            "session_id": "s", "cwd": self.main, "tool_name": "Write",
+            "tool_input": {"file_path": os.path.join(self.main, ".lane", "STATUS.md"),
+                           "content": RELATIVE}})
+        self.assertIsNone(out)
+
 
 class IdentityHook(LanesRepo):
     def setUp(self):
