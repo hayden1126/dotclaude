@@ -904,8 +904,8 @@ def cmd_lock(args) -> int:
     names = parse_locks(repo.config().get("locks", ""))
     if args.name not in names:
         raise LaneError(f"no lock {args.name!r} in config.toml (locks: {', '.join(names) or 'none'})"
-                        ": add it with `lane init --locks <a,b>`; an unlisted name would split the "
-                        "mutual exclusion")
+                        ": add it with `lane init --locks <full,list>` (it replaces the list); an "
+                        "unlisted name would split the mutual exclusion")
     path = lock_path(repo, args.name)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     # O_CLOEXEC, and Popen's close_fds: the command and anything it backgrounds never inherit the

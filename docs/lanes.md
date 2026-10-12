@@ -161,7 +161,7 @@ stays in the common dir, which sandboxed Bash can write (S1).
   config.toml                   root, setup cmd, port range, live-lane cap, base (origin/main), locks
   .lock                         flock for every CLI write (claims are atomic)
   _locks/<name>                 one flock per shared gate (`lane lock`), holding the holder line
-  <id>/lane.json                id, branch, path, base_sha, port, claims[], state, sessions[], created/updated
+  <id>/lane.json                id, branch, path, base_sha, port, claims[], state, sessions[], created/updated, opened
   <id>/mirror/                  copy of <lane>/.lane/, refreshed by a Stop and SessionEnd hook, so a raw
                                 `git worktree remove` (which deletes ignored files) loses nothing
   _closed/<id>-<date>/          lane.json + .lane/ archived on `lane done`
@@ -227,7 +227,7 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
 - **`lane lock <name> -- <cmd>`** serializes shared gates with a flock on
   `<common-dir>/lanes/_locks/<name>`, apart from the CLI's own `.lock`. The name must be listed in
   `config.toml` `locks`, since a typo would split the mutual exclusion. Once it holds the lock, it
-  writes a holder line (lane id or `main`, start time, command), which a waiting run and the
+  writes a holder line (lane id, `main`, or the checkout's kind and path; start time; command), which a waiting run and the
   `lane ls` footer show. There is no pid: each sandboxed command has its own pid namespace, so a
   pid would mislead. A run that ends clears the line while it still holds the lock, so a waiter
   doesn't name it; a `lane` killed by a signal it doesn't catch (SIGKILL, SIGHUP) leaves its line

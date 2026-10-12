@@ -71,15 +71,8 @@ stored here).
 ## In flight
 - **Lanes, handoff-check and `/pass`** (Hayden's design, approved 2026-10-11; `PLAN.md`, behavior in
   `docs/lanes.md` and `skills/lanes/SKILL.md`). Three PRs:
-  - **PR 1 `feat/lanes` (lanes core): built, reviewed clean after four fix rounds, installed from
-    its branch and smoke-tested on HAYPC 2026-10-11.** In a scratch repo with two lanes, a real
-    `claude -p` session in lane `chart-fix` got its identity line, the guard denied a relative
-    claim (`another session owns #43`) and a write into lane `api-docs`'s record, a sandboxed
-    `git commit` worked with no extra
-    rule, `handoff-check` failed an un-updated record, and `lane ls` flagged `handoff?`. Guard
-    replay over the work repo's 273 real STATUS edits: 13 denies, all genuine relative claims, no
-    false positives. PR #86 (`gh pr view 86`); commits `main..feat/lanes`.
-  - PR 1 merged as #86.
+  - PR 1 (lanes core) merged as #86 (`gh pr view 86`); its smoke test and guard replay are in
+    `git show cc6b3df:STATUS.md`.
   - **PR 2 `feat/lanes-lead`: built, reviewed (four rounds, the last on 7ba04d3), installed
     from its branch and smoke-tested on HAYPC 2026-10-11.** `lane open` (plan mode, window
     derived from the live session, never stored), `lane lock` (sandboxed: `lane *` left
@@ -91,8 +84,12 @@ stored here).
     first; a lane session's writer was denied `echo > <lane>/x` ("in the parent session's
     checkout"). Found live: a new lane path stops at Claude Code's trust dialog, and trusting the
     lanes root covers every lane under it (`lane init` prints the line). As-built deviations:
-    PLAN.md PR 2 "As built". Accepted limits: docs/lanes.md (`setup` runs sandbox-off via
-    `new`/`adopt`; lock signal edges) and docs/delegation.md (a lane under a temp root isn't held).
+    PLAN.md PR 2 "As built". Accepted limits: docs/lanes.md (lock signal edges) and
+    docs/delegation.md (a lane under a temp root isn't held).
+  - **Security follow-up found while building PR 2** (excluded commands; detail and plan are
+    private: `~/scratch/sandbox-audit/FINDINGS.md`, "Follow-up 2026-10-11"). Step 0 goes into PR 2
+    before it is pushed; step 1 is its own PR after PR 3 and before the work repo migration;
+    step 2 later. The plan is saved; Hayden's go on step 0 is pending.
   - **PR 3 `feat/pass`** (`/pass`, `pass compact`, opt-in auto-pass on context): not started;
     PLAN.md has it, plus PR 2's deferred context-management bullet.
   - After PR 1 and 2 merge: migrate the work repo (its own PR there). The concrete values and the
@@ -145,10 +142,15 @@ stored here).
   `claude -p` repro and the 2.1.285 boundary; the karaoke session's has the incident.
 
 ## Notes for next session
-- **Next: Hayden merges PR 2** (`gh pr list --head feat/lanes-lead`), then `git fetch origin
-  main:main` and `git switch main` outside the sandbox (the checkout is on `feat/lanes-lead` and
-  live for every session). Then PR 3 on `feat/pass` from the new `main` (PLAN.md PR 3, spikes
-  first). Verify lanes before touching it: `tests/lanes`, `tests/setup`, and `tests/delegation`
+- **Next: step 0 of the security follow-up on `feat/lanes-lead`, on Hayden's go** (the private
+  FINDINGS.md section says what; it also rewords the branch's two public mentions of the gap in
+  docs/lanes.md and `tests/delegation/test_settings.py`). **Don't push the branch before it.**
+  Then a fresh reviewer, re-install (`./setup.sh` outside the sandbox, settings diff), push on
+  Hayden's approval, PR as draft then ready. After Hayden merges: `git fetch origin main:main`
+  and `git switch main` outside the sandbox (the checkout is on `feat/lanes-lead` and live for
+  every session), then PR 3 on `feat/pass` (PLAN.md PR 3, spikes first; build `pass-respawn` as
+  a narrow wrapper with its own excludedCommands entry, never raw `tmux`). PR 2's range:
+  `main..feat/lanes-lead` (base d0ebbd8). Verify lanes before touching it: `tests/lanes`, `tests/setup`, and `tests/delegation`
   from the main checkout (`test_subagent_policy` refuses to load sandboxed under
   `.claude/worktrees/`).
 - **Astra waits on Hayden's plan** (`feat/codex-astra` merged as #85): two 2026-10-10 probes passed the audit (astra admitted,

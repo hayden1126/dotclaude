@@ -104,7 +104,7 @@ inside a lane.
    taken". The board's `rebase` flag is the truth; the message is only a nudge.
 7. **Shared gates.** Wrap any run that can't happen twice at once (a browser-driven test gate, an
    e2e suite on a fixed port) in `lane lock <name> -- <cmd>`. List the names once with
-   `lane init --locks gate,e2e`; an unlisted name is refused, since a typo would split the mutual
+   `lane init --locks gate,e2e` (it takes the full list and replaces the old one); an unlisted name is refused, since a typo would split the mutual
    exclusion. A second run waits and names the holder; `--wait SECS` gives up with exit 75.
 
 The lead never respawns another lane's session or edits its record (invariant 2): only the lane
@@ -126,7 +126,7 @@ stale-base trap (`worktree.baseRef`) therefore bites only a session rooted in th
 | `lane note "<text>"` | append a timestamped line to your record's State |
 | `lane asks` | every lane's open "Asks for Hayden", one list |
 | `lane open <id>` | the lane's session in a new tmux window, in plan mode; `--focus` switches to it, or to the live session's window; `--print` shows the tmux command |
-| `lane lock gate -- <cmd>` | run `<cmd>` under the named lock, waiting while another run holds it; `--wait SECS` gives up with exit 75 (a command's own 75 looks the same: only a timeout prints "gave up on lock") |
+| `lane lock gate -- <cmd>` | run `<cmd>` under the named lock, waiting while another run holds it; `--wait SECS` gives up with exit 75 (docs/lanes.md: telling it from the command's own 75) |
 | `lane new` / `adopt` / `done` | lifecycle, above |
 
 Board flags: `stale` (worktree gone; its claims are void), `rebase` (behind the base),

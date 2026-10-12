@@ -168,20 +168,8 @@ Changed after spike S2 (Hayden, 2026-10-11): Claude Code treats every path under
 therefore lives in the lane's own worktree, in the session's cwd, where the Edit tool works with
 no prompt. The CLI-owned data stays in the common dir, which sandboxed Bash can write (S1).
 
-```
-<lane worktree>/.lane/          hidden by `/.lane/` in the shared <common-dir>/info/exclude (no repo footprint)
-  STATUS.md                     the lane's prose (templates/LANE.md): Brief, State, Decisions, Asks for Hayden, Not mine, Next
-  PLAN.md                       the lane's working design (optional)
-  artifacts/                    evidence that rulings point at (mocks, shots, gate logs)
-
-<common-dir>/lanes/             CLI-owned; written by `lane` and by hooks, never by the Edit tool
-  config.toml                   root (~/code/<repo>-lanes), setup cmd, port range, live-lane cap, base (origin/main)
-  .lock                         flock for every CLI write (claims are atomic)
-  <id>/lane.json                id, branch, path, base_sha, port, claims[], state, sessions[], created/updated
-  <id>/mirror/                  copy of <lane>/.lane/, refreshed by a Stop and SessionEnd hook, so a raw
-                                `git worktree remove` (which deletes ignored files) loses nothing
-  _closed/<id>-<date>/          lane.json + .lane/ archived on `lane done`
-```
+The layout (files, fields, `_locks/`, the mirror) lives in `docs/lanes.md` "Layout", the
+as-built reference.
 
 JSON for the fields the CLI owns (models alter JSON less than Markdown; Anthropic's long-running
 harness post). Markdown for the prose.
@@ -333,7 +321,8 @@ session):
   unlisted name is refused, since a typo would split the mutual exclusion. A waiter prints the
   holder (lane id, command, start time); `--wait` gives up with 75.
 - The ledger keeps separate `parent_root`/`parent_before`/`parent_after` fields, so the audit
-  names the lane. Both layers find the parent's checkout through `delegation_common.session_toplevel`
+  names the lane (`main_status` became `main_checkout` plus `checkout_status`), and the audit
+  checks every activation, not only an agent's latest. Both layers find the parent's checkout through `delegation_common.session_toplevel`
   (no import of the lanes skill: the policy hook fails closed).
 - `docs/lanes.md` and `docs/delegation.md` are the as-built references.
 

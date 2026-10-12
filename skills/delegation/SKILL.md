@@ -48,7 +48,8 @@ permission flow.
 - **Stays in the sandbox:**
   - `dangerouslyDisableSandbox` is denied;
   - so is every `excludedCommands` entry, which covers `gh`, `git push/fetch/pull`, `codex`,
-    `codex-delegate`, `claude`, `tmux` and `delegation-ledger`.
+    `codex-delegate`, `claude`, `tmux`, `delegation-ledger` and the `lane` subcommands that
+    leave the sandbox.
 - **Can't reach authenticated GitHub.** `~/.config/gh` is unreadable inside the sandbox, so
   there is no push and no private-repo read. That holds whatever form the command takes.
   Public GitHub is available through `gh-public` and https clones.
