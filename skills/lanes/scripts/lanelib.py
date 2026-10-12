@@ -552,26 +552,36 @@ def first_item(block: str | None) -> str:
     return "\n".join(item)
 
 
-def approval(block: str | None, since: datetime.date | None = None) -> str:
+def approval_dates(block: str | None) -> list[datetime.date]:
+    """The dates of the first item's approval markers (approval checks they parse first)."""
+    first = first_item(block)
+    return [datetime.date.fromisoformat(APPROVAL_DATE.match(first, m.end()).group(1))
+            for m in APPROVAL_OPEN.finditer(first)]
+
+
+def approval(block: str | None, since: datetime.date | None = None,
+             today: datetime.date | None = None) -> str:
     """Whether a Next block pre-approves its next step, for /pass's resume mode. MALFORMED when
     any `(approved by Hayden` in the block lacks a real ISO date (the handoff skill writes the
     marker only for an approval given in the session, citing its date). Otherwise only a marker
     on the first item (first_item) counts, since an approval covers one step: APPROVED when it
-    carries `(approved by Hayden YYYY-MM-DD)`, STALE when a first-item marker is dated before
-    `since` (the session's start date, local time: the approval came from an earlier session),
-    UNAPPROVED when the first item has no marker. A marker on a later item is ignored."""
+    carries `(approved by Hayden YYYY-MM-DD)` dated within the session, UNAPPROVED when the
+    first item has no marker. A first-item marker is STALE when it is dated before `since` (the
+    session's start date, local time: the approval came from an earlier session), after `today`
+    (no approval comes from the future), or when `since` is None (an unknown start can't confirm
+    it). A same-day marker from an earlier session can't be told apart by its date, so it counts.
+    A marker on a later item is ignored."""
     for m in APPROVAL_OPEN.finditer(block or ""):
         date = APPROVAL_DATE.match(block, m.end())
         try:
             datetime.date.fromisoformat(date.group(1) if date else "")
         except ValueError:
             return MALFORMED
-    first = first_item(block)
-    dates = [datetime.date.fromisoformat(APPROVAL_DATE.match(first, m.end()).group(1))
-             for m in APPROVAL_OPEN.finditer(first)]
+    dates = approval_dates(block)
     if not dates:
         return UNAPPROVED
-    return STALE if since is not None and min(dates) < since else APPROVED
+    today = today or datetime.date.today()
+    return STALE if since is None or min(dates) < since or max(dates) > today else APPROVED
 
 
 def sessions_dir() -> str:

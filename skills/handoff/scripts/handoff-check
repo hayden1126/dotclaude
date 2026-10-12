@@ -14,7 +14,10 @@ in a plain repo (the root STATUS.md). Checks:
   approval   every `(approved by Hayden` marker in that section carries a valid ISO date
              (`(approved by Hayden YYYY-MM-DD)`), and one on its first item (the step /pass
              resumes with; a marker on a later item is ignored) is dated on or after this
-             session's start date, local time; /pass reads it to pick its resume mode
+             session's start date, local time, and not after today. With the session start
+             unknown, a first-item marker fails: nothing confirms it is this session's. A
+             same-day marker from an earlier session passes (its date can't tell). /pass reads
+             it to pick its resume mode
   absolute   no relative identity ("another session", "this session"; the guard's lint) outside
              HTML comments and code. A failure in a lanes repo; in a plain repo, where no peer
              misreads it, only a warning
@@ -157,6 +160,12 @@ def check(cwd: str) -> tuple[str, list[str], list[str]]:
         if state == lanelib.MALFORMED:
             fails.append("malformed approval marker in the Next block: write `(approved by "
                          "Hayden YYYY-MM-DD)` with the date Hayden approved the step, or drop it")
+        elif state == lanelib.STALE and since is None:
+            fails.append("approval marker on the first Next item, but can't confirm this "
+                         "session's start: remove the marker or run inside the session")
+        elif state == lanelib.STALE and max(lanelib.approval_dates(block)) > datetime.date.today():
+            fails.append("approval marker is dated in the future: write the date Hayden "
+                         "approved the step")
         elif state == lanelib.STALE:
             fails.append("approval marker predates this session: remove it or get a fresh "
                          "approval")
