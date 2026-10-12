@@ -66,8 +66,9 @@ permission flow.
   allowed: the handback, SendMessage, and ToolSearch to load SendMessage (§4).
 
 **Writers** also can't write outside their worktree: file tools, redirects, `cd`,
-`git -C`. They can still read the main checkout. A computed-path subprocess write into the
-main checkout can't be stopped; `delegation-ledger audit` flags it.
+`git -C`. That holds in the main checkout and, when the parent session runs in a lane, in
+the lane too. They can still read both. A computed-path subprocess write into either can't
+be stopped; `delegation-ledger audit` flags it.
 
 **When a denial arrives,** it names a rule and an intent. The agent reports it in
 `blocked_actions` with that intent. If the work really needs it, you run it yourself in the
@@ -144,7 +145,7 @@ validated (`report_ok`).
   visible: it warns on its first line and calls each session `unknown`.
 - `delegation-ledger audit` checks that enforcement still binds:
   - the policy hook saw every agent that used tools;
-  - no writer's run coincided with a main-checkout change;
+  - no writer's run coincided with a change in the main checkout or the parent's lane;
   - which reports failed the contract;
   - the denials.
 
