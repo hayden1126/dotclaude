@@ -68,7 +68,8 @@ inside", and Codex sessions wouldn't get the convention.
    from prose, ListAgents first prompts or tab titles. "Hayden routed #110 away from lane X" is
    recorded by lane X about itself.
 4. **Derive, don't store.** `lane ls` derives branch, ahead/behind `origin/main`, PR state,
-   session liveness and staleness live from git, gh and `~/.claude/sessions/*.json`.
+   session liveness, context and staleness live from git, gh, `~/.claude/sessions/*.json` and
+   the auto-pass watcher's `ctx/<session>.json`.
 5. **STATUS.md is project direction, not lane state.** In a repo with lanes, STATUS.md holds
    direction and a backlog keyed by request number. Each lane's next step lives in its own
    record.
@@ -251,6 +252,18 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
   `opened` in `lane.json`. The window is derived from the live session's `tmux` field on each
   `lane ls`, never stored (invariant 4): a stored window id drifts the moment the window closes
   or tmux renumbers it.
+- **Auto-pass in lanes** (README "Auto-pass", PLAN.md "PR 4: auto-pass"). Auto-pass is on by
+  default in every lane and in the main checkout of a repo with lanes, so the lead passes itself
+  the same way. `lane init --no-autopass` turns it off for the repo (`autopass = false` in the
+  lanes config), `--autopass` turns it back on, and `/autopass on|off` in a tab beats both. Each
+  lane hands itself off through the watcher. `lane ls` shows how close each one is: its CTX
+  column, after SESSIONS, is the watcher's latest count (`ctx/<session>.json`) for the lane's
+  live sessions, the most urgent one when there are two, marked `*` past the soft tier and `!`
+  past hard on that session's own window (`312k*`, `523k!`). It is `-` with no count and `?`
+  when sandboxed; `--json` has it as `ctx` (`session`, `tokens`, `tier`). The lead messages a
+  lane that sits idle past soft: "context N k, run /pass". It does this by hand for now; no code
+  sends that message. The lead never respawns another lane's pane, since only that lane holds
+  the context its handoff needs.
 - **`lane lock <name> -- <cmd>`** serializes shared gates with a flock on
   `<common-dir>/lanes/_locks/<name>`, apart from the CLI's own `.lock`. The name must be listed in
   the config's `locks`, since a typo would split the mutual exclusion. Once it holds the lock, it

@@ -426,7 +426,8 @@ and status single-writer:
   read its record; `--focus` switches to a session already running there. Trust the lanes root
   in Claude Code once (`lane init` prints how), or each new window waits at the trust dialog.
 - `lane ls` is the board, derived live from git, gh and the session files, down to each lane's
-  tmux window. `lane who 42` is the only answer to who owns #42.
+  tmux window and context (CTX: `312k*` past the auto-pass soft tier, `523k!` past hard).
+  `lane who 42` is the only answer to who owns #42.
 - `lane lock gate -- npm run e2e` runs a shared gate under a named lock, so a second lane's run
   waits instead of colliding.
 - An optional lead session triages requests into lanes, opens them on Hayden's approval and sets
@@ -541,9 +542,14 @@ parses the fixed-overhead categories from the most recent `/context` output stor
 session transcript, and computes the messages figure live (total minus overhead) from the
 totals piped on stdin. Run `/context` once per session to seed the split; until then the
 widget shows the total with a hint. The total chip shows the token count and its percent
-of the window, set off from the per-category chips by a thin divider; it is green, turns
-amber past 50% of the context window, red past 66%, and blinking bright red past 83%
-(about 400k and 500k of a 600k window; terminals without blink support show it static).
+of the window, set off from the per-category chips by a thin divider. Its color follows the
+auto-pass tiers (see Auto-pass) on the smaller of the model window and `autoCompactWindow`:
+green below soft, yellow from soft, dark red from wrap-up, and bold bright red "Ctx!" from
+hard (300k, 480k and 520k of a 600k window). An `A` at the end of the chip means auto-pass is
+on for this tab. The widget also writes the model's window into the session's ctx file, since
+no hook payload carries it, so the watcher's tiers follow a smaller window. Without
+`hooks/autopass_state.py` (a copied widget) it falls back to 50%, 66% and 83% of the window,
+with no `A`.
 `statusline/session-summary.py` adds a second custom widget on status lines 2 and 3 (previously
 empty): a 1-2 sentence plain-language summary of what the session is doing and where it stands,
 word-wrapped to the terminal width across two dim rows (`--row 1` / `--row 2`). The text is produced
