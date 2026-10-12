@@ -241,6 +241,13 @@ class Baseline(unittest.TestCase):
         self.assertLess(excluded.index("lane done *"), excluded.index("pass-respawn"))
         for cmd in ("pass-respawn", "pass-respawn --compact", "pass-respawn --print -C /x"):
             self.assertTrue(any(glob_match(p, cmd) for p in excluded), cmd)
+        # The allow rule skips the auto-mode classifier, which once refused a bare call as
+        # "Create Unsafe Agents" (live run, 2026-10-12); the skill keeps -C first to match it.
+        self.assertIn("Bash(pass-respawn -C *)", S["permissions"]["allow"])
+        with open(os.path.join(REPO, "skills", "pass", "SKILL.md")) as f:
+            skill = f.read()
+        self.assertIn("`pass-respawn -C <toplevel> --compact`", skill)
+        self.assertIn("Bash(pass-respawn -C *)", skill)
         script = os.path.join(REPO, "skills", "pass", "scripts", "pass-respawn")
         self.assertTrue(os.access(script, os.X_OK))
         with open(os.path.join(REPO, "setup.sh")) as f:

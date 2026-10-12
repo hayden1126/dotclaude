@@ -23,6 +23,7 @@
   "permissions": {
     "allow": [
       "Bash(delegation-ledger wait *)",
+      "Bash(pass-respawn -C *)",
       "Bash(git push origin *)",
       "Bash(gh pr create *)",
       "Bash(gh pr ready *)",

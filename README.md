@@ -452,7 +452,8 @@ rechecks the handoff and respawns the pane with a fresh `claude`.
   after the handoff (`stale`), Hayden typed a prompt after the call (`resumed`), the stop listed
   background work or a teammate (`busy`), the session or pane went away or changed (`gone`), or
   the turn never ended (`timeout`). Fix the cause and run `/pass` again.
-- `pass-respawn` is in `excludedCommands` (it needs the tmux socket), so it runs bare. Each
+- `pass-respawn` is in `excludedCommands` (it needs the tmux socket), so it runs bare, and the
+  allow rule `Bash(pass-respawn -C *)` keeps the auto-mode classifier from refusing it. Each
   decision appends a line to `~/.local/state/dotclaude/pass.log`.
 
 `skills/pass/SKILL.md` is the procedure and PLAN.md ("PR 3: `/pass`") the design.

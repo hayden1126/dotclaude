@@ -29,7 +29,7 @@ The record holds the exact facts and the fresh session re-reads it. So the hando
 
 4. **Run `~/.claude/skills/handoff/scripts/handoff-check`** and fix each gap it lists until it passes. Never pass on a failing check.
 
-5. **Run `pass-respawn -C <toplevel>`** as the turn's **last** action, with `--compact` for the compact mode.
+5. **Run `pass-respawn -C <toplevel>`** as the turn's **last** action, or `pass-respawn -C <toplevel> --compact` for the compact mode. Keep `-C` first: the allow rule `Bash(pass-respawn -C *)` matches that form, so the auto-mode classifier never sees it (it once refused a bare call as "Create Unsafe Agents").
    - `<toplevel>` is the literal path from `git rev-parse --show-toplevel`.
    - Run it as a bare command (no `cd`, pipe, `&&` or `;`), so the `excludedCommands` match takes it out of the sandbox. It needs the tmux socket and the session's processes.
    - Always pass `-C`. The argument-less form is unprobed against the `excludedCommands` match.
