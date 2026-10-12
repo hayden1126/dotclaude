@@ -171,8 +171,24 @@ def write_json(path: str, data) -> None:
         raise
 
 
+def flag_generation(pane) -> str:
+    """A token that changes with every write of the pane's flag: its `generation` counter, or
+    "absent" (no pane, no flag, or one without a counter). The watcher's cached decide() is
+    valid only while this is what it was when decide() ran, so a toggle between a hook's
+    decide() and its store can't leave a stale answer cached."""
+    if not isinstance(pane, str) or not PANE.fullmatch(pane):
+        return "absent"
+    flag = load_json(flag_path(pane))
+    gen = flag.get("generation") if isinstance(flag, dict) else None
+    return "g%d" % gen if is_int(gen) else "absent"
+
+
 def set_flag(pane: str, the_tab: dict, on: bool) -> None:
-    write_json(flag_path(pane), {"tab": the_tab, "on": on, "set_at": time.time()})
+    """Write the tab flag with the next generation, so two writes in one mtime tick differ."""
+    old = load_json(flag_path(pane))
+    gen = old.get("generation") if isinstance(old, dict) else None
+    write_json(flag_path(pane), {"tab": the_tab, "on": on, "set_at": time.time(),
+                                 "generation": (gen if is_int(gen) else 0) + 1})
 
 
 def tab_flag(pane: str):
@@ -272,6 +288,10 @@ def watch_lock(sid: str, wait: float = 1.0):
                     yield False
                     return
                 time.sleep(0.02)
+        try:
+            os.utime(fd)  # flock leaves the mtime alone; this keeps the prune off a lock in use
+        except OSError:
+            pass
         yield True
     finally:
         os.close(fd)

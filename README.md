@@ -502,16 +502,17 @@ before that (at most 47k), wrap-up 7% before hard (at most 40k), soft at half th
 |---|---|---|
 | Soft | 300k | a Stop is blocked once: pass if the task is done, finish a small remainder first, do nothing if the last reply asked something |
 | Wrap-up | 480k | once, on a Stop or a tool call: finish this step, then pass |
-| Hard | 520k | on a Stop or a tool call, again every 20k until a handoff starts: pass now |
+| Hard | 520k | on a Stop or a tool call, again every 20k until a pass starts: pass now |
 
-- Only the highest tier crossed speaks, once per crossing. A drop of more than 50k under a
-  tier (a compact) re-arms it, so a count hovering at a tier never repeats it. The hard tier's
-  20k re-arm stops once the session calls the `pass` or `handoff` skill or `pass-respawn`.
+- Only the highest tier crossed speaks, once per crossing. A drop of more than a quarter of a
+  tier (at most 50k) under it, as a compact makes, re-arms it, so a count hovering at a tier
+  never repeats it. The hard tier's 20k re-arm (less on a small window) pauses once the session
+  calls the `pass` skill or runs `pass-respawn`, and resumes if no pass came 40k later.
 - Background work: while a subagent, shell, workflow or cloud session runs, soft and wrap-up
   wait and hard says `pass compact`. With any other task but `dream` (a monitor, a teammate),
   every tier says compact mode, since `pass-respawn` would refuse a plain pass. A tool call
   can't see the task list, so it reads the last Stop's record; with none from the last 10
-  minutes, it says compact mode too (always safe).
+  minutes, it says compact mode too, as safe whether or not anything runs.
 - With autopass off, you alone see one line at the hard tier, once: "Context 521k, auto-compact
   near 567k: hand off now (/pass)."
 - `/autopass on|off|status` sets it for this tmux tab, or shows the count, the next tier, on or

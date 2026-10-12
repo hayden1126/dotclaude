@@ -20,13 +20,17 @@ tiers' window (autopass_state.window).
 Crossings live in the watcher's own record, ctx-watch/<session>.json, not in stop_hook_active:
 - only the highest tier the count has crossed may speak, once per crossing; when it speaks, the
   tiers under it count as fired too, so a lower one never speaks after a higher one;
-- a count more than 50000 under a tier re-arms it (a compact drops the count; a new session id
-  is a new record), so a count hovering at a tier never fires it twice;
-- the hard tier also re-arms 20000 tokens past its last firing, unless the transcript shows,
-  after that firing (the record keeps its time and the transcript's size then), a main-chain
-  tool call that starts the handoff: the Skill tool with skill `pass` or `handoff`, or a Bash
-  command running `pass-respawn`. A handoff costs 22k to 47k, so the re-arm would otherwise
-  say "hand off now" in the middle of the handoff it asked for.
+- a count more than min(50000, tier // 4) under a tier re-arms it (a compact drops the count;
+  a new session id is a new record), so a count hovering at a tier never fires it twice, and a
+  small window's tiers still re-arm after a compact;
+- the hard tier also re-arms min(20000, half the gap from hard to compact_at) past its last
+  firing (20k at 600k), unless the transcript shows, after that firing (the record keeps its
+  time and the transcript's size then), a main-chain tool call that starts the pass: the Skill
+  tool with skill `pass`, or a Bash command that starts with `pass-respawn` (after blanks and
+  an optional `!`). A handoff costs 22k to 47k, so the re-arm would otherwise say "hand off now"
+  in the middle of the pass it asked for. A handoff alone doesn't end the session, so the
+  handoff skill doesn't count. If no pass comes within 40000 tokens of that call, the re-arm
+  resumes, looking only past that point.
 
 On (decide()): soft speaks on Stop only, as a block. Wrap-up and hard speak on Stop as a block
 and on PostToolUse as additionalContext; one that spoke on PostToolUse doesn't repeat at the Stop.
@@ -43,9 +47,9 @@ Background work, two rules:
 On Stop the payload's background_tasks decide. PostToolUse has no task list, so the session's
 stop record (stops/<session>.json, which stop-ring.sh writes at every Stop) decides when it was
 written within the last 10 minutes: its `waits` for busy, its `tasks` for blocked. With no such
-record the state is unknown and counts as blocked: compact mode is always safe, and a plain
-pass would be refused if a monitor or teammate runs. A task started since the last Stop isn't
-seen.
+record (or one without a task list) the state is unknown: every tier says compact mode, which is
+safe either way, and its text says so without claiming tasks run. A task started since the
+last Stop isn't seen.
 
 Nothing fires while a pass is already pending for the session (pass-respawn's waiter holds
 pass-pending/<session>.lock): the turn should end so the pass can act.
@@ -67,15 +71,17 @@ import autopass_state as aps  # noqa: E402
 import stop_ring  # noqa: E402
 
 TAIL, WIDE = 512 * 1024, 8 * 1024 * 1024
-REARM = 20000
-HYSTERESIS = 50000
+REARM = 20000             # the hard tier's re-arm step, at most
+HYSTERESIS = 50000        # how far under a tier the count must fall to re-arm it, at most
+HANDOFF_GRACE = 40000     # a pass call older than this many tokens no longer holds the re-arm
 STOP_FRESH = 600
 MODE_TTL = 60
-HANDOFF_SKILLS = ("pass", "handoff")
+PASS_SKILL = "pass"
 
 
 LEAD = "[autopass] Context is at {n}, auto-compact near {c}"
 COMPACT_WHY = "(a compact keeps background tasks alive; a plain pass would be refused)"
+UNKNOWN_WHY = "(it's safe whether or not background work is running)"
 TEXTS = {
     "soft": LEAD + ". If the task is done end to end, run the pass skill now. If only a small "
                    "remainder is left, finish it first. If your last reply asked Hayden "
@@ -95,6 +101,17 @@ TEXTS = {
                            + COMPACT_WHY + ".",
     "hard_compact": LEAD + ": hand off now. Run the pass skill in compact mode " + COMPACT_WHY
                          + ".",
+    "soft_unknown": LEAD + ". If the task is done end to end, run the pass skill in compact "
+                           "mode now " + UNKNOWN_WHY + ". If only a small remainder is left, "
+                           "finish it first. If your last reply asked Hayden something, end "
+                           "your turn without doing anything.",
+    "wrap_unknown": LEAD + ". Finish the step you are on and don't start another. If more than "
+                           "this step is left, run the pass skill in compact mode now "
+                           + UNKNOWN_WHY + ".",
+    "hard_unknown": LEAD + ": hand off now. Run the pass skill in compact mode " + UNKNOWN_WHY
+                         + ".",
+    "off_unknown": "Context {n}, auto-compact near {c}: hand off now (/pass compact is safe if "
+                   "background work may be running).",
     "off": "Context {n}, auto-compact near {c}: hand off now (/pass).",
     "off_compact": "Context {n}, auto-compact near {c}: hand off now (/pass compact: background "
                    "tasks are running).",
@@ -145,8 +162,18 @@ def tokens(path) -> int | None:
     return None
 
 
+def runs_pass_respawn(command: str) -> bool:
+    """Whether a Bash command starts with pass-respawn (after blanks and an optional `!`), as
+    the pass skill runs it: not one that only names it (`grep pass-respawn README.md`)."""
+    c = command.lstrip()
+    if c.startswith("!"):
+        c = c[1:].lstrip()
+    word = c.split(None, 1)[0] if c.split() else ""
+    return word == "pass-respawn" or word.endswith("/pass-respawn")
+
+
 def starts_handoff(line: bytes) -> bool:
-    """Whether a transcript line is a main-chain assistant tool call that starts a handoff."""
+    """Whether a transcript line is a main-chain assistant tool call that starts a pass."""
     if b'"tool_use"' not in line or not (b'"Skill"' in line or b"pass-respawn" in line):
         return False
     try:
@@ -161,10 +188,10 @@ def starts_handoff(line: bytes) -> bool:
         if not isinstance(c, dict) or c.get("type") != "tool_use":
             continue
         args = c.get("input") if isinstance(c.get("input"), dict) else {}
-        if c.get("name") == "Skill" and args.get("skill") in HANDOFF_SKILLS:
+        if c.get("name") == "Skill" and args.get("skill") == PASS_SKILL:
             return True
         if c.get("name") == "Bash" and isinstance(args.get("command"), str) \
-                and "pass-respawn" in args["command"]:
+                and runs_pass_respawn(args["command"]):
             return True
     return False
 
@@ -196,20 +223,30 @@ def fresh_record(rec) -> dict:
            "off_hard": num(rec.get("off_hard")),
            "hard_time": rec.get("hard_time") if isinstance(rec.get("hard_time"), float) else None,
            "hard_offset": num(rec.get("hard_offset")),
-           "handing_off": rec.get("handing_off") is True}
+           "handing_off": rec.get("handing_off") is True,
+           "handoff_at": num(rec.get("handoff_at"))}
     if isinstance(rec.get("mode"), dict):
         out["mode"] = rec["mode"]
     return out
 
 
+def hysteresis(tiers: dict, tier: str) -> int:
+    return min(HYSTERESIS, tiers[tier] // 4)
+
+
+def rearm_step(tiers: dict) -> int:
+    """The hard tier's re-arm step: 20k, or half the room left before auto-compact."""
+    return min(REARM, max(1, (tiers["compact_at"] - tiers["hard"]) // 2))
+
+
 def rearm(rec: dict, n: int, tiers: dict) -> None:
-    """A count more than HYSTERESIS under a tier re-arms it."""
+    """A count more than hysteresis() under a tier re-arms it."""
     for t in aps.TIER_NAMES:
-        if n < tiers[t] - HYSTERESIS:
+        if n < tiers[t] - hysteresis(tiers, t):
             rec["fired"][t] = None
-    if n < tiers["hard"] - HYSTERESIS:
+    if n < tiers["hard"] - hysteresis(tiers, "hard"):
         rec["off_hard"] = None
-        rec.update(hard_time=None, hard_offset=None, handing_off=False)
+        rec.update(hard_time=None, hard_offset=None, handing_off=False, handoff_at=None)
 
 
 def top_tier(n: int, tiers: dict):
@@ -219,27 +256,35 @@ def top_tier(n: int, tiers: dict):
     return None
 
 
-def armed(rec: dict, tier: str, n: int, handoff) -> bool:
-    """Whether tier may fire at n. handoff(offset) -> whether a handoff started past it; asked
-    only for the hard tier's +REARM re-arm, and remembered once true."""
+def armed(rec: dict, tier: str, n: int, tiers: dict, handoff, size=None) -> bool:
+    """Whether tier may fire at n. handoff(offset) -> whether a pass started past it; asked
+    only for the hard tier's re-arm, and remembered (handing_off) until the count is
+    HANDOFF_GRACE past where it was seen. Then the scan starts again from size, the
+    transcript's size now."""
     last = rec["fired"][tier]
     if last is None:
         return True
-    if tier != "hard" or n < last + REARM or rec["handing_off"]:
+    if tier != "hard" or n < last + rearm_step(tiers):
         return False
+    if rec["handing_off"]:
+        if rec["handoff_at"] is not None and n < rec["handoff_at"] + HANDOFF_GRACE:
+            return False
+        rec.update(handing_off=False, handoff_at=None,
+                   hard_offset=size if aps.is_int(size) else None)
+        return True
     if handoff(rec["hard_offset"]):
-        rec["handing_off"] = True
+        rec.update(handing_off=True, handoff_at=n)
         return False
     return True
 
 
-def due(rec: dict, n: int, tiers: dict, event: str, handoff):
+def due(rec: dict, n: int, tiers: dict, event: str, handoff, size=None):
     """(top tier, whether it is due with autopass on, whether the off line is due), after the
     re-arm, which changes rec in place."""
     rearm(rec, n, tiers)
     top = top_tier(n, tiers)
     on_due = top is not None and (event == "Stop" or top != "soft") \
-        and armed(rec, top, n, handoff)
+        and armed(rec, top, n, tiers, handoff, size)
     off_due = n >= tiers["hard"] and rec["off_hard"] is None
     return top, on_due, off_due
 
@@ -248,9 +293,9 @@ def step(rec: dict, n: int, tiers: dict, event: str, mode, work, handoff=lambda 
          size=None, now=None):
     """What this event says: (text key or None, "block" | "context" | "system" | None), with
     rec updated in place. mode() -> on (True or False, or None: say nothing and mark nothing),
-    work() -> "busy" | "blocked" | None, both run only when something would fire. size is the
-    transcript's size now, kept with a hard firing for the handoff check."""
-    top, on_due, off_due = due(rec, n, tiers, event, handoff)
+    work() -> "busy" | "blocked" | "unknown" | None, both run only when something would fire.
+    size is the transcript's size now, kept with a hard firing for the handoff check."""
+    top, on_due, off_due = due(rec, n, tiers, event, handoff, size)
     if not (on_due or off_due):
         return None, None
     on = mode()
@@ -266,18 +311,21 @@ def step(rec: dict, n: int, tiers: dict, event: str, mode, work, handoff=lambda 
             key = "hard_busy"
             rec["fired"]["hard"] = n
         else:
-            key = top + ("_compact" if state == "blocked" else "")
+            key = top + {"blocked": "_compact", "unknown": "_unknown"}.get(state, "")
             for t in aps.TIER_NAMES:
                 if n >= tiers[t]:
                     rec["fired"][t] = n
         if top == "hard":
             rec.update(hard_time=float(now if now is not None else time.time()),
-                       hard_offset=size if aps.is_int(size) else None, handing_off=False)
+                       hard_offset=size if aps.is_int(size) else None, handing_off=False,
+                       handoff_at=None)
         return key, ("block" if event == "Stop" else "context")
     if not off_due:
         return None, None
     rec["off_hard"] = n
-    return ("off_compact" if work() else "off"), "system"
+    state = work()
+    return {"busy": "off_compact", "blocked": "off_compact",
+            "unknown": "off_unknown"}.get(state, "off"), "system"
 
 
 def labels(tasks) -> list:
@@ -300,15 +348,17 @@ def stop_work(d: dict):
 
 
 def recorded_work(sid: str):
-    """The stop record's work state when it is under STOP_FRESH seconds old. Without one the
-    state is unknown, which counts as "blocked": compact mode is always safe."""
+    """The stop record's work state when it is under STOP_FRESH seconds old and lists its
+    tasks; else "unknown" (the texts then say compact mode is safe either way)."""
     rec = aps.load_json(os.path.join(aps.state_dir(), "stops", sid + ".json"))
     when = rec.get("time") if isinstance(rec, dict) else None
     if not isinstance(when, (int, float)) or not 0 <= time.time() - when < STOP_FRESH:
-        return "blocked"
-    waits = rec.get("waits") if isinstance(rec.get("waits"), list) else []
+        return "unknown"
     tasks = rec.get("tasks")
-    return work_state(waits, tasks if isinstance(tasks, list) else ["?"])
+    if not isinstance(tasks, list):
+        return "unknown"
+    waits = rec.get("waits") if isinstance(rec.get("waits"), list) else []
+    return work_state(waits, tasks)
 
 
 def pass_pending(sid: str) -> bool:
@@ -328,14 +378,17 @@ def pass_pending(sid: str) -> bool:
 
 
 def cached_mode(rec: dict, cwd, pane):
-    """(on, a fresh cache entry to store, or None when the cached one served)."""
+    """(on, a fresh cache entry to store, or None when the cached one served). An entry holds
+    for MODE_TTL seconds, and only while the tab flag's generation is the one read before its
+    decide(): a toggle in between changes it, so a stale store never serves."""
     m = rec.get("mode")
     now = time.time()
-    if (isinstance(m, dict) and isinstance(m.get("on"), bool)
+    gen = aps.flag_generation(pane)
+    if (isinstance(m, dict) and isinstance(m.get("on"), bool) and m.get("flag") == gen
             and isinstance(m.get("at"), (int, float)) and 0 <= now - m["at"] < MODE_TTL):
         return m["on"], None
     on, source = aps.decide(cwd, pane)
-    return on, {"on": on, "source": source, "at": now}
+    return on, {"on": on, "source": source, "at": now, "flag": gen}
 
 
 def render(key: str, kind: str, n: int, tiers: dict) -> dict:
@@ -387,6 +440,7 @@ def handle(d: dict, pane=None):
     stop_ring.prune(os.path.dirname(aps.ctx_path(sid)), now)
     if os.environ.get("CLAUDE_CODE_SESSION_ATTENDED") == "0":
         return None
+    # `window` may be stale (the model changed): part 2b's widget rewrites it on every render.
     tiers = aps.tiers(aps.window(path, ctx.get("window")))
     if tiers is None:
         return None

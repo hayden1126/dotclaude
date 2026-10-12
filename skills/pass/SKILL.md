@@ -76,7 +76,7 @@ With autopass on (`/autopass on` in the tab, a lane or a lanes repo's main check
 
 - **Soft (300k), at a Stop:** done end to end, run this skill now. A small remainder left, finish it first. Your last reply asked Hayden something, end the turn and do nothing else.
 - **Wrap-up (480k):** finish the step you are on and don't start another. If more than that step is left, run this skill now, in compact mode if you are mid-task.
-- **Hard (520k, again every 20k until you start the handoff):** run this skill now: compact mode mid-task, plain at a task boundary.
+- **Hard (520k, again every 20k until you start the pass):** run this skill now: compact mode mid-task, plain at a task boundary.
 - When it says compact mode because background tasks are running (or may be: a tool call can't see the task list), use compact: a plain pass would be refused (step 2).
 - The tiers follow the window: on a smaller one they come earlier, and the text always names the size and where auto-compact fires.
 

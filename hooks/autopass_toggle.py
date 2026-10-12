@@ -77,6 +77,7 @@ def status(sid, cwd, pane, transcript_path=None) -> str:
         if isinstance(sid, str) and SID.fullmatch(sid) else None
     n = ctx.get("tokens") if isinstance(ctx, dict) and aps.is_int(ctx.get("tokens")) else None
     tiers = aps.tiers(aps.window(transcript_path,
+                                 # `window`: the widget's, refreshed on every render (2b)
                                  ctx.get("window") if isinstance(ctx, dict) else None))
     if tiers is None:
         return head + " No tiers: the context window is too small for them."

@@ -196,7 +196,7 @@ class Tiers(Base):
         self.assertEqual(self.ctx_of("s1")["tokens"], 299_999)
         self.assertIsNone(self.tool(479_999, session_id="s2"))     # past soft: Stop only
         # s3 has no stop record: its work is unknown, so the compact text
-        self.assertEqual(self.tool(519_999, session_id="s3"), context("wrap_compact", "520k"))
+        self.assertEqual(self.tool(519_999, session_id="s3"), context("wrap_unknown", "520k"))
         self.assertIsNone(self.stop(299_999))
         self.assertEqual(self.ctx()["tokens"], 299_999)
         self.assertLess(time.time() - self.ctx()["time"], 30)
@@ -317,23 +317,23 @@ class Background(Base):
     def test_a_stale_stop_record_is_unknown_work_and_says_compact(self):
         self.on()
         self.stop_record(["shell"], ["shell"], age=601)
-        self.assertEqual(self.tool(485_000), context("wrap_compact", "485k"))
+        self.assertEqual(self.tool(485_000), context("wrap_unknown", "485k"))
 
     def test_no_stop_record_is_unknown_work_and_says_compact(self):
         self.on()
         self.no_stop_record()
-        self.assertEqual(self.tool(525_000), context("hard_compact", "525k"))
+        self.assertEqual(self.tool(525_000), context("hard_unknown", "525k"))
 
     def test_off_with_unknown_work_says_pass_compact(self):
         self.no_stop_record()
-        self.assertEqual(self.tool(525_000), {"systemMessage": text("off_compact", "525k")})
+        self.assertEqual(self.tool(525_000), {"systemMessage": text("off_unknown", "525k")})
 
     def test_a_stop_records_without_a_task_list_says_compact(self):
         self.on()
         d = os.path.join(self.state, "dotclaude", "stops", SID + ".json")
         with open(d, "w") as f:
             json.dump({"time": time.time(), "waits": []}, f)
-        self.assertEqual(self.tool(485_000), context("wrap_compact", "485k"))
+        self.assertEqual(self.tool(485_000), context("wrap_unknown", "485k"))
 
     def test_the_plain_pass_rule_is_pass_respawns(self):
         # One definition: lanelib.plain_pass_blockers, which pass-respawn's stop_problem uses.
@@ -690,15 +690,38 @@ class Rearm(Base):
         self.assertEqual(self.stop_at(525_000), block("hard", "525k"))
         self.assertEqual(self.stop_at(546_000), block("hard", "546k"))  # no handoff since
 
-    def test_the_handoff_skill_and_pass_respawn_count_too(self):
+    def test_a_pass_respawn_call_counts(self):
         self.on()
-        for i, call in enumerate((skill_call("handoff"),
-                                  bash_call("pass-respawn -C /home/u/code/dna --compact"))):
+        for i, cmd in enumerate(("pass-respawn -C /home/u/code/dna --compact",
+                                 "  ! pass-respawn -C /home/u/code/dna",
+                                 "/home/u/.local/bin/pass-respawn -C /x")):
             sid = "s%d" % i
             self.write_transcript(525_000)
             self.assertEqual(self.stop(session_id=sid), block("hard", "525k"))
+            self.append(bash_call(cmd), assistant(546_000))
+            self.assertIsNone(self.stop(session_id=sid), cmd)
+
+    def test_naming_pass_respawn_or_a_handoff_alone_does_not_count(self):
+        self.on()
+        for i, call in enumerate((bash_call("grep pass-respawn README.md"),
+                                  bash_call("git diff -- skills/pass/scripts/pass-respawn"),
+                                  bash_call("echo hi; pass-respawn -C /x"),
+                                  skill_call("handoff"))):
+            sid = "n%d" % i
+            self.write_transcript(525_000)
+            self.assertEqual(self.stop(session_id=sid), block("hard", "525k"))
             self.append(call, assistant(546_000))
-            self.assertIsNone(self.stop(session_id=sid))
+            self.assertEqual(self.stop(session_id=sid), block("hard", "546k"), i)
+
+    def test_a_pass_that_never_comes_lets_the_re_arm_resume(self):
+        self.on()
+        self.write_transcript(525_000)
+        self.assertEqual(self.stop(), block("hard", "525k"))
+        self.assertIsNone(self.stop_at(546_000, skill_call("pass")))   # seen at 546k
+        self.assertIsNone(self.stop_at(585_999))                       # under 546k + 40k
+        self.assertEqual(self.stop_at(586_000), block("hard", "586k")) # expired: fires
+        self.assertIsNone(self.stop_at(600_000))                       # under 586k + 20k
+        self.assertEqual(self.stop_at(606_000), block("hard", "606k")) # old call not re-read
 
     def test_other_calls_and_a_subagents_skill_call_do_not(self):
         self.on()
@@ -752,6 +775,113 @@ class PlainPassRule(unittest.TestCase):
         self.assertEqual(lib.plain_pass_blockers([{"a": 1}, ["x"], "dream", None, 3, "monitor"]),
                          ["{'a': 1}", "['x']", "None", "3", "monitor"])
         self.assertEqual(lib.plain_pass_blockers(["dream", "dream"]), [])
+
+
+class SmallWindows(Base):
+    def test_a_150k_window_re_arms_after_a_compact(self):
+        # hysteresis min(50k, tier // 4): hard 105k re-arms under 78.75k
+        self.on()
+        self.write_ctx_window(150_000)
+        self.assertEqual(self.stop(106_000), {"decision": "block",
+                                              "reason": text("hard", "106k", "117k")})
+        self.assertIsNone(self.stop(60_000))
+        self.assertEqual(self.stop(106_000), {"decision": "block",
+                                              "reason": text("hard", "106k", "117k")})
+
+    def test_a_150k_windows_hard_re_arm_stays_under_compact(self):
+        tiers = aps.tiers(150_000, {})
+        self.assertEqual(cw.rearm_step(tiers), 6_000)         # (117k - 105k) // 2
+        self.assertEqual(cw.rearm_step(aps.tiers(600_000, {})), 20_000)
+        self.on()
+        self.write_ctx_window(150_000)
+        self.assertEqual(self.stop(106_000)["reason"], text("hard", "106k", "117k"))
+        self.assertIsNone(self.stop(111_999))
+        self.assertEqual(self.stop(112_000)["reason"], text("hard", "112k", "117k"))
+
+    def test_soft_on_200k_re_arms_after_a_compact_sized_drop(self):
+        self.on()
+        self.write_ctx_window(200_000)
+        self.assertEqual(self.stop(101_000)["reason"], text("soft", "101k", "167k"))
+        self.assertIsNone(self.stop(80_000))       # 100k - 25k = 75k: not yet
+        self.assertIsNone(self.stop(101_000))
+        self.assertIsNone(self.stop(40_000))       # a compact
+        self.assertEqual(self.stop(101_000)["reason"], text("soft", "101k", "167k"))
+
+    def test_600k_keeps_its_50k_hysteresis(self):
+        tiers = aps.tiers(600_000, {})
+        self.assertEqual([cw.hysteresis(tiers, t) for t in aps.TIER_NAMES],
+                         [50_000, 50_000, 50_000])
+
+
+class Wording(Base):
+    def test_each_work_state_picks_its_text(self):
+        tiers = aps.tiers(600_000, {})
+        cases = [(None, "wrap"), ("blocked", "wrap_compact"), ("unknown", "wrap_unknown")]
+        for state, key in cases:
+            rec = cw.fresh_record(None)
+            self.assertEqual(cw.step(rec, 485_000, tiers, "PostToolUse", lambda: True,
+                                     lambda: state)[0], key)
+        rec = cw.fresh_record(None)
+        self.assertEqual(cw.step(rec, 485_000, tiers, "Stop", lambda: True,
+                                 lambda: "busy")[0], None)
+        for state, key in (("busy", "off_compact"), ("blocked", "off_compact"),
+                           ("unknown", "off_unknown"), (None, "off")):
+            rec = cw.fresh_record(None)
+            self.assertEqual(cw.step(rec, 525_000, tiers, "Stop", lambda: False,
+                                     lambda: state)[0], key)
+
+    def test_unknown_texts_never_claim_tasks_run(self):
+        for key in ("soft_unknown", "wrap_unknown", "hard_unknown", "off_unknown"):
+            self.assertNotIn("are running", cw.TEXTS[key])
+            self.assertIn("compact", cw.TEXTS[key])
+        self.assertIn("safe whether or not background work is running", cw.TEXTS["hard_unknown"])
+        self.assertIn("/pass compact is safe if background work may be running",
+                      cw.TEXTS["off_unknown"])
+
+
+class CacheRace(Base):
+    def test_a_decision_made_before_a_toggle_is_never_served_after_it(self):
+        # Hook A reads the flag generation and decides "off"; the toggle writes the flag and
+        # drops the cache; then A stores its stale entry. The next hook must decide again.
+        self.write_transcript(525_000)
+        payload = {"session_id": SID, "hook_event_name": "Stop",
+                   "transcript_path": self.transcript, "cwd": self.cwd}
+        real = aps.decide
+
+        def decide_then_toggle(cwd, pane):
+            answer = real(cwd, pane)                     # off: the default
+            toggle_mod.toggle("on", SID, "%7")           # lands mid-hook
+            return answer
+
+        with mock.patch.object(aps, "decide", decide_then_toggle):
+            self.assertEqual(cw.handle(payload, "%7"), {"systemMessage": text("off", "525k")})
+        stale = aps.load_json(aps.watch_path(SID))["mode"]
+        self.assertEqual((stale["on"], stale["flag"]), (False, "absent"))
+        self.assertEqual(aps.flag_generation("%7"), "g1")
+        self.assertEqual(cw.handle(payload, "%7"), block("hard", "525k"))
+
+    def test_two_writes_in_one_tick_still_differ(self):
+        aps.set_flag("%7", TAB, True)
+        first = aps.flag_generation("%7")
+        aps.set_flag("%7", TAB, True)
+        self.assertNotEqual(aps.flag_generation("%7"), first)
+        self.assertEqual(aps.flag_generation(None), "absent")
+
+
+class LockPrune(Base):
+    def test_a_lock_in_use_is_never_pruned_and_an_old_idle_one_is(self):
+        d = os.path.join(self.state, "dotclaude", "ctx-watch")
+        os.makedirs(d)
+        old = time.time() - 30 * 86400
+        for name in (SID, "idle"):
+            path = os.path.join(d, name + ".lock")
+            open(path, "w").close()
+            os.utime(path, (old, old))
+        with aps.watch_lock(SID) as locked:
+            self.assertTrue(locked)
+            cw.prune_locks(d, time.time())
+        self.assertTrue(os.path.exists(os.path.join(d, SID + ".lock")))
+        self.assertFalse(os.path.exists(os.path.join(d, "idle.lock")))
 
 
 if __name__ == "__main__":
