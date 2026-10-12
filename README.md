@@ -125,11 +125,11 @@ sees it.
 | `hooks/report-check.sh` | PreToolUse(SubagentHandback)/SubagentStop hook: sends a delegated role's malformed report back, at most twice; fails open | symlink `~/.claude/hooks/report-check.sh` |
 | `hooks/handoff-reminder.sh` | UserPromptSubmit hook: on a wrap-up / handoff / clear-memory signal, reminds me to invoke the `handoff` skill instead of improvising it, or the `pass` skill on a terse "... and pass"; a shim over `hooks/handoff_reminder.py`, which holds the classifier | symlink `~/.claude/hooks/handoff-reminder.sh` and `handoff_reminder.py` |
 | `hooks/session-title.sh` | UserPromptSubmit hook: sets the terminal tab title to `[<repo>] <label>` via `sessionTitle`, so tabs are tellable apart; the label comes from the Stop-hook Haiku cache (`.title.txt`), falling back to the current prompt's first line | symlink `~/.claude/hooks/session-title.sh` |
-| `hooks/stop-ring.sh` | Stop hook: plays the Windows notify sound when a session you see finishes (a tab, a plain terminal or a mapped background session), not a subagent, an unmapped background session, a `claude -p` run, a turn that ends with an agent or shell still running for it, or one a queued notice or prompt restarts within a second; logs each decision to `ring.log`, and writes the session's stop record (`stops/<session>.json`: time, tasks in flight, the transcript path, the replies to the last three prompts; records older than 7 days go) for `pass-respawn`; a shim over `hooks/stop_ring.py` | symlink `~/.claude/hooks/stop-ring.sh` and `stop_ring.py` |
+| `hooks/stop-ring.sh` | Stop hook: plays the Windows notify sound when a session you see finishes (a tab, a plain terminal or a mapped background session), not a subagent, an unmapped background session, a `claude -p` run, a turn that ends with an agent or shell still running for it, or one a queued notice or prompt restarts within a second; logs each decision to `ring.log`, and writes the session's stop record (`stops/<session>.json`: time, tasks in flight, the transcript path, the replies of the last 5 turns; records older than 7 days go) for `pass-respawn`; a shim over `hooks/stop_ring.py` | symlink `~/.claude/hooks/stop-ring.sh` and `stop_ring.py` |
 | `hooks/notify.sh` | Notification(permission_prompt) hook: pops a Windows toast, resolving the toast path per platform (WSL via `wslpath`, native Windows git-bash via `cygpath`), and rings like `stop-ring.sh` | symlink `~/.claude/hooks/notify.sh` |
 | `hooks/tmux-state.sh` | Prompt, tool, Stop and Notification hook: sets `@claude_state` (busy, wait, idle) on the tmux window the session is shown in, for the indicator in `tmux/claude.conf`; does nothing outside tmux | symlink `~/.claude/hooks/tmux-state.sh` |
 | `hooks/session-pane.sh` | Sourced by the three hooks above, not a hook: finds the tmux pane a session is shown in, and whether a person sees it | symlink `~/.claude/hooks/session-pane.sh` |
-| `hooks/pass-banner.sh` | SessionStart (`startup`) hook: after a plain `/pass` respawned the tab, shows everything the old session said since your last prompt, once, as a banner you see and the model doesn't (40 lines or 4 KiB, then a pointer to Ctrl-b P); a shim over `hooks/pass_banner.py`; fails open | symlink `~/.claude/hooks/pass-banner.sh` and `pass_banner.py` |
+| `hooks/pass-banner.sh` | SessionStart (`startup`) hook: after a plain `/pass` respawned the tab, shows what the old session said in its last turn, once, as a banner you see and the model doesn't (40 lines of reply, 4 KiB in all, then where to read the rest); a shim over `hooks/pass_banner.py`; fails open | symlink `~/.claude/hooks/pass-banner.sh` and `pass_banner.py` |
 | `hooks/session-registry.sh` | SessionStart/SessionEnd hook: records which session is open in which tmux tab (`$XDG_STATE_HOME/dotclaude/open-sessions/`), for `claude-restore`; deletes the entry on `/exit` or `/clear`, marks it when the window or claude is killed; then hands each payload to `claude-saved` (Star and Shelve; the star follows `/clear`); does nothing outside tmux | symlink `~/.claude/hooks/session-registry.sh` |
 | `hooks/session-summary.sh` | Stop hook: regenerates a 1-2 sentence session summary via a direct Haiku Messages-API call (Claude subscription OAuth token, stdlib urllib, no API key/jq), detached so it never blocks; caches the summary to `<config-dir>/session-summaries/<session_id>.txt` for the status-line widget and a short (`<=32`-char) tab label to `<session_id>.title.txt` for `session-title.sh` | symlink `~/.claude/hooks/session-summary.sh` |
 | `hooks/overwrite-guard.sh` | PreToolUse(Write) hook: denies a Write over a file this session hasn't read, or one that cuts a file of 1 KB or more to under a fifth; a shim over `hooks/overwrite_guard.py`; fails open | symlink `~/.claude/hooks/overwrite-guard.sh` and `overwrite_guard.py` |
@@ -385,9 +385,9 @@ need nothing extra.
   included, can be restored. Transcripts are never tracked, and the repo has no remote. A
   session that finds another one mid-commit skips, and the next trigger commits. Never blocks.
 - **SessionStart (`startup`): `pass-banner.sh`** (in this repo). After a plain `/pass` respawned
-  the tab, it shows everything the old session said since your last prompt, once, as a banner
-  the model doesn't see (see Pass, below). It acts only in the same tab on the same tmux server, within 120 s of the pass,
-  and never in a `claude -p` run or a subagent. Fails open.
+  the tab, it shows what the old session said in its last turn, once, as a banner the model
+  doesn't see (see Pass, below). It acts only in the same tab on the same tmux server, within
+  120 s of the pass, and never in a `claude -p` run or a subagent. Fails open.
 - **SessionStart (`startup|resume|clear|compact`) / Stop / SessionEnd: `lane-identity.sh`** (in
   this repo). In a lane it tells the session its lane id, branch, claims, port and record, and
   registers it in `lane.json`; after a compact it adds "re-read your record". In the main
@@ -463,11 +463,14 @@ idle, the script rechecks the handoff and respawns the pane with a fresh `claude
   a draft or no input box between `/compact` and the resume prompt leaves the prompt for you to
   type (`partial`): it stays in the status line until a key press, and `pass.log` has it whole.
 - What Claude said before a pass: a plain pass clears the pane, so the old session's replies
-  would leave the screen. The fresh session shows everything said since your last prompt once
-  as a banner (the first 40 lines or 4 KiB), which you see and the model doesn't. Ctrl-b P shows
-  the replies to the last three prompts in a popup at any time, opened at the newest, as does
-  "Replies before pass" in the Ctrl-b Enter menu and the tab's right-click menu (`pass-last`,
-  linked by `setup-tmux.sh`). A compact keeps the conversation, so it needs neither.
+  would leave the screen. The fresh session shows what was said in the last turn once as a
+  banner (at most 40 lines of reply and 4 KiB in all), which you see and the model doesn't. A
+  turn is every reply to one prompt_id: a turn a background-task notice started counts as its
+  own, so the last turn isn't always your last prompt. Ctrl-b P shows the last 5 turns in a
+  popup at any time, opened at the last one, as does "Replies before pass" in the Ctrl-b Enter
+  menu and the tab's right-click menu (`pass-last`, linked by `setup-tmux.sh`). Without
+  `setup-tmux.sh`, a cut banner names the file instead. A compact keeps the conversation, so it
+  needs neither.
 - One pass may be pending per session. `pass-respawn -C <toplevel> --cancel` ends it, until the
   waiter has begun acting; then it finishes, and `--cancel` says `too-late` (also, naming the
   outcome, when the waiter dropped or acted on its own while still holding its lock). Once the

@@ -197,8 +197,9 @@ class Baseline(unittest.TestCase):
         self.assertTrue(os.access(os.path.join(REPO, "hooks", "overwrite-guard.sh"), os.X_OK))
 
     def test_the_pass_banner_is_wired_on_startup_only(self):
-        # A /pass respawn starts as `startup`; the banner shows what the old session said since
-        # the last prompt, once. The first reply waits for SessionStart hooks, so the timeout stays short.
+        # A /pass respawn starts as `startup`; the banner shows what the old session said in its
+        # last turn, once. The first reply waits for SessionStart hooks, so the timeout stays
+        # short.
         banner = 'bash "$HOME/.claude/hooks/pass-banner.sh"'
         self.assertEqual(commands("SessionStart", "startup"), [banner])
         (h,) = [h for e in S["hooks"]["SessionStart"] for h in e["hooks"]

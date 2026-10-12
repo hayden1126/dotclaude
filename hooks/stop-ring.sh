@@ -28,8 +28,8 @@ input=$(cat 2>/dev/null)
 # upkeep and a monitor can run for hours, so those don't count.
 #
 # The same step writes the session's stop record, $XDG_STATE_HOME/dotclaude/stops/<session>.json
-# (time, the waits in flight, every task's label, the transcript path, and `replies`: everything
-# Claude said since each of the last three prompts), for every stop but a subagent's, and prunes
+# (time, the waits in flight, every task's label, the transcript path, and `replies`: what Claude
+# said in the last 5 turns), for every stop but a subagent's, and prunes
 # records older than 7 days once a day. pass-respawn's plain mode respawns only after a stop with
 # no task but dream, since in-process agents are no child process it could see; it reads the
 # transcript there and copies `replies` for the respawned session's banner

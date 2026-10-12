@@ -22,6 +22,7 @@ import os
 import re
 import shlex
 import shutil
+import subprocess
 import sys
 import time
 import unittest
@@ -917,6 +918,26 @@ class Units(unittest.TestCase):
         self.mod = load()
         self.dir = __import__("tempfile").mkdtemp()
         self.addCleanup(shutil.rmtree, self.dir)
+
+    def test_the_stop_record_is_read_as_utf8_in_any_locale(self):
+        # stop_ring.py writes it as UTF-8. The C locale with Python's UTF-8 mode and coercion off
+        # reads files as ASCII by default.
+        stops = os.path.join(self.dir, "dotclaude", "stops")
+        os.makedirs(stops)
+        with open(os.path.join(stops, "s1.json"), "w", encoding="utf-8") as f:
+            json.dump({"replies": [{"prompt_id": "p1", "text": "caf" + chr(0x00E9)}]}, f,
+                      ensure_ascii=False)
+        code = ("from importlib.machinery import SourceFileLoader\n"
+                "from importlib.util import module_from_spec, spec_from_loader\n"
+                f"loader = SourceFileLoader('pr', {SCRIPT!r})\n"
+                "mod = module_from_spec(spec_from_loader('pr', loader))\n"
+                "loader.exec_module(mod)\n"
+                "print(ascii(mod.stop_record('s1')['replies'][0]['text']))\n")
+        env = {k: v for k, v in os.environ.items() if not k.startswith(("CLAUDE", "TMUX"))}
+        env.update(LC_ALL="C", LANG="C", PYTHONCOERCECLOCALE="0", XDG_STATE_HOME=self.dir)
+        p = subprocess.run([sys.executable, "-X", "utf8=0", "-c", code], capture_output=True,
+                           text=True, timeout=20, env=env)
+        self.assertEqual((p.returncode, p.stdout.strip()), (0, "'caf\\xe9'"), p.stderr)
 
     def test_the_sessions_claude_is_the_nearest_claude_ancestor(self):
         self.assertEqual(self.mod.session_claude(table(), os.getpid()), CLAUDE)

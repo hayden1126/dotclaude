@@ -52,7 +52,7 @@ once, while waiting too. Past --timeout (600 s; at most 3600) it gives up (`time
 shows one line in the pane's status line and touches nothing else. Never respawn or compact on a
 failing check: the respawn throws away the context that could fix the gap.
   plain    write the Star carry marker (tmux/claude-saved re-keys a starred chat to the new
-           session on its `startup`) and the replies since the last prompts
+           session on its `startup`) and the replies of the last 5 turns
            (pass-last/<pane number>.json: the stop record's `replies` and the tab, for
            hooks/pass-banner.sh's banner and the Ctrl-b P popup, tmux/pass-last; with no reply
            text, any older one for the pane goes),
@@ -337,7 +337,8 @@ def session_problem(session: dict | None, sid: str, pid: int, start: int | None,
 def stop_record(sid: str) -> dict | None:
     """The session's stop record (hooks/stop-ring.sh), or None."""
     try:
-        with open(os.path.join(lanelib.state_dir(), "stops", f"{sid}.json")) as f:
+        with open(os.path.join(lanelib.state_dir(), "stops", f"{sid}.json"),
+                  encoding="utf-8") as f:
             rec = json.load(f)
     except (OSError, ValueError):
         return None
@@ -971,9 +972,9 @@ def write_utf8_json(path: str, data) -> None:
 
 
 def write_last(plan: Plan, tab: dict | None) -> str | None:
-    """Everything the old session said since the last few prompts, for the respawned session's
-    banner (hooks/pass-banner.sh, which shows the newest prompt's replies and sets `shown`) and
-    the popup (tmux/pass-last, Ctrl-b P, which shows them all): the stop record's `replies`,
+    """What the old session said in its last 5 turns, for the respawned session's banner
+    (hooks/pass-banner.sh, which shows the last turn and sets `shown`) and the popup
+    (tmux/pass-last, Ctrl-b P, which shows every turn): the stop record's `replies`,
     with the tab, at pass-last/<pane number>.json as {tab, from_session, written_at, replies,
     shown}. Not one-shot, and apart from the carry marker, which claude-saved consumes on the
     same SessionStart. Its path, or None when nothing was written: with no reply text or no tab,
