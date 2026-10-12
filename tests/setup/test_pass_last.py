@@ -2,19 +2,38 @@
 (stdlib only).
 
 It reads $XDG_STATE_HOME/dotclaude/pass-last/<pane number>.json and shows every reply, grouped by
-prompt, oldest first, only when the entry's tab is this pane on this tmux server. A stub tmux answers `display` with the current
-pane ($STUB_PANE) or the server line ($STUB_SERVER; empty fails). Output is not a terminal here,
-so the script prints instead of starting less."""
+turn, oldest first, only when the entry's tab is this pane on this tmux server. A stub tmux
+answers `display` with the current pane ($STUB_PANE) or the server line ($STUB_SERVER; empty
+fails). Output is not a terminal here, so the script prints instead of starting less."""
+import importlib.util
 import json
 import os
 import shutil
 import subprocess
 import tempfile
+import sys
 import time
 import unittest
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 SCRIPT = os.path.join(REPO, "tmux", "pass-last")
+
+spec = importlib.util.spec_from_file_location("pass_banner",
+                                              os.path.join(REPO, "hooks", "pass_banner.py"))
+pass_banner = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(pass_banner)
+
+# A locale whose files read as ASCII: C, with Python's UTF-8 mode and coercion off. -I ignores
+# those env switches and coerces C to UTF-8, so the fake python3 drops -I and adds -X utf8=0.
+ASCII_LOCALE = {"LC_ALL": "C", "LANG": "C", "PYTHONCOERCECLOCALE": "0", "PYTHONUTF8": "0",
+                "FAKE_PY_ASCII": "1"}
+FAKE_PYTHON = """#!/usr/bin/env bash
+if [ -n "${FAKE_PY_ASCII:-}" ]; then
+  args=(); for a in "$@"; do [ "$a" = -I ] || args+=("$a"); done
+  exec %s -X utf8=0 "${args[@]}"
+fi
+exec %s "$@"
+"""
 
 STUB = """#!/usr/bin/env bash
 { printf '%s' "$(basename "$0")"; printf '\\x1f%s' "$@"; printf '\\n'; } >> "$STUB_LOG"
@@ -45,6 +64,9 @@ class PassLast(unittest.TestCase):
         with open(os.path.join(stubs, "tmux"), "w") as f:
             f.write(STUB)
         os.chmod(os.path.join(stubs, "tmux"), 0o755)
+        with open(os.path.join(stubs, "python3"), "w") as f:
+            f.write(FAKE_PYTHON % (sys.executable, sys.executable))
+        os.chmod(os.path.join(stubs, "python3"), 0o755)
         self.log = os.path.join(self.tmp, "calls.log")
         self.dir = os.path.join(self.tmp, "state", "dotclaude", "pass-last")
         self.env = {k: v for k, v in os.environ.items()
@@ -72,7 +94,7 @@ class PassLast(unittest.TestCase):
         self.entry(message="\n".join(f"line {i}" for i in range(1, 101)))
         out = self.show("%7")
         self.assertTrue(out.startswith(
-            HEAD + "\n\n== Replies from 2026-10-12 14:04 (since your last prompt) ==\n\nline 1\n"))
+            HEAD + "\n\n== Replies from 2026-10-12 14:04 (last turn) ==\n\nline 1\n"))
         self.assertTrue(out.endswith("line 100\n"))  # no cap: the popup scrolls
         self.assertIn(["tmux", "display", "-p", "-t", "%7",
                        "#{start_time} #{pid} #{socket_path}"], self.calls())
@@ -84,8 +106,42 @@ class PassLast(unittest.TestCase):
                             {"prompt_id": "p3", "text": " "}, 5])
         self.assertEqual(self.show("%7"), "\n\n".join([
             HEAD, "== Replies from 2026-10-12 13:50 ==", "Older reply.",
-            "== Replies from 2026-10-12 14:04 (since your last prompt) ==", "First part.",
+            "== Replies from 2026-10-12 14:04 (last turn) ==", "First part.",
             "Pass armed."]) + "\n")
+
+    def test_the_popup_and_the_banner_agree_on_the_last_turn(self):
+        cases = [
+            [{"prompt_id": "p1", "text": "a"}, {"prompt_id": "p2", "text": "b"},
+             {"prompt_id": "p1", "text": "c"}],                       # an id that recurs
+            [{"prompt_id": "p1", "text": "a"}, {"prompt_id": "none-1.0", "text": "b"}],
+            [{"prompt_id": "p1", "text": "a"}, {"prompt_id": "p1", "text": " "},
+             {"prompt_id": "p1", "text": "c"}, 5],                    # junk inside the turn
+            [{"prompt_id": "p1", "text": "a"}, {"prompt_id": "p2", "text": "b"},
+             {"prompt_id": "p2", "text": "c"}],
+        ]
+        for replies in cases:
+            with self.subTest(replies=replies):
+                self.entry(replies=[dict(r, time=T2) if isinstance(r, dict) else r
+                                    for r in replies])
+                popup_last = self.show("%7").split("(last turn) ==\n\n", 1)[1]
+                self.assertEqual(popup_last, "\n\n".join(pass_banner.newest_group(replies)) + "\n")
+
+    def test_the_entry_is_read_as_utf8_in_any_locale(self):
+        os.makedirs(self.dir)
+        with open(os.path.join(self.dir, "7.json"), "w", encoding="utf-8") as f:
+            json.dump({"tab": TAB, "written_at": SAVED, "from_session": "s1",
+                       "replies": [{"prompt_id": "p1", "text": "caf" + chr(0x00E9),
+                                    "time": T2}]}, f, ensure_ascii=False)
+        self.env.update(ASCII_LOCALE)
+        p = subprocess.run(["bash", SCRIPT, "%7"], capture_output=True, timeout=10, env=self.env,
+                           stdin=subprocess.DEVNULL)
+        self.assertEqual((p.returncode, p.stderr), (0, b""))
+        self.assertTrue(p.stdout.endswith(("caf" + chr(0x00E9) + "\n").encode()), p.stdout)
+
+    def test_less_opens_at_the_end_and_ignores_a_quit_if_one_screen(self):
+        # A LESS=-F in the environment would close a short popup at once; -+F turns it off.
+        with open(SCRIPT) as f:
+            self.assertIn("| less -+F +G\n", f.read())
 
     def test_shown_does_not_matter_and_the_entry_stays(self):
         self.entry(shown=False)

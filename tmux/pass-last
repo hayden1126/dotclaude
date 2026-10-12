@@ -5,11 +5,11 @@
 #                        it); with no pane, tmux's current pane
 #
 # pass-respawn writes $XDG_STATE_HOME/dotclaude/pass-last/<pane number>.json ({tab, from_session,
-# written_at, replies, shown}) right before it respawns the pane: everything said since each of
-# the last three prompts (stop-ring.sh keeps them). hooks/pass-banner.sh shows the newest prompt's
-# replies once as the new session's banner. This shows them all, as often as asked, oldest first,
-# a header line with its time before each prompt's group, so less opens at the end, on the
-# newest. Only when the entry's tab is this pane on this tmux server (a pane number repeats on a
+# written_at, replies, shown}) right before it respawns the pane: the replies of the last 5 turns
+# (stop-ring.sh keeps them; a turn is a run of replies with one prompt_id). hooks/pass-banner.sh
+# shows the last turn once as the new session's banner. This shows every turn, as often as asked,
+# oldest first, each under a header line with its time, and less opens at the end, on the last
+# turn (-+F: a LESS=-F in the environment would close a short popup at once). Only when the entry's tab is this pane on this tmux server (a pane number repeats on a
 # new server); otherwise it says there is none. Control characters (C0 but tab and newline, DEL,
 # C1) are dropped. Linked into ~/.local/bin by setup-tmux.sh; Ctrl-b P (tmux/claude.conf) opens
 # it in a popup, and the Ctrl-b Enter menu (tmux/base.conf) and the tab's right-click menu
@@ -53,7 +53,8 @@ def when(t):
     return "?"
 
 def groups(replies):
-    """Runs of replies that share a prompt_id, oldest first."""
+    """Turns: runs of replies that share a prompt_id, oldest first. hooks/pass_banner.py's
+    newest_group takes the last run the same way, so the banner and this agree."""
     out = []
     for r in replies if isinstance(replies, list) else []:
         if not (isinstance(r, dict) and isinstance(r.get("prompt_id"), str)
@@ -84,7 +85,7 @@ def show():
     parts = ["Replies before the pass (saved %s, session %s); the newest are last, q closes."
              % (when(e.get("written_at")), clean(sid) if isinstance(sid, str) else "?")]
     for i, (_, rs) in enumerate(found):
-        last = " (since your last prompt)" if i == len(found) - 1 else ""
+        last = " (last turn)" if i == len(found) - 1 else ""
         parts.append("== Replies from %s%s ==" % (when(rs[0].get("time")), last))
         parts.extend(clean(r["text"]).strip() for r in rs)
     return "\n\n".join(parts)
@@ -94,7 +95,7 @@ EOF
 
 text=$(PASS_LAST_DIR="$state/pass-last" python3 -I -c "$PY" "$pane" "$server" 2>&1)
 if [ -t 1 ]; then
-  printf '%s\n' "$text" | less +G
+  printf '%s\n' "$text" | less -+F +G
 else
   printf '%s\n' "$text"
 fi
