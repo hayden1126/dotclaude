@@ -88,6 +88,7 @@ import argparse
 import contextlib
 import dataclasses
 import datetime
+import fcntl
 import glob
 import json
 import math
@@ -95,6 +96,7 @@ import os
 import re
 import shlex
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -114,6 +116,7 @@ COMPACT_GAP = 1.0  # secs between typing /compact and the prompt (it queues, S4)
 TIMEOUT = 600.0
 MAX_TIMEOUT = 3600.0
 PANE_RE = re.compile(r"%\d+")
+SID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
 PANE_FORMAT = "#{pane_pid} #{pane_current_command}"
 PROMPT_MARK = chr(0x276F)  # the input box's prompt mark, then a no-break space
 PROMPT_LINE = re.compile(PROMPT_MARK + "[" + chr(0xA0) + " ]")
@@ -127,7 +130,12 @@ DROPS = {
     "timeout": "pass dropped: the turn never went idle; run /pass again",
     "failed": "pass failed: tmux could not respawn or type into the pane; see pass.log",
     "error": "pass failed: an error in the waiter; see pass.log",
+    "cancelled": "pass cancelled",
 }
+
+
+class Cancelled(Exception):
+    """SIGTERM reached the waiter: `pass-respawn --cancel`."""
 
 
 class Refuse(Exception):
@@ -599,6 +607,8 @@ def parse(argv=None) -> argparse.Namespace:
     ap = argparse.ArgumentParser(prog="pass-respawn", description=__doc__.split("\n\n")[0])
     ap.add_argument("--compact", action="store_true", help="compact in place instead of respawning")
     ap.add_argument("--print", action="store_true", help="print the mode and argv, do nothing")
+    ap.add_argument("--cancel", action="store_true",
+                    help="end this session's pending waiter, if any")
     ap.add_argument("--foreground", action="store_true", help="wait in-process (tests)")
     ap.add_argument("--timeout", type=timeout_arg, default=TIMEOUT, metavar="SECONDS",
                     help=f"give up when the turn isn't idle by then (default {TIMEOUT:g}, at most "
@@ -612,6 +622,7 @@ def prepare(args: argparse.Namespace, procs) -> Plan:
     called = time.time()
     mode = "compact" if args.compact else "plain"
     sid = os.environ.get("CLAUDE_CODE_SESSION_ID") or ""
+    sid = sid if SID_RE.fullmatch(sid) else ""  # it names files: a plain id or nothing
     claude_pid = session_claude(procs(), os.getpid())
     session = load_session(claude_pid) if claude_pid else None
     launch = session.get("cwd") if session and isinstance(session.get("cwd"), str) else None
@@ -650,8 +661,8 @@ def prepare(args: argparse.Namespace, procs) -> Plan:
         raise Refuse(1, "pass-respawn: can't find this session's claude process, so it can't "
                      "tell when the turn ends. Run it bare (sandbox-off)", "no claude")
     if not sid:
-        raise Refuse(1, "pass-respawn: CLAUDE_CODE_SESSION_ID is unset, so it can't tell this "
-                     "session's file from another's", "no session id")
+        raise Refuse(1, "pass-respawn: CLAUDE_CODE_SESSION_ID is unset (or not a plain id), so "
+                     "it can't tell this session's file from another's", "no session id")
     if why := session_problem(session, sid, claude_pid, None, pane):
         raise Refuse(1, f"pass-respawn: {why} (~/.claude/sessions/{claude_pid}.json, procStart "
                      "checked); it can't tell when this session's turn ends", why)
@@ -809,20 +820,119 @@ def wait_and_act(plan: Plan, procs) -> str:
 
 
 def run_waiter(plan: Plan, procs) -> str:
-    """wait_and_act, with any exception logged as `error` (in the detached waiter nothing else
-    can see it)."""
+    """wait_and_act, with SIGTERM (`--cancel`) logged as `cancelled` and any exception as
+    `error` (in the detached waiter nothing else can see it)."""
+    def on_term(signum, frame):
+        raise Cancelled()
+    old = signal.signal(signal.SIGTERM, on_term)
     try:
         return wait_and_act(plan, procs)
+    except Cancelled:
+        return drop(plan, "cancelled", "on SIGTERM")
     except BaseException as e:  # noqa: BLE001  logged and shown, as nothing else can be
         tmux(plan, "display-message", "-t", plan.pane, DROPS["error"])
         log(plan.mode, "error", plan.pane, f"{type(e).__name__}: {e}")
         return "error"
+    finally:
+        signal.signal(signal.SIGTERM, old)
 
 
-def detach(plan: Plan, procs) -> str:
+# ---- one pending pass per session ----
+
+def pending_path(sid: str) -> str:
+    return os.path.join(lanelib.state_dir(), "pass-pending", f"{sid}.lock")
+
+
+def take_pending(plan: Plan) -> int:
+    """An fd holding the exclusive flock on the session's pending lock, which the waiter keeps
+    for its whole life; refused when another waiter holds it."""
+    path = pending_path(plan.session_id)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        os.close(fd)
+        raise Refuse(1, f"pass-respawn: a pass is already pending; `pass-respawn -C "
+                     f"{plan.toplevel} --cancel` drops it", "pending") from None
+    return fd
+
+
+def claim(fd: int) -> None:
+    """Write the waiter's pid and start time into the lock it holds, for --cancel."""
+    os.ftruncate(fd, 0)
+    os.pwrite(fd, f"{os.getpid()} {proc_start(os.getpid())}\n".encode(), 0)
+
+
+def is_pass_respawn(pid: int) -> bool:
+    """Whether pid runs this script: its interpreter's first argument (or argv[0]) is
+    pass-respawn."""
+    try:
+        with open(f"/proc/{int(pid)}/cmdline", "rb") as f:
+            argv = f.read().split(b"\0")
+    except OSError:
+        return False
+    return any(os.path.basename(a) == b"pass-respawn" for a in argv[:2])
+
+
+def cancel() -> int:
+    """End this session's pending waiter: SIGTERM to the pid in its lock, once that pid is a
+    live pass-respawn with the start time written beside it (a reused pid is not), then wait
+    for the lock to free."""
+    sid = os.environ.get("CLAUDE_CODE_SESSION_ID") or ""
+    pane = os.environ.get("TMUX_PANE")
+    if not SID_RE.fullmatch(sid):
+        print("pass-respawn: CLAUDE_CODE_SESSION_ID is unset (or not a plain id)")
+        log("cancel", "refused", pane, "no session id")
+        return 1
+    try:
+        fd = os.open(pending_path(sid), os.O_RDWR | os.O_NOFOLLOW | os.O_CLOEXEC)
+    except FileNotFoundError:
+        fd = None
+    try:
+        if fd is not None:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                held = True
+            else:
+                held = False
+        if fd is None or not held:
+            print(f"pass-respawn: no pass pending for session {sid}")
+            log("cancel", "cancelled", pane, "nothing pending")
+            return 0
+        fields = os.pread(fd, 64, 0).decode("ascii", "replace").split()
+        pid = int(fields[0]) if fields and fields[0].isdigit() else None
+        start = fields[1] if len(fields) > 1 else None
+        if pid is None or str(proc_start(pid)) != start or not is_pass_respawn(pid):
+            print(f"pass-respawn: the pending lock names pid {pid}, which doesn't match a live "
+                  "pass-respawn started then; not signalling it")
+            log("cancel", "refused", pane, f"pid {pid} doesn't match")
+            return 1
+        os.kill(pid, signal.SIGTERM)
+        for _ in range(50):
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                time.sleep(0.1)
+        else:
+            print(f"pass-respawn: sent SIGTERM to waiter {pid}, but it still holds the lock")
+            log("cancel", "error", pane, f"waiter {pid} still pending after SIGTERM")
+            return 1
+        print(f"pass-respawn: cancelled the pending pass (waiter {pid})")
+        log("cancel", "cancelled", pane, f"waiter {pid}")
+        return 0
+    finally:
+        if fd is not None:
+            os.close(fd)
+
+
+def detach(plan: Plan, procs, lock: int) -> str:
     """Run the waiter in a double-forked grandchild (fork, setsid, fork), reparented away from
     this call so the Bash tool's end can't reach it, with /dev/null for stdin, stdout and stderr,
-    no other inherited descriptor and / as its directory (watch-guard's spawn_waiter). Returns
+    no other inherited descriptor but the pending lock, which it keeps (holding the flock) and
+    writes its pid into, and / as its directory (watch-guard's spawn_waiter). Returns
     "" once the grandchild runs the waiter, else why it didn't start: the middle process and the
     grandchild's setup say so down a pipe, and the middle's exit status must be 0."""
     r, report = os.pipe()
@@ -839,9 +949,13 @@ def detach(plan: Plan, procs) -> str:
                     null = os.open(os.devnull, os.O_RDWR)
                     for fd in (0, 1, 2):
                         os.dup2(null, fd)
-                    os.closerange(3, report)
-                    os.closerange(report + 1, os.sysconf("SC_OPEN_MAX"))
+                    low = 3
+                    for keep in sorted((report, lock)):
+                        os.closerange(low, keep)
+                        low = keep + 1
+                    os.closerange(low, os.sysconf("SC_OPEN_MAX"))
                     os.chdir("/")
+                    claim(lock)
                 except BaseException as e:  # noqa: BLE001  said down the pipe
                     with contextlib.suppress(OSError):
                         os.write(report, f"{type(e).__name__}: {e}".encode())
@@ -868,6 +982,8 @@ def detach(plan: Plan, procs) -> str:
 
 def main(argv=None, procs=proc_table) -> int:
     args = parse(argv)
+    if args.cancel:
+        return cancel()
     mode = "compact" if args.compact else "plain"
     try:
         plan = prepare(args, procs)
@@ -883,12 +999,24 @@ def main(argv=None, procs=proc_table) -> int:
         for action in plan.actions(approved):
             print(shlex.join(action))
         return 0
-    if args.foreground:
-        return 0 if run_waiter(plan, procs) in ("respawn", "compact") else 1
     try:
-        err = detach(plan, procs)
+        lock = take_pending(plan)
+    except Refuse as r:
+        print(r.message)
+        log(mode, "refused", plan.pane, r.reason)
+        return r.code
+    if args.foreground:
+        try:
+            claim(lock)
+            return 0 if run_waiter(plan, procs) in ("respawn", "compact") else 1
+        finally:
+            os.close(lock)
+    try:
+        err = detach(plan, procs, lock)
     except OSError as e:
         err = f"{type(e).__name__}: {e}"
+    finally:
+        os.close(lock)
     if err:
         print(f"pass-respawn: the waiter didn't start: {err}")
         log(mode, "error", plan.pane, f"detach: {err}")
