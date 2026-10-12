@@ -11,7 +11,8 @@ Two rules keep lane status single-writer and absolute (docs/lanes.md, invariants
             merge) when <common-dir>/lanes/config.toml exists.
             New text is a Write's content, or an Edit's new_string minus the phrases its
             old_string already held (a MultiEdit's edits likewise), so an edit near an old line
-            still passes.
+            still passes. HTML comments and code are skipped on both sides (lanelib.prose_only),
+            the lint handoff-check runs too: a quoted example claims nothing.
 
 A repo with no lanes is untouched. Any failure allows the call (fail open) and is logged to
 $XDG_STATE_HOME/dotclaude/lane-guard.log, as is every deny.
@@ -47,15 +48,16 @@ def deny(reason, note):
 
 
 def added_text(tool: str, inp: dict) -> list[str]:
-    """The relative phrases this call adds to the file."""
+    """The relative phrases this call adds to the file's prose (lanelib.prose_only: comments and
+    code quote, they don't claim; the same lint handoff-check runs)."""
     if tool == "Write":
-        return lanelib.relative_phrases(str(inp.get("content") or ""))
+        return lanelib.relative_phrases(lanelib.prose_only(str(inp.get("content") or "")))
     edits = inp.get("edits") if tool == "MultiEdit" else [inp]
     out = []
     for e in edits if isinstance(edits, list) else []:
         if isinstance(e, dict):
-            out += lanelib.added_phrases(str(e.get("old_string") or ""),
-                                         str(e.get("new_string") or ""))
+            out += lanelib.added_phrases(lanelib.prose_only(str(e.get("old_string") or "")),
+                                         lanelib.prose_only(str(e.get("new_string") or "")))
     return out
 
 

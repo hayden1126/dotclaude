@@ -15,6 +15,7 @@ import glob
 import json
 import os
 import re
+import shutil
 import subprocess
 import tempfile
 import time
@@ -40,12 +41,29 @@ def relative_phrases(text: str) -> list[str]:
     return [" ".join(m.group(0).lower().split()) for m in RELATIVE.finditer(text or "")]
 
 
+FENCE = re.compile(r"\s{0,3}(`{3,}|~{3,})")
+
+
 def prose_only(text: str) -> str:
     """text without HTML comments, fenced code blocks and inline code: what quotes an example
-    rather than claiming anything."""
+    rather than claiming anything. The one lint the guard and handoff-check share.
+
+    A fence opens with 3+ backticks or tildes and closes on a line of the same char, at least as
+    long, with nothing after but whitespace. An unclosed fence runs to the end of the text, which
+    errs toward passing quoted text, never toward denying prose."""
     text = re.sub(r"<!--.*?-->", " ", text or "", flags=re.DOTALL)
-    text = re.sub(r"^\s*(```|~~~).*?^\s*\1[^\n]*$", " ", text, flags=re.DOTALL | re.MULTILINE)
-    return re.sub(r"`[^`\n]*`", " ", text)
+    kept, fence = [], None
+    for line in text.splitlines():
+        m = FENCE.match(line)
+        if fence is None:
+            if m:
+                fence = m.group(1)
+            else:
+                kept.append(line)
+        elif m and m.group(1)[0] == fence[0] and len(m.group(1)) >= len(fence) \
+                and not line[m.end():].strip():
+            fence = None
+    return re.sub(r"`[^`\n]*`", " ", "\n".join(kept))
 
 
 def added_phrases(old: str, new: str) -> list[str]:
@@ -193,6 +211,67 @@ def record_path(lane: dict) -> str:
     return os.path.join(record_dir(lane), "STATUS.md")
 
 
+def walk_record(src: str, rel: str = "", seen: frozenset = frozenset()):
+    """Yield (path, relative path, kind) under src, kind 'dir', 'file' or 'link'. A symlink to a
+    file counts as that file and one to a dir as that dir, so evidence outlives its target; a
+    dangling link, a loop back into an ancestor, or a link to anything else stays a 'link'."""
+    seen = seen | {os.path.realpath(src)}
+    for entry in sorted(os.scandir(src), key=lambda e: e.name):
+        path, sub = entry.path, os.path.join(rel, entry.name)
+        if entry.is_symlink():
+            if os.path.isfile(path):
+                yield path, sub, "file"
+            elif os.path.isdir(path) and os.path.realpath(path) not in seen:
+                yield path, sub, "dir"
+                yield from walk_record(path, sub, seen)
+            else:
+                yield path, sub, "link"
+        elif entry.is_dir(follow_symlinks=False):
+            yield path, sub, "dir"
+            yield from walk_record(path, sub, seen)
+        else:
+            yield path, sub, "file"
+
+
+def copy_record(src: str, dest: str) -> None:
+    """Copy a record dir (a lane's .lane/) to dest, which must not exist, per walk_record."""
+    os.makedirs(dest)
+    for path, rel, kind in walk_record(src):
+        target = os.path.join(dest, rel)
+        if kind == "dir":
+            os.makedirs(target, exist_ok=True)
+        elif kind == "link":
+            os.symlink(os.readlink(path), target)
+        else:
+            shutil.copy2(path, target)
+
+
+def newest_mtime(src: str) -> float:
+    """The latest mtime under src, dirs included (a deletion touches its dir)."""
+    newest = os.stat(src).st_mtime
+    for path, _, kind in walk_record(src):
+        st = os.lstat(path) if kind == "link" else os.stat(path)
+        newest = max(newest, st.st_mtime)
+    return newest
+
+
+def mirror_dir(repo: "Repo", lane_id: str) -> str | None:
+    """lanes/<id>/mirror, the copy of a lane's .lane/ that outlives its worktree, or None. A hook
+    killed between its two renames leaves only mirror.old, the only copy: this puts it back (or,
+    if the rename fails, returns it), so no reader misses it and nothing deletes it unread."""
+    dest = os.path.join(repo.lane_dir(lane_id), "mirror")
+    old = dest + ".old"
+    if os.path.isdir(dest):
+        return dest
+    if os.path.isdir(old):
+        try:
+            os.rename(old, dest)
+            return dest
+        except OSError:
+            return old
+    return None
+
+
 def write_json(path: str, data) -> None:
     """Atomic write: a temp file in the same dir, fsynced, then renamed over path."""
     d = os.path.dirname(path)
@@ -302,11 +381,35 @@ def sessions_dir() -> str:
                         "sessions")
 
 
-def pids_visible() -> bool:
+SANDBOX_INITS = {"apply-seccomp", "bwrap"}
+
+
+def sandboxed(proc: str = "/proc") -> bool:
+    """Whether this process runs in the Bash sandbox, by its pid namespace's pid 1: there it is
+    the sandbox's own launcher (cmdline argv0 `apply-seccomp`, measured on Claude Code 2.1.296,
+    whose comm can read `3`), outside it is init. CLAUDE_PID can't tell: it is set in both."""
+    names = set()
+    try:
+        with open(os.path.join(proc, "1", "cmdline"), "rb") as f:
+            names.add(os.path.basename(f.read().split(b"\0")[0].decode(errors="replace")))
+    except OSError:
+        pass
+    try:
+        with open(os.path.join(proc, "1", "comm")) as f:
+            names.add(f.read().strip())
+    except OSError:
+        pass
+    return bool(names & SANDBOX_INITS)
+
+
+def pids_visible(proc: str = "/proc") -> bool:
     """False inside the Bash sandbox: each sandboxed command runs in its own pid namespace, so
-    the claude that launched it has no /proc entry, and neither do other processes."""
-    own = os.environ.get("CLAUDE_PID")
-    return not (own and own.isdigit() and not os.path.exists(f"/proc/{own}"))
+    other processes, the sessions in a lane among them, have no /proc entry. LANE_SANDBOXED=1 or
+    0 overrides the detection (the test suite, itself possibly sandboxed, sets 0)."""
+    forced = os.environ.get("LANE_SANDBOXED")
+    if forced in ("0", "1"):
+        return forced == "0"
+    return not sandboxed(proc)
 
 
 def live_sessions() -> list[dict] | None:

@@ -99,6 +99,18 @@ class Guard(LanesRepo):
                            {"old_string": "c", "new_string": "my lane has #42"}]}
         self.assertIsNotNone(self.write_call(lane, self.own, None, tool="MultiEdit", **multi))
 
+    def test_quoted_examples_pass_as_in_handoff_check(self):
+        # One lint for both: comments and code quote a phrase, they don't claim anything.
+        lane = self.lane_path("chart-fix")
+        for text in ("Never write `another session`.", "<!-- not 'this session' -->",
+                     "```\nmy lane\n```\n"):
+            with self.subTest(text=text):
+                self.assertIsNone(self.write_call(lane, self.own, text))
+        add = {"old_string": "x", "new_string": "the guard denies `this session`"}
+        self.assertIsNone(self.write_call(lane, self.own, None, tool="Edit", **add))
+        add = {"old_string": "`this session`", "new_string": "this session"}
+        self.assertIsNotNone(self.write_call(lane, self.own, None, tool="Edit", **add))
+
     def test_a_relative_path_resolves_against_the_session_cwd(self):
         lane = self.lane_path("chart-fix")
         self.assertIsNotNone(self.write_call(lane, ".lane/STATUS.md", RELATIVE))
@@ -194,6 +206,31 @@ class IdentityHook(LanesRepo):
         copied = self.mirror("artifacts", "shot.png")
         self.assertFalse(os.path.islink(copied))
         self.assertEqual(self.read(copied), "png")
+
+    def test_dangling_links_and_loops_never_break_the_mirror_or_the_end_stamp(self):
+        self.start(self.lane_dir)
+        rec = os.path.join(self.lane_dir, ".lane")
+        os.symlink(os.path.join(self.tmp, "missing.png"), os.path.join(rec, "gone.png"))
+        os.symlink(rec, os.path.join(rec, "loop"))
+        self.stop()
+        self.assertTrue(os.path.isfile(self.mirror("STATUS.md")))
+        self.assertTrue(os.path.islink(self.mirror("gone.png")))
+        self.assertTrue(os.path.islink(self.mirror("loop")))
+        self.assertTrue(os.path.isfile(self.mirror() + ".stamp"))
+        self.hook("lane-identity.sh", {"session_id": "sess-0001", "cwd": self.lane_dir,
+                                       "hook_event_name": "SessionEnd", "reason": "other"})
+        self.assertIn("endedAt", self.lane_json("chart-fix")["sessions"][0])
+
+    @unittest.skipIf(os.geteuid() == 0, "root reads a chmod 0 file")
+    def test_a_failed_mirror_still_stamps_the_session_end(self):
+        self.start(self.lane_dir)
+        secret = os.path.join(self.lane_dir, ".lane", "unreadable.txt")
+        self.write(secret, "x")
+        os.chmod(secret, 0)
+        self.addCleanup(os.chmod, secret, 0o644)
+        self.hook("lane-identity.sh", {"session_id": "sess-0001", "cwd": self.lane_dir,
+                                       "hook_event_name": "SessionEnd", "reason": "other"})
+        self.assertIn("endedAt", self.lane_json("chart-fix")["sessions"][0])
 
     def test_an_unchanged_record_is_not_copied_again(self):
         self.stop()

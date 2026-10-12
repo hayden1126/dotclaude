@@ -86,32 +86,20 @@ def start(repo: lanelib.Repo, lane: dict, event: dict) -> None:
         lanelib.update_lane(repo, lane["id"], append)
 
 
-def newest_mtime(root: str) -> float:
-    """The latest mtime under root, dirs included (a deletion touches its dir), following links."""
-    newest = os.stat(root).st_mtime
-    for d, dirs, files in os.walk(root, followlinks=True):
-        for name in dirs + files:
-            try:
-                newest = max(newest, os.stat(os.path.join(d, name)).st_mtime)
-            except OSError:  # a dangling link
-                continue
-    return newest
-
-
 def mirror(repo: lanelib.Repo, lane: dict) -> None:
     """Copy <lane>/.lane/ to lanes/<id>/mirror/, crash-safe: build mirror.new, move mirror aside
     to mirror.old, move mirror.new in, then drop mirror.old. A run killed between the moves
-    leaves mirror.old as the only copy, so the next run restores it before anything else.
-    Symlinks are copied as what they point at, so evidence outlives its target. Nothing changed
-    since the last copy (the stamp) means no copy, so a Stop on every turn stays cheap."""
+    leaves mirror.old as the only copy; lanelib.mirror_dir restores it before anything else.
+    Links are copied as what they point at, and dangling ones or loops as links
+    (lanelib.walk_record). Nothing changed since the last copy (the stamp) means no copy, so a
+    Stop on every turn stays cheap."""
     dest = os.path.join(repo.lane_dir(lane["id"]), "mirror")
     new, old, stamp = dest + ".new", dest + ".old", dest + ".stamp"
-    if not os.path.isdir(dest) and os.path.isdir(old):
-        os.rename(old, dest)
+    lanelib.mirror_dir(repo, lane["id"])
     src = lanelib.record_dir(lane)
     if not os.path.isdir(src):
         return
-    changed = newest_mtime(src)
+    changed = lanelib.newest_mtime(src)
     try:
         with open(stamp) as f:
             if os.path.isdir(dest) and changed <= float(f.read()):
@@ -119,7 +107,7 @@ def mirror(repo: lanelib.Repo, lane: dict) -> None:
     except (OSError, ValueError):
         pass
     shutil.rmtree(new, ignore_errors=True)
-    shutil.copytree(src, new, symlinks=False)
+    lanelib.copy_record(src, new)
     shutil.rmtree(old, ignore_errors=True)
     if os.path.isdir(dest):
         os.rename(dest, old)
@@ -139,7 +127,11 @@ def end(repo: lanelib.Repo, lane: dict, event: dict) -> None:
                 return
 
     with lanelib.lock(repo, timeout=LOCK_WAIT):
-        mirror(repo, lane)
+        try:
+            mirror(repo, lane)
+        except OSError as e:  # shutil.Error is one; the end stamp must still land
+            log(f"mirror skipped lane={lane['id']} {type(e).__name__}: {e}")
+            shutil.rmtree(os.path.join(repo.lane_dir(lane["id"]), "mirror.new"), ignore_errors=True)
         if event.get("hook_event_name") == "SessionEnd":
             lanelib.update_lane(repo, lane["id"], stamp)
 

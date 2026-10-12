@@ -42,7 +42,11 @@ class LanesRepo(unittest.TestCase):
                         PATH=fake_bin + os.pathsep + os.environ["PATH"],
                         GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@example.com",
                         GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@example.com",
-                        GIT_CONFIG_NOSYSTEM="1")
+                        GIT_CONFIG_NOSYSTEM="1",
+                        # The suite itself may run in the Bash sandbox; its processes share one
+                        # namespace, so `done`'s process check sees them. Tests that need the
+                        # sandboxed path set it to 1.
+                        LANE_SANDBOXED="0")
         self.origin = os.path.join(self.tmp, "origin.git")
         self.main = os.path.join(self.tmp, "proj")
         self.root = os.path.join(self.tmp, "proj-lanes")
