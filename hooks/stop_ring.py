@@ -103,9 +103,9 @@ def merge_replies(previous, message, prompt_id, now: float) -> list:
     replies = [{**({"dropped": r["dropped"]} if isinstance(r.get("dropped"), int) else {}),
                 "prompt_id": r["prompt_id"], "text": utf8(r["text"]), "time": r.get("time")}
                for r in replies if isinstance(r, dict) and isinstance(r.get("prompt_id"), str)
-               and isinstance(r.get("text"), str) and r["text"]]
+               and isinstance(r.get("text"), str) and r["text"].strip()]
     group = prompt_id if isinstance(prompt_id, str) and prompt_id else "none-%.6f" % now
-    if isinstance(message, str) and message:
+    if isinstance(message, str) and message.strip():
         text = cut(message)
         if not (replies and replies[-1]["text"] == text and replies[-1]["prompt_id"] == group):
             replies.append({"prompt_id": group, "text": text, "time": now})
@@ -178,7 +178,7 @@ def write_record(d: dict, sid: str, types: list, tasks) -> None:
 
 def main() -> None:
     try:
-        d = json.load(sys.stdin)
+        d = json.load(sys.stdin.buffer)
     except Exception:
         d = {}
     if not isinstance(d, dict):

@@ -443,6 +443,26 @@ class Hooks(unittest.TestCase):
         self.assertEqual([x["text"] for x in self.stop_record()["replies"]],
                          ["caf" + chr(0x00E9), "next"])
 
+    def test_the_event_is_read_as_utf8_in_any_locale(self):
+        self.logged_before = len(self.ring_log())
+        body = json.dumps({"session_id": "abcdef12-0000", "prompt_id": "p1",
+                           "last_assistant_message": "caf" + chr(0x00E9)}, ensure_ascii=False)
+        p = subprocess.run(["bash", os.path.join(HOOKS, "stop-ring.sh")], input=body.encode(),
+                           capture_output=True, timeout=10,
+                           env={**self.env, **TAB, **ASCII_LOCALE})
+        self.assertEqual((p.returncode, p.stderr), (0, b""))
+        self.decided()
+        self.assertEqual(self.stop_record()["replies"][-1]["text"], "caf" + chr(0x00E9))
+
+    def test_a_whitespace_only_reply_is_no_turn(self):
+        merge = stop_ring.merge_replies
+        r = merge(None, "a", "p1", 1)
+        self.assertEqual(merge(r, " \n ", "p2", 2), r)
+        old = r + [{"prompt_id": "p2", "text": "  ", "time": 2}]
+        self.assertEqual(merge(old, "c", "p1", 3),
+                         [{"prompt_id": "p1", "text": "a", "time": 1},
+                          {"prompt_id": "p1", "text": "c", "time": 3}])
+
     def test_a_lone_surrogate_becomes_a_question_mark(self):
         (kept,) = stop_ring.merge_replies(None, "a" + chr(0xD800) + "b", "p1", 1)
         self.assertEqual(kept["text"], "a?b")

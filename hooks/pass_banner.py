@@ -142,7 +142,7 @@ def main() -> None:
     if not re.fullmatch(r"%\d+", pane):
         return
     try:
-        d = json.load(sys.stdin)
+        d = json.load(sys.stdin.buffer)
     except Exception:
         return
     if (not isinstance(d, dict) or d.get("agent_id") or d.get("source") != "startup"

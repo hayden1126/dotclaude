@@ -465,8 +465,8 @@ idle, the script rechecks the handoff and respawns the pane with a fresh `claude
 - What Claude said before a pass: a plain pass clears the pane, so the old session's replies
   would leave the screen. The fresh session shows what was said in the last turn once as a
   banner (at most 40 lines of reply and 4 KiB in all), which you see and the model doesn't. A
-  turn is every reply to one prompt_id: a turn a background-task notice started counts as its
-  own, so the last turn isn't always your last prompt. Ctrl-b P shows the last 5 turns in a
+  turn is a run of replies to one prompt_id: a turn a background-task notice started counts as
+  its own, so the last turn isn't always your last prompt. Ctrl-b P shows the last 5 turns in a
   popup at any time, opened at the last one, as does "Replies before pass" in the Ctrl-b Enter
   menu and the tab's right-click menu (`pass-last`, linked by `setup-tmux.sh`). Without
   `setup-tmux.sh`, a cut banner names the file instead. A compact keeps the conversation, so it

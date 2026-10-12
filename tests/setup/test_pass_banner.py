@@ -216,6 +216,18 @@ class Banner(unittest.TestCase):
         self.assertEqual(self.start(session={**ENV, **ASCII_LOCALE}),
                          "Last reply before the pass:\ncaf" + chr(0x00E9) + " " + chr(0x2026))
 
+    def test_a_non_ascii_event_still_shows_the_banner_in_any_locale(self):
+        # The banner uses no payload text, so this guards the parse, not the decoding.
+        self.entry()
+        body = json.dumps({"session_id": "new-session-2", "hook_event_name": "SessionStart",
+                           "source": "startup", "cwd": "/home/u/caf" + chr(0x00E9)},
+                          ensure_ascii=False)
+        p = subprocess.run(["bash", HOOK], input=body.encode(), capture_output=True,
+                           timeout=10, env={**self.env, **ENV, **ASCII_LOCALE})
+        self.assertEqual((p.returncode, p.stderr), (0, b""))
+        self.assertEqual(json.loads(p.stdout)["systemMessage"],
+                         "Last reply before the pass:\n" + REPLY)
+
     def test_a_long_reply_is_cut_at_40_lines(self):
         self.entry(message="\n".join(f"line {i}" for i in range(1, 61)))
         lines = self.start().split("\n")
