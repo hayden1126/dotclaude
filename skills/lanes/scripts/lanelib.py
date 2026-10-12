@@ -211,30 +211,23 @@ def record_path(lane: dict) -> str:
     return os.path.join(record_dir(lane), "STATUS.md")
 
 
-def walk_record(src: str, rel: str = "", seen: frozenset = frozenset()):
-    """Yield (path, relative path, kind) under src, kind 'dir', 'file' or 'link'. A symlink to a
-    file counts as that file and one to a dir as that dir, so evidence outlives its target; a
-    dangling link, a loop back into an ancestor, or a link to anything else stays a 'link'."""
-    seen = seen | {os.path.realpath(src)}
+def walk_record(src: str, rel: str = ""):
+    """Yield (path, relative path, kind) under src, kind 'dir', 'file' or 'link'. A symlink is
+    never followed, to a file or a dir, dangling or not: following one copied whatever it reached
+    (`../..`, a home dir, its keys) into the mirror and every archive. Evidence is real files."""
     for entry in sorted(os.scandir(src), key=lambda e: e.name):
         path, sub = entry.path, os.path.join(rel, entry.name)
         if entry.is_symlink():
-            if os.path.isfile(path):
-                yield path, sub, "file"
-            elif os.path.isdir(path) and os.path.realpath(path) not in seen:
-                yield path, sub, "dir"
-                yield from walk_record(path, sub, seen)
-            else:
-                yield path, sub, "link"
+            yield path, sub, "link"
         elif entry.is_dir(follow_symlinks=False):
             yield path, sub, "dir"
-            yield from walk_record(path, sub, seen)
+            yield from walk_record(path, sub)
         else:
             yield path, sub, "file"
 
 
 def copy_record(src: str, dest: str) -> None:
-    """Copy a record dir (a lane's .lane/) to dest, which must not exist, per walk_record."""
+    """Copy a record dir (a lane's .lane/) to dest, which must not exist; links stay links."""
     os.makedirs(dest)
     for path, rel, kind in walk_record(src):
         target = os.path.join(dest, rel)
@@ -247,29 +240,33 @@ def copy_record(src: str, dest: str) -> None:
 
 
 def newest_mtime(src: str) -> float:
-    """The latest mtime under src, dirs included (a deletion touches its dir)."""
-    newest = os.stat(src).st_mtime
-    for path, _, kind in walk_record(src):
-        st = os.lstat(path) if kind == "link" else os.stat(path)
-        newest = max(newest, st.st_mtime)
+    """The latest mtime under src, dirs included (a deletion touches its dir), by lstat: a link's
+    own change counts, never its target's."""
+    newest = os.lstat(src).st_mtime
+    for path, _, _ in walk_record(src):
+        newest = max(newest, os.lstat(path).st_mtime)
     return newest
 
 
-def mirror_dir(repo: "Repo", lane_id: str) -> str | None:
+def mirror_dir(repo: "Repo",
+    lane_id: str,
+    *,
+    restore: bool,
+) -> str | None:
     """lanes/<id>/mirror, the copy of a lane's .lane/ that outlives its worktree, or None. A hook
-    killed between its two renames leaves only mirror.old, the only copy: this puts it back (or,
-    if the rename fails, returns it), so no reader misses it and nothing deletes it unread."""
+    killed between its two renames leaves only mirror.old, the only copy, so no reader may miss
+    it. restore=True puts it back as mirror, and only a caller holding the lanes lock (the hook,
+    `done`) may ask, or it races the hook's swap; lock-free readers get mirror.old in place."""
     dest = os.path.join(repo.lane_dir(lane_id), "mirror")
     old = dest + ".old"
     if os.path.isdir(dest):
         return dest
-    if os.path.isdir(old):
-        try:
-            os.rename(old, dest)
-            return dest
-        except OSError:
-            return old
-    return None
+    if not os.path.isdir(old):
+        return None
+    if restore:
+        os.rename(old, dest)
+        return dest
+    return old
 
 
 def write_json(path: str, data) -> None:
@@ -404,12 +401,12 @@ def sandboxed(proc: str = "/proc") -> bool:
 
 def pids_visible(proc: str = "/proc") -> bool:
     """False inside the Bash sandbox: each sandboxed command runs in its own pid namespace, so
-    other processes, the sessions in a lane among them, have no /proc entry. LANE_SANDBOXED=1 or
-    0 overrides the detection (the test suite, itself possibly sandboxed, sets 0)."""
-    forced = os.environ.get("LANE_SANDBOXED")
+    other processes, the sessions in a lane among them, have no /proc entry. SANDBOX_RUNTIME=1,
+    set only inside, says so too (as delegation_common.pids_visible reads it)."""
+    forced = os.environ.get("_LANE_TEST_SANDBOXED")  # tests/lanes only; they may run sandboxed
     if forced in ("0", "1"):
         return forced == "0"
-    return not sandboxed(proc)
+    return os.environ.get("SANDBOX_RUNTIME") != "1" and not sandboxed(proc)
 
 
 def live_sessions() -> list[dict] | None:

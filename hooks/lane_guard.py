@@ -47,17 +47,39 @@ def deny(reason, note):
                                              "permissionDecisionReason": reason}}))
 
 
-def added_text(tool: str, inp: dict) -> list[str]:
+def edited(text: str, edits: list) -> str | None:
+    """text after the edits, applied in order as the tool does (first occurrence, or every one
+    with replace_all); None when an old_string isn't there, so the call can't be replayed."""
+    for e in edits:
+        old, new = str(e.get("old_string") or ""), str(e.get("new_string") or "")
+        if not old or old not in text:
+            return None
+        text = text.replace(old, new) if e.get("replace_all") else text.replace(old, new, 1)
+    return text
+
+
+def added_text(tool: str, inp: dict, target: str) -> list[str]:
     """The relative phrases this call adds to the file's prose (lanelib.prose_only: comments and
-    code quote, they don't claim; the same lint handoff-check runs)."""
+    code quote, they don't claim; the same lint handoff-check runs). An Edit is judged on the
+    whole file before and after, since a fragment alone misreads fences (an old_string starting
+    at a closing fence reads it as an opener); the fragments are the fallback when the file
+    can't be read or replayed."""
     if tool == "Write":
         return lanelib.relative_phrases(lanelib.prose_only(str(inp.get("content") or "")))
     edits = inp.get("edits") if tool == "MultiEdit" else [inp]
+    edits = [e for e in edits if isinstance(e, dict)] if isinstance(edits, list) else []
+    try:
+        with open(target) as f:
+            before = f.read()
+    except (OSError, UnicodeDecodeError):
+        before = None
+    after = edited(before, edits) if before is not None else None
+    if after is not None:
+        return lanelib.added_phrases(lanelib.prose_only(before), lanelib.prose_only(after))
     out = []
-    for e in edits if isinstance(edits, list) else []:
-        if isinstance(e, dict):
-            out += lanelib.added_phrases(lanelib.prose_only(str(e.get("old_string") or "")),
-                                         lanelib.prose_only(str(e.get("new_string") or "")))
+    for e in edits:
+        out += lanelib.added_phrases(lanelib.prose_only(str(e.get("old_string") or "")),
+                                     lanelib.prose_only(str(e.get("new_string") or "")))
     return out
 
 
@@ -116,7 +138,7 @@ def main():
                  and target == os.path.join(repo.toplevel, "STATUS.md"))
     if owner is None and not is_status:
         return
-    if found := added_text(tool, inp):
+    if found := added_text(tool, inp, target):
         deny(f"lane-guard: relative identity in {raw} ({', '.join(sorted(set(found)))}). "
              f"{lanelib.RELATIVE_HINT}",
              f"deny relative {who} phrases={sorted(set(found))} path={target}")

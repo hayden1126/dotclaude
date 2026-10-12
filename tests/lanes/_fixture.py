@@ -37,16 +37,16 @@ class LanesRepo(unittest.TestCase):
                     "echo 'gh: offline in tests' >&2\nexit 1\n")
         os.chmod(os.path.join(fake_bin, "gh"), 0o755)
         self.env = {k: v for k, v in os.environ.items()
-                    if not k.startswith(("CLAUDE", "GIT_DIR", "GIT_WORK_TREE"))}
+                    if not k.startswith(("CLAUDE", "GIT_DIR", "GIT_WORK_TREE", "SANDBOX_RUNTIME"))}
         self.env.update(HOME=self.home, XDG_STATE_HOME=os.path.join(self.tmp, "state"),
                         PATH=fake_bin + os.pathsep + os.environ["PATH"],
                         GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@example.com",
                         GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@example.com",
                         GIT_CONFIG_NOSYSTEM="1",
-                        # The suite itself may run in the Bash sandbox; its processes share one
-                        # namespace, so `done`'s process check sees them. Tests that need the
-                        # sandboxed path set it to 1.
-                        LANE_SANDBOXED="0")
+                        # The suite may itself run in the Bash sandbox, whose pid 1 the CLI
+                        # would read as sandboxed; its processes share one namespace, so `done`'s
+                        # process check still sees them. A test hook, not a user setting.
+                        _LANE_TEST_SANDBOXED="0")
         self.origin = os.path.join(self.tmp, "origin.git")
         self.main = os.path.join(self.tmp, "proj")
         self.root = os.path.join(self.tmp, "proj-lanes")

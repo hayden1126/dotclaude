@@ -51,15 +51,41 @@ class Sandbox(unittest.TestCase):
     def test_a_stale_claude_pid_no_longer_hides_pids(self):
         outside = self.proc("/sbin/init", comm="systemd")
         with mock.patch.dict(os.environ, {"CLAUDE_PID": "999999999"}):
-            os.environ.pop("LANE_SANDBOXED", None)
+            for var in ("SANDBOX_RUNTIME", "_LANE_TEST_SANDBOXED"):  # the suite may be sandboxed
+                os.environ.pop(var, None)
             self.assertTrue(lanelib.pids_visible(outside))
 
-    def test_the_override_wins(self):
-        inside = self.proc("apply-seccomp")
+    def test_sandbox_runtime_says_sandboxed(self):
+        # Set only inside the sandbox; delegation_common.pids_visible reads it the same way.
+        with mock.patch.dict(os.environ, {"SANDBOX_RUNTIME": "1"}):
+            os.environ.pop("_LANE_TEST_SANDBOXED", None)
+            self.assertFalse(lanelib.pids_visible(self.proc("/sbin/init", comm="systemd")))
+
+    def test_there_is_no_public_override(self):
         with mock.patch.dict(os.environ, {"LANE_SANDBOXED": "0"}):
-            self.assertTrue(lanelib.pids_visible(inside))
-        with mock.patch.dict(os.environ, {"LANE_SANDBOXED": "1"}):
-            self.assertFalse(lanelib.pids_visible(self.proc("/sbin/init")))
+            os.environ.pop("_LANE_TEST_SANDBOXED", None)
+            self.assertFalse(lanelib.pids_visible(self.proc("apply-seccomp")))
+
+
+class Walk(unittest.TestCase):
+    def test_links_are_never_followed(self):
+        root = os.path.realpath(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, root)
+        rec = os.path.join(root, "lane", ".lane")
+        outside = os.path.join(root, "outside")
+        os.makedirs(os.path.join(rec, "artifacts"))
+        os.makedirs(outside)
+        with open(os.path.join(outside, "key"), "w") as f:
+            f.write("secret")
+        os.symlink("../..", os.path.join(rec, "artifacts", "src"))
+        os.symlink(outside, os.path.join(rec, "artifacts", "out"))
+        os.symlink(os.path.join(outside, "key"), os.path.join(rec, "key"))
+        walked = {rel: kind for _, rel, kind in lanelib.walk_record(rec)}
+        self.assertEqual(walked, {"artifacts": "dir", "artifacts/out": "link",
+                                  "artifacts/src": "link", "key": "link"})
+        before = lanelib.newest_mtime(rec)
+        os.utime(os.path.join(outside, "key"), (before + 100, before + 100))
+        self.assertEqual(lanelib.newest_mtime(rec), before)  # a target's change is not ours
 
 
 if __name__ == "__main__":

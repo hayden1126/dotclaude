@@ -1,10 +1,12 @@
 """hooks/lane-guard.sh and hooks/lane-identity.sh, run as Claude Code runs them: the event JSON on
 stdin to the bash shim."""
+import importlib.util
 import os
 import shutil
 import subprocess
 import time
 import unittest
+from unittest import mock
 
 from _fixture import HOOKS, LanesRepo
 
@@ -91,6 +93,7 @@ class Guard(LanesRepo):
 
     def test_an_edit_is_judged_by_what_it_adds(self):
         lane = self.lane_path("chart-fix")
+        self.write(self.own, "## State\nanother session said so\n- a\n- c\n- x\n")
         keep = {"old_string": "another session said so", "new_string": "another session said so!"}
         self.assertIsNone(self.write_call(lane, self.own, None, tool="Edit", **keep))
         add = {"old_string": "x", "new_string": "this session owns it"}
@@ -110,6 +113,26 @@ class Guard(LanesRepo):
         self.assertIsNone(self.write_call(lane, self.own, None, tool="Edit", **add))
         add = {"old_string": "`this session`", "new_string": "this session"}
         self.assertIsNotNone(self.write_call(lane, self.own, None, tool="Edit", **add))
+
+    def test_an_edit_anchored_on_a_closing_fence_is_judged_in_the_whole_file(self):
+        # In the fragment alone the closer reads as an opener and hides the new prose.
+        lane = self.lane_path("chart-fix")
+        self.write(self.own, "# LANE\n```\ncode\n```\n## Next\n- ship\n")
+        edit = {"old_string": "```\n## Next",
+                "new_string": "```\nThe other lane owns the parser.\n## Next"}
+        self.assertDenied(self.write_call(lane, self.own, None, tool="Edit", **edit),
+                          "the other lane")
+        multi = {"edits": [{"old_string": "- ship", "new_string": "- ship it"}, edit]}
+        self.assertDenied(self.write_call(lane, self.own, None, tool="MultiEdit", **multi),
+                          "the other lane")
+        inside = {"old_string": "code\n", "new_string": "code\nmy lane\n"}  # inside the fence
+        self.assertIsNone(self.write_call(lane, self.own, None, tool="Edit", **inside))
+
+    def test_replace_all_is_applied_to_every_copy(self):
+        lane = self.lane_path("chart-fix")
+        self.write(self.own, "```\nc\n```\nx\n```\nd\n```\nx\n")
+        edit = {"old_string": "```\nx", "new_string": "```\nmy lane: x", "replace_all": True}
+        self.assertDenied(self.write_call(lane, self.own, None, tool="Edit", **edit), "my lane")
 
     def test_a_relative_path_resolves_against_the_session_cwd(self):
         lane = self.lane_path("chart-fix")
@@ -197,15 +220,37 @@ class IdentityHook(LanesRepo):
         self.assertEqual(self.read(self.mirror("STATUS.md")), "the only copy\n")
         self.assertFalse(os.path.exists(old))
 
-    def test_the_mirror_copies_what_symlinks_point_at(self):
-        outside = os.path.join(self.tmp, "shot.png")
-        self.write(outside, "png")
-        os.makedirs(os.path.join(self.lane_dir, ".lane", "artifacts"))
-        os.symlink(outside, os.path.join(self.lane_dir, ".lane", "artifacts", "shot.png"))
+    def test_links_are_mirrored_as_links_and_never_followed(self):
+        # Following them copied whatever they reached (`../..`, a home dir, keys) into the
+        # mirror and every archive. Evidence must be real files in .lane/artifacts/.
+        outside = os.path.join(self.tmp, "outside")
+        self.write(os.path.join(outside, "key"), "secret")
+        art = os.path.join(self.lane_dir, ".lane", "artifacts")
+        os.makedirs(art)
+        os.symlink("../..", os.path.join(art, "src"))
+        os.symlink(outside, os.path.join(art, "out"))
+        os.symlink(os.path.join(outside, "key"), os.path.join(art, "key"))
         self.stop()
-        copied = self.mirror("artifacts", "shot.png")
-        self.assertFalse(os.path.islink(copied))
-        self.assertEqual(self.read(copied), "png")
+        for name in ("src", "out", "key"):
+            with self.subTest(name=name):
+                self.assertTrue(os.path.islink(self.mirror("artifacts", name)))
+        self.assertEqual(sorted(os.listdir(self.mirror("artifacts"))), ["key", "out", "src"])
+
+    def test_the_end_is_stamped_before_the_mirror_runs(self):
+        # A slow mirror killed at the hook timeout must not cost endedAt. A SystemExit from the
+        # mirror stands in for the kill: nothing after it in end() runs.
+        self.start(self.lane_dir)
+        spec = importlib.util.spec_from_file_location(
+            "lane_identity_t", os.path.join(HOOKS, "lane_identity.py"))
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        repo = mod.lanelib.resolve(self.lane_dir)
+        lane = repo.lane_at(self.lane_dir)
+        event = {"session_id": "sess-0001", "hook_event_name": "SessionEnd", "reason": "other"}
+        with mock.patch.object(mod, "mirror", side_effect=SystemExit):
+            with self.assertRaises(SystemExit):
+                mod.end(repo, lane, event)
+        self.assertIn("endedAt", self.lane_json("chart-fix")["sessions"][0])
 
     def test_dangling_links_and_loops_never_break_the_mirror_or_the_end_stamp(self):
         self.start(self.lane_dir)

@@ -90,12 +90,12 @@ def mirror(repo: lanelib.Repo, lane: dict) -> None:
     """Copy <lane>/.lane/ to lanes/<id>/mirror/, crash-safe: build mirror.new, move mirror aside
     to mirror.old, move mirror.new in, then drop mirror.old. A run killed between the moves
     leaves mirror.old as the only copy; lanelib.mirror_dir restores it before anything else.
-    Links are copied as what they point at, and dangling ones or loops as links
+    The caller holds the lanes lock. Links are copied as links and never followed
     (lanelib.walk_record). Nothing changed since the last copy (the stamp) means no copy, so a
     Stop on every turn stays cheap."""
     dest = os.path.join(repo.lane_dir(lane["id"]), "mirror")
     new, old, stamp = dest + ".new", dest + ".old", dest + ".stamp"
-    lanelib.mirror_dir(repo, lane["id"])
+    lanelib.mirror_dir(repo, lane["id"], restore=True)
     src = lanelib.record_dir(lane)
     if not os.path.isdir(src):
         return
@@ -127,13 +127,14 @@ def end(repo: lanelib.Repo, lane: dict, event: dict) -> None:
                 return
 
     with lanelib.lock(repo, timeout=LOCK_WAIT):
-        try:
-            mirror(repo, lane)
-        except OSError as e:  # shutil.Error is one; the end stamp must still land
-            log(f"mirror skipped lane={lane['id']} {type(e).__name__}: {e}")
-            shutil.rmtree(os.path.join(repo.lane_dir(lane["id"]), "mirror.new"), ignore_errors=True)
+        # The stamp first: a mirror killed at the hook timeout must not cost it.
         if event.get("hook_event_name") == "SessionEnd":
             lanelib.update_lane(repo, lane["id"], stamp)
+        try:
+            mirror(repo, lane)
+        except OSError as e:  # shutil.Error is one
+            log(f"mirror skipped lane={lane['id']} {type(e).__name__}: {e}")
+            shutil.rmtree(os.path.join(repo.lane_dir(lane["id"]), "mirror.new"), ignore_errors=True)
 
 
 def main():
