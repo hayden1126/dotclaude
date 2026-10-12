@@ -78,7 +78,7 @@ stored here).
     `git commit` worked with no extra
     rule, `handoff-check` failed an un-updated record, and `lane ls` flagged `handoff?`. Guard
     replay over the work repo's 273 real STATUS edits: 13 denies, all genuine relative claims, no
-    false positives. Commits `b0708f5..HEAD` on `feat/lanes`. Waiting on Hayden's nod to push and
+    false positives. Commits `main..feat/lanes`. Waiting on Hayden's nod to push and
     open the PR.
   - **PR 2 `feat/lanes-lead`** (lane open, lane lock, the lead's triage and merge order) and
     **PR 3 `feat/pass`** (`/pass`, `pass compact`, opt-in auto-pass on context): not started;

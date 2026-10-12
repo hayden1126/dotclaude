@@ -16,8 +16,8 @@ what. `docs/lanes.md` holds the design and why; this is the operating guide.
    id. Never write "another session", "this session", "the other lane" or "my lane": every other
    reader resolves those to someone else. The guard denies them in status files.
 2. **One writer per record.** Only a lane's own sessions write `<lane>/.lane/`. Only the `lane`
-   CLI and its hooks write `<common-dir>/lanes/`. The guard denies the Edit tool both of those
-   when they aren't yours.
+   CLI and its hooks write `<common-dir>/lanes/`. The guard denies the Edit tool any write under
+   `<common-dir>/lanes/` (your own lane's data included) and any write to another lane's `.lane/`.
 3. **Only the owner claims.** A request is owned only when a live lane claims it (`lane claim`).
    "Who has #42?" is answered by `lane who 42`, never by prose, agent lists, first prompts or tab
    titles. If Hayden routes #42 away from your lane, record that in your own record and
@@ -58,13 +58,15 @@ an unregistered worktree: `lane whoami` tells you which.
 5. **Merge** through the lane's own PR, on Hayden's approval. Then write the outcome into the
    record, add one line to the project backlog (lane id, PR number), and propose
    `lane done chart-fix`. Run it only on Hayden's nod.
-6. **Close:** `lane done <id>` refuses an unmerged branch (pass `--abandon` to close one anyway)
-   and a lane with a live process in it. It archives `lane.json` and `.lane/` to
+6. **Close:** `lane done <id>` refuses an unmerged branch, a lane made by `lane new` with no
+   commits past its base (pass `--abandon` to close either anyway) and a lane with a live process
+   in it. It archives `lane.json` and `.lane/` to
    `<common-dir>/lanes/_closed/<id>-<date>/`, runs `git worktree remove` (never `--force`) and
    `git branch -d` (never `-D`).
 
-Existing worktrees join with `lane adopt <path>`. A dir name that is no slug (it starts with
-`_` or `.`, is `main`, or runs past 64 chars) takes `--id <slug>`, the one case where the id
+Existing worktrees join with `lane adopt <path>`. A dir name that is no slug (a slug is letters,
+digits, `.`, `_` and `-`, starts with a letter or digit, runs at most 64 chars and isn't `main`)
+takes `--id <slug>`, the one case where the id
 differs from the dir name; `git worktree move` is the other fix. If `lane new` fails partway, the
 lane stays registered as `setup-failed`, and `lane adopt <path>` finishes it, redoing only the
 failed step (copies never overwrite a file the lane already has).

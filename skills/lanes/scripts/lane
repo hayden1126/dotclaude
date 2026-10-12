@@ -4,7 +4,7 @@
   lane init [--root DIR] [--setup CMD] [--ports A-B] [--cap N]
   lane new <id> [--branch B] [--claim N ...] [--goal T] [--files T] [--overlaps T]
                [--done-when T] [--constraints T]
-  lane adopt <path>
+  lane adopt <path> [--id SLUG]
   lane ls [--json] [--requests]
   lane whoami [--json]
   lane claim <req> ... | lane release <req> ... | lane who <req>

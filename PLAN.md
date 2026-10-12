@@ -199,7 +199,7 @@ sibling lane; they go into `docs/lanes.md`):
   file checks at all). Hence the in-lane `.lane/` above. A Write to `<lane>/.lane/STATUS.md` in
   acceptEdits mode succeeds with no prompt, and the shared `info/exclude` hides it
   (`git status --ignored` shows `!! .lane/`).
-- S3, `excludedCommands`: `lane *` goes in, beside `delegation-ledger *` and `hq-open`. `lane new`
+- S3, `excludedCommands`: `lane *` goes in, beside `delegation-ledger *` (hq-open is excluded the same way in hq's own settings). `lane new`
   fetches and `lane ls` asks gh for PR state, and both need the credential the sandbox hides. A
   sandboxed (piped) call still works for the local subcommands and says what it skipped.
 - S4, compaction: a SessionStart hook matched on `compact` gets its `additionalContext` to the
@@ -209,9 +209,18 @@ sibling lane; they go into `docs/lanes.md`):
   `cwd`, `startedAt` (ms), `status` (`idle` and others), `tmux` (`session:@window.%pane`) and
   `messagingSocketPath`.
 
+**As built (2026-10-11), where it differs from the list below:** the guard denies every Edit-tool
+write under `<common-dir>/lanes/` outright and lints relative phrases in `.lane/` files and every
+checkout's root STATUS.md; `lane adopt` takes `--id` and finishes a `setup-failed` lane; `merged()`
+became `closable()` with states `merged`, `closed` (an adopted lane with nothing past
+`origin/main`) and `abandoned` (`--abandon` only), and a lane made by `new` needs commits past its
+base; `ls` also flags `setup-failed`; `new` takes `--goal`, `--files`, `--overlaps`,
+`--done-when` and `--constraints`; the mirror never follows symlinks and refuses a symlinked
+`.lane`. `docs/lanes.md` is the as-built reference.
+
 **New files:**
 - `skills/lanes/scripts/lane`: Python stdlib (`tomllib`, `fcntl`, `subprocess`), installed to
-  `~/.local/bin` by the existing `setup.sh:107-112` loop. Subcommands:
+  `~/.local/bin` by the existing bin-link loop in `setup.sh` (the `codex-delegate,delegation-ledger,gh-public` line). Subcommands:
   - `init --root --setup --ports --cap`
   - `new <id> --branch <b> [--claim #n ...]`: fetch; `worktree add -b` from `origin/main`;
     `--unset-upstream`; copy the main checkout's files matched by `.worktreeinclude` (Claude Code's
@@ -236,7 +245,7 @@ sibling lane; they go into `docs/lanes.md`):
     `.lane/` (hooks run outside the sandbox) and stamps the session's end into `lane.json`.
   - In a main checkout that has lanes, it injects a one-line board summary.
   - With no lanes, it stays silent.
-- `hooks/lane-guard.sh` + `hooks/lane_guard.py`, PreToolUse `Edit|Write`:
+- `hooks/lane-guard.sh` + `hooks/lane_guard.py`, PreToolUse `Edit|Write|MultiEdit`:
   - Deny writes to another lane's `.lane/**` (and to anything under `<common-dir>/lanes/`)
     from a session whose lane is not that lane.
   - Deny relative-identity phrases in any write to `lanes/**` or to the STATUS.md of a repo with
@@ -289,7 +298,7 @@ sibling lane; they go into `docs/lanes.md`):
     during this session (the session's start time comes from `~/.claude/sessions/<pid>.json`;
     a spike confirms the field);
   - a non-empty Next block exists;
-  - there is no relative-identity phrase (reuses `lane_guard`'s lint);
+  - there is no relative-identity phrase (the shared `lanelib.relative_phrases` and `prose_only`, also used by the guard and `lane note`);
   - in a lane, `lane.json` claims match the record, and an unpushed branch is noted in the record
     (a warning, not a failure, since pushes need Hayden).
   - It exits non-zero and lists each gap. Tests cover each check's pass and fail.
@@ -341,6 +350,18 @@ sibling lane; they go into `docs/lanes.md`):
   - The lead passes itself the same way. Its state lives in the project STATUS and the board, so
     a fresh lead resumes cleanly.
   - This bullet lands with PR 3, since it needs the watcher.
+- **Delegation guardrails reach the parent lane** (found 2026-10-11 by a live probe: a `claude -p`
+  session in a lane spawned a `writer`). The writer's worktree lands under the main checkout's
+  `.claude/worktrees/`, branched from the lane's HEAD (so the stale-base trap is gone for
+  lane-rooted sessions). Two layers still assume the session lives in the main checkout:
+  - `subagent-policy` `Analyzer.main_root` (the outermost checkout, from the writer's worktree
+    path) is the main checkout, so a writer's literal-path Bash write into the parent lane isn't
+    denied (the sandbox allows it: the lane is the session's cwd). File-tool writes outside the
+    worktree are still denied everywhere.
+  - `delegation-ledger` `main_status` hashes the main checkout's `git status`, so a writer's write
+    into the lane goes unflagged by `audit`.
+  Fix: both also cover the parent session's toplevel (from `~/.claude/sessions/<pid>.json` `cwd`
+  by session id, else the payload's), with tests in `tests/delegation`.
 - Lanes still use `writer` subagents for short chunks. The skill notes the stale-base trap
   (`worktree.baseRef` and the work repo's recipe).
 - **Verify:** unit tests for `lock` (a second holder blocks or times out) and for `open --print`.
@@ -467,7 +488,7 @@ Patterns to reuse:
 - `hooks/overwrite_guard.py`: guard structure and logging.
 - `hooks/session-title.sh:82-128`: resolving a worktree's repo from `.git` files.
 - `hooks/session-registry.sh`: the session JSON.
-- `setup.sh:107-112`: installing to bin.
+- `setup.sh`'s bin-link loop: installing to bin.
 
 Process: each PR runs as a full-track effort with a `writer` in a worktree and a fresh
 `reviewer` per fix round. It opens as a draft and is marked ready after docs, STATUS, install
