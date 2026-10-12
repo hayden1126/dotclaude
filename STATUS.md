@@ -158,6 +158,8 @@ stored here).
      - `lane ls` shows CTX and STATE.
   4. Open the draft PR, then mark it ready after STATUS. Push and merge only on Hayden's
      approval.
+  - The work so far is `git log main..feat/autopass`. A doc-drift sweep at the 2026-10-12
+    handoff fixed 12 claims (`30cc300`).
   - Then the release-skill PR in the work repos (PLAN.md PR 3 "Delta handoff").
   - Verify from the main checkout (`test_subagent_policy` refuses to load under
     `.claude/worktrees/`): `tests/setup`, `tests/pass`, `tests/lanes`, `tests/delegation`. The
