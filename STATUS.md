@@ -80,7 +80,7 @@ stored here).
     `feat/lanes-lead`, merged in #87**: the lanes config lives in the state dir, and what the
     sandbox can still write is checked before sandbox-off code acts on it (docs/lanes.md S3).
     Step 1 is its own PR after PR 3 and before the work repo migration; step 2 later.
-  - **PR 3 `feat/pass`: built, reviewed (five rounds; the last found nothing medium or worse),
+  - **PR 3 `feat/pass` (#88): built, reviewed (five rounds; the last found nothing medium or worse),
     installed from its branch and live-tested on HAYPC 2026-10-12.** `/pass`, `pass compact`,
     `--cancel`, the trigger, the delta handoff, the Star carry. Live in a scratch window: a plain
     pass respawned in plan mode with the Star carried; an approved first item resumed in the
@@ -143,8 +143,10 @@ stored here).
   `claude -p` repro and the 2.1.285 boundary; the karaoke session's has the incident.
 
 ## Notes for next session
-- **Next: Hayden approves pushing `feat/pass` and opening PR 3 as a draft** (range
-  `main..feat/pass`, base `0ad597d`). Mark it ready once open; merge on Hayden's approval. Then PR 4 on `feat/autopass` (PLAN.md PR 4; step 0
+- **Next: Hayden merges PR 3, #88** (`gh pr view 88 --json state,mergedAt`; range
+  `main..feat/pass`, base `0ad597d`). After the merge: `git fetch origin main:main` and
+  `git switch main` outside the sandbox (the checkout is on `feat/pass` and live for every
+  session). Then PR 4 on `feat/autopass` (PLAN.md PR 4; step 0
   spikes whether UserPromptSubmit sees a defined slash command), then the release-skill PR in
   the work repos (PLAN.md PR 3 "Delta handoff"). Verify before touching `/pass`: `tests/pass`,
   `tests/lanes`, `tests/setup`, `tests/delegation`, from the main checkout
