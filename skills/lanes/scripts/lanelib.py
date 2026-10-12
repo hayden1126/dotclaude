@@ -6,7 +6,8 @@ own real path. Stdlib only. docs/lanes.md has the design.
 
 Layout (PLAN.md "Layout"):
   <lane>/.lane/                 the lane's prose: STATUS.md (templates/LANE.md), PLAN.md, artifacts/
-  <common-dir>/lanes/           CLI-owned: config.toml, .lock, <id>/lane.json, <id>/mirror/, _closed/
+  <common-dir>/lanes/           CLI-owned: config.toml, .lock, <id>/lane.json, <id>/mirror/, _closed/,
+                                _locks/<name> (`lane lock`)
 """
 import contextlib
 import datetime
@@ -24,6 +25,7 @@ import tomllib
 LANES = "lanes"
 RECORD_DIR = ".lane"
 CLOSED = "_closed"
+LOCKS = "_locks"  # the leading '_' keeps it clear of every lane id, and of Repo.lanes()
 ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
 
 # The relative-identity lint, shared by the guard and handoff-check. Kept tight on purpose: each
