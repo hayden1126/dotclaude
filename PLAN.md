@@ -688,6 +688,26 @@ all on 1M-window models). Context at each event, in thousands of tokens:
 - Rejected: putting the reply in the resume prompt. That feeds the old session's beliefs back
   into the fresh context, which is what a clear avoids.
 
+**A refused pass, and leftover monitors** (found live 2026-10-12; Hayden's calls, part 2c).
+- What happened: a capella-studio `/pass` was refused (`pass.log`: `outcome=busy busy: waits:
+  monitor, monitor, monitor`). Three Monitor tasks were still listed at its Stop, and
+  `respawn-pane -k` would kill them silently.
+  - The gate was right, but the only notice was a few-second tmux status-line message. It came
+    right after a reply that promised "the pane restarts". The label `waits:` was also wrong:
+    those were tasks, and `waits` was empty.
+- **The skill judges, the script enforces.** Before `pass-respawn`, the pass skill lists the
+  session's running background tasks:
+  - It stops leftovers whose job is done (`TaskStop`).
+  - If any is still in use, it uses compact mode instead.
+  - Its reply never promises a restart. It says the pane restarts unless the gate refuses.
+  - `pass-respawn` still refuses a plain pass while any task but `dream` runs, so a model that
+    skips the check can't kill a live watcher.
+- **A refusal is loud:** a tmux message held until a key (`-d 0`) plus the `notify.sh` toast,
+  naming the tasks and the fix ("3 monitors running: /pass compact, or stop them"). The label
+  becomes `tasks:`.
+- The watcher (part 2a) uses `pass-respawn`'s rule, so with tasks in flight its tiers say
+  compact mode, never a plain pass that the gate would refuse.
+
 **Spikes first** (a scratch tmux window, driven from outside, with a `--settings` probe hook):
 
 | # | Question | Decides |
