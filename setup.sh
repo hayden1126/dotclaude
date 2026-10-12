@@ -107,13 +107,14 @@ done
 if [[ -d "$HOME/.local/bin" ]]; then
   chmod +x "$REPO_DIR"/bin/* 2>/dev/null || true
   for exe in "$REPO_DIR"/bin/* "$REPO_DIR"/skills/*/scripts/deckkit \
-             "$REPO_DIR"/skills/delegation/scripts/{codex-delegate,delegation-ledger,gh-public}; do
+             "$REPO_DIR"/skills/delegation/scripts/{codex-delegate,delegation-ledger,gh-public} \
+             "$REPO_DIR"/skills/lanes/scripts/lane "$REPO_DIR"/skills/handoff/scripts/handoff-check; do
     [[ -x "$exe" ]] || continue
     link "$exe" "$HOME/.local/bin/$(basename "$exe")"
   done
 fi
 
-# templates/ — per-file (SPEC/PLAN/STATUS scaffolds for full-lane work)
+# templates/ — per-file (SPEC/PLAN/STATUS/LANE scaffolds for full-track work)
 for f in "$REPO_DIR"/templates/*.md; do
   [[ -e "$f" ]] || continue
   link "$f" "$CLAUDE_DIR/templates/$(basename "$f")"
@@ -351,6 +352,8 @@ cat <<'EOF'
      docs/delegation.md for what each layer binds. The overwrite guard
      (hooks/overwrite-guard.sh) and the delete guard (hooks/delete-guard.sh)
      need python3 and fail open; memory-git.sh needs git and never blocks.
+     The lane hooks (hooks/lane-identity.sh, hooks/lane-guard.sh) need
+     python3 >= 3.11 (tomllib) and fail open; see docs/lanes.md.
 
 ============================================================
 

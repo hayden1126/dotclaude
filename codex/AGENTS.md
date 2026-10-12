@@ -28,7 +28,7 @@ Global preferences for any agent working in Hayden's repos. Project-level `AGENT
   parentheses, or colons.
 
 ## How to work
-- Fast lane: a one-sentence diff — just make it, verify, done. No ceremony.
-- Full lane (multi-file or unfamiliar): explore, plan, execute, verify.
+- Fast track: a one-sentence diff — just make it, verify, done. No ceremony.
+- Full track (multi-file or unfamiliar): explore, plan, execute, verify.
 - Always give yourself a runnable verification target (tests, build, lint) and show
   evidence, not assertions. If tests fail, say so.

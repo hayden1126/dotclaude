@@ -6,7 +6,7 @@
 > [[dotclaude-chrome-devtools-wsl]]). Per-effort design lives in the repo's `PLAN.md` or its doc,
 > not only under `~/.claude/plans/`, which the next plan overwrites ([[plan-file-not-durable]]).
 
-Last updated: 2026-10-10
+Last updated: 2026-10-11
 Base: `main`. For branch / PR / push state, run `gh pr list` and `git log main..HEAD` (derive it; not
 stored here).
 
@@ -69,6 +69,22 @@ stored here).
   `~/.claude/sessions/<pid>.json` (undocumented; the registry is the fallback).
 
 ## In flight
+- **Lanes, handoff-check and `/pass`** (Hayden's design, approved 2026-10-11; `PLAN.md`, behavior in
+  `docs/lanes.md` and `skills/lanes/SKILL.md`). Three PRs:
+  - **PR 1 `feat/lanes` (lanes core): built, reviewed clean after four fix rounds, installed from
+    its branch and smoke-tested on HAYPC 2026-10-11.** In a scratch repo with two lanes, a real
+    `claude -p` session in lane `chart-fix` got its identity line, the guard denied a relative
+    claim (`another session owns #43`) and a write into lane `api-docs`'s record, a sandboxed
+    `git commit` worked with no extra
+    rule, `handoff-check` failed an un-updated record, and `lane ls` flagged `handoff?`. Guard
+    replay over the work repo's 273 real STATUS edits: 13 denies, all genuine relative claims, no
+    false positives. PR #86 (`gh pr view 86`); commits `main..feat/lanes`.
+  - **PR 2 `feat/lanes-lead`** (lane open, lane lock, the lead's triage and merge order) and
+    **PR 3 `feat/pass`** (`/pass`, `pass compact`, opt-in auto-pass on context): not started;
+    PLAN.md has both. PR 2 also carries the delegation fix (PLAN.md "Delegation guardrails reach
+    the parent lane": a lane session's writer is watched against the main checkout, not the lane).
+  - After PR 1 and 2 merge: migrate the work repo (its own PR there). The concrete values and the
+    incident ids are in `~/scratch/lanes/PRIVATE.md` (private).
 - **`deck-production`: deferred (Hayden, 2026-10-05: workflow improvements first).** The geometry
   gate is merged (#68): behavior in SKILL.md "The geometry gate", design in git history (`PLAN.md`
   before the tmux-restore design). Its golden is on the private repo's unmerged
@@ -113,15 +129,17 @@ stored here).
   sandbox-off deletes, so the sandboxed gap stands):
   `python3 -I ~/scratch/sandbox-audit/rm_scan.py 2026-11-04`. Sending the drafted
   `$CLAUDE_JOB_DIR/tmp` bug report is Hayden's call; `CLAUDE.md` carries the workaround.
-- **Two Write-tool bug drafts wait in `/feedback`** (Hayden's call to send): this session's has the
+- **Two Write-tool bug drafts wait in `/feedback`** (Hayden's call to send): the overwrite-guard session's has the
   `claude -p` repro and the 2.1.285 boundary; the karaoke session's has the incident.
 
 ## Notes for next session
-- **Next: merge `feat/codex-astra` once Hayden approves** (`gh pr list --head
-  feat/codex-astra`), then `git fetch origin main:main` and `git switch main` outside the
-  sandbox. It makes `gpt-6-astra` opt-in per run (`--model astra`; the audit admits it only in
-  that run), allows Tectonic's `relay.fullyjustified.net` and its `data1b` mirror, and carries the no-attribution line.
-  **Astra waits on Hayden's plan:** two 2026-10-10 probes passed the audit (astra admitted,
+- **Next: Hayden merges PR #86** (`gh pr view 86 --json state`), then `git fetch origin
+  main:main` and `git switch main` outside the sandbox (the checkout is on `feat/lanes` and live
+  for every session). Then PR 2 on `feat/lanes-lead` from the new `main`: `lane open`, `lane lock`,
+  the lead section, and the delegation fix first (PLAN.md PR 2). Verify lanes before touching it:
+  `tests/lanes`, `tests/setup`, and `tests/delegation` from the main checkout
+  (`test_subagent_policy` refuses to load sandboxed under `.claude/worktrees/`).
+- **Astra waits on Hayden's plan** (`feat/codex-astra` merged as #85): two 2026-10-10 probes passed the audit (astra admitted,
   nothing disallowed), but even after a fresh `codex login` the turn gets a 400, "gpt-6-astra
   is not supported when using Codex with a ChatGPT account". Astra ran fine on 2026-09-29 and
   2026-10-08, so the plan lapsing is the likely cause (Hayden's read). Once the plan is back,

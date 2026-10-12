@@ -111,6 +111,7 @@
       "gh *",
       "codex-delegate *",
       "delegation-ledger *",
+      "lane *",
       "codex *",
       "claude *",
       "tmux *",
@@ -233,6 +234,16 @@
         ]
       },
       {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$HOME/.claude/hooks/lane-guard.sh\"",
+            "timeout": 5
+          }
+        ]
+      },
+      {
         "matcher": "Bash",
         "hooks": [
           {
@@ -295,6 +306,16 @@
         ]
       },
       {
+        "matcher": "startup|resume|clear|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$HOME/.claude/hooks/lane-identity.sh\"",
+            "timeout": 5
+          }
+        ]
+      },
+      {
         "hooks": [
           {
             "type": "command",
@@ -310,6 +331,15 @@
           {
             "type": "command",
             "command": "bash \"$HOME/.claude/hooks/session-registry.sh\"",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$HOME/.claude/hooks/lane-identity.sh\"",
             "timeout": 5
           }
         ]
@@ -413,6 +443,15 @@
           {
             "type": "command",
             "command": "bash \"$HOME/.claude/hooks/tmux-state.sh\" idle",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$HOME/.claude/hooks/lane-identity.sh\"",
             "timeout": 5
           }
         ]
