@@ -208,9 +208,12 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
   lock by the hook or `done`, and read in place by lock-free readers such as `lane asks`. It
   copies every symlink as a link and never follows one, and skips the copy when nothing in
   `.lane/` changed. Following links once copied whatever they reached (`../..`, a home dir) into
-  every archive, so evidence must be real files. SessionEnd stamps `endedAt` before it mirrors,
-  so a slow or failed mirror never costs the stamp.
-- **`hooks/lane-guard.sh`** (PreToolUse `Edit|Write|MultiEdit`): denies a write to another lane's
+  every archive, so evidence must be real files. A `.lane` that is itself a symlink (a repo can
+  commit `.lane -> ..`) is never mirrored or archived, and `lane new` and `adopt` refuse it.
+  SessionEnd stamps `endedAt` before it mirrors, so a slow or failed mirror never costs the
+  stamp.
+- **`hooks/lane-guard.sh`** (PreToolUse `Edit|Write|MultiEdit`): denies a write through a
+  symlinked `.lane` (checked on the path as given, before resolving it), a write to another lane's
   `.lane/`, any Edit-tool write under `<common-dir>/lanes/` (the lane's own included: the CLI
   owns that data), and a relative phrase added to a `.lane/` file or to the root STATUS.md of
   any checkout in a lanes repo (a lane's copy reaches main on merge). The phrase list is tight
@@ -230,9 +233,11 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
 - **`lane done`** validates the id and asserts its deletes stay inside `<common-dir>/lanes/`. It
   needs commits past the lane's base, then either a merged PR whose head commit is the branch tip
   (a squash merge) or the tip in the base. An adopted lane's base is a merge-base: with nothing
-  past it, its tip is already in the base, so it closes without `--abandon` as "abandoned (no
-  work)" unless a merged PR names that tip. The archive is built
-  under a `.tmp` name and renamed into place only when complete. Sandboxed, `done` can't see
+  past it, its tip is already in the base, so nothing can be lost and it closes without
+  `--abandon`. It can't tell "no work" from "fast-forwarded in before adoption", so its state is
+  `closed`, "closed (nothing past origin/main)", unless a merged PR names that tip; `abandoned`
+  means `--abandon`. The archive is built under a `.tmp` name and renamed into place only when
+  complete. Sandboxed, `done` can't see
   other processes, so it refuses and asks for a bare `lane done <id>`. It detects the sandbox by
   `SANDBOX_RUNTIME=1` or by pid 1 of its namespace (the sandbox's `apply-seccomp` launcher, not
   init), since `CLAUDE_PID` is set both inside and out.
