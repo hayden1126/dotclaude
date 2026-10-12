@@ -158,9 +158,15 @@ stored here).
     - Tiers scale with the window and are exact at 600k. The lead is on by default.
     - Not live until `./setup.sh`. Unverified live: a skill-defined `/autopass` reaching
       UserPromptSubmit (spike A1 used a `.claude/commands` file).
-  - Next, **part 2b**: the ctx widget's absolute tiers and on/off cue. It must write the
-    statusline's `context_window_size` into `ctx/<sid>.json` `window` on every render (the
-    watcher reads it). Also the `lane ls` CTX column, `lane init --autopass`, and docs/lanes.md.
+  - **Part 2b is merged into the branch** (`84cc4a4`, two review rounds plus my fixes for the
+    round-2 lows).
+    - The ctx widget colors by the tiers and shows an `A` cue when auto-pass is on. It writes
+      `window` into `ctx/<sid>.json`, and both writers merge under `ctx-watch/<sid>.ctx.lock`.
+    - `lane ls` gains CTX and STATE columns, and `lane init` gains `--autopass/--no-autopass`.
+    - **Live now** (the widget is symlinked): this session's `ctx/<sid>.json` holds
+      `window: 1000000`, and the cue resolved to off, `default`.
+    - Settled live: the statusline's `total_input_tokens` is the current context; it equals the
+      `current_usage` sum and the transcript's last usage.
   - Then **part 2c**: a loud refusal (tmux `-d 0` plus a toast, a `tasks:` label), and the pass
     skill stopping leftover monitors (PLAN.md "A refused pass, and leftover monitors").
   - Then install from the branch and run the live smoke tests, then the draft PR.
