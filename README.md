@@ -125,7 +125,7 @@ sees it.
 | `hooks/report-check.sh` | PreToolUse(SubagentHandback)/SubagentStop hook: sends a delegated role's malformed report back, at most twice; fails open | symlink `~/.claude/hooks/report-check.sh` |
 | `hooks/handoff-reminder.sh` | UserPromptSubmit hook: on a wrap-up / handoff / clear-memory signal, reminds me to invoke the `handoff` skill instead of improvising it, or the `pass` skill on a terse "... and pass"; a shim over `hooks/handoff_reminder.py`, which holds the classifier | symlink `~/.claude/hooks/handoff-reminder.sh` and `handoff_reminder.py` |
 | `hooks/session-title.sh` | UserPromptSubmit hook: sets the terminal tab title to `[<repo>] <label>` via `sessionTitle`, so tabs are tellable apart; the label comes from the Stop-hook Haiku cache (`.title.txt`), falling back to the current prompt's first line | symlink `~/.claude/hooks/session-title.sh` |
-| `hooks/stop-ring.sh` | Stop hook: plays the Windows notify sound when a session you see finishes (a tab, a plain terminal or a mapped background session), not a subagent, an unmapped background session, a `claude -p` run, a turn that ends with an agent or shell still running for it, or one a queued notice or prompt restarts within a second; logs each decision to `ring.log` | symlink `~/.claude/hooks/stop-ring.sh` |
+| `hooks/stop-ring.sh` | Stop hook: plays the Windows notify sound when a session you see finishes (a tab, a plain terminal or a mapped background session), not a subagent, an unmapped background session, a `claude -p` run, a turn that ends with an agent or shell still running for it, or one a queued notice or prompt restarts within a second; logs each decision to `ring.log`, and writes the session's stop record (`stops/<session>.json`: time, tasks in flight) for `pass-respawn` | symlink `~/.claude/hooks/stop-ring.sh` |
 | `hooks/notify.sh` | Notification(permission_prompt) hook: pops a Windows toast, resolving the toast path per platform (WSL via `wslpath`, native Windows git-bash via `cygpath`), and rings like `stop-ring.sh` | symlink `~/.claude/hooks/notify.sh` |
 | `hooks/tmux-state.sh` | Prompt, tool, Stop and Notification hook: sets `@claude_state` (busy, wait, idle) on the tmux window the session is shown in, for the indicator in `tmux/claude.conf`; does nothing outside tmux | symlink `~/.claude/hooks/tmux-state.sh` |
 | `hooks/session-pane.sh` | Sourced by the three hooks above, not a hook: finds the tmux pane a session is shown in, and whether a person sees it | symlink `~/.claude/hooks/session-pane.sh` |
@@ -439,17 +439,19 @@ rechecks the handoff and respawns the pane with a fresh `claude`.
 
 - `pass compact` keeps the session and types `/compact` and the resume prompt instead. Use it
   mid-task with tacit state or with background tasks in flight, which a respawn would kill (a
-  plain pass refuses while they run).
+  plain pass drops while they run, an in-process teammate included).
 - Typed triggers: "pass" fires only as the bare last item of a terse list ("pass", "handoff and
   pass", "commit, handoff and pass"). "pass compact", "handoff and compact" and "handoff and
   pass compact" pick the compact mode. "a later pass" or "the tests pass" never fire, and a
   bare "handoff" never passes.
-- The fresh session starts in plan mode, unless the Next block carries `(approved by Hayden
-  YYYY-MM-DD)` for that exact step. The handoff skill writes that marker only for an approval
-  given in the session.
-- The pass drops, with one line in the pane's status line and nothing changed, when work landed
-  after the handoff (`stale`), a queued prompt restarted the turn (`resumed`), background work
-  started (`busy`) or the pane never went idle (`timeout`). Fix the cause and run `/pass` again.
+- The fresh session starts in plan mode, unless the Next block's first item carries `(approved by
+  Hayden YYYY-MM-DD)` dated within this session. The handoff skill writes that marker only for an
+  approval given in the session, and `handoff-check` fails one with a bad or older date.
+- It waits for this session's own idle status (`~/.claude/sessions/<pid>.json`), not the tab's.
+  The pass drops, with one line in the pane's status line and nothing changed, when work landed
+  after the handoff (`stale`), Hayden typed a prompt after the call (`resumed`), the stop listed
+  background work or a teammate (`busy`), the session or pane went away or changed (`gone`), or
+  the turn never ended (`timeout`). Fix the cause and run `/pass` again.
 - `pass-respawn` is in `excludedCommands` (it needs the tmux socket), so it runs bare. Each
   decision appends a line to `~/.local/state/dotclaude/pass.log`.
 
