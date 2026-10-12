@@ -70,33 +70,30 @@ stored here).
 
 ## In flight
 - **Lanes, handoff-check and `/pass`** (Hayden's design, approved 2026-10-11; `PLAN.md`, behavior in
-  `docs/lanes.md` and `skills/lanes/SKILL.md`). Three PRs:
+  `docs/lanes.md` and `skills/lanes/SKILL.md`). Four PRs:
   - PR 1 (lanes core) merged as #86 (`gh pr view 86`); its smoke test and guard replay are in
     `git show cc6b3df:STATUS.md`.
-  - **PR 2 `feat/lanes-lead` (#87): built, reviewed (four rounds, the last on 7ba04d3), installed
-    from its branch and smoke-tested on HAYPC 2026-10-11.** `lane open` (plan mode, window
-    derived from the live session, never stored), `lane lock` (sandboxed: `lane *` left
-    excludedCommands for six named subcommands), the lead's playbook in the skill, and the
-    delegation fix (a lane-rooted session's writer is held out of the lane; the audit names it).
-    Live: a `claude -p` lead triaged three requests, proposed, and on approval opened two lanes
-    whose sessions started in plan mode with their identity line and showed in `lane ls` WINDOW;
-    a fresh session's `lane lock` ran under `apply-seccomp`; a second holder waited and named the
-    first; a lane session's writer was denied `echo > <lane>/x` ("in the parent session's
-    checkout"). Found live: a new lane path stops at Claude Code's trust dialog, and trusting the
-    lanes root covers every lane under it (`lane init` prints the line). As-built deviations:
-    PLAN.md PR 2 "As built". Accepted limits: docs/lanes.md (lock signal edges) and
-    docs/delegation.md (a lane under a temp root isn't held).
+  - PR 2 (the lead) merged as #87 (`gh pr view 87`); its smoke test is in
+    `git show e6040de:STATUS.md`.
   - **Security follow-up found while building PR 2** (excluded commands; detail and plan are
     private: `~/scratch/sandbox-audit/FINDINGS.md`, "Follow-up 2026-10-11"). **Step 0 is done on
-    `feat/lanes-lead` (2026-10-12)**: the lanes config lives in the state dir, and what the
+    `feat/lanes-lead`, merged in #87**: the lanes config lives in the state dir, and what the
     sandbox can still write is checked before sandbox-off code acts on it (docs/lanes.md S3).
-    Four fresh review rounds, every finding fixed, each new test red on the code before it;
-    installed from the branch (settings.json byte-identical) and smoke-tested with the installed
-    `lane` and hook. Step 1 is its own PR after PR 3 and before the work repo migration; step 2
-    later.
-  - **PR 3 `feat/pass`** (`/pass`, `pass compact`, opt-in auto-pass on context): not started;
-    PLAN.md has it, plus PR 2's deferred context-management bullet.
-  - After PR 1 and 2 merge: migrate the work repo (its own PR there). The concrete values and the
+    Step 1 is its own PR after PR 3 and before the work repo migration; step 2 later.
+  - **PR 3 `feat/pass` (#88): built, reviewed (five rounds; the last found nothing medium or worse),
+    installed from its branch and live-tested on HAYPC 2026-10-12.** `/pass`, `pass compact`,
+    `--cancel`, the trigger, the delta handoff, the Star carry. Live in a scratch window: a plain
+    pass respawned in plan mode with the Star carried; an approved first item resumed in the
+    default mode; compact typed `/compact` and the resume prompt, then plan mode; `--cancel`
+    ended a pending waiter. As built and why: PLAN.md PR 3 "As built". The allow rule
+    `Bash(pass-respawn -C *)` is installed too: the classifier refused my `setup.sh` run as
+    "Auto-Mode Bypass", so Hayden ran it (settings.json diff: that one line, 2026-10-12).
+  - **PR 4 `feat/autopass`: designed, after PR 3** (Hayden split it out 2026-10-12). Three token
+    tiers from `autoCompactWindow` (300k soft, 480k wrap-up, 520k hard), read from the
+    transcript; the calibration over his transcripts is in PLAN.md PR 4.
+  - After PR 3: the release skill in the work repos gets its post-release Next block and a
+    closing `handoff-check` (its own PR there; PLAN.md PR 3 "Delta handoff").
+  - Migrate the work repo (its own PR there). The concrete values and the
     incident ids are in `~/scratch/lanes/PRIVATE.md` (private).
 - **`deck-production`: deferred (Hayden, 2026-10-05: workflow improvements first).** The geometry
   gate is merged (#68): behavior in SKILL.md "The geometry gate", design in git history (`PLAN.md`
@@ -146,14 +143,14 @@ stored here).
   `claude -p` repro and the 2.1.285 boundary; the karaoke session's has the incident.
 
 ## Notes for next session
-- **Next: Hayden merges PR 2, #87** (`gh pr view 87 --json state,mergedAt`; step 0 is in it,
-  reviewed, installed and smoke-tested). After Hayden merges: `git fetch origin main:main`
-  and `git switch main` outside the sandbox (the checkout is on `feat/lanes-lead` and live for
-  every session), then PR 3 on `feat/pass` (PLAN.md PR 3, spikes first; build `pass-respawn` as
-  a narrow wrapper with its own excludedCommands entry, never raw `tmux`). PR 2's range:
-  `main..feat/lanes-lead` (base d0ebbd8). Verify lanes before touching it: `tests/lanes`, `tests/setup`, and `tests/delegation`
-  from the main checkout (`test_subagent_policy` refuses to load sandboxed under
-  `.claude/worktrees/`).
+- **Next: Hayden merges PR 3, #88** (`gh pr view 88 --json state,mergedAt`; range
+  `main..feat/pass`, base `0ad597d`). After the merge: `git fetch origin main:main` and
+  `git switch main` outside the sandbox (the checkout is on `feat/pass` and live for every
+  session). Then PR 4 on `feat/autopass` (PLAN.md PR 4; step 0
+  spikes whether UserPromptSubmit sees a defined slash command), then the release-skill PR in
+  the work repos (PLAN.md PR 3 "Delta handoff"). Verify before touching `/pass`: `tests/pass`,
+  `tests/lanes`, `tests/setup`, `tests/delegation`, from the main checkout
+  (`test_subagent_policy` refuses to load under `.claude/worktrees/`).
 - **Astra waits on Hayden's plan** (`feat/codex-astra` merged as #85): two 2026-10-10 probes passed the audit (astra admitted,
   nothing disallowed), but even after a fresh `codex login` the turn gets a 400, "gpt-6-astra
   is not supported when using Codex with a ChatGPT account". Astra ran fine on 2026-09-29 and
@@ -164,7 +161,8 @@ stored here).
   names only Sol and Terra (decide before Medium). Kaggle hosts for the RSNA repo
   (`api.kaggle.com`, `www.kaggleusercontent.com`) are not added: its `.claude/` has only
   `settings.local.json`, Hayden's call. Flaky, not from these branches: `test_tmux_hooks`
-  `test_each_ring_decision_is_logged` failed once, then passed; `test_ledger`
+  `test_each_ring_decision_is_logged` failed once, then passed, and so did
+  `test_a_mapped_background_session_rings_on_stop` (once in about seven full runs, never alone); `test_ledger`
   `test_open_warns_first_and_calls_the_session_unknown` read 4 min for a 5-min call once
   (a backward clock step, inferred). Then Hayden picks the next workflow improvement; deck-production S2 is deferred. First real
   check of #70: the next reboot (see Done). Recent work: `gh pr list --state merged --limit 10`.

@@ -518,6 +518,72 @@ def section(text: str,
     return None
 
 
+def next_block(text: str) -> str | None:
+    """The status file's Next block: the first `## Next...` (or `## Notes for next session`)
+    section, as section() cleans it."""
+    return section(text, "Notes for next session", prefixes=("next",))
+
+
+def status_path(repo: Repo, lane: dict | None) -> str:
+    """The status file a handoff writes: the lane record in a lane, else the root STATUS.md.
+    Built from the toplevel, never lane.json's sandbox-writable `path`: in the session's own lane
+    the two name the same file (identity matches them by realpath)."""
+    if lane:
+        return os.path.join(repo.toplevel, ".lane", "STATUS.md")
+    return os.path.join(repo.toplevel, "STATUS.md")
+
+
+APPROVED, MALFORMED, UNAPPROVED, STALE = "approved", "malformed", "unapproved", "stale"
+APPROVAL_OPEN = re.compile(r"\(approved by Hayden", re.IGNORECASE)
+APPROVAL_DATE = re.compile(r" (\d{4}-\d{2}-\d{2})\)")
+BULLET = re.compile(r"\s*(?:[-*+]|\d+[.)])\s")
+
+
+def first_item(block: str | None) -> str:
+    """The Next block's first item: its first non-empty line (a bullet or not) with the wrapped
+    continuation lines after it, up to the next bullet at any depth. A nested bullet is a step
+    of its own, so it ends the item too."""
+    lines = [ln for ln in (block or "").splitlines() if ln.strip()]
+    item = lines[:1]
+    for ln in lines[1:]:
+        if BULLET.match(ln):
+            break
+        item.append(ln)
+    return "\n".join(item)
+
+
+def approval_dates(block: str | None) -> list[datetime.date]:
+    """The dates of the first item's approval markers (approval checks they parse first)."""
+    first = first_item(block)
+    return [datetime.date.fromisoformat(APPROVAL_DATE.match(first, m.end()).group(1))
+            for m in APPROVAL_OPEN.finditer(first)]
+
+
+def approval(block: str | None, since: datetime.date | None = None,
+             today: datetime.date | None = None) -> str:
+    """Whether a Next block pre-approves its next step, for /pass's resume mode. MALFORMED when
+    any `(approved by Hayden` in the block lacks a real ISO date (the handoff skill writes the
+    marker only for an approval given in the session, citing its date). Otherwise only a marker
+    on the first item (first_item) counts, since an approval covers one step: APPROVED when it
+    carries `(approved by Hayden YYYY-MM-DD)` dated within the session, UNAPPROVED when the
+    first item has no marker. A first-item marker is STALE when it is dated before `since` (the
+    session's start date, local time: the approval came from an earlier session), after `today`
+    (no approval comes from the future), or when `since` is None (an unknown start can't confirm
+    it). A same-day marker from an earlier session can't be told apart by its date, so it counts.
+    A marker on a later item is ignored."""
+    for m in APPROVAL_OPEN.finditer(block or ""):
+        date = APPROVAL_DATE.match(block, m.end())
+        try:
+            datetime.date.fromisoformat(date.group(1) if date else "")
+        except ValueError:
+            return MALFORMED
+    dates = approval_dates(block)
+    if not dates:
+        return UNAPPROVED
+    today = today or datetime.date.today()
+    return STALE if since is None or min(dates) < since or max(dates) > today else APPROVED
+
+
 def sessions_dir() -> str:
     return os.path.join(os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude"),
                         "sessions")

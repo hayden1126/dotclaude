@@ -50,7 +50,8 @@ inside", and Codex sessions wouldn't get the convention.
 - An optional **lead** session triages requests, proposes a lane split and, on approval, opens
   each lane as a real top-level session (`lane open`).
 - Each lane merges its own PR (Hayden approves each merge), and the lead sets the order.
-- `/pass` runs handoff, then `handoff-check`, then respawns the pane (PR 3).
+- `/pass` runs handoff, then `handoff-check`, then respawns the pane (PR 3; README "Pass" and
+  `skills/pass/SKILL.md`).
 
 ## Invariants (the convention in five rules)
 
@@ -219,6 +220,8 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
     sides. A symlink is copied as a link (a relative one made absolute), never read through, so
     the sandbox's read deny still holds at its target; anything not a regular file is skipped.
   - A symlinked `lanes/`, `lanes/<id>`, mirror or `info/exclude` is refused.
+  PR 3 adds `pass-respawn` to `excludedCommands` (bare and with arguments): it needs the tmux socket and
+  the session's processes, and its docstring lists what it reads and why each input is safe.
 - **S4, compaction:** a SessionStart hook matched on `compact` gets its `additionalContext` to
   the model after `/compact` (`/compact` piped into `claude -p --resume` triggers a real
   compaction). `lane-identity.sh` on `compact` is therefore the safety net for an unplanned

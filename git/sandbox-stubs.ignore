@@ -27,6 +27,8 @@
 !/.claude/agents/
 /.claude/commands
 !/.claude/commands/
+/.claude/hooks
+!/.claude/hooks/
 /.claude/output-styles
 !/.claude/output-styles/
 /.claude/routines

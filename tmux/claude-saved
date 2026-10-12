@@ -40,7 +40,11 @@
 #     takes it off the shelf, and a starred one stays starred. Until that SessionStart, the
 #     entry's `opening` names the new window for 60 s, so a second open goes there.
 #   - The star follows the tab: on SessionStart `clear` a starred chat whose tab is this pane is
-#     re-keyed to the new session id. Any other session starting in that pane takes the tab from
+#     re-keyed to the new session id. A /pass respawn starts as `startup`, so pass-respawn first
+#     writes a one-shot marker, $XDG_STATE_HOME/dotclaude/pass-carry/<pane number>.json holding
+#     {session_id, tab, written_at}; a `startup` in that tab under 120 s later re-keys that chat
+#     the same way. Any start in the pane deletes the marker (in the state dir, which sandboxed
+#     Bash can't write). Any other session starting in that pane takes the tab from
 #     the starred chat (it stays starred, its ★ goes), and a shelved chat that starts anywhere in
 #     tmux leaves the shelf. SessionEnd refreshes a saved title and clears the ★ only on a real
 #     exit (prompt_input_exit, logout); after any other end the next SessionStart decides, and
@@ -75,7 +79,8 @@ esac
 IFS= read -r -d '' PY <<'EOF'
 import glob, json, os, re, sys, tempfile, time
 
-STORE, REG = os.environ["SAVED_DIR"], os.environ["REG_DIR"]
+STORE, REG, CARRY = os.environ["SAVED_DIR"], os.environ["REG_DIR"], os.environ["CARRY_DIR"]
+CARRY_TTL = 120
 SESSIONS, PROJECTS = os.environ["SESSIONS_DIR"], os.environ["PROJECTS_DIR"]
 SID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{7,127}")
 KEYS = "123456789abcdefghijklmnopqrstuvwxyz"
@@ -458,6 +463,18 @@ def op_list():
         repo = os.path.basename(e["cwd"].rstrip("/")) or "?"
         print("%s %s %-20s %s" % (flag, e["session_id"][:8], repo, e.get("title") or ""))
 
+def take_carry(tab):
+    """The /pass carry for this tab, consumed: pass-respawn's one-shot marker naming the chat it
+    respawns away from, honored only when written under CARRY_TTL s ago for this exact tab. The
+    file goes either way, so it counts once."""
+    path = os.path.join(CARRY, tab["pane"][1:] + ".json")
+    m = load(path)
+    remove(path)
+    if (m is None or m.get("tab") != tab or not isinstance(m.get("session_id"), str)
+            or not 0 <= NOW - num(m.get("written_at")) < CARRY_TTL):
+        return None
+    return m["session_id"]
+
 def op_hook(pane, start, pid, socket, title):
     try:
         d = json.load(sys.stdin)
@@ -488,12 +505,16 @@ def op_hook(pane, start, pid, socket, title):
     if event != "SessionStart":
         return
     if tab:
+        carried = take_carry(tab)   # any start in the pane uses up its marker
+        if d.get("source") != "startup":
+            carried = None
         for e in entries():
             if e["session_id"] == sid or not e["starred"] or e.get("tab") != tab:
                 continue
-            if d.get("source") == "clear" and not entry(sid):
-                # The star follows the tab: the chat /clear just left becomes the new one. The
-                # new file is written before the old one goes, so a crash between keeps both.
+            if (d.get("source") == "clear" or carried == e["session_id"]) and not entry(sid):
+                # The star follows the tab: the chat /clear (or a /pass respawn) just left
+                # becomes the new one. The new file is written before the old one goes, so a
+                # crash between keeps both.
                 old = e["session_id"]
                 e["session_id"] = sid
                 e["transcript_path"] = d.get("transcript_path") or ""
@@ -518,7 +539,8 @@ OPS[sys.argv[1]](*sys.argv[2:])
 EOF
 
 py() {
-  SAVED_DIR="$state/saved" REG_DIR="$state/open-sessions" SESSIONS_DIR="$HOME/.claude/sessions" \
+  SAVED_DIR="$state/saved" REG_DIR="$state/open-sessions" CARRY_DIR="$state/pass-carry" \
+    SESSIONS_DIR="$HOME/.claude/sessions" \
     PROJECTS_DIR="$HOME/.claude/projects" python3 -I -c "$PY" "$@"
 }
 

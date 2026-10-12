@@ -302,6 +302,65 @@ class Saved(unittest.TestCase):
         self.hook("SessionStart", 2, source="clear")
         self.assertTrue(self.saved()[sid(1)]["starred"])
 
+    # --- the /pass carry: a respawn starts as `startup`, and pass-respawn leaves a marker ---
+
+    def carry(self, n, pane="%4", age=5, server_start=START):
+        """pass-respawn's one-shot marker for session n leaving pane."""
+        d = os.path.join(self.state, "pass-carry")
+        os.makedirs(d, exist_ok=True)
+        path = os.path.join(d, pane[1:] + ".json")
+        with open(path, "w") as f:
+            json.dump({"session_id": sid(n), "written_at": time.time() - age,
+                       "tab": {"socket": SOCKET, "server_start": server_start,
+                               "server_pid": PID, "pane": pane}}, f)
+        return path
+
+    def test_a_pass_carry_moves_the_star_on_startup(self):
+        self.put(1, starred=True)
+        marker = self.carry(1)
+        self.hook("SessionStart", 2, source="startup")
+        self.assertEqual(list(self.saved()), [sid(2)])
+        e = self.saved()[sid(2)]
+        self.assertEqual((e["starred"], e["tab"]["pane"]), (True, "%4"))
+        self.assertEqual(e["transcript_path"], f"/x/{sid(2)}.jsonl")
+        self.assertFalse(os.path.exists(marker))
+        self.assertTrue(self.star_set())
+
+    def test_a_stale_pass_carry_changes_nothing(self):
+        self.put(1, starred=True)
+        marker = self.carry(1, age=200)
+        self.hook("SessionStart", 2, source="startup")
+        self.assertEqual(list(self.saved()), [sid(1)])
+        self.assertIsNone(self.saved()[sid(1)]["tab"])   # the plain startup rule: ★ goes
+        self.assertFalse(os.path.exists(marker))
+
+    def test_a_pass_carry_for_another_pane_or_server_changes_nothing(self):
+        self.put(1, starred=True, pane="%4")
+        marker = self.carry(1, pane="%4")
+        self.hook("SessionStart", 2, pane="%5", source="startup")
+        self.assertTrue(os.path.exists(marker))   # not this pane's
+        self.assertEqual(self.saved()[sid(1)]["tab"]["pane"], "%4")
+        self.carry(1, pane="%4", server_start=START + 5)   # same pane id, another server
+        self.hook("SessionStart", 3, pane="%4", source="startup")
+        self.assertEqual(list(self.saved()), [sid(1)])
+        self.assertFalse(os.path.exists(marker))
+
+    def test_a_pass_carry_is_consumed_once(self):
+        self.put(1, starred=True)
+        marker = self.carry(1)
+        self.hook("SessionStart", 2, source="startup")
+        self.assertFalse(os.path.exists(marker))
+        self.hook("SessionStart", 3, source="startup")   # a later plain start takes the tab
+        self.assertEqual(list(self.saved()), [sid(2)])
+        self.assertIsNone(self.saved()[sid(2)]["tab"])
+
+    def test_a_pass_carry_for_another_chat_changes_nothing(self):
+        self.put(1, starred=True)
+        marker = self.carry(7)
+        self.hook("SessionStart", 2, source="startup")
+        self.assertEqual(list(self.saved()), [sid(1)])
+        self.assertFalse(os.path.exists(marker))
+
     def test_clear_in_another_pane_or_server_leaves_the_star(self):
         self.put(1, starred=True, pane="%4")
         self.hook("SessionStart", 2, pane="%5", source="clear")

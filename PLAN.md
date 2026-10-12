@@ -1,8 +1,9 @@
 # PLAN: Lanes (parallel sessions in worktrees), handoff-check and /pass
 
 > **Status:** STATUS.md holds where this stands. Approved by Hayden 2026-10-11 (three PRs:
-> core `feat/lanes`, lead `feat/lanes-lead`, `/pass` `feat/pass`). The previous PLAN.md (Star and
-> Shelve) is in git (`git show fe56e56:PLAN.md`); README holds its as-built behavior.
+> core `feat/lanes`, lead `feat/lanes-lead`, `/pass` `feat/pass`). On 2026-10-12 Hayden split
+> auto-pass out of PR 3 into PR 4. The previous PLAN.md (Star and Shelve) is in git
+> (`git show fe56e56:PLAN.md`); README holds its as-built behavior.
 
 ## Context
 
@@ -355,18 +356,7 @@ session):
   - **Watch and order:** watch `lane ls`. Keep the merge order in the lead's backlog. After each
     merge, message the remaining lanes ("main moved to `<sha>`, rebase; renumber the version if
     taken"). The board's `rebase` flag is the truth, and the message is only a nudge.
-- **Context management across lanes.**
-  - Each lane manages itself through the PR 3 watcher, with `autopass = true` set in the lanes
-    config by default.
-  - The lead is the backstop, not the actor. `lane ls` shows each lane's context % (from the live
-    session's transcript, using the session id in `lane.json`) and its idle or working state.
-  - When a lane is high and idle at a clean boundary, the lead messages it: "context N%, run
-    /pass".
-  - The lead never respawns another lane's pane, because only the lane holds the context its
-    handoff needs. A lane whose session died with `handoff?` set goes to Hayden's asks.
-  - The lead passes itself the same way. Its state lives in the project STATUS and the board, so
-    a fresh lead resumes cleanly.
-  - This bullet lands with PR 3, since it needs the watcher.
+- **Context management across lanes:** moved to PR 4 ("The lead"), since it needs the watcher.
 - **Delegation guardrails reach the parent lane** (found 2026-10-11 by a live probe: a `claude -p`
   session in a lane spawned a `writer`). The writer's worktree lands under the main checkout's
   `.claude/worktrees/`, branched from the lane's HEAD (so the stale-base trap is gone for
@@ -386,6 +376,81 @@ session):
   and both sessions start with their identity line.
 
 ## PR 3: `/pass` (`feat/pass`)
+
+**As built (2026-10-12), where it differs from the lists below.** The script's docstring and
+`skills/pass/SKILL.md` are the as-built reference. Five review rounds (34 findings: 32 fixed
+here; one, the process command line, checked live and documented as a limit; one
+excludedCommands question left to the private sandbox follow-up's step 1; the last round found
+nothing medium or worse) and live runs shaped these:
+- **The turn's end comes from Claude Code's per-session file** (`~/.claude/sessions/<pid>.json`),
+  not tmux's per-window `@claude_state`. The window state reads `idle` on a hook-blocked Stop,
+  during a `/compact`, and for any split pane. At the prompt the file reads `idle`, or `shell`
+  while a background shell runs (found live: a compact waiter sat until its timeout). The
+  waiter also checks the session id, `procStart` and pane, and runs a final re-check right
+  before acting: the same `statusUpdatedAt`, the pane still running that claude, not in copy
+  mode, and no unsent draft in the input box (a dim ghost suggestion isn't one).
+- **Background work comes from the Stop payload, not the process tree.** In-process agents are
+  no child process. `hooks/stop-ring.sh` writes a per-session stop record (time, task labels,
+  transcript path), and a plain pass drops `busy` on any task but `dream`, a teammate included.
+- **A prompt typed after the call drops the pass** (`resumed`): a typed user entry, or a
+  mid-turn `queue-operation` enqueue or `queued_command` attachment. The approval and the mode
+  are read at act time.
+- **Approval is per step:** only the Next block's first item, dated within the session and not
+  in the future. `handoff-check` fails a malformed, stale or future marker, and one it can't date
+  against a session start.
+- **Single flight:** the waiter holds a per-session flock; `pass-respawn -C <dir> --cancel` ends
+  a pending pass on a verified pid. Once acting begins it ignores SIGTERM and finishes, and a
+  late `--cancel` says `too-late`.
+- **Compact re-checks before its second half:** copy mode or a draft after the 1 s gap shows the
+  resume prompt instead of typing it (`partial`).
+- **Trust:** writable roots cover the launch dir and `additionalDirectories`, with user and
+  managed `denyWrite` carved out (otherwise every pass in dotclaude would refuse); the script and
+  `handoff-check` refuse when sandbox-writable, and so does a sandbox-writable `--settings` file
+  the session was launched with (its `--add-dir` dirs count as writable); children get a pinned
+  PATH; both scripts run under `/usr/bin/python3 -I`; prompts carry only computed paths.
+- **Outcomes** grew `gone`, `failed`, `error`, `cancelled`, `partial` and `too-late`.
+- **A one-word "pass" doesn't trigger** (it is also "no thanks"); the typed trigger needs an
+  action word before "pass".
+- **An allow rule, `Bash(pass-respawn -C *)`:** the auto-mode classifier refused a bare call as
+  "Create Unsafe Agents" after allowing one, so the skill always calls `pass-respawn -C
+  <toplevel> [--compact]`. Installing a new allow rule is Hayden's step (the classifier refused
+  the `setup.sh` run as "Auto-Mode Bypass").
+- **The sandbox's `.claude/hooks` stub** joined `git/sandbox-stubs.ignore`. Untracked, it failed
+  `handoff-check`'s clean check in every repo.
+- **Live runs** (a scratch window): a plain pass respawned in plan mode with the Star carried; an
+  approved first item resumed in the default mode; compact typed `/compact` and the resume
+  prompt, which entered plan mode; `--cancel` ended a pending waiter; a `!pass-respawn` typed in
+  bash mode works too (its output starts a model turn, which is harmless).
+
+**Changes from the 2026-10-11 design** (Hayden, 2026-10-12):
+- Auto-pass (the context watcher, its config, `/pass auto`) moved to PR 4.
+- **Work after a handoff makes it stale.** The detached respawner re-runs `handoff-check` right
+  before it acts, and drops the pass (a `tmux display-message`, a `stale` log line, no respawn)
+  if the tree got dirty or a commit landed after the status file. Between the call and idle the
+  turn can keep editing, and a queued prompt can restart it.
+- **Delta handoff** (from the `/release` pattern in the work repos: a second handoff after a
+  release is needed only sometimes).
+  - Review fixes, a rebase, a chat decision or a failed deploy make a handoff stale. A clean PR,
+    merge and deploy don't, because `gh` can derive them.
+  - `handoff-check` is the staleness detector.
+  - The handoff skill gets a delta mode: the range is the last status commit to HEAD, plus
+    decisions from chat since then. It skips the drift sweep when the range touches no code or
+    docs.
+  - `/pass` runs the delta mode when a handoff already ran in the session.
+  - The release skill in the work repos changes in its own PR there, after this one: its step-5
+    handoff writes the post-release Next block, and step 7 ends with `handoff-check` and "did
+    anything get decided or found since the handoff?".
+- **Both modes wait for idle.** The plain respawn also waits for the turn's Stop (`@claude_state`
+  `busy` then `idle`, a 1 s settle and a recheck), not only a fixed settle, so the final reply and
+  the Stop hooks finish before `-k`.
+- **The Star carries across a pass.** `tmux/claude-saved` re-keys a starred chat only on a
+  `clear` start; a respawn is a `startup`, which today drops the ★. `pass-respawn` leaves a
+  one-shot carry marker, and the hook honors it the way it handles `clear`.
+- **Classifier misfires found by the PR 4 calibration get fixed here**, since the trigger work
+  touches `handoff_reminder.py` anyway:
+  - a deferred handoff ("do a handoff at the time");
+  - a question ("ready to clear context?");
+  - long prompts firing on a non-handoff last clause.
 
 - `skills/pass/SKILL.md` (user-invocable):
   1. Refuse if background tasks are in flight or `$TMUX_PANE` is unset (then print the manual
@@ -438,49 +503,165 @@ session):
   - "pass" is a risky trigger word. 63 of 5,661 typed prompts use it, almost all as "a pass"
     ("Handoff for a later pass to fix this", "a graphics/image pass").
   - So the natural-language trigger only fires when "pass" is the bare last item of a terse list
-    ("handoff and pass", "commit, pass", "pass").
+    ("handoff and pass", "commit, pass"). As built, a one-word "pass" doesn't fire: it is also
+    "no thanks" (round-3 review), so an action word must come before it in the same sentence;
+    `/pass` itself always works.
   - The `handoff_reminder.py` classifier gets that end-anchored rule, and the skill's description
     says the same.
   - Gate: replay all of `history.jsonl` with zero hits in the "a pass" sense ([[hayden-prompt-style]],
     [[fix-every-review-finding]]).
-- **Opt-in auto-pass on context** (Hayden's ask: pass at the end of a session without being told):
-  - `hooks/context-watch.sh`, Stop.
-    - Hooks get no context-fill field, but the statusline JSON documents
-      `context_window.used_percentage`.
-    - So a ccstatusline custom-command widget writes `used_percentage` per session to
-      `$XDG_STATE_HOME/dotclaude/ctx/<session_id>`, and the hook reads that file.
-    - Fallback: the transcript's last assistant `usage` (an internal format).
-    - The same file feeds `lane ls`'s context column.
-  - The nudge always says "run the pass skill", so a handoff always comes first. It names the
-    mode the table suggests. With background tasks in flight, it suggests only `pass compact`
-    instead of staying quiet.
-  - When auto-pass is on and the fill is at or above the threshold (default 60%, set in
-    `~/.config/dotclaude/pass.toml`, per repo in the lanes config), it blocks the Stop once
-    per threshold crossing with: "Context at N%. If this is a clean boundary, run the pass skill;
-    if you just asked Hayden something or work is mid-step, finish that first."
-  - Stop `decision: block` keeps the turn going ([[cc-stop-hook-facts]]). The hook stays quiet
-    while `background_tasks` is non-empty.
-  - Turning it on: `/pass auto` (this session, a flag file keyed by session id), or
-    `autopass = true` in config (every session in that repo or lane).
-  - When it's off, the hook does nothing. The statusline already shows context.
-- Spike first:
-  - SessionEnd reason and the hooks on a respawn.
-  - Whether tmux-restore treats it as a death.
-  - Whether a Star follows the pane across it, as it does across `/clear`
-    ([[dotclaude-tmux-shelf]]).
+- **Spikes first** (in a scratch tmux window running an interactive `claude`):
+
+  | # | Question | Expected |
+  |---|---|---|
+  | S1 | `respawn-pane -k` on a live claude pane: the old session's SessionEnd reason, the new one's SessionStart source | `other`, then `startup`; `open-sessions/` marks the old entry and writes a new one for the same pane (restore keeps the newest per pane, so a pass is no death); no stray ring in `ring.log` |
+  | S2 | tmux 3.7c `respawn-pane -c <cwd> -- <abs claude> --permission-mode plan "<prompt>"` | argv form works; the pane starts in plan mode with the prompt and has `TMUX_PANE` |
+  | S3 | `@claude_state` seen from a detached child of a Bash call | `busy`, then `idle` after the turn's Stop; a queued input flips it back inside the settle |
+  | S4 | `send-keys` of `/compact <focus>` into an idle pane, then the resume prompt | how to tell the compact finished, and whether typed input queues during it |
+  | S5 | a background `python3 -I -c 'import time; time.sleep(120)'` across `/compact` | it survives |
+  | S6 | can `pass-respawn` see in-flight background tasks (descendants of the pane's claude, minus MCP servers)? | if cleanly, plain pass refuses mechanically; otherwise the refusal stays in the skill |
+
+- **Spike results** (2026-10-12, Claude Code 2.1.296, tmux 3.7c; a scratch window driven from
+  outside, with a `--settings` probe logging hook events):
+  - S1: `respawn-pane -k` sends the old session SessionEnd `other`, and the new one starts as
+    `startup` in the same pane. `open-sessions/` marks the old entry and writes the new one, so
+    restore (newest per pane) sees no death. `ring.log` rang only on real turns' Stops. The ★
+    dropped: the saved chat kept `starred` with `tab: None`, which confirms the carry is needed.
+  - S2: the argv form `respawn-pane -k -t <pane> -c <cwd> -- <abs claude> --permission-mode plan
+    <prompt>` works. The pane came back in plan mode with the prompt submitted, and it has
+    `TMUX_PANE`.
+  - S3: `@claude_state` goes `busy` at UserPromptSubmit and `idle` within 0.2 s of the Stop, as
+    seen from a poller outside the session.
+  - S4: `/compact <focus>` typed into an idle pane runs, and a prompt typed 1 s later queues
+    ("Press up to edit queued messages") and runs right after SessionStart `compact`. So the
+    script types both and needs no wait for the compact. `@claude_state` stays `idle` while
+    compacting, so the state can't show a compact in progress.
+  - S5: a background `sleep` survived the compact (`background_tasks` still listed it at the next
+    Stop).
+  - S6: a background Bash task is a `bwrap` child of the pane's `claude`. MCP servers are `npm`
+    and `socat` children, and a sandbox-off command is a shell child. So a plain pass refuses
+    mechanically: at act time, any `bwrap` or shell child of the claude process means work is in
+    flight. `/exit` asks before stopping background work, but `respawn-pane -k` would kill it
+    silently, which is why the check matters.
+
 - **Verify:**
   - Unit tests:
-    - `context-watch` on transcript fixtures: below the threshold; at it, once per crossing;
-      off; background tasks in flight.
     - The resume-mode choice: approved, unapproved, a malformed marker.
-    - The trigger classifier, plus the full `history.jsonl` replay.
+    - `pass-respawn --print` in a lane and a plain repo; the waiter against a fake `tmux`
+      (`busy` then `idle`, a queued restart, a timeout); the refusals (no `TMUX_PANE`, a failing
+      `handoff-check`); staleness (an edit or a commit after the call drops the pass, and no
+      respawn reaches the fake `tmux`).
+    - The Star carry: match, stale, wrong pane, consumed once.
+    - The trigger classifier, the calibration's misfires, plus the full `history.jsonl` replay.
   - A live run in a scratch tmux window: `/pass`, then the handoff commit; the pane comes back in
     plan mode with the prompt. `ring.log` and the restore log stay sane, and a Star survives.
   - A second run with an approved Next resumes in normal mode.
   - `pass compact` with a background `python3 -I -c 'import time; time.sleep(120)'` in flight:
     the handoff commits, `/compact` is typed only after idle, the background task survives, and
     the resumed turn enters plan mode.
-  - An auto-pass at a lowered threshold (5%) fires once and ends in a passing `handoff-check`.
+
+## PR 4: auto-pass (`feat/autopass`, after PR 3)
+
+Hayden's ask: pass at the end of a session without being told. Designed with Hayden on
+2026-10-12, from his own pattern and a calibration over his transcripts.
+
+**Hayden's pattern.** He thinks in absolute tokens, not percentages. Past about 300k with the
+task done, he hands off. Past 300k mid-plan with little left, he finishes first, usually by
+500k to 550k. He always wants the handoff before auto-compact. A handoff costs 5k to 60k tokens,
+depending on how much new work it covers.
+
+**Calibration** (2026-10-12, read-only, transcripts from 2026-09-09 on; 151 sessions passed 200k,
+all on 1M-window models). Context at each event, in thousands of tokens:
+
+| Event | n | p25 | p50 | p75 | p90 | max |
+|---|---|---|---|---|---|---|
+| handoff | 241 | 273 | 354 | 439 | 499 | 565 |
+| `/clear` | 112 | 313 | 371 | 458 | 497 | 548 |
+| `/compact` | 113 | 354 | 442 | 500 | 543 | 565 |
+
+- A handoff costs p50 22k, p90 47k, max 208k. The number of edits barely predicts it.
+- **Auto-compact fires at about 567k, not at `autoCompactWindow` (600k):** 33 of 38 fell between
+  566k and 571k, so Claude Code keeps a buffer of about 33k.
+- Nine handoffs typed at 515k or later overflowed into auto-compact.
+- 19 of 38 auto-compacts had no handoff before them, several in long unattended runs that never
+  reach a Stop.
+- After crossing 300k, the handoff came a median of 2 prompts and 115k tokens later, so a turn
+  runs about 45k (derived, not measured).
+
+**Signal.**
+- Absolute tokens: the transcript's last main-chain assistant `usage` (input, cache read and
+  cache creation), read by the hook through the payload's `transcript_path`.
+- This replaces the statusline writer of the 2026-10-11 design. That writer exists only while a
+  pane renders the statusline, so `claude -p`, background sessions and unwatched lanes would get
+  nothing. The transcript format is internal: a fixture pins it, and a parse miss stays quiet.
+- Raw `used_percentage` was rejected: it is a share of the 1M window, so a 60% threshold would
+  sit at auto-compact itself.
+- The hook writes the count to `$XDG_STATE_HOME/dotclaude/ctx/<session_id>`, for `lane ls`.
+
+**Three tiers**, all derived from `autoCompactWindow`, so they move together if it changes:
+
+| Tier | Tokens | Fires on | What the model is told |
+|---|---|---|---|
+| Soft | 300k | Stop, once per crossing | Done end to end: run the pass skill. A small remainder: keep going. Just asked Hayden something: do nothing. The model judges the boundary; the hook can't. |
+| Wrap-up | window − 120k (480k) | Stop and PostToolUse, once | Finish the step you're on and don't start a new one. If more than this step is left, hand off now (compact mode if mid-task). |
+| Hard | window − 80k (520k) | Stop and PostToolUse, re-armed every +20k | Hand off now: `pass compact` mid-task, `pass` at a boundary. |
+
+- The hard margin is Claude Code's ~33k buffer plus the p90 handoff cost (47k). It is fixed, not
+  scaled to the work (Hayden's call). 600k minus 60k, the first idea, would leave only 27k.
+- Wrap-up at 480k leaves 40k, about one turn, before the hard tier. 500k was rejected: it leaves
+  under half a turn, and it is Hayden's p90 handoff, so it mostly lands after the decision.
+- PostToolUse is what reaches long autonomous turns (subagent-driven execution, fix loops),
+  which would otherwise cross into auto-compact before any Stop.
+
+**The `/autopass` toggle** (Hayden, 2026-10-12).
+- `/autopass on|off|status` is typed in chat. A UserPromptSubmit hook catches it, writes the flag
+  (hooks run outside the sandbox, which can't write the state dir), and blocks the prompt with a
+  one-line confirmation. So a toggle costs no model turn and no context.
+  - Spike first: does UserPromptSubmit see a defined slash command before it expands? If not,
+    use a mod's slash command (the `plugin-authoring` skill), which also runs locally.
+- **On:**
+  - all three tiers block or inject as above;
+  - the model may run the pass skill on its own (it still respawns into plan mode, so Hayden
+    approves the next step).
+- **Off:**
+  - no blocks, no injected context, and no pass the user didn't ask for;
+  - one exception, the safety net (Hayden's call): a single non-blocking line at the hard tier,
+    "context 520k, auto-compact at about 567k: hand off now", not re-armed.
+- **Either way:**
+  - the token count is written to `ctx/<sid>`, and the ctx widget changes color at each tier
+    (passive);
+  - `/pass`, the typed triggers and the handoff reminder work unchanged.
+- **Scope: per tab** (Hayden's call).
+  - A pass respawn and `/clear` both start a new session id, so a per-session flag would switch
+    itself off after the first pass.
+  - The flag is keyed by the tab (socket, server start, server pid, pane), the way the Star
+    carries, and dies with the tab.
+  - Precedence: the tab's toggle, then the repo's lanes config (`autopass = true` by default in
+    lanes), then the global default in `~/.config/dotclaude/pass.toml` (off).
+- `/autopass status` prints the token count, the next tier, on or off, and which level set it.
+
+**Guards.**
+- A subagent's events are ignored.
+- The hook stays quiet while background work runs (`stop-ring.sh`'s set, so a lingering monitor
+  doesn't mute it). The one exception is the hard tier, which then suggests `pass compact`,
+  since a compact keeps background tasks alive.
+- It keeps crossings in its own record, the way `watch-guard` keeps its blocks, not through
+  `stop_hook_active`.
+- A compact, or a new session id, drops the count and re-arms it.
+- Stop `decision: block` keeps the turn going ([[cc-stop-hook-facts]]).
+
+**The lead** (moved from PR 2).
+- Each lane manages itself through the watcher (autopass is on by default in lanes).
+- `lane ls` shows each lane's context from `ctx/<sid>`, plus its idle or working state.
+- A lane past the soft tier and idle gets a message from the lead: "context N k, run /pass".
+- The lead never respawns another lane's pane, because only that lane holds the context its
+  handoff needs. A lane whose session died with `handoff?` set goes to Hayden's asks.
+- The lead passes itself the same way. Its state lives in the project STATUS and the board.
+
+**Verify.**
+- `context-watch` on transcript fixtures: below each tier, at each tier once per crossing, the
+  hard tier re-arming, off, background work in flight, a subagent event, and a compact re-arming.
+- A live run at lowered tiers fires each tier once and ends in a passing `handoff-check`.
 
 ## After: the work repo's migration (its own PR in that repo, after PR 1 and PR 2 merge)
 

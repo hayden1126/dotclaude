@@ -50,8 +50,13 @@ class Baseline(unittest.TestCase):
     def test_excluded_patterns_have_a_form_claude_code_matches(self):
         # Live probe, 2026-09-30: "cp *" matched `cp a b`, a bare "touch" did not match
         # `touch x`. Multi-word exact forms ("git push") cover the argument-less call.
-        for pat in S["sandbox"]["excludedCommands"]:
-            self.assertTrue(pat.endswith(" *") or len(pat.split()) >= 2, pat)
+        # A one-word exact form ("pass-respawn") is allowed only beside its " *" twin, which
+        # carries every call with an argument; whether the one-word form matches the bare call
+        # is unprobed, so /pass passes an argument.
+        excluded = S["sandbox"]["excludedCommands"]
+        for pat in excluded:
+            self.assertTrue(pat.endswith(" *") or len(pat.split()) >= 2
+                            or f"{pat} *" in excluded, pat)
 
     def test_the_credential_barrier_covers_github(self):
         fs = S["sandbox"]["filesystem"]
@@ -225,6 +230,28 @@ class Baseline(unittest.TestCase):
             self.assertEqual([p for p in excluded if glob_match(p, cmd)], [], cmd)
         for cmd in ("lane ls", "lane ls --json", "lane open chart-fix", "lane done chart-fix"):
             self.assertTrue(any(glob_match(p, cmd) for p in excluded), cmd)
+
+    def test_pass_respawn_runs_outside_the_sandbox(self):
+        # It needs the tmux socket and the session's processes (/pass, spike S6). It is
+        # sandbox-off code, so it checks every sandbox-writable input it reads (its docstring);
+        # the delegated-agent policy denies it like every excluded command.
+        excluded = S["sandbox"]["excludedCommands"]
+        self.assertEqual([p for p in excluded if p.split()[0] == "pass-respawn"],
+                         ["pass-respawn", "pass-respawn *"])
+        self.assertLess(excluded.index("lane done *"), excluded.index("pass-respawn"))
+        for cmd in ("pass-respawn", "pass-respawn --compact", "pass-respawn --print -C /x"):
+            self.assertTrue(any(glob_match(p, cmd) for p in excluded), cmd)
+        # The allow rule skips the auto-mode classifier, which once refused a bare call as
+        # "Create Unsafe Agents" (live run, 2026-10-12); the skill keeps -C first to match it.
+        self.assertIn("Bash(pass-respawn -C *)", S["permissions"]["allow"])
+        with open(os.path.join(REPO, "skills", "pass", "SKILL.md")) as f:
+            skill = f.read()
+        self.assertIn("`pass-respawn -C <toplevel> --compact`", skill)
+        self.assertIn("Bash(pass-respawn -C *)", skill)
+        script = os.path.join(REPO, "skills", "pass", "scripts", "pass-respawn")
+        self.assertTrue(os.access(script, os.X_OK))
+        with open(os.path.join(REPO, "setup.sh")) as f:
+            self.assertIn('"$REPO_DIR"/skills/pass/scripts/pass-respawn', f.read())
 
     def test_the_delete_guard_runs_on_sandbox_off_bash_only_and_fails_open(self):
         # Every Bash call passes the matcher; the prefilter keeps Python off the sandboxed ones,

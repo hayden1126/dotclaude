@@ -1,4 +1,4 @@
-"""handoff-reminder's classifier: does a typed prompt ask for a session wrap-up or handoff?
+"""handoff-reminder's classifier: does a typed prompt ask for a session wrap-up, a handoff or a pass?
 
 hooks/handoff-reminder.sh runs this file with python3 -I, passing the UserPromptSubmit event on
 stdin; the rules are summarized in that shim's header. Tests import classify() directly
@@ -13,6 +13,15 @@ improvising or cherry-picking steps. Improvising tends to silently drop steps (c
 reconciliation and the memory curation, but run them all). If this is genuinely trivial with nothing
 durable to carry, the skill itself says skip it, but make that an explicit judgment, not an omission.
 """
+
+PASS_HEAD = """[handoff-reminder] This asks for a pass: hand the session off, then restart it fresh in its
+tmux pane. Before responding, invoke the `pass` skill (Skill tool, name "pass") and follow it. It runs
+the handoff first (the full procedure, or its delta mode when a handoff already ran this session),
+gates on handoff-check and calls pass-respawn as the turn's last action. """
+PASS_MSG = PASS_HEAD + "Pick the mode from the skill's table; Hayden can name one.\n"
+COMPACT_MSG = PASS_HEAD + ("Hayden asked for the compact mode: run pass-respawn with --compact, so "
+                           "the session\ncompacts in place instead of respawning.\n")
+MESSAGES = {"handoff": MSG, "pass": PASS_MSG, "compact": COMPACT_MSG}
 
 # Keep in sync with session-title.sh and session-summary.sh (tests/setup/test_hook_payloads.py checks).
 INJECTED = ("[system notification", "not user input", "<task-notification", "<system-reminder",
@@ -68,6 +77,11 @@ DELEGATE = re.compile(
     r"(?!(?:new |fresh |next |later |clean )(?:session|chat|conversation|agent|window|thread|instance)\b"
     r"|(?:session|chat|conversation)\b)|(?:codex|claude|gemini|gpt|sol|terra)\b)"
     r"|for\s+(?:review|approval|feedback|testing)\b)", I)
+# "do a handoff at the time", "handoff later": a handoff for some later moment, not now.
+DEFER = re.compile(r"\s+(?:at (?:the|that|some) (?:time|point)\b|when the time comes\b|later\b|eventually\b"
+                   r"|at some point\b)", I)
+# "ready to clear context?", "ready to handoff?": asking whether it's time, not asking for it.
+READY = re.compile(r"\bready to\b", I)
 COPULA = re.compile(r"\b(?:is|are|was|were|isn'?t|aren'?t|wasn'?t)\b", I)
 SUBORDINATE = re.compile(r"\b(?:if|when|whether|unless|while|before|after|until|because|since|so|what"
                          r"|that|which|who|where)\b", I)
@@ -98,6 +112,22 @@ Q = r"what(?:'s| is| does| do| about)|how (?:does|do|is)|why (?:does|do|is|would
 CLEAR = re.compile(r"(?:^|[\s`\"(])/clear(?:[\s`\").,!?;:]|$)", I)
 CLEAR_NOT = re.compile(rf"(?:^|[^\w])(?:(?:don'?t|dont|do not|never|not|can'?t|cant|cannot|won'?t|{Q})"
                        rf"(?:\s+[\w'-]+){{0,3}}|no|no need to|without(?: a| the)?)\s+[`\"(]?/clear", I)
+
+# 6. A pass: "pass" (or "pass compact", or "compact" right after a handoff) as the bare last item of
+# a terse action list ("commit, pass", "commit, handoff and pass", "handoff and compact"). "pass" is
+# mostly a noun ("a later pass", "an image pass") or a verb with a subject ("the tests pass"), so
+# every earlier item comes from a closed list of actions and statuses, and a question never counts.
+# A plain "pass" needs at least one item before it in the same sentence: a bare "pass" is also a
+# "no thanks" ("want me to also do X?" "pass"). "pass compact" names the mode, so it stands alone.
+ITEM = (rf"(?:commit(?:ted)?|push(?:ed)?|merged?|clean ?up|cleaned up|(?:re)?deploy(?:ed)?|rebased?"
+        rf"|review(?:ed)?|verify|verified|fix(?:ed)?|done|sent|emailed|submitted|checked|approved"
+        rf"|(?:open (?:a |the )?)?pr|{HWORD}(?: here)?)")
+PSEP = r"(?:\s*,\s*(?:and then\s+|and\s+|then\s+)?|\s+(?:and then|and|then)\s+)"
+PLEAD = (r"(?:(?:ok(?:ay)?|alright|great|good|nice|perfect|thanks|thank you|yes|now|then|please|just|so"
+         r"|go ahead and|time to)\b[\s,]*)*")
+PASS = re.compile(rf"{PLEAD}(?:(?:{ITEM}{PSEP})+pass(?P<plain_compact>\s+compact)?"
+                  rf"|pass\s+(?P<bare_compact>compact)"
+                  rf"|(?:{ITEM}{PSEP})*{HWORD}{PSEP}(?P<compact>compact))(?:\s+(?:now|please|here))?", I)
 
 
 def strip_leads(s):
@@ -150,7 +180,7 @@ def handoff_command(clause, label):
             if not m:
                 continue
             rest = s[m.end():]
-            if AFTER_H.match(rest) or DELEGATE.match(rest):
+            if AFTER_H.match(rest) or DELEGATE.match(rest) or DEFER.match(rest):
                 continue
             # A statement after it ("handoff and push notifications are both broken"), but not inside
             # an "if", "so" or "what" clause ("hand off if there is anything left", "push what is left").
@@ -198,11 +228,20 @@ def generic(clause, next_clause):
     return False
 
 
-def classify(prompt):
-    text = prompt.replace(chr(0x2019), chr(39))  # a curly apostrophe reads as a straight one
-    low = text.lower()
-    if any(m in low for m in INJECTED) or SKILL_NOT.search(text):
-        return False
+def pass_kind(text):
+    """'pass' or 'compact' when the prompt's last sentence is a terse list ending in a pass."""
+    t = trim(text)
+    if "?" in text[len(t):]:
+        return None
+    last = re.split(r"[.!?;\n]+", t)[-1].strip()
+    m = PASS.fullmatch(last)
+    if not m:
+        return None
+    compact = m.group("plain_compact") or m.group("bare_compact") or m.group("compact")
+    return "compact" if compact else "pass"
+
+
+def wants_handoff(text):
     cs = clauses(EXAMPLE.sub(" ", text))
     if not cs:
         return False
@@ -217,7 +256,7 @@ def classify(prompt):
             first -= 1
     for i in range(first, len(cs)):
         c = cs[i][0]
-        if TOPIC.search(c):
+        if TOPIC.search(c) or ("?" in terms[i] and READY.search(c)):
             continue
         if handoff_command(c, label_follows(terms, i)):
             return True
@@ -226,14 +265,24 @@ def classify(prompt):
     return False
 
 
+def classify(prompt):
+    """'pass', 'compact' or 'handoff' for a prompt that asks for one, else None."""
+    text = prompt.replace(chr(0x2019), chr(39))  # a curly apostrophe reads as a straight one
+    low = text.lower()
+    if any(m in low for m in INJECTED) or SKILL_NOT.search(text):
+        return None
+    return pass_kind(text) or ("handoff" if wants_handoff(text) else None)
+
+
 def main():
     try:
         d = json.load(sys.stdin)
     except Exception:
         return
     if isinstance(d, dict) and not d.get("agent_id") and isinstance(d.get("prompt"), str):
-        if classify(d["prompt"]):
-            sys.stdout.write(MSG)
+        kind = classify(d["prompt"])
+        if kind:
+            sys.stdout.write(MESSAGES[kind])
 
 
 if __name__ == "__main__":

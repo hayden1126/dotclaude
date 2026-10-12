@@ -21,7 +21,15 @@
 #      So "stop here, then explain why the test fails", "clear the session cache" and "don't wrap
 #      up yet" stay silent. These phrases show up in technical text; "handoff" rarely does.
 #   Rules 4 and 5 apply to messages of 18 words or fewer. In a longer one, only a handoff command
-#   among its last clauses counts ("<a long status>. handoff, then push").
+#   among its last clauses counts ("<a long status>. handoff, then push"). A deferred handoff ("do a
+#   handoff at the time", "handoff later") and "ready to ...?" ("ready to clear context?") never count.
+#   6. "pass" asks for the `pass` skill instead, with its own message, only as the bare last item of
+#      a terse list from a closed set of actions, with at least one before it: "commit, pass",
+#      "handoff and pass", "commit, handoff and pass". A one-word "pass" ("Pass.") never fires: it
+#      is also a "no thanks" to an offer, and /pass is the explicit form. "pass compact", "handoff
+#      and compact" and "handoff and pass compact" name the compact mode. "pass" is mostly a noun
+#      ("a later pass") or a verb with a subject ("the tests pass"), so nothing else counts, and a
+#      question never does. A bare "handoff" never suggests a pass.
 #
 # This shim passes the event on stdin to hooks/handoff_reminder.py, found beside this script's real
 # path (setup.sh symlinks only the .sh into ~/.claude/hooks), run by python3 -I (-I keeps a

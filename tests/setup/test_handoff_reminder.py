@@ -24,6 +24,13 @@ def fires(prompt):
     return handoff_reminder.classify(prompt)
 
 
+def output(prompt):
+    """What the shim prints for a typed prompt."""
+    p = subprocess.run(["bash", HOOK], input=json.dumps({"prompt": prompt}), capture_output=True,
+                       text=True, timeout=10)
+    return p.stdout
+
+
 def run(payload, hook=HOOK, env=None):
     p = subprocess.run(["bash", hook], input=payload, capture_output=True, text=True,
                        timeout=10, env=env)
@@ -213,6 +220,95 @@ class HandoffReminder(unittest.TestCase):
 
     def test_an_empty_prompt_is_silent(self):
         self.assertFalse(fires(""))
+
+    def test_a_deferred_handoff_is_silent(self):
+        for prompt in ("Ok, do a handoff at the time", "handoff at that point",
+                       "do a handoff later", "hand off when the time comes", "handoff eventually"):
+            with self.subTest(prompt=prompt):
+                self.assertFalse(fires(prompt))
+        # Handoff now, for later work, is still a command.
+        for prompt in ("Handoff for a later pass to fix this.", "Ok, do a handoff then",
+                       "handoff for next time to continue", "after you finish this, handoff"):
+            with self.subTest(prompt=prompt):
+                self.assertEqual(fires(prompt), "handoff")
+
+    def test_asking_whether_it_is_ready_to_clear_is_silent(self):
+        for prompt in ("ready to clear context?", "Ready to clear memory?", "ready to handoff?",
+                       "ready to clear context? another session just merged the PR",
+                       "ready to wrap up?"):
+            with self.subTest(prompt=prompt):
+                self.assertFalse(fires(prompt))
+        for prompt in ("ready to clear context", "ok, ready to wrap up.", "can we stop here?"):
+            with self.subTest(prompt=prompt):
+                self.assertTrue(fires(prompt))
+
+    def test_a_handoff_before_a_trailing_question_still_fires(self):
+        # The handoff is a command among the last clauses; the question after it is a follow-up.
+        for prompt in ("commit our part and handoff here, then I will have the other agent do the same?",
+                       "handoff and push and PR. Also does the new setup still work with the old one?",
+                       "merged, cleanup and handoff", "commit, handoff and push"):
+            with self.subTest(prompt=prompt):
+                self.assertEqual(fires(prompt), "handoff")
+
+
+class Pass(unittest.TestCase):
+    """"pass" fires only as the bare last item of a terse action list with an item before it."""
+
+    def test_pass_as_the_last_item_of_a_terse_list_fires(self):
+        for prompt in ("handoff and pass", "commit, pass", "commit, handoff and pass",
+                       "push, then pass", "hand off and pass", "merged, cleanup and pass",
+                       "commit and push and pass", "deployed, handoff, then pass", "Handoff and pass.",
+                       "ok, handoff and pass", "commit, pass now", "merged. handoff and pass"):
+            with self.subTest(prompt=prompt):
+                self.assertEqual(fires(prompt), "pass")
+
+    def test_a_bare_pass_is_a_no_thanks_not_a_pass(self):
+        # "want me to also do X?" "pass": a one-word "pass" declines. The list must sit in the
+        # last sentence, so "merged. pass" is a bare pass too; /pass is the explicit form.
+        for prompt in ("pass", "Pass.", "PASS", "pass!", "Pass...", "ok, pass", "no thanks, pass",
+                       "nah, pass", "pass now", "merged. pass", "thanks. Pass."):
+            with self.subTest(prompt=prompt):
+                self.assertIsNone(fires(prompt))
+
+    def test_compact_after_a_handoff_or_pass_fires_the_compact_mode(self):
+        for prompt in ("pass compact", "handoff and compact", "handoff and pass compact",
+                       "commit, handoff and compact", "Pass compact.", "handoff, then compact"):
+            with self.subTest(prompt=prompt):
+                self.assertEqual(fires(prompt), "compact")
+
+    def test_pass_in_the_sense_of_a_pass_is_not_a_pass(self):
+        for prompt in ("Can we run a real research pass for this too?", "do a final pass",
+                       "do another pass", "make the tests compile and pass", "the tests pass",
+                       "both pass", "fix the build so lint and tests pass", "let it pass",
+                       "I'll pass", "pass?", "/pass", "don't pass yet", "pass on that",
+                       "pass the config to the parser", "tests: pass",
+                       "pass should always happen after a handoff, right?",
+                       "Use a general-purpose agent to do the entire spacing pass",
+                       "compact the inspector", "make it compact", "commit and compact"):
+            with self.subTest(prompt=prompt):
+                self.assertNotIn(fires(prompt), ("pass", "compact"))
+
+    def test_a_handoff_that_mentions_a_pass_stays_a_handoff(self):
+        for prompt in ("Handoff for a later pass to fix this.",
+                       "handoff. Next session we work on a graphics pass",
+                       "So there are gaps left. Can we run another exploration pass next session? Handoff."):
+            with self.subTest(prompt=prompt):
+                self.assertEqual(fires(prompt), "handoff")
+
+    def test_a_bare_handoff_never_suggests_a_pass(self):
+        for prompt in ("handoff", "handoff and push", "commit, handoff and push", "let's wrap up"):
+            with self.subTest(prompt=prompt):
+                self.assertEqual(fires(prompt), "handoff")
+                self.assertNotIn("pass", output(prompt).replace("handoff-reminder", ""))
+
+    def test_each_kind_has_its_own_message(self):
+        plain, compact, handoff = output("handoff and pass"), output("pass compact"), output("handoff")
+        self.assertIn('name "pass"', plain)
+        self.assertNotIn("compact", plain)
+        self.assertIn('name "pass"', compact)
+        self.assertIn("compact mode", compact)
+        self.assertIn('name "handoff"', handoff)
+        self.assertEqual(output("fix the parser"), "")
 
 
 class ShimEndToEnd(unittest.TestCase):
