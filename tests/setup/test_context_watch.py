@@ -961,6 +961,42 @@ class LockPrune(Base):
         self.assertTrue(os.path.exists(os.path.join(d, SID + ".lock")))
         self.assertFalse(os.path.exists(os.path.join(d, "idle.lock")))
 
+    def test_a_lock_file_unlinked_before_its_flock_is_taken_again_at_the_path(self):
+        # The prune can unlink the file between open and flock; a lock on the old inode
+        # excludes nobody, so watch_lock must end up holding the file now at the path.
+        path = os.path.join(self.state, "dotclaude", "ctx-watch", SID + ".ctx.lock")
+        real = fcntl.flock
+        calls = []
+
+        def flock(fd, op):
+            if not calls and os.path.exists(path):
+                os.unlink(path)  # the prune, landing between open and the first flock
+            calls.append(op)
+            return real(fd, op)
+
+        with mock.patch.object(aps.fcntl, "flock", flock):
+            with aps.watch_lock(SID, kind=".ctx") as locked:
+                self.assertTrue(locked)
+                other = os.open(path, os.O_RDWR)
+                try:
+                    with self.assertRaises(BlockingIOError):
+                        real(other, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                finally:
+                    os.close(other)
+        self.assertGreaterEqual(len(calls), 2)
+
+
+class CtxOrder(Base):
+    def test_an_older_count_landing_late_never_replaces_a_newer_one(self):
+        aps.write_ctx(SID, 500_000, 200.0)
+        aps.write_ctx(SID, 400_000, 100.0)  # a parallel tool call's hook, finishing last
+        self.assertEqual({k: aps.read_ctx(SID)[k] for k in ("tokens", "time")},
+                         {"tokens": 500_000, "time": 200.0})
+        aps.merge_ctx(SID, {"window": 200_000, "window_at": 150.0})  # the widget's fields land
+        self.assertEqual(aps.read_ctx(SID)["window"], 200_000)
+        aps.write_ctx(SID, 510_000, 300.0)
+        self.assertEqual(aps.read_ctx(SID)["tokens"], 510_000)
+
 
 if __name__ == "__main__":
     unittest.main()
