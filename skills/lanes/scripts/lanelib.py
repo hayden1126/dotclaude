@@ -529,25 +529,45 @@ def status_path(repo: Repo, lane: dict | None) -> str:
     return record_path(lane) if lane else os.path.join(repo.toplevel, "STATUS.md")
 
 
-APPROVED, MALFORMED, UNAPPROVED = "approved", "malformed", "unapproved"
+APPROVED, MALFORMED, UNAPPROVED, STALE = "approved", "malformed", "unapproved", "stale"
 APPROVAL_OPEN = re.compile(r"\(approved by Hayden", re.IGNORECASE)
 APPROVAL_DATE = re.compile(r" (\d{4}-\d{2}-\d{2})\)")
+BULLET = re.compile(r"\s*(?:[-*+]|\d+[.)])\s")
 
 
-def approval(block: str | None) -> str:
-    """Whether a Next block pre-approves its step: APPROVED when it carries `(approved by Hayden
-    YYYY-MM-DD)` with a real ISO date, MALFORMED when any `(approved by Hayden` lacks one (the
-    handoff skill writes the marker only for an approval given in the session, citing its date),
-    UNAPPROVED when there is no marker. /pass resumes in the default mode only when APPROVED."""
-    state = UNAPPROVED
+def first_item(block: str | None) -> str:
+    """The Next block's first item: its first non-empty line (a bullet or not) with the wrapped
+    continuation lines after it, up to the next bullet at any depth. A nested bullet is a step
+    of its own, so it ends the item too."""
+    lines = [ln for ln in (block or "").splitlines() if ln.strip()]
+    item = lines[:1]
+    for ln in lines[1:]:
+        if BULLET.match(ln):
+            break
+        item.append(ln)
+    return "\n".join(item)
+
+
+def approval(block: str | None, since: datetime.date | None = None) -> str:
+    """Whether a Next block pre-approves its next step, for /pass's resume mode. MALFORMED when
+    any `(approved by Hayden` in the block lacks a real ISO date (the handoff skill writes the
+    marker only for an approval given in the session, citing its date). Otherwise only a marker
+    on the first item (first_item) counts, since an approval covers one step: APPROVED when it
+    carries `(approved by Hayden YYYY-MM-DD)`, STALE when a first-item marker is dated before
+    `since` (the session's start date, local time: the approval came from an earlier session),
+    UNAPPROVED when the first item has no marker. A marker on a later item is ignored."""
     for m in APPROVAL_OPEN.finditer(block or ""):
         date = APPROVAL_DATE.match(block, m.end())
         try:
             datetime.date.fromisoformat(date.group(1) if date else "")
         except ValueError:
             return MALFORMED
-        state = APPROVED
-    return state
+    first = first_item(block)
+    dates = [datetime.date.fromisoformat(APPROVAL_DATE.match(first, m.end()).group(1))
+             for m in APPROVAL_OPEN.finditer(first)]
+    if not dates:
+        return UNAPPROVED
+    return STALE if since is not None and min(dates) < since else APPROVED
 
 
 def sessions_dir() -> str:

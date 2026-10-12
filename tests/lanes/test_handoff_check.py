@@ -1,5 +1,6 @@
 """skills/handoff/scripts/handoff-check: each check passing and failing, in a plain repo and in a
 lane."""
+import datetime
 import json
 import os
 import subprocess
@@ -19,6 +20,13 @@ GOOD = """# STATUS: chart work
 ## Notes for next session
 - Run the chart tests, then open the PR for #42.
 """
+TODAY = datetime.date.today()
+FIRST = "- Run the chart tests, then open the PR for #42."
+
+
+def marked(marker, text=GOOD):
+    """text with marker on the Next block's first item."""
+    return text.replace(FIRST, f"{FIRST[:-1]} {marker}.")
 
 
 class Check(LanesRepo):
@@ -148,7 +156,18 @@ class PlainRepo(Check):
         self.assertGap(self.check(), "no status file")
 
     def test_a_dated_approval_marker_passes(self):
-        self.commit("STATUS.md", GOOD + "- Then merge it (approved by Hayden 2026-10-12).\n")
+        self.commit("STATUS.md", marked(f"(approved by Hayden {TODAY})"))
+        self.assertPasses(self.check())
+
+    def test_an_approval_marker_from_before_the_session_fails(self):
+        old = TODAY - datetime.timedelta(days=1)
+        self.commit("STATUS.md", marked(f"(approved by Hayden {old})"))
+        self.assertGap(self.check(), "approval marker predates this session: remove it or get a "
+                       "fresh approval")
+
+    def test_an_old_marker_on_a_later_item_is_ignored(self):
+        old = TODAY - datetime.timedelta(days=3)
+        self.commit("STATUS.md", GOOD + f"- Then merge it (approved by Hayden {old}).\n")
         self.assertPasses(self.check())
 
     def test_an_approval_marker_without_a_valid_date_fails(self):
@@ -169,11 +188,34 @@ class Approval(unittest.TestCase):
     def state(self, text):
         return lanelib.approval(lanelib.next_block(text))
 
-    def test_a_dated_marker_in_next_is_approved(self):
+    def test_a_dated_marker_on_the_first_item_is_approved(self):
+        self.assertEqual(self.state(marked("(approved by Hayden 2026-10-12)")), lanelib.APPROVED)
+        self.assertEqual(self.state(marked("(Approved by Hayden 2026-02-28)", GOOD.replace(
+            "Notes for next session", "Next step"))), lanelib.APPROVED)
+
+    def test_a_marker_on_a_later_item_does_not_approve(self):
         self.assertEqual(self.state(GOOD + "- Merge (approved by Hayden 2026-10-12).\n"),
-                         lanelib.APPROVED)
-        self.assertEqual(self.state(GOOD.replace("Notes for next session", "Next step") +
-                                    "- Merge (Approved by Hayden 2026-02-28)\n"), lanelib.APPROVED)
+                         lanelib.UNAPPROVED)
+        nested = GOOD + "  - Then merge (approved by Hayden 2026-10-12).\n"
+        self.assertEqual(self.state(nested), lanelib.UNAPPROVED)
+
+    def test_the_first_items_wrapped_lines_count(self):
+        wrapped = GOOD.replace(FIRST, FIRST + "\n  Merge after (approved by Hayden 2026-10-12).")
+        self.assertEqual(self.state(wrapped + "- Later step.\n"), lanelib.APPROVED)
+        plain = GOOD.replace(FIRST, "Run the chart tests,\nthen merge (approved by Hayden "
+                             "2026-10-12).\n- Later step.")
+        self.assertEqual(self.state(plain), lanelib.APPROVED)
+        self.assertEqual(lanelib.first_item("Do this\n- then that"), "Do this")
+
+    def test_a_marker_dated_before_since_is_stale(self):
+        text = marked("(approved by Hayden 2026-10-11)")
+        block = lanelib.next_block(text)
+        self.assertEqual(lanelib.approval(block, datetime.date(2026, 10, 12)), lanelib.STALE)
+        self.assertEqual(lanelib.approval(block, datetime.date(2026, 10, 11)), lanelib.APPROVED)
+        self.assertEqual(lanelib.approval(block, None), lanelib.APPROVED)
+        later = GOOD + "- Merge (approved by Hayden 2020-01-01).\n"
+        self.assertEqual(lanelib.approval(lanelib.next_block(later), datetime.date(2026, 10, 12)),
+                         lanelib.UNAPPROVED)
 
     def test_no_marker_is_unapproved(self):
         self.assertEqual(self.state(GOOD), lanelib.UNAPPROVED)
@@ -192,7 +234,7 @@ class Approval(unittest.TestCase):
             self.assertEqual(self.state(GOOD + f"- Merge {marker}\n"), lanelib.MALFORMED, marker)
 
     def test_one_malformed_marker_beside_a_good_one_is_malformed(self):
-        self.assertEqual(self.state(GOOD + "- A (approved by Hayden 2026-10-12)\n"
+        self.assertEqual(self.state(marked("(approved by Hayden 2026-10-12)") +
                                     "- B (approved by Hayden)\n"), lanelib.MALFORMED)
 
     def test_the_status_path_follows_the_lane(self):
