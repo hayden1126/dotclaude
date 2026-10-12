@@ -383,7 +383,8 @@ class InputBox(Plain):
         real = self.mod.tmux
         for env, value, words in (("FAKE_TMUX_MODE", "1", "pane in copy mode"),
                                   ("FAKE_TMUX_SCREEN", t.screen("my draft"),
-                                   "unsent draft in the input box")):
+                                   "unsent draft in the input box"),
+                                  ("FAKE_TMUX_SCREEN", "a dialog, no box", "no input box")):
             with self.subTest(words=words):
                 self.reset()
                 self.clear_log()
@@ -401,11 +402,17 @@ class InputBox(Plain):
                 keys = [a[-1] for a in self.calls("tmux", "send-keys")]
                 self.assertEqual(keys, [f"/compact {self.mod.compact_focus('STATUS.md')}",
                                         "Enter"])
-                (msg,) = self.notices()
-                self.assertEqual(msg[-1], "compacted; type the resume prompt yourself: "
-                                 + self.PROMPT + " Call EnterPlanMode first.")
-                self.assertIn("mode=compact outcome=partial", self.log())
-                self.assertIn(words, self.log())
+                # It stays on the status line until a key press (-d 0), and says the compact
+                # was sent, not confirmed; pass.log keeps the whole prompt.
+                prompt = self.PROMPT + " Call EnterPlanMode first."
+                (msg,) = [a for a in self.calls("tmux", "display-message") if a[2] != "-p"]
+                self.assertEqual(msg[1:], ["display-message", "-d", "0", "-t", "%4",
+                                           "pass: /compact sent; type the resume prompt "
+                                           f"yourself: {prompt}"])
+                (line,) = [ln for ln in self.log().splitlines() if "outcome=partial" in ln]
+                self.assertIn("mode=compact outcome=partial", line)
+                self.assertIn(words, line)
+                self.assertTrue(line.endswith(f"resume prompt: {prompt}"), line)
                 self.assertNotIn("outcome=compact", self.log())
 
 # ---- 5. prompts typed mid-turn and the transcript ----------------------------------------------

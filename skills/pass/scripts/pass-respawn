@@ -54,8 +54,10 @@ failing check: the respawn throws away the context that could fix the gap.
   compact  type `/compact <focus>` and Enter, wait 1 s, type the prompt and Enter (it queues
            behind the compact, spike S4); no respawn and no carry. A send-keys that fails
            stops there and logs `failed`. Before the prompt it re-checks the pane (copy mode,
-           a draft, no input box): on a problem the prompt is shown in the status line for
-           Hayden to type, not typed, and the outcome is `partial` (compacted, no prompt)
+           a draft, no input box): on a problem the prompt is not typed but shown in the
+           status line for Hayden to type (`display-message -d 0`, so it stays until a key
+           press) and written whole into pass.log, and the outcome is `partial` (/compact
+           sent, not confirmed; no prompt)
 The resume mode is plan mode unless the first item of the status file's Next block carries
 `(approved by Hayden YYYY-MM-DD)` dated on or after the session's start and not after today
 (lanelib.approval); then --permission-mode is left out and the user's default applies. An
@@ -970,11 +972,14 @@ def wait_and_act(plan: Plan, procs) -> str:
     for i, argv in enumerate(actions):  # /compact <focus>, Enter, the prompt, Enter
         if i == 2:
             time.sleep(COMPACT_GAP)
-            if why := pane_problem(plan):  # copy mode or a draft came up during the gap
-                tmux(plan, "display-message", "-t", plan.pane,
-                     f"compacted; type the resume prompt yourself: {argv[-1]}")
+            if why := pane_problem(plan):  # copy mode, a draft or no box came up in the gap
+                # -d 0 keeps it on the status line until a key press (the default is about
+                # 750 ms); pass.log keeps the whole prompt, which the status line may cut.
+                tmux(plan, "display-message", "-d", "0", "-t", plan.pane,
+                     f"pass: /compact sent; type the resume prompt yourself: {argv[-1]}")
                 log(plan.mode, "partial", plan.pane,
-                    late(plan, f"compacted, resume prompt not typed: {why}"))
+                    late(plan, f"/compact sent, resume prompt not typed: {why}")
+                    + f"; resume prompt: {argv[-1]}")
                 return "partial"
         p = tmux(plan, *argv[1:])
         if p is None or p.returncode != 0:
