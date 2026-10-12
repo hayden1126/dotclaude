@@ -103,8 +103,9 @@ class Open(Lead):
         return shlex.split(self.lane("open", "chart-fix", "--print", *args))
 
     def test_init_says_to_trust_the_lanes_root(self):
-        out = self.lane("init")
-        self.assertIn(f"cd {shlex.quote(self.root)} && claude", out)
+        out = self.lane("init")  # `lane new` makes the root, so the line must too
+        root = shlex.quote(self.root)
+        self.assertIn(f"mkdir -p {root} && cd {root} && claude", out)
         self.assertIn("trust dialog", out)
 
     def test_print_shows_the_tmux_argv_with_no_tmux(self):
@@ -234,6 +235,11 @@ class Lock(Lead):
         # A command killed by signal n kills `lane` with n too, as a calling shell expects.
         p = self.run_lane("lock", "gate", "--wait", "1", "--", "sh", "-c", "kill -TERM $$")
         self.assertEqual(p.returncode, -signal.SIGTERM)
+        # SIGKILL takes no handler, so re-raising it must skip setting one (an OSError before).
+        p = self.run_lane("lock", "gate", "--", "sh", "-c", "kill -KILL $$")
+        self.assertEqual(p.returncode, -signal.SIGKILL)
+        self.assertNotIn("Traceback", p.stderr)
+        self.assertFalse(self.held())
         self.assertEqual(self.run_lane("lock", "gate", "--", "true").returncode, 0)
 
     def test_unknown_names_and_empty_commands_are_refused(self):

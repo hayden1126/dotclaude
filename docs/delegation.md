@@ -163,7 +163,10 @@ repo that turns the sandbox off loses subagent Bash; the policy still applies.
 - Literal Bash write targets outside the worktree are denied in the main checkout, and in the
   parent session's own checkout when that is somewhere else (a lane, a sibling worktree). The
   policy looks that checkout up in the parent's sessions file ("Verified facts the design rests
-  on"), and only when a target needs it. Elsewhere the sandbox decides.
+  on"), and only when a target needs it. Elsewhere the sandbox decides. Temp always wins, so a
+  checkout under a temp root (`/tmp/claude-<uid>`) is not held: a live probe on 2026-10-11 with
+  its lane under the scratchpad got out, and the same probe with the lane under `~/scratch` was
+  denied. Real lanes live beside the main checkout.
 - Reads of the main checkout and the lane stay allowed.
 
 **Researcher:** an allowlist.

@@ -28,6 +28,7 @@ exits 75, which a command's own 75 can't be told from: only the "gave up on lock
 marks a timeout.
 """
 import argparse
+import contextlib
 import datetime
 import fcntl
 import json
@@ -376,7 +377,8 @@ def cmd_init(args) -> None:
     # Claude Code asks "trust this folder?" for an untrusted cwd, and a trusted parent covers its
     # subdirs (probed 2026-10-11, 2.1.296): without this, every `lane open` window stops there.
     say(f"Trust the lanes root once, or each `lane open` window waits at Claude Code's trust "
-        f"dialog: cd {shlex.quote(cfg['root'])} && claude, then accept and exit")
+        f"dialog: mkdir -p {shlex.quote(cfg['root'])} && cd {shlex.quote(cfg['root'])} && "
+        "claude, then accept and exit")
 
 
 def cmd_new(args) -> None:
@@ -891,7 +893,8 @@ def die_of(sig: int) -> int:
     bash quits a script on Ctrl-C only when its child died of SIGINT, so an exit of 130 would run
     the script's next gate. coreutils `timeout` re-raises the same way, with core dumps off."""
     resource.setrlimit(resource.RLIMIT_CORE, (0, resource.getrlimit(resource.RLIMIT_CORE)[1]))
-    signal.signal(sig, signal.SIG_DFL)
+    with contextlib.suppress(OSError):  # SIGKILL takes no handler: it is always the default
+        signal.signal(sig, signal.SIG_DFL)
     os.kill(os.getpid(), sig)
     return 128 + sig
 
