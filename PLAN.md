@@ -168,20 +168,8 @@ Changed after spike S2 (Hayden, 2026-10-11): Claude Code treats every path under
 therefore lives in the lane's own worktree, in the session's cwd, where the Edit tool works with
 no prompt. The CLI-owned data stays in the common dir, which sandboxed Bash can write (S1).
 
-```
-<lane worktree>/.lane/          hidden by `/.lane/` in the shared <common-dir>/info/exclude (no repo footprint)
-  STATUS.md                     the lane's prose (templates/LANE.md): Brief, State, Decisions, Asks for Hayden, Not mine, Next
-  PLAN.md                       the lane's working design (optional)
-  artifacts/                    evidence that rulings point at (mocks, shots, gate logs)
-
-<common-dir>/lanes/             CLI-owned; written by `lane` and by hooks, never by the Edit tool
-  config.toml                   root (~/code/<repo>-lanes), setup cmd, port range, live-lane cap, base (origin/main)
-  .lock                         flock for every CLI write (claims are atomic)
-  <id>/lane.json                id, branch, path, base_sha, port, claims[], state, sessions[], created/updated
-  <id>/mirror/                  copy of <lane>/.lane/, refreshed by a Stop and SessionEnd hook, so a raw
-                                `git worktree remove` (which deletes ignored files) loses nothing
-  _closed/<id>-<date>/          lane.json + .lane/ archived on `lane done`
-```
+The layout (files, fields, `_locks/`, the mirror) lives in `docs/lanes.md` "Layout", the
+as-built reference.
 
 JSON for the fields the CLI owns (models alter JSON less than Markdown; Anthropic's long-running
 harness post). Markdown for the prose.
@@ -202,6 +190,7 @@ sibling lane; they go into `docs/lanes.md`):
 - S3, `excludedCommands`: `lane *` goes in, beside `delegation-ledger *` (hq-open is excluded the same way in hq's own settings). `lane new`
   fetches and `lane ls` asks gh for PR state, and both need the credential the sandbox hides. A
   sandboxed (piped) call still works for the local subcommands and says what it skipped.
+  (Superseded: PR 2 "As built" narrowed the exclusion, and `new` now refuses sandboxed.)
 - S4, compaction: a SessionStart hook matched on `compact` gets its `additionalContext` to the
   model after `/compact` (`/compact` piped into `claude -p --resume` triggers a real compaction).
   `lane-identity.sh` on `compact` is therefore the safety net for an unplanned auto-compact.
@@ -319,11 +308,39 @@ base; `ls` also flags `setup-failed`; `new` takes `--goal`, `--files`, `--overla
 
 ## PR 2: the lead (`feat/lanes-lead`)
 
+**As built (2026-10-11), where it differs from the list below** (Hayden's calls in the planning
+session):
+- `lane open` stores no window. `lane ls` derives a WINDOW column from the live session's
+  `tmux` field (invariant 4: a stored window id drifts when the window closes or renumbers);
+  lane.json gets only an `opened` time. The session starts in plan mode.
+- `lane *` left `excludedCommands` (PR 1 put it there, S3). Only `init`, `new`, `adopt`, `ls`,
+  `open` and `done` are excluded, so `lane lock -- <cmd>` runs sandboxed: under `lane *` any
+  wrapped command ran sandbox-off without the `dangerouslyDisableSandbox` flag the delete guard
+  checks.
+- The lanes config left the common dir for `$XDG_STATE_HOME/dotclaude/lanes/<repo>-<hash>.toml`.
+  `new` and `adopt` run its `setup` (and `new` makes a worktree at its `root`) sandbox-off, so it
+  lives where sandboxed Bash can't write, and only a bare `lane init` writes it. A hash pin of the
+  old file was the other option, rejected: a bare `lane init` would re-pin whatever the file held.
+- What stays sandbox-writable is checked before sandbox-off code acts on it (docs/lanes.md S3):
+  every `lane.json` on load, a lane's path before `open`, the setup, the copy or `done` act in
+  it, and the `.worktreeinclude` copy by directory fd. `new` refuses when the fetch fails
+  (Hayden's call): a lane branches only from the commit the remote reports, never a local ref.
+  It branches from that sha, so PR 1's `--unset-upstream` step is gone (no upstream is set).
+- Locks live in `<common-dir>/lanes/_locks/<name>` (the leading `_` can't collide with a lane
+  id), and the lanes config's `locks` lists the names `lane lock` accepts (`lane init --locks`). An
+  unlisted name is refused, since a typo would split the mutual exclusion. A waiter prints the
+  holder (lane id, command, start time); `--wait` gives up with 75.
+- The ledger keeps separate `parent_root`/`parent_before`/`parent_after` fields, so the audit
+  names the lane (`main_status` became `main_checkout` plus `checkout_status`), and the audit
+  checks every activation, not only an agent's latest. Both layers find the parent's checkout through `delegation_common.session_toplevel`
+  (no import of the lanes skill: the policy hook fails closed).
+- `docs/lanes.md` and `docs/delegation.md` are the as-built references.
+
 - `lane open <id> [--focus]`: an `hq-open` clone. Run `tmux new-window -d -c <lane path> -n <id>
   claude "<prompt>"`, where the prompt is "Read your lane record `<path>`, then plan the brief it
-  holds". Then record the window in `lane.json`.
+  holds". (As built: no window stored; see above.)
 - `lane lock <name> -- <cmd>`: flock under `<common-dir>/lanes/locks/`, for shared gates (a
-  browser-driven test gate) and anything else that can't run twice. `config.toml` lists the known
+  browser-driven test gate) and anything else that can't run twice. The lanes config lists the known
   resources, and the skill says to wrap gate runs.
 - The lead section of `skills/lanes/SKILL.md`:
   - **Triage:** collect the requests, explore the code to estimate the files each touches, group
@@ -331,7 +348,7 @@ base; `ls` also flags `setup-failed`; `new` takes `--goal`, `--files`, `--overla
   - **Propose:** show a table (lane, branch, requests, files, overlaps, merge order) and wait for
     Hayden's approval.
   - **Open:** `lane new --claim …` writes the brief into each new record, then `lane open`.
-  - **Cap:** keep a backlog beyond the live-lane cap, set in `config.toml` (default 4).
+  - **Cap:** keep a backlog beyond the live-lane cap, set in the lanes config (default 4).
   - **Hand-back gate:** the lead treats a lane as handed back only when that lane's
     `handoff-check` passes and `lane ls` shows no `handoff?` flag. Otherwise it messages the lane
     (or tells Hayden, if the session is gone) before it orders a merge or closes the lane.
@@ -438,7 +455,7 @@ base; `ls` also flags `setup-failed`; `new` takes `--goal`, `--files`, `--overla
     mode the table suggests. With background tasks in flight, it suggests only `pass compact`
     instead of staying quiet.
   - When auto-pass is on and the fill is at or above the threshold (default 60%, set in
-    `~/.config/dotclaude/pass.toml`, per repo in the lanes `config.toml`), it blocks the Stop once
+    `~/.config/dotclaude/pass.toml`, per repo in the lanes config), it blocks the Stop once
     per threshold crossing with: "Context at N%. If this is a clean boundary, run the pass skill;
     if you just asked Hayden something or work is mid-step, finish that first."
   - Stop `decision: block` keeps the turn going ([[cc-stop-hook-facts]]). The hook stays quiet

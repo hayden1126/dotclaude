@@ -47,7 +47,8 @@ Each layer covers what the others can't.
    - The ledger records every start, stop, denial and deadline nudge, and the exclusions that
      keep probes out of `audit --monthly`.
    - `audit` flags a hook that stopped seeing agents, and a writer run that coincided with a
-     main-checkout change.
+     change in the main checkout or in the parent session's own checkout (a lane). It checks
+     each activation, so a resumed writer's earlier escape still shows.
    - `sandbox-denials` lists what the sandbox refused.
    - The canary re-verifies all of this on a new Claude Code version, and a SessionStart check
      runs the cheap checks itself and reminds Hayden of the rest ("Stage 3", A4 and A5).
@@ -78,7 +79,7 @@ Each layer covers what the others can't.
 | Sandbox | `settings.json` `sandbox` | Enforces (OS): the write roots, `denyRead` (the credential barrier, plus tool tokens and shell history), `denyWrite` (the enforcement sources, and the repo files that run outside the sandbox: `statusline/`, `notify-toast.ps1`, `codex/`, `tmux/`, `bin/`, `setup-tmux.sh`, and `setup.sh` with the scripts and lists it installs from), and the network allowlist. A sandboxed `git switch` or `merge` that touches a `denyWrite` file fails; `git pull` already runs outside. `failIfUnavailable`, and `autoAllowBashIfSandboxed: false`, so Hayden's prompts stay as they were |
 | Subagent policy | `hooks/subagent-policy.sh`, `skills/delegation/scripts/subagent-policy`, `skills/delegation/policy.toml` | Enforces: see "Subagent policy" below. Fails closed for the tools it polices |
 | Report check | `hooks/report-check.sh`, `skills/delegation/scripts/report-check` | Enforces acceptance: a schema-invalid report is sent back twice at most. Fails open |
-| Ledger | `hooks/delegation-ledger.sh`, `skills/delegation/scripts/delegation-ledger`, `skills/delegation/liveness.toml` | Observes: start and stop rows (`agent_type` is the resolved role; a teammate adds `name` and `teammate`), `report_ok`, denial rows, the main-checkout hash for a worktree agent; the per-agent liveness index (`agents/<id>.json`); `open` (the tool in flight and since when, thresholds in `liveness.toml`); `watch` (one line per live delegation, and a token like `2▶ 1⚠` for the tmux bar); `audit` (`--monthly` adds a month of usage for retuning, and `exclude` keeps probes out of it); `sandbox-denials`. Persuades: the deadline nudge, one PostToolUse `additionalContext` per activation past the role's `nudge_min`, and a `nudge` row. Fails open |
+| Ledger | `hooks/delegation-ledger.sh`, `skills/delegation/scripts/delegation-ledger`, `skills/delegation/liveness.toml` | Observes: start and stop rows (`agent_type` is the resolved role; a teammate adds `name` and `teammate`), `report_ok`, denial rows, the main-checkout hash for a worktree agent (and the lane's, when the parent session runs in one); the per-agent liveness index (`agents/<id>.json`); `open` (the tool in flight and since when, thresholds in `liveness.toml`); `watch` (one line per live delegation, and a token like `2▶ 1⚠` for the tmux bar); `audit` (`--monthly` adds a month of usage for retuning, and `exclude` keeps probes out of it); `sandbox-denials`. Persuades: the deadline nudge, one PostToolUse `additionalContext` per activation past the role's `nudge_min`, and a `nudge` row. Fails open |
 | Canary and due checks | `hooks/delegation-due.sh`, `skills/delegation/scripts/delegation_checks.py`, `skills/delegation/due.toml` | Observes: `delegation-ledger canary` re-verifies enforcement on this Claude Code version; `due` runs the cheap checks at session start (the quick tier includes a run of the installed watch-guard shim) and shows Hayden what needs their attention, including the watch nudges: unresolved watches whose waiter's exit reaches nobody, and watches that ended while no Claude process listened. Fails open |
 | Public GitHub client | `skills/delegation/scripts/gh-public` | GET-only access to api.github.com for delegated agents, optionally with a public-read token |
 | Brief and report | `skills/delegation/BRIEF.md`, `report.schema.json` | Persuades (the brief); checks (the schema) |
@@ -158,8 +159,15 @@ repo that turns the sandbox off loses subagent Bash; the policy still applies.
 - Its root is `meta.json`'s `worktreePath`, falling back to a cwd under `.claude/worktrees/`.
   Otherwise it is denied.
 - File-tool writes must stay inside the worktree or temp.
-- Bash write targets, `cd` and `git -C` into the session repo but outside the worktree are denied.
-- Reads of the main checkout stay allowed.
+- `cd` and `git -C` outside the worktree and temp are denied.
+- Literal Bash write targets outside the worktree are denied in the main checkout, and in the
+  parent session's own checkout when that is somewhere else (a lane, a sibling worktree). The
+  policy looks that checkout up in the parent's sessions file ("Verified facts the design rests
+  on"), and only when a target needs it. Elsewhere the sandbox decides. Temp always wins, so a
+  checkout under a temp root (`/tmp/claude-<uid>`) is not held: a live probe on 2026-10-11 with
+  its lane under the scratchpad got out, and the same probe with the lane under `~/scratch` was
+  denied. Real lanes live beside the main checkout.
+- Reads of the main checkout and the lane stay allowed.
 
 **Researcher:** an allowlist.
 - **Allowed:**
@@ -198,15 +206,20 @@ from 60 to 5,000 requests an hour.
 
 - **A real agent's `dangerouslyDisableSandbox` denial is not observed live.** The teammate probe
   declined to try it. The harness covers the rule (its `policy` case).
-- **A writer's computed-path write into the main checkout.**
-  - The sandbox's write root is the session's cwd, and a worktree lives inside it.
+- **A writer's computed-path write into the main checkout or the parent's lane.**
+  - The sandbox's write root is the session's cwd. In a session rooted in the main checkout, a
+    writer's worktree lives inside it. In a session rooted in a lane, the write root is the lane,
+    while the writer's worktree sits under the main checkout's `.claude/worktrees/`.
   - A live probe (2026-09-30) showed a worktree subagent writing the main checkout through
     `python3 -c` with a computed path. A plain `../../../` redirect worked too, until the
     policy's literal-path check.
   - Claude Code's own worktree check stopped neither.
-  - The hook denies the literal forms. For the computed ones, the ledger hashes the main
-    checkout's `git status` at the writer's start and stop, and `audit` reports a change. That is
-    evidence, since the lead may have edited too.
+  - The hook denies the literal forms in both checkouts. For the computed ones, the ledger hashes
+    the main checkout's `git status` at the writer's start and stop, and the lane's too when the
+    parent runs in one (`parent_root`, `parent_before`, `parent_after`). `audit` reports a change
+    in either, naming the lane by path. That is evidence, since the lead may have edited too.
+  - Both lane checks depend on the parent's sessions file. When it can't be read or names no
+    git checkout, only the main checkout is checked, as before.
 - **What the policy can't see.** Script bodies, interpreter code, and an alias that shadows a real
   binary name are out of its sight. The sandbox, the credential barrier and the network filter
   bound them (cc-safety-net's residual risks RR-1 to RR-5).
@@ -465,7 +478,9 @@ Found along the way:
 - **Nested worktrees.** A lead session in a worktree nests its agents' worktrees inside it. The
   policy's cwd fallback took the first `/.claude/worktrees/`, which made the lead's whole worktree
   the agent's root; it now takes the last. The protected area (`main_root`) stays the outermost
-  checkout, because it holds both the lead's worktree and the real main checkout.
+  checkout, because it holds both the lead's worktree and the real main checkout. A lane is the
+  opposite case: a sibling of the main checkout, not inside it, so `main_root` misses it, and the
+  policy adds the parent's own checkout (`protected_roots`) when it lies outside `main_root`.
 - **Two test-suite bugs.** A project slug built by replacing only `/` and `.` failed about one run
   in five. And sandboxed from a checkout under `.claude/worktrees/`, the policy tests have nowhere
   clean to build their fake homes, so they now stop with one message that says so, instead of six
@@ -1222,6 +1237,15 @@ wins.
   - teammate `meta.json` files carry `teamName`.
 - **Worktree base:** `isolation: worktree` branches from the default branch unless
   `worktree.baseRef` is `"head"` ([worktrees](https://code.claude.com/docs/en/worktrees)).
+- **A lane-rooted session's writer** (live probe, 2026-10-11): a `claude -p` session rooted in a
+  lane (a sibling worktree of the main checkout) spawned a `writer`. Its worktree landed under the
+  main checkout's `.claude/worktrees/`, not the lane's, branched from the lane's HEAD.
+- **The sessions file** (undocumented): `~/.claude/sessions/<pid>.json` (under
+  `$CLAUDE_CONFIG_DIR` when set) names a running session's `sessionId` and its `cwd`, the
+  directory it was launched in. `session_toplevel` in `delegation_common.py` finds the file whose
+  `sessionId` is the hook payload's `session_id` (the parent session's, on a subagent's hooks),
+  runs `git rev-parse --show-toplevel` in its `cwd`, and returns None on any miss. The policy and
+  the ledger read the parent's checkout from it.
 - **Hook input** (probe):
   - `agent_id` and `agent_type` appear on a subagent's PreToolUse, SubagentStart and SubagentStop,
     and never on the main thread;

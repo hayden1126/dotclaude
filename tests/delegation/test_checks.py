@@ -866,6 +866,48 @@ class CLI(StateTest):
         p = self.ledger("audit", "--hours", "1")
         self.assertIn("WARN main checkout changed while writer w1", p.stdout)
 
+    def test_audit_warns_for_each_moved_activation_not_only_the_latest(self):
+        # A resume or a teammate's next message starts another activation; an escape in the
+        # first must still show once the second has started and stopped clean.
+        now = checks.time.time()
+        base = {"runner": "claude", "id": "w1", "agent_type": "writer", "parent_root": "/lane"}
+        self.rows(dict(base, event="start", ts=iso(now - 900), main_before="aaa",
+                       parent_before="ppp"),
+                  dict(base, event="stop", ts=iso(now - 800), main_after="bbb",
+                       parent_after="qqq"),
+                  dict(base, event="start", ts=iso(now - 700), main_before="bbb",
+                       parent_before="qqq"),
+                  dict(base, event="stop", ts=iso(now - 600), main_after="bbb",
+                       parent_after="qqq"))
+        out = self.ledger("audit", "--hours", "1").stdout
+        self.assertEqual(out.count("WARN main checkout changed while writer w1"), 1, out)
+        self.assertEqual(out.count("WARN /lane (the parent session's checkout) changed while "
+                                   "writer w1"), 1, out)
+
+    def test_audit_ignores_edits_between_activations(self):
+        # The lead edits between two clean activations: no agent's doing, whether the second
+        # is still running (a start row carries no *_after) or has stopped.
+        now = checks.time.time()
+        base = {"runner": "claude", "id": "w1", "agent_type": "writer"}
+        first = [dict(base, event="start", ts=iso(now - 900), main_before="aaa"),
+                 dict(base, event="stop", ts=iso(now - 800), main_after="aaa"),
+                 dict(base, event="start", ts=iso(now - 700), main_before="bbb")]
+        for rows in (first, first + [dict(base, event="stop", ts=iso(now - 600),
+                                          main_after="bbb")]):
+            with self.subTest(rows=len(rows)):
+                self.rows(*rows)
+                out = self.ledger("audit", "--hours", "1").stdout
+                self.assertNotIn("changed while", out)
+
+    def test_audit_skips_an_activation_that_stopped_before_the_window(self):
+        now = checks.time.time()
+        base = {"runner": "claude", "id": "w1", "agent_type": "writer"}
+        self.rows(dict(base, event="start", ts=iso(now - 3 * 3600), main_before="aaa"),
+                  dict(base, event="stop", ts=iso(now - 2 * 3600), main_after="bbb"),
+                  dict(base, event="start", ts=iso(now - 900), main_before="bbb"),
+                  dict(base, event="stop", ts=iso(now - 600), main_after="bbb"))
+        self.assertNotIn("changed while", self.ledger("audit", "--hours", "1").stdout)
+
     def test_hook_mode_exits_zero_and_names_a_malformed_due_file(self):
         self.write_due("this is not toml [[[")
         p = self.ledger("due", "--hook", stdin='{"hook_event_name":"SessionStart"}')

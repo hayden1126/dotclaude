@@ -85,6 +85,7 @@ class LedgerEnv(unittest.TestCase):
         # Sandbox tests set CLAUDE_PID on purpose.
         self.env.pop("CLAUDE_PID", None)
         self.env.pop("SANDBOX_RUNTIME", None)
+        self.env.pop("CLAUDE_CONFIG_DIR", None)  # the sessions dir lives in the fake home
         self.ledger = os.path.join(self.tmp.name, "state", "dotclaude", "delegations.jsonl")
 
     def tearDown(self):
@@ -321,6 +322,102 @@ class LedgerHook(LedgerEnv):
                            env=self.env)
         self.assertIn("main checkout changed while writer w1", p.stdout)
         self.assertEqual(p.returncode, 1)
+
+    def lane_setup(self, session_cwd=None):
+        """A main checkout with a writer's worktree, a lane beside it, and a sessions file
+        whose cwd is the lane (or `session_cwd`). Returns (repo, worktree, lane)."""
+        repo = os.path.join(self.tmp.name, "repo")
+        wt = os.path.join(repo, ".claude", "worktrees", "agent-w1")
+        lane = os.path.join(self.tmp.name, "repo-lanes", "chart-fix")
+        os.makedirs(wt)
+        os.makedirs(lane)
+        for d in (repo, lane):
+            subprocess.run(["git", "init", "-q", d], check=True)
+        sessions = os.path.join(self.tmp.name, ".claude", "sessions")
+        os.makedirs(sessions)
+        with open(os.path.join(sessions, "1.json"), "w") as f:
+            json.dump({"pid": 1, "sessionId": "s1", "cwd": session_cwd or lane}, f)
+        return repo, wt, lane
+
+    def test_a_lane_rooted_parent_records_its_own_checkout_status(self):
+        _, wt, lane = self.lane_setup()
+        self.hook(dict(self.start("agent-w1"), cwd=wt, agent_type="writer"))
+        with open(os.path.join(lane, "escaped.txt"), "w") as f:
+            f.write("x")
+        self.hook(dict(self.stop("w1"), cwd=wt, agent_type="writer"))
+        start, stop = self.rows()
+        self.assertEqual((start["parent_root"], stop["parent_root"]),
+                         (os.path.realpath(lane),) * 2)
+        self.assertNotEqual(start["parent_before"], stop["parent_after"])
+        self.assertEqual(start["main_before"], stop["main_after"])
+        p = subprocess.run(["python3", LEDGER, "audit"], capture_output=True, text=True,
+                           env=self.env)
+        self.assertIn(f"WARN {os.path.realpath(lane)} (the parent session's checkout) changed "
+                      "while writer w1", p.stdout)
+        self.assertNotIn("main checkout changed", p.stdout)
+        self.assertEqual(p.returncode, 1)
+
+    def test_an_unchanged_lane_audits_ok(self):
+        _, wt, _ = self.lane_setup()
+        self.hook(dict(self.start("agent-w1"), cwd=wt, agent_type="writer"))
+        self.hook(dict(self.stop("w1"), cwd=wt, agent_type="writer"))
+        p = subprocess.run(["python3", LEDGER, "audit"], capture_output=True, text=True,
+                           env=self.env)
+        self.assertIn("ok   no worktree agent coincided with a change in the main checkout or "
+                      "the parent session's checkout", p.stdout)
+
+    def audit(self):
+        return subprocess.run(["python3", LEDGER, "audit"], capture_output=True, text=True,
+                              env=self.env).stdout
+
+    def test_a_resume_compares_only_its_own_activation(self):
+        # audit pairs each start with its own stop, never the previous activation's: an edit
+        # between activations is no agent's doing.
+        repo, wt, lane = self.lane_setup()
+        self.hook(dict(self.start("agent-w1"), cwd=wt, agent_type="writer"))
+        self.hook(dict(self.stop("w1"), cwd=wt, agent_type="writer"))
+        for d in (repo, lane):
+            with open(os.path.join(d, "between.txt"), "w") as f:
+                f.write("x")
+        self.hook(dict(self.start("agent-w1"), cwd=wt, agent_type="writer"))
+        out = self.audit()
+        self.assertNotIn("WARN", out)
+        for d in (repo, lane):
+            with open(os.path.join(d, "during.txt"), "w") as f:
+                f.write("x")
+        self.hook(dict(self.stop("w1"), cwd=wt, agent_type="writer"))
+        out = self.audit()
+        self.assertIn("WARN main checkout changed while writer w1", out)
+        self.assertIn(f"WARN {os.path.realpath(lane)} (the parent session's checkout) changed "
+                      "while writer w1", out)
+
+    def test_the_stop_rehashes_the_checkout_its_start_recorded(self):
+        _, wt, lane = self.lane_setup()
+        self.hook(dict(self.start("agent-w1"), cwd=wt, agent_type="writer"))
+        os.remove(os.path.join(self.tmp.name, ".claude", "sessions", "1.json"))
+        self.hook(dict(self.stop("w1"), cwd=wt, agent_type="writer"))
+        self.assertEqual(self.rows()[1]["parent_root"], os.path.realpath(lane))
+
+    def assertNoParentFields(self):
+        rows = self.rows()
+        self.assertEqual(len(rows), 2)
+        for row in rows:
+            self.assertIn("main_before" if row["event"] == "start" else "main_after", row)
+            self.assertFalse({"parent_root", "parent_before", "parent_after"} & set(row), row)
+
+    def test_no_parent_fields_without_a_matching_session(self):
+        _, wt, _ = self.lane_setup()
+        self.hook(dict(self.start("agent-w1", sid="other"), cwd=wt, agent_type="writer"))
+        self.hook(dict(self.stop("w1"), cwd=wt, agent_type="writer", session_id="other"))
+        self.assertNoParentFields()
+
+    def test_no_parent_fields_for_a_parent_rooted_in_the_main_checkout(self):
+        repo = os.path.join(self.tmp.name, "repo")
+        _, wt, _ = self.lane_setup(session_cwd=os.path.join(repo, "sub"))
+        os.makedirs(os.path.join(repo, "sub"))
+        self.hook(dict(self.start("agent-w1"), cwd=wt, agent_type="writer"))
+        self.hook(dict(self.stop("w1"), cwd=wt, agent_type="writer"))
+        self.assertNoParentFields()
 
     def test_audit_warns_when_the_policy_hook_never_saw_an_agent(self):
         transcript = os.path.join(self.tmp.name, "agent-a1.jsonl")
@@ -1084,7 +1181,8 @@ DEADLINE = {"deadline": {"allow": list(dc.REPORT_PATH), "default": {"nudge_min":
 
 
 def act(aid, role, minutes, kind="subagent", transcript=None):
-    return ledger_mod.Activation(("claude", aid), role, kind, T0, T0 + minutes * 60, transcript)
+    return ledger_mod.Activation(("claude", aid), role, kind, T0, T0 + minutes * 60, transcript,
+                                 {}, {})
 
 
 class Tables(unittest.TestCase):
@@ -1092,7 +1190,8 @@ class Tables(unittest.TestCase):
         rows = ledger_mod.duration_table(
             [act("a1", "Explore", 5), act("a2", "Explore", 15), act("a3", "Explore", 25),
              act("m1", "Explore", 12, kind="teammate"), act("m2", "writer", 12, kind="teammate"),
-             ledger_mod.Activation(("codex", "r1"), "codex", "codex", T0, T0 + 600, None)],
+             ledger_mod.Activation(("codex", "r1"), "codex", "codex", T0, T0 + 600, None, {},
+                                   {})],
             DEADLINE)
         self.assertEqual([r["label"] for r in rows], ["Explore", "teammates", "codex"])
         explore, mates, codex = rows

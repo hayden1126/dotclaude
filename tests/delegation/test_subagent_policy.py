@@ -551,6 +551,66 @@ class Writer(Base):
                               "worktree-root", msg=target)
 
 
+class WriterInLane(Writer):
+    """A session rooted in a lane (a sibling worktree of the main checkout): its writer's
+    worktree still lands under the main checkout, so the lane needs holding on its own."""
+
+    def setUp(self):
+        super().setUp()
+        env = mock.patch.dict(os.environ)
+        env.start()
+        self.addCleanup(env.stop)
+        os.environ.pop("CLAUDE_CONFIG_DIR", None)  # the sessions file lives in the fake home
+        self.lane = os.path.join(self.home, "code", "proj-lanes", "chart-fix")
+        os.makedirs(os.path.join(self.lane, "src"))
+        subprocess.run(["git", "init", "-q", self.lane], check=True)
+        self.sessions = os.path.join(self.home, ".claude", "sessions")
+        os.makedirs(self.sessions)
+        self.session_cwd(self.lane)
+
+    def session_cwd(self, cwd):
+        with open(os.path.join(self.sessions, "4242.json"), "w") as f:
+            json.dump({"pid": 4242, "sessionId": "s1", "cwd": cwd}, f)
+
+    def lane_writes(self):
+        return (f"echo x > {self.lane}/src/a.py", f"cp a {self.lane}/src/",
+                f"echo x | tee {self.lane}/notes.md")
+
+    def test_bash_writes_into_the_parent_lane_are_denied(self):
+        for cmd in self.lane_writes():
+            self.assertDenied(self.wb(cmd), "worktree-root", "scope_down", msg=cmd)
+        d = sp.evaluate(self.ev("Bash", {"command": self.lane_writes()[0]}, atype="writer",
+                                cwd=self.wt, aid="w1"), POLICY, home=self.home)
+        self.assertIn("the parent session's checkout", d.message)
+
+    def test_without_a_sessions_file_the_lane_is_left_to_the_sandbox(self):
+        os.remove(os.path.join(self.sessions, "4242.json"))
+        for cmd in self.lane_writes():
+            self.assertIsNone(self.wb(cmd), cmd)
+
+    def test_file_tools_into_the_lane_are_denied_either_way(self):
+        self.assertDenied(self.w("Write", {"file_path": self.lane + "/src/a.py"}),
+                          "worktree-root", "scope_down")
+        os.remove(os.path.join(self.sessions, "4242.json"))
+        self.assertDenied(self.w("Write", {"file_path": self.lane + "/src/a.py"}),
+                          "worktree-root", "scope_down")
+
+    def test_a_parent_in_the_main_checkout_adds_nothing(self):
+        subprocess.run(["git", "init", "-q", self.proj], check=True)
+        self.session_cwd(os.path.join(self.proj, "src"))
+        for cmd in self.lane_writes():
+            self.assertIsNone(self.wb(cmd), cmd)
+        a = sp.Analyzer(self.ev("Bash", {"command": "ls"}, atype="writer", cwd=self.wt,
+                                aid="w1"), POLICY, home=self.home)
+        self.assertEqual(a.protected_roots(), [(self.proj, "the main checkout")])
+
+    def test_the_lane_is_looked_up_only_for_a_target_outside_the_worktree(self):
+        temp = sp.expand(POLICY["rm"]["temp_roots"][0], self.home)
+        with mock.patch.object(sp.dc, "session_toplevel") as lookup:
+            self.assertIsNone(self.wb(f"echo x > a.txt && echo y > {temp}/s.txt"))
+            lookup.assert_not_called()
+
+
 class Researcher(Base):
     def r(self, cmd):
         return self.bash(cmd, atype="researcher")

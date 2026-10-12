@@ -105,8 +105,10 @@ def unpushed(repo: lanelib.Repo, lane: dict) -> int:
     branch = lane["branch"]
     remote = f"refs/remotes/origin/{branch}"
     has_remote = git(["rev-parse", "--verify", "--quiet", remote], repo.toplevel).returncode == 0
-    base = remote if has_remote else repo.config().get("base", "origin/main")
-    p = git(["rev-list", "--count", f"{base}..{branch}"], repo.toplevel)
+    base = repo.config().get("base", "origin/main")
+    base = remote if has_remote else base if base.startswith("refs/") else f"refs/remotes/{base}"
+    p = git(["rev-list", "--count", "--end-of-options", f"{base}..refs/heads/{branch}"],
+            repo.toplevel)
     return int(p.stdout.strip()) if p.returncode == 0 else 0
 
 

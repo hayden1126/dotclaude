@@ -1,8 +1,10 @@
 """A throwaway lanes repo for tests: a bare origin, a clone as the main checkout, `lane init`.
 
 No network: origin is a local bare repo, and a fake `gh` that always fails sits first on PATH, so
-PR state is the degraded `?` and `done` falls back to git. HOME, XDG_STATE_HOME and the Claude
-session variables point into the temp dir, so nothing reads or writes the real machine's state.
+PR state is the degraded `?` and `done` falls back to git. A fake `claude` sits there too, for
+`lane open`, and TMUX is unset (a test that opens a window sets it and stubs tmux). HOME,
+XDG_STATE_HOME and the Claude session variables point into the temp dir, so nothing reads or
+writes the real machine's state.
 """
 import json
 import os
@@ -11,6 +13,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 LANE = os.path.join(REPO, "skills", "lanes", "scripts", "lane")
@@ -36,8 +39,13 @@ class LanesRepo(unittest.TestCase):
             f.write('#!/bin/sh\nif [ -n "$FAKE_GH_OUT" ]; then printf "%s" "$FAKE_GH_OUT"; exit 0; fi\n'
                     "echo 'gh: offline in tests' >&2\nexit 1\n")
         os.chmod(os.path.join(fake_bin, "gh"), 0o755)
+        with open(os.path.join(fake_bin, "claude"), "w") as f:
+            f.write("#!/bin/sh\nexit 0\n")
+        os.chmod(os.path.join(fake_bin, "claude"), 0o755)
+        self.fake_bin = fake_bin
         self.env = {k: v for k, v in os.environ.items()
-                    if not k.startswith(("CLAUDE", "GIT_DIR", "GIT_WORK_TREE", "SANDBOX_RUNTIME"))}
+                    if not k.startswith(("CLAUDE", "GIT_DIR", "GIT_WORK_TREE", "SANDBOX_RUNTIME",
+                                             "TMUX"))}
         self.env.update(HOME=self.home, XDG_STATE_HOME=os.path.join(self.tmp, "state"),
                         PATH=fake_bin + os.pathsep + os.environ["PATH"],
                         GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@example.com",
@@ -47,6 +55,10 @@ class LanesRepo(unittest.TestCase):
                         # would read as sandboxed; its processes share one namespace, so `done`'s
                         # process check still sees them. A test hook, not a user setting.
                         _LANE_TEST_SANDBOXED="0")
+        # In-process calls (a loaded `lane` script, lanelib) find the config by this too.
+        env_patch = mock.patch.dict(os.environ, XDG_STATE_HOME=self.env["XDG_STATE_HOME"])
+        env_patch.start()
+        self.addCleanup(env_patch.stop)
         self.origin = os.path.join(self.tmp, "origin.git")
         self.main = os.path.join(self.tmp, "proj")
         self.root = os.path.join(self.tmp, "proj-lanes")
@@ -88,6 +100,11 @@ class LanesRepo(unittest.TestCase):
     def lane_json(self, lane_id):
         with open(os.path.join(self.common, "lanes", lane_id, "lane.json")) as f:
             return json.load(f)
+
+    def config_files(self):
+        """The lanes configs `lane init` wrote: they live in the state dir, out of the repo."""
+        d = os.path.join(self.tmp, "state", "dotclaude", "lanes")
+        return sorted(os.path.join(d, n) for n in os.listdir(d)) if os.path.isdir(d) else []
 
     def hook(self, script, payload):
         p = subprocess.run(["bash", os.path.join(HOOKS, script)], input=json.dumps(payload),

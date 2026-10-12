@@ -236,7 +236,8 @@ class Analyzer:
         self.cwd = os.path.realpath(data.get("cwd") or os.getcwd())
         self.worktree = self._worktree()
         # The outermost checkout, not the innermost: with nested worktrees it holds both the
-        # lead's worktree and the real main checkout, and it is the area escapes are denied in.
+        # lead's worktree and the real main checkout, and it is the area escapes are denied in
+        # (with a lane-rooted parent's own checkout: protected_roots).
         self.main_root = (self.worktree.split("/.claude/worktrees/", 1)[0]
                           if self.worktree else None)
         self.project = self.main_root or self._project_dir()
@@ -249,6 +250,7 @@ class Analyzer:
         # Any isolated agent (a writer, or any type spawned with isolation "worktree") is held
         # to its worktree; a writer without one is refused outright (decide()).
         self.confined = self.worktree is not None
+        self._parent_root = False  # looked up on first need (protected_roots)
         self.path_dirs = self._path_dirs()
 
     # ------------------------------------------------ context
@@ -402,21 +404,42 @@ class Analyzer:
     def in_temp(self, p):
         return any(under(p, t) for t in self.temp_roots)
 
+    def protected_roots(self):
+        """(root, name) of the checkouts a confined agent's Bash writes are held out of: the
+        main checkout, and the parent session's own checkout when it lies outside that. A
+        lane-rooted session is the case: its writers' worktrees land under the main checkout,
+        while the sandbox's write root is the lane. Finding the lane costs a git call, so it is
+        looked up once, and only for a target outside the worktree and temp. When the lookup
+        misses, only the main checkout is held."""
+        if self._parent_root is False:
+            top = dc.session_toplevel(self.data.get("session_id"), self.home)
+            self._parent_root = (top if top and not under(top, self.root)
+                                 and not under(top, self.main_root) else None)
+        roots = [(self.main_root, "the main checkout")]
+        if self._parent_root:
+            roots.append((self._parent_root, "the parent session's checkout"))
+        return roots
+
     def check_write_path(self, path, base, strict_root=False):
         """A literal write target. strict_root: the file tools, where a writer may only
         touch its worktree and temp; Bash targets are held to the worktree only inside the
-        session repo (the sandbox already stops the rest)."""
+        main checkout and the parent session's checkout (the sandbox already stops the rest)."""
         p = resolve(expand(path, self.home), base)
         hit = self.protected(p)
         if hit:
             self.deny("protected-path", "hard_stop",
                       f"{path} is protected ({hit}): delegated agents never write Claude Code, "
                       "shell, git or enforcement config")
-        if self.confined:
-            inside = under(p, self.root) or self.in_temp(p)
-            if not inside and (strict_root or under(p, self.main_root)):
+        if not self.confined or under(p, self.root) or self.in_temp(p):
+            return
+        if strict_root:
+            self.deny("worktree-root", "scope_down",
+                      f"{path} is outside your worktree ({self.root}); write only inside it")
+        for root, name in self.protected_roots():
+            if under(p, root):
                 self.deny("worktree-root", "scope_down",
-                          f"{path} is outside your worktree ({self.root}); write only inside it")
+                          f"{path} is in {name} ({root}), outside your worktree ({self.root}); "
+                          "write only inside it")
 
     def file_write(self, path):
         self.check_write_path(path, self.cwd, strict_root=True)

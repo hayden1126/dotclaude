@@ -279,6 +279,46 @@ class RoundTrip(LanesRepo):
         self.assertNotIn("abandoned", out)
         self.assertEqual(self.closed_state(), "closed")
 
+    def test_a_copy_never_reads_through_a_link_or_a_special_file(self):
+        # `new` copies sandbox-off, and the sandbox can plant both the link and .worktreeinclude:
+        # a followed link would land a file the sandbox can't read (a credential) in the lane as
+        # a plain copy it can. The link is copied as a link (a relative one made absolute, so it
+        # names the same file), and the sandbox's read deny still holds at its target.
+        outside = os.path.join(self.tmp, "outside")
+        secret = os.path.join(outside, "secret")
+        self.write(secret, "TOKEN\n")
+        self.include("a.cfg", "abs.cfg", "rel.cfg", "sub/in.cfg")
+        for name, target in (("abs.cfg", secret), ("rel.cfg", "sub/in.cfg")):
+            os.remove(os.path.join(self.main, name))
+            os.symlink(target, os.path.join(self.main, name))
+        lane_mod = load_lane_script()
+        dest = os.path.join(self.tmp, "dest")
+        os.makedirs(dest)
+        self.assertEqual(sorted(lane_mod.copy_includes(lanelib.resolve(self.main), dest)),
+                         ["a.cfg", "abs.cfg", "rel.cfg", "sub/in.cfg"])
+        self.assertEqual(os.readlink(os.path.join(dest, "abs.cfg")), secret)
+        self.assertEqual(os.readlink(os.path.join(dest, "rel.cfg")),
+                         os.path.join(self.main, "sub", "in.cfg"))
+        # Git never lists a FIFO, but one can be swapped in after the listing: it is skipped,
+        # never opened blocking.
+        os.mkfifo(os.path.join(self.main, "pipe.cfg"))
+        self.assertFalse(lane_mod.copy_one(self.main, dest, "pipe.cfg"))
+        self.assertFalse(os.path.lexists(os.path.join(dest, "pipe.cfg")))
+        # A dir on the way that is a link fails the copy, on either side, instead of leading out:
+        # the lane's own session can plant one in the lane, the sandbox one in the main checkout.
+        shutil.rmtree(os.path.join(dest, "sub"))
+        os.symlink(outside, os.path.join(dest, "sub"))
+        self.assertEqual(lane_mod.copy_includes(lanelib.resolve(self.main), dest), [])
+        self.assertFalse(os.path.exists(os.path.join(outside, "in.cfg")))
+        os.rename(os.path.join(self.main, "sub"), os.path.join(self.main, "real-sub"))
+        os.symlink(outside, os.path.join(self.main, "sub"))
+        self.write(os.path.join(outside, "in.cfg"), "TOKEN\n")
+        fresh = os.path.join(self.tmp, "fresh")
+        os.makedirs(fresh)
+        with self.assertRaises(NotADirectoryError):
+            lane_mod.copy_one(self.main, fresh, "sub/in.cfg")
+        self.assertEqual(os.listdir(fresh), [])
+
     def test_a_copy_never_touches_a_neighbouring_part_file(self):
         # A fixed <name>.part temp would clobber, write through or delete someone's file.
         self.include("big.cfg")
@@ -290,7 +330,7 @@ class RoundTrip(LanesRepo):
         self.assertEqual(self.read(os.path.join(dest, "big.cfg.part")), "keep\n")
         self.assertEqual(sorted(os.listdir(dest)), ["big.cfg", "big.cfg.part"])
         os.remove(os.path.join(dest, "big.cfg"))
-        with mock.patch.object(lane_mod.shutil, "copyfile", side_effect=OSError("disk full")):
+        with mock.patch.object(lane_mod, "copy_fd", side_effect=OSError("disk full")):
             with self.assertRaises(OSError):
                 lane_mod.copy_includes(repo, dest)
         self.assertEqual(os.listdir(dest), ["big.cfg.part"])
@@ -351,19 +391,15 @@ class RoundTrip(LanesRepo):
         repo = lanelib.resolve(self.main)
         dest = os.path.join(self.tmp, "dest")
         os.makedirs(dest)
-        real = shutil.copyfile
-
-        def half(src, dst, **kw):
-            with open(dst, "w") as f:
-                f.write("ha")
+        def half(src, out):
+            os.write(out, b"ha")
             raise OSError("disk full")
 
-        with mock.patch.object(lane_mod.shutil, "copyfile", side_effect=half):
+        with mock.patch.object(lane_mod, "copy_fd", side_effect=half):
             with self.assertRaises(OSError):
                 lane_mod.copy_includes(repo, dest)
         self.assertEqual(os.listdir(dest), [])
-        with mock.patch.object(lane_mod.shutil, "copyfile", side_effect=real):
-            self.assertEqual(lane_mod.copy_includes(repo, dest), ["big.cfg"])
+        self.assertEqual(lane_mod.copy_includes(repo, dest), ["big.cfg"])
         self.assertEqual(self.read(os.path.join(dest, "big.cfg")), "main\n")
 
     def test_done_closes_a_lane_whose_record_holds_a_dangling_link(self):
@@ -533,12 +569,194 @@ class Identity(LanesRepo):
                          "chart-fix: - pick the chip row or the dropdown")
 
 
+class ConfigTrust(LanesRepo):
+    """`new` and `adopt` run the config's `setup` sandbox-off, so the config lives in the state
+    dir, which sandboxed Bash can't write; only a bare `lane init` writes it."""
+
+    def test_init_writes_the_config_to_the_state_dir_not_the_repo(self):
+        (cfg,) = self.config_files()
+        self.assertIn(f"# repo: {os.path.realpath(self.common)}", self.read(cfg))
+        self.assertIn(f'root = "{self.root}"', self.read(cfg))
+        self.assertFalse(os.path.exists(os.path.join(self.common, "lanes", "config.toml")))
+
+    def test_a_config_planted_in_the_common_dir_never_runs(self):
+        self.lane("init", "--setup", "touch TRUSTED")
+        self.write(os.path.join(self.common, "lanes", "config.toml"),
+                   f'root = "{self.tmp}/elsewhere"\nsetup = "touch PLANTED"\n')
+        self.lane("new", "chart-fix")
+        path = self.lane_path("chart-fix")
+        self.assertTrue(os.path.exists(os.path.join(path, "TRUSTED")))
+        self.assertFalse(os.path.exists(os.path.join(path, "PLANTED")))
+        self.assertFalse(os.path.exists(os.path.join(self.tmp, "elsewhere")))
+
+    def test_each_repo_gets_its_own_config(self):
+        other = os.path.join(self.tmp, "other")
+        self.git("clone", "-q", self.origin, other, cwd=self.tmp)
+        self.lane("init", "--setup", "true", cwd=other)
+        texts = [self.read(f) for f in self.config_files()]
+        self.assertEqual(len(texts), 2)
+        (mine,) = [t for t in texts if f"# repo: {os.path.realpath(self.common)}\n" in t]
+        self.assertNotIn('setup = "true"', mine)
+
+    def test_same_named_repos_get_their_own_configs(self):
+        other = os.path.join(self.tmp, "elsewhere", "proj")
+        self.git("clone", "-q", self.origin, other, cwd=self.tmp)
+        self.lane("init", "--setup", "true", cwd=other)
+        self.assertEqual(len(self.config_files()), 2)
+
+    @unittest.skipIf(os.geteuid() == 0, "root writes a chmod 0500 dir")
+    def test_init_says_to_run_bare_when_it_cannot_write_the_state_dir(self):
+        d = os.path.dirname(self.config_files()[0])
+        os.chmod(d, 0o500)
+        self.addCleanup(os.chmod, d, 0o700)
+        p = self.run_lane("init", "--cap", "3")
+        self.assertEqual(p.returncode, 1)
+        self.assertIn("bare `lane init`", p.stderr)
+
+
+class RecordTrust(LanesRepo):
+    """Sandboxed Bash can write every lane.json, every ref and the main checkout, and the hooks,
+    `ls`, `open`, `done`, `new` and `adopt` act on them sandbox-off: a record is checked on load
+    (lanelib.record_problem), and a lane's path before anything acts in it."""
+
+    def setUp(self):
+        super().setUp()
+        self.lane("new", "chart-fix")
+        self.json_path = os.path.join(self.common, "lanes", "chart-fix", "lane.json")
+
+    def plant(self, lane_id, **fields):
+        rec = dict(self.lane_json("chart-fix"), **fields)
+        self.write(os.path.join(self.common, "lanes", lane_id, "lane.json"), json.dumps(rec))
+
+    def test_a_planted_id_never_moves_the_hooks_mirror(self):
+        # It sorts before the real record and claims the same path; its id walks out of lanes/.
+        self.plant("0evil", id="../../../escape")
+        self.write(self.record("chart-fix"), "# LANE: chart-fix\n")
+        self.hook("lane-identity.sh", {"session_id": "s1", "cwd": self.lane_path("chart-fix"),
+                                       "hook_event_name": "Stop"})
+        self.assertFalse(os.path.exists(os.path.join(self.tmp, "escape")))
+        self.assertTrue(os.path.isdir(os.path.join(self.common, "lanes", "chart-fix", "mirror")))
+        self.assertIn("left out lanes/0evil", self.run_lane("ls").stderr)
+
+    def test_a_planted_twin_never_frees_the_real_lanes_claims(self):
+        self.lane("claim", "42", cwd=self.lane_path("chart-fix"))
+        self.plant("twin", id="twin", claims=[])  # same path: neither names the lane now
+        self.assertIn("shares its path", self.run_lane("ls").stderr)
+        p = self.run_lane("new", "other", "--claim", "42")
+        self.assertEqual(p.returncode, 1)
+        self.assertIn("#42 (chart-fix)", p.stderr)
+
+    def test_open_done_and_adopt_refuse_a_twinned_path(self):
+        self.plant("twin", id="twin")
+        for args in (("open", "twin", "--print"), ("done", "twin", "--abandon"),
+                     ("open", "chart-fix", "--print"), ("adopt", self.lane_path("chart-fix"))):
+            with self.subTest(args=args):
+                p = self.run_lane(*args)
+                self.assertEqual(p.returncode, 1)
+                self.assertIn("didn't write", p.stderr)
+        self.assertTrue(os.path.isdir(self.lane_path("chart-fix")))
+
+    def test_new_refuses_a_path_a_stale_record_still_holds(self):
+        self.plant("old", id="old", path=self.lane_path("second"))
+        p = self.run_lane("new", "second")
+        self.assertEqual(p.returncode, 1)
+        self.assertIn("lane old still holds", p.stderr)
+
+    def test_new_takes_the_base_ref_exactly(self):
+        # ls-remote matches a ref's tail, and the server lists a/refs/heads/main first.
+        self.commit("evil.sh", "x\n")
+        self.git("push", "-q", "origin", "HEAD:refs/heads/a/refs/heads/main")
+        self.git("reset", "-q", "--hard", "HEAD~1")
+        self.lane("new", "second")
+        self.assertFalse(os.path.exists(os.path.join(self.lane_path("second"), "evil.sh")))
+
+    def test_new_takes_a_remote_whose_name_has_a_slash(self):
+        self.git("remote", "rename", "origin", "my/fork")
+        (cfg,) = self.config_files()
+        self.write(cfg, self.read(cfg).replace('base = "origin/main"', 'base = "my/fork/main"'))
+        self.lane("new", "second")
+
+    def test_new_wants_a_remote_base(self):
+        (cfg,) = self.config_files()
+        self.write(cfg, self.read(cfg).replace('base = "origin/main"', 'base = "main"'))
+        p = self.run_lane("new", "second")
+        self.assertEqual(p.returncode, 1)
+        self.assertIn("must be <remote>/<branch>", p.stderr)
+
+    def test_ls_never_hands_git_a_planted_option(self):
+        victim = os.path.join(self.tmp, "victim")
+        self.write(victim, "keep\n")
+        self.plant("chart-fix", branch=f"--output={victim}")
+        p = self.run_lane("ls")
+        self.assertEqual(self.read(victim), "keep\n")
+        self.assertIn("bad branch", p.stderr)
+
+    def test_a_record_of_the_wrong_shape_is_left_out(self):
+        for field, value in (("base_sha", "HEAD"), ("port", "80; x"), ("claims", ["#1 x"]),
+                             ("path", "rel/path"), ("sessions", ["x"])):
+            with self.subTest(field=field):
+                self.plant("chart-fix", **{field: value})
+                self.assertIn("left out lanes/chart-fix", self.run_lane("ls").stderr)
+        self.assertIn("bad request", self.run_lane("claim", "#1 x",
+                                                   cwd=self.lane_path("chart-fix")).stderr)
+
+    def test_open_and_done_act_only_in_the_lanes_own_worktree(self):
+        decoy = os.path.join(self.main, "decoy")  # sandbox-writable, with its own .claude/
+        os.makedirs(os.path.join(decoy, ".claude"))
+        nested = os.path.join(self.lane_path("chart-fix"), "nested")
+        os.makedirs(nested)
+        for path in (decoy, nested, self.tmp):
+            with self.subTest(path=path):
+                self.plant("chart-fix", path=path)
+                p = self.run_lane("open", "chart-fix", "--print")
+                self.assertEqual(p.returncode, 1)
+                self.assertIn("refusing lane chart-fix", p.stderr)
+                self.assertEqual(self.run_lane("done", "chart-fix", "--abandon").returncode, 1)
+
+    def test_new_branches_from_the_remote_not_a_planted_ref(self):
+        # A tag named like the base outranks the remote-tracking ref in git's lookup.
+        self.commit("evil.sh", "x\n")
+        self.git("tag", "origin/main")
+        self.git("reset", "-q", "--hard", "HEAD~1")
+        self.lane("new", "second")
+        self.assertFalse(os.path.exists(os.path.join(self.lane_path("second"), "evil.sh")))
+        self.git("remote", "set-url", "origin", os.path.join(self.tmp, "gone.git"))
+        p = self.run_lane("new", "third")
+        self.assertEqual(p.returncode, 1)
+        self.assertIn("branches only from a freshly fetched", p.stderr)
+        self.assertFalse(os.path.exists(self.lane_path("third")))
+
+    def test_a_linked_info_exclude_or_lanes_dir_is_refused(self):
+        victim = os.path.join(self.tmp, "victim")
+        self.write(victim, "keep\n")
+        exclude = os.path.join(self.common, "info", "exclude")
+        os.remove(exclude)
+        os.symlink(victim, exclude)
+        self.assertEqual(self.run_lane("new", "second").returncode, 1)
+        self.assertEqual(self.read(victim), "keep\n")
+        moved = os.path.join(self.tmp, "moved-lanes")
+        os.rename(os.path.join(self.common, "lanes"), moved)
+        os.symlink(moved, os.path.join(self.common, "lanes"))
+        p = self.run_lane("claim", "7", cwd=self.lane_path("chart-fix"))
+        self.assertEqual(p.returncode, 1)
+        self.assertNotIn("#7", self.read(os.path.join(moved, "chart-fix", "lane.json")))
+
+
 class Plain(LanesRepo):
     init_lanes = False
 
     def test_a_repo_without_lanes_is_plain(self):
         self.assertTrue(self.lane("whoami").startswith("plain "))
         self.assertIn("lane init", self.run_lane("ls").stderr)
+
+    def test_an_old_common_dir_config_does_not_make_a_lanes_repo(self):
+        self.write(os.path.join(self.common, "lanes", "config.toml"),
+                   f'root = "{self.root}"\nsetup = "touch PLANTED"\n')
+        self.assertTrue(self.lane("whoami").startswith("plain "))
+        p = self.run_lane("new", "chart-fix")
+        self.assertEqual(p.returncode, 1)
+        self.assertIn("old layout's config", p.stderr)
+        self.assertFalse(os.path.exists(self.lane_path("chart-fix")))
 
 
 if __name__ == "__main__":

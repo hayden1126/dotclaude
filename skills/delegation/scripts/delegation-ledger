@@ -51,10 +51,15 @@ per activation, recorded as `nudged` in its index and as a `nudge` row. subagent
 enforces the stop that follows.
 
 For an agent in a worktree, the start and stop rows also carry a hash of the main checkout's
-`git status` (main_before, main_after). The sandbox lets a worktree agent's subprocess write
-anywhere in the session repo, so a computed-path write into the main checkout can't be
-stopped, only seen. `audit` reports a changed hash as evidence, not a verdict, because the
-lead may have been editing too.
+`git status` (main_before, main_after). When the parent session runs in another checkout (a
+lane: a sibling worktree, while its writers' worktrees still land under the main checkout),
+they carry that checkout's path and hash too (parent_root, parent_before, parent_after; the
+stop re-hashes the path its start recorded). `audit` compares each activation's start with the
+stop that closed it, so it checks every activation of a resumed agent or a teammate, and never
+an edit made between two. The sandbox lets a worktree agent's subprocess write anywhere in the
+session's write root, so a computed-path write into either checkout can't be stopped, only seen.
+`audit` reports a changed hash as evidence, not a verdict, because the lead may have been editing
+too.
 
 `open` only suggests. Each row prints the evidence it used (parent session alive, how long
 this activation has run, the newest transcript entry and its age, the calls still open), so
@@ -159,17 +164,28 @@ def handback_message(path):
     return (accepted or [m for _, m in handbacks] or [""])[-1]
 
 
-def main_status(cwd):
-    """sha256 of the main checkout's `git status` for an agent in a worktree, else None."""
+def main_checkout(cwd):
+    """The main checkout of an agent in a worktree, else None: the outermost, as
+    subagent-policy protects."""
     if not cwd or "/.claude/worktrees/" not in cwd:
         return None
-    main = cwd.split("/.claude/worktrees/", 1)[0]  # the outermost, as subagent-policy protects
+    return cwd.split("/.claude/worktrees/", 1)[0]
+
+
+def checkout_status(root):
+    """sha256 of `git status` in the checkout at root, or "unknown" when git can't run."""
     try:
-        out = subprocess.run(["git", "-C", main, "status", "--porcelain=v1", "-uall"],
+        out = subprocess.run(["git", "-C", root, "status", "--porcelain=v1", "-uall"],
                              capture_output=True, timeout=3).stdout
     except (OSError, subprocess.SubprocessError):
         return "unknown"
     return hashlib.sha256(out).hexdigest()[:16]
+
+
+def parent_checkout(session_id, main):
+    """The parent session's own checkout when it is not `main` (a lane), else None."""
+    top = dc.session_toplevel(session_id)
+    return top if top and top != os.path.realpath(main) else None
 
 
 def cmd_hook(_args):
@@ -203,9 +219,12 @@ def cmd_hook(_args):
         if event == "SubagentStart":
             row = dict(base, event="start", cwd=data.get("cwd"),
                        parent_transcript=data.get("transcript_path"))
-            mb = main_status(data.get("cwd"))
-            if mb:
-                row["main_before"] = mb
+            main = main_checkout(data.get("cwd"))
+            if main:
+                row["main_before"] = checkout_status(main)
+                parent = parent_checkout(base["session_id"], main)
+                if parent:
+                    row.update(parent_root=parent, parent_before=checkout_status(parent))
         else:
             text, source = data.get("last_assistant_message") or "", "last_message"
             if not text.strip():
@@ -215,11 +234,15 @@ def cmd_hook(_args):
             row = dict(base, event="stop", agent_transcript=data.get("agent_transcript_path"),
                        report_ok=ok, report_status=status, report_error=err,
                        report_source=source)
-            ma = main_status(data.get("cwd"))
-            if ma:
-                row["main_after"] = ma
+            main = main_checkout(data.get("cwd"))
+            if main:
+                row["main_after"] = checkout_status(main)
+            # The path its start hashed, so both ends compare the same checkout.
+            parent = dc.read_agent_state(base["id"]).get("parent_root")
+            if parent:
+                row.update(parent_root=parent, parent_after=checkout_status(parent))
         dc.append_row(row)
-        index_agent(event, base, data)
+        index_agent(event, base, data, row.get("parent_root"))
     except Exception:
         try:
             os.makedirs(dc.state_dir(), exist_ok=True)
@@ -230,8 +253,9 @@ def cmd_hook(_args):
     return 0
 
 
-def index_agent(event, base, data):
-    """Keep agents/<id>.json, the liveness index `open`, `watch` and the deadline read."""
+def index_agent(event, base, data, parent_root=None):
+    """Keep agents/<id>.json, the liveness index `open`, `watch` and the deadline read, plus
+    the parent checkout a start hashed, for its stop to re-hash."""
     if event == "SubagentStart":
         transcript = agent_transcript({"id": base["id"],
                                        "parent_transcript": data.get("transcript_path")})
@@ -247,6 +271,10 @@ def index_agent(event, base, data):
             s.setdefault("first_start", base["ts"])
             s.pop("stopped_at", None)
             s.pop("nudged", None)
+            if parent_root:
+                s["parent_root"] = parent_root
+            else:
+                s.pop("parent_root", None)
         dc.update_agent_state(base["id"], start)
         dc.prune_agent_states()
     else:
@@ -755,21 +783,27 @@ def cmd_audit(args):
             " Check the PreToolUse entry and that hook input still carries agent_id.")
     else:
         say("ok   policy hook: saw every agent that used tools")
-    # Fold the whole ledger, then keep the agents whose latest row is in the window: a writer
-    # that started before the window and stopped inside it still pairs its start and stop.
-    folded = {k: e for k, e in dc.fold(every).items()
-              if e.get("ts") and dc.parse_iso(e["ts"]).timestamp() >= horizon}
-    moved = [(k, e) for k, e in folded.items()
-             if e.get("main_before") and e.get("main_after")
-             and e["main_before"] != e["main_after"]]
-    for (_, rid), e in moved:
+    # Every activation, not only an agent's latest (a resume and each teammate message start
+    # another), kept when it stopped in the window: a writer that started before the window and
+    # stopped inside it still pairs its start and stop.
+    ran = [a for a in activations(every)[0] if a.end >= horizon]
+    def changed(field):
+        return [a for a in ran if a.first.get(f"{field}_before") and a.last.get(f"{field}_after")
+                and a.first[f"{field}_before"] != a.last[f"{field}_after"]]
+    moved = ([("main checkout", a.key, a.last) for a in changed("main")]
+             + [(f"{a.last.get('parent_root')} (the parent session's checkout)", a.key, a.last)
+                for a in changed("parent")])
+    for where, (_, rid), e in moved:
         warn += 1
-        say(f"WARN main checkout changed while {e.get('agent_type')} {rid} ran in its worktree "
+        say(f"WARN {where} changed while {e.get('agent_type')} {rid} ran in its worktree "
             "(evidence, not proof: the lead may have edited too). Inspect `git status` there.")
     if not moved:
-        say("ok   no worktree agent coincided with a main-checkout change")
+        say("ok   no worktree agent coincided with a change in the main checkout or the parent "
+            "session's checkout")
     policy = read_policy()
     roles = report_roles(policy)
+    folded = {k: e for k, e in dc.fold(every).items()
+              if e.get("ts") and dc.parse_iso(e["ts"]).timestamp() >= horizon}
     bad = [e for e in folded.values() if e.get("event") == "stop" and e.get("report_ok") is False
            and e.get("agent_type") in roles and not e.get("teammate")]
     say(f"{'WARN' if bad else 'ok  '} reports failing the contract: {len(bad)}")
@@ -806,7 +840,9 @@ EXCLUDE_KEYS = {"id": "id", "session": "session_id", "name": "name"}  # option -
 START_EVENTS = ("start", "resume")  # codex-delegate's resume starts a run too
 SLACK = 1  # seconds: ledger stamps are whole seconds, transcript ones carry milliseconds
 
-Activation = collections.namedtuple("Activation", "key role kind start end transcript")
+# first and last: the start row and the stop row that closed it, for the audit's hashes.
+Activation = collections.namedtuple("Activation",
+                                    "key role kind start end transcript first last")
 
 
 def excluded(rows):
@@ -870,7 +906,7 @@ def activations(rows):
             unstopped[key] = a["start"]
         else:
             acts.append(Activation(key, a["role"], a["kind"], a["start"], a["end"],
-                                   a["transcript"]))
+                                   a["transcript"], a["first"], a["last"]))
 
     for r in rows:
         event, key, t = r.get("event"), (r.get("runner"), r.get("id")), row_ts(r)
@@ -881,11 +917,12 @@ def activations(rows):
             if key in cur:
                 close(key)
             cur[key] = {"role": role, "kind": kind_of(r), "start": t, "end": None,
-                        "transcript": agent_transcript(r)}
+                        "transcript": agent_transcript(r), "first": r, "last": None}
         elif key in cur:
             a = cur[key]
             # The stop row has the role meta.json resolved, and only it may say `teammate`.
-            a.update(end=t, role=role, transcript=agent_transcript(r) or a["transcript"],
+            a.update(end=t, last=r, role=role,
+                     transcript=agent_transcript(r) or a["transcript"],
                      kind="teammate" if "teammate" in (a["kind"], kind_of(r)) else a["kind"])
             if key[0] == "codex":
                 close(key)  # codex never stops twice: a later stop is a failed resume's
