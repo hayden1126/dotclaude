@@ -91,8 +91,10 @@ class Hooks(unittest.TestCase):
         return p
 
     def decided(self):
-        """Wait for the run's ring.log line: stop-ring logs a ring after its settle, detached."""
-        deadline = time.time() + 3
+        """Wait for the run's ring.log line: stop-ring logs a ring after its settle, detached.
+        A positive-only wait, so a long deadline costs nothing when it passes; 3 s flaked under
+        machine load (on main too, 2026-10-12)."""
+        deadline = time.time() + 15
         while len(self.ring_log()) == self.logged_before and time.time() < deadline:
             time.sleep(0.05)
         self.assertNotEqual(len(self.ring_log()), self.logged_before, "no decision logged")
