@@ -129,6 +129,8 @@ sees it.
 | `hooks/notify.sh` | Notification(permission_prompt) hook: pops a Windows toast, resolving the toast path per platform (WSL via `wslpath`, native Windows git-bash via `cygpath`), and rings like `stop-ring.sh` | symlink `~/.claude/hooks/notify.sh` |
 | `hooks/tmux-state.sh` | Prompt, tool, Stop and Notification hook: sets `@claude_state` (busy, wait, idle) on the tmux window the session is shown in, for the indicator in `tmux/claude.conf`; does nothing outside tmux | symlink `~/.claude/hooks/tmux-state.sh` |
 | `hooks/session-pane.sh` | Sourced by the three hooks above, not a hook: finds the tmux pane a session is shown in, and whether a person sees it | symlink `~/.claude/hooks/session-pane.sh` |
+| `hooks/context-watch.sh` | Stop and PostToolUse hook: the auto-pass watcher; writes the context size to `ctx/<session>.json` and, at 300k, 480k and 520k (derived from `autoCompactWindow`), tells the session to run the pass skill, or with autopass off shows you one line at 520k; a shim over `hooks/context_watch.py`, which shares `hooks/autopass_state.py` (tiers, the tab flag, on or off); fails open | symlink `~/.claude/hooks/context-watch.sh`, `context_watch.py` and `autopass_state.py` |
+| `hooks/autopass-toggle.sh` | UserPromptSubmit hook: answers `/autopass on\|off\|status` (defined by `skills/autopass`) without a model turn; a shim over `hooks/autopass_toggle.py` | symlink `~/.claude/hooks/autopass-toggle.sh` and `autopass_toggle.py` |
 | `hooks/pass-banner.sh` | SessionStart (`startup`) hook: after a plain `/pass` respawned the tab, shows what the old session said in its last turn, once, as a banner you see and the model doesn't (40 lines of reply, 4 KiB in all, then where to read the rest); a shim over `hooks/pass_banner.py`; fails open | symlink `~/.claude/hooks/pass-banner.sh` and `pass_banner.py` |
 | `hooks/session-registry.sh` | SessionStart/SessionEnd hook: records which session is open in which tmux tab (`$XDG_STATE_HOME/dotclaude/open-sessions/`), for `claude-restore`; deletes the entry on `/exit` or `/clear`, marks it when the window or claude is killed; then hands each payload to `claude-saved` (Star and Shelve; the star follows `/clear`); does nothing outside tmux | symlink `~/.claude/hooks/session-registry.sh` |
 | `hooks/session-summary.sh` | Stop hook: regenerates a 1-2 sentence session summary via a direct Haiku Messages-API call (Claude subscription OAuth token, stdlib urllib, no API key/jq), detached so it never blocks; caches the summary to `<config-dir>/session-summaries/<session_id>.txt` for the status-line widget and a short (`<=32`-char) tab label to `<session_id>.title.txt` for `session-title.sh` | symlink `~/.claude/hooks/session-summary.sh` |
@@ -152,7 +154,7 @@ sees it.
 | `docs/prose-is-not-a-permission.md` | Blog post on the delegation work: why a prompt can't limit an agent's authority, and the layers that can | reference |
 | `docs/images/` | The post's diagram: `delegation-layers.svg` (source) and `delegation-layers.png` (2x render) | reference |
 | `tests/delegation/` | Unit tests for the delegation pieces (no model calls) and `run.py`, a live harness that spends model calls | run from the repo root |
-| `tests/setup/` | Unit tests for `merge-settings.py`, `git/install-ignore.py`, and the prompt and session hooks (`handoff_reminder.py`, `session-title.sh`, `session-summary.sh`), the tmux and sound hooks (`test_tmux_hooks.py`), `tmux/tmux-claude-status` (`test_tmux_claude_status.py`), the restore after tmux dies (`test_session_registry.py`, `test_claude_restore.py`), Star and Shelve (`test_claude_saved.py`), the replies across a pass (`test_pass_banner.py`, `test_pass_last.py`), `setup-tmux.sh`, the overwrite and delete guards, `memory-git.sh` and `claude-file-history`; `replay_history.py` is a local-only replay tool, not a unit test | `python3 -m unittest discover -s tests/setup -t tests/setup` |
+| `tests/setup/` | Unit tests for `merge-settings.py`, `git/install-ignore.py`, and the prompt and session hooks (`handoff_reminder.py`, `session-title.sh`, `session-summary.sh`), the tmux and sound hooks (`test_tmux_hooks.py`), `tmux/tmux-claude-status` (`test_tmux_claude_status.py`), the restore after tmux dies (`test_session_registry.py`, `test_claude_restore.py`), Star and Shelve (`test_claude_saved.py`), the replies across a pass (`test_pass_banner.py`, `test_pass_last.py`), the auto-pass watcher and `/autopass` (`test_context_watch.py`), `setup-tmux.sh`, the overwrite and delete guards, `memory-git.sh` and `claude-file-history`; `replay_history.py` is a local-only replay tool, not a unit test | `python3 -m unittest discover -s tests/setup -t tests/setup` |
 | `tests/deck_production/` | Unit tests for `deck-production`'s `deckkit geometry` gate (rule matrix on canned probe output, plus an end-to-end run over the synthetic `fixtures/geodeck` that skips without a headless Chrome) `deckkit regress`'s geometry facts, and `deckkit doctor`'s exit codes | `python3 -m unittest discover -s tests/deck_production -t tests/deck_production` |
 | `tests/lanes/` | Unit tests for the `lane` CLI, the lane hooks and `handoff-check`, on a throwaway bare origin plus clone (no network) | `python3 -m unittest discover -s tests/lanes -t tests/lanes` |
 | `docs/lanes.md` | Lanes: the incident, the five invariants, the communication model, the layout and the spike results | reference |
@@ -388,6 +390,9 @@ need nothing extra.
   the tab, it shows what the old session said in its last turn, once, as a banner the model
   doesn't see (see Pass, below). It acts only in the same tab on the same tmux server, within
   120 s of the pass, and never in a `claude -p` run or a subagent. Fails open.
+- **Stop / PostToolUse: `context-watch.sh`** and **UserPromptSubmit: `autopass-toggle.sh`** (in
+  this repo). The auto-pass watcher and its `/autopass` toggle (see Auto-pass, below). The
+  PostToolUse entry skips a subagent's calls before any Python starts. Both fail open.
 - **SessionStart (`startup|resume|clear|compact`) / Stop / SessionEnd: `lane-identity.sh`** (in
   this repo). In a lane it tells the session its lane id, branch, claims, port and record, and
   registers it in `lane.json`; after a compact it adds "re-read your record". In the main
@@ -481,6 +486,36 @@ idle, the script rechecks the handoff and respawns the pane with a fresh `claude
   decision appends a line to `~/.local/state/dotclaude/pass.log`.
 
 `skills/pass/SKILL.md` is the procedure and PLAN.md ("PR 3: `/pass`") the design.
+
+### Auto-pass
+
+A session can hand off on its own before auto-compact (about 567k tokens with
+`autoCompactWindow` at 600k). `hooks/context-watch.sh` runs on Stop and on every main-thread
+tool call. It reads the context size from the transcript's last assistant `usage`, writes it to
+`~/.local/state/dotclaude/ctx/<session>.json`, and acts at three tiers, all derived from
+`autoCompactWindow`:
+
+| Tier | Tokens | With autopass on |
+|---|---|---|
+| Soft | 300k | a Stop is blocked once: pass if the task is done, finish a small remainder first, do nothing if the last reply asked something |
+| Wrap-up | 480k | once, on a Stop or a tool call: finish this step, then pass |
+| Hard | 520k | on a Stop or a tool call, again every 20k: pass now |
+
+- Only the highest tier crossed speaks, once per crossing; a drop below a tier (a compact)
+  re-arms it.
+- Background work: while a subagent, shell, workflow or cloud session runs, soft and wrap-up
+  wait and hard says `pass compact`. With any other task but `dream` (a monitor, a teammate),
+  every tier says compact mode, since `pass-respawn` would refuse a plain pass.
+- With autopass off, you alone see one line at the hard tier, once: "Context 521k, auto-compact
+  near 567k: hand off now (/pass)."
+- `/autopass on|off|status` sets it for this tmux tab, or shows the count, the next tier, on or
+  off and what set it. A hook answers it, so it costs no model turn. Without a tab's setting,
+  a lane is on (`autopass` in the repo's lanes config), and elsewhere `autopass = true` in
+  `~/.config/dotclaude/pass.toml` turns it on (off by default). `tiers = [soft, wrap, hard]` in
+  that file overrides the tiers for live tests.
+- Nothing fires for a subagent, a `claude -p` run, or while a pass is already pending.
+
+PLAN.md ("PR 4: auto-pass") is the design.
 
 ## Status line
 
