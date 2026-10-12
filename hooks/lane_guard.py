@@ -92,6 +92,17 @@ def record_owner(target: str) -> str | None:
     return None
 
 
+def linked_record(path: str) -> str | None:
+    """The first `.lane` component of an unresolved path that is itself a symlink, or None."""
+    parts = path.split(os.sep)
+    for i, part in enumerate(parts[:-1]):
+        if part == lanelib.RECORD_DIR:
+            prefix = os.sep.join(parts[:i + 1]) or os.sep
+            if os.path.islink(prefix):
+                return prefix
+    return None
+
+
 def main():
     event = json.load(sys.stdin)
     tool = event.get("tool_name")
@@ -103,6 +114,18 @@ def main():
     if not isinstance(raw, str) or not raw:
         return
     target = os.path.realpath(os.path.join(cwd, raw))
+    who = f"session={str(event.get('session_id'))[:8]}" + (
+        f" agent={event['agent_id']}" if event.get("agent_id") else "")
+    # Checked on the path as given: resolved first, a write through `.lane -> ..` has no .lane
+    # part left and may land outside any repo, so neither rule below would see it.
+    if (link := linked_record(os.path.normpath(os.path.join(cwd, raw)))) is not None:
+        linked_repo = lanelib.resolve(os.path.dirname(link))
+        if linked_repo is not None and os.path.isdir(linked_repo.lanes_dir):
+            deny(f"lane-guard: {link} is a symlink, and a lane's record must be a real dir: a "
+                 "write through it lands outside the record. Replace the link with a real "
+                 ".lane/ dir.",
+                 f"deny linked-record {who} link={link} path={target}")
+            return
     # The target's repo. Inside a .git dir --show-toplevel fails, so fall back to the common dir.
     repo = lanelib.resolve_path(target)
     common = repo.common_dir if repo else lanelib.common_dir_of(target)
@@ -115,8 +138,6 @@ def main():
     owner = record_owner(target)
     session = lanelib.resolve(cwd)
     here = session.toplevel if session else os.path.realpath(cwd)
-    who = f"session={str(event.get('session_id'))[:8]}" + (
-        f" agent={event['agent_id']}" if event.get("agent_id") else "")
 
     if lanelib.inside(target, lanes_dir):
         deny(f"lane-guard: {raw} is lanes data under the git common dir, which only the `lane` "

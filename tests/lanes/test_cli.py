@@ -269,14 +269,80 @@ class RoundTrip(LanesRepo):
         self.assertIn("PR #9 merged", self.lane("done", "docs-lane"))
         self.assertEqual(self.closed_state(), "merged")
 
-    def test_an_adopted_lane_with_nothing_past_main_closes_as_no_work(self):
-        # Nothing past origin/main, so nothing can be lost: no --abandon needed, but no
-        # "merged" label either.
+    def test_an_adopted_lane_with_nothing_past_main_closes_as_closed(self):
+        # Nothing past origin/main, so nothing can be lost: no --abandon needed. It can't tell
+        # "no work" from "already fast-forwarded into main", so neither merged nor abandoned.
         self.adopt_at_main()
         out = self.lane("done", "docs-lane")
-        self.assertIn("abandoned (no work)", out)
+        self.assertIn("closed (nothing past origin/main)", out)
         self.assertNotIn("merged", out)
-        self.assertEqual(self.closed_state(), "abandoned")
+        self.assertNotIn("abandoned", out)
+        self.assertEqual(self.closed_state(), "closed")
+
+    def test_a_copy_never_touches_a_neighbouring_part_file(self):
+        # A fixed <name>.part temp would clobber, write through or delete someone's file.
+        self.include("big.cfg")
+        lane_mod = load_lane_script()
+        repo = lanelib.resolve(self.main)
+        dest = os.path.join(self.tmp, "dest")
+        self.write(os.path.join(dest, "big.cfg.part"), "keep\n")
+        self.assertEqual(lane_mod.copy_includes(repo, dest), ["big.cfg"])
+        self.assertEqual(self.read(os.path.join(dest, "big.cfg.part")), "keep\n")
+        self.assertEqual(sorted(os.listdir(dest)), ["big.cfg", "big.cfg.part"])
+        os.remove(os.path.join(dest, "big.cfg"))
+        with mock.patch.object(lane_mod.shutil, "copyfile", side_effect=OSError("disk full")):
+            with self.assertRaises(OSError):
+                lane_mod.copy_includes(repo, dest)
+        self.assertEqual(os.listdir(dest), ["big.cfg.part"])
+        self.assertEqual(self.read(os.path.join(dest, "big.cfg.part")), "keep\n")
+
+    def test_a_lock_free_read_retries_once_when_the_mirror_moves(self):
+        # The hook may delete mirror.old between mirror_dir's answer and the open.
+        self.lane("new", "chart-fix")
+        self.hook("lane-identity.sh", {"session_id": "s1", "cwd": self.lane_path("chart-fix"),
+                                       "hook_event_name": "Stop"})
+        self.git("worktree", "remove", self.lane_path("chart-fix"))
+        lane_mod = load_lane_script()
+        repo = lanelib.resolve(self.main)
+        mirror = os.path.join(self.common, "lanes", "chart-fix", "mirror")
+        answers = iter([mirror + ".old", mirror])
+        with mock.patch.object(lane_mod.lanelib, "mirror_dir",
+                               side_effect=lambda *a, **k: next(answers)):
+            text, _ = lane_mod.record_text(repo, self.lane_json("chart-fix"))
+        self.assertIn("# LANE: chart-fix", text)
+
+    def commit_record_link(self):
+        """A repo that commits `.lane -> ..`: the N1 leak one level up, in every new lane."""
+        os.symlink("..", os.path.join(self.main, ".lane"))
+        self.git("add", ".lane")
+        self.git("commit", "-q", "-m", "a committed .lane link")
+        self.git("push", "-q", "origin", "main")
+
+    def test_done_never_archives_through_a_symlinked_record(self):
+        self.commit_record_link()
+        self.write(os.path.join(self.root, "outside.txt"), "not the lane's\n")
+        self.assertEqual(self.run_lane("new", "chart-fix").returncode, 1)  # left setup-failed
+        self.assertTrue(os.path.islink(os.path.join(self.lane_path("chart-fix"), ".lane")))
+        p = self.run_lane("done", "chart-fix", "--abandon")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("symlink", p.stderr)
+        closed = os.path.join(self.common, "lanes", "_closed")
+        (archive,) = os.listdir(closed)
+        self.assertFalse(os.path.exists(os.path.join(closed, archive, ".lane", "outside.txt")))
+        self.assertTrue(os.path.isfile(os.path.join(self.root, "outside.txt")))
+
+    def test_new_and_adopt_refuse_a_symlinked_record(self):
+        self.commit_record_link()
+        p = self.run_lane("new", "chart-fix")
+        self.assertEqual(p.returncode, 1)
+        self.assertIn("symlink", p.stderr)
+        self.assertFalse(os.path.exists(os.path.join(self.root, "STATUS.md")))  # not written
+        path = os.path.join(self.tmp, "elsewhere", "docs-lane")
+        self.git("worktree", "add", "-q", "-b", "docs", path, "origin/main")
+        p = self.run_lane("adopt", path)
+        self.assertEqual(p.returncode, 1)
+        self.assertIn("symlink", p.stderr)
+        self.assertFalse(os.path.exists(os.path.join(self.common, "lanes", "docs-lane")))
 
     def test_a_copy_that_fails_partway_leaves_no_partial_file(self):
         # A half-copied file would be kept forever: copies never overwrite an existing file.

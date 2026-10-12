@@ -207,6 +207,13 @@ def record_dir(lane: dict) -> str:
     return os.path.join(lane["path"], RECORD_DIR)
 
 
+def record_is_link(lane: dict) -> bool:
+    """A .lane that is itself a symlink (a repo can commit `.lane -> ..`): following it would
+    mirror and archive its whole target, so the mirror, `done`, `new` and `adopt` refuse one and
+    the guard denies writes through one."""
+    return os.path.islink(record_dir(lane))
+
+
 def record_path(lane: dict) -> str:
     return os.path.join(record_dir(lane), "STATUS.md")
 

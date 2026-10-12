@@ -26,6 +26,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 import lanelib  # noqa: E402  (beside this script's real path)
@@ -193,13 +194,16 @@ def copy_includes(repo: Repo, dest: str) -> list[str]:
         if os.path.lexists(target):
             continue
         os.makedirs(os.path.dirname(target), exist_ok=True)
-        part = target + ".part"  # renamed into place whole, so a failure never leaves half a file
+        # A fresh temp, renamed into place whole: a failure never leaves half a file, and no
+        # neighbouring file (a `<name>.part` of the lane's own) is clobbered or deleted.
+        fd, tmp = tempfile.mkstemp(dir=os.path.dirname(target), prefix=".tmp-lane-")
+        os.close(fd)
         try:
-            shutil.copy2(os.path.join(repo.main, rel), part)
-            os.replace(part, target)
-        finally:
-            if os.path.lexists(part):
-                os.unlink(part)
+            shutil.copy2(os.path.join(repo.main, rel), tmp)
+            os.replace(tmp, target)
+        except BaseException:
+            os.unlink(tmp)
+            raise
         copied.append(rel)
     return copied
 
@@ -207,6 +211,11 @@ def copy_includes(repo: Repo, dest: str) -> list[str]:
 def lane_files(repo: Repo, lane: dict, brief: dict) -> list[str]:
     """The 'copy' step of making a lane: included files, the shared exclude, the seeded record.
     A failure becomes a LaneError naming the half-made lane and how to finish it."""
+    if lanelib.record_is_link(lane):
+        raise LaneError(f"{lanelib.record_dir(lane)} is a symlink in the repo's tree, and a lane's "
+                        "record must be a real dir (a link would mirror and archive its target). "
+                        f"Remove the link from the repo, then `lane adopt {lane['path']}`, or "
+                        f"`lane done {lane['id']} --abandon`")
     try:
         copied = copy_includes(repo, lane["path"])
         add_exclude(repo)
@@ -378,6 +387,9 @@ def cmd_adopt(args) -> None:
         raise LaneError(f"the dir name {lane_id!r} is no lane id (a slug that starts with a "
                         "letter or digit, at most 64 chars, not 'main'): pass `--id <slug>`, or "
                         "rename the worktree with `git worktree move`")
+    if os.path.islink(os.path.join(path, lanelib.RECORD_DIR)):
+        raise LaneError(f"{path}/.lane is a symlink, and a lane's record must be a real dir (a "
+                        "link would mirror and archive its target): remove it, then adopt")
     with lock(repo):
         check_unregistered(repo, lane_id)
         base = cfg.get("base", "origin/main")
@@ -462,14 +474,24 @@ def board(repo: Repo) -> list[dict]:
 
 
 def record_text(repo: Repo, lane: dict) -> tuple[str | None, float | None]:
-    """The lane's STATUS.md text and mtime, from the worktree or, when it is gone, the mirror."""
-    mirror = lanelib.mirror_dir(repo, lane["id"], restore=False)  # no lock held: read in place
-    for path in [lanelib.record_path(lane)] + ([os.path.join(mirror, "STATUS.md")] if mirror else []):
+    """The lane's STATUS.md text and mtime, from the worktree or, when it is gone, the mirror.
+    No lock is held, so the mirror is read in place, and a hook's swap can move it between
+    mirror_dir's answer and the open: one fresh answer and retry covers that."""
+    def read(path):
         try:
             with open(path) as f:
                 return f.read(), os.path.getmtime(path)
         except OSError:
-            continue
+            return None
+
+    if not lanelib.record_is_link(lane) and (found := read(lanelib.record_path(lane))):
+        return found
+    for _ in range(2):
+        mirror = lanelib.mirror_dir(repo, lane["id"], restore=False)
+        if mirror is None:
+            break
+        if found := read(os.path.join(mirror, "STATUS.md")):
+            return found
     return None, None
 
 
@@ -676,8 +698,10 @@ def closable(repo: Repo, lane: dict, fetched: bool) -> tuple[str | None, str, st
     commit is the branch tip (a squash merge leaves the tip out of the base) or the tip is in the
     base; an old PR from a same-named branch at another commit proves nothing. A lane made by
     `new` with nothing past its base did no work, so it needs --abandon. An adopted lane's base is
-    a merge-base: with nothing past it the tip is already in the base, so nothing can be lost and
-    it closes as "abandoned (no work)" unless a merged PR names that tip."""
+    a merge-base: with nothing past it the tip is already in the base, so nothing can be lost. It
+    can't tell "no work" from "fast-forwarded in before adoption", so it closes with state
+    `closed`, "closed (nothing past <base>)", unless a merged PR names that tip. `abandoned` is
+    kept for --abandon."""
     branch = lane["branch"]
     tip = rev(repo, branch)
     if tip is None:
@@ -700,7 +724,7 @@ def closable(repo: Repo, lane: dict, fetched: bool) -> tuple[str | None, str, st
         pass
     in_base = git(["merge-base", "--is-ancestor", tip, base], repo.toplevel).returncode == 0
     if in_base and no_work:
-        return "abandoned (no work)", "abandoned", ""
+        return f"closed (nothing past {base})", "closed", ""
     if in_base:
         return f"fully in {base}" + ("" if fetched else " (unfetched copy)"), "merged", ""
     return None, "", f"no merged PR at its tip {tip[:12]}, and the tip is not in {base}"
@@ -744,7 +768,10 @@ def cmd_done(args) -> None:
         # retry after one) never leaves a partial archive.
         tmp = archive + ".tmp"
         source = lanelib.record_dir(lane)
-        if not os.path.isdir(source):
+        if lanelib.record_is_link(lane):
+            warn(f"{source} is a symlink: its target is not archived (the last mirror is, if any)")
+            source = lanelib.mirror_dir(repo, args.id, restore=True)
+        elif not os.path.isdir(source):
             source = lanelib.mirror_dir(repo, args.id, restore=True)  # under the lock
         lane.update(state=state, closed=now_iso(), outcome=how)
         try:

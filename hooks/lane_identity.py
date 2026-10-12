@@ -97,6 +97,9 @@ def mirror(repo: lanelib.Repo, lane: dict) -> None:
     new, old, stamp = dest + ".new", dest + ".old", dest + ".stamp"
     lanelib.mirror_dir(repo, lane["id"], restore=True)
     src = lanelib.record_dir(lane)
+    if lanelib.record_is_link(lane):
+        log(f"mirror refused lane={lane['id']}: {src} is a symlink, not a record dir")
+        return
     if not os.path.isdir(src):
         return
     changed = lanelib.newest_mtime(src)

@@ -74,6 +74,16 @@ class Guard(LanesRepo):
         # Only the root one: a nested STATUS.md is ordinary content.
         self.assertIsNone(self.write_call(lane, os.path.join(lane, "docs", "STATUS.md"), RELATIVE))
 
+    def test_a_write_through_a_symlinked_record_is_denied(self):
+        # Resolved first, <lane>/.lane/STATUS.md through `.lane -> ..` has no .lane part left,
+        # and lands outside any repo: both rules were skipped.
+        lane = self.lane_path("chart-fix")
+        shutil.rmtree(os.path.join(lane, ".lane"))
+        os.symlink("..", os.path.join(lane, ".lane"))
+        for raw in (os.path.join(lane, ".lane", "STATUS.md"), ".lane/STATUS.md"):
+            with self.subTest(raw=raw):
+                self.assertDenied(self.write_call(lane, raw, CLEAN), "symlink")
+
     def test_the_deny_names_the_fix_and_the_phrase(self):
         out = self.write_call(self.lane_path("chart-fix"), self.own, "The other lane owns it.")
         self.assertDenied(out, "the other lane")
@@ -235,6 +245,18 @@ class IdentityHook(LanesRepo):
             with self.subTest(name=name):
                 self.assertTrue(os.path.islink(self.mirror("artifacts", name)))
         self.assertEqual(sorted(os.listdir(self.mirror("artifacts"))), ["key", "out", "src"])
+
+    def test_a_symlinked_record_is_never_mirrored(self):
+        rec = os.path.join(self.lane_dir, ".lane")
+        shutil.rmtree(rec)
+        os.symlink("..", rec)
+        self.start(self.lane_dir)
+        self.hook("lane-identity.sh", {"session_id": "sess-0001", "cwd": self.lane_dir,
+                                       "hook_event_name": "SessionEnd", "reason": "other"})
+        self.assertFalse(os.path.exists(self.mirror()))
+        self.assertIn("endedAt", self.lane_json("chart-fix")["sessions"][0])
+        with open(os.path.join(self.tmp, "state", "dotclaude", "lane-identity.log")) as f:
+            self.assertIn("symlink", f.read())
 
     def test_the_end_is_stamped_before_the_mirror_runs(self):
         # A slow mirror killed at the hook timeout must not cost endedAt. A SystemExit from the
