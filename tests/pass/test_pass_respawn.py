@@ -494,6 +494,16 @@ class Plain(Base):
         self.assertFalse(os.path.exists(self.carry_marker()))
         self.assertIn("mode=compact outcome=compact", self.log())
 
+    def test_shell_status_is_at_the_prompt_so_compact_acts(self):
+        # Live, 2026-10-12: at the prompt with a background shell running, the session file
+        # reads `shell`, never `idle`, so a waiter that wanted `idle` sat until its timeout.
+        self.script = ["busy", "shell"]
+        self.stop_waits = ["shell"]
+        code, out = self.run_pass("--compact", "--foreground", "--timeout", "3")
+        self.assertEqual(code, 0, out)
+        self.assertEqual(len(self.calls("tmux", "send-keys")), 4)
+        self.assertIn("mode=compact outcome=compact", self.log())
+
     def test_the_call_returns_and_a_detached_waiter_acts_after(self):
         self.script = ["busy"] * 30 + ["idle"]
         code, out = self.run_pass("--compact")

@@ -19,7 +19,8 @@ waiter (a double fork; a fork or setsid that fails exits 1 and logs `error`) and
 is a live pass-respawn with the start time written beside it; the waiter logs `cancelled` and
 exits. With nothing pending it says so and exits 0.
 
-The waiter polls that session file every 0.2 s until its status is `idle` with a statusUpdatedAt
+The waiter polls that session file every 0.2 s until its status is `idle` (or `shell`, at the
+prompt with a background shell running) with a statusUpdatedAt
 later than the call: this session's own turn has ended (the file says `busy` for the whole turn,
 tool calls included, and stays busy when a hook blocks the Stop). It settles 1 s and re-reads it
 (not idle, or a new statusUpdatedAt: a queued prompt restarted the turn, `resumed`). It re-runs
@@ -92,7 +93,8 @@ the sandbox can write (docs/lanes.md S3). Every input, and why each is safe:
   - The environment ($TMUX_PANE, $CLAUDE_CODE_SESSION_ID, $HOME, $XDG_STATE_HOME) is the Bash
     call's; TMUX_PANE must be `%<n>`, and the session id must match the session file.
   - The session file (~/.claude/sessions/<pid>.json) is Claude Code's, and the sandbox can't
-    write ~/.claude/sessions. Only `idle` there lets the waiter act.
+    write ~/.claude/sessions. Only `idle` there (or `shell`: at the prompt with a background
+    shell running) lets the waiter act.
   - The transcript (~/.claude/projects/...) is Claude Code's too, also out of the sandbox's
     reach; it can only drop a pass.
   - The stop record, the carry marker, the pending lock and pass.log live in the state dir,
@@ -130,6 +132,10 @@ MANAGED_SETTINGS = "/etc/claude-code/managed-settings.json"
 MANAGED_DIR = "/etc/claude-code/managed-settings.d"
 POLL = 0.2         # secs between session file reads
 SETTLE = 1.0       # secs idle must hold, so a queued prompt can restart the turn first
+# Session-file statuses that mean "at the prompt, turn over": `idle`, and `shell` when a
+# background shell is still running (live, 2026-10-12; a foreground Bash call reads `busy`).
+# `waiting` (an open dialog) and anything unknown keep the waiter waiting.
+AT_PROMPT = {"idle", "shell"}
 COMPACT_GAP = 1.0  # secs between typing /compact and the prompt (it queues, S4)
 TIMEOUT = 600.0
 MAX_TIMEOUT = 3600.0
@@ -718,7 +724,7 @@ def observe(plan: Plan, procs=None) -> tuple[str, str, dict | None]:
             return "gone", f"pane {plan.pane} runs {cmd or '?'} (pid {pid or '?'}), not claude " \
                            f"{plan.claude_pid}", None
     updated = session.get("statusUpdatedAt")
-    idle = (session.get("status") == "idle" and isinstance(updated, (int, float))
+    idle = (session.get("status") in AT_PROMPT and isinstance(updated, (int, float))
             and not isinstance(updated, bool) and updated > plan.called * 1000)
     return ("idle" if idle else "busy"), str(session.get("status")), session
 
