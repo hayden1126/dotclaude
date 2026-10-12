@@ -267,7 +267,13 @@ def merge_ctx(sid: str, fields: dict, wait: float = 1.0) -> dict | None:
     with watch_lock(sid, wait, kind=".ctx") as locked:
         if not locked:
             return None
-        rec = {**read_ctx(sid), **fields}
+        old = read_ctx(sid)
+        stamp = old.get("time")
+        if ("time" in fields and isinstance(stamp, (int, float)) and not isinstance(stamp, bool)
+                and stamp > fields["time"]):
+            # An older count landing after a newer one (two parallel tool calls): keep the newer.
+            fields = {k: v for k, v in fields.items() if k not in ("tokens", "time")}
+        rec = {**old, **fields}
         write_json(ctx_path(sid), rec)
     return rec
 
@@ -293,18 +299,29 @@ def watch_lock(sid: str, wait: float = 1.0, kind: str = ""):
     watcher never holds up the count. Yields False when it wasn't taken within `wait` seconds."""
     d = os.path.join(state_dir(), "ctx-watch")
     os.makedirs(d, exist_ok=True)
-    fd = os.open(os.path.join(d, sid + kind + ".lock"), os.O_RDWR | os.O_CREAT, 0o600)
+    path = os.path.join(d, sid + kind + ".lock")
+    fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
     try:
         deadline = time.monotonic() + wait
         while True:
             try:
                 fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                break
             except BlockingIOError:
                 if time.monotonic() >= deadline:
                     yield False
                     return
                 time.sleep(0.02)
+                continue
+            try:
+                same = os.fstat(fd).st_ino == os.stat(path).st_ino
+            except OSError:
+                same = False
+            if same:
+                break
+            # The prune unlinked the file between open and flock: a lock on the old inode
+            # excludes nobody, so take the file now at the path.
+            os.close(fd)
+            fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
         try:
             os.utime(fd)  # flock leaves the mtime alone; this keeps the prune off a lock in use
         except OSError:

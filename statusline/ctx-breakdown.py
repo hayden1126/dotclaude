@@ -169,8 +169,10 @@ def timed_decide(aps, cwd, pane):
         return None
     finally:  # an alarm landing past the try raises Slow from here: autopass_on catches it
         if timer:
-            signal.setitimer(signal.ITIMER_REAL, 0)
-            signal.signal(signal.SIGALRM, old)
+            try:
+                signal.setitimer(signal.ITIMER_REAL, 0)
+            finally:
+                signal.signal(signal.SIGALRM, old)
 
 
 def autopass_on(aps, sid, cwd, pane):

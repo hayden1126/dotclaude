@@ -349,6 +349,7 @@ class InProcess(Widget):
         os.utime(old, (week, week))
         os.remove(self.cache)
         self.run_widget(self.payload(100000))
+        self.assertTrue(os.path.exists(self.cache))  # the render reached the cache write
         self.assertTrue(os.path.exists(old))
 
 
