@@ -173,6 +173,12 @@ $XDG_STATE_HOME/dotclaude/lanes/<repo>-<hash>.toml
 
 JSON for the fields the CLI owns (models alter JSON less than Markdown), Markdown for the prose.
 
+A repo set up before the config moved (it held `<common-dir>/lanes/config.toml`) reads as plain:
+the hooks go quiet and every `lane` subcommand says to re-run `lane init`. The old file is never
+read, since sandboxed Bash could have written it: run `lane init` with the flags you want, without
+copying its `setup` or `root` unread, then delete it. Requests a lane claims are short tokens
+(`42`, `#42`, `ABC-7`); `claim` refuses anything else, since a record holding it is left out.
+
 ## Spike results (Step 0)
 
 Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a sibling lane.
@@ -193,7 +199,7 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
   `lane *`, any command wrapped in it ran sandbox-off without the `dangerouslyDisableSandbox`
   flag the delete guard checks. `whoami`, `claim`, `release`, `who`, `note`, `asks` and `lock`
   touch only `<common-dir>/lanes/` and the lane's `.lane/`, which a lane-rooted sandbox can
-  write (S1). A sandboxed (piped) call of an excluded subcommand says what it skipped.
+  write (S1). A sandboxed (piped) `ls` says what it skipped; `new`, `open` and `done` refuse.
   `new` and `adopt` also run the config's `setup` command through a shell, sandbox-off, and
   `new` makes its worktree under the config's `root`. So the config lives in the state dir, not
   the common dir: sandboxed Bash can read it but not write it, and only a bare `lane init`

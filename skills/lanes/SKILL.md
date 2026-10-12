@@ -137,8 +137,9 @@ port, claims and a cap slot; finish it with `lane adopt <path>`).
 
 Run `lane init`, `new`, `adopt`, `ls`, `open` and `done` as bare commands: those are in
 `excludedCommands`, so they run outside the sandbox with the network, gh's credential and a view
-of other processes. Piped or sandboxed, `new`, `ls` and `done` say what they skipped (PR state,
-sessions and window show `?`), and `open` refuses. `open --print` still prints, but warns that it
+of other processes. Piped or sandboxed, `ls` says what it skipped (PR state, sessions and window
+show `?`), and `new`, `open` and `done` refuse. `lane ls` also names any record it left out (a
+`lane.json` the CLI didn't write, or two claiming one path): look at it before removing it. `open --print` still prints, but warns that it
 can't see a live session, so its command may start a second one. Every other subcommand runs
 sandboxed. `lane lock` must: the command it wraps inherits its sandbox.
 

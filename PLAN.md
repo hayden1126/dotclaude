@@ -190,6 +190,7 @@ sibling lane; they go into `docs/lanes.md`):
 - S3, `excludedCommands`: `lane *` goes in, beside `delegation-ledger *` (hq-open is excluded the same way in hq's own settings). `lane new`
   fetches and `lane ls` asks gh for PR state, and both need the credential the sandbox hides. A
   sandboxed (piped) call still works for the local subcommands and says what it skipped.
+  (Superseded: PR 2 "As built" narrowed the exclusion, and `new` now refuses sandboxed.)
 - S4, compaction: a SessionStart hook matched on `compact` gets its `additionalContext` to the
   model after `/compact` (`/compact` piped into `claude -p --resume` triggers a real compaction).
   `lane-identity.sh` on `compact` is therefore the safety net for an unplanned auto-compact.
@@ -324,6 +325,7 @@ session):
   every `lane.json` on load, a lane's path before `open`, the setup, the copy or `done` act in
   it, and the `.worktreeinclude` copy by directory fd. `new` refuses when the fetch fails
   (Hayden's call): a lane branches only from the commit the remote reports, never a local ref.
+  It branches from that sha, so PR 1's `--unset-upstream` step is gone (no upstream is set).
 - Locks live in `<common-dir>/lanes/_locks/<name>` (the leading `_` can't collide with a lane
   id), and the lanes config's `locks` lists the names `lane lock` accepts (`lane init --locks`). An
   unlisted name is refused, since a typo would split the mutual exclusion. A waiter prints the

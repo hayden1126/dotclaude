@@ -133,8 +133,8 @@ class Repo:
 
     @property
     def config_path(self) -> str:
-        """Out of the repo: under the common dir, sandboxed Bash could plant a `setup` (or a
-        `root`) that the next bare `lane new` runs sandbox-off. One file per common dir."""
+        """Out of the repo, where sandboxed Bash can't write (docs/lanes.md S3). One file per
+        common dir."""
         key = hashlib.sha256(self.common_dir.encode()).hexdigest()[:12]
         return os.path.join(state_dir(), LANES, f"{os.path.basename(self.main)}-{key}.toml")
 

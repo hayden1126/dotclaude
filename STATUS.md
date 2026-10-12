@@ -147,8 +147,7 @@ stored here).
 
 ## Notes for next session
 - **Next: push `feat/lanes-lead` on Hayden's approval** (step 0 is in, reviewed, installed and
-  smoke-tested), then open PR 2 as a draft and mark it ready. A `lane new` now refuses when the
-  fetch fails (Hayden's call): it branches only from the commit the remote reports. After Hayden merges: `git fetch origin main:main`
+  smoke-tested), then open PR 2 as a draft and mark it ready. After Hayden merges: `git fetch origin main:main`
   and `git switch main` outside the sandbox (the checkout is on `feat/lanes-lead` and live for
   every session), then PR 3 on `feat/pass` (PLAN.md PR 3, spikes first; build `pass-respawn` as
   a narrow wrapper with its own excludedCommands entry, never raw `tmux`). PR 2's range:

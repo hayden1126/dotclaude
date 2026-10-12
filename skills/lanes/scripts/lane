@@ -14,15 +14,14 @@
   lane asks
   lane done <id> [--abandon]
 
-Records: CLI data in <common-dir>/lanes/<id>/lane.json, the lane's prose in <lane>/.lane/STATUS.md.
-The config lives in $XDG_STATE_HOME/dotclaude/lanes/, which sandboxed Bash can't write, since `new`
-and `adopt` run its `setup` sandbox-off; only a bare `init` writes it.
-Every write takes the flock on <common-dir>/lanes/.lock. Board fields (ahead/behind, PR state,
+Records: CLI data in <common-dir>/lanes/<id>/lane.json, the lane's prose in <lane>/.lane/STATUS.md,
+the config in $XDG_STATE_HOME/dotclaude/lanes/ (why, and what is checked before sandbox-off code
+acts on a sandbox-writable file: docs/lanes.md S3). Every write takes the flock on <common-dir>/lanes/.lock. Board fields (ahead/behind, PR state,
 liveness, flags) are derived on each `ls`, never stored. skills/lanes/SKILL.md is the guide and
 docs/lanes.md the design. Run `init`, `new`, `adopt`, `ls`, `open` and `done` bare, so their
 excludedCommands entries take them out of the sandbox: `new`, `ls` and `done` need the network and
-the GitHub credential (and say what they skipped without them), and `ls`, `open` and `done` need to
-see other processes. Every other subcommand runs sandboxed; `lock` must, so the command it wraps
+the GitHub credential (`new` refuses without them; `ls` and `done` say what they skipped), and
+`ls`, `open` and `done` need to see other processes. Every other subcommand runs sandboxed; `lock` must, so the command it wraps
 stays sandboxed too.
 
 `lock` exits with its command's code, or dies of the signal that killed it; `--wait` running out
