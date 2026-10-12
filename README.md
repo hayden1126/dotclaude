@@ -123,7 +123,7 @@ sees it.
 | `hooks/subagent-policy.sh` | PreToolUse(*) policy for delegated agents only (rules in `skills/delegation/policy.toml`): no leaving the sandbox, no destructive git, no MCP writes, protected paths, the researcher allowlist, writers held to their worktree; fails closed | symlink `~/.claude/hooks/subagent-policy.sh` |
 | `hooks/watch-guard.sh` | Stop hook (main thread): blocks a stop once when a `delegation-ledger wait` watch has lapsed or a background command was killed at its time limit, with the re-arm command (`skills/delegation/scripts/watch-guard`); fails open | symlink `~/.claude/hooks/watch-guard.sh` |
 | `hooks/report-check.sh` | PreToolUse(SubagentHandback)/SubagentStop hook: sends a delegated role's malformed report back, at most twice; fails open | symlink `~/.claude/hooks/report-check.sh` |
-| `hooks/handoff-reminder.sh` | UserPromptSubmit hook: on a wrap-up / handoff / clear-memory signal, reminds me to invoke the `handoff` skill instead of improvising it; a shim over `hooks/handoff_reminder.py`, which holds the classifier | symlink `~/.claude/hooks/handoff-reminder.sh` and `handoff_reminder.py` |
+| `hooks/handoff-reminder.sh` | UserPromptSubmit hook: on a wrap-up / handoff / clear-memory signal, reminds me to invoke the `handoff` skill instead of improvising it, or the `pass` skill on a terse "... and pass"; a shim over `hooks/handoff_reminder.py`, which holds the classifier | symlink `~/.claude/hooks/handoff-reminder.sh` and `handoff_reminder.py` |
 | `hooks/session-title.sh` | UserPromptSubmit hook: sets the terminal tab title to `[<repo>] <label>` via `sessionTitle`, so tabs are tellable apart; the label comes from the Stop-hook Haiku cache (`.title.txt`), falling back to the current prompt's first line | symlink `~/.claude/hooks/session-title.sh` |
 | `hooks/stop-ring.sh` | Stop hook: plays the Windows notify sound when a session you see finishes (a tab, a plain terminal or a mapped background session), not a subagent, an unmapped background session, a `claude -p` run, a turn that ends with an agent or shell still running for it, or one a queued notice or prompt restarts within a second; logs each decision to `ring.log` | symlink `~/.claude/hooks/stop-ring.sh` |
 | `hooks/notify.sh` | Notification(permission_prompt) hook: pops a Windows toast, resolving the toast path per platform (WSL via `wslpath`, native Windows git-bash via `cygpath`), and rings like `stop-ring.sh` | symlink `~/.claude/hooks/notify.sh` |
@@ -246,7 +246,10 @@ need nothing extra.
   to invoke the `handoff` skill rather than improvising its steps (which kept dropping the
   curate-memory step). "handoff" fires the way it's typed in practice, as one action in a list
   ("emailed. handoff", "commit, handoff and push", "deploy handoff and push"), but not in a
-  question about it, praise, a delegation ("hand off X to Y") or `/handoff` itself. Generic phrases
+  question about it, praise, a delegation ("hand off X to Y"), a deferral ("do a handoff at the
+  time"), "ready to clear context?" or `/handoff` itself. "pass" as the bare last item of a terse
+  list ("commit, handoff and pass", "handoff and compact") gets its own reminder, naming the `pass`
+  skill and its mode (Pass, below). Generic phrases
   ("wrap up", "stop here", "clear the context") count only as a whole clause, so "don't wrap up
   yet", "clear the session cache" and "stop here, then explain why" stay silent. It also stays
   silent when "handoff" is just a topic (discussing the skill or this hook), on injected content
@@ -425,6 +428,32 @@ and status single-writer:
 
 A repo with no lanes is unchanged. `skills/lanes/SKILL.md` is the operating guide and
 `docs/lanes.md` the design. Run `lane init` once in the main checkout to start.
+
+## Pass
+
+`/pass` hands a session off and restarts it fresh in its tmux pane, so the next session starts
+from the status doc instead of a long context. It runs the handoff (or its delta mode, when a
+handoff already ran this session), gates on `handoff-check`, and calls
+`pass-respawn -C <toplevel>` last. Once the turn ends and the pane goes idle, the script
+rechecks the handoff and respawns the pane with a fresh `claude`.
+
+- `pass compact` keeps the session and types `/compact` and the resume prompt instead. Use it
+  mid-task with tacit state or with background tasks in flight, which a respawn would kill (a
+  plain pass refuses while they run).
+- Typed triggers: "pass" fires only as the bare last item of a terse list ("pass", "handoff and
+  pass", "commit, handoff and pass"). "pass compact", "handoff and compact" and "handoff and
+  pass compact" pick the compact mode. "a later pass" or "the tests pass" never fire, and a
+  bare "handoff" never passes.
+- The fresh session starts in plan mode, unless the Next block carries `(approved by Hayden
+  YYYY-MM-DD)` for that exact step. The handoff skill writes that marker only for an approval
+  given in the session.
+- The pass drops, with one line in the pane's status line and nothing changed, when work landed
+  after the handoff (`stale`), a queued prompt restarted the turn (`resumed`), background work
+  started (`busy`) or the pane never went idle (`timeout`). Fix the cause and run `/pass` again.
+- `pass-respawn` is in `excludedCommands` (it needs the tmux socket), so it runs bare. Each
+  decision appends a line to `~/.local/state/dotclaude/pass.log`.
+
+`skills/pass/SKILL.md` is the procedure and PLAN.md ("PR 3: `/pass`") the design.
 
 ## Status line
 

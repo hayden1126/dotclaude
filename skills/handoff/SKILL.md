@@ -7,7 +7,7 @@ description: Hayden's session-handoff procedure, so a fresh session resumes from
 
 ## Overview
 
-Make a complete handoff happen so the next session resumes from current, not stale, state. Durable state lives on disk and is re-read; conversation memory does not survive compaction or `/clear`, so anything that must outlive this session goes into a file now. This skill orchestrates and delegates: it reuses the living status doc (STATUS.md), claude-md-management, the memory system, and `/commit` rather than reimplementing them. It is advisory: invoking it is the model's job, and it does the work in one pass. A handoff is **point-in-time**: make it the session's last substantive act. If you keep changing state afterward (merge, close a PR, more commits), re-run steps 1-2: the doc it wrote is now stale.
+Make a complete handoff happen so the next session resumes from current, not stale, state. Durable state lives on disk and is re-read; conversation memory does not survive compaction or `/clear`, so anything that must outlive this session goes into a file now. This skill orchestrates and delegates: it reuses the living status doc (STATUS.md), claude-md-management, the memory system, and `/commit` rather than reimplementing them. It is advisory: invoking it is the model's job, and it does the work in one pass. A handoff is **point-in-time**: make it the session's last substantive act. If you keep working afterward, the doc it wrote is stale: run the delta mode below.
 
 ## When to use
 
@@ -38,8 +38,19 @@ Ordered. Doc-drift reconciliation is an early gate: the durable docs must match 
 5. **Commit cleanly and verify.** Stage the doc fixes, STATUS, and memory files together and commit via `/commit` (branch-first on the default branch, never push without approval). Confirm everything intended is committed; note any deliberately uncommitted work in STATUS. Run the verification target (tests, build, lint) and record green, or note red and why. A PR for this work (opened only with Hayden's approval) stays a draft (`gh pr create --draft`) until this step is done, and goes ready (`gh pr ready <n>`) only after it, so it merges once with its docs and STATUS; if the repo installs from its checkout, install and smoke-test from the branch first, so STATUS can say so. A fact only knowable after the merge rides in the next PR, not a STATUS-only one. **In a lane:** commit on the lane branch. The record is outside the tree (hidden by `info/exclude`), so there is nothing to stage for it; note an unpushed branch in the record, since pushes wait for Hayden.
 
 6. **Leave next-session pointers.** Ensure the status doc's next-step block ("Notes for next session", or Next in a lane record) names the exact next concrete step and what to verify, and include the commit range so the next session can `git log` the work. In a lane, write the range into the record after the step-5 commit, so the record postdates it. Close with a short summary to Hayden: drift found and fixed or flagged, STATUS updated, memory changes, git and verification state.
+    - **Approval marker:** append `(approved by Hayden YYYY-MM-DD)` to the next step only when Hayden approved that exact step in this session, and cite the approval (his words or the plan he accepted) beside it. Never infer one from a general "go ahead" or an earlier session. `/pass` reads it: with the marker the fresh session starts in the default mode and continues, without it in plan mode. `handoff-check` fails a marker with no valid date.
 
 7. **Run `~/.claude/skills/handoff/scripts/handoff-check`** from the checkout, by that path: the skill dir is linked live, while the `~/.local/bin` link waits for the next `setup.sh`. It checks a clean tree (or leftovers named in the status doc by their repo-relative path; agent worktrees don't count), a status doc written after HEAD's commit and during this session, a non-empty Next block, no relative identity (a warning only in a repo with no lanes) and, in a lane, that every claim is named and an unpushed branch is noted. It exits non-zero and lists each gap: fix them and re-run. Say the handoff is done only after it passes.
+
+### Delta mode
+
+Use it when a handoff already ran this session, or when `handoff-check` says the last one is stale. Work after a handoff makes it stale: review fixes, a rebase, a decision in chat, a failed deploy. A clean PR, merge and deploy don't, since `gh` derives them. The delta runs the same procedure over a smaller range:
+
+1. **The range** is `<last commit touching the status file>..HEAD` (`git log -1 --format=%H -- <status file>` gives the base). A lane record is never committed, so in a lane the base is the head of the range the last handoff wrote into the record.
+2. **Reconcile the docs** for that range only. Skip the drift sweep when the range touches no code or docs.
+3. **Update the status doc:** overwrite the next-step block, and add the decisions and findings from chat since that handoff.
+4. Curate memory, commit and leave pointers as in steps 4-6, for what is new since the last handoff.
+5. **Always end with `handoff-check`.**
 
 ### After a merge ("merged, cleanup and handoff")
 
@@ -75,7 +86,8 @@ Always `git fetch` first: a stale remote-tracking ref is the other direction thi
 | Firing at 90% full | Hand off at a clean boundary; re-asked questions or re-suggested dead approaches mean you waited too long |
 | Committing or pushing on the default branch silently | Branch-first on default; never push without approval |
 | Opening the PR ready before the handoff, then chasing the merge with STATUS-only PRs | Draft until step 5 is done, then `gh pr ready`; one merge carries the work, its docs and STATUS |
-| Working on past a handoff, then leaving the doc it wrote stale | A handoff is point-in-time. Make it the last act; if you merge/close/commit/run more after it, re-run the reconcile (steps 1-2) |
+| Working on past a handoff, then skipping the delta handoff | A handoff is point-in-time. Make it the last act; after review fixes, a rebase or a chat decision, run the delta mode before the next handoff or `/pass` |
+| An approval marker written for a step Hayden didn't approve this session | Write `(approved by Hayden YYYY-MM-DD)` only for that exact step, citing the approval. Never infer it: it lets `/pass` resume without a plan checkpoint |
 | A volatile fact stored in two places (branch name, counts, PR number stated twice) | Give it ONE home and point at it; grep only to confirm no second copy returned. Two copies is a future contradiction, not a backup |
 | Storing push/merge/PR state as a fact ("pushed", "merged", "nothing unpushed") | It is stale the moment it is committed and merges flip on GitHub unseen. Store the derive-command + immutable ids; see "Volatile git state" |
 | Citing raw `file.py ~line` numbers in durable docs | Anchor to function/section names instead; line numbers drift on the next edit |
