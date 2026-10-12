@@ -85,9 +85,9 @@ stored here).
     `--cancel`, the trigger, the delta handoff, the Star carry. Live in a scratch window: a plain
     pass respawned in plan mode with the Star carried; an approved first item resumed in the
     default mode; compact typed `/compact` and the resume prompt, then plan mode; `--cancel`
-    ended a pending waiter. As built and why: PLAN.md PR 3 "As built". **Not installed:** the
-    allow rule `Bash(pass-respawn -C *)` (the classifier refused the `setup.sh` run as
-    "Auto-Mode Bypass"); Hayden runs `./setup.sh` and diffs settings.json (only that line).
+    ended a pending waiter. As built and why: PLAN.md PR 3 "As built". The allow rule
+    `Bash(pass-respawn -C *)` is installed too: the classifier refused my `setup.sh` run as
+    "Auto-Mode Bypass", so Hayden ran it (settings.json diff: that one line, 2026-10-12).
   - **PR 4 `feat/autopass`: designed, after PR 3** (Hayden split it out 2026-10-12). Three token
     tiers from `autoCompactWindow` (300k soft, 480k wrap-up, 520k hard), read from the
     transcript; the calibration over his transcripts is in PLAN.md PR 4.
@@ -144,8 +144,7 @@ stored here).
 
 ## Notes for next session
 - **Next: Hayden approves pushing `feat/pass` and opening PR 3 as a draft** (range
-  `main..feat/pass`, base `0ad597d`), and runs `./setup.sh` for the allow rule. Mark it ready
-  once open; merge on Hayden's approval. Then PR 4 on `feat/autopass` (PLAN.md PR 4; step 0
+  `main..feat/pass`, base `0ad597d`). Mark it ready once open; merge on Hayden's approval. Then PR 4 on `feat/autopass` (PLAN.md PR 4; step 0
   spikes whether UserPromptSubmit sees a defined slash command), then the release-skill PR in
   the work repos (PLAN.md PR 3 "Delta handoff"). Verify before touching `/pass`: `tests/pass`,
   `tests/lanes`, `tests/setup`, `tests/delegation`, from the main checkout
