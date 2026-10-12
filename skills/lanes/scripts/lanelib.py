@@ -110,6 +110,23 @@ def git(args: list[str],
                           check=check, timeout=60)
 
 
+# A plain /pass respawns the pane, which kills every background task with it. So it goes ahead
+# only after a Stop that listed no task but these: `dream` is memory upkeep. Teammates and
+# monitors count, though stop-ring.sh rings past them (it asks "is the turn waiting on its
+# result?", not "would a respawn kill it?"). pass-respawn refuses by this rule, and the autopass
+# watcher (hooks/context_watch.py) says "compact mode" by it, so the two never disagree.
+PLAIN_PASS_IGNORES = frozenset({"dream"})
+
+
+def plain_pass_blockers(tasks) -> list[str]:
+    """The task labels (a stop record's `tasks`, or the Stop payload's background_tasks types,
+    `unlabeled` for one with none) that make a plain pass refuse, in order. A list that isn't a
+    list blocks, as `?`: with no task list the respawn can't be shown safe."""
+    if not isinstance(tasks, list):
+        return ["?"]
+    return [str(t) for t in tasks if t not in PLAIN_PASS_IGNORES]
+
+
 def state_dir() -> str:
     """$XDG_STATE_HOME/dotclaude: readable but not writable from the Bash sandbox, and denied to
     delegated agents (policy.toml's {state_dir})."""

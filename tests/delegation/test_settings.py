@@ -211,6 +211,43 @@ class Baseline(unittest.TestCase):
         self.assertTrue(os.access(os.path.join(REPO, "hooks", "pass-banner.sh"), os.X_OK))
         self.assertTrue(os.path.exists(os.path.join(REPO, "hooks", "pass_banner.py")))
 
+    def test_the_context_watcher_is_wired_on_stop_and_main_thread_tool_calls(self):
+        # PLAN.md "PR 4": the tiers block a Stop, and reach long autonomous turns through
+        # PostToolUse. PostToolUse fires on every call, a subagent's too, so the inline
+        # pre-filter skips agent_id payloads before any Python starts. It never blocks by exit
+        # code.
+        watch = 'bash "$HOME/.claude/hooks/context-watch.sh"'
+        self.assertIn(watch, commands("Stop"))
+        (entry,) = [e for e in S["hooks"]["PostToolUse"]
+                    if any("context-watch" in h["command"] for h in e["hooks"])]
+        self.assertEqual(entry["matcher"], "*")
+        (h,) = entry["hooks"]
+        self.assertEqual(h["command"], "i=$(cat); case \"$i\" in *'\"agent_id\"'*) ;; *) "
+                         "printf '%s' \"$i\" | " + watch + " ;; esac")
+        hooks = [h for event in ("Stop", "PostToolUse") for e in S["hooks"][event]
+                 for h in e["hooks"] if "context-watch" in h["command"]]
+        self.assertEqual(len(hooks), 2)
+        for h in hooks:
+            self.assertEqual(h["timeout"], 5)
+            self.assertNotIn("exit 2", h["command"])
+        self.assertTrue(os.access(os.path.join(REPO, "hooks", "context-watch.sh"), os.X_OK))
+        for f in ("context_watch.py", "autopass_state.py"):
+            self.assertTrue(os.path.exists(os.path.join(REPO, "hooks", f)))
+
+    def test_the_autopass_toggle_is_wired_on_prompt_submit_with_its_command(self):
+        # Spike A1: only a defined command reaches the hook, so skills/autopass defines it, and
+        # the model may never run it on its own.
+        toggle = 'bash "$HOME/.claude/hooks/autopass-toggle.sh"'
+        self.assertIn(toggle, commands("UserPromptSubmit"))
+        (h,) = [h for e in S["hooks"]["UserPromptSubmit"] for h in e["hooks"]
+                if "autopass-toggle" in h["command"]]
+        self.assertEqual(h["timeout"], 5)
+        self.assertTrue(os.access(os.path.join(REPO, "hooks", "autopass-toggle.sh"), os.X_OK))
+        with open(os.path.join(REPO, "skills", "autopass", "SKILL.md")) as f:
+            head = f.read().split("---")[1]
+        self.assertIn("name: autopass", head)
+        self.assertIn("disable-model-invocation: true", head)
+
     def test_the_lane_hooks_are_wired_and_fail_open(self):
         # docs/lanes.md: the guard on every file-tool write; identity on every context reset (a
         # compact is the net for an unplanned auto-compact), and the mirror on Stop and
