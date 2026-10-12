@@ -1,5 +1,5 @@
-"""pass-banner: show what Claude said since your last prompt, once, as the banner of the session a
-/pass respawn started.
+"""pass-banner: show what Claude said in the last turn, once, as the banner of the session a /pass
+respawn started.
 
 hooks/pass-banner.sh runs this file with python3 -I, passing the SessionStart event on stdin; the
 rules are in that shim's header. Tests import banner() and run the shim
@@ -15,7 +15,8 @@ import time
 
 TTL = 120                      # seconds: a startup later than this isn't the respawn
 MAX_LINES, MAX_BYTES = 40, 4096   # the whole banner, head and tail included (spike A2: 3.6 KiB)
-HEAD_ONE, HEAD_MANY = "Last reply before the pass:\n", "Since your last prompt:\n"
+HEAD_ONE, HEAD_MANY = "Last reply before the pass:\n", "Last turn's replies:\n"
+POPUP = "~/.local/bin/pass-last"  # setup-tmux.sh links it; Ctrl-b P runs it
 ELLIPSIS = chr(0x2026)
 # C0 controls but tab and newline, DEL and C1: an escape sequence in a reply stays out of the
 # terminal.
@@ -57,35 +58,41 @@ def size(text: str) -> int:
     return len(text.encode("utf-8"))
 
 
-def tail(left: int) -> str:
-    return "%s %d more line%s: Ctrl-b P shows the whole reply" % (
-        ELLIPSIS, left, "" if left == 1 else "s")
+def tail(left: int, where: str) -> str:
+    """The line after a cut banner: Ctrl-b P where setup-tmux.sh installed the popup, else the
+    file (where) that holds every reply."""
+    more = "%s %d more line%s" % (ELLIPSIS, left, "" if left == 1 else "s")
+    if os.path.exists(os.path.expanduser(POPUP)):
+        return more + ": Ctrl-b P shows the whole reply"
+    return "%s in %s" % (more, where)
 
 
 def newest_group(replies) -> list[str]:
-    """The texts of the replies that share the newest entry's prompt_id, oldest first: everything
-    said since the last prompt (a Stop a hook blocks and the Stop ending the continued turn share
-    one, spike A5)."""
+    """The texts of the last turn, oldest first: the run of valid replies at the end that share
+    the newest one's prompt_id (a Stop a hook blocks and the Stop ending the continued turn share
+    one, spike A5). tmux/pass-last splits turns the same way, by runs."""
     valid = [r for r in replies if isinstance(r, dict) and isinstance(r.get("prompt_id"), str)
              and isinstance(r.get("text"), str) and r["text"].strip()] \
         if isinstance(replies, list) else []
-    if not valid:
-        return []
-    newest = valid[-1]["prompt_id"]
-    return [r["text"] for r in valid if r["prompt_id"] == newest]
+    run = []
+    for r in reversed(valid):
+        if run and r["prompt_id"] != run[-1]["prompt_id"]:
+            break
+        run.append(r)
+    return [r["text"] for r in reversed(run)]
 
 
-def banner(texts: list[str]) -> str:
+def banner(texts: list[str], where: str = "") -> str:
     """The banner: a head, then the texts with a blank line between, whole when they fit in
     MAX_LINES lines and MAX_BYTES bytes (head included). Otherwise as many lines as fit with
-    the tail ("N more lines: Ctrl-b P ...") also inside MAX_BYTES. A first line longer than
+    the tail ("N more lines: Ctrl-b P ...", or the file where) also inside MAX_BYTES. A first line longer than
     that is cut on a character boundary and counts as left."""
     head = HEAD_ONE if len(texts) == 1 else HEAD_MANY
     lines = "\n\n".join(clean(t).strip() for t in texts).split("\n")
     whole = head + "\n".join(lines)
     if len(lines) <= MAX_LINES and size(whole) <= MAX_BYTES:
         return whole
-    budget = MAX_BYTES - size(head) - size("\n" + tail(len(lines)))  # tail's longest form
+    budget = MAX_BYTES - size(head) - size("\n" + tail(len(lines), where))  # longest form
     out, used, cut = [], 0, False
     for line in lines:
         if len(out) == MAX_LINES:
@@ -98,12 +105,12 @@ def banner(texts: list[str]) -> str:
             break
         out.append(line)
         used += need
-    return head + "\n".join(out) + "\n" + tail(len(lines) - len(out) + cut)
+    return head + "\n".join(out) + "\n" + tail(len(lines) - len(out) + cut, where)
 
 
 def load(path: str):
     try:
-        with open(path) as f:
+        with open(path, encoding="utf-8") as f:
             return json.load(f)
     except (OSError, ValueError):
         return None
@@ -151,7 +158,7 @@ def main() -> None:
     tab = current_tab(pane)
     if tab is None or entry.get("tab") != tab:
         return
-    sys.stdout.write(json.dumps({"systemMessage": banner(texts)}))
+    sys.stdout.write(json.dumps({"systemMessage": banner(texts, path)}))
     sys.stdout.flush()
     entry["shown"] = True
     try:

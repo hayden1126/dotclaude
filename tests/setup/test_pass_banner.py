@@ -1,18 +1,22 @@
 """hooks/pass-banner.sh (and pass_banner.py): after a plain /pass respawned a tab, the new
-session's `startup` shows everything the old session said since the last prompt, once, as a
-SessionStart systemMessage (stdlib only).
+session's `startup` shows what the old session said in its last turn, once, as a SessionStart
+systemMessage (stdlib only).
 
 The entry is $XDG_STATE_HOME/dotclaude/pass-last/<pane number>.json, which pass-respawn writes.
 A stub tmux on PATH answers `display` with the server line ($STUB_SERVER; empty fails) and logs
-each call. The env starts scrubbed of CLAUDE* and TMUX*, since the test may run in a Claude tab."""
+each call. The env starts scrubbed of CLAUDE* and TMUX*, since the test may run in a Claude tab.
+HOME is a temp dir holding a ~/.local/bin/pass-last, as setup-tmux.sh links it, so the tail names
+Ctrl-b P; one test removes it."""
 import importlib.util
 import json
 import os
 import shutil
 import subprocess
 import tempfile
+import sys
 import time
 import unittest
+from unittest import mock
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 HOOK = os.path.join(REPO, "hooks", "pass-banner.sh")
@@ -38,6 +42,17 @@ TAB = {"socket": SOCKET, "server_start": 1791222157, "server_pid": 4321, "pane":
 ENV = {"TMUX": "/tmp/tmux-1000/default,1,0", "TMUX_PANE": "%7",
        "CLAUDE_CODE_SESSION_ATTENDED": "1"}
 REPLY = "Done: the PR is up.\nNext: review it."
+# A locale whose files read as ASCII: C, with Python's UTF-8 mode and coercion off. -I ignores
+# those env switches and coerces C to UTF-8, so the fake python3 drops -I and adds -X utf8=0.
+ASCII_LOCALE = {"LC_ALL": "C", "LANG": "C", "PYTHONCOERCECLOCALE": "0", "PYTHONUTF8": "0",
+                "FAKE_PY_ASCII": "1"}
+FAKE_PYTHON = """#!/usr/bin/env bash
+if [ -n "${FAKE_PY_ASCII:-}" ]; then
+  args=(); for a in "$@"; do [ "$a" = -I ] || args+=("$a"); done
+  exec %s -X utf8=0 "${args[@]}"
+fi
+exec %s "$@"
+"""
 
 
 class Banner(unittest.TestCase):
@@ -49,6 +64,9 @@ class Banner(unittest.TestCase):
         with open(os.path.join(stubs, "tmux"), "w") as f:
             f.write(STUB)
         os.chmod(os.path.join(stubs, "tmux"), 0o755)
+        with open(os.path.join(stubs, "python3"), "w") as f:
+            f.write(FAKE_PYTHON % (sys.executable, sys.executable))
+        os.chmod(os.path.join(stubs, "python3"), 0o755)
         self.log = os.path.join(self.tmp, "calls.log")
         self.dir = os.path.join(self.tmp, "state", "dotclaude", "pass-last")
         self.env = {k: v for k, v in os.environ.items()
@@ -56,6 +74,12 @@ class Banner(unittest.TestCase):
         self.env.update(PATH=stubs + os.pathsep + self.env["PATH"], STUB_LOG=self.log,
                         HOME=os.path.join(self.tmp, "home"), STUB_SERVER=SERVER,
                         XDG_STATE_HOME=os.path.join(self.tmp, "state"))
+        self.popup = os.path.join(self.env["HOME"], ".local", "bin", "pass-last")
+        os.makedirs(os.path.dirname(self.popup))
+        open(self.popup, "w").close()
+        patch = mock.patch.dict(os.environ, {"HOME": self.env["HOME"]})  # banner() in-process
+        patch.start()
+        self.addCleanup(patch.stop)
 
     def entry(self, pane="7", message=REPLY, **fields):
         """A pass-last entry; message= gives it one reply."""
@@ -151,18 +175,46 @@ class Banner(unittest.TestCase):
                     .replace("@", "\\ud800"))
         self.assertEqual(self.start(), "Last reply before the pass:\na?b")
 
-    def test_the_newest_prompts_replies_show_together(self):
+    def test_the_last_turns_replies_show_together(self):
         # A Stop auto-pass blocks and the Stop that ends the continued turn share a prompt_id.
-        self.entry(replies=[{"prompt_id": "p1", "text": "Older prompt's reply."},
+        self.entry(replies=[{"prompt_id": "p1", "text": "Older turn's reply."},
                             {"prompt_id": "p2", "text": "First part.\n"},
                             {"prompt_id": "p2", "text": "Pass armed."}])
-        self.assertEqual(self.start(),
-                         "Since your last prompt:\nFirst part.\n\nPass armed.")
+        self.assertEqual(self.start(), "Last turn's replies:\nFirst part.\n\nPass armed.")
 
-    def test_one_reply_for_the_newest_prompt_has_the_singular_head(self):
+    def test_the_last_turn_is_the_run_at_the_end(self):
+        # The popup splits turns by runs too (tests/setup/test_pass_last.py checks they agree).
+        group = pass_banner.newest_group
+        self.assertEqual(group([{"prompt_id": "p1", "text": "a"}, {"prompt_id": "p2", "text": "b"},
+                                {"prompt_id": "p1", "text": "c"}, 5]), ["c"])
+        self.assertEqual(group([{"prompt_id": "p1", "text": "a"},
+                                {"prompt_id": "none-2.0", "text": "b"}]), ["b"])
+        self.assertEqual(group([{"prompt_id": "p1", "text": "a"}, {"prompt_id": "p1", "text": " "},
+                                {"prompt_id": "p1", "text": "c"}]), ["a", "c"])
+
+    def test_one_reply_in_the_last_turn_has_the_singular_head(self):
         self.assertEqual(pass_banner.banner(["only"]), "Last reply before the pass:\nonly")
-        self.assertEqual(pass_banner.newest_group(
-            [{"prompt_id": "p1", "text": "a"}, {"prompt_id": "", "text": "b"}, 5]), ["b"])
+
+    def test_without_the_popup_installed_the_tail_names_the_file(self):
+        os.remove(self.popup)
+        self.entry(message="\n".join(f"line {i}" for i in range(1, 61)))
+        out = self.start()
+        self.assertEqual(out.split("\n")[-1], "%s 20 more lines in %s" % (
+            chr(0x2026), os.path.join(self.dir, "7.json")))
+        self.assertLessEqual(len(out.encode()), 4096)
+        long = pass_banner.banner([chr(0x00E9) * 5000], "/state/dotclaude/pass-last/7.json")
+        self.assertLessEqual(len(long.encode()), 4096)
+        self.assertTrue(long.endswith(" 1 more line in /state/dotclaude/pass-last/7.json"))
+
+    def test_an_entry_is_read_as_utf8_in_any_locale(self):
+        self.entry(message="caf" + chr(0x00E9) + " " + chr(0x2026))
+        with open(os.path.join(self.dir, "7.json"), "rb") as f:
+            raw = f.read()
+        with open(os.path.join(self.dir, "7.json"), "wb") as f:  # as pass-respawn writes it
+            f.write(raw.replace(b"\\u00e9", chr(0x00E9).encode()))
+        self.assertIn(chr(0x00E9).encode(), open(os.path.join(self.dir, "7.json"), "rb").read())
+        self.assertEqual(self.start(session={**ENV, **ASCII_LOCALE}),
+                         "Last reply before the pass:\ncaf" + chr(0x00E9) + " " + chr(0x2026))
 
     def test_a_long_reply_is_cut_at_40_lines(self):
         self.entry(message="\n".join(f"line {i}" for i in range(1, 61)))
