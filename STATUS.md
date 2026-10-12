@@ -153,7 +153,10 @@ stored here).
   - Part 2 is next: the context watcher, `/autopass`, the tiered ctx widget and the `lane ls`
     CTX column.
   - **`tests/pass` is load-sensitive:** a load spike (one run took 1,248 s) failed timing
-    asserts in untouched PR 3 tests too. Judge it on a run at normal speed (about 46 s). This branch already carries the post-#88 STATUS lines (a
+    asserts in untouched PR 3 tests too. Judge it on a run at normal speed (about 46 s).
+  - **`test_tmux_hooks` flakes on `main` too:** 2 of 6 runs under parallel load (2026-10-12),
+    each time a different test. They wait 3 s for stop-ring's detached ring decision. Not from
+    PR 4; a fix would poll for longer or make the settle deterministic. This branch already carries the post-#88 STATUS lines (a
   fact known only after a merge rides in the next PR). Then the release-skill PR in the work
   repos (PLAN.md PR 3 "Delta handoff"). Verify before touching `/pass`: `tests/pass`,
   `tests/lanes`, `tests/setup`, `tests/delegation`, from the main checkout
