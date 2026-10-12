@@ -78,11 +78,11 @@ stored here).
     `git commit` worked with no extra
     rule, `handoff-check` failed an un-updated record, and `lane ls` flagged `handoff?`. Guard
     replay over the work repo's 273 real STATUS edits: 13 denies, all genuine relative claims, no
-    false positives. Commits `main..feat/lanes`. Waiting on Hayden's nod to push and
-    open the PR.
+    false positives. PR #86 (`gh pr view 86`); commits `main..feat/lanes`.
   - **PR 2 `feat/lanes-lead`** (lane open, lane lock, the lead's triage and merge order) and
     **PR 3 `feat/pass`** (`/pass`, `pass compact`, opt-in auto-pass on context): not started;
-    PLAN.md has both.
+    PLAN.md has both. PR 2 also carries the delegation fix (PLAN.md "Delegation guardrails reach
+    the parent lane": a lane session's writer is watched against the main checkout, not the lane).
   - After PR 1 and 2 merge: migrate the work repo (its own PR there). The concrete values and the
     incident ids are in `~/scratch/lanes/PRIVATE.md` (private).
 - **`deck-production`: deferred (Hayden, 2026-10-05: workflow improvements first).** The geometry
@@ -133,12 +133,12 @@ stored here).
   `claude -p` repro and the 2.1.285 boundary; the karaoke session's has the incident.
 
 ## Notes for next session
-- **Next: Hayden approves pushing `feat/lanes` and opening its PR**, then PR 2 on `feat/lanes-lead`
-  (branched from `feat/lanes`). The checkout is on `feat/lanes`, and it is live for every session
-  (CLAUDE.md, skills and hooks are symlinked); `git switch main` outside the sandbox only after
-  the merge. Verify lanes before touching it: `tests/lanes`, `tests/setup` and `tests/delegation`
-  (run delegation from the main checkout: `test_subagent_policy` refuses to load sandboxed
-  under `.claude/worktrees/`).
+- **Next: Hayden merges PR #86** (`gh pr view 86 --json state`), then `git fetch origin
+  main:main` and `git switch main` outside the sandbox (the checkout is on `feat/lanes` and live
+  for every session). Then PR 2 on `feat/lanes-lead` from the new `main`: `lane open`, `lane lock`,
+  the lead section, and the delegation fix first (PLAN.md PR 2). Verify lanes before touching it:
+  `tests/lanes`, `tests/setup`, and `tests/delegation` from the main checkout
+  (`test_subagent_policy` refuses to load sandboxed under `.claude/worktrees/`).
 - **Astra waits on Hayden's plan** (`feat/codex-astra` merged as #85): two 2026-10-10 probes passed the audit (astra admitted,
   nothing disallowed), but even after a fresh `codex login` the turn gets a 400, "gpt-6-astra
   is not supported when using Codex with a ChatGPT account". Astra ran fine on 2026-09-29 and
