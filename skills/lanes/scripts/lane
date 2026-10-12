@@ -193,7 +193,13 @@ def copy_includes(repo: Repo, dest: str) -> list[str]:
         if os.path.lexists(target):
             continue
         os.makedirs(os.path.dirname(target), exist_ok=True)
-        shutil.copy2(os.path.join(repo.main, rel), target)
+        part = target + ".part"  # renamed into place whole, so a failure never leaves half a file
+        try:
+            shutil.copy2(os.path.join(repo.main, rel), part)
+            os.replace(part, target)
+        finally:
+            if os.path.lexists(part):
+                os.unlink(part)
         copied.append(rel)
     return copied
 
@@ -457,7 +463,7 @@ def board(repo: Repo) -> list[dict]:
 
 def record_text(repo: Repo, lane: dict) -> tuple[str | None, float | None]:
     """The lane's STATUS.md text and mtime, from the worktree or, when it is gone, the mirror."""
-    mirror = lanelib.mirror_dir(repo, lane["id"])
+    mirror = lanelib.mirror_dir(repo, lane["id"], restore=False)  # no lock held: read in place
     for path in [lanelib.record_path(lane)] + ([os.path.join(mirror, "STATUS.md")] if mirror else []):
         try:
             with open(path) as f:
@@ -664,22 +670,24 @@ def work_references(repo: Repo, lane: dict) -> list[str]:
     return hits
 
 
-def merged(repo: Repo, lane: dict, fetched: bool) -> tuple[str | None, str]:
-    """(how the lane's work is known merged, or None; why not). Merged means the branch has
-    commits past its base and either a merged PR's head commit is the branch tip (a squash merge
-    leaves the tip out of the base) or the tip is in the base. An old PR from a same-named branch
-    at another commit proves nothing."""
+def closable(repo: Repo, lane: dict, fetched: bool) -> tuple[str | None, str, str]:
+    """(label, state, why not) for closing a lane without --abandon; label None means it needs
+    --abandon. Merged means the branch has commits past its base and either a merged PR's head
+    commit is the branch tip (a squash merge leaves the tip out of the base) or the tip is in the
+    base; an old PR from a same-named branch at another commit proves nothing. A lane made by
+    `new` with nothing past its base did no work, so it needs --abandon. An adopted lane's base is
+    a merge-base: with nothing past it the tip is already in the base, so nothing can be lost and
+    it closes as "abandoned (no work)" unless a merged PR names that tip."""
     branch = lane["branch"]
     tip = rev(repo, branch)
     if tip is None:
-        return None, f"branch {branch} does not exist"
+        return None, "", f"branch {branch} does not exist"
     base = repo.config().get("base", "origin/main")
     fork = lane.get("base_sha") or tip
     count = git(["rev-list", "--count", f"{fork}..{tip}"], repo.toplevel)
-    # A lane made by `new` with nothing past its base did no work. An adopted lane's base is a
-    # merge-base, which a fast-forward or merge-commit merge turns into its tip, so it goes on.
-    if count.returncode == 0 and count.stdout.strip() == "0" and not lane.get("adopted"):
-        return None, f"no commits past its base {fork[:12]}"
+    no_work = count.returncode == 0 and count.stdout.strip() == "0"
+    if no_work and not lane.get("adopted"):
+        return None, "", f"no commits past its base {fork[:12]}"
     try:
         p = subprocess.run(["gh", "pr", "list", "--head", branch, "--state", "merged", "--json",
                             "number,headRefOid"], cwd=repo.toplevel, capture_output=True,
@@ -687,12 +695,15 @@ def merged(repo: Repo, lane: dict, fetched: bool) -> tuple[str | None, str]:
         rows = json.loads(p.stdout or "[]") if p.returncode == 0 else []
         for row in rows:
             if row.get("headRefOid") == tip:
-                return f"PR #{row.get('number')} merged", ""
+                return f"PR #{row.get('number')} merged", "merged", ""
     except (OSError, subprocess.SubprocessError, ValueError):
         pass
-    if git(["merge-base", "--is-ancestor", tip, base], repo.toplevel).returncode == 0:
-        return f"fully in {base}" + ("" if fetched else " (unfetched copy)"), ""
-    return None, f"no merged PR at its tip {tip[:12]}, and the tip is not in {base}"
+    in_base = git(["merge-base", "--is-ancestor", tip, base], repo.toplevel).returncode == 0
+    if in_base and no_work:
+        return "abandoned (no work)", "abandoned", ""
+    if in_base:
+        return f"fully in {base}" + ("" if fetched else " (unfetched copy)"), "merged", ""
+    return None, "", f"no merged PR at its tip {tip[:12]}, and the tip is not in {base}"
 
 
 def cmd_done(args) -> None:
@@ -707,10 +718,11 @@ def cmd_done(args) -> None:
         raise LaneError(f"refusing: lane {args.id}'s path is the main checkout")
     present = os.path.isdir(path)
     fetched = fetch(repo)
-    how, why = merged(repo, lane, fetched)
+    how, state, why = closable(repo, lane, fetched)
     if not how and not args.abandon:
         raise LaneError(f"branch {lane['branch']} is not merged: {why}. Pass --abandon to close "
                         "it anyway")
+    how, state = (how, state) if how else ("abandoned", "abandoned")
     if present and not lanelib.pids_visible():
         raise LaneError("sandboxed: this command can't see other processes, so it can't tell "
                         f"whether a session still runs in {path}. Run it as a bare "
@@ -733,8 +745,8 @@ def cmd_done(args) -> None:
         tmp = archive + ".tmp"
         source = lanelib.record_dir(lane)
         if not os.path.isdir(source):
-            source = lanelib.mirror_dir(repo, args.id)
-        lane.update(state="abandoned" if not how else "merged", closed=now_iso(), merged=how)
+            source = lanelib.mirror_dir(repo, args.id, restore=True)  # under the lock
+        lane.update(state=state, closed=now_iso(), outcome=how)
         try:
             shutil.rmtree(tmp, ignore_errors=True)
             os.makedirs(tmp)
@@ -751,7 +763,7 @@ def cmd_done(args) -> None:
                 raise LaneError(f"git worktree remove refused: {p.stderr.strip()}")
         os.rename(tmp, archive)
         shutil.rmtree(data_dir)
-    say(f"lane {args.id} closed ({how or 'abandoned'}); archived to {archive}")
+    say(f"lane {args.id} closed ({how}); archived to {archive}")
     # With no upstream, -d judges against the main checkout's HEAD, which may not have pulled the
     # merge yet; the base as upstream makes it judge against what was actually merged.
     git(["branch", "--set-upstream-to", repo.config().get("base", "origin/main"), lane["branch"]],

@@ -1,12 +1,27 @@
 """skills/lanes/scripts/lane: the CLI round trip, staleness, the claim lock and identity."""
+import importlib.machinery
+import importlib.util
 import json
 import multiprocessing
 import os
+import shutil
 import subprocess
 import sys
 import unittest
+from unittest import mock
 
 from _fixture import LANE, LanesRepo
+
+import lanelib  # on sys.path through _fixture
+
+
+def load_lane_script():
+    """The lane CLI as a module, for in-process tests (it has no .py suffix)."""
+    loader = importlib.machinery.SourceFileLoader("lane_cli", LANE)
+    spec = importlib.util.spec_from_loader("lane_cli", loader)
+    module = importlib.util.module_from_spec(spec)
+    loader.exec_module(module)
+    return module
 
 
 def claim_in(args):
@@ -153,7 +168,7 @@ class RoundTrip(LanesRepo):
         # Sandboxed, its own claude has no /proc entry: a live session in the lane would be
         # invisible, so it must refuse rather than pass.
         self.lane("new", "chart-fix")
-        self.env["LANE_SANDBOXED"] = "1"
+        self.env["_LANE_TEST_SANDBOXED"] = "1"
         p = self.run_lane("done", "chart-fix", "--abandon")
         self.assertEqual(p.returncode, 1)
         self.assertIn("bare `lane done chart-fix`", p.stderr)
@@ -230,8 +245,8 @@ class RoundTrip(LanesRepo):
         self.assertEqual((rec["id"], rec["path"]), ("scratch-lane", path))
         self.assertTrue(self.lane("whoami", cwd=path).startswith("scratch-lane "))
 
-    def test_an_adopted_lane_merged_by_fast_forward_closes_as_merged(self):
-        # Its merge-base is its tip, so "commits past the base" is zero, yet it is merged.
+    def adopt_at_main(self):
+        """An adopted worktree whose tip is in origin/main: its merge-base is its tip."""
         path = os.path.join(self.tmp, "elsewhere", "docs-lane")
         self.git("worktree", "add", "-q", "-b", "docs", path, "origin/main")
         self.commit("docs.txt", "docs\n", cwd=path)
@@ -239,8 +254,51 @@ class RoundTrip(LanesRepo):
         self.git("fetch", "-q", "origin")
         self.lane("adopt", path)
         self.assertTrue(self.lane_json("docs-lane")["adopted"])
+        return path
+
+    def closed_state(self):
+        closed = os.path.join(self.common, "lanes", "_closed")
+        (archive,) = os.listdir(closed)
+        with open(os.path.join(closed, archive, "lane.json")) as f:
+            return json.load(f)["state"]
+
+    def test_an_adopted_lane_merged_through_a_pr_closes_as_merged(self):
+        path = self.adopt_at_main()
+        tip = self.git("rev-parse", "HEAD", cwd=path).strip()
+        self.env["FAKE_GH_OUT"] = json.dumps([{"number": 9, "headRefOid": tip}])
+        self.assertIn("PR #9 merged", self.lane("done", "docs-lane"))
+        self.assertEqual(self.closed_state(), "merged")
+
+    def test_an_adopted_lane_with_nothing_past_main_closes_as_no_work(self):
+        # Nothing past origin/main, so nothing can be lost: no --abandon needed, but no
+        # "merged" label either.
+        self.adopt_at_main()
         out = self.lane("done", "docs-lane")
-        self.assertIn("fully in origin/main", out)
+        self.assertIn("abandoned (no work)", out)
+        self.assertNotIn("merged", out)
+        self.assertEqual(self.closed_state(), "abandoned")
+
+    def test_a_copy_that_fails_partway_leaves_no_partial_file(self):
+        # A half-copied file would be kept forever: copies never overwrite an existing file.
+        self.include("big.cfg")
+        lane_mod = load_lane_script()
+        repo = lanelib.resolve(self.main)
+        dest = os.path.join(self.tmp, "dest")
+        os.makedirs(dest)
+        real = shutil.copyfile
+
+        def half(src, dst, **kw):
+            with open(dst, "w") as f:
+                f.write("ha")
+            raise OSError("disk full")
+
+        with mock.patch.object(lane_mod.shutil, "copyfile", side_effect=half):
+            with self.assertRaises(OSError):
+                lane_mod.copy_includes(repo, dest)
+        self.assertEqual(os.listdir(dest), [])
+        with mock.patch.object(lane_mod.shutil, "copyfile", side_effect=real):
+            self.assertEqual(lane_mod.copy_includes(repo, dest), ["big.cfg"])
+        self.assertEqual(self.read(os.path.join(dest, "big.cfg")), "main\n")
 
     def test_done_closes_a_lane_whose_record_holds_a_dangling_link(self):
         self.lane("new", "chart-fix")
@@ -270,9 +328,9 @@ class RoundTrip(LanesRepo):
         self.assertEqual(os.listdir(closed) if os.path.isdir(closed) else [], [])
         self.assertTrue(os.path.isdir(self.lane_path("chart-fix")))
 
-    def test_done_and_asks_read_a_mirror_left_mid_swap(self):
-        # A killed hook left only mirror.old, then the worktree was removed raw: mirror.old is
-        # the only copy, so every reader must find it, and done must archive it.
+    def leave_only_mirror_old(self):
+        """A killed hook left only mirror.old, then the worktree was removed raw: mirror.old is
+        the only copy of the record."""
         self.lane("new", "chart-fix")
         path = self.lane_path("chart-fix")
         text = self.read(self.record("chart-fix")).replace(
@@ -283,7 +341,17 @@ class RoundTrip(LanesRepo):
         data = os.path.join(self.common, "lanes", "chart-fix")
         os.rename(os.path.join(data, "mirror"), os.path.join(data, "mirror.old"))
         self.git("worktree", "remove", path)
+        return data
+
+    def test_a_lock_free_reader_reads_mirror_old_in_place(self):
+        # asks holds no lock, so it must not rename under a hook's swap.
+        data = self.leave_only_mirror_old()
         self.assertIn("chart-fix: - pick the chip row", self.lane("asks"))
+        self.assertTrue(os.path.isdir(os.path.join(data, "mirror.old")))
+        self.assertFalse(os.path.exists(os.path.join(data, "mirror")))
+
+    def test_done_archives_a_mirror_left_mid_swap(self):
+        self.leave_only_mirror_old()
         self.lane("done", "chart-fix", "--abandon")
         (archive,) = os.listdir(os.path.join(self.common, "lanes", "_closed"))
         self.assertIn("pick the chip row", self.read(os.path.join(
