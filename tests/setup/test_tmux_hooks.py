@@ -256,6 +256,41 @@ class Hooks(unittest.TestCase):
                       {"background_tasks": [{"id": "b1", "type": "local_bash", "status": "running"}]})
         self.assertTrue(self.rang())
 
+    def stop_record(self, sid="abcdef12-0000"):
+        path = os.path.join(self.state, "dotclaude", "stops", f"{sid}.json")
+        if not os.path.exists(path):
+            return None
+        with open(path) as f:
+            return json.load(f)
+
+    def test_each_stop_writes_the_sessions_stop_record(self):
+        # pass-respawn reads it: a plain pass respawns only after a Stop with no waits.
+        before = time.time()
+        self.run_hook("stop-ring.sh", TAB, {"background_tasks": [
+            {"id": "t1", "type": "teammate", "status": "running"}]})
+        rec = self.stop_record()
+        self.assertEqual((rec["session_id"], rec["waits"], rec["tasks"]),
+                         ("abcdef12-0000", [], ["teammate"]))
+        self.assertGreaterEqual(rec["time"], before - 1)
+        self.assertLessEqual(rec["time"], time.time() + 1)
+        tasks = [{"id": "b1", "type": "shell"}, {"id": "a1", "type": "subagent"},
+                 {"id": "d1", "type": "dream"}]
+        self.run_hook("stop-ring.sh", TAB, {"background_tasks": tasks})
+        self.assertEqual(self.stop_record()["waits"], ["shell", "subagent"])
+        self.assertIn("stop quiet busy=1 tasks=shell,subagent,dream", self.ring_log()[-1])
+        self.assertEqual(os.listdir(os.path.join(self.state, "dotclaude", "stops")),
+                         ["abcdef12-0000.json"])  # renamed into place: no temp file left
+
+    def test_a_subagent_stop_or_an_unsafe_id_writes_no_stop_record(self):
+        self.run_hook("stop-ring.sh", TAB, {"agent_id": "a1"})
+        self.assertIsNone(self.stop_record())
+        for sid in ("../evil", "", ".hidden", "a/b"):
+            with self.subTest(sid=sid):
+                self.run_hook("stop-ring.sh", TAB, {"session_id": sid})
+        self.assertFalse(os.path.exists(os.path.join(self.state, "dotclaude", "stops")) and
+                         os.listdir(os.path.join(self.state, "dotclaude", "stops")))
+        self.assertFalse(os.path.exists(os.path.join(self.state, "dotclaude", "evil.json")))
+
     DEQUEUE = {"type": "queue-operation", "operation": "dequeue",
                "timestamp": "2026-10-06T19:26:22.917Z", "sessionId": "abcdef12-0000"}
 
