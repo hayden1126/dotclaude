@@ -9,9 +9,11 @@
 # test_context_watch.py holds the cases. Quiet for a subagent; a `claude -p` or `claude --bg`
 # session (CLAUDE_CODE_SESSION_ATTENDED=0) gets its count written (`lane ls` reads it) but no
 # nudge, since it has no pane to respawn. Fail-open: always exits 0, and anything that goes
-# wrong says nothing.
+# wrong says nothing to the session; Python's errors go to
+# $XDG_STATE_HOME/dotclaude/context-watch.err (added after a live run wrote no count).
 set -uo pipefail
 
 src=$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null) || exit 0
-python3 -I "${src%/*}/context_watch.py" 2>/dev/null
+err="${XDG_STATE_HOME:-$HOME/.local/state}/dotclaude/context-watch.err"
+python3 -I "${src%/*}/context_watch.py" 2>>"$err"
 exit 0

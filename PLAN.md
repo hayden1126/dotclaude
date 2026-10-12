@@ -774,6 +774,20 @@ all on 1M-window models). Context at each event, in thousands of tokens:
   (`origin.kind` "human") whose content is the string `<command-message>probeskill
   </command-message>\n<command-name>/probeskill</command-name>\n<command-args>hello
   </command-args>`, followed by an `isMeta` user entry holding the skill's body.
+- **A8 (the live smoke run, after install): at Stop the turn's last assistant entry is not yet
+  readable in the transcript.**
+  - What the smoke session (`185d6425`, scratch repo `~/scratch/autopass-smoke`) did:
+    - Its first Stop wrote no count: `tokens()` found no assistant entry.
+    - Its second Stop wrote 41,501, which is turn 1's count, while turn 2's entry says 41,541.
+    - The entries' `timestamp` precedes `stop_hook_summary` by about 90 ms, but the file had
+      not caught up when the hook read it.
+    - A3 compared counts after the fact, so it missed this.
+  - Effect: the Stop-time count lags one turn. PostToolUse reads entries already written, so it
+    stays fresh. A long final reply can still cross a tier one Stop late.
+  - **Open, the next step:** probe whether the entry becomes readable during the Stop hook (poll
+    up to ~1.5 s, log when it appears). If it does, have the watcher poll on Stop until an entry
+    newer than its last count appears. If not, use the payload's `last_assistant_message`
+    as the sign, and fall back to correcting the count from a detached child.
 - **A7 (the statusline payload):** `context_window.total_input_tokens` equals the
   `current_usage` sum and the transcript's last usage, after one turn (52,075) and after a
   second (52,252). It is the current context, not a session total. `context_window_size` is

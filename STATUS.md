@@ -82,10 +82,8 @@ stored here).
     Step 1 is its own PR after PR 3 and before the work repo migration; step 2 later.
   - PR 3 (`/pass`) merged as #88 (`gh pr view 88`), installed with its allow rule; its live runs
     and the as-built notes are in PLAN.md PR 3 "As built".
-  - **PR 4 `feat/autopass`: designed, branch cut from main, not started** (Hayden split it out
-    2026-10-12). Three token
-    tiers from `autoCompactWindow` (300k soft, 480k wrap-up, 520k hard), read from the
-    transcript; the calibration over his transcripts is in PLAN.md PR 4.
+  - **PR 4 `feat/autopass`: built, installed, live smoke in progress.** The state and the next
+    step are in "Notes for next session"; the design and "As built" are in PLAN.md PR 4.
   - After PR 3: the release skill in the work repos gets its post-release Next block and a
     closing `handoff-check` (its own PR there; PLAN.md PR 3 "Delta handoff").
   - Migrate the work repo (its own PR there). The concrete values and the
@@ -138,61 +136,35 @@ stored here).
   `claude -p` repro and the 2.1.285 boundary; the karaoke session's has the incident.
 
 ## Notes for next session
-- **Next: PR 4 part 2 on `feat/autopass`** (PLAN.md "PR 4: auto-pass"; Hayden approved the
-  build plan 2026-10-12). Spikes A1-A5 passed (PLAN.md "Spike results"); `/autopass` ships as a
-  defined command the hook blocks.
-  - **Part 1 is merged into the branch** (`f4fa52e`, three review rounds, none medium or worse
-    after round 2). It covers the last turn's replies across a plain pass: `hooks/stop_ring.py`
-    keeps them, `hooks/pass-banner.sh` shows them once, and `tmux/pass-last` on Ctrl-b P
-    shows them any time.
-    - Live now: the new `stop-ring` (the checkout is the live hook install).
-    - Not live until `./setup.sh` and `./setup-tmux.sh`: the banner's SessionStart entry and
-      Ctrl-b P.
-    - Still unchecked live: Ctrl-b P, both menu entries, `less -+F +G`, and the banner after a
-      real `/pass`.
-  - **Part 2a is merged into the branch** (`ce589a3`, three review rounds plus my anchor fix).
-    It adds `hooks/context_watch.py` (the tiers, on Stop and PostToolUse), `hooks/autopass_state.py`
-    (the window, the tiers, the tab flag, `decide()`), and `/autopass` (`skills/autopass` plus
-    `hooks/autopass-toggle.sh`).
-    - The plain-pass rule now lives once, in `lanelib.plain_pass_blockers`.
-    - Tiers scale with the window and are exact at 600k. The lead is on by default.
-    - Not live until `./setup.sh`. Unverified live: a skill-defined `/autopass` reaching
-      UserPromptSubmit (spike A1 used a `.claude/commands` file).
-  - **Part 2b is merged into the branch** (`84cc4a4`, two review rounds plus my fixes for the
-    round-2 lows).
-    - The ctx widget colors by the tiers and shows an `A` cue when auto-pass is on. It writes
-      `window` into `ctx/<sid>.json`, and both writers merge under `ctx-watch/<sid>.ctx.lock`.
-    - `lane ls` gains CTX and STATE columns, and `lane init` gains `--autopass/--no-autopass`.
-    - **Live now** (the widget is symlinked): this session's `ctx/<sid>.json` holds
-      `window: 1000000`, and the cue resolved to off, `default`.
-    - Settled live: the statusline's `total_input_tokens` is the current context; it equals the
-      `current_usage` sum and the transcript's last usage.
-  - **Part 2c is merged into the branch** (`3f566e6`, one review round). A refused pass is held
-    on every client of the session until a key, plus a toast, except `cancelled`, `resumed` and
-    `gone`. The pass skill stops leftover tasks or uses compact mode. `pass-respawn` is live
-    now (the checkout is the install).
-  - **All of PR 4 is on the branch; PLAN.md has "As built".** Next, in order:
-    1. Hayden installs from the branch: copy `~/.claude/settings.json`, run `./setup.sh`, diff
-       the two, then `./setup-tmux.sh` (the classifier refused a `setup.sh` run in PR 3).
-    2. Live smoke tests, each in a scratch tmux window:
-       - `/autopass status`, `/autopass on` (blocked, no model turn, the tab not left busy);
-       - at lowered tiers (`tiers = [...]` in `~/.config/dotclaude/pass.toml`), each tier
-         fires once and a pass follows;
-       - `/pass` shows the banner, and Ctrl-b P plus both menu entries reopen it;
-       - a pass refused for a running Monitor shows the held notice and the toast;
-       - the `A` cue, and `lane ls` CTX and STATE.
-    3. Open the draft PR, then mark it ready after STATUS. Push and merge only on Hayden's
-       approval.
-  - **`tests/pass` is load-sensitive:** a load spike (one run took 1,248 s) failed timing
-    asserts in untouched PR 3 tests too. Judge it on a run at normal speed (about 46 s).
-  - **`test_tmux_hooks` flakes on `main` too:** 2 of 6 runs under parallel load (2026-10-12),
-    each time a different test. They waited 3 s for stop-ring's detached ring decision; that
-    wait is now 15 s on this branch (positive-only, so it costs nothing when it passes). Watch
-    for flakes in `seen()`'s 3 s wait, which also serves negative checks. This branch already carries the post-#88 STATUS lines (a
-  fact known only after a merge rides in the next PR). Then the release-skill PR in the work
-  repos (PLAN.md PR 3 "Delta handoff"). Verify before touching `/pass`: `tests/pass`,
-  `tests/lanes`, `tests/setup`, `tests/delegation`, from the main checkout
-  (`test_subagent_policy` refuses to load under `.claude/worktrees/`).
+- **Next: fix the Stop-time lag in PR 4's watcher (PLAN.md "Spike results" A8), then the rest of
+  the live smoke tests, then the draft PR.** `feat/autopass` holds all of PR 4: four writer parts,
+  each reviewed until no finding was medium or worse, with PLAN.md "As built". It is installed on
+  HAYPC (Hayden ran `setup.sh` and `setup-tmux.sh` 2026-10-12; the settings diff was only the
+  four new hook entries).
+  1. **A8:** at Stop, the turn's last assistant entry isn't readable yet, so the count lags one
+     turn (a session's first Stop writes none). Probe whether it appears during the hook, then
+     fix `context_watch.tokens`/`handle` and add a test. `context-watch.err` in the state dir
+     now catches the watcher's Python errors.
+  2. **Smoke so far (passed):** `/autopass status` and `on` were blocked with no model turn, and
+     the tab stayed `idle`. The tab flag was written. The widget shows `Ctx 41.5k 7% A`, and
+     `ctx/<sid>.json` gets `window`. Cosmetic: `/autopass status` names `~/.config/...` even
+     when `XDG_CONFIG_HOME` moved it.
+  3. **Smoke still to run:** use a scratch window in `~/scratch/autopass-smoke` started with
+     `XDG_CONFIG_HOME=~/scratch/autopass-smoke-conf`, whose `pass.toml` has `autopass = true`
+     and `tiers = [60000, 75000, 90000]` and links `git` to `~/.config/git`. Check:
+     - each tier fires once and a pass follows;
+     - `/pass` shows the banner, and Ctrl-b P plus both menu entries reopen it;
+     - a pass refused for a running Monitor is held, with the toast;
+     - `lane ls` shows CTX and STATE.
+  4. Open the draft PR, then mark it ready after STATUS. Push and merge only on Hayden's
+     approval.
+  - Then the release-skill PR in the work repos (PLAN.md PR 3 "Delta handoff").
+  - Verify from the main checkout (`test_subagent_policy` refuses to load under
+    `.claude/worktrees/`): `tests/setup`, `tests/pass`, `tests/lanes`, `tests/delegation`. The
+    last full run on the merged branch was green: 466, 139, 155 and 646 tests.
+  - **Flakes:** `tests/pass` fails timing asserts under a load spike, so judge it on a run of
+    about 46 s. `test_tmux_hooks` flaked on `main` too; its ring-decision wait is now 15 s.
+    Watch `seen()`'s 3 s wait, which also serves negative checks.
 - **Astra waits on Hayden's plan** (`feat/codex-astra` merged as #85): two 2026-10-10 probes passed the audit (astra admitted,
   nothing disallowed), but even after a fresh `codex login` the turn gets a 400, "gpt-6-astra
   is not supported when using Codex with a ChatGPT account". Astra ran fine on 2026-09-29 and
