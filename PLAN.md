@@ -377,6 +377,43 @@ session):
 
 ## PR 3: `/pass` (`feat/pass`)
 
+**As built (2026-10-12), where it differs from the lists below.** The script's docstring and
+`skills/pass/SKILL.md` are the as-built reference. Two review rounds (17 findings, all fixed)
+and live runs shaped these:
+- **The turn's end comes from Claude Code's per-session file** (`~/.claude/sessions/<pid>.json`),
+  not tmux's per-window `@claude_state`. The window state reads `idle` on a hook-blocked Stop,
+  during a `/compact`, and for any split pane. At the prompt the file reads `idle`, or `shell`
+  while a background shell runs (found live: a compact waiter sat until its timeout). The
+  waiter also checks the session id, `procStart` and pane, and runs a final re-check right
+  before acting: the same `statusUpdatedAt`, the pane still running that claude, not in copy
+  mode, and no unsent draft in the input box (a dim ghost suggestion isn't one).
+- **Background work comes from the Stop payload, not the process tree.** In-process agents are
+  no child process. `hooks/stop-ring.sh` writes a per-session stop record (time, task labels,
+  transcript path), and a plain pass drops `busy` on any task but `dream`, a teammate included.
+- **A prompt typed after the call drops the pass** (`resumed`): a typed user entry, or a
+  mid-turn `queue-operation` enqueue or `queued_command` attachment. The approval and the mode
+  are read at act time.
+- **Approval is per step:** only the Next block's first item, dated within the session and not
+  in the future. `handoff-check` fails a malformed, stale or future marker, and one it can't date
+  against a session start.
+- **Single flight:** the waiter holds a per-session flock; `pass-respawn -C <dir> --cancel` ends
+  a pending pass on a verified pid.
+- **Trust:** writable roots cover the launch dir and `additionalDirectories`, with user and
+  managed `denyWrite` carved out (otherwise every pass in dotclaude would refuse); the script and
+  `handoff-check` refuse when sandbox-writable; children get a pinned PATH; the shebang is
+  `/usr/bin/python3`; prompts carry only computed paths.
+- **Outcomes** grew `gone`, `failed`, `error` and `cancelled`.
+- **An allow rule, `Bash(pass-respawn -C *)`:** the auto-mode classifier refused a bare call as
+  "Create Unsafe Agents" after allowing one, so the skill always calls `pass-respawn -C
+  <toplevel> [--compact]`. Installing a new allow rule is Hayden's step (the classifier refused
+  the `setup.sh` run as "Auto-Mode Bypass").
+- **The sandbox's `.claude/hooks` stub** joined `git/sandbox-stubs.ignore`. Untracked, it failed
+  `handoff-check`'s clean check in every repo.
+- **Live runs** (a scratch window): a plain pass respawned in plan mode with the Star carried; an
+  approved first item resumed in the default mode; compact typed `/compact` and the resume
+  prompt, which entered plan mode; `--cancel` ended a pending waiter; a `!pass-respawn` typed in
+  bash mode works too (its output starts a model turn, which is harmless).
+
 **Changes from the 2026-10-11 design** (Hayden, 2026-10-12):
 - Auto-pass (the context watcher, its config, `/pass auto`) moved to PR 4.
 - **Work after a handoff makes it stale.** The detached respawner re-runs `handoff-check` right
