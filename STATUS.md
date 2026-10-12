@@ -138,10 +138,22 @@ stored here).
   `claude -p` repro and the 2.1.285 boundary; the karaoke session's has the incident.
 
 ## Notes for next session
-- **Next: build PR 4 on `feat/autopass`** (PLAN.md "PR 4: auto-pass"; Hayden approved the build
-  plan 2026-10-12, which adds "The last reply across a pass": a banner and a Ctrl-b P popup).
-  Spikes A1-A4 passed (PLAN.md "Spike results"); the one change is that `/autopass` ships as a
-  defined command the hook blocks. This branch already carries the post-#88 STATUS lines (a
+- **Next: PR 4 part 2 on `feat/autopass`** (PLAN.md "PR 4: auto-pass"; Hayden approved the
+  build plan 2026-10-12). Spikes A1-A5 passed (PLAN.md "Spike results"); `/autopass` ships as a
+  defined command the hook blocks.
+  - **Part 1 is merged into the branch** (`f4fa52e`, three review rounds, none medium or worse
+    after round 2). It covers the last turn's replies across a plain pass: `hooks/stop_ring.py`
+    keeps them, `hooks/pass-banner.sh` shows them once, and `tmux/pass-last` on Ctrl-b P
+    shows them any time.
+    - Live now: the new `stop-ring` (the checkout is the live hook install).
+    - Not live until `./setup.sh` and `./setup-tmux.sh`: the banner's SessionStart entry and
+      Ctrl-b P.
+    - Still unchecked live: Ctrl-b P, both menu entries, `less -+F +G`, and the banner after a
+      real `/pass`.
+  - Part 2 is next: the context watcher, `/autopass`, the tiered ctx widget and the `lane ls`
+    CTX column.
+  - **`tests/pass` is load-sensitive:** a load spike (one run took 1,248 s) failed timing
+    asserts in untouched PR 3 tests too. Judge it on a run at normal speed (about 46 s). This branch already carries the post-#88 STATUS lines (a
   fact known only after a merge rides in the next PR). Then the release-skill PR in the work
   repos (PLAN.md PR 3 "Delta handoff"). Verify before touching `/pass`: `tests/pass`,
   `tests/lanes`, `tests/setup`, `tests/delegation`, from the main checkout
