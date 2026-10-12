@@ -73,11 +73,13 @@ stored here).
   `docs/lanes.md` and `skills/lanes/SKILL.md`). Three PRs:
   - **PR 1 `feat/lanes` (lanes core): built, reviewed clean after four fix rounds, installed from
     its branch and smoke-tested on HAYPC 2026-10-11.** In a scratch repo with two lanes, a real
-    `claude -p` session in one lane got its identity line, the guard denied "another session owns
-    #43" and a write into the other lane's record, a sandboxed `git commit` worked with no extra
+    `claude -p` session in lane `chart-fix` got its identity line, the guard denied a relative
+    claim (`another session owns #43`) and a write into lane `api-docs`'s record, a sandboxed
+    `git commit` worked with no extra
     rule, `handoff-check` failed an un-updated record, and `lane ls` flagged `handoff?`. Guard
     replay over the work repo's 273 real STATUS edits: 13 denies, all genuine relative claims, no
-    false positives. Waiting on Hayden's nod to push and open the PR.
+    false positives. Commits `b0708f5..HEAD` on `feat/lanes`. Waiting on Hayden's nod to push and
+    open the PR.
   - **PR 2 `feat/lanes-lead`** (lane open, lane lock, the lead's triage and merge order) and
     **PR 3 `feat/pass`** (`/pass`, `pass compact`, opt-in auto-pass on context): not started;
     PLAN.md has both.
@@ -127,7 +129,7 @@ stored here).
   sandbox-off deletes, so the sandboxed gap stands):
   `python3 -I ~/scratch/sandbox-audit/rm_scan.py 2026-11-04`. Sending the drafted
   `$CLAUDE_JOB_DIR/tmp` bug report is Hayden's call; `CLAUDE.md` carries the workaround.
-- **Two Write-tool bug drafts wait in `/feedback`** (Hayden's call to send): this session's has the
+- **Two Write-tool bug drafts wait in `/feedback`** (Hayden's call to send): the overwrite-guard session's has the
   `claude -p` repro and the 2.1.285 boundary; the karaoke session's has the incident.
 
 ## Notes for next session
