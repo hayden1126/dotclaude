@@ -373,6 +373,10 @@ def cmd_init(args) -> None:
     say(f"lanes config: {repo.config_path}")
     for key, value in cfg.items():
         say(f"  {key} = {value}")
+    # Claude Code asks "trust this folder?" for an untrusted cwd, and a trusted parent covers its
+    # subdirs (probed 2026-10-11, 2.1.296): without this, every `lane open` window stops there.
+    say(f"Trust the lanes root once, or each `lane open` window waits at Claude Code's trust "
+        f"dialog: cd {shlex.quote(cfg['root'])} && claude, then accept and exit")
 
 
 def cmd_new(args) -> None:

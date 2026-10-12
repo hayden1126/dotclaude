@@ -50,7 +50,9 @@ an unregistered worktree: `lane whoami` tells you which.
    the brief, hands out a port and runs the setup command. Start the lane's session with
    `lane open chart-fix` (bare, from inside tmux): a new tmux window in the lane, in plan mode,
    told to read its record and plan the brief. Outside tmux, `cd <path> && claude`. Either way
-   the session's cwd is the lane.
+   the session's cwd is the lane. Claude Code asks whether to trust each new folder, and a trusted
+   parent covers its subdirs, so trust the lanes root once (`lane init` prints the line);
+   otherwise each new window waits at that dialog and `lane ls` shows it `orphan`.
 3. **Work.** Commit on the lane branch. Keep the record current (`lane note "<line>"` adds a
    timestamped State line). Put evidence under `.lane/artifacts/` and cite it in Decisions.
    Copy it in, don't link it: the mirror and the archive keep a symlink as a link, never what
@@ -89,7 +91,9 @@ inside a lane.
 
 3. **Open.** For each approved lane, `lane new <id> --branch <b> --claim <n> --goal "..."
    --files "..." --overlaps "..." --done-when "..."` writes the brief into the record. Then
-   `lane open <id>` starts its session.
+   `lane open <id>` starts its session. A lane still `orphan` a minute later is usually stuck at
+   the trust dialog: `tmux capture-pane -p -t <window>` shows it. Tell Hayden; don't open it
+   again, which would start a second session.
 4. **Cap.** `config.toml` `cap` (default 4) limits live lanes. Requests beyond it wait in the
    project STATUS backlog.
 5. **Hand-back gate.** A lane is handed back only when `handoff-check -C <lane path>` passes and

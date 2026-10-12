@@ -410,7 +410,8 @@ and status single-writer:
   copies the files `.worktreeinclude` lists, hands out a port, runs the repo's setup command and
   seeds the lane's record (`<lane>/.lane/STATUS.md`, from `templates/LANE.md`).
 - `lane open chart-fix` starts the lane's session in a new tmux window, in plan mode, told to
-  read its record; `--focus` switches to a session already running there.
+  read its record; `--focus` switches to a session already running there. Trust the lanes root
+  in Claude Code once (`lane init` prints how), or each new window waits at the trust dialog.
 - `lane ls` is the board, derived live from git, gh and the session files, down to each lane's
   tmux window. `lane who 42` is the only answer to who owns #42.
 - `lane lock gate -- npm run e2e` runs a shared gate under a named lock, so a second lane's run

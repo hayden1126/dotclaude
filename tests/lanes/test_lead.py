@@ -102,6 +102,11 @@ class Open(Lead):
     def argv(self, *args):
         return shlex.split(self.lane("open", "chart-fix", "--print", *args))
 
+    def test_init_says_to_trust_the_lanes_root(self):
+        out = self.lane("init")
+        self.assertIn(f"cd {shlex.quote(self.root)} && claude", out)
+        self.assertIn("trust dialog", out)
+
     def test_print_shows_the_tmux_argv_with_no_tmux(self):
         argv = self.argv()
         self.assertEqual(argv[:2], ["tmux", "new-window"])

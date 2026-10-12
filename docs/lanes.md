@@ -214,7 +214,10 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
   checkout's possibly unpulled HEAD.
 - **`lane open <id>`** (from `hq-open`) runs `tmux new-window -c <lane> -n <id> -d` with the
   absolute `claude` path (tmux's PATH lacks `~/.local/bin`), `--permission-mode plan` and a first
-  prompt to read the record and plan its brief. It refuses a stale or `setup-failed` lane, and a
+  prompt to read the record and plan its brief. The window stops at Claude Code's "trust this
+  folder?" dialog unless the lanes root (or a parent) is trusted; a trusted parent covers every
+  lane under it (probed 2026-10-11, 2.1.296), so `lane init` prints the one-time line that
+  trusts the root. It refuses a stale or `setup-failed` lane, and a
   lane with a live session (naming its tmux target; `--focus` selects that window instead).
   Sandboxed, it can't see other sessions, so it refuses and asks for a bare run; `--print` still
   prints, warning that the command may duplicate a live session. It stamps only
