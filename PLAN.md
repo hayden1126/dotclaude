@@ -378,7 +378,8 @@ session):
 ## PR 3: `/pass` (`feat/pass`)
 
 **As built (2026-10-12), where it differs from the lists below.** The script's docstring and
-`skills/pass/SKILL.md` are the as-built reference. Two review rounds (17 findings, all fixed)
+`skills/pass/SKILL.md` are the as-built reference. Three review rounds (22 findings, all fixed
+here except one excludedCommands question that belongs to the private sandbox follow-up's step 1)
 and live runs shaped these:
 - **The turn's end comes from Claude Code's per-session file** (`~/.claude/sessions/<pid>.json`),
   not tmux's per-window `@claude_state`. The window state reads `idle` on a hook-blocked Stop,
@@ -397,12 +398,18 @@ and live runs shaped these:
   in the future. `handoff-check` fails a malformed, stale or future marker, and one it can't date
   against a session start.
 - **Single flight:** the waiter holds a per-session flock; `pass-respawn -C <dir> --cancel` ends
-  a pending pass on a verified pid.
+  a pending pass on a verified pid. Once acting begins it ignores SIGTERM and finishes, and a
+  late `--cancel` says `too-late`.
+- **Compact re-checks before its second half:** copy mode or a draft after the 1 s gap shows the
+  resume prompt instead of typing it (`partial`).
 - **Trust:** writable roots cover the launch dir and `additionalDirectories`, with user and
   managed `denyWrite` carved out (otherwise every pass in dotclaude would refuse); the script and
-  `handoff-check` refuse when sandbox-writable; children get a pinned PATH; the shebang is
-  `/usr/bin/python3`; prompts carry only computed paths.
-- **Outcomes** grew `gone`, `failed`, `error` and `cancelled`.
+  `handoff-check` refuse when sandbox-writable, and so does a sandbox-writable `--settings` file
+  the session was launched with (its `--add-dir` dirs count as writable); children get a pinned
+  PATH; both scripts run under `/usr/bin/python3 -I`; prompts carry only computed paths.
+- **Outcomes** grew `gone`, `failed`, `error`, `cancelled`, `partial` and `too-late`.
+- **A one-word "pass" doesn't trigger** (it is also "no thanks"); the typed trigger needs an
+  action word before "pass".
 - **An allow rule, `Bash(pass-respawn -C *)`:** the auto-mode classifier refused a bare call as
   "Create Unsafe Agents" after allowing one, so the skill always calls `pass-respawn -C
   <toplevel> [--compact]`. Installing a new allow rule is Hayden's step (the classifier refused
@@ -495,7 +502,9 @@ and live runs shaped these:
   - "pass" is a risky trigger word. 63 of 5,661 typed prompts use it, almost all as "a pass"
     ("Handoff for a later pass to fix this", "a graphics/image pass").
   - So the natural-language trigger only fires when "pass" is the bare last item of a terse list
-    ("handoff and pass", "commit, pass", "pass").
+    ("handoff and pass", "commit, pass"). As built, a one-word "pass" doesn't fire: it is also
+    "no thanks" (round-3 review), so an action word must come before it in the same sentence;
+    `/pass` itself always works.
   - The `handoff_reminder.py` classifier gets that end-anchored rule, and the skill's description
     says the same.
   - Gate: replay all of `history.jsonl` with zero hits in the "a pass" sense ([[hayden-prompt-style]],
