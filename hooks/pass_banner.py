@@ -1,4 +1,5 @@
-"""pass-banner: show the reply a /pass respawn left behind, once, as the new session's banner.
+"""pass-banner: show what Claude said since your last prompt, once, as the banner of the session a
+/pass respawn started.
 
 hooks/pass-banner.sh runs this file with python3 -I, passing the SessionStart event on stdin; the
 rules are in that shim's header. Tests import banner() and run the shim
@@ -13,12 +14,13 @@ import tempfile
 import time
 
 TTL = 120                      # seconds: a startup later than this isn't the respawn
-MAX_LINES, MAX_BYTES = 40, 4096
-HEAD = "Last reply before the pass:\n"
+MAX_LINES, MAX_BYTES = 40, 4096   # the whole banner, head and tail included (spike A2: 3.6 KiB)
+HEAD_ONE, HEAD_MANY = "Last reply before the pass:\n", "Since your last prompt:\n"
 ELLIPSIS = chr(0x2026)
-# C0 controls but tab and newline, and DEL: an escape sequence in a reply stays out of the
+# C0 controls but tab and newline, DEL and C1: an escape sequence in a reply stays out of the
 # terminal.
-CONTROL = re.compile("[%s]" % re.escape("".join(map(chr, [*range(0, 9), *range(11, 32), 127]))))
+CONTROL = re.compile("[%s]" % re.escape("".join(map(chr, [*range(0, 9), *range(11, 32),
+                                                          *range(127, 160)]))))
 
 
 def state_dir() -> str:
@@ -46,32 +48,57 @@ def current_tab(pane: str) -> dict | None:
 
 
 def clean(text: str) -> str:
+    """text without control characters, as valid UTF-8 (a lone surrogate becomes '?')."""
+    text = text.encode("utf-8", "replace").decode("utf-8")
     return CONTROL.sub("", text.replace("\r\n", "\n"))
 
 
-def banner(message: str) -> str:
-    """The banner text: the head, then the message up to MAX_LINES lines or MAX_BYTES bytes,
-    whichever comes first, then how many lines are left. A first line longer than MAX_BYTES is
-    cut on a character boundary and counts as left."""
-    lines = message.rstrip().split("\n")
+def size(text: str) -> int:
+    return len(text.encode("utf-8"))
+
+
+def tail(left: int) -> str:
+    return "%s %d more line%s: Ctrl-b P shows the whole reply" % (
+        ELLIPSIS, left, "" if left == 1 else "s")
+
+
+def newest_group(replies) -> list[str]:
+    """The texts of the replies that share the newest entry's prompt_id, oldest first: everything
+    said since the last prompt (a Stop a hook blocks and the Stop ending the continued turn share
+    one, spike A5)."""
+    valid = [r for r in replies if isinstance(r, dict) and isinstance(r.get("prompt_id"), str)
+             and isinstance(r.get("text"), str) and r["text"].strip()] \
+        if isinstance(replies, list) else []
+    if not valid:
+        return []
+    newest = valid[-1]["prompt_id"]
+    return [r["text"] for r in valid if r["prompt_id"] == newest]
+
+
+def banner(texts: list[str]) -> str:
+    """The banner: a head, then the texts with a blank line between, whole when they fit in
+    MAX_LINES lines and MAX_BYTES bytes (head included). Otherwise as many lines as fit with
+    the tail ("N more lines: Ctrl-b P ...") also inside MAX_BYTES. A first line longer than
+    that is cut on a character boundary and counts as left."""
+    head = HEAD_ONE if len(texts) == 1 else HEAD_MANY
+    lines = "\n\n".join(clean(t).strip() for t in texts).split("\n")
+    whole = head + "\n".join(lines)
+    if len(lines) <= MAX_LINES and size(whole) <= MAX_BYTES:
+        return whole
+    budget = MAX_BYTES - size(head) - size("\n" + tail(len(lines)))  # tail's longest form
     out, used, cut = [], 0, False
     for line in lines:
         if len(out) == MAX_LINES:
             break
-        size = len(line.encode("utf-8", "replace")) + 1
-        if used + size > MAX_BYTES:
+        need = size(line) + (1 if out else 0)
+        if used + need > budget:
             if not out:
-                out.append(line.encode("utf-8", "replace")[:MAX_BYTES].decode("utf-8", "ignore"))
+                out.append(line.encode("utf-8")[:budget].decode("utf-8", "ignore"))
                 cut = True
             break
         out.append(line)
-        used += size
-    left = len(lines) - len(out) + cut
-    text = HEAD + "\n".join(out)
-    if left:
-        text += "\n%s %d more line%s: Ctrl-b P shows the whole reply" % (
-            ELLIPSIS, left, "" if left == 1 else "s")
-    return text
+        used += need
+    return head + "\n".join(out) + "\n" + tail(len(lines) - len(out) + cut)
 
 
 def load(path: str):
@@ -118,13 +145,13 @@ def main() -> None:
     entry = load(path)
     if not isinstance(entry, dict) or entry.get("shown") is not False:
         return
-    message = entry.get("message")
-    if not isinstance(message, str) or not message.strip() or not fresh(entry.get("written_at")):
+    texts = newest_group(entry.get("replies"))
+    if not texts or not fresh(entry.get("written_at")):
         return
     tab = current_tab(pane)
     if tab is None or entry.get("tab") != tab:
         return
-    sys.stdout.write(json.dumps({"systemMessage": banner(clean(message))}))
+    sys.stdout.write(json.dumps({"systemMessage": banner(texts)}))
     sys.stdout.flush()
     entry["shown"] = True
     try:

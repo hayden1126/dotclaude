@@ -1,6 +1,6 @@
 """hooks/pass-banner.sh (and pass_banner.py): after a plain /pass respawned a tab, the new
-session's `startup` shows the old session's last reply once, as a SessionStart systemMessage
-(stdlib only).
+session's `startup` shows everything the old session said since the last prompt, once, as a
+SessionStart systemMessage (stdlib only).
 
 The entry is $XDG_STATE_HOME/dotclaude/pass-last/<pane number>.json, which pass-respawn writes.
 A stub tmux on PATH answers `display` with the server line ($STUB_SERVER; empty fails) and logs
@@ -57,9 +57,11 @@ class Banner(unittest.TestCase):
                         HOME=os.path.join(self.tmp, "home"), STUB_SERVER=SERVER,
                         XDG_STATE_HOME=os.path.join(self.tmp, "state"))
 
-    def entry(self, pane="7", **fields):
+    def entry(self, pane="7", message=REPLY, **fields):
+        """A pass-last entry; message= gives it one reply."""
         e = {"tab": TAB, "from_session": "old-session-1", "written_at": time.time(),
-             "message": REPLY, "shown": False, **fields}
+             "replies": [{"prompt_id": "p1", "text": message, "time": 1.0}], "shown": False,
+             **fields}
         os.makedirs(self.dir, exist_ok=True)
         with open(os.path.join(self.dir, pane + ".json"), "w") as f:
             json.dump(e, f)
@@ -80,7 +82,7 @@ class Banner(unittest.TestCase):
         self.entry()
         self.assertEqual(self.start(), "Last reply before the pass:\n" + REPLY)
         self.assertIs(self.read()["shown"], True)
-        self.assertEqual(self.read()["message"], REPLY)  # kept for Ctrl-b P
+        self.assertEqual(self.read()["replies"][0]["text"], REPLY)  # kept for Ctrl-b P
         self.assertIsNone(self.start())                   # once
         self.assertEqual(os.listdir(self.dir), ["7.json"])  # renamed into place
 
@@ -125,6 +127,8 @@ class Banner(unittest.TestCase):
 
     def test_a_shown_or_malformed_entry_shows_nothing(self):
         for fields in ({"shown": True}, {"shown": None}, {"message": ""}, {"message": 5},
+                       {"message": " \n"}, {"replies": []}, {"replies": "text"},
+                       {"replies": [{"prompt_id": None, "text": "x"}]},
                        {"written_at": "now"}, {"written_at": True}):
             with self.subTest(fields=fields):
                 self.entry(**fields)
@@ -135,8 +139,30 @@ class Banner(unittest.TestCase):
         self.assertIsNone(self.start())
 
     def test_control_characters_never_reach_the_banner(self):
-        self.entry(message="red " + chr(27) + "[31mtext" + chr(7) + "\r\nnext\tcol")
+        self.entry(message="red " + chr(27) + "[31mtext" + chr(7) + chr(0x9B) + chr(0x85)
+                   + "\r\nnext\tcol" + chr(0x7F))
         self.assertEqual(self.start(), "Last reply before the pass:\nred [31mtext\nnext\tcol")
+
+    def test_a_lone_surrogate_does_not_break_it(self):
+        os.makedirs(self.dir)
+        with open(os.path.join(self.dir, "7.json"), "w") as f:
+            f.write(json.dumps({"tab": TAB, "written_at": time.time(), "shown": False,
+                                "replies": [{"prompt_id": "p1", "text": "a@b"}]})
+                    .replace("@", "\\ud800"))
+        self.assertEqual(self.start(), "Last reply before the pass:\na?b")
+
+    def test_the_newest_prompts_replies_show_together(self):
+        # A Stop auto-pass blocks and the Stop that ends the continued turn share a prompt_id.
+        self.entry(replies=[{"prompt_id": "p1", "text": "Older prompt's reply."},
+                            {"prompt_id": "p2", "text": "First part.\n"},
+                            {"prompt_id": "p2", "text": "Pass armed."}])
+        self.assertEqual(self.start(),
+                         "Since your last prompt:\nFirst part.\n\nPass armed.")
+
+    def test_one_reply_for_the_newest_prompt_has_the_singular_head(self):
+        self.assertEqual(pass_banner.banner(["only"]), "Last reply before the pass:\nonly")
+        self.assertEqual(pass_banner.newest_group(
+            [{"prompt_id": "p1", "text": "a"}, {"prompt_id": "", "text": "b"}, 5]), ["b"])
 
     def test_a_long_reply_is_cut_at_40_lines(self):
         self.entry(message="\n".join(f"line {i}" for i in range(1, 61)))
@@ -146,23 +172,34 @@ class Banner(unittest.TestCase):
         self.assertEqual(lines[41], chr(0x2026) + " 20 more lines: Ctrl-b P shows the whole reply")
         self.assertEqual(len(lines), 42)
 
-    def test_a_long_reply_is_cut_at_4_kib(self):
-        text = "\n".join("x" * 199 for _ in range(30))  # 200 bytes a line: 20 fit in 4 KiB
-        out = pass_banner.banner(text).split("\n")
+    def test_the_whole_banner_stays_within_4_kib(self):
+        for texts in (["\n".join("x" * 199 for _ in range(30))],    # 200 bytes a line
+                      ["\n".join(chr(0x00E9) * 150 for _ in range(30))],
+                      ["a" * 3000, "b" * 3000]):
+            with self.subTest(first=texts[0][:3]):
+                out = pass_banner.banner(texts)
+                self.assertLessEqual(len(out.encode()), 4096)
+                self.assertTrue(out.split("\n")[-1].startswith(chr(0x2026) + " "))
+        out = pass_banner.banner(["\n".join("x" * 199 for _ in range(30))]).split("\n")
+        # head (28 bytes), 20 lines (3,999), tail (50): 4,077; a 21st line would pass 4 KiB.
         self.assertEqual(len(out), 22)
-        self.assertLessEqual(sum(len(x) + 1 for x in out[1:21]), 4096)
         self.assertEqual(out[-1], chr(0x2026) + " 10 more lines: Ctrl-b P shows the whole reply")
+        fits = "x" * (4096 - len("Last reply before the pass:\n"))  # exactly 4 KiB: no tail
+        self.assertEqual(len(pass_banner.banner([fits]).encode()), 4096)
 
     def test_one_huge_line_is_cut_on_a_character_boundary(self):
-        out = pass_banner.banner(chr(0x00E9) * 5000).split("\n")
-        self.assertEqual(len(out), 3)
-        self.assertEqual(out[1], chr(0x00E9) * 2048)
-        self.assertEqual(out[2], chr(0x2026) + " 1 more line: Ctrl-b P shows the whole reply")
+        out = pass_banner.banner([chr(0x00E9) * 5000])
+        self.assertLessEqual(len(out.encode()), 4096)
+        head, body, rest = out.split("\n")
+        self.assertEqual(body, chr(0x00E9) * len(body))
+        self.assertGreater(len(body), 1900)
+        self.assertEqual(rest, chr(0x2026) + " 1 more line: Ctrl-b P shows the whole reply")
 
     def test_a_short_reply_is_whole_and_trailing_blank_lines_go(self):
-        self.assertEqual(pass_banner.banner("one\ntwo\n\n"), "Last reply before the pass:\none\ntwo")
+        self.assertEqual(pass_banner.banner(["one\ntwo\n\n"]),
+                         "Last reply before the pass:\none\ntwo")
         forty = "\n".join(["l"] * 40)
-        self.assertEqual(pass_banner.banner(forty), "Last reply before the pass:\n" + forty)
+        self.assertEqual(pass_banner.banner([forty]), "Last reply before the pass:\n" + forty)
 
     def test_a_projects_json_py_never_runs(self):
         cwd = os.path.join(self.tmp, "proj")
