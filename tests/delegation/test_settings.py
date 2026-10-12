@@ -224,11 +224,13 @@ class Baseline(unittest.TestCase):
         (h,) = entry["hooks"]
         self.assertEqual(h["command"], "i=$(cat); case \"$i\" in *'\"agent_id\"'*) ;; *) "
                          "printf '%s' \"$i\" | " + watch + " ;; esac")
-        hooks = [h for event in ("Stop", "PostToolUse") for e in S["hooks"][event]
+        hooks = [(event, h) for event in ("Stop", "PostToolUse") for e in S["hooks"][event]
                  for h in e["hooks"] if "context-watch" in h["command"]]
         self.assertEqual(len(hooks), 2)
-        for h in hooks:
-            self.assertEqual(h["timeout"], 5)
+        for event, h in hooks:
+            # A Stop waits up to 1.5 s for the turn's final reply (spike A8), then may run tmux
+            # and git, so it gets more room than a tool call.
+            self.assertEqual(h["timeout"], 10 if event == "Stop" else 5)
             self.assertNotIn("exit 2", h["command"])
         self.assertTrue(os.access(os.path.join(REPO, "hooks", "context-watch.sh"), os.X_OK))
         for f in ("context_watch.py", "autopass_state.py"):

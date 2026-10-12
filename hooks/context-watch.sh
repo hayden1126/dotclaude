@@ -10,10 +10,12 @@
 # session (CLAUDE_CODE_SESSION_ATTENDED=0) gets its count written (`lane ls` reads it) but no
 # nudge, since it has no pane to respawn. Fail-open: always exits 0, and anything that goes
 # wrong says nothing to the session; Python's errors go to
-# $XDG_STATE_HOME/dotclaude/context-watch.err (added after a live run wrote no count).
+# $XDG_STATE_HOME/dotclaude/context-watch.err (added after a live run wrote no count), and so
+# does a line for a Stop whose final reply never reached the transcript (spike A8).
 set -uo pipefail
 
 src=$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null) || exit 0
 err="${XDG_STATE_HOME:-$HOME/.local/state}/dotclaude/context-watch.err"
+mkdir -p "${err%/*}" 2>/dev/null  # else the redirect fails and Python never runs
 python3 -I "${src%/*}/context_watch.py" 2>>"$err"
 exit 0

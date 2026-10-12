@@ -6,8 +6,10 @@ XDG_STATE_HOME, and a stub tmux on PATH that answers `display` with $STUB_SERVER
 The env starts scrubbed of CLAUDE* and TMUX*, since the test may run inside a Claude tab. The
 shims run end to end; the modules are also loaded in-process for the parts a shim can't reach.
 Transcript lines copy the real entry shape (spike A3, Claude Code 2.1.296)."""
+import contextlib
 import fcntl
 import importlib.util
+import io
 import json
 import os
 import shutil
@@ -98,8 +100,11 @@ class Base(unittest.TestCase):
                                              ("PATH", "HOME", "XDG_STATE_HOME", "STUB_SERVER")})
         patch.start()
         self.addCleanup(patch.stop)
-        os.environ.pop("CLAUDE_CODE_SESSION_ATTENDED", None)
-        os.environ.pop("XDG_CONFIG_HOME", None)  # the patch restores it
+        # In-process calls see os.environ: scrub it like self.env (CLAUDE_CONFIG_DIR would
+        # otherwise pick the live settings.json's window). The patch restores every key.
+        for k in [k for k in os.environ if k.startswith(("CLAUDE", "TMUX"))]:
+            os.environ.pop(k)
+        os.environ.pop("XDG_CONFIG_HOME", None)
         self.cwd = self.tmp  # not a git repo: no lane
         self.stop_record([], [])  # no background work: a tool call gets the plain texts
 
@@ -113,7 +118,9 @@ class Base(unittest.TestCase):
     def on(self):
         self.pass_toml("autopass = true\n")
 
-    def write_transcript(self, total, before=(), after=(USER, SYSTEM)):
+    def write_transcript(self, total, before=(), after=(SYSTEM,)):
+        """A transcript whose last main-chain entry is the assistant's (its final reply is on
+        disk, as at a Stop after spike A8's wait, or at a tool call)."""
         with open(self.transcript, "w") as f:
             for e in [*before, assistant(total), *after]:
                 f.write(json.dumps(e) + "\n")
@@ -125,7 +132,7 @@ class Base(unittest.TestCase):
 
     def stop_at(self, total, *before):
         """A Stop after appending entries and then an assistant entry at total."""
-        self.append(*before, assistant(total), USER)
+        self.append(*before, assistant(total), SYSTEM)
         return self.stop()
 
     def write_ctx_window(self, win, sid=SID):
@@ -432,6 +439,94 @@ class Skips(Base):
     def test_the_last_entry_wins(self):
         self.write_transcript(41_538, before=(assistant(30_000), USER))
         self.assertEqual(cw.tokens(self.transcript), 41_538)
+
+
+class StopWait(Base):
+    """Spike A8: at a Stop the turn's final reply lands in the transcript about 100 ms into the
+    hook, so the watcher waits for it rather than count the previous turn."""
+
+    def payload(self, event="Stop"):
+        return {"session_id": SID, "hook_event_name": event, "transcript_path": self.transcript,
+                "cwd": self.cwd}
+
+    def handle_landing(self, *entries, event="Stop"):
+        """cw.handle, with entries appended right after the watcher's first read, so a pass
+        means it read again (no race with a timer)."""
+        real, calls = cw.scan, []
+
+        def scan(path):
+            out = real(path)
+            calls.append(out)
+            if len(calls) == 1:
+                self.append(*entries)
+            return out
+        err = io.StringIO()
+        with mock.patch.object(cw, "scan", scan), contextlib.redirect_stderr(err):
+            out = cw.handle(self.payload(event))
+        self.assertEqual(err.getvalue(), "")
+        return out, calls
+
+    def test_scan_says_whether_the_final_reply_is_on_disk(self):
+        zero = assistant(0)
+        for k in ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens"):
+            zero["message"]["usage"][k] = 0
+        big = dict(USER, toolUseResult={"stdout": "x" * (cw.TAIL + 1000)})
+        cases = [((SYSTEM,), (41_000, True)),
+                 ((USER, SYSTEM), (41_000, False)),
+                 ((USER, assistant(900_000, sidechain=True)), (41_000, False)),
+                 ((USER, zero), (41_000, True)),   # a synthetic error reply ends the turn too
+                 ((big,), (41_000, False))]        # a final user line past the first read
+        for after, want in cases:
+            self.write_transcript(41_000, after=after)
+            self.assertEqual(cw.scan(self.transcript), want, after)
+        with open(self.transcript, "w") as f:
+            f.write(json.dumps(USER) + "\n")
+        self.assertEqual(cw.scan(self.transcript), (None, False))
+        open(self.transcript, "w").close()   # nothing in reach yet: the reply would be readable
+        self.assertEqual(cw.scan(self.transcript), (None, False))
+        # Unreadable: nothing will land there.
+        self.assertEqual(cw.scan(os.path.join(self.tmp, "missing.jsonl")), (None, None))
+        self.assertEqual(cw.scan(7), (None, None))
+
+    def test_a_stop_waits_for_the_final_reply(self):
+        self.on()
+        self.write_transcript(200_000, after=(USER,))   # the turn's prompt, its reply not yet
+        out, calls = self.handle_landing(assistant(320_000), SYSTEM)
+        self.assertEqual(out, block("soft", "320k"))
+        self.assertEqual(self.ctx()["tokens"], 320_000)
+        self.assertEqual(calls[0], (200_000, False))
+
+    def test_a_sessions_first_stop_gets_its_count(self):
+        with open(self.transcript, "w") as f:
+            f.write(json.dumps(USER) + "\n")
+        out, _ = self.handle_landing(assistant(41_538))
+        self.assertIsNone(out)
+        self.assertEqual(self.ctx()["tokens"], 41_538)
+
+    def test_a_tool_call_never_waits(self):
+        self.write_transcript(41_000, after=(USER,))
+        _, calls = self.handle_landing(assistant(60_000), event="PostToolUse")
+        self.assertEqual((len(calls), self.ctx()["tokens"]), (1, 41_000))
+
+    def test_an_unreadable_transcript_does_not_wait(self):
+        err = io.StringIO()
+        start = time.monotonic()
+        with mock.patch.object(cw, "STOP_WAIT", 30), contextlib.redirect_stderr(err):
+            for path in (os.path.join(self.tmp, "missing.jsonl"), 7):
+                self.assertIsNone(cw.handle(dict(self.payload(), transcript_path=path)))
+        self.assertLess(time.monotonic() - start, 5)
+        self.assertEqual(err.getvalue(), "")
+
+    def test_a_reply_that_never_lands_logs_a_line_and_uses_the_previous_count(self):
+        # End to end: the shim appends the line to context-watch.err, never to the session.
+        self.on()
+        self.write_transcript(320_000, after=(USER,))
+        start = time.monotonic()
+        self.assertEqual(self.stop(), block("soft", "320k"))
+        self.assertGreaterEqual(time.monotonic() - start, cw.STOP_WAIT)
+        with open(os.path.join(self.state, "dotclaude", "context-watch.err")) as f:
+            self.assertIn("context-watch %s: no final reply in the transcript after 1.5 s; "
+                          "used the previous reply's" % SID, f.read())
 
 
 class Decide(Base):

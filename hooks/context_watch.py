@@ -12,8 +12,11 @@ it has no pane to respawn, and `lane ls` still reads its count.
 The count: the transcript's last main-chain assistant entry (type "assistant", not isSidechain)
 with a message.usage, summed as input + cache read + cache creation tokens (spike A3: it matched
 the statusline). A zero sum (a synthetic error entry) doesn't count. The last 512 KiB are read,
-then once 8 MiB when no such entry is in them. Any miss says nothing and writes nothing. The
-count is merged into ctx/<session>.json as {tokens, time} on every event, firing or not; a
+then once 8 MiB when no such entry is in them. Any miss says nothing and writes nothing. At a
+Stop the turn's final reply lands in the transcript about 100 ms into the hook (spike A8), so
+while the last main-chain user or assistant entry is a user's (or none is in reach), the
+watcher re-reads every 25 ms for up to STOP_WAIT (1.5 s); past that it logs a line to stderr
+and uses the last count on disk, if any. The count is merged into ctx/<session>.json as {tokens, time} on every event, firing or not; a
 `window` there (the model's context window, which the statusline widget writes) lowers the
 tiers' window (autopass_state.window).
 
@@ -78,6 +81,7 @@ REARM = 20000             # the hard tier's re-arm step, at most
 HYSTERESIS = 50000        # how far under a tier the count must fall to re-arm it, at most
 HANDOFF_GRACE = 40000     # a pass call older than this many tokens no longer holds the re-arm
 STOP_FRESH = 600
+STOP_WAIT, STOP_POLL = 1.5, 0.025  # at a Stop, how long to wait for the final reply, and how often
 MODE_TTL = 60
 PASS_SKILL = "pass"
 # A typed /pass (or /pass compact) is a main-chain user entry whose text carries the command:
@@ -124,18 +128,24 @@ TEXTS = {
 }
 
 
-def usage_total(line: bytes):
-    """The context size an assistant transcript line records, or None."""
-    if b'"assistant"' not in line:
+def main_chain(line: bytes):
+    """A main-chain user or assistant transcript line as a dict, or None."""
+    if b'"assistant"' not in line and b'"user"' not in line:
         return None
     try:
         d = json.loads(line)
     except ValueError:
         return None
-    if not isinstance(d, dict) or d.get("type") != "assistant" or d.get("isSidechain"):
+    if not isinstance(d, dict) or d.get("isSidechain") or d.get("type") not in ("user",
+                                                                                "assistant"):
         return None
+    return d
+
+
+def usage_total(d: dict):
+    """The context size a main-chain entry records (an assistant's), or None."""
     msg = d.get("message")
-    u = msg.get("usage") if isinstance(msg, dict) else None
+    u = msg.get("usage") if d.get("type") == "assistant" and isinstance(msg, dict) else None
     if not isinstance(u, dict):
         return None
     parts = [u.get(k, 0) for k in ("input_tokens", "cache_read_input_tokens",
@@ -145,10 +155,15 @@ def usage_total(line: bytes):
     return sum(parts)
 
 
-def tokens(path) -> int | None:
-    """The last main-chain assistant usage in the transcript at path, or None."""
+def scan(path):
+    """(the last main-chain assistant usage or None, whether the last main-chain user or
+    assistant entry is an assistant's: the turn's final reply is on disk). It is False too
+    when no such entry is in reach (an empty file, or one final user line past WIDE), since
+    the reply that lands is then readable; it is None when the transcript can't be read: no
+    reply will land there to wait for."""
+    final = None
     if not isinstance(path, str) or not path:
-        return None
+        return None, None
     try:
         with open(path, "rb") as f:
             size = f.seek(0, os.SEEK_END)
@@ -158,14 +173,40 @@ def tokens(path) -> int | None:
                 if size > span:
                     lines = lines[1:]  # the first line is cut
                 for line in reversed(lines):
-                    n = usage_total(line)
+                    d = main_chain(line)
+                    if d is None:
+                        continue
+                    if final is None:
+                        final = d["type"] == "assistant"
+                    n = usage_total(d)
                     if n is not None:
-                        return n
+                        return n, final
                 if size <= span:
-                    return None
+                    break
     except OSError:
-        return None
-    return None
+        return None, None
+    return None, final is True
+
+
+def tokens(path) -> int | None:
+    """The last main-chain assistant usage in the transcript at path, or None."""
+    return scan(path)[0]
+
+
+def stop_tokens(path, sid):
+    """The count at a Stop. The turn's final reply reaches the transcript about 100 ms into
+    the Stop hook (spike A8), so wait up to STOP_WAIT for it; past that, log a line and use
+    the last count on disk (the previous turn's). An unreadable transcript doesn't wait."""
+    n, final = scan(path)
+    deadline = time.monotonic() + STOP_WAIT
+    while final is False and time.monotonic() < deadline:
+        time.sleep(STOP_POLL)
+        n, final = scan(path)
+    if final is False:
+        sys.stderr.write("%s context-watch %s: no final reply in the transcript after %.1f s; "
+                         "%s\n" % (time.strftime("%F %T"), sid, STOP_WAIT,
+                                   "no count" if n is None else "used the previous reply's"))
+    return n
 
 
 def runs_pass_respawn(command: str) -> bool:
@@ -456,7 +497,7 @@ def handle(d: dict, pane=None):
             or not stop_ring.SID.fullmatch(sid):
         return None
     path = d.get("transcript_path")
-    n = tokens(path)
+    n = stop_tokens(path, sid) if event == "Stop" else tokens(path)
     if n is None:
         return None
     now = time.time()

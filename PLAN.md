@@ -796,10 +796,16 @@ scale with the window:
     - A3 compared counts after the fact, so it missed this.
   - Effect: the Stop-time count lags one turn. PostToolUse reads entries already written, so it
     stays fresh. A long final reply can still cross a tier one Stop late.
-  - **Open, the next step:** probe whether the entry becomes readable during the Stop hook (poll
-    up to ~1.5 s, log when it appears). If it does, have the watcher poll on Stop until an entry
-    newer than its last count appears. If not, use the payload's `last_assistant_message`
-    as the sign, and fall back to correcting the count from a detached child.
+  - **Probe (2026-10-12, `~/scratch/autopass-spike/probe8.py`, 13 Stops in one session):** every
+    Stop hook started with the last main-chain user or assistant entry a user's (the prompt, a
+    tool result, or a Stop hook's block reason), and the final reply appeared 54 to 112 ms into
+    the hook, its text matching `last_assistant_message` each time. Short, tool, ~10k-character
+    and blocked-then-continued turns all behaved the same. A child polling past the hook's exit
+    saw it at the same moment, so the write isn't gated on the hook.
+  - **Fix:** at Stop, while the last main-chain user or assistant entry is a user's (or none
+    is in reach, as in an empty file), `context_watch.stop_tokens` re-reads every 25 ms for up to 1.5 s, then logs a line to
+    `context-watch.err` and uses the last count. PostToolUse never waits. The probe session's
+    `ctx` file then matched each turn's own count.
 
 **Verify.**
 - `context-watch` on transcript fixtures: below each tier, at each tier once per crossing, the
