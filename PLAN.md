@@ -378,8 +378,8 @@ session):
 ## PR 3: `/pass` (`feat/pass`)
 
 **As built (2026-10-12), where it differs from the lists below.** The script's docstring and
-`skills/pass/SKILL.md` are the as-built reference. Three review rounds (22 findings, all fixed
-here except one excludedCommands question that belongs to the private sandbox follow-up's step 1)
+`skills/pass/SKILL.md` are the as-built reference. Three review rounds (23 findings: 22 fixed
+here, and one excludedCommands question left to the private sandbox follow-up's step 1)
 and live runs shaped these:
 - **The turn's end comes from Claude Code's per-session file** (`~/.claude/sessions/<pid>.json`),
   not tmux's per-window `@claude_state`. The window state reads `idle` on a hook-blocked Stop,
