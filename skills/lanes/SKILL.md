@@ -122,7 +122,7 @@ stale-base trap (`worktree.baseRef`) therefore bites only a session rooted in th
 | `lane note "<text>"` | append a timestamped line to your record's State |
 | `lane asks` | every lane's open "Asks for Hayden", one list |
 | `lane open <id>` | the lane's session in a new tmux window, in plan mode; `--focus` switches to it, or to the live session's window; `--print` shows the tmux command |
-| `lane lock gate -- <cmd>` | run `<cmd>` under the named lock, waiting while another run holds it; `--wait SECS` gives up with exit 75 |
+| `lane lock gate -- <cmd>` | run `<cmd>` under the named lock, waiting while another run holds it; `--wait SECS` gives up with exit 75 (a command's own 75 looks the same: only a timeout prints "gave up on lock") |
 | `lane new` / `adopt` / `done` | lifecycle, above |
 
 Board flags: `stale` (worktree gone; its claims are void), `rebase` (behind the base),
@@ -132,9 +132,10 @@ port, claims and a cap slot; finish it with `lane adopt <path>`).
 
 Run `lane init`, `new`, `adopt`, `ls`, `open` and `done` as bare commands: those are in
 `excludedCommands`, so they run outside the sandbox with the network, gh's credential and a view
-of other processes. Piped or sandboxed, `new`, `ls` and `done` say what they skipped (PR state
-shows `?`), and `open` refuses. Every other subcommand runs sandboxed. `lane lock` must: the
-command it wraps inherits its sandbox.
+of other processes. Piped or sandboxed, `new`, `ls` and `done` say what they skipped (PR state,
+sessions and window show `?`), and `open` refuses. `open --print` still prints, but warns that it
+can't see a live session, so its command may start a second one. Every other subcommand runs
+sandboxed. `lane lock` must: the command it wraps inherits its sandbox.
 
 ## What to write where
 

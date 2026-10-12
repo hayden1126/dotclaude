@@ -190,6 +190,11 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
   flag the delete guard checks. `whoami`, `claim`, `release`, `who`, `note`, `asks` and `lock`
   touch only `<common-dir>/lanes/` and the lane's `.lane/`, which a lane-rooted sandbox can
   write (S1). A sandboxed (piped) call of an excluded subcommand says what it skipped.
+  The narrowing doesn't close every path. `new` and `adopt` run config.toml's `setup` command
+  through a shell, sandbox-off, and sandboxed Bash can write config.toml, so a tampered config
+  runs unsandboxed at the next bare `lane new`. That is a known escape, the same class as the
+  `tmux *` and `claude *` exclusions. `lock` was different: its routine use ran every gate
+  sandbox-off unnoticed.
 - **S4, compaction:** a SessionStart hook matched on `compact` gets its `additionalContext` to
   the model after `/compact` (`/compact` piped into `claude -p --resume` triggers a real
   compaction). `lane-identity.sh` on `compact` is therefore the safety net for an unplanned
@@ -211,7 +216,8 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
   absolute `claude` path (tmux's PATH lacks `~/.local/bin`), `--permission-mode plan` and a first
   prompt to read the record and plan its brief. It refuses a stale or `setup-failed` lane, and a
   lane with a live session (naming its tmux target; `--focus` selects that window instead).
-  Sandboxed, it can't see other sessions, so it refuses and asks for a bare run. It stamps only
+  Sandboxed, it can't see other sessions, so it refuses and asks for a bare run; `--print` still
+  prints, warning that the command may duplicate a live session. It stamps only
   `opened` in `lane.json`. The window is derived from the live session's `tmux` field on each
   `lane ls`, never stored (invariant 4): a stored window id drifts the moment the window closes
   or tmux renumbers it.
@@ -220,9 +226,15 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
   `config.toml` `locks`, since a typo would split the mutual exclusion. Once it holds the lock, it
   writes a holder line (lane id or `main`, start time, command), which a waiting run and the
   `lane ls` footer show. There is no pid: each sandboxed command has its own pid namespace, so a
-  pid would mislead. The lock fd is close-on-exec, so a backgrounded grandchild never keeps the
-  lock; SIGINT and SIGTERM are forwarded to the command, whose exit code it returns (128+n for
-  signal n). `--wait SECS` gives up with exit 75.
+  pid would mislead. The line is cleared while the lock is still held, so a waiter never names
+  a run that already let go. The lock fd is close-on-exec, so a backgrounded grandchild never
+  keeps the lock. SIGINT and SIGTERM are not forwarded: the command shares `lane`'s process
+  group, so a Ctrl-C or the Bash tool's kill already reaches it, and Go and Node tools read a
+  second copy as "force quit". So a signal sent to `lane` alone leaves the command running,
+  lock held. It returns the command's exit code (128+n for signal n). `--wait SECS` gives up
+  with exit 75, which a command's own 75 matches: only the "gave up on lock" stderr line tells a
+  timeout apart. A wait first retries once after 50 ms, so `lane ls`'s instant shared-lock
+  probe never reads as a holder.
 - **`hooks/lane-identity.sh`** (SessionStart, Stop, SessionEnd): the identity line, the
   `sessions[]` entry, the mirror and the end stamp. A compact keeps its session's entry, so the
   session's start (which `handoff-check` uses) doesn't move. The mirror is crash-safe: it builds

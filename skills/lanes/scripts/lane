@@ -1086,9 +1086,9 @@ def parser() -> argparse.ArgumentParser:
                        usage="lane lock <name> [--wait SECS] -- <cmd...>")
     p.add_argument("name")
     p.add_argument("--wait", type=float, metavar="SECS",
-                   help=f"give up after SECS, exit {LOCK_BUSY} (default: wait as long as it takes); "
-                        f"the command's own {LOCK_BUSY} looks the same, but only a timeout "
-                        "prints \"gave up on lock\" on stderr")
+                   help=f"give up after SECS, exit {LOCK_BUSY} (default: wait as long as it "
+                        f"takes); the command's own {LOCK_BUSY} looks the same, but only a "
+                        "timeout prints \"gave up on lock\" on stderr")
     p = sub.add_parser("whoami", help="this checkout's lane id, main, or plain")
     p.add_argument("--json", action="store_true")
     for name in ("claim", "release"):
