@@ -361,6 +361,36 @@ class Transcript(Plain):
         self.assertIsNone(self.mod.typed_since(os.path.join(self.tmp, "none.jsonl"), 0))
         self.assertIsNone(self.mod.typed_since(None, 0))
 
+    def test_a_malformed_attachment_entry_is_skipped(self):
+        path = os.path.join(self.tmp, "malformed.jsonl")
+        bad = ({"type": "attachment"}, {"type": "attachment", "attachment": None},
+               {"type": "attachment", "attachment": "queued_command"},
+               {"type": "attachment", "attachment": ["queued_command"]},
+               {"type": "attachment", "attachment": {"type": "queued_command", "origin": "human"}},
+               [1, 2], 7, None)
+        self.write(path, "".join(json.dumps(e) + "\n" for e in bad))
+        self.assertFalse(self.mod.typed_since(path, 0))
+        for entry in bad:
+            self.assertFalse(self.mod.queued_prompt(entry))
+            self.assertFalse(self.mod.typed_prompt(entry))
+        plan = self.plan()
+        self.say(*bad)
+        self.assertEqual(self.mod.wait_and_act(plan, t.table), "respawn")
+
+    def test_a_bang_command_is_not_a_typed_prompt(self):
+        # `!ls` in Claude Code writes user entries holding <bash-input> and <bash-stdout> blocks,
+        # with no origin kind human (live runs): Hayden ran a command, he didn't prompt.
+        plan = self.plan()
+        bang = ({"type": "user", "message": {"role": "user",
+                                             "content": "<bash-input>ls -la</bash-input>"}},
+                {"type": "user", "message": {"role": "user", "content": [
+                    {"type": "text", "text": "<bash-stdout>total 0</bash-stdout>"
+                                             "<bash-stderr></bash-stderr>"}]}})
+        for entry in bang:
+            self.assertFalse(self.mod.typed_prompt(entry))
+        self.say(*bang)
+        self.assertEqual(self.mod.wait_and_act(plan, t.table), "respawn")
+
 
 # ---- compact mode drops ------------------------------------------------------------------------
 
