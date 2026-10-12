@@ -149,6 +149,7 @@ class Base(LanesRepo):
         self.script = ["busy", "idle"]
         self.stop_waits = []
         self.stop_tasks = None  # every task label; None means the waits
+        self.stop_message = "Done: the handoff is committed."  # last_message; None: none
         self.start_now = START
         self.status, self.updated, self.stopped = None, 0, False
         real_start = self.mod.proc_start
@@ -194,9 +195,10 @@ class Base(LanesRepo):
 
     def write_stop(self, waits, at=None):
         tasks = waits if self.stop_tasks is None else self.stop_tasks
-        self.write(os.path.join(self.state, "stops", f"{SID}.json"),
-                   json.dumps({"session_id": SID, "time": at or time.time(), "waits": waits,
-                               "tasks": tasks}))
+        rec = {"session_id": SID, "time": at or time.time(), "waits": waits, "tasks": tasks}
+        if self.stop_message is not None:
+            rec["last_message"] = self.stop_message
+        self.write(os.path.join(self.state, "stops", f"{SID}.json"), json.dumps(rec))
 
     def transcript(self):
         return os.path.join(self.home, ".claude", "projects",
@@ -234,6 +236,15 @@ class Base(LanesRepo):
 
     def carry_marker(self):
         return os.path.join(self.state, "pass-carry", "4.json")
+
+    def last_reply(self):
+        return os.path.join(self.state, "pass-last", "4.json")
+
+    def old_last_reply(self):
+        """A pass-last file from an earlier pass in this pane."""
+        self.write(self.last_reply(), json.dumps({"tab": {}, "from_session": "older",
+                                                  "written_at": 1, "message": "old",
+                                                  "shown": True}))
 
     def notices(self):
         return [a for a in self.calls("tmux", "display-message") if a[2] == "-t"]
@@ -493,6 +504,40 @@ class Plain(Base):
         self.assertEqual(self.calls("tmux", "respawn-pane"), [])
         self.assertFalse(os.path.exists(self.carry_marker()))
         self.assertIn("mode=compact outcome=compact", self.log())
+        self.assertFalse(os.path.exists(self.last_reply()))  # the conversation survives
+
+    def test_a_plain_pass_writes_the_last_reply_for_the_banner(self):
+        self.stop_message = "Done: the PR is up.\nNext: review it."
+        code, out = self.run_pass("--foreground")
+        self.assertEqual(code, 0, out)
+        with open(self.last_reply()) as f:
+            last = json.load(f)
+        self.assertEqual(last["tab"], {"socket": "/tmp/tmux-1000/default",
+                                       "server_start": 1791000000, "server_pid": 222,
+                                       "pane": "%4"})
+        self.assertEqual((last["from_session"], last["message"], last["shown"]),
+                         (SID, "Done: the PR is up.\nNext: review it.", False))
+        self.assertLess(abs(time.time() - last["written_at"]), 30)
+        self.assertTrue(os.path.exists(self.carry_marker()))  # its own file, beside the carry
+
+    def test_compact_leaves_an_earlier_last_reply_alone(self):
+        self.old_last_reply()
+        code, out = self.run_pass("--compact", "--foreground")
+        self.assertEqual(code, 0, out)
+        with open(self.last_reply()) as f:
+            self.assertEqual(json.load(f)["from_session"], "older")
+
+    def test_no_last_message_removes_an_earlier_last_reply(self):
+        # The popup must never show an earlier pass's reply as this one's.
+        for message in (None, ""):
+            with self.subTest(message=message):
+                self.reset()
+                self.old_last_reply()
+                self.stop_message = message
+                code, out = self.run_pass("--foreground")
+                self.assertEqual(code, 0, out)
+                self.assertEqual(len(self.calls("tmux", "respawn-pane")), 1)
+                self.assertFalse(os.path.exists(self.last_reply()))
 
     def test_shell_status_is_at_the_prompt_so_compact_acts(self):
         # Live, 2026-10-12: at the prompt with a background shell running, the session file
@@ -662,6 +707,7 @@ class Plain(Base):
         self.assertEqual(code, 1, out)
         self.assertEqual(len(self.calls("tmux", "respawn-pane")), 1)
         self.assertFalse(os.path.exists(self.carry_marker()))
+        self.assertFalse(os.path.exists(self.last_reply()))
         self.assertIn("outcome=failed", self.log())
         self.assertIn("can't find pane", self.log())
 
@@ -671,12 +717,14 @@ class Plain(Base):
         def tmux(plan, *args):
             if args[0] == "respawn-pane":
                 self.assertTrue(os.path.exists(self.carry_marker()))
+                self.assertTrue(os.path.exists(self.last_reply()))
                 raise RuntimeError("boom")
             return real(plan, *args)
         self.mod.tmux = tmux
         code, out = self.run_pass("--foreground")
         self.assertEqual(code, 1, out)
         self.assertFalse(os.path.exists(self.carry_marker()))
+        self.assertFalse(os.path.exists(self.last_reply()))
         self.assertIn("outcome=error RuntimeError: boom", self.log())
 
     def test_a_waiter_that_cannot_detach_reports_error(self):

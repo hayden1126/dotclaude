@@ -293,6 +293,29 @@ class Hooks(unittest.TestCase):
         self.run_hook("stop-ring.sh", TAB, {"transcript_path": ["not", "a", "string"]})
         self.assertNotIn("transcript_path", self.stop_record())
 
+    def test_the_stop_record_keeps_the_last_reply(self):
+        # pass-respawn copies it for the respawned session's banner and Ctrl-b P.
+        self.run_hook("stop-ring.sh", TAB, {"last_assistant_message": "Done: the PR is up.\nNext?"})
+        self.assertEqual(self.stop_record()["last_message"], "Done: the PR is up.\nNext?")
+        self.run_hook("stop-ring.sh", TAB, {"last_assistant_message": None})
+        rec = self.stop_record()
+        self.assertNotIn("last_message", rec)  # a later stop with none replaces it
+        self.assertEqual(rec["waits"], [])     # the rest of the record is as before
+
+    def test_the_last_reply_is_cut_to_64_kib_on_a_character_boundary(self):
+        cap = 64 * 1024
+        reply = "a" + chr(0x00E9) * cap  # two bytes each, so the cut can land mid-character
+        self.run_hook("stop-ring.sh", TAB, {"last_assistant_message": reply})
+        kept = self.stop_record()["last_message"]
+        body, note = kept.rsplit("\n", 1)
+        self.assertLessEqual(len(kept.encode()), cap)
+        self.assertGreater(len(kept.encode()), cap - 100)
+        self.assertTrue(reply.startswith(body))
+        self.assertEqual(note, f"[cut to 64 KiB: the reply was {len(reply.encode())} bytes]")
+        exact = "b" * cap  # at the cap: kept whole, no note
+        self.run_hook("stop-ring.sh", TAB, {"last_assistant_message": exact})
+        self.assertEqual(self.stop_record()["last_message"], exact)
+
     def test_a_subagent_stop_or_an_unsafe_id_writes_no_stop_record(self):
         self.run_hook("stop-ring.sh", TAB, {"agent_id": "a1"})
         self.assertIsNone(self.stop_record())

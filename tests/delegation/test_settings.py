@@ -196,6 +196,20 @@ class Baseline(unittest.TestCase):
         self.assertLessEqual(entry["hooks"][0]["timeout"], 5)
         self.assertTrue(os.access(os.path.join(REPO, "hooks", "overwrite-guard.sh"), os.X_OK))
 
+    def test_the_pass_banner_is_wired_on_startup_only(self):
+        # A /pass respawn starts as `startup`; the banner shows the old session's last reply
+        # once. The first reply waits for SessionStart hooks, so the timeout stays short.
+        banner = 'bash "$HOME/.claude/hooks/pass-banner.sh"'
+        self.assertEqual(commands("SessionStart", "startup"), [banner])
+        (h,) = [h for e in S["hooks"]["SessionStart"] for h in e["hooks"]
+                if "pass-banner" in h["command"]]
+        self.assertEqual(h["timeout"], 5)
+        self.assertEqual([c for entries in S["hooks"].values() for e in entries
+                          for c in (h["command"] for h in e["hooks"]) if "pass-banner" in c],
+                         [banner])
+        self.assertTrue(os.access(os.path.join(REPO, "hooks", "pass-banner.sh"), os.X_OK))
+        self.assertTrue(os.path.exists(os.path.join(REPO, "hooks", "pass_banner.py")))
+
     def test_the_lane_hooks_are_wired_and_fail_open(self):
         # docs/lanes.md: the guard on every file-tool write; identity on every context reset (a
         # compact is the net for an unplanned auto-compact), and the mirror on Stop and
