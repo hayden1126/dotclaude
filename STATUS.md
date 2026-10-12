@@ -73,7 +73,7 @@ stored here).
   `docs/lanes.md` and `skills/lanes/SKILL.md`). Three PRs:
   - PR 1 (lanes core) merged as #86 (`gh pr view 86`); its smoke test and guard replay are in
     `git show cc6b3df:STATUS.md`.
-  - **PR 2 `feat/lanes-lead`: built, reviewed (four rounds, the last on 7ba04d3), installed
+  - **PR 2 `feat/lanes-lead` (#87): built, reviewed (four rounds, the last on 7ba04d3), installed
     from its branch and smoke-tested on HAYPC 2026-10-11.** `lane open` (plan mode, window
     derived from the live session, never stored), `lane lock` (sandboxed: `lane *` left
     excludedCommands for six named subcommands), the lead's playbook in the skill, and the
@@ -146,8 +146,8 @@ stored here).
   `claude -p` repro and the 2.1.285 boundary; the karaoke session's has the incident.
 
 ## Notes for next session
-- **Next: push `feat/lanes-lead` on Hayden's approval** (step 0 is in, reviewed, installed and
-  smoke-tested), then open PR 2 as a draft and mark it ready. After Hayden merges: `git fetch origin main:main`
+- **Next: Hayden merges PR 2, #87** (`gh pr view 87 --json state,mergedAt`; step 0 is in it,
+  reviewed, installed and smoke-tested). After Hayden merges: `git fetch origin main:main`
   and `git switch main` outside the sandbox (the checkout is on `feat/lanes-lead` and live for
   every session), then PR 3 on `feat/pass` (PLAN.md PR 3, spikes first; build `pass-respawn` as
   a narrow wrapper with its own excludedCommands entry, never raw `tmux`). PR 2's range:
