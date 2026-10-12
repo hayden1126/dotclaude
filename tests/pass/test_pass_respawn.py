@@ -57,13 +57,31 @@ case "$1" in
       case "$5" in
         *pane_in_mode*) printf '%s\n' "$FAKE_TMUX_MODE" ;;
         *pane_pid*) printf '%s\n' "$FAKE_TMUX_PANE" ;;
+        *session_id*) printf '%s\n' "$FAKE_TMUX_WHERE" ;;
         *) printf '%s\n' "$FAKE_TMUX_SERVER" ;;
       esac
     fi ;;
   capture-pane) printf '%s\n' "$FAKE_TMUX_SCREEN" ;;
+  list-clients) [ -n "$FAKE_TMUX_CLIENTS" ] && printf '%s\n' "$FAKE_TMUX_CLIENTS" ;;
 esac
 exit 0
 """
+
+# The toast: a fake powershell.exe logs its argv like the fake tmux and exits $FAKE_TOAST_EXIT;
+# a fake wslpath answers one Windows path. Both sit first on PATH, and Base drops every /mnt/
+# entry from PATH, so the real powershell.exe never runs.
+FAKE_POWERSHELL = r"""#!/bin/sh
+{ printf 'powershell.exe'; for a in "$@"; do printf '\037%s' "$a"; done; printf '\n'; } \
+  >> "$FAKE_TOAST_LOG"
+exit "${FAKE_TOAST_EXIT:-0}"
+"""
+FAKE_WSLPATH = r"""#!/bin/sh
+[ "$1" = -w ] || exit 1
+printf '%s\n' 'C:\fake\notify-toast.ps1'
+"""
+WINPATH = r"C:\fake\notify-toast.ps1"
+WHERE = "$2 3 [repo] chart work"  # the pane's session id, window index and window name
+CLIENTS = "/dev/pts/7\n/dev/pts/9"  # the clients attached to that session
 
 TODAY = datetime.date.today()
 GOOD = """# STATUS: chart work
@@ -135,11 +153,21 @@ class Base(LanesRepo):
         with open(self.tmux, "w") as f:
             f.write(FAKE_TMUX)
         os.chmod(self.tmux, 0o755)
+        for name, body in (("powershell.exe", FAKE_POWERSHELL), ("wslpath", FAKE_WSLPATH)):
+            with open(os.path.join(self.fake_bin, name), "w") as f:
+                f.write(body)
+            os.chmod(os.path.join(self.fake_bin, name), 0o755)
+        self.write(os.path.join(self.home, ".claude", "notify-toast.ps1"), "# the toast\n")
         self.claude = os.path.join(self.fake_bin, "claude")
         self.tmux_log = os.path.join(self.tmp, "tmux.log")
+        self.toast_log = os.path.join(self.tmp, "toast.log")
+        self.env["PATH"] = os.pathsep.join(e for e in self.env["PATH"].split(os.pathsep)
+                                           if not e.startswith("/mnt/"))
         self.env.update(TMUX_PANE="%4", CLAUDE_CODE_SESSION_ID=SID, FAKE_TMUX_LOG=self.tmux_log,
                         FAKE_TMUX_SERVER=SERVER, FAKE_TMUX_PANE=f"{PANE_SHELL} claude",
-                        FAKE_TMUX_FAIL="", FAKE_TMUX_MODE="0", FAKE_TMUX_SCREEN=EMPTY_BOX)
+                        FAKE_TMUX_FAIL="", FAKE_TMUX_MODE="0", FAKE_TMUX_SCREEN=EMPTY_BOX,
+                        FAKE_TMUX_WHERE=WHERE, FAKE_TMUX_CLIENTS=CLIENTS,
+                        FAKE_TOAST_LOG=self.toast_log, FAKE_TOAST_EXIT="0")
         patch = mock.patch.dict(os.environ, self.env, clear=True)
         patch.start()
         self.addCleanup(patch.stop)
@@ -193,8 +221,9 @@ class Base(LanesRepo):
         """A fresh turn for another call in the same test: a new script, no stop yet."""
         self.script = list(script) or ["busy", "idle"]
         self.status, self.stopped = None, False
-        with contextlib.suppress(FileNotFoundError):
-            os.remove(self.tmux_log)
+        for path in (self.tmux_log, self.toast_log):
+            with contextlib.suppress(FileNotFoundError):
+                os.remove(path)
 
     def write_stop(self, waits, at=None):
         tasks = waits if self.stop_tasks is None else self.stop_tasks
@@ -250,14 +279,55 @@ class Base(LanesRepo):
                                                   "shown": True}))
 
     def notices(self):
-        return [a for a in self.calls("tmux", "display-message") if a[2] == "-t"]
+        """The status-line messages shown (display-message without -p)."""
+        return [a for a in self.calls("tmux", "display-message") if a[2] != "-p"]
+
+    def toasts(self, want=1, tries=60):
+        """The toasts sent: each fake powershell.exe call's argv. The toast is detached, so wait
+        up to tries * 0.05 s (3 s) for want of them."""
+        argvs = []
+        for _ in range(tries):
+            if os.path.exists(self.toast_log):
+                with open(self.toast_log) as f:
+                    done = f.read().rpartition("\n")[0]  # a line still being written waits
+                argvs = [line.split("\x1f") for line in done.splitlines()]
+                if len(argvs) >= want:
+                    return argvs
+            time.sleep(0.05)
+        return argvs
+
+    def assertLoud(self, words, toast=True):
+        """One held message per client of the pane's session (-d 0 -c <client> -t %4) holding
+        words and naming the tab, and, with toast, one toast holding them too."""
+        msgs = self.notices()
+        self.assertEqual([m[:7] for m in msgs],
+                         [["tmux", "display-message", "-d", "0", "-c", c, "-t"]
+                          for c in CLIENTS.split("\n")])
+        for m in msgs:
+            self.assertEqual(m[7], "%4")
+            self.assertIn(words, m[-1])
+            self.assertIn(" in tab 3: ", m[-1])
+        if toast:
+            (argv,) = self.toasts()
+            self.assertEqual(argv[1:6], ["-ExecutionPolicy", "Bypass", "-File", WINPATH,
+                                         "-Message"])
+            # The toast names the window too: no status bar beside it says which tab.
+            self.assertIn(words.replace(" in tab 3: ", " in tab 3 ([repo] chart work): "),
+                          argv[6])
+            self.assertIn(" in tab 3 ([repo] chart work): ", argv[6])
 
     def assertDropped(self, outcome, words):
         self.assertEqual(self.calls("tmux", "respawn-pane"), [])
         self.assertEqual(self.calls("tmux", "send-keys"), [])
-        (msg,) = self.notices()
-        self.assertEqual(msg[:4], ["tmux", "display-message", "-t", "%4"])
-        self.assertIn(words, msg[-1])
+        if outcome in self.mod.QUIET:
+            # Hayden caused it: the brief line, no held notice, no toast (a short look here;
+            # LoudNotice waits the full 3 s for each quiet outcome).
+            (msg,) = self.notices()
+            self.assertEqual(msg[:4], ["tmux", "display-message", "-t", "%4"])
+            self.assertIn(words, msg[-1])
+            self.assertEqual(self.toasts(tries=4), [])
+        else:
+            self.assertLoud(words)
         self.assertIn(f"outcome={outcome}", self.log())
 
     def assertNoTypedPath(self, argvs):
@@ -603,7 +673,7 @@ class Plain(Base):
         self.stop_waits = ["shell"]
         code, out = self.run_pass("--foreground", "--timeout", "3")
         self.assertEqual(code, 1, out)
-        self.assertDropped("busy", "background work")
+        self.assertDropped("busy", "waiting on 1 shell (a respawn would kill it)")
         self.assertIn("busy: waits: shell", self.log())
         self.assertNotIn("no stop record", self.log())
 
@@ -695,7 +765,7 @@ class Plain(Base):
         self.stop_waits = ["shell"]
         code, out = self.run_pass("--foreground")
         self.assertEqual(code, 1, out)
-        self.assertDropped("busy", "background work")
+        self.assertDropped("busy", "waiting on 1 shell (a respawn would kill it)")
         self.assertIn("waits: shell", self.log())
 
     def test_a_teammate_at_the_stop_drops_busy(self):
@@ -703,14 +773,14 @@ class Plain(Base):
         self.stop_tasks = ["teammate"]
         code, out = self.run_pass("--foreground")
         self.assertEqual(code, 1, out)
-        self.assertDropped("busy", "background work")
-        self.assertIn("waits: teammate", self.log())
+        self.assertDropped("busy", "1 teammate running (a respawn would kill it)")
+        self.assertIn("busy: tasks: teammate", self.log())
 
     def test_no_stop_record_drops_busy(self):
         self.stop_waits = None
         code, out = self.run_pass("--foreground")
         self.assertEqual(code, 1, out)
-        self.assertDropped("busy", "background work")
+        self.assertDropped("busy", "the Stop wrote no record, so background work")
         self.assertIn("busy: no stop record", self.log())
 
     def test_a_stop_record_from_before_the_call_drops_busy(self):
@@ -718,7 +788,7 @@ class Plain(Base):
         self.write_stop([], at=time.time() - 30)
         code, out = self.run_pass("--foreground")
         self.assertEqual(code, 1, out)
-        self.assertDropped("busy", "background work")
+        self.assertDropped("busy", "no record since the call")
 
     def test_a_pane_not_running_claude_drops_gone(self):
         for pane in (f"{PANE_SHELL} zsh", "12345 claude"):
@@ -756,6 +826,8 @@ class Plain(Base):
         self.assertFalse(os.path.exists(self.last_reply()))
         self.assertIn("outcome=failed", self.log())
         self.assertIn("can't find pane", self.log())
+        self.assertLoud("pass failed in tab 3: tmux could not respawn or type into the pane. "
+                        "See pass.log")
 
     def test_an_error_after_the_carry_removes_it_and_logs_error(self):
         real = self.mod.tmux
@@ -772,6 +844,7 @@ class Plain(Base):
         self.assertFalse(os.path.exists(self.carry_marker()))
         self.assertFalse(os.path.exists(self.last_reply()))
         self.assertIn("outcome=error RuntimeError: boom", self.log())
+        self.assertLoud("pass failed in tab 3: an error in the waiter. See pass.log")
 
     def test_a_waiter_that_cannot_detach_reports_error(self):
         real_fork = os.fork
@@ -881,7 +954,7 @@ class Lane(Base):
         self.stop_tasks = ["monitor"]
         code, out = self.run_pass("--foreground", cwd=self.path)
         self.assertEqual(code, 1, out)
-        self.assertDropped("busy", "background work")
+        self.assertDropped("busy", "1 monitor running")
         self.assertFalse(os.path.exists(self.carry_marker()))
 
     def test_a_planted_lane_path_never_reaches_argv_or_keys(self):
