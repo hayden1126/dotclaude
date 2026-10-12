@@ -61,7 +61,11 @@ an unregistered worktree: `lane whoami` tells you which.
    `<common-dir>/lanes/_closed/<id>-<date>/`, runs `git worktree remove` (never `--force`) and
    `git branch -d` (never `-D`).
 
-Existing worktrees join with `lane adopt <path>`.
+Existing worktrees join with `lane adopt <path>`. A dir name that is no slug (it starts with
+`_` or `.`, is `main`, or runs past 64 chars) takes `--id <slug>`, the one case where the id
+differs from the dir name; `git worktree move` is the other fix. If `lane new` fails partway, the
+lane stays registered as `setup-failed`, and `lane adopt <path>` finishes it, redoing only the
+failed step (copies never overwrite a file the lane already has).
 
 ## Cheat sheet
 
@@ -78,7 +82,8 @@ Existing worktrees join with `lane adopt <path>`.
 
 Board flags: `stale` (worktree gone; its claims are void), `rebase` (behind the base),
 `conflict` (two live lanes claim one request), `orphan` (no live session), `handoff?` (the last
-commit or session end is newer than the record).
+commit or session end is newer than the record), `setup-failed` (half made: it still holds its
+port, claims and a cap slot; finish it with `lane adopt <path>`).
 
 Run `lane` as a bare command: `lane *` is in `excludedCommands`, so it runs outside the sandbox
 with the network and gh's credential. Piped or sandboxed, the local subcommands still work, and
