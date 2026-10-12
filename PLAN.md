@@ -474,6 +474,29 @@ session):
   | S5 | a background `python3 -I -c 'import time; time.sleep(120)'` across `/compact` | it survives |
   | S6 | can `pass-respawn` see in-flight background tasks (descendants of the pane's claude, minus MCP servers)? | if cleanly, plain pass refuses mechanically; otherwise the refusal stays in the skill |
 
+- **Spike results** (2026-10-12, Claude Code 2.1.296, tmux 3.7c; a scratch window driven from
+  outside, with a `--settings` probe logging hook events):
+  - S1: `respawn-pane -k` sends the old session SessionEnd `other`, and the new one starts as
+    `startup` in the same pane. `open-sessions/` marks the old entry and writes the new one, so
+    restore (newest per pane) sees no death. `ring.log` rang only on real turns' Stops. The ★
+    dropped: the saved chat kept `starred` with `tab: None`, which confirms the carry is needed.
+  - S2: the argv form `respawn-pane -k -t <pane> -c <cwd> -- <abs claude> --permission-mode plan
+    <prompt>` works. The pane came back in plan mode with the prompt submitted, and it has
+    `TMUX_PANE`.
+  - S3: `@claude_state` goes `busy` at UserPromptSubmit and `idle` within 0.2 s of the Stop, as
+    seen from a poller outside the session.
+  - S4: `/compact <focus>` typed into an idle pane runs, and a prompt typed 1 s later queues
+    ("Press up to edit queued messages") and runs right after SessionStart `compact`. So the
+    script types both and needs no wait for the compact. `@claude_state` stays `idle` while
+    compacting, so the state can't show a compact in progress.
+  - S5: a background `sleep` survived the compact (`background_tasks` still listed it at the next
+    Stop).
+  - S6: a background Bash task is a `bwrap` child of the pane's `claude`. MCP servers are `npm`
+    and `socat` children, and a sandbox-off command is a shell child. So a plain pass refuses
+    mechanically: at act time, any `bwrap` or shell child of the claude process means work is in
+    flight. `/exit` asks before stopping background work, but `respawn-pane -k` would kill it
+    silently, which is why the check matters.
+
 - **Verify:**
   - Unit tests:
     - The resume-mode choice: approved, unapproved, a malformed marker.
