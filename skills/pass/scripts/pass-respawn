@@ -413,9 +413,10 @@ def typed_since(path: str | None, offset: int | None) -> bool | None:
 def stop_problem(plan: Plan) -> str | None:
     """Why the session's stop record doesn't clear a respawn, or None: it must be dated after
     the call and list no waits (stop-ring.sh's subagent, shell, workflow, cloud session) and no
-    task at all but `dream` (memory upkeep). stop-ring.sh rings past a teammate or a monitor,
-    since one lingers or runs for hours, but a respawn kills either, and any type it doesn't
-    know (unlabeled ones included), so a plain pass doesn't."""
+    task at all but `dream` (memory upkeep; lanelib.plain_pass_blockers, which the autopass
+    watcher shares). stop-ring.sh rings past a teammate or a monitor, since one lingers or runs
+    for hours, but a respawn kills either, and any type it doesn't know (unlabeled ones
+    included), so a plain pass doesn't."""
     rec = stop_record(plan.session_id)
     if rec is None:
         return "no stop record"
@@ -429,8 +430,8 @@ def stop_problem(plan: Plan) -> str | None:
     tasks = rec.get("tasks")
     if not isinstance(tasks, list):
         return "no task list in the stop record"
-    if others := [t for t in tasks if t != "dream"]:
-        return "waits: " + ", ".join(map(str, others))
+    if others := lanelib.plain_pass_blockers(tasks):
+        return "waits: " + ", ".join(others)
     return None
 
 

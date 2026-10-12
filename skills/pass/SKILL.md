@@ -70,6 +70,18 @@ Each drop shows one line in the pane's status line and changes nothing else:
 
 Each decision appends one line to `$XDG_STATE_HOME/dotclaude/pass.log` (`~/.local/state/dotclaude/pass.log` by default).
 
+## Auto-pass nudges
+
+With autopass on (`/autopass on` in the tab, a lane or a lanes repo's main checkout by default, or `autopass = true` in `~/.config/dotclaude/pass.toml`), `hooks/context-watch.sh` tells you when to pass. Its text starts with `[autopass]`, arrives as a Stop block reason or as context added to a tool result, and names the context size and where auto-compact fires (about 567k).
+
+- **Soft (300k), at a Stop:** done end to end, run this skill now. A small remainder left, finish it first. Your last reply asked Hayden something, end the turn and do nothing else.
+- **Wrap-up (480k):** finish the step you are on and don't start another. If more than that step is left, run this skill now, in compact mode if you are mid-task.
+- **Hard (520k, again every 20k until you start the pass):** run this skill now: compact mode mid-task, plain at a task boundary.
+- When it says compact mode because background tasks are running (or may be: a tool call can't see the task list), use compact: a plain pass would be refused (step 2).
+- The tiers follow the window: on a smaller one they come earlier, and the text always names the size and where auto-compact fires.
+
+An auto-pass is a normal pass: the same handoff, `handoff-check` and `pass-respawn`, and the fresh session starts in plan mode unless the first Next item is approved. Never pass on a nudge while Hayden is waiting on an answer from you. With autopass off you get no nudge: Hayden alone sees one line at the hard tier and decides. `/autopass` is answered by a hook and never reaches you.
+
 ## Resume mode
 
 The fresh session starts in **plan mode** unless the status doc's Next block carries `(approved by Hayden YYYY-MM-DD)` on its **first** item, dated within this session (not before its start, not after today). With the session's start unknown it stays in plan mode. A same-day marker from an earlier session can't be told apart by its date, so it counts. Then it starts in the user's default mode and continues. A marker on a later item is ignored. In compact mode the resume prompt asks for `EnterPlanMode` instead. The handoff skill writes the marker only for an approval Hayden gave in this session (its step 6), so each new step stops at a human checkpoint.
