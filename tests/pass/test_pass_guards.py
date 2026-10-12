@@ -117,6 +117,19 @@ class WritableRoots(Plain):
         self.assertEqual(asked, [t.CLAUDE])
         self.assertEqual(seen, [argv, argv])
 
+    def test_a_sandbox_writable_settings_flag_file_refuses(self):
+        # Its allowWrite was read at launch; edited since, it could hide a writable dir.
+        writable = os.path.join(self.tmp, "w")
+        flagged = os.path.join(writable, "flags.json")
+        self.settings(flagged, sandbox={"filesystem": {"allowWrite": []}})
+        self.mod.writable_roots = lambda repo, cwd, launch=None, session_argv=None: (
+            [repo.toplevel, repo.main, writable] if repo else [writable])
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            code = self.mod.main(["--print", "-C", self.main], procs=t.table,
+                                 cmdline=lambda pid: ["claude", "--settings", flagged])
+        self.assertEqual(code, 1, out.getvalue())
+        self.assertIn("a --settings file resolves to", out.getvalue())
+
     def test_deny_write_carves_out_only_from_the_user_and_managed_tiers(self):
         managed = os.path.join(self.tmp, "managed-settings.json")
         self.mod.MANAGED_SETTINGS = managed

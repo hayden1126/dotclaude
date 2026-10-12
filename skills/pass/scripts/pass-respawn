@@ -93,8 +93,10 @@ the sandbox can write (docs/lanes.md S3). Every input, and why each is safe:
     tier's is ignored, as a project file could forge it. The session's own launch flags count
     too, read from its claude's command line (/proc/<pid>/cmdline, the kernel's): every
     --add-dir value and each --settings file's (or inline JSON's) allowWrite and
-    additionalDirectories. A dir added at runtime with /add-dir lives only in Claude Code's
-    memory, so it can't be seen and isn't counted: an accepted limit.
+    additionalDirectories. A --settings file the sandbox can write refuses the pass: it may
+    have been edited since launch, so what it listed then can't be read back. A dir added at
+    runtime with /add-dir lives only in Claude Code's memory, so it can't be seen and isn't
+    counted: an accepted limit.
   - PATH is the call's, so it keeps only the absolute entries outside those dirs (as given and
     resolved). git, tmux and claude resolve through that PATH and must also resolve, as found
     and through their links, outside them; otherwise it refuses. The sanitized PATH replaces
@@ -549,6 +551,26 @@ def tier_files() -> list[str]:
             *sorted(glob.glob(os.path.join(MANAGED_DIR, "*.json")))]
 
 
+def flag_base(repo: lanelib.Repo | None, cwd: str, launch: str | None) -> str:
+    """The dir a session flag's relative path resolves against: the launch dir, else the
+    toplevel (or the call's dir)."""
+    if launch and os.path.isabs(launch):
+        return os.path.normpath(launch)
+    return repo.toplevel if repo else os.path.realpath(cwd)
+
+
+def flag_settings(argv: list[str] | None, base: str) -> tuple[list[str], list[dict]]:
+    """The session's --settings values: (absolute file paths, parsed inline JSON objects)."""
+    files, inline = [], []
+    for value in session_flags(argv)[1]:
+        if value.lstrip().startswith("{"):
+            with contextlib.suppress(ValueError):
+                inline.append(json.loads(value))
+        else:
+            files.append(os.path.normpath(os.path.join(base, os.path.expanduser(value))))
+    return files, inline
+
+
 def writable_roots(repo: lanelib.Repo | None, cwd: str, launch: str | None = None,
                    session_argv: list[str] | None = None) -> list[str]:
     """Dirs sandboxed Bash can write: the checkout and the main checkout (before git has found
@@ -571,15 +593,10 @@ def writable_roots(repo: lanelib.Repo | None, cwd: str, launch: str | None = Non
         files += [os.path.join(d, ".claude", "settings.json"),
                   os.path.join(d, ".claude", "settings.local.json")]
     base = os.path.normpath(launch) if launch and os.path.isabs(launch) else top
-    add_dirs, flag_settings = session_flags(session_argv)
+    add_dirs, _ = session_flags(session_argv)
     roots += [os.path.normpath(os.path.join(base, os.path.expanduser(d))) for d in add_dirs]
-    inline = []
-    for value in flag_settings:
-        if value.lstrip().startswith("{"):
-            with contextlib.suppress(ValueError):
-                inline.append(json.loads(value))
-        else:
-            files.append(os.path.normpath(os.path.join(base, os.path.expanduser(value))))
+    flag_files, inline = flag_settings(session_argv, base)
+    files += flag_files
     for path in files:
         roots += listed_paths(path, (*SANDBOX_KEYS, "allowWrite"), top)
         roots += listed_paths(path, ("permissions", "additionalDirectories"), top)
@@ -758,6 +775,10 @@ def prepare(args: argparse.Namespace, procs, cmdline=proc_cmdline) -> Plan:
         raise Refuse(2, f"pass-respawn: not in a tmux pane. Do it by hand: {by_hand}, then: "
                      f"{prompt}", "no tmux pane")
     roots = writable_roots(repo, args.cwd, launch, session_argv=claude_argv)
+    # A --settings file the sandbox can write may have been edited since launch, so the dirs it
+    # listed then (and the sandbox still honors) can't be read back from it now.
+    for flagged in flag_settings(claude_argv, flag_base(repo, args.cwd, launch))[0]:
+        refuse_writable("a --settings file", flagged, roots, deny_roots())
     path = pin(roots)
     resolve_bin("git", roots, path)
     tmux = resolve_bin("tmux", roots, path)
