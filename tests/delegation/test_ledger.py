@@ -371,8 +371,8 @@ class LedgerHook(LedgerEnv):
                               env=self.env).stdout
 
     def test_a_resume_compares_only_its_own_activation(self):
-        # fold keeps each field's latest value, so a resume's start must clear the last stop's
-        # *_after: an edit between activations is no agent's doing.
+        # audit pairs each start with its own stop, never the previous activation's: an edit
+        # between activations is no agent's doing.
         repo, wt, lane = self.lane_setup()
         self.hook(dict(self.start("agent-w1"), cwd=wt, agent_type="writer"))
         self.hook(dict(self.stop("w1"), cwd=wt, agent_type="writer"))
@@ -1181,7 +1181,8 @@ DEADLINE = {"deadline": {"allow": list(dc.REPORT_PATH), "default": {"nudge_min":
 
 
 def act(aid, role, minutes, kind="subagent", transcript=None):
-    return ledger_mod.Activation(("claude", aid), role, kind, T0, T0 + minutes * 60, transcript)
+    return ledger_mod.Activation(("claude", aid), role, kind, T0, T0 + minutes * 60, transcript,
+                                 {}, {})
 
 
 class Tables(unittest.TestCase):
@@ -1189,7 +1190,8 @@ class Tables(unittest.TestCase):
         rows = ledger_mod.duration_table(
             [act("a1", "Explore", 5), act("a2", "Explore", 15), act("a3", "Explore", 25),
              act("m1", "Explore", 12, kind="teammate"), act("m2", "writer", 12, kind="teammate"),
-             ledger_mod.Activation(("codex", "r1"), "codex", "codex", T0, T0 + 600, None)],
+             ledger_mod.Activation(("codex", "r1"), "codex", "codex", T0, T0 + 600, None, {},
+                                   {})],
             DEADLINE)
         self.assertEqual([r["label"] for r in rows], ["Explore", "teammates", "codex"])
         explore, mates, codex = rows

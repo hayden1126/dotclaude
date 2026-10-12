@@ -54,11 +54,12 @@ For an agent in a worktree, the start and stop rows also carry a hash of the mai
 `git status` (main_before, main_after). When the parent session runs in another checkout (a
 lane: a sibling worktree, while its writers' worktrees still land under the main checkout),
 they carry that checkout's path and hash too (parent_root, parent_before, parent_after; the
-stop re-hashes the path its start recorded). A start row nulls the *_after fields, so a
-resumed agent's audit compares only its current activation. The sandbox lets a worktree
-agent's subprocess write anywhere in the session's write root, so a computed-path write into
-either checkout can't be stopped, only seen. `audit` reports a changed hash as evidence, not a verdict,
-because the lead may have been editing too.
+stop re-hashes the path its start recorded). `audit` compares each activation's start with the
+stop that closed it, so it checks every activation of a resumed agent or a teammate, and never
+an edit made between two. The sandbox lets a worktree agent's subprocess write anywhere in the
+session's write root, so a computed-path write into either checkout can't be stopped, only seen.
+`audit` reports a changed hash as evidence, not a verdict, because the lead may have been editing
+too.
 
 `open` only suggests. Each row prints the evidence it used (parent session alive, how long
 this activation has run, the newest transcript entry and its age, the calls still open), so
@@ -220,13 +221,10 @@ def cmd_hook(_args):
                        parent_transcript=data.get("transcript_path"))
             main = main_checkout(data.get("cwd"))
             if main:
-                # *_after: None, since fold keeps each field's latest value: a resume's audit
-                # must not compare this start with the previous activation's stop.
-                row.update(main_before=checkout_status(main), main_after=None)
+                row["main_before"] = checkout_status(main)
                 parent = parent_checkout(base["session_id"], main)
                 if parent:
-                    row.update(parent_root=parent, parent_before=checkout_status(parent),
-                               parent_after=None)
+                    row.update(parent_root=parent, parent_before=checkout_status(parent))
         else:
             text, source = data.get("last_assistant_message") or "", "last_message"
             if not text.strip():
@@ -785,17 +783,16 @@ def cmd_audit(args):
             " Check the PreToolUse entry and that hook input still carries agent_id.")
     else:
         say("ok   policy hook: saw every agent that used tools")
-    # Fold the whole ledger, then keep the agents whose latest row is in the window: a writer
-    # that started before the window and stopped inside it still pairs its start and stop.
-    folded = {k: e for k, e in dc.fold(every).items()
-              if e.get("ts") and dc.parse_iso(e["ts"]).timestamp() >= horizon}
+    # Every activation, not only an agent's latest (a resume and each teammate message start
+    # another), kept when it stopped in the window: a writer that started before the window and
+    # stopped inside it still pairs its start and stop.
+    ran = [a for a in activations(every)[0] if a.end >= horizon]
     def changed(field):
-        return [(k, e) for k, e in folded.items()
-                if e.get(f"{field}_before") and e.get(f"{field}_after")
-                and e[f"{field}_before"] != e[f"{field}_after"]]
-    moved = ([("main checkout", k, e) for k, e in changed("main")]
-             + [(f"{e.get('parent_root')} (the parent session's checkout)", k, e)
-                for k, e in changed("parent")])
+        return [a for a in ran if a.first.get(f"{field}_before") and a.last.get(f"{field}_after")
+                and a.first[f"{field}_before"] != a.last[f"{field}_after"]]
+    moved = ([("main checkout", a.key, a.last) for a in changed("main")]
+             + [(f"{a.last.get('parent_root')} (the parent session's checkout)", a.key, a.last)
+                for a in changed("parent")])
     for where, (_, rid), e in moved:
         warn += 1
         say(f"WARN {where} changed while {e.get('agent_type')} {rid} ran in its worktree "
@@ -805,6 +802,8 @@ def cmd_audit(args):
             "session's checkout")
     policy = read_policy()
     roles = report_roles(policy)
+    folded = {k: e for k, e in dc.fold(every).items()
+              if e.get("ts") and dc.parse_iso(e["ts"]).timestamp() >= horizon}
     bad = [e for e in folded.values() if e.get("event") == "stop" and e.get("report_ok") is False
            and e.get("agent_type") in roles and not e.get("teammate")]
     say(f"{'WARN' if bad else 'ok  '} reports failing the contract: {len(bad)}")
@@ -841,7 +840,9 @@ EXCLUDE_KEYS = {"id": "id", "session": "session_id", "name": "name"}  # option -
 START_EVENTS = ("start", "resume")  # codex-delegate's resume starts a run too
 SLACK = 1  # seconds: ledger stamps are whole seconds, transcript ones carry milliseconds
 
-Activation = collections.namedtuple("Activation", "key role kind start end transcript")
+# first and last: the start row and the stop row that closed it, for the audit's hashes.
+Activation = collections.namedtuple("Activation",
+                                    "key role kind start end transcript first last")
 
 
 def excluded(rows):
@@ -905,7 +906,7 @@ def activations(rows):
             unstopped[key] = a["start"]
         else:
             acts.append(Activation(key, a["role"], a["kind"], a["start"], a["end"],
-                                   a["transcript"]))
+                                   a["transcript"], a["first"], a["last"]))
 
     for r in rows:
         event, key, t = r.get("event"), (r.get("runner"), r.get("id")), row_ts(r)
@@ -916,11 +917,12 @@ def activations(rows):
             if key in cur:
                 close(key)
             cur[key] = {"role": role, "kind": kind_of(r), "start": t, "end": None,
-                        "transcript": agent_transcript(r)}
+                        "transcript": agent_transcript(r), "first": r, "last": None}
         elif key in cur:
             a = cur[key]
             # The stop row has the role meta.json resolved, and only it may say `teammate`.
-            a.update(end=t, role=role, transcript=agent_transcript(r) or a["transcript"],
+            a.update(end=t, last=r, role=role,
+                     transcript=agent_transcript(r) or a["transcript"],
                      kind="teammate" if "teammate" in (a["kind"], kind_of(r)) else a["kind"])
             if key[0] == "codex":
                 close(key)  # codex never stops twice: a later stop is a failed resume's

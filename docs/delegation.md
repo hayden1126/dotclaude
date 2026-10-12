@@ -47,7 +47,8 @@ Each layer covers what the others can't.
    - The ledger records every start, stop, denial and deadline nudge, and the exclusions that
      keep probes out of `audit --monthly`.
    - `audit` flags a hook that stopped seeing agents, and a writer run that coincided with a
-     change in the main checkout or in the parent session's own checkout (a lane).
+     change in the main checkout or in the parent session's own checkout (a lane). It checks
+     each activation, so a resumed writer's earlier escape still shows.
    - `sandbox-denials` lists what the sandbox refused.
    - The canary re-verifies all of this on a new Claude Code version, and a SessionStart check
      runs the cheap checks itself and reminds Hayden of the rest ("Stage 3", A4 and A5).
