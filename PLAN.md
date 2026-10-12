@@ -658,10 +658,42 @@ all on 1M-window models). Context at each event, in thousands of tokens:
   handoff needs. A lane whose session died with `handoff?` set goes to Hayden's asks.
 - The lead passes itself the same way. Its state lives in the project STATUS and the board.
 
+**The last reply across a pass** (Hayden, 2026-10-12: banner and popup, in this PR).
+- The problem: a plain pass respawns the pane, so the old session's final reply leaves the screen.
+  Auto-pass makes it worse: a pass he didn't ask for wipes a reply he never read. Compact mode
+  doesn't need this, because the conversation survives a compact.
+- The source: the Stop payload's `last_assistant_message`. A plain pass acts after that Stop, so
+  the field holds exactly the reply.
+  - `stop-ring.sh` adds it to `stops/<sid>.json` as `last_message`, capped at 64 KiB.
+  - `pass-respawn` (plain mode) copies it to `pass-last/<pane number>.json` as `{tab,
+    from_session, written_at, message, shown}`. The file is per tab and not consumed. It is kept
+    apart from the one-shot `pass-carry` marker, so two SessionStart hooks never race over one
+    file.
+- **Banner:** a SessionStart hook (`startup` only; it skips `-p` and subagents) shows the message
+  as a `systemMessage`, which Hayden sees and the model doesn't. It needs the same tab, an entry
+  under 120 s old and `shown` false, and then sets `shown`.
+- **Popup:** `pass-last` opens the tab's message in `display-popup` with `less`. It is bound to
+  Ctrl-b P and has entries in the Ctrl-b Enter menu and the right-click tab menu.
+- Rejected: putting the reply in the resume prompt. That feeds the old session's beliefs back
+  into the fresh context, which is what a clear avoids.
+
+**Spikes first** (a scratch tmux window, driven from outside, with a `--settings` probe hook):
+
+| # | Question | Decides |
+|---|---|---|
+| A1 | Does UserPromptSubmit see `/autopass on` before it expands? Try it both undefined and defined. Does `decision: block` with a `reason` show the line and cost no model turn? | a hook, or a mod's slash command |
+| A2 | Is a SessionStart `systemMessage` shown on a `startup` respawned with a prompt argument, and where? Is a 3-4 KiB message truncated? | the whole reply in the banner, or a head plus "Ctrl-b P for the rest" |
+| A3 | Does the transcript's last main-chain assistant `usage` match the statusline's `current_usage` at a Stop and mid-turn? Is `isSidechain` set on subagent entries? | the parser and its fixture |
+| A4 | Does a PostToolUse `additionalContext` reach the model on a main-session tool call? | the wrap-up and hard tiers inside long turns |
+
 **Verify.**
 - `context-watch` on transcript fixtures: below each tier, at each tier once per crossing, the
   hard tier re-arming, off, background work in flight, a subagent event, and a compact re-arming.
+- The banner: a match, a stale entry, the wrong tab, shown once. `stop-ring.sh`'s `last_message`
+  and its cap. `pass-respawn` writes `pass-last`.
 - A live run at lowered tiers fires each tier once and ends in a passing `handoff-check`.
+- A live `/pass` shows the banner with the old reply, Ctrl-b P reopens it, and a Star still
+  carries.
 
 ## After: the work repo's migration (its own PR in that repo, after PR 1 and PR 2 merge)
 

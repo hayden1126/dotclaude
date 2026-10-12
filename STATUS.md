@@ -138,10 +138,10 @@ stored here).
   `claude -p` repro and the 2.1.285 boundary; the karaoke session's has the incident.
 
 ## Notes for next session
-- **Next: PR 4 on `feat/autopass`, spikes first** (PLAN.md "PR 4: auto-pass"). Step 0: does
-  UserPromptSubmit see a defined slash command (`/autopass on`) before it expands, so the toggle
-  costs no model turn? If not, a mod's slash command (`plugin-authoring` skill). Then plan the
-  build and get Hayden's approval. This branch already carries the post-#88 STATUS lines (a
+- **Next: PR 4 on `feat/autopass`, spikes A1-A4 first** (PLAN.md "PR 4: auto-pass"; Hayden
+  approved the build plan 2026-10-12, which adds "The last reply across a pass": a banner and a
+  Ctrl-b P popup). If A1 (the `/autopass` toggle in UserPromptSubmit) or A2 (the banner's
+  `systemMessage`) breaks the design, bring it back to Hayden before building. This branch already carries the post-#88 STATUS lines (a
   fact known only after a merge rides in the next PR). Then the release-skill PR in the work
   repos (PLAN.md PR 3 "Delta handoff"). Verify before touching `/pass`: `tests/pass`,
   `tests/lanes`, `tests/setup`, `tests/delegation`, from the main checkout
