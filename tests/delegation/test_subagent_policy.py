@@ -61,9 +61,10 @@ class Base(unittest.TestCase):
                                      re.sub(r"[^A-Za-z0-9]", "-", self.proj))
         os.makedirs(os.path.join(self.slug_dir, "s1", "subagents"))
         self.transcript = os.path.join(self.slug_dir, "s1.jsonl")
-        bindir = os.path.join(self.home, "bin")  # gh-public as setup.sh links it, and a script
+        bindir = os.path.join(self.home, "bin")  # tools as setup.sh links them, and a script
         os.makedirs(bindir)
-        for exe in (os.path.join(bindir, "gh-public"), os.path.join(self.proj, "run.sh")):
+        for exe in (os.path.join(bindir, "gh-public"), os.path.join(bindir, "pass-respawn"),
+                    os.path.join(self.proj, "run.sh")):
             with open(exe, "w") as f:
                 f.write("#!/bin/sh\n")
             os.chmod(exe, 0o755)
