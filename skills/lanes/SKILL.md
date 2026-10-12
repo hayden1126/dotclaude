@@ -1,6 +1,6 @@
 ---
 name: lanes
-description: How to work when several Claude sessions share one repo, each in its own git worktree (a "lane"), using the `lane` CLI. Use when starting, adopting or closing a worktree for parallel work, when a SessionStart line names your lane, when deciding who owns a request, when writing status in a repo with lanes, or when the user mentions lanes, worktrees, parallel sessions or "who has #N". Covers the five invariants, the lane lifecycle, a command cheat sheet and what to write where.
+description: How to work when several Claude sessions share one repo, each in its own git worktree (a "lane"), using the `lane` CLI. Use when starting, adopting or closing a worktree for parallel work, when a SessionStart line names your lane, when deciding who owns a request, when writing status in a repo with lanes, when acting as the lead (triaging requests into lanes and opening them with `lane open`), when running a shared gate that can't run twice at once (`lane lock`), or when the user mentions lanes, worktrees, parallel sessions or "who has #N". Covers the five invariants, the lane lifecycle, the lead's playbook, a command cheat sheet and what to write where.
 ---
 
 # Lanes
@@ -47,8 +47,10 @@ an unregistered worktree: `lane whoami` tells you which.
 2. **New lane:** `lane new chart-fix --claim 42 --goal "fix the axis labels" --files src/chart/
    --overlaps api-docs --done-when "axis test green"`. It fetches, branches from `origin/main`
    with no upstream, copies the gitignored files `.worktreeinclude` lists, seeds the record with
-   the brief, hands out a port, runs the setup command and prints `cd <path> && claude`. Start
-   the lane's session there, so its cwd is the lane.
+   the brief, hands out a port and runs the setup command. Start the lane's session with
+   `lane open chart-fix` (bare, from inside tmux): a new tmux window in the lane, in plan mode,
+   told to read its record and plan the brief. Outside tmux, `cd <path> && claude`. Either way
+   the session's cwd is the lane.
 3. **Work.** Commit on the lane branch. Keep the record current (`lane note "<line>"` adds a
    timestamped State line). Put evidence under `.lane/artifacts/` and cite it in Decisions.
    Copy it in, don't link it: the mirror and the archive keep a symlink as a link, never what
@@ -71,17 +73,56 @@ differs from the dir name; `git worktree move` is the other fix. If `lane new` f
 lane stays registered as `setup-failed`, and `lane adopt <path>` finishes it, redoing only the
 failed step (copies never overwrite a file the lane already has).
 
+## The lead
+
+The lead is an optional session, usually in the main checkout, that splits a batch of requests
+into lanes and keeps them moving. It owns the project STATUS (backlog, merge order) and nothing
+inside a lane.
+
+1. **Triage.** Collect the requests. Explore the code to estimate the files each one touches,
+   group requests whose files overlap, and pick lane ids and branches.
+2. **Propose.** Show Hayden a table and wait for approval:
+
+   | Lane | Branch | Requests | Files | Overlaps | Merge order |
+   |---|---|---|---|---|---|
+   | chart-fix | fix/chart-axis | #42 | src/chart/ | api-docs | 1 |
+
+3. **Open.** For each approved lane, `lane new <id> --branch <b> --claim <n> --goal "..."
+   --files "..." --overlaps "..." --done-when "..."` writes the brief into the record. Then
+   `lane open <id>` starts its session.
+4. **Cap.** `config.toml` `cap` (default 4) limits live lanes. Requests beyond it wait in the
+   project STATUS backlog.
+5. **Hand-back gate.** A lane is handed back only when `handoff-check -C <lane path>` passes and
+   `lane ls` shows no `handoff?` flag. Until then, message the lane; if its session is gone, add it
+   to Hayden's asks. Never order a merge or close a lane before the gate passes.
+6. **Watch and order.** Watch `lane ls`. Keep the merge order in the project STATUS. After each
+   merge, message the remaining lanes: "main moved to `<sha>`: rebase; renumber the version if
+   taken". The board's `rebase` flag is the truth; the message is only a nudge.
+7. **Shared gates.** Wrap any run that can't happen twice at once (a browser-driven test gate, an
+   e2e suite on a fixed port) in `lane lock <name> -- <cmd>`. List the names once with
+   `lane init --locks gate,e2e`; an unlisted name is refused, since a typo would split the mutual
+   exclusion. A second run waits and names the holder; `--wait SECS` gives up with exit 75.
+
+The lead never respawns another lane's session or edits its record (invariant 2): only the lane
+holds the context its handoff needs.
+
+**Writers in lanes.** A lane-rooted session's `writer` subagent gets a worktree under the main
+checkout's `.claude/worktrees/`, but branched from the lane's HEAD (live probe, 2026-10-11). The
+stale-base trap (`worktree.baseRef`) therefore bites only a session rooted in the main checkout.
+
 ## Cheat sheet
 
 | Command | What it does |
 |---|---|
 | `lane whoami` | your lane id, `main`, `unregistered` or `plain` (`--json` for scripts) |
-| `lane ls` | the board: branch, ahead/behind, PR, port, claims, live sessions, flags |
+| `lane ls` | the board: branch, ahead/behind, PR, port, claims, live sessions, tmux window, flags; then any held locks |
 | `lane ls --requests` | request to lane, from claims only |
 | `lane who 42` | the lane that claims #42, or "unclaimed" |
 | `lane claim 42` / `lane release 42` | claim or drop a request for your lane |
 | `lane note "<text>"` | append a timestamped line to your record's State |
 | `lane asks` | every lane's open "Asks for Hayden", one list |
+| `lane open <id>` | the lane's session in a new tmux window, in plan mode; `--focus` switches to it, or to the live session's window; `--print` shows the tmux command |
+| `lane lock gate -- <cmd>` | run `<cmd>` under the named lock, waiting while another run holds it; `--wait SECS` gives up with exit 75 |
 | `lane new` / `adopt` / `done` | lifecycle, above |
 
 Board flags: `stale` (worktree gone; its claims are void), `rebase` (behind the base),
@@ -89,9 +130,11 @@ Board flags: `stale` (worktree gone; its claims are void), `rebase` (behind the 
 commit or session end is newer than the record), `setup-failed` (half made: it still holds its
 port, claims and a cap slot; finish it with `lane adopt <path>`).
 
-Run `lane` as a bare command: `lane *` is in `excludedCommands`, so it runs outside the sandbox
-with the network and gh's credential. Piped or sandboxed, the local subcommands still work, and
-`new`, `ls` and `done` say what they skipped (PR state shows `?`).
+Run `lane init`, `new`, `adopt`, `ls`, `open` and `done` as bare commands: those are in
+`excludedCommands`, so they run outside the sandbox with the network, gh's credential and a view
+of other processes. Piped or sandboxed, `new`, `ls` and `done` say what they skipped (PR state
+shows `?`), and `open` refuses. Every other subcommand runs sandboxed. `lane lock` must: the
+command it wraps inherits its sandbox.
 
 ## What to write where
 
@@ -117,3 +160,5 @@ with the network and gh's credential. Piped or sandboxed, the local subcommands 
 | Deciding ownership from an agent list or a tab title | Only `lane who` answers it |
 | Running `git worktree remove` by hand | `lane done` archives the record first; the Stop-hook mirror is only the backstop |
 | Claiming for a lane you're not in | Only a lane claims, for itself; the lead names claims at `lane new` |
+| Running a shared gate bare while another lane may run it | `lane lock <name> -- <cmd>`, so the second run waits |
+| Opening a lane by `cd`-ing the lead's session into it | `lane open <id>`: a lane needs its own session, rooted in its worktree |
