@@ -59,7 +59,7 @@ The waiter watches this session's own status in `~/.claude/sessions/<pid>.json` 
 
 After a plain respawn, the fresh session shows the last turn's replies once as a banner (Hayden sees it, the model doesn't), and Ctrl-b P reopens the last 5 turns in a popup.
 
-A refusal (`stale`, `busy`, `timeout`, `failed`, and the resume prompt a partial compact leaves) is loud: one line naming the cause, the tab and the fix, on the status line of every terminal attached to the pane's tmux session, held until a key press, plus the Windows toast. A drop Hayden caused (`resumed`, `gone`, `cancelled`) shows a brief line in the status line. A drop changes nothing else:
+A refusal (`stale`, `busy`, `timeout`, `failed`, `error`, and the resume prompt a partial compact leaves) is loud: one line naming the cause, the tab and the fix, on the status line of every terminal attached to the pane's tmux session, held until a key press, plus the Windows toast. A drop Hayden caused (`resumed`, `gone`, `cancelled`) shows a brief line in the status line. A drop changes nothing else:
 
 | Drop | Cause | What to do |
 |---|---|---|
@@ -70,6 +70,7 @@ A refusal (`stale`, `busy`, `timeout`, `failed`, and the resume prompt a partial
 | `timeout` | the turn never ended (600 s) | `/pass` again |
 | `cancelled` | `pass-respawn -C <toplevel> --cancel` ended the waiter | nothing; `/pass` again when wanted |
 | `failed` | tmux could not respawn the pane or type into it | read `pass.log`, then `/pass` again |
+| `error` | an error in the waiter itself | read `pass.log`, then `/pass` again |
 | `partial` | compact mode: `/compact` was sent (not confirmed), then copy mode, a draft or no input box came up before the resume prompt | type the prompt the status line shows (it stays until a key press, and `pass.log` has it whole) |
 
 Each decision appends one line to `$XDG_STATE_HOME/dotclaude/pass.log` (`~/.local/state/dotclaude/pass.log` by default).

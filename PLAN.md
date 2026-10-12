@@ -54,7 +54,8 @@ inside", and Codex sessions wouldn't get the convention.
   pane. It resumes in plan mode unless the next step was already approved.
 - Opt-in auto-pass on context fill, on by default in lanes. The lead only nudges and never
   respawns a lane.
-- The work ships as three PRs: core, lead, /pass. Then the work repo migrates in its own repo.
+- The work ships as four PRs: core, lead, /pass, auto-pass. Then the work repo migrates in its
+  own repo.
 
 ## Invariants (the convention in five rules)
 
@@ -423,7 +424,7 @@ nothing medium or worse) and live runs shaped these:
   bash mode works too (its output starts a model turn, which is harmless).
 
 **Changes from the 2026-10-11 design** (Hayden, 2026-10-12):
-- Auto-pass (the context watcher, its config, `/pass auto`) moved to PR 4.
+- Auto-pass (the context watcher, its config, `/autopass`) moved to PR 4.
 - **Work after a handoff makes it stale.** The detached respawner re-runs `handoff-check` right
   before it acts, and drops the pass (a `tmux display-message`, a `stale` log line, no respawn)
   if the tree got dirty or a commit landed after the status file. Between the call and idle the
@@ -632,7 +633,9 @@ all on 1M-window models). Context at each event, in thousands of tokens:
   sit at auto-compact itself.
 - The hook writes the count to `$XDG_STATE_HOME/dotclaude/ctx/<session_id>`, for `lane ls`.
 
-**Three tiers**, all derived from `autoCompactWindow`, so they move together if it changes:
+**Three tiers**, all derived from `autoCompactWindow`, so they move together if it changes. The
+token values below are the design values at a 600k window; "As built" above has the formulas that
+scale with the window:
 
 | Tier | Tokens | Fires on | What the model is told |
 |---|---|---|---|
@@ -698,9 +701,11 @@ all on 1M-window models). Context at each event, in thousands of tokens:
   doesn't need this, because the conversation survives a compact.
 - The source: the Stop payload's `last_assistant_message`. A plain pass acts after that Stop, so
   the field holds exactly the reply.
-  - `stop-ring.sh` adds it to `stops/<sid>.json` as `last_message`, capped at 64 KiB.
-  - `pass-respawn` (plain mode) copies it to `pass-last/<pane number>.json` as `{tab,
-    from_session, written_at, message, shown}`. The file is per tab and not consumed. It is kept
+  - `stop-ring.sh` adds it to `stops/<sid>.json` in `replies` (`hooks/stop_ring.py`
+    `merge_replies`, 64 KiB per reply). It was first built as one `last_message`; review round 1
+    made it `replies` (below).
+  - `pass-respawn` (plain mode) copies them to `pass-last/<pane number>.json` as `{tab,
+    from_session, written_at, replies, shown}`. The file is per tab and not consumed. It is kept
     apart from the one-shot `pass-carry` marker, so two SessionStart hooks never race over one
     file.
 - **Banner:** a SessionStart hook (`startup` only; it skips `-p` and subagents) shows the message
@@ -750,6 +755,7 @@ all on 1M-window models). Context at each event, in thousands of tokens:
 | A2 | Is a SessionStart `systemMessage` shown on a `startup` respawned with a prompt argument, and where? Is a 3-4 KiB message truncated? | the whole reply in the banner, or a head plus "Ctrl-b P for the rest" |
 | A3 | Does the transcript's last main-chain assistant `usage` match the statusline's `current_usage` at a Stop and mid-turn? Is `isSidechain` set on subagent entries? | the parser and its fixture |
 | A4 | Does a PostToolUse `additionalContext` reach the model on a main-session tool call? | the wrap-up and hard tiers inside long turns |
+| A5 | Does a hook-blocked Stop share the payload's `prompt_id` with the Stop that ends its continuation? | how the banner groups replies into turns |
 
 **Spike results** (2026-10-12, Claude Code 2.1.296, tmux 3.7c; harness in
 `~/scratch/autopass-spike/`). The design holds, with one change from A1.
@@ -770,10 +776,16 @@ all on 1M-window models). Context at each event, in thousands of tokens:
   right. Mid-turn, the last entry is the tool_use message, one tool result behind.
 - **A4:** a main-session PostToolUse `additionalContext` reached the model (it followed the
   injected instruction in its reply).
+- **A5:** yes. The blocked Stop has `stop_hook_active` false and the continuation's Stop has it
+  true, with the same `prompt_id`. Recorded in "The last reply across a pass".
 - **A6 (a typed skill command):** a typed `/probeskill hello` is one main-chain `user` entry
   (`origin.kind` "human") whose content is the string `<command-message>probeskill
   </command-message>\n<command-name>/probeskill</command-name>\n<command-args>hello
   </command-args>`, followed by an `isMeta` user entry holding the skill's body.
+- **A7 (the statusline payload):** `context_window.total_input_tokens` equals the
+  `current_usage` sum and the transcript's last usage, after one turn (52,075) and after a
+  second (52,252). It is the current context, not a session total. `context_window_size` is
+  1,000,000 for Opus 5.5.
 - **A8 (the live smoke run, after install): at Stop the turn's last assistant entry is not yet
   readable in the transcript.**
   - What the smoke session (`185d6425`, scratch repo `~/scratch/autopass-smoke`) did:
@@ -788,16 +800,12 @@ all on 1M-window models). Context at each event, in thousands of tokens:
     up to ~1.5 s, log when it appears). If it does, have the watcher poll on Stop until an entry
     newer than its last count appears. If not, use the payload's `last_assistant_message`
     as the sign, and fall back to correcting the count from a detached child.
-- **A7 (the statusline payload):** `context_window.total_input_tokens` equals the
-  `current_usage` sum and the transcript's last usage, after one turn (52,075) and after a
-  second (52,252). It is the current context, not a session total. `context_window_size` is
-  1,000,000 for Opus 5.5.
 
 **Verify.**
 - `context-watch` on transcript fixtures: below each tier, at each tier once per crossing, the
   hard tier re-arming, off, background work in flight, a subagent event, and a compact re-arming.
-- The banner: a match, a stale entry, the wrong tab, shown once. `stop-ring.sh`'s `last_message`
-  and its cap. `pass-respawn` writes `pass-last`.
+- The banner: a match, a stale entry, the wrong tab, shown once. `stop_ring.merge_replies` and its
+  caps. `pass-respawn` writes `pass-last`.
 - A live run at lowered tiers fires each tier once and ends in a passing `handoff-check`.
 - A live `/pass` shows the banner with the old reply, Ctrl-b P reopens it, and a Star still
   carries.
@@ -818,6 +826,8 @@ all on 1M-window models). Context at each event, in thousands of tokens:
 New: `skills/lanes/{SKILL.md,scripts/lane}`, `hooks/lane-identity.sh`,
 `hooks/{lane-guard.sh,lane_guard.py}`, `templates/LANE.md`, `docs/lanes.md`, `tests/lanes/`,
 `skills/pass/{SKILL.md,scripts/pass-respawn}`.
+PR 4: the modules "PR 4: auto-pass" lists under "As built" (`hooks/{context_watch.py,
+autopass_state.py,stop_ring.py,pass_banner.py}`, `tmux/pass-last`, `pass-respawn`).
 Edited: `settings.json`, `CLAUDE.md`, `skills/handoff/SKILL.md`, `templates/STATUS.md`,
 `README.md`, `codex/AGENTS.md`, `setup.sh` (only if the bin loop needs the new paths).
 Patterns to reuse:
