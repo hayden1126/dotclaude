@@ -23,6 +23,7 @@ import math
 import os
 import re
 import secrets
+import subprocess
 import tempfile
 import time
 
@@ -1106,6 +1107,45 @@ def live_sessions():
         if isinstance(sid, str) and sid and pid_alive(d.get("pid"), d.get("procStart")):
             out[sid] = d.get("pid")
     return out
+
+
+def sessions_dir(home=None):
+    """Claude Code's sessions directory: <config dir>/sessions, where the config dir is
+    $CLAUDE_CONFIG_DIR, else <home>/.claude."""
+    return os.path.join(os.environ.get("CLAUDE_CONFIG_DIR")
+                        or os.path.join(home or os.path.expanduser("~"), ".claude"), "sessions")
+
+
+def session_toplevel(session_id, home=None):
+    """The realpath of the git toplevel the session `session_id` runs in, or None on any miss.
+    The sessions file is undocumented: <pid>.json names a running process's sessionId and its
+    `cwd`, which is the directory the session was launched in (a lane-rooted session's lane),
+    not wherever its Bash has since `cd`'d to. When several files name the session, the newest
+    wins. The git call has a short timeout, so subagent-policy stays inside its 5-second alarm."""
+    if not session_id:
+        return None
+    found = None
+    for path in glob.glob(os.path.join(sessions_dir(home), "*.json")):
+        try:
+            with open(path) as f:
+                d = json.load(f)
+            mtime = os.path.getmtime(path)
+        except (OSError, ValueError):
+            continue
+        if not isinstance(d, dict) or d.get("sessionId") != session_id:
+            continue
+        cwd = d.get("cwd")
+        if isinstance(cwd, str) and cwd and (found is None or mtime > found[0]):
+            found = (mtime, cwd)
+    if found is None:
+        return None
+    try:
+        p = subprocess.run(["git", "-C", found[1], "rev-parse", "--show-toplevel"],
+                           capture_output=True, text=True, timeout=2)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    top = p.stdout.strip()
+    return os.path.realpath(top) if p.returncode == 0 and top else None
 
 
 def claude_identity():

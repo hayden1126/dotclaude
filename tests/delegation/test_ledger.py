@@ -322,6 +322,77 @@ class LedgerHook(LedgerEnv):
         self.assertIn("main checkout changed while writer w1", p.stdout)
         self.assertEqual(p.returncode, 1)
 
+    def lane_setup(self, session_cwd=None):
+        """A main checkout with a writer's worktree, a lane beside it, and a sessions file
+        whose cwd is the lane (or `session_cwd`). Returns (repo, worktree, lane)."""
+        repo = os.path.join(self.tmp.name, "repo")
+        wt = os.path.join(repo, ".claude", "worktrees", "agent-w1")
+        lane = os.path.join(self.tmp.name, "repo-lanes", "chart-fix")
+        os.makedirs(wt)
+        os.makedirs(lane)
+        for d in (repo, lane):
+            subprocess.run(["git", "init", "-q", d], check=True)
+        sessions = os.path.join(self.tmp.name, ".claude", "sessions")
+        os.makedirs(sessions)
+        with open(os.path.join(sessions, "1.json"), "w") as f:
+            json.dump({"pid": 1, "sessionId": "s1", "cwd": session_cwd or lane}, f)
+        return repo, wt, lane
+
+    def test_a_lane_rooted_parent_records_its_own_checkout_status(self):
+        _, wt, lane = self.lane_setup()
+        self.hook(dict(self.start("agent-w1"), cwd=wt, agent_type="writer"))
+        with open(os.path.join(lane, "escaped.txt"), "w") as f:
+            f.write("x")
+        self.hook(dict(self.stop("w1"), cwd=wt, agent_type="writer"))
+        start, stop = self.rows()
+        self.assertEqual((start["parent_root"], stop["parent_root"]),
+                         (os.path.realpath(lane),) * 2)
+        self.assertNotEqual(start["parent_before"], stop["parent_after"])
+        self.assertEqual(start["main_before"], stop["main_after"])
+        p = subprocess.run(["python3", LEDGER, "audit"], capture_output=True, text=True,
+                           env=self.env)
+        self.assertIn(f"WARN {os.path.realpath(lane)} (the parent session's checkout) changed "
+                      "while writer w1", p.stdout)
+        self.assertNotIn("main checkout changed", p.stdout)
+        self.assertEqual(p.returncode, 1)
+
+    def test_an_unchanged_lane_audits_ok(self):
+        _, wt, _ = self.lane_setup()
+        self.hook(dict(self.start("agent-w1"), cwd=wt, agent_type="writer"))
+        self.hook(dict(self.stop("w1"), cwd=wt, agent_type="writer"))
+        p = subprocess.run(["python3", LEDGER, "audit"], capture_output=True, text=True,
+                           env=self.env)
+        self.assertIn("ok   no worktree agent coincided with a change in the main checkout or "
+                      "the parent session's checkout", p.stdout)
+
+    def test_the_stop_rehashes_the_checkout_its_start_recorded(self):
+        _, wt, lane = self.lane_setup()
+        self.hook(dict(self.start("agent-w1"), cwd=wt, agent_type="writer"))
+        os.remove(os.path.join(self.tmp.name, ".claude", "sessions", "1.json"))
+        self.hook(dict(self.stop("w1"), cwd=wt, agent_type="writer"))
+        self.assertEqual(self.rows()[1]["parent_root"], os.path.realpath(lane))
+
+    def assertNoParentFields(self):
+        rows = self.rows()
+        self.assertEqual(len(rows), 2)
+        for row in rows:
+            self.assertIn("main_before" if row["event"] == "start" else "main_after", row)
+            self.assertFalse({"parent_root", "parent_before", "parent_after"} & set(row), row)
+
+    def test_no_parent_fields_without_a_matching_session(self):
+        _, wt, _ = self.lane_setup()
+        self.hook(dict(self.start("agent-w1", sid="other"), cwd=wt, agent_type="writer"))
+        self.hook(dict(self.stop("w1"), cwd=wt, agent_type="writer", session_id="other"))
+        self.assertNoParentFields()
+
+    def test_no_parent_fields_for_a_parent_rooted_in_the_main_checkout(self):
+        repo = os.path.join(self.tmp.name, "repo")
+        _, wt, _ = self.lane_setup(session_cwd=os.path.join(repo, "sub"))
+        os.makedirs(os.path.join(repo, "sub"))
+        self.hook(dict(self.start("agent-w1"), cwd=wt, agent_type="writer"))
+        self.hook(dict(self.stop("w1"), cwd=wt, agent_type="writer"))
+        self.assertNoParentFields()
+
     def test_audit_warns_when_the_policy_hook_never_saw_an_agent(self):
         transcript = os.path.join(self.tmp.name, "agent-a1.jsonl")
         with open(transcript, "w") as f:
