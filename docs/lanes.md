@@ -259,9 +259,12 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
   lane hands itself off through the watcher. `lane ls` shows how close each one is: its CTX
   column, after SESSIONS, is the watcher's latest count (`ctx/<session>.json`) for the lane's
   live sessions, the most urgent one when there are two, marked `*` past the soft tier and `!`
-  past hard on that session's own window (`312k*`, `523k!`). It is `-` with no count and `?`
-  when sandboxed; `--json` has it as `ctx` (`session`, `tokens`, `tier`). The lead messages a
-  lane that sits idle past soft: "context N k, run /pass". It does this by hand for now; no code
+  past hard on that session's own window (`312k*`, `523k!`; the window comes from the config
+  dir of the transcript its stop record names, as the watcher's does). It is `-` with no count
+  and `?` when sandboxed; `--json` has it as `ctx` (`session`, `tokens`, `tier`, `status`). The
+  STATE column after it lists each live session's `status` from its session file (`busy`,
+  `idle`, `waiting`, or `shell` while a background shell runs at the prompt), as `states` in
+  `--json`. The lead messages a lane that sits idle past soft: "context N k, run /pass". It does this by hand for now; no code
   sends that message. The lead never respawns another lane's pane, since only that lane holds
   the context its handoff needs.
 - **`lane lock <name> -- <cmd>`** serializes shared gates with a flock on

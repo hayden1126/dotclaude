@@ -9,11 +9,13 @@ import importlib.util
 import json
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
 import time
 import unittest
+from unittest import mock
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 WIDGET = os.path.join(REPO, "statusline", "ctx-breakdown.py")
@@ -237,6 +239,117 @@ class Window(Widget):
         self.run_widget(self.payload(100000, 200000))
         win = aps.window(None, self.read_ctx()["window"])
         self.assertEqual(aps.tiers(win, {})["soft"], 100000)
+
+
+def load_widget():
+    spec = importlib.util.spec_from_file_location("ctx_breakdown", WIDGET)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+class InProcess(Widget):
+    """The widget loaded in-process, for the races a subprocess can't time."""
+
+    def setUp(self):
+        super().setUp()
+        handler = signal.getsignal(signal.SIGALRM)
+        self.addCleanup(signal.signal, signal.SIGALRM, handler)
+        self.addCleanup(signal.setitimer, signal.ITIMER_REAL, 0)
+        patch = mock.patch.dict(os.environ, XDG_STATE_HOME=self.state, HOME=self.home)
+        patch.start()
+        self.addCleanup(patch.stop)
+        self.w = load_widget()
+        self.aps = self.w.load_aps()
+        self.cache = os.path.join(self.state, "dotclaude", "ctx-widget", SID + ".json")
+
+    def alarm_at_cancel(self, which):
+        """setitimer that raises Slow on its `which`th cancel (0 = the first), as if the alarm
+        landed right there, after decide() returned."""
+        real, cancels = signal.setitimer, []
+
+        def fake(kind, value):
+            real(kind, value)
+            if value == 0:
+                cancels.append(1)
+                if len(cancels) == which + 1:
+                    raise self.w.Slow
+        return mock.patch.object(self.w.signal, "setitimer", side_effect=fake)
+
+    def test_an_alarm_after_decide_returned_caches_off(self):
+        for which in (0, 1):  # inside the try, then in the finally
+            with self.subTest(cancel=which):
+                if os.path.exists(self.cache):
+                    os.remove(self.cache)
+                with self.alarm_at_cancel(which), \
+                        mock.patch.object(self.aps, "decide", return_value=(True, "pass.toml")):
+                    self.assertFalse(self.w.autopass_on(self.aps, SID, self.cwd, None))
+                with open(self.cache) as f:
+                    self.assertEqual(json.load(f)["source"], "unknown")
+
+    def test_an_alarm_inside_decide_caches_off(self):
+        def slow(*_):
+            raise self.w.Slow
+        with mock.patch.object(self.aps, "decide", side_effect=slow):
+            self.assertFalse(self.w.autopass_on(self.aps, SID, self.cwd, None))
+
+    def test_the_window_write_never_rolls_back_the_watchers_tokens(self):
+        self.aps.write_ctx(SID, 100, 1.0)
+        real_read = self.aps.read_ctx
+        calls = []
+
+        def read_then_watcher_writes(sid):
+            rec = real_read(sid)
+            if not calls:  # the widget's freshness check saw tokens 100; now the watcher runs
+                calls.append(1)
+                self.aps.write_ctx(SID, 200, 2.0)
+            return rec
+        with mock.patch.object(self.aps, "read_ctx", side_effect=read_then_watcher_writes):
+            self.w.write_window(self.aps, SID, 600000)
+        rec = self.read_ctx()
+        self.assertEqual((rec["tokens"], rec["time"], rec["window"]), (200, 2.0, 600000))
+
+    def test_a_busy_lock_skips_the_window_write_and_the_next_render_retries(self):
+        self.aps.write_ctx(SID, 100, 1.0)
+        with self.aps.watch_lock(SID, kind=".ctx") as locked:
+            self.assertTrue(locked)
+            self.run_widget(self.payload(100000))  # another process: the lock is busy
+            self.assertNotIn("window", self.read_ctx())
+        self.run_widget(self.payload(100000))
+        self.assertEqual(self.read_ctx()["window"], 600000)
+        self.assertEqual(self.read_ctx()["tokens"], 100)
+
+    def test_the_watchers_write_under_a_busy_lock_returns_the_merge_unwritten(self):
+        self.aps.merge_ctx(SID, {"tokens": 100, "time": 1.0, "window": 200000})
+        with self.aps.watch_lock(SID, kind=".ctx") as locked:
+            self.assertTrue(locked)
+            rec = self.aps.write_ctx(SID, 300, 3.0)  # waits its second, then gives up
+        self.assertEqual(rec, {"tokens": 300, "time": 3.0, "window": 200000})
+        self.assertEqual(self.read_ctx()["tokens"], 100)  # the next event writes
+        with self.aps.watch_lock(SID) as locked:  # the watcher's own lock never blocks it
+            self.assertTrue(locked)
+            self.assertEqual(self.aps.write_ctx(SID, 400, 4.0)["tokens"], 400)
+        self.assertEqual(self.read_ctx()["tokens"], 400)
+
+    def test_old_cue_caches_are_pruned_once_a_day(self):
+        d = os.path.dirname(self.cache)
+        os.makedirs(d)
+        old, fresh = os.path.join(d, "old.json"), os.path.join(d, "fresh.json")
+        for path in (old, fresh):
+            with open(path, "w") as f:
+                f.write("{}")
+        week = time.time() - 8 * 86400
+        os.utime(old, (week, week))
+        self.run_widget(self.payload(100000))
+        self.assertFalse(os.path.exists(old))
+        self.assertTrue(os.path.exists(fresh))
+        self.assertTrue(os.path.exists(self.cache))
+        with open(old, "w") as f:  # a second render the same day leaves it
+            f.write("{}")
+        os.utime(old, (week, week))
+        os.remove(self.cache)
+        self.run_widget(self.payload(100000))
+        self.assertTrue(os.path.exists(old))
 
 
 class Fallback(Widget):

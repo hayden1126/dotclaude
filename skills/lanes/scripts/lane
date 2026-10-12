@@ -54,6 +54,7 @@ TEMPLATE = os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "..",
                         "templates", "LANE.md")
 HOOKS = os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "..", "..", "hooks")
 SID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")  # hooks/stop_ring.py SID
+STATUS = re.compile(r"[a-z][a-z_-]{0,19}")  # a session file's status word
 CTX_MARK = {"soft": "*", "wrap": "*", "hard": "!"}  # the board's CTX mark per auto-pass tier
 DEFAULT_CAP = 4
 LOCK_BUSY = 75  # EX_TEMPFAIL: `lane lock --wait` gave up on a held lock
@@ -698,14 +699,32 @@ def autopass_state():
     return mod
 
 
-def ctx_of(aps, sids: list) -> dict | None:
+def status_of(session: dict) -> str:
+    """A live session's status from its session file (busy, idle, waiting, or shell while a
+    background shell runs at the prompt), else "?" (also for anything but one short word)."""
+    v = session.get("status")
+    return v if isinstance(v, str) and STATUS.fullmatch(v) else "?"
+
+
+def transcript_of(aps, sid: str):
+    """The session's transcript path from its stop record (stops/<session>.json, which
+    stop-ring writes at every Stop), so its window comes from its own config dir, as the
+    watcher's does. None before the first Stop: lane's own config dir then decides."""
+    rec = aps.load_json(os.path.join(aps.state_dir(), "stops", sid + ".json"))
+    tp = rec.get("transcript_path") if isinstance(rec, dict) else None
+    return tp if isinstance(tp, str) and tp else None
+
+
+def ctx_of(aps, sessions: list[dict]) -> dict | None:
     """The most urgent context among the live sessions, from the watcher's ctx/<session>.json:
-    {"session", "tokens", "tier"}, where tier is the highest auto-pass tier the count has passed
-    on that session's window (None below soft, or when the window has no tiers). The highest
-    tier wins, then the most tokens. None when no session has a count, or without aps."""
+    {"session", "tokens", "tier", "status"}, where tier is the highest auto-pass tier the count
+    has passed on that session's window (None below soft, or when the window has no tiers) and
+    status is status_of. The highest tier wins, then the most tokens. None when no session has
+    a count, or without aps."""
     best = None
     rank = {None: 0, "soft": 1, "wrap": 2, "hard": 3}
-    for sid in sids if aps is not None else []:
+    for s in sessions if aps is not None else []:
+        sid = s.get("sessionId")
         if not isinstance(sid, str) or not SID.fullmatch(sid):
             continue
         rec = aps.read_ctx(sid)
@@ -713,11 +732,11 @@ def ctx_of(aps, sids: list) -> dict | None:
         if not aps.is_int(tokens) or tokens < 0:
             continue
         try:
-            tiers = aps.tiers(aps.window(None, rec.get("window")))
+            tiers = aps.tiers(aps.window(transcript_of(aps, sid), rec.get("window")))
         except Exception:
             tiers = None
         tier = next((t for t in ("hard", "wrap", "soft") if tiers and tokens >= tiers[t]), None)
-        row = {"session": sid, "tokens": tokens, "tier": tier}
+        row = {"session": sid, "tokens": tokens, "tier": tier, "status": status_of(s)}
         if best is None or (rank[tier], tokens) > (rank[best["tier"]], best["tokens"]):
             best = row
     return best
@@ -755,7 +774,8 @@ def board(repo: Repo) -> list[dict]:
             row["behind"], row["ahead"] = (int(x) for x in counts.stdout.split())
         here = sessions_in(live or [], path)
         row["live_sessions"] = None if live is None else [s.get("sessionId") for s in here]
-        row["ctx"] = ctx_of(aps, row["live_sessions"] or [])
+        row["states"] = None if live is None else [status_of(s) for s in here]
+        row["ctx"] = ctx_of(aps, here)
         # Derived from the live session, never stored: a stored window id drifts when the window
         # closes or tmux renumbers it (invariant 4).
         row["window"] = ",".join(sorted({window_of(s["tmux"]) for s in here
@@ -849,17 +869,18 @@ def print_board(rows: list[dict]) -> None:
         warn("gh unavailable (no network or credential): PR state shows ?")
     if any(r["live_sessions"] is None for r in rows):
         warn("sandboxed: session liveness unknown; run `lane ls` bare")
-    head = ("LANE", "BRANCH", "+/-", "PR", "PORT", "CLAIMS", "SESSIONS", "CTX", "WINDOW",
-            "FLAGS")
+    head = ("LANE", "BRANCH", "+/-", "PR", "PORT", "CLAIMS", "SESSIONS", "CTX", "STATE",
+            "WINDOW", "FLAGS")
     table = [head]
     for r in rows:
         ab = "?" if r["ahead"] is None else f"+{r['ahead']}/-{r['behind']}"
         unknown = r["live_sessions"] is None  # sandboxed: liveness, so ctx and window, unknown
         sess = "?" if unknown else str(len(r["live_sessions"]))
         ctx = "?" if unknown else ctx_cell(r["ctx"])
+        state = "?" if unknown else ",".join(r["states"]) or "-"
         window = "?" if unknown else r["window"] or "-"
         table.append((r["id"], r["branch"], ab, r["pr"], str(r["port"] or "-"),
-                      ",".join(r.get("claims", [])) or "-", sess, ctx, window,
+                      ",".join(r.get("claims", [])) or "-", sess, ctx, state, window,
                       " ".join(r["flags"]) or "-"))
     widths = [max(len(row[i]) for row in table) for i in range(len(head))]
     for row in table:

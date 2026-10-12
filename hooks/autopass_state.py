@@ -1,16 +1,16 @@
 """autopass state: the context tiers, the per-tab /autopass flag and whether auto-pass is on.
 
-Shared by hooks/context_watch.py (the watcher), hooks/autopass_toggle.py (/autopass) and, later,
-the statusline widget and `lane ls`. Each puts this file's real directory on sys.path itself
-(python3 -I keeps it off). Stdlib only; keep the source ASCII. PLAN.md "PR 4: auto-pass" has
-the design.
+Shared by hooks/context_watch.py (the watcher), hooks/autopass_toggle.py (/autopass),
+statusline/ctx-breakdown.py (the ctx widget) and `lane ls`. Each puts this file's real directory
+on sys.path itself (python3 -I keeps it off; setup.sh symlinks the widget into ccstatusline's
+config dir, so its real path finds hooks/). Stdlib only; keep the source ASCII. PLAN.md "PR 4:
+auto-pass" has the design.
 
 - window(transcript_path, model_window): `autoCompactWindow` from the config dir's
-  settings.json, the dir found from the transcript path as statusline/ctx-breakdown.py's
-  config_dir finds it (that file is copied into ccstatusline's own config dir, so it can't
-  import this one), else 600000. When the model's own window is known (the ctx file's
-  `window`, which the statusline widget writes from context_window.context_window_size; no
-  hook payload names the model) and sane, the smaller of the two.
+  settings.json, the dir found from the transcript path, else 600000. When the model's own
+  window is known (the ctx file's `window`, which the statusline widget writes from
+  context_window.context_window_size; no hook payload names the model) and sane, the smaller
+  of the two.
 - tiers(window): compact_at = window - 33000, where Claude Code really compacts
   (spike-measured, about 567k); hard = compact_at - min(47000, 8% of the window) (47k is the
   p90 handoff cost); wrap = hard - min(40000, 7% of the window) (40k is about one turn); soft =
@@ -21,8 +21,10 @@ the design.
   quiet: any window under about 110k. `tiers = [soft, wrap, hard]` in
   ~/.config/dotclaude/pass.toml overrides the three for live tests; a value that isn't three
   increasing positive integers below compact_at is ignored.
-- The ctx file, ctx/<session>.json = {tokens, time, window?}: the watcher writes tokens and
-  time, merging, so a `window` another writer put there stays.
+- The ctx file, ctx/<session>.json = {tokens, time, window?, window_at?}: the watcher writes
+  tokens and time, the widget window and window_at. Both merge through merge_ctx(), under the
+  session's ctx lock (ctx-watch/<session>.ctx.lock, apart from the watcher's own), so neither
+  rolls back the other's fields.
 - The tab flag, $XDG_STATE_HOME/dotclaude/autopass/<pane number>.json = {tab, on, set_at}, holds
   what /autopass on|off set in that tmux tab. It counts only while its tab (socket, server
   start, server pid, pane: pass-respawn's pane_tab key) matches this pane on this server
@@ -247,7 +249,8 @@ def decide(cwd: str, pane: str | None) -> tuple[bool, str]:
 # ---- the watcher's files, shared with /autopass ----
 
 def ctx_path(sid: str) -> str:
-    """{tokens, time}: the session's context size at its latest Stop or tool call."""
+    """{tokens, time}: the session's context size at its latest Stop or tool call, plus the
+    widget's {window, window_at}."""
     return os.path.join(state_dir(), "ctx", sid + ".json")
 
 
@@ -256,12 +259,25 @@ def read_ctx(sid: str) -> dict:
     return rec if isinstance(rec, dict) else {}
 
 
-def write_ctx(sid: str, tokens: int, now: float) -> dict:
-    """Merge {tokens, time} into the ctx file, keeping its other fields (`window`). A writer
-    racing this one may lose its field until its next write; neither file goes bad."""
-    rec = {**read_ctx(sid), "tokens": tokens, "time": now}
-    write_json(ctx_path(sid), rec)
+def merge_ctx(sid: str, fields: dict, wait: float = 1.0) -> dict | None:
+    """Merge fields into the ctx file, keeping its others, under the session's ctx lock
+    (ctx-watch/<session>.ctx.lock), so the watcher and the widget never roll back each other's
+    fields. The new record, or None when the lock stayed busy for `wait` seconds and nothing
+    was written."""
+    with watch_lock(sid, wait, kind=".ctx") as locked:
+        if not locked:
+            return None
+        rec = {**read_ctx(sid), **fields}
+        write_json(ctx_path(sid), rec)
     return rec
+
+
+def write_ctx(sid: str, tokens: int, now: float) -> dict:
+    """Merge {tokens, time} into the ctx file (merge_ctx). With the lock busy past a second the
+    write is skipped (the next event writes) and the merged record is still returned."""
+    fields = {"tokens": tokens, "time": now}
+    rec = merge_ctx(sid, fields)
+    return rec if rec is not None else {**read_ctx(sid), **fields}
 
 
 def watch_path(sid: str) -> str:
@@ -270,13 +286,14 @@ def watch_path(sid: str) -> str:
 
 
 @contextlib.contextmanager
-def watch_lock(sid: str, wait: float = 1.0):
+def watch_lock(sid: str, wait: float = 1.0, kind: str = ""):
     """An exclusive flock on ctx-watch/<session>.lock, so two hooks of one session (parallel
     tool calls) never fire a tier twice. Nothing slow runs under it (decide() runs before).
-    Yields False when it wasn't taken within `wait` seconds."""
+    kind ".ctx" is merge_ctx's own lock, <session>.ctx.lock, apart from the watcher's, so a busy
+    watcher never holds up the count. Yields False when it wasn't taken within `wait` seconds."""
     d = os.path.join(state_dir(), "ctx-watch")
     os.makedirs(d, exist_ok=True)
-    fd = os.open(os.path.join(d, sid + ".lock"), os.O_RDWR | os.O_CREAT, 0o600)
+    fd = os.open(os.path.join(d, sid + kind + ".lock"), os.O_RDWR | os.O_CREAT, 0o600)
     try:
         deadline = time.monotonic() + wait
         while True:

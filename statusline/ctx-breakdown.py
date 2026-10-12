@@ -25,7 +25,9 @@ inside the chip means auto-pass is on for this tab (autopass_state.decide(), cac
 session for CACHE_TTL seconds and while the tab flag's generation holds). On every render
 with a session id and a sane context_window_size, the model window is merged into
 $XDG_STATE_HOME/dotclaude/ctx/<session>.json as `window` (and `window_at`), since no hook
-payload names it; an unchanged value written under WINDOW_FRESH seconds ago is skipped.
+payload names it; an unchanged value written under WINDOW_FRESH seconds ago is skipped. The
+write merges under the session's ctx lock (autopass_state.merge_ctx) and is skipped while the
+lock is busy. The cue's cache files (ctx-widget/) are pruned past 7 days, once a day.
 
 setup.sh symlinks this file into ~/.config/ccstatusline/, so its real path finds the repo's
 hooks/. When autopass_state can't be imported (a copy, or Windows, which lacks fcntl), the
@@ -68,6 +70,7 @@ AUTOPASS_CUE = 'A'
 CACHE_TTL = 10       # seconds a cached decide() holds
 DECIDE_BUDGET = 0.8  # seconds decide() (git, tmux) may take before the cue shows as off
 WINDOW_FRESH = 60    # seconds an unchanged `window` write is skipped
+LOCK_WAIT = 0.05     # seconds the `window` write waits for the session's ctx lock
 SID = re.compile(r'[A-Za-z0-9][A-Za-z0-9._-]{0,127}')  # hooks/stop_ring.py SID
 HOOKS = os.path.join(os.path.dirname(os.path.realpath(__file__)), '..', 'hooks')
 RESET = '\x1b[0m'
@@ -127,7 +130,9 @@ def chip_tiers(aps, pct_window, transcript_path, model_window):
 
 def write_window(aps, sid, size):
     """Merge the model window into the ctx file, keeping its other fields: always on a change,
-    else once per WINDOW_FRESH. A racing watcher write may drop it; the next render restores it."""
+    else once per WINDOW_FRESH. It goes through aps.merge_ctx, under the session's lock the
+    watcher's tokens write takes too, so neither rolls back the other; with the lock busy past
+    LOCK_WAIT the write is skipped and the next render retries."""
     now = time.time()
     try:
         rec = aps.read_ctx(sid)
@@ -135,7 +140,7 @@ def write_window(aps, sid, size):
         if (rec.get('window') == size and isinstance(at, (int, float))
                 and 0 <= now - at < WINDOW_FRESH):
             return
-        aps.write_json(aps.ctx_path(sid), {**rec, 'window': size, 'window_at': now})
+        aps.merge_ctx(sid, {'window': size, 'window_at': now}, wait=LOCK_WAIT)
     except Exception:
         pass
 
@@ -156,10 +161,13 @@ def timed_decide(aps, cwd, pane):
         old = signal.signal(signal.SIGALRM, _slow)
         signal.setitimer(signal.ITIMER_REAL, DECIDE_BUDGET)
     try:
-        return aps.decide(cwd, pane)
+        got = aps.decide(cwd, pane)
+        if timer:
+            signal.setitimer(signal.ITIMER_REAL, 0)
+        return got
     except (Slow, Exception):
         return None
-    finally:
+    finally:  # an alarm landing past the try raises Slow from here: autopass_on catches it
         if timer:
             signal.setitimer(signal.ITIMER_REAL, 0)
             signal.signal(signal.SIGALRM, old)
@@ -184,11 +192,16 @@ def autopass_on(aps, sid, cwd, pane):
             and c.get('cwd') == cwd and c.get('pane') == pane
             and isinstance(c.get('at'), (int, float)) and 0 <= now - c['at'] < CACHE_TTL):
         return c['on']
-    got = timed_decide(aps, cwd, pane)
+    try:
+        got = timed_decide(aps, cwd, pane)
+    except Slow:  # the alarm fired as decide() returned, before the timer was cancelled
+        got = None
     on, source = got if got is not None else (False, 'unknown')
     try:
         aps.write_json(path, {'on': on, 'source': source, 'at': now, 'flag': gen,
                               'cwd': cwd, 'pane': pane})
+        import stop_ring  # beside autopass_state in hooks/
+        stop_ring.prune(os.path.dirname(path), now)  # *.json past 7 days, once a day
     except Exception:
         pass
     return on
@@ -312,6 +325,8 @@ def main():
             and aps.WINDOW_RANGE[0] <= size <= aps.WINDOW_RANGE[1]):
         write_window(aps, sid, size)
 
+    # The current context, not a session total: live-checked 2026-10-12 (2.1.296, Opus 5.5), it
+    # equals the current_usage sum and the transcript's last main-chain usage sum turn to turn.
     total = cw.get('total_input_tokens')
     if total is None:
         u = cw.get('current_usage')

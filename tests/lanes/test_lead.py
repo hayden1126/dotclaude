@@ -208,10 +208,12 @@ class Board(Lead):
         self.env["_LANE_TEST_SANDBOXED"] = "1"
         head, line = self.lane("ls").splitlines()
         cells = dict(zip(head.split(), line.split()))
-        self.assertEqual((cells["SESSIONS"], cells["CTX"], cells["WINDOW"]), ("?", "?", "?"))
+        self.assertEqual((cells["SESSIONS"], cells["CTX"], cells["STATE"], cells["WINDOW"]),
+                         ("?", "?", "?", "?"))
         (row,) = json.loads(self.lane("ls", "--json"))
         self.assertIsNone(row["window"])
         self.assertIsNone(row["ctx"])
+        self.assertIsNone(row["states"])
 
 
 class Ctx(Lead):
@@ -222,10 +224,10 @@ class Ctx(Lead):
         super().setUp()
         self.lane("new", "chart-fix")
 
-    def session(self, pid, sid):
+    def session(self, pid, sid, status="idle"):
         self.write(os.path.join(self.home, ".claude", "sessions", f"{pid}.json"),
                    json.dumps({"pid": pid, "sessionId": sid, "cwd": self.lane_path("chart-fix"),
-                               "tmux": "proj:@3.%7"}))
+                               "tmux": "proj:@3.%7", "status": status}))
 
     def ctx(self, sid, tokens, window=None):
         rec = {"tokens": tokens, "time": time.time()}
@@ -250,7 +252,8 @@ class Ctx(Lead):
         self.session(os.getpid(), "s-1")
         self.ctx("s-1", 212345)
         self.assertEqual(self.board(),
-                         ("212k", {"session": "s-1", "tokens": 212345, "tier": None}))
+                         ("212k", {"session": "s-1", "tokens": 212345, "tier": None,
+                                   "status": "idle"}))
 
     def test_two_sessions_show_the_larger(self):
         self.session(os.getpid(), "s-1")
@@ -275,7 +278,39 @@ class Ctx(Lead):
         self.ctx("s-1", 250000)          # 600k: under soft
         self.ctx("s-2", 160000, 200000)  # 200k: past hard (151k)
         self.assertEqual(self.board(),
-                         ("160k!", {"session": "s-2", "tokens": 160000, "tier": "hard"}))
+                         ("160k!", {"session": "s-2", "tokens": 160000, "tier": "hard",
+                                    "status": "idle"}))
+
+    def test_the_window_comes_from_the_sessions_own_config_dir(self):
+        self.session(os.getpid(), "s-1")
+        self.ctx("s-1", 160000)
+        self.assertEqual(self.board()[0], "160k")  # lane's own config dir: 600k
+        cfg = os.path.join(self.tmp, "other-config")
+        self.write(os.path.join(cfg, "settings.json"), json.dumps({"autoCompactWindow": 200000}))
+        self.write(os.path.join(self.tmp, "state", "dotclaude", "stops", "s-1.json"),
+                   json.dumps({"session_id": "s-1", "time": time.time(),
+                               "transcript_path": os.path.join(cfg, "projects", "p", "s-1.jsonl")}))
+        self.assertEqual(self.board()[0], "160k!")  # its stop record's config dir: 200k
+
+    def states(self):
+        head, line = self.lane("ls").splitlines()
+        self.assertEqual(head.split().index("STATE"), head.split().index("CTX") + 1)
+        cell = dict(zip(head.split(), line.split()))["STATE"]
+        (row,) = json.loads(self.lane("ls", "--json"))
+        return cell, row["states"]
+
+    def test_state_column_and_json(self):
+        self.assertEqual(self.states(), ("-", []))
+        self.session(os.getpid(), "s-1", "busy")
+        self.assertEqual(self.states(), ("busy", ["busy"]))
+        self.session(os.getppid(), "s-2", "shell")
+        cell, states = self.states()
+        self.assertEqual((sorted(cell.split(",")), sorted(states)), (["busy", "shell"],) * 2)
+        self.session(os.getppid(), "s-2", "two words")  # not a status word
+        self.assertEqual(sorted(self.states()[1]), ["?", "busy"])
+        self.ctx("s-1", 310000)
+        (row,) = json.loads(self.lane("ls", "--json"))
+        self.assertEqual((row["ctx"]["status"], row["ctx"]["tier"]), ("busy", "soft"))
 
     def test_a_bad_count_or_session_id_is_skipped(self):
         self.session(os.getpid(), "../s-1")
