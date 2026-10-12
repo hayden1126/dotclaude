@@ -149,7 +149,9 @@ class Base(LanesRepo):
         self.script = ["busy", "idle"]
         self.stop_waits = []
         self.stop_tasks = None  # every task label; None means the waits
-        self.stop_message = "Done: the handoff is committed."  # last_message; None: none
+        # The stop record's `replies` (hooks/stop_ring.py); None writes no key.
+        self.stop_replies = [{"prompt_id": "p1", "text": "Done: the handoff is committed.",
+                              "time": time.time()}]
         self.start_now = START
         self.status, self.updated, self.stopped = None, 0, False
         real_start = self.mod.proc_start
@@ -196,8 +198,8 @@ class Base(LanesRepo):
     def write_stop(self, waits, at=None):
         tasks = waits if self.stop_tasks is None else self.stop_tasks
         rec = {"session_id": SID, "time": at or time.time(), "waits": waits, "tasks": tasks}
-        if self.stop_message is not None:
-            rec["last_message"] = self.stop_message
+        if self.stop_replies is not None:
+            rec["replies"] = self.stop_replies
         self.write(os.path.join(self.state, "stops", f"{SID}.json"), json.dumps(rec))
 
     def transcript(self):
@@ -506,19 +508,33 @@ class Plain(Base):
         self.assertIn("mode=compact outcome=compact", self.log())
         self.assertFalse(os.path.exists(self.last_reply()))  # the conversation survives
 
-    def test_a_plain_pass_writes_the_last_reply_for_the_banner(self):
-        self.stop_message = "Done: the PR is up.\nNext: review it."
+    REPLIES = [{"prompt_id": "p1", "text": "Earlier: the tests pass.", "time": 1.0},
+               {"prompt_id": "p2", "text": "Done: the PR is up.", "time": 2.0},
+               {"prompt_id": "p2", "text": "Pass armed. Next: review " + chr(0x00E9), "time": 3.0}]
+
+    def test_a_plain_pass_writes_the_replies_for_the_banner(self):
+        self.stop_replies = self.REPLIES
         code, out = self.run_pass("--foreground")
         self.assertEqual(code, 0, out)
-        with open(self.last_reply()) as f:
-            last = json.load(f)
+        with open(self.last_reply(), "rb") as f:
+            raw = f.read()
+        self.assertIn(chr(0x00E9).encode(), raw)  # UTF-8, not escaped
+        last = json.loads(raw)
         self.assertEqual(last["tab"], {"socket": "/tmp/tmux-1000/default",
                                        "server_start": 1791000000, "server_pid": 222,
                                        "pane": "%4"})
-        self.assertEqual((last["from_session"], last["message"], last["shown"]),
-                         (SID, "Done: the PR is up.\nNext: review it.", False))
+        self.assertEqual((last["from_session"], last["replies"], last["shown"]),
+                         (SID, self.REPLIES, False))
         self.assertLess(abs(time.time() - last["written_at"]), 30)
         self.assertTrue(os.path.exists(self.carry_marker()))  # its own file, beside the carry
+
+    def test_only_replies_with_text_are_copied(self):
+        self.stop_replies = [5, {"prompt_id": "p1", "text": ""}, {"prompt_id": "p1", "text": 7},
+                             {"prompt_id": None, "text": "no prompt"}, *self.REPLIES[:1]]
+        code, out = self.run_pass("--foreground")
+        self.assertEqual(code, 0, out)
+        with open(self.last_reply()) as f:
+            self.assertEqual(json.load(f)["replies"], self.REPLIES[:1])
 
     def test_compact_leaves_an_earlier_last_reply_alone(self):
         self.old_last_reply()
@@ -527,17 +543,46 @@ class Plain(Base):
         with open(self.last_reply()) as f:
             self.assertEqual(json.load(f)["from_session"], "older")
 
-    def test_no_last_message_removes_an_earlier_last_reply(self):
-        # The popup must never show an earlier pass's reply as this one's.
-        for message in (None, ""):
-            with self.subTest(message=message):
+    def test_no_reply_text_removes_an_earlier_last_reply(self):
+        # The popup must never show an earlier pass's replies as this one's.
+        for replies in (None, [], "text", [{"prompt_id": "p1", "text": ""}],
+                        [{"prompt_id": "p1", "text": None}]):
+            with self.subTest(replies=replies):
                 self.reset()
                 self.old_last_reply()
-                self.stop_message = message
+                self.stop_replies = replies
                 code, out = self.run_pass("--foreground")
                 self.assertEqual(code, 0, out)
                 self.assertEqual(len(self.calls("tmux", "respawn-pane")), 1)
                 self.assertFalse(os.path.exists(self.last_reply()))
+
+    def test_an_unreadable_tab_writes_no_carry_and_removes_an_earlier_last_reply(self):
+        # pane_tab returns None when tmux's server line can't be read.
+        os.environ["FAKE_TMUX_SERVER"] = "not a server line"
+        self.old_last_reply()
+        code, out = self.run_pass("--foreground")
+        self.assertEqual(code, 0, out)
+        self.assertEqual(len(self.calls("tmux", "respawn-pane")), 1)
+        self.assertFalse(os.path.exists(self.carry_marker()))
+        self.assertFalse(os.path.exists(self.last_reply()))
+
+    def test_old_last_replies_are_pruned_once_a_day(self):
+        lasts = os.path.dirname(self.last_reply())
+        now = time.time()
+
+        def touch(name, age):
+            self.write(os.path.join(lasts, name), "{}")
+            os.utime(os.path.join(lasts, name), (now - age, now - age))
+        touch("9.json", 8 * 86400)
+        touch("8.json", 6 * 86400)
+        code, out = self.run_pass("--foreground")
+        self.assertEqual(code, 0, out)
+        self.assertEqual(sorted(os.listdir(lasts)), [".pruned", "4.json", "8.json"])
+        touch("9.json", 8 * 86400)
+        self.mod.prune(lasts, now + 3600)  # within the day: no pass
+        self.assertIn("9.json", os.listdir(lasts))
+        self.mod.prune(lasts, now + 86401)  # a day later: 8.json is past 7 days too
+        self.assertEqual(sorted(os.listdir(lasts)), [".pruned", "4.json"])
 
     def test_shell_status_is_at_the_prompt_so_compact_acts(self):
         # Live, 2026-10-12: at the prompt with a background shell running, the session file

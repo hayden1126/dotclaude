@@ -52,9 +52,10 @@ once, while waiting too. Past --timeout (600 s; at most 3600) it gives up (`time
 shows one line in the pane's status line and touches nothing else. Never respawn or compact on a
 failing check: the respawn throws away the context that could fix the gap.
   plain    write the Star carry marker (tmux/claude-saved re-keys a starred chat to the new
-           session on its `startup`) and the last reply (pass-last/<pane number>.json: the
-           stop record's last_message and the tab, for hooks/pass-banner.sh's banner and the
-           Ctrl-b P popup, tmux/pass-last; with no message, any older one for the pane goes),
+           session on its `startup`) and the replies since the last prompts
+           (pass-last/<pane number>.json: the stop record's `replies` and the tab, for
+           hooks/pass-banner.sh's banner and the Ctrl-b P popup, tmux/pass-last; with no reply
+           text, any older one for the pane goes),
            then `tmux respawn-pane -k -t <pane> -c <toplevel> -- <abs claude>
            [--permission-mode plan] <prompt>`; both files are removed again when the respawn
            fails (`failed`) or anything after writing them raises
@@ -128,9 +129,9 @@ the sandbox can write (docs/lanes.md S3). Every input, and why each is safe:
     shell running) lets the waiter act.
   - The transcript (~/.claude/projects/...) is Claude Code's too, also out of the sandbox's
     reach; it can only drop a pass.
-  - The stop record, the carry marker, the last reply, the pending lock and pass.log live in
+  - The stop record, the carry marker, the replies, the pending lock and pass.log live in
     the state dir, which sandboxed Bash can't write. The session id names the stop record and
-    the lock, so it must be a plain id ([A-Za-z0-9][A-Za-z0-9._-]*). The last reply is copied
+    the lock, so it must be a plain id ([A-Za-z0-9][A-Za-z0-9._-]*). The replies are copied
     as data, never run or interpolated.
   - The pane's capture (the input box) is tmux's; it can only drop a pass.
   - tmux's answers come from the tmux server, and /proc (the session's claude, its ancestors
@@ -920,23 +921,75 @@ def last_path(pane: str) -> str:
     return os.path.join(lanelib.state_dir(), "pass-last", pane[1:] + ".json")
 
 
+PRUNE_AGE, PRUNE_EVERY = 7 * 86400, 86400
+
+
+def replies_of(record: dict | None) -> list[dict]:
+    """The stop record's `replies` (hooks/stop_ring.py) with a non-empty text, oldest first."""
+    replies = (record or {}).get("replies")
+    return [r for r in replies if isinstance(r, dict) and isinstance(r.get("text"), str)
+            and r["text"] and isinstance(r.get("prompt_id"), str)] \
+        if isinstance(replies, list) else []
+
+
+def prune(directory: str, now: float) -> None:
+    """Delete the directory's *.json files older than PRUNE_AGE, at most once per PRUNE_EVERY
+    (the mtime of its .pruned stamp), as hooks/stop_ring.py prunes stops/. Best-effort."""
+    stamp = os.path.join(directory, ".pruned")
+    with contextlib.suppress(OSError):
+        if now - os.path.getmtime(stamp) < PRUNE_EVERY:
+            return
+    try:
+        os.makedirs(directory, exist_ok=True)
+        with open(stamp, "a"):
+            pass
+        os.utime(stamp, (now, now))
+    except OSError:
+        return
+    for path in glob.glob(os.path.join(directory, "*.json")):
+        with contextlib.suppress(OSError):
+            if now - os.path.getmtime(path) > PRUNE_AGE:
+                os.unlink(path)
+
+
+def write_utf8_json(path: str, data) -> None:
+    """Atomic write as UTF-8 (ensure_ascii off, so a long non-ASCII reply stays its own size;
+    a lone surrogate becomes '?'): a temp file in the same dir, fsynced, then renamed."""
+    d = os.path.dirname(path)
+    os.makedirs(d, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=d, prefix=".tmp-")
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(json.dumps(data, ensure_ascii=False).encode("utf-8", "replace"))
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp)
+        raise
+
+
 def write_last(plan: Plan, tab: dict | None) -> str | None:
-    """The reply the old session ended on, for the respawned session's banner (hooks/
-    pass-banner.sh, which sets `shown`) and the popup (tmux/pass-last, Ctrl-b P): the stop
-    record's last_message, with the tab, at pass-last/<pane number>.json. Not one-shot, and
-    apart from the carry marker, which claude-saved consumes on the same SessionStart. Its
-    path, or None when nothing was written: with no message or no tab, any older file for the
-    pane goes, so the popup never shows an earlier pass's reply as this one's."""
+    """Everything the old session said since the last few prompts, for the respawned session's
+    banner (hooks/pass-banner.sh, which shows the newest prompt's replies and sets `shown`) and
+    the popup (tmux/pass-last, Ctrl-b P, which shows them all): the stop record's `replies`,
+    with the tab, at pass-last/<pane number>.json as {tab, from_session, written_at, replies,
+    shown}. Not one-shot, and apart from the carry marker, which claude-saved consumes on the
+    same SessionStart. Its path, or None when nothing was written: with no reply text or no tab,
+    any older file for the pane goes, so the popup never shows an earlier pass's replies as
+    this one's. Files older than 7 days go once a day."""
     path = last_path(plan.pane)
-    message = (stop_record(plan.session_id) or {}).get("last_message")
-    if tab is None or not isinstance(message, str) or not message:
+    now = time.time()
+    prune(os.path.dirname(path), now)
+    replies = replies_of(stop_record(plan.session_id))
+    if tab is None or not replies:
         remove(path)
         return None
     try:
-        lanelib.write_json(path, {"tab": tab, "from_session": plan.session_id,
-                                  "written_at": time.time(), "message": message,
-                                  "shown": False})
-    except OSError:
+        write_utf8_json(path, {"tab": tab, "from_session": plan.session_id, "written_at": now,
+                               "replies": replies, "shown": False})
+    except (OSError, ValueError):
         remove(path)
         return None
     return path
