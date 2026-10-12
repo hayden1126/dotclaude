@@ -48,7 +48,7 @@ inside", and Codex sessions wouldn't get the convention.
 - A `lane` CLI creates sibling-dir worktrees.
 - Enforcement is the skill and CLI plus two hooks.
 - An optional **lead** session triages requests, proposes a lane split and, on approval, opens
-  each lane as a real top-level session (PR 2).
+  each lane as a real top-level session (`lane open`).
 - Each lane merges its own PR (Hayden approves each merge), and the lead sets the order.
 - `/pass` runs handoff, then `handoff-check`, then respawns the pane (PR 3).
 
@@ -94,7 +94,7 @@ writer, and every other place links to it.
 | 9 | What is this lane blocked on Hayden for? | Asks | the record's "Asks for Hayden" (a design pick, push or merge approval, a cleanup nod), shown by `lane asks` across lanes | the lane; cleared after Hayden answers | living |
 | 10 | What did a delegate produce? | Report (up) | a subagent's report JSON (the delegation contract); a lane's hand-back is a passing `handoff-check` plus a State summary; the PR body to outsiders | the delegate | ephemeral, then PR |
 | 11 | Proof behind a claim | Evidence | `.lane/artifacts/` (mocks, shots, gate logs), mirrored so it survives `worktree remove`; rulings point here | the lane | archived with the record |
-| 12 | Shared machine resources | Env state | `lane.json` port, live sessions (derived; a hand-kept "machine state" list drifts) | the CLI | live |
+| 12 | Shared machine resources | Env state | `lane.json` port, live sessions and `lane lock` holders (derived; a hand-kept "machine state" list drifts) | the CLI | live |
 | 13 | Heads-up between peers | Message | SendMessage. A nudge only: anything that matters lands in a doc first, and a message never carries state or consent | anyone | ephemeral |
 | 14 | What did we learn? | Lessons | memory (Hayden's preferences, traps), `docs/` | any session | durable |
 | 15 | What happened? | History | git, PRs, transcripts. Never copied into a doc; docs point to them by SHA, PR # or session id | n/a | durable |
@@ -158,8 +158,9 @@ stays in the common dir, which sandboxed Bash can write (S1).
   artifacts/                    evidence that rulings point at (mocks, shots, gate logs)
 
 <common-dir>/lanes/             CLI-owned; written by `lane` and by hooks, never by the Edit tool
-  config.toml                   root, setup cmd, port range, live-lane cap, base (origin/main)
+  config.toml                   root, setup cmd, port range, live-lane cap, base (origin/main), locks
   .lock                         flock for every CLI write (claims are atomic)
+  _locks/<name>                 one flock per shared gate (`lane lock`), holding the holder line
   <id>/lane.json                id, branch, path, base_sha, port, claims[], state, sessions[], created/updated
   <id>/mirror/                  copy of <lane>/.lane/, refreshed by a Stop and SessionEnd hook, so a raw
                                 `git worktree remove` (which deletes ignored files) loses nothing
@@ -181,9 +182,14 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
   file checks at all). Hence the in-lane `.lane/` above. A Write to `<lane>/.lane/STATUS.md` in
   acceptEdits mode succeeds with no prompt, and the shared `info/exclude` hides it
   (`git status --ignored` shows `!! .lane/`).
-- **S3, `excludedCommands`:** `lane *` goes in, beside `delegation-ledger *`. `lane new` fetches
-  and `lane ls` asks gh for PR state, and both need the credential the sandbox hides. A sandboxed
-  (piped) call still works for the local subcommands and says what it skipped.
+- **S3, `excludedCommands`:** `lane new` fetches and `lane ls` asks gh for PR state, and both
+  need the credential the sandbox hides; `ls`, `open` and `done` also need to see other
+  processes. PR 1 excluded `lane *`. PR 2 narrowed it to `lane init`, `new`, `adopt`, `ls`,
+  `open` and `done`, each by name, because `lane lock -- <cmd>` must stay sandboxed: under
+  `lane *`, any command wrapped in it ran sandbox-off without the `dangerouslyDisableSandbox`
+  flag the delete guard checks. `whoami`, `claim`, `release`, `who`, `note`, `asks` and `lock`
+  touch only `<common-dir>/lanes/` and the lane's `.lane/`, which a lane-rooted sandbox can
+  write (S1). A sandboxed (piped) call of an excluded subcommand says what it skipped.
 - **S4, compaction:** a SessionStart hook matched on `compact` gets its `additionalContext` to
   the model after `/compact` (`/compact` piped into `claude -p --resume` triggers a real
   compaction). `lane-identity.sh` on `compact` is therefore the safety net for an unplanned
@@ -201,6 +207,22 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
   `lane done --abandon`. `lane done` sets the base as the branch's upstream before
   `git branch -d`, so `-d` judges the branch against what was merged rather than the main
   checkout's possibly unpulled HEAD.
+- **`lane open <id>`** (from `hq-open`) runs `tmux new-window -c <lane> -n <id> -d` with the
+  absolute `claude` path (tmux's PATH lacks `~/.local/bin`), `--permission-mode plan` and a first
+  prompt to read the record and plan its brief. It refuses a stale or `setup-failed` lane, and a
+  lane with a live session (naming its tmux target; `--focus` selects that window instead).
+  Sandboxed, it can't see other sessions, so it refuses and asks for a bare run. It stamps only
+  `opened` in `lane.json`. The window is derived from the live session's `tmux` field on each
+  `lane ls`, never stored (invariant 4): a stored window id drifts the moment the window closes
+  or tmux renumbers it.
+- **`lane lock <name> -- <cmd>`** serializes shared gates with a flock on
+  `<common-dir>/lanes/_locks/<name>`, apart from the CLI's own `.lock`. The name must be listed in
+  `config.toml` `locks`, since a typo would split the mutual exclusion. Once it holds the lock, it
+  writes a holder line (lane id or `main`, start time, command), which a waiting run and the
+  `lane ls` footer show. There is no pid: each sandboxed command has its own pid namespace, so a
+  pid would mislead. The lock fd is close-on-exec, so a backgrounded grandchild never keeps the
+  lock; SIGINT and SIGTERM are forwarded to the command, whose exit code it returns (128+n for
+  signal n). `--wait SECS` gives up with exit 75.
 - **`hooks/lane-identity.sh`** (SessionStart, Stop, SessionEnd): the identity line, the
   `sessions[]` entry, the mirror and the end stamp. A compact keeps its session's entry, so the
   session's start (which `handoff-check` uses) doesn't move. The mirror is crash-safe: it builds

@@ -409,8 +409,14 @@ and status single-writer:
 - `lane new chart-fix --claim 42 --goal "..."` makes the worktree and branch from `origin/main`,
   copies the files `.worktreeinclude` lists, hands out a port, runs the repo's setup command and
   seeds the lane's record (`<lane>/.lane/STATUS.md`, from `templates/LANE.md`).
-- `lane ls` is the board, derived live from git, gh and the session files. `lane who 42` is the
-  only answer to who owns #42.
+- `lane open chart-fix` starts the lane's session in a new tmux window, in plan mode, told to
+  read its record; `--focus` switches to a session already running there.
+- `lane ls` is the board, derived live from git, gh and the session files, down to each lane's
+  tmux window. `lane who 42` is the only answer to who owns #42.
+- `lane lock gate -- npm run e2e` runs a shared gate under a named lock, so a second lane's run
+  waits instead of colliding.
+- An optional lead session triages requests into lanes, opens them on Hayden's approval and sets
+  the merge order (the skill's "The lead").
 - `lane-identity.sh` and `lane-guard.sh` (Hooks, above) tell each session which lane it is and
   keep it out of other lanes' records.
 - The handoff skill's lane mode updates the lane record, not STATUS.md, and ends with

@@ -1,8 +1,10 @@
 """A throwaway lanes repo for tests: a bare origin, a clone as the main checkout, `lane init`.
 
 No network: origin is a local bare repo, and a fake `gh` that always fails sits first on PATH, so
-PR state is the degraded `?` and `done` falls back to git. HOME, XDG_STATE_HOME and the Claude
-session variables point into the temp dir, so nothing reads or writes the real machine's state.
+PR state is the degraded `?` and `done` falls back to git. A fake `claude` sits there too, for
+`lane open`, and TMUX is unset (a test that opens a window sets it and stubs tmux). HOME,
+XDG_STATE_HOME and the Claude session variables point into the temp dir, so nothing reads or
+writes the real machine's state.
 """
 import json
 import os
@@ -36,8 +38,13 @@ class LanesRepo(unittest.TestCase):
             f.write('#!/bin/sh\nif [ -n "$FAKE_GH_OUT" ]; then printf "%s" "$FAKE_GH_OUT"; exit 0; fi\n'
                     "echo 'gh: offline in tests' >&2\nexit 1\n")
         os.chmod(os.path.join(fake_bin, "gh"), 0o755)
+        with open(os.path.join(fake_bin, "claude"), "w") as f:
+            f.write("#!/bin/sh\nexit 0\n")
+        os.chmod(os.path.join(fake_bin, "claude"), 0o755)
+        self.fake_bin = fake_bin
         self.env = {k: v for k, v in os.environ.items()
-                    if not k.startswith(("CLAUDE", "GIT_DIR", "GIT_WORK_TREE", "SANDBOX_RUNTIME"))}
+                    if not k.startswith(("CLAUDE", "GIT_DIR", "GIT_WORK_TREE", "SANDBOX_RUNTIME",
+                                             "TMUX"))}
         self.env.update(HOME=self.home, XDG_STATE_HOME=os.path.join(self.tmp, "state"),
                         PATH=fake_bin + os.pathsep + os.environ["PATH"],
                         GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@example.com",

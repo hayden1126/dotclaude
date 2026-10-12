@@ -16,11 +16,15 @@ with open(os.path.join(REPO, "settings.json")) as f:
 POLICY = load_script("subagent-policy").load_policy()
 
 
+def glob_match(pattern, command):
+    """Claude Code matches a Bash rule or an excludedCommands pattern as a glob whose * spans
+    spaces (verified live on 2.1.288)."""
+    return re.fullmatch(re.escape(pattern).replace(r"\*", ".*"), command) is not None
+
+
 def matching(kind, command):
-    """The permission rules of this kind that match a Bash command. Claude Code matches a Bash
-    rule as a glob whose * spans spaces (verified live on 2.1.288)."""
-    return [rule for rule in S["permissions"][kind]
-            if re.fullmatch(re.escape(rule[len("Bash("):-1]).replace(r"\*", ".*"), command)]
+    """The permission rules of this kind that match a Bash command."""
+    return [rule for rule in S["permissions"][kind] if glob_match(rule[len("Bash("):-1], command)]
 
 
 def commands(event, matcher=None):
@@ -205,8 +209,20 @@ class Baseline(unittest.TestCase):
             self.assertLessEqual(h["timeout"], 5)
         for script in ("lane-guard.sh", "lane-identity.sh"):
             self.assertTrue(os.access(os.path.join(REPO, "hooks", script), os.X_OK), script)
-        # `lane new`, `ls` and `done` need the network and gh's credential (spike S3).
-        self.assertIn("lane *", S["sandbox"]["excludedCommands"])
+        # `lane new`, `ls` and `done` need the network and gh's credential (spike S3); `ls`,
+        # `open` and `done` need to see other processes. Only those run sandbox-off: `lane lock
+        # -- <cmd>` must stay sandboxed, or the command it wraps would run outside the sandbox
+        # without the dangerouslyDisableSandbox flag the delete guard checks.
+        excluded = S["sandbox"]["excludedCommands"]
+        bare = ["lane init", "lane init *", "lane new *", "lane adopt *", "lane ls", "lane ls *",
+                "lane open *", "lane done *"]
+        self.assertEqual([p for p in excluded if p.split()[0] == "lane"], bare)
+        self.assertNotIn("lane *", excluded)
+        for cmd in ("lane lock gate -- true", "lane lock gate -- rm -rf build", "lane whoami",
+                    "lane claim 42", "lane note x"):
+            self.assertEqual([p for p in excluded if glob_match(p, cmd)], [], cmd)
+        for cmd in ("lane ls", "lane ls --json", "lane open chart-fix", "lane done chart-fix"):
+            self.assertTrue(any(glob_match(p, cmd) for p in excluded), cmd)
 
     def test_the_delete_guard_runs_on_sandbox_off_bash_only_and_fails_open(self):
         # Every Bash call passes the matcher; the prefilter keeps Python off the sandboxed ones,
