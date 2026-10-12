@@ -86,7 +86,11 @@ the sandbox can write (docs/lanes.md S3). Every input, and why each is safe:
     .claude/settings.local.json at the top level and at the launch dir). A
     sandbox.filesystem.denyWrite entry from the user or managed tier carves its path back
     out (the user tier denies ~/dotclaude/skills, where this script lives); the project
-    tier's is ignored, as a project file could forge it.
+    tier's is ignored, as a project file could forge it. The session's own launch flags count
+    too, read from its claude's command line (/proc/<pid>/cmdline, the kernel's): every
+    --add-dir value and each --settings file's (or inline JSON's) allowWrite and
+    additionalDirectories. A dir added at runtime with /add-dir lives only in Claude Code's
+    memory, so it can't be seen and isn't counted: an accepted limit.
   - PATH is the call's, so it keeps only the absolute entries outside those dirs (as given and
     resolved). git, tmux and claude resolve through that PATH and must also resolve, as found
     and through their links, outside them; otherwise it refuses. The sanitized PATH replaces
@@ -475,16 +479,13 @@ def input_box(screen: str) -> str | None:
 SANDBOX_KEYS = ("sandbox", "filesystem")
 
 
-def listed_paths(path: str, keys: tuple[str, ...], base: str | None) -> list[str]:
-    """A settings file's list at keys as absolute paths (~ expanded). A relative one resolves
-    against base and against the file's own dir (either may be meant), or is skipped when base
-    is None."""
+def listed(tree, keys: tuple[str, ...], bases: list[str]) -> list[str]:
+    """A settings tree's list at keys as absolute paths (~ expanded). A relative one resolves
+    against each of bases (any may be meant), or is skipped when there are none."""
     try:
-        with open(path) as f:
-            tree = json.load(f)
         for key in keys:
             tree = tree[key]
-    except (OSError, ValueError, KeyError, TypeError):
+    except (KeyError, IndexError, TypeError):
         return []
     out = []
     for p in tree if isinstance(tree, list) else []:
@@ -493,10 +494,46 @@ def listed_paths(path: str, keys: tuple[str, ...], base: str | None) -> list[str
         p = os.path.expanduser(p)
         if p.startswith("/"):
             out.append(os.path.normpath("/" + p.lstrip("/")))
-        elif base is not None:
-            out += [os.path.normpath(os.path.join(base, p)),
-                    os.path.normpath(os.path.join(os.path.dirname(path), p))]
+        else:
+            out += [os.path.normpath(os.path.join(b, p)) for b in bases]
     return out
+
+
+def listed_paths(path: str, keys: tuple[str, ...], base: str | None) -> list[str]:
+    """A settings file's list at keys as absolute paths (listed): a relative one resolves against
+    base and against the file's own dir, or is skipped when base is None."""
+    try:
+        with open(path) as f:
+            tree = json.load(f)
+    except (OSError, ValueError):
+        return []
+    return listed(tree, keys, [base, os.path.dirname(path)] if base is not None else [])
+
+
+def session_flags(argv: list[str] | None) -> tuple[list[str], list[str]]:
+    """The session claude's own --add-dir values and --settings values (a file or inline JSON),
+    from its argv. --add-dir takes several values: every argument after it up to the next flag
+    counts (a prompt read as a dir only adds a root, which can only refuse more)."""
+    dirs, settings, args, i = [], [], (argv or [])[1:], 0
+    while i < len(args):
+        arg = args[i]
+        i += 1
+        if arg == "--":
+            break
+        name, eq, value = arg.partition("=")
+        if name == "--add-dir":
+            if eq:
+                dirs.append(value)
+            while i < len(args) and not args[i].startswith("-"):
+                dirs.append(args[i])
+                i += 1
+        elif name == "--settings":
+            if eq:
+                settings.append(value)
+            elif i < len(args):
+                settings.append(args[i])
+                i += 1
+    return [d for d in dirs if d], [v for v in settings if v]
 
 
 def tier_files() -> list[str]:
@@ -505,10 +542,14 @@ def tier_files() -> list[str]:
             *sorted(glob.glob(os.path.join(MANAGED_DIR, "*.json")))]
 
 
-def writable_roots(repo: lanelib.Repo | None, cwd: str, launch: str | None = None) -> list[str]:
+def writable_roots(repo: lanelib.Repo | None, cwd: str, launch: str | None = None,
+                   session_argv: list[str] | None = None) -> list[str]:
     """Dirs sandboxed Bash can write: the checkout and the main checkout (before git has found
-    them, the call's dir), the session's launch dir, the temp dirs, and every settings file's
-    allowWrite and additionalDirectories (the project's at the top level and the launch dir)."""
+    them, the call's dir), the session's launch dir, the temp dirs, every settings file's
+    allowWrite and additionalDirectories (the project's at the top level and the launch dir),
+    and the session's own flags (session_argv, its claude's command line): each --add-dir, and
+    the allowWrite and additionalDirectories of each --settings file or inline JSON. A relative
+    flag value resolves against the launch dir (the claude's cwd), else the checkout."""
     top = repo.toplevel if repo else os.path.realpath(cwd)
     roots = [repo.toplevel, repo.main] if repo else [top]
     dirs = [top]
@@ -522,9 +563,22 @@ def writable_roots(repo: lanelib.Repo | None, cwd: str, launch: str | None = Non
     for d in dict.fromkeys(dirs):
         files += [os.path.join(d, ".claude", "settings.json"),
                   os.path.join(d, ".claude", "settings.local.json")]
+    base = os.path.normpath(launch) if launch and os.path.isabs(launch) else top
+    add_dirs, flag_settings = session_flags(session_argv)
+    roots += [os.path.normpath(os.path.join(base, os.path.expanduser(d))) for d in add_dirs]
+    inline = []
+    for value in flag_settings:
+        if value.lstrip().startswith("{"):
+            with contextlib.suppress(ValueError):
+                inline.append(json.loads(value))
+        else:
+            files.append(os.path.normpath(os.path.join(base, os.path.expanduser(value))))
     for path in files:
         roots += listed_paths(path, (*SANDBOX_KEYS, "allowWrite"), top)
         roots += listed_paths(path, ("permissions", "additionalDirectories"), top)
+    for tree in inline:
+        roots += listed(tree, (*SANDBOX_KEYS, "allowWrite"), [base, top])
+        roots += listed(tree, ("permissions", "additionalDirectories"), [base, top])
     return roots
 
 
@@ -663,8 +717,9 @@ def parse(argv=None) -> argparse.Namespace:
     return ap.parse_args(argv)
 
 
-def prepare(args: argparse.Namespace, procs) -> Plan:
-    """The checks at call time, then the plan; raises Refuse."""
+def prepare(args: argparse.Namespace, procs, cmdline=proc_cmdline) -> Plan:
+    """The checks at call time, then the plan; raises Refuse. procs and cmdline read /proc
+    (injected by tests)."""
     called = time.time()
     mode = "compact" if args.compact else "plain"
     sid = os.environ.get("CLAUDE_CODE_SESSION_ID") or ""
@@ -672,7 +727,8 @@ def prepare(args: argparse.Namespace, procs) -> Plan:
     claude_pid = session_claude(procs(), os.getpid())
     session = load_session(claude_pid) if claude_pid else None
     launch = session.get("cwd") if session and isinstance(session.get("cwd"), str) else None
-    early = writable_roots(None, args.cwd, launch)
+    claude_argv = cmdline(claude_pid) if claude_pid else None
+    early = writable_roots(None, args.cwd, launch, session_argv=claude_argv)
     resolve_bin("git", early, pin(early))  # lanelib.resolve runs it next
     repo = lanelib.resolve(args.cwd)
     if repo is None:
@@ -694,7 +750,7 @@ def prepare(args: argparse.Namespace, procs) -> Plan:
         by_hand = f"/compact {compact_focus(status_rel)}" if args.compact else "/clear"
         raise Refuse(2, f"pass-respawn: not in a tmux pane. Do it by hand: {by_hand}, then: "
                      f"{prompt}", "no tmux pane")
-    roots = writable_roots(repo, args.cwd, launch)
+    roots = writable_roots(repo, args.cwd, launch, session_argv=claude_argv)
     path = pin(roots)
     resolve_bin("git", roots, path)
     tmux = resolve_bin("tmux", roots, path)
@@ -1034,13 +1090,13 @@ def detach(plan: Plan, procs, lock: int) -> str:
     return err
 
 
-def main(argv=None, procs=proc_table) -> int:
+def main(argv=None, procs=proc_table, cmdline=proc_cmdline) -> int:
     args = parse(argv)
     if args.cancel:
         return cancel()
     mode = "compact" if args.compact else "plain"
     try:
-        plan = prepare(args, procs)
+        plan = prepare(args, procs, cmdline)
     except Refuse as r:
         print(r.message)
         log(mode, "refused", os.environ.get("TMUX_PANE"), r.reason)

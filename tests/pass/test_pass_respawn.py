@@ -128,7 +128,7 @@ class Base(LanesRepo):
         self.mod = load()
         self.mod.POLL, self.mod.SETTLE, self.mod.COMPACT_GAP = 0.01, 0.05, 0.01
         self.real_roots = self.mod.writable_roots
-        self.mod.writable_roots = (lambda repo, cwd, launch=None:
+        self.mod.writable_roots = (lambda repo, cwd, launch=None, session_argv=None:
                                    [repo.toplevel, repo.main] if repo else [])
         self.tmux = os.path.join(self.fake_bin, "tmux")
         with open(self.tmux, "w") as f:
@@ -401,7 +401,7 @@ class Plain(Base):
         self.assertIn("CLAUDE_CODE_SESSION_ID", out)
 
     def test_a_path_entry_in_a_sandbox_writable_dir_is_skipped(self):
-        self.mod.writable_roots = lambda repo, cwd, launch=None: [self.fake_bin]
+        self.mod.writable_roots = lambda repo, cwd, launch=None, session_argv=None: [self.fake_bin]
         code, out = self.run_pass("--print")
         self.assertNotIn(self.fake_bin, out)
 
@@ -412,7 +412,7 @@ class Plain(Base):
         shutil.move(self.claude, os.path.join(wbin, "claude"))
         os.symlink(os.path.join(wbin, "claude"), os.path.join(safe, "claude"))
         os.environ["PATH"] = safe + os.pathsep + os.environ["PATH"]
-        self.mod.writable_roots = lambda repo, cwd, launch=None: [wbin]
+        self.mod.writable_roots = lambda repo, cwd, launch=None, session_argv=None: [wbin]
         code, out = self.run_pass("--print")
         self.assertEqual(code, 1, out)
         self.assertIn(f"claude resolves to {wbin}/claude", out)

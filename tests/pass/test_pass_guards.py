@@ -5,8 +5,10 @@ input box and copy mode, prompts typed mid-turn, approval dates and one pending 
 Each test reuses test_pass_respawn's fixture (Base): fakes for tmux, the session file, /proc and
 the transcript, under a temp HOME and XDG_STATE_HOME. Nothing reaches the live tmux server or the
 real ~/.claude."""
+import contextlib
 import datetime
 import fcntl
+import io
 import json
 import os
 import subprocess
@@ -69,11 +71,49 @@ class WritableRoots(Plain):
     def test_the_call_passes_the_session_launch_dir(self):
         seen = []
         self.session_cwd = launch = os.path.join(self.tmp, "launch")
-        self.mod.writable_roots = lambda repo, cwd, launch=None: (
+        self.mod.writable_roots = lambda repo, cwd, launch=None, session_argv=None: (
             seen.append(launch) or ([repo.toplevel, repo.main] if repo else []))
         code, out = self.run_pass("--print")
         self.assertEqual(code, 0, out)
         self.assertIn(launch, seen)
+
+    def test_the_sessions_own_add_dir_and_settings_flags_count(self):
+        launch = os.path.join(self.tmp, "launch")
+        flagged = os.path.join(self.tmp, "flagged.json")
+        self.settings(flagged, sandbox={"filesystem": {"allowWrite": ["/flag-w"]}},
+                      permissions={"additionalDirectories": ["/flag-add"]})
+        other = os.path.join(launch, "other.json")
+        self.settings(other, sandbox={"filesystem": {"allowWrite": ["/eq-w"]}})
+        inline = json.dumps({"permissions": {"additionalDirectories": ["/inline-add"]}})
+        argv = ["claude", "--add-dir", "/ad1", "/ad2", "--model", "opus", "--add-dir=/ad3",
+                "--add-dir", "rel", "--settings", flagged, "--settings=other.json",
+                "--settings", inline, "the prompt"]
+        import lanelib
+        roots = self.real_roots(lanelib.resolve(self.main), self.main, launch, argv)
+        for want in ("/ad1", "/ad2", "/ad3", os.path.join(launch, "rel"), "/flag-w",
+                     "/flag-add", "/eq-w", "/inline-add"):
+            self.assertIn(want, roots)
+        self.assertNotIn("/opus", roots)
+        self.assertNotIn(os.path.join(launch, "opus"), roots)
+        # Before git has run, too; and no argv (an unreadable cmdline) adds nothing.
+        self.assertIn("/ad3", self.real_roots(None, self.main, launch, argv))
+        self.assertEqual(self.real_roots(None, self.main, launch, None),
+                         self.real_roots(None, self.main, launch))
+
+    def test_the_call_reads_the_sessions_cmdline(self):
+        seen, asked = [], []
+        argv = ["claude", "--add-dir", "/ad1"]
+        self.mod.writable_roots = lambda repo, cwd, launch=None, session_argv=None: (
+            seen.append(session_argv) or ([repo.toplevel, repo.main] if repo else []))
+
+        def cmdline(pid):
+            asked.append(pid)
+            return argv
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            code = self.mod.main(["--print", "-C", self.main], procs=t.table, cmdline=cmdline)
+        self.assertEqual(code, 0, out.getvalue())
+        self.assertEqual(asked, [t.CLAUDE])
+        self.assertEqual(seen, [argv, argv])
 
     def test_deny_write_carves_out_only_from_the_user_and_managed_tiers(self):
         managed = os.path.join(self.tmp, "managed-settings.json")
@@ -89,7 +129,7 @@ class WritableRoots(Plain):
         self.assertNotIn("/projdw", denies)
 
     def test_the_script_under_a_writable_root_refuses(self):
-        self.mod.writable_roots = lambda repo, cwd, launch=None: [REPO]
+        self.mod.writable_roots = lambda repo, cwd, launch=None, session_argv=None: [REPO]
         code, out = self.run_pass("--print")
         self.assertEqual(code, 1, out)
         self.assertIn("pass-respawn resolves to", out)
@@ -104,14 +144,14 @@ class WritableRoots(Plain):
         os.makedirs(wlink)
         os.symlink(SCRIPT, os.path.join(wlink, "pass-respawn"))
         self.mod.INVOKED = os.path.join(wlink, "pass-respawn")
-        self.mod.writable_roots = lambda repo, cwd, launch=None: [wlink]
+        self.mod.writable_roots = lambda repo, cwd, launch=None, session_argv=None: [wlink]
         code, out = self.run_pass("--print")
         self.assertEqual(code, 1, out)
         self.assertIn(f"pass-respawn resolves to {wlink}/pass-respawn", out)
 
     def test_handoff_check_under_a_writable_root_refuses(self):
         where = os.path.dirname(os.path.realpath(self.mod.HANDOFF_CHECK))
-        self.mod.writable_roots = lambda repo, cwd, launch=None: [where]
+        self.mod.writable_roots = lambda repo, cwd, launch=None, session_argv=None: [where]
         code, out = self.run_pass("--print")
         self.assertEqual(code, 1, out)
         self.assertIn("handoff-check resolves to", out)
@@ -130,7 +170,7 @@ class PinnedPath(Plain):
             self.write(os.path.join(wbin, name), PLANT.format(name=name, marker=marker))
             os.chmod(os.path.join(wbin, name), 0o755)
         os.environ["PATH"] = wbin + os.pathsep + os.environ["PATH"]
-        self.mod.writable_roots = lambda repo, cwd, launch=None: (
+        self.mod.writable_roots = lambda repo, cwd, launch=None, session_argv=None: (
             [repo.toplevel, repo.main, wbin] if repo else [wbin])
         code, out = self.run_pass("--foreground")
         self.assertEqual(code, 0, out)
