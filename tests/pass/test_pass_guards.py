@@ -867,29 +867,42 @@ class Pending(Plain):
 # ---- 8. a loud refusal -------------------------------------------------------------------------
 
 class LoudNotice(Plain):
-    LOUD = ("stale", "resumed", "busy", "gone", "timeout", "failed", "error")
+    LOUD = ("stale", "busy", "timeout", "failed", "error")
+    QUIET = ("cancelled", "resumed", "gone")  # Hayden caused these
 
-    def test_every_drop_but_cancelled_is_loud_and_keeps_its_log_word(self):
-        self.assertEqual(set(self.mod.DROPS) - self.mod.QUIET, set(self.LOUD))
-        for outcome in self.LOUD:
+    def test_refusals_are_loud_and_the_drops_hayden_caused_quiet(self):
+        self.assertEqual(set(self.mod.QUIET), set(self.QUIET))
+        self.assertEqual(set(self.mod.DROPS), set(self.LOUD) | set(self.QUIET))
+        for outcome in self.LOUD + self.QUIET:
             with self.subTest(outcome=outcome):
                 self.reset()
                 self.clear_log()
                 plan = self.plan()
                 self.assertEqual(self.mod.drop(plan, outcome, "some detail"), outcome)
-                head, _, tail = self.mod.DROPS[outcome].partition(": ")
-                self.assertLoud(f"{head} in tab 3: {tail}")
+                if outcome in self.LOUD:
+                    head, _, tail = self.mod.DROPS[outcome].partition(": ")
+                    self.assertLoud(f"{head} in tab 3: {tail}")
+                else:
+                    self.assertEqual([m[1:] for m in self.notices()],
+                                     [["display-message", "-t", "%4",
+                                       self.mod.DROPS[outcome]]])
+                    self.assertEqual(self.toasts(), [])  # the full 3 s
                 self.assertTrue(plan.settled)
+                # pass.log's outcome word is unchanged
                 (line,) = self.log().splitlines()
                 self.assertRegex(line, rf" session={t.SID} pane=%4 mode=plain "
                                        rf"outcome={outcome} some detail$")
-        self.reset()
-        self.clear_log()
-        self.mod.drop(self.plan(), "cancelled", "on SIGTERM")
-        self.assertEqual([m[1:] for m in self.notices()],
-                         [["display-message", "-t", "%4", "pass cancelled"]])
-        self.assertIn("outcome=cancelled on SIGTERM", self.log())
-        self.assertEqual(self.toasts(), [])
+
+    def test_a_loud_notice_for_a_pane_tmux_cannot_find_goes_to_tmuxs_client(self):
+        plan = self.plan()
+        os.environ["FAKE_TMUX_FAIL"] = "display-message"
+        self.mod.drop(plan, "timeout")
+        (msg,) = self.notices()
+        self.assertEqual(msg[1:4], ["display-message", "-d", "0"])
+        self.assertNotIn("-t", msg)
+        self.assertNotIn("-c", msg)
+        self.assertIn("the turn never went idle", msg[-1])
+        self.assertIn("the turn never went idle", self.toasts()[0][-1])
 
     def test_every_loud_text_names_a_fix(self):
         for outcome in self.LOUD:
@@ -911,33 +924,81 @@ class LoudNotice(Plain):
         return self.run_pass("--foreground")
 
     def test_a_failing_or_missing_toast_changes_neither_the_outcome_nor_the_exit_code(self):
-        real_run = self.mod.subprocess.run
+        # Each case breaks one thing on a fresh fixture and undoes it after, and checks it
+        # reached its own branch (spied below), not an earlier early return.
+        real_run, real_resolve = self.mod.subprocess.run, self.mod.resolve_bin
+        ps1 = os.path.join(self.home, ".claude", "notify-toast.ps1")
+        powershell = os.path.join(self.fake_bin, "powershell.exe")
+        wslpath = os.path.join(self.fake_bin, "wslpath")
+        wsl_log = os.path.join(self.tmp, "wslpath.log")
+        refused = []
 
         def no_shell(argv, *a, **kw):
             if argv[0] == "/bin/sh":
                 raise OSError("no /bin/sh")
             return real_run(argv, *a, **kw)
-        ps1 = os.path.join(self.home, ".claude", "notify-toast.ps1")
-        powershell = os.path.join(self.fake_bin, "powershell.exe")
-        wslpath = os.path.join(self.fake_bin, "wslpath")
-        cases = (("the toast exits 1", lambda: os.environ.update(FAKE_TOAST_EXIT="1"), True),
-                 ("no /bin/sh", lambda: setattr(self.mod.subprocess, "run", no_shell), False),
-                 ("no notify-toast.ps1", lambda: os.rename(ps1, ps1 + ".gone"), False),
-                 ("no powershell.exe", lambda: os.rename(powershell, powershell + ".gone"),
-                  False),
-                 ("wslpath fails", lambda: self.write(wslpath, "#!/bin/sh\nexit 1\n"), False))
-        for name, breakit, sent in cases:
-            with self.subTest(name), mock.patch.object(self.mod.subprocess, "run", real_run):
+
+        def resolve(name, *a):
+            try:
+                return real_resolve(name, *a)
+            except self.mod.Refuse:
+                refused.append(name)
+                raise
+
+        def moved(path):
+            os.rename(path, path + ".gone")
+            return lambda: os.rename(path + ".gone", path)
+
+        def failing_wslpath():
+            # A path on stdout but exit 1: only the exit-status check stops it.
+            self.write(wslpath, f"#!/bin/sh\necho x >> '{wsl_log}'\n"
+                                "printf '%s\\n' 'C:\\fake\\notify-toast.ps1'\nexit 1\n")
+            return lambda: self.write(wslpath, t.FAKE_WSLPATH)
+
+        def exits_1():
+            os.environ["FAKE_TOAST_EXIT"] = "1"
+            return lambda: os.environ.update(FAKE_TOAST_EXIT="0")
+
+        def without_shell():
+            self.mod.subprocess.run = no_shell
+            return lambda: setattr(self.mod.subprocess, "run", real_run)
+
+        cases = (("the toast exits 1", exits_1, True, []),
+                 ("no /bin/sh", without_shell, False, []),
+                 ("no notify-toast.ps1", lambda: moved(ps1), False, []),
+                 ("no powershell.exe", lambda: moved(powershell), False, ["powershell.exe"]),
+                 ("wslpath fails", failing_wslpath, False, []))
+        self.mod.resolve_bin = resolve
+        for name, breakit, sent, want_refused in cases:
+            with self.subTest(name):
                 self.reset()
                 self.clear_log()
-                breakit()
-                code, out = self.busy_run()
+                refused.clear()
+                for path in (ps1, powershell, wslpath):
+                    self.assertTrue(os.path.exists(path), path)  # the last case was undone
+                undo = breakit()
+                try:
+                    # What toast_command decided: an argv only when nothing before the start
+                    # failed (the toast exiting 1, or /bin/sh missing, come after it).
+                    toast = self.plan().toast
+                    self.assertEqual(refused, want_refused)
+                    refused.clear()
+                    code, out = self.busy_run()
+                finally:
+                    undo()
+                if name in ("the toast exits 1", "no /bin/sh"):
+                    self.assertIsNotNone(toast)
+                else:
+                    self.assertIsNone(toast)
                 self.assertEqual(code, 1, out)
                 self.assertIn("mode=plain outcome=busy busy: tasks: monitor", self.log())
                 self.assertNotIn("outcome=error", self.log())
                 self.assertLoud("pass refused in tab 3: 1 monitor running", toast=sent)
                 if not sent:
                     self.assertEqual(self.toasts(), [])
+                self.assertEqual(refused, want_refused)
+                if name == "wslpath fails":
+                    self.assertTrue(os.path.exists(wsl_log))  # it ran, and its exit 1 counted
 
     def test_with_no_client_attached_tmux_picks_one(self):
         # Hayden switched his only terminal to another session: no client of the pane's session.
@@ -950,12 +1011,15 @@ class LoudNotice(Plain):
         self.assertIn("1 monitor running", self.toasts()[0][-1])
 
     def test_a_label_is_shown_not_expanded_as_a_format(self):
-        self.stop_tasks = ["mon#{pane_id}"]
+        # display-message runs strftime (%H), then formats (#{...}, #(cmd)): both doubled.
+        self.stop_tasks = ["mon#{pane_id}", "%H#(id)", "a%#b"]
         code, out = self.run_pass("--foreground")
         self.assertEqual(code, 1, out)
         for m in self.notices():
-            self.assertIn("1 mon##{pane_id} running", m[-1])
-        self.assertIn("1 mon#{pane_id} running", self.toasts()[0][-1])
+            self.assertIn("1 mon##{pane_id}, 1 %%H##(id), 1 a%%##b running", m[-1])
+            self.assertNotRegex(m[-1].replace("%%", "").replace("##", ""), "[%#]")
+        self.assertIn("1 mon#{pane_id}, 1 %H#(id), 1 a%#b running", self.toasts()[0][-1])
+        self.assertEqual(self.mod.shown_literally("%#%%##"), "%%##%%%%####")
 
     def test_a_pane_problem_names_its_fix(self):
         os.environ["FAKE_TMUX_MODE"] = "1"
@@ -985,6 +1049,20 @@ class SkillLeftovers(unittest.TestCase):
         self.assertIn("The pane restarts after this turn unless the gate refuses (you'd see a "
                       "notice that stays until a key).", self.text)
         self.assertNotIn("When this turn ends, the pane restarts", self.text)
+
+    def test_a_lingering_stopped_task_means_compact_not_retries(self):
+        call = self.text.index("Run `pass-respawn -C <toplevel>`")
+        self.assertIn("still shows as running (a finished in-process teammate lingers",
+                      self.text[:call])
+        self.assertIn("Don't keep retrying `TaskStop`", self.text[:call])
+
+    def test_the_autopass_nudge_defers_to_step_2(self):
+        # A nudge that names running tasks must not compact forever over leftovers.
+        nudge = next(ln for ln in self.text.splitlines()
+                     if "compact mode because background tasks are running" in ln)
+        self.assertIn("run step 2's check", nudge)
+        self.assertIn("pass plain if none remain", nudge)
+        self.assertNotIn("a plain pass would be refused", nudge)
 
 
 if __name__ == "__main__":

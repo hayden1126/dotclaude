@@ -49,12 +49,14 @@ and empty (`busy` otherwise: typing would join a draft and a respawn would disca
 ghost suggestion is not a draft). A pane tmux can't find, a missing session file,
 a dead or replaced process, or a session file naming another session or pane drops `gone` at
 once, while waiting too. Past --timeout (600 s; at most 3600) it gives up (`timeout`). Each drop
-is logged, then shown, and touches nothing else. Every drop but `cancelled` is a pass Hayden
-expects that won't happen, so it is loud: one line naming the cause, the tab and the fix (for
-`busy`, the stop record's tasks counted: "3 monitors running ... /pass compact keeps them") on
-the status line of every client attached to the pane's session, held until a key press
-(`display-message -d 0 -c <client>`), plus the Windows toast notify.sh sends (toast_command;
-best-effort). `cancelled` keeps the brief status-line message: it was asked for. Outcomes at
+is logged, then shown, and touches nothing else. A refusal of a pass Hayden expects (`stale`,
+`busy`, `timeout`, `failed`, `error`, and `partial` below) is loud: one line naming the cause,
+the tab and the fix (for `busy`, the stop record's tasks counted: "3 monitors running ...
+/pass compact keeps them") on the status line of every client attached to the pane's session,
+held until a key press (`display-message -d 0 -c <client>`), plus the Windows toast notify.sh
+sends (toast_command; best-effort). The drops Hayden caused keep the brief status-line
+message (QUIET): `cancelled`, `resumed` (he typed a prompt after the call, which SKILL.md
+offers as a way to cancel) and `gone` (his own /clear or exit). Outcomes at
 call time (`refused`, a detach `error`) and --cancel's (`too-late`, `none`) print to the
 caller, which reads them before its reply, so they show nothing in tmux. Never respawn or
 compact on a failing check: the respawn throws away the context that could fix the gap.
@@ -207,9 +209,10 @@ DROPS = {
     "error": "pass failed: an error in the waiter. See pass.log, then /pass again",
     "cancelled": "pass cancelled",
 }
-# The one drop that stays quiet: a cancel is asked for on purpose. Every other drop is a pass
-# Hayden expects that won't happen, so it is loud (notify).
-QUIET = {"cancelled"}
+# The drops Hayden caused, which keep the brief status-line message: a cancel, a prompt he typed
+# after the call (SKILL.md documents typing one as a way to cancel), and his own /clear or exit
+# (`gone`). Every other drop is a refusal of a pass he expects, so it is loud (notify).
+QUIET = {"cancelled", "resumed", "gone"}
 # How a task label reads in a count ("3 monitors"); any other label reads as itself.
 NOUNS = {"unlabeled": "unlabeled task", "None": "unlabeled task"}
 TOAST_PS1 = "notify-toast.ps1"  # in the config dir, as hooks/notify.sh finds it
@@ -998,6 +1001,15 @@ def toast(plan: Plan, text: str) -> None:
                        env=dict(os.environ, PATH=plan.path))
 
 
+def shown_literally(text: str) -> str:
+    """text escaped for display-message, which expands its message twice: strftime first (`%%` is
+    a `%`), then tmux's formats (`##` is a `#`). Each pass undoes only its own doubling, and
+    neither creates the other's character, so the order of the two replaces doesn't matter and
+    no doubled pair can combine into a live `%H` or `#(cmd)`. -l would print it unchanged, but
+    tmux before 3.4 rejects it."""
+    return text.replace("%", "%%").replace("#", "##")
+
+
 def notify(plan: Plan, text: str) -> None:
     """A loud notice: text, naming the tab, on the status line of every client attached to the
     pane's session until a key press (`display-message -d 0 -c <client>`), then the Windows
@@ -1005,10 +1017,9 @@ def notify(plan: Plan, text: str) -> None:
     session shows it whichever window it is on; tmux's default (no -c) picks only one, which
     may be a stale terminal. With no client attached (Hayden switched his to another session)
     or the pane gone, it goes to tmux's own choice of client, the most recently active one.
-    `#` is doubled: the text is a format, and a task label must not expand (-l would do, but
-    tmux before 3.4 rejects it)."""
+    The text is escaped (shown_literally), so a task label shows as itself."""
     session_id, index, name = pane_place(plan)
-    shown = placed(text, f"tab {index}" if index else "").replace("#", "##")
+    shown = shown_literally(placed(text, f"tab {index}" if index else ""))
     clients = session_clients(plan, session_id) if session_id else []
     targets = (([["-c", c, "-t", plan.pane] for c in clients] or [["-t", plan.pane]])
                if session_id else [[]])
@@ -1018,13 +1029,13 @@ def notify(plan: Plan, text: str) -> None:
 
 
 def drop(plan: Plan, outcome: str, detail: str = "", shown: str | None = None) -> str:
-    """Log the drop, then show it: loud (notify) unless it is quiet (QUIET, a cancel), which
-    keeps the brief status-line message."""
+    """Log the drop, then show it: loud (notify) unless Hayden caused it (QUIET: a cancel, a
+    prompt after the call, his /clear or exit), which keeps the brief status-line message."""
     plan.settled = True
     log(plan.mode, outcome, plan.pane, detail)
     text = shown or DROPS[outcome]
     if outcome in QUIET:
-        tmux(plan, "display-message", "-t", plan.pane, text)
+        tmux(plan, "display-message", "-t", plan.pane, shown_literally(text))
     else:
         with contextlib.suppress(Exception):  # the outcome is logged; the notice is best-effort
             notify(plan, text)

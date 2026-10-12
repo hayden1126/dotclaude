@@ -282,11 +282,11 @@ class Base(LanesRepo):
         """The status-line messages shown (display-message without -p)."""
         return [a for a in self.calls("tmux", "display-message") if a[2] != "-p"]
 
-    def toasts(self, want=1):
+    def toasts(self, want=1, tries=60):
         """The toasts sent: each fake powershell.exe call's argv. The toast is detached, so wait
-        up to 3 s for want of them."""
+        up to tries * 0.05 s (3 s) for want of them."""
         argvs = []
-        for _ in range(60):
+        for _ in range(tries):
             if os.path.exists(self.toast_log):
                 with open(self.toast_log) as f:
                     done = f.read().rpartition("\n")[0]  # a line still being written waits
@@ -319,17 +319,13 @@ class Base(LanesRepo):
     def assertDropped(self, outcome, words):
         self.assertEqual(self.calls("tmux", "respawn-pane"), [])
         self.assertEqual(self.calls("tmux", "send-keys"), [])
-        if outcome == "cancelled":
+        if outcome in self.mod.QUIET:
+            # Hayden caused it: the brief line, no held notice, no toast (a short look here;
+            # LoudNotice waits the full 3 s for each quiet outcome).
             (msg,) = self.notices()
             self.assertEqual(msg[:4], ["tmux", "display-message", "-t", "%4"])
             self.assertIn(words, msg[-1])
-        elif "display-message" in os.environ.get("FAKE_TMUX_FAIL", ""):
-            # tmux can't find the pane: one held message to tmux's own choice of client.
-            (msg,) = self.notices()
-            self.assertEqual(msg[:4], ["tmux", "display-message", "-d", "0"])
-            self.assertNotIn("-t", msg)
-            self.assertIn(words, msg[-1])
-            self.assertIn(words, self.toasts()[0][-1])
+            self.assertEqual(self.toasts(tries=4), [])
         else:
             self.assertLoud(words)
         self.assertIn(f"outcome={outcome}", self.log())

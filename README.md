@@ -460,11 +460,13 @@ idle, the script rechecks the handoff and respawns the pane with a fresh `claude
   approval given in the session, and `handoff-check` fails one with a bad, older or future
   date, or when it can't find the session's start.
 - It waits for this session's own idle status (`~/.claude/sessions/<pid>.json`), not the tab's.
-  The pass drops, with one line in the pane's status line and nothing changed, when work landed
-  after the handoff (`stale`), Hayden typed or queued a prompt after the call (`resumed`), the
-  stop listed any background task but memory upkeep, or the pane was in copy mode or held a
-  draft in the input box (`busy`), the session or pane went away or changed (`gone`), or the
-  turn never ended (`timeout`). Fix the cause and run `/pass` again. In compact mode, copy mode,
+  The pass drops, with nothing changed, when work landed after the handoff (`stale`), Hayden
+  typed or queued a prompt after the call (`resumed`), the stop listed any background task but
+  memory upkeep, or the pane was in copy mode or held a draft in the input box (`busy`), the
+  session or pane went away or changed (`gone`), or the turn never ended (`timeout`). A refusal
+  (`stale`, `busy`, `timeout`, `failed`) shows its cause and fix on every terminal attached to
+  the pane's tmux session until a key press, plus a Windows toast; `resumed` and `gone`, which
+  Hayden caused, show one brief line in the status line. Fix the cause and run `/pass` again. In compact mode, copy mode,
   a draft or no input box between `/compact` and the resume prompt leaves the prompt for you to
   type (`partial`): it stays in the status line until a key press, and `pass.log` has it whole.
 - What Claude said before a pass: a plain pass clears the pane, so the old session's replies
