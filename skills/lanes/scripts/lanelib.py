@@ -120,11 +120,12 @@ PLAIN_PASS_IGNORES = frozenset({"dream"})
 
 def plain_pass_blockers(tasks) -> list[str]:
     """The task labels (a stop record's `tasks`, or the Stop payload's background_tasks types,
-    `unlabeled` for one with none) that make a plain pass refuse, in order. A list that isn't a
-    list blocks, as `?`: with no task list the respawn can't be shown safe."""
+    `unlabeled` for one with none) that make a plain pass refuse, in order, as strings. Anything
+    but a string ignored by name blocks, whatever its type. A list that isn't a list blocks, as
+    `?`: with no task list the respawn can't be shown safe."""
     if not isinstance(tasks, list):
         return ["?"]
-    return [str(t) for t in tasks if t not in PLAIN_PASS_IGNORES]
+    return [str(t) for t in tasks if not (isinstance(t, str) and t in PLAIN_PASS_IGNORES)]
 
 
 def state_dir() -> str:

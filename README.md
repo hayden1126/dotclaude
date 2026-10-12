@@ -492,28 +492,36 @@ idle, the script rechecks the handoff and respawns the pane with a fresh `claude
 A session can hand off on its own before auto-compact (about 567k tokens with
 `autoCompactWindow` at 600k). `hooks/context-watch.sh` runs on Stop and on every main-thread
 tool call. It reads the context size from the transcript's last assistant `usage`, writes it to
-`~/.local/state/dotclaude/ctx/<session>.json`, and acts at three tiers, all derived from
-`autoCompactWindow`:
+`~/.local/state/dotclaude/ctx/<session>.json` (for every session, `claude -p` and `--bg` ones
+included), and acts at three tiers. They come from `autoCompactWindow`, or from the model's
+window when the ctx file says it is smaller: compact at window - 33k, hard 47k before that,
+wrap-up 40k before hard, soft at half the window (on a 200k window soft would pass wrap-up, so
+it sits 20k under it: 60k, 80k, 120k).
 
 | Tier | Tokens | With autopass on |
 |---|---|---|
 | Soft | 300k | a Stop is blocked once: pass if the task is done, finish a small remainder first, do nothing if the last reply asked something |
 | Wrap-up | 480k | once, on a Stop or a tool call: finish this step, then pass |
-| Hard | 520k | on a Stop or a tool call, again every 20k: pass now |
+| Hard | 520k | on a Stop or a tool call, again every 20k until a handoff starts: pass now |
 
-- Only the highest tier crossed speaks, once per crossing; a drop below a tier (a compact)
-  re-arms it.
+- Only the highest tier crossed speaks, once per crossing. A drop of more than 50k under a
+  tier (a compact) re-arms it, so a count hovering at a tier never repeats it. The hard tier's
+  20k re-arm stops once the session calls the `pass` or `handoff` skill or `pass-respawn`.
 - Background work: while a subagent, shell, workflow or cloud session runs, soft and wrap-up
   wait and hard says `pass compact`. With any other task but `dream` (a monitor, a teammate),
-  every tier says compact mode, since `pass-respawn` would refuse a plain pass.
+  every tier says compact mode, since `pass-respawn` would refuse a plain pass. A tool call
+  can't see the task list, so it reads the last Stop's record; with none from the last 10
+  minutes, it says compact mode too (always safe).
 - With autopass off, you alone see one line at the hard tier, once: "Context 521k, auto-compact
   near 567k: hand off now (/pass)."
 - `/autopass on|off|status` sets it for this tmux tab, or shows the count, the next tier, on or
   off and what set it. A hook answers it, so it costs no model turn. Without a tab's setting,
-  a lane is on (`autopass` in the repo's lanes config), and elsewhere `autopass = true` in
+  a lane and the lanes repo's main checkout (the lead) are on (`autopass` in the repo's lanes
+  config), and elsewhere `autopass = true` in
   `~/.config/dotclaude/pass.toml` turns it on (off by default). `tiers = [soft, wrap, hard]` in
   that file overrides the tiers for live tests.
-- Nothing fires for a subagent, a `claude -p` run, or while a pass is already pending.
+- Nothing fires for a subagent, a `claude -p` or `--bg` session (no pane to respawn), or while
+  a pass is already pending.
 
 PLAN.md ("PR 4: auto-pass") is the design.
 

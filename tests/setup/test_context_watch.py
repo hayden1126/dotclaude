@@ -99,6 +99,7 @@ class Base(unittest.TestCase):
         self.addCleanup(patch.stop)
         os.environ.pop("CLAUDE_CODE_SESSION_ATTENDED", None)
         self.cwd = self.tmp  # not a git repo: no lane
+        self.stop_record([], [])  # no background work: a tool call gets the plain texts
 
     # ---- fixtures ----
     def pass_toml(self, text):
@@ -114,6 +115,25 @@ class Base(unittest.TestCase):
         with open(self.transcript, "w") as f:
             for e in [*before, assistant(total), *after]:
                 f.write(json.dumps(e) + "\n")
+
+    def append(self, *entries):
+        with open(self.transcript, "a") as f:
+            for e in entries:
+                f.write(json.dumps(e) + "\n")
+
+    def stop_at(self, total, *before):
+        """A Stop after appending entries and then an assistant entry at total."""
+        self.append(*before, assistant(total), USER)
+        return self.stop()
+
+    def write_ctx_window(self, win, sid=SID):
+        d = os.path.join(self.state, "dotclaude", "ctx")
+        os.makedirs(d, exist_ok=True)
+        with open(os.path.join(d, sid + ".json"), "w") as f:
+            json.dump({"tokens": 1, "time": 1.0, "window": win}, f)
+
+    def no_stop_record(self):
+        os.unlink(os.path.join(self.state, "dotclaude", "stops", SID + ".json"))
 
     def stop_record(self, waits, tasks, age=5):
         d = os.path.join(self.state, "dotclaude", "stops")
@@ -175,7 +195,8 @@ class Tiers(Base):
         self.assertIsNone(self.stop(299_999, session_id="s1"))
         self.assertEqual(self.ctx_of("s1")["tokens"], 299_999)
         self.assertIsNone(self.tool(479_999, session_id="s2"))     # past soft: Stop only
-        self.assertEqual(self.tool(519_999, session_id="s3"), context("wrap", "520k"))
+        # s3 has no stop record: its work is unknown, so the compact text
+        self.assertEqual(self.tool(519_999, session_id="s3"), context("wrap_compact", "520k"))
         self.assertIsNone(self.stop(299_999))
         self.assertEqual(self.ctx()["tokens"], 299_999)
         self.assertLess(time.time() - self.ctx()["time"], 30)
@@ -293,10 +314,26 @@ class Background(Base):
         self.stop_record([], ["monitor"])
         self.assertEqual(self.tool(485_000), context("wrap_compact", "485k"))
 
-    def test_a_stale_stop_record_counts_as_no_work(self):
+    def test_a_stale_stop_record_is_unknown_work_and_says_compact(self):
         self.on()
         self.stop_record(["shell"], ["shell"], age=601)
-        self.assertEqual(self.tool(485_000), context("wrap", "485k"))
+        self.assertEqual(self.tool(485_000), context("wrap_compact", "485k"))
+
+    def test_no_stop_record_is_unknown_work_and_says_compact(self):
+        self.on()
+        self.no_stop_record()
+        self.assertEqual(self.tool(525_000), context("hard_compact", "525k"))
+
+    def test_off_with_unknown_work_says_pass_compact(self):
+        self.no_stop_record()
+        self.assertEqual(self.tool(525_000), {"systemMessage": text("off_compact", "525k")})
+
+    def test_a_stop_records_without_a_task_list_says_compact(self):
+        self.on()
+        d = os.path.join(self.state, "dotclaude", "stops", SID + ".json")
+        with open(d, "w") as f:
+            json.dump({"time": time.time(), "waits": []}, f)
+        self.assertEqual(self.tool(485_000), context("wrap_compact", "485k"))
 
     def test_the_plain_pass_rule_is_pass_respawns(self):
         # One definition: lanelib.plain_pass_blockers, which pass-respawn's stop_problem uses.
@@ -325,11 +362,24 @@ class Skips(Base):
         self.assertIsNone(self.stop(525_000, agent_id="a1", agent_type="writer"))
         self.assertFalse(self.has_ctx())
 
-    def test_a_p_run_is_ignored(self):
+    def test_a_p_run_gets_its_count_but_no_nudge(self):
         self.on()
         self.assertIsNone(self.stop(525_000, session={**IN_TAB,
                                                        "CLAUDE_CODE_SESSION_ATTENDED": "0"}))
-        self.assertFalse(self.has_ctx())
+        self.assertEqual(self.ctx()["tokens"], 525_000)
+        self.assertIsNone(self.tool(530_000, session={**IN_TAB,
+                                                       "CLAUDE_CODE_SESSION_ATTENDED": "0"}))
+        self.assertEqual(self.ctx()["tokens"], 530_000)
+        self.assertFalse(os.path.exists(os.path.join(self.state, "dotclaude", "ctx-watch",
+                                                     SID + ".json")))
+
+    def test_a_background_session_gets_its_count_but_no_nudge(self):
+        # `claude --bg`: no TMUX_PANE, ATTENDED=0, CLAUDE_JOB_DIR (probed on 2.1.289).
+        self.on()
+        bg = {"CLAUDE_CODE_SESSION_ATTENDED": "0", "CLAUDE_JOB_DIR": "/tmp/job"}
+        self.assertIsNone(self.stop(525_000, session=bg))
+        self.assertEqual(self.ctx()["tokens"], 525_000)
+        self.assertEqual(self.stop(526_000), block("hard", "526k"))  # attended: nudged
 
     def test_a_session_id_that_is_not_plain_is_ignored(self):
         self.on()
@@ -406,7 +456,10 @@ class Decide(Base):
         cases = [(Repo("lane", {}), (True, "lanes")),
                  (Repo("lane", {"autopass": False}), (False, "lanes")),
                  (Repo("lane", {"autopass": "yes"}), (True, "lanes")),
-                 (Repo("main", {"autopass": True}), (False, "pass.toml")),
+                 (Repo("main", {}), (True, "lanes")),   # the lead passes itself too
+                 (Repo("main", {"autopass": False}), (False, "lanes")),
+                 (Repo("unregistered", {"autopass": True}), (False, "pass.toml")),
+                 (Repo("plain", {"autopass": True}), (False, "pass.toml")),
                  (None, (False, "pass.toml"))]
         for repo, want in cases:
             with mock.patch.object(lib, "resolve", return_value=repo):
@@ -452,11 +505,50 @@ class TierValues(Base):
             self.assertEqual(aps.window(), 600_000)
 
     def test_a_window_too_small_for_the_tiers_keeps_the_watcher_quiet(self):
-        self.settings(200_000)
+        self.settings(140_000)
         self.assertIsNone(aps.tiers())
         self.on()
-        self.assertIsNone(self.stop(190_000))
-        self.assertEqual(self.ctx()["tokens"], 190_000)
+        self.assertIsNone(self.stop(130_000))
+        self.assertEqual(self.ctx()["tokens"], 130_000)
+
+    def test_small_windows_scale_and_clamp_the_tiers(self):
+        # compact_at = w - 33k, hard = compact_at - 47k, wrap = hard - 40k, soft = w // 2 unless
+        # that reaches wrap, then wrap - 20k.
+        self.assertEqual(aps.tiers(200_000, {}), {"soft": 60_000, "wrap": 80_000,
+                                                  "hard": 120_000, "compact_at": 167_000})
+        self.assertEqual(aps.tiers(300_000, {}), {"soft": 150_000, "wrap": 180_000,
+                                                  "hard": 220_000, "compact_at": 267_000})
+        self.assertEqual(aps.tiers(150_000, {}), {"soft": 10_000, "wrap": 30_000,
+                                                  "hard": 70_000, "compact_at": 117_000})
+        self.assertEqual(aps.tiers(1_000_000, {}), {"soft": 500_000, "wrap": 880_000,
+                                                    "hard": 920_000, "compact_at": 967_000})
+
+    def test_the_models_window_from_the_ctx_file_lowers_the_tiers(self):
+        self.on()
+        self.write_ctx_window(200_000)
+        self.assertEqual(self.stop(61_000), {"decision": "block",
+                                             "reason": text("soft", "61k", "167k")})
+        self.assertEqual(self.ctx(), {**self.ctx(), "tokens": 61_000, "window": 200_000})
+
+    def test_a_larger_or_insane_model_window_does_not_raise_the_tiers(self):
+        self.on()
+        for win in (1_000_000, 10, "200000", True):
+            self.write_ctx_window(win)
+            self.assertIsNone(self.stop(299_000))       # 600k's soft tier, not crossed
+            self.assertEqual(self.ctx()["window"], win)  # kept, never clobbered
+            self.assertEqual(aps.window(self.transcript, win), 600_000)
+
+    def test_the_config_dir_comes_from_the_transcript_path(self):
+        cfg = os.path.join(self.tmp, "other-config")
+        os.makedirs(os.path.join(cfg, "projects", "-home-u-dna"))
+        with open(os.path.join(cfg, "settings.json"), "w") as f:
+            json.dump({"autoCompactWindow": 400_000}, f)
+        self.transcript = os.path.join(cfg, "projects", "-home-u-dna", SID + ".jsonl")
+        self.assertEqual(aps.window(self.transcript), 400_000)
+        self.assertEqual(aps.window(os.path.join(self.tmp, "t.jsonl")), 600_000)  # ~/.claude
+        self.on()
+        self.assertEqual(self.stop(321_000), {"decision": "block",
+                                              "reason": text("hard", "321k", "367k")})
 
     def test_a_valid_tiers_override(self):
         self.pass_toml("autopass = true\ntiers = [20000, 40000, 50000]\n")
@@ -517,9 +609,25 @@ class Toggle(Base):
         self.assertEqual(self.prompt("/autopass maybe")["reason"], toggle_mod.USAGE)
 
     def test_other_prompts_pass_through(self):
-        for p in ("/autopass on please", "please /autopass on", "/autopassx", "autopass on",
+        for p in ("please /autopass on", "/autopassx", "autopass on",
                   "/pass", "<task-notification>/autopass on</task-notification>"):
             self.assertIsNone(self.prompt(p), p)
+
+    def test_extra_words_get_the_usage_not_the_skill_body(self):
+        for p in ("/autopass on please", "/autopass\non off", "/autopass status now"):
+            self.assertEqual(self.prompt(p)["reason"], toggle_mod.USAGE, p)
+        self.assertIn("autopass off (the default)", self.prompt("/autopass   \n")["reason"])
+
+    def test_a_busy_session_lock_delays_the_cache_drop_and_says_so(self):
+        d = os.path.join(self.state, "dotclaude", "ctx-watch")
+        os.makedirs(d)
+        fd = os.open(os.path.join(d, SID + ".lock"), os.O_RDWR | os.O_CREAT)
+        self.addCleanup(os.close, fd)
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        out = self.prompt("/autopass on")["reason"]
+        self.assertIn("autopass on in this tab", out)
+        self.assertIn(toggle_mod.LATE.strip(), out)
+        self.assertEqual(self.flag()["on"], True)   # the flag itself is written regardless
 
     def test_a_subagent_prompt_passes_through(self):
         self.assertIsNone(self.prompt("/autopass on", agent_id="a1"))
@@ -529,6 +637,115 @@ class Toggle(Base):
         self.assertEqual(self.stop(), {"systemMessage": text("off", "525k")})  # caches off
         self.prompt("/autopass on")
         self.assertEqual(self.stop(), block("hard", "525k"))
+
+
+def skill_call(skill, sidechain=False):
+    """A main-chain assistant entry calling the Skill tool, as the transcript records it."""
+    e = assistant(1, sidechain=sidechain)
+    e["message"]["content"] = [{"type": "tool_use", "id": "toolu_1", "name": "Skill",
+                                "input": {"skill": skill}}]
+    del e["message"]["usage"]
+    return e
+
+
+def bash_call(command):
+    e = skill_call("x")
+    e["message"]["content"] = [{"type": "tool_use", "id": "toolu_2", "name": "Bash",
+                                "input": {"command": command, "description": "Pass"}}]
+    return e
+
+
+class Rearm(Base):
+    def test_a_count_hovering_at_a_tier_does_not_fire_it_again(self):
+        self.on()
+        self.assertEqual(self.stop(310_000), block("soft", "310k"))
+        for n in (290_000, 305_000, 250_000, 320_000):   # never more than 50k under
+            self.assertIsNone(self.stop(n), n)
+        self.assertIsNone(self.stop(249_999))            # re-armed
+        self.assertEqual(self.stop(301_000), block("soft", "301k"))
+
+    def test_hovering_at_the_hard_tier_off_does_not_repeat_the_line(self):
+        self.assertEqual(self.stop(521_000), {"systemMessage": text("off", "521k")})
+        self.assertIsNone(self.stop(500_000))
+        self.assertIsNone(self.stop(522_000))
+        self.assertIsNone(self.stop(469_000))
+        self.assertEqual(self.stop(521_000), {"systemMessage": text("off", "521k")})
+
+    def test_a_handoff_after_the_hard_tier_stops_its_re_arm(self):
+        self.on()
+        self.write_transcript(525_000)
+        self.assertEqual(self.stop(), block("hard", "525k"))
+        rec = cw.fresh_record(aps.load_json(aps.watch_path(SID)))
+        self.assertEqual(rec["hard_offset"], os.path.getsize(self.transcript))
+        self.assertIsInstance(rec["hard_time"], float)
+        self.assertIsNone(self.stop_at(546_000, skill_call("pass")))
+        self.assertIsNone(self.stop_at(570_000))         # still handing off
+        self.assertIsNone(self.stop_at(100_000))         # a compact re-arms everything
+        self.assertEqual(self.stop_at(525_000), block("hard", "525k"))
+        self.assertEqual(self.stop_at(546_000), block("hard", "546k"))  # no handoff since
+
+    def test_the_handoff_skill_and_pass_respawn_count_too(self):
+        self.on()
+        for i, call in enumerate((skill_call("handoff"),
+                                  bash_call("pass-respawn -C /home/u/code/dna --compact"))):
+            sid = "s%d" % i
+            self.write_transcript(525_000)
+            self.assertEqual(self.stop(session_id=sid), block("hard", "525k"))
+            self.append(call, assistant(546_000))
+            self.assertIsNone(self.stop(session_id=sid))
+
+    def test_other_calls_and_a_subagents_skill_call_do_not(self):
+        self.on()
+        self.write_transcript(525_000)
+        self.assertEqual(self.stop(), block("hard", "525k"))
+        self.assertEqual(self.stop_at(546_000, skill_call("pass", sidechain=True),
+                                      skill_call("writing-voice"), bash_call("git status")),
+                         block("hard", "546k"))
+
+    def test_a_handoff_before_the_firing_does_not_count(self):
+        self.on()
+        self.write_transcript(525_000, before=(skill_call("pass"),))
+        self.assertEqual(self.stop(), block("hard", "525k"))
+        self.assertEqual(self.stop_at(546_000), block("hard", "546k"))
+
+
+class Locks(Base):
+    def test_the_lock_is_per_session_and_a_busy_one_says_nothing(self):
+        self.on()
+        d = os.path.join(self.state, "dotclaude", "ctx-watch")
+        os.makedirs(d)
+        fd = os.open(os.path.join(d, SID + ".lock"), os.O_RDWR | os.O_CREAT)
+        self.addCleanup(os.close, fd)
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        self.assertIsNone(self.stop(310_000))
+        self.assertEqual(self.ctx()["tokens"], 310_000)   # the count still lands
+        self.assertEqual(self.stop(310_000, session_id="other"), block("soft", "310k"))
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        self.assertEqual(self.stop(311_000), block("soft", "311k"))  # nothing was marked
+
+    def test_decide_runs_before_the_lock(self):
+        self.on()
+        self.write_transcript(310_000)
+        held = []
+
+        def decide(cwd, pane):
+            with aps.watch_lock(SID, wait=0) as locked:
+                held.append(locked)
+            return True, "pass.toml"
+
+        payload = {"session_id": SID, "hook_event_name": "Stop",
+                   "transcript_path": self.transcript, "cwd": self.cwd}
+        with mock.patch.object(aps, "decide", decide):
+            self.assertEqual(cw.handle(payload), block("soft", "310k"))
+        self.assertEqual(held, [True])
+
+
+class PlainPassRule(unittest.TestCase):
+    def test_non_strings_block_like_the_old_rule_and_never_raise(self):
+        lib = aps.lanelib()
+        self.assertEqual(lib.plain_pass_blockers([{"a": 1}, ["x"], "dream", None, 3, "monitor"]),
+                         ["{'a': 1}", "['x']", "None", "3", "monitor"])
+        self.assertEqual(lib.plain_pass_blockers(["dream", "dream"]), [])
 
 
 if __name__ == "__main__":

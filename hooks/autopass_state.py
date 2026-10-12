@@ -5,20 +5,29 @@ the statusline widget and `lane ls`. Each puts this file's real directory on sys
 (python3 -I keeps it off). Stdlib only; keep the source ASCII. PLAN.md "PR 4: auto-pass" has
 the design.
 
-- window(): `autoCompactWindow` from ~/.claude/settings.json (statusline/ctx-breakdown.py's
-  autocompact_setting reads it the same way; that file is copied into ccstatusline's own config
-  dir, so it can't import this one), else 600000.
-- tiers(window): soft = window // 2, wrap = window - 120000, hard = window - 80000 and
-  compact_at = window - 33000, where Claude Code really compacts (spike-measured, about 567k).
-  `tiers = [soft, wrap, hard]` in ~/.config/dotclaude/pass.toml overrides the three for live
-  tests; a value that isn't three increasing positive integers below compact_at is ignored.
-  A window too small for the derived tiers to increase gives None (the watcher stays quiet).
+- window(transcript_path, model_window): `autoCompactWindow` from the config dir's
+  settings.json, the dir found from the transcript path as statusline/ctx-breakdown.py's
+  config_dir finds it (that file is copied into ccstatusline's own config dir, so it can't
+  import this one), else 600000. When the model's own window is known (the ctx file's
+  `window`, which the statusline widget writes from context_window.context_window_size; no
+  hook payload names the model) and sane, the smaller of the two.
+- tiers(window): compact_at = window - 33000, where Claude Code really compacts
+  (spike-measured, about 567k); hard = compact_at - 47000 (the p90 handoff cost); wrap = hard -
+  40000 (about one turn); soft = window // 2. For 600k that is 300k/480k/520k/567k. On a small
+  window soft can reach wrap: then soft = wrap - 20000 (200k gives 60k/80k/120k/167k). When
+  the order soft < wrap < hard < compact_at can't hold even so (a window of 140k or less),
+  tiers is None and the watcher stays quiet. `tiers = [soft, wrap, hard]` in
+  ~/.config/dotclaude/pass.toml overrides the three for live tests; a value that isn't three
+  increasing positive integers below compact_at is ignored.
+- The ctx file, ctx/<session>.json = {tokens, time, window?}: the watcher writes tokens and
+  time, merging, so a `window` another writer put there stays.
 - The tab flag, $XDG_STATE_HOME/dotclaude/autopass/<pane number>.json = {tab, on, set_at}, holds
   what /autopass on|off set in that tmux tab. It counts only while its tab (socket, server
   start, server pid, pane: pass-respawn's pane_tab key) matches this pane on this server
   exactly, so a flag a dead server left behind is ignored.
 - decide(cwd, pane) -> (on, source): the tab flag ("tab"), else the repo's lanes config key
-  `autopass` when cwd is a lane, true by default there ("lanes"), else `autopass` in pass.toml
+  `autopass` when cwd is a lane or the main checkout of a lanes repo (the lead passes itself
+  the same way), true by default there ("lanes"), else `autopass` in pass.toml
   ("pass.toml"), else off ("default"). It runs git and maybe tmux, so call it only when a tier
   would fire.
 """
@@ -34,7 +43,8 @@ import time
 import tomllib
 
 DEFAULT_WINDOW = 600000
-SOFT_SHARE, WRAP_MARGIN, HARD_MARGIN, COMPACT_BUFFER = 2, 120000, 80000, 33000
+COMPACT_BUFFER, HANDOFF_COST, TURN, SOFT_CLAMP = 33000, 47000, 40000, 20000
+WINDOW_RANGE = (50000, 10_000_000)  # a model window outside this is garbage
 TIER_NAMES = ("soft", "wrap", "hard")
 PANE = re.compile(r"%\d+")
 HERE = os.path.dirname(os.path.realpath(__file__))
@@ -64,8 +74,20 @@ def autocompact_setting(cfg: str):
     return int(v) if isinstance(v, (int, float)) and not isinstance(v, bool) and v > 0 else None
 
 
-def window() -> int:
-    return autocompact_setting(os.path.expanduser("~/.claude")) or DEFAULT_WINDOW
+def config_dir(transcript_path) -> str:
+    """The active config dir: <config-dir>/projects/<project>/<session>.jsonl, else
+    CLAUDE_CONFIG_DIR, else ~/.claude (ctx-breakdown.py's config_dir)."""
+    if isinstance(transcript_path, str) and transcript_path:
+        if os.path.basename(os.path.dirname(os.path.dirname(transcript_path))) == "projects":
+            return os.path.dirname(os.path.dirname(os.path.dirname(transcript_path)))
+    return os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude")
+
+
+def window(transcript_path=None, model_window=None) -> int:
+    win = autocompact_setting(config_dir(transcript_path)) or DEFAULT_WINDOW
+    if is_int(model_window) and WINDOW_RANGE[0] <= model_window <= WINDOW_RANGE[1]:
+        win = min(win, model_window)
+    return win
 
 
 def pass_toml() -> dict:
@@ -79,7 +101,7 @@ def pass_toml() -> dict:
 
 def tiers(win: int | None = None, config: dict | None = None) -> dict | None:
     """{"soft", "wrap", "hard", "compact_at"} in tokens, or None when neither the derived tiers
-    nor an override increase (a window under 280k)."""
+    nor an override can increase."""
     win = window() if win is None else win
     compact_at = win - COMPACT_BUFFER
     override = (pass_toml() if config is None else config).get("tiers")
@@ -87,7 +109,11 @@ def tiers(win: int | None = None, config: dict | None = None) -> dict | None:
             and 0 < override[0] < override[1] < override[2] < compact_at):
         soft, wrap, hard = override
     else:
-        soft, wrap, hard = win // SOFT_SHARE, win - WRAP_MARGIN, win - HARD_MARGIN
+        hard = compact_at - HANDOFF_COST
+        wrap = hard - TURN
+        soft = win // 2
+        if soft >= wrap:
+            soft = wrap - SOFT_CLAMP
         if not 0 < soft < wrap < hard < compact_at:
             return None
     return {"soft": soft, "wrap": wrap, "hard": hard, "compact_at": compact_at}
@@ -171,14 +197,14 @@ def lanelib():
 
 
 def lane_setting(cwd: str):
-    """The lanes config's `autopass` (true by default) when cwd is a registered lane, else
-    None. Any failure (no git, no lanes, a broken config) is None."""
+    """The lanes config's `autopass` (true by default) when cwd is a registered lane or the
+    main checkout of a lanes repo, else None. Any failure (no git, no lanes, a broken config) is None."""
     lib = lanelib() if isinstance(cwd, str) and os.path.isdir(cwd) else None
     if lib is None:
         return None
     try:
         repo = lib.resolve(cwd)
-        if repo is None or repo.identity()[0] != "lane":
+        if repo is None or repo.identity()[0] not in ("lane", "main"):
             return None
         v = repo.config().get("autopass", True)
     except Exception:
@@ -207,18 +233,32 @@ def ctx_path(sid: str) -> str:
     return os.path.join(state_dir(), "ctx", sid + ".json")
 
 
+def read_ctx(sid: str) -> dict:
+    rec = load_json(ctx_path(sid))
+    return rec if isinstance(rec, dict) else {}
+
+
+def write_ctx(sid: str, tokens: int, now: float) -> dict:
+    """Merge {tokens, time} into the ctx file, keeping its other fields (`window`). A writer
+    racing this one may lose its field until its next write; neither file goes bad."""
+    rec = {**read_ctx(sid), "tokens": tokens, "time": now}
+    write_json(ctx_path(sid), rec)
+    return rec
+
+
 def watch_path(sid: str) -> str:
     """The watcher's own record of the session: which tiers fired, and a cached decide()."""
     return os.path.join(state_dir(), "ctx-watch", sid + ".json")
 
 
 @contextlib.contextmanager
-def watch_lock(wait: float = 1.0):
-    """An exclusive flock on ctx-watch/.lock, so two hooks of one session (parallel tool calls)
-    never fire a tier twice. Yields False when it wasn't taken within `wait` seconds."""
+def watch_lock(sid: str, wait: float = 1.0):
+    """An exclusive flock on ctx-watch/<session>.lock, so two hooks of one session (parallel
+    tool calls) never fire a tier twice. Nothing slow runs under it (decide() runs before).
+    Yields False when it wasn't taken within `wait` seconds."""
     d = os.path.join(state_dir(), "ctx-watch")
     os.makedirs(d, exist_ok=True)
-    fd = os.open(os.path.join(d, ".lock"), os.O_RDWR | os.O_CREAT, 0o600)
+    fd = os.open(os.path.join(d, sid + ".lock"), os.O_RDWR | os.O_CREAT, 0o600)
     try:
         deadline = time.monotonic() + wait
         while True:

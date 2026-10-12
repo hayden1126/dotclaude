@@ -6,11 +6,12 @@
 # (/autopass, a lane, or pass.toml) a tier blocks the Stop or adds context to a tool result;
 # with it off, only the hard tier shows Hayden one line, once. hooks/context_watch.py, beside
 # this script's real path and run with python3 -I, has the rules; tests/setup/
-# test_context_watch.py holds the cases. Quiet for a `claude -p` run and a subagent.
-# Fail-open: always exits 0, and anything that goes wrong says nothing.
+# test_context_watch.py holds the cases. Quiet for a subagent; a `claude -p` or `claude --bg`
+# session (CLAUDE_CODE_SESSION_ATTENDED=0) gets its count written (`lane ls` reads it) but no
+# nudge, since it has no pane to respawn. Fail-open: always exits 0, and anything that goes
+# wrong says nothing.
 set -uo pipefail
 
-[ "${CLAUDE_CODE_SESSION_ATTENDED:-}" != 0 ] || exit 0
 src=$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null) || exit 0
 python3 -I "${src%/*}/context_watch.py" 2>/dev/null
 exit 0
