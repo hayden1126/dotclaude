@@ -10,7 +10,9 @@ repo, a PR or an agent's brief; turn a case into a genericized test instead.
     python3 tests/setup/replay_history.py --all           # also list every fire
 
 It prints the fire counts, every prompt the two versions disagree on, and the near-misses: short
-prompts with a wrap-up word that neither version fires on. Read all of them. A version with
+prompts with a wrap-up word that neither version fires on. Read all of them. A version whose
+classify() names the kind ("handoff", "pass", "compact") tags each listed fire with its first letter
+(h, p, c); an older one returns a bool and shows as 1. A version with
 hooks/handoff_reminder.py is classified in-process, in seconds; an older one, with the Python inside
 hooks/handoff-reminder.sh, runs through bash per prompt (about a minute for 3,000 prompts). Not a
 unit test (its name keeps discovery away from it).
@@ -29,7 +31,8 @@ from concurrent.futures import ThreadPoolExecutor
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 HOOK = "hooks/handoff-reminder.sh"
 MODULE = "hooks/handoff_reminder.py"
-NEAR = re.compile(r"wrap|hand ?-?off|stop here|call it|/clear|done for|clear (the )?(context|session)", re.I)
+NEAR = re.compile(r"wrap|hand ?-?off|stop here|call it|/clear|done for|clear (the )?(context|session)|\bpass\b",
+                  re.I)
 # Versions before the python3 rewrite read the prompt with jq; this stands in where jq is missing.
 JQ_SHIM = ('#!/usr/bin/env python3\nimport json, sys\np = json.load(sys.stdin).get("prompt")\n'
            'print(p if isinstance(p, str) else "")\n')
@@ -62,7 +65,7 @@ def replay(hooks_dir, name, prompts, env):
         spec = importlib.util.spec_from_file_location(name, module)
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
-        return [mod.classify(p) for p in prompts]
+        return [mod.classify(p) or False for p in prompts]
     hook = os.path.join(hooks_dir, os.path.basename(HOOK))
     with ThreadPoolExecutor(12) as ex:
         return list(ex.map(lambda p: fires(hook, p, env), prompts))
@@ -72,6 +75,11 @@ def show(ref, path):
     """path's content at ref, or None when it doesn't exist there."""
     p = subprocess.run(["git", "-C", REPO, "show", f"{ref}:{path}"], capture_output=True, text=True)
     return None if p.returncode else p.stdout
+
+
+def tag(kind):
+    """One character for a decision: '.' for none, the kind's first letter, or '1' for a bool fire."""
+    return kind[0] if isinstance(kind, str) else ("1" if kind else ".")
 
 
 def flat(prompt, width=140):
@@ -106,12 +114,13 @@ def main():
         before = replay(old_dir, "handoff_reminder_old", prompts, env)
         after = replay(os.path.join(REPO, "hooks"), "handoff_reminder_new", prompts, env)
 
-    print(f"{len(prompts)} typed prompts. {args.against} fires on {sum(before)}, "
-          f"this checkout on {sum(after)}.")
+    kinds = {k: sum(a == k for a in after) for k in ("handoff", "pass", "compact")}
+    print(f"{len(prompts)} typed prompts. {args.against} fires on {sum(map(bool, before))}, "
+          f"this checkout on {sum(map(bool, after))} {kinds}.")
     print(f"\n-- disagreements ({args.against}, this checkout):")
     for p, b, a in zip(prompts, before, after):
-        if b != a:
-            print(f"   {'1' if b else '.'}{'1' if a else '.'}  {flat(p)}")
+        if bool(b) != bool(a) or (isinstance(b, str) and b != a):
+            print(f"   {tag(b)}{tag(a)}  {flat(p)}")
     print("\n-- near-misses (18 words or fewer, a wrap-up word, neither fires):")
     for p, b, a in zip(prompts, before, after):
         if not (b or a) and len(p.split()) <= 18 and NEAR.search(p):
@@ -120,7 +129,7 @@ def main():
         print("\n-- every fire in this checkout:")
         for p, a in zip(prompts, after):
             if a:
-                print(f"      {flat(p)}")
+                print(f"    {tag(a)} {flat(p)}")
 
 
 if __name__ == "__main__":
