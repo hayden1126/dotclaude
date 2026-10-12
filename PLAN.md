@@ -678,10 +678,13 @@ all on 1M-window models). Context at each event, in thousands of tokens:
   2026-10-12). One `last_message` per session loses the unread reply when auto-pass blocks a Stop
   and the continued turn ends on "pass armed". Spike A5: a hook-blocked Stop and the Stop that
   ends the continued turn share the payload's `prompt_id` (`stop_hook_active` false, then true).
-  So the stop record keeps `replies` (`{prompt_id, text, time}`, the 3 most recent prompts, 128
-  KiB in all). The banner shows the newest prompt's replies, and the popup shows all three
-  prompts' replies, which puts the reply before a manual `/pass` one key away. `-p` sessions keep
-  none, and `stops/` and `pass-last/` are pruned after 7 days.
+  So the stop record keeps `replies` (`{prompt_id, text, time}`, the 5 most recent turns, 128
+  KiB in all). The banner shows the newest turn's replies, and the popup shows all five turns,
+  which puts the reply before a manual `/pass` one key away. `-p` sessions keep none, and
+  `stops/` and `pass-last/` are pruned after 7 days.
+  - Review round 2: the Stop payload can't tell a typed prompt from a turn a task notice
+    started, so the banner says "Last turn's replies", not "since your last prompt". A Stop
+    with no `prompt_id` is its own group, and a cut inside the newest turn leaves a note.
 - Rejected: putting the reply in the resume prompt. That feeds the old session's beliefs back
   into the fresh context, which is what a clear avoids.
 
