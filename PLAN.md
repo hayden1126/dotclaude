@@ -604,7 +604,7 @@ all on 1M-window models). Context at each event, in thousands of tokens:
 - Stop `decision: block` keeps the turn going ([[cc-stop-hook-facts]]).
 
 **The lead** (moved from PR 2).
-- Each lane manages itself through the watcher (`auto` in lanes).
+- Each lane manages itself through the watcher (autopass is on by default in lanes).
 - `lane ls` shows each lane's context from `ctx/<sid>`, plus its idle or working state.
 - A lane past the soft tier and idle gets a message from the lead: "context N k, run /pass".
 - The lead never respawns another lane's pane, because only that lane holds the context its
