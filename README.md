@@ -454,11 +454,12 @@ idle, the script rechecks the handoff and respawns the pane with a fresh `claude
   after the handoff (`stale`), Hayden typed or queued a prompt after the call (`resumed`), the
   stop listed any background task but memory upkeep, or the pane was in copy mode or held a
   draft in the input box (`busy`), the session or pane went away or changed (`gone`), or the
-  turn never ended (`timeout`). Fix the cause and run `/pass` again. In compact mode, copy mode
-  or a draft that comes up between `/compact` and the resume prompt leaves the prompt in the
-  status line for you to type (`partial`).
+  turn never ended (`timeout`). Fix the cause and run `/pass` again. In compact mode, copy mode,
+  a draft or no input box between `/compact` and the resume prompt leaves the prompt for you to
+  type (`partial`): it stays in the status line until a key press, and `pass.log` has it whole.
 - One pass may be pending per session. `pass-respawn -C <toplevel> --cancel` ends it, until the
-  waiter has begun acting; then it finishes, and `--cancel` says `too-late`.
+  waiter has begun acting; then it finishes, and `--cancel` says `too-late` (also, naming the
+  outcome, when the waiter had already dropped or acted on its own).
 - `pass-respawn` is in `excludedCommands` (it needs the tmux socket), so it runs bare, and the
   allow rule `Bash(pass-respawn -C *)` keeps the auto-mode classifier from refusing it. Each
   decision appends a line to `~/.local/state/dotclaude/pass.log`.

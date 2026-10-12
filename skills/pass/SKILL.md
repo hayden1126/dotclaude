@@ -40,7 +40,7 @@ The record holds the exact facts and the fresh session re-reads it. So the hando
 
 6. **Say in one line what happens when the turn ends, then stop.** For example: "When this turn ends, the pane restarts fresh in plan mode and reads STATUS.md." Do nothing after the call. Any edit or commit after it makes the handoff stale, and the waiter drops the pass.
 
-7. **If Hayden says not to pass after the call**, run `pass-respawn -C <toplevel> --cancel`. It ends this session's pending waiter (logged `cancelled`), and says so when nothing was pending. A prompt he types mid-turn drops the pass anyway; `--cancel` makes it certain. Once the waiter has passed its last check and begun acting, it is too late: the waiter ignores the signal and finishes (the respawn, or the keys), and `--cancel` says `too-late` and exits 1.
+7. **If Hayden says not to pass after the call**, run `pass-respawn -C <toplevel> --cancel`. It ends this session's pending waiter (logged `cancelled`), and says so when nothing was pending. A prompt he types mid-turn drops the pass anyway; `--cancel` makes it certain. Once the waiter has passed its last check and begun acting, it is too late: the waiter ignores the signal and finishes (the respawn, or the keys), and `--cancel` says `too-late` and exits 1. It says `too-late` too, naming the outcome, when the waiter had already ended on its own (a drop such as `stale`, or the act).
 
 ## What happens after the turn
 
@@ -51,7 +51,7 @@ The waiter watches this session's own status in `~/.claude/sessions/<pid>.json` 
 3. It reads the resume mode.
 4. In plain mode, it checks the session's stop record for background work: any task but memory upkeep (`dream`) drops it.
 5. Right before acting, it checks once more: the session is still idle, the pane still runs the same `claude`, the pane is not in copy mode, and the input box is empty. A draft Hayden is composing drops the pass in both modes, since typing would join it and a respawn would discard it. The dim ghost suggestion doesn't count.
-6. In compact mode it checks the pane again between `/compact` and the resume prompt. If copy mode or a draft came up in that second, it shows the prompt in the status line for Hayden to type instead of typing it (logged `partial`).
+6. In compact mode it checks the pane again between `/compact` and the resume prompt. If copy mode, a draft or no input box came up in that second, it doesn't type the prompt: it shows it in the status line for Hayden to type, where it stays until a key press, and writes it whole into `pass.log` (logged `partial`).
 
 Each drop shows one line in the pane's status line and changes nothing else:
 
@@ -64,7 +64,7 @@ Each drop shows one line in the pane's status line and changes nothing else:
 | `timeout` | the turn never ended (600 s) | `/pass` again |
 | `cancelled` | `pass-respawn -C <toplevel> --cancel` ended the waiter | nothing; `/pass` again when wanted |
 | `failed` | tmux could not respawn the pane or type into it | read `pass.log`, then `/pass` again |
-| `partial` | compact mode: `/compact` went in, then copy mode or a draft came up before the resume prompt | type the prompt the status line shows |
+| `partial` | compact mode: `/compact` was sent (not confirmed), then copy mode, a draft or no input box came up before the resume prompt | type the prompt the status line shows (it stays until a key press, and `pass.log` has it whole) |
 
 Each decision appends one line to `$XDG_STATE_HOME/dotclaude/pass.log` (`~/.local/state/dotclaude/pass.log` by default).
 

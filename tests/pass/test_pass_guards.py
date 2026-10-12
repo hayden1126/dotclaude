@@ -11,11 +11,13 @@ import fcntl
 import io
 import json
 import os
+import re
 import shutil
 import signal
 import subprocess
 import sys
 import time
+import unittest
 from unittest import mock
 
 import test_pass_respawn as t
@@ -414,6 +416,24 @@ class InputBox(Plain):
                 self.assertIn(words, line)
                 self.assertTrue(line.endswith(f"resume prompt: {prompt}"), line)
                 self.assertNotIn("outcome=compact", self.log())
+
+PARTIAL_WORDS = ("copy mode", "a draft", "no input box", "key press", "pass.log")
+
+
+def partial_gaps(text):
+    """The words PARTIAL_WORDS a doc's `partial` passage lacks: SKILL.md's table row and step 6,
+    or the README's sentence. The passage is the paragraph (or row) that names `partial`."""
+    passages = [p for p in re.split(r"\n(?=\| |\d+\. |- )|\n\n", text) if "`partial`" in p]
+    return [(p.strip()[:40], w) for p in passages for w in PARTIAL_WORDS if w not in p] or (
+        [] if passages else [("no passage", "`partial`")])
+
+
+class PartialDocs(unittest.TestCase):
+    def test_the_docs_name_every_cause_of_partial_and_where_the_prompt_stays(self):
+        for rel in ("skills/pass/SKILL.md", "README.md"):
+            with self.subTest(doc=rel), open(os.path.join(REPO, rel)) as f:
+                self.assertEqual(partial_gaps(f.read()), [])
+
 
 # ---- 5. prompts typed mid-turn and the transcript ----------------------------------------------
 
