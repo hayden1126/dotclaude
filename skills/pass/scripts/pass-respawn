@@ -137,7 +137,7 @@ class Plan:
     session: dict          # the session file at the call
     called: float          # epoch secs at the start of the call
     transcript: str | None
-    transcript_size: int
+    transcript_size: int | None  # None: unreadable at the call
     timeout: float
 
     @property
@@ -237,12 +237,22 @@ def session_problem(session: dict | None, sid: str, pid: int, start: int | None,
     return None
 
 
-def transcript_path(session: dict, sid: str) -> str | None:
-    """The session's transcript: the session file's transcript_path, else
-    <config>/projects/<cwd with each non-alphanumeric as '-'>/<sid>.jsonl."""
-    given = session.get("transcript_path")
-    if isinstance(given, str) and given:
-        return given
+def stop_record(sid: str) -> dict | None:
+    """The session's stop record (hooks/stop-ring.sh), or None."""
+    try:
+        with open(os.path.join(lanelib.state_dir(), "stops", f"{sid}.json")) as f:
+            rec = json.load(f)
+    except (OSError, ValueError):
+        return None
+    return rec if isinstance(rec, dict) else None
+
+
+def transcript_path(session: dict, sid: str, record: dict | None = None) -> str | None:
+    """The session's transcript: the stop record's transcript_path (the Stop payload's), else
+    the session file's, else <config>/projects/<cwd with each non-alphanumeric as '-'>/<sid>.jsonl."""
+    for given in ((record or {}).get("transcript_path"), session.get("transcript_path")):
+        if isinstance(given, str) and given:
+            return given
     cwd = session.get("cwd")
     if not isinstance(cwd, str) or not cwd:
         return None
@@ -264,20 +274,38 @@ def typed_prompt(entry) -> bool:
         isinstance(c, dict) and c.get("type") == "tool_result" for c in content))
 
 
-def typed_since(path: str | None, offset: int) -> bool:
-    """Whether the transcript gained a typed prompt past byte offset. A missing one: no."""
+def queued_prompt(entry) -> bool:
+    """A transcript entry for a prompt queued mid-turn, which Claude Code folds into the running
+    turn without a user entry: a queue enqueue (any, so a queued notice also counts and the pass
+    drops, failing closed), or a queued_command attachment whose origin kind is human."""
+    if not isinstance(entry, dict):
+        return False
+    if entry.get("type") == "queue-operation":
+        return entry.get("operation") == "enqueue"
+    att = entry.get("attachment")
+    origin = att.get("origin") if isinstance(att, dict) else None
+    return (entry.get("type") == "attachment" and att.get("type") == "queued_command"
+            and isinstance(origin, dict) and origin.get("kind") == "human")
+
+
+def typed_since(path: str | None, offset: int | None) -> bool | None:
+    """Whether the transcript gained a typed or queued prompt past byte offset; None when it
+    can't be read (or couldn't at the call, offset None)."""
+    if offset is None:
+        return None
     try:
         with open(path, "rb") as f:
             f.seek(offset)
             data = f.read()
     except (OSError, TypeError):
-        return False
+        return None
     for line in data.split(b"\n"):
         try:
-            if typed_prompt(json.loads(line)):
-                return True
+            entry = json.loads(line)
         except ValueError:
             continue
+        if typed_prompt(entry) or queued_prompt(entry):
+            return True
     return False
 
 
@@ -287,13 +315,10 @@ def stop_problem(plan: Plan) -> str | None:
     task at all but `dream` (memory upkeep). stop-ring.sh rings past a teammate or a monitor,
     since one lingers or runs for hours, but a respawn kills either, and any type it doesn't
     know (unlabeled ones included), so a plain pass doesn't."""
-    path = os.path.join(lanelib.state_dir(), "stops", f"{plan.session_id}.json")
-    try:
-        with open(path) as f:
-            rec = json.load(f)
-    except (OSError, ValueError):
+    rec = stop_record(plan.session_id)
+    if rec is None:
         return "no stop record"
-    when = rec.get("time") if isinstance(rec, dict) else None
+    when = rec.get("time")
     if not isinstance(when, (int, float)) or when <= plan.called:
         return "no stop record since the call"
     waits = rec.get("waits")
@@ -459,11 +484,11 @@ def prepare(args: argparse.Namespace, procs) -> Plan:
     sid = os.environ.get("CLAUDE_CODE_SESSION_ID") or ""
     claude_pid = session_claude(procs(), os.getpid())
     session = load_session(claude_pid) if claude_pid else None
-    transcript = transcript_path(session, sid) if session and sid else None
+    transcript = transcript_path(session, sid, stop_record(sid)) if session and sid else None
     try:
-        size = os.path.getsize(transcript) if transcript else 0
+        size = os.path.getsize(transcript) if transcript else None
     except OSError:
-        size = 0
+        size = None
     pane = os.environ.get("TMUX_PANE") or ""
     if not PANE_RE.fullmatch(pane):
         draft = Plan(mode, "", repo.toplevel, lane is not None, status_rel, "", None, 0, 0, sid,
@@ -588,8 +613,11 @@ def wait_and_act(plan: Plan, procs) -> str:
         gaps = [ln.strip()[len("FAIL"):].strip() for ln in out.splitlines()
                 if ln.strip().startswith("FAIL")]
         return drop(plan, "stale", "; ".join(gaps))
-    if typed_since(plan.transcript, plan.transcript_size):
-        return drop(plan, "resumed", "a typed prompt after the call")
+    typed = typed_since(plan.transcript, plan.transcript_size)
+    if typed is None:
+        return drop(plan, "resumed", "resumed: transcript unreadable")
+    if typed:
+        return drop(plan, "resumed", "a typed or queued prompt after the call")
     approved = approved_now(plan, session)
     actions = plan.actions(approved)
     if plan.mode == "plain" and (why := stop_problem(plan)):
