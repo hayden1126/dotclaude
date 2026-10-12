@@ -167,9 +167,22 @@ stored here).
       `window: 1000000`, and the cue resolved to off, `default`.
     - Settled live: the statusline's `total_input_tokens` is the current context; it equals the
       `current_usage` sum and the transcript's last usage.
-  - Then **part 2c**: a loud refusal (tmux `-d 0` plus a toast, a `tasks:` label), and the pass
-    skill stopping leftover monitors (PLAN.md "A refused pass, and leftover monitors").
-  - Then install from the branch and run the live smoke tests, then the draft PR.
+  - **Part 2c is merged into the branch** (`3f566e6`, one review round). A refused pass is held
+    on every client of the session until a key, plus a toast, except `cancelled`, `resumed` and
+    `gone`. The pass skill stops leftover tasks or uses compact mode. `pass-respawn` is live
+    now (the checkout is the install).
+  - **All of PR 4 is on the branch; PLAN.md has "As built".** Next, in order:
+    1. Hayden installs from the branch: copy `~/.claude/settings.json`, run `./setup.sh`, diff
+       the two, then `./setup-tmux.sh` (the classifier refused a `setup.sh` run in PR 3).
+    2. Live smoke tests, each in a scratch tmux window:
+       - `/autopass status`, `/autopass on` (blocked, no model turn, the tab not left busy);
+       - at lowered tiers (`tiers = [...]` in `~/.config/dotclaude/pass.toml`), each tier
+         fires once and a pass follows;
+       - `/pass` shows the banner, and Ctrl-b P plus both menu entries reopen it;
+       - a pass refused for a running Monitor shows the held notice and the toast;
+       - the `A` cue, and `lane ls` CTX and STATE.
+    3. Open the draft PR, then mark it ready after STATUS. Push and merge only on Hayden's
+       approval.
   - **`tests/pass` is load-sensitive:** a load spike (one run took 1,248 s) failed timing
     asserts in untouched PR 3 tests too. Judge it on a run at normal speed (about 46 s).
   - **`test_tmux_hooks` flakes on `main` too:** 2 of 6 runs under parallel load (2026-10-12),

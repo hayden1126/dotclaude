@@ -562,6 +562,40 @@ nothing medium or worse) and live runs shaped these:
 
 ## PR 4: auto-pass (`feat/autopass`, after PR 3)
 
+**As built (2026-10-12), where it differs from the design below.** The module docstrings
+(`hooks/context_watch.py`, `hooks/autopass_state.py`, `hooks/stop_ring.py`,
+`hooks/pass_banner.py`, `tmux/pass-last`, `pass-respawn`) and README "Auto-pass" are the
+reference. It shipped as four writer parts, each reviewed until no finding was medium or worse:
+part 1 in 3 rounds, 2a in 3, 2b in 2 and 2c in 1.
+- **Tiers scale with the window.** The window is min(the model window the widget writes into
+  `ctx/<sid>.json`, `autoCompactWindow`).
+  - compact_at = window - 33k; hard = compact_at - min(47k, 8%); wrap = hard - min(40k, 7%);
+    soft = window / 2. That gives 300/480/520/567k at 600k and 100/137/151/167k at 200k.
+  - The watcher stays quiet when soft >= wrap or wrap < 60k.
+  - A tier re-arms below tier - min(50k, tier/4). The hard tier repeats every min(20k, half
+    the gap to compact_at).
+- **The hard repeat pauses during a pass:** after a pass skill call, a command that starts
+  with `pass-respawn`, or a typed `/pass` (a user entry starting with Claude Code's
+  `<command-message>` block, spike A6). It resumes 40k later if no pass comes.
+- **Work in flight has three states.** Busy (subagent, shell, workflow, cloud session) keeps
+  soft and wrap-up quiet. Blocked (any other task but `dream`, from
+  `lanelib.plain_pass_blockers`, which `pass-respawn` also uses) and unknown (a tool call with
+  no stop record in the last 10 minutes) both get compact-mode texts.
+- **Coverage:** `-p` and `--bg` sessions get a count but never a nudge. Locks are per
+  session; `decide()` runs outside them and is cached 60 s, keyed by the tab flag's
+  `generation`. The lead's main checkout is on by default, like a lane.
+- **`/autopass`** is `skills/autopass` (`disable-model-invocation`) plus a UserPromptSubmit hook
+  that blocks it. `tmux-state.sh` doesn't mark the tab busy for it.
+- **The ctx file** `ctx/<sid>.json` holds `tokens` and `time` from the watcher, and `window`
+  and `window_at` from the widget, merged under `ctx-watch/<sid>.ctx.lock`. An older count never
+  replaces a newer one.
+- **The last reply is the last turn's replies** (see below). The popup shows the last 5 turns.
+- **A refused pass is loud** (held notice plus toast) except `cancelled`, `resumed` and `gone`,
+  which Hayden caused. The pass skill stops leftover tasks before a plain pass and never
+  promises a restart.
+- **Not built:** the lead nudging an idle lane past soft (by hand for now; `lane ls` shows CTX
+  and STATE).
+
 Hayden's ask: pass at the end of a session without being told. Designed with Hayden on
 2026-10-12, from his own pattern and a calibration over his transcripts.
 
@@ -736,6 +770,14 @@ all on 1M-window models). Context at each event, in thousands of tokens:
   right. Mid-turn, the last entry is the tool_use message, one tool result behind.
 - **A4:** a main-session PostToolUse `additionalContext` reached the model (it followed the
   injected instruction in its reply).
+- **A6 (a typed skill command):** a typed `/probeskill hello` is one main-chain `user` entry
+  (`origin.kind` "human") whose content is the string `<command-message>probeskill
+  </command-message>\n<command-name>/probeskill</command-name>\n<command-args>hello
+  </command-args>`, followed by an `isMeta` user entry holding the skill's body.
+- **A7 (the statusline payload):** `context_window.total_input_tokens` equals the
+  `current_usage` sum and the transcript's last usage, after one turn (52,075) and after a
+  second (52,252). It is the current context, not a session total. `context_window_size` is
+  1,000,000 for Opus 5.5.
 
 **Verify.**
 - `context-watch` on transcript fixtures: below each tier, at each tier once per crossing, the
