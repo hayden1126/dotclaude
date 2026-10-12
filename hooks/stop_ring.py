@@ -2,14 +2,18 @@
 
 hooks/stop-ring.sh runs this file with python3 -I, passing the Stop event on stdin, and reads one
 line back: "<spawned> <busy> <task labels or -> <transcript size or -> <transcript path>". The
-shim's header says what each means. Tests import merge_replies() and prune() directly
+shim's header says what each means; with this file missing or failing, the shim reads nothing
+and rings by its defaults. Tests import merge_replies() and prune() directly
 (tests/setup/test_tmux_hooks.py). Stdlib only; keep the source ASCII.
 
 The stop record, $XDG_STATE_HOME/dotclaude/stops/<session>.json, is written atomically for every
 stop but a subagent's, and only for a session id that is a plain name. It holds the time, the
 waits in flight, every task's label (`unlabeled` for one with none), the transcript path when it
-is a string, and `replies`: what Claude said since the last few prompts, for the banner and popup
-after a plain /pass (pass-respawn copies it to pass-last/). A `claude -p` run
+is a string, and `replies`: what Claude said in the last TURNS turns, for the banner and popup
+after a plain /pass (pass-respawn copies it to pass-last/). A turn is a run of replies with one
+prompt_id: a Stop a hook blocked and the Stop that ends the continued turn carry the same one
+(spike A5). The payload can't tell a typed prompt from a turn a background-task notice started,
+so a turn is not always one of Hayden's prompts. A `claude -p` run
 (CLAUDE_CODE_SESSION_ATTENDED=0) never passes, so its record has no `replies`.
 """
 import glob
@@ -23,8 +27,8 @@ import time
 WAITS = {"subagent", "shell", "workflow", "cloud session"}
 SID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
 TEXT_CAP = 64 * 1024       # bytes of UTF-8 per reply
-TOTAL_CAP = 128 * 1024     # bytes of UTF-8 over all replies; the oldest go first
-PROMPTS = 3                # the most recent distinct prompt_ids kept
+TOTAL_CAP = 128 * 1024     # bytes of UTF-8 over all replies; the oldest turns go first
+TURNS = 5                  # the most recent turns (runs of one prompt_id) kept
 PRUNE_AGE, PRUNE_EVERY = 7 * 86400, 86400
 
 
@@ -46,31 +50,67 @@ def cut(text: str) -> str:
     return raw[:TEXT_CAP - len(note)].decode("utf-8", "ignore") + note
 
 
-def merge_replies(previous, message, prompt_id, now: float) -> list:
-    """The record's new `replies`: the previous record's valid entries plus this Stop's reply.
+def runs(replies: list) -> list[list]:
+    """The replies split into turns: runs of one prompt_id, oldest first."""
+    out = []
+    for r in replies:
+        if out and out[-1][0]["prompt_id"] == r["prompt_id"]:
+            out[-1].append(r)
+        else:
+            out.append([r])
+    return out
 
-    A Stop a hook blocked and the Stop that ends the continued turn carry the same prompt_id
-    (spike A5), so a group of entries is everything said since one prompt. The reply is skipped
-    when it repeats the newest entry (same text, same prompt). Then only the PROMPTS most recent
-    prompt_ids stay, and the oldest entries go until the texts fit TOTAL_CAP. A Stop with no
-    string prompt_id groups under ""."""
+
+def total(replies: list) -> int:
+    return sum(size(r["text"]) for r in replies)
+
+
+def dropped_note(prompt_id: str, count: int, when) -> dict:
+    return {"prompt_id": prompt_id, "dropped": count, "time": when,
+            "text": "[%d earlier repl%s of this turn dropped: over 128 KiB]"
+                    % (count, "y" if count == 1 else "ies")}
+
+
+def fit(replies: list) -> list:
+    """replies within TOTAL_CAP: whole older turns go first. If the newest turn alone is still
+    over, its oldest replies go and a note leads the turn, counting them (it keeps the count
+    across Stops)."""
+    turns = runs(replies)
+    while len(turns) > 1 and total([r for t in turns for r in t]) > TOTAL_CAP:
+        turns.pop(0)
+    kept = [r for t in turns for r in t]
+    if total(kept) <= TOTAL_CAP:
+        return kept
+    turn = turns[0]  # the newest turn, alone and over the cap
+    count, when = 0, None
+    if isinstance(turn[0].get("dropped"), int):
+        count, when = turn[0]["dropped"], turn[0].get("time")
+        turn = turn[1:]
+    room = TOTAL_CAP - size(dropped_note("", 10 ** 6, None)["text"])
+    while len(turn) > 1 and total(turn) > room:
+        gone = turn.pop(0)
+        count += 1
+        when = when if when is not None else gone.get("time")
+    return [dropped_note(turn[0]["prompt_id"], count, when), *turn]
+
+
+def merge_replies(previous, message, prompt_id, now: float) -> list:
+    """The record's new `replies`: the previous record's valid entries plus this Stop's reply,
+    skipped when it repeats the newest entry (same text, same prompt_id). Then only the TURNS
+    most recent turns stay, within TOTAL_CAP (fit). A Stop with no prompt_id (not a string, or
+    empty) gets a turn of its own, "none-<time>", so it never joins another Stop's."""
     replies = previous if isinstance(previous, list) else []
-    replies = [{"prompt_id": r["prompt_id"], "text": utf8(r["text"]), "time": r.get("time")}
+    replies = [{**({"dropped": r["dropped"]} if isinstance(r.get("dropped"), int) else {}),
+                "prompt_id": r["prompt_id"], "text": utf8(r["text"]), "time": r.get("time")}
                for r in replies if isinstance(r, dict) and isinstance(r.get("prompt_id"), str)
                and isinstance(r.get("text"), str) and r["text"]]
-    group = prompt_id if isinstance(prompt_id, str) else ""
+    group = prompt_id if isinstance(prompt_id, str) and prompt_id else "none-%.6f" % now
     if isinstance(message, str) and message:
         text = cut(message)
         if not (replies and replies[-1]["text"] == text and replies[-1]["prompt_id"] == group):
             replies.append({"prompt_id": group, "text": text, "time": now})
-    recent = []
-    for r in reversed(replies):
-        if r["prompt_id"] not in recent:
-            recent.append(r["prompt_id"])
-    replies = [r for r in replies if r["prompt_id"] in recent[:PROMPTS]]
-    while replies and sum(size(r["text"]) for r in replies) > TOTAL_CAP:
-        replies.pop(0)
-    return replies
+    replies = [r for t in runs(replies)[-TURNS:] for r in t]
+    return fit(replies)
 
 
 def prune(directory: str, now: float) -> None:

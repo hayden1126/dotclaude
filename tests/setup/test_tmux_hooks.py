@@ -11,6 +11,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 import unittest
@@ -38,6 +39,20 @@ P_RUN = {**TAB, "CLAUDE_CODE_SESSION_ATTENDED": "0"}
 BG = {"CLAUDE_CODE_SESSION_ATTENDED": "0", "CLAUDE_JOB_DIR": "/tmp/job"}
 
 
+# A locale whose files read as ASCII: the C locale with Python's UTF-8 mode and coercion off.
+# Under -I those env switches are ignored and C is coerced to UTF-8, so the fake python3 below
+# (first on PATH in the stubs dir) drops -I and adds -X utf8=0 to make the default bite.
+ASCII_LOCALE = {"LC_ALL": "C", "LANG": "C", "PYTHONCOERCECLOCALE": "0", "PYTHONUTF8": "0",
+                "FAKE_PY_ASCII": "1"}
+FAKE_PYTHON = """#!/usr/bin/env bash
+if [ -n "${FAKE_PY_ASCII:-}" ]; then
+  args=(); for a in "$@"; do [ "$a" = -I ] || args+=("$a"); done
+  exec %s -X utf8=0 "${args[@]}"
+fi
+exec %s "$@"
+"""
+
+
 class Hooks(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
@@ -49,6 +64,9 @@ class Hooks(unittest.TestCase):
             with open(path, "w") as f:
                 f.write(STUB)
             os.chmod(path, 0o755)
+        with open(os.path.join(stubs, "python3"), "w") as f:
+            f.write(FAKE_PYTHON % (sys.executable, sys.executable))
+        os.chmod(os.path.join(stubs, "python3"), 0o755)
         self.log = os.path.join(self.tmp, "calls.log")
         self.state = os.path.join(self.tmp, "state")
         # The test may itself run inside a Claude session in a tmux tab: start from a clean env.
@@ -332,23 +350,38 @@ class Hooks(unittest.TestCase):
                                                     "last_assistant_message": "New."})
                 self.assertEqual([r["text"] for r in self.stop_record()["replies"]], ["New."])
 
-    def test_merging_dedupes_and_keeps_three_prompts(self):
+    def test_merging_dedupes_and_keeps_five_turns(self):
         merge = stop_ring.merge_replies
         r = merge(None, "a", "p1", 1)
         self.assertEqual(r, [{"prompt_id": "p1", "text": "a", "time": 1}])
         self.assertEqual(merge(r, "a", "p1", 2), r)              # the same reply again
-        self.assertEqual(len(merge(r, "a", "p2", 2)), 2)         # same text, a new prompt
-        for pid in ("p2", "p3", "p4"):
+        self.assertEqual(len(merge(r, "a", "p2", 2)), 2)         # same text, a new turn
+        for pid in ("p2", "p3", "p4", "p5", "p6"):
             r = merge(r, "reply " + pid, pid, 3)
-        self.assertEqual([x["prompt_id"] for x in r], ["p2", "p3", "p4"])
-        r = merge(r, "more", "p4", 4)
-        self.assertEqual([x["prompt_id"] for x in r], ["p2", "p3", "p4", "p4"])
-        self.assertEqual(merge(None, "x", None, 1)[0]["prompt_id"], "")  # no prompt_id
-        self.assertEqual(merge(None, "x", 5, 1)[0]["prompt_id"], "")
+        self.assertEqual([x["prompt_id"] for x in r], ["p2", "p3", "p4", "p5", "p6"])
+        r = merge(r, "more", "p6", 4)
+        self.assertEqual([x["prompt_id"] for x in r], ["p2", "p3", "p4", "p5", "p6", "p6"])
         self.assertEqual(merge(None, "", "p1", 1), [])
         self.assertEqual(merge(None, ["x"], "p1", 1), [])
 
-    def test_merging_cuts_each_reply_to_64_kib_and_all_to_128_kib(self):
+    def test_a_stop_with_no_prompt_id_is_a_turn_of_its_own(self):
+        merge = stop_ring.merge_replies
+        r = merge(None, "x", None, 1)
+        self.assertEqual(r[0]["prompt_id"], "none-1.000000")
+        r = merge(r, "y", 5, 2)
+        r = merge(r, "z", "", 3)
+        self.assertEqual([x["prompt_id"] for x in r],
+                         ["none-1.000000", "none-2.000000", "none-3.000000"])
+        r = merge(r, "z", None, 4)  # the same text, but a new Stop with no id: not a repeat
+        self.assertEqual(len(r), 4)
+        # The hook: the newest Stop without a prompt_id doesn't join the turn before it.
+        self.run_hook("stop-ring.sh", TAB, {"prompt_id": "p1", "last_assistant_message": "One."})
+        self.run_hook("stop-ring.sh", TAB, {"last_assistant_message": "Notice reply."})
+        ids = [x["prompt_id"] for x in self.stop_record()["replies"]]
+        self.assertEqual(ids[0], "p1")
+        self.assertTrue(ids[1].startswith("none-"))
+
+    def test_merging_cuts_each_reply_to_64_kib(self):
         cap = 64 * 1024
         reply = "a" + chr(0x00E9) * cap  # two bytes each, so the cut can land mid-character
         (kept,) = stop_ring.merge_replies(None, reply, "p1", 1)
@@ -359,11 +392,56 @@ class Hooks(unittest.TestCase):
         self.assertEqual(note, f"[cut to 64 KiB: the reply was {len(reply.encode())} bytes]")
         exact = "b" * cap  # at the cap: kept whole, no note
         self.assertEqual(stop_ring.merge_replies(None, exact, "p1", 1)[0]["text"], exact)
+
+    def test_over_128_kib_whole_older_turns_go_first(self):
         r = None
-        for i, ch in enumerate("cde"):
-            r = stop_ring.merge_replies(r, ch * (50 * 1024), "p1", i)
-        self.assertEqual([x["text"][0] for x in r], ["d", "e"])  # the oldest went first
+        for pid, ch, kib in (("p1", "a", 60), ("p2", "b", 60), ("p3", "c", 20)):
+            r = stop_ring.merge_replies(r, ch * (kib * 1024), pid, 1)
+        self.assertEqual([(x["prompt_id"], len(x["text"]) // 1024) for x in r],
+                         [("p2", 60), ("p3", 20)])
+        self.assertNotIn("dropped", r[0])
+
+    def test_over_128_kib_in_one_turn_its_oldest_replies_go_with_a_note(self):
+        r = None
+        for i, (ch, kib) in enumerate((("a", 60), ("b", 60), ("c", 20))):
+            r = stop_ring.merge_replies(r, ch * (kib * 1024), "p1", 10 + i)
+        self.assertEqual(r[0], {"prompt_id": "p1", "dropped": 1, "time": 10,
+                                "text": "[1 earlier reply of this turn dropped: over 128 KiB]"})
+        self.assertEqual([(x["text"][0], len(x["text"]) // 1024) for x in r[1:]],
+                         [("b", 60), ("c", 20)])
         self.assertLessEqual(sum(len(x["text"].encode()) for x in r), 128 * 1024)
+        r = stop_ring.merge_replies(r, "d" * (60 * 1024), "p1", 13)  # the count carries over
+        self.assertEqual((r[0]["dropped"], r[0]["time"]), (2, 10))
+        self.assertEqual(r[0]["text"], "[2 earlier replies of this turn dropped: over 128 KiB]")
+        self.assertEqual([x["text"][0] for x in r[1:]], ["c", "d"])
+        r = stop_ring.merge_replies(r, "next turn", "p2", 14)  # a new turn: the note stays
+        self.assertEqual([x["prompt_id"] for x in r], ["p1", "p1", "p1", "p2"])
+
+    def test_the_shim_rings_by_its_defaults_without_its_module(self):
+        # As the old inline code did when python3 failed: exit 0, no record, and a ring.
+        hooks = os.path.join(self.tmp, "hooks")
+        os.mkdir(hooks)
+        for name in ("stop-ring.sh", "session-pane.sh"):
+            shutil.copy(os.path.join(HOOKS, name), hooks)
+        self.logged_before = len(self.ring_log())
+        p = subprocess.run(["bash", os.path.join(hooks, "stop-ring.sh")],
+                           input=json.dumps({"session_id": "abcdef12-0000"}),
+                           capture_output=True, text=True, timeout=10, env={**self.env, **TAB})
+        self.assertEqual((p.returncode, p.stderr), (0, ""))
+        self.decided()
+        self.assertTrue(self.rang())
+        self.assertIsNone(self.stop_record())
+
+    def test_a_previous_record_is_read_as_utf8_in_any_locale(self):
+        stops = os.path.join(self.state, "dotclaude", "stops")
+        os.makedirs(stops)
+        with open(os.path.join(stops, "abcdef12-0000.json"), "w", encoding="utf-8") as f:
+            json.dump({"replies": [{"prompt_id": "p1", "text": "caf" + chr(0x00E9)}]}, f,
+                      ensure_ascii=False)
+        self.run_hook("stop-ring.sh", {**TAB, **ASCII_LOCALE},
+                      {"prompt_id": "p2", "last_assistant_message": "next"})
+        self.assertEqual([x["text"] for x in self.stop_record()["replies"]],
+                         ["caf" + chr(0x00E9), "next"])
 
     def test_a_lone_surrogate_becomes_a_question_mark(self):
         (kept,) = stop_ring.merge_replies(None, "a" + chr(0xD800) + "b", "p1", 1)
