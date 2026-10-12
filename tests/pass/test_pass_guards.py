@@ -313,14 +313,39 @@ class PinnedPath(Plain):
 
 class Tasks(Plain):
     def test_any_task_but_dream_drops_busy(self):
-        for tasks in (["monitor"], ["teammate"], ["some-new-kind"], ["unlabeled"], [None],
-                      ["dream", "monitor"]):
+        for tasks, shown in ((["monitor"], "1 monitor"), (["teammate"], "1 teammate"),
+                             (["some-new-kind"], "1 some-new-kind"),
+                             (["unlabeled"], "1 unlabeled task"), ([None], "1 unlabeled task"),
+                             (["dream", "monitor"], "1 monitor")):
             with self.subTest(tasks=tasks):
                 self.reset()
                 self.clear_log()
                 self.stop_tasks = tasks
                 self.assertEqual(self.mod.wait_and_act(self.plan(), t.table), "busy")
-                self.assertDropped("busy", "background work")
+                self.assertDropped("busy", f"pass refused in tab 3: {shown} running (a respawn "
+                                           "would kill it). /pass compact keeps it, or stop it "
+                                           "and /pass")
+
+    def test_the_busy_notice_counts_and_names_the_tasks(self):
+        # Live, 2026-10-12: three monitors at the Stop, and the log said `waits:` though the
+        # record's waits were empty. The notice counts each label; the log says `tasks:`.
+        self.stop_tasks = ["monitor", "dream", "monitor", "teammate", "monitor"]
+        code, out = self.run_pass("--foreground")
+        self.assertEqual(code, 1, out)
+        self.assertDropped("busy", "pass refused in tab 3: 3 monitors, 1 teammate running (a "
+                                   "respawn would kill them). /pass compact keeps them, or stop "
+                                   "them and /pass")
+        self.assertIn("outcome=busy busy: tasks: monitor, monitor, teammate, monitor",
+                      self.log())
+        self.assertNotIn("waits:", self.log())
+
+    def test_real_waits_keep_the_waits_label(self):
+        self.stop_waits = ["shell", "subagent", "shell"]
+        code, out = self.run_pass("--foreground")
+        self.assertEqual(code, 1, out)
+        self.assertDropped("busy", "waiting on 2 shells, 1 subagent (a respawn would kill "
+                                   "them). /pass compact keeps them, or let them finish")
+        self.assertIn("outcome=busy busy: waits: shell, subagent, shell", self.log())
 
     def test_dream_alone_does_not_block(self):
         self.stop_tasks = ["dream"]
@@ -419,10 +444,9 @@ class InputBox(Plain):
                 # It stays on the status line until a key press (-d 0), and says the compact
                 # was sent, not confirmed; pass.log keeps the whole prompt.
                 prompt = self.PROMPT + " Call EnterPlanMode first."
-                (msg,) = [a for a in self.calls("tmux", "display-message") if a[2] != "-p"]
-                self.assertEqual(msg[1:], ["display-message", "-d", "0", "-t", "%4",
-                                           "pass: /compact sent; type the resume prompt "
-                                           f"yourself: {prompt}"])
+                self.assertLoud(f"pass in tab 3: /compact sent; type the resume prompt "
+                                f"yourself: {prompt}")
+                self.assertTrue(all(m[-1].endswith(prompt) for m in self.notices()))
                 (line,) = [ln for ln in self.log().splitlines() if "outcome=partial" in ln]
                 self.assertIn("mode=compact outcome=partial", line)
                 self.assertIn(words, line)
@@ -830,6 +854,137 @@ class Pending(Plain):
         self.reset()
         code, out = self.run_pass("--foreground")
         self.assertEqual(code, 0, out)
+
+    def test_a_cancel_stays_quiet(self):
+        # Cancelled on purpose: the brief status-line line as before, no held notice, no toast.
+        code, _ = self.term_during("capture-pane")
+        self.assertEqual(code, 1)
+        self.assertIn("mode=plain outcome=cancelled", self.log())
+        self.assertDropped("cancelled", "pass cancelled")
+        self.assertEqual(self.toasts(), [])
+
+
+# ---- 8. a loud refusal -------------------------------------------------------------------------
+
+class LoudNotice(Plain):
+    LOUD = ("stale", "resumed", "busy", "gone", "timeout", "failed", "error")
+
+    def test_every_drop_but_cancelled_is_loud_and_keeps_its_log_word(self):
+        self.assertEqual(set(self.mod.DROPS) - self.mod.QUIET, set(self.LOUD))
+        for outcome in self.LOUD:
+            with self.subTest(outcome=outcome):
+                self.reset()
+                self.clear_log()
+                plan = self.plan()
+                self.assertEqual(self.mod.drop(plan, outcome, "some detail"), outcome)
+                head, _, tail = self.mod.DROPS[outcome].partition(": ")
+                self.assertLoud(f"{head} in tab 3: {tail}")
+                self.assertTrue(plan.settled)
+                (line,) = self.log().splitlines()
+                self.assertRegex(line, rf" session={t.SID} pane=%4 mode=plain "
+                                       rf"outcome={outcome} some detail$")
+        self.reset()
+        self.clear_log()
+        self.mod.drop(self.plan(), "cancelled", "on SIGTERM")
+        self.assertEqual([m[1:] for m in self.notices()],
+                         [["display-message", "-t", "%4", "pass cancelled"]])
+        self.assertIn("outcome=cancelled on SIGTERM", self.log())
+        self.assertEqual(self.toasts(), [])
+
+    def test_every_loud_text_names_a_fix(self):
+        for outcome in self.LOUD:
+            with self.subTest(outcome=outcome):
+                self.assertIn("/pass", self.mod.DROPS[outcome])
+        for why, fix in self.mod.PANE_FIXES.items():
+            with self.subTest(why=why):
+                self.assertIn("/pass", fix)
+
+    def test_the_call_resolves_the_toast_as_notify_sh_runs_it(self):
+        plan = self.plan()
+        self.assertEqual(plan.toast, [os.path.join(self.fake_bin, "powershell.exe"),
+                                      "-ExecutionPolicy", "Bypass", "-File", t.WINPATH,
+                                      "-Message"])
+
+    def busy_run(self):
+        """A plain pass a monitor refuses: (exit code, output)."""
+        self.stop_tasks = ["monitor"]
+        return self.run_pass("--foreground")
+
+    def test_a_failing_or_missing_toast_changes_neither_the_outcome_nor_the_exit_code(self):
+        real_run = self.mod.subprocess.run
+
+        def no_shell(argv, *a, **kw):
+            if argv[0] == "/bin/sh":
+                raise OSError("no /bin/sh")
+            return real_run(argv, *a, **kw)
+        ps1 = os.path.join(self.home, ".claude", "notify-toast.ps1")
+        powershell = os.path.join(self.fake_bin, "powershell.exe")
+        wslpath = os.path.join(self.fake_bin, "wslpath")
+        cases = (("the toast exits 1", lambda: os.environ.update(FAKE_TOAST_EXIT="1"), True),
+                 ("no /bin/sh", lambda: setattr(self.mod.subprocess, "run", no_shell), False),
+                 ("no notify-toast.ps1", lambda: os.rename(ps1, ps1 + ".gone"), False),
+                 ("no powershell.exe", lambda: os.rename(powershell, powershell + ".gone"),
+                  False),
+                 ("wslpath fails", lambda: self.write(wslpath, "#!/bin/sh\nexit 1\n"), False))
+        for name, breakit, sent in cases:
+            with self.subTest(name), mock.patch.object(self.mod.subprocess, "run", real_run):
+                self.reset()
+                self.clear_log()
+                breakit()
+                code, out = self.busy_run()
+                self.assertEqual(code, 1, out)
+                self.assertIn("mode=plain outcome=busy busy: tasks: monitor", self.log())
+                self.assertNotIn("outcome=error", self.log())
+                self.assertLoud("pass refused in tab 3: 1 monitor running", toast=sent)
+                if not sent:
+                    self.assertEqual(self.toasts(), [])
+
+    def test_with_no_client_attached_tmux_picks_one(self):
+        # Hayden switched his only terminal to another session: no client of the pane's session.
+        os.environ["FAKE_TMUX_CLIENTS"] = ""
+        code, out = self.busy_run()
+        self.assertEqual(code, 1, out)
+        (msg,) = self.notices()
+        self.assertEqual(msg[1:5], ["display-message", "-d", "0", "-t"])
+        self.assertNotIn("-c", msg)
+        self.assertIn("1 monitor running", self.toasts()[0][-1])
+
+    def test_a_label_is_shown_not_expanded_as_a_format(self):
+        self.stop_tasks = ["mon#{pane_id}"]
+        code, out = self.run_pass("--foreground")
+        self.assertEqual(code, 1, out)
+        for m in self.notices():
+            self.assertIn("1 mon##{pane_id} running", m[-1])
+        self.assertIn("1 mon#{pane_id} running", self.toasts()[0][-1])
+
+    def test_a_pane_problem_names_its_fix(self):
+        os.environ["FAKE_TMUX_MODE"] = "1"
+        code, out = self.run_pass("--foreground")
+        self.assertEqual(code, 1, out)
+        self.assertLoud("pass dropped in tab 3: pane in copy mode. Leave copy mode (q), then "
+                        "/pass")
+        self.assertIn("outcome=busy busy: pane in copy mode", self.log())
+
+
+class SkillLeftovers(unittest.TestCase):
+    """skills/pass/SKILL.md: the model stops leftover tasks, or picks compact, before the plain
+    pass's pass-respawn call, and its reply never promises a restart."""
+
+    def setUp(self):
+        with open(os.path.join(REPO, "skills", "pass", "SKILL.md")) as f:
+            self.text = f.read()
+
+    def test_leftovers_are_stopped_before_the_plain_mode_call(self):
+        call = self.text.index("Run `pass-respawn -C <toplevel>`")
+        before = self.text[:call]
+        for words in ("TaskStop", "a Monitor too", "use compact mode instead",
+                      "background Bash", "teammates"):
+            self.assertIn(words, before)
+
+    def test_the_reply_never_promises_a_restart(self):
+        self.assertIn("The pane restarts after this turn unless the gate refuses (you'd see a "
+                      "notice that stays until a key).", self.text)
+        self.assertNotIn("When this turn ends, the pane restarts", self.text)
 
 
 if __name__ == "__main__":

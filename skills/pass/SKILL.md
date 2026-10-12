@@ -22,7 +22,10 @@ The record holds the exact facts and the fresh session re-reads it. So the hando
    | plain (the default): a fresh `claude` in the same pane | a task boundary (merged, a new request), poisoned context (corrected twice on the same thing), a lane at a boundary, an approved plan ready to run fresh |
    | compact: `/compact <focus>` in place, then the resume prompt | the same task mid-flight with tacit state (ruled-out hypotheses, half-built understanding), background tasks in flight, waiting on a build |
 
-2. **Plain mode with background tasks in flight: don't start.** A respawn kills them silently, and an in-process teammate with them. Offer compact instead, or wait for them. `pass-respawn` also drops a plain pass when the session's stop record lists background work or a teammate, so this is a courtesy, not the only guard.
+2. **Plain mode: stop the leftovers first.** A respawn kills every background task silently, and an in-process teammate with them. So before a plain pass, list the session's running background tasks: the Monitor watches you started, background Bash, and the agents and teammates you know of.
+   - A task whose job is done is a leftover (a watch whose answer came, a server nothing uses now): stop it with `TaskStop`, a Monitor too.
+   - If any is still in use, use compact mode instead, and say so in your reply.
+   - You judge, the script enforces: `pass-respawn` still refuses a plain pass while any task but memory upkeep (`dream`) runs, so a skipped check can't kill a live watcher. Its refusal is loud: a notice held until a key, plus the Windows toast, counting the tasks ("3 monitors running").
 
 3. **Run the handoff skill.**
    - If a handoff already ran this session, run its delta mode (the `handoff` skill, "Delta mode").
@@ -38,7 +41,7 @@ The record holds the exact facts and the fresh session re-reads it. So the hando
    - It refuses with no `$TMUX_PANE` (and prints the line to run by hand), on a failing `handoff-check`, when it can't find this session's `claude` and its session file, when it or a binary it runs sits where the sandbox can write, and when a pass is already pending for this session. Fix the cause and run it again; never work around a refusal.
    - Not on PATH means `./setup.sh` hasn't run since it was added.
 
-6. **Say in one line what happens when the turn ends, then stop.** For example: "When this turn ends, the pane restarts fresh in plan mode and reads STATUS.md." Do nothing after the call. Any edit or commit after it makes the handoff stale, and the waiter drops the pass.
+6. **Say in one line what happens when the turn ends, then stop.** Never promise a restart: the waiter's checks run after your reply, and any of them can drop the pass. Say: "The pane restarts after this turn unless the gate refuses (you'd see a notice that stays until a key)." In compact mode: "The pane compacts after this turn unless the gate refuses (you'd see a notice that stays until a key)." Do nothing after the call. Any edit or commit after it makes the handoff stale, and the waiter drops the pass.
 
 7. **If Hayden says not to pass after the call**, run `pass-respawn -C <toplevel> --cancel`. It ends this session's pending waiter (logged `cancelled`), and says so when nothing was pending. A prompt he types mid-turn drops the pass anyway; `--cancel` makes it certain. Once the waiter has passed its last check and begun acting, it is too late: the waiter ignores the signal and finishes (the respawn, or the keys), and `--cancel` says `too-late` and exits 1. It says `too-late` too, naming the outcome, when the waiter dropped (`stale`, say) or acted on its own while still holding its lock. Once the waiter is gone, `--cancel` says nothing is pending; read `pass.log` for what it did.
 
@@ -55,13 +58,13 @@ The waiter watches this session's own status in `~/.claude/sessions/<pid>.json` 
 
 After a plain respawn, the fresh session shows the last turn's replies once as a banner (Hayden sees it, the model doesn't), and Ctrl-b P reopens the last 5 turns in a popup.
 
-Each drop shows one line in the pane's status line and changes nothing else:
+Each drop but `cancelled` is loud: one line naming the cause, the tab and the fix, on the status line of every terminal attached to the pane's tmux session, held until a key press, plus the Windows toast. `cancelled` shows a brief line, since it was asked for. A drop changes nothing else:
 
 | Drop | Cause | What to do |
 |---|---|---|
 | `stale` | work landed after the handoff (an edit, a commit) | run the delta handoff, then `/pass` again |
 | `resumed` | Hayden typed a prompt after the call, or the turn restarted | finish that turn, then `/pass` again if it still applies |
-| `busy` | the stop listed background work, a teammate or a monitor (or wrote no record); or, at the last check, the pane was in copy mode, had a draft in the input box, or showed no input box | wait for the work, or `/pass compact`; leave copy mode or send or clear the draft, then `/pass` again |
+| `busy` | the stop listed background tasks (counted: "3 monitors running"; `pass.log` says `tasks:`, or `waits:` for real waits) or wrote no record; or, at the last check, the pane was in copy mode, had a draft in the input box, or showed no input box | `/pass compact` keeps the tasks; or stop the leftovers (`TaskStop`) or wait, then `/pass`; leave copy mode or send or clear the draft, then `/pass` again |
 | `gone` | the session, its process or the pane went away or changed (a `/clear`, an exit) | `/pass` again from the live session |
 | `timeout` | the turn never ended (600 s) | `/pass` again |
 | `cancelled` | `pass-respawn -C <toplevel> --cancel` ended the waiter | nothing; `/pass` again when wanted |
@@ -92,7 +95,8 @@ The fresh session starts in **plan mode** unless the status doc's Next block car
 |---|---|
 | Passing on a failing `handoff-check` | Fix the gaps first; the respawn throws away the context that could fix them |
 | Doing anything after `pass-respawn` | Make it the turn's last action; later work makes the handoff stale and the pass drops |
-| A plain pass with background tasks running | Use compact, or wait; a respawn kills them |
+| A plain pass with background tasks running | Stop the leftovers (`TaskStop`); if any is still in use, use compact; a respawn kills them |
+| Promising "the pane restarts" | Say it restarts unless the gate refuses; the checks run after your reply |
 | Skipping the delta handoff because a handoff ran earlier | Work after a handoff makes it stale; run the delta mode |
 | Writing the approval marker to get a normal-mode resume | Only for an approval Hayden gave this session, cited; never inferred |
 | Calling `pass-respawn` without `-C`, or behind `cd` or a pipe | Run `pass-respawn -C <toplevel>` bare |
