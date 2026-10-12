@@ -90,7 +90,7 @@ writer, and every other place links to it.
 
 | # | Flow (the question it answers) | Type | Home (lanes repo) | Writer | Lifetime |
 |---|---|---|---|---|---|
-| 1 | How do we work here? | Conventions | `CLAUDE.md`, skills, `docs/` (the work repo's `guardrails.md` folds into the lanes skill and CLAUDE.md) | Hayden or a PR | durable |
+| 1 | How do we work here? | Conventions | `CLAUDE.md`, skills, `docs/` (a repo's own lane guardrails doc folds into the lanes skill and CLAUDE.md) | Hayden or a PR | durable |
 | 2 | What is wanted, and why? | Intent | the request tracker (source of truth); `SPEC.md` for a large effort | Hayden or outside people | durable |
 | 3 | What's queued and not started? | Backlog | the project `STATUS.md` Backlog, keyed by request #; it mirrors nothing the tracker already holds | main or lead | living |
 | 4 | Who is doing what? | Registry | `lane.json` claims, viewed through `lane ls` / `lane who` (derived, never prose) | the owning lane via the CLI | living |
@@ -313,8 +313,8 @@ sibling lane; they go into `docs/lanes.md`):
 - `lane open <id> [--focus]`: an `hq-open` clone. Run `tmux new-window -d -c <lane path> -n <id>
   claude "<prompt>"`, where the prompt is "Read your lane record `<path>`, then plan the brief it
   holds". Then record the window in `lane.json`.
-- `lane lock <name> -- <cmd>`: flock under `<common-dir>/lanes/locks/`, for shared gates (the
-  Chrome typing gate) and anything else that can't run twice. `config.toml` lists the known
+- `lane lock <name> -- <cmd>`: flock under `<common-dir>/lanes/locks/`, for shared gates (a
+  browser-driven test gate) and anything else that can't run twice. `config.toml` lists the known
   resources, and the skill says to wrap gate runs.
 - The lead section of `skills/lanes/SKILL.md`:
   - **Triage:** collect the requests, explore the code to estimate the files each touches, group
@@ -446,11 +446,12 @@ sibling lane; they go into `docs/lanes.md`):
 
 ## After: the work repo's migration (its own PR in that repo, after PR 1 and PR 2 merge)
 
-- `lane init` with the <repo>-lanes root, `install:ci`, ports 5191+, the typing gate as a lock.
+- `lane init` with the repo's lanes root, its setup command, a port range and its shared gates as locks
+  (the concrete values are in the private notes).
 - `lane adopt` each live worktree.
 - Move each lane's paragraph out of STATUS.md into its record.
 - Shrink STATUS.md to direction and backlog.
-- Point the `lane worktree recipe` memory and `briefs/guardrails.md` at the skill (one
+- Point the repo's lane recipe memory and its guardrails doc at the skill (one
   home per fact).
 - Root new lane sessions in the lane (`lane open`), which S1 shows is all the sandbox needs.
 
