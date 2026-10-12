@@ -49,7 +49,9 @@ failing check: the respawn throws away the context that could fix the gap.
            the respawn fails (`failed`) or anything after writing it raises
   compact  type `/compact <focus>` and Enter, wait 1 s, type the prompt and Enter (it queues
            behind the compact, spike S4); no respawn and no carry. A send-keys that fails
-           stops there and logs `failed`
+           stops there and logs `failed`. Before the prompt it re-checks the pane (copy mode,
+           a draft, no input box): on a problem the prompt is shown in the status line for
+           Hayden to type, not typed, and the outcome is `partial` (compacted, no prompt)
 The resume mode is plan mode unless the first item of the status file's Next block carries
 `(approved by Hayden YYYY-MM-DD)` dated on or after the session's start and not after today
 (lanelib.approval); then --permission-mode is left out and the user's default applies. An
@@ -852,6 +854,11 @@ def wait_and_act(plan: Plan, procs) -> str:
     for i, argv in enumerate(actions):  # /compact <focus>, Enter, the prompt, Enter
         if i == 2:
             time.sleep(COMPACT_GAP)
+            if why := pane_problem(plan):  # copy mode or a draft came up during the gap
+                tmux(plan, "display-message", "-t", plan.pane,
+                     f"compacted; type the resume prompt yourself: {argv[-1]}")
+                log(plan.mode, "partial", plan.pane, f"compacted, resume prompt not typed: {why}")
+                return "partial"
         p = tmux(plan, *argv[1:])
         if p is None or p.returncode != 0:
             return drop(plan, "failed", f"send-keys {i + 1} of 4: "

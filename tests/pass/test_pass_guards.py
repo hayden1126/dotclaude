@@ -277,6 +277,37 @@ class InputBox(Plain):
         self.assertNotIn("outcome=compact", self.log())
 
 
+    def test_a_pane_problem_in_the_compact_gap_leaves_the_prompt_to_hayden(self):
+        # /compact went in; then copy mode or a draft shows up during COMPACT_GAP. Typing the
+        # resume prompt would scroll the pane or join the draft, so it is shown, not typed.
+        real = self.mod.tmux
+        for env, value, words in (("FAKE_TMUX_MODE", "1", "pane in copy mode"),
+                                  ("FAKE_TMUX_SCREEN", t.screen("my draft"),
+                                   "unsent draft in the input box")):
+            with self.subTest(words=words):
+                self.reset()
+                self.clear_log()
+                os.environ.update(FAKE_TMUX_MODE="0", FAKE_TMUX_SCREEN=t.EMPTY_BOX)
+
+                def tmux(plan, *args, env=env, value=value):
+                    p = real(plan, *args)
+                    if args[:1] == ("send-keys",) and args[-1] == "Enter":
+                        os.environ[env] = value  # it appears right after /compact's Enter
+                    return p
+                self.mod.tmux = tmux
+                self.assertEqual(self.mod.wait_and_act(self.plan("--compact"), t.table),
+                                 "partial")
+                self.mod.tmux = real
+                keys = [a[-1] for a in self.calls("tmux", "send-keys")]
+                self.assertEqual(keys, [f"/compact {self.mod.compact_focus('STATUS.md')}",
+                                        "Enter"])
+                (msg,) = self.notices()
+                self.assertEqual(msg[-1], "compacted; type the resume prompt yourself: "
+                                 + self.PROMPT + " Call EnterPlanMode first.")
+                self.assertIn("mode=compact outcome=partial", self.log())
+                self.assertIn(words, self.log())
+                self.assertNotIn("outcome=compact", self.log())
+
 # ---- 5. prompts typed mid-turn and the transcript ----------------------------------------------
 
 ENQUEUE = {"type": "queue-operation", "operation": "enqueue", "content": "wait, don't pass"}
