@@ -8,7 +8,7 @@ points HOME and XDG_STATE_HOME into a temp dir). Fakes stand in for everything l
     server line; a command named in $FAKE_TMUX_FAIL exits 1.
   - the session file: load_session is wrapped so each read writes the next scripted status to
     $HOME/.claude/sessions/<pid>.json first (the last one repeats; the first is the call's own
-    read), then reads it for real. When the status first turns idle, the wrapper also writes
+    read), then reads it for real. When the status first turns idle (or shell), the wrapper writes
     the stop record stop-ring.sh would (self.stop_waits; None writes none).
   - /proc: proc_start is replaced, and a fake process table stands in for proc_table.
   - the transcript: a file under the fake $HOME/.claude/projects.
@@ -164,7 +164,7 @@ class Base(LanesRepo):
         status = entry.get("status")
         if status != self.status:
             self.status, self.updated = status, int(time.time() * 1000) + 1
-            if status == "idle" and self.stop_waits is not None and not self.stopped:
+            if status in ("idle", "shell") and self.stop_waits is not None and not self.stopped:
                 self.write_stop(self.stop_waits)
                 self.stopped = True
         return {"sessionId": SID, "pid": CLAUDE, "procStart": START, "status": status,
@@ -503,6 +503,18 @@ class Plain(Base):
         self.assertEqual(code, 0, out)
         self.assertEqual(len(self.calls("tmux", "send-keys")), 4)
         self.assertIn("mode=compact outcome=compact", self.log())
+
+    def test_shell_status_in_plain_mode_drops_busy_on_the_stop_records_waits(self):
+        # `shell` ends the wait, so a plain pass reaches the stop record, which names the
+        # background shell: a respawn would kill it. The drop must come from those waits, not
+        # from a missing record.
+        self.script = ["busy", "shell"]
+        self.stop_waits = ["shell"]
+        code, out = self.run_pass("--foreground", "--timeout", "3")
+        self.assertEqual(code, 1, out)
+        self.assertDropped("busy", "background work")
+        self.assertIn("busy: waits: shell", self.log())
+        self.assertNotIn("no stop record", self.log())
 
     def test_the_call_returns_and_a_detached_waiter_acts_after(self):
         self.script = ["busy"] * 30 + ["idle"]
