@@ -22,6 +22,9 @@ excludedCommands entries take them out of the sandbox: `new`, `ls` and `done` ne
 the GitHub credential (and say what they skipped without them), and `ls`, `open` and `done` need to
 see other processes. Every other subcommand runs sandboxed; `lock` must, so the command it wraps
 stays sandboxed too.
+
+`lock` exits with its command's code; `--wait` running out exits 75, which a command's own 75
+can't be told from: only the "gave up on lock" line on stderr marks a timeout.
 """
 import argparse
 import datetime
@@ -44,6 +47,7 @@ TEMPLATE = os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "..",
                         "templates", "LANE.md")
 DEFAULT_CAP = 4
 LOCK_BUSY = 75  # EX_TEMPFAIL: `lane lock --wait` gave up on a held lock
+PROBE_GRACE = 0.05  # secs `lane lock` waits out a `lane ls` probe before it reports a holder
 HOLDER_CMD_MAX = 120  # chars of the wrapped command kept in a lock's holder line
 # new's brief flags -> the <placeholder> each fills in templates/LANE.md
 BRIEF = {"goal": "goal", "files": "files", "overlaps": "overlaps", "done_when": "done-when",
@@ -606,9 +610,11 @@ def print_board(rows: list[dict]) -> None:
     table = [head]
     for r in rows:
         ab = "?" if r["ahead"] is None else f"+{r['ahead']}/-{r['behind']}"
-        sess = "?" if r["live_sessions"] is None else str(len(r["live_sessions"]))
+        unknown = r["live_sessions"] is None  # sandboxed: liveness, so the window, unknown
+        sess = "?" if unknown else str(len(r["live_sessions"]))
+        window = "?" if unknown else r["window"] or "-"
         table.append((r["id"], r["branch"], ab, r["pr"], str(r["port"] or "-"),
-                      ",".join(r.get("claims", [])) or "-", sess, r["window"] or "-",
+                      ",".join(r.get("claims", [])) or "-", sess, window,
                       " ".join(r["flags"]) or "-"))
     widths = [max(len(row[i]) for row in table) for i in range(len(head))]
     for row in table:
@@ -741,10 +747,13 @@ def cmd_open(args) -> None:
     if lane.get("state") == "setup-failed":
         raise LaneError(f"lane {args.id} is setup-failed: finish it with `lane adopt {path}` first")
     live = lanelib.live_sessions()
-    if live is None and not args.print:
-        raise LaneError(f"sandboxed: session liveness unknown, so this can't tell whether lane "
-                        f"{args.id} already has a session. Run it as a bare `lane open {args.id}` "
-                        "(excludedCommands runs that outside the sandbox)")
+    if live is None:
+        unknown = (f"sandboxed: session liveness unknown, so this can't tell whether lane "
+                   f"{args.id} already has a session")
+        if not args.print:
+            raise LaneError(f"{unknown}. Run it as a bare `lane open {args.id}` "
+                            "(excludedCommands runs that outside the sandbox)")
+        warn(f"{unknown}: the printed command may duplicate a live session")
     if here := sessions_in(live or [], path):
         focus_session(args, here)
         return
@@ -801,40 +810,53 @@ def holder_line(repo: Repo, command: list[str]) -> str:
     return f"{who} since {now_iso()}: {cmd}"
 
 
-def take_lock(fd: int, name: str, wait: float | None) -> bool:
-    """flock fd, saying who holds it while it waits; False when --wait ran out."""
+def try_lock(fd: int) -> bool:
     try:
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         return True
     except BlockingIOError:
-        pass
+        return False
+
+
+def take_lock(fd: int, name: str, wait: float | None) -> bool:
+    """flock fd, saying who holds it while it waits; False when --wait ran out."""
+    deadline = None if wait is None else time.monotonic() + wait
+    # `lane ls` probes a lock by taking LOCK_SH for an instant (lock_holder). One retry after a
+    # short pause keeps that probe from reading as a holder: a false "waiting", or a `--wait 0`
+    # that gives up on a free lock.
+    if try_lock(fd):
+        return True
+    time.sleep(PROBE_GRACE)
+    if try_lock(fd):
+        return True
     warn(f"waiting for lock {name}: held by {holder_of(fd)}")
-    if wait is None:
+    if deadline is None:
         fcntl.flock(fd, fcntl.LOCK_EX)
         return True
-    deadline = time.monotonic() + wait
     while time.monotonic() < deadline:
         time.sleep(0.05)
-        try:
-            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        if try_lock(fd):
             return True
-        except BlockingIOError:
-            pass
     warn(f"gave up on lock {name} after {wait:g}s: held by {holder_of(fd)}")
     return False
 
 
 def run_child(command: list[str]) -> int:
-    """Run command, forwarding SIGINT and SIGTERM; its exit code, 128+n when signal n killed it."""
+    """Run command and wait for it; its exit code, 128+n when signal n killed it.
+
+    The command shares this process group, so a Ctrl-C from the tty or a kill of the whole tree
+    (Claude Code's Bash tool stops a command that way) already reaches it. SIGINT and SIGTERM are
+    therefore only recorded here, never forwarded: a second copy reads as "force quit" to Go and
+    Node tools. One that arrives before the command starts is replayed to it once. The cost: a
+    signal sent to `lane` alone no longer stops the command, and the lock stays held while it
+    runs. A Python handler, not SIG_IGN, so the command doesn't inherit an ignored signal."""
     child, pending = None, []
 
-    def forward(sig, _frame):
+    def record(sig, _frame):
         if child is None:
             pending.append(sig)
-        else:
-            child.send_signal(sig)
 
-    old = {sig: signal.signal(sig, forward) for sig in (signal.SIGINT, signal.SIGTERM)}
+    old = {sig: signal.signal(sig, record) for sig in (signal.SIGINT, signal.SIGTERM)}
     try:
         try:
             child = subprocess.Popen(command)
@@ -868,9 +890,14 @@ def cmd_lock(args) -> int:
                 return LOCK_BUSY
         except KeyboardInterrupt:
             return 128 + signal.SIGINT
-        os.ftruncate(fd, 0)
-        os.pwrite(fd, (holder_line(repo, args.command) + "\n").encode(), 0)
-        return run_child(args.command)
+        try:
+            os.ftruncate(fd, 0)
+            os.pwrite(fd, (holder_line(repo, args.command) + "\n").encode(), 0)
+            return run_child(args.command)
+        finally:
+            # Cleared while still held: a waiter that reads between the next holder's acquire and
+            # its write sees "an unknown holder", never this run.
+            os.ftruncate(fd, 0)
     finally:
         os.close(fd)
 
@@ -1059,7 +1086,9 @@ def parser() -> argparse.ArgumentParser:
                        usage="lane lock <name> [--wait SECS] -- <cmd...>")
     p.add_argument("name")
     p.add_argument("--wait", type=float, metavar="SECS",
-                   help=f"give up after SECS, exit {LOCK_BUSY} (default: wait as long as it takes)")
+                   help=f"give up after SECS, exit {LOCK_BUSY} (default: wait as long as it takes); "
+                        f"the command's own {LOCK_BUSY} looks the same, but only a timeout "
+                        "prints \"gave up on lock\" on stderr")
     p = sub.add_parser("whoami", help="this checkout's lane id, main, or plain")
     p.add_argument("--json", action="store_true")
     for name in ("claim", "release"):

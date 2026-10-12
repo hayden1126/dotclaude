@@ -1,6 +1,9 @@
 """The lead's tools in skills/lanes/scripts/lane: `open`, `lock`, and the board's WINDOW column and
 locks footer. tmux is a stub that logs its argv; a live session is a session file whose pid is
 this test process."""
+import contextlib
+import fcntl
+import io
 import json
 import os
 import shlex
@@ -9,15 +12,38 @@ import subprocess
 import sys
 import time
 import unittest
+from unittest import mock
 
 from _fixture import LANE, LanesRepo
+from test_cli import load_lane_script
 
 TMUX_STUB = """#!/bin/sh
 printf '%s\\n' "tmux $*" >> "$STUB_LOG"
 [ "$1" = new-window ] && echo 'proj:3 (chart-fix)'
 exit 0
 """
-SLEEP = [sys.executable, "-I", "-c", "import time; time.sleep(30)"]
+# A command that counts the SIGINTs and SIGTERMs it gets (into argv[1]), says it is ready (by
+# creating argv[2]), and after the first leaves room for a second copy, then dies of the first.
+COUNTER = """
+import os, signal, sys, time
+out, ready = sys.argv[1], sys.argv[2]
+got = []
+def on(sig, _frame):
+    got.append(sig)
+    with open(out, "w") as f:
+        f.write(str(len(got)))
+for s in (signal.SIGINT, signal.SIGTERM):
+    signal.signal(s, on)
+open(ready, "w").close()
+deadline = time.monotonic() + 20
+while not got and time.monotonic() < deadline:
+    time.sleep(0.01)
+if not got:
+    sys.exit(99)
+time.sleep(0.5)
+signal.signal(got[0], signal.SIG_DFL)
+os.kill(os.getpid(), got[0])
+"""
 
 
 class Lead(LanesRepo):
@@ -124,6 +150,14 @@ class Open(Lead):
         self.assertEqual(self.tmux_calls(), ["tmux select-window -t proj:@3"])
         self.assertNotIn("opened", self.lane_json("chart-fix"))
 
+    def test_sandboxed_print_still_prints_but_warns(self):
+        self.env["_LANE_TEST_SANDBOXED"] = "1"
+        p = self.run_lane("open", "chart-fix", "--print")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(shlex.split(p.stdout)[:2], ["tmux", "new-window"])
+        self.assertIn("liveness unknown", p.stderr)
+        self.assertIn("may duplicate a live session", p.stderr)
+
     def test_unknown_liveness_refuses_and_asks_for_a_bare_run(self):
         self.with_tmux()
         self.env["_LANE_TEST_SANDBOXED"] = "1"
@@ -161,6 +195,15 @@ class Board(Lead):
         col = head.split().index("WINDOW")
         cells = {ln.split()[0]: ln.split()[col] for ln in lines}
         self.assertEqual(cells, {"api-docs": "-", "chart-fix": "proj:@3"})
+
+    def test_sandboxed_window_is_unknown_not_empty(self):
+        self.lane("new", "chart-fix")
+        self.env["_LANE_TEST_SANDBOXED"] = "1"
+        head, line = self.lane("ls").splitlines()
+        cells = dict(zip(head.split(), line.split()))
+        self.assertEqual((cells["SESSIONS"], cells["WINDOW"]), ("?", "?"))
+        (row,) = json.loads(self.lane("ls", "--json"))
+        self.assertIsNone(row["window"])
 
 
 class Lock(Lead):
@@ -228,12 +271,74 @@ class Lock(Lead):
         holder.wait(10)
         self.assertEqual(self.run_lane("lock", "gate", "--wait", "0", "--", "true").returncode, 0)
 
-    def test_sigterm_reaches_the_command(self):
-        holder = self.start("lock", "gate", "--", *SLEEP)
-        self.wait_for(self.held, "the holder")
-        holder.send_signal(signal.SIGTERM)
-        self.assertEqual(holder.wait(10), 128 + signal.SIGTERM)
+    def test_a_group_signal_reaches_the_command_once(self):
+        # A tty Ctrl-C or the Bash tool's kill signals the whole process group: `lane` must not
+        # forward a second copy, which Go and Node tools read as "force quit".
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            with self.subTest(sig=sig.name):
+                count = os.path.join(self.tmp, f"{sig.name}.count")
+                ready = os.path.join(self.tmp, f"{sig.name}.ready")
+                p = subprocess.Popen([sys.executable, LANE, "lock", "gate", "--", sys.executable,
+                                      "-I", "-c", COUNTER, count, ready],
+                                     cwd=self.main, env=self.env, start_new_session=True,
+                                     stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                self.addCleanup(p.communicate)
+                self.addCleanup(lambda: p.poll() is None and os.killpg(p.pid, signal.SIGKILL))
+                self.wait_for(lambda: os.path.exists(ready), "the command")
+                os.killpg(p.pid, sig)
+                self.assertEqual(p.wait(10), 128 + sig)
+                self.assertEqual(self.read(count), "1")
         self.assertEqual(self.run_lane("lock", "gate", "--wait", "0", "--", "true").returncode, 0)
+
+    def test_a_signal_before_the_command_starts_is_replayed_to_it(self):
+        lane_cli, real_popen = load_lane_script(), subprocess.Popen
+
+        def popen_after_a_ctrl_c(*args, **kwargs):
+            os.kill(os.getpid(), signal.SIGINT)  # run_child's handler records it: no command yet
+            return real_popen(*args, **kwargs)
+
+        with mock.patch.object(lane_cli.subprocess, "Popen", popen_after_a_ctrl_c):
+            rc = lane_cli.run_child(["sleep", "30"])
+        self.assertEqual(rc, 128 + signal.SIGINT)
+
+    def test_a_probe_is_not_reported_as_a_holder(self):
+        # `lane ls` holds LOCK_SH for an instant; a `--wait 0` run that meets it retries once.
+        lane_cli = load_lane_script()
+        path = os.path.join(self.tmp, "probed")
+        fd = os.open(path, os.O_RDWR | os.O_CREAT)
+        probe = os.open(path, os.O_RDONLY)
+        self.addCleanup(os.close, fd)
+        self.addCleanup(os.close, probe)
+        fcntl.flock(probe, fcntl.LOCK_SH)
+        err = io.StringIO()
+        with mock.patch.object(lane_cli.time, "sleep",
+                               side_effect=lambda _: fcntl.flock(probe, fcntl.LOCK_UN)) as nap, \
+                contextlib.redirect_stderr(err):
+            self.assertTrue(lane_cli.take_lock(fd, "gate", 0))
+        nap.assert_called_once_with(lane_cli.PROBE_GRACE)
+        self.assertEqual(err.getvalue(), "")
+
+    def test_release_clears_the_holder_line(self):
+        # A waiter that reads between the next holder's acquire and its write must not name this
+        # run, whatever way the command ended.
+        for cmd in (["true"], ["sh", "-c", "exit 3"], [os.path.join(self.tmp, "no-such-cmd")]):
+            with self.subTest(cmd=cmd):
+                self.run_lane("lock", "gate", "--", *cmd)
+                self.assertEqual(self.read(self.lock_file), "")
+
+    def test_a_double_dash_inside_the_command_reaches_it(self):
+        p = self.run_lane("lock", "gate", "--", "sh", "-c", 'printf %s "$*"', "x", "--", "y")
+        self.assertEqual((p.returncode, p.stdout), (0, "-- y"), p.stderr)
+
+    def test_ls_json_stays_a_list_of_lanes_with_no_locks(self):
+        self.lane("new", "chart-fix")
+        pid_file = os.path.join(self.tmp, "child.pid")
+        self.kill_pid_file(pid_file)
+        self.start("lock", "gate", "--", "sh", "-c", f"echo $$ > {pid_file}; exec sleep 30")
+        self.wait_for(self.held, "the holder")
+        rows = json.loads(self.lane("ls", "--json"))
+        self.assertEqual([r["id"] for r in rows], ["chart-fix"])
+        self.assertNotIn("locks", rows[0])
 
     def test_a_backgrounded_grandchild_does_not_keep_the_lock(self):
         pid_file = os.path.join(self.tmp, "bg.pid")
