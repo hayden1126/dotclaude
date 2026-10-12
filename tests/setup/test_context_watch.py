@@ -777,6 +777,80 @@ class PlainPassRule(unittest.TestCase):
         self.assertEqual(lib.plain_pass_blockers(["dream", "dream"]), [])
 
 
+def typed_command(name, args="", as_list=False):
+    """A main-chain user entry for a typed skill command, the shape Claude Code 2.1.296 writes
+    (probed live with a project skill): string content, origin human."""
+    body = ("<command-message>%s</command-message>\n<command-name>/%s</command-name>\n"
+            "<command-args>%s</command-args>" % (name, name, args))
+    return {"parentUuid": "a-1", "isSidechain": False, "type": "user", "uuid": "u-9",
+            "origin": {"kind": "human"},
+            "message": {"role": "user",
+                        "content": [{"type": "text", "text": body}] if as_list else body}}
+
+
+def skill_body(name):
+    """The isMeta user entry that follows a typed skill command, holding the skill's body."""
+    return {"parentUuid": "u-9", "isSidechain": False, "type": "user", "uuid": "u-10",
+            "isMeta": True,
+            "message": {"role": "user", "content": [
+                {"type": "text", "text": "Base directory for this skill: /home/u/.claude/"
+                                         "skills/%s\n\n# %s" % (name, name)}]}}
+
+
+class TypedPass(Base):
+    def test_a_typed_pass_starts_the_pause_before_its_handoff_call(self):
+        self.on()
+        for i, entry in enumerate((typed_command("pass"),
+                                   typed_command("pass", "compact", as_list=True))):
+            sid = "t%d" % i
+            self.write_transcript(525_000)
+            self.assertEqual(self.stop(session_id=sid), block("hard", "525k"))
+            self.append(entry, skill_body("pass"), skill_call("handoff"), assistant(546_000))
+            self.assertIsNone(self.stop(session_id=sid))
+
+    def test_a_typed_handoff_and_pass_counts_through_the_skill_call(self):
+        # "handoff and pass" reaches the model as text; the model calls the pass skill.
+        self.on()
+        self.write_transcript(525_000)
+        self.assertEqual(self.stop(), block("hard", "525k"))
+        said = {"parentUuid": "a-1", "isSidechain": False, "type": "user", "uuid": "u-8",
+                "message": {"role": "user", "content": "handoff and pass"}}
+        self.append(said, skill_call("pass"), skill_call("handoff"), assistant(546_000))
+        self.assertIsNone(self.stop())
+
+    def test_other_commands_and_a_subagents_pass_do_not_count(self):
+        self.on()
+        sub = typed_command("pass")
+        sub["isSidechain"] = True
+        self.write_transcript(525_000)
+        self.assertEqual(self.stop(), block("hard", "525k"))
+        self.append(typed_command("passive"), skill_body("passive"), typed_command("passx"),
+                    typed_command("compact"), sub,
+                    {"type": "user", "isSidechain": False,
+                     "message": {"role": "user", "content": "explain /pass please"}},
+                    assistant(546_000))
+        self.assertEqual(self.stop(), block("hard", "546k"))
+
+    def test_an_expired_pause_moves_the_scan_past_the_old_call_even_when_quiet(self):
+        # The expiry at 586k happens while a pass is pending (mode() is None: nothing fires),
+        # and must still move hard_offset, or the old pass call is found again at 587k.
+        self.on()
+        self.write_transcript(525_000)
+        self.assertEqual(self.stop(), block("hard", "525k"))
+        self.assertIsNone(self.stop_at(546_000, skill_call("pass")))
+        d = os.path.join(self.state, "dotclaude", "pass-pending")
+        os.makedirs(d)
+        fd = os.open(os.path.join(d, SID + ".lock"), os.O_RDWR | os.O_CREAT)
+        self.addCleanup(os.close, fd)
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        self.assertIsNone(self.stop_at(586_000))
+        rec = cw.fresh_record(aps.load_json(aps.watch_path(SID)))
+        self.assertEqual((rec["handing_off"], rec["hard_offset"]),
+                         (False, os.path.getsize(self.transcript)))
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        self.assertEqual(self.stop_at(587_000), block("hard", "587k"))
+
+
 class SmallWindows(Base):
     def test_a_150k_window_re_arms_after_a_compact(self):
         # hysteresis min(50k, tier // 4): hard 105k re-arms under 78.75k
@@ -831,7 +905,8 @@ class Wording(Base):
                                      lambda: state)[0], key)
 
     def test_unknown_texts_never_claim_tasks_run(self):
-        for key in ("soft_unknown", "wrap_unknown", "hard_unknown", "off_unknown"):
+        self.assertNotIn("soft_unknown", cw.TEXTS)   # soft never meets unknown work
+        for key in ("wrap_unknown", "hard_unknown", "off_unknown"):
             self.assertNotIn("are running", cw.TEXTS[key])
             self.assertIn("compact", cw.TEXTS[key])
         self.assertIn("safe whether or not background work is running", cw.TEXTS["hard_unknown"])

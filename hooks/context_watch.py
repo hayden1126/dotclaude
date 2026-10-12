@@ -26,8 +26,8 @@ Crossings live in the watcher's own record, ctx-watch/<session>.json, not in sto
 - the hard tier also re-arms min(20000, half the gap from hard to compact_at) past its last
   firing (20k at 600k), unless the transcript shows, after that firing (the record keeps its
   time and the transcript's size then), a main-chain tool call that starts the pass: the Skill
-  tool with skill `pass`, or a Bash command that starts with `pass-respawn` (after blanks and
-  an optional `!`). A handoff costs 22k to 47k, so the re-arm would otherwise say "hand off now"
+  tool with skill `pass`, a Bash command that starts with `pass-respawn` (after blanks and an
+  optional `!`), or a typed `/pass` (a user entry with <command-name>/pass</command-name>). A handoff costs 22k to 47k, so the re-arm would otherwise say "hand off now"
   in the middle of the pass it asked for. A handoff alone doesn't end the session, so the
   handoff skill doesn't count. If no pass comes within 40000 tokens of that call, the re-arm
   resumes, looking only past that point.
@@ -63,6 +63,7 @@ import fcntl
 import glob
 import json
 import os
+import re
 import sys
 import time
 
@@ -77,6 +78,10 @@ HANDOFF_GRACE = 40000     # a pass call older than this many tokens no longer ho
 STOP_FRESH = 600
 MODE_TTL = 60
 PASS_SKILL = "pass"
+# A typed /pass (or /pass compact) is a main-chain user entry whose text carries the command:
+# "<command-name>/pass</command-name>" beside <command-message> and <command-args> (the shape
+# Claude Code writes for every slash command; seen for /clear and /compact).
+TYPED_PASS = re.compile(r"<command-name>\s*/pass\s*</command-name>")
 
 
 LEAD = "[autopass] Context is at {n}, auto-compact near {c}"
@@ -101,10 +106,6 @@ TEXTS = {
                            + COMPACT_WHY + ".",
     "hard_compact": LEAD + ": hand off now. Run the pass skill in compact mode " + COMPACT_WHY
                          + ".",
-    "soft_unknown": LEAD + ". If the task is done end to end, run the pass skill in compact "
-                           "mode now " + UNKNOWN_WHY + ". If only a small remainder is left, "
-                           "finish it first. If your last reply asked Hayden something, end "
-                           "your turn without doing anything.",
     "wrap_unknown": LEAD + ". Finish the step you are on and don't start another. If more than "
                            "this step is left, run the pass skill in compact mode now "
                            + UNKNOWN_WHY + ".",
@@ -172,18 +173,34 @@ def runs_pass_respawn(command: str) -> bool:
     return word == "pass-respawn" or word.endswith("/pass-respawn")
 
 
+def typed_pass(content) -> bool:
+    """Whether a user entry's content (a string, or a list of text blocks) is a typed /pass."""
+    texts = [content] if isinstance(content, str) else [
+        c.get("text") for c in content if isinstance(c, dict) and c.get("type") == "text"
+    ] if isinstance(content, list) else []
+    return any(isinstance(t, str) and TYPED_PASS.search(t) for t in texts)
+
+
 def starts_handoff(line: bytes) -> bool:
-    """Whether a transcript line is a main-chain assistant tool call that starts a pass."""
-    if b'"tool_use"' not in line or not (b'"Skill"' in line or b"pass-respawn" in line):
+    """Whether a transcript line starts a pass: a main-chain assistant tool call (the pass
+    skill, pass-respawn), or a main-chain user entry that is a typed /pass. A typed "handoff
+    and pass" reaches the model as text and makes it call the pass skill, which counts."""
+    typed = b"<command-name>" in line and b"/pass" in line
+    if not typed and (b'"tool_use"' not in line
+                      or not (b'"Skill"' in line or b"pass-respawn" in line)):
         return False
     try:
         d = json.loads(line)
     except ValueError:
         return False
-    if not isinstance(d, dict) or d.get("type") != "assistant" or d.get("isSidechain"):
+    if not isinstance(d, dict) or d.get("isSidechain"):
         return False
     msg = d.get("message")
     content = msg.get("content") if isinstance(msg, dict) else None
+    if d.get("type") == "user":
+        return typed and typed_pass(content)
+    if d.get("type") != "assistant":
+        return False
     for c in content if isinstance(content, list) else []:
         if not isinstance(c, dict) or c.get("type") != "tool_use":
             continue
@@ -311,6 +328,8 @@ def step(rec: dict, n: int, tiers: dict, event: str, mode, work, handoff=lambda 
             key = "hard_busy"
             rec["fired"]["hard"] = n
         else:
+            # "unknown" comes only from a tool call's stop-record lookup, and soft never fires
+            # on a tool call, so there is no soft_unknown text.
             key = top + {"blocked": "_compact", "unknown": "_unknown"}.get(state, "")
             for t in aps.TIER_NAMES:
                 if n >= tiers[t]:

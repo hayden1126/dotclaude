@@ -507,7 +507,8 @@ before that (at most 47k), wrap-up 7% before hard (at most 40k), soft at half th
 - Only the highest tier crossed speaks, once per crossing. A drop of more than a quarter of a
   tier (at most 50k) under it, as a compact makes, re-arms it, so a count hovering at a tier
   never repeats it. The hard tier's 20k re-arm (less on a small window) pauses once the session
-  calls the `pass` skill or runs `pass-respawn`, and resumes if no pass came 40k later.
+  calls the `pass` skill, runs `pass-respawn` or you type `/pass`, and resumes if no pass came
+  40k later.
 - Background work: while a subagent, shell, workflow or cloud session runs, soft and wrap-up
   wait and hard says `pass compact`. With any other task but `dream` (a monitor, a teammate),
   every tier says compact mode, since `pass-respawn` would refuse a plain pass. A tool call
