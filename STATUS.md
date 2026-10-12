@@ -150,8 +150,20 @@ stored here).
       Ctrl-b P.
     - Still unchecked live: Ctrl-b P, both menu entries, `less -+F +G`, and the banner after a
       real `/pass`.
-  - Part 2 is next: the context watcher, `/autopass`, the tiered ctx widget and the `lane ls`
-    CTX column.
+  - **Part 2a is merged into the branch** (`ce589a3`, three review rounds plus my anchor fix).
+    It adds `hooks/context_watch.py` (the tiers, on Stop and PostToolUse), `hooks/autopass_state.py`
+    (the window, the tiers, the tab flag, `decide()`), and `/autopass` (`skills/autopass` plus
+    `hooks/autopass-toggle.sh`).
+    - The plain-pass rule now lives once, in `lanelib.plain_pass_blockers`.
+    - Tiers scale with the window and are exact at 600k. The lead is on by default.
+    - Not live until `./setup.sh`. Unverified live: a skill-defined `/autopass` reaching
+      UserPromptSubmit (spike A1 used a `.claude/commands` file).
+  - Next, **part 2b**: the ctx widget's absolute tiers and on/off cue. It must write the
+    statusline's `context_window_size` into `ctx/<sid>.json` `window` on every render (the
+    watcher reads it). Also the `lane ls` CTX column, `lane init --autopass`, and docs/lanes.md.
+  - Then **part 2c**: a loud refusal (tmux `-d 0` plus a toast, a `tasks:` label), and the pass
+    skill stopping leftover monitors (PLAN.md "A refused pass, and leftover monitors").
+  - Then install from the branch and run the live smoke tests, then the draft PR.
   - **`tests/pass` is load-sensitive:** a load spike (one run took 1,248 s) failed timing
     asserts in untouched PR 3 tests too. Judge it on a run at normal speed (about 46 s).
   - **`test_tmux_hooks` flakes on `main` too:** 2 of 6 runs under parallel load (2026-10-12),
