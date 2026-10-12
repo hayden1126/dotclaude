@@ -52,9 +52,12 @@ once, while waiting too. Past --timeout (600 s; at most 3600) it gives up (`time
 shows one line in the pane's status line and touches nothing else. Never respawn or compact on a
 failing check: the respawn throws away the context that could fix the gap.
   plain    write the Star carry marker (tmux/claude-saved re-keys a starred chat to the new
-           session on its `startup`), then `tmux respawn-pane -k -t <pane> -c <toplevel> --
-           <abs claude> [--permission-mode plan] <prompt>`; the marker is removed again when
-           the respawn fails (`failed`) or anything after writing it raises
+           session on its `startup`) and the last reply (pass-last/<pane number>.json: the
+           stop record's last_message and the tab, for hooks/pass-banner.sh's banner and the
+           Ctrl-b P popup, tmux/pass-last; with no message, any older one for the pane goes),
+           then `tmux respawn-pane -k -t <pane> -c <toplevel> -- <abs claude>
+           [--permission-mode plan] <prompt>`; both files are removed again when the respawn
+           fails (`failed`) or anything after writing them raises
   compact  type `/compact <focus>` and Enter, wait 1 s, type the prompt and Enter (it queues
            behind the compact, spike S4); no respawn and no carry. A send-keys that fails
            stops there and logs `failed`. Before the prompt it re-checks the pane (copy mode,
@@ -125,9 +128,10 @@ the sandbox can write (docs/lanes.md S3). Every input, and why each is safe:
     shell running) lets the waiter act.
   - The transcript (~/.claude/projects/...) is Claude Code's too, also out of the sandbox's
     reach; it can only drop a pass.
-  - The stop record, the carry marker, the pending lock and pass.log live in the state dir,
-    which sandboxed Bash can't write. The session id names the stop record and the lock, so it
-    must be a plain id ([A-Za-z0-9][A-Za-z0-9._-]*).
+  - The stop record, the carry marker, the last reply, the pending lock and pass.log live in
+    the state dir, which sandboxed Bash can't write. The session id names the stop record and
+    the lock, so it must be a plain id ([A-Za-z0-9][A-Za-z0-9._-]*). The last reply is copied
+    as data, never run or interpolated.
   - The pane's capture (the input box) is tmux's; it can only drop a pass.
   - tmux's answers come from the tmux server, and /proc (the session's claude, its ancestors
     and its start time) is the kernel's.
@@ -886,22 +890,54 @@ def carry_path(pane: str) -> str:
     return os.path.join(lanelib.state_dir(), "pass-carry", pane[1:] + ".json")
 
 
-def write_carry(plan: Plan) -> str | None:
-    """The one-shot marker tmux/claude-saved reads on the respawned session's `startup`: the
-    session leaving and its tab, keyed as claude-saved's make_tab keys it. Its path, or None
-    when it was skipped because either can't be read (the star then stays on the old chat,
-    detached, as before)."""
+def pane_tab(plan: Plan) -> dict | None:
+    """The pane on its tmux server, keyed as claude-saved's make_tab keys it, or None when tmux
+    can't say."""
     p = tmux(plan, "display-message", "-p", "-t", plan.pane, "#{start_time} #{pid} #{socket_path}")
     parts = p.stdout.strip().split(" ", 2) if p and p.returncode == 0 else []
     if len(parts) != 3 or not (parts[0].isdigit() and parts[1].isdigit()):
         return None
-    tab = {"socket": parts[2], "server_start": int(parts[0]), "server_pid": int(parts[1]),
-           "pane": plan.pane}
+    return {"socket": parts[2], "server_start": int(parts[0]), "server_pid": int(parts[1]),
+            "pane": plan.pane}
+
+
+def write_carry(plan: Plan, tab: dict | None) -> str | None:
+    """The one-shot marker tmux/claude-saved reads on the respawned session's `startup`: the
+    session leaving and its tab. Its path, or None when it was skipped because either can't be
+    read (the star then stays on the old chat, detached, as before)."""
+    if tab is None:
+        return None
     path = carry_path(plan.pane)
     try:
         lanelib.write_json(path, {"session_id": plan.session_id, "tab": tab,
                                   "written_at": time.time()})
     except OSError:
+        return None
+    return path
+
+
+def last_path(pane: str) -> str:
+    return os.path.join(lanelib.state_dir(), "pass-last", pane[1:] + ".json")
+
+
+def write_last(plan: Plan, tab: dict | None) -> str | None:
+    """The reply the old session ended on, for the respawned session's banner (hooks/
+    pass-banner.sh, which sets `shown`) and the popup (tmux/pass-last, Ctrl-b P): the stop
+    record's last_message, with the tab, at pass-last/<pane number>.json. Not one-shot, and
+    apart from the carry marker, which claude-saved consumes on the same SessionStart. Its
+    path, or None when nothing was written: with no message or no tab, any older file for the
+    pane goes, so the popup never shows an earlier pass's reply as this one's."""
+    path = last_path(plan.pane)
+    message = (stop_record(plan.session_id) or {}).get("last_message")
+    if tab is None or not isinstance(message, str) or not message:
+        remove(path)
+        return None
+    try:
+        lanelib.write_json(path, {"tab": tab, "from_session": plan.session_id,
+                                  "written_at": time.time(), "message": message,
+                                  "shown": False})
+    except OSError:
+        remove(path)
         return None
     return path
 
@@ -969,16 +1005,20 @@ def wait_and_act(plan: Plan, procs) -> str:
         return drop(plan, "busy", f"busy: {why}", f"pass dropped: {why}; run /pass again")
     begin_acting(plan)
     if plan.mode == "plain":
-        carry = None
+        carry = last = None
         try:
-            carry = write_carry(plan)
+            tab = pane_tab(plan)
+            carry = write_carry(plan, tab)
+            last = write_last(plan, tab)
             p = tmux(plan, *actions[0][1:])
             if p is None or p.returncode != 0:
                 remove(carry)
+                remove(last)
                 return drop(plan, "failed", late(plan, p.stderr.strip() if p
                                                  else "tmux didn't run"))
         except BaseException:
             remove(carry)
+            remove(last)
             raise
         log(plan.mode, "respawn", plan.pane,
             late(plan, "default mode" if approved else "plan mode"))

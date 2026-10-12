@@ -1,0 +1,73 @@
+#!/usr/bin/env bash
+# pass-last: show the reply a Claude session ended on before a plain /pass respawned its tab.
+#
+#   pass-last [<pane>]   the tab's last reply before a pass, in less (q closes it); with no pane,
+#                        tmux's current pane
+#
+# pass-respawn writes $XDG_STATE_HOME/dotclaude/pass-last/<pane number>.json ({tab, from_session,
+# written_at, message, shown}) right before it respawns the pane; hooks/pass-banner.sh shows the
+# start of it once as the new session's banner. This shows the whole reply, as often as asked,
+# only when the entry's tab is this pane on this tmux server (a pane number repeats on a new
+# server); otherwise it says there is none. Control characters but tab and newline are dropped.
+# Linked into ~/.local/bin by setup-tmux.sh; Ctrl-b P (tmux/base.conf) opens it in a popup, and
+# the Ctrl-b Enter menu and the tab's right-click menu (tmux/claude.conf) have an entry.
+# tests/setup/test_pass_last.py holds the cases.
+set -uo pipefail
+
+case "${1:-}" in -h|--help) sed -n '2,6p' "$0"; exit 0 ;; esac
+state="${XDG_STATE_HOME:-$HOME/.local/state}/dotclaude"
+pane="${1:-}"
+# A key binding can't expand #{pane_id} into a popup's command, so Ctrl-b P passes none.
+[ -n "$pane" ] || pane=$(tmux display -p '#{pane_id}' 2>/dev/null)
+server=""
+if [[ "$pane" =~ ^%[0-9]+$ ]]; then
+  server=$(tmux display -p -t "$pane" '#{start_time} #{pid} #{socket_path}' 2>/dev/null)
+fi
+
+IFS= read -r -d '' PY <<'EOF'
+import json, os, re, sys, time
+
+pane, server = sys.argv[1], sys.argv[2]
+CONTROL = re.compile("[%s]" % re.escape("".join(map(chr, [*range(0, 9), *range(11, 32), 127]))))
+NONE = "No reply saved from a /pass in this tab."
+
+def tab():
+    parts = server.rstrip("\n").split(" ", 2)
+    if not re.fullmatch(r"%\d+", pane) or len(parts) != 3 or not (
+            parts[0].isdigit() and parts[1].isdigit()) or not parts[2]:
+        return None
+    return {"socket": parts[2], "server_start": int(parts[0]), "server_pid": int(parts[1]),
+            "pane": pane}
+
+def clean(text):
+    return CONTROL.sub("", text.replace("\r\n", "\n"))
+
+here = tab()
+if here is None:
+    print(NONE + " (tmux can't read the pane)")
+    sys.exit(0)
+try:
+    with open(os.path.join(os.environ["PASS_LAST_DIR"], pane[1:] + ".json")) as f:
+        e = json.load(f)
+except (OSError, ValueError):
+    e = None
+if not isinstance(e, dict) or not isinstance(e.get("message"), str):
+    print(NONE)
+elif e.get("tab") != here:
+    print(NONE + " (the saved one is from another tab or tmux server)")
+else:
+    when = e.get("written_at")
+    when = (time.strftime("%Y-%m-%d %H:%M", time.localtime(when))
+            if isinstance(when, (int, float)) and not isinstance(when, bool) else "?")
+    sid = e.get("from_session")
+    sid = clean(sid) if isinstance(sid, str) else "?"
+    print("Last reply before the pass (%s, session %s):\n\n%s" % (when, sid, clean(e["message"])))
+EOF
+
+text=$(PASS_LAST_DIR="$state/pass-last" python3 -I -c "$PY" "$pane" "$server" 2>&1)
+if [ -t 1 ]; then
+  printf '%s\n' "$text" | less
+else
+  printf '%s\n' "$text"
+fi
+exit 0

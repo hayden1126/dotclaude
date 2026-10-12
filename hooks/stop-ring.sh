@@ -29,10 +29,13 @@ input=$(cat 2>/dev/null)
 #
 # The same step writes the session's stop record, $XDG_STATE_HOME/dotclaude/stops/<session>.json
 # (time, the waits in flight, every task's label, `unlabeled` for one with none, and the
-# transcript path when it is a string), atomically, for every stop but a subagent's:
+# transcript path when it is a string, and the reply the turn ended on, `last_message`, from the
+# payload's last_assistant_message when it is a string, cut to 64 KiB of UTF-8 on a character
+# boundary with a one-line note), atomically, for every stop but a subagent's:
 # pass-respawn's plain mode respawns only after a stop with no task but dream, since
-# in-process agents are no child process it could see, and it reads the transcript there. A
-# session id that isn't a plain name writes none.
+# in-process agents are no child process it could see, and it reads the transcript there and
+# copies last_message for the respawned session's banner (hooks/pass-banner.sh). A session id
+# that isn't a plain name writes none.
 read -r spawned busy tasks size transcript < <(printf '%s' "$input" | python3 -I -c 'import sys, json, os, re, time, tempfile
 try: d = json.load(sys.stdin)
 except Exception: d = {}
@@ -52,6 +55,13 @@ if not spawned and isinstance(sid, str) and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9
                "tasks": [t.get("type") if isinstance(t, dict) and isinstance(t.get("type"), str) and t.get("type") else "unlabeled" for t in (tasks if isinstance(tasks, list) else [])]}
         if isinstance(d.get("transcript_path"), str):
             rec["transcript_path"] = d["transcript_path"]
+        msg = d.get("last_assistant_message")
+        if isinstance(msg, str):
+            raw, cap = msg.encode("utf-8", "replace"), 64 * 1024
+            if len(raw) > cap:
+                note = "\n[cut to 64 KiB: the reply was %d bytes]" % len(raw)
+                msg = raw[:cap - len(note)].decode("utf-8", "ignore") + note
+            rec["last_message"] = msg
         with os.fdopen(fd, "w") as f:
             json.dump(rec, f)
         os.replace(tmp, os.path.join(stops, sid + ".json"))
