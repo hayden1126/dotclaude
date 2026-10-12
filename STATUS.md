@@ -80,8 +80,14 @@ stored here).
     `feat/lanes-lead`, merged in #87**: the lanes config lives in the state dir, and what the
     sandbox can still write is checked before sandbox-off code acts on it (docs/lanes.md S3).
     Step 1 is its own PR after PR 3 and before the work repo migration; step 2 later.
-  - **PR 3 `feat/pass`: in flight** (`/pass`, `pass compact`, the trigger, a delta handoff, the
-    Star carry). PLAN.md PR 3, with Hayden's 2026-10-12 changes at its top.
+  - **PR 3 `feat/pass`: built, reviewed (three rounds plus a focused fourth on the last fixes),
+    installed from its branch and live-tested on HAYPC 2026-10-12.** `/pass`, `pass compact`,
+    `--cancel`, the trigger, the delta handoff, the Star carry. Live in a scratch window: a plain
+    pass respawned in plan mode with the Star carried; an approved first item resumed in the
+    default mode; compact typed `/compact` and the resume prompt, then plan mode; `--cancel`
+    ended a pending waiter. As built and why: PLAN.md PR 3 "As built". **Not installed:** the
+    allow rule `Bash(pass-respawn -C *)` (the classifier refused the `setup.sh` run as
+    "Auto-Mode Bypass"); Hayden runs `./setup.sh` and diffs settings.json (only that line).
   - **PR 4 `feat/autopass`: designed, after PR 3** (Hayden split it out 2026-10-12). Three token
     tiers from `autoCompactWindow` (300k soft, 480k wrap-up, 520k hard), read from the
     transcript; the calibration over his transcripts is in PLAN.md PR 4.
@@ -137,12 +143,13 @@ stored here).
   `claude -p` repro and the 2.1.285 boundary; the karaoke session's has the incident.
 
 ## Notes for next session
-- **Next: PR 3 on `feat/pass`, spikes S1-S6 first** (PLAN.md PR 3; in a scratch tmux window with
-  an interactive `claude`, sandbox-off). A spike that breaks the design goes back to Hayden.
-  Then one `writer` builds it, tests first; build `pass-respawn` as a narrow wrapper with its own
-  excludedCommands entry, never raw `tmux`. Verify lanes before touching it: `tests/lanes`,
-  `tests/setup`, and `tests/delegation` from the main checkout (`test_subagent_policy` refuses to
-  load sandboxed under `.claude/worktrees/`).
+- **Next: Hayden approves pushing `feat/pass` and opening PR 3 as a draft** (range
+  `main..feat/pass`, base `0ad597d`), and runs `./setup.sh` for the allow rule. Mark it ready
+  once open; merge on Hayden's approval. Then PR 4 on `feat/autopass` (PLAN.md PR 4; step 0
+  spikes whether UserPromptSubmit sees a defined slash command), then the release-skill PR in
+  the work repos (PLAN.md PR 3 "Delta handoff"). Verify before touching `/pass`: `tests/pass`,
+  `tests/lanes`, `tests/setup`, `tests/delegation`, from the main checkout
+  (`test_subagent_policy` refuses to load under `.claude/worktrees/`).
 - **Astra waits on Hayden's plan** (`feat/codex-astra` merged as #85): two 2026-10-10 probes passed the audit (astra admitted,
   nothing disallowed), but even after a fresh `codex login` the turn gets a 400, "gpt-6-astra
   is not supported when using Codex with a ChatGPT account". Astra ran fine on 2026-09-29 and
@@ -153,7 +160,8 @@ stored here).
   names only Sol and Terra (decide before Medium). Kaggle hosts for the RSNA repo
   (`api.kaggle.com`, `www.kaggleusercontent.com`) are not added: its `.claude/` has only
   `settings.local.json`, Hayden's call. Flaky, not from these branches: `test_tmux_hooks`
-  `test_each_ring_decision_is_logged` failed once, then passed; `test_ledger`
+  `test_each_ring_decision_is_logged` failed once, then passed, and so did
+  `test_a_mapped_background_session_rings_on_stop` (once in about seven full runs, never alone); `test_ledger`
   `test_open_warns_first_and_calls_the_session_unknown` read 4 min for a 5-min call once
   (a backward clock step, inferred). Then Hayden picks the next workflow improvement; deck-production S2 is deferred. First real
   check of #70: the next reboot (see Done). Recent work: `gh pr list --state merged --limit 10`.
