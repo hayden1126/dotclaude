@@ -566,12 +566,32 @@ all on 1M-window models). Context at each event, in thousands of tokens:
 - PostToolUse is what reaches long autonomous turns (subagent-driven execution, fix loops),
   which would otherwise cross into auto-compact before any Stop.
 
-**Modes and config.**
-- `off`, `nudge` (visual only: the ctx widget changes color, and Hayden decides) and `auto`
-  (blocks as above).
-- The default is `nudge`, and `auto` in lanes.
-- Config lives in `~/.config/dotclaude/pass.toml`, with a per-repo override in the lanes config.
-  `/pass auto` sets one session (a flag file keyed by session id).
+**The `/autopass` toggle** (Hayden, 2026-10-12).
+- `/autopass on|off|status` is typed in chat. A UserPromptSubmit hook catches it, writes the flag
+  (hooks run outside the sandbox, which can't write the state dir), and blocks the prompt with a
+  one-line confirmation. So a toggle costs no model turn and no context.
+  - Spike first: does UserPromptSubmit see a defined slash command before it expands? If not,
+    use a mod's slash command (the `plugin-authoring` skill), which also runs locally.
+- **On:**
+  - all three tiers block or inject as above;
+  - the model may run the pass skill on its own (it still respawns into plan mode, so Hayden
+    approves the next step).
+- **Off:**
+  - no blocks, no injected context, and no pass the user didn't ask for;
+  - one exception, the safety net (Hayden's call): a single non-blocking line at the hard tier,
+    "context 520k, auto-compact at about 567k: hand off now", not re-armed.
+- **Either way:**
+  - the token count is written to `ctx/<sid>`, and the ctx widget changes color at each tier
+    (passive);
+  - `/pass`, the typed triggers and the handoff reminder work unchanged.
+- **Scope: per tab** (Hayden's call).
+  - A pass respawn and `/clear` both start a new session id, so a per-session flag would switch
+    itself off after the first pass.
+  - The flag is keyed by the tab (socket, server start, server pid, pane), the way the Star
+    carries, and dies with the tab.
+  - Precedence: the tab's toggle, then the repo's lanes config (`autopass = true` by default in
+    lanes), then the global default in `~/.config/dotclaude/pass.toml` (off).
+- `/autopass status` prints the token count, the next tier, on or off, and which level set it.
 
 **Guards.**
 - A subagent's events are ignored.
