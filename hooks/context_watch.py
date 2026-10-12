@@ -27,7 +27,9 @@ Crossings live in the watcher's own record, ctx-watch/<session>.json, not in sto
   firing (20k at 600k), unless the transcript shows, after that firing (the record keeps its
   time and the transcript's size then), a main-chain tool call that starts the pass: the Skill
   tool with skill `pass`, a Bash command that starts with `pass-respawn` (after blanks and an
-  optional `!`), or a typed `/pass` (a user entry with <command-name>/pass</command-name>). A handoff costs 22k to 47k, so the re-arm would otherwise say "hand off now"
+  optional `!`), or a typed `/pass` (a user entry whose text starts with Claude Code's
+  <command-message> block and names <command-name>/pass</command-name>). A handoff costs 22k
+  to 47k, so the re-arm would otherwise say "hand off now"
   in the middle of the pass it asked for. A handoff alone doesn't end the session, so the
   handoff skill doesn't count. If no pass comes within 40000 tokens of that call, the re-arm
   resumes, looking only past that point.
@@ -81,7 +83,10 @@ PASS_SKILL = "pass"
 # A typed /pass (or /pass compact) is a main-chain user entry whose text carries the command:
 # "<command-name>/pass</command-name>" beside <command-message> and <command-args> (the shape
 # Claude Code writes for every slash command; seen for /clear and /compact).
-TYPED_PASS = re.compile(r"<command-name>\s*/pass\s*</command-name>")
+# Anchored at the <command-message> block a real command starts with, so a message that only
+# quotes the marker doesn't count.
+TYPED_PASS = re.compile(r"\A\s*<command-message>[^<]*</command-message>\s*"
+                        r"<command-name>\s*/pass\s*</command-name>")
 
 
 LEAD = "[autopass] Context is at {n}, auto-compact near {c}"
@@ -178,7 +183,7 @@ def typed_pass(content) -> bool:
     texts = [content] if isinstance(content, str) else [
         c.get("text") for c in content if isinstance(c, dict) and c.get("type") == "text"
     ] if isinstance(content, list) else []
-    return any(isinstance(t, str) and TYPED_PASS.search(t) for t in texts)
+    return any(isinstance(t, str) and TYPED_PASS.match(t) for t in texts)
 
 
 def starts_handoff(line: bytes) -> bool:

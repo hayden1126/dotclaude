@@ -828,6 +828,9 @@ class TypedPass(Base):
                     typed_command("compact"), sub,
                     {"type": "user", "isSidechain": False,
                      "message": {"role": "user", "content": "explain /pass please"}},
+                    {"type": "user", "isSidechain": False, "origin": {"kind": "human"},
+                     "message": {"role": "user", "content": "the hook matches "
+                                 "<command-name>/pass</command-name> in a typed /pass"}},
                     assistant(546_000))
         self.assertEqual(self.stop(), block("hard", "546k"))
 
