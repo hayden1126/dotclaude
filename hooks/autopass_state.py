@@ -19,7 +19,7 @@ auto-pass" has the design.
   75k/94.5k/105k/117k. When soft would reach wrap-up, or wrap-up would sit under 60k (a
   session starts near 40k, so the first Stop would nudge), tiers is None and the watcher stays
   quiet: any window under about 110k. `tiers = [soft, wrap, hard]` in
-  ~/.config/dotclaude/pass.toml overrides the three for live tests; a value that isn't three
+  pass.toml (pass_toml_path()) overrides the three for live tests; a value that isn't three
   increasing positive integers below compact_at is ignored.
 - The ctx file, ctx/<session>.json = {tokens, time, window?, window_at?}: the watcher writes
   tokens and time, the widget window and window_at. Both merge through merge_ctx(), under the
@@ -100,7 +100,7 @@ def window(transcript_path=None, model_window=None) -> int:
 
 
 def pass_toml() -> dict:
-    """~/.config/dotclaude/pass.toml, or {} when it is missing or not TOML."""
+    """pass.toml (pass_toml_path()), or {} when it is missing or not TOML."""
     try:
         with open(pass_toml_path(), "rb") as f:
             return tomllib.load(f)

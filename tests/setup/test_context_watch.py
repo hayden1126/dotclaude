@@ -711,6 +711,18 @@ class Toggle(Base):
         self.stop()
         self.assertIn("past the hard tier (520k)", self.prompt("/autopass status")["reason"])
 
+    def test_the_texts_name_the_pass_toml_the_watcher_reads(self):
+        for conf, shown in ((os.path.join(self.home, "conf"), "~/conf/dotclaude/pass.toml"),
+                            (os.path.join(self.tmp, "conf"),
+                             os.path.join(self.tmp, "conf", "dotclaude", "pass.toml"))):
+            os.makedirs(os.path.join(conf, "dotclaude"))
+            with open(os.path.join(conf, "dotclaude", "pass.toml"), "w") as f:
+                f.write("autopass = true\n")
+            self.env["XDG_CONFIG_HOME"] = conf
+            self.assertIn("autopass on (from %s)." % shown,
+                          self.prompt("/autopass status")["reason"])
+            self.assertIn(shown, self.prompt("/autopass on", session={})["reason"])
+
     def test_without_tmux_nothing_is_written(self):
         out = self.prompt("/autopass on", session={})
         self.assertIn("per tmux tab", out["reason"])

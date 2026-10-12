@@ -77,7 +77,7 @@ Each decision appends one line to `$XDG_STATE_HOME/dotclaude/pass.log` (`~/.loca
 
 ## Auto-pass nudges
 
-With autopass on (`/autopass on` in the tab, a lane or a lanes repo's main checkout by default, or `autopass = true` in `~/.config/dotclaude/pass.toml`), `hooks/context-watch.sh` tells you when to pass. Its text starts with `[autopass]`, arrives as a Stop block reason or as context added to a tool result, and names the context size and where auto-compact fires (about 567k).
+With autopass on (`/autopass on` in the tab, a lane or a lanes repo's main checkout by default, or `autopass = true` in `~/.config/dotclaude/pass.toml`, under `$XDG_CONFIG_HOME` when that is set), `hooks/context-watch.sh` tells you when to pass. Its text starts with `[autopass]`, arrives as a Stop block reason or as context added to a tool result, and names the context size and where auto-compact fires (about 567k).
 
 - **Soft (300k), at a Stop:** done end to end, run this skill now. A small remainder left, finish it first. Your last reply asked Hayden something, end the turn and do nothing else.
 - **Wrap-up (480k):** finish the step you are on and don't start another. If more than that step is left, run this skill now, in compact mode if you are mid-task.

@@ -136,19 +136,20 @@ stored here).
   `claude -p` repro and the 2.1.285 boundary; the karaoke session's has the incident.
 
 ## Notes for next session
-- **Next: fix the Stop-time lag in PR 4's watcher (PLAN.md "Spike results" A8), then the rest of
-  the live smoke tests, then the draft PR.** `feat/autopass` holds all of PR 4: four writer parts,
-  each reviewed until no finding was medium or worse, with PLAN.md "As built". It is installed on
+- **Next: the rest of PR 4's live smoke tests, then the draft PR.** `feat/autopass` holds all of
+  PR 4: four writer parts, each reviewed until no finding was medium or worse, with PLAN.md "As
+  built". It is installed on
   HAYPC (Hayden ran `setup.sh` and `setup-tmux.sh` 2026-10-12; the settings diff was only the
   four new hook entries).
-  1. **A8:** at Stop, the turn's last assistant entry isn't readable yet, so the count lags one
-     turn (a session's first Stop writes none). Probe whether it appears during the hook, then
-     fix `context_watch.tokens`/`handle` and add a test. `context-watch.err` in the state dir
-     now catches the watcher's Python errors.
+  1. **A8, fixed:** the Stop hook now waits up to 1.5 s for the turn's final reply (it lands
+     about 100 ms in; PLAN.md "Spike results" A8 has the probe). The Stop hook's timeout went
+     from 5 to 10 s in `settings.json`, a copied file: **re-run `setup.sh`** (copy and diff
+     `~/.claude/settings.json` around it) to install that. **Watch:** `context-watch.err` in
+     the state dir, which logs a Stop that timed out as well as the watcher's Python errors.
   2. **Smoke so far (passed):** `/autopass status` and `on` were blocked with no model turn, and
      the tab stayed `idle`. The tab flag was written. The widget shows `Ctx 41.5k 7% A`, and
-     `ctx/<sid>.json` gets `window`. Cosmetic: `/autopass status` names `~/.config/...` even
-     when `XDG_CONFIG_HOME` moved it.
+     `ctx/<sid>.json` gets `window`. `/autopass` now names the `pass.toml` it reads (it
+     named `~/.config/...` even when `XDG_CONFIG_HOME` moved it).
   3. **Smoke still to run:** use a scratch window in `~/scratch/autopass-smoke` started with
      `XDG_CONFIG_HOME=~/scratch/autopass-smoke-conf`, whose `pass.toml` has `autopass = true`
      and `tiers = [60000, 75000, 90000]` and links `git` to `~/.config/git`. Check:

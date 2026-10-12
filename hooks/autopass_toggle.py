@@ -10,7 +10,8 @@ prompt that starts, after a strip, with `/autopass` and then a space or nothing 
 - on / off: write the tab flag (autopass_state.set_flag) for TMUX_PANE on its tmux server, and
   drop the watcher's cached decision for this session under its lock (waiting up to 3 s; if
   the lock stays busy, the reply says the change may take up to a minute). Outside tmux nothing is written: the
-  toggle is per tab, and `autopass` in ~/.config/dotclaude/pass.toml is the global default.
+  toggle is per tab, and `autopass` in pass.toml ($XDG_CONFIG_HOME/dotclaude, ~/.config by
+  default; the replies name the one in use) is the global default.
 - status, or no word: the context size (ctx/<session>.json), the next tier, on or off, and
   which level set it.
 - another word, or more than one: the usage line.
@@ -28,15 +29,21 @@ COMMAND = re.compile(r"/autopass(?:\s+(.*))?", re.S)
 SID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
 USAGE = "Usage: /autopass on|off|status (per tmux tab)."
 NO_TMUX = ("/autopass {word} is per tmux tab, and this session isn't in one: nothing changed. "
-           "The global default is `autopass = true` or `false` in "
-           "~/.config/dotclaude/pass.toml.")
+           "The global default is `autopass = true` or `false` in {path}.")
 NO_TAB = "/autopass {word}: tmux didn't say which tab this is, so nothing changed."
-SOURCES = {"tab": "set in this tab", "lanes": "the lane default", "pass.toml":
-           "from ~/.config/dotclaude/pass.toml", "default": "the default"}
+SOURCES = {"tab": "set in this tab", "lanes": "the lane default", "pass.toml": "from {path}",
+           "default": "the default"}
 LABELS = {"soft": "soft", "wrap": "wrap-up", "hard": "hard"}
 
 
 LATE = " The watcher may use the old setting for up to a minute."
+
+
+def shown_toml() -> str:
+    """pass.toml's path as /autopass names it: the one the watcher reads (it follows
+    XDG_CONFIG_HOME), with the home directory as ~."""
+    path, home = aps.pass_toml_path(), os.path.expanduser("~")
+    return "~" + path[len(home):] if path.startswith(home + os.sep) else path
 
 
 def drop_cached_mode(sid) -> bool:
@@ -56,7 +63,7 @@ def drop_cached_mode(sid) -> bool:
 
 def toggle(word: str, sid, pane) -> str:
     if not (isinstance(pane, str) and aps.PANE.fullmatch(pane)):
-        return NO_TMUX.format(word=word)
+        return NO_TMUX.format(word=word, path=shown_toml())
     here = aps.tab(pane)
     if here is None:
         return NO_TAB.format(word=word)
@@ -72,7 +79,8 @@ def toggle(word: str, sid, pane) -> str:
 
 def status(sid, cwd, pane, transcript_path=None) -> str:
     on, source = aps.decide(cwd, pane)
-    head = "autopass %s (%s)." % ("on" if on else "off", SOURCES[source])
+    head = "autopass %s (%s)." % ("on" if on else "off",
+                                  SOURCES[source].format(path=shown_toml()))
     ctx = aps.load_json(aps.ctx_path(sid)) \
         if isinstance(sid, str) and SID.fullmatch(sid) else None
     n = ctx.get("tokens") if isinstance(ctx, dict) and aps.is_int(ctx.get("tokens")) else None
