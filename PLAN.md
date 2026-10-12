@@ -674,6 +674,14 @@ all on 1M-window models). Context at each event, in thousands of tokens:
   under 120 s old and `shown` false, and then sets `shown`.
 - **Popup:** `pass-last` opens the tab's message in `display-popup` with `less`. It is bound to
   Ctrl-b P and has entries in the Ctrl-b Enter menu and the right-click tab menu.
+- **Everything since the last prompt, not only the last reply** (review round 1; Hayden's call,
+  2026-10-12). One `last_message` per session loses the unread reply when auto-pass blocks a Stop
+  and the continued turn ends on "pass armed". Spike A5: a hook-blocked Stop and the Stop that
+  ends the continued turn share the payload's `prompt_id` (`stop_hook_active` false, then true).
+  So the stop record keeps `replies` (`{prompt_id, text, time}`, the 3 most recent prompts, 128
+  KiB in all). The banner shows the newest prompt's replies, and the popup shows all three
+  prompts' replies, which puts the reply before a manual `/pass` one key away. `-p` sessions keep
+  none, and `stops/` and `pass-last/` are pruned after 7 days.
 - Rejected: putting the reply in the resume prompt. That feeds the old session's beliefs back
   into the fresh context, which is what a clear avoids.
 
