@@ -1,8 +1,8 @@
-"""tmux/pass-last: the Ctrl-b P popup that shows the reply a tab's Claude ended on before a
-plain /pass (stdlib only).
+"""tmux/pass-last: the Ctrl-b P popup that shows what a tab's Claude said before a plain /pass
+(stdlib only).
 
-It reads $XDG_STATE_HOME/dotclaude/pass-last/<pane number>.json and shows the message only when
-the entry's tab is this pane on this tmux server. A stub tmux answers `display` with the current
+It reads $XDG_STATE_HOME/dotclaude/pass-last/<pane number>.json and shows every reply, grouped by
+prompt, oldest first, only when the entry's tab is this pane on this tmux server. A stub tmux answers `display` with the current
 pane ($STUB_PANE) or the server line ($STUB_SERVER; empty fails). Output is not a terminal here,
 so the script prints instead of starting less."""
 import json
@@ -29,6 +29,11 @@ SOCKET = "/tmp/tmux-1000/default"
 SERVER = f"1791222157 4321 {SOCKET}"
 TAB = {"socket": SOCKET, "server_start": 1791222157, "server_pid": 4321, "pane": "%7"}
 NONE = "No reply saved from a /pass in this tab."
+T1 = time.mktime((2026, 10, 12, 13, 50, 0, 0, 0, -1))
+T2 = time.mktime((2026, 10, 12, 14, 4, 0, 0, 0, -1))
+SAVED = time.mktime((2026, 10, 12, 14, 5, 0, 0, 0, -1))
+HEAD = "Replies before the pass (saved 2026-10-12 14:05, session old-session-1); the newest are " \
+       "last, q closes."
 
 
 class PassLast(unittest.TestCase):
@@ -48,10 +53,11 @@ class PassLast(unittest.TestCase):
                         HOME=os.path.join(self.tmp, "home"), STUB_SERVER=SERVER,
                         STUB_PANE="%7", XDG_STATE_HOME=os.path.join(self.tmp, "state"))
 
-    def entry(self, **fields):
-        e = {"tab": TAB, "from_session": "old-session-1",
-             "written_at": time.mktime((2026, 10, 12, 14, 5, 0, 0, 0, -1)),
-             "message": "Done: the PR is up.\nNext: review it.", "shown": True, **fields}
+    def entry(self, message="Done: the PR is up.\nNext: review it.", **fields):
+        """A pass-last entry; message= gives it one reply."""
+        e = {"tab": TAB, "from_session": "old-session-1", "written_at": SAVED,
+             "replies": [{"prompt_id": "p1", "text": message, "time": T2}], "shown": True,
+             **fields}
         os.makedirs(self.dir, exist_ok=True)
         with open(os.path.join(self.dir, "7.json"), "w") as f:
             json.dump(e, f)
@@ -66,10 +72,20 @@ class PassLast(unittest.TestCase):
         self.entry(message="\n".join(f"line {i}" for i in range(1, 101)))
         out = self.show("%7")
         self.assertTrue(out.startswith(
-            "Last reply before the pass (2026-10-12 14:05, session old-session-1):\n\nline 1\n"))
+            HEAD + "\n\n== Replies from 2026-10-12 14:04 (since your last prompt) ==\n\nline 1\n"))
         self.assertTrue(out.endswith("line 100\n"))  # no cap: the popup scrolls
         self.assertIn(["tmux", "display", "-p", "-t", "%7",
                        "#{start_time} #{pid} #{socket_path}"], self.calls())
+
+    def test_every_prompts_replies_show_oldest_first_under_a_time_header(self):
+        self.entry(replies=[{"prompt_id": "p1", "text": "Older reply.", "time": T1},
+                            {"prompt_id": "p2", "text": "First part.\n", "time": T2},
+                            {"prompt_id": "p2", "text": "Pass armed.", "time": T2 + 30},
+                            {"prompt_id": "p3", "text": " "}, 5])
+        self.assertEqual(self.show("%7"), "\n\n".join([
+            HEAD, "== Replies from 2026-10-12 13:50 ==", "Older reply.",
+            "== Replies from 2026-10-12 14:04 (since your last prompt) ==", "First part.",
+            "Pass armed."]) + "\n")
 
     def test_shown_does_not_matter_and_the_entry_stays(self):
         self.entry(shown=False)
@@ -85,7 +101,10 @@ class PassLast(unittest.TestCase):
 
     def test_no_entry_says_so(self):
         self.assertEqual(self.show("%7"), NONE + "\n")
-        os.makedirs(self.dir)
+        self.entry(replies=[])
+        self.assertEqual(self.show("%7"), NONE + "\n")
+        self.entry(message="")
+        self.assertEqual(self.show("%7"), NONE + "\n")
         with open(os.path.join(self.dir, "7.json"), "w") as f:
             f.write("{not json")
         self.assertEqual(self.show("%7"), NONE + "\n")
@@ -108,8 +127,19 @@ class PassLast(unittest.TestCase):
         self.assertTrue(self.show("%7").startswith(NONE))
 
     def test_control_characters_are_dropped(self):
-        self.entry(message="red " + chr(27) + "[31mtext" + chr(7))
+        self.entry(message="red " + chr(27) + "[31mtext" + chr(7) + chr(0x9B) + chr(0x85)
+               + chr(0x7F))
         self.assertTrue(self.show("%7").endswith("red [31mtext\n"))
+
+    def test_a_lone_surrogate_does_not_break_it(self):
+        os.makedirs(self.dir)
+        with open(os.path.join(self.dir, "7.json"), "w") as f:
+            f.write(json.dumps({"tab": TAB, "written_at": SAVED, "from_session": "s@",
+                                "replies": [{"prompt_id": "p1", "text": "a@b", "time": T2}]})
+                    .replace("@", "\\ud800"))
+        out = self.show("%7")
+        self.assertTrue(out.endswith("a?b\n"), out)
+        self.assertIn("session s?)", out)
 
     def calls(self):
         with open(self.log) as f:

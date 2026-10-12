@@ -1,20 +1,23 @@
 #!/usr/bin/env bash
-# pass-last: show the reply a Claude session ended on before a plain /pass respawned its tab.
+# pass-last: show what a Claude session said before a plain /pass respawned its tab.
 #
-#   pass-last [<pane>]   the tab's last reply before a pass, in less (q closes it); with no pane,
-#                        tmux's current pane
+#   pass-last [<pane>]   the tab's replies before a pass, in less (opens at the end; q closes
+#                        it); with no pane, tmux's current pane
 #
 # pass-respawn writes $XDG_STATE_HOME/dotclaude/pass-last/<pane number>.json ({tab, from_session,
-# written_at, message, shown}) right before it respawns the pane; hooks/pass-banner.sh shows the
-# start of it once as the new session's banner. This shows the whole reply, as often as asked,
-# only when the entry's tab is this pane on this tmux server (a pane number repeats on a new
-# server); otherwise it says there is none. Control characters but tab and newline are dropped.
-# Linked into ~/.local/bin by setup-tmux.sh; Ctrl-b P (tmux/base.conf) opens it in a popup, and
-# the Ctrl-b Enter menu and the tab's right-click menu (tmux/claude.conf) have an entry.
+# written_at, replies, shown}) right before it respawns the pane: everything said since each of
+# the last three prompts (stop-ring.sh keeps them). hooks/pass-banner.sh shows the newest prompt's
+# replies once as the new session's banner. This shows them all, as often as asked, oldest first,
+# a header line with its time before each prompt's group, so less opens at the end, on the
+# newest. Only when the entry's tab is this pane on this tmux server (a pane number repeats on a
+# new server); otherwise it says there is none. Control characters (C0 but tab and newline, DEL,
+# C1) are dropped. Linked into ~/.local/bin by setup-tmux.sh; Ctrl-b P (tmux/claude.conf) opens
+# it in a popup, and the Ctrl-b Enter menu (tmux/base.conf) and the tab's right-click menu
+# (tmux/claude.conf) have an entry.
 # tests/setup/test_pass_last.py holds the cases.
 set -uo pipefail
 
-case "${1:-}" in -h|--help) sed -n '2,6p' "$0"; exit 0 ;; esac
+case "${1:-}" in -h|--help) sed -n '2,5p' "$0"; exit 0 ;; esac
 state="${XDG_STATE_HOME:-$HOME/.local/state}/dotclaude"
 pane="${1:-}"
 # tmux's man page doesn't call a popup's command a format, so Ctrl-b P passes no pane.
@@ -28,7 +31,8 @@ IFS= read -r -d '' PY <<'EOF'
 import json, os, re, sys, time
 
 pane, server = sys.argv[1], sys.argv[2]
-CONTROL = re.compile("[%s]" % re.escape("".join(map(chr, [*range(0, 9), *range(11, 32), 127]))))
+CONTROL = re.compile("[%s]" % re.escape("".join(map(chr, [*range(0, 9), *range(11, 32),
+                                                          *range(127, 160)]))))
 NONE = "No reply saved from a /pass in this tab."
 
 def tab():
@@ -40,33 +44,57 @@ def tab():
             "pane": pane}
 
 def clean(text):
+    text = text.encode("utf-8", "replace").decode("utf-8")   # a lone surrogate becomes '?'
     return CONTROL.sub("", text.replace("\r\n", "\n"))
 
-here = tab()
-if here is None:
-    print(NONE + " (tmux can't read the pane)")
-    sys.exit(0)
-try:
-    with open(os.path.join(os.environ["PASS_LAST_DIR"], pane[1:] + ".json")) as f:
-        e = json.load(f)
-except (OSError, ValueError):
-    e = None
-if not isinstance(e, dict) or not isinstance(e.get("message"), str):
-    print(NONE)
-elif e.get("tab") != here:
-    print(NONE + " (the saved one is from another tab or tmux server)")
-else:
-    when = e.get("written_at")
-    when = (time.strftime("%Y-%m-%d %H:%M", time.localtime(when))
-            if isinstance(when, (int, float)) and not isinstance(when, bool) else "?")
+def when(t):
+    if isinstance(t, (int, float)) and not isinstance(t, bool):
+        return time.strftime("%Y-%m-%d %H:%M", time.localtime(t))
+    return "?"
+
+def groups(replies):
+    """Runs of replies that share a prompt_id, oldest first."""
+    out = []
+    for r in replies if isinstance(replies, list) else []:
+        if not (isinstance(r, dict) and isinstance(r.get("prompt_id"), str)
+                and isinstance(r.get("text"), str) and r["text"].strip()):
+            continue
+        if out and out[-1][0] == r["prompt_id"]:
+            out[-1][1].append(r)
+        else:
+            out.append((r["prompt_id"], [r]))
+    return out
+
+def show():
+    here = tab()
+    if here is None:
+        return NONE + " (tmux can't read the pane)"
+    try:
+        with open(os.path.join(os.environ["PASS_LAST_DIR"], pane[1:] + ".json"),
+                  encoding="utf-8") as f:
+            e = json.load(f)
+    except (OSError, ValueError):
+        e = None
+    found = groups(e.get("replies")) if isinstance(e, dict) else []
+    if not found:
+        return NONE
+    if e.get("tab") != here:
+        return NONE + " (the saved one is from another tab or tmux server)"
     sid = e.get("from_session")
-    sid = clean(sid) if isinstance(sid, str) else "?"
-    print("Last reply before the pass (%s, session %s):\n\n%s" % (when, sid, clean(e["message"])))
+    parts = ["Replies before the pass (saved %s, session %s); the newest are last, q closes."
+             % (when(e.get("written_at")), clean(sid) if isinstance(sid, str) else "?")]
+    for i, (_, rs) in enumerate(found):
+        last = " (since your last prompt)" if i == len(found) - 1 else ""
+        parts.append("== Replies from %s%s ==" % (when(rs[0].get("time")), last))
+        parts.extend(clean(r["text"]).strip() for r in rs)
+    return "\n\n".join(parts)
+
+sys.stdout.buffer.write((show() + "\n").encode("utf-8", "replace"))
 EOF
 
 text=$(PASS_LAST_DIR="$state/pass-last" python3 -I -c "$PY" "$pane" "$server" 2>&1)
 if [ -t 1 ]; then
-  printf '%s\n' "$text" | less
+  printf '%s\n' "$text" | less +G
 else
   printf '%s\n' "$text"
 fi
