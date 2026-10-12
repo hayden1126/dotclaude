@@ -686,6 +686,26 @@ all on 1M-window models). Context at each event, in thousands of tokens:
 | A3 | Does the transcript's last main-chain assistant `usage` match the statusline's `current_usage` at a Stop and mid-turn? Is `isSidechain` set on subagent entries? | the parser and its fixture |
 | A4 | Does a PostToolUse `additionalContext` reach the model on a main-session tool call? | the wrap-up and hard tiers inside long turns |
 
+**Spike results** (2026-10-12, Claude Code 2.1.296, tmux 3.7c; harness in
+`~/scratch/autopass-spike/`). The design holds, with one change from A1.
+- **A1:** a *defined* command reaches UserPromptSubmit raw (`prompt: "/autopass on"`), and
+  `decision: block` with a `reason` shows "UserPromptSubmit operation blocked by hook: <reason>"
+  and runs no model turn. An *undefined* `/autopassx` never reaches the hook: Claude Code answers
+  "Unknown command". **Change:** `/autopass` ships as a defined command with
+  `disable-model-invocation: true`. The hook blocks it. The body runs only if the hook didn't, and
+  says the hook isn't installed.
+- **A2:** a 3.6 KiB SessionStart `systemMessage` shows in full, untruncated, as "SessionStart:startup
+  says: ...". After a `respawn-pane` with a prompt argument it sits above the submitted prompt
+  and stays on screen. The model can't see it: a random codeword in the banner came back `NONE`.
+  The transcript keeps the text as `hook_success` and `hook_system_message` attachments.
+- **A3:** the transcript's last main-chain assistant `usage` sum (input, cache read, cache
+  creation) read 41,538 while the statusline showed 41.5k. Subagent entries go to
+  `<session>/subagents/agent-<id>.jsonl`, never the main file, and their hook payloads carry
+  `agent_id`. A split assistant message repeats its usage on each entry, so the last entry is
+  right. Mid-turn, the last entry is the tool_use message, one tool result behind.
+- **A4:** a main-session PostToolUse `additionalContext` reached the model (it followed the
+  injected instruction in its reply).
+
 **Verify.**
 - `context-watch` on transcript fixtures: below each tier, at each tier once per crossing, the
   hard tier re-arming, off, background work in flight, a subagent event, and a compact re-arming.
