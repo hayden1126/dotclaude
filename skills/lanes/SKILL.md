@@ -45,7 +45,8 @@ an unregistered worktree: `lane whoami` tells you which.
 1. **Init, once per repo**, from the main checkout:
    `lane init --root ~/code/<repo>-lanes --setup "npm ci" --ports 5191-5199 --cap 4`.
 2. **New lane:** `lane new chart-fix --claim 42 --goal "fix the axis labels" --files src/chart/
-   --overlaps api-docs --done-when "axis test green"`. It fetches, branches from `origin/main`
+   --overlaps api-docs --done-when "axis test green"`. It fetches (and refuses if the fetch
+   fails: a lane branches only from the commit the remote reports), branches from `origin/main`
    with no upstream, copies the gitignored files `.worktreeinclude` lists, seeds the record with
    the brief, hands out a port and runs the setup command. Start the lane's session with
    `lane open chart-fix` (bare, from inside tmux): a new tmux window in the lane, in plan mode,
@@ -94,7 +95,7 @@ inside a lane.
    `lane open <id>` starts its session. A lane still `orphan` a minute later is usually stuck at
    the trust dialog: `tmux capture-pane -p -t <window>` shows it. Tell Hayden; don't open it
    again, which would start a second session.
-4. **Cap.** `config.toml` `cap` (default 4) limits live lanes. Requests beyond it wait in the
+4. **Cap.** The lanes config's `cap` (default 4, `lane init --cap`) limits live lanes. Requests beyond it wait in the
    project STATUS backlog.
 5. **Hand-back gate.** A lane is handed back only when `handoff-check -C <lane path>` passes and
    `lane ls` shows no `handoff?` flag. Until then, message the lane; if its session is gone, add it

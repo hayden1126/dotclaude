@@ -212,9 +212,9 @@ class Baseline(unittest.TestCase):
         # `lane new`, `ls` and `done` need the network and gh's credential (spike S3); `ls`,
         # `open` and `done` need to see other processes. Only those run sandbox-off: `lane lock
         # -- <cmd>` must stay sandboxed, or the command it wraps would run outside the sandbox
-        # without the dangerouslyDisableSandbox flag the delete guard checks. Not every path is
-        # closed: `new` and `adopt` run config.toml's `setup` through a shell, and sandboxed Bash
-        # can write config.toml. A known escape, like `tmux *` and `claude *` (docs/lanes.md S3).
+        # without the dangerouslyDisableSandbox flag the delete guard checks. `new` and `adopt`
+        # run the config's `setup` through a shell, so the config lives in the state dir, which
+        # sandboxed Bash can't write (docs/lanes.md S3; tests/lanes ConfigTrust).
         excluded = S["sandbox"]["excludedCommands"]
         bare = ["lane init", "lane init *", "lane new *", "lane adopt *", "lane ls", "lane ls *",
                 "lane open *", "lane done *"]

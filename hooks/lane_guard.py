@@ -8,7 +8,7 @@ Two rules keep lane status single-writer and absolute (docs/lanes.md, invariants
   relative  relative-identity phrases ("another session", "this session", "the other lane",
             "my lane"; lanelib.RELATIVE) are denied in the new text of any file under a .lane/,
             and of the root STATUS.md of any checkout (main or a lane, whose copy reaches main on
-            merge) when <common-dir>/lanes/config.toml exists.
+            merge) when the repo has a lanes config (`lane init`).
             New text is a Write's content, or an Edit's new_string minus the phrases its
             old_string already held (a MultiEdit's edits likewise), so an edit near an old line
             still passes. HTML comments and code are skipped on both sides (lanelib.prose_only),

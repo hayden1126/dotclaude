@@ -157,8 +157,12 @@ stays in the common dir, which sandboxed Bash can write (S1).
   PLAN.md                       the lane's working design (optional)
   artifacts/                    evidence that rulings point at (mocks, shots, gate logs)
 
+$XDG_STATE_HOME/dotclaude/lanes/<repo>-<hash>.toml
+                                the config: root, setup cmd, port range, live-lane cap, base
+                                (<remote>/<branch>, default origin/main), locks; written only
+                                by a bare `lane init`
+
 <common-dir>/lanes/             CLI-owned; written by `lane` and by hooks, never by the Edit tool
-  config.toml                   root, setup cmd, port range, live-lane cap, base (origin/main), locks
   .lock                         flock for every CLI write (claims are atomic)
   _locks/<name>                 one flock per shared gate (`lane lock`), holding the holder line
   <id>/lane.json                id, branch, path, base_sha, port, claims[], state, sessions[], created/updated, opened
@@ -190,11 +194,25 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
   flag the delete guard checks. `whoami`, `claim`, `release`, `who`, `note`, `asks` and `lock`
   touch only `<common-dir>/lanes/` and the lane's `.lane/`, which a lane-rooted sandbox can
   write (S1). A sandboxed (piped) call of an excluded subcommand says what it skipped.
-  The narrowing doesn't close every path. `new` and `adopt` run config.toml's `setup` command
-  through a shell, sandbox-off, and sandboxed Bash can write config.toml, so a tampered config
-  runs unsandboxed at the next bare `lane new`. That is a known escape, the same class as the
-  `tmux *` and `claude *` exclusions. `lock` was different: its routine use ran every gate
-  sandbox-off unnoticed.
+  `new` and `adopt` also run the config's `setup` command through a shell, sandbox-off, and
+  `new` makes its worktree under the config's `root`. So the config lives in the state dir, not
+  the common dir: sandboxed Bash can read it but not write it, and only a bare `lane init`
+  (whose flags the permission gate sees) writes it. Everything else the sandbox-off subcommands
+  and the hooks act on is sandbox-writable (every `lane.json`, the refs, the main checkout,
+  `.worktreeinclude`), so it is checked before use:
+  - A `lane.json` must pass `lanelib.record_problem` (its id is its dir's name, its branch can't
+    be read as a git option, its path is absolute, and so on), or every command and hook leaves
+    it out, and `lane ls` names it.
+  - A lane's path must be a real worktree of this repo, outside the main checkout and any other
+    lane, before `open` starts `claude` there, the setup runs there, files are copied there, or
+    `done` archives and removes it.
+  - `new` branches from the commit `ls-remote` reports for the base after a fetch, never from a
+    local ref, and refuses when the fetch fails. Other git calls get refs in full
+    (`refs/heads/<branch>`, `refs/remotes/origin/main`) after `--end-of-options`.
+  - `new` and `adopt` copy `.worktreeinclude` matches by directory fd with `O_NOFOLLOW` on both
+    sides. A symlink is copied as a link (a relative one made absolute), never read through, so
+    the sandbox's read deny still holds at its target; anything not a regular file is skipped.
+  - A symlinked `lanes/`, `lanes/<id>`, mirror or `info/exclude` is refused.
 - **S4, compaction:** a SessionStart hook matched on `compact` gets its `additionalContext` to
   the model after `/compact` (`/compact` piped into `claude -p --resume` triggers a real
   compaction). `lane-identity.sh` on `compact` is therefore the safety net for an unplanned
@@ -226,7 +244,7 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
   or tmux renumbers it.
 - **`lane lock <name> -- <cmd>`** serializes shared gates with a flock on
   `<common-dir>/lanes/_locks/<name>`, apart from the CLI's own `.lock`. The name must be listed in
-  `config.toml` `locks`, since a typo would split the mutual exclusion. Once it holds the lock, it
+  the config's `locks`, since a typo would split the mutual exclusion. Once it holds the lock, it
   writes a holder line (lane id, `main`, or the checkout's kind and path; start time; command), which a waiting run and the
   `lane ls` footer show. There is no pid: each sandboxed command has its own pid namespace, so a
   pid would mislead. A run that ends clears the line while it still holds the lock, so a waiter

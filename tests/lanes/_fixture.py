@@ -13,6 +13,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 LANE = os.path.join(REPO, "skills", "lanes", "scripts", "lane")
@@ -54,6 +55,10 @@ class LanesRepo(unittest.TestCase):
                         # would read as sandboxed; its processes share one namespace, so `done`'s
                         # process check still sees them. A test hook, not a user setting.
                         _LANE_TEST_SANDBOXED="0")
+        # In-process calls (a loaded `lane` script, lanelib) find the config by this too.
+        env_patch = mock.patch.dict(os.environ, XDG_STATE_HOME=self.env["XDG_STATE_HOME"])
+        env_patch.start()
+        self.addCleanup(env_patch.stop)
         self.origin = os.path.join(self.tmp, "origin.git")
         self.main = os.path.join(self.tmp, "proj")
         self.root = os.path.join(self.tmp, "proj-lanes")
@@ -95,6 +100,11 @@ class LanesRepo(unittest.TestCase):
     def lane_json(self, lane_id):
         with open(os.path.join(self.common, "lanes", lane_id, "lane.json")) as f:
             return json.load(f)
+
+    def config_files(self):
+        """The lanes configs `lane init` wrote: they live in the state dir, out of the repo."""
+        d = os.path.join(self.tmp, "state", "dotclaude", "lanes")
+        return sorted(os.path.join(d, n) for n in os.listdir(d)) if os.path.isdir(d) else []
 
     def hook(self, script, payload):
         p = subprocess.run(["bash", os.path.join(HOOKS, script)], input=json.dumps(payload),

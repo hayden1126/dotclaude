@@ -224,8 +224,8 @@ class Lock(Lead):
 
     def test_init_keeps_the_locks_and_checks_their_names(self):
         self.lane("init", "--cap", "5")
-        self.assertIn('locks = "gate,e2e"', self.read(os.path.join(self.common, "lanes",
-                                                                    "config.toml")))
+        (cfg,) = self.config_files()
+        self.assertIn('locks = "gate,e2e"', self.read(cfg))
         p = self.run_lane("init", "--locks", "gate,../x")
         self.assertEqual(p.returncode, 1)
         self.assertIn("../x", p.stderr)

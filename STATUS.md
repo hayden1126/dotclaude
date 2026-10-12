@@ -6,7 +6,7 @@
 > [[dotclaude-chrome-devtools-wsl]]). Per-effort design lives in the repo's `PLAN.md` or its doc,
 > not only under `~/.claude/plans/`, which the next plan overwrites ([[plan-file-not-durable]]).
 
-Last updated: 2026-10-11
+Last updated: 2026-10-12
 Base: `main`. For branch / PR / push state, run `gh pr list` and `git log main..HEAD` (derive it; not
 stored here).
 
@@ -87,9 +87,13 @@ stored here).
     PLAN.md PR 2 "As built". Accepted limits: docs/lanes.md (lock signal edges) and
     docs/delegation.md (a lane under a temp root isn't held).
   - **Security follow-up found while building PR 2** (excluded commands; detail and plan are
-    private: `~/scratch/sandbox-audit/FINDINGS.md`, "Follow-up 2026-10-11"). Step 0 goes into PR 2
-    before it is pushed; step 1 is its own PR after PR 3 and before the work repo migration;
-    step 2 later. The plan is saved; Hayden's go on step 0 is pending.
+    private: `~/scratch/sandbox-audit/FINDINGS.md`, "Follow-up 2026-10-11"). **Step 0 is done on
+    `feat/lanes-lead` (2026-10-12)**: the lanes config lives in the state dir, and what the
+    sandbox can still write is checked before sandbox-off code acts on it (docs/lanes.md S3).
+    Four fresh review rounds, every finding fixed, each new test red on the code before it;
+    installed from the branch (settings.json byte-identical) and smoke-tested with the installed
+    `lane` and hook. Step 1 is its own PR after PR 3 and before the work repo migration; step 2
+    later.
   - **PR 3 `feat/pass`** (`/pass`, `pass compact`, opt-in auto-pass on context): not started;
     PLAN.md has it, plus PR 2's deferred context-management bullet.
   - After PR 1 and 2 merge: migrate the work repo (its own PR there). The concrete values and the
@@ -142,11 +146,9 @@ stored here).
   `claude -p` repro and the 2.1.285 boundary; the karaoke session's has the incident.
 
 ## Notes for next session
-- **Next: step 0 of the security follow-up on `feat/lanes-lead`, on Hayden's go** (the private
-  FINDINGS.md section says what; it also rewords the branch's two public mentions of the gap in
-  docs/lanes.md and `tests/delegation/test_settings.py`). **Don't push the branch before it.**
-  Then a fresh reviewer, re-install (`./setup.sh` outside the sandbox, settings diff), push on
-  Hayden's approval, PR as draft then ready. After Hayden merges: `git fetch origin main:main`
+- **Next: push `feat/lanes-lead` on Hayden's approval** (step 0 is in, reviewed, installed and
+  smoke-tested), then open PR 2 as a draft and mark it ready. A `lane new` now refuses when the
+  fetch fails (Hayden's call): it branches only from the commit the remote reports. After Hayden merges: `git fetch origin main:main`
   and `git switch main` outside the sandbox (the checkout is on `feat/lanes-lead` and live for
   every session), then PR 3 on `feat/pass` (PLAN.md PR 3, spikes first; build `pass-respawn` as
   a narrow wrapper with its own excludedCommands entry, never raw `tmux`). PR 2's range:
