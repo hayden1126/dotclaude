@@ -6,6 +6,7 @@ import fcntl
 import io
 import json
 import os
+import resource
 import shlex
 import signal
 import subprocess
@@ -225,8 +226,9 @@ class Lock(Lead):
 
     def test_the_command_exit_code_passes_through(self):
         self.assertEqual(self.run_lane("lock", "gate", "--", "sh", "-c", "exit 3").returncode, 3)
+        # A command killed by signal n kills `lane` with n too, as a calling shell expects.
         p = self.run_lane("lock", "gate", "--wait", "1", "--", "sh", "-c", "kill -TERM $$")
-        self.assertEqual(p.returncode, 128 + signal.SIGTERM)
+        self.assertEqual(p.returncode, -signal.SIGTERM)
         self.assertEqual(self.run_lane("lock", "gate", "--", "true").returncode, 0)
 
     def test_unknown_names_and_empty_commands_are_refused(self):
@@ -266,6 +268,10 @@ class Lock(Lead):
         self.assertLess(time.monotonic() - t0, 10)
         self.assertIn("held by main", p.stderr)
         self.assertIn("sleep 30", p.stderr)
+        p = self.run_lane("lock", "gate", "--wait", "0", "--", "true")
+        self.assertEqual(p.returncode, 75)
+        self.assertNotIn("waiting", p.stderr)  # --wait 0 never waits: only "gave up" is said
+        self.assertIn("gave up on lock gate after 0s: held by main", p.stderr)
         # Killed outright, the holder takes the lock with it; its orphaned child holds nothing.
         holder.kill()
         holder.wait(10)
@@ -286,8 +292,9 @@ class Lock(Lead):
                 self.addCleanup(lambda: p.poll() is None and os.killpg(p.pid, signal.SIGKILL))
                 self.wait_for(lambda: os.path.exists(ready), "the command")
                 os.killpg(p.pid, sig)
-                self.assertEqual(p.wait(10), 128 + sig)
+                self.assertEqual(p.wait(10), -sig)  # it died of the signal, as its command did
                 self.assertEqual(self.read(count), "1")
+                self.assertEqual(self.read(self.lock_file), "")
         self.assertEqual(self.run_lane("lock", "gate", "--wait", "0", "--", "true").returncode, 0)
 
     def test_a_signal_before_the_command_starts_is_replayed_to_it(self):
@@ -299,7 +306,45 @@ class Lock(Lead):
 
         with mock.patch.object(lane_cli.subprocess, "Popen", popen_after_a_ctrl_c):
             rc = lane_cli.run_child(["sleep", "30"])
-        self.assertEqual(rc, 128 + signal.SIGINT)
+        self.assertEqual(rc, -signal.SIGINT)
+
+    def test_a_ctrl_c_stops_a_calling_script(self):
+        # bash quits a script on Ctrl-C only when its child died of SIGINT, not on an exit of 130.
+        ready = os.path.join(self.tmp, "ready")
+        gate = shlex.join([sys.executable, LANE, "lock", "gate", "--", "sh", "-c",
+                           f"echo go > {shlex.quote(ready)}; exec sleep 30"])
+        p = subprocess.Popen(["bash", "-c", f"{gate}; echo second"], cwd=self.main, env=self.env,
+                             start_new_session=True, stdout=subprocess.PIPE,
+                             stderr=subprocess.PIPE, text=True)
+        self.addCleanup(p.communicate)
+        self.addCleanup(lambda: p.poll() is None and os.killpg(p.pid, signal.SIGKILL))
+        self.wait_for(lambda: os.path.exists(ready) and self.read(ready).strip(), "the command")
+        os.killpg(p.pid, signal.SIGINT)
+        out, err = p.communicate(timeout=10)
+        self.assertNotIn("second", out)
+        self.assertIn(p.returncode, (-signal.SIGINT, 128 + signal.SIGINT), err)
+        self.assertEqual(self.read(self.lock_file), "")
+        self.assertEqual(self.run_lane("lock", "gate", "--wait", "0", "--", "true").returncode, 0)
+
+    def test_a_ctrl_c_outside_the_command_releases_the_lock_quietly(self):
+        # Between the acquire and the command (here in holder_line): no traceback, the holder
+        # line cleared, the lock let go, then `lane` dies of the SIGINT (os.kill only records).
+        lane_cli = load_lane_script()
+        self.addCleanup(signal.signal, signal.SIGINT, signal.getsignal(signal.SIGINT))
+        self.addCleanup(resource.setrlimit, resource.RLIMIT_CORE,
+                        resource.getrlimit(resource.RLIMIT_CORE))
+        repo = lane_cli.lanelib.resolve(self.main)
+        err = io.StringIO()
+        with mock.patch.object(lane_cli, "lanes_repo", return_value=repo), \
+                mock.patch.object(lane_cli, "holder_line", side_effect=KeyboardInterrupt), \
+                mock.patch.object(lane_cli.os, "kill") as kill, \
+                contextlib.redirect_stderr(err):
+            rc = lane_cli.main(["lock", "gate", "--", "true"])
+        kill.assert_called_once_with(os.getpid(), signal.SIGINT)
+        self.assertEqual(rc, 128 + signal.SIGINT)  # what it returns when it survives the re-raise
+        self.assertNotIn("Traceback", err.getvalue())
+        self.assertEqual(self.read(self.lock_file), "")
+        self.assertEqual(self.run_lane("lock", "gate", "--wait", "0", "--", "true").returncode, 0)
 
     def test_a_probe_is_not_reported_as_a_holder(self):
         # `lane ls` holds LOCK_SH for an instant; a `--wait 0` run that meets it retries once.

@@ -23,14 +23,16 @@ the GitHub credential (and say what they skipped without them), and `ls`, `open`
 see other processes. Every other subcommand runs sandboxed; `lock` must, so the command it wraps
 stays sandboxed too.
 
-`lock` exits with its command's code; `--wait` running out exits 75, which a command's own 75
-can't be told from: only the "gave up on lock" line on stderr marks a timeout.
+`lock` exits with its command's code, or dies of the signal that killed it; `--wait` running out
+exits 75, which a command's own 75 can't be told from: only the "gave up on lock" line on stderr
+marks a timeout.
 """
 import argparse
 import datetime
 import fcntl
 import json
 import os
+import resource
 import shlex
 import shutil
 import signal
@@ -829,7 +831,8 @@ def take_lock(fd: int, name: str, wait: float | None) -> bool:
     time.sleep(PROBE_GRACE)
     if try_lock(fd):
         return True
-    warn(f"waiting for lock {name}: held by {holder_of(fd)}")
+    if wait != 0:
+        warn(f"waiting for lock {name}: held by {holder_of(fd)}")
     if deadline is None:
         fcntl.flock(fd, fcntl.LOCK_EX)
         return True
@@ -842,14 +845,20 @@ def take_lock(fd: int, name: str, wait: float | None) -> bool:
 
 
 def run_child(command: list[str]) -> int:
-    """Run command and wait for it; its exit code, 128+n when signal n killed it.
+    """Run command and wait for it; its exit code, or -n (as Popen gives it) when signal n killed it.
 
     The command shares this process group, so a Ctrl-C from the tty or a kill of the whole tree
     (Claude Code's Bash tool stops a command that way) already reaches it. SIGINT and SIGTERM are
     therefore only recorded here, never forwarded: a second copy reads as "force quit" to Go and
-    Node tools. One that arrives before the command starts is replayed to it once. The cost: a
-    signal sent to `lane` alone no longer stops the command, and the lock stays held while it
-    runs. A Python handler, not SIG_IGN, so the command doesn't inherit an ignored signal."""
+    Node tools. One that arrives before the command starts is replayed to it once. A Python
+    handler, not SIG_IGN, so the command doesn't inherit an ignored signal. The costs:
+    - A signal sent to `lane` alone no longer stops the command, and the lock stays held while it
+      runs. A supervisor that signals `lane` alone and then SIGKILLs it (`timeout -k`,
+      `terminate()` then `kill()`) frees the lock while the orphaned command still runs: signal
+      the process group instead.
+    - A group signal that lands after the command has exec'd but before Popen returns (while it
+      reads the exec status pipe) is taken as pending and replayed, so the command gets it twice.
+      Blocking the signals around Popen can't tell a pre-fork arrival from a post-fork one."""
     child, pending = None, []
 
     def record(sig, _frame):
@@ -869,7 +878,18 @@ def run_child(command: list[str]) -> int:
     finally:
         for sig, handler in old.items():
             signal.signal(sig, handler)
-    return 128 - rc if rc < 0 else rc
+    return rc
+
+
+def die_of(sig: int) -> int:
+    """Die of signal sig, as the locked command did; 128+sig if this process survives it.
+
+    bash quits a script on Ctrl-C only when its child died of SIGINT, so an exit of 130 would run
+    the script's next gate. coreutils `timeout` re-raises the same way, with core dumps off."""
+    resource.setrlimit(resource.RLIMIT_CORE, (0, resource.getrlimit(resource.RLIMIT_CORE)[1]))
+    signal.signal(sig, signal.SIG_DFL)
+    os.kill(os.getpid(), sig)
+    return 128 + sig
 
 
 def cmd_lock(args) -> int:
@@ -885,11 +905,8 @@ def cmd_lock(args) -> int:
     # lock, so it ends with this process.
     fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_CLOEXEC, 0o644)
     try:
-        try:
-            if not take_lock(fd, args.name, args.wait):
-                return LOCK_BUSY
-        except KeyboardInterrupt:
-            return 128 + signal.SIGINT
+        if not take_lock(fd, args.name, args.wait):
+            return LOCK_BUSY
         try:
             os.ftruncate(fd, 0)
             os.pwrite(fd, (holder_line(repo, args.command) + "\n").encode(), 0)
@@ -898,6 +915,8 @@ def cmd_lock(args) -> int:
             # Cleared while still held: a waiter that reads between the next holder's acquire and
             # its write sees "an unknown holder", never this run.
             os.ftruncate(fd, 0)
+    except KeyboardInterrupt:  # a Ctrl-C while waiting, or before or after the command runs
+        return -signal.SIGINT
     finally:
         os.close(fd)
 
@@ -1137,6 +1156,8 @@ def main(argv=None) -> int:
     except OSError as e:  # shutil.Error included: a clean message, never a traceback
         warn(f"{type(e).__name__}: {e}")
         return 1
+    if rc and rc < 0:  # lock's command died of signal -rc, or a Ctrl-C hit `lane` itself
+        return die_of(-rc)  # only now: cmd_lock has cleared the holder line and let go
     return rc or 0  # only `lock` returns a code: its command's
 
 
