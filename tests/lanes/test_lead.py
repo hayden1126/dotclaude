@@ -208,9 +208,82 @@ class Board(Lead):
         self.env["_LANE_TEST_SANDBOXED"] = "1"
         head, line = self.lane("ls").splitlines()
         cells = dict(zip(head.split(), line.split()))
-        self.assertEqual((cells["SESSIONS"], cells["WINDOW"]), ("?", "?"))
+        self.assertEqual((cells["SESSIONS"], cells["CTX"], cells["WINDOW"]), ("?", "?", "?"))
         (row,) = json.loads(self.lane("ls", "--json"))
         self.assertIsNone(row["window"])
+        self.assertIsNone(row["ctx"])
+
+
+class Ctx(Lead):
+    """The board's CTX column: the watcher's count for the lane's live sessions, marked * past
+    the soft tier and ! past hard on each session's own window (600k here: 300k/480k/520k)."""
+
+    def setUp(self):
+        super().setUp()
+        self.lane("new", "chart-fix")
+
+    def session(self, pid, sid):
+        self.write(os.path.join(self.home, ".claude", "sessions", f"{pid}.json"),
+                   json.dumps({"pid": pid, "sessionId": sid, "cwd": self.lane_path("chart-fix"),
+                               "tmux": "proj:@3.%7"}))
+
+    def ctx(self, sid, tokens, window=None):
+        rec = {"tokens": tokens, "time": time.time()}
+        if window is not None:
+            rec["window"] = window
+        self.write(os.path.join(self.tmp, "state", "dotclaude", "ctx", sid + ".json"),
+                   json.dumps(rec))
+
+    def board(self):
+        head, line = self.lane("ls").splitlines()
+        self.assertEqual(head.split().index("CTX"), head.split().index("SESSIONS") + 1)
+        cell = dict(zip(head.split(), line.split()))["CTX"]
+        (row,) = json.loads(self.lane("ls", "--json"))
+        return cell, row["ctx"]
+
+    def test_no_session_or_no_count_is_a_dash(self):
+        self.assertEqual(self.board(), ("-", None))
+        self.session(os.getpid(), "s-1")  # live, but the watcher hasn't counted it yet
+        self.assertEqual(self.board(), ("-", None))
+
+    def test_one_session(self):
+        self.session(os.getpid(), "s-1")
+        self.ctx("s-1", 212345)
+        self.assertEqual(self.board(),
+                         ("212k", {"session": "s-1", "tokens": 212345, "tier": None}))
+
+    def test_two_sessions_show_the_larger(self):
+        self.session(os.getpid(), "s-1")
+        self.session(os.getppid(), "s-2")
+        self.ctx("s-1", 120000)
+        self.ctx("s-2", 250000)
+        self.assertEqual(self.board()[0], "250k")
+        self.assertEqual(self.board()[1]["session"], "s-2")
+
+    def test_past_soft_and_past_hard(self):
+        self.session(os.getpid(), "s-1")
+        for tokens, cell, tier in ((299000, "299k", None), (300000, "300k*", "soft"),
+                                   (480000, "480k*", "wrap"), (523456, "523k!", "hard")):
+            with self.subTest(tokens=tokens):
+                self.ctx("s-1", tokens)
+                got_cell, got = self.board()
+                self.assertEqual((got_cell, got["tier"]), (cell, tier))
+
+    def test_marks_use_each_sessions_window(self):
+        self.session(os.getpid(), "s-1")
+        self.session(os.getppid(), "s-2")
+        self.ctx("s-1", 250000)          # 600k: under soft
+        self.ctx("s-2", 160000, 200000)  # 200k: past hard (151k)
+        self.assertEqual(self.board(),
+                         ("160k!", {"session": "s-2", "tokens": 160000, "tier": "hard"}))
+
+    def test_a_bad_count_or_session_id_is_skipped(self):
+        self.session(os.getpid(), "../s-1")
+        self.session(os.getppid(), "s-2")
+        self.write(os.path.join(self.tmp, "state", "dotclaude", "s-1.json"),
+                   json.dumps({"tokens": 999999}))
+        self.ctx("s-2", "lots")
+        self.assertEqual(self.board(), ("-", None))
 
 
 class Lock(Lead):

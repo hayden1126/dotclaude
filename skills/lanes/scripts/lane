@@ -2,6 +2,7 @@
 """lane: parallel Claude sessions, one git worktree ("lane") each, with single-writer records.
 
   lane init [--root DIR] [--setup CMD] [--ports A-B] [--cap N] [--locks A,B]
+            [--autopass | --no-autopass]
   lane new <id> [--branch B] [--claim N ...] [--goal T] [--files T] [--overlaps T]
                [--done-when T] [--constraints T]
   lane adopt <path> [--id SLUG]
@@ -35,6 +36,7 @@ import errno
 import fcntl
 import json
 import os
+import re
 import resource
 import shlex
 import shutil
@@ -50,6 +52,9 @@ from lanelib import Repo, git, lock, now_iso, write_json  # noqa: E402
 
 TEMPLATE = os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "..", "..",
                         "templates", "LANE.md")
+HOOKS = os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "..", "..", "hooks")
+SID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")  # hooks/stop_ring.py SID
+CTX_MARK = {"soft": "*", "wrap": "*", "hard": "!"}  # the board's CTX mark per auto-pass tier
 DEFAULT_CAP = 4
 LOCK_BUSY = 75  # EX_TEMPFAIL: `lane lock --wait` gave up on a held lock
 PROBE_GRACE = 0.05  # secs `lane lock` waits out a `lane ls` probe before it reports a holder
@@ -527,6 +532,8 @@ def cmd_init(args) -> None:
             value = getattr(args, key)
             if value is not None:
                 cfg[key] = os.path.abspath(os.path.expanduser(value)) if key == "root" else value
+        if args.autopass is not None:  # unset means on (autopass_state.decide)
+            cfg["autopass"] = args.autopass
         try:
             write_config(repo, cfg)
         except OSError as e:
@@ -536,7 +543,7 @@ def cmd_init(args) -> None:
         add_exclude(repo)
     say(f"lanes config: {repo.config_path}")
     for key, value in cfg.items():
-        say(f"  {key} = {value}")
+        say(f"  {key} = {toml_value(value) if isinstance(value, bool) else value}")
     # Claude Code asks "trust this folder?" for an untrusted cwd, and a trusted parent covers its
     # subdirs (probed 2026-10-11, 2.1.296): without this, every `lane open` window stops there.
     say(f"Trust the lanes root once, or each `lane open` window waits at Claude Code's trust "
@@ -679,6 +686,49 @@ def pr_states(repo: Repo) -> dict[str, str] | None:
     return out
 
 
+def autopass_state():
+    """hooks/autopass_state (the tiers, the ctx files), found from this script's real path, or
+    None: the board's CTX is then unknown."""
+    if HOOKS not in sys.path:
+        sys.path.insert(0, HOOKS)
+    try:
+        import autopass_state as mod
+    except Exception:
+        return None
+    return mod
+
+
+def ctx_of(aps, sids: list) -> dict | None:
+    """The most urgent context among the live sessions, from the watcher's ctx/<session>.json:
+    {"session", "tokens", "tier"}, where tier is the highest auto-pass tier the count has passed
+    on that session's window (None below soft, or when the window has no tiers). The highest
+    tier wins, then the most tokens. None when no session has a count, or without aps."""
+    best = None
+    rank = {None: 0, "soft": 1, "wrap": 2, "hard": 3}
+    for sid in sids if aps is not None else []:
+        if not isinstance(sid, str) or not SID.fullmatch(sid):
+            continue
+        rec = aps.read_ctx(sid)
+        tokens = rec.get("tokens")
+        if not aps.is_int(tokens) or tokens < 0:
+            continue
+        try:
+            tiers = aps.tiers(aps.window(None, rec.get("window")))
+        except Exception:
+            tiers = None
+        tier = next((t for t in ("hard", "wrap", "soft") if tiers and tokens >= tiers[t]), None)
+        row = {"session": sid, "tokens": tokens, "tier": tier}
+        if best is None or (rank[tier], tokens) > (rank[best["tier"]], best["tokens"]):
+            best = row
+    return best
+
+
+def ctx_cell(ctx: dict | None) -> str:
+    if ctx is None:
+        return "-"
+    return "%dk%s" % (round(ctx["tokens"] / 1000), CTX_MARK.get(ctx["tier"], ""))
+
+
 def board(repo: Repo) -> list[dict]:
     """Each lane's record plus its derived state: nothing here is stored."""
     cfg = repo.config()
@@ -686,6 +736,7 @@ def board(repo: Repo) -> list[dict]:
     trees = worktrees(repo)
     prs = pr_states(repo)
     live = lanelib.live_sessions()
+    aps = autopass_state()
     lanes = repo.lanes()
     claimers = {}
     for lane in lanes:
@@ -704,6 +755,7 @@ def board(repo: Repo) -> list[dict]:
             row["behind"], row["ahead"] = (int(x) for x in counts.stdout.split())
         here = sessions_in(live or [], path)
         row["live_sessions"] = None if live is None else [s.get("sessionId") for s in here]
+        row["ctx"] = ctx_of(aps, row["live_sessions"] or [])
         # Derived from the live session, never stored: a stored window id drifts when the window
         # closes or tmux renumbers it (invariant 4).
         row["window"] = ",".join(sorted({window_of(s["tmux"]) for s in here
@@ -797,15 +849,17 @@ def print_board(rows: list[dict]) -> None:
         warn("gh unavailable (no network or credential): PR state shows ?")
     if any(r["live_sessions"] is None for r in rows):
         warn("sandboxed: session liveness unknown; run `lane ls` bare")
-    head = ("LANE", "BRANCH", "+/-", "PR", "PORT", "CLAIMS", "SESSIONS", "WINDOW", "FLAGS")
+    head = ("LANE", "BRANCH", "+/-", "PR", "PORT", "CLAIMS", "SESSIONS", "CTX", "WINDOW",
+            "FLAGS")
     table = [head]
     for r in rows:
         ab = "?" if r["ahead"] is None else f"+{r['ahead']}/-{r['behind']}"
-        unknown = r["live_sessions"] is None  # sandboxed: liveness, so the window, unknown
+        unknown = r["live_sessions"] is None  # sandboxed: liveness, so ctx and window, unknown
         sess = "?" if unknown else str(len(r["live_sessions"]))
+        ctx = "?" if unknown else ctx_cell(r["ctx"])
         window = "?" if unknown else r["window"] or "-"
         table.append((r["id"], r["branch"], ab, r["pr"], str(r["port"] or "-"),
-                      ",".join(r.get("claims", [])) or "-", sess, window,
+                      ",".join(r.get("claims", [])) or "-", sess, ctx, window,
                       " ".join(r["flags"]) or "-"))
     widths = [max(len(row[i]) for row in table) for i in range(len(head))]
     for row in table:
@@ -1295,6 +1349,8 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--ports", help="port range A-B handed out one per lane")
     p.add_argument("--cap", type=int, help=f"live-lane cap (default {DEFAULT_CAP})")
     p.add_argument("--locks", help="comma-separated names `lane lock` accepts, e.g. gate,e2e")
+    p.add_argument("--autopass", action=argparse.BooleanOptionalAction, default=None,
+                   help="auto-pass in the lanes and the main checkout (on when never set)")
     p = sub.add_parser("new", help="make a lane: worktree, branch, record, port, setup")
     p.add_argument("id")
     p.add_argument("--branch", help="branch name (default: the id)")
