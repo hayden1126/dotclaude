@@ -319,9 +319,27 @@ base; `ls` also flags `setup-failed`; `new` takes `--goal`, `--files`, `--overla
 
 ## PR 2: the lead (`feat/lanes-lead`)
 
+**As built (2026-10-11), where it differs from the list below** (Hayden's calls in the planning
+session):
+- `lane open` stores no window. `lane ls` derives a WINDOW column from the live session's
+  `tmux` field (invariant 4: a stored window id drifts when the window closes or renumbers);
+  lane.json gets only an `opened` time. The session starts in plan mode.
+- `lane *` left `excludedCommands` (PR 1 put it there, S3). Only `init`, `new`, `adopt`, `ls`,
+  `open` and `done` are excluded, so `lane lock -- <cmd>` runs sandboxed: under `lane *` any
+  wrapped command ran sandbox-off without the `dangerouslyDisableSandbox` flag the delete guard
+  checks.
+- Locks live in `<common-dir>/lanes/_locks/<name>` (the leading `_` can't collide with a lane
+  id), and `config.toml` `locks` lists the names `lane lock` accepts (`lane init --locks`). An
+  unlisted name is refused, since a typo would split the mutual exclusion. A waiter prints the
+  holder (lane id, command, start time); `--wait` gives up with 75.
+- The ledger keeps separate `parent_root`/`parent_before`/`parent_after` fields, so the audit
+  names the lane. Both layers find the parent's checkout through `delegation_common.session_toplevel`
+  (no import of the lanes skill: the policy hook fails closed).
+- `docs/lanes.md` and `docs/delegation.md` are the as-built references.
+
 - `lane open <id> [--focus]`: an `hq-open` clone. Run `tmux new-window -d -c <lane path> -n <id>
   claude "<prompt>"`, where the prompt is "Read your lane record `<path>`, then plan the brief it
-  holds". Then record the window in `lane.json`.
+  holds". (As built: no window stored; see above.)
 - `lane lock <name> -- <cmd>`: flock under `<common-dir>/lanes/locks/`, for shared gates (a
   browser-driven test gate) and anything else that can't run twice. `config.toml` lists the known
   resources, and the skill says to wrap gate runs.
