@@ -495,40 +495,46 @@ class TierValues(Base):
 
     def test_the_window_comes_from_settings(self):
         self.settings(400_000)
-        self.assertEqual(aps.tiers(), {"soft": 200_000, "wrap": 280_000, "hard": 320_000,
+        self.assertEqual(aps.tiers(), {"soft": 200_000, "wrap": 307_000, "hard": 335_000,
                                        "compact_at": 367_000})
         self.on()
-        self.assertEqual(self.stop(321_000),
-                         {"decision": "block", "reason": text("hard", "321k", "367k")})
+        self.assertEqual(self.stop(336_000),
+                         {"decision": "block", "reason": text("hard", "336k", "367k")})
         for garbage in (True, -5, "600000", None):
             self.settings(garbage)
             self.assertEqual(aps.window(), 600_000)
 
     def test_a_window_too_small_for_the_tiers_keeps_the_watcher_quiet(self):
-        self.settings(140_000)
+        self.settings(100_000)
         self.assertIsNone(aps.tiers())
         self.on()
-        self.assertIsNone(self.stop(130_000))
-        self.assertEqual(self.ctx()["tokens"], 130_000)
+        self.assertIsNone(self.stop(90_000))
+        self.assertEqual(self.ctx()["tokens"], 90_000)
+        # wrap-up under 60k is quiet too, even with soft still under it
+        self.assertEqual(aps.tiers(110_000, {})["wrap"], 60_500)
+        self.assertIsNone(aps.tiers(109_000, {}))
 
-    def test_small_windows_scale_and_clamp_the_tiers(self):
-        # compact_at = w - 33k, hard = compact_at - 47k, wrap = hard - 40k, soft = w // 2 unless
-        # that reaches wrap, then wrap - 20k.
-        self.assertEqual(aps.tiers(200_000, {}), {"soft": 60_000, "wrap": 80_000,
-                                                  "hard": 120_000, "compact_at": 167_000})
-        self.assertEqual(aps.tiers(300_000, {}), {"soft": 150_000, "wrap": 180_000,
-                                                  "hard": 220_000, "compact_at": 267_000})
-        self.assertEqual(aps.tiers(150_000, {}), {"soft": 10_000, "wrap": 30_000,
-                                                  "hard": 70_000, "compact_at": 117_000})
+    def test_small_windows_scale_the_margins(self):
+        # compact_at = w - 33k, hard = compact_at - min(47k, 8% w), wrap = hard - min(40k,
+        # 7% w), soft = w // 2: 600k is unchanged, a small window keeps room above its start.
+        self.assertEqual(aps.tiers(600_000, {}), {"soft": 300_000, "wrap": 480_000,
+                                                  "hard": 520_000, "compact_at": 567_000})
+        self.assertEqual(aps.tiers(200_000, {}), {"soft": 100_000, "wrap": 137_000,
+                                                  "hard": 151_000, "compact_at": 167_000})
+        self.assertEqual(aps.tiers(150_000, {}), {"soft": 75_000, "wrap": 94_500,
+                                                  "hard": 105_000, "compact_at": 117_000})
+        self.assertEqual(aps.tiers(300_000, {}), {"soft": 150_000, "wrap": 222_000,
+                                                  "hard": 243_000, "compact_at": 267_000})
         self.assertEqual(aps.tiers(1_000_000, {}), {"soft": 500_000, "wrap": 880_000,
                                                     "hard": 920_000, "compact_at": 967_000})
 
     def test_the_models_window_from_the_ctx_file_lowers_the_tiers(self):
         self.on()
         self.write_ctx_window(200_000)
-        self.assertEqual(self.stop(61_000), {"decision": "block",
-                                             "reason": text("soft", "61k", "167k")})
-        self.assertEqual(self.ctx(), {**self.ctx(), "tokens": 61_000, "window": 200_000})
+        self.assertIsNone(self.stop(99_000))
+        self.assertEqual(self.stop(101_000), {"decision": "block",
+                                              "reason": text("soft", "101k", "167k")})
+        self.assertEqual(self.ctx(), {**self.ctx(), "tokens": 101_000, "window": 200_000})
 
     def test_a_larger_or_insane_model_window_does_not_raise_the_tiers(self):
         self.on()
@@ -547,8 +553,8 @@ class TierValues(Base):
         self.assertEqual(aps.window(self.transcript), 400_000)
         self.assertEqual(aps.window(os.path.join(self.tmp, "t.jsonl")), 600_000)  # ~/.claude
         self.on()
-        self.assertEqual(self.stop(321_000), {"decision": "block",
-                                              "reason": text("hard", "321k", "367k")})
+        self.assertEqual(self.stop(336_000), {"decision": "block",
+                                              "reason": text("hard", "336k", "367k")})
 
     def test_a_valid_tiers_override(self):
         self.pass_toml("autopass = true\ntiers = [20000, 40000, 50000]\n")

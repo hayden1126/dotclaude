@@ -12,11 +12,13 @@ the design.
   `window`, which the statusline widget writes from context_window.context_window_size; no
   hook payload names the model) and sane, the smaller of the two.
 - tiers(window): compact_at = window - 33000, where Claude Code really compacts
-  (spike-measured, about 567k); hard = compact_at - 47000 (the p90 handoff cost); wrap = hard -
-  40000 (about one turn); soft = window // 2. For 600k that is 300k/480k/520k/567k. On a small
-  window soft can reach wrap: then soft = wrap - 20000 (200k gives 60k/80k/120k/167k). When
-  the order soft < wrap < hard < compact_at can't hold even so (a window of 140k or less),
-  tiers is None and the watcher stays quiet. `tiers = [soft, wrap, hard]` in
+  (spike-measured, about 567k); hard = compact_at - min(47000, 8% of the window) (47k is the
+  p90 handoff cost); wrap = hard - min(40000, 7% of the window) (40k is about one turn); soft =
+  window // 2. The margins scale down so a small window isn't eaten by them, and are capped at
+  the 600k values: 600k gives 300k/480k/520k/567k, 200k gives 100k/137k/151k/167k, 150k gives
+  75k/94.5k/105k/117k. When soft would reach wrap-up, or wrap-up would sit under 60k (a
+  session starts near 40k, so the first Stop would nudge), tiers is None and the watcher stays
+  quiet: any window under about 110k. `tiers = [soft, wrap, hard]` in
   ~/.config/dotclaude/pass.toml overrides the three for live tests; a value that isn't three
   increasing positive integers below compact_at is ignored.
 - The ctx file, ctx/<session>.json = {tokens, time, window?}: the watcher writes tokens and
@@ -43,7 +45,9 @@ import time
 import tomllib
 
 DEFAULT_WINDOW = 600000
-COMPACT_BUFFER, HANDOFF_COST, TURN, SOFT_CLAMP = 33000, 47000, 40000, 20000
+COMPACT_BUFFER, HANDOFF_COST, TURN = 33000, 47000, 40000  # the margins' caps
+HARD_SHARE, WRAP_SHARE = 8, 7  # percent of the window, under the caps
+MIN_WRAP = 60000               # a session starts near 40k: a wrap-up under this nudges at once
 WINDOW_RANGE = (50000, 10_000_000)  # a model window outside this is garbage
 TIER_NAMES = ("soft", "wrap", "hard")
 PANE = re.compile(r"%\d+")
@@ -109,12 +113,10 @@ def tiers(win: int | None = None, config: dict | None = None) -> dict | None:
             and 0 < override[0] < override[1] < override[2] < compact_at):
         soft, wrap, hard = override
     else:
-        hard = compact_at - HANDOFF_COST
-        wrap = hard - TURN
+        hard = compact_at - min(HANDOFF_COST, win * HARD_SHARE // 100)
+        wrap = hard - min(TURN, win * WRAP_SHARE // 100)
         soft = win // 2
-        if soft >= wrap:
-            soft = wrap - SOFT_CLAMP
-        if not 0 < soft < wrap < hard < compact_at:
+        if soft >= wrap or wrap < MIN_WRAP or not 0 < soft < wrap < hard < compact_at:
             return None
     return {"soft": soft, "wrap": wrap, "hard": hard, "compact_at": compact_at}
 

@@ -494,9 +494,9 @@ A session can hand off on its own before auto-compact (about 567k tokens with
 tool call. It reads the context size from the transcript's last assistant `usage`, writes it to
 `~/.local/state/dotclaude/ctx/<session>.json` (for every session, `claude -p` and `--bg` ones
 included), and acts at three tiers. They come from `autoCompactWindow`, or from the model's
-window when the ctx file says it is smaller: compact at window - 33k, hard 47k before that,
-wrap-up 40k before hard, soft at half the window (on a 200k window soft would pass wrap-up, so
-it sits 20k under it: 60k, 80k, 120k).
+window when the ctx file says it is smaller: compact at window - 33k, hard 8% of the window
+before that (at most 47k), wrap-up 7% before hard (at most 40k), soft at half the window. A
+200k window gives 100k, 137k and 151k; under about 110k it stays quiet.
 
 | Tier | Tokens | With autopass on |
 |---|---|---|
