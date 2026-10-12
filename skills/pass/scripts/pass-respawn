@@ -1,0 +1,414 @@
+#!/usr/bin/env python3
+"""pass-respawn: restart this Claude session fresh in its tmux pane once the turn ends, but only on
+a passing handoff.
+
+  pass-respawn [--compact] [--print] [--foreground] [--timeout SECONDS] [-C DIR]
+
+/pass runs it last (skills/pass/SKILL.md; PLAN.md "PR 3: /pass" has the design and the spike
+results it rests on). At call time it refuses unless $TMUX_PANE names a pane (exit 2, printing
+the line to do by hand), `handoff-check -C <dir>` passes (exit 1, echoing its gaps) and, in plain
+mode, the session's claude has no background work in flight (exit 1: a respawn would kill it
+silently; a compact keeps it). Then it detaches a waiter (a double fork) and exits 0. The waiter
+polls the window's @claude_state every 0.2 s until `idle`, settles 1 s and re-reads it (anything
+else: a queued prompt restarted the turn, `resumed`), re-runs handoff-check (a failure: work after
+the handoff made it stale, `stale`) and, in plain mode, re-checks background work (`busy`). Past
+--timeout (600 s) it gives up (`timeout`). Each drop shows one line in the pane's status line and
+touches nothing else. Never respawn or compact on a failing check: the respawn throws away the
+context that could fix the gap.
+  plain    write the Star carry marker (tmux/claude-saved re-keys a starred chat to the new
+           session on its `startup`), then `tmux respawn-pane -k -t <pane> -c <toplevel> --
+           <abs claude> [--permission-mode plan] <prompt>`
+  compact  type `/compact <focus>` and Enter, wait 1 s, type the prompt and Enter (it queues
+           behind the compact, spike S4); no respawn and no carry
+The resume mode is plan mode unless the status file's Next block carries `(approved by Hayden
+YYYY-MM-DD)`; then --permission-mode is left out and the user's default applies. --print shows
+the mode and the exact argv instead of acting; --foreground runs the waiter in-process (tests).
+Each decision appends one line to $XDG_STATE_HOME/dotclaude/pass.log.
+
+Sandbox. It runs bare, so excludedCommands takes it out of the sandbox (it needs the tmux socket
+and the session's processes). Code that runs sandbox-off never trusts what the sandbox can write
+(docs/lanes.md S3). What it reads, and why each is safe:
+  - The status file (the lane record or the root STATUS.md) is sandbox-writable. It only picks
+    plan versus default mode and is never run or interpolated into argv except as a path. A
+    forged approval marker gains the default mode, which still prompts by the user's rules; the
+    prompts are fixed text with only code-computed paths.
+  - The checkout (cwd, git state) comes from the call, which the permission gate shows, and is
+    read through handoff-check, which runs git with fixed argv and full refs.
+  - tmux and claude resolve through PATH, so each must resolve, both as found and through its
+    links, outside the sandbox-writable dirs (the checkout, the main checkout, /tmp, $TMPDIR and
+    the installed settings' sandbox.filesystem.allowWrite); otherwise it refuses. Both run by
+    absolute path, so the binary checked is the binary run. tmux's PATH lacks ~/.local/bin, so
+    the respawned claude is named by absolute path too (spike S2).
+  - @claude_state comes from the tmux server; only `idle` lets the waiter act.
+  - /proc (the session's claude and its children) is the kernel's.
+  - The carry marker and pass.log live in the state dir, which sandboxed Bash can't write.
+"""
+import argparse
+import contextlib
+import dataclasses
+import datetime
+import json
+import os
+import re
+import shlex
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+
+HERE = os.path.dirname(os.path.realpath(__file__))
+sys.path.insert(0, os.path.join(HERE, "..", "..", "lanes", "scripts"))
+import lanelib  # noqa: E402
+
+HANDOFF_CHECK = os.path.join(HERE, "..", "..", "handoff", "scripts", "handoff-check")
+POLL = 0.2         # secs between @claude_state reads (it flips within 0.2 s of a Stop, S3)
+SETTLE = 1.0       # secs idle must hold, so a queued prompt can restart the turn first
+COMPACT_GAP = 1.0  # secs between typing /compact and the prompt (it queues, S4)
+TIMEOUT = 600.0
+PANE_RE = re.compile(r"%\d+")
+SHELLS = {"zsh", "bash", "sh", "dash"}
+WORK = SHELLS | {"bwrap"}  # S6: a background Bash task is bwrap, a sandbox-off one a shell
+DROPS = {
+    "stale": "pass dropped: handoff is stale; run /pass again",
+    "resumed": "pass dropped: a queued prompt restarted the turn; run /pass again",
+    "busy": "pass dropped: background work is running; wait for it, or run /pass compact",
+    "timeout": "pass dropped: the turn never went idle; run /pass again",
+    "failed": "pass failed: tmux could not respawn the pane",
+}
+
+
+class Refuse(Exception):
+    def __init__(self, code: int, message: str, reason: str):
+        super().__init__(message)
+        self.code, self.message, self.reason = code, message, reason
+
+
+@dataclasses.dataclass
+class Plan:
+    mode: str  # plain | compact
+    approved: bool
+    pane: str
+    toplevel: str
+    status: str
+    prompt: str
+    focus: str
+    tmux: str
+    claude: str | None
+    claude_pid: int | None
+    timeout: float
+
+    def actions(self) -> list[list[str]]:
+        if self.mode == "plain":
+            perm = [] if self.approved else ["--permission-mode", "plan"]
+            return [[self.tmux, "respawn-pane", "-k", "-t", self.pane, "-c", self.toplevel, "--",
+                     self.claude, *perm, self.prompt]]
+        keys = [self.tmux, "send-keys", "-t", self.pane]
+        return [[*keys, "-l", f"/compact {self.focus}"], [*keys, "Enter"],
+                [*keys, "-l", self.prompt], [*keys, "Enter"]]
+
+
+# ---- processes (spike S6) ----
+
+def proc_table(proc: str = "/proc") -> dict[int, tuple[str, int]]:
+    """{pid: (comm, ppid)} for every process /proc shows."""
+    out = {}
+    for name in os.listdir(proc):
+        if not name.isdigit():
+            continue
+        try:
+            with open(os.path.join(proc, name, "stat")) as f:
+                stat = f.read()
+        except OSError:
+            continue
+        left, right = stat.find("("), stat.rfind(")")  # comm may hold spaces and parens
+        fields = stat[right + 1:].split() if 0 <= left < right else []
+        if len(fields) >= 2 and fields[1].isdigit():
+            out[int(name)] = (stat[left + 1:right], int(fields[1]))
+    return out
+
+
+def ancestry(table: dict, pid: int | None) -> list[int]:
+    """pid and its parents, as far as the table goes (a cycle stops it)."""
+    chain = []
+    while pid in table and pid not in chain:
+        chain.append(pid)
+        pid = table[pid][1]
+    return chain
+
+
+def session_claude(table: dict, me: int) -> int | None:
+    """The nearest ancestor of me whose comm is `claude`: the session that ran this call."""
+    return next((p for p in ancestry(table, me)[1:] if table[p][0] == "claude"), None)
+
+
+def background_work(table: dict, claude: int | None, me: int | None) -> list[tuple[int, str]]:
+    """The claude's direct children that are work in flight: bwrap (a sandboxed background Bash
+    task) or a shell (a sandbox-off one), minus me's own ancestry (the shell running this call).
+    MCP servers (npm, node, socat) don't count. Once detached, me's ancestry no longer reaches
+    the claude, so every such child counts."""
+    mine = set(ancestry(table, me))
+    return [(pid, comm) for pid, (comm, ppid) in sorted(table.items())
+            if ppid == claude and comm in WORK and pid not in mine]
+
+
+# ---- inputs ----
+
+def writable_roots(repo: lanelib.Repo) -> list[str]:
+    """Dirs sandboxed Bash can write: the checkout, the main checkout, the temp dirs and the
+    installed settings' extra allowWrite paths."""
+    roots = [repo.toplevel, repo.main, "/tmp", tempfile.gettempdir()]
+    if os.environ.get("TMPDIR"):
+        roots.append(os.environ["TMPDIR"])
+    config = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude")
+    try:
+        with open(os.path.join(config, "settings.json")) as f:
+            extra = json.load(f)["sandbox"]["filesystem"]["allowWrite"]
+        roots += [os.path.expanduser(p) for p in extra if isinstance(p, str) and p.strip(".")]
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
+    return roots
+
+
+def resolve_bin(name: str, roots: list[str]) -> str:
+    """name's absolute path on PATH, refused when it or its link target sits in a dir the
+    sandbox can write (this runs sandbox-off, so a planted binary would too)."""
+    found = shutil.which(name)
+    if found is None:
+        raise Refuse(1, f"pass-respawn: {name} is not on PATH", f"no {name}")
+    found = os.path.abspath(found)
+    for path in (found, os.path.realpath(found)):
+        if root := next((r for r in roots if lanelib.inside(path, r)), None):
+            raise Refuse(1, f"pass-respawn: {name} resolves to {path}, inside the sandbox-writable "
+                         f"{root}; refusing to run it sandbox-off", f"{name} sandbox-writable")
+    return found
+
+
+def resume_prompt(status: str, in_lane: bool, approved: bool, compact: bool) -> str:
+    step = "continue with the approved next step" if approved else "plan the next step"
+    text = (f"Read your lane record {status}, then {step}." if in_lane
+            else f"Read STATUS.md (and PLAN.md if present), then {step}.")
+    return text + (" Call EnterPlanMode first." if compact and not approved else "")
+
+
+def compact_focus(status: str) -> str:
+    return ("Keep the failed approaches and why each failed, exact identifiers (paths, commands, "
+            f"ids, error text) and the repro command. {status} holds the exact facts: re-read it "
+            "rather than trusting this summary.")
+
+
+def gate(toplevel: str) -> tuple[int, str]:
+    """handoff-check on the checkout: (exit code, its output)."""
+    try:
+        p = subprocess.run([sys.executable, HANDOFF_CHECK, "-C", toplevel], capture_output=True,
+                           text=True, timeout=120)
+    except (OSError, subprocess.SubprocessError) as e:
+        return 1, f"handoff-check didn't run: {e}"
+    return p.returncode, p.stdout + p.stderr
+
+
+# ---- the log ----
+
+def log(mode: str, outcome: str, pane: str | None, detail: str = "") -> None:
+    line = (f"{datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')} "
+            f"session={os.environ.get('CLAUDE_CODE_SESSION_ID') or '-'} pane={pane or '-'} "
+            f"mode={mode} outcome={outcome}" + (f" {detail}" if detail else ""))
+    with contextlib.suppress(OSError):
+        os.makedirs(lanelib.state_dir(), exist_ok=True)
+        with open(os.path.join(lanelib.state_dir(), "pass.log"), "a") as f:
+            f.write(line.replace("\n", " ") + "\n")
+
+
+# ---- call time ----
+
+def parse(argv=None) -> argparse.Namespace:
+    ap = argparse.ArgumentParser(prog="pass-respawn", description=__doc__.split("\n\n")[0])
+    ap.add_argument("--compact", action="store_true", help="compact in place instead of respawning")
+    ap.add_argument("--print", action="store_true", help="print the mode and argv, do nothing")
+    ap.add_argument("--foreground", action="store_true", help="wait in-process (tests)")
+    ap.add_argument("--timeout", type=float, default=TIMEOUT, metavar="SECONDS",
+                    help=f"give up when the turn isn't idle by then (default {TIMEOUT:g})")
+    ap.add_argument("-C", dest="cwd", default=os.getcwd(), help="the checkout to pass")
+    return ap.parse_args(argv)
+
+
+def prepare(args: argparse.Namespace, procs) -> Plan:
+    """The checks at call time, then the plan; raises Refuse."""
+    mode = "compact" if args.compact else "plain"
+    repo = lanelib.resolve(args.cwd)
+    if repo is None:
+        raise Refuse(1, "pass-respawn: not inside a git work tree", "not a work tree")
+    _, lane = repo.identity()
+    status = lanelib.status_path(repo, lane)
+    try:
+        with open(status) as f:
+            text = f.read()
+    except OSError:
+        text = ""
+    approved = lanelib.approval(lanelib.next_block(text)) == lanelib.APPROVED
+    prompt = resume_prompt(status, lane is not None, approved, args.compact)
+    focus = compact_focus(status)
+    pane = os.environ.get("TMUX_PANE") or ""
+    if not PANE_RE.fullmatch(pane):
+        by_hand = f"/compact {focus}" if args.compact else "/clear"
+        raise Refuse(2, f"pass-respawn: not in a tmux pane. Do it by hand: {by_hand}, then: "
+                     f"{prompt}", "no tmux pane")
+    roots = writable_roots(repo)
+    tmux = resolve_bin("tmux", roots)
+    claude = None if args.compact else resolve_bin("claude", roots)
+    code, out = gate(repo.toplevel)
+    if code != 0:
+        raise Refuse(1, out.rstrip() + "\npass-respawn: refused: handoff-check failed; fix the "
+                     "gaps and run it again", "handoff-check failed")
+    claude_pid = None
+    if not args.compact:
+        table = procs()
+        claude_pid = session_claude(table, os.getpid())
+        if claude_pid is None:
+            raise Refuse(1, "pass-respawn: can't find this session's claude process, so it can't "
+                         "check for background work. Run it bare (sandbox-off), or use --compact",
+                         "no claude")
+        if work := background_work(table, claude_pid, os.getpid()):
+            names = ", ".join(f"{comm} {pid}" for pid, comm in work)
+            raise Refuse(1, f"pass-respawn: background work in flight ({names}); a respawn would "
+                         "kill it. Wait for it to finish, or use --compact (it survives a compact)",
+                         f"background work: {names}")
+    return Plan(mode, approved, pane, repo.toplevel, status, prompt, focus, tmux, claude,
+                claude_pid, args.timeout)
+
+
+# ---- the waiter ----
+
+def tmux(plan: Plan, *args: str) -> subprocess.CompletedProcess | None:
+    try:
+        return subprocess.run([plan.tmux, *args], capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
+def pane_state(plan: Plan) -> str:
+    p = tmux(plan, "show-option", "-wqv", "-t", plan.pane, "@claude_state")
+    return p.stdout.strip() if p and p.returncode == 0 else ""
+
+
+def drop(plan: Plan, outcome: str, detail: str = "") -> str:
+    tmux(plan, "display-message", "-t", plan.pane, DROPS[outcome])
+    log(plan.mode, outcome, plan.pane, detail)
+    return outcome
+
+
+def carry_path(pane: str) -> str:
+    return os.path.join(lanelib.state_dir(), "pass-carry", pane[1:] + ".json")
+
+
+def write_carry(plan: Plan) -> None:
+    """The one-shot marker tmux/claude-saved reads on the respawned session's `startup`: the
+    session leaving and its tab, keyed as claude-saved's make_tab keys it. Skipped when either
+    can't be read (the star then stays on the old chat, detached, as before)."""
+    sid = os.environ.get("CLAUDE_CODE_SESSION_ID") or ""
+    p = tmux(plan, "display-message", "-p", "-t", plan.pane, "#{start_time} #{pid} #{socket_path}")
+    parts = p.stdout.strip().split(" ", 2) if p and p.returncode == 0 else []
+    if not sid or len(parts) != 3 or not (parts[0].isdigit() and parts[1].isdigit()):
+        return
+    tab = {"socket": parts[2], "server_start": int(parts[0]), "server_pid": int(parts[1]),
+           "pane": plan.pane}
+    with contextlib.suppress(OSError):
+        lanelib.write_json(carry_path(plan.pane),
+                           {"session_id": sid, "tab": tab, "written_at": time.time()})
+
+
+def wait_and_act(plan: Plan, procs) -> str:
+    """Wait for the turn to end, recheck, then act; returns the outcome logged."""
+    deadline = time.monotonic() + plan.timeout
+    while pane_state(plan) != "idle":  # busy, or wait (a permission dialog)
+        if time.monotonic() >= deadline:
+            return drop(plan, "timeout")
+        time.sleep(POLL)
+    time.sleep(SETTLE)
+    if pane_state(plan) != "idle":
+        return drop(plan, "resumed")
+    code, out = gate(plan.toplevel)
+    if code != 0:
+        gaps = [ln.strip()[len("FAIL"):].strip() for ln in out.splitlines()
+                if ln.strip().startswith("FAIL")]
+        return drop(plan, "stale", "; ".join(gaps))
+    if plan.mode == "plain":
+        if work := background_work(procs(), plan.claude_pid, os.getpid()):
+            return drop(plan, "busy", ", ".join(f"{comm} {pid}" for pid, comm in work))
+        write_carry(plan)
+        (respawn,) = plan.actions()
+        p = tmux(plan, *respawn[1:])
+        if p is None or p.returncode != 0:
+            return drop(plan, "failed", (p.stderr.strip() if p else "tmux didn't run"))
+        log(plan.mode, "respawn", plan.pane)
+        return "respawn"
+    focus, enter, prompt, enter2 = plan.actions()
+    for argv in (focus, enter):
+        tmux(plan, *argv[1:])
+    time.sleep(COMPACT_GAP)
+    for argv in (prompt, enter2):
+        tmux(plan, *argv[1:])
+    log(plan.mode, "compact", plan.pane)
+    return "compact"
+
+
+def detach(plan: Plan, procs) -> None:
+    """Run the waiter in a double-forked grandchild (fork, setsid, fork), reparented away from
+    this call so the Bash tool's end can't reach it, with /dev/null for stdin, stdout and stderr,
+    no other inherited descriptor and / as its directory (watch-guard's exec_detached)."""
+    sys.stdout.flush()
+    sys.stderr.flush()
+    middle = os.fork()
+    if middle == 0:
+        try:
+            os.setsid()
+            if os.fork() == 0:
+                try:
+                    null = os.open(os.devnull, os.O_RDWR)
+                    for fd in (0, 1, 2):
+                        os.dup2(null, fd)
+                    os.closerange(3, os.sysconf("SC_OPEN_MAX"))
+                    os.chdir("/")
+                    wait_and_act(plan, procs)
+                except BaseException as e:  # noqa: BLE001  logged: nothing else can see it
+                    log(plan.mode, "error", plan.pane, f"{type(e).__name__}: {e}")
+                finally:
+                    os._exit(0)
+        finally:
+            os._exit(0)
+    os.waitpid(middle, 0)
+
+
+def main(argv=None, procs=proc_table) -> int:
+    args = parse(argv)
+    mode = "compact" if args.compact else "plain"
+    try:
+        plan = prepare(args, procs)
+    except Refuse as r:
+        print(r.message)
+        log(mode, "refused", os.environ.get("TMUX_PANE"), r.reason)
+        return r.code
+    if args.print:
+        print(f"mode: {plan.mode} ({'default' if plan.approved else 'plan'})")
+        if plan.mode == "plain":
+            print(f"carry: {carry_path(plan.pane)}")
+        for action in plan.actions():
+            print(shlex.join(action))
+        return 0
+    if args.foreground:
+        return 0 if wait_and_act(plan, procs) in ("respawn", "compact") else 1
+    try:
+        detach(plan, procs)
+    except OSError as e:
+        print(f"pass-respawn: couldn't detach the waiter: {e}")
+        log(mode, "refused", plan.pane, f"detach: {e}")
+        return 1
+    what = ("respawn this pane with a fresh claude" if plan.mode == "plain"
+            else "type /compact, then the resume prompt")
+    print(f"pass-respawn: once this turn ends and pane {plan.pane} goes idle, it will recheck the "
+          f"handoff and {what} ({'default' if plan.approved else 'plan'} mode).")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
