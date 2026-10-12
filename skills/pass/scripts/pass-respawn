@@ -103,7 +103,10 @@ the sandbox can write (docs/lanes.md S3). Every input, and why each is safe:
     git or tmux runs (against the early roots, and again once the checkout is known): it may
     have been edited since launch, so what it listed then can't be read back. A dir added at
     runtime with /add-dir lives only in Claude Code's memory, so it can't be seen and isn't
-    counted: an accepted limit.
+    counted: an accepted limit. So is the command line itself: the native install keeps
+    claude's full argv there (seen live on Claude Code 2.1.296, a session launched with
+    --settings), but an npm install may overwrite its process title, and then no session flag
+    is seen. Code can't tell "launched with no flags" from "title overwritten".
   - PATH is the call's, so it keeps only the absolute entries outside those dirs (as given and
     resolved). git, tmux and claude resolve through that PATH and must also resolve, as found
     and through their links, outside them; otherwise it refuses. The sanitized PATH replaces

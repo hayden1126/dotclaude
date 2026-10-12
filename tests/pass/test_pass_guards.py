@@ -428,6 +428,14 @@ def partial_gaps(text):
         [] if passages else [("no passage", "`partial`")])
 
 
+class LimitDocs(unittest.TestCase):
+    def test_the_docstring_names_the_overwritten_process_title_limit(self):
+        doc = " ".join(t.load().__doc__.split())
+        for words in ("npm install may overwrite its process title", "2.1.296",
+                      "launched with no flags"):
+            self.assertIn(words, doc)
+
+
 class PartialDocs(unittest.TestCase):
     def test_the_docs_name_every_cause_of_partial_and_where_the_prompt_stays(self):
         for rel in ("skills/pass/SKILL.md", "README.md"):
