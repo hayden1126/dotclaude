@@ -824,8 +824,8 @@ def take_lock(fd: int, name: str, wait: float | None) -> bool:
     """flock fd, saying who holds it while it waits; False when --wait ran out."""
     deadline = None if wait is None else time.monotonic() + wait
     # `lane ls` probes a lock by taking LOCK_SH for an instant (lock_holder). One retry after a
-    # short pause keeps that probe from reading as a holder: a false "waiting", or a `--wait 0`
-    # that gives up on a free lock.
+    # short pause keeps a single probe from reading as a holder (a false "waiting", or a
+    # `--wait 0` that gives up on a free lock); two probes PROBE_GRACE apart still can.
     if try_lock(fd):
         return True
     time.sleep(PROBE_GRACE)
@@ -845,7 +845,7 @@ def take_lock(fd: int, name: str, wait: float | None) -> bool:
 
 
 def run_child(command: list[str]) -> int:
-    """Run command and wait for it; its exit code, or -n (as Popen gives it) when signal n killed it.
+    """Run command and wait for it; its exit code, or -n (as Popen has it) if signal n killed it.
 
     The command shares this process group, so a Ctrl-C from the tty or a kill of the whole tree
     (Claude Code's Bash tool stops a command that way) already reaches it. SIGINT and SIGTERM are
@@ -854,8 +854,8 @@ def run_child(command: list[str]) -> int:
     handler, not SIG_IGN, so the command doesn't inherit an ignored signal. The costs:
     - A signal sent to `lane` alone no longer stops the command, and the lock stays held while it
       runs. A supervisor that signals `lane` alone and then SIGKILLs it (`timeout -k`,
-      `terminate()` then `kill()`) frees the lock while the orphaned command still runs: signal
-      the process group instead.
+      `terminate()` then `kill()`, systemd `KillMode=process`) frees the lock while the orphaned
+      command still runs: signal the process group instead.
     - A group signal that lands after the command has exec'd but before Popen returns (while it
       reads the exec status pipe) is taken as pending and replayed, so the command gets it twice.
       Blocking the signals around Popen can't tell a pre-fork arrival from a post-fork one."""

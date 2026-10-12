@@ -226,15 +226,23 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
   `config.toml` `locks`, since a typo would split the mutual exclusion. Once it holds the lock, it
   writes a holder line (lane id or `main`, start time, command), which a waiting run and the
   `lane ls` footer show. There is no pid: each sandboxed command has its own pid namespace, so a
-  pid would mislead. The line is cleared while the lock is still held, so a waiter never names
-  a run that already let go. The lock fd is close-on-exec, so a backgrounded grandchild never
-  keeps the lock. SIGINT and SIGTERM are not forwarded: the command shares `lane`'s process
+  pid would mislead. A run that ends clears the line while it still holds the lock, so a waiter
+  doesn't name it; a `lane` killed by a signal it doesn't catch (SIGKILL, SIGHUP) leaves its line
+  until the next holder overwrites it. The lock fd is close-on-exec, so a backgrounded grandchild
+  never keeps the lock. SIGINT and SIGTERM are not forwarded: the command shares `lane`'s process
   group, so a Ctrl-C or the Bash tool's kill already reaches it, and Go and Node tools read a
-  second copy as "force quit". So a signal sent to `lane` alone leaves the command running,
-  lock held. It returns the command's exit code (128+n for signal n). `--wait SECS` gives up
-  with exit 75, which a command's own 75 matches: only the "gave up on lock" stderr line tells a
-  timeout apart. A wait first retries once after 50 ms, so `lane ls`'s instant shared-lock
-  probe never reads as a holder.
+  second copy as "force quit". Two edges follow. A signal sent to `lane` alone leaves the command
+  running, lock held, and a supervisor that then SIGKILLs `lane` (`timeout -k`, `terminate()` then
+  `kill()`, systemd `KillMode=process`) frees the lock while the orphaned command still runs:
+  signal the process group instead. And a group signal that lands after the command has exec'd
+  but before `Popen` returns is replayed as pending, so the command gets it twice (blocking the
+  signals around `Popen` can't tell a pre-fork arrival from a post-fork one). `lane` returns the
+  command's exit code; when signal n killed the command, it lets go of the lock and dies of n
+  too, so a Ctrl-C stops a calling script (bash stops only for a child that died of SIGINT, not
+  one that exited 130). `--wait SECS` gives up with exit 75, which a command's own 75 matches:
+  only the "gave up on lock" stderr line tells a timeout apart. A wait first retries once after
+  50 ms, so one `lane ls` probe (an instant shared lock) doesn't read as a holder; two probes
+  50 ms apart still can, and make `--wait 0` give up on a lock nobody runs under.
 - **`hooks/lane-identity.sh`** (SessionStart, Stop, SessionEnd): the identity line, the
   `sessions[]` entry, the mirror and the end stamp. A compact keeps its session's entry, so the
   session's start (which `handoff-check` uses) doesn't move. The mirror is crash-safe: it builds
