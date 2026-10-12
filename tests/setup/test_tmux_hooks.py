@@ -6,16 +6,22 @@ inherits the tab's TMUX_PANE, and a background session (claude daemon) has none;
 CLAUDE_CODE_SESSION_ATTENDED=0 in a hook's env (probed on 2.1.289), so neither writes tab state
 nor rings, unless tmux/tmux-claude-status mapped the background session to the tab showing it
 ($XDG_STATE_HOME/dotclaude/tabs). Stubs for tmux, powershell.exe and wslpath record every call."""
+import importlib.util
 import json
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 import unittest
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 HOOKS = os.path.join(REPO, "hooks")
+
+spec = importlib.util.spec_from_file_location("stop_ring", os.path.join(HOOKS, "stop_ring.py"))
+stop_ring = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(stop_ring)
 
 STUB = """#!/usr/bin/env bash
 printf '%s\\n' "$(basename "$0") $*" >> "$STUB_LOG"
@@ -33,6 +39,20 @@ P_RUN = {**TAB, "CLAUDE_CODE_SESSION_ATTENDED": "0"}
 BG = {"CLAUDE_CODE_SESSION_ATTENDED": "0", "CLAUDE_JOB_DIR": "/tmp/job"}
 
 
+# A locale whose files read as ASCII: the C locale with Python's UTF-8 mode and coercion off.
+# Under -I those env switches are ignored and C is coerced to UTF-8, so the fake python3 below
+# (first on PATH in the stubs dir) drops -I and adds -X utf8=0 to make the default bite.
+ASCII_LOCALE = {"LC_ALL": "C", "LANG": "C", "PYTHONCOERCECLOCALE": "0", "PYTHONUTF8": "0",
+                "FAKE_PY_ASCII": "1"}
+FAKE_PYTHON = """#!/usr/bin/env bash
+if [ -n "${FAKE_PY_ASCII:-}" ]; then
+  args=(); for a in "$@"; do [ "$a" = -I ] || args+=("$a"); done
+  exec %s -X utf8=0 "${args[@]}"
+fi
+exec %s "$@"
+"""
+
+
 class Hooks(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
@@ -44,6 +64,9 @@ class Hooks(unittest.TestCase):
             with open(path, "w") as f:
                 f.write(STUB)
             os.chmod(path, 0o755)
+        with open(os.path.join(stubs, "python3"), "w") as f:
+            f.write(FAKE_PYTHON % (sys.executable, sys.executable))
+        os.chmod(os.path.join(stubs, "python3"), 0o755)
         self.log = os.path.join(self.tmp, "calls.log")
         self.state = os.path.join(self.tmp, "state")
         # The test may itself run inside a Claude session in a tmux tab: start from a clean env.
@@ -278,8 +301,8 @@ class Hooks(unittest.TestCase):
         self.run_hook("stop-ring.sh", TAB, {"background_tasks": tasks})
         self.assertEqual(self.stop_record()["waits"], ["shell", "subagent"])
         self.assertIn("stop quiet busy=1 tasks=shell,subagent,dream", self.ring_log()[-1])
-        self.assertEqual(os.listdir(os.path.join(self.state, "dotclaude", "stops")),
-                         ["abcdef12-0000.json"])  # renamed into place: no temp file left
+        self.assertEqual(sorted(os.listdir(os.path.join(self.state, "dotclaude", "stops"))),
+                         [".pruned", "abcdef12-0000.json"])  # renamed into place: no temp file
 
     def test_the_stop_record_names_the_transcript_and_unlabeled_tasks(self):
         # pass-respawn reads the transcript path from it, and blocks a plain pass on any task.
@@ -292,6 +315,193 @@ class Hooks(unittest.TestCase):
         self.assertIn("stop rang tasks=monitor", self.ring_log()[-1])
         self.run_hook("stop-ring.sh", TAB, {"transcript_path": ["not", "a", "string"]})
         self.assertNotIn("transcript_path", self.stop_record())
+
+    def test_the_stop_record_keeps_everything_since_the_last_prompts(self):
+        # pass-respawn copies `replies` for the respawned session's banner and Ctrl-b P. A Stop
+        # a hook blocked and the one ending the continued turn share a prompt_id (spike A5).
+        self.run_hook("stop-ring.sh", TAB, {"prompt_id": "p1", "last_assistant_message": "One."})
+        self.run_hook("stop-ring.sh", TAB, {"prompt_id": "p1", "stop_hook_active": True,
+                                            "last_assistant_message": "Two, " + chr(0x00E9)})
+        rec = self.stop_record()
+        self.assertEqual([(r["prompt_id"], r["text"]) for r in rec["replies"]],
+                         [("p1", "One."), ("p1", "Two, " + chr(0x00E9))])
+        self.assertEqual(rec["waits"], [])  # the rest of the record is as before
+        raw = open(os.path.join(self.state, "dotclaude", "stops", "abcdef12-0000.json"),
+                   "rb").read()
+        self.assertIn(chr(0x00E9).encode(), raw)  # ensure_ascii=False, as UTF-8
+        self.run_hook("stop-ring.sh", TAB, {"prompt_id": "p2", "last_assistant_message": None})
+        self.assertEqual(len(self.stop_record()["replies"]), 2)  # nothing to add
+
+    def test_a_claude_p_stop_keeps_no_replies(self):
+        self.run_hook("stop-ring.sh", P_RUN, {"prompt_id": "p1", "last_assistant_message": "x"})
+        rec = self.stop_record()
+        self.assertNotIn("replies", rec)
+        self.assertEqual(rec["waits"], [])
+
+    def test_a_corrupt_previous_record_starts_fresh(self):
+        stops = os.path.join(self.state, "dotclaude", "stops")
+        os.makedirs(stops)
+        for junk in ("{not json", '{"replies": "nope"}', '[1, 2]',
+                     '{"replies": [5, {"prompt_id": 1, "text": "x"}, {"prompt_id": "p0"}]}'):
+            with self.subTest(junk=junk):
+                with open(os.path.join(stops, "abcdef12-0000.json"), "w") as f:
+                    f.write(junk)
+                self.run_hook("stop-ring.sh", TAB, {"prompt_id": "p1",
+                                                    "last_assistant_message": "New."})
+                self.assertEqual([r["text"] for r in self.stop_record()["replies"]], ["New."])
+
+    def test_merging_dedupes_and_keeps_five_turns(self):
+        merge = stop_ring.merge_replies
+        r = merge(None, "a", "p1", 1)
+        self.assertEqual(r, [{"prompt_id": "p1", "text": "a", "time": 1}])
+        self.assertEqual(merge(r, "a", "p1", 2), r)              # the same reply again
+        self.assertEqual(len(merge(r, "a", "p2", 2)), 2)         # same text, a new turn
+        for pid in ("p2", "p3", "p4", "p5", "p6"):
+            r = merge(r, "reply " + pid, pid, 3)
+        self.assertEqual([x["prompt_id"] for x in r], ["p2", "p3", "p4", "p5", "p6"])
+        r = merge(r, "more", "p6", 4)
+        self.assertEqual([x["prompt_id"] for x in r], ["p2", "p3", "p4", "p5", "p6", "p6"])
+        self.assertEqual(merge(None, "", "p1", 1), [])
+        self.assertEqual(merge(None, ["x"], "p1", 1), [])
+
+    def test_a_stop_with_no_prompt_id_is_a_turn_of_its_own(self):
+        merge = stop_ring.merge_replies
+        r = merge(None, "x", None, 1)
+        self.assertEqual(r[0]["prompt_id"], "none-1.000000")
+        r = merge(r, "y", 5, 2)
+        r = merge(r, "z", "", 3)
+        self.assertEqual([x["prompt_id"] for x in r],
+                         ["none-1.000000", "none-2.000000", "none-3.000000"])
+        r = merge(r, "z", None, 4)  # the same text, but a new Stop with no id: not a repeat
+        self.assertEqual(len(r), 4)
+        # The hook: the newest Stop without a prompt_id doesn't join the turn before it.
+        self.run_hook("stop-ring.sh", TAB, {"prompt_id": "p1", "last_assistant_message": "One."})
+        self.run_hook("stop-ring.sh", TAB, {"last_assistant_message": "Notice reply."})
+        ids = [x["prompt_id"] for x in self.stop_record()["replies"]]
+        self.assertEqual(ids[0], "p1")
+        self.assertTrue(ids[1].startswith("none-"))
+
+    def test_merging_cuts_each_reply_to_64_kib(self):
+        cap = 64 * 1024
+        reply = "a" + chr(0x00E9) * cap  # two bytes each, so the cut can land mid-character
+        (kept,) = stop_ring.merge_replies(None, reply, "p1", 1)
+        body, note = kept["text"].rsplit("\n", 1)
+        self.assertLessEqual(len(kept["text"].encode()), cap)
+        self.assertGreater(len(kept["text"].encode()), cap - 100)
+        self.assertTrue(reply.startswith(body))
+        self.assertEqual(note, f"[cut to 64 KiB: the reply was {len(reply.encode())} bytes]")
+        exact = "b" * cap  # at the cap: kept whole, no note
+        self.assertEqual(stop_ring.merge_replies(None, exact, "p1", 1)[0]["text"], exact)
+
+    def test_over_128_kib_whole_older_turns_go_first(self):
+        r = None
+        for pid, ch, kib in (("p1", "a", 60), ("p2", "b", 60), ("p3", "c", 20)):
+            r = stop_ring.merge_replies(r, ch * (kib * 1024), pid, 1)
+        self.assertEqual([(x["prompt_id"], len(x["text"]) // 1024) for x in r],
+                         [("p2", 60), ("p3", 20)])
+        self.assertNotIn("dropped", r[0])
+
+    def test_over_128_kib_in_one_turn_its_oldest_replies_go_with_a_note(self):
+        r = None
+        for i, (ch, kib) in enumerate((("a", 60), ("b", 60), ("c", 20))):
+            r = stop_ring.merge_replies(r, ch * (kib * 1024), "p1", 10 + i)
+        self.assertEqual(r[0], {"prompt_id": "p1", "dropped": 1, "time": 10,
+                                "text": "[1 earlier reply of this turn dropped: over 128 KiB]"})
+        self.assertEqual([(x["text"][0], len(x["text"]) // 1024) for x in r[1:]],
+                         [("b", 60), ("c", 20)])
+        self.assertLessEqual(sum(len(x["text"].encode()) for x in r), 128 * 1024)
+        r = stop_ring.merge_replies(r, "d" * (60 * 1024), "p1", 13)  # the count carries over
+        self.assertEqual((r[0]["dropped"], r[0]["time"]), (2, 10))
+        self.assertEqual(r[0]["text"], "[2 earlier replies of this turn dropped: over 128 KiB]")
+        self.assertEqual([x["text"][0] for x in r[1:]], ["c", "d"])
+        r = stop_ring.merge_replies(r, "next turn", "p2", 14)  # a new turn: the note stays
+        self.assertEqual([x["prompt_id"] for x in r], ["p1", "p1", "p1", "p2"])
+
+    def test_the_shim_rings_by_its_defaults_without_its_module(self):
+        # As the old inline code did when python3 failed: exit 0, no record, and a ring.
+        hooks = os.path.join(self.tmp, "hooks")
+        os.mkdir(hooks)
+        for name in ("stop-ring.sh", "session-pane.sh"):
+            shutil.copy(os.path.join(HOOKS, name), hooks)
+        self.logged_before = len(self.ring_log())
+        p = subprocess.run(["bash", os.path.join(hooks, "stop-ring.sh")],
+                           input=json.dumps({"session_id": "abcdef12-0000"}),
+                           capture_output=True, text=True, timeout=10, env={**self.env, **TAB})
+        self.assertEqual((p.returncode, p.stderr), (0, ""))
+        self.decided()
+        self.assertTrue(self.rang())
+        self.assertIsNone(self.stop_record())
+
+    def test_a_previous_record_is_read_as_utf8_in_any_locale(self):
+        stops = os.path.join(self.state, "dotclaude", "stops")
+        os.makedirs(stops)
+        with open(os.path.join(stops, "abcdef12-0000.json"), "w", encoding="utf-8") as f:
+            json.dump({"replies": [{"prompt_id": "p1", "text": "caf" + chr(0x00E9)}]}, f,
+                      ensure_ascii=False)
+        self.run_hook("stop-ring.sh", {**TAB, **ASCII_LOCALE},
+                      {"prompt_id": "p2", "last_assistant_message": "next"})
+        self.assertEqual([x["text"] for x in self.stop_record()["replies"]],
+                         ["caf" + chr(0x00E9), "next"])
+
+    def test_the_event_is_read_as_utf8_in_any_locale(self):
+        self.logged_before = len(self.ring_log())
+        body = json.dumps({"session_id": "abcdef12-0000", "prompt_id": "p1",
+                           "last_assistant_message": "caf" + chr(0x00E9)}, ensure_ascii=False)
+        p = subprocess.run(["bash", os.path.join(HOOKS, "stop-ring.sh")], input=body.encode(),
+                           capture_output=True, timeout=10,
+                           env={**self.env, **TAB, **ASCII_LOCALE})
+        self.assertEqual((p.returncode, p.stderr), (0, b""))
+        self.decided()
+        self.assertEqual(self.stop_record()["replies"][-1]["text"], "caf" + chr(0x00E9))
+
+    def test_a_whitespace_only_reply_is_no_turn(self):
+        merge = stop_ring.merge_replies
+        r = merge(None, "a", "p1", 1)
+        self.assertEqual(merge(r, " \n ", "p2", 2), r)
+        old = r + [{"prompt_id": "p2", "text": "  ", "time": 2}]
+        self.assertEqual(merge(old, "c", "p1", 3),
+                         [{"prompt_id": "p1", "text": "a", "time": 1},
+                          {"prompt_id": "p1", "text": "c", "time": 3}])
+
+    def test_a_lone_surrogate_becomes_a_question_mark(self):
+        (kept,) = stop_ring.merge_replies(None, "a" + chr(0xD800) + "b", "p1", 1)
+        self.assertEqual(kept["text"], "a?b")
+        # The hook too, from raw JSON (json.dumps can't send a lone surrogate's escape).
+        self.logged_before = len(self.ring_log())
+        p = subprocess.run(["bash", os.path.join(HOOKS, "stop-ring.sh")],
+                           input='{"session_id": "abcdef12-0000", "prompt_id": "p9", '
+                                 '"last_assistant_message": "x\\ud800y"}',
+                           capture_output=True, text=True, timeout=10,
+                           env={**self.env, **TAB})
+        self.assertEqual(p.returncode, 0)
+        self.decided()
+        self.assertEqual(self.stop_record()["replies"][-1]["text"], "x?y")
+
+    def test_old_stop_records_are_pruned_once_a_day(self):
+        stops = os.path.join(self.state, "dotclaude", "stops")
+        os.makedirs(stops)
+        now = time.time()
+
+        def touch(name, age):
+            path = os.path.join(stops, name)
+            with open(path, "w") as f:
+                f.write("{}")
+            os.utime(path, (now - age, now - age))
+        touch("old.json", 8 * 86400)
+        touch("recent.json", 6 * 86400)
+        stop_ring.prune(stops, now)
+        self.assertEqual(sorted(os.listdir(stops)), [".pruned", "recent.json"])
+        touch("old.json", 8 * 86400)
+        stop_ring.prune(stops, now + 3600)  # within the day: no pass
+        self.assertIn("old.json", os.listdir(stops))
+        stop_ring.prune(stops, now + 86401)  # a day later: recent.json is now 7 days old too
+        self.assertEqual(sorted(os.listdir(stops)), [".pruned"])
+        stop_ring.prune(os.path.join(self.tmp, "nowhere"), now)  # best-effort: no error
+        # The hook prunes too.
+        touch("old.json", 8 * 86400)
+        os.utime(os.path.join(stops, ".pruned"), (now - 90000, now - 90000))
+        self.run_hook("stop-ring.sh", TAB)
+        self.assertEqual(sorted(os.listdir(stops)), [".pruned", "abcdef12-0000.json"])
 
     def test_a_subagent_stop_or_an_unsafe_id_writes_no_stop_record(self):
         self.run_hook("stop-ring.sh", TAB, {"agent_id": "a1"})

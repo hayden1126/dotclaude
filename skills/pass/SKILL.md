@@ -53,6 +53,8 @@ The waiter watches this session's own status in `~/.claude/sessions/<pid>.json` 
 5. Right before acting, it checks once more: the session is still idle, the pane still runs the same `claude`, the pane is not in copy mode, and the input box is empty. A draft Hayden is composing drops the pass in both modes, since typing would join it and a respawn would discard it. The dim ghost suggestion doesn't count.
 6. In compact mode it checks the pane again between `/compact` and the resume prompt. If copy mode, a draft or no input box came up in that second, it doesn't type the prompt: it shows it in the status line for Hayden to type, where it stays until a key press, and writes it whole into `pass.log` (logged `partial`).
 
+After a plain respawn, the fresh session shows the last turn's replies once as a banner (Hayden sees it, the model doesn't), and Ctrl-b P reopens the last 5 turns in a popup.
+
 Each drop shows one line in the pane's status line and changes nothing else:
 
 | Drop | Cause | What to do |

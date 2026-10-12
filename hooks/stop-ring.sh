@@ -28,41 +28,15 @@ input=$(cat 2>/dev/null)
 # upkeep and a monitor can run for hours, so those don't count.
 #
 # The same step writes the session's stop record, $XDG_STATE_HOME/dotclaude/stops/<session>.json
-# (time, the waits in flight, every task's label, `unlabeled` for one with none, and the
-# transcript path when it is a string), atomically, for every stop but a subagent's:
-# pass-respawn's plain mode respawns only after a stop with no task but dream, since
-# in-process agents are no child process it could see, and it reads the transcript there. A
-# session id that isn't a plain name writes none.
-read -r spawned busy tasks size transcript < <(printf '%s' "$input" | python3 -I -c 'import sys, json, os, re, time, tempfile
-try: d = json.load(sys.stdin)
-except Exception: d = {}
-if not isinstance(d, dict): d = {}
-spawned = 1 if (d.get("agent_id") or d.get("agent_type")) else 0
-waits = {"subagent", "shell", "workflow", "cloud session"}
-tasks = d.get("background_tasks")
-types = [t.get("type") for t in tasks if isinstance(t, dict)] if isinstance(tasks, list) else []
-busy = 1 if any(t in waits for t in types) else 0
-sid = d.get("session_id")
-if not spawned and isinstance(sid, str) and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", sid):
-    try:
-        stops = os.path.join(os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state"), "dotclaude", "stops")
-        os.makedirs(stops, exist_ok=True)
-        fd, tmp = tempfile.mkstemp(dir=stops, prefix=".tmp-")
-        rec = {"session_id": sid, "time": time.time(), "waits": [t for t in types if t in waits],
-               "tasks": [t.get("type") if isinstance(t, dict) and isinstance(t.get("type"), str) and t.get("type") else "unlabeled" for t in (tasks if isinstance(tasks, list) else [])]}
-        if isinstance(d.get("transcript_path"), str):
-            rec["transcript_path"] = d["transcript_path"]
-        with os.fdopen(fd, "w") as f:
-            json.dump(rec, f)
-        os.replace(tmp, os.path.join(stops, sid + ".json"))
-    except Exception:
-        try: os.unlink(tmp)
-        except Exception: pass
-labels = ",".join(t.replace(" ", "_") for t in types if isinstance(t, str) and t.strip())
-path = d.get("transcript_path")
-try: size = os.path.getsize(path) if isinstance(path, str) and "\n" not in path else "-"
-except OSError: size = "-"
-print(spawned, busy, labels or "-", size, path if size != "-" else "")' 2>/dev/null)
+# (time, the waits in flight, every task's label, the transcript path, and `replies`: what Claude
+# said in the last 5 turns), for every stop but a subagent's, and prunes
+# records older than 7 days once a day. pass-respawn's plain mode respawns only after a stop with
+# no task but dream, since in-process agents are no child process it could see; it reads the
+# transcript there and copies `replies` for the respawned session's banner
+# (hooks/pass-banner.sh) and Ctrl-b P (tmux/pass-last). hooks/stop_ring.py, beside this script's
+# real path and run with python3 -I, does all of this and has the details.
+read -r spawned busy tasks size transcript < <(printf '%s' "$input" | \
+  python3 -I "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/stop_ring.py" 2>/dev/null)
 
 # Ring unless the transcript gained a queue dequeue (or popAll) past byte $2 within the settle
 # window. Args: transcript path, its size at the Stop ("-" when unreadable: ring), pane.

@@ -22,6 +22,7 @@ import os
 import re
 import shlex
 import shutil
+import subprocess
 import sys
 import time
 import unittest
@@ -149,6 +150,9 @@ class Base(LanesRepo):
         self.script = ["busy", "idle"]
         self.stop_waits = []
         self.stop_tasks = None  # every task label; None means the waits
+        # The stop record's `replies` (hooks/stop_ring.py); None writes no key.
+        self.stop_replies = [{"prompt_id": "p1", "text": "Done: the handoff is committed.",
+                              "time": time.time()}]
         self.start_now = START
         self.status, self.updated, self.stopped = None, 0, False
         real_start = self.mod.proc_start
@@ -194,9 +198,10 @@ class Base(LanesRepo):
 
     def write_stop(self, waits, at=None):
         tasks = waits if self.stop_tasks is None else self.stop_tasks
-        self.write(os.path.join(self.state, "stops", f"{SID}.json"),
-                   json.dumps({"session_id": SID, "time": at or time.time(), "waits": waits,
-                               "tasks": tasks}))
+        rec = {"session_id": SID, "time": at or time.time(), "waits": waits, "tasks": tasks}
+        if self.stop_replies is not None:
+            rec["replies"] = self.stop_replies
+        self.write(os.path.join(self.state, "stops", f"{SID}.json"), json.dumps(rec))
 
     def transcript(self):
         return os.path.join(self.home, ".claude", "projects",
@@ -234,6 +239,15 @@ class Base(LanesRepo):
 
     def carry_marker(self):
         return os.path.join(self.state, "pass-carry", "4.json")
+
+    def last_reply(self):
+        return os.path.join(self.state, "pass-last", "4.json")
+
+    def old_last_reply(self):
+        """A pass-last file from an earlier pass in this pane."""
+        self.write(self.last_reply(), json.dumps({"tab": {}, "from_session": "older",
+                                                  "written_at": 1, "message": "old",
+                                                  "shown": True}))
 
     def notices(self):
         return [a for a in self.calls("tmux", "display-message") if a[2] == "-t"]
@@ -493,6 +507,83 @@ class Plain(Base):
         self.assertEqual(self.calls("tmux", "respawn-pane"), [])
         self.assertFalse(os.path.exists(self.carry_marker()))
         self.assertIn("mode=compact outcome=compact", self.log())
+        self.assertFalse(os.path.exists(self.last_reply()))  # the conversation survives
+
+    REPLIES = [{"prompt_id": "p1", "text": "Earlier: the tests pass.", "time": 1.0},
+               {"prompt_id": "p2", "text": "Done: the PR is up.", "time": 2.0},
+               {"prompt_id": "p2", "text": "Pass armed. Next: review " + chr(0x00E9), "time": 3.0}]
+
+    def test_a_plain_pass_writes_the_replies_for_the_banner(self):
+        self.stop_replies = self.REPLIES
+        code, out = self.run_pass("--foreground")
+        self.assertEqual(code, 0, out)
+        with open(self.last_reply(), "rb") as f:
+            raw = f.read()
+        self.assertIn(chr(0x00E9).encode(), raw)  # UTF-8, not escaped
+        last = json.loads(raw)
+        self.assertEqual(last["tab"], {"socket": "/tmp/tmux-1000/default",
+                                       "server_start": 1791000000, "server_pid": 222,
+                                       "pane": "%4"})
+        self.assertEqual((last["from_session"], last["replies"], last["shown"]),
+                         (SID, self.REPLIES, False))
+        self.assertLess(abs(time.time() - last["written_at"]), 30)
+        self.assertTrue(os.path.exists(self.carry_marker()))  # its own file, beside the carry
+
+    def test_only_replies_with_text_are_copied(self):
+        self.stop_replies = [5, {"prompt_id": "p1", "text": ""}, {"prompt_id": "p1", "text": 7},
+                             {"prompt_id": None, "text": "no prompt"}, *self.REPLIES[:1]]
+        code, out = self.run_pass("--foreground")
+        self.assertEqual(code, 0, out)
+        with open(self.last_reply()) as f:
+            self.assertEqual(json.load(f)["replies"], self.REPLIES[:1])
+
+    def test_compact_leaves_an_earlier_last_reply_alone(self):
+        self.old_last_reply()
+        code, out = self.run_pass("--compact", "--foreground")
+        self.assertEqual(code, 0, out)
+        with open(self.last_reply()) as f:
+            self.assertEqual(json.load(f)["from_session"], "older")
+
+    def test_no_reply_text_removes_an_earlier_last_reply(self):
+        # The popup must never show an earlier pass's replies as this one's.
+        for replies in (None, [], "text", [{"prompt_id": "p1", "text": ""}],
+                        [{"prompt_id": "p1", "text": None}]):
+            with self.subTest(replies=replies):
+                self.reset()
+                self.old_last_reply()
+                self.stop_replies = replies
+                code, out = self.run_pass("--foreground")
+                self.assertEqual(code, 0, out)
+                self.assertEqual(len(self.calls("tmux", "respawn-pane")), 1)
+                self.assertFalse(os.path.exists(self.last_reply()))
+
+    def test_an_unreadable_tab_writes_no_carry_and_removes_an_earlier_last_reply(self):
+        # pane_tab returns None when tmux's server line can't be read.
+        os.environ["FAKE_TMUX_SERVER"] = "not a server line"
+        self.old_last_reply()
+        code, out = self.run_pass("--foreground")
+        self.assertEqual(code, 0, out)
+        self.assertEqual(len(self.calls("tmux", "respawn-pane")), 1)
+        self.assertFalse(os.path.exists(self.carry_marker()))
+        self.assertFalse(os.path.exists(self.last_reply()))
+
+    def test_old_last_replies_are_pruned_once_a_day(self):
+        lasts = os.path.dirname(self.last_reply())
+        now = time.time()
+
+        def touch(name, age):
+            self.write(os.path.join(lasts, name), "{}")
+            os.utime(os.path.join(lasts, name), (now - age, now - age))
+        touch("9.json", 8 * 86400)
+        touch("8.json", 6 * 86400)
+        code, out = self.run_pass("--foreground")
+        self.assertEqual(code, 0, out)
+        self.assertEqual(sorted(os.listdir(lasts)), [".pruned", "4.json", "8.json"])
+        touch("9.json", 8 * 86400)
+        self.mod.prune(lasts, now + 3600)  # within the day: no pass
+        self.assertIn("9.json", os.listdir(lasts))
+        self.mod.prune(lasts, now + 86401)  # a day later: 8.json is past 7 days too
+        self.assertEqual(sorted(os.listdir(lasts)), [".pruned", "4.json"])
 
     def test_shell_status_is_at_the_prompt_so_compact_acts(self):
         # Live, 2026-10-12: at the prompt with a background shell running, the session file
@@ -662,6 +753,7 @@ class Plain(Base):
         self.assertEqual(code, 1, out)
         self.assertEqual(len(self.calls("tmux", "respawn-pane")), 1)
         self.assertFalse(os.path.exists(self.carry_marker()))
+        self.assertFalse(os.path.exists(self.last_reply()))
         self.assertIn("outcome=failed", self.log())
         self.assertIn("can't find pane", self.log())
 
@@ -671,12 +763,14 @@ class Plain(Base):
         def tmux(plan, *args):
             if args[0] == "respawn-pane":
                 self.assertTrue(os.path.exists(self.carry_marker()))
+                self.assertTrue(os.path.exists(self.last_reply()))
                 raise RuntimeError("boom")
             return real(plan, *args)
         self.mod.tmux = tmux
         code, out = self.run_pass("--foreground")
         self.assertEqual(code, 1, out)
         self.assertFalse(os.path.exists(self.carry_marker()))
+        self.assertFalse(os.path.exists(self.last_reply()))
         self.assertIn("outcome=error RuntimeError: boom", self.log())
 
     def test_a_waiter_that_cannot_detach_reports_error(self):
@@ -824,6 +918,26 @@ class Units(unittest.TestCase):
         self.mod = load()
         self.dir = __import__("tempfile").mkdtemp()
         self.addCleanup(shutil.rmtree, self.dir)
+
+    def test_the_stop_record_is_read_as_utf8_in_any_locale(self):
+        # stop_ring.py writes it as UTF-8. The C locale with Python's UTF-8 mode and coercion off
+        # reads files as ASCII by default.
+        stops = os.path.join(self.dir, "dotclaude", "stops")
+        os.makedirs(stops)
+        with open(os.path.join(stops, "s1.json"), "w", encoding="utf-8") as f:
+            json.dump({"replies": [{"prompt_id": "p1", "text": "caf" + chr(0x00E9)}]}, f,
+                      ensure_ascii=False)
+        code = ("from importlib.machinery import SourceFileLoader\n"
+                "from importlib.util import module_from_spec, spec_from_loader\n"
+                f"loader = SourceFileLoader('pr', {SCRIPT!r})\n"
+                "mod = module_from_spec(spec_from_loader('pr', loader))\n"
+                "loader.exec_module(mod)\n"
+                "print(ascii(mod.stop_record('s1')['replies'][0]['text']))\n")
+        env = {k: v for k, v in os.environ.items() if not k.startswith(("CLAUDE", "TMUX"))}
+        env.update(LC_ALL="C", LANG="C", PYTHONCOERCECLOCALE="0", XDG_STATE_HOME=self.dir)
+        p = subprocess.run([sys.executable, "-X", "utf8=0", "-c", code], capture_output=True,
+                           text=True, timeout=20, env=env)
+        self.assertEqual((p.returncode, p.stdout.strip()), (0, "'caf\\xe9'"), p.stderr)
 
     def test_the_sessions_claude_is_the_nearest_claude_ancestor(self):
         self.assertEqual(self.mod.session_claude(table(), os.getpid()), CLAUDE)

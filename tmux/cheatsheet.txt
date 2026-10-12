@@ -27,6 +27,7 @@
     right-click a tab   Star (★, a bookmark) / Shelve (save + close) / Shelf…
     C-b S        the shelf: reopen a starred or shelved chat
     C-b Enter    Star / Shelve / Shelf… too (no Shift)
+    C-b P        what Claude said before a /pass (popup; also in both menus)
 
   SESSION
     C-b d        detach (keeps running)

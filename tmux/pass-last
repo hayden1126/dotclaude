@@ -1,0 +1,102 @@
+#!/usr/bin/env bash
+# pass-last: show what a Claude session said before a plain /pass respawned its tab.
+#
+#   pass-last [<pane>]   the tab's replies before a pass, in less (opens at the end; q closes
+#                        it); with no pane, tmux's current pane
+#
+# pass-respawn writes $XDG_STATE_HOME/dotclaude/pass-last/<pane number>.json ({tab, from_session,
+# written_at, replies, shown}) right before it respawns the pane: the replies of the last 5 turns
+# (stop-ring.sh keeps them; a turn is a run of replies with one prompt_id). hooks/pass-banner.sh
+# shows the last turn once as the new session's banner. This shows every turn, as often as asked,
+# oldest first, each under a header line with its time, and less opens at the end, on the last
+# turn (-+F: a LESS=-F in the environment would close a short popup at once). Only when the entry's tab is this pane on this tmux server (a pane number repeats on a
+# new server); otherwise it says there is none. Control characters (C0 but tab and newline, DEL,
+# C1) are dropped. Linked into ~/.local/bin by setup-tmux.sh; Ctrl-b P (tmux/claude.conf) opens
+# it in a popup, and the Ctrl-b Enter menu (tmux/base.conf) and the tab's right-click menu
+# (tmux/claude.conf) have an entry.
+# tests/setup/test_pass_last.py holds the cases.
+set -uo pipefail
+
+case "${1:-}" in -h|--help) sed -n '2,5p' "$0"; exit 0 ;; esac
+state="${XDG_STATE_HOME:-$HOME/.local/state}/dotclaude"
+pane="${1:-}"
+# tmux's man page doesn't call a popup's command a format, so Ctrl-b P passes no pane.
+[ -n "$pane" ] || pane=$(tmux display -p '#{pane_id}' 2>/dev/null)
+server=""
+if [[ "$pane" =~ ^%[0-9]+$ ]]; then
+  server=$(tmux display -p -t "$pane" '#{start_time} #{pid} #{socket_path}' 2>/dev/null)
+fi
+
+IFS= read -r -d '' PY <<'EOF'
+import json, os, re, sys, time
+
+pane, server = sys.argv[1], sys.argv[2]
+CONTROL = re.compile("[%s]" % re.escape("".join(map(chr, [*range(0, 9), *range(11, 32),
+                                                          *range(127, 160)]))))
+NONE = "No reply saved from a /pass in this tab."
+
+def tab():
+    parts = server.rstrip("\n").split(" ", 2)
+    if not re.fullmatch(r"%\d+", pane) or len(parts) != 3 or not (
+            parts[0].isdigit() and parts[1].isdigit()) or not parts[2]:
+        return None
+    return {"socket": parts[2], "server_start": int(parts[0]), "server_pid": int(parts[1]),
+            "pane": pane}
+
+def clean(text):
+    text = text.encode("utf-8", "replace").decode("utf-8")   # a lone surrogate becomes '?'
+    return CONTROL.sub("", text.replace("\r\n", "\n"))
+
+def when(t):
+    if isinstance(t, (int, float)) and not isinstance(t, bool):
+        return time.strftime("%Y-%m-%d %H:%M", time.localtime(t))
+    return "?"
+
+def groups(replies):
+    """Turns: runs of replies that share a prompt_id, oldest first. hooks/pass_banner.py's
+    newest_group takes the last run the same way, so the banner and this agree."""
+    out = []
+    for r in replies if isinstance(replies, list) else []:
+        if not (isinstance(r, dict) and isinstance(r.get("prompt_id"), str)
+                and isinstance(r.get("text"), str) and r["text"].strip()):
+            continue
+        if out and out[-1][0] == r["prompt_id"]:
+            out[-1][1].append(r)
+        else:
+            out.append((r["prompt_id"], [r]))
+    return out
+
+def show():
+    here = tab()
+    if here is None:
+        return NONE + " (tmux can't read the pane)"
+    try:
+        with open(os.path.join(os.environ["PASS_LAST_DIR"], pane[1:] + ".json"),
+                  encoding="utf-8") as f:
+            e = json.load(f)
+    except (OSError, ValueError):
+        e = None
+    found = groups(e.get("replies")) if isinstance(e, dict) else []
+    if not found:
+        return NONE
+    if e.get("tab") != here:
+        return NONE + " (the saved one is from another tab or tmux server)"
+    sid = e.get("from_session")
+    parts = ["Replies before the pass (saved %s, session %s); the newest are last, q closes."
+             % (when(e.get("written_at")), clean(sid) if isinstance(sid, str) else "?")]
+    for i, (_, rs) in enumerate(found):
+        last = " (last turn)" if i == len(found) - 1 else ""
+        parts.append("== Replies from %s%s ==" % (when(rs[0].get("time")), last))
+        parts.extend(clean(r["text"]).strip() for r in rs)
+    return "\n\n".join(parts)
+
+sys.stdout.buffer.write((show() + "\n").encode("utf-8", "replace"))
+EOF
+
+text=$(PASS_LAST_DIR="$state/pass-last" python3 -I -c "$PY" "$pane" "$server" 2>&1)
+if [ -t 1 ]; then
+  printf '%s\n' "$text" | less -+F +G
+else
+  printf '%s\n' "$text"
+fi
+exit 0
