@@ -148,12 +148,52 @@ class PinnedPath(Plain):
                                  ["/w"], ["/w/deny"])
         self.assertEqual(got, os.pathsep.join(["/ok/bin", "/w/deny/bin"]))
 
-    def test_the_interpreter_is_pinned(self):
+    def test_the_interpreter_is_pinned_and_isolated(self):
         with open(SCRIPT) as f:
             first = f.readline()
-        self.assertEqual(first, "#!/usr/bin/python3\n")
-        self.assertIn("/usr/bin/python3", self.mod.__doc__)
+        self.assertEqual(first, "#!/usr/bin/python3 -I\n")
+        self.assertIn("/usr/bin/python3 -I", self.mod.__doc__)
+        self.assertIn("PYTHONPATH", self.mod.__doc__)
 
+    def plant_argparse(self):
+        """A dir on PYTHONPATH holding an argparse.py that leaves a marker when imported."""
+        planted, marker = os.path.join(self.tmp, "pyplant"), os.path.join(self.tmp, "imported")
+        self.write(os.path.join(planted, "argparse.py"),
+                   f"open({marker!r}, 'w').close()\nraise SystemExit(7)\n")
+        os.environ["PYTHONPATH"] = planted
+        return marker
+
+    def test_pythonpath_never_reaches_the_script(self):
+        marker = self.plant_argparse()
+        p = subprocess.run([SCRIPT, "--help"], capture_output=True, text=True, env=os.environ)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertFalse(os.path.exists(marker), "a PYTHONPATH module ran in pass-respawn")
+
+    def test_pythonpath_never_reaches_handoff_check(self):
+        marker = self.plant_argparse()
+        code, out = self.mod.gate(self.main, os.environ["PATH"])
+        self.assertEqual(code, 0, out)
+        self.assertFalse(os.path.exists(marker), "a PYTHONPATH module ran in handoff-check")
+
+    def test_handoff_check_still_runs_under_dash_i(self):
+        p = subprocess.run([sys.executable, "-I", self.mod.HANDOFF_CHECK, "-C", self.main],
+                           capture_output=True, text=True, env=os.environ)
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+
+
+    def test_a_waiter_run_through_the_dash_i_shebang_is_recognised(self):
+        # The kernel runs `#!/usr/bin/python3 -I` as python3 -I <script> ...: the script is argv[2].
+        procdir = os.path.join(self.tmp, "proc")
+        for pid, argv in ((10, ["/usr/bin/python3", "-I", SCRIPT, "-C", "/x"]),
+                          (11, [SCRIPT, "--compact"]),
+                          (12, ["/usr/bin/python3", "-I", "/elsewhere/other", "pass-respawn"]),
+                          (13, ["/usr/bin/python3", "-c", "pass-respawn"])):
+            self.write(os.path.join(procdir, str(pid), "cmdline"), "\0".join(argv) + "\0")
+        self.assertEqual(self.mod.proc_cmdline(10, procdir),
+                         ["/usr/bin/python3", "-I", SCRIPT, "-C", "/x"])
+        self.assertIsNone(self.mod.proc_cmdline(99, procdir))
+        got = {pid: self.mod.is_pass_respawn(pid, procdir) for pid in (10, 11, 12, 13, 99)}
+        self.assertEqual(got, {10: True, 11: True, 12: False, 13: False, 99: False})
 
 # ---- 3. any background task blocks a plain pass ------------------------------------------------
 

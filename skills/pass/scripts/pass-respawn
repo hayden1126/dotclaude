@@ -1,4 +1,4 @@
-#!/usr/bin/python3
+#!/usr/bin/python3 -I
 """pass-respawn: restart this Claude session fresh in its tmux pane once the turn ends, but only on
 a passing handoff.
 
@@ -70,7 +70,10 @@ the sandbox can write (docs/lanes.md S3). Every input, and why each is safe:
     The prompts are fixed text with that path and nothing read from a file.
   - The checkout (cwd, git state) comes from the call, which the permission gate shows, and is
     read through handoff-check and lanelib, which run git with fixed argv and full refs.
-  - The interpreter is /usr/bin/python3, named in the shebang, so no PATH lookup picks it.
+  - The interpreter is /usr/bin/python3 -I, named in the shebang, so no PATH lookup picks it,
+    and handoff-check runs under the same `-I`. Isolated mode keeps PYTHONPATH, PYTHONHOME,
+    PYTHONSTARTUP and the like (the call's environment) and the user site dir out, and puts
+    neither the script's dir nor the cwd on sys.path; both scripts add lanelib's dir themselves.
   - This script (as invoked, which may be setup.sh's link, and its target), the handoff-check
     it runs and the lanelib it imports must sit outside the sandbox-writable dirs, as found
     and through their links; otherwise it refuses. Those dirs are the checkout, the main
@@ -231,6 +234,19 @@ def proc_start(pid: int, proc: str = "/proc") -> int | None:
         return None if fields[0] in ("Z", "X") else int(fields[19])
     except (OSError, ValueError, IndexError, TypeError):
         return None
+
+
+def proc_cmdline(pid: int, proc: str = "/proc") -> list[str] | None:
+    """pid's argv (/proc/<pid>/cmdline, NUL-separated), or None when it can't be read."""
+    try:
+        with open(os.path.join(proc, str(int(pid)), "cmdline"), "rb") as f:
+            data = f.read()
+    except (OSError, ValueError, TypeError):
+        return None
+    args = data.split(b"\0")
+    if args and args[-1] == b"":
+        args.pop()  # the terminating NUL
+    return [a.decode("utf-8", "surrogateescape") for a in args]
 
 
 def ancestry(table: dict, pid: int | None) -> list[int]:
@@ -595,8 +611,9 @@ def compact_focus(status_rel: str) -> str:
 def gate(toplevel: str, path: str) -> tuple[int, str]:
     """handoff-check on the checkout, with the sanitized PATH: (exit code, its output)."""
     try:
-        p = subprocess.run([sys.executable, HANDOFF_CHECK, "-C", toplevel], capture_output=True,
-                           text=True, timeout=120, env=dict(os.environ, PATH=path))
+        p = subprocess.run([sys.executable, "-I", HANDOFF_CHECK, "-C", toplevel],
+                           capture_output=True, text=True, timeout=120,
+                           env=dict(os.environ, PATH=path))
     except (OSError, subprocess.SubprocessError) as e:
         return 1, f"handoff-check didn't run: {e}"
     return p.returncode, p.stdout + p.stderr
@@ -888,15 +905,18 @@ def claim(fd: int) -> None:
     os.pwrite(fd, f"{os.getpid()} {proc_start(os.getpid())}\n".encode(), 0)
 
 
-def is_pass_respawn(pid: int) -> bool:
-    """Whether pid runs this script: its interpreter's first argument (or argv[0]) is
-    pass-respawn."""
-    try:
-        with open(f"/proc/{int(pid)}/cmdline", "rb") as f:
-            argv = f.read().split(b"\0")
-    except OSError:
-        return False
-    return any(os.path.basename(a) == b"pass-respawn" for a in argv[:2])
+def is_pass_respawn(pid: int, proc: str = "/proc") -> bool:
+    """Whether pid runs this script: argv[0], or the interpreter's first argument past its own
+    flags (the shebang's `python3 -I <script>`), is pass-respawn. `-c` or `-m` means it isn't."""
+    argv = proc_cmdline(pid, proc) or []
+    if argv and os.path.basename(argv[0]) == "pass-respawn":
+        return True
+    for arg in argv[1:]:
+        if not arg.startswith("-"):
+            return os.path.basename(arg) == "pass-respawn"
+        if arg[1:2] in ("c", "m"):
+            return False
+    return False
 
 
 def cancel() -> int:
