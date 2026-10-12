@@ -104,6 +104,9 @@ TIMEOUT = 600.0
 MAX_TIMEOUT = 3600.0
 PANE_RE = re.compile(r"%\d+")
 PANE_FORMAT = "#{pane_pid} #{pane_current_command}"
+PROMPT_MARK = chr(0x276F)  # the input box's prompt mark, then a no-break space
+PROMPT_LINE = re.compile(PROMPT_MARK + "[" + chr(0xA0) + " ]")
+ESCAPE = re.compile(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)?|[()*+][0-~]|[@-_])")
 DROPS = {
     "stale": "pass dropped: handoff is stale; run /pass again",
     "resumed": "pass dropped: the session went on (a queued or typed prompt); run /pass again",
@@ -111,7 +114,7 @@ DROPS = {
             "/pass compact",
     "gone": "pass dropped: the pane or its claude went away; run /pass again",
     "timeout": "pass dropped: the turn never went idle; run /pass again",
-    "failed": "pass failed: tmux could not respawn the pane",
+    "failed": "pass failed: tmux could not respawn or type into the pane; see pass.log",
     "error": "pass failed: an error in the waiter; see pass.log",
 }
 
@@ -348,6 +351,60 @@ def approved_now(plan: Plan, session: dict | None) -> bool:
     return lanelib.approval(lanelib.next_block(text), since) == lanelib.APPROVED
 
 
+# ---- the input box ----
+
+def sgr_dim(params: str, dim: bool) -> bool:
+    """Whether text is dim after an SGR sequence with these params: 2 turns dim on, 0, 22 and a
+    bare reset turn it off. An extended colour's own numbers (38;5;2) are skipped, not read."""
+    codes = [int(p) if p.isdigit() else 0 for p in params.replace(":", ";").split(";")]
+    i = 0
+    while i < len(codes):
+        if codes[i] in (38, 48, 58):
+            i += 3 if i + 1 < len(codes) and codes[i + 1] == 5 else 5
+            continue
+        if codes[i] == 2:
+            dim = True
+        elif codes[i] in (0, 22):
+            dim = False
+        i += 1
+    return dim
+
+
+def visible(line: str) -> str:
+    """line (tmux capture-pane -e) as plain text, less its dim spans (Claude Code's ghost
+    suggestion) and every escape. Dim starts off on each line: a dim span tmux carried over
+    without repeating it then reads as a draft, which only drops the pass."""
+    out, dim, pos = [], False, 0
+    for m in ESCAPE.finditer(line):
+        if not dim:
+            out.append(line[pos:m.start()])
+        pos = m.end()
+        seq = m.group(0)
+        if seq.startswith("\x1b[") and seq.endswith("m"):
+            dim = sgr_dim(seq[2:-1], dim)
+    if not dim:
+        out.append(line[pos:])
+    return "".join(out)
+
+
+def input_box(screen: str) -> str | None:
+    """The text in Claude Code's input box on a captured pane, "" when empty, None when there is
+    no box. The box is the last line holding the prompt mark and a space; a wrapped draft goes on
+    below it, up to the status bar's rule (a box-drawing character). The mark and the rule are
+    found with every escape stripped (the rule is dim); the text is read without dim spans."""
+    raw = screen.split("\n")
+    plain = [ESCAPE.sub("", ln) for ln in raw]
+    at = next((i for i in range(len(raw) - 1, -1, -1) if PROMPT_LINE.search(plain[i])), None)
+    if at is None:
+        return None
+    text = [visible(raw[at].split(PROMPT_MARK, 1)[1])]
+    for line, bare in zip(raw[at + 1:], plain[at + 1:]):
+        if bare.strip() and 0x2500 <= ord(bare.strip()[0]) <= 0x257F:
+            break
+        text.append(visible(line))
+    return " ".join(t.strip() for t in text if t.strip())
+
+
 # ---- inputs ----
 
 def allow_write(path: str, base: str) -> list[str]:
@@ -553,8 +610,22 @@ def observe(plan: Plan, procs=None) -> tuple[str, str, dict | None]:
     return ("idle" if idle else "busy"), str(session.get("status")), session
 
 
-def drop(plan: Plan, outcome: str, detail: str = "") -> str:
-    tmux(plan, "display-message", "-t", plan.pane, DROPS[outcome])
+def pane_problem(plan: Plan) -> str | None:
+    """Why the pane can't take keys or a respawn now, or None: copy mode (keys would scroll it,
+    not type), or text Hayden is composing in the input box (typing would join it, a respawn
+    would discard it), or no input box at all (a dialog or a full-screen view)."""
+    p = tmux(plan, "display-message", "-p", "-t", plan.pane, "#{pane_in_mode}")
+    if p is None or p.returncode != 0 or p.stdout.strip() != "0":
+        return "pane in copy mode"
+    p = tmux(plan, "capture-pane", "-e", "-p", "-t", plan.pane)
+    box = input_box(p.stdout) if p is not None and p.returncode == 0 else None
+    if box is None:
+        return "no input box"
+    return "unsent draft in the input box" if box else None
+
+
+def drop(plan: Plan, outcome: str, detail: str = "", shown: str | None = None) -> str:
+    tmux(plan, "display-message", "-t", plan.pane, shown or DROPS[outcome])
     log(plan.mode, outcome, plan.pane, detail)
     return outcome
 
@@ -627,6 +698,8 @@ def wait_and_act(plan: Plan, procs) -> str:
         return drop(plan, "gone", detail)
     if state != "idle" or session["statusUpdatedAt"] != seen:
         return drop(plan, "resumed", f"status {detail} at the final re-check")
+    if why := pane_problem(plan):
+        return drop(plan, "busy", f"busy: {why}", f"pass dropped: {why}; run /pass again")
     if plan.mode == "plain":
         carry = None
         try:
@@ -640,12 +713,13 @@ def wait_and_act(plan: Plan, procs) -> str:
             raise
         log(plan.mode, "respawn", plan.pane, "default mode" if approved else "plan mode")
         return "respawn"
-    focus, enter, prompt, enter2 = actions
-    for argv in (focus, enter):
-        tmux(plan, *argv[1:])
-    time.sleep(COMPACT_GAP)
-    for argv in (prompt, enter2):
-        tmux(plan, *argv[1:])
+    for i, argv in enumerate(actions):  # /compact <focus>, Enter, the prompt, Enter
+        if i == 2:
+            time.sleep(COMPACT_GAP)
+        p = tmux(plan, *argv[1:])
+        if p is None or p.returncode != 0:
+            return drop(plan, "failed", f"send-keys {i + 1} of 4: "
+                        + (p.stderr.strip() if p else "tmux didn't run"))
     log(plan.mode, "compact", plan.pane, "default mode" if approved else "plan mode")
     return "compact"
 
