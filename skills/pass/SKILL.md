@@ -33,28 +33,40 @@ The record holds the exact facts and the fresh session re-reads it. So the hando
    - `<toplevel>` is the literal path from `git rev-parse --show-toplevel`.
    - Run it as a bare command (no `cd`, pipe, `&&` or `;`), so the `excludedCommands` match takes it out of the sandbox. It needs the tmux socket and the session's processes.
    - Always pass `-C`. The argument-less form is unprobed against the `excludedCommands` match.
-   - It refuses with no `$TMUX_PANE` (and prints the line to run by hand), on a failing `handoff-check`, and when it can't find this session's `claude` and its session file. Fix the cause and run it again; never work around a refusal.
+   - It refuses with no `$TMUX_PANE` (and prints the line to run by hand), on a failing `handoff-check`, when it can't find this session's `claude` and its session file, when it or a binary it runs sits where the sandbox can write, and when a pass is already pending for this session. Fix the cause and run it again; never work around a refusal.
    - Not on PATH means `./setup.sh` hasn't run since it was added.
 
 6. **Say in one line what happens when the turn ends, then stop.** For example: "When this turn ends, the pane restarts fresh in plan mode and reads STATUS.md." Do nothing after the call. Any edit or commit after it makes the handoff stale, and the waiter drops the pass.
 
+7. **If Hayden says not to pass after the call**, run `pass-respawn -C <toplevel> --cancel`. It ends this session's pending waiter (logged `cancelled`), and says so when nothing was pending. A prompt he types mid-turn drops the pass anyway; `--cancel` makes it certain.
+
 ## What happens after the turn
 
-The waiter watches this session's own status in `~/.claude/sessions/<pid>.json` (not the tab's) until it reads idle, waits 1 s, and checks again. It drops the pass if Hayden typed a prompt after the call. Then it re-runs `handoff-check`, reads the resume mode, and in plain mode checks the session's stop record for background work. Right before acting it checks once more that the session is still idle and the pane still runs the same `claude`. Each drop shows one line in the pane's status line and changes nothing else:
+The waiter watches this session's own status in `~/.claude/sessions/<pid>.json` (not the tab's) until it reads idle, waits 1 s, and checks again. Then, in order:
+
+1. It re-runs `handoff-check`.
+2. It drops the pass if Hayden typed a prompt after the call, or queued one mid-turn, or the transcript can't be read.
+3. It reads the resume mode.
+4. In plain mode, it checks the session's stop record for background work: any task but memory upkeep (`dream`) drops it.
+5. Right before acting, it checks once more: the session is still idle, the pane still runs the same `claude`, the pane is not in copy mode, and the input box is empty. A draft Hayden is composing drops the pass in both modes, since typing would join it and a respawn would discard it. The dim ghost suggestion doesn't count.
+
+Each drop shows one line in the pane's status line and changes nothing else:
 
 | Drop | Cause | What to do |
 |---|---|---|
 | `stale` | work landed after the handoff (an edit, a commit) | run the delta handoff, then `/pass` again |
 | `resumed` | Hayden typed a prompt after the call, or the turn restarted | finish that turn, then `/pass` again if it still applies |
-| `busy` | the stop listed background work or a teammate (or wrote no record) | wait for it, or `/pass compact` |
+| `busy` | the stop listed background work, a teammate or a monitor (or wrote no record); or, at the last check, the pane was in copy mode, had a draft in the input box, or showed no input box | wait for the work, or `/pass compact`; leave copy mode or send or clear the draft, then `/pass` again |
 | `gone` | the session, its process or the pane went away or changed (a `/clear`, an exit) | `/pass` again from the live session |
 | `timeout` | the turn never ended (600 s) | `/pass` again |
+| `cancelled` | `pass-respawn -C <toplevel> --cancel` ended the waiter | nothing; `/pass` again when wanted |
+| `failed` | tmux could not respawn the pane or type into it | read `pass.log`, then `/pass` again |
 
 Each decision appends one line to `$XDG_STATE_HOME/dotclaude/pass.log` (`~/.local/state/dotclaude/pass.log` by default).
 
 ## Resume mode
 
-The fresh session starts in **plan mode** unless the status doc's Next block carries `(approved by Hayden YYYY-MM-DD)` on its **first** item, dated within this session. Then it starts in the user's default mode and continues. A marker on a later item is ignored. In compact mode the resume prompt asks for `EnterPlanMode` instead. The handoff skill writes the marker only for an approval Hayden gave in this session (its step 6), so each new step stops at a human checkpoint.
+The fresh session starts in **plan mode** unless the status doc's Next block carries `(approved by Hayden YYYY-MM-DD)` on its **first** item, dated within this session (not before its start, not after today). With the session's start unknown it stays in plan mode. A same-day marker from an earlier session can't be told apart by its date, so it counts. Then it starts in the user's default mode and continues. A marker on a later item is ignored. In compact mode the resume prompt asks for `EnterPlanMode` instead. The handoff skill writes the marker only for an approval Hayden gave in this session (its step 6), so each new step stops at a human checkpoint.
 
 ## Common Mistakes
 

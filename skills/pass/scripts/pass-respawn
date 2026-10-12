@@ -2,29 +2,42 @@
 """pass-respawn: restart this Claude session fresh in its tmux pane once the turn ends, but only on
 a passing handoff.
 
-  pass-respawn [--compact] [--print] [--foreground] [--timeout SECONDS] [-C DIR]
+  pass-respawn -C DIR [--compact] [--print] [--foreground] [--timeout SECONDS]
+  pass-respawn -C DIR --cancel
 
 /pass runs it last (skills/pass/SKILL.md; PLAN.md "PR 3: /pass" has the design and the spike
 results it rests on). At call time it refuses unless $TMUX_PANE names a pane (exit 2, printing
 the line to do by hand) and `handoff-check -C <dir>` passes (exit 1, echoing its gaps). It also
 refuses (exit 1) when it can't find this session: the nearest `claude` ancestor process, whose
 Claude Code session file ~/.claude/sessions/<pid>.json must name $CLAUDE_CODE_SESSION_ID, the
-process's own start time (procStart, so a reused pid can't pass) and this pane. Then it detaches
-a waiter (a double fork; a fork or setsid that fails exits 1 and logs `error`) and exits 0.
+process's own start time (procStart, so a reused pid can't pass) and this pane. One pass may be
+pending per session: the waiter holds an exclusive flock on
+$XDG_STATE_HOME/dotclaude/pass-pending/<session>.lock for its whole life, with its pid and start
+time written in it, and a second call while it is held refuses (exit 1). Then it detaches the
+waiter (a double fork; a fork or setsid that fails exits 1 and logs `error`) and exits 0.
+--cancel ends this session's pending waiter: SIGTERM to the pid in the lock, only once that pid
+is a live pass-respawn with the start time written beside it; the waiter logs `cancelled` and
+exits. With nothing pending it says so and exits 0.
 
 The waiter polls that session file every 0.2 s until its status is `idle` with a statusUpdatedAt
 later than the call: this session's own turn has ended (the file says `busy` for the whole turn,
 tool calls included, and stays busy when a hook blocks the Stop). It settles 1 s and re-reads it
 (not idle, or a new statusUpdatedAt: a queued prompt restarted the turn, `resumed`). It re-runs
 handoff-check (a failure: work after the handoff made it stale, `stale`), drops `resumed` when
-the transcript gained a typed prompt after the call (Hayden spoke, and his words may cancel the
-pass), and only then reads the resume mode and builds the prompt. In plain mode it requires the
-session's stop record (hooks/stop-ring.sh, $XDG_STATE_HOME/dotclaude/stops/<session>.json) dated
-after the call with no waits in flight and no teammate, since a respawn kills background work,
-in-process agents included, which no process check can see (`busy`, also with no record). Right before acting it
-re-checks: the session file still idle with the same statusUpdatedAt (`resumed`), the process
-alive with the same procStart, and the pane still running that claude (pane_pid is the claude or
-its ancestor, pane_current_command is `claude`). A pane tmux can't find, a missing session file,
+the transcript gained a typed prompt after the call, or a prompt queued mid-turn (a queue
+enqueue, or a queued_command attachment from a person: Claude Code folds those into the running
+turn with no user entry), since Hayden spoke and his words may cancel the pass. The transcript
+is the stop record's transcript_path, else the session file's cwd slug; one it can't read drops
+`resumed` too. Only then it reads the resume mode and builds the prompt. In plain mode it
+requires the session's stop record (hooks/stop-ring.sh, $XDG_STATE_HOME/dotclaude/stops/
+<session>.json) dated after the call with no waits and no task but `dream`, since a respawn
+kills background work, in-process agents and monitors included, which no process check can see
+(`busy`, also with no record). Right before acting it re-checks: the session file still idle
+with the same statusUpdatedAt (`resumed`), the process alive with the same procStart, the pane
+still running that claude (pane_pid is the claude or its ancestor, pane_current_command is
+`claude`), the pane not in copy mode (`#{pane_in_mode}` 0), and Claude Code's input box present
+and empty (`busy` otherwise: typing would join a draft and a respawn would discard it; the dim
+ghost suggestion is not a draft). A pane tmux can't find, a missing session file,
 a dead or replaced process, or a session file naming another session or pane drops `gone` at
 once, while waiting too. Past --timeout (600 s; at most 3600) it gives up (`timeout`). Each drop
 shows one line in the pane's status line and touches nothing else. Never respawn or compact on a
@@ -34,10 +47,13 @@ failing check: the respawn throws away the context that could fix the gap.
            <abs claude> [--permission-mode plan] <prompt>`; the marker is removed again when
            the respawn fails (`failed`) or anything after writing it raises
   compact  type `/compact <focus>` and Enter, wait 1 s, type the prompt and Enter (it queues
-           behind the compact, spike S4); no respawn and no carry
+           behind the compact, spike S4); no respawn and no carry. A send-keys that fails
+           stops there and logs `failed`
 The resume mode is plan mode unless the first item of the status file's Next block carries
-`(approved by Hayden YYYY-MM-DD)` dated on or after the session's start (lanelib.approval); then
---permission-mode is left out and the user's default applies. --print shows the mode and the
+`(approved by Hayden YYYY-MM-DD)` dated on or after the session's start and not after today
+(lanelib.approval); then --permission-mode is left out and the user's default applies. An
+unknown session start reads as unapproved. A same-day marker from an earlier session can't be
+told apart by its date, so it counts. --print shows the mode and the
 exact argv instead of acting; --foreground runs the waiter in-process (tests). Each decision
 appends one line to $XDG_STATE_HOME/dotclaude/pass.log (an exception in the waiter: `error`).
 
@@ -79,8 +95,10 @@ the sandbox can write (docs/lanes.md S3). Every input, and why each is safe:
     write ~/.claude/sessions. Only `idle` there lets the waiter act.
   - The transcript (~/.claude/projects/...) is Claude Code's too, also out of the sandbox's
     reach; it can only drop a pass.
-  - The stop record, the carry marker and pass.log live in the state dir, which sandboxed Bash
-    can't write.
+  - The stop record, the carry marker, the pending lock and pass.log live in the state dir,
+    which sandboxed Bash can't write. The session id names the stop record and the lock, so it
+    must be a plain id ([A-Za-z0-9][A-Za-z0-9._-]*).
+  - The pane's capture (the input box) is tmux's; it can only drop a pass.
   - tmux's answers come from the tmux server, and /proc (the session's claude, its ancestors
     and its start time) is the kernel's.
 """
