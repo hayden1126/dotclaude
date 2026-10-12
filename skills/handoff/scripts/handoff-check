@@ -11,6 +11,8 @@ in a plain repo (the root STATUS.md). Checks:
              cwd is this checkout; skipped with a warning when none is found
   next       a non-empty section under a `##` heading starting with "Next", or "Notes for next
              session"
+  approval   every `(approved by Hayden` marker in that section carries a valid ISO date
+             (`(approved by Hayden YYYY-MM-DD)`); /pass reads the marker to pick its resume mode
   absolute   no relative identity ("another session", "this session"; the guard's lint) outside
              HTML comments and code. A failure in a lanes repo; in a plain repo, where no peer
              misreads it, only a warning
@@ -118,7 +120,7 @@ def check(cwd: str) -> tuple[str, list[str], list[str]]:
     if repo is None:
         return "handoff-check: not inside a git work tree", ["not a git work tree"], []
     kind, lane = repo.identity()
-    status = lanelib.record_path(lane) if lane else os.path.join(repo.toplevel, "STATUS.md")
+    status = lanelib.status_path(repo, lane)
     header = f"handoff-check: {lane['id'] if lane else kind} ({status})"
     fails, warns = [], []
     try:
@@ -143,8 +145,12 @@ def check(cwd: str) -> tuple[str, list[str], list[str]]:
     elif mtime < start:
         fails.append(f"the status file was not written during this session ({source})")
 
-    if not lanelib.section(text, "Notes for next session", prefixes=("next",)):
+    block = lanelib.next_block(text)
+    if not block:
         fails.append("no non-empty `## Next...` (or `## Notes for next session`) section")
+    elif lanelib.approval(block) == lanelib.MALFORMED:
+        fails.append("malformed approval marker in the Next block: write `(approved by Hayden "
+                     "YYYY-MM-DD)` with the date Hayden approved the step, or drop it")
 
     if found := lanelib.relative_phrases(lanelib.prose_only(text)):
         gap = f"relative identity: {', '.join(sorted(set(found)))}. {lanelib.RELATIVE_HINT}"

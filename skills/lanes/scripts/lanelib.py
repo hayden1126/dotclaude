@@ -518,6 +518,38 @@ def section(text: str,
     return None
 
 
+def next_block(text: str) -> str | None:
+    """The status file's Next block: the first `## Next...` (or `## Notes for next session`)
+    section, as section() cleans it."""
+    return section(text, "Notes for next session", prefixes=("next",))
+
+
+def status_path(repo: Repo, lane: dict | None) -> str:
+    """The status file a handoff writes: the lane record in a lane, else the root STATUS.md."""
+    return record_path(lane) if lane else os.path.join(repo.toplevel, "STATUS.md")
+
+
+APPROVED, MALFORMED, UNAPPROVED = "approved", "malformed", "unapproved"
+APPROVAL_OPEN = re.compile(r"\(approved by Hayden", re.IGNORECASE)
+APPROVAL_DATE = re.compile(r" (\d{4}-\d{2}-\d{2})\)")
+
+
+def approval(block: str | None) -> str:
+    """Whether a Next block pre-approves its step: APPROVED when it carries `(approved by Hayden
+    YYYY-MM-DD)` with a real ISO date, MALFORMED when any `(approved by Hayden` lacks one (the
+    handoff skill writes the marker only for an approval given in the session, citing its date),
+    UNAPPROVED when there is no marker. /pass resumes in the default mode only when APPROVED."""
+    state = UNAPPROVED
+    for m in APPROVAL_OPEN.finditer(block or ""):
+        date = APPROVAL_DATE.match(block, m.end())
+        try:
+            datetime.date.fromisoformat(date.group(1) if date else "")
+        except ValueError:
+            return MALFORMED
+        state = APPROVED
+    return state
+
+
 def sessions_dir() -> str:
     return os.path.join(os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude"),
                         "sessions")

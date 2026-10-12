@@ -147,6 +147,60 @@ class PlainRepo(Check):
         self.git("commit", "-q", "-m", "drop")
         self.assertGap(self.check(), "no status file")
 
+    def test_a_dated_approval_marker_passes(self):
+        self.commit("STATUS.md", GOOD + "- Then merge it (approved by Hayden 2026-10-12).\n")
+        self.assertPasses(self.check())
+
+    def test_an_approval_marker_without_a_valid_date_fails(self):
+        for marker in ("(approved by Hayden)", "(approved by Hayden 2026-13-40)",
+                       "(approved by Hayden yesterday)", "(approved by Hayden 2026-10-12"):
+            self.commit("STATUS.md", GOOD + f"- Then merge it {marker}.\n")
+            self.assertGap(self.check(), "approval marker")
+
+    def test_an_approval_marker_outside_next_is_not_checked(self):
+        self.commit("STATUS.md", GOOD.replace("## Direction\n", "## Direction\n"
+                                              "- Old step (approved by Hayden).\n"))
+        self.assertPasses(self.check())
+
+
+class Approval(unittest.TestCase):
+    """lanelib.approval over the Next block: approved, malformed or none (the resume mode)."""
+
+    def state(self, text):
+        return lanelib.approval(lanelib.next_block(text))
+
+    def test_a_dated_marker_in_next_is_approved(self):
+        self.assertEqual(self.state(GOOD + "- Merge (approved by Hayden 2026-10-12).\n"),
+                         lanelib.APPROVED)
+        self.assertEqual(self.state(GOOD.replace("Notes for next session", "Next step") +
+                                    "- Merge (Approved by Hayden 2026-02-28)\n"), lanelib.APPROVED)
+
+    def test_no_marker_is_unapproved(self):
+        self.assertEqual(self.state(GOOD), lanelib.UNAPPROVED)
+        self.assertEqual(self.state("# x\n"), lanelib.UNAPPROVED)
+        self.assertEqual(lanelib.approval(None), lanelib.UNAPPROVED)
+        # Only the Next block counts, and an HTML comment there is not text.
+        self.assertEqual(self.state(GOOD.replace("## Direction\n", "## Direction\n- (approved "
+                                                 "by Hayden 2026-10-12)\n")), lanelib.UNAPPROVED)
+        self.assertEqual(self.state(GOOD + "<!-- (approved by Hayden 2026-10-12) -->\n"),
+                         lanelib.UNAPPROVED)
+
+    def test_a_marker_with_a_missing_or_invalid_date_is_malformed(self):
+        for marker in ("(approved by Hayden)", "(approved by Hayden 2026-02-30)",
+                       "(approved by Hayden on 2026-10-12)", "(approved by Hayden 2026-10-12",
+                       "(approved by Hayden 26-10-12)"):
+            self.assertEqual(self.state(GOOD + f"- Merge {marker}\n"), lanelib.MALFORMED, marker)
+
+    def test_one_malformed_marker_beside_a_good_one_is_malformed(self):
+        self.assertEqual(self.state(GOOD + "- A (approved by Hayden 2026-10-12)\n"
+                                    "- B (approved by Hayden)\n"), lanelib.MALFORMED)
+
+    def test_the_status_path_follows_the_lane(self):
+        repo = lanelib.Repo("/r/proj", "/r/proj/.git")
+        self.assertEqual(lanelib.status_path(repo, None), "/r/proj/STATUS.md")
+        self.assertEqual(lanelib.status_path(repo, {"path": "/r/lanes/x"}),
+                         "/r/lanes/x/.lane/STATUS.md")
+
 
 class Lane(Check):
     def setUp(self):
