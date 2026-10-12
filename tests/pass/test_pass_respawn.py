@@ -131,6 +131,7 @@ class Base(LanesRepo):
         self.session_cwd = self.main
         self.script = ["busy", "idle"]
         self.stop_waits = []
+        self.stop_tasks = None  # every task label; None means the waits
         self.start_now = START
         self.status, self.updated, self.stopped = None, 0, False
         self.mod.proc_start = lambda pid: self.start_now if pid == CLAUDE else None
@@ -173,9 +174,10 @@ class Base(LanesRepo):
             os.remove(self.tmux_log)
 
     def write_stop(self, waits, at=None):
+        tasks = waits if self.stop_tasks is None else self.stop_tasks
         self.write(os.path.join(self.state, "stops", f"{SID}.json"),
                    json.dumps({"session_id": SID, "time": at or time.time(), "waits": waits,
-                               "tasks": waits}))
+                               "tasks": tasks}))
 
     def transcript(self):
         return os.path.join(self.home, ".claude", "projects",
@@ -566,6 +568,14 @@ class Plain(Base):
         self.assertEqual(code, 1, out)
         self.assertDropped("busy", "background work")
         self.assertIn("waits: shell", self.log())
+
+    def test_a_teammate_at_the_stop_drops_busy(self):
+        # stop-ring.sh doesn't count a teammate as a wait, but a respawn kills it in-process.
+        self.stop_tasks = ["teammate"]
+        code, out = self.run_pass("--foreground")
+        self.assertEqual(code, 1, out)
+        self.assertDropped("busy", "background work")
+        self.assertIn("waits: teammate", self.log())
 
     def test_no_stop_record_drops_busy(self):
         self.stop_waits = None

@@ -525,8 +525,12 @@ def next_block(text: str) -> str | None:
 
 
 def status_path(repo: Repo, lane: dict | None) -> str:
-    """The status file a handoff writes: the lane record in a lane, else the root STATUS.md."""
-    return record_path(lane) if lane else os.path.join(repo.toplevel, "STATUS.md")
+    """The status file a handoff writes: the lane record in a lane, else the root STATUS.md.
+    Built from the toplevel, never lane.json's sandbox-writable `path`: in the session's own lane
+    the two name the same file (identity matches them by realpath)."""
+    if lane:
+        return os.path.join(repo.toplevel, ".lane", "STATUS.md")
+    return os.path.join(repo.toplevel, "STATUS.md")
 
 
 APPROVED, MALFORMED, UNAPPROVED, STALE = "approved", "malformed", "unapproved", "stale"

@@ -237,10 +237,11 @@ class Approval(unittest.TestCase):
         self.assertEqual(self.state(marked("(approved by Hayden 2026-10-12)") +
                                     "- B (approved by Hayden)\n"), lanelib.MALFORMED)
 
-    def test_the_status_path_follows_the_lane(self):
-        repo = lanelib.Repo("/r/proj", "/r/proj/.git")
-        self.assertEqual(lanelib.status_path(repo, None), "/r/proj/STATUS.md")
-        self.assertEqual(lanelib.status_path(repo, {"path": "/r/lanes/x"}),
+    def test_the_status_path_follows_the_lane_from_the_toplevel(self):
+        # In a lane the toplevel is the lane; lane.json's path (sandbox-writable) is never read.
+        repo = lanelib.Repo("/r/lanes/x", "/r/proj/.git")
+        self.assertEqual(lanelib.status_path(repo, None), "/r/lanes/x/STATUS.md")
+        self.assertEqual(lanelib.status_path(repo, {"path": "/r/lanes/$(evil)\nx"}),
                          "/r/lanes/x/.lane/STATUS.md")
 
 

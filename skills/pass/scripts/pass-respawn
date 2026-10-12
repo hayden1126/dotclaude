@@ -20,8 +20,8 @@ handoff-check (a failure: work after the handoff made it stale, `stale`), drops 
 the transcript gained a typed prompt after the call (Hayden spoke, and his words may cancel the
 pass), and only then reads the resume mode and builds the prompt. In plain mode it requires the
 session's stop record (hooks/stop-ring.sh, $XDG_STATE_HOME/dotclaude/stops/<session>.json) dated
-after the call with no waits in flight, since a respawn kills background work, in-process agents
-included, which no process check can see (`busy`, also with no record). Right before acting it
+after the call with no waits in flight and no teammate, since a respawn kills background work,
+in-process agents included, which no process check can see (`busy`, also with no record). Right before acting it
 re-checks: the session file still idle with the same statusUpdatedAt (`resumed`), the process
 alive with the same procStart, and the pane still running that claude (pane_pid is the claude or
 its ancestor, pane_current_command is `claude`). A pane tmux can't find, a missing session file,
@@ -283,7 +283,9 @@ def typed_since(path: str | None, offset: int) -> bool:
 
 def stop_problem(plan: Plan) -> str | None:
     """Why the session's stop record doesn't clear a respawn, or None: it must be dated after
-    the call and list no waits (stop-ring.sh's subagent, shell, workflow, cloud session)."""
+    the call and list no waits (stop-ring.sh's subagent, shell, workflow, cloud session) and no
+    teammate. stop-ring.sh doesn't count a teammate, since one lingers in the list after it
+    finishes, but a respawn kills an in-process teammate either way, so a plain pass doesn't."""
     path = os.path.join(lanelib.state_dir(), "stops", f"{plan.session_id}.json")
     try:
         with open(path) as f:
@@ -297,6 +299,11 @@ def stop_problem(plan: Plan) -> str | None:
     if waits != []:
         names = ", ".join(map(str, waits)) if isinstance(waits, list) else repr(waits)
         return f"waits: {names}"
+    tasks = rec.get("tasks")
+    if not isinstance(tasks, list):
+        return "no task list in the stop record"
+    if "teammate" in tasks:
+        return "waits: teammate"
     return None
 
 
