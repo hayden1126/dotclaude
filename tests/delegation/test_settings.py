@@ -7,8 +7,11 @@ import glob
 import json
 import os
 import re
+import shutil
+import subprocess
 import unittest
 
+import command_inventory as inv
 from _paths import REPO, load_script
 
 with open(os.path.join(REPO, "settings.json")) as f:
@@ -82,11 +85,11 @@ class Baseline(unittest.TestCase):
     def test_code_that_runs_outside_the_sandbox_is_write_protected(self):
         # Sandbox audit, 2026-10-04. ccstatusline and the Notification hook run these unsandboxed
         # on every refresh or toast; setup.sh runs or installs the rest, including the plugins
-        # and tools its JSON lists.
+        # and tools its JSON lists; the canary (an excluded command) runs tests/.
         deny = S["sandbox"]["filesystem"]["denyWrite"]
         for p in ("statusline", "notify-toast.ps1", "codex", "setup.sh", "merge-settings.py",
                   "setup-chrome-wsl.sh", "sync.sh", "chrome-debug.ps1", "git", "plugins",
-                  "tools.json", "tmux", "setup-tmux.sh", "bin"):
+                  "tools.json", "tmux", "setup-tmux.sh", "bin", "tests"):
             self.assertIn("~/dotclaude/" + p, deny)
 
     def test_tool_credentials_and_shell_history_are_read_protected(self):
@@ -415,7 +418,9 @@ class Baseline(unittest.TestCase):
         for c in asked:  # ask beats allow, so an allow rule may cover these too
             self.assertTrue(matching("ask", c), c)
         # Every rule is the only one of its kind that catches some case, so dropping one fails.
-        for kind, cases in (("deny", denied), ("ask", asked)):
+        # The inventory's rules bring their own cases.
+        for kind, cases in (("deny", denied + [s for r in inv.DENIES for s in r.samples]),
+                            ("ask", asked + [s for r in inv.ASKS for s in r.samples])):
             for rule in S["permissions"][kind]:
                 self.assertIn([rule], [matching(kind, c) for c in cases], rule)
 
@@ -452,6 +457,156 @@ class Baseline(unittest.TestCase):
         self.assertIn('bash "$HOME/.claude/hooks/stop-ring.sh"', stops)
         self.assertFalse(any("powershell.exe" in c for c in stops), stops)
         self.assertTrue(os.access(os.path.join(REPO, "hooks", "stop-ring.sh"), os.X_OK))
+
+
+def excluded_by(command):
+    return [p for p in S["sandbox"]["excludedCommands"] if glob_match(p, command)]
+
+
+def help_text(*argv):
+    p = subprocess.run(["claude", *argv, "--help"], capture_output=True, text=True, timeout=30)
+    return p.stdout
+
+
+class Inventory(unittest.TestCase):
+    """command_inventory.py is the single source for what runs outside the sandbox and what asks;
+    settings.json must say the same, in both directions."""
+
+    def test_excluded_commands_are_the_inventory_in_order(self):
+        self.assertEqual(S["sandbox"]["excludedCommands"], [e.pattern for e in inv.EXCLUDED])
+
+    def test_each_sample_matches_its_entry_and_the_rest_stay_sandboxed(self):
+        for e in inv.EXCLUDED:
+            for s in e.samples:
+                self.assertTrue(glob_match(e.pattern, s), (e.pattern, s))
+        for s in inv.NO_ASK:
+            self.assertTrue(excluded_by(s), s)
+        for s in inv.SANDBOXED:
+            self.assertEqual(excluded_by(s), [], s)
+
+    def test_the_inventory_rules_are_in_settings(self):
+        self.assertLessEqual({r.rule for r in inv.ASKS}, set(S["permissions"]["ask"]))
+        self.assertLessEqual({r.rule for r in inv.DENIES}, set(S["permissions"]["deny"]))
+        # Every other ask is the git and gh baseline that
+        # test_destructive_git_is_denied_and_anything_that_can_reach_main_asks covers.
+        for rule in set(S["permissions"]["ask"]) - {r.rule for r in inv.ASKS}:
+            self.assertRegex(rule, r"^Bash\((git|gh) ", rule)
+
+    def test_raw_samples_ask_and_the_hot_path_does_not(self):
+        for r in inv.ASKS:
+            for s in r.samples:
+                self.assertIn(r.rule, matching("ask", s), s)
+        for r in inv.DENIES:
+            for s in r.samples:
+                self.assertIn(r.rule, matching("deny", s), s)
+        for s in inv.NO_ASK:
+            self.assertEqual(matching("ask", s) + matching("deny", s), [], s)
+
+    def test_every_tmux_spelling_asks_unless_read_only(self):
+        # tmux takes an alias or any unambiguous prefix of a name, so each spelling of each of
+        # the snapshot's commands is checked, bare and with an argument.
+        table = inv.tmux_table()
+        self.assertEqual(len(table), 91)
+        self.assertLessEqual(inv.TMUX_READ_ONLY, {n for n, _ in table})
+        for name, _ in table:
+            for verb in sorted(inv.tmux_spellings(name, table)):
+                self.assertEqual(inv.tmux_resolve(verb, table), name, verb)
+                for cmd in (f"tmux {verb}", f"tmux {verb} -t x"):
+                    asks = matching("ask", cmd)
+                    if name in inv.TMUX_READ_ONLY:
+                        self.assertEqual(asks, [], cmd)
+                    else:
+                        self.assertTrue(asks, cmd)
+        # Each excluded tmux entry is a read-only verb.
+        for p in S["sandbox"]["excludedCommands"]:
+            if p.startswith("tmux "):
+                self.assertIn(inv.tmux_resolve(p.split()[1], table), inv.TMUX_READ_ONLY, p)
+
+    def test_installed_tmux_matches_the_snapshot(self):
+        # `tmux -V` needs no server, so a tmux upgrade fails every suite run until the snapshot
+        # and the read-only list are redone. The table itself needs a server, which the sandbox
+        # blocks, so that half runs where a socket is reachable (the sandbox-off canary).
+        if not shutil.which("tmux"):
+            self.skipTest("no tmux on PATH")
+        v = subprocess.run(["tmux", "-V"], capture_output=True, text=True, timeout=10)
+        self.assertEqual(v.stdout.strip(), inv.TMUX_VERSION,
+                         "re-snapshot `tmux list-commands` into " + inv.TMUX_SNAPSHOT)
+        sock = f"dotclaude-inventory-{os.getpid()}"
+        p = subprocess.run(["tmux", "-L", sock, "-f", "/dev/null", "start-server", ";",
+                            "list-commands", ";", "kill-server"],
+                           capture_output=True, text=True, timeout=10)
+        if p.returncode != 0:
+            self.skipTest("tmux reaches no server here: " + p.stderr.strip()[:80])
+        with open(inv.TMUX_SNAPSHOT) as f:
+            self.assertEqual(p.stdout, f.read())
+
+    def test_installed_claude_flags_and_subcommands_are_classified(self):
+        # A new Claude Code flag or subcommand fails every suite until the inventory classifies
+        # it (Hayden accepted the cost, 2026-10-13): an unclassified loosening flag is what the
+        # inventory exists to catch. Leaf subcommands' own options aren't listed: a leaf that
+        # changes anything asks as a whole, and the flag asks match anywhere in the call.
+        if not shutil.which("claude"):
+            self.skipTest("no claude on PATH")
+        known = set(inv.CLAUDE_FLAG_ASKS) | inv.CLAUDE_FLAG_OK
+        for argv in ((), ("agents",)):
+            text = help_text(*argv)
+            flags = set(re.findall(r"^  (?:-\w, )?(--[\w-]+)(?:, (--[\w-]+))?", text, re.M))
+            self.assertTrue(flags, argv)
+            for pair in flags:
+                for flag in filter(None, pair):
+                    self.assertIn(flag, known, f"classify claude {' '.join(argv)} {flag}")
+        for path, subs in inv.CLAUDE_COMMANDS.items():
+            text = help_text(*path)
+            listed = re.findall(r"^  ([a-z][\w|-]*)", text.split("\nCommands:\n", 1)[-1], re.M)
+            self.assertTrue(listed, path)
+            for sub in listed:
+                self.assertIn(sub, subs, f"classify claude {' '.join(path)} {sub}")
+
+    def test_claude_classes_match_the_rules(self):
+        for flag, glob_ in inv.CLAUDE_FLAG_ASKS.items():
+            if glob_:
+                self.assertTrue(matching("ask", f"claude -p {flag} x"), flag)
+        for flag in inv.CLAUDE_FLAG_OK:
+            self.assertEqual(matching("ask", f"claude -p {flag} x"), [], flag)
+        for path, subs in inv.CLAUDE_COMMANDS.items():
+            for heads in ([path], [("plugins",)] if path == ("plugin",) else []):
+                for head in heads:
+                    for sub, cls in subs.items():
+                        for name in sub.split("|"):
+                            cmd = " ".join(["claude", *head, name, "x"])
+                            if cls == "ask":
+                                self.assertTrue(matching("ask", cmd), cmd)
+                            elif cls == "deny":
+                                self.assertTrue(matching("deny", cmd), cmd)
+                            elif cls == "ok":
+                                self.assertEqual(matching("ask", cmd) + matching("deny", cmd),
+                                                 [], cmd)
+
+    def test_every_model_run_command_in_skills_asks_nothing(self):
+        # What CLAUDE.md, a skill or an agent tells Claude to run stays prompt-free (rule D),
+        # and a call with arguments to an excluded wrapper or verb really runs outside.
+        docs = ([os.path.join(REPO, "CLAUDE.md")]
+                + glob.glob(os.path.join(REPO, "skills", "**", "*.md"), recursive=True)
+                + glob.glob(os.path.join(REPO, "agents", "*.md")))
+        tools = r"tmux|claude|codex|lane|pass-respawn|delegation-ledger|codex-delegate"
+        found = set()
+        for path in docs:
+            with open(path) as f:
+                for span in re.findall(rf"`((?:{tools}) [^`]+)`", f.read()):
+                    found.add(" ".join(re.sub(r"<[^>]*>", "x", span).split()))  # unwrap
+        self.assertIn("tmux capture-pane -p -t x", found)  # the scan still reaches the lanes skill
+        excluded = S["sandbox"]["excludedCommands"]
+        for cmd in sorted(found):
+            with self.subTest(cmd=cmd):
+                if any(cmd.startswith(k) for k in inv.SKILL_ASKS):
+                    self.assertTrue(matching("ask", cmd))
+                    continue
+                self.assertEqual(matching("ask", cmd) + matching("deny", cmd), [])
+                words = cmd.split()
+                family = [p for p in excluded if p.split()[:2] == words[:2]
+                          or p.split()[0] == words[0] and p.split()[1:] == ["*"]]
+                if family and len(words) > 2:
+                    self.assertTrue(excluded_by(cmd))
 
 
 if __name__ == "__main__":
