@@ -138,7 +138,7 @@ stored here).
 ## Notes for next session
 - **Next: PR 4 (`feat/autopass`) is up for Hayden's review; merge only on his approval.** The
   PR number: `gh pr list --head feat/autopass`. What it holds: PLAN.md PR 4 "As built" (five
-  writer parts) plus this session's work, `git log 0df4e46..feat/autopass`:
+  writer parts) plus the 2026-10-12 work (session acbec206), `git log 0df4e46..feat/autopass`:
   - **A8 fixed:** the watcher waits at Stop up to 1.5 s for the turn's final reply.
   - **Part 3:** the banner and Ctrl-b Up popup render markdown (stdlib `hooks/md_render.py`) and
     show each turn's prompt (PLAN.md PR 4 "The popup and banner, rendered").
