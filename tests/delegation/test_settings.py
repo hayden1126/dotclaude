@@ -118,9 +118,13 @@ class Baseline(unittest.TestCase):
         self.assertEqual(commands("Notification", "permission_prompt"),
                          ['bash "$HOME/.claude/hooks/notify.sh"'])
         # Both sound hooks ask tmux where a background session is shown; bound them too.
-        for event, script in (("Stop", "stop-ring.sh"), ("Notification", "notify.sh")):
+        # stop-ring gets 10 s: it may read a big transcript cold to tell a Monitor from a
+        # background Bash (PLAN.md A10; 2.5 s cold for 128 MiB), and a kill drops the ring and
+        # the stop record. A normal ring still takes milliseconds.
+        for event, script, limit in (("Stop", "stop-ring.sh", 10),
+                                     ("Notification", "notify.sh", 5)):
             (h,) = [h for e in S["hooks"][event] for h in e["hooks"] if script in h["command"]]
-            self.assertEqual(h["timeout"], 5, script)
+            self.assertEqual(h["timeout"], limit, script)
 
     def test_wait_glyph_needs_a_real_ask(self):
         # An unmatched Notification hook painted the green wait glyph on idle_prompt too, so a

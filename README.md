@@ -131,7 +131,7 @@ sees it.
 | `hooks/session-pane.sh` | Sourced by the three hooks above, not a hook: finds the tmux pane a session is shown in, and whether a person sees it | symlink `~/.claude/hooks/session-pane.sh` |
 | `hooks/context-watch.sh` | Stop and PostToolUse hook: the auto-pass watcher; writes the context size to `ctx/<session>.json` and, at 300k, 480k and 520k (derived from `autoCompactWindow`), tells the session to run the pass skill, or with autopass off shows you one line at 520k; a shim over `hooks/context_watch.py`, which shares `hooks/autopass_state.py` (tiers, the tab flag, on or off); fails open, with errors in `context-watch.err` in the state dir | symlink `~/.claude/hooks/context-watch.sh`, `context_watch.py` and `autopass_state.py` |
 | `hooks/autopass-toggle.sh` | UserPromptSubmit hook: answers `/autopass on\|off\|status` (defined by `skills/autopass`) without a model turn; a shim over `hooks/autopass_toggle.py` | symlink `~/.claude/hooks/autopass-toggle.sh` and `autopass_toggle.py` |
-| `hooks/pass-banner.sh` | SessionStart (`startup`) hook: after a plain `/pass` respawned the tab, shows what the old session said in its last turn, once, as a banner you see and the model doesn't: the turn's time, the first line of your prompt, then the replies rendered from markdown at the pane's width (40 lines of reply, 4 KiB in all, escapes counted, then where to read the rest); a shim over `hooks/pass_banner.py`; fails open | symlink `~/.claude/hooks/pass-banner.sh` and `pass_banner.py` |
+| `hooks/pass-banner.sh` | SessionStart (`startup`) hook: after a plain `/pass` respawned the tab, shows what the old session said in its last turn, once, as a banner you see and the model doesn't (its format and caps: the shim's header); a shim over `hooks/pass_banner.py`; fails open | symlink `~/.claude/hooks/pass-banner.sh` and `pass_banner.py` |
 | `hooks/md_render.py` | Not a hook: the stdlib markdown-to-terminal renderer (bold, italic, code, links, headings, lists, code blocks, tables, wrapped by terminal cells) that the banner and `tmux/pass-last` load by path | symlink `~/.claude/hooks/md_render.py` |
 | `hooks/session-registry.sh` | SessionStart/SessionEnd hook: records which session is open in which tmux tab (`$XDG_STATE_HOME/dotclaude/open-sessions/`), for `claude-restore`; deletes the entry on `/exit` or `/clear`, marks it when the window or claude is killed; then hands each payload to `claude-saved` (Star and Shelve; the star follows `/clear`); does nothing outside tmux | symlink `~/.claude/hooks/session-registry.sh` |
 | `hooks/session-summary.sh` | Stop hook: regenerates a 1-2 sentence session summary via a direct Haiku Messages-API call (Claude subscription OAuth token, stdlib urllib, no API key/jq), detached so it never blocks; caches the summary to `<config-dir>/session-summaries/<session_id>.txt` for the status-line widget and a short (`<=32`-char) tab label to `<session_id>.title.txt` for `session-title.sh` | symlink `~/.claude/hooks/session-summary.sh` |
@@ -527,9 +527,8 @@ before that (at most 47k), wrap-up 7% before hard (at most 40k), soft at half th
   40k later.
 - Background work: while a subagent, shell, workflow or cloud session runs, soft and wrap-up
   wait and hard says `pass compact`. With any other task but `dream` (a monitor, a teammate),
-  every tier says compact mode, since `pass-respawn` would refuse a plain pass. Claude Code
-  reports a Monitor as a shell, so the hooks look up which tool started each running shell in
-  the transcript (and its subagents'). A tool call
+  every tier says compact mode, since `pass-respawn` would refuse a plain pass. A Monitor
+  counts as a monitor, though Claude Code reports it as a shell (PLAN.md A10). A tool call
   can't see the task list, so it reads the last Stop's record; with none from the last 10
   minutes, it says compact mode too, as safe whether or not anything runs.
 - With autopass off, you alone see one line at the hard tier, once: "Context 521k, auto-compact

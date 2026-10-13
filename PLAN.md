@@ -565,9 +565,9 @@ nothing medium or worse) and live runs shaped these:
 
 **As built (2026-10-12), where it differs from the design below.** The module docstrings
 (`hooks/context_watch.py`, `hooks/autopass_state.py`, `hooks/stop_ring.py`,
-`hooks/pass_banner.py`, `tmux/pass-last`, `pass-respawn`) and README "Auto-pass" are the
-reference. It shipped as four writer parts, each reviewed until no finding was medium or worse:
-part 1 in 3 rounds, 2a in 3, 2b in 2 and 2c in 1.
+`hooks/pass_banner.py`, `hooks/md_render.py`, `tmux/pass-last`, `pass-respawn`) and README
+"Auto-pass" are the reference. It shipped as five writer parts, each reviewed until no finding
+was medium or worse: part 1 in 3 rounds, 2a in 3, 2b in 2, 2c in 1 and 3 in 5.
 - **Tiers scale with the window.** The window is min(the model window the widget writes into
   `ctx/<sid>.json`, `autoCompactWindow`).
   - compact_at = window - 33k; hard = compact_at - min(47k, 8%); wrap = hard - min(40k, 7%);
@@ -680,7 +680,7 @@ scale with the window:
 **Guards.**
 - A subagent's events are ignored.
 - The hook stays quiet while background work runs (`stop-ring.sh`'s set, so a lingering monitor
-  doesn't mute it). The one exception is the hard tier, which then suggests `pass compact`,
+  doesn't mute it; a Monitor arrives as `shell` and is relabeled, A10). The one exception is the hard tier, which then suggests `pass compact`,
   since a compact keeps background tasks alive.
 - It keeps crossings in its own record, the way `watch-guard` keeps its blocks, not through
   `stop_hook_active`.
@@ -704,14 +704,15 @@ scale with the window:
   - `stop-ring.sh` adds it to `stops/<sid>.json` in `replies` (`hooks/stop_ring.py`
     `merge_replies`, 64 KiB per reply). It was first built as one `last_message`; review round 1
     made it `replies` (below).
-  - `pass-respawn` (plain mode) copies them to `pass-last/<pane number>.json` as `{tab,
-    from_session, written_at, replies, shown}`. The file is per tab and not consumed. It is kept
+  - `pass-respawn` (plain mode) copies them to `pass-last/<pane number>.json` (its fields:
+    `write_last`'s docstring; part 3 added `prompts`). The file is per tab and not consumed. It is kept
     apart from the one-shot `pass-carry` marker, so two SessionStart hooks never race over one
     file.
 - **Banner:** a SessionStart hook (`startup` only; it skips `-p` and subagents) shows the message
   as a `systemMessage`, which Hayden sees and the model doesn't. It needs the same tab, an entry
   under 120 s old and `shown` false, and then sets `shown`.
-- **Popup:** `pass-last` opens the tab's message in `display-popup` with `less`. It is bound to
+- **Popup:** `pass-last` opens the tab's message in `display-popup` with `less` (rendered since
+  part 3, below). It is bound to
   Ctrl-b Up and has entries in the Ctrl-b Enter menu and the right-click tab menu.
 - **Everything since the last prompt, not only the last reply** (review round 1; Hayden's call,
   2026-10-12). One `last_message` per session loses the unread reply when auto-pass blocks a Stop
@@ -830,8 +831,8 @@ scale with the window:
     - The entries' `timestamp` precedes `stop_hook_summary` by about 90 ms, but the file had
       not caught up when the hook read it.
     - A3 compared counts after the fact, so it missed this.
-  - Effect: the Stop-time count lags one turn. PostToolUse reads entries already written, so it
-    stays fresh. A long final reply can still cross a tier one Stop late.
+  - Before the fix: the Stop-time count lagged one turn, so a long final reply could cross a
+    tier one Stop late. PostToolUse reads entries already written, so it stayed fresh.
   - **Probe (2026-10-12, `~/scratch/autopass-spike/probe8.py`, 13 Stops in one session):** every
     Stop hook started with the last main-chain user or assistant entry a user's (the prompt, a
     tool result, or a Stop hook's block reason), and the final reply appeared 54 to 112 ms into
@@ -855,7 +856,8 @@ scale with the window:
     `"backgroundTaskId":"<id>"` for a Bash command's), so a Monitor started early in a long
     session, or by a subagent, still counts. Review round 1 replaced a last-8 MiB scan, which
     missed exactly those; round 2 made it one walk per file with a 2 s budget before the
-    subagents' files (0.75 s warm for a 128 MiB transcript that names none of the ids). The stop record, the ring and the
+    subagents' files (0.75 s warm for a 128 MiB transcript that names none of the ids, about
+    2.5 s cold). stop-ring's Stop timeout went from 5 to 10 s for that cold read. The stop record, the ring and the
     watcher's Stop check all use it, so `pass-respawn` names the monitor too.
 
 **Verify.**
@@ -884,7 +886,8 @@ New: `skills/lanes/{SKILL.md,scripts/lane}`, `hooks/lane-identity.sh`,
 `hooks/{lane-guard.sh,lane_guard.py}`, `templates/LANE.md`, `docs/lanes.md`, `tests/lanes/`,
 `skills/pass/{SKILL.md,scripts/pass-respawn}`.
 PR 4: the modules "PR 4: auto-pass" lists under "As built" (`hooks/{context_watch.py,
-autopass_state.py,stop_ring.py,pass_banner.py}`, `tmux/pass-last`, `pass-respawn`).
+autopass_state.py,stop_ring.py,pass_banner.py,md_render.py}`, `tmux/pass-last`,
+`pass-respawn`), with `tests/setup/test_md_render.py`.
 Edited: `settings.json`, `CLAUDE.md`, `skills/handoff/SKILL.md`, `templates/STATUS.md`,
 `README.md`, `codex/AGENTS.md`, `setup.sh` (only if the bin loop needs the new paths).
 Patterns to reuse:

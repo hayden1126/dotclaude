@@ -82,8 +82,8 @@ stored here).
     Step 1 is its own PR after PR 3 and before the work repo migration; step 2 later.
   - PR 3 (`/pass`) merged as #88 (`gh pr view 88`), installed with its allow rule; its live runs
     and the as-built notes are in PLAN.md PR 3 "As built".
-  - **PR 4 `feat/autopass`: built, installed, live smoke in progress.** The state and the next
-    step are in "Notes for next session"; the design and "As built" are in PLAN.md PR 4.
+  - **PR 4 `feat/autopass`: built, installed, smoke-tested, PR open for review.** The next
+    step is in "Notes for next session"; the design and "As built" are in PLAN.md PR 4.
   - After PR 3: the release skill in the work repos gets its post-release Next block and a
     closing `handoff-check` (its own PR there; PLAN.md PR 3 "Delta handoff").
   - Migrate the work repo (its own PR there). The concrete values and the
@@ -136,41 +136,22 @@ stored here).
   `claude -p` repro and the 2.1.285 boundary; the karaoke session's has the incident.
 
 ## Notes for next session
-- **Next: the rest of PR 4's live smoke tests, then the draft PR.** `feat/autopass` holds all of
-  PR 4: four writer parts, each reviewed until no finding was medium or worse, with PLAN.md "As
-  built". It is installed on
-  HAYPC (Hayden ran `setup.sh` and `setup-tmux.sh` 2026-10-12; the settings diff was only the
-  four new hook entries).
-  1. **A8, fixed:** the Stop hook now waits up to 1.5 s for the turn's final reply (it lands
-     about 100 ms in; PLAN.md "Spike results" A8 has the probe). The Stop hook's timeout went
-     from 5 to 10 s in `settings.json`; `setup.sh` installed it on HAYPC 2026-10-12 (the
-     settings diff was that one line) and linked the new `hooks/md_render.py`. **Watch:**
-     `context-watch.err` in the state dir, which logs a Stop that timed out as well as the
-     watcher's Python errors.
-  1b. **Part 3, done:** the banner and the Ctrl-b Up popup render markdown (stdlib
-     `hooks/md_render.py`, which Hayden picked over `rich` after seeing both) and show each
-     turn's prompt (PLAN.md PR 4 "The popup and banner, rendered"). A live `/pass` showed the
-     colored banner, with the gray kept after code spans. Reviewed in 5 rounds; rounds 2 to 5
-     found crafted 64 KiB inputs that took seconds, minutes or GBs, and the module docstring
-     now states its time and size bounds, which a sweep test checks. Hayden hasn't yet given
-     a verdict on the live popup.
-  2. **Smoke so far (passed):** `/autopass status` and `on` were blocked with no model turn, and
-     the tab stayed `idle`. The tab flag was written. The widget shows `Ctx 41.5k 7% A`, and
-     `ctx/<sid>.json` gets `window`. `/autopass` now names the `pass.toml` it reads (it
-     named `~/.config/...` even when `XDG_CONFIG_HOME` moved it).
-  3. **Smoke done (2026-10-12, scratch repo `~/scratch/autopass-smoke`, tiers 60k/75k/90k
-     through `XDG_CONFIG_HOME=~/scratch/autopass-smoke-conf`):** soft fired at 63k (Stop),
-     wrap-up at 87k (Stop; a tool call's count is one result behind, A3) and hard at 98k
-     (mid-turn PostToolUse), each once, and the session then passed by itself in compact mode.
-     A plain pass with a Monitor running was refused with the held notice. `lane ls` showed
-     CTX 58k and STATE busy, then waiting. The banner rendered on a live `/pass`; Ctrl-b Up,
-     Ctrl-b P and both menus are bound to `pass-last`. Found: a Monitor arrives as `shell`
-     (PLAN.md A10), fixed by classifying by tool. Not seen from here: the refusal's toast.
-     Claude Code labels a Stop block "Stop hook error" (its display, not ours).
-  4. Open the draft PR, then mark it ready after STATUS. Push and merge only on Hayden's
-     approval.
-  - The work so far is `git log main..feat/autopass`. A doc-drift sweep at the 2026-10-12
-    handoff fixed 12 claims (`30cc300`).
+- **Next: PR 4 (`feat/autopass`) is up for Hayden's review; merge only on his approval.** The
+  PR number: `gh pr list --head feat/autopass`. What it holds: PLAN.md PR 4 "As built" (five
+  writer parts) plus this session's work, `git log 0df4e46..feat/autopass`:
+  - **A8 fixed:** the watcher waits at Stop up to 1.5 s for the turn's final reply.
+  - **Part 3:** the banner and Ctrl-b Up popup render markdown (stdlib `hooks/md_render.py`) and
+    show each turn's prompt (PLAN.md PR 4 "The popup and banner, rendered").
+  - **A10 fixed:** a Monitor the payload calls `shell` is classified by tool from the transcript.
+  - Stop timeouts: context-watch and stop-ring 10 s (settings.json, installed by `setup.sh`).
+  - **Smoke (2026-10-12, `~/scratch/autopass-smoke`, tiers 60k/75k/90k via
+    `XDG_CONFIG_HOME=~/scratch/autopass-smoke-conf`):** soft at 63k, wrap-up at 87k (Stop) and
+    hard at 98k (mid-turn) fired once each, then the session passed itself in compact mode; a
+    plain pass with a Monitor running was refused with the held notice; `lane ls` showed CTX and
+    STATE; the banner rendered live. Not seen: the refusal's toast. Hayden hasn't given a verdict
+    on the live popup yet.
+  - **Watch:** `context-watch.err` in the state dir (a Stop that timed out waiting for its reply,
+    and the watcher's Python errors).
   - Then the release-skill PR in the work repos (PLAN.md PR 3 "Delta handoff").
   - **Follow-up, its own PR (found 2026-10-12):** a tab running `claude attach <id>` (a
     background session brought back into a tab) isn't recognized by Star, Shelve or tab
@@ -181,7 +162,7 @@ stored here).
     in the background (`kind: bg`), which is how that tab came to be.
   - Verify from the main checkout (`test_subagent_policy` refuses to load under
     `.claude/worktrees/`): `tests/setup`, `tests/pass`, `tests/lanes`, `tests/delegation`. The
-    last full run on the merged branch was green: 466, 139, 155 and 646 tests.
+    last full run on `feat/autopass` (2026-10-12) was green: 532, 148, 155 and 646 tests.
   - **Flakes:** `tests/pass` fails timing asserts under a load spike, so judge it on a run of
     about 46 s. `test_tmux_hooks` flaked on `main` too; its ring-decision wait is now 15 s.
     Watch `seen()`'s 3 s wait, which also serves negative checks.

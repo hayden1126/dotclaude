@@ -24,8 +24,9 @@ input=$(cat 2>/dev/null)
 # (the in-flight task labels, for ring.log), and the transcript's size now and its path ("-" and
 # nothing when it can't be read). background_tasks' `type` is Claude Code's friendly label
 # ("shell", "subagent"), not the internal task name (local_bash, local_agent), which appears only
-# for a type with no label. Teammates linger in the list after they finish, dream is memory
-# upkeep and a monitor can run for hours, so those don't count.
+# for a type with no label. A Monitor arrives as "shell" too; stop_ring.task_types relabels it
+# "monitor" from the transcript (PLAN.md A10). Teammates linger in the list after they finish,
+# dream is memory upkeep and a monitor can run for hours, so those don't count.
 #
 # The same step writes the session's stop record, $XDG_STATE_HOME/dotclaude/stops/<session>.json
 # (time, the waits in flight, every task's label, the transcript path, and `replies`: what Claude

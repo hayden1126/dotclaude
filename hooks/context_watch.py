@@ -44,9 +44,9 @@ whichever event comes first.
 
 Background work, two rules:
 - busy: a task of stop_ring.WAITS (a subagent, shell, workflow or cloud session: work whose
-  result the turn waits on). The payload labels a Monitor `shell` too; stop_ring.task_types
-  relabels it `monitor` from the transcript (spike A10), so a lingering monitor isn't busy. Soft and wrap-up stay quiet and stay armed; hard says its busy
-  variant (pass compact: a compact keeps the tasks alive).
+  result the turn waits on; a Monitor is relabeled by stop_ring.task_types). Soft and wrap-up
+  stay quiet and stay armed; hard says its busy variant (pass compact: a compact keeps the tasks
+  alive).
 - blocked: any task a plain pass would be refused for (lanelib.plain_pass_blockers, the rule
   pass-respawn uses: everything but `dream`, monitors and teammates too). Every tier then says to
   pass in compact mode.
