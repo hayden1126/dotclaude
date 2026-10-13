@@ -185,17 +185,20 @@ class Base(unittest.TestCase):
         return os.path.exists(os.path.join(self.state, "dotclaude", "ctx", SID + ".json"))
 
 
-def text(key, n, c="567k"):
-    return cw.TEXTS[key].format(n=n, c=c)
+def text(key, n, c="567k", tasks=None):
+    """A tier's text; with tasks (as the nudge names them), the note naming them: to the model,
+    or to Hayden for an off-mode systemMessage."""
+    note = "" if tasks is None else (cw.TASKS_SEEN if key.startswith("off") else cw.TASKS_NOTE)
+    return cw.TEXTS[key].format(n=n, c=c) + note.format(tasks=tasks)
 
 
-def block(key, n):
-    return {"decision": "block", "reason": text(key, n)}
+def block(key, n, tasks=None):
+    return {"decision": "block", "reason": text(key, n, tasks=tasks)}
 
 
-def context(key, n):
+def context(key, n, tasks=None):
     return {"hookSpecificOutput": {"hookEventName": "PostToolUse",
-                                   "additionalContext": text(key, n)}}
+                                   "additionalContext": text(key, n, tasks=tasks)}}
 
 
 class Tiers(Base):
@@ -269,7 +272,7 @@ class Off(Base):
 
     def test_off_with_background_tasks_says_pass_compact(self):
         self.assertEqual(self.stop(521_000, background_tasks=[{"type": "monitor"}]),
-                         {"systemMessage": text("off_compact", "521k")})
+                         {"systemMessage": text("off_compact", "521k", tasks="monitor")})
 
     def test_pass_toml_follows_xdg_config_home(self):
         # A live test gives one session its own pass.toml without moving every other session's.
@@ -299,15 +302,18 @@ class Background(Base):
     def test_busy_on_stop_gives_the_hard_tiers_busy_variant(self):
         self.on()
         self.assertEqual(self.stop(525_000, background_tasks=[{"type": "workflow"}]),
-                         block("hard_busy", "525k"))
+                         block("hard_busy", "525k", "workflow"))
         self.assertIsNone(self.stop(526_000))
 
     def test_monitor_only_tasks_say_compact_mode_at_every_tier(self):
         self.on()
         mon = [{"type": "monitor"}, {"type": "dream"}]
-        self.assertEqual(self.stop(310_000, background_tasks=mon), block("soft_compact", "310k"))
-        self.assertEqual(self.stop(481_000, background_tasks=mon), block("wrap_compact", "481k"))
-        self.assertEqual(self.stop(521_000, background_tasks=mon), block("hard_compact", "521k"))
+        self.assertEqual(self.stop(310_000, background_tasks=mon),
+                         block("soft_compact", "310k", "monitor"))
+        self.assertEqual(self.stop(481_000, background_tasks=mon),
+                         block("wrap_compact", "481k", "monitor"))
+        self.assertEqual(self.stop(521_000, background_tasks=mon),
+                         block("hard_compact", "521k", "monitor"))
 
     def test_a_monitor_the_payload_calls_a_shell_still_lets_soft_speak(self):
         # Spike A10: the payload labels a Monitor `shell`. The transcript shows the Monitor
@@ -320,7 +326,8 @@ class Background(Base):
         self.on()
         self.write_transcript(310_000, before=started)
         mon = [{"id": "m1", "type": "shell", "status": "running"}]
-        self.assertEqual(self.stop(background_tasks=mon), block("soft_compact", "310k"))
+        self.assertEqual(self.stop(background_tasks=mon), block("soft_compact", "310k",
+                                                                "monitor (m1)"))
         # A background Bash shell is still busy: soft stays quiet.
         self.write_transcript(320_000, before=started)
         sh = [{"id": "b1", "type": "shell", "status": "running"}]
@@ -329,14 +336,42 @@ class Background(Base):
     def test_teammates_and_unlabeled_tasks_block_a_plain_pass_too(self):
         self.on()
         self.assertEqual(self.stop(310_000, background_tasks=[{"id": "x"}]),
-                         block("soft_compact", "310k"))
+                         block("soft_compact", "310k", "unlabeled task (x)"))
         self.assertEqual(self.stop(481_000, background_tasks=[{"type": "teammate"}]),
-                         block("wrap_compact", "481k"))
+                         block("wrap_compact", "481k", "teammate"))
 
     def test_dream_alone_is_no_background_work(self):
         self.on()
         self.assertEqual(self.stop(310_000, background_tasks=[{"type": "dream"}]),
                          block("soft", "310k"))
+
+    def test_the_nudge_names_each_task_and_its_id(self):
+        # Before the handoff the session stops what is done (pass skill step 2); the nudge
+        # hands it each id, which a compaction may have taken. An artifact watch isn't named.
+        self.on()
+        tasks = [{"id": "b0fzd27l4", "type": "monitor", "status": "running",
+                  "description": "deploy events"},
+                 {"id": "b2", "type": "shell", "status": "running", "description": "npm run dev",
+                  "command": "npm run dev -- --port 5222"},
+                 {"id": "s1", "type": "monitor", "status": "running",
+                  "description": "live updates for artifact https://claude.ai/artifact/x (c)"}]
+        self.assertEqual(self.stop(525_000, background_tasks=tasks),
+                         block("hard_busy", "525k", 'monitor "deploy events" (b0fzd27l4), '
+                                                    'shell "npm run dev" (b2)'))
+        # A tool call reads the same names from the stop record.
+        self.stop_record(["shell"], [{"label": "shell", "id": "b2", "description": "npm run dev"}])
+        self.assertEqual(self.tool(546_000),
+                         context("hard_busy", "546k", 'shell "npm run dev" (b2)'))
+        self.assertIn("TaskStop", cw.TASKS_NOTE)
+        self.assertIn("ask Hayden", cw.TASKS_NOTE)
+
+    def test_the_nudge_names_at_most_ten_tasks(self):
+        self.on()
+        tasks = [{"id": f"m{i}", "type": "monitor", "description": f"watch {i}"}
+                 for i in range(12)]
+        names = ", ".join(f'monitor "watch {i}" (m{i})' for i in range(cw.NUDGE_SHOWN))
+        self.assertEqual(self.stop(310_000, background_tasks=tasks),
+                         block("soft_compact", "310k", names + ", +2 more"))
 
     def test_an_artifact_watch_alone_is_no_background_work(self):
         # The Artifact tool's live watch: a plain pass ends it, so no compact advice for it.
@@ -352,14 +387,14 @@ class Background(Base):
         self.on()
         self.stop_record(["subagent"], ["subagent"])
         self.assertIsNone(self.tool(485_000))                           # busy: wrap quiet
-        self.assertEqual(self.tool(525_000), context("hard_busy", "525k"))
+        self.assertEqual(self.tool(525_000), context("hard_busy", "525k", "subagent"))
         self.stop_record([], ["monitor"])
-        self.assertEqual(self.tool(546_000), context("hard_compact", "546k"))
+        self.assertEqual(self.tool(546_000), context("hard_compact", "546k", "monitor"))
 
     def test_a_tool_call_reads_monitor_only_tasks_as_compact_at_wrap(self):
         self.on()
         self.stop_record([], ["monitor"])
-        self.assertEqual(self.tool(485_000), context("wrap_compact", "485k"))
+        self.assertEqual(self.tool(485_000), context("wrap_compact", "485k", "monitor"))
 
     def test_a_stale_stop_record_is_unknown_work_and_says_compact(self):
         self.on()

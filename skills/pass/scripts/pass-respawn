@@ -46,7 +46,8 @@ requires the session's stop record (hooks/stop-ring.sh, $XDG_STATE_HOME/dotclaud
 watch` (lanelib.PLAIN_PASS_IGNORES), since a respawn kills background work, in-process agents
 and monitors included, which no process check can see (`busy`, also with no record). An
 artifact watch is the Artifact tool's live watch, hidden from the model and from /tasks: the
-respawn ends it, and the log line ends `; ignored: artifact watch <url> (<id>)`. Right before acting it re-checks: the session file still idle
+respawn ends it, and the log line ends `; ignored: artifact watch <url> (<id>)`.
+Right before acting it re-checks: the session file still idle
 with the same statusUpdatedAt (`resumed`), the process alive with the same procStart, the pane
 still running that claude (pane_pid is the claude or its ancestor, pane_current_command is
 `claude`), the pane not in copy mode (`#{pane_in_mode}` 0), and Claude Code's input box present
@@ -222,7 +223,7 @@ DROPS = {
 # (`gone`). Every other drop is a refusal of a pass he expects, so it is loud (notify).
 QUIET = {"cancelled", "resumed", "gone"}
 # How a task label reads in a count ("3 monitors"); any other label reads as itself.
-NOUNS = {"unlabeled": "unlabeled task", "None": "unlabeled task"}
+NOUNS = lanelib.TASK_NOUNS
 # A busy notice names this many tasks, each description cut to this many characters, so it fits
 # a status line; pass.log and --tasks keep LOG_CHARS (stop-ring.sh caps a description at 200).
 SHOWN, SHOWN_CHARS, LOG_CHARS = 2, 40, 200
@@ -463,18 +464,6 @@ def counted(labels: list[str]) -> str:
                      for label, n in counts.items())
 
 
-def described(entry: dict, chars: int) -> str:
-    """One task (a lanelib.task_entries entry) for a notice, the log or --tasks: its noun, then
-    an artifact watch's page or else its description in double quotes (cut to chars), then its
-    id in parentheses, each when the record has it: 'monitor "deploy events" (b0fzd27l4)'."""
-    text = NOUNS.get(entry["label"], entry["label"])
-    if url := entry.get("url"):
-        text += f" {url[:chars]}"
-    elif desc := entry.get("description"):
-        text += f' "{desc if len(desc) <= chars else desc[:chars - 3] + "..."}"'
-    return text + (f" ({entry['id']})" if entry.get("id") else "")
-
-
 def task_line(entries: list[dict]) -> str:
     """Tasks for a notice that fits a status line: the first SHOWN that the record describes or
     names (an id) described, the rest counted ("+2 more (1 monitor, 1 shell)"; with none
@@ -484,7 +473,7 @@ def task_line(entries: list[dict]) -> str:
     rest = [e["label"] for e in entries if not any(e is s for s in shown)]
     if not shown:
         return counted(rest)
-    head = ", ".join(described(e, SHOWN_CHARS) for e in shown)
+    head = ", ".join(lanelib.describe_task(e, SHOWN_CHARS) for e in shown)
     return head + (f", +{len(rest)} more ({counted(rest)})" if rest else "")
 
 
@@ -493,7 +482,7 @@ def ignored(rec: dict | None) -> str:
     lets the respawn end (lanelib.PLAIN_PASS_IGNORES but memory upkeep), or ''. The respawn ends
     a watch on a page Hayden may still comment on; the log keeps the page to watch again."""
     entries = lanelib.task_entries(rec.get("tasks")) if isinstance(rec, dict) else None
-    kept = [described(e, LOG_CHARS) for e in entries or []
+    kept = [lanelib.describe_task(e, LOG_CHARS) for e in entries or []
             if e["label"] in lanelib.PLAIN_PASS_IGNORES and e["label"] != "dream"]
     return "; ignored: " + ", ".join(kept) if kept else ""
 
@@ -525,7 +514,8 @@ def stop_problem(plan: Plan, rec: dict | None) -> tuple[str, str] | None:
         entries = [e for e in lanelib.task_entries(rec.get("tasks")) or []
                    if e["label"] in names] or [{"label": str(w)} for w in waits]
         them = "it" if len(entries) == 1 else "them"
-        return ("waits: " + ", ".join(described(e, LOG_CHARS) for e in entries) + ignored(rec),
+        return ("waits: " + ", ".join(lanelib.describe_task(e, LOG_CHARS) for e in entries)
+                + ignored(rec),
                 f"pass refused: waiting on {task_line(entries)} (a respawn would kill {them}). "
                 f"/pass compact keeps {them}, or let {them} finish and /pass")
     tasks = rec.get("tasks")
@@ -534,7 +524,8 @@ def stop_problem(plan: Plan, rec: dict | None) -> tuple[str, str] | None:
                 f"pass refused: the stop record lists no tasks, {unsure}")
     if blockers := lanelib.plain_pass_blockers(tasks):
         them = "it" if len(blockers) == 1 else "them"
-        return ("tasks: " + ", ".join(described(e, LOG_CHARS) for e in blockers) + ignored(rec),
+        return ("tasks: " + ", ".join(lanelib.describe_task(e, LOG_CHARS) for e in blockers)
+                + ignored(rec),
                 f"pass refused: {task_line(blockers)} running (a respawn would kill {them}). "
                 f"Stop {them} (/tasks, or ask Claude to TaskStop {them}), or /pass compact "
                 f"keeps {them}")
@@ -1589,7 +1580,7 @@ def list_tasks() -> int:
         verdict = ("doesn't block a plain pass" if e["label"] in lanelib.PLAIN_PASS_IGNORES
                    else "blocks a plain pass; the turn waits on it" if e["label"] in waits
                    else "blocks a plain pass")
-        print(f"  {described(e, LOG_CHARS)}: {verdict}")
+        print(f"  {lanelib.describe_task(e, LOG_CHARS)}: {verdict}")
     if not entries:
         print("  none")
     return 0

@@ -37,8 +37,8 @@ SID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
 # page's URL and what it delivers. The canary checks the prefix is still in the binary
 # (delegation_checks.CANARY_STRINGS).
 ARTIFACT_WATCH_PREFIX = "live updates for artifact "
-ARTIFACT_WATCH = re.compile(re.escape(ARTIFACT_WATCH_PREFIX)
-                            + r"(https://claude\.ai/(?:code/)?artifact/[A-Za-z0-9_-]{1,128})(?=\s|$)")
+ARTIFACT_WATCH = re.compile(re.escape(ARTIFACT_WATCH_PREFIX) + r"(https://claude\.ai/"
+                            r"(?:code/)?artifact/[A-Za-z0-9_-]{1,128})(?=\s|$)")
 DESC_CAP = 200             # characters of a task's description kept in the stop record
 TEXT_CAP = 64 * 1024       # bytes of UTF-8 per reply
 TOTAL_CAP = 128 * 1024     # bytes of UTF-8 over all replies; the oldest turns go first

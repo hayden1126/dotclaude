@@ -150,6 +150,22 @@ def plain_pass_blockers(tasks) -> list[dict]:
     return [e for e in entries if e["label"] not in PLAIN_PASS_IGNORES]
 
 
+TASK_NOUNS = {"unlabeled": "unlabeled task", "None": "unlabeled task"}
+
+
+def describe_task(entry: dict, chars: int) -> str:
+    """One task (a task_entries entry) as pass-respawn's refusal, pass.log, --tasks and the
+    autopass nudge name it: its noun, then an artifact watch's page or else its description in
+    double quotes (cut to chars), then its id in parentheses, each when the record has it:
+    'monitor "deploy events" (b0fzd27l4)'."""
+    text = TASK_NOUNS.get(entry["label"], entry["label"])
+    if url := entry.get("url"):
+        text += f" {url[:chars]}"
+    elif desc := entry.get("description"):
+        text += f' "{desc if len(desc) <= chars else desc[:chars - 3] + "..."}"'
+    return text + (f" ({entry['id']})" if entry.get("id") else "")
+
+
 def state_dir() -> str:
     """$XDG_STATE_HOME/dotclaude: readable but not writable from the Bash sandbox, and denied to
     delegated agents (policy.toml's {state_dir})."""
