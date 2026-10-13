@@ -180,13 +180,17 @@ stored here).
   - **Watch (PR 4, live on HAYPC):** `context-watch.err` in the state dir (a Stop that timed out
     waiting for its reply, and the watcher's Python errors). Not yet seen live: a refused pass's
     toast, and Hayden's verdict on the rendered popup.
-  - **Follow-up, its own PR (found 2026-10-12):** a tab running `claude attach <id>` (a
-    background session brought back into a tab) isn't recognized by Star, Shelve or tab
-    restore ("No claude session found in this tab"): they find the session through the Claude
-    process under the pane, and an attach client isn't it (the session's process lives under
-    Claude Code's daemon). `claude-saved` could map the attach client's id argument to its
-    `~/.claude/sessions/<pid>.json`. A tmux window killed with a live session left it running
-    in the background (`kind: bg`), which is how that tab came to be.
+  - **Attach tabs (lane attach-tabs, `fix/tmux-attach-tabs`):** Star, Shelve, Open and tab
+    restore now recognize a tab running `claude attach <jobId>`: `claude-saved` reads the
+    client's argv from /proc and finds the `kind: bg` sessions file with that jobId. Shelve there
+    also runs `claude stop` (Hayden's call: background is mostly an accident), and
+    `claude-saved track`, run by `tmux-claude-status`, records attach tabs so `claude-restore`
+    reopens them after `tmux kill-server`. Probed on 2.1.296: a killed tab ends its session (the
+    2026-10-12 "moved to the background" came from agent view, not the kill); `claude attach`
+    takes the jobId, never the session id; `claude --resume` of a background chat becomes an
+    attach. Not recognized: a tab opened from agent view (argv stays `claude agents`) or by
+    `claude attach <name part>`; `/clear` in an attach tab doesn't move its star. Design and
+    probes: the PR body.
   - Verify from the main checkout (`test_subagent_policy` refuses to load under
     `.claude/worktrees/`): `tests/setup`, `tests/pass`, `tests/lanes`, `tests/delegation`. The
     last full run on `feat/autopass` (2026-10-12) was green: 532, 148, 155 and 646 tests.
