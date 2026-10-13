@@ -585,8 +585,9 @@ was medium or worse: part 1 in 3 rounds, 2a in 3, 2b in 2, 2c in 1 and 3 in 5.
 - **Coverage:** `-p` and `--bg` sessions get a count but never a nudge. Locks are per
   session; `decide()` runs outside them and is cached 60 s, keyed by the tab flag's
   `generation`. The lead's main checkout is on by default, like a lane.
-- **`/autopass`** is `skills/autopass` (`disable-model-invocation`) plus a UserPromptSubmit hook
-  that blocks it. `tmux-state.sh` doesn't mark the tab busy for it.
+- **`/autopass`** was `skills/autopass` (`disable-model-invocation`) plus a UserPromptSubmit hook
+  that blocked it. Since `feat/autopass-immediate` (lane autopass-now) it is a mod: see "The
+  `/autopass` toggle" below.
 - **The ctx file** `ctx/<sid>.json` holds `tokens` and `time` from the watcher, and `window`
   and `window_at` from the widget, merged under `ctx-watch/<sid>.ctx.lock`. An older count never
   replaces a newer one.
@@ -651,7 +652,15 @@ scale with the window:
   which would otherwise cross into auto-compact before any Stop.
 
 **The `/autopass` toggle** (Hayden, 2026-10-12).
-- `/autopass on|off|status` is typed in chat. A UserPromptSubmit hook catches it, writes the flag
+- As built after PR 4 (`feat/autopass-immediate`, 2026-10-13): the hook below queued behind a
+  running turn and answered in a "blocked by hook" line, so `skills/autopass` became an
+  immediate mod command. How it works: README "Auto-pass"; the code: `skills/autopass/hooks/
+  register.ts`. What the spikes settled: a skills-dir mod loads only in a trusted workspace; a
+  SKILL.md of the same name makes the registration refuse; a command's text draws only once the
+  turn ends (hence a notice mid-turn, Hayden's pick); a mod command fires no UserPromptSubmit or
+  Stop (so `tmux-state.sh` lost its `/autopass` skip). The rest of this section is the PR 4
+  design, superseded where it says "hook".
+- (PR 4, superseded by the mod) `/autopass on|off|status` is typed in chat. A UserPromptSubmit hook catches it, writes the flag
   (hooks run outside the sandbox, which can't write the state dir), and blocks the prompt with a
   one-line confirmation. So a toggle costs no model turn and no context.
   - Spike first: does UserPromptSubmit see a defined slash command before it expands? If not,
@@ -801,7 +810,7 @@ scale with the window:
   and runs no model turn. An *undefined* `/autopassx` never reaches the hook: Claude Code answers
   "Unknown command". **Change:** `/autopass` ships as a defined command with
   `disable-model-invocation: true`. The hook blocks it. The body runs only if the hook didn't, and
-  says the hook isn't installed.
+  says the hook isn't installed. (Superseded after PR 4: `/autopass` is a mod, see "The `/autopass` toggle".)
 - **A2:** a 3.6 KiB SessionStart `systemMessage` shows in full, untruncated, as "SessionStart:startup
   says: ...". After a `respawn-pane` with a prompt argument it sits above the submitted prompt
   and stays on screen. The model can't see it: a random codeword in the banner came back `NONE`.
@@ -888,6 +897,8 @@ New: `skills/lanes/{SKILL.md,scripts/lane}`, `hooks/lane-identity.sh`,
 PR 4: the modules "PR 4: auto-pass" lists under "As built" (`hooks/{context_watch.py,
 autopass_state.py,stop_ring.py,pass_banner.py,md_render.py}`, `tmux/pass-last`,
 `pass-respawn`), with `tests/setup/test_md_render.py`.
+After PR 4: `skills/autopass/` (the mod: `.claude-plugin/plugin.json`, `hooks/register.ts`,
+`types/index.d.ts`, `tests/autopass.test.ts`) and `hooks/autopass_toggle.py` (its CLI).
 Edited: `settings.json`, `CLAUDE.md`, `skills/handoff/SKILL.md`, `templates/STATUS.md`,
 `README.md`, `codex/AGENTS.md`, `setup.sh` (only if the bin loop needs the new paths).
 Patterns to reuse:

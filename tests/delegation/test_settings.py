@@ -240,19 +240,23 @@ class Baseline(unittest.TestCase):
         for f in ("context_watch.py", "autopass_state.py"):
             self.assertTrue(os.path.exists(os.path.join(REPO, "hooks", f)))
 
-    def test_the_autopass_toggle_is_wired_on_prompt_submit_with_its_command(self):
-        # Spike A1: only a defined command reaches the hook, so skills/autopass defines it, and
-        # the model may never run it on its own.
-        toggle = 'bash "$HOME/.claude/hooks/autopass-toggle.sh"'
-        self.assertIn(toggle, commands("UserPromptSubmit"))
-        (h,) = [h for e in S["hooks"]["UserPromptSubmit"] for h in e["hooks"]
-                if "autopass-toggle" in h["command"]]
-        self.assertEqual(h["timeout"], 5)
-        self.assertTrue(os.access(os.path.join(REPO, "hooks", "autopass-toggle.sh"), os.X_OK))
-        with open(os.path.join(REPO, "skills", "autopass", "SKILL.md")) as f:
-            head = f.read().split("---")[1]
-        self.assertIn("name: autopass", head)
-        self.assertIn("disable-model-invocation: true", head)
+    def test_autopass_is_a_mod_command_not_a_prompt_hook(self):
+        # skills/autopass is a mod (<name>@skills-dir): it registers /autopass as an immediate
+        # command and runs hooks/autopass_toggle.py. A SKILL.md of the same name would make
+        # the registration refuse and lose `immediate` (spike 3), and no settings hook answers it.
+        self.assertFalse([h for entries in S["hooks"].values() for e in entries
+                          for h in e["hooks"] if "autopass" in h["command"]])
+        mod = os.path.join(REPO, "skills", "autopass")
+        self.assertFalse(os.path.exists(os.path.join(mod, "SKILL.md")))
+        with open(os.path.join(mod, ".claude-plugin", "plugin.json")) as f:
+            self.assertEqual(json.load(f)["name"], "autopass")
+        with open(os.path.join(mod, "hooks", "hooks.json")) as f:
+            self.assertEqual(json.load(f), {"modules": ["./register.ts"]})
+        with open(os.path.join(mod, "hooks", "register.ts")) as f:
+            src = f.read()
+        self.assertIn("immediate: true", src)
+        self.assertIn('"$HOME/.claude/hooks/autopass_toggle.py"', src)
+        self.assertTrue(os.path.exists(os.path.join(REPO, "hooks", "autopass_toggle.py")))
 
     def test_the_lane_hooks_are_wired_and_fail_open(self):
         # docs/lanes.md: the guard on every file-tool write; identity on every context reset (a

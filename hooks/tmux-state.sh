@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 # Set @claude_state on the tmux window this session is shown in, for the per-window indicator
 # (tmux/claude.conf renders ◐ for busy, ✳ for wait, nothing for idle). Wired in settings.json:
-#   busy  <- UserPromptSubmit, PreToolUse, PostToolUse   (a turn started / work is happening;
-#            not a `/autopass` prompt, which its hook blocks before any turn)
+#   busy  <- UserPromptSubmit, PreToolUse, PostToolUse   (a turn started / work is happening)
 #   wait  <- Notification                                (Claude needs your input)
 #   idle  <- Stop                                        (turn finished), main session only
 # session-pane.sh finds the window: a tab's own pane, a background session's mapped pane, or none
@@ -19,17 +18,6 @@ input=$(cat 2>/dev/null)
 . "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/session-pane.sh" 2>/dev/null || exit 0
 pane=$(session_pane "$input")
 [ -n "$pane" ] || exit 0
-
-# A prompt that is `/autopass ...` is answered and blocked by autopass-toggle.sh: no turn runs,
-# so no Stop would clear a busy set here. Leave the window as it is. The test is cheap first.
-if [ "$state" = busy ] && [[ $input == *UserPromptSubmit* && $input == */autopass* ]]; then
-  skip=$(printf '%s' "$input" | python3 -I -c 'import json, re, sys
-try: d = json.load(sys.stdin)
-except Exception: d = {}
-p = d.get("prompt") if isinstance(d, dict) and d.get("hook_event_name") == "UserPromptSubmit" else None
-print("1" if isinstance(p, str) and re.match(r"/autopass(\s|$)", p.strip()) else "")' 2>/dev/null)
-  [ -z "$skip" ] || exit 0
-fi
 
 spawned=""
 # Busy fires on every tool call: skip the interpreter unless the payload could name an agent.

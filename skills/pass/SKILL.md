@@ -85,7 +85,7 @@ With autopass on (`/autopass on` in the tab, a lane or a lanes repo's main check
 - When it says compact mode because background tasks are running (or may be: a tool call can't see the task list), run step 2's check: stop the leftovers, then pass plain if none remain; use compact if any is still in use (or a stopped one still shows). Compacting over leftovers would leave them running through every later nudge.
 - The tiers follow the window: on a smaller one they come earlier, and the text always names the size and where auto-compact fires.
 
-An auto-pass is a normal pass: the same handoff, `handoff-check` and `pass-respawn`, and the fresh session starts in plan mode unless the first Next item is approved. Never pass on a nudge while Hayden is waiting on an answer from you. With autopass off you get no nudge: Hayden alone sees one line at the hard tier and decides. `/autopass` is answered by a hook and never reaches you.
+An auto-pass is a normal pass: the same handoff, `handoff-check` and `pass-respawn`, and the fresh session starts in plan mode unless the first Next item is approved. Never pass on a nudge while Hayden is waiting on an answer from you. With autopass off you get no nudge: Hayden alone sees one line at the hard tier and decides. `/autopass` is Hayden's: the autopass mod answers it without a model turn, and you never run it.
 
 ## Resume mode
 

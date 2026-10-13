@@ -1,0 +1,7 @@
+{
+  "name": "autopass",
+  "version": "1.0.0",
+  "description": "/autopass on|off|status: turn auto-pass on or off for this tmux tab, at once even mid-turn",
+  "author": { "name": "hayden1126" },
+  "types": "./types/index.d.ts"
+}
