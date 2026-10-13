@@ -76,7 +76,7 @@ Each layer covers what the others can't.
 | `reviewer` | `agents/reviewer.md` | Enforces: Read, Grep and Glob only |
 | `writer` | `agents/writer.md` | Enforces: `isolation: worktree`, no Agent tool, and the policy's worktree root |
 | Spawn guard | `hooks/agent-spawn-guard.sh`, `skills/delegation/scripts/agent-spawn-guard` | Enforces: denies a `writer` spawn without `isolation` on the call, and a named spawn without the `team-` prefix. Fails closed |
-| Sandbox | `settings.json` `sandbox` | Enforces (OS): the write roots, `denyRead` (the credential barrier, plus tool tokens and shell history), `denyWrite` (the enforcement sources, and the repo files that run outside the sandbox: `statusline/`, `notify-toast.ps1`, `codex/`, `tmux/`, `bin/`, `setup-tmux.sh`, and `setup.sh` with the scripts and lists it installs from), and the network allowlist. A sandboxed `git switch` or `merge` that touches a `denyWrite` file fails; `git pull` already runs outside. `failIfUnavailable`, and `autoAllowBashIfSandboxed: false`, so Hayden's prompts stay as they were |
+| Sandbox | `settings.json` `sandbox` | Enforces (OS): the write roots, `denyRead` (the credential barrier, plus tool tokens and shell history), `denyWrite` (the enforcement sources, and the repo files that run outside the sandbox: `statusline/`, `notify-toast.ps1`, `codex/`, `tmux/`, `bin/`, `setup-tmux.sh`, `tests/` (the canary runs it), and `setup.sh` with the scripts and lists it installs from; installed from a lane, that checkout's copies too), and the network allowlist. A sandboxed `git switch` or `merge` that touches a `denyWrite` file fails; `git pull` already runs outside. `failIfUnavailable`, and `autoAllowBashIfSandboxed: false`, so Hayden's prompts stay as they were |
 | Subagent policy | `hooks/subagent-policy.sh`, `skills/delegation/scripts/subagent-policy`, `skills/delegation/policy.toml` | Enforces: see "Subagent policy" below. Fails closed for the tools it polices |
 | Report check | `hooks/report-check.sh`, `skills/delegation/scripts/report-check` | Enforces acceptance: a schema-invalid report is sent back twice at most. Fails open |
 | Ledger | `hooks/delegation-ledger.sh`, `skills/delegation/scripts/delegation-ledger`, `skills/delegation/liveness.toml` | Observes: start and stop rows (`agent_type` is the resolved role; a teammate adds `name` and `teammate`), `report_ok`, denial rows, the main-checkout hash for a worktree agent (and the lane's, when the parent session runs in one); the per-agent liveness index (`agents/<id>.json`); `open` (the tool in flight and since when, thresholds in `liveness.toml`); `watch` (one line per live delegation, and a token like `2▶ 1⚠` for the tmux bar); `audit` (`--monthly` adds a month of usage for retuning, and `exclude` keeps probes out of it); `sandbox-denials`. Persuades: the deadline nudge, one PostToolUse `additionalContext` per activation past the role's `nudge_min`, and a `nudge` row. Fails open |
@@ -114,7 +114,8 @@ repo that turns the sandbox off loses subagent Bash; the policy still applies.
   ("Deadline (A2)").
 - **The sandbox escape:** any truthy input key matching `/sandbox/i` is hard_stop.
 - **Excluded commands:** an `excludedCommands` match is manual_only. The list is read live from the
-  trusted tiers, as Claude Code reads it.
+  trusted tiers, as Claude Code reads it. What the baseline excludes, and why, is the inventory in
+  `tests/delegation/command_inventory.py`.
 - **Parsing:**
   - The command is parsed with Parable, and every simple command is walked (lists, pipes,
     subshells, `$( )`, backticks, control flow).
@@ -188,7 +189,8 @@ git authenticates through `gh auth git-credential` over HTTPS, and its token liv
 `~/.config/gh`. The sandbox's `denyRead` hides that directory. So nothing inside the sandbox can
 authenticate to GitHub, whatever form the command takes: an alias, a Makefile or a test script.
 
-The main thread's `gh` and git network commands are in `excludedCommands`. They run unsandboxed
+The main thread's git network commands and `gh`'s allowed families (README, permissions) are in
+`excludedCommands`. They run unsandboxed
 through the normal permission flow, as they did before. Delegated agents are denied every excluded
 command: the same holds for `delegation-ledger`, the excluded `lane` subcommands and
 `pass-respawn`, so an agent lists such a step in `blocked_actions`.
@@ -1298,8 +1300,27 @@ wins.
 - **Seccomp:**
   - the filter is embedded in the native binary; the npm package is not needed;
   - in the probe, `socket(AF_UNIX)` failed with EPERM and `cmd.exe` failed to launch;
-  - unix sockets are all-or-nothing on Linux (`allowUnixSockets` is ignored there), so tmux,
-    `systemd-run --user` and Windows binaries run through `excludedCommands`.
+  - unix sockets are all-or-nothing on Linux (`allowUnixSockets` is ignored there), so read-only
+    tmux, `systemd-run --user` (inside `codex-delegate`) and Windows binaries run through
+    `excludedCommands`.
+- **Narrowing the list** (probes, 2026-10-13, Claude Code 2.1.296, tmux 3.7c):
+  - a tmux call that matches no entry runs sandboxed and reaches no socket, even for
+    `list-commands`, so it fails closed; `tmux -V` needs no socket and runs;
+  - an env-assignment prefix (`FOO=1 tmux ls`) matches no entry, so the asks need no such forms;
+  - in tmux a `;` after a read-only verb runs the next command, so `;` asks; a `#(` job in a
+    command's format did not run on 3.7c (status-line formats do run them), and it asks anyway;
+  - a global flag before a `claude` subcommand still reaches it (probed with a help call); the subcommand asks anchor on the subcommand, and that spelling
+    is left to the classifier (Hayden, 2026-10-13);
+  - `codex --version` and `--help` run sandboxed; `codex login status` and the other read-only
+    forms need its credential or config, which `denyRead` hides;
+  - git (2.43) takes any unique prefix of a long option (`--upl` for `--upload-pack`), so each
+    ask names the shortest one, and a test derives it from `git <verb>
+    --git-completion-helper-all`; argparse does the same by default, so the excluded wrappers
+    set `allow_abbrev=False`;
+  - a bare excluded call with a shell redirect from a denyRead file fails on the redirect, so
+    redirects need no ask; a file a flag names is read outside, so those flags ask;
+  - `claude -p <flag> X --bogus` errors on the first unknown flag before anything runs, which
+    is how the inventory's hidden flags were confirmed (2.1.296).
 - **Protected paths:** `.claude/settings*`, skills, agents, hooks, `.mcp.json`, `.git/hooks` and
   `.git/config` stay read-only for sandboxed Bash, even inside a writable root
   ([sandboxing](https://code.claude.com/docs/en/sandboxing)).

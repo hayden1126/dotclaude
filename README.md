@@ -45,7 +45,9 @@ other value replaces the baseline's (`merge-settings.py`). Top-level keys only t
 names every live value the baseline overrides (such as `effortLevel`) and every live hook command
 it drops; put a value in the overlay to keep it. The baseline now owns a `permissions` object, so
 `setup.sh` replaces the live one (`merge-settings.py` names it on stderr): personal allow rules go
-in `settings.machine.json`, whose lists append.
+in `settings.machine.json`, whose lists append. Installed from a checkout other than `~/dotclaude`
+(a lane's worktree), the copy's `denyWrite` also names that checkout's copies of the
+`~/dotclaude` paths, since the installed links point there.
 
 A typical overlay sets a preference and the machine's own tools:
 
@@ -89,6 +91,44 @@ other `bash -c`, such as one running `push -f`, and `bash -lc`, `sh -c`, `eval`)
 other than `-C` (`-c k=v`, `--git-dir`, `--no-pager`), soft, mixed and `--keep` resets, and
 `checkout`, `switch`, `restore` and `revert`. Why rules at all: on 2.1.288, auto mode ran a
 force-push and a `reset --hard` on a dirty tree when the prompt named them.
+
+`sandbox.excludedCommands` is the allowlist of what runs outside the sandbox.
+`tests/delegation/command_inventory.py` lists each entry, why it needs the outside and the calls it
+must cover, and `test_settings.py` ties it to `settings.json` in both directions. It holds the
+credential barrier (`git push` to `origin`, `fetch`, `pull`, `ls-remote`, and `gh`'s `pr`, `run`,
+`issue`, `api` and `search` with its read-only `repo`, `release` and `auth status` forms), our
+wrappers (`lane init`, `new`, `adopt`, `ls`, `open`, `done`, `pass-respawn`, `delegation-ledger`,
+`codex-delegate`), `claude`, the read-only tmux verbs (`ls`, `list-sessions`, `list-windows`,
+`list-panes`, `list-clients`, `list-keys`, `list-commands`, `capture-pane`, `display`, `show`,
+`show-options`, `show-environment`, `show-messages`, `show-hooks`), read-only codex (`login status`,
+`doctor` and a few lists) and the Windows shells. Any other call runs sandboxed, where tmux reaches
+no socket, codex and any other `gh` form no credential, and a push to a local path no other repo's
+hooks, so it fails closed.
+
+Asks cover what an excluded command could still be made to run or read:
+- tmux: every other verb, alias and prefix, a bare `tmux`, a global flag, a `;` chain, a `#(`
+  job, the `E:` and `T:` format modifiers (they expand a value as a format) and `display -I`;
+- `claude`: the flags that turn off a guard, widen the permission mode (`auto` included) or load
+  config, tools, code or files from elsewhere, hidden flags included; the subcommands that change
+  the install, config, auth or sessions; `plugin test` and `eval` (they run code from a chosen
+  path). `claude ultrareview` is denied;
+- git's `--upload-pack`, `--receive-pack` and `--exec`, in every prefix git accepts;
+- `gh auth status -t`; `gh run download`, which writes where it's told; and the flags that read
+  a local file and send it to GitHub (`--body-file`, `-F`, `--field`, `--input`), since denyRead
+  doesn't bind an excluded command. A bundled short flag (`-dF`) gets past a glob, so it is left to
+  the classifier until a guard parses gh's arguments and checks each path. These asks match
+  anywhere in the command, so a `--body` whose text names one of these flags asks too;
+- `lane init --setup` or `--root`, `lane done --abandon`, `codex-delegate --network` and
+  `--no-scope` (these wrappers take no abbreviated flag), and the Windows shells.
+
+The wrappers check their own path arguments the same way: `codex-delegate` refuses a `--dir` or
+`--out` that is, holds or sits under a denyWrite path (codex's sandbox doesn't know that list), and
+a `--brief` or `--prompt` under a denyRead path; `delegation-ledger wait` refuses such a `--log`
+or `--file`. What CLAUDE.md, the skills and the agents tell Claude to run asks nothing, except
+the lead's once-per-repo `lane init --root ... --setup` (a test scans them), and a suite fails
+when the installed tmux, git or Claude Code has a verb or flag the inventory hasn't classified.
+Spellings a glob can't anchor, such as a quoted verb, a global flag before a `claude` subcommand
+or a hidden `claude` flag added after the inventory, are left to the classifier.
 
 `rm` never asks. Ask rules for `rm -r` and `rm -f` stopped sessions and stalled delegated writers
 mid-task, and a hook can't exempt agents from them: an ask rule prompts even when a PreToolUse

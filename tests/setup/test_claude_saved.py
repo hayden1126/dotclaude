@@ -991,6 +991,13 @@ class Saved(unittest.TestCase):
             "Shelve this tab", "V", f"run-shell '{SCRIPT} shelve %4 {CLIENT}'", ""])
         self.assertEqual(items[7:], ["-(nothing saved)", "", ""])
 
+    def test_a_saved_file_too_deep_for_json_is_skipped(self):
+        self.live(1, "%4")
+        os.makedirs(self.store, exist_ok=True)
+        with open(os.path.join(self.store, sid(2) + ".json"), "w") as f:
+            f.write("[" * 100000)  # json raises RecursionError, not ValueError
+        self.assertEqual(self.menu(CLIENT)[17:], ["-(nothing saved)", "", ""])
+
     def test_the_menu_disables_this_tab_without_a_chat(self):
         self.put(1, shelved=True)
         items = self.menu(CLIENT)[10:]

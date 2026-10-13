@@ -185,7 +185,7 @@ def show():
         with open(os.path.join(os.environ["PASS_LAST_DIR"], pane[1:] + ".json"),
                   encoding="utf-8") as f:
             e = json.load(f)
-    except (OSError, ValueError):
+    except (OSError, ValueError, RecursionError):   # json recurses on nesting
         e = None
     found = groups(e.get("replies")) if isinstance(e, dict) else []
     if not found:

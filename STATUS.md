@@ -6,7 +6,7 @@
 > [[dotclaude-chrome-devtools-wsl]]). Per-effort design lives in the repo's `PLAN.md` or its doc,
 > not only under `~/.claude/plans/`, which the next plan overwrites ([[plan-file-not-durable]]).
 
-Last updated: 2026-10-12
+Last updated: 2026-10-13
 Base: `main`. For branch / PR / push state, run `gh pr list` and `git log main..HEAD` (derive it; not
 stored here).
 
@@ -30,8 +30,8 @@ stored here).
   https://claude.ai/artifact/KWwrPkLsbMUi7Ugjfskqsz (republish by that URL).
 - **tmux tabs come back after their server dies** (PR #70, installed 2026-10-05; design in
   `PLAN.md`, behavior in README "Tabs come back after a reboot", decisions in
-  [[dotclaude-tmux-restore]]). **Untested for real:** Hayden's `wsl --shutdown`, then connect;
-  `claude-restore --list` before, `$XDG_STATE_HOME/dotclaude/restore.log` after.
+  [[dotclaude-tmux-restore]]). Ran for real on 2026-10-13 (`restore.log`, 13:58
+  local).
 - **Green only for a real ask** (PR #74, live on HAYPC): the wait hook matches
   `permission_prompt|elicitation_dialog`. The cause is inferred, not proven; if a window goes green
   again with no ask, log `notification_type` in `tmux-state.sh`.
@@ -72,15 +72,30 @@ stored here).
 - **dotclaude runs in lanes (since 2026-10-12).** The lead is the main checkout. Lanes live in
   `~/dotclaude-lanes/`, and each lane's state is in its record (`lane ls`, `lane asks`), not
   here. The config caps live lanes at 3, with locks `install` and `suite`.
-  - Merged: `autopass-now` as #90 and `attach-tabs` as #91 (2026-10-13), each installed by the
-    lead from the main checkout. `/autopass` is now an immediate mod command, dotclaude's first.
-  - Live: `narrow-excluded` (security step 1, effort xhigh), plus `lane-close` and `pass-busy`
-    (opened 2026-10-13, Hayden's call). `lane-close`: `lane done` ends the lane's own window
-    and the leftovers that carry a lane session's id, the install lock holds until the lead's
-    reinstall, setup.sh prunes links into lanes and says when sessions need a restart.
-    `pass-busy`: a `busy: tasks` refusal names the task, and the pass skill stops its own
-    finished Monitors first (capella-studio session e7cc7b9a's pass was refused twice by a
-    leftover Monitor). Merge order goes by readiness: the lead installs only the next to merge.
+  - Merged: `autopass-now` as #90, `attach-tabs` as #91 and `pass-busy` as #92 (2026-10-13), each
+    installed by the lead from the main checkout. `/autopass` is now an immediate mod command,
+    dotclaude's first. #92: an Artifact publish no longer blocks a plain pass (Claude Code
+    2.1.296 arms an artifact watch per publish, shown to hooks as a `monitor` task whose id the
+    model never sees; that is what refused capella-studio session e7cc7b9a's pass twice), and a
+    `busy: tasks` refusal names each blocker (`pass-respawn --tasks`).
+    - #92's review follow-up (a deeply nested JSON state file raised `RecursionError`) ships
+      as the lead's `fix/json-depth`: the pass-last readers plus `autopass_state`,
+      `session-registry`, `claude-saved` and `pass-respawn`. A wider sweep (21 files, among
+      them the delegation enforcement scripts and lane-close's files) is parked on
+      `fix/json-depth-sweep`; after the lanes merge, check how each enforcement site fails
+      (a caught error must not turn a deny into an allow) before shipping any of it. The
+      trigger is near theoretical (our own state files), so it is optional.
+  - Live: `narrow-excluded` (security step 1, effort xhigh), `lane-close` (opened
+    2026-10-13, Hayden's call: `lane done` ends the lane's own window and the leftovers that
+    carry a lane session's id, the install lock holds until the lead's reinstall, setup.sh
+    prunes links into lanes and says when sessions need a restart) and `tab-bar` (opened
+    2026-10-13, below). **Merge order (lead, 2026-10-13): 1 `fix/json-depth`, 2
+    `narrow-excluded`, 3 `lane-close`, 4 `tab-bar`.** The lead installs only the next to merge.
+  - **/pass finding (2026-10-13):** lane-close's session 70e81418 had a compact pass time out
+    (`pass.log` `outcome=timeout status busy`, pending lock `done:timeout`), then the tmux server
+    died, and the session kept saying the pass was "still queued" for two more turns. The loud
+    refusal notice never reached it (likely lost with the server). A timed-out pass should tell
+    the session itself, not only the tmux client.
     Once pushed, a lane merges `origin/main` into its branch, since force pushes are denied.
   - Hayden split `narrow-excluded` (2026-10-13), after a safety classifier stopped three
     sessions while they read the sandbox code. Part 1, this lane's PR: the excluded-command
@@ -99,26 +114,41 @@ stored here).
   `claude`. Today `lane open` hardcodes the argv, so a lane's model or effort is set by hand in
   its window.
 
-  Backlog, the next free lane slot (Hayden, 2026-10-12): **a tmux bar that fits several projects
-  with lanes.** One `main` session already holds 9 windows (5 projects, 3 lanes, a spike), and
-  the titles and glyphs no longer fit. Option B, Hayden's pick: keep `main`, and switch to a
-  two-row status bar (tmux 3.7 `status 2`) with windows grouped and colored by project and
-  shorter lane names (`tmux/claude.conf`, `tmux-claude-status`). Option A, only if B still
-  overflows: one tmux session per project, each in its own terminal window.
-  - Remote: `tmux-remote` takes the project from `$SSH_ORIGINAL_COMMAND` (`ssh -t <host>
-    <project>`).
-  - `lane open` already lands in the lead's session.
-  - The cost: `claude-restore` restores everything into `main` and fires only on `main`'s
-    creation, so it would have to become session-aware.
-  - Star, Shelve and the tab map need re-checking.
-  - The remote-access side is private (the hq remote-access doc).
+  **Next free lane slot: `lane-addr`** (Hayden's request via lane narrow-excluded, 2026-10-13;
+  he picked "queue for the next slot", to open right after `narrow-excluded` merges):
+  1. Stable lead/lane addressing. A session's name changes most turns, so a ListAgents name goes
+     stale. The stable address is the messaging socket `uds:/run/user/1000/cc-socks/<pid>.sock`
+     (`messagingSocketPath` in `~/.claude/sessions/<pid>.json`; tested live). Proposed:
+     `lane addr <lane|lead>` prints it (live pid, cwd is the lane or the main checkout), and the
+     lanes skill and the SessionStart line say to resolve it fresh before each send (a pass
+     makes a new pid). The title's `[repo]` brackets look like ListAgents' `name [ref]`;
+     narrow-excluded misaddressed the lead three times on that.
+  2. Titles keep the main project: a lead stays `[dotclaude]` after a Bash `cd`
+     (`hooks/session-title.sh`: the repo from `CLAUDE_PROJECT_DIR` or the session's launch cwd,
+     not the payload cwd). Probe first: a Bash `cd` into a worktree moved the lead's primary
+     working directory itself ([[bash-cd-moves-session-cwd]]). Hayden: "either the lead keeps
+     its main project name, or the main project name is displayed on the left of the lead on
+     that project's own lead/lanes row"; that row label is lane `tab-bar`'s (told 2026-10-13).
+  Overlaps: lane-close (`skills/lanes/scripts/lane`), tab-bar (row label).
+
+  **Lane `tab-bar` (opened 2026-10-13): stay on tmux, multi-row bar plus a phone layout.**
+  Hayden picked tmux over a migration after the research page
+  (https://claude.ai/artifact/E75uhqt2xskxUGQopLwvoA, private; tmux inventory in
+  `~/scratch/tab-bar/INVENTORY.md`). The design is in the lane's Brief, and the decisions are
+  in [[dotclaude-tab-bar]]: a row per lead with lanes, one shared row, overflow, at most 5 rows
+  (pack, then `+N`); a narrow layout for the phone's grouped session; PR 2 adds manual drag
+  between rows (spike first, popup board as the fallback), with placements kept in the tab
+  record. Remote Control can't run `!` lines, so the phone needs the real pane. The
+  remote-access side is private (the hq remote-access doc).
 
   How lanes install, Hayden's call 2026-10-12: after its last review round, a lane runs
   `lane lock install -- ./setup.sh` from its own worktree, sandbox off. Until it merges, every
-  session runs that lane's hooks. After the merge, the lead moves the main checkout to `main`,
-  re-runs `./setup.sh` there and smoke-tests, then proposes `lane done`. A lane carries the
-  lead's STATUS commits (on `chore/after-pr4`, local only) into its PR before it is marked ready.
-  Only the next PR to merge carries them; later lanes get them from `main` when they rebase.
+  session runs that lane's hooks. After the merge, the lead runs `git fetch origin main:main`,
+  merges `main` into its branch `chore/after-pr4` (sandbox off), re-runs `./setup.sh` and
+  `./setup-tmux.sh` from the main checkout under `lane lock install` (settings.json and
+  `~/.tmux.conf` copied first and diffed), checks no installed link points into a lane, then
+  proposes `lane done`. Lead STATUS commits ride the next lane PR to merge: that lane applies
+  `git diff origin/main chore/after-pr4 -- STATUS.md` as one commit just before ready.
   - **Install gap found 2026-10-13:** `lane lock install` serializes only the setup.sh run, and
     the last run wins. Lane `attach-tabs` installed two minutes after lane `autopass-now` and
     replaced its links. Rule until tooling covers it: only the lane next in merge order
@@ -198,28 +228,31 @@ stored here).
   `claude -p` repro and the 2.1.285 boundary; the karaoke session's has the incident.
 
 ## Notes for next session
-- **Next (lead, main checkout): run the two lanes** in "In flight" (dotclaude runs in lanes).
-  Watch `lane ls` and `lane asks`, and message a lane idle past the soft tier to run /pass. A
-  lane is handed back only once `handoff-check -C <lane path>` passes and the board shows no
-  `handoff?` flag. After each merge, follow the install step in "In flight". Once
-  `narrow-excluded` merges, plan the work repo migration, with the release skill as its first
-  lane.
-  - Branch `chore/after-pr4` holds the lead's STATUS commits. They ride the next lane PR to
-    merge (the lane cherry-picks them), never a STATUS-only PR.
+- **Next (lead, main checkout): take `narrow-excluded` (#93) to merge, then `lane-close`, then
+  `tab-bar`** ("In flight"). #94 (`fix/json-depth`) merged on 2026-10-13. The lead reinstalled
+  from main under `lane lock install`: settings.json and ~/.tmux.conf unchanged, no installed
+  links into lanes. `narrow-excluded` was then cleared to merge origin/main, install from its
+  branch, smoke, and apply the lead STATUS diff. When it reports ready in its record, take #93
+  to Hayden. After #93 merges: reinstall from main, propose `lane done narrow-excluded`, open
+  `lane-addr` (and Part 2 when a slot frees). Start with `lane ls` and `lane asks`. A lane is
+  handed back only once `handoff-check -C <lane path>` passes and the board shows no `handoff?`
+  flag. After each merge, follow the install step in "In flight", then `lane done <id>` once
+  its session exits (until `lane-close` merges, Hayden `/exit`s it first).
+  **Message a lane at its messaging socket**: `uds:/run/user/1000/cc-socks/<pid>.sock`, the
+  `messagingSocketPath` in `~/.claude/sessions/<pid>.json` of the session whose cwd is in the
+  lane. Resolve it fresh before each send, since a pass makes a new pid. A ListAgents name
+  drifts, and a bare lane id is "not reachable". An idle lane still drains a message.
+  - Local leftovers, never pushed: `fix/json-depth-sweep` (the parked sweep) and
+    `fix/pass-last-recursion` (the same sweep under its first name, plus the writer's
+    `worktree-agent-a8c1570566ac3d240` branch). Delete them once Hayden nods.
+  - Tab restore (#70) ran for real: the tmux server died, and at 2026-10-13 13:58 local
+    `restore.log` shows the open sessions restored to their tabs, with expected skips (a
+    deleted directory, older sessions of one pane, a window closed before the server ended).
   - **Watch (PR 4, live on HAYPC):** `context-watch.err` in the state dir (a Stop that timed out
     waiting for its reply, and the watcher's Python errors). Not yet seen live: a refused pass's
     toast, and Hayden's verdict on the rendered popup.
-  - **Attach tabs (merged as #91, 2026-10-13):** Star, Shelve, Open and tab
-    restore now recognize a tab running `claude attach <jobId>`: `claude-saved` reads the
-    client's argv from /proc and finds the `kind: bg` sessions file with that jobId. Shelve there
-    also runs `claude stop` (Hayden's call: background is mostly an accident), and
-    `claude-saved track`, run by `tmux-claude-status`, records attach tabs so `claude-restore`
-    reopens them after `tmux kill-server`. Probed on 2.1.296: a killed tab ends its session (the
-    2026-10-12 "moved to the background" came from agent view, not the kill); `claude attach`
-    takes the jobId, never the session id; `claude --resume` of a background chat becomes an
-    attach. Not recognized: a tab opened from agent view (argv stays `claude agents`) or by
-    `claude attach <name part>`; `/clear` in an attach tab doesn't move its star. Design and
-    probes: the PR body.
+  - Attach tabs: merged as #91 (behavior and limits: README "Star and Shelve", design and
+    probes: `gh pr view 91`).
   - Verify from the main checkout (`test_subagent_policy` refuses to load under
     `.claude/worktrees/`): `tests/setup`, `tests/pass`, `tests/lanes`, `tests/delegation`. The
     last full run on `feat/autopass` (2026-10-12) was green: 532, 148, 155 and 646 tests.
