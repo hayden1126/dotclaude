@@ -80,7 +80,10 @@ stored here).
     sessions while they read the sandbox code. Part 1, this lane's PR: the excluded-command
     inventory, the narrowed `excludedCommands`, the ask rules and their tests. Part 2, a
     follow-up lane the lead opens after Part 1: a PreToolUse guard that lets an excluded command
-    run only when its cwd's git dir and its PATH entries aren't sandbox-writable. The lane's
+    run only when its cwd's git dir and its PATH entries aren't sandbox-writable, then the allow
+    lines for `lane ls/open/new/adopt/done` (an allow rule skips the classifier, so those land
+    only behind the guard; Hayden applies them, since the classifier refuses edits that add
+    allow rules). The lane's
     plan is rewritten in rule terms, and its sessions don't open the private findings. Codex is
     unavailable until the ChatGPT plan is renewed. If Part 1 stops again, Hayden applies it by
     hand.
