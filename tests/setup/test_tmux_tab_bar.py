@@ -17,6 +17,7 @@ import sys
 import tempfile
 import time
 import unittest
+import unittest.mock
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 SCRIPT = os.path.join(REPO, "tmux", "tmux-tab-bar")
@@ -36,7 +37,7 @@ Group = tb.Group
 
 # Every character a generated row may hold: the template's own text, digits and window ids.
 ALPHABET = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-               " #{}[]=,:;|/@?^()\\*+-_.!…◐✳★▸│┃")
+               " #{}[]=,:;|/@?^()\\*+-_.!$…◐✳★▸│┃♯")
 
 HOSTILE = "#(touch x)%,}\n\x1b[31m#{E:pwn}"   # cleans to "(touch x)%,}[31m{E:pwn}"
 BENIGN = "abcdefghijklmnopqrstuvwxyz"
@@ -336,12 +337,22 @@ class Render(unittest.TestCase):
                     self.assertLessEqual(set(row), ALPHABET)
                     self.assertNotRegex(row, r"#\[[^]]*,")       # one style per #[ ]
 
-    def test_titles_are_drawn_with_their_hashes_doubled(self):
+    def test_a_title_loses_its_hashes_then_claudes_prefix(self):
         e = tb.entry("@7", 7, 30)
-        self.assertIn("#{s/^(✳ )?\\[[^]]*\\] //;q/h:pane_title}", e)
-        self.assertIn("#{q/h:pane_current_command}", e)
-        self.assertNotRegex(e.replace("q/h:pane_title", "").replace(
-            "q/h:pane_current_command", ""), r"pane_title}|pane_current_command}")
+        strip = "s/^([^ [][^ []?[^ []? )?\\[[^]]*\\] (.*)$/\\2/"
+        self.assertIn("#{s/[#]/♯/;" + strip + ":pane_title}", e)
+        self.assertIn("#{s/[#]/♯/:pane_current_command}", e)
+        self.assertEqual(e.count("pane_title}"), e.count("[#]/♯/;" + strip + ":pane_title}"))
+        for bad in ("{", "}", ",", ":", ";"):   # each would end the modifier or the #{...}
+            self.assertNotIn(bad, strip)
+        # The same pattern in Python's dialect ([ escaped in a set): what it keeps.
+        py = re.compile(r"^([^ \[][^ \[]?[^ \[]? )?\[[^]]*\] (.*)$")
+        for title, label in (("✳ [repo] label", "label"), ("⠂ [repo] label", "label"),
+                             ("⣿ [repo] label", "label"), ("[repo] label", "label"),
+                             ("no prefix here", "no prefix here"),
+                             ("✳ [a] [b] x", "[b] x"), ("long word [x] y", "long word [x] y")):
+            with self.subTest(title=title):
+                self.assertEqual(py.sub(r"\2", title), label)
 
     def test_row_0_keeps_status_left_and_right(self):
         rows = tb.render(tb.lay_out([DOTCLAUDE], SHARED5, 188, "@4", 28, 16))
@@ -532,7 +543,8 @@ class Conf(unittest.TestCase):
         with open(CONF) as f:
             text = f.read()
         hooks = ("client-attached", "client-detached", "client-resized", "window-linked",
-                 "window-unlinked", "after-new-window", "session-window-changed")
+                 "window-unlinked", "after-new-window", "session-window-changed",
+                 "client-session-changed")
         for hook in hooks:
             with self.subTest(hook=hook):
                 self.assertIn(f"set-hook -g {hook}[43] {HOOK}\n", text)
@@ -803,6 +815,21 @@ class FakeTmux(unittest.TestCase):
         with open(self.base + ".err") as f:
             self.assertIn("source-file", f.read())
 
+    def test_a_newline_in_a_path_cannot_forge_another_panes_line(self):
+        # A directory named "x\n@1\t1\t<the lead>" would read, line by line, as a second pane
+        # line giving @1 (hq) the lead's directory.
+        st = self.read_state()
+        lead = st["panes"][1]["pane_current_path"]
+        forged = os.path.join(self.tmp, "x\n@1\t1\t" + lead)
+        st["panes"].append({"window_id": "@5", "pane_active": "1", "pane_current_path": forged})
+        st["windows"].append({"session_id": "$0", "window_id": "@5", "window_index": "5",
+                              "window_active": "0"})
+        self.write_state(st)
+        self.run_layout()
+        names = {w["window_id"]: w.get("@tab_name") for w in self.read_state()["windows"]}
+        self.assertEqual(names["@1"], "hq:")
+        self.assertNotEqual(names["@5"], "lead")
+
     def test_outside_tmux_nothing_runs(self):
         env = {k: v for k, v in self.env.items() if k != "TMUX"}
         p = subprocess.run([sys.executable, "-I", SCRIPT, "layout"], capture_output=True,
@@ -869,6 +896,20 @@ class Lock(unittest.TestCase):
 
         tb.run_locked(self.base, run)
         self.assertEqual(len(calls), 2 * tb.PASSES)   # the passes, then the one retry's
+
+    def test_a_run_marks_dirty_before_it_tries_the_lock(self):
+        # Otherwise a holder letting go between this run's failed flock and its mark would
+        # check, find nothing and leave, and this run's change would wait for the next event.
+        calls = []
+
+        def flock(fd, op):
+            self.assertTrue(os.path.exists(self.base + ".dirty"))
+            raise BlockingIOError
+
+        with unittest.mock.patch.object(tb.fcntl, "flock", flock):
+            tb.run_locked(self.base, lambda: calls.append(1))
+        self.assertEqual(calls, [])
+        self.assertTrue(os.path.exists(self.base + ".dirty"))
 
     def test_one_pass_when_nothing_marks(self):
         calls = []
@@ -1049,12 +1090,32 @@ class RealTmux(unittest.TestCase):
         time.sleep(2.5)                   # a status-interval: the row is drawn again
         self.assertFalse(os.path.exists(pwned))
 
-    def test_a_style_in_a_title_is_drawn_as_text(self):
+    def test_claudes_title_prefix_is_stripped_idle_busy_or_bare(self):
+        self.ti("new-window", "-d", "-t", "t:3", "-c", self.plain, "sleep 600")
         self.run_layout()
+        titles = ("✳ [dotclaude] alpha label", "⠂ [tab-bar] beta label", "[hq] gamma label",
+                  "no prefix here")
+        for i, title in enumerate(titles):
+            self.ti("select-pane", "-t", f"t:{i}", "-T", title)
+        for text in ("lead alpha label", "tab-bar beta label", "hq: gamma label",
+                     "hq: no prefix here"):
+            self.find(text)
+        bar = "\n".join(self.screen()[:2])
+        for gone in ("✳", "⠂", "[dotclaude]", "[tab-bar]", "[hq]"):
+            self.assertNotIn(gone, bar)
+
+    def test_a_hash_or_a_style_in_a_title_draws_as_text_and_keeps_the_width(self):
+        self.run_layout()
+        self.ti("select-pane", "-t", "t:0", "-T", "PR 93 x")
+        self.find("lead PR 93 x")
+        x0, y0 = self.find("tab-bar beta-title")
+        self.ti("select-pane", "-t", "t:0", "-T", "PR #93x")          # as many characters
+        self.find("lead PR ♯93x")
+        self.assertEqual(self.find("tab-bar beta-title"), (x0, y0))    # the next tab stays put
         self.ti("select-pane", "-t", "t:2", "-T", "#[range=window|1]x")
         self.assertEqual(self.ti("display", "-p", "-t", "t:2", "#{pane_title}").stdout,
                          "#[range=window|1]x\n")
-        self.find("hq: #[range=window|1]x")    # without q/h it would be a range and "hq: x"
+        self.find("hq: ♯[range=window|1]x")    # a # left in would make it a range: "hq: x"
 
     def test_a_click_on_row_2_switches(self):
         self.run_layout()
