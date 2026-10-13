@@ -81,7 +81,7 @@ stored here).
   - Merged and installed from main (2026-10-13): the lead's #94 (`fix/json-depth`: a state file
     too deep for json reads as malformed, in the pass-last readers, `autopass_state`,
     `session-registry`, `claude-saved` and `pass-respawn`) and lane `narrow-excluded` Part 1 as
-    #93. `lane done narrow-excluded` waits on Hayden's nod and its sessions exiting. A wider
+    #93; the lane is closed (`lane done`, archived under `.git/lanes/_closed/`). A wider
     json-depth sweep (21 files, among them the delegation enforcement scripts and lane-close's
     files) is parked on `fix/json-depth-sweep`. Shipping any of it first needs a check of how
     each enforcement site fails (a caught error must not turn a deny into an allow). The trigger
@@ -89,8 +89,14 @@ stored here).
   - Live: `lane-close` (opened 2026-10-13, Hayden's call: `lane done` ends the lane's own
     window and the leftovers that carry a lane session's id, the install lock holds until the
     lead's reinstall, setup.sh prunes links into lanes and says when sessions need a restart)
-    and `tab-bar` (opened 2026-10-13, below). **Merge order: 1 `lane-close`, 2 `tab-bar`.** The
-    lead installs only the next to merge.
+    `tab-bar` (opened 2026-10-13, below) and `lane-addr` (opened 2026-10-13 from its backlog
+    entry below, whose text is now its Brief). **Merge order: 1 `lane-close`, 2 `tab-bar`, 3
+    `lane-addr`.** The lead installs only the next to merge.
+  - `lane new` with `|`, `<`, `>` or `;` inside its quoted `--goal` ran sandboxed and failed
+    ("Read-only file system") even though `lane new *` is in `excludedCommands`. It left a
+    stray branch, and nothing registered. The likely cause is that the matcher sees those
+    characters as compound syntax (inferred). Keep lane briefs free of them, or run the
+    command sandbox-off.
   - **/pass finding (2026-10-13):** lane-close's session 70e81418 had a compact pass time out
     (`pass.log` `outcome=timeout status busy`, pending lock `done:timeout`), then the tmux server
     died, and the session kept saying the pass was "still queued" for two more turns. The loud
@@ -114,8 +120,8 @@ stored here).
   `claude`. Today `lane open` hardcodes the argv, so a lane's model or effort is set by hand in
   its window.
 
-  **Next free lane slot: `lane-addr`** (Hayden's request via lane narrow-excluded, 2026-10-13;
-  he picked "queue for the next slot", to open right after `narrow-excluded` merges):
+  **Lane `lane-addr` (opened 2026-10-13; Hayden's request via lane narrow-excluded, his pick
+  "queue for the next slot"):**
   1. Stable lead/lane addressing. A session's name changes most turns, so a ListAgents name goes
      stale. The stable address is the messaging socket `uds:/run/user/1000/cc-socks/<pid>.sock`
      (`messagingSocketPath` in `~/.claude/sessions/<pid>.json`; tested live). Proposed:
@@ -228,15 +234,14 @@ stored here).
   `claude -p` repro and the 2.1.285 boundary; the karaoke session's has the incident.
 
 ## Notes for next session
-- **Next (lead, main checkout): close `narrow-excluded`, open `lane-addr`, then run `lane-close`
-  and `tab-bar` to merge** ("In flight"). #93 merged and is installed from main (2026-10-13).
-  Once Hayden nods and `/exit`s its sessions (main:@3, and the stale 80d2d8f7 in main:@41),
-  run `lane done narrow-excluded`. Then open `lane-addr` from its backlog entry (Hayden's
-  pick: the next free slot). Part 2 waits for the slot after that. Start with `lane ls` and
-  `lane asks`. A lane is handed back only once `handoff-check -C <lane path>` passes and the
-  board shows no `handoff?` flag. After each merge, follow the install step in "In flight",
-  then `lane done <id>` once its session exits (until `lane-close` merges, Hayden `/exit`s it
-  first).
+- **Next (lead, main checkout): run `lane-close`, `tab-bar` and `lane-addr` to merge in that
+  order** ("In flight"). As of 2026-10-13: narrow-excluded is closed, lane-addr was just opened
+  (plan mode), and lane-close and tab-bar were told main moved to fe981d7 and to merge it.
+  lane-close is next and cleared to install once its review and live probe are done. Start
+  with `lane ls` and `lane asks`. A lane is handed back only once `handoff-check -C <lane path>`
+  passes and the board shows no `handoff?` flag. After each merge, follow the install step in
+  "In flight", then `lane done <id>` once its session exits (until `lane-close` merges, Hayden
+  `/exit`s it first). narrow-excluded Part 2 opens at the next free slot.
   **Message a lane at its messaging socket**: `uds:/run/user/1000/cc-socks/<pid>.sock`, the
   `messagingSocketPath` in `~/.claude/sessions/<pid>.json` of the session whose cwd is in the
   lane. Resolve it fresh before each send, since a pass makes a new pid. A ListAgents name
