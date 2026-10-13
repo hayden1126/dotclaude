@@ -8,8 +8,9 @@ and rings by its defaults. Tests import merge_replies() and prune() directly
 
 The stop record, $XDG_STATE_HOME/dotclaude/stops/<session>.json, is written atomically for every
 stop but a subagent's, and only for a session id that is a plain name. It holds the time, the
-waits in flight, every task's label (`unlabeled` for one with none; a Monitor, which the payload
-labels `shell`, as `monitor`: task_types), the transcript path when it
+waits in flight (labels), every task as {label, id, description, url} (task_entries: the label
+is `unlabeled` for one with none, `monitor` for a Monitor the payload labels `shell`, and
+`artifact watch` for the Artifact tool's live watch: task_types), the transcript path when it
 is a string, and `replies`: what Claude said in the last TURNS turns, for the banner and popup
 after a plain /pass (pass-respawn copies it to pass-last/). A turn is a run of replies with one
 prompt_id: a Stop a hook blocked and the Stop that ends the continued turn carry the same one
@@ -25,10 +26,20 @@ import re
 import sys
 import tempfile
 import time
+import unicodedata
 
 WAITS = {"subagent", "shell", "workflow", "cloud session"}
 ID = re.compile(r"[A-Za-z0-9_-]{1,128}")   # a task or tool-use id we search the transcript for
 SID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
+# The live watch the Artifact tool arms on each publish (2.1.296: a monitor_ws flagged ambient).
+# Claude Code keeps it out of /tasks and its own busy counts and never shows the model its id,
+# but the Stop payload lists it as a `monitor` with no server, described by this prefix, the
+# page's URL and what it delivers. The canary checks the prefix is still in the binary
+# (delegation_checks.CANARY_STRINGS).
+ARTIFACT_WATCH_PREFIX = "live updates for artifact "
+ARTIFACT_WATCH = re.compile(re.escape(ARTIFACT_WATCH_PREFIX)
+                            + r"(https://claude\.ai/(?:code/)?artifact/[A-Za-z0-9_-]{1,128})(?=\s|$)")
+DESC_CAP = 200             # characters of a task's description kept in the stop record
 TEXT_CAP = 64 * 1024       # bytes of UTF-8 per reply
 TOTAL_CAP = 128 * 1024     # bytes of UTF-8 over all replies; the oldest turns go first
 TURNS = 5                  # the most recent turns (runs of one prompt_id) kept
@@ -236,12 +247,25 @@ def monitor_ids(path, wanted, budget: float = 2.0) -> set:
     return found
 
 
+def artifact_url(task):
+    """The page's URL when task (a background_tasks entry) is the Artifact tool's live watch: a
+    `monitor` with no server (an MCP monitor names one) whose description opens with
+    ARTIFACT_WATCH. Else None. A Monitor the model started with that very description would
+    pass too; nothing in the payload tells them apart, so the model would have to name it so."""
+    if not (isinstance(task, dict) and task.get("type") == "monitor" and "server" not in task):
+        return None
+    desc = task.get("description")
+    m = ARTIFACT_WATCH.match(desc) if isinstance(desc, str) else None
+    return m.group(1) if m else None
+
+
 def task_types(tasks, path) -> list:
     """Each background_tasks entry's type, in order (None for one that isn't an object), with a
-    `shell` task the Monitor tool started as `monitor`. The Stop payload labels a Monitor
-    `shell`, like a background Bash command (spike A10), and a shell is work the turn waits on
-    while a monitor is not, so only the transcript tells them apart. It is searched only for
-    the shell tasks listed; any failure there leaves them `shell` (the old behavior)."""
+    `shell` task the Monitor tool started as `monitor`, and the Artifact tool's live watch as
+    `artifact watch` (artifact_url). The Stop payload labels a Monitor `shell`, like a
+    background Bash command (spike A10), and a shell is work the turn waits on while a monitor
+    is not, so only the transcript tells them apart. It is searched only for the shell tasks
+    listed; any failure there leaves them `shell` (the old behavior)."""
     if not isinstance(tasks, list):
         return []
     shells = [t.get("id") for t in tasks if isinstance(t, dict) and t.get("type") == "shell"
@@ -251,18 +275,53 @@ def task_types(tasks, path) -> list:
     except Exception:
         monitors = set()
     return [("monitor" if t.get("type") == "shell" and isinstance(t.get("id"), str)
-             and t.get("id") in monitors else t.get("type")) if isinstance(t, dict) else None
+             and t.get("id") in monitors
+             else "artifact watch" if artifact_url(t) else t.get("type"))
+            if isinstance(t, dict) else None
             for t in tasks]
 
 
-def write_record(d: dict, sid: str, types: list, tasks) -> None:
+def clean(text):
+    """A task's description as one plain line for a notice, a log line and the model: control
+    and format characters dropped (an escape sequence, a bidi override), whitespace folded to
+    single spaces, double quotes made single (the notice quotes it), cut to DESC_CAP characters.
+    None for no text."""
+    if not isinstance(text, str):
+        return None
+    kept = "".join(" " if c.isspace() else c for c in utf8(text)
+                   if c.isspace() or unicodedata.category(c) not in ("Cc", "Cf"))
+    line = " ".join(kept.replace('"', "'").split())
+    if len(line) > DESC_CAP:
+        line = line[:DESC_CAP - 3] + "..."
+    return line or None
+
+
+def task_entries(tasks: list, labels: list) -> list:
+    """The stop record's `tasks`: per background_tasks entry, {label} plus its id when that is a
+    plain name, its description (clean) and an artifact watch's url. pass-respawn names them
+    in a refusal and `pass-respawn --tasks` lists them, so the session can stop one by id."""
+    out = []
+    for t, k in zip(tasks, labels):
+        e = {"label": k if isinstance(k, str) and k else "unlabeled"}
+        if isinstance(t, dict):
+            if isinstance(t.get("id"), str) and ID.fullmatch(t["id"]):
+                e["id"] = t["id"]
+            if desc := clean(t.get("description")):
+                e["description"] = desc
+            if url := artifact_url(t):
+                e["url"] = url
+        out.append(e)
+    return out
+
+
+def write_record(d: dict, sid: str, types: list, tasks: list) -> None:
     stops = os.path.join(os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state"),
                          "dotclaude", "stops")
     os.makedirs(stops, exist_ok=True)
     path = os.path.join(stops, sid + ".json")
     now = time.time()
     rec = {"session_id": sid, "time": now, "waits": [t for t in types if t in WAITS],
-           "tasks": [k if isinstance(k, str) and k else "unlabeled" for k in tasks]}
+           "tasks": tasks}
     if isinstance(d.get("transcript_path"), str):
         rec["transcript_path"] = d["transcript_path"]
     if os.environ.get("CLAUDE_CODE_SESSION_ATTENDED") != "0":
@@ -301,7 +360,7 @@ def main() -> None:
     sid = d.get("session_id")
     if not spawned and isinstance(sid, str) and SID.fullmatch(sid):
         try:
-            write_record(d, sid, types, tasks)
+            write_record(d, sid, types, task_entries(raw, tasks))
         except Exception:
             pass
     labels = ",".join(t.replace(" ", "_") for t in types if isinstance(t, str) and t.strip())

@@ -111,21 +111,43 @@ def git(args: list[str],
 
 
 # A plain /pass respawns the pane, which kills every background task with it. So it goes ahead
-# only after a Stop that listed no task but these: `dream` is memory upkeep. Teammates and
+# only after a Stop that listed no task but these: `dream` is memory upkeep, and an `artifact
+# watch` is the live watch the Artifact tool arms on each publish (hooks/stop_ring.py
+# artifact_url), a subscription for comments, not work in flight: Claude Code itself leaves it
+# out of /tasks and its own busy counts, and never shows the model its id, so nothing could
+# stop it (incident e7cc7b9a, 2026-10-13). The respawn ends it, as quitting would. Teammates and
 # monitors count, though stop-ring.sh rings past them (it asks "is the turn waiting on its
 # result?", not "would a respawn kill it?"). pass-respawn refuses by this rule, and the autopass
 # watcher (hooks/context_watch.py) says "compact mode" by it, so the two never disagree.
-PLAIN_PASS_IGNORES = frozenset({"dream"})
+PLAIN_PASS_IGNORES = frozenset({"dream", "artifact watch"})
+TASK_FIELDS = ("id", "description", "url")
 
 
-def plain_pass_blockers(tasks) -> list[str]:
-    """The task labels (a stop record's `tasks`, or the Stop payload's background_tasks types,
-    `unlabeled` for one with none) that make a plain pass refuse, in order, as strings. Anything
-    but a string ignored by name blocks, whatever its type. A list that isn't a list blocks, as
-    `?`: with no task list the respawn can't be shown safe."""
+def task_entries(tasks) -> list[dict] | None:
+    """A stop record's `tasks` (or the Stop payload's labels) as entries, {label} plus the
+    string fields of TASK_FIELDS it has; None when tasks isn't a list. An entry is a label or an
+    object holding one; anything else, or an empty label, is `unlabeled`. Only strings survive:
+    the record is data, and its text reaches tmux, the toast and pass.log."""
     if not isinstance(tasks, list):
-        return ["?"]
-    return [str(t) for t in tasks if not (isinstance(t, str) and t in PLAIN_PASS_IGNORES)]
+        return None
+    out = []
+    for t in tasks:
+        label = t if isinstance(t, str) else t.get("label") if isinstance(t, dict) else None
+        e = {"label": label if isinstance(label, str) and label else "unlabeled"}
+        if isinstance(t, dict):
+            e.update({k: t[k] for k in TASK_FIELDS if isinstance(t.get(k), str)})
+        out.append(e)
+    return out
+
+
+def plain_pass_blockers(tasks) -> list[dict]:
+    """The entries (task_entries) that make a plain pass refuse, in order: every task but those
+    PLAIN_PASS_IGNORES names. A list that isn't a list blocks, as `?`: with no task list the
+    respawn can't be shown safe."""
+    entries = task_entries(tasks)
+    if entries is None:
+        return [{"label": "?"}]
+    return [e for e in entries if e["label"] not in PLAIN_PASS_IGNORES]
 
 
 def state_dir() -> str:

@@ -25,15 +25,16 @@ input=$(cat 2>/dev/null)
 # nothing when it can't be read). background_tasks' `type` is Claude Code's friendly label
 # ("shell", "subagent"), not the internal task name (local_bash, local_agent), which appears only
 # for a type with no label. A Monitor arrives as "shell" too; stop_ring.task_types relabels it
-# "monitor" from the transcript (PLAN.md A10). Teammates linger in the list after they finish,
-# dream is memory upkeep and a monitor can run for hours, so those don't count.
+# "monitor" from the transcript (PLAN.md A10), and the Artifact tool's live watch "artifact
+# watch". Teammates linger in the list after they finish, dream is memory upkeep and a monitor
+# can run for hours, so those don't count.
 #
 # The same step writes the session's stop record, $XDG_STATE_HOME/dotclaude/stops/<session>.json
-# (time, the waits in flight, every task's label, the transcript path, and `replies`: what Claude
-# said in the last 5 turns), for every stop but a subagent's, and prunes
+# (time, the waits in flight, every task's label, id and description, the transcript path, and
+# `replies`: what Claude said in the last 5 turns), for every stop but a subagent's, and prunes
 # records older than 7 days once a day. pass-respawn's plain mode respawns only after a stop with
-# no task but dream, since in-process agents are no child process it could see; it reads the
-# transcript there and copies `replies` for the respawned session's banner
+# no task but dream or an artifact watch, since in-process agents are no child process it could
+# see; it reads the transcript there and copies `replies` for the respawned session's banner
 # (hooks/pass-banner.sh) and Ctrl-b Up (tmux/pass-last). hooks/stop_ring.py, beside this script's
 # real path and run with python3 -I, does all of this and has the details.
 read -r spawned busy tasks size transcript < <(printf '%s' "$input" | \

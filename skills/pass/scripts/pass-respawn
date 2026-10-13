@@ -484,7 +484,8 @@ def stop_problem(plan: Plan) -> tuple[str, str] | None:
     if not isinstance(tasks, list):
         return ("no task list in the stop record",
                 f"pass refused: the stop record lists no tasks, {unsure}")
-    if others := lanelib.plain_pass_blockers(tasks):
+    if blockers := lanelib.plain_pass_blockers(tasks):
+        others = [e["label"] for e in blockers]
         them = "it" if len(others) == 1 else "them"
         return ("tasks: " + ", ".join(others),
                 f"pass refused: {counted(others)} running (a respawn would kill {them}). "

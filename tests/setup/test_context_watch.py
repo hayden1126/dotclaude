@@ -338,6 +338,16 @@ class Background(Base):
         self.assertEqual(self.stop(310_000, background_tasks=[{"type": "dream"}]),
                          block("soft", "310k"))
 
+    def test_an_artifact_watch_alone_is_no_background_work(self):
+        # The Artifact tool's live watch: a plain pass ends it, so no compact advice for it.
+        self.on()
+        watch = [{"id": "s1", "type": "monitor", "status": "running",
+                  "description": "live updates for artifact https://claude.ai/artifact/x (c)"}]
+        self.assertEqual(self.stop(310_000, background_tasks=watch), block("soft", "310k"))
+        self.stop_record([], [{"label": "artifact watch", "id": "s1",
+                               "url": "https://claude.ai/artifact/x"}])
+        self.assertEqual(self.tool(485_000), context("wrap", "485k"))
+
     def test_a_tool_call_reads_the_fresh_stop_record(self):
         self.on()
         self.stop_record(["subagent"], ["subagent"])
@@ -375,9 +385,10 @@ class Background(Base):
     def test_the_plain_pass_rule_is_pass_respawns(self):
         # One definition: lanelib.plain_pass_blockers, which pass-respawn's stop_problem uses.
         lib = aps.lanelib()
-        self.assertEqual(lib.plain_pass_blockers(["dream", "monitor", "unlabeled"]),
-                         ["monitor", "unlabeled"])
-        self.assertEqual(lib.plain_pass_blockers(None), ["?"])
+        self.assertEqual(lib.plain_pass_blockers(["dream", "monitor", "unlabeled",
+                                                  "artifact watch"]),
+                         [{"label": "monitor"}, {"label": "unlabeled"}])
+        self.assertEqual(lib.plain_pass_blockers(None), [{"label": "?"}])
         with open(os.path.join(REPO, "skills", "pass", "scripts", "pass-respawn")) as f:
             self.assertIn("lanelib.plain_pass_blockers(tasks)", f.read())
 
@@ -921,11 +932,28 @@ class Locks(Base):
 
 
 class PlainPassRule(unittest.TestCase):
-    def test_non_strings_block_like_the_old_rule_and_never_raise(self):
+    def test_odd_entries_block_as_unlabeled_and_never_raise(self):
         lib = aps.lanelib()
-        self.assertEqual(lib.plain_pass_blockers([{"a": 1}, ["x"], "dream", None, 3, "monitor"]),
-                         ["{'a': 1}", "['x']", "None", "3", "monitor"])
+        self.assertEqual(lib.plain_pass_blockers([{"a": 1}, ["x"], "dream", None, 3, "monitor",
+                                                  {"label": ""}, {"label": 5}, ""]),
+                         [{"label": "unlabeled"}] * 4 + [{"label": "monitor"}]
+                         + [{"label": "unlabeled"}] * 3)
         self.assertEqual(lib.plain_pass_blockers(["dream", "dream"]), [])
+
+    def test_record_entries_keep_their_names_and_an_artifact_watch_never_blocks(self):
+        # stop-ring.sh's record keeps each task as {label, id, description, url}; a plain
+        # pass ignores memory upkeep and the Artifact tool's live watch (incident e7cc7b9a).
+        lib = aps.lanelib()
+        watch = {"label": "artifact watch", "id": "s1", "url": "https://claude.ai/artifact/x"}
+        mon = {"label": "monitor", "id": "m1", "description": "deploy events"}
+        self.assertEqual(lib.plain_pass_blockers([watch, mon, {"label": "dream", "id": "d1"}]),
+                         [mon])
+        self.assertEqual(lib.plain_pass_blockers([watch]), [])
+        # Only string fields survive: a record is data, and its text reaches tmux and the log.
+        self.assertEqual(lib.task_entries([{"label": "shell", "id": 3, "description": ["x"],
+                                            "url": "u", "extra": "e"}]),
+                         [{"label": "shell", "url": "u"}])
+        self.assertIsNone(lib.task_entries("monitor"))
 
 
 def typed_command(name, args="", as_list=False):

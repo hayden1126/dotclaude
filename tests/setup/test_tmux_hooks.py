@@ -296,7 +296,7 @@ class Hooks(unittest.TestCase):
             {"id": "t1", "type": "teammate", "status": "running"}]})
         rec = self.stop_record()
         self.assertEqual((rec["session_id"], rec["waits"], rec["tasks"]),
-                         ("abcdef12-0000", [], ["teammate"]))
+                         ("abcdef12-0000", [], [{"label": "teammate", "id": "t1"}]))
         self.assertGreaterEqual(rec["time"], before - 1)
         self.assertLessEqual(rec["time"], time.time() + 1)
         tasks = [{"id": "b1", "type": "shell"}, {"id": "a1", "type": "subagent"},
@@ -344,8 +344,8 @@ class Hooks(unittest.TestCase):
         self.run_hook("stop-ring.sh", TAB, {"transcript_path": path, "background_tasks": tasks})
         rec = self.stop_record()
         # s1 is a subagent's Monitor: not work the turn waits on either.
-        self.assertEqual((rec["tasks"], rec["waits"]), (["monitor", "shell", "monitor"],
-                                                        ["shell"]))
+        self.assertEqual(([t["label"] for t in rec["tasks"]], rec["waits"]),
+                         (["monitor", "shell", "monitor"], ["shell"]))
         self.assertIn("tasks=monitor,shell,monitor", self.ring_log()[-1])
         # A Monitor alone rings, as a lingering monitor always did.
         self.run_hook("stop-ring.sh", TAB, {"transcript_path": path, "background_tasks": tasks[:1]})
@@ -439,11 +439,74 @@ class Hooks(unittest.TestCase):
             {"id": "m1", "type": "monitor"}, {"id": "u1"}, {"id": "e1", "type": ""}, "junk"]})
         rec = self.stop_record()
         self.assertEqual(rec["transcript_path"], "/x/t.jsonl")
-        self.assertEqual(rec["tasks"], ["monitor", "unlabeled", "unlabeled", "unlabeled"])
+        self.assertEqual(rec["tasks"], [{"label": "monitor", "id": "m1"},
+                                        {"label": "unlabeled", "id": "u1"},
+                                        {"label": "unlabeled", "id": "e1"},
+                                        {"label": "unlabeled"}])
         self.assertEqual(rec["waits"], [])
         self.assertIn("stop rang tasks=monitor", self.ring_log()[-1])
         self.run_hook("stop-ring.sh", TAB, {"transcript_path": ["not", "a", "string"]})
         self.assertNotIn("transcript_path", self.stop_record())
+
+    def test_the_stop_record_keeps_each_tasks_id_and_description(self):
+        # pass-respawn names each task it refuses for, and `pass-respawn --tasks` lists them
+        # for the session to stop. Entries follow the 2.1.296 payload (rdn: id, type, status,
+        # description, and a shell's command, which the record leaves out).
+        long = "Wait for " + "x" * 300
+        self.run_hook("stop-ring.sh", TAB, {"background_tasks": [
+            {"id": "b0fzd27l4", "type": "shell", "status": "running",
+             "description": "Wait for the deploy run to finish",
+             "command": "gh run watch 38350970777 --exit-status"},
+            {"id": "a1", "type": "subagent", "status": "running", "agent_type": "writer",
+             "description": 'Fix the "axis"\nlabels\x1b[31m now' + chr(0x202e)},
+            {"id": "w1", "type": "workflow", "status": "running", "description": long},
+            {"id": "odd id", "type": "monitor", "description": 7}]})
+        tasks = self.stop_record()["tasks"]
+        self.assertEqual(tasks[0], {"label": "shell", "id": "b0fzd27l4",
+                                    "description": "Wait for the deploy run to finish"})
+        # Control and format characters go, double quotes become single, whitespace folds.
+        self.assertEqual(tasks[1], {"label": "subagent", "id": "a1",
+                                    "description": "Fix the 'axis' labels[31m now"})
+        self.assertEqual(tasks[2]["description"], long[:stop_ring.DESC_CAP - 3] + "...")
+        self.assertEqual(len(tasks[2]["description"]), stop_ring.DESC_CAP)
+        # An id that isn't a plain name and a description that isn't a string are left out.
+        self.assertEqual(tasks[3], {"label": "monitor"})
+
+    def artifact_watch(self, url="https://claude.ai/artifact/8JLmWLDftm9VdGcLQnGr76", **extra):
+        """A Stop payload entry for the live watch the Artifact tool arms on a publish, in
+        2.1.296's shape: a monitor_ws, labeled `monitor`, with no server (rdn) and the
+        description Yt builds."""
+        return {"id": "s8k2m4p6q", "type": "monitor", "status": "running",
+                "description": f"live updates for artifact {url} (comments sent to Claude)",
+                **extra}
+
+    def test_an_artifact_watch_is_labeled_and_keeps_its_url(self):
+        # Claude Code hides it from /tasks and its own busy counts and never shows the model
+        # its id, so a plain pass must not wait on it (incident e7cc7b9a, 2026-10-13).
+        code = "https://claude.ai/code/artifact/0b5e7c1a-2f4d-4c1e-9a7b-3d2f1e0c9b8a"
+        self.run_hook("stop-ring.sh", TAB, {"background_tasks": [
+            self.artifact_watch(), self.artifact_watch(code)]})
+        tasks = self.stop_record()["tasks"]
+        self.assertEqual([(t["label"], t["url"]) for t in tasks],
+                         [("artifact watch", "https://claude.ai/artifact/8JLmWLDftm9VdGcLQnGr76"),
+                          ("artifact watch", code)])
+        self.assertEqual(tasks[0]["id"], "s8k2m4p6q")
+        self.assertIn("stop rang tasks=artifact_watch,artifact_watch", self.ring_log()[-1])
+
+    def test_only_a_monitor_with_the_watch_description_is_an_artifact_watch(self):
+        types = stop_ring.task_types
+        watch = self.artifact_watch()
+        self.assertEqual(types([watch], None), ["artifact watch"])
+        # An MCP monitor carries its server; a Monitor the model started is a shell or has
+        # its own description; the prefix must open the description and name a claude.ai page.
+        self.assertEqual(types([{**watch, "server": "x", "tool": "y"}], None), ["monitor"])
+        self.assertEqual(types([{**watch, "type": "shell"}], None), ["shell"])
+        for desc in ["deploy events", "see live updates for artifact https://claude.ai/artifact/x",
+                     "live updates for artifact https://evil.example/artifact/x (c)",
+                     "live updates for artifact https://claude.ai/artifacts/x (c)", None]:
+            self.assertEqual(types([{**watch, "description": desc}], None), ["monitor"], desc)
+        self.assertIsNone(stop_ring.artifact_url({**watch, "server": "x"}))
+        self.assertIsNone(stop_ring.artifact_url("junk"))
 
     def test_the_stop_record_keeps_everything_since_the_last_prompts(self):
         # pass-respawn copies `replies` for the respawned session's banner and Ctrl-b Up. A Stop
