@@ -30,8 +30,8 @@ stored here).
   https://claude.ai/artifact/KWwrPkLsbMUi7Ugjfskqsz (republish by that URL).
 - **tmux tabs come back after their server dies** (PR #70, installed 2026-10-05; design in
   `PLAN.md`, behavior in README "Tabs come back after a reboot", decisions in
-  [[dotclaude-tmux-restore]]). **Untested for real:** Hayden's `wsl --shutdown`, then connect;
-  `claude-restore --list` before, `$XDG_STATE_HOME/dotclaude/restore.log` after.
+  [[dotclaude-tmux-restore]]). Ran for real on 2026-10-13 (`restore.log`, 13:58
+  local).
 - **Green only for a real ask** (PR #74, live on HAYPC): the wait hook matches
   `permission_prompt|elicitation_dialog`. The cause is inferred, not proven; if a window goes green
   again with no ask, log `notification_type` in `tmux-state.sh`.
@@ -219,7 +219,6 @@ stored here).
   - Tab restore (#70) ran for real: the tmux server died, and at 2026-10-13 13:58 local
     `restore.log` shows the open sessions restored to their tabs, with expected skips (a
     deleted directory, older sessions of one pane, a window closed before the server ended).
-    Remove #70's "Untested for real" note in Done at the next edit there.
   - **Watch (PR 4, live on HAYPC):** `context-watch.err` in the state dir (a Stop that timed out
     waiting for its reply, and the watcher's Python errors). Not yet seen live: a refused pass's
     toast, and Hayden's verdict on the rendered popup.
