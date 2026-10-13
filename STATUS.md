@@ -74,8 +74,14 @@ stored here).
   here. The config caps live lanes at 3, with locks `install` and `suite`.
   - Merged: `autopass-now` as #90 and `attach-tabs` as #91 (2026-10-13), each installed by the
     lead from the main checkout. `/autopass` is now an immediate mod command, dotclaude's first.
-  - Live: `narrow-excluded` (security step 1, effort xhigh). Once pushed, a lane merges
-    `origin/main` into its branch, since force pushes are denied.
+  - Live: `narrow-excluded` (security step 1, effort xhigh), plus `lane-close` and `pass-busy`
+    (opened 2026-10-13, Hayden's call). `lane-close`: `lane done` ends the lane's own window
+    and the leftovers that carry a lane session's id, the install lock holds until the lead's
+    reinstall, setup.sh prunes links into lanes and says when sessions need a restart.
+    `pass-busy`: a `busy: tasks` refusal names the task, and the pass skill stops its own
+    finished Monitors first (capella-studio session e7cc7b9a's pass was refused twice by a
+    leftover Monitor). Merge order goes by readiness: the lead installs only the next to merge.
+    Once pushed, a lane merges `origin/main` into its branch, since force pushes are denied.
   - Hayden split `narrow-excluded` (2026-10-13), after a safety classifier stopped three
     sessions while they read the sandbox code. Part 1, this lane's PR: the excluded-command
     inventory, the narrowed `excludedCommands`, the ask rules and their tests. Part 2, a
