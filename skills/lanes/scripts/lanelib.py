@@ -755,7 +755,6 @@ def cwd_inside(value, root: str) -> bool:
 
 PROC = "/proc"
 EXITED = ("Z", "X")  # /proc/<pid>/stat states of a process that has exited (zombie, dead)
-STOPPED = ("T", "t")  # states of a stopped thread: by a signal, or for its tracer
 TRANSCRIPT_HEAD = 64 * 1024  # bytes of a transcript read for its first recorded cwd
 
 
@@ -797,26 +796,6 @@ def proc_alive(p: Proc, proc: str = PROC) -> bool:
     """Whether p still runs: its pid names the same process (same start) and it hasn't exited."""
     st = proc_stat(p.pid, proc)
     return st is not None and st[3] == p.start and st[1] not in EXITED
-
-
-def proc_frozen(p: Proc, proc: str = PROC) -> bool:
-    """Whether p can no longer run: gone, or every thread of it stopped (state T, or t when
-    traced). SIGSTOP stops each thread at its next return to user space, so a syscall in flight,
-    an open() among them, completes first: only this state proves none can open a file now."""
-    if proc_start(p.pid, proc) != p.start:
-        return True
-    task = os.path.join(proc, str(p.pid), "task")
-    try:
-        tids = os.listdir(task)
-    except FileNotFoundError:
-        return True
-    except OSError:
-        return False
-    for tid in tids:
-        st = proc_stat(int(tid), task) if tid.isascii() and tid.isdigit() else None
-        if st is not None and st[1] not in STOPPED + EXITED:
-            return False
-    return True
 
 
 def proc_env_sid(pid: int, proc: str = PROC) -> str | None:

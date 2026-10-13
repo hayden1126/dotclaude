@@ -14,7 +14,6 @@ import shutil
 import signal
 import subprocess
 import sys
-import textwrap
 import threading
 import time
 import types
@@ -844,24 +843,11 @@ FAKE = r'''
   then      {argv, cwd, go, out}: once go exists, run argv in cwd and write {rc, err} to out
   comm      the comm it gives itself (/proc/self/comm), e.g. "tmux: server"
   session   {file, sid}: Claude Code's session file it writes for itself (pid, procStart)
-  on_cont   a fake's config it starts on its first SIGCONT, and waits for until it is ready
-            (whatever a process does once it runs again: a git that opens a lock file)
 It prints "ready <pid> <its descendants' pids>" once set up, then sleeps."""
 import json, os, signal, subprocess, sys, time
 
 cfg = json.loads(sys.argv[1])
 ending = False
-started = []
-
-
-def cont(_sig, _frame):
-    if started:
-        return
-    child = cfg["on_cont"]
-    started.append(subprocess.Popen([sys.executable, __file__, json.dumps(child)],
-                                    cwd=child["cwd"], env=child["env"], stdout=subprocess.PIPE,
-                                    text=True))
-    started[0].stdout.readline()
 
 
 def on(sig, _frame):
@@ -882,8 +868,6 @@ def on(sig, _frame):
 
 for sig in (signal.SIGTERM, signal.SIGHUP):
     signal.signal(sig, on)
-if cfg.get("on_cont"):
-    signal.signal(signal.SIGCONT, cont)
 if cfg.get("comm"):
     with open("/proc/self/comm", "w") as f:
         f.write(cfg["comm"])
@@ -1246,48 +1230,21 @@ class Close(LanesRepo):
         self.assertEqual(self.signals(), [])  # SIGTERM to an init that exits would kill it too
         self.assertEqual(self.lane_json("chart-fix")["state"], "closing")
 
-    def test_a_target_that_starts_a_git_file_holder_once_continued_is_never_killed(self):
-        # The race between the check and the signal: a survivor starts a git that opens a lock
-        # file. This one starts it the moment it runs again (SIGCONT). Its tree is frozen for
-        # each check, so the holder is seen before the next signal, and nothing is left stopped,
-        # on a refusal too.
-        self.env["_LANE_TEST_GRACE"] = "2"  # time for the holder to start before round 2
-        self.hand_off()
-        self.transcript("sess-lane-0003", self.path)
-        lock = os.path.join(self.common, "x.lock")
-        holder = self.fake(self.path, "sess-lane-0003", ignore=["SIGTERM"], hold=lock)
-        (left,) = self.start(self.fake(self.path, "sess-lane-0003", ignore=["SIGTERM"],
-                                       on_cont=holder))
-        p = self.run_lane("done", "chart-fix", "--abandon")
-        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
-        (git,) = lanelib.children(lanelib.scan()).get(left, [])
-        comm, state, _, self.starts[git] = lanelib.proc_stat(git)
-        self.addCleanup(self.kill_ours, [git])
-        self.assertTrue(self.alive(left) and self.alive(git))  # never SIGKILLed
-        self.assertIn(f"{left} {self.comms[left]} (carries lane session sess-lane-0003; has "
-                      f"{git} {comm} under it, which holds {lock} open, so it was left running",
-                      p.stderr)
-        self.assertNotIn(state, lanelib.STOPPED)
-        self.assertNotIn(lanelib.proc_stat(left)[1], lanelib.STOPPED)
-        self.assertLessEqual(set(self.signals()), {(left, "SIGTERM"), (git, "SIGTERM")})
-        self.assertEqual(self.lane_json("chart-fix")["state"], "closing")
-
-    def test_guarded_freezes_the_whole_tree_for_its_check_and_always_continues_it(self):
+    def test_guarded_checks_the_whole_tree_just_before_its_signal(self):
         lane_mod = load_lane_script()
         parent, child = self.start(self.fake(self.tmp, children=[self.fake(self.tmp)]))
-        seen = {}
+        seen = []
 
-        def check(pid, root):  # lanelib.open_under, noting each process's state when checked
-            seen[pid] = lanelib.proc_stat(pid)[1]
+        def check(pid, root):  # lanelib.open_under, noting each process it checks
+            seen.append(pid)
             return None
 
         with mock.patch.object(lanelib, "open_under", side_effect=check):
             self.assertIsNone(lane_mod.guarded(lanelib.scan()[parent], signal.SIGTERM,
                                                self.common))
-        self.assertEqual(seen, {parent: "T", child: "T"})
-        self.assertTrue(self.gone(parent))  # its SIGTERM, once continued
-        self.assertNotIn(lanelib.proc_stat(child)[1], lanelib.STOPPED)
-        # A hold, and a check that fails, continue the whole tree too, and signal nothing.
+        self.assertEqual(seen, [parent, child])
+        self.assertTrue(self.gone(parent))
+        # A holder anywhere in the tree holds the signal; a check that fails signals nothing.
         lock = os.path.join(self.common, "y.lock")
         top, mid = self.start(self.fake(self.tmp, children=[self.fake(self.tmp, hold=lock)]))
         why = lane_mod.guarded(lanelib.scan()[top], signal.SIGTERM, self.common)
@@ -1296,66 +1253,30 @@ class Close(LanesRepo):
         with mock.patch.object(lanelib, "open_under", side_effect=RuntimeError("boom")):
             with self.assertRaises(RuntimeError):
                 lane_mod.guarded(lanelib.scan()[top], signal.SIGKILL, self.common)
-        for pid in (top, mid):
-            self.assertTrue(self.alive(pid))
-            self.assertNotIn(lanelib.proc_stat(pid)[1], lanelib.STOPPED)
+        self.assertTrue(self.alive(top) and self.alive(mid))
         self.assertEqual(self.signals(), [(parent, "SIGTERM")])
 
-    def test_guarded_freezes_a_pane_shell_above_first_and_continues_it_last(self):
-        # A job-control shell that sees its child stop reports it suspended and takes back the
-        # terminal: stopped first, it never sees the stop. Only p's own parent is frozen.
+    @unittest.skipUnless(shutil.which("tmux"), "no tmux")
+    def test_a_tmux_pane_process_gets_its_signal(self):
+        # tmux continues a pane process that gets SIGSTOP at once (a `lane open` tab's claude
+        # is one), so a check that froze its target first never got a signal through.
         lane_mod = load_lane_script()
-        shell, child = self.start(self.fake(self.tmp, children=[self.fake(self.tmp)]))
-        (other,) = self.start(self.fake(self.tmp))
-        for above, want in ((shell, "T"), (other, "S")):
-            with self.subTest(above=above):
-                seen = {}
-
-                def check(pid, root):
-                    seen[pid], seen["above"] = lanelib.proc_stat(pid)[1], lanelib.proc_stat(above)[1]
-                    return None
-
-                with mock.patch.object(lanelib, "open_under", side_effect=check):
-                    self.assertIsNone(lane_mod.guarded(lanelib.scan()[child], 0, self.common,
-                                                       above=lanelib.scan()[above]))
-                self.assertEqual(seen, {child: "T", "above": want})
-                for pid in (shell, child, other):
-                    self.assertTrue(self.alive(pid))
-                    self.assertNotIn(lanelib.proc_stat(pid)[1], lanelib.STOPPED)
-        self.assertEqual(self.signals(), [])
-
-    def test_a_sigterm_to_done_mid_freeze_still_continues_the_tree(self):
-        # The lead's Bash timeout or a closed pane signals `done` itself: blocked while a tree is
-        # frozen, the signal ends it only once everything is continued.
-        (target,) = self.start(self.fake(self.tmp))
-        marker = os.path.join(self.tmp, "frozen")
-        code = textwrap.dedent("""
-            import importlib.machinery, importlib.util, sys, time
-            lane, libdir, pid, marker, common = sys.argv[1:]
-            sys.path.insert(0, libdir)
-            import lanelib
-            loader = importlib.machinery.SourceFileLoader("lane_cli", lane)
-            mod = importlib.util.module_from_spec(importlib.util.spec_from_loader("lane_cli", loader))
-            loader.exec_module(mod)
-            def check(p, root):
-                open(marker, "w").close()
-                time.sleep(2)
-            lanelib.open_under = check
-            mod.guarded(lanelib.scan()[int(pid)], 0, common)
-            time.sleep(30)
-        """)
-        helper = subprocess.Popen([sys.executable, "-c", code, LANE,
-                                   os.path.dirname(lanelib.__file__), str(target), marker,
-                                   self.common], env=self.env)
-        self.addCleanup(helper.kill)
-        deadline = time.monotonic() + 20
-        while not os.path.exists(marker) and time.monotonic() < deadline:
-            time.sleep(0.02)
-        self.assertEqual(lanelib.proc_stat(target)[1], "T")
-        helper.terminate()
-        self.assertEqual(helper.wait(10), -signal.SIGTERM)
-        self.assertTrue(self.alive(target))
-        self.assertNotIn(lanelib.proc_stat(target)[1], lanelib.STOPPED)
+        sock = os.path.join(self.tmp, "tmux.sock")
+        tmux = ["tmux", "-S", sock, "-f", "/dev/null"]
+        started = subprocess.run([*tmux, "new-session", "-d", "sleep 300"], env=self.env,
+                                 capture_output=True, text=True)
+        if started.returncode != 0:  # the Bash sandbox refuses a unix socket's connect
+            self.skipTest(f"tmux can't start a server here: {started.stderr.strip()}")
+        self.addCleanup(subprocess.run, [*tmux, "kill-server"], env=self.env,
+                        capture_output=True)
+        pane = int(subprocess.run([*tmux, "display", "-p", "#{pane_pid}"], env=self.env,
+                                  capture_output=True, text=True, check=True).stdout)
+        proc = lanelib.scan()[pane]
+        self.assertIsNone(lane_mod.guarded(proc, signal.SIGTERM, self.common))
+        deadline = time.monotonic() + 5
+        while lanelib.proc_alive(proc) and time.monotonic() < deadline:
+            time.sleep(0.05)
+        self.assertFalse(lanelib.proc_alive(proc))
 
     def test_a_process_started_during_the_close_refuses_in_round_two(self):
         # Unprovable and new (a session's exit left it behind): the close stops there, the
@@ -1921,6 +1842,20 @@ class Close(LanesRepo):
             self.done_in_process(lane_mod)
         self.assertFalse(os.path.exists(ran))
         self.assertClosed()
+
+    def test_a_repo_with_per_worktree_config_refuses_before_any_git_in_the_lane(self):
+        # config.worktree sits in the lane-writable admin dir, and GIT_COMMON_DIR can't keep
+        # git from reading it once extensions.worktreeConfig is on.
+        lane_mod = load_lane_script()
+        self.git("config", "extensions.worktreeConfig", "true")
+        (pid,) = self.claude()
+        with mock.patch.object(lane_mod, "removable") as removable:
+            with self.assertRaisesRegex(lane_mod.LaneError, "extensions.worktreeConfig"):
+                self.done_in_process(lane_mod)
+        removable.assert_not_called()
+        self.assertTrue(self.alive(pid))
+        self.assertEqual(self.signals(), [])
+        self.assertEqual(self.lane_json("chart-fix")["state"], "active")
 
     def test_an_archive_build_that_fails_any_way_leaves_no_partial_archive(self):
         lane_mod = load_lane_script()
