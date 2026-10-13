@@ -607,6 +607,110 @@ class Plain(Base):
         with open(self.last_reply()) as f:
             self.assertEqual(json.load(f)["replies"], self.REPLIES[:1])
 
+    def prompt(self, pid, content, **fields):
+        """A main-chain typed prompt in the transcript, as Claude Code writes it."""
+        return {"type": "user", "origin": {"kind": "human"}, "promptId": pid,
+                "isSidechain": False, "timestamp": "2026-10-12T18:27:29.500Z",
+                "message": {"role": "user", "content": content}, **fields}
+
+    def written(self):
+        with open(self.last_reply()) as f:
+            return json.load(f)
+
+    def test_each_turns_prompt_is_written_beside_its_replies(self):
+        self.stop_replies = self.REPLIES
+        self.say(self.prompt("p2", "Open the PR.\nThen pass."),
+                 self.prompt("p1", "Run the tests " + chr(0x00E9)),
+                 self.prompt("p2", "a second typed entry for p2 is ignored"),
+                 self.prompt("p9", "a turn the replies don't have"))
+        code, out = self.run_pass("--foreground")
+        self.assertEqual(code, 0, out)
+        stamp = datetime.datetime(2026, 10, 12, 18, 27, 29, 500000,
+                                  tzinfo=datetime.timezone.utc).timestamp()
+        self.assertEqual(self.written()["prompts"], [
+            {"prompt_id": "p1", "text": "Run the tests " + chr(0x00E9), "time": stamp},
+            {"prompt_id": "p2", "text": "Open the PR.\nThen pass.", "time": stamp}])
+
+    def test_only_a_main_chain_typed_prompt_counts(self):
+        self.stop_replies = self.REPLIES
+        self.say(self.prompt("p1", "from a subagent", isSidechain=True),
+                 self.prompt("p1", "the skill body", isMeta=True),
+                 self.prompt("p1", "a task notice", origin={"kind": "task-notification"}),
+                 self.prompt("p1", [{"type": "tool_result", "content": "x"}]),
+                 self.prompt("p1", "   "),
+                 "{not json", "",
+                 self.prompt("p2", "the real one"))
+        code, out = self.run_pass("--foreground")
+        self.assertEqual(code, 0, out)
+        self.assertEqual([p["text"] for p in self.written()["prompts"]], ["the real one"])
+
+    def test_a_slash_command_and_an_image_show_as_typed(self):
+        self.stop_replies = self.REPLIES
+        command = ("<command-message>pass</command-message>\n<command-name>/pass</command-name>\n"
+                   "<command-args>compact</command-args>")
+        self.say(self.prompt("p1", command),
+                 self.prompt("p2", [{"type": "image", "source": {"type": "base64", "data": "x"}},
+                                    {"type": "text", "text": "what is this?"}]))
+        code, out = self.run_pass("--foreground")
+        self.assertEqual(code, 0, out)
+        self.assertEqual([p["text"] for p in self.written()["prompts"]],
+                         ["/pass compact", "[image]\nwhat is this?"])
+        self.assertEqual(self.mod.prompt_text("<command-message>x</command-message>\n"
+                                              "<command-name>/clear</command-name>"), "/clear")
+        self.assertEqual(self.mod.prompt_text("<command-message>x</command-message>\n"
+                                              "<command-name>review</command-name>\n"
+                                              "<command-args></command-args>"), "/review")
+
+    def test_a_long_prompt_is_cut_at_12_lines_or_1_kib(self):
+        clip = self.mod.clip_prompt
+        many = "\n".join(f"line {i}" for i in range(1, 21))
+        self.assertEqual(clip(many), "\n".join(f"line {i}" for i in range(1, 13))
+                         + "\n" + chr(0x2026) + " (8 more lines)")
+        self.assertEqual(clip("\n".join(["l"] * 13)),
+                         "\n".join(["l"] * 12) + "\n" + chr(0x2026) + " (1 more line)")
+        self.assertEqual(clip("\n".join(["l"] * 12)), "\n".join(["l"] * 12))
+        one = clip(chr(0x00E9) * 1000)                       # 2,000 bytes on one line
+        self.assertEqual(one, chr(0x00E9) * 512 + chr(0x2026))   # cut on a character boundary
+        two = clip("a" * 1000 + "\n" + "b" * 100 + "\nc")
+        self.assertEqual(two, "a" * 1000 + "\n" + "b" * 23 + chr(0x2026) + "\n" + chr(0x2026)
+                         + " (1 more line)")
+        self.assertEqual(clip("a" * 1024 + "\nb"), "a" * 1024 + "\n" + chr(0x2026)
+                         + " (1 more line)")                 # no room for a cut line
+        self.assertEqual(clip("\n\nfine  \n\n"), "fine")
+        self.assertLessEqual(len(clip("x" * 5000).encode()), 1024 + 3)
+
+    def test_only_the_transcripts_last_8_mib_is_read(self):
+        self.mod.PROMPT_TAIL = 200
+        self.stop_replies = self.REPLIES
+        self.say(self.prompt("p1", "too far back"), {"type": "pad", "x": "y" * 300},
+                 self.prompt("p2", "recent"))
+        code, out = self.run_pass("--foreground")
+        self.assertEqual(code, 0, out)
+        self.assertEqual([p["text"] for p in self.written()["prompts"]], ["recent"])
+
+    def test_no_transcript_writes_no_prompts(self):
+        # A transcript gone at the call drops the pass (`resumed`), so this calls write_last
+        # with one that went away after the call.
+        self.stop_replies = self.REPLIES
+        plan = self.plan()
+        self.write_stop([])
+        os.remove(self.transcript())
+        tab = {"socket": "/tmp/s", "server_start": 1, "server_pid": 2, "pane": "%4"}
+        self.assertEqual(self.mod.write_last(plan, tab), self.last_reply())
+        self.assertNotIn("prompts", self.written())
+        self.assertEqual(self.written()["replies"], self.REPLIES)
+        self.assertIsNone(self.mod.read_prompts(None, ["p1"]))
+        self.assertIsNone(self.mod.read_prompts(self.tmp, ["p1"]))   # a directory
+
+    def test_a_surprise_in_the_transcript_never_stops_the_pass(self):
+        self.stop_replies = self.REPLIES
+        self.mod.prompt_text = lambda content: 1 / 0
+        self.say(self.prompt("p1", "boom"))
+        code, out = self.run_pass("--foreground")
+        self.assertEqual(code, 0, out)
+        self.assertEqual(len(self.calls("tmux", "respawn-pane")), 1)
+        self.assertNotIn("prompts", self.written())
+
     def test_compact_leaves_an_earlier_last_reply_alone(self):
         self.old_last_reply()
         code, out = self.run_pass("--compact", "--foreground")
