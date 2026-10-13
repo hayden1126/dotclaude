@@ -342,12 +342,21 @@ def lane_of(wt: Worktree, common: str | None) -> bool:
     return common is not None and common_dir(wt.root) == common
 
 
+def under_lanes(wt: Worktree, run: Run) -> bool:
+    """wt sits under run's lanes root, which the lanes config in the state dir names and
+    sandboxed Bash can't write: a lane of run's repo whatever its .git file names, and whether
+    or not run's .git/worktrees/ still registers it (a lane can delete its own entry there)."""
+    return run.lanes is not None and inside(wt.root, run.lanes)
+
+
 def ours(wt: Worktree, run: Run) -> bool:
     """wt is a lane of run's repo, for the prune: its own .git file says so (lane_of), or run's
-    .git/worktrees/ registers it (as holders reads it, so the main whose run releases a lane
-    whose .git file names a fake admin also prunes its links) and it is a dotclaude checkout (so
-    an entry planted there naming another project's worktree prunes nothing in it)."""
-    return lane_of(wt, run.common) or (wt.root in run.registered and dotclaude(wt.root))
+    .git/worktrees/ registers it or it sits under run's lanes root (as holders reads it, so the
+    main whose run releases a lane whose .git file names a fake admin also prunes its links), and
+    it is a dotclaude checkout (so an entry planted there naming another project's worktree
+    prunes nothing in it)."""
+    return lane_of(wt, run.common) or ((wt.root in run.registered or under_lanes(wt, run))
+                                       and dotclaude(wt.root))
 
 
 def holders(repo_dir: str, env=None) -> list[dict]:
@@ -357,7 +366,7 @@ def holders(repo_dir: str, env=None) -> list[dict]:
     plain clone elsewhere is still refused while the real repo's lane holds. Another project's
     worktree never holds, nor does one inside repo_dir's main checkout. A holder this repo's own
     .git/worktrees/ registers gets this repo's main and its admin dir there, whatever its .git
-    file names."""
+    file names; one under this repo's lanes root (under_lanes) gets this repo's main too."""
     p = places(env)
     run = run_at(repo_dir, p)
     found = {}
@@ -369,6 +378,8 @@ def holders(repo_dir: str, env=None) -> list[dict]:
             continue
         if wt.root in run.registered:
             wt = Worktree(wt.root, run.main, run.registered[wt.root])
+        elif under_lanes(wt, run):
+            wt = Worktree(wt.root, run.main, wt.admin)
         found.setdefault(wt, []).append(show(link, p))
     return [{"root": wt.root, "main": wt.main, "branch": branch(wt), "links": shown}
             for wt, shown in sorted(found.items())]
@@ -377,9 +388,10 @@ def holders(repo_dir: str, env=None) -> list[dict]:
 def hold(repo_dir: str, env=None) -> tuple[list[dict], list[dict]]:
     """(the holders a run from repo_dir must not replace, the ones it releases). A run from a
     holder's main checkout relinks everything, so it releases that holder: one whose .git file
-    names it, or any its own .git/worktrees/ registers. Only a main checkout (a real .git dir)
-    releases: a lane whose own .git file names a common dir it planted would otherwise read its
-    run as main and release a sibling.
+    names it, any its own .git/worktrees/ registers, or any under its lanes root, so a lane
+    that deletes its entry there and names a fake admin in its .git file still can't hold this
+    main off. Only a main checkout (a real .git dir) releases: a lane whose own .git file names a
+    common dir it planted would otherwise read its run as main and release a sibling.
 
     A known limit, accepted: a lane can write this repo's .git/worktrees/, so an entry planted
     there naming another clone's dotclaude lane makes this main's run release that lane's hold

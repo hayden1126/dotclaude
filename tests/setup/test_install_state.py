@@ -266,6 +266,41 @@ class Hold(Machine):
         self.assertEqual(install_state.holders(self.b, self.env), [])
         self.assertEqual(self.cli("hold", self.b).returncode, 0)
 
+    def test_a_lane_that_deregisters_itself_and_names_a_fake_admin_is_released_by_main(self):
+        # Neither its .git file nor this repo's worktrees/ ties it here any more: only the
+        # lanes root (the config's, which sandboxed Bash can't write) does.
+        self.install(self.a)
+        write(os.path.join(self.a, "hooks", "lane-only.sh"))
+        only = self.link(os.path.join(self.a, "hooks", "lane-only.sh"),
+                         os.path.join(self.claude, "hooks", "lane-only.sh"))
+        self.forge_admin(self.a)
+        shutil.rmtree(os.path.join(self.common, "worktrees", "a"))
+        self.assertNotIn(self.a, install_state.registered(self.common))
+        (h,) = install_state.holders(self.main, self.env)
+        self.assertEqual((h["root"], h["main"]), (self.a, self.main))
+        r = self.cli("hold", self.main)
+        self.assertEqual((r.returncode, r.stderr), (0, ""))
+        self.assertIn(f"releases the install held by {self.a}", r.stdout)
+        self.assertEqual(self.cli("hold", self.b).returncode, 3)  # only main releases
+        self.install(self.main)
+        self.assertEqual(install_state.prune(self.main, self.env),
+                         [f"removed link {only} -> {self.a}/hooks/lane-only.sh"])
+        self.assertEqual(install_state.holders(self.b, self.env), [])
+
+    def test_a_deregistered_lane_outside_the_lanes_root_still_holds_and_is_kept(self):
+        out = os.path.join(self.tmp, "elsewhere")
+        self.git("worktree", "add", "-q", "-b", "elsewhere", out)
+        self.install(out)
+        self.forge_admin(out)
+        shutil.rmtree(os.path.join(self.common, "worktrees", "elsewhere"))
+        (h,) = install_state.holders(self.main, self.env)
+        self.assertEqual(h["root"], out)
+        self.assertNotEqual(h["main"], self.main)
+        self.assertEqual(self.cli("hold", self.main).returncode, 3)
+        before = self.snapshot()
+        self.assertEqual(install_state.prune(self.main, self.env), [])
+        self.assertEqual(self.snapshot(), before)
+
     def test_a_planted_registration_of_another_projects_worktree_prunes_nothing_there(self):
         # A lane can write this repo's .git/worktrees/: an entry naming proj2's worktree back
         # registers it here, but it is no dotclaude checkout, so its links stay.
