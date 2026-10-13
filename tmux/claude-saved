@@ -93,6 +93,7 @@ import glob, json, os, re, sys, tempfile, time
 
 STORE, REG, CARRY = os.environ["SAVED_DIR"], os.environ["REG_DIR"], os.environ["CARRY_DIR"]
 CARRY_TTL = 120
+SHELVED_GRACE = 30   # s after a Shelve in which track won't record its chat (see op_track)
 SESSIONS, PROJECTS = os.environ["SESSIONS_DIR"], os.environ["PROJECTS_DIR"]
 SID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{7,127}")
 KEYS = "123456789abcdefghijklmnopqrstuvwxyz"
@@ -214,7 +215,7 @@ def argv(pid):
     return [a.decode("utf-8", "replace") for a in raw.split(b"\0")[:-1]]
 
 def stopped(pid):
-    """True for a process stopped by Ctrl+Z (state T or t), or gone."""
+    """True for a stopped process (state T or t: an interactive claude after Ctrl+Z), or gone."""
     try:
         with open("/proc/%d/stat" % pid) as f:
             return f.read().rpartition(")")[2].split()[0] in ("T", "t")
@@ -224,9 +225,10 @@ def stopped(pid):
 def clients():
     """(pid, arg) for each running `claude attach <arg>` process: a tab showing a background
     session. argv[0] is `claude` or the full path a client re-execs itself under (a
-    `claude --resume` of a background chat becomes one). One stopped by Ctrl+Z isn't what its
-    pane shows. "<-" turns a client into `claude agents`, which names no session even after it
-    opens one, so that tab isn't recognized."""
+    `claude --resume` of a background chat becomes one). A stopped one isn't what its pane
+    shows (Claude's own Ctrl+Z exits a client, but a SIGSTOP can stop one). "<-" turns a client
+    into `claude agents`, which names no session even after it opens one, so that tab isn't
+    recognized."""
     for name in os.listdir("/proc"):
         if name.isdigit():
             a = argv(int(name))
@@ -302,7 +304,10 @@ def resolve(tab, pane_pid, command):
     root = int(pane_pid) if pane_pid.isdigit() else None
     live = [s for s in live_sessions()
             if pane_of(s) == tab["pane"] and root and descends(s["pid"], root)]
-    bg = None if live or not root else attached([root]).get(root)
+    bg = attached([root]).get(root) if root else None
+    if bg and live and all(stopped(s["pid"]) for s in live):
+        live = []   # Ctrl+Z'd, then `claude attach` in the same shell: the pane shows that
+    bg = None if live else bg
     job = bg["jobId"] if bg else ""
     if live or bg:
         s = bg or max(live, key=lambda s: num(s.get("updatedAt")) or num(s.get("startedAt")))
@@ -499,17 +504,28 @@ def op_track():
     if not server:
         return   # tmux answered nothing: never sweep entries from that
     by_root = attached({r[1] for r in rows})
-    tabs = list(live_sessions())   # a tab session under the pane is what it shows
+    # A running tab session under the pane is what it shows (as in resolve).
+    tabs = [s for s in live_sessions() if not stopped(s["pid"])]
     keep = set()
     for pane, root, index in rows:
         s = by_root.get(root)
         cwd = s and s.get("cwd")
         if (not (isinstance(cwd, str) and cwd)
-                or any(pane_of(i) == pane and descends(i["pid"], root) for i in tabs)
-                or (entry(s["sessionId"]) or {}).get("shelved")):
-            continue   # (a shelved chat: Shelve deleted its entry; a track that read /proc
-                       # before the kill must not write it back)
+                or any(pane_of(i) == pane and descends(i["pid"], root) for i in tabs)):
+            continue
         sid = s["sessionId"]
+        e = entry(sid)
+        if e and e["shelved"]:
+            if 0 <= NOW - num(e.get("saved_at")) < SHELVED_GRACE:
+                continue   # Shelve deleted its entry just now; a track that read /proc before
+                           # the kill must not write it back
+            # Shelved a while ago and attached again: no SessionStart reaches claude-saved, so
+            # this does that hook's work.
+            e["shelved"] = False
+            e.pop("opening", None)
+            if e["starred"]:
+                e["tab"] = dict(server, pane=pane)
+            save(e)
         old = load(os.path.join(REG, sid + ".json")) or {}
         keep.add((sid, pane))
         write(os.path.join(REG, sid + ".json"), dict(
@@ -787,19 +803,24 @@ case "$cmd" in
     IFS=$'\x1f' read -r result job name < <(py shelve write "$pane" "$start" "$pid" "$panepid" \
       "$command" "$socket" "$title")
     [ "${result:-}" = ok ] || exit 0
+    # An attach tab only shows a background session, which outlives the tab: stop it, so a
+    # shelved chat never runs unseen (Open then resumes it like any other). First: killing a
+    # server's last window ends the server, and this run-shell could go with it.
+    stuck=0
+    if [ -n "$job" ] && ! timeout 10 claude stop "$job" >/dev/null 2>&1; then
+      stuck=1
+    fi
     if [ "$(tmux display -p -t "$pane" '#{window_panes}' 2>/dev/null)" = 1 ]; then
       tmux kill-window -t "$pane"
     else
       mark "$pane" off   # the window stays: its ★ must not linger through it
       tmux kill-pane -t "$pane"
     fi
-    # An attach tab only showed a background session, which outlives the tab: stop it, so a
-    # shelved chat never runs unseen. Open then resumes it like any other.
-    if [ -n "$job" ] && ! timeout 10 claude stop "$job" >/dev/null 2>&1; then
+    if [ "$stuck" = 1 ]; then
       msg "shelved, but it still runs in the background (claude stop $job): $name"
-      exit 0
-    fi
-    msg "shelved: $name" ;;
+    else
+      msg "shelved: $name"
+    fi ;;
 
   menu)
     removing=0

@@ -727,9 +727,10 @@ class Saved(unittest.TestCase):
         self.assertEqual(self.calls("tmux", "select-pane"), [])
         self.assertEqual(len(self.opened()), 1)
 
-    def test_a_suspended_attach_client_is_not_what_the_tab_shows(self):
-        # Ctrl+Z on `claude attach 1`, then `claude attach 2`: the pane shows 2. Two running
-        # clients showing different chats leave no answer at all.
+    def test_a_stopped_attach_client_is_not_what_the_tab_shows(self):
+        # A SIGSTOPped `claude attach 1` (Claude's own Ctrl+Z exits the client instead), then
+        # `claude attach 2`: the pane shows 2. Two running clients showing different chats
+        # leave no answer at all.
         self.background(1)
         self.background(2)
         self.transcript(1)
@@ -743,6 +744,23 @@ class Saved(unittest.TestCase):
         self.run_saved("star", "%4", CLIENT)   # unstar 2 if it resolved; it must not
         self.assertTrue(self.saved()[sid(2)]["starred"])
         self.assertIn("no Claude session found", self.messages()[-1])
+
+    def test_a_suspended_tab_session_loses_to_a_running_attach_client(self):
+        # Ctrl+Z on an interactive claude (it stops), then `claude attach 2` in the same shell.
+        held = subprocess.Popen(["sleep", "30"])
+        self.addCleanup(held.wait)
+        self.addCleanup(held.kill)
+        os.kill(held.pid, signal.SIGSTOP)
+        self.live(1, "%4", pid=held.pid)
+        self.background(2)
+        self.transcript(1)
+        self.transcript(2)
+        self.client("attach", sid(2)[:8])
+        self.run_saved("star", "%4", CLIENT)
+        self.assertEqual(list(self.saved()), [sid(2)])
+        self.track_panes(("%4", self.ppid, 1))
+        self.run_saved("track")
+        self.assertEqual(self.reg_entry(2)["pane"], "%4")
 
     def test_an_attach_client_outside_the_pane_is_not_the_tabs(self):
         self.background(1)
@@ -770,6 +788,10 @@ class Saved(unittest.TestCase):
         self.assertFalse(os.path.exists(os.path.join(self.reg, sid(1) + ".json")))
         self.assertEqual(self.calls("tmux", "kill-window"), [["tmux", "kill-window", "-t", "%4"]])
         self.assertEqual(self.calls("claude"), [["claude", "stop", sid(1)[:8]]])
+        # Stop first: killing a server's last window ends the server and could take this
+        # run-shell, and the stop, with it.
+        order = [a[:2] for a in self.calls() if a[:2] in (["claude", "stop"], ["tmux", "kill-window"])]
+        self.assertEqual(order, [["claude", "stop"], ["tmux", "kill-window"]])
         self.assertEqual(self.messages()[-1], "claude-saved: shelved: [repo1] Fix the parser")
 
     def test_shelve_an_attach_tab_says_when_the_stop_fails(self):
@@ -889,9 +911,29 @@ class Saved(unittest.TestCase):
         self.run_saved("track")
         self.assertIsNone(self.reg_entry(1))
         os.remove(os.path.join(self.sessions, "2.json"))
-        self.put(1, shelved=True)
+        self.put(1, shelved=True, age=0)
         self.run_saved("track")
         self.assertIsNone(self.reg_entry(1))
+
+    def test_track_takes_a_reattached_chat_off_the_shelf(self):
+        # Shelved a while ago, then attached again (its stop failed, or it was started from
+        # agent view): no SessionStart reaches claude-saved, so track does that hook's work.
+        for starred in (False, True):
+            with self.subTest(starred=starred):
+                self.setUp()
+                self.background(1)
+                self.put(1, shelved=True, starred=starred, pane="%9", age=60)
+                stop = self.client("attach", sid(1)[:8])
+                self.track_panes(("%7", self.ppid, 3))
+                self.run_saved("track")
+                stop()
+                self.assertEqual(self.reg_entry(1)["pane"], "%7")
+                if starred:
+                    e = self.saved()[sid(1)]
+                    self.assertFalse(e["shelved"])
+                    self.assertEqual(e["tab"]["pane"], "%7")
+                else:
+                    self.assertEqual(self.saved(), {})
 
     def test_track_with_no_tmux_answer_changes_nothing(self):
         self.registered(1, "%7", attach=True)
