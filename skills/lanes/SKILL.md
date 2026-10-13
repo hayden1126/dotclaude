@@ -85,6 +85,8 @@ an unregistered worktree: `lane whoami` tells you which.
    - anything else with its cwd in the lane;
    - a background session (`claude stop <jobId>` ends it);
    - a dirty, locked or submodule worktree;
+   - a repo that sets `extensions.worktreeConfig` (git in the lane would read its
+     lane-writable `config.worktree`);
    - a run from anywhere but the main checkout, or under a lane's session (only the lead
      closes lanes);
    - links the install still points into the lane;

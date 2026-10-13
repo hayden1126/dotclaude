@@ -1256,6 +1256,31 @@ class Close(LanesRepo):
         self.assertTrue(self.alive(top) and self.alive(mid))
         self.assertEqual(self.signals(), [(parent, "SIGTERM")])
 
+    def test_a_pane_shell_that_took_a_new_job_since_its_check_is_never_sighuped(self):
+        # guarded's own `only` check, just before the signal: round 1's filter ran earlier.
+        lane_mod = load_lane_script()
+        shell, claude, job = self.start(self.fake(self.tmp, children=[self.fake(self.tmp),
+                                                                       self.fake(self.tmp)]))
+        only = {(shell, self.starts[shell]), (claude, self.starts[claude])}
+        why = lane_mod.guarded(lanelib.scan()[shell], signal.SIGHUP, self.common, only)
+        self.assertEqual(why, f"now running {job} {self.comms[job]}, so it was left running")
+        self.assertEqual(self.signals(), [])
+
+    def test_what_runs_under_a_held_session_is_never_sigkilled(self):
+        # Its session's round-2 SIGTERM is held (a hook has a git file open), so its other
+        # processes got no signal of their own: none of them may get a SIGKILL either.
+        self.hand_off()
+        lock = os.path.join(self.common, "z.lock")
+        claude, holder, plain = self.claude(ignore=["SIGTERM"], children=[
+            self.fake(self.path, ignore=["SIGTERM"], hold=lock), self.fake(self.path)])
+        p = self.run_lane("done", "chart-fix", "--abandon")
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        for pid in (claude, holder, plain):
+            self.assertTrue(self.alive(pid), pid)
+        self.assertIn(f"{plain} {self.comms[plain]} (", p.stderr)
+        self.assertIn(f"its session {claude} was left running, so it was too", p.stderr)
+        self.assertEqual(self.lane_json("chart-fix")["state"], "closing")
+
     @unittest.skipUnless(shutil.which("tmux"), "no tmux")
     def test_a_tmux_pane_process_gets_its_signal(self):
         # tmux continues a pane process that gets SIGSTOP at once (a `lane open` tab's claude
@@ -1856,6 +1881,12 @@ class Close(LanesRepo):
         self.assertTrue(self.alive(pid))
         self.assertEqual(self.signals(), [])
         self.assertEqual(self.lane_json("chart-fix")["state"], "active")
+        # With its worktree gone no git runs in the lane, so nothing refuses the close.
+        self.kill_ours([pid])
+        self.assertTrue(self.gone(pid))
+        self.git("worktree", "remove", "--force", self.path)
+        self.done_in_process(lane_mod)
+        self.assertClosed()
 
     def test_an_archive_build_that_fails_any_way_leaves_no_partial_archive(self):
         lane_mod = load_lane_script()

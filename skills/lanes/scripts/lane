@@ -39,8 +39,9 @@ from /proc and Claude Code's own session files and transcripts, never lane.json.
 its cwd in the lane refuses the close by name before any signal, as do installed links into the
 lane (it holds the install: install-state.py, checked again under setup.sh's install.lock just
 before the remove), a dirty, locked or submodule worktree, a background session, a `done` run
-from anywhere but the main checkout or under a lane's session (only the lead closes lanes), and,
-when there is something to end, a failing `handoff-check --closing`.
+from anywhere but the main checkout or under a lane's session (only the lead closes lanes), a
+repo that sets extensions.worktreeConfig (git in the lane would read the lane-writable
+config.worktree), and, when there is something to end, a failing `handoff-check --closing`.
 A close refused after a signal leaves the lane `closing`, which `open` refuses: rerun `done`.
 With nothing to end, a refused close leaves the lane as it was.
 """
@@ -1683,10 +1684,21 @@ def end_lane(repo: Repo, lane_id: str, path: str, hits: dict[int, Hit]) -> None:
             else:
                 send(h, signal.SIGTERM)
         survivors = settle(list(now.values()), wait)
-        # SIGKILL, guarded too; one held at its round-2 signal stays held, so nothing is
-        # killed that never got the chance to exit.
-        killed = [h for h in survivors
-                  if (h.proc.pid, h.proc.start) not in held and send(h, signal.SIGKILL)]
+        # SIGKILL, guarded too, sessions first; one held at its round-2 signal stays held, and so
+        # does whatever runs under a held session (its hooks and servers got no signal of their
+        # own), so nothing is killed that never got the chance to exit.
+        killed = []
+        for h in sorted(survivors, key=lambda h: h.kind != SESSION):
+            key = (h.proc.pid, h.proc.start)
+            if key in held:
+                continue
+            if h.kind == OWNED and (up := next((a for a in lanelib.ancestors(h.proc.pid, procs)
+                                                if a in running and a in procs
+                                                and (a, procs[a].start) in held), None)):
+                held[key] = f"its session {up} was left running, so it was too"
+                continue
+            if send(h, signal.SIGKILL):
+                killed.append(h)
         settle(killed, wait)
         settle(list(known.values()), 0)  # the rest that exited by themselves
     # The final look, with or without anything ended: a process that started meanwhile, or
@@ -1987,13 +1999,14 @@ def cmd_done(args) -> None:
     os.environ["GIT_COMMON_DIR"] = repo.common_dir
     # Not even then, where the repo turns on per-worktree config: git would read the lane's
     # <admin>/config.worktree too, which its sandbox can write and no variable overrides.
+    present = os.path.isdir(path)
     wtc = git(["config", "--file", os.path.join(repo.common_dir, "config"), "--type=bool",
-               "--get", "extensions.worktreeConfig"], repo.main)
-    if wtc.stdout.strip() == "true":
+               "--get", "extensions.worktreeConfig"], repo.main) if present else None
+    if wtc and wtc.stdout.strip() == "true":
         raise LaneError(f"this repo sets extensions.worktreeConfig, so git in lane {args.id} reads "
                         "its config.worktree, which the lane's sandbox can write: `done` won't run "
-                        "git there sandbox-off. Close the lane by hand, or unset it")
-    present = os.path.isdir(path)
+                        "git there sandbox-off. Close the lane by hand, or turn the extension off "
+                        "if nothing needs it (`git sparse-checkout` turns it on)")
     if present:  # its record is archived and its worktree removed, sandbox-off
         usable_path(repo, lane)
     fetched = fetch(repo)
@@ -2100,8 +2113,9 @@ def parser() -> argparse.ArgumentParser:
                        "processes that provably belong to it, archive its record, remove its "
                        "worktree. Its sessions get SIGTERM, their pane shells SIGHUP, survivors "
                        "SIGKILL. Anything else with its cwd in the lane refuses the close by name "
-                       "before any signal, as do installed links into the lane, a dirty or locked "
-                       "worktree and, when there is "
+                       "before any signal, as do installed links into the lane, a dirty, locked "
+                       "or submodule worktree, a repo with extensions.worktreeConfig and, when "
+                       "there is "
                        "something to end, a failing `handoff-check --closing`. A close refused "
                        "after a signal leaves the lane closing: rerun `lane done <id>`.")
     p.add_argument("id")

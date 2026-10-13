@@ -366,20 +366,21 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
   through a pidfd once the start time is checked again:
   1. SIGTERM to sessions and leftovers, then a wait of up to 10 s: longer than the 5 s
      SessionEnd hooks, which run as the session's children and are left to it.
-  2. SIGHUP to a pane shell once its session has exited (an interactive shell ignores
-     SIGTERM), unless it started another job meanwhile.
+  2. SIGHUP to each pane shell after that wait (an interactive shell ignores SIGTERM), unless
+     it started another job meanwhile. zsh passes it on to a session still exiting, which Claude
+     Code handles as a closing tab.
   3. Whatever survives, classified afresh: SIGTERM (SIGHUP again for a pane shell), a wait,
      then SIGKILL.
 
   Every signal but a session's first SIGTERM is guarded: just before it, `done` rescans the
   target's process tree and holds the signal while anything in it has a file open in the git dir
   (a killed git leaves lock files). A held signal is named in the refusal, and a process held at
-  step 3's SIGTERM is never SIGKILLed. A session's first SIGTERM goes unchecked: Claude Code
+  step 3's SIGTERM is never SIGKILLed, nor is anything under a session whose signal was held. A session's first SIGTERM goes unchecked: Claude Code
   handles it as when its tab closes, running its SessionEnd hooks and ending its own children.
   Nothing is stopped for the check. tmux continues a pane process that gets SIGSTOP at once, and
   a job-control shell reports a stopped job suspended and takes back the terminal (probe on tmux
-  3.7c), so a freeze can't hold a tab's session still. A git that opens a lock file in the
-  microseconds between the check and a SIGKILL is the accepted residual (Hayden's call,
+  3.7c), so a freeze can't hold a tab's session still. A git that starts or opens a lock file
+  in the milliseconds between the check and a SIGKILL is the accepted residual (Hayden's call,
   2026-10-13); git removes its own lock files on SIGTERM.
 
   A `lane open` tab closes by itself once its claude exits. The lanes lock is never held while
