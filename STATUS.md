@@ -81,6 +81,20 @@ stored here).
   `claude`. Today `lane open` hardcodes the argv, so a lane's model or effort is set by hand in
   its window.
 
+  Backlog, the next free lane slot (Hayden, 2026-10-12): **a tmux bar that fits several projects
+  with lanes.** One `main` session already holds 9 windows (5 projects, 3 lanes, a spike), and
+  the titles and glyphs no longer fit. Option B, Hayden's pick: keep `main`, and switch to a
+  two-row status bar (tmux 3.7 `status 2`) with windows grouped and colored by project and
+  shorter lane names (`tmux/claude.conf`, `tmux-claude-status`). Option A, only if B still
+  overflows: one tmux session per project, each in its own terminal window.
+  - Remote: `tmux-remote` takes the project from `$SSH_ORIGINAL_COMMAND` (`ssh -t <host>
+    <project>`).
+  - `lane open` already lands in the lead's session.
+  - The cost: `claude-restore` restores everything into `main` and fires only on `main`'s
+    creation, so it would have to become session-aware.
+  - Star, Shelve and the tab map need re-checking.
+  - The remote-access side is private (the hq remote-access doc).
+
   How lanes install, Hayden's call 2026-10-12: after its last review round, a lane runs
   `lane lock install -- ./setup.sh` from its own worktree, sandbox off. Until it merges, every
   session runs that lane's hooks. After the merge, the lead moves the main checkout to `main`,
