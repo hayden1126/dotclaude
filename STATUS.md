@@ -143,11 +143,10 @@ stored here).
   four new hook entries).
   1. **A8, fixed:** the Stop hook now waits up to 1.5 s for the turn's final reply (it lands
      about 100 ms in; PLAN.md "Spike results" A8 has the probe). The Stop hook's timeout went
-     from 5 to 10 s in `settings.json`, a copied file: **re-run `setup.sh`** (copy and diff
-     `~/.claude/settings.json` around it) to install that. **Watch:** `context-watch.err` in
-     the state dir, which logs a Stop that timed out as well as the watcher's Python errors.
-     The same `setup.sh` run links the new `hooks/md_render.py` (the banner and popup already
-     find it through their real paths).
+     from 5 to 10 s in `settings.json`; `setup.sh` installed it on HAYPC 2026-10-12 (the
+     settings diff was that one line) and linked the new `hooks/md_render.py`. **Watch:**
+     `context-watch.err` in the state dir, which logs a Stop that timed out as well as the
+     watcher's Python errors.
   1b. **Part 3, done:** the banner and the Ctrl-b Up popup render markdown (stdlib
      `hooks/md_render.py`, which Hayden picked over `rich` after seeing both) and show each
      turn's prompt (PLAN.md PR 4 "The popup and banner, rendered"). A live `/pass` showed the
