@@ -52,16 +52,22 @@ INLINE = re.compile(
     r"\\(?P<esc>[!-/:-@\[-`{-~])"                       # a backslash escape: the char itself
     r"|(?<!`)(?P<tick>`+)(?!`)(?P<code>.+?)(?<!`)(?P=tick)(?!`)"   # a code span, literal inside
     r"|\*\*(?P<bold>.+?)\*\*"
-    r"|\[(?P<ltext>[^\[\]]+)\]\((?P<url>[^)\s]*)\)"
+    r"|\[(?P<ltext>[^\[\]]+)\]\((?P<url>[^()\s]*)\)"
     r"|(?<![\w*])\*(?![\s*])(?P<ital>[^*]+?)(?<!\s)\*(?![\w*])")
 # Kept linear on a 64 KiB line, since a reply can hold anything. Link text holds no "[" and
 # italic text no "*", so an unclosed opener's scan stops at the next one (a line of "[" or "*a "
 # took 7 s). A code span opens and closes only on whole backtick runs, as in CommonMark, so a
-# long run isn't retried at every shorter length (a line of backticks took minutes). Accepted:
-# italic around a "*" (*a * b*, or around a code span holding one) keeps its asterisks.
+# long run isn't retried at every shorter length (a line of backticks took minutes). A link's
+# URL holds no "(" (a line of "[a](" took 3 s). Accepted, both rare: italic around a "*"
+# (*a * b*, or around a code span holding one) keeps its asterisks, and a code span right after
+# an escaped backtick (\``code`) doesn't open (letting it open made "x" + "\``" * 20000 take
+# 7 s). The backstop: text over INLINE_MAX characters gets no inline markup at all, so a pattern
+# missed here costs at most a bounded square, not seconds.
+INLINE_MAX = 4096
 FENCE = re.compile(r"^(\s*)(`{3,}|~{3,})")
 LIST = re.compile(r"^(\s*)([-*+]|\d{1,9}[.)])\s+(.*)$")
-HEADING = re.compile(r"^\s{0,3}(#{1,6})\s+(.*?)(\s+#+)?\s*$")
+HEADING = re.compile(r"^\s{0,3}(#{1,6})\s+(.*)$")   # heading_text() drops a closing # run
+# (in code: "(.*?)(\s+#+)?\s*$" took minutes on a heading with a long run of spaces)
 HRULE = re.compile(r"^\s{0,3}([-*_])(\s*\1){2,}\s*$")
 SEPARATOR = re.compile(r"^\s*:?-+:?\s*$")
 
@@ -112,8 +118,20 @@ def paint(text: str, style: str, color: bool = True, reset: str = "full") -> str
     return on + text + off
 
 
+def heading_text(text: str) -> str:
+    """A heading's text without a closing run of #s (one after a blank, or the whole text)."""
+    text = text.rstrip()
+    bare = text.rstrip("#")
+    if bare != text and (not bare or bare[-1].isspace()):
+        return bare.rstrip()
+    return text
+
+
 def spans(text: str, style: str = "") -> list[tuple[str, str]]:
-    """[(text, style)] for one paragraph's inline markdown; bold, italic and link text nest."""
+    """[(text, style)] for one paragraph's inline markdown; bold, italic and link text nest.
+    Text over INLINE_MAX characters stays as it is (the backstop above INLINE)."""
+    if len(text) > INLINE_MAX:
+        return [(text, style)]
     out, pos = [], 0
     for m in INLINE.finditer(text):
         if m.start() > pos:
@@ -296,7 +314,7 @@ def render(text: str, width: int, color: bool = True, reset: str = "full") -> st
             continue
         m = HEADING.match(line)
         if m:
-            para(spans(m.group(2), "bm"))
+            para(spans(heading_text(m.group(2)), "bm"))
             i += 1
             continue
         m = LIST.match(line)

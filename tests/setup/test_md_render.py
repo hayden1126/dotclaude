@@ -5,6 +5,7 @@ import os
 import re
 import time
 import unittest
+from unittest import mock
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 spec = importlib.util.spec_from_file_location("md_render",
@@ -204,13 +205,38 @@ class Pathological(unittest.TestCase):
         # An unclosed "*" or "[" used to scan to the line's end (7 s), and a run of backticks
         # was retried at every shorter length (minutes). The "x" keeps a line of backticks from
         # reading as a fence.
+        # Each regex is linear on its own (the backstop off), and the backstop holds too.
         rising = "x" + "".join("`" * k + "a" for k in range(1, 340))
-        for text in ("*a " * 21000, "[" * 60000, "[a " * 21000, "**a " * 16000,
-                     "x" + "`" * 60000, "x" + "` a" * 20000, rising):
-            with self.subTest(text=text[:4]):
-                start = time.monotonic()
-                md.render(text, 80)
-                self.assertLess(time.monotonic() - start, 1.0)
+        texts = ("*a " * 21000, "[" * 60000, "[a " * 21000, "**a " * 16000, "**a" * 21000,
+                 "x" + "`" * 60000, "x" + "` a" * 20000, rising, "[a](" * 16000,
+                 "[a](b" * 13000, "x" + "\\``" * 20000, "**[`*" * 13000,
+                 # line-level patterns
+                 "# a" + " " * 65000 + "b", "# " + "#" * 65000 + " x", " " * 65000 + "x",
+                 "-" + " -" * 30000 + "x", "|" + "a|" * 30000, "- " + "*a " * 21000)
+        for inline_max in (md.INLINE_MAX, 10 ** 9):
+            for text in texts:
+                with self.subTest(text=text[:5], inline_max=inline_max), \
+                        mock.patch.object(md, "INLINE_MAX", inline_max):
+                    start = time.monotonic()
+                    md.render(text, 80)
+                    self.assertLess(time.monotonic() - start, 1.0)
+
+    def test_text_over_inline_max_gets_no_inline_markup(self):
+        long = "**b** " + "x" * md.INLINE_MAX
+        self.assertTrue(md.render(long, 10 ** 5, color=False).startswith("**b** x"))
+        self.assertTrue(md.render(long[:md.INLINE_MAX], 10 ** 5, color=False).startswith("b x"))
+
+    def test_a_headings_closing_hashes_go(self):
+        for text, want in (("# Title ##", "Title"), ("# Title#", "Title#"), ("# ###", ""),
+                           ("## a # b", "a # b"), ("#  spaced   ", "spaced")):
+            with self.subTest(text=text):
+                self.assertEqual(md.render(text, 80, color=False), want)
+
+    def test_links_and_the_accepted_code_span_limit(self):
+        self.assertEqual(md.render("see [x](http://a.b/c) and [f(x)](u)", 80, color=False),
+                         "see x and f(x)")
+        # Accepted for linear time: a code span right after an escaped backtick doesn't open.
+        self.assertEqual(md.render("\\``code`", 80, color=False), "``code`")
 
     def test_nested_and_plain_markup_still_render(self):
         self.assertEqual(md.render("*it* and [link](u) and **b *i* b**", 80, color=False),
