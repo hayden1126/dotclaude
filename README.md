@@ -316,8 +316,9 @@ need nothing extra.
   then each lane (its id, cut to 12 cells, plus its title), then its other worktrees. Every other
   window goes on the shared row(s) at the bottom, as `repo: title`. A window counts as whatever
   its active pane's directory is in. Window numbers never change; only the order on the bar does.
-  Tabs split their row evenly and a row spills over only when a tab would get too narrow, so a
-  title or glyph change never moves a tab or resizes the panes. Past 5 rows the smallest
+  Tabs split their row evenly and a row spills over only when a tab would get too narrow (the
+  tabs then spread evenly over the rows they need), so a title or glyph change never moves a tab
+  or resizes the panes. Past 5 rows the smallest
   groups share the bottom rows behind a `│repo▸` divider; still past 5, the bar ends in `+N`, which
   opens the window list. The window you are on is always shown. On a terminal under 100 columns
   (the phone over ssh) the bar moves to the bottom with shorter tabs and drops the clock. Tap a
@@ -325,7 +326,8 @@ need nothing extra.
   pass, Rename and Windows…); right-click still opens the full menu. `tmux/tmux-tab-bar` runs from
   tmux hooks and from `tmux-claude-status`, which catches a directory change or a lane opening or
   closing within a few seconds. It never puts a title, a directory name or a lane record into a
-  tmux format, and if it fails the bar stays as it was.
+  tmux format (a `#[...]` in a title draws as text), never prints into a pane, and if it fails
+  the bar stays as it was.
 - **Tabs come back after tmux dies**: a Windows restart, `wsl --shutdown`, `wsl --terminate` or
   `tmux kill-server` ends the tmux server and every Claude tab in `main`. `session-registry.sh`
   keeps one file per open tab in `$XDG_STATE_HOME/dotclaude/open-sessions/`: the session id, its
