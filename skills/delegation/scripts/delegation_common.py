@@ -102,13 +102,34 @@ def sandbox_paths(home=None):
 
 def path_conflict(path, roots, contains=False):
     """The root that path is, or lies under (with contains, also one that lies under path), with
-    symlinks resolved; None when it is clear of them all."""
-    p = os.path.realpath(os.path.expanduser(path))
+    symlinks resolved; None when it is clear of them all. path is taken as the caller will open
+    it: a `~` the shell left quoted is a directory named `~`."""
+    p = os.path.realpath(path)
     for r in roots:
         if p == r or p.startswith(r.rstrip("/") + "/") or (
                 contains and r.startswith(p.rstrip("/") + "/")):
             return r
     return None
+
+
+def open_unprotected(path):
+    """path opened for binary reading, unless the file it reaches lies under a read-protected
+    path (PermissionError). Checked on the open file, so a link swapped in after an earlier check
+    is caught: a waiter reads its log outside the sandbox for as long as it waits."""
+    f = open(path, "rb")
+    try:
+        real = os.path.realpath(f"/proc/self/fd/{f.fileno()}")
+    except OSError:
+        real = os.path.realpath(path)
+    if path_conflict(real, sandbox_paths()[0]):
+        f.close()
+        raise PermissionError(f"{path} reaches a read-protected path")
+    return f
+
+
+def unprotected_exists(path):
+    """os.path.exists, but False for a path that reaches a read-protected one."""
+    return os.path.exists(path) and not path_conflict(path, sandbox_paths()[0])
 
 
 def ledger_path():
@@ -1022,8 +1043,8 @@ def scan_log(path, done, fail, cursor, pids_gone=None, quiet_s=WAIT_POLL_S, now=
         return None
 
     try:
-        f = open(path, "rb")
-    except OSError:  # no log now: what was seen stands, and a fresh cursor has seen nothing
+        f = open_unprotected(path)
+    except OSError:  # no log now (or one that reaches a read-protected file): what was seen stands, and a fresh cursor has seen nothing
         held = cursor.get("partial")
         if not cursor["failed"] and held and settle and pids_gone:
             verdict = settled(held)
@@ -1096,7 +1117,7 @@ def watch_verdict(w, cursor=None, now=None, settle=True, between=None):
            if c.get("log") else None)
     if log == "failed":
         return "failed", f"{c['log']} has a line matching /{c['fail']}/"
-    met = {"pids": not running, "file": bool(c.get("file")) and os.path.exists(c["file"]),
+    met = {"pids": not running, "file": bool(c.get("file")) and unprotected_exists(c["file"]),
            "done": log == "done"}
     unmet = [text for key, text in _clauses(c) if not met[key]]
     if not unmet:

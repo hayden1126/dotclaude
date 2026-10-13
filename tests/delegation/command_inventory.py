@@ -39,7 +39,22 @@ EXCLUDED = [
     Excluded("git pull", CREDENTIAL, ["git pull"]),
     Excluded("git pull *", CREDENTIAL, ["git pull --ff-only"]),
     Excluded("git ls-remote *", CREDENTIAL, ["git ls-remote origin"]),
-    Excluded("gh *", CREDENTIAL, ["gh pr view 5", "gh auth status"]),
+] + [
+    # gh, by the families real use needs (Hayden, 2026-10-13). Any other gh form (gist, release
+    # create or download, repo clone, keys, secrets, extensions, auth token) runs sandboxed, where
+    # it can't read gh's credential, so it fails closed; Hayden runs those at his terminal.
+    Excluded(p, CREDENTIAL, [s])
+    for p, s in [
+        ("gh pr *", "gh pr view 5"), ("gh run *", "gh run watch 5"),
+        ("gh issue *", "gh issue view 5"), ("gh api *", "gh api repos/o/r/pulls"),
+        ("gh search *", "gh search prs x"), ("gh repo view", "gh repo view"),
+        ("gh repo view *", "gh repo view o/r --json name"), ("gh repo list", "gh repo list"),
+        ("gh repo list *", "gh repo list o"), ("gh auth status", "gh auth status"),
+        ("gh auth status *", "gh auth status --hostname github.com"),
+        ("gh release list", "gh release list"), ("gh release list *", "gh release list -R o/r"),
+        ("gh release view *", "gh release view v1"),
+    ]
+] + [
     Excluded("codex-delegate *", "starts codex in its own sandbox and needs codex's credential",
              ["codex-delegate run --model sol --dir /x --brief b.md", "codex-delegate status"]),
     Excluded("delegation-ledger *", "watches agent processes the sandbox can't see",
@@ -103,7 +118,10 @@ SANDBOXED = ["tmux -L x ls", "tmux send-keys -t %1 x", "tmux lsp", "tmux display
              "tmux -V", "FOO=1 tmux ls", "codex exec x", "codex --version", "codex mcp add x",
              "codex login", "lane lock gate -- true", "lane whoami", "lane claim 42",
              "git clone x", "git -C . fetch", "git -c k=v fetch", "claude-alt -p x",
-             "git push ../r feat", "git push /tmp/r feat", "git push upstream feat"]
+             "git push ../r feat", "git push /tmp/r feat", "git push upstream feat",
+             "gh gist create f", "gh gist new f", "gh release download v1 -O x",
+             "gh repo clone o/r d", "gh auth token", "gh cs cp f r:f", "gh --version",
+             "gh extension install o/r", "gh secret set X -f e"]
 
 # --- tmux -----------------------------------------------------------------------------------------
 
@@ -323,40 +341,23 @@ OTHER_RULES = [
 ] + [
     Rule("Bash(git ls-remote -u*)", "-u is --upload-pack", ["git ls-remote -u x origin"]),
     Rule("Bash(git ls-remote * -u*)", "-u is --upload-pack", ["git ls-remote origin -u x"]),
-    Rule("Bash(gh auth token*)", "prints the credential the sandbox hides", ["gh auth token"]),
-    Rule("Bash(gh auth git-credential*)", "git's credential helper: prints the credential",
-         ["gh auth git-credential get"]),
     Rule("Bash(gh auth status *-t*)", "prints the credential the sandbox hides",
          ["gh auth status -t", "gh auth status --show-token"]),
     Rule("Bash(gh auth status *-at*)", "-at bundles --active and --show-token",
          ["gh auth status -at"]),
-    Rule("Bash(gh * -- *)", "passes flags on to git, ssh or scp, which can name a program",
-         ["gh repo clone o/r d -- --upload-pack=x", "gh repo fork o/r --clone -- --template=x"]),
+    Rule("Bash(gh run download*)", "writes the run's artifacts to a chosen dir",
+         ["gh run download 5 -D x"]),
 ] + [
-    Rule(f"Bash(gh {sub}*)", "changes gh's credential, config, aliases or extensions",
-         [f"gh {sub} x"])
-    # `ext*` covers extension, extensions and ext.
-    for sub in ("auth login", "auth logout", "auth refresh", "auth setup-git", "auth switch",
-                "alias set", "alias import", "config set", "ext* install", "ext* upgrade")
-] + [
-    # gh runs outside the sandbox, so denyRead doesn't bind it: each way it reads a local file
-    # and sends it to GitHub asks (Hayden, 2026-10-13). A shell redirect needs no rule: it fails
-    # in the sandbox.
+    # In the excluded families gh still reads a file by path outside the sandbox, where denyRead
+    # doesn't bind it, and sends it to GitHub, so each such flag asks (Hayden, 2026-10-13). A
+    # bundle like `-dF` slips past a glob; Part 2's guard parses gh's arguments and replaces these
+    # asks. A shell redirect needs no rule: it is opened in the sandbox.
     Rule(f"Bash(gh {glob})", "reads a local file and sends it to GitHub", [sample])
     for glob, sample in (
         ("*--body-file*", "gh pr edit 5 --body-file b.md"),
-        ("*--notes-file*", "gh release edit v1 --notes-file n.md"),
-        ("*--from-file*", "gh agent-task create --from-file t.md"),
         ("*--input*", "gh api repos/o/r --input body.json"),
         ("* -F*", "gh api repos/o/r -F body=@f"),
-        ("*--field*", "gh api repos/o/r --field body=@f"),
-        ("gist create*", "gh gist create f"), ("gist edit*", "gh gist edit 1 -a f"),
-        ("release create*", "gh release create v1 f"),
-        ("release upload*", "gh release upload v1 f"), ("ssh-key add*", "gh ssh-key add k.pub"),
-        ("gpg-key add*", "gh gpg-key add k.asc"),
-        ("repo deploy-key add*", "gh repo deploy-key add k.pub"),
-        ("codespace cp*", "gh codespace cp f remote:f"), ("secret set*", "gh secret set X -f e"),
-        ("variable set*", "gh variable set X -f e"))
+        ("*--field*", "gh api repos/o/r --field body=@f"))
 ] + [
     Rule("Bash(lane init *--setup*)", "names the command each new lane runs",
          ["lane init --setup 'npm ci'"]),

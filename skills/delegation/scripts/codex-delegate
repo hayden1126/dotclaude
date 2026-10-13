@@ -697,7 +697,7 @@ def check_paths(dirs=(), reads=()):
             die(f"{flag} {path} would let codex write {hit}, which the sandbox protects; "
                 "Hayden runs that delegation by hand")
     for flag, path in reads:
-        if path != "-" and dc.path_conflict(path, read_denied):
+        if path != "-" and dc.path_conflict(path, read_denied):  # as read_text opens it
             die(f"{flag} {path} is under {dc.path_conflict(path, read_denied)}, which the sandbox "
                 "keeps unreadable")
 

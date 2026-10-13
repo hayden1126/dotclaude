@@ -88,16 +88,17 @@ other than `-C` (`-c k=v`, `--git-dir`, `--no-pager`), soft, mixed and `--keep` 
 force-push and a `reset --hard` on a dirty tree when the prompt named them.
 
 `sandbox.excludedCommands` is the allowlist of what runs outside the sandbox.
-`tests/delegation/command_inventory.py` lists each entry, why it needs the outside and the calls
-it must cover, and `test_settings.py` ties it to `settings.json` in both directions. It holds the
-credential barrier (`git push` to `origin`, `fetch`, `pull`, `ls-remote`, `gh`), our wrappers
-(`lane init`, `new`, `adopt`, `ls`, `open`, `done`, `pass-respawn`, `delegation-ledger`,
+`tests/delegation/command_inventory.py` lists each entry, why it needs the outside and the calls it
+must cover, and `test_settings.py` ties it to `settings.json` in both directions. It holds the
+credential barrier (`git push` to `origin`, `fetch`, `pull`, `ls-remote`, and `gh`'s `pr`, `run`,
+`issue`, `api` and `search` with its read-only `repo`, `release` and `auth status` forms), our
+wrappers (`lane init`, `new`, `adopt`, `ls`, `open`, `done`, `pass-respawn`, `delegation-ledger`,
 `codex-delegate`), `claude`, the read-only tmux verbs (`ls`, `list-sessions`, `list-windows`,
 `list-panes`, `list-clients`, `list-keys`, `list-commands`, `capture-pane`, `display`, `show`,
-`show-options`, `show-environment`, `show-messages`, `show-hooks`), read-only codex (`login
-status`, `doctor` and a few lists) and the Windows shells. Any other call runs sandboxed, where
-tmux reaches no socket, codex no credential and a push to a local path no other repo's hooks, so
-it fails closed.
+`show-options`, `show-environment`, `show-messages`, `show-hooks`), read-only codex (`login status`,
+`doctor` and a few lists) and the Windows shells. Any other call runs sandboxed, where tmux reaches
+no socket, codex and any other `gh` form no credential, and a push to a local path no other repo's
+hooks, so it fails closed.
 
 Asks cover what an excluded command could still be made to run or read:
 - tmux: every other verb, alias and prefix, a bare `tmux`, a global flag, a `;` chain, a `#(`
@@ -107,11 +108,10 @@ Asks cover what an excluded command could still be made to run or read:
   the install, config, auth or sessions; `plugin test` and `eval` (they run code from a chosen
   path). `claude ultrareview` is denied;
 - git's `--upload-pack`, `--receive-pack` and `--exec`, in every prefix git accepts;
-- `gh auth token`, `gh auth git-credential` and `gh auth status -t`; the `gh` commands that change
-  its credential, aliases, config or extensions; flags passed on after `--` (to git, ssh or scp);
-  and every form that reads a local file and sends it to GitHub (`--body-file`, `-F`, `--field`,
-  `--input`, `--notes-file`, `--from-file`, `gist create`, `release create` and `upload`, key
-  uploads, `secret set` and `variable set`), since denyRead doesn't bind an excluded command;
+- `gh auth status -t`; `gh run download`, which writes where it's told; and the flags that read
+  a local file and send it to GitHub (`--body-file`, `-F`, `--field`, `--input`), since denyRead
+  doesn't bind an excluded command. A bundled short flag (`-dF`) gets past a glob; Part 2's guard
+  will parse gh's arguments and check each path instead;
 - `lane init --setup` or `--root`, `lane done --abandon`, `codex-delegate --network` and
   `--no-scope` (these wrappers take no abbreviated flag), and the Windows shells.
 

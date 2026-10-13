@@ -67,7 +67,7 @@ class Baseline(unittest.TestCase):
         fs = S["sandbox"]["filesystem"]
         self.assertIn("~/.config/gh", fs["denyRead"])
         excluded = S["sandbox"]["excludedCommands"]
-        for pat in ("git push origin *", "git fetch *", "git pull *", "gh *"):
+        for pat in ("git push origin *", "git fetch *", "git pull *", "gh pr *", "gh api *"):
             self.assertIn(pat, excluded)
         self.assertNotIn("git clone *", excluded)  # it stays sandboxed: public clones only
 
@@ -658,7 +658,7 @@ class Inventory(unittest.TestCase):
         docs = ([os.path.join(REPO, "CLAUDE.md")]
                 + glob.glob(os.path.join(REPO, "skills", "**", "*.md"), recursive=True)
                 + glob.glob(os.path.join(REPO, "agents", "*.md")))
-        tools = r"tmux|claude|codex|lane|pass-respawn|delegation-ledger|codex-delegate"
+        tools = r"tmux|claude|codex|lane|pass-respawn|delegation-ledger|codex-delegate|gh"
         found = set()
         for path in docs:
             with open(path) as f:

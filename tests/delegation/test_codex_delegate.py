@@ -712,14 +712,24 @@ class FullRun(unittest.TestCase):
             f.write("k\n")
         link = os.path.join(self.work, "brief-link.md")
         os.symlink(key, link)
-        cases = [["--dir", t, "--brief", self.brief],  # holds ~/.claude
-                 ["--dir", self.work, "--out", os.path.join(t, ".claude", "x"), "--brief",
-                  self.brief],
-                 ["--dir", self.work, "--brief", key], ["--dir", self.work, "--brief", link]]
-        for argv in cases:
+        write, read = "which the sandbox protects", "which the sandbox keeps unreadable"
+        cases = [(["--dir", t, "--brief", self.brief], write),  # holds ~/.claude
+                 (["--dir", self.work, "--out", os.path.join(t, ".claude", "x"), "--brief",
+                   self.brief], write),
+                 (["--dir", self.work, "--brief", key], read),
+                 (["--dir", self.work, "--brief", link], read)]
+        for argv, why in cases:
             p = self.run_cd("run", "--model", "sol", *argv, "--no-scope")
             self.assertEqual(p.returncode, 2, (argv, p.stderr))
-            self.assertIn("sandbox", p.stderr)
+            self.assertIn(why, p.stderr)
+        # A quoted ~ reaches the wrapper as is, and read_text opens it from the cwd: the check
+        # resolves the same path (here a `~` link in the cwd to ~/.ssh, where $HOME/id is clear).
+        os.symlink(os.path.join(t, ".ssh"), os.path.join(self.work, "~"))
+        p = subprocess.run([sys.executable, CD, "run", "--model", "sol", "--dir", self.work,
+                            "--brief", "~/id", "--no-scope"], capture_output=True,
+                           text=True, env=self.env, cwd=self.work)
+        self.assertEqual(p.returncode, 2, p.stderr)
+        self.assertIn(read, p.stderr)
         with open(os.path.join(t, ".claude", "settings.json"), "w") as f:
             json.dump({"sandbox": {"filesystem": {"denyWrite": [self.work + "/hooks"]}}}, f)
         p = self.run_ok()

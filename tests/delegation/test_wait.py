@@ -1042,6 +1042,27 @@ class Usage(WaitEnv):
             self.assertIn("which the sandbox keeps unreadable", p.stderr)
         self.assertFalse(os.path.exists(self.watches))
 
+    def test_a_log_swapped_for_a_protected_link_reads_as_missing(self):
+        # Checked when the watch is made, and again on each open: a log in a writable place
+        # that becomes a link to a protected file is never read, so --done can't match it.
+        secret = self.path(".ssh/id")
+        os.makedirs(os.path.dirname(secret))
+        with open(secret, "w") as f:
+            f.write("DONE\n")
+        log = self.path("job.log")
+        open(log, "w").close()
+        with mock.patch.dict(os.environ, {"HOME": self.tmp.name}):
+            cursor = dc.log_cursor()
+            self.assertIsNone(dc.scan_log(log, re.compile("DONE"), None, cursor))
+            os.remove(log)
+            os.symlink(secret, log)
+            with self.assertRaises(PermissionError):
+                dc.open_unprotected(log)
+            self.assertIsNone(dc.scan_log(log, re.compile("DONE"), None, dc.log_cursor()))
+            self.assertFalse(dc.unprotected_exists(log))
+            open(self.path("other"), "w").close()
+            self.assertTrue(dc.unprotected_exists(self.path("other")))
+
     def test_max_stays_under_the_bash_cap(self):
         target = self.path("out")
         open(target, "w").close()
