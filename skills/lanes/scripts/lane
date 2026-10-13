@@ -1407,14 +1407,17 @@ def signal_proc(p: lanelib.Proc, sig: int) -> bool:
     """Send sig to p only while its pid still names that process: through a pidfd, whose start
     time is checked once the pidfd pins the process, so a pid reused since the scan is never
     hit. Where a seccomp filter refuses pidfds (ENOSYS, EPERM), the start time is checked just
-    before a plain kill. False when p is gone, or isn't this user's to signal."""
+    before a plain kill. False when p is gone or can't be signalled: whatever survives, the
+    final look in end_lane refuses."""
+    filtered = (errno.ENOSYS, errno.EPERM)
     try:
         fd = os.pidfd_open(p.pid)
     except ProcessLookupError:
         return False
     except OSError as e:
-        if e.errno not in (errno.ENOSYS, errno.EPERM):
-            raise
+        if e.errno not in filtered:
+            warn(f"can't signal {p.pid} {p.comm}: {e.strerror}")
+            return False
         fd = None
     try:
         if fd is not None:
@@ -1424,7 +1427,7 @@ def signal_proc(p: lanelib.Proc, sig: int) -> bool:
                 signal.pidfd_send_signal(fd, sig)
                 return True
             except OSError as e:
-                if e.errno not in (errno.ENOSYS, errno.EPERM):
+                if e.errno not in filtered:
                     raise
         if lanelib.proc_start(p.pid) != p.start:
             return False
@@ -1432,8 +1435,8 @@ def signal_proc(p: lanelib.Proc, sig: int) -> bool:
         return True
     except ProcessLookupError:
         return False
-    except PermissionError:
-        warn(f"not permitted to signal {p.pid} {p.comm}")
+    except OSError as e:
+        warn(f"can't signal {p.pid} {p.comm}: {e.strerror}")
         return False
     finally:
         if fd is not None:
@@ -1481,8 +1484,13 @@ def sweep_open_sessions(path: str) -> None:
             except ValueError:
                 continue
             if isinstance(rec, dict) and lanelib.cwd_inside(rec.get("cwd"), path):
-                with contextlib.suppress(FileNotFoundError):
+                try:
                     os.remove(entry)
+                except FileNotFoundError:
+                    pass
+                except OSError as e:
+                    warn(f"open-sessions entry {entry} kept ({e.strerror}): claude-restore may "
+                         "reopen it")
     finally:
         os.close(fd)
 
