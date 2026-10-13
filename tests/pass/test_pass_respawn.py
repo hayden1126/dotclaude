@@ -649,11 +649,15 @@ class Plain(Base):
                  self.prompt("p1", "the skill body", isMeta=True),
                  self.prompt("p1", [{"type": "tool_result", "content": "x"}], origin=None),
                  self.prompt("p1", "   "),
-                 "{not json", "", "[1, 2]",
+                 "{not json", "", "[1, 2]", "[" * 100000,  # RecursionError in json
                  self.prompt("p2", "the real one"))
         code, out = self.run_pass("--foreground")
         self.assertEqual(code, 0, out)
         self.assertEqual([p.get("text") for p in self.written()["prompts"]], ["the real one"])
+
+    def test_a_session_file_too_deep_for_json_reads_as_none(self):
+        self.write(os.path.join(self.sessions, f"{CLAUDE}.json"), "[" * 100000)  # json raises RecursionError, not ValueError
+        self.assertIsNone(self.real_load(CLAUDE))
 
     def test_a_turn_a_notice_started_is_marked_and_one_past_the_read_is_left_out(self):
         self.stop_replies = [{"prompt_id": p, "text": "reply " + p} for p in ("p1", "p2", "p3")]
@@ -897,7 +901,8 @@ class Plain(Base):
                   "message": {"content": result}},
                  {"type": "user", "origin": {"kind": "task-notification"},
                   "message": {"content": "task done"}},
-                 {"type": "assistant", "message": {"content": "ok"}}, "not json {")
+                 {"type": "assistant", "message": {"content": "ok"}}, "not json {",
+                 "[" * 100000)  # RecursionError in json
         self.assertEqual(self.mod.wait_and_act(plan, table), "respawn")
 
     def test_waits_at_the_stop_drop_busy(self):

@@ -78,7 +78,7 @@ def autocompact_setting(cfg: str):
     try:
         with open(os.path.join(cfg, "settings.json"), encoding="utf-8") as f:
             v = json.load(f).get("autoCompactWindow")
-    except (OSError, ValueError, AttributeError):
+    except (OSError, ValueError, AttributeError, RecursionError):   # json recurses on nesting
         return None
     return int(v) if isinstance(v, (int, float)) and not isinstance(v, bool) and v > 0 else None
 
