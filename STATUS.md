@@ -82,8 +82,8 @@ stored here).
     Step 1 is its own PR after PR 3 and before the work repo migration; step 2 later.
   - PR 3 (`/pass`) merged as #88 (`gh pr view 88`), installed with its allow rule; its live runs
     and the as-built notes are in PLAN.md PR 3 "As built".
-  - **PR 4 `feat/autopass`: built, installed, smoke-tested, PR open for review.** The next
-    step is in "Notes for next session"; the design and "As built" are in PLAN.md PR 4.
+  - PR 4 (auto-pass, the rendered banner and popup) merged as #89 (`gh pr view 89`), installed
+    on HAYPC from its branch and smoke-tested (PLAN.md PR 4 "As built" and spikes A8 to A10).
   - After PR 3: the release skill in the work repos gets its post-release Next block and a
     closing `handoff-check` (its own PR there; PLAN.md PR 3 "Delta handoff").
   - Migrate the work repo (its own PR there). The concrete values and the
@@ -136,23 +136,17 @@ stored here).
   `claude -p` repro and the 2.1.285 boundary; the karaoke session's has the incident.
 
 ## Notes for next session
-- **Next: PR 4 (`feat/autopass`) is up for Hayden's review; merge only on his approval.** The
-  PR number: `gh pr list --head feat/autopass`. What it holds: PLAN.md PR 4 "As built" (five
-  writer parts) plus the 2026-10-12 work (session acbec206), `git log 0df4e46..feat/autopass`:
-  - **A8 fixed:** the watcher waits at Stop up to 1.5 s for the turn's final reply.
-  - **Part 3:** the banner and Ctrl-b Up popup render markdown (stdlib `hooks/md_render.py`) and
-    show each turn's prompt (PLAN.md PR 4 "The popup and banner, rendered").
-  - **A10 fixed:** a Monitor the payload calls `shell` is classified by tool from the transcript.
-  - Stop timeouts: context-watch and stop-ring 10 s (settings.json, installed by `setup.sh`).
-  - **Smoke (2026-10-12, `~/scratch/autopass-smoke`, tiers 60k/75k/90k via
-    `XDG_CONFIG_HOME=~/scratch/autopass-smoke-conf`):** soft at 63k, wrap-up at 87k (Stop) and
-    hard at 98k (mid-turn) fired once each, then the session passed itself in compact mode; a
-    plain pass with a Monitor running was refused with the held notice; `lane ls` showed CTX and
-    STATE; the banner rendered live. Not seen: the refusal's toast. Hayden hasn't given a verdict
-    on the live popup yet.
-  - **Watch:** `context-watch.err` in the state dir (a Stop that timed out waiting for its reply,
-    and the watcher's Python errors).
-  - Then the release-skill PR in the work repos (PLAN.md PR 3 "Delta handoff").
+- **Next: Hayden picks the next piece of work; plan it first.** PR 4 merged as #89. Candidates,
+  in the order STATUS "In flight" gives them:
+  1. The security follow-up's step 1, its own dotclaude PR before the work repo migration
+     (private plan: `~/scratch/sandbox-audit/FINDINGS.md`, "Follow-up 2026-10-11").
+  2. The `claude attach` follow-up below (dotclaude).
+  3. The release-skill PR in the work repos, then the work repo migration (each its own PR there).
+  - Branch `chore/after-pr4` holds only this post-merge STATUS update: rename it for the chosen
+    work (`git branch -m`) so the update rides that PR, never a STATUS-only one.
+  - **Watch (PR 4, live on HAYPC):** `context-watch.err` in the state dir (a Stop that timed out
+    waiting for its reply, and the watcher's Python errors). Not yet seen live: a refused pass's
+    toast, and Hayden's verdict on the rendered popup.
   - **Follow-up, its own PR (found 2026-10-12):** a tab running `claude attach <id>` (a
     background session brought back into a tab) isn't recognized by Star, Shelve or tab
     restore ("No claude session found in this tab"): they find the session through the Claude
