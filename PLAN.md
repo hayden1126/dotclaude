@@ -849,10 +849,12 @@ scale with the window:
   earlier the same day logged `monitor`, so both labels occur. As `shell` it counted as busy:
   a lingering Monitor kept soft and wrap-up quiet, and the refusal said "1 shell".
   - **Fix (Hayden's call: classify by tool):** `stop_ring.task_types` relabels a `shell` task
-    as `monitor` when its id is a Monitor call's `toolUseResult.taskId` in the transcript's
-    last 8 MiB (read only when a `shell` task runs). The stop record, the ring and the
-    watcher's Stop check all use it, so `pass-respawn` names the monitor too. A Monitor
-    started before that read stays `shell` (busy), the old behavior.
+    as `monitor` when its id is the `toolUseResult.taskId` of a result answering a Monitor
+    call. It byte-searches the whole transcript and its subagents' transcripts for each
+    listed shell id (`"taskId":"<id>"`; a background Bash's key is `backgroundTaskId`), so a
+    Monitor started early in a long session, or by a subagent, still counts. Review round 1
+    replaced a last-8 MiB scan, which missed exactly those. The stop record, the ring and the
+    watcher's Stop check all use it, so `pass-respawn` names the monitor too.
 
 **Verify.**
 - `context-watch` on transcript fixtures: below each tier, at each tier once per crossing, the

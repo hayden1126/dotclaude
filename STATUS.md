@@ -158,18 +158,27 @@ stored here).
      the tab stayed `idle`. The tab flag was written. The widget shows `Ctx 41.5k 7% A`, and
      `ctx/<sid>.json` gets `window`. `/autopass` now names the `pass.toml` it reads (it
      named `~/.config/...` even when `XDG_CONFIG_HOME` moved it).
-  3. **Smoke still to run:** use a scratch window in `~/scratch/autopass-smoke` started with
-     `XDG_CONFIG_HOME=~/scratch/autopass-smoke-conf`, whose `pass.toml` has `autopass = true`
-     and `tiers = [60000, 75000, 90000]` and links `git` to `~/.config/git`. Check:
-     - each tier fires once and a pass follows;
-     - `/pass` shows the banner, and Ctrl-b Up plus both menu entries reopen it;
-     - a pass refused for a running Monitor is held, with the toast;
-     - `lane ls` shows CTX and STATE.
+  3. **Smoke done (2026-10-12, scratch repo `~/scratch/autopass-smoke`, tiers 60k/75k/90k
+     through `XDG_CONFIG_HOME=~/scratch/autopass-smoke-conf`):** soft fired at 63k (Stop),
+     wrap-up at 87k (Stop; a tool call's count is one result behind, A3) and hard at 98k
+     (mid-turn PostToolUse), each once, and the session then passed by itself in compact mode.
+     A plain pass with a Monitor running was refused with the held notice. `lane ls` showed
+     CTX 58k and STATE busy, then waiting. The banner rendered on a live `/pass`; Ctrl-b Up,
+     Ctrl-b P and both menus are bound to `pass-last`. Found: a Monitor arrives as `shell`
+     (PLAN.md A10), fixed by classifying by tool. Not seen from here: the refusal's toast.
+     Claude Code labels a Stop block "Stop hook error" (its display, not ours).
   4. Open the draft PR, then mark it ready after STATUS. Push and merge only on Hayden's
      approval.
   - The work so far is `git log main..feat/autopass`. A doc-drift sweep at the 2026-10-12
     handoff fixed 12 claims (`30cc300`).
   - Then the release-skill PR in the work repos (PLAN.md PR 3 "Delta handoff").
+  - **Follow-up, its own PR (found 2026-10-12):** a tab running `claude attach <id>` (a
+    background session brought back into a tab) isn't recognized by Star, Shelve or tab
+    restore ("No claude session found in this tab"): they find the session through the Claude
+    process under the pane, and an attach client isn't it (the session's process lives under
+    Claude Code's daemon). `claude-saved` could map the attach client's id argument to its
+    `~/.claude/sessions/<pid>.json`. A tmux window killed with a live session left it running
+    in the background (`kind: bg`), which is how that tab came to be.
   - Verify from the main checkout (`test_subagent_policy` refuses to load under
     `.claude/worktrees/`): `tests/setup`, `tests/pass`, `tests/lanes`, `tests/delegation`. The
     last full run on the merged branch was green: 466, 139, 155 and 646 tests.

@@ -528,8 +528,8 @@ before that (at most 47k), wrap-up 7% before hard (at most 40k), soft at half th
 - Background work: while a subagent, shell, workflow or cloud session runs, soft and wrap-up
   wait and hard says `pass compact`. With any other task but `dream` (a monitor, a teammate),
   every tier says compact mode, since `pass-respawn` would refuse a plain pass. Claude Code
-  reports a Monitor as a shell, so the hooks look up which tool started each shell in the
-  transcript's last 8 MiB; an older Monitor still counts as a shell. A tool call
+  reports a Monitor as a shell, so the hooks look up which tool started each running shell in
+  the transcript (and its subagents'). A tool call
   can't see the task list, so it reads the last Stop's record; with none from the last 10
   minutes, it says compact mode too, as safe whether or not anything runs.
 - With autopass off, you alone see one line at the hard tier, once: "Context 521k, auto-compact

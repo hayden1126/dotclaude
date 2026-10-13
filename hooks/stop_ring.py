@@ -19,6 +19,7 @@ so a turn is not always one of Hayden's prompts. A `claude -p` run
 """
 import glob
 import json
+import mmap
 import os
 import re
 import sys
@@ -26,7 +27,7 @@ import tempfile
 import time
 
 WAITS = {"subagent", "shell", "workflow", "cloud session"}
-MONITOR_SCAN = 8 * 1024 * 1024   # transcript bytes read for the Monitor calls' task ids
+ID = re.compile(r"[A-Za-z0-9_-]{1,128}")   # a task or tool-use id we search the transcript for
 SID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
 TEXT_CAP = 64 * 1024       # bytes of UTF-8 per reply
 TOTAL_CAP = 128 * 1024     # bytes of UTF-8 over all replies; the oldest turns go first
@@ -146,51 +147,96 @@ def load(path: str):
         return None
 
 
-def monitor_ids(path) -> set:
-    """The ids of the tasks the Monitor tool started, from the transcript's last MONITOR_SCAN
-    bytes: a main-chain Monitor call's result entry carries the id as toolUseResult.taskId
-    (Claude Code 2.1.296). Empty when the transcript can't be read."""
+def _line_at(m, pos: int):
+    """(start offset, parsed object) of the line in mmap m that holds byte pos; None on a parse
+    miss."""
+    start = m.rfind(b"\n", 0, pos) + 1
+    end = m.find(b"\n", pos)
     try:
-        with open(path, "rb") as f:
-            start = max(0, f.seek(0, os.SEEK_END) - MONITOR_SCAN)
-            f.seek(start)
-            data = f.read()
-    except (OSError, TypeError, ValueError):
-        return set()
-    calls, ids = set(), set()
-    for line in data.split(b"\n")[1 if start else 0:]:   # a cut first line is dropped
-        if b'"Monitor"' not in line and b'"taskId"' not in line:
+        return start, json.loads(m[start:end if end >= 0 else len(m)])
+    except ValueError:
+        return start, None
+
+
+def _rfind_pair(m, key: str, value: str, end: int | None = None) -> int:
+    """The last offset before end of `"key":"value"` in m, compact as Claude Code writes it or
+    with a space after the colon; -1 when neither occurs."""
+    stop = len(m) if end is None else end
+    return max(m.rfind(b'"%s"%s"%s"' % (key.encode(), sep, value.encode()), 0, stop)
+               for sep in (b":", b": "))
+
+
+def _started_by_monitor(m, task_id: str) -> bool:
+    """Whether the last line of m naming task_id as a toolUseResult.taskId is the result of a
+    Monitor call made earlier in the same file."""
+    pos = _rfind_pair(m, "taskId", task_id)
+    if pos < 0:
+        return False
+    start, d = _line_at(m, pos)
+    result = d.get("toolUseResult") if isinstance(d, dict) else None
+    msg = d.get("message") if isinstance(d, dict) else None
+    content = msg.get("content") if isinstance(msg, dict) else None
+    if not (isinstance(result, dict) and result.get("taskId") == task_id
+            and isinstance(content, list)):
+        return False
+    for c in content:
+        use = c.get("tool_use_id") if isinstance(c, dict) and c.get("type") == "tool_result" \
+            else None
+        if not (isinstance(use, str) and ID.fullmatch(use)):
             continue
+        at = _rfind_pair(m, "id", use, start)
+        _, call = _line_at(m, at) if at >= 0 else (0, None)
+        msg = call.get("message") if isinstance(call, dict) else None
+        for u in msg.get("content") if isinstance(msg, dict) and \
+                isinstance(msg.get("content"), list) else []:
+            if isinstance(u, dict) and u.get("type") == "tool_use" and u.get("id") == use \
+                    and u.get("name") == "Monitor":
+                return True
+    return False
+
+
+def monitor_ids(path, wanted) -> set:
+    """Which task ids in wanted the Monitor tool started: the transcript, or one of its
+    subagents' transcripts (<session>/subagents/*.jsonl), holds a result entry with that
+    toolUseResult.taskId answering a Monitor call (Claude Code 2.1.296 writes
+    `"taskId":"<id>"`; a background Bash command's key is backgroundTaskId). A byte search over
+    each whole file, so a Monitor started early in a long session still counts; ids that
+    aren't plain names are skipped."""
+    left = {i for i in wanted if isinstance(i, str) and ID.fullmatch(i)}
+    found = set()
+    if not left or not isinstance(path, str) or "\n" in path:
+        return found
+    base = path[:-len(".jsonl")] if path.endswith(".jsonl") else path
+    for name in [path, *sorted(glob.glob(os.path.join(glob.escape(base), "subagents",
+                                                       "*.jsonl")))]:
         try:
-            d = json.loads(line)
-        except ValueError:
+            with open(name, "rb") as f, mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ) as m:
+                found |= {i for i in left if _started_by_monitor(m, i)}
+        except (OSError, ValueError):   # unreadable, or empty (mmap refuses size 0)
             continue
-        msg = d.get("message") if isinstance(d, dict) and not d.get("isSidechain") else None
-        content = msg.get("content") if isinstance(msg, dict) else None
-        for c in content if isinstance(content, list) else []:
-            if not isinstance(c, dict):
-                continue
-            if c.get("type") == "tool_use" and c.get("name") == "Monitor":
-                calls.add(c.get("id"))
-            elif c.get("type") == "tool_result" and c.get("tool_use_id") in calls:
-                result = d.get("toolUseResult")
-                if isinstance(result, dict) and isinstance(result.get("taskId"), str):
-                    ids.add(result["taskId"])
-    return ids
+        left -= found
+        if not left:
+            break
+    return found
 
 
 def task_types(tasks, path) -> list:
     """Each background_tasks entry's type, in order (None for one that isn't an object), with a
     `shell` task the Monitor tool started as `monitor`. The Stop payload labels a Monitor
     `shell`, like a background Bash command (spike A10), and a shell is work the turn waits on
-    while a monitor is not, so only the transcript tells them apart. It is read only when a
-    shell task runs; a Monitor started before the read stays `shell`."""
+    while a monitor is not, so only the transcript tells them apart. It is searched only for
+    the shell tasks listed; any failure there leaves them `shell` (the old behavior)."""
     if not isinstance(tasks, list):
         return []
-    shells = [t for t in tasks if isinstance(t, dict) and t.get("type") == "shell"]
-    monitors = monitor_ids(path) if shells else set()
-    return [("monitor" if t.get("type") == "shell" and t.get("id") in monitors
-             else t.get("type")) if isinstance(t, dict) else None for t in tasks]
+    shells = [t.get("id") for t in tasks if isinstance(t, dict) and t.get("type") == "shell"
+              and isinstance(t.get("id"), str)]
+    try:
+        monitors = monitor_ids(path, shells) if shells else set()
+    except Exception:
+        monitors = set()
+    return [("monitor" if t.get("type") == "shell" and isinstance(t.get("id"), str)
+             and t.get("id") in monitors else t.get("type")) if isinstance(t, dict) else None
+            for t in tasks]
 
 
 def write_record(d: dict, sid: str, types: list, tasks) -> None:

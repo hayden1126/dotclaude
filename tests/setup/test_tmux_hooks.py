@@ -340,14 +340,14 @@ class Hooks(unittest.TestCase):
             {"type": "user", "isSidechain": False, "toolUseResult": {"backgroundTaskId": "b1"},
              "message": {"content": [{"type": "tool_result", "tool_use_id": "tu_b",
                                       "content": "Command running in background with ID: b1"}]}},
-            # A subagent's Monitor doesn't count for the main session.
+            # A sidechain Monitor (only a subagent's own file holds these).
             {"type": "assistant", "isSidechain": True, "message": {"content": [
                 {"type": "tool_use", "id": "tu_s", "name": "Monitor", "input": {}}]}},
             {"type": "user", "isSidechain": True, "toolUseResult": {"taskId": "s1"},
              "message": {"content": [{"type": "tool_result", "tool_use_id": "tu_s"}]}},
         ]
-        with open(path, "w") as f:
-            f.write("".join(json.dumps(e) + "\n" for e in entries))
+        with open(path, "w") as f:   # compact, as Claude Code writes its JSONL
+            f.write("".join(json.dumps(e, separators=(",", ":")) + "\n" for e in entries))
         return path
 
     def test_a_monitor_the_payload_calls_a_shell_is_recorded_as_a_monitor(self):
@@ -359,9 +359,10 @@ class Hooks(unittest.TestCase):
                  {"id": "s1", "type": "shell", "status": "running"}]
         self.run_hook("stop-ring.sh", TAB, {"transcript_path": path, "background_tasks": tasks})
         rec = self.stop_record()
-        self.assertEqual((rec["tasks"], rec["waits"]), (["monitor", "shell", "shell"],
-                                                        ["shell", "shell"]))
-        self.assertIn("tasks=monitor,shell,shell", self.ring_log()[-1])
+        # s1 is a subagent's Monitor: not work the turn waits on either.
+        self.assertEqual((rec["tasks"], rec["waits"]), (["monitor", "shell", "monitor"],
+                                                        ["shell"]))
+        self.assertIn("tasks=monitor,shell,monitor", self.ring_log()[-1])
         # A Monitor alone rings, as a lingering monitor always did.
         self.run_hook("stop-ring.sh", TAB, {"transcript_path": path, "background_tasks": tasks[:1]})
         self.assertTrue(self.rang())
@@ -377,9 +378,45 @@ class Hooks(unittest.TestCase):
         with mock.patch.object(stop_ring, "monitor_ids") as ids:
             self.assertEqual(types([{"id": "a1", "type": "subagent"}], path), ["subagent"])
             ids.assert_not_called()
-        # Only the last MONITOR_SCAN bytes are read, the first line of them dropped as cut.
-        with mock.patch.object(stop_ring, "MONITOR_SCAN", os.path.getsize(path) - 10):
+        # Odd ids never crash the hook: they stay as the payload says.
+        self.assertEqual(types([{"id": ["m1"], "type": "shell"}, {"id": "m1\"x", "type": "shell"},
+                                {"type": "shell"}], path), ["shell", "shell", "shell"])
+        with mock.patch.object(stop_ring, "monitor_ids", side_effect=RuntimeError):
             self.assertEqual(types([{"id": "m1", "type": "shell"}], path), ["shell"])
+
+    def test_a_monitor_far_back_in_a_long_transcript_still_counts(self):
+        # The lingering monitor that matters is the one started early in a big session.
+        path = self.monitor_transcript()
+        with open(path, "a") as f:
+            pad = json.dumps({"type": "user", "toolUseResult": {"stdout": "x" * 1024 * 1024}})
+            f.write((pad + "\n") * 12)                   # 12 MiB after the Monitor call
+        self.assertEqual(stop_ring.task_types([{"id": "m1", "type": "shell"}], path), ["monitor"])
+
+    def test_only_a_taskid_answering_a_monitor_call_counts(self):
+        path = os.path.join(self.tmp, "t.jsonl")
+        entries = [
+            {"type": "assistant", "message": {"content": [
+                {"type": "tool_use", "id": "tu_x", "name": "SomethingElse", "input": {}}]}},
+            {"type": "user", "toolUseResult": {"taskId": "x1"},
+             "message": {"content": [{"type": "tool_result", "tool_use_id": "tu_x"}]}},
+            {"type": "user", "toolUseResult": {"taskId": "x2"},   # no call before it
+             "message": {"content": [{"type": "tool_result", "tool_use_id": "tu_none"}]}}]
+        with open(path, "w") as f:
+            f.write("".join(json.dumps(e, separators=(",", ":")) + "\n" for e in entries))
+        self.assertEqual(stop_ring.task_types([{"id": "x1", "type": "shell"},
+                                               {"id": "x2", "type": "shell"}], path),
+                         ["shell", "shell"])
+
+    def test_a_subagents_monitor_counts_from_its_own_transcript(self):
+        # Subagent entries go to <session>/subagents/agent-<id>.jsonl (spike A3).
+        path = os.path.join(self.tmp, "s.jsonl")
+        with open(path, "w") as f:
+            f.write(json.dumps({"type": "user", "message": {"content": "hi"}}) + "\n")
+        sub = os.path.join(self.tmp, "s", "subagents")
+        os.makedirs(sub)
+        shutil.copy(self.monitor_transcript(), os.path.join(sub, "agent-a1.jsonl"))
+        self.assertEqual(stop_ring.task_types([{"id": "s1", "type": "shell"}], path),
+                         ["monitor"])
 
     def test_the_stop_record_names_the_transcript_and_unlabeled_tasks(self):
         # pass-respawn reads the transcript path from it, and blocks a plain pass on any task.
