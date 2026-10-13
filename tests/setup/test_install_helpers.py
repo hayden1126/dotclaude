@@ -1,8 +1,12 @@
-"""setup.sh's two merge helpers: the settings overlay and the git excludes block (stdlib only)."""
+"""setup.sh's two merge helpers (the settings overlay, the git excludes block) and its wiring,
+install-state.py's calls and source globs among it (stdlib only). test_install_state.py tests
+install-state.py itself."""
+import glob
 import importlib.machinery
 import importlib.util
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -11,6 +15,7 @@ import unittest
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 MERGE = os.path.join(REPO, "merge-settings.py")
 IGNORE = os.path.join(REPO, "git", "install-ignore.py")
+INSTALL_STATE = os.path.join(REPO, "install-state.py")
 
 
 def load(path):
@@ -23,6 +28,7 @@ def load(path):
 
 merge_settings = load(MERGE)
 install_ignore = load(IGNORE)
+install_state = load(INSTALL_STATE)
 
 
 def run(*args):
@@ -229,32 +235,78 @@ class IgnoreBlock(unittest.TestCase):
             self.assertEqual(f.read(), f"{install_ignore.BEGIN}\n/.x\n")
 
 
+def setup_lines():
+    """setup.sh's lines, backslash continuations joined."""
+    with open(os.path.join(REPO, "setup.sh")) as f:
+        return f.read().replace("\\\n", " ").splitlines()
+
+
+def first(lines, pattern):
+    return next(i for i, l in enumerate(lines) if re.match(pattern, l))
+
+
+def setup_link_sources():
+    """Every repo path setup.sh links, relative to the repo: the `for ... in` lists and the
+    literal `link "$REPO_DIR/..."` sources, expanded by bash against this checkout."""
+    words = []
+    for line in setup_lines():
+        m = re.match(r"\s*for \w+ in (.*); do$", line)
+        if m:
+            words += [w for w in m.group(1).split() if "$REPO_DIR" in w]
+        m = re.match(r'\s*link ("\$REPO_DIR/[^"$]+")', line)
+        if m:
+            words.append(m.group(1))
+    script = ('shopt -s nullglob; for f in ' + " ".join(words)
+              + '; do printf "%s\\n" "${f#"$REPO_DIR"/}"; done')
+    out = subprocess.run(["bash", "-c", script], env={**os.environ, "REPO_DIR": REPO},
+                         capture_output=True, text=True, check=True).stdout
+    return sorted({p.rstrip("/") for p in out.splitlines()
+                   if os.path.lexists(os.path.join(REPO, p))})
+
+
 class SetupWiring(unittest.TestCase):
-    def test_a_hook_removed_from_the_repo_has_its_link_pruned(self):
-        # setup.sh's prune_stale_hook_links, run on its own: only a dangling link into this
-        # checkout's hooks/ goes; a live link, another repo's dangling link and a file stay.
-        with open(os.path.join(REPO, "setup.sh")) as f:
-            text = f.read()
-        start = text.index("prune_stale_hook_links() {")
-        func = text[start:text.index("\n}\n", start) + 3]
-        with tempfile.TemporaryDirectory() as tmp:
-            repo, claude = os.path.join(tmp, "repo"), os.path.join(tmp, "claude")
-            os.makedirs(os.path.join(repo, "hooks"))
-            os.makedirs(os.path.join(claude, "hooks"))
-            with open(os.path.join(repo, "hooks", "live.sh"), "w"):
-                pass
-            hooks = os.path.join(claude, "hooks")
-            os.symlink(os.path.join(repo, "hooks", "live.sh"), os.path.join(hooks, "live.sh"))
-            os.symlink(os.path.join(repo, "hooks", "gone.sh"), os.path.join(hooks, "gone.sh"))
-            os.symlink(os.path.join(tmp, "other", "hooks", "x.sh"), os.path.join(hooks, "x.sh"))
-            with open(os.path.join(hooks, "plugin.sh"), "w"):
-                pass
-            r = subprocess.run(["bash", "-c", 'set -euo pipefail; say() { echo "$*"; }\n'
-                                + func + "\nprune_stale_hook_links"],
-                               env={**os.environ, "REPO_DIR": repo, "CLAUDE_DIR": claude},
-                               capture_output=True, text=True, timeout=20)
-            self.assertEqual((r.returncode, r.stdout), (0, "removed stale link hooks/gone.sh\n"))
-            self.assertEqual(sorted(os.listdir(hooks)), ["live.sh", "plugin.sh", "x.sh"])
+    def test_setup_locks_and_holds_before_changing_anything(self):
+        lines = setup_lines()
+        hold = first(lines, r'python3 "\$REPO_DIR/install-state\.py" hold "\$REPO_DIR"')
+        self.assertLess(first(lines, r"\s*flock -n 9"), hold)
+        self.assertLess(hold, first(lines, r'mkdir -p "\$CLAUDE_DIR"'))
+        self.assertLess(hold, first(lines, r"\s*(copy_managed|link) \""))
+        self.assertLess(hold, first(lines, r'python3 "\$REPO_DIR/merge-settings\.py"'))
+        # A plugin or tool installer that outlives the run must not inherit the lock.
+        for name in ("plugins/marketplaces.json", "plugins/enabled.json", "tools.json"):
+            line = lines[first(lines, rf'\s*python3 - "\$REPO_DIR/{re.escape(name)}"')]
+            self.assertIn(" 9>&- ", line, name)
+
+    def test_setup_prunes_after_the_last_link_then_checks_plugins(self):
+        lines = setup_lines()
+        prune = first(lines, r'python3 "\$REPO_DIR/install-state\.py" prune "\$REPO_DIR"')
+        last_link = max(i for i, l in enumerate(lines) if re.match(r'\s*link "', l))
+        plugins = first(lines, r'python3 "\$REPO_DIR/install-state\.py" plugins')
+        self.assertLess(last_link, prune)
+        self.assertLess(prune, plugins)
+        self.assertLess(plugins, first(lines, r"# \d+\. Final checklist"))
+        self.assertLess(first(lines, r"# \d+\. Register marketplaces"), prune)
+        self.assertNotIn("prune_stale_hook_links", "\n".join(lines))
+
+    def test_every_path_setup_links_matches_a_source_glob(self):
+        sources = setup_link_sources()
+        for known in ("CLAUDE.md", "notify-toast.ps1", "hooks/session-title.sh", "skills/lanes",
+                      "agents/Explore.md", "skills/lanes/scripts/lane", "codex/AGENTS.md",
+                      "statusline/ctx-breakdown.py"):
+            self.assertIn(known, sources)  # the parse found each kind of source
+        for rel in sources:
+            with self.subTest(rel):
+                self.assertTrue(install_state.managed(rel), rel)
+
+    def test_no_tmux_path_matches_a_source_glob(self):
+        # setup-tmux.sh's links are its own: setup.sh's prune and hold leave them alone.
+        tmux = [os.path.relpath(p, REPO) for p in glob.glob(os.path.join(REPO, "tmux", "*"))]
+        with open(os.path.join(REPO, "setup-tmux.sh")) as f:
+            tmux += re.findall(r'^link "\$REPO_DIR/([^"]+)"', f.read(), re.M)
+        self.assertIn("tmux/pass-last", tmux)
+        for rel in tmux:
+            with self.subTest(rel):
+                self.assertFalse(install_state.managed(rel), rel)
 
     def test_setup_installs_the_merged_settings_and_the_block(self):
         with open(os.path.join(REPO, "setup.sh")) as f:

@@ -15,6 +15,31 @@ BACKUP_DIR="$CLAUDE_DIR/backups/pre-dotclaude-$TS"
 say()  { printf "\033[1;36m==>\033[0m %s\n" "$*"; }
 warn() { printf "\033[1;33m!!\033[0m  %s\n" "$*" >&2; }
 
+# ---------------------------------------------------------------------------
+# 0. One run at a time, and a lane's install holds until the lead's
+# ---------------------------------------------------------------------------
+# Two runs at once would interleave their links. The lock is best-effort: without flock
+# (git-bash, macOS) or a writable state dir the run goes on unlocked. The children that may
+# outlive the run (plugin installs, tool installers) get fd 9 closed, or they'd keep the lock.
+STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/dotclaude"
+if command -v flock >/dev/null 2>&1 && mkdir -p "$STATE_DIR" 2>/dev/null \
+    && { exec 9>"$STATE_DIR/install.lock"; } 2>/dev/null; then
+  flock -n 9 || { say "waiting for another setup.sh run to finish"; flock 9; }
+fi
+# A lane installs from its own worktree to test a change, and an install from anywhere else
+# would replace those links mid-test. So links into a live lane worktree hold the install: the
+# run stops here, before changing anything, unless this checkout is that lane or its main
+# checkout (whose run relinks everything, releasing it). install-state.py has the rule. Any
+# other failure warns and goes on, like the lane hooks.
+hold=0
+python3 "$REPO_DIR/install-state.py" hold "$REPO_DIR" || hold=$?
+if [[ $hold -eq 3 ]]; then
+  warn "setup.sh stopped before changing anything"
+  exit 1
+elif [[ $hold -ne 0 ]]; then
+  warn "the install hold check failed (exit $hold, see above); installing anyway"
+fi
+
 mkdir -p "$CLAUDE_DIR"
 
 # ---------------------------------------------------------------------------
@@ -85,18 +110,6 @@ for f in "$REPO_DIR"/hooks/*.sh "$REPO_DIR"/hooks/*.py; do
   link "$f" "$CLAUDE_DIR/hooks/$(basename "$f")"
 done
 
-# A hook removed from the repo leaves its link dangling (hooks/autopass-toggle.sh went in
-# 2026-10). Drop the dangling links into this checkout's hooks/; any other link is left alone.
-prune_stale_hook_links() {
-  local l
-  for l in "$CLAUDE_DIR"/hooks/*; do
-    [[ -L "$l" && ! -e "$l" && "$(readlink "$l")" == "$REPO_DIR/hooks/"* ]] || continue
-    rm "$l"
-    say "removed stale link ${l#"$CLAUDE_DIR/"}"
-  done
-}
-prune_stale_hook_links
-
 # skills/ — one symlink per authored skill directory (plugin skills come from plugins). A
 # directory holding .claude-plugin/ loads as a mod, <name>@skills-dir (skills/autopass).
 for d in "$REPO_DIR"/skills/*/; do
@@ -165,7 +178,7 @@ if ! command -v claude >/dev/null 2>&1; then
   warn "claude CLI not on PATH — skipping plugin install (install Claude Code, then re-run)"
 else
   say "registering marketplaces"
-  python3 - "$REPO_DIR/plugins/marketplaces.json" <<'PY'
+  python3 - "$REPO_DIR/plugins/marketplaces.json" 9>&- <<'PY'
 import json, subprocess, sys
 with open(sys.argv[1]) as f:
     data = json.load(f)
@@ -179,7 +192,7 @@ for name, entry in data.items():
 PY
 
   say "installing plugins"
-  python3 - "$REPO_DIR/plugins/enabled.json" <<'PY'
+  python3 - "$REPO_DIR/plugins/enabled.json" 9>&- <<'PY'
 import json, subprocess, sys
 with open(sys.argv[1]) as f:
     data = json.load(f)
@@ -195,7 +208,7 @@ fi
 # 4. Standalone CLI tools (ccstatusline, etc.)
 # ---------------------------------------------------------------------------
 say "installing standalone CLI tools from tools.json"
-python3 - "$REPO_DIR/tools.json" <<'PY'
+python3 - "$REPO_DIR/tools.json" 9>&- <<'PY'
 import json, subprocess, sys, shutil
 with open(sys.argv[1]) as f:
     tools = json.load(f)
@@ -322,7 +335,21 @@ if [[ "$(uname -s)" == "Linux" ]]; then
 fi
 
 # ---------------------------------------------------------------------------
-# 6. Final checklist
+# 6. Stale links and plugin changes
+# ---------------------------------------------------------------------------
+# After the last link: remove the managed links this run didn't replace that point into another
+# live lane worktree (a file only that lane has), and the dangling ones into this checkout or
+# the lanes root (a removed hook, a closed lane). setup-tmux.sh's links and plugin files are
+# left alone; install-state.py has the rule.
+python3 "$REPO_DIR/install-state.py" prune "$REPO_DIR" \
+  || warn "pruning stale links failed (see above); they are left in place"
+# A running session loads plugins and mods only at its start (SKILL.md text it picks up live),
+# so name each one that changed since the last install: those sessions need /pass to see it.
+python3 "$REPO_DIR/install-state.py" plugins \
+  || warn "the plugin change check failed (see above)"
+
+# ---------------------------------------------------------------------------
+# 7. Final checklist
 # ---------------------------------------------------------------------------
 cat <<'EOF'
 
