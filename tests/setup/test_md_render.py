@@ -212,14 +212,18 @@ class Pathological(unittest.TestCase):
                  "[a](b" * 13000, "x" + "\\``" * 20000, "**[`*" * 13000,
                  # line-level patterns
                  "# a" + " " * 65000 + "b", "# " + "#" * 65000 + " x", " " * 65000 + "x",
-                 "-" + " -" * 30000 + "x", "|" + "a|" * 30000, "- " + "*a " * 21000)
+                 "-" + " -" * 30000 + "x", "|" + "a|" * 30000, "- " + "*a " * 21000,
+                 # layout: a table padded to its widest row, a deep list indent
+                 "|" + "a|" * 16000 + "\n|" * 16000, "| a | b |\n|---|---|\n" + "| x | y |\n" * 6000,
+                 " " * 32000 + "- " + "x" * 32000, "\t" * 16000 + "- " + "x" * 48000)
         for inline_max in (md.INLINE_MAX, 10 ** 9):
             for text in texts:
                 with self.subTest(text=text[:5], inline_max=inline_max), \
                         mock.patch.object(md, "INLINE_MAX", inline_max):
                     start = time.monotonic()
-                    md.render(text, 80)
+                    out = md.render(text, 80)
                     self.assertLess(time.monotonic() - start, 1.0)
+                    self.assertLess(len(out), 4 * len(text) + 1000)   # no blow-up in size
 
     def test_text_over_inline_max_gets_no_inline_markup(self):
         long = "**b** " + "x" * md.INLINE_MAX
@@ -248,6 +252,20 @@ class Pathological(unittest.TestCase):
     def test_a_tab_in_a_table_cell_keeps_the_borders_aligned(self):
         out = md.render("| a\tb | c |\n|---|---|\n| x | y |", 80, color=False).split("\n")
         self.assertEqual(len({md.cells(line) for line in out}), 1, out)
+
+    def test_a_deep_list_indent_keeps_room_for_the_text(self):
+        out = md.render(" " * 200 + "- an item long enough to wrap twice here", 40,
+                        color=False).split("\n")
+        self.assertLessEqual(max(md.cells(line) for line in out), 40)
+        self.assertLessEqual(len(out), 3, out)
+
+    def test_a_table_too_wide_or_too_big_shows_its_raw_rows(self):
+        wide = "|" + "a|" * 30
+        self.assertEqual(md.render(wide, 80, color=False), wide)
+        big = "| a | b |\n" + "| x | y |\n" * md.TABLE_CELLS
+        self.assertEqual(md.render(big, 80, color=False).split("\n")[0], "| a | b |")
+        small = md.render("| a | b |\n|---|---|\n| x | y |", 80, color=False)
+        self.assertTrue(small.startswith(chr(0x250C)), small)
 
 
 if __name__ == "__main__":

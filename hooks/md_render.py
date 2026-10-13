@@ -16,7 +16,12 @@ rows, dim), and --- rules. A line break stays a line break (as Claude Code and G
 show one; a reply's "Done: ...\nNext: ..." lines stay apart), and each line wraps at word
 boundaries by terminal cells: a wide (W or F) character is 2 cells, a combining or format
 character 0. A word longer than the line is broken by cells. A list item's indented lines keep
-its hanging indent.
+its hanging indent, which stays under a quarter of the width.
+
+Its cost stays near linear in the text, since a reply can hold anything (a 64 KiB line of
+openers took seconds to minutes before; the comment above INLINE has the cases). A line over
+INLINE_MAX (4,096) characters shows its markup raw, and a table wider than the width or with
+more than TABLE_CELLS cells shows as its raw rows, dim.
 
 Control characters (C0 but tab and newline, DEL, C1) are dropped before any escape is added, so
 an escape sequence in the text never reaches the terminal. Every style opened on a line closes
@@ -64,6 +69,7 @@ INLINE = re.compile(
 # 7 s). The backstop: text over INLINE_MAX characters gets no inline markup at all, so a pattern
 # missed here costs at most a bounded square, not seconds.
 INLINE_MAX = 4096
+TABLE_CELLS = 4000     # a table with more cells than this shows as its raw rows
 FENCE = re.compile(r"^(\s*)(`{3,}|~{3,})")
 LIST = re.compile(r"^(\s*)([-*+]|\d{1,9}[.)])\s+(.*)$")
 HEADING = re.compile(r"^\s{0,3}(#{1,6})\s+(.*)$")   # heading_text() drops a closing # run
@@ -243,6 +249,10 @@ def table(rows: list[str], width: int, color: bool, reset: str) -> list[str]:
              for c in cellrows[1]] if header else []
     body = [r for k, r in enumerate(cellrows) if not (header and k == 1)]
     ncol = max(len(r) for r in body)
+    if 3 * ncol + 1 > width or ncol * len(body) > TABLE_CELLS:
+        # Too wide even with empty cells, or too big to draw: decided before padding, since
+        # padding every row to ncol grew with the square of a crafted reply.
+        return [paint(r.strip().expandtabs(4), "d", color, reset) for r in rows]
     body = [r + [""] * (ncol - len(r)) for r in body]
     align += ["l"] * (ncol - len(align))
     styled = [[spans(c, "b" if header and k == 0 else "") for c in r]
@@ -319,7 +329,9 @@ def render(text: str, width: int, color: bool = True, reset: str = "full") -> st
             continue
         m = LIST.match(line)
         if m:
-            indent = len(m.group(1).expandtabs(4)) + 2
+            # The hanging indent stays under a quarter of the width: a deep one left no room
+            # and put one character per line, each line carrying the whole indent.
+            indent = min(len(m.group(1).expandtabs(4)) + 2, width // 4)
             mark = BULLET if m.group(2) in "-*+" else m.group(2)
             item = [m.group(3).strip()]
             i += 1
