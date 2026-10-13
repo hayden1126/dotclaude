@@ -439,7 +439,11 @@ def recorded_work(sid: str):
     say compact mode is safe either way), as pass-respawn refuses a record it can't read."""
     rec = aps.load_json(os.path.join(aps.state_dir(), "stops", sid + ".json"))
     when = rec.get("time") if isinstance(rec, dict) else None
-    if not isinstance(when, (int, float)) or not 0 <= time.time() - when < STOP_FRESH:
+    try:
+        fresh = isinstance(when, (int, float)) and 0 <= time.time() - when < STOP_FRESH
+    except OverflowError:   # json reads ints past a float's range
+        fresh = False
+    if not fresh:
         return "unknown", []
     tasks, waits = rec.get("tasks"), rec.get("waits")
     if not (isinstance(tasks, list) and isinstance(waits, list)) or \

@@ -1030,7 +1030,8 @@ class PassRuleParity(Base):
                  ({"waits": [], "tasks": ["artifact watch"]}, False),
                  ({"time": float("nan"), "waits": [], "tasks": []}, False),
                  ({"time": float("inf"), "waits": [], "tasks": []}, False),
-                 ({"time": float("-inf"), "waits": [], "tasks": []}, False)]
+                 ({"time": float("-inf"), "waits": [], "tasks": []}, False),
+                 ({"time": 10 ** 400, "waits": [], "tasks": []}, False)]  # past a float
         path = os.path.join(self.state, "dotclaude", "stops", SID + ".json")
         os.makedirs(os.path.dirname(path), exist_ok=True)
         for body, clear in cases:
