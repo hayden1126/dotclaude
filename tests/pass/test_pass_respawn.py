@@ -1088,6 +1088,14 @@ class Plain(Base):
         code, out = self.run_pass("--tasks")
         self.assertEqual(code, 0, out)
         self.assertIn(f"no stop record for session {SID}", out)
+        # Review round 6: a record that exists but can't be read refuses, as the waiter does.
+        for body in ("{}", "[]", "not json", ""):
+            with self.subTest(body=body):
+                self.write(os.path.join(self.state, "stops", f"{SID}.json"), body)
+                code, out = self.run_pass("--tasks")
+                self.assertEqual(code, 0, out)
+                self.assertNotIn("no stop record", out)
+                self.assertIn("can't be read: a plain pass would refuse", out)
         self.write(os.path.join(self.state, "stops", f"{SID}.json"),
                    json.dumps({"time": time.time(), "waits": []}))
         code, out = self.run_pass("--tasks")

@@ -384,11 +384,16 @@ def session_problem(session: dict | None, sid: str, pid: int, start: int | None,
     return None
 
 
+def stop_path(sid: str) -> str:
+    """Where hooks/stop-ring.sh writes the session's stop record."""
+    return os.path.join(lanelib.state_dir(), "stops", f"{sid}.json")
+
+
 def stop_record(sid: str) -> dict | None:
-    """The session's stop record (hooks/stop-ring.sh), or None."""
+    """The session's stop record (hooks/stop-ring.sh), or None: missing, unreadable or not an
+    object."""
     try:
-        with open(os.path.join(lanelib.state_dir(), "stops", f"{sid}.json"),
-                  encoding="utf-8") as f:
+        with open(stop_path(sid), encoding="utf-8") as f:
             rec = json.load(f)
     except (OSError, ValueError):
         return None
@@ -502,10 +507,12 @@ def ignored(rec: dict | None) -> str:
 
 
 def readable_time(when) -> bool:
-    """Whether a stop record's `time` is a finite number. json reads NaN, Infinity and ints past
-    a float's range, which math.isfinite rejects or can't convert."""
+    """Whether a stop record's `time` is a finite number, not a bool (an int to isinstance).
+    json reads NaN, Infinity and ints past a float's range, which math.isfinite rejects or can't
+    convert."""
     try:
-        return isinstance(when, (int, float)) and math.isfinite(when)
+        return (isinstance(when, (int, float)) and not isinstance(when, bool)
+                and math.isfinite(when))
     except OverflowError:
         return False
 
@@ -1596,9 +1603,13 @@ def list_tasks() -> int:
         print("pass-respawn: CLAUDE_CODE_SESSION_ID is unset (or not a plain id)")
         return 1
     rec = stop_record(sid)
-    if not rec:
+    if rec is None and not os.path.lexists(stop_path(sid)):
         print(f"pass-respawn: no stop record for session {sid} yet (stop-ring.sh writes one at "
               "each Stop)")
+        return 0
+    if rec is None:
+        print(f"pass-respawn: session {sid}: the stop record can't be read: a plain pass would "
+              "refuse")
         return 0
     when = rec.get("time")
     if not readable_time(when):

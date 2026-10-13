@@ -1000,8 +1000,9 @@ class Locks(Base):
 
 class PassRuleParity(Base):
     """One stop record through every reader: pass-respawn's waiter (stop_problem), its --tasks,
-    and the nudge's recorded_work. None may read a record as clearer than the waiter does
-    (review round 2: a wait labeled `dream` read as clear in two of them)."""
+    and the nudge's recorded_work. None may read a record dated after the call as clearer than
+    the waiter does (review round 2: a wait labeled `dream` read as clear in two of them).
+    --tasks has no call to date against, so a record from before it is out of scope here."""
 
     def test_every_reader_agrees_whether_a_plain_pass_is_clear(self):
         loader = SourceFileLoader("pass_respawn", os.path.join(REPO, "skills", "pass",
@@ -1033,7 +1034,8 @@ class PassRuleParity(Base):
                  ({"time": float("inf"), "waits": [], "tasks": []}, False),
                  ({"time": float("-inf"), "waits": [], "tasks": []}, False),
                  ({"time": 10 ** 400, "waits": [], "tasks": []}, False),  # past a float
-                 ({"time": "now", "waits": [], "tasks": []}, False)]
+                 ({"time": "now", "waits": [], "tasks": []}, False),
+                 ({"time": True, "waits": [], "tasks": []}, False)]  # review round 6
         path = os.path.join(self.state, "dotclaude", "stops", SID + ".json")
         os.makedirs(os.path.dirname(path), exist_ok=True)
         for body, clear in cases:
