@@ -1,0 +1,589 @@
+#!/usr/bin/python3 -I
+"""tmux-tab-bar: a status bar of up to 5 rows that groups tmux windows by project.
+
+  tmux-tab-bar layout    lay out the bar of every session that has a client attached
+
+A repo with lanes (skills/lanes) gets its own row: a coloured header with the repo's name, its
+lead checkout's tab first, then its lanes, then its other worktrees (agent worktrees). Every other
+window goes on the shared row(s), last. Each row splits its width evenly among its tabs, and a
+row spills into a new one only when a slot would fall under 18 cells (9 on a phone), so a title
+change never moves a tab or changes the row count (which would resize every pane). Past 5 rows
+the smallest lane groups move onto the shared rows behind a `│repo▸` divider; still past 5, the
+last row ends in `+N`, which opens the window list. The current window is always shown. A client
+narrower than 100 cells (the phone) gets short slots and the bar at the bottom; a session's
+narrowest client decides its layout. Window numbers never change: the bar only draws tabs in
+another order.
+
+tmux/claude.conf runs `layout` from hooks (attach, detach, resize, a window opened, closed or
+selected), and tmux-claude-status runs it in its rate-limited pass, which catches what no hook
+reports (a cwd change, a lane opened or closed). Each window is classified by its active pane's
+cwd, from the filesystem alone: no git call. Writes are per session: `status` (the row count, set
+only when it changes), every `status-format[0..N-1]` row (a session's first array write leaves
+the rows it didn't write blank), the header names as `@tab_bar_g<n>` and, on the phone,
+`status-position`, `status-left` and `status-right`. A hash of all of it in `@tab_bar_sig` makes
+an unchanged run write nothing. The window options `@tab_name` (`lead`, a lane id, `repo:`) and
+`@tab_group` (the group's colour index) are written only when they change.
+
+Nothing from a window title, a directory name or a lane record enters a format string: the rows
+hold only window ids (`@N`), integers and fixed template text, and names reach the bar through
+options read plainly (`#{@tab_name}`). No `%` either (tmux runs each row through strftime).
+Fail-open: any error leaves the bar as it was (tmux's default single row before the first
+layout), and the traceback goes to the run dir, never to tmux. Linked into ~/.local/bin by
+setup-tmux.sh; tests/setup/test_tmux_tab_bar.py holds the cases.
+"""
+import dataclasses
+import fcntl
+import functools
+import glob
+import hashlib
+import json
+import os
+import re
+import stat
+import subprocess
+import sys
+import traceback
+import unicodedata
+
+MAX_ROWS = 5            # tmux's own limit for `status`
+MAX_SLOT = 48           # a tab never grows wider than this
+MIN_SLOT = 18           # desktop: index, glyphs and a few title cells
+MIN_SLOT_PHONE = 9
+PHONE_WIDTH = 100       # a client narrower than this gets the phone layout
+PHONE_LEFT = 6          # row 0's cells for the delegation token on the phone
+NAME_CELLS = 12         # tab and header names are cut to this many cells
+PHONE_HEAD_CHARS = 3    # the phone's header shows this much of the repo name
+GITFILE_MAX = 4096
+RECORD_MAX = 64 * 1024  # a lane.json is untrusted: read no more than this
+# tmux's client refuses a command over 16 KB ("command too long"), and a row goes over as one
+# argument, so a row holds no more tabs than fit in this many bytes (a slot is about 1.9 KB:
+# 8 tabs a row).
+ROW_BYTES = 16000
+PALETTE = (75, 179, 141, 114, 174, 110)   # header colours, by group order
+PHONE_STATUS_LEFT = "#(~/.local/bin/tmux-claude-status)"
+
+SID = re.compile(r"\$\d+\Z")
+WID = re.compile(r"@\d+\Z")
+
+FILL = "#[fill=colour236]"
+NORM = "#[bg=colour236]#[fg=colour250]#[nobold]#[nodim]"
+CUR = "#[bg=colour24]#[fg=colour231]#[bold]"
+GLYPH_ON = "#{?#{==:#{@claude_state},busy},1,#{?#{==:#{@claude_state},wait},1,0}}"
+BODY = ("#{?@tab_name,#{@tab_name} ,}"
+        "#{?pane_title,#{s/^(✳ )?\\[[^]]*\\] //:pane_title},#{pane_current_command}}")
+
+SESSION_FMT = "#{session_id}\t#{status}\t#{status-left-length}\t#{status-right-length}\t#{@tab_bar_sig}"
+CLIENT_FMT = "#{session_id}\t#{client_width}"
+WINDOW_FMT = "#{session_id}\t#{window_id}\t#{window_index}\t#{window_active}\t#{@tab_name}\t#{@tab_group}"
+PANE_FMT = "#{window_id}\t#{pane_active}\t#{pane_current_path}"
+
+
+# --- names --------------------------------------------------------------------------------------
+
+def cell_width(ch: str) -> int:
+    if unicodedata.combining(ch):
+        return 0
+    return 2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1
+
+
+def text_width(s: str) -> int:
+    return sum(cell_width(c) for c in s)
+
+
+def clean(s: str, cells: int = NAME_CELLS) -> str:
+    """s without control, format or surrogate characters or '#', cut to `cells` with '…'."""
+    s = "".join(c for c in s if c != "#" and unicodedata.category(c) not in ("Cc", "Cf", "Cs"))
+    if text_width(s) <= cells:
+        return s
+    out, used = [], 0
+    for c in s:
+        if used + cell_width(c) > cells - 1:
+            break
+        out.append(c)
+        used += cell_width(c)
+    return "".join(out) + "…"
+
+
+def short(name: str, phone: bool) -> str:
+    """A group header's name: whole on the desktop, its first few characters on the phone."""
+    return name[:PHONE_HEAD_CHARS] if phone else name
+
+
+# --- classify -----------------------------------------------------------------------------------
+
+@dataclasses.dataclass(frozen=True)
+class Tab:
+    kind: str       # lead | lane | other (a laned repo's worktrees) | shared
+    repo: str       # a laned repo's common dir; "" when shared
+    repo_name: str  # cleaned: the group header (laned), or the shared tab's name
+    name: str       # cleaned: the tab's @tab_name
+
+    @property
+    def rank(self) -> int:
+        return ("lead", "lane", "other").index(self.kind) if self.kind != "shared" else 3
+
+
+def read_small(path: str, limit: int) -> bytes | None:
+    """At most `limit` bytes of a regular file (not a symlink or FIFO), or None when it is
+    missing, unreadable, not regular or longer."""
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
+    except (OSError, ValueError):
+        return None
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            return None
+        data = b""
+        while len(data) <= limit:
+            chunk = os.read(fd, limit + 1 - len(data))
+            if not chunk:
+                break
+            data += chunk
+        return data if len(data) <= limit else None
+    except OSError:
+        return None
+    finally:
+        os.close(fd)
+
+
+def common_dir(top: str, dotgit: str) -> str | None:
+    """The git common dir of the checkout at `top`: its .git dir, or for a linked worktree
+    (.git file reading `gitdir: <common>/worktrees/<name>`) that <common>."""
+    if os.path.isdir(dotgit):
+        return os.path.realpath(dotgit)
+    data = read_small(dotgit, GITFILE_MAX)
+    if data is None:
+        return None
+    try:
+        first = data.decode().splitlines()[0]
+    except (UnicodeDecodeError, IndexError):
+        return None
+    if not first.startswith("gitdir:") or not first[7:].strip() or "\0" in first:
+        return None
+    gitdir = os.path.realpath(os.path.join(top, first[7:].strip()))
+    parent = os.path.dirname(gitdir)
+    return os.path.dirname(parent) if os.path.basename(parent) == "worktrees" else gitdir
+
+
+def lane_paths(common: str) -> set[str] | None:
+    """The realpaths that the repo's lane records name, or None when it has no lanes: no
+    <common>/lanes/<id>/lane.json for an id not starting with '_' (`_closed` holds the
+    archive), or a symlinked lanes dir. A record is untrusted: only its `path` is used, and only
+    when it is an absolute str."""
+    lanes = os.path.join(common, "lanes")
+    if os.path.islink(lanes):
+        return None
+    found, paths = False, set()
+    for rec in glob.glob(os.path.join(glob.escape(lanes), "*", "lane.json")):
+        if os.path.basename(os.path.dirname(rec)).startswith("_"):
+            continue
+        found = True
+        data = read_small(rec, RECORD_MAX)
+        try:
+            path = json.loads(data).get("path") if data is not None else None
+        except (ValueError, RecursionError, AttributeError):
+            continue
+        if isinstance(path, str) and os.path.isabs(path) and "\0" not in path:
+            paths.add(os.path.realpath(path))
+    return paths if found else None
+
+
+def classify(cwd: str) -> Tab:
+    """What a window is, from its active pane's cwd: a laned repo's lead, lane or other
+    worktree, or a shared tab named by its checkout's (or cwd's) directory."""
+    if not cwd or "\0" in cwd or not os.path.isabs(cwd):
+        return Tab("shared", "", "", "")
+    cwd = os.path.realpath(cwd)
+    top = cwd
+    while not os.path.lexists(os.path.join(top, ".git")):
+        parent = os.path.dirname(top)
+        if parent == top:
+            name = clean(os.path.basename(cwd), NAME_CELLS - 1)
+            return Tab("shared", "", name, f"{name}:" if name else "")
+        top = parent
+    name = clean(os.path.basename(top), NAME_CELLS - 1)
+    shared = Tab("shared", "", name, f"{name}:" if name else "")
+    common = common_dir(top, os.path.join(top, ".git"))
+    if common is None:
+        return shared
+    lanes = lane_paths(common)
+    if lanes is None:
+        return shared
+    lead = os.path.dirname(common)
+    repo_name = clean(os.path.basename(lead))
+    if top == lead:
+        return Tab("lead", common, repo_name, "lead")
+    kind = "lane" if top in lanes else "other"
+    return Tab(kind, common, repo_name, clean(os.path.basename(top)))
+
+
+# --- lay out ------------------------------------------------------------------------------------
+
+@dataclasses.dataclass
+class Group:
+    name: str                   # the cleaned repo name
+    tabs: list                  # [(window id, window index)], in tab order
+
+
+@dataclasses.dataclass
+class Layout:
+    phone: bool
+    heads: list                 # per group: the header name shown (an option value, not format)
+    head_w: list                # per group: the header's cells (" " + name + "▸")
+    rows: list                  # per row: items ("head", g, dim) ("div", g) ("tab", wid, index)
+                                # ("more", hidden, cells)
+    slots: list                 # per row: the slot width of its tabs
+    hidden: int
+    left: int                   # row 0's cells for status-left (padded to it)
+    right: int                  # row 0's cells for status-right (desktop)
+
+
+@functools.cache
+def max_tabs_per_row() -> int:
+    """How many slots fit in ROW_BYTES with row 0's extras (a header, status-left and -right)."""
+    extra = len(header(0, 12, False)) + len(left_part(9999)) + len(right_part(9999)) + 200
+    return max(1, (ROW_BYTES - extra) // len(entry("@99999", 99999, MAX_SLOT)))
+
+
+def lay_out(groups: list, shared: list, width: int, current: str | None = None,
+            left_len: int = 0, right_len: int = 0) -> Layout:
+    """Rows of tabs for one session (pure). groups: [Group] in order; shared: [(wid, index)];
+    width: the session's narrowest client; current: its current window id; left_len and
+    right_len: status-left-length and status-right-length, reserved on row 0 (desktop)."""
+    phone = width < PHONE_WIDTH
+    min_slot = MIN_SLOT_PHONE if phone else MIN_SLOT
+    left, right = (PHONE_LEFT, 0) if phone else (max(0, left_len), max(0, right_len))
+    heads = [short(g.name, phone) for g in groups]
+    head_w = [text_width(h) + 2 for h in heads]
+    most = max_tabs_per_row()
+
+    def avail(r: int) -> int:
+        return max(0, width - (left + right if r == 0 else 0))
+
+    def cap(r: int, fixed: int) -> int:
+        return max(1, min(most, (avail(r) - fixed) // min_slot))
+
+    def build(packed: set) -> list:
+        rows = []
+        for g, group in enumerate(groups):
+            if g in packed:
+                continue
+            tabs, dim = list(group.tabs), False
+            while tabs:
+                n = cap(len(rows), head_w[g])
+                rows.append([("head", g, dim)] + [("tab", *t) for t in tabs[:n]])
+                tabs, dim = tabs[n:], True
+        base, bins = len(rows), []      # the shared rows: [items, cells used]
+        for t in shared:
+            if not bins or bins[-1][1] + min_slot > avail(base + len(bins) - 1) or \
+                    sum(i[0] == "tab" for i in bins[-1][0]) >= most:
+                bins.append([[], 0])
+            bins[-1][0].append(("tab", *t))
+            bins[-1][1] += min_slot
+        for g in sorted(packed):        # first fit, each group whole behind its divider
+            need = head_w[g] + len(groups[g].tabs) * min_slot
+            for b, (items, used) in enumerate(bins):
+                if used + need <= avail(base + b) and \
+                        sum(i[0] == "tab" for i in items) + len(groups[g].tabs) <= most:
+                    items += [("div", g)] + [("tab", *t) for t in groups[g].tabs]
+                    bins[b][1] += need
+                    break
+            else:                       # no room: its own row(s), each behind the divider
+                tabs = list(groups[g].tabs)
+                while tabs:
+                    n = cap(base + len(bins), head_w[g])
+                    bins.append([[("div", g)] + [("tab", *t) for t in tabs[:n]],
+                                 head_w[g] + n * min_slot])
+                    tabs = tabs[n:]
+        return rows + [items for items, _ in bins]
+
+    packed: set = set()
+    rows = build(packed)
+    for g in sorted(range(len(groups)), key=lambda g: (len(groups[g].tabs), g)):
+        if len(rows) <= MAX_ROWS:
+            break
+        trial = build(packed | {g})
+        if len(trial) <= len(rows):
+            packed.add(g)
+            rows = trial
+
+    hidden = []
+    if len(rows) > MAX_ROWS:
+        total = sum(len(g.tabs) for g in groups) + len(shared)
+        more_w = len(f" +{total} ")
+        for row in rows[MAX_ROWS:]:
+            hidden += [i[1:] for i in row if i[0] == "tab"]
+        rows = rows[:MAX_ROWS]
+        last, r = rows[-1], MAX_ROWS - 1
+
+        def fixed() -> int:
+            return sum(head_w[i[1]] for i in last if i[0] in ("head", "div")) + more_w
+
+        while sum(i[0] == "tab" for i in last) > 1 and \
+                fixed() + sum(i[0] == "tab" for i in last) * min_slot > avail(r):
+            if last[-1][0] == "tab":
+                hidden.insert(0, last.pop()[1:])
+            if last[-1][0] == "div":
+                last.pop()
+        cur = next((t for t in hidden if t[0] == current), None)
+        if cur is not None:             # the current window takes the last visible slot
+            k = max(i for i, item in enumerate(last) if item[0] == "tab")
+            hidden.remove(cur)
+            hidden.append(last[k][1:])
+            last[k] = ("tab", *cur)
+        last.append(("more", len(hidden), more_w))
+
+    slots = []
+    for r, row in enumerate(rows):
+        n = sum(i[0] == "tab" for i in row)
+        fixed_w = sum(head_w[i[1]] if i[0] in ("head", "div") else i[2]
+                      for i in row if i[0] != "tab")
+        slots.append(min(MAX_SLOT, max(1, (avail(r) - fixed_w) // n)) if n else 0)
+    return Layout(phone, heads, head_w, rows, slots, len(hidden), left, right)
+
+
+# --- render -------------------------------------------------------------------------------------
+
+def fit(width: int) -> str:
+    """BODY padded to `width` cells, cut to width-1 plus '…' when longer (literal widths only:
+    a computed width garbles)."""
+    width = max(2, width)
+    return f"#{{p{width}:#{{=/{width - 1}/…:{BODY}}}}}"
+
+
+def entry(wid: str, index: int, slot: int) -> str:
+    """One slot: a W loop that draws only window `wid`, normal or (as tmux's current window)
+    highlighted, as ` #I ★ ◐ name label` padded to `slot` cells. The star and the glyph come and
+    go at render time, so the text is a 4-way conditional over literal widths."""
+    if not WID.match(wid) or not isinstance(index, int) or index < 0:
+        raise ValueError(f"bad window {wid!r} {index!r}")
+    base = slot - (len(str(index)) + 2)
+
+    def one(style: str, fg: str) -> str:
+        glyph = ("#{?#{==:#{@claude_state},busy},◐ ,#{?#{==:#{@claude_state},wait},"
+                 f"#[fg=colour46]✳ #[fg={fg}],}}}}")
+        rest = (f"#{{?@claude_star,#{{?{GLYPH_ON},{fit(base - 4)},{fit(base - 2)}}},"
+                f"#{{?{GLYPH_ON},{fit(base - 2)},{fit(base)}}}}}")
+        return ("#[range=window|#{window_index}]" + style + " #I #{?@claude_star,★ ,}" + glyph
+                + rest + "#[norange]" + NORM)
+
+    match = f"#{{==:#{{window_id}},{wid}}}"
+    return (f"#{{W:#{{?{match},{one(NORM, 'colour250')},}},"
+            f"#{{?{match},{one(CUR, 'colour231')},}}}}")
+
+
+def name_part(g: int, cells: int) -> str:
+    """Group g's name (the session option @tab_bar_g<g>, read plainly) in exactly `cells`."""
+    if cells <= 0:
+        return ""
+    return f"#{{p{cells}:#{{={cells}:#{{@tab_bar_g{g}}}}}}}"
+
+
+def header(g: int, cells: int, dim: bool) -> str:
+    return (f"#[fg=colour{PALETTE[g % len(PALETTE)]}]" + ("#[dim]" if dim else "#[bold]")
+            + " " + name_part(g, cells) + "▸" + NORM)
+
+
+def divider(g: int, cells: int) -> str:
+    return f"#[fg=colour{PALETTE[g % len(PALETTE)]}]#[bold]│" + name_part(g, cells) + "▸" + NORM
+
+
+def left_part(cells: int) -> str:
+    """status-left (which runs tmux-claude-status, the glyph backstop), padded to `cells`."""
+    return f"#{{p{cells}:#{{T;=/{cells}:status-left}}}}" if cells > 0 else ""
+
+
+def right_part(cells: int) -> str:
+    return f"#[align=right]#{{T;=/{cells}:status-right}}" if cells > 0 else ""
+
+
+def render(lay: Layout) -> list:
+    """The status-format rows for a layout. Only window ids, integers and fixed text go in."""
+    out = []
+    for r, (items, slot) in enumerate(zip(lay.rows, lay.slots)):
+        parts = [FILL, NORM]
+        if r == 0:
+            parts.append(left_part(lay.left))
+        for item in items:
+            if item[0] == "head":
+                parts.append(header(item[1], lay.head_w[item[1]] - 2, item[2]))
+            elif item[0] == "div":
+                parts.append(divider(item[1], lay.head_w[item[1]] - 2))
+            elif item[0] == "tab":
+                parts.append(entry(item[1], item[2], slot))
+            else:
+                text = f" +{int(item[1])} ".ljust(int(item[2]))
+                parts.append("#[range=user|more]#[fg=colour250]#[bold]" + text
+                             + "#[norange]" + NORM)
+        if r == 0 and not lay.phone:
+            parts.append(right_part(lay.right))
+        row = "".join(parts)
+        if "%" in row or "#(" in row or "\n" in row or len(row.encode()) > ROW_BYTES:
+            raise ValueError(f"row {r} breaks the template rules")
+        out.append(row)
+    return out
+
+
+def session_ops(lay: Layout, rows: list) -> list:
+    """The option writes that give a session this layout, in order: (name, value), with None
+    for an unset. The row count (`status`) goes separately, last."""
+    ops = [(f"@tab_bar_g{g}", head) for g, head in enumerate(lay.heads)]
+    ops += [(f"status-format[{i}]", row) for i, row in enumerate(rows)]
+    if lay.phone:
+        ops += [("status-position", "bottom"), ("status-left", PHONE_STATUS_LEFT),
+                ("status-right", "")]
+    else:                               # back to the global (desktop) values
+        ops += [("status-position", None), ("status-left", None), ("status-right", None)]
+    return ops
+
+
+# --- tmux I/O -----------------------------------------------------------------------------------
+
+def tmux(*args: str) -> subprocess.CompletedProcess:
+    """One tmux command on the server $TMUX names."""
+    return subprocess.run(["tmux", *args], capture_output=True, text=True, timeout=5,
+                          errors="surrogateescape")
+
+
+def read(*args: str) -> list:
+    p = tmux(*args)
+    if p.returncode != 0:
+        raise RuntimeError(f"tmux {args[0]} failed: {p.stderr.strip()}")
+    return [line.split("\t") for line in p.stdout.splitlines()]
+
+
+def to_int(s: str, default: int) -> int:
+    return int(s) if s.isdigit() else default
+
+
+def status_value(rows: int) -> str:
+    return "on" if rows == 1 else str(rows)
+
+
+def layout() -> None:
+    """Read every session, window, pane and client once; write what changed."""
+    sessions = {}
+    for f in read("list-sessions", "-F", SESSION_FMT):
+        if len(f) == 5 and SID.match(f[0]):
+            sessions[f[0]] = {"status": f[1], "left": to_int(f[2], 0),
+                              "right": to_int(f[3], 0), "sig": f[4]}
+    widths = {}
+    for f in read("list-clients", "-F", CLIENT_FMT):
+        if len(f) == 2 and f[0] in sessions and f[1].isdigit() and int(f[1]) > 0:
+            widths[f[0]] = min(widths.get(f[0], int(f[1])), int(f[1]))
+    windows, options = {}, {}           # session -> [(index, wid, active)]; wid -> (name, group)
+    for f in read("list-windows", "-a", "-F", WINDOW_FMT):
+        if len(f) == 6 and f[0] in sessions and WID.match(f[1]) and f[2].isdigit():
+            windows.setdefault(f[0], []).append((int(f[2]), f[1], f[3] == "1"))
+            options[f[1]] = (f[4], f[5])
+    cwds = {}
+    for line in read("list-panes", "-a", "-F", PANE_FMT):
+        if len(line) >= 3 and line[1] == "1":
+            cwds[line[0]] = "\t".join(line[2:])
+
+    seen: dict = {}
+    writes: dict = {}                   # wid -> (@tab_name, @tab_group) wanted
+    plans = []
+    for sid, sess in sessions.items():
+        if sid not in widths or not windows.get(sid):
+            continue                    # nobody sees it
+        wins = sorted(windows[sid])
+        by_repo: dict = {}
+        shared = []
+        for index, wid, _ in wins:
+            if cwds.get(wid, "") not in seen:
+                seen[cwds.get(wid, "")] = classify(cwds.get(wid, ""))
+            tab = seen[cwds.get(wid, "")]
+            if tab.kind == "shared":
+                shared.append((wid, index))
+                writes.setdefault(wid, (tab.name, ""))
+            else:
+                by_repo.setdefault(tab.repo, []).append((tab, wid, index))
+        groups = []
+        for g, members in enumerate(by_repo.values()):      # by each group's lowest index
+            members.sort(key=lambda m: (m[0].rank, m[2]))
+            groups.append(Group(members[0][0].repo_name, [(wid, i) for _, wid, i in members]))
+            for tab, wid, _ in members:
+                writes.setdefault(wid, (tab.name, str(g % len(PALETTE))))
+        current = next((wid for _, wid, active in wins if active), None)
+        lay = lay_out(groups, shared, widths[sid], current, sess["left"], sess["right"])
+        rows = render(lay)
+        ops = session_ops(lay, rows)
+        status = status_value(len(rows))
+        sig = hashlib.sha256(json.dumps([ops, status]).encode()).hexdigest()[:16]
+        if sig != sess["sig"]:
+            plans.append((sid, ops, status, sess["status"], sig))
+
+    for wid, (name, group) in writes.items():   # before the rows that read them
+        if options.get(wid, ("", ""))[0] != name:
+            tmux("set-option", "-w", "-t", wid, "@tab_name", name)
+        if options.get(wid, ("", ""))[1] != group:
+            tmux("set-option", "-w", "-t", wid, "@tab_group", group)
+    for sid, ops, status, old_status, sig in plans:
+        ok = True
+        for name, value in ops:
+            args = ("-u", "-t", sid, name) if value is None else ("-t", sid, name, value)
+            if tmux("set-option", *args).returncode != 0:
+                ok = False              # e.g. the session closed: leave its sig for a retry
+                break
+        if not ok:
+            continue
+        # Every row is written first, so no row shows blank. A bar turned off stays off.
+        if status != old_status and old_status != "off" and \
+                tmux("set-option", "-t", sid, "status", status).returncode:
+            continue
+        tmux("set-option", "-t", sid, "@tab_bar_sig", sig)
+
+
+def run_locked(run_dir: str) -> None:
+    """layout() under a lock: hooks fire in bursts (a restore opens 8 windows), so a run that
+    finds the lock held marks the state dirty and leaves; the holder runs once more if so."""
+    uid = os.getuid()
+    lock = os.path.join(run_dir, f".tmux-tab-bar.{uid}.lock")
+    dirty = os.path.join(run_dir, f".tmux-tab-bar.{uid}.dirty")
+    try:
+        fd = os.open(lock, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    except OSError:
+        layout()                        # no lock to be had: still lay out
+        return
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            try:
+                os.close(os.open(dirty, os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW, 0o600))
+            except OSError:
+                pass
+            return
+        for _ in range(2):
+            try:
+                os.unlink(dirty)
+            except OSError:
+                pass
+            layout()
+            if not os.path.exists(dirty):
+                break
+    finally:
+        os.close(fd)
+
+
+def main(argv: list) -> int:
+    if argv[1:] != ["layout"]:
+        print(__doc__.split("\n\n")[1], file=sys.stderr)
+        return 2
+    if not os.environ.get("TMUX"):
+        return 0                        # outside tmux: nothing to lay out
+    run_dir = os.environ.get("TMUX_CLAUDE_STATUS_DIR") or "/tmp"
+    try:
+        run_locked(run_dir)
+    except Exception:                   # fail-open: the bar keeps what it had
+        try:
+            with open(os.path.join(run_dir, f".tmux-tab-bar.{os.getuid()}.err"), "w") as f:
+                traceback.print_exc(file=f)
+        except OSError:
+            pass
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))
