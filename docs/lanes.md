@@ -375,7 +375,9 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
   tree (SIGSTOP, parents first, rescanning until no new process appears), checks that nothing in
   it holds a file open in the git dir (a killed git leaves lock files), sends the signal, then
   continues everything it froze, children first. Frozen, nothing in the tree can open a file or
-  start a process between the check and the signal. A held signal is named in the refusal, and a
+  start a process between the check and the signal. A session's pane shell is frozen before the
+  session, so its job control never sees the stop, and SIGTERM, SIGHUP and SIGINT to `done`
+  itself wait, blocked, until the tree is continued. A held signal is named in the refusal, and a
   process held at step 3's SIGTERM is never SIGKILLed. A session's first SIGTERM goes unfrozen:
   Claude Code handles it as when its tab closes, running its SessionEnd hooks and ending its own
   children.
@@ -387,10 +389,16 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
   `closing` (rerun `done`); its `open-sessions` entries are swept either way. Last, under
   setup.sh's `install.lock` (waited for up to 30 s), `done` builds the archive under a temporary
   name from `lane.json` re-read under the lanes lock (so it keeps the `endedAt` SessionEnd
-  stamped), checks the install once more and removes the worktree with the lanes lock released
+  stamped), checks the install and the lane's processes once more and removes the worktree with
+  the lanes lock released
   (`git worktree remove` can outlast the hooks' 2 s), then re-reads the record under it and
   moves the archive into place. No install relinks into the lane in between, and a failure
   leaves no partial archive.
+
+  Every git `done` runs in the lane takes its config from the repo's common dir
+  (`GIT_COMMON_DIR`), and the lane's path must be a worktree whose admin dir's `commondir` names
+  that dir: the admin dir is sandbox-writable, and a config `core.fsmonitor` would run a command
+  sandbox-off.
 
   Nothing is chosen by name, start time or tmux window. A window id means something only on its
   own tmux server, and `kill-window` sends SIGHUP to everything on the pane's terminal (Hayden's

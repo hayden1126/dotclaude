@@ -84,14 +84,17 @@ an unregistered worktree: `lane whoami` tells you which.
    `lane.json`. Before any signal, it refuses, by name:
    - anything else with its cwd in the lane;
    - a background session (`claude stop <jobId>` ends it);
-   - a dirty or locked worktree;
+   - a dirty, locked or submodule worktree;
    - a run from anywhere but the main checkout, or under a lane's session (only the lead
      closes lanes);
    - links the install still points into the lane;
    - a failing `handoff-check --closing`.
 
    A close refused after a signal leaves the lane `closing`, which `open` refuses: rerun
-   `lane done`.
+   `lane done`. Give its Bash call `timeout: 600000`: it can wait minutes (the fetch,
+   handoff-check, two grace periods, the locks), and a timeout's SIGKILL is the one signal it
+   can't hold off, and one landing while a process tree is frozen leaves it stopped (`kill -CONT`
+   the pids `ps -o pid,stat` shows in state T).
    It archives `lane.json` and `.lane/` to `<common-dir>/lanes/_closed/<id>-<date>/`, runs
    `git worktree remove` (never `--force`) and `git branch -d` (never `-D`).
 
