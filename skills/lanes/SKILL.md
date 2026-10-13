@@ -44,7 +44,9 @@ an unregistered worktree: `lane whoami` tells you which.
 ## Lifecycle
 
 1. **Init, once per repo**, from the main checkout:
-   `lane init --root ~/code/<repo>-lanes --setup "npm ci" --ports 5191-5199 --cap 4`.
+   `lane init --root ~/code/<repo>-lanes --setup "npm ci" --ports 5191-5199 --cap 4`. It asks
+   for Hayden's click: `--setup` names the command each new lane runs, and `--root` moves where
+   lanes live.
 2. **New lane:** `lane new chart-fix --claim 42 --goal "fix the axis labels" --files src/chart/
    --overlaps api-docs --done-when "axis test green"`. It fetches (and refuses if the fetch
    fails: a lane branches only from the commit the remote reports), branches from `origin/main`
@@ -65,8 +67,8 @@ an unregistered worktree: `lane whoami` tells you which.
    record, add one line to the project backlog (lane id, PR number), and propose
    `lane done chart-fix`. Run it only on Hayden's nod.
 6. **Close:** `lane done <id>` refuses an unmerged branch, a lane made by `lane new` with no
-   commits past its base (pass `--abandon` to close either anyway) and a lane with a live process
-   in it. It archives `lane.json` and `.lane/` to
+   commits past its base (pass `--abandon` to close either anyway; it asks) and a lane with a
+   live process in it. It archives `lane.json` and `.lane/` to
    `<common-dir>/lanes/_closed/<id>-<date>/`, runs `git worktree remove` (never `--force`) and
    `git branch -d` (never `-D`).
 

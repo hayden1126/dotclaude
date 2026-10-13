@@ -40,7 +40,9 @@ other value replaces the baseline's (`merge-settings.py`). Top-level keys only t
 names every live value the baseline overrides (such as `effortLevel`) and every live hook command
 it drops; put a value in the overlay to keep it. The baseline now owns a `permissions` object, so
 `setup.sh` replaces the live one (`merge-settings.py` names it on stderr): personal allow rules go
-in `settings.machine.json`, whose lists append.
+in `settings.machine.json`, whose lists append. Installed from a checkout other than `~/dotclaude`
+(a lane's worktree), the copy's `denyWrite` also names that checkout's copies of the
+`~/dotclaude` paths, since the installed links point there.
 
 A typical overlay sets a preference and the machine's own tools:
 
@@ -84,6 +86,26 @@ other `bash -c`, such as one running `push -f`, and `bash -lc`, `sh -c`, `eval`)
 other than `-C` (`-c k=v`, `--git-dir`, `--no-pager`), soft, mixed and `--keep` resets, and
 `checkout`, `switch`, `restore` and `revert`. Why rules at all: on 2.1.288, auto mode ran a
 force-push and a `reset --hard` on a dirty tree when the prompt named them.
+
+`sandbox.excludedCommands` is the allowlist of what runs outside the sandbox.
+`tests/delegation/command_inventory.py` lists each entry, why it needs the outside and the calls
+it must cover, and `test_settings.py` ties it to `settings.json` in both directions. It holds the
+credential barrier (`git push`, `fetch`, `pull`, `ls-remote`, `gh`), our wrappers (`lane init`,
+`new`, `adopt`, `ls`, `open`, `done`, `pass-respawn`, `delegation-ledger`, `codex-delegate`),
+`claude`, the read-only tmux verbs (`ls`, `list-*`, `capture-pane`, `display`, `show*`), read-only
+codex (`login status`, `doctor` and a few lists) and the Windows shells. Any other call runs
+sandboxed, where tmux reaches no socket and codex no credential, so it fails closed.
+
+Asks cover what an excluded command could still be made to run: every other tmux verb, alias and
+prefix, a bare `tmux`, a global flag, a `;` chain, a `#(` job and `display -I`; the `claude`
+flags that turn off a guard or load config, tools or code from elsewhere, and its subcommands
+that change the install, config, auth or sessions; git's `--upload-pack`, `--receive-pack` and
+`--exec`; `gh auth token` and the `gh` commands that change its credential, aliases, config or
+extensions; `lane init --setup` or `--root`, `lane done --abandon`, `codex-delegate --network` and
+the Windows shells. `claude ultrareview` is denied. What CLAUDE.md, the skills and the agents tell
+Claude to run asks nothing (a test scans them), and a suite fails when the installed tmux or Claude
+Code has a verb or flag the inventory hasn't classified. Spellings a glob can't anchor, such as a
+quoted verb or a global flag before a `claude` subcommand, are left to the classifier.
 
 `rm` never asks. Ask rules for `rm -r` and `rm -f` stopped sessions and stalled delegated writers
 mid-task, and a hook can't exempt agents from them: an ask rule prompts even when a PreToolUse
