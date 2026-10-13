@@ -114,6 +114,23 @@ stored here).
   `claude`. Today `lane open` hardcodes the argv, so a lane's model or effort is set by hand in
   its window.
 
+  **Next free lane slot: `lane-addr`** (Hayden's request via lane narrow-excluded, 2026-10-13;
+  he picked "queue for the next slot", to open right after `narrow-excluded` merges):
+  1. Stable lead/lane addressing. A session's name changes most turns, so a ListAgents name goes
+     stale. The stable address is the messaging socket `uds:/run/user/1000/cc-socks/<pid>.sock`
+     (`messagingSocketPath` in `~/.claude/sessions/<pid>.json`; tested live). Proposed:
+     `lane addr <lane|lead>` prints it (live pid, cwd is the lane or the main checkout), and the
+     lanes skill and the SessionStart line say to resolve it fresh before each send (a pass
+     makes a new pid). The title's `[repo]` brackets look like ListAgents' `name [ref]`;
+     narrow-excluded misaddressed the lead three times on that.
+  2. Titles keep the main project: a lead stays `[dotclaude]` after a Bash `cd`
+     (`hooks/session-title.sh`: the repo from `CLAUDE_PROJECT_DIR` or the session's launch cwd,
+     not the payload cwd). Probe first: a Bash `cd` into a worktree moved the lead's primary
+     working directory itself ([[bash-cd-moves-session-cwd]]). Hayden: "either the lead keeps
+     its main project name, or the main project name is displayed on the left of the lead on
+     that project's own lead/lanes row"; that row label is lane `tab-bar`'s (told 2026-10-13).
+  Overlaps: lane-close (`skills/lanes/scripts/lane`), tab-bar (row label).
+
   **Lane `tab-bar` (opened 2026-10-13): stay on tmux, multi-row bar plus a phone layout.**
   Hayden picked tmux over a migration after the research page
   (https://claude.ai/artifact/E75uhqt2xskxUGQopLwvoA, private; tmux inventory in
