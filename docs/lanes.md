@@ -371,16 +371,16 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
   3. Whatever survives, classified afresh: SIGTERM (SIGHUP again for a pane shell), a wait,
      then SIGKILL.
 
-  Every signal but a session's first SIGTERM is guarded. `done` freezes the target's process
-  tree (SIGSTOP, parents first, rescanning until no new process appears), checks that nothing in
-  it holds a file open in the git dir (a killed git leaves lock files), sends the signal, then
-  continues everything it froze, children first. Frozen, nothing in the tree can open a file or
-  start a process between the check and the signal. A session's pane shell is frozen before the
-  session, so its job control never sees the stop, and SIGTERM, SIGHUP and SIGINT to `done`
-  itself wait, blocked, until the tree is continued. A held signal is named in the refusal, and a
-  process held at step 3's SIGTERM is never SIGKILLed. A session's first SIGTERM goes unfrozen:
-  Claude Code handles it as when its tab closes, running its SessionEnd hooks and ending its own
-  children.
+  Every signal but a session's first SIGTERM is guarded: just before it, `done` rescans the
+  target's process tree and holds the signal while anything in it has a file open in the git dir
+  (a killed git leaves lock files). A held signal is named in the refusal, and a process held at
+  step 3's SIGTERM is never SIGKILLed. A session's first SIGTERM goes unchecked: Claude Code
+  handles it as when its tab closes, running its SessionEnd hooks and ending its own children.
+  Nothing is stopped for the check. tmux continues a pane process that gets SIGSTOP at once, and
+  a job-control shell reports a stopped job suspended and takes back the terminal (probe on tmux
+  3.7c), so a freeze can't hold a tab's session still. A git that opens a lock file in the
+  microseconds between the check and a SIGKILL is the accepted residual (Hayden's call,
+  2026-10-13); git removes its own lock files on SIGTERM.
 
   A `lane open` tab closes by itself once its claude exits. The lanes lock is never held while
   `done` waits, because every lane's hooks take it with a 2 s timeout, and `done` gives up on it
@@ -398,7 +398,8 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
   Every git `done` runs in the lane takes its config from the repo's common dir
   (`GIT_COMMON_DIR`), and the lane's path must be a worktree whose admin dir's `commondir` names
   that dir: the admin dir is sandbox-writable, and a config `core.fsmonitor` would run a command
-  sandbox-off.
+  sandbox-off. A repo that sets `extensions.worktreeConfig` refuses `done` outright, since git
+  then also reads the lane's `config.worktree`, which nothing overrides.
 
   Nothing is chosen by name, start time or tmux window. A window id means something only on its
   own tmux server, and `kill-window` sends SIGHUP to everything on the pane's terminal (Hayden's

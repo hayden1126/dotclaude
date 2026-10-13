@@ -78,8 +78,8 @@ an unregistered worktree: `lane whoami` tells you which.
    - leftovers started with a lane session's id get SIGTERM;
    - survivors get SIGTERM, then SIGKILL.
 
-   Every signal but a session's first is sent with its target's process tree frozen, and held
-   (named in the refusal) while anything in that tree has a file open in the git dir. The proof
+   Every signal but a session's first is checked just before it is sent, and held (named in
+   the refusal) while anything in the target's tree has a file open in the git dir. The proof
    comes from /proc and Claude Code's own session files and transcripts, never from
    `lane.json`. Before any signal, it refuses, by name:
    - anything else with its cwd in the lane;
@@ -92,9 +92,7 @@ an unregistered worktree: `lane whoami` tells you which.
 
    A close refused after a signal leaves the lane `closing`, which `open` refuses: rerun
    `lane done`. Give its Bash call `timeout: 600000`: it can wait minutes (the fetch,
-   handoff-check, two grace periods, the locks), and a timeout's SIGKILL is the one signal it
-   can't hold off, and one landing while a process tree is frozen leaves it stopped (`kill -CONT`
-   the pids `ps -o pid,stat` shows in state T).
+   handoff-check, two grace periods, the locks), and one cut off by a timeout needs a rerun.
    It archives `lane.json` and `.lane/` to `<common-dir>/lanes/_closed/<id>-<date>/`, runs
    `git worktree remove` (never `--force`) and `git branch -d` (never `-D`).
 
