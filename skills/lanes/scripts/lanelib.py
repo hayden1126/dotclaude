@@ -113,9 +113,9 @@ def git(args: list[str],
 # A plain /pass respawns the pane, which kills every background task with it. So it goes ahead
 # only after a Stop that listed no task but these: `dream` is memory upkeep, and an `artifact
 # watch` is the live watch the Artifact tool arms on each publish (hooks/stop_ring.py
-# artifact_url), a subscription for comments, not work in flight: Claude Code itself leaves it
-# out of /tasks and its own busy counts, and never shows the model its id, so nothing could
-# stop it (incident e7cc7b9a, 2026-10-13). The respawn ends it, as quitting would. Teammates and
+# artifact_url), a subscription for comments, not work in flight. The model never sees its id,
+# so a session can't stop it, and it blocked every plain pass after a publish (incident
+# e7cc7b9a, 2026-10-13). The respawn ends it, as quitting would. Teammates and
 # monitors count, though stop-ring.sh rings past them (it asks "is the turn waiting on its
 # result?", not "would a respawn kill it?"). pass-respawn refuses by this rule, and the autopass
 # watcher (hooks/context_watch.py) says "compact mode" by it, so the two never disagree.

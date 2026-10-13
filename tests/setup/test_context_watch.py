@@ -365,6 +365,26 @@ class Background(Base):
         self.assertIn("TaskStop", cw.TASKS_NOTE)
         self.assertIn("ask Hayden", cw.TASKS_NOTE)
 
+    def test_unreadable_waits_in_the_record_are_unknown_work(self):
+        # Review round 1: waits that aren't a list made a tool call read the record as clear,
+        # where pass-respawn refuses it.
+        self.on()
+        self.stop_record("shell", [])
+        self.assertEqual(self.tool(485_000), context("wrap_unknown", "485k"))
+
+    def test_without_lanelib_every_task_blocks(self):
+        # The rule lives in lanelib; without it (a broken install, where pass-respawn can't
+        # run either) no task can be shown safe, so the nudge says compact mode.
+        self.write_transcript(310_000)
+        watch = [{"id": "s1", "type": "monitor", "status": "running",
+                  "description": "live updates for artifact https://claude.ai/artifact/x (c)"}]
+        payload = {"session_id": SID, "hook_event_name": "Stop",
+                   "transcript_path": self.transcript, "cwd": self.cwd,
+                   "background_tasks": watch}
+        with mock.patch.object(aps, "lanelib", return_value=None), \
+                mock.patch.object(aps, "decide", return_value=(True, "pass.toml")):
+            self.assertEqual(cw.handle(payload), block("soft_compact", "310k", "artifact watch"))
+
     def test_the_nudge_names_at_most_ten_tasks(self):
         self.on()
         tasks = [{"id": f"m{i}", "type": "monitor", "description": f"watch {i}"}

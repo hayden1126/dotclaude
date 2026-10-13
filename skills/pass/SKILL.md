@@ -29,7 +29,7 @@ The record holds the exact facts and the fresh session re-reads it. So the hando
    - A task you can't tie to finished work: ask Hayden before you stop it, and don't pass this turn.
    - In plain mode, if any is still in use, use compact mode instead, and say so in your reply. In compact mode, leave it running.
    - If a task you stopped still shows as running (a finished in-process teammate lingers in the list), use compact mode. Don't keep retrying `TaskStop`.
-   - An `artifact watch` doesn't block a plain pass. The Artifact tool arms one on each publish, and Claude Code hides it from you and from `/tasks`; the respawn ends it, and `pass.log` names its page. If Hayden is still commenting on that page, put its URL in the record's Next so the fresh session watches it again.
+   - An `artifact watch` doesn't block a plain pass. The Artifact tool arms one on each publish, and you never see its id (`/tasks` shows it to Hayden under System tasks); the respawn ends it, and `pass.log` names its page. If Hayden is still commenting on that page, put its URL in the record's Next so the fresh session watches it again.
    - You judge, the script enforces: `pass-respawn` still refuses a plain pass while any task but memory upkeep (`dream`) or an artifact watch runs, so a skipped check can't kill a live watcher. Its refusal is loud (a notice held until a key, plus the Windows toast) and names the first two tasks with their ids; `pass.log` names every one.
 
 3. **Run the handoff skill.**

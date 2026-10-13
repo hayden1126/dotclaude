@@ -32,9 +32,9 @@ WAITS = {"subagent", "shell", "workflow", "cloud session"}
 ID = re.compile(r"[A-Za-z0-9_-]{1,128}")   # a task or tool-use id we search the transcript for
 SID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
 # The live watch the Artifact tool arms on each publish (2.1.296: a monitor_ws flagged ambient).
-# Claude Code keeps it out of /tasks and its own busy counts and never shows the model its id,
-# but the Stop payload lists it as a `monitor` with no server, described by this prefix, the
-# page's URL and what it delivers. The canary checks the prefix is still in the binary
+# /tasks lists it under System tasks ("auto-replying to comments"), but the model never sees its
+# id. The Stop payload lists it as a `monitor` with no server, described by this prefix, the
+# page's URL and how it was armed ("(auto-armed on publish)", session f857d709). The canary checks the prefix is still in the binary
 # (delegation_checks.CANARY_STRINGS).
 ARTIFACT_WATCH_PREFIX = "live updates for artifact "
 ARTIFACT_WATCH = re.compile(re.escape(ARTIFACT_WATCH_PREFIX) + r"(https://claude\.ai/"

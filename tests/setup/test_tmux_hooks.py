@@ -475,14 +475,14 @@ class Hooks(unittest.TestCase):
     def artifact_watch(self, url="https://claude.ai/artifact/8JLmWLDftm9VdGcLQnGr76", **extra):
         """A Stop payload entry for the live watch the Artifact tool arms on a publish, in
         2.1.296's shape: a monitor_ws, labeled `monitor`, with no server (rdn) and the
-        description Yt builds."""
-        return {"id": "s8k2m4p6q", "type": "monitor", "status": "running",
-                "description": f"live updates for artifact {url} (comments sent to Claude)",
+        description Yt builds, as session f857d709's task notices show it (2026-10-12)."""
+        return {"id": "s31udgb0s", "type": "monitor", "status": "running",
+                "description": f"live updates for artifact {url} (auto-armed on publish)",
                 **extra}
 
     def test_an_artifact_watch_is_labeled_and_keeps_its_url(self):
-        # Claude Code hides it from /tasks and its own busy counts and never shows the model
-        # its id, so a plain pass must not wait on it (incident e7cc7b9a, 2026-10-13).
+        # The model never sees its id, so it can't stop one, and a plain pass must not wait
+        # on it (incident e7cc7b9a, 2026-10-13).
         code = "https://claude.ai/code/artifact/0b5e7c1a-2f4d-4c1e-9a7b-3d2f1e0c9b8a"
         self.run_hook("stop-ring.sh", TAB, {"background_tasks": [
             self.artifact_watch(), self.artifact_watch(code)]})
@@ -490,7 +490,7 @@ class Hooks(unittest.TestCase):
         self.assertEqual([(t["label"], t["url"]) for t in tasks],
                          [("artifact watch", "https://claude.ai/artifact/8JLmWLDftm9VdGcLQnGr76"),
                           ("artifact watch", code)])
-        self.assertEqual(tasks[0]["id"], "s8k2m4p6q")
+        self.assertEqual(tasks[0]["id"], "s31udgb0s")
         self.assertIn("stop rang tasks=artifact_watch,artifact_watch", self.ring_log()[-1])
 
     def test_only_a_monitor_with_the_watch_description_is_an_artifact_watch(self):
@@ -501,9 +501,13 @@ class Hooks(unittest.TestCase):
         # its own description; the prefix must open the description and name a claude.ai page.
         self.assertEqual(types([{**watch, "server": "x", "tool": "y"}], None), ["monitor"])
         self.assertEqual(types([{**watch, "type": "shell"}], None), ["shell"])
+        # A URL of another shape (a trailing slash, a query) isn't one seen live: it blocks and
+        # is named, the safe side.
         for desc in ["deploy events", "see live updates for artifact https://claude.ai/artifact/x",
                      "live updates for artifact https://evil.example/artifact/x (c)",
-                     "live updates for artifact https://claude.ai/artifacts/x (c)", None]:
+                     "live updates for artifact https://claude.ai/artifacts/x (c)",
+                     "live updates for artifact https://claude.ai/artifact/x/ (c)",
+                     "live updates for artifact https://claude.ai/artifact/x?v=1 (c)", None]:
             self.assertEqual(types([{**watch, "description": desc}], None), ["monitor"], desc)
         self.assertIsNone(stop_ring.artifact_url({**watch, "server": "x"}))
         self.assertIsNone(stop_ring.artifact_url("junk"))

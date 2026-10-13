@@ -49,7 +49,7 @@ Background work, two rules:
   alive).
 - blocked: any task a plain pass would be refused for (lanelib.plain_pass_blockers, the rule
   pass-respawn uses: everything but `dream` and an `artifact watch`, monitors and teammates
-  too). Every tier then says to pass in compact mode.
+  too; without lanelib, every task). Every tier then says to pass in compact mode.
 Busy or blocked, the text ends by naming each such task with its id (TASKS_NOTE): the session
 stops the finished ones before the handoff and passes plain if none is left (pass skill step 2).
 On Stop the payload's background_tasks decide. PostToolUse has no task list, so the session's
@@ -413,13 +413,15 @@ def entries(tasks, path=None) -> list:
 
 
 def work_state(waits: list, tasks: list):
-    """(busy, blocked or None; the tasks that block a plain pass, which the nudge names)."""
+    """(busy, blocked or None; the tasks that block a plain pass, which the nudge names).
+    Without lanelib the rule can't be applied (pass-respawn can't run either), so every task
+    blocks: compact mode is safe either way."""
     lib = aps.lanelib()
     if lib:
         blockers = lib.plain_pass_blockers(tasks)
     else:
-        blockers = [{"label": str(k)} for t in tasks
-                    if (k := t.get("label") if isinstance(t, dict) else t) != "dream"]
+        blockers = [{"label": k if isinstance(k, str) and k else "unlabeled"}
+                    for k in (t.get("label") if isinstance(t, dict) else t for t in tasks)]
     if any(w in stop_ring.WAITS for w in waits if isinstance(w, str)):
         return "busy", blockers
     return ("blocked" if blockers else None), blockers
@@ -432,15 +434,15 @@ def stop_work(d: dict):
 
 def recorded_work(sid: str):
     """work_state from the stop record when it is under STOP_FRESH seconds old and lists its
-    tasks; else ("unknown", []) (the texts then say compact mode is safe either way)."""
+    tasks and waits; else ("unknown", []) (the texts then say compact mode is safe either way),
+    as pass-respawn refuses a record it can't read."""
     rec = aps.load_json(os.path.join(aps.state_dir(), "stops", sid + ".json"))
     when = rec.get("time") if isinstance(rec, dict) else None
     if not isinstance(when, (int, float)) or not 0 <= time.time() - when < STOP_FRESH:
         return "unknown", []
-    tasks = rec.get("tasks")
-    if not isinstance(tasks, list):
+    tasks, waits = rec.get("tasks"), rec.get("waits")
+    if not (isinstance(tasks, list) and isinstance(waits, list)):
         return "unknown", []
-    waits = rec.get("waits") if isinstance(rec.get("waits"), list) else []
     return work_state(waits, tasks)
 
 

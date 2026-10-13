@@ -493,9 +493,9 @@ idle, the script rechecks the handoff and respawns the pane with a fresh `claude
   the session's tasks from its last Stop, and Claude stops the finished ones (asking you about
   any it can't place) before the handoff, in either mode.
 - An *artifact watch* never blocks. The Artifact tool arms one each time it publishes a page, to
-  deliver your comments, and Claude Code hides it from `/tasks` and from the model, so nothing
-  could stop it. The respawn ends it, and `pass.log` names the page, so the fresh session can
-  watch it again.
+  pass your comments to Claude. `/tasks` lists it under System tasks, but Claude never sees its
+  id, so it can't stop one. The respawn ends it, and `pass.log` names the page, so the fresh
+  session can watch it again.
 - What Claude said before a pass: a plain pass clears the pane, so the old session's replies
   would leave the screen. The fresh session shows what was said in the last turn once as a
   banner (at most 40 lines of reply and 4 KiB in all), which you see and the model doesn't. A

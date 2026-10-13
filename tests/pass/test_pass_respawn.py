@@ -52,8 +52,8 @@ _ring.exec_module(stop_ring)
 
 # The live watch the Artifact tool arms on a publish, as stop-ring.sh records it.
 URL = "https://claude.ai/artifact/8JLmWLDftm9VdGcLQnGr76"
-WATCH = {"label": "artifact watch", "id": "s8k2m4p6q", "url": URL,
-         "description": f"live updates for artifact {URL} (comments sent to Claude)"}
+WATCH = {"label": "artifact watch", "id": "s31udgb0s", "url": URL,
+         "description": f"live updates for artifact {URL} (auto-armed on publish)"}
 DEPLOY = {"label": "monitor", "id": "b0fzd27l4", "description": "deploy events"}
 
 
@@ -962,16 +962,32 @@ class Plain(Base):
                            "(b0fzd27l4) (a respawn would kill it). /pass compact keeps it, or "
                            "let it finish and /pass")
         self.assertIn('busy: waits: shell "Wait for the deploy run to finish" (b0fzd27l4); '
-                      f"ignored: artifact watch {URL} (s8k2m4p6q)", self.log())
+                      f"ignored: artifact watch {URL} (s31udgb0s)", self.log())
+
+    def test_a_wait_and_a_task_are_both_named(self):
+        # Review round 1: naming only the wait sent Hayden to wait it out, then a second
+        # refusal for the monitor. Both parts name what the respawn would kill, and the fix
+        # covers both.
+        self.stop_waits = ["shell"]
+        self.stop_tasks = [{"label": "shell", "id": "b1", "description": "npm test"}, DEPLOY,
+                           WATCH]
+        code, out = self.run_pass("--foreground")
+        self.assertEqual(code, 1, out)
+        self.assertDropped("busy", 'waiting on shell "npm test" (b1), and monitor "deploy '
+                           'events" (b0fzd27l4) running (a respawn would kill them). /pass '
+                           "compact keeps them, or let the waits finish, stop the rest (/tasks, "
+                           "or ask Claude to TaskStop them) and /pass")
+        self.assertIn('busy: waits: shell "npm test" (b1); tasks: monitor "deploy events" '
+                      f"(b0fzd27l4); ignored: artifact watch {URL} (s31udgb0s)", self.log())
 
     def test_an_artifact_watch_alone_lets_the_pass_respawn(self):
-        # The Artifact tool's live watch: Claude Code hides it and nothing could stop it, so
+        # The Artifact tool's live watch: the session never sees its id and can't stop it, so
         # the respawn ends it and pass.log names the page, for Hayden to watch it again.
         self.stop_tasks = [WATCH, {"label": "dream", "id": "d1"}]
         code, out = self.run_pass("--foreground")
         self.assertEqual(code, 0, out)
         self.assertEqual(len(self.calls("tmux", "respawn-pane")), 1)
-        self.assertIn(f"outcome=respawn plan mode; ignored: artifact watch {URL} (s8k2m4p6q)",
+        self.assertIn(f"outcome=respawn plan mode; ignored: artifact watch {URL} (s31udgb0s)",
                       self.log())
 
     def test_an_artifact_watch_beside_a_monitor_is_left_out_of_the_notice(self):
@@ -982,13 +998,13 @@ class Plain(Base):
                            "would kill it)")
         for m in self.notices():
             self.assertNotIn("artifact", m[-1])
-        self.assertIn(f"; ignored: artifact watch {URL} (s8k2m4p6q)", self.log())
+        self.assertIn(f"; ignored: artifact watch {URL} (s31udgb0s)", self.log())
 
     def test_the_incident_now_respawns(self):
         # e7cc7b9a's Stops listed one task, the watch its Artifact publish armed, in 2.1.296's
         # payload shape; recorded the way stop-ring.sh now records it, it clears a plain pass.
-        payload = [{"id": "s8k2m4p6q", "type": "monitor", "status": "running",
-                    "description": f"live updates for artifact {URL} (comments sent to Claude)"}]
+        payload = [{"id": "s31udgb0s", "type": "monitor", "status": "running",
+                    "description": f"live updates for artifact {URL} (auto-armed on publish)"}]
         self.stop_tasks = stop_ring.task_entries(payload, stop_ring.task_types(payload, None))
         code, out = self.run_pass("--foreground")
         self.assertEqual(code, 0, out)
@@ -1005,13 +1021,26 @@ class Plain(Base):
         self.assertIn("started or ended since then aren't listed", out)
         for line in ['monitor "deploy events" (b0fzd27l4): blocks a plain pass',
                      'shell "npm run dev" (b2): blocks a plain pass; the turn waits on it',
-                     f"artifact watch {URL} (s8k2m4p6q): doesn't block a plain pass",
+                     f"artifact watch {URL} (s31udgb0s): doesn't block a plain pass",
                      "dream (d1): doesn't block a plain pass", "teammate: blocks a plain pass"]:
             self.assertIn("\n  " + line + "\n", out)
         # Read-only: nothing shown, logged or queued.
         self.assertEqual((self.notices(), self.log()), ([], ""))
         self.assertFalse(os.listdir(os.path.join(self.state, "pass-pending"))
                          if os.path.isdir(os.path.join(self.state, "pass-pending")) else [])
+
+    def test_tasks_never_reads_clear_where_the_waiter_refuses(self):
+        # Review round 1: a wait with no task entry, or waits that aren't a list, must not
+        # print "none" or "doesn't block" when the waiter would refuse that record.
+        stops = os.path.join(self.state, "stops", f"{SID}.json")
+        self.write(stops, json.dumps({"time": time.time(), "waits": ["shell"], "tasks": []}))
+        code, out = self.run_pass("--tasks")
+        self.assertEqual(code, 0, out)
+        self.assertIn("\n  shell: blocks a plain pass; the turn waits on it\n", out)
+        self.assertNotIn("\n  none\n", out)
+        self.write(stops, json.dumps({"time": time.time(), "waits": "shell", "tasks": [WATCH]}))
+        code, out = self.run_pass("--tasks")
+        self.assertIn("\n  (waits can't be read: a plain pass would refuse)\n", out)
 
     def test_tasks_with_no_record_or_task_list_says_so(self):
         code, out = self.run_pass("--tasks")
