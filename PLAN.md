@@ -652,21 +652,15 @@ scale with the window:
   which would otherwise cross into auto-compact before any Stop.
 
 **The `/autopass` toggle** (Hayden, 2026-10-12).
-- As built after PR 4 (`feat/autopass-immediate`, 2026-10-12): the hook below queued behind a
-  running turn and answered in a "blocked by hook" line, so `skills/autopass` became a mod
-  (`.claude-plugin/plugin.json`, no SKILL.md, loaded as `autopass@skills-dir`). It registers
-  `/autopass` as an `immediate` command, so typed mid-turn it runs at once, and its
-  `command.run` hook runs `hooks/autopass_toggle.py SESSION_ID CWD ARGS` through
-  `$.process.run`, whose child inherits TMUX_PANE. Claude Code draws a command's text only once
-  the turn ends, so mid-turn the reply goes out as a `$.ui.log` notice and the command prints
-  nothing; idle, it is the command's output (Hayden's pick). The mod tracks the main turn in
-  `$.state`: marked at an idle `prompt.submit` (the UserPromptSubmit hooks run before
-  `turn.start`), then the turn's id from `turn.start`, cleared by that turn's own
-  `turn.complete` (interrupted or not; a subagent's carries an `agentId`), or once
-  `prompt.submit` settles with no turn started (a drop, an error, a built-in). A mod command fires no UserPromptSubmit or Stop, so `tmux-state.sh` lost its `/autopass`
-  skip. The spikes: a skills-dir mod loads only in a trusted workspace; a SKILL.md of the same
-  name makes the registration refuse. The design below is the PR 4 history.
-- `/autopass on|off|status` is typed in chat. A UserPromptSubmit hook catches it, writes the flag
+- As built after PR 4 (`feat/autopass-immediate`, 2026-10-13): the hook below queued behind a
+  running turn and answered in a "blocked by hook" line, so `skills/autopass` became an
+  immediate mod command. How it works: README "Auto-pass"; the code: `skills/autopass/hooks/
+  register.ts`. What the spikes settled: a skills-dir mod loads only in a trusted workspace; a
+  SKILL.md of the same name makes the registration refuse; a command's text draws only once the
+  turn ends (hence a notice mid-turn, Hayden's pick); a mod command fires no UserPromptSubmit or
+  Stop (so `tmux-state.sh` lost its `/autopass` skip). The rest of this section is the PR 4
+  design, superseded where it says "hook".
+- (PR 4, superseded by the mod) `/autopass on|off|status` is typed in chat. A UserPromptSubmit hook catches it, writes the flag
   (hooks run outside the sandbox, which can't write the state dir), and blocks the prompt with a
   one-line confirmation. So a toggle costs no model turn and no context.
   - Spike first: does UserPromptSubmit see a defined slash command before it expands? If not,
@@ -816,7 +810,7 @@ scale with the window:
   and runs no model turn. An *undefined* `/autopassx` never reaches the hook: Claude Code answers
   "Unknown command". **Change:** `/autopass` ships as a defined command with
   `disable-model-invocation: true`. The hook blocks it. The body runs only if the hook didn't, and
-  says the hook isn't installed.
+  says the hook isn't installed. (Superseded after PR 4: `/autopass` is a mod, see "The `/autopass` toggle".)
 - **A2:** a 3.6 KiB SessionStart `systemMessage` shows in full, untruncated, as "SessionStart:startup
   says: ...". After a `respawn-pane` with a prompt argument it sits above the submitted prompt
   and stays on screen. The model can't see it: a random codeword in the banner came back `NONE`.
@@ -903,6 +897,8 @@ New: `skills/lanes/{SKILL.md,scripts/lane}`, `hooks/lane-identity.sh`,
 PR 4: the modules "PR 4: auto-pass" lists under "As built" (`hooks/{context_watch.py,
 autopass_state.py,stop_ring.py,pass_banner.py,md_render.py}`, `tmux/pass-last`,
 `pass-respawn`), with `tests/setup/test_md_render.py`.
+After PR 4: `skills/autopass/` (the mod: `.claude-plugin/plugin.json`, `hooks/register.ts`,
+`types/index.d.ts`, `tests/autopass.test.ts`) and `hooks/autopass_toggle.py` (its CLI).
 Edited: `settings.json`, `CLAUDE.md`, `skills/handoff/SKILL.md`, `templates/STATUS.md`,
 `README.md`, `codex/AGENTS.md`, `setup.sh` (only if the bin loop needs the new paths).
 Patterns to reuse:
