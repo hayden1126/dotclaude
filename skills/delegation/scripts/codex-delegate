@@ -64,6 +64,7 @@ started or can't be verified, or when the run's finalize lock stays busy.
 import argparse
 import contextlib
 import datetime
+import functools
 import glob
 import json
 import math
@@ -681,8 +682,28 @@ def finish(row, rc, thread_id, since_epoch, out, stream=None):
 def read_text(path):
     if path == "-":
         return sys.stdin.read()
-    with open(path) as f:
-        return f.read()
+    # Checked again on the open file: a link swapped in after check_paths isn't followed.
+    try:
+        with dc.open_unprotected(path) as f:
+            return f.read().decode()
+    except PermissionError:
+        die(f"{path} reaches a path the sandbox keeps unreadable")
+
+
+def check_paths(dirs=(), reads=()):
+    """Refuse a writable root codex would get that is, holds or sits under a write-protected
+    path, and a file to send it from under a read-protected one: this wrapper runs outside
+    Claude's sandbox, and codex's own sandbox doesn't know Claude's lists (Hayden, 2026-10-13)."""
+    read_denied, write_denied = dc.sandbox_paths()
+    for flag, path in dirs:
+        hit = dc.path_conflict(path, write_denied, contains=True)
+        if hit:
+            die(f"{flag} {path} would let codex write {hit}, which the sandbox protects; "
+                "Hayden runs that delegation by hand")
+    for flag, path in reads:
+        if path != "-" and dc.path_conflict(path, read_denied):  # as read_text opens it
+            die(f"{flag} {path} is under {dc.path_conflict(path, read_denied)}, which the sandbox "
+                "keeps unreadable")
 
 
 def cmd_run(a):
@@ -691,11 +712,12 @@ def cmd_run(a):
     workdir = os.path.realpath(a.dir)
     if not os.path.isdir(workdir):
         die(f"--dir {a.dir} is not a directory")
+    run_id = time.strftime("%Y%m%dT%H%M%S") + "-" + secrets.token_hex(3)
+    out = os.path.realpath(a.out or os.path.join(workdir, ".codex-delegate", run_id))
+    check_paths([("--dir", workdir), ("--out", out)], [("--brief", a.brief)])
     brief = read_text(a.brief)
     if not brief.strip():
         die("empty brief")
-    run_id = time.strftime("%Y%m%dT%H%M%S") + "-" + secrets.token_hex(3)
-    out = os.path.realpath(a.out or os.path.join(workdir, ".codex-delegate", run_id))
     os.makedirs(out, exist_ok=True)
     row = {"runner": "codex", "id": run_id, "run_id": run_id, "model": model,
            "dir": workdir, "out": out, "network": a.network, "effort": a.effort}
@@ -751,6 +773,8 @@ def cmd_resume(a):
     model = pin(a.model) if a.model else e["model"]
     if model not in MODELS.values():
         die(f"ledger model {model!r} is not allowed")
+    check_paths([("--dir", e["dir"]), ("--out", e["out"])],
+                [("--prompt", a.prompt)] if a.prompt else [])
     prompt = read_text(a.prompt) if a.prompt else "Continue the task from where you stopped."
     row = {k: e.get(k) for k in ("runner", "id", "run_id", "dir", "out", "network", "effort",
                                  "thread_id")}
@@ -940,8 +964,10 @@ def cmd_audit(a):
 
 
 def main(argv=None):
-    ap = argparse.ArgumentParser(prog="codex-delegate", description=__doc__.split("\n")[0])
-    sub = ap.add_subparsers(dest="cmd", required=True)
+    # No abbreviated flags: the ask on --network must see its full spelling.
+    strict = functools.partial(argparse.ArgumentParser, allow_abbrev=False)
+    ap = strict(prog="codex-delegate", description=__doc__.split("\n")[0])
+    sub = ap.add_subparsers(dest="cmd", required=True, parser_class=strict)
     r = sub.add_parser("run")
     r.add_argument("--model", required=True)
     r.add_argument("--dir", required=True)

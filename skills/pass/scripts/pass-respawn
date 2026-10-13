@@ -921,7 +921,9 @@ def timeout_arg(text: str) -> float:
 
 
 def parse(argv=None) -> argparse.Namespace:
-    ap = argparse.ArgumentParser(prog="pass-respawn", description=__doc__.split("\n\n")[0])
+    # No abbreviated flags, like the other excluded wrappers.
+    ap = argparse.ArgumentParser(prog="pass-respawn", description=__doc__.split("\n\n")[0],
+                                 allow_abbrev=False)
     ap.add_argument("--compact", action="store_true", help="compact in place instead of respawning")
     ap.add_argument("--print", action="store_true", help="print the mode and argv, do nothing")
     ap.add_argument("--cancel", action="store_true",

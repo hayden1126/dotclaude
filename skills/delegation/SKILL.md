@@ -47,9 +47,10 @@ permission flow.
 **Every delegated agent:**
 - **Stays in the sandbox:**
   - `dangerouslyDisableSandbox` is denied;
-  - so is every `excludedCommands` entry, which covers `gh`, `git push/fetch/pull`, `codex`,
-    `codex-delegate`, `claude`, `tmux`, `delegation-ledger` and the `lane` subcommands that
-    leave the sandbox.
+  - so is every `excludedCommands` entry, which covers `gh`, `git push/fetch/pull/ls-remote`,
+    `claude`, `codex-delegate`, `delegation-ledger`, `pass-respawn`, the `lane` subcommands
+    that leave the sandbox, read-only `tmux` and `codex`, and the Windows shells. Any other
+    `tmux` or `codex` call runs sandboxed, where it reaches no socket or credential.
 - **Can't reach authenticated GitHub.** `~/.config/gh` is unreadable inside the sandbox, so
   there is no push and no private-repo read. That holds whatever form the command takes.
   Public GitHub is available through `gh-public` and https clones.
@@ -295,3 +296,10 @@ codex-delegate audit <thread_id> [--model astra]   # every model the thread and 
     running, exits 1.
 - **Scope:** send Codex only the work it does better, such as anything about its own
   configuration. Claude does the rest.
+- **Protected paths:** `run` and `resume` refuse (exit 2) a `--dir` or `--out` that is, holds
+  or sits under a denyWrite path, such as `~/dotclaude` or a lane checkout whose install is
+  live, since codex's sandbox doesn't know Claude's lists; Hayden runs such a delegation by
+  hand. `run` also refuses a `--brief`, and `resume` a `--prompt`, under a denyRead path.
+  `--network` and `--no-scope` ask. Codex's `workspace-write` sandbox limits writes, not reads,
+  so a delegated codex can still read those paths itself; a follow-up moves the wrapper to a
+  codex permission profile that denies them.

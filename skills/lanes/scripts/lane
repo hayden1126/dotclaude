@@ -34,6 +34,7 @@ import contextlib
 import datetime
 import errno
 import fcntl
+import functools
 import json
 import os
 import re
@@ -1362,8 +1363,10 @@ def cmd_done(args) -> None:
 
 
 def parser() -> argparse.ArgumentParser:
-    ap = argparse.ArgumentParser(prog="lane", description=__doc__.split("\n\n")[0])
-    sub = ap.add_subparsers(dest="cmd", required=True)
+    # No abbreviated flags: the asks on --setup, --root and --abandon must see the full spelling.
+    strict = functools.partial(argparse.ArgumentParser, allow_abbrev=False)
+    ap = strict(prog="lane", description=__doc__.split("\n\n")[0])
+    sub = ap.add_subparsers(dest="cmd", required=True, parser_class=strict)
     p = sub.add_parser("init", help="write the lanes config (in the state dir)")
     p.add_argument("--root", help="dir that holds the lane worktrees (default <repo>-lanes beside it)")
     p.add_argument("--setup", help="shell command run in each new lane (LANE_ID, LANE_PORT set)")

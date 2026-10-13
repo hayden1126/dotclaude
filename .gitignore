@@ -40,5 +40,6 @@ plans/
 __pycache__/
 *.pyc
 
-# Fake homes for the policy tests when they run inside Claude Code's sandbox
-tests/delegation/.tmp/
+# Fake homes for the policy tests when they run inside Claude Code's sandbox (tests/ itself is
+# write-protected)
+/.tmp/

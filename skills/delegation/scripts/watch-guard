@@ -219,7 +219,7 @@ def log_tail_cursor(cond):
     True when that cut anything off."""
     cursor = dict(dc.log_cursor(), tail=False)
     try:
-        with open(cond["log"], "rb") as f:
+        with dc.open_unprotected(cond["log"]) as f:
             size = os.fstat(f.fileno()).st_size
             if size > LOG_TAIL:
                 f.seek(size - LOG_TAIL - 1)
@@ -302,7 +302,7 @@ def unseen(verdict, cond, cursor):
         return []
     done, fail = cond.get("done"), cond.get("fail")
     only_done = (done and not cursor["done"]
-                 and (not cond.get("file") or os.path.exists(cond["file"]))
+                 and (not cond.get("file") or dc.unprotected_exists(cond["file"]))
                  and not any(dc.pid_alive(p.get("pid"), p.get("start"))
                              for p in cond.get("pids") or []))
     found = {"done": [fail], "failed": [only_done and done],
@@ -325,7 +325,7 @@ def unfinished(verdict, cond, cursor):
     lines = partial.splitlines()  # as scan_log matches it, once settled
     hit = {p: bool(p and any(re.search(p, line) for line in lines)) for p in (done, fail)}
     only_done = (hit[done] and not cursor["done"]
-                 and (not cond.get("file") or os.path.exists(cond["file"]))
+                 and (not cond.get("file") or dc.unprotected_exists(cond["file"]))
                  and not any(dc.pid_alive(p.get("pid"), p.get("start"))
                              for p in cond.get("pids") or []))
     either = [only_done and done, hit[fail] and fail]

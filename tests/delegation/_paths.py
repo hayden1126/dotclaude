@@ -10,9 +10,9 @@ AGENTS = os.path.join(REPO, "agents")
 HOOKS = os.path.join(REPO, "hooks")
 
 
-def load_script(name):
+def load_script(name, scripts=SCRIPTS):
     """Import an extensionless script (codex-delegate, delegation-ledger) as a module."""
-    path = os.path.join(SCRIPTS, name)
+    path = os.path.join(scripts, name)
     loader = importlib.machinery.SourceFileLoader(name.replace("-", "_"), path)
     spec = importlib.util.spec_from_loader(loader.name, loader)
     mod = importlib.util.module_from_spec(spec)
