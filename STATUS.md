@@ -120,10 +120,12 @@ stored here).
 
   How lanes install, Hayden's call 2026-10-12: after its last review round, a lane runs
   `lane lock install -- ./setup.sh` from its own worktree, sandbox off. Until it merges, every
-  session runs that lane's hooks. After the merge, the lead moves the main checkout to `main`,
-  re-runs `./setup.sh` there and smoke-tests, then proposes `lane done`. A lane carries the
-  lead's STATUS commits (on `chore/after-pr4`, local only) into its PR before it is marked ready.
-  Only the next PR to merge carries them; later lanes get them from `main` when they rebase.
+  session runs that lane's hooks. After the merge, the lead runs `git fetch origin main:main`,
+  merges `main` into its branch `chore/after-pr4` (sandbox off), re-runs `./setup.sh` and
+  `./setup-tmux.sh` from the main checkout under `lane lock install` (settings.json and
+  `~/.tmux.conf` copied first and diffed), checks no installed link points into a lane, then
+  proposes `lane done`. Lead STATUS commits ride the next lane PR to merge: that lane applies
+  `git diff origin/main chore/after-pr4 -- STATUS.md` as one commit just before ready.
   - **Install gap found 2026-10-13:** `lane lock install` serializes only the setup.sh run, and
     the last run wins. Lane `attach-tabs` installed two minutes after lane `autopass-now` and
     replaced its links. Rule until tooling covers it: only the lane next in merge order
@@ -203,28 +205,26 @@ stored here).
   `claude -p` repro and the 2.1.285 boundary; the karaoke session's has the incident.
 
 ## Notes for next session
-- **Next (lead, main checkout): run the two lanes** in "In flight" (dotclaude runs in lanes).
-  Watch `lane ls` and `lane asks`, and message a lane idle past the soft tier to run /pass. A
-  lane is handed back only once `handoff-check -C <lane path>` passes and the board shows no
-  `handoff?` flag. After each merge, follow the install step in "In flight". Once
-  `narrow-excluded` merges, plan the work repo migration, with the release skill as its first
-  lane.
-  - Branch `chore/after-pr4` holds the lead's STATUS commits. They ride the next lane PR to
-    merge (the lane cherry-picks them), never a STATUS-only PR.
+- **Next (lead, main checkout): run lanes `lane-close` and `narrow-excluded`** ("In flight").
+  Start with `lane ls` and `lane asks`. As of this handoff (2026-10-13), `lane-close` was past
+  the hard tier and told to /pass, then merge `origin/main` (a24817d, #92 changed
+  `lanelib.py`); `narrow-excluded` was in its Part 1 review, told the same. Neither is cleared
+  to install: tell the next one to merge when it reports ready. A lane is handed back only
+  once `handoff-check -C <lane path>` passes and the board shows no `handoff?` flag. After
+  each merge, follow the install step in "In flight", then `lane done <id>` once its session
+  exits (until `lane-close` merges, Hayden `/exit`s it first). Messages to lanes go by their
+  current ListAgents name or the `from=` socket of their last message; their titles drift.
+  After `narrow-excluded` Part 1 merges: open Part 2 as a lane, then plan the work repo
+  migration, with the release skill as its first lane.
+  - Tab restore (#70) ran for real: the tmux server died, and at 2026-10-13 13:58 local
+    `restore.log` shows the open sessions restored to their tabs, with expected skips (a
+    deleted directory, older sessions of one pane, a window closed before the server ended).
+    Remove #70's "Untested for real" note in Done at the next edit there.
   - **Watch (PR 4, live on HAYPC):** `context-watch.err` in the state dir (a Stop that timed out
     waiting for its reply, and the watcher's Python errors). Not yet seen live: a refused pass's
     toast, and Hayden's verdict on the rendered popup.
-  - **Attach tabs (merged as #91, 2026-10-13):** Star, Shelve, Open and tab
-    restore now recognize a tab running `claude attach <jobId>`: `claude-saved` reads the
-    client's argv from /proc and finds the `kind: bg` sessions file with that jobId. Shelve there
-    also runs `claude stop` (Hayden's call: background is mostly an accident), and
-    `claude-saved track`, run by `tmux-claude-status`, records attach tabs so `claude-restore`
-    reopens them after `tmux kill-server`. Probed on 2.1.296: a killed tab ends its session (the
-    2026-10-12 "moved to the background" came from agent view, not the kill); `claude attach`
-    takes the jobId, never the session id; `claude --resume` of a background chat becomes an
-    attach. Not recognized: a tab opened from agent view (argv stays `claude agents`) or by
-    `claude attach <name part>`; `/clear` in an attach tab doesn't move its star. Design and
-    probes: the PR body.
+  - Attach tabs: merged as #91 (behavior and limits: README "Star and Shelve", design and
+    probes: `gh pr view 91`).
   - Verify from the main checkout (`test_subagent_policy` refuses to load under
     `.claude/worktrees/`): `tests/setup`, `tests/pass`, `tests/lanes`, `tests/delegation`. The
     last full run on `feat/autopass` (2026-10-12) was green: 532, 148, 155 and 646 tests.
