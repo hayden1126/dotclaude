@@ -65,7 +65,8 @@ HEAD = "Replies before the pass (saved 2026-10-12 14:05, session old-session-1);
 WIDTH = 100
 E = chr(27) + "["
 BAR = chr(0x258C)
-NO_PROMPT = BAR + " (no prompt: a background notice)"
+NO_PROMPT = BAR + " (prompt not saved)"
+NOTICE = BAR + " (no prompt: a background notice)"
 
 
 def short(t):
@@ -182,16 +183,28 @@ class PassLast(unittest.TestCase):
         self.assertTrue(out.endswith(f"{E}1mbold{E}0m and {E}36mcode{E}0m\n"), out)
         self.assertTrue(out.startswith(f"{E}2mReplies before the pass"), out)
 
+    def test_a_notice_turn_and_a_corrupt_time(self):
+        self.entry(replies=[{"prompt_id": "p1", "text": "From a notice.", "time": T1},
+                            {"prompt_id": "p2", "text": "Bad time.", "time": float("nan")}],
+                   prompts=[{"prompt_id": "p1", "notice": True}], written_at=1e20)
+        out = self.show("%7")
+        self.assertIn(NOTICE, out)
+        self.assertIn(NO_PROMPT, out)
+        self.assertIn("saved ?", out)
+        self.assertIn("Bad time.", out)
+
     def test_without_md_render_it_falls_back_to_the_plain_text(self):
         # A copy of the script away from hooks/, with no ~/.claude/hooks/md_render.py.
         lone = os.path.join(self.tmp, "lone", "tmux")
         os.makedirs(lone)
         shutil.copy(SCRIPT, lone)
         self.entry(replies=[{"prompt_id": "p1", "text": "Older **reply**.", "time": T1},
-                            {"prompt_id": "p2", "text": "Pass armed.", "time": T2}])
+                            {"prompt_id": "p2", "text": "Pass armed.", "time": T2}],
+                   prompts=[{"prompt_id": "p1", "text": "Run the tests"}])
         self.assertEqual(self.show("%7", script=os.path.join(lone, "pass-last")), "\n\n".join([
-            HEAD, "== Replies from 2026-10-12 13:50 ==", "Older **reply**.",
-            "== Replies from 2026-10-12 14:04 (last turn) ==", "Pass armed."]) + "\n")
+            HEAD, "== Replies from 2026-10-12 13:50 ==", "You: Run the tests", "Older **reply**.",
+            "== Replies from 2026-10-12 14:04 (last turn) ==", "You: (prompt not saved)",
+            "Pass armed."]) + "\n")
         # ~/.claude/hooks/md_render.py is the second place it looks.
         hooks = os.path.join(self.env["HOME"], ".claude", "hooks")
         os.makedirs(hooks)

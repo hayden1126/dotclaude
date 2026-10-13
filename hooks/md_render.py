@@ -52,8 +52,10 @@ INLINE = re.compile(
     r"\\(?P<esc>[!-/:-@\[-`{-~])"                       # a backslash escape: the char itself
     r"|(?P<tick>`+)(?P<code>.+?)(?P=tick)"               # a code span, literal inside
     r"|\*\*(?P<bold>.+?)\*\*"
-    r"|\[(?P<ltext>[^\]]+)\]\((?P<url>[^)\s]*)\)"
-    r"|(?<![\w*])\*(?![\s*])(?P<ital>.+?)(?<![\s*])\*(?![\w*])")
+    r"|\[(?P<ltext>[^\[\]]+)\]\((?P<url>[^)\s]*)\)"
+    r"|(?<![\w*])\*(?![\s*])(?P<ital>[^*]+?)(?<!\s)\*(?![\w*])")
+# Link text holds no "[" and italic text no "*": an unclosed opener's scan then stops at the next
+# one, so a 64 KiB line of "[" or "*a " renders in milliseconds, not seconds (it took 7 s).
 FENCE = re.compile(r"^(\s*)(`{3,}|~{3,})")
 LIST = re.compile(r"^(\s*)([-*+]|\d{1,9}[.)])\s+(.*)$")
 HEADING = re.compile(r"^\s{0,3}(#{1,6})\s+(.*?)(\s+#+)?\s*$")
@@ -207,7 +209,7 @@ def _row(line: str) -> list[str]:
     line = line.strip()
     line = line[1:] if line.startswith("|") else line
     line = line[:-1] if line.endswith("|") and not line.endswith("\\|") else line
-    return [c.strip().replace("\\|", "|") for c in re.split(r"(?<!\\)\|", line)]
+    return [c.strip().replace("\\|", "|").expandtabs(4) for c in re.split(r"(?<!\\)\|", line)]
 
 
 def table(rows: list[str], width: int, color: bool, reset: str) -> list[str]:

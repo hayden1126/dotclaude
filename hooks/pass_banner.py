@@ -24,7 +24,8 @@ MAX_LINES, MAX_BYTES = 40, 4096   # the whole banner, head and tail included (sp
 INDENT, PANE_WIDTH = 5, 80     # Claude Code's indent before the banner; a pane of unknown width
 MIN_WIDTH = 20
 PROMPT_CHARS = 100             # the banner shows the prompt's first line up to this
-NO_PROMPT = "(no prompt: a background notice)"
+NO_PROMPT = "(prompt not saved)"            # the transcript was unreadable or didn't reach it
+NOTICE = "(no prompt: a background notice)"  # a task notice or an agent's message started it
 POPUP = "~/.local/bin/pass-last"  # setup-tmux.sh links it; Ctrl-b Up runs it
 ELLIPSIS = chr(0x2026)
 # C0 controls but tab and newline, DEL and C1: an escape sequence in a reply stays out of the
@@ -108,13 +109,17 @@ def newest_group(replies) -> list[dict]:
     return list(reversed(run))
 
 
-def turn_prompt(prompts, prompt_id: str) -> str | None:
-    """The text pass-respawn saved as the turn's prompt (the entry's `prompts`), or None."""
+def turn_prompt(prompts, prompt_id: str):
+    """What pass-respawn saved as the turn's prompt (the entry's `prompts`): (its text or None,
+    whether a background notice started the turn)."""
     for p in prompts if isinstance(prompts, list) else []:
-        if (isinstance(p, dict) and p.get("prompt_id") == prompt_id
-                and isinstance(p.get("text"), str) and p["text"].strip()):
-            return p["text"]
-    return None
+        if not isinstance(p, dict) or p.get("prompt_id") != prompt_id:
+            continue
+        if isinstance(p.get("text"), str) and p["text"].strip():
+            return p["text"], False
+        if p.get("notice") is True:
+            return None, True
+    return None, False
 
 
 def first_line(prompt: str) -> str:
@@ -131,14 +136,25 @@ def paint(text: str, style: str) -> str:
     return md_render.paint(text, style, True, "own") if md_render else text
 
 
-def head(turn: list[dict], prompt: str | None) -> str:
+def hhmm(t) -> str:
+    """t (epoch seconds) as HH:MM, or "" when it isn't a time localtime can take (a corrupt
+    entry may hold NaN or 1e20)."""
+    if not isinstance(t, (int, float)) or isinstance(t, bool):
+        return ""
+    try:
+        return time.strftime("%H:%M", time.localtime(t))
+    except (OverflowError, OSError, ValueError):
+        return ""
+
+
+def head(turn: list[dict], prompt: str | None, notice: bool = False) -> str:
     """What goes above the replies: "Last turn (HH:MM)" (bold), "You:" and the prompt's first
-    line (or a dim note that a background notice started the turn), then a blank line."""
-    t = turn[0].get("time") if turn else None
-    stamp = (" (%s)" % time.strftime("%H:%M", time.localtime(t))
-             if isinstance(t, (int, float)) and not isinstance(t, bool) else "")
+    line (or a dim note: a background notice started the turn, or the prompt wasn't saved),
+    then a blank line."""
+    t = hhmm(turn[0].get("time") if turn else None)
+    stamp = " (%s)" % t if t else ""
     you = (paint("You:", "g") + " " + first_line(prompt) if prompt
-           else paint("You: " + NO_PROMPT, "d"))
+           else paint("You: " + (NOTICE if notice else NO_PROMPT), "d"))
     return "%s\n%s\n\n" % (paint("Last turn" + stamp, "b"), you)
 
 
@@ -161,13 +177,13 @@ def cut_line(line: str, nbytes: int) -> str:
 
 
 def banner(turn: list[dict], prompt: str | None = None, width: int = PANE_WIDTH - INDENT,
-           where: str = "") -> str:
+           where: str = "", notice: bool = False) -> str:
     """The banner: the head, then the turn's replies rendered to width, whole when they fit in
     MAX_LINES lines and MAX_BYTES bytes (head and escapes included). Otherwise as many lines as
     fit with the tail ("N more lines: Ctrl-b Up ...", or the file where) also inside MAX_BYTES.
     A first line longer than that is cut and counts as left. Every rendered line closes its own
     styles, so no cut leaves one open."""
-    top = head(turn, prompt)
+    top = head(turn, prompt, notice)
     lines = body([r["text"] for r in turn], width)
     whole = top + "\n".join(lines)
     if len(lines) <= MAX_LINES and size(whole) <= MAX_BYTES:
@@ -238,9 +254,9 @@ def main() -> None:
     here = current_tab(pane)
     if here is None or entry.get("tab") != here[0]:
         return
-    prompt = turn_prompt(entry.get("prompts"), turn[-1]["prompt_id"])
+    prompt, notice = turn_prompt(entry.get("prompts"), turn[-1]["prompt_id"])
     width = max(here[1] - INDENT, MIN_WIDTH)
-    sys.stdout.write(json.dumps({"systemMessage": banner(turn, prompt, width, path)}))
+    sys.stdout.write(json.dumps({"systemMessage": banner(turn, prompt, width, path, notice)}))
     sys.stdout.flush()
     entry["shown"] = True
     try:

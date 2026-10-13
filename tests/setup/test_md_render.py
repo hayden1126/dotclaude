@@ -3,6 +3,7 @@
 import importlib.util
 import os
 import re
+import time
 import unittest
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -200,3 +201,21 @@ class Cut(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Pathological(unittest.TestCase):
+    def test_a_64_kib_line_of_unclosed_openers_renders_fast(self):
+        # An unclosed "*" or "[" used to scan to the line's end: 7 s for one of these.
+        for text in ("*a " * 21000, "[" * 60000, "[a " * 21000, "**a " * 16000, "`" * 60000):
+            with self.subTest(text=text[:4]):
+                start = time.monotonic()
+                md.render(text, 80)
+                self.assertLess(time.monotonic() - start, 1.0)
+
+    def test_nested_and_plain_markup_still_render(self):
+        self.assertEqual(md.render("*it* and [link](u) and **b *i* b**", 80, color=False),
+                         "it and link and b i b")
+
+    def test_a_tab_in_a_table_cell_keeps_the_borders_aligned(self):
+        out = md.render("| a\tb | c |\n|---|---|\n| x | y |", 80, color=False).split("\n")
+        self.assertEqual(len({md.cells(line) for line in out}), 1, out)

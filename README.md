@@ -484,8 +484,9 @@ idle, the script rechecks the handoff and respawns the pane with a fresh `claude
   `setup-tmux.sh`, a cut banner names the file instead. A compact keeps the conversation, so it
   needs neither.
 - Both show your side too. Each turn starts with its time and the prompt you typed (the banner
-  shows its first line; the popup shows it under a green bar), or "(no prompt: a background
-  notice)" when a task notice started the turn. `pass-respawn` reads the prompts from the
+  shows its first line; the popup shows it under a green bar). A turn a task notice or an
+  agent's message started says "(no prompt: a background notice)", and one whose start
+  `pass-respawn` couldn't read says "(prompt not saved)". `pass-respawn` reads the prompts from the
   transcript's last 8 MiB at the pass; a slash command shows as typed and an image as `[image]`,
   and each prompt is cut at 12 lines or 1 KiB. The replies are rendered from markdown by
   `hooks/md_render.py` (stdlib, no dependency): bold, code, lists, tables and code blocks in

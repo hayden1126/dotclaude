@@ -10,12 +10,13 @@
 # prompt for each turn (from the transcript). hooks/pass-banner.sh shows the last turn once as the
 # new session's banner. This shows every turn, as often as asked, oldest first. Each turn starts
 # with a cyan rule and its time (the last turn: a bold yellow heavy rule, "last turn"), then
-# "You:" after a green bar with the prompt under the bar, or a dim "(no prompt: a background
-# notice)" when a task notice or an agent message started the turn (or the entry has no prompts),
-# then the replies rendered from markdown by hooks/md_render.py (bold, code, lists, tables, code
+# "You:" after a green bar with the prompt under the bar, or a dim note: "(no prompt: a
+# background notice)" when pass-respawn saw a task notice or an agent's message start the turn,
+# "(prompt not saved)" when it couldn't tell (no readable transcript, or the turn began before
+# the part it reads), then the replies rendered from markdown by hooks/md_render.py (bold, code, lists, tables, code
 # blocks), word-wrapped to the popup's width. That module is found from this script's real path
 # (../hooks/), else ~/.claude/hooks/; with neither, the output is the plain text under "==" header
-# lines. In a terminal it opens in less -R at the end, on the last turn (-+F: a LESS=-F in the
+# lines, each turn's prompt after "You: ". In a terminal it opens in less -R at the end, on the last turn (-+F: a LESS=-F in the
 # environment would close a short popup at once). Not in a terminal, it prints plain text: the
 # markup stripped, no escapes. The width is the tty's (stty size on /dev/tty; stdout is a pipe
 # into less), else $COLUMNS, else 80. Only when the entry's tab is this pane on this tmux server
@@ -51,7 +52,8 @@ CONTROL = re.compile("[%s]" % re.escape("".join(map(chr, [*range(0, 9), *range(1
                                                           *range(127, 160)]))))
 NONE = "No reply saved from a /pass in this tab."
 BAR, LIGHT, HEAVY, DOT = chr(0x258C), chr(0x2500), chr(0x2501), chr(0x00B7)
-NO_PROMPT = "(no prompt: a background notice)"
+NO_PROMPT = "(prompt not saved)"
+NOTICE = "(no prompt: a background notice)"
 
 def renderer():
     """hooks/md_render.py from the first path that loads, or None."""
@@ -84,15 +86,27 @@ def clean(text):
 def number(t):
     return isinstance(t, (int, float)) and not isinstance(t, bool)
 
+def local(t):
+    """time.localtime(t), or None when t isn't a time it can take (NaN, 1e20 in a corrupt
+    entry)."""
+    if not number(t):
+        return None
+    try:
+        return time.localtime(t)
+    except (OverflowError, OSError, ValueError):
+        return None
+
 def when(t):
-    return time.strftime("%Y-%m-%d %H:%M", time.localtime(t)) if number(t) else "?"
+    lt = local(t)
+    return time.strftime("%Y-%m-%d %H:%M", lt) if lt else "?"
 
 def short(t):
     """HH:MM, with the date when the turn wasn't today."""
-    if not number(t):
+    lt = local(t)
+    if lt is None:
         return "?"
-    today = time.strftime("%Y-%m-%d") == time.strftime("%Y-%m-%d", time.localtime(t))
-    return time.strftime("%H:%M" if today else "%Y-%m-%d %H:%M", time.localtime(t))
+    today = time.strftime("%Y-%m-%d") == time.strftime("%Y-%m-%d", lt)
+    return time.strftime("%H:%M" if today else "%Y-%m-%d %H:%M", lt)
 
 def groups(replies):
     """Turns: runs of replies that share a prompt_id, oldest first. hooks/pass_banner.py's
@@ -109,11 +123,15 @@ def groups(replies):
     return out
 
 def prompts_by_id(prompts):
+    """prompt_id -> the prompt's text, or NOTICE when a background notice started the turn."""
     out = {}
     for p in prompts if isinstance(prompts, list) else []:
-        if (isinstance(p, dict) and isinstance(p.get("prompt_id"), str)
-                and isinstance(p.get("text"), str) and p["text"].strip()):
+        if not (isinstance(p, dict) and isinstance(p.get("prompt_id"), str)):
+            continue
+        if isinstance(p.get("text"), str) and p["text"].strip():
             out.setdefault(p["prompt_id"], p["text"])
+        elif p.get("notice") is True:
+            out.setdefault(p["prompt_id"], NOTICE)
     return out
 
 def rule(label, last):
@@ -123,9 +141,10 @@ def rule(label, last):
     return md.paint(line, "by" if last else "c", color)
 
 def you(prompt):
-    """The turn's prompt under a green bar, or the dim note that no typed prompt started it."""
-    if prompt is None:
-        return [md.paint(BAR + " " + NO_PROMPT, "d", color)]
+    """The turn's prompt under a green bar, or a dim note: a notice started it, or no prompt
+    was saved."""
+    if prompt is None or prompt is NOTICE:
+        return [md.paint(BAR + " " + (NOTICE if prompt is NOTICE else NO_PROMPT), "d", color)]
     bar = md.paint(BAR, "g", color)
     lines = [md.paint(BAR + " You:", "g", color)]
     for line in md.wrap_plain(prompt.strip("\n"), width - 2):
@@ -148,9 +167,13 @@ def rendered(e, found, sid):
 def plain(e, found, sid):
     parts = ["Replies before the pass (saved %s, session %s); the newest are last, q closes."
              % (when(e.get("written_at")), sid)]
-    for i, (_, rs) in enumerate(found):
+    prompts = prompts_by_id(e.get("prompts"))
+    for i, (pid, rs) in enumerate(found):
         last = " (last turn)" if i == len(found) - 1 else ""
         parts.append("== Replies from %s%s ==" % (when(rs[0].get("time")), last))
+        prompt = prompts.get(pid)
+        parts.append("You: " + (NOTICE if prompt is NOTICE else NO_PROMPT if prompt is None
+                                else clean(prompt).strip()))
         parts.extend(clean(r["text"]).strip() for r in rs)
     return "\n\n".join(parts)
 

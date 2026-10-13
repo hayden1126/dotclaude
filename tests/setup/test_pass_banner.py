@@ -47,7 +47,7 @@ def head(prompt=None, at=1.0):
     """The banner's head: the turn's time, then the prompt's first line or the dim note."""
     stamp = " (%s)" % time.strftime("%H:%M", time.localtime(at)) if at is not None else ""
     you = (f"{E}32mYou:{E}38;5;246m {prompt}" if prompt is not None
-           else f"{E}2mYou: (no prompt: a background notice){E}22m")
+           else f"{E}2mYou: (prompt not saved){E}22m")
     return f"{E}1mLast turn{stamp}{E}22m\n{you}\n\n"
 
 
@@ -233,12 +233,24 @@ class Banner(unittest.TestCase):
         self.entry(prompts=[{"prompt_id": "p1", "text": "one line"}])
         self.assertEqual(self.start(), head("one line") + REPLY)
 
-    def test_a_turn_without_a_prompt_says_a_background_notice_started_it(self):
+    def test_a_turn_without_a_saved_prompt_says_so(self):
         for prompts in ([{"prompt_id": "p0", "text": "another turn's"}], [], "x", None,
-                        [{"prompt_id": "p1", "text": "  "}, 5]):
+                        [{"prompt_id": "p1", "text": "  "}, 5],
+                        [{"prompt_id": "p1", "notice": "yes"}]):
             with self.subTest(prompts=prompts):
                 self.entry(prompts=prompts)
                 self.assertEqual(self.start(), head() + REPLY)
+
+    def test_a_turn_a_notice_started_says_a_background_notice(self):
+        self.entry(prompts=[{"prompt_id": "p1", "notice": True, "time": 1.0}])
+        notice = head().replace("(prompt not saved)", "(no prompt: a background notice)")
+        self.assertEqual(self.start(), notice + REPLY)
+
+    def test_a_corrupt_reply_time_drops_the_stamp_not_the_banner(self):
+        for bad in (1e20, float("nan"), -1e20):
+            with self.subTest(time=bad):
+                out = pass_banner.banner([{"prompt_id": "p1", "text": "hi", "time": bad}])
+                self.assertTrue(out.startswith(f"{E}1mLast turn{E}22m\n"), out)
 
     def test_markdown_is_rendered_to_the_panes_width_with_own_resets(self):
         self.env["STUB_SERVER"] = f"1791222157 4321 40 {SOCKET}"    # 35 columns of text
@@ -313,16 +325,16 @@ class Banner(unittest.TestCase):
                 self.assertTrue(out.split("\n")[-1].startswith(ELL + " "))
                 self.assertEqual(open_styles(out), set())
         out = pass_banner.banner(turn("\n".join("x" * 199 for _ in range(30))), None, 300)
-        # head (67 bytes with its escapes), 19 lines (3,799), tail (51): 3,917; a 20th line
+        # head (53 bytes with its escapes), 19 lines (3,799), tail (51): 3,917; a 20th line
         # (200) would pass 4 KiB.
         self.assertEqual(len(out.split("\n")), 3 + 19 + 1)
         self.assertEqual(out.split("\n")[-1],
                          ELL + " 11 more lines: Ctrl-b Up shows the whole reply")
-        # A code line costs 29 bytes of bar and escapes: head 67 + 29 + 4,000 is exactly 4 KiB.
-        fits = pass_banner.banner(turn("```\n" + "x" * 4000 + "\n```"), None, 75)
+        # A code line costs 29 bytes of bar and escapes: head 53 + 29 + 4,014 is exactly 4 KiB.
+        fits = pass_banner.banner(turn("```\n" + "x" * 4014 + "\n```"), None, 75)
         self.assertEqual(len(fits.encode()), 4096)
         self.assertTrue(fits.endswith("x" + E + "38;5;246m"))
-        over = pass_banner.banner(turn("```\n" + "x" * 4001 + "\n```"), None, 75)
+        over = pass_banner.banner(turn("```\n" + "x" * 4015 + "\n```"), None, 75)
         self.assertTrue(over.endswith(" 1 more line: Ctrl-b Up shows the whole reply"))
 
     def test_one_huge_line_is_cut_outside_escapes_with_its_styles_closed(self):

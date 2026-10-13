@@ -635,14 +635,37 @@ class Plain(Base):
         self.stop_replies = self.REPLIES
         self.say(self.prompt("p1", "from a subagent", isSidechain=True),
                  self.prompt("p1", "the skill body", isMeta=True),
-                 self.prompt("p1", "a task notice", origin={"kind": "task-notification"}),
-                 self.prompt("p1", [{"type": "tool_result", "content": "x"}]),
+                 self.prompt("p1", [{"type": "tool_result", "content": "x"}], origin=None),
                  self.prompt("p1", "   "),
-                 "{not json", "",
+                 "{not json", "", "[1, 2]",
                  self.prompt("p2", "the real one"))
         code, out = self.run_pass("--foreground")
         self.assertEqual(code, 0, out)
-        self.assertEqual([p["text"] for p in self.written()["prompts"]], ["the real one"])
+        self.assertEqual([p.get("text") for p in self.written()["prompts"]], ["the real one"])
+
+    def test_a_turn_a_notice_started_is_marked_and_one_past_the_read_is_left_out(self):
+        self.stop_replies = [{"prompt_id": p, "text": "reply " + p} for p in ("p1", "p2", "p3")]
+        self.say(self.prompt("p1", "<task-notification>done</task-notification>",
+                             origin={"kind": "task-notification"}),
+                 self.prompt("p1", "typed after the notice, same turn"),
+                 # An agent's message is meta too.
+                 self.prompt("p2", "Another Claude session sent a message", isMeta=True,
+                             origin={"kind": "peer"}),
+                 # p3's start is past the read: only its tool result is left.
+                 self.prompt("p3", [{"type": "tool_result", "content": "x"}], origin=None))
+        code, out = self.run_pass("--foreground")
+        self.assertEqual(code, 0, out)
+        self.assertEqual([(p["prompt_id"], p.get("notice"), p.get("text"))
+                          for p in self.written()["prompts"]],
+                         [("p1", True, None), ("p2", True, None)])
+
+    def test_a_lone_surrogate_in_one_prompt_keeps_every_prompt(self):
+        self.stop_replies = self.REPLIES
+        self.say(self.prompt("p1", "cut mid-emoji " + chr(0xD83D)), self.prompt("p2", "fine"))
+        code, out = self.run_pass("--foreground")
+        self.assertEqual(code, 0, out)
+        self.assertEqual([p["text"] for p in self.written()["prompts"]],
+                         ["cut mid-emoji ?", "fine"])
 
     def test_a_slash_command_and_an_image_show_as_typed(self):
         self.stop_replies = self.REPLIES

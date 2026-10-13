@@ -9,9 +9,11 @@
 # Hayden sees and the model doesn't (spike A2). It starts "Last turn (HH:MM)", then "You:" with
 # the first line of the turn's prompt (the entry's `prompts`, which pass-respawn reads from the
 # transcript; about 100 characters, then an ellipsis), or a dim "(no prompt: a background
-# notice)", then the replies rendered from markdown by md_render.py (bold, code, lists, tables,
-# code blocks) at the pane's width less Claude Code's 5-column indent, each style closed by its
-# own reset (spike A9: 0m would drop the banner's gray). It shows when:
+# notice)" when a notice started the turn, "(prompt not saved)" when pass-respawn couldn't tell,
+# then the replies rendered from markdown by md_render.py (bold, code, lists, tables, code
+# blocks) at the pane's width less Claude Code's 5-column indent, each style closed by its own
+# reset and a color by going back to the banner's gray (spike A9: 0m or 39m would drop it). It
+# shows when:
 #   - the source is `startup` (a respawn starts that way), in a tmux tab (TMUX_PANE), not a
 #     `claude -p` run (CLAUDE_CODE_SESSION_ATTENDED=0) and not a subagent (agent_id);
 #   - the entry's tab matches this pane on this tmux server exactly (keyed as session-registry.sh

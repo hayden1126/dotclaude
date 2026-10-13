@@ -1160,7 +1160,9 @@ def prompt_text(content) -> str | None:
 def clip_prompt(text: str) -> str:
     """text cut to PROMPT_BYTES of UTF-8 or PROMPT_LINES lines, whichever comes first: a line
     cut on a character boundary ends with an ellipsis, and the lines dropped after it are
-    counted on a last line, "... (N more lines)"."""
+    counted on a last line, "... (N more lines)". A lone surrogate (a paste cut mid-emoji)
+    becomes '?', as write_utf8_json writes it."""
+    text = text.encode("utf-8", "replace").decode("utf-8")
     lines = text.strip("\n").rstrip().split("\n")
     keep, used = [], 0
     for line in lines[:PROMPT_LINES]:
@@ -1187,10 +1189,12 @@ def epoch(stamp) -> float | None:
 
 
 def read_prompts(path: str | None, ids: list[str]) -> list[dict] | None:
-    """Hayden's prompt for each turn in ids, from the transcript's last PROMPT_TAIL bytes:
-    [{prompt_id, text, time}] in the order of ids, for each id that has one. A prompt is a
-    main-chain typed prompt (typed_prompt; not a sidechain or meta entry) whose promptId is the
-    turn's prompt_id; the first one wins. None when the transcript can't be read."""
+    """Hayden's prompt for each turn in ids, from the transcript's last PROMPT_TAIL bytes, in
+    the order of ids: {prompt_id, text, time} when the turn's first main-chain user entry that
+    isn't a tool result is a typed prompt (typed_prompt), {prompt_id, notice: true, time} when
+    it has another origin (a task notice is `task-notification`, an agent's message `peer`,
+    which is also meta). A turn whose start is past the read has neither, so the popup says the
+    prompt wasn't saved rather than guess. None when the transcript can't be read."""
     try:
         with open(path, "rb") as f:
             start = max(0, f.seek(0, os.SEEK_END) - PROMPT_TAIL)
@@ -1206,11 +1210,21 @@ def read_prompts(path: str | None, ids: list[str]) -> list[dict] | None:
             entry = json.loads(line)
         except ValueError:
             continue
-        if (not typed_prompt(entry) or entry.get("isSidechain") or entry.get("isMeta")
-                or not isinstance(entry.get("message"), dict)):
+        if (not isinstance(entry, dict) or entry.get("type") != "user"
+                or entry.get("isSidechain") or not isinstance(entry.get("message"), dict)):
             continue
         pid = entry.get("promptId")
         if not isinstance(pid, str) or pid not in wanted or pid in found:
+            continue
+        origin = entry.get("origin")
+        kind = origin.get("kind") if isinstance(origin, dict) else None
+        if not isinstance(kind, str):
+            continue   # a tool result, a skill body, an interrupt: not what started the turn
+        if kind != "human":
+            found[pid] = {"prompt_id": pid, "notice": True,
+                          "time": epoch(entry.get("timestamp"))}
+            continue
+        if not typed_prompt(entry) or entry.get("isMeta"):
             continue
         text = prompt_text(entry["message"].get("content"))
         if isinstance(text, str) and text.strip():
@@ -1224,8 +1238,9 @@ def write_last(plan: Plan, tab: dict | None) -> str | None:
     (hooks/pass-banner.sh, which shows the last turn and sets `shown`) and the popup
     (tmux/pass-last, Ctrl-b Up, which shows every turn): the stop record's `replies` and
     Hayden's prompt for each turn (read_prompts), with the tab, at pass-last/<pane number>.json
-    as {tab, from_session, written_at, replies, prompts, shown}. The transcript is the stop
-    record's transcript_path, else the session file's cwd slug; with none readable there is no
+    as {tab, from_session, written_at, replies, prompts, shown}. The transcript is
+    transcript_path()'s: the stop record's, else the session file's, else the session file's
+    cwd slug; with none readable there is no
     `prompts` key. The prompts are cosmetic: no error reading them stops the pass. Not
     one-shot, and apart from the carry marker, which claude-saved consumes on the same
     SessionStart. Its path, or None when nothing was written: with no reply text or no tab,
