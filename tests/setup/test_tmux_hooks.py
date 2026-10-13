@@ -553,8 +553,9 @@ class Hooks(unittest.TestCase):
         stops = os.path.join(self.state, "dotclaude", "stops")
         os.makedirs(stops)
         for junk in ("{not json", '{"replies": "nope"}', '[1, 2]',
-                     '{"replies": [5, {"prompt_id": 1, "text": "x"}, {"prompt_id": "p0"}]}'):
-            with self.subTest(junk=junk):
+                     '{"replies": [5, {"prompt_id": 1, "text": "x"}, {"prompt_id": "p0"}]}',
+                     "[" * 100000):  # json raises RecursionError, not ValueError
+            with self.subTest(junk=junk[:20]):
                 with open(os.path.join(stops, "abcdef12-0000.json"), "w") as f:
                     f.write(junk)
                 self.run_hook("stop-ring.sh", TAB, {"prompt_id": "p1",

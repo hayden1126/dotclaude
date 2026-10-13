@@ -395,7 +395,7 @@ def stop_record(sid: str) -> dict | None:
     try:
         with open(stop_path(sid), encoding="utf-8") as f:
             rec = json.load(f)
-    except (OSError, ValueError):
+    except (OSError, ValueError, RecursionError):   # json recurses on nesting
         return None
     return rec if isinstance(rec, dict) else None
 

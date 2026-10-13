@@ -1053,6 +1053,15 @@ class PassRuleParity(Base):
                                    out.getvalue())
                 self.assertEqual(blocks is None, clear, out.getvalue())
 
+    def test_a_record_too_deep_for_json_reads_as_unknown(self):
+        # Review round 7: json raises RecursionError, not ValueError, on deep nesting.
+        path = os.path.join(self.state, "dotclaude", "stops", SID + ".json")
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as f:
+            f.write("[" * 100000)
+        self.assertIsNone(aps.load_json(path))
+        self.assertEqual(cw.recorded_work(SID), ("unknown", []))
+
 
 class PlainPassRule(unittest.TestCase):
     def test_odd_entries_block_as_unlabeled_and_never_raise(self):

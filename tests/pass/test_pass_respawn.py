@@ -1088,16 +1088,30 @@ class Plain(Base):
         code, out = self.run_pass("--tasks")
         self.assertEqual(code, 0, out)
         self.assertIn(f"no stop record for session {SID}", out)
-        # Review round 6: a record that exists but can't be read refuses, as the waiter does.
-        for body in ("{}", "[]", "not json", ""):
-            with self.subTest(body=body):
-                self.write(os.path.join(self.state, "stops", f"{SID}.json"), body)
+        # Review rounds 6 and 7: a record that exists but can't be read refuses, as the waiter
+        # does. Only a missing path says "yet": a dangling link or a directory there doesn't.
+        path = os.path.join(self.state, "stops", f"{SID}.json")
+        unreadable = "the stop record can't be read: a plain pass would refuse"
+        cases = [("{}", "the record's time can't be read: a plain pass would refuse"),
+                 ("[]", unreadable), ("null", unreadable), ("not json", unreadable),
+                 ("", unreadable), ("[" * 100000, unreadable),  # RecursionError in json
+                 ("<dangling link>", unreadable), ("<directory>", unreadable)]
+        for body, says in cases:
+            with self.subTest(body=body[:12]):
+                if body == "<dangling link>":
+                    os.remove(path)
+                    os.symlink(path + ".gone", path)
+                elif body == "<directory>":
+                    os.remove(path)
+                    os.mkdir(path)
+                else:
+                    self.write(path, body)
                 code, out = self.run_pass("--tasks")
                 self.assertEqual(code, 0, out)
                 self.assertNotIn("no stop record", out)
-                self.assertIn("can't be read: a plain pass would refuse", out)
-        self.write(os.path.join(self.state, "stops", f"{SID}.json"),
-                   json.dumps({"time": time.time(), "waits": []}))
+                self.assertIn(says, out)
+        os.rmdir(path)
+        self.write(path, json.dumps({"time": time.time(), "waits": []}))
         code, out = self.run_pass("--tasks")
         self.assertIn("no task list: a plain pass would refuse", out)
         self.write_stop([])
