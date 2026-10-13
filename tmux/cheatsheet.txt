@@ -5,6 +5,11 @@
     C-b Enter    action menu (do things)
     C-b ?        all keys (raw tmux list)
 
+  TAB BAR  (rows by project: a repo with lanes, then the rest)
+    tap a tab    switch to it
+    tap again    its menu: Star / Shelve / Shelf… / Rename / Windows…
+    tap +N       the windows the bar has no room for
+
   WINDOWS  (one per repo)
     C-b c        new window (keeps dir)
     C-b ,        rename window
