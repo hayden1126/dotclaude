@@ -215,15 +215,21 @@ class Pathological(unittest.TestCase):
                  "-" + " -" * 30000 + "x", "|" + "a|" * 30000, "- " + "*a " * 21000,
                  # layout: a table padded to its widest row, a deep list indent
                  "|" + "a|" * 16000 + "\n|" * 16000, "| a | b |\n|---|---|\n" + "| x | y |\n" * 6000,
-                 " " * 32000 + "- " + "x" * 32000, "\t" * 16000 + "- " + "x" * 48000)
+                 " " * 32000 + "- " + "x" * 32000, "\t" * 16000 + "- " + "x" * 48000,
+                 # a fixed ratio of output per input: rules, fence lines, boxes, headings
+                 "---\n" * 16000, "***\n" * 16000, "```\n" + "\n" * 64000,
+                 "```\n" + "x\n" * 32000, "# " + "a " * 32000, "|\n" * 4000,
+                 "    123456789. **" + chr(0x4e2d) * 4000 + "**")
         for inline_max in (md.INLINE_MAX, 10 ** 9):
             for text in texts:
-                with self.subTest(text=text[:5], inline_max=inline_max), \
-                        mock.patch.object(md, "INLINE_MAX", inline_max):
-                    start = time.monotonic()
-                    out = md.render(text, 80)
-                    self.assertLess(time.monotonic() - start, 1.0)
-                    self.assertLess(len(out), 4 * len(text) + 1000)   # no blow-up in size
+                for width, reset in ((80, "full"), (20, "own")):
+                    with self.subTest(text=text[:5], inline_max=inline_max, width=width), \
+                            mock.patch.object(md, "INLINE_MAX", inline_max):
+                        start = time.monotonic()
+                        out = md.render(text, width, reset=reset)
+                        self.assertLess(time.monotonic() - start, 1.0)
+                        # The docstring's size bound: within 40 times the input's bytes.
+                        self.assertLess(len(out.encode()), 40 * len(text.encode()) + 1000)
 
     def test_text_over_inline_max_gets_no_inline_markup(self):
         long = "**b** " + "x" * md.INLINE_MAX
@@ -252,6 +258,12 @@ class Pathological(unittest.TestCase):
     def test_a_tab_in_a_table_cell_keeps_the_borders_aligned(self):
         out = md.render("| a\tb | c |\n|---|---|\n| x | y |", 80, color=False).split("\n")
         self.assertEqual(len({md.cells(line) for line in out}), 1, out)
+
+    def test_nesting_levels_stay_apart_from_width_24(self):
+        for width in (24, 32, 40, 80):
+            lead = [len(line) - len(line.lstrip()) for line in
+                    (md.render(" " * k + "- x", width, color=False) for k in (0, 2, 4, 6, 8))]
+            self.assertEqual(lead, [2, 4, 6, 8, 10], width)
 
     def test_a_deep_list_indent_keeps_room_for_the_text(self):
         out = md.render(" " * 200 + "- an item long enough to wrap twice here", 40,

@@ -16,10 +16,13 @@ rows, dim), and --- rules. A line break stays a line break (as Claude Code and G
 show one; a reply's "Done: ...\nNext: ..." lines stay apart), and each line wraps at word
 boundaries by terminal cells: a wide (W or F) character is 2 cells, a combining or format
 character 0. A word longer than the line is broken by cells. A list item's indented lines keep
-its hanging indent, which stays under a quarter of the width.
+its hanging indent, which leaves at least half the width for the text.
 
-Its cost stays near linear in the text, since a reply can hold anything (a 64 KiB line of
-openers took seconds to minutes before; the comment above INLINE has the cases). A line over
+Its time stays near linear in the text, since a reply can hold anything (a 64 KiB line of
+openers took seconds to minutes before; the comment above INLINE has the cases), and so does
+its size: each input character yields at most a fixed amount of output (a 4-character rule
+draws a 40-cell line, an empty line in a fence gets its bar), within 40 times the input's
+bytes. A line over
 INLINE_MAX (4,096) characters shows its markup raw, and a table wider than the width or with
 more than TABLE_CELLS cells shows as its raw rows, dim.
 
@@ -329,10 +332,11 @@ def render(text: str, width: int, color: bool = True, reset: str = "full") -> st
             continue
         m = LIST.match(line)
         if m:
-            # The hanging indent stays under a quarter of the width: a deep one left no room
-            # and put one character per line, each line carrying the whole indent.
-            indent = min(len(m.group(1).expandtabs(4)) + 2, width // 4)
+            # The hanging indent leaves at least half the width for the text: a deep one left
+            # no room and put one character per line, each line carrying the whole indent.
             mark = BULLET if m.group(2) in "-*+" else m.group(2)
+            indent = min(len(m.group(1).expandtabs(4)) + 2,
+                         max(0, width - width // 2 - len(mark) - 1))
             item = [m.group(3).strip()]
             i += 1
             while (i < len(lines) and lines[i].strip() and lines[i][:1].isspace()
