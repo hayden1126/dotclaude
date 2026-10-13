@@ -69,6 +69,17 @@ stored here).
   `~/.claude/sessions/<pid>.json` (undocumented; the registry is the fallback).
 
 ## In flight
+- **dotclaude runs in lanes (since 2026-10-12).** The lead is the main checkout. Lanes live in
+  `~/dotclaude-lanes/`, and each lane's state is in its record (`lane ls`, `lane asks`), not
+  here. The config caps live lanes at 2, with locks `install` and `suite`. Merge order:
+  1. `attach-tabs` (Star, Shelve and restore for `claude attach` tabs).
+  2. `narrow-excluded` (security step 1), which rebases after 1 merges.
+
+  How lanes install, Hayden's call 2026-10-12: after its last review round, a lane runs
+  `lane lock install -- ./setup.sh` from its own worktree, sandbox off. Until it merges, every
+  session runs that lane's hooks. After the merge, the lead moves the main checkout to `main`,
+  re-runs `./setup.sh` there and smoke-tests, then proposes `lane done`. A lane carries the
+  lead's STATUS commits (on `chore/after-pr4`) into its PR before it is marked ready.
 - **Lanes, handoff-check and `/pass`** (Hayden's design, approved 2026-10-11; `PLAN.md`, behavior in
   `docs/lanes.md` and `skills/lanes/SKILL.md`). Four PRs:
   - PR 1 (lanes core) merged as #86 (`gh pr view 86`); its smoke test and guard replay are in
@@ -79,13 +90,15 @@ stored here).
     private: `~/scratch/sandbox-audit/FINDINGS.md`, "Follow-up 2026-10-11"). **Step 0 is done on
     `feat/lanes-lead`, merged in #87**: the lanes config lives in the state dir, and what the
     sandbox can still write is checked before sandbox-off code acts on it (docs/lanes.md S3).
-    Step 1 is its own PR after PR 3 and before the work repo migration; step 2 later.
+    Step 1 is lane `narrow-excluded`, and it merges before the work repo migration; step 2 later.
   - PR 3 (`/pass`) merged as #88 (`gh pr view 88`), installed with its allow rule; its live runs
     and the as-built notes are in PLAN.md PR 3 "As built".
   - PR 4 (auto-pass, the rendered banner and popup) merged as #89 (`gh pr view 89`), installed
     on HAYPC from its branch and smoke-tested (PLAN.md PR 4 "As built" and spikes A8 to A10).
-  - After PR 3: the release skill in the work repos gets its post-release Next block and a
-    closing `handoff-check` (its own PR there; PLAN.md PR 3 "Delta handoff").
+  - The release skill in the work repos gets its post-release Next block and a closing
+    `handoff-check` (PLAN.md PR 3 "Delta handoff"). Hayden's call (2026-10-12): it becomes the
+    first lane of the work repo migration, after `narrow-excluded` merges, led from that repo's
+    main checkout. A dotclaude lead can't open lanes there, because `lane` acts on the cwd repo.
   - Migrate the work repo (its own PR there). The concrete values and the
     incident ids are in `~/scratch/lanes/PRIVATE.md` (private).
 - **`deck-production`: deferred (Hayden, 2026-10-05: workflow improvements first).** The geometry
@@ -136,14 +149,14 @@ stored here).
   `claude -p` repro and the 2.1.285 boundary; the karaoke session's has the incident.
 
 ## Notes for next session
-- **Next: Hayden picks the next piece of work; plan it first.** PR 4 merged as #89. Candidates,
-  in the order STATUS "In flight" gives them:
-  1. The security follow-up's step 1, its own dotclaude PR before the work repo migration
-     (private plan: `~/scratch/sandbox-audit/FINDINGS.md`, "Follow-up 2026-10-11").
-  2. The `claude attach` follow-up below (dotclaude).
-  3. The release-skill PR in the work repos, then the work repo migration (each its own PR there).
-  - Branch `chore/after-pr4` holds only this post-merge STATUS update: rename it for the chosen
-    work (`git branch -m`) so the update rides that PR, never a STATUS-only one.
+- **Next (lead, main checkout): run the two lanes** in "In flight" (dotclaude runs in lanes).
+  Watch `lane ls` and `lane asks`, and message a lane idle past the soft tier to run /pass. A
+  lane is handed back only once `handoff-check -C <lane path>` passes and the board shows no
+  `handoff?` flag. After each merge, follow the install step in "In flight". Once
+  `narrow-excluded` merges, plan the work repo migration, with the release skill as its first
+  lane.
+  - Branch `chore/after-pr4` holds the lead's STATUS commits. They ride the next lane PR to
+    merge (the lane cherry-picks them), never a STATUS-only PR.
   - **Watch (PR 4, live on HAYPC):** `context-watch.err` in the state dir (a Stop that timed out
     waiting for its reply, and the watcher's Python errors). Not yet seen live: a refused pass's
     toast, and Hayden's verdict on the rendered popup.
