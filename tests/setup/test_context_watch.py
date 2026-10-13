@@ -1009,7 +1009,8 @@ class PassRuleParity(Base):
         pr = importlib.util.module_from_spec(importlib.util.spec_from_loader("pass_respawn",
                                                                               loader))
         loader.exec_module(pr)
-        plan = types.SimpleNamespace(session_id=SID, called=0)
+        # Called a minute before each record, as in a real pass.
+        plan = types.SimpleNamespace(session_id=SID, called=time.time() - 60)
         watch = {"label": "artifact watch", "id": "s1", "url": "https://claude.ai/artifact/x"}
         cases = [({"waits": [], "tasks": []}, True),
                  ({"waits": [], "tasks": [watch, {"label": "dream"}, "dream"]}, True),
@@ -1031,7 +1032,8 @@ class PassRuleParity(Base):
                  ({"time": float("nan"), "waits": [], "tasks": []}, False),
                  ({"time": float("inf"), "waits": [], "tasks": []}, False),
                  ({"time": float("-inf"), "waits": [], "tasks": []}, False),
-                 ({"time": 10 ** 400, "waits": [], "tasks": []}, False)]  # past a float
+                 ({"time": 10 ** 400, "waits": [], "tasks": []}, False),  # past a float
+                 ({"time": "now", "waits": [], "tasks": []}, False)]
         path = os.path.join(self.state, "dotclaude", "stops", SID + ".json")
         os.makedirs(os.path.dirname(path), exist_ok=True)
         for body, clear in cases:

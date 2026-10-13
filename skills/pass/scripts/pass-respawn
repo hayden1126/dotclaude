@@ -1596,11 +1596,11 @@ def list_tasks() -> int:
         print("pass-respawn: CLAUDE_CODE_SESSION_ID is unset (or not a plain id)")
         return 1
     rec = stop_record(sid)
-    when = rec.get("time") if rec else None
-    if not isinstance(when, (int, float)):
+    if not rec:
         print(f"pass-respawn: no stop record for session {sid} yet (stop-ring.sh writes one at "
               "each Stop)")
         return 0
+    when = rec.get("time")
     if not readable_time(when):
         print(f"pass-respawn: session {sid}: the record's time can't be read: a plain pass "
               "would refuse")
