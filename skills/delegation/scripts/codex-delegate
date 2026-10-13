@@ -682,8 +682,12 @@ def finish(row, rc, thread_id, since_epoch, out, stream=None):
 def read_text(path):
     if path == "-":
         return sys.stdin.read()
-    with open(path) as f:
-        return f.read()
+    # Checked again on the open file: a link swapped in after check_paths isn't followed.
+    try:
+        with dc.open_unprotected(path) as f:
+            return f.read().decode()
+    except PermissionError:
+        die(f"{path} reaches a path the sandbox keeps unreadable")
 
 
 def check_paths(dirs=(), reads=()):

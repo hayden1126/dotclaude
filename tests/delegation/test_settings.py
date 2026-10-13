@@ -682,7 +682,7 @@ class Inventory(unittest.TestCase):
                 words = cmd.split()
                 family = [p for p in excluded if p.split()[:2] == words[:2]
                           or p.split()[0] == words[0] and p.split()[1:] == ["*"]]
-                if family and len(words) > 2:
+                if family and len(words) > 2 or words[0] == "gh":  # gh is an allowlist
                     self.assertTrue(excluded_by(cmd))
 
 

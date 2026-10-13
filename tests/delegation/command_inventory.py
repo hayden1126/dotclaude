@@ -52,7 +52,7 @@ EXCLUDED = [
         ("gh repo list *", "gh repo list o"), ("gh auth status", "gh auth status"),
         ("gh auth status *", "gh auth status --hostname github.com"),
         ("gh release list", "gh release list"), ("gh release list *", "gh release list -R o/r"),
-        ("gh release view *", "gh release view v1"),
+        ("gh release view", "gh release view"), ("gh release view *", "gh release view v1"),
     ]
 ] + [
     Excluded("codex-delegate *", "starts codex in its own sandbox and needs codex's credential",

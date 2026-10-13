@@ -257,6 +257,7 @@
       "gh auth status *",
       "gh release list",
       "gh release list *",
+      "gh release view",
       "gh release view *",
       "codex-delegate *",
       "delegation-ledger *",
