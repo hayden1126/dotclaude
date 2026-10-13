@@ -1463,7 +1463,7 @@ def closing_check(lane_id: str, path: str) -> None:
     """`handoff-check --closing` in the lane must pass before its sessions end: the record is
     all of the lane that outlives them."""
     try:
-        p = subprocess.run([sys.executable, HANDOFF_CHECK, "--closing", "-C", path],
+        p = subprocess.run([sys.executable, "-I", HANDOFF_CHECK, "--closing", "-C", path],
                            capture_output=True, text=True, timeout=120)
     except (OSError, subprocess.SubprocessError) as e:
         raise LaneError(f"can't run handoff-check --closing ({e}), so nothing was signalled")

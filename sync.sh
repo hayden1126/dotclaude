@@ -13,7 +13,8 @@
 # after a sync that changes the plugin list, copy the change into the baseline by hand.
 # codex/config.toml is the same kind of baseline: setup.sh merges its keys into
 # ~/.codex/config.toml, and Codex's own entries there never come back here.
-# Safe to re-run; reports a diff but never auto-commits.
+# Safe to re-run; reports a diff but never auto-commits. It runs outside the sandbox, so its
+# Python runs isolated (-I), like setup.sh's.
 
 set -euo pipefail
 
@@ -23,7 +24,7 @@ CLAUDE_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
 say() { printf "\033[1;36m==>\033[0m %s\n" "$*"; }
 
 say "syncing plugins/marketplaces.json"
-python3 - "$CLAUDE_DIR/plugins/known_marketplaces.json" "$REPO_DIR/plugins/marketplaces.json" <<'PY'
+python3 -I - "$CLAUDE_DIR/plugins/known_marketplaces.json" "$REPO_DIR/plugins/marketplaces.json" <<'PY'
 import json, sys
 src, dst = sys.argv[1], sys.argv[2]
 with open(src) as f:
@@ -35,7 +36,7 @@ with open(dst, "w") as f:
 PY
 
 say "syncing plugins/enabled.json"
-python3 - "$CLAUDE_DIR/settings.json" "$REPO_DIR/plugins/enabled.json" <<'PY'
+python3 -I - "$CLAUDE_DIR/settings.json" "$REPO_DIR/plugins/enabled.json" <<'PY'
 import json, sys
 src, dst = sys.argv[1], sys.argv[2]
 with open(src) as f:

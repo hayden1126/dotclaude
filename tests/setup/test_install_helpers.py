@@ -339,6 +339,45 @@ def first(lines, pattern):
     return next(i for i, l in enumerate(lines) if re.match(pattern, l))
 
 
+# Lines that name Python without starting it, per script. Anything else that names a Python
+# interpreter or a .py file outside a heredoc body must be a call in the strict form.
+PYTHON_NON_CALLS = {
+    "setup.sh": ('for f in "$REPO_DIR"/hooks/*.sh "$REPO_DIR"/hooks/*.py; do',
+                 'for pyf in "$REPO_DIR"/statusline/*.py; do'),
+    "setup-tmux.sh": ('command -v python3 >/dev/null || die "python3 not found."',),
+}
+
+
+def python_lines(text, non_calls):
+    """A shell script's lines that name Python: (bad, ok, unclosed). ok holds the calls in the
+    strict form, `python3 -I` then a quoted arg or `-`, with no other Python on the line; bad
+    holds every other line naming a Python interpreter (python, python3, python3.12) or a .py
+    file, so a bare python3, an interpreter in a variable (its assignment names it) and a
+    direct run of a .py all land there. Comments and heredoc bodies (the Python a call reads,
+    or printed text) are skipped; unclosed is the delimiter of a heredoc still open at the end.
+    Lines are continuation-joined and whitespace-normalized."""
+    bad, ok, delim = [], [], None
+    for raw in text.replace("\\\n", " ").splitlines():
+        line = " ".join(raw.split())
+        if delim is not None:
+            if line == delim:
+                delim = None
+            continue
+        if line.startswith("#"):
+            continue
+        m = re.search(r"(?<!<)<<(?!<)-?\s*(['\"]?)(\w+)\1", line)  # a <<< here-string isn't one
+        if m:
+            delim = m.group(2)
+        if line in non_calls:
+            continue
+        names = re.findall(r"\bpython[0-9.]*\b", line)
+        if re.match(r"python3 -I [\"'-]", line) and len(names) == 1:
+            ok.append(line)
+        elif names or re.search(r"\.py\b", line):
+            bad.append(line)
+    return bad, ok, delim
+
+
 def setup_link_sources():
     """Every repo path setup.sh links, relative to the repo: the `for ... in` lists and the
     literal `link "$REPO_DIR/..."` sources, expanded by bash against this checkout."""
@@ -417,25 +456,52 @@ class SetupWiring(unittest.TestCase):
         self.assertNotIn('copy_managed "$REPO_DIR/settings.json"', text)
         self.assertIn('git/install-ignore.py" "$REPO_DIR/git/sandbox-stubs.ignore"', text)
 
-    def test_setup_runs_its_python_isolated(self):
-        # setup*.sh run outside the sandbox. Without -I, a script's sys.path[0] is its own dir or
-        # the cwd, and the repo root isn't in denyWrite (only its files and subdirs are), so
-        # every python3 they start runs isolated. An invocation is python3 followed by an
-        # argument (a quote, a $ or a flag); prose like "needs python3 on PATH" is not one.
-        found = {}
-        for path in sorted(glob.glob(os.path.join(REPO, "setup*.sh"))):
-            with open(path) as f:
-                text = f.read().replace("\\\n", " ")
-            name = os.path.basename(path)
-            for line in text.splitlines():
-                if line.lstrip().startswith("#"):
-                    continue
-                for m in re.finditer(r"\bpython3\s+([\"'$-]\S*)", line):
-                    found[name] = found.get(name, 0) + 1
-                    with self.subTest(name, call=line.strip()[:80]):
-                        self.assertEqual(m.group(1), "-I")
-        self.assertGreaterEqual(found.get("setup.sh", 0), 10)  # the scan sees every call
-        self.assertGreaterEqual(found.get("setup-tmux.sh", 0), 1)
+    def test_the_top_level_scripts_run_their_python_isolated(self):
+        # The top-level scripts run outside the sandbox (setup*.sh, sync.sh), and the repo root
+        # isn't in denyWrite (only its files and subdirs are), so every Python they start runs
+        # isolated: no import path from the cwd, the script's dir or the environment.
+        scripts = sorted(os.path.basename(p) for p in glob.glob(os.path.join(REPO, "*.sh")))
+        self.assertEqual(scripts, ["setup-chrome-wsl.sh", "setup-tmux.sh", "setup.sh", "sync.sh"])
+        calls = {}
+        for name in scripts:
+            with open(os.path.join(REPO, name)) as f:
+                bad, ok, unclosed = python_lines(f.read(), PYTHON_NON_CALLS.get(name, ()))
+            with self.subTest(name):
+                self.assertEqual(bad, [])
+                self.assertIsNone(unclosed)  # every heredoc ended, so nothing after it was skipped
+            calls[name] = ok
+        # The scan reached each kind of call, past every heredoc.
+        self.assertIn('python3 -I "$REPO_DIR/install-state.py" hold "$REPO_DIR" || hold=$?',
+                      calls["setup.sh"])
+        self.assertIn('python3 -I "$REPO_DIR/install-state.py" plugins '
+                      '|| warn "the plugin change check failed (see above)"', calls["setup.sh"])
+        self.assertEqual(len(calls["setup.sh"]), 10)
+        self.assertEqual(len(calls["sync.sh"]), 2)
+        self.assertEqual(len(calls["setup-tmux.sh"]), 1)
+
+    def test_the_isolation_scan_flags_every_other_way_to_start_python(self):
+        planted = [
+            "python3 <<'PY'", "python3 ./x.py", "python3 ~/x.py", "python3.12 -I x.py",
+            "python x.py", 'PY="$(command -v python3)"', '"$PY" "$REPO_DIR/x.py"',
+            '"$REPO_DIR/x.py" --flag', "./tool.py", "python3 -I x.py | python3 y.py",
+            "if python3 x.py; then :; fi", "python3 -c 'import x'", "exec python3 x.py",
+        ]
+        for line in planted:
+            with self.subTest(line):
+                bad, _, _ = python_lines(line + "\nPY\n", ())
+                self.assertEqual(bad, [line])
+        text = ("python3 -I - \"$A\" <<'PY'\nimport os  # python x.py inside the heredoc\nPY\n"
+                "cat <<EOF\n  needs python3 on PATH\nEOF\n"
+                "command -v python3 >/dev/null\n"
+                'python3 -I "$REPO_DIR/merge.py" \\\n  "$B" > "$C"\n')
+        bad, ok, unclosed = python_lines(text, ("command -v python3 >/dev/null",))
+        self.assertEqual(bad, [])
+        self.assertEqual(ok, ["python3 -I - \"$A\" <<'PY'",
+                              'python3 -I "$REPO_DIR/merge.py" "$B" > "$C"'])
+        self.assertIsNone(unclosed)
+        self.assertEqual(python_lines("python3 -I - <<'PY'\nimport os\n", ())[2], "PY")
+        self.assertEqual(python_lines("sed -n '/<<< x <<</p' f\npython3 y.py\n", ()),
+                         (["python3 y.py"], [], None))
 
     def test_codex_gets_the_portable_skills_and_each_exists(self):
         with open(os.path.join(REPO, "setup.sh")) as f:
