@@ -44,7 +44,8 @@ whichever event comes first.
 
 Background work, two rules:
 - busy: a task of stop_ring.WAITS (a subagent, shell, workflow or cloud session: work whose
-  result the turn waits on). Soft and wrap-up stay quiet and stay armed; hard says its busy
+  result the turn waits on). The payload labels a Monitor `shell` too; stop_ring.task_types
+  relabels it `monitor` from the transcript (spike A10), so a lingering monitor isn't busy. Soft and wrap-up stay quiet and stay armed; hard says its busy
   variant (pass compact: a compact keeps the tasks alive).
 - blocked: any task a plain pass would be refused for (lanelib.plain_pass_blockers, the rule
   pass-respawn uses: everything but `dream`, monitors and teammates too). Every tier then says to
@@ -393,10 +394,11 @@ def step(rec: dict, n: int, tiers: dict, event: str, mode, work, handoff=lambda 
             "unknown": "off_unknown"}.get(state, "off"), "system"
 
 
-def labels(tasks) -> list:
-    """background_tasks as stop-ring.sh records them: each type, `unlabeled` for none."""
-    return [t.get("type") if isinstance(t, dict) and isinstance(t.get("type"), str)
-            and t.get("type") else "unlabeled" for t in tasks] if isinstance(tasks, list) else []
+def labels(tasks, path=None) -> list:
+    """background_tasks as stop-ring.sh records them: each type (a Monitor as `monitor`, from
+    the transcript at path: stop_ring.task_types), `unlabeled` for none."""
+    return [k if isinstance(k, str) and k else "unlabeled"
+            for k in stop_ring.task_types(tasks, path)]
 
 
 def work_state(waits: list, tasks: list):
@@ -408,7 +410,7 @@ def work_state(waits: list, tasks: list):
 
 
 def stop_work(d: dict):
-    tasks = labels(d.get("background_tasks"))
+    tasks = labels(d.get("background_tasks"), d.get("transcript_path"))
     return work_state(tasks, tasks)
 
 

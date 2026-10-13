@@ -8,7 +8,8 @@ and rings by its defaults. Tests import merge_replies() and prune() directly
 
 The stop record, $XDG_STATE_HOME/dotclaude/stops/<session>.json, is written atomically for every
 stop but a subagent's, and only for a session id that is a plain name. It holds the time, the
-waits in flight, every task's label (`unlabeled` for one with none), the transcript path when it
+waits in flight, every task's label (`unlabeled` for one with none; a Monitor, which the payload
+labels `shell`, as `monitor`: task_types), the transcript path when it
 is a string, and `replies`: what Claude said in the last TURNS turns, for the banner and popup
 after a plain /pass (pass-respawn copies it to pass-last/). A turn is a run of replies with one
 prompt_id: a Stop a hook blocked and the Stop that ends the continued turn carry the same one
@@ -25,6 +26,7 @@ import tempfile
 import time
 
 WAITS = {"subagent", "shell", "workflow", "cloud session"}
+MONITOR_SCAN = 8 * 1024 * 1024   # transcript bytes read for the Monitor calls' task ids
 SID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
 TEXT_CAP = 64 * 1024       # bytes of UTF-8 per reply
 TOTAL_CAP = 128 * 1024     # bytes of UTF-8 over all replies; the oldest turns go first
@@ -144,6 +146,53 @@ def load(path: str):
         return None
 
 
+def monitor_ids(path) -> set:
+    """The ids of the tasks the Monitor tool started, from the transcript's last MONITOR_SCAN
+    bytes: a main-chain Monitor call's result entry carries the id as toolUseResult.taskId
+    (Claude Code 2.1.296). Empty when the transcript can't be read."""
+    try:
+        with open(path, "rb") as f:
+            start = max(0, f.seek(0, os.SEEK_END) - MONITOR_SCAN)
+            f.seek(start)
+            data = f.read()
+    except (OSError, TypeError, ValueError):
+        return set()
+    calls, ids = set(), set()
+    for line in data.split(b"\n")[1 if start else 0:]:   # a cut first line is dropped
+        if b'"Monitor"' not in line and b'"taskId"' not in line:
+            continue
+        try:
+            d = json.loads(line)
+        except ValueError:
+            continue
+        msg = d.get("message") if isinstance(d, dict) and not d.get("isSidechain") else None
+        content = msg.get("content") if isinstance(msg, dict) else None
+        for c in content if isinstance(content, list) else []:
+            if not isinstance(c, dict):
+                continue
+            if c.get("type") == "tool_use" and c.get("name") == "Monitor":
+                calls.add(c.get("id"))
+            elif c.get("type") == "tool_result" and c.get("tool_use_id") in calls:
+                result = d.get("toolUseResult")
+                if isinstance(result, dict) and isinstance(result.get("taskId"), str):
+                    ids.add(result["taskId"])
+    return ids
+
+
+def task_types(tasks, path) -> list:
+    """Each background_tasks entry's type, in order (None for one that isn't an object), with a
+    `shell` task the Monitor tool started as `monitor`. The Stop payload labels a Monitor
+    `shell`, like a background Bash command (spike A10), and a shell is work the turn waits on
+    while a monitor is not, so only the transcript tells them apart. It is read only when a
+    shell task runs; a Monitor started before the read stays `shell`."""
+    if not isinstance(tasks, list):
+        return []
+    shells = [t for t in tasks if isinstance(t, dict) and t.get("type") == "shell"]
+    monitors = monitor_ids(path) if shells else set()
+    return [("monitor" if t.get("type") == "shell" and t.get("id") in monitors
+             else t.get("type")) if isinstance(t, dict) else None for t in tasks]
+
+
 def write_record(d: dict, sid: str, types: list, tasks) -> None:
     stops = os.path.join(os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state"),
                          "dotclaude", "stops")
@@ -151,9 +200,7 @@ def write_record(d: dict, sid: str, types: list, tasks) -> None:
     path = os.path.join(stops, sid + ".json")
     now = time.time()
     rec = {"session_id": sid, "time": now, "waits": [t for t in types if t in WAITS],
-           "tasks": [t.get("type") if isinstance(t, dict) and isinstance(t.get("type"), str)
-                     and t.get("type") else "unlabeled"
-                     for t in (tasks if isinstance(tasks, list) else [])]}
+           "tasks": [k if isinstance(k, str) and k else "unlabeled" for k in tasks]}
     if isinstance(d.get("transcript_path"), str):
         rec["transcript_path"] = d["transcript_path"]
     if os.environ.get("CLAUDE_CODE_SESSION_ATTENDED") != "0":
@@ -184,8 +231,10 @@ def main() -> None:
     if not isinstance(d, dict):
         d = {}
     spawned = 1 if (d.get("agent_id") or d.get("agent_type")) else 0
-    tasks = d.get("background_tasks")
-    types = [t.get("type") for t in tasks if isinstance(t, dict)] if isinstance(tasks, list) else []
+    raw = d.get("background_tasks")
+    raw = raw if isinstance(raw, list) else []
+    tasks = task_types(raw, d.get("transcript_path"))   # one per entry, a Monitor as `monitor`
+    types = [k for k, t in zip(tasks, raw) if isinstance(t, dict)]
     busy = 1 if any(t in WAITS for t in types) else 0
     sid = d.get("session_id")
     if not spawned and isinstance(sid, str) and SID.fullmatch(sid):

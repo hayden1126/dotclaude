@@ -843,6 +843,17 @@ scale with the window:
     `context-watch.err` and uses the last count. PostToolUse never waits. The probe session's
     `ctx` file then matched each turn's own count.
 
+- **A10 (live smoke, 2026-10-12): a Monitor arrives as a `shell` task.** The Stop payload's
+  `background_tasks` gave a Monitor `type: "shell"`, the same as a background `sleep` (fields:
+  id, type, status, description, command; no monitor flag), on 2.1.296. The capella refusal
+  earlier the same day logged `monitor`, so both labels occur. As `shell` it counted as busy:
+  a lingering Monitor kept soft and wrap-up quiet, and the refusal said "1 shell".
+  - **Fix (Hayden's call: classify by tool):** `stop_ring.task_types` relabels a `shell` task
+    as `monitor` when its id is a Monitor call's `toolUseResult.taskId` in the transcript's
+    last 8 MiB (read only when a `shell` task runs). The stop record, the ring and the
+    watcher's Stop check all use it, so `pass-respawn` names the monitor too. A Monitor
+    started before that read stays `shell` (busy), the old behavior.
+
 **Verify.**
 - `context-watch` on transcript fixtures: below each tier, at each tier once per crossing, the
   hard tier re-arming, off, background work in flight, a subagent event, and a compact re-arming.

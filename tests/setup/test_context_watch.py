@@ -309,6 +309,23 @@ class Background(Base):
         self.assertEqual(self.stop(481_000, background_tasks=mon), block("wrap_compact", "481k"))
         self.assertEqual(self.stop(521_000, background_tasks=mon), block("hard_compact", "521k"))
 
+    def test_a_monitor_the_payload_calls_a_shell_still_lets_soft_speak(self):
+        # Spike A10: the payload labels a Monitor `shell`. The transcript shows the Monitor
+        # tool started it, so it blocks a plain pass (compact texts) but isn't busy work.
+        started = [
+            {"type": "assistant", "isSidechain": False, "message": {"content": [
+                {"type": "tool_use", "id": "tu_m", "name": "Monitor", "input": {}}]}},
+            {"type": "user", "isSidechain": False, "toolUseResult": {"taskId": "m1"},
+             "message": {"content": [{"type": "tool_result", "tool_use_id": "tu_m"}]}}]
+        self.on()
+        self.write_transcript(310_000, before=started)
+        mon = [{"id": "m1", "type": "shell", "status": "running"}]
+        self.assertEqual(self.stop(background_tasks=mon), block("soft_compact", "310k"))
+        # A background Bash shell is still busy: soft stays quiet.
+        self.write_transcript(320_000, before=started)
+        sh = [{"id": "b1", "type": "shell", "status": "running"}]
+        self.assertIsNone(self.stop(background_tasks=sh, session_id="other-session"))
+
     def test_teammates_and_unlabeled_tasks_block_a_plain_pass_too(self):
         self.on()
         self.assertEqual(self.stop(310_000, background_tasks=[{"id": "x"}]),
