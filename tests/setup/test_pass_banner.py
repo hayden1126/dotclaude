@@ -46,7 +46,7 @@ ELL = chr(0x2026)
 def head(prompt=None, at=1.0):
     """The banner's head: the turn's time, then the prompt's first line or the dim note."""
     stamp = " (%s)" % time.strftime("%H:%M", time.localtime(at)) if at is not None else ""
-    you = (f"{E}32mYou:{E}39m {prompt}" if prompt is not None
+    you = (f"{E}32mYou:{E}38;5;246m {prompt}" if prompt is not None
            else f"{E}2mYou: (no prompt: a background notice){E}22m")
     return f"{E}1mLast turn{stamp}{E}22m\n{you}\n\n"
 
@@ -57,11 +57,11 @@ def turn(*texts):
 
 def open_styles(text):
     """The SGR styles still open at the end of text (own resets: 22 closes 1 and 2, 23 closes 3,
-    24 closes 4, 39 closes a color)."""
-    closes = {"22": {"1", "2"}, "23": {"3"}, "24": {"4"}, "39": {"32", "33", "35", "36"}}
+    24 closes 4, and the banner gray 38;5;246 closes a color)."""
+    closes = {"22": {"1", "2"}, "23": {"3"}, "24": {"4"}, "38;5;246": {"32", "33", "35", "36"}}
     now = set()
     for params in re.findall(re.escape(E) + r"([0-9;]*)m", text):
-        for code in params.split(";"):
+        for code in re.findall(r"38;5;\d+|[0-9]+", params):
             if code in closes:
                 now -= closes[code]
             else:
@@ -247,10 +247,10 @@ class Banner(unittest.TestCase):
         out = self.start()
         self.assertNotIn(E + "0m", out)
         self.assertEqual(out[len(head()):].split("\n"), [
-            f"{E}1;35mPlan{E}22;39m", "",
-            f"  {chr(0x2022)} {E}1mone{E}22m with {E}36mcode{E}39m and words that",  # 32
+            f"{E}1;35mPlan{E}22;38;5;246m", "",
+            f"  {chr(0x2022)} {E}1mone{E}22m with {E}36mcode{E}38;5;246m and words that",  # 32
             "    wrap past the width here", "",
-            f"{E}2m{chr(0x2502)} {E}22m{E}33mls{E}39m"])
+            f"{E}2m{chr(0x2502)} {E}22m{E}33mls{E}38;5;246m"])
         self.assertEqual(self.calls()[-1][-1], "#{start_time} #{pid} #{pane_width} "
                                                "#{socket_path}")
 
@@ -318,11 +318,11 @@ class Banner(unittest.TestCase):
         self.assertEqual(len(out.split("\n")), 3 + 19 + 1)
         self.assertEqual(out.split("\n")[-1],
                          ELL + " 11 more lines: Ctrl-b Up shows the whole reply")
-        # A code line costs 23 bytes of bar and escapes: head 67 + 23 + 4,006 is exactly 4 KiB.
-        fits = pass_banner.banner(turn("```\n" + "x" * 4006 + "\n```"), None, 75)
+        # A code line costs 29 bytes of bar and escapes: head 67 + 29 + 4,000 is exactly 4 KiB.
+        fits = pass_banner.banner(turn("```\n" + "x" * 4000 + "\n```"), None, 75)
         self.assertEqual(len(fits.encode()), 4096)
-        self.assertTrue(fits.endswith("x" + E + "39m"))
-        over = pass_banner.banner(turn("```\n" + "x" * 4007 + "\n```"), None, 75)
+        self.assertTrue(fits.endswith("x" + E + "38;5;246m"))
+        over = pass_banner.banner(turn("```\n" + "x" * 4001 + "\n```"), None, 75)
         self.assertTrue(over.endswith(" 1 more line: Ctrl-b Up shows the whole reply"))
 
     def test_one_huge_line_is_cut_outside_escapes_with_its_styles_closed(self):
@@ -332,7 +332,7 @@ class Banner(unittest.TestCase):
         self.assertEqual(open_styles(out), set())
         body, rest = out[len(head(at=None)):].split("\n")
         self.assertTrue(body.startswith(f"{E}2m{chr(0x2502)} {E}22m{E}33m"), body)
-        self.assertTrue(body.endswith(chr(0x00E9) + E + "39m"), body)
+        self.assertTrue(body.endswith(chr(0x00E9) + E + "38;5;246m"), body)
         self.assertGreater(body.count(chr(0x00E9)), 1900)
         self.assertEqual(rest, ELL + " 1 more line: Ctrl-b Up shows the whole reply")
 

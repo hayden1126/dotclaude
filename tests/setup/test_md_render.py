@@ -32,7 +32,7 @@ class Inline(unittest.TestCase):
 
     def test_styles_nest(self):
         out = md.render("**bold `code` end**", 80, reset="own")
-        self.assertEqual(out, f"{E}1mbold{E}22m {E}1;36mcode{E}22;39m {E}1mend{E}22m")
+        self.assertEqual(out, f"{E}1mbold{E}22m {E}1;36mcode{E}22;38;5;246m {E}1mend{E}22m")
 
     def test_a_star_inside_a_word_or_alone_is_not_italic(self):
         self.assertEqual(plain("2 * 3 and a*b*c and snake_case_name"),
@@ -84,7 +84,7 @@ class Blocks(unittest.TestCase):
         self.assertEqual(plain(text, 20).split("\n"),
                          ["before", BAR + " " + long, BAR + "   **kept** `as is`", "after"])
         out = md.render("```\ncode\n```", 80, reset="own")
-        self.assertEqual(out, f"{E}2m{BAR} {E}22m{E}33mcode{E}39m")
+        self.assertEqual(out, f"{E}2m{BAR} {E}22m{E}33mcode{E}38;5;246m")
 
     def test_an_unclosed_fence_runs_to_the_end(self):
         self.assertEqual(plain("```\na\nb"), BAR + " a\n" + BAR + " b")
@@ -183,7 +183,7 @@ class Cut(unittest.TestCase):
             # no torn escape: every ESC starts a whole SGR
             self.assertEqual(strip(out).count(chr(27)), 0)
             opened = out.count(E + "1m") + out.count(E + "36m")
-            closed = out.count(E + "22m") + out.count(E + "39m")
+            closed = out.count(E + "22m") + out.count(E + "38;5;246m")
             self.assertEqual(opened, closed, out)
 
     def test_a_cut_keeps_characters_whole(self):

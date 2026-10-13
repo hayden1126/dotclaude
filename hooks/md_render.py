@@ -22,8 +22,9 @@ Control characters (C0 but tab and newline, DEL, C1) are dropped before any esca
 an escape sequence in the text never reaches the terminal. Every style opened on a line closes
 on that line, so lines can be dropped or kept whole without leaving a style open. reset="full"
 closes a style with 0m; reset="own" closes each with its own reset (22m bold and dim, 23m
-italic, 24m underline, 39m color) and never emits 0m: Claude Code draws a SessionStart
-systemMessage in gray, and 0m would drop that gray for the rest of the line (PLAN.md, spike A9).
+italic, 24m underline) and a color by going back to BANNER_FG, and never emits 0m: Claude Code
+draws a SessionStart systemMessage in that gray, and 0m or 39m (the terminal's default color)
+would drop the gray for the rest of the line (PLAN.md, spike A9).
 With color=False the markup is stripped and no escape is added; the layout is the same.
 
 tests/setup/test_md_render.py holds the cases.
@@ -41,6 +42,7 @@ BOX = {"top": (chr(0x250C), chr(0x252C), chr(0x2510)),
 STYLES = {"b": ("1", "22"), "d": ("2", "22"), "i": ("3", "23"), "u": ("4", "24"),
           "c": ("36", "39"), "y": ("33", "39"), "m": ("35", "39"), "g": ("32", "39")}
 COLORS = "cymg"
+BANNER_FG = "38;5;246"  # the gray Claude Code draws a SessionStart systemMessage in (spike A9)
 CONTROL = re.compile("[%s]" % re.escape("".join(map(chr, [*range(0, 9), *range(11, 32),
                                                           *range(127, 160)]))))
 SGR = re.compile(re.escape(CSI) + r"[0-9;]*m")
@@ -89,7 +91,12 @@ def _codes(style: str, reset: str) -> tuple[str, str]:
     on = CSI + ";".join(STYLES[c][0] for c in letters) + "m"
     if reset == "full":
         return on, CSI + "0m"
-    return on, CSI + ";".join(dict.fromkeys(STYLES[c][1] for c in letters)) + "m"
+    return on, CSI + ";".join(dict.fromkeys(_own(STYLES[c][1]) for c in letters)) + "m"
+
+
+def _own(off: str) -> str:
+    """A style's own reset for the banner: a color goes back to BANNER_FG, not to 39m."""
+    return BANNER_FG if off == "39" else off
 
 
 def paint(text: str, style: str, color: bool = True, reset: str = "full") -> str:
@@ -324,7 +331,7 @@ def _closer(open_codes: list[str], reset: str) -> str:
     if reset == "full":
         return CSI + "0m"
     resets = {on: off for on, off in STYLES.values()}
-    return CSI + ";".join(dict.fromkeys(resets[c] for c in open_codes)) + "m"
+    return CSI + ";".join(dict.fromkeys(_own(resets[c]) for c in open_codes)) + "m"
 
 
 def cut(line: str, nbytes: int, reset: str = "own") -> str:
@@ -337,8 +344,12 @@ def cut(line: str, nbytes: int, reset: str = "own") -> str:
     for tok in re.findall(re.escape(CSI) + r"[0-9;]*m|.", line, re.S):
         now = list(open_codes)
         if tok.startswith(CSI):
-            for code in tok[len(CSI):-1].split(";"):
-                code = code or "0"
+            codes = tok[len(CSI):-1].split(";")
+            while codes:
+                code = codes.pop(0) or "0"
+                if code == "38":   # an extended color (BANNER_FG): it ends the open color
+                    del codes[:2 if codes[:1] == ["5"] else 4]
+                    code = "39"
                 if code == "0":
                     now = []
                 elif code in resets:

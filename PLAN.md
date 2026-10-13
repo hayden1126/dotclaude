@@ -722,7 +722,8 @@ scale with the window:
   which puts the reply before a manual `/pass` one key away. `-p` sessions keep none, and
   `stops/` and `pass-last/` are pruned after 7 days.
   - Review round 2: the Stop payload can't tell a typed prompt from a turn a task notice
-    started, so the banner says "Last turn's replies", not "since your last prompt". A Stop
+    started, so the banner said "Last turn's replies", not "since your last prompt" (part 3
+    made it "Last turn (HH:MM)" with the prompt, when the transcript has one). A Stop
     with no `prompt_id` is its own group, and a cut inside the newest turn leaves a note.
 - Rejected: putting the reply in the resume prompt. That feeds the old session's beliefs back
   into the fresh context, which is what a clear avoids.
@@ -744,8 +745,11 @@ scale with the window:
   prompt (a task notice or an agent message started it) says `▌ (no prompt: a background
   notice)`, dim.
 - **Banner (spike A9):** a SessionStart `systemMessage` keeps ANSI color. Claude Code draws it
-  in gray (`38;5;246`), and a full reset (`0m`) drops that gray for the rest of the line, so the
-  banner closes each style with its own reset (`22m`, `23m`, `24m`, `39m`). It starts "Last turn
+  in gray (`38;5;246`), and a full reset (`0m`) or `39m` (the terminal's default color) drops
+  that gray for the rest of the line, so the banner closes bold, italic and underline with their
+  own resets (`22m`, `23m`, `24m`) and a color by going back to the gray (`md_render.BANNER_FG`;
+  seen live: the gray holds after a code span). Claude Code starts each line gray again, so a
+  miss lasts only to the line's end. It starts "Last turn
   (HH:MM)", then `You:` with the prompt's first line (about 100 characters, `…` past that),
   then the replies, rendered to the pane's width less Claude Code's 5-column indent. The 40
   lines and 4 KiB caps still hold, and they count the escapes too.
