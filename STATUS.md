@@ -72,15 +72,20 @@ stored here).
 - **dotclaude runs in lanes (since 2026-10-12).** The lead is the main checkout. Lanes live in
   `~/dotclaude-lanes/`, and each lane's state is in its record (`lane ls`, `lane asks`), not
   here. The config caps live lanes at 3, with locks `install` and `suite`.
-  - Merged: `autopass-now` as #90 and `attach-tabs` as #91 (2026-10-13), each installed by the
-    lead from the main checkout. `/autopass` is now an immediate mod command, dotclaude's first.
-  - Live: `narrow-excluded` (security step 1, effort xhigh), plus `lane-close` and `pass-busy`
-    (opened 2026-10-13, Hayden's call). `lane-close`: `lane done` ends the lane's own window
-    and the leftovers that carry a lane session's id, the install lock holds until the lead's
-    reinstall, setup.sh prunes links into lanes and says when sessions need a restart.
-    `pass-busy`: a `busy: tasks` refusal names the task, and the pass skill stops its own
-    finished Monitors first (capella-studio session e7cc7b9a's pass was refused twice by a
-    leftover Monitor). Merge order goes by readiness: the lead installs only the next to merge.
+  - Merged: `autopass-now` as #90, `attach-tabs` as #91 and `pass-busy` as #92 (2026-10-13), each
+    installed by the lead from the main checkout. `/autopass` is now an immediate mod command,
+    dotclaude's first. #92: an Artifact publish no longer blocks a plain pass (Claude Code
+    2.1.296 arms an artifact watch per publish, shown to hooks as a `monitor` task whose id the
+    model never sees; that is what refused capella-studio session e7cc7b9a's pass twice), and a
+    `busy: tasks` refusal names each blocker (`pass-respawn --tasks`).
+    - Follow-up from #92's review round 8: `hooks/pass_banner.py` `load` and `tmux/pass-last`
+      catch only `OSError`/`ValueError` on a pass-last record, so deeply nested JSON raises
+      `RecursionError` there.
+  - Live: `narrow-excluded` (security step 1, effort xhigh) and `lane-close` (opened
+    2026-10-13, Hayden's call): `lane done` ends the lane's own window and the leftovers that
+    carry a lane session's id, the install lock holds until the lead's reinstall, setup.sh
+    prunes links into lanes and says when sessions need a restart. Merge order goes by
+    readiness: the lead installs only the next to merge.
     Once pushed, a lane merges `origin/main` into its branch, since force pushes are denied.
   - Hayden split `narrow-excluded` (2026-10-13), after a safety classifier stopped three
     sessions while they read the sandbox code. Part 1, this lane's PR: the excluded-command
