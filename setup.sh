@@ -21,12 +21,16 @@ warn() { printf "\033[1;33m!!\033[0m  %s\n" "$*" >&2; }
 # Two runs at once would interleave their links, so a run first takes a flock on install.lock in
 # the state dir. While another holds it, the run says so and waits up to 5 minutes: a sandboxed
 # process can hold that lock too (a read-only fd is enough), and flock can't name the holder. A
-# timeout or any other flock error stops the run before it changes anything. Only where flock
-# or a writable state dir is missing (git-bash, macOS) does the run go on unlocked. The children
-# that may outlive the run (plugin installs, tool installers) get fd 9 closed, or they'd keep it.
+# timeout, a lock file it can't open (a dir, another user's, a read-only file system) or any
+# other flock error stops the run before it changes anything. Only where flock is missing or the
+# state dir can't be made (git-bash, macOS) does the run go on unlocked. The children that may
+# outlive the run (plugin installs, tool installers) get fd 9 closed, or they'd keep it.
 STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/dotclaude"
-if command -v flock >/dev/null 2>&1 && mkdir -p "$STATE_DIR" 2>/dev/null \
-    && { exec 9>"$STATE_DIR/install.lock"; } 2>/dev/null; then
+if command -v flock >/dev/null 2>&1 && mkdir -p "$STATE_DIR" 2>/dev/null; then
+  if ! { exec 9>"$STATE_DIR/install.lock"; }; then
+    warn "couldn't open $STATE_DIR/install.lock to lock it (see above); setup.sh stopped before changing anything"
+    exit 1
+  fi
   locked=0
   flock -n 9 || locked=$?
   if [[ $locked -eq 1 ]]; then  # flock's exit for a lock held elsewhere, and for a timeout

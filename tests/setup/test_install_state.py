@@ -126,6 +126,16 @@ class Machine(unittest.TestCase):
         return subprocess.run([sys.executable, INSTALL_STATE, *args], env=self.env,
                               capture_output=True, text=True, timeout=30)
 
+    def forge_admin(self, root):
+        """Point root's .git file at a fake admin dir outside this repo whose gitdir names root
+        back, as sandboxed Bash in that worktree can: git would read it as fake's worktree."""
+        admin = os.path.join(self.tmp, "fake", ".git", "worktrees", "A")
+        write(os.path.join(admin, "gitdir"), os.path.join(root, ".git") + "\n")
+        write(os.path.join(admin, "HEAD"), "ref: refs/heads/forged\n")
+        write(os.path.join(root, ".git"), f"gitdir: {admin}\n")
+        self.assertIsNotNone(install_state.linked_worktree(root))
+        return admin
+
 
 class Hold(Machine):
     def test_a_lane_install_holds_against_another_lane_and_changes_nothing(self):
@@ -232,29 +242,45 @@ class Hold(Machine):
         self.assertIsNone(install_state.linked_worktree(other))
         self.assertEqual(install_state.holders(self.a, self.env), [])
 
-    def forge_admin(self, root):
-        """Point root's .git file at a fake admin dir outside this repo whose gitdir names root
-        back, as sandboxed Bash in that worktree can: git would read it as fake's worktree."""
-        admin = os.path.join(self.tmp, "fake", ".git", "worktrees", "A")
-        write(os.path.join(admin, "gitdir"), os.path.join(root, ".git") + "\n")
-        write(os.path.join(admin, "HEAD"), "ref: refs/heads/forged\n")
-        write(os.path.join(root, ".git"), f"gitdir: {admin}\n")
-        self.assertIsNotNone(install_state.linked_worktree(root))
-        return admin
-
     def test_a_lane_naming_a_fake_admin_is_released_by_the_real_main(self):
         # Its .git file says its main is fake/, but this repo's own worktrees/ registers it.
         self.install(self.a)
+        write(os.path.join(self.a, "hooks", "lane-only.sh"))  # a hook main doesn't have
+        only = self.link(os.path.join(self.a, "hooks", "lane-only.sh"),
+                         os.path.join(self.claude, "hooks", "lane-only.sh"))
         self.forge_admin(self.a)
         (h,) = install_state.holders(self.main, self.env)
         self.assertEqual((h["root"], h["main"], h["branch"]), (self.a, self.main, "a"))
         r = self.cli("hold", self.main)
         self.assertEqual((r.returncode, r.stderr), (0, ""))
-        self.assertIn(f"releases the install held by {self.a} (branch a, 11 links)", r.stdout)
+        self.assertIn(f"releases the install held by {self.a} (branch a, 12 links)", r.stdout)
         # A sibling lane is still held, and told which main releases it.
         r = self.cli("hold", self.b)
         self.assertEqual(r.returncode, 3, r.stderr)
         self.assertIn(f"The lead's ./setup.sh in {self.main} releases it", r.stderr)
+        # Main's run relinks what it has, and its prune takes the lane-only link: the hold it
+        # said it releases is gone, for the sibling too.
+        self.install(self.main)
+        self.assertEqual(install_state.prune(self.main, self.env),
+                         [f"removed link {only} -> {self.a}/hooks/lane-only.sh"])
+        self.assertEqual(install_state.holders(self.b, self.env), [])
+        self.assertEqual(self.cli("hold", self.b).returncode, 0)
+
+    def test_a_planted_registration_of_another_projects_worktree_prunes_nothing_there(self):
+        # A lane can write this repo's .git/worktrees/: an entry naming proj2's worktree back
+        # registers it here, but it is no dotclaude checkout, so its links stay.
+        wt = self.other_repo("proj2", ("bin/x", "hooks/a.sh", "README.md"))
+        dsts = [self.link(os.path.join(wt, "bin", "x"), os.path.join(self.bin, "x")),
+                self.link(os.path.join(wt, "hooks", "a.sh"), os.path.join(self.claude, "hooks", "a.sh"))]
+        write(os.path.join(self.common, "worktrees", "planted", "gitdir"), os.path.join(wt, ".git") + "\n")
+        self.assertIn(wt, install_state.registered(self.common))
+        before = self.snapshot()
+        for run_from in (self.main, self.b):
+            with self.subTest(run_from):
+                self.assertEqual(install_state.holders(run_from, self.env), [])
+                self.assertEqual(install_state.prune(run_from, self.env), [])
+        self.assertEqual(self.snapshot(), before)
+        self.assertTrue(all(os.path.islink(d) for d in dsts))
 
     def test_a_lane_planting_its_own_registry_is_still_held(self):
         # b's .git file names a common dir inside b whose worktrees/ registers a: b's run reads
@@ -282,6 +308,23 @@ class Hold(Machine):
                 self.assertEqual(self.cli("hold", run_from).returncode, 0)
                 self.assertEqual(install_state.prune(run_from, self.env), [])
         self.assertEqual(self.snapshot(), before)
+
+    def test_a_nul_in_a_lanes_git_metadata_reads_as_no_worktree(self):
+        # realpath raises ValueError on a NUL: a lane writing one crashed holders and prune.
+        self.install(self.a)
+        admin = os.path.join(self.common, "worktrees", "a")
+        for path, text in ((os.path.join(self.a, ".git"), f"gitdir: {admin}\0x\n"),
+                           (os.path.join(admin, "gitdir"), f"{self.a}/.git\0\n")):
+            with self.subTest(path):
+                with open(path) as f:
+                    original = f.read()
+                write(path, text)
+                try:
+                    self.assertIsNone(install_state.linked_worktree(self.a))
+                    self.assertEqual(install_state.holders(self.b, self.env), [])
+                    self.assertEqual(self.cli("prune", self.main).returncode, 0)
+                finally:
+                    write(path, original)
 
     def test_holders_names_root_main_branch_and_each_link(self):
         self.install(self.a)
@@ -428,6 +471,10 @@ class ConfigRoot(unittest.TestCase):
             self.assertEqual(install_state.config_root(self.TEXT), '/x/a "q" b\\c')
             self.assertIsNone(install_state.config_root("setup = 'x'\n"))
 
+    def test_a_config_nested_past_the_recursion_limit_has_no_root(self):
+        # tomllib raises RecursionError there, not TOMLDecodeError.
+        self.assertIsNone(install_state.config_root("root = " + "[" * 100000))
+
 
 class LinksInto(Machine):
     def test_every_managed_dir_and_the_tmux_block_are_reported(self):
@@ -572,12 +619,280 @@ class Plugins(Machine):
                 self.assertEqual(self.change(), "plugins changed (autopass@skills-dir changed): "
                                                 + install_state.CHANGED)
 
+    def test_a_manifest_nested_past_the_recursion_limit_names_the_mod_by_its_dir(self):
+        # json raises RecursionError, not ValueError, on deep nesting: it read as a crash.
+        self.change()
+        write(os.path.join(self.src, "autopass", ".claude-plugin", "plugin.json"), "[" * 200000)
+        r = self.plugins_cli()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("(autopass added, autopass@skills-dir removed)", r.stdout)
+
     def test_the_cli_prints_the_line_once(self):
         self.assertEqual(self.cli("plugins").stdout, "")
         self.mod("newmod")
         r = self.cli("plugins")
         self.assertEqual((r.returncode, r.stdout.count("\n")), (0, 1))
         self.assertTrue(r.stdout.startswith("!!  plugins changed (newmod@skills-dir added): "))
+
+
+def sparse(path, size=2 << 30):
+    with open(path, "wb") as f:
+        f.truncate(size)
+
+
+def capped():
+    """A child's limits: 1 GiB of address space, so an endless read fails it, not the machine."""
+    resource.setrlimit(resource.RLIMIT_AS, (1 << 30, 1 << 30))
+
+
+# One install-state.py call in a child, by name: hold, prune and plugins through main() as the
+# CLI runs them, any other a function called with the args. Its last stdout line lists each file
+# it opened for reading (the audit hook sees builtin open and os.open alike).
+DRIVER = r"""
+import importlib.machinery, importlib.util, json, os, sys
+loader = importlib.machinery.SourceFileLoader("install_state", sys.argv[1])
+mod = importlib.util.module_from_spec(importlib.util.spec_from_loader(loader.name, loader))
+loader.exec_module(mod)
+opened = []
+def audit(event, args):
+    if event == "open" and isinstance(args[0], str) and args[2] & os.O_ACCMODE == os.O_RDONLY:
+        opened.append(args[0])
+sys.addaudithook(audit)
+name, args = sys.argv[2], sys.argv[3:]
+if name in ("hold", "prune", "plugins"):
+    code = mod.main(["install-state.py", name, *args])
+else:
+    code = 0
+    getattr(mod, name)(*args)
+sys.stdout.flush()
+print("\nOPENED " + json.dumps(opened))
+sys.exit(code)
+"""
+
+
+class BoundedReads(Machine):
+    """The backstop for read_bounded: every file install-state.py reads, swapped in turn for a
+    FIFO, a link to /dev/zero and a sparse 2 GiB file, and each command still returns at once.
+
+    Lane a holds the install; lane b holds one link too, names a forged admin whose commondir is
+    this repo's, and is no longer registered here (so its branch comes from the forged HEAD); a
+    planted entry in this repo's worktrees/ names a dir that isn't there."""
+
+    WAIT = 10  # seconds: a blocking open or an endless read never finishes
+
+    def setUp(self):
+        super().setUp()
+        j = os.path.join
+        self.install(self.a)
+        self.link(j(self.b, "hooks", "a.sh"), j(self.claude, "hooks", "c.sh"))
+        self.fake = self.forge_admin(self.b)
+        write(j(self.fake, "commondir"), self.common + "\n")
+        shutil.rmtree(j(self.common, "worktrees", "b"))
+        write(j(self.common, "worktrees", "planted", "gitdir"), j(self.tmp, "gone", ".git") + "\n")
+        write(j(self.home, ".tmux.conf"), f'{install_state.TMUX_START}\n'
+                                          f'source-file "{self.a}/tmux/claude.conf"\n'
+                                          f'{install_state.TMUX_END}\n')
+        src, self.mod = j(self.tmp, "src", "m"), j(self.claude, "skills", "m")  # read via the link
+        write(j(src, ".claude-plugin", "plugin.json"), '{"name": "m"}')
+        write(j(src, "index.ts"), "export {}\n")
+        self.link(src, self.mod)
+        write(j(self.claude, "plugins", "installed_plugins.json"),
+              json.dumps({"version": 2, "plugins": {"p@x": [{"version": "1", "gitCommitSha": "ab"}]}}))
+        self.assertEqual(self.cli("plugins").returncode, 0)  # the saved fingerprint
+        admin_a = j(self.common, "worktrees", "a")
+        self.targets = {
+            "a lane's .git file": j(self.a, ".git"),
+            "a forged lane's .git file (the run's own)": j(self.b, ".git"),
+            "<admin>/gitdir": j(self.fake, "gitdir"),
+            "<admin>/HEAD": j(self.fake, "HEAD"),
+            "<admin>/commondir": j(self.fake, "commondir"),
+            "<common>/worktrees/<x>/gitdir": j(admin_a, "gitdir"),
+            "<common>/worktrees/<x>/HEAD": j(admin_a, "HEAD"),
+            "<common>/worktrees/<x>/commondir": j(admin_a, "commondir"),
+            "a planted <common>/worktrees/<x>/gitdir": j(self.common, "worktrees", "planted", "gitdir"),
+            "a mod's plugin.json": j(self.mod, ".claude-plugin", "plugin.json"),
+            "installed_plugins.json": j(self.claude, "plugins", "installed_plugins.json"),
+            "~/.tmux.conf": j(self.home, ".tmux.conf"),
+            "the lanes config": self.config,
+            "the saved plugin fingerprint": j(self.state, "dotclaude", "install-plugins.json"),
+        }
+
+    def relink(self):
+        self.install(self.a)
+        self.link(os.path.join(self.b, "hooks", "a.sh"), os.path.join(self.claude, "hooks", "c.sh"))
+
+    def calls(self):
+        """The five, the first four side by side, then prune (it removes the links they read)."""
+        return ([("hold", self.b), ("holders", self.main), ("links_into", self.a), ("plugins",)],
+                [("prune", self.main)])
+
+    def run_calls(self, calls):
+        """call -> (exit code, stdout, stderr, files opened for reading), or None past WAIT."""
+        procs = [(c, subprocess.Popen([sys.executable, "-c", DRIVER, INSTALL_STATE, *c],
+                                      env=self.env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                      text=True, preexec_fn=capped)) for c in calls]
+        out = {}
+        for c, proc in procs:
+            try:
+                stdout, stderr = proc.communicate(timeout=self.WAIT)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.communicate()
+                out[c[0]] = None
+                continue
+            body, sep, opened = stdout.rpartition("\nOPENED ")  # none when the child crashed
+            out[c[0]] = ((proc.returncode, body, stderr, json.loads(opened)) if sep
+                         else (proc.returncode, stdout, stderr, []))
+        return out
+
+    def test_the_sweep_covers_every_file_the_module_reads(self):
+        # Every target is read by one of the five, and nothing else is but a mod's own files
+        # (tree_hash's chunked reader): a new read must join the targets, so the sweep covers it.
+        opened = set()
+        for batch in self.calls():
+            for name, result in self.run_calls(batch).items():
+                self.assertIsNotNone(result, f"{name} still ran after {self.WAIT} s")
+                code, _, stderr, files = result
+                self.assertIn(code, (0, install_state.HELD) if name == "hold" else (0,), stderr)
+                opened.update(f for f in files if install_state.inside(f, self.tmp))
+        self.assertEqual(sorted(set(self.targets.values()) - opened), [])
+        self.assertEqual(sorted(f for f in opened - set(self.targets.values())
+                                if not install_state.inside(f, self.mod)), [])
+
+    def test_a_fifo_a_device_link_or_a_huge_file_in_place_of_any_of_them_reads_promptly(self):
+        kinds = (("a FIFO", os.mkfifo),
+                 ("a link to /dev/zero", lambda p: os.symlink("/dev/zero", p)),
+                 ("a sparse 2 GiB file", sparse))
+        for what, path in self.targets.items():
+            with open(path, "rb") as f:
+                original = f.read()
+            for kind, make in kinds:
+                with self.subTest(f"{what} as {kind}"):
+                    os.unlink(path)
+                    make(path)
+                    try:
+                        results = {}
+                        for batch in self.calls():
+                            results.update(self.run_calls(batch))
+                    finally:
+                        if os.path.lexists(path):
+                            os.unlink(path)
+                        with open(path, "wb") as f:
+                            f.write(original)
+                        self.relink()
+                    for name, result in results.items():
+                        self.assertIsNotNone(result, f"{name} still ran after {self.WAIT} s")
+                        code, _, stderr, _ = result
+                        self.assertNotIn("Traceback", stderr, name)
+                        self.assertIn(code, (0, install_state.HELD) if name == "hold" else (0,),
+                                      f"{name}: {stderr}")
+
+
+class ReadBounded(unittest.TestCase):
+    """install-state.py's one reader for everything but a mod's entries."""
+
+    def setUp(self):
+        self.tmp = os.path.realpath(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+
+    def path(self, name, text=None):
+        p = os.path.join(self.tmp, name)
+        if text is not None:
+            write(p, text)
+        return p
+
+    def read_in_child(self, path, limit, follow=False):
+        """read_bounded(path, limit, follow) in a capped child killed after 10 s: a blocking open
+        fails the test instead of hanging the suite."""
+        code = ("import importlib.machinery, importlib.util, sys\n"
+                f"loader = importlib.machinery.SourceFileLoader('s', {INSTALL_STATE!r})\n"
+                "mod = importlib.util.module_from_spec(importlib.util.spec_from_loader('s', loader))\n"
+                "loader.exec_module(mod)\n"
+                f"print(repr(mod.read_bounded({path!r}, {limit}, {follow})))\n")
+        r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True,
+                           timeout=10, preexec_fn=capped)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return ast.literal_eval(r.stdout)
+
+    def test_a_regular_file_reads_to_its_limit_and_no_further(self):
+        p = self.path("f", "0123456789")
+        self.assertEqual(install_state.read_bounded(p, 10), b"0123456789")
+        self.assertIsNone(install_state.read_bounded(p, 9))
+        self.assertEqual(install_state.read_text(p, 10), "0123456789")
+
+    def test_the_read_stops_at_the_limit_whatever_the_size_says(self):
+        # A /proc file says it holds 0 bytes; read_bounded reads limit + 1 and gives up.
+        status = "/proc/self/status"
+        if not os.path.isfile(status):
+            self.skipTest("no /proc here")
+        self.assertIsNone(install_state.read_bounded(status, 16))
+        self.assertIn(b"Name:", install_state.read_bounded(status, 1 << 20))
+
+    def test_anything_but_a_regular_file_reads_as_absent(self):
+        target = self.path("target", "text\n")
+        fifo = self.path("fifo")
+        os.mkfifo(fifo)
+        cases = {"a FIFO": fifo, "a dir": self.tmp, "missing": self.path("missing"),
+                 "a link to /dev/zero": self.path("zero"), "a link to a FIFO": self.path("tofifo"),
+                 "a link to a regular file": self.path("tofile")}
+        os.symlink("/dev/zero", cases["a link to /dev/zero"])
+        os.symlink(fifo, cases["a link to a FIFO"])
+        os.symlink(target, cases["a link to a regular file"])
+        for what, path in cases.items():
+            with self.subTest(what):
+                self.assertIsNone(self.read_in_child(path, 4096))
+        if os.geteuid() != 0:
+            os.chmod(target, 0)
+            self.addCleanup(os.chmod, target, 0o644)
+            self.assertIsNone(install_state.read_bounded(target, 4096))
+
+    def test_follow_reads_through_a_link_to_a_regular_file_only(self):
+        # ~/.tmux.conf may be a dotfile manager's link; setup-tmux.sh writes through it.
+        target = self.path("target", "text\n")
+        fifo = self.path("fifo")
+        os.mkfifo(fifo)
+        for name, to, want in (("tofile", target, b"text\n"), ("tozero", "/dev/zero", None),
+                               ("tofifo", fifo, None)):
+            with self.subTest(name):
+                link = self.path(name)
+                os.symlink(to, link)
+                self.assertEqual(self.read_in_child(link, 4096, follow=True), want)
+
+    def test_text_and_json_read_bad_input_as_absent(self):
+        with open(self.path("latin"), "wb") as f:
+            f.write(b"\xff\xfe")
+        self.assertIsNone(install_state.read_text(self.path("latin"), 10))
+        for text in ("{not json", "[" * 200000):
+            with self.subTest(text[:10]):
+                self.assertIsNone(install_state.read_json(self.path("j", text), 1 << 20))
+        self.assertEqual(install_state.read_json(self.path("k", '{"a": 1}'), 100), {"a": 1})
+
+
+class OneReader(unittest.TestCase):
+    def test_no_read_escapes_the_helper(self):
+        # The grep for open( as a test: os.open only in read_bounded and entry_digest (tree_hash's
+        # chunked reader), builtin open only to write, and nothing that reads a file object.
+        with open(INSTALL_STATE) as f:
+            tree = ast.parse(f.read())
+        os_open, builtin_open, other = set(), [], []
+        for fn in tree.body:
+            for node in ast.walk(fn):
+                if not isinstance(node, ast.Call):
+                    continue
+                call = ast.unparse(node.func)
+                where = getattr(fn, "name", "<module>")
+                if call == "os.open":
+                    os_open.add(where)
+                elif call == "open":
+                    mode = node.args[1] if len(node.args) > 1 else None
+                    builtin_open.append((where, getattr(mode, "value", None)))
+                elif call.rsplit(".", 1)[-1] in ("fdopen", "load", "read_text", "read_bytes") \
+                        and call != "read_text":
+                    other.append((where, call))
+        self.assertEqual(os_open, {"read_bounded", "entry_digest"})
+        self.assertTrue(builtin_open, "plugin_change writes its fingerprint with open")
+        self.assertEqual([w for w, mode in builtin_open if not (isinstance(mode, str) and "w" in mode)], [])
+        self.assertEqual(other, [])
 
 
 class SetupHold(Machine):
@@ -686,6 +1001,31 @@ class SetupHold(Machine):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("releases the install held by", r.stdout)
         self.assertIn("past the hold", r.stdout)
+
+    def test_a_lock_file_that_cant_be_opened_stops_the_run_naming_it(self):
+        # flock and the state dir are there, so the run must lock: it used to go on unlocked.
+        if shutil.which("flock", path=self.env["PATH"]) is None:
+            self.skipTest("no flock here: setup.sh runs unlocked")
+        lock = self.lock_path()
+        state = os.path.dirname(lock)  # holds the lanes config already
+        self.addCleanup(os.chmod, state, 0o755)
+        for name, make in (("a dir", lambda: os.mkdir(lock)),
+                           ("read-only", lambda: (write(lock), os.chmod(lock, 0o444))),
+                           ("in a read-only state dir", lambda: os.chmod(state, 0o555))):
+            with self.subTest(name):
+                if name != "a dir" and os.geteuid() == 0:
+                    self.skipTest("root opens a read-only file for writing")
+                make()
+                try:
+                    r = self.head(self.b, helper=self.LOCK_RAN)
+                finally:
+                    os.chmod(state, 0o755)
+                    if os.path.lexists(lock):
+                        (os.rmdir if os.path.isdir(lock) else os.unlink)(lock)
+                self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+                self.assertIn(f"couldn't open {lock} to lock it", r.stderr)
+                self.assertIn("setup.sh stopped before changing anything", r.stderr)
+                self.assertNotIn("the hold check ran", r.stdout)
 
     def test_a_failing_helper_warns_and_goes_on(self):
         self.install(self.a)

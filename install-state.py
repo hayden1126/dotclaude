@@ -11,10 +11,21 @@ links into (managed_dirs) whose path inside its checkout matches one of setup.sh
 are never touched, however their links look (another project's bin/x matches bin/*). Nor is a
 worktree inside the run's own main checkout (Claude Code's agent worktrees) while it lives.
 
-A lane's sandboxed Bash can write in its worktree, so nothing here trusts what a lane's files
-say beyond the lane: a .git file naming a fake admin dir doesn't change which main releases it
-(the main's own .git/worktrees/ decides), and a FIFO or a link to a device in a mod dir is
-hashed by its type, never opened or read.
+A lane's sandboxed Bash can write in its worktree (its .git file too) and in its repo's
+.git/worktrees/, so nothing here trusts what a lane's files say beyond the lane: a .git file
+naming a fake admin dir doesn't change which main releases it (the main's own .git/worktrees/
+decides), and a FIFO or a link to a device in a mod dir is hashed by its type, never opened or
+read.
+
+The invariant: no file read here can block or read without bound. Every file this module reads
+goes through read_bounded (git's metadata: a .git file, an admin dir's gitdir, HEAD and
+commondir; a mod's plugin.json, installed_plugins.json, the saved fingerprint, the lanes config
+and ~/.tmux.conf), except a mod's entries, which entry_digest reads in chunks for tree_hash.
+read_bounded opens without following a link (~/.tmux.conf alone follows one) and without waiting
+on a FIFO, reads only a regular file, and stops at a per-file limit (GIT_READ, TEXT_READ,
+JSON_READ): a FIFO, a device, a link, a dir, a file past its limit or one it can't read all read
+as absent. tests/setup sweeps each of those files with a FIFO, a link to /dev/zero and a 2 GiB
+file, and fails on any other open() of a file to read.
 
 Usage:
   install-state.py hold REPO_DIR   exit 3, naming the holder on stderr, when a live lane other
@@ -56,10 +67,17 @@ AGENTS = os.path.join(".claude", "worktrees")  # Claude Code's agent worktrees, 
 MOD_SKIP = ("tests", "__pycache__")  # a mod's tests and bytecode don't change what a session loads
 MOD_READ = 64 << 20  # a mod file past this counts by its size and its first MOD_READ bytes
 CHUNK = 1 << 16
-# Opening a mod file never follows a link or waits on a FIFO (both are checked by lstat first,
-# and these close the race); O_BINARY keeps Windows from translating line ends.
-OPEN = os.O_RDONLY | sum(getattr(os, f, 0) for f in ("O_NOFOLLOW", "O_NONBLOCK", "O_CLOEXEC",
-                                                     "O_BINARY"))
+# read_bounded's limits, past which a file reads as absent. GIT_READ: one path or ref (PATH_MAX
+# plus "gitdir: " fits). TEXT_READ: a manifest, the lanes config, ~/.tmux.conf. JSON_READ:
+# installed_plugins.json and the saved fingerprint, which grow with each plugin.
+GIT_READ = 8 << 10
+TEXT_READ = 1 << 20
+JSON_READ = 16 << 20
+# Opening a file never follows a link or waits on a FIFO (both are checked by lstat first, and
+# these close the race); O_BINARY keeps Windows from translating line ends.
+NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
+OPEN = os.O_RDONLY | NOFOLLOW | sum(getattr(os, f, 0) for f in ("O_NONBLOCK", "O_CLOEXEC",
+                                                                "O_BINARY"))
 CHANGED = "sessions started before this install need /pass to load them"
 
 
@@ -87,6 +105,56 @@ class Run(NamedTuple):
     common: str | None   # that checkout's git common dir
     main: str            # its main checkout: the common dir's parent (me, outside git)
     lanes: str | None    # its repo's lanes root, from the lanes config
+    registered: dict     # root -> admin dir, for each worktree common's worktrees/ registers
+
+
+def read_bounded(path: str, limit: int, follow: bool = False) -> bytes | None:
+    """path's bytes when it is a regular file of at most limit bytes, else None (missing, a FIFO,
+    a device, a dir, a link unless follow, past limit, unreadable). It can't block or read
+    without bound: lstat (stat with follow) turns away all but a regular file before the open,
+    the open neither follows a link nor waits on a FIFO swapped in since, fstat checks again, and
+    the read stops at limit + 1 bytes whatever the size says (a /proc file says 0)."""
+    try:
+        if not stat.S_ISREG(os.stat(path, follow_symlinks=follow).st_mode):
+            return None
+        fd = os.open(path, OPEN & ~NOFOLLOW if follow else OPEN)
+    except (OSError, ValueError):  # ValueError: a NUL in the path
+        return None
+    chunks, left = [], limit + 1
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode) or st.st_size > limit:
+            return None
+        while left > 0:
+            chunk = os.read(fd, min(CHUNK, left))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            left -= len(chunk)
+    except OSError:
+        return None
+    finally:
+        os.close(fd)
+    return b"".join(chunks) if left > 0 else None
+
+
+def read_text(path: str, limit: int, follow: bool = False) -> str | None:
+    """read_bounded's bytes as UTF-8; None for those it reads as absent and for other bytes."""
+    data = read_bounded(path, limit, follow)
+    try:
+        return None if data is None else data.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+
+
+def read_json(path: str, limit: int):
+    """The JSON value in path, None when read_text reads it as absent or it isn't JSON (nested
+    past the recursion limit included: json raises RecursionError there, not ValueError)."""
+    text = read_text(path, limit)
+    try:
+        return None if text is None else json.loads(text)
+    except (ValueError, RecursionError):
+        return None
 
 
 def places(env=None) -> Places:
@@ -184,17 +252,24 @@ def checkout_of(path: str) -> str | None:
         d = parent
 
 
+def git_line(path: str) -> str | None:
+    """One of git's metadata files (a .git file, an admin dir's gitdir, HEAD or commondir),
+    stripped; None when read_text reads it as absent or it holds a NUL (no path can, and
+    realpath raises on one)."""
+    text = read_text(path, GIT_READ)
+    return None if text is None or "\0" in text else text.strip()
+
+
+def git_path(admin: str, name: str) -> str | None:
+    """The path admin/name holds (a gitdir or commondir file), resolved against admin."""
+    line = git_line(os.path.join(admin, name))
+    return None if line is None else os.path.realpath(os.path.join(admin, line))
+
+
 def gitdir_file(root: str) -> str | None:
     """The dir root/.git names when it is a file (a linked worktree's, a submodule's), resolved."""
-    dotgit = os.path.join(root, ".git")
-    try:
-        if not stat.S_ISREG(os.lstat(dotgit).st_mode):
-            return None
-        with open(dotgit, encoding="utf-8") as f:
-            line = f.read().strip()
-    except (OSError, ValueError):  # ValueError: not UTF-8
-        return None
-    if not line.startswith("gitdir:"):
+    line = git_line(os.path.join(root, ".git"))
+    if line is None or not line.startswith("gitdir:"):
         return None
     return os.path.realpath(os.path.join(root, line[len("gitdir:"):].strip()))
 
@@ -208,10 +283,8 @@ def linked_worktree(root: str) -> Worktree | None:
     admin = gitdir_file(root)
     if admin is None or os.path.basename(os.path.dirname(admin)) != "worktrees":
         return None
-    try:
-        with open(os.path.join(admin, "gitdir"), encoding="utf-8") as f:
-            back = os.path.realpath(os.path.join(admin, f.read().strip()))
-    except (OSError, ValueError):
+    back = git_path(admin, "gitdir")
+    if back is None:
         return None
     common = os.path.dirname(os.path.dirname(admin))
     main = os.path.dirname(common)
@@ -238,12 +311,8 @@ def registered(common: str | None) -> dict[str, str]:
         names = []
     for name in names:
         admin = os.path.join(top, name)
-        try:
-            with open(os.path.join(admin, "gitdir"), encoding="utf-8") as f:
-                back = os.path.realpath(os.path.join(admin, f.read().strip()))
-        except (OSError, ValueError):
-            continue
-        if os.path.basename(back) == ".git":
+        back = git_path(admin, "gitdir")
+        if back is not None and os.path.basename(back) == ".git":
             out.setdefault(os.path.dirname(back), admin)
     return out
 
@@ -251,22 +320,34 @@ def registered(common: str | None) -> dict[str, str]:
 def run_at(repo_dir: str, p: Places) -> Run:
     me = os.path.realpath(repo_dir)
     common = common_dir(me)
-    return Run(me, common, os.path.dirname(common) if common else me, lanes_root(common, p))
+    return Run(me, common, os.path.dirname(common) if common else me, lanes_root(common, p),
+               registered(common))
 
 
 def branch(wt: Worktree) -> str:
-    try:
-        with open(os.path.join(wt.admin, "HEAD"), encoding="utf-8") as f:
-            head = f.read().strip()
-    except (OSError, ValueError):
+    head = git_line(os.path.join(wt.admin, "HEAD"))
+    if head is None:
         return "?"
     ref = "ref: refs/heads/"
     return head[len(ref):] if head.startswith(ref) else f"detached at {head[:12]}"
 
 
+def dotclaude(root: str) -> bool:
+    """root is a dotclaude checkout: both DOTCLAUDE files sit at it."""
+    return all(os.path.isfile(os.path.join(root, f)) for f in DOTCLAUDE)
+
+
 def lane_of(wt: Worktree, common: str | None) -> bool:
-    """wt is a lane of the repo whose git common dir is common."""
+    """wt is a lane of the repo whose git common dir is common, by its own .git file."""
     return common is not None and common_dir(wt.root) == common
+
+
+def ours(wt: Worktree, run: Run) -> bool:
+    """wt is a lane of run's repo, for the prune: its own .git file says so (lane_of), or run's
+    .git/worktrees/ registers it (as holders reads it, so the main whose run releases a lane
+    whose .git file names a fake admin also prunes its links) and it is a dotclaude checkout (so
+    an entry planted there naming another project's worktree prunes nothing in it)."""
+    return lane_of(wt, run.common) or (wt.root in run.registered and dotclaude(wt.root))
 
 
 def holders(repo_dir: str, env=None) -> list[dict]:
@@ -279,17 +360,15 @@ def holders(repo_dir: str, env=None) -> list[dict]:
     file names."""
     p = places(env)
     run = run_at(repo_dir, p)
-    ours = registered(run.common)
     found = {}
     for link in links(p):
         wt = worktree_at(link.target)
         if (wt is None or wt.root == run.me or inside(wt.root, run.main)
                 or not managed(os.path.relpath(link.target, wt.root))
-                or not (lane_of(wt, run.common)
-                        or all(os.path.isfile(os.path.join(wt.root, f)) for f in DOTCLAUDE))):
+                or not (lane_of(wt, run.common) or dotclaude(wt.root))):
             continue
-        if wt.root in ours:
-            wt = Worktree(wt.root, run.main, ours[wt.root])
+        if wt.root in run.registered:
+            wt = Worktree(wt.root, run.main, run.registered[wt.root])
         found.setdefault(wt, []).append(show(link, p))
     return [{"root": wt.root, "main": wt.main, "branch": branch(wt), "links": shown}
             for wt, shown in sorted(found.items())]
@@ -300,7 +379,14 @@ def hold(repo_dir: str, env=None) -> tuple[list[dict], list[dict]]:
     holder's main checkout relinks everything, so it releases that holder: one whose .git file
     names it, or any its own .git/worktrees/ registers. Only a main checkout (a real .git dir)
     releases: a lane whose own .git file names a common dir it planted would otherwise read its
-    run as main and release a sibling."""
+    run as main and release a sibling.
+
+    A known limit, accepted: a lane can write this repo's .git/worktrees/, so an entry planted
+    there naming another clone's dotclaude lane makes this main's run release that lane's hold
+    (and its prune remove that lane's managed links). Trusting only the holder's own .git file
+    instead would let a lane name a fake admin there and hold this main off for good. The effect
+    equals an install from this main, which the lead may run anyway, and nothing outside a
+    dotclaude checkout is ever pruned."""
     me = os.path.realpath(repo_dir)
     dotgit = os.path.join(me, ".git")
     main = os.path.isdir(dotgit) and not os.path.islink(dotgit)
@@ -311,12 +397,11 @@ def hold(repo_dir: str, env=None) -> tuple[list[dict], list[dict]]:
 
 
 def tmux_block(path: str) -> list[str]:
-    """The lines inside ~/.tmux.conf's setup-tmux.sh block (to its end marker, or the file's)."""
-    try:
-        with open(path, encoding="utf-8") as f:
-            lines = f.read().splitlines()
-    except (OSError, ValueError):
-        return []
+    """The lines inside ~/.tmux.conf's setup-tmux.sh block (to its end marker, or the file's).
+    It may be a dotfile manager's link (setup-tmux.sh writes through one), so this read alone
+    follows a link: still only to a regular file within TEXT_READ."""
+    text = read_text(path, TEXT_READ, follow=True)
+    lines = text.splitlines() if text is not None else []
     if TMUX_START not in lines:
         return []
     block = lines[lines.index(TMUX_START) + 1:]
@@ -339,7 +424,7 @@ def links_into(path: str, env=None) -> list[str]:
             words = shlex.split(line, comments=True)
         except ValueError:  # unbalanced quotes
             words = line.split()
-        if any(os.path.isabs(w) and inside(pointed(w), root) for w in words):
+        if any(os.path.isabs(w) and "\0" not in w and inside(pointed(w), root) for w in words):
             out.append(f"~/.tmux.conf: {line.strip()} (setup-tmux.sh)")
     return out
 
@@ -355,12 +440,12 @@ def common_dir(checkout: str) -> str | None:
     if gitdir is None:
         return None
     try:
-        with open(os.path.join(gitdir, "commondir"), encoding="utf-8") as f:
-            return os.path.realpath(os.path.join(gitdir, f.read().strip()))
-    except FileNotFoundError:
+        os.lstat(os.path.join(gitdir, "commondir"))
+    except FileNotFoundError:  # no commondir: gitdir is the common dir
         return gitdir
-    except (OSError, ValueError):
+    except OSError:
         return None
+    return git_path(gitdir, "commondir")
 
 
 def config_root(text: str) -> str | None:
@@ -376,7 +461,7 @@ def config_root(text: str) -> str | None:
                       m.group(1))
     try:
         root = tomllib.loads(text).get("root")
-    except tomllib.TOMLDecodeError:
+    except (tomllib.TOMLDecodeError, RecursionError):  # RecursionError: nested past the limit
         return None
     return root if isinstance(root, str) else None
 
@@ -388,21 +473,18 @@ def lanes_root(common: str | None, p: Places) -> str | None:
         return None
     key = hashlib.sha256(common.encode()).hexdigest()[:12]
     name = f"{os.path.basename(os.path.dirname(common))}-{key}.toml"
-    try:
-        with open(os.path.join(p.state, "lanes", name), encoding="utf-8") as f:
-            root = config_root(f.read())
-    except (OSError, ValueError):
-        return None
-    return os.path.realpath(root) if root and os.path.isabs(root) else None
+    text = read_text(os.path.join(p.state, "lanes", name), TEXT_READ)
+    root = config_root(text) if text is not None else None
+    return os.path.realpath(root) if root and os.path.isabs(root) and "\0" not in root else None
 
 
 def stale(link: Link, run: Run) -> bool:
-    """A managed link this run should remove: into a live lane of this repo (a linked worktree
-    sharing run.common) other than run.me and outside run.main, or dangling under an agent
-    worktree in run.main, under run.me or under a lane in the lanes root. A link into another
-    repo's worktree is never stale here, dotclaude-shaped or not."""
+    """A managed link this run should remove: into a live lane of this repo (see ours) other
+    than run.me and outside run.main, or dangling under an agent worktree in run.main, under
+    run.me or under a lane in the lanes root. A link into another repo's worktree is never stale
+    here, unless it is a dotclaude checkout run's own .git/worktrees/ registers (hold's limit)."""
     wt = worktree_at(link.target)
-    if wt and wt.root != run.me and not inside(wt.root, run.main) and lane_of(wt, run.common):
+    if wt and wt.root != run.me and not inside(wt.root, run.main) and ours(wt, run):
         rel = os.path.relpath(link.target, wt.root)
     elif os.path.exists(link.path):
         return False
@@ -489,11 +571,7 @@ def tree_hash(d: str) -> str:
 
 def mod_name(d: str, manifest: str) -> str:
     """The manifest's name plus @skills-dir, as Claude Code names a skills-dir mod; else the dir's."""
-    try:
-        with open(manifest, encoding="utf-8") as f:
-            data = json.load(f)
-    except (OSError, ValueError):
-        data = None
+    data = read_json(manifest, TEXT_READ)
     name = data.get("name") if isinstance(data, dict) else None
     return f"{name}@skills-dir" if isinstance(name, str) and name else os.path.basename(d)
 
@@ -513,11 +591,7 @@ def fingerprint(p: Places) -> dict:
         manifest = os.path.join(d, ".claude-plugin", "plugin.json")
         if os.path.isfile(manifest):
             out[mod_name(d, manifest)] = tree_hash(d)
-    try:
-        with open(os.path.join(p.claude, "plugins", "installed_plugins.json"), encoding="utf-8") as f:
-            data = json.load(f)
-    except (OSError, ValueError):
-        data = None
+    data = read_json(os.path.join(p.claude, "plugins", "installed_plugins.json"), JSON_READ)
     plugins = data.get("plugins") if isinstance(data, dict) else None
     for name, entries in (plugins.items() if isinstance(plugins, dict) else ()):
         entries = entries if isinstance(entries, list) else [entries]
@@ -533,11 +607,7 @@ def plugin_change(env=None) -> str | None:
     p = places(env)
     path = os.path.join(p.state, "install-plugins.json")
     new = fingerprint(p)
-    try:
-        with open(path, encoding="utf-8") as f:
-            old = json.load(f)
-    except (OSError, ValueError):
-        old = None
+    old = read_json(path, JSON_READ)
     os.makedirs(p.state, exist_ok=True)
     tmp = f"{path}.{os.getpid()}.tmp"
     with open(tmp, "w", encoding="utf-8") as f:
