@@ -164,7 +164,7 @@ sees it.
 | `docs/blind-overwrite-brief.md` | Why the overwrite guard and `memory-git.sh` exist: two incidents (a blind overwrite of a memory file, a job's state inferred instead of read), the experiments and the design calls | reference |
 | `docs/chrome-devtools-wsl.md` | WSL2-only: how to make `chrome-devtools-mcp` work (Strategy A headless Linux Chrome, plus B to attach to your Windows Chrome) | reference |
 | `chrome-debug.ps1` | Windows launcher for Strategy B (Chrome with a remote-debugging port) | run on Windows when needed |
-| `tmux/` | The tmux side of the indicator: `claude.conf` (titles, status bar, the ◐ busy and ✳ waiting glyphs), the optional `base.conf` (mouse, splits, the Ctrl-b Enter menu), `cheatsheet.txt`, `tmux-claude-status`, the backstop the status bar runs (it also maps background sessions to their tab), `claude-restore`, which reopens `main`'s Claude tabs after the tmux server dies, `claude-saved`, which stars and shelves a tab's chat (the tab's right-click menu, Ctrl-b S, or Ctrl-b Enter), and `pass-last`, which shows what Claude said before a `/pass` (Ctrl-b Up, or either menu) | sourced and linked by `setup-tmux.sh` |
+| `tmux/` | The tmux side of the indicator: `claude.conf` (titles, status bar, the ◐ busy and ✳ waiting glyphs), the optional `base.conf` (mouse, splits, the Ctrl-b Enter menu), `cheatsheet.txt`, `tmux-claude-status`, the backstop the status bar runs (it also maps background sessions to their tab and has `claude-saved track` record attach tabs for `claude-restore`), `claude-restore`, which reopens `main`'s Claude tabs after the tmux server dies, `claude-saved`, which stars and shelves a tab's chat (the tab's right-click menu, Ctrl-b S, or Ctrl-b Enter), and `pass-last`, which shows what Claude said before a `/pass` (Ctrl-b Up, or either menu) | sourced and linked by `setup-tmux.sh` |
 | `setup-tmux.sh` | Opt-in tmux installer: links `tmux-claude-status`, `claude-restore`, `claude-saved` and `pass-last` into `~/.local/bin` and keeps a marked `source-file` block in `~/.tmux.conf` (`--base` adds `base.conf` and the cheatsheet, `--no-base` drops them, and a run with neither keeps what the block has) | run once per machine that uses tmux; not called by `setup.sh` |
 | `setup-chrome-wsl.sh` | Opt-in WSL2 installer: installs Chrome for Testing and registers the user-scoped `chrome-devtools` override | run once on WSL2; not called by `setup.sh` |
 | `setup.sh` | The installer | run once per machine |
@@ -330,8 +330,12 @@ need nothing extra.
   now. If tmux fails to open a window, the entry stays for the next run. Each decision is a line in `$XDG_STATE_HOME/dotclaude/restore.log`, and
   the last restore's files stay in `open-sessions/restored/`. Known limit: a window killed just
   before tmux dies with nothing else running is in that final 120 s, so it comes back. An
-  extra tab is cheap; losing every tab is what this exists to prevent. Background (`--bg`)
-  sessions are not restored.
+  extra tab is cheap; losing every tab is what this exists to prevent. A tab attached to a
+  background session (`claude attach <job>`, or a `claude --resume` of a chat running in the
+  background) gets no hook file, so `tmux-claude-status` has `claude-saved track` write one,
+  marked `attach`. `tmux kill-server` leaves background sessions running, so such a tab comes back
+  attached to its session; after a reboot it resumes the chat. Background sessions with no tab
+  are not restored.
 - **Star and Shelve keep a chat after its tab closes**: right-click a Claude tab for **Star** (a
   bookmark: the tab shows ★, and the chat stays saved until unstarred, however the tab closes)
   or **Shelve** (save the chat and close the tab now; it won't come back on a tmux restore).
@@ -345,6 +349,13 @@ need nothing extra.
   terminal ends in "+N more" and shortens titles. `tmux/claude-saved` keeps one file per chat in
   `$XDG_STATE_HOME/dotclaude/saved/` and finds a tab's chat from Claude's own
   `~/.claude/sessions/` files, falling back to the registry; `claude-saved list` prints the list.
+  A tab attached to a background session (`claude attach <job>`) works the same: `claude-saved`
+  reads the attach client's arguments from `/proc` and finds the session that job names. A tab
+  opened from agent view, or by `claude attach <part of a name>`, names no session it can trust,
+  so it isn't recognized. Shelving an attach tab also stops that session
+  (`claude stop`), since closing the tab alone would leave it running unseen; reopening a chat
+  that still runs in the background attaches to it. A `/clear` in such a tab doesn't move its
+  star: the session's hooks can't see the tab.
 - **PreToolUse(`Write`): `overwrite-guard.sh`** (in this repo). The Write tool's own "File has not
   been read yet" check last fired in Claude Code 2.1.285, and on 2.1.289 a Write of `PLACEHOLDER`
   replaced an unread 6 KB memory file (`docs/blind-overwrite-brief.md`). The guard denies a Write

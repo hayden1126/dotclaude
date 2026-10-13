@@ -27,6 +27,15 @@
 # transcript yet (fresh from startup or /clear: a session writes none until its first input)
 # reopens as a plain `claude`.
 #
+# An attach tab (a `claude attach <job>` client showing a background session) has an entry
+# from `claude-saved track` instead, marked `attach`. Its session outlives a `tmux kill-server`
+# (the daemon is detached), so one still running in the background is what to reopen, not a
+# skip: `claude --resume <id>` attaches to it, transcript or not. One running in a tab is
+# skipped as above; after a reboot it resumes like any other. Such an entry never gets an end
+# mark (a background session's hooks run unattended, so session-registry.sh skips them):
+# track deletes it once the tab closes, so one closed while no tmux client was attached, with
+# no status bar to run track, can come back.
+#
 # Each entry moves to open-sessions/restored/ just before its window opens (still before
 # `claude --resume` runs, so the resumed session's fresh entry is never swept up), and back if
 # tmux fails; a skipped one moves there too. A run that has candidates first empties restored/,
@@ -121,6 +130,7 @@ def valid(e):
     return (isinstance(e, dict)
             and all(text(e.get(k)) for k in ("socket", "session_id", "cwd", "pane"))
             and (e.get("transcript_path") in (None, "") or text(e.get("transcript_path")))
+            and e.get("attach") in (None, True, False)
             and isint(e.get("server_start")) and isint(e.get("server_pid"))
             and (e.get("window_index") is None or isint(e.get("window_index")))
             and all(when(e.get(k)) for k in ("ts", "ended_other_at")))
@@ -144,10 +154,11 @@ def server(e):
 if not live_mode:
     print("yes" if cands else "")
     sys.exit(0)
-live = set()
+live, background = set(), set()
 try:
-    agents = json.load(sys.stdin)
-    live = {a.get("sessionId") for a in agents if isinstance(a, dict) and a.get("pid")}
+    agents = [a for a in json.load(sys.stdin) if isinstance(a, dict) and a.get("pid")]
+    live = {a.get("sessionId") for a in agents}
+    background = {a.get("sessionId") for a in agents if a.get("kind") == "background"}
 except Exception:
     pass  # claude agents failed: restore anyway; a duplicate tab is cheaper than none
 
@@ -187,12 +198,14 @@ for name, e in cands:
     ended = num(e.get("ended_other_at"))
     key = server(e) + (e.get("pane"),)
     end = last.get(server(e), 0)
+    # An attach tab whose session still runs in the background: the resume attaches to it.
+    attaching = e.get("attach") is True and sid in background
     if not isinstance(sid, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{7,127}", sid):
         why = "skip", "not a plain session id"
     elif key in newest and newest[key][0] != name:
         why = "skip", "an older session in pane %s (newer: %s)" % (
             e.get("pane"), str(newest[key][1].get("session_id"))[:8])
-    elif sid in live:
+    elif sid in live and not attaching:
         why = "skip", "already running"
     elif not isinstance(cwd, str) or not cwd or not os.path.isdir(cwd):
         why = "skip", "directory gone"
@@ -202,6 +215,8 @@ for name, e in cands:
         why = "skip", "directory name has a control character"
     elif ended is not None and ended < end - 120:
         why = "skip", "window closed %ds before its server ended" % (end - ended)
+    elif attaching:
+        why = "restore", "attach tab, its session still runs in the background"
     elif mtime(e) is None:
         # A session has no transcript until its first input (probed): a tab fresh from startup
         # or /clear. Nothing to resume, so the tab reopens as a new session in its directory.

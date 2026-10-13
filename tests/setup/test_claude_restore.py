@@ -79,9 +79,10 @@ class Restore(unittest.TestCase):
 
     def entry(self, n, window, pane=None, age=600, ended=None, transcript=True, cwd=True,
               transcript_age=None, socket=SOCKET, server_start=OLD_START, server_pid=OLD_PID,
-              dirname=None, died=None):
+              dirname=None, died=None, attach=False):
         """Write an entry for session n, its times `age`/`ended` seconds before its server
-        died (`died`, default the old server's), in a real cwd."""
+        died (`died`, default the old server's), in a real cwd. attach: claude-saved track's
+        entry for a tab attached to background session n."""
         died = self.died if died is None else died
         path = os.path.join(self.tmp, "code", dirname or f"repo{n}")
         if cwd:
@@ -97,6 +98,8 @@ class Restore(unittest.TestCase):
              "server_start": server_start, "server_pid": server_pid, "ts": died - age}
         if ended is not None:
             e["ended_other_at"] = died - ended
+        if attach:
+            e |= {"attach": True, "job_id": sid(n)[:8]}
         with open(os.path.join(self.reg, sid(n) + ".json"), "w") as f:
             json.dump(e, f)
         return path
@@ -259,6 +262,35 @@ class Restore(unittest.TestCase):
             {"sessionId": sid(2), "kind": "interactive"}])  # no pid: not running
         self.run_restore()
         self.assertEqual(self.resumed(), [(b, sid(2))])
+
+    def agents(self, *rows):
+        self.env["STUB_AGENTS"] = json.dumps([{"sessionId": sid(n), "pid": 4000 + n, "kind": kind}
+                                              for n, kind in rows])
+
+    def test_an_attach_tab_comes_back_to_its_background_session(self):
+        # tmux kill-server leaves the daemon's sessions running: `claude --resume` of one
+        # attaches to it, even before its first input (no transcript yet, after a /clear).
+        a = self.entry(1, window=1, attach=True)
+        b = self.entry(2, window=2, attach=True, transcript=False)
+        self.agents((1, "background"), (2, "background"))
+        self.run_restore()
+        self.assertEqual(self.resumed(), [(a, sid(1)), (b, sid(2))])
+        self.assertTrue(all("background" in line for line in self.restore_log()))
+
+    def test_an_attach_tab_after_a_reboot_resumes_its_chat(self):
+        a = self.entry(1, window=1, attach=True)
+        self.run_restore()
+        self.assertEqual(self.resumed(), [(a, sid(1))])
+
+    def test_a_live_session_still_blocks_what_no_attach_tab_showed(self):
+        # A normal tab's kill ends its chat, so one live in the background now was started
+        # there later: not this tab's to reopen. Nor an attach tab whose chat runs in a tab.
+        self.entry(1, window=1)
+        self.entry(2, window=2, attach=True)
+        self.agents((1, "background"), (2, "interactive"))
+        self.run_restore()
+        self.assertEqual(self.resumed(), [])
+        self.assertEqual(sum("already running" in line for line in self.restore_log()), 2)
 
     def test_a_failing_agents_call_does_not_stop_the_restore(self):
         a = self.entry(1, window=1)

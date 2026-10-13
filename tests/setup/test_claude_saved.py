@@ -9,6 +9,7 @@ each call's argv, one argument per field; os.getpid() stands in for a live claud
 import json
 import os
 import shutil
+import signal
 import subprocess
 import tempfile
 import time
@@ -45,6 +46,12 @@ esac
 exit 0
 """
 
+# `claude stop <job>` (Shelve in an attach tab): logs its argv like the tmux stub.
+CLAUDE_STUB = r"""#!/usr/bin/env bash
+{ printf 'claude'; printf '\x1f%s' "$@"; printf '\n'; } >> "$STUB_LOG"
+exit "${STUB_CLAUDE_RC:-0}"
+"""
+
 SOCKET = "/tmp/tmux-1000/default"
 START = 1_791_000_000
 PID = 222
@@ -66,6 +73,9 @@ class Saved(unittest.TestCase):
         with open(os.path.join(stubs, "tmux"), "w") as f:
             f.write(STUB)
         os.chmod(os.path.join(stubs, "tmux"), 0o755)
+        with open(os.path.join(stubs, "claude"), "w") as f:
+            f.write(CLAUDE_STUB)
+        os.chmod(os.path.join(stubs, "claude"), 0o755)
         self.home = os.path.join(self.tmp, "home")
         self.sessions = os.path.join(self.home, ".claude", "sessions")
         os.makedirs(self.sessions)
@@ -87,6 +97,7 @@ class Saved(unittest.TestCase):
                         STUB_PANE_PID=str(os.getppid()))
         self.ppid = os.getppid()
         self.n = 0
+        self.clients = []
 
     # --- fixtures -----------------------------------------------------------------------
 
@@ -113,14 +124,55 @@ class Saved(unittest.TestCase):
                        "tmux": f"main:@1.{pane}" if tmux is None else tmux,
                        "updatedAt": self.n}, f)
 
-    def registered(self, n, pane, server_start=START, ended=None, ts=None):
+    def registered(self, n, pane, server_start=START, ended=None, ts=None, attach=False):
         e = {"session_id": sid(n), "cwd": self.cwd(n), "transcript_path": "", "pane": pane,
              "window_index": 1, "socket": SOCKET, "server_start": server_start,
              "server_pid": PID, "ts": ts or time.time()}
         if ended:
             e["ended_other_at"] = ended
+        if attach:
+            e |= {"attach": True, "job_id": sid(n)[:8]}
         with open(os.path.join(self.reg, sid(n) + ".json"), "w") as f:
             json.dump(e, f)
+
+    def background(self, n, job=None, name=None, pid=None, proc_start=None):
+        """Claude's sessions file for background session n, hosted by the daemon: no tmux
+        field, a jobId (what `claude attach` takes) and a name."""
+        self.n += 1
+        e = {"pid": os.getpid() if pid is None else pid, "sessionId": sid(n),
+             "cwd": self.cwd(n), "kind": "bg", "status": "idle",
+             "jobId": sid(n)[:8] if job is None else job,
+             "name": f"[repo{n}] Job number {n}" if name is None else name, "updatedAt": self.n}
+        if proc_start is not None:
+            e["procStart"] = proc_start
+        with open(os.path.join(self.sessions, f"{self.n}.json"), "w") as f:
+            json.dump(e, f)
+
+    def client(self, *args, argv0="claude"):
+        """A Claude client process under the pane's process (this test's parent), its argv
+        exactly argv0 + args as /proc shows a real `claude attach <job>`: bash runs the script
+        file named by args[0] from its cwd, and sleeps."""
+        d = os.path.join(self.tmp, "client")
+        os.makedirs(d, exist_ok=True)
+        with open(os.path.join(d, args[0]), "w") as f:
+            f.write("sleep 30\n:\n")
+        p = subprocess.Popen([argv0, *args], executable="/bin/bash", cwd=d,
+                             start_new_session=True, stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL)
+        self.clients = getattr(self, "clients", []) + [p.pid]
+        self.last_client = p.pid
+
+        def stop():
+            try:
+                os.killpg(p.pid, signal.SIGKILL)
+            except OSError:
+                pass
+            p.wait()
+        self.addCleanup(stop)
+        return stop
+
+    def first_client(self):
+        return self.clients[0]
 
     def put(self, n, starred=False, shelved=False, pane="%4", age=60, title=None, cwd=None):
         os.makedirs(self.store, exist_ok=True)
@@ -427,6 +479,7 @@ class Saved(unittest.TestCase):
         self.assertFalse(os.path.exists(os.path.join(self.reg, sid(1) + ".json")))
         self.assertEqual(self.calls("tmux", "kill-window"), [["tmux", "kill-window", "-t", "%4"]])
         self.assertEqual(self.calls("tmux", "kill-pane"), [])
+        self.assertEqual(self.calls("claude"), [])   # its kill ends the chat
 
     def test_shelve_in_a_split_closes_only_the_pane(self):
         self.live(1, "%4")
@@ -532,12 +585,16 @@ class Saved(unittest.TestCase):
     def test_a_reused_pid_is_not_the_chat(self):
         # A sessions file left by a restart whose pid now names another process: its procStart
         # doesn't match that process's start time, so the chat isn't running and it reopens.
-        self.put(1, shelved=True)
-        self.transcript(1)
-        self.live(1, "%7", proc_start=1)
-        self.env["STUB_PANES"] = f"$1 @3 %7 {DEAD} claude\\n"
-        self.run_saved("open", sid(1), CLIENT)
-        self.assertEqual(len(self.opened()), 1)
+        # Claude writes procStart as a digit string; an int counts the same.
+        for proc_start in (1, "1"):
+            with self.subTest(proc_start=proc_start):
+                self.setUp()
+                self.put(1, shelved=True)
+                self.transcript(1)
+                self.live(1, "%7", proc_start=proc_start)
+                self.env["STUB_PANES"] = f"$1 @3 %7 {DEAD} claude\\n"
+                self.run_saved("open", sid(1), CLIENT)
+                self.assertEqual(len(self.opened()), 1)
 
     def test_a_matching_proc_start_counts_as_live(self):
         with open(f"/proc/{os.getpid()}/stat") as f:
@@ -602,6 +659,298 @@ class Saved(unittest.TestCase):
     def test_an_unsafe_id_is_never_typed(self):
         self.run_saved("open", "x; rm -rf ~", CLIENT)
         self.assertEqual(self.calls("tmux", "send-keys"), [])
+
+    # --- attach tabs: a tab whose `claude attach <job>` shows a background session --------
+
+    def proc_start(self):
+        with open(f"/proc/{os.getpid()}/stat") as f:
+            return int(f.read().rpartition(")")[2].split()[19])
+
+    def test_star_finds_an_attached_background_chat(self):
+        self.background(1, proc_start=str(self.proc_start()))
+        t = self.transcript(1)
+        self.client("attach", sid(1)[:8])
+        self.run_saved("star", "%4", CLIENT)
+        e = self.saved()[sid(1)]
+        self.assertEqual((e["starred"], e["cwd"], e["transcript_path"]), (True, self.cwd(1), t))
+        self.assertEqual(e["tab"]["pane"], "%4")
+        self.assertTrue(self.star_set())
+
+    def test_an_attach_client_names_its_chat_by_job_id(self):
+        # argv[0] may be the full path the client re-execs itself under (a `claude --resume` of
+        # a background chat does).
+        for argv0 in ("claude", "/home/u/.local/bin/claude"):
+            with self.subTest(argv0=argv0):
+                self.setUp()
+                self.background(1)
+                self.background(2)
+                self.transcript(1)
+                stop = self.client("attach", sid(1)[:8], argv0=argv0)
+                self.run_saved("star", "%4", CLIENT)
+                stop()   # the next case's client must be the only one
+                self.assertEqual(list(self.saved()), [sid(1)])
+
+    def test_a_client_that_names_no_single_live_chat_is_not_the_tabs(self):
+        # A name part stays in the argv while the session gets renamed (its title follows the
+        # chat), so it can come to name another session; and `claude attach` refuses a full
+        # session id. Only the jobId is trusted.
+        cases = {"name part": (("attach", "Job number 1"), {}),
+                 "session id": (("attach", sid(1)), {}),
+                 "unknown job": (("attach", "ffffffff"), {}),
+                 "dead session": (("attach", sid(1)[:8]), {"pid": DEAD}),
+                 "reused pid": (("attach", sid(1)[:8]), {"proc_start": "1"}),
+                 "agent view": (("agents",), {})}
+        for case, (args, bg) in cases.items():
+            with self.subTest(case=case):
+                self.setUp()
+                self.background(1, **bg)
+                self.background(2)
+                self.transcript(1)
+                stop = self.client(*args)
+                self.run_saved("star", "%4", CLIENT)
+                stop()
+                self.assertEqual(self.saved(), {})
+                self.assertIn("no Claude session found", self.messages()[-1])
+
+    def test_a_tracked_attach_entry_is_not_the_tabs_chat_once_the_client_moved_on(self):
+        # "<-" turned the client into agent view (still `claude`): only /proc says what an
+        # attach tab shows, never track's entry, which lags up to a minute.
+        self.background(1)
+        self.transcript(1)
+        self.registered(1, "%4", attach=True)
+        self.put(1, shelved=True)
+        self.client("agents")
+        self.run_saved("star", "%4", CLIENT)
+        self.assertIn("no Claude session found", self.messages()[-1])
+        self.env["STUB_PANES"] = f"$1 @1 %4 {self.ppid} claude\\n"
+        self.run_saved("open", sid(1), CLIENT)
+        self.assertEqual(self.calls("tmux", "select-pane"), [])
+        self.assertEqual(len(self.opened()), 1)
+
+    def test_a_stopped_attach_client_is_not_what_the_tab_shows(self):
+        # A SIGSTOPped `claude attach 1` (Claude's own Ctrl+Z exits the client instead), then
+        # `claude attach 2`: the pane shows 2. Two running clients showing different chats
+        # leave no answer at all.
+        self.background(1)
+        self.background(2)
+        self.transcript(1)
+        self.transcript(2)
+        self.client("attach", sid(1)[:8])
+        os.killpg(self.last_client, signal.SIGSTOP)
+        self.client("attach", sid(2)[:8])
+        self.run_saved("star", "%4", CLIENT)
+        self.assertEqual(list(self.saved()), [sid(2)])
+        os.killpg(self.first_client(), signal.SIGCONT)
+        self.run_saved("star", "%4", CLIENT)   # unstar 2 if it resolved; it must not
+        self.assertTrue(self.saved()[sid(2)]["starred"])
+        self.assertIn("no Claude session found", self.messages()[-1])
+
+    def test_a_suspended_tab_session_loses_to_a_running_attach_client(self):
+        # Ctrl+Z on an interactive claude (it stops), then `claude attach 2` in the same shell.
+        held = subprocess.Popen(["sleep", "30"])
+        self.addCleanup(held.wait)
+        self.addCleanup(held.kill)
+        os.kill(held.pid, signal.SIGSTOP)
+        self.live(1, "%4", pid=held.pid)
+        self.background(2)
+        self.transcript(1)
+        self.transcript(2)
+        self.client("attach", sid(2)[:8])
+        self.run_saved("star", "%4", CLIENT)
+        self.assertEqual(list(self.saved()), [sid(2)])
+        self.track_panes(("%4", self.ppid, 1))
+        self.run_saved("track")
+        self.assertEqual(self.reg_entry(2)["pane"], "%4")
+        # Shelve would kill the suspended chat with the tab, unsaved: it refuses instead.
+        self.run_saved("shelve", "%4", CLIENT)
+        self.assertEqual(self.calls("tmux", "kill-window") + self.calls("claude"), [])
+        self.assertFalse(self.saved()[sid(2)]["shelved"])
+        self.assertIn("suspended", self.messages()[-1])
+
+    def test_an_attach_client_outside_the_pane_is_not_the_tabs(self):
+        self.background(1)
+        self.transcript(1)
+        self.client("attach", sid(1)[:8])
+        self.env["STUB_PANE_PID"] = str(DEAD)
+        self.run_saved("star", "%4", CLIENT)
+        self.assertEqual(self.saved(), {})
+
+    def test_sync_sets_the_star_of_an_attach_tab(self):
+        self.background(1)
+        self.put(1, starred=True)
+        self.client("attach", sid(1)[:8])
+        self.run_saved("sync", "%4")
+        self.assertTrue(self.star_set())
+
+    def test_shelve_an_attach_tab_stops_its_session(self):
+        # Closing the tab only ends the viewer: the chat would run on, unseen, in the daemon.
+        self.background(1)
+        self.registered(1, "%4", attach=True)
+        self.transcript(1)
+        self.client("attach", sid(1)[:8])
+        self.run_saved("shelve", "%4", CLIENT)
+        self.assertTrue(self.saved()[sid(1)]["shelved"])
+        self.assertFalse(os.path.exists(os.path.join(self.reg, sid(1) + ".json")))
+        self.assertEqual(self.calls("tmux", "kill-window"), [["tmux", "kill-window", "-t", "%4"]])
+        self.assertEqual(self.calls("claude"), [["claude", "stop", sid(1)[:8]]])
+        # Stop first: killing a server's last window ends the server and could take this
+        # run-shell, and the stop, with it.
+        order = [a[:2] for a in self.calls() if a[:2] in (["claude", "stop"], ["tmux", "kill-window"])]
+        self.assertEqual(order, [["claude", "stop"], ["tmux", "kill-window"]])
+        self.assertEqual(self.messages()[-1], "claude-saved: shelved: [repo1] Fix the parser")
+
+    def test_shelve_an_attach_tab_says_when_the_stop_fails(self):
+        self.background(1)
+        self.transcript(1)
+        self.client("attach", sid(1)[:8])
+        self.env["STUB_CLAUDE_RC"] = "1"
+        self.run_saved("shelve", "%4", CLIENT)
+        self.assertTrue(self.saved()[sid(1)]["shelved"])
+        self.assertEqual(len(self.calls("tmux", "kill-window")), 1)
+        self.assertIn("still runs in the background", self.messages()[-1])
+
+    def test_shelve_a_busy_attach_tab_asks_first(self):
+        self.background(1)
+        self.transcript(1)
+        self.client("attach", sid(1)[:8])
+        self.env["STUB_STATE"] = "busy"
+        self.run_saved("shelve", "%4", CLIENT)
+        self.assertEqual(self.saved(), {})
+        self.assertEqual(self.calls("claude"), [])
+        self.assertEqual(len(self.calls("tmux", "confirm-before")), 1)
+
+    def test_open_an_attached_chat_goes_to_its_tab(self):
+        self.put(1, starred=True)
+        self.background(1)
+        self.client("attach", sid(1)[:8])
+        self.env["STUB_PANES"] = f"$1 @3 %7 {self.ppid} claude\\n$1 @1 %4 1 claude\\n"
+        self.run_saved("open", sid(1), CLIENT)
+        self.assertEqual(self.opened(), [])
+        self.assertIn(["tmux", "select-pane", "-t", "%7"], self.calls("tmux"))
+
+    def test_open_a_chat_live_in_the_background_attaches_and_takes_it_off_the_shelf(self):
+        # `claude --resume` of a background chat becomes `claude attach <job>`, so no
+        # SessionStart follows: open takes it off the shelf itself, and puts a star on its tab.
+        for starred in (False, True):
+            with self.subTest(starred=starred):
+                self.setUp()
+                self.put(1, shelved=True, starred=starred)
+                self.transcript(1)
+                self.background(1)
+                self.env["STUB_PANES"] = "$1 @1 %4 1 claude\\n"
+                self.run_saved("open", sid(1), CLIENT)
+                self.assertEqual(self.opened(), [("$1:", self.cwd(1), f"claude --resume {sid(1)}")])
+                if starred:
+                    e = self.saved()[sid(1)]
+                    self.assertFalse(e["shelved"])
+                    self.assertEqual(e["tab"]["pane"], "%101")
+                    self.assertTrue(self.star_set("%101"))
+                else:
+                    self.assertEqual(self.saved(), {})
+
+    def test_rm_clears_the_star_of_an_attach_tab(self):
+        self.put(1, starred=True)
+        self.background(1)
+        self.client("attach", sid(1)[:8])
+        self.env["STUB_PANES"] = f"$1 @3 %7 {self.ppid} claude\\n"
+        self.run_saved("rm", sid(1), CLIENT)
+        self.assertTrue(self.star_unset("%7"))
+
+    # --- track: open-sessions entries for attach tabs, for claude-restore ------------------
+
+    def reg_entry(self, n):
+        try:
+            with open(os.path.join(self.reg, sid(n) + ".json")) as f:
+                return json.load(f)
+        except OSError:
+            return None
+
+    def track_panes(self, *rows):
+        """list-panes rows as track reads them: pane, its process, window index."""
+        self.env["STUB_PANES"] = "".join(
+            f"{START} {PID} {pane} {pid} {index} {SOCKET}\\n" for pane, pid, index in rows)
+
+    def test_track_records_an_attach_tab_for_restore(self):
+        self.background(1)
+        t = self.transcript(1)
+        self.registered(1, "%33", ended=time.time() - 600)   # the tab it ran in before
+        self.client("attach", sid(1)[:8])
+        self.track_panes(("%4", 1, 1), ("%7", self.ppid, 3))
+        self.run_saved("track")
+        e = self.reg_entry(1)
+        self.assertEqual({k: e[k] for k in ("session_id", "cwd", "transcript_path", "pane",
+                                            "window_index", "socket", "server_start",
+                                            "server_pid", "attach", "job_id")},
+                         {"session_id": sid(1), "cwd": self.cwd(1), "transcript_path": t,
+                          "pane": "%7", "window_index": 3, "socket": SOCKET,
+                          "server_start": START, "server_pid": PID, "attach": True,
+                          "job_id": sid(1)[:8]})
+        self.assertNotIn("ended_other_at", e)
+        self.assertAlmostEqual(e["ts"], time.time(), delta=30)
+
+    def test_track_drops_an_attach_entry_whose_tab_moved_on(self):
+        # The tab closed, or a /clear gave the job a new session id (sid 2 under job 1's id),
+        # so the entry for what it showed goes. A tab's own entry and another server's stay.
+        self.background(2, job=sid(1)[:8])
+        self.registered(1, "%7", attach=True)
+        self.registered(3, "%8", attach=True)
+        self.registered(4, "%9")
+        self.registered(5, "%7", attach=True, server_start=START - 9)
+        self.client("attach", sid(1)[:8])
+        self.track_panes(("%7", self.ppid, 3), ("%9", 1, 4))
+        self.run_saved("track")
+        self.assertIsNone(self.reg_entry(1))
+        self.assertIsNone(self.reg_entry(3))
+        self.assertEqual(self.reg_entry(2)["pane"], "%7")
+        self.assertIsNotNone(self.reg_entry(4))
+        self.assertIsNotNone(self.reg_entry(5))
+
+    def test_track_skips_a_pane_running_a_tab_session_and_a_shelved_chat(self):
+        # A live interactive session under the pane is what it shows (resolve agrees), and a
+        # chat Shelve just closed must not come back from a track that read /proc before the
+        # kill.
+        self.background(1)
+        self.client("attach", sid(1)[:8])
+        self.live(2, "%7")
+        self.track_panes(("%7", self.ppid, 3))
+        self.run_saved("track")
+        self.assertIsNone(self.reg_entry(1))
+        os.remove(os.path.join(self.sessions, "2.json"))
+        # Shelved just now, or after this track started (a saved_at past its clock).
+        for age in (0, -20):
+            with self.subTest(age=age):
+                self.put(1, shelved=True, age=age)
+                before = self.saved()
+                self.run_saved("track")
+                self.assertIsNone(self.reg_entry(1))
+                self.assertEqual(self.saved(), before)
+
+    def test_track_takes_a_reattached_chat_off_the_shelf(self):
+        # Shelved a while ago, then attached again (its stop failed, or it was started from
+        # agent view): no SessionStart reaches claude-saved, so track does that hook's work.
+        for starred in (False, True):
+            with self.subTest(starred=starred):
+                self.setUp()
+                self.background(1)
+                self.put(1, shelved=True, starred=starred, pane="%9", age=60)
+                stop = self.client("attach", sid(1)[:8])
+                self.track_panes(("%7", self.ppid, 3))
+                self.run_saved("track")
+                stop()
+                self.assertEqual(self.reg_entry(1)["pane"], "%7")
+                if starred:
+                    e = self.saved()[sid(1)]
+                    self.assertFalse(e["shelved"])
+                    self.assertEqual(e["tab"]["pane"], "%7")
+                else:
+                    self.assertEqual(self.saved(), {})
+
+    def test_track_with_no_tmux_answer_changes_nothing(self):
+        self.registered(1, "%7", attach=True)
+        self.env["STUB_PANES"] = ""
+        p = self.run_saved("track")
+        self.assertEqual((p.stdout, p.stderr), ("", ""))
+        self.assertIsNotNone(self.reg_entry(1))
 
     # --- menu, rm, list -------------------------------------------------------------------
 

@@ -72,11 +72,10 @@ stored here).
 - **dotclaude runs in lanes (since 2026-10-12).** The lead is the main checkout. Lanes live in
   `~/dotclaude-lanes/`, and each lane's state is in its record (`lane ls`, `lane asks`), not
   here. The config caps live lanes at 3, with locks `install` and `suite`.
-  - Merged: `autopass-now` as #90 (2026-10-13). `/autopass` is now an immediate mod command,
-    dotclaude's first. The lead installed it from the main checkout.
-  - Merge order for the rest: 1. `attach-tabs` (Star, Shelve and restore for `claude attach`
-    tabs). 2. `narrow-excluded` (security step 1, effort xhigh). Each merges `origin/main` into
-    its branch once pushed, since force pushes are denied.
+  - Merged: `autopass-now` as #90 and `attach-tabs` as #91 (2026-10-13), each installed by the
+    lead from the main checkout. `/autopass` is now an immediate mod command, dotclaude's first.
+  - Live: `narrow-excluded` (security step 1, effort xhigh). Once pushed, a lane merges
+    `origin/main` into its branch, since force pushes are denied.
   - Hayden split `narrow-excluded` (2026-10-13), after a safety classifier stopped three
     sessions while they read the sandbox code. Part 1, this lane's PR: the excluded-command
     inventory, the narrowed `excludedCommands`, the ask rules and their tests. Part 2, a
@@ -201,13 +200,17 @@ stored here).
   - **Watch (PR 4, live on HAYPC):** `context-watch.err` in the state dir (a Stop that timed out
     waiting for its reply, and the watcher's Python errors). Not yet seen live: a refused pass's
     toast, and Hayden's verdict on the rendered popup.
-  - **Follow-up, its own PR (found 2026-10-12):** a tab running `claude attach <id>` (a
-    background session brought back into a tab) isn't recognized by Star, Shelve or tab
-    restore ("No claude session found in this tab"): they find the session through the Claude
-    process under the pane, and an attach client isn't it (the session's process lives under
-    Claude Code's daemon). `claude-saved` could map the attach client's id argument to its
-    `~/.claude/sessions/<pid>.json`. A tmux window killed with a live session left it running
-    in the background (`kind: bg`), which is how that tab came to be.
+  - **Attach tabs (merged as #91, 2026-10-13):** Star, Shelve, Open and tab
+    restore now recognize a tab running `claude attach <jobId>`: `claude-saved` reads the
+    client's argv from /proc and finds the `kind: bg` sessions file with that jobId. Shelve there
+    also runs `claude stop` (Hayden's call: background is mostly an accident), and
+    `claude-saved track`, run by `tmux-claude-status`, records attach tabs so `claude-restore`
+    reopens them after `tmux kill-server`. Probed on 2.1.296: a killed tab ends its session (the
+    2026-10-12 "moved to the background" came from agent view, not the kill); `claude attach`
+    takes the jobId, never the session id; `claude --resume` of a background chat becomes an
+    attach. Not recognized: a tab opened from agent view (argv stays `claude agents`) or by
+    `claude attach <name part>`; `/clear` in an attach tab doesn't move its star. Design and
+    probes: the PR body.
   - Verify from the main checkout (`test_subagent_policy` refuses to load under
     `.claude/worktrees/`): `tests/setup`, `tests/pass`, `tests/lanes`, `tests/delegation`. The
     last full run on `feat/autopass` (2026-10-12) was green: 532, 148, 155 and 646 tests.
