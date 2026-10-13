@@ -79,6 +79,7 @@ DEFAULT_CAP = 4
 LOCK_BUSY = 75  # EX_TEMPFAIL: `lane lock --wait` gave up on a held lock
 PROBE_GRACE = 0.05  # secs `lane lock` waits out a `lane ls` probe before it reports a holder
 HOLDER_CMD_MAX = 120  # chars of the wrapped command kept in a lock's holder line
+RECORD_READ = 1 << 20  # bytes of a lane's STATUS.md read by `ls` and `done`
 # new's brief flags -> the <placeholder> each fills in templates/LANE.md
 BRIEF = {"goal": "goal", "files": "files", "overlaps": "overlaps", "done_when": "done-when",
          "constraints": "constraints"}
@@ -821,11 +822,15 @@ def board(repo: Repo) -> list[dict]:
 def record_text(repo: Repo, lane: dict) -> tuple[str | None, float | None]:
     """The lane's STATUS.md text and mtime, from the worktree or, when it is gone, the mirror.
     No lock is held, so the mirror is read in place, and a hook's swap can move it between
-    mirror_dir's answer and the open: one fresh answer and retry covers that."""
+    mirror_dir's answer and the open: one fresh answer and retry covers that. Read bounded and
+    never waiting on a FIFO (lanelib.read_head): `ls` and `done` run sandbox-off, and any lane
+    can write its own record."""
     def read(path):
+        data = lanelib.read_head(path, RECORD_READ)
+        if data is None:
+            return None
         try:
-            with open(path) as f:
-                return f.read(), os.path.getmtime(path)
+            return data.decode(errors="replace"), os.path.getmtime(path)
         except OSError:
             return None
 
@@ -1257,6 +1262,7 @@ LANES_LOCK_WAIT = 30.0  # secs `done` waits for the lanes lock while it holds in
 FREEZE_TRIES = 20  # scans `guarded` makes for a frozen process tree to stop growing
 FREEZE_WAIT = 2.0  # secs `guarded` waits for what it sent SIGSTOP to stop (a syscall ends first)
 LEFT = ", so it was left running"  # the end of each reason `guarded` holds a signal for
+SHIELDED = {signal.SIGTERM, signal.SIGHUP, signal.SIGINT}  # blocked while a tree is frozen
 SHOWN = re.compile(r"[\x00-\x1f\x7f-\x9f]")  # C0, DEL and C1: masked in what `done` prints
 HANDOFF_CHECK = os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "..", "handoff",
                              "scripts", "handoff-check")
@@ -1512,6 +1518,7 @@ def guarded(p: lanelib.Proc,
     sig: int,
     common: str,
     only: set[tuple[int, int]] | None = None,
+    above: lanelib.Proc | None = None,
 ) -> str | None:
     """Send p sig unless p or a process under it holds a file open under common (the git dir): a
     git cut off mid-write leaves its lock files, and a sandbox's pid namespace init (apply-seccomp,
@@ -1522,47 +1529,70 @@ def guarded(p: lanelib.Proc,
     p and its tree are frozen first (SIGSTOP, through signal_proc's pidfd), parents before
     children, then rescanned until a scan finds none it hasn't stopped, so none can open a file or
     start a process between the check and the signal. A parent stopped first never sees its child
-    stop (a job-control shell would take back the terminal), and every process frozen here is
-    continued (SIGCONT), children first, whatever happens."""
-    me, frozen = os.getpid(), {}
+    stop (a job-control shell would report it suspended and take back the terminal), so above,
+    p's pane shell when it has one, is frozen before p. Every process frozen here is continued
+    (SIGCONT), children first, whatever happens: SIGTERM, SIGHUP and SIGINT to `done` itself wait,
+    blocked, until then, since their default action would end it with the tree still stopped."""
+    old = signal.pthread_sigmask(signal.SIG_BLOCK, SHIELDED)
+    frozen: dict[tuple[int, int], lanelib.Proc] = {}
     try:
-        for _ in range(FREEZE_TRIES):
-            procs = lanelib.scan(full=False)
-            now = procs.get(p.pid)
-            if now is None or now.start != p.start or now.state in lanelib.EXITED:
-                return None  # gone
-            tree = [now, *(procs[d] for d in lanelib.descendants(p.pid, lanelib.children(procs))
-                           if d in procs)]  # each after its parent
-            if any(q.pid == me for q in tree):
-                return f"this `lane done` runs under it{LEFT}"
-            new = [q for q in tree if (q.pid, q.start) not in frozen]
-            if not new:
-                break  # all of it stopped before this scan began: none can fork or open now
-            for q in new:
-                if signal_proc(q, signal.SIGSTOP):
-                    frozen[(q.pid, q.start)] = q
-                elif lanelib.proc_alive(q):
-                    who = "it" if q.pid == p.pid else f"{q.pid} {q.comm} under it"
-                    return f"{who} can't be stopped{LEFT}"
-            deadline = time.monotonic() + FREEZE_WAIT
-            while not all(lanelib.proc_frozen(q) for q in frozen.values()):
-                if time.monotonic() >= deadline:
-                    return f"what runs under it didn't stop within {FREEZE_WAIT:g} s{LEFT}"
-                time.sleep(0.01)
-        else:
-            return f"what runs under it kept starting processes while frozen{LEFT}"
-        if only is not None and (jobs := [q for q in tree if q.ppid == p.pid
-                                          and (q.pid, q.start) not in only]):
-            return f"now running {', '.join(f'{q.pid} {q.comm}' for q in jobs)}{LEFT}"
-        for q in tree:
-            if found := lanelib.open_under(q.pid, common):
-                who = "holds" if q.pid == p.pid else f"has {q.pid} {q.comm} under it, which holds"
-                return f"{who} {found} open{LEFT} (a killed git leaves lock files)"
-        signal_proc(p, sig)
-        return None
+        return freeze_and_send(p, sig, common, only, above, frozen)
     finally:
-        for q in reversed(frozen.values()):
-            signal_proc(q, signal.SIGCONT)
+        for q in reversed(list(frozen.values())):
+            try:
+                signal_proc(q, signal.SIGCONT)
+            except OSError:
+                pass  # its warning's stderr is gone (a closed pane): continue the rest anyway
+        signal.pthread_sigmask(signal.SIG_SETMASK, old)
+
+
+def freeze_and_send(p: lanelib.Proc,
+    sig: int,
+    common: str,
+    only: set[tuple[int, int]] | None,
+    above: lanelib.Proc | None,
+    frozen: dict[tuple[int, int], lanelib.Proc],
+) -> str | None:
+    """guarded's work; frozen collects each process it stops, in order, for guarded to continue."""
+    me = os.getpid()
+    for _ in range(FREEZE_TRIES):
+        procs = lanelib.scan(full=False)
+        now = procs.get(p.pid)
+        if now is None or now.start != p.start or now.state in lanelib.EXITED:
+            return None  # gone
+        if (above is not None and not frozen and now.ppid == above.pid
+                and (up := procs.get(above.pid)) and up.start == above.start
+                and signal_proc(up, signal.SIGSTOP)):
+            frozen[(up.pid, up.start)] = up
+        tree = [now, *(procs[d] for d in lanelib.descendants(p.pid, lanelib.children(procs))
+                       if d in procs)]  # each after its parent
+        if any(q.pid == me for q in tree):
+            return f"this `lane done` runs under it{LEFT}"
+        new = [q for q in tree if (q.pid, q.start) not in frozen]
+        if not new:
+            break  # all of it stopped before this scan began: none can fork or open now
+        for q in new:
+            if signal_proc(q, signal.SIGSTOP):
+                frozen[(q.pid, q.start)] = q
+            elif lanelib.proc_alive(q):
+                who = "it" if q.pid == p.pid else f"{q.pid} {q.comm} under it"
+                return f"{who} can't be stopped{LEFT}"
+        deadline = time.monotonic() + FREEZE_WAIT
+        while not all(lanelib.proc_frozen(q) for q in frozen.values()):
+            if time.monotonic() >= deadline:
+                return f"what runs under it didn't stop within {FREEZE_WAIT:g} s{LEFT}"
+            time.sleep(0.01)
+    else:
+        return f"what runs under it kept starting processes while frozen{LEFT}"
+    if only is not None and (jobs := [q for q in tree if q.ppid == p.pid
+                                      and (q.pid, q.start) not in only]):
+        return f"now running {', '.join(f'{q.pid} {q.comm}' for q in jobs)}{LEFT}"
+    for q in tree:
+        if found := lanelib.open_under(q.pid, common):
+            who = "holds" if q.pid == p.pid else f"has {q.pid} {q.comm} under it, which holds"
+            return f"{who} {found} open{LEFT} (a killed git leaves lock files)"
+    signal_proc(p, sig)
+    return None
 
 
 def forget_sessions(sids: list[str]) -> None:
@@ -1654,7 +1684,9 @@ def end_lane(repo: Repo, lane_id: str, path: str, hits: dict[int, Hit]) -> None:
         """guarded's signal to h; a hold is kept for the final look, and dropped once a later
         signal to h goes through. True when sent (or h is gone)."""
         key = (h.proc.pid, h.proc.start)
-        if why := guarded(h.proc, sig, repo.common_dir, only):
+        shell = next((k.proc for k in known.values()
+                      if k.kind == PANE and k.proc.pid == h.proc.ppid), None)
+        if why := guarded(h.proc, sig, repo.common_dir, only, shell):
             held[key] = why
             return False
         held.pop(key, None)
@@ -1959,12 +1991,24 @@ def close_record(repo: Repo, lane: dict, path: str, data_dir: str, state: str, h
             except OSError as e:
                 shutil.rmtree(tmp, ignore_errors=True)
                 raise LaneError(f"could not archive lane {lane_id} ({e}); nothing was removed")
+            except BaseException:  # a record nested past the recursion limit, an interrupt
+                shutil.rmtree(tmp, ignore_errors=True)
+                raise
         try:
             if path in worktrees(repo):
                 # An install run since the first links check (setup.sh from the lane, mid-close)
                 # would point every hook into the worktree this removes: check again, under its
                 # lock.
                 install_hold(repo, lane_id, path, "its worktree was not removed")
+                # And for a process once more: the final look was up to a minute of lock waits
+                # ago, and with nothing ended the lane was never `closing`, so `open` could
+                # start a session meanwhile.
+                if left := in_lane(lanelib.scan(), path):
+                    raise refusal(f"these started in {path} during the close, so lane {lane_id}'s "
+                                  "worktree was not removed",
+                                  {pid: described(p, "started during the close")
+                                   for pid, p in left.items()},
+                                  f"End them, then rerun `lane done {lane_id}`")
                 p = git(["worktree", "remove", path], repo.toplevel)
                 if p.returncode != 0:
                     raise LaneError(f"git worktree remove refused: {p.stderr.strip()}")
@@ -1987,6 +2031,11 @@ def cmd_done(args) -> None:
     if path == repo.main:
         raise LaneError(f"refusing: lane {args.id}'s path is the main checkout")
     lead_only(repo, args.id, path)
+    # Every git `done` runs in the lane (status, handoff-check's, the one `git worktree remove`
+    # starts) takes its config from this repo's common dir, never the lane-writable commondir
+    # file that worktree_problem checks: a lane could repoint it after the check to a config
+    # whose core.fsmonitor runs a command sandbox-off.
+    os.environ["GIT_COMMON_DIR"] = repo.common_dir
     present = os.path.isdir(path)
     if present:  # its record is archived and its worktree removed, sandbox-off
         usable_path(repo, lane)

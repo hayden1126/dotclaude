@@ -14,6 +14,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import textwrap
 import threading
 import time
 import types
@@ -669,6 +670,7 @@ class RecordTrust(LanesRepo):
         with open(dotgit) as f:
             admin = os.path.join(path, f.read().strip().removeprefix("gitdir: "))
         back = os.path.join(admin, "gitdir")
+        common = os.path.join(admin, "commondir")
         self.assertIsNone(lanelib.worktree_problem(repo, path, repo.lanes(shared=True)))
 
         def fifo(p):
@@ -678,8 +680,11 @@ class RecordTrust(LanesRepo):
         def nul(p):
             self.write(p, "gitdir: /x\0y\n" if p == dotgit else "/x\0y\n")
 
-        for target in (dotgit, back):
-            for plant in (fifo, nul):
+        def elsewhere(p):
+            self.write(p, self.tmp + "\n")
+
+        for target in (dotgit, back, common):
+            for plant in (fifo, nul) + ((elsewhere,) if target == common else ()):
                 with self.subTest(target=target, plant=plant.__name__):
                     with open(target, "rb") as f:
                         saved = f.read()
@@ -696,6 +701,21 @@ class RecordTrust(LanesRepo):
                         with open(target, "wb") as f:
                             f.write(saved)
         self.assertIsNone(lanelib.worktree_problem(repo, path, repo.lanes(shared=True)))
+
+    def test_a_fifo_in_place_of_a_lanes_record_reads_as_absent_promptly(self):
+        # `ls` and `done` (work_references) read every lane's STATUS.md sandbox-off.
+        lane_mod = load_lane_script()
+        repo = lanelib.resolve(self.main)
+        rec = self.record("chart-fix")
+        os.unlink(rec)
+        os.mkfifo(rec)
+        old = signal.signal(signal.SIGALRM, lambda *_: self.fail("blocked"))
+        signal.alarm(5)
+        try:
+            lane_mod.record_text(repo, self.lane_json("chart-fix"))
+        finally:
+            signal.alarm(0)
+            signal.signal(signal.SIGALRM, old)
 
     def test_a_planted_id_never_moves_the_hooks_mirror(self):
         # It sorts before the real record and claims the same path; its id walks out of lanes/.
@@ -1281,6 +1301,62 @@ class Close(LanesRepo):
             self.assertNotIn(lanelib.proc_stat(pid)[1], lanelib.STOPPED)
         self.assertEqual(self.signals(), [(parent, "SIGTERM")])
 
+    def test_guarded_freezes_a_pane_shell_above_first_and_continues_it_last(self):
+        # A job-control shell that sees its child stop reports it suspended and takes back the
+        # terminal: stopped first, it never sees the stop. Only p's own parent is frozen.
+        lane_mod = load_lane_script()
+        shell, child = self.start(self.fake(self.tmp, children=[self.fake(self.tmp)]))
+        (other,) = self.start(self.fake(self.tmp))
+        for above, want in ((shell, "T"), (other, "S")):
+            with self.subTest(above=above):
+                seen = {}
+
+                def check(pid, root):
+                    seen[pid], seen["above"] = lanelib.proc_stat(pid)[1], lanelib.proc_stat(above)[1]
+                    return None
+
+                with mock.patch.object(lanelib, "open_under", side_effect=check):
+                    self.assertIsNone(lane_mod.guarded(lanelib.scan()[child], 0, self.common,
+                                                       above=lanelib.scan()[above]))
+                self.assertEqual(seen, {child: "T", "above": want})
+                for pid in (shell, child, other):
+                    self.assertTrue(self.alive(pid))
+                    self.assertNotIn(lanelib.proc_stat(pid)[1], lanelib.STOPPED)
+        self.assertEqual(self.signals(), [])
+
+    def test_a_sigterm_to_done_mid_freeze_still_continues_the_tree(self):
+        # The lead's Bash timeout or a closed pane signals `done` itself: blocked while a tree is
+        # frozen, the signal ends it only once everything is continued.
+        (target,) = self.start(self.fake(self.tmp))
+        marker = os.path.join(self.tmp, "frozen")
+        code = textwrap.dedent("""
+            import importlib.machinery, importlib.util, sys, time
+            lane, libdir, pid, marker, common = sys.argv[1:]
+            sys.path.insert(0, libdir)
+            import lanelib
+            loader = importlib.machinery.SourceFileLoader("lane_cli", lane)
+            mod = importlib.util.module_from_spec(importlib.util.spec_from_loader("lane_cli", loader))
+            loader.exec_module(mod)
+            def check(p, root):
+                open(marker, "w").close()
+                time.sleep(2)
+            lanelib.open_under = check
+            mod.guarded(lanelib.scan()[int(pid)], 0, common)
+            time.sleep(30)
+        """)
+        helper = subprocess.Popen([sys.executable, "-c", code, LANE,
+                                   os.path.dirname(lanelib.__file__), str(target), marker,
+                                   self.common], env=self.env)
+        self.addCleanup(helper.kill)
+        deadline = time.monotonic() + 20
+        while not os.path.exists(marker) and time.monotonic() < deadline:
+            time.sleep(0.02)
+        self.assertEqual(lanelib.proc_stat(target)[1], "T")
+        helper.terminate()
+        self.assertEqual(helper.wait(10), -signal.SIGTERM)
+        self.assertTrue(self.alive(target))
+        self.assertNotIn(lanelib.proc_stat(target)[1], lanelib.STOPPED)
+
     def test_a_process_started_during_the_close_refuses_in_round_two(self):
         # Unprovable and new (a session's exit left it behind): the close stops there, the
         # lane stays closing, and nothing is archived.
@@ -1805,6 +1881,75 @@ class Close(LanesRepo):
                 lane_mod.cmd_done(argparse.Namespace(id="chart-fix", abandon=True))
         finally:
             os.chdir(cwd)
+
+    def test_dones_git_never_takes_its_config_from_a_commondir_the_lane_repoints(self):
+        # A lane can write its admin dir: repointed after worktree_problem's check, commondir
+        # would hand `done`'s sandbox-off git a config whose core.fsmonitor runs a command.
+        lane_mod = load_lane_script()
+        with open(os.path.join(self.path, ".git")) as f:
+            admin = os.path.join(self.path, f.read().strip().removeprefix("gitdir: "))
+        commondir = os.path.join(admin, "commondir")
+        real_common = self.read(commondir)
+        fake = os.path.join(self.tmp, "fake-common")
+        shutil.copytree(self.common, fake, symlinks=True,
+                        ignore=shutil.ignore_patterns("worktrees", "lanes"))
+        ran, hook = os.path.join(self.tmp, "fsmonitor-ran"), os.path.join(self.tmp, "fsmon")
+        self.write(hook, f"#!/bin/sh\ntouch {ran}\n")
+        os.chmod(hook, 0o755)
+        with open(os.path.join(fake, "config"), "a") as f:
+            f.write(f"[core]\n\tfsmonitor = {hook}\n")
+
+        def repoint():
+            self.write(commondir, fake + "\n")
+
+        repoint()  # the attack is real: a plain git status in the lane runs the hook
+        subprocess.run(["git", "status"], cwd=self.path, env=self.env, capture_output=True)
+        self.assertTrue(os.path.exists(ran))
+        os.unlink(ran)
+        repo = lanelib.resolve(self.main)
+        self.assertIn("commondir", lanelib.worktree_problem(repo, self.path,
+                                                            repo.lanes(shared=True)))
+        self.write(commondir, real_common)
+        real = lane_mod.usable_path
+
+        def usable(*args):
+            out = real(*args)
+            repoint()
+            return out
+
+        with mock.patch.object(lane_mod, "usable_path", side_effect=usable):
+            self.done_in_process(lane_mod)
+        self.assertFalse(os.path.exists(ran))
+        self.assertClosed()
+
+    def test_an_archive_build_that_fails_any_way_leaves_no_partial_archive(self):
+        lane_mod = load_lane_script()
+        with mock.patch.object(lanelib, "copy_record", side_effect=RecursionError("deep")):
+            with self.assertRaises(RecursionError):
+                self.done_in_process(lane_mod)
+        self.assertEqual(self.archives(), [])
+        self.assertTrue(os.path.isdir(self.path))
+
+    def test_a_process_started_after_the_final_look_keeps_the_worktree(self):
+        # With nothing to end the lane is never closing, so `open` could start a session
+        # during the lock waits: the remove looks once more.
+        lane_mod = load_lane_script()
+        late = []
+        real = lane_mod.install_hold
+
+        def hold(*args):
+            real(*args)
+            if args[-1] == "its worktree was not removed":
+                late.extend(self.start(self.fake(self.path)))
+
+        with mock.patch.object(lane_mod, "install_hold", side_effect=hold):
+            with self.assertRaisesRegex(lane_mod.LaneError, "started in .* during the close, so "
+                                        "lane chart-fix's worktree was not removed"):
+                self.done_in_process(lane_mod)
+        self.assertEqual(len(late), 1)
+        self.assertTrue(os.path.isdir(self.path))
+        self.assertEqual(self.archives(), [])
+        self.assertEqual(self.lane_json("chart-fix")["state"], "active")
 
     def test_a_refusal_with_nothing_to_end_leaves_the_lane_as_it_was(self):
         # Never `closing` (which `open` refuses) unless something got signalled: the final look

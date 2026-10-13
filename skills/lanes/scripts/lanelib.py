@@ -551,6 +551,13 @@ def worktree_problem(repo: "Repo", path: str, lanes: list[dict]) -> str | None:
     back = os.path.realpath(back) if back and "\0" not in back else ""
     if os.path.dirname(admin) != os.path.join(repo.common_dir, "worktrees") or back != dotgit:
         return f"{path} is not a worktree of this repo"
+    # git takes the config (core.fsmonitor runs a command on `git status`) from the dir commondir
+    # names, and the admin dir is sandbox-writable: it must name this repo's common dir.
+    common = read_head(os.path.join(admin, "commondir"), GITDIR_MAX)
+    common = common.decode(errors="replace").strip() if common is not None else ""
+    if not common or "\0" in common or (
+            os.path.realpath(os.path.join(admin, common)) != os.path.realpath(repo.common_dir)):
+        return f"{path} is not a worktree of this repo (its commondir names another git dir)"
     return None
 
 
