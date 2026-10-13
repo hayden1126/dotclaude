@@ -50,12 +50,15 @@ MIN_WIDTH = 20
 
 INLINE = re.compile(
     r"\\(?P<esc>[!-/:-@\[-`{-~])"                       # a backslash escape: the char itself
-    r"|(?P<tick>`+)(?P<code>.+?)(?P=tick)"               # a code span, literal inside
+    r"|(?<!`)(?P<tick>`+)(?!`)(?P<code>.+?)(?<!`)(?P=tick)(?!`)"   # a code span, literal inside
     r"|\*\*(?P<bold>.+?)\*\*"
     r"|\[(?P<ltext>[^\[\]]+)\]\((?P<url>[^)\s]*)\)"
     r"|(?<![\w*])\*(?![\s*])(?P<ital>[^*]+?)(?<!\s)\*(?![\w*])")
-# Link text holds no "[" and italic text no "*": an unclosed opener's scan then stops at the next
-# one, so a 64 KiB line of "[" or "*a " renders in milliseconds, not seconds (it took 7 s).
+# Kept linear on a 64 KiB line, since a reply can hold anything. Link text holds no "[" and
+# italic text no "*", so an unclosed opener's scan stops at the next one (a line of "[" or "*a "
+# took 7 s). A code span opens and closes only on whole backtick runs, as in CommonMark, so a
+# long run isn't retried at every shorter length (a line of backticks took minutes). Accepted:
+# italic around a "*" (*a * b*, or around a code span holding one) keeps its asterisks.
 FENCE = re.compile(r"^(\s*)(`{3,}|~{3,})")
 LIST = re.compile(r"^(\s*)([-*+]|\d{1,9}[.)])\s+(.*)$")
 HEADING = re.compile(r"^\s{0,3}(#{1,6})\s+(.*?)(\s+#+)?\s*$")

@@ -199,14 +199,14 @@ class Cut(unittest.TestCase):
         self.assertEqual(md.cut("short", 100), "short")
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class Pathological(unittest.TestCase):
     def test_a_64_kib_line_of_unclosed_openers_renders_fast(self):
-        # An unclosed "*" or "[" used to scan to the line's end: 7 s for one of these.
-        for text in ("*a " * 21000, "[" * 60000, "[a " * 21000, "**a " * 16000, "`" * 60000):
+        # An unclosed "*" or "[" used to scan to the line's end (7 s), and a run of backticks
+        # was retried at every shorter length (minutes). The "x" keeps a line of backticks from
+        # reading as a fence.
+        rising = "x" + "".join("`" * k + "a" for k in range(1, 340))
+        for text in ("*a " * 21000, "[" * 60000, "[a " * 21000, "**a " * 16000,
+                     "x" + "`" * 60000, "x" + "` a" * 20000, rising):
             with self.subTest(text=text[:4]):
                 start = time.monotonic()
                 md.render(text, 80)
@@ -215,7 +215,14 @@ class Pathological(unittest.TestCase):
     def test_nested_and_plain_markup_still_render(self):
         self.assertEqual(md.render("*it* and [link](u) and **b *i* b**", 80, color=False),
                          "it and link and b i b")
+        self.assertEqual(md.render("a ``b ` c`` d `e`", 80, color=False), "a b ` c d e")
+        # Accepted for linear time: italic around a "*" keeps its asterisks.
+        self.assertEqual(md.render("*a * b*", 80, color=False), "*a * b*")
 
     def test_a_tab_in_a_table_cell_keeps_the_borders_aligned(self):
         out = md.render("| a\tb | c |\n|---|---|\n| x | y |", 80, color=False).split("\n")
         self.assertEqual(len({md.cells(line) for line in out}), 1, out)
+
+
+if __name__ == "__main__":
+    unittest.main()

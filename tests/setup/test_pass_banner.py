@@ -325,7 +325,7 @@ class Banner(unittest.TestCase):
                 self.assertTrue(out.split("\n")[-1].startswith(ELL + " "))
                 self.assertEqual(open_styles(out), set())
         out = pass_banner.banner(turn("\n".join("x" * 199 for _ in range(30))), None, 300)
-        # head (53 bytes with its escapes), 19 lines (3,799), tail (51): 3,917; a 20th line
+        # head (53 bytes with its escapes), 19 lines (3,799), tail (51): 3,903; a 20th line
         # (200) would pass 4 KiB.
         self.assertEqual(len(out.split("\n")), 3 + 19 + 1)
         self.assertEqual(out.split("\n")[-1],
