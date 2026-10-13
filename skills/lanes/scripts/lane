@@ -2015,7 +2015,7 @@ def cmd_done(args) -> None:
         # Closing from here on: `open` refuses the lane, so no new session starts mid-close,
         # and a refusal below leaves it closing for a rerun to finish. With nothing to end, a
         # refusal leaves the lane as it was.
-        with lock(repo):
+        with lanes_lock(repo, f"nothing was signalled: rerun `lane done {args.id}`"):
             reread(repo, lane, path)
             lanelib.update_lane(repo, args.id, lambda x: x.update(state="closing"))
         try:

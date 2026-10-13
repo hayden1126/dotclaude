@@ -660,6 +660,43 @@ class RecordTrust(LanesRepo):
         rec = dict(self.lane_json("chart-fix"), **fields)
         self.write(os.path.join(self.common, "lanes", lane_id, "lane.json"), json.dumps(rec))
 
+    def test_a_fifo_or_a_nul_in_a_lanes_git_metadata_refuses_promptly(self):
+        # The .git file and the admin dir's gitdir file are both sandbox-writable, and the
+        # admin dir is wherever the .git file names: a plain open of a FIFO would wait forever.
+        repo = lanelib.resolve(self.main)
+        path = self.lane_path("chart-fix")
+        dotgit = os.path.join(path, ".git")
+        with open(dotgit) as f:
+            admin = os.path.join(path, f.read().strip().removeprefix("gitdir: "))
+        back = os.path.join(admin, "gitdir")
+        self.assertIsNone(lanelib.worktree_problem(repo, path, repo.lanes(shared=True)))
+
+        def fifo(p):
+            os.unlink(p)
+            os.mkfifo(p)
+
+        def nul(p):
+            self.write(p, "gitdir: /x\0y\n" if p == dotgit else "/x\0y\n")
+
+        for target in (dotgit, back):
+            for plant in (fifo, nul):
+                with self.subTest(target=target, plant=plant.__name__):
+                    with open(target, "rb") as f:
+                        saved = f.read()
+                    plant(target)
+                    old = signal.signal(signal.SIGALRM, lambda *_: self.fail("blocked"))
+                    signal.alarm(5)
+                    try:
+                        self.assertIsNotNone(
+                            lanelib.worktree_problem(repo, path, repo.lanes(shared=True)))
+                    finally:
+                        signal.alarm(0)
+                        signal.signal(signal.SIGALRM, old)
+                        os.unlink(target)
+                        with open(target, "wb") as f:
+                            f.write(saved)
+        self.assertIsNone(lanelib.worktree_problem(repo, path, repo.lanes(shared=True)))
+
     def test_a_planted_id_never_moves_the_hooks_mirror(self):
         # It sorts before the real record and claims the same path; its id walks out of lanes/.
         self.plant("0evil", id="../../../escape")
@@ -1604,6 +1641,22 @@ class Close(LanesRepo):
         self.assertTrue(os.path.isdir(self.path))
         self.assertEqual(self.lane_json("chart-fix")["state"], "active")
         self.assertEqual(self.archives(), [])
+
+    def test_a_held_lanes_lock_when_marking_closing_refuses_before_any_signal(self):
+        lane_mod = load_lane_script()
+        (pid,) = self.start(self.fake(self.tmp))
+        self.addCleanup(self.kill_ours, [pid])
+        hit = lane_mod.Hit(lanelib.scan()[pid], lane_mod.LEFTOVER, "a test leftover")
+        self.hold_lanes_lock()
+        with mock.patch.object(lane_mod, "survey", return_value=({pid: hit}, {})), \
+                mock.patch.object(lane_mod, "closing_check"), \
+                mock.patch.object(lane_mod, "LANES_LOCK_WAIT", 0.3):
+            with self.assertRaisesRegex(lane_mod.LaneError, r"held past 0\.3 s .*: nothing was "
+                                        "signalled: rerun `lane done chart-fix`"):
+                self.done_in_process(lane_mod)
+        self.assertEqual(self.signals(), [])
+        self.assertTrue(self.alive(pid))
+        self.assertEqual(self.lane_json("chart-fix")["state"], "active")
 
     def test_the_remove_runs_without_the_lanes_lock_and_a_timeout_after_it_is_clean(self):
         # `git worktree remove` can take seconds, and every lane's hooks give up on the lanes

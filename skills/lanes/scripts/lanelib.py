@@ -536,17 +536,19 @@ def worktree_problem(repo: "Repo", path: str, lanes: list[dict]) -> str | None:
     for other in lanes:
         if other["path"] != real and inside(real, other["path"]):
             return f"{path} is inside lane {other['id']}"
+    # Both files read with read_head: the admin dir is wherever the .git file says, so either
+    # can be a FIFO a plain open would wait on.
     dotgit = os.path.join(real, ".git")
-    try:
-        if not stat.S_ISREG(os.lstat(dotgit).st_mode):
-            return f"{dotgit} is not a worktree's .git file"
-        with open(dotgit) as f:
-            gitdir = f.read().strip().removeprefix("gitdir: ")
-        admin = os.path.realpath(os.path.join(real, gitdir))
-        with open(os.path.join(admin, "gitdir")) as f:
-            back = os.path.realpath(f.read().strip())
-    except OSError as e:
-        return f"{path} is not a worktree ({e.strerror})"
+    text = read_head(dotgit, GITDIR_MAX)
+    if text is None:
+        return f"{dotgit} is not a worktree's .git file"
+    gitdir = text.decode(errors="replace").strip().removeprefix("gitdir: ")
+    admin = os.path.realpath(os.path.join(real, gitdir)) if "\0" not in gitdir else ""
+    back = read_head(os.path.join(admin, "gitdir"), GITDIR_MAX) if admin else None
+    if back is None:
+        return f"{path} is not a worktree (its admin dir's gitdir file can't be read)"
+    back = back.decode(errors="replace").strip()
+    back = os.path.realpath(back) if back and "\0" not in back else ""
     if os.path.dirname(admin) != os.path.join(repo.common_dir, "worktrees") or back != dotgit:
         return f"{path} is not a worktree of this repo"
     return None
