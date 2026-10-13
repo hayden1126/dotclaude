@@ -1861,7 +1861,10 @@ def cmd_done(args) -> None:
             end_lane(repo, args.id, path, hits)  # its final look only
         sweep_open_sessions(path)
     stamp = datetime.date.today().isoformat()
-    with lock(repo):
+    # install.lock first, then the lanes lock: setup.sh never takes the lanes lock, and the lanes
+    # lock must not sit idle for the install wait, since every lane's hooks take it with a 2 s
+    # timeout. Held across the remove, so no install relinks into the lane after the check below.
+    with (install_lock() if present else contextlib.nullcontext()), lock(repo):
         # Re-read: a SessionEnd hook may have stamped endedAt meanwhile, which the archive keeps.
         lane = reread(repo, lane, path)
         closed = os.path.join(repo.lanes_dir, lanelib.CLOSED)
@@ -1893,9 +1896,8 @@ def cmd_done(args) -> None:
             # An install run since the first links check (setup.sh from the lane, mid-close)
             # would point every hook into the worktree this removes: check again, under its lock.
             try:
-                with install_lock():
-                    install_hold(repo, args.id, path)
-                    p = git(["worktree", "remove", path], repo.toplevel)
+                install_hold(repo, args.id, path)
+                p = git(["worktree", "remove", path], repo.toplevel)
             except BaseException:
                 shutil.rmtree(tmp, ignore_errors=True)
                 raise

@@ -1406,6 +1406,27 @@ class Close(LanesRepo):
             with lane_mod.install_lock():
                 pass
 
+    def test_done_waits_for_an_install_without_holding_the_lanes_lock(self):
+        # Every lane's hooks take the lanes lock with a 2 s timeout, so done waits for setup.sh's
+        # install.lock first and takes the lanes lock only once it holds that.
+        state = os.path.join(self.tmp, "state", "dotclaude")
+        os.makedirs(state, exist_ok=True)
+        fd = os.open(os.path.join(state, "install.lock"), os.O_WRONLY | os.O_CREAT, 0o644)
+        self.addCleanup(os.close, fd)
+        fcntl.flock(fd, fcntl.LOCK_EX)  # setup.sh's hold, for its whole run
+        p = subprocess.Popen([sys.executable, LANE, "done", "chart-fix", "--abandon"],
+                             cwd=self.main, env=self.env, stdout=subprocess.PIPE,
+                             stderr=subprocess.PIPE, text=True)
+        self.addCleanup(lambda: p.poll() is None and p.kill())
+        time.sleep(2)  # done has reached the install wait by now
+        self.assertIsNone(p.poll(), "done finished while setup.sh held install.lock")
+        with lanelib.lock(lanelib.resolve(self.main), timeout=1):
+            pass  # free while done waits
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        out, err = p.communicate(timeout=60)
+        self.assertEqual(p.returncode, 0, out + err)
+        self.assertClosed()
+
     def test_a_tmux_conf_block_into_the_lane_holds_it_too(self):
         # setup-tmux.sh run from the lane: the next tmux server would source a removed file.
         self.write(os.path.join(self.home, ".tmux.conf"),
