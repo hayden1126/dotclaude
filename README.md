@@ -164,7 +164,7 @@ sees it.
 | `hooks/watch-guard.sh` | Stop hook (main thread): blocks a stop once when a `delegation-ledger wait` watch has lapsed or a background command was killed at its time limit, with the re-arm command (`skills/delegation/scripts/watch-guard`); fails open | symlink `~/.claude/hooks/watch-guard.sh` |
 | `hooks/report-check.sh` | PreToolUse(SubagentHandback)/SubagentStop hook: sends a delegated role's malformed report back, at most twice; fails open | symlink `~/.claude/hooks/report-check.sh` |
 | `hooks/handoff-reminder.sh` | UserPromptSubmit hook: on a wrap-up / handoff / clear-memory signal, reminds me to invoke the `handoff` skill instead of improvising it, or the `pass` skill on a terse "... and pass"; a shim over `hooks/handoff_reminder.py`, which holds the classifier | symlink `~/.claude/hooks/handoff-reminder.sh` and `handoff_reminder.py` |
-| `hooks/session-title.sh` | UserPromptSubmit hook: sets the terminal tab title to `[<repo>] <label>` via `sessionTitle`, so tabs are tellable apart; the label comes from the Stop-hook Haiku cache (`.title.txt`), falling back to the current prompt's first line | symlink `~/.claude/hooks/session-title.sh` |
+| `hooks/session-title.sh` | UserPromptSubmit hook: sets the terminal tab title to `<repo> · <label>` via `sessionTitle`, so tabs are tellable apart (the repo is the one the session launched in, so a Bash `cd` doesn't rename it); the label comes from the Stop-hook Haiku cache (`.title.txt`), falling back to the current prompt's first line | symlink `~/.claude/hooks/session-title.sh` |
 | `hooks/stop-ring.sh` | Stop hook: plays the Windows notify sound when a session you see finishes (a tab, a plain terminal or a mapped background session), not a subagent, an unmapped background session, a `claude -p` run, a turn that ends with an agent or shell still running for it, or one a queued notice or prompt restarts within a second; logs each decision to `ring.log`, and writes the session's stop record (`stops/<session>.json`: time, tasks in flight, the transcript path, the replies of the last 5 turns; records older than 7 days go) for `pass-respawn`; a shim over `hooks/stop_ring.py` | symlink `~/.claude/hooks/stop-ring.sh` and `stop_ring.py` |
 | `hooks/notify.sh` | Notification(permission_prompt) hook: pops a Windows toast, resolving the toast path per platform (WSL via `wslpath`, native Windows git-bash via `cygpath`), and rings like `stop-ring.sh` | symlink `~/.claude/hooks/notify.sh` |
 | `hooks/tmux-state.sh` | Prompt, tool, Stop and Notification hook: sets `@claude_state` (busy, wait, idle) on the tmux window the session is shown in, for the indicator in `tmux/claude.conf`; does nothing outside tmux | symlink `~/.claude/hooks/tmux-state.sh` |
@@ -305,12 +305,16 @@ need nothing extra.
   `hooks/handoff_reminder.py` with python3 and stays silent if that fails. After changing it, replay your own typed prompts through it with
   `python3 tests/setup/replay_history.py` (local only: the history holds private names).
 - **UserPromptSubmit: `session-title.sh`** (in this repo). Sets the session title (the terminal tab
-  title) to `[<repo>] <label>` so tabs are tellable apart. It emits the supported
+  title) to `<repo> · <label>` so tabs are tellable apart. It emits the supported
   `hookSpecificOutput.sessionTitle`, not raw OSC escapes, so the title has display precedence over
   Claude's own AI title and the tab's running/idle status icons stay intact. The repo name comes from
-  walking up for `.git` (no git subprocess). The label is chosen by a cascade: the Stop-hook Haiku
+  walking up for `.git` (no git subprocess) from `CLAUDE_PROJECT_DIR`, the directory the session
+  launched in: a Bash `cd` moves the payload `cwd` but not that, so a lead that steps into an agent
+  worktree keeps its own name, and a lane (launched in its worktree) shows its lane id. There are no
+  brackets, since ListAgents prints a session as `<name> [<ref>]` and a leading `[repo]` read like a
+  ref. The label is chosen by a cascade: the Stop-hook Haiku
   label (`session-summaries/<id>.title.txt`), else the first line of the current prompt, else the
-  first clause of the long summary, else the bare `[<repo>]`. (It used to read Claude Code's own
+  first clause of the long summary, else the bare `<repo>`. (It used to read Claude Code's own
   `ai-title`, but CC 2.1.237 stops generating that once a custom title is set, so the hook was
   suppressing the very record it read; it now owns the label instead.) A subagent's or teammate's
   prompt, or injected content (a task notification, another agent's message), leaves the title as
