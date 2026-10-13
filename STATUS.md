@@ -71,9 +71,15 @@ stored here).
 ## In flight
 - **dotclaude runs in lanes (since 2026-10-12).** The lead is the main checkout. Lanes live in
   `~/dotclaude-lanes/`, and each lane's state is in its record (`lane ls`, `lane asks`), not
-  here. The config caps live lanes at 2, with locks `install` and `suite`. Merge order:
+  here. The config caps live lanes at 3, with locks `install` and `suite`. Merge order:
   1. `attach-tabs` (Star, Shelve and restore for `claude attach` tabs).
-  2. `narrow-excluded` (security step 1), which rebases after 1 merges.
+  2. `autopass-now` (`/autopass` runs at once mid-turn, as dotclaude's first mod command).
+  3. `narrow-excluded` (security step 1, effort xhigh), which rebases after 1 and 2 merge.
+
+  Backlog, after `narrow-excluded` merges (it may touch the same launch code): `lane init
+  --model/--effort` repo defaults and `lane open --model/--effort` overrides, passed through to
+  `claude`. Today `lane open` hardcodes the argv, so a lane's model or effort is set by hand in
+  its window.
 
   How lanes install, Hayden's call 2026-10-12: after its last review round, a lane runs
   `lane lock install -- ./setup.sh` from its own worktree, sandbox off. Until it merges, every
