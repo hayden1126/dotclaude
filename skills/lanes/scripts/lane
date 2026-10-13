@@ -38,7 +38,8 @@ holds a file open in the git dir or has a process under it that does. Proof come
 its cwd in the lane refuses the close by name before any signal, as do installed links into the
 lane (it holds the install: install-state.py, checked again under setup.sh's install.lock just
 before the remove), a dirty, locked or submodule worktree, a background session, a `done` run
-from inside the lane, and, when there is something to end, a failing `handoff-check --closing`.
+from anywhere but the main checkout or under a lane's session (only the lead closes lanes), and,
+when there is something to end, a failing `handoff-check --closing`.
 A close refused after a signal leaves the lane `closing`, which `open` refuses: rerun `done`.
 With nothing to end, a refused close leaves the lane as it was.
 """

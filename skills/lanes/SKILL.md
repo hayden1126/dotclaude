@@ -82,11 +82,12 @@ an unregistered worktree: `lane whoami` tells you which.
    - anything else with its cwd in the lane;
    - a background session (`claude stop <jobId>` ends it);
    - a dirty or locked worktree;
-   - a run from inside the lane;
+   - a run from anywhere but the main checkout (only the lead closes lanes);
    - links the install still points into the lane;
    - a failing `handoff-check --closing`.
 
-   A close refused partway leaves the lane `closing`, which `open` refuses: rerun `lane done`.
+   A close refused after a signal leaves the lane `closing`, which `open` refuses: rerun
+   `lane done`.
    It archives `lane.json` and `.lane/` to `<common-dir>/lanes/_closed/<id>-<date>/`, runs
    `git worktree remove` (never `--force`) and `git branch -d` (never `-D`).
 

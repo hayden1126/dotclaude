@@ -338,8 +338,9 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
   - **session:** a `~/.claude/sessions/<pid>.json` whose `procStart` is that pid's start time,
     with its cwd in the lane;
   - **owned:** its parent chain reaches a session (its Bash commands, hooks, MCP servers);
-  - **pane shell:** a session's parent whose only children are sessions (claude-restore types
-    `claude --resume` into a zsh);
+  - **pane shell:** a session's parent whose only children are sessions, whose own parent is a
+    tmux server and which carries no foreign session id (claude-restore types `claude --resume`
+    into a zsh);
   - **leftover:** started with the `CLAUDE_CODE_SESSION_ID` of a lane session, and every one of
     its descendants is ended too (a tmux server started from a lane's Bash carries the lane's
     id, and its panes run elsewhere).
@@ -348,27 +349,32 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
   (`projects/*/<sid>.jsonl`) records a cwd in the lane. `lane.json`'s `sessions[]` proves
   nothing: sandboxed Bash can write it, and it misses a registration that timed out.
 
-  Before any signal, `done` refuses anything else by name (pid, comm, the first 60 characters of
-  argv, never more: argv can hold a secret). The same goes for each of these:
+  Before any signal, `done` refuses anything else by name (pid, comm and program name, never an
+  argument: one can hold a secret). The same goes for each of these:
   - a background session: `claude stop <jobId>` ends it;
   - a dirty, locked or submodule worktree, which `git worktree remove` would refuse after the
     kill;
-  - a run from inside the lane;
+  - a run from anywhere but the main checkout, or under a lane's session: only the lead closes
+    lanes;
   - an install that points into the lane (below);
   - when there is something to end, a failing `handoff-check --closing`.
 
-  Then it marks the lane `closing`, which `open` refuses, and deletes the sessions'
-  `open-sessions` entries, as Shelve does, so claude-restore never reopens them. Signals go
+  With something to end, it marks the lane `closing`, which `open` refuses, and deletes each
+  session's `open-sessions` entry, as Shelve does, so claude-restore never reopens it. Signals go
   through a pidfd once the start time is checked again:
-  1. SIGTERM to sessions and leftovers.
+  1. SIGTERM to sessions and leftovers, then a wait of up to 10 s: longer than the 5 s
+     SessionEnd hooks, which run as the session's children and are left to it.
   2. SIGHUP to a pane shell once its session has exited (an interactive shell ignores SIGTERM).
-  3. SIGTERM and then SIGKILL to whatever survives, except a process holding a file open in the
-     git dir: a killed git leaves lock files.
+  3. SIGTERM and then SIGKILL to whatever survives, except a process that holds a file open in
+     the git dir, or has one under it that does: a killed git leaves lock files.
 
   A `lane open` tab closes by itself once its claude exits. The lanes lock is never held while
-  `done` waits, because the SessionEnd hook takes it to stamp `endedAt`, and the archive is
-  built from `lane.json` re-read afterwards. Anything that survives, or that starts meanwhile,
-  refuses the close and leaves the lane `closing`: rerun `done`.
+  `done` waits, because every lane's hooks take it with a 2 s timeout; the archive is built from
+  `lane.json` re-read afterwards, so it keeps the `endedAt` SessionEnd stamped. Anything that
+  survives, or that starts meanwhile, refuses the close and leaves the lane `closing` (rerun
+  `done`); its `open-sessions` entries are swept either way. Last, `done` takes setup.sh's
+  `install.lock` (before the lanes lock), checks the install once more and removes the worktree,
+  so no install relinks into the lane in between.
 
   Nothing is chosen by name, start time or tmux window. A window id means something only on its
   own tmux server, and `kill-window` sends SIGHUP to everything on the pane's terminal (Hayden's
@@ -384,12 +390,20 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
   - **Released:** the lead's `./setup.sh` in the main checkout relinks everything, which
     releases the hold.
   - **What counts as a lane:** a linked worktree of this repo, or a worktree of another clone
-    with `install-state.py` and `setup.sh` at its root. Another project's worktree never holds.
+    with `install-state.py` and `setup.sh` at its root. Another project's worktree, and one
+    inside the main checkout (an agent's), never holds. A lane registered in the main
+    checkout's own `.git/worktrees/` is released by that main's run whatever its `.git` file
+    names, and only a real main checkout releases: a lane's sandbox can rewrite its `.git` file.
   - **Prune:** after linking, `setup.sh` removes managed links that point into another lane of
-    this repo, and dangling ones into its own checkout or the lanes root (a closed lane, a
-    removed hook). setup-tmux.sh's `tmux/*` links and plugin files are never touched.
+    this repo, and dangling ones into its own checkout, the lanes root or `.claude/worktrees/`
+    (a closed lane, a removed hook, a removed agent worktree). setup-tmux.sh's `tmux/*` links
+    and plugin files are never touched.
+  - **One run at a time:** `setup.sh` takes a flock on `install.lock` in the state dir for its
+    whole run, waits up to 5 minutes for another run, then stops before changing anything. It
+    runs unlocked only where `flock` or the state dir is missing (macOS, git-bash).
   - **Seen elsewhere:** `lane ls` shows `install: held by lane <id>`. `lane done` refuses while
-    any link, or setup-tmux.sh's `~/.tmux.conf` block, points into the lane.
+    any link, or setup-tmux.sh's `~/.tmux.conf` block, points into the lane, naming for each the
+    installer that relinks it (`setup.sh`, `setup-tmux.sh`, or by hand).
   - **The plugin line:** `setup.sh` prints one line when a mod or plugin changed since the last
     install (a fingerprint in the state dir). A running session loads those only at its start,
     so it needs `/pass`. Plain skills are left out, since SKILL.md text loads live.
