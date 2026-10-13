@@ -394,13 +394,19 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
     inside the main checkout (an agent's), never holds. A lane registered in the main
     checkout's own `.git/worktrees/` is released by that main's run whatever its `.git` file
     names, and only a real main checkout releases: a lane's sandbox can rewrite its `.git` file.
+    The accepted cost: an entry planted there naming another clone's lane releases that lane's
+    hold too, which equals an install from this main and prunes nothing outside a dotclaude
+    checkout. Every file these checks read goes through one bounded, non-blocking reader, so a
+    FIFO or a huge file planted in a lane can't hang `setup.sh`.
   - **Prune:** after linking, `setup.sh` removes managed links that point into another lane of
-    this repo, and dangling ones into its own checkout, the lanes root or `.claude/worktrees/`
+    this repo (or into a dotclaude checkout the main checkout's `.git/worktrees/` registers,
+    whatever its `.git` file says), and dangling ones into its own checkout, the lanes root or `.claude/worktrees/`
     (a closed lane, a removed hook, a removed agent worktree). setup-tmux.sh's `tmux/*` links
     and plugin files are never touched.
   - **One run at a time:** `setup.sh` takes a flock on `install.lock` in the state dir for its
     whole run, waits up to 5 minutes for another run, then stops before changing anything. It
-    runs unlocked only where `flock` or the state dir is missing (macOS, git-bash).
+    runs unlocked only where `flock` is missing or the state dir can't be made (macOS,
+    git-bash); a lock file it can't open stops the run.
   - **Seen elsewhere:** `lane ls` shows `install: held by lane <id>`. `lane done` refuses while
     any link, or setup-tmux.sh's `~/.tmux.conf` block, points into the lane, naming for each the
     installer that relinks it (`setup.sh`, `setup-tmux.sh`, or by hand).
