@@ -472,8 +472,20 @@ class Hooks(unittest.TestCase):
         self.assertEqual(len(tasks[2]["description"]), stop_ring.DESC_CAP)
         # An id that isn't a plain name and a description that isn't a string are left out.
         self.assertEqual(tasks[3], {"label": "monitor"})
-        # A label (Claude Code's type name) is made one plain line too: it reaches the notice.
-        self.assertEqual(tasks[4], {"label": "newkind x", "id": "k1"})
+        # A type name cleaning would change can't be one of Claude Code's: it is unlabeled, so
+        # it can't turn into a label a plain pass ignores (review round 3).
+        self.assertEqual(tasks[4], {"label": "unlabeled", "id": "k1"})
+
+    def test_a_type_cleaning_would_change_is_unlabeled(self):
+        self.run_hook("stop-ring.sh", TAB, {"background_tasks": [
+            {"id": "d1", "type": "dream "}, {"id": "c1", "type": "cloud\tsession"},
+            {"id": "a1", "type": "artifact watch"}]})
+        rec = self.stop_record()
+        self.assertEqual([t["label"] for t in rec["tasks"]],
+                         ["unlabeled", "unlabeled", "artifact watch"])
+        self.assertEqual(rec["waits"], [])
+        # A payload type spelled `artifact watch` has no page: lanelib blocks it.
+        self.assertNotIn("url", rec["tasks"][2])
 
     def artifact_watch(self, url="https://claude.ai/artifact/8JLmWLDftm9VdGcLQnGr76", **extra):
         """A Stop payload entry for the live watch the Artifact tool arms on a publish, in

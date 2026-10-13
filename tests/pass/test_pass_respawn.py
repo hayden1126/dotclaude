@@ -1049,6 +1049,28 @@ class Plain(Base):
         self.assertFalse(os.listdir(os.path.join(self.state, "pass-pending"))
                          if os.path.isdir(os.path.join(self.state, "pass-pending")) else [])
 
+    def test_a_type_that_only_looks_ignored_still_refuses(self):
+        # Review round 3: no payload type may reach an ignored label by cleaning, and a type
+        # spelled `artifact watch` (no page) is no artifact watch.
+        payload = [{"id": "d1", "type": "dream "}, {"id": "a1", "type": "artifact watch"}]
+        self.stop_tasks = stop_ring.task_entries(payload, stop_ring.task_types(payload, None))
+        code, out = self.run_pass("--foreground")
+        self.assertEqual(code, 1, out)
+        self.assertDropped("busy", "unlabeled task (d1), artifact watch (a1) running")
+
+    def test_a_record_time_that_isnt_finite_refuses(self):
+        for when in (float("nan"), float("inf")):
+            with self.subTest(when=when):
+                plan = types.SimpleNamespace(session_id=SID, called=time.time())
+                rec = {"time": when, "waits": [], "tasks": []}
+                self.assertEqual(self.mod.stop_problem(plan, rec)[0],
+                                 "no stop record since the call")
+        self.write(os.path.join(self.state, "stops", f"{SID}.json"),
+                   json.dumps({"time": float("-inf"), "waits": [], "tasks": []}))
+        code, out = self.run_pass("--tasks")
+        self.assertEqual(code, 0, out)
+        self.assertIn("the record's time can't be read: a plain pass would refuse", out)
+
     def test_tasks_never_reads_clear_where_the_waiter_refuses(self):
         # Review round 1: a wait with no task entry, or waits that aren't a list, must not
         # print "none" or "doesn't block" when the waiter would refuse that record.

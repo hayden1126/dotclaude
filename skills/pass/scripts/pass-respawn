@@ -44,7 +44,7 @@ is the stop record's transcript_path, else the session file's cwd slug; one it c
 `resumed` too. Only then it reads the resume mode and builds the prompt. In plain mode it
 requires the session's stop record (hooks/stop-ring.sh, $XDG_STATE_HOME/dotclaude/stops/
 <session>.json) dated after the call with no waits and no task but `dream` or an `artifact
-watch` (lanelib.PLAIN_PASS_IGNORES), since a respawn kills background work, in-process agents
+watch` (lanelib.plain_pass_ignores), since a respawn kills background work, in-process agents
 and monitors included, which no process check can see (`busy`, also with no record). An
 artifact watch is the Artifact tool's live watch, whose id the model never sees: the respawn
 ends it, and the log line ends `; ignored: artifact watch <url> (<id>)`.
@@ -493,11 +493,11 @@ def logged(entries: list[dict]) -> str:
 
 def ignored(rec: dict | None) -> str:
     """'; ignored: artifact watch <url> (<id>), ...' for the stop record's tasks a plain pass
-    lets the respawn end (lanelib.PLAIN_PASS_IGNORES but memory upkeep), or ''. The respawn ends
+    lets the respawn end (lanelib.plain_pass_ignores, but memory upkeep), or ''. The respawn ends
     a watch on a page Hayden may still comment on; the log keeps the page to watch again."""
     entries = lanelib.task_entries(rec.get("tasks")) if isinstance(rec, dict) else None
     kept = [e for e in entries or []
-            if e["label"] in lanelib.PLAIN_PASS_IGNORES and e["label"] != "dream"]
+            if lanelib.plain_pass_ignores(e) and e["label"] != "dream"]
     return "; ignored: " + logged(kept) if kept else ""
 
 
@@ -515,7 +515,7 @@ def stop_problem(plan: Plan, rec: dict | None) -> tuple[str, str] | None:
     if rec is None:
         return "no stop record", f"pass refused: the Stop wrote no record, {unsure}"
     when = rec.get("time")
-    if not isinstance(when, (int, float)) or when <= plan.called:
+    if not isinstance(when, (int, float)) or not math.isfinite(when) or when <= plan.called:
         return ("no stop record since the call",
                 f"pass refused: the Stop wrote no record since the call, {unsure}")
     waits = rec.get("waits")
@@ -1592,6 +1592,10 @@ def list_tasks() -> int:
         print(f"pass-respawn: no stop record for session {sid} yet (stop-ring.sh writes one at "
               "each Stop)")
         return 0
+    if not math.isfinite(when):
+        print(f"pass-respawn: session {sid}: the record's time can't be read: a plain pass "
+              "would refuse")
+        return 0
     age = max(0, time.time() - when)
     ago = f"{int(age)} s" if age < 60 else f"{int(age // 60)} min"
     print(f"pass-respawn: session {sid} at its last Stop, {ago} ago. Tasks started or ended "
@@ -1609,7 +1613,7 @@ def list_tasks() -> int:
     extra = [{"label": w} for w in waits if w not in {e["label"] for e in entries}]
     for e in entries + extra:
         verdict = ("blocks a plain pass; the turn waits on it" if e["label"] in waits
-                   else "doesn't block a plain pass" if e["label"] in lanelib.PLAIN_PASS_IGNORES
+                   else "doesn't block a plain pass" if lanelib.plain_pass_ignores(e)
                    else "blocks a plain pass")
         print(f"  {lanelib.describe_task(e, LOG_CHARS)}: {verdict}")
     if not entries + extra:

@@ -450,9 +450,11 @@ class Background(Base):
     def test_the_plain_pass_rule_is_pass_respawns(self):
         # One definition: lanelib.plain_pass_blockers, which pass-respawn's stop_problem uses.
         lib = aps.lanelib()
+        # A bare `artifact watch` label has no page: only stop_ring's match writes one.
         self.assertEqual(lib.plain_pass_blockers(["dream", "monitor", "unlabeled",
                                                   "artifact watch"]),
-                         [{"label": "monitor"}, {"label": "unlabeled"}])
+                         [{"label": "monitor"}, {"label": "unlabeled"},
+                          {"label": "artifact watch"}])
         self.assertEqual(lib.plain_pass_blockers(None), [{"label": "?"}])
         with open(os.path.join(REPO, "skills", "pass", "scripts", "pass-respawn")) as f:
             self.assertIn("lanelib.plain_pass_blockers(tasks)", f.read())
@@ -1021,7 +1023,14 @@ class PassRuleParity(Base):
                  ({"waits": "shell", "tasks": []}, False),
                  ({"tasks": []}, False),
                  ({"waits": [], "tasks": "monitor"}, False),
-                 ({"waits": []}, False)]
+                 ({"waits": []}, False),
+                 # Review round 3: an artifact watch counts only with its page, and a time
+                 # that isn't a finite number can't date the record after the call.
+                 ({"waits": [], "tasks": [{"label": "artifact watch", "id": "s1"}]}, False),
+                 ({"waits": [], "tasks": ["artifact watch"]}, False),
+                 ({"time": float("nan"), "waits": [], "tasks": []}, False),
+                 ({"time": float("inf"), "waits": [], "tasks": []}, False),
+                 ({"time": float("-inf"), "waits": [], "tasks": []}, False)]
         path = os.path.join(self.state, "dotclaude", "stops", SID + ".json")
         os.makedirs(os.path.dirname(path), exist_ok=True)
         for body, clear in cases:

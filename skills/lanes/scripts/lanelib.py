@@ -120,6 +120,15 @@ def git(args: list[str],
 # result?", not "would a respawn kill it?"). pass-respawn refuses by this rule, and the autopass
 # watcher (hooks/context_watch.py) says "compact mode" by it, so the two never disagree.
 PLAIN_PASS_IGNORES = frozenset({"dream", "artifact watch"})
+
+
+def plain_pass_ignores(entry: dict) -> bool:
+    """Whether a plain pass lets the respawn end this task (a task_entries entry): a label
+    PLAIN_PASS_IGNORES names, and for an artifact watch its page too. stop_ring writes `url`
+    only for a description artifact_url matched, so a type merely spelled `artifact watch`
+    still blocks."""
+    return entry["label"] in PLAIN_PASS_IGNORES and (entry["label"] != "artifact watch"
+                                                     or bool(entry.get("url")))
 TASK_FIELDS = ("id", "description", "url")
 
 
@@ -142,12 +151,12 @@ def task_entries(tasks) -> list[dict] | None:
 
 def plain_pass_blockers(tasks) -> list[dict]:
     """The entries (task_entries) that make a plain pass refuse, in order: every task but those
-    PLAIN_PASS_IGNORES names. A list that isn't a list blocks, as `?`: with no task list the
+    plain_pass_ignores lets go. A list that isn't a list blocks, as `?`: with no task list the
     respawn can't be shown safe."""
     entries = task_entries(tasks)
     if entries is None:
         return [{"label": "?"}]
-    return [e for e in entries if e["label"] not in PLAIN_PASS_IGNORES]
+    return [e for e in entries if not plain_pass_ignores(e)]
 
 
 TASK_NOUNS = {"unlabeled": "unlabeled task", "None": "unlabeled task"}
