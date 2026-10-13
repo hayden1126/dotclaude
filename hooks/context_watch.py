@@ -55,8 +55,9 @@ stops the finished ones before the handoff and passes plain if none is left (pas
 On Stop the payload's background_tasks decide. PostToolUse has no task list, so the session's
 stop record (stops/<session>.json, which stop-ring.sh writes at every Stop) decides when it was
 written within the last 10 minutes: its `waits` for busy, its `tasks` for blocked. With no such
-record (or one without a task list) the state is unknown: every tier says compact mode, which is
-safe either way, and its text says so without claiming tasks run. A task started since the
+record, or one whose task list or waits can't be read (a wait stop_ring.WAITS doesn't name
+included), the state is unknown: every tier says compact mode, which is safe either way, and its
+text says so without claiming tasks run. A task started since the
 last Stop isn't seen.
 
 Nothing fires while a pass is already pending for the session (pass-respawn's waiter holds
@@ -434,14 +435,15 @@ def stop_work(d: dict):
 
 def recorded_work(sid: str):
     """work_state from the stop record when it is under STOP_FRESH seconds old and lists its
-    tasks and waits; else ("unknown", []) (the texts then say compact mode is safe either way),
-    as pass-respawn refuses a record it can't read."""
+    tasks and waits, every wait one stop_ring.WAITS names; else ("unknown", []) (the texts then
+    say compact mode is safe either way), as pass-respawn refuses a record it can't read."""
     rec = aps.load_json(os.path.join(aps.state_dir(), "stops", sid + ".json"))
     when = rec.get("time") if isinstance(rec, dict) else None
     if not isinstance(when, (int, float)) or not 0 <= time.time() - when < STOP_FRESH:
         return "unknown", []
     tasks, waits = rec.get("tasks"), rec.get("waits")
-    if not (isinstance(tasks, list) and isinstance(waits, list)):
+    if not (isinstance(tasks, list) and isinstance(waits, list)) or \
+            any(not isinstance(w, str) or w not in stop_ring.WAITS for w in waits):
         return "unknown", []
     return work_state(waits, tasks)
 

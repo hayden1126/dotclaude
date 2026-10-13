@@ -460,7 +460,8 @@ class Hooks(unittest.TestCase):
             {"id": "a1", "type": "subagent", "status": "running", "agent_type": "writer",
              "description": 'Fix the "axis"\nlabels\x1b[31m now' + chr(0x202e)},
             {"id": "w1", "type": "workflow", "status": "running", "description": long},
-            {"id": "odd id", "type": "monitor", "description": 7}]})
+            {"id": "odd id", "type": "monitor", "description": 7},
+            {"id": "k1", "type": "new\x1bkind\nx"}]})
         tasks = self.stop_record()["tasks"]
         self.assertEqual(tasks[0], {"label": "shell", "id": "b0fzd27l4",
                                     "description": "Wait for the deploy run to finish"})
@@ -471,6 +472,8 @@ class Hooks(unittest.TestCase):
         self.assertEqual(len(tasks[2]["description"]), stop_ring.DESC_CAP)
         # An id that isn't a plain name and a description that isn't a string are left out.
         self.assertEqual(tasks[3], {"label": "monitor"})
+        # A label (Claude Code's type name) is made one plain line too: it reaches the notice.
+        self.assertEqual(tasks[4], {"label": "newkind x", "id": "k1"})
 
     def artifact_watch(self, url="https://claude.ai/artifact/8JLmWLDftm9VdGcLQnGr76", **extra):
         """A Stop payload entry for the live watch the Artifact tool arms on a publish, in

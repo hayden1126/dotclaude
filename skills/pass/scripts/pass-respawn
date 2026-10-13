@@ -157,10 +157,10 @@ the sandbox can write (docs/lanes.md S3). Every input, and why each is safe:
     wslpath resolve through the sanitized PATH and are refused (no toast) when sandbox-writable,
     like tmux; notify-toast.ps1 is the config dir's, whose target the user tier's denyWrite
     covers (~/dotclaude/notify-toast.ps1), and is checked the same way. The message is fixed
-    text plus tmux's window name and the stop record's tasks: labels, ids and URLs bound by
-    stop_ring's patterns, and descriptions, which are the model's text, made one plain line at
-    write (stop_ring.clean: no control or format characters, `"` made `'`, at most 200
-    characters). It is passed as one argument to a fixed /bin/sh script, never interpolated
+    text plus tmux's window name and the stop record's tasks: ids and URLs bound by
+    stop_ring's patterns, and labels (Claude Code's type names, or ours) and descriptions (the
+    model's text), both made one plain line at write (stop_ring.clean: no control or format
+    characters, `"` made `'`, at most 200 characters). It is passed as one argument to a fixed /bin/sh script, never interpolated
     (WSL hands an embedded `"` to Windows escaped); on the status line `%` and `#` are doubled
     (shown_literally), so tmux shows it rather than expanding strftime or a format. --tasks
     prints the same text to the caller and changes nothing.
@@ -469,12 +469,16 @@ def counted(labels: list[str]) -> str:
                      for label, n in counts.items())
 
 
-def task_line(entries: list[dict]) -> str:
-    """Tasks for a notice that fits a status line: the first SHOWN that the record describes or
-    names (an id) described, the rest counted ("+2 more (1 monitor, 1 shell)"; with none
-    described, only the count, as a record of bare labels reads)."""
-    named = [e for e in entries if e.get("id") or e.get("description") or e.get("url")]
-    shown = named[:SHOWN]
+def described_by_record(entry: dict) -> bool:
+    """Whether the record says more of a task than its label: an id, a description or a page."""
+    return bool(entry.get("id") or entry.get("description") or entry.get("url"))
+
+
+def task_line(entries: list[dict], limit: int = SHOWN) -> str:
+    """Tasks for a notice that fits a status line: the first `limit` that the record describes
+    (described_by_record) described, the rest counted ("+2 more (1 monitor, 1 shell)"; with
+    none described, only the count, as a record of bare labels reads)."""
+    shown = [e for e in entries if described_by_record(e)][:limit]
     rest = [e["label"] for e in entries if not any(e is s for s in shown)]
     if not shown:
         return counted(rest)
@@ -524,16 +528,20 @@ def stop_problem(plan: Plan, rec: dict | None) -> tuple[str, str] | None:
         blockers = lanelib.plain_pass_blockers(tasks) if isinstance(tasks, list) else []
         # The record keeps the waits as labels; its tasks describe them. Any other blocker is
         # named too, so waiting out the waits doesn't meet a second refusal.
-        waiting = [e for e in blockers if e["label"] in names] or [{"label": str(w)}
-                                                                    for w in waits]
+        waiting = [e for e in blockers if e["label"] in names]
+        described = {e["label"] for e in waiting}
+        waiting += [{"label": str(w)} for w in waits if str(w) not in described]
         rest = [e for e in blockers if e["label"] not in names]
         them = "it" if len(waiting) + len(rest) == 1 else "them"
         if not rest:
             return ("waits: " + logged(waiting) + ignored(rec),
                     f"pass refused: waiting on {task_line(waiting)} (a respawn would kill "
                     f"{them}). /pass compact keeps {them}, or let {them} finish and /pass")
+        # SHOWN named across both parts: the waits first, then the rest.
+        left = SHOWN - min(SHOWN, sum(map(described_by_record, waiting)))
         return ("waits: " + logged(waiting) + "; tasks: " + logged(rest) + ignored(rec),
-                f"pass refused: waiting on {task_line(waiting)}, and {task_line(rest)} running "
+                f"pass refused: waiting on {task_line(waiting)}, and {task_line(rest, left)} "
+                f"running "
                 f"(a respawn would kill {them}). /pass compact keeps {them}, or let the waits "
                 f"finish, stop the rest (/tasks, or ask Claude to TaskStop {them}) and /pass")
     tasks = rec.get("tasks")
@@ -1600,8 +1608,8 @@ def list_tasks() -> int:
     # A wait the tasks don't describe still blocks, as the waiter reads it (stop_problem).
     extra = [{"label": w} for w in waits if w not in {e["label"] for e in entries}]
     for e in entries + extra:
-        verdict = ("doesn't block a plain pass" if e["label"] in lanelib.PLAIN_PASS_IGNORES
-                   else "blocks a plain pass; the turn waits on it" if e["label"] in waits
+        verdict = ("blocks a plain pass; the turn waits on it" if e["label"] in waits
+                   else "doesn't block a plain pass" if e["label"] in lanelib.PLAIN_PASS_IGNORES
                    else "blocks a plain pass")
         print(f"  {lanelib.describe_task(e, LOG_CHARS)}: {verdict}")
     if not entries + extra:

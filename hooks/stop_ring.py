@@ -297,12 +297,12 @@ def clean(text):
 
 
 def task_entries(tasks: list, labels: list) -> list:
-    """The stop record's `tasks`: per background_tasks entry, {label} plus its id when that is a
-    plain name, its description (clean) and an artifact watch's url. pass-respawn names them
+    """The stop record's `tasks`: per background_tasks entry, {label} (clean) plus its id when
+    that is a plain name, its description (clean) and an artifact watch's url. pass-respawn names them
     in a refusal and `pass-respawn --tasks` lists them, so the session can stop one by id."""
     out = []
     for t, k in zip(tasks, labels):
-        e = {"label": k if isinstance(k, str) and k else "unlabeled"}
+        e = {"label": clean(k) or "unlabeled"}
         if isinstance(t, dict):
             if isinstance(t.get("id"), str) and ID.fullmatch(t["id"]):
                 e["id"] = t["id"]

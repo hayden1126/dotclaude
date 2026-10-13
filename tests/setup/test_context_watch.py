@@ -12,12 +12,15 @@ import importlib.util
 import io
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
 import tempfile
 import time
+import types
 import unittest
+from importlib.machinery import SourceFileLoader
 from unittest import mock
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -384,6 +387,13 @@ class Background(Base):
         with mock.patch.object(aps, "lanelib", return_value=None), \
                 mock.patch.object(aps, "decide", return_value=(True, "pass.toml")):
             self.assertEqual(cw.handle(payload), block("soft_compact", "310k", "artifact watch"))
+
+    def test_a_description_with_braces_reaches_the_nudge_as_text(self):
+        # The names fill TASKS_NOTE as a value; a brace in one is never a format field.
+        self.on()
+        tasks = [{"id": "m1", "type": "monitor", "description": "watch {tasks} {0} {n}"}]
+        self.assertIn('Running: monitor "watch {tasks} {0} {n}" (m1).',
+                      self.stop(310_000, background_tasks=tasks)["reason"])
 
     def test_the_nudge_names_at_most_ten_tasks(self):
         self.on()
@@ -984,6 +994,50 @@ class Locks(Base):
         with mock.patch.object(aps, "decide", decide):
             self.assertEqual(cw.handle(payload), block("soft", "310k"))
         self.assertEqual(held, [True])
+
+
+class PassRuleParity(Base):
+    """One stop record through every reader: pass-respawn's waiter (stop_problem), its --tasks,
+    and the nudge's recorded_work. None may read a record as clearer than the waiter does
+    (review round 2: a wait labeled `dream` read as clear in two of them)."""
+
+    def test_every_reader_agrees_whether_a_plain_pass_is_clear(self):
+        loader = SourceFileLoader("pass_respawn", os.path.join(REPO, "skills", "pass",
+                                                                "scripts", "pass-respawn"))
+        pr = importlib.util.module_from_spec(importlib.util.spec_from_loader("pass_respawn",
+                                                                              loader))
+        loader.exec_module(pr)
+        plan = types.SimpleNamespace(session_id=SID, called=0)
+        watch = {"label": "artifact watch", "id": "s1", "url": "https://claude.ai/artifact/x"}
+        cases = [({"waits": [], "tasks": []}, True),
+                 ({"waits": [], "tasks": [watch, {"label": "dream"}, "dream"]}, True),
+                 ({"waits": [], "tasks": [{"label": "monitor", "id": "m1"}]}, False),
+                 ({"waits": [], "tasks": [None, 3]}, False),
+                 ({"waits": ["shell"], "tasks": [{"label": "shell", "id": "b1"}]}, False),
+                 ({"waits": ["shell"], "tasks": []}, False),
+                 ({"waits": ["dream"], "tasks": []}, False),
+                 ({"waits": ["artifact watch"], "tasks": [watch]}, False),
+                 ({"waits": [1], "tasks": []}, False),
+                 ({"waits": "shell", "tasks": []}, False),
+                 ({"tasks": []}, False),
+                 ({"waits": [], "tasks": "monitor"}, False),
+                 ({"waits": []}, False)]
+        path = os.path.join(self.state, "dotclaude", "stops", SID + ".json")
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        for body, clear in cases:
+            with self.subTest(body=body):
+                rec = {"session_id": SID, "time": time.time(), **body}
+                with open(path, "w") as f:
+                    json.dump(rec, f)
+                self.assertEqual(pr.stop_problem(plan, rec) is None, clear)
+                self.assertEqual(cw.recorded_work(SID)[0] is None, clear)
+                out = io.StringIO()
+                with mock.patch.dict(os.environ, {"CLAUDE_CODE_SESSION_ID": SID}), \
+                        contextlib.redirect_stdout(out):
+                    self.assertEqual(pr.main(["--tasks", "-C", self.cwd]), 0)
+                blocks = re.search(r"blocks a plain pass|can't be read|no task list",
+                                   out.getvalue())
+                self.assertEqual(blocks is None, clear, out.getvalue())
 
 
 class PlainPassRule(unittest.TestCase):

@@ -980,6 +980,26 @@ class Plain(Base):
         self.assertIn('busy: waits: shell "npm test" (b1); tasks: monitor "deploy events" '
                       f"(b0fzd27l4); ignored: artifact watch {URL} (s31udgb0s)", self.log())
 
+    def test_a_wait_the_tasks_dont_describe_is_still_named(self):
+        # Review round 2: a second wait with no task entry fell out of the notice.
+        self.stop_waits = ["shell", "subagent"]
+        self.stop_tasks = [{"label": "shell", "id": "b1", "description": "npm test"}]
+        code, out = self.run_pass("--foreground")
+        self.assertEqual(code, 1, out)
+        self.assertDropped("busy", 'waiting on shell "npm test" (b1), +1 more (1 subagent) (a '
+                           "respawn would kill them)")
+        self.assertIn('busy: waits: shell "npm test" (b1), subagent', self.log())
+
+    def test_waits_and_tasks_together_name_two_in_all(self):
+        # The notice fits a status line: SHOWN named across both parts, the rest counted.
+        self.stop_waits = ["shell"]
+        self.stop_tasks = [{"label": "shell", "id": f"b{i}", "description": f"job {i}"}
+                           for i in (1, 2, 3)] + [DEPLOY, {"label": "monitor", "id": "m2"}]
+        code, out = self.run_pass("--foreground")
+        self.assertEqual(code, 1, out)
+        self.assertDropped("busy", 'waiting on shell "job 1" (b1), shell "job 2" (b2), +1 more '
+                           "(1 shell), and 2 monitors running (a respawn would kill them)")
+
     def test_an_artifact_watch_alone_lets_the_pass_respawn(self):
         # The Artifact tool's live watch: the session never sees its id and can't stop it, so
         # the respawn ends it and pass.log names the page, for Hayden to watch it again.
