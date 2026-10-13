@@ -533,6 +533,7 @@ def op_track():
             if e["starred"]:
                 e["tab"] = dict(server, pane=pane)
             if entry(sid) != was:
+                keep.add((sid, pane))   # changed meanwhile: leave it, and its registry entry
                 continue
             save(e)
         old = load(os.path.join(REG, sid + ".json")) or {}

@@ -917,7 +917,7 @@ class Saved(unittest.TestCase):
         self.assertIsNone(self.reg_entry(1))
         os.remove(os.path.join(self.sessions, "2.json"))
         # Shelved just now, or after this track started (a saved_at past its clock).
-        for age in (0, -1):
+        for age in (0, -20):
             with self.subTest(age=age):
                 self.put(1, shelved=True, age=age)
                 before = self.saved()
