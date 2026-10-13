@@ -62,9 +62,10 @@ caller, which reads them before its reply, so they show nothing in tmux. Never r
 compact on a failing check: the respawn throws away the context that could fix the gap.
   plain    write the Star carry marker (tmux/claude-saved re-keys a starred chat to the new
            session on its `startup`) and the replies of the last 5 turns
-           (pass-last/<pane number>.json: the stop record's `replies` and the tab, for
-           hooks/pass-banner.sh's banner and the Ctrl-b Up popup, tmux/pass-last; with no reply
-           text, any older one for the pane goes),
+           (pass-last/<pane number>.json: the stop record's `replies`, Hayden's prompt for
+           each turn from the transcript's last 8 MiB, and the tab, for hooks/pass-banner.sh's
+           banner and the Ctrl-b Up popup, tmux/pass-last; with no reply text, any older one
+           for the pane goes),
            then `tmux respawn-pane -k -t <pane> -c <toplevel> -- <abs claude>
            [--permission-mode plan] <prompt>`; both files are removed again when the respawn
            fails (`failed`) or anything after writing them raises
@@ -1125,25 +1126,129 @@ def write_utf8_json(path: str, data) -> None:
         raise
 
 
+PROMPT_TAIL = 8 * 1024 * 1024        # bytes of the transcript read for the prompts
+PROMPT_BYTES, PROMPT_LINES = 1024, 12  # each prompt is cut at whichever comes first
+COMMAND_NAME = re.compile(r"<command-name>(.*?)</command-name>", re.S)
+COMMAND_ARGS = re.compile(r"<command-args>(.*?)</command-args>", re.S)
+ELLIPSIS = chr(0x2026)
+
+
+def prompt_text(content) -> str | None:
+    """A typed prompt's content as Hayden typed it: a slash command as `/name args` (not its
+    <command-message> block, spike A6), an image block as [image]; None with no text."""
+    if isinstance(content, str):
+        if content.lstrip().startswith("<command-message>"):
+            name, args = COMMAND_NAME.search(content), COMMAND_ARGS.search(content)
+            if name and name.group(1).strip():
+                cmd = name.group(1).strip()
+                cmd = cmd if cmd.startswith("/") else "/" + cmd
+                return f"{cmd} {args.group(1).strip()}".rstrip() if args else cmd
+        return content
+    if not isinstance(content, list):
+        return None
+    parts = []
+    for block in content:
+        if not isinstance(block, dict):
+            continue
+        if block.get("type") == "text" and isinstance(block.get("text"), str):
+            parts.append(block["text"])
+        elif block.get("type") == "image":
+            parts.append("[image]")
+    return "\n".join(parts) if parts else None
+
+
+def clip_prompt(text: str) -> str:
+    """text cut to PROMPT_BYTES of UTF-8 or PROMPT_LINES lines, whichever comes first: a line
+    cut on a character boundary ends with an ellipsis, and the lines dropped after it are
+    counted on a last line, "... (N more lines)"."""
+    lines = text.strip("\n").rstrip().split("\n")
+    keep, used = [], 0
+    for line in lines[:PROMPT_LINES]:
+        sep = 1 if keep else 0
+        need = len(line.encode("utf-8")) + sep
+        if used + need > PROMPT_BYTES:
+            room = PROMPT_BYTES - used - sep
+            if room > 0:
+                keep.append(line.encode("utf-8")[:room].decode("utf-8", "ignore") + ELLIPSIS)
+            break
+        keep.append(line)
+        used += need
+    left = len(lines) - len(keep)
+    tail = f"\n{ELLIPSIS} ({left} more line{'' if left == 1 else 's'})" if left else ""
+    return "\n".join(keep) + tail
+
+
+def epoch(stamp) -> float | None:
+    """A transcript timestamp (ISO 8601, Z for UTC) as epoch seconds, or None."""
+    try:
+        return datetime.datetime.fromisoformat(stamp.replace("Z", "+00:00")).timestamp()
+    except (AttributeError, TypeError, ValueError):
+        return None
+
+
+def read_prompts(path: str | None, ids: list[str]) -> list[dict] | None:
+    """Hayden's prompt for each turn in ids, from the transcript's last PROMPT_TAIL bytes:
+    [{prompt_id, text, time}] in the order of ids, for each id that has one. A prompt is a
+    main-chain typed prompt (typed_prompt; not a sidechain or meta entry) whose promptId is the
+    turn's prompt_id; the first one wins. None when the transcript can't be read."""
+    try:
+        with open(path, "rb") as f:
+            start = max(0, f.seek(0, os.SEEK_END) - PROMPT_TAIL)
+            f.seek(start)
+            data = f.read()
+    except (OSError, TypeError, ValueError):
+        return None
+    if start:
+        data = data.partition(b"\n")[2]   # the first line is likely torn
+    wanted, found = set(ids), {}
+    for line in data.split(b"\n"):
+        try:
+            entry = json.loads(line)
+        except ValueError:
+            continue
+        if (not typed_prompt(entry) or entry.get("isSidechain") or entry.get("isMeta")
+                or not isinstance(entry.get("message"), dict)):
+            continue
+        pid = entry.get("promptId")
+        if not isinstance(pid, str) or pid not in wanted or pid in found:
+            continue
+        text = prompt_text(entry["message"].get("content"))
+        if isinstance(text, str) and text.strip():
+            found[pid] = {"prompt_id": pid, "text": clip_prompt(text),
+                          "time": epoch(entry.get("timestamp"))}
+    return [found[p] for p in dict.fromkeys(ids) if p in found]
+
+
 def write_last(plan: Plan, tab: dict | None) -> str | None:
     """What the old session said in its last 5 turns, for the respawned session's banner
     (hooks/pass-banner.sh, which shows the last turn and sets `shown`) and the popup
-    (tmux/pass-last, Ctrl-b Up, which shows every turn): the stop record's `replies`,
-    with the tab, at pass-last/<pane number>.json as {tab, from_session, written_at, replies,
-    shown}. Not one-shot, and apart from the carry marker, which claude-saved consumes on the
-    same SessionStart. Its path, or None when nothing was written: with no reply text or no tab,
+    (tmux/pass-last, Ctrl-b Up, which shows every turn): the stop record's `replies` and
+    Hayden's prompt for each turn (read_prompts), with the tab, at pass-last/<pane number>.json
+    as {tab, from_session, written_at, replies, prompts, shown}. The transcript is the stop
+    record's transcript_path, else the session file's cwd slug; with none readable there is no
+    `prompts` key. The prompts are cosmetic: no error reading them stops the pass. Not
+    one-shot, and apart from the carry marker, which claude-saved consumes on the same
+    SessionStart. Its path, or None when nothing was written: with no reply text or no tab,
     any older file for the pane goes, so the popup never shows an earlier pass's replies as
     this one's. Files older than 7 days go once a day."""
     path = last_path(plan.pane)
     now = time.time()
     prune(os.path.dirname(path), now)
-    replies = replies_of(stop_record(plan.session_id))
+    record = stop_record(plan.session_id)
+    replies = replies_of(record)
     if tab is None or not replies:
         remove(path)
         return None
+    last = {"tab": tab, "from_session": plan.session_id, "written_at": now, "replies": replies}
     try:
-        write_utf8_json(path, {"tab": tab, "from_session": plan.session_id, "written_at": now,
-                               "replies": replies, "shown": False})
+        prompts = read_prompts(transcript_path(plan.session or {}, plan.session_id, record),
+                               [r["prompt_id"] for r in replies])
+    except Exception:  # cosmetic: nothing in a transcript may stop the pass
+        prompts = None
+    if prompts is not None:
+        last["prompts"] = prompts
+    try:
+        write_utf8_json(path, {**last, "shown": False})
     except (OSError, ValueError):
         remove(path)
         return None
