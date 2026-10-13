@@ -22,11 +22,15 @@ The record holds the exact facts and the fresh session re-reads it. So the hando
    | plain (the default): a fresh `claude` in the same pane | a task boundary (merged, a new request), poisoned context (corrected twice on the same thing), a lane at a boundary, an approved plan ready to run fresh |
    | compact: `/compact <focus>` in place, then the resume prompt | the same task mid-flight with tacit state (ruled-out hypotheses, half-built understanding), background tasks in flight, waiting on a build |
 
-2. **Plain mode: stop the leftovers first.** A respawn kills every background task silently, and an in-process teammate with them. So before a plain pass, list the session's running background tasks: the Monitor watches you started, background Bash, and the agents and teammates you know of.
-   - A task whose job is done is a leftover (a watch whose answer came, a server nothing uses now): stop it with `TaskStop`, a Monitor too.
-   - If any is still in use, use compact mode instead, and say so in your reply.
+2. **Stop the leftovers first, in either mode.** A respawn kills every background task silently, an in-process teammate too, and a compact leaves a leftover running through every later nudge. So before the handoff, list the session's tasks.
+   - Run `pass-respawn -C <toplevel> --tasks`, bare like step 5. It prints each task from the last Stop with its description and id, and whether it blocks a plain pass. Add any you started this turn: a Monitor, background Bash, the agents and teammates you know of.
+   - Never use `ps` for this. Tasks aren't child processes you can see, but the MCP servers are, and they look like the whole list.
+   - A task whose job is done is a leftover (a watch whose answer came, a server nothing uses now): stop it with `TaskStop <id>`, a Monitor too.
+   - A task you can't tie to finished work: ask Hayden before you stop it, and don't pass this turn.
+   - In plain mode, if any is still in use, use compact mode instead, and say so in your reply. In compact mode, leave it running.
    - If a task you stopped still shows as running (a finished in-process teammate lingers in the list), use compact mode. Don't keep retrying `TaskStop`.
-   - You judge, the script enforces: `pass-respawn` still refuses a plain pass while any task but memory upkeep (`dream`) runs, so a skipped check can't kill a live watcher. Its refusal is loud: a notice held until a key, plus the Windows toast, counting the tasks ("3 monitors running").
+   - An `artifact watch` doesn't block a plain pass. The Artifact tool arms one on each publish, and Claude Code hides it from you and from `/tasks`; the respawn ends it, and `pass.log` names its page. If Hayden is still commenting on that page, put its URL in the record's Next so the fresh session watches it again.
+   - You judge, the script enforces: `pass-respawn` still refuses a plain pass while any task but memory upkeep (`dream`) or an artifact watch runs, so a skipped check can't kill a live watcher. Its refusal is loud (a notice held until a key, plus the Windows toast) and names the first two tasks with their ids; `pass.log` names every one.
 
 3. **Run the handoff skill.**
    - If a handoff already ran this session, run its delta mode (the `handoff` skill, "Delta mode").
@@ -53,7 +57,7 @@ The waiter watches this session's own status in `~/.claude/sessions/<pid>.json` 
 1. It re-runs `handoff-check`.
 2. It drops the pass if Hayden typed a prompt after the call, or queued one mid-turn, or the transcript can't be read.
 3. It reads the resume mode.
-4. In plain mode, it checks the session's stop record for background work: any task but memory upkeep (`dream`) drops it.
+4. In plain mode, it checks the session's stop record for background work: any task but memory upkeep (`dream`) or an artifact watch drops it.
 5. Right before acting, it checks once more: the session is still idle, the pane still runs the same `claude`, the pane is not in copy mode, and the input box is empty. A draft Hayden is composing drops the pass in both modes, since typing would join it and a respawn would discard it. The dim ghost suggestion doesn't count.
 6. In compact mode it checks the pane again between `/compact` and the resume prompt. If copy mode, a draft or no input box came up in that second, it doesn't type the prompt: it shows it in the status line for Hayden to type, where it stays until a key press, and writes it whole into `pass.log` (logged `partial`).
 
@@ -65,7 +69,7 @@ A refusal (`stale`, `busy`, `timeout`, `failed`, `error`, and the resume prompt 
 |---|---|---|
 | `stale` | work landed after the handoff (an edit, a commit) | run the delta handoff, then `/pass` again |
 | `resumed` | Hayden typed a prompt after the call, or the turn restarted | finish that turn, then `/pass` again if it still applies |
-| `busy` | the stop listed background tasks (counted: "3 monitors running"; `pass.log` says `tasks:`, or `waits:` for real waits) or wrote no record; or, at the last check, the pane was in copy mode, had a draft in the input box, or showed no input box | `/pass compact` keeps the tasks; or stop the leftovers (`TaskStop`) or wait, then `/pass`; leave copy mode or send or clear the draft, then `/pass` again |
+| `busy` | the stop listed background tasks (the notice names the first two with their ids, `pass.log` every one, as `tasks:`, or `waits:` for real waits) or wrote no record; or, at the last check, the pane was in copy mode, had a draft in the input box, or showed no input box | stop the leftovers (step 2: `--tasks`, then `TaskStop <id>`) or wait, then `/pass`; `/pass compact` keeps the tasks; leave copy mode or send or clear the draft, then `/pass` again |
 | `gone` | the session, its process or the pane went away or changed (a `/clear`, an exit) | `/pass` again from the live session |
 | `timeout` | the turn never ended (600 s) | `/pass` again |
 | `cancelled` | `pass-respawn -C <toplevel> --cancel` ended the waiter | nothing; `/pass` again when wanted |
@@ -82,7 +86,7 @@ With autopass on (`/autopass on` in the tab, a lane or a lanes repo's main check
 - **Soft (300k), at a Stop:** done end to end, run this skill now. A small remainder left, finish it first. Your last reply asked Hayden something, end the turn and do nothing else.
 - **Wrap-up (480k):** finish the step you are on and don't start another. If more than that step is left, run this skill now, in compact mode if you are mid-task.
 - **Hard (520k, again every 20k until you start the pass):** run this skill now: compact mode mid-task, plain at a task boundary.
-- When it says compact mode because background tasks are running (or may be: a tool call can't see the task list), run step 2's check: stop the leftovers, then pass plain if none remain; use compact if any is still in use (or a stopped one still shows). Compacting over leftovers would leave them running through every later nudge.
+- When it says compact mode because background tasks are running (or may be: a tool call can't see the task list), run step 2's check: stop the leftovers, then pass plain if none remain; use compact if any is still in use (or a stopped one still shows). The nudge names each task with its id. Compacting over leftovers would leave them running through every later nudge.
 - The tiers follow the window: on a smaller one they come earlier, and the text always names the size and where auto-compact fires.
 
 An auto-pass is a normal pass: the same handoff, `handoff-check` and `pass-respawn`, and the fresh session starts in plan mode unless the first Next item is approved. Never pass on a nudge while Hayden is waiting on an answer from you. With autopass off you get no nudge: Hayden alone sees one line at the hard tier and decides. `/autopass` is Hayden's: the autopass mod answers it without a model turn, and you never run it.
@@ -97,7 +101,8 @@ The fresh session starts in **plan mode** unless the status doc's Next block car
 |---|---|
 | Passing on a failing `handoff-check` | Fix the gaps first; the respawn throws away the context that could fix them |
 | Doing anything after `pass-respawn` | Make it the turn's last action; later work makes the handoff stale and the pass drops |
-| A plain pass with background tasks running | Stop the leftovers (`TaskStop`); if any is still in use, use compact; a respawn kills them |
+| A plain pass with background tasks running | Stop the leftovers (`TaskStop <id>`); if any is still in use, use compact; a respawn kills them |
+| Checking `ps` for leftover tasks | Read `pass-respawn -C <toplevel> --tasks`: tasks aren't child processes, and the MCP servers that are look like the whole list |
 | Promising "the pane restarts" | Say it restarts unless the gate refuses; the checks run after your reply |
 | Skipping the delta handoff because a handoff ran earlier | Work after a handoff makes it stale; run the delta mode |
 | Writing the approval marker to get a normal-mode resume | Only for an approval Hayden gave this session, cited; never inferred |

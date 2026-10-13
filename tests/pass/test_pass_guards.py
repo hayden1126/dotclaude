@@ -1056,6 +1056,24 @@ class SkillLeftovers(unittest.TestCase):
                       self.text[:call])
         self.assertIn("Don't keep retrying `TaskStop`", self.text[:call])
 
+    def test_step_2_reads_the_task_list_before_the_handoff_in_either_mode(self):
+        # Incident e7cc7b9a: the session checked ps, saw only MCP servers, and called its work
+        # finished. The list comes from pass-respawn --tasks, before the handoff, in both modes.
+        handoff = self.text.index("**Run the handoff skill.**")
+        step2 = self.text[self.text.index("2. **Stop the leftovers first"):handoff]
+        self.assertIn("in either mode", step2)
+        self.assertIn("pass-respawn -C <toplevel> --tasks", step2)
+        self.assertIn("Never use `ps`", step2)
+        self.assertIn("TaskStop <id>", step2)
+        self.assertIn("ask Hayden before you stop it, and don't pass this turn", step2)
+        self.assertIn("In compact mode, leave it running", step2)
+
+    def test_step_2_says_an_artifact_watch_doesnt_block(self):
+        call = self.text.index("Run `pass-respawn -C <toplevel>`")
+        before = self.text[:call]
+        self.assertIn("An `artifact watch` doesn't block a plain pass", before)
+        self.assertIn("put its URL in the record's Next", before)
+
     def test_the_autopass_nudge_defers_to_step_2(self):
         # A nudge that names running tasks must not compact forever over leftovers.
         nudge = next(ln for ln in self.text.splitlines()

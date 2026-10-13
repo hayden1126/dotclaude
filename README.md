@@ -476,16 +476,26 @@ idle, the script rechecks the handoff and respawns the pane with a fresh `claude
   approval given in the session, and `handoff-check` fails one with a bad, older or future
   date, or when it can't find the session's start.
 - It waits for this session's own idle status (`~/.claude/sessions/<pid>.json`), not the tab's.
-  The pass drops, with nothing changed, when work landed after the handoff (`stale`), Hayden
-  typed or queued a prompt after the call (`resumed`), the stop listed any background task but
-  memory upkeep, or the pane was in copy mode or held a draft in the input box (`busy`), the
-  session or pane went away or changed (`gone`), or the turn never ended (`timeout`). A refusal
-  (`stale`, `busy`, `timeout`, `failed`, an `error` in the waiter, and `partial` below) shows
-  its cause and fix on every terminal attached to the pane's tmux session until a key press,
-  plus a Windows toast; `resumed`, `gone` and `cancelled`, which Hayden caused, show one brief
-  line in the status line. Fix the cause and run `/pass` again. In compact mode, copy mode,
-  a draft or no input box between `/compact` and the resume prompt leaves the prompt for you to
-  type (`partial`): it stays in the status line until a key press, and `pass.log` has it whole.
+  The pass drops, with nothing changed, when work landed after the handoff (`stale`), Hayden typed
+  or queued a prompt after the call (`resumed`), the stop listed any background task but memory
+  upkeep or an artifact watch, or the pane was in copy mode or held a draft in the input box
+  (`busy`), the session or pane went away or changed (`gone`), or the turn never ended
+  (`timeout`). A refusal (`stale`, `busy`, `timeout`, `failed`, an `error` in the waiter, and
+  `partial` below) shows its cause and fix on every terminal attached to the pane's tmux session
+  until a key press, plus a Windows toast; `resumed`, `gone` and `cancelled`, which Hayden caused,
+  show one brief line in the status line. Fix the cause and run `/pass` again. In compact mode,
+  copy mode, a draft or no input box between `/compact` and the resume prompt leaves the prompt
+  for you to type (`partial`): it stays in the status line until a key press, and `pass.log` has
+  it whole.
+- A `busy` refusal names the first two tasks with their description and id (`monitor "deploy
+  events" (b0fzd27l4) running`), and `pass.log` names every one. Stop a leftover from `/tasks`,
+  or ask Claude to `TaskStop` it. `/pass` checks first: `pass-respawn -C <dir> --tasks` lists
+  the session's tasks from its last Stop, and Claude stops the finished ones (asking you about
+  any it can't place) before the handoff, in either mode.
+- An *artifact watch* never blocks. The Artifact tool arms one each time it publishes a page, to
+  deliver your comments, and Claude Code hides it from `/tasks` and from the model, so nothing
+  could stop it. The respawn ends it, and `pass.log` names the page, so the fresh session can
+  watch it again.
 - What Claude said before a pass: a plain pass clears the pane, so the old session's replies
   would leave the screen. The fresh session shows what was said in the last turn once as a
   banner (at most 40 lines of reply and 4 KiB in all), which you see and the model doesn't. A
@@ -538,8 +548,9 @@ before that (at most 47k), wrap-up 7% before hard (at most 40k), soft at half th
   calls the `pass` skill, runs `pass-respawn` or you type `/pass`, and resumes if no pass came
   40k later.
 - Background work: while a subagent, shell, workflow or cloud session runs, soft and wrap-up
-  wait and hard says `pass compact`. With any other task but `dream` (a monitor, a teammate),
-  every tier says compact mode, since `pass-respawn` would refuse a plain pass. A Monitor
+  wait and hard says `pass compact`. With any other task but `dream` or an artifact watch (a
+  monitor, a teammate), every tier says compact mode, since `pass-respawn` would refuse a plain
+  pass, and names each task with its id, so Claude stops the finished ones first. A Monitor
   counts as a monitor, though Claude Code reports it as a shell (PLAN.md A10). A tool call
   can't see the task list, so it reads the last Stop's record; with none from the last 10
   minutes, it says compact mode too, as safe whether or not anything runs.
