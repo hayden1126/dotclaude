@@ -189,7 +189,8 @@ git authenticates through `gh auth git-credential` over HTTPS, and its token liv
 `~/.config/gh`. The sandbox's `denyRead` hides that directory. So nothing inside the sandbox can
 authenticate to GitHub, whatever form the command takes: an alias, a Makefile or a test script.
 
-The main thread's `gh` and git network commands are in `excludedCommands`. They run unsandboxed
+The main thread's git network commands and `gh`'s allowed families (README, permissions) are in
+`excludedCommands`. They run unsandboxed
 through the normal permission flow, as they did before. Delegated agents are denied every excluded
 command: the same holds for `delegation-ledger`, the excluded `lane` subcommands and
 `pass-respawn`, so an agent lists such a step in `blocked_actions`.

@@ -110,8 +110,8 @@ Asks cover what an excluded command could still be made to run or read:
 - git's `--upload-pack`, `--receive-pack` and `--exec`, in every prefix git accepts;
 - `gh auth status -t`; `gh run download`, which writes where it's told; and the flags that read
   a local file and send it to GitHub (`--body-file`, `-F`, `--field`, `--input`), since denyRead
-  doesn't bind an excluded command. A bundled short flag (`-dF`) gets past a glob; Part 2's guard
-  will parse gh's arguments and check each path instead;
+  doesn't bind an excluded command. A bundled short flag (`-dF`) gets past a glob, so it is left to
+  the classifier until a guard parses gh's arguments and checks each path;
 - `lane init --setup` or `--root`, `lane done --abandon`, `codex-delegate --network` and
   `--no-scope` (these wrappers take no abbreviated flag), and the Windows shells.
 
