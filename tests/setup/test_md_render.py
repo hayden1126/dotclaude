@@ -70,12 +70,13 @@ class Blocks(unittest.TestCase):
             "      ok",
             "  " + BULLET + " star"])
 
-    def test_an_indented_line_continues_its_list_item(self):
+    def test_an_indented_line_keeps_its_list_items_hanging_indent(self):
         self.assertEqual(plain("- one\n  more of one\n- two"),
-                         "  " + BULLET + " one more of one\n  " + BULLET + " two")
+                         "  " + BULLET + " one\n    more of one\n  " + BULLET + " two")
 
-    def test_paragraph_lines_join_and_blank_runs_collapse(self):
-        self.assertEqual(plain("\n\none\ntwo\n\n\n\nthree\n\n"), "one two\n\nthree")
+    def test_line_breaks_stay_and_blank_runs_collapse(self):
+        self.assertEqual(plain("\n\nDone: one\nNext: two\n\n\n\nthree\n\n"),
+                         "Done: one\nNext: two\n\nthree")
 
     def test_fenced_code_has_a_dim_bar_and_never_wraps(self):
         long = "x" * 50

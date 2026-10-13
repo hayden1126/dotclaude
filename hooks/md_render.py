@@ -12,9 +12,11 @@ non-ASCII characters with chr().
 What render handles: **bold**, *italic*, code spans, [text](url) links (the text, underlined),
 # headings, -, * and 1. lists with a hanging indent (nested indentation kept), fenced code (a
 dim bar, not wrapped), pipe tables drawn with box lines when they fit the width (else the raw
-rows, dim), and --- rules. Paragraph lines join, as markdown's soft breaks do, and wrap at word
+rows, dim), and --- rules. A line break stays a line break (as Claude Code and GitHub comments
+show one; a reply's "Done: ...\nNext: ..." lines stay apart), and each line wraps at word
 boundaries by terminal cells: a wide (W or F) character is 2 cells, a combining or format
-character 0. A word longer than the line is broken by cells.
+character 0. A word longer than the line is broken by cells. A list item's indented lines keep
+its hanging indent.
 
 Control characters (C0 but tab and newline, DEL, C1) are dropped before any escape is added, so
 an escape sequence in the text never reaches the terminal. Every style opened on a line closes
@@ -296,18 +298,17 @@ def render(text: str, width: int, color: bool = True, reset: str = "full") -> st
                 item.append(lines[i].strip())
                 i += 1
             first = " " * indent + mark + " "
-            para(spans(" ".join(item)), (first, cells(first)), (" " * cells(first), cells(first)))
+            hang = (" " * cells(first), cells(first))
+            para(spans(item[0]), (first, cells(first)), hang)
+            for more in item[1:]:
+                para(spans(more), hang, hang)
             continue
         if not line.strip():
             out.append("")
             i += 1
             continue
-        block = [line.strip()]
+        para(spans(line.strip()))
         i += 1
-        while i < len(lines) and lines[i].strip() and not _starts_block(lines[i]):
-            block.append(lines[i].strip())
-            i += 1
-        para(spans(" ".join(block)))
     squeezed = []
     for line in out:
         if line or (squeezed and squeezed[-1]):
