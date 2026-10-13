@@ -406,6 +406,11 @@ def op_shelve(mode, pane, start, pid, pane_pid, command, socket, title):
     if not tpath:
         print("empty")
         return
+    root = int(pane_pid) if pane_pid.isdigit() else None
+    if job and any(pane_of(s) == pane and descends(s["pid"], root) for s in live_sessions()):
+        # A suspended claude under the attach client: the kill would take that chat, unsaved.
+        print("suspended")
+        return
     if mode == "check":
         print("ok")
         return
@@ -516,15 +521,19 @@ def op_track():
         sid = s["sessionId"]
         e = entry(sid)
         if e and e["shelved"]:
-            if 0 <= NOW - num(e.get("saved_at")) < SHELVED_GRACE:
-                continue   # Shelve deleted its entry just now; a track that read /proc before
-                           # the kill must not write it back
+            if NOW - num(e.get("saved_at")) < SHELVED_GRACE:
+                # Shelve deleted its entry just now (or after this run started: its saved_at
+                # is past NOW); a track that read /proc before the kill must not write it back.
+                continue
             # Shelved a while ago and attached again: no SessionStart reaches claude-saved, so
-            # this does that hook's work.
+            # this does that hook's work, unless a Star or Shelve changed the entry meanwhile.
+            was = dict(e)
             e["shelved"] = False
             e.pop("opening", None)
             if e["starred"]:
                 e["tab"] = dict(server, pane=pane)
+            if entry(sid) != was:
+                continue
             save(e)
         old = load(os.path.join(REG, sid + ".json")) or {}
         keep.add((sid, pane))
@@ -790,6 +799,7 @@ case "$cmd" in
     case "$(py shelve check "$pane" "$start" "$pid" "$panepid" "$command" "$socket" "$title")" in
       none) msg "no Claude session found in this tab"; exit 0 ;;
       empty) msg "no messages yet, nothing to shelve"; exit 0 ;;
+      suspended) msg "a suspended Claude also runs in this tab (fg it, or exit it first)"; exit 0 ;;
       ok) ;;
       *) exit 0 ;;
     esac

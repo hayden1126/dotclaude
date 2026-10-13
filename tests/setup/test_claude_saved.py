@@ -761,6 +761,11 @@ class Saved(unittest.TestCase):
         self.track_panes(("%4", self.ppid, 1))
         self.run_saved("track")
         self.assertEqual(self.reg_entry(2)["pane"], "%4")
+        # Shelve would kill the suspended chat with the tab, unsaved: it refuses instead.
+        self.run_saved("shelve", "%4", CLIENT)
+        self.assertEqual(self.calls("tmux", "kill-window") + self.calls("claude"), [])
+        self.assertFalse(self.saved()[sid(2)]["shelved"])
+        self.assertIn("suspended", self.messages()[-1])
 
     def test_an_attach_client_outside_the_pane_is_not_the_tabs(self):
         self.background(1)
@@ -911,9 +916,14 @@ class Saved(unittest.TestCase):
         self.run_saved("track")
         self.assertIsNone(self.reg_entry(1))
         os.remove(os.path.join(self.sessions, "2.json"))
-        self.put(1, shelved=True, age=0)
-        self.run_saved("track")
-        self.assertIsNone(self.reg_entry(1))
+        # Shelved just now, or after this track started (a saved_at past its clock).
+        for age in (0, -1):
+            with self.subTest(age=age):
+                self.put(1, shelved=True, age=age)
+                before = self.saved()
+                self.run_saved("track")
+                self.assertIsNone(self.reg_entry(1))
+                self.assertEqual(self.saved(), before)
 
     def test_track_takes_a_reattached_chat_off_the_shelf(self):
         # Shelved a while ago, then attached again (its stop failed, or it was started from
