@@ -1,23 +1,20 @@
 """tmux/tmux-tab-bar: the grouped multi-row tab bar (stdlib only).
 
-The pure parts (classify, group_windows, lay_out, render) run in-process. `layout` runs as a
-subprocess against a fake tmux (a stateful Python stub that answers the list commands from a
-JSON file and applies set-option to it), and against a real tmux server on a private socket,
-which the Bash sandbox blocks: that class skips there."""
+The pure parts (classify, group_windows, lay_out, render, the source-file quoting) run
+in-process. `layout` runs as a subprocess against a fake tmux (a stateful Python stub that
+answers the list commands from a JSON file and runs `source-file -` through a model of tmux's
+config lexer), and against real tmux servers on private sockets, which the Bash sandbox blocks:
+that class skips there."""
 import fcntl
 import importlib.machinery
 import importlib.util
 import json
 import os
-import pty
 import re
 import shutil
-import struct
 import subprocess
 import sys
 import tempfile
-import termios
-import threading
 import time
 import unittest
 
@@ -180,16 +177,14 @@ SHARED5 = tabs(1, 2, 3, 5, 9)
 
 
 class LayOut(unittest.TestCase):
-    def check_fits(self, lay, width, left=28, right=16):
-        """Every row's headers, slots and +N fit its width; slots respect the cap."""
+    def check_fits(self, lay, width):
+        """Every row's headers, slots and +N fit its width; no slot is over the cap."""
         for r, (row, slot) in enumerate(zip(lay.rows, lay.slots)):
             avail = width - ((lay.left + lay.right) if r == 0 else 0)
             fixed = sum(lay.head_w[i[1]] if i[0] in ("head", "div") else i[2]
                         for i in row if i[0] != "tab")
-            n = len(tab_ids(row))
-            self.assertLessEqual(fixed + n * slot, avail, (r, row))
+            self.assertLessEqual(fixed + len(tab_ids(row)) * slot, avail, (r, row))
             self.assertLessEqual(slot, tb.MAX_SLOT)
-            self.assertLessEqual(n, tb.max_tabs_per_row())
 
     def test_one_laned_group_and_a_shared_row(self):
         lay = tb.lay_out([Group("dotclaude", tabs(2, 3))], tabs(1, 4), 188, "@1", 28, 16)
@@ -206,16 +201,37 @@ class LayOut(unittest.TestCase):
         self.assertEqual(lay.slots, [33, 37])
         self.check_fits(lay, 188)
 
-    def test_the_live_shape_on_the_phone(self):
+    def test_the_live_shape_on_the_phone_spreads_the_lanes_evenly(self):
+        # Row 0 holds 3 of the 4 dotclaude tabs, but 3+1 would leave the first three at 11
+        # cells (`narro…`): 2+2 gives each 17.
         lay = tb.lay_out([DOTCLAUDE], SHARED5, 45, "@4", 28, 16)
         self.assertTrue(lay.phone)
         self.assertEqual(lay.heads, ["dot"])
         self.assertEqual(lay.rows[1][0], ("head", 0, True))     # the overflow header, dimmed
         self.assertEqual([tab_ids(r) for r in lay.rows],
-                         [["@4", "@6", "@7"], ["@8"], ["@1", "@2", "@3", "@5", "@9"]])
+                         [["@4", "@6"], ["@7", "@8"], ["@1", "@2", "@3", "@5", "@9"]])
+        self.assertEqual(lay.slots, [17, 20, 9])
         self.assertEqual((lay.left, lay.right), (tb.PHONE_LEFT, 0))
-        self.assertTrue(all(s >= tb.MIN_SLOT_PHONE for s in lay.slots))
         self.check_fits(lay, 45)
+
+    def test_spread_matrix(self):
+        cases = [(4, [3, 4], [2, 2]), (5, [3, 4], [3, 2]), (5, [2, 4], [2, 3]),
+                 (7, [3, 4, 4], [3, 2, 2]), (9, [3, 4, 4], [3, 3, 3]), (1, [5], [1]),
+                 (6, [1, 10], [1, 5]), (10, [10], [10]), (11, [10, 10], [6, 5])]
+        for n, caps, want in cases:
+            with self.subTest(n=n, caps=caps):
+                got = tb.spread(n, caps)
+                self.assertEqual(got, want)
+                self.assertEqual(sum(got), n)
+                self.assertTrue(all(g <= c for g, c in zip(got, caps)))
+
+    def test_every_kind_spreads_over_its_rows(self):
+        # 11 shared at a width that holds 10 a row: 6+5, not 10+1; the same for a group.
+        lay = tb.lay_out([], tabs(*range(1, 12)), 180, "@1", 0, 0)
+        self.assertEqual([len(tab_ids(r)) for r in lay.rows], [6, 5])
+        lay = tb.lay_out([Group("big", tabs(*range(1, 12)))], [], 180, "@1", 0, 0)
+        self.assertEqual([len(tab_ids(r)) for r in lay.rows], [6, 5])
+        self.check_fits(lay, 180)
 
     def test_four_groups_pack_the_smallest_onto_the_shared_rows(self):
         groups = [Group("alpha", tabs(1, 2)), Group("bravo", tabs(3, 4, 5)),
@@ -231,35 +247,34 @@ class LayOut(unittest.TestCase):
         self.check_fits(lay, 188)
 
     def test_past_5_rows_ends_in_plus_n_and_keeps_the_current_window(self):
-        groups = [Group(f"g{k}", tabs(*range(10 * k + 1, 10 * k + 9))) for k in range(6)]
-        for current in ("@1", "@58"):
+        groups = [Group(f"g{k}", tabs(*range(10 * k + 1, 10 * k + 11))) for k in range(6)]
+        for current in ("@1", "@60"):
             with self.subTest(current=current):
                 lay = tb.lay_out(groups, [], 188, current, 28, 16)
                 self.assertEqual(len(lay.rows), tb.MAX_ROWS)
                 last = lay.rows[-1][-1]
                 self.assertEqual(last[0], "more")
+                self.assertGreater(lay.hidden, 0)
                 self.assertEqual(last[1], lay.hidden)
                 shown = [w for row in lay.rows for w in tab_ids(row)]
-                self.assertEqual(len(shown) + lay.hidden, 48)
+                self.assertEqual(len(shown) + lay.hidden, 60)
                 self.assertIn(current, shown)
                 self.assertEqual(len(set(shown)), len(shown))
                 # Packing these saves no row, so none is packed: every row keeps its header.
                 self.assertTrue(all(row[0][0] == "head" for row in lay.rows))
                 self.check_fits(lay, 188)
 
-    def test_title_churn_cannot_move_a_tab(self):
-        # The layout's inputs are ids, indexes, names, widths and the current window: no title
-        # or state. Changing the current window moves nothing while nothing is hidden.
+    def test_the_current_window_moves_nothing_while_nothing_is_hidden(self):
         a = tb.lay_out([DOTCLAUDE], SHARED5, 188, "@4", 28, 16)
         b = tb.lay_out([DOTCLAUDE], SHARED5, 188, "@9", 28, 16)
         self.assertEqual(a, b)
         self.assertEqual(tb.render(a), tb.render(b))
 
-    def test_a_wide_screen_caps_a_row_by_bytes(self):
-        lay = tb.lay_out([], tabs(*range(1, 21)), 400, "@1", 28, 16)
+    def test_a_wide_row_has_no_tab_cap(self):
+        # Rows go to tmux through source-file, which has no 16 KB command limit.
+        lay = tb.lay_out([], tabs(*range(1, 16)), 400, "@1", 28, 16)
+        self.assertEqual([len(tab_ids(r)) for r in lay.rows], [15])   # (400 - 44) // 18 = 19
         self.check_fits(lay, 400)
-        for row in tb.render(lay):
-            self.assertLessEqual(len(row.encode()), tb.ROW_BYTES)
 
     def test_a_tiny_client_still_shows_one_tab_a_row(self):
         lay = tb.lay_out([DOTCLAUDE], SHARED5, 12, "@4", 28, 16)
@@ -276,11 +291,17 @@ class Render(unittest.TestCase):
             for row in tb.render(lay):
                 with self.subTest(width=width):
                     self.assertTrue(row.startswith("#[fill=colour236]"))
-                    self.assertNotIn("%", row)
-                    self.assertNotIn("#(", row)
-                    self.assertNotIn("#{E:", row)
+                    for bad in ("%", "#(", "#{E:", "'", "\n"):
+                        self.assertNotIn(bad, row)
                     self.assertLessEqual(set(row), ALPHABET)
                     self.assertNotRegex(row, r"#\[[^]]*,")       # one style per #[ ]
+
+    def test_titles_are_drawn_with_their_hashes_doubled(self):
+        e = tb.entry("@7", 7, 30)
+        self.assertIn("#{s/^(✳ )?\\[[^]]*\\] //;q/h:pane_title}", e)
+        self.assertIn("#{q/h:pane_current_command}", e)
+        self.assertNotRegex(e.replace("q/h:pane_title", "").replace(
+            "q/h:pane_current_command", ""), r"pane_title}|pane_current_command}")
 
     def test_row_0_keeps_status_left_and_right(self):
         rows = tb.render(tb.lay_out([DOTCLAUDE], SHARED5, 188, "@4", 28, 16))
@@ -305,7 +326,7 @@ class Render(unittest.TestCase):
                 tb.entry(bad[0], bad[1], 30)
 
     def test_plus_n_is_a_user_range(self):
-        groups = [Group(f"g{k}", tabs(*range(10 * k + 1, 10 * k + 9))) for k in range(6)]
+        groups = [Group(f"g{k}", tabs(*range(10 * k + 1, 10 * k + 11))) for k in range(6)]
         rows = tb.render(tb.lay_out(groups, [], 188, "@1", 28, 16))
         self.assertIn("#[range=user|more]", rows[-1])
 
@@ -355,7 +376,89 @@ class Render(unittest.TestCase):
                          [None, None, None])
 
 
+# --- the source-file write ----------------------------------------------------------------------
+
+# A model of tmux 3.7c's config lexer (cmd-parse.y yylex_token) for the words tmux-tab-bar writes,
+# strict where tmux would expand: in double quotes it allows only a ', and unquoted only plain
+# words and the ; between commands. The fake tmux below runs `source-file -` through it.
+TMUX_WORDS = r'''
+def tmux_words(line):
+    """One config line as tmux's lexer reads it: [[word, ...] per ;-separated command]."""
+    cmds, words, buf, state, inword = [], [], [], None, False
+    for ch in line:
+        if state == "'":
+            if ch == "'":
+                state = None
+            else:
+                buf.append(ch)
+        elif state == '"':
+            if ch == '"':
+                state = None
+            elif ch in "$\\~\n":
+                raise ValueError("tmux would expand %r in double quotes" % ch)
+            else:
+                buf.append(ch)
+        elif ch in " \t":
+            if inword:
+                words.append("".join(buf))
+                buf, inword = [], False
+        elif ch == ";" and not inword:
+            cmds.append(words)
+            words = []
+        elif ch in "'\"":
+            state, inword = ch, True
+        elif ch in "$\\~#{};%\n":
+            raise ValueError("unquoted %r" % ch)
+        else:
+            buf.append(ch)
+            inword = True
+    if state:
+        raise ValueError("an open quote")
+    if inword:
+        words.append("".join(buf))
+    if words:
+        cmds.append(words)
+    return cmds
+'''
+exec(TMUX_WORDS)
+
+ROUND_TRIP = ["'", '"', "\\", "$HOME", ";", "{}", "#(touch x)", "~", "a\\'b", "\\\\", "end\\",
+              "%if 1", " lead", "-t", "", "#{E:x}", "✳▸ ★", "'\"'\"'", "a b\tc", "q'\"\\$H;{}"]
+
+
+class Quote(unittest.TestCase):
+    def test_every_word_reads_back_byte_for_byte(self):
+        for s in ROUND_TRIP:
+            with self.subTest(s=s):
+                line = tb.command("set-option", "-w", "-t", "@1", "@tab_name", s)
+                self.assertEqual(tmux_words(line), [["set-option", "-w", "-t", "@1",
+                                                      "@tab_name", s]])
+
+    def test_a_newline_never_goes_in(self):
+        for s in ("a\nb", "a\rb", "a\0b"):
+            with self.subTest(s=s), self.assertRaises(ValueError):
+                tb.quote(s)
+
+    def test_a_session_line_writes_rows_then_status_then_the_rest_and_the_sig_last(self):
+        lay = tb.lay_out([DOTCLAUDE], SHARED5, 45, "@4", 28, 16)
+        rows = tb.render(lay)
+        line = tb.write_line("$3", tb.session_ops(lay, rows), "3", "SIG")
+        cmds = tmux_words(line)
+        names = [c[3] if c[1] == "-t" else c[4] for c in cmds]
+        self.assertEqual(names, ["@tab_bar_g0", "status-format[0]", "status-format[1]",
+                                 "status-format[2]", "status", "status-position", "status-left",
+                                 "status-right", "@tab_bar_sig"])
+        self.assertEqual([c[4] for c in cmds[1:4]], rows)
+        self.assertEqual(cmds[-1], ["set-option", "-t", "$3", "@tab_bar_sig", "SIG"])
+        no_status = tmux_words(tb.write_line("$3", tb.session_ops(lay, rows), None, "SIG"))
+        self.assertNotIn("status", [c[3] for c in no_status if c[1] == "-t"])
+
+
 # --- claude.conf --------------------------------------------------------------------------------
+
+HOOK = ("'run-shell -b \"[ -x $HOME/.local/bin/tmux-tab-bar ] && "
+        "$HOME/.local/bin/tmux-tab-bar layout >/dev/null 2>&1; true\"'")
+
 
 class Conf(unittest.TestCase):
     CLAUDE_ITEM = re.compile(r'^\s*"(#\{\?@claude_state|Shelf…|Replies before pass)')
@@ -384,23 +487,45 @@ class Conf(unittest.TestCase):
         self.assertNotRegex(block, r"display-menu[^\n]* -O")
         self.assertIn("unbind -n MouseDown1Status", text)
 
-    def test_every_hook_runs_the_layout_by_full_path(self):
+    def test_every_hook_is_silent_exits_0_and_uses_the_full_path(self):
+        # A run-shell -b that prints or fails puts the active pane into view mode.
         with open(CONF) as f:
             text = f.read()
-        for hook in ("client-attached", "client-detached", "client-resized", "window-linked",
-                     "window-unlinked", "after-new-window", "session-window-changed"):
+        hooks = ("client-attached", "client-detached", "client-resized", "window-linked",
+                 "window-unlinked", "after-new-window", "session-window-changed")
+        for hook in hooks:
             with self.subTest(hook=hook):
-                self.assertRegex(text, rf"set-hook -g {hook}\[43\] 'run-shell -b "
-                                       rf"\"\$HOME/\.local/bin/tmux-tab-bar layout\"'")
+                self.assertIn(f"set-hook -g {hook}[43] {HOOK}\n", text)
+        self.assertEqual(text.count("tmux-tab-bar layout"), len(hooks))
+
+    def test_the_hook_command_exits_0_and_says_nothing_whatever_the_script_does(self):
+        cmd = HOOK.split('"')[1].replace("$HOME", "$H")
+        home = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, home)
+        script = os.path.join(home, ".local", "bin", "tmux-tab-bar")
+        os.makedirs(os.path.dirname(script))
+        for body, mode in ((None, None), ("#!/bin/sh\necho out; echo err >&2; exit 3\n", 0o755),
+                           ("#!/bin/sh\nexit 0\n", 0o644)):
+            with self.subTest(body=body, mode=mode):
+                if body is not None:
+                    with open(script, "w") as f:
+                        f.write(body)
+                    os.chmod(script, mode)
+                p = subprocess.run(["sh", "-c", cmd], capture_output=True, text=True,
+                                   timeout=10, env={"H": home, "PATH": "/usr/bin:/bin"})
+                self.assertEqual((p.returncode, p.stdout, p.stderr), (0, "", ""))
 
 
 # --- layout against a fake tmux ------------------------------------------------------------------
 
-FAKE_TMUX = r'''
+FAKE_TMUX = TMUX_WORDS + r'''
 import json, os, re, sys
 args = sys.argv[1:]
-with open(os.environ["STUB_LOG"], "a") as f:
-    f.write(json.dumps(args) + "\n")
+log = os.environ["STUB_LOG"]
+def record(argv):
+    with open(log, "a") as f:
+        f.write(json.dumps(argv) + "\n")
+record(args)
 path = os.environ["STUB_STATE"]
 with open(path) as f:
     st = json.load(f)
@@ -413,26 +538,42 @@ if args[0] in lists:
     for rec in st[lists[args[0]]]:
         print(re.sub(r"#\{([^}]*)\}", lambda m: str(rec.get(m.group(1), "")), fmt))
     sys.exit(0)
-if args[0] != "set-option":
+
+def set_option(argv):
+    rest, unset, window, target = argv[1:], False, False, None
+    while rest and rest[0].startswith("-") and len(rest) > 1 and rest[0] in ("-t", "-u", "-w"):
+        flag = rest.pop(0)
+        if flag == "-t":
+            target = rest.pop(0)
+        unset |= flag == "-u"
+        window |= flag == "-w"
+    key, recs = ("window_id", st["windows"]) if window else ("session_id", st["sessions"])
+    recs = [r for r in recs if r[key] == target]
+    if argv[0] != "set-option" or not recs or len(rest) != (1 if unset else 2):
+        return False
+    for r in recs:
+        if unset:
+            r.pop(rest[0], None)
+        else:
+            r[rest[0]] = rest[1]
+    record(argv)
+    return True
+
+if args != ["source-file", "-"]:
     sys.exit(1)
-rest, unset, window, target = args[1:], False, False, None
-while rest and rest[0].startswith("-"):
-    flag = rest.pop(0)
-    if flag == "-t":
-        target = rest.pop(0)
-    unset |= flag == "-u"
-    window |= flag == "-w"
-key, recs = ("window_id", st["windows"]) if window else ("session_id", st["sessions"])
-recs = [r for r in recs if r[key] == target]
-if not recs:
-    sys.exit(1)
-for r in recs:
-    if unset:
-        r.pop(rest[0], None)
-    else:
-        r[rest[0]] = rest[1]
+ok = True
+for line in sys.stdin.read().splitlines():
+    try:
+        cmds = tmux_words(line)
+    except ValueError:
+        sys.exit(2)                     # a parse error: tmux runs none of the file
+    for argv in cmds:                   # an error drops the rest of its line, as in tmux
+        if not set_option(argv):
+            ok = False
+            break
 with open(path, "w") as f:
     json.dump(st, f)
+sys.exit(0 if ok else 1)
 '''
 
 
@@ -453,6 +594,8 @@ class FakeTmux(unittest.TestCase):
         self.env.update(PATH=stubs + os.pathsep + "/usr/bin:/bin", STUB_LOG=self.log,
                         STUB_STATE=self.state, TMUX="/fake/sock,1,0",
                         TMUX_CLAUDE_STATUS_DIR=self.run_dir)
+        self.base = os.path.join(self.run_dir,
+                                 f".tmux-tab-bar.{os.getuid()}.{tb.server_key('/fake/sock,1,0')}")
         repos = os.path.join(self.tmp, "code")
         os.makedirs(repos)
         lead = make_repo(repos, "dotclaude", lanes=["tab-bar", "lane-close"])
@@ -465,9 +608,11 @@ class FakeTmux(unittest.TestCase):
                           "status-right-length": "16"}],
             "clients": [{"session_id": "$0", "client_width": "188"}],
             "windows": [{"session_id": "$0", "window_id": w, "window_index": w[1:],
-                         "window_active": "1" if w == "@2" else "0"} for w in cwds],
+                         "window_active": "1" if w == "@2" else "0", "@claude_state": "idle"}
+                        for w in cwds],
             "panes": [{"window_id": w, "pane_active": "1", "pane_current_path": p,
-                       "pane_title": "✳ [x] title"} for w, p in cwds.items()],
+                       "pane_title": "✳ [x] title", "@claude_star": ""}
+                      for w, p in cwds.items()],
         })
 
     def write_state(self, st):
@@ -498,8 +643,13 @@ class FakeTmux(unittest.TestCase):
     def session(self):
         return self.read_state()["sessions"][0]
 
+    def rows(self):
+        s = self.session()
+        return [s[k] for k in sorted(k for k in s if k.startswith("status-format"))]
+
     def test_a_first_run_writes_every_row_then_the_count_and_a_rerun_writes_nothing(self):
         self.run_layout()
+        self.assertEqual(sum(c[0] == "source-file" for c in self.calls()), 1)   # one write
         s = self.session()
         self.assertEqual(s["status"], "2")
         self.assertTrue(s["status-format[0]"] and s["status-format[1]"])
@@ -509,26 +659,34 @@ class FakeTmux(unittest.TestCase):
                  for w in self.read_state()["windows"]}
         self.assertEqual(names, {"@1": ("hq:", ""), "@2": ("lead", "0"),
                                  "@3": ("tab-bar", "0"), "@4": ("lane-close", "0")})
-        order = [c[-2] if c[1] != "-u" else c[-1] for c in self.writes()
-                 if c[1] != "-w"]
+        writes = self.writes()
+        order = [c[-1] if c[1] == "-u" else c[-2] for c in writes]
+        self.assertEqual(order.index("@tab_name"), 0)          # window options come first
         self.assertLess(order.index("status-format[1]"), order.index("status"))
+        self.assertLess(order.index("status"), order.index("status-position"))
         self.assertEqual(order[-1], "@tab_bar_sig")
         self.run_layout()
         self.assertEqual(self.writes(), [])
+        self.assertNotIn("source-file", [c[0] for c in self.calls()])
 
-    def test_reads_carry_no_title_or_state_and_title_churn_writes_nothing(self):
+    def test_title_and_state_churn_changes_no_row_and_writes_nothing(self):
         self.run_layout()
         for call in self.calls():
             if call[0].startswith("list-"):
                 fmt = call[call.index("-F") + 1]
                 for word in ("pane_title", "@claude_state", "@claude_star"):
                     self.assertNotIn(word, fmt)
+        rows = self.rows()
         st = self.read_state()
         for p in st["panes"]:
-            p["pane_title"] = "⠂ [x] a brand new and much longer title"
+            p["pane_title"] = "⠂ [x] a brand new and much longer title #[fg=red]"
+            p["@claude_star"] = "1"
+        for w in st["windows"]:
+            w["@claude_state"] = "busy"
         self.write_state(st)
         self.run_layout()
         self.assertEqual(self.writes(), [])
+        self.assertEqual(self.rows(), rows)
 
     def test_the_narrowest_client_picks_the_phone_layout_then_the_desktop_comes_back(self):
         st = self.read_state()
@@ -555,13 +713,53 @@ class FakeTmux(unittest.TestCase):
         self.run_layout()
         self.assertEqual(self.writes(), [])
 
-    def test_a_bar_turned_off_stays_off(self):
+    def test_a_bar_turned_off_stays_off_and_comes_back_laid_out_when_turned_on(self):
         st = self.read_state()
         st["sessions"][0]["status"] = "off"
         self.write_state(st)
         self.run_layout()
         self.assertEqual(self.session()["status"], "off")
-        self.assertIn("status-format[0]", self.session())
+        self.assertIn("status-format[1]", self.session())
+        self.run_layout()
+        self.assertEqual(self.writes(), [])        # off and unchanged: nothing to write
+        st = self.read_state()
+        st["sessions"][0]["status"] = "on"          # turned back on: one row of the default
+        self.write_state(st)
+        self.run_layout()
+        self.assertEqual(self.session()["status"], "2")
+        self.run_layout()
+        self.assertEqual(self.writes(), [])
+
+    def test_a_count_changed_behind_its_back_is_put_right(self):
+        self.run_layout()
+        st = self.read_state()
+        st["sessions"][0]["status"] = "4"
+        self.write_state(st)
+        self.run_layout()
+        self.assertEqual(self.session()["status"], "2")
+        self.run_layout()
+        self.assertEqual(self.writes(), [])
+
+    def test_a_vanished_window_does_not_stop_the_session_line(self):
+        st = self.read_state()
+        st["panes"].append({"window_id": "@9", "pane_active": "1",
+                            "pane_current_path": self.tmp})
+        st["windows"].append({"session_id": "$0", "window_id": "@9", "window_index": "9",
+                              "window_active": "0"})
+        self.write_state(st)
+        # @9 is listed but gone by the write: its option line fails, the session line runs.
+        stub = os.path.join(self.tmp, "bin", "tmux")
+        with open(stub) as f:
+            text = f.read()
+        with open(stub, "w") as f:
+            f.write(text.replace('if args != ["source-file", "-"]:',
+                                 'st["windows"] = [w for w in st["windows"] '
+                                 'if w["window_id"] != "@9"]\n'
+                                 'if args != ["source-file", "-"]:'))
+        self.run_layout()
+        self.assertIn("@tab_bar_sig", self.session())
+        with open(self.base + ".err") as f:
+            self.assertIn("source-file", f.read())
 
     def test_outside_tmux_nothing_runs(self):
         env = {k: v for k, v in self.env.items() if k != "TMUX"}
@@ -573,41 +771,102 @@ class FakeTmux(unittest.TestCase):
     def test_a_failing_tmux_is_fail_open_and_silent(self):
         self.run_layout(STUB_FAIL="list-windows")
         self.assertEqual(self.writes(), [])
-        err = os.path.join(self.run_dir, f".tmux-tab-bar.{os.getuid()}.err")
-        with open(err) as f:
+        with open(self.base + ".err") as f:
             self.assertIn("list-windows", f.read())
+        self.assertEqual(os.stat(self.base + ".err").st_mode & 0o777, 0o600)
+
+    def test_an_unwritable_run_dir_still_lays_out_silently(self):
+        self.run_layout(TMUX_CLAUDE_STATUS_DIR="/nonexistent/dir")
+        self.assertIn("@tab_bar_sig", self.session())
 
     def test_a_held_lock_marks_the_state_dirty_and_leaves(self):
-        lock = os.path.join(self.run_dir, f".tmux-tab-bar.{os.getuid()}.lock")
-        fd = os.open(lock, os.O_RDWR | os.O_CREAT, 0o600)
+        fd = os.open(self.base + ".lock", os.O_RDWR | os.O_CREAT, 0o600)
         self.addCleanup(os.close, fd)
         fcntl.flock(fd, fcntl.LOCK_EX)
         self.run_layout()
         self.assertEqual(self.calls(), [])
-        self.assertTrue(os.path.exists(os.path.join(self.run_dir,
-                                                    f".tmux-tab-bar.{os.getuid()}.dirty")))
+        self.assertTrue(os.path.exists(self.base + ".dirty"))
 
-    def test_bad_usage_exits_2(self):
+    def test_the_lock_is_per_tmux_server(self):
+        fd = os.open(self.base + ".lock", os.O_RDWR | os.O_CREAT, 0o600)
+        self.addCleanup(os.close, fd)
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        self.run_layout(TMUX="/other/sock,1,0")   # another server: not blocked by this lock
+        self.assertIn("list-sessions", [c[0] for c in self.calls()])
+
+    def test_bad_usage_exits_2_silently(self):
         p = subprocess.run([sys.executable, "-I", SCRIPT], capture_output=True, text=True,
                            timeout=30, env=self.env)
-        self.assertEqual(p.returncode, 2)
-        self.assertIn("layout", p.stderr)
+        self.assertEqual((p.returncode, p.stdout, p.stderr), (2, "", ""))
 
 
-# --- layout against a real tmux ------------------------------------------------------------------
+class Lock(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp)
+        self.base = os.path.join(self.tmp, "b")
+
+    def test_a_mark_while_running_runs_again(self):
+        calls = []
+
+        def run():
+            calls.append(1)
+            if len(calls) < 3:
+                tb.touch(self.base + ".dirty")     # another hook fired meanwhile
+
+        tb.run_locked(self.base, run)
+        self.assertEqual(len(calls), 3)
+        self.assertFalse(os.path.exists(self.base + ".dirty"))
+
+    def test_the_passes_are_bounded(self):
+        calls = []
+
+        def run():
+            calls.append(1)
+            tb.touch(self.base + ".dirty")
+
+        tb.run_locked(self.base, run)
+        self.assertEqual(len(calls), 2 * tb.PASSES)   # the passes, then the one retry's
+
+    def test_one_pass_when_nothing_marks(self):
+        calls = []
+        tb.run_locked(self.base, lambda: calls.append(1))
+        self.assertEqual(len(calls), 1)
+
+    def test_the_error_log_never_follows_a_link_and_is_capped(self):
+        target = os.path.join(self.tmp, "target")
+        with open(target, "w") as f:
+            f.write("keep")
+        os.symlink(target, self.base + ".err")
+        tb.log_error(self.base + ".err", "boom")
+        with open(target) as f:
+            self.assertEqual(f.read(), "keep")
+        os.remove(self.base + ".err")
+        tb.log_error(self.base + ".err", "x" * (tb.ERR_MAX * 2))
+        self.assertEqual(os.path.getsize(self.base + ".err"), tb.ERR_MAX)
+
+
+# --- against a real tmux -------------------------------------------------------------------------
 
 class RealTmux(unittest.TestCase):
-    """A private tmux server (-S, -f /dev/null) with one attached client on a pty at 188x46.
-    HOME is a temp dir, so the conf's hooks find no tmux-tab-bar and stay inert: only the
-    explicit runs lay out."""
+    """A private tmux server "in" (-S, -f /dev/null, mouse on, tmux/claude.conf sourced) holding
+    session t: window 0 in a laned repo's lead, 1 in its lane, 2 in a plain dir. Its client runs
+    inside a second private server "out" (188x46, no status bar of its own), so capture-pane on
+    the out pane shows what the client draws, and send-keys -l on it sends the client SGR mouse
+    events. HOME is a temp dir without tmux-tab-bar, so the conf's hooks find no script: each must
+    still exit 0 silently (test_no_hook_puts_a_pane_in_view_mode). The tests lay out by running
+    the script themselves."""
 
     def setUp(self):
         self.tmux_bin = shutil.which("tmux")
         if not self.tmux_bin:
             self.skipTest("tmux not installed")
-        self.tmp = os.path.realpath(tempfile.mkdtemp())
+        try:                    # a short path: a socket path has a 108-byte limit
+            self.tmp = os.path.realpath(tempfile.mkdtemp(dir="/tmp"))
+        except OSError:         # the sandbox's /tmp is read-only; tmux skips below anyway
+            self.tmp = os.path.realpath(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, self.tmp, True)
-        self.sock = os.path.join(self.tmp, "sock")
+        self.sock, self.out_sock = os.path.join(self.tmp, "in"), os.path.join(self.tmp, "out")
         self.home = os.path.join(self.tmp, "home")
         os.makedirs(self.home)
         self.env = {k: v for k, v in os.environ.items() if not k.startswith(("TMUX", "CLAUDE"))}
@@ -615,99 +874,177 @@ class RealTmux(unittest.TestCase):
         repos = os.path.join(self.tmp, "code")
         os.makedirs(repos)
         self.lead = make_repo(repos, "dotclaude", lanes=["tab-bar"])
-        self.lane = os.path.join(repos, "tab-bar")
         self.plain = os.path.join(repos, "hq")
         os.makedirs(self.plain)
-        p = self.tmux("-f", "/dev/null", "new-session", "-d", "-s", "t", "-x", "188", "-y", "46",
-                      "-c", self.lead, "sleep 600", check=False)
+        p = self.ti("-f", "/dev/null", "new-session", "-d", "-s", "t", "-x", "188", "-y", "46",
+                    "-c", self.lead, "sleep 600", check=False)
         if "Operation not permitted" in p.stderr:
             self.skipTest("the Bash sandbox blocks tmux's socket; run outside it")
         self.assertEqual(p.returncode, 0, p.stderr)
-        self.addCleanup(self.tmux, "kill-server", check=False)
-        self.tmux("source-file", CONF)
-        self.tmux("new-window", "-d", "-t", "t", "-c", self.lane, "sleep 600")
-        self.tmux("new-window", "-d", "-t", "t", "-c", self.plain, "sleep 600")
-        self.attach(188, 46)
-        pid = self.tmux("display", "-p", "#{pid}").stdout.strip()
+        self.addCleanup(self.ti, "kill-server", check=False)
+        self.ti("set", "-g", "mouse", "on")
+        self.ti("source-file", CONF)
+        self.ti("new-window", "-d", "-t", "t:1", "-c", os.path.join(repos, "tab-bar"),
+                "sleep 600")
+        self.ti("new-window", "-d", "-t", "t:2", "-c", self.plain, "sleep 600")
+        self.ti("rename-window", "-t", "t:2", "hqwin")
+        for i, title in enumerate(("alpha-title", "beta-title", "gamma-title")):
+            self.ti("select-pane", "-t", f"t:{i}", "-T", title)
+        p = self.to("-f", "/dev/null", "new-session", "-d", "-s", "o", "-x", "188", "-y", "46",
+                    f"env -u TMUX {self.tmux_bin} -S {self.sock} attach -t t", check=False)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.addCleanup(self.to, "kill-server", check=False)
+        self.to("set", "-g", "status", "off")
+        self.wait(lambda: self.ti("list-clients", "-F", "#{client_width}x#{client_height}")
+                  .stdout.strip() == "188x46", "the client never attached at 188x46")
+        pid = self.ti("display", "-p", "#{pid}").stdout.strip()
         self.layout_env = {**self.env, "TMUX": f"{self.sock},{pid},0",
                            "PATH": os.path.dirname(self.tmux_bin) + os.pathsep
                            + os.environ.get("PATH", "/usr/bin:/bin")}
 
-    def tmux(self, *args, check=True):
-        p = subprocess.run([self.tmux_bin, "-S", self.sock, *args], capture_output=True,
-                           text=True, timeout=10, env=self.env)
+    # --- helpers ---
+
+    def tmux(self, sock, args, check=True, stdin=None):
+        p = subprocess.run([self.tmux_bin, "-S", sock, *args], capture_output=True, text=True,
+                           timeout=10, env=self.env, input=stdin)
         if check:
             self.assertEqual(p.returncode, 0, (args, p.stderr))
         return p
 
-    def attach(self, cols, rows):
-        pid, master = pty.fork()
-        if pid == 0:                        # the child: size its tty, then become the client
-            try:
-                fcntl.ioctl(0, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
-                os.execve(self.tmux_bin, [self.tmux_bin, "-S", self.sock, "attach", "-t", "t"],
-                          self.env)
-            finally:
-                os._exit(127)
+    def ti(self, *args, check=True, stdin=None):
+        return self.tmux(self.sock, args, check, stdin)
 
-        def drain():
-            while True:
-                try:
-                    if not os.read(master, 65536):
-                        return
-                except OSError:
-                    return
+    def to(self, *args, check=True):
+        return self.tmux(self.out_sock, args, check)
 
-        threading.Thread(target=drain, daemon=True).start()
-        self.addCleanup(os.waitpid, pid, 0)
-        self.addCleanup(os.close, master)
-        deadline = time.time() + 5
+    def wait(self, pred, why, timeout=5.0):
+        deadline = time.time() + timeout
         while time.time() < deadline:
-            if self.tmux("list-clients", "-F", "#{client_width}").stdout.strip() == str(cols):
+            if pred():
                 return
             time.sleep(0.05)
-        self.fail("the client never attached")
+        self.fail(why)
+
+    def screen(self):
+        """What the inner client draws: the out pane's text, one line per row."""
+        return self.to("capture-pane", "-p", "-t", "o").stdout.split("\n")
+
+    def find(self, text, timeout=5.0):
+        """(x, y) of text on the client's screen, 1-based cells, once it is drawn."""
+        found = []
+
+        def look():
+            for y, line in enumerate(self.screen()):
+                if text in line:
+                    found.append((line.index(text) + 1, y + 1))
+                    return True
+            return False
+
+        self.wait(look, f"{text!r} never drawn: {self.screen()[:6]}", timeout)
+        return found[0]
+
+    def click(self, x, y, button=0, release=True):
+        self.to("send-keys", "-t", "o", "-l", f"\x1b[<{button};{x};{y}M")
+        if release:
+            self.to("send-keys", "-t", "o", "-l", f"\x1b[<{button};{x};{y}m")
 
     def run_layout(self):
         p = subprocess.run([sys.executable, "-I", SCRIPT, "layout"], capture_output=True,
                            text=True, timeout=30, env=self.layout_env)
         self.assertEqual((p.returncode, p.stdout, p.stderr), (0, "", ""))
-        err = os.path.join(self.tmp, f".tmux-tab-bar.{os.getuid()}.err")
-        self.assertFalse(os.path.exists(err), open(err).read() if os.path.exists(err) else "")
+        errs = [n for n in os.listdir(self.tmp) if n.endswith(".err")]
+        self.assertEqual(errs, [], [open(os.path.join(self.tmp, n)).read() for n in errs])
 
     def show(self, *args):
-        return self.tmux("show-options", *args).stdout
+        return self.ti("show-options", *args).stdout
+
+    def current(self):
+        return self.ti("display", "-p", "-t", "t", "#{window_index}").stdout.strip()
+
+    # --- tests ---
 
     def test_every_row_is_written_and_a_rerun_changes_nothing(self):
         self.run_layout()
-        self.assertEqual(self.tmux("show-options", "-v", "-t", "t", "status").stdout.strip(), "2")
+        self.assertEqual(self.show("-v", "-t", "t", "status").strip(), "2")
         for i in range(2):
-            row = self.tmux("show-options", "-v", "-t", "t", f"status-format[{i}]").stdout
+            row = self.show("-v", "-t", "t", f"status-format[{i}]")
             self.assertTrue(row.startswith("#[fill=colour236]"), (i, row[:80]))
-        names = self.tmux("list-windows", "-t", "t", "-F", "#{window_index} #{@tab_name}").stdout
-        self.assertEqual(sorted(names.split("\n")[:-1]),
-                         sorted(["0 lead", "1 tab-bar", "2 hq:"]))
+        names = self.ti("list-windows", "-t", "t", "-F", "#{window_index} #{@tab_name}").stdout
+        self.assertEqual(sorted(names.split("\n")[:-1]), ["0 lead", "1 tab-bar", "2 hq:"])
         before = (self.show("-t", "t"), self.show("-w", "-t", "t:0"), self.show("-w", "-t", "t:2"))
         self.run_layout()
         after = (self.show("-t", "t"), self.show("-w", "-t", "t:0"), self.show("-w", "-t", "t:2"))
         self.assertEqual(after, before)
+        self.find("dotclaude▸")
+        self.find("hq: gamma-title")
 
-    def test_a_name_holding_a_job_runs_nothing(self):
+    def test_hostile_words_go_through_source_file_byte_for_byte(self):
+        words = ROUND_TRIP
+        script = "\n".join(tb.command("set-option", "-w", "-t", "t:0", f"@x{i}", w)
+                           for i, w in enumerate(words)) + "\n"
+        self.ti("source-file", "-", stdin=script)
+        for i, w in enumerate(words):
+            with self.subTest(w=w):
+                got = self.ti("show-options", "-wv", "-t", "t:0", f"@x{i}").stdout
+                self.assertEqual(got, w + "\n")
+        # And end to end: a directory named with them becomes a tab name.
+        odd = os.path.join(self.tmp, "q'\"\\$H;{}")
+        os.makedirs(odd)
+        self.ti("new-window", "-d", "-t", "t:3", "-c", odd, "sleep 600")
         self.run_layout()
-        pwned, control = os.path.join(self.tmp, "pwned"), os.path.join(self.tmp, "control")
-        self.tmux("set-option", "-w", "-t", "t:2", "@tab_name", f"#(touch {pwned})")
-        # The positive control: display -p does start a #() job written into its format.
-        self.tmux("display", "-p", "-t", "t", f"#(touch {control})")
-        deadline = time.time() + 5
-        while not os.path.exists(control) and time.time() < deadline:
-            time.sleep(0.05)
-        self.assertTrue(os.path.exists(control))
-        for i in range(2):
-            row = self.tmux("show-options", "-v", "-t", "t", f"status-format[{i}]").stdout
-            row = row.rstrip("\n")
-            self.tmux("display", "-p", "-t", "t", row)
-        time.sleep(1)
+        got = self.ti("show-options", "-wv", "-t", "t:3", "@tab_name").stdout
+        self.assertEqual(got, "q'\"\\$H;{}:\n")
+
+    def test_a_name_holding_a_job_is_drawn_as_text_and_runs_nothing(self):
+        self.run_layout()
+        pwned = os.path.join(self.tmp, "pwned")
+        self.ti("set-option", "-w", "-t", "t:2", "@tab_name", f"#(touch {pwned})")
+        self.ti("refresh-client", "-S", "-t", self.ti("list-clients", "-F", "#{client_name}")
+                .stdout.strip())
+        self.find("#(touch /")
+        time.sleep(2.5)                   # a status-interval: the row is drawn again
         self.assertFalse(os.path.exists(pwned))
+
+    def test_a_style_in_a_title_is_drawn_as_text(self):
+        self.run_layout()
+        self.ti("select-pane", "-t", "t:2", "-T", "#[range=window|1]x")
+        self.find("#[range=window|1]x")
+
+    def test_a_click_on_row_2_switches(self):
+        self.run_layout()
+        self.assertEqual(self.current(), "0")
+        x, y = self.find("gamma-title")
+        self.assertEqual(y, 2)
+        self.click(x, y)
+        self.wait(lambda: self.current() == "2", "the click on row 2 did not switch")
+
+    def test_a_tap_on_the_current_tab_opens_its_menu_and_a_tap_on_an_item_runs_it(self):
+        self.run_layout()
+        x, y = self.find("alpha-title")
+        self.click(x, y)
+        self.find("Replies before pass")
+        self.assertEqual(self.current(), "0")
+        wx, wy = self.find("Windows…")
+        self.click(wx + 1, wy)
+        self.wait(lambda: self.ti("display", "-p", "-t", "t:0", "#{pane_mode}").stdout.strip()
+                  == "tree-mode", "the Windows… item did not open the window list")
+
+    def test_a_right_click_opens_the_full_menu_for_the_clicked_tab(self):
+        self.run_layout()
+        x, y = self.find("gamma-title")
+        self.click(x, y, button=2, release=False)   # a release outside would close it
+        self.find("2:hqwin")
+        self.find("Swap Left")
+
+    def test_no_hook_puts_a_pane_in_view_mode(self):
+        # HOME has no tmux-tab-bar: every hook's command must still exit 0 and print nothing.
+        self.ti("new-window", "-t", "t", "-c", self.plain, "sleep 600")
+        self.ti("select-window", "-t", "t:0")
+        deadline = time.time() + 2
+        while time.time() < deadline:
+            modes = self.ti("list-panes", "-a", "-F", "#{pane_in_mode}").stdout.split()
+            self.assertEqual(set(modes), {"0"})
+            time.sleep(0.1)
 
 
 if __name__ == "__main__":

@@ -6,44 +6,53 @@
 A repo with lanes (skills/lanes) gets its own row: a coloured header with the repo's name, its
 lead checkout's tab first, then its lanes, then its other worktrees (agent worktrees). Every other
 window goes on the shared row(s), last. Each row splits its width evenly among its tabs, and a
-row spills into a new one only when a slot would fall under 18 cells (9 on a phone), so a title
-change never moves a tab or changes the row count (which would resize every pane). Past 5 rows
-the smallest lane groups move onto the shared rows behind a `│repo▸` divider; still past 5, the
-last row ends in `+N`, which opens the window list. The current window is always shown. A client
-narrower than 100 cells (the phone) gets short slots and the bar at the bottom; a session's
-narrowest client decides its layout. Window numbers never change: the bar only draws tabs in
-another order.
+kind spills into another row only when a slot would fall under 18 cells (9 on a phone), its tabs
+then spread evenly over its rows; so a title change never moves a tab or changes the row count
+(which would resize every pane). Past 5 rows the smallest lane groups move onto the shared rows
+behind a `│repo▸` divider; still past 5, the last row ends in `+N`, which opens the window list.
+The current window is always shown. A client narrower than 100 cells (the phone) gets short slots
+and the bar at the bottom; a session's narrowest client decides its layout. Window numbers never
+change: the bar only draws tabs in another order.
 
 tmux/claude.conf runs `layout` from hooks (attach, detach, resize, a window opened, closed or
 selected), and tmux-claude-status runs it in its rate-limited pass, which catches what no hook
 reports (a cwd change, a lane opened or closed). Each window is classified by its active pane's
-cwd, from the filesystem alone: no git call. Writes are per session: `status` (the row count, set
-only when it changes), every `status-format[0..N-1]` row (a session's first array write leaves
-the rows it didn't write blank), the header names as `@tab_bar_g<n>` and, on the phone,
-`status-position`, `status-left` and `status-right`. A hash of all of it in `@tab_bar_sig` makes
-an unchanged run write nothing. The window options `@tab_name` (`lead`, a lane id, `repo:`) and
-`@tab_group` (the group's colour index) are written only when they change.
+cwd, from the filesystem alone: no git call. Writes are per session: every
+`status-format[0..N-1]` row (a session's first array write leaves the rows it didn't write blank),
+then `status` (the row count, set only when it changes), the header names as `@tab_bar_g<n>` and,
+on the phone, `status-position`, `status-left` and `status-right`. A hash of all of it in
+`@tab_bar_sig` makes an unchanged run write nothing. The window options `@tab_name` (`lead`, a
+lane id, `repo:`) and `@tab_group` (the group's colour index) are written only when they change.
+Every write of a run goes to one `tmux source-file -` on stdin, one line per session with its sig
+last, so a session that vanished mid-run (an error drops the rest of its line) records no sig.
 
 Nothing from a window title, a directory name or a lane record enters a format string: the rows
-hold only window ids (`@N`), integers and fixed template text, and names reach the bar through
-options read plainly (`#{@tab_name}`). No `%` either (tmux runs each row through strftime).
-Fail-open: any error leaves the bar as it was (tmux's default single row before the first
-layout), and the traceback goes to the run dir, never to tmux. Linked into ~/.local/bin by
-setup-tmux.sh; tests/setup/test_tmux_tab_bar.py holds the cases.
+hold only window ids (`@N`), integers and fixed template text, names reach the bar through options
+read plainly (`#{@tab_name}`), and titles through `#{q/h:...}`, which doubles each `#` so a
+`#[...]` in a title draws as text. No `%` either (tmux runs each row through strftime). The
+script never writes to stdout or stderr (tmux puts a hook's output in the pane): it fails open,
+leaving the bar as it was (tmux's default single row before the first layout), with the traceback
+in the run dir. Linked into ~/.local/bin by setup-tmux.sh; tests/setup/test_tmux_tab_bar.py holds
+the cases.
 """
-import dataclasses
-import fcntl
-import functools
-import glob
-import hashlib
-import json
 import os
-import re
-import stat
-import subprocess
 import sys
-import traceback
-import unicodedata
+
+if __name__ == "__main__":      # say nothing, ever: tmux shows a hook's output in the pane
+    _null = os.open(os.devnull, os.O_WRONLY)
+    os.dup2(_null, 1)
+    os.dup2(_null, 2)
+
+import dataclasses  # noqa: E402
+import fcntl  # noqa: E402
+import glob  # noqa: E402
+import hashlib  # noqa: E402
+import json  # noqa: E402
+import re  # noqa: E402
+import stat  # noqa: E402
+import subprocess  # noqa: E402
+import traceback  # noqa: E402
+import unicodedata  # noqa: E402
 
 MAX_ROWS = 5            # tmux's own limit for `status`
 MAX_SLOT = 48           # a tab never grows wider than this
@@ -55,22 +64,23 @@ NAME_CELLS = 12         # tab and header names are cut to this many cells
 PHONE_HEAD_CHARS = 3    # the phone's header shows this much of the repo name
 GITFILE_MAX = 4096
 RECORD_MAX = 64 * 1024  # a lane.json is untrusted: read no more than this
-# tmux's client refuses a command over 16 KB ("command too long"), and a row goes over as one
-# argument, so a row holds no more tabs than fit in this many bytes (a slot is about 1.9 KB:
-# 8 tabs a row).
-ROW_BYTES = 16000
+ERR_MAX = 16 * 1024     # the error log keeps the end of the traceback
+PASSES = 5              # a lock holder lays out at most this many times while hooks burst
 PALETTE = (75, 179, 141, 114, 174, 110)   # header colours, by group order
 PHONE_STATUS_LEFT = "#(~/.local/bin/tmux-claude-status)"
 
 SID = re.compile(r"\$\d+\Z")
 WID = re.compile(r"@\d+\Z")
+PLAIN_WORD = re.compile(r"[A-Za-z0-9_@-][A-Za-z0-9_@\[\]-]*")   # needs no quotes in tmux's config
 
 FILL = "#[fill=colour236]"
 NORM = "#[bg=colour236]#[fg=colour250]#[nobold]#[nodim]"
 CUR = "#[bg=colour24]#[fg=colour231]#[bold]"
 GLYPH_ON = "#{?#{==:#{@claude_state},busy},1,#{?#{==:#{@claude_state},wait},1,0}}"
+# q/h doubles each # in the title (tmux 3.7c format.c, FORMAT_QUOTE_STYLE) before the s///
+# strips Claude's `✳ [repo] ` prefix, so a `#[...]` in a title draws as text, not as a style.
 BODY = ("#{?@tab_name,#{@tab_name} ,}"
-        "#{?pane_title,#{s/^(✳ )?\\[[^]]*\\] //:pane_title},#{pane_current_command}}")
+        "#{?pane_title,#{s/^(✳ )?\\[[^]]*\\] //;q/h:pane_title},#{q/h:pane_current_command}}")
 
 SESSION_FMT = ("#{session_id}\t#{status}\t#{status-left-length}\t#{status-right-length}"
                "\t#{@tab_bar_sig}")
@@ -192,7 +202,13 @@ def lane_paths(common: str) -> set[str] | None:
 
 def classify(cwd: str) -> Tab:
     """What a window is, from its active pane's cwd: a laned repo's lead, lane or other
-    worktree, or a shared tab named by its checkout's (or cwd's) directory."""
+    worktree, or a shared tab named by its checkout's (or cwd's) directory.
+
+    Looser than lanelib's Repo.identity (skills/lanes/scripts/lanelib.py), on purpose: a repo
+    counts as laned when it has a lane record, without lanelib's check for `lane init`'s config,
+    and a record whose path another record also claims still names its lane (lanelib rejects
+    both). That is fine for a display: the worst a planted record does is draw a tab under the
+    wrong header, and nothing here acts on a lane."""
     if not cwd or "\0" in cwd or not os.path.isabs(cwd):
         return Tab("shared", "", "", "")
     cwd = os.path.realpath(cwd)
@@ -262,11 +278,19 @@ def group_windows(wins: list, tab_of: dict) -> tuple:
     return groups, shared, names
 
 
-@functools.cache
-def max_tabs_per_row() -> int:
-    """How many slots fit in ROW_BYTES with row 0's extras (a header, status-left and -right)."""
-    extra = len(header(0, 12, False)) + len(left_part(9999)) + len(right_part(9999)) + 200
-    return max(1, (ROW_BYTES - extra) // len(entry("@99999", 99999, MAX_SLOT)))
+def spread(n: int, caps: list) -> list:
+    """n tabs over rows holding at most caps[i] each, as evenly as the caps allow (4 over two
+    rows is 2+2, not 3+1); a leftover tab goes to an earlier row. sum(caps) >= n."""
+    level = 0
+    while sum(min(c, level) for c in caps) < n:
+        level += 1
+    sizes = [min(c, level) for c in caps]
+    extra = sum(sizes) - n
+    for i in reversed(range(len(sizes))):
+        if extra and sizes[i] == level:
+            sizes[i] -= 1
+            extra -= 1
+    return sizes
 
 
 def lay_out(groups: list, shared: list, width: int, current: str | None = None,
@@ -279,46 +303,44 @@ def lay_out(groups: list, shared: list, width: int, current: str | None = None,
     left, right = (PHONE_LEFT, 0) if phone else (max(0, left_len), max(0, right_len))
     heads = [short(g.name, phone) for g in groups]
     head_w = [text_width(h) + 2 for h in heads]
-    most = max_tabs_per_row()
 
     def avail(r: int) -> int:
         return max(0, width - (left + right if r == 0 else 0))
 
     def cap(r: int, fixed: int) -> int:
-        return max(1, min(most, (avail(r) - fixed) // min_slot))
+        return max(1, (avail(r) - fixed) // min_slot)
+
+    def kind_rows(first: int, tabs: list, fixed: int) -> list:
+        """A kind's tabs over as few rows as hold them from row `first` on, spread evenly."""
+        caps = []
+        while sum(caps) < len(tabs):
+            caps.append(cap(first + len(caps), fixed))
+        out, k = [], 0
+        for size in spread(len(tabs), caps):
+            out.append(tabs[k:k + size])
+            k += size
+        return out
 
     def build(packed: set) -> list:
         rows = []
         for g, group in enumerate(groups):
-            if g in packed:
-                continue
-            tabs, dim = list(group.tabs), False
-            while tabs:
-                n = cap(len(rows), head_w[g])
-                rows.append([("head", g, dim)] + [("tab", *t) for t in tabs[:n]])
-                tabs, dim = tabs[n:], True
-        base, bins = len(rows), []      # the shared rows: [items, cells used]
-        for t in shared:
-            if not bins or bins[-1][1] + min_slot > avail(base + len(bins) - 1) or \
-                    sum(i[0] == "tab" for i in bins[-1][0]) >= most:
-                bins.append([[], 0])
-            bins[-1][0].append(("tab", *t))
-            bins[-1][1] += min_slot
+            if g not in packed:
+                for i, part in enumerate(kind_rows(len(rows), group.tabs, head_w[g])):
+                    rows.append([("head", g, i > 0)] + [("tab", *t) for t in part])
+        base = len(rows)
+        bins = [[[("tab", *t) for t in part], len(part) * min_slot]   # [items, cells used]
+                for part in kind_rows(base, shared, 0)] if shared else []
         for g in sorted(packed):        # first fit, each group whole behind its divider
             need = head_w[g] + len(groups[g].tabs) * min_slot
             for b, (items, used) in enumerate(bins):
-                if used + need <= avail(base + b) and \
-                        sum(i[0] == "tab" for i in items) + len(groups[g].tabs) <= most:
+                if used + need <= avail(base + b):
                     items += [("div", g)] + [("tab", *t) for t in groups[g].tabs]
                     bins[b][1] += need
                     break
             else:                       # no room: its own row(s), each behind the divider
-                tabs = list(groups[g].tabs)
-                while tabs:
-                    n = cap(base + len(bins), head_w[g])
-                    bins.append([[("div", g)] + [("tab", *t) for t in tabs[:n]],
-                                 head_w[g] + n * min_slot])
-                    tabs = tabs[n:]
+                for part in kind_rows(base + len(bins), groups[g].tabs, head_w[g]):
+                    bins.append([[("div", g)] + [("tab", *t) for t in part],
+                                 head_w[g] + len(part) * min_slot])
         return rows + [items for items, _ in bins]
 
     # Pack the smallest groups one more at a time until the rows fit; if none fits, keep the
@@ -444,7 +466,7 @@ def render(lay: Layout) -> list:
         if r == 0 and not lay.phone:
             parts.append(right_part(lay.right))
         row = "".join(parts)
-        if "%" in row or "#(" in row or "\n" in row or len(row.encode()) > ROW_BYTES:
+        if any(bad in row for bad in ("%", "#(", "'", "\n")):
             raise ValueError(f"row {r} breaks the template rules")
         out.append(row)
     return out
@@ -452,7 +474,7 @@ def render(lay: Layout) -> list:
 
 def session_ops(lay: Layout, rows: list) -> list:
     """The option writes that give a session this layout, in order: (name, value), with None
-    for an unset. The row count (`status`) goes separately, last."""
+    for an unset. The row count (`status`) goes in after the rows (write_line)."""
     ops = [(f"@tab_bar_g{g}", head) for g, head in enumerate(lay.heads)]
     ops += [(f"status-format[{i}]", row) for i, row in enumerate(rows)]
     if lay.phone:
@@ -463,12 +485,56 @@ def session_ops(lay: Layout, rows: list) -> list:
     return ops
 
 
+def status_value(rows: int) -> str:
+    return "on" if rows == 1 else str(rows)
+
+
+def signature(ops: list, status: str, state: str) -> str:
+    """What a session's @tab_bar_sig holds after a write. state: "off" (the bar was turned off:
+    rows are kept current, `status` is left alone), "ok" (`status` is right) or "fix" (it isn't,
+    so this sig never matches a stored one and the next run writes it)."""
+    return hashlib.sha256(json.dumps([ops, status, state]).encode()).hexdigest()[:16]
+
+
+# --- the write: one `tmux source-file -` ---------------------------------------------------------
+
+def quote(s: str) -> str:
+    """s as one word of tmux's config language, byte for byte: single quotes keep everything
+    literal ($, ~, \\, ;, {}, #) but a ', which goes in double quotes on its own ("'"). tmux's
+    lexer joins a line ending in \\ to the next even inside quotes, so a newline never goes in."""
+    if "\n" in s or "\r" in s or "\0" in s:
+        raise ValueError("a newline or NUL in a tmux word")
+    if PLAIN_WORD.fullmatch(s):
+        return s                        # set-option, -t, @tab_name, status-format[0]
+    return "'" + s.replace("'", "'\"'\"'") + "'"
+
+
+def command(*words: str) -> str:
+    return " ".join(quote(w) for w in words)
+
+
+def write_line(sid: str, ops: list, status: str | None, sig: str) -> str:
+    """One session's writes as one ;-joined line: the headers and every row, then `status`
+    (None: leave it), then position, left and right, and the sig last. tmux drops the rest of a
+    line after an error, so a session that vanished records no sig."""
+    tail = ("status-position", "status-left", "status-right")
+    cmds = [command("set-option", "-t", sid, name, value)
+            for name, value in ops if name not in tail]
+    if status is not None:
+        cmds.append(command("set-option", "-t", sid, "status", status))
+    cmds += [command("set-option", "-u", "-t", sid, name) if value is None
+             else command("set-option", "-t", sid, name, value)
+             for name, value in ops if name in tail]
+    cmds.append(command("set-option", "-t", sid, "@tab_bar_sig", sig))
+    return " ; ".join(cmds)
+
+
 # --- tmux I/O -----------------------------------------------------------------------------------
 
-def tmux(*args: str) -> subprocess.CompletedProcess:
+def tmux(*args: str, stdin: str | None = None) -> subprocess.CompletedProcess:
     """One tmux command on the server $TMUX names."""
-    return subprocess.run(["tmux", *args], capture_output=True, text=True, timeout=5,
-                          errors="surrogateescape")
+    return subprocess.run(["tmux", *args], input=stdin, capture_output=True, text=True,
+                          timeout=5, errors="surrogateescape")
 
 
 def read(fields: int, *args: str) -> list:
@@ -485,12 +551,9 @@ def to_int(s: str, default: int) -> int:
     return int(s) if s.isdigit() else default
 
 
-def status_value(rows: int) -> str:
-    return "on" if rows == 1 else str(rows)
-
-
-def layout() -> None:
-    """Read every session, window, pane and client once; write what changed."""
+def layout(err_log: str) -> None:
+    """Read every session, window, pane and client once; write what changed in one
+    source-file."""
     sessions = {}
     for f in read(5, "list-sessions", "-F", SESSION_FMT):
         if SID.match(f[0]):
@@ -512,7 +575,7 @@ def layout() -> None:
 
     tabs: dict = {}                     # cwd -> Tab, classified once per run
     writes: dict = {}                   # wid -> (@tab_name, @tab_group) wanted
-    plans = []
+    lines = []
     for sid, sess in sessions.items():
         if sid not in widths or not windows.get(sid):
             continue                    # nobody sees it
@@ -530,82 +593,103 @@ def layout() -> None:
         lay = lay_out(groups, shared, widths[sid], current, sess["left"], sess["right"])
         rows = render(lay)
         ops = session_ops(lay, rows)
-        status = status_value(len(rows))
-        sig = hashlib.sha256(json.dumps([ops, status]).encode()).hexdigest()[:16]
-        if sig != sess["sig"]:
-            plans.append((sid, ops, status, sess["status"], sig))
+        status, old = status_value(len(rows)), sess["status"]
+        now = "off" if old == "off" else "ok" if old == status else "fix"
+        if signature(ops, status, now) == sess["sig"]:
+            continue
+        after = "off" if old == "off" else "ok"
+        lines.append(write_line(sid, ops, status if now == "fix" else None,
+                                signature(ops, status, after)))
 
-    for wid, (name, group) in writes.items():   # before the rows that read them
+    # The window options go first (the rows read them), each on its own line.
+    head = []
+    for wid, (name, group) in writes.items():
         if options.get(wid, ("", ""))[0] != name:
-            tmux("set-option", "-w", "-t", wid, "@tab_name", name)
+            head.append(command("set-option", "-w", "-t", wid, "@tab_name", name))
         if options.get(wid, ("", ""))[1] != group:
-            tmux("set-option", "-w", "-t", wid, "@tab_group", group)
-    for sid, ops, status, old_status, sig in plans:
-        ok = True
-        for name, value in ops:
-            if value is None:           # an unset of an option the session never set is fine
-                tmux("set-option", "-u", "-t", sid, name)
-            elif tmux("set-option", "-t", sid, name, value).returncode != 0:
-                ok = False              # e.g. the session closed: leave its sig for a retry
-                break
-        if not ok:
-            continue
-        # Every row is written first, so no row shows blank. A bar turned off stays off.
-        if status != old_status and old_status != "off" and \
-                tmux("set-option", "-t", sid, "status", status).returncode:
-            continue
-        tmux("set-option", "-t", sid, "@tab_bar_sig", sig)
+            head.append(command("set-option", "-w", "-t", wid, "@tab_group", group))
+    script = head + lines
+    if script:
+        p = tmux("source-file", "-", stdin="\n".join(script) + "\n")
+        if p.returncode != 0:           # e.g. a window closed mid-run; the next run retries
+            log_error(err_log, f"source-file: {p.stderr.strip()}\n")
 
 
-def run_locked(run_dir: str) -> None:
-    """layout() under a lock: hooks fire in bursts (a restore opens 8 windows), so a run that
-    finds the lock held marks the state dirty and leaves; the holder runs once more if so."""
-    uid = os.getuid()
-    lock = os.path.join(run_dir, f".tmux-tab-bar.{uid}.lock")
-    dirty = os.path.join(run_dir, f".tmux-tab-bar.{uid}.dirty")
+def log_error(path: str, text: str) -> None:
+    """The end of text into the run dir's error log (never a symlink; owner-only)."""
     try:
-        fd = os.open(lock, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
     except OSError:
-        layout()                        # no lock to be had: still lay out
         return
+    with os.fdopen(fd, "w", errors="replace") as f:
+        f.write(text[-ERR_MAX:])
+
+
+def server_key(tmux_env: str) -> str:
+    """A short hash of the socket path in $TMUX ("<socket>,<pid>,<session>"): one lock per
+    tmux server, so a test server never waits on the live one."""
+    return hashlib.sha256(tmux_env.rsplit(",", 2)[0].encode(errors="surrogateescape")
+                          ).hexdigest()[:12]
+
+
+def touch(path: str) -> None:
     try:
+        os.close(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW, 0o600))
+    except OSError:
+        pass
+
+
+def run_locked(base: str, run=None) -> None:
+    """layout() under a lock (files `<base>.lock` and `<base>.dirty`). Hooks fire in bursts (a
+    restore opens 8 windows): a run that finds the lock held marks the state dirty and leaves,
+    and the holder lays out again while dirty reappears, at most PASSES times. A run that
+    marks dirty just as the holder lets go is caught by the holder's one retry after unlocking.
+    `run` stands in for layout() in tests."""
+    run = run or (lambda: layout(base + ".err"))
+    lock, dirty = base + ".lock", base + ".dirty"
+    for _ in range(2):
         try:
-            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            fd = os.open(lock, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
         except OSError:
-            try:
-                os.close(os.open(dirty, os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW, 0o600))
-            except OSError:
-                pass
+            run()                       # no lock to be had: still lay out
             return
-        for _ in range(2):
+        try:
             try:
-                os.unlink(dirty)
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except OSError:
-                pass
-            layout()
-            if not os.path.exists(dirty):
-                break
-    finally:
-        os.close(fd)
+                touch(dirty)            # the holder lays out again for this one
+                return
+            for _ in range(PASSES):
+                try:
+                    os.unlink(dirty)
+                except OSError:
+                    pass
+                run()
+                if not os.path.exists(dirty):
+                    break
+        finally:
+            os.close(fd)
+        if not os.path.exists(dirty):
+            return
 
 
 def main(argv: list) -> int:
     if argv[1:] != ["layout"]:
-        print(__doc__.split("\n\n")[1], file=sys.stderr)
         return 2
-    if not os.environ.get("TMUX"):
+    tmux_env = os.environ.get("TMUX")
+    if not tmux_env:
         return 0                        # outside tmux: nothing to lay out
     run_dir = os.environ.get("TMUX_CLAUDE_STATUS_DIR") or "/tmp"
+    base = os.path.join(run_dir, f".tmux-tab-bar.{os.getuid()}.{server_key(tmux_env)}")
     try:
-        run_locked(run_dir)
+        run_locked(base)
     except Exception:                   # fail-open: the bar keeps what it had
-        try:
-            with open(os.path.join(run_dir, f".tmux-tab-bar.{os.getuid()}.err"), "w") as f:
-                traceback.print_exc(file=f)
-        except OSError:
-            pass
+        log_error(base + ".err", traceback.format_exc())
     return 0
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv))
+    try:
+        sys.exit(main(sys.argv))
+    except Exception:                   # never a traceback on stderr (it is /dev/null anyway)
+        sys.exit(0)
