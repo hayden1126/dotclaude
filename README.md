@@ -330,8 +330,12 @@ need nothing extra.
   now. If tmux fails to open a window, the entry stays for the next run. Each decision is a line in `$XDG_STATE_HOME/dotclaude/restore.log`, and
   the last restore's files stay in `open-sessions/restored/`. Known limit: a window killed just
   before tmux dies with nothing else running is in that final 120 s, so it comes back. An
-  extra tab is cheap; losing every tab is what this exists to prevent. Background (`--bg`)
-  sessions are not restored.
+  extra tab is cheap; losing every tab is what this exists to prevent. A tab attached to a
+  background session (`claude attach <job>`, or a `claude --resume` of a chat running in the
+  background) gets no hook file, so `tmux-claude-status` has `claude-saved track` write one,
+  marked `attach`. `tmux kill-server` leaves background sessions running, so such a tab comes back
+  attached to its session; after a reboot it resumes the chat. Background sessions with no tab
+  are not restored.
 - **Star and Shelve keep a chat after its tab closes**: right-click a Claude tab for **Star** (a
   bookmark: the tab shows ★, and the chat stays saved until unstarred, however the tab closes)
   or **Shelve** (save the chat and close the tab now; it won't come back on a tmux restore).
@@ -345,6 +349,11 @@ need nothing extra.
   terminal ends in "+N more" and shortens titles. `tmux/claude-saved` keeps one file per chat in
   `$XDG_STATE_HOME/dotclaude/saved/` and finds a tab's chat from Claude's own
   `~/.claude/sessions/` files, falling back to the registry; `claude-saved list` prints the list.
+  A tab attached to a background session works the same: `claude-saved` reads the attach client's
+  arguments from `/proc` and finds the session it shows. Shelving it also stops that session
+  (`claude stop`), since closing the tab alone would leave it running unseen; reopening a chat
+  that still runs in the background attaches to it. A `/clear` in such a tab doesn't move its
+  star: the session's hooks can't see the tab.
 - **PreToolUse(`Write`): `overwrite-guard.sh`** (in this repo). The Write tool's own "File has not
   been read yet" check last fired in Claude Code 2.1.285, and on 2.1.289 a Write of `PLACEHOLDER`
   replaced an unread 6 KB memory file (`docs/blind-overwrite-brief.md`). The guard denies a Write

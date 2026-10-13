@@ -421,7 +421,7 @@ class Status(unittest.TestCase):
         self.pane("%5", "@5", "/y", command="zsh")   # still suspended: waits
         self.away |= {"%4", "%5"}
         self.run_status([], hosts="")
-        self.assertEqual([c for c in self.calls() if c.startswith("claude-saved")],
+        self.assertEqual([c for c in self.calls() if c.startswith("claude-saved sync")],
                          ["claude-saved sync %4"])
         self.assertEqual(self.writes(), ["tmux set-option -pu -t %4 @claude_star_away"])
 
@@ -446,8 +446,26 @@ class Status(unittest.TestCase):
         self.pane("%6", "@4", "/x", command="zsh")
         self.pane("%5", "@5", "/y", state="idle")   # not cold: left alone
         self.run_status([], hosts="")
-        self.assertEqual([c for c in self.calls() if c.startswith("claude-saved")],
+        self.assertEqual([c for c in self.calls() if c.startswith("claude-saved sync")],
                          ["claude-saved sync %4"])
+
+    def test_track_runs_when_the_claude_panes_change_and_every_60_s(self):
+        # claude-saved track records attach tabs for claude-restore: a tab that starts or stops
+        # running claude changes what it would record.
+        self.saved_stub()
+        tracked = lambda: [c for c in self.calls() if c == "claude-saved track"]
+        self.pane("%4", "@4", "/x", state="idle")
+        self.run_status([], hosts="")
+        self.assertEqual(tracked(), ["claude-saved track"])
+        self.run_status([], hosts="")
+        self.assertEqual(tracked(), [])
+        self.pane("%5", "@5", "/y", state="idle")
+        self.run_status([], hosts="")
+        self.assertEqual(tracked(), ["claude-saved track"])
+        old = time.time() - 61
+        os.utime(self.run_file("track"), (old, old))
+        self.run_status([], hosts="")
+        self.assertEqual(tracked(), ["claude-saved track"])
 
     def test_a_failing_claude_saved_does_not_reach_the_bar(self):
         self.saved_stub("echo noise; echo more >&2; exit 3\n")

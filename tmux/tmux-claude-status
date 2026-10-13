@@ -21,6 +21,11 @@
 #     it. A client's cwd is where it was launched, not which session it shows.
 #     $XDG_STATE_HOME/dotclaude/tabs holds "server <tmux pid>" then "<session id> <pane>
 #     <window>" lines for hooks/session-pane.sh, whose hooks then write that window themselves.
+#   - RECORD attach tabs (a `claude attach <job>` client showing a background session) for
+#     claude-restore: `claude-saved track` writes their open-sessions entries, which no hook
+#     can (a background session's hooks have no TMUX_PANE). It runs when the claude panes change
+#     and at least every 60 s, so a /clear in an attach tab (same pane, new session id) lands
+#     within a minute.
 # It never overwrites a live busy/wait/idle value, with two exceptions that hand a window over:
 # a new mapping (or its pane moving to a cold window, or a map old enough that hooks ignored
 # it: tmux detached or queries failing) fills it from the session's status, and a
@@ -107,9 +112,18 @@ if [ ${#need_fill[@]} -gt 0 ] && [ -x "$saved" ]; then
   done <<< "$panes"
 fi
 
+# Attach tabs for claude-restore (see the top). Fail-open and bounded; output never reaches the bar.
+track_sig="$run_dir/.tmux-claude-status.$(id -u).track"
+claude_panes="$(awk '$4 == "claude"' <<< "$panes")"
+if [ -x "$saved" ] && { [ "$claude_panes" != "$(cat "$track_sig" 2>/dev/null)" ] ||
+                        [ "$(age "$track_sig")" -ge 60 ]; }; then
+  timeout 2 "$saved" track >/dev/null 2>&1
+  printf '%s' "$claude_panes" > "$track_sig"
+fi
+
 # The daemon's pty hosts (each background session runs under one, plus pre-warmed spares).
 hosts="$(pgrep -f 'bg-pty-host --bg-pty-host' 2>/dev/null | sort | tr '\n' ' ')"
-sig="$server|$hosts|$(awk '$4 == "claude"' <<< "$panes")"
+sig="$server|$hosts|$claude_panes"
 map_server=""
 [ -s "$tabs" ] && read -r _ map_server < "$tabs" 2>/dev/null
 remap=""

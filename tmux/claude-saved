@@ -13,6 +13,7 @@
 #   claude-saved rm <sid> [client]                 drop a chat from the list
 #   claude-saved list                              print the list
 #   claude-saved sync <pane>                       set the pane's ★ from the list (the backstop)
+#   claude-saved track                             record attach tabs for claude-restore (the backstop)
 #   claude-saved hook                              the hook side: the payload on stdin
 #
 # One file per saved chat: $XDG_STATE_HOME/dotclaude/saved/<session_id>.json, holding
@@ -21,24 +22,32 @@
 # while the chat is starred or shelved. The session in a pane comes from Claude's own live-session
 # files (~/.claude/sessions/<pid>.json: an interactive session whose `tmux` field ends in the pane
 # id and whose pid runs under the pane's #{pane_pid}, read from /proc; undocumented, but /clear
-# updates it), else from the newest unmarked open-sessions entry for that pane on this tmux
-# server (hooks/session-registry.sh), but only while the pane runs `claude` and no live sessions
-# file puts another chat there: a crashed claude leaves its entry behind. The ★ is the pane
-# option @claude_star (a chat is per pane); tmux/claude.conf shows it through the active pane.
+# updates it), else from an attach client under the pane (a `claude attach <job>` process, which
+# shows a background session the daemon hosts: the live `kind: bg` sessions file whose jobId,
+# session id or name it names, exactly one), else from the newest unmarked open-sessions entry
+# for that pane on this tmux server (hooks/session-registry.sh), but only while the pane runs
+# `claude` and no live sessions file puts another chat there: a crashed claude leaves its entry
+# behind. The ★ is the pane option @claude_star (a chat is per pane); tmux/claude.conf shows it
+# through the active pane.
 #
 # The rules:
 #   - Star and Shelve act only in a window with a @claude_state (a Claude runs there: a stale
 #     registry entry must never get a shell window killed), and refuse a chat with no transcript
 #     yet (nothing to resume), so every saved chat has one. Shelve asks first while Claude is
 #     busy. It deletes the chat's open-sessions entry before killing the pane, so claude-restore
-#     won't bring it back and the SessionEnd `other` that follows marks nothing.
+#     won't bring it back and the SessionEnd `other` that follows marks nothing. In an attach tab
+#     the kill only ends the viewer, so Shelve then runs `claude stop <job>`: a shelved chat
+#     never runs unseen in the background (Hayden's call: background is mostly an accident).
 #   - Open goes to the chat's pane when it is running in this server, stops when it runs
 #     anywhere else (outside tmux, another tmux server), and otherwise opens a window in the
 #     client's session in its directory (the directory must exist and hold no # or control
 #     character, as in claude-restore, and the transcript must still be there), running
 #     `claude --resume <id>`. Open never deletes the entry: the resumed session's SessionStart
 #     takes it off the shelf, and a starred one stays starred. Until that SessionStart, the
-#     entry's `opening` names the new window for 60 s, so a second open goes there.
+#     entry's `opening` names the new window for 60 s, so a second open goes there. A chat
+#     running in the background goes to an attach tab showing it, or else gets the same
+#     `claude --resume`, which attaches to it; no SessionStart follows, so Open takes it off the
+#     shelf itself.
 #   - The star follows the tab: on SessionStart `clear` a starred chat whose tab is this pane is
 #     re-keyed to the new session id. A /pass respawn starts as `startup`, so pass-respawn first
 #     writes a one-shot marker, $XDG_STATE_HOME/dotclaude/pass-carry/<pane number>.json holding
@@ -51,6 +60,9 @@
 #     SessionEnd `clear` does nothing at all (it could land after the SessionStart that follows).
 #   - tmux-claude-status clears the ★ of a pane no longer running claude (Ctrl-Z included), and
 #     on its cold fill of a window runs `sync` for each claude pane there, which brings it back.
+#     It also runs `track`, which keeps an open-sessions entry (marked `attach`) for each attach
+#     tab, since a background session's hooks have no TMUX_PANE; claude-restore reads them.
+#     /clear in an attach tab doesn't move a star: the session's hooks can't see the tab.
 #   - The shelf menu shows as many rows as the client's height allows, then "+N more", and
 #     shortens titles to its width. Titles lose any #[...] tmux style sequence before they
 #     reach a menu or a message.
@@ -70,9 +82,9 @@ client=""
 cflag=()
 
 case "$cmd" in
-  -h|--help) sed -n '2,16p' "$0"; exit 0 ;;
+  -h|--help) sed -n '2,17p' "$0"; exit 0 ;;
   list) ;;
-  star|shelve|menu|open|rm|sync|hook) exec >/dev/null 2>&1 ;;
+  star|shelve|menu|open|rm|sync|track|hook) exec >/dev/null 2>&1 ;;
   *) printf 'claude-saved: unknown command: %s (try --help)\n' "$cmd" >&2; exit 2 ;;
 esac
 
@@ -176,14 +188,66 @@ def descends(pid, ancestor):
         pid = parent(pid)
     return False
 
-def live_sessions():
-    """Claude's own files for its running interactive sessions."""
+def started(s):
+    """False when the file's procStart (an int, or the digit string Claude writes) isn't its
+    pid's start time: the pid was reused after the claude that wrote it died."""
+    ps = s.get("procStart")
+    if isinstance(ps, str) and ps.isdigit():
+        ps = int(ps)
+    return not isint(ps) or stat(s["pid"], 22) == ps
+
+def live_sessions(kind="interactive"):
+    """Claude's own files for its running sessions of a kind: interactive (a tab) or bg (a
+    background session the daemon hosts)."""
     for path in glob.glob(os.path.join(SESSIONS, "*.json")):
         s = load(path)
-        if (s and s.get("kind") == "interactive" and isinstance(s.get("sessionId"), str)
-                and SID.fullmatch(s["sessionId"]) and alive(s.get("pid"))
-                and (not isint(s.get("procStart")) or stat(s["pid"], 22) == s["procStart"])):
+        if (s and s.get("kind") == kind and isinstance(s.get("sessionId"), str)
+                and SID.fullmatch(s["sessionId"]) and alive(s.get("pid")) and started(s)):
             yield s
+
+def argv(pid):
+    try:
+        with open("/proc/%d/cmdline" % pid, "rb") as f:
+            raw = f.read()
+    except OSError:
+        return []
+    return [a.decode("utf-8", "replace") for a in raw.split(b"\0")[:-1]]
+
+def clients():
+    """(pid, arg) for each `claude attach <arg>` process: a tab showing a background session.
+    argv[0] is `claude` or the full path a client re-execs itself under (a `claude --resume`
+    of a background chat becomes one); "<-" turns it into `claude agents`."""
+    for name in os.listdir("/proc"):
+        if name.isdigit():
+            a = argv(int(name))
+            if len(a) >= 3 and os.path.basename(a[0]) == "claude" and a[1] == "attach":
+                yield int(name), a[2]
+
+def shown(arg, bgs):
+    """The background session `claude attach <arg>` shows, or None: arg is its jobId (which a
+    /clear keeps), its session id, or part of its name, matching exactly one."""
+    for key in ("jobId", "sessionId"):
+        hit = [s for s in bgs if s.get(key) == arg]
+        if hit:
+            return hit[0] if len(hit) == 1 else None
+    part = arg.casefold()
+    hit = [s for s in bgs if part and isinstance(s.get("name"), str)
+           and part in s["name"].casefold()]
+    return hit[0] if len(hit) == 1 else None
+
+def attached(roots):
+    """{pane process: the background session its attach client shows} for the given pane
+    processes. One /proc scan serves them all."""
+    bgs = list(live_sessions("bg"))
+    found = {}
+    if not bgs:
+        return found
+    for pid, arg in clients():
+        s = shown(arg, bgs)
+        root = s and next((r for r in roots if descends(pid, r)), None)
+        if root and root not in found:
+            found[root] = s
+    return found
 
 def pane_of(s):
     # `tmux` looks like main:@4.%4: the pane id follows the last dot.
@@ -191,11 +255,13 @@ def pane_of(s):
     return t.rpartition(".")[2] if isinstance(t, str) and "." in t else None
 
 def registry():
-    """open-sessions entries still open (no SessionEnd `other` mark)."""
+    """The hook's open-sessions entries still open (no SessionEnd `other` mark). track's
+    attach entries are for claude-restore only: what an attach tab shows comes from /proc,
+    and an entry lags behind its client by up to a minute."""
     for path in glob.glob(os.path.join(REG, "*.json")):
         e = load(path)
         if (e and isinstance(e.get("session_id"), str) and SID.fullmatch(e["session_id"])
-                and "ended_other_at" not in e):
+                and "ended_other_at" not in e and e.get("attach") is not True):
             yield e
 
 def on_server(e, server):
@@ -222,14 +288,19 @@ def transcript(sid, hint=None):
 
 def resolve(tab, pane_pid, command):
     """The chat in a tab (pane_pid: the pane's first process; command: what runs in it now) as
-    (sid, cwd, transcript), or None."""
+    (sid, cwd, transcript, job), or None. job is the jobId when the tab is an attach client
+    showing a background session, else empty."""
     regs = {e["session_id"]: e for e in registry()}
     root = int(pane_pid) if pane_pid.isdigit() else None
     live = [s for s in live_sessions()
             if pane_of(s) == tab["pane"] and root and descends(s["pid"], root)]
-    if live:
-        s = max(live, key=lambda s: num(s.get("updatedAt")) or num(s.get("startedAt")))
+    job = ""
+    bg = None if live or not root else attached([root]).get(root)
+    if live or bg:
+        s = bg or max(live, key=lambda s: num(s.get("updatedAt")) or num(s.get("startedAt")))
         sid, cwd = s["sessionId"], s.get("cwd")
+        if bg and isinstance(bg.get("jobId"), str) and SID.fullmatch(bg["jobId"]):
+            job = bg["jobId"]
         r = regs.get(sid, {})
         if not isinstance(cwd, str) or not cwd:
             cwd = r.get("cwd")
@@ -243,7 +314,7 @@ def resolve(tab, pane_pid, command):
         sid, cwd = r["session_id"], r.get("cwd")
     if not isinstance(cwd, str) or not cwd:
         return None
-    return sid, cwd, transcript(sid, r.get("transcript_path"))
+    return sid, cwd, transcript(sid, r.get("transcript_path")), job
 
 def clean_title(t):
     # Claude's title starts with ✳ when idle and a braille spinner when busy; ◐ is ours.
@@ -298,7 +369,7 @@ def op_star(pane, start, pid, pane_pid, command, socket, title):
     if not found:
         print("none")
         return
-    sid, cwd, tpath = found
+    sid, cwd, tpath, _ = found
     e = entry(sid)
     if e and e["starred"]:
         e["starred"] = False
@@ -320,7 +391,7 @@ def op_shelve(mode, pane, start, pid, pane_pid, command, socket, title):
     if not found:
         print("none")
         return
-    sid, cwd, tpath = found
+    sid, cwd, tpath, job = found
     if not tpath:
         print("empty")
         return
@@ -333,7 +404,9 @@ def op_shelve(mode, pane, start, pid, pane_pid, command, socket, title):
     save(e)
     # claude-restore must not reopen it, and the SessionEnd `other` the kill sends finds no file.
     remove(os.path.join(REG, sid + ".json"))
-    print("ok\x1f" + label(e))
+    # The job, when the tab only attaches to a background session: closing the tab would leave
+    # the chat running unseen, so the caller stops it.
+    print("ok\x1f%s\x1f%s" % (job, label(e)))
 
 def op_live(sid, start, pid, socket, csess):
     """Where sid runs: `pane, window, 1 if the window is in the client's session` for a pane on
@@ -344,7 +417,8 @@ def op_live(sid, start, pid, socket, csess):
     The registry's pane counts only while it runs claude and no live sessions file puts another
     chat there (a crashed claude leaves its entry), and a window `open` made in the last 60 s
     counts while its claude is still starting (no SessionStart yet), so a second click goes
-    there instead of starting a second copy."""
+    there instead of starting a second copy. A pane whose attach client shows sid counts too;
+    `background` means sid runs only in the background, so `claude --resume` attaches to it."""
     panes = {}   # pane -> [window, pane_pid, command, sessions holding its window]
     for line in sys.stdin.read().splitlines():
         parts = line.split(" ", 4)
@@ -354,11 +428,15 @@ def op_live(sid, start, pid, socket, csess):
     running = [s for s in every if s["sessionId"] == sid]
     candidates = [pane_of(s) for s in running
                   if pane_of(s) in panes and descends(s["pid"], panes[pane_of(s)][1])]
+    by_root = attached({v[1] for v in panes.values()})
+    showing = {p: by_root[v[1]]["sessionId"] for p, v in panes.items() if v[1] in by_root}
+    candidates += sorted(p for p, s in showing.items() if s == sid)
     server = make_server(start, pid, socket)
     r = load(os.path.join(REG, sid + ".json")) or {}
     p = r.get("pane")
-    if (server and on_server(r, server) and "ended_other_at" not in r and p in panes
-            and panes[p][2] == "claude"
+    if (server and on_server(r, server) and "ended_other_at" not in r
+            and r.get("attach") is not True and p in panes
+            and panes[p][2] == "claude" and showing.get(p, sid) == sid
             and not any(pane_of(s) == p and s["sessionId"] != sid
                         and descends(s["pid"], panes[p][1]) for s in every)):
         candidates.append(p)
@@ -373,13 +451,22 @@ def op_live(sid, start, pid, socket, csess):
             return
     if running:
         print("elsewhere")
+    elif any(s["sessionId"] == sid for s in live_sessions("bg")):
+        print("background")
 
-def op_opening(sid, pane, start, pid, socket):
-    """Note the window open just started sid's resume in (see op_live)."""
+def op_opening(sid, pane, start, pid, socket, attaching):
+    """Note the window open just started sid's resume in (see op_live). When it attaches to a
+    background session (attaching=1) no SessionStart follows, so this does that hook's work:
+    off the shelf, and a starred chat's tab is the new pane (printed `on` for its ★)."""
     e = entry(sid)
     server = make_server(start, pid, socket)
     if e and server:
         e["opening"] = dict(server, pane=pane, at=round(NOW, 3))
+        if attaching == "1":
+            e["shelved"] = False
+            if e["starred"]:
+                e["tab"] = dict(server, pane=pane)
+                print("on")
         save(e)
 
 def op_sync(pane, start, pid, pane_pid, command, socket):
@@ -389,6 +476,41 @@ def op_sync(pane, start, pid, pane_pid, command, socket):
     found = tab and resolve(tab, pane_pid, command)
     e = found and entry(found[0])
     print("on" if e and e["starred"] else "off")
+
+def op_track():
+    """Keep an open-sessions entry for each attach tab on this tmux server, so claude-restore
+    can reopen it (a background session's hooks have no TMUX_PANE, so session-registry.sh never
+    writes one). stdin: list-panes rows `start pid pane pane_pid window_index socket`. An
+    entry is the hook's, plus attach and job_id; it replaces the session's entry from the tab
+    it ran in before. An attach entry on this server whose pane no longer shows its session
+    (the tab closed, or a /clear gave the job a new id) goes; nothing else is touched."""
+    rows, server = [], None
+    for line in sys.stdin.read().splitlines():
+        f = line.split(" ", 5)
+        if len(f) == 6 and re.fullmatch(r"%\d+", f[2]) and f[3].isdigit() and f[4].isdigit():
+            server = server or make_server(f[0], f[1], f[5])
+            rows.append((f[2], int(f[3]), int(f[4])))
+    if not server:
+        return   # tmux answered nothing: never sweep entries from that
+    by_root = attached({r[1] for r in rows})
+    keep = set()
+    for pane, root, index in rows:
+        s = by_root.get(root)
+        cwd = s and s.get("cwd")
+        if not (isinstance(cwd, str) and cwd):
+            continue
+        sid = s["sessionId"]
+        old = load(os.path.join(REG, sid + ".json")) or {}
+        keep.add((sid, pane))
+        write(os.path.join(REG, sid + ".json"), dict(
+            server, session_id=sid, cwd=cwd, pane=pane, window_index=index,
+            transcript_path=transcript(sid, old.get("transcript_path")), attach=True,
+            job_id=s.get("jobId") if isinstance(s.get("jobId"), str) else "", ts=round(NOW, 3)))
+    for path in glob.glob(os.path.join(REG, "*.json")):
+        e = load(path)
+        if (e and e.get("attach") is True and on_server(e, server)
+                and (e.get("session_id"), e.get("pane")) not in keep):
+            remove(path)
 
 def op_plan(sid):
     e = entry(sid)
@@ -534,7 +656,7 @@ def op_hook(pane, start, pid, socket, title):
 
 OPS = {"resolve": op_resolve, "star": op_star, "shelve": op_shelve, "live": op_live,
        "plan": op_plan, "rm": op_rm, "menu": op_menu, "list": op_list, "hook": op_hook,
-       "opening": op_opening, "sync": op_sync, "run-shell": lambda *a: print(run_shell(*a))}
+       "opening": op_opening, "sync": op_sync, "track": op_track, "run-shell": lambda *a: print(run_shell(*a))}
 OPS[sys.argv[1]](*sys.argv[2:])
 EOF
 
@@ -603,7 +725,7 @@ pane_ok() { [[ "${1:-}" =~ ^%[0-9]+$ ]]; }
 sid_ok() { [[ "${1:-}" =~ ^[A-Za-z0-9][A-Za-z0-9_-]{7,127}$ ]]; }
 
 # Where sid runs now, into $live: `pane window 1-if-in-the-client's-session` (split by \x1f),
-# `elsewhere`, or empty when it isn't running. The command goes last: it may hold a space.
+# `elsewhere`, `background` (no tab shows it), or empty when it isn't running. The command goes last: it may hold a space.
 locate() {
   live=$(tmux list-panes -a \
     -F '#{session_id} #{window_id} #{pane_id} #{pane_pid} #{pane_current_command}' 2>/dev/null |
@@ -652,7 +774,7 @@ case "$cmd" in
         -p "Claude is working; shelve anyway? (y/n)" "$again"
       exit 0
     fi
-    IFS=$'\x1f' read -r result name < <(py shelve write "$pane" "$start" "$pid" "$panepid" \
+    IFS=$'\x1f' read -r result job name < <(py shelve write "$pane" "$start" "$pid" "$panepid" \
       "$command" "$socket" "$title")
     [ "${result:-}" = ok ] || exit 0
     if [ "$(tmux display -p -t "$pane" '#{window_panes}' 2>/dev/null)" = 1 ]; then
@@ -660,6 +782,12 @@ case "$cmd" in
     else
       mark "$pane" off   # the window stays: its ★ must not linger through it
       tmux kill-pane -t "$pane"
+    fi
+    # An attach tab only showed a background session, which outlives the tab: stop it, so a
+    # shelved chat never runs unseen. Open then resumes it like any other.
+    if [ -n "$job" ] && ! timeout 10 claude stop "$job" >/dev/null 2>&1; then
+      msg "shelved, but it still runs in the background (claude stop $job): $name"
+      exit 0
     fi
     msg "shelved: $name" ;;
 
@@ -693,7 +821,7 @@ case "$cmd" in
     if [ "$live" = elsewhere ]; then
       msg "that chat is already running elsewhere (outside tmux or in another tmux server)"
       exit 0
-    elif [ -n "$live" ]; then
+    elif [ -n "$live" ] && [ "$live" != background ]; then
       IFS=$'\x1f' read -r there window mine <<< "$live"
       if [ "$mine" = 1 ]; then
         tmux select-window -t "$csess:$window"
@@ -710,9 +838,13 @@ case "$cmd" in
     printf -v line 'claude --resume %q' "$sid"
     # The entry stays: the resumed session's SessionStart takes it off the shelf (a starred one
     # keeps its star), so a resume that never starts leaves the chat saved. Until then the
-    # entry names this window, so a second open goes here instead of resuming it twice.
+    # entry names this window, so a second open goes here instead of resuming it twice. A chat
+    # live in the background has no start to wait for: the resume attaches to it.
+    attaching=0
+    [ "$live" = background ] && attaching=1
     if tmux send-keys -t "$new" "$line" Enter; then
-      py opening "$sid" "$new" "$start" "$pid" "$socket"
+      [ "$(py opening "$sid" "$new" "$start" "$pid" "$socket" "$attaching")" = on ] &&
+        mark "$new" on
     else
       msg "tmux couldn't type into $new"
     fi ;;
@@ -735,6 +867,11 @@ case "$cmd" in
     tab "$1" || exit 0
     state=$(py sync "$1" "$start" "$pid" "$panepid" "$command" "$socket")
     [ -z "$state" ] || mark "$1" "$state" ;;
+
+  track)
+    # The socket goes last: it may hold a space.
+    tmux list-panes -a -F '#{start_time} #{pid} #{pane_id} #{pane_pid} #{window_index} #{socket_path}' \
+      2>/dev/null | py track ;;
 
   hook)
     [ "${CLAUDE_CODE_SESSION_ATTENDED:-}" != 0 ] && pane_ok "${TMUX_PANE:-}" || exit 0
