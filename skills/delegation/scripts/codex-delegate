@@ -64,6 +64,7 @@ started or can't be verified, or when the run's finalize lock stays busy.
 import argparse
 import contextlib
 import datetime
+import functools
 import glob
 import json
 import math
@@ -940,8 +941,10 @@ def cmd_audit(a):
 
 
 def main(argv=None):
-    ap = argparse.ArgumentParser(prog="codex-delegate", description=__doc__.split("\n")[0])
-    sub = ap.add_subparsers(dest="cmd", required=True)
+    # No abbreviated flags: the ask on --network must see its full spelling.
+    strict = functools.partial(argparse.ArgumentParser, allow_abbrev=False)
+    ap = strict(prog="codex-delegate", description=__doc__.split("\n")[0])
+    sub = ap.add_subparsers(dest="cmd", required=True, parser_class=strict)
     r = sub.add_parser("run")
     r.add_argument("--model", required=True)
     r.add_argument("--dir", required=True)

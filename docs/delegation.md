@@ -1311,7 +1311,11 @@ wins.
   - a global flag before a `claude` subcommand still reaches it (probed with a help call); the subcommand asks anchor on the subcommand, and that spelling
     is left to the classifier (Hayden, 2026-10-13);
   - `codex --version` and `--help` run sandboxed; `codex login status` and the other read-only
-    forms need its credential or config, which `denyRead` hides.
+    forms need its credential or config, which `denyRead` hides;
+  - git (2.43) takes any unique prefix of a long option (`--upl` for `--upload-pack`), so each
+    ask names the shortest one, and a test derives it from `git <verb>
+    --git-completion-helper-all`; argparse does the same by default, so the excluded wrappers
+    set `allow_abbrev=False`.
 - **Protected paths:** `.claude/settings*`, skills, agents, hooks, `.mcp.json`, `.git/hooks` and
   `.git/config` stay read-only for sandboxed Bash, even inside a writable root
   ([sandboxing](https://code.claude.com/docs/en/sandboxing)).

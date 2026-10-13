@@ -109,6 +109,11 @@ TMUX_READ_ONLY = {"capture-pane", "display-message", "has-session", "list-buffer
                   "list-windows", "show-buffer", "show-environment", "show-hooks",
                   "show-messages", "show-options", "show-prompt-history", "show-window-options"}
 
+# tmux's default `command-alias` server option (options-table.c), expanded before the table lookup.
+TMUX_DEFAULT_ALIASES = {"split-pane": "split-window", "splitp": "split-window",
+                        "server-info": "show-messages", "info": "show-messages",
+                        "choose-window": "choose-tree", "choose-session": "choose-tree"}
+
 
 def tmux_table(text=None):
     """[(name, alias or None)] from `tmux list-commands` output (the snapshot by default)."""
@@ -159,6 +164,13 @@ TMUX_RULES = [
     Rule("Bash(tmux *;*)", "a ; starts a second tmux command after any verb",
          ["tmux display -p x \\; set -g @x 1"]),
     Rule("Bash(tmux *#(*)", "#( is a format's job syntax", ["tmux display -p '#(id)'"]),
+    # E: and T: expand a value as a format, so a #( job the value holds would run; any other
+    # value-expanding spelling needs a ; between modifiers, which asks above. The globs stop
+    # before the colon (a rule ending in :* is the legacy prefix form); no format variable
+    # starts with a capital E or T.
+    Rule("Bash(tmux *{E*)", "expands a value as a format", ["tmux display -p '#{E:pane_title}'"]),
+    Rule("Bash(tmux *{T*)", "expands a value as a format", ["tmux display -p '#{T:pane_title}'"]),
+    # Also a false prompt when a target or text after a dash holds a capital I: rare, and safe.
     Rule("Bash(tmux display* -*I*)", "display -I types its input into a pane",
          ["tmux display -I -t %1", "tmux display -pI -t %1"]),
 ] + [
@@ -197,7 +209,15 @@ CLAUDE_FLAG_OK = {
     "--permission-prompts", "--print", "--prompt-suggestions", "--replay-user-messages",
     "--restricted", "--resume", "--session-id", "--strict-mcp-config", "--system-prompt",
     "--system-prompt-snapshot", "--tmux", "--tools", "--verbose", "--version", "--worktree",
+    # The options of the "ok" leaf subcommands below.
+    "--available", "--data-size", "--label", "--strict", "--text",
 }
+# Short aliases, by their long flag. None may stand for an ask-class flag: a glob can't anchor
+# `-x` safely, so a new one fails the live check until it gets a rule.
+CLAUDE_SHORT_FLAGS = {"-c": "--continue", "-d": "--debug", "-h": "--help", "-n": "--name",
+                      "-p": "--print", "-r": "--resume", "-v": "--version", "-w": "--worktree"}
+# Leaf options that ask through a rule of their own, anchored on the leaf.
+CLAUDE_LEAF_FLAG_ASKS = {"--values-stdin": "Bash(claude plugin* configure *--values-stdin*)"}
 # Every subcommand the group helps list ("|" joins an alias), as "ask", "deny" or "ok".
 CLAUDE_COMMANDS = {
     (): {"agents": "ok", "attach": "ok", "auth": "group", "auto-mode": "group", "doctor": "ok",
@@ -212,9 +232,9 @@ CLAUDE_COMMANDS = {
                "help": "ok", "list": "ok", "login": "ask", "logout": "ask", "remove": "ask",
                "reset-project-choices": "ask", "serve": "ask"},
     ("plugin",): {"configure": "ok", "details": "ok", "disable": "ask", "enable": "ask",
-                  "eval": "ok", "help": "ok", "init|new": "ask", "install|i": "ask",
+                  "eval": "ask", "help": "ok", "init|new": "ask", "install|i": "ask",
                   "list": "ok", "marketplace": "ask", "prune|autoremove": "ask", "tag": "ask",
-                  "test": "ok", "uninstall|remove": "ask", "update": "ask", "validate": "ok"},
+                  "test": "ask", "uninstall|remove": "ask", "update": "ask", "validate": "ok"},
     ("sandbox",): {"help": "ok", "install": "ask", "status": "ok"},  # a hidden group
 }
 
@@ -243,26 +263,36 @@ CLAUDE_RULES = [
          [f"claude plugin {sub.strip()} x"])
     for sub in ("disable", "enable", "init", "new", "install", "i ", "marketplace", "prune",
                 "autoremove", "tag", "uninstall", "remove", "update")
+] + [
+    # Like --plugin-dir: the path is in the command text, but the code under it is whatever the
+    # sandbox wrote there (Hayden, 2026-10-13).
+    Rule("Bash(claude plugin* test*)", "runs a mod's test files from a chosen dir",
+         ["claude plugin test skills/autopass"]),
+    Rule("Bash(claude plugin* eval*)", "loads a plugin from a chosen path and starts claude runs",
+         ["claude plugin eval skills/autopass"]),
 ]
 CLAUDE_DENY = [Rule("Bash(claude *ultrareview*)", "a billed cloud review only Hayden starts",
                     ["claude ultrareview", "claude -p x ultrareview 5"])]
 
 # --- git, gh, the wrappers, Windows ---------------------------------------------------------------
 
+# git takes any unique prefix of a long option (`--upl` is --upload-pack), so each ask names the
+# shortest unique prefix of a flag that names the program the remote end runs. A live test derives
+# the prefixes from `git <verb> --git-completion-helper-all`.
+GIT_PROGRAM_FLAGS = {"push": {"--receive-pack": "--rece", "--exec": "--e"},
+                     "fetch": {"--upload-pack": "--upl"}, "pull": {"--upload-pack": "--upl"},
+                     "ls-remote": {"--upload-pack": "--u", "--exec": "--exe"}}
+
 OTHER_RULES = [
-    Rule("Bash(git push *--receive-pack*)", "names the program the remote end runs",
-         ["git push origin feat --receive-pack=x"]),
-    Rule("Bash(git push *--exec*)", "names the program the remote end runs",
-         ["git push origin feat --exec=x"]),
-    Rule("Bash(git fetch *--upload-pack*)", "names the program the remote end runs",
-         ["git fetch origin --upload-pack=x"]),
-    Rule("Bash(git pull *--upload-pack*)", "names the program the remote end runs",
-         ["git pull origin --upload-pack=x"]),
-    Rule("Bash(git ls-remote *--upload-pack*)", "names the program the remote end runs",
-         ["git ls-remote --upload-pack=x origin"]),
+    Rule(f"Bash(git {verb} *{prefix}*)", "names the program the remote end runs",
+         [f"git {verb} origin feat {flag}=x", f"git {verb} origin feat {prefix}=x"])
+    for verb, flags in GIT_PROGRAM_FLAGS.items() for flag, prefix in flags.items()
+] + [
     Rule("Bash(git ls-remote -u*)", "-u is --upload-pack", ["git ls-remote -u x origin"]),
     Rule("Bash(git ls-remote * -u*)", "-u is --upload-pack", ["git ls-remote origin -u x"]),
     Rule("Bash(gh auth token*)", "prints the credential the sandbox hides", ["gh auth token"]),
+    Rule("Bash(gh auth git-credential*)", "git's credential helper: prints the credential",
+         ["gh auth git-credential get"]),
     Rule("Bash(gh auth status *-t*)", "prints the credential the sandbox hides",
          ["gh auth status -t", "gh auth status --show-token"]),
 ] + [
@@ -301,8 +331,7 @@ NO_ASK = ["lane ls", "lane ls --json", "lane open chart-fix", "lane open chart-f
           "tmux show -gv @x", "tmux show-options -g", "tmux show-environment -g",
           "tmux show-messages", "tmux list-windows -a", "tmux list-keys -T root",
           "tmux list-clients", "claude --version", "claude --help", "claude -p --model sonnet",
-          "claude agents --json", "claude plugin validate skills/autopass",
-          "claude plugin test skills/autopass", "claude plugin list", "claude mcp list",
+          "claude agents --json", "claude plugin validate skills/autopass", "claude plugin list", "claude mcp list",
           "claude mcp get x", "claude sandbox status", "claude auth status",
           "claude --bg --model sonnet", "claude doctor", "claude logs x", "claude attach x",
           "claude -p --no-session-persistence",

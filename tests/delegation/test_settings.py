@@ -3,7 +3,9 @@ permission rules.
 
 A wrong type or a missing suffix here fails silently in Claude Code (an unknown value is
 ignored; a hook that exits non-2 doesn't block), so the baseline is pinned by test."""
+import contextlib
 import glob
+import io
 import json
 import os
 import re
@@ -522,6 +524,42 @@ class Inventory(unittest.TestCase):
             if p.startswith("tmux "):
                 self.assertIn(inv.tmux_resolve(p.split()[1], table), inv.TMUX_READ_ONLY, p)
 
+    def test_each_excluded_tmux_verb_names_the_command_tmux_runs(self):
+        # Written out by hand from tmux's cmd_find (exact alias, else a unique prefix), so a
+        # slip in tmux_spellings can't hide behind tmux_resolve, which derives from it.
+        expect = {"ls": "list-sessions", "list-sessions": "list-sessions",
+                  "list-windows": "list-windows", "list-panes": "list-panes",
+                  "list-clients": "list-clients", "list-keys": "list-keys",
+                  "list-commands": "list-commands", "capture-pane": "capture-pane",
+                  "display": "display-message", "show": "show-options",
+                  "show-options": "show-options", "show-environment": "show-environment",
+                  "show-messages": "show-messages", "show-hooks": "show-hooks"}
+        verbs = {p.split()[1] for p in S["sandbox"]["excludedCommands"] if p.startswith("tmux ")}
+        self.assertEqual(verbs, set(expect))
+        for verb, name in expect.items():
+            self.assertEqual(inv.tmux_resolve(verb), name, verb)
+            self.assertIn(name, inv.TMUX_READ_ONLY, verb)
+        # A default command-alias runs its target: the mutating ones ask, and none is excluded.
+        for alias, name in inv.TMUX_DEFAULT_ALIASES.items():
+            self.assertEqual(excluded_by(f"tmux {alias} -t x"), [], alias)
+            if name not in inv.TMUX_READ_ONLY:
+                self.assertTrue(matching("ask", f"tmux {alias} -t x"), alias)
+
+    def test_wrapper_flags_an_ask_names_take_no_abbreviation(self):
+        # argparse takes a unique prefix by default (`--aban` for --abandon), which an ask that
+        # names the full flag would miss, so the excluded wrappers turn that off.
+        lane = load_script("lane", os.path.join(REPO, "skills", "lanes", "scripts"))
+        for argv in (["init", "--set", "x"], ["init", "--ro", "/x"], ["done", "x", "--aban"]):
+            with self.assertRaises(SystemExit, msg=argv), contextlib.redirect_stderr(io.StringIO()):
+                lane.parser().parse_args(argv)
+        self.assertTrue(lane.parser().parse_args(["done", "x", "--abandon"]).abandon)
+        cd = load_script("codex-delegate")
+        cd.cmd_run = lambda a: a.network
+        run = ["run", "--model", "m", "--dir", "/x", "--brief", "b.md"]
+        with self.assertRaises(SystemExit), contextlib.redirect_stderr(io.StringIO()):
+            cd.main(run + ["--net"])
+        self.assertTrue(cd.main(run + ["--network"]))
+
     def test_installed_tmux_matches_the_snapshot(self):
         # `tmux -V` needs no server, so a tmux upgrade fails every suite run until the snapshot
         # and the read-only list are redone. The table itself needs a server, which the sandbox
@@ -540,21 +578,47 @@ class Inventory(unittest.TestCase):
         with open(inv.TMUX_SNAPSHOT) as f:
             self.assertEqual(p.stdout, f.read())
 
+    def test_git_program_flag_asks_cover_every_prefix_git_takes(self):
+        # git takes any unique prefix of a long option, so each ask names the shortest one the
+        # installed git accepts, and no other option of that verb trips it.
+        if not shutil.which("git"):
+            self.skipTest("no git on PATH")
+        for verb, flags in inv.GIT_PROGRAM_FLAGS.items():
+            p = subprocess.run(["git", verb, "--git-completion-helper-all"],
+                               capture_output=True, text=True, timeout=10)
+            opts = {o.rstrip("=") for o in p.stdout.split() if o.startswith("--")}
+            self.assertLessEqual(set(flags), opts, verb)
+            for flag, prefix in flags.items():
+                short = next(flag[:i] for i in range(3, len(flag) + 1)
+                             if [o for o in opts if o.startswith(flag[:i])] == [flag])
+                self.assertEqual(prefix, short, f"git {verb} {flag}")
+                for i in range(len(short), len(flag) + 1):
+                    self.assertTrue(matching("ask", f"git {verb} origin {flag[:i]}=x"), flag[:i])
+            mine = {r.rule for r in inv.ASKS}  # the baseline's push asks are another test's
+            for o in sorted(opts - set(flags) - {"--"}):
+                self.assertEqual(set(matching("ask", f"git {verb} origin {o}")) & mine, set(),
+                                 f"git {verb} {o}")
+
     def test_installed_claude_flags_and_subcommands_are_classified(self):
         # A new Claude Code flag or subcommand fails every suite until the inventory classifies
         # it (Hayden accepted the cost, 2026-10-13): an unclassified loosening flag is what the
-        # inventory exists to catch. Leaf subcommands' own options aren't listed: a leaf that
-        # changes anything asks as a whole, and the flag asks match anywhere in the call.
+        # inventory exists to catch. The flags are the top level's and every "ok" leaf's, short
+        # aliases included; a leaf that asks as a whole needs no flag list.
         if not shutil.which("claude"):
             self.skipTest("no claude on PATH")
-        known = set(inv.CLAUDE_FLAG_ASKS) | inv.CLAUDE_FLAG_OK
-        for argv in ((), ("agents",)):
+        known = set(inv.CLAUDE_FLAG_ASKS) | inv.CLAUDE_FLAG_OK | set(inv.CLAUDE_LEAF_FLAG_ASKS)
+        leaves = [()] + [path + (sub.split("|")[0],) for path, subs in inv.CLAUDE_COMMANDS.items()
+                         for sub, cls in subs.items() if cls == "ok" and sub != "help"]
+        for argv in leaves:
             text = help_text(*argv)
-            flags = set(re.findall(r"^  (?:-\w, )?(--[\w-]+)(?:, (--[\w-]+))?", text, re.M))
-            self.assertTrue(flags, argv)
-            for pair in flags:
-                for flag in filter(None, pair):
+            self.assertIn("Usage: claude", text, argv)
+            for short, *longs in re.findall(r"^  (?:(-\w), )?(--[\w-]+)(?:, (--[\w-]+))?",
+                                            text, re.M):
+                for flag in filter(None, longs):
                     self.assertIn(flag, known, f"classify claude {' '.join(argv)} {flag}")
+                if short:
+                    self.assertEqual(inv.CLAUDE_SHORT_FLAGS.get(short), longs[0],
+                                     f"classify claude {' '.join(argv)} {short}")
         for path, subs in inv.CLAUDE_COMMANDS.items():
             text = help_text(*path)
             listed = re.findall(r"^  ([a-z][\w|-]*)", text.split("\nCommands:\n", 1)[-1], re.M)
@@ -568,6 +632,11 @@ class Inventory(unittest.TestCase):
                 self.assertTrue(matching("ask", f"claude -p {flag} x"), flag)
         for flag in inv.CLAUDE_FLAG_OK:
             self.assertEqual(matching("ask", f"claude -p {flag} x"), [], flag)
+        for short, long_ in inv.CLAUDE_SHORT_FLAGS.items():
+            self.assertIn(long_, inv.CLAUDE_FLAG_OK, short)  # an ask-class short needs a rule
+            self.assertEqual(matching("ask", f"claude {short} x"), [], short)
+        for flag, rule in inv.CLAUDE_LEAF_FLAG_ASKS.items():
+            self.assertIn(rule, {r.rule for r in inv.ASKS}, flag)
         for path, subs in inv.CLAUDE_COMMANDS.items():
             for heads in ([path], [("plugins",)] if path == ("plugin",) else []):
                 for head in heads:
@@ -592,9 +661,16 @@ class Inventory(unittest.TestCase):
         found = set()
         for path in docs:
             with open(path) as f:
-                for span in re.findall(rf"`((?:{tools}) [^`]+)`", f.read()):
-                    found.add(" ".join(re.sub(r"<[^>]*>", "x", span).split()))  # unwrap
+                text = f.read()
+            spans = re.findall(rf"`((?:{tools}) [^`]+)`", text)
+            for block in re.findall(r"^```[^\n]*\n(.*?)^```", text, re.M | re.S):
+                spans += re.findall(rf"^\s*((?:{tools}) .*?)(?:\s+#.*)?$", block, re.M)
+            for span in spans:
+                # <placeholder> becomes a word; an [--optional] group drops (it may ask).
+                span = re.sub(r"\[[^]]*\]", "", re.sub(r"<[^>]*>", "x", span))
+                found.add(" ".join(span.split()))
         self.assertIn("tmux capture-pane -p -t x", found)  # the scan still reaches the lanes skill
+        self.assertIn("codex-delegate status", found)  # and the fenced blocks
         excluded = S["sandbox"]["excludedCommands"]
         for cmd in sorted(found):
             with self.subTest(cmd=cmd):

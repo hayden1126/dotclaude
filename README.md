@@ -99,12 +99,14 @@ codex (`login status`, `doctor` and a few lists) and the Windows shells. Any oth
 sandboxed, where tmux reaches no socket and codex no credential, so it fails closed.
 
 Asks cover what an excluded command could still be made to run: every other tmux verb, alias and
-prefix, a bare `tmux`, a global flag, a `;` chain, a `#(` job and `display -I`; the `claude`
-flags that turn off a guard or load config, tools or code from elsewhere, and its subcommands
-that change the install, config, auth or sessions; git's `--upload-pack`, `--receive-pack` and
-`--exec`; `gh auth token` and the `gh` commands that change its credential, aliases, config or
-extensions; `lane init --setup` or `--root`, `lane done --abandon`, `codex-delegate --network` and
-the Windows shells. `claude ultrareview` is denied. What CLAUDE.md, the skills and the agents tell
+prefix, a bare `tmux`, a global flag, a `;` chain, a `#(` job, the `E:` and `T:` format
+modifiers (they expand a value as a format) and `display -I`; the `claude` flags that turn off a
+guard or load config, tools or code from elsewhere, its subcommands that change the install,
+config, auth or sessions, and `claude plugin test` and `eval` (they run code from a chosen path);
+git's `--upload-pack`, `--receive-pack` and `--exec`, in every prefix git accepts; `gh auth token`,
+`gh auth git-credential` and the `gh` commands that change its credential, aliases, config or
+extensions; `lane init --setup` or `--root`, `lane done --abandon`, `codex-delegate --network`
+(these wrappers take no abbreviated flag) and the Windows shells. `claude ultrareview` is denied. What CLAUDE.md, the skills and the agents tell
 Claude to run asks nothing, except the lead's once-per-repo `lane init --root ... --setup` (a test
 scans them), and a suite fails when the installed tmux or Claude
 Code has a verb or flag the inventory hasn't classified. Spellings a glob can't anchor, such as a

@@ -3,6 +3,7 @@ import importlib.machinery
 import importlib.util
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -208,16 +209,54 @@ class MergeCli(unittest.TestCase):
         with open(self.base) as f:
             self.assertEqual((r.returncode, r.stdout, r.stderr), (0, f.read(), ""))
 
-    def test_the_real_baseline_protects_every_dotclaude_path_from_a_lane(self):
+    def test_every_path_setup_installs_from_is_write_protected_in_each_checkout(self):
+        # What setup.sh links, copies or runs from the checkout runs outside the sandbox later
+        # (a hook, a skill script, the settings), so it must be in denyWrite, and so must a
+        # lane's copy of it. templates/ is exempt: its seeds are copied into projects, never run.
+        with open(os.path.join(REPO, "setup.sh")) as f:
+            sources = set(re.findall(r'"?\$REPO_DIR"?/([\w.-]+)', f.read())) - {"templates"}
+        self.assertIn("hooks", sources)
         with open(os.path.join(REPO, "settings.json")) as f:
             base = json.load(f)
+        names = {p[len("~/dotclaude/"):] for p in base["sandbox"]["filesystem"]["denyWrite"]
+                 if p.startswith("~/dotclaude/")}
+        self.assertLessEqual(sources, names)
         lane = os.path.join(self.dir.name, "lane")
         deny = merge_settings.protect_checkout(base, lane, home=self.dir.name)
         deny = deny["sandbox"]["filesystem"]["denyWrite"]
-        names = [p[len("~/dotclaude/"):] for p in base["sandbox"]["filesystem"]["denyWrite"]
-                 if p.startswith("~/dotclaude/")]
-        self.assertIn("tests", names)
-        self.assertEqual(deny[-len(names):], [os.path.join(os.path.realpath(lane), n) for n in names])
+        self.assertLessEqual({os.path.join(os.path.realpath(lane), n) for n in sources}, set(deny))
+
+    def test_a_lane_install_with_an_overlay_and_a_live_file(self):
+        # setup.sh's call shape: the overlay's ~/dotclaude paths get the lane's copies too, and
+        # a live-only key is kept.
+        lane = os.path.realpath(os.path.join(self.dir.name, "x"))
+        overlay = self.overlay(json.dumps(
+            {"sandbox": {"filesystem": {"denyWrite": ["~/dotclaude/local"]}}}))
+        os.makedirs(lane)
+        with open(self.base, "w") as f:
+            json.dump({"sandbox": {"filesystem": {"denyWrite": ["~/dotclaude/hooks"]}}}, f)
+        r = run(MERGE, "--checkout", lane, self.base, overlay, self.live({"model": "opus"}),
+                env=dict(os.environ, HOME=os.path.join(self.dir.name, "home")))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        out = json.loads(r.stdout)
+        self.assertEqual(out["sandbox"]["filesystem"]["denyWrite"],
+                         ["~/dotclaude/hooks", "~/dotclaude/local", lane + "/hooks",
+                          lane + "/local"])
+        self.assertEqual(out["model"], "opus")
+
+    def test_a_symlinked_dotclaude_is_the_main_checkout(self):
+        # ~/dotclaude may be a link to the real checkout: installing from either path is the
+        # main install, verbatim, with no copies.
+        home = os.path.join(self.dir.name, "home")
+        real = os.path.join(self.dir.name, "src", "dotclaude")
+        os.makedirs(real)
+        os.makedirs(home)
+        os.symlink(real, os.path.join(home, "dotclaude"))
+        for checkout in (real, os.path.join(home, "dotclaude")):
+            with self.subTest(checkout):
+                r = self.protect(checkout, ["~/dotclaude/hooks"])
+                self.assertEqual((r.returncode, r.stderr), (0, ""))
+                self.assertNotIn(real, r.stdout)
 
     def test_a_bad_live_file_fails_and_prints_nothing(self):
         for text in ("{not json", "[1, 2]"):
