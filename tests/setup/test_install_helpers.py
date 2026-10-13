@@ -269,6 +269,11 @@ class SetupWiring(unittest.TestCase):
         lines = setup_lines()
         hold = first(lines, r'python3 "\$REPO_DIR/install-state\.py" hold "\$REPO_DIR"')
         self.assertLess(first(lines, r"\s*flock -n 9"), hold)
+        self.assertLess(first(lines, r"\s*flock -w 300 9"), hold)
+        # Every flock on fd 9 is bounded: a sandboxed process can hold the lock, unnamed.
+        calls = [m.group(1) for l in lines if not l.lstrip().startswith("#")
+                 for m in re.finditer(r"\bflock((?: -\w+(?: \d+)?)*) 9\b", l)]
+        self.assertEqual(sorted(calls), [" -n", " -w 300"])
         self.assertLess(hold, first(lines, r'mkdir -p "\$CLAUDE_DIR"'))
         self.assertLess(hold, first(lines, r"\s*(copy_managed|link) \""))
         self.assertLess(hold, first(lines, r'python3 "\$REPO_DIR/merge-settings\.py"'))

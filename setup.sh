@@ -18,13 +18,30 @@ warn() { printf "\033[1;33m!!\033[0m  %s\n" "$*" >&2; }
 # ---------------------------------------------------------------------------
 # 0. One run at a time, and a lane's install holds until the lead's
 # ---------------------------------------------------------------------------
-# Two runs at once would interleave their links. The lock is best-effort: without flock
-# (git-bash, macOS) or a writable state dir the run goes on unlocked. The children that may
-# outlive the run (plugin installs, tool installers) get fd 9 closed, or they'd keep the lock.
+# Two runs at once would interleave their links, so a run first takes a flock on install.lock in
+# the state dir. While another holds it, the run says so and waits up to 5 minutes: a sandboxed
+# process can hold that lock too (a read-only fd is enough), and flock can't name the holder. A
+# timeout or any other flock error stops the run before it changes anything. Only where flock
+# or a writable state dir is missing (git-bash, macOS) does the run go on unlocked. The children
+# that may outlive the run (plugin installs, tool installers) get fd 9 closed, or they'd keep it.
 STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/dotclaude"
 if command -v flock >/dev/null 2>&1 && mkdir -p "$STATE_DIR" 2>/dev/null \
     && { exec 9>"$STATE_DIR/install.lock"; } 2>/dev/null; then
-  flock -n 9 || { say "waiting for another setup.sh run to finish"; flock 9; }
+  locked=0
+  flock -n 9 || locked=$?
+  if [[ $locked -eq 1 ]]; then  # flock's exit for a lock held elsewhere, and for a timeout
+    say "another process holds $STATE_DIR/install.lock: this run (pid $$, from $REPO_DIR) waits up to 5 minutes for it"
+    locked=0
+    flock -w 300 9 || locked=$?
+    if [[ $locked -eq 1 ]]; then
+      warn "timed out after 5 minutes waiting for $STATE_DIR/install.lock (\`fuser -v\` on it lists who has it open); setup.sh stopped before changing anything"
+      exit 1
+    fi
+  fi
+  if [[ $locked -ne 0 ]]; then
+    warn "couldn't lock $STATE_DIR/install.lock (flock exit $locked, see above); setup.sh stopped before changing anything"
+    exit 1
+  fi
 fi
 # A lane installs from its own worktree to test a change, and an install from anywhere else
 # would replace those links mid-test. So links into a live lane worktree hold the install: the

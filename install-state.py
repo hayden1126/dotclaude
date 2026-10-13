@@ -8,7 +8,13 @@ linked worktree of this repo (it shares REPO_DIR's git common dir) or of another
 clone (its root holds install-state.py and setup.sh). Managed means a symlink in a dir setup.sh
 links into (managed_dirs) whose path inside its checkout matches one of setup.sh's link sources
 (SOURCES). setup-tmux.sh's tmux/* links, plugin-installed files and other projects' worktrees
-are never touched, however their links look (another project's bin/x matches bin/*).
+are never touched, however their links look (another project's bin/x matches bin/*). Nor is a
+worktree inside the run's own main checkout (Claude Code's agent worktrees) while it lives.
+
+A lane's sandboxed Bash can write in its worktree, so nothing here trusts what a lane's files
+say beyond the lane: a .git file naming a fake admin dir doesn't change which main releases it
+(the main's own .git/worktrees/ decides), and a FIFO or a link to a device in a mod dir is
+hashed by its type, never opened or read.
 
 Usage:
   install-state.py hold REPO_DIR   exit 3, naming the holder on stderr, when a live lane other
@@ -16,7 +22,8 @@ Usage:
                                    lane's main checkout. A run from the main checkout relinks
                                    everything, so it proceeds and says it releases the hold.
   install-state.py prune REPO_DIR  remove the managed links into another live lane of this repo,
-                                   and the dangling ones under REPO_DIR or its lanes root.
+                                   and the dangling ones under REPO_DIR, its lanes root or an
+                                   agent worktree in its main's .claude/worktrees/.
   install-state.py plugins         print one line when a mod or plugin changed since the last
                                    install: sessions started before it need /pass to load it.
 
@@ -42,9 +49,17 @@ HELD = 3
 SOURCES = ("CLAUDE.md", "notify-toast.ps1", "hooks/*.sh", "hooks/*.py", "skills/*",
            "skills/*/scripts/*", "agents/*.md", "templates/*.md", "bin/*", "statusline/*.py",
            "codex/AGENTS.md")
+TMUX_SOURCES = ("tmux/*",)  # what setup-tmux.sh links into ~/.local/bin (and $HOME)
 TMUX_START, TMUX_END = "# >>> dotclaude tmux (setup-tmux.sh) >>>", "# <<< dotclaude tmux <<<"
 DOTCLAUDE = ("install-state.py", "setup.sh")  # a checkout holding both is a dotclaude checkout
+AGENTS = os.path.join(".claude", "worktrees")  # Claude Code's agent worktrees, in a main checkout
 MOD_SKIP = ("tests", "__pycache__")  # a mod's tests and bytecode don't change what a session loads
+MOD_READ = 64 << 20  # a mod file past this counts by its size and its first MOD_READ bytes
+CHUNK = 1 << 16
+# Opening a mod file never follows a link or waits on a FIFO (both are checked by lstat first,
+# and these close the race); O_BINARY keeps Windows from translating line ends.
+OPEN = os.O_RDONLY | sum(getattr(os, f, 0) for f in ("O_NOFOLLOW", "O_NONBLOCK", "O_CLOEXEC",
+                                                     "O_BINARY"))
 CHANGED = "sessions started before this install need /pass to load them"
 
 
@@ -64,6 +79,14 @@ class Worktree(NamedTuple):
     root: str
     main: str
     admin: str  # <common>/worktrees/<x>
+
+
+class Run(NamedTuple):
+    """Where a setup.sh run stands."""
+    me: str              # its checkout, resolved
+    common: str | None   # that checkout's git common dir
+    main: str            # its main checkout: the common dir's parent (me, outside git)
+    lanes: str | None    # its repo's lanes root, from the lanes config
 
 
 def places(env=None) -> Places:
@@ -116,15 +139,31 @@ def links(p: Places) -> list[Link]:
     return out
 
 
-def managed(rel: str) -> bool:
-    """rel, a path inside a checkout, is one setup.sh links: it matches a SOURCES glob segment by
-    segment, so a * never spans a /."""
+def managed(rel: str, globs: tuple[str, ...] = SOURCES) -> bool:
+    """rel, a path inside a checkout, is one setup.sh links: it matches a SOURCES glob (or one of
+    globs) segment by segment, so a * never spans a /."""
     parts = rel.replace(os.sep, "/").split("/")
-    for glob in SOURCES:
+    for glob in globs:
         pats = glob.split("/")
         if len(pats) == len(parts) and all(map(fnmatch.fnmatchcase, parts, pats)):
             return True
     return False
+
+
+def installer(rel: str) -> str:
+    """What relinks a link to rel, a path inside its checkout."""
+    if managed(rel):
+        return "setup.sh"
+    return "setup-tmux.sh" if managed(rel, TMUX_SOURCES) else "by hand"
+
+
+def below(path: str, root: str) -> str | None:
+    """path's part under <root>/<one dir>/ (a lane's id, an agent worktree's name, stripped);
+    None when path isn't that deep under root."""
+    if not inside(path, root):
+        return None
+    parts = os.path.relpath(path, root).split(os.sep, 1)
+    return parts[1] if len(parts) == 2 else None
 
 
 def show(link: Link, p: Places) -> str:
@@ -187,6 +226,34 @@ def worktree_at(target: str) -> Worktree | None:
     return linked_worktree(root) if root else None
 
 
+def registered(common: str | None) -> dict[str, str]:
+    """root -> admin dir for each worktree that common's own worktrees/<x>/gitdir names back
+    (<root>/.git): the linked worktrees git lists for that repo, whatever each root's .git file
+    says. A lane's sandboxed Bash can rewrite its .git file to name a fake admin elsewhere."""
+    out: dict[str, str] = {}
+    top = os.path.join(common, "worktrees") if common else None
+    try:
+        names = sorted(os.listdir(top)) if top else []
+    except OSError:
+        names = []
+    for name in names:
+        admin = os.path.join(top, name)
+        try:
+            with open(os.path.join(admin, "gitdir"), encoding="utf-8") as f:
+                back = os.path.realpath(os.path.join(admin, f.read().strip()))
+        except (OSError, ValueError):
+            continue
+        if os.path.basename(back) == ".git":
+            out.setdefault(os.path.dirname(back), admin)
+    return out
+
+
+def run_at(repo_dir: str, p: Places) -> Run:
+    me = os.path.realpath(repo_dir)
+    common = common_dir(me)
+    return Run(me, common, os.path.dirname(common) if common else me, lanes_root(common, p))
+
+
 def branch(wt: Worktree) -> str:
     try:
         with open(os.path.join(wt.admin, "HEAD"), encoding="utf-8") as f:
@@ -207,28 +274,39 @@ def holders(repo_dir: str, env=None) -> list[dict]:
     "main", "branch", "links"}, links as `~/.claude/hooks/x.sh -> <target>`. A lane is a linked
     worktree of this repo, or a dotclaude checkout's (both DOTCLAUDE files at its root), so a
     plain clone elsewhere is still refused while the real repo's lane holds. Another project's
-    worktree never holds."""
+    worktree never holds, nor does one inside repo_dir's main checkout. A holder this repo's own
+    .git/worktrees/ registers gets this repo's main and its admin dir there, whatever its .git
+    file names."""
     p = places(env)
-    me = os.path.realpath(repo_dir)
-    mine = common_dir(me)
+    run = run_at(repo_dir, p)
+    ours = registered(run.common)
     found = {}
     for link in links(p):
         wt = worktree_at(link.target)
-        if (wt and wt.root != me and managed(os.path.relpath(link.target, wt.root))
-                and (lane_of(wt, mine)
-                     or all(os.path.isfile(os.path.join(wt.root, f)) for f in DOTCLAUDE))):
-            found.setdefault(wt, []).append(show(link, p))
+        if (wt is None or wt.root == run.me or inside(wt.root, run.main)
+                or not managed(os.path.relpath(link.target, wt.root))
+                or not (lane_of(wt, run.common)
+                        or all(os.path.isfile(os.path.join(wt.root, f)) for f in DOTCLAUDE))):
+            continue
+        if wt.root in ours:
+            wt = Worktree(wt.root, run.main, ours[wt.root])
+        found.setdefault(wt, []).append(show(link, p))
     return [{"root": wt.root, "main": wt.main, "branch": branch(wt), "links": shown}
             for wt, shown in sorted(found.items())]
 
 
 def hold(repo_dir: str, env=None) -> tuple[list[dict], list[dict]]:
     """(the holders a run from repo_dir must not replace, the ones it releases). A run from a
-    holder's main checkout relinks everything, so it releases that holder."""
+    holder's main checkout relinks everything, so it releases that holder: one whose .git file
+    names it, or any its own .git/worktrees/ registers. Only a main checkout (a real .git dir)
+    releases: a lane whose own .git file names a common dir it planted would otherwise read its
+    run as main and release a sibling."""
     me = os.path.realpath(repo_dir)
+    dotgit = os.path.join(me, ".git")
+    main = os.path.isdir(dotgit) and not os.path.islink(dotgit)
     held, released = [], []
     for h in holders(repo_dir, env):
-        (released if h["main"] == me else held).append(h)
+        (released if main and h["main"] == me else held).append(h)
     return held, released
 
 
@@ -246,12 +324,15 @@ def tmux_block(path: str) -> list[str]:
 
 
 def links_into(path: str, env=None) -> list[str]:
-    """Every link in the managed dirs pointing into path, glob or not (setup-tmux.sh's
-    ~/.local/bin links count), plus each line of the ~/.tmux.conf block naming a path inside it.
+    """Every link in the managed dirs pointing into path, a checkout's root (a lane's), glob or
+    not (setup-tmux.sh's ~/.local/bin links count), plus each line of the ~/.tmux.conf block
+    naming a path inside it. Each line ends with what relinks it: " (setup.sh)" for a managed
+    link, " (setup-tmux.sh)" for a tmux/* link and each block line, " (by hand)" for any other.
     `lane done` refuses while this is non-empty: removing the worktree would break them."""
     p = places(env)
     root = os.path.realpath(path)
-    out = [show(link, p) for link in links(p) if inside(link.target, root)]
+    out = [f"{show(link, p)} ({installer(os.path.relpath(link.target, root))})"
+           for link in links(p) if inside(link.target, root)]
     conf = os.path.join(p.home, ".tmux.conf")
     for line in tmux_block(conf):
         try:
@@ -259,7 +340,7 @@ def links_into(path: str, env=None) -> list[str]:
         except ValueError:  # unbalanced quotes
             words = line.split()
         if any(os.path.isabs(w) and inside(pointed(w), root) for w in words):
-            out.append(f"~/.tmux.conf: {line.strip()}")
+            out.append(f"~/.tmux.conf: {line.strip()} (setup-tmux.sh)")
     return out
 
 
@@ -315,66 +396,94 @@ def lanes_root(common: str | None, p: Places) -> str | None:
     return os.path.realpath(root) if root and os.path.isabs(root) else None
 
 
-def stale(link: Link,
-    me: str,
-    mine: str | None,
-    lanes: str | None,
-) -> bool:
+def stale(link: Link, run: Run) -> bool:
     """A managed link this run should remove: into a live lane of this repo (a linked worktree
-    sharing mine, me's common dir) other than me, or dangling under me or the lanes root. A
-    link into another repo's worktree is never stale here, dotclaude-shaped or not."""
+    sharing run.common) other than run.me and outside run.main, or dangling under an agent
+    worktree in run.main, under run.me or under a lane in the lanes root. A link into another
+    repo's worktree is never stale here, dotclaude-shaped or not."""
     wt = worktree_at(link.target)
-    if wt and wt.root != me and lane_of(wt, mine):
+    if wt and wt.root != run.me and not inside(wt.root, run.main) and lane_of(wt, run.common):
         rel = os.path.relpath(link.target, wt.root)
     elif os.path.exists(link.path):
         return False
-    elif inside(link.target, me):
-        rel = os.path.relpath(link.target, me)
-    elif lanes and link.target != lanes and inside(link.target, lanes):
-        lane_rel = os.path.relpath(link.target, lanes).split(os.sep, 1)  # <lane id>/<path>
-        if len(lane_rel) != 2:
-            return False
-        rel = lane_rel[1]
+    elif inside(link.target, os.path.join(run.main, AGENTS)):  # before me, which may hold it
+        rel = below(link.target, os.path.join(run.main, AGENTS))
+    elif inside(link.target, run.me):
+        rel = os.path.relpath(link.target, run.me)
     else:
-        return False
-    return managed(rel)
+        rel = below(link.target, run.lanes) if run.lanes else None
+    return rel is not None and managed(rel)
 
 
-def prune(repo_dir: str, env=None) -> list[str]:
-    """Remove the stale managed links (stale: into another live lane of this repo, or dangling
-    under repo_dir or its lanes root); one line per removal. Regular files, links outside the
-    managed dirs, links matching no source and links into other repos are never touched."""
+def prune(repo_dir: str, env=None, say=None) -> list[str]:
+    """Remove the stale managed links (see stale); one line per removal, returned and passed to
+    say as each happens. A link that can't be checked or removed is named on stderr and left.
+    Regular files, links outside the managed dirs, links matching no source and links into other
+    repos are never touched."""
     p = places(env)
-    me = os.path.realpath(repo_dir)
-    mine = common_dir(me)
-    lanes = lanes_root(mine, p)
+    run = run_at(repo_dir, p)
     out = []
     for link in links(p):
-        if not stale(link, me, mine, lanes) or not os.path.islink(link.path):
-            continue
         try:
+            if not stale(link, run) or not os.path.islink(link.path):
+                continue
             os.unlink(link.path)
-        except FileNotFoundError:
+        except FileNotFoundError:  # gone meanwhile
+            continue
+        except OSError as e:
+            sys.stderr.write(f"!!  couldn't prune the link {show(link, p)} "
+                             f"({e.strerror or e}); left in place\n")
             continue
         out.append(f"removed link {show(link, p)}")
+        if say:
+            say(out[-1])
     return out
 
 
+def entry_digest(path: str) -> bytes:
+    """What one entry of a mod adds to its hash, never blocking on it or reading without end: a
+    regular file's size and content digest (to MOD_READ), a link's own target text (never
+    followed), and for anything else (a FIFO, a socket, a device) only its type."""
+    try:
+        st = os.lstat(path)
+        if stat.S_ISLNK(st.st_mode):
+            return b"link\0" + os.fsencode(os.readlink(path))
+        if not stat.S_ISREG(st.st_mode):
+            return b"type\0%o" % stat.S_IFMT(st.st_mode)
+        fd = os.open(path, OPEN)
+    except OSError:
+        return b"unreadable"
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode):  # swapped in since the lstat
+            return b"type\0%o" % stat.S_IFMT(st.st_mode)
+        h, left = hashlib.sha256(), min(st.st_size, MOD_READ)
+        while left > 0:
+            chunk = os.read(fd, min(CHUNK, left))
+            if not chunk:
+                break
+            h.update(chunk)
+            left -= len(chunk)
+    except OSError:
+        return b"unreadable"
+    finally:
+        os.close(fd)
+    return b"file\0%d\0%s" % (st.st_size, h.digest())
+
+
 def tree_hash(d: str) -> str:
-    """sha256 over a mod's files (relative paths and contents), minus MOD_SKIP dirs."""
-    files = []
+    """sha256 over a mod's entries (relative paths and entry_digest), minus MOD_SKIP dirs. A
+    linked subdir counts as a link: os.walk lists it but doesn't follow it."""
+    paths = []
     for top, dirs, names in os.walk(d):
         dirs[:] = [x for x in dirs if x not in MOD_SKIP]
-        files += [os.path.join(top, n) for n in names]
+        paths += [os.path.join(top, n) for n in names]
+        paths += [os.path.join(top, x) for x in dirs if os.path.islink(os.path.join(top, x))]
     h = hashlib.sha256()
-    for path in sorted(files):
+    for path in sorted(paths):
         rel = os.path.relpath(path, d).replace(os.sep, "/").encode("utf-8", "surrogateescape")
-        try:
-            with open(path, "rb") as f:
-                data = f.read()
-        except OSError:
-            data = b"\0unreadable"
-        h.update(b"%d\0%s%d\0%s" % (len(rel), rel, len(data), data))
+        entry = entry_digest(path)
+        h.update(b"%d\0%s%d\0%s" % (len(rel), rel, len(entry), entry))
     return h.hexdigest()
 
 
@@ -463,8 +572,7 @@ def main(argv: list[str]) -> int:
                   f"(branch {h['branch']}, {link_count(h)}): it relinks everything")
         return 0
     if cmd == "prune" and len(args) == 1:
-        for line in prune(args[0]):
-            print(f"==> {line}")
+        prune(args[0], say=lambda line: print(f"==> {line}", flush=True))
         return 0
     if cmd == "plugins" and not args:
         line = plugin_change()

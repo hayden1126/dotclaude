@@ -4,11 +4,13 @@ Every test runs on a temp machine: HOME, CLAUDE_CONFIG_DIR, CODEX_HOME and XDG_S
 into a temp dir, beside a real git repo with two `git worktree add` lanes and its lanes config.
 """
 import ast
+import fcntl
 import hashlib
 import importlib.machinery
 import importlib.util
 import json
 import os
+import resource
 import shutil
 import subprocess
 import sys
@@ -230,6 +232,57 @@ class Hold(Machine):
         self.assertIsNone(install_state.linked_worktree(other))
         self.assertEqual(install_state.holders(self.a, self.env), [])
 
+    def forge_admin(self, root):
+        """Point root's .git file at a fake admin dir outside this repo whose gitdir names root
+        back, as sandboxed Bash in that worktree can: git would read it as fake's worktree."""
+        admin = os.path.join(self.tmp, "fake", ".git", "worktrees", "A")
+        write(os.path.join(admin, "gitdir"), os.path.join(root, ".git") + "\n")
+        write(os.path.join(admin, "HEAD"), "ref: refs/heads/forged\n")
+        write(os.path.join(root, ".git"), f"gitdir: {admin}\n")
+        self.assertIsNotNone(install_state.linked_worktree(root))
+        return admin
+
+    def test_a_lane_naming_a_fake_admin_is_released_by_the_real_main(self):
+        # Its .git file says its main is fake/, but this repo's own worktrees/ registers it.
+        self.install(self.a)
+        self.forge_admin(self.a)
+        (h,) = install_state.holders(self.main, self.env)
+        self.assertEqual((h["root"], h["main"], h["branch"]), (self.a, self.main, "a"))
+        r = self.cli("hold", self.main)
+        self.assertEqual((r.returncode, r.stderr), (0, ""))
+        self.assertIn(f"releases the install held by {self.a} (branch a, 11 links)", r.stdout)
+        # A sibling lane is still held, and told which main releases it.
+        r = self.cli("hold", self.b)
+        self.assertEqual(r.returncode, 3, r.stderr)
+        self.assertIn(f"The lead's ./setup.sh in {self.main} releases it", r.stderr)
+
+    def test_a_lane_planting_its_own_registry_is_still_held(self):
+        # b's .git file names a common dir inside b whose worktrees/ registers a: b's run reads
+        # itself as a's main, but only a real main checkout (a .git dir) releases.
+        self.install(self.a)
+        planted = os.path.join(self.b, "planted-git")
+        write(os.path.join(planted, "worktrees", "x", "gitdir"), os.path.join(self.a, ".git") + "\n")
+        write(os.path.join(self.b, ".git"), f"gitdir: {planted}\n")
+        (h,) = install_state.holders(self.b, self.env)
+        self.assertEqual((h["root"], h["main"]), (self.a, self.b))
+        r = self.cli("hold", self.b)
+        self.assertEqual((r.returncode, r.stdout), (3, ""), r.stderr)
+
+    def test_a_worktree_inside_main_naming_a_fake_admin_neither_holds_nor_is_pruned(self):
+        # An agent worktree inside main whose .git file names an admin outside it (so the
+        # inside-its-own-main check passes) with a commondir back to this repo's.
+        inner = os.path.join(self.main, ".claude", "worktrees", "agent-x")
+        self.git("worktree", "add", "-q", "-b", "agent-x", inner)
+        write(os.path.join(self.forge_admin(inner), "commondir"), self.common + "\n")
+        self.install(inner)
+        before = self.snapshot()
+        for run_from in (self.main, self.b):
+            with self.subTest(run_from):
+                self.assertEqual(install_state.holders(run_from, self.env), [])
+                self.assertEqual(self.cli("hold", run_from).returncode, 0)
+                self.assertEqual(install_state.prune(run_from, self.env), [])
+        self.assertEqual(self.snapshot(), before)
+
     def test_holders_names_root_main_branch_and_each_link(self):
         self.install(self.a)
         (h,) = install_state.holders(self.b, self.env)
@@ -308,6 +361,46 @@ class Prune(Machine):
         self.assertEqual(self.snapshot(), before)
         self.assertTrue(all(os.path.islink(k) for k in keep))
 
+    def test_a_dangling_link_into_a_removed_agent_worktree_is_pruned(self):
+        # Claude Code's agent worktrees sit in <main>/.claude/worktrees/<x>/: strip <x>/, as for
+        # a lane under the lanes root, but only on a run whose main is that main.
+        agents = os.path.join(self.main, ".claude", "worktrees")
+        target = os.path.join(agents, "agent-x", "skills", "s1", "scripts", "tool")
+        unmanaged = self.link(os.path.join(agents, "agent-x", "README.md"),
+                              os.path.join(self.claude, "README.md"))
+        other = os.path.join(self.tmp, "proj2", ".claude", "worktrees", "agent-y", "hooks", "b.py")
+        foreign = self.link(other, os.path.join(self.claude, "hooks", "b.py"))
+        for run_from in (self.main, self.b):
+            with self.subTest(run_from):
+                dst = self.link(target, os.path.join(self.bin, "tool"))
+                self.assertEqual(self.prune(run_from), [f"removed link ~/.local/bin/tool -> {target}"])
+                self.assertFalse(os.path.lexists(dst))
+                self.assertTrue(os.path.islink(unmanaged) and os.path.islink(foreign))
+
+    def test_a_link_that_cant_be_removed_warns_and_the_rest_still_go(self):
+        # One PermissionError used to abort the prune, and the lines already removed never printed.
+        if os.geteuid() == 0:
+            self.skipTest("root removes links from a read-only dir")
+        self.install(self.a)
+        hooks = os.path.join(self.claude, "hooks")
+        os.chmod(hooks, 0o555)
+        self.addCleanup(os.chmod, hooks, 0o755)
+        r = self.cli("prune", self.main)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(r.stdout.count("==> removed link "), 9, r.stdout)  # 11, less hooks' two
+        self.assertIn(f"removed link {self.claude}/CLAUDE.md -> {self.a}/CLAUDE.md", r.stdout)
+        self.assertIn(f"removed link ~/.local/bin/tool2 -> {self.a}/bin/tool2", r.stdout)
+        for name in ("a.sh", "b.py"):
+            self.assertIn(f"{hooks}/{name} -> {self.a}/hooks/{name}", r.stderr)
+            self.assertTrue(os.path.islink(os.path.join(hooks, name)))
+        self.assertNotIn("Traceback", r.stderr)
+
+    def test_each_removal_is_reported_as_it_happens(self):
+        self.install(self.a)
+        seen = []
+        out = install_state.prune(self.main, self.env, say=seen.append)
+        self.assertEqual((len(out), seen), (11, out))
+
     def test_a_relative_link_is_read_against_its_dir(self):
         dst = os.path.join(self.claude, "hooks", "a.sh")
         self.link(os.path.relpath(os.path.join(self.a, "hooks", "a.sh"), os.path.dirname(dst)), dst)
@@ -348,11 +441,30 @@ class LinksInto(Machine):
         self.link(os.path.join(self.b, "CLAUDE.md"), os.path.join(self.claude, "other.md"))
         found = install_state.links_into(self.a, self.env)
         self.assertEqual(len(found), 13, found)  # 11 setup.sh links, the tmux link, one block line
-        self.assertIn(f"~/.local/bin/pass-last -> {self.a}/tmux/pass-last", found)
-        self.assertIn(f'~/.tmux.conf: source-file "{self.a}/tmux/claude.conf"', found)
+        self.assertIn(f"~/.local/bin/pass-last -> {self.a}/tmux/pass-last (setup-tmux.sh)", found)
+        self.assertIn(f'~/.tmux.conf: source-file "{self.a}/tmux/claude.conf" (setup-tmux.sh)', found)
         dirs = {os.path.dirname(l.split(" -> ")[0]) for l in found if " -> " in l}
         self.assertEqual(len(dirs), 9, dirs)  # all nine managed dirs
         self.assertTrue(os.path.islink(tmux))
+
+    def test_each_line_names_the_installer_that_relinks_it(self):
+        j = os.path.join
+        self.link(j(self.a, "hooks", "a.sh"), j(self.claude, "hooks", "a.sh"))
+        self.link(j(self.a, "skills", "s1", "scripts", "tool"), j(self.bin, "tool"))
+        self.link(j(self.a, "tmux", "pass-last"), j(self.bin, "pass-last"))
+        self.link(j(self.a, "README.md"), j(self.claude, "README.md"))
+        self.link(j(self.a, "hooks", "sub", "x.sh"), j(self.claude, "hooks", "x.sh"))
+        write(j(self.home, ".tmux.conf"), f'{install_state.TMUX_START}\n'
+                                          f'source-file "{self.a}/tmux/base.conf"\n'
+                                          f'{install_state.TMUX_END}\n')
+        self.assertEqual(sorted(install_state.links_into(self.a, self.env)), sorted([
+            f"{self.claude}/hooks/a.sh -> {self.a}/hooks/a.sh (setup.sh)",
+            f"~/.local/bin/tool -> {self.a}/skills/s1/scripts/tool (setup.sh)",
+            f"~/.local/bin/pass-last -> {self.a}/tmux/pass-last (setup-tmux.sh)",
+            f'~/.tmux.conf: source-file "{self.a}/tmux/base.conf" (setup-tmux.sh)',
+            f"{self.claude}/README.md -> {self.a}/README.md (by hand)",
+            f"{self.claude}/hooks/x.sh -> {self.a}/hooks/sub/x.sh (by hand)",
+        ]))
 
     def test_nothing_points_into_an_untouched_lane(self):
         self.install(self.main)
@@ -423,6 +535,43 @@ class Plugins(Machine):
         self.mod("bare", manifest_name=False)
         self.assertIn("(bare added)", self.change())
 
+    def plugins_cli(self):
+        """`install-state.py plugins` in a child capped at 1 GiB of address space and 20 seconds:
+        a blocking open or an endless read fails the test, not the machine."""
+        def cap():
+            resource.setrlimit(resource.RLIMIT_AS, (1 << 30, 1 << 30))
+        return subprocess.run([sys.executable, INSTALL_STATE, "plugins"], env=self.env,
+                              capture_output=True, text=True, timeout=20, preexec_fn=cap)
+
+    def test_a_fifo_a_device_link_and_a_dangling_link_hash_promptly(self):
+        # A mod dir is a linked checkout dir, which sandboxed Bash in a lane can write.
+        d = os.path.join(self.src, "autopass")
+        self.change()
+        for name, make in (("pipe", os.mkfifo),
+                           ("zero", lambda p: os.symlink("/dev/zero", p)),
+                           ("dangling", lambda p: os.symlink(os.path.join(d, "gone"), p))):
+            with self.subTest(name):
+                make(os.path.join(d, name))
+                r = self.plugins_cli()
+                self.assertEqual(r.returncode, 0, r.stderr)
+                self.assertIn("(autopass@skills-dir changed)", r.stdout)
+        self.assertEqual(self.plugins_cli().stdout, "")
+
+    def test_a_link_counts_by_its_target_not_what_it_reads(self):
+        d = os.path.join(self.src, "autopass")
+        for name in ("one", "two"):
+            write(os.path.join(d, f"{name}.ts"), "same\n")
+            write(os.path.join(d, f"lib-{name}", "x.ts"), "same\n")
+        os.symlink("one.ts", os.path.join(d, "cfg.ts"))
+        os.symlink("lib-one", os.path.join(d, "lib"))
+        self.change()
+        for link, target in (("cfg.ts", "two.ts"), ("lib", "lib-two")):
+            with self.subTest(link):
+                os.unlink(os.path.join(d, link))
+                os.symlink(target, os.path.join(d, link))
+                self.assertEqual(self.change(), "plugins changed (autopass@skills-dir changed): "
+                                                + install_state.CHANGED)
+
     def test_the_cli_prints_the_line_once(self):
         self.assertEqual(self.cli("plugins").stdout, "")
         self.mod("newmod")
@@ -445,6 +594,77 @@ class SetupHold(Machine):
             write(os.path.join(checkout, "install-state.py"), helper)
         return subprocess.run(["bash", os.path.join(checkout, "setup-head.sh")], env=self.env,
                               capture_output=True, text=True, timeout=30)
+
+    LOCK_RAN = "print('the hold check ran')\n"
+
+    def fake_flock(self, body):
+        """A flock first on PATH that logs its args, then runs body (bash; $REAL is the real one)."""
+        real = shutil.which("flock", path=self.env["PATH"])
+        if real is None:
+            self.skipTest("no flock here: setup.sh runs unlocked")
+        d = os.path.join(self.tmp, "fakebin")
+        self.flock_log = os.path.join(self.tmp, "flock.log")
+        write(os.path.join(d, "flock"),
+              f'#!/bin/bash\nREAL={real}\necho "$*" >> {self.flock_log}\n{body}\n')
+        os.chmod(os.path.join(d, "flock"), 0o755)
+        self.env["PATH"] = d + os.pathsep + self.env["PATH"]
+
+    def flock_calls(self):
+        with open(self.flock_log) as f:
+            return f.read().splitlines()
+
+    def lock_path(self):
+        return os.path.join(self.state, "dotclaude", "install.lock")
+
+    def test_a_held_lock_is_waited_for_with_a_limit_then_stops_the_run(self):
+        # A sandboxed process can hold the flock on a read-only fd, and nothing names it. The
+        # fake turns the 300-second wait into one second.
+        self.fake_flock('[[ $1 == -w ]] && set -- -w 1 "${@:3}"\nexec "$REAL" "$@"')
+        os.makedirs(os.path.dirname(self.lock_path()), exist_ok=True)
+        with open(self.lock_path(), "w") as f:
+            fcntl.flock(f, fcntl.LOCK_EX)
+            r = self.head(self.b, helper=self.LOCK_RAN)
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertRegex(r.stdout, rf"this run \(pid \d+, from {self.b}\) waits up to 5 minutes")
+        self.assertIn(f"timed out after 5 minutes waiting for {self.lock_path()}", r.stderr)
+        self.assertIn("setup.sh stopped before changing anything", r.stderr)
+        self.assertNotIn("the hold check ran", r.stdout)
+        self.assertEqual(self.flock_calls(), ["-n 9", "-w 300 9"])
+
+    def test_a_lock_freed_within_the_limit_goes_on(self):
+        self.fake_flock('[[ $1 == -n ]] && exit 1\nexit 0')
+        r = self.head(self.b, helper=self.LOCK_RAN)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("waits up to 5 minutes", r.stdout)
+        self.assertIn("the hold check ran", r.stdout)
+        self.assertEqual(self.flock_calls(), ["-n 9", "-w 300 9"])
+
+    def test_a_lock_error_stops_the_run_naming_the_lock(self):
+        # ENOLCK: util-linux flock exits 71, not its conflict code 1; the run never waited.
+        self.fake_flock("echo 'flock: 9: No locks available' >&2\nexit 71")
+        r = self.head(self.b, helper=self.LOCK_RAN)
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn(f"couldn't lock {self.lock_path()} (flock exit 71", r.stderr)
+        self.assertIn("setup.sh stopped before changing anything", r.stderr)
+        self.assertNotIn("waits", r.stdout)
+        self.assertNotIn("the hold check ran", r.stdout)
+
+    def test_without_flock_or_a_state_dir_the_run_goes_on_unlocked(self):
+        write(os.path.join(self.tmp, "afile"))
+        self.env["XDG_STATE_HOME"] = os.path.join(self.tmp, "afile")  # mkdir -p fails under it
+        r = self.head(self.b, helper=self.LOCK_RAN)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("the hold check ran", r.stdout)
+        self.env["XDG_STATE_HOME"] = self.state
+        bins = os.path.join(self.tmp, "noflock")  # what setup.sh's top runs, less flock
+        os.makedirs(bins)
+        for tool in ("bash", "python3", "dirname", "date", "mkdir"):
+            os.symlink(shutil.which(tool), os.path.join(bins, tool))
+        self.env["PATH"] = bins
+        r = self.head(self.b, helper=self.LOCK_RAN)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("the hold check ran", r.stdout)
+        self.assertFalse(os.path.exists(self.lock_path()))
 
     def test_a_held_install_stops_before_changing_anything(self):
         self.install(self.a)
