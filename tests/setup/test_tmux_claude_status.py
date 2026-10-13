@@ -467,6 +467,37 @@ class Status(unittest.TestCase):
         self.run_status([], hosts="")
         self.assertEqual(tracked(), ["claude-saved track"])
 
+    # --- the tab bar ---------------------------------------------------------------------------
+
+    def tab_bar_stub(self, tail):
+        """A tmux-tab-bar in ~/.local/bin that logs its calls like the other stubs, then runs
+        tail."""
+        path = os.path.join(self.tmp, "home", ".local", "bin", "tmux-tab-bar")
+        with open(path, "w") as f:
+            f.write('#!/usr/bin/env bash\nprintf "%s\\n" "tmux-tab-bar $*" >> "$STUB_LOG"\n' + tail)
+        os.chmod(path, 0o755)
+
+    def test_each_pass_lays_out_the_tab_bar_and_its_output_never_reaches_the_bar(self):
+        self.tab_bar_stub("echo noise; echo more >&2; exit 3\n")
+        self.pane("%2", "@2", DNA, state="idle")
+        self.run_status([], hosts="")   # asserts the bar shows only the delegation token
+        self.assertIn("tmux-tab-bar layout", self.calls())
+
+    def test_a_hung_tab_bar_is_bounded(self):
+        self.tab_bar_stub("exec sleep 30\n")
+        self.pane("%2", "@2", DNA, state="idle")
+        start = time.time()
+        self.run_status([], hosts="")
+        self.assertLess(time.time() - start, 8)
+
+    def test_the_rate_limited_runs_skip_the_tab_bar(self):
+        self.tab_bar_stub("exit 0\n")
+        self.pane("%2", "@2", DNA, state="idle")
+        self.run_status([], hosts="")
+        os.remove(self.log)
+        subprocess.run(["bash", SCRIPT], capture_output=True, text=True, timeout=15, env=self.env)
+        self.assertEqual(self.calls(), [])
+
     def test_a_failing_claude_saved_does_not_reach_the_bar(self):
         self.saved_stub("echo noise; echo more >&2; exit 3\n")
         self.pane("%4", "@4", "/x")
