@@ -34,8 +34,9 @@ worktree: the lane's Claude sessions (SIGTERM), the processes under them, their 
 (SIGHUP) and leftovers started with a lane session's id; survivors get SIGTERM, then SIGKILL,
 except one holding a file open in the git dir. Proof comes only from /proc and Claude Code's own
 session files and transcripts, never lane.json. Anything else with its cwd in the lane refuses
-the close by name before any signal, as do a dirty, locked or submodule worktree, a background
-session, a `done` run from inside the lane, and, when there is something to end, a failing
+the close by name before any signal, as do installed links into the lane (it holds the
+install: install-state.py), a dirty, locked or submodule worktree, a background session, a
+`done` run from inside the lane, and, when there is something to end, a failing
 `handoff-check --closing`. A close refused after a signal leaves the lane `closing`, which
 `open` refuses: rerun `done`.
 """
@@ -45,6 +46,7 @@ import datetime
 import errno
 import fcntl
 import glob
+import importlib.util
 import json
 import os
 import re
@@ -65,6 +67,8 @@ from lanelib import Repo, git, lock, now_iso, write_json  # noqa: E402
 TEMPLATE = os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "..", "..",
                         "templates", "LANE.md")
 HOOKS = os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "..", "..", "hooks")
+INSTALL_STATE = os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "..", "..",
+                             "install-state.py")
 STATUS = re.compile(r"[a-z][a-z_-]{0,19}")  # a session file's status word
 CTX_MARK = {"soft": "*", "wrap": "*", "hard": "!"}  # the board's CTX mark per auto-pass tier
 DEFAULT_CAP = 4
@@ -874,6 +878,17 @@ def cmd_ls(args) -> None:
     for name in parse_locks(repo.config().get("locks", "")):
         if (holder := lock_holder(repo, name)) is not None:
             say(f"locks: {name} held by {holder}")
+    try:
+        held = install_state().holders(repo.main)
+    except Exception as e:  # the board still shows; only the hold line is lost
+        warn(f"install hold unknown ({type(e).__name__}: {e})")
+        held = []
+    ids = {os.path.realpath(x["path"]): x["id"] for x in repo.lanes(shared=True)}
+    for h in held:
+        who = f"lane {ids[h['root']]}" if h["root"] in ids else h["root"]
+        n = len(h["links"])
+        say(f"install: held by {who} (branch {h['branch']}, {n} link{'' if n == 1 else 's'}): "
+            f"the lead's ./setup.sh in {h['main']} releases it")
 
 
 def print_board(rows: list[dict]) -> None:
@@ -1571,6 +1586,32 @@ def end_lane(repo: Repo, lane_id: str, path: str, hits: dict[int, Hit]) -> None:
                       f"End them (or let them finish), then rerun `lane done {lane_id}`")
 
 
+def install_state():
+    """install-state.py at this checkout's root, loaded by path (its name holds a '-'): setup.sh's
+    link rules, which `ls` and `done` share with it."""
+    spec = importlib.util.spec_from_file_location("install_state", INSTALL_STATE)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def install_hold(repo: Repo, lane_id: str, path: str) -> None:
+    """Refuse while installed links (or setup-tmux.sh's ~/.tmux.conf block) point into the lane:
+    removing its worktree would break every session's hooks and tools. Fails closed, since a
+    close that can't check would risk exactly that."""
+    try:
+        into = install_state().links_into(path)
+    except Exception as e:
+        raise LaneError(f"can't check the install for links into lane {lane_id} ({type(e).__name__}"
+                        f": {e}), so nothing was signalled")
+    if into:
+        more = f"\n  and {len(into) - 5} more" if len(into) > 5 else ""
+        raise LaneError(f"lane {lane_id} holds the install: these point into {path}, and removing "
+                        "it would break them:" + "".join(f"\n  {x}" for x in into[:5]) + more
+                        + f"\nThe lead's ./setup.sh in {repo.main} relinks them (setup-tmux.sh "
+                        f"there for ~/.tmux.conf); then rerun `lane done {lane_id}`")
+
+
 def reread(repo: Repo, loaded: dict, path: str) -> dict:
     """lane.json read again, under the lock: a second `done` may have closed the lane since this
     one loaded it, or its path or branch changed (what `done` checked would no longer be what
@@ -1667,6 +1708,7 @@ def cmd_done(args) -> None:
         raise LaneError(f"branch {lane['branch']} is not merged: {why}. Pass --abandon to close "
                         "it anyway")
     how, state = (how, state) if how else ("abandoned", "abandoned")
+    install_hold(repo, args.id, path)
     hits = {}
     if present:  # every gate before any signal
         if not lanelib.pids_visible():
@@ -1797,7 +1839,8 @@ def parser() -> argparse.ArgumentParser:
                        "processes that provably belong to it, archive its record, remove its "
                        "worktree. Its sessions get SIGTERM, their pane shells SIGHUP, survivors "
                        "SIGKILL. Anything else with its cwd in the lane refuses the close by name "
-                       "before any signal, as do a dirty or locked worktree and, when there is "
+                       "before any signal, as do installed links into the lane, a dirty or locked "
+                       "worktree and, when there is "
                        "something to end, a failing `handoff-check --closing`. A close refused "
                        "after a signal leaves the lane closing: rerun `lane done <id>`.")
     p.add_argument("id")

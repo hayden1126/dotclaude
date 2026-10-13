@@ -1144,6 +1144,39 @@ class Close(LanesRepo):
         self.assertIn("## Next", p.stderr)
         self.assertRefusedUntouched(p, claude)
 
+    def test_a_lane_that_holds_the_install_refuses_before_any_signal(self):
+        # Installed links into the lane (setup.sh run from it): removing the worktree would
+        # break every session's hooks, so done refuses until the lead's reinstall from main.
+        self.hand_off()
+        (claude,) = self.claude()
+        hooks = os.path.join(self.home, ".claude", "hooks")
+        os.makedirs(hooks)
+        link = os.path.join(hooks, "lane-identity.sh")
+        os.symlink(os.path.join(self.path, "hooks", "lane-identity.sh"), link)
+        p = self.run_lane("done", "chart-fix", "--abandon")
+        self.assertIn("lane chart-fix holds the install", p.stderr)
+        self.assertIn("~/.claude/hooks/lane-identity.sh -> ", p.stderr)
+        self.assertIn(f"The lead's ./setup.sh in {self.main} relinks them", p.stderr)
+        self.assertRefusedUntouched(p, claude)
+        # The board names the holder; once main relinks it, the hold is gone and done goes on.
+        self.assertIn("install: held by lane chart-fix (branch chart-fix, 1 link)",
+                      self.lane("ls"))
+        os.remove(link)
+        self.assertNotIn("install:", self.lane("ls"))
+        self.lane("done", "chart-fix", "--abandon")
+        self.assertClosed()
+
+    def test_a_tmux_conf_block_into_the_lane_holds_it_too(self):
+        # setup-tmux.sh run from the lane: the next tmux server would source a removed file.
+        self.write(os.path.join(self.home, ".tmux.conf"),
+                   "# >>> dotclaude tmux (setup-tmux.sh) >>>\n"
+                   f'source-file "{self.path}/tmux/claude.conf"\n'
+                   "# <<< dotclaude tmux <<<\n")
+        p = self.run_lane("done", "chart-fix", "--abandon")
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn("~/.tmux.conf: source-file", p.stderr)
+        self.assertTrue(os.path.isdir(self.path))
+
     # ---- 10, 11. the record ----------------------------------------------------------------
 
     def test_a_sessionend_stamp_made_during_the_close_reaches_the_archive(self):
