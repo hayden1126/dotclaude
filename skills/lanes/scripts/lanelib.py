@@ -552,6 +552,36 @@ def worktree_problem(repo: "Repo", path: str, lanes: list[dict]) -> str | None:
     return None
 
 
+GITDIR_MAX = 4096  # bytes read of a .git file or an admin dir's gitdir file
+
+
+def linked_worktree(repo: "Repo", cwd) -> str | None:
+    """The linked worktree of this repo that holds cwd (a cwd from /proc or a session file), by
+    the nearest .git at or above it: a regular file naming <common-dir>/worktrees/<x>, whose
+    gitdir file names that .git back. Both are read with read_head: bounded, never through a
+    link, never waiting on a FIFO. None for the main checkout (its .git is a dir), for another
+    repo's checkout, and for anything else."""
+    if not (isinstance(cwd, str) and "\0" not in cwd):
+        return None
+    top = os.path.realpath(cwd)
+    while not os.path.lexists(os.path.join(top, ".git")):
+        if (parent := os.path.dirname(top)) == top:
+            return None
+        top = parent
+    dotgit = os.path.join(top, ".git")
+    text = (read_head(dotgit, GITDIR_MAX) or b"").decode(errors="replace").strip()
+    if not text.startswith("gitdir: ") or "\0" in text:
+        return None
+    admin = os.path.realpath(os.path.join(top, text[len("gitdir: "):]))
+    if os.path.dirname(admin) != os.path.join(repo.common_dir, "worktrees"):
+        return None
+    back = (read_head(os.path.join(admin, "gitdir"), GITDIR_MAX) or b"").decode(
+        errors="replace").strip()
+    if not back or "\0" in back or os.path.realpath(os.path.join(admin, back)) != dotgit:
+        return None
+    return top
+
+
 def norm_request(req: str) -> str:
     """'42' or '#42' -> '#42'; anything else is kept as given (a tracker key like ABC-7)."""
     req = req.strip()
@@ -716,6 +746,7 @@ def cwd_inside(value, root: str) -> bool:
 
 PROC = "/proc"
 EXITED = ("Z", "X")  # /proc/<pid>/stat states of a process that has exited (zombie, dead)
+STOPPED = ("T", "t")  # states of a stopped thread: by a signal, or for its tracer
 TRANSCRIPT_HEAD = 64 * 1024  # bytes of a transcript read for its first recorded cwd
 
 
@@ -759,6 +790,26 @@ def proc_alive(p: Proc, proc: str = PROC) -> bool:
     return st is not None and st[3] == p.start and st[1] not in EXITED
 
 
+def proc_frozen(p: Proc, proc: str = PROC) -> bool:
+    """Whether p can no longer run: gone, or every thread of it stopped (state T, or t when
+    traced). SIGSTOP stops each thread at its next return to user space, so a syscall in flight,
+    an open() among them, completes first: only this state proves none can open a file now."""
+    if proc_start(p.pid, proc) != p.start:
+        return True
+    task = os.path.join(proc, str(p.pid), "task")
+    try:
+        tids = os.listdir(task)
+    except FileNotFoundError:
+        return True
+    except OSError:
+        return False
+    for tid in tids:
+        st = proc_stat(int(tid), task) if tid.isascii() and tid.isdigit() else None
+        if st is not None and st[1] not in STOPPED + EXITED:
+            return False
+    return True
+
+
 def proc_env_sid(pid: int, proc: str = PROC) -> str | None:
     """The CLAUDE_CODE_SESSION_ID that pid was started with, when it is a session id (SID), else
     None. Raises OSError when the environment can't be read (gone, another user's)."""
@@ -771,8 +822,9 @@ def proc_env_sid(pid: int, proc: str = PROC) -> str | None:
     return None
 
 
-def scan(proc: str = PROC) -> dict[int, Proc]:
-    """Every process, from one pass over /proc: pid -> Proc. One that exits mid-scan is left out."""
+def scan(proc: str = PROC, full: bool = True) -> dict[int, Proc]:
+    """Every process, from one pass over /proc: pid -> Proc. One that exits mid-scan is left out.
+    full=False reads only each stat (cwd None, argv empty): the process tree, faster."""
     out = {}
     try:
         names = os.listdir(proc)
@@ -784,6 +836,9 @@ def scan(proc: str = PROC) -> dict[int, Proc]:
         pid = int(name)
         st = proc_stat(pid, proc)
         if st is None:
+            continue
+        if not full:
+            out[pid] = Proc(pid, st[2], st[3], st[1], st[0], None, ())
             continue
         base = os.path.join(proc, name)
         try:
