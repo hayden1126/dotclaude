@@ -1026,6 +1026,22 @@ class Usage(WaitEnv):
             self.assertTrue(p.stderr, argv)
         self.assertFalse(os.path.exists(self.state))
 
+    def test_a_read_protected_log_or_file_is_refused(self):
+        # The waiter runs outside the sandbox, so its exit would say whether a file the sandbox
+        # hides matches a pattern, or exists. ~/.ssh is in policy.toml's read_denied (HOME is
+        # the temp dir); a link to it from a readable place counts too.
+        secret = self.path(".ssh/id")
+        os.makedirs(os.path.dirname(secret))
+        with open(secret, "w") as f:
+            f.write("k\n")
+        os.symlink(secret, self.path("link.log"))
+        for argv in (["--log", secret, "--done", "k"], ["--file", secret],
+                     ["--log", self.path("link.log"), "--done", "k"]):
+            p = self.run_(*argv, poll=False)
+            self.assertEqual(p.returncode, USAGE, (argv, p.stderr))
+            self.assertIn("which the sandbox keeps unreadable", p.stderr)
+        self.assertFalse(os.path.exists(self.watches))
+
     def test_max_stays_under_the_bash_cap(self):
         target = self.path("out")
         open(target, "w").close()

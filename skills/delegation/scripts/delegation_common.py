@@ -26,6 +26,7 @@ import secrets
 import subprocess
 import tempfile
 import time
+import tomllib
 
 HERE = os.path.dirname(os.path.realpath(__file__))
 SCHEMA_PATH = os.path.join(os.path.dirname(HERE), "report.schema.json")
@@ -62,6 +63,52 @@ def state_dir(home=None):
     base = (os.environ.get("XDG_STATE_HOME")
             or os.path.join(home or os.path.expanduser("~"), ".local", "state"))
     return os.path.join(base, "dotclaude")
+
+
+def sandbox_paths(home=None):
+    """(read_denied, write_denied): the sandbox's denyRead and denyWrite from the trusted
+    settings tiers (user and managed) plus policy.toml's [protect] lists, each as its expanded
+    path and its symlink-resolved one. Our wrappers run outside the sandbox, so they hold their
+    own path arguments to these lists, which the sandbox can't do for them."""
+    home = home or os.path.expanduser("~")
+    lists = {"denyRead": [], "denyWrite": []}
+    for path in (os.path.join(home, ".claude", "settings.json"),
+                 os.path.join(home, ".claude", "settings.local.json"),
+                 "/etc/claude-code/managed-settings.json"):
+        try:
+            with open(path) as f:
+                fs = ((json.load(f) or {}).get("sandbox") or {}).get("filesystem") or {}
+        except (OSError, ValueError, AttributeError):
+            continue
+        for key in lists:
+            lists[key] += [p for p in fs.get(key) or [] if isinstance(p, str)]
+    try:
+        with open(policy_path(), "rb") as f:
+            protect = tomllib.load(f).get("protect") or {}
+    except (OSError, ValueError):
+        protect = {}
+    lists["denyRead"] += protect.get("read_denied") or []
+    lists["denyWrite"] += protect.get("write_denied") or []
+
+    def roots(entries):
+        out = set()
+        for p in entries:
+            p = str(p).replace("{uid}", str(os.getuid())).replace("{state_dir}", state_dir(home))
+            p = os.path.normpath(home + p[1:] if p == "~" or p.startswith("~/") else p)
+            out |= {p, os.path.realpath(p)}
+        return sorted(out)
+    return roots(lists["denyRead"]), roots(lists["denyWrite"])
+
+
+def path_conflict(path, roots, contains=False):
+    """The root that path is, or lies under (with contains, also one that lies under path), with
+    symlinks resolved; None when it is clear of them all."""
+    p = os.path.realpath(os.path.expanduser(path))
+    for r in roots:
+        if p == r or p.startswith(r.rstrip("/") + "/") or (
+                contains and r.startswith(p.rstrip("/") + "/")):
+            return r
+    return None
 
 
 def ledger_path():

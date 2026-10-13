@@ -1315,7 +1315,11 @@ wins.
   - git (2.43) takes any unique prefix of a long option (`--upl` for `--upload-pack`), so each
     ask names the shortest one, and a test derives it from `git <verb>
     --git-completion-helper-all`; argparse does the same by default, so the excluded wrappers
-    set `allow_abbrev=False`.
+    set `allow_abbrev=False`;
+  - a bare excluded call with a shell redirect from a denyRead file fails on the redirect, so
+    redirects need no ask; a file a flag names is read outside, so those flags ask;
+  - `claude -p <flag> X --bogus` errors on the first unknown flag before anything runs, which
+    is how the inventory's hidden flags were confirmed (2.1.296).
 - **Protected paths:** `.claude/settings*`, skills, agents, hooks, `.mcp.json`, `.git/hooks` and
   `.git/config` stay read-only for sandboxed Bash, even inside a writable root
   ([sandboxing](https://code.claude.com/docs/en/sandboxing)).

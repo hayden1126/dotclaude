@@ -28,8 +28,12 @@ Rule = namedtuple("Rule", "rule why samples")
 
 CREDENTIAL = "needs GitHub's credential, which the sandbox hides"
 EXCLUDED = [
+    # Only to origin: a push to a local path runs receive-pack, and that repo's hooks, outside
+    # the sandbox. A flag-first push asks anyway (the baseline's `git push -*`).
     Excluded("git push", CREDENTIAL, ["git push"]),
-    Excluded("git push *", CREDENTIAL, ["git push origin feat/x"]),
+    Excluded("git push origin", CREDENTIAL, ["git push origin"]),
+    Excluded("git push origin *", CREDENTIAL, ["git push origin feat/x"]),
+    Excluded("git push -*", CREDENTIAL, ["git push -u origin feat/x"]),
     Excluded("git fetch", CREDENTIAL, ["git fetch"]),
     Excluded("git fetch *", CREDENTIAL, ["git fetch origin"]),
     Excluded("git pull", CREDENTIAL, ["git pull"]),
@@ -98,7 +102,8 @@ EXCLUDED = [
 SANDBOXED = ["tmux -L x ls", "tmux send-keys -t %1 x", "tmux lsp", "tmux display-message -p x",
              "tmux -V", "FOO=1 tmux ls", "codex exec x", "codex --version", "codex mcp add x",
              "codex login", "lane lock gate -- true", "lane whoami", "lane claim 42",
-             "git clone x", "git -C . fetch", "git -c k=v fetch", "claude-alt -p x"]
+             "git clone x", "git -C . fetch", "git -c k=v fetch", "claude-alt -p x",
+             "git push ../r feat", "git push /tmp/r feat", "git push upstream feat"]
 
 # --- tmux -----------------------------------------------------------------------------------------
 
@@ -197,6 +202,32 @@ CLAUDE_FLAG_ASKS = {
     "--remote-control": "*--remote-control*",
     "--remote-control-session-name-prefix": "*--remote-control*",
     "--teleport": "*--teleport*",
+    # Accepted but not in --help (2.1.296): found by a scan of the binary's strings, each
+    # checked with `claude -p <flag> X --bogus` (an unknown flag errors before anything runs).
+    # A later hidden flag stays with the classifier until it lands here.
+    "--permission-prompt-tool": "*--permission-prompt-tool*",
+    "--dangerously-load-development-channels": "*--dangerously-load*",
+    "--enable-auto-mode": "*--enable-auto-mode*",
+    "--inherit-permission-mode": "*--inherit-permission-mode*",
+    "--managed-settings": "*--managed-settings*",
+    "--forward-home-settings": "*--forward-home-settings*",
+    "--project-config-root": "*--project-config-root*",
+    "--plugin-dir-no-mcp": "*--plugin-dir*",
+    "--system-prompt-file": "*-prompt-file*", "--append-system-prompt-file": "*-prompt-file*",
+    "--append-subagent-system-prompt-file": "*-prompt-file*",
+    "--channels": "*--channels*", "--rewind-files": "*--rewind-files*",
+    "--sdk-url": "*--sdk-url*", "--session-mirror": "*--session-mirror*",
+    "--messaging-socket-path": "*--messaging-socket*",
+}
+CLAUDE_HIDDEN_OK = {
+    "--advisor", "--agent-color", "--agent-id", "--agent-name", "--agent-type",
+    "--append-subagent-system-prompt", "--attach-serve", "--await-claim", "--await-initialize",
+    "--debug-to-stderr", "--deep-link-origin", "--deep-link-repo", "--init", "--init-only",
+    "--maintenance", "--max-thinking-tokens", "--max-turns", "--parent-session-id",
+    "--plan-mode-instructions", "--prefill", "--proactivity", "--reply-on-resume",
+    "--resume-drops-turn", "--resume-session-at", "--task-budget", "--team-name",
+    "--teammate-mode", "--thinking", "--thinking-display", "--watch-artifact",
+    "--watch-artifact-no-autoreact", "--workload",
 }
 CLAUDE_FLAG_OK = {
     "--agent", "--all", "--append-system-prompt", "--autocompact", "--ax-screen-reader", "--bg",
@@ -247,6 +278,8 @@ CLAUDE_RULES = [
          ["claude -p --permission-mode bypassPermissions"]),
     Rule("Bash(claude *acceptEdits*)", "a permission mode that skips edit prompts",
          ["claude -p --permission-mode acceptEdits"]),
+    Rule("Bash(claude *permission-mode*auto*)", "lets the classifier approve what -p would deny",
+         ["claude -p --permission-mode auto", "claude -p --permission-mode=auto"]),
     Rule("Bash(claude plugin* configure *--values-stdin*)", "saves a plugin's option values",
          ["claude plugin configure x --values-stdin"]),
 ] + [
@@ -295,12 +328,35 @@ OTHER_RULES = [
          ["gh auth git-credential get"]),
     Rule("Bash(gh auth status *-t*)", "prints the credential the sandbox hides",
          ["gh auth status -t", "gh auth status --show-token"]),
+    Rule("Bash(gh auth status *-at*)", "-at bundles --active and --show-token",
+         ["gh auth status -at"]),
+    Rule("Bash(gh * -- *)", "passes flags on to git, ssh or scp, which can name a program",
+         ["gh repo clone o/r d -- --upload-pack=x", "gh repo fork o/r --clone -- --template=x"]),
 ] + [
     Rule(f"Bash(gh {sub}*)", "changes gh's credential, config, aliases or extensions",
          [f"gh {sub} x"])
+    # `ext*` covers extension, extensions and ext.
     for sub in ("auth login", "auth logout", "auth refresh", "auth setup-git", "auth switch",
-                "alias set", "alias import", "config set", "extension install", "ext install",
-                "extension upgrade", "ext upgrade")
+                "alias set", "alias import", "config set", "ext* install", "ext* upgrade")
+] + [
+    # gh runs outside the sandbox, so denyRead doesn't bind it: each way it reads a local file
+    # and sends it to GitHub asks (Hayden, 2026-10-13). A shell redirect needs no rule: it fails
+    # in the sandbox.
+    Rule(f"Bash(gh {glob})", "reads a local file and sends it to GitHub", [sample])
+    for glob, sample in (
+        ("*--body-file*", "gh pr edit 5 --body-file b.md"),
+        ("*--notes-file*", "gh release edit v1 --notes-file n.md"),
+        ("*--from-file*", "gh agent-task create --from-file t.md"),
+        ("*--input*", "gh api repos/o/r --input body.json"),
+        ("* -F*", "gh api repos/o/r -F body=@f"),
+        ("*--field*", "gh api repos/o/r --field body=@f"),
+        ("gist create*", "gh gist create f"), ("gist edit*", "gh gist edit 1 -a f"),
+        ("release create*", "gh release create v1 f"),
+        ("release upload*", "gh release upload v1 f"), ("ssh-key add*", "gh ssh-key add k.pub"),
+        ("gpg-key add*", "gh gpg-key add k.asc"),
+        ("repo deploy-key add*", "gh repo deploy-key add k.pub"),
+        ("codespace cp*", "gh codespace cp f remote:f"), ("secret set*", "gh secret set X -f e"),
+        ("variable set*", "gh variable set X -f e"))
 ] + [
     Rule("Bash(lane init *--setup*)", "names the command each new lane runs",
          ["lane init --setup 'npm ci'"]),
@@ -309,6 +365,8 @@ OTHER_RULES = [
          ["lane done chart-fix --abandon"]),
     Rule("Bash(codex-delegate *--network*)", "opens the network to the delegated codex",
          ["codex-delegate run --model sol --dir /x --brief b.md --network"]),
+    Rule("Bash(codex-delegate *--no-scope*)", "turns off the memory cap",
+         ["codex-delegate run --model sol --dir /x --brief b.md --no-scope"]),
     Rule("Bash(powershell.exe)", "a Windows shell", ["powershell.exe"]),
     Rule("Bash(powershell.exe *)", "a Windows shell", ["powershell.exe -NoProfile -Command x"]),
     Rule("Bash(cmd.exe)", "a Windows shell", ["cmd.exe"]),

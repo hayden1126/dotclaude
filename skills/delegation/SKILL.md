@@ -296,3 +296,7 @@ codex-delegate audit <thread_id> [--model astra]   # every model the thread and 
     running, exits 1.
 - **Scope:** send Codex only the work it does better, such as anything about its own
   configuration. Claude does the rest.
+- **Protected paths:** `run` refuses (exit 2) a `--dir` or `--out` that is, holds or sits under
+  a denyWrite path, such as a dotclaude checkout whose install is live, since codex's sandbox
+  doesn't know Claude's lists; Hayden runs such a delegation by hand. It also refuses a
+  `--brief` or `--prompt` under a denyRead path. `--network` and `--no-scope` ask.

@@ -90,27 +90,39 @@ force-push and a `reset --hard` on a dirty tree when the prompt named them.
 `sandbox.excludedCommands` is the allowlist of what runs outside the sandbox.
 `tests/delegation/command_inventory.py` lists each entry, why it needs the outside and the calls
 it must cover, and `test_settings.py` ties it to `settings.json` in both directions. It holds the
-credential barrier (`git push`, `fetch`, `pull`, `ls-remote`, `gh`), our wrappers (`lane init`,
-`new`, `adopt`, `ls`, `open`, `done`, `pass-respawn`, `delegation-ledger`, `codex-delegate`),
-`claude`, the read-only tmux verbs (`ls`, `list-sessions`, `list-windows`, `list-panes`,
-`list-clients`, `list-keys`, `list-commands`, `capture-pane`, `display`, `show`, `show-options`,
-`show-environment`, `show-messages`, `show-hooks`), read-only
-codex (`login status`, `doctor` and a few lists) and the Windows shells. Any other call runs
-sandboxed, where tmux reaches no socket and codex no credential, so it fails closed.
+credential barrier (`git push` to `origin`, `fetch`, `pull`, `ls-remote`, `gh`), our wrappers
+(`lane init`, `new`, `adopt`, `ls`, `open`, `done`, `pass-respawn`, `delegation-ledger`,
+`codex-delegate`), `claude`, the read-only tmux verbs (`ls`, `list-sessions`, `list-windows`,
+`list-panes`, `list-clients`, `list-keys`, `list-commands`, `capture-pane`, `display`, `show`,
+`show-options`, `show-environment`, `show-messages`, `show-hooks`), read-only codex (`login
+status`, `doctor` and a few lists) and the Windows shells. Any other call runs sandboxed, where
+tmux reaches no socket, codex no credential and a push to a local path no other repo's hooks, so
+it fails closed.
 
-Asks cover what an excluded command could still be made to run: every other tmux verb, alias and
-prefix, a bare `tmux`, a global flag, a `;` chain, a `#(` job, the `E:` and `T:` format
-modifiers (they expand a value as a format) and `display -I`; the `claude` flags that turn off a
-guard or load config, tools or code from elsewhere, its subcommands that change the install,
-config, auth or sessions, and `claude plugin test` and `eval` (they run code from a chosen path);
-git's `--upload-pack`, `--receive-pack` and `--exec`, in every prefix git accepts; `gh auth token`,
-`gh auth git-credential` and the `gh` commands that change its credential, aliases, config or
-extensions; `lane init --setup` or `--root`, `lane done --abandon`, `codex-delegate --network`
-(these wrappers take no abbreviated flag) and the Windows shells. `claude ultrareview` is denied. What CLAUDE.md, the skills and the agents tell
-Claude to run asks nothing, except the lead's once-per-repo `lane init --root ... --setup` (a test
-scans them), and a suite fails when the installed tmux or Claude
-Code has a verb or flag the inventory hasn't classified. Spellings a glob can't anchor, such as a
-quoted verb or a global flag before a `claude` subcommand, are left to the classifier.
+Asks cover what an excluded command could still be made to run or read:
+- tmux: every other verb, alias and prefix, a bare `tmux`, a global flag, a `;` chain, a `#(`
+  job, the `E:` and `T:` format modifiers (they expand a value as a format) and `display -I`;
+- `claude`: the flags that turn off a guard, widen the permission mode (`auto` included) or load
+  config, tools, code or files from elsewhere, hidden flags included; the subcommands that change
+  the install, config, auth or sessions; `plugin test` and `eval` (they run code from a chosen
+  path). `claude ultrareview` is denied;
+- git's `--upload-pack`, `--receive-pack` and `--exec`, in every prefix git accepts;
+- `gh auth token`, `gh auth git-credential` and `gh auth status -t`; the `gh` commands that change
+  its credential, aliases, config or extensions; flags passed on after `--` (to git, ssh or scp);
+  and every form that reads a local file and sends it to GitHub (`--body-file`, `-F`, `--field`,
+  `--input`, `--notes-file`, `--from-file`, `gist create`, `release create` and `upload`, key
+  uploads, `secret set` and `variable set`), since denyRead doesn't bind an excluded command;
+- `lane init --setup` or `--root`, `lane done --abandon`, `codex-delegate --network` and
+  `--no-scope` (these wrappers take no abbreviated flag), and the Windows shells.
+
+The wrappers check their own path arguments the same way: `codex-delegate` refuses a `--dir` or
+`--out` that is, holds or sits under a denyWrite path (codex's sandbox doesn't know that list), and
+a `--brief` or `--prompt` under a denyRead path; `delegation-ledger wait` refuses such a `--log`
+or `--file`. What CLAUDE.md, the skills and the agents tell Claude to run asks nothing, except
+the lead's once-per-repo `lane init --root ... --setup` (a test scans them), and a suite fails
+when the installed tmux, git or Claude Code has a verb or flag the inventory hasn't classified.
+Spellings a glob can't anchor, such as a quoted verb, a global flag before a `claude` subcommand
+or a hidden `claude` flag added after the inventory, are left to the classifier.
 
 `rm` never asks. Ask rules for `rm -r` and `rm -f` stopped sessions and stalled delegated writers
 mid-task, and a hook can't exempt agents from them: an ask rule prompts even when a PreToolUse

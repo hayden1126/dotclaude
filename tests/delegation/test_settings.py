@@ -67,7 +67,7 @@ class Baseline(unittest.TestCase):
         fs = S["sandbox"]["filesystem"]
         self.assertIn("~/.config/gh", fs["denyRead"])
         excluded = S["sandbox"]["excludedCommands"]
-        for pat in ("git push *", "git fetch *", "git pull *", "gh *"):
+        for pat in ("git push origin *", "git fetch *", "git pull *", "gh *"):
             self.assertIn(pat, excluded)
         self.assertNotIn("git clone *", excluded)  # it stays sandboxed: public clones only
 
@@ -384,12 +384,13 @@ class Baseline(unittest.TestCase):
         # approves each in words; 2026-10-09 he extended his "perms for PR requests" to ready,
         # edit, comment, close and reopen, after the classifier refused the handoff skill's own
         # `gh pr ready` as an unrequested commit).
+        # A body read from a file asks (the inventory's gh file rules; Hayden, 2026-10-13).
         # Read-only git and pipe filters skip the classifier, which once refused a
         # `git status -sb | head -1` as an unrequested commit. Each part of a pipe needs its
         # own rule (live probe, 2.1.293), hence head, tail, wc and grep.
         allowed = ["git push origin feat/x", "git push origin feat-force-fix",
                    "git push origin fix/x --follow-tags", "gh pr create --base main --head feat/x",
-                   "gh pr ready 5", "gh pr ready 5 --repo o/r", "gh pr edit 5 --body-file b.md",
+                   "gh pr ready 5", "gh pr ready 5 --repo o/r", "gh pr edit 5 --body x",
                    "gh pr comment 5 --body x", "gh pr close 5", "gh pr reopen 5",
                    "git push origin :feat",
                    "git status", "git status -sb", "git log", "git log --oneline -5",
@@ -630,7 +631,7 @@ class Inventory(unittest.TestCase):
         for flag, glob_ in inv.CLAUDE_FLAG_ASKS.items():
             if glob_:
                 self.assertTrue(matching("ask", f"claude -p {flag} x"), flag)
-        for flag in inv.CLAUDE_FLAG_OK:
+        for flag in inv.CLAUDE_FLAG_OK | inv.CLAUDE_HIDDEN_OK:
             self.assertEqual(matching("ask", f"claude -p {flag} x"), [], flag)
         for short, long_ in inv.CLAUDE_SHORT_FLAGS.items():
             self.assertIn(long_, inv.CLAUDE_FLAG_OK, short)  # an ask-class short needs a rule

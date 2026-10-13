@@ -700,6 +700,43 @@ class FullRun(unittest.TestCase):
                       f"codex-delegate finalize {run_id}", p.stderr)
         self.assertEqual([r["event"] for r in self.ledger()], ["pending", "start"])
 
+    def test_protected_paths_are_refused_before_anything_runs(self):
+        # codex's writable roots and the files it is sent come from this wrapper, which runs
+        # outside Claude's sandbox: policy.toml protects ~/.claude and ~/.ssh (HOME is the temp
+        # dir), and a denyWrite entry in the user settings counts too.
+        t = self.tmp.name
+        os.makedirs(os.path.join(t, ".claude"))
+        os.makedirs(os.path.join(t, ".ssh"))
+        key = os.path.join(t, ".ssh", "id")
+        with open(key, "w") as f:
+            f.write("k\n")
+        link = os.path.join(self.work, "brief-link.md")
+        os.symlink(key, link)
+        cases = [["--dir", t, "--brief", self.brief],  # holds ~/.claude
+                 ["--dir", self.work, "--out", os.path.join(t, ".claude", "x"), "--brief",
+                  self.brief],
+                 ["--dir", self.work, "--brief", key], ["--dir", self.work, "--brief", link]]
+        for argv in cases:
+            p = self.run_cd("run", "--model", "sol", *argv, "--no-scope")
+            self.assertEqual(p.returncode, 2, (argv, p.stderr))
+            self.assertIn("sandbox", p.stderr)
+        with open(os.path.join(t, ".claude", "settings.json"), "w") as f:
+            json.dump({"sandbox": {"filesystem": {"denyWrite": [self.work + "/hooks"]}}}, f)
+        p = self.run_ok()
+        self.assertEqual(p.returncode, 2, p.stderr)
+        self.assertIn(self.work + "/hooks", p.stderr)
+        self.assertFalse(os.path.exists(self.argv_log))
+
+    def test_resume_refuses_a_read_protected_prompt(self):
+        run_id = self.summary(self.run_ok())["run_id"]
+        key = os.path.join(self.tmp.name, ".ssh", "id")
+        os.makedirs(os.path.dirname(key))
+        with open(key, "w") as f:
+            f.write("k\n")
+        p = self.run_cd("resume", run_id, "--prompt", key, "--no-scope")
+        self.assertEqual(p.returncode, 2, p.stderr)
+        self.assertIn("which the sandbox keeps unreadable", p.stderr)
+
     def test_unknown_model_refused_before_anything_runs(self):
         p = self.run_cd("run", "--model", "gpt-6", "--dir", self.work, "--brief", self.brief)
         self.assertEqual(p.returncode, 2)
