@@ -114,6 +114,23 @@ stored here).
   `claude`. Today `lane open` hardcodes the argv, so a lane's model or effort is set by hand in
   its window.
 
+  **Next free lane slot: `lane-addr`** (Hayden's request via lane narrow-excluded, 2026-10-13;
+  he picked "queue for the next slot", to open right after `narrow-excluded` merges):
+  1. Stable lead/lane addressing. A session's name changes most turns, so a ListAgents name goes
+     stale. The stable address is the messaging socket `uds:/run/user/1000/cc-socks/<pid>.sock`
+     (`messagingSocketPath` in `~/.claude/sessions/<pid>.json`; tested live). Proposed:
+     `lane addr <lane|lead>` prints it (live pid, cwd is the lane or the main checkout), and the
+     lanes skill and the SessionStart line say to resolve it fresh before each send (a pass
+     makes a new pid). The title's `[repo]` brackets look like ListAgents' `name [ref]`;
+     narrow-excluded misaddressed the lead three times on that.
+  2. Titles keep the main project: a lead stays `[dotclaude]` after a Bash `cd`
+     (`hooks/session-title.sh`: the repo from `CLAUDE_PROJECT_DIR` or the session's launch cwd,
+     not the payload cwd). Probe first: a Bash `cd` into a worktree moved the lead's primary
+     working directory itself ([[bash-cd-moves-session-cwd]]). Hayden: "either the lead keeps
+     its main project name, or the main project name is displayed on the left of the lead on
+     that project's own lead/lanes row"; that row label is lane `tab-bar`'s (told 2026-10-13).
+  Overlaps: lane-close (`skills/lanes/scripts/lane`), tab-bar (row label).
+
   **Lane `tab-bar` (opened 2026-10-13): stay on tmux, multi-row bar plus a phone layout.**
   Hayden picked tmux over a migration after the research page
   (https://claude.ai/artifact/E75uhqt2xskxUGQopLwvoA, private; tmux inventory in
@@ -211,24 +228,23 @@ stored here).
   `claude -p` repro and the 2.1.285 boundary; the karaoke session's has the incident.
 
 ## Notes for next session
-- **Next (lead, main checkout): merge `fix/json-depth`, then run the three lanes in merge
-  order** ("In flight"). `fix/json-depth` (the lead's PR, 2026-10-13): tests/setup 570 OK and
-  tests/pass 167 OK under `lane lock suite`, red-then-green per fix, and a smoke of the branch's
-  `pass_banner.load` on a deep record (None; main's copy raises). It merges first; after it, the
-  lead reinstalls from main and messages `narrow-excluded` that it may install. Start with
-  `lane ls` and `lane asks`. A lane is handed back only once `handoff-check -C <lane path>`
-  passes and the board shows no `handoff?` flag. After each merge, follow the install step in
-  "In flight", then `lane done <id>` once its session exits (until `lane-close` merges, Hayden
-  `/exit`s it first). **Messages to lanes need the full ListAgents name plus its `[ref]`**
-  (for example `[lane-close] You are lane ... [58ecd7]`); the bare lane id is "not reachable".
-  An idle lane still drains a message. After `narrow-excluded` Part 1 merges: open Part 2 as a
-  lane, then plan the work repo migration, with the release skill as its first lane.
-  - PR state: `gh pr list --head fix/json-depth`. It stays a draft until Hayden reads it;
-    ready and merge each need his OK. Its branch is checked out in the agent worktree
-    `.claude/worktrees/agent-a8c1570566ac3d240` (made by the lead's writer, 2026-10-13); remove
-    it after the merge. Local leftovers, never pushed: `fix/json-depth-sweep` (the parked sweep)
-    and `fix/pass-last-recursion` (the same sweep under its first name; delete it once Hayden
-    nods).
+- **Next (lead, main checkout): take `narrow-excluded` (#93) to merge, then `lane-close`, then
+  `tab-bar`** ("In flight"). #94 (`fix/json-depth`) merged on 2026-10-13. The lead reinstalled
+  from main under `lane lock install`: settings.json and ~/.tmux.conf unchanged, no installed
+  links into lanes. `narrow-excluded` was then cleared to merge origin/main, install from its
+  branch, smoke, and apply the lead STATUS diff. When it reports ready in its record, take #93
+  to Hayden. After #93 merges: reinstall from main, propose `lane done narrow-excluded`, open
+  `lane-addr` (and Part 2 when a slot frees). Start with `lane ls` and `lane asks`. A lane is
+  handed back only once `handoff-check -C <lane path>` passes and the board shows no `handoff?`
+  flag. After each merge, follow the install step in "In flight", then `lane done <id>` once
+  its session exits (until `lane-close` merges, Hayden `/exit`s it first).
+  **Message a lane at its messaging socket**: `uds:/run/user/1000/cc-socks/<pid>.sock`, the
+  `messagingSocketPath` in `~/.claude/sessions/<pid>.json` of the session whose cwd is in the
+  lane. Resolve it fresh before each send, since a pass makes a new pid. A ListAgents name
+  drifts, and a bare lane id is "not reachable". An idle lane still drains a message.
+  - Local leftovers, never pushed: `fix/json-depth-sweep` (the parked sweep) and
+    `fix/pass-last-recursion` (the same sweep under its first name, plus the writer's
+    `worktree-agent-a8c1570566ac3d240` branch). Delete them once Hayden nods.
   - Tab restore (#70) ran for real: the tmux server died, and at 2026-10-13 13:58 local
     `restore.log` shows the open sessions restored to their tabs, with expected skips (a
     deleted directory, older sessions of one pane, a window closed before the server ended).
