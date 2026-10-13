@@ -65,6 +65,23 @@ def protect_checkout(settings, checkout, home=None):
     return merge(settings, {"sandbox": {"filesystem": {"denyWrite": extra}}}) if extra else None
 
 
+def without_checkout_copies(settings):
+    """settings minus the denyWrite entries an earlier install from another checkout added
+    (a root holding a copy of every ~/dotclaude path the list names), so a change of checkout
+    isn't reported as a reset."""
+    deny = ((settings.get("sandbox") or {}).get("filesystem") or {}).get("denyWrite")
+    if not isinstance(deny, list):
+        return settings
+    tails = ["/" + p[len(DOTCLAUDE):] for p in deny if isinstance(p, str) and p.startswith(DOTCLAUDE)]
+    roots = {p[:-len(tails[0])] for p in deny
+             if tails and isinstance(p, str) and os.path.isabs(p) and p.endswith(tails[0])}
+    copies = {r + t for r in roots if all(r + t in deny for t in tails) for t in tails}
+    if not copies:
+        return settings
+    fs = dict(settings["sandbox"]["filesystem"], denyWrite=[p for p in deny if p not in copies])
+    return dict(settings, sandbox=dict(settings["sandbox"], filesystem=fs))
+
+
 def commands(hooks):
     """Every hook command string in a settings `hooks` object."""
     out = set()
@@ -97,7 +114,7 @@ def main(argv):
     checkout = None
     if argv[1:2] == ["--checkout"] and len(argv) > 2:
         checkout, argv = argv[2], argv[:1] + argv[3:]
-    if len(argv) not in (2, 3, 4):
+    if len(argv) not in (2, 3, 4) or any(a.startswith("--") for a in argv[1:]):
         sys.stderr.write(__doc__)
         return 2
     with open(argv[1]) as f:
@@ -110,15 +127,17 @@ def main(argv):
     base = json.loads(text)
     keep = {k: v for k, v in live.items() if k not in base and k not in overlay}
     out = merge(base, overlay)
+    if keep:
+        sys.stderr.write(f"merge-settings: kept the live-only keys {', '.join(sorted(keep))}\n")
+    # On the verbatim path too, so a reset is never silent. A checkout's copies, added before or
+    # now, are named on their own line instead.
+    report_resets(without_checkout_copies(live), out)
     protected = protect_checkout(out, checkout) if checkout else None
     if protected:
         out = protected
         sys.stderr.write(f"merge-settings: installing from {os.path.realpath(checkout)}, so its "
                          "copies of the ~/dotclaude paths join denyWrite\n")
     verbatim = not keep and not protected and not (overlay_path and os.path.exists(overlay_path))
-    if keep:
-        sys.stderr.write(f"merge-settings: kept the live-only keys {', '.join(sorted(keep))}\n")
-    report_resets(live, out)  # on the verbatim path too, so a reset is never silent
     if verbatim:
         sys.stdout.write(text)  # verbatim, so a machine without an overlay installs the file as is
         return 0

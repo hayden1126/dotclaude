@@ -163,14 +163,34 @@ class MergeCli(unittest.TestCase):
         r = run(MERGE, self.base, os.path.join(self.dir.name, "absent.json"), self.live(""))
         self.assertEqual((r.returncode, r.stdout), (0, '{"a":   [1]}\n'))
 
-    def protect(self, checkout, deny):
+    def protect(self, checkout, deny, live=None):
         """merge-settings --checkout under a fake HOME, with a baseline denyWrite of `deny`."""
         home = os.path.join(self.dir.name, "home")
         os.makedirs(checkout, exist_ok=True)
         with open(self.base, "w") as f:
             json.dump({"sandbox": {"filesystem": {"denyWrite": deny}}}, f)
-        return run(MERGE, "--checkout", checkout, self.base,
-                   os.path.join(self.dir.name, "absent.json"), env=dict(os.environ, HOME=home))
+        args = [MERGE, "--checkout", checkout, self.base, os.path.join(self.dir.name, "absent.json")]
+        return run(*args, *([live] if live else []), env=dict(os.environ, HOME=home))
+
+    def test_a_change_of_checkout_is_not_a_reset(self):
+        # A lane install over a main one, and the lead's reinstall from main after it, change
+        # only the checkout's copies: they are named on their own line, never as a reset whose
+        # advice (keep it in the overlay) would keep the lane's paths.
+        main, lane = os.path.join(self.dir.name, "home", "dotclaude"), os.path.join(self.dir.name, "x")
+        deny = ["~/dotclaude/hooks", "~/dotclaude/bin"]
+        installed = self.protect(lane, deny, self.live(self.protect(main, deny).stdout))
+        self.assertIn("installing from", installed.stderr)
+        self.assertNotIn("resets", installed.stderr)
+        back = self.protect(main, deny, self.live(installed.stdout))
+        self.assertEqual((back.returncode, back.stderr), (0, ""))
+        self.assertNotIn(os.path.realpath(lane), back.stdout)
+
+    def test_a_bad_flag_prints_usage(self):
+        for args in (["--checkout"], ["--checkout=x", self.base], [self.base, "--checkout", "x"]):
+            with self.subTest(args):
+                r = run(MERGE, *args)
+                self.assertEqual((r.returncode, r.stdout), (2, ""))
+                self.assertIn("Usage:", r.stderr)
 
     def test_another_checkout_protects_its_own_copies(self):
         # A lane's install links ~/.claude/hooks and the rest into the lane's worktree, which
