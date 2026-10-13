@@ -122,13 +122,13 @@ class Base(unittest.TestCase):
         """A transcript whose last main-chain entry is the assistant's (its final reply is on
         disk, as at a Stop after spike A8's wait, or at a tool call)."""
         with open(self.transcript, "w") as f:
-            for e in [*before, assistant(total), *after]:
-                f.write(json.dumps(e) + "\n")
+            for e in [*before, assistant(total), *after]:   # compact, as Claude Code writes
+                f.write(json.dumps(e, separators=(",", ":")) + "\n")
 
     def append(self, *entries):
         with open(self.transcript, "a") as f:
             for e in entries:
-                f.write(json.dumps(e) + "\n")
+                f.write(json.dumps(e, separators=(",", ":")) + "\n")
 
     def stop_at(self, total, *before):
         """A Stop after appending entries and then an assistant entry at total."""

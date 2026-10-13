@@ -158,19 +158,17 @@ def _line_at(m, pos: int):
         return start, None
 
 
-def _rfind_pair(m, key: str, value: str, end: int | None = None) -> int:
-    """The last offset before end of `"key":"value"` in m, compact as Claude Code writes it or
-    with a space after the colon; -1 when neither occurs."""
-    stop = len(m) if end is None else end
-    return max(m.rfind(b'"%s"%s"%s"' % (key.encode(), sep, value.encode()), 0, stop)
-               for sep in (b":", b": "))
-
-
-def _started_by_monitor(m, task_id: str) -> bool:
-    """Whether the last line of m naming task_id as a toolUseResult.taskId is the result of a
-    Monitor call made earlier in the same file."""
-    pos = _rfind_pair(m, "taskId", task_id)
+def _started_by_monitor(m, task_id: str):
+    """Whether task_id is a Monitor's, from the last line of m that names it as a task id:
+    True when that line is a result (toolUseResult.taskId) answering a Monitor call earlier in
+    the same file, False when it is anything else (a background Bash command's result names
+    it as backgroundTaskId), None when m never names it. One backward search for both keys
+    ("taskId" and "backgroundTaskId" both end in `askId":"<id>"`), so a recent task is found
+    near the end of the file and only an id m never names costs a whole pass."""
+    pos = m.rfind(b'askId":"' + task_id.encode() + b'"')
     if pos < 0:
+        return None
+    if not m[max(0, pos - 2):pos] == b'"t':   # "taskId", not "backgroundTaskId"
         return False
     start, d = _line_at(m, pos)
     result = d.get("toolUseResult") if isinstance(d, dict) else None
@@ -184,7 +182,7 @@ def _started_by_monitor(m, task_id: str) -> bool:
             else None
         if not (isinstance(use, str) and ID.fullmatch(use)):
             continue
-        at = _rfind_pair(m, "id", use, start)
+        at = m.rfind(b'"id":"' + use.encode() + b'"', 0, start)
         _, call = _line_at(m, at) if at >= 0 else (0, None)
         msg = call.get("message") if isinstance(call, dict) else None
         for u in msg.get("content") if isinstance(msg, dict) and \
@@ -198,10 +196,11 @@ def _started_by_monitor(m, task_id: str) -> bool:
 def monitor_ids(path, wanted) -> set:
     """Which task ids in wanted the Monitor tool started: the transcript, or one of its
     subagents' transcripts (<session>/subagents/*.jsonl), holds a result entry with that
-    toolUseResult.taskId answering a Monitor call (Claude Code 2.1.296 writes
-    `"taskId":"<id>"`; a background Bash command's key is backgroundTaskId). A byte search over
-    each whole file, so a Monitor started early in a long session still counts; ids that
-    aren't plain names are skipped."""
+    toolUseResult.taskId answering a Monitor call (Claude Code 2.1.296 writes compact JSON,
+    `"taskId":"<id>"`; a background Bash command's key is backgroundTaskId). A backward byte
+    search over each whole file, so a Monitor started early in a long session still counts; an
+    id settled in one file isn't looked for in the next. Ids that aren't plain names are
+    skipped."""
     left = {i for i in wanted if isinstance(i, str) and ID.fullmatch(i)}
     found = set()
     if not left or not isinstance(path, str) or "\n" in path:
@@ -211,10 +210,11 @@ def monitor_ids(path, wanted) -> set:
                                                        "*.jsonl")))]:
         try:
             with open(name, "rb") as f, mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ) as m:
-                found |= {i for i in left if _started_by_monitor(m, i)}
+                seen = {i: _started_by_monitor(m, i) for i in left}
         except (OSError, ValueError):   # unreadable, or empty (mmap refuses size 0)
             continue
-        left -= found
+        found |= {i for i, monitor in seen.items() if monitor}
+        left -= {i for i, monitor in seen.items() if monitor is not None}   # settled here
         if not left:
             break
     return found

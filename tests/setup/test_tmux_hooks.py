@@ -417,6 +417,11 @@ class Hooks(unittest.TestCase):
         shutil.copy(self.monitor_transcript(), os.path.join(sub, "agent-a1.jsonl"))
         self.assertEqual(stop_ring.task_types([{"id": "s1", "type": "shell"}], path),
                          ["monitor"])
+        # An id the main transcript settles as a background Bash isn't looked for further.
+        with open(path, "a") as f:
+            f.write(json.dumps({"type": "user", "toolUseResult": {"backgroundTaskId": "s1"}},
+                               separators=(",", ":")) + "\n")
+        self.assertEqual(stop_ring.task_types([{"id": "s1", "type": "shell"}], path), ["shell"])
 
     def test_the_stop_record_names_the_transcript_and_unlabeled_tasks(self):
         # pass-respawn reads the transcript path from it, and blocks a plain pass on any task.
