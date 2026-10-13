@@ -69,6 +69,50 @@ stored here).
   `~/.claude/sessions/<pid>.json` (undocumented; the registry is the fallback).
 
 ## In flight
+- **dotclaude runs in lanes (since 2026-10-12).** The lead is the main checkout. Lanes live in
+  `~/dotclaude-lanes/`, and each lane's state is in its record (`lane ls`, `lane asks`), not
+  here. The config caps live lanes at 3, with locks `install` and `suite`.
+  - Merged: `autopass-now` as #90 (2026-10-13). `/autopass` is now an immediate mod command,
+    dotclaude's first. The lead installed it from the main checkout.
+  - Merge order for the rest: 1. `attach-tabs` (Star, Shelve and restore for `claude attach`
+    tabs). 2. `narrow-excluded` (security step 1, effort xhigh). Each merges `origin/main` into
+    its branch once pushed, since force pushes are denied.
+
+  Backlog, after `narrow-excluded` merges (it may touch the same launch code): `lane init
+  --model/--effort` repo defaults and `lane open --model/--effort` overrides, passed through to
+  `claude`. Today `lane open` hardcodes the argv, so a lane's model or effort is set by hand in
+  its window.
+
+  Backlog, the next free lane slot (Hayden, 2026-10-12): **a tmux bar that fits several projects
+  with lanes.** One `main` session already holds 9 windows (5 projects, 3 lanes, a spike), and
+  the titles and glyphs no longer fit. Option B, Hayden's pick: keep `main`, and switch to a
+  two-row status bar (tmux 3.7 `status 2`) with windows grouped and colored by project and
+  shorter lane names (`tmux/claude.conf`, `tmux-claude-status`). Option A, only if B still
+  overflows: one tmux session per project, each in its own terminal window.
+  - Remote: `tmux-remote` takes the project from `$SSH_ORIGINAL_COMMAND` (`ssh -t <host>
+    <project>`).
+  - `lane open` already lands in the lead's session.
+  - The cost: `claude-restore` restores everything into `main` and fires only on `main`'s
+    creation, so it would have to become session-aware.
+  - Star, Shelve and the tab map need re-checking.
+  - The remote-access side is private (the hq remote-access doc).
+
+  How lanes install, Hayden's call 2026-10-12: after its last review round, a lane runs
+  `lane lock install -- ./setup.sh` from its own worktree, sandbox off. Until it merges, every
+  session runs that lane's hooks. After the merge, the lead moves the main checkout to `main`,
+  re-runs `./setup.sh` there and smoke-tests, then proposes `lane done`. A lane carries the
+  lead's STATUS commits (on `chore/after-pr4`, local only) into its PR before it is marked ready.
+  Only the next PR to merge carries them; later lanes get them from `main` when they rebase.
+  - **Install gap found 2026-10-13:** `lane lock install` serializes only the setup.sh run, and
+    the last run wins. Lane `attach-tabs` installed two minutes after lane `autopass-now` and
+    replaced its links. Rule until tooling covers it: only the lane next in merge order
+    installs, and the next lane waits for the lead's reinstall from `main`. The fix to build is a
+    lock held from install until the merge.
+  - **Messaging gap found 2026-10-13:** a lane's SendMessage to the lead failed "not reachable".
+    A session's address is its full title, and `session-title.sh` rewrites the lead's title as
+    the summary changes, so neither "dotclaude" nor a truncated title matched. Lead-to-lane sends
+    work. Until it's fixed, the lead polls `lane asks`, and lanes put anything for the lead in
+    their records.
 - **Lanes, handoff-check and `/pass`** (Hayden's design, approved 2026-10-11; `PLAN.md`, behavior in
   `docs/lanes.md` and `skills/lanes/SKILL.md`). Four PRs:
   - PR 1 (lanes core) merged as #86 (`gh pr view 86`); its smoke test and guard replay are in
@@ -79,13 +123,15 @@ stored here).
     private: `~/scratch/sandbox-audit/FINDINGS.md`, "Follow-up 2026-10-11"). **Step 0 is done on
     `feat/lanes-lead`, merged in #87**: the lanes config lives in the state dir, and what the
     sandbox can still write is checked before sandbox-off code acts on it (docs/lanes.md S3).
-    Step 1 is its own PR after PR 3 and before the work repo migration; step 2 later.
+    Step 1 is lane `narrow-excluded`, and it merges before the work repo migration; step 2 later.
   - PR 3 (`/pass`) merged as #88 (`gh pr view 88`), installed with its allow rule; its live runs
     and the as-built notes are in PLAN.md PR 3 "As built".
-  - **PR 4 `feat/autopass`: built, installed, smoke-tested, PR open for review.** The next
-    step is in "Notes for next session"; the design and "As built" are in PLAN.md PR 4.
-  - After PR 3: the release skill in the work repos gets its post-release Next block and a
-    closing `handoff-check` (its own PR there; PLAN.md PR 3 "Delta handoff").
+  - PR 4 (auto-pass, the rendered banner and popup) merged as #89 (`gh pr view 89`), installed
+    on HAYPC from its branch and smoke-tested (PLAN.md PR 4 "As built" and spikes A8 to A10).
+  - The release skill in the work repos gets its post-release Next block and a closing
+    `handoff-check` (PLAN.md PR 3 "Delta handoff"). Hayden's call (2026-10-12): it becomes the
+    first lane of the work repo migration, after `narrow-excluded` merges, led from that repo's
+    main checkout. A dotclaude lead can't open lanes there, because `lane` acts on the cwd repo.
   - Migrate the work repo (its own PR there). The concrete values and the
     incident ids are in `~/scratch/lanes/PRIVATE.md` (private).
 - **`deck-production`: deferred (Hayden, 2026-10-05: workflow improvements first).** The geometry
@@ -136,30 +182,28 @@ stored here).
   `claude -p` repro and the 2.1.285 boundary; the karaoke session's has the incident.
 
 ## Notes for next session
-- **Next: PR 4 (`feat/autopass`) is up for Hayden's review; merge only on his approval.** The
-  PR number: `gh pr list --head feat/autopass`. What it holds: PLAN.md PR 4 "As built" (five
-  writer parts) plus the 2026-10-12 work (session acbec206), `git log 0df4e46..feat/autopass`:
-  - **A8 fixed:** the watcher waits at Stop up to 1.5 s for the turn's final reply.
-  - **Part 3:** the banner and Ctrl-b Up popup render markdown (stdlib `hooks/md_render.py`) and
-    show each turn's prompt (PLAN.md PR 4 "The popup and banner, rendered").
-  - **A10 fixed:** a Monitor the payload calls `shell` is classified by tool from the transcript.
-  - Stop timeouts: context-watch and stop-ring 10 s (settings.json, installed by `setup.sh`).
-  - **Smoke (2026-10-12, `~/scratch/autopass-smoke`, tiers 60k/75k/90k via
-    `XDG_CONFIG_HOME=~/scratch/autopass-smoke-conf`):** soft at 63k, wrap-up at 87k (Stop) and
-    hard at 98k (mid-turn) fired once each, then the session passed itself in compact mode; a
-    plain pass with a Monitor running was refused with the held notice; `lane ls` showed CTX and
-    STATE; the banner rendered live. Not seen: the refusal's toast. Hayden hasn't given a verdict
-    on the live popup yet.
-  - **Watch:** `context-watch.err` in the state dir (a Stop that timed out waiting for its reply,
-    and the watcher's Python errors).
-  - Then the release-skill PR in the work repos (PLAN.md PR 3 "Delta handoff").
-  - **Follow-up, its own PR (found 2026-10-12):** a tab running `claude attach <id>` (a
-    background session brought back into a tab) isn't recognized by Star, Shelve or tab
-    restore ("No claude session found in this tab"): they find the session through the Claude
-    process under the pane, and an attach client isn't it (the session's process lives under
-    Claude Code's daemon). `claude-saved` could map the attach client's id argument to its
-    `~/.claude/sessions/<pid>.json`. A tmux window killed with a live session left it running
-    in the background (`kind: bg`), which is how that tab came to be.
+- **Next (lead, main checkout): run the two lanes** in "In flight" (dotclaude runs in lanes).
+  Watch `lane ls` and `lane asks`, and message a lane idle past the soft tier to run /pass. A
+  lane is handed back only once `handoff-check -C <lane path>` passes and the board shows no
+  `handoff?` flag. After each merge, follow the install step in "In flight". Once
+  `narrow-excluded` merges, plan the work repo migration, with the release skill as its first
+  lane.
+  - Branch `chore/after-pr4` holds the lead's STATUS commits. They ride the next lane PR to
+    merge (the lane cherry-picks them), never a STATUS-only PR.
+  - **Watch (PR 4, live on HAYPC):** `context-watch.err` in the state dir (a Stop that timed out
+    waiting for its reply, and the watcher's Python errors). Not yet seen live: a refused pass's
+    toast, and Hayden's verdict on the rendered popup.
+  - **Attach tabs (lane attach-tabs, `fix/tmux-attach-tabs`):** Star, Shelve, Open and tab
+    restore now recognize a tab running `claude attach <jobId>`: `claude-saved` reads the
+    client's argv from /proc and finds the `kind: bg` sessions file with that jobId. Shelve there
+    also runs `claude stop` (Hayden's call: background is mostly an accident), and
+    `claude-saved track`, run by `tmux-claude-status`, records attach tabs so `claude-restore`
+    reopens them after `tmux kill-server`. Probed on 2.1.296: a killed tab ends its session (the
+    2026-10-12 "moved to the background" came from agent view, not the kill); `claude attach`
+    takes the jobId, never the session id; `claude --resume` of a background chat becomes an
+    attach. Not recognized: a tab opened from agent view (argv stays `claude agents`) or by
+    `claude attach <name part>`; `/clear` in an attach tab doesn't move its star. Design and
+    probes: the PR body.
   - Verify from the main checkout (`test_subagent_policy` refuses to load under
     `.claude/worktrees/`): `tests/setup`, `tests/pass`, `tests/lanes`, `tests/delegation`. The
     last full run on `feat/autopass` (2026-10-12) was green: 532, 148, 155 and 646 tests.
