@@ -111,21 +111,68 @@ def git(args: list[str],
 
 
 # A plain /pass respawns the pane, which kills every background task with it. So it goes ahead
-# only after a Stop that listed no task but these: `dream` is memory upkeep. Teammates and
+# only after a Stop that listed no task but these: `dream` is memory upkeep, and an `artifact
+# watch` is the live watch the Artifact tool arms on each publish (hooks/stop_ring.py
+# artifact_url), a subscription for comments, not work in flight. The model never sees its id,
+# so a session can't stop it, and it blocked every plain pass after a publish (incident
+# e7cc7b9a, 2026-10-13). The respawn ends it, as quitting would. Teammates and
 # monitors count, though stop-ring.sh rings past them (it asks "is the turn waiting on its
 # result?", not "would a respawn kill it?"). pass-respawn refuses by this rule, and the autopass
 # watcher (hooks/context_watch.py) says "compact mode" by it, so the two never disagree.
-PLAIN_PASS_IGNORES = frozenset({"dream"})
+PLAIN_PASS_IGNORES = frozenset({"dream", "artifact watch"})
 
 
-def plain_pass_blockers(tasks) -> list[str]:
-    """The task labels (a stop record's `tasks`, or the Stop payload's background_tasks types,
-    `unlabeled` for one with none) that make a plain pass refuse, in order, as strings. Anything
-    but a string ignored by name blocks, whatever its type. A list that isn't a list blocks, as
-    `?`: with no task list the respawn can't be shown safe."""
+def plain_pass_ignores(entry: dict) -> bool:
+    """Whether a plain pass lets the respawn end this task (a task_entries entry): a label
+    PLAIN_PASS_IGNORES names, and for an artifact watch its page too. stop_ring writes `url`
+    only for a description artifact_url matched, so a type merely spelled `artifact watch`
+    still blocks."""
+    return entry["label"] in PLAIN_PASS_IGNORES and (entry["label"] != "artifact watch"
+                                                     or bool(entry.get("url")))
+TASK_FIELDS = ("id", "description", "url")
+
+
+def task_entries(tasks) -> list[dict] | None:
+    """A stop record's `tasks` (or the Stop payload's labels) as entries, {label} plus the
+    string fields of TASK_FIELDS it has; None when tasks isn't a list. An entry is a label or an
+    object holding one; anything else, or an empty label, is `unlabeled`. Only strings survive:
+    the record is data, and its text reaches tmux, the toast and pass.log."""
     if not isinstance(tasks, list):
-        return ["?"]
-    return [str(t) for t in tasks if not (isinstance(t, str) and t in PLAIN_PASS_IGNORES)]
+        return None
+    out = []
+    for t in tasks:
+        label = t if isinstance(t, str) else t.get("label") if isinstance(t, dict) else None
+        e = {"label": label if isinstance(label, str) and label else "unlabeled"}
+        if isinstance(t, dict):
+            e.update({k: t[k] for k in TASK_FIELDS if isinstance(t.get(k), str)})
+        out.append(e)
+    return out
+
+
+def plain_pass_blockers(tasks) -> list[dict]:
+    """The entries (task_entries) that make a plain pass refuse, in order: every task but those
+    plain_pass_ignores lets go. A list that isn't a list blocks, as `?`: with no task list the
+    respawn can't be shown safe."""
+    entries = task_entries(tasks)
+    if entries is None:
+        return [{"label": "?"}]
+    return [e for e in entries if not plain_pass_ignores(e)]
+
+
+TASK_NOUNS = {"unlabeled": "unlabeled task", "None": "unlabeled task"}
+
+
+def describe_task(entry: dict, chars: int) -> str:
+    """One task (a task_entries entry) as pass-respawn's refusal, pass.log, --tasks and the
+    autopass nudge name it: its noun, then an artifact watch's page or else its description in
+    double quotes (cut to chars), then its id in parentheses, each when the record has it:
+    'monitor "deploy events" (b0fzd27l4)'."""
+    text = TASK_NOUNS.get(entry["label"], entry["label"])
+    if url := entry.get("url"):
+        text += f" {url[:chars]}"
+    elif desc := entry.get("description"):
+        text += f' "{desc if len(desc) <= chars else desc[:chars - 3] + "..."}"'
+    return text + (f" ({entry['id']})" if entry.get("id") else "")
 
 
 def state_dir() -> str:

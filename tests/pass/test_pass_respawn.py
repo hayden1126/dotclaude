@@ -25,6 +25,7 @@ import shutil
 import subprocess
 import sys
 import time
+import types
 import unittest
 from importlib.machinery import SourceFileLoader
 from importlib.util import module_from_spec, spec_from_loader
@@ -43,6 +44,17 @@ def load():
     mod = module_from_spec(spec_from_loader("pass_respawn", loader))
     loader.exec_module(mod)
     return mod
+
+
+_ring = SourceFileLoader("stop_ring", os.path.join(REPO, "hooks", "stop_ring.py"))
+stop_ring = module_from_spec(spec_from_loader("stop_ring", _ring))
+_ring.exec_module(stop_ring)
+
+# The live watch the Artifact tool arms on a publish, as stop-ring.sh records it.
+URL = "https://claude.ai/artifact/8JLmWLDftm9VdGcLQnGr76"
+WATCH = {"label": "artifact watch", "id": "s31udgb0s", "url": URL,
+         "description": f"live updates for artifact {URL} (auto-armed on publish)"}
+DEPLOY = {"label": "monitor", "id": "b0fzd27l4", "description": "deploy events"}
 
 
 FAKE_TMUX = r"""#!/bin/sh
@@ -903,6 +915,213 @@ class Plain(Base):
         self.assertDropped("busy", "1 teammate running (a respawn would kill it)")
         self.assertIn("busy: tasks: teammate", self.log())
 
+    def test_a_refusal_names_each_task_its_id_and_the_fix(self):
+        # Incident e7cc7b9a: "busy: tasks: monitor" named no task, so nobody could tell which
+        # to stop. The notice, the toast and pass.log name each, with the id to stop it by.
+        self.stop_tasks = [DEPLOY]
+        code, out = self.run_pass("--foreground")
+        self.assertEqual(code, 1, out)
+        self.assertDropped("busy", 'monitor "deploy events" (b0fzd27l4) running (a respawn '
+                           "would kill it). Stop it (/tasks, or ask Claude to TaskStop it), "
+                           "or /pass compact keeps it")
+        self.assertIn('busy: tasks: monitor "deploy events" (b0fzd27l4)', self.log())
+
+    def test_a_refusal_shows_two_tasks_and_counts_the_rest(self):
+        long = "x" * 60
+        self.stop_tasks = [{"label": "monitor", "id": "m1", "description": long},
+                           {"label": "teammate", "id": "t1"},
+                           {"label": "monitor", "id": "m2", "description": "second"},
+                           {"label": "MCP task", "id": "p1", "description": "an MCP job"}]
+        code, out = self.run_pass("--foreground")
+        self.assertEqual(code, 1, out)
+        cut = "x" * (self.mod.SHOWN_CHARS - 3) + "..."
+        self.assertDropped("busy", f'monitor "{cut}" (m1), teammate (t1), +2 more (1 monitor, '
+                           "1 MCP task) running (a respawn would kill them). Stop them")
+        # pass.log keeps each one whole with its id: what a session reads to stop them.
+        self.assertIn(f'busy: tasks: monitor "{long}" (m1), teammate (t1), monitor "second" '
+                      '(m2), MCP task "an MCP job" (p1)', self.log())
+
+    def test_a_task_description_reaches_tmux_literally(self):
+        # A description is the model's text; display-message expands #(cmd), #{} and %H.
+        self.stop_tasks = [{"label": "monitor", "id": "m1",
+                            "description": "#(touch pwned) #{pane_id} %H"}]
+        code, out = self.run_pass("--foreground")
+        self.assertEqual(code, 1, out)
+        for m in self.notices():
+            self.assertIn('monitor "##(touch pwned) ##{pane_id} %%H" (m1)', m[-1])
+        (toast,) = self.toasts()
+        self.assertIn('monitor "#(touch pwned) #{pane_id} %H" (m1)', toast[6])
+
+    def test_a_wait_is_named_from_the_records_tasks(self):
+        self.stop_waits = ["shell"]
+        self.stop_tasks = [{"label": "shell", "id": "b0fzd27l4",
+                            "description": "Wait for the deploy run to finish"}, WATCH]
+        code, out = self.run_pass("--foreground")
+        self.assertEqual(code, 1, out)
+        self.assertDropped("busy", 'waiting on shell "Wait for the deploy run to finish" '
+                           "(b0fzd27l4) (a respawn would kill it). /pass compact keeps it, or "
+                           "let it finish and /pass")
+        self.assertIn('busy: waits: shell "Wait for the deploy run to finish" (b0fzd27l4); '
+                      f"ignored: artifact watch {URL} (s31udgb0s)", self.log())
+
+    def test_a_wait_and_a_task_are_both_named(self):
+        # Review round 1: naming only the wait sent Hayden to wait it out, then a second
+        # refusal for the monitor. Both parts name what the respawn would kill, and the fix
+        # covers both.
+        self.stop_waits = ["shell"]
+        self.stop_tasks = [{"label": "shell", "id": "b1", "description": "npm test"}, DEPLOY,
+                           WATCH]
+        code, out = self.run_pass("--foreground")
+        self.assertEqual(code, 1, out)
+        self.assertDropped("busy", 'waiting on shell "npm test" (b1), and monitor "deploy '
+                           'events" (b0fzd27l4) running (a respawn would kill them). /pass '
+                           "compact keeps them, or let the waits finish, stop the rest (/tasks, "
+                           "or ask Claude to TaskStop them) and /pass")
+        self.assertIn('busy: waits: shell "npm test" (b1); tasks: monitor "deploy events" '
+                      f"(b0fzd27l4); ignored: artifact watch {URL} (s31udgb0s)", self.log())
+
+    def test_a_wait_the_tasks_dont_describe_is_still_named(self):
+        # Review round 2: a second wait with no task entry fell out of the notice.
+        self.stop_waits = ["shell", "subagent"]
+        self.stop_tasks = [{"label": "shell", "id": "b1", "description": "npm test"}]
+        code, out = self.run_pass("--foreground")
+        self.assertEqual(code, 1, out)
+        self.assertDropped("busy", 'waiting on shell "npm test" (b1), +1 more (1 subagent) (a '
+                           "respawn would kill them)")
+        self.assertIn('busy: waits: shell "npm test" (b1), subagent', self.log())
+
+    def test_waits_and_tasks_together_name_two_in_all(self):
+        # The notice fits a status line: SHOWN named across both parts, the rest counted.
+        self.stop_waits = ["shell"]
+        self.stop_tasks = [{"label": "shell", "id": f"b{i}", "description": f"job {i}"}
+                           for i in (1, 2, 3)] + [DEPLOY, {"label": "monitor", "id": "m2"}]
+        code, out = self.run_pass("--foreground")
+        self.assertEqual(code, 1, out)
+        self.assertDropped("busy", 'waiting on shell "job 1" (b1), shell "job 2" (b2), +1 more '
+                           "(1 shell), and 2 monitors running (a respawn would kill them)")
+
+    def test_an_artifact_watch_alone_lets_the_pass_respawn(self):
+        # The Artifact tool's live watch: the session never sees its id and can't stop it, so
+        # the respawn ends it and pass.log names the page, for Hayden to watch it again.
+        self.stop_tasks = [WATCH, {"label": "dream", "id": "d1"}]
+        code, out = self.run_pass("--foreground")
+        self.assertEqual(code, 0, out)
+        self.assertEqual(len(self.calls("tmux", "respawn-pane")), 1)
+        self.assertIn(f"outcome=respawn plan mode; ignored: artifact watch {URL} (s31udgb0s)",
+                      self.log())
+
+    def test_an_artifact_watch_beside_a_monitor_is_left_out_of_the_notice(self):
+        self.stop_tasks = [WATCH, DEPLOY]
+        code, out = self.run_pass("--foreground")
+        self.assertEqual(code, 1, out)
+        self.assertDropped("busy", 'monitor "deploy events" (b0fzd27l4) running (a respawn '
+                           "would kill it)")
+        for m in self.notices():
+            self.assertNotIn("artifact", m[-1])
+        self.assertIn(f"; ignored: artifact watch {URL} (s31udgb0s)", self.log())
+
+    def test_the_incident_now_respawns(self):
+        # e7cc7b9a's Stops listed one task, the watch its Artifact publish armed, in 2.1.296's
+        # payload shape; recorded the way stop-ring.sh now records it, it clears a plain pass.
+        payload = [{"id": "s31udgb0s", "type": "monitor", "status": "running",
+                    "description": f"live updates for artifact {URL} (auto-armed on publish)"}]
+        self.stop_tasks = stop_ring.task_entries(payload, stop_ring.task_types(payload, None))
+        code, out = self.run_pass("--foreground")
+        self.assertEqual(code, 0, out)
+        self.assertIn("outcome=respawn", self.log())
+
+    def test_tasks_lists_the_last_stops_tasks(self):
+        # Skill step 2 reads this, never ps: tasks aren't child processes, MCP servers are.
+        self.stop_tasks = [DEPLOY, {"label": "shell", "id": "b2", "description": "npm run dev"},
+                           WATCH, {"label": "dream", "id": "d1"}, "teammate"]
+        self.write_stop(["shell"], at=time.time() - 90)
+        code, out = self.run_pass("--tasks")
+        self.assertEqual(code, 0, out)
+        self.assertIn(f"session {SID} at its last Stop, 1 min ago", out)
+        self.assertIn("started or ended since then aren't listed", out)
+        for line in ['monitor "deploy events" (b0fzd27l4): blocks a plain pass',
+                     'shell "npm run dev" (b2): blocks a plain pass; the turn waits on it',
+                     f"artifact watch {URL} (s31udgb0s): doesn't block a plain pass",
+                     "dream (d1): doesn't block a plain pass", "teammate: blocks a plain pass"]:
+            self.assertIn("\n  " + line + "\n", out)
+        # Read-only: nothing shown, logged or queued.
+        self.assertEqual((self.notices(), self.log()), ([], ""))
+        self.assertFalse(os.listdir(os.path.join(self.state, "pass-pending"))
+                         if os.path.isdir(os.path.join(self.state, "pass-pending")) else [])
+
+    def test_a_type_that_only_looks_ignored_still_refuses(self):
+        # Review round 3: no payload type may reach an ignored label by cleaning, and a type
+        # spelled `artifact watch` (no page) is no artifact watch.
+        payload = [{"id": "d1", "type": "dream "}, {"id": "a1", "type": "artifact watch"}]
+        self.stop_tasks = stop_ring.task_entries(payload, stop_ring.task_types(payload, None))
+        code, out = self.run_pass("--foreground")
+        self.assertEqual(code, 1, out)
+        self.assertDropped("busy", "unlabeled task (d1), artifact watch (a1) running")
+
+    def test_a_record_time_that_isnt_finite_refuses(self):
+        for when in (float("nan"), float("inf")):
+            with self.subTest(when=when):
+                plan = types.SimpleNamespace(session_id=SID, called=time.time())
+                rec = {"time": when, "waits": [], "tasks": []}
+                self.assertEqual(self.mod.stop_problem(plan, rec)[0],
+                                 "no stop record since the call")
+        self.write(os.path.join(self.state, "stops", f"{SID}.json"),
+                   json.dumps({"time": float("-inf"), "waits": [], "tasks": []}))
+        code, out = self.run_pass("--tasks")
+        self.assertEqual(code, 0, out)
+        self.assertIn("the record's time can't be read: a plain pass would refuse", out)
+
+    def test_tasks_never_reads_clear_where_the_waiter_refuses(self):
+        # Review round 1: a wait with no task entry, or waits that aren't a list, must not
+        # print "none" or "doesn't block" when the waiter would refuse that record.
+        stops = os.path.join(self.state, "stops", f"{SID}.json")
+        self.write(stops, json.dumps({"time": time.time(), "waits": ["shell"], "tasks": []}))
+        code, out = self.run_pass("--tasks")
+        self.assertEqual(code, 0, out)
+        self.assertIn("\n  shell: blocks a plain pass; the turn waits on it\n", out)
+        self.assertNotIn("\n  none\n", out)
+        self.write(stops, json.dumps({"time": time.time(), "waits": "shell", "tasks": [WATCH]}))
+        code, out = self.run_pass("--tasks")
+        self.assertIn("\n  (waits can't be read: a plain pass would refuse)\n", out)
+
+    def test_tasks_with_no_record_or_task_list_says_so(self):
+        code, out = self.run_pass("--tasks")
+        self.assertEqual(code, 0, out)
+        self.assertIn(f"no stop record for session {SID}", out)
+        # Review rounds 6 and 7: a record that exists but can't be read refuses, as the waiter
+        # does. Only a missing path says "yet": a dangling link or a directory there doesn't.
+        path = os.path.join(self.state, "stops", f"{SID}.json")
+        unreadable = "the stop record can't be read: a plain pass would refuse"
+        cases = [("{}", "the record's time can't be read: a plain pass would refuse"),
+                 ("[]", unreadable), ("null", unreadable), ("not json", unreadable),
+                 ("", unreadable), ("[" * 100000, unreadable),  # RecursionError in json
+                 ("<dangling link>", unreadable), ("<directory>", unreadable)]
+        for body, says in cases:
+            with self.subTest(body=body[:12]):
+                if body == "<dangling link>":
+                    os.remove(path)
+                    os.symlink(path + ".gone", path)
+                elif body == "<directory>":
+                    os.remove(path)
+                    os.mkdir(path)
+                else:
+                    self.write(path, body)
+                code, out = self.run_pass("--tasks")
+                self.assertEqual(code, 0, out)
+                self.assertNotIn("no stop record", out)
+                self.assertIn(says, out)
+        os.rmdir(path)
+        self.write(path, json.dumps({"time": time.time(), "waits": []}))
+        code, out = self.run_pass("--tasks")
+        self.assertIn("no task list: a plain pass would refuse", out)
+        self.write_stop([])
+        code, out = self.run_pass("--tasks")
+        self.assertIn("\n  none\n", out)
+        del os.environ["CLAUDE_CODE_SESSION_ID"]
+        code, out = self.run_pass("--tasks")
+        self.assertEqual(code, 1, out)
+        self.assertIn("CLAUDE_CODE_SESSION_ID", out)
+
     def test_no_stop_record_drops_busy(self):
         self.stop_waits = None
         code, out = self.run_pass("--foreground")
@@ -1118,6 +1337,25 @@ class Units(unittest.TestCase):
         self.mod = load()
         self.dir = __import__("tempfile").mkdtemp()
         self.addCleanup(shutil.rmtree, self.dir)
+
+    def test_a_refusal_names_a_task_of_every_label(self):
+        # The labels stop-ring.sh records (2.1.296's friendly names, an internal name for an
+        # unmapped type, `unlabeled`); stop-ring's waits take the waits branch.
+        plan = types.SimpleNamespace(session_id="s1", called=0)
+        waits = {"subagent", "shell", "workflow", "cloud session"}
+        for label in ("subagent", "shell", "monitor", "workflow", "cloud session", "teammate",
+                      "MCP task", "auto-mode scan", "memory import", "unlabeled", "local_bash"):
+            with self.subTest(label=label):
+                rec = {"time": 1.0, "waits": [label] if label in waits else [],
+                       "tasks": [{"label": label, "id": "t1", "description": "its job"}]}
+                detail, notice = self.mod.stop_problem(plan, rec)
+                noun = "unlabeled task" if label == "unlabeled" else label
+                self.assertIn(f'{noun} "its job" (t1)', notice)
+                self.assertIn(f'{noun} "its job" (t1)', detail)
+                self.assertTrue(detail.startswith("waits: " if label in waits else "tasks: "))
+        for tasks in ([{"label": "dream", "id": "d1"}], [WATCH], []):
+            self.assertIsNone(self.mod.stop_problem(plan, {"time": 1.0, "waits": [],
+                                                           "tasks": tasks}))
 
     def test_the_stop_record_is_read_as_utf8_in_any_locale(self):
         # stop_ring.py writes it as UTF-8. The C locale with Python's UTF-8 mode and coercion off

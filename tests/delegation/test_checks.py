@@ -84,6 +84,13 @@ class Strings(unittest.TestCase):
                   "CLAUDE_PID"):
             self.assertIn(s, names)
 
+    def test_the_artifact_watch_description_is_checked(self):
+        # stop_ring relabels the Artifact tool's live watch by its description; renamed, the
+        # watch blocks a plain pass again (incident e7cc7b9a).
+        with open(os.path.join(HOOKS, "stop_ring.py")) as f:
+            prefix = re.search(r'^ARTIFACT_WATCH_PREFIX = "([^"]+)"$', f.read(), re.M).group(1)
+        self.assertIn(prefix.strip(), {s for s, _ in checks.CANARY_STRINGS})
+
     def test_every_injected_content_marker_is_checked(self):
         # The hooks keep their markers lowercase; the binary has them in their own case.
         names = {s.lower() for s, _ in checks.CANARY_STRINGS}

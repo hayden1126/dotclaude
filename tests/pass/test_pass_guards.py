@@ -323,8 +323,8 @@ class Tasks(Plain):
                 self.stop_tasks = tasks
                 self.assertEqual(self.mod.wait_and_act(self.plan(), t.table), "busy")
                 self.assertDropped("busy", f"pass refused in tab 3: {shown} running (a respawn "
-                                           "would kill it). /pass compact keeps it, or stop it "
-                                           "and /pass")
+                                           "would kill it). Stop it (/tasks, or ask Claude to "
+                                           "TaskStop it), or /pass compact keeps it")
 
     def test_the_busy_notice_counts_and_names_the_tasks(self):
         # Live, 2026-10-12: three monitors at the Stop, and the log said `waits:` though the
@@ -333,8 +333,8 @@ class Tasks(Plain):
         code, out = self.run_pass("--foreground")
         self.assertEqual(code, 1, out)
         self.assertDropped("busy", "pass refused in tab 3: 3 monitors, 1 teammate running (a "
-                                   "respawn would kill them). /pass compact keeps them, or stop "
-                                   "them and /pass")
+                                   "respawn would kill them). Stop them (/tasks, or ask Claude to "
+                                   "TaskStop them), or /pass compact keeps them")
         self.assertIn("outcome=busy busy: tasks: monitor, monitor, teammate, monitor",
                       self.log())
         self.assertNotIn("waits:", self.log())
@@ -1055,6 +1055,24 @@ class SkillLeftovers(unittest.TestCase):
         self.assertIn("still shows as running (a finished in-process teammate lingers",
                       self.text[:call])
         self.assertIn("Don't keep retrying `TaskStop`", self.text[:call])
+
+    def test_step_2_reads_the_task_list_before_the_handoff_in_either_mode(self):
+        # Incident e7cc7b9a: the session checked ps, saw only MCP servers, and called its work
+        # finished. The list comes from pass-respawn --tasks, before the handoff, in both modes.
+        handoff = self.text.index("**Run the handoff skill.**")
+        step2 = self.text[self.text.index("2. **Stop the leftovers first"):handoff]
+        self.assertIn("in either mode", step2)
+        self.assertIn("pass-respawn -C <toplevel> --tasks", step2)
+        self.assertIn("Never use `ps`", step2)
+        self.assertIn("TaskStop <id>", step2)
+        self.assertIn("ask Hayden before you stop it, and don't pass this turn", step2)
+        self.assertIn("In compact mode, leave it running", step2)
+
+    def test_step_2_says_an_artifact_watch_doesnt_block(self):
+        call = self.text.index("Run `pass-respawn -C <toplevel>`")
+        before = self.text[:call]
+        self.assertIn("An `artifact watch` doesn't block a plain pass", before)
+        self.assertIn("put its URL in the record's Next", before)
 
     def test_the_autopass_nudge_defers_to_step_2(self):
         # A nudge that names running tasks must not compact forever over leftovers.

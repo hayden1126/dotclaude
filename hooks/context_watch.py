@@ -48,13 +48,16 @@ Background work, two rules:
   stay quiet and stay armed; hard says its busy variant (pass compact: a compact keeps the tasks
   alive).
 - blocked: any task a plain pass would be refused for (lanelib.plain_pass_blockers, the rule
-  pass-respawn uses: everything but `dream`, monitors and teammates too). Every tier then says to
-  pass in compact mode.
+  pass-respawn uses: everything but `dream` and an `artifact watch`, monitors and teammates
+  too; without lanelib, every task). Every tier then says to pass in compact mode.
+Busy or blocked, the text ends by naming each such task with its id (TASKS_NOTE): the session
+stops the finished ones before the handoff and passes plain if none is left (pass skill step 2).
 On Stop the payload's background_tasks decide. PostToolUse has no task list, so the session's
 stop record (stops/<session>.json, which stop-ring.sh writes at every Stop) decides when it was
 written within the last 10 minutes: its `waits` for busy, its `tasks` for blocked. With no such
-record (or one without a task list) the state is unknown: every tier says compact mode, which is
-safe either way, and its text says so without claiming tasks run. A task started since the
+record, or one whose task list or waits can't be read (a wait stop_ring.WAITS doesn't name
+included), the state is unknown: every tier says compact mode, which is safe either way, and its
+text says so without claiming tasks run. A task started since the
 last Stop isn't seen.
 
 Nothing fires while a pass is already pending for the session (pass-respawn's waiter holds
@@ -97,6 +100,14 @@ TYPED_PASS = re.compile(r"\A\s*<command-message>[^<]*</command-message>\s*"
 LEAD = "[autopass] Context is at {n}, auto-compact near {c}"
 COMPACT_WHY = "(a compact keeps background tasks alive; a plain pass would be refused)"
 UNKNOWN_WHY = "(it's safe whether or not background work is running)"
+# Added to a text when tasks would block a plain pass, naming each with its id (the first
+# NUDGE_SHOWN, descriptions cut to NUDGE_CHARS): to the model, so it stops the finished ones
+# before the handoff (pass skill step 2), or, off, to Hayden.
+NUDGE_SHOWN, NUDGE_CHARS = 10, 80
+TASKS_NOTE = (" Running: {tasks}. Before the handoff, TaskStop each one whose job is done, ask "
+              "Hayden about any you can't tie to finished work, and pass plain if none is left "
+              "(pass skill step 2).")
+TASKS_SEEN = " Running: {tasks}."
 TEXTS = {
     "soft": LEAD + ". If the task is done end to end, run the pass skill now. If only a small "
                    "remainder is left, finish it first. If your last reply asked Hayden "
@@ -394,37 +405,50 @@ def step(rec: dict, n: int, tiers: dict, event: str, mode, work, handoff=lambda 
             "unknown": "off_unknown"}.get(state, "off"), "system"
 
 
-def labels(tasks, path=None) -> list:
-    """background_tasks as stop-ring.sh records them: each type (a Monitor as `monitor`, from
-    the transcript at path: stop_ring.task_types), `unlabeled` for none."""
-    return [k if isinstance(k, str) and k else "unlabeled"
-            for k in stop_ring.task_types(tasks, path)]
+def entries(tasks, path=None) -> list:
+    """background_tasks as stop-ring.sh records them (stop_ring.task_entries): each one's label
+    (a Monitor as `monitor`, from the transcript at path; the Artifact tool's watch as
+    `artifact watch`; `unlabeled` for none), id and description."""
+    raw = tasks if isinstance(tasks, list) else []
+    return stop_ring.task_entries(raw, stop_ring.task_types(raw, path))
 
 
 def work_state(waits: list, tasks: list):
-    if any(w in stop_ring.WAITS for w in waits if isinstance(w, str)):
-        return "busy"
+    """(busy, blocked or None; the tasks that block a plain pass, which the nudge names).
+    Without lanelib the rule can't be applied (pass-respawn can't run either), so every task
+    blocks: compact mode is safe either way."""
     lib = aps.lanelib()
-    blockers = lib.plain_pass_blockers(tasks) if lib else [t for t in tasks if t != "dream"]
-    return "blocked" if blockers else None
+    if lib:
+        blockers = lib.plain_pass_blockers(tasks)
+    else:
+        blockers = [{"label": k if isinstance(k, str) and k else "unlabeled"}
+                    for k in (t.get("label") if isinstance(t, dict) else t for t in tasks)]
+    if any(w in stop_ring.WAITS for w in waits if isinstance(w, str)):
+        return "busy", blockers
+    return ("blocked" if blockers else None), blockers
 
 
 def stop_work(d: dict):
-    tasks = labels(d.get("background_tasks"), d.get("transcript_path"))
-    return work_state(tasks, tasks)
+    tasks = entries(d.get("background_tasks"), d.get("transcript_path"))
+    return work_state([t["label"] for t in tasks], tasks)
 
 
 def recorded_work(sid: str):
-    """The stop record's work state when it is under STOP_FRESH seconds old and lists its
-    tasks; else "unknown" (the texts then say compact mode is safe either way)."""
+    """work_state from the stop record when it is under STOP_FRESH seconds old and lists its
+    tasks and waits, every wait one stop_ring.WAITS names; else ("unknown", []) (the texts then
+    say compact mode is safe either way), as pass-respawn refuses a record it can't read."""
     rec = aps.load_json(os.path.join(aps.state_dir(), "stops", sid + ".json"))
     when = rec.get("time") if isinstance(rec, dict) else None
-    if not isinstance(when, (int, float)) or not 0 <= time.time() - when < STOP_FRESH:
-        return "unknown"
-    tasks = rec.get("tasks")
-    if not isinstance(tasks, list):
-        return "unknown"
-    waits = rec.get("waits") if isinstance(rec.get("waits"), list) else []
+    try:
+        fresh = isinstance(when, (int, float)) and 0 <= time.time() - when < STOP_FRESH
+    except OverflowError:   # json reads ints past a float's range
+        fresh = False
+    if not fresh:
+        return "unknown", []
+    tasks, waits = rec.get("tasks"), rec.get("waits")
+    if not (isinstance(tasks, list) and isinstance(waits, list)) or \
+            any(not isinstance(w, str) or w not in stop_ring.WAITS for w in waits):
+        return "unknown", []
     return work_state(waits, tasks)
 
 
@@ -458,8 +482,20 @@ def cached_mode(rec: dict, cwd, pane):
     return on, {"on": on, "source": source, "at": now, "flag": gen}
 
 
-def render(key: str, kind: str, n: int, tiers: dict) -> dict:
+def named(tasks: list) -> str:
+    """The tasks for the nudge: the first NUDGE_SHOWN as lanelib.describe_task names them, with
+    every id, then "+N more"."""
+    lib = aps.lanelib()
+    shown = [lib.describe_task(t, NUDGE_CHARS) if lib else t["label"]
+             for t in tasks[:NUDGE_SHOWN]]
+    more = len(tasks) - NUDGE_SHOWN
+    return ", ".join(shown) + (f", +{more} more" if more > 0 else "")
+
+
+def render(key: str, kind: str, n: int, tiers: dict, tasks=()) -> dict:
     text = TEXTS[key].format(n=aps.kilo(n), c=aps.kilo(tiers["compact_at"]))
+    if tasks:
+        text += (TASKS_SEEN if kind == "system" else TASKS_NOTE).format(tasks=named(tasks))
     if kind == "block":
         return {"decision": "block", "reason": text}
     if kind == "context":
@@ -530,8 +566,11 @@ def handle(d: dict, pane=None):
     if (on_due or off_due) and not pass_pending(sid):
         on, entry = cached_mode(before, d.get("cwd"), pane)
 
+    blockers = []
+
     def work():
-        return stop_work(d) if event == "Stop" else recorded_work(sid)
+        state, blockers[:] = stop_work(d) if event == "Stop" else recorded_work(sid)
+        return state
 
     with aps.watch_lock(sid) as locked:
         if not locked:
@@ -543,7 +582,7 @@ def handle(d: dict, pane=None):
         aps.write_json(watch, rec)
     prune_locks(os.path.dirname(watch), now)
     stop_ring.prune(os.path.dirname(watch), now)
-    return render(key, kind, n, tiers) if key else None
+    return render(key, kind, n, tiers, blockers) if key else None
 
 
 def main() -> None:
