@@ -146,6 +146,15 @@ stored here).
      from 5 to 10 s in `settings.json`, a copied file: **re-run `setup.sh`** (copy and diff
      `~/.claude/settings.json` around it) to install that. **Watch:** `context-watch.err` in
      the state dir, which logs a Stop that timed out as well as the watcher's Python errors.
+     The same `setup.sh` run links the new `hooks/md_render.py` (the banner and popup already
+     find it through their real paths).
+  1b. **Part 3, done:** the banner and the Ctrl-b Up popup render markdown (stdlib
+     `hooks/md_render.py`, which Hayden picked over `rich` after seeing both) and show each
+     turn's prompt (PLAN.md PR 4 "The popup and banner, rendered"). A live `/pass` showed the
+     colored banner, with the gray kept after code spans. Reviewed in 5 rounds; rounds 2 to 5
+     found crafted 64 KiB inputs that took seconds, minutes or GBs, and the module docstring
+     now states its time and size bounds, which a sweep test checks. Hayden hasn't yet given
+     a verdict on the live popup.
   2. **Smoke so far (passed):** `/autopass status` and `on` were blocked with no model turn, and
      the tab stayed `idle`. The tab flag was written. The widget shows `Ctx 41.5k 7% A`, and
      `ctx/<sid>.json` gets `window`. `/autopass` now names the `pass.toml` it reads (it
