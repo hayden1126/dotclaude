@@ -22,7 +22,8 @@
 # many lines are left and where to read them: Ctrl-b Up once setup-tmux.sh installed it, else the
 # pass-last file. A cut never splits an escape or leaves a style open.
 #
-# This shim runs hooks/pass_banner.py, found beside this script's real path, with python3 -I.
+# This shim runs hooks/pass_banner.py, found beside this script's real path, with python3 -I; it
+# loads md_render.py from beside its own real path, and without it shows the plain text.
 # tests/setup/test_pass_banner.py holds the cases. Fail-open: always exits 0.
 set -uo pipefail
 
