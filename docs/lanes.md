@@ -354,8 +354,10 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
   - a background session: `claude stop <jobId>` ends it;
   - a dirty, locked or submodule worktree, which `git worktree remove` would refuse after the
     kill;
-  - a run from anywhere but the main checkout, or under a lane's session: only the lead closes
-    lanes;
+  - a run from anywhere but the main checkout, or under a Claude session whose cwd is in a
+    linked worktree of this repo or under the lanes root (outside the main checkout): only the
+    lead closes lanes. Both come from git's own worktree links and the lanes config, never
+    `lane.json`, which sandboxed Bash can write;
   - an install that points into the lane (below);
   - when there is something to end, a failing `handoff-check --closing`.
 
@@ -364,17 +366,31 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
   through a pidfd once the start time is checked again:
   1. SIGTERM to sessions and leftovers, then a wait of up to 10 s: longer than the 5 s
      SessionEnd hooks, which run as the session's children and are left to it.
-  2. SIGHUP to a pane shell once its session has exited (an interactive shell ignores SIGTERM).
-  3. SIGTERM and then SIGKILL to whatever survives, except a process that holds a file open in
-     the git dir, or has one under it that does: a killed git leaves lock files.
+  2. SIGHUP to a pane shell once its session has exited (an interactive shell ignores
+     SIGTERM), unless it started another job meanwhile.
+  3. Whatever survives, classified afresh: SIGTERM (SIGHUP again for a pane shell), a wait,
+     then SIGKILL.
+
+  Every signal but a session's first SIGTERM is guarded. `done` freezes the target's process
+  tree (SIGSTOP, parents first, rescanning until no new process appears), checks that nothing in
+  it holds a file open in the git dir (a killed git leaves lock files), sends the signal, then
+  continues everything it froze, children first. Frozen, nothing in the tree can open a file or
+  start a process between the check and the signal. A held signal is named in the refusal, and a
+  process held at step 3's SIGTERM is never SIGKILLed. A session's first SIGTERM goes unfrozen:
+  Claude Code handles it as when its tab closes, running its SessionEnd hooks and ending its own
+  children.
 
   A `lane open` tab closes by itself once its claude exits. The lanes lock is never held while
-  `done` waits, because every lane's hooks take it with a 2 s timeout; the archive is built from
-  `lane.json` re-read afterwards, so it keeps the `endedAt` SessionEnd stamped. Anything that
-  survives, or that starts meanwhile, refuses the close and leaves the lane `closing` (rerun
-  `done`); its `open-sessions` entries are swept either way. Last, `done` takes setup.sh's
-  `install.lock` (before the lanes lock), checks the install once more and removes the worktree,
-  so no install relinks into the lane in between.
+  `done` waits, because every lane's hooks take it with a 2 s timeout, and `done` gives up on it
+  after 30 s wherever it takes it, so a stuck sandboxed `lane claim` can't hang the close.
+  Anything that survives, or that starts meanwhile, refuses the close and leaves the lane
+  `closing` (rerun `done`); its `open-sessions` entries are swept either way. Last, under
+  setup.sh's `install.lock` (waited for up to 30 s), `done` builds the archive under a temporary
+  name from `lane.json` re-read under the lanes lock (so it keeps the `endedAt` SessionEnd
+  stamped), checks the install once more and removes the worktree with the lanes lock released
+  (`git worktree remove` can outlast the hooks' 2 s), then re-reads the record under it and
+  moves the archive into place. No install relinks into the lane in between, and a failure
+  leaves no partial archive.
 
   Nothing is chosen by name, start time or tmux window. A window id means something only on its
   own tmux server, and `kill-window` sends SIGHUP to everything on the pane's terminal (Hayden's
@@ -394,13 +410,15 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
     inside the main checkout (an agent's), never holds. A lane registered in the main
     checkout's own `.git/worktrees/` is released by that main's run whatever its `.git` file
     names, and only a real main checkout releases: a lane's sandbox can rewrite its `.git` file.
+    So is any dotclaude checkout under the lanes root (the lanes config's, which sandboxed Bash
+    can't write), so a lane that deletes its own `.git/worktrees/` entry too can't hold main off.
     The accepted cost: an entry planted there naming another clone's lane releases that lane's
     hold too, which equals an install from this main and prunes nothing outside a dotclaude
     checkout. Every file these checks read goes through one bounded, non-blocking reader, so a
     FIFO or a huge file planted in a lane can't hang `setup.sh`.
   - **Prune:** after linking, `setup.sh` removes managed links that point into another lane of
-    this repo (or into a dotclaude checkout the main checkout's `.git/worktrees/` registers,
-    whatever its `.git` file says), and dangling ones into its own checkout, the lanes root or `.claude/worktrees/`
+    this repo (or into a dotclaude checkout the main checkout's `.git/worktrees/` registers or
+    the lanes root holds, whatever its `.git` file says), and dangling ones into its own checkout, the lanes root or `.claude/worktrees/`
     (a closed lane, a removed hook, a removed agent worktree). setup-tmux.sh's `tmux/*` links
     and plugin files are never touched.
   - **One run at a time:** `setup.sh` takes a flock on `install.lock` in the state dir for its

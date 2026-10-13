@@ -75,14 +75,18 @@ an unregistered worktree: `lane whoami` tells you which.
    - its Claude sessions get SIGTERM (a `lane open` tab closes with its claude);
    - what runs under them ends with them;
    - a restored tab's shell gets SIGHUP;
-   - leftovers started with a lane session's id get SIGTERM.
+   - leftovers started with a lane session's id get SIGTERM;
+   - survivors get SIGTERM, then SIGKILL.
 
-   The proof comes from /proc and Claude Code's own session files and transcripts, never from
+   Every signal but a session's first is sent with its target's process tree frozen, and held
+   (named in the refusal) while anything in that tree has a file open in the git dir. The proof
+   comes from /proc and Claude Code's own session files and transcripts, never from
    `lane.json`. Before any signal, it refuses, by name:
    - anything else with its cwd in the lane;
    - a background session (`claude stop <jobId>` ends it);
    - a dirty or locked worktree;
-   - a run from anywhere but the main checkout (only the lead closes lanes);
+   - a run from anywhere but the main checkout, or under a lane's session (only the lead
+     closes lanes);
    - links the install still points into the lane;
    - a failing `handoff-check --closing`.
 
