@@ -727,6 +727,38 @@ scale with the window:
 - Rejected: putting the reply in the resume prompt. That feeds the old session's beliefs back
   into the fresh context, which is what a clear avoids.
 
+**The popup and banner, rendered, with Hayden's prompts** (Hayden, 2026-10-12, part 3).
+- The problem: both showed raw markdown (`**`, backticks, `#`) and `less` broke lines mid-word.
+  Hayden also wants his own side of each turn, not only the replies.
+- **Renderer: stdlib** (Hayden picked it over `rich` after seeing both live: no dependency, so a
+  new device works unchanged). One module, `hooks/md_render.py`, imported by `tmux/pass-last`
+  and `hooks/pass_banner.py` through their real paths (no new link). It handles what Claude
+  writes: `**bold**`, `*italic*`, code spans, links, `#` headings, `-`/`*`/`1.` lists with a
+  hanging indent, fenced code (a dim bar, not wrapped), and pipe tables drawn with box lines
+  when they fit the width (else the raw rows, dim). It word-wraps by terminal cells (wide
+  characters count 2). Control characters are dropped before any escape is added. With no
+  color (not a tty), the markup is stripped and nothing else changes.
+- **Popup:** a cyan rule with the time per turn, and a bold yellow heavy rule for the last turn.
+  `less -R` shows the colors, and the width comes from the popup's tty. Under each rule, the
+  turn's prompt: `▌ You:` in green, then the prompt indented under the bar. A turn with no typed
+  prompt (a task notice or an agent message started it) says `▌ (no prompt: a background
+  notice)`, dim.
+- **Banner (spike A9):** a SessionStart `systemMessage` keeps ANSI color. Claude Code draws it
+  in gray (`38;5;246`), and a full reset (`0m`) drops that gray for the rest of the line, so the
+  banner closes each style with its own reset (`22m`, `23m`, `24m`, `39m`). It starts "Last turn
+  (HH:MM)", then `You:` with the prompt's first line (about 100 characters, `…` past that),
+  then the replies, rendered to the pane's width less Claude Code's 5-column indent. The 40
+  lines and 4 KiB caps still hold, and they count the escapes too.
+- **Where prompts come from:** `pass-respawn` reads them at the pass from the transcript it
+  already has (`transcript_path`): each main-chain user entry whose `origin.kind` is "human"
+  (its `typed_prompt`), matched to the replies' turns by `promptId`. They go into
+  `pass-last/<pane>.json` as `prompts: [{prompt_id, text, time}]`. Only the last WIDE (8 MiB)
+  of the transcript is read. A typed slash command shows as typed (`/pass compact`), not as its
+  `<command-message>` block, and an image shows as `[image]`. Each prompt is cut to 1 KiB or 12
+  lines, whichever comes first, ending "… (N more lines)". With no transcript the file has no
+  `prompts`, and every turn says no prompt. Rejected: a UserPromptSubmit hook recording each
+  prompt, which costs a write per prompt for a popup.
+
 **A refused pass, and leftover monitors** (found live 2026-10-12; Hayden's calls, part 2c).
 - What happened: a capella-studio `/pass` was refused (`pass.log`: `outcome=busy busy: waits:
   monitor, monitor, monitor`). Three Monitor tasks were still listed at its Stop, and
