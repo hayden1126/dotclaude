@@ -792,6 +792,11 @@ scale with the window:
   becomes `tasks:`.
 - The watcher (part 2a) uses `pass-respawn`'s rule, so with tasks in flight its tiers say
   compact mode, never a plain pass that the gate would refuse.
+- **Later (lane pass-busy, 2026-10-13):** an `artifact watch` (the live watch the Artifact tool
+  arms on each publish, which `/tasks` lists under System tasks but whose id the model never
+  sees) joins `dream` as ignored, after it blocked every plain pass in capella-studio. The refusal and the nudge name each task with its
+  id, step 2 reads `pass-respawn --tasks` instead of `ps` and runs in both modes. Behavior:
+  `skills/pass/SKILL.md`.
 
 **Spikes first** (a scratch tmux window, driven from outside, with a `--settings` probe hook):
 

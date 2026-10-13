@@ -12,12 +12,15 @@ import importlib.util
 import io
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
 import tempfile
 import time
+import types
 import unittest
+from importlib.machinery import SourceFileLoader
 from unittest import mock
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -185,17 +188,20 @@ class Base(unittest.TestCase):
         return os.path.exists(os.path.join(self.state, "dotclaude", "ctx", SID + ".json"))
 
 
-def text(key, n, c="567k"):
-    return cw.TEXTS[key].format(n=n, c=c)
+def text(key, n, c="567k", tasks=None):
+    """A tier's text; with tasks (as the nudge names them), the note naming them: to the model,
+    or to Hayden for an off-mode systemMessage."""
+    note = "" if tasks is None else (cw.TASKS_SEEN if key.startswith("off") else cw.TASKS_NOTE)
+    return cw.TEXTS[key].format(n=n, c=c) + note.format(tasks=tasks)
 
 
-def block(key, n):
-    return {"decision": "block", "reason": text(key, n)}
+def block(key, n, tasks=None):
+    return {"decision": "block", "reason": text(key, n, tasks=tasks)}
 
 
-def context(key, n):
+def context(key, n, tasks=None):
     return {"hookSpecificOutput": {"hookEventName": "PostToolUse",
-                                   "additionalContext": text(key, n)}}
+                                   "additionalContext": text(key, n, tasks=tasks)}}
 
 
 class Tiers(Base):
@@ -269,7 +275,7 @@ class Off(Base):
 
     def test_off_with_background_tasks_says_pass_compact(self):
         self.assertEqual(self.stop(521_000, background_tasks=[{"type": "monitor"}]),
-                         {"systemMessage": text("off_compact", "521k")})
+                         {"systemMessage": text("off_compact", "521k", tasks="monitor")})
 
     def test_pass_toml_follows_xdg_config_home(self):
         # A live test gives one session its own pass.toml without moving every other session's.
@@ -299,15 +305,18 @@ class Background(Base):
     def test_busy_on_stop_gives_the_hard_tiers_busy_variant(self):
         self.on()
         self.assertEqual(self.stop(525_000, background_tasks=[{"type": "workflow"}]),
-                         block("hard_busy", "525k"))
+                         block("hard_busy", "525k", "workflow"))
         self.assertIsNone(self.stop(526_000))
 
     def test_monitor_only_tasks_say_compact_mode_at_every_tier(self):
         self.on()
         mon = [{"type": "monitor"}, {"type": "dream"}]
-        self.assertEqual(self.stop(310_000, background_tasks=mon), block("soft_compact", "310k"))
-        self.assertEqual(self.stop(481_000, background_tasks=mon), block("wrap_compact", "481k"))
-        self.assertEqual(self.stop(521_000, background_tasks=mon), block("hard_compact", "521k"))
+        self.assertEqual(self.stop(310_000, background_tasks=mon),
+                         block("soft_compact", "310k", "monitor"))
+        self.assertEqual(self.stop(481_000, background_tasks=mon),
+                         block("wrap_compact", "481k", "monitor"))
+        self.assertEqual(self.stop(521_000, background_tasks=mon),
+                         block("hard_compact", "521k", "monitor"))
 
     def test_a_monitor_the_payload_calls_a_shell_still_lets_soft_speak(self):
         # Spike A10: the payload labels a Monitor `shell`. The transcript shows the Monitor
@@ -320,7 +329,8 @@ class Background(Base):
         self.on()
         self.write_transcript(310_000, before=started)
         mon = [{"id": "m1", "type": "shell", "status": "running"}]
-        self.assertEqual(self.stop(background_tasks=mon), block("soft_compact", "310k"))
+        self.assertEqual(self.stop(background_tasks=mon), block("soft_compact", "310k",
+                                                                "monitor (m1)"))
         # A background Bash shell is still busy: soft stays quiet.
         self.write_transcript(320_000, before=started)
         sh = [{"id": "b1", "type": "shell", "status": "running"}]
@@ -329,27 +339,92 @@ class Background(Base):
     def test_teammates_and_unlabeled_tasks_block_a_plain_pass_too(self):
         self.on()
         self.assertEqual(self.stop(310_000, background_tasks=[{"id": "x"}]),
-                         block("soft_compact", "310k"))
+                         block("soft_compact", "310k", "unlabeled task (x)"))
         self.assertEqual(self.stop(481_000, background_tasks=[{"type": "teammate"}]),
-                         block("wrap_compact", "481k"))
+                         block("wrap_compact", "481k", "teammate"))
 
     def test_dream_alone_is_no_background_work(self):
         self.on()
         self.assertEqual(self.stop(310_000, background_tasks=[{"type": "dream"}]),
                          block("soft", "310k"))
 
+    def test_the_nudge_names_each_task_and_its_id(self):
+        # Before the handoff the session stops what is done (pass skill step 2); the nudge
+        # hands it each id, which a compaction may have taken. An artifact watch isn't named.
+        self.on()
+        tasks = [{"id": "b0fzd27l4", "type": "monitor", "status": "running",
+                  "description": "deploy events"},
+                 {"id": "b2", "type": "shell", "status": "running", "description": "npm run dev",
+                  "command": "npm run dev -- --port 5222"},
+                 {"id": "s1", "type": "monitor", "status": "running",
+                  "description": "live updates for artifact https://claude.ai/artifact/x (c)"}]
+        self.assertEqual(self.stop(525_000, background_tasks=tasks),
+                         block("hard_busy", "525k", 'monitor "deploy events" (b0fzd27l4), '
+                                                    'shell "npm run dev" (b2)'))
+        # A tool call reads the same names from the stop record.
+        self.stop_record(["shell"], [{"label": "shell", "id": "b2", "description": "npm run dev"}])
+        self.assertEqual(self.tool(546_000),
+                         context("hard_busy", "546k", 'shell "npm run dev" (b2)'))
+        self.assertIn("TaskStop", cw.TASKS_NOTE)
+        self.assertIn("ask Hayden", cw.TASKS_NOTE)
+
+    def test_unreadable_waits_in_the_record_are_unknown_work(self):
+        # Review round 1: waits that aren't a list made a tool call read the record as clear,
+        # where pass-respawn refuses it.
+        self.on()
+        self.stop_record("shell", [])
+        self.assertEqual(self.tool(485_000), context("wrap_unknown", "485k"))
+
+    def test_without_lanelib_every_task_blocks(self):
+        # The rule lives in lanelib; without it (a broken install, where pass-respawn can't
+        # run either) no task can be shown safe, so the nudge says compact mode.
+        self.write_transcript(310_000)
+        watch = [{"id": "s1", "type": "monitor", "status": "running",
+                  "description": "live updates for artifact https://claude.ai/artifact/x (c)"}]
+        payload = {"session_id": SID, "hook_event_name": "Stop",
+                   "transcript_path": self.transcript, "cwd": self.cwd,
+                   "background_tasks": watch}
+        with mock.patch.object(aps, "lanelib", return_value=None), \
+                mock.patch.object(aps, "decide", return_value=(True, "pass.toml")):
+            self.assertEqual(cw.handle(payload), block("soft_compact", "310k", "artifact watch"))
+
+    def test_a_description_with_braces_reaches_the_nudge_as_text(self):
+        # The names fill TASKS_NOTE as a value; a brace in one is never a format field.
+        self.on()
+        tasks = [{"id": "m1", "type": "monitor", "description": "watch {tasks} {0} {n}"}]
+        self.assertIn('Running: monitor "watch {tasks} {0} {n}" (m1).',
+                      self.stop(310_000, background_tasks=tasks)["reason"])
+
+    def test_the_nudge_names_at_most_ten_tasks(self):
+        self.on()
+        tasks = [{"id": f"m{i}", "type": "monitor", "description": f"watch {i}"}
+                 for i in range(12)]
+        names = ", ".join(f'monitor "watch {i}" (m{i})' for i in range(cw.NUDGE_SHOWN))
+        self.assertEqual(self.stop(310_000, background_tasks=tasks),
+                         block("soft_compact", "310k", names + ", +2 more"))
+
+    def test_an_artifact_watch_alone_is_no_background_work(self):
+        # The Artifact tool's live watch: a plain pass ends it, so no compact advice for it.
+        self.on()
+        watch = [{"id": "s1", "type": "monitor", "status": "running",
+                  "description": "live updates for artifact https://claude.ai/artifact/x (c)"}]
+        self.assertEqual(self.stop(310_000, background_tasks=watch), block("soft", "310k"))
+        self.stop_record([], [{"label": "artifact watch", "id": "s1",
+                               "url": "https://claude.ai/artifact/x"}])
+        self.assertEqual(self.tool(485_000), context("wrap", "485k"))
+
     def test_a_tool_call_reads_the_fresh_stop_record(self):
         self.on()
         self.stop_record(["subagent"], ["subagent"])
         self.assertIsNone(self.tool(485_000))                           # busy: wrap quiet
-        self.assertEqual(self.tool(525_000), context("hard_busy", "525k"))
+        self.assertEqual(self.tool(525_000), context("hard_busy", "525k", "subagent"))
         self.stop_record([], ["monitor"])
-        self.assertEqual(self.tool(546_000), context("hard_compact", "546k"))
+        self.assertEqual(self.tool(546_000), context("hard_compact", "546k", "monitor"))
 
     def test_a_tool_call_reads_monitor_only_tasks_as_compact_at_wrap(self):
         self.on()
         self.stop_record([], ["monitor"])
-        self.assertEqual(self.tool(485_000), context("wrap_compact", "485k"))
+        self.assertEqual(self.tool(485_000), context("wrap_compact", "485k", "monitor"))
 
     def test_a_stale_stop_record_is_unknown_work_and_says_compact(self):
         self.on()
@@ -375,9 +450,12 @@ class Background(Base):
     def test_the_plain_pass_rule_is_pass_respawns(self):
         # One definition: lanelib.plain_pass_blockers, which pass-respawn's stop_problem uses.
         lib = aps.lanelib()
-        self.assertEqual(lib.plain_pass_blockers(["dream", "monitor", "unlabeled"]),
-                         ["monitor", "unlabeled"])
-        self.assertEqual(lib.plain_pass_blockers(None), ["?"])
+        # A bare `artifact watch` label has no page: only stop_ring's match writes one.
+        self.assertEqual(lib.plain_pass_blockers(["dream", "monitor", "unlabeled",
+                                                  "artifact watch"]),
+                         [{"label": "monitor"}, {"label": "unlabeled"},
+                          {"label": "artifact watch"}])
+        self.assertEqual(lib.plain_pass_blockers(None), [{"label": "?"}])
         with open(os.path.join(REPO, "skills", "pass", "scripts", "pass-respawn")) as f:
             self.assertIn("lanelib.plain_pass_blockers(tasks)", f.read())
 
@@ -920,12 +998,94 @@ class Locks(Base):
         self.assertEqual(held, [True])
 
 
+class PassRuleParity(Base):
+    """One stop record through every reader: pass-respawn's waiter (stop_problem), its --tasks,
+    and the nudge's recorded_work. None may read a record dated after the call as clearer than
+    the waiter does (review round 2: a wait labeled `dream` read as clear in two of them).
+    --tasks has no call to date against, so a record from before it is out of scope here."""
+
+    def test_every_reader_agrees_whether_a_plain_pass_is_clear(self):
+        loader = SourceFileLoader("pass_respawn", os.path.join(REPO, "skills", "pass",
+                                                                "scripts", "pass-respawn"))
+        pr = importlib.util.module_from_spec(importlib.util.spec_from_loader("pass_respawn",
+                                                                              loader))
+        loader.exec_module(pr)
+        # Called a minute before each record, as in a real pass.
+        plan = types.SimpleNamespace(session_id=SID, called=time.time() - 60)
+        watch = {"label": "artifact watch", "id": "s1", "url": "https://claude.ai/artifact/x"}
+        cases = [({"waits": [], "tasks": []}, True),
+                 ({"waits": [], "tasks": [watch, {"label": "dream"}, "dream"]}, True),
+                 ({"waits": [], "tasks": [{"label": "monitor", "id": "m1"}]}, False),
+                 ({"waits": [], "tasks": [None, 3]}, False),
+                 ({"waits": ["shell"], "tasks": [{"label": "shell", "id": "b1"}]}, False),
+                 ({"waits": ["shell"], "tasks": []}, False),
+                 ({"waits": ["dream"], "tasks": []}, False),
+                 ({"waits": ["artifact watch"], "tasks": [watch]}, False),
+                 ({"waits": [1], "tasks": []}, False),
+                 ({"waits": "shell", "tasks": []}, False),
+                 ({"tasks": []}, False),
+                 ({"waits": [], "tasks": "monitor"}, False),
+                 ({"waits": []}, False),
+                 # Review round 3: an artifact watch counts only with its page, and a time
+                 # that isn't a finite number can't date the record after the call.
+                 ({"waits": [], "tasks": [{"label": "artifact watch", "id": "s1"}]}, False),
+                 ({"waits": [], "tasks": ["artifact watch"]}, False),
+                 ({"time": float("nan"), "waits": [], "tasks": []}, False),
+                 ({"time": float("inf"), "waits": [], "tasks": []}, False),
+                 ({"time": float("-inf"), "waits": [], "tasks": []}, False),
+                 ({"time": 10 ** 400, "waits": [], "tasks": []}, False),  # past a float
+                 ({"time": "now", "waits": [], "tasks": []}, False),
+                 ({"time": True, "waits": [], "tasks": []}, False)]  # review round 6
+        path = os.path.join(self.state, "dotclaude", "stops", SID + ".json")
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        for body, clear in cases:
+            with self.subTest(body=body):
+                rec = {"session_id": SID, "time": time.time(), **body}
+                with open(path, "w") as f:
+                    json.dump(rec, f)
+                self.assertEqual(pr.stop_problem(plan, rec) is None, clear)
+                self.assertEqual(cw.recorded_work(SID)[0] is None, clear)
+                out = io.StringIO()
+                with mock.patch.dict(os.environ, {"CLAUDE_CODE_SESSION_ID": SID}), \
+                        contextlib.redirect_stdout(out):
+                    self.assertEqual(pr.main(["--tasks", "-C", self.cwd]), 0)
+                blocks = re.search(r"blocks a plain pass|can't be read|no task list",
+                                   out.getvalue())
+                self.assertEqual(blocks is None, clear, out.getvalue())
+
+    def test_a_record_too_deep_for_json_reads_as_unknown(self):
+        # Review round 7: json raises RecursionError, not ValueError, on deep nesting.
+        path = os.path.join(self.state, "dotclaude", "stops", SID + ".json")
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as f:
+            f.write("[" * 100000)
+        self.assertIsNone(aps.load_json(path))
+        self.assertEqual(cw.recorded_work(SID), ("unknown", []))
+
+
 class PlainPassRule(unittest.TestCase):
-    def test_non_strings_block_like_the_old_rule_and_never_raise(self):
+    def test_odd_entries_block_as_unlabeled_and_never_raise(self):
         lib = aps.lanelib()
-        self.assertEqual(lib.plain_pass_blockers([{"a": 1}, ["x"], "dream", None, 3, "monitor"]),
-                         ["{'a': 1}", "['x']", "None", "3", "monitor"])
+        self.assertEqual(lib.plain_pass_blockers([{"a": 1}, ["x"], "dream", None, 3, "monitor",
+                                                  {"label": ""}, {"label": 5}, ""]),
+                         [{"label": "unlabeled"}] * 4 + [{"label": "monitor"}]
+                         + [{"label": "unlabeled"}] * 3)
         self.assertEqual(lib.plain_pass_blockers(["dream", "dream"]), [])
+
+    def test_record_entries_keep_their_names_and_an_artifact_watch_never_blocks(self):
+        # stop-ring.sh's record keeps each task as {label, id, description, url}; a plain
+        # pass ignores memory upkeep and the Artifact tool's live watch (incident e7cc7b9a).
+        lib = aps.lanelib()
+        watch = {"label": "artifact watch", "id": "s1", "url": "https://claude.ai/artifact/x"}
+        mon = {"label": "monitor", "id": "m1", "description": "deploy events"}
+        self.assertEqual(lib.plain_pass_blockers([watch, mon, {"label": "dream", "id": "d1"}]),
+                         [mon])
+        self.assertEqual(lib.plain_pass_blockers([watch]), [])
+        # Only string fields survive: a record is data, and its text reaches tmux and the log.
+        self.assertEqual(lib.task_entries([{"label": "shell", "id": 3, "description": ["x"],
+                                            "url": "u", "extra": "e"}]),
+                         [{"label": "shell", "url": "u"}])
+        self.assertIsNone(lib.task_entries("monitor"))
 
 
 def typed_command(name, args="", as_list=False):

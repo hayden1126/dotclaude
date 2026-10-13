@@ -106,6 +106,8 @@ CANARY_STRINGS = [
                 "<command-message>", "<local-command", "<agent-message", "[Subagent hand-back]",
                 "<cross-session-message", "<teammate-message")],
     ("isMeta", "session-summary injected(): a skill body or agent message in the transcript"),
+    ("live updates for artifact", "stop_ring.artifact_url: the Artifact tool's live watch, which "
+     "a plain /pass ignores (renamed, it blocks every plain pass again)"),
 ]
 
 
