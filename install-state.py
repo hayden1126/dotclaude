@@ -3,18 +3,20 @@
 
 A lane installs from its own worktree to test a change, and the next install from anywhere else
 would replace those links mid-test. So the links themselves are the hold, with no state file: a
-checkout holds the install while managed links point into it and it is a live linked worktree.
-Managed means a symlink in a dir setup.sh links into (managed_dirs) whose path inside its
-checkout matches one of setup.sh's link sources (SOURCES). setup-tmux.sh's tmux/* links and
-plugin-installed files are never managed.
+checkout holds the install while managed links point into it and it is a live lane, meaning a
+linked worktree of this repo (it shares REPO_DIR's git common dir) or of another dotclaude
+clone (its root holds install-state.py and setup.sh). Managed means a symlink in a dir setup.sh
+links into (managed_dirs) whose path inside its checkout matches one of setup.sh's link sources
+(SOURCES). setup-tmux.sh's tmux/* links, plugin-installed files and other projects' worktrees
+are never touched, however their links look (another project's bin/x matches bin/*).
 
 Usage:
-  install-state.py hold REPO_DIR   exit 3, naming the holder on stderr, when a live lane worktree
-                                   other than REPO_DIR holds the install and REPO_DIR is not that
-                                   worktree's main checkout. A run from the main checkout relinks
+  install-state.py hold REPO_DIR   exit 3, naming the holder on stderr, when a live lane other
+                                   than REPO_DIR holds the install and REPO_DIR is not that
+                                   lane's main checkout. A run from the main checkout relinks
                                    everything, so it proceeds and says it releases the hold.
-  install-state.py prune REPO_DIR  remove the managed links into another live worktree, and the
-                                   dangling ones under REPO_DIR or this repo's lanes root.
+  install-state.py prune REPO_DIR  remove the managed links into another live lane of this repo,
+                                   and the dangling ones under REPO_DIR or its lanes root.
   install-state.py plugins         print one line when a mod or plugin changed since the last
                                    install: sessions started before it need /pass to load it.
 
@@ -41,6 +43,7 @@ SOURCES = ("CLAUDE.md", "notify-toast.ps1", "hooks/*.sh", "hooks/*.py", "skills/
            "skills/*/scripts/*", "agents/*.md", "templates/*.md", "bin/*", "statusline/*.py",
            "codex/AGENTS.md")
 TMUX_START, TMUX_END = "# >>> dotclaude tmux (setup-tmux.sh) >>>", "# <<< dotclaude tmux <<<"
+DOTCLAUDE = ("install-state.py", "setup.sh")  # a checkout holding both is a dotclaude checkout
 MOD_SKIP = ("tests", "__pycache__")  # a mod's tests and bytecode don't change what a session loads
 CHANGED = "sessions started before this install need /pass to load them"
 
@@ -194,15 +197,26 @@ def branch(wt: Worktree) -> str:
     return head[len(ref):] if head.startswith(ref) else f"detached at {head[:12]}"
 
 
+def lane_of(wt: Worktree, common: str | None) -> bool:
+    """wt is a lane of the repo whose git common dir is common."""
+    return common is not None and common_dir(wt.root) == common
+
+
 def holders(repo_dir: str, env=None) -> list[dict]:
-    """Each live linked worktree other than repo_dir that managed links point into, by root:
-    {"root", "main", "branch", "links"}, links as `~/.claude/hooks/x.sh -> <target>`."""
+    """Each live lane other than repo_dir that managed links point into, by root: {"root",
+    "main", "branch", "links"}, links as `~/.claude/hooks/x.sh -> <target>`. A lane is a linked
+    worktree of this repo, or a dotclaude checkout's (both DOTCLAUDE files at its root), so a
+    plain clone elsewhere is still refused while the real repo's lane holds. Another project's
+    worktree never holds."""
     p = places(env)
     me = os.path.realpath(repo_dir)
+    mine = common_dir(me)
     found = {}
     for link in links(p):
         wt = worktree_at(link.target)
-        if wt and wt.root != me and managed(os.path.relpath(link.target, wt.root)):
+        if (wt and wt.root != me and managed(os.path.relpath(link.target, wt.root))
+                and (lane_of(wt, mine)
+                     or all(os.path.isfile(os.path.join(wt.root, f)) for f in DOTCLAUDE))):
             found.setdefault(wt, []).append(show(link, p))
     return [{"root": wt.root, "main": wt.main, "branch": branch(wt), "links": shown}
             for wt, shown in sorted(found.items())]
@@ -286,10 +300,9 @@ def config_root(text: str) -> str | None:
     return root if isinstance(root, str) else None
 
 
-def lanes_root(repo_dir: str, p: Places) -> str | None:
-    """This repo's lanes root, from the config `lane init` wrote (lanelib.Repo.config_path); None
-    without one."""
-    common = common_dir(repo_dir)
+def lanes_root(common: str | None, p: Places) -> str | None:
+    """The lanes root of the repo whose git common dir is common, from the config `lane init`
+    wrote (lanelib.Repo.config_path); None without one."""
     if common is None:
         return None
     key = hashlib.sha256(common.encode()).hexdigest()[:12]
@@ -302,11 +315,16 @@ def lanes_root(repo_dir: str, p: Places) -> str | None:
     return os.path.realpath(root) if root and os.path.isabs(root) else None
 
 
-def stale(link: Link, me: str, lanes: str | None) -> bool:
-    """A managed link this run should remove: into a live linked worktree other than me, or
-    dangling under me or under the lanes root."""
+def stale(link: Link,
+    me: str,
+    mine: str | None,
+    lanes: str | None,
+) -> bool:
+    """A managed link this run should remove: into a live lane of this repo (a linked worktree
+    sharing mine, me's common dir) other than me, or dangling under me or the lanes root. A
+    link into another repo's worktree is never stale here, dotclaude-shaped or not."""
     wt = worktree_at(link.target)
-    if wt and wt.root != me:
+    if wt and wt.root != me and lane_of(wt, mine):
         rel = os.path.relpath(link.target, wt.root)
     elif os.path.exists(link.path):
         return False
@@ -323,14 +341,16 @@ def stale(link: Link, me: str, lanes: str | None) -> bool:
 
 
 def prune(repo_dir: str, env=None) -> list[str]:
-    """Remove the stale managed links; one line per removal. Regular files, links outside the
-    managed dirs and links matching no source are never touched."""
+    """Remove the stale managed links (stale: into another live lane of this repo, or dangling
+    under repo_dir or its lanes root); one line per removal. Regular files, links outside the
+    managed dirs, links matching no source and links into other repos are never touched."""
     p = places(env)
     me = os.path.realpath(repo_dir)
-    lanes = lanes_root(me, p)
+    mine = common_dir(me)
+    lanes = lanes_root(mine, p)
     out = []
     for link in links(p):
-        if not stale(link, me, lanes) or not os.path.islink(link.path):
+        if not stale(link, me, mine, lanes) or not os.path.islink(link.path):
             continue
         try:
             os.unlink(link.path)

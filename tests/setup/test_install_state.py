@@ -31,11 +31,11 @@ def load(path):
 
 install_state = load(INSTALL_STATE)
 
-# The fake repo's files: one per setup.sh source kind, a README nothing links, and tmux/ files
-# only setup-tmux.sh links.
+# The fake dotclaude's files: one per setup.sh source kind, a README nothing links, tmux/ files
+# only setup-tmux.sh links, and the two files that mark a dotclaude checkout.
 FILES = ("CLAUDE.md", "README.md", "hooks/a.sh", "hooks/b.py", "skills/s1/SKILL.md",
          "skills/s1/scripts/tool", "agents/x.md", "templates/T.md", "bin/tool2", "statusline/w.py",
-         "codex/AGENTS.md", "tmux/claude.conf", "tmux/pass-last")
+         "codex/AGENTS.md", "tmux/claude.conf", "tmux/pass-last", "install-state.py", "setup.sh")
 
 
 def write(path, text=""):
@@ -80,6 +80,17 @@ class Machine(unittest.TestCase):
     def git(self, *args, cwd=None):
         return subprocess.run(["git", *args], cwd=cwd or self.main, env=self.env, check=True,
                               capture_output=True, text=True).stdout
+
+    def other_repo(self, name, files):
+        """A separate repo holding files, and its linked worktree <name>-wt, which it returns."""
+        repo, wt = os.path.join(self.tmp, name), os.path.join(self.tmp, f"{name}-wt")
+        self.git("init", "-q", "-b", "main", repo, cwd=self.tmp)
+        for rel in files:
+            write(os.path.join(repo, rel), rel + "\n")
+        self.git("add", "-A", cwd=repo)
+        self.git("commit", "-qm", "files", cwd=repo)
+        self.git("worktree", "add", "-q", "-b", "wt", wt, cwd=repo)
+        return wt
 
     def link(self, target, dst):
         if os.path.lexists(dst):
@@ -142,6 +153,29 @@ class Hold(Machine):
         self.git("clone", "-q", self.main, clone, cwd=self.tmp)
         self.install(self.a)
         self.assertEqual(self.cli("hold", clone).returncode, 3)
+        # From the clone, lane a is another repo's worktree: it holds only as a dotclaude checkout.
+        os.unlink(os.path.join(self.a, "install-state.py"))
+        self.assertEqual(install_state.holders(clone, self.env), [])
+        self.assertEqual([h["root"] for h in install_state.holders(self.b, self.env)], [self.a])
+
+    def test_another_projects_worktree_neither_holds_nor_is_pruned(self):
+        # Its bin/x matches setup.sh's bin/* glob, but it is no lane of this repo.
+        wt = self.other_repo("proj2", ("bin/x", "README.md"))
+        dst = self.link(os.path.join(wt, "bin", "x"), os.path.join(self.bin, "x"))
+        for run_from in (self.main, self.b):
+            with self.subTest(run_from):
+                self.assertEqual(install_state.holders(run_from, self.env), [])
+                self.assertEqual(self.cli("hold", run_from).returncode, 0)
+                self.assertEqual(install_state.prune(run_from, self.env), [])
+                self.assertEqual(os.readlink(dst), os.path.join(wt, "bin", "x"))
+
+    def test_a_dotclaude_worktree_of_another_clone_holds_but_is_not_pruned(self):
+        wt = self.other_repo("dotclaude2", ("install-state.py", "setup.sh", "hooks/a.sh"))
+        dst = self.link(os.path.join(wt, "hooks", "a.sh"), os.path.join(self.claude, "hooks", "a.sh"))
+        self.assertEqual([h["root"] for h in install_state.holders(self.main, self.env)], [wt])
+        self.assertEqual(self.cli("hold", self.main).returncode, 3)
+        self.assertEqual(install_state.prune(self.main, self.env), [])
+        self.assertTrue(os.path.islink(dst))
 
     def test_a_removed_worktree_holds_nothing(self):
         self.install(self.a)
