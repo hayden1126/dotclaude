@@ -270,6 +270,9 @@ class PassLast(unittest.TestCase):
         with open(os.path.join(self.dir, "7.json"), "w") as f:
             f.write("{not json")
         self.assertEqual(self.show("%7"), NONE + "\n")
+        with open(os.path.join(self.dir, "7.json"), "w") as f:
+            f.write("[" * 100000)  # json raises RecursionError, not ValueError
+        self.assertEqual(self.show("%7"), NONE + "\n")
 
     def test_the_wrong_tab_shows_nothing(self):
         for field, value in (("socket", "/tmp/tmux-1000/other"), ("server_start", 1),

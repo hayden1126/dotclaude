@@ -359,7 +359,7 @@ def load_session(pid: int) -> dict | None:
     try:
         with open(os.path.join(lanelib.sessions_dir(), f"{int(pid)}.json")) as f:
             data = json.load(f)
-    except (OSError, ValueError, TypeError):
+    except (OSError, ValueError, TypeError, RecursionError):   # json recurses on nesting
         return None
     return data if isinstance(data, dict) else None
 
@@ -459,7 +459,7 @@ def typed_since(path: str | None, offset: int | None) -> bool | None:
     for line in data.split(b"\n"):
         try:
             entry = json.loads(line)
-        except ValueError:
+        except (ValueError, RecursionError):   # json recurses on nesting
             continue
         if typed_prompt(entry) or queued_prompt(entry):
             return True
@@ -674,7 +674,7 @@ def listed_paths(path: str, keys: tuple[str, ...], base: str | None) -> list[str
     try:
         with open(path) as f:
             tree = json.load(f)
-    except (OSError, ValueError):
+    except (OSError, ValueError, RecursionError):   # json recurses on nesting
         return []
     return listed(tree, keys, [base, os.path.dirname(path)] if base is not None else [])
 
@@ -724,7 +724,7 @@ def flag_settings(argv: list[str] | None, base: str) -> tuple[list[str], list[di
     files, inline = [], []
     for value in session_flags(argv)[1]:
         if value.lstrip().startswith("{"):
-            with contextlib.suppress(ValueError):
+            with contextlib.suppress(ValueError, RecursionError):   # json recurses on nesting
                 inline.append(json.loads(value))
         else:
             files.append(os.path.normpath(os.path.join(base, os.path.expanduser(value))))
@@ -1295,7 +1295,7 @@ def read_prompts(path: str | None, ids: list[str]) -> list[dict] | None:
     for line in data.split(b"\n"):
         try:
             entry = json.loads(line)
-        except ValueError:
+        except (ValueError, RecursionError):   # json recurses on nesting
             continue
         if (not isinstance(entry, dict) or entry.get("type") != "user"
                 or entry.get("isSidechain") or not isinstance(entry.get("message"), dict)):
