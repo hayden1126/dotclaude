@@ -49,19 +49,33 @@ and empty (`busy` otherwise: typing would join a draft and a respawn would disca
 ghost suggestion is not a draft). A pane tmux can't find, a missing session file,
 a dead or replaced process, or a session file naming another session or pane drops `gone` at
 once, while waiting too. Past --timeout (600 s; at most 3600) it gives up (`timeout`). Each drop
-shows one line in the pane's status line and touches nothing else. Never respawn or compact on a
-failing check: the respawn throws away the context that could fix the gap.
+is logged, then shown, and touches nothing else. A refusal of a pass Hayden expects (`stale`,
+`busy`, `timeout`, `failed`, `error`, and `partial` below) is loud: one line naming the cause,
+the tab and the fix (for `busy`, the stop record's tasks counted: "3 monitors running ...
+/pass compact keeps them") on the status line of every client attached to the pane's session,
+held until a key press (`display-message -d 0 -c <client>`), plus the Windows toast notify.sh
+sends (toast_command; best-effort). The drops Hayden caused keep the brief status-line
+message (QUIET): `cancelled`, `resumed` (he typed a prompt after the call, which SKILL.md
+offers as a way to cancel) and `gone` (his own /clear or exit). Outcomes at
+call time (`refused`, a detach `error`) and --cancel's (`too-late`, `none`) print to the
+caller, which reads them before its reply, so they show nothing in tmux. Never respawn or
+compact on a failing check: the respawn throws away the context that could fix the gap.
   plain    write the Star carry marker (tmux/claude-saved re-keys a starred chat to the new
-           session on its `startup`), then `tmux respawn-pane -k -t <pane> -c <toplevel> --
-           <abs claude> [--permission-mode plan] <prompt>`; the marker is removed again when
-           the respawn fails (`failed`) or anything after writing it raises
+           session on its `startup`) and the replies of the last 5 turns
+           (pass-last/<pane number>.json: the stop record's `replies`, Hayden's prompt for
+           each turn from the transcript's last 8 MiB, and the tab, for hooks/pass-banner.sh's
+           banner and the Ctrl-b Up popup, tmux/pass-last; with no reply text, any older one
+           for the pane goes),
+           then `tmux respawn-pane -k -t <pane> -c <toplevel> -- <abs claude>
+           [--permission-mode plan] <prompt>`; both files are removed again when the respawn
+           fails (`failed`) or anything after writing them raises
   compact  type `/compact <focus>` and Enter, wait 1 s, type the prompt and Enter (it queues
            behind the compact, spike S4); no respawn and no carry. A send-keys that fails
            stops there and logs `failed`. Before the prompt it re-checks the pane (copy mode,
-           a draft, no input box): on a problem the prompt is not typed but shown in the
-           status line for Hayden to type (`display-message -d 0`, so it stays until a key
-           press) and written whole into pass.log, and the outcome is `partial` (/compact
-           sent, not confirmed; no prompt)
+           a draft, no input box): on a problem the prompt is not typed but shown loud, as a
+           drop is (the status line until a key press, and the toast), for Hayden to type,
+           and written whole into pass.log, and the outcome is `partial` (/compact sent, not
+           confirmed; no prompt)
 The resume mode is plan mode unless the first item of the status file's Next block carries
 `(approved by Hayden YYYY-MM-DD)` dated on or after the session's start and not after today
 (lanelib.approval); then --permission-mode is left out and the user's default applies. An
@@ -125,10 +139,18 @@ the sandbox can write (docs/lanes.md S3). Every input, and why each is safe:
     shell running) lets the waiter act.
   - The transcript (~/.claude/projects/...) is Claude Code's too, also out of the sandbox's
     reach; it can only drop a pass.
-  - The stop record, the carry marker, the pending lock and pass.log live in the state dir,
-    which sandboxed Bash can't write. The session id names the stop record and the lock, so it
-    must be a plain id ([A-Za-z0-9][A-Za-z0-9._-]*).
+  - The stop record, the carry marker, the replies, the pending lock and pass.log live in
+    the state dir, which sandboxed Bash can't write. The session id names the stop record and
+    the lock, so it must be a plain id ([A-Za-z0-9][A-Za-z0-9._-]*). The replies are copied
+    as data, never run or interpolated.
   - The pane's capture (the input box) is tmux's; it can only drop a pass.
+  - The toast (toast_command, resolved at the call against the same roots): powershell.exe and
+    wslpath resolve through the sanitized PATH and are refused (no toast) when sandbox-writable,
+    like tmux; notify-toast.ps1 is the config dir's, whose target the user tier's denyWrite
+    covers (~/dotclaude/notify-toast.ps1), and is checked the same way. The message is fixed
+    text plus the stop record's task labels and tmux's window name, passed as one argument to
+    a fixed /bin/sh script, never interpolated; on the status line `#` is doubled, so tmux
+    shows it rather than expanding a format.
   - tmux's answers come from the tmux server, and /proc (the session's claude, its ancestors
     and its start time) is the kernel's.
 """
@@ -174,15 +196,31 @@ PROMPT_MARK = chr(0x276F)  # the input box's prompt mark, then a no-break space
 PROMPT_LINE = re.compile(PROMPT_MARK + "[" + chr(0xA0) + " ]")
 ESCAPE = re.compile(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)?|[()*+][0-~]|[@-_])")
 DROPS = {
-    "stale": "pass dropped: handoff is stale; run /pass again",
-    "resumed": "pass dropped: the session went on (a queued or typed prompt); run /pass again",
-    "busy": "pass dropped: background work was in flight at the stop; wait for it, or run "
-            "/pass compact",
-    "gone": "pass dropped: the pane or its claude went away; run /pass again",
-    "timeout": "pass dropped: the turn never went idle; run /pass again",
-    "failed": "pass failed: tmux could not respawn or type into the pane; see pass.log",
-    "error": "pass failed: an error in the waiter; see pass.log",
+    "stale": "pass dropped: the handoff is stale (work landed after it). Run the delta handoff, "
+             "then /pass",
+    "resumed": "pass dropped: the session went on (a typed or queued prompt). Finish that turn, "
+               "then /pass if it still applies",
+    "busy": "pass refused: background work was in flight at the stop. /pass compact keeps it, "
+            "or wait for it and /pass",
+    "gone": "pass dropped: the pane or its claude went away or changed (a /clear, an exit). "
+            "/pass again from the live session",
+    "timeout": "pass dropped: the turn never went idle before the timeout. /pass again",
+    "failed": "pass failed: tmux could not respawn or type into the pane. See pass.log, then "
+              "/pass again",
+    "error": "pass failed: an error in the waiter. See pass.log, then /pass again",
     "cancelled": "pass cancelled",
+}
+# The drops Hayden caused, which keep the brief status-line message: a cancel, a prompt he typed
+# after the call (SKILL.md documents typing one as a way to cancel), and his own /clear or exit
+# (`gone`). Every other drop is a refusal of a pass he expects, so it is loud (notify).
+QUIET = {"cancelled", "resumed", "gone"}
+# How a task label reads in a count ("3 monitors"); any other label reads as itself.
+NOUNS = {"unlabeled": "unlabeled task", "None": "unlabeled task"}
+TOAST_PS1 = "notify-toast.ps1"  # in the config dir, as hooks/notify.sh finds it
+PANE_FIXES = {  # pane_problem's causes, and what to do about each
+    "pane in copy mode": "Leave copy mode (q), then /pass",
+    "unsent draft in the input box": "Send or clear the draft, then /pass",
+    "no input box": "Close the dialog or view, then /pass",
 }
 
 
@@ -214,6 +252,7 @@ class Plan:
     transcript_size: int | None  # None: unreadable at the call
     timeout: float
     path: str = ""         # the sanitized PATH every child gets
+    toast: list[str] | None = None  # the toast's argv less its message (toast_command)
     lock_fd: int | None = None  # the pending lock the waiter holds (None: not taken)
     acting: bool = False   # past the final re-check: SIGTERM no longer cancels
     late_cancel: bool = False  # a SIGTERM came while acting, and was ignored
@@ -332,7 +371,8 @@ def session_problem(session: dict | None, sid: str, pid: int, start: int | None,
 def stop_record(sid: str) -> dict | None:
     """The session's stop record (hooks/stop-ring.sh), or None."""
     try:
-        with open(os.path.join(lanelib.state_dir(), "stops", f"{sid}.json")) as f:
+        with open(os.path.join(lanelib.state_dir(), "stops", f"{sid}.json"),
+                  encoding="utf-8") as f:
             rec = json.load(f)
     except (OSError, ValueError):
         return None
@@ -404,27 +444,51 @@ def typed_since(path: str | None, offset: int | None) -> bool | None:
     return False
 
 
-def stop_problem(plan: Plan) -> str | None:
-    """Why the session's stop record doesn't clear a respawn, or None: it must be dated after
-    the call and list no waits (stop-ring.sh's subagent, shell, workflow, cloud session) and no
-    task at all but `dream` (memory upkeep). stop-ring.sh rings past a teammate or a monitor,
-    since one lingers or runs for hours, but a respawn kills either, and any type it doesn't
-    know (unlabeled ones included), so a plain pass doesn't."""
+def counted(labels: list[str]) -> str:
+    """Labels as counts in first-seen order: monitor, monitor, shell -> "2 monitors, 1 shell"."""
+    counts: dict[str, int] = {}
+    for label in labels:
+        counts[label] = counts.get(label, 0) + 1
+    return ", ".join(f"{n} {NOUNS.get(label, label)}{'' if n == 1 else 's'}"
+                     for label, n in counts.items())
+
+
+def stop_problem(plan: Plan) -> tuple[str, str] | None:
+    """Why the session's stop record doesn't clear a respawn, as (the log's detail, the notice),
+    or None: it must be dated after the call and list no waits (stop-ring.sh's subagent, shell,
+    workflow, cloud session) and no task at all but `dream` (memory upkeep;
+    lanelib.plain_pass_blockers, which the autopass watcher shares). stop-ring.sh rings past a
+    teammate or a monitor, since one lingers or runs for hours, but a respawn kills either, and
+    any type it doesn't know (unlabeled ones included), so a plain pass doesn't. The detail says
+    `waits:` for the record's waits and `tasks:` for its task labels; the notice counts them and
+    names the fix."""
+    unsure = "so background work can't be ruled out. /pass compact is safe either way"
     rec = stop_record(plan.session_id)
     if rec is None:
-        return "no stop record"
+        return "no stop record", f"pass refused: the Stop wrote no record, {unsure}"
     when = rec.get("time")
     if not isinstance(when, (int, float)) or when <= plan.called:
-        return "no stop record since the call"
+        return ("no stop record since the call",
+                f"pass refused: the Stop wrote no record since the call, {unsure}")
     waits = rec.get("waits")
     if waits != []:
-        names = ", ".join(map(str, waits)) if isinstance(waits, list) else repr(waits)
-        return f"waits: {names}"
+        if not isinstance(waits, list):
+            return (f"waits: {waits!r}",
+                    f"pass refused: the stop record's waits can't be read, {unsure}")
+        names = [str(w) for w in waits]
+        them = "it" if len(names) == 1 else "them"
+        return ("waits: " + ", ".join(names),
+                f"pass refused: waiting on {counted(names)} (a respawn would kill {them}). "
+                f"/pass compact keeps {them}, or let {them} finish and /pass")
     tasks = rec.get("tasks")
     if not isinstance(tasks, list):
-        return "no task list in the stop record"
-    if others := [t for t in tasks if t != "dream"]:
-        return "waits: " + ", ".join(map(str, others))
+        return ("no task list in the stop record",
+                f"pass refused: the stop record lists no tasks, {unsure}")
+    if others := lanelib.plain_pass_blockers(tasks):
+        them = "it" if len(others) == 1 else "them"
+        return ("tasks: " + ", ".join(others),
+                f"pass refused: {counted(others)} running (a respawn would kill {them}). "
+                f"/pass compact keeps {them}, or stop {them} and /pass")
     return None
 
 
@@ -701,6 +765,30 @@ def resolve_bin(name: str, roots: list[str], path: str) -> str:
     return os.path.abspath(found)
 
 
+def toast_command(roots: list[str], path: str) -> list[str] | None:
+    """The Windows toast's argv less its message, as hooks/notify.sh runs it: powershell.exe
+    -ExecutionPolicy Bypass -File <notify-toast.ps1 as a Windows path> -Message. notify.sh
+    itself isn't called: it reads a Notification payload on stdin and rings and logs a
+    permission prompt, which a refused pass is not. WSL only (wslpath; tmux and pass-respawn
+    don't run under git-bash). None when anything is missing or sits where the sandbox can
+    write (the same checks as tmux's): the toast is best-effort and never refuses a pass."""
+    ps1 = os.path.join(config_dir(), TOAST_PS1)
+    if not os.path.isfile(ps1):
+        return None
+    try:
+        refuse_writable(TOAST_PS1, ps1, roots, deny_roots())
+        powershell = resolve_bin("powershell.exe", roots, path)
+        wslpath = resolve_bin("wslpath", roots, path)
+        p = subprocess.run([wslpath, "-w", ps1], capture_output=True, text=True, timeout=5,
+                           env=dict(os.environ, PATH=path))
+    except (Refuse, OSError, subprocess.SubprocessError):
+        return None
+    winpath = p.stdout.strip()
+    if p.returncode != 0 or not winpath or "\n" in winpath:
+        return None
+    return [powershell, "-ExecutionPolicy", "Bypass", "-File", winpath, "-Message"]
+
+
 def resume_prompt(status_rel: str, in_lane: bool, approved: bool, compact: bool) -> str:
     step = "continue with the approved next step" if approved else "plan the next step"
     text = (f"Read your lane record {status_rel}, then {step}." if in_lane
@@ -824,7 +912,7 @@ def prepare(args: argparse.Namespace, procs, cmdline=proc_cmdline) -> Plan:
                      "checked); it can't tell when this session's turn ends", why)
     return Plan(mode, pane, repo.toplevel, lane is not None, status_rel, tmux, claude, claude_pid,
                 proc_start(claude_pid), sid, session, called, transcript, size, args.timeout,
-                path)
+                path, toast_command(roots, path))
 
 
 # ---- the waiter ----
@@ -875,10 +963,83 @@ def pane_problem(plan: Plan) -> str | None:
     return "unsent draft in the input box" if box else None
 
 
+def pane_place(plan: Plan) -> tuple[str | None, str, str]:
+    """(the pane's session id, its window index, its window name) from tmux, or (None, "", "")
+    when tmux can't find the pane."""
+    p = tmux(plan, "display-message", "-p", "-t", plan.pane,
+             "#{session_id} #{window_index} #{window_name}")
+    parts = p.stdout.rstrip("\n").split(" ", 2) if p and p.returncode == 0 else []
+    if len(parts) < 2 or not re.fullmatch(r"\$\d+", parts[0]) or not parts[1].isdigit():
+        return None, "", ""
+    return parts[0], parts[1], (parts[2] if len(parts) > 2 else "").strip()
+
+
+def session_clients(plan: Plan, session_id: str) -> list[str]:
+    """The clients attached to the session (tmux list-clients -t), in tmux's order."""
+    p = tmux(plan, "list-clients", "-t", session_id, "-F", "#{client_name}")
+    names = p.stdout.split("\n") if p is not None and p.returncode == 0 else []
+    return [c for c in dict.fromkeys(names) if c and not any(ch.isspace() for ch in c)]
+
+
+def placed(text: str, where: str) -> str:
+    """text with `in <where>` after its first word group: "pass refused: x" -> "pass refused in
+    tab 3: x"."""
+    head, sep, tail = text.partition(": ")
+    return f"{head} in {where}: {tail}" if sep and where else text
+
+
+def toast(plan: Plan, text: str) -> None:
+    """The Windows toast (toast_command), detached as notify.sh detaches it (`( cmd & )`): a
+    fixed /bin/sh script backgrounds it and exits, the message passed as an argument, never
+    interpolated. Best-effort: no toast command, a failed start or a toast that fails changes
+    nothing."""
+    if not plan.toast:
+        return
+    with contextlib.suppress(OSError, subprocess.SubprocessError):
+        subprocess.run(["/bin/sh", "-c", '"$@" </dev/null >/dev/null 2>&1 &', "toast",
+                        *plan.toast, text], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                       stderr=subprocess.DEVNULL, cwd="/", timeout=5,
+                       env=dict(os.environ, PATH=plan.path))
+
+
+def shown_literally(text: str) -> str:
+    """text escaped for display-message, which expands its message twice: strftime first (`%%` is
+    a `%`), then tmux's formats (`##` is a `#`). Each pass undoes only its own doubling, and
+    neither creates the other's character, so the order of the two replaces doesn't matter and
+    no doubled pair can combine into a live `%H` or `#(cmd)`. -l would print it unchanged, but
+    tmux before 3.4 rejects it."""
+    return text.replace("%", "%%").replace("#", "##")
+
+
+def notify(plan: Plan, text: str) -> None:
+    """A loud notice: text, naming the tab, on the status line of every client attached to the
+    pane's session until a key press (`display-message -d 0 -c <client>`), then the Windows
+    toast. A status-line message belongs to a client, not a window, so each client of the
+    session shows it whichever window it is on; tmux's default (no -c) picks only one, which
+    may be a stale terminal. With no client attached (Hayden switched his to another session)
+    or the pane gone, it goes to tmux's own choice of client, the most recently active one.
+    The text is escaped (shown_literally), so a task label shows as itself."""
+    session_id, index, name = pane_place(plan)
+    shown = shown_literally(placed(text, f"tab {index}" if index else ""))
+    clients = session_clients(plan, session_id) if session_id else []
+    targets = (([["-c", c, "-t", plan.pane] for c in clients] or [["-t", plan.pane]])
+               if session_id else [[]])
+    for target in targets:
+        tmux(plan, "display-message", "-d", "0", *target, shown)
+    toast(plan, placed(text, f"tab {index}" + (f" ({name})" if name else "") if index else ""))
+
+
 def drop(plan: Plan, outcome: str, detail: str = "", shown: str | None = None) -> str:
+    """Log the drop, then show it: loud (notify) unless Hayden caused it (QUIET: a cancel, a
+    prompt after the call, his /clear or exit), which keeps the brief status-line message."""
     plan.settled = True
-    tmux(plan, "display-message", "-t", plan.pane, shown or DROPS[outcome])
     log(plan.mode, outcome, plan.pane, detail)
+    text = shown or DROPS[outcome]
+    if outcome in QUIET:
+        tmux(plan, "display-message", "-t", plan.pane, shown_literally(text))
+    else:
+        with contextlib.suppress(Exception):  # the outcome is logged; the notice is best-effort
+            notify(plan, text)
     return outcome
 
 
@@ -886,22 +1047,225 @@ def carry_path(pane: str) -> str:
     return os.path.join(lanelib.state_dir(), "pass-carry", pane[1:] + ".json")
 
 
-def write_carry(plan: Plan) -> str | None:
-    """The one-shot marker tmux/claude-saved reads on the respawned session's `startup`: the
-    session leaving and its tab, keyed as claude-saved's make_tab keys it. Its path, or None
-    when it was skipped because either can't be read (the star then stays on the old chat,
-    detached, as before)."""
+def pane_tab(plan: Plan) -> dict | None:
+    """The pane on its tmux server, keyed as claude-saved's make_tab keys it, or None when tmux
+    can't say."""
     p = tmux(plan, "display-message", "-p", "-t", plan.pane, "#{start_time} #{pid} #{socket_path}")
     parts = p.stdout.strip().split(" ", 2) if p and p.returncode == 0 else []
     if len(parts) != 3 or not (parts[0].isdigit() and parts[1].isdigit()):
         return None
-    tab = {"socket": parts[2], "server_start": int(parts[0]), "server_pid": int(parts[1]),
-           "pane": plan.pane}
+    return {"socket": parts[2], "server_start": int(parts[0]), "server_pid": int(parts[1]),
+            "pane": plan.pane}
+
+
+def write_carry(plan: Plan, tab: dict | None) -> str | None:
+    """The one-shot marker tmux/claude-saved reads on the respawned session's `startup`: the
+    session leaving and its tab. Its path, or None when it was skipped because either can't be
+    read (the star then stays on the old chat, detached, as before)."""
+    if tab is None:
+        return None
     path = carry_path(plan.pane)
     try:
         lanelib.write_json(path, {"session_id": plan.session_id, "tab": tab,
                                   "written_at": time.time()})
     except OSError:
+        return None
+    return path
+
+
+def last_path(pane: str) -> str:
+    return os.path.join(lanelib.state_dir(), "pass-last", pane[1:] + ".json")
+
+
+PRUNE_AGE, PRUNE_EVERY = 7 * 86400, 86400
+
+
+def replies_of(record: dict | None) -> list[dict]:
+    """The stop record's `replies` (hooks/stop_ring.py) with a non-empty text, oldest first."""
+    replies = (record or {}).get("replies")
+    return [r for r in replies if isinstance(r, dict) and isinstance(r.get("text"), str)
+            and r["text"] and isinstance(r.get("prompt_id"), str)] \
+        if isinstance(replies, list) else []
+
+
+def prune(directory: str, now: float) -> None:
+    """Delete the directory's *.json files older than PRUNE_AGE, at most once per PRUNE_EVERY
+    (the mtime of its .pruned stamp), as hooks/stop_ring.py prunes stops/. Best-effort."""
+    stamp = os.path.join(directory, ".pruned")
+    with contextlib.suppress(OSError):
+        if now - os.path.getmtime(stamp) < PRUNE_EVERY:
+            return
+    try:
+        os.makedirs(directory, exist_ok=True)
+        with open(stamp, "a"):
+            pass
+        os.utime(stamp, (now, now))
+    except OSError:
+        return
+    for path in glob.glob(os.path.join(directory, "*.json")):
+        with contextlib.suppress(OSError):
+            if now - os.path.getmtime(path) > PRUNE_AGE:
+                os.unlink(path)
+
+
+def write_utf8_json(path: str, data) -> None:
+    """Atomic write as UTF-8 (ensure_ascii off, so a long non-ASCII reply stays its own size;
+    a lone surrogate becomes '?'): a temp file in the same dir, fsynced, then renamed."""
+    d = os.path.dirname(path)
+    os.makedirs(d, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=d, prefix=".tmp-")
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(json.dumps(data, ensure_ascii=False).encode("utf-8", "replace"))
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp)
+        raise
+
+
+PROMPT_TAIL = 8 * 1024 * 1024        # bytes of the transcript read for the prompts
+PROMPT_BYTES, PROMPT_LINES = 1024, 12  # each prompt is cut at whichever comes first
+COMMAND_NAME = re.compile(r"<command-name>(.*?)</command-name>", re.S)
+COMMAND_ARGS = re.compile(r"<command-args>(.*?)</command-args>", re.S)
+ELLIPSIS = chr(0x2026)
+
+
+def prompt_text(content) -> str | None:
+    """A typed prompt's content as Hayden typed it: a slash command as `/name args` (not its
+    <command-message> block, spike A6), an image block as [image]; None with no text."""
+    if isinstance(content, str):
+        if content.lstrip().startswith("<command-message>"):
+            name, args = COMMAND_NAME.search(content), COMMAND_ARGS.search(content)
+            if name and name.group(1).strip():
+                cmd = name.group(1).strip()
+                cmd = cmd if cmd.startswith("/") else "/" + cmd
+                return f"{cmd} {args.group(1).strip()}".rstrip() if args else cmd
+        return content
+    if not isinstance(content, list):
+        return None
+    parts = []
+    for block in content:
+        if not isinstance(block, dict):
+            continue
+        if block.get("type") == "text" and isinstance(block.get("text"), str):
+            parts.append(block["text"])
+        elif block.get("type") == "image":
+            parts.append("[image]")
+    return "\n".join(parts) if parts else None
+
+
+def clip_prompt(text: str) -> str:
+    """text cut to PROMPT_BYTES of UTF-8 or PROMPT_LINES lines, whichever comes first: a line
+    cut on a character boundary ends with an ellipsis, and the lines dropped after it are
+    counted on a last line, "... (N more lines)". A lone surrogate (a paste cut mid-emoji)
+    becomes '?', as write_utf8_json writes it."""
+    text = text.encode("utf-8", "replace").decode("utf-8")
+    lines = text.strip("\n").rstrip().split("\n")
+    keep, used = [], 0
+    for line in lines[:PROMPT_LINES]:
+        sep = 1 if keep else 0
+        need = len(line.encode("utf-8")) + sep
+        if used + need > PROMPT_BYTES:
+            room = PROMPT_BYTES - used - sep
+            if room > 0:
+                keep.append(line.encode("utf-8")[:room].decode("utf-8", "ignore") + ELLIPSIS)
+            break
+        keep.append(line)
+        used += need
+    left = len(lines) - len(keep)
+    tail = f"\n{ELLIPSIS} ({left} more line{'' if left == 1 else 's'})" if left else ""
+    return "\n".join(keep) + tail
+
+
+def epoch(stamp) -> float | None:
+    """A transcript timestamp (ISO 8601, Z for UTC) as epoch seconds, or None."""
+    try:
+        return datetime.datetime.fromisoformat(stamp.replace("Z", "+00:00")).timestamp()
+    except (AttributeError, TypeError, ValueError):
+        return None
+
+
+def read_prompts(path: str | None, ids: list[str]) -> list[dict] | None:
+    """Hayden's prompt for each turn in ids, from the transcript's last PROMPT_TAIL bytes, in
+    the order of ids: {prompt_id, text, time} when the turn's first main-chain user entry that
+    isn't a tool result is a typed prompt (typed_prompt), {prompt_id, notice: true, time} when
+    it has another origin (a task notice is `task-notification`, an agent's message `peer`,
+    which is also meta). A turn whose start is past the read has neither, so the popup says the
+    prompt wasn't saved rather than guess. None when the transcript can't be read."""
+    try:
+        with open(path, "rb") as f:
+            start = max(0, f.seek(0, os.SEEK_END) - PROMPT_TAIL)
+            f.seek(start)
+            data = f.read()
+    except (OSError, TypeError, ValueError):
+        return None
+    if start:
+        data = data.partition(b"\n")[2]   # the first line is likely torn
+    wanted, found = set(ids), {}
+    for line in data.split(b"\n"):
+        try:
+            entry = json.loads(line)
+        except ValueError:
+            continue
+        if (not isinstance(entry, dict) or entry.get("type") != "user"
+                or entry.get("isSidechain") or not isinstance(entry.get("message"), dict)):
+            continue
+        pid = entry.get("promptId")
+        if not isinstance(pid, str) or pid not in wanted or pid in found:
+            continue
+        origin = entry.get("origin")
+        kind = origin.get("kind") if isinstance(origin, dict) else None
+        if not isinstance(kind, str):
+            continue   # a tool result, a skill body, an interrupt: not what started the turn
+        if kind != "human":
+            found[pid] = {"prompt_id": pid, "notice": True,
+                          "time": epoch(entry.get("timestamp"))}
+            continue
+        if not typed_prompt(entry) or entry.get("isMeta"):
+            continue
+        text = prompt_text(entry["message"].get("content"))
+        if isinstance(text, str) and text.strip():
+            found[pid] = {"prompt_id": pid, "text": clip_prompt(text),
+                          "time": epoch(entry.get("timestamp"))}
+    return [found[p] for p in dict.fromkeys(ids) if p in found]
+
+
+def write_last(plan: Plan, tab: dict | None) -> str | None:
+    """What the old session said in its last 5 turns, for the respawned session's banner
+    (hooks/pass-banner.sh, which shows the last turn and sets `shown`) and the popup
+    (tmux/pass-last, Ctrl-b Up, which shows every turn): the stop record's `replies` and
+    Hayden's prompt for each turn (read_prompts), with the tab, at pass-last/<pane number>.json
+    as {tab, from_session, written_at, replies, prompts, shown}. The transcript is
+    transcript_path()'s: the stop record's, else the session file's, else the session file's
+    cwd slug; with none readable there is no
+    `prompts` key. The prompts are cosmetic: no error reading them stops the pass. Not
+    one-shot, and apart from the carry marker, which claude-saved consumes on the same
+    SessionStart. Its path, or None when nothing was written: with no reply text or no tab,
+    any older file for the pane goes, so the popup never shows an earlier pass's replies as
+    this one's. Files older than 7 days go once a day."""
+    path = last_path(plan.pane)
+    now = time.time()
+    prune(os.path.dirname(path), now)
+    record = stop_record(plan.session_id)
+    replies = replies_of(record)
+    if tab is None or not replies:
+        remove(path)
+        return None
+    last = {"tab": tab, "from_session": plan.session_id, "written_at": now, "replies": replies}
+    try:
+        prompts = read_prompts(transcript_path(plan.session or {}, plan.session_id, record),
+                               [r["prompt_id"] for r in replies])
+    except Exception:  # cosmetic: nothing in a transcript may stop the pass
+        prompts = None
+    if prompts is not None:
+        last["prompts"] = prompts
+    try:
+        write_utf8_json(path, {**last, "shown": False})
+    except (OSError, ValueError):
+        remove(path)
         return None
     return path
 
@@ -958,27 +1322,31 @@ def wait_and_act(plan: Plan, procs) -> str:
         return drop(plan, "resumed", "a typed or queued prompt after the call")
     approved = approved_now(plan, session)
     actions = plan.actions(approved)
-    if plan.mode == "plain" and (why := stop_problem(plan)):
-        return drop(plan, "busy", f"busy: {why}")
+    if plan.mode == "plain" and (problem := stop_problem(plan)):
+        return drop(plan, "busy", f"busy: {problem[0]}", problem[1])
     state, detail, session = observe(plan, procs)
     if state == "gone":
         return drop(plan, "gone", detail)
     if state != "idle" or session["statusUpdatedAt"] != seen:
         return drop(plan, "resumed", f"status {detail} at the final re-check")
     if why := pane_problem(plan):
-        return drop(plan, "busy", f"busy: {why}", f"pass dropped: {why}; run /pass again")
+        return drop(plan, "busy", f"busy: {why}", f"pass dropped: {why}. {PANE_FIXES[why]}")
     begin_acting(plan)
     if plan.mode == "plain":
-        carry = None
+        carry = last = None
         try:
-            carry = write_carry(plan)
+            tab = pane_tab(plan)
+            carry = write_carry(plan, tab)
+            last = write_last(plan, tab)
             p = tmux(plan, *actions[0][1:])
             if p is None or p.returncode != 0:
                 remove(carry)
+                remove(last)
                 return drop(plan, "failed", late(plan, p.stderr.strip() if p
                                                  else "tmux didn't run"))
         except BaseException:
             remove(carry)
+            remove(last)
             raise
         log(plan.mode, "respawn", plan.pane,
             late(plan, "default mode" if approved else "plan mode"))
@@ -987,13 +1355,15 @@ def wait_and_act(plan: Plan, procs) -> str:
         if i == 2:
             time.sleep(COMPACT_GAP)
             if why := pane_problem(plan):  # copy mode, a draft or no box came up in the gap
-                # -d 0 keeps it on the status line until a key press (the default is about
-                # 750 ms); pass.log keeps the whole prompt, which the status line may cut.
-                tmux(plan, "display-message", "-d", "0", "-t", plan.pane,
-                     f"pass: /compact sent; type the resume prompt yourself: {argv[-1]}")
+                # notify keeps it on the status line until a key press (the default is about
+                # 750 ms) and sends the toast; pass.log keeps the whole prompt, which the status
+                # line may cut.
                 log(plan.mode, "partial", plan.pane,
                     late(plan, f"/compact sent, resume prompt not typed: {why}")
                     + f"; resume prompt: {argv[-1]}")
+                with contextlib.suppress(Exception):
+                    notify(plan, f"pass: /compact sent; type the resume prompt yourself: "
+                                 f"{argv[-1]}")
                 return "partial"
         p = tmux(plan, *argv[1:])
         if p is None or p.returncode != 0:
@@ -1031,7 +1401,8 @@ def run_waiter(plan: Plan, procs) -> str:
     except BaseException as e:  # noqa: BLE001  logged and shown, as nothing else can be
         plan.settled = True  # a SIGTERM from here on is only noted: the error still gets logged
         log(plan.mode, "error", plan.pane, f"{type(e).__name__}: {e}")
-        tmux(plan, "display-message", "-t", plan.pane, DROPS["error"])
+        with contextlib.suppress(Exception):
+            notify(plan, DROPS["error"])
         outcome = "error"
     finally:
         finish(plan, outcome)

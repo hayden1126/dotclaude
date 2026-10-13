@@ -54,7 +54,8 @@ inside", and Codex sessions wouldn't get the convention.
   pane. It resumes in plan mode unless the next step was already approved.
 - Opt-in auto-pass on context fill, on by default in lanes. The lead only nudges and never
   respawns a lane.
-- The work ships as three PRs: core, lead, /pass. Then the work repo migrates in its own repo.
+- The work ships as four PRs: core, lead, /pass, auto-pass. Then the work repo migrates in its
+  own repo.
 
 ## Invariants (the convention in five rules)
 
@@ -423,7 +424,7 @@ nothing medium or worse) and live runs shaped these:
   bash mode works too (its output starts a model turn, which is harmless).
 
 **Changes from the 2026-10-11 design** (Hayden, 2026-10-12):
-- Auto-pass (the context watcher, its config, `/pass auto`) moved to PR 4.
+- Auto-pass (the context watcher, its config, `/autopass`) moved to PR 4.
 - **Work after a handoff makes it stale.** The detached respawner re-runs `handoff-check` right
   before it acts, and drops the pass (a `tmux display-message`, a `stale` log line, no respawn)
   if the tree got dirty or a commit landed after the status file. Between the call and idle the
@@ -562,6 +563,40 @@ nothing medium or worse) and live runs shaped these:
 
 ## PR 4: auto-pass (`feat/autopass`, after PR 3)
 
+**As built (2026-10-12), where it differs from the design below.** The module docstrings
+(`hooks/context_watch.py`, `hooks/autopass_state.py`, `hooks/stop_ring.py`,
+`hooks/pass_banner.py`, `hooks/md_render.py`, `tmux/pass-last`, `pass-respawn`) and README
+"Auto-pass" are the reference. It shipped as five writer parts, each reviewed until no finding
+was medium or worse: part 1 in 3 rounds, 2a in 3, 2b in 2, 2c in 1 and 3 in 5.
+- **Tiers scale with the window.** The window is min(the model window the widget writes into
+  `ctx/<sid>.json`, `autoCompactWindow`).
+  - compact_at = window - 33k; hard = compact_at - min(47k, 8%); wrap = hard - min(40k, 7%);
+    soft = window / 2. That gives 300/480/520/567k at 600k and 100/137/151/167k at 200k.
+  - The watcher stays quiet when soft >= wrap or wrap < 60k.
+  - A tier re-arms below tier - min(50k, tier/4). The hard tier repeats every min(20k, half
+    the gap to compact_at).
+- **The hard repeat pauses during a pass:** after a pass skill call, a command that starts
+  with `pass-respawn`, or a typed `/pass` (a user entry starting with Claude Code's
+  `<command-message>` block, spike A6). It resumes 40k later if no pass comes.
+- **Work in flight has three states.** Busy (subagent, shell, workflow, cloud session) keeps
+  soft and wrap-up quiet. Blocked (any other task but `dream`, from
+  `lanelib.plain_pass_blockers`, which `pass-respawn` also uses) and unknown (a tool call with
+  no stop record in the last 10 minutes) both get compact-mode texts.
+- **Coverage:** `-p` and `--bg` sessions get a count but never a nudge. Locks are per
+  session; `decide()` runs outside them and is cached 60 s, keyed by the tab flag's
+  `generation`. The lead's main checkout is on by default, like a lane.
+- **`/autopass`** is `skills/autopass` (`disable-model-invocation`) plus a UserPromptSubmit hook
+  that blocks it. `tmux-state.sh` doesn't mark the tab busy for it.
+- **The ctx file** `ctx/<sid>.json` holds `tokens` and `time` from the watcher, and `window`
+  and `window_at` from the widget, merged under `ctx-watch/<sid>.ctx.lock`. An older count never
+  replaces a newer one.
+- **The last reply is the last turn's replies** (see below). The popup shows the last 5 turns.
+- **A refused pass is loud** (held notice plus toast) except `cancelled`, `resumed` and `gone`,
+  which Hayden caused. The pass skill stops leftover tasks before a plain pass and never
+  promises a restart.
+- **Not built:** the lead nudging an idle lane past soft (by hand for now; `lane ls` shows CTX
+  and STATE).
+
 Hayden's ask: pass at the end of a session without being told. Designed with Hayden on
 2026-10-12, from his own pattern and a calibration over his transcripts.
 
@@ -598,7 +633,9 @@ all on 1M-window models). Context at each event, in thousands of tokens:
   sit at auto-compact itself.
 - The hook writes the count to `$XDG_STATE_HOME/dotclaude/ctx/<session_id>`, for `lane ls`.
 
-**Three tiers**, all derived from `autoCompactWindow`, so they move together if it changes:
+**Three tiers**, all derived from `autoCompactWindow`, so they move together if it changes. The
+token values below are the design values at a 600k window; "As built" above has the formulas that
+scale with the window:
 
 | Tier | Tokens | Fires on | What the model is told |
 |---|---|---|---|
@@ -643,7 +680,7 @@ all on 1M-window models). Context at each event, in thousands of tokens:
 **Guards.**
 - A subagent's events are ignored.
 - The hook stays quiet while background work runs (`stop-ring.sh`'s set, so a lingering monitor
-  doesn't mute it). The one exception is the hard tier, which then suggests `pass compact`,
+  doesn't mute it; a Monitor arrives as `shell` and is relabeled, A10). The one exception is the hard tier, which then suggests `pass compact`,
   since a compact keeps background tasks alive.
 - It keeps crossings in its own record, the way `watch-guard` keeps its blocks, not through
   `stop_hook_active`.
@@ -658,10 +695,179 @@ all on 1M-window models). Context at each event, in thousands of tokens:
   handoff needs. A lane whose session died with `handoff?` set goes to Hayden's asks.
 - The lead passes itself the same way. Its state lives in the project STATUS and the board.
 
+**The last reply across a pass** (Hayden, 2026-10-12: banner and popup, in this PR).
+- The problem: a plain pass respawns the pane, so the old session's final reply leaves the screen.
+  Auto-pass makes it worse: a pass he didn't ask for wipes a reply he never read. Compact mode
+  doesn't need this, because the conversation survives a compact.
+- The source: the Stop payload's `last_assistant_message`. A plain pass acts after that Stop, so
+  the field holds exactly the reply.
+  - `stop-ring.sh` adds it to `stops/<sid>.json` in `replies` (`hooks/stop_ring.py`
+    `merge_replies`, 64 KiB per reply). It was first built as one `last_message`; review round 1
+    made it `replies` (below).
+  - `pass-respawn` (plain mode) copies them to `pass-last/<pane number>.json` (its fields:
+    `write_last`'s docstring; part 3 added `prompts`). The file is per tab and not consumed. It is kept
+    apart from the one-shot `pass-carry` marker, so two SessionStart hooks never race over one
+    file.
+- **Banner:** a SessionStart hook (`startup` only; it skips `-p` and subagents) shows the message
+  as a `systemMessage`, which Hayden sees and the model doesn't. It needs the same tab, an entry
+  under 120 s old and `shown` false, and then sets `shown`.
+- **Popup:** `pass-last` opens the tab's message in `display-popup` with `less` (rendered since
+  part 3, below). It is bound to
+  Ctrl-b Up and has entries in the Ctrl-b Enter menu and the right-click tab menu.
+- **Everything since the last prompt, not only the last reply** (review round 1; Hayden's call,
+  2026-10-12). One `last_message` per session loses the unread reply when auto-pass blocks a Stop
+  and the continued turn ends on "pass armed". Spike A5: a hook-blocked Stop and the Stop that
+  ends the continued turn share the payload's `prompt_id` (`stop_hook_active` false, then true).
+  So the stop record keeps `replies` (`{prompt_id, text, time}`, the 5 most recent turns, 128
+  KiB in all). The banner shows the newest turn's replies, and the popup shows all five turns,
+  which puts the reply before a manual `/pass` one key away. `-p` sessions keep none, and
+  `stops/` and `pass-last/` are pruned after 7 days.
+  - Review round 2: the Stop payload can't tell a typed prompt from a turn a task notice
+    started, so the banner said "Last turn's replies", not "since your last prompt" (part 3
+    made it "Last turn (HH:MM)" with the prompt, when the transcript has one). A Stop
+    with no `prompt_id` is its own group, and a cut inside the newest turn leaves a note.
+- Rejected: putting the reply in the resume prompt. That feeds the old session's beliefs back
+  into the fresh context, which is what a clear avoids.
+
+**The popup and banner, rendered, with Hayden's prompts** (Hayden, 2026-10-12, part 3).
+- The problem: both showed raw markdown (`**`, backticks, `#`) and `less` broke lines mid-word.
+  Hayden also wants his own side of each turn, not only the replies.
+- **Renderer: stdlib** (Hayden picked it over `rich` after seeing both live: no dependency, so a
+  new device works unchanged). One module, `hooks/md_render.py`, imported by `tmux/pass-last`
+  and `hooks/pass_banner.py` through their real paths (no new link). It handles what Claude
+  writes: `**bold**`, `*italic*`, code spans, links, `#` headings, `-`/`*`/`1.` lists with a
+  hanging indent, fenced code (a dim bar, not wrapped), and pipe tables drawn with box lines
+  when they fit the width (else the raw rows, dim). It word-wraps by terminal cells (wide
+  characters count 2). Control characters are dropped before any escape is added. With no
+  color (not a tty), the markup is stripped and nothing else changes.
+- **Popup:** a cyan rule with the time per turn, and a bold yellow heavy rule for the last turn.
+  `less -R` shows the colors, and the width comes from the popup's tty. Under each rule, the
+  turn's prompt: `▌ You:` in green, then the prompt indented under the bar. A turn with no typed
+  prompt (a task notice or an agent message started it) says `▌ (no prompt: a background
+  notice)`, dim.
+- **Banner (spike A9):** a SessionStart `systemMessage` keeps ANSI color. Claude Code draws it
+  in gray (`38;5;246`), and a full reset (`0m`) or `39m` (the terminal's default color) drops
+  that gray for the rest of the line, so the banner closes bold, italic and underline with their
+  own resets (`22m`, `23m`, `24m`) and a color by going back to the gray (`md_render.BANNER_FG`;
+  seen live: the gray holds after a code span). Claude Code starts each line gray again, so a
+  miss lasts only to the line's end. It starts "Last turn
+  (HH:MM)", then `You:` with the prompt's first line (about 100 characters, `…` past that),
+  then the replies, rendered to the pane's width less Claude Code's 5-column indent. The 40
+  lines and 4 KiB caps still hold, and they count the escapes too.
+- **Where prompts come from:** `pass-respawn` reads them at the pass from the transcript it
+  already has (`transcript_path`): each main-chain user entry whose `origin.kind` is "human"
+  (its `typed_prompt`), matched to the replies' turns by `promptId`. They go into
+  `pass-last/<pane>.json` as `prompts: [{prompt_id, text, time}]`. Only the last WIDE (8 MiB)
+  of the transcript is read. A typed slash command shows as typed (`/pass compact`), not as its
+  `<command-message>` block, and an image shows as `[image]`. Each prompt is cut to 1 KiB or 12
+  lines, whichever comes first, ending "… (N more lines)". With no transcript the file has no
+  `prompts`, and every turn says no prompt. Rejected: a UserPromptSubmit hook recording each
+  prompt, which costs a write per prompt for a popup.
+
+**A refused pass, and leftover monitors** (found live 2026-10-12; Hayden's calls, part 2c).
+- What happened: a capella-studio `/pass` was refused (`pass.log`: `outcome=busy busy: waits:
+  monitor, monitor, monitor`). Three Monitor tasks were still listed at its Stop, and
+  `respawn-pane -k` would kill them silently.
+  - The gate was right, but the only notice was a few-second tmux status-line message. It came
+    right after a reply that promised "the pane restarts". The label `waits:` was also wrong:
+    those were tasks, and `waits` was empty.
+- **The skill judges, the script enforces.** Before `pass-respawn`, the pass skill lists the
+  session's running background tasks:
+  - It stops leftovers whose job is done (`TaskStop`).
+  - If any is still in use, it uses compact mode instead.
+  - Its reply never promises a restart. It says the pane restarts unless the gate refuses.
+  - `pass-respawn` still refuses a plain pass while any task but `dream` runs, so a model that
+    skips the check can't kill a live watcher.
+- **A refusal is loud:** a tmux message held until a key (`-d 0`) plus the `notify.sh` toast,
+  naming the tasks and the fix ("3 monitors running: /pass compact, or stop them"). The label
+  becomes `tasks:`.
+- The watcher (part 2a) uses `pass-respawn`'s rule, so with tasks in flight its tiers say
+  compact mode, never a plain pass that the gate would refuse.
+
+**Spikes first** (a scratch tmux window, driven from outside, with a `--settings` probe hook):
+
+| # | Question | Decides |
+|---|---|---|
+| A1 | Does UserPromptSubmit see `/autopass on` before it expands? Try it both undefined and defined. Does `decision: block` with a `reason` show the line and cost no model turn? | a hook, or a mod's slash command |
+| A2 | Is a SessionStart `systemMessage` shown on a `startup` respawned with a prompt argument, and where? Is a 3-4 KiB message truncated? | the whole reply in the banner, or a head plus "Ctrl-b Up for the rest" |
+| A3 | Does the transcript's last main-chain assistant `usage` match the statusline's `current_usage` at a Stop and mid-turn? Is `isSidechain` set on subagent entries? | the parser and its fixture |
+| A4 | Does a PostToolUse `additionalContext` reach the model on a main-session tool call? | the wrap-up and hard tiers inside long turns |
+| A5 | Does a hook-blocked Stop share the payload's `prompt_id` with the Stop that ends its continuation? | how the banner groups replies into turns |
+
+**Spike results** (2026-10-12, Claude Code 2.1.296, tmux 3.7c; harness in
+`~/scratch/autopass-spike/`). The design holds, with one change from A1.
+- **A1:** a *defined* command reaches UserPromptSubmit raw (`prompt: "/autopass on"`), and
+  `decision: block` with a `reason` shows "UserPromptSubmit operation blocked by hook: <reason>"
+  and runs no model turn. An *undefined* `/autopassx` never reaches the hook: Claude Code answers
+  "Unknown command". **Change:** `/autopass` ships as a defined command with
+  `disable-model-invocation: true`. The hook blocks it. The body runs only if the hook didn't, and
+  says the hook isn't installed.
+- **A2:** a 3.6 KiB SessionStart `systemMessage` shows in full, untruncated, as "SessionStart:startup
+  says: ...". After a `respawn-pane` with a prompt argument it sits above the submitted prompt
+  and stays on screen. The model can't see it: a random codeword in the banner came back `NONE`.
+  The transcript keeps the text as `hook_success` and `hook_system_message` attachments.
+- **A3:** the transcript's last main-chain assistant `usage` sum (input, cache read, cache
+  creation) read 41,538 while the statusline showed 41.5k. Subagent entries go to
+  `<session>/subagents/agent-<id>.jsonl`, never the main file, and their hook payloads carry
+  `agent_id`. A split assistant message repeats its usage on each entry, so the last entry is
+  right. Mid-turn, the last entry is the tool_use message, one tool result behind.
+- **A4:** a main-session PostToolUse `additionalContext` reached the model (it followed the
+  injected instruction in its reply).
+- **A5:** yes. The blocked Stop has `stop_hook_active` false and the continuation's Stop has it
+  true, with the same `prompt_id`. Recorded in "The last reply across a pass".
+- **A6 (a typed skill command):** a typed `/probeskill hello` is one main-chain `user` entry
+  (`origin.kind` "human") whose content is the string `<command-message>probeskill
+  </command-message>\n<command-name>/probeskill</command-name>\n<command-args>hello
+  </command-args>`, followed by an `isMeta` user entry holding the skill's body.
+- **A7 (the statusline payload):** `context_window.total_input_tokens` equals the
+  `current_usage` sum and the transcript's last usage, after one turn (52,075) and after a
+  second (52,252). It is the current context, not a session total. `context_window_size` is
+  1,000,000 for Opus 5.5.
+- **A8 (the live smoke run, after install): at Stop the turn's last assistant entry is not yet
+  readable in the transcript.**
+  - What the smoke session (`185d6425`, scratch repo `~/scratch/autopass-smoke`) did:
+    - Its first Stop wrote no count: `tokens()` found no assistant entry.
+    - Its second Stop wrote 41,501, which is turn 1's count, while turn 2's entry says 41,541.
+    - The entries' `timestamp` precedes `stop_hook_summary` by about 90 ms, but the file had
+      not caught up when the hook read it.
+    - A3 compared counts after the fact, so it missed this.
+  - Before the fix: the Stop-time count lagged one turn, so a long final reply could cross a
+    tier one Stop late. PostToolUse reads entries already written, so it stayed fresh.
+  - **Probe (2026-10-12, `~/scratch/autopass-spike/probe8.py`, 13 Stops in one session):** every
+    Stop hook started with the last main-chain user or assistant entry a user's (the prompt, a
+    tool result, or a Stop hook's block reason), and the final reply appeared 54 to 112 ms into
+    the hook, its text matching `last_assistant_message` each time. Short, tool, ~10k-character
+    and blocked-then-continued turns all behaved the same. A child polling past the hook's exit
+    saw it at the same moment, so the write isn't gated on the hook.
+  - **Fix:** at Stop, while the last main-chain user or assistant entry is a user's (or none
+    is in reach, as in an empty file), `context_watch.stop_tokens` re-reads every 25 ms for up to 1.5 s, then logs a line to
+    `context-watch.err` and uses the last count. PostToolUse never waits. The probe session's
+    `ctx` file then matched each turn's own count.
+
+- **A10 (live smoke, 2026-10-12): a Monitor arrives as a `shell` task.** The Stop payload's
+  `background_tasks` gave a Monitor `type: "shell"`, the same as a background `sleep` (fields:
+  id, type, status, description, command; no monitor flag), on 2.1.296. The capella refusal
+  earlier the same day logged `monitor`, so both labels occur. As `shell` it counted as busy:
+  a lingering Monitor kept soft and wrap-up quiet, and the refusal said "1 shell".
+  - **Fix (Hayden's call: classify by tool):** `stop_ring.task_types` relabels a `shell` task
+    as `monitor` when its id is the `toolUseResult.taskId` of a result answering a Monitor
+    call. One backward walk per file, over the transcript and then its subagents'
+    transcripts, settles every listed shell id (`"taskId":"<id>"` for a Monitor's result,
+    `"backgroundTaskId":"<id>"` for a Bash command's), so a Monitor started early in a long
+    session, or by a subagent, still counts. Review round 1 replaced a last-8 MiB scan, which
+    missed exactly those; round 2 made it one walk per file with a 2 s budget before the
+    subagents' files (0.75 s warm for a 128 MiB transcript that names none of the ids, about
+    2.5 s cold). stop-ring's Stop timeout went from 5 to 10 s for that cold read. The stop record, the ring and the
+    watcher's Stop check all use it, so `pass-respawn` names the monitor too.
+
 **Verify.**
 - `context-watch` on transcript fixtures: below each tier, at each tier once per crossing, the
   hard tier re-arming, off, background work in flight, a subagent event, and a compact re-arming.
+- The banner: a match, a stale entry, the wrong tab, shown once. `stop_ring.merge_replies` and its
+  caps. `pass-respawn` writes `pass-last`.
 - A live run at lowered tiers fires each tier once and ends in a passing `handoff-check`.
+- A live `/pass` shows the banner with the old reply, Ctrl-b Up reopens it, and a Star still
+  carries.
 
 ## After: the work repo's migration (its own PR in that repo, after PR 1 and PR 2 merge)
 
@@ -679,6 +885,9 @@ all on 1M-window models). Context at each event, in thousands of tokens:
 New: `skills/lanes/{SKILL.md,scripts/lane}`, `hooks/lane-identity.sh`,
 `hooks/{lane-guard.sh,lane_guard.py}`, `templates/LANE.md`, `docs/lanes.md`, `tests/lanes/`,
 `skills/pass/{SKILL.md,scripts/pass-respawn}`.
+PR 4: the modules "PR 4: auto-pass" lists under "As built" (`hooks/{context_watch.py,
+autopass_state.py,stop_ring.py,pass_banner.py,md_render.py}`, `tmux/pass-last`,
+`pass-respawn`), with `tests/setup/test_md_render.py`.
 Edited: `settings.json`, `CLAUDE.md`, `skills/handoff/SKILL.md`, `templates/STATUS.md`,
 `README.md`, `codex/AGENTS.md`, `setup.sh` (only if the bin loop needs the new paths).
 Patterns to reuse:

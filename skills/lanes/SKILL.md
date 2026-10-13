@@ -22,8 +22,9 @@ what. `docs/lanes.md` holds the design and why; this is the operating guide.
    "Who has #42?" is answered by `lane who 42`, never by prose, agent lists, first prompts or tab
    titles. If Hayden routes #42 away from your lane, record that in your own record and
    `lane release 42`.
-4. **Derive, don't store.** Branch position, PR state, liveness and staleness come from
-   `lane ls`, which computes them on each call. Don't copy them into prose.
+4. **Derive, don't store.** Branch position, PR state, liveness, context (CTX, from the auto-pass
+   watcher's `ctx/<session>.json`) and staleness come from `lane ls`, which computes them on each
+   call. Don't copy them into prose.
 5. **STATUS.md is project direction, not lane state.** In a repo with lanes, the root STATUS.md
    holds direction and the backlog by request number. Your state and next step live in your
    record.
@@ -111,6 +112,10 @@ inside a lane.
 The lead never respawns another lane's session or edits its record (invariant 2): only the lane
 holds the context its handoff needs.
 
+Auto-pass is on by default in every lane and in the lead's main checkout, so each passes itself;
+`lane init --autopass` or `--no-autopass` seeds it for the repo. A lane idle past soft (`lane ls`
+CTX `*`, STATE `idle`) gets a message from the lead, by hand: "context N k, run /pass".
+
 **Writers in lanes.** A lane-rooted session's `writer` subagent gets a worktree under the main
 checkout's `.claude/worktrees/`, but branched from the lane's HEAD (live probe, 2026-10-11). The
 stale-base trap (`worktree.baseRef`) therefore bites only a session rooted in the main checkout.
@@ -120,7 +125,7 @@ stale-base trap (`worktree.baseRef`) therefore bites only a session rooted in th
 | Command | What it does |
 |---|---|
 | `lane whoami` | your lane id, `main`, `unregistered` or `plain` (`--json` for scripts) |
-| `lane ls` | the board: branch, ahead/behind, PR, port, claims, live sessions, tmux window, flags; then any held locks |
+| `lane ls` | the board: branch, ahead/behind, PR, port, claims, live sessions, context (CTX: `312k*` past the auto-pass soft tier, `523k!` past hard), state (STATE: busy, idle, waiting, shell; message a lane idle past soft to run /pass), tmux window, flags; then any held locks |
 | `lane ls --requests` | request to lane, from claims only |
 | `lane who 42` | the lane that claims #42, or "unclaimed" |
 | `lane claim 42` / `lane release 42` | claim or drop a request for your lane |

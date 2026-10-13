@@ -1,0 +1,209 @@
+#!/usr/bin/env bash
+# pass-last: show what a Claude session said before a plain /pass respawned its tab.
+#
+#   pass-last [<pane>]   the tab's prompts and replies before a pass, in less (opens at the end;
+#                        q closes it); with no pane, tmux's current pane
+#
+# pass-respawn writes $XDG_STATE_HOME/dotclaude/pass-last/<pane number>.json ({tab, from_session,
+# written_at, replies, prompts, shown}) right before it respawns the pane: the replies of the last
+# 5 turns (stop-ring.sh keeps them; a turn is a run of replies with one prompt_id) and Hayden's
+# prompt for each turn (from the transcript). hooks/pass-banner.sh shows the last turn once as the
+# new session's banner. This shows every turn, as often as asked, oldest first. Each turn starts
+# with a cyan rule and its time (the last turn: a bold yellow heavy rule, "last turn"), then
+# "You:" after a green bar with the prompt under the bar, or a dim note: "(no prompt: a
+# background notice)" when pass-respawn saw a task notice or an agent's message start the turn,
+# "(prompt not saved)" when it couldn't tell (no readable transcript, or the turn began before
+# the part it reads), then the replies rendered from markdown by hooks/md_render.py (bold, code, lists, tables, code
+# blocks), word-wrapped to the popup's width. That module is found from this script's real path
+# (../hooks/), else ~/.claude/hooks/; with neither, the output is the plain text under "==" header
+# lines, each turn's prompt after "You: ". In a terminal it opens in less -R at the end, on the last turn (-+F: a LESS=-F in the
+# environment would close a short popup at once). Not in a terminal, it prints plain text: the
+# markup stripped, no escapes. The width is the tty's (stty size on /dev/tty; stdout is a pipe
+# into less), else $COLUMNS, else 80. Only when the entry's tab is this pane on this tmux server
+# (a pane number repeats on a new server); otherwise it says there is none. Control characters
+# (C0 but tab and newline, DEL, C1) are dropped before any escape is added. Linked into
+# ~/.local/bin by setup-tmux.sh; Ctrl-b Up (tmux/claude.conf) opens it in a popup, and the Ctrl-b
+# Enter menu (tmux/base.conf) and the tab's right-click menu (tmux/claude.conf) have an entry.
+# tests/setup/test_pass_last.py holds the cases.
+set -uo pipefail
+
+case "${1:-}" in -h|--help) sed -n '2,5p' "$0"; exit 0 ;; esac
+state="${XDG_STATE_HOME:-$HOME/.local/state}/dotclaude"
+pane="${1:-}"
+# tmux's man page doesn't call a popup's command a format, so Ctrl-b Up passes no pane.
+[ -n "$pane" ] || pane=$(tmux display -p '#{pane_id}' 2>/dev/null)
+server=""
+if [[ "$pane" =~ ^%[0-9]+$ ]]; then
+  server=$(tmux display -p -t "$pane" '#{start_time} #{pid} #{socket_path}' 2>/dev/null)
+fi
+self=$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null) || self=""
+render="${self:+${self%/*}/../hooks/md_render.py}"$'\n'"$HOME/.claude/hooks/md_render.py"
+cols=$({ stty size </dev/tty; } 2>/dev/null) && cols="${cols##* }"
+[[ "$cols" =~ ^[1-9][0-9]*$ ]] || cols="${COLUMNS:-}"
+[[ "$cols" =~ ^[1-9][0-9]*$ ]] || cols=80
+color=0
+[ -t 1 ] && color=1
+
+IFS= read -r -d '' PY <<'EOF'
+import importlib.util, json, os, re, sys, time
+
+pane, server, width, color = sys.argv[1], sys.argv[2], int(sys.argv[3]), sys.argv[4] == "1"
+CONTROL = re.compile("[%s]" % re.escape("".join(map(chr, [*range(0, 9), *range(11, 32),
+                                                          *range(127, 160)]))))
+NONE = "No reply saved from a /pass in this tab."
+BAR, LIGHT, HEAVY, DOT = chr(0x258C), chr(0x2500), chr(0x2501), chr(0x00B7)
+NO_PROMPT = "(prompt not saved)"
+NOTICE = "(no prompt: a background notice)"
+
+def renderer():
+    """hooks/md_render.py from the first path that loads, or None."""
+    for path in os.environ.get("PASS_LAST_RENDER", "").split("\n"):
+        if not path:
+            continue
+        try:
+            spec = importlib.util.spec_from_file_location("md_render", path)
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            return mod
+        except Exception:
+            continue
+    return None
+
+md = renderer()
+
+def tab():
+    parts = server.rstrip("\n").split(" ", 2)
+    if not re.fullmatch(r"%\d+", pane) or len(parts) != 3 or not (
+            parts[0].isdigit() and parts[1].isdigit()) or not parts[2]:
+        return None
+    return {"socket": parts[2], "server_start": int(parts[0]), "server_pid": int(parts[1]),
+            "pane": pane}
+
+def clean(text):
+    text = text.encode("utf-8", "replace").decode("utf-8")   # a lone surrogate becomes '?'
+    return CONTROL.sub("", text.replace("\r\n", "\n"))
+
+def number(t):
+    return isinstance(t, (int, float)) and not isinstance(t, bool)
+
+def local(t):
+    """time.localtime(t), or None when t isn't a time it can take (NaN, 1e20 in a corrupt
+    entry)."""
+    if not number(t):
+        return None
+    try:
+        return time.localtime(t)
+    except (OverflowError, OSError, ValueError):
+        return None
+
+def when(t):
+    lt = local(t)
+    return time.strftime("%Y-%m-%d %H:%M", lt) if lt else "?"
+
+def short(t):
+    """HH:MM, with the date when the turn wasn't today."""
+    lt = local(t)
+    if lt is None:
+        return "?"
+    today = time.strftime("%Y-%m-%d") == time.strftime("%Y-%m-%d", lt)
+    return time.strftime("%H:%M" if today else "%Y-%m-%d %H:%M", lt)
+
+def groups(replies):
+    """Turns: runs of replies that share a prompt_id, oldest first. hooks/pass_banner.py's
+    newest_group takes the last run the same way, so the banner and this agree."""
+    out = []
+    for r in replies if isinstance(replies, list) else []:
+        if not (isinstance(r, dict) and isinstance(r.get("prompt_id"), str)
+                and isinstance(r.get("text"), str) and r["text"].strip()):
+            continue
+        if out and out[-1][0] == r["prompt_id"]:
+            out[-1][1].append(r)
+        else:
+            out.append((r["prompt_id"], [r]))
+    return out
+
+def prompts_by_id(prompts):
+    """prompt_id -> the prompt's text, or NOTICE when a background notice started the turn."""
+    out = {}
+    for p in prompts if isinstance(prompts, list) else []:
+        if not (isinstance(p, dict) and isinstance(p.get("prompt_id"), str)):
+            continue
+        if isinstance(p.get("text"), str) and p["text"].strip():
+            out.setdefault(p["prompt_id"], p["text"])
+        elif p.get("notice") is True:
+            out.setdefault(p["prompt_id"], NOTICE)
+    return out
+
+def rule(label, last):
+    head = " %s " % label
+    ch = HEAVY if last else LIGHT
+    line = ch * 3 + head + ch * max(3, width - 3 - md.cells(head))
+    return md.paint(line, "by" if last else "c", color)
+
+def you(prompt):
+    """The turn's prompt under a green bar, or a dim note: a notice started it, or no prompt
+    was saved."""
+    if prompt is None or prompt is NOTICE:
+        return [md.paint(BAR + " " + (NOTICE if prompt is NOTICE else NO_PROMPT), "d", color)]
+    bar = md.paint(BAR, "g", color)
+    lines = [md.paint(BAR + " You:", "g", color)]
+    for line in md.wrap_plain(prompt.strip("\n"), width - 2):
+        lines.append(bar + (" " + line if line else ""))
+    return lines
+
+def rendered(e, found, sid):
+    prompts = prompts_by_id(e.get("prompts"))
+    out = [md.paint("Replies before the pass (saved %s, session %s); the newest are last, "
+                    "q closes." % (when(e.get("written_at")), sid), "d", color)]
+    for i, (pid, rs) in enumerate(found):
+        last = i == len(found) - 1
+        out += ["", rule(short(rs[0].get("time")) + (" %s last turn" % DOT if last else ""),
+                         last), ""]
+        out += you(prompts.get(pid))
+        for r in rs:
+            out += ["", md.render(r["text"], width, color)]
+    return "\n".join(out)
+
+def plain(e, found, sid):
+    parts = ["Replies before the pass (saved %s, session %s); the newest are last, q closes."
+             % (when(e.get("written_at")), sid)]
+    prompts = prompts_by_id(e.get("prompts"))
+    for i, (pid, rs) in enumerate(found):
+        last = " (last turn)" if i == len(found) - 1 else ""
+        parts.append("== Replies from %s%s ==" % (when(rs[0].get("time")), last))
+        prompt = prompts.get(pid)
+        parts.append("You: " + (NOTICE if prompt is NOTICE else NO_PROMPT if prompt is None
+                                else clean(prompt).strip()))
+        parts.extend(clean(r["text"]).strip() for r in rs)
+    return "\n\n".join(parts)
+
+def show():
+    here = tab()
+    if here is None:
+        return NONE + " (tmux can't read the pane)"
+    try:
+        with open(os.path.join(os.environ["PASS_LAST_DIR"], pane[1:] + ".json"),
+                  encoding="utf-8") as f:
+            e = json.load(f)
+    except (OSError, ValueError):
+        e = None
+    found = groups(e.get("replies")) if isinstance(e, dict) else []
+    if not found:
+        return NONE
+    if e.get("tab") != here:
+        return NONE + " (the saved one is from another tab or tmux server)"
+    sid = e.get("from_session")
+    sid = clean(sid) if isinstance(sid, str) else "?"
+    return rendered(e, found, sid) if md else plain(e, found, sid)
+
+sys.stdout.buffer.write((show() + "\n").encode("utf-8", "replace"))
+EOF
+
+text=$(PASS_LAST_DIR="$state/pass-last" PASS_LAST_RENDER="$render" \
+       python3 -I -c "$PY" "$pane" "$server" "$cols" "$color" 2>&1)
+if [ -t 1 ]; then
+  printf '%s\n' "$text" | less -R -+F +G
+else
+  printf '%s\n' "$text"
+fi
+exit 0

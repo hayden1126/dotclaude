@@ -10,7 +10,7 @@ import sys
 import unittest
 from unittest import mock
 
-from _fixture import LANE, LanesRepo
+from _fixture import HOOKS, LANE, LanesRepo
 
 import lanelib  # on sys.path through _fixture
 
@@ -572,6 +572,24 @@ class Identity(LanesRepo):
 class ConfigTrust(LanesRepo):
     """`new` and `adopt` run the config's `setup` sandbox-off, so the config lives in the state
     dir, which sandboxed Bash can't write; only a bare `lane init` writes it."""
+
+    def test_init_seeds_autopass_only_when_asked(self):
+        (cfg,) = self.config_files()
+        self.assertNotIn("autopass", self.read(cfg))  # unset: on in lanes
+        self.assertIn("autopass = false", self.lane("init", "--no-autopass"))
+        self.assertIn("autopass = false\n", self.read(cfg))
+        self.lane("init", "--cap", "3")  # a re-init without the flag keeps it
+        self.assertIn("autopass = false\n", self.read(cfg))
+        self.lane("init", "--autopass")
+        self.assertIn("autopass = true\n", self.read(cfg))
+        # The reader: decide() in the main checkout of a lanes repo.
+        spec = importlib.util.spec_from_file_location(
+            "autopass_state", os.path.join(HOOKS, "autopass_state.py"))
+        autopass_state = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(autopass_state)
+        self.assertEqual(autopass_state.lane_setting(self.main), True)
+        self.lane("init", "--no-autopass")
+        self.assertEqual(autopass_state.lane_setting(self.main), False)
 
     def test_init_writes_the_config_to_the_state_dir_not_the_repo(self):
         (cfg,) = self.config_files()

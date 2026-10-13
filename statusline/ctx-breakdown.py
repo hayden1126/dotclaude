@@ -17,8 +17,23 @@ The percent is total / window. Flags opt in to more:
            (fallback before the first /context run:  Ctx 85k 43% (run /context))
   --conf   render a standalone Conf chip (active config dir) instead
   --no-pct drop the percent from the total chip (tier colors still apply)
+
+The total chip colors by the auto-pass tiers (hooks/autopass_state.py tiers(), on the
+watcher's window: the smaller of the model window and autoCompactWindow): green below soft,
+yellow from soft, dark red from wrap-up, bold bright red "Ctx!" from hard. A trailing "A"
+inside the chip means auto-pass is on for this tab (autopass_state.decide(), cached per
+session for CACHE_TTL seconds and while the tab flag's generation holds). On every render
+with a session id and a sane context_window_size, the model window is merged into
+$XDG_STATE_HOME/dotclaude/ctx/<session>.json as `window` (and `window_at`), since no hook
+payload names it; an unchanged value written under WINDOW_FRESH seconds ago is skipped. The
+write merges under the session's ctx lock (autopass_state.merge_ctx) and is skipped while the
+lock is busy. The cue's cache files (ctx-widget/) are pruned past 7 days, once a day.
+
+setup.sh symlinks this file into ~/.config/ccstatusline/, so its real path finds the repo's
+hooks/. When autopass_state can't be imported (a copy, or Windows, which lacks fcntl), the
+widget falls back to fixed shares of the window, no cue and no window write.
 """
-import sys, json, os, re, tempfile
+import sys, json, os, re, signal, tempfile, time
 
 # ccstatusline pipes stdout, where Windows Python defaults to cp1252 and the
 # divider glyph below raises UnicodeEncodeError, blanking the whole widget.
@@ -41,14 +56,23 @@ MSG_STYLE = ('Msg', 53, 140)
 MIN_CHIP = 10_000
 ETC_STYLE = ('Etc', 236, 245)
 CONF_STYLE = (24, 117)
-# Total-context chip: green while comfortable, dark red past 66% of the
-# window, bright bold red with a "Ctx!" label past ~83% (~500k of a 600k
-# window), where compaction is close.
-TOTAL_STYLE = [
-    (0.83, 160, 231, '\x1b[1m', 'Ctx!'),
-    (0.66, 88, 210, '', 'Ctx'),
-    (0.0, 22, 114, '', 'Ctx'),
-]
+# Total-context chip, by auto-pass band: (256-color bg, fg, attrs, label).
+BAND_STYLE = {
+    'ok': (22, 114, '', 'Ctx'),
+    'soft': (136, 230, '', 'Ctx'),
+    'wrap': (88, 210, '', 'Ctx'),
+    'hard': (160, 231, '\x1b[1m', 'Ctx!'),
+}
+# The bands as shares of the window when the tiers are unknown (autopass_state missing, or a
+# window too small for tiers).
+FALLBACK_SHARE = {'soft': 0.5, 'wrap': 0.66, 'hard': 0.83}
+AUTOPASS_CUE = 'A'
+CACHE_TTL = 10       # seconds a cached decide() holds
+DECIDE_BUDGET = 0.8  # seconds decide() (git, tmux) may take before the cue shows as off
+WINDOW_FRESH = 60    # seconds an unchanged `window` write is skipped
+LOCK_WAIT = 0.05     # seconds the `window` write waits for the session's ctx lock
+SID = re.compile(r'[A-Za-z0-9][A-Za-z0-9._-]{0,127}')  # hooks/stop_ring.py SID
+HOOKS = os.path.join(os.path.dirname(os.path.realpath(__file__)), '..', 'hooks')
 RESET = '\x1b[0m'
 # Dim divider between the total chip and the category breakdown chips.
 GROUP_SEP = '\x1b[38;5;240m ▏ ' + RESET
@@ -58,14 +82,133 @@ def chip(label, value, bg, fg):
     return f'\x1b[48;5;{bg}m\x1b[38;5;{fg}m {label} {value} {RESET}'
 
 
-def total_chip(total, window, show_pct=True):
-    if not window:
-        return f'Ctx {fmt(total)}'
-    frac = total / window
-    value = f'{fmt(total)} {frac * 100:.0f}%' if show_pct else fmt(total)
-    for threshold, bg, fg, attrs, label in TOTAL_STYLE:
-        if frac >= threshold:
-            return attrs + chip(label, value, bg, fg)
+def load_aps():
+    """hooks/autopass_state, found from this file's real path, or None."""
+    if HOOKS not in sys.path:
+        sys.path.insert(0, HOOKS)
+    try:
+        import autopass_state
+    except Exception:
+        return None
+    return autopass_state
+
+
+def band(total, tiers):
+    for name in ('hard', 'wrap', 'soft'):
+        if total >= tiers[name]:
+            return name
+    return 'ok'
+
+
+def total_chip(total, pct_window, tiers, show_pct=True, cue=False):
+    """tiers: {'soft', 'wrap', 'hard'} in tokens, or None for an uncolored chip."""
+    if pct_window and show_pct:
+        value = f'{fmt(total)} {total / pct_window * 100:.0f}%'
+    else:
+        value = fmt(total)
+    if cue:
+        value += ' ' + AUTOPASS_CUE
+    if tiers is None:
+        return f'Ctx {value}'
+    bg, fg, attrs, label = BAND_STYLE[band(total, tiers)]
+    return attrs + chip(label, value, bg, fg)
+
+
+def chip_tiers(aps, pct_window, transcript_path, model_window):
+    """The auto-pass tiers on the watcher's window, else fixed shares of pct_window, else None."""
+    if aps is not None:
+        try:
+            t = aps.tiers(aps.window(transcript_path, model_window))
+        except Exception:
+            t = None
+        if t is not None:
+            return t
+    if not pct_window:
+        return None
+    return {k: v * pct_window for k, v in FALLBACK_SHARE.items()}
+
+
+def write_window(aps, sid, size):
+    """Merge the model window into the ctx file, keeping its other fields: always on a change,
+    else once per WINDOW_FRESH. It goes through aps.merge_ctx, under the session's lock the
+    watcher's tokens write takes too, so neither rolls back the other; with the lock busy past
+    LOCK_WAIT the write is skipped and the next render retries."""
+    now = time.time()
+    try:
+        rec = aps.read_ctx(sid)
+        at = rec.get('window_at')
+        if (rec.get('window') == size and isinstance(at, (int, float))
+                and 0 <= now - at < WINDOW_FRESH):
+            return
+        aps.merge_ctx(sid, {'window': size, 'window_at': now}, wait=LOCK_WAIT)
+    except Exception:
+        pass
+
+
+class Slow(BaseException):
+    """decide() ran past DECIDE_BUDGET. A BaseException, so no `except Exception` inside
+    decide() turns it into a wrong answer; subprocess.run kills its child on the way out."""
+
+
+def _slow(_sig, _frame):
+    raise Slow
+
+
+def timed_decide(aps, cwd, pane):
+    """(on, source), or None when decide() failed or ran past DECIDE_BUDGET."""
+    timer = hasattr(signal, 'setitimer')
+    if timer:
+        old = signal.signal(signal.SIGALRM, _slow)
+        signal.setitimer(signal.ITIMER_REAL, DECIDE_BUDGET)
+    try:
+        got = aps.decide(cwd, pane)
+        if timer:
+            signal.setitimer(signal.ITIMER_REAL, 0)
+        return got
+    except (Slow, Exception):
+        return None
+    finally:  # an alarm landing past the try raises Slow from here: autopass_on catches it
+        if timer:
+            try:
+                signal.setitimer(signal.ITIMER_REAL, 0)
+            finally:
+                signal.signal(signal.SIGALRM, old)
+
+
+def autopass_on(aps, sid, cwd, pane):
+    """Whether auto-pass is on for this tab. The answer is cached per session in the state dir
+    (ctx-widget/<session>.json) for CACHE_TTL seconds, for the same cwd and pane, and only while
+    the tab flag's generation is the one read before its decide(), so /autopass shows at once.
+    A failed or slow decide() caches as off: a slow git costs one DECIDE_BUDGET per CACHE_TTL."""
+    if not isinstance(cwd, str) or not cwd:
+        return False
+    pane = pane if isinstance(pane, str) and pane else None
+    now = time.time()
+    try:
+        path = os.path.join(aps.state_dir(), 'ctx-widget', sid + '.json')
+        gen = aps.flag_generation(pane)
+        c = aps.load_json(path)
+    except Exception:
+        return False
+    if (isinstance(c, dict) and isinstance(c.get('on'), bool) and c.get('flag') == gen
+            and c.get('cwd') == cwd and c.get('pane') == pane
+            and isinstance(c.get('at'), (int, float)) and 0 <= now - c['at'] < CACHE_TTL):
+        return c['on']
+    try:
+        got = timed_decide(aps, cwd, pane)
+    except Slow:  # the alarm fired as decide() returned, before the timer was cancelled
+        got = None
+    on, source = got if got is not None else (False, 'unknown')
+    try:
+        aps.write_json(path, {'on': on, 'source': source, 'at': now, 'flag': gen,
+                              'cwd': cwd, 'pane': pane})
+        import stop_ring  # beside autopass_state in hooks/
+        stop_ring.prune(os.path.dirname(path), now)  # *.json past 7 days, once a day
+    except Exception:
+        pass
+    return on
+
+
 SKIP = {'Messages', 'Free space', 'Autocompact buffer'}
 CAT_RE = re.compile(r'([A-Z][A-Za-z.]*(?: [a-z][a-z.]+)*):\s*([\d.]+k?)\s*tokens?\s*\(([\d.]+)%\)')
 MARKER = b'Estimated usage by category'
@@ -163,35 +306,54 @@ def main():
     try:
         data = json.load(sys.stdin)
     except ValueError:
+        data = None
+    if not isinstance(data, dict):
         print('Ctx ?')
         return
+    tp = data.get('transcript_path')
+    tp = tp if isinstance(tp, str) else None
     if '--conf' in sys.argv[1:]:
         # Standalone Conf chip so the layout can place it independently.
-        cfg = config_dir(data.get('transcript_path'))
+        cfg = config_dir(tp)
         print(chip('Conf', os.path.basename(cfg), *CONF_STYLE) if cfg else '')
         return
-    cw = data.get('context_window') or {}
+    cw = data.get('context_window')
+    cw = cw if isinstance(cw, dict) else {}
+    size = cw.get('context_window_size')
+    sid = data.get('session_id')
+    sid = sid if isinstance(sid, str) and SID.fullmatch(sid) else None
+    aps = load_aps()
+    if (aps is not None and sid and aps.is_int(size)
+            and aps.WINDOW_RANGE[0] <= size <= aps.WINDOW_RANGE[1]):
+        write_window(aps, sid, size)
+
+    # The current context, not a session total: live-checked 2026-10-12 (2.1.296, Opus 5.5), it
+    # equals the current_usage sum and the transcript's last main-chain usage sum turn to turn.
     total = cw.get('total_input_tokens')
     if total is None:
-        u = cw.get('current_usage') or {}
-        total = sum(u.get(k) or 0 for k in
-                    ('input_tokens', 'cache_read_input_tokens', 'cache_creation_input_tokens'))
-    if not total:
+        u = cw.get('current_usage')
+        u = u if isinstance(u, dict) else {}
+        total = sum(v for k in ('input_tokens', 'cache_read_input_tokens',
+                                'cache_creation_input_tokens')
+                    if isinstance(v := u.get(k), (int, float)))
+    if not isinstance(total, (int, float)) or isinstance(total, bool) or total <= 0:
         print('Ctx ?')
         return
 
     cats = acw = None
-    tp = data.get('transcript_path')
     if tp:
         cats, acw = parse_breakdown(tp)
-    # Threshold base: the smallest of the model window, the auto-compact
+    # Percent base: the smallest of the model window, the auto-compact
     # window reported by /context, and the autoCompactWindow setting --
     # compaction fires at the auto-compact point, not the model window.
     cfg = config_dir(tp)
-    candidates = [w for w in
-                  (cw.get('context_window_size'), acw, autocompact_setting(cfg)) if w]
+    candidates = [w for w in (size, acw, autocompact_setting(cfg))
+                  if isinstance(w, (int, float)) and not isinstance(w, bool) and w > 0]
     window = min(candidates) if candidates else None
-    head = total_chip(total, window, '--no-pct' not in sys.argv[1:])
+    tiers = chip_tiers(aps, window, tp, size)
+    cue = bool(aps and sid) and autopass_on(aps, sid, data.get('cwd'),
+                                            os.environ.get('TMUX_PANE'))
+    head = total_chip(total, window, tiers, '--no-pct' not in sys.argv[1:], cue)
 
     if '--chips' not in sys.argv[1:]:
         print(head)

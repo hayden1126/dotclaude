@@ -39,13 +39,14 @@ class SetupTmux(unittest.TestCase):
         # README says ./setup-tmux.sh; the other tests call it through bash, which hides a mode bug.
         for path in (SCRIPT, os.path.join(REPO, "tmux", "tmux-claude-status"),
                      os.path.join(REPO, "tmux", "claude-restore"),
-                     os.path.join(REPO, "tmux", "claude-saved")):
+                     os.path.join(REPO, "tmux", "claude-saved"),
+                     os.path.join(REPO, "tmux", "pass-last")):
             with self.subTest(path=path):
                 self.assertTrue(os.access(path, os.X_OK))
 
     def test_a_fresh_home_gets_the_link_and_the_claude_block(self):
         self.run_setup()
-        for name in ("tmux-claude-status", "claude-restore", "claude-saved"):
+        for name in ("tmux-claude-status", "claude-restore", "claude-saved", "pass-last"):
             link = os.path.join(self.home, ".local", "bin", name)
             self.assertEqual(os.readlink(link), os.path.join(REPO, "tmux", name))
         conf = self.read()

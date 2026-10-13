@@ -118,9 +118,13 @@ class Baseline(unittest.TestCase):
         self.assertEqual(commands("Notification", "permission_prompt"),
                          ['bash "$HOME/.claude/hooks/notify.sh"'])
         # Both sound hooks ask tmux where a background session is shown; bound them too.
-        for event, script in (("Stop", "stop-ring.sh"), ("Notification", "notify.sh")):
+        # stop-ring gets 10 s: it may read a big transcript cold to tell a Monitor from a
+        # background Bash (PLAN.md A10; 2.5 s cold for 128 MiB), and a kill drops the ring and
+        # the stop record. A normal ring still takes milliseconds.
+        for event, script, limit in (("Stop", "stop-ring.sh", 10),
+                                     ("Notification", "notify.sh", 5)):
             (h,) = [h for e in S["hooks"][event] for h in e["hooks"] if script in h["command"]]
-            self.assertEqual(h["timeout"], 5, script)
+            self.assertEqual(h["timeout"], limit, script)
 
     def test_wait_glyph_needs_a_real_ask(self):
         # An unmatched Notification hook painted the green wait glyph on idle_prompt too, so a
@@ -195,6 +199,60 @@ class Baseline(unittest.TestCase):
         (entry,) = [e for e in S["hooks"]["PreToolUse"] if e.get("matcher") == "Write"]
         self.assertLessEqual(entry["hooks"][0]["timeout"], 5)
         self.assertTrue(os.access(os.path.join(REPO, "hooks", "overwrite-guard.sh"), os.X_OK))
+
+    def test_the_pass_banner_is_wired_on_startup_only(self):
+        # A /pass respawn starts as `startup`; the banner shows what the old session said in its
+        # last turn, once. The first reply waits for SessionStart hooks, so the timeout stays
+        # short.
+        banner = 'bash "$HOME/.claude/hooks/pass-banner.sh"'
+        self.assertEqual(commands("SessionStart", "startup"), [banner])
+        (h,) = [h for e in S["hooks"]["SessionStart"] for h in e["hooks"]
+                if "pass-banner" in h["command"]]
+        self.assertEqual(h["timeout"], 5)
+        self.assertEqual([c for entries in S["hooks"].values() for e in entries
+                          for c in (h["command"] for h in e["hooks"]) if "pass-banner" in c],
+                         [banner])
+        self.assertTrue(os.access(os.path.join(REPO, "hooks", "pass-banner.sh"), os.X_OK))
+        self.assertTrue(os.path.exists(os.path.join(REPO, "hooks", "pass_banner.py")))
+
+    def test_the_context_watcher_is_wired_on_stop_and_main_thread_tool_calls(self):
+        # PLAN.md "PR 4": the tiers block a Stop, and reach long autonomous turns through
+        # PostToolUse. PostToolUse fires on every call, a subagent's too, so the inline
+        # pre-filter skips agent_id payloads before any Python starts. It never blocks by exit
+        # code.
+        watch = 'bash "$HOME/.claude/hooks/context-watch.sh"'
+        self.assertIn(watch, commands("Stop"))
+        (entry,) = [e for e in S["hooks"]["PostToolUse"]
+                    if any("context-watch" in h["command"] for h in e["hooks"])]
+        self.assertEqual(entry["matcher"], "*")
+        (h,) = entry["hooks"]
+        self.assertEqual(h["command"], "i=$(cat); case \"$i\" in *'\"agent_id\"'*) ;; *) "
+                         "printf '%s' \"$i\" | " + watch + " ;; esac")
+        hooks = [(event, h) for event in ("Stop", "PostToolUse") for e in S["hooks"][event]
+                 for h in e["hooks"] if "context-watch" in h["command"]]
+        self.assertEqual(len(hooks), 2)
+        for event, h in hooks:
+            # A Stop waits up to 1.5 s for the turn's final reply (spike A8), then may run tmux
+            # and git, so it gets more room than a tool call.
+            self.assertEqual(h["timeout"], 10 if event == "Stop" else 5)
+            self.assertNotIn("exit 2", h["command"])
+        self.assertTrue(os.access(os.path.join(REPO, "hooks", "context-watch.sh"), os.X_OK))
+        for f in ("context_watch.py", "autopass_state.py"):
+            self.assertTrue(os.path.exists(os.path.join(REPO, "hooks", f)))
+
+    def test_the_autopass_toggle_is_wired_on_prompt_submit_with_its_command(self):
+        # Spike A1: only a defined command reaches the hook, so skills/autopass defines it, and
+        # the model may never run it on its own.
+        toggle = 'bash "$HOME/.claude/hooks/autopass-toggle.sh"'
+        self.assertIn(toggle, commands("UserPromptSubmit"))
+        (h,) = [h for e in S["hooks"]["UserPromptSubmit"] for h in e["hooks"]
+                if "autopass-toggle" in h["command"]]
+        self.assertEqual(h["timeout"], 5)
+        self.assertTrue(os.access(os.path.join(REPO, "hooks", "autopass-toggle.sh"), os.X_OK))
+        with open(os.path.join(REPO, "skills", "autopass", "SKILL.md")) as f:
+            head = f.read().split("---")[1]
+        self.assertIn("name: autopass", head)
+        self.assertIn("disable-model-invocation: true", head)
 
     def test_the_lane_hooks_are_wired_and_fail_open(self):
         # docs/lanes.md: the guard on every file-tool write; identity on every context reset (a

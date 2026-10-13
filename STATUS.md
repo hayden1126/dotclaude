@@ -80,17 +80,10 @@ stored here).
     `feat/lanes-lead`, merged in #87**: the lanes config lives in the state dir, and what the
     sandbox can still write is checked before sandbox-off code acts on it (docs/lanes.md S3).
     Step 1 is its own PR after PR 3 and before the work repo migration; step 2 later.
-  - **PR 3 `feat/pass` (#88): built, reviewed (five rounds; the last found nothing medium or worse),
-    installed from its branch and live-tested on HAYPC 2026-10-12.** `/pass`, `pass compact`,
-    `--cancel`, the trigger, the delta handoff, the Star carry. Live in a scratch window: a plain
-    pass respawned in plan mode with the Star carried; an approved first item resumed in the
-    default mode; compact typed `/compact` and the resume prompt, then plan mode; `--cancel`
-    ended a pending waiter. As built and why: PLAN.md PR 3 "As built". The allow rule
-    `Bash(pass-respawn -C *)` is installed too: the classifier refused my `setup.sh` run as
-    "Auto-Mode Bypass", so Hayden ran it (settings.json diff: that one line, 2026-10-12).
-  - **PR 4 `feat/autopass`: designed, after PR 3** (Hayden split it out 2026-10-12). Three token
-    tiers from `autoCompactWindow` (300k soft, 480k wrap-up, 520k hard), read from the
-    transcript; the calibration over his transcripts is in PLAN.md PR 4.
+  - PR 3 (`/pass`) merged as #88 (`gh pr view 88`), installed with its allow rule; its live runs
+    and the as-built notes are in PLAN.md PR 3 "As built".
+  - **PR 4 `feat/autopass`: built, installed, smoke-tested, PR open for review.** The next
+    step is in "Notes for next session"; the design and "As built" are in PLAN.md PR 4.
   - After PR 3: the release skill in the work repos gets its post-release Next block and a
     closing `handoff-check` (its own PR there; PLAN.md PR 3 "Delta handoff").
   - Migrate the work repo (its own PR there). The concrete values and the
@@ -143,14 +136,36 @@ stored here).
   `claude -p` repro and the 2.1.285 boundary; the karaoke session's has the incident.
 
 ## Notes for next session
-- **Next: Hayden merges PR 3, #88** (`gh pr view 88 --json state,mergedAt`; range
-  `main..feat/pass`, base `0ad597d`). After the merge: `git fetch origin main:main` and
-  `git switch main` outside the sandbox (the checkout is on `feat/pass` and live for every
-  session). Then PR 4 on `feat/autopass` (PLAN.md PR 4; step 0
-  spikes whether UserPromptSubmit sees a defined slash command), then the release-skill PR in
-  the work repos (PLAN.md PR 3 "Delta handoff"). Verify before touching `/pass`: `tests/pass`,
-  `tests/lanes`, `tests/setup`, `tests/delegation`, from the main checkout
-  (`test_subagent_policy` refuses to load under `.claude/worktrees/`).
+- **Next: PR 4 (`feat/autopass`) is up for Hayden's review; merge only on his approval.** The
+  PR number: `gh pr list --head feat/autopass`. What it holds: PLAN.md PR 4 "As built" (five
+  writer parts) plus the 2026-10-12 work (session acbec206), `git log 0df4e46..feat/autopass`:
+  - **A8 fixed:** the watcher waits at Stop up to 1.5 s for the turn's final reply.
+  - **Part 3:** the banner and Ctrl-b Up popup render markdown (stdlib `hooks/md_render.py`) and
+    show each turn's prompt (PLAN.md PR 4 "The popup and banner, rendered").
+  - **A10 fixed:** a Monitor the payload calls `shell` is classified by tool from the transcript.
+  - Stop timeouts: context-watch and stop-ring 10 s (settings.json, installed by `setup.sh`).
+  - **Smoke (2026-10-12, `~/scratch/autopass-smoke`, tiers 60k/75k/90k via
+    `XDG_CONFIG_HOME=~/scratch/autopass-smoke-conf`):** soft at 63k, wrap-up at 87k (Stop) and
+    hard at 98k (mid-turn) fired once each, then the session passed itself in compact mode; a
+    plain pass with a Monitor running was refused with the held notice; `lane ls` showed CTX and
+    STATE; the banner rendered live. Not seen: the refusal's toast. Hayden hasn't given a verdict
+    on the live popup yet.
+  - **Watch:** `context-watch.err` in the state dir (a Stop that timed out waiting for its reply,
+    and the watcher's Python errors).
+  - Then the release-skill PR in the work repos (PLAN.md PR 3 "Delta handoff").
+  - **Follow-up, its own PR (found 2026-10-12):** a tab running `claude attach <id>` (a
+    background session brought back into a tab) isn't recognized by Star, Shelve or tab
+    restore ("No claude session found in this tab"): they find the session through the Claude
+    process under the pane, and an attach client isn't it (the session's process lives under
+    Claude Code's daemon). `claude-saved` could map the attach client's id argument to its
+    `~/.claude/sessions/<pid>.json`. A tmux window killed with a live session left it running
+    in the background (`kind: bg`), which is how that tab came to be.
+  - Verify from the main checkout (`test_subagent_policy` refuses to load under
+    `.claude/worktrees/`): `tests/setup`, `tests/pass`, `tests/lanes`, `tests/delegation`. The
+    last full run on `feat/autopass` (2026-10-12) was green: 532, 148, 155 and 646 tests.
+  - **Flakes:** `tests/pass` fails timing asserts under a load spike, so judge it on a run of
+    about 46 s. `test_tmux_hooks` flaked on `main` too; its ring-decision wait is now 15 s.
+    Watch `seen()`'s 3 s wait, which also serves negative checks.
 - **Astra waits on Hayden's plan** (`feat/codex-astra` merged as #85): two 2026-10-10 probes passed the audit (astra admitted,
   nothing disallowed), but even after a fresh `codex login` the turn gets a 400, "gpt-6-astra
   is not supported when using Codex with a ChatGPT account". Astra ran fine on 2026-09-29 and

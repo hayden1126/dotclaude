@@ -285,6 +285,16 @@
         ]
       },
       {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "i=$(cat); case \"$i\" in *'\"agent_id\"'*) ;; *) printf '%s' \"$i\" | bash \"$HOME/.claude/hooks/context-watch.sh\" ;; esac",
+            "timeout": 5
+          }
+        ]
+      },
+      {
         "hooks": [
           {
             "type": "command",
@@ -311,6 +321,16 @@
           {
             "type": "command",
             "command": "bash \"$HOME/.claude/hooks/session-registry.sh\"",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "startup",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$HOME/.claude/hooks/pass-banner.sh\"",
             "timeout": 5
           }
         ]
@@ -387,6 +407,15 @@
         "hooks": [
           {
             "type": "command",
+            "command": "bash \"$HOME/.claude/hooks/autopass-toggle.sh\"",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
             "command": "bash \"$HOME/.claude/hooks/handoff-reminder.sh\"",
             "timeout": 5
           }
@@ -417,7 +446,7 @@
           {
             "type": "command",
             "command": "bash \"$HOME/.claude/hooks/stop-ring.sh\"",
-            "timeout": 5
+            "timeout": 10
           }
         ]
       },
@@ -436,6 +465,15 @@
             "type": "command",
             "command": "bash \"$HOME/.claude/hooks/watch-guard.sh\"",
             "timeout": 5
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$HOME/.claude/hooks/context-watch.sh\"",
+            "timeout": 10
           }
         ]
       },

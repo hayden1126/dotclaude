@@ -115,7 +115,7 @@ sees it.
 | `settings.json` | Hooks, status line, env vars, enabled plugins, permission rules, and the Bash sandbox (curated baseline; see docs/delegation.md for the sandbox) | **copy** to `~/.claude/settings.json` (runtime-managed, not symlinked), merged with `~/.claude/settings.machine.json` when present |
 | `merge-settings.py` | Merges the machine overlay into the baseline and keeps the live file's own top-level keys, for `setup.sh` | run by `setup.sh` |
 | `git/sandbox-stubs.ignore` | Git ignore patterns for the `/dev/null` mounts the Bash sandbox puts over protected dotfiles a repo lacks (they break `git add -A`) | upserted by `git/install-ignore.py` between markers in the global git excludes file (`core.excludesFile`, else `~/.config/git/ignore`); Linux only |
-| `skills/` | The skills I authored: `coding-practices`, `research-discipline`, `research-sourcing`, `writing-voice`, `staged-reader-review`, `ebook-extract`, `deck-production`, `vetting-sources`, `handoff`, `frontend-ui-discipline`, `ui-alignment`, `delegation`, `lanes` | symlink per dir into `~/.claude/skills/`; a skill's `scripts/` CLI also symlinks into `~/.local/bin` when that dir exists (`deck-production` ships `deckkit`; `delegation` ships `codex-delegate`, `delegation-ledger` and `gh-public`; `lanes` ships `lane`; `handoff` ships `handoff-check`); the portable ones (`CODEX_SKILLS` in `setup.sh`) also link into `~/.codex/skills/` |
+| `skills/` | The skills I authored: `coding-practices`, `research-discipline`, `research-sourcing`, `writing-voice`, `staged-reader-review`, `ebook-extract`, `deck-production`, `vetting-sources`, `handoff`, `frontend-ui-discipline`, `ui-alignment`, `delegation`, `lanes`, `pass`, `autopass` | symlink per dir into `~/.claude/skills/`; a skill's `scripts/` CLI also symlinks into `~/.local/bin` when that dir exists (`deck-production` ships `deckkit`; `delegation` ships `codex-delegate`, `delegation-ledger` and `gh-public`; `lanes` ships `lane`; `handoff` ships `handoff-check`; `pass` ships `pass-respawn`); the portable ones (`CODEX_SKILLS` in `setup.sh`) also link into `~/.codex/skills/` |
 | `agents/` | Delegation roles: `Explore` (overrides the built-in with a no-shell reader), `researcher`, `reviewer`, `writer`; see docs/delegation.md | symlink per file into `~/.claude/agents/` |
 | `hooks/agent-spawn-guard.sh` | PreToolUse(Agent) guard: denies a `writer` spawn that doesn't pass `isolation` on the call, and a named spawn without the `team-` prefix; fails closed | symlink `~/.claude/hooks/agent-spawn-guard.sh` |
 | `hooks/delegation-ledger.sh` | SubagentStart/SubagentStop hook: appends a pointer row per delegated agent to the delegation ledger; as a PostToolUse hook, sends a delegated agent its deadline nudge; never blocks | symlink `~/.claude/hooks/delegation-ledger.sh` |
@@ -125,10 +125,14 @@ sees it.
 | `hooks/report-check.sh` | PreToolUse(SubagentHandback)/SubagentStop hook: sends a delegated role's malformed report back, at most twice; fails open | symlink `~/.claude/hooks/report-check.sh` |
 | `hooks/handoff-reminder.sh` | UserPromptSubmit hook: on a wrap-up / handoff / clear-memory signal, reminds me to invoke the `handoff` skill instead of improvising it, or the `pass` skill on a terse "... and pass"; a shim over `hooks/handoff_reminder.py`, which holds the classifier | symlink `~/.claude/hooks/handoff-reminder.sh` and `handoff_reminder.py` |
 | `hooks/session-title.sh` | UserPromptSubmit hook: sets the terminal tab title to `[<repo>] <label>` via `sessionTitle`, so tabs are tellable apart; the label comes from the Stop-hook Haiku cache (`.title.txt`), falling back to the current prompt's first line | symlink `~/.claude/hooks/session-title.sh` |
-| `hooks/stop-ring.sh` | Stop hook: plays the Windows notify sound when a session you see finishes (a tab, a plain terminal or a mapped background session), not a subagent, an unmapped background session, a `claude -p` run, a turn that ends with an agent or shell still running for it, or one a queued notice or prompt restarts within a second; logs each decision to `ring.log`, and writes the session's stop record (`stops/<session>.json`: time, tasks in flight, the transcript path) for `pass-respawn` | symlink `~/.claude/hooks/stop-ring.sh` |
+| `hooks/stop-ring.sh` | Stop hook: plays the Windows notify sound when a session you see finishes (a tab, a plain terminal or a mapped background session), not a subagent, an unmapped background session, a `claude -p` run, a turn that ends with an agent or shell still running for it, or one a queued notice or prompt restarts within a second; logs each decision to `ring.log`, and writes the session's stop record (`stops/<session>.json`: time, tasks in flight, the transcript path, the replies of the last 5 turns; records older than 7 days go) for `pass-respawn`; a shim over `hooks/stop_ring.py` | symlink `~/.claude/hooks/stop-ring.sh` and `stop_ring.py` |
 | `hooks/notify.sh` | Notification(permission_prompt) hook: pops a Windows toast, resolving the toast path per platform (WSL via `wslpath`, native Windows git-bash via `cygpath`), and rings like `stop-ring.sh` | symlink `~/.claude/hooks/notify.sh` |
 | `hooks/tmux-state.sh` | Prompt, tool, Stop and Notification hook: sets `@claude_state` (busy, wait, idle) on the tmux window the session is shown in, for the indicator in `tmux/claude.conf`; does nothing outside tmux | symlink `~/.claude/hooks/tmux-state.sh` |
 | `hooks/session-pane.sh` | Sourced by the three hooks above, not a hook: finds the tmux pane a session is shown in, and whether a person sees it | symlink `~/.claude/hooks/session-pane.sh` |
+| `hooks/context-watch.sh` | Stop and PostToolUse hook: the auto-pass watcher; writes the context size to `ctx/<session>.json` and, at 300k, 480k and 520k (derived from `autoCompactWindow`), tells the session to run the pass skill, or with autopass off shows you one line at 520k; a shim over `hooks/context_watch.py`, which shares `hooks/autopass_state.py` (tiers, the tab flag, on or off); fails open, with errors in `context-watch.err` in the state dir | symlink `~/.claude/hooks/context-watch.sh`, `context_watch.py` and `autopass_state.py` |
+| `hooks/autopass-toggle.sh` | UserPromptSubmit hook: answers `/autopass on\|off\|status` (defined by `skills/autopass`) without a model turn; a shim over `hooks/autopass_toggle.py` | symlink `~/.claude/hooks/autopass-toggle.sh` and `autopass_toggle.py` |
+| `hooks/pass-banner.sh` | SessionStart (`startup`) hook: after a plain `/pass` respawned the tab, shows what the old session said in its last turn, once, as a banner you see and the model doesn't (its format and caps: the shim's header); a shim over `hooks/pass_banner.py`; fails open | symlink `~/.claude/hooks/pass-banner.sh` and `pass_banner.py` |
+| `hooks/md_render.py` | Not a hook: the stdlib markdown-to-terminal renderer (bold, italic, code, links, headings, lists, code blocks, tables, wrapped by terminal cells) that the banner and `tmux/pass-last` load by path | symlink `~/.claude/hooks/md_render.py` |
 | `hooks/session-registry.sh` | SessionStart/SessionEnd hook: records which session is open in which tmux tab (`$XDG_STATE_HOME/dotclaude/open-sessions/`), for `claude-restore`; deletes the entry on `/exit` or `/clear`, marks it when the window or claude is killed; then hands each payload to `claude-saved` (Star and Shelve; the star follows `/clear`); does nothing outside tmux | symlink `~/.claude/hooks/session-registry.sh` |
 | `hooks/session-summary.sh` | Stop hook: regenerates a 1-2 sentence session summary via a direct Haiku Messages-API call (Claude subscription OAuth token, stdlib urllib, no API key/jq), detached so it never blocks; caches the summary to `<config-dir>/session-summaries/<session_id>.txt` for the status-line widget and a short (`<=32`-char) tab label to `<session_id>.title.txt` for `session-title.sh` | symlink `~/.claude/hooks/session-summary.sh` |
 | `hooks/overwrite-guard.sh` | PreToolUse(Write) hook: denies a Write over a file this session hasn't read, or one that cuts a file of 1 KB or more to under a fifth; a shim over `hooks/overwrite_guard.py`; fails open | symlink `~/.claude/hooks/overwrite-guard.sh` and `overwrite_guard.py` |
@@ -142,7 +146,7 @@ sees it.
 | `notify-toast.ps1` | Windows toast script that `notify.sh` renders for the Notification hook | symlink `~/.claude/notify-toast.ps1` |
 | `plugins/marketplaces.json` | Marketplaces to register | consumed by `setup.sh` |
 | `plugins/enabled.json` | Plugins to install and enable (must equal the baseline `settings.json`'s `enabledPlugins`; a test pins it) | consumed by `setup.sh` |
-| `statusline/ctx-breakdown.py` | ccstatusline widget: colored per-category context chips (system prompt, tools, agents, memory, skills, MCP, messages) | symlink `~/.config/ccstatusline/ctx-breakdown.py` |
+| `statusline/ctx-breakdown.py` | ccstatusline widget: colored per-category context chips (system prompt, tools, agents, memory, skills, MCP, messages); the total chip colors by the auto-pass tiers, ends in `A` when auto-pass is on, and the widget writes the model's window for the watcher (imports `hooks/autopass_state.py` through its real path) | symlink `~/.config/ccstatusline/ctx-breakdown.py` |
 | `statusline/session-summary.py` | ccstatusline widget: renders the cached session summary (nothing until the first one lands), word-wrapped across two dim rows on status lines 2-3 (`--row 1` / `--row 2`) | symlink `~/.config/ccstatusline/session-summary.py` |
 | `statusline/ccstatusline-settings.json` | ccstatusline layout baseline that wires the ctx-breakdown and session-summary widgets in | installed by `setup.sh` to `~/.config/ccstatusline/settings.json` (paths patched per machine) |
 | `tools.json` | Standalone CLI tools (ccstatusline via bun) | consumed by `setup.sh` |
@@ -151,15 +155,16 @@ sees it.
 | `docs/prose-is-not-a-permission.md` | Blog post on the delegation work: why a prompt can't limit an agent's authority, and the layers that can | reference |
 | `docs/images/` | The post's diagram: `delegation-layers.svg` (source) and `delegation-layers.png` (2x render) | reference |
 | `tests/delegation/` | Unit tests for the delegation pieces (no model calls) and `run.py`, a live harness that spends model calls | run from the repo root |
-| `tests/setup/` | Unit tests for `merge-settings.py`, `git/install-ignore.py`, and the prompt and session hooks (`handoff_reminder.py`, `session-title.sh`, `session-summary.sh`), the tmux and sound hooks (`test_tmux_hooks.py`), `tmux/tmux-claude-status` (`test_tmux_claude_status.py`), the restore after tmux dies (`test_session_registry.py`, `test_claude_restore.py`), Star and Shelve (`test_claude_saved.py`), `setup-tmux.sh`, the overwrite and delete guards, `memory-git.sh` and `claude-file-history`; `replay_history.py` is a local-only replay tool, not a unit test | `python3 -m unittest discover -s tests/setup -t tests/setup` |
+| `tests/setup/` | Unit tests for `merge-settings.py`, `git/install-ignore.py`, and the prompt and session hooks (`handoff_reminder.py`, `session-title.sh`, `session-summary.sh`), the tmux and sound hooks (`test_tmux_hooks.py`), `tmux/tmux-claude-status` (`test_tmux_claude_status.py`), the restore after tmux dies (`test_session_registry.py`, `test_claude_restore.py`), Star and Shelve (`test_claude_saved.py`), the replies across a pass (`test_pass_banner.py`, `test_pass_last.py`, `test_md_render.py`), the auto-pass watcher and `/autopass` (`test_context_watch.py`), the ctx widget's tiers, cue and window write (`test_ctx_breakdown.py`), `setup-tmux.sh`, the overwrite and delete guards, `memory-git.sh` and `claude-file-history`; `replay_history.py` is a local-only replay tool, not a unit test | `python3 -m unittest discover -s tests/setup -t tests/setup` |
 | `tests/deck_production/` | Unit tests for `deck-production`'s `deckkit geometry` gate (rule matrix on canned probe output, plus an end-to-end run over the synthetic `fixtures/geodeck` that skips without a headless Chrome) `deckkit regress`'s geometry facts, and `deckkit doctor`'s exit codes | `python3 -m unittest discover -s tests/deck_production -t tests/deck_production` |
 | `tests/lanes/` | Unit tests for the `lane` CLI, the lane hooks and `handoff-check`, on a throwaway bare origin plus clone (no network) | `python3 -m unittest discover -s tests/lanes -t tests/lanes` |
+| `tests/pass/` | Unit tests for `pass-respawn` on fakes for tmux, the session file and the transcript (`test_pass_respawn.py`), plus its guards and checks on the pass docs (`test_pass_guards.py`); nothing reaches the live tmux server | `python3 -m unittest discover -s tests/pass -t tests/pass` |
 | `docs/lanes.md` | Lanes: the incident, the five invariants, the communication model, the layout and the spike results | reference |
 | `docs/blind-overwrite-brief.md` | Why the overwrite guard and `memory-git.sh` exist: two incidents (a blind overwrite of a memory file, a job's state inferred instead of read), the experiments and the design calls | reference |
 | `docs/chrome-devtools-wsl.md` | WSL2-only: how to make `chrome-devtools-mcp` work (Strategy A headless Linux Chrome, plus B to attach to your Windows Chrome) | reference |
 | `chrome-debug.ps1` | Windows launcher for Strategy B (Chrome with a remote-debugging port) | run on Windows when needed |
-| `tmux/` | The tmux side of the indicator: `claude.conf` (titles, status bar, the ◐ busy and ✳ waiting glyphs), the optional `base.conf` (mouse, splits, the Ctrl-b Enter menu), `cheatsheet.txt`, `tmux-claude-status`, the backstop the status bar runs (it also maps background sessions to their tab), `claude-restore`, which reopens `main`'s Claude tabs after the tmux server dies, and `claude-saved`, which stars and shelves a tab's chat (the tab's right-click menu, Ctrl-b S, or Ctrl-b Enter) | sourced and linked by `setup-tmux.sh` |
-| `setup-tmux.sh` | Opt-in tmux installer: links `tmux-claude-status`, `claude-restore` and `claude-saved` into `~/.local/bin` and keeps a marked `source-file` block in `~/.tmux.conf` (`--base` adds `base.conf` and the cheatsheet, `--no-base` drops them, and a run with neither keeps what the block has) | run once per machine that uses tmux; not called by `setup.sh` |
+| `tmux/` | The tmux side of the indicator: `claude.conf` (titles, status bar, the ◐ busy and ✳ waiting glyphs), the optional `base.conf` (mouse, splits, the Ctrl-b Enter menu), `cheatsheet.txt`, `tmux-claude-status`, the backstop the status bar runs (it also maps background sessions to their tab), `claude-restore`, which reopens `main`'s Claude tabs after the tmux server dies, `claude-saved`, which stars and shelves a tab's chat (the tab's right-click menu, Ctrl-b S, or Ctrl-b Enter), and `pass-last`, which shows what Claude said before a `/pass` (Ctrl-b Up, or either menu) | sourced and linked by `setup-tmux.sh` |
+| `setup-tmux.sh` | Opt-in tmux installer: links `tmux-claude-status`, `claude-restore`, `claude-saved` and `pass-last` into `~/.local/bin` and keeps a marked `source-file` block in `~/.tmux.conf` (`--base` adds `base.conf` and the cheatsheet, `--no-base` drops them, and a run with neither keeps what the block has) | run once per machine that uses tmux; not called by `setup.sh` |
 | `setup-chrome-wsl.sh` | Opt-in WSL2 installer: installs Chrome for Testing and registers the user-scoped `chrome-devtools` override | run once on WSL2; not called by `setup.sh` |
 | `setup.sh` | The installer | run once per machine |
 | `sync.sh` | Regenerates the derived plugin lists from live `~/.claude/` | run after plugin changes |
@@ -383,6 +388,13 @@ need nothing extra.
   `$XDG_STATE_HOME/dotclaude/memory.git`, so a memory file broken by any means, a Bash heredoc
   included, can be restored. Transcripts are never tracked, and the repo has no remote. A
   session that finds another one mid-commit skips, and the next trigger commits. Never blocks.
+- **SessionStart (`startup`): `pass-banner.sh`** (in this repo). After a plain `/pass` respawned
+  the tab, it shows what the old session said in its last turn, once, as a banner the model
+  doesn't see (see Pass, below). It acts only in the same tab on the same tmux server, within
+  120 s of the pass, and never in a `claude -p` run or a subagent. Fails open.
+- **Stop / PostToolUse: `context-watch.sh`** and **UserPromptSubmit: `autopass-toggle.sh`** (in
+  this repo). The auto-pass watcher and its `/autopass` toggle (see Auto-pass, below). The
+  PostToolUse entry skips a subagent's calls before any Python starts. Both fail open.
 - **SessionStart (`startup|resume|clear|compact`) / Stop / SessionEnd: `lane-identity.sh`** (in
   this repo). In a lane it tells the session its lane id, branch, claims, port and record, and
   registers it in `lane.json`; after a compact it adds "re-read your record". In the main
@@ -416,7 +428,9 @@ and status single-writer:
   read its record; `--focus` switches to a session already running there. Trust the lanes root
   in Claude Code once (`lane init` prints how), or each new window waits at the trust dialog.
 - `lane ls` is the board, derived live from git, gh and the session files, down to each lane's
-  tmux window. `lane who 42` is the only answer to who owns #42.
+  tmux window, context (CTX: `312k*` past the auto-pass soft tier, `523k!` past hard) and
+  state (STATE: busy, idle, waiting or shell).
+  `lane who 42` is the only answer to who owns #42.
 - `lane lock gate -- npm run e2e` runs a shared gate under a named lock, so a second lane's run
   waits instead of colliding.
 - An optional lead session triages requests into lanes, opens them on Hayden's approval and sets
@@ -450,13 +464,34 @@ idle, the script rechecks the handoff and respawns the pane with a fresh `claude
   approval given in the session, and `handoff-check` fails one with a bad, older or future
   date, or when it can't find the session's start.
 - It waits for this session's own idle status (`~/.claude/sessions/<pid>.json`), not the tab's.
-  The pass drops, with one line in the pane's status line and nothing changed, when work landed
-  after the handoff (`stale`), Hayden typed or queued a prompt after the call (`resumed`), the
-  stop listed any background task but memory upkeep, or the pane was in copy mode or held a
-  draft in the input box (`busy`), the session or pane went away or changed (`gone`), or the
-  turn never ended (`timeout`). Fix the cause and run `/pass` again. In compact mode, copy mode,
+  The pass drops, with nothing changed, when work landed after the handoff (`stale`), Hayden
+  typed or queued a prompt after the call (`resumed`), the stop listed any background task but
+  memory upkeep, or the pane was in copy mode or held a draft in the input box (`busy`), the
+  session or pane went away or changed (`gone`), or the turn never ended (`timeout`). A refusal
+  (`stale`, `busy`, `timeout`, `failed`, an `error` in the waiter, and `partial` below) shows
+  its cause and fix on every terminal attached to the pane's tmux session until a key press,
+  plus a Windows toast; `resumed`, `gone` and `cancelled`, which Hayden caused, show one brief
+  line in the status line. Fix the cause and run `/pass` again. In compact mode, copy mode,
   a draft or no input box between `/compact` and the resume prompt leaves the prompt for you to
   type (`partial`): it stays in the status line until a key press, and `pass.log` has it whole.
+- What Claude said before a pass: a plain pass clears the pane, so the old session's replies
+  would leave the screen. The fresh session shows what was said in the last turn once as a
+  banner (at most 40 lines of reply and 4 KiB in all), which you see and the model doesn't. A
+  turn is a run of replies to one prompt_id: a turn a background-task notice started counts as
+  its own, so the last turn isn't always your last prompt. Ctrl-b Up shows the last 5 turns in a
+  popup at any time, opened at the last one, as does "Replies before pass" in the Ctrl-b Enter
+  menu and the tab's right-click menu (`pass-last`, linked by `setup-tmux.sh`). Without
+  `setup-tmux.sh`, a cut banner names the file instead. A compact keeps the conversation, so it
+  needs neither.
+- Both show your side too. Each turn starts with its time and the prompt you typed (the banner
+  shows its first line; the popup shows it under a green bar). A turn a task notice or an
+  agent's message started says "(no prompt: a background notice)", and one whose start
+  `pass-respawn` couldn't read says "(prompt not saved)". `pass-respawn` reads the prompts from the
+  transcript's last 8 MiB at the pass; a slash command shows as typed and an image as `[image]`,
+  and each prompt is cut at 12 lines or 1 KiB. The replies are rendered from markdown by
+  `hooks/md_render.py` (stdlib, no dependency): bold, code, lists, tables and code blocks in
+  color, wrapped at the width without breaking words. The popup uses `less -R`; piped
+  elsewhere, `pass-last` prints plain text.
 - One pass may be pending per session. `pass-respawn -C <toplevel> --cancel` ends it, until the
   waiter has begun acting; then it finishes, and `--cancel` says `too-late` (also, naming the
   outcome, when the waiter dropped or acted on its own while still holding its lock). Once the
@@ -467,6 +502,48 @@ idle, the script rechecks the handoff and respawns the pane with a fresh `claude
   decision appends a line to `~/.local/state/dotclaude/pass.log`.
 
 `skills/pass/SKILL.md` is the procedure and PLAN.md ("PR 3: `/pass`") the design.
+
+### Auto-pass
+
+A session can hand off on its own before auto-compact (about 567k tokens with
+`autoCompactWindow` at 600k). `hooks/context-watch.sh` runs on Stop and on every main-thread
+tool call. It reads the context size from the transcript's last assistant `usage`, writes it to
+`~/.local/state/dotclaude/ctx/<session>.json` (for every session, `claude -p` and `--bg` ones
+included), and acts at three tiers. They come from `autoCompactWindow`, or from the model's
+window when the ctx file says it is smaller: compact at window - 33k, hard 8% of the window
+before that (at most 47k), wrap-up 7% before hard (at most 40k), soft at half the window. A
+200k window gives 100k, 137k and 151k; under about 110k it stays quiet.
+
+| Tier | Tokens | With autopass on |
+|---|---|---|
+| Soft | 300k | a Stop is blocked once: pass if the task is done, finish a small remainder first, do nothing if the last reply asked something |
+| Wrap-up | 480k | once, on a Stop or a tool call: finish this step, then pass |
+| Hard | 520k | on a Stop or a tool call, again every 20k until a pass starts: pass now |
+
+- Only the highest tier crossed speaks, once per crossing. A drop of more than a quarter of a
+  tier (at most 50k) under it, as a compact makes, re-arms it, so a count hovering at a tier
+  never repeats it. The hard tier's 20k re-arm (less on a small window) pauses once the session
+  calls the `pass` skill, runs `pass-respawn` or you type `/pass`, and resumes if no pass came
+  40k later.
+- Background work: while a subagent, shell, workflow or cloud session runs, soft and wrap-up
+  wait and hard says `pass compact`. With any other task but `dream` (a monitor, a teammate),
+  every tier says compact mode, since `pass-respawn` would refuse a plain pass. A Monitor
+  counts as a monitor, though Claude Code reports it as a shell (PLAN.md A10). A tool call
+  can't see the task list, so it reads the last Stop's record; with none from the last 10
+  minutes, it says compact mode too, as safe whether or not anything runs.
+- With autopass off, you alone see one line at the hard tier, once: "Context 521k, auto-compact
+  near 567k: hand off now (/pass)."
+- `/autopass on|off|status` sets it for this tmux tab, or shows the count, the next tier, on or
+  off and what set it. A hook answers it, so it costs no model turn. Without a tab's setting,
+  a lane and the lanes repo's main checkout (the lead) are on (`autopass` in the repo's lanes
+  config), and elsewhere `autopass = true` in
+  `~/.config/dotclaude/pass.toml` turns it on (off by default). `tiers = [soft, wrap, hard]` in
+  that file overrides the tiers for live tests; start the test session with its own
+  `XDG_CONFIG_HOME` so the override reaches only that session.
+- Nothing fires for a subagent, a `claude -p` or `--bg` session (no pane to respawn), or while
+  a pass is already pending.
+
+PLAN.md ("PR 4: auto-pass") is the design.
 
 ## Status line
 
@@ -482,9 +559,14 @@ parses the fixed-overhead categories from the most recent `/context` output stor
 session transcript, and computes the messages figure live (total minus overhead) from the
 totals piped on stdin. Run `/context` once per session to seed the split; until then the
 widget shows the total with a hint. The total chip shows the token count and its percent
-of the window, set off from the per-category chips by a thin divider; it is green, turns
-amber past 50% of the context window, red past 66%, and blinking bright red past 83%
-(about 400k and 500k of a 600k window; terminals without blink support show it static).
+of the window, set off from the per-category chips by a thin divider. Its color follows the
+auto-pass tiers (see Auto-pass) on the smaller of the model window and `autoCompactWindow`:
+green below soft, yellow from soft, dark red from wrap-up, and bold bright red "Ctx!" from
+hard (300k, 480k and 520k of a 600k window). An `A` at the end of the chip means auto-pass is
+on for this tab. The widget also writes the model's window into the session's ctx file, since
+no hook payload carries it, so the watcher's tiers follow a smaller window. Without
+`hooks/autopass_state.py` (a copied widget) it falls back to 50%, 66% and 83% of the window,
+with no `A`.
 `statusline/session-summary.py` adds a second custom widget on status lines 2 and 3 (previously
 empty): a 1-2 sentence plain-language summary of what the session is doing and where it stands,
 word-wrapped to the terminal width across two dim rows (`--row 1` / `--row 2`). The text is produced

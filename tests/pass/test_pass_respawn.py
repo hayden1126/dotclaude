@@ -22,6 +22,7 @@ import os
 import re
 import shlex
 import shutil
+import subprocess
 import sys
 import time
 import unittest
@@ -56,13 +57,31 @@ case "$1" in
       case "$5" in
         *pane_in_mode*) printf '%s\n' "$FAKE_TMUX_MODE" ;;
         *pane_pid*) printf '%s\n' "$FAKE_TMUX_PANE" ;;
+        *session_id*) printf '%s\n' "$FAKE_TMUX_WHERE" ;;
         *) printf '%s\n' "$FAKE_TMUX_SERVER" ;;
       esac
     fi ;;
   capture-pane) printf '%s\n' "$FAKE_TMUX_SCREEN" ;;
+  list-clients) [ -n "$FAKE_TMUX_CLIENTS" ] && printf '%s\n' "$FAKE_TMUX_CLIENTS" ;;
 esac
 exit 0
 """
+
+# The toast: a fake powershell.exe logs its argv like the fake tmux and exits $FAKE_TOAST_EXIT;
+# a fake wslpath answers one Windows path. Both sit first on PATH, and Base drops every /mnt/
+# entry from PATH, so the real powershell.exe never runs.
+FAKE_POWERSHELL = r"""#!/bin/sh
+{ printf 'powershell.exe'; for a in "$@"; do printf '\037%s' "$a"; done; printf '\n'; } \
+  >> "$FAKE_TOAST_LOG"
+exit "${FAKE_TOAST_EXIT:-0}"
+"""
+FAKE_WSLPATH = r"""#!/bin/sh
+[ "$1" = -w ] || exit 1
+printf '%s\n' 'C:\fake\notify-toast.ps1'
+"""
+WINPATH = r"C:\fake\notify-toast.ps1"
+WHERE = "$2 3 [repo] chart work"  # the pane's session id, window index and window name
+CLIENTS = "/dev/pts/7\n/dev/pts/9"  # the clients attached to that session
 
 TODAY = datetime.date.today()
 GOOD = """# STATUS: chart work
@@ -134,11 +153,21 @@ class Base(LanesRepo):
         with open(self.tmux, "w") as f:
             f.write(FAKE_TMUX)
         os.chmod(self.tmux, 0o755)
+        for name, body in (("powershell.exe", FAKE_POWERSHELL), ("wslpath", FAKE_WSLPATH)):
+            with open(os.path.join(self.fake_bin, name), "w") as f:
+                f.write(body)
+            os.chmod(os.path.join(self.fake_bin, name), 0o755)
+        self.write(os.path.join(self.home, ".claude", "notify-toast.ps1"), "# the toast\n")
         self.claude = os.path.join(self.fake_bin, "claude")
         self.tmux_log = os.path.join(self.tmp, "tmux.log")
+        self.toast_log = os.path.join(self.tmp, "toast.log")
+        self.env["PATH"] = os.pathsep.join(e for e in self.env["PATH"].split(os.pathsep)
+                                           if not e.startswith("/mnt/"))
         self.env.update(TMUX_PANE="%4", CLAUDE_CODE_SESSION_ID=SID, FAKE_TMUX_LOG=self.tmux_log,
                         FAKE_TMUX_SERVER=SERVER, FAKE_TMUX_PANE=f"{PANE_SHELL} claude",
-                        FAKE_TMUX_FAIL="", FAKE_TMUX_MODE="0", FAKE_TMUX_SCREEN=EMPTY_BOX)
+                        FAKE_TMUX_FAIL="", FAKE_TMUX_MODE="0", FAKE_TMUX_SCREEN=EMPTY_BOX,
+                        FAKE_TMUX_WHERE=WHERE, FAKE_TMUX_CLIENTS=CLIENTS,
+                        FAKE_TOAST_LOG=self.toast_log, FAKE_TOAST_EXIT="0")
         patch = mock.patch.dict(os.environ, self.env, clear=True)
         patch.start()
         self.addCleanup(patch.stop)
@@ -149,6 +178,9 @@ class Base(LanesRepo):
         self.script = ["busy", "idle"]
         self.stop_waits = []
         self.stop_tasks = None  # every task label; None means the waits
+        # The stop record's `replies` (hooks/stop_ring.py); None writes no key.
+        self.stop_replies = [{"prompt_id": "p1", "text": "Done: the handoff is committed.",
+                              "time": time.time()}]
         self.start_now = START
         self.status, self.updated, self.stopped = None, 0, False
         real_start = self.mod.proc_start
@@ -189,14 +221,16 @@ class Base(LanesRepo):
         """A fresh turn for another call in the same test: a new script, no stop yet."""
         self.script = list(script) or ["busy", "idle"]
         self.status, self.stopped = None, False
-        with contextlib.suppress(FileNotFoundError):
-            os.remove(self.tmux_log)
+        for path in (self.tmux_log, self.toast_log):
+            with contextlib.suppress(FileNotFoundError):
+                os.remove(path)
 
     def write_stop(self, waits, at=None):
         tasks = waits if self.stop_tasks is None else self.stop_tasks
-        self.write(os.path.join(self.state, "stops", f"{SID}.json"),
-                   json.dumps({"session_id": SID, "time": at or time.time(), "waits": waits,
-                               "tasks": tasks}))
+        rec = {"session_id": SID, "time": at or time.time(), "waits": waits, "tasks": tasks}
+        if self.stop_replies is not None:
+            rec["replies"] = self.stop_replies
+        self.write(os.path.join(self.state, "stops", f"{SID}.json"), json.dumps(rec))
 
     def transcript(self):
         return os.path.join(self.home, ".claude", "projects",
@@ -235,15 +269,65 @@ class Base(LanesRepo):
     def carry_marker(self):
         return os.path.join(self.state, "pass-carry", "4.json")
 
+    def last_reply(self):
+        return os.path.join(self.state, "pass-last", "4.json")
+
+    def old_last_reply(self):
+        """A pass-last file from an earlier pass in this pane."""
+        self.write(self.last_reply(), json.dumps({"tab": {}, "from_session": "older",
+                                                  "written_at": 1, "message": "old",
+                                                  "shown": True}))
+
     def notices(self):
-        return [a for a in self.calls("tmux", "display-message") if a[2] == "-t"]
+        """The status-line messages shown (display-message without -p)."""
+        return [a for a in self.calls("tmux", "display-message") if a[2] != "-p"]
+
+    def toasts(self, want=1, tries=60):
+        """The toasts sent: each fake powershell.exe call's argv. The toast is detached, so wait
+        up to tries * 0.05 s (3 s) for want of them."""
+        argvs = []
+        for _ in range(tries):
+            if os.path.exists(self.toast_log):
+                with open(self.toast_log) as f:
+                    done = f.read().rpartition("\n")[0]  # a line still being written waits
+                argvs = [line.split("\x1f") for line in done.splitlines()]
+                if len(argvs) >= want:
+                    return argvs
+            time.sleep(0.05)
+        return argvs
+
+    def assertLoud(self, words, toast=True):
+        """One held message per client of the pane's session (-d 0 -c <client> -t %4) holding
+        words and naming the tab, and, with toast, one toast holding them too."""
+        msgs = self.notices()
+        self.assertEqual([m[:7] for m in msgs],
+                         [["tmux", "display-message", "-d", "0", "-c", c, "-t"]
+                          for c in CLIENTS.split("\n")])
+        for m in msgs:
+            self.assertEqual(m[7], "%4")
+            self.assertIn(words, m[-1])
+            self.assertIn(" in tab 3: ", m[-1])
+        if toast:
+            (argv,) = self.toasts()
+            self.assertEqual(argv[1:6], ["-ExecutionPolicy", "Bypass", "-File", WINPATH,
+                                         "-Message"])
+            # The toast names the window too: no status bar beside it says which tab.
+            self.assertIn(words.replace(" in tab 3: ", " in tab 3 ([repo] chart work): "),
+                          argv[6])
+            self.assertIn(" in tab 3 ([repo] chart work): ", argv[6])
 
     def assertDropped(self, outcome, words):
         self.assertEqual(self.calls("tmux", "respawn-pane"), [])
         self.assertEqual(self.calls("tmux", "send-keys"), [])
-        (msg,) = self.notices()
-        self.assertEqual(msg[:4], ["tmux", "display-message", "-t", "%4"])
-        self.assertIn(words, msg[-1])
+        if outcome in self.mod.QUIET:
+            # Hayden caused it: the brief line, no held notice, no toast (a short look here;
+            # LoudNotice waits the full 3 s for each quiet outcome).
+            (msg,) = self.notices()
+            self.assertEqual(msg[:4], ["tmux", "display-message", "-t", "%4"])
+            self.assertIn(words, msg[-1])
+            self.assertEqual(self.toasts(tries=4), [])
+        else:
+            self.assertLoud(words)
         self.assertIn(f"outcome={outcome}", self.log())
 
     def assertNoTypedPath(self, argvs):
@@ -493,6 +577,210 @@ class Plain(Base):
         self.assertEqual(self.calls("tmux", "respawn-pane"), [])
         self.assertFalse(os.path.exists(self.carry_marker()))
         self.assertIn("mode=compact outcome=compact", self.log())
+        self.assertFalse(os.path.exists(self.last_reply()))  # the conversation survives
+
+    REPLIES = [{"prompt_id": "p1", "text": "Earlier: the tests pass.", "time": 1.0},
+               {"prompt_id": "p2", "text": "Done: the PR is up.", "time": 2.0},
+               {"prompt_id": "p2", "text": "Pass armed. Next: review " + chr(0x00E9), "time": 3.0}]
+
+    def test_a_plain_pass_writes_the_replies_for_the_banner(self):
+        self.stop_replies = self.REPLIES
+        code, out = self.run_pass("--foreground")
+        self.assertEqual(code, 0, out)
+        with open(self.last_reply(), "rb") as f:
+            raw = f.read()
+        self.assertIn(chr(0x00E9).encode(), raw)  # UTF-8, not escaped
+        last = json.loads(raw)
+        self.assertEqual(last["tab"], {"socket": "/tmp/tmux-1000/default",
+                                       "server_start": 1791000000, "server_pid": 222,
+                                       "pane": "%4"})
+        self.assertEqual((last["from_session"], last["replies"], last["shown"]),
+                         (SID, self.REPLIES, False))
+        self.assertLess(abs(time.time() - last["written_at"]), 30)
+        self.assertTrue(os.path.exists(self.carry_marker()))  # its own file, beside the carry
+
+    def test_only_replies_with_text_are_copied(self):
+        self.stop_replies = [5, {"prompt_id": "p1", "text": ""}, {"prompt_id": "p1", "text": 7},
+                             {"prompt_id": None, "text": "no prompt"}, *self.REPLIES[:1]]
+        code, out = self.run_pass("--foreground")
+        self.assertEqual(code, 0, out)
+        with open(self.last_reply()) as f:
+            self.assertEqual(json.load(f)["replies"], self.REPLIES[:1])
+
+    def prompt(self, pid, content, **fields):
+        """A main-chain typed prompt in the transcript, as Claude Code writes it."""
+        return {"type": "user", "origin": {"kind": "human"}, "promptId": pid,
+                "isSidechain": False, "timestamp": "2026-10-12T18:27:29.500Z",
+                "message": {"role": "user", "content": content}, **fields}
+
+    def written(self):
+        with open(self.last_reply()) as f:
+            return json.load(f)
+
+    def test_each_turns_prompt_is_written_beside_its_replies(self):
+        self.stop_replies = self.REPLIES
+        self.say(self.prompt("p2", "Open the PR.\nThen pass."),
+                 self.prompt("p1", "Run the tests " + chr(0x00E9)),
+                 self.prompt("p2", "a second typed entry for p2 is ignored"),
+                 self.prompt("p9", "a turn the replies don't have"))
+        code, out = self.run_pass("--foreground")
+        self.assertEqual(code, 0, out)
+        stamp = datetime.datetime(2026, 10, 12, 18, 27, 29, 500000,
+                                  tzinfo=datetime.timezone.utc).timestamp()
+        self.assertEqual(self.written()["prompts"], [
+            {"prompt_id": "p1", "text": "Run the tests " + chr(0x00E9), "time": stamp},
+            {"prompt_id": "p2", "text": "Open the PR.\nThen pass.", "time": stamp}])
+
+    def test_only_a_main_chain_typed_prompt_counts(self):
+        self.stop_replies = self.REPLIES
+        self.say(self.prompt("p1", "from a subagent", isSidechain=True),
+                 self.prompt("p1", "the skill body", isMeta=True),
+                 self.prompt("p1", [{"type": "tool_result", "content": "x"}], origin=None),
+                 self.prompt("p1", "   "),
+                 "{not json", "", "[1, 2]",
+                 self.prompt("p2", "the real one"))
+        code, out = self.run_pass("--foreground")
+        self.assertEqual(code, 0, out)
+        self.assertEqual([p.get("text") for p in self.written()["prompts"]], ["the real one"])
+
+    def test_a_turn_a_notice_started_is_marked_and_one_past_the_read_is_left_out(self):
+        self.stop_replies = [{"prompt_id": p, "text": "reply " + p} for p in ("p1", "p2", "p3")]
+        self.say(self.prompt("p1", "<task-notification>done</task-notification>",
+                             origin={"kind": "task-notification"}),
+                 self.prompt("p1", "typed after the notice, same turn"),
+                 # An agent's message is meta too.
+                 self.prompt("p2", "Another Claude session sent a message", isMeta=True,
+                             origin={"kind": "peer"}),
+                 # p3's start is past the read: only its tool result is left.
+                 self.prompt("p3", [{"type": "tool_result", "content": "x"}], origin=None))
+        code, out = self.run_pass("--foreground")
+        self.assertEqual(code, 0, out)
+        self.assertEqual([(p["prompt_id"], p.get("notice"), p.get("text"))
+                          for p in self.written()["prompts"]],
+                         [("p1", True, None), ("p2", True, None)])
+
+    def test_a_lone_surrogate_in_one_prompt_keeps_every_prompt(self):
+        self.stop_replies = self.REPLIES
+        self.say(self.prompt("p1", "cut mid-emoji " + chr(0xD83D)), self.prompt("p2", "fine"))
+        code, out = self.run_pass("--foreground")
+        self.assertEqual(code, 0, out)
+        self.assertEqual([p["text"] for p in self.written()["prompts"]],
+                         ["cut mid-emoji ?", "fine"])
+
+    def test_a_slash_command_and_an_image_show_as_typed(self):
+        self.stop_replies = self.REPLIES
+        command = ("<command-message>pass</command-message>\n<command-name>/pass</command-name>\n"
+                   "<command-args>compact</command-args>")
+        self.say(self.prompt("p1", command),
+                 self.prompt("p2", [{"type": "image", "source": {"type": "base64", "data": "x"}},
+                                    {"type": "text", "text": "what is this?"}]))
+        code, out = self.run_pass("--foreground")
+        self.assertEqual(code, 0, out)
+        self.assertEqual([p["text"] for p in self.written()["prompts"]],
+                         ["/pass compact", "[image]\nwhat is this?"])
+        self.assertEqual(self.mod.prompt_text("<command-message>x</command-message>\n"
+                                              "<command-name>/clear</command-name>"), "/clear")
+        self.assertEqual(self.mod.prompt_text("<command-message>x</command-message>\n"
+                                              "<command-name>review</command-name>\n"
+                                              "<command-args></command-args>"), "/review")
+
+    def test_a_long_prompt_is_cut_at_12_lines_or_1_kib(self):
+        clip = self.mod.clip_prompt
+        many = "\n".join(f"line {i}" for i in range(1, 21))
+        self.assertEqual(clip(many), "\n".join(f"line {i}" for i in range(1, 13))
+                         + "\n" + chr(0x2026) + " (8 more lines)")
+        self.assertEqual(clip("\n".join(["l"] * 13)),
+                         "\n".join(["l"] * 12) + "\n" + chr(0x2026) + " (1 more line)")
+        self.assertEqual(clip("\n".join(["l"] * 12)), "\n".join(["l"] * 12))
+        one = clip(chr(0x00E9) * 1000)                       # 2,000 bytes on one line
+        self.assertEqual(one, chr(0x00E9) * 512 + chr(0x2026))   # cut on a character boundary
+        two = clip("a" * 1000 + "\n" + "b" * 100 + "\nc")
+        self.assertEqual(two, "a" * 1000 + "\n" + "b" * 23 + chr(0x2026) + "\n" + chr(0x2026)
+                         + " (1 more line)")
+        self.assertEqual(clip("a" * 1024 + "\nb"), "a" * 1024 + "\n" + chr(0x2026)
+                         + " (1 more line)")                 # no room for a cut line
+        self.assertEqual(clip("\n\nfine  \n\n"), "fine")
+        self.assertLessEqual(len(clip("x" * 5000).encode()), 1024 + 3)
+
+    def test_only_the_transcripts_last_8_mib_is_read(self):
+        self.mod.PROMPT_TAIL = 200
+        self.stop_replies = self.REPLIES
+        self.say(self.prompt("p1", "too far back"), {"type": "pad", "x": "y" * 300},
+                 self.prompt("p2", "recent"))
+        code, out = self.run_pass("--foreground")
+        self.assertEqual(code, 0, out)
+        self.assertEqual([p["text"] for p in self.written()["prompts"]], ["recent"])
+
+    def test_no_transcript_writes_no_prompts(self):
+        # A transcript gone at the call drops the pass (`resumed`), so this calls write_last
+        # with one that went away after the call.
+        self.stop_replies = self.REPLIES
+        plan = self.plan()
+        self.write_stop([])
+        os.remove(self.transcript())
+        tab = {"socket": "/tmp/s", "server_start": 1, "server_pid": 2, "pane": "%4"}
+        self.assertEqual(self.mod.write_last(plan, tab), self.last_reply())
+        self.assertNotIn("prompts", self.written())
+        self.assertEqual(self.written()["replies"], self.REPLIES)
+        self.assertIsNone(self.mod.read_prompts(None, ["p1"]))
+        self.assertIsNone(self.mod.read_prompts(self.tmp, ["p1"]))   # a directory
+
+    def test_a_surprise_in_the_transcript_never_stops_the_pass(self):
+        self.stop_replies = self.REPLIES
+        self.mod.prompt_text = lambda content: 1 / 0
+        self.say(self.prompt("p1", "boom"))
+        code, out = self.run_pass("--foreground")
+        self.assertEqual(code, 0, out)
+        self.assertEqual(len(self.calls("tmux", "respawn-pane")), 1)
+        self.assertNotIn("prompts", self.written())
+
+    def test_compact_leaves_an_earlier_last_reply_alone(self):
+        self.old_last_reply()
+        code, out = self.run_pass("--compact", "--foreground")
+        self.assertEqual(code, 0, out)
+        with open(self.last_reply()) as f:
+            self.assertEqual(json.load(f)["from_session"], "older")
+
+    def test_no_reply_text_removes_an_earlier_last_reply(self):
+        # The popup must never show an earlier pass's replies as this one's.
+        for replies in (None, [], "text", [{"prompt_id": "p1", "text": ""}],
+                        [{"prompt_id": "p1", "text": None}]):
+            with self.subTest(replies=replies):
+                self.reset()
+                self.old_last_reply()
+                self.stop_replies = replies
+                code, out = self.run_pass("--foreground")
+                self.assertEqual(code, 0, out)
+                self.assertEqual(len(self.calls("tmux", "respawn-pane")), 1)
+                self.assertFalse(os.path.exists(self.last_reply()))
+
+    def test_an_unreadable_tab_writes_no_carry_and_removes_an_earlier_last_reply(self):
+        # pane_tab returns None when tmux's server line can't be read.
+        os.environ["FAKE_TMUX_SERVER"] = "not a server line"
+        self.old_last_reply()
+        code, out = self.run_pass("--foreground")
+        self.assertEqual(code, 0, out)
+        self.assertEqual(len(self.calls("tmux", "respawn-pane")), 1)
+        self.assertFalse(os.path.exists(self.carry_marker()))
+        self.assertFalse(os.path.exists(self.last_reply()))
+
+    def test_old_last_replies_are_pruned_once_a_day(self):
+        lasts = os.path.dirname(self.last_reply())
+        now = time.time()
+
+        def touch(name, age):
+            self.write(os.path.join(lasts, name), "{}")
+            os.utime(os.path.join(lasts, name), (now - age, now - age))
+        touch("9.json", 8 * 86400)
+        touch("8.json", 6 * 86400)
+        code, out = self.run_pass("--foreground")
+        self.assertEqual(code, 0, out)
+        self.assertEqual(sorted(os.listdir(lasts)), [".pruned", "4.json", "8.json"])
+        touch("9.json", 8 * 86400)
+        self.mod.prune(lasts, now + 3600)  # within the day: no pass
+        self.assertIn("9.json", os.listdir(lasts))
+        self.mod.prune(lasts, now + 86401)  # a day later: 8.json is past 7 days too
+        self.assertEqual(sorted(os.listdir(lasts)), [".pruned", "4.json"])
 
     def test_shell_status_is_at_the_prompt_so_compact_acts(self):
         # Live, 2026-10-12: at the prompt with a background shell running, the session file
@@ -512,7 +800,7 @@ class Plain(Base):
         self.stop_waits = ["shell"]
         code, out = self.run_pass("--foreground", "--timeout", "3")
         self.assertEqual(code, 1, out)
-        self.assertDropped("busy", "background work")
+        self.assertDropped("busy", "waiting on 1 shell (a respawn would kill it)")
         self.assertIn("busy: waits: shell", self.log())
         self.assertNotIn("no stop record", self.log())
 
@@ -604,7 +892,7 @@ class Plain(Base):
         self.stop_waits = ["shell"]
         code, out = self.run_pass("--foreground")
         self.assertEqual(code, 1, out)
-        self.assertDropped("busy", "background work")
+        self.assertDropped("busy", "waiting on 1 shell (a respawn would kill it)")
         self.assertIn("waits: shell", self.log())
 
     def test_a_teammate_at_the_stop_drops_busy(self):
@@ -612,14 +900,14 @@ class Plain(Base):
         self.stop_tasks = ["teammate"]
         code, out = self.run_pass("--foreground")
         self.assertEqual(code, 1, out)
-        self.assertDropped("busy", "background work")
-        self.assertIn("waits: teammate", self.log())
+        self.assertDropped("busy", "1 teammate running (a respawn would kill it)")
+        self.assertIn("busy: tasks: teammate", self.log())
 
     def test_no_stop_record_drops_busy(self):
         self.stop_waits = None
         code, out = self.run_pass("--foreground")
         self.assertEqual(code, 1, out)
-        self.assertDropped("busy", "background work")
+        self.assertDropped("busy", "the Stop wrote no record, so background work")
         self.assertIn("busy: no stop record", self.log())
 
     def test_a_stop_record_from_before_the_call_drops_busy(self):
@@ -627,7 +915,7 @@ class Plain(Base):
         self.write_stop([], at=time.time() - 30)
         code, out = self.run_pass("--foreground")
         self.assertEqual(code, 1, out)
-        self.assertDropped("busy", "background work")
+        self.assertDropped("busy", "no record since the call")
 
     def test_a_pane_not_running_claude_drops_gone(self):
         for pane in (f"{PANE_SHELL} zsh", "12345 claude"):
@@ -662,8 +950,11 @@ class Plain(Base):
         self.assertEqual(code, 1, out)
         self.assertEqual(len(self.calls("tmux", "respawn-pane")), 1)
         self.assertFalse(os.path.exists(self.carry_marker()))
+        self.assertFalse(os.path.exists(self.last_reply()))
         self.assertIn("outcome=failed", self.log())
         self.assertIn("can't find pane", self.log())
+        self.assertLoud("pass failed in tab 3: tmux could not respawn or type into the pane. "
+                        "See pass.log")
 
     def test_an_error_after_the_carry_removes_it_and_logs_error(self):
         real = self.mod.tmux
@@ -671,13 +962,16 @@ class Plain(Base):
         def tmux(plan, *args):
             if args[0] == "respawn-pane":
                 self.assertTrue(os.path.exists(self.carry_marker()))
+                self.assertTrue(os.path.exists(self.last_reply()))
                 raise RuntimeError("boom")
             return real(plan, *args)
         self.mod.tmux = tmux
         code, out = self.run_pass("--foreground")
         self.assertEqual(code, 1, out)
         self.assertFalse(os.path.exists(self.carry_marker()))
+        self.assertFalse(os.path.exists(self.last_reply()))
         self.assertIn("outcome=error RuntimeError: boom", self.log())
+        self.assertLoud("pass failed in tab 3: an error in the waiter. See pass.log")
 
     def test_a_waiter_that_cannot_detach_reports_error(self):
         real_fork = os.fork
@@ -787,7 +1081,7 @@ class Lane(Base):
         self.stop_tasks = ["monitor"]
         code, out = self.run_pass("--foreground", cwd=self.path)
         self.assertEqual(code, 1, out)
-        self.assertDropped("busy", "background work")
+        self.assertDropped("busy", "1 monitor running")
         self.assertFalse(os.path.exists(self.carry_marker()))
 
     def test_a_planted_lane_path_never_reaches_argv_or_keys(self):
@@ -824,6 +1118,26 @@ class Units(unittest.TestCase):
         self.mod = load()
         self.dir = __import__("tempfile").mkdtemp()
         self.addCleanup(shutil.rmtree, self.dir)
+
+    def test_the_stop_record_is_read_as_utf8_in_any_locale(self):
+        # stop_ring.py writes it as UTF-8. The C locale with Python's UTF-8 mode and coercion off
+        # reads files as ASCII by default.
+        stops = os.path.join(self.dir, "dotclaude", "stops")
+        os.makedirs(stops)
+        with open(os.path.join(stops, "s1.json"), "w", encoding="utf-8") as f:
+            json.dump({"replies": [{"prompt_id": "p1", "text": "caf" + chr(0x00E9)}]}, f,
+                      ensure_ascii=False)
+        code = ("from importlib.machinery import SourceFileLoader\n"
+                "from importlib.util import module_from_spec, spec_from_loader\n"
+                f"loader = SourceFileLoader('pr', {SCRIPT!r})\n"
+                "mod = module_from_spec(spec_from_loader('pr', loader))\n"
+                "loader.exec_module(mod)\n"
+                "print(ascii(mod.stop_record('s1')['replies'][0]['text']))\n")
+        env = {k: v for k, v in os.environ.items() if not k.startswith(("CLAUDE", "TMUX"))}
+        env.update(LC_ALL="C", LANG="C", PYTHONCOERCECLOCALE="0", XDG_STATE_HOME=self.dir)
+        p = subprocess.run([sys.executable, "-X", "utf8=0", "-c", code], capture_output=True,
+                           text=True, timeout=20, env=env)
+        self.assertEqual((p.returncode, p.stdout.strip()), (0, "'caf\\xe9'"), p.stderr)
 
     def test_the_sessions_claude_is_the_nearest_claude_ancestor(self):
         self.assertEqual(self.mod.session_claude(table(), os.getpid()), CLAUDE)
