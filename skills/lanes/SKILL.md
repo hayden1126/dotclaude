@@ -105,7 +105,9 @@ inside a lane.
    to Hayden's asks. Never order a merge or close a lane before the gate passes.
 6. **Watch and order.** Watch `lane ls`. Keep the merge order in the project STATUS. After each
    merge, message the remaining lanes: "main moved to `<sha>`: rebase; renumber the version if
-   taken". The board's `rebase` flag is the truth; the message is only a nudge.
+   taken". The board's `rebase` flag is the truth; the message is only a nudge. A lane whose
+   install is live rebases with the sandbox off: its own hooks, skills and tests are
+   write-protected then (`docs/lanes.md` S3).
 7. **Shared gates.** Wrap any run that can't happen twice at once (a browser-driven test gate, an
    e2e suite on a fixed port) in `lane lock <name> -- <cmd>`. List the names once with
    `lane init --locks gate,e2e` (it takes the full list and replaces the old one); an unlisted name is refused, since a typo would split the mutual

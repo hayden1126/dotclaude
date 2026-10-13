@@ -47,9 +47,10 @@ permission flow.
 **Every delegated agent:**
 - **Stays in the sandbox:**
   - `dangerouslyDisableSandbox` is denied;
-  - so is every `excludedCommands` entry, which covers `gh`, `git push/fetch/pull`, `codex`,
-    `codex-delegate`, `claude`, `tmux`, `delegation-ledger` and the `lane` subcommands that
-    leave the sandbox.
+  - so is every `excludedCommands` entry, which covers `gh`, `git push/fetch/pull/ls-remote`,
+    `claude`, `codex-delegate`, `delegation-ledger`, `pass-respawn`, the `lane` subcommands
+    that leave the sandbox, read-only `tmux` and `codex`, and the Windows shells. Any other
+    `tmux` or `codex` call runs sandboxed, where it reaches no socket or credential.
 - **Can't reach authenticated GitHub.** `~/.config/gh` is unreadable inside the sandbox, so
   there is no push and no private-repo read. That holds whatever form the command takes.
   Public GitHub is available through `gh-public` and https clones.

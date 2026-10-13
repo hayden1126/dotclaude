@@ -1308,8 +1308,7 @@ wins.
   - an env-assignment prefix (`FOO=1 tmux ls`) matches no entry, so the asks need no such forms;
   - in tmux a `;` after a read-only verb runs the next command, so `;` asks; a `#(` job in a
     command's format did not run on 3.7c (status-line formats do run them), and it asks anyway;
-  - `claude --verbose auth --help` printed auth's help, so a global flag before a `claude`
-    subcommand still reaches it; the subcommand asks anchor on the subcommand, and that spelling
+  - a global flag before a `claude` subcommand still reaches it (probed with a help call); the subcommand asks anchor on the subcommand, and that spelling
     is left to the classifier (Hayden, 2026-10-13);
   - `codex --version` and `--help` run sandboxed; `codex login status` and the other read-only
     forms need its credential or config, which `denyRead` hides.

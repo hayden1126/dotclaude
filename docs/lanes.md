@@ -229,7 +229,9 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
   A lane that installs from its worktree (`lane lock install -- ./setup.sh`) points the installed
   hooks, skills, agents and bin at files its own sandboxed Bash can write, so the install adds the
   lane's copies of the `~/dotclaude` paths to `denyWrite` (`merge-settings.py --checkout`); the
-  lead's reinstall from `main` drops them.
+  lead's reinstall from `main` drops them. While that install is live, the lane's own sandboxed
+  rebase, merge or switch that touches those paths fails or half-applies, as in `~/dotclaude`:
+  run it sandbox-off, or after the reinstall.
 - **S4, compaction:** a SessionStart hook matched on `compact` gets its `additionalContext` to
   the model after `/compact` (`/compact` piped into `claude -p --resume` triggers a real
   compaction). `lane-identity.sh` on `compact` is therefore the safety net for an unplanned

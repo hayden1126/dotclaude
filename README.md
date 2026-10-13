@@ -92,7 +92,9 @@ force-push and a `reset --hard` on a dirty tree when the prompt named them.
 it must cover, and `test_settings.py` ties it to `settings.json` in both directions. It holds the
 credential barrier (`git push`, `fetch`, `pull`, `ls-remote`, `gh`), our wrappers (`lane init`,
 `new`, `adopt`, `ls`, `open`, `done`, `pass-respawn`, `delegation-ledger`, `codex-delegate`),
-`claude`, the read-only tmux verbs (`ls`, `list-*`, `capture-pane`, `display`, `show*`), read-only
+`claude`, the read-only tmux verbs (`ls`, `list-sessions`, `list-windows`, `list-panes`,
+`list-clients`, `list-keys`, `list-commands`, `capture-pane`, `display`, `show`, `show-options`,
+`show-environment`, `show-messages`, `show-hooks`), read-only
 codex (`login status`, `doctor` and a few lists) and the Windows shells. Any other call runs
 sandboxed, where tmux reaches no socket and codex no credential, so it fails closed.
 
@@ -103,7 +105,8 @@ that change the install, config, auth or sessions; git's `--upload-pack`, `--rec
 `--exec`; `gh auth token` and the `gh` commands that change its credential, aliases, config or
 extensions; `lane init --setup` or `--root`, `lane done --abandon`, `codex-delegate --network` and
 the Windows shells. `claude ultrareview` is denied. What CLAUDE.md, the skills and the agents tell
-Claude to run asks nothing (a test scans them), and a suite fails when the installed tmux or Claude
+Claude to run asks nothing, except the lead's once-per-repo `lane init --root ... --setup` (a test
+scans them), and a suite fails when the installed tmux or Claude
 Code has a verb or flag the inventory hasn't classified. Spellings a glob can't anchor, such as a
 quoted verb or a global flag before a `claude` subcommand, are left to the classifier.
 
