@@ -29,7 +29,8 @@ or one gone at the signal (ProcessLookupError), may be a waiter that just ended:
 a freed lock's marks the same way, and with none says nothing was pending. --tasks prints
 this session's tasks from its last stop record (each one's label, description and id, and
 whether it blocks a plain pass) for /pass step 2, and changes nothing: no lock, log or notice.
-It exits 1 with no plain $CLAUDE_CODE_SESSION_ID, else 0, a missing record included.
+It exits 1 with no plain $CLAUDE_CODE_SESSION_ID, else 0, a missing or unreadable record
+included (an unreadable one says a plain pass would refuse).
 
 The waiter polls that session file every 0.2 s until its status is `idle` (or `shell`, at the
 prompt with a background shell running) with a statusUpdatedAt
