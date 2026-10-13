@@ -32,9 +32,10 @@ marks a timeout.
 `done` runs only from the main checkout (the lead), never under a lane's session. It ends what
 provably belongs to the lane before it archives the record and removes the worktree: the lane's
 Claude sessions (SIGTERM), the processes under them, their tmux pane shells (SIGHUP) and
-leftovers started with a lane session's id; survivors get SIGTERM, then SIGKILL, except one that
-holds a file open in the git dir or has a process under it that does. Proof comes only from
-/proc and Claude Code's own session files and transcripts, never lane.json. Anything else with
+leftovers started with a lane session's id; survivors get SIGTERM (a pane shell SIGHUP), then
+SIGKILL. Every signal but a session's first is sent with its target's process tree frozen, and
+held while the target or a process under it holds a file open in the git dir. Proof comes only
+from /proc and Claude Code's own session files and transcripts, never lane.json. Anything else with
 its cwd in the lane refuses the close by name before any signal, as do installed links into the
 lane (it holds the install: install-state.py, checked again under setup.sh's install.lock just
 before the remove), a dirty, locked or submodule worktree, a background session, a `done` run

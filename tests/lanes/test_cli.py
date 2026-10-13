@@ -1620,9 +1620,9 @@ class Close(LanesRepo):
 
         with self.git_after_remove(lane_mod, then), \
                 mock.patch.object(lane_mod, "LANES_LOCK_WAIT", 0.3):
-            with self.assertRaisesRegex(lane_mod.LaneError, r"held past 0\.3 s .*: lane chart-fix's "
-                                        "record is not archived, and its worktree is gone: rerun "
-                                        "`lane done chart-fix`"):
+            with self.assertRaisesRegex(lane_mod.LaneError, r"held past 0\.3 s .*: lane "
+                                        "chart-fix's record is not archived, and its worktree is "
+                                        "gone: rerun `lane done chart-fix`"):
                 self.done_in_process(lane_mod)
         self.assertFalse(os.path.exists(self.path))
         self.assertEqual(self.archives(), [])
