@@ -99,7 +99,18 @@ stored here).
   `lane lock install -- ./setup.sh` from its own worktree, sandbox off. Until it merges, every
   session runs that lane's hooks. After the merge, the lead moves the main checkout to `main`,
   re-runs `./setup.sh` there and smoke-tests, then proposes `lane done`. A lane carries the
-  lead's STATUS commits (on `chore/after-pr4`) into its PR before it is marked ready.
+  lead's STATUS commits (on `chore/after-pr4`, local only) into its PR before it is marked ready.
+  Only the next PR to merge carries them; later lanes get them from `main` when they rebase.
+  - **Install gap found 2026-10-13:** `lane lock install` serializes only the setup.sh run, and
+    the last run wins. Lane `attach-tabs` installed two minutes after lane `autopass-now` and
+    replaced its links. Rule until tooling covers it: only the lane next in merge order
+    installs, and the next lane waits for the lead's reinstall from `main`. The fix to build is a
+    lock held from install until the merge.
+  - **Messaging gap found 2026-10-13:** a lane's SendMessage to the lead failed "not reachable".
+    A session's address is its full title, and `session-title.sh` rewrites the lead's title as
+    the summary changes, so neither "dotclaude" nor a truncated title matched. Lead-to-lane sends
+    work. Until it's fixed, the lead polls `lane asks`, and lanes put anything for the lead in
+    their records.
 - **Lanes, handoff-check and `/pass`** (Hayden's design, approved 2026-10-11; `PLAN.md`, behavior in
   `docs/lanes.md` and `skills/lanes/SKILL.md`). Four PRs:
   - PR 1 (lanes core) merged as #86 (`gh pr view 86`); its smoke test and guard replay are in
