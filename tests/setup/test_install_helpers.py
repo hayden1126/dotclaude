@@ -350,32 +350,63 @@ PYTHON_NON_CALLS = {
 
 def python_lines(text, non_calls):
     """A shell script's lines that name Python: (bad, ok, unclosed). ok holds the calls in the
-    strict form, `python3 -I` then a quoted arg or `-`, with no other Python on the line; bad
-    holds every other line naming a Python interpreter (python, python3, python3.12) or a .py
-    file, so a bare python3, an interpreter in a variable (its assignment names it) and a
-    direct run of a .py all land there. Comments and heredoc bodies (the Python a call reads,
-    or printed text) are skipped; unclosed is the delimiter of a heredoc still open at the end.
-    Lines are continuation-joined and whitespace-normalized."""
-    bad, ok, delim = [], [], None
-    for raw in text.replace("\\\n", " ").splitlines():
-        line = " ".join(raw.split())
+    strict form: the line's first command is `python3 -I` then a quoted arg or `-`, and nothing
+    after it (past &&, ||, ;, |, & or a command substitution) names Python. bad holds every
+    other line naming a Python interpreter (python, python3, python3.12) or a .py file, so a
+    bare python3, an interpreter in a variable (its assignment names it) and a direct run of a
+    .py all land there. Full-line comments are dropped before continuations join (bash doesn't
+    continue a comment), heredoc bodies (the Python a call reads, or printed text) are skipped,
+    and unclosed is the delimiter of a heredoc still open at the end. Lines are
+    whitespace-normalized.
+
+    Known limits (no top-level script does any of these today): a `<<WORD` inside a string or
+    an arithmetic `$((x << 2))` opens a heredoc that isn't there (the unclosed check catches one
+    that never ends); a trailing `cmd # note \\` reads as a continuation; and an extensionless
+    script run through its shebang, or an interpreter in a variable whose assignment names no
+    Python (`"$PYTHON"` from the environment), isn't seen."""
+    bad, ok, delim, buf = [], [], None, ""
+    for raw in text.splitlines():
         if delim is not None:
-            if line == delim:
+            if raw.strip() == delim:
                 delim = None
             continue
-        if line.startswith("#"):
+        if not buf and raw.lstrip().startswith("#"):
             continue
+        if raw.endswith("\\"):
+            buf += raw[:-1] + " "
+            continue
+        line, buf = " ".join((buf + raw).split()), ""
         m = re.search(r"(?<!<)<<(?!<)-?\s*(['\"]?)(\w+)\1", line)  # a <<< here-string isn't one
         if m:
             delim = m.group(2)
         if line in non_calls:
             continue
-        names = re.findall(r"\bpython[0-9.]*\b", line)
-        if re.match(r"python3 -I [\"'-]", line) and len(names) == 1:
+        first, *rest = re.split(r"&&|\|\||[;|&`]|\$\(", line)
+        if (re.match(r"python3 -I [\"'-]", first)
+                and len(re.findall(r"\bpython[0-9.]*\b", first)) == 1
+                and not any(re.search(r"\bpython[0-9.]*\b|\.py\b", s) for s in rest)):
             ok.append(line)
-        elif names or re.search(r"\.py\b", line):
+        elif re.search(r"\bpython[0-9.]*\b|\.py\b", line):
             bad.append(line)
     return bad, ok, delim
+
+
+# Python a script starts through sys.executable runs isolated (-I), like the shell scripts'
+# Python: the cwd or a writable dir never comes first on its import path. Each exception is a
+# path and why.
+EXECUTABLE_EXCEPTIONS = {
+    "skills/deck-production/scripts/parity_check.py":
+        "runs the deck build scripts in the sandbox, and they may need the user's "
+        "site-packages, which -I drops",
+}
+
+
+def unisolated_executable_calls(text):
+    """The lines that start sys.executable without -I as the first argument: a list or tuple
+    that begins with sys.executable and whose next item isn't "-I"."""
+    return [m.group(0) for m in re.finditer(r"(?:\[\s*sys\.executable\s*[,\]]|"
+                                            r"\(\s*sys\.executable\s*,)[^\n]*", text)
+            if not re.match(r"[\[(]\s*sys\.executable\s*,\s*[\"']-I[\"']", m.group(0))]
 
 
 def setup_link_sources():
@@ -485,11 +516,15 @@ class SetupWiring(unittest.TestCase):
             "python x.py", 'PY="$(command -v python3)"', '"$PY" "$REPO_DIR/x.py"',
             '"$REPO_DIR/x.py" --flag', "./tool.py", "python3 -I x.py | python3 y.py",
             "if python3 x.py; then :; fi", "python3 -c 'import x'", "exec python3 x.py",
+            "python3 -I \"$a\" && ./tool.py", "python3 -I - \"$a\" | sh -c 'python x'",
+            "python3 -I \"$a\"; \"$REPO_DIR/x.py\"", "python3 -I \"$a\" \"$(python3 y)\"",
         ]
         for line in planted:
             with self.subTest(line):
                 bad, _, _ = python_lines(line + "\nPY\n", ())
                 self.assertEqual(bad, [line])
+        # A comment doesn't continue, so the call after a `# note \` line is its own line.
+        self.assertEqual(python_lines("# note \\\npython3 x.py\n", ()), (["python3 x.py"], [], None))
         text = ("python3 -I - \"$A\" <<'PY'\nimport os  # python x.py inside the heredoc\nPY\n"
                 "cat <<EOF\n  needs python3 on PATH\nEOF\n"
                 "command -v python3 >/dev/null\n"
@@ -502,6 +537,43 @@ class SetupWiring(unittest.TestCase):
         self.assertEqual(python_lines("python3 -I - <<'PY'\nimport os\n", ())[2], "PY")
         self.assertEqual(python_lines("sed -n '/<<< x <<</p' f\npython3 y.py\n", ()),
                          (["python3 y.py"], [], None))
+
+    def test_python_started_through_sys_executable_runs_isolated(self):
+        roots = [os.path.join(REPO, "hooks"), os.path.join(REPO, "bin")]
+        roots += glob.glob(os.path.join(REPO, "skills", "*", "scripts"))
+        seen = set()
+        for root in roots:
+            for dirpath, _, files in os.walk(root):
+                for name in files:
+                    path = os.path.join(dirpath, name)
+                    rel = os.path.relpath(path, REPO)
+                    with open(path, "rb") as f:
+                        text = f.read().decode("utf-8", "replace")
+                    if "sys.executable" not in text:
+                        continue
+                    seen.add(rel)
+                    calls = unisolated_executable_calls(text)
+                    with self.subTest(rel):
+                        if rel in EXECUTABLE_EXCEPTIONS:
+                            self.assertTrue(calls, f"{rel} is isolated now: drop its exception")
+                        else:
+                            self.assertEqual(calls, [])
+        # The walk reached each kind of caller, and every exception still names a file.
+        for rel in ("skills/delegation/scripts/delegation_checks.py",
+                    "skills/delegation/scripts/watch-guard", "skills/lanes/scripts/lane",
+                    "skills/pass/scripts/pass-respawn", *EXECUTABLE_EXCEPTIONS):
+            self.assertIn(rel, seen)
+
+    def test_the_executable_scan_flags_a_call_without_isolation(self):
+        for text in ("subprocess.run([sys.executable, x])", "run([sys.executable, '-m', 'y'])",
+                     "Popen((sys.executable, LEDGER))", "argv = [sys.executable]",
+                     "run([\n    sys.executable, '-u', x])", "run([sys.executable, \"-u\", \"-I\"])"):
+            with self.subTest(text):
+                self.assertEqual(len(unisolated_executable_calls(text)), 1)
+        for text in ("run([sys.executable, \"-I\", x])", "run([ sys.executable , '-I', '-m', y])",
+                     "return sys.executable", "print(sys.executable)"):
+            with self.subTest(text):
+                self.assertEqual(unisolated_executable_calls(text), [])
 
     def test_codex_gets_the_portable_skills_and_each_exists(self):
         with open(os.path.join(REPO, "setup.sh")) as f:

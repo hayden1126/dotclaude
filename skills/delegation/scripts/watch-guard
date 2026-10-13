@@ -386,7 +386,7 @@ def spawn_waiter(w, sid, me):
     with the hook. True once it has exec'd; False, logged, when it couldn't start, and the stop
     goes on. The waiter itself checks the watch is still acknowledged in this session with no
     live waiter, and logs a refusal."""
-    argv = [sys.executable, LEDGER, "wait", "--resume", w["id"], "--detached", sid]
+    argv = [sys.executable, "-I", LEDGER, "wait", "--resume", w["id"], "--detached", sid]
     if dc.is_positive(w.get("poll_s")):
         argv += ["--poll", str(w["poll_s"])]
     if me is not None:
