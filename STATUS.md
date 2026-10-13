@@ -223,6 +223,12 @@ stored here).
   (for example `[lane-close] You are lane ... [58ecd7]`); the bare lane id is "not reachable".
   An idle lane still drains a message. After `narrow-excluded` Part 1 merges: open Part 2 as a
   lane, then plan the work repo migration, with the release skill as its first lane.
+  - PR state: `gh pr list --head fix/json-depth`. It stays a draft until Hayden reads it;
+    ready and merge each need his OK. Its branch is checked out in the agent worktree
+    `.claude/worktrees/agent-a8c1570566ac3d240` (made by the lead's writer, 2026-10-13); remove
+    it after the merge. Local leftovers, never pushed: `fix/json-depth-sweep` (the parked sweep)
+    and `fix/pass-last-recursion` (the same sweep under its first name; delete it once Hayden
+    nods).
   - Tab restore (#70) ran for real: the tmux server died, and at 2026-10-13 13:58 local
     `restore.log` shows the open sessions restored to their tabs, with expected skips (a
     deleted directory, older sessions of one pane, a window closed before the server ended).
