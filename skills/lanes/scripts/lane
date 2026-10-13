@@ -1910,7 +1910,14 @@ def lead_only(repo: Repo, lane_id: str, path: str) -> None:
                                       f"{sid} ({a} {p.comm}), {where}"))
 
 
-def close_record(repo: Repo, lane: dict, path: str, data_dir: str, state: str, how: str) -> str:
+def close_record(repo: Repo,
+    lane: dict,
+    path: str,
+    data_dir: str,
+    state: str,
+    how: str,
+    present: bool,
+) -> str:
     """Archive the lane's record and remove its worktree, all under install.lock: (a) under the
     lanes lock, re-read lane.json (a SessionEnd hook may have stamped endedAt, which the archive
     keeps) and build the archive under a .tmp name; (b) without it, check the install once more
@@ -1956,6 +1963,11 @@ def close_record(repo: Repo, lane: dict, path: str, data_dir: str, state: str, h
                 shutil.rmtree(tmp, ignore_errors=True)
                 raise
         try:
+            if not present and os.path.lexists(path):
+                # Gone at the gates, so nothing checked it (worktreeConfig among the rest), and
+                # `git worktree remove` would run git in it sandbox-off.
+                raise LaneError(f"{path} reappeared during the close of lane {lane_id}, so nothing "
+                                f"checked it: {rerun}")
             if path in worktrees(repo):
                 # An install run since the first links check (setup.sh from the lane, mid-close)
                 # would point every hook into the worktree this removes: check again, under its
@@ -2045,7 +2057,7 @@ def cmd_done(args) -> None:
         if present:
             end_lane(repo, args.id, path, hits)  # its final look only
         sweep_open_sessions(path)
-    archive = close_record(repo, lane, path, data_dir, state, how)
+    archive = close_record(repo, lane, path, data_dir, state, how, present)
     say(f"lane {args.id} closed ({how}); archived to {archive}")
     # With no upstream, -d judges against the main checkout's HEAD, which may not have pulled the
     # merge yet; the base as upstream makes it judge against what was actually merged.

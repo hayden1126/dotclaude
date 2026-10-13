@@ -1277,8 +1277,8 @@ class Close(LanesRepo):
         self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
         for pid in (claude, holder, plain):
             self.assertTrue(self.alive(pid), pid)
-        self.assertIn(f"{plain} {self.comms[plain]} (", p.stderr)
-        self.assertIn(f"its session {claude} was left running, so it was too", p.stderr)
+        (line,) = [x for x in p.stderr.splitlines() if x.strip().startswith(f"{plain} ")]
+        self.assertIn(f"its session {claude} was left running, so it was too", line)
         self.assertEqual(self.lane_json("chart-fix")["state"], "closing")
 
     @unittest.skipUnless(shutil.which("tmux"), "no tmux")
@@ -1887,6 +1887,19 @@ class Close(LanesRepo):
         self.git("worktree", "remove", "--force", self.path)
         self.done_in_process(lane_mod)
         self.assertClosed()
+
+    def test_a_worktree_gone_at_the_gates_that_reappears_is_never_removed(self):
+        # Deleted but still registered: nothing checked it, so `git worktree remove` (which runs
+        # git in it) must not run once it is back.
+        lane_mod = load_lane_script()
+        shutil.rmtree(self.path)
+        with mock.patch.object(lane_mod, "sweep_open_sessions",
+                               side_effect=lambda _p: os.makedirs(self.path)):
+            with self.assertRaisesRegex(lane_mod.LaneError, "reappeared during the close"):
+                self.done_in_process(lane_mod)
+        self.assertEqual(self.archives(), [])
+        self.assertTrue(os.path.isdir(self.path))
+        self.assertIn(self.path, self.git("worktree", "list", "--porcelain"))
 
     def test_an_archive_build_that_fails_any_way_leaves_no_partial_archive(self):
         lane_mod = load_lane_script()

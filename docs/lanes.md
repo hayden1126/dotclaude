@@ -399,8 +399,9 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
   Every git `done` runs in the lane takes its config from the repo's common dir
   (`GIT_COMMON_DIR`), and the lane's path must be a worktree whose admin dir's `commondir` names
   that dir: the admin dir is sandbox-writable, and a config `core.fsmonitor` would run a command
-  sandbox-off. A repo that sets `extensions.worktreeConfig` refuses `done` outright, since git
-  then also reads the lane's `config.worktree`, which nothing overrides.
+  sandbox-off. While the lane's worktree exists, a repo that sets `extensions.worktreeConfig` refuses
+  `done`, since git then also reads the lane's `config.worktree`, which nothing overrides; a
+  worktree that was gone at the checks and reappears before the remove refuses too.
 
   Nothing is chosen by name, start time or tmux window. A window id means something only on its
   own tmux server, and `kill-window` sends SIGHUP to everything on the pane's terminal (Hayden's
