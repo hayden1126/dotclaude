@@ -61,14 +61,34 @@ an unregistered worktree: `lane whoami` tells you which.
    it points at, so a linked shot is gone once its target is.
 4. **Hand off** with the handoff skill. Its lane mode updates the record, not STATUS.md, and
    finishes with `handoff-check`, which must pass.
-5. **Merge** through the lane's own PR, on Hayden's approval. Then write the outcome into the
+5. **Install**, in a repo that installs from its checkout (dotclaude): only the lane next in
+   merge order, after its last review round, runs `lane lock install -- ./setup.sh` from its
+   worktree, sandbox off. That install holds: setup.sh refuses to run from any other lane or
+   clone until the lead's `./setup.sh` in the main checkout relinks everything after the merge.
+   `lane ls` shows `install: held by lane <id>`.
+6. **Merge** through the lane's own PR, on Hayden's approval. Then write the outcome into the
    record, add one line to the project backlog (lane id, PR number), and propose
    `lane done chart-fix`. Run it only on Hayden's nod.
-6. **Close:** `lane done <id>` refuses an unmerged branch, a lane made by `lane new` with no
-   commits past its base (pass `--abandon` to close either anyway) and a lane with a live process
-   in it. It archives `lane.json` and `.lane/` to
-   `<common-dir>/lanes/_closed/<id>-<date>/`, runs `git worktree remove` (never `--force`) and
-   `git branch -d` (never `-D`).
+7. **Close:** `lane done <id>` refuses an unmerged branch and a lane made by `lane new` with no
+   commits past its base (pass `--abandon` to close either anyway). It ends what provably
+   belongs to the lane, so its open tab needs no closing by hand:
+   - its Claude sessions get SIGTERM (a `lane open` tab closes with its claude);
+   - what runs under them ends with them;
+   - a restored tab's shell gets SIGHUP;
+   - leftovers started with a lane session's id get SIGTERM.
+
+   The proof comes from /proc and Claude Code's own session files and transcripts, never from
+   `lane.json`. Before any signal, it refuses, by name:
+   - anything else with its cwd in the lane;
+   - a background session (`claude stop <jobId>` ends it);
+   - a dirty or locked worktree;
+   - a run from inside the lane;
+   - links the install still points into the lane;
+   - a failing `handoff-check --closing`.
+
+   A close refused partway leaves the lane `closing`, which `open` refuses: rerun `lane done`.
+   It archives `lane.json` and `.lane/` to `<common-dir>/lanes/_closed/<id>-<date>/`, runs
+   `git worktree remove` (never `--force`) and `git branch -d` (never `-D`).
 
 Existing worktrees join with `lane adopt <path>`. A dir name that is no slug (a slug is letters,
 digits, `.`, `_` and `-`, starts with a letter or digit, runs at most 64 chars and isn't `main`)
@@ -103,7 +123,10 @@ inside a lane.
    to Hayden's asks. Never order a merge or close a lane before the gate passes.
 6. **Watch and order.** Watch `lane ls`. Keep the merge order in the project STATUS. After each
    merge, message the remaining lanes: "main moved to `<sha>`: rebase; renumber the version if
-   taken". The board's `rebase` flag is the truth; the message is only a nudge.
+   taken". The board's `rebase` flag is the truth; the message is only a nudge. Where the repo
+   installs from its checkout, move the main checkout to the merge and run its `./setup.sh`
+   (sandbox off) before proposing `lane done`: that releases the merged lane's install hold,
+   which `done` refuses while it stands.
 7. **Shared gates.** Wrap any run that can't happen twice at once (a browser-driven test gate, an
    e2e suite on a fixed port) in `lane lock <name> -- <cmd>`. List the names once with
    `lane init --locks gate,e2e` (it takes the full list and replaces the old one); an unlisted name is refused, since a typo would split the mutual
@@ -125,7 +148,7 @@ stale-base trap (`worktree.baseRef`) therefore bites only a session rooted in th
 | Command | What it does |
 |---|---|
 | `lane whoami` | your lane id, `main`, `unregistered` or `plain` (`--json` for scripts) |
-| `lane ls` | the board: branch, ahead/behind, PR, port, claims, live sessions, context (CTX: `312k*` past the auto-pass soft tier, `523k!` past hard), state (STATE: busy, idle, waiting, shell; message a lane idle past soft to run /pass), tmux window, flags; then any held locks |
+| `lane ls` | the board: branch, ahead/behind, PR, port, claims, live sessions, context (CTX: `312k*` past the auto-pass soft tier, `523k!` past hard), state (STATE: busy, idle, waiting, shell; message a lane idle past soft to run /pass), tmux window, flags; then any held locks and the install hold |
 | `lane ls --requests` | request to lane, from claims only |
 | `lane who 42` | the lane that claims #42, or "unclaimed" |
 | `lane claim 42` / `lane release 42` | claim or drop a request for your lane |
@@ -138,7 +161,8 @@ stale-base trap (`worktree.baseRef`) therefore bites only a session rooted in th
 Board flags: `stale` (worktree gone; its claims are void), `rebase` (behind the base),
 `conflict` (two live lanes claim one request), `orphan` (no live session), `handoff?` (the last
 commit or session end is newer than the record), `setup-failed` (half made: it still holds its
-port, claims and a cap slot; finish it with `lane adopt <path>`).
+port, claims and a cap slot; finish it with `lane adopt <path>`), `closing` (a `lane done`
+stopped partway; rerun it).
 
 Run `lane init`, `new`, `adopt`, `ls`, `open` and `done` as bare commands: those are in
 `excludedCommands`, so they run outside the sandbox with the network, gh's credential and a view
