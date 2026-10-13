@@ -80,7 +80,7 @@ elif event == "SessionEnd":
         try:
             with open(path) as f:
                 entry = json.load(f)
-        except (OSError, ValueError):
+        except (OSError, ValueError, RecursionError):   # json recurses on nesting
             sys.exit(0)
         if isinstance(entry, dict):
             entry["ended_other_at"] = round(time.time(), 3)
