@@ -160,22 +160,6 @@ class Hooks(unittest.TestCase):
         self.run_hook("tmux-state.sh", TAB, args=("busy",))
         self.assertEqual(self.window_writes(), ["tmux set-option -w -t %7 @claude_state busy"])
 
-    def test_an_autopass_prompt_leaves_the_window_alone(self):
-        # autopass-toggle.sh blocks `/autopass ...` before any turn, so no Stop would clear a
-        # busy set on its UserPromptSubmit. Any other prompt, and tool calls, still set busy.
-        for prompt in ("/autopass on", "  /autopass  ", "/autopass on please"):
-            self.run_hook("tmux-state.sh", TAB, {"hook_event_name": "UserPromptSubmit",
-                                                 "prompt": prompt}, args=("busy",))
-        self.assertEqual(self.window_writes(), [])
-        self.run_hook("tmux-state.sh", TAB, {"hook_event_name": "UserPromptSubmit",
-                                             "prompt": "/autopassx then explain /autopass"},
-                      args=("busy",))
-        self.run_hook("tmux-state.sh", TAB, {"hook_event_name": "PostToolUse",
-                                             "tool_input": {"command": "/autopass on"}},
-                      args=("busy",))
-        self.assertEqual(self.window_writes(),
-                         ["tmux set-option -w -t %7 @claude_state busy"] * 2)
-
     def test_a_background_session_writes_no_tab_state(self):
         # One shared daemon hosts every background session, so even an ancestry that reaches a
         # pane (as this stub's does) names the daemon's first client, not the tab showing it.

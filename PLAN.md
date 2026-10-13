@@ -585,8 +585,9 @@ was medium or worse: part 1 in 3 rounds, 2a in 3, 2b in 2, 2c in 1 and 3 in 5.
 - **Coverage:** `-p` and `--bg` sessions get a count but never a nudge. Locks are per
   session; `decide()` runs outside them and is cached 60 s, keyed by the tab flag's
   `generation`. The lead's main checkout is on by default, like a lane.
-- **`/autopass`** is `skills/autopass` (`disable-model-invocation`) plus a UserPromptSubmit hook
-  that blocks it. `tmux-state.sh` doesn't mark the tab busy for it.
+- **`/autopass`** was `skills/autopass` (`disable-model-invocation`) plus a UserPromptSubmit hook
+  that blocked it. Since `feat/autopass-immediate` (lane autopass-now) it is a mod: see "The
+  `/autopass` toggle" below.
 - **The ctx file** `ctx/<sid>.json` holds `tokens` and `time` from the watcher, and `window`
   and `window_at` from the widget, merged under `ctx-watch/<sid>.ctx.lock`. An older count never
   replaces a newer one.
@@ -651,6 +652,20 @@ scale with the window:
   which would otherwise cross into auto-compact before any Stop.
 
 **The `/autopass` toggle** (Hayden, 2026-10-12).
+- As built after PR 4 (`feat/autopass-immediate`, 2026-10-12): the hook below queued behind a
+  running turn and answered in a "blocked by hook" line, so `skills/autopass` became a mod
+  (`.claude-plugin/plugin.json`, no SKILL.md, loaded as `autopass@skills-dir`). It registers
+  `/autopass` as an `immediate` command, so typed mid-turn it runs at once, and its
+  `command.run` hook runs `hooks/autopass_toggle.py SESSION_ID CWD ARGS` through
+  `$.process.run`, whose child inherits TMUX_PANE. Claude Code draws a command's text only once
+  the turn ends, so mid-turn the reply goes out as a `$.ui.log` notice and the command prints
+  nothing; idle, it is the command's output (Hayden's pick). The mod tracks the main turn in
+  `$.state`: marked at an idle `prompt.submit` (the UserPromptSubmit hooks run before
+  `turn.start`), then the turn's id from `turn.start`, cleared by that turn's own
+  `turn.complete` (interrupted or not; a subagent's carries an `agentId`), or once
+  `prompt.submit` settles with no turn started (a drop, an error, a built-in). A mod command fires no UserPromptSubmit or Stop, so `tmux-state.sh` lost its `/autopass`
+  skip. The spikes: a skills-dir mod loads only in a trusted workspace; a SKILL.md of the same
+  name makes the registration refuse. The design below is the PR 4 history.
 - `/autopass on|off|status` is typed in chat. A UserPromptSubmit hook catches it, writes the flag
   (hooks run outside the sandbox, which can't write the state dir), and blocks the prompt with a
   one-line confirmation. So a toggle costs no model turn and no context.

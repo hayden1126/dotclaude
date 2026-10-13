@@ -230,6 +230,32 @@ class IgnoreBlock(unittest.TestCase):
 
 
 class SetupWiring(unittest.TestCase):
+    def test_a_hook_removed_from_the_repo_has_its_link_pruned(self):
+        # setup.sh's prune_stale_hook_links, run on its own: only a dangling link into this
+        # checkout's hooks/ goes; a live link, another repo's dangling link and a file stay.
+        with open(os.path.join(REPO, "setup.sh")) as f:
+            text = f.read()
+        start = text.index("prune_stale_hook_links() {")
+        func = text[start:text.index("\n}\n", start) + 3]
+        with tempfile.TemporaryDirectory() as tmp:
+            repo, claude = os.path.join(tmp, "repo"), os.path.join(tmp, "claude")
+            os.makedirs(os.path.join(repo, "hooks"))
+            os.makedirs(os.path.join(claude, "hooks"))
+            with open(os.path.join(repo, "hooks", "live.sh"), "w"):
+                pass
+            hooks = os.path.join(claude, "hooks")
+            os.symlink(os.path.join(repo, "hooks", "live.sh"), os.path.join(hooks, "live.sh"))
+            os.symlink(os.path.join(repo, "hooks", "gone.sh"), os.path.join(hooks, "gone.sh"))
+            os.symlink(os.path.join(tmp, "other", "hooks", "x.sh"), os.path.join(hooks, "x.sh"))
+            with open(os.path.join(hooks, "plugin.sh"), "w"):
+                pass
+            r = subprocess.run(["bash", "-c", 'set -euo pipefail; say() { echo "$*"; }\n'
+                                + func + "\nprune_stale_hook_links"],
+                               env={**os.environ, "REPO_DIR": repo, "CLAUDE_DIR": claude},
+                               capture_output=True, text=True, timeout=20)
+            self.assertEqual((r.returncode, r.stdout), (0, "removed stale link hooks/gone.sh\n"))
+            self.assertEqual(sorted(os.listdir(hooks)), ["live.sh", "plugin.sh", "x.sh"])
+
     def test_setup_installs_the_merged_settings_and_the_block(self):
         with open(os.path.join(REPO, "setup.sh")) as f:
             text = f.read()

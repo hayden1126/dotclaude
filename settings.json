@@ -407,15 +407,6 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"$HOME/.claude/hooks/autopass-toggle.sh\"",
-            "timeout": 5
-          }
-        ]
-      },
-      {
-        "hooks": [
-          {
-            "type": "command",
             "command": "bash \"$HOME/.claude/hooks/handoff-reminder.sh\"",
             "timeout": 5
           }
