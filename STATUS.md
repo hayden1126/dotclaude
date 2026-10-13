@@ -77,6 +77,14 @@ stored here).
   - Merge order for the rest: 1. `attach-tabs` (Star, Shelve and restore for `claude attach`
     tabs). 2. `narrow-excluded` (security step 1, effort xhigh). Each merges `origin/main` into
     its branch once pushed, since force pushes are denied.
+  - Hayden split `narrow-excluded` (2026-10-13), after a safety classifier stopped three
+    sessions while they read the sandbox code. Part 1, this lane's PR: the excluded-command
+    inventory, the narrowed `excludedCommands`, the ask rules and their tests. Part 2, a
+    follow-up lane the lead opens after Part 1: a PreToolUse guard that lets an excluded command
+    run only when its cwd's git dir and its PATH entries aren't sandbox-writable. The lane's
+    plan is rewritten in rule terms, and its sessions don't open the private findings. Codex is
+    unavailable until the ChatGPT plan is renewed. If Part 1 stops again, Hayden applies it by
+    hand.
 
   Backlog, after `narrow-excluded` merges (it may touch the same launch code): `lane init
   --model/--effort` repo defaults and `lane open --model/--effort` overrides, passed through to
