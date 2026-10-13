@@ -85,7 +85,20 @@ for f in "$REPO_DIR"/hooks/*.sh "$REPO_DIR"/hooks/*.py; do
   link "$f" "$CLAUDE_DIR/hooks/$(basename "$f")"
 done
 
-# skills/ — one symlink per authored skill directory (plugin skills come from plugins)
+# A hook removed from the repo leaves its link dangling (hooks/autopass-toggle.sh went in
+# 2026-10). Drop the dangling links into this checkout's hooks/; any other link is left alone.
+prune_stale_hook_links() {
+  local l
+  for l in "$CLAUDE_DIR"/hooks/*; do
+    [[ -L "$l" && ! -e "$l" && "$(readlink "$l")" == "$REPO_DIR/hooks/"* ]] || continue
+    rm "$l"
+    say "removed stale link ${l#"$CLAUDE_DIR/"}"
+  done
+}
+prune_stale_hook_links
+
+# skills/ — one symlink per authored skill directory (plugin skills come from plugins). A
+# directory holding .claude-plugin/ loads as a mod, <name>@skills-dir (skills/autopass).
 for d in "$REPO_DIR"/skills/*/; do
   [[ -d "$d" ]] || continue
   chmod +x "${d%/}"/scripts/* 2>/dev/null || true

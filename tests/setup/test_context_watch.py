@@ -1,4 +1,4 @@
-"""hooks/context-watch.sh, hooks/autopass-toggle.sh and hooks/autopass_state.py: the autopass
+"""hooks/context-watch.sh, hooks/autopass_toggle.py and hooks/autopass_state.py: the autopass
 context watcher, its tiers and the per-tab /autopass toggle (stdlib only).
 
 Each test has its own HOME (for ~/.claude/settings.json and ~/.config/dotclaude/pass.toml) and
@@ -23,7 +23,7 @@ from unittest import mock
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 HOOKS = os.path.join(REPO, "hooks")
 WATCH = os.path.join(HOOKS, "context-watch.sh")
-TOGGLE = os.path.join(HOOKS, "autopass-toggle.sh")
+TOGGLE = os.path.join(HOOKS, "autopass_toggle.py")
 
 
 def load(name):
@@ -696,37 +696,50 @@ class TierValues(Base):
 
 
 class Toggle(Base):
-    def prompt(self, prompt, session=None, **payload):
-        body = {"session_id": SID, "hook_event_name": "UserPromptSubmit", "prompt": prompt,
-                "cwd": self.cwd, **payload}
-        return self.run_shim(TOGGLE, body, session)
+    """The CLI the autopass mod runs: `autopass_toggle.py SESSION_ID CWD ARGS`, ARGS being what
+    was typed after `/autopass` (the engine has already matched the command name)."""
+
+    def reply(self, args, session=None):
+        p = subprocess.run(["python3", "-I", TOGGLE, SID, self.cwd, args],
+                           capture_output=True, text=True, timeout=20, cwd=self.tmp,
+                           env={**self.env, **(IN_TAB if session is None else session)})
+        self.assertEqual((p.returncode, p.stderr), (0, ""))
+        self.assertTrue(p.stdout.endswith("\n") and p.stdout.count("\n") == 1, p.stdout)
+        return p.stdout[:-1]
 
     def flag(self):
         with open(os.path.join(self.state, "dotclaude", "autopass", "7.json")) as f:
             return json.load(f)
 
     def test_on_and_off_write_the_tab_flag(self):
-        out = self.prompt("/autopass on")
-        self.assertEqual(out["decision"], "block")
-        self.assertIn("autopass on in this tab", out["reason"])
+        self.assertEqual(self.reply("on"),
+                         "on in this tab: it nudges a handoff at each context tier.")
         self.assertEqual((self.flag()["tab"], self.flag()["on"]), (TAB, True))
         self.assertEqual(aps.decide(self.cwd, "%7"), (True, "tab"))
-        self.assertIn("autopass off", self.prompt("  /autopass OFF  ")["reason"])
+        self.assertEqual(self.reply("  OFF  "), "off in this tab: no nudges; one line at the hard tier.")
         self.assertIs(self.flag()["on"], False)
 
     def test_status_reports_tokens_the_next_tier_and_the_source(self):
-        self.assertEqual(self.prompt("/autopass status")["reason"],
-                         "autopass off (the default). Context unknown yet, next tier: soft at "
+        self.assertEqual(self.reply("status"),
+                         "off (the default). Context unknown yet, next tier: soft at "
                          "300k; auto-compact near 567k.")
         self.write_transcript(312_000)
         self.stop()
-        self.prompt("/autopass on")
-        self.assertEqual(self.prompt("/autopass")["reason"],
-                         "autopass on (set in this tab). Context 312k, next tier: wrap-up at "
+        self.reply("on")
+        self.assertEqual(self.reply(""),
+                         "on (set in this tab). Context 312k, next tier: wrap-up at "
                          "480k; auto-compact near 567k.")
         self.write_transcript(530_000)
         self.stop()
-        self.assertIn("past the hard tier (520k)", self.prompt("/autopass status")["reason"])
+        self.assertIn("past the hard tier (520k)", self.reply("status"))
+
+    def test_status_reads_the_window_from_the_inherited_config_dir(self):
+        conf = os.path.join(self.tmp, "cfg")
+        os.makedirs(conf)
+        with open(os.path.join(conf, "settings.json"), "w") as f:
+            json.dump({"autoCompactWindow": 400_000}, f)
+        self.env["CLAUDE_CONFIG_DIR"] = conf
+        self.assertNotIn("567k", self.reply("status"))
 
     def test_the_texts_name_the_pass_toml_the_watcher_reads(self):
         for conf, shown in ((os.path.join(self.home, "conf"), "~/conf/dotclaude/pass.toml"),
@@ -736,30 +749,34 @@ class Toggle(Base):
             with open(os.path.join(conf, "dotclaude", "pass.toml"), "w") as f:
                 f.write("autopass = true\n")
             self.env["XDG_CONFIG_HOME"] = conf
-            self.assertIn("autopass on (from %s)." % shown,
-                          self.prompt("/autopass status")["reason"])
-            self.assertIn(shown, self.prompt("/autopass on", session={})["reason"])
+            self.assertIn("on (from %s)." % shown, self.reply("status"))
+            self.assertIn(shown, self.reply("on", session={}))
 
     def test_without_tmux_nothing_is_written(self):
-        out = self.prompt("/autopass on", session={})
-        self.assertIn("per tmux tab", out["reason"])
-        self.assertIn("~/.config/dotclaude/pass.toml", out["reason"])
+        out = self.reply("on", session={})
+        self.assertIn("per tmux tab", out)
+        self.assertIn("~/.config/dotclaude/pass.toml", out)
         self.assertFalse(os.path.exists(os.path.join(self.state, "dotclaude", "autopass")))
         self.env["STUB_SERVER"] = ""
-        self.assertIn("tmux didn't say", self.prompt("/autopass off")["reason"])
+        self.assertIn("tmux didn't say", self.reply("off"))
 
     def test_garbage_arguments_get_the_usage(self):
-        self.assertEqual(self.prompt("/autopass maybe")["reason"], toggle_mod.USAGE)
+        for args in ("maybe", "on please", "on\noff", "status now", "-x"):
+            self.assertEqual(self.reply(args), toggle_mod.USAGE, args)
+        self.assertIn("off (the default)", self.reply("   \n"))
 
-    def test_other_prompts_pass_through(self):
-        for p in ("please /autopass on", "/autopassx", "autopass on",
-                  "/pass", "<task-notification>/autopass on</task-notification>"):
-            self.assertIsNone(self.prompt(p), p)
+    def test_a_reply_never_starts_with_the_plugin_name(self):
+        # The engine shows each reply under the plugin's name ("autopass: ..."); a reply that
+        # led with it too would read "autopass: autopass on".
+        for args, session in (("on", None), ("off", None), ("status", None), ("on", {}),
+                              ("x", None)):
+            self.assertFalse(self.reply(args, session).lower().startswith("autopass"), args)
 
-    def test_extra_words_get_the_usage_not_the_skill_body(self):
-        for p in ("/autopass on please", "/autopass\non off", "/autopass status now"):
-            self.assertEqual(self.prompt(p)["reason"], toggle_mod.USAGE, p)
-        self.assertIn("autopass off (the default)", self.prompt("/autopass   \n")["reason"])
+    def test_a_wrong_argument_count_fails_loudly(self):
+        p = subprocess.run(["python3", "-I", TOGGLE, SID, self.cwd], capture_output=True,
+                           text=True, timeout=20, env=self.env, cwd=self.tmp)
+        self.assertEqual((p.returncode, p.stdout), (2, ""))
+        self.assertIn("usage: autopass_toggle.py", p.stderr)
 
     def test_a_busy_session_lock_delays_the_cache_drop_and_says_so(self):
         d = os.path.join(self.state, "dotclaude", "ctx-watch")
@@ -767,18 +784,15 @@ class Toggle(Base):
         fd = os.open(os.path.join(d, SID + ".lock"), os.O_RDWR | os.O_CREAT)
         self.addCleanup(os.close, fd)
         fcntl.flock(fd, fcntl.LOCK_EX)
-        out = self.prompt("/autopass on")["reason"]
-        self.assertIn("autopass on in this tab", out)
+        out = self.reply("on")
+        self.assertIn("on in this tab", out)
         self.assertIn(toggle_mod.LATE.strip(), out)
         self.assertEqual(self.flag()["on"], True)   # the flag itself is written regardless
-
-    def test_a_subagent_prompt_passes_through(self):
-        self.assertIsNone(self.prompt("/autopass on", agent_id="a1"))
 
     def test_a_toggle_drops_the_watchers_cached_decision(self):
         self.write_transcript(525_000)
         self.assertEqual(self.stop(), {"systemMessage": text("off", "525k")})  # caches off
-        self.prompt("/autopass on")
+        self.reply("on")
         self.assertEqual(self.stop(), block("hard", "525k"))
 
 

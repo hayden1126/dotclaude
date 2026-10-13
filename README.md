@@ -115,7 +115,7 @@ sees it.
 | `settings.json` | Hooks, status line, env vars, enabled plugins, permission rules, and the Bash sandbox (curated baseline; see docs/delegation.md for the sandbox) | **copy** to `~/.claude/settings.json` (runtime-managed, not symlinked), merged with `~/.claude/settings.machine.json` when present |
 | `merge-settings.py` | Merges the machine overlay into the baseline and keeps the live file's own top-level keys, for `setup.sh` | run by `setup.sh` |
 | `git/sandbox-stubs.ignore` | Git ignore patterns for the `/dev/null` mounts the Bash sandbox puts over protected dotfiles a repo lacks (they break `git add -A`) | upserted by `git/install-ignore.py` between markers in the global git excludes file (`core.excludesFile`, else `~/.config/git/ignore`); Linux only |
-| `skills/` | The skills I authored: `coding-practices`, `research-discipline`, `research-sourcing`, `writing-voice`, `staged-reader-review`, `ebook-extract`, `deck-production`, `vetting-sources`, `handoff`, `frontend-ui-discipline`, `ui-alignment`, `delegation`, `lanes`, `pass`, `autopass` | symlink per dir into `~/.claude/skills/`; a skill's `scripts/` CLI also symlinks into `~/.local/bin` when that dir exists (`deck-production` ships `deckkit`; `delegation` ships `codex-delegate`, `delegation-ledger` and `gh-public`; `lanes` ships `lane`; `handoff` ships `handoff-check`; `pass` ships `pass-respawn`); the portable ones (`CODEX_SKILLS` in `setup.sh`) also link into `~/.codex/skills/` |
+| `skills/` | The skills I authored: `coding-practices`, `research-discipline`, `research-sourcing`, `writing-voice`, `staged-reader-review`, `ebook-extract`, `deck-production`, `vetting-sources`, `handoff`, `frontend-ui-discipline`, `ui-alignment`, `delegation`, `lanes`, `pass`; and `autopass`, a mod (a folder with `.claude-plugin/`, which Claude Code loads from `~/.claude/skills` as `autopass@skills-dir`), not a skill | symlink per dir into `~/.claude/skills/`; a skill's `scripts/` CLI also symlinks into `~/.local/bin` when that dir exists (`deck-production` ships `deckkit`; `delegation` ships `codex-delegate`, `delegation-ledger` and `gh-public`; `lanes` ships `lane`; `handoff` ships `handoff-check`; `pass` ships `pass-respawn`); the portable ones (`CODEX_SKILLS` in `setup.sh`) also link into `~/.codex/skills/` |
 | `agents/` | Delegation roles: `Explore` (overrides the built-in with a no-shell reader), `researcher`, `reviewer`, `writer`; see docs/delegation.md | symlink per file into `~/.claude/agents/` |
 | `hooks/agent-spawn-guard.sh` | PreToolUse(Agent) guard: denies a `writer` spawn that doesn't pass `isolation` on the call, and a named spawn without the `team-` prefix; fails closed | symlink `~/.claude/hooks/agent-spawn-guard.sh` |
 | `hooks/delegation-ledger.sh` | SubagentStart/SubagentStop hook: appends a pointer row per delegated agent to the delegation ledger; as a PostToolUse hook, sends a delegated agent its deadline nudge; never blocks | symlink `~/.claude/hooks/delegation-ledger.sh` |
@@ -130,7 +130,7 @@ sees it.
 | `hooks/tmux-state.sh` | Prompt, tool, Stop and Notification hook: sets `@claude_state` (busy, wait, idle) on the tmux window the session is shown in, for the indicator in `tmux/claude.conf`; does nothing outside tmux | symlink `~/.claude/hooks/tmux-state.sh` |
 | `hooks/session-pane.sh` | Sourced by the three hooks above, not a hook: finds the tmux pane a session is shown in, and whether a person sees it | symlink `~/.claude/hooks/session-pane.sh` |
 | `hooks/context-watch.sh` | Stop and PostToolUse hook: the auto-pass watcher; writes the context size to `ctx/<session>.json` and, at 300k, 480k and 520k (derived from `autoCompactWindow`), tells the session to run the pass skill, or with autopass off shows you one line at 520k; a shim over `hooks/context_watch.py`, which shares `hooks/autopass_state.py` (tiers, the tab flag, on or off); fails open, with errors in `context-watch.err` in the state dir | symlink `~/.claude/hooks/context-watch.sh`, `context_watch.py` and `autopass_state.py` |
-| `hooks/autopass-toggle.sh` | UserPromptSubmit hook: answers `/autopass on\|off\|status` (defined by `skills/autopass`) without a model turn; a shim over `hooks/autopass_toggle.py` | symlink `~/.claude/hooks/autopass-toggle.sh` and `autopass_toggle.py` |
+| `hooks/autopass_toggle.py` | Not a hook: the `skills/autopass` mod runs it for `/autopass on\|off\|status` (`autopass_toggle.py SESSION_ID CWD ARGS`), and it prints the one reply | symlink `~/.claude/hooks/autopass_toggle.py` |
 | `hooks/pass-banner.sh` | SessionStart (`startup`) hook: after a plain `/pass` respawned the tab, shows what the old session said in its last turn, once, as a banner you see and the model doesn't (its format and caps: the shim's header); a shim over `hooks/pass_banner.py`; fails open | symlink `~/.claude/hooks/pass-banner.sh` and `pass_banner.py` |
 | `hooks/md_render.py` | Not a hook: the stdlib markdown-to-terminal renderer (bold, italic, code, links, headings, lists, code blocks, tables, wrapped by terminal cells) that the banner and `tmux/pass-last` load by path | symlink `~/.claude/hooks/md_render.py` |
 | `hooks/session-registry.sh` | SessionStart/SessionEnd hook: records which session is open in which tmux tab (`$XDG_STATE_HOME/dotclaude/open-sessions/`), for `claude-restore`; deletes the entry on `/exit` or `/clear`, marks it when the window or claude is killed; then hands each payload to `claude-saved` (Star and Shelve; the star follows `/clear`); does nothing outside tmux | symlink `~/.claude/hooks/session-registry.sh` |
@@ -159,6 +159,7 @@ sees it.
 | `tests/deck_production/` | Unit tests for `deck-production`'s `deckkit geometry` gate (rule matrix on canned probe output, plus an end-to-end run over the synthetic `fixtures/geodeck` that skips without a headless Chrome) `deckkit regress`'s geometry facts, and `deckkit doctor`'s exit codes | `python3 -m unittest discover -s tests/deck_production -t tests/deck_production` |
 | `tests/lanes/` | Unit tests for the `lane` CLI, the lane hooks and `handoff-check`, on a throwaway bare origin plus clone (no network) | `python3 -m unittest discover -s tests/lanes -t tests/lanes` |
 | `tests/pass/` | Unit tests for `pass-respawn` on fakes for tmux, the session file and the transcript (`test_pass_respawn.py`), plus its guards and checks on the pass docs (`test_pass_guards.py`); nothing reaches the live tmux server | `python3 -m unittest discover -s tests/pass -t tests/pass` |
+| `skills/autopass/tests/` | The `/autopass` mod's tests: registration, the args reaching the script, the reply as a notice mid-turn (from Enter) and as output when idle, a prompt that starts no turn (dropped, failed or a built-in), a subagent's or an interrupted turn's end, unreadable state, and a failing script (the test stands for the engine; nothing runs on the host) | `claude plugin test skills/autopass` |
 | `docs/lanes.md` | Lanes: the incident, the five invariants, the communication model, the layout and the spike results | reference |
 | `docs/blind-overwrite-brief.md` | Why the overwrite guard and `memory-git.sh` exist: two incidents (a blind overwrite of a memory file, a job's state inferred instead of read), the experiments and the design calls | reference |
 | `docs/chrome-devtools-wsl.md` | WSL2-only: how to make `chrome-devtools-mcp` work (Strategy A headless Linux Chrome, plus B to attach to your Windows Chrome) | reference |
@@ -392,9 +393,9 @@ need nothing extra.
   the tab, it shows what the old session said in its last turn, once, as a banner the model
   doesn't see (see Pass, below). It acts only in the same tab on the same tmux server, within
   120 s of the pass, and never in a `claude -p` run or a subagent. Fails open.
-- **Stop / PostToolUse: `context-watch.sh`** and **UserPromptSubmit: `autopass-toggle.sh`** (in
-  this repo). The auto-pass watcher and its `/autopass` toggle (see Auto-pass, below). The
-  PostToolUse entry skips a subagent's calls before any Python starts. Both fail open.
+- **Stop / PostToolUse: `context-watch.sh`** (in this repo). The auto-pass watcher (see
+  Auto-pass, below); its `/autopass` toggle is the `skills/autopass` mod, not a settings hook.
+  The PostToolUse entry skips a subagent's calls before any Python starts. Fails open.
 - **SessionStart (`startup|resume|clear|compact`) / Stop / SessionEnd: `lane-identity.sh`** (in
   this repo). In a lane it tells the session its lane id, branch, claims, port and record, and
   registers it in `lane.json`; after a compact it adds "re-read your record". In the main
@@ -534,7 +535,9 @@ before that (at most 47k), wrap-up 7% before hard (at most 40k), soft at half th
 - With autopass off, you alone see one line at the hard tier, once: "Context 521k, auto-compact
   near 567k: hand off now (/pass)."
 - `/autopass on|off|status` sets it for this tmux tab, or shows the count, the next tier, on or
-  off and what set it. A hook answers it, so it costs no model turn. Without a tab's setting,
+  off and what set it. The `skills/autopass` mod answers it with no model turn, at once even
+  when typed mid-turn: while a turn runs the reply is a dim notice, otherwise the command's
+  output. Without a tab's setting,
   a lane and the lanes repo's main checkout (the lead) are on (`autopass` in the repo's lanes
   config), and elsewhere `autopass = true` in
   `~/.config/dotclaude/pass.toml` turns it on (off by default). `tiers = [soft, wrap, hard]` in
@@ -542,6 +545,12 @@ before that (at most 47k), wrap-up 7% before hard (at most 40k), soft at half th
   `XDG_CONFIG_HOME` so the override reaches only that session.
 - Nothing fires for a subagent, a `claude -p` or `--bg` session (no pane to respawn), or while
   a pass is already pending.
+- `skills/autopass` is dotclaude's first mod, on Claude Code 2.1.296's early-access mod API: it
+  registers `/autopass` with `immediate`, answers `command.run`, tracks the turn from
+  `prompt.submit` (Enter) through `turn.start` to `turn.complete`, and runs `hooks/autopass_toggle.py` through
+  `$.process.run`, which hands the child the session's `TMUX_PANE`. If that API changes,
+  `/autopass` turns into an unknown command or prints "the toggle failed"; `claude plugin
+  validate skills/autopass` and `claude plugin test skills/autopass` show what broke.
 
 PLAN.md ("PR 4: auto-pass") is the design.
 
