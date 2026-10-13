@@ -72,11 +72,27 @@ stored here).
 - **dotclaude runs in lanes (since 2026-10-12).** The lead is the main checkout. Lanes live in
   `~/dotclaude-lanes/`, and each lane's state is in its record (`lane ls`, `lane asks`), not
   here. The config caps live lanes at 3, with locks `install` and `suite`.
-  - Merged: `autopass-now` as #90 (2026-10-13). `/autopass` is now an immediate mod command,
-    dotclaude's first. The lead installed it from the main checkout.
-  - Merge order for the rest: 1. `attach-tabs` (Star, Shelve and restore for `claude attach`
-    tabs). 2. `narrow-excluded` (security step 1, effort xhigh). Each merges `origin/main` into
-    its branch once pushed, since force pushes are denied.
+  - Merged: `autopass-now` as #90 and `attach-tabs` as #91 (2026-10-13), each installed by the
+    lead from the main checkout. `/autopass` is now an immediate mod command, dotclaude's first.
+  - Live: `narrow-excluded` (security step 1, effort xhigh), plus `lane-close` and `pass-busy`
+    (opened 2026-10-13, Hayden's call). `lane-close`: `lane done` ends the lane's own window
+    and the leftovers that carry a lane session's id, the install lock holds until the lead's
+    reinstall, setup.sh prunes links into lanes and says when sessions need a restart.
+    `pass-busy`: a `busy: tasks` refusal names the task, and the pass skill stops its own
+    finished Monitors first (capella-studio session e7cc7b9a's pass was refused twice by a
+    leftover Monitor). Merge order goes by readiness: the lead installs only the next to merge.
+    Once pushed, a lane merges `origin/main` into its branch, since force pushes are denied.
+  - Hayden split `narrow-excluded` (2026-10-13), after a safety classifier stopped three
+    sessions while they read the sandbox code. Part 1, this lane's PR: the excluded-command
+    inventory, the narrowed `excludedCommands`, the ask rules and their tests. Part 2, a
+    follow-up lane the lead opens after Part 1: a PreToolUse guard that lets an excluded command
+    run only when its cwd's git dir and its PATH entries aren't sandbox-writable, then the allow
+    lines for `lane ls/open/new/adopt/done` (an allow rule skips the classifier, so those land
+    only behind the guard; Hayden applies them, since the classifier refuses edits that add
+    allow rules). The lane's
+    plan is rewritten in rule terms, and its sessions don't open the private findings. Codex is
+    unavailable until the ChatGPT plan is renewed. If Part 1 stops again, Hayden applies it by
+    hand.
 
   Backlog, after `narrow-excluded` merges (it may touch the same launch code): `lane init
   --model/--effort` repo defaults and `lane open --model/--effort` overrides, passed through to
@@ -193,7 +209,7 @@ stored here).
   - **Watch (PR 4, live on HAYPC):** `context-watch.err` in the state dir (a Stop that timed out
     waiting for its reply, and the watcher's Python errors). Not yet seen live: a refused pass's
     toast, and Hayden's verdict on the rendered popup.
-  - **Attach tabs (lane attach-tabs, `fix/tmux-attach-tabs`):** Star, Shelve, Open and tab
+  - **Attach tabs (merged as #91, 2026-10-13):** Star, Shelve, Open and tab
     restore now recognize a tab running `claude attach <jobId>`: `claude-saved` reads the
     client's argv from /proc and finds the `kind: bg` sessions file with that jobId. Shelve there
     also runs `claude stop` (Hayden's call: background is mostly an accident), and
