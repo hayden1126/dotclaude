@@ -191,6 +191,16 @@ class Banner(unittest.TestCase):
             f.write("{not json")
         self.assertIsNone(self.start())
 
+    def test_a_record_too_deep_for_json_reads_as_none(self):
+        # json raises RecursionError, not ValueError, on deep nesting. The shim hides stderr and
+        # exits 0, so only load() in-process shows the crash.
+        os.makedirs(self.dir, exist_ok=True)
+        path = os.path.join(self.dir, "7.json")
+        with open(path, "w") as f:
+            f.write("[" * 100000)
+        self.assertIsNone(pass_banner.load(path))
+        self.assertIsNone(self.start())
+
     def test_control_characters_never_reach_the_banner(self):
         self.entry(message="red " + chr(27) + "[31mtext" + chr(7) + chr(0x9B) + chr(0x85)
                    + "\r\nnext\tcol" + chr(0x7F),
