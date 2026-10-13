@@ -158,18 +158,9 @@ def _line_at(m, pos: int):
         return start, None
 
 
-def _started_by_monitor(m, task_id: str):
-    """Whether task_id is a Monitor's, from the last line of m that names it as a task id:
-    True when that line is a result (toolUseResult.taskId) answering a Monitor call earlier in
-    the same file, False when it is anything else (a background Bash command's result names
-    it as backgroundTaskId), None when m never names it. One backward search for both keys
-    ("taskId" and "backgroundTaskId" both end in `askId":"<id>"`), so a recent task is found
-    near the end of the file and only an id m never names costs a whole pass."""
-    pos = m.rfind(b'askId":"' + task_id.encode() + b'"')
-    if pos < 0:
-        return None
-    if not m[max(0, pos - 2):pos] == b'"t':   # "taskId", not "backgroundTaskId"
-        return False
+def _answers_monitor(m, pos: int, task_id: str) -> bool:
+    """Whether the line of m holding byte pos is a result (toolUseResult.taskId == task_id)
+    answering a Monitor call made earlier in the same file."""
     start, d = _line_at(m, pos)
     result = d.get("toolUseResult") if isinstance(d, dict) else None
     msg = d.get("message") if isinstance(d, dict) else None
@@ -193,28 +184,53 @@ def _started_by_monitor(m, task_id: str):
     return False
 
 
-def monitor_ids(path, wanted) -> set:
-    """Which task ids in wanted the Monitor tool started: the transcript, or one of its
-    subagents' transcripts (<session>/subagents/*.jsonl), holds a result entry with that
-    toolUseResult.taskId answering a Monitor call (Claude Code 2.1.296 writes compact JSON,
-    `"taskId":"<id>"`; a background Bash command's key is backgroundTaskId). A backward byte
-    search over each whole file, so a Monitor started early in a long session still counts; an
-    id settled in one file isn't looked for in the next. Ids that aren't plain names are
-    skipped."""
+def _settle(m, wanted: set) -> dict:
+    """{id: True when a Monitor started it, False when a background Bash command did} for the
+    ids in wanted that m settles, from one backward walk over m's task-id keys: "taskId" (a
+    Monitor's result) and "backgroundTaskId" (a Bash command's) both end in `askId":"<id>"`,
+    which only a real key matches (a quote inside a string value is escaped). A walk stops as
+    soon as every id is settled, so recent tasks cost little; a "taskId" hit that isn't a
+    Monitor's result doesn't settle its id, and the walk goes on past it."""
+    out, pos = {}, len(m)
+    while len(out) < len(wanted):
+        pos = m.rfind(b'askId":"', 0, pos)
+        if pos < 0:
+            break
+        close = m.find(b'"', pos + 8, pos + 8 + 130)
+        task_id = m[pos + 8:close].decode("ascii", "replace") if close > 0 else ""
+        if task_id not in wanted or task_id in out:
+            continue
+        if m[max(0, pos - 12):pos] == b'"backgroundT':
+            out[task_id] = False
+        elif m[max(0, pos - 2):pos] == b'"t' and _answers_monitor(m, pos, task_id):
+            out[task_id] = True
+    return out
+
+
+def monitor_ids(path, wanted, budget: float = 2.0) -> set:
+    """Which task ids in wanted the Monitor tool started, from the transcript and then its
+    subagents' transcripts (<session>/subagents/*.jsonl): an id one file settles (_settle)
+    isn't looked for in the next, so a Monitor started early in a long session, or by a
+    subagent, still counts. Claude Code 2.1.296 writes compact JSON (`"taskId":"<id>"`). The
+    subagents' files are skipped once budget seconds have gone, so a cold read of several big
+    files can't run the Stop hook out of time. Ids that aren't plain names are skipped."""
     left = {i for i in wanted if isinstance(i, str) and ID.fullmatch(i)}
     found = set()
     if not left or not isinstance(path, str) or "\n" in path:
         return found
+    deadline = time.monotonic() + budget
     base = path[:-len(".jsonl")] if path.endswith(".jsonl") else path
-    for name in [path, *sorted(glob.glob(os.path.join(glob.escape(base), "subagents",
-                                                       "*.jsonl")))]:
+    for k, name in enumerate([path, *sorted(glob.glob(os.path.join(
+            glob.escape(base), "subagents", "*.jsonl")))]):
+        if k and time.monotonic() > deadline:
+            break
         try:
             with open(name, "rb") as f, mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ) as m:
-                seen = {i: _started_by_monitor(m, i) for i in left}
+                settled = _settle(m, left)
         except (OSError, ValueError):   # unreadable, or empty (mmap refuses size 0)
             continue
-        found |= {i for i, monitor in seen.items() if monitor}
-        left -= {i for i, monitor in seen.items() if monitor is not None}   # settled here
+        found |= {i for i, monitor in settled.items() if monitor}
+        left -= set(settled)
         if not left:
             break
     return found

@@ -407,6 +407,32 @@ class Hooks(unittest.TestCase):
                                                {"id": "x2", "type": "shell"}], path),
                          ["shell", "shell"])
 
+    def test_a_later_non_result_taskid_doesnt_hide_the_monitor(self):
+        # Only a result answering a Monitor call settles an id as a monitor; another line
+        # naming it (here a bare key after the real result) is walked past, not trusted.
+        path = self.monitor_transcript()
+        with open(path, "a") as f:
+            f.write(json.dumps({"type": "attachment", "attachment": {"taskId": "m1"}},
+                               separators=(",", ":")) + "\n")
+            f.write('{"type":"user","toolUseResult":{"taskId":"m1"')   # a partial last line
+        self.assertEqual(stop_ring.task_types([{"id": "m1", "type": "shell"}], path), ["monitor"])
+
+    def test_one_walk_settles_every_id_and_a_last_line_needs_no_newline(self):
+        path = self.monitor_transcript()
+        with open(path, "rb+") as f:          # drop the trailing newline
+            f.seek(-1, os.SEEK_END)
+            f.truncate()
+        tasks = [{"id": "m1", "type": "shell"}, {"id": "b1", "type": "shell"},
+                 {"id": "zz", "type": "shell"}]
+        with mock.patch.object(stop_ring, "_settle", wraps=stop_ring._settle) as walk:
+            self.assertEqual(stop_ring.task_types(tasks, path), ["monitor", "shell", "shell"])
+        self.assertEqual(walk.call_count, 1)    # one file (no subagents dir), one walk
+        # The subagents' files are skipped once the budget is spent.
+        sub = os.path.join(path[:-len(".jsonl")], "subagents")
+        os.makedirs(sub)
+        shutil.copy(path, os.path.join(sub, "agent-x.jsonl"))
+        self.assertEqual(stop_ring.monitor_ids(path, {"zz"}, budget=-1), set())
+
     def test_a_subagents_monitor_counts_from_its_own_transcript(self):
         # Subagent entries go to <session>/subagents/agent-<id>.jsonl (spike A3).
         path = os.path.join(self.tmp, "s.jsonl")

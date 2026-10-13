@@ -850,10 +850,12 @@ scale with the window:
   a lingering Monitor kept soft and wrap-up quiet, and the refusal said "1 shell".
   - **Fix (Hayden's call: classify by tool):** `stop_ring.task_types` relabels a `shell` task
     as `monitor` when its id is the `toolUseResult.taskId` of a result answering a Monitor
-    call. It byte-searches the whole transcript and its subagents' transcripts for each
-    listed shell id (`"taskId":"<id>"`; a background Bash's key is `backgroundTaskId`), so a
-    Monitor started early in a long session, or by a subagent, still counts. Review round 1
-    replaced a last-8 MiB scan, which missed exactly those. The stop record, the ring and the
+    call. One backward walk per file, over the transcript and then its subagents'
+    transcripts, settles every listed shell id (`"taskId":"<id>"` for a Monitor's result,
+    `"backgroundTaskId":"<id>"` for a Bash command's), so a Monitor started early in a long
+    session, or by a subagent, still counts. Review round 1 replaced a last-8 MiB scan, which
+    missed exactly those; round 2 made it one walk per file with a 2 s budget before the
+    subagents' files (0.75 s warm for a 128 MiB transcript that names none of the ids). The stop record, the ring and the
     watcher's Stop check all use it, so `pass-respawn` names the monitor too.
 
 **Verify.**
