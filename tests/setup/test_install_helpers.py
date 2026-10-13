@@ -361,7 +361,7 @@ def setup_link_sources():
 class SetupWiring(unittest.TestCase):
     def test_setup_locks_and_holds_before_changing_anything(self):
         lines = setup_lines()
-        hold = first(lines, r'python3 "\$REPO_DIR/install-state\.py" hold "\$REPO_DIR"')
+        hold = first(lines, r'python3 -I "\$REPO_DIR/install-state\.py" hold "\$REPO_DIR"')
         self.assertLess(first(lines, r"\s*flock -n 9"), hold)
         self.assertLess(first(lines, r"\s*flock -w 300 9"), hold)
         # Every flock on fd 9 is bounded: a sandboxed process can hold the lock, unnamed.
@@ -370,17 +370,17 @@ class SetupWiring(unittest.TestCase):
         self.assertEqual(sorted(calls), [" -n", " -w 300"])
         self.assertLess(hold, first(lines, r'mkdir -p "\$CLAUDE_DIR"'))
         self.assertLess(hold, first(lines, r"\s*(copy_managed|link) \""))
-        self.assertLess(hold, first(lines, r'python3 "\$REPO_DIR/merge-settings\.py"'))
+        self.assertLess(hold, first(lines, r'python3 -I "\$REPO_DIR/merge-settings\.py"'))
         # A plugin or tool installer that outlives the run must not inherit the lock.
         for name in ("plugins/marketplaces.json", "plugins/enabled.json", "tools.json"):
-            line = lines[first(lines, rf'\s*python3 - "\$REPO_DIR/{re.escape(name)}"')]
+            line = lines[first(lines, rf'\s*python3 -I - "\$REPO_DIR/{re.escape(name)}"')]
             self.assertIn(" 9>&- ", line, name)
 
     def test_setup_prunes_after_the_last_link_then_checks_plugins(self):
         lines = setup_lines()
-        prune = first(lines, r'python3 "\$REPO_DIR/install-state\.py" prune "\$REPO_DIR"')
+        prune = first(lines, r'python3 -I "\$REPO_DIR/install-state\.py" prune "\$REPO_DIR"')
         last_link = max(i for i, l in enumerate(lines) if re.match(r'\s*link "', l))
-        plugins = first(lines, r'python3 "\$REPO_DIR/install-state\.py" plugins')
+        plugins = first(lines, r'python3 -I "\$REPO_DIR/install-state\.py" plugins')
         self.assertLess(last_link, prune)
         self.assertLess(prune, plugins)
         self.assertLess(plugins, first(lines, r"# \d+\. Final checklist"))
@@ -416,6 +416,26 @@ class SetupWiring(unittest.TestCase):
         self.assertIn('copy_managed "$MERGED_SETTINGS" "$CLAUDE_DIR/settings.json"', text)
         self.assertNotIn('copy_managed "$REPO_DIR/settings.json"', text)
         self.assertIn('git/install-ignore.py" "$REPO_DIR/git/sandbox-stubs.ignore"', text)
+
+    def test_setup_runs_its_python_isolated(self):
+        # setup*.sh run outside the sandbox. Without -I, a script's sys.path[0] is its own dir or
+        # the cwd, and the repo root isn't in denyWrite (only its files and subdirs are), so
+        # every python3 they start runs isolated. An invocation is python3 followed by an
+        # argument (a quote, a $ or a flag); prose like "needs python3 on PATH" is not one.
+        found = {}
+        for path in sorted(glob.glob(os.path.join(REPO, "setup*.sh"))):
+            with open(path) as f:
+                text = f.read().replace("\\\n", " ")
+            name = os.path.basename(path)
+            for line in text.splitlines():
+                if line.lstrip().startswith("#"):
+                    continue
+                for m in re.finditer(r"\bpython3\s+([\"'$-]\S*)", line):
+                    found[name] = found.get(name, 0) + 1
+                    with self.subTest(name, call=line.strip()[:80]):
+                        self.assertEqual(m.group(1), "-I")
+        self.assertGreaterEqual(found.get("setup.sh", 0), 10)  # the scan sees every call
+        self.assertGreaterEqual(found.get("setup-tmux.sh", 0), 1)
 
     def test_codex_gets_the_portable_skills_and_each_exists(self):
         with open(os.path.join(REPO, "setup.sh")) as f:

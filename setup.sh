@@ -4,6 +4,9 @@
 # Idempotent: safe to re-run. Existing non-symlink files are backed up to
 # ~/.claude/backups/pre-dotclaude-<unix-ts>/ before being replaced with symlinks
 # back to this repo, so future edits in either place stay in sync.
+#
+# It runs outside the sandbox, so every python3 it starts runs isolated (-I): no path it imports
+# from comes from the cwd, the script's dir or the environment.
 
 set -euo pipefail
 
@@ -53,7 +56,7 @@ fi
 # checkout (whose run relinks everything, releasing it). install-state.py has the rule. Any
 # other failure warns and goes on, like the lane hooks.
 hold=0
-python3 "$REPO_DIR/install-state.py" hold "$REPO_DIR" || hold=$?
+python3 -I "$REPO_DIR/install-state.py" hold "$REPO_DIR" || hold=$?
 if [[ $hold -eq 3 ]]; then
   warn "setup.sh stopped before changing anything"
   exit 1
@@ -116,7 +119,7 @@ copy_managed() {
 MERGED_SETTINGS="$(mktemp)"
 trap 'rm -f "$MERGED_SETTINGS"' EXIT
 chmod 644 "$MERGED_SETTINGS"  # mktemp's 0600 would carry over to the installed copy
-python3 "$REPO_DIR/merge-settings.py" --checkout "$REPO_DIR" "$REPO_DIR/settings.json" \
+python3 -I "$REPO_DIR/merge-settings.py" --checkout "$REPO_DIR" "$REPO_DIR/settings.json" \
   "$CLAUDE_DIR/settings.machine.json" "$CLAUDE_DIR/settings.json" > "$MERGED_SETTINGS" \
   || { warn "settings.machine.json or the live settings.json is not valid JSON; settings.json left unchanged"; exit 1; }
 copy_managed "$MERGED_SETTINGS" "$CLAUDE_DIR/settings.json"
@@ -180,7 +183,7 @@ done
 CODEX_DIR="${CODEX_HOME:-$HOME/.codex}"
 mkdir -p "$CODEX_DIR"
 link "$REPO_DIR/codex/AGENTS.md" "$CODEX_DIR/AGENTS.md"
-python3 "$REPO_DIR/codex/merge-config.py" "$REPO_DIR/codex/config.toml" "$CODEX_DIR/config.toml" \
+python3 -I "$REPO_DIR/codex/merge-config.py" "$REPO_DIR/codex/config.toml" "$CODEX_DIR/config.toml" \
   || warn "codex config.toml merge failed (see above); $CODEX_DIR/config.toml left unchanged"
 # The skills Codex gets: the portable ones (Hayden's list, 2026-10-01). The others lean on Claude
 # Code: its subagents, its own skills, chrome-devtools-mcp.
@@ -200,7 +203,7 @@ if ! command -v claude >/dev/null 2>&1; then
   warn "claude CLI not on PATH — skipping plugin install (install Claude Code, then re-run)"
 else
   say "registering marketplaces"
-  python3 - "$REPO_DIR/plugins/marketplaces.json" 9>&- <<'PY'
+  python3 -I - "$REPO_DIR/plugins/marketplaces.json" 9>&- <<'PY'
 import json, subprocess, sys
 with open(sys.argv[1]) as f:
     data = json.load(f)
@@ -214,7 +217,7 @@ for name, entry in data.items():
 PY
 
   say "installing plugins"
-  python3 - "$REPO_DIR/plugins/enabled.json" 9>&- <<'PY'
+  python3 -I - "$REPO_DIR/plugins/enabled.json" 9>&- <<'PY'
 import json, subprocess, sys
 with open(sys.argv[1]) as f:
     data = json.load(f)
@@ -230,7 +233,7 @@ fi
 # 4. Standalone CLI tools (ccstatusline, etc.)
 # ---------------------------------------------------------------------------
 say "installing standalone CLI tools from tools.json"
-python3 - "$REPO_DIR/tools.json" 9>&- <<'PY'
+python3 -I - "$REPO_DIR/tools.json" 9>&- <<'PY'
 import json, subprocess, sys, shutil
 with open(sys.argv[1]) as f:
     tools = json.load(f)
@@ -262,7 +265,7 @@ for pyf in "$REPO_DIR"/statusline/*.py; do
   [[ -e "$pyf" ]] || continue
   link "$pyf" "$CC_CFG_DIR/$(basename "$pyf")"
 done
-python3 - "$REPO_DIR/statusline/ccstatusline-settings.json" "$CC_CFG_DIR/settings.json" <<'PY'
+python3 -I - "$REPO_DIR/statusline/ccstatusline-settings.json" "$CC_CFG_DIR/settings.json" <<'PY'
 import json, os, shutil, sys, time
 baseline_path, dst = sys.argv[1], sys.argv[2]
 cfgdir = os.path.dirname(dst)
@@ -352,7 +355,7 @@ if [[ "$(uname -s)" == "Linux" ]]; then
   done
   # The sandbox mounts /dev/null over protected dotfiles a repo lacks, which breaks
   # `git add -A` inside it; the block (explained in the file) hides them from git.
-  python3 "$REPO_DIR/git/install-ignore.py" "$REPO_DIR/git/sandbox-stubs.ignore" \
+  python3 -I "$REPO_DIR/git/install-ignore.py" "$REPO_DIR/git/sandbox-stubs.ignore" \
     || warn "sandbox stub block not installed into the git excludes file (see above)"
 fi
 
@@ -363,11 +366,11 @@ fi
 # live lane worktree (a file only that lane has), and the dangling ones into this checkout or
 # the lanes root (a removed hook, a closed lane). setup-tmux.sh's links and plugin files are
 # left alone; install-state.py has the rule.
-python3 "$REPO_DIR/install-state.py" prune "$REPO_DIR" \
+python3 -I "$REPO_DIR/install-state.py" prune "$REPO_DIR" \
   || warn "pruning stale links failed (see above); they are left in place"
 # A running session loads plugins and mods only at its start (SKILL.md text it picks up live),
 # so name each one that changed since the last install: those sessions need /pass to see it.
-python3 "$REPO_DIR/install-state.py" plugins \
+python3 -I "$REPO_DIR/install-state.py" plugins \
   || warn "the plugin change check failed (see above)"
 
 # ---------------------------------------------------------------------------
