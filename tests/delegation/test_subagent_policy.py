@@ -26,16 +26,18 @@ SETTINGS_CMD = BASELINE["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
 def _test_tmp_dir():
     """Where the fake homes go. Inside Claude Code's sandbox the system temp dir is
     /tmp/claude-<uid>, one of the policy's own temp roots, so every "outside the root" case
-    would pass as a temp write. There the fake homes go in the repo instead (gitignored),
-    which a sandboxed session rooted in the repo can write. A checkout that is itself a
-    Claude worktree can't host them: the policy would read every fake path as inside that
-    worktree, and the one other writable place, the git common dir, trips rm-git-metadata."""
+    would pass as a temp write. There the fake homes go in the repo instead (the gitignored
+    .tmp/ at its root), which a sandboxed session rooted in the repo can write; not beside
+    this file, since tests/ is write-protected (the canary runs it outside the sandbox). A
+    checkout that is itself a Claude worktree can't host them: the policy would read every
+    fake path as inside that worktree, and the one other writable place, the git common dir,
+    trips rm-git-metadata."""
     base = os.path.realpath(tempfile.gettempdir())
     roots = [os.path.realpath(sp.expand(r, os.path.expanduser("~")))
              for r in POLICY["rm"]["temp_roots"]]
     if not any(sp.under(base, r) for r in roots):
         return None
-    local = os.path.join(os.path.dirname(os.path.realpath(__file__)), ".tmp")
+    local = os.path.join(os.path.realpath(REPO), ".tmp", "policy-tests")
     if "/.claude/worktrees/" in local:
         raise RuntimeError("sandboxed in a checkout under .claude/worktrees/, the policy tests "
                            "have nowhere clean to build their fake homes; run this suite with "
@@ -256,11 +258,14 @@ class Excluded(Base):
     def test_excluded_commands_are_manual_only_in_any_position(self):
         for cmd in ("gh repo view", "git push origin main", "git push", "git fetch",
                     "env FOO=1 gh pr list", "ls && gh api /user", "bash -c 'git status; git push'",
-                    "eval \"git push\"", "codex exec x", "claude -p hi", "tmux ls",
+                    "eval \"git push\"", "codex login status", "claude -p hi", "tmux ls",
                     "timeout 5 git pull", "echo hi | xargs gh issue view",
                     "delegation-ledger open", "timeout 5 delegation-ledger watch",
                     "pass-respawn", "pass-respawn --compact", "env X=1 pass-respawn --print"):
             self.assertDenied(self.bash(cmd), "excluded-command", "manual_only", cmd)
+        # Only read-only codex is excluded: an agent's raw `codex exec` runs sandboxed, where
+        # codex's credential is unreadable, so it is no longer an excluded command.
+        self.assertNotEqual((self.bash("codex exec x") or (None,))[0], "excluded-command")
 
     def test_project_exclusions_are_ignored_like_claude_code_does(self):
         os.makedirs(os.path.join(self.proj, ".claude"), exist_ok=True)

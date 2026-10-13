@@ -26,6 +26,7 @@ import secrets
 import subprocess
 import tempfile
 import time
+import tomllib
 
 HERE = os.path.dirname(os.path.realpath(__file__))
 SCHEMA_PATH = os.path.join(os.path.dirname(HERE), "report.schema.json")
@@ -62,6 +63,73 @@ def state_dir(home=None):
     base = (os.environ.get("XDG_STATE_HOME")
             or os.path.join(home or os.path.expanduser("~"), ".local", "state"))
     return os.path.join(base, "dotclaude")
+
+
+def sandbox_paths(home=None):
+    """(read_denied, write_denied): the sandbox's denyRead and denyWrite from the trusted
+    settings tiers (user and managed) plus policy.toml's [protect] lists, each as its expanded
+    path and its symlink-resolved one. Our wrappers run outside the sandbox, so they hold their
+    own path arguments to these lists, which the sandbox can't do for them."""
+    home = home or os.path.expanduser("~")
+    lists = {"denyRead": [], "denyWrite": []}
+    for path in (os.path.join(home, ".claude", "settings.json"),
+                 os.path.join(home, ".claude", "settings.local.json"),
+                 "/etc/claude-code/managed-settings.json"):
+        try:
+            with open(path) as f:
+                fs = ((json.load(f) or {}).get("sandbox") or {}).get("filesystem") or {}
+        except (OSError, ValueError, AttributeError):
+            continue
+        for key in lists:
+            lists[key] += [p for p in fs.get(key) or [] if isinstance(p, str)]
+    try:
+        with open(policy_path(), "rb") as f:
+            protect = tomllib.load(f).get("protect") or {}
+    except (OSError, ValueError):
+        protect = {}
+    lists["denyRead"] += protect.get("read_denied") or []
+    lists["denyWrite"] += protect.get("write_denied") or []
+
+    def roots(entries):
+        out = set()
+        for p in entries:
+            p = str(p).replace("{uid}", str(os.getuid())).replace("{state_dir}", state_dir(home))
+            p = os.path.normpath(home + p[1:] if p == "~" or p.startswith("~/") else p)
+            out |= {p, os.path.realpath(p)}
+        return sorted(out)
+    return roots(lists["denyRead"]), roots(lists["denyWrite"])
+
+
+def path_conflict(path, roots, contains=False):
+    """The root that path is, or lies under (with contains, also one that lies under path), with
+    symlinks resolved; None when it is clear of them all. path is taken as the caller will open
+    it: a `~` the shell left quoted is a directory named `~`."""
+    p = os.path.realpath(path)
+    for r in roots:
+        if p == r or p.startswith(r.rstrip("/") + "/") or (
+                contains and r.startswith(p.rstrip("/") + "/")):
+            return r
+    return None
+
+
+def open_unprotected(path):
+    """path opened for binary reading, unless the file it reaches lies under a read-protected
+    path (PermissionError). Checked on the open file, so a link swapped in after an earlier check
+    is caught: a waiter reads its log outside the sandbox for as long as it waits."""
+    f = open(path, "rb")
+    try:
+        real = os.path.realpath(f"/proc/self/fd/{f.fileno()}")
+    except OSError:
+        real = os.path.realpath(path)
+    if path_conflict(real, sandbox_paths()[0]):
+        f.close()
+        raise PermissionError(f"{path} reaches a read-protected path")
+    return f
+
+
+def unprotected_exists(path):
+    """os.path.exists, but False for a path that reaches a read-protected one."""
+    return os.path.exists(path) and not path_conflict(path, sandbox_paths()[0])
 
 
 def ledger_path():
@@ -975,8 +1043,8 @@ def scan_log(path, done, fail, cursor, pids_gone=None, quiet_s=WAIT_POLL_S, now=
         return None
 
     try:
-        f = open(path, "rb")
-    except OSError:  # no log now: what was seen stands, and a fresh cursor has seen nothing
+        f = open_unprotected(path)
+    except OSError:  # no log now (or one that reaches a read-protected file): what was seen stands, and a fresh cursor has seen nothing
         held = cursor.get("partial")
         if not cursor["failed"] and held and settle and pids_gone:
             verdict = settled(held)
@@ -1049,7 +1117,7 @@ def watch_verdict(w, cursor=None, now=None, settle=True, between=None):
            if c.get("log") else None)
     if log == "failed":
         return "failed", f"{c['log']} has a line matching /{c['fail']}/"
-    met = {"pids": not running, "file": bool(c.get("file")) and os.path.exists(c["file"]),
+    met = {"pids": not running, "file": bool(c.get("file")) and unprotected_exists(c["file"]),
            "done": log == "done"}
     unmet = [text for key, text in _clauses(c) if not met[key]]
     if not unmet:

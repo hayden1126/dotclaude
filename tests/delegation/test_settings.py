@@ -3,12 +3,17 @@ permission rules.
 
 A wrong type or a missing suffix here fails silently in Claude Code (an unknown value is
 ignored; a hook that exits non-2 doesn't block), so the baseline is pinned by test."""
+import contextlib
 import glob
+import io
 import json
 import os
 import re
+import shutil
+import subprocess
 import unittest
 
+import command_inventory as inv
 from _paths import REPO, load_script
 
 with open(os.path.join(REPO, "settings.json")) as f:
@@ -62,7 +67,7 @@ class Baseline(unittest.TestCase):
         fs = S["sandbox"]["filesystem"]
         self.assertIn("~/.config/gh", fs["denyRead"])
         excluded = S["sandbox"]["excludedCommands"]
-        for pat in ("git push *", "git fetch *", "git pull *", "gh *"):
+        for pat in ("git push origin *", "git fetch *", "git pull *", "gh pr *", "gh api *"):
             self.assertIn(pat, excluded)
         self.assertNotIn("git clone *", excluded)  # it stays sandboxed: public clones only
 
@@ -82,11 +87,11 @@ class Baseline(unittest.TestCase):
     def test_code_that_runs_outside_the_sandbox_is_write_protected(self):
         # Sandbox audit, 2026-10-04. ccstatusline and the Notification hook run these unsandboxed
         # on every refresh or toast; setup.sh runs or installs the rest, including the plugins
-        # and tools its JSON lists.
+        # and tools its JSON lists; the canary (an excluded command) runs tests/.
         deny = S["sandbox"]["filesystem"]["denyWrite"]
         for p in ("statusline", "notify-toast.ps1", "codex", "setup.sh", "merge-settings.py",
                   "setup-chrome-wsl.sh", "sync.sh", "chrome-debug.ps1", "git", "plugins",
-                  "tools.json", "tmux", "setup-tmux.sh", "bin"):
+                  "tools.json", "tmux", "setup-tmux.sh", "bin", "tests"):
             self.assertIn("~/dotclaude/" + p, deny)
 
     def test_tool_credentials_and_shell_history_are_read_protected(self):
@@ -379,12 +384,13 @@ class Baseline(unittest.TestCase):
         # approves each in words; 2026-10-09 he extended his "perms for PR requests" to ready,
         # edit, comment, close and reopen, after the classifier refused the handoff skill's own
         # `gh pr ready` as an unrequested commit).
+        # A body read from a file asks (the inventory's gh file rules; Hayden, 2026-10-13).
         # Read-only git and pipe filters skip the classifier, which once refused a
         # `git status -sb | head -1` as an unrequested commit. Each part of a pipe needs its
         # own rule (live probe, 2.1.293), hence head, tail, wc and grep.
         allowed = ["git push origin feat/x", "git push origin feat-force-fix",
                    "git push origin fix/x --follow-tags", "gh pr create --base main --head feat/x",
-                   "gh pr ready 5", "gh pr ready 5 --repo o/r", "gh pr edit 5 --body-file b.md",
+                   "gh pr ready 5", "gh pr ready 5 --repo o/r", "gh pr edit 5 --body x",
                    "gh pr comment 5 --body x", "gh pr close 5", "gh pr reopen 5",
                    "git push origin :feat",
                    "git status", "git status -sb", "git log", "git log --oneline -5",
@@ -415,7 +421,9 @@ class Baseline(unittest.TestCase):
         for c in asked:  # ask beats allow, so an allow rule may cover these too
             self.assertTrue(matching("ask", c), c)
         # Every rule is the only one of its kind that catches some case, so dropping one fails.
-        for kind, cases in (("deny", denied), ("ask", asked)):
+        # The inventory's rules bring their own cases.
+        for kind, cases in (("deny", denied + [s for r in inv.DENIES for s in r.samples]),
+                            ("ask", asked + [s for r in inv.ASKS for s in r.samples])):
             for rule in S["permissions"][kind]:
                 self.assertIn([rule], [matching(kind, c) for c in cases], rule)
 
@@ -452,6 +460,230 @@ class Baseline(unittest.TestCase):
         self.assertIn('bash "$HOME/.claude/hooks/stop-ring.sh"', stops)
         self.assertFalse(any("powershell.exe" in c for c in stops), stops)
         self.assertTrue(os.access(os.path.join(REPO, "hooks", "stop-ring.sh"), os.X_OK))
+
+
+def excluded_by(command):
+    return [p for p in S["sandbox"]["excludedCommands"] if glob_match(p, command)]
+
+
+def help_text(*argv):
+    p = subprocess.run(["claude", *argv, "--help"], capture_output=True, text=True, timeout=30)
+    return p.stdout
+
+
+class Inventory(unittest.TestCase):
+    """command_inventory.py is the single source for what runs outside the sandbox and what asks;
+    settings.json must say the same, in both directions."""
+
+    def test_excluded_commands_are_the_inventory_in_order(self):
+        self.assertEqual(S["sandbox"]["excludedCommands"], [e.pattern for e in inv.EXCLUDED])
+
+    def test_each_sample_matches_its_entry_and_the_rest_stay_sandboxed(self):
+        for e in inv.EXCLUDED:
+            for s in e.samples:
+                self.assertTrue(glob_match(e.pattern, s), (e.pattern, s))
+        for s in inv.NO_ASK:
+            self.assertTrue(excluded_by(s), s)
+        for s in inv.SANDBOXED:
+            self.assertEqual(excluded_by(s), [], s)
+
+    def test_the_inventory_rules_are_in_settings(self):
+        self.assertLessEqual({r.rule for r in inv.ASKS}, set(S["permissions"]["ask"]))
+        self.assertLessEqual({r.rule for r in inv.DENIES}, set(S["permissions"]["deny"]))
+        # Every other ask is the git and gh baseline that
+        # test_destructive_git_is_denied_and_anything_that_can_reach_main_asks covers.
+        for rule in set(S["permissions"]["ask"]) - {r.rule for r in inv.ASKS}:
+            self.assertRegex(rule, r"^Bash\((git|gh) ", rule)
+
+    def test_raw_samples_ask_and_the_hot_path_does_not(self):
+        for r in inv.ASKS:
+            for s in r.samples:
+                self.assertIn(r.rule, matching("ask", s), s)
+        for r in inv.DENIES:
+            for s in r.samples:
+                self.assertIn(r.rule, matching("deny", s), s)
+        for s in inv.NO_ASK:
+            self.assertEqual(matching("ask", s) + matching("deny", s), [], s)
+
+    def test_every_tmux_spelling_asks_unless_read_only(self):
+        # tmux takes an alias or any unambiguous prefix of a name, so each spelling of each of
+        # the snapshot's commands is checked, bare and with an argument.
+        table = inv.tmux_table()
+        self.assertEqual(len(table), 91)
+        self.assertLessEqual(inv.TMUX_READ_ONLY, {n for n, _ in table})
+        for name, _ in table:
+            for verb in sorted(inv.tmux_spellings(name, table)):
+                self.assertEqual(inv.tmux_resolve(verb, table), name, verb)
+                for cmd in (f"tmux {verb}", f"tmux {verb} -t x"):
+                    asks = matching("ask", cmd)
+                    if name in inv.TMUX_READ_ONLY:
+                        self.assertEqual(asks, [], cmd)
+                    else:
+                        self.assertTrue(asks, cmd)
+        # Each excluded tmux entry is a read-only verb.
+        for p in S["sandbox"]["excludedCommands"]:
+            if p.startswith("tmux "):
+                self.assertIn(inv.tmux_resolve(p.split()[1], table), inv.TMUX_READ_ONLY, p)
+
+    def test_each_excluded_tmux_verb_names_the_command_tmux_runs(self):
+        # Written out by hand from tmux's cmd_find (exact alias, else a unique prefix), so a
+        # slip in tmux_spellings can't hide behind tmux_resolve, which derives from it.
+        expect = {"ls": "list-sessions", "list-sessions": "list-sessions",
+                  "list-windows": "list-windows", "list-panes": "list-panes",
+                  "list-clients": "list-clients", "list-keys": "list-keys",
+                  "list-commands": "list-commands", "capture-pane": "capture-pane",
+                  "display": "display-message", "show": "show-options",
+                  "show-options": "show-options", "show-environment": "show-environment",
+                  "show-messages": "show-messages", "show-hooks": "show-hooks"}
+        verbs = {p.split()[1] for p in S["sandbox"]["excludedCommands"] if p.startswith("tmux ")}
+        self.assertEqual(verbs, set(expect))
+        for verb, name in expect.items():
+            self.assertEqual(inv.tmux_resolve(verb), name, verb)
+            self.assertIn(name, inv.TMUX_READ_ONLY, verb)
+        # A default command-alias runs its target: the mutating ones ask, and none is excluded.
+        for alias, name in inv.TMUX_DEFAULT_ALIASES.items():
+            self.assertEqual(excluded_by(f"tmux {alias} -t x"), [], alias)
+            if name not in inv.TMUX_READ_ONLY:
+                self.assertTrue(matching("ask", f"tmux {alias} -t x"), alias)
+
+    def test_wrapper_flags_an_ask_names_take_no_abbreviation(self):
+        # argparse takes a unique prefix by default (`--aban` for --abandon), which an ask that
+        # names the full flag would miss, so the excluded wrappers turn that off.
+        lane = load_script("lane", os.path.join(REPO, "skills", "lanes", "scripts"))
+        for argv in (["init", "--set", "x"], ["init", "--ro", "/x"], ["done", "x", "--aban"]):
+            with self.assertRaises(SystemExit, msg=argv), contextlib.redirect_stderr(io.StringIO()):
+                lane.parser().parse_args(argv)
+        self.assertTrue(lane.parser().parse_args(["done", "x", "--abandon"]).abandon)
+        cd = load_script("codex-delegate")
+        cd.cmd_run = lambda a: a.network
+        run = ["run", "--model", "m", "--dir", "/x", "--brief", "b.md"]
+        with self.assertRaises(SystemExit), contextlib.redirect_stderr(io.StringIO()):
+            cd.main(run + ["--net"])
+        self.assertTrue(cd.main(run + ["--network"]))
+
+    def test_installed_tmux_matches_the_snapshot(self):
+        # `tmux -V` needs no server, so a tmux upgrade fails every suite run until the snapshot
+        # and the read-only list are redone. The table itself needs a server, which the sandbox
+        # blocks, so that half runs where a socket is reachable (the sandbox-off canary).
+        if not shutil.which("tmux"):
+            self.skipTest("no tmux on PATH")
+        v = subprocess.run(["tmux", "-V"], capture_output=True, text=True, timeout=10)
+        self.assertEqual(v.stdout.strip(), inv.TMUX_VERSION,
+                         "re-snapshot `tmux list-commands` into " + inv.TMUX_SNAPSHOT)
+        sock = f"dotclaude-inventory-{os.getpid()}"
+        p = subprocess.run(["tmux", "-L", sock, "-f", "/dev/null", "start-server", ";",
+                            "list-commands", ";", "kill-server"],
+                           capture_output=True, text=True, timeout=10)
+        if p.returncode != 0:
+            self.skipTest("tmux reaches no server here: " + p.stderr.strip()[:80])
+        with open(inv.TMUX_SNAPSHOT) as f:
+            self.assertEqual(p.stdout, f.read())
+
+    def test_git_program_flag_asks_cover_every_prefix_git_takes(self):
+        # git takes any unique prefix of a long option, so each ask names the shortest one the
+        # installed git accepts, and no other option of that verb trips it.
+        if not shutil.which("git"):
+            self.skipTest("no git on PATH")
+        for verb, flags in inv.GIT_PROGRAM_FLAGS.items():
+            p = subprocess.run(["git", verb, "--git-completion-helper-all"],
+                               capture_output=True, text=True, timeout=10)
+            opts = {o.rstrip("=") for o in p.stdout.split() if o.startswith("--")}
+            self.assertLessEqual(set(flags), opts, verb)
+            for flag, prefix in flags.items():
+                short = next(flag[:i] for i in range(3, len(flag) + 1)
+                             if [o for o in opts if o.startswith(flag[:i])] == [flag])
+                self.assertEqual(prefix, short, f"git {verb} {flag}")
+                for i in range(len(short), len(flag) + 1):
+                    self.assertTrue(matching("ask", f"git {verb} origin {flag[:i]}=x"), flag[:i])
+            mine = {r.rule for r in inv.ASKS}  # the baseline's push asks are another test's
+            for o in sorted(opts - set(flags) - {"--"}):
+                self.assertEqual(set(matching("ask", f"git {verb} origin {o}")) & mine, set(),
+                                 f"git {verb} {o}")
+
+    def test_installed_claude_flags_and_subcommands_are_classified(self):
+        # A new Claude Code flag or subcommand fails every suite until the inventory classifies
+        # it (Hayden accepted the cost, 2026-10-13): an unclassified loosening flag is what the
+        # inventory exists to catch. The flags are the top level's and every "ok" leaf's, short
+        # aliases included; a leaf that asks as a whole needs no flag list.
+        if not shutil.which("claude"):
+            self.skipTest("no claude on PATH")
+        known = set(inv.CLAUDE_FLAG_ASKS) | inv.CLAUDE_FLAG_OK | set(inv.CLAUDE_LEAF_FLAG_ASKS)
+        leaves = [()] + [path + (sub.split("|")[0],) for path, subs in inv.CLAUDE_COMMANDS.items()
+                         for sub, cls in subs.items() if cls == "ok" and sub != "help"]
+        for argv in leaves:
+            text = help_text(*argv)
+            self.assertIn("Usage: claude", text, argv)
+            for short, *longs in re.findall(r"^  (?:(-\w), )?(--[\w-]+)(?:, (--[\w-]+))?",
+                                            text, re.M):
+                for flag in filter(None, longs):
+                    self.assertIn(flag, known, f"classify claude {' '.join(argv)} {flag}")
+                if short:
+                    self.assertEqual(inv.CLAUDE_SHORT_FLAGS.get(short), longs[0],
+                                     f"classify claude {' '.join(argv)} {short}")
+        for path, subs in inv.CLAUDE_COMMANDS.items():
+            text = help_text(*path)
+            listed = re.findall(r"^  ([a-z][\w|-]*)", text.split("\nCommands:\n", 1)[-1], re.M)
+            self.assertTrue(listed, path)
+            for sub in listed:
+                self.assertIn(sub, subs, f"classify claude {' '.join(path)} {sub}")
+
+    def test_claude_classes_match_the_rules(self):
+        for flag, glob_ in inv.CLAUDE_FLAG_ASKS.items():
+            if glob_:
+                self.assertTrue(matching("ask", f"claude -p {flag} x"), flag)
+        for flag in inv.CLAUDE_FLAG_OK | inv.CLAUDE_HIDDEN_OK:
+            self.assertEqual(matching("ask", f"claude -p {flag} x"), [], flag)
+        for short, long_ in inv.CLAUDE_SHORT_FLAGS.items():
+            self.assertIn(long_, inv.CLAUDE_FLAG_OK, short)  # an ask-class short needs a rule
+            self.assertEqual(matching("ask", f"claude {short} x"), [], short)
+        for flag, rule in inv.CLAUDE_LEAF_FLAG_ASKS.items():
+            self.assertIn(rule, {r.rule for r in inv.ASKS}, flag)
+        for path, subs in inv.CLAUDE_COMMANDS.items():
+            for heads in ([path], [("plugins",)] if path == ("plugin",) else []):
+                for head in heads:
+                    for sub, cls in subs.items():
+                        for name in sub.split("|"):
+                            cmd = " ".join(["claude", *head, name, "x"])
+                            if cls == "ask":
+                                self.assertTrue(matching("ask", cmd), cmd)
+                            elif cls == "deny":
+                                self.assertTrue(matching("deny", cmd), cmd)
+                            elif cls == "ok":
+                                self.assertEqual(matching("ask", cmd) + matching("deny", cmd),
+                                                 [], cmd)
+
+    def test_every_model_run_command_in_skills_asks_nothing(self):
+        # What CLAUDE.md, a skill or an agent tells Claude to run stays prompt-free (rule D),
+        # and a call with arguments to an excluded wrapper or verb really runs outside.
+        docs = ([os.path.join(REPO, "CLAUDE.md")]
+                + glob.glob(os.path.join(REPO, "skills", "**", "*.md"), recursive=True)
+                + glob.glob(os.path.join(REPO, "agents", "*.md")))
+        tools = r"tmux|claude|codex|lane|pass-respawn|delegation-ledger|codex-delegate|gh"
+        found = set()
+        for path in docs:
+            with open(path) as f:
+                text = f.read()
+            spans = re.findall(rf"`((?:{tools}) [^`]+)`", text)
+            for block in re.findall(r"^```[^\n]*\n(.*?)^```", text, re.M | re.S):
+                spans += re.findall(rf"^\s*((?:{tools}) .*?)(?:\s+#.*)?$", block, re.M)
+            for span in spans:
+                # <placeholder> becomes a word; an [--optional] group drops (it may ask).
+                span = re.sub(r"\[[^]]*\]", "", re.sub(r"<[^>]*>", "x", span))
+                found.add(" ".join(span.split()))
+        self.assertIn("tmux capture-pane -p -t x", found)  # the scan still reaches the lanes skill
+        self.assertIn("codex-delegate status", found)  # and the fenced blocks
+        excluded = S["sandbox"]["excludedCommands"]
+        for cmd in sorted(found):
+            with self.subTest(cmd=cmd):
+                if any(cmd.startswith(k) for k in inv.SKILL_ASKS):
+                    self.assertTrue(matching("ask", cmd))
+                    continue
+                self.assertEqual(matching("ask", cmd) + matching("deny", cmd), [])
+                words = cmd.split()
+                family = [p for p in excluded if p.split()[:2] == words[:2]
+                          or p.split()[0] == words[0] and p.split()[1:] == ["*"]]
+                if family and len(words) > 2 or words[0] == "gh":  # gh is an allowlist
+                    self.assertTrue(excluded_by(cmd))
 
 
 if __name__ == "__main__":

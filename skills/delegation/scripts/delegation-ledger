@@ -1247,6 +1247,14 @@ def wait_condition(args):
             raise dc.WaitRefused(f"--{opt} {pattern!r} is not a pattern ({ex})") from None
     if not (args.pid or args.file or args.done):
         raise dc.WaitRefused("give what to wait for: --pid, --file, --log with --done, or --codex")
+    # The waiter runs outside the sandbox, where its exit would say what a protected file holds.
+    read_denied = dc.sandbox_paths()[0]
+    for opt in ("log", "file"):
+        path = getattr(args, opt)
+        hit = path is not None and dc.path_conflict(path, read_denied)
+        if hit:
+            raise dc.WaitRefused(f"--{opt} {path} is under {hit}, which the sandbox keeps "
+                                 "unreadable")
     if args.stale is not None and not dc.is_positive(args.stale):
         raise dc.WaitRefused("--stale takes positive minutes")
     if args.pid and min(args.pid) <= 0:
@@ -1529,6 +1537,10 @@ class Parser(argparse.ArgumentParser):
     """An ArgumentParser whose usage errors exit `usage_code`: argparse's 2, unless a subcommand
     sets its own (wait's 2 means a stale log, so its bad usage is WAIT_USAGE)."""
     usage_code = 2
+
+    def __init__(self, *args, **kwargs):
+        # No abbreviated flags: a permission rule that names a flag must see its full spelling.
+        super().__init__(*args, allow_abbrev=False, **kwargs)
 
     def error(self, message):
         self.print_usage(sys.stderr)

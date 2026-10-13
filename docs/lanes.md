@@ -223,6 +223,15 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
   - A symlinked `lanes/`, `lanes/<id>`, mirror or `info/exclude` is refused.
   PR 3 adds `pass-respawn` to `excludedCommands` (bare and with arguments): it needs the tmux socket and
   the session's processes, and its docstring lists what it reads and why each input is safe.
+  The excluded-command inventory (2026-10-13, `tests/delegation/command_inventory.py`) adds three
+  asks: `lane init --setup` names the command each new lane runs, `lane init --root` moves where
+  lanes live, and `lane done --abandon` closes unmerged work. The rest of `lane` asks nothing.
+  A lane that installs from its worktree (`lane lock install -- ./setup.sh`) points the installed
+  hooks, skills, agents and bin at files its own sandboxed Bash can write, so the install adds the
+  lane's copies of the `~/dotclaude` paths to `denyWrite` (`merge-settings.py --checkout`); the
+  lead's reinstall from `main` drops them. While that install is live, the lane's own sandboxed
+  rebase, merge or switch that touches those paths fails or half-applies, as in `~/dotclaude`:
+  run it sandbox-off, or after the reinstall.
 - **S4, compaction:** a SessionStart hook matched on `compact` gets its `additionalContext` to
   the model after `/compact` (`/compact` piped into `claude -p --resume` triggers a real
   compaction). `lane-identity.sh` on `compact` is therefore the safety net for an unplanned

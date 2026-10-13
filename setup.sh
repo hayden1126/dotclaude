@@ -64,13 +64,14 @@ copy_managed() {
 # tools) goes in settings.machine.json beside the live copy, never in this repo, and the
 # copy is the baseline with that overlay merged in (merge-settings.py has the rule).
 # Top-level keys only the live copy sets (autoMode, model and the other /config choices) are
-# kept; a live value the baseline overrides is named on stderr. Without an overlay or such a
-# key, the baseline is copied byte for byte.
+# kept; a live value the baseline overrides is named on stderr. Installed from a checkout other
+# than ~/dotclaude (a lane), that checkout's copies of the write-protected paths join denyWrite.
+# Without an overlay, such a key or another checkout, the baseline is copied byte for byte.
 MERGED_SETTINGS="$(mktemp)"
 trap 'rm -f "$MERGED_SETTINGS"' EXIT
 chmod 644 "$MERGED_SETTINGS"  # mktemp's 0600 would carry over to the installed copy
-python3 "$REPO_DIR/merge-settings.py" "$REPO_DIR/settings.json" "$CLAUDE_DIR/settings.machine.json" \
-  "$CLAUDE_DIR/settings.json" > "$MERGED_SETTINGS" \
+python3 "$REPO_DIR/merge-settings.py" --checkout "$REPO_DIR" "$REPO_DIR/settings.json" \
+  "$CLAUDE_DIR/settings.machine.json" "$CLAUDE_DIR/settings.json" > "$MERGED_SETTINGS" \
   || { warn "settings.machine.json or the live settings.json is not valid JSON; settings.json left unchanged"; exit 1; }
 copy_managed "$MERGED_SETTINGS" "$CLAUDE_DIR/settings.json"
 link "$REPO_DIR/CLAUDE.md"       "$CLAUDE_DIR/CLAUDE.md"
