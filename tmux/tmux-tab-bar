@@ -532,9 +532,11 @@ def write_line(sid: str, ops: list, status: str | None, sig: str) -> str:
 # --- tmux I/O -----------------------------------------------------------------------------------
 
 def tmux(*args: str, stdin: str | None = None) -> subprocess.CompletedProcess:
-    """One tmux command on the server $TMUX names."""
-    return subprocess.run(["tmux", *args], input=stdin, capture_output=True, text=True,
-                          timeout=5, errors="surrogateescape")
+    """One tmux command on the server $TMUX names. -u: a client that doesn't think its locale
+    is UTF-8 prints every tab and non-ASCII byte of a list as _ (server_client_print's
+    utf8_sanitize), which would break the tab-separated fields and every non-ASCII path."""
+    return subprocess.run(["tmux", "-u", *args], input=stdin, capture_output=True, text=True,
+                          encoding="utf-8", timeout=5, errors="surrogateescape")
 
 
 def read(fields: int, *args: str) -> list:

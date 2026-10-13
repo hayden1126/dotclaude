@@ -520,7 +520,9 @@ class Conf(unittest.TestCase):
 
 FAKE_TMUX = TMUX_WORDS + r'''
 import json, os, re, sys
-args = sys.argv[1:]
+if sys.argv[1:2] != ["-u"]:
+    sys.exit(3)                         # without -u, tmux would print tabs and non-ASCII as _
+args = sys.argv[2:]
 log = os.environ["STUB_LOG"]
 def record(argv):
     with open(log, "a") as f:
@@ -870,7 +872,8 @@ class RealTmux(unittest.TestCase):
         self.home = os.path.join(self.tmp, "home")
         os.makedirs(self.home)
         self.env = {k: v for k, v in os.environ.items() if not k.startswith(("TMUX", "CLAUDE"))}
-        self.env.update(HOME=self.home, TERM="xterm-256color", TMUX_CLAUDE_STATUS_DIR=self.tmp)
+        self.env.update(HOME=self.home, TERM="xterm-256color", TMUX_CLAUDE_STATUS_DIR=self.tmp,
+                        LANG="C.UTF-8")
         repos = os.path.join(self.tmp, "code")
         os.makedirs(repos)
         self.lead = make_repo(repos, "dotclaude", lanes=["tab-bar"])
@@ -891,7 +894,7 @@ class RealTmux(unittest.TestCase):
         for i, title in enumerate(("alpha-title", "beta-title", "gamma-title")):
             self.ti("select-pane", "-t", f"t:{i}", "-T", title)
         p = self.to("-f", "/dev/null", "new-session", "-d", "-s", "o", "-x", "188", "-y", "46",
-                    f"env -u TMUX {self.tmux_bin} -S {self.sock} attach -t t", check=False)
+                    f"env -u TMUX {self.tmux_bin} -u -S {self.sock} attach -t t", check=False)
         self.assertEqual(p.returncode, 0, p.stderr)
         self.addCleanup(self.to, "kill-server", check=False)
         self.to("set", "-g", "status", "off")
@@ -905,8 +908,9 @@ class RealTmux(unittest.TestCase):
     # --- helpers ---
 
     def tmux(self, sock, args, check=True, stdin=None):
-        p = subprocess.run([self.tmux_bin, "-S", sock, *args], capture_output=True, text=True,
-                           timeout=10, env=self.env, input=stdin)
+        # -u: a client without a UTF-8 locale prints non-ASCII and tabs as _ (utf8_sanitize).
+        p = subprocess.run([self.tmux_bin, "-u", "-S", sock, *args], capture_output=True,
+                           text=True, encoding="utf-8", timeout=10, env=self.env, input=stdin)
         if check:
             self.assertEqual(p.returncode, 0, (args, p.stderr))
         return p
@@ -1008,7 +1012,9 @@ class RealTmux(unittest.TestCase):
     def test_a_style_in_a_title_is_drawn_as_text(self):
         self.run_layout()
         self.ti("select-pane", "-t", "t:2", "-T", "#[range=window|1]x")
-        self.find("#[range=window|1]x")
+        self.assertEqual(self.ti("display", "-p", "-t", "t:2", "#{pane_title}").stdout,
+                         "#[range=window|1]x\n")
+        self.find("hq: #[range=window|1]x")    # without q/h it would be a range and "hq: x"
 
     def test_a_click_on_row_2_switches(self):
         self.run_layout()
