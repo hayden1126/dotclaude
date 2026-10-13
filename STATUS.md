@@ -237,7 +237,10 @@ stored here).
 - **Next (lead, main checkout): run `lane-close`, `tab-bar` and `lane-addr` to merge in that
   order** ("In flight"). As of 2026-10-13: narrow-excluded is closed, lane-addr was just opened
   (plan mode), and lane-close and tab-bar were told main moved to fe981d7 and to merge it.
-  lane-close is next and cleared to install once its review and live probe are done. Start
+  lane-close is next: review rounds 3-6, the live probe and a lead review of its post-merge
+  fixes are done. Before it ships, it adds one sandbox fix (G7 in the private findings; setup
+  runs its Python isolated, Hayden's call 2026-10-13), and then a fresh reviewer reads that
+  commit. Start
   with `lane ls` and `lane asks`. A lane is handed back only once `handoff-check -C <lane path>`
   passes and the board shows no `handoff?` flag. After each merge, follow the install step in
   "In flight", then `lane done <id>` once its session exits (until `lane-close` merges, Hayden
