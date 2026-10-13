@@ -316,10 +316,12 @@ need nothing extra.
   then each lane (its id, cut to 12 cells, plus its title), then its other worktrees. Every other
   window goes on the shared row(s) at the bottom, as `repo: title`. A window counts as whatever
   its active pane's directory is in. Window numbers never change; only the order on the bar does.
-  Tabs split their row evenly and a row spills over only when a tab would get too narrow (the
-  tabs then spread evenly over the rows they need), so a title or glyph change never moves a tab
-  or resizes the panes. Past 5 rows the smallest
-  groups share the bottom rows behind a `│repo▸` divider; still past 5, the bar ends in `+N`, which
+  Each tab is 32 columns wide, left-justified, with a dim `│` between two tabs; a row with too
+  many tabs for that splits its width evenly, and a row spills over only when a tab would get too
+  narrow (the tabs then spread evenly over the rows they need). Widths depend only on how many
+  tabs there are and the terminal's width, so a title or glyph change never moves a tab or
+  resizes the panes. Past 5 rows the smallest
+  groups share the bottom rows behind a `┃repo▸` divider; still past 5, the bar ends in `+N`, which
   opens the window list. The window you are on is always shown. On a terminal under 100 columns
   (the phone over ssh) the bar moves to the bottom with shorter tabs and drops the clock. Tap a
   tab to switch to it; tap the tab you are on for its menu (Star, Shelve, Shelf…, Replies before

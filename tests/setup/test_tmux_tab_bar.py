@@ -36,7 +36,7 @@ Group = tb.Group
 
 # Every character a generated row may hold: the template's own text, digits and window ids.
 ALPHABET = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-               " #{}[]=,:;|/@?^()\\*+-_.!…◐✳★▸│")
+               " #{}[]=,:;|/@?^()\\*+-_.!…◐✳★▸│┃")
 
 HOSTILE = "#(touch x)%,}\n\x1b[31m#{E:pwn}"   # cleans to "(touch x)%,}[31m{E:pwn}"
 BENIGN = "abcdefghijklmnopqrstuvwxyz"
@@ -178,19 +178,21 @@ SHARED5 = tabs(1, 2, 3, 5, 9)
 
 class LayOut(unittest.TestCase):
     def check_fits(self, lay, width):
-        """Every row's headers, slots and +N fit its width; no slot is over the cap."""
+        """Every row's headers, slots, separators and +N fit its width; no slot is over the
+        default width."""
         for r, (row, slot) in enumerate(zip(lay.rows, lay.slots)):
             avail = width - ((lay.left + lay.right) if r == 0 else 0)
             fixed = sum(lay.head_w[i[1]] if i[0] in ("head", "div") else i[2]
                         for i in row if i[0] != "tab")
-            self.assertLessEqual(fixed + len(tab_ids(row)) * slot, avail, (r, row))
-            self.assertLessEqual(slot, tb.MAX_SLOT)
+            self.assertLessEqual(fixed + len(tab_ids(row)) * slot + tb.separators(row), avail,
+                                 (r, row))
+            self.assertLessEqual(slot, tb.DEFAULT_SLOT)
 
     def test_one_laned_group_and_a_shared_row(self):
         lay = tb.lay_out([Group("dotclaude", tabs(2, 3))], tabs(1, 4), 188, "@1", 28, 16)
         self.assertEqual(lay.rows, [[("head", 0, False), ("tab", "@2", 2), ("tab", "@3", 3)],
                                     [("tab", "@1", 1), ("tab", "@4", 4)]])
-        self.assertEqual(lay.slots, [48, 48])       # (144 - 11) // 2 and 188 // 2, capped
+        self.assertEqual(lay.slots, [32, 32])       # room for more: the default width
         self.assertEqual((lay.phone, lay.hidden, lay.heads), (False, 0, ["dotclaude"]))
         self.check_fits(lay, 188)
 
@@ -198,19 +200,30 @@ class LayOut(unittest.TestCase):
         lay = tb.lay_out([DOTCLAUDE], SHARED5, 188, "@4", 28, 16)
         self.assertEqual([tab_ids(r) for r in lay.rows],
                          [["@4", "@6", "@7", "@8"], ["@1", "@2", "@3", "@5", "@9"]])
-        self.assertEqual(lay.slots, [33, 37])
+        self.assertEqual(lay.slots, [32, 32])       # a row of 4 at 188: 32 each, left-justified
         self.check_fits(lay, 188)
 
+    def test_a_row_too_full_for_the_default_width_splits_evenly(self):
+        # 9 shared: row 0 (144 cells after status-left and -right) holds 7 at 18 + 6
+        # separators, so 5+4; 5 tabs get (144 - 4) // 5 = 28, the row of 4 gets 32.
+        lay = tb.lay_out([], tabs(*range(1, 10)), 188, "@1", 28, 16)
+        self.assertEqual([len(tab_ids(r)) for r in lay.rows], [5, 4])
+        self.assertEqual(lay.slots, [28, 32])
+        self.check_fits(lay, 188)
+        lay = tb.lay_out([], tabs(*range(1, 11)), 188, "@1", 0, 0)    # 10 in 188: 17 < 18
+        self.assertEqual([len(tab_ids(r)) for r in lay.rows], [5, 5])
+        self.assertEqual(lay.slots, [32, 32])
+
     def test_the_live_shape_on_the_phone_spreads_the_lanes_evenly(self):
-        # Row 0 holds 3 of the 4 dotclaude tabs, but 3+1 would leave the first three at 11
-        # cells (`narro…`): 2+2 gives each 17.
+        # Row 0 holds 3 of the 4 dotclaude tabs, but 3+1 would leave the first three at 10
+        # cells (`narro…`): 2+2 gives each 16. 5 shared need 5 * 9 + 4 separators = 49 > 45.
         lay = tb.lay_out([DOTCLAUDE], SHARED5, 45, "@4", 28, 16)
         self.assertTrue(lay.phone)
         self.assertEqual(lay.heads, ["dot"])
         self.assertEqual(lay.rows[1][0], ("head", 0, True))     # the overflow header, dimmed
         self.assertEqual([tab_ids(r) for r in lay.rows],
-                         [["@4", "@6"], ["@7", "@8"], ["@1", "@2", "@3", "@5", "@9"]])
-        self.assertEqual(lay.slots, [17, 20, 9])
+                         [["@4", "@6"], ["@7", "@8"], ["@1", "@2", "@3"], ["@5", "@9"]])
+        self.assertEqual(lay.slots, [16, 19, 14, 22])
         self.assertEqual((lay.left, lay.right), (tb.PHONE_LEFT, 0))
         self.check_fits(lay, 45)
 
@@ -273,7 +286,8 @@ class LayOut(unittest.TestCase):
     def test_a_wide_row_has_no_tab_cap(self):
         # Rows go to tmux through source-file, which has no 16 KB command limit.
         lay = tb.lay_out([], tabs(*range(1, 16)), 400, "@1", 28, 16)
-        self.assertEqual([len(tab_ids(r)) for r in lay.rows], [15])   # (400 - 44) // 18 = 19
+        self.assertEqual([len(tab_ids(r)) for r in lay.rows], [15])   # (400 - 44 + 1) // 19
+        self.assertEqual(lay.slots, [22])                              # (356 - 14) // 15
         self.check_fits(lay, 400)
 
     def test_a_tiny_client_still_shows_one_tab_a_row(self):
@@ -285,6 +299,32 @@ class LayOut(unittest.TestCase):
 # --- render -------------------------------------------------------------------------------------
 
 class Render(unittest.TestCase):
+    def test_a_dim_separator_between_two_tabs_and_nowhere_else(self):
+        # Packed: alpha's divider follows a shared tab, so no separator before it or its tab.
+        groups = [Group("alpha", tabs(1, 2)), Group("bravo", tabs(3, 4, 5)),
+                  Group("charlie", tabs(6, 7, 8)), Group("delta", tabs(9, 10, 11))]
+        lay = tb.lay_out(groups, tabs(*range(12, 26)), 188, "@1", 28, 16)
+        for r, (items, row) in enumerate(zip(lay.rows, tb.render(lay))):
+            with self.subTest(row=r):
+                want = [tb.FILL, tb.NORM] + ([tb.left_part(28)] if r == 0 else [])
+                for k, item in enumerate(items):
+                    if item[0] == "tab" and k and items[k - 1][0] == "tab":
+                        want.append(tb.SEP)
+                    if item[0] == "head":
+                        want.append(tb.header(item[1], lay.head_w[item[1]] - 2, item[2]))
+                    elif item[0] == "div":
+                        want.append(tb.divider(item[1], lay.head_w[item[1]] - 2))
+                    elif item[0] == "tab":
+                        want.append(tb.entry(item[1], item[2], lay.slots[r]))
+                want += [tb.right_part(16)] if r == 0 else []
+                self.assertEqual(row, "".join(want))
+                self.assertEqual(row.count(tb.SEP), tb.separators(items))
+        # Outside every range: each entry closes its range before the separator.
+        self.assertTrue(tb.entry("@1", 1, 20).endswith("#[norange]" + tb.NORM + ",}}"))
+        self.assertEqual(tb.SEP, "#[fg=colour240]│#[fg=colour250]")
+        self.assertIn("┃", tb.divider(0, 5))      # a packed group's divider reads differently
+        self.assertNotIn("│", tb.divider(0, 5))
+
     def test_rows_hold_only_template_text(self):
         for width in (188, 45):
             lay = tb.lay_out([DOTCLAUDE], SHARED5, width, "@4", 28, 16)
@@ -445,10 +485,10 @@ class Quote(unittest.TestCase):
         line = tb.write_line("$3", tb.session_ops(lay, rows), "3", "SIG")
         cmds = tmux_words(line)
         names = [c[3] if c[1] == "-t" else c[4] for c in cmds]
-        self.assertEqual(names, ["@tab_bar_g0", "status-format[0]", "status-format[1]",
-                                 "status-format[2]", "status", "status-position", "status-left",
-                                 "status-right", "@tab_bar_sig"])
-        self.assertEqual([c[4] for c in cmds[1:4]], rows)
+        self.assertEqual(names, ["@tab_bar_g0"] + [f"status-format[{i}]" for i in range(len(rows))]
+                         + ["status", "status-position", "status-left", "status-right",
+                            "@tab_bar_sig"])
+        self.assertEqual([c[4] for c in cmds[1:1 + len(rows)]], rows)
         self.assertEqual(cmds[-1], ["set-option", "-t", "$3", "@tab_bar_sig", "SIG"])
         no_status = tmux_words(tb.write_line("$3", tb.session_ops(lay, rows), None, "SIG"))
         self.assertNotIn("status", [c[3] for c in no_status if c[1] == "-t"])
@@ -1023,6 +1063,17 @@ class RealTmux(unittest.TestCase):
         self.assertEqual(y, 2)
         self.click(x, y)
         self.wait(lambda: self.current() == "2", "the click on row 2 did not switch")
+
+    def test_a_click_on_a_separator_does_nothing(self):
+        # The separator sits outside both tabs' ranges: tmux sees no range there
+        # (MouseUp1StatusDefault, unbound), so no switch and no menu.
+        self.run_layout()
+        x, y = self.find("│")
+        self.assertEqual(y, 1)                  # between the lead and the lane on row 1
+        self.click(x, y)
+        time.sleep(0.5)
+        self.assertEqual(self.current(), "0")
+        self.assertFalse(any("Replies before pass" in line for line in self.screen()))
 
     def test_a_tap_on_the_current_tab_opens_its_menu_and_a_tap_on_an_item_runs_it(self):
         self.run_layout()
