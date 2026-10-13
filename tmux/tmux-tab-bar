@@ -72,9 +72,11 @@ GLYPH_ON = "#{?#{==:#{@claude_state},busy},1,#{?#{==:#{@claude_state},wait},1,0}
 BODY = ("#{?@tab_name,#{@tab_name} ,}"
         "#{?pane_title,#{s/^(✳ )?\\[[^]]*\\] //:pane_title},#{pane_current_command}}")
 
-SESSION_FMT = "#{session_id}\t#{status}\t#{status-left-length}\t#{status-right-length}\t#{@tab_bar_sig}"
+SESSION_FMT = ("#{session_id}\t#{status}\t#{status-left-length}\t#{status-right-length}"
+               "\t#{@tab_bar_sig}")
 CLIENT_FMT = "#{session_id}\t#{client_width}"
-WINDOW_FMT = "#{session_id}\t#{window_id}\t#{window_index}\t#{window_active}\t#{@tab_group}\t#{@tab_name}"
+WINDOW_FMT = ("#{session_id}\t#{window_id}\t#{window_index}\t#{window_active}\t#{@tab_group}"
+              "\t#{@tab_name}")         # the name last: it may hold a tab
 PANE_FMT = "#{window_id}\t#{pane_active}\t#{pane_current_path}"
 
 

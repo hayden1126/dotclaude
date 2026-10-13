@@ -151,7 +151,8 @@ class Classify(unittest.TestCase):
         dotgit = os.path.join(self.root, "l1", ".git")
         os.chmod(dotgit, 0)
         self.addCleanup(os.chmod, dotgit, 0o644)
-        self.assertEqual(tb.classify(os.path.join(self.root, "l1")), tb.Tab("shared", "", "l1", "l1:"))
+        self.assertEqual(tb.classify(os.path.join(self.root, "l1")),
+                         tb.Tab("shared", "", "l1", "l1:"))
 
     def test_a_git_fifo_does_not_hang(self):
         d = os.path.join(self.root, "odd")
@@ -702,7 +703,8 @@ class RealTmux(unittest.TestCase):
             time.sleep(0.05)
         self.assertTrue(os.path.exists(control))
         for i in range(2):
-            row = self.tmux("show-options", "-v", "-t", "t", f"status-format[{i}]").stdout.rstrip("\n")
+            row = self.tmux("show-options", "-v", "-t", "t", f"status-format[{i}]").stdout
+            row = row.rstrip("\n")
             self.tmux("display", "-p", "-t", "t", row)
         time.sleep(1)
         self.assertFalse(os.path.exists(pwned))
