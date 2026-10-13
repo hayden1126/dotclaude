@@ -109,7 +109,7 @@ def load(path):
     try:
         with open(path) as f:
             v = json.load(f)
-    except (OSError, ValueError):
+    except (OSError, ValueError, RecursionError):   # json recurses on nesting
         return None
     return v if isinstance(v, dict) else None
 
