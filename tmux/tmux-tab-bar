@@ -74,7 +74,7 @@ BODY = ("#{?@tab_name,#{@tab_name} ,}"
 
 SESSION_FMT = "#{session_id}\t#{status}\t#{status-left-length}\t#{status-right-length}\t#{@tab_bar_sig}"
 CLIENT_FMT = "#{session_id}\t#{client_width}"
-WINDOW_FMT = "#{session_id}\t#{window_id}\t#{window_index}\t#{window_active}\t#{@tab_name}\t#{@tab_group}"
+WINDOW_FMT = "#{session_id}\t#{window_id}\t#{window_index}\t#{window_active}\t#{@tab_group}\t#{@tab_name}"
 PANE_FMT = "#{window_id}\t#{pane_active}\t#{pane_current_path}"
 
 
@@ -155,12 +155,12 @@ def common_dir(top: str, dotgit: str) -> str | None:
     if data is None:
         return None
     try:
-        first = data.decode().splitlines()[0]
-    except (UnicodeDecodeError, IndexError):
+        text = data.decode().rstrip()   # as git reads it: the whole file, trailing space cut
+    except UnicodeDecodeError:
         return None
-    if not first.startswith("gitdir:") or not first[7:].strip() or "\0" in first:
+    if not text.startswith("gitdir:") or not text[7:].strip() or "\0" in text:
         return None
-    gitdir = os.path.realpath(os.path.join(top, first[7:].strip()))
+    gitdir = os.path.realpath(os.path.join(top, text[7:].strip()))
     parent = os.path.dirname(gitdir)
     return os.path.dirname(parent) if os.path.basename(parent) == "worktrees" else gitdir
 
@@ -238,6 +238,28 @@ class Layout:
     right: int                  # row 0's cells for status-right (desktop)
 
 
+def group_windows(wins: list, tab_of: dict) -> tuple:
+    """Split a session's windows ([(index, wid)] by index; tab_of: wid -> Tab) into its laned
+    groups (ordered by each group's lowest index; lead, lanes, then other worktrees, each by
+    index) and the shared tabs, plus each window's (@tab_name, @tab_group)."""
+    by_repo: dict = {}
+    shared, names = [], {}
+    for index, wid in sorted(wins):
+        tab = tab_of[wid]
+        if tab.kind == "shared":
+            shared.append((wid, index))
+            names[wid] = (tab.name, "")
+        else:
+            by_repo.setdefault(tab.repo, []).append((tab, wid, index))
+    groups = []
+    for g, members in enumerate(by_repo.values()):
+        members.sort(key=lambda m: (m[0].rank, m[2]))
+        groups.append(Group(members[0][0].repo_name, [(wid, i) for _, wid, i in members]))
+        for tab, wid, _ in members:
+            names[wid] = (tab.name, str(g % len(PALETTE)))
+    return groups, shared, names
+
+
 @functools.cache
 def max_tabs_per_row() -> int:
     """How many slots fit in ROW_BYTES with row 0's extras (a header, status-left and -right)."""
@@ -297,14 +319,16 @@ def lay_out(groups: list, shared: list, width: int, current: str | None = None,
                     tabs = tabs[n:]
         return rows + [items for items, _ in bins]
 
+    # Pack the smallest groups one more at a time until the rows fit; if none fits, keep the
+    # packing with the fewest rows (none on a tie), so a pack that saves nothing never happens.
+    rows = build(set())
     packed: set = set()
-    rows = build(packed)
     for g in sorted(range(len(groups)), key=lambda g: (len(groups[g].tabs), g)):
         if len(rows) <= MAX_ROWS:
             break
-        trial = build(packed | {g})
-        if len(trial) <= len(rows):
-            packed.add(g)
+        packed.add(g)
+        trial = build(packed)
+        if len(trial) < len(rows):
             rows = trial
 
     hidden = []
@@ -445,11 +469,14 @@ def tmux(*args: str) -> subprocess.CompletedProcess:
                           errors="surrogateescape")
 
 
-def read(*args: str) -> list:
+def read(fields: int, *args: str) -> list:
+    """A tmux list command's lines, split into `fields` tab-separated fields (the last may hold
+    tabs); a line with fewer is dropped."""
     p = tmux(*args)
     if p.returncode != 0:
         raise RuntimeError(f"tmux {args[0]} failed: {p.stderr.strip()}")
-    return [line.split("\t") for line in p.stdout.splitlines()]
+    rows = [line.split("\t", fields - 1) for line in p.stdout.splitlines()]
+    return [f for f in rows if len(f) == fields]
 
 
 def to_int(s: str, default: int) -> int:
@@ -463,48 +490,40 @@ def status_value(rows: int) -> str:
 def layout() -> None:
     """Read every session, window, pane and client once; write what changed."""
     sessions = {}
-    for f in read("list-sessions", "-F", SESSION_FMT):
-        if len(f) == 5 and SID.match(f[0]):
+    for f in read(5, "list-sessions", "-F", SESSION_FMT):
+        if SID.match(f[0]):
             sessions[f[0]] = {"status": f[1], "left": to_int(f[2], 0),
                               "right": to_int(f[3], 0), "sig": f[4]}
     widths = {}
-    for f in read("list-clients", "-F", CLIENT_FMT):
-        if len(f) == 2 and f[0] in sessions and f[1].isdigit() and int(f[1]) > 0:
+    for f in read(2, "list-clients", "-F", CLIENT_FMT):
+        if f[0] in sessions and f[1].isdigit() and int(f[1]) > 0:
             widths[f[0]] = min(widths.get(f[0], int(f[1])), int(f[1]))
     windows, options = {}, {}           # session -> [(index, wid, active)]; wid -> (name, group)
-    for f in read("list-windows", "-a", "-F", WINDOW_FMT):
-        if len(f) == 6 and f[0] in sessions and WID.match(f[1]) and f[2].isdigit():
+    for f in read(6, "list-windows", "-a", "-F", WINDOW_FMT):
+        if f[0] in sessions and WID.match(f[1]) and f[2].isdigit():
             windows.setdefault(f[0], []).append((int(f[2]), f[1], f[3] == "1"))
-            options[f[1]] = (f[4], f[5])
+            options[f[1]] = (f[5], f[4])
     cwds = {}
-    for line in read("list-panes", "-a", "-F", PANE_FMT):
-        if len(line) >= 3 and line[1] == "1":
-            cwds[line[0]] = "\t".join(line[2:])
+    for f in read(3, "list-panes", "-a", "-F", PANE_FMT):
+        if f[1] == "1":
+            cwds[f[0]] = f[2]
 
-    seen: dict = {}
+    tabs: dict = {}                     # cwd -> Tab, classified once per run
     writes: dict = {}                   # wid -> (@tab_name, @tab_group) wanted
     plans = []
     for sid, sess in sessions.items():
         if sid not in widths or not windows.get(sid):
             continue                    # nobody sees it
         wins = sorted(windows[sid])
-        by_repo: dict = {}
-        shared = []
-        for index, wid, _ in wins:
-            if cwds.get(wid, "") not in seen:
-                seen[cwds.get(wid, "")] = classify(cwds.get(wid, ""))
-            tab = seen[cwds.get(wid, "")]
-            if tab.kind == "shared":
-                shared.append((wid, index))
-                writes.setdefault(wid, (tab.name, ""))
-            else:
-                by_repo.setdefault(tab.repo, []).append((tab, wid, index))
-        groups = []
-        for g, members in enumerate(by_repo.values()):      # by each group's lowest index
-            members.sort(key=lambda m: (m[0].rank, m[2]))
-            groups.append(Group(members[0][0].repo_name, [(wid, i) for _, wid, i in members]))
-            for tab, wid, _ in members:
-                writes.setdefault(wid, (tab.name, str(g % len(PALETTE))))
+        tab_of = {}
+        for _, wid, _ in wins:
+            cwd = cwds.get(wid, "")
+            if cwd not in tabs:
+                tabs[cwd] = classify(cwd)
+            tab_of[wid] = tabs[cwd]
+        groups, shared, names = group_windows([(i, wid) for i, wid, _ in wins], tab_of)
+        for wid, value in names.items():
+            writes.setdefault(wid, value)
         current = next((wid for _, wid, active in wins if active), None)
         lay = lay_out(groups, shared, widths[sid], current, sess["left"], sess["right"])
         rows = render(lay)
@@ -522,8 +541,9 @@ def layout() -> None:
     for sid, ops, status, old_status, sig in plans:
         ok = True
         for name, value in ops:
-            args = ("-u", "-t", sid, name) if value is None else ("-t", sid, name, value)
-            if tmux("set-option", *args).returncode != 0:
+            if value is None:           # an unset of an option the session never set is fine
+                tmux("set-option", "-u", "-t", sid, name)
+            elif tmux("set-option", "-t", sid, name, value).returncode != 0:
                 ok = False              # e.g. the session closed: leave its sig for a retry
                 break
         if not ok:
