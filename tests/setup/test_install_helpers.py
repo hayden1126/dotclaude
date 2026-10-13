@@ -25,8 +25,8 @@ merge_settings = load(MERGE)
 install_ignore = load(IGNORE)
 
 
-def run(*args):
-    return subprocess.run([sys.executable, *args], capture_output=True, text=True)
+def run(*args, env=None):
+    return subprocess.run([sys.executable, *args], capture_output=True, text=True, env=env)
 
 
 class MergeRule(unittest.TestCase):
@@ -163,6 +163,42 @@ class MergeCli(unittest.TestCase):
         r = run(MERGE, self.base, os.path.join(self.dir.name, "absent.json"), self.live(""))
         self.assertEqual((r.returncode, r.stdout), (0, '{"a":   [1]}\n'))
 
+    def protect(self, checkout, deny):
+        """merge-settings --checkout under a fake HOME, with a baseline denyWrite of `deny`."""
+        home = os.path.join(self.dir.name, "home")
+        os.makedirs(checkout, exist_ok=True)
+        with open(self.base, "w") as f:
+            json.dump({"sandbox": {"filesystem": {"denyWrite": deny}}}, f)
+        return run(MERGE, "--checkout", checkout, self.base,
+                   os.path.join(self.dir.name, "absent.json"), env=dict(os.environ, HOME=home))
+
+    def test_another_checkout_protects_its_own_copies(self):
+        # A lane's install links ~/.claude/hooks and the rest into the lane's worktree, which
+        # that lane's sandboxed Bash can write; its copies join denyWrite.
+        lane = os.path.realpath(os.path.join(self.dir.name, "dotclaude-lanes", "x"))
+        r = self.protect(lane, ["~/dotclaude/hooks", "~/dotclaude/bin", "~/.claude/hooks"])
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(json.loads(r.stdout)["sandbox"]["filesystem"]["denyWrite"],
+                         ["~/dotclaude/hooks", "~/dotclaude/bin", "~/.claude/hooks",
+                          lane + "/hooks", lane + "/bin"])
+        self.assertIn(f"installing from {lane}", r.stderr)
+
+    def test_the_dotclaude_checkout_stays_verbatim(self):
+        r = self.protect(os.path.join(self.dir.name, "home", "dotclaude"), ["~/dotclaude/hooks"])
+        with open(self.base) as f:
+            self.assertEqual((r.returncode, r.stdout, r.stderr), (0, f.read(), ""))
+
+    def test_the_real_baseline_protects_every_dotclaude_path_from_a_lane(self):
+        with open(os.path.join(REPO, "settings.json")) as f:
+            base = json.load(f)
+        lane = os.path.join(self.dir.name, "lane")
+        deny = merge_settings.protect_checkout(base, lane, home=self.dir.name)
+        deny = deny["sandbox"]["filesystem"]["denyWrite"]
+        names = [p[len("~/dotclaude/"):] for p in base["sandbox"]["filesystem"]["denyWrite"]
+                 if p.startswith("~/dotclaude/")]
+        self.assertIn("tests", names)
+        self.assertEqual(deny[-len(names):], [os.path.join(os.path.realpath(lane), n) for n in names])
+
     def test_a_bad_live_file_fails_and_prints_nothing(self):
         for text in ("{not json", "[1, 2]"):
             with self.subTest(text):
@@ -259,8 +295,9 @@ class SetupWiring(unittest.TestCase):
     def test_setup_installs_the_merged_settings_and_the_block(self):
         with open(os.path.join(REPO, "setup.sh")) as f:
             text = f.read()
-        self.assertIn('merge-settings.py" "$REPO_DIR/settings.json" "$CLAUDE_DIR/settings.machine.json"', text)
-        self.assertIn('"$CLAUDE_DIR/settings.json" > "$MERGED_SETTINGS"', text)  # live keys kept
+        self.assertIn('merge-settings.py" --checkout "$REPO_DIR" "$REPO_DIR/settings.json"', text)
+        self.assertIn('"$CLAUDE_DIR/settings.machine.json" "$CLAUDE_DIR/settings.json" > '
+                      '"$MERGED_SETTINGS"', text)  # live keys kept
         self.assertIn('copy_managed "$MERGED_SETTINGS" "$CLAUDE_DIR/settings.json"', text)
         self.assertNotIn('copy_managed "$REPO_DIR/settings.json"', text)
         self.assertIn('git/install-ignore.py" "$REPO_DIR/git/sandbox-stubs.ignore"', text)
