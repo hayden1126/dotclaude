@@ -323,8 +323,8 @@ class Tasks(Plain):
                 self.stop_tasks = tasks
                 self.assertEqual(self.mod.wait_and_act(self.plan(), t.table), "busy")
                 self.assertDropped("busy", f"pass refused in tab 3: {shown} running (a respawn "
-                                           "would kill it). /pass compact keeps it, or stop it "
-                                           "and /pass")
+                                           "would kill it). Stop it (/tasks, or ask Claude to "
+                                           "TaskStop it), or /pass compact keeps it")
 
     def test_the_busy_notice_counts_and_names_the_tasks(self):
         # Live, 2026-10-12: three monitors at the Stop, and the log said `waits:` though the
@@ -333,8 +333,8 @@ class Tasks(Plain):
         code, out = self.run_pass("--foreground")
         self.assertEqual(code, 1, out)
         self.assertDropped("busy", "pass refused in tab 3: 3 monitors, 1 teammate running (a "
-                                   "respawn would kill them). /pass compact keeps them, or stop "
-                                   "them and /pass")
+                                   "respawn would kill them). Stop them (/tasks, or ask Claude to "
+                                   "TaskStop them), or /pass compact keeps them")
         self.assertIn("outcome=busy busy: tasks: monitor, monitor, teammate, monitor",
                       self.log())
         self.assertNotIn("waits:", self.log())

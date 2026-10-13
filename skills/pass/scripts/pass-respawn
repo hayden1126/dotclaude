@@ -4,6 +4,7 @@ a passing handoff.
 
   pass-respawn -C DIR [--compact] [--print] [--foreground] [--timeout SECONDS]
   pass-respawn -C DIR --cancel
+  pass-respawn -C DIR --tasks
 
 /pass runs it last (skills/pass/SKILL.md; PLAN.md "PR 3: /pass" has the design and the spike
 results it rests on). At call time it refuses unless $TMUX_PANE names a pane (exit 2, printing
@@ -25,7 +26,9 @@ lets the lock go, the waiter appends ` done:<outcome>`. --cancel that finds ` ac
 outcome than `cancelled`, before signalling or once the lock frees, says `too-late` (naming the
 outcome when there is one) and exits 1, logging no `cancelled`. A pid that no longer matches,
 or one gone at the signal (ProcessLookupError), may be a waiter that just ended: --cancel reads
-a freed lock's marks the same way, and with none says nothing was pending.
+a freed lock's marks the same way, and with none says nothing was pending. --tasks prints
+this session's tasks from its last stop record (each one's label, description and id, and
+whether it blocks a plain pass) for /pass step 2, and changes nothing: no lock, log or notice.
 
 The waiter polls that session file every 0.2 s until its status is `idle` (or `shell`, at the
 prompt with a background shell running) with a statusUpdatedAt
@@ -39,9 +42,11 @@ turn with no user entry), since Hayden spoke and his words may cancel the pass. 
 is the stop record's transcript_path, else the session file's cwd slug; one it can't read drops
 `resumed` too. Only then it reads the resume mode and builds the prompt. In plain mode it
 requires the session's stop record (hooks/stop-ring.sh, $XDG_STATE_HOME/dotclaude/stops/
-<session>.json) dated after the call with no waits and no task but `dream`, since a respawn
-kills background work, in-process agents and monitors included, which no process check can see
-(`busy`, also with no record). Right before acting it re-checks: the session file still idle
+<session>.json) dated after the call with no waits and no task but `dream` or an `artifact
+watch` (lanelib.PLAIN_PASS_IGNORES), since a respawn kills background work, in-process agents
+and monitors included, which no process check can see (`busy`, also with no record). An
+artifact watch is the Artifact tool's live watch, hidden from the model and from /tasks: the
+respawn ends it, and the log line ends `; ignored: artifact watch <url> (<id>)`. Right before acting it re-checks: the session file still idle
 with the same statusUpdatedAt (`resumed`), the process alive with the same procStart, the pane
 still running that claude (pane_pid is the claude or its ancestor, pane_current_command is
 `claude`), the pane not in copy mode (`#{pane_in_mode}` 0), and Claude Code's input box present
@@ -51,8 +56,10 @@ a dead or replaced process, or a session file naming another session or pane dro
 once, while waiting too. Past --timeout (600 s; at most 3600) it gives up (`timeout`). Each drop
 is logged, then shown, and touches nothing else. A refusal of a pass Hayden expects (`stale`,
 `busy`, `timeout`, `failed`, `error`, and `partial` below) is loud: one line naming the cause,
-the tab and the fix (for `busy`, the stop record's tasks counted: "3 monitors running ...
-/pass compact keeps them") on the status line of every client attached to the pane's session,
+the tab and the fix (for `busy`, the stop record's tasks, the first two named with their
+description and id and the rest counted: 'monitor "deploy events" (b0fzd27l4) running ... Stop
+it (/tasks, or ask Claude to TaskStop it), or /pass compact keeps it'; pass.log names every one
+whole) on the status line of every client attached to the pane's session,
 held until a key press (`display-message -d 0 -c <client>`), plus the Windows toast notify.sh
 sends (toast_command; best-effort). The drops Hayden caused keep the brief status-line
 message (QUIET): `cancelled`, `resumed` (he typed a prompt after the call, which SKILL.md
@@ -216,6 +223,9 @@ DROPS = {
 QUIET = {"cancelled", "resumed", "gone"}
 # How a task label reads in a count ("3 monitors"); any other label reads as itself.
 NOUNS = {"unlabeled": "unlabeled task", "None": "unlabeled task"}
+# A busy notice names this many tasks, each description cut to this many characters, so it fits
+# a status line; pass.log and --tasks keep LOG_CHARS (stop-ring.sh caps a description at 200).
+SHOWN, SHOWN_CHARS, LOG_CHARS = 2, 40, 200
 TOAST_PS1 = "notify-toast.ps1"  # in the config dir, as hooks/notify.sh finds it
 PANE_FIXES = {  # pane_problem's causes, and what to do about each
     "pane in copy mode": "Leave copy mode (q), then /pass",
@@ -453,17 +463,52 @@ def counted(labels: list[str]) -> str:
                      for label, n in counts.items())
 
 
-def stop_problem(plan: Plan) -> tuple[str, str] | None:
-    """Why the session's stop record doesn't clear a respawn, as (the log's detail, the notice),
-    or None: it must be dated after the call and list no waits (stop-ring.sh's subagent, shell,
-    workflow, cloud session) and no task at all but `dream` (memory upkeep;
-    lanelib.plain_pass_blockers, which the autopass watcher shares). stop-ring.sh rings past a
-    teammate or a monitor, since one lingers or runs for hours, but a respawn kills either, and
-    any type it doesn't know (unlabeled ones included), so a plain pass doesn't. The detail says
-    `waits:` for the record's waits and `tasks:` for its task labels; the notice counts them and
-    names the fix."""
+def described(entry: dict, chars: int) -> str:
+    """One task (a lanelib.task_entries entry) for a notice, the log or --tasks: its noun, then
+    an artifact watch's page or else its description in double quotes (cut to chars), then its
+    id in parentheses, each when the record has it: 'monitor "deploy events" (b0fzd27l4)'."""
+    text = NOUNS.get(entry["label"], entry["label"])
+    if url := entry.get("url"):
+        text += f" {url[:chars]}"
+    elif desc := entry.get("description"):
+        text += f' "{desc if len(desc) <= chars else desc[:chars - 3] + "..."}"'
+    return text + (f" ({entry['id']})" if entry.get("id") else "")
+
+
+def task_line(entries: list[dict]) -> str:
+    """Tasks for a notice that fits a status line: the first SHOWN that the record describes or
+    names (an id) described, the rest counted ("+2 more (1 monitor, 1 shell)"; with none
+    described, only the count, as a record of bare labels reads)."""
+    named = [e for e in entries if e.get("id") or e.get("description") or e.get("url")]
+    shown = named[:SHOWN]
+    rest = [e["label"] for e in entries if not any(e is s for s in shown)]
+    if not shown:
+        return counted(rest)
+    head = ", ".join(described(e, SHOWN_CHARS) for e in shown)
+    return head + (f", +{len(rest)} more ({counted(rest)})" if rest else "")
+
+
+def ignored(rec: dict | None) -> str:
+    """'; ignored: artifact watch <url> (<id>), ...' for the stop record's tasks a plain pass
+    lets the respawn end (lanelib.PLAIN_PASS_IGNORES but memory upkeep), or ''. The respawn ends
+    a watch on a page Hayden may still comment on; the log keeps the page to watch again."""
+    entries = lanelib.task_entries(rec.get("tasks")) if isinstance(rec, dict) else None
+    kept = [described(e, LOG_CHARS) for e in entries or []
+            if e["label"] in lanelib.PLAIN_PASS_IGNORES and e["label"] != "dream"]
+    return "; ignored: " + ", ".join(kept) if kept else ""
+
+
+def stop_problem(plan: Plan, rec: dict | None) -> tuple[str, str] | None:
+    """Why the session's stop record rec doesn't clear a respawn, as (the log's detail, the
+    notice), or None: it must be dated after the call and list no waits (stop-ring.sh's
+    subagent, shell, workflow, cloud session) and no task at all but `dream` (memory upkeep) or
+    an `artifact watch` (lanelib.plain_pass_blockers, which the autopass watcher shares).
+    stop-ring.sh rings past a teammate or a monitor, since one lingers or runs for hours, but a
+    respawn kills either, and any type it doesn't know (unlabeled ones included), so a plain
+    pass doesn't. The detail says `waits:` for the record's waits and `tasks:` for its tasks,
+    each described whole, then what it ignored; the notice names the first tasks, counts the
+    rest and gives the fix."""
     unsure = "so background work can't be ruled out. /pass compact is safe either way"
-    rec = stop_record(plan.session_id)
     if rec is None:
         return "no stop record", f"pass refused: the Stop wrote no record, {unsure}"
     when = rec.get("time")
@@ -475,21 +520,24 @@ def stop_problem(plan: Plan) -> tuple[str, str] | None:
         if not isinstance(waits, list):
             return (f"waits: {waits!r}",
                     f"pass refused: the stop record's waits can't be read, {unsure}")
-        names = [str(w) for w in waits]
-        them = "it" if len(names) == 1 else "them"
-        return ("waits: " + ", ".join(names),
-                f"pass refused: waiting on {counted(names)} (a respawn would kill {them}). "
+        names = {str(w) for w in waits}
+        # The record keeps the waits as labels; its tasks describe them.
+        entries = [e for e in lanelib.task_entries(rec.get("tasks")) or []
+                   if e["label"] in names] or [{"label": str(w)} for w in waits]
+        them = "it" if len(entries) == 1 else "them"
+        return ("waits: " + ", ".join(described(e, LOG_CHARS) for e in entries) + ignored(rec),
+                f"pass refused: waiting on {task_line(entries)} (a respawn would kill {them}). "
                 f"/pass compact keeps {them}, or let {them} finish and /pass")
     tasks = rec.get("tasks")
     if not isinstance(tasks, list):
         return ("no task list in the stop record",
                 f"pass refused: the stop record lists no tasks, {unsure}")
     if blockers := lanelib.plain_pass_blockers(tasks):
-        others = [e["label"] for e in blockers]
-        them = "it" if len(others) == 1 else "them"
-        return ("tasks: " + ", ".join(others),
-                f"pass refused: {counted(others)} running (a respawn would kill {them}). "
-                f"/pass compact keeps {them}, or stop {them} and /pass")
+        them = "it" if len(blockers) == 1 else "them"
+        return ("tasks: " + ", ".join(described(e, LOG_CHARS) for e in blockers) + ignored(rec),
+                f"pass refused: {task_line(blockers)} running (a respawn would kill {them}). "
+                f"Stop {them} (/tasks, or ask Claude to TaskStop {them}), or /pass compact "
+                f"keeps {them}")
     return None
 
 
@@ -845,6 +893,9 @@ def parse(argv=None) -> argparse.Namespace:
     ap.add_argument("--print", action="store_true", help="print the mode and argv, do nothing")
     ap.add_argument("--cancel", action="store_true",
                     help="end this session's pending waiter, if any")
+    ap.add_argument("--tasks", action="store_true",
+                    help="list this session's tasks at its last Stop, and whether each blocks a "
+                         "plain pass; change nothing")
     ap.add_argument("--foreground", action="store_true", help="wait in-process (tests)")
     ap.add_argument("--timeout", type=timeout_arg, default=TIMEOUT, metavar="SECONDS",
                     help=f"give up when the turn isn't idle by then (default {TIMEOUT:g}, at most "
@@ -1323,7 +1374,8 @@ def wait_and_act(plan: Plan, procs) -> str:
         return drop(plan, "resumed", "a typed or queued prompt after the call")
     approved = approved_now(plan, session)
     actions = plan.actions(approved)
-    if plan.mode == "plain" and (problem := stop_problem(plan)):
+    rec = stop_record(plan.session_id) if plan.mode == "plain" else None
+    if plan.mode == "plain" and (problem := stop_problem(plan, rec)):
         return drop(plan, "busy", f"busy: {problem[0]}", problem[1])
     state, detail, session = observe(plan, procs)
     if state == "gone":
@@ -1350,7 +1402,7 @@ def wait_and_act(plan: Plan, procs) -> str:
             remove(last)
             raise
         log(plan.mode, "respawn", plan.pane,
-            late(plan, "default mode" if approved else "plan mode"))
+            late(plan, ("default mode" if approved else "plan mode") + ignored(rec)))
         return "respawn"
     for i, argv in enumerate(actions):  # /compact <focus>, Enter, the prompt, Enter
         if i == 2:
@@ -1509,6 +1561,40 @@ def is_pass_respawn(pid: int, proc: str = "/proc") -> bool:
     return False
 
 
+def list_tasks() -> int:
+    """--tasks: this session's tasks as its last stop record lists them, one line each with
+    whether it blocks a plain pass (the waiter's rule: lanelib.plain_pass_blockers), for /pass
+    step 2. Read-only: no lock, no log, no notice. A task started or ended since that Stop isn't
+    in it, which the header says."""
+    sid = os.environ.get("CLAUDE_CODE_SESSION_ID") or ""
+    if not SID_RE.fullmatch(sid):
+        print("pass-respawn: CLAUDE_CODE_SESSION_ID is unset (or not a plain id)")
+        return 1
+    rec = stop_record(sid)
+    when = rec.get("time") if rec else None
+    if not isinstance(when, (int, float)):
+        print(f"pass-respawn: no stop record for session {sid} yet (stop-ring.sh writes one at "
+              "each Stop)")
+        return 0
+    age = max(0, time.time() - when)
+    ago = f"{int(age)} s" if age < 60 else f"{int(age // 60)} min"
+    print(f"pass-respawn: session {sid} at its last Stop, {ago} ago. Tasks started or ended "
+          "since then aren't listed.")
+    entries = lanelib.task_entries(rec.get("tasks"))
+    if entries is None:
+        print("  (no task list: a plain pass would refuse)")
+        return 0
+    waits = rec.get("waits") if isinstance(rec.get("waits"), list) else []
+    for e in entries:
+        verdict = ("doesn't block a plain pass" if e["label"] in lanelib.PLAIN_PASS_IGNORES
+                   else "blocks a plain pass; the turn waits on it" if e["label"] in waits
+                   else "blocks a plain pass")
+        print(f"  {described(e, LOG_CHARS)}: {verdict}")
+    if not entries:
+        print("  none")
+    return 0
+
+
 def cancel() -> int:
     """End this session's pending waiter: SIGTERM to the pid in its lock, once that pid is a
     live pass-respawn with the start time written beside it (a reused pid is not), then wait
@@ -1631,6 +1717,8 @@ def main(argv=None, procs=proc_table, cmdline=proc_cmdline) -> int:
     args = parse(argv)
     if args.cancel:
         return cancel()
+    if args.tasks:
+        return list_tasks()
     mode = "compact" if args.compact else "plain"
     try:
         plan = prepare(args, procs, cmdline)
