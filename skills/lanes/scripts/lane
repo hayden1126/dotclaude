@@ -53,7 +53,6 @@ from lanelib import Repo, git, lock, now_iso, write_json  # noqa: E402
 TEMPLATE = os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "..", "..",
                         "templates", "LANE.md")
 HOOKS = os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "..", "..", "hooks")
-SID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")  # hooks/stop_ring.py SID
 STATUS = re.compile(r"[a-z][a-z_-]{0,19}")  # a session file's status word
 CTX_MARK = {"soft": "*", "wrap": "*", "hard": "!"}  # the board's CTX mark per auto-pass tier
 DEFAULT_CAP = 4
@@ -725,7 +724,7 @@ def ctx_of(aps, sessions: list[dict]) -> dict | None:
     rank = {None: 0, "soft": 1, "wrap": 2, "hard": 3}
     for s in sessions if aps is not None else []:
         sid = s.get("sessionId")
-        if not isinstance(sid, str) or not SID.fullmatch(sid):
+        if not isinstance(sid, str) or not lanelib.SID.fullmatch(sid):
             continue
         rec = aps.read_ctx(sid)
         tokens = rec.get("tokens")

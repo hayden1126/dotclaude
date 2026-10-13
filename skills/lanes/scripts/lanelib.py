@@ -27,6 +27,7 @@ import subprocess
 import tempfile
 import time
 import tomllib
+from typing import NamedTuple
 
 LANES = "lanes"
 RECORD_DIR = ".lane"
@@ -36,6 +37,7 @@ ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
 BRANCH_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/+-]{0,199}")
 SHA_RE = re.compile(r"[0-9a-f]{40}(?:[0-9a-f]{24})?")
 CLAIM_RE = re.compile(r"#?[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
+SID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")  # a session id; hooks/stop_ring.py SID
 
 # The relative-identity lint, shared by the guard and handoff-check. Kept tight on purpose: each
 # phrase names a session or lane only relative to the writer, which a reader in another lane
@@ -649,9 +651,13 @@ def approval(block: str | None, since: datetime.date | None = None,
     return STALE if since is None or min(dates) < since or max(dates) > today else APPROVED
 
 
+def config_dir() -> str:
+    """Claude Code's config dir: $CLAUDE_CONFIG_DIR, else ~/.claude."""
+    return os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude")
+
+
 def sessions_dir() -> str:
-    return os.path.join(os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude"),
-                        "sessions")
+    return os.path.join(config_dir(), "sessions")
 
 
 SANDBOX_INITS = {"apply-seccomp", "bwrap"}
@@ -689,19 +695,226 @@ def live_sessions() -> list[dict] | None:
     """Claude Code's per-process session files whose pid is alive; None when pids can't be seen."""
     if not pids_visible():
         return None
-    out = []
-    for path in glob.glob(os.path.join(sessions_dir(), "*.json")):
-        try:
-            with open(path) as f:
-                s = json.load(f)
-        except (OSError, ValueError):
-            continue
-        pid = s.get("pid") if isinstance(s, dict) else None
-        if isinstance(pid, int) and os.path.exists(f"/proc/{pid}"):
-            out.append(s)
-    return out
+    return [s for s in session_files()
+            if isinstance(s.get("pid"), int) and os.path.exists(f"/proc/{s['pid']}")]
 
 
 def inside(path: str, root: str) -> bool:
     path, root = os.path.realpath(path), os.path.realpath(root)
     return path == root or path.startswith(root.rstrip(os.sep) + os.sep)
+
+
+def cwd_inside(value, root: str) -> bool:
+    """inside() for a cwd read from a file: a string with no NUL (realpath raises on one)."""
+    return isinstance(value, str) and "\0" not in value and inside(value, root)
+
+
+# ---- processes ------------------------------------------------------------------------------
+# `lane done` decides what to end from kernel facts (/proc) and Claude Code's own files (session
+# files, transcripts), which sandboxed Bash can't write; never from lane.json, which it can. Any
+# read here may race the process's exit, so an OSError means "gone or unknown", never a crash.
+
+PROC = "/proc"
+EXITED = ("Z", "X")  # /proc/<pid>/stat states of a process that has exited (zombie, dead)
+TRANSCRIPT_HEAD = 64 * 1024  # bytes of a transcript read for its first recorded cwd
+
+
+class Proc(NamedTuple):
+    """One process as a /proc scan saw it. (pid, start) names it: a pid alone may be reused."""
+    pid: int
+    ppid: int
+    start: int  # /proc/<pid>/stat field 22, clock ticks since boot
+    state: str  # field 3
+    comm: str
+    cwd: str | None  # None when unreadable (a zombie has none)
+    argv: tuple[str, ...]
+
+
+def proc_stat(pid: int, proc: str = PROC) -> tuple[str, str, int, int] | None:
+    """(comm, state, ppid, start) from /proc/<pid>/stat, or None. The comm sits in parentheses
+    and may hold spaces and ')' itself, so the fields are split after the last ')'."""
+    try:
+        with open(os.path.join(proc, str(pid), "stat"), "rb") as f:
+            raw = f.read().decode(errors="replace")
+    except OSError:
+        return None
+    head, sep, rest = raw.rpartition(")")
+    fields = rest.split()
+    if not sep or "(" not in head or len(fields) < 20:
+        return None
+    try:
+        return head.partition("(")[2], fields[0], int(fields[1]), int(fields[19])
+    except ValueError:
+        return None
+
+
+def proc_start(pid: int, proc: str = PROC) -> int | None:
+    st = proc_stat(pid, proc)
+    return st[3] if st else None
+
+
+def proc_alive(p: Proc, proc: str = PROC) -> bool:
+    """Whether p still runs: its pid names the same process (same start) and it hasn't exited."""
+    st = proc_stat(p.pid, proc)
+    return st is not None and st[3] == p.start and st[1] not in EXITED
+
+
+def proc_env_sid(pid: int, proc: str = PROC) -> str | None:
+    """The CLAUDE_CODE_SESSION_ID that pid was started with, when it is a session id (SID), else
+    None. Raises OSError when the environment can't be read (gone, another user's)."""
+    with open(os.path.join(proc, str(pid), "environ"), "rb") as f:
+        raw = f.read()
+    for entry in raw.split(b"\0"):
+        if entry.startswith(b"CLAUDE_CODE_SESSION_ID="):
+            sid = entry.partition(b"=")[2].decode(errors="replace")
+            return sid if SID.fullmatch(sid) else None
+    return None
+
+
+def scan(proc: str = PROC) -> dict[int, Proc]:
+    """Every process, from one pass over /proc: pid -> Proc. One that exits mid-scan is left out."""
+    out = {}
+    try:
+        names = os.listdir(proc)
+    except OSError:
+        return out
+    for name in names:
+        if not (name.isascii() and name.isdigit()):
+            continue
+        pid = int(name)
+        st = proc_stat(pid, proc)
+        if st is None:
+            continue
+        base = os.path.join(proc, name)
+        try:
+            cwd = os.readlink(os.path.join(base, "cwd"))
+        except OSError:
+            cwd = None
+        try:
+            with open(os.path.join(base, "cmdline"), "rb") as f:
+                raw = f.read().rstrip(b"\0")
+            argv = tuple(a.decode(errors="replace") for a in raw.split(b"\0")) if raw else ()
+        except OSError:
+            argv = ()
+        out[pid] = Proc(pid, st[2], st[3], st[1], st[0], cwd, argv)
+    return out
+
+
+def children(procs: dict[int, Proc]) -> dict[int, list[int]]:
+    """ppid -> the pids of its children that haven't exited, from one scan."""
+    out = {}
+    for p in procs.values():
+        if p.state not in EXITED:
+            out.setdefault(p.ppid, []).append(p.pid)
+    return out
+
+
+def ancestors(pid: int, procs: dict[int, Proc]) -> list[int]:
+    """pid's parent chain in one scan, nearest first; it stops at a pid the scan lacks."""
+    out, seen = [], {pid}
+    while (p := procs.get(pid)) and p.ppid > 0 and p.ppid not in seen:
+        out.append(p.ppid)
+        seen.add(p.ppid)
+        pid = p.ppid
+    return out
+
+
+def descendants(pid: int, kids: dict[int, list[int]]) -> list[int]:
+    """Every process whose parent chain reaches pid (children())."""
+    out, todo, seen = [], list(kids.get(pid, [])), {pid}
+    while todo:
+        child = todo.pop()
+        if child not in seen:
+            seen.add(child)
+            out.append(child)
+            todo.extend(kids.get(child, []))
+    return out
+
+
+def open_under(pid: int, root: str, proc: str = PROC) -> str | None:
+    """A file pid holds open under root (by its /proc fd links), "(its open files can't be
+    read)" when they can't be listed while it runs, or None."""
+    fd_dir = os.path.join(proc, str(pid), "fd")
+    try:
+        fds = os.listdir(fd_dir)
+    except FileNotFoundError:
+        return None
+    except OSError:
+        return "(its open files can't be read)"
+    prefix = os.path.realpath(root).rstrip(os.sep) + os.sep
+    for fd in fds:
+        try:
+            target = os.readlink(os.path.join(fd_dir, fd))
+        except OSError:
+            continue
+        if target.startswith(prefix):
+            return target
+    return None
+
+
+def read_head(path: str, limit: int) -> bytes | None:
+    """Up to limit bytes of a regular file, or None: gone, unreadable, or no regular file (a
+    FIFO's open would wait for a writer)."""
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW | os.O_CLOEXEC)
+    except OSError:
+        return None
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            return None
+        chunks, left = [], limit
+        while left > 0 and (chunk := os.read(fd, left)):
+            chunks.append(chunk)
+            left -= len(chunk)
+        return b"".join(chunks)
+    except OSError:
+        return None
+    finally:
+        os.close(fd)
+
+
+def session_files() -> list[dict]:
+    """Claude Code's per-process session files (<config>/sessions/<pid>.json), live or stale,
+    each a JSON object. They outlive their process, so a pid in one proves nothing alone."""
+    out = []
+    for path in glob.glob(os.path.join(sessions_dir(), "*.json")):
+        try:
+            s = json.loads(read_head(path, 1 << 20) or b"null")
+        except ValueError:
+            continue
+        if isinstance(s, dict):
+            out.append(s)
+    return out
+
+
+def proc_start_of(session: dict) -> int | None:
+    """A session file's procStart (an int, or the digit string Claude Code writes), or None."""
+    v = session.get("procStart")
+    if isinstance(v, str) and re.fullmatch(r"[0-9]{1,20}", v):
+        return int(v)
+    return v if type(v) is int else None
+
+
+def transcript_cwd(path: str) -> str | None:
+    """The first cwd a transcript records, from its first TRANSCRIPT_HEAD bytes, or None."""
+    for line in (read_head(path, TRANSCRIPT_HEAD) or b"").splitlines():
+        try:
+            rec = json.loads(line)
+        except ValueError:  # the line cut at the limit, or not JSON
+            continue
+        if isinstance(rec, dict) and isinstance(rec.get("cwd"), str):
+            return rec["cwd"]
+    return None
+
+
+def lane_sid(sid, path: str, files: list[dict]) -> bool:
+    """Whether Claude Code's own records place session sid in the lane at path: a session file
+    (session_files(), live or stale) with that sessionId and a cwd inside it, or a transcript
+    <config>/projects/*/<sid>.jsonl whose first recorded cwd is inside it. lane.json's
+    sessions[] is never proof: sandboxed Bash can write it."""
+    if not isinstance(sid, str) or not SID.fullmatch(sid):
+        return False
+    if any(s.get("sessionId") == sid and cwd_inside(s.get("cwd"), path) for s in files):
+        return True
+    return any(cwd_inside(transcript_cwd(t), path)
+               for t in glob.glob(os.path.join(config_dir(), "projects", "*", sid + ".jsonl")))
