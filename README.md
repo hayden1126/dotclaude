@@ -349,8 +349,10 @@ need nothing extra.
   terminal ends in "+N more" and shortens titles. `tmux/claude-saved` keeps one file per chat in
   `$XDG_STATE_HOME/dotclaude/saved/` and finds a tab's chat from Claude's own
   `~/.claude/sessions/` files, falling back to the registry; `claude-saved list` prints the list.
-  A tab attached to a background session works the same: `claude-saved` reads the attach client's
-  arguments from `/proc` and finds the session it shows. Shelving it also stops that session
+  A tab attached to a background session (`claude attach <job>`) works the same: `claude-saved`
+  reads the attach client's arguments from `/proc` and finds the session that job names. A tab
+  opened from agent view, or by `claude attach <part of a name>`, names no session it can trust,
+  so it isn't recognized. Shelving an attach tab also stops that session
   (`claude stop`), since closing the tab alone would leave it running unseen; reopening a chat
   that still runs in the background attaches to it. A `/clear` in such a tab doesn't move its
   star: the session's hooks can't see the tab.

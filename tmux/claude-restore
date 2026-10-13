@@ -31,7 +31,10 @@
 # from `claude-saved track` instead, marked `attach`. Its session outlives a `tmux kill-server`
 # (the daemon is detached), so one still running in the background is what to reopen, not a
 # skip: `claude --resume <id>` attaches to it, transcript or not. One running in a tab is
-# skipped as above; after a reboot it resumes like any other.
+# skipped as above; after a reboot it resumes like any other. Such an entry never gets an end
+# mark (a background session's hooks run unattended, so session-registry.sh skips them):
+# track deletes it once the tab closes, so one closed while no tmux client was attached, with
+# no status bar to run track, can come back.
 #
 # Each entry moves to open-sessions/restored/ just before its window opens (still before
 # `claude --resume` runs, so the resumed session's fresh entry is never swept up), and back if

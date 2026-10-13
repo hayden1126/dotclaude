@@ -23,8 +23,8 @@
 # files (~/.claude/sessions/<pid>.json: an interactive session whose `tmux` field ends in the pane
 # id and whose pid runs under the pane's #{pane_pid}, read from /proc; undocumented, but /clear
 # updates it), else from an attach client under the pane (a `claude attach <job>` process, which
-# shows a background session the daemon hosts: the live `kind: bg` sessions file whose jobId,
-# session id or name it names, exactly one), else from the newest unmarked open-sessions entry
+# shows a background session the daemon hosts: the live `kind: bg` sessions file whose jobId it
+# names; not one stopped by Ctrl+Z), else from the newest unmarked open-sessions entry
 # for that pane on this tmux server (hooks/session-registry.sh), but only while the pane runs
 # `claude` and no live sessions file puts another chat there: a crashed claude leaves its entry
 # behind. The ★ is the pane option @claude_star (a chat is per pane); tmux/claude.conf shows it
@@ -192,7 +192,7 @@ def started(s):
     """False when the file's procStart (an int, or the digit string Claude writes) isn't its
     pid's start time: the pid was reused after the claude that wrote it died."""
     ps = s.get("procStart")
-    if isinstance(ps, str) and ps.isdigit():
+    if isinstance(ps, str) and re.fullmatch(r"[0-9]{1,20}", ps):
         ps = int(ps)
     return not isint(ps) or stat(s["pid"], 22) == ps
 
@@ -213,41 +213,49 @@ def argv(pid):
         return []
     return [a.decode("utf-8", "replace") for a in raw.split(b"\0")[:-1]]
 
+def stopped(pid):
+    """True for a process stopped by Ctrl+Z (state T or t), or gone."""
+    try:
+        with open("/proc/%d/stat" % pid) as f:
+            return f.read().rpartition(")")[2].split()[0] in ("T", "t")
+    except (OSError, IndexError):
+        return True
+
 def clients():
-    """(pid, arg) for each `claude attach <arg>` process: a tab showing a background session.
-    argv[0] is `claude` or the full path a client re-execs itself under (a `claude --resume`
-    of a background chat becomes one); "<-" turns it into `claude agents`."""
+    """(pid, arg) for each running `claude attach <arg>` process: a tab showing a background
+    session. argv[0] is `claude` or the full path a client re-execs itself under (a
+    `claude --resume` of a background chat becomes one). One stopped by Ctrl+Z isn't what its
+    pane shows. "<-" turns a client into `claude agents`, which names no session even after it
+    opens one, so that tab isn't recognized."""
     for name in os.listdir("/proc"):
         if name.isdigit():
             a = argv(int(name))
-            if len(a) >= 3 and os.path.basename(a[0]) == "claude" and a[1] == "attach":
+            if (len(a) >= 3 and os.path.basename(a[0]) == "claude" and a[1] == "attach"
+                    and not stopped(int(name))):
                 yield int(name), a[2]
 
 def shown(arg, bgs):
-    """The background session `claude attach <arg>` shows, or None: arg is its jobId (which a
-    /clear keeps), its session id, or part of its name, matching exactly one."""
-    for key in ("jobId", "sessionId"):
-        hit = [s for s in bgs if s.get(key) == arg]
-        if hit:
-            return hit[0] if len(hit) == 1 else None
-    part = arg.casefold()
-    hit = [s for s in bgs if part and isinstance(s.get("name"), str)
-           and part in s["name"].casefold()]
+    """The background session `claude attach <arg>` shows: the one whose jobId is arg (a
+    /clear keeps it), or None. `claude attach` also takes part of a name, but that stays in
+    the argv while the session gets renamed, so it could come to name another one; Shelve
+    stops what this returns, so a name part counts for nothing."""
+    hit = [s for s in bgs if s.get("jobId") == arg and SID.fullmatch(arg)]
     return hit[0] if len(hit) == 1 else None
 
 def attached(roots):
     """{pane process: the background session its attach client shows} for the given pane
-    processes. One /proc scan serves them all."""
+    processes; a pane whose running clients show different sessions gets none. One /proc scan
+    serves them all."""
     bgs = list(live_sessions("bg"))
-    found = {}
     if not bgs:
-        return found
+        return {}
+    seen = {}   # pane process -> {session id: file}
     for pid, arg in clients():
-        s = shown(arg, bgs)
-        root = s and next((r for r in roots if descends(pid, r)), None)
-        if root and root not in found:
-            found[root] = s
-    return found
+        root = next((r for r in roots if descends(pid, r)), None)
+        if root:
+            s = shown(arg, bgs)
+            seen.setdefault(root, {})[s and s["sessionId"]] = s
+    return {r: next(iter(v.values())) for r, v in seen.items() if len(v) == 1 and None not in v}
 
 def pane_of(s):
     # `tmux` looks like main:@4.%4: the pane id follows the last dot.
@@ -294,13 +302,11 @@ def resolve(tab, pane_pid, command):
     root = int(pane_pid) if pane_pid.isdigit() else None
     live = [s for s in live_sessions()
             if pane_of(s) == tab["pane"] and root and descends(s["pid"], root)]
-    job = ""
     bg = None if live or not root else attached([root]).get(root)
+    job = bg["jobId"] if bg else ""
     if live or bg:
         s = bg or max(live, key=lambda s: num(s.get("updatedAt")) or num(s.get("startedAt")))
         sid, cwd = s["sessionId"], s.get("cwd")
-        if bg and isinstance(bg.get("jobId"), str) and SID.fullmatch(bg["jobId"]):
-            job = bg["jobId"]
         r = regs.get(sid, {})
         if not isinstance(cwd, str) or not cwd:
             cwd = r.get("cwd")
@@ -493,19 +499,23 @@ def op_track():
     if not server:
         return   # tmux answered nothing: never sweep entries from that
     by_root = attached({r[1] for r in rows})
+    tabs = list(live_sessions())   # a tab session under the pane is what it shows
     keep = set()
     for pane, root, index in rows:
         s = by_root.get(root)
         cwd = s and s.get("cwd")
-        if not (isinstance(cwd, str) and cwd):
-            continue
+        if (not (isinstance(cwd, str) and cwd)
+                or any(pane_of(i) == pane and descends(i["pid"], root) for i in tabs)
+                or (entry(s["sessionId"]) or {}).get("shelved")):
+            continue   # (a shelved chat: Shelve deleted its entry; a track that read /proc
+                       # before the kill must not write it back)
         sid = s["sessionId"]
         old = load(os.path.join(REG, sid + ".json")) or {}
         keep.add((sid, pane))
         write(os.path.join(REG, sid + ".json"), dict(
             server, session_id=sid, cwd=cwd, pane=pane, window_index=index,
             transcript_path=transcript(sid, old.get("transcript_path")), attach=True,
-            job_id=s.get("jobId") if isinstance(s.get("jobId"), str) else "", ts=round(NOW, 3)))
+            job_id=s["jobId"], ts=round(NOW, 3)))
     for path in glob.glob(os.path.join(REG, "*.json")):
         e = load(path)
         if (e and e.get("attach") is True and on_server(e, server)

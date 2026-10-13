@@ -97,6 +97,7 @@ class Saved(unittest.TestCase):
                         STUB_PANE_PID=str(os.getppid()))
         self.ppid = os.getppid()
         self.n = 0
+        self.clients = []
 
     # --- fixtures -----------------------------------------------------------------------
 
@@ -158,6 +159,8 @@ class Saved(unittest.TestCase):
         p = subprocess.Popen([argv0, *args], executable="/bin/bash", cwd=d,
                              start_new_session=True, stdout=subprocess.DEVNULL,
                              stderr=subprocess.DEVNULL)
+        self.clients = getattr(self, "clients", []) + [p.pid]
+        self.last_client = p.pid
 
         def stop():
             try:
@@ -167,6 +170,9 @@ class Saved(unittest.TestCase):
             p.wait()
         self.addCleanup(stop)
         return stop
+
+    def first_client(self):
+        return self.clients[0]
 
     def put(self, n, starred=False, shelved=False, pane="%4", age=60, title=None, cwd=None):
         os.makedirs(self.store, exist_ok=True)
@@ -670,23 +676,26 @@ class Saved(unittest.TestCase):
         self.assertEqual(e["tab"]["pane"], "%4")
         self.assertTrue(self.star_set())
 
-    def test_an_attach_client_names_its_chat_by_job_session_id_or_name(self):
-        # `claude attach` takes the jobId or part of the name; argv[0] may be the full path the
-        # client re-execs itself under (a `claude --resume` of a background chat does).
-        for arg, argv0 in ((sid(1)[:8], "claude"), (sid(1)[:8], "/home/u/.local/bin/claude"),
-                           (sid(1), "claude"), ("job NUMBER 1", "claude")):
-            with self.subTest(arg=arg, argv0=argv0):
+    def test_an_attach_client_names_its_chat_by_job_id(self):
+        # argv[0] may be the full path the client re-execs itself under (a `claude --resume` of
+        # a background chat does).
+        for argv0 in ("claude", "/home/u/.local/bin/claude"):
+            with self.subTest(argv0=argv0):
                 self.setUp()
                 self.background(1)
                 self.background(2)
                 self.transcript(1)
-                stop = self.client("attach", arg, argv0=argv0)
+                stop = self.client("attach", sid(1)[:8], argv0=argv0)
                 self.run_saved("star", "%4", CLIENT)
                 stop()   # the next case's client must be the only one
                 self.assertEqual(list(self.saved()), [sid(1)])
 
     def test_a_client_that_names_no_single_live_chat_is_not_the_tabs(self):
-        cases = {"ambiguous name": (("attach", "Job number"), {}),
+        # A name part stays in the argv while the session gets renamed (its title follows the
+        # chat), so it can come to name another session; and `claude attach` refuses a full
+        # session id. Only the jobId is trusted.
+        cases = {"name part": (("attach", "Job number 1"), {}),
+                 "session id": (("attach", sid(1)), {}),
                  "unknown job": (("attach", "ffffffff"), {}),
                  "dead session": (("attach", sid(1)[:8]), {"pid": DEAD}),
                  "reused pid": (("attach", sid(1)[:8]), {"proc_start": "1"}),
@@ -717,6 +726,23 @@ class Saved(unittest.TestCase):
         self.run_saved("open", sid(1), CLIENT)
         self.assertEqual(self.calls("tmux", "select-pane"), [])
         self.assertEqual(len(self.opened()), 1)
+
+    def test_a_suspended_attach_client_is_not_what_the_tab_shows(self):
+        # Ctrl+Z on `claude attach 1`, then `claude attach 2`: the pane shows 2. Two running
+        # clients showing different chats leave no answer at all.
+        self.background(1)
+        self.background(2)
+        self.transcript(1)
+        self.transcript(2)
+        self.client("attach", sid(1)[:8])
+        os.killpg(self.last_client, signal.SIGSTOP)
+        self.client("attach", sid(2)[:8])
+        self.run_saved("star", "%4", CLIENT)
+        self.assertEqual(list(self.saved()), [sid(2)])
+        os.killpg(self.first_client(), signal.SIGCONT)
+        self.run_saved("star", "%4", CLIENT)   # unstar 2 if it resolved; it must not
+        self.assertTrue(self.saved()[sid(2)]["starred"])
+        self.assertIn("no Claude session found", self.messages()[-1])
 
     def test_an_attach_client_outside_the_pane_is_not_the_tabs(self):
         self.background(1)
@@ -851,6 +877,21 @@ class Saved(unittest.TestCase):
         self.assertEqual(self.reg_entry(2)["pane"], "%7")
         self.assertIsNotNone(self.reg_entry(4))
         self.assertIsNotNone(self.reg_entry(5))
+
+    def test_track_skips_a_pane_running_a_tab_session_and_a_shelved_chat(self):
+        # A live interactive session under the pane is what it shows (resolve agrees), and a
+        # chat Shelve just closed must not come back from a track that read /proc before the
+        # kill.
+        self.background(1)
+        self.client("attach", sid(1)[:8])
+        self.live(2, "%7")
+        self.track_panes(("%7", self.ppid, 3))
+        self.run_saved("track")
+        self.assertIsNone(self.reg_entry(1))
+        os.remove(os.path.join(self.sessions, "2.json"))
+        self.put(1, shelved=True)
+        self.run_saved("track")
+        self.assertIsNone(self.reg_entry(1))
 
     def test_track_with_no_tmux_answer_changes_nothing(self):
         self.registered(1, "%7", attach=True)

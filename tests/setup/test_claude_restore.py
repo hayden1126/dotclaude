@@ -292,13 +292,6 @@ class Restore(unittest.TestCase):
         self.assertEqual(self.resumed(), [])
         self.assertEqual(sum("already running" in line for line in self.restore_log()), 2)
 
-    def test_an_attach_tab_closed_earlier_stays_closed(self):
-        self.entry(1, window=1, attach=True, ended=600)
-        self.entry(2, window=2, age=10)
-        self.agents((1, "background"))
-        self.run_restore()
-        self.assertEqual([s for _, s in self.resumed()], [sid(2)])
-
     def test_a_failing_agents_call_does_not_stop_the_restore(self):
         a = self.entry(1, window=1)
         self.env["STUB_AGENTS_FAIL"] = "1"
