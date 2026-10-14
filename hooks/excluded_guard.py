@@ -11,6 +11,11 @@ act on anything a sandboxed session can write. For a call that matches, three ch
      path that exists is judged; only a regular file is parsed. The project repo's own config
      and hooks/ are trusted (Claude Code protects them for the session), and so is
      config.worktree when the cwd's gitdir is the project's own; another worktree's is judged.
+     That trust rests on Claude Code protecting the session's gitfile and its
+     worktrees/<name>/commondir, not the main .git/ dir, so the common dir comes from git's real
+     layout: a gitdir with a commondir file must sit at <common>/worktrees/<name> with its
+     commondir naming that <common>, and <common> must hold no commondir. Any other layout, in
+     the cwd's repo or the project's, is refused.
   2. The PATH the head resolves through. Every PATH entry must be protected, not only those
      before the head: its children (git, gh, tmux, the tools claude spawns) search PATH too. An
      empty or relative entry is the cwd: refused. Then the resolved file's symlink chain (each
@@ -19,7 +24,7 @@ act on anything a sandboxed session can write. For a call that matches, three ch
   3. `claude` and `codex` run only from the project root.
 
 Protected means not writable in the machine view. A path (or, if missing, its nearest existing
-ancestor) is writable when it sits under a root ($HOME, /tmp, $TMPDIR or an allowWrite entry;
+ancestor, at its target when that ancestor is a symlink) is writable when it sits under a root ($HOME, /tmp, $TMPDIR or an allowWrite entry;
 realpaths compared), no denyWrite entry, ~/.claude or ~/.gitconfig covers it, and some component
 from it up to its root is owned by the user or writable by the user. Permission bits are not
 protection: an owner can chmod a dir back, and a writable parent can rename it. Outside every
@@ -197,15 +202,17 @@ class Machine:
         return p == self.gitconfig and not os.path.islink(p) and os.path.isfile(p)
 
     def writable(self, path):
-        """Writable in the machine view: the path, or its nearest existing ancestor, sits under a
-        root, no denyWrite entry or always-protected path covers it, and some component from it
+        """Writable in the machine view: the path, or its nearest existing ancestor (at that
+        ancestor's target when it is a symlink), sits under a root, no denyWrite entry or always-protected path covers it, and some component from it
         up to its root is the user's own or writable by the user (an owner can chmod it back, a
         writable parent can rename it). Permission bits alone protect nothing inside a root."""
         p = os.path.abspath(os.path.join(self.cwd, path))
         q = p
         while not os.path.lexists(q):
             q = os.path.dirname(q)
-        real = self.resolved(q)
+        # A missing tail under a symlinked q gets created in q's target, so judge it there; the
+        # link itself is judged as an ancestor by exposed() and chain().
+        real = os.path.realpath(q) if q != p and os.path.islink(q) else self.resolved(q)
         if not any(under(real, r) for r in self.roots):
             return False
         if self.always_protected(q):
@@ -261,14 +268,27 @@ class Machine:
 
 # --- Rule 1: git config ------------------------------------------------------------------------
 
-def gitdir_info(gitdir):
+def gitdir_info(gitdir, at_root=False):
+    """(gitdir, common) from git's real layout, never from a pointer alone. A gitdir with no
+    `commondir` file is its own common dir. One with a `commondir` file must be a linked
+    worktree's: it sits at `<common>/worktrees/<name>`, its `commondir` resolves to that
+    `<common>`, and `<common>` holds no `commondir` of its own. `at_root` marks a `<top>/.git`
+    dir, which is never a linked gitdir. Any break refuses: the main `.git/` is writable from a
+    sandboxed session, so a planted `commondir` there must not pick which common dir is trusted.
+    This leans on Claude Code protecting the session's own gitfile and its
+    `worktrees/<name>/commondir`."""
     gitdir = os.path.realpath(gitdir)
-    common = gitdir
-    try:
-        with open(os.path.join(gitdir, "commondir")) as f:
-            common = os.path.realpath(os.path.join(gitdir, f.read().strip()))
-    except FileNotFoundError:
-        pass
+    pointer = os.path.join(gitdir, "commondir")
+    if not os.path.lexists(pointer):
+        return gitdir, gitdir
+    with open(pointer) as f:
+        common = os.path.realpath(os.path.join(gitdir, f.read().strip()))
+    parent = os.path.dirname(gitdir)
+    if (at_root or os.path.basename(parent) != "worktrees"
+            or common != os.path.dirname(parent)
+            or os.path.lexists(os.path.join(common, "commondir"))):
+        raise Refusal("rule1", gitdir, f"the git dir {gitdir} has an unexpected layout; refusing "
+                      "an excluded command.")
     return gitdir, common
 
 
@@ -300,7 +320,7 @@ def discover(start, env=None):
     while True:
         dotgit = os.path.join(d, ".git")
         if os.path.isdir(dotgit):
-            return gitdir_info(dotgit) + (d,)
+            return gitdir_info(dotgit, at_root=True) + (d,)
         if os.path.isfile(dotgit):
             return gitdir_info(read_gitfile(dotgit)) + (d,)
         if looks_like_gitdir(d):

@@ -184,6 +184,48 @@ class Rule1Repository(Guard):
         self.allowed("git push", cwd=self.lane)
 
 
+class Rule1Layout(Guard):
+    """The trusted common dir comes from git's real layout, not from a commondir pointer."""
+
+    def test_a_commondir_planted_in_the_main_gitdir_is_refused(self):
+        self.allowed("git push")
+        self.env["CLAUDE_PROJECT_DIR"] = self.lane
+        self.allowed("git push", cwd=self.lane)
+        self.write(os.path.join(self.proj, ".git", "commondir"), self.mkdir("decoy") + "\n")
+        gitdir = os.path.join(self.proj, ".git")
+        # The lane's common dir now holds a commondir of its own.
+        self.assertIn("unexpected layout", self.denied("git push", "rule1", gitdir, cwd=self.lane))
+        # A main-checkout project: a <top>/.git dir with a commondir is never a linked gitdir.
+        self.env["CLAUDE_PROJECT_DIR"] = self.proj
+        self.assertIn("unexpected layout", self.denied("git push", "rule1", gitdir))
+
+    def test_a_lane_commondir_naming_another_dir_is_refused(self):
+        other = self.mkdir("other")
+        self.git("init", "-q", other, cwd=self.tmp)
+        self.env["CLAUDE_PROJECT_DIR"] = self.lane
+        lane_gitdir = os.path.join(self.proj, ".git", "worktrees", "lane")
+        self.write(os.path.join(lane_gitdir, "commondir"), os.path.join(other, ".git") + "\n")
+        self.denied("git push", "rule1", lane_gitdir, cwd=self.lane)
+
+    def test_a_linked_gitdir_outside_a_worktrees_dir_is_refused(self):
+        # A gitfile into the writable main .git/, at a gitdir whose commondir names that .git/.
+        fake = os.path.join(self.proj, ".git", "planted", "x")
+        self.write(os.path.join(fake, "commondir"), "../..\n")
+        self.write(os.path.join(fake, "HEAD"), "ref: refs/heads/main\n")
+        sub = self.mkdir("proj", "sub")
+        self.write(os.path.join(sub, ".git"), f"gitdir: {fake}\n")
+        self.denied("git push", "rule1", fake, cwd=sub)
+
+    def test_a_root_gitdir_with_a_commondir_is_refused_even_under_a_worktrees_dir(self):
+        # <tmp>/worktrees/.git with commondir ../.. would pass the name and target checks.
+        top = os.path.join(self.tmp, "worktrees")
+        self.git("init", "-q", top, cwd=self.tmp)
+        self.env["CLAUDE_PROJECT_DIR"] = top
+        self.allowed("git push", cwd=top)
+        self.write(os.path.join(top, ".git", "commondir"), "../..\n")
+        self.denied("git push", "rule1", os.path.join(top, ".git"), cwd=top)
+
+
 class Rule1Config(Guard):
     def gitconfig(self, text):
         self.write(os.path.join(self.home, ".gitconfig"), text)
@@ -267,6 +309,35 @@ class Rule1Config(Guard):
     def test_a_writable_xdg_config_is_refused(self):
         xdg = self.write(os.path.join(self.home, ".config", "git", "config"), "")
         self.denied("git push", "rule1", xdg)
+
+    def test_a_missing_hooks_path_under_a_writable_root_is_refused(self):
+        hooks = os.path.join(self.tmp, "nohooks", "hooks")
+        self.gitconfig(f"[core]\n\thooksPath = {hooks}\n")
+        self.denied("git push", "rule1", hooks)
+
+    def test_a_missing_hooks_path_under_a_denywrite_dir_passes(self):
+        hooks = os.path.join(self.protect(self.mkdir("phooks")), "missing")
+        self.gitconfig(f"[core]\n\thooksPath = {hooks}\n")
+        self.allowed("git push")
+
+    def test_git_config_global_replaces_the_normal_global_files(self):
+        # The normal global files are writable; GIT_CONFIG_GLOBAL makes git skip them.
+        real = self.write(os.path.join(self.tmp, "wcfg", "gitconfig"), "")
+        os.symlink(real, os.path.join(self.home, ".gitconfig"))
+        self.write(os.path.join(self.home, ".config", "git", "config"), "")
+        self.denied("git push", "rule1")
+        pcfg = self.write(os.path.join(self.protect(self.mkdir("pcfg")), "global"), "")
+        self.env["GIT_CONFIG_GLOBAL"] = pcfg
+        self.allowed("git push")
+        self.env["GIT_CONFIG_GLOBAL"] = real
+        self.denied("git push", "rule1", real)
+
+    def test_a_writable_git_config_system_is_refused_unless_nosystem(self):
+        system = self.write(os.path.join(self.tmp, "wcfg", "system"), "")
+        self.env["GIT_CONFIG_SYSTEM"] = system
+        self.denied("git push", "rule1", system)
+        self.env["GIT_CONFIG_NOSYSTEM"] = "1"
+        self.allowed("git push")
 
 
 class Rule2Path(Guard):
@@ -366,6 +437,38 @@ class Rule2Path(Guard):
         self.make_bin(os.path.join("home", "wbin"), protect=False)
         self.env["PATH"] = f"{link}/wbin:/usr/bin"
         self.denied("git push", "rule2", f"{link}/wbin")
+
+    def test_a_missing_path_entry_under_a_writable_root_is_refused(self):
+        missing = os.path.join(self.tmp, "nobin", "bin")
+        self.env["PATH"] = f"{missing}:{self.bin}:/usr/bin"
+        self.denied("git push", "rule2", missing)
+
+    def test_a_missing_path_entry_under_a_symlink_is_judged_at_the_target(self):
+        # The link sits in a denyWrite dir, but the missing dir would be made in its target.
+        links = self.protect(self.mkdir("links"))
+        os.symlink(self.mkdir("wtarget"), os.path.join(links, "w"))
+        missing = os.path.join(links, "w", "bin")
+        self.env["PATH"] = f"{missing}:{self.bin}:/usr/bin"
+        self.denied("git push", "rule2", missing)
+
+    def test_a_symlink_loop_on_path_is_refused(self):
+        loop = self.protect(self.mkdir("loop"))
+        os.symlink("b", os.path.join(loop, "a"))
+        os.symlink("a", os.path.join(loop, "b"))
+        self.env["PATH"] = f"{loop}/a:{self.bin}:/usr/bin"
+        self.assertIn("symlink loop", self.denied("git push", "rule2"))
+
+    def test_a_shebang_chain_deeper_than_3_is_refused(self):
+        sbin = self.protect(self.mkdir("sbin"))
+        # lane runs i1, i1 runs i2, and i2 (MARKER) runs /bin/sh: three interpreters.
+        self.write(os.path.join(sbin, "i2"), MARKER, 0o755)
+        for name, interp in (("i1", "i2"), ("lane", "i1")):
+            self.write(os.path.join(sbin, name), f"#!{sbin}/{interp}\n", 0o755)
+        self.env["PATH"] = f"{sbin}:/usr/bin"
+        self.allowed("lane ls")
+        self.write(os.path.join(sbin, "i3"), MARKER, 0o755)
+        self.write(os.path.join(sbin, "i2"), f"#!{sbin}/i3\n", 0o755)
+        self.assertIn("more than 3 interpreters", self.denied("lane ls", "rule2"))
 
     def test_a_head_not_on_path_passes(self):
         self.env["PATH"] = "/usr/bin:/bin"
@@ -534,6 +637,9 @@ class SandboxReality(unittest.TestCase):
         paths = [os.path.join(common, "config"), os.path.join(common, "hooks")]
         if os.path.exists(os.path.join(gitdir, "config.worktree")):
             paths.append(os.path.join(gitdir, "config.worktree"))
+        if os.path.isfile(os.path.join(REPO, ".git")):
+            # A lane: the layout check trusts its gitfile and commondir to stay put.
+            paths += [os.path.join(REPO, ".git"), os.path.join(gitdir, "commondir")]
         for p in paths:  # never written: access and file type only
             with self.subTest(path=p):
                 self.assertTrue(os.path.exists(p), p)
