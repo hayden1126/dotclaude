@@ -36,6 +36,11 @@
 # track deletes it once the tab closes, so one closed while no tmux client was attached, with
 # no status bar to run track, can come back.
 #
+# An entry's place (its window's @tab_place: the tab bar's row and position for it, a string
+# only tmux-tab-bar parses) is set back on the new window before claude starts; one that isn't
+# 1 to 2048 bytes of UTF-8 with no control character is dropped, never the tab. Once any window
+# is open, `tmux-tab-bar layout` runs once, so the bar comes back arranged.
+#
 # Each entry moves to open-sessions/restored/ just before its window opens (still before
 # `claude --resume` runs, so the resumed session's fresh entry is never swept up), and back if
 # tmux fails; a skipped one moves there too. A run that has candidates first empties restored/,
@@ -53,6 +58,9 @@ PATH="$HOME/.local/bin:$PATH"
 # run. So every tmux and claude call goes through these, with fd 9 closed.
 tmux() { command tmux "$@" 9>&-; }
 claude() { command claude "$@" 9>&-; }
+# tmux takes each argument literally except a trailing ;, which it reads as a command separator
+# (a directory `x;` would open in `x`). A trailing \; is a literal ;, so escape that one.
+tmux_arg() { if [[ "$1" == *';' ]]; then printf '%s\\;' "${1%;}"; else printf '%s' "$1"; fi; }
 
 mode=restore
 case "${1:-}" in
@@ -95,7 +103,8 @@ if [[ ! "${start:-}" =~ ^[0-9]+$ ]] || [[ ! "${pid:-}" =~ ^[0-9]+$ ]] || [ -z "$
 fi
 
 # The plan: one line per candidate, in old window order, fields split by \x1f (not whitespace,
-# so an empty field can't shift the rest): decision, id, cwd, reason, file. With "live" it reads
+# so an empty field can't shift the rest): decision, id, cwd, reason, file, place (last, as the
+# one field that may hold anything but a control character, or empty). With "live" it reads
 # `claude agents --json` on stdin; without, it prints "yes" when there is any candidate.
 decide() {
   python3 -I -c '
@@ -230,12 +239,21 @@ for name, e in cands:
 def clean(s):
     return re.sub(r"[\x00-\x1f]", " ", str(s))
 
+def place(e):
+    # The @tab_place of its window, set back as given, or "" when it is no valid one: a bad
+    # value costs the tab its place in the bar, never the tab.
+    v = e.get("place")
+    if not text(v) or re.search(r"[\x00-\x1f\x7f]", v):
+        return ""
+    return v if 1 <= len(v.encode("utf-8")) <= 2048 else ""
+
 def order(row):
     w = row[1].get("window_index")
     return (w if num(w) is not None else float("inf"), num(row[1].get("ts")) or 0)
 
 for name, e, why in sorted(rows, key=order):
-    print("\x1f".join((why[0], clean(e.get("session_id")), clean(e.get("cwd")), clean(why[1]), name)))
+    print("\x1f".join((why[0], clean(e.get("session_id")), clean(e.get("cwd")), clean(why[1]), name,
+                       place(e))))
 ' "$reg" "$socket" "$start" "$pid" "$1"
 }
 
@@ -263,7 +281,8 @@ done_dir="$reg/restored"
 mkdir -p "$done_dir"
 rm -f "$done_dir/"*.json
 
-while IFS=$'\x1f' read -r decision sid cwd why file; do
+opened=0
+while IFS=$'\x1f' read -r decision sid cwd why file place; do
   if [ "$decision" != restore ] && [ "$decision" != fresh ]; then
     mv -f "$reg/$file" "$done_dir/$file"
     note skipped "$sid" "$cwd" "$why"
@@ -274,11 +293,16 @@ while IFS=$'\x1f' read -r decision sid cwd why file; do
     note failed "$sid" "$cwd" "couldn't move its entry"
     continue
   fi
-  pane=$(tmux new-window -d -P -F '#{pane_id}' -t =main: -c "$cwd" 2>/dev/null)
+  pane=$(tmux new-window -d -P -F '#{pane_id}' -t =main: -c "$(tmux_arg "$cwd")" 2>/dev/null)
   if [ -z "$pane" ]; then
     mv -f "$done_dir/$file" "$reg/$file"
     note failed "$sid" "$cwd" "tmux new-window failed; kept for the next run"
     continue
+  fi
+  opened=$((opened + 1))
+  # Before claude starts, so the bar has it from the window's first draw.
+  if [ -n "$place" ]; then
+    tmux set-option -w -t "$pane" @tab_place "$(tmux_arg "$place")" >/dev/null 2>&1
   fi
   if [ "$decision" = fresh ]; then
     cmd=claude
@@ -292,6 +316,12 @@ while IFS=$'\x1f' read -r decision sid cwd why file; do
     note failed "$sid" "$cwd" "tmux send-keys to $pane failed; kept for the next run"
   fi
 done <<< "$plan"
+
+# Arrange the bar from the places just set: once, bounded, and silent like a hook.
+bar="$HOME/.local/bin/tmux-tab-bar"
+if [ "$opened" -gt 0 ] && [ -x "$bar" ]; then
+  timeout 10 "$bar" layout >/dev/null 2>&1 9>&-
+fi
 
 if [ "$(wc -l < "$log" 2>/dev/null || echo 0)" -gt 2000 ]; then
   tail -n 1000 "$log" > "$log.tmp" 2>/dev/null && mv "$log.tmp" "$log" 2>/dev/null
