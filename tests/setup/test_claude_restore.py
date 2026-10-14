@@ -332,6 +332,14 @@ class Restore(unittest.TestCase):
         self.assertEqual(self.resumed(), [(b, sid(2))])
         self.assertTrue(any(sid(1)[:8] in line and "#" in line for line in self.restore_log()))
 
+    def test_a_directory_ending_in_a_semicolon_goes_escaped(self):
+        # tmux reads an argument's trailing ; as a command separator, so `end;` unescaped would
+        # open in `end`. A trailing \; is tmux's literal ;.
+        a = self.entry(1, window=1, dirname="end;")
+        self.run_restore()
+        [nw] = self.calls("tmux", "new-window")
+        self.assertEqual(nw[9], a[:-1] + "\\;")
+
     def test_a_tab_in_the_directory_name_keeps_the_fields_apart(self):
         a = self.entry(1, window=1, dirname="a\tb")
         self.run_restore()
@@ -653,8 +661,10 @@ class RealTmux(unittest.TestCase):
         start = int(start)
         reg = os.path.join(self.tmp, "state", "dotclaude", "open-sessions")
         os.makedirs(reg)
+        cwds = []
         for n, place in enumerate(places, 1):
-            cwd = os.path.join(self.tmp, f"repo{n}")
+            cwd = os.path.join(self.tmp, f"repo{n};")   # tmux's trailing-; trap on -c too
+            cwds.append(cwd)
             os.makedirs(cwd)
             transcript = os.path.join(self.tmp, f"{sid(n)}.jsonl")
             open(transcript, "w").close()
@@ -669,6 +679,8 @@ class RealTmux(unittest.TestCase):
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertEqual(self.tmux("list-windows", "-t", "=main", "-F", "#{@tab_place}")
                          .stdout.splitlines(), ["", *places])
+        self.assertEqual(self.tmux("list-windows", "-t", "=main", "-F", "#{pane_current_path}")
+                         .stdout.splitlines()[1:], cwds)
 
 
 if __name__ == "__main__":
