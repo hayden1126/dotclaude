@@ -842,8 +842,11 @@ HOOK = ("'run-shell -b \"[ -x $HOME/.local/bin/tmux-tab-bar ] && "
         "$HOME/.local/bin/tmux-tab-bar layout >/dev/null 2>&1; true\"'")
 
 
-NAV_BIND = ("bind -n S-{key} run-shell -b '[ -x \"$HOME/.local/bin/tmux-tab-bar\" ] && "
-            "\"$HOME/.local/bin/tmux-tab-bar\" nav {dir} \"#{{client_name}}\" >/dev/null 2>&1; true'\n")
+# The script when it is installed, else window order for Left and Right (Up and Down do nothing).
+NAV_CMD = "\"$HOME/.local/bin/tmux-tab-bar\" nav {dir} \"#{{client_name}}\" >/dev/null 2>&1; true"
+NAV_BIND = ("bind -n S-{key} if-shell '[ -x \"$HOME/.local/bin/tmux-tab-bar\" ]' "
+            "{{ run-shell -b '" + NAV_CMD + "' }}{fallback}\n")
+NAV_FALLBACK = {"Left": " { previous-window }", "Right": " { next-window }", "Up": "", "Down": ""}
 
 
 class Conf(unittest.TestCase):
@@ -890,15 +893,15 @@ class Conf(unittest.TestCase):
             text = f.read()
         for key in ("Left", "Right", "Up", "Down"):
             with self.subTest(key=key):
-                self.assertIn(NAV_BIND.format(key=key, dir=key.lower()), text)
+                self.assertIn(NAV_BIND.format(key=key, dir=key.lower(),
+                                              fallback=NAV_FALLBACK[key]), text)
         self.assertEqual(text.count('tmux-tab-bar" nav '), 4)
         with open(os.path.join(REPO, "tmux", "base.conf")) as f:
             base = f.read()
         self.assertNotIn("S-Up", base)          # claude.conf, sourced after it, owns all four
 
     def test_the_nav_command_exits_0_and_says_nothing_whatever_the_script_does(self):
-        line = NAV_BIND.format(key="Left", dir="left")
-        cmd = line.split("'", 1)[1].rsplit("'", 1)[0].replace("#{client_name}", "/dev/pts/9")
+        cmd = NAV_CMD.format(dir="left").replace("#{client_name}", "/dev/pts/9")
         home = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, home)
         script = os.path.join(home, ".local", "bin", "tmux-tab-bar")
@@ -1696,6 +1699,17 @@ class RealTmux(unittest.TestCase):
         for key, want in (("S-Up", "3"), ("S-Up", "0"), ("S-Down", "3"), ("S-Down", "2")):
             self.press(key, want)
         self.run_layout()
+
+    def test_without_the_script_shift_left_right_step_by_number_and_up_down_do_nothing(self):
+        self.add_second_laned_repo()
+        for key, want in (("S-Right", "1"), ("S-Right", "2"), ("S-Left", "1")):
+            self.press(key, want)
+        for key in ("S-Up", "S-Down"):
+            self.to("send-keys", "-t", "o", key)
+        time.sleep(0.5)
+        self.assertEqual(self.current(), "1")
+        modes = self.ti("list-panes", "-a", "-F", "#{pane_in_mode}").stdout.split()
+        self.assertEqual(set(modes), {"0"})
 
     def test_no_hook_puts_a_pane_in_view_mode(self):
         # HOME has no tmux-tab-bar: every hook's command must still exit 0 and print nothing.
