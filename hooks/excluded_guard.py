@@ -6,25 +6,34 @@ act on anything a sandboxed session can write. For a call that matches, three ch
   1. The git config the cwd resolves to. A repo at the cwd must be the project's own repository
      (same common git dir as CLAUDE_PROJECT_DIR); a nested repo, a planted gitfile or a repo in a
      temp dir is refused. Every other config file git reads (global, XDG, system, each
-     include.path / includeIf.*.path target, recursively, and a core.hooksPath target) must be
-     protected. The project repo's own config, hooks/ and config.worktree are trusted: Claude
-     Code protects them for the session.
-  2. The PATH the head resolves through. Every PATH entry searched up to and including the one
-     holding the head must be protected (an empty or relative entry is the cwd: refused), then
-     the resolved file, each symlink hop and each one's dir, and a shebang interpreter
-     (`#!/usr/bin/env X` resolves X through PATH), depth capped at 3.
+     include.path / includeIf.*.path target, recursively, and a core.hooksPath dir and each file
+     in it) must be protected, judged along its symlink chain: each hop and the dir of each. Any
+     path that exists is judged; only a regular file is parsed. The project repo's own config
+     and hooks/ are trusted (Claude Code protects them for the session), and so is
+     config.worktree when the cwd's gitdir is the project's own; another worktree's is judged.
+  2. The PATH the head resolves through. Every PATH entry must be protected, not only those
+     before the head: its children (git, gh, tmux, the tools claude spawns) search PATH too. An
+     empty or relative entry is the cwd: refused. Then the resolved file's symlink chain (each
+     hop and the dir of each) and a shebang interpreter (`#!/usr/bin/env X` resolves X through
+     PATH), depth capped at 3.
   3. `claude` and `codex` run only from the project root.
 
-Protected means not writable in the machine view: a path (or its nearest existing ancestor) is
-writable when the user can write it on disk, it sits under $HOME, /tmp, $TMPDIR or an allowWrite
-entry, and no denyWrite entry, ~/.claude or ~/.gitconfig covers it. PATH dirs are shared by every
-session, so "this session can't write it" is not enough.
+Protected means not writable in the machine view. A path (or, if missing, its nearest existing
+ancestor) is writable when it sits under a root ($HOME, /tmp, $TMPDIR or an allowWrite entry;
+realpaths compared), no denyWrite entry, ~/.claude or ~/.gitconfig covers it, and some component
+from it up to its root is owned by the user or writable by the user. Permission bits are not
+protection: an owner can chmod a dir back, and a writable parent can rename it. Outside every
+root is protected (/usr/bin, /etc). ~/.gitconfig counts only as a regular file at that exact
+path; a symlink there is judged by its hops and target. PATH dirs are shared by every session,
+so "this session can't write it" is not enough.
 
 Which calls are candidates: a pattern's `*` matches any characters, spaces included; the rest is
 literal. A call is a candidate when the whole command matches, or any piece does after splitting
 on newlines, `;`, `&&`, `||`, `|` and `&` (not quote-aware, so it over-matches: an over-match only
-adds checks to a sandboxed call). Settings are the union of user, managed, project and
-project-local files.
+adds checks to a sandboxed call). excludedCommands and allowWrite are the union of user, managed,
+project and project-local files (more candidates, more writable: both safe). denyWrite counts
+only from user and managed files: the machine view stands for every session, and other sessions
+don't load this project's settings.
 
 Fails closed for candidates: any error while matching makes the call a candidate, and any error
 while checking one refuses it. A non-candidate exits silently. An unreadable payload raises, so
@@ -73,20 +82,23 @@ def expand(path, home):
 
 
 def load_settings(env):
-    """Union of excludedCommands, denyWrite and allowWrite. Returns (settings, errors): a file
-    that exists but can't be read makes the call a candidate (we may have missed a pattern)."""
+    """Union of excludedCommands and allowWrite from user, managed, project and project-local
+    settings; denyWrite from user and managed only. Returns (settings, errors): a file that
+    exists but can't be read makes the call a candidate (we may have missed a pattern)."""
     home = env.get("HOME") or os.path.expanduser("~")
     managed = env.get(MANAGED_ENV) or MANAGED_DIR
-    files = [os.path.join(home, ".claude", "settings.json"),
-             os.path.join(managed, "managed-settings.json")]
-    files += sorted(glob.glob(os.path.join(managed, "managed-settings.d", "*.json")))
+    # (path, machine-wide): only machine-wide files load in every session, so only they protect.
+    files = [(os.path.join(home, ".claude", "settings.json"), True),
+             (os.path.join(managed, "managed-settings.json"), True)]
+    files += [(f, True) for f in sorted(glob.glob(os.path.join(managed, "managed-settings.d",
+                                                               "*.json")))]
     project = env.get("CLAUDE_PROJECT_DIR")
     if project:
-        files += [os.path.join(project, ".claude", "settings.json"),
-                  os.path.join(project, ".claude", "settings.local.json")]
+        files += [(os.path.join(project, ".claude", "settings.json"), False),
+                  (os.path.join(project, ".claude", "settings.local.json"), False)]
     out = {"excludedCommands": [], "denyWrite": [], "allowWrite": []}
     errors = []
-    for path in files:
+    for path, machine_wide in files:
         try:
             with open(path) as f:
                 data = json.load(f)
@@ -99,7 +111,10 @@ def load_settings(env):
         if not isinstance(sandbox, dict):
             continue
         fs = sandbox.get("filesystem") if isinstance(sandbox.get("filesystem"), dict) else {}
-        for key, src in (("excludedCommands", sandbox), ("denyWrite", fs), ("allowWrite", fs)):
+        keys = [("excludedCommands", sandbox), ("allowWrite", fs)]
+        if machine_wide:
+            keys.append(("denyWrite", fs))
+        for key, src in keys:
             values = src.get(key)
             if isinstance(values, list):
                 out[key] += [v for v in values if isinstance(v, str)]
@@ -166,6 +181,7 @@ class Machine:
         self.roots = [os.path.realpath(r) for r in roots]
         deny = settings["denyWrite"]
         self.deny = ([os.path.abspath(d) for d in deny] + [os.path.realpath(d) for d in deny]
+                     + [self.resolved(os.path.abspath(d)) for d in deny]
                      + [os.path.join(self.home, ".claude")])
         self.gitconfig = os.path.join(self.home, ".gitconfig")
 
@@ -175,28 +191,43 @@ class Machine:
             return os.path.join(os.path.realpath(os.path.dirname(p)), os.path.basename(p))
         return os.path.realpath(p)
 
+    def always_protected(self, p):
+        """~/.gitconfig as a regular file at that exact path: Claude Code protects the name in
+        every session. A symlink there is judged by its hops and target instead."""
+        return p == self.gitconfig and not os.path.islink(p) and os.path.isfile(p)
+
     def writable(self, path):
+        """Writable in the machine view: the path, or its nearest existing ancestor, sits under a
+        root, no denyWrite entry or always-protected path covers it, and some component from it
+        up to its root is the user's own or writable by the user (an owner can chmod it back, a
+        writable parent can rename it). Permission bits alone protect nothing inside a root."""
         p = os.path.abspath(os.path.join(self.cwd, path))
         q = p
         while not os.path.lexists(q):
             q = os.path.dirname(q)
-        if os.path.islink(q):
-            ok = os.access(os.path.dirname(q), os.W_OK)
-        elif os.path.isdir(q):
-            ok = os.access(q, os.W_OK)
-        else:
-            ok = os.access(q, os.W_OK) or os.access(os.path.dirname(q), os.W_OK)
-        if not ok:
-            return False
         real = self.resolved(q)
         if not any(under(real, r) for r in self.roots):
             return False
-        if real == self.gitconfig or os.path.realpath(p) == self.gitconfig:
+        if self.always_protected(q):
             return False
-        for d in self.deny:
-            if under(real, d) or under(p, d) or under(q, d):
-                return False
-        return True
+        # Resolved only: a path reached through a symlink in a denied dir is not in that dir.
+        # The missing tail has no symlinks, so a denied name that doesn't exist yet still counts.
+        full = os.path.normpath(os.path.join(real, os.path.relpath(p, q)))
+        if any(under(full, d) for d in self.deny):
+            return False
+        uid = os.getuid()
+        c = real
+        while any(under(c, r) for r in self.roots):
+            try:
+                st = os.lstat(c)
+            except OSError:
+                return True  # can't tell: count it writable
+            if st.st_uid == uid or (not os.path.islink(c) and os.access(c, os.W_OK)):
+                return True
+            if c == "/":
+                break
+            c = os.path.dirname(c)
+        return False
 
     def exposed(self, path):
         """The first writable thing along `path` (a symlinked ancestor, then the path), or None."""
@@ -207,6 +238,25 @@ class Machine:
             if os.path.islink(a) and self.writable(a):
                 return a
         return p if self.writable(p) else None
+
+    def chain(self, path, rule, refuse):
+        """Follow `path`'s symlink chain, raising `refuse(bad)` for the first hop, or dir of a
+        hop, that is exposed. Returns the final target. Rules 1 and 2 both judge files this way."""
+        p = os.path.abspath(os.path.join(self.cwd, path))
+        for _ in range(40):
+            if self.always_protected(p):
+                return p
+            # A file or symlink is replaced by whoever writes its dir; a real dir stands on its
+            # own, as a PATH entry does.
+            real_dir = os.path.isdir(p) and not os.path.islink(p)
+            for x in (p,) if real_dir else (p, os.path.dirname(p)):
+                bad = self.exposed(x)
+                if bad:
+                    raise refuse(bad)
+            if not os.path.islink(p):
+                return p
+            p = os.path.normpath(os.path.join(os.path.dirname(p), os.readlink(p)))
+        raise Refusal(rule, p, f"{path} has a symlink loop at {p}; could not verify it.")
 
 
 # --- Rule 1: git config ------------------------------------------------------------------------
@@ -326,7 +376,10 @@ def check_rule1(m, env, cwd, project):
     trusted, files = [], []
     if repo:
         gitdir, common, top = repo
-        trusted = [os.path.join(common, "config"), os.path.join(gitdir, "config.worktree")]
+        # Claude Code protects the session's own gitdir, so config.worktree is trusted only there.
+        trusted = [os.path.join(common, "config")]
+        worktree_cfg = os.path.join(gitdir, "config.worktree")
+        (trusted if gitdir == proj[0] else files).append(worktree_cfg)
     if env.get("GIT_CONFIG_GLOBAL"):
         files.append(expand(env["GIT_CONFIG_GLOBAL"], home))
     else:
@@ -342,26 +395,36 @@ def check_rule1(m, env, cwd, project):
     while queue:
         path, is_trusted, depth = queue.pop(0)
         path = os.path.abspath(os.path.join(cwd, path))
-        if path in seen or not os.path.isfile(path):
+        if path in seen or not os.path.lexists(path):
             continue
         seen.add(path)
+        target = path
         if not is_trusted:
-            bad = m.exposed(path)
-            if bad:
-                raise Refusal("rule1", bad, f"git reads the config file {path}, which a sandboxed "
-                              f"session can write ({bad}). Add it to sandbox.filesystem.denyWrite.")
-        includes, hooks = config_refs(path, home)
+            target = m.chain(path, "rule1", lambda bad, path=path: Refusal(
+                "rule1", bad, f"git reads the config file {path}, which a sandboxed session can "
+                f"write ({bad}). Add it to sandbox.filesystem.denyWrite."))
+        if not os.path.isfile(target):
+            continue  # judged above; only a regular file is parsed
+        includes, hooks = config_refs(target, home)
         if depth < INCLUDE_DEPTH:
             queue += [(i, False, depth + 1) for i in includes]
         for h in hooks:
-            hdir = os.path.join(hooks_base, h)
-            bad = m.exposed(hdir)
-            if not bad and os.path.isdir(hdir):
-                bad = next((x for x in (m.exposed(os.path.join(hdir, n))
-                                        for n in sorted(os.listdir(hdir))) if x), None)
-            if bad:
-                raise Refusal("rule1", bad, f"core.hooksPath points at {hdir}, which a sandboxed "
-                              f"session can write ({bad}). Add it to sandbox.filesystem.denyWrite.")
+            check_hooks_dir(m, os.path.join(hooks_base, h))
+
+
+def check_hooks_dir(m, hdir):
+    def refuse(bad):
+        return Refusal("rule1", bad, f"core.hooksPath points at {hdir}, which a sandboxed "
+                       f"session can write ({bad}). Add it to sandbox.filesystem.denyWrite.")
+    if not os.path.lexists(hdir):
+        bad = m.exposed(hdir)
+        if bad:
+            raise refuse(bad)
+        return
+    target = m.chain(hdir, "rule1", refuse)
+    if os.path.isdir(target):
+        for name in sorted(os.listdir(target)):
+            m.chain(os.path.join(target, name), "rule1", refuse)
 
 
 # --- Rule 2: PATH ------------------------------------------------------------------------------
@@ -372,36 +435,32 @@ def path_refusal(head, path):
 
 
 def which(m, head, path_var, label, depth):
-    """Walk PATH for `head`, refusing an unprotected entry searched before it is found."""
+    """Find `head` on PATH. Every entry must be protected, not only those searched before it:
+    the head's children (git, gh, tmux, the tools claude spawns) search the same PATH."""
+    found = None
     for entry in path_var.split(":"):
         if not entry or not os.path.isabs(entry):
             raise Refusal("rule2", entry or "(empty)",
                           f"PATH holds {entry or 'an empty entry'!r}, which searches the working "
                           f"directory for `{label}`. Drop it from PATH.")
-        bad = m.exposed(entry)
-        if bad:
-            raise path_refusal(label, bad)
+        if os.path.lexists(entry):
+            m.chain(entry, "rule2", lambda bad: path_refusal(label, bad))
+        else:
+            bad = m.exposed(entry)
+            if bad:
+                raise path_refusal(label, bad)
         cand = os.path.join(entry, head)
-        if os.path.isfile(cand) and os.access(cand, os.X_OK):
-            check_file(m, cand, path_var, label, depth)
-            return
+        if found is None and os.path.isfile(cand) and os.access(cand, os.X_OK):
+            found = cand
+    if found:
+        check_file(m, found, path_var, label, depth)
 
 
 def check_file(m, path, path_var, label, depth):
     if depth > SHEBANG_DEPTH:
         raise Refusal("rule2", path, f"`{label}` runs through more than {SHEBANG_DEPTH} "
                       "interpreters; could not verify it.")
-    p = os.path.abspath(os.path.join(m.cwd, path))
-    for _ in range(40):
-        for x in (p, os.path.dirname(p)):
-            bad = m.exposed(x)
-            if bad:
-                raise path_refusal(label, bad)
-        if not os.path.islink(p):
-            break
-        p = os.path.normpath(os.path.join(os.path.dirname(p), os.readlink(p)))
-    else:
-        raise Refusal("rule2", p, f"`{label}` has a symlink loop at {p}; could not verify it.")
+    p = m.chain(path, "rule2", lambda bad: path_refusal(label, bad))
     try:
         with open(p, "rb") as f:
             line = f.readline(512)

@@ -2,14 +2,18 @@
 
 Each test builds a fake HOME (with .claude/settings.json), a project repo made by `git init` plus a
 `git worktree add` lane, and PATH dirs holding marker executables (`#!/bin/sh` echo scripts named
-git, gh, lane, claude, codex). Tests run inside the Bash sandbox, where the temp dir is writable and
-sits under /tmp, so protection comes from `chmod 555` or a denyWrite entry, never from location.
+git, gh, lane, claude, codex). The temp dir sits under a root ($TMPDIR or /tmp) and belongs to the
+user, so a "clean" (protected) dir is one listed in the user settings' denyWrite: permission bits
+protect nothing there, and only /usr/bin-style dirs outside every root are protected by location.
 """
+import importlib.util
 import json
 import os
 import shutil
+import stat
 import subprocess
 import tempfile
+import time
 import unittest
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -37,7 +41,6 @@ class Guard(unittest.TestCase):
         self.addCleanup(unlock, self.tmp)
         self.home = self.mkdir("home")
         self.deny_write = []
-        self.write_settings()
         self.proj = os.path.join(self.tmp, "proj")
         self.lane = os.path.join(self.tmp, "lane")
         self.git("init", "-q", self.proj, cwd=self.tmp)
@@ -45,6 +48,7 @@ class Guard(unittest.TestCase):
         self.git("worktree", "add", "-q", "-b", "lane", self.lane, cwd=self.proj)
         self.bin = self.make_bin("bin")
         self.wbin = self.make_bin("wbin", protect=False)
+        self.write_settings()
         self.env = {"HOME": self.home, "PATH": f"{self.bin}:/usr/bin:/bin",
                     "CLAUDE_PROJECT_DIR": self.proj, "TMPDIR": os.environ.get("TMPDIR", "/tmp"),
                     "XDG_STATE_HOME": os.path.join(self.tmp, "state"),
@@ -78,12 +82,18 @@ class Guard(unittest.TestCase):
                "GIT_COMMITTER_EMAIL": "t@t"}
         subprocess.run(["git", *args], cwd=cwd, env=env, check=True, capture_output=True)
 
+    def protect(self, path):
+        """List `path` in the user settings' denyWrite."""
+        self.deny_write.append(path)
+        self.write_settings()
+        return path
+
     def make_bin(self, name, heads=HEADS, protect=True):
         d = self.mkdir(name)
         for head in heads:
-            self.write(os.path.join(d, head), MARKER, 0o555 if protect else 0o755)
+            self.write(os.path.join(d, head), MARKER, 0o755)
         if protect:
-            os.chmod(d, 0o555)
+            self.deny_write.append(d)
         return d
 
     def fire(self, command, cwd=None, raw=None, hook=HOOK, env=None):
@@ -158,6 +168,21 @@ class Rule1Repository(Guard):
         self.env["CLAUDE_PROJECT_DIR"] = self.mkdir("plain")
         self.denied("git push", "rule1")
 
+    def test_a_cwd_with_no_repo_passes_while_the_project_is_a_repo(self):
+        self.allowed("git push", cwd=self.mkdir("plain"))
+
+    def test_another_worktrees_config_worktree_is_judged(self):
+        # A lane-like project, cwd in the main checkout: same common dir, a different gitdir.
+        self.env["CLAUDE_PROJECT_DIR"] = self.lane
+        self.allowed("git push", cwd=self.proj)
+        cfg = self.write(os.path.join(self.proj, ".git", "config.worktree"), "")
+        self.denied("git push", "rule1", cfg, cwd=self.proj)
+
+    def test_the_projects_own_config_worktree_is_trusted(self):
+        self.env["CLAUDE_PROJECT_DIR"] = self.lane
+        self.write(os.path.join(self.proj, ".git", "worktrees", "lane", "config.worktree"), "")
+        self.allowed("git push", cwd=self.lane)
+
 
 class Rule1Config(Guard):
     def gitconfig(self, text):
@@ -179,16 +204,52 @@ class Rule1Config(Guard):
         self.denied("git push", "rule1", hooks)
 
     def test_a_protected_include_passes_and_its_own_includes_are_followed(self):
-        inc = self.write(os.path.join(self.tmp, "pcfg", "inc.cfg"), "[user]\n\tname = x\n", 0o444)
-        os.chmod(os.path.dirname(inc), 0o555)
+        inc = self.write(os.path.join(self.protect(self.mkdir("pcfg")), "inc.cfg"),
+                         "[user]\n\tname = x\n")
         self.gitconfig(f"[include]\n\tpath = {inc}\n")
         self.allowed("git push")
-        os.chmod(os.path.dirname(inc), 0o755)
-        os.chmod(inc, 0o644)
         inner = self.write(os.path.join(self.tmp, "wcfg", "inner.cfg"), "")
-        self.write(inc, f"[include]\n\tpath = ../wcfg/inner.cfg\n", 0o444)
-        os.chmod(os.path.dirname(inc), 0o555)
+        self.write(inc, f"[include]\n\tpath = ../wcfg/inner.cfg\n")
         self.denied("git push", "rule1", inner)
+
+    def test_an_include_in_a_protected_dir_that_symlinks_to_a_writable_file_is_refused(self):
+        real = self.write(os.path.join(self.tmp, "wcfg", "real.cfg"), "")
+        link = os.path.join(self.protect(self.mkdir("pcfg")), "inc.cfg")
+        os.symlink(real, link)
+        self.gitconfig(f"[include]\n\tpath = {link}\n")
+        self.denied("git push", "rule1", os.path.dirname(real))
+
+    def test_a_symlinked_gitconfig_is_judged_by_its_hops_and_target(self):
+        real = self.write(os.path.join(self.tmp, "wcfg", "gitconfig"), "")
+        os.symlink(real, os.path.join(self.home, ".gitconfig"))
+        self.denied("git push", "rule1", os.path.join(self.home, ".gitconfig"))
+
+    def test_a_regular_gitconfig_in_a_writable_home_is_trusted(self):
+        self.gitconfig("[user]\n\tname = x\n")
+        self.allowed("git push")
+
+    def test_a_fifo_include_target_in_a_writable_dir_is_refused(self):
+        fifo = os.path.join(self.mkdir("wcfg"), "inc.cfg")
+        os.mkfifo(fifo)  # never opened: the guard must judge it without reading it
+        self.gitconfig(f"[include]\n\tpath = {fifo}\n")
+        self.denied("git push", "rule1", fifo)
+
+    def test_a_protected_hooks_dir_holding_a_symlinked_hook_is_refused(self):
+        hooks = self.protect(self.mkdir("phooks"))
+        self.write(os.path.join(hooks, "pre-commit"), MARKER, 0o755)
+        self.gitconfig(f"[core]\n\thooksPath = {hooks}\n")
+        self.allowed("git push")
+        real = self.write(os.path.join(self.tmp, "whook", "pre-push"), MARKER, 0o755)
+        os.symlink(real, os.path.join(hooks, "pre-push"))
+        self.denied("git push", "rule1", os.path.dirname(real))
+
+    def test_a_hooks_path_symlinked_from_a_protected_dir_to_a_writable_one_is_refused(self):
+        whooks = self.mkdir("whooks")
+        self.write(os.path.join(whooks, "pre-push"), MARKER, 0o755)
+        link = os.path.join(self.protect(self.mkdir("plinks")), "hooks")
+        os.symlink(whooks, link)
+        self.gitconfig(f"[core]\n\thooksPath = {link}\n")
+        self.denied("git push", "rule1", whooks)
 
     def test_a_denywrite_entry_protects_an_include(self):
         inc = self.write(os.path.join(self.tmp, "wcfg", "inc.cfg"), "")
@@ -214,9 +275,32 @@ class Rule2Path(Guard):
         self.denied("git push", "rule2", self.wbin)
         self.assertIn("deny rule2 " + self.wbin, self.log())
 
-    def test_a_writable_dir_after_the_head_is_never_searched(self):
-        self.env["PATH"] = f"{self.bin}:{self.wbin}:/usr/bin"
+    def test_a_writable_dir_after_the_head_is_refused(self):
+        # The head's children (git hooks, gh's git, claude's tools) search the whole PATH.
+        self.env["PATH"] = f"{self.bin}:/usr/bin:{self.wbin}"
+        self.denied("git push", "rule2", self.wbin)
+
+    def test_a_chmod_555_dir_outside_denywrite_is_refused(self):
+        ro = self.make_bin("ro", protect=False)
+        for name in (*os.listdir(ro), "."):
+            os.chmod(os.path.join(ro, name), 0o555)  # its owner can chmod it back
+        self.env["PATH"] = f"{ro}:/usr/bin"
+        self.denied("git push", "rule2", ro)
+
+    def test_a_system_dir_outside_every_root_passes(self):
+        # git resolves in /usr/bin, which sits outside $HOME, /tmp and $TMPDIR.
+        gbin = self.make_bin("gbin", heads=("gh",))
+        self.write_settings()
+        self.env["PATH"] = f"{gbin}:/usr/bin"
         self.allowed("git push")
+
+    def test_path_and_denywrite_entries_with_trailing_slashes(self):
+        tbin = self.make_bin("tbin", protect=False)
+        self.protect(tbin + "/")
+        self.env["PATH"] = f"{tbin}/:/usr/bin/"
+        self.allowed("git push")
+        self.env["PATH"] = f"{self.wbin}/:/usr/bin/"
+        self.denied("git push", "rule2", self.wbin)
 
     def test_a_denywrite_entry_protects_a_path_dir(self):
         self.env["PATH"] = f"{self.wbin}:/usr/bin"
@@ -234,22 +318,54 @@ class Rule2Path(Guard):
 
     def test_a_symlink_into_a_writable_dir_is_refused(self):
         target = self.write(os.path.join(self.tmp, "wtarget", "real-git"), MARKER, 0o755)
-        links = self.mkdir("links")
+        links = self.protect(self.mkdir("links"))
         os.symlink(target, os.path.join(links, "git"))
-        os.chmod(links, 0o555)
         self.env["PATH"] = f"{links}:/usr/bin"
         self.denied("git push", "rule2", os.path.dirname(target))
 
-    def test_a_shebang_interpreter_through_a_writable_dir_is_refused(self):
-        sbin = self.mkdir("sbin")
-        self.write(os.path.join(sbin, "lane"), "#!/usr/bin/env fakeinterp\n", 0o555)
-        os.chmod(sbin, 0o555)
-        self.write(os.path.join(self.wbin, "fakeinterp"), MARKER, 0o555)
-        self.env["PATH"] = f"{sbin}:{self.wbin}:/usr/bin"
-        self.denied("lane ls", "rule2", self.wbin)
+    def test_a_path_dir_reached_through_a_symlink_in_a_protected_dir_is_judged_where_it_lands(self):
+        links = self.protect(self.mkdir("links"))
+        os.symlink(self.wbin, os.path.join(links, "wbin"))
+        self.env["PATH"] = f"{links}/wbin:/usr/bin"
+        self.denied("git push", "rule2", self.wbin)
+        os.remove(os.path.join(self.wbin, "gh"))  # the link's target is judged even without the head
+        self.denied("gh pr view 5", "rule2", self.wbin)
+
+    def test_an_env_shebang_interpreter_resolving_into_a_writable_dir_is_refused(self):
+        sbin = self.protect(self.mkdir("sbin"))
+        self.write(os.path.join(sbin, "lane"), "#!/usr/bin/env fakeinterp\n", 0o755)
+        interp = self.write(os.path.join(self.tmp, "winterp", "fakeinterp"), MARKER, 0o755)
+        os.symlink(interp, os.path.join(sbin, "fakeinterp"))
+        self.env["PATH"] = f"{sbin}:/usr/bin"
+        self.denied("lane ls", "rule2", os.path.dirname(interp))
         # The same interpreter in a protected dir passes.
-        os.chmod(self.wbin, 0o555)
+        self.protect(os.path.dirname(interp))
         self.allowed("lane ls")
+
+    def test_a_direct_shebang_interpreter_in_a_writable_dir_is_refused(self):
+        interp = self.write(os.path.join(self.tmp, "winterp", "fakeinterp"), MARKER, 0o755)
+        sbin = self.protect(self.mkdir("sbin"))
+        self.write(os.path.join(sbin, "lane"), f"#!{interp} -x\n", 0o755)
+        self.env["PATH"] = f"{sbin}:/usr/bin"
+        self.denied("lane ls", "rule2", os.path.dirname(interp))
+        self.protect(os.path.dirname(interp))
+        self.allowed("lane ls")
+
+    def test_a_symlinked_home_resolves_its_denywrite_entries(self):
+        links = self.protect(self.mkdir("homelinks"))  # the link itself must be protected
+        link = os.path.join(links, "home")
+        os.symlink(self.home, link)
+        hbin = self.make_bin(os.path.join("home", "bin"), protect=False)
+        self.protect("~/bin")
+        self.write(os.path.join(self.home, ".gitconfig"), "[user]\n\tname = x\n")
+        self.env["HOME"] = link
+        self.env["PATH"] = f"{link}/bin:/usr/bin"
+        self.allowed("git push")
+        self.env["PATH"] = f"{hbin}:/usr/bin"
+        self.allowed("git push")
+        self.make_bin(os.path.join("home", "wbin"), protect=False)
+        self.env["PATH"] = f"{link}/wbin:/usr/bin"
+        self.denied("git push", "rule2", f"{link}/wbin")
 
     def test_a_head_not_on_path_passes(self):
         self.env["PATH"] = "/usr/bin:/bin"
@@ -315,6 +431,15 @@ class Matching(Guard):
         self.denied("gh api user", "rule2")
         self.allowed("gh issue list")
 
+    def test_denywrite_counts_only_from_user_and_managed_settings(self):
+        self.env["PATH"] = f"{self.wbin}:/usr/bin"
+        local = {"sandbox": {"filesystem": {"denyWrite": [self.wbin]}}}
+        self.write(os.path.join(self.proj, ".claude", "settings.local.json"), json.dumps(local))
+        self.write(os.path.join(self.proj, ".claude", "settings.json"), json.dumps(local))
+        self.denied("git push", "rule2", self.wbin)
+        self.write(os.path.join(self.tmp, "managed", "managed-settings.json"), json.dumps(local))
+        self.allowed("git push")
+
     def test_an_unreadable_settings_file_makes_the_call_a_candidate(self):
         self.env["PATH"] = f"{self.wbin}:/usr/bin"
         self.write(os.path.join(self.proj, ".claude", "settings.json"), "{not json")
@@ -366,6 +491,54 @@ class FailsClosed(Guard):
         self.env["PATH"] = f"{self.wbin}:/usr/bin"
         self.denied("git push", "rule2")
         self.assertFalse(os.path.exists(ran), "the guard imported the project's json.py")
+
+
+class SettingsCommand(unittest.TestCase):
+    def test_a_slow_guard_times_out_into_the_head_word_fallback(self):
+        # The real settings.json command, with a stand-in shim that outlives its `timeout 4`.
+        with open(os.path.join(REPO, "settings.json")) as f:
+            settings = json.load(f)
+        (cmd,) = [h["command"] for e in settings["hooks"]["PreToolUse"] for h in e["hooks"]
+                  if "excluded-guard" in h["command"]]
+        home = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, home)
+        shim = os.path.join(home, ".claude", "hooks", "excluded-guard.sh")
+        os.makedirs(os.path.dirname(shim))
+        with open(shim, "w") as f:
+            f.write("cat >/dev/null\nsleep 6\n")
+        env = dict(os.environ, HOME=home)
+        for command, rc in (("git push", 2), ("ls", 0)):
+            with self.subTest(command=command):
+                payload = json.dumps({"tool_name": "Bash", "tool_input": {"command": command}})
+                start = time.monotonic()
+                p = subprocess.run(["sh", "-c", cmd], input=payload, capture_output=True,
+                                   text=True, env=env, timeout=20)
+                elapsed = time.monotonic() - start
+                self.assertEqual(p.returncode, rc, p.stderr)
+                self.assertTrue(3.5 <= elapsed < 6, f"took {elapsed:.1f}s: not the timeout")
+
+
+class SandboxReality(unittest.TestCase):
+    def test_the_paths_rule_1_trusts_are_unwritable_in_the_sandbox(self):
+        try:
+            with open("/proc/1/cmdline", "rb") as f:
+                sandboxed = b"apply-seccomp" in f.read()
+        except OSError:
+            sandboxed = False
+        if not sandboxed:
+            self.skipTest("not inside the Bash sandbox")
+        spec = importlib.util.spec_from_file_location("excluded_guard", MODULE)
+        guard = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(guard)
+        gitdir, common, _ = guard.discover(REPO)
+        paths = [os.path.join(common, "config"), os.path.join(common, "hooks")]
+        if os.path.exists(os.path.join(gitdir, "config.worktree")):
+            paths.append(os.path.join(gitdir, "config.worktree"))
+        for p in paths:  # never written: access and file type only
+            with self.subTest(path=p):
+                self.assertTrue(os.path.exists(p), p)
+                self.assertTrue(not os.access(p, os.W_OK) or stat.S_ISCHR(os.stat(p).st_mode),
+                                f"{p} is writable inside the sandbox")
 
 
 if __name__ == "__main__":
