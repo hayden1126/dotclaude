@@ -1125,16 +1125,20 @@ class RealTmux(unittest.TestCase):
         self.click(x, y)
         self.wait(lambda: self.current() == "2", "the click on row 2 did not switch")
 
-    def test_a_click_on_a_separator_does_nothing(self):
-        # The separator sits outside both tabs' ranges: tmux sees no range there
-        # (MouseUp1StatusDefault, unbound), so no switch and no menu.
+    def test_a_click_on_a_separator_acts_on_the_tab_to_its_left(self):
+        # tmux 3.7c ends a range at cx + 1 (format-draw.c:949), so the left tab's range
+        # also claims the divider; the cell after the divider is the right tab's.
         self.run_layout()
         x, y = self.find("│")
         self.assertEqual(y, 1)                  # between the lead and the lane on row 1
-        self.click(x, y)
-        time.sleep(0.5)
+        self.click(x, y)                        # the lead, the current tab: its menu
+        self.find("Replies before pass")
         self.assertEqual(self.current(), "0")
-        self.assertFalse(any("Replies before pass" in line for line in self.screen()))
+        self.click(1, 40)                       # a tap in the pane closes the menu
+        self.wait(lambda: not any("Replies before pass" in line for line in self.screen()),
+                  "the menu did not close")
+        self.click(x + 1, y)                    # the lane: a switch
+        self.wait(lambda: self.current() != "0", "the click right of the divider did not switch")
 
     def test_a_tap_on_the_current_tab_opens_its_menu_and_a_tap_on_an_item_runs_it(self):
         self.run_layout()

@@ -78,7 +78,10 @@ PLAIN_WORD = re.compile(r"[A-Za-z0-9_@-][A-Za-z0-9_@\[\]-]*")   # needs no quote
 FILL = "#[fill=colour236]"
 NORM = "#[bg=colour236]#[fg=colour250]#[nobold]#[nodim]"
 CUR = "#[bg=colour24]#[fg=colour231]#[bold]"
-SEP = "#[fg=colour240]│#[fg=colour250]"   # between two tabs, outside both ranges
+# Between two tabs, after the left tab's #[norange]. tmux 3.7c ends a range at cx + 1
+# (format-draw.c:949), so a range also claims the cell after it: a click on the divider acts
+# on the tab to its left.
+SEP = "#[fg=colour240]│#[fg=colour250]"
 GLYPH_ON = "#{?#{==:#{@claude_state},busy},1,#{?#{==:#{@claude_state},wait},1,0}}"
 # The label: the pane title (else the running command) with two substitutions, applied in order
 # after the lookup (tmux 3.7c format.c format_replace1):
