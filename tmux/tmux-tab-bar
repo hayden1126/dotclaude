@@ -60,7 +60,7 @@ import unicodedata  # noqa: E402
 MAX_ROWS = 5            # tmux's own limit for `status`
 DEFAULT_SLOT = 32       # a tab's width while its row has room; a fuller row splits evenly
 MIN_SLOT = 18           # desktop: index, glyphs and a few title cells
-MIN_SLOT_PHONE = 9
+MIN_SLOT_PHONE = 9      # " 999 ★ ◐ ": the label shrinks to fit (entry)
 PHONE_WIDTH = 100       # a client narrower than this gets the phone layout
 PHONE_LEFT = 6          # row 0's cells for the delegation token on the phone
 NAME_CELLS = 12         # tab and header names are cut to this many cells
@@ -455,11 +455,17 @@ def entry(wid: str, index: int, slot: int) -> str:
         raise ValueError(f"bad window {wid!r} {index!r}")
     base = slot - (len(str(index)) + 2)
 
+    def label(cells: int) -> str:
+        """The label in exactly `cells`: fitted, a lone '…', or nothing. fit() needs 2 (a name
+        cell and the '…'), so a 3-digit index with a star and a glyph (9 cells) in a phone's
+        9-cell slot would draw 2 past it and push every later tab right."""
+        return fit(cells) if cells >= 2 else "…" if cells == 1 else ""
+
     def one(style: str, fg: str) -> str:
         glyph = ("#{?#{==:#{@claude_state},busy},◐ ,#{?#{==:#{@claude_state},wait},"
                  f"#[fg=colour46]✳ #[fg={fg}],}}}}")
-        rest = (f"#{{?@claude_star,#{{?{GLYPH_ON},{fit(base - 4)},{fit(base - 2)}}},"
-                f"#{{?{GLYPH_ON},{fit(base - 2)},{fit(base)}}}}}")
+        rest = (f"#{{?@claude_star,#{{?{GLYPH_ON},{label(base - 4)},{label(base - 2)}}},"
+                f"#{{?{GLYPH_ON},{label(base - 2)},{label(base)}}}}}")
         return ("#[range=window|#{window_index}]" + style + " #I #{?@claude_star,★ ,}" + glyph
                 + rest + "#[norange]" + NORM)
 

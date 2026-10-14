@@ -560,6 +560,24 @@ class Render(unittest.TestCase):
             with self.subTest(bad=bad), self.assertRaises(ValueError):
                 tb.entry(bad[0], bad[1], 30)
 
+    def test_a_tab_draws_exactly_its_slot_at_any_index_width(self):
+        # The worst case on the phone: a 3-digit index, a star and a glyph take 9 cells, the
+        # whole minimum slot; the label then shrinks to '…' or nothing, never past the slot.
+        self.assertGreaterEqual(tb.MIN_SLOT_PHONE, len(" 999 ") + len("★ ◐ "))
+        for index in (7, 42, 999):
+            for slot in (tb.MIN_SLOT_PHONE, tb.MIN_SLOT_PHONE + 1, tb.MIN_SLOT_PHONE + 2,
+                         tb.MIN_SLOT, tb.DEFAULT_SLOT):
+                for star in ("", "1"):
+                    for state in ("idle", "busy", "wait"):
+                        for current in ("@5", "@6"):
+                            with self.subTest(index=index, slot=slot, star=star, state=state,
+                                              current=current):
+                                env = {"windows": [window("@5", index, star, state)],
+                                       "current": current}
+                                text = draw(tb.entry("@5", index, slot), env)
+                                self.assertEqual(tb.text_width(text), slot, text)
+                                self.assertTrue(text.startswith(f" {index} "), text)
+
     def test_plus_n_is_a_user_range(self):
         groups = [Group(f"g{k}", tabs(*range(10 * k + 1, 10 * k + 11))) for k in range(6)]
         rows = tb.render(tb.lay_out(groups, [], 188, "@1", 28, 16))
