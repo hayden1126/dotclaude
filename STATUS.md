@@ -234,14 +234,21 @@ stored here).
   `claude -p` repro and the 2.1.285 boundary; the karaoke session's has the incident.
 
 ## Notes for next session
-- **Next (lead, main checkout): run `lane-close`, `tab-bar` and `lane-addr` to merge in that
-  order** ("In flight"). As of 2026-10-13: narrow-excluded is closed, lane-addr was just opened
-  (plan mode), and lane-close and tab-bar were told main moved to fe981d7 and to merge it.
-  lane-close is next and cleared to install once its review and live probe are done. Start
-  with `lane ls` and `lane asks`. A lane is handed back only once `handoff-check -C <lane path>`
-  passes and the board shows no `handoff?` flag. After each merge, follow the install step in
-  "In flight", then `lane done <id>` once its session exits (until `lane-close` merges, Hayden
-  `/exit`s it first). narrow-excluded Part 2 opens at the next free slot.
+- **Next (lead, main checkout): take lane-close's PR to ready and merge, then `tab-bar`, then
+  `lane-addr`** ("In flight"). As of 2026-10-13, lane-close is done at `origin/main..3160bef`:
+  - review rounds 3-6 and the live probe;
+  - the lead's reviews of its post-merge fixes and of the G7 rounds (setup, sync and every
+    `sys.executable` start run Python with `-I`; private findings G7), with the last round
+    reviewed by the lead itself;
+  - all four suites green in one run, installed from the lane, and smoked.
+
+  Hayden approved its push and a draft PR; ready and merge still need his OK
+  (`gh pr list --head feat/lane-close`). After the merge: reinstall from main, which releases
+  lane-close's install hold (`lane ls` shows it). Then propose `lane done lane-close` and tell
+  tab-bar it is next. Start with `lane ls` and `lane asks`. A lane is handed back only once
+  `handoff-check -C <lane path>` passes and the board shows no `handoff?` flag. After each
+  merge, follow the install step in "In flight", then `lane done <id>` once its session exits.
+  narrow-excluded Part 2 opens at the next free slot.
   **Message a lane at its messaging socket**: `uds:/run/user/1000/cc-socks/<pid>.sock`, the
   `messagingSocketPath` in `~/.claude/sessions/<pid>.json` of the session whose cwd is in the
   lane. Resolve it fresh before each send, since a pass makes a new pid. A ListAgents name
@@ -260,6 +267,11 @@ stored here).
   - Verify from the main checkout (`test_subagent_policy` refuses to load under
     `.claude/worktrees/`): `tests/setup`, `tests/pass`, `tests/lanes`, `tests/delegation`. The
     last full run on `feat/autopass` (2026-10-12) was green: 532, 148, 155 and 646 tests.
+  - **Flakes got worse under load (2026-10-13, lane-close's runs):** about half of loaded runs
+    fail one timing test in `tests/pass` (a 600 s compact wait, a run killed at 900 s) or
+    `tests/delegation` (`test_wait`'s 30 s subprocess timeout, `test_ledger` minute rounding);
+    each passes 3/3 alone. Worth a small PR that bounds those waits on a fake clock; it is slowing
+    every lane's verification.
   - **Flakes:** `tests/pass` fails timing asserts under a load spike, so judge it on a run of
     about 46 s. `test_tmux_hooks` flaked on `main` too; its ring-decision wait is now 15 s.
     Watch `seen()`'s 3 s wait, which also serves negative checks.
