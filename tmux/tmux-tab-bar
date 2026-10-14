@@ -1276,13 +1276,17 @@ def apply(ctx: Context, changes: dict, base: str) -> None:
                                         for pane in ctx.state.panes.get(wid, [])})
 
 
-def show_menu(client: str, wid: str) -> None:
+def show_menu(client: str, sid: str, wid: str) -> None:
     """The Move menu on `client`, centred, without -O (a touch tap has no hover). Each item
     moves `wid` and opens the menu again, so the phone takes several steps without retapping;
     a tap outside closes it. Only a validated client name and window id go in its commands.
-    display-menu holds its tmux client until the menu closes, so it runs detached: a run-shell
-    waiting on it would hold the client's queue, and a timeout would kill it under the menu."""
-    args = ["tmux", "-u", "display-menu", "-c", client, "-t", wid, "-x", "C",
+    -M: a menu opened with no mouse event behind it (as here) otherwise ignores a tap on an
+    item and closes on its release. -t names the client's session `sid` too: a window in
+    grouped sessions alone resolves to the most recent one, whose bar (the phone's, at the
+    bottom) would decide -y. display-menu holds its tmux client until the menu closes, so it
+    runs detached: a run-shell waiting on it would hold the client's queue, and a timeout would
+    kill it under the menu."""
+    args = ["tmux", "-u", "display-menu", "-M", "-c", client, "-t", f"{sid}:{wid}", "-x", "C",
             "-y", OVERLAY_Y_CENTRE,
             "-T", "#[align=centre]Move #{window_index}"]
     for item in MENU:
@@ -1325,7 +1329,7 @@ def arrange_command(words: list, base: str) -> None:
         elif cmd == "menu" and len(args) in (1, 2):
             ctx = context(args[0], args[1] if len(args) == 2 else None)
             if ctx is not None:
-                show_menu(args[0], ctx.wid)
+                show_menu(args[0], ctx.sid, ctx.wid)
         elif cmd == "reset" and len(args) == 1:
             ctx = context(args[0], None)
             if ctx is not None:
@@ -1354,7 +1358,7 @@ def move(how: str, client: str, wid: str | None, menu: bool, base: str) -> None:
         changes = {ctx.wid: None}
     apply(ctx, changes, base)
     if menu:
-        show_menu(client, ctx.wid)
+        show_menu(client, ctx.sid, ctx.wid)
 
 
 def drop(src: str, dst: str, x: str, line: str, rng: str, client: str, base: str) -> None:

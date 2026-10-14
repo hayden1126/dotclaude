@@ -1919,10 +1919,11 @@ class FakeTmux(unittest.TestCase):
         while time.time() < deadline and "display-menu" not in [c[0] for c in self.calls()]:
             time.sleep(0.05)
         menu = next(c for c in self.calls() if c[0] == "display-menu")
-        self.assertEqual(menu[:10], ["display-menu", "-c", "/dev/pts/7", "-t", "@2", "-x", "C",
-                                     "-y", tb.OVERLAY_Y_CENTRE, "-T"])
+        # -M: taps work in a menu no mouse event opened; the client's own session in -t.
+        self.assertEqual(menu[:11], ["display-menu", "-M", "-c", "/dev/pts/7", "-t", "$0:@2",
+                                     "-x", "C", "-y", tb.OVERLAY_Y_CENTRE, "-T"])
         self.assertNotIn("-O", menu)
-        items = menu[11:]
+        items = menu[12:]
         self.assertIn("◀ Left", items)
         cmd = items[items.index("Auto place") + 2]
         self.assertEqual(tmux_words(cmd), [["run-shell", '"$HOME/.local/bin/tmux-tab-bar" move '
@@ -2603,7 +2604,7 @@ class RealTmux(unittest.TestCase):
 
         def look():
             for y, line in enumerate(self.screen()[:tb.MAX_ROWS]):
-                m = re.search(r" \+\d+ ", line)
+                m = re.search(r" \+\d+ *$", line)       # it ends its row; capture strips the pad
                 if m:
                     found.append((m.start() + 2, y + 1))
                     return True
@@ -2677,10 +2678,17 @@ class RealTmux(unittest.TestCase):
     def test_the_move_menus_name_row_stores_a_hostile_name_literally(self):
         # The Move menu opened by the script itself, with no script in HOME yet: the prompt's
         # run-shell finds nothing, so the typed text stays in @tab_row_name_in to be read.
+        # A script's display-menu has no mouse event, so without -M tmux ignores a tap on an
+        # item and closes the menu on its release. And with the window also in a newer grouped
+        # session whose bar is at the bottom (the phone's), the menu still reads this client's
+        # session: under its top bar it opens at row 0, out of tmux 3.7c's clip.
         self.run_layout()
         self.ti("set-option", "-w", "-t", "t:1", "@tab_place",
                 tb.place_text(tb.Place("c:1", 0, "s")))
         self.run_layout()
+        time.sleep(1.1)                 # session activity times are in seconds
+        self.ti("new-session", "-d", "-t", "t", "-s", "phone")
+        self.ti("set-option", "-t", "phone", "status-position", "bottom")
         wid = self.ti("display", "-p", "-t", "t:1", "#{window_id}").stdout.strip()
         client = self.ti("list-clients", "-F", "#{client_name}").stdout.strip()
         p = subprocess.run([sys.executable, "-I", SCRIPT, "menu", client, wid],
@@ -2688,6 +2696,7 @@ class RealTmux(unittest.TestCase):
         self.assertEqual((p.returncode, p.stdout, p.stderr), (0, "", ""))
         self.find("New row")
         nx, ny = self.find("Name row…")
+        self.assertLess(ny, 10, self.screen()[:12])
         self.click(nx + 1, ny)
         self.find("row name:")
         hostile = "a\"b'c;d#[e%f$(g)$HOME~h\\i"

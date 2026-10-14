@@ -60,6 +60,11 @@ DEAD = 99_999_999   # above any pid_max: never a live process
 TITLE = "✳ [repo1] Fix the parser"
 
 
+def items_of(menu):
+    """A display-menu argv's items: everything after -y and its value."""
+    return menu[menu.index("-y") + 2:]
+
+
 def sid(n):
     return f"{n:08d}-5e55-4000-8000-000000000000"
 
@@ -298,7 +303,7 @@ class Saved(unittest.TestCase):
         self.env["STUB_TITLE"] = "a #[fg=red]b ##[bg=blue]c #d #[x"
         self.run_saved("star", "%4", CLIENT)
         self.assertEqual(self.messages()[-1], "claude-saved: starred: a b ##c ##d [x")
-        items = self.menu(CLIENT)[10:]
+        items = items_of(self.menu(CLIENT))
         self.assertEqual(items[7], "★ a b ##c ##d [x · now")
 
     def test_unstar_deletes_the_entry(self):
@@ -965,10 +970,14 @@ class Saved(unittest.TestCase):
         self.put(2, shelved=True, age=5 * 60, title="[repo2] issue #12")
         self.put(3, starred=True, shelved=True, age=2 * 86400, title="")
         m = self.menu(CLIENT)
-        # Row 0 under a top bar, where tmux 3.7c can't draw a busy pane over the menu's top rows.
-        self.assertEqual(m[2:11], ["-c", CLIENT, "-T", "#[align=centre]Shelf", "-x", "C",
-                                   "-y", "#{?#{==:#{status-position},top},0,#{popup_centre_y}}", "Star this tab"])
-        items = m[10:]
+        # Row 0 under a top bar, where tmux 3.7c can't draw a busy pane over the menu's top rows,
+        # read from the client's own session ($1, not whichever grouped session tmux would
+        # pick); -M, so a click on an item works in a menu no mouse event opened.
+        self.assertEqual(m[2:14], ["-M", "-c", CLIENT, "-t", "$1:", "-T", "#[align=centre]Shelf",
+                                   "-x", "C", "-y",
+                                   "#{?#{==:#{status-position},top},0,#{popup_centre_y}}",
+                                   "Star this tab"])
+        items = items_of(m)
         self.assertEqual(items[:7], [
             "Star this tab", "*", f"run-shell '{SCRIPT} star %4 {CLIENT}'",
             "Shelve this tab", "V", f"run-shell '{SCRIPT} shelve %4 {CLIENT}'", ""])
@@ -982,11 +991,11 @@ class Saved(unittest.TestCase):
     def test_the_menu_offers_unstar_for_a_starred_tab(self):
         self.live(1, "%4")
         self.put(1, starred=True)
-        self.assertEqual(self.menu(CLIENT)[10], "Unstar this tab")
+        self.assertEqual(items_of(self.menu(CLIENT))[0], "Unstar this tab")
 
     def test_an_empty_menu_still_offers_this_tab(self):
         self.live(1, "%4")
-        items = self.menu(CLIENT)[10:]
+        items = items_of(self.menu(CLIENT))
         self.assertEqual(items[:7], [
             "Star this tab", "*", f"run-shell '{SCRIPT} star %4 {CLIENT}'",
             "Shelve this tab", "V", f"run-shell '{SCRIPT} shelve %4 {CLIENT}'", ""])
@@ -997,17 +1006,17 @@ class Saved(unittest.TestCase):
         os.makedirs(self.store, exist_ok=True)
         with open(os.path.join(self.store, sid(2) + ".json"), "w") as f:
             f.write("[" * 100000)  # json raises RecursionError, not ValueError
-        self.assertEqual(self.menu(CLIENT)[17:], ["-(nothing saved)", "", ""])
+        self.assertEqual(items_of(self.menu(CLIENT))[7:], ["-(nothing saved)", "", ""])
 
     def test_the_menu_disables_this_tab_without_a_chat(self):
         self.put(1, shelved=True)
-        items = self.menu(CLIENT)[10:]
+        items = items_of(self.menu(CLIENT))
         self.assertEqual(items[:7], ["-Star this tab", "", "", "-Shelve this tab", "", "", ""])
 
     def test_the_menu_disables_this_tab_where_claude_isnt_running(self):
         self.registered(1, "%4")   # stale: the pane runs a shell now
         self.env["STUB_STATE"] = ""
-        items = self.menu(CLIENT)[10:]
+        items = items_of(self.menu(CLIENT))
         self.assertEqual(items[:7], ["-Star this tab", "", "", "-Shelve this tab", "", "", ""])
 
     def test_the_menu_fits_the_client(self):
@@ -1029,7 +1038,7 @@ class Saved(unittest.TestCase):
     def names(self, m):
         """A display-menu argv's lines: each item's name, or "" for a separator (one argument,
         where an item is three)."""
-        args, out, i = m[10:], [], 0
+        args, out, i = items_of(m), [], 0
         while i < len(args):
             out.append(args[i])
             i += 1 if args[i] == "" else 3
@@ -1038,9 +1047,9 @@ class Saved(unittest.TestCase):
     def test_the_remove_menu_runs_rm(self):
         self.put(1, starred=True)
         m = self.menu("--remove", CLIENT)
-        self.assertEqual(m[4:6], ["-T", "#[align=centre]Remove from shelf"])
-        self.assertEqual(m[10:], ["★ [repo1] chat 1 · 1m", "1",
-                                  f"run-shell '{SCRIPT} rm {sid(1)} {CLIENT}'"])
+        self.assertEqual(m[m.index("-T"):m.index("-T") + 2], ["-T", "#[align=centre]Remove from shelf"])
+        self.assertEqual(items_of(m), ["★ [repo1] chat 1 · 1m", "1",
+                                       f"run-shell '{SCRIPT} rm {sid(1)} {CLIENT}'"])
 
     def test_rm_drops_the_entry_and_the_mark_where_it_runs(self):
         self.put(1, starred=True)
@@ -1083,7 +1092,7 @@ class Saved(unittest.TestCase):
                 self.assertIn("no Claude session found", self.messages()[-1])
         self.assertEqual(self.saved(), {})
         self.assertEqual(self.calls("tmux", "kill-pane") + self.calls("tmux", "kill-window"), [])
-        items = self.menu(CLIENT)[10:]
+        items = items_of(self.menu(CLIENT))
         self.assertEqual(items[:6], ["-Star this tab", "", "", "-Shelve this tab", "", ""])
 
     def test_open_skips_a_stale_registry_pane(self):

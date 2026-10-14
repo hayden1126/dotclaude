@@ -851,7 +851,13 @@ case "$cmd" in
     fi
     heading=Shelf
     [ "$removing" = 1 ] && heading="Remove from shelf"
-    tmux display-menu "${cflag[@]}" -T "#[align=centre]$heading" -x C \
+    # -M: a menu opened with no mouse event behind it (a script's, as here) otherwise ignores
+    # a click on an item and closes on its release. -t: the client's own session, since a
+    # window in grouped sessions alone resolves to the most recent one, whose bar (the phone's,
+    # at the bottom) would decide -y.
+    tflag=()
+    [[ "$csess" =~ ^\$[0-9]+$ ]] && tflag=(-t "$csess:")
+    tmux display-menu -M "${cflag[@]}" "${tflag[@]}" -T "#[align=centre]$heading" -x C \
       -y '#{?#{==:#{status-position},top},0,#{popup_centre_y}}' "${items[@]}" ;;
 
   open)
