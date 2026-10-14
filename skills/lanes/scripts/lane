@@ -42,7 +42,8 @@ lane (it holds the install: install-state.py, checked again under setup.sh's ins
 before the remove), a dirty, locked or submodule worktree, a background session, a `done` run
 from anywhere but the main checkout or under a lane's session (only the lead closes lanes), a
 repo that sets extensions.worktreeConfig (git in the lane would read the lane-writable
-config.worktree), and, when there is something to end, a failing `handoff-check --closing`.
+config.worktree), a record whose Next says `Keep open:` (more PRs to come; --abandon closes it
+anyway), and, when there is something to end, a failing `handoff-check --closing`.
 A close refused after a signal leaves the lane `closing`, which `open` refuses: rerun `done`.
 With nothing to end, a refused close leaves the lane as it was.
 """
@@ -1503,11 +1504,13 @@ def removable(lane_id: str, path: str) -> None:
                         "remove` refuses (and `done` never forces it)")
 
 
-def closing_check(lane_id: str, path: str) -> None:
+def closing_check(lane_id: str, path: str, abandon: bool = False) -> None:
     """`handoff-check --closing` in the lane must pass before its sessions end: the record is
-    all of the lane that outlives them."""
+    all of the lane that outlives them. With abandon, its `Keep open:` check is skipped, as
+    `done --abandon` closes a kept lane anyway."""
     try:
-        p = subprocess.run([sys.executable, "-I", HANDOFF_CHECK, "--closing", "-C", path],
+        p = subprocess.run([sys.executable, "-I", HANDOFF_CHECK, "--closing",
+                            *(["--abandon"] if abandon else []), "-C", path],
                            capture_output=True, text=True, timeout=120)
     except (OSError, subprocess.SubprocessError) as e:
         raise LaneError(f"can't run handoff-check --closing ({e}), so nothing was signalled")
@@ -2072,6 +2075,13 @@ def cmd_done(args) -> None:
         raise LaneError(f"branch {lane['branch']} is not merged: {why}. Pass --abandon to close "
                         "it anyway")
     how, state = (how, state) if how else ("abandoned", "abandoned")
+    # Read here, live session or not: `handoff-check --closing` (which fails on it too) runs only
+    # when there is something to end.
+    if present and not args.abandon and (kept := lanelib.kept_open(lanelib.next_block(
+            record_text(repo, lane)[0] or ""))):
+        raise LaneError(f"lane {args.id}'s Next says {shown(kept.splitlines()[0].strip())!r}: it "
+                        "stays open for more PRs. Its session drops that line at its last merge; "
+                        "pass --abandon to close it anyway")
     install_hold(repo, args.id, path, "nothing was signalled")
     hits = {}
     if present:  # every gate before any signal (lead_only refused a sandboxed run)
@@ -2084,7 +2094,7 @@ def cmd_done(args) -> None:
                           "nothing was signalled", refused,
                           f"End or move them, then rerun `lane done {args.id}`")
         if hits:
-            closing_check(args.id, path)
+            closing_check(args.id, path, args.abandon)
     for hit in work_references(repo, lane) if present else []:
         warn(shown(f"reference into {lane['id']}/work: {hit}"))  # a path from another lane
     if hits:
@@ -2176,12 +2186,13 @@ def parser() -> argparse.ArgumentParser:
                        "worktree. Its sessions get SIGTERM, their pane shells SIGHUP, survivors "
                        "SIGKILL. Anything else with its cwd in the lane refuses the close by name "
                        "before any signal, as do installed links into the lane, a dirty, locked "
-                       "or submodule worktree, a repo with extensions.worktreeConfig and, when "
-                       "there is "
+                       "or submodule worktree, a repo with extensions.worktreeConfig, a record "
+                       "whose Next says `Keep open:` (unless --abandon) and, when there is "
                        "something to end, a failing `handoff-check --closing`. A close refused "
                        "after a signal leaves the lane closing: rerun `lane done <id>`.")
     p.add_argument("id")
-    p.add_argument("--abandon", action="store_true", help="close an unmerged lane")
+    p.add_argument("--abandon", action="store_true",
+                   help="close an unmerged lane, or one whose Next says `Keep open:`")
     return ap
 
 
