@@ -1410,6 +1410,29 @@ class TurnEnd(Handed):
                 self.assertIn("outcome=resumed a new turn in the transcript " + where,
                               self.log().splitlines()[-1])
 
+    def test_a_turn_start_on_a_session_kept_busy_drops_resumed(self):
+        # An agent runs throughout, so the status stays busy: a new turn changes no
+        # statusUpdatedAt, and only its start marker, about 150 ms late, shows it. Once the end
+        # is known the settle and the final re-check always give it TRANSCRIPT_LAG.
+        start = STARTS["a task notice"]
+        with self.subTest(where="in the settle"):
+            code, out = self.compacts("busy", self.then("busy", END), self.lagged("busy", start))
+            self.assertEqual(code, 1, out)
+            self.assertDropped("resumed", "pass dropped")
+            self.assertIn("outcome=resumed a new turn in the transcript in the settle",
+                          self.log().splitlines()[-1])
+        with self.subTest(where="at the final re-check"):
+            # The start lands 0.2 s after the final re-check's first look (its first procs
+            # read), when the waiter would otherwise act.
+            self.reset("busy", self.then("busy", END), "busy")
+            plan = self.plan("--compact")
+            land = self.lagged(None, start)
+            self.assertEqual(self.mod.wait_and_act(plan, lambda: (land(), table())[1]),
+                             "resumed")
+            self.assertEqual(self.calls("tmux", "send-keys"), [])
+            self.assertIn("outcome=resumed a new turn in the transcript at the final re-check",
+                          self.log().splitlines()[-1])
+
     def test_a_whole_turn_after_the_passing_turns_end_drops_resumed(self):
         # The end, then a notice turn's start and its own end, all before the first look: the
         # latest end has no start after it, but the passing turn's own end (the first) does.
