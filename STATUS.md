@@ -254,16 +254,47 @@ stored here).
   `claude -p` repro and the 2.1.285 boundary; the karaoke session's has the incident.
 
 ## Notes for next session
-- **Next (lead, main checkout): take tab-bar's `fix/tab-bar-tests` to merge, then
-  `excluded-guard` and `tab-bar` PR 2 by readiness** ("In flight"). As of 2026-10-14: #98
-  merged, installed from main, and lane-addr closed. The fix PR repairs #97's
-  `test_claude_saved` Wiring failure (fails every run on main) and the Shift+Up phone flake
-  (about 1 in 5). It holds the install and is running the full suites. After it merges:
-  reinstall from main, and check `~/.tmux.conf`'s `source-file` lines too, not only symlinks.
-  Then tab-bar runs its live smoke and Hayden's phone tap test. Start with `lane ls` and
-  `lane asks`. A lane is handed back only once `handoff-check -C <lane path>` passes and the
-  board shows no `handoff?` flag. Close `tab-bar` with `lane done` after its PR 2 merges
-  (Hayden's ask).
+- **Next (lead, main checkout): investigate two workflow problems Hayden raised (2026-10-14),
+  and bring him a design for each, with options rated across situations, before building.**
+  1. **Lead and lanes say the same things twice.** Hayden reads both windows, and the lead kept
+     restating lane asks ("ready to merge", "go for lane done?", "approve the push?"). He
+     rejected both extremes: lanes do everything (installs, `lane done` and opening lanes sit
+     with the lead), and he talks only to the lead (relays are slow, and he approves plans and
+     commands in lanes anyway). Interim rule: memory `lead-no-relay-of-lane-asks`. The lead's
+     starting proposal:
+     - Lanes own every ask about their own work: plan, push, ready, merge.
+     - The lead speaks only on cross-lane orchestration, decisions raised with it, a failed
+       verification, and lead-only actions.
+     - The lead watches merges itself (`gh`/`lane ls`), then reinstalls from main and runs
+       `lane done` without asking, a standing approval Hayden would have to grant once.
+     - The lead verifies silently.
+     Open: which of those he pre-authorizes, and whether the lead runs as a watcher loop
+     rather than a chat.
+  2. **The tab glyph misses "input wanted".** Hayden wants: green whenever input from him is
+     required or preferred; the busy glyph as now; blank only when nothing is wanted and no
+     agents or subagents run. Today green fires only on `permission_prompt|elicitation_dialog`
+     (PR #74), so a turn ending with a plain-text ask stays idle. Evidence: lane
+     excluded-guard's 01:11:23 Stop asked him to add a settings line, and `@15` showed
+     `state=idle` (snapshot `~/scratch/lanes-ux/snapshot-2026-10-14.txt`). Design options to
+     weigh:
+     - every attended Stop with no running tasks is "your turn" (green), cleared on his next
+       prompt;
+     - classify the last reply with Haiku (the session-summary call already exists);
+     - an explicit end-of-turn marker the model writes.
+
+     Also check that subagent and background work keeps the busy glyph (`ring.log` already
+     logs `tasks=`). Files: `hooks/tmux-state.sh`, `hooks/session-pane.sh`,
+     `tmux/tmux-claude-status`, and the Notification matcher in settings.json; memory
+     `dotclaude-tmux-indicator`.
+  **Board at handoff (derive fresh with `lane ls`):**
+  - tab-bar's `fix/tab-bar-tests` is verified and holds the install. It waits for Hayden's
+    push approval (in its window), and it must first re-take the lead STATUS diff.
+  - excluded-guard is next after it. It waits for Hayden to add `"Bash(lane addr *)",` to
+    settings.json, then the lead's go to install.
+  - After each merge, reinstall from main (check `~/.tmux.conf`'s `source-file` lines too),
+    then `lane done`. Close `tab-bar` after its PR 2 merges (Hayden's ask).
+  - STATUS is far past its ceiling (about 330 lines): collapse the finished tracks to
+    pointers before adding more.
   **Message a lane at its messaging socket**: `uds:/run/user/1000/cc-socks/<pid>.sock`, the
   `messagingSocketPath` in `~/.claude/sessions/<pid>.json` of the session whose cwd is in the
   lane. Resolve it fresh before each send, since a pass makes a new pid. A ListAgents name
