@@ -91,16 +91,18 @@ GLYPH_ON = "#{?#{==:#{@claude_state},busy},1,#{?#{==:#{@claude_state},wait},1,0}
 #   modifier's argument is format-expanded twice (format_build_modifiers, then format_sub's
 #   caller), where `##` would collapse to `#` and then to nothing; `#]` passes through as is.
 # - then the prefix Claude's titles carry: `✳ ` idle, a braille spinner frame (U+2800-28FF)
-#   busy, then `repo · ` (hooks/session-title.sh). The server's locale decides whether regcomp
-#   sees bytes or characters, so the sets are ASCII: 1 to 3 non-space characters cover a 3-byte
-#   glyph either way, and the `·` is a literal, which matches as its bytes or as one character
-#   (a title with no glyph whose first word is that short, then a word and ` · `, loses both
-#   words). The bound is repeated `?`, not `{1,3}`: a bare } ends the enclosing #{...} early.
-#   The match runs to the end and keeps \2, so tmux's global replace can't strip a second ` · `.
-#   \2 must be non-empty: tmux draws an empty group's reference as a literal "2", so a bare
-#   prefix (`repo · `) is left whole.
+#   busy, then the repo: `repo · ` (hooks/session-title.sh), or `[repo] ` from before it, which
+#   a session keeps until its next prompt (an idle or restored tab, indefinitely). The server's
+#   locale decides whether regcomp sees bytes or characters, so the sets are ASCII: 1 to 3
+#   non-space, non-[ characters cover a 3-byte glyph either way, and the `·` is a literal, which
+#   matches as its bytes or as one character (a title with no glyph whose first word is that
+#   short, then a [bracket] or a word and ` · `, loses both). The bound is repeated `?`, not
+#   `{1,3}`: a bare } ends the enclosing #{...} early. The match runs to the end and keeps \3,
+#   so tmux's global replace can't strip a second prefix. \3 must be non-empty: tmux draws an
+#   empty group's reference as a literal "3", so a bare prefix (`repo · `) is left whole.
 BODY = ("#{?@tab_name,#{@tab_name} ,}"
-        "#{?pane_title,#{s/[#]/♯/;s/^([^ ][^ ]?[^ ]? )?[^ ]+ · (.+)$/\\2/:pane_title},"
+        "#{?pane_title,#{s/[#]/♯/;s/^([^ [][^ []?[^ []? )?(\\[[^]]*\\]|[^ []+ ·) (.+)$/\\3/"
+        ":pane_title},"
         "#{s/[#]/♯/:pane_current_command}}")
 
 SESSION_FMT = ("#{session_id}\t#{status}\t#{status-left-length}\t#{status-right-length}"
