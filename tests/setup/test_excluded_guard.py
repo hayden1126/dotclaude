@@ -868,8 +868,10 @@ class RulesNaming(Guard):
         lane = self.mkdir("home", "lanes", "chart-fix")
         inside = ["Edit(~/lanes/chart-fix/.githooks/**)", f"Edit(/{lane}/tools/*.sh)",
                   f"Edit(/{lane})", "Edit(~/lanes/chart-fix/[ab]/**)"]
+        # A glob mid-name widens to the parent: it covers sibling lanes too, so it stays.
         outside = ["Edit(~/lanes/**)", "Edit(~/lanes/chart-fix2/**)", "Read(~/lanes/chart-fix/**)",
-                   "Edit(~/lanes/*/x/**)", 7]
+                   "Edit(~/lanes/*/x/**)", "Edit(~/lanes/chart-fix*/**)",
+                   "Edit(~/lanes/chart-fix[0-9]/**)", "Edit(~/la*/chart-fix/**)", 7]
         machine = self.write(os.path.join(self.home, ".claude", "settings.machine.json"),
                              json.dumps({"permissions": {"deny": inside[:2] + outside}}))
         managed = self.write(os.path.join(self.tmp, "managed", "managed-settings.d", "a.json"),
@@ -949,10 +951,64 @@ class Session(Guard):
         del self.env["CLAUDE_CODE_SESSION_ATTENDED"]
         self.assertIsNotNone(self.start())
 
-    def test_an_unreadable_settings_file_is_no_finding(self):
+    def test_an_unreadable_project_settings_file_is_no_finding(self):
         # The guard then judges more calls as candidates; it refuses none for that alone.
         self.mkdir("proj", ".claude", "settings.json")
         self.assertIsNone(self.start())
+
+    def test_an_unreadable_user_settings_file_is_named(self):
+        # It takes its deny rules with it, so the guard may refuse what they would clear.
+        self.write(os.path.join(self.home, ".claude", "settings.json"), "{not json")
+        self.assertIn("settings not read", self.start()["systemMessage"])
+
+    def test_each_path_shows_once_however_tabs_alternate(self):
+        w2 = self.make_bin("wbin2", protect=False)
+        for path, shows in ((self.wbin, True), (w2, True), (self.wbin, False), (w2, False)):
+            with self.subTest(path=path):
+                self.env["PATH"] = f"{path}:/usr/bin"
+                out = self.start()
+                self.assertEqual(out is not None, shows, out)
+
+    def test_what_a_projects_own_settings_add_is_its_own(self):
+        # A head only proj's settings exclude runs through a writable interpreter: proj shows
+        # it, the lane doesn't, and alternating starts show nothing again.
+        interp = self.write(os.path.join(self.mkdir("wint"), "interp"), MARKER, 0o755)
+        self.write(os.path.join(self.bin, "mytool"), f"#!{interp}\n", 0o755)
+        self.write(os.path.join(self.proj, ".claude", "settings.json"),
+                   json.dumps({"sandbox": {"excludedCommands": ["mytool *"]}}))
+        self.assertIn(os.path.dirname(interp), self.start()["systemMessage"])
+        for project in (self.lane, self.proj, self.lane):
+            with self.subTest(project=project):
+                self.assertIsNone(self.start(project))
+
+    def test_racing_starts_show_a_finding_once(self):
+        self.env["PATH"] = f"{self.wbin}:/usr/bin"
+        event = json.dumps({"session_id": "s1", "hook_event_name": "SessionStart",
+                            "cwd": self.proj})
+        procs = [subprocess.Popen(["bash", SESSION_HOOK], stdin=subprocess.PIPE,
+                                  stdout=subprocess.PIPE, text=True, env=self.env, cwd=self.proj)
+                 for _ in range(4)]
+        outs = [p.communicate(event, timeout=30)[0] for p in procs]
+        self.assertEqual(sum(bool(o.strip()) for o in outs), 1, outs)
+
+    def test_a_stuck_state_lock_still_shows(self):
+        import fcntl
+        self.env["PATH"] = f"{self.wbin}:/usr/bin"
+        lock = os.path.join(self.mkdir("state", "dotclaude"), "excluded-check.json.lock")
+        with open(lock, "a") as f:
+            fcntl.flock(f, fcntl.LOCK_EX)
+            self.assertIsNotNone(self.start())
+        self.assertIn("lock busy", self.log())
+
+    def test_a_fifo_interpreter_never_hangs_it(self):
+        # Judging on past the writable dir reaches the file it holds; a FIFO must not block.
+        fifo = os.path.join(self.mkdir("wfifo"), "interp")
+        os.mkfifo(fifo)
+        self.write(os.path.join(self.wbin, "git"), f"#!{fifo}\n", 0o755)
+        self.env["PATH"] = f"{self.wbin}:/usr/bin"
+        msg = self.start()["systemMessage"]
+        for d in (self.wbin, os.path.dirname(fifo)):
+            self.assertIn(f"Edit(/{d}/**)", msg)
 
     def test_a_refusal_with_no_rule_is_shown_by_its_reason(self):
         self.env["PATH"] = f":{self.bin}:/usr/bin"

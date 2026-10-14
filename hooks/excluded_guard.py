@@ -49,6 +49,8 @@ Fails closed for candidates: any error while matching makes the call a candidate
 while checking one refuses it. A non-candidate exits silently. An unreadable payload raises, so
 the shim's head-word fallback decides. Denies go to $XDG_STATE_HOME/dotclaude/excluded-guard.log.
 """
+import contextlib
+import fcntl
 import glob
 import hashlib
 import json
@@ -277,9 +279,16 @@ class Machine:
         self.memo = {}
 
     def protect(self, d):
-        """Judge on as if `d` were protected: all_refusals puts a refusal's fix in place."""
+        """Judge on as if `d` were protected: all_refusals puts a refusal's fix in place. More
+        protection only clears verdicts, so only those whose exposed path `d` covers go."""
         self.deny.append(d)
-        self.memo.clear()
+
+        def covered(verdict):
+            bad = verdict if isinstance(verdict, str) else (
+                verdict[1] if isinstance(verdict, tuple) and verdict[0] == "bad" else None)
+            return bad is not None and (under(bad, d) or under(os.path.realpath(bad), d))
+
+        self.memo = {k: v for k, v in self.memo.items() if not covered(v)}
 
     def resolved(self, p):
         """Realpath, but a symlink itself stays itself (it can be replaced by its dir's owner)."""
@@ -595,7 +604,11 @@ def check_file(m, path, path_var, label, depth):
                       "interpreters; could not verify it.")
     p = m.chain(path, "rule2", lambda bad: path_refusal(label, bad, m))
     try:
-        with open(p, "rb") as f:
+        # Never waiting on a FIFO: judging on past a refusal reaches files in writable dirs.
+        fd = os.open(p, os.O_RDONLY | os.O_NONBLOCK)
+        with os.fdopen(fd, "rb") as f:
+            if not stat.S_ISREG(os.fstat(f.fileno()).st_mode):
+                return  # no regular file: it can't run as a script
             line = f.readline(512)
     except OSError:
         return  # unreadable: it can't run as a script
@@ -695,7 +708,8 @@ def path_refusals(m, heads, path_var):
     for head in heads:
         refusals, error = all_refusals(lambda m, head=head: check_rule2(m, head, ":".join(entries)),
                                        m, entries)
-        found += refusals
+        # One that can't be cleared stops every head at the same place: list it once.
+        found += [r for r in refusals if (r.rule, r.path) not in {(f.rule, f.path) for f in found}]
         if error:
             errors.append(error)
     return found, errors
@@ -705,8 +719,8 @@ def excluded_heads(settings):
     return sorted({first_word(normalize(p)) for p in settings["excludedCommands"]} - {""})
 
 
-# An Edit rule's path, read looser than EDIT_RULE: its glob tail is cut, since a rule over a
-# removed dir names nothing whatever its form.
+# An Edit rule's path, read looser than EDIT_RULE: its glob tail is cut back to a whole dir,
+# since a rule over a removed dir names nothing whatever its form.
 EDIT_ANY = re.compile(r"Edit\((//|~/)([^)]*)\)")
 
 
@@ -738,7 +752,11 @@ def rules_naming(path, env):
             m = EDIT_ANY.fullmatch(rule) if isinstance(rule, str) else None
             if not m:
                 continue
-            literal = re.split(r"[*?\[]", m.group(2), maxsplit=1)[0]
+            # The literal dirs before the first glob. A glob mid-name (`lanes/x*/**`) widens to
+            # its parent dir, which covers sibling lanes too, so such a rule never reads as inside.
+            rest = m.group(2)
+            g = re.search(r"[*?\[]", rest)
+            literal = rest[:rest.rfind("/", 0, g.start()) + 1] if g else rest
             d = os.path.normpath(("/" if m.group(1) == "//" else home.rstrip("/") + "/")
                                  + literal)
             if any(under(p, t) for p in (d, os.path.realpath(d)) for t in targets):
@@ -928,6 +946,7 @@ def run_scan(roots):
 
 SESSION_STATE = "excluded-check.json"
 MACHINE_KEY = "machine"
+MACHINE_KEYS = 8  # PATH keys kept: one per PATH a tab started with
 
 
 def finding(r):
@@ -936,23 +955,36 @@ def finding(r):
 
 def session_findings(env, project):
     """{key: [line]}: what the live guard would refuse an excluded call from the project's root
-    (rule 3 aside: only a call's cwd decides it). MACHINE_KEY holds what every session shares,
-    PATH, so it shows once across projects and lanes. The git config is
-    keyed by the project's path: its repo names its own includes and hooks dir, and each
-    worktree has its own."""
+    (rule 3 aside: only a call's cwd decides it). PATH judged with the machine-wide settings
+    alone is what every session shares: keyed MACHINE_KEY plus the PATH's hash, it shows once
+    across projects and lanes, and a tab with another PATH gets its own key. What the project's
+    own settings add to that (heads, write roots) and its git config are keyed by the project's
+    path: its repo names its own includes and hooks dir, and each worktree has its own."""
+    shared_env = {k: v for k, v in env.items() if k != "CLAUDE_PROJECT_DIR"}
     env = dict(env, CLAUDE_PROJECT_DIR=project)
-    # An unread settings file makes the guard judge more calls, not refuse them: not a finding.
+    path_var = env.get("PATH", "")
+    shared, unread = load_settings(shared_env)
     settings, _ = load_settings(env)
-    refusals, path_errors = path_refusals(Machine(env, settings, project),
-                                          excluded_heads(settings), env.get("PATH", ""))
-    machine = [finding(r) for r in refusals]
-    machine += [f"PATH: could not check ({type(e).__name__}: {e})" for e in path_errors]
+
+    def path_lines(s):
+        refusals, errors = path_refusals(Machine(env, s, project), excluded_heads(s), path_var)
+        return [finding(r) for r in refusals] + [
+            f"PATH: could not check ({type(e).__name__}: {e})" for e in errors]
+
+    # An unread project file only widens what the guard judges. An unread user or managed file
+    # also takes its deny rules with it, so the guard may refuse what they would clear.
+    machine = [f"settings not read: {e}: the guard misses its rules and patterns" for e in unread]
+    machine += path_lines(shared)
+    mine = []
+    if any(settings[k] != shared[k] for k in ("excludedCommands", "allowWrite")):
+        mine += [line for line in path_lines(settings) if line not in machine]
     refusals, error = all_refusals(lambda m: check_rule1(m, env, project, project),
                                    Machine(env, settings, project))
-    mine = [finding(r) for r in refusals]
+    mine += [finding(r) for r in refusals]
     if error:
         mine.append(f"its git config: could not check ({type(error).__name__}: {error})")
-    return {MACHINE_KEY: machine, project: mine}
+    key = f"{MACHINE_KEY}:{hashlib.sha256(path_var.encode()).hexdigest()[:16]}"
+    return {key: machine, project: mine}
 
 
 def unseen(findings):
@@ -963,41 +995,76 @@ def unseen(findings):
     d = os.path.join(os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state"),
                      "dotclaude")
     path = os.path.join(d, SESSION_STATE)
-    try:
-        with open(path) as f:
-            seen = json.load(f)
-        if not isinstance(seen, dict):
-            seen = {}
-    except FileNotFoundError:
-        seen = {}
-    except (OSError, ValueError) as e:
-        log(f"excluded-check state not read ({type(e).__name__}: {e})")
-        seen = {}
-    out = {}
-    for key, lines in findings.items():
-        digest = hashlib.sha256(json.dumps(sorted(lines)).encode()).hexdigest()
-        if lines and seen.get(key) != digest:
-            out[key] = lines
-        seen[key] = digest
-    # A closed lane's key goes with its dir, so the file stays as small as the live projects.
-    seen = {k: v for k, v in seen.items() if k == MACHINE_KEY or os.path.isdir(k)}
-    tmp = f"{path}.{os.getpid()}.tmp"
-    try:
-        os.makedirs(d, exist_ok=True)
-        with open(tmp, "w") as f:
-            json.dump(seen, f)
-        os.replace(tmp, path)
-    except OSError as e:
-        log(f"excluded-check state not written ({type(e).__name__}: {e})")
+    # Starts that race (a tmux restore resumes every tab) take turns, so one shows a finding.
+    with state_lock(path + ".lock"):
         try:
-            os.unlink(tmp)
-        except OSError:
-            pass
+            with open(path) as f:
+                seen = json.load(f)
+            if not isinstance(seen, dict):
+                seen = {}
+        except FileNotFoundError:
+            seen = {}
+        except (OSError, ValueError) as e:
+            log(f"excluded-check state not read ({type(e).__name__}: {e})")
+            seen = {}
+        out = {}
+        for key, lines in findings.items():
+            digest = hashlib.sha256(json.dumps(sorted(lines)).encode()).hexdigest()
+            if lines and seen.get(key) != digest:
+                out[key] = lines
+            seen.pop(key, None)
+            seen[key] = digest  # last, so the newest keys stay
+        # A closed lane's key goes with its dir and a PATH key past the newest few with its
+        # tab, so the file stays small.
+        paths = [k for k in seen if k.startswith(MACHINE_KEY + ":")]
+        keep = set(paths[-MACHINE_KEYS:])
+        seen = {k: v for k, v in seen.items()
+                if k in keep or (k not in paths and os.path.isdir(k))}
+        tmp = f"{path}.{os.getpid()}.tmp"
+        try:
+            os.makedirs(d, exist_ok=True)
+            with open(tmp, "w") as f:
+                json.dump(seen, f)
+            os.replace(tmp, path)
+        except OSError as e:
+            log(f"excluded-check state not written ({type(e).__name__}: {e})")
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
     return out
 
 
+@contextlib.contextmanager
+def state_lock(path, wait=2.0):
+    """An flock on `path` for up to `wait` seconds; past that, or when it can't be taken at all,
+    on without it (a finding then may show twice, never not at all)."""
+    f = None
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        f = open(path, "a")
+        end = time.monotonic() + wait
+        while True:
+            try:
+                fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() > end:
+                    log("excluded-check state lock busy: going on without it")
+                    break
+                time.sleep(0.05)
+    except OSError as e:
+        log(f"excluded-check state lock not taken ({type(e).__name__}: {e})")
+    try:
+        yield
+    finally:
+        if f:
+            f.close()
+
+
 def session_message(shown):
-    lines = [line for key in sorted(shown, key=lambda k: k != MACHINE_KEY) for line in shown[key]]
+    lines = [line for key in sorted(shown, key=lambda k: not k.startswith(MACHINE_KEY + ":"))
+             for line in shown[key]]
     screen = ("excluded-guard: an excluded command (git push, gh, lane and the rest of "
               "sandbox.excludedCommands) from this session would be refused:\n"
               + "\n".join(f"  {line}" for line in lines)

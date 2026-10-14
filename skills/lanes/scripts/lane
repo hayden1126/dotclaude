@@ -225,14 +225,11 @@ def base_ref(cfg: dict) -> str:
     return base if base.startswith("refs/") else f"refs/remotes/{base}"
 
 
-def fetched_base(repo: Repo, cfg: dict) -> str:
-    """The commit the remote's base branch is at now, fetched. `new` branches only from this:
-    sandboxed Bash can write every local ref, so neither a failed fetch's fallback to the local
-    remote-tracking ref nor a ref rewritten after the fetch may choose the commit a lane's
-    setup then runs on, sandbox-off."""
+def base_parts(repo: Repo, cfg: dict) -> tuple[str, str]:
+    """(remote, branch) of the config's base, by the longest remote name that prefixes it: a
+    remote's name may hold a '/' (my/fork)."""
     ref = base_ref(cfg)
     rest = ref.removeprefix("refs/remotes/")
-    # The longest remote name that prefixes it: a remote's name may hold a '/' (my/fork).
     remotes = git(["remote"], repo.toplevel).stdout.split()
     remote = max((r for r in remotes if rest.startswith(r + "/")), key=len, default="")
     branch = rest[len(remote) + 1:] if remote else ""
@@ -240,6 +237,16 @@ def fetched_base(repo: Repo, cfg: dict) -> str:
         raise LaneError(f"the config's base {cfg.get('base')!r} must be <remote>/<branch> for a "
                         f"remote this repo has (a lane branches from the remote's commit): fix it "
                         f"in {repo.config_path}")
+    return remote, branch
+
+
+def fetched_base(repo: Repo, cfg: dict) -> str:
+    """The commit the remote's base branch is at now, fetched. `new` branches only from this:
+    sandboxed Bash can write every local ref, so neither a failed fetch's fallback to the local
+    remote-tracking ref nor a ref rewritten after the fetch may choose the commit a lane's
+    setup then runs on, sandbox-off."""
+    remote, branch = base_parts(repo, cfg)
+
     def failed(what, p):
         line = (p.stderr.strip().splitlines() or ["unknown error"])[-1]
         return LaneError(f"{what} failed ({line}): a lane branches only from a freshly fetched "
@@ -297,6 +304,11 @@ def lane_head(lane: dict, heads: dict[str, tuple[str, str]]) -> tuple[str, str]:
         branch, sha = heads[path]
         return (branch, f"refs/heads/{branch}") if branch else ("", sha)
     return lane["branch"], f"refs/heads/{lane['branch']}"
+
+
+def branch_label(branch: str, ref: str) -> str:
+    """lane_head's branch as `ls` and `whoami` show it."""
+    return branch or f"(detached {ref[:12]})"
 
 
 def check_id(lane_id: str) -> None:
@@ -657,7 +669,7 @@ def finish(repo: Repo, lane: dict) -> None:
         lane = lanelib.update_lane(repo, lane["id"], mark_active)
     say(f"finished lane {lane['id']}: branch {lane['branch']}, port {lane['port'] or 'none'}")
     say(f"  record {lanelib.record_path(lane)}")
-    check_worktree(lane, seed_ask=False)
+    check_worktree(lane, seed_ask=True)  # `open` refuses a setup-failed lane: no session yet
 
 
 def cmd_adopt(args) -> None:
@@ -735,38 +747,31 @@ def pr_states(repo: Repo) -> dict[str, str] | None:
     return out
 
 
+def hook_module(name: str):
+    """A module in hooks/, found from this script's real path, or None."""
+    if HOOKS not in sys.path:
+        sys.path.insert(0, HOOKS)
+    try:
+        return importlib.import_module(name)
+    except Exception:
+        return None
+
+
 def autopass_state():
-    """hooks/autopass_state (the tiers, the ctx files), found from this script's real path, or
-    None: the board's CTX is then unknown."""
-    if HOOKS not in sys.path:
-        sys.path.insert(0, HOOKS)
-    try:
-        import autopass_state as mod
-    except Exception:
-        return None
-    return mod
-
-
-def excluded_guard():
-    """hooks/excluded_guard (the excluded-command guard), found from this script's real path, or
-    None: `new` and `done` then say they couldn't check."""
-    if HOOKS not in sys.path:
-        sys.path.insert(0, HOOKS)
-    try:
-        import excluded_guard as mod
-    except Exception:
-        return None
-    return mod
+    """hooks/autopass_state (the tiers, the ctx files), or None: the board's CTX is then
+    unknown."""
+    return hook_module("autopass_state")
 
 
 def check_worktree(lane: dict, seed_ask: bool) -> None:
-    """What the excluded-command guard would refuse an excluded call (git push, gh, lane) from
-    the lane's own session, each dir with the Edit deny rule that protects it. A repo whose setup
-    sets a relative core.hooksPath gives every worktree its own hooks dir, and the guard reads no
-    glob, so each lane needs a rule of its own. `new` also seeds the ask into the record it just
-    wrote, before any session; `adopt` only warns, as the record is the lane's to write. Advisory:
-    it never fails the lane."""
-    guard = excluded_guard()
+    """What the excluded-command guard (hooks/excluded_guard) would refuse an excluded call (git
+    push, gh, lane) from the lane's own session, each dir with the Edit deny rule that protects
+    it. A repo whose setup sets a relative core.hooksPath gives every worktree its own hooks dir,
+    and the guard reads no glob, so each lane needs a rule of its own. `new`, and `adopt`
+    finishing a lane `new` left setup-failed (which `open` refuses), also seed the ask into the
+    record `new` wrote, before any session; adopting another worktree only warns, as its record
+    is the lane's to write. Advisory: it never fails the lane."""
+    guard = hook_module("excluded_guard")
     try:
         if guard is None:
             raise ImportError(f"no excluded_guard in {HOOKS}")
@@ -795,29 +800,45 @@ def check_worktree(lane: dict, seed_ask: bool) -> None:
 
 
 def seed_line(lane: dict, heading: str, line: str) -> bool:
-    """Add `line` under `heading` (after its comment) in the record `new` just seeded. Read
-    without following a link and replaced whole, never written through one: the setup ran in
-    the lane in between. False when the record or heading isn't there as seeded."""
-    if lanelib.record_is_link(lane):
-        return False
-    path = lanelib.record_path(lane)
-    data = lanelib.read_head(path, RECORD_READ)
-    if data is None:
-        return False
-    text = data.decode(errors="replace")
-    m = re.search(rf"^{re.escape(heading)}\n(<!--.*?-->\n)?", text, re.M | re.S)
-    if not m:
-        return False
+    """Add `line` under `heading` (after its comment) in the record `new` seeded. The setup ran
+    in the lane in between, so every step goes through one fd of the real .lane dir, opened
+    without following a link: the record is read without following one, as a regular file under
+    the read limit, and replaced whole. False when it isn't there as seeded."""
     try:
-        lanelib.write_text(path, text[:m.end()] + line + "\n" + text[m.end():])
+        d = os.open(lanelib.record_dir(lane), os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     except OSError:
         return False
-    return True
+    tmp = f".tmp-seed-{os.getpid()}"
+    try:
+        fd = os.open("STATUS.md", os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW, dir_fd=d)
+        with os.fdopen(fd, "rb") as f:
+            if not stat.S_ISREG(os.fstat(f.fileno()).st_mode):
+                return False
+            data = f.read(RECORD_READ + 1)
+        if len(data) > RECORD_READ:  # rewriting a cut read would lose the rest
+            return False
+        text = data.decode(errors="replace")
+        m = re.search(rf"^{re.escape(heading)}\n(<!--.*?-->\n)?", text, re.M | re.S)
+        if not m:
+            return False
+        out = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644, dir_fd=d)
+        with os.fdopen(out, "w") as f:
+            f.write(text[:m.end()] + line + "\n" + text[m.end():])
+        os.replace(tmp, "STATUS.md", src_dir_fd=d, dst_dir_fd=d)
+        return True
+    except OSError:
+        try:
+            os.unlink(tmp, dir_fd=d)
+        except OSError:
+            pass
+        return False
+    finally:
+        os.close(d)
 
 
 def orphaned_rules(lane_id: str, path: str) -> None:
     """After a close: the Edit deny rules that named paths in the removed worktree."""
-    guard = excluded_guard()
+    guard = hook_module("excluded_guard")
     try:
         if guard is None:
             raise ImportError(f"no excluded_guard in {HOOKS}")
@@ -906,9 +927,10 @@ def board(repo: Repo) -> list[dict]:
         path = os.path.realpath(lane["path"])
         stale = path not in trees or not os.path.isdir(path)
         branch, ref = lane_head(lane, trees)
-        row = dict(lane, branch=branch or f"(detached {ref[:12]})",
-                   registered_branch=lane["branch"], stale=stale, ahead=None, behind=None,
-                   pr=("?" if prs is None else prs.get(branch, "none") if branch else "none"))
+        # Detached (mid-rebase, say), the PR is still lane.json's branch's best guess.
+        row = dict(lane, branch=branch_label(branch, ref), registered_branch=lane["branch"],
+                   stale=stale, ahead=None, behind=None,
+                   pr="?" if prs is None else prs.get(branch or lane["branch"], "none"))
         counts = git(["rev-list", "--left-right", "--count", "--end-of-options",
                       f"{base}...{ref}"], repo.toplevel)
         if counts.returncode == 0:
@@ -1054,7 +1076,7 @@ def cmd_whoami(args) -> None:
             branch, ref = lane_head(lane, worktree_heads(repo))
         except (OSError, subprocess.SubprocessError):  # git can't list them: the stored name
             branch, ref = lane["branch"], ""
-        info.update(branch=branch or f"(detached {ref[:12]})", registered_branch=lane["branch"],
+        info.update(branch=branch_label(branch, ref), registered_branch=lane["branch"],
                     port=lane.get("port"), claims=lane.get("claims", []),
                     record=lanelib.record_path(lane))
     if args.json:
@@ -2265,20 +2287,42 @@ def cmd_done(args) -> None:
         sweep_open_sessions(path)
     archive = close_record(repo, lane, path, data_dir, state, how, present, heads.get(path))
     say(f"lane {args.id} closed ({how}); archived to {archive}")
+    delete_branches(repo, branches)
+    orphaned_rules(args.id, path)
+
+
+def delete_branches(repo: Repo, branches: list[str]) -> None:
+    """`git branch -d` each branch `done` judged, never the base's own local branch (a lane can
+    check it out) and never one another worktree has checked out (Hayden testing it, say)."""
     cfg = repo.config()
-    base_branch = cfg.get("base", "origin/main").removeprefix("refs/remotes/").split("/", 1)[-1]
+    try:
+        base_branch = base_parts(repo, cfg)[1]
+    except LaneError:  # a base no remote matches: keep any branch named like its tail
+        base_branch = base_ref(cfg).rsplit("/", 1)[-1]
+    try:
+        elsewhere = {b for b, _ in worktree_heads(repo).values() if b}
+    except (OSError, subprocess.SubprocessError):
+        elsewhere = set(branches)  # can't tell: keep them all
     for branch in branches:
-        if branch == base_branch:  # a lane that checked out the base's local branch
+        if branch == base_branch:
+            continue
+        if branch in elsewhere:
+            warn(f"branch {branch} kept: another worktree has it checked out")
             continue
         # With no upstream, -d judges against the main checkout's HEAD, which may not have
         # pulled the merge yet; the base as upstream makes it judge against what was merged.
+        # A branch -d keeps gets its own upstream back.
+        up = git(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "--end-of-options",
+                  f"{branch}@{{upstream}}"], repo.toplevel)
+        before = up.stdout.strip() if up.returncode == 0 else ""
         git(["branch", f"--set-upstream-to={base_ref(cfg)}", "--end-of-options", branch],
             repo.toplevel)
         p = git(["branch", "-d", "--end-of-options", branch], repo.toplevel)
         if p.returncode != 0:
+            git(["branch", f"--set-upstream-to={before}", "--end-of-options", branch] if before
+                else ["branch", "--unset-upstream", "--end-of-options", branch], repo.toplevel)
             warn(f"branch {branch} kept: {p.stderr.strip()} (a squash merge leaves it "
                  "unmerged to git; check, then delete it yourself)")
-    orphaned_rules(args.id, path)
 
 
 def parser() -> argparse.ArgumentParser:

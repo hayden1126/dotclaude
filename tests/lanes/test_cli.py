@@ -2031,6 +2031,47 @@ class SwitchedBranch(LanesRepo):
         self.lane("done", "chart-fix")
         self.assertIn("main", self.git("branch", "--list", "main"))
 
+    def test_the_base_branch_is_kept_on_a_remote_whose_name_holds_a_slash(self):
+        self.git("remote", "add", "my/fork", self.origin)
+        self.git("fetch", "-q", "my/fork")
+        (cfg,) = self.config_files()
+        text = self.read(cfg)
+        self.assertIn('base = "origin/main"\n', text)
+        self.write(cfg, text.replace('base = "origin/main"', 'base = "my/fork/main"'))
+        self.git("switch", "-q", "-c", "lead")
+        self.git("switch", "-q", "main", cwd=self.path)
+        self.lane("done", "chart-fix")
+        self.assertIn("main", self.git("branch", "--list", "main"))
+
+    def test_a_switch_to_a_fresh_branch_closes_once_the_first_is_merged(self):
+        self.git("switch", "-q", "-c", "chart-next", "chart-fix", cwd=self.path)
+        self.lane("done", "chart-fix")
+        self.assertEqual(self.git("branch", "--list", "chart-fix", "chart-next"), "")
+
+    def test_a_branch_checked_out_elsewhere_keeps_its_upstream(self):
+        # The lane switched away from chart-fix; the lead checks chart-fix out to test it.
+        self.git("push", "-q", "origin", "chart-more:main", cwd=self.path)
+        self.git("push", "-q", "origin", "chart-fix", cwd=self.path)
+        self.git("branch", "--set-upstream-to=origin/chart-fix", "chart-fix")
+        self.git("switch", "-q", "chart-fix")
+        p = self.run_lane("done", "chart-fix")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("branch chart-fix kept", p.stderr)
+        self.assertEqual(self.git("rev-parse", "--abbrev-ref", "chart-fix@{upstream}").strip(),
+                         "origin/chart-fix")
+        self.assertEqual(self.git("branch", "--list", "chart-more"), "")
+
+    def test_registered_branch_deleted_after_the_switch_judges_the_checked_out_one(self):
+        self.git("branch", "-D", "chart-fix")
+        self.assertIn("branch chart-more is not merged", self.run_lane("done", "chart-fix").stderr)
+        self.git("push", "-q", "origin", "chart-more:main", cwd=self.path)
+        self.lane("done", "chart-fix")
+        self.assertEqual(self.git("branch", "--list", "chart-more"), "")
+
+    def test_abandon_keeps_an_unmerged_switched_branch(self):
+        self.lane("done", "chart-fix", "--abandon")
+        self.assertIn("chart-more", self.git("branch", "--list", "chart-more"))
+
     def test_a_switch_during_the_close_refuses_it(self):
         # What `done` judged is what it removes: a switch after the judging stops the close.
         self.git("push", "-q", "origin", "chart-more:main", cwd=self.path)
@@ -2061,7 +2102,7 @@ class ExcludedGuardRules(LanesRepo):
     passes its excluded calls; `done` names the ones its removed worktree leaves behind."""
 
     def asks(self, lane_id):
-        text = self.read(self.record(lane_id))
+        text = self.read(os.path.join(self.lane_json(lane_id)["path"], ".lane", "STATUS.md"))
         return text[text.index("## Asks for Hayden"):text.index("## Not mine")]
 
     def test_new_names_the_rule_a_setup_made_hooks_dir_needs_and_seeds_the_ask(self):
@@ -2082,7 +2123,8 @@ class ExcludedGuardRules(LanesRepo):
         self.assertNotIn("excluded-guard", p.stderr)
         self.assertNotIn("Edit(", self.asks("chart-fix"))
 
-    def test_adopt_warns_but_leaves_the_record_to_the_lane(self):
+    def test_finishing_a_failed_setup_seeds_the_ask_too(self):
+        # `open` refuses a setup-failed lane, so its record is still the one `new` wrote.
         self.lane("init", "--setup", "git config core.hooksPath .githooks && test -f ready.flag")
         self.assertEqual(self.run_lane("new", "chart-fix").returncode, 1)
         path = self.lane_path("chart-fix")
@@ -2090,7 +2132,32 @@ class ExcludedGuardRules(LanesRepo):
         p = self.run_lane("adopt", path)
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertIn(f"Edit(/{path}/.githooks/**)", p.stderr)
-        self.assertNotIn("Edit(", self.asks("chart-fix"))
+        self.assertIn(f"Edit(/{path}/.githooks/**)", self.asks("chart-fix"))
+
+    def test_adopting_another_worktree_warns_but_leaves_its_record_to_the_lane(self):
+        path = os.path.join(self.tmp, "elsewhere", "docs-lane")
+        self.git("worktree", "add", "-q", "-b", "docs", path, "origin/main")
+        self.git("config", "core.hooksPath", ".githooks")
+        p = self.run_lane("adopt", path)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn(f"Edit(/{path}/.githooks/**)", p.stderr)
+        self.assertNotIn("Edit(", self.asks("docs-lane"))
+
+    def test_a_record_past_the_read_limit_is_never_rewritten(self):
+        lane_mod = load_lane_script()
+        self.lane("new", "chart-fix")
+        lane = self.lane_json("chart-fix")
+        big = self.read(self.record("chart-fix")) + "x" * lane_mod.RECORD_READ
+        self.write(self.record("chart-fix"), big)
+        self.assertFalse(lane_mod.seed_line(lane, "## Asks for Hayden", "- ask"))
+        self.assertEqual(self.read(self.record("chart-fix")), big)
+        # A .lane that is a link is never written through.
+        shutil.rmtree(os.path.join(self.lane_path("chart-fix"), ".lane"))
+        target = os.path.join(self.tmp, "elsewhere-record")
+        self.write(os.path.join(target, "STATUS.md"), "## Asks for Hayden\n")
+        os.symlink(target, os.path.join(self.lane_path("chart-fix"), ".lane"))
+        self.assertFalse(lane_mod.seed_line(lane, "## Asks for Hayden", "- ask"))
+        self.assertEqual(self.read(os.path.join(target, "STATUS.md")), "## Asks for Hayden\n")
 
     def test_done_names_the_deny_rules_its_worktree_leaves_behind(self):
         self.lane("new", "chart-fix")
