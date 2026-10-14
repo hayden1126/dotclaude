@@ -175,11 +175,9 @@ class Status(unittest.TestCase):
         self.run_status([self.session(tab, "/home/u/code/other"), self.bg()])
         self.assertEqual(self.tabs(), mapped("bg-1 %2 @2"))
         self.assertEqual(self.writes(), ["tmux set-option -w -t @2 @claude_state busy"])
-        # A fill hands the window over: no earlier Stop's reply check or dialog owner outlives
-        # it (hooks/session-pane.sh's glyph companions), in the same tmux call.
-        self.assertEqual(self.companions(), ["tmux set-option -uw -t @2 @claude_turn",
-                                             "tmux set-option -uw -t @2 @claude_wait_by"])
-        self.assertEqual(len([c for c in self.calls() if "set-option" in c]), 1)
+        # A busy or idle fill keeps the hooks' glyph companions: an owner's token or a Stop's
+        # pending reply check there may still be live.
+        self.assertEqual(self.companions(), [])
 
     def test_a_cwd_with_spaces_maps(self):
         self.pane("%2", "@2", "/home/u/my code/dna")
@@ -271,9 +269,13 @@ class Status(unittest.TestCase):
         self.run_status([self.bg(status="waiting")])
         self.assertEqual(self.tabs(), mapped("bg-1 %2 @7"))
         self.assertEqual(self.writes(), ["tmux set-option -w -t @7 @claude_state wait"])
-        # A filled wait has no known owner: the unowned token, which anyone's next event ends.
-        self.assertEqual(self.companions(), ["tmux set-option -uw -t @7 @claude_turn",
-                                             "tmux set-option -w -t @7 @claude_wait_by !note!"])
+        # A filled wait with no owner in the set gets the unowned token, which anyone's next
+        # event ends, in the same tmux call.
+        self.assertEqual(self.companions(), [
+            "tmux set-option -wF -t @7 @claude_wait_by "
+            "#{?#{@claude_wait_by},#{@claude_wait_by},!note!}"])
+        self.assertTrue([c for c in self.calls()
+                         if "-t @7 @claude_wait_by" in c and "-t @7 @claude_state wait" in c])
 
     def test_a_vanished_mapping_clears_its_window(self):
         self.pane("%2", "@2", DNA)

@@ -16,7 +16,8 @@
 # the rest of the glyph's events). It writes the window's turn token (the prompt_id and the
 # time), then busy while a counted task runs (the ring's rule below), else idle, and drops the
 # wait-set tokens (session-pane.sh) of the main session, of an unowned notice, and of any agent
-# whose task no longer runs (all are kept while a task that may host other agents runs).
+# whose task no longer runs (all are kept while a workflow runs: its agents have ids of their
+# own).
 # Then a detached child asks hooks/wants_input.py whether the reply wants the person. yes, or
 # an error (redundancy over silence), paints wait, but only while the window still holds this
 # Stop's token: any later main event clears it. A queued prompt that started a new turn (a

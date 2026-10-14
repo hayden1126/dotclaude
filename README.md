@@ -355,16 +355,17 @@ need nothing extra.
 - **tmux indicator**: the session's window shows busy (◐) while Claude works, waiting (✳) when
   it wants you, and nothing once it is done. `tmux-state.sh` marks it busy on a prompt or tool
   call, and waiting while a permission dialog or a question is open (not on `idle_prompt`). A
-  subagent's dialog keeps it waiting until that dialog is answered, and two dialogs open at once
-  keep it waiting until both are. At a Stop, `stop-ring.sh` marks it busy while an agent or shell
+  subagent's permission dialog keeps it waiting until that dialog is answered, and two dialogs
+  open at once keep it waiting until both are. A dialog no hook names an owner for (an MCP
+  server's form) keeps it waiting only until the next activity, anyone's. At a Stop, `stop-ring.sh` marks it busy while an agent or shell
   the session started still runs (the rule that keeps the ring quiet), else idle, then asks
   Haiku (`wants_input.py`) whether the reply wants you: a question, an approval, a step only you
   can do. A yes paints it waiting, usually within a second or two. A failed call paints it
   waiting too, so a broken check shows as green rather than as silence. The paint lands only if
   the main session did nothing newer since that Stop, and each verdict is a
-  `stop input=<yes|no|error> ... painted=<1|0|->` line in `ring.log` (`-` when nothing was
-  painted). Each check is one small
-  Haiku call on your subscription quota. A reply that leaves you a step for later ("run X when
+  `stop input=<yes|no|error> ... painted=<1|0|->` line in `ring.log` (`-` when it painted no
+  green: a no, or a queued prompt that started the next turn, `resumed=1`, which shows busy).
+  Each check is one small Haiku call on your subscription quota. A reply that leaves you a step for later ("run X when
   you're ready") often reads as a report and stays blank. A new, resumed or cleared session
   starts blank, and `claude -p` runs never set it. A
   background session has no pane of its own, so `tmux/tmux-claude-status` maps it by directory to

@@ -15,7 +15,8 @@
 # a call the auto-mode classifier approves) and names the subagent whose dialog it is; the
 # Notification 6 s later never names one (nor does an elicitation's, which has no
 # PermissionRequest), so it adds the unowned token "note": a permission prompt's only when
-# nothing holds the wait, an elicitation dialog's always. A subagent's own tool calls and its
+# nothing holds the wait, an elicitation dialog's always; so does a PermissionRequest from an
+# agent with no usable id (an agent_type alone). A subagent's own tool calls and its
 # SubagentStop remove its token: approve fires its PostToolUse, deny ends it. The main
 # session's events remove the main token and the Stop's turn token, so a classifier still
 # running for that Stop never paints over newer work. Anyone's event removes "note": an
@@ -70,7 +71,9 @@ case "$mode" in
     elif [ "$event" = Notification ]; then
       glyph_cmd set-option -wF -t "$pane" @claude_wait_by \
         "#{?#{@claude_wait_by},#{@claude_wait_by},!note!}"
-    elif [ -n "$agent" ] && [ "$agent" != - ]; then
+    elif [ "$agent" = - ]; then
+      glyph_add "$pane" note   # an agent with no usable id: its own events can't end an owner
+    elif [ -n "$agent" ]; then
       glyph_add "$pane" "agent-$agent"
     else
       glyph_add "$pane" main

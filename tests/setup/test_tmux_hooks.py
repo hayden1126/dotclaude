@@ -400,11 +400,15 @@ class Hooks(unittest.TestCase):
         self.assertEqual(self.glyph(), ("wait", "!agent-a1!"))
         self.run_hook("tmux-state.sh", TAB, {"hook_event_name": "PermissionRequest",
                                              "agent_type": "reviewer"}, args=("wait",))
-        self.assertEqual(self.glyph(), ("wait", "!agent-a1!!main!"))
+        # No id to own it by: the unowned token, which its own next event ends, not main.
+        self.assertEqual(self.glyph(), ("wait", "!agent-a1!!note!"))
+        self.run_hook("tmux-state.sh", TAB, {"hook_event_name": "PostToolUse",
+                                             "agent_type": "reviewer"}, args=("busy",))
+        self.assertEqual(self.glyph(), ("wait", "!agent-a1!"))
 
     def test_a_hostile_agent_id_never_reaches_a_format(self):
         self.dialog("a}#{@claude_state}")
-        self.assertEqual(self.glyph(), ("wait", "!main!"))
+        self.assertEqual(self.glyph(), ("wait", "!note!"))
 
     def test_session_start_resets_the_glyph(self):
         self.seed(claude_state="wait", claude_wait_by="!main!!agent-a1!", claude_turn="p/1")
@@ -537,8 +541,9 @@ class Hooks(unittest.TestCase):
                 self.transcript(self.DEQUEUE)
                 self.assertIn(" resumed=1 ms=4 painted=-", self.classified(len(self.input_log()) + 1))
                 self.assertEqual(self.glyph(), ("busy", ""))
-        # A main event after the Stop took the window: the dequeue's busy paint is refused.
-        self.env["STUB_INPUT_DELAY"] = "0.5"
+        # A main event after the Stop took the window: the dequeue's busy paint is refused. The
+        # verdict comes late enough that the dequeue is seen at its check under any load.
+        self.env["STUB_INPUT_DELAY"] = "3"
         path = self.transcript({"type": "assistant", "message": {"content": "y"}})
         count = len(self.input_log())
         self.stop("yes - 5", wait=False, transcript_path=path)
@@ -548,16 +553,22 @@ class Hooks(unittest.TestCase):
         self.assertIn("resumed=1", self.classified(count + 1))
         self.assertEqual(self.glyph(), ("wait", "!main!"))
 
-    def test_a_task_that_may_host_other_agents_keeps_every_dialog(self):
-        # A workflow's agents (and a teammate's, a dream's, a kind not known here) have ids no
-        # task lists: the Stop keeps every agent's token while one runs.
-        for kind in ("workflow", "teammate", "dream", "something new"):
+    def test_a_running_workflow_keeps_every_agents_dialog(self):
+        # A workflow's agents have ids no task lists: the Stop keeps every agent's token while
+        # one runs, and drops the stale ones at the first Stop without one.
+        self.dialog("w9")
+        self.stop(background_tasks=[{"id": "t1", "type": "workflow", "status": "running"}])
+        self.assertEqual(self.glyph(), ("wait", "!agent-w9!"))
+        self.stop()
+        self.assertEqual(self.glyph(), ("idle", ""))
+        # Any other kind keeps only its own id's token: a finished teammate lingers in the list,
+        # and keeping every token for it would hold a stale one green through all main work.
+        for kind in ("teammate", "dream", "something new", None):
             with self.subTest(kind=kind):
-                self.dialog("w9")
-                self.stop(background_tasks=[{"id": "t1", "type": kind, "status": "running"}])
-                self.assertEqual(self.glyph()[1], "!agent-w9!")
-                self.stop()  # nothing runs: the stale token goes
-                self.assertEqual(self.glyph(), ("idle", ""))
+                self.seed(claude_wait_by="!agent-x!")
+                self.stop(background_tasks=[{"id": "t1", "type": kind, "status": "running"}, 7])
+                self.event("UserPromptSubmit", "busy", prompt="next")
+                self.assertEqual(self.glyph(), ("busy", ""))
 
     def test_a_stop_keeps_a_running_subagents_dialog_green(self):
         # Probe 4b: a main Stop landed 0.1 s after a background subagent's dialog opened.
