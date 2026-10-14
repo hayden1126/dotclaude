@@ -79,7 +79,7 @@ handoff skill's own `gh pr ready` as an unrequested commit, so `test_settings.py
 that every `gh pr` or `gh run` step CLAUDE.md, a skill or an agent names has a rule. Also
 allowed, because the classifier once refused a CI watch with no reason given: the read-only
 `gh pr checks`, `view`, `list`, `status` and `diff`, and `gh run list`, `view` and `watch`.
-`lane ls`, `new`, `adopt`, `open` and `done` are allowed too, behind the excluded-command guard
+`lane ls`, `new`, `adopt`, `open`, `done` and `addr` are allowed too, behind the excluded-command guard
 (docs/lanes.md S3).
 Read-only git (`status`, `log`, `diff`, `show`, `rev-parse`; the classifier once refused one as an
 "unrequested commit") is allowed too, with the pipe filters `head`, `tail`, `wc` and `grep`, since
