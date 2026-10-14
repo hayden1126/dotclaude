@@ -109,7 +109,7 @@ PALETTE = (75, 179, 141, 114, 174, 110)   # header colours, by group order
 CUSTOM_COLOUR = 252     # every custom row's header, outside PALETTE
 ROW_NAME_CELLS = 16     # a custom row's name is cut to this many cells
 PLACE_MAX = 2048        # an @tab_place value, in bytes
-LOCK_WAIT = 2.0         # seconds a move waits for the layout lock, a record write for its own
+LOCK_WAIT = 2.0         # seconds a move waits for the layout lock, then once for the records lock
 RECORDS_LOCK = ".records.lock"   # in open-sessions, shared with hooks/session-registry.sh
 POS_MAX = 999
 CUSTOM_MAX = 9999       # custom row ids run 1..CUSTOM_MAX
@@ -1226,10 +1226,8 @@ def update_record(path: str, server: tuple, places: dict) -> None:
     """Set or drop `place` in one restore record when it names this server and one of the
     panes in `places` (pane id -> @tab_place, None: unset). A read-modify-write through an
     fsynced temp file and os.replace, skipped when the file changed meanwhile (the registry
-    rewrites or deletes it), so a record is never created or brought back. The compare and the
-    replace hold the records' lock (RECORDS_LOCK, which hooks/session-registry.sh takes for its
-    writes and deletes), so the registry can't delete or rewrite the file between them; a lock
-    not had within LOCK_WAIT is gone without (fail-open)."""
+    rewrites or deletes it), so a record is never created or brought back. update_records
+    holds the records' lock around it; the compare still covers a run that went without."""
     before = os.lstat(path)
     data = read_small(path, RECORD_MAX)
     if data is None:
@@ -1254,30 +1252,39 @@ def update_record(path: str, server: tuple, places: dict) -> None:
             json.dump(entry, f)
             f.flush()
             os.fsync(f.fileno())
-        lock = lock_within(os.path.join(os.path.dirname(path), RECORDS_LOCK), LOCK_WAIT)
         try:
-            try:
-                now = os.lstat(path)
-            except FileNotFoundError:
-                return                  # deleted meanwhile: never brought back
-            if (now.st_ino, now.st_mtime_ns, now.st_size) \
-                    == (before.st_ino, before.st_mtime_ns, before.st_size):
-                os.replace(tmp, path)
-        finally:
-            if lock is not None:
-                os.close(lock)
+            now = os.lstat(path)
+        except FileNotFoundError:
+            return                      # deleted meanwhile: never brought back
+        if (now.st_ino, now.st_mtime_ns, now.st_size) \
+                == (before.st_ino, before.st_mtime_ns, before.st_size):
+            os.replace(tmp, path)
     finally:
         if os.path.lexists(tmp):
             os.unlink(tmp)
 
 
 def update_records(server: tuple, places: dict) -> None:
-    """update_record for every restore record; one it can't read or write is skipped."""
-    for path in glob.glob(os.path.join(glob.escape(registry_dir()), "*.json")):
-        try:
-            update_record(path, server, places)
-        except (OSError, ValueError):
-            continue
+    """update_record for every restore record; one it can't read or write is skipped. All
+    under one hold of the records' lock (RECORDS_LOCK, which hooks/session-registry.sh and
+    tmux/claude-saved take for their writes and deletes), so none can delete or rewrite a
+    record between its read and its replace. A lock not had within LOCK_WAIT is gone without
+    (fail-open), once per move: a stalled holder costs a key move LOCK_WAIT here, not that for
+    each record."""
+    reg = registry_dir()
+    paths = glob.glob(os.path.join(glob.escape(reg), "*.json"))
+    if not paths:
+        return
+    lock = lock_within(os.path.join(reg, RECORDS_LOCK), LOCK_WAIT)
+    try:
+        for path in paths:
+            try:
+                update_record(path, server, places)
+            except (OSError, ValueError):
+                continue
+    finally:
+        if lock is not None:
+            os.close(lock)
 
 
 def apply(ctx: Context, changes: dict, base: str) -> None:

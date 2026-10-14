@@ -387,7 +387,8 @@ need nothing extra.
   hidden in `+N`, left and right step by number and up and down do nothing (the same without
   `tmux-tab-bar` installed). Those four keys never reach the program in a pane.
   Tabs can also be arranged by hand. Drag a tab onto another tab to put it before or after
-  that tab (by which half you let go on), or onto a row's left edge or empty end to make it that
+  that tab (by which half you let go on, unless only the other side keeps it on that line when
+  the row redraws), or onto a row's left edge or empty end to make it that
   row's first or last tab; a drag that ends over a pane does nothing (no copy mode). Ctrl-b then
   Shift+arrows carry the tab you are on: left and right within its row, up and down onto the row
   above or below (Shift+arrows go, Ctrl-b Shift+arrows carry, and each Shift+arrow within the

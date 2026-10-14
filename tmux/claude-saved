@@ -131,9 +131,10 @@ def remove(path):
 
 @contextlib.contextmanager
 def reg_lock():
-    """open-sessions/.records.lock, held around a registry write or delete here, as
-    session-registry.sh holds it: tmux-tab-bar compares and replaces a record's place under it,
-    so neither can fall between the other's steps. Waits up to 2 s, then goes ahead without."""
+    """open-sessions/.records.lock, held around a registry write or delete here (with what
+    decided it checked again inside), as session-registry.sh holds it, and as tmux-tab-bar
+    does around its read and replace of a record's place. Waits up to 2 s, then goes ahead
+    without."""
     fd = None
     try:
         fd = os.open(os.path.join(REG, ".records.lock"), os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW,
@@ -595,13 +596,23 @@ def op_track():
         if place is not None:
             rec["place"] = place
         with reg_lock():
+            # A Shelve since the check above saved the chat as shelved and deleted this entry
+            # (under the lock): writing it now would bring it back.
+            now = entry(sid)
+            if now and now["shelved"] and NOW - num(now.get("saved_at")) < SHELVED_GRACE:
+                keep.discard((sid, pane))
+                continue
             write(os.path.join(REG, sid + ".json"), rec)
+
+    def gone(e):
+        return (e and e.get("attach") is True and on_server(e, server)
+                and (e.get("session_id"), e.get("pane")) not in keep)
+
     for path in glob.glob(os.path.join(REG, "*.json")):
-        e = load(path)
-        if (e and e.get("attach") is True and on_server(e, server)
-                and (e.get("session_id"), e.get("pane")) not in keep):
+        if gone(load(path)):
             with reg_lock():
-                remove(path)
+                if gone(load(path)):    # the registry may have rewritten it meanwhile
+                    remove(path)
 
 def op_plan(sid):
     e = entry(sid)

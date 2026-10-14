@@ -2013,42 +2013,61 @@ class FakeTmux(unittest.TestCase):
         with open(os.path.join(reg, "mine.json")) as f:
             self.assertNotIn("place", json.load(f))
 
-    def test_a_record_deleted_before_the_replace_is_never_brought_back(self):
-        # The registry deletes a record (under the records lock) after the update read it: the
-        # update's compare and replace wait for the lock, then see it gone.
-        reg = os.path.join(self.tmp, "reg")
+    def records(self, n=1):
+        """n restore records on server ("/s", 1, 2), panes %1..%n, under a temp state dir;
+        their dir and the records' lock file, held."""
+        state = os.path.join(self.tmp, "state")
+        reg = os.path.join(state, "dotclaude", "open-sessions")
         os.makedirs(reg)
-        path = os.path.join(reg, "a.json")
-        with open(path, "w") as f:
-            json.dump({"socket": "/fake/sock", "server_start": 1700, "server_pid": 42,
-                       "pane": "%2"}, f)
+        for i in range(1, n + 1):
+            with open(os.path.join(reg, f"r{i}.json"), "w") as f:
+                json.dump({"socket": "/s", "server_start": 1, "server_pid": 2, "pane": f"%{i}"},
+                          f)
         fd = os.open(os.path.join(reg, tb.RECORDS_LOCK), os.O_RDWR | os.O_CREAT, 0o600)
         self.addCleanup(lambda: os.close(fd))
         fcntl.flock(fd, fcntl.LOCK_EX)
-        update = threading.Thread(target=tb.update_record,
-                                  args=(path, ("/fake/sock", 1700, 42), {"%2": '{"x":1}'}))
+        patch = unittest.mock.patch.dict(os.environ, {"XDG_STATE_HOME": state})
+        patch.start()
+        self.addCleanup(patch.stop)
+        return reg, fd
+
+    def test_records_update_under_the_lock_and_never_bring_one_back(self):
+        # The registry deletes a record (under the records lock) while a move waits for it:
+        # the move reads after it gets the lock, finds it gone and writes nothing back.
+        reg, fd = self.records()
+        update = threading.Thread(target=tb.update_records, args=(("/s", 1, 2), {"%1": "p"}))
         update.start()
-        deadline = time.time() + 5                      # its temp file: it is at the lock
-        while time.time() < deadline and not any(n.startswith(".tmp-") for n in os.listdir(reg)):
-            time.sleep(0.01)
-        os.remove(path)
+        time.sleep(0.3)
+        os.remove(os.path.join(reg, "r1.json"))
         fcntl.flock(fd, fcntl.LOCK_UN)
         update.join(10)
         self.assertEqual(os.listdir(reg), [tb.RECORDS_LOCK])   # not recreated, no temp left
 
-    def test_a_record_update_goes_ahead_past_the_lock_bound(self):
-        reg = os.path.join(self.tmp, "reg")
-        os.makedirs(reg)
-        path = os.path.join(reg, "a.json")
-        with open(path, "w") as f:
-            json.dump({"socket": "/s", "server_start": 1, "server_pid": 2, "pane": "%2"}, f)
-        fd = os.open(os.path.join(reg, tb.RECORDS_LOCK), os.O_RDWR | os.O_CREAT, 0o600)
-        self.addCleanup(lambda: os.close(fd))
-        fcntl.flock(fd, fcntl.LOCK_EX)
-        with unittest.mock.patch.object(tb, "LOCK_WAIT", 0.2):
-            tb.update_record(path, ("/s", 1, 2), {"%2": "p"})
-        with open(path) as f:
-            self.assertEqual(json.load(f)["place"], "p")
+    def test_a_record_changed_between_read_and_replace_is_left_alone(self):
+        # Without the lock (fail-open), update_record's compare still catches a delete.
+        reg, _ = self.records()
+        path = os.path.join(reg, "r1.json")
+        read = tb.read_small
+
+        def read_then_delete(p, limit):
+            data = read(p, limit)
+            os.remove(p)
+            return data
+
+        with unittest.mock.patch.object(tb, "read_small", read_then_delete):
+            tb.update_record(path, ("/s", 1, 2), {"%1": "p"})
+        self.assertEqual(os.listdir(reg), [tb.RECORDS_LOCK])
+
+    def test_records_update_goes_ahead_past_one_lock_wait(self):
+        # A stalled holder costs a move one LOCK_WAIT, not one per record.
+        reg, _ = self.records(3)
+        t = time.monotonic()
+        with unittest.mock.patch.object(tb, "LOCK_WAIT", 0.3):
+            tb.update_records(("/s", 1, 2), {"%1": "p", "%2": "p", "%3": None})
+        self.assertLess(time.monotonic() - t, 0.55)
+        for i, want in ((1, "p"), (2, "p"), (3, None)):
+            with open(os.path.join(reg, f"r{i}.json")) as f:
+                self.assertEqual(json.load(f).get("place"), want)
 
     def test_outside_tmux_nothing_runs(self):
         env = {k: v for k, v in self.env.items() if k != "TMUX"}

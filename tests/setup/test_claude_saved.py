@@ -942,6 +942,46 @@ class Saved(unittest.TestCase):
                 self.assertEqual(p.wait(timeout=10), 0)
                 self.assertEqual(self.reg_entry(1) is not None, want)
 
+    def track_waiting(self):
+        """track started while this test holds the records lock: (the process, the lock fd)."""
+        os.makedirs(self.reg, exist_ok=True)
+        fd = os.open(os.path.join(self.reg, ".records.lock"), os.O_RDWR | os.O_CREAT, 0o600)
+        self.addCleanup(os.close, fd)
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        p = subprocess.Popen(["bash", SCRIPT, "track"], stdin=subprocess.DEVNULL,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=self.env)
+        time.sleep(0.8)
+        return p, fd
+
+    def test_track_writes_nothing_back_after_a_shelve_it_waited_on(self):
+        # Review round 3: a Shelve that lands while track waits for the lock saved the chat as
+        # shelved and deleted its entry; track checks again under the lock.
+        self.background(1)
+        self.client("attach", sid(1)[:8])
+        self.track_panes(("%7", self.ppid, 3))
+        p, fd = self.track_waiting()
+        self.put(1, shelved=True, age=0)                # Shelve's save; its delete found none
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        self.assertEqual(p.wait(timeout=10), 0)
+        self.assertIsNone(self.reg_entry(1))
+
+    def test_track_keeps_a_record_the_registry_rewrote_while_it_waited(self):
+        # Review round 3: the sweep found a gone attach tab's entry, and while it waited for the
+        # lock the registry rewrote the file as a plain tab's record (the chat resumed in one).
+        self.background(1)
+        self.client("attach", sid(1)[:8])
+        self.track_panes(("%7", self.ppid, 3))
+        self.run_saved("track")
+        self.assertIs(self.reg_entry(1)["attach"], True)
+        self.track_panes(("%7", 1, 3))                  # the tab moved on: swept
+        p, fd = self.track_waiting()
+        rec = {k: v for k, v in self.reg_entry(1).items() if k not in ("attach", "job_id")}
+        with open(os.path.join(self.reg, sid(1) + ".json"), "w") as f:
+            json.dump({**rec, "pane": "%9"}, f)
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        self.assertEqual(p.wait(timeout=10), 0)
+        self.assertEqual(self.reg_entry(1)["pane"], "%9")
+
     def test_track_drops_an_attach_entry_whose_tab_moved_on(self):
         # The tab closed, or a /clear gave the job a new session id (sid 2 under job 1's id),
         # so the entry for what it showed goes. A tab's own entry and another server's stay.
