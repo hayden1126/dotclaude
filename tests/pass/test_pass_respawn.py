@@ -9,9 +9,10 @@ points HOME and XDG_STATE_HOME into a temp dir). Fakes stand in for everything l
   - the session file: load_session is wrapped so each read writes the next scripted status to
     $HOME/.claude/sessions/<pid>.json first (the last one repeats; the first is the call's own
     read), then reads it for real. When the status first turns idle (or shell), the wrapper writes
-    the stop record stop-ring.sh would (self.stop_waits; None writes none).
+    the stop record stop-ring.sh would (self.stop_waits; None writes none). A callable in the
+    script runs first and gives the status (Base.then: it appends to the transcript once).
   - /proc: proc_start is replaced, and a fake process table stands in for proc_table.
-  - the transcript: a file under the fake $HOME/.claude/projects.
+  - the transcript: a file under the fake $HOME/.claude/projects, which tests append to.
 handoff-check runs for real as a subprocess. Nothing reaches the live tmux server or the real
 ~/.claude."""
 import contextlib
@@ -55,6 +56,37 @@ URL = "https://claude.ai/artifact/8JLmWLDftm9VdGcLQnGr76"
 WATCH = {"label": "artifact watch", "id": "s31udgb0s", "url": URL,
          "description": f"live updates for artifact {URL} (auto-armed on publish)"}
 DEPLOY = {"label": "monitor", "id": "b0fzd27l4", "description": "deploy events"}
+AGENT = {"label": "subagent", "id": "a1b2c3d4", "description": "Write the notice hook"}
+
+# Transcript entries around a turn's end, as Claude Code 2.1.300 writes them (lane pass-timeout's
+# spike, .lane/artifacts/spike/status-and-transcript.log).
+END = {"type": "system", "subtype": "turn_duration", "durationMs": 1400, "isSidechain": False}
+STOP_ONLY = {"type": "system", "subtype": "stop_hook_summary", "isSidechain": False}
+INTERRUPT = {"type": "user", "isSidechain": False, "message": {"role": "user", "content": [
+    {"type": "text", "text": "[Request interrupted by user for tool use]"}]}}
+STARTS = {  # what starts a turn after the end
+    "a dequeued notice": {"type": "queue-operation", "operation": "dequeue"},
+    "a task notice": {"type": "user", "isSidechain": False, "origin": {"kind": "task-notification"},
+                      "message": {"role": "user", "content": "<task-notification>done"}},
+    "an agent's message": {"type": "user", "isSidechain": False, "isMeta": True,
+                           "origin": {"kind": "peer"},
+                           "message": {"role": "user", "content": "Another session sent this"}},
+    "an assistant entry": {"type": "assistant", "isSidechain": False,
+                           "message": {"content": [{"type": "text", "text": "ok"}]}},
+}
+AFTER_END = (  # the bookkeeping that follows a turn's end, none of it a new turn
+    {"type": "last-prompt", "lastPrompt": "x"}, {"type": "ai-title", "aiTitle": "Chart work"},
+    {"type": "mode", "mode": "normal"}, {"type": "permission-mode", "permissionMode": "default"},
+    {"type": "atis-latch"}, {"type": "file-history-snapshot"}, {"type": "api-request"},
+    {"type": "attachment", "attachment": {"type": "hook_success"}},
+    {"type": "system", "subtype": "away_summary"}, {"type": "file-history-delta"},
+    {"type": "queue-operation", "operation": "remove"}, {"type": "cost-state"},
+    {"type": "user", "isSidechain": False, "message": {"content": "Stop hook feedback:\nx"}})
+
+
+def hms(when):
+    """Epoch seconds as a notice's UTC clock time."""
+    return datetime.datetime.fromtimestamp(when, datetime.timezone.utc).strftime("%H:%M:%S")
 
 
 FAKE_TMUX = r"""#!/bin/sh
@@ -226,8 +258,26 @@ class Base(LanesRepo):
 
     def fake_load(self, pid):
         entry = self.script.pop(0) if len(self.script) > 1 else self.script[0]
+        if callable(entry):
+            entry = entry()
         self.write_session({"status": entry} if isinstance(entry, str) else entry)
         return self.real_load(pid)
+
+    def then(self, status, *entries, stop=None):
+        """A scripted read that first appends entries to the transcript (once, however often
+        the script repeats it) and, given stop, writes the stop record with those waits, as
+        Claude Code writes the turn's end before the session file changes. Then it reads
+        status."""
+        done = []
+
+        def read():
+            if not done:
+                done.append(True)
+                self.say(*entries)
+                if stop is not None:
+                    self.write_stop(stop)
+            return status
+        return read
 
     def reset(self, *script):
         """A fresh turn for another call in the same test: a new script, no stop yet."""
@@ -253,6 +303,18 @@ class Base(LanesRepo):
         with open(self.transcript(), "a") as f:
             for e in entries:
                 f.write((e if isinstance(e, str) else json.dumps(e)) + "\n")
+
+    def raw(self, text):
+        """Append text to the transcript as is: no newline, so a line can be left torn."""
+        with open(self.transcript(), "a") as f:
+            f.write(text)
+
+    def notice_file(self, sid=SID):
+        return os.path.join(self.state, "pass-notice", f"{sid}.json")
+
+    def notice(self):
+        with open(self.notice_file(), encoding="utf-8") as f:
+            return json.load(f)
 
     # --- running and reading -------------------------------------------------------------
 
@@ -1234,6 +1296,325 @@ class Plain(Base):
         self.commit("late.txt", "x")
         self.assertEqual(self.mod.wait_and_act(plan, table), "stale")
         self.assertDropped("stale", "handoff is stale")
+
+
+class Handed(Base):
+    """A checkout whose handoff passes, with no tests of its own (Plain's would run again)."""
+    PROMPT = Plain.PROMPT
+
+    def setUp(self):
+        super().setUp()
+        self.commit("STATUS.md", GOOD, msg="Handoff")
+
+
+class TurnEnd(Handed):
+    """The turn's end while delegated work runs. Claude Code 2.1.300's session file says `busy`
+    at the prompt while an agent, a teammate or a workflow runs (isLoading || delegatedActive),
+    so the transcript past the call says when the turn ended (the live timeouts of 70e81418 and
+    2ae29a58)."""
+
+    def compacts(self, *script, timeout="5"):
+        self.script = list(script)
+        return self.run_pass("--compact", "--foreground", "--timeout", timeout)
+
+    def test_busy_with_a_turn_end_past_the_call_is_at_the_prompt(self):
+        code, out = self.compacts("busy", self.then("busy", END))
+        self.assertEqual(code, 0, out)
+        self.assertEqual(len(self.calls("tmux", "send-keys")), 4)
+        self.assertIn("mode=compact outcome=compact", self.log())
+
+    def test_plain_with_an_agent_running_refuses_busy_naming_it(self):
+        # Not `timeout`: the turn's end lets the waiter reach the stop record, which names it.
+        self.stop_tasks = [AGENT]
+        self.script = ["busy", self.then("busy", END, stop=["subagent"])]
+        code, out = self.run_pass("--foreground", "--timeout", "5")
+        self.assertEqual(code, 1, out)
+        self.assertDropped("busy", 'waiting on subagent "Write the notice hook" (a1b2c3d4) (a '
+                           "respawn would kill it)")
+        self.assertIn('busy: waits: subagent "Write the notice hook" (a1b2c3d4)', self.log())
+        self.assertNotIn("outcome=timeout", self.log())
+
+    def test_a_turn_end_from_before_the_call_does_not_count(self):
+        self.say(END)
+        code, out = self.compacts("busy", timeout="0.3")
+        self.assertEqual(code, 1, out)
+        self.assertDropped("timeout", "pass dropped")
+
+    def test_a_stop_a_hook_blocked_is_no_turn_end(self):
+        # The spike: a blocked Stop writes stop_hook_summary and the hook's feedback, and
+        # turn_duration only at the real end.
+        blocked = ({"type": "attachment", "attachment": {"type": "hook_blocking_error"}},
+                   STOP_ONLY, {"type": "user", "isSidechain": False,
+                               "message": {"role": "user", "content": "Stop hook feedback:\nx"}},
+                   STARTS["an assistant entry"])
+        code, out = self.compacts("busy", self.then("busy", *blocked), timeout="0.3")
+        self.assertEqual(code, 1, out)
+        self.assertDropped("timeout", "pass dropped")
+
+    def test_an_interrupt_ends_the_turn(self):
+        code, out = self.compacts("busy", self.then("busy", INTERRUPT))
+        self.assertEqual(code, 0, out)
+        self.assertIn("mode=compact outcome=compact", self.log())
+
+    def test_a_turn_start_after_the_end_drops_resumed(self):
+        for name, start in STARTS.items():
+            for where, between in (("in the settle", ()), ("at the final re-check", ("busy",))):
+                with self.subTest(start=name, where=where):
+                    self.reset()
+                    code, out = self.compacts("busy", self.then("busy", END), *between,
+                                              self.then("busy", start))
+                    self.assertEqual(code, 1, out)
+                    self.assertDropped("resumed", "pass dropped")
+                    line = self.log().splitlines()[-1]
+                    self.assertIn("outcome=resumed a new turn in the transcript " + where, line)
+
+    def test_a_status_flip_with_no_turn_start_does_not_drop(self):
+        # The spike: an agent resuming after its shell ended flipped `shell` to `busy` with no
+        # transcript entry, so once the end is known only a start marker means a new turn.
+        code, out = self.compacts("busy", self.then("busy", END), "shell", "busy")
+        self.assertEqual(code, 0, out)
+        self.assertIn("mode=compact outcome=compact", self.log())
+
+    def test_bookkeeping_after_the_end_does_not_count(self):
+        code, out = self.compacts("busy", self.then("busy", END, *AFTER_END),
+                                  self.then("busy", *AFTER_END))
+        self.assertEqual(code, 0, out)
+        self.assertIn("mode=compact outcome=compact", self.log())
+
+    def test_sidechain_entries_do_not_count(self):
+        def side(entry):
+            return {**entry, "isSidechain": True}
+        code, out = self.compacts("busy", self.then("busy", side(END)), timeout="0.3")
+        self.assertEqual(code, 1, out)
+        self.assertDropped("timeout", "pass dropped")
+        self.reset()
+        code, out = self.compacts("busy", self.then("busy", END),
+                                  self.then("busy", *map(side, STARTS.values())))
+        self.assertEqual(code, 0, out)
+        self.assertIn("mode=compact outcome=compact", self.log())
+
+    def test_a_torn_last_line_is_read_once_complete(self):
+        line = json.dumps(END)
+        plan = self.plan("--compact")
+        self.raw(line[:15])
+        self.mod.scan_turns(plan)
+        self.assertFalse(self.mod.turn_over(plan))
+        self.assertEqual(plan.read_at, os.path.getsize(self.transcript()))  # read once
+        self.raw(line[15:] + "\n")
+        self.mod.scan_turns(plan)
+        self.assertTrue(self.mod.turn_over(plan))
+        self.assertEqual((plan.read_at, plan.torn), (os.path.getsize(self.transcript()), b""))
+        # The same across the waiter's polls.
+        self.reset()
+        code, out = self.compacts("busy", lambda: (self.raw(line[:15]), "busy")[1],
+                                  self.then("busy", line[15:]))
+        self.assertEqual(code, 0, out)
+        self.assertIn("mode=compact outcome=compact", self.log())
+
+
+class Notices(Handed):
+    """Every drop, and `partial`, leaves the session a notice at pass-notice/<sid>.json, which
+    hooks/pass-notice.sh injects into its next turn: tmux alone never reached the session."""
+
+    FIELDS = {"v", "session_id", "outcome", "mode", "called", "dropped", "text"}
+    READ_LOG = "Read pass.log, then run the pass skill again."
+
+    def loud(self, n, cause, fix):
+        return (f"[pass] The {n['mode']} pass you queued at {hms(n['called'])}Z was dropped at "
+                f"{hms(n['dropped'])}Z ({n['outcome']}): {cause}. No pass is pending now, so "
+                f"don't tell anyone one is queued. {fix} Tell Hayden in one line.")
+
+    def case_stale(self):
+        plan = self.plan()
+        late = os.path.join(self.main, "late.txt")
+        self.write(late, "x")
+        try:
+            self.assertEqual(self.mod.wait_and_act(plan, table), "stale")
+        finally:
+            os.remove(late)
+        gaps = re.findall(r"outcome=stale (.*)$", self.log(), re.M)[-1]
+        self.assertIn("late.txt", gaps)
+        return "stale", "plain", lambda n: self.loud(
+            n, f"the handoff went stale (work landed after it: {gaps})",
+            "Run the delta handoff and handoff-check, then run the pass skill again if it still "
+            "applies.")
+
+    def case_busy_at_the_stop(self):
+        self.stop_tasks = [DEPLOY]
+        code, out = self.run_pass("--foreground")
+        self.assertEqual(code, 1, out)
+        return "busy", "plain", lambda n: self.loud(
+            n, 'monitor "deploy events" (b0fzd27l4) running (a respawn would kill it). Stop it '
+               "(/tasks, or ask Claude to TaskStop it), or /pass compact keeps it",
+            f"Follow the pass skill's step 2 (pass-respawn -C {self.main} --tasks, then TaskStop "
+            "the leftovers) or pass in compact mode.")
+
+    def case_busy_in_the_pane(self):
+        os.environ["FAKE_TMUX_MODE"] = "1"
+        code, out = self.run_pass("--compact", "--foreground")
+        self.assertEqual(code, 1, out)
+        return "busy", "compact", lambda n: self.loud(
+            n, "pane in copy mode at the final check",
+            "Run the pass skill again once Hayden has cleared it.")
+
+    def case_timeout(self):
+        self.script = ["busy"]
+        code, out = self.run_pass("--compact", "--foreground", "--timeout", "0.3")
+        self.assertEqual(code, 1, out)
+        return "timeout", "compact", lambda n: self.loud(
+            n, "the turn didn't end within 0.3 s of the call",
+            "Make pass-respawn the turn's last action, then run the pass skill again.")
+
+    def case_failed(self):
+        os.environ["FAKE_TMUX_FAIL"] = "respawn-pane"
+        code, out = self.run_pass("--foreground")
+        self.assertEqual(code, 1, out)
+        return "failed", "plain", lambda n: self.loud(
+            n, "tmux could not respawn or type into the pane (can't find pane: %4)",
+            self.READ_LOG)
+
+    def case_error(self):
+        real = self.mod.tmux
+
+        def tmux(plan, *args):
+            if args[0] == "respawn-pane":
+                raise RuntimeError("boom")
+            return real(plan, *args)
+        self.mod.tmux = tmux
+        code, out = self.run_pass("--foreground")
+        self.assertEqual(code, 1, out)
+        return "error", "plain", lambda n: self.loud(
+            n, "the waiter hit an error (RuntimeError: boom)", self.READ_LOG)
+
+    def case_resumed(self):
+        plan = self.plan()
+        self.say(typed("wait, don't pass yet"))
+        self.assertEqual(self.mod.wait_and_act(plan, table), "resumed")
+        return "resumed", "plain", lambda n: (
+            f"[pass] The plain pass you queued at {hms(n['called'])}Z was dropped: a prompt "
+            "arrived after the call (a typed or queued prompt after the call). No pass is pending "
+            "now; run the pass skill again once this work is done, if it still applies.")
+
+    def case_gone(self):
+        os.environ["FAKE_TMUX_PANE"] = f"{PANE_SHELL} zsh"
+        self.assertEqual(self.mod.wait_and_act(self.plan("--compact"), table), "gone")
+        return "gone", "compact", lambda n: (
+            f"[pass] The compact pass you queued at {hms(n['called'])}Z was dropped: the pane or "
+            f"its claude changed (pane %4 runs zsh (pid {PANE_SHELL}), not claude {CLAUDE}). No "
+            "pass is pending now.")
+
+    def case_cancelled(self):
+        def term():
+            raise self.mod.Cancelled()  # as on_term raises it on --cancel's SIGTERM
+        self.script = ["busy", term]
+        code, out = self.run_pass("--foreground")
+        self.assertEqual(code, 1, out)
+        return "cancelled", "plain", lambda n: (
+            f"[pass] The plain pass you queued at {hms(n['called'])}Z was cancelled. No pass is "
+            "pending now.")
+
+    def case_partial(self):
+        checks = []
+
+        def pane_problem(plan):  # clear at the final re-check, a draft in the compact gap
+            checks.append(plan)
+            return None if len(checks) == 1 else "unsent draft in the input box"
+        self.mod.pane_problem = pane_problem
+        self.assertEqual(self.mod.wait_and_act(self.plan("--compact"), table), "partial")
+        prompt = self.PROMPT + " Call EnterPlanMode first."
+        return "partial", "compact", lambda n: (
+            f"[pass] The compact pass you queued at {hms(n['called'])}Z sent /compact, but the "
+            "resume prompt wasn't typed (unsent draft in the input box). No pass is pending now. "
+            f"Treat this as your resume prompt unless Hayden's message says otherwise: {prompt}")
+
+    def test_every_drop_and_partial_leaves_the_session_a_notice(self):
+        real = (self.mod.tmux, self.mod.pane_problem)
+        env = {k: os.environ[k] for k in ("FAKE_TMUX_FAIL", "FAKE_TMUX_MODE", "FAKE_TMUX_PANE")}
+        seen = set()
+        for case in (self.case_stale, self.case_busy_at_the_stop, self.case_busy_in_the_pane,
+                     self.case_timeout, self.case_failed, self.case_error, self.case_resumed,
+                     self.case_gone, self.case_cancelled, self.case_partial):
+            with self.subTest(case=case.__name__):
+                self.reset()
+                self.stop_tasks = None
+                os.environ.update(env)
+                self.mod.tmux, self.mod.pane_problem = real
+                with contextlib.suppress(FileNotFoundError):
+                    os.remove(self.notice_file())
+                began = time.time()
+                outcome, mode, want = case()
+                n = self.notice()
+                self.assertEqual(set(n), self.FIELDS)
+                self.assertEqual((n["v"], n["session_id"], n["outcome"], n["mode"]),
+                                 (1, SID, outcome, mode))
+                self.assertTrue(began <= n["called"] <= n["dropped"] <= time.time(), n)
+                self.assertEqual(n["text"], want(n))
+                self.assertEqual(os.stat(self.notice_file()).st_mode & 0o777, 0o600)
+                seen.add(outcome)
+        self.assertEqual(seen, set(self.mod.DROPS) | {"partial"})
+
+    def test_the_notice_comes_after_the_log_and_before_any_tmux_call(self):
+        # A dying tmux server can't delay or skip it: once the drop is logged, tmux is gone here.
+        real = self.mod.tmux
+        ready = []
+
+        def tmux(plan, *args):
+            if self.log().count(" outcome=") > logged:
+                ready.append(os.path.exists(self.notice_file()))
+                return None   # as when tmux didn't run
+            return real(plan, *args)
+        self.mod.tmux = tmux
+        for outcome, args, script, words in (
+                ("timeout", ("--compact", "--timeout", "0.3"), ["busy"], None),
+                ("resumed", (), None, "wait"), ("busy", (), None, None)):
+            with self.subTest(outcome=outcome):
+                self.reset(*(script or ()))
+                self.stop_waits = ["shell"] if outcome == "busy" else []
+                with contextlib.suppress(FileNotFoundError):
+                    os.remove(self.notice_file())
+                logged, ready[:] = self.log().count(" outcome="), []
+                if words:
+                    self.script = ["busy", self.then("busy", typed(words)), "idle"]
+                code, out = self.run_pass(*args, "--foreground")
+                self.assertEqual(code, 1, out)
+                self.assertEqual(self.notice()["outcome"], outcome)
+                self.assertTrue(ready and all(ready), ready)
+
+    def test_a_tmux_that_fails_every_call_still_gets_the_notice(self):
+        os.environ["FAKE_TMUX_FAIL"] = ("display-message capture-pane list-clients send-keys "
+                                        "respawn-pane")
+        for mode in ((), ("--compact",)):
+            with self.subTest(mode=mode):
+                self.reset()
+                code, out = self.run_pass(*mode, "--foreground")
+                self.assertEqual(code, 1, out)
+                n = self.notice()
+                self.assertEqual((n["outcome"], n["mode"]),
+                                 ("gone", "compact" if mode else "plain"))
+                self.assertIn("can't find pane: %4", n["text"])
+
+    def test_a_new_call_clears_the_sessions_old_notice(self):
+        for sid in (SID, "other-session"):
+            self.write(self.notice_file(sid), json.dumps({"v": 1, "session_id": sid, "text": "x"}))
+        cleared = []
+        self.script = ["busy", lambda: (cleared.append(not os.path.exists(self.notice_file())),
+                                        "busy")[1], "idle"]
+        code, out = self.run_pass("--compact", "--foreground")
+        self.assertEqual(code, 0, out)
+        self.assertEqual(cleared, [True])   # gone before the wait began
+        self.assertFalse(os.path.exists(self.notice_file()))
+        self.assertTrue(os.path.exists(self.notice_file("other-session")))
+
+    def test_old_notices_and_taken_files_are_pruned_at_the_call(self):
+        notices, now = os.path.dirname(self.notice_file()), time.time()
+        for name, age in (("old.json", 8 * 86400), ("new.json", 6 * 86400),
+                          ("a.json.12.taken", 2 * 86400), ("b.json.13.taken", 12 * 3600)):
+            self.write(os.path.join(notices, name), "{}")
+            os.utime(os.path.join(notices, name), (now - age, now - age))
+        code, out = self.run_pass("--compact", "--foreground")
+        self.assertEqual(code, 0, out)
+        # No stamp file inside: the hook's shim reads an empty dir as "nothing to inject".
+        self.assertEqual(sorted(os.listdir(notices)), ["b.json.13.taken", "new.json"])
 
 
 class Lane(Base):
