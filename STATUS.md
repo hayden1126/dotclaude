@@ -91,8 +91,10 @@ stored here).
     into lanes, sandbox-off Python runs `-I`). Its first live `lane done` ended the lane's
     `claude` (session 8e31f81a) and 9 of its MCP children, each named with its pid, and left
     every other window alone.
-  - `tab-bar` PR 1 merged as #96 (2026-10-14) and is installed from main (main shows
-    `status 2`). It merged before its fresh review and live smoke, so both still run, with
+  - `tab-bar` PR 1 merged as #96 (2026-10-14) and was installed from main (main shows
+    `status 2`). Its review fixes and Shift+arrow navigation merged as #97 (968a8af). The lead
+    did not install #97 from main: lane-addr holds the install, and main's bar strips only the
+    old `[repo] ` title, so it goes live through lane-addr's install after lane-addr merges main. It merged before its fresh review and live smoke, so both still run, with
     Hayden's phone tap test, and anything found rides PR 2. The lane stays open for PR 2 (drag,
     custom rows). Hayden asked the lead to close it when tab-bar is done (taken as: after PR 2
     merges).
@@ -271,11 +273,13 @@ stored here).
   - Verify from the main checkout (`test_subagent_policy` refuses to load under
     `.claude/worktrees/`): `tests/setup`, `tests/pass`, `tests/lanes`, `tests/delegation`. The
     last full run on `feat/autopass` (2026-10-12) was green: 532, 148, 155 and 646 tests.
-  - **Flakes got worse under load (2026-10-13, lane-close's runs):** about half of loaded runs
-    fail one timing test in `tests/pass` (a 600 s compact wait, a run killed at 900 s) or
-    `tests/delegation` (`test_wait`'s 30 s subprocess timeout, `test_ledger` minute rounding);
-    each passes 3/3 alone. Worth a small PR that bounds those waits on a fake clock; it is slowing
-    every lane's verification.
+  - **Root cause of the timing flakes (lane lane-addr, 2026-10-14):** HAYPC's wall clock steps
+    -2.7 s then +5.4 s about every 33 s (`time.time()` minus `time.monotonic()`; evidence in
+    lane-addr's `.lane/artifacts/clock-steps.txt`). It matches the setup, ctx, handoff-reminder and
+    ledger flakes. `systemd-timesyncd` is active inside WSL2 beside WSL's own host time sync,
+    which likely means two sources fighting (inferred). Hayden's call: `sudo systemctl disable
+    --now systemd-timesyncd`, then re-sample. Separately, tests should measure durations with
+    `time.monotonic()`, not `time.time()`.
   - **Flakes:** `tests/pass` fails timing asserts under a load spike, so judge it on a run of
     about 46 s. `test_tmux_hooks` flaked on `main` too; its ring-decision wait is now 15 s.
     Watch `seen()`'s 3 s wait, which also serves negative checks.
