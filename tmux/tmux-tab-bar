@@ -1,7 +1,9 @@
 #!/usr/bin/python3 -I
 """tmux-tab-bar: a status bar of up to 5 rows that groups tmux windows by project.
 
-  tmux-tab-bar layout    lay out the bar of every session that has a client attached
+  tmux-tab-bar layout                       lay out the bar of every session that has a client
+  tmux-tab-bar nav <direction> <client>     move that client's session to the tab left, right,
+                                            up or down of its current one, as the bar draws them
 
 A repo with lanes (skills/lanes) gets its own row: a coloured header with the repo's name, its
 lead checkout's tab first, then its lanes, then its other worktrees (agent worktrees). Every other
@@ -13,7 +15,7 @@ cells (9 on a phone), its tabs then spread evenly over its rows. Widths come fro
 client's width alone, so a title change never moves a tab or changes the row count (which would
 resize every pane). Past 5 rows the smallest lane groups move onto the shared rows behind a
 `┃repo▸` divider; still past 5, the last row ends in `+N`, which opens the window list. The
-current window is always shown. A client narrower than 100 cells (the phone) gets short slots
+current window is always shown, under its own header. A client narrower than 100 cells (the phone) gets short slots
 and the bar at the bottom; a session's narrowest client decides its layout. Window numbers never
 change: the bar only draws tabs in another order.
 
@@ -28,6 +30,13 @@ then `status` (the row count, set only when it changes), the header names as `@t
 lane id, `repo:`) and `@tab_group` (the group's colour index) are written only when they change.
 Every write of a run goes to one `tmux source-file -` on stdin, one line per session with its sig
 last, so a session that vanished mid-run (an error drops the rest of its line) records no sig.
+
+Shift+arrows (claude.conf) run `nav`, which reads the client's session, its current window and
+the session's `@tab_bar_nav` (each shown row's tabs with their columns, written by `layout` like
+the rows) and selects one window. Left and right step in the order the bar draws the tabs,
+wrapping; up and down go to the tab above or below, wrapping. Rows count top to bottom on both
+layouts (tmux draws row 0 on top even with the bar at the bottom). A window hidden in `+N`, or a
+session with no `@tab_bar_nav`, falls back to tmux's previous-window and next-window.
 
 Nothing from a window title, a directory name or a lane record enters a format string: the rows
 hold only window ids (`@N`), integers and fixed template text, names reach the bar through options
@@ -60,7 +69,7 @@ import unicodedata  # noqa: E402
 MAX_ROWS = 5            # tmux's own limit for `status`
 DEFAULT_SLOT = 32       # a tab's width while its row has room; a fuller row splits evenly
 MIN_SLOT = 18           # desktop: index, glyphs and a few title cells
-MIN_SLOT_PHONE = 9
+MIN_SLOT_PHONE = 9      # " 999 ★ ◐ ": the label shrinks to fit (entry)
 PHONE_WIDTH = 100       # a client narrower than this gets the phone layout
 PHONE_LEFT = 6          # row 0's cells for the delegation token on the phone
 NAME_CELLS = 12         # tab and header names are cut to this many cells
@@ -74,6 +83,10 @@ PHONE_STATUS_LEFT = "#(~/.local/bin/tmux-claude-status)"
 
 SID = re.compile(r"\$\d+\Z")
 WID = re.compile(r"@\d+\Z")
+CLIENT = re.compile(r"[A-Za-z0-9_./][A-Za-z0-9_./-]{0,255}\Z")   # a tty path, client-<pid>
+NAV_ROW = re.compile(r"\d{1,2};@\d{1,9}:\d{1,6}:\d{1,6}(?:,@\d{1,9}:\d{1,6}:\d{1,6})*\Z")
+NAV_MAX = 16 * 1024
+DIRECTIONS = ("left", "right", "up", "down")
 PLAIN_WORD = re.compile(r"[A-Za-z0-9_@-][A-Za-z0-9_@\[\]-]*")   # needs no quotes in tmux's config
 
 FILL = "#[fill=colour236]"
@@ -96,13 +109,24 @@ GLYPH_ON = "#{?#{==:#{@claude_state},busy},1,#{?#{==:#{@claude_state},wait},1,0}
 #   (a title whose first word is that short and followed by a [bracket] loses that word). The
 #   bound is repeated `?`, not `{1,3}`: a bare } ends the enclosing #{...} early. The match
 #   runs to the end and keeps \2, so tmux's global replace can't strip a second [bracket].
+#   `(.+)`, not `(.*)`: a title that is only the prefix would leave \2 empty, and tmux draws an
+#   empty group's reference as a literal 2; unmatched, that title draws as it is.
+# Both run on the text cut to LABEL_CAP cells first (the nested #{=/N:...} expands before the
+# substitutions): s/// is quadratic in its input (regsub runs regexec once per match, each from
+# the strlen of the rest), and a pane can set a title of any length with OSC 2, so a 160k-cell
+# title took 98 ms a row to draw, against tmux's 100 ms limit for a whole row. Cut, it takes 3 ms.
+LABEL_CAP = 64                  # cells: well over any slot
 BODY = ("#{?@tab_name,#{@tab_name} ,}"
-        "#{?pane_title,#{s/[#]/♯/;s/^([^ [][^ []?[^ []? )?\\[[^]]*\\] (.*)$/\\2/:pane_title},"
-        "#{s/[#]/♯/:pane_current_command}}")
+        "#{?pane_title,#{s/[#]/♯/;s/^([^ [][^ []?[^ []? )?\\[[^]]*\\] (.+)$/\\2/:"
+        f"#{{=/{LABEL_CAP}:pane_title}}}},"
+        f"#{{s/[#]/♯/:#{{=/{LABEL_CAP}:pane_current_command}}}}}}")
 
 SESSION_FMT = ("#{session_id}\t#{status}\t#{status-left-length}\t#{status-right-length}"
                "\t#{@tab_bar_sig}")
 CLIENT_FMT = "#{session_id}\t#{client_width}"
+# A client's session and current window, and that session's @tab_bar_nav (a list-clients format
+# has the client's session, its current window and pane, so the option resolves there).
+NAV_FMT = "#{client_name}\t#{session_id}\t#{window_id}\t#{@tab_bar_nav}"
 WINDOW_FMT = ("#{session_id}\t#{window_id}\t#{window_index}\t#{window_active}\t#{@tab_group}"
               "\t#{@tab_name}")         # the name last: it may hold a tab
 PANE_FMT = "#{window_id}\t#{pane_active}\t#{pane_current_path}"
@@ -308,6 +332,34 @@ def separators(row: list) -> int:
     return sum(a[0] == "tab" and b[0] == "tab" for a, b in zip(row, row[1:]))
 
 
+def marker_w(head_w: list, item: tuple) -> int:
+    """A divider's cells: `┃name▸` for a packed group, a lone `┃` (group None) before a shared
+    tab that the current window put on a laned row."""
+    return 1 if item[1] is None else head_w[item[1]]
+
+
+def owner(row: list, k: int) -> int | None:
+    """The group whose tab row[k] is drawn as: the last header or divider before it, or None
+    (a shared tab) when there is none."""
+    g = None
+    for item in row[:k]:
+        if item[0] in ("head", "div"):
+            g = item[1]
+    return g
+
+
+def prune(row: list) -> None:
+    """Drop each header or divider that no tab follows before the next one."""
+    keep = []
+    for k, item in enumerate(row):
+        if item[0] in ("head", "div"):
+            after = next((i for i in row[k + 1:] if i[0] != "more"), None)
+            if after is None or after[0] != "tab":
+                continue
+        keep.append(item)
+    row[:] = keep
+
+
 def spread(n: int, caps: list) -> list:
     """n tabs over rows holding at most caps[i] each, as evenly as the caps allow (4 over two
     rows is 2+2, not 3+1); a leftover tab goes to an earlier row. sum(caps) >= n."""
@@ -395,8 +447,11 @@ def lay_out(groups: list, shared: list, width: int, current: str | None = None,
             rows, head = trial
 
     def fixed(row: list) -> int:        # cells a row's tabs can't use: dividers and +N
-        return sum(head_w[i[1]] if i[0] == "div" else i[2]
+        return sum(marker_w(head_w, i) if i[0] == "div" else i[2]
                    for i in row if i[0] in ("div", "more"))
+
+    def tab_count(row: list) -> int:
+        return sum(i[0] == "tab" for i in row)
 
     hidden = []
     if len(rows) > MAX_ROWS:
@@ -406,19 +461,32 @@ def lay_out(groups: list, shared: list, width: int, current: str | None = None,
             hidden += [i[1:] for i in row if i[0] == "tab"]
         rows = rows[:MAX_ROWS]
         last, r = rows[-1], MAX_ROWS - 1
-        while sum(i[0] == "tab" for i in last) > 1 and \
-                fixed(last) + more_w + sum(i[0] == "tab" for i in last) * min_slot \
-                + separators(last) > avail(r, head):
-            if last[-1][0] == "tab":
-                hidden.insert(0, last.pop()[1:])
-            if last[-1][0] == "div":
-                last.pop()
+        # The current window is always shown, and under its own header: it takes the last
+        # shown slot of its own kind (a tab of its group, or a shared tab for a shared one),
+        # else the last row's last slot behind its own divider (a lone ┃ for a shared tab).
+        # Taking any other slot would draw it under another repo's name.
         cur = next((t for t in hidden if t[0] == current), None)
-        if cur is not None:             # the current window takes the last visible slot
-            k = max(i for i, item in enumerate(last) if item[0] == "tab")
+        if cur is not None:
+            g = next((g for g, grp in enumerate(groups) if cur in grp.tabs), None)
             hidden.remove(cur)
-            hidden.append(last[k][1:])
-            last[k] = ("tab", *cur)
+            spots = [(i, k) for i, row in enumerate(rows) for k, item in enumerate(row)
+                     if item[0] == "tab" and owner(row, k) == g]
+            if spots:
+                i, k = spots[-1]
+                hidden.append(rows[i][k][1:])
+                rows[i][k] = ("tab", *cur)
+            else:
+                k = max(k for k, item in enumerate(last) if item[0] == "tab")
+                hidden.append(last.pop(k)[1:])
+                last += [("div", g), ("tab", *cur)]
+                prune(last)
+        # Room for `+N`: drop the last row's last tabs (never the current one) and any
+        # header or divider left with no tab.
+        while tab_count(last) > 1 and fixed(last) + more_w + tab_count(last) * min_slot \
+                + separators(last) > avail(r, head):
+            k = max(k for k, item in enumerate(last) if item[0] == "tab" and item[1] != current)
+            hidden.insert(0, last.pop(k)[1:])
+            prune(last)
         last.append(("more", len(hidden), more_w))
 
     slots = []
@@ -447,11 +515,17 @@ def entry(wid: str, index: int, slot: int) -> str:
         raise ValueError(f"bad window {wid!r} {index!r}")
     base = slot - (len(str(index)) + 2)
 
+    def label(cells: int) -> str:
+        """The label in exactly `cells`: fitted, a lone '…', or nothing. fit() needs 2 (a name
+        cell and the '…'), so a 3-digit index with a star and a glyph (9 cells) in a phone's
+        9-cell slot would draw 2 past it and push every later tab right."""
+        return fit(cells) if cells >= 2 else "…" if cells == 1 else ""
+
     def one(style: str, fg: str) -> str:
         glyph = ("#{?#{==:#{@claude_state},busy},◐ ,#{?#{==:#{@claude_state},wait},"
                  f"#[fg=colour46]✳ #[fg={fg}],}}}}")
-        rest = (f"#{{?@claude_star,#{{?{GLYPH_ON},{fit(base - 4)},{fit(base - 2)}}},"
-                f"#{{?{GLYPH_ON},{fit(base - 2)},{fit(base)}}}}}")
+        rest = (f"#{{?@claude_star,#{{?{GLYPH_ON},{label(base - 4)},{label(base - 2)}}},"
+                f"#{{?{GLYPH_ON},{label(base - 2)},{label(base)}}}}}")
         return ("#[range=window|#{window_index}]" + style + " #I #{?@claude_star,★ ,}" + glyph
                 + rest + "#[norange]" + NORM)
 
@@ -474,7 +548,9 @@ def header(g: int, cells: int, dim: bool, width: int) -> str:
             + name_part(g, cells) + "▸" + NORM + " " * max(0, width - cells - 1))
 
 
-def divider(g: int, cells: int) -> str:
+def divider(g: int | None, cells: int) -> str:
+    if g is None:                       # before a shared tab on a laned row: no name
+        return "#[fg=colour250]#[bold]┃" + NORM
     return f"#[fg=colour{PALETTE[g % len(PALETTE)]}]#[bold]┃" + name_part(g, cells) + "▸" + NORM
 
 
@@ -501,7 +577,7 @@ def render(lay: Layout) -> list:
             if item[0] == "head":
                 parts.append(header(item[1], lay.head_w[item[1]] - 2, item[2], lay.head))
             elif item[0] == "div":
-                parts.append(divider(item[1], lay.head_w[item[1]] - 2))
+                parts.append(divider(item[1], marker_w(lay.head_w, item) - 2))
             elif item[0] == "tab":
                 parts.append(entry(item[1], item[2], slot))
             else:
@@ -517,11 +593,34 @@ def render(lay: Layout) -> list:
     return out
 
 
+def nav_value(lay: Layout) -> str:
+    """The session's @tab_bar_nav: each row's tabs in bar order as `row;@id:x:w,...`, the rows
+    joined by `|`, where x is the 0-based cell the tab starts at (the gutter, then its row's
+    dividers, slots and separators, as render draws them) and w its slot. Ids and integers
+    only, so nothing untrusted. A row with no tab is left out."""
+    out = []
+    for r, (row, slot) in enumerate(zip(lay.rows, lay.slots)):
+        col, tabs = lay.gutter, []
+        for k, item in enumerate(row):
+            if item[0] == "tab":
+                if not WID.match(item[1]):
+                    raise ValueError(f"bad window {item[1]!r}")
+                col += 1 if k and row[k - 1][0] == "tab" else 0     # the separator
+                tabs.append(f"{item[1]}:{col}:{slot}")
+                col += slot
+            elif item[0] == "div":
+                col += marker_w(lay.head_w, item)
+        if tabs:
+            out.append(f"{r};" + ",".join(tabs))
+    return "|".join(out)
+
+
 def session_ops(lay: Layout, rows: list) -> list:
     """The option writes that give a session this layout, in order: (name, value), with None
     for an unset. The row count (`status`) goes in after the rows (write_line)."""
     ops = [(f"@tab_bar_g{g}", head) for g, head in enumerate(lay.heads)]
     ops += [(f"status-format[{i}]", row) for i, row in enumerate(rows)]
+    ops.append(("@tab_bar_nav", nav_value(lay)))
     if lay.phone:
         ops += [("status-position", "bottom"), ("status-left", PHONE_STATUS_LEFT),
                 ("status-right", "")]
@@ -670,6 +769,76 @@ def layout(err_log: str) -> None:
             log_error(err_log, f"source-file: {p.stderr.strip()}\n")
 
 
+# --- nav: Shift+arrows ---------------------------------------------------------------------------
+
+def parse_nav(text: str) -> list | None:
+    """@tab_bar_nav read back as [[(wid, x, w), ...] per row, top to bottom], or None when it is
+    missing or not exactly what nav_value writes: every id and integer is checked, and row
+    numbers must rise."""
+    if not text or len(text) > NAV_MAX:
+        return None
+    rows, last = [], -1
+    for part in text.split("|"):
+        if not NAV_ROW.match(part):
+            return None
+        r, tabs = part.split(";")
+        if int(r) <= last:
+            return None
+        last = int(r)
+        rows.append([(wid, int(x), int(w)) for wid, x, w in
+                     (tab.split(":") for tab in tabs.split(","))])
+    return rows
+
+
+def nav_step(rows: list | None, current: str, direction: str) -> tuple | None:
+    """Where a Shift+arrow goes from `current` (pure): ("select", wid), (command,) for tmux's
+    previous-window or next-window when the bar has no place for the current window (no
+    @tab_bar_nav, or the window is hidden in +N), or None to stay.
+    Left and right step in reading order, past a row's end to the next row's first tab and from
+    the last tab to the first. Up and down go to the next row up or down (wrapping between the
+    top and bottom rows), to the tab whose span covers the current tab's first cell, else the
+    nearest by column (the left one on a tie)."""
+    where = next(((r, k) for r, row in enumerate(rows or []) for k, tab in enumerate(row)
+                  if tab[0] == current), None)
+    if where is None:
+        fallback = {"left": "previous-window", "right": "next-window"}.get(direction)
+        return (fallback,) if fallback else None
+    r, k = where
+    if direction in ("left", "right"):
+        flat = [tab[0] for row in rows for tab in row]
+        step = 1 if direction == "right" else -1
+        target = flat[(flat.index(current) + step) % len(flat)]
+    else:
+        x = rows[r][k][1]
+        step = 1 if direction == "down" else -1
+
+        def distance(tab: tuple) -> int:
+            return max(tab[1] - x, x - (tab[1] + tab[2] - 1), 0)
+
+        target = min(rows[(r + step) % len(rows)], key=distance)[0]
+    return None if target == current else ("select", target)
+
+
+def nav(direction: str, client: str) -> None:
+    """Select the window a Shift+arrow on `client` goes to: one tmux read, then at most one
+    select-window (or previous-window/next-window) on that client's session."""
+    if direction not in DIRECTIONS or not CLIENT.match(client):
+        return
+    found = [f for f in read(4, "list-clients", NAV_FMT) if f[0] == client]
+    if len(found) != 1:
+        return
+    _, sid, wid, text = found[0]
+    if not SID.match(sid) or not WID.match(wid):
+        return
+    step = nav_step(parse_nav(text), wid, direction)
+    if step is None:
+        return
+    if step[0] == "select":
+        tmux("select-window", "-t", f"{sid}:{step[1]}")
+    else:
+        tmux(step[0], "-t", sid)
+
+
 def log_error(path: str, text: str) -> None:
     """The end of text into the run dir's error log (never a symlink; owner-only)."""
     try:
@@ -700,48 +869,62 @@ def run_locked(base: str, run=None) -> None:
     that finds the lock held leaves; the holder lays out again while dirty reappears (PASSES
     times per hold), and after letting go it looks once more and takes the lock again if dirty.
     Marking first means a holder that lets go can't miss a run that failed to get the lock: the
-    mark is already there when it looks.
+    mark is already there when it looks. A pass that raises ends its hold, but the look after
+    letting go still happens (the runs that left meanwhile are counting on it); the first error
+    is raised at the end, for main's catch-all to log.
     `run` stands in for layout() in tests."""
     run = run or (lambda: layout(base + ".err"))
     lock, dirty = base + ".lock", base + ".dirty"
+    failure = None
     for _ in range(2):
         touch(dirty)                    # before the lock: a holder letting go will see it
         try:
             fd = os.open(lock, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
         except OSError:
             run()                       # no lock to be had: still lay out
-            return
+            break
         try:
             try:
                 fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except OSError:
-                return                  # the holder lays out again for this one
+                break                   # the holder lays out again for this one
             for _ in range(PASSES):
                 try:
                     os.unlink(dirty)
                 except OSError:
                     pass
-                run()
+                try:
+                    run()
+                except Exception as e:  # raised below, after the look
+                    failure = failure or e
+                    break
                 if not os.path.exists(dirty):
                     break
         finally:
             os.close(fd)
         if not os.path.exists(dirty):
-            return
+            break
+    if failure is not None:
+        raise failure
 
 
 def main(argv: list) -> int:
-    if argv[1:] != ["layout"]:
+    """`layout`, or `nav <direction> <client>`; nav always exits 0, since a key runs it."""
+    is_nav = argv[1:2] == ["nav"]
+    if not is_nav and argv[1:] != ["layout"]:
         return 2
     tmux_env = os.environ.get("TMUX")
     if not tmux_env:
-        return 0                        # outside tmux: nothing to lay out
+        return 0                        # outside tmux: nothing to lay out or select
     run_dir = os.environ.get("TMUX_CLAUDE_STATUS_DIR") or "/tmp"
     base = os.path.join(run_dir, f".tmux-tab-bar.{os.getuid()}.{server_key(tmux_env)}")
     try:
-        run_locked(base)
+        if not is_nav:
+            run_locked(base)
+        elif len(argv) == 4:
+            nav(argv[2], argv[3])
     except Exception:                   # fail-open: the bar keeps what it had
-        log_error(base + ".err", traceback.format_exc())
+        log_error(base + (".nav.err" if is_nav else ".err"), traceback.format_exc())
     return 0
 
 

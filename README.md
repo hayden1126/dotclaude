@@ -374,7 +374,11 @@ need nothing extra.
   opens the window list. The window you are on is always shown. On a narrow terminal (the phone over
   ssh) the bar moves to the bottom with shorter tabs and drops the host and the clock. Tap a
   tab to switch to it; tap the tab you are on for its menu (Star, Shelve, Shelf…, Replies before
-  pass, Rename and Windows…); right-click still opens the full menu. `tmux/tmux-tab-bar` runs from
+  pass, Rename and Windows…); right-click still opens the full menu. Shift+Left and Shift+Right
+  step through the tabs in the order the bar draws them, not by window number (wrapping from the
+  last tab to the first), and Shift+Up and Shift+Down go to the tab above or below; a window
+  hidden in `+N` steps by number. Those four keys never reach the program in a pane.
+  `tmux/tmux-tab-bar` runs from
   tmux hooks and from `tmux-claude-status`, which catches a directory change or a lane opening or
   closing within a few seconds. It never puts a title, a directory name or a lane record into a
   tmux format (a `#[...]` in a title draws as text), never prints into a pane, and if it fails
