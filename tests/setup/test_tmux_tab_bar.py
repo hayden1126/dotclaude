@@ -1178,6 +1178,85 @@ class Conf(unittest.TestCase):
                                    timeout=10, env={"HOME": home, "PATH": "/usr/bin:/bin"})
                 self.assertEqual((p.returncode, p.stdout, p.stderr), (0, "", ""))
 
+    def conf(self):
+        with open(CONF) as f:
+            return f.read()
+
+    def tap_menu(self, binding):
+        """The tap branch inside `binding`: from its window_active test to its switch-client."""
+        text = self.conf()
+        block = text[text.index(f"bind -n {binding} "):]
+        start = block.index("if -F -t = '#{window_active}' {")
+        end = block.index("switch-client -t =\n      }", start)
+        return block[start:end]
+
+    def test_a_drag_end_on_its_own_tab_is_exactly_the_tap(self):
+        tap, drag = self.tap_menu("MouseUp1Status"), self.tap_menu("MouseDragEnd1Status")
+        self.assertEqual(tap, drag)
+        self.assertIn('"Move…" m { run-shell \'"$HOME/.local/bin/tmux-tab-bar" menu '
+                      '"#{client_name}" "#{window_id}" >/dev/null 2>&1; true\' }', tap)
+        # The verified prompt shape: a quoted template with %%%, never the { } form.
+        self.assertIn('"#{?@tab_row_custom,,-}Name row…" N { command-prompt -p "row name:" '
+                      '"set -w @tab_row_name_in \\"%%%\\" ; run-shell \'\\"$HOME/.local/bin/'
+                      'tmux-tab-bar\\" name-row \\"#{client_name}\\" >/dev/null 2>&1; true\'" }',
+                      tap)
+
+    def test_the_drag_bindings_record_drop_and_clear(self):
+        text = self.conf()
+        self.assertIn("bind -n MouseUp1Status {\n  set -u @tab_bar_drag\n", text)
+        self.assertIn("bind -n MouseDragEnd1Status {\n  if -F '#{==:#{@tab_bar_drag},#{window_id}}'"
+                      " {\n    set -u @tab_bar_drag\n", text)
+        self.assertIn("    run-shell '\"$HOME/.local/bin/tmux-tab-bar\" drop \"#{@tab_bar_drag}\" "
+                      "\"#{window_id}\" \"#{mouse_x}\" \"#{mouse_status_line}\" "
+                      "\"#{mouse_status_range}\" \"#{client_name}\" >/dev/null 2>&1; true'\n"
+                      "    set -u @tab_bar_drag\n", text)
+        self.assertIn("bind -n MouseDragEnd1StatusDefault {\n  run-shell '\"$HOME/.local/bin/"
+                      "tmux-tab-bar\" drop-row \"#{@tab_bar_drag}\" \"#{mouse_x}\" "
+                      "\"#{mouse_status_line}\" \"#{client_name}\" >/dev/null 2>&1; true'\n"
+                      "  set -u @tab_bar_drag\n}", text)
+        self.assertNotIn("bind -n MouseDrag1Status", text)        # no live preview
+        self.assertNotRegex(text, r"tmux-tab-bar[^\n]*(drop|move|menu|name-row)[^\n]*-b")
+        # The pane guard: tmux 3.7c's default inside it, and the release kept for apps.
+        self.assertIn("bind -n MouseDrag1Pane if -F '#{==:#{@tab_bar_drag},}' { if -F "
+                      "'#{||:#{pane_in_mode},#{mouse_any_flag}}' { send-keys -M } "
+                      "{ copy-mode -M } }\n", text)
+        self.assertIn("bind -n MouseDragEnd1Pane if -F '#{@tab_bar_drag}' "
+                      "{ set -u @tab_bar_drag } { send-keys -M }\n", text)
+
+    def test_ctrl_b_shift_arrows_carry_the_tab(self):
+        text = self.conf()
+        for key in ("Left", "Right", "Up", "Down"):
+            with self.subTest(key=key):
+                self.assertIn(f"bind -r S-{key} if-shell '[ -x \"$HOME/.local/bin/tmux-tab-bar\" ]'"
+                              f" {{ run-shell '\"$HOME/.local/bin/tmux-tab-bar\" move "
+                              f"{key.lower()} \"#{{client_name}}\" >/dev/null 2>&1; true' }}\n",
+                              text)
+
+    def test_the_right_click_menu_moves_instead_of_swapping(self):
+        text = self.conf()
+        block = text[text.index("bind -n MouseDown3Status"):]
+        block = block[:block.index("\n\n")]
+        for side, key, how in (("◀", "l", "left"), ("▶", "r", "right")):
+            self.assertIn(f'"#{{?#{{>:#{{session_windows}},1}},,-}}Move {side}" {key} '
+                          f'{{ run-shell \'"$HOME/.local/bin/tmux-tab-bar" move {how} '
+                          f'"#{{client_name}}" "#{{window_id}}" >/dev/null 2>&1; true\' }}', block)
+        self.assertNotIn("swap-window", block)
+        self.assertNotIn("Swap", block)
+
+    def test_the_restore_hook_is_silent_and_exits_0(self):
+        self.assertIn("set-hook -g session-created[42] 'run-shell -b \"[ -x "
+                      "$HOME/.local/bin/claude-restore ] && $HOME/.local/bin/claude-restore "
+                      "--auto #{q:session_name} >/dev/null 2>&1; true\"'\n", self.conf())
+
+    def test_the_enter_menu_moves_and_resets_behind_a_confirm(self):
+        with open(os.path.join(REPO, "tmux", "base.conf")) as f:
+            base = f.read()
+        self.assertIn('"Move…"               m "run-shell \\"$HOME/.local/bin/tmux-tab-bar menu '
+                      '#{client_name} >/dev/null 2>&1; true\\""', base)
+        line = next(l for l in base.splitlines() if l.lstrip().startswith('"Reset bar"'))
+        self.assertIn("confirm-before", line)
+        self.assertIn("tmux-tab-bar reset #{client_name} >/dev/null 2>&1; true", line)
+
     def test_the_hook_command_exits_0_and_says_nothing_whatever_the_script_does(self):
         cmd = HOOK.split('"')[1].replace("$HOME", "$H")
         home = tempfile.mkdtemp()
