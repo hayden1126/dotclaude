@@ -401,9 +401,15 @@ class Render(unittest.TestCase):
     def test_a_title_loses_its_hashes_then_claudes_prefix(self):
         e = tb.entry("@7", 7, 30)
         strip = "s/^([^ [][^ []?[^ []? )?\\[[^]]*\\] (.*)$/\\2/"
-        self.assertIn("#{s/[#]/♯/;" + strip + ":pane_title}", e)
-        self.assertIn("#{s/[#]/♯/:pane_current_command}", e)
-        self.assertEqual(e.count("pane_title}"), e.count("[#]/♯/;" + strip + ":pane_title}"))
+        # Each substitution runs on the text cut to 64 cells first: s/// is quadratic.
+        self.assertIn("#{s/[#]/♯/;" + strip + ":#{=/64:pane_title}}", e)
+        self.assertIn("#{s/[#]/♯/:#{=/64:pane_current_command}}", e)
+        self.assertEqual(e.count("pane_title}"),
+                         e.count("[#]/♯/;" + strip + ":#{=/64:pane_title}}"))
+        self.assertEqual(e.count("pane_current_command}"),
+                         e.count("#{s/[#]/♯/:#{=/64:pane_current_command}}"))
+        self.assertEqual(tb.LABEL_CAP, 64)
+        self.assertGreater(tb.LABEL_CAP, tb.DEFAULT_SLOT)
         for bad in ("{", "}", ",", ":", ";"):   # each would end the modifier or the #{...}
             self.assertNotIn(bad, strip)
         # The same pattern in Python's dialect ([ escaped in a set): what it keeps.
@@ -1185,6 +1191,22 @@ class RealTmux(unittest.TestCase):
         self.assertEqual(self.ti("display", "-p", "-t", "t:2", "#{pane_title}").stdout,
                          "#[range=window|1]x\n")
         self.find("hq: ♯[range=window|1]x")    # a # left in would make it a range: "hq: x"
+
+    def test_a_huge_osc_title_expands_fast(self):
+        # A pane can set a title of any length with OSC 2 (select-pane -T that long hits
+        # ARG_MAX). s/// is quadratic in its input: uncut, a 160k title took 98 ms to expand.
+        self.ti("new-window", "-d", "-t", "t:3", "-c", self.plain,
+                "printf '\\033]2;%s\\033\\\\' \"$(head -c 160000 /dev/zero | tr '\\0' x)\"; "
+                "sleep 600")
+        self.wait(lambda: len(self.ti("display", "-p", "-t", "t:3", "#{pane_title}").stdout)
+                  > 150000, "the OSC 2 title never arrived")
+        times = []
+        for _ in range(5):
+            start = time.perf_counter()
+            got = self.ti("display", "-p", "-t", "t:3", tb.BODY).stdout.rstrip("\n")
+            times.append(time.perf_counter() - start)
+        self.assertLessEqual(len(got), tb.LABEL_CAP + 16, got[:80])
+        self.assertLess(min(times), 0.020, times)
 
     def test_a_click_on_row_2_switches(self):
         self.run_layout()

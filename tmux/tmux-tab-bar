@@ -96,9 +96,15 @@ GLYPH_ON = "#{?#{==:#{@claude_state},busy},1,#{?#{==:#{@claude_state},wait},1,0}
 #   (a title whose first word is that short and followed by a [bracket] loses that word). The
 #   bound is repeated `?`, not `{1,3}`: a bare } ends the enclosing #{...} early. The match
 #   runs to the end and keeps \2, so tmux's global replace can't strip a second [bracket].
+# Both run on the text cut to LABEL_CAP cells first (the nested #{=/N:...} expands before the
+# substitutions): s/// is quadratic in its input (regsub runs regexec once per match, each from
+# the strlen of the rest), and a pane can set a title of any length with OSC 2, so a 160k-cell
+# title took 98 ms a row to draw, against tmux's 100 ms limit for a whole row. Cut, it takes 3 ms.
+LABEL_CAP = 64                  # cells: well over any slot
 BODY = ("#{?@tab_name,#{@tab_name} ,}"
-        "#{?pane_title,#{s/[#]/♯/;s/^([^ [][^ []?[^ []? )?\\[[^]]*\\] (.*)$/\\2/:pane_title},"
-        "#{s/[#]/♯/:pane_current_command}}")
+        "#{?pane_title,#{s/[#]/♯/;s/^([^ [][^ []?[^ []? )?\\[[^]]*\\] (.*)$/\\2/:"
+        f"#{{=/{LABEL_CAP}:pane_title}}}},"
+        f"#{{s/[#]/♯/:#{{=/{LABEL_CAP}:pane_current_command}}}}}}")
 
 SESSION_FMT = ("#{session_id}\t#{status}\t#{status-left-length}\t#{status-right-length}"
                "\t#{@tab_bar_sig}")
