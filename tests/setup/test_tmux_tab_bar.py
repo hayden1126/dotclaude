@@ -2197,14 +2197,14 @@ class RealTmux(unittest.TestCase):
         self.assertEqual(self.nav_rows(), [["0", "1"], ["2"]])
         self.drag(self.find("gamma-title"), self.find("alpha-title"))    # hq before the lead
         self.wait(lambda: self.nav_rows() == [["2", "0", "1"]], f"rows {self.nav_rows()}")
-        self.assertEqual(self.show("-v", "-t", "t:", "@tab_bar_drag").strip(), "")
+        self.assertEqual(self.show("-qv", "-t", "t:", "@tab_bar_drag").strip(), "")
         rows = self.nav_rows()
         self.drag(self.find("beta-title"), (40, 30))                      # onto the pane
         time.sleep(1)
         self.assertEqual(self.nav_rows(), rows)
         modes = self.ti("list-panes", "-a", "-F", "#{pane_in_mode}").stdout.split()
         self.assertEqual(set(modes), {"0"})
-        self.assertEqual(self.show("-v", "-t", "t:", "@tab_bar_drag").strip(), "")
+        self.assertEqual(self.show("-qv", "-t", "t:", "@tab_bar_drag").strip(), "")
 
     def test_ctrl_b_shift_right_carries_the_tab(self):
         self.link_script()
