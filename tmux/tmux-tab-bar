@@ -35,7 +35,9 @@ by its active pane's cwd, from the filesystem alone: no git call. Writes are per
 then `status` (the row count, set only when it changes), the header names as `@tab_bar_g<n>`, and
 `status-position`, `status-left` and `status-right` (set on the phone, unset on the desktop). A hash of all of it in
 `@tab_bar_sig` makes an unchanged run write nothing. The window options `@tab_name` (`lead`, a
-lane id, `repo:`) and `@tab_group` (the group's colour index) are written only when they change.
+lane id, `repo:`, or `repo·name` for a laned tab moved out of its project's row), `@tab_group`
+(the group's colour index) and `@tab_row_custom` (1 in a custom row, else unset, for the menus'
+Name row…) are written only when they change.
 Every write of a run goes to one `tmux source-file -` on stdin, one line per session with its sig
 last, so a session that vanished mid-run (an error drops the rest of its line) records no sig.
 
