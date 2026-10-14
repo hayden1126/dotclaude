@@ -221,6 +221,8 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
     sides. A symlink is copied as a link (a relative one made absolute), never read through, so
     the sandbox's read deny still holds at its target; anything not a regular file is skipped.
   - A symlinked `lanes/`, `lanes/<id>`, mirror or `info/exclude` is refused.
+  - `done` signals a process only on kernel facts (`/proc`) and Claude Code's own files (session
+    files, transcripts), never on `lane.json` (the pieces, `lane done`).
   PR 3 adds `pass-respawn` to `excludedCommands` (bare and with arguments): it needs the tmux socket and
   the session's processes, and its docstring lists what it reads and why each input is safe.
   The excluded-command inventory (2026-10-13, `tests/delegation/command_inventory.py`) adds three
@@ -326,7 +328,8 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
   record after the commit. Agent worktrees (`.claude/worktrees/`) never count as leftovers, and a
   leftover must be named by its repo-relative path. Relative identity outside HTML comments and
   code fails in a lanes repo and only warns in a plain one, where long-lived text has no peer
-  to mislead.
+  to mislead. `--closing`, which `lane done` runs, judges freshness against HEAD's commit only
+  and skips approval: after a `/pass`, the idle new session started after the handoff.
 - **`lane done`** validates the id and asserts its deletes stay inside `<common-dir>/lanes/`. It
   needs commits past the lane's base, then either a merged PR whose head commit is the branch tip
   (a squash merge) or the tip in the base. An adopted lane's base is a merge-base: with nothing
@@ -338,3 +341,113 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
   other processes, so it refuses and asks for a bare `lane done <id>`. It detects the sandbox by
   `SANDBOX_RUNTIME=1` or by pid 1 of its namespace (the sandbox's `apply-seccomp` launcher, not
   init), since `CLAUDE_PID` is set both inside and out.
+
+  `done` ends what provably belongs to the lane, so a merged lane whose session is still open
+  closes in one run. One `/proc` scan sorts every process whose real cwd is in the lane:
+  - **session:** a `~/.claude/sessions/<pid>.json` whose `procStart` is that pid's start time,
+    with its cwd in the lane;
+  - **owned:** its parent chain reaches a session (its Bash commands, hooks, MCP servers);
+  - **pane shell:** a session's parent whose only children are sessions, whose own parent is a
+    tmux server and which carries no foreign session id (claude-restore types `claude --resume`
+    into a zsh);
+  - **leftover:** started with the `CLAUDE_CODE_SESSION_ID` of a lane session, and every one of
+    its descendants is ended too (a tmux server started from a lane's Bash carries the lane's
+    id, and its panes run elsewhere).
+
+  A session id is the lane's only when a session file or a transcript
+  (`projects/*/<sid>.jsonl`) records a cwd in the lane. `lane.json`'s `sessions[]` proves
+  nothing: sandboxed Bash can write it, and it misses a registration that timed out.
+
+  Before any signal, `done` refuses anything else by name (pid, comm and program name, never an
+  argument: one can hold a secret). The same goes for each of these:
+  - a background session: `claude stop <jobId>` ends it;
+  - a dirty, locked or submodule worktree, which `git worktree remove` would refuse after the
+    kill;
+  - a run from anywhere but the main checkout, or under a Claude session whose cwd is in a
+    linked worktree of this repo or under the lanes root (outside the main checkout): only the
+    lead closes lanes. Both come from git's own worktree links and the lanes config, never
+    `lane.json`, which sandboxed Bash can write;
+  - an install that points into the lane (below);
+  - when there is something to end, a failing `handoff-check --closing`.
+
+  With something to end, it marks the lane `closing`, which `open` refuses, and deletes each
+  session's `open-sessions` entry, as Shelve does, so claude-restore never reopens it. Signals go
+  through a pidfd once the start time is checked again:
+  1. SIGTERM to sessions and leftovers, then a wait of up to 10 s: longer than the 5 s
+     SessionEnd hooks, which run as the session's children and are left to it.
+  2. SIGHUP to each pane shell after that wait (an interactive shell ignores SIGTERM), unless
+     it started another job meanwhile. zsh passes it on to a session still exiting, which Claude
+     Code handles as a closing tab.
+  3. Whatever survives, classified afresh: SIGTERM (SIGHUP again for a pane shell), a wait,
+     then SIGKILL.
+
+  Every signal but a session's first SIGTERM is guarded: just before it, `done` rescans the
+  target's process tree and holds the signal while anything in it has a file open in the git dir
+  (a killed git leaves lock files). A held signal is named in the refusal, and a process held at
+  step 3's SIGTERM is never SIGKILLed, nor is anything under a session whose signal was held. A session's first SIGTERM goes unchecked: Claude Code
+  handles it as when its tab closes, running its SessionEnd hooks and ending its own children.
+  Nothing is stopped for the check. tmux continues a pane process that gets SIGSTOP at once, and
+  a job-control shell reports a stopped job suspended and takes back the terminal (probe on tmux
+  3.7c), so a freeze can't hold a tab's session still. A git that starts or opens a lock file
+  in the milliseconds between the check and a SIGKILL is the accepted residual (Hayden's call,
+  2026-10-13); git removes its own lock files on SIGTERM.
+
+  A `lane open` tab closes by itself once its claude exits. The lanes lock is never held while
+  `done` waits, because every lane's hooks take it with a 2 s timeout, and `done` gives up on it
+  after 30 s wherever it takes it, so a stuck sandboxed `lane claim` can't hang the close.
+  Anything that survives, or that starts meanwhile, refuses the close and leaves the lane
+  `closing` (rerun `done`); its `open-sessions` entries are swept either way. Last, under
+  setup.sh's `install.lock` (waited for up to 30 s), `done` builds the archive under a temporary
+  name from `lane.json` re-read under the lanes lock (so it keeps the `endedAt` SessionEnd
+  stamped), checks the install and the lane's processes once more and removes the worktree with
+  the lanes lock released
+  (`git worktree remove` can outlast the hooks' 2 s), then re-reads the record under it and
+  moves the archive into place. No install relinks into the lane in between, and a failure
+  leaves no partial archive.
+
+  Every git `done` runs in the lane takes its config from the repo's common dir
+  (`GIT_COMMON_DIR`), and the lane's path must be a worktree whose admin dir's `commondir` names
+  that dir: the admin dir is sandbox-writable, and a config `core.fsmonitor` would run a command
+  sandbox-off. While the lane's worktree exists, a repo that sets `extensions.worktreeConfig` refuses
+  `done`, since git then also reads the lane's `config.worktree`, which nothing overrides; a
+  worktree that was gone at the checks and reappears before the remove refuses too.
+
+  Nothing is chosen by name, start time or tmux window. A window id means something only on its
+  own tmux server, and `kill-window` sends SIGHUP to everything on the pane's terminal (Hayden's
+  call, 2026-10-13).
+- **Installing from a lane** (`install-state.py`, run by `setup.sh`). In a repo that installs
+  from its checkout, the lane next in merge order tests its change by installing from its own
+  worktree (`lane lock install -- ./setup.sh`). Before this, the next install from anywhere
+  replaced its links mid-test. Now the links themselves are the hold, with no state file to go
+  stale.
+  - **Held:** while managed links point into a live lane, `setup.sh` refuses, before changing
+    anything, to run from anywhere but that lane or its main checkout. A managed link sits in a
+    dir setup.sh links into, and its path inside its checkout matches one that setup.sh links.
+  - **Released:** the lead's `./setup.sh` in the main checkout relinks everything, which
+    releases the hold.
+  - **What counts as a lane:** a linked worktree of this repo, or a worktree of another clone
+    with `install-state.py` and `setup.sh` at its root. Another project's worktree, and one
+    inside the main checkout (an agent's), never holds. A lane registered in the main
+    checkout's own `.git/worktrees/` is released by that main's run whatever its `.git` file
+    names, and only a real main checkout releases: a lane's sandbox can rewrite its `.git` file.
+    So is any dotclaude checkout under the lanes root (the lanes config's, which sandboxed Bash
+    can't write), so a lane that deletes its own `.git/worktrees/` entry too can't hold main off.
+    The accepted cost: an entry planted there naming another clone's lane releases that lane's
+    hold too, which equals an install from this main and prunes nothing outside a dotclaude
+    checkout. Every file these checks read goes through one bounded, non-blocking reader, so a
+    FIFO or a huge file planted in a lane can't hang `setup.sh`.
+  - **Prune:** after linking, `setup.sh` removes managed links that point into another lane of
+    this repo (or into a dotclaude checkout the main checkout's `.git/worktrees/` registers or
+    the lanes root holds, whatever its `.git` file says), and dangling ones into its own checkout, the lanes root or `.claude/worktrees/`
+    (a closed lane, a removed hook, a removed agent worktree). setup-tmux.sh's `tmux/*` links
+    and plugin files are never touched.
+  - **One run at a time:** `setup.sh` takes a flock on `install.lock` in the state dir for its
+    whole run, waits up to 5 minutes for another run, then stops before changing anything. It
+    runs unlocked only where `flock` is missing or the state dir can't be made (macOS,
+    git-bash); a lock file it can't open stops the run.
+  - **Seen elsewhere:** `lane ls` shows `install: held by lane <id>`. `lane done` refuses while
+    any link, or setup-tmux.sh's `~/.tmux.conf` block, points into the lane, naming for each the
+    installer that relinks it (`setup.sh`, `setup-tmux.sh`, or by hand).
+  - **The plugin line:** `setup.sh` prints one line when a mod or plugin changed since the last
+    install (a fingerprint in the state dir). A running session loads those only at its start,
+    so it needs `/pass`. Plain skills are left out, since SKILL.md text loads live.

@@ -3,8 +3,8 @@
 No network: origin is a local bare repo, and a fake `gh` that always fails sits first on PATH, so
 PR state is the degraded `?` and `done` falls back to git. A fake `claude` sits there too, for
 `lane open`, and TMUX is unset (a test that opens a window sets it and stubs tmux). HOME,
-XDG_STATE_HOME and the Claude session variables point into the temp dir, so nothing reads or
-writes the real machine's state.
+XDG_STATE_HOME, TMUX_TMPDIR and the Claude session variables point into the temp dir, so nothing
+reads or writes the real machine's state.
 """
 import json
 import os
@@ -47,6 +47,7 @@ class LanesRepo(unittest.TestCase):
                     if not k.startswith(("CLAUDE", "GIT_DIR", "GIT_WORK_TREE", "SANDBOX_RUNTIME",
                                              "TMUX"))}
         self.env.update(HOME=self.home, XDG_STATE_HOME=os.path.join(self.tmp, "state"),
+                        TMUX_TMPDIR=self.tmp,  # a tmux a test starts never finds the real server
                         PATH=fake_bin + os.pathsep + os.environ["PATH"],
                         GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@example.com",
                         GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@example.com",
