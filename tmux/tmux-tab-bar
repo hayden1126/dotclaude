@@ -1,7 +1,9 @@
 #!/usr/bin/python3 -I
 """tmux-tab-bar: a status bar of up to 5 rows that groups tmux windows by project.
 
-  tmux-tab-bar layout    lay out the bar of every session that has a client attached
+  tmux-tab-bar layout                       lay out the bar of every session that has a client
+  tmux-tab-bar nav <direction> <client>     move that client's session to the tab left, right,
+                                            up or down of its current one, as the bar draws them
 
 A repo with lanes (skills/lanes) gets its own row: a coloured header with the repo's name, its
 lead checkout's tab first, then its lanes, then its other worktrees (agent worktrees). Every other
@@ -28,6 +30,13 @@ then `status` (the row count, set only when it changes), the header names as `@t
 lane id, `repo:`) and `@tab_group` (the group's colour index) are written only when they change.
 Every write of a run goes to one `tmux source-file -` on stdin, one line per session with its sig
 last, so a session that vanished mid-run (an error drops the rest of its line) records no sig.
+
+Shift+arrows (claude.conf) run `nav`, which reads the client's session, its current window and
+the session's `@tab_bar_nav` (each shown row's tabs with their columns, written by `layout` like
+the rows) and selects one window. Left and right step in the order the bar draws the tabs,
+wrapping; up and down go to the tab above or below, wrapping. Rows count top to bottom on both
+layouts (tmux draws row 0 on top even with the bar at the bottom). A window hidden in `+N`, or a
+session with no `@tab_bar_nav`, falls back to tmux's previous-window and next-window.
 
 Nothing from a window title, a directory name or a lane record enters a format string: the rows
 hold only window ids (`@N`), integers and fixed template text, names reach the bar through options
@@ -74,6 +83,10 @@ PHONE_STATUS_LEFT = "#(~/.local/bin/tmux-claude-status)"
 
 SID = re.compile(r"\$\d+\Z")
 WID = re.compile(r"@\d+\Z")
+CLIENT = re.compile(r"[A-Za-z0-9_./][A-Za-z0-9_./-]{0,255}\Z")   # a tty path, client-<pid>
+NAV_ROW = re.compile(r"\d{1,2};@\d{1,9}:\d{1,6}:\d{1,6}(?:,@\d{1,9}:\d{1,6}:\d{1,6})*\Z")
+NAV_MAX = 16 * 1024
+DIRECTIONS = ("left", "right", "up", "down")
 PLAIN_WORD = re.compile(r"[A-Za-z0-9_@-][A-Za-z0-9_@\[\]-]*")   # needs no quotes in tmux's config
 
 FILL = "#[fill=colour236]"
@@ -111,6 +124,9 @@ BODY = ("#{?@tab_name,#{@tab_name} ,}"
 SESSION_FMT = ("#{session_id}\t#{status}\t#{status-left-length}\t#{status-right-length}"
                "\t#{@tab_bar_sig}")
 CLIENT_FMT = "#{session_id}\t#{client_width}"
+# A client's session and current window, and that session's @tab_bar_nav (a list-clients format
+# has the client's session, its current window and pane, so the option resolves there).
+NAV_FMT = "#{client_name}\t#{session_id}\t#{window_id}\t#{@tab_bar_nav}"
 WINDOW_FMT = ("#{session_id}\t#{window_id}\t#{window_index}\t#{window_active}\t#{@tab_group}"
               "\t#{@tab_name}")         # the name last: it may hold a tab
 PANE_FMT = "#{window_id}\t#{pane_active}\t#{pane_current_path}"
@@ -577,11 +593,34 @@ def render(lay: Layout) -> list:
     return out
 
 
+def nav_value(lay: Layout) -> str:
+    """The session's @tab_bar_nav: each row's tabs in bar order as `row;@id:x:w,...`, the rows
+    joined by `|`, where x is the 0-based cell the tab starts at (the gutter, then its row's
+    dividers, slots and separators, as render draws them) and w its slot. Ids and integers
+    only, so nothing untrusted. A row with no tab is left out."""
+    out = []
+    for r, (row, slot) in enumerate(zip(lay.rows, lay.slots)):
+        col, tabs = lay.gutter, []
+        for k, item in enumerate(row):
+            if item[0] == "tab":
+                if not WID.match(item[1]):
+                    raise ValueError(f"bad window {item[1]!r}")
+                col += 1 if k and row[k - 1][0] == "tab" else 0     # the separator
+                tabs.append(f"{item[1]}:{col}:{slot}")
+                col += slot
+            elif item[0] == "div":
+                col += marker_w(lay.head_w, item)
+        if tabs:
+            out.append(f"{r};" + ",".join(tabs))
+    return "|".join(out)
+
+
 def session_ops(lay: Layout, rows: list) -> list:
     """The option writes that give a session this layout, in order: (name, value), with None
     for an unset. The row count (`status`) goes in after the rows (write_line)."""
     ops = [(f"@tab_bar_g{g}", head) for g, head in enumerate(lay.heads)]
     ops += [(f"status-format[{i}]", row) for i, row in enumerate(rows)]
+    ops.append(("@tab_bar_nav", nav_value(lay)))
     if lay.phone:
         ops += [("status-position", "bottom"), ("status-left", PHONE_STATUS_LEFT),
                 ("status-right", "")]
@@ -730,6 +769,76 @@ def layout(err_log: str) -> None:
             log_error(err_log, f"source-file: {p.stderr.strip()}\n")
 
 
+# --- nav: Shift+arrows ---------------------------------------------------------------------------
+
+def parse_nav(text: str) -> list | None:
+    """@tab_bar_nav read back as [[(wid, x, w), ...] per row, top to bottom], or None when it is
+    missing or not exactly what nav_value writes: every id and integer is checked, and row
+    numbers must rise."""
+    if not text or len(text) > NAV_MAX:
+        return None
+    rows, last = [], -1
+    for part in text.split("|"):
+        if not NAV_ROW.match(part):
+            return None
+        r, tabs = part.split(";")
+        if int(r) <= last:
+            return None
+        last = int(r)
+        rows.append([(wid, int(x), int(w)) for wid, x, w in
+                     (tab.split(":") for tab in tabs.split(","))])
+    return rows
+
+
+def nav_step(rows: list | None, current: str, direction: str) -> tuple | None:
+    """Where a Shift+arrow goes from `current` (pure): ("select", wid), (command,) for tmux's
+    previous-window or next-window when the bar has no place for the current window (no
+    @tab_bar_nav, or the window is hidden in +N), or None to stay.
+    Left and right step in reading order, past a row's end to the next row's first tab and from
+    the last tab to the first. Up and down go to the next row up or down (wrapping between the
+    top and bottom rows), to the tab whose span covers the current tab's first cell, else the
+    nearest by column (the left one on a tie)."""
+    where = next(((r, k) for r, row in enumerate(rows or []) for k, tab in enumerate(row)
+                  if tab[0] == current), None)
+    if where is None:
+        fallback = {"left": "previous-window", "right": "next-window"}.get(direction)
+        return (fallback,) if fallback else None
+    r, k = where
+    if direction in ("left", "right"):
+        flat = [tab[0] for row in rows for tab in row]
+        step = 1 if direction == "right" else -1
+        target = flat[(flat.index(current) + step) % len(flat)]
+    else:
+        x = rows[r][k][1]
+        step = 1 if direction == "down" else -1
+
+        def distance(tab: tuple) -> int:
+            return max(tab[1] - x, x - (tab[1] + tab[2] - 1), 0)
+
+        target = min(rows[(r + step) % len(rows)], key=distance)[0]
+    return None if target == current else ("select", target)
+
+
+def nav(direction: str, client: str) -> None:
+    """Select the window a Shift+arrow on `client` goes to: one tmux read, then at most one
+    select-window (or previous-window/next-window) on that client's session."""
+    if direction not in DIRECTIONS or not CLIENT.match(client):
+        return
+    found = [f for f in read(4, "list-clients", NAV_FMT) if f[0] == client]
+    if len(found) != 1:
+        return
+    _, sid, wid, text = found[0]
+    if not SID.match(sid) or not WID.match(wid):
+        return
+    step = nav_step(parse_nav(text), wid, direction)
+    if step is None:
+        return
+    if step[0] == "select":
+        tmux("select-window", "-t", f"{sid}:{step[1]}")
+    else:
+        tmux(step[0], "-t", sid)
+
+
 def log_error(path: str, text: str) -> None:
     """The end of text into the run dir's error log (never a symlink; owner-only)."""
     try:
@@ -800,17 +909,22 @@ def run_locked(base: str, run=None) -> None:
 
 
 def main(argv: list) -> int:
-    if argv[1:] != ["layout"]:
+    """`layout`, or `nav <direction> <client>`; nav always exits 0, since a key runs it."""
+    is_nav = argv[1:2] == ["nav"]
+    if not is_nav and argv[1:] != ["layout"]:
         return 2
     tmux_env = os.environ.get("TMUX")
     if not tmux_env:
-        return 0                        # outside tmux: nothing to lay out
+        return 0                        # outside tmux: nothing to lay out or select
     run_dir = os.environ.get("TMUX_CLAUDE_STATUS_DIR") or "/tmp"
     base = os.path.join(run_dir, f".tmux-tab-bar.{os.getuid()}.{server_key(tmux_env)}")
     try:
-        run_locked(base)
+        if not is_nav:
+            run_locked(base)
+        elif len(argv) == 4:
+            nav(argv[2], argv[3])
     except Exception:                   # fail-open: the bar keeps what it had
-        log_error(base + ".err", traceback.format_exc())
+        log_error(base + (".nav.err" if is_nav else ".err"), traceback.format_exc())
     return 0
 
 

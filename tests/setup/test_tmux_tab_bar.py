@@ -662,6 +662,102 @@ class Render(unittest.TestCase):
                          [None, None, None])
 
 
+# --- nav: Shift+arrows (pure) --------------------------------------------------------------------
+
+def select(rows, current, direction):
+    step = tb.nav_step(rows, current, direction)
+    return step[1] if step and step[0] == "select" else step
+
+
+class Nav(unittest.TestCase):
+    def nav(self, lay):
+        rows = tb.parse_nav(tb.nav_value(lay))
+        self.assertIsNotNone(rows, tb.nav_value(lay))
+        return rows
+
+    def test_the_columns_are_where_each_row_draws_its_tabs(self):
+        # Checked against the drawn rows, dividers (a lone one too) and +N included.
+        big = [Group(f"g{k}", tabs(*range(10 * k + 1, 10 * k + 11))) for k in range(6)]
+        packed = [Group("alpha", tabs(1, 2)), Group("bravo", tabs(3, 4, 5)),
+                  Group("charlie", tabs(6, 7, 8)), Group("delta", tabs(9, 10, 11))]
+        cases = [([DOTCLAUDE], SHARED5, 188, "@4"), ([DOTCLAUDE], SHARED5, 45, "@4"),
+                 (big, tabs(*range(61, 66)), 188, "@63"), (big, [], 45, "@60"),
+                 (packed, tabs(*range(12, 26)), 188, "@1")]
+        for groups, shared, width, current in cases:
+            with self.subTest(width=width, current=current, groups=len(groups)):
+                lay = tb.lay_out(groups, shared, width, current, 8, 22)
+                rows = self.nav(lay)
+                env = bar_env(lay, current)
+                self.assertEqual(len(rows), len(lay.rows))
+                for nav_row, fmt, items, slot in zip(rows, tb.render(lay), lay.rows, lay.slots):
+                    starts = []
+                    draw(fmt, env, starts)
+                    self.assertEqual([t[1] for t in nav_row], starts)
+                    self.assertEqual([t[0] for t in nav_row], tab_ids(items))
+                    self.assertEqual({t[2] for t in nav_row}, {slot})
+
+    def test_the_value_holds_only_ids_and_integers(self):
+        lay = tb.lay_out([DOTCLAUDE], SHARED5, 188, "@4", 8, 22)
+        self.assertEqual(tb.nav_value(lay), "0;@4:19:32,@6:52:32,@7:85:32,@8:118:32|"
+                                            "1;@1:19:32,@2:52:32,@3:85:32,@5:118:32,@9:151:32")
+        self.assertIn(("@tab_bar_nav", tb.nav_value(lay)), tb.session_ops(lay, tb.render(lay)))
+
+    def test_the_live_shape_on_the_desktop(self):
+        rows = self.nav(tb.lay_out([DOTCLAUDE], SHARED5, 188, "@4", 8, 22))
+        cases = [("@4", "right", "@6"), ("@8", "right", "@1"),     # past a row's end
+                 ("@9", "right", "@4"), ("@4", "left", "@9"),      # wrapping
+                 ("@1", "left", "@8"),
+                 ("@7", "down", "@3"),                             # the tab under it
+                 ("@9", "up", "@8"),                               # nothing above: the nearest
+                 ("@4", "up", "@1"), ("@3", "down", "@7")]         # wrapping top and bottom
+        for current, direction, want in cases:
+            with self.subTest(current=current, direction=direction):
+                self.assertEqual(select(rows, current, direction), want)
+
+    def test_the_live_shape_on_the_phone(self):
+        # Rows [@4 @6] [@7 @8] [@1 @2 @3] [@5 @9]; tabs start at 11 and 28, or 11, 22 and 33.
+        rows = self.nav(tb.lay_out([DOTCLAUDE], SHARED5, 45, "@4", 8, 22))
+        cases = [("@6", "down", "@8"), ("@8", "down", "@2"), ("@3", "down", "@9"),
+                 ("@2", "up", "@7"), ("@4", "up", "@5"), ("@9", "down", "@6"),
+                 ("@6", "right", "@7"), ("@9", "right", "@4"), ("@1", "left", "@8")]
+        for current, direction, want in cases:
+            with self.subTest(current=current, direction=direction):
+                self.assertEqual(select(rows, current, direction), want)
+
+    def test_plus_n_and_a_hidden_window(self):
+        groups = [Group(f"g{k}", tabs(*range(10 * k + 1, 10 * k + 11))) for k in range(6)]
+        rows = self.nav(tb.lay_out(groups, tabs(*range(61, 66)), 188, "@63", 28, 16))
+        self.assertEqual(select(rows, "@63", "right"), "@1")       # +N isn't a tab: wraps
+        self.assertEqual(select(rows, "@63", "left"), "@24")
+        self.assertEqual(select(rows, "@63", "up"), "@19")  # @63 at 152: @19 spans 125-154
+        # A window the layout hid (the current one moved before the relayout): by number.
+        self.assertEqual(tb.nav_step(rows, "@45", "right"), ("next-window",))
+        self.assertEqual(tb.nav_step(rows, "@45", "left"), ("previous-window",))
+        self.assertIsNone(tb.nav_step(rows, "@45", "up"))
+        self.assertIsNone(tb.nav_step(rows, "@45", "down"))
+
+    def test_a_missing_or_bad_option_falls_back(self):
+        bad = ["", "0;@4:19", "0;@4:19:32,", "0;@4:19:32|", "0;$4:19:32", "0;@4:19:32\n",
+               "1;@4:19:32|0;@6:52:32", "0;@4:1:1|0;@6:1:1", "#{E:x}", "0;@4:19:32 ; kill-server",
+               "0;@4:" + "9" * 40 + ":32", "|".join(f"{i};@4:1:1" for i in range(20000))]
+        for text in bad:
+            with self.subTest(text=text[:40]):
+                rows = tb.parse_nav(text)
+                self.assertIsNone(rows)
+                self.assertEqual(tb.nav_step(rows, "@4", "left"), ("previous-window",))
+                self.assertEqual(tb.nav_step(rows, "@4", "right"), ("next-window",))
+                self.assertIsNone(tb.nav_step(rows, "@4", "up"))
+                self.assertIsNone(tb.nav_step(rows, "@4", "down"))
+
+    def test_one_tab_or_one_row_stays(self):
+        rows = [[("@1", 8, 32)]]
+        for direction in tb.DIRECTIONS:
+            self.assertIsNone(tb.nav_step(rows, "@1", direction))
+        rows = [[("@1", 8, 32), ("@2", 41, 32)]]
+        self.assertIsNone(tb.nav_step(rows, "@2", "up"))
+        self.assertEqual(select(rows, "@2", "right"), "@1")
+
+
 # --- the source-file write ----------------------------------------------------------------------
 
 # A model of tmux 3.7c's config lexer (cmd-parse.y yylex_token) for the words tmux-tab-bar writes,
@@ -732,8 +828,8 @@ class Quote(unittest.TestCase):
         cmds = tmux_words(line)
         names = [c[3] if c[1] == "-t" else c[4] for c in cmds]
         self.assertEqual(names, ["@tab_bar_g0"] + [f"status-format[{i}]" for i in range(len(rows))]
-                         + ["status", "status-position", "status-left", "status-right",
-                            "@tab_bar_sig"])
+                         + ["@tab_bar_nav", "status", "status-position", "status-left",
+                            "status-right", "@tab_bar_sig"])
         self.assertEqual([c[4] for c in cmds[1:1 + len(rows)]], rows)
         self.assertEqual(cmds[-1], ["set-option", "-t", "$3", "@tab_bar_sig", "SIG"])
         no_status = tmux_words(tb.write_line("$3", tb.session_ops(lay, rows), None, "SIG"))
@@ -744,6 +840,10 @@ class Quote(unittest.TestCase):
 
 HOOK = ("'run-shell -b \"[ -x $HOME/.local/bin/tmux-tab-bar ] && "
         "$HOME/.local/bin/tmux-tab-bar layout >/dev/null 2>&1; true\"'")
+
+
+NAV_BIND = ("bind -n S-{key} run-shell -b '[ -x \"$HOME/.local/bin/tmux-tab-bar\" ] && "
+            "\"$HOME/.local/bin/tmux-tab-bar\" nav {dir} \"#{{client_name}}\" >/dev/null 2>&1; true'\n")
 
 
 class Conf(unittest.TestCase):
@@ -784,6 +884,35 @@ class Conf(unittest.TestCase):
             with self.subTest(hook=hook):
                 self.assertIn(f"set-hook -g {hook}[43] {HOOK}\n", text)
         self.assertEqual(text.count("tmux-tab-bar layout"), len(hooks))
+
+    def test_shift_arrows_run_nav_for_the_client_that_pressed_them(self):
+        with open(CONF) as f:
+            text = f.read()
+        for key in ("Left", "Right", "Up", "Down"):
+            with self.subTest(key=key):
+                self.assertIn(NAV_BIND.format(key=key, dir=key.lower()), text)
+        self.assertEqual(text.count('tmux-tab-bar" nav '), 4)
+        with open(os.path.join(REPO, "tmux", "base.conf")) as f:
+            base = f.read()
+        self.assertNotIn("S-Up", base)          # claude.conf, sourced after it, owns all four
+
+    def test_the_nav_command_exits_0_and_says_nothing_whatever_the_script_does(self):
+        line = NAV_BIND.format(key="Left", dir="left")
+        cmd = line.split("'", 1)[1].rsplit("'", 1)[0].replace("#{client_name}", "/dev/pts/9")
+        home = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, home)
+        script = os.path.join(home, ".local", "bin", "tmux-tab-bar")
+        os.makedirs(os.path.dirname(script))
+        for body, mode in ((None, None), ("#!/bin/sh\necho out; echo err >&2; exit 3\n", 0o755),
+                           ("#!/bin/sh\nexit 0\n", 0o644)):
+            with self.subTest(body=body, mode=mode):
+                if body is not None:
+                    with open(script, "w") as f:
+                        f.write(body)
+                    os.chmod(script, mode)
+                p = subprocess.run(["sh", "-c", cmd], capture_output=True, text=True,
+                                   timeout=10, env={"HOME": home, "PATH": "/usr/bin:/bin"})
+                self.assertEqual((p.returncode, p.stdout, p.stderr), (0, "", ""))
 
     def test_the_hook_command_exits_0_and_says_nothing_whatever_the_script_does(self):
         cmd = HOOK.split('"')[1].replace("$HOME", "$H")
@@ -1064,6 +1193,71 @@ class FakeTmux(unittest.TestCase):
         names = {w["window_id"]: w.get("@tab_name") for w in self.read_state()["windows"]}
         self.assertEqual(names["@1"], "hq:")
         self.assertNotEqual(names["@5"], "lead")
+
+    def nav_state(self, current, nav=None, client="/dev/pts/7"):
+        """Lay out, then give the fake one client on $0 at window `current`, whose
+        #{@tab_bar_nav} (tmux resolves it from the client's session) is the session's, or `nav`."""
+        self.run_layout()
+        st = self.read_state()
+        value = st["sessions"][0]["@tab_bar_nav"] if nav is None else nav
+        st["clients"] = [{"session_id": "$0", "client_width": "188", "client_name": client,
+                          "window_id": current, "@tab_bar_nav": value}]
+        self.write_state(st)
+
+    def run_nav(self, *args, **env):
+        """nav's tmux calls after its read: [] when it selects nothing."""
+        if os.path.exists(self.log):
+            os.remove(self.log)
+        p = subprocess.run([sys.executable, "-I", SCRIPT, "nav", *args], capture_output=True,
+                           text=True, timeout=30, env={**self.env, **env})
+        self.assertEqual((p.returncode, p.stdout, p.stderr), (0, "", ""))
+        return [c for c in self.calls() if c[0] != "list-clients"]
+
+    def test_nav_selects_by_the_bars_layout(self):
+        # Rows: dotclaude's lead @2 and lanes @3 @4, then the shared @1. G = 28 + 11.
+        self.nav_state("@2")
+        self.assertEqual(self.session()["@tab_bar_nav"],
+                         "0;@2:39:32,@3:72:32,@4:105:32|1;@1:39:32")
+        for direction, want in (("right", "@3"), ("down", "@1"), ("left", "@1"), ("up", "@1")):
+            with self.subTest(direction=direction):
+                self.assertEqual(self.run_nav(direction, "/dev/pts/7"),
+                                 [["select-window", "-t", f"$0:{want}"]])
+        self.nav_state("@4")
+        self.assertEqual(self.run_nav("right", "/dev/pts/7"), [["select-window", "-t", "$0:@1"]])
+        self.assertEqual(sum(c[0] == "list-clients" for c in self.calls()), 1)   # one read
+
+    def test_nav_without_a_layout_steps_by_number(self):
+        for nav in ("", "0;@2:39:32 ; kill-server", "#{E:x}"):
+            with self.subTest(nav=nav):
+                self.nav_state("@2", nav)
+                self.assertEqual(self.run_nav("right", "/dev/pts/7"),
+                                 [["next-window", "-t", "$0"]])
+                self.assertEqual(self.run_nav("left", "/dev/pts/7"),
+                                 [["previous-window", "-t", "$0"]])
+                self.assertEqual(self.run_nav("up", "/dev/pts/7"), [])
+
+    def test_nav_checks_its_words_and_says_nothing(self):
+        self.nav_state("@2")
+        for args in (("right", "/dev/pts/7;kill-server"), ("right", "-t"), ("right", ""),
+                     ("sideways", "/dev/pts/7"), ("right",), ("right", "/dev/pts/7", "x"), ()):
+            with self.subTest(args=args):
+                self.assertEqual(self.run_nav(*args), [])
+                self.assertEqual(self.calls(), [])          # not even the read
+        self.assertEqual(self.run_nav("right", "/dev/pts/8"), [])   # no such client
+        for wid in ("@2;x", "2", ""):                       # a window id that isn't one
+            with self.subTest(wid=wid):
+                self.nav_state(wid)
+                self.assertEqual(self.run_nav("right", "/dev/pts/7"), [])
+        env = {k: v for k, v in self.env.items() if k != "TMUX"}
+        p = subprocess.run([sys.executable, "-I", SCRIPT, "nav", "right", "/dev/pts/7"],
+                           capture_output=True, text=True, timeout=30, env=env)
+        self.assertEqual((p.returncode, p.stdout, p.stderr), (0, "", ""))
+
+    def test_a_failing_tmux_leaves_nav_silent(self):
+        self.nav_state("@2")
+        self.assertEqual(self.run_nav("right", "/dev/pts/7", STUB_FAIL="list-clients"), [])
+        with open(self.base + ".nav.err") as f:
+            self.assertIn("list-clients", f.read())
 
     def test_outside_tmux_nothing_runs(self):
         env = {k: v for k, v in self.env.items() if k != "TMUX"}
@@ -1447,6 +1641,61 @@ class RealTmux(unittest.TestCase):
         self.click(x, y, button=2, release=False)   # a release outside would close it
         self.find("2:hqwin")
         self.find("Swap Left")
+
+    def link_script(self):
+        """Put tmux-tab-bar where the conf's hooks and keys look for it."""
+        bin_dir = os.path.join(self.home, ".local", "bin")
+        os.makedirs(bin_dir, exist_ok=True)
+        os.symlink(SCRIPT, os.path.join(bin_dir, "tmux-tab-bar"))
+
+    def add_second_laned_repo(self):
+        """Window 3 in another laned repo's lead: rows [0 1] [3] [2] (two groups, then hq)."""
+        lead = make_repo(os.path.dirname(self.plain), "karaoke", lanes=["k1"])
+        self.ti("new-window", "-d", "-t", "t:3", "-c", lead, "sleep 600")
+
+    def press(self, key, want):
+        self.to("send-keys", "-t", "o", key)        # the outer pane passes it to the client
+        self.wait(lambda: self.current() == want,
+                  f"{key} did not go to window {want} (at {self.current()})")
+
+    def nav_rows(self):
+        ids = dict(line.split() for line in self.ti(
+            "list-windows", "-t", "t", "-F", "#{window_id} #{window_index}").stdout.split("\n")
+            if line)
+        rows = tb.parse_nav(self.show("-v", "-t", "t", "@tab_bar_nav").strip())
+        return [[ids[t[0]] for t in row] for row in rows]
+
+    def test_shift_arrows_follow_the_bars_layout(self):
+        self.link_script()
+        self.add_second_laned_repo()
+        self.run_layout()
+        self.assertEqual(self.nav_rows(), [["0", "1"], ["3"], ["2"]])
+        ys = [self.find(text)[1] for text in ("0 lead", "3 lead", "2 hq:")]
+        self.assertEqual(ys, [1, 2, 3])
+        self.assertEqual(self.current(), "0")
+        # Down from the lane (row 0's second tab) finds no tab under it: the nearest. Up from
+        # row 0 wraps to the bottom row; up from the bottom row goes to row 1, not row 0.
+        for key, want in (("S-Right", "1"), ("S-Down", "3"), ("S-Left", "1"), ("S-Up", "2"),
+                          ("S-Up", "3"), ("S-Right", "2"), ("S-Right", "0")):
+            self.press(key, want)
+        self.run_layout()                       # and the keys left no error behind
+
+    def test_shift_up_goes_to_the_row_above_on_the_phone_too(self):
+        # The phone's bar is at the bottom, but tmux still draws row 0 on top.
+        self.link_script()
+        self.add_second_laned_repo()
+        self.to("resize-window", "-t", "o", "-x", "45")
+        self.wait(lambda: self.ti("list-clients", "-F", "#{client_width}").stdout.strip() == "45",
+                  "the client never shrank to 45")
+        self.run_layout()
+        self.assertEqual(self.show("-v", "-t", "t", "status-position").strip(), "bottom")
+        self.assertEqual(self.nav_rows(), [["0", "1"], ["3"], ["2"]])
+        ys = [self.find(text)[1] for text in ("0 lead", "3 lead", "2 hq:")]
+        self.assertEqual(ys, [44, 45, 46])
+        self.ti("select-window", "-t", "t:2")
+        for key, want in (("S-Up", "3"), ("S-Up", "0"), ("S-Down", "3"), ("S-Down", "2")):
+            self.press(key, want)
+        self.run_layout()
 
     def test_no_hook_puts_a_pane_in_view_mode(self):
         # HOME has no tmux-tab-bar: every hook's command must still exit 0 and print nothing.
