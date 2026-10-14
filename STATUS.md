@@ -75,7 +75,8 @@ stored here).
   - Merged, installed from main and closed: `autopass-now` #90, `attach-tabs` #91, `pass-busy`
     #92, `narrow-excluded` Part 1 #93, the lead's `fix/json-depth` #94, `lane-close` #95,
     `lane-addr` #98, `excluded-guard` #100 (narrow-excluded Part 2 plus G8's fix, 2026-10-14),
-    `tab-bar` #96, #97, #99 and #101 (2026-10-14), `turn-glyph` #102 (2026-10-14).
+    `tab-bar` #96, #97, #99 and #101 (2026-10-14), `turn-glyph` #102 (2026-10-14), `ask-owner`
+    #103 (2026-10-14).
     `gh pr view <n>` and the closed records under `.git/lanes/_closed/` hold the detail.
   - `tab-bar`: Hayden smoke-tested #101 live on 2026-10-14, all 8 items on desktop and phone
     ("all works"). Design: the research page
@@ -84,17 +85,18 @@ stored here).
   - `turn-glyph` #102: the tab goes green when a reply wants Hayden, and stays busy while counted
     work runs. Tabs opened before the 2026-10-14 install keep their old startup hooks (no
     PermissionRequest or SubagentStop wiring) until they restart.
-  - `ask-owner` (opened 2026-10-14): PLAN.md "Next: two workflow fixes", the lead/lane half.
+  - `ask-owner` #103: one owner per ask. The post-merge chain and the hand-back gate before
+    `lane done` now live in `skills/lanes/SKILL.md` (The lead, step 7).
   - `guard-b` (opened 2026-10-14): excluded-guard group B, the design in the closed record
     `excluded-guard-2026-10-14`'s `.lane/PLAN.md` "Part 2b", plus (Hayden, 2026-10-14) `lane ls`
     and `lane done` reading the worktree's checked-out branch, not `lane.json`'s (lane tab-bar's
-    worktree had moved branches). Overlaps `ask-owner` on `skills/lanes/` and `docs/lanes.md`.
+    worktree had moved branches). Overlaps `pass-timeout` on `settings.json` if both wire a hook.
   - `pass-timeout` (opened 2026-10-14, Hayden's pick): a dropped `/pass` must reach the session
     itself, not only the tmux client. Seen live twice in `pass.log` (compact, `outcome=timeout
     status busy`, 2026-10-13 and 2026-10-14). On 2026-10-13 the tmux server died, and the
     session kept saying the pass was "still queued".
-  - **Merge order: `ask-owner`, then `guard-b` and `pass-timeout` by readiness.** The lead
-    installs only the next to merge.
+  - **Merge order: `guard-b` and `pass-timeout` by readiness.** The lead installs only the next
+    to merge.
   - The parked json-depth sweep (21 files, among them the delegation enforcement scripts) is on
     `fix/json-depth-sweep`, a local branch never pushed: keep it while the sweep is in the
     backlog. Shipping it first needs a check of how each enforcement site fails
@@ -117,14 +119,8 @@ stored here).
   - `lane init --model/--effort` repo defaults and `lane open --model/--effort` overrides,
     passed through to `claude` (today `lane open` hardcodes the argv).
 
-  **The post-merge chain (Hayden's design B, 2026-10-14; it replaces asking for `lane done`):**
-  the lane that learns of a merge messages the lead "merged #N". The lead runs `git fetch origin
-  main:main`, merges `main` into `chore/after-pr4` (sandbox off), re-runs `./setup.sh` and
-  `./setup-tmux.sh` from the main checkout under `lane lock install` (settings.json and
-  `~/.tmux.conf` copied first and diffed), checks no installed link or `source-file` line points
-  into a lane, nudges the other lanes to merge main, and runs `lane done` unless the lane's Next
-  starts with `Keep open:`. Never `--abandon`. One line to Hayden, or the failure. Lead STATUS
-  commits ride the next lane PR: that lane applies `git diff origin/main chore/after-pr4 --
+  **The post-merge chain** (Hayden's design B, standing approval 2026-10-14): `skills/lanes/SKILL.md`,
+  The lead, step 7. Lead STATUS commits ride the next lane PR: that lane applies `git diff origin/main chore/after-pr4 --
   STATUS.md PLAN.md` as one commit just before ready (PLAN.md too: main's glyph code cites its
   "Next: two workflow fixes", which only `chore/after-pr4` holds). A lane installs (`lane lock install --
   ./setup.sh` from its worktree, sandbox off) only when next in merge order, and its install
@@ -194,19 +190,27 @@ stored here).
   sandbox-off deletes, so the sandboxed gap stands):
   `python3 -I ~/scratch/sandbox-audit/rm_scan.py 2026-11-04`. Sending the drafted
   `$CLAUDE_JOB_DIR/tmp` bug report is Hayden's call; `CLAUDE.md` carries the workaround.
+- **Closing a merged lane with no live session** (raised by lane ask-owner, 2026-10-14): the
+  hand-back gate stands before the chain's `lane done`. Such a lane usually fails it on
+  `handoff?`, so its close becomes the lead's ask to Hayden, unless he says to close those
+  without asking.
+- **Setup's excluded-command guard scan flags a work repo's lane worktrees** (2026-10-14, after
+  #103): its shared git config points `core.hooksPath` at each worktree's own writable hooks dir,
+  so excluded commands in those worktrees are refused. Every flagged hook matched HEAD. The fix
+  is Hayden's: rerun `python3 -I hooks/excluded_guard.py --scan`, look, paste its
+  `settings.machine.json`, rerun `./setup.sh`. Each new lane there needs its own rule (Edit deny
+  rules take no glob), which is what lane guard-b's `lane new` check is for.
 - **Two Write-tool bug drafts wait in `/feedback`** (Hayden's call to send): the overwrite-guard session's has the
   `claude -p` repro and the 2.1.285 boundary; the karaoke session's has the incident.
 
 ## Notes for next session
 - **Next (lead, main checkout):** watch for "merged #N" from a lane, then run the post-merge
-  chain (In flight) and `lane done` without asking, unless that lane's Next starts with
-  `Keep open:`. Live lanes: `ask-owner` (next to merge; design B's docs), `guard-b` and
-  `pass-timeout` (both opened 2026-10-14). Check `lane ls` first, since a merge Hayden made on
-  GitHub and mentioned to no session sends no message (#102 showed merged there before its
-  lane's message came). The cap of 3 is full; the backlog's next pick is Hayden's. The lead
-  follows design B by hand until `ask-owner` merges:
-  no chat about a lane's own asks; speak on cross-lane orders, decisions raised with the lead,
-  failed checks and lead-only actions.
+  chain (`skills/lanes/SKILL.md`, The lead, step 7). Live lanes: `guard-b` and `pass-timeout`
+  (both opened 2026-10-14). The next lane PR carries the lead's STATUS and PLAN.md commits.
+  Check `lane ls` first: a merge Hayden made on GitHub and mentioned to no session sends no
+  message (#102 showed merged there before its lane's message came). One slot of 3 is free; the
+  backlog's next pick is Hayden's. No chat about a lane's own asks; speak on cross-lane orders,
+  decisions raised with the lead, failed checks and lead-only actions.
   - Design reviews the lead sent to lanes on 2026-10-14 (turn-glyph's set of wait owners and its
     classifier probe, excluded-guard's G8) live in those lanes' records and plans, and G8 in the
     private findings file. The lead's commits of 2026-10-14: `git log 6503f0e..HEAD -- STATUS.md
