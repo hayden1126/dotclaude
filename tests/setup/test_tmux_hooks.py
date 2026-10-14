@@ -5,7 +5,11 @@ A session is in view when a person sees it: a tmux tab or a plain terminal. A `c
 inherits the tab's TMUX_PANE, and a background session (claude daemon) has none; both carry
 CLAUDE_CODE_SESSION_ATTENDED=0 in a hook's env (probed on 2.1.289), so neither writes tab state
 nor rings, unless tmux/tmux-claude-status mapped the background session to the tab showing it
-($XDG_STATE_HOME/dotclaude/tabs). Stubs for tmux, powershell.exe and wslpath record every call."""
+($XDG_STATE_HOME/dotclaude/tabs). Stubs for tmux, powershell.exe and wslpath record every call;
+the tmux one (fake_tmux.py) also keeps window options and evaluates the hooks' formats, so the
+glyph tests assert the window's state and wait set. hooks/wants_input.py never runs here: the
+python3 shim answers it with $STUB_INPUT, and HOME is an empty dir, so no test reaches the API.
+The real-tmux tests repeat the glyph sequences on a tmux server when one can start."""
 import importlib.util
 import json
 import os
@@ -15,6 +19,7 @@ import sys
 import tempfile
 import time
 import unittest
+import uuid
 from unittest import mock
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -27,12 +32,13 @@ spec.loader.exec_module(stop_ring)
 STUB = """#!/usr/bin/env bash
 printf '%s\\n' "$(basename "$0") $*" >> "$STUB_LOG"
 case "$(basename "$0") $1" in
-  "tmux list-panes") printf '%s\\n' "$STUB_PANES" ;;
-  "tmux show-option") printf '%s\\n' "${STUB_WINDOW_STATE:-}" ;;
   "wslpath -w") printf 'C:\\\\stub\\\\%s\\n' "$(basename "$2")" ;;
 esac
 exit 0
 """
+FAKE_TMUX = """#!/bin/sh
+exec python3 %s "$@"
+""" % os.path.join(os.path.dirname(os.path.abspath(__file__)), "fake_tmux.py")
 
 TAB = {"TMUX": "/tmp/tmux-stub,1,0", "TMUX_PANE": "%7"}
 P_RUN = {**TAB, "CLAUDE_CODE_SESSION_ATTENDED": "0"}
@@ -46,6 +52,15 @@ BG = {"CLAUDE_CODE_SESSION_ATTENDED": "0", "CLAUDE_JOB_DIR": "/tmp/job"}
 ASCII_LOCALE = {"LC_ALL": "C", "LANG": "C", "PYTHONCOERCECLOCALE": "0", "PYTHONUTF8": "0",
                 "FAKE_PY_ASCII": "1"}
 FAKE_PYTHON = """#!/usr/bin/env bash
+for a in "$@"; do
+  case "$a" in */wants_input.py)
+    cat > /dev/null
+    printf 'wants_input\\n' >> "$STUB_LOG"
+    sleep "${STUB_INPUT_DELAY:-0}"
+    printf '%%s\\n' "${STUB_INPUT-no - 7}"
+    exit 0 ;;
+  esac
+done
 if [ -n "${FAKE_PY_ASCII:-}" ]; then
   args=(); for a in "$@"; do [ "$a" = -I ] || args+=("$a"); done
   exec %s -X utf8=0 "${args[@]}"
@@ -60,21 +75,24 @@ class Hooks(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.tmp)
         stubs = os.path.join(self.tmp, "bin")
         os.mkdir(stubs)
-        for name in ("tmux", "powershell.exe", "wslpath"):
+        for name, body in (("tmux", FAKE_TMUX), ("powershell.exe", STUB), ("wslpath", STUB)):
             path = os.path.join(stubs, name)
             with open(path, "w") as f:
-                f.write(STUB)
+                f.write(body)
             os.chmod(path, 0o755)
         with open(os.path.join(stubs, "python3"), "w") as f:
             f.write(FAKE_PYTHON % (sys.executable, sys.executable))
         os.chmod(os.path.join(stubs, "python3"), 0o755)
         self.log = os.path.join(self.tmp, "calls.log")
         self.state = os.path.join(self.tmp, "state")
+        self.tmux_state = os.path.join(self.tmp, "tmux.json")
+        os.mkdir(os.path.join(self.tmp, "home"))
         # The test may itself run inside a Claude session in a tmux tab: start from a clean env.
         self.env = {k: v for k, v in os.environ.items()
                     if not k.startswith(("CLAUDE", "TMUX"))}
         self.env.update(PATH=stubs + os.pathsep + self.env["PATH"], STUB_LOG=self.log,
                         XDG_STATE_HOME=self.state, STUB_PANES="1 %1",
+                        STUB_TMUX_STATE=self.tmux_state, HOME=os.path.join(self.tmp, "home"),
                         CLAUDE_CODE_SESSION_ID="abcdef12-0000", DOTCLAUDE_RING_SETTLE="0.3")
 
     def run_hook(self, name, session, payload=None, args=(), wait=True):
@@ -138,12 +156,45 @@ class Hooks(unittest.TestCase):
         log = self.ring_log()
         return len(log) == self.logged_before + 1 and " quiet " in log[-1]
 
-    def ring_log(self):
+    def all_log(self):
         path = os.path.join(self.state, "dotclaude", "ring.log")
         if not os.path.exists(path):
             return []
         with open(path) as f:
             return f.read().splitlines()
+
+    def ring_log(self):
+        """ring.log's sound decisions (the classifier's input= lines left out)."""
+        return [x for x in self.all_log() if " input=" not in x]
+
+    def input_log(self):
+        return [x for x in self.all_log() if " input=" in x]
+
+    def classified(self, count=1):
+        """Wait until ring.log holds count classifier lines (stop-ring's detached child logs
+        after its settle); return the last."""
+        deadline = time.time() + 15
+        while len(self.input_log()) < count and time.time() < deadline:
+            time.sleep(0.05)
+        self.assertGreaterEqual(len(self.input_log()), count, "no classifier verdict logged")
+        return self.input_log()[-1]
+
+    def window(self, target="%7"):
+        """The fake tmux's options for target: {"@claude_state": ..., ...}."""
+        if not os.path.exists(self.tmux_state):
+            return {}
+        with open(self.tmux_state) as f:
+            return json.loads(f.read() or "{}").get(target, {})
+
+    def seed(self, target="%7", **opts):
+        """Set target's window options as a hook earlier in the session would have."""
+        state = {}
+        if os.path.exists(self.tmux_state):
+            with open(self.tmux_state) as f:
+                state = json.loads(f.read() or "{}")
+        state.setdefault(target, {}).update({"@" + k: v for k, v in opts.items()})
+        with open(self.tmux_state, "w") as f:
+            json.dump(state, f)
 
     def map_tabs(self, text, age=0):
         """Write the map tmux-claude-status keeps: a server line, then "<session> <pane> <window>"."""
@@ -158,7 +209,9 @@ class Hooks(unittest.TestCase):
 
     def test_a_tab_writes_its_own_pane(self):
         self.run_hook("tmux-state.sh", TAB, args=("busy",))
-        self.assertEqual(self.window_writes(), ["tmux set-option -w -t %7 @claude_state busy"])
+        self.assertEqual(self.window(), {"@claude_state": "busy", "@claude_wait_by": ""})
+        self.assertEqual(len(self.window_writes()), 1)  # one tmux call per event
+        self.assertTrue(all(" -t %7 " in c for c in self.window_writes()))
 
     def test_a_background_session_writes_no_tab_state(self):
         # One shared daemon hosts every background session, so even an ancestry that reaches a
@@ -171,10 +224,11 @@ class Hooks(unittest.TestCase):
 
     def test_a_mapped_background_session_writes_its_tab(self):
         self.map_tabs("server 42\nother-id %3 @3\nabcdef12-0000 %9 @9\n")
-        for state in ("busy", "wait", "idle"):
-            self.run_hook("tmux-state.sh", BG, args=(state,))
-        self.assertEqual(self.window_writes(), [
-            f"tmux set-option -w -t %9 @claude_state {s}" for s in ("busy", "wait", "idle")])
+        for state, event in (("busy", "PostToolUse"), ("wait", "PermissionRequest"),
+                             ("idle", "SessionStart")):
+            self.run_hook("tmux-state.sh", BG, {"hook_event_name": event}, args=(state,))
+            self.assertEqual(self.window("%9")["@claude_state"], state)
+        self.assertEqual(self.window("%3"), {})
 
     def test_a_mapped_background_subagent_stop_does_not_clear_its_tab(self):
         self.map_tabs("server 42\nabcdef12-0000 %9 @9\n")
@@ -229,17 +283,332 @@ class Hooks(unittest.TestCase):
     def test_a_subagent_does_not_cover_a_question_waiting_on_the_user(self):
         # A background subagent keeps making tool calls while the main session asks a question;
         # its busy must not overwrite the main session's wait (2026-10-04, AskUserQuestion).
-        self.env["STUB_WINDOW_STATE"] = "wait"
+        self.seed(claude_state="wait", claude_wait_by="!main!")
         self.run_hook("tmux-state.sh", TAB, {"agent_id": "a1"}, args=("busy",))
         self.run_hook("tmux-state.sh", TAB, {"agent_type": "reviewer"}, args=("busy",))
-        self.assertEqual(self.window_writes(), [])
+        self.assertEqual(self.glyph(), ("wait", "!main!"))
         # The main session's own next event (the answer, its next tool call) clears it.
         self.run_hook("tmux-state.sh", TAB, args=("busy",))
-        self.assertEqual(len(self.window_writes()), 1)
+        self.assertEqual(self.glyph(), ("busy", ""))
 
     def test_outside_tmux_nothing_is_written(self):
         self.run_hook("tmux-state.sh", {}, args=("busy",))
         self.assertEqual(self.window_writes(), [])
+
+    # --- the glyph: the wait set, the Stop's state and its classifier --------------------
+    # PLAN.md "Next: two workflow fixes" and probes 3-4 (2.1.299): PermissionRequest fires when
+    # a dialog is shown and names a subagent's; the 6 s Notification names none; a subagent's
+    # dialog is answered by its own next event (PostToolUse on approve, SubagentStop on deny).
+
+    def glyph(self, target="%7"):
+        w = self.window(target)
+        return w.get("@claude_state"), w.get("@claude_wait_by", "")
+
+    def event(self, name, mode, agent=None, session=TAB, **payload):
+        payload = {"hook_event_name": name, **payload}
+        if agent:
+            payload["agent_id"] = agent
+        self.run_hook("tmux-state.sh", session, payload, args=(mode,))
+
+    def dialog(self, agent=None):
+        self.event("PermissionRequest", "wait", agent, tool_name="Bash")
+
+    def tool(self, agent=None):
+        self.event("PostToolUse", "busy", agent, tool_name="Bash")
+
+    def notice(self, kind="permission_prompt"):
+        self.event("Notification", "wait", notification_type=kind)
+
+    def stop(self, answer="no - 7", session=TAB, wait=True, **payload):
+        """A main Stop whose classifier answers answer; waits for its verdict unless wait is
+        False."""
+        self.env["STUB_INPUT"] = answer
+        count = len(self.input_log())
+        payload.setdefault("prompt_id", str(uuid.uuid4()))
+        self.run_hook("stop-ring.sh", session, {"hook_event_name": "Stop", **payload}, wait=wait)
+        return self.classified(count + 1) if wait else None
+
+    def test_a_main_dialog_is_green_until_the_main_session_moves_on(self):
+        self.dialog()
+        self.assertEqual(self.glyph(), ("wait", "!main!"))
+        self.tool()
+        self.assertEqual(self.glyph(), ("busy", ""))
+
+    def test_an_answered_subagent_dialog_clears_on_its_own_next_event(self):
+        # The lead's live miss (lane tab-bar, 2026-10-14): writer add88621's approved dialog
+        # stayed green for five minutes, until the main session's next turn.
+        self.dialog("a1")
+        self.assertEqual(self.glyph(), ("wait", "!agent-a1!"))
+        self.tool()  # the main session working meanwhile doesn't hide the open dialog
+        self.assertEqual(self.glyph(), ("wait", "!agent-a1!"))
+        self.tool("a1")  # approved: the call ran
+        self.assertEqual(self.glyph(), ("busy", ""))
+        self.dialog("a1")
+        self.event("SubagentStop", "busy", "a1")  # denied: the subagent ended
+        self.assertEqual(self.glyph(), ("busy", ""))
+
+    def test_two_open_dialogs_stay_green_until_both_are_answered(self):
+        self.dialog("a1")
+        self.dialog("b2")
+        self.assertEqual(self.glyph(), ("wait", "!agent-a1!!agent-b2!"))
+        self.tool("b2")
+        self.assertEqual(self.glyph(), ("wait", "!agent-a1!"))
+        self.dialog("a1")  # a second dialog of one subagent holds one token
+        self.assertEqual(self.glyph(), ("wait", "!agent-a1!"))
+        self.event("SubagentStop", "busy", "a1")
+        self.assertEqual(self.glyph(), ("busy", ""))
+
+    def test_a_main_question_beside_a_subagent_dialog(self):
+        self.dialog("a1")
+        self.dialog()  # AskUserQuestion fires PermissionRequest too (probe 4d)
+        self.tool("a1")
+        self.assertEqual(self.glyph(), ("wait", "!main!"))
+        self.tool()
+        self.assertEqual(self.glyph(), ("busy", ""))
+
+    def test_the_6s_notice_adds_an_unowned_wait_only_when_nothing_holds_one(self):
+        self.dialog("a1")
+        self.notice()  # that dialog's own notice: it names no agent
+        self.assertEqual(self.glyph(), ("wait", "!agent-a1!"))
+        self.tool("a1")
+        self.notice()  # a dialog whose PermissionRequest was lost still turns green
+        self.assertEqual(self.glyph(), ("wait", "!note!"))
+        # Its owner is unknown, so anyone's next event ends it: an agent's answer to a dialog
+        # whose notice raced it (about 6 s) leaves no green behind it until the main session.
+        self.tool("b2")
+        self.assertEqual(self.glyph(), ("busy", ""))
+        self.notice()
+        self.tool()
+        self.assertEqual(self.glyph(), ("busy", ""))
+
+    def test_an_elicitation_is_an_unowned_wait_its_tools_answer_ends(self):
+        # An MCP form fires no PermissionRequest, and neither its Notification nor the
+        # Elicitation hook names an agent (2.1.299 builds both without the tool context).
+        self.dialog("a1")
+        self.notice("elicitation_dialog")
+        self.assertEqual(self.glyph(), ("wait", "!agent-a1!!note!"))
+        self.tool("b2")  # a subagent's form: its tool call ends once the form is answered
+        self.assertEqual(self.glyph(), ("wait", "!agent-a1!"))
+        self.notice("elicitation_dialog")
+        self.stop()  # a main Stop ends it too
+        self.assertEqual(self.glyph(), ("idle", ""))
+
+    def test_an_agent_type_without_an_id_never_clears_a_wait(self):
+        self.dialog("a1")
+        self.run_hook("tmux-state.sh", TAB, {"hook_event_name": "PostToolUse",
+                                             "agent_type": "reviewer"}, args=("busy",))
+        self.assertEqual(self.glyph(), ("wait", "!agent-a1!"))
+        self.run_hook("tmux-state.sh", TAB, {"hook_event_name": "PermissionRequest",
+                                             "agent_type": "reviewer"}, args=("wait",))
+        # No id to own it by: the unowned token, which its own next event ends, not main.
+        self.assertEqual(self.glyph(), ("wait", "!agent-a1!!note!"))
+        self.run_hook("tmux-state.sh", TAB, {"hook_event_name": "PostToolUse",
+                                             "agent_type": "reviewer"}, args=("busy",))
+        self.assertEqual(self.glyph(), ("wait", "!agent-a1!"))
+
+    def test_a_hostile_agent_id_never_reaches_a_format(self):
+        self.dialog("a}#{@claude_state}")
+        self.assertEqual(self.glyph(), ("wait", "!note!"))
+
+    def test_session_start_resets_the_glyph(self):
+        self.seed(claude_state="wait", claude_wait_by="!main!!agent-a1!", claude_turn="p/1")
+        self.event("SessionStart", "idle", source="clear")
+        self.assertEqual(self.window(), {"@claude_state": "idle"})
+
+    def test_idle_on_any_event_but_session_start_writes_nothing(self):
+        # A machine overlay, or a session started before the install, may still wire
+        # `tmux-state.sh idle` on Stop: it must not empty the set under an open dialog.
+        self.seed(claude_state="wait", claude_wait_by="!agent-a1!", claude_turn="p/1")
+        for payload in ({"hook_event_name": "Stop"}, {}):
+            with self.subTest(payload=payload):
+                self.run_hook("tmux-state.sh", TAB, payload, args=("idle",))
+                self.assertEqual(self.window_writes(), [])
+
+    def test_an_old_stop_wiring_beside_stop_ring_keeps_an_open_agent_dialog(self):
+        for first in ("old", "new"):
+            with self.subTest(first=first):
+                self.dialog("a1")
+                tasks = [{"id": "a1", "type": "subagent", "status": "running"}]
+                if first == "old":
+                    self.event("Stop", "idle")
+                self.stop(background_tasks=tasks)
+                if first == "new":
+                    self.event("Stop", "idle")
+                self.assertEqual(self.glyph(), ("wait", "!agent-a1!"))
+                self.notice()  # its 6 s notice adds nothing while a1 holds the wait
+                self.tool("a1")
+                self.assertEqual(self.glyph(), ("busy", ""))
+
+    def test_a_subagents_event_leaves_an_idle_tab_idle(self):
+        # The Stop counted no work (a teammate or a dream runs on): its tool calls and its end
+        # don't turn the tab busy, the ring's rule.
+        self.stop(background_tasks=[{"id": "t1", "type": "teammate", "status": "running"}])
+        self.assertEqual(self.glyph(), ("idle", ""))
+        self.tool("t1")
+        self.event("SubagentStop", "busy", "t1")
+        self.run_hook("tmux-state.sh", TAB, {"hook_event_name": "PostToolUse",
+                                             "agent_type": "dream"}, args=("busy",))
+        self.assertEqual(self.glyph(), ("idle", ""))
+        self.dialog("t1")  # its dialog still turns it green, and its answer ends that
+        self.tool("t1")
+        self.assertEqual(self.glyph(), ("busy", ""))
+
+    def test_a_long_agent_id_is_still_its_own(self):
+        self.dialog("a" * 128)
+        self.assertEqual(self.glyph(), ("wait", "!agent-%s!" % ("a" * 128)))
+        self.tool("a" * 128)
+        self.assertEqual(self.glyph(), ("busy", ""))
+
+    def test_a_stop_is_busy_while_counted_work_runs_else_idle(self):
+        # The ring's rule (stop_ring.WAITS): every Stop wrote idle before, a running subagent's
+        # included (capella-studio's stop record, 2026-10-14).
+        for task, state in (("subagent", "busy"), ("shell", "busy"), ("workflow", "busy"),
+                            ("cloud session", "busy"), ("teammate", "idle"), ("dream", "idle"),
+                            ("monitor", "idle")):
+            with self.subTest(task=task):
+                self.stop(background_tasks=[{"id": "t1", "type": task, "status": "running"}])
+                self.assertEqual(self.glyph(), (state, ""))
+
+    def test_a_reply_that_wants_the_person_paints_green_over_busy(self):
+        line = self.stop("yes - 412", background_tasks=[
+            {"id": "a1", "type": "subagent", "status": "running"}])
+        self.assertEqual(self.glyph(), ("wait", "!main!"))
+        self.assertIn("stop input=yes ms=412 painted=1 session=abcdef12 kind=tab", line)
+        self.tool()
+        self.assertEqual(self.glyph(), ("busy", ""))
+
+    def test_a_no_leaves_the_stops_state(self):
+        line = self.stop("no - 9")
+        self.assertEqual(self.glyph(), ("idle", ""))
+        self.assertIn("stop input=no ms=9 painted=- ", line)
+
+    def test_a_failed_classifier_paints_green_and_logs_why(self):
+        for answer, logged in (("error http-429 12", "input=error reason=http-429 ms=12"),
+                               ("error no-token 3", "input=error reason=no-token ms=3"),
+                               ("", "input=error reason=crash ms=-"),
+                               ("garbage here", "input=error reason=crash ms=-")):
+            with self.subTest(answer=answer):
+                line = self.stop(answer)
+                self.assertEqual(self.glyph(), ("wait", "!main!"))
+                self.assertIn(logged + " painted=1", line)
+                self.tool()
+
+    def test_a_paint_never_lands_after_a_newer_event(self):
+        self.env["STUB_INPUT_DELAY"] = "1"
+        self.stop("yes - 900", wait=False)
+        self.event("UserPromptSubmit", "busy", prompt="next")
+        self.assertIn("input=yes ms=900 painted=0", self.classified())
+        self.assertEqual(self.glyph(), ("busy", ""))
+
+    def test_a_newer_stop_supersedes_an_older_classifier(self):
+        self.env["STUB_INPUT_DELAY"] = "1.5"
+        self.stop("yes - 1500", wait=False)  # a Stop another hook blocked, say
+        self.env["STUB_INPUT_DELAY"] = "0"
+        self.stop("no - 5", wait=False)
+        self.classified(2)
+        self.assertEqual(sorted(x.split()[3] for x in self.input_log()),
+                         ["input=no", "input=yes"])
+        self.assertIn("painted=0", [x for x in self.input_log() if "input=yes" in x][0])
+        self.assertEqual(self.glyph(), ("idle", ""))
+
+    def test_a_queued_prompt_that_resumes_shows_busy_not_green(self):
+        # Probe 3a: a prompt typed during the reply fires UserPromptSubmit when queued, before
+        # the Stop; the turn it starts after the Stop fires none.
+        path = self.transcript({"type": "assistant", "message": {"content": "done"}})
+        self.stop("yes - 40", wait=False, transcript_path=path)
+        self.transcript(self.DEQUEUE)
+        self.assertIn("input=yes resumed=1 ms=40 painted=-", self.classified())
+        self.assertEqual(self.glyph(), ("busy", ""))
+
+    def test_a_resumed_turn_shows_busy_at_the_settle_not_after_haiku(self):
+        self.env["STUB_INPUT_DELAY"] = "3"
+        path = self.transcript({"type": "assistant", "message": {"content": "done"}})
+        self.stop("yes - 3000", wait=False, transcript_path=path)
+        self.transcript(self.DEQUEUE)
+        deadline = time.time() + 2.5  # the settle is 0.3 s; Haiku answers at 3 s
+        while self.glyph()[0] != "busy" and time.time() < deadline:
+            time.sleep(0.05)
+        self.assertEqual(self.glyph(), ("busy", ""))
+        self.assertEqual(self.input_log(), [])  # Haiku hasn't answered yet
+        self.assertIn("input=yes resumed=1 ms=3000 painted=-", self.classified())
+        self.assertEqual(self.glyph(), ("busy", ""))
+
+    def test_a_dequeue_wins_over_any_verdict_and_never_over_a_newer_event(self):
+        for answer in ("no - 4", "error http-500 4"):
+            with self.subTest(answer=answer):
+                path = self.transcript({"type": "assistant", "message": {"content": "x"}})
+                self.stop(answer, wait=False, transcript_path=path)
+                self.transcript(self.DEQUEUE)
+                self.assertIn(" resumed=1 ms=4 painted=-", self.classified(len(self.input_log()) + 1))
+                self.assertEqual(self.glyph(), ("busy", ""))
+        # A main event after the Stop took the window: the dequeue's busy paint is refused. The
+        # verdict comes late enough that the dequeue is seen at its check under any load.
+        self.env["STUB_INPUT_DELAY"] = "3"
+        path = self.transcript({"type": "assistant", "message": {"content": "y"}})
+        count = len(self.input_log())
+        self.stop("yes - 5", wait=False, transcript_path=path)
+        self.event("PreToolUse", "busy", tool_name="AskUserQuestion")
+        self.dialog()
+        self.transcript(self.DEQUEUE)
+        self.assertIn("resumed=1", self.classified(count + 1))
+        self.assertEqual(self.glyph(), ("wait", "!main!"))
+
+    def test_a_running_workflow_keeps_every_agents_dialog(self):
+        # A workflow's agents have ids no task lists: the Stop keeps every agent's token while
+        # one runs, and drops the stale ones at the first Stop without one.
+        self.dialog("w9")
+        self.stop(background_tasks=[{"id": "t1", "type": "workflow", "status": "running"}])
+        self.assertEqual(self.glyph(), ("wait", "!agent-w9!"))
+        self.stop()
+        self.assertEqual(self.glyph(), ("idle", ""))
+        # Any other kind keeps only its own id's token: a finished teammate lingers in the list,
+        # and keeping every token for it would hold a stale one green through all main work.
+        for kind in ("teammate", "dream", "something new", None):
+            with self.subTest(kind=kind):
+                self.seed(claude_wait_by="!agent-x!")
+                self.stop(background_tasks=[{"id": "t1", "type": kind, "status": "running"}, 7])
+                self.event("UserPromptSubmit", "busy", prompt="next")
+                self.assertEqual(self.glyph(), ("busy", ""))
+
+    def test_a_stop_keeps_a_running_subagents_dialog_green(self):
+        # Probe 4b: a main Stop landed 0.1 s after a background subagent's dialog opened.
+        self.dialog("a1")
+        self.stop(background_tasks=[{"id": "a1", "type": "subagent", "status": "running"}])
+        self.assertEqual(self.glyph(), ("wait", "!agent-a1!"))
+        self.stop()  # a1 no longer runs: its token is stale
+        self.assertEqual(self.glyph(), ("idle", ""))
+        # Any running task keeps its id's dialog (a teammate's, a workflow's), counted or not:
+        # dropping a live agent's token would blank its open dialog.
+        self.dialog("t1")
+        self.stop(background_tasks=[{"id": "t1", "type": "teammate", "status": "running"}])
+        self.assertEqual(self.glyph(), ("wait", "!agent-t1!"))
+
+    def test_a_stop_ends_a_main_wait_and_sets_its_turn(self):
+        self.seed(claude_state="wait", claude_wait_by="!main!")
+        self.stop(prompt_id="6c009242-28f2-45be-a312-32b7db9652c9")
+        self.assertEqual(self.glyph(), ("idle", ""))
+        turn = self.window()["@claude_turn"]
+        self.assertRegex(turn, r"^6c009242-28f2-45be-a312-32b7db9652c9/[0-9]{16,}$")
+        for hostile in ("a},#{@claude_state}", "x" * 65, 7):
+            with self.subTest(prompt_id=hostile):
+                self.stop(prompt_id=hostile)
+                self.assertRegex(self.window()["@claude_turn"], r"^none/[0-9]{16,}$")
+
+    def test_off_tab_and_subagent_stops_paint_nothing_and_ask_no_one(self):
+        for session, payload in ((P_RUN, {}), (BG, {}), (TAB, {"agent_id": "a1"}),
+                                 ({}, {})):
+            with self.subTest(session=session, payload=payload):
+                self.stop("yes - 1", session=session, wait=False, **payload)
+        time.sleep(0.6)  # past the settle a classifier would have waited out
+        self.assertEqual(self.input_log(), [])
+        self.assertNotIn("wants_input", self.calls())
+        self.assertEqual(self.window_writes(), [])
+
+    def test_a_mapped_background_stop_paints_its_tab(self):
+        self.map_tabs("server 42\nabcdef12-0000 %9 @9\n")
+        self.stop("yes - 3", session=BG)
+        self.assertEqual(self.glyph("%9"), ("wait", "!main!"))
+        self.assertEqual(self.window("%7"), {})
 
     # --- stop-ring.sh: who rings when a turn ends -----------------------------------------
 
@@ -537,8 +906,9 @@ class Hooks(unittest.TestCase):
         self.assertEqual([(r["prompt_id"], r["text"]) for r in rec["replies"]],
                          [("p1", "One."), ("p1", "Two, " + chr(0x00E9))])
         self.assertEqual(rec["waits"], [])  # the rest of the record is as before
-        raw = open(os.path.join(self.state, "dotclaude", "stops", "abcdef12-0000.json"),
-                   "rb").read()
+        with open(os.path.join(self.state, "dotclaude", "stops", "abcdef12-0000.json"),
+                  "rb") as f:
+            raw = f.read()
         self.assertIn(chr(0x00E9).encode(), raw)  # ensure_ascii=False, as UTF-8
         self.run_hook("stop-ring.sh", TAB, {"prompt_id": "p2", "last_assistant_message": None})
         self.assertEqual(len(self.stop_record()["replies"]), 2)  # nothing to add
@@ -832,6 +1202,131 @@ class Hooks(unittest.TestCase):
         self.assertTrue(self.toasted())
         self.run_hook("stop-ring.sh", TAB)
         self.assertEqual(len(self.ring_log()), 2)
+
+
+class RealTmux(unittest.TestCase):
+    """The glyph's sequences on a real tmux server, so fake_tmux.py's format subset can't drift
+    from tmux. tmux can't start inside the Bash sandbox, where these skip: run them sandbox-off
+    once per change (`python3 -m unittest tests.setup.test_tmux_hooks.RealTmux`)."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp)
+        env = {k: v for k, v in os.environ.items() if not k.startswith(("CLAUDE", "TMUX"))}
+        self.server = ["tmux", "-L", "glyph-test-%d" % os.getpid(), "-f", "/dev/null"]
+        try:
+            start = subprocess.run(self.server + ["new-session", "-d", "-s", "t", "sleep 120"],
+                                   capture_output=True, text=True, timeout=10, env=env)
+        except (OSError, subprocess.TimeoutExpired) as e:
+            self.skipTest("no tmux here: %s" % e)
+        if start.returncode:
+            self.skipTest("tmux can't start here: %s" % start.stderr.strip()[:80])
+        self.addCleanup(subprocess.run, self.server + ["kill-server"], capture_output=True)
+        socket, pid, self.pane = subprocess.run(
+            self.server + ["display", "-p", "#{socket_path} #{pid} #{pane_id}"],
+            capture_output=True, text=True, env=env).stdout.split()
+        stubs = os.path.join(self.tmp, "bin")
+        os.mkdir(stubs)
+        with open(os.path.join(stubs, "python3"), "w") as f:
+            f.write(FAKE_PYTHON % (sys.executable, sys.executable))
+        with open(os.path.join(stubs, "powershell.exe"), "w") as f:
+            f.write(STUB)
+        for name in ("python3", "powershell.exe"):
+            os.chmod(os.path.join(stubs, name), 0o755)
+        os.mkdir(os.path.join(self.tmp, "home"))
+        self.env = {**env, "PATH": stubs + os.pathsep + env["PATH"],
+                    "TMUX": "%s,%s,0" % (socket, pid), "TMUX_PANE": self.pane,
+                    "XDG_STATE_HOME": os.path.join(self.tmp, "state"),
+                    "HOME": os.path.join(self.tmp, "home"),
+                    "STUB_LOG": os.path.join(self.tmp, "calls.log"),
+                    "CLAUDE_CODE_SESSION_ID": "abcdef12-0000", "DOTCLAUDE_RING_SETTLE": "0.3"}
+
+    def hook(self, name, mode=None, agent=None, **payload):
+        payload = {"session_id": "abcdef12-0000", **payload}
+        if agent:
+            payload["agent_id"] = agent
+        p = subprocess.run(["bash", os.path.join(HOOKS, name)] + ([mode] if mode else []),
+                           input=json.dumps(payload), capture_output=True, text=True,
+                           timeout=10, env=self.env)
+        self.assertEqual((p.returncode, p.stderr), (0, ""))
+
+    def glyph(self):
+        return tuple(subprocess.run(self.server + ["show", "-wqv", "-t", self.pane, opt],
+                                    capture_output=True, text=True).stdout.rstrip("\n")
+                     for opt in ("@claude_state", "@claude_wait_by"))
+
+    def verdicts(self):
+        try:
+            with open(os.path.join(self.tmp, "state", "dotclaude", "ring.log")) as f:
+                return [x for x in f.read().splitlines() if " input=" in x]
+        except OSError:
+            return []
+
+    def stop(self, answer, delay="0", **payload):
+        self.env.update(STUB_INPUT=answer, STUB_INPUT_DELAY=delay)
+        count = len(self.verdicts())
+        self.hook("stop-ring.sh", hook_event_name="Stop", prompt_id=str(uuid.uuid4()), **payload)
+        return count
+
+    def settled(self, count):
+        deadline = time.time() + 15
+        while len(self.verdicts()) <= count and time.time() < deadline:
+            time.sleep(0.05)
+        return self.verdicts()[-1]
+
+    def test_the_wait_set_on_real_tmux(self):
+        for agent in ("a1", "b2"):
+            self.hook("tmux-state.sh", "wait", agent, hook_event_name="PermissionRequest")
+        self.assertEqual(self.glyph(), ("wait", "!agent-a1!!agent-b2!"))
+        self.hook("tmux-state.sh", "busy", "b2", hook_event_name="PostToolUse")
+        self.assertEqual(self.glyph(), ("wait", "!agent-a1!"))
+        self.hook("tmux-state.sh", "wait", hook_event_name="Notification",
+                  notification_type="permission_prompt")
+        self.assertEqual(self.glyph(), ("wait", "!agent-a1!"))
+        self.hook("tmux-state.sh", "wait", hook_event_name="Notification",
+                  notification_type="elicitation_dialog")
+        self.assertEqual(self.glyph(), ("wait", "!agent-a1!!note!"))
+        self.hook("tmux-state.sh", "busy", hook_event_name="UserPromptSubmit")
+        self.assertEqual(self.glyph(), ("wait", "!agent-a1!"))
+        self.hook("tmux-state.sh", "busy", "a1", hook_event_name="SubagentStop")
+        self.assertEqual(self.glyph(), ("busy", ""))
+        self.hook("tmux-state.sh", "idle", hook_event_name="SessionStart")
+        self.assertEqual(self.glyph(), ("idle", ""))
+
+    def test_the_stop_and_its_paint_on_real_tmux(self):
+        self.hook("tmux-state.sh", "wait", "a1", hook_event_name="PermissionRequest")
+        n = self.stop("yes - 5", background_tasks=[{"id": "a1", "type": "subagent"}])
+        self.assertIn("painted=1", self.settled(n))
+        self.assertEqual(self.glyph(), ("wait", "!agent-a1!!main!"))
+        n = self.stop("no - 5")  # a1 is gone: its token is stale
+        self.settled(n)
+        self.assertEqual(self.glyph(), ("idle", ""))
+        n = self.stop("yes - 900", delay="1")
+        self.hook("tmux-state.sh", "busy", hook_event_name="UserPromptSubmit")
+        self.assertIn("painted=0", self.settled(n))
+        self.assertEqual(self.glyph(), ("busy", ""))
+
+    def test_the_other_formulas_on_real_tmux(self):
+        # The notice's add-when-empty, an agent event's idle-stays-idle, a main dialog, and the
+        # dequeue's nested busy paint.
+        self.hook("tmux-state.sh", "wait", hook_event_name="Notification",
+                  notification_type="permission_prompt")
+        self.assertEqual(self.glyph(), ("wait", "!note!"))
+        self.hook("tmux-state.sh", "busy", "a1", hook_event_name="PostToolUse")
+        self.assertEqual(self.glyph(), ("busy", ""))
+        self.hook("tmux-state.sh", "idle", hook_event_name="SessionStart")
+        self.hook("tmux-state.sh", "busy", "a1", hook_event_name="PostToolUse")
+        self.assertEqual(self.glyph(), ("idle", ""))
+        self.hook("tmux-state.sh", "wait", hook_event_name="PermissionRequest")
+        self.assertEqual(self.glyph(), ("wait", "!main!"))
+        path = os.path.join(self.tmp, "transcript.jsonl")
+        with open(path, "w") as f:
+            f.write('{"type":"assistant"}\n')
+        n = self.stop("yes - 5", delay="1", transcript_path=path)
+        with open(path, "a") as f:
+            f.write(json.dumps(Hooks.DEQUEUE) + "\n")
+        self.assertIn("resumed=1", self.settled(n))
+        self.assertEqual(self.glyph(), ("busy", ""))
 
 
 if __name__ == "__main__":

@@ -123,8 +123,25 @@ class Status(unittest.TestCase):
         with open(self.log) as f:
             return f.read().splitlines()
 
+    def commands(self):
+        """Each tmux command on its own, a call chaining several with ; split up."""
+        out = []
+        for c in self.calls():
+            if c.startswith("tmux "):
+                out += ["tmux " + part for part in c[5:].split(" ; ")]
+            else:
+                out.append(c)
+        return out
+
     def writes(self):
-        return sorted(c for c in self.calls() if c.startswith("tmux set-option"))
+        """The state and star writes; the glyph companions each state write carries are in
+        companions()."""
+        return sorted(c for c in self.commands() if c.startswith("tmux set-option")
+                      and " @claude_turn" not in c and " @claude_wait_by" not in c)
+
+    def companions(self):
+        return sorted(c for c in self.commands() if c.startswith("tmux set-option")
+                      and (" @claude_turn" in c or " @claude_wait_by" in c))
 
     def queried(self):
         return any(c.startswith("claude agents") for c in self.calls())
@@ -158,6 +175,9 @@ class Status(unittest.TestCase):
         self.run_status([self.session(tab, "/home/u/code/other"), self.bg()])
         self.assertEqual(self.tabs(), mapped("bg-1 %2 @2"))
         self.assertEqual(self.writes(), ["tmux set-option -w -t @2 @claude_state busy"])
+        # A busy or idle fill keeps the hooks' glyph companions: an owner's token or a Stop's
+        # pending reply check there may still be live.
+        self.assertEqual(self.companions(), [])
 
     def test_a_cwd_with_spaces_maps(self):
         self.pane("%2", "@2", "/home/u/my code/dna")
@@ -214,6 +234,8 @@ class Status(unittest.TestCase):
         self.run_status([self.bg(), self.bg(sid="bg-2", pid=9998)], hosts="501 503")
         self.assertEqual(self.tabs(), mapped())
         self.assertEqual(self.writes(), ["tmux set-option -uw -t @2 @claude_state"])
+        self.assertEqual(self.companions(), ["tmux set-option -uw -t @2 @claude_turn",
+                                             "tmux set-option -uw -t @2 @claude_wait_by"])
 
     def test_a_kept_mapping_is_refilled_after_the_map_went_stale(self):
         # Hooks ignore a map older than 90 s (tmux detached, or queries failing), so the
@@ -247,6 +269,13 @@ class Status(unittest.TestCase):
         self.run_status([self.bg(status="waiting")])
         self.assertEqual(self.tabs(), mapped("bg-1 %2 @7"))
         self.assertEqual(self.writes(), ["tmux set-option -w -t @7 @claude_state wait"])
+        # A filled wait with no owner in the set gets the unowned token, which anyone's next
+        # event ends, in the same tmux call.
+        self.assertEqual(self.companions(), [
+            "tmux set-option -wF -t @7 @claude_wait_by "
+            "#{?#{@claude_wait_by},#{@claude_wait_by},!note!}"])
+        self.assertTrue([c for c in self.calls()
+                         if "-t @7 @claude_wait_by" in c and "-t @7 @claude_state wait" in c])
 
     def test_a_vanished_mapping_clears_its_window(self):
         self.pane("%2", "@2", DNA)
@@ -400,6 +429,10 @@ class Status(unittest.TestCase):
         self.pane("%4", "@4", "/x", state="busy", command="zsh")
         self.run_status([], hosts="")
         self.assertEqual(self.writes(), ["tmux set-option -uw -t @4 @claude_state"])
+        # Claude exited: a reply check still running for its last Stop must not paint ✳ on the
+        # shell left behind, and a later Claude here starts from an empty wait set.
+        self.assertEqual(self.companions(), ["tmux set-option -uw -t @4 @claude_turn",
+                                             "tmux set-option -uw -t @4 @claude_wait_by"])
         self.assertFalse(self.queried())
 
     def test_a_star_on_a_pane_without_claude_is_cleared(self):

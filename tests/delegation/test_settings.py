@@ -115,8 +115,14 @@ class Baseline(unittest.TestCase):
         # tmux-state.sh exits at once outside a tab, so every machine carries it. The permission
         # sound lives in notify.sh, gated like stop-ring.sh: an inline one would ring for every
         # session, the canary's `claude -p` runs included.
+        # The Stop's state belongs to stop-ring.sh, which knows the turn's background work and
+        # guards the classifier's green with the turn token; a second Stop writer would race it.
+        # A dialog paints at PermissionRequest (a subagent's names its owner), SubagentStop
+        # hands a finished subagent's dialog back, and a fresh or cleared session starts blank
+        # (not on compact: an auto-compact fires mid-turn).
         want = {"UserPromptSubmit": "busy", "PreToolUse": "busy", "PostToolUse": "busy",
-                "Stop": "idle", "Notification": "wait"}
+                "SubagentStop": "busy", "Notification": "wait", "PermissionRequest": "wait",
+                "SessionStart": "idle"}
         for event, state in want.items():
             with self.subTest(event=event):
                 tmux = [h for e in S["hooks"][event] for h in e["hooks"]
@@ -125,6 +131,11 @@ class Baseline(unittest.TestCase):
                                  [f'bash "$HOME/.claude/hooks/tmux-state.sh" {state}'])
                 # It runs on every tool call: a stuck tmux server may cost 5 s, not the default.
                 self.assertEqual(tmux[0]["timeout"], 5)
+        self.assertFalse([h for e in S["hooks"]["Stop"] for h in e["hooks"]
+                          if "tmux-state.sh" in h["command"]])
+        (start,) = [e for e in S["hooks"]["SessionStart"]
+                    if any("tmux-state.sh" in h["command"] for h in e["hooks"])]
+        self.assertEqual(start.get("matcher"), "startup|resume|clear")
         every = [c for entries in S["hooks"].values() for e in entries for c in
                  (h["command"] for h in e["hooks"])]
         self.assertFalse([c for c in every if "SoundPlayer" in c])

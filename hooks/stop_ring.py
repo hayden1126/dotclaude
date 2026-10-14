@@ -1,9 +1,9 @@
 """stop-ring's event reader: the facts the shim needs, and the session's stop record.
 
 hooks/stop-ring.sh runs this file with python3 -I, passing the Stop event on stdin, and reads one
-line back: "<spawned> <busy> <task labels or -> <transcript size or -> <transcript path>". The
-shim's header says what each means; with this file missing or failing, the shim reads nothing
-and rings by its defaults. Tests import merge_replies() and prune() directly
+line back: "<spawned> <busy> <task labels or -> <running task ids, - or *> <prompt_id or ->
+<transcript size or -> <transcript path>". The shim's header says what each means; with this
+file missing or failing, the shim reads nothing and rings by its defaults. Tests import merge_replies() and prune() directly
 (tests/setup/test_tmux_hooks.py). Stdlib only; keep the source ASCII.
 
 The stop record, $XDG_STATE_HOME/dotclaude/stops/<session>.json, is written atomically for every
@@ -29,8 +29,12 @@ import time
 import unicodedata
 
 WAITS = {"subagent", "shell", "workflow", "cloud session"}
+# Task kinds whose agents have ids no task lists: a workflow's. They end with the workflow (a
+# finished teammate lingers in the list, so one there would keep a stale token without bound).
+AGENT_HOSTS = {"workflow"}
 ID = re.compile(r"[A-Za-z0-9_-]{1,128}")   # a task or tool-use id we search the transcript for
 SID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
+PROMPT_ID = re.compile(r"[A-Za-z0-9-]{1,64}")   # it goes into a tmux format: plain names only
 # The live watch the Artifact tool arms on each publish (2.1.296: a monitor_ws flagged ambient).
 # /tasks lists it under System tasks ("auto-replying to comments"), but the model never sees its
 # id. The Stop payload lists it as a `monitor` with no server, described by this prefix, the
@@ -367,12 +371,24 @@ def main() -> None:
         except Exception:
             pass
     labels = ",".join(t.replace(" ", "_") for t in types if isinstance(t, str) and t.strip())
+    # A subagent task's id is its agent_id (a task notice names it as <task-id>): the glyph keeps
+    # an agent's open dialog green across this Stop only while its task still runs. Every running
+    # task's id counts, and while a workflow runs "*" keeps every agent's token, since its agents
+    # have ids of their own: dropping a live agent's token blanks its open dialog, while a stale
+    # one lasts only until a Stop with no workflow running.
+    if any(k in AGENT_HOSTS for k in tasks):
+        agents = "*"
+    else:
+        agents = ",".join(t["id"] for t in raw if isinstance(t, dict)
+                          and isinstance(t.get("id"), str) and ID.fullmatch(t["id"]))
+    prompt = d.get("prompt_id")
+    prompt = prompt if isinstance(prompt, str) and PROMPT_ID.fullmatch(prompt) else "-"
     path = d.get("transcript_path")
     try:
         tsize = os.path.getsize(path) if isinstance(path, str) and "\n" not in path else "-"
     except (OSError, ValueError):
         tsize = "-"
-    print(spawned, busy, labels or "-", tsize, path if tsize != "-" else "")
+    print(spawned, busy, labels or "-", agents or "-", prompt, tsize, path if tsize != "-" else "")
 
 
 if __name__ == "__main__":
