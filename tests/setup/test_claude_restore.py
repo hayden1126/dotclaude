@@ -46,6 +46,10 @@ def sid(n):
     return f"{n:08d}-5e55-4000-8000-000000000000"
 
 
+# A tab bar placement: opaque to the restore, so spaces, quotes, # and $() pass as they are.
+PLACE = '{"row": 1, "pos": 2, "k": "a b #{pane_id} $(id) \'q\' ' + chr(0xe9) + '"}'
+
+
 class Restore(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
@@ -79,10 +83,10 @@ class Restore(unittest.TestCase):
 
     def entry(self, n, window, pane=None, age=600, ended=None, transcript=True, cwd=True,
               transcript_age=None, socket=SOCKET, server_start=OLD_START, server_pid=OLD_PID,
-              dirname=None, died=None, attach=False):
+              dirname=None, died=None, attach=False, place=None):
         """Write an entry for session n, its times `age`/`ended` seconds before its server
         died (`died`, default the old server's), in a real cwd. attach: claude-saved track's
-        entry for a tab attached to background session n."""
+        entry for a tab attached to background session n. place: its window's @tab_place."""
         died = self.died if died is None else died
         path = os.path.join(self.tmp, "code", dirname or f"repo{n}")
         if cwd:
@@ -100,6 +104,8 @@ class Restore(unittest.TestCase):
             e["ended_other_at"] = died - ended
         if attach:
             e |= {"attach": True, "job_id": sid(n)[:8]}
+        if place is not None:
+            e["place"] = place
         with open(os.path.join(self.reg, sid(n) + ".json"), "w") as f:
             json.dump(e, f)
         return path
@@ -326,6 +332,14 @@ class Restore(unittest.TestCase):
         self.assertEqual(self.resumed(), [(b, sid(2))])
         self.assertTrue(any(sid(1)[:8] in line and "#" in line for line in self.restore_log()))
 
+    def test_a_directory_ending_in_a_semicolon_goes_escaped(self):
+        # tmux reads an argument's trailing ; as a command separator, so `end;` unescaped would
+        # open in `end`. A trailing \; is tmux's literal ;.
+        a = self.entry(1, window=1, dirname="end;")
+        self.run_restore()
+        [nw] = self.calls("tmux", "new-window")
+        self.assertEqual(nw[9], a[:-1] + "\\;")
+
     def test_a_tab_in_the_directory_name_keeps_the_fields_apart(self):
         a = self.entry(1, window=1, dirname="a\tb")
         self.run_restore()
@@ -379,13 +393,15 @@ class Restore(unittest.TestCase):
     def test_the_lock_never_reaches_tmux_or_claude(self):
         # tmux new-session may start the server and claude agents the daemon: a lock fd they
         # inherit would outlive this run and block every later one.
-        self.entry(1, window=1)
+        self.entry(1, window=1, place=PLACE)
+        self.bar_stub()
         del self.env["STUB_HAS_MAIN"]
         self.run_restore()
         with open(self.log + ".fds") as f:
             lines = f.read().splitlines()
-        self.assertTrue(any(line.startswith("tmux new-session:") for line in lines))
-        self.assertTrue(any(line.startswith("claude agents:") for line in lines))
+        for call in ("tmux new-session:", "claude agents:", "tmux set-option:",
+                     "tmux-tab-bar layout:"):
+            self.assertTrue(any(line.startswith(call) for line in lines), call)
         for line in lines:
             with self.subTest(call=line.split(":")[0]):
                 self.assertNotIn("9", line.split(":", 1)[1].split())
@@ -399,6 +415,85 @@ class Restore(unittest.TestCase):
                        "ts": self.died, "transcript_path": "/nonexistent"}, f)
         self.run_restore()
         self.assertEqual(self.calls("tmux", "send-keys"), [])
+
+    # --- the tab bar's placement -------------------------------------------------------
+
+    def bar_stub(self, body="", mode=0o755):
+        """A ~/.local/bin/tmux-tab-bar that logs its argv like the other stubs, then runs body."""
+        path = os.path.join(self.env["HOME"], ".local", "bin", "tmux-tab-bar")
+        with open(path, "w") as f:
+            f.write(STUB + body)
+        os.chmod(path, mode)
+
+    def test_a_place_is_set_on_its_new_window_before_claude_starts(self):
+        # Fresh or resumed alike. tmux reads a trailing ; as a command separator, so it goes
+        # escaped; set-option takes the rest literally (no format expansion without -F).
+        self.entry(1, window=1, place=PLACE)
+        self.entry(2, window=2)
+        self.entry(3, window=3, transcript=False, place="end;")
+        self.run_restore()
+        calls = [a for a in self.calls("tmux") if a[1] in ("new-window", "set-option", "send-keys")]
+        self.assertEqual([a[1] for a in calls],
+                         ["new-window", "set-option", "send-keys", "new-window", "send-keys",
+                          "new-window", "set-option", "send-keys"])
+        self.assertEqual(calls[1], ["tmux", "set-option", "-w", "-t", "%101", "@tab_place", PLACE])
+        self.assertEqual(calls[2][3], "%101")
+        self.assertEqual(calls[6], ["tmux", "set-option", "-w", "-t", "%103", "@tab_place",
+                                    "end\\;"])
+        self.assertEqual(calls[7][3], "%103")
+
+    def test_the_place_limit_is_counted_in_bytes(self):
+        self.entry(1, window=1, place=chr(0xe9) * 1024)          # 2048 bytes of UTF-8
+        self.entry(2, window=2, place=chr(0xe9) * 1024 + "x")    # 2049
+        self.run_restore()
+        self.assertEqual([a[4:] for a in self.calls("tmux", "set-option")],
+                         [["%101", "@tab_place", chr(0xe9) * 1024]])
+
+    def test_an_invalid_place_sets_nothing_and_still_restores_the_tab(self):
+        bad = ("", "x" * 2049, "a\nb", "a\tb", "a" + chr(0x1b) + "b", "a" + chr(0x7f) + "b",
+               "a" + chr(0x1f) + "b", chr(0xd800), 42, ["x"], {"row": 1}, True)
+        paths = [self.entry(n, window=n, place=p) for n, p in enumerate(bad, 1)]
+        self.run_restore()
+        self.assertEqual(self.calls("tmux", "set-option"), [])
+        self.assertEqual(self.resumed(), [(p, sid(n)) for n, p in enumerate(paths, 1)])
+
+    def test_the_bar_is_laid_out_once_after_the_windows_open(self):
+        self.bar_stub()
+        self.entry(1, window=1, place=PLACE)
+        self.entry(2, window=2)
+        self.entry(3, window=3, cwd=False)   # skipped
+        self.run_restore()
+        calls = self.calls()
+        self.assertEqual(self.calls("tmux-tab-bar"), [["tmux-tab-bar", "layout"]])
+        last = max(i for i, a in enumerate(calls) if a[:2] in (["tmux", "send-keys"],
+                                                               ["tmux", "set-option"]))
+        self.assertGreater(calls.index(["tmux-tab-bar", "layout"]), last)
+
+    def test_no_layout_when_no_window_opens(self):
+        self.bar_stub()
+        self.entry(1, window=1, cwd=False, place=PLACE)   # skipped
+        self.run_restore()
+        self.entry(2, window=2, place=PLACE)
+        self.env["STUB_FAIL_NEW_WINDOW"] = "1"
+        self.run_restore()
+        self.assertEqual(self.calls("tmux", "set-option"), [])
+        self.assertEqual(self.calls("tmux-tab-bar"), [])
+
+    def test_a_missing_or_failing_tab_bar_changes_nothing(self):
+        a = self.entry(1, window=1, place=PLACE)
+        self.run_restore()   # no tmux-tab-bar: run_restore asserts exit 0
+        self.assertEqual(self.resumed(), [(a, sid(1))])
+        self.bar_stub('echo noise; echo more >&2; exit 3\n', mode=0o644)   # not executable
+        b = self.entry(2, window=1, place=PLACE)
+        self.run_restore()
+        self.assertEqual(self.calls("tmux-tab-bar"), [])
+        self.bar_stub('echo noise; echo more >&2; exit 3\n')
+        c = self.entry(3, window=1, place=PLACE)
+        p = self.run_restore()
+        self.assertEqual(self.calls("tmux-tab-bar"), [["tmux-tab-bar", "layout"]])
+        self.assertNotIn("noise", p.stdout)
+        self.assertEqual(p.stderr, "")
+        self.assertEqual(self.resumed(), [(a, sid(1)), (b, sid(2)), (c, sid(3))])
 
     # --- failures and retries -----------------------------------------------------------
 
@@ -435,11 +530,13 @@ class Restore(unittest.TestCase):
     # --- modes --------------------------------------------------------------------------
 
     def test_list_changes_nothing(self):
-        self.entry(1, window=1)
+        self.entry(1, window=1, place=PLACE)
         self.entry(2, window=2, cwd=False)
+        self.bar_stub()
         p = self.run_restore("--list")
         self.assertEqual([a for a in self.calls("tmux")
-                          if a[1] in ("new-window", "send-keys", "new-session")], [])
+                          if a[1] in ("new-window", "send-keys", "new-session", "set-option")], [])
+        self.assertEqual(self.calls("tmux-tab-bar"), [])
         self.assertEqual(self.registry(), [sid(1) + ".json", sid(2) + ".json"])
         self.assertEqual(self.registry("restored"), [])
         self.assertIn(sid(1)[:8], p.stdout)
@@ -509,6 +606,81 @@ class Restore(unittest.TestCase):
 
     def test_the_script_is_executable(self):
         self.assertTrue(os.access(SCRIPT, os.X_OK))
+
+
+class RealTmux(unittest.TestCase):
+    """A private tmux server (-S, -f /dev/null) with session main stands in for a fresh one after
+    a death: records from an earlier server on its socket, each with a place, come back as windows
+    that carry that @tab_place. New windows run sleep and claude is a stub (agents: none), so the
+    typed `claude --resume` reaches nothing."""
+
+    def setUp(self):
+        self.tmux_bin = shutil.which("tmux")
+        if not self.tmux_bin:
+            self.skipTest("tmux not installed")
+        try:                    # a short path: a socket path has a 108-byte limit
+            self.tmp = os.path.realpath(tempfile.mkdtemp(dir="/tmp"))
+        except OSError:         # the sandbox's /tmp is read-only; tmux skips below anyway
+            self.tmp = os.path.realpath(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.sock = os.path.join(self.tmp, "s")
+        home = os.path.join(self.tmp, "home")
+        local_bin = os.path.join(home, ".local", "bin")
+        os.makedirs(local_bin)
+        claude = os.path.join(local_bin, "claude")
+        with open(claude, "w") as f:
+            f.write('#!/bin/sh\n[ "$1" != agents ] || echo "[]"\n')
+        os.chmod(claude, 0o755)
+        self.env = {k: v for k, v in os.environ.items() if not k.startswith(("TMUX", "CLAUDE"))}
+        self.env.update(HOME=home, XDG_STATE_HOME=os.path.join(self.tmp, "state"),
+                        LANG="C.UTF-8", PATH=os.path.dirname(self.tmux_bin) + os.pathsep
+                        + os.environ.get("PATH", "/usr/bin:/bin"))
+        p = self.tmux("-f", "/dev/null", "new-session", "-d", "-s", "main", "sleep 600",
+                      check=False)
+        if "Operation not permitted" in p.stderr:
+            self.skipTest("the Bash sandbox blocks tmux's socket; run outside it")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.addCleanup(self.tmux, "kill-server", check=False)
+        self.tmux("set", "-g", "default-command", "sleep 600")
+        pid = self.tmux("display", "-p", "#{pid}").stdout.strip()
+        self.env["TMUX"] = f"{self.sock},{pid},0"
+
+    def tmux(self, *args, check=True):
+        # -u: a client without a UTF-8 locale prints non-ASCII as _ (utf8_sanitize).
+        p = subprocess.run([self.tmux_bin, "-u", "-S", self.sock, *args], capture_output=True,
+                           text=True, encoding="utf-8", timeout=10, env=self.env)
+        if check:
+            self.assertEqual(p.returncode, 0, p.stderr)
+        return p
+
+    def test_a_restored_window_gets_its_place_back(self):
+        # A trailing ; and a trailing \; check the escape tmux needs for each.
+        places = (PLACE + " end;", "tail\\;")
+        start, socket = self.tmux("display", "-p", "#{start_time} #{socket_path}").stdout \
+            .rstrip("\n").split(" ", 1)
+        start = int(start)
+        reg = os.path.join(self.tmp, "state", "dotclaude", "open-sessions")
+        os.makedirs(reg)
+        cwds = []
+        for n, place in enumerate(places, 1):
+            cwd = os.path.join(self.tmp, f"repo{n};")   # tmux's trailing-; trap on -c too
+            cwds.append(cwd)
+            os.makedirs(cwd)
+            transcript = os.path.join(self.tmp, f"{sid(n)}.jsonl")
+            open(transcript, "w").close()
+            os.utime(transcript, (start - 600, start - 600))
+            with open(os.path.join(reg, sid(n) + ".json"), "w") as f:
+                json.dump({"session_id": sid(n), "cwd": cwd, "transcript_path": transcript,
+                           "pane": f"%{n}", "window_index": n, "socket": socket,
+                           "server_start": start - 3600, "server_pid": 1, "ts": start - 600,
+                           "place": place}, f)
+        p = subprocess.run(["bash", SCRIPT], capture_output=True, text=True, timeout=30,
+                           env=self.env)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(self.tmux("list-windows", "-t", "=main", "-F", "#{@tab_place}")
+                         .stdout.splitlines(), ["", *places])
+        self.assertEqual(self.tmux("list-windows", "-t", "=main", "-F", "#{pane_current_path}")
+                         .stdout.splitlines()[1:], cwds)
 
 
 if __name__ == "__main__":

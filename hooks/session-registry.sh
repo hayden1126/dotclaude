@@ -5,10 +5,19 @@
 #   SessionStart (startup, resume, clear, compact)  write or refresh the session's entry
 #   SessionEnd                                      delete it, or mark it on reason `other`
 # One file per session: $XDG_STATE_HOME/dotclaude/open-sessions/<session_id>.json, holding
-# {session_id, cwd, transcript_path, pane, window_index, socket, server_start, server_pid, ts},
-# written as an fsynced tmp file plus rename. socket, server_start and server_pid (tmux's
-# #{socket_path}, #{start_time} and #{pid}; the pid tells apart two servers started in the same
-# second) name the server the tab lives in: claude inherits the pane's TMUX, so `tmux display` reaches it.
+# {session_id, cwd, transcript_path, pane, window_index, socket, server_start, server_pid, ts}
+# and, when the window has one, place, written as an fsynced tmp file plus rename. socket,
+# server_start and server_pid (tmux's #{socket_path}, #{start_time} and #{pid}; the pid tells
+# apart two servers started in the same second) name the server the tab lives in: claude inherits
+# the pane's TMUX, so `tmux display` reaches it. place is the window's @tab_place, the tab bar's
+# row and position for it (tmux/tmux-tab-bar owns the format; here it is an opaque string, kept
+# only as 1 to 2048 bytes of UTF-8 with no control character), which claude-restore sets back.
+# Every write and delete holds open-sessions/.records.lock (flock, waiting up to 2 s, then going
+# ahead without it), as claude-saved's do: tmux-tab-bar compares and replaces a record's place
+# under it, so a record deleted or rewritten here is never brought back or overwritten by a stale
+# copy. One race stays: a move landing between this hook's read of @tab_place and its write
+# leaves the record one move behind (the live bar is right) until a move that changes this
+# tab's place, or its next SessionStart.
 # Only a tab counts: no TMUX_PANE, a `claude -p` run (ATTENDED=0, even with an inherited
 # TMUX_PANE), a subagent payload (agent_id), an empty cwd or an unreadable server write nothing.
 #
@@ -32,15 +41,21 @@ case "$input" in
     [ -n "${TMUX_PANE:-}" ] || exit 0
     # "<start_time> <pid> <window_index> <socket_path>": the path last, since it may hold a space.
     server=$(tmux display -p -t "$TMUX_PANE" '#{start_time} #{pid} #{window_index} #{socket_path}' 2>/dev/null)
-    [ -n "$server" ] || exit 0 ;;
-  *'"SessionEnd"'*) server="" ;;
+    [ -n "$server" ] || exit 0
+    # Its own call, since it may hold anything. The x keeps a trailing newline of the value,
+    # which $() would strip into a valid-looking one; -u keeps tmux from replacing non-ASCII
+    # with _ when the locale isn't UTF-8. A failed read leaves it empty: no place.
+    place=$(tmux -u display -p -t "$TMUX_PANE" '#{@tab_place}' 2>/dev/null && printf x)
+    place=${place%x}
+    place=${place%$'\n'} ;;
+  *'"SessionEnd"'*) server="" place="" ;;
   *) exit 0 ;;
 esac
 
 printf '%s' "$input" | \
   REG_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/dotclaude/open-sessions" \
-  REG_SERVER="$server" REG_PANE="${TMUX_PANE:-}" python3 -I -c '
-import json, os, re, sys, tempfile, time
+  REG_SERVER="$server" REG_PANE="${TMUX_PANE:-}" REG_PLACE="$place" python3 -I -c '
+import fcntl, json, os, re, sys, tempfile, time
 try:
     d = json.load(sys.stdin)
 except Exception:
@@ -53,8 +68,27 @@ if not isinstance(sid, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{7,127
 reg = os.environ["REG_DIR"]
 path = os.path.join(reg, sid + ".json")
 
+def locked():
+    """The records lock (shared with tmux-tab-bar, whose record update compares and replaces
+    under it), as a held fd; None when it cannot be opened or is not free within 2 s: go ahead
+    without."""
+    try:
+        fd = os.open(os.path.join(reg, ".records.lock"),
+                     os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    except OSError:
+        return None
+    deadline = time.monotonic() + 2
+    while True:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return fd
+        except OSError:
+            if time.monotonic() >= deadline:
+                os.close(fd)
+                return None
+            time.sleep(0.01)
+
 def write(entry):
-    os.makedirs(reg, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=reg, prefix=".tmp-")
     with os.fdopen(fd, "w") as f:
         json.dump(entry, f)
@@ -68,14 +102,25 @@ if event == "SessionStart":
     cwd = d.get("cwd")
     if not m or not isinstance(cwd, str) or not cwd:
         sys.exit(0)
-    write({"session_id": sid, "cwd": cwd,
-           "transcript_path": d.get("transcript_path") or "",
-           "pane": os.environ.get("REG_PANE", ""),
-           "window_index": int(m.group(3)) if m.group(3) else None,
-           "socket": m.group(4), "server_start": int(m.group(1)),
-           "server_pid": int(m.group(2)),
-           "ts": round(time.time(), 3)})
+    entry = {"session_id": sid, "cwd": cwd,
+             "transcript_path": d.get("transcript_path") or "",
+             "pane": os.environ.get("REG_PANE", ""),
+             "window_index": int(m.group(3)) if m.group(3) else None,
+             "socket": m.group(4), "server_start": int(m.group(1)),
+             "server_pid": int(m.group(2)),
+             "ts": round(time.time(), 3)}
+    place = os.environ.get("REG_PLACE", "")
+    try:
+        size = len(place.encode("utf-8"))
+    except UnicodeError:   # a lone surrogate: bytes that were not UTF-8
+        size = 0
+    if 1 <= size <= 2048 and not re.search(r"[\x00-\x1f\x7f]", place):
+        entry["place"] = place
+    os.makedirs(reg, exist_ok=True)
+    lock = locked()   # held until exit, as below
+    write(entry)
 elif event == "SessionEnd":
+    lock = locked()
     if d.get("reason") == "other":
         try:
             with open(path) as f:

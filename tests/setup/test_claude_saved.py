@@ -6,6 +6,7 @@ The session in a pane comes from Claude's live-session files (~/.claude/sessions
 interactive session with a live pid) and else from hooks/session-registry.sh's open-sessions
 entries on the current server. A stub tmux answers the display formats the script reads and logs
 each call's argv, one argument per field; os.getpid() stands in for a live claude pid."""
+import fcntl
 import json
 import os
 import shutil
@@ -33,6 +34,7 @@ case "$1" in
       '#{pane_title}') printf '%s\n' "$STUB_TITLE" ;;
       '#{pane_current_command}') printf '%s\n' "$STUB_COMMAND" ;;
       '#{window_panes}') echo "${STUB_WINDOW_PANES:-1}" ;;
+      '#{@tab_place}x') printf '%sx\n' "${STUB_PLACE:-}" ;;
       '#{pane_id} #{session_id} #{client_height} #{client_width}')
         echo "$STUB_CLIENT_PANE \$1 $STUB_HEIGHT $STUB_WIDTH" ;;
     esac ;;
@@ -58,6 +60,11 @@ PID = 222
 CLIENT = "/dev/pts/3"
 DEAD = 99_999_999   # above any pid_max: never a live process
 TITLE = "✳ [repo1] Fix the parser"
+
+
+def items_of(menu):
+    """A display-menu argv's items: everything after -y and its value."""
+    return menu[menu.index("-y") + 2:]
 
 
 def sid(n):
@@ -298,7 +305,7 @@ class Saved(unittest.TestCase):
         self.env["STUB_TITLE"] = "a #[fg=red]b ##[bg=blue]c #d #[x"
         self.run_saved("star", "%4", CLIENT)
         self.assertEqual(self.messages()[-1], "claude-saved: starred: a b ##c ##d [x")
-        items = self.menu(CLIENT)[10:]
+        items = items_of(self.menu(CLIENT))
         self.assertEqual(items[7], "★ a b ##c ##d [x · now")
 
     def test_unstar_deletes_the_entry(self):
@@ -888,6 +895,108 @@ class Saved(unittest.TestCase):
         self.assertNotIn("ended_other_at", e)
         self.assertAlmostEqual(e["ts"], time.time(), delta=30)
 
+    def test_track_keeps_the_tabs_place(self):
+        # Review round 2: track rewrites an attach tab's record whole, so it carries the
+        # window's @tab_place (tmux-tab-bar's, opaque here) as session-registry.sh does: read
+        # live, the old record's when tmux doesn't answer, none when empty or junk.
+        self.background(1)
+        self.client("attach", sid(1)[:8])
+        self.track_panes(("%7", self.ppid, 3))
+        place = '{"row": "c:1", "pos": 0, "after": "s", "name": "a b"}'
+        self.env["STUB_PLACE"] = place
+        self.run_saved("track")
+        self.assertEqual(self.reg_entry(1)["place"], place)
+        self.assertIn(["tmux", "display", "-p", "-t", "%7", "#{@tab_place}x"],
+                      self.calls("tmux", "display"))
+        self.env.update(STUB_PLACE="other", STUB_GONE="%7")
+        self.run_saved("track")
+        self.assertEqual(self.reg_entry(1)["place"], place)       # no answer: the old one
+        del self.env["STUB_GONE"]
+        for bad in ("", "x\x01y", "x" * 2049):
+            with self.subTest(bad=bad):
+                self.env["STUB_PLACE"] = bad
+                self.run_saved("track")
+                self.assertNotIn("place", self.reg_entry(1))
+                self.assertIs(self.reg_entry(1)["attach"], True)
+
+    def test_track_writes_and_sweeps_under_the_records_lock(self):
+        # tmux-tab-bar compares and replaces a record's place under open-sessions/.records.lock;
+        # track's write (and its sweep of a gone tab's entry) must wait for it.
+        self.background(1)
+        self.client("attach", sid(1)[:8])
+        self.track_panes(("%7", self.ppid, 3))
+        os.makedirs(self.reg, exist_ok=True)
+        fd = os.open(os.path.join(self.reg, ".records.lock"), os.O_RDWR | os.O_CREAT, 0o600)
+        self.addCleanup(os.close, fd)
+        for want in (True, False):
+            with self.subTest(written=want):
+                if not want:
+                    self.track_panes(("%7", 1, 3))                 # the tab moved on: swept
+                fcntl.flock(fd, fcntl.LOCK_EX)
+                p = subprocess.Popen(["bash", SCRIPT, "track"], stdin=subprocess.DEVNULL,
+                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                     env=self.env)
+                time.sleep(0.8)
+                self.assertEqual(self.reg_entry(1) is None, want)  # waiting on the lock
+                fcntl.flock(fd, fcntl.LOCK_UN)
+                self.assertEqual(p.wait(timeout=10), 0)
+                self.assertEqual(self.reg_entry(1) is not None, want)
+
+    def track_waiting(self):
+        """track started while this test holds the records lock: (the process, the lock fd)."""
+        os.makedirs(self.reg, exist_ok=True)
+        fd = os.open(os.path.join(self.reg, ".records.lock"), os.O_RDWR | os.O_CREAT, 0o600)
+        self.addCleanup(os.close, fd)
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        p = subprocess.Popen(["bash", SCRIPT, "track"], stdin=subprocess.DEVNULL,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=self.env)
+        time.sleep(0.8)
+        return p, fd
+
+    def test_track_writes_nothing_back_after_a_shelve_it_waited_on(self):
+        # Review round 3: a Shelve that lands while track waits for the lock saved the chat as
+        # shelved and deleted its entry; track checks again under the lock.
+        self.background(1)
+        self.client("attach", sid(1)[:8])
+        self.track_panes(("%7", self.ppid, 3))
+        p, fd = self.track_waiting()
+        self.put(1, shelved=True, age=0)                # Shelve's save; its delete found none
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        self.assertEqual(p.wait(timeout=10), 0)
+        self.assertIsNone(self.reg_entry(1))
+
+    def test_track_keeps_a_record_the_registry_rewrote_while_it_waited(self):
+        # Review round 3: the sweep found a gone attach tab's entry, and while it waited for the
+        # lock the registry rewrote the file as a plain tab's record (the chat resumed in one).
+        self.background(1)
+        self.client("attach", sid(1)[:8])
+        self.track_panes(("%7", self.ppid, 3))
+        self.run_saved("track")
+        self.assertIs(self.reg_entry(1)["attach"], True)
+        self.track_panes(("%7", 1, 3))                  # the tab moved on: swept
+        p, fd = self.track_waiting()
+        rec = {k: v for k, v in self.reg_entry(1).items() if k not in ("attach", "job_id")}
+        with open(os.path.join(self.reg, sid(1) + ".json"), "w") as f:
+            json.dump({**rec, "pane": "%9"}, f)
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        self.assertEqual(p.wait(timeout=10), 0)
+        self.assertEqual(self.reg_entry(1)["pane"], "%9")
+
+    def test_track_leaves_a_record_rewritten_while_it_waited(self):
+        # Review round 4: the chat resumed in a plain tab while track waited for the lock, and
+        # the registry rewrote the record for it; track's attach record must not replace it.
+        self.background(1)
+        self.client("attach", sid(1)[:8])
+        self.track_panes(("%7", self.ppid, 3))
+        p, fd = self.track_waiting()
+        plain = {"session_id": sid(1), "cwd": self.cwd(1), "pane": "%9", "window_index": 5,
+                 "socket": SOCKET, "server_start": START, "server_pid": PID}
+        with open(os.path.join(self.reg, sid(1) + ".json"), "w") as f:
+            json.dump(plain, f)
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        self.assertEqual(p.wait(timeout=10), 0)
+        self.assertEqual(self.reg_entry(1), plain)
+
     def test_track_drops_an_attach_entry_whose_tab_moved_on(self):
         # The tab closed, or a /clear gave the job a new session id (sid 2 under job 1's id),
         # so the entry for what it showed goes. A tab's own entry and another server's stay.
@@ -965,9 +1074,14 @@ class Saved(unittest.TestCase):
         self.put(2, shelved=True, age=5 * 60, title="[repo2] issue #12")
         self.put(3, starred=True, shelved=True, age=2 * 86400, title="")
         m = self.menu(CLIENT)
-        self.assertEqual(m[2:11], ["-c", CLIENT, "-T", "#[align=centre]Shelf", "-x", "C",
-                                   "-y", "C", "Star this tab"])
-        items = m[10:]
+        # Row 0 under a top bar, where tmux 3.7c can't draw a busy pane over the menu's top rows,
+        # read from the client's own session ($1, not whichever grouped session tmux would
+        # pick); -M, so a click on an item works in a menu no mouse event opened.
+        self.assertEqual(m[2:14], ["-M", "-c", CLIENT, "-t", "$1:", "-T", "#[align=centre]Shelf",
+                                   "-x", "C", "-y",
+                                   "#{?#{==:#{status-position},top},0,#{popup_centre_y}}",
+                                   "Star this tab"])
+        items = items_of(m)
         self.assertEqual(items[:7], [
             "Star this tab", "*", f"run-shell '{SCRIPT} star %4 {CLIENT}'",
             "Shelve this tab", "V", f"run-shell '{SCRIPT} shelve %4 {CLIENT}'", ""])
@@ -981,11 +1095,11 @@ class Saved(unittest.TestCase):
     def test_the_menu_offers_unstar_for_a_starred_tab(self):
         self.live(1, "%4")
         self.put(1, starred=True)
-        self.assertEqual(self.menu(CLIENT)[10], "Unstar this tab")
+        self.assertEqual(items_of(self.menu(CLIENT))[0], "Unstar this tab")
 
     def test_an_empty_menu_still_offers_this_tab(self):
         self.live(1, "%4")
-        items = self.menu(CLIENT)[10:]
+        items = items_of(self.menu(CLIENT))
         self.assertEqual(items[:7], [
             "Star this tab", "*", f"run-shell '{SCRIPT} star %4 {CLIENT}'",
             "Shelve this tab", "V", f"run-shell '{SCRIPT} shelve %4 {CLIENT}'", ""])
@@ -996,17 +1110,17 @@ class Saved(unittest.TestCase):
         os.makedirs(self.store, exist_ok=True)
         with open(os.path.join(self.store, sid(2) + ".json"), "w") as f:
             f.write("[" * 100000)  # json raises RecursionError, not ValueError
-        self.assertEqual(self.menu(CLIENT)[17:], ["-(nothing saved)", "", ""])
+        self.assertEqual(items_of(self.menu(CLIENT))[7:], ["-(nothing saved)", "", ""])
 
     def test_the_menu_disables_this_tab_without_a_chat(self):
         self.put(1, shelved=True)
-        items = self.menu(CLIENT)[10:]
+        items = items_of(self.menu(CLIENT))
         self.assertEqual(items[:7], ["-Star this tab", "", "", "-Shelve this tab", "", "", ""])
 
     def test_the_menu_disables_this_tab_where_claude_isnt_running(self):
         self.registered(1, "%4")   # stale: the pane runs a shell now
         self.env["STUB_STATE"] = ""
-        items = self.menu(CLIENT)[10:]
+        items = items_of(self.menu(CLIENT))
         self.assertEqual(items[:7], ["-Star this tab", "", "", "-Shelve this tab", "", "", ""])
 
     def test_the_menu_fits_the_client(self):
@@ -1028,7 +1142,7 @@ class Saved(unittest.TestCase):
     def names(self, m):
         """A display-menu argv's lines: each item's name, or "" for a separator (one argument,
         where an item is three)."""
-        args, out, i = m[10:], [], 0
+        args, out, i = items_of(m), [], 0
         while i < len(args):
             out.append(args[i])
             i += 1 if args[i] == "" else 3
@@ -1037,9 +1151,9 @@ class Saved(unittest.TestCase):
     def test_the_remove_menu_runs_rm(self):
         self.put(1, starred=True)
         m = self.menu("--remove", CLIENT)
-        self.assertEqual(m[4:6], ["-T", "#[align=centre]Remove from shelf"])
-        self.assertEqual(m[10:], ["★ [repo1] chat 1 · 1m", "1",
-                                  f"run-shell '{SCRIPT} rm {sid(1)} {CLIENT}'"])
+        self.assertEqual(m[m.index("-T"):m.index("-T") + 2], ["-T", "#[align=centre]Remove from shelf"])
+        self.assertEqual(items_of(m), ["★ [repo1] chat 1 · 1m", "1",
+                                       f"run-shell '{SCRIPT} rm {sid(1)} {CLIENT}'"])
 
     def test_rm_drops_the_entry_and_the_mark_where_it_runs(self):
         self.put(1, starred=True)
@@ -1082,7 +1196,7 @@ class Saved(unittest.TestCase):
                 self.assertIn("no Claude session found", self.messages()[-1])
         self.assertEqual(self.saved(), {})
         self.assertEqual(self.calls("tmux", "kill-pane") + self.calls("tmux", "kill-window"), [])
-        items = self.menu(CLIENT)[10:]
+        items = items_of(self.menu(CLIENT))
         self.assertEqual(items[:6], ["-Star this tab", "", "", "-Shelve this tab", "", ""])
 
     def test_open_skips_a_stale_registry_pane(self):
