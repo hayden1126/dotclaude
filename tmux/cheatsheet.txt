@@ -10,13 +10,13 @@
     tap again    its menu: Star / Shelve / Shelf… / Replies before pass /
                  Rename / Windows…
     tap +N       the windows the bar has no room for
+    S-arrows     the tab left / right / above / below, as drawn (no prefix)
 
   WINDOWS  (one per repo)
     C-b c        new window (keeps dir)
     C-b ,        rename window
     C-b 1..9     jump to window N
     C-b n / p    next / prev window
-    S-Left/Right prev / next, no prefix
     C-b w        pick from a list
 
   PANES  (splits)
