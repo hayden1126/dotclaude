@@ -138,7 +138,7 @@ inside a lane.
    `lane ls` shows no `handoff?` flag. Until then, message the lane; if its session is gone, add it
    to Hayden's asks. Never order a merge or close a lane before the gate passes.
 6. **Watch and order.** Watch `lane ls`. Keep the merge order in the project STATUS. A lane
-   whose install is live rebases with the sandbox off: its own hooks, skills and tests are
+   whose install is live merges main with the sandbox off: its own hooks, skills and tests are
    write-protected then (`docs/lanes.md` S3).
 7. **After a merge.** A lane's `merged #N` starts the post-merge chain. A merged PR on `lane ls`
    that no lane reported starts it only when that lane has no live session. With one, message
@@ -202,7 +202,7 @@ what").
 
 - A lane never proposes `lane done`: only the lead can run it. The lead never restates a lane's
   push, ready or merge ask.
-- A lane acts on the lead's messages (rebase, /pass) and reports its own state and asks, never
+- A lane acts on the lead's messages (merge main, /pass) and reports its own state and asks, never
   what the lead said.
 - A message is a nudge, never consent. The consent is Hayden's standing approval above, and the
   lead proves the merge from gh before it acts; `lane done` checks it again.
