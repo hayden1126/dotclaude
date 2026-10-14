@@ -1202,7 +1202,9 @@ class Wiring(unittest.TestCase):
         for line in formats:
             # Before the state glyph: Windows Terminal draws ✳ two cells wide over its space.
             self.assertIn("#I #{?@claude_star,★ ,}#{?#{==:#{@claude_state},busy}", line)
-            self.assertIn("#{s/✳ //:pane_title}", line)
+            # The ✳ prefix is stripped from the title (tmux-tab-bar's tests pin the cut that
+            # runs first, so a huge title stays cheap).
+            self.assertIn("#{s/✳ //:#{s/^(.{128#})", line)
 
 
 if __name__ == "__main__":

@@ -94,13 +94,23 @@ stored here).
   - `tab-bar` PR 1 merged as #96 (2026-10-14) and was installed from main (main shows
     `status 2`). Its review fixes and Shift+arrow navigation merged as #97 (968a8af). The lead
     did not install #97 from main: lane-addr holds the install, and main's bar strips only the
-    old `[repo] ` title, so it goes live through lane-addr's install after lane-addr merges main. It merged before its fresh review and live smoke, so both still run, with
+    old `[repo] ` title, so it goes live through lane-addr's install after lane-addr merges main.
+    #97 left `test_claude_saved` Wiring red on main (it expects the old title substitution) and a
+    flaky RealTmux Shift+Up phone test (about 1 in 5; not the clock). Both are routed to lane
+    tab-bar (2026-10-14); it fixes them in a small PR (`fix/tab-bar-tests`) that merges right
+    after #98. Main's tests/setup isn't green until it lands. The cause was a last commit on #97
+    that only the tmux suites saw: rerun the full suite after a lane's last commit. It merged before its fresh review and live smoke, so both still run, with
     Hayden's phone tap test, and anything found rides PR 2. The lane stays open for PR 2 (drag,
     custom rows). Hayden asked the lead to close it when tab-bar is done (taken as: after PR 2
     merges).
-  - Live: `tab-bar` (PR 2), `lane-addr` (opened 2026-10-13 from its backlog entry below, whose
-    text is now its Brief) and `excluded-guard` (narrow-excluded Part 2, opened 2026-10-14).
-    **Merge order by readiness: `lane-addr`, `excluded-guard`, `tab-bar` PR 2.** The lead
+  - `lane-addr` merged as #98 (2026-10-14: `lane addr`, titles `repo · label` that keep the main
+    project, and a bar that strips both title forms). Installed from main, which released its hold.
+    #98 merged before the lane's own reinstall and live check, so the lead did them from main.
+    Live check (lead, 2026-10-14): every tab's label renders clean in both title forms, and
+    Hayden confirmed #97's Shift+arrows work. The lane is closed (`lane done` ended its session
+    8a52a566 and 9 children).
+  - Live: `tab-bar` (PR 2 and the `fix/tab-bar-tests` PR) and `excluded-guard` (narrow-excluded Part 2, opened 2026-10-14).
+    **Merge order: tab-bar's `fix/tab-bar-tests`, then `excluded-guard` and `tab-bar` PR 2 by readiness.** The lead
     installs only the next to merge.
   - `lane new` with `|`, `<`, `>` or `;` inside its quoted `--goal` ran sandboxed and failed
     ("Read-only file system") even though `lane new *` is in `excludedCommands`. It left a
@@ -156,10 +166,6 @@ stored here).
   between rows (spike first, popup board as the fallback), with placements kept in the tab
   record. Remote Control can't run `!` lines, so the phone needs the real pane. The
   remote-access side is private (the hq remote-access doc).
-  - PR 1 merged as #96 (2026-10-13) before its fresh review and live smoke; the lead installed it
-    from main the same day. Its review findings ride `fix/tab-bar-nav` (PR 1.5), with Shift+arrows
-    that follow the bar's layout (Hayden's ask). Still open: Hayden's desktop and phone tap checks
-    on the live bar, then PR 2.
 
   How lanes install, Hayden's call 2026-10-12: after its last review round, a lane runs
   `lane lock install -- ./setup.sh` from its own worktree, sandbox off. Until it merges, every
@@ -248,13 +254,47 @@ stored here).
   `claude -p` repro and the 2.1.285 boundary; the karaoke session's has the incident.
 
 ## Notes for next session
-- **Next (lead, main checkout): run `lane-addr`, `excluded-guard` and `tab-bar` PR 2 to merge
-  by readiness** ("In flight"). As of 2026-10-14: #96 merged and installed; lane-addr has merged
-  main 623923d and its `lane addr lead` reached the lead live; excluded-guard was just opened
-  (plan mode). Close `tab-bar` with `lane done` after its PR 2 merges (Hayden's ask). Start with
-  `lane ls` and `lane asks`. A lane is handed back only once `handoff-check -C <lane path>`
-  passes and the board shows no `handoff?` flag. After each merge, follow the install step in
-  "In flight", then propose `lane done <id>` (it ends the lane's own session itself).
+- **Next (lead, main checkout): investigate two workflow problems Hayden raised (2026-10-14),
+  and bring him a design for each, with options rated across situations, before building.**
+  1. **Lead and lanes say the same things twice.** Hayden reads both windows, and the lead kept
+     restating lane asks ("ready to merge", "go for lane done?", "approve the push?"). He
+     rejected both extremes: lanes do everything (installs, `lane done` and opening lanes sit
+     with the lead), and he talks only to the lead (relays are slow, and he approves plans and
+     commands in lanes anyway). Interim rule: memory `lead-no-relay-of-lane-asks`. The lead's
+     starting proposal:
+     - Lanes own every ask about their own work: plan, push, ready, merge.
+     - The lead speaks only on cross-lane orchestration, decisions raised with it, a failed
+       verification, and lead-only actions.
+     - The lead watches merges itself (`gh`/`lane ls`), then reinstalls from main and runs
+       `lane done` without asking, a standing approval Hayden would have to grant once.
+     - The lead verifies silently.
+     Open: which of those he pre-authorizes, and whether the lead runs as a watcher loop
+     rather than a chat.
+  2. **The tab glyph misses "input wanted".** Hayden wants: green whenever input from him is
+     required or preferred; the busy glyph as now; blank only when nothing is wanted and no
+     agents or subagents run. Today green fires only on `permission_prompt|elicitation_dialog`
+     (PR #74), so a turn ending with a plain-text ask stays idle. Evidence: lane
+     excluded-guard's 01:11:23 Stop asked him to add a settings line, and `@15` showed
+     `state=idle` (snapshot `~/scratch/lanes-ux/snapshot-2026-10-14.txt`). Design options to
+     weigh:
+     - every attended Stop with no running tasks is "your turn" (green), cleared on his next
+       prompt;
+     - classify the last reply with Haiku (the session-summary call already exists);
+     - an explicit end-of-turn marker the model writes.
+
+     Also check that subagent and background work keeps the busy glyph (`ring.log` already
+     logs `tasks=`). Files: `hooks/tmux-state.sh`, `hooks/session-pane.sh`,
+     `tmux/tmux-claude-status`, and the Notification matcher in settings.json; memory
+     `dotclaude-tmux-indicator`.
+  **Board at handoff (derive fresh with `lane ls`):**
+  - tab-bar's `fix/tab-bar-tests` is verified and holds the install. It waits for Hayden's
+    push approval (in its window), and it must first re-take the lead STATUS diff.
+  - excluded-guard is next after it. It waits for Hayden to add `"Bash(lane addr *)",` to
+    settings.json, then the lead's go to install.
+  - After each merge, reinstall from main (check `~/.tmux.conf`'s `source-file` lines too),
+    then `lane done`. Close `tab-bar` after its PR 2 merges (Hayden's ask).
+  - STATUS is far past its ceiling (about 330 lines): collapse the finished tracks to
+    pointers before adding more.
   **Message a lane at its messaging socket**: `uds:/run/user/1000/cc-socks/<pid>.sock`, the
   `messagingSocketPath` in `~/.claude/sessions/<pid>.json` of the session whose cwd is in the
   lane. Resolve it fresh before each send, since a pass makes a new pid. A ListAgents name

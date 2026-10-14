@@ -1530,28 +1530,59 @@ class RealTmux(unittest.TestCase):
         p = subprocess.run([sys.executable, "-I", SCRIPT, "layout"], capture_output=True,
                            text=True, timeout=30, env=self.layout_env)
         self.assertEqual((p.returncode, p.stdout, p.stderr), (0, "", ""))
+        self.settle()
         errs = [n for n in os.listdir(self.tmp) if n.endswith(".err")]
         self.assertEqual(errs, [], [open(os.path.join(self.tmp, n)).read() for n in errs])
+
+    def settle(self, timeout=10.0):
+        """Wait until no layout is in flight. A hook's run (a resize, a window selected) can hold
+        the lock when the test's run starts; that run then only marks the state dirty and
+        leaves, and the holder lays out again. Done = the lock is free and no mark is left. A
+        mark found with the lock free (a hook that met this probe's own brief hold) gets a run
+        of its own, since no holder will see it."""
+        base = os.path.join(self.tmp, f".tmux-tab-bar.{os.getuid()}."
+                                      f"{tb.server_key(self.layout_env['TMUX'])}")
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            fd = os.open(base + ".lock", os.O_RDWR | os.O_CREAT, 0o600)
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                free = True
+            except OSError:
+                free = False
+            finally:
+                os.close(fd)            # closing drops the lock
+            if free and not os.path.exists(base + ".dirty"):
+                return
+            if free:
+                subprocess.run([sys.executable, "-I", SCRIPT, "layout"], capture_output=True,
+                               timeout=30, env=self.layout_env)
+            else:
+                time.sleep(0.02)
+        self.fail("a layout was still in flight")
 
     def show(self, *args):
         return self.ti("show-options", *args).stdout
 
     def current(self):
-        return self.ti("display", "-p", "-t", "t", "#{window_index}").stdout.strip()
+        # "t:", never a bare "t": tmux tries a bare name as a window first, and under load
+        # window 0 can be named "tmux" (automatic-rename sees the pane before its exec, then the
+        # conf turns renaming off), so "t" read window 0 whatever was current.
+        return self.ti("display", "-p", "-t", "t:", "#{window_index}").stdout.strip()
 
     # --- tests ---
 
     def test_every_row_is_written_and_a_rerun_changes_nothing(self):
         self.run_layout()
-        self.assertEqual(self.show("-v", "-t", "t", "status").strip(), "2")
+        self.assertEqual(self.show("-v", "-t", "t:", "status").strip(), "2")
         for i in range(2):
-            row = self.show("-v", "-t", "t", f"status-format[{i}]")
+            row = self.show("-v", "-t", "t:", f"status-format[{i}]")
             self.assertTrue(row.startswith("#[fill=colour236]"), (i, row[:80]))
-        names = self.ti("list-windows", "-t", "t", "-F", "#{window_index} #{@tab_name}").stdout
+        names = self.ti("list-windows", "-t", "t:", "-F", "#{window_index} #{@tab_name}").stdout
         self.assertEqual(sorted(names.split("\n")[:-1]), ["0 lead", "1 tab-bar", "2 hq:"])
-        before = (self.show("-t", "t"), self.show("-w", "-t", "t:0"), self.show("-w", "-t", "t:2"))
+        before = (self.show("-t", "t:"), self.show("-w", "-t", "t:0"), self.show("-w", "-t", "t:2"))
         self.run_layout()
-        after = (self.show("-t", "t"), self.show("-w", "-t", "t:0"), self.show("-w", "-t", "t:2"))
+        after = (self.show("-t", "t:"), self.show("-w", "-t", "t:0"), self.show("-w", "-t", "t:2"))
         self.assertEqual(after, before)
         self.find("dotclaude▸")
         self.find("hq: gamma-title")
@@ -1707,9 +1738,9 @@ class RealTmux(unittest.TestCase):
 
     def nav_rows(self):
         ids = dict(line.split() for line in self.ti(
-            "list-windows", "-t", "t", "-F", "#{window_id} #{window_index}").stdout.split("\n")
+            "list-windows", "-t", "t:", "-F", "#{window_id} #{window_index}").stdout.split("\n")
             if line)
-        rows = tb.parse_nav(self.show("-v", "-t", "t", "@tab_bar_nav").strip())
+        rows = tb.parse_nav(self.show("-v", "-t", "t:", "@tab_bar_nav").strip())
         return [[ids[t[0]] for t in row] for row in rows]
 
     def test_shift_arrows_follow_the_bars_layout(self):
@@ -1745,7 +1776,7 @@ class RealTmux(unittest.TestCase):
         self.wait(lambda: self.ti("list-clients", "-F", "#{client_width}").stdout.strip() == "45",
                   "the client never shrank to 45")
         self.run_layout()
-        self.assertEqual(self.show("-v", "-t", "t", "status-position").strip(), "bottom")
+        self.assertEqual(self.show("-v", "-t", "t:", "status-position").strip(), "bottom")
         self.assertEqual(self.nav_rows(), [["0", "1"], ["3"], ["2"]])
         ys = [self.find(text)[1] for text in ("0 lead", "3 lead", "2 hq:")]
         self.assertEqual(ys, [44, 45, 46])
