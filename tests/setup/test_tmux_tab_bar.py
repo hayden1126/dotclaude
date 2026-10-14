@@ -1228,7 +1228,6 @@ class Conf(unittest.TestCase):
         self.assertNotIn("kill-window", block)
         self.assertNotIn("respawn-window", block)
         self.assertNotRegex(block, r"display-menu[^\n]* -O")
-        self.assertIn("bind -n MouseDown1Status set -F @tab_bar_drag '#{window_id}'\n", text)
 
     def test_every_hook_is_silent_exits_0_and_uses_the_full_path(self):
         # A run-shell -b that prints or fails puts the active pane into view mode.
@@ -1297,12 +1296,32 @@ class Conf(unittest.TestCase):
     def test_the_drag_bindings_record_drop_and_clear(self):
         text = self.conf()
         self.assertIn("bind -n MouseUp1Status {\n  set -u @tab_bar_drag\n", text)
-        self.assertIn("bind -n MouseDragEnd1Status {\n  if -F '#{==:#{@tab_bar_drag},#{window_id}}'"
-                      " {\n    set -u @tab_bar_drag\n", text)
-        self.assertIn("    run-shell '\"$HOME/.local/bin/tmux-tab-bar\" drop \"#{@tab_bar_drag}\" "
+        # A press records a tab's id, or `more` for +N; every other press clears the flag.
+        self.assertIn("bind -n MouseDown1Status set -F @tab_bar_drag '#{?#{==:#{mouse_status_range},"
+                      "window},#{window_id},#{mouse_status_range}}'\n", text)
+        for key in ("MouseDown1StatusDefault", "MouseDown1StatusLeft", "MouseDown1StatusRight",
+                    "MouseDragEnd1Border"):
+            with self.subTest(key=key):
+                self.assertIn(f"bind -n {key} set -u @tab_bar_drag\n", text)
+        for line in ("bind -n MouseDown1Pane { set -u @tab_bar_drag ; select-pane -t = ; "
+                     "send-keys -M }\n",
+                     "bind -n MouseDown1Border { set -u @tab_bar_drag ; select-pane -M }\n",
+                     "bind -T copy-mode MouseDown1Pane { set -u @tab_bar_drag ; select-pane }\n",
+                     "bind -T copy-mode-vi MouseDown1Pane { set -u @tab_bar_drag ; select-pane }\n"):
+            with self.subTest(line=line):
+                self.assertIn(line, text)
+        # The end: the tap on its own tab, the window list from +N to +N, a drop from a tab,
+        # else nothing; the flag cleared on every path.
+        self.assertIn("bind -n MouseDragEnd1Status {\n  if -F '#{&&:#{==:#{mouse_status_range},"
+                      "window},#{==:#{@tab_bar_drag},#{window_id}}}' {\n    set -u @tab_bar_drag\n",
+                      text)
+        self.assertIn("  } {\n    if -F '#{&&:#{==:#{mouse_status_range},more},"
+                      "#{==:#{@tab_bar_drag},more}}' {\n      set -u @tab_bar_drag\n"
+                      "      choose-tree -Zw\n    } {\n      if -F '#{m:@*,#{@tab_bar_drag}}' {\n"
+                      "        run-shell '\"$HOME/.local/bin/tmux-tab-bar\" drop \"#{@tab_bar_drag}\" "
                       "\"#{window_id}\" \"#{mouse_x}\" \"#{mouse_status_line}\" "
                       "\"#{mouse_status_range}\" \"#{client_name}\" >/dev/null 2>&1; true'\n"
-                      "    set -u @tab_bar_drag\n", text)
+                      "      }\n      set -u @tab_bar_drag\n    }\n  }\n}\n", text)
         self.assertIn("bind -n MouseDragEnd1StatusDefault {\n  run-shell '\"$HOME/.local/bin/"
                       "tmux-tab-bar\" drop-row \"#{@tab_bar_drag}\" \"#{mouse_x}\" "
                       "\"#{mouse_status_line}\" \"#{client_name}\" >/dev/null 2>&1; true'\n"
@@ -2393,6 +2412,58 @@ class RealTmux(unittest.TestCase):
         x, y = self.find("one two three four")                            # a plain drag copies
         self.drag((x, y), (x + 6, y))
         self.wait(lambda: self.ti("list-buffers").stdout != "", "the copy-mode drag copied nothing")
+
+    def plus_n(self):
+        """Enough shared windows on a 100-cell client for the bar to end in +N: its (x, y)."""
+        self.link_script()
+        self.ti("source-file", "-", stdin="".join(
+            f"new-window -d -t t:{i} -c {self.plain} 'sleep 600'\n" for i in range(3, 30)))
+        self.to("resize-window", "-t", "o", "-x", "100")
+        self.wait(lambda: self.ti("list-clients", "-F", "#{client_width}").stdout.strip() == "100",
+                  "the client never shrank to 100")
+        self.run_layout()
+        found = []
+
+        def look():
+            for y, line in enumerate(self.screen()[:tb.MAX_ROWS]):
+                m = re.search(r" \+\d+ ", line)
+                if m:
+                    found.append((m.start() + 2, y + 1))
+                    return True
+            return False
+
+        self.wait(look, f"no +N drawn: {self.screen()[:6]}")
+        return found[0]
+
+    def test_a_jittery_tap_on_plus_n_opens_the_window_list(self):
+        x, y = self.plus_n()
+        self.drag((x, y), (x + 1, y))
+        self.wait(lambda: self.ti("display", "-p", "-t", "t:", "#{pane_mode}").stdout.strip()
+                  == "tree-mode", "a jittery tap on +N did not open the window list")
+        self.assertEqual(self.show("-qv", "-t", "t:", "@tab_bar_drag").strip(), "")
+
+    def test_a_drag_from_plus_n_onto_a_tab_moves_nothing(self):
+        x, y = self.plus_n()
+        rows = self.nav_rows()
+        self.drag((x, y), self.find("alpha-title"))
+        time.sleep(1)
+        self.assertEqual(self.nav_rows(), rows)
+        self.assertEqual(self.ti("show-options", "-wqv", "-t", "t:0", "@tab_place").stdout, "")
+        self.assertEqual(self.show("-qv", "-t", "t:", "@tab_bar_drag").strip(), "")
+
+    def test_a_stuck_flag_cleared_by_a_gutter_press_moves_nothing(self):
+        # A release tmux never reported left the flag on a tab; a drag from the gutter onto a
+        # tab must not drop that tab.
+        self.link_script()
+        self.run_layout()
+        rows = self.nav_rows()
+        wid = self.ti("display", "-p", "-t", "t:2", "#{window_id}").stdout.strip()
+        self.ti("set-option", "-t", "t:", "@tab_bar_drag", wid)
+        _, y = self.find("alpha-title")
+        self.drag((2, y + 1), self.find("alpha-title"))                   # row 2's gutter
+        time.sleep(1)
+        self.assertEqual(self.nav_rows(), rows)
+        self.assertEqual(self.show("-qv", "-t", "t:", "@tab_bar_drag").strip(), "")
 
     def test_ctrl_b_shift_right_carries_the_tab(self):
         self.link_script()
