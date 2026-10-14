@@ -90,8 +90,8 @@ class Baseline(unittest.TestCase):
         # and tools its JSON lists; the canary (an excluded command) runs tests/.
         deny = S["sandbox"]["filesystem"]["denyWrite"]
         for p in ("statusline", "notify-toast.ps1", "codex", "setup.sh", "merge-settings.py",
-                  "setup-chrome-wsl.sh", "sync.sh", "chrome-debug.ps1", "git", "plugins",
-                  "tools.json", "tmux", "setup-tmux.sh", "bin", "tests"):
+                  "install-state.py", "setup-chrome-wsl.sh", "sync.sh", "chrome-debug.ps1",
+                  "git", "plugins", "tools.json", "tmux", "setup-tmux.sh", "bin", "tests"):
             self.assertIn("~/dotclaude/" + p, deny)
 
     def test_tool_credentials_and_shell_history_are_read_protected(self):

@@ -28,6 +28,22 @@ stays sandboxed too.
 `lock` exits with its command's code, or dies of the signal that killed it; `--wait` running out
 exits 75, which a command's own 75 can't be told from: only the "gave up on lock" line on stderr
 marks a timeout.
+
+`done` runs only from the main checkout (the lead), never under a lane's session. It ends what
+provably belongs to the lane before it archives the record and removes the worktree: the lane's
+Claude sessions (SIGTERM), the processes under them, their tmux pane shells (SIGHUP) and
+leftovers started with a lane session's id; survivors get SIGTERM (a pane shell SIGHUP), then
+SIGKILL. Every signal but a session's first is checked just before it is sent, and held while
+the target or a process under it holds a file open in the git dir. Proof comes only
+from /proc and Claude Code's own session files and transcripts, never lane.json. Anything else with
+its cwd in the lane refuses the close by name before any signal, as do installed links into the
+lane (it holds the install: install-state.py, checked again under setup.sh's install.lock just
+before the remove), a dirty, locked or submodule worktree, a background session, a `done` run
+from anywhere but the main checkout or under a lane's session (only the lead closes lanes), a
+repo that sets extensions.worktreeConfig (git in the lane would read the lane-writable
+config.worktree), and, when there is something to end, a failing `handoff-check --closing`.
+A close refused after a signal leaves the lane `closing`, which `open` refuses: rerun `done`.
+With nothing to end, a refused close leaves the lane as it was.
 """
 import argparse
 import contextlib
@@ -35,6 +51,8 @@ import datetime
 import errno
 import fcntl
 import functools
+import glob
+import importlib.util
 import json
 import os
 import re
@@ -46,6 +64,7 @@ import stat
 import subprocess
 import sys
 import time
+from typing import NamedTuple
 
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 import lanelib  # noqa: E402  (beside this script's real path)
@@ -54,13 +73,15 @@ from lanelib import Repo, git, lock, now_iso, write_json  # noqa: E402
 TEMPLATE = os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "..", "..",
                         "templates", "LANE.md")
 HOOKS = os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "..", "..", "hooks")
-SID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")  # hooks/stop_ring.py SID
+INSTALL_STATE = os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "..", "..",
+                             "install-state.py")
 STATUS = re.compile(r"[a-z][a-z_-]{0,19}")  # a session file's status word
 CTX_MARK = {"soft": "*", "wrap": "*", "hard": "!"}  # the board's CTX mark per auto-pass tier
 DEFAULT_CAP = 4
 LOCK_BUSY = 75  # EX_TEMPFAIL: `lane lock --wait` gave up on a held lock
 PROBE_GRACE = 0.05  # secs `lane lock` waits out a `lane ls` probe before it reports a holder
 HOLDER_CMD_MAX = 120  # chars of the wrapped command kept in a lock's holder line
+RECORD_READ = 1 << 20  # bytes of a lane's STATUS.md read by `ls` and `done`
 # new's brief flags -> the <placeholder> each fills in templates/LANE.md
 BRIEF = {"goal": "goal", "files": "files", "overlaps": "overlaps", "done_when": "done-when",
          "constraints": "constraints"}
@@ -726,7 +747,7 @@ def ctx_of(aps, sessions: list[dict]) -> dict | None:
     rank = {None: 0, "soft": 1, "wrap": 2, "hard": 3}
     for s in sessions if aps is not None else []:
         sid = s.get("sessionId")
-        if not isinstance(sid, str) or not SID.fullmatch(sid):
+        if not isinstance(sid, str) or not lanelib.SID.fullmatch(sid):
             continue
         rec = aps.read_ctx(sid)
         tokens = rec.get("tokens")
@@ -782,8 +803,9 @@ def board(repo: Repo) -> list[dict]:
         row["window"] = ",".join(sorted({window_of(s["tmux"]) for s in here
                                          if s.get("tmux")})) or None
         flags = []
-        if lane.get("state") == "setup-failed":  # still holds its port, claims and a cap slot
-            flags.append("setup-failed")
+        # Either still holds its port, claims and a cap slot; a closing one waits on `done`.
+        if lane.get("state") in ("setup-failed", "closing"):
+            flags.append(lane["state"])
         if stale:
             flags.append("stale")
         if row["behind"]:
@@ -802,11 +824,15 @@ def board(repo: Repo) -> list[dict]:
 def record_text(repo: Repo, lane: dict) -> tuple[str | None, float | None]:
     """The lane's STATUS.md text and mtime, from the worktree or, when it is gone, the mirror.
     No lock is held, so the mirror is read in place, and a hook's swap can move it between
-    mirror_dir's answer and the open: one fresh answer and retry covers that."""
+    mirror_dir's answer and the open: one fresh answer and retry covers that. Read bounded and
+    never waiting on a FIFO (lanelib.read_head): `ls` and `done` run sandbox-off, and any lane
+    can write its own record."""
     def read(path):
+        data = lanelib.read_head(path, RECORD_READ)
+        if data is None:
+            return None
         try:
-            with open(path) as f:
-                return f.read(), os.path.getmtime(path)
+            return data.decode(errors="replace"), os.path.getmtime(path)
         except OSError:
             return None
 
@@ -863,6 +889,17 @@ def cmd_ls(args) -> None:
     for name in parse_locks(repo.config().get("locks", "")):
         if (holder := lock_holder(repo, name)) is not None:
             say(f"locks: {name} held by {holder}")
+    try:
+        held = install_state().holders(repo.main)
+    except Exception as e:  # the board still shows; only the hold line is lost
+        warn(f"install hold unknown ({type(e).__name__}: {e})")
+        held = []
+    ids = {os.path.realpath(x["path"]): x["id"] for x in repo.lanes(shared=True)}
+    for h in held:
+        who = f"lane {ids[h['root']]}" if h["root"] in ids else h["root"]
+        n = len(h["links"])
+        say(f"install: held by {who} (branch {h['branch']}, {n} link{'' if n == 1 else 's'}): "
+            f"the lead's ./setup.sh in {h['main']} releases it")
 
 
 def print_board(rows: list[dict]) -> None:
@@ -1028,6 +1065,8 @@ def cmd_open(args) -> None:
     repo = lanes_repo()
     lane = load_lane(repo, args.id)
     path = lane["path"]
+    if lane.get("state") == "closing":  # a `done` is ending it, or one refused partway
+        raise LaneError(f"lane {args.id} is closing: rerun `lane done {args.id}`")
     if not lanelib.is_live(lane):
         raise LaneError(f"lane {args.id} is stale: its worktree {path} is gone (`lane done "
                         f"{args.id}` closes it)")
@@ -1208,22 +1247,551 @@ def cmd_lock(args) -> int:
         os.close(fd)
 
 
-def processes_inside(path: str) -> list[str]:
-    out = []
-    for proc in os.listdir("/proc"):
-        if not proc.isdigit() or int(proc) == os.getpid():
+# ---- done: what runs in a lane, and ending it ------------------------------------------------
+# `done` sorts every process whose real cwd is in the lane into these classes, and ends only
+# those; anything else refuses the close before any signal. The proof is kernel facts (/proc)
+# and Claude Code's own files, never lane.json (lanelib's processes section).
+SESSION = "session"    # a session file's own process (pid and procStart), both cwds in the lane
+OWNED = "owned"        # its parent chain reaches a SESSION: its Bash commands, hooks, MCP servers
+PANE = "pane shell"    # a tmux pane's shell whose children are all SESSIONs (claude-restore's zsh)
+LEFTOVER = "leftover"  # none of those, started with a lane session's CLAUDE_CODE_SESSION_ID
+# secs a round waits for what it signalled to exit: twice settings.json's SessionEnd hook
+# timeout (5 s), so round 2 never cuts off a hook Claude Code itself would still let run
+GRACE = 10.0
+OPEN_SESSIONS_WAIT = 2.0  # secs `done` waits for open-sessions/.lock (claude-restore's flock)
+INSTALL_LOCK_WAIT = 30.0  # secs `done` waits for install.lock (setup.sh's flock) before the remove
+LANES_LOCK_WAIT = 30.0  # secs `done` waits for the lanes lock while it holds install.lock
+LEFT = ", so it was left running"  # the end of each reason `guarded` holds a signal for
+SHOWN = re.compile(r"[\x00-\x1f\x7f-\x9f]")  # C0, DEL and C1: masked in what `done` prints
+HANDOFF_CHECK = os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "..", "handoff",
+                             "scripts", "handoff-check")
+
+
+class Hit(NamedTuple):
+    """A process `done` may end: its class, why it is the lane's, and a SESSION's id."""
+    proc: lanelib.Proc
+    kind: str
+    why: str
+    sid: str | None = None
+
+
+def grace() -> float:
+    """GRACE, or _LANE_TEST_GRACE's seconds (tests/lanes only, like _LANE_TEST_SANDBOXED)."""
+    try:
+        secs = float(os.environ.get("_LANE_TEST_GRACE", ""))
+    except ValueError:
+        return GRACE
+    return secs if 0 <= secs <= GRACE else GRACE
+
+
+def shown(text: str) -> str:
+    """text with its control characters (SHOWN) masked, fit for a terminal."""
+    return SHOWN.sub("?", text)
+
+
+def described(p: lanelib.Proc, why: str) -> str:
+    """`pid comm (why): program`, control chars masked. Only argv[0], cut at its first whitespace,
+    then its basename: never an argument, since any can hold a secret (`curl -u user:pass`), and
+    a title set with setproctitle carries them in argv[0] itself (cut first, since an argument
+    can hold a '/')."""
+    prog = os.path.basename((p.argv[0].split(None, 1) or [""])[0]) if p.argv else ""
+    return shown(f"{p.pid} {p.comm} ({why})" + (f": {prog}" if prog else ""))
+
+
+def in_lane(procs: dict[int, lanelib.Proc], path: str) -> dict[int, lanelib.Proc]:
+    """The running processes whose real cwd is the lane at path or under it, this one aside."""
+    me = os.getpid()
+    return {pid: p for pid, p in procs.items() if pid != me and p.state not in lanelib.EXITED
+            and p.cwd is not None and lanelib.inside(p.cwd, path)}
+
+
+def other_jobs(pid: int, kids: dict[int, list[int]], targets) -> list[int]:
+    """pid's running children that aren't in targets (pids from the same scan)."""
+    return [c for c in kids.get(pid, []) if c not in targets]
+
+
+def jobs_named(pids: list[int], procs: dict[int, lanelib.Proc]) -> str:
+    return ", ".join(f"{c} {procs[c].comm}" if c in procs else str(c) for c in pids)
+
+
+def survey(lane_id: str,
+    path: str,
+    procs: dict[int, lanelib.Proc],
+    known: dict[tuple[int, int], Hit] | None = None,
+) -> tuple[dict[int, Hit], dict[int, str]]:
+    """Sort what runs in the lane (in_lane), from one scan: (hits, refused). hits {pid: Hit} is
+    what `done` may end; refused {pid: line} what nothing proves the lane's, each of which
+    refuses the close. A process in known {(pid, start): Hit} (an earlier round's hits) keeps its
+    class: a session mid-exit may have dropped its session file, and its SessionEnd hooks are
+    still its OWNED children. The rest in order: SESSION, OWNED, PANE, LEFTOVER. A PANE is a
+    tmux pane's shell (its parent a tmux server) with no foreign session id. A LEFTOVER's every
+    descendant, anywhere, must be a hit too: a tmux server or a `--bg` daemon started from a
+    lane Bash carries the lane's session id, and its panes or sessions run elsewhere."""
+    files = lanelib.session_files()
+    here = in_lane(procs, path)
+    kids = lanelib.children(procs)
+    by_pid = {}
+    for s in files:
+        if type(s.get("pid")) is int:
+            by_pid.setdefault(s["pid"], []).append(s)
+    hits, refused, notes = {}, {}, {}
+    for pid, p in here.items():
+        if h := (known or {}).get((pid, p.start)):
+            hits[pid] = h._replace(proc=p)
+    for pid, p in here.items():
+        if pid in hits:
+            continue
+        named = by_pid.get(pid, [])
+        match = [s for s in named if lanelib.proc_start_of(s) == p.start]
+        if not match:
+            if named:  # a stale file: that pid ran another process when it was written
+                notes[pid] = "a stale session file names its pid"
+            continue
+        sid = match[0].get("sessionId")
+        if not (isinstance(sid, str) and lanelib.SID.fullmatch(sid)):
+            refused[pid] = described(p, "its session file has no valid session id")
+        elif not lanelib.cwd_inside(match[0].get("cwd"), path):
+            refused[pid] = described(p, f"session {sid} is not lane {lane_id}'s")
+        elif match[0].get("kind") == "bg" or "jobId" in match[0]:
+            job = match[0].get("jobId")
+            stop = (f"`claude stop {job}`" if isinstance(job, str) and lanelib.SID.fullmatch(job)
+                    else "`claude stop` with its job id")
+            refused[pid] = described(p, f"background session {sid}, which the daemon owns: "
+                                        f"run {stop}")
+        else:
+            hits[pid] = Hit(p, SESSION, f"lane session {sid}", sid)
+    # A known session still running counts, whether or not its session file is left.
+    sessions = {pid for pid, h in hits.items() if h.kind == SESSION}
+    for pid, p in here.items():
+        if pid not in hits and pid not in refused:
+            up = next((a for a in lanelib.ancestors(pid, procs) if a in sessions), None)
+            if up is not None:
+                hits[pid] = Hit(p, OWNED, f"under lane session {hits[up].sid}")
+    proven = {}
+    for pid, p in here.items():
+        if pid in hits or pid in refused:
             continue
         try:
-            cwd = os.readlink(f"/proc/{proc}/cwd")
+            sid = lanelib.proc_env_sid(pid)
         except OSError:
+            if lanelib.proc_alive(p):
+                refused[pid] = described(p, "its environment can't be read")
+            continue  # else it exited since the scan
+        if sid is not None and sid not in proven:
+            proven[sid] = lanelib.lane_sid(sid, path, files)
+        foreign = (f"session {sid} is not lane {lane_id}'s" if sid and not proven[sid]
+                   else None)
+        if shell_of := [c for c in kids.get(pid, []) if c in sessions]:
+            # claude-restore's shape: a tmux pane's shell that ran claude. A session's parent
+            # that isn't one (a foreign session's Bash `cd <lane> && claude`, a tmux server
+            # whose pane command is claude) is no lane's to end.
+            parent = procs.get(p.ppid)
+            if len(shell_of) != len(kids[pid]):
+                why = "a shell with other jobs"
+            elif not (parent and parent.comm.startswith("tmux")):
+                why = (f"the parent of lane session {hits[shell_of[0]].sid}, but not a tmux "
+                       "pane's shell")
+            elif foreign:
+                why = f"the parent of lane session {hits[shell_of[0]].sid}, but {foreign}"
+            else:
+                hits[pid] = Hit(p, PANE, f"the shell of lane session {hits[shell_of[0]].sid}")
+                continue
+            refused[pid] = described(p, why)
             continue
-        if lanelib.inside(cwd, path):
+        if sid is not None and proven[sid]:
+            hits[pid] = Hit(p, LEFTOVER, f"carries lane session {sid}")
+            continue
+        refused[pid] = described(p, notes.get(pid) or foreign
+                                 or "no session id in its environment")
+    for pid, h in list(hits.items()):
+        if h.kind == PANE and (jobs := other_jobs(pid, kids, hits)):
+            # A known pane shell that took a new job since (its SIGHUP would reach that too)
+            del hits[pid]
+            refused[pid] = described(h.proc, f"{h.why}, now running {jobs_named(jobs, procs)}")
+    me = os.getpid()  # self_guard names this one's own place, more plainly
+    for pid, h in list(hits.items()):
+        if h.kind == LEFTOVER:
+            for d in lanelib.descendants(pid, kids):
+                if d not in hits and d not in refused and d != me and d in procs:
+                    refused[d] = described(procs[d], f"runs under {pid} {h.proc.comm} ({h.why}), "
+                                                     f"outside lane {lane_id}")
+    return hits, refused
+
+
+def refusal(head: str, refused: dict[int, str], tail: str) -> LaneError:
+    lines = "".join(f"\n  {refused[pid]}" for pid in sorted(refused))
+    return LaneError(f"{head}:{lines}\n{tail}")
+
+
+def self_guard(lane_id: str, path: str, procs: dict[int, lanelib.Proc], hits: dict) -> None:
+    """Refuse a `done` run from inside the lane: its own cwd, or a process above it (the lane's
+    session, a pane shell), is one it would end."""
+    if lanelib.inside(os.getcwd(), path) or any(
+            a in hits for a in lanelib.ancestors(os.getpid(), procs)):
+        raise LaneError(f"this `lane done` runs inside lane {lane_id} (its cwd, or a process "
+                        "above it, is one it would end): run it from the main checkout")
+
+
+def removable(lane_id: str, path: str) -> None:
+    """Refuse unless a plain `git worktree remove` will take the lane, so nothing is ended only
+    for the remove to fail afterwards: a clean tree by git's own test, not locked, and no
+    submodules (a gitlink in the index, or a modules dir in its admin dir)."""
+    p = git(["status", "--porcelain", "--ignore-submodules=none"], path)
+    if p.returncode != 0:
+        raise LaneError(f"git status failed in {path}: {p.stderr.strip()}")
+    if dirty := [line[3:] for line in p.stdout.splitlines()]:
+        more = f" and {len(dirty) - 5} more" if len(dirty) > 5 else ""
+        raise LaneError(f"lane {lane_id} has uncommitted or untracked files ("
+                        f"{', '.join(dirty[:5])}{more}), which `git worktree remove` refuses: "
+                        f"commit or remove them, then rerun `lane done {lane_id}`")
+    tree = None
+    for line in git(["worktree", "list", "--porcelain"], path).stdout.splitlines():
+        if line.startswith("worktree "):
+            tree = os.path.realpath(line[len("worktree "):])
+        elif tree == path and (line == "locked" or line.startswith("locked ")):
+            raise LaneError(f"lane {lane_id}'s worktree is locked, so git won't remove it: "
+                            f"`git worktree unlock {path}`, then rerun `lane done {lane_id}`")
+    staged = git(["ls-files", "--stage"], path).stdout.splitlines()
+    admin = git(["rev-parse", "--absolute-git-dir"], path).stdout.strip()
+    if any(line.startswith("160000 ") for line in staged) or (
+            admin and os.path.isdir(os.path.join(admin, "modules"))):
+        raise LaneError(f"lane {lane_id}'s worktree has submodules, which a plain `git worktree "
+                        "remove` refuses (and `done` never forces it)")
+
+
+def closing_check(lane_id: str, path: str) -> None:
+    """`handoff-check --closing` in the lane must pass before its sessions end: the record is
+    all of the lane that outlives them."""
+    try:
+        p = subprocess.run([sys.executable, "-I", HANDOFF_CHECK, "--closing", "-C", path],
+                           capture_output=True, text=True, timeout=120)
+    except (OSError, subprocess.SubprocessError) as e:
+        raise LaneError(f"can't run handoff-check --closing ({e}), so nothing was signalled")
+    if p.returncode != 0:
+        raise LaneError(f"lane {lane_id}'s handoff is incomplete, so nothing was signalled: "
+                        f"finish it, then rerun `lane done {lane_id}`\n"
+                        f"{(p.stdout + p.stderr).strip()}")
+
+
+def signal_proc(p: lanelib.Proc, sig: int) -> bool:
+    """Send sig to p only while its pid still names that process: through a pidfd, whose start
+    time is checked once the pidfd pins the process, so a pid reused since the scan is never
+    hit. Where a seccomp filter refuses pidfds (ENOSYS, EPERM), the start time is checked just
+    before a plain kill. False when p is gone or can't be signalled: whatever survives, the
+    final look in end_lane refuses."""
+    filtered = (errno.ENOSYS, errno.EPERM)
+    try:
+        fd = os.pidfd_open(p.pid)
+    except ProcessLookupError:
+        return False
+    except OSError as e:
+        if e.errno not in filtered:
+            warn(shown(f"can't signal {p.pid} {p.comm}: {e.strerror}"))
+            return False
+        fd = None
+    try:
+        if fd is not None:
+            if lanelib.proc_start(p.pid) != p.start:
+                return False
             try:
-                with open(f"/proc/{proc}/comm") as f:
-                    out.append(f"{proc} ({f.read().strip()})")
-            except OSError:
-                out.append(proc)
-    return out
+                signal.pidfd_send_signal(fd, sig)
+                return True
+            except OSError as e:
+                if e.errno not in filtered:
+                    raise
+        if lanelib.proc_start(p.pid) != p.start:
+            return False
+        os.kill(p.pid, sig)
+        return True
+    except ProcessLookupError:
+        return False
+    except OSError as e:
+        warn(shown(f"can't signal {p.pid} {p.comm}: {e.strerror}"))
+        return False
+    finally:
+        if fd is not None:
+            os.close(fd)
+
+
+def guarded(p: lanelib.Proc,
+    sig: int,
+    common: str,
+    only: set[tuple[int, int]] | None = None,
+) -> str | None:
+    """Send p sig unless p or a process under it holds a file open under common (the git dir): a
+    git cut off mid-write leaves its lock files, and a sandbox's pid namespace init (apply-seccomp,
+    bwrap) that exits takes every process in it down by SIGKILL. With only {(pid, start)}, also
+    unless a child of p is not in it (a pane shell's SIGHUP reaches each of its jobs). None
+    when sent (or p is gone), else why it was held, which the final look names.
+
+    Checked from one scan just before the signal, with nothing stopped: tmux continues a pane
+    process that gets SIGSTOP at once, and a job-control shell reports a stopped job suspended
+    and takes back the terminal (probe on tmux 3.7c, 2026-10-13), so no freeze can hold a tab's
+    session still. A process that opens a git file between the check and the signal is the
+    accepted residual (Hayden's call, 2026-10-13); git itself removes its lock files on SIGTERM."""
+    procs = lanelib.scan(full=False)
+    now = procs.get(p.pid)
+    if now is None or now.start != p.start or now.state in lanelib.EXITED:
+        return None  # gone
+    tree = [now, *(procs[d] for d in lanelib.descendants(p.pid, lanelib.children(procs))
+                   if d in procs)]
+    if any(q.pid == os.getpid() for q in tree):
+        return f"this `lane done` runs under it{LEFT}"
+    if only is not None and (jobs := [q for q in tree if q.ppid == p.pid
+                                      and (q.pid, q.start) not in only]):
+        return f"now running {', '.join(f'{q.pid} {q.comm}' for q in jobs)}{LEFT}"
+    for q in tree:
+        if found := lanelib.open_under(q.pid, common):
+            who = "holds" if q.pid == p.pid else f"has {q.pid} {q.comm} under it, which holds"
+            return f"{who} {found} open{LEFT} (a killed git leaves lock files)"
+    signal_proc(p, sig)
+    return None
+
+
+def forget_sessions(sids: list[str]) -> None:
+    """Delete each session's open-sessions entry, as Shelve does (tmux/claude-saved), so
+    claude-restore never reopens a session `done` ends; its SessionEnd then finds none to mark."""
+    reg = os.path.join(lanelib.state_dir(), "open-sessions")
+    for sid in sids:
+        try:
+            os.remove(os.path.join(reg, sid + ".json"))
+        except FileNotFoundError:
+            pass
+        except OSError as e:
+            warn(f"open-sessions entry of session {sid} kept ({e.strerror}): claude-restore may "
+                 "reopen it")
+
+
+def sweep_open_sessions(path: str) -> None:
+    """Delete every open-sessions entry whose cwd is in the lane, under that dir's .lock (the
+    flock claude-restore takes): a restore would reopen them in a removed worktree. A lock held
+    past OPEN_SESSIONS_WAIT leaves them, with a warning."""
+    reg = os.path.join(lanelib.state_dir(), "open-sessions")
+    if not os.path.isdir(reg):
+        return
+    try:
+        fd = os.open(os.path.join(reg, ".lock"),
+                     os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_CLOEXEC, 0o644)
+    except OSError as e:
+        warn(f"open-sessions entries in {path} kept: can't open {reg}/.lock ({e.strerror})")
+        return
+    try:
+        deadline = time.monotonic() + OPEN_SESSIONS_WAIT
+        while not try_lock(fd):
+            if time.monotonic() >= deadline:
+                warn(f"open-sessions entries in {path} kept: {reg}/.lock is held (a restore "
+                     "running?), and claude-restore may reopen them")
+                return
+            time.sleep(0.05)
+        for entry in glob.glob(os.path.join(reg, "*.json")):
+            try:
+                rec = json.loads(lanelib.read_head(entry, 1 << 20) or b"null")
+            except ValueError:
+                continue
+            if isinstance(rec, dict) and lanelib.cwd_inside(rec.get("cwd"), path):
+                try:
+                    os.remove(entry)
+                except FileNotFoundError:
+                    pass
+                except OSError as e:
+                    warn(f"open-sessions entry {entry} kept ({e.strerror}): claude-restore may "
+                         "reopen it")
+    finally:
+        os.close(fd)
+
+
+def end_lane(repo: Repo, lane_id: str, path: str, hits: dict[int, Hit]) -> None:
+    """End what `done` proved the lane's (hits) in two rounds, then look once more: anything
+    still in the lane refuses, nothing is archived, and a rerun carries on. The lanes lock is
+    never held here: a session's SessionEnd hook takes it to stamp endedAt. Each session's
+    open-sessions entry goes before its SIGTERM, in either round (forget_sessions). Every signal
+    but round 1's SIGTERM to a session goes through guarded."""
+    wait = grace()
+    known = {(h.proc.pid, h.proc.start): h for h in hits.values()}
+    ended, held, forgotten = set(), {}, set()
+
+    def settle(group: list[Hit], secs: float) -> list[Hit]:
+        """Wait up to secs for group to exit, saying `ended` for each; the ones still running."""
+        deadline = time.monotonic() + secs
+        while True:
+            left = []
+            for h in group:
+                key = (h.proc.pid, h.proc.start)
+                if key in ended:
+                    continue
+                if lanelib.proc_alive(h.proc):
+                    left.append(h)
+                else:
+                    ended.add(key)
+                    say(f"ended {described(h.proc, h.why)}")
+            if not left or time.monotonic() >= deadline:
+                return left
+            time.sleep(0.05)
+
+    def forget(group) -> None:
+        sids = [h.sid for h in group if h.kind == SESSION and h.sid not in forgotten]
+        forgotten.update(sids)
+        forget_sessions(sids)
+
+    def send(h: Hit, sig: int, only: set | None = None) -> bool:
+        """guarded's signal to h; a hold is kept for the final look, and dropped once a later
+        signal to h goes through. True when sent (or h is gone)."""
+        key = (h.proc.pid, h.proc.start)
+        if why := guarded(h.proc, sig, repo.common_dir, only):
+            held[key] = why
+            return False
+        held.pop(key, None)
+        return True
+
+    if hits:
+        # Round 1: the sessions and the leftovers. A session gets a plain SIGTERM, unchecked:
+        # Claude Code handles it as when its tab closes, running its SessionEnd hooks and ending
+        # its own children, which are left to it. Every other signal goes through guarded.
+        # Then the pane shells, which an interactive shell ignores SIGTERM for; one that took a
+        # new job meanwhile is left to round 2's refusal.
+        first = [h for h in hits.values() if h.kind in (SESSION, LEFTOVER)]
+        forget(first)
+        for h in first:
+            if h.kind == SESSION:
+                signal_proc(h.proc, signal.SIGTERM)
+            else:
+                send(h, signal.SIGTERM)
+        settle(first, wait)
+        if shells := [h for h in hits.values() if h.kind == PANE]:
+            procs = lanelib.scan()
+            kids = lanelib.children(procs)
+            targets = {pid for pid, p in procs.items() if (pid, p.start) in known}
+            shells = [h for h in shells if not other_jobs(h.proc.pid, kids, targets)]
+            for h in shells:
+                send(h, signal.SIGHUP, set(known))
+            settle(shells, wait)
+        # Round 2: whatever runs now, classified afresh, but a known process keeps its round-1
+        # class (a pane shell whose session has gone is no less the lane's, and a session still
+        # exiting keeps its hooks OWNED).
+        procs = lanelib.scan()
+        now, refused = survey(lane_id, path, procs, known)
+        if refused:
+            raise refusal(f"lane {lane_id} is closing, and nothing proves these lane {lane_id}'s",
+                          refused, f"End or move them, then rerun `lane done {lane_id}`")
+        for h in now.values():
+            known.setdefault((h.proc.pid, h.proc.start), h)
+        forget(now.values())
+        running = {pid for pid, h in now.items() if h.kind == SESSION}
+        for pid, h in now.items():
+            if h.kind == OWNED and any(a in running for a in lanelib.ancestors(pid, procs)):
+                continue  # a session's hook ends with it; the SIGKILL pass covers a survivor
+            if h.kind == PANE:  # SIGHUP again: an interactive shell ignores SIGTERM
+                send(h, signal.SIGHUP, set(known))
+            else:
+                send(h, signal.SIGTERM)
+        survivors = settle(list(now.values()), wait)
+        # SIGKILL, guarded too, sessions first; one held at its round-2 signal stays held, and so
+        # does whatever runs under a held session (its hooks and servers got no signal of their
+        # own), so nothing is killed that never got the chance to exit.
+        killed = []
+        for h in sorted(survivors, key=lambda h: h.kind != SESSION):
+            key = (h.proc.pid, h.proc.start)
+            if key in held:
+                continue
+            if h.kind == OWNED and (up := next((a for a in lanelib.ancestors(h.proc.pid, procs)
+                                                if a in running and a in procs
+                                                and (a, procs[a].start) in held), None)):
+                held[key] = f"its session {up} was left running, so it was too"
+                continue
+            if send(h, signal.SIGKILL):
+                killed.append(h)
+        settle(killed, wait)
+        settle(list(known.values()), 0)  # the rest that exited by themselves
+    # The final look, with or without anything ended: a process that started meanwhile, or
+    # survived, keeps the worktree.
+    procs = lanelib.scan()
+    if left := in_lane(procs, path):
+        lines = {}
+        for pid, p in left.items():
+            h = known.get((pid, p.start))
+            why = f"{h.why}; still running" if h else "started during the close"
+            if h and (hold := held.get((pid, p.start))):
+                why = f"{h.why}; {hold}"
+            lines[pid] = described(p, why)
+        raise refusal(f"lane {lane_id} is closing, and these still run in {path}", lines,
+                      f"End them (or let them finish), then rerun `lane done {lane_id}`")
+
+
+def install_state():
+    """install-state.py at this checkout's root, loaded by path (its name holds a '-'): setup.sh's
+    link rules, which `ls` and `done` share with it."""
+    spec = importlib.util.spec_from_file_location("install_state", INSTALL_STATE)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def install_hold(repo: Repo, lane_id: str, path: str, so: str) -> None:
+    """Refuse while installed links (or setup-tmux.sh's ~/.tmux.conf block) point into the lane:
+    removing its worktree would break every session's hooks and tools. Fails closed, since a
+    close that can't check would risk exactly that; so ends that message with what the caller
+    has (and hasn't) done by then."""
+    try:
+        into = install_state().links_into(path)
+    except Exception as e:
+        raise LaneError(f"can't check the install for links into lane {lane_id} ({type(e).__name__}"
+                        f": {e}), so {so}")
+    if into:
+        more = f"\n  and {len(into) - 5} more" if len(into) > 5 else ""
+        raise LaneError(f"lane {lane_id} holds the install: these point into {path}, and removing "
+                        "it would break them:" + "".join(f"\n  {shown(x)}" for x in into[:5])
+                        + more + "\nThe lead reruns the installer each line names from the main "
+                        f"checkout {repo.main}, then reruns `lane done {lane_id}`")
+
+
+@contextlib.contextmanager
+def install_lock():
+    """Hold <state_dir>/install.lock, the flock setup.sh holds for its whole run, so no install
+    relinks into a lane between `done`'s last links check and its worktree remove. Gives up
+    after INSTALL_LOCK_WAIT."""
+    state = lanelib.state_dir()
+    os.makedirs(state, exist_ok=True)
+    fd = os.open(os.path.join(state, "install.lock"),
+                 os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_CLOEXEC, 0o644)
+    try:
+        deadline = time.monotonic() + INSTALL_LOCK_WAIT
+        while not try_lock(fd):
+            if time.monotonic() >= deadline:
+                raise LaneError(f"{state}/install.lock is held past {INSTALL_LOCK_WAIT:g} s: by a "
+                                "setup.sh run, or by anything holding it open with its lock (a "
+                                "process setup.sh started inherits it). Nothing was archived or "
+                                "removed: rerun `lane done` once it is released")
+            time.sleep(0.1)
+        yield
+    finally:
+        os.close(fd)
+
+
+@contextlib.contextmanager
+def lanes_lock(repo: Repo, then: str):
+    """lock(repo), given up after LANES_LOCK_WAIT with a LaneError that ends with then: `done`
+    takes it while it holds install.lock, and a sandboxed `lane claim` or `note` can hold it."""
+    with contextlib.ExitStack() as stack:
+        try:
+            stack.enter_context(lock(repo, timeout=LANES_LOCK_WAIT))
+        except lanelib.LockTimeout:
+            raise LaneError(f"the lanes lock {repo.lanes_dir}/.lock is held past "
+                            f"{LANES_LOCK_WAIT:g} s (a stuck `lane claim` or `note`?): {then}")
+        yield
+
+
+def reread(repo: Repo, loaded: dict, path: str) -> dict:
+    """lane.json read again, under the lock: a second `done` may have closed the lane since this
+    one loaded it, or its path or branch changed (what `done` checked would no longer be what
+    it removes or deletes)."""
+    lane_id = loaded["id"]
+    try:
+        lane = lanelib.read_record(repo, lane_id)
+    except FileNotFoundError:
+        raise LaneError(f"lane {lane_id} was closed meanwhile (a second `lane done`?)")
+    if os.path.realpath(lane["path"]) != path or lane["branch"] != loaded["branch"]:
+        raise LaneError(f"lane {lane_id}'s path or branch changed during the close: refusing")
+    return lane
 
 
 def work_references(repo: Repo, lane: dict) -> list[str]:
@@ -1292,6 +1860,143 @@ def closable(repo: Repo, lane: dict, fetched: bool) -> tuple[str | None, str, st
     return None, "", f"no merged PR at its tip {tip[:12]}, and the tip is not in {base}"
 
 
+def lane_place(repo: Repo, root: str, cwd) -> str | None:
+    """Where a session's cwd (its session file's, or its real one) makes it a lane's, or None:
+    in a linked worktree of this repo (lanelib.linked_worktree), or under the lanes root but
+    outside the main checkout (a root that holds main must not count the lead as a lane; no lane
+    lives inside main, since worktree_problem refuses one)."""
+    if wt := lanelib.linked_worktree(repo, cwd):
+        return f"in linked worktree {wt}"
+    if lanelib.cwd_inside(cwd, root) and not lanelib.cwd_inside(cwd, repo.main):
+        return f"under the lanes root {root}"
+    return None
+
+
+def lead_only(repo: Repo, lane_id: str, path: str) -> None:
+    """Only the lead closes lanes: refuse unless this runs from the main checkout, and when a
+    Claude session above it (a session file's own process, by pid and procStart) is a lane's by
+    its session file's cwd or its real one (a lane session that cd'd to main): lane_place. Only
+    trusted facts decide that: the lanes root from the config, which sandboxed Bash can't write,
+    and git's own worktree links. Never lane.json's paths, which it can: a planted "/home" made
+    every `done` refuse the lead, and a lane could drop its own path. Sandboxed, the processes
+    above it can't be seen, so that refuses too."""
+    lead = (f"only the lead (the main checkout) closes lanes: run `lane done {lane_id}` from "
+            f"{repo.main}")
+    if not repo.is_main:
+        raise LaneError(f"refusing: {lead}")
+    if not lanelib.pids_visible():
+        raise LaneError("sandboxed: this command can't see other processes, so it can't tell "
+                        f"whether a session still runs in {path}, or runs this one. Run it as a "
+                        f"bare `lane done {lane_id}` (excludedCommands runs that outside the "
+                        "sandbox)")
+    root = repo.config().get("root")
+    if not (isinstance(root, str) and os.path.isabs(root)):
+        raise LaneError(f"the lanes config {repo.config_path} has no absolute root: rerun "
+                        "`lane init --root DIR`")
+    root = os.path.realpath(root)
+    procs = lanelib.scan()
+    by_pid = {}
+    for s in lanelib.session_files():
+        if type(s.get("pid")) is int:
+            by_pid.setdefault(s["pid"], []).append(s)
+    for a in lanelib.ancestors(os.getpid(), procs):
+        p = procs.get(a)
+        for s in by_pid.get(a, []):
+            if p is None or lanelib.proc_start_of(s) != p.start:
+                continue
+            if where := lane_place(repo, root, s.get("cwd")) or lane_place(repo, root, p.cwd):
+                sid = s.get("sessionId")
+                sid = sid if isinstance(sid, str) and lanelib.SID.fullmatch(sid) else "?"
+                raise LaneError(shown(f"refusing: {lead}. This `lane done` runs under session "
+                                      f"{sid} ({a} {p.comm}), {where}"))
+
+
+def close_record(repo: Repo,
+    lane: dict,
+    path: str,
+    data_dir: str,
+    state: str,
+    how: str,
+    present: bool,
+) -> str:
+    """Archive the lane's record and remove its worktree, all under install.lock: (a) under the
+    lanes lock, re-read lane.json (a SessionEnd hook may have stamped endedAt, which the archive
+    keeps) and build the archive under a .tmp name; (b) without it, check the install once more
+    and `git worktree remove`, which can take seconds while every lane's hooks give up on that
+    lock after 2 s; (c) under it again, re-read (refused if the record vanished or its path or
+    branch changed), rename the archive into place and remove the data dir. A failure anywhere
+    removes the .tmp, so no partial archive is left. Returns the archive's path."""
+    lane_id = lane["id"]
+    stamp = datetime.date.today().isoformat()
+    closed = os.path.join(repo.lanes_dir, lanelib.CLOSED)
+    rerun = f"rerun `lane done {lane_id}`"
+    # install.lock first, then the lanes lock: setup.sh never takes the lanes lock, and the lanes
+    # lock must not sit idle for the install wait. Held from the build to the rename, so no
+    # install relinks into the lane after the check in (b), and, with no worktree left too, no
+    # second `done` of the lane builds on the same .tmp name meanwhile.
+    with install_lock():
+        with lanes_lock(repo, f"nothing was archived or removed: {rerun}"):
+            loaded = reread(repo, lane, path)
+            archive = os.path.join(closed, f"{lane_id}-{stamp}")
+            n = 2
+            while os.path.exists(archive):
+                archive = os.path.join(closed, f"{lane_id}-{stamp}-{n}")
+                n += 1
+            tmp = archive + ".tmp"
+            source = lanelib.record_dir(loaded)
+            if lanelib.record_is_link(loaded):
+                warn(f"{source} is a symlink: its target is not archived (the last mirror is, if "
+                     "any)")
+                source = lanelib.mirror_dir(repo, lane_id, restore=True)
+            elif not os.path.isdir(source):
+                source = lanelib.mirror_dir(repo, lane_id, restore=True)  # under the lock
+            try:
+                shutil.rmtree(tmp, ignore_errors=True)
+                os.makedirs(tmp)
+                if source and os.path.isdir(source):
+                    lanelib.copy_record(source, os.path.join(tmp, lanelib.RECORD_DIR))
+                write_json(os.path.join(tmp, "lane.json"),
+                           dict(loaded, state=state, closed=now_iso(), outcome=how))
+            except OSError as e:
+                shutil.rmtree(tmp, ignore_errors=True)
+                raise LaneError(f"could not archive lane {lane_id} ({e}); nothing was removed")
+            except BaseException:  # a record nested past the recursion limit, an interrupt
+                shutil.rmtree(tmp, ignore_errors=True)
+                raise
+        try:
+            if not present and os.path.lexists(path):
+                # Gone at the gates, so nothing checked it (worktreeConfig among the rest), and
+                # `git worktree remove` would run git in it sandbox-off.
+                raise LaneError(f"{path} reappeared during the close of lane {lane_id}, so nothing "
+                                f"checked it: {rerun}")
+            if path in worktrees(repo):
+                # An install run since the first links check (setup.sh from the lane, mid-close)
+                # would point every hook into the worktree this removes: check again, under its
+                # lock.
+                install_hold(repo, lane_id, path, "its worktree was not removed")
+                # And for a process once more: the final look was up to a minute of lock waits
+                # ago, and with nothing ended the lane was never `closing`, so `open` could
+                # start a session meanwhile.
+                if left := in_lane(lanelib.scan(), path):
+                    raise refusal(f"these started in {path} during the close, so lane {lane_id}'s "
+                                  "worktree was not removed",
+                                  {pid: described(p, "started during the close")
+                                   for pid, p in left.items()},
+                                  f"End them, then rerun `lane done {lane_id}`")
+                p = git(["worktree", "remove", path], repo.toplevel)
+                if p.returncode != 0:
+                    raise LaneError(f"git worktree remove refused: {p.stderr.strip()}")
+            with lanes_lock(repo, f"lane {lane_id}'s record is not archived, and its worktree is "
+                                  f"gone: {rerun}"):
+                reread(repo, loaded, path)
+                os.rename(tmp, archive)
+                shutil.rmtree(data_dir)
+        except BaseException:
+            shutil.rmtree(tmp, ignore_errors=True)
+            raise
+    return archive
+
+
 def cmd_done(args) -> None:
     repo = lanes_repo()
     data_dir = lane_data_dir(repo, args.id)
@@ -1299,7 +2004,22 @@ def cmd_done(args) -> None:
     path = os.path.realpath(lane["path"])
     if path == repo.main:
         raise LaneError(f"refusing: lane {args.id}'s path is the main checkout")
+    lead_only(repo, args.id, path)
+    # Every git `done` runs in the lane (status, handoff-check's, the one `git worktree remove`
+    # starts) takes its config from this repo's common dir, never the lane-writable commondir
+    # file that worktree_problem checks: a lane could repoint it after the check to a config
+    # whose core.fsmonitor runs a command sandbox-off.
+    os.environ["GIT_COMMON_DIR"] = repo.common_dir
+    # Not even then, where the repo turns on per-worktree config: git would read the lane's
+    # <admin>/config.worktree too, which its sandbox can write and no variable overrides.
     present = os.path.isdir(path)
+    wtc = git(["config", "--file", os.path.join(repo.common_dir, "config"), "--type=bool",
+               "--get", "extensions.worktreeConfig"], repo.main) if present else None
+    if wtc and wtc.stdout.strip() == "true":
+        raise LaneError(f"this repo sets extensions.worktreeConfig, so git in lane {args.id} reads "
+                        "its config.worktree, which the lane's sandbox can write: `done` won't run "
+                        "git there sandbox-off. Close the lane by hand, or turn the extension off "
+                        "if nothing needs it (`git sparse-checkout` turns it on)")
     if present:  # its record is archived and its worktree removed, sandbox-off
         usable_path(repo, lane)
     fetched = fetch(repo)
@@ -1308,49 +2028,37 @@ def cmd_done(args) -> None:
         raise LaneError(f"branch {lane['branch']} is not merged: {why}. Pass --abandon to close "
                         "it anyway")
     how, state = (how, state) if how else ("abandoned", "abandoned")
-    if present and not lanelib.pids_visible():
-        raise LaneError("sandboxed: this command can't see other processes, so it can't tell "
-                        f"whether a session still runs in {path}. Run it as a bare "
-                        f"`lane done {args.id}` (excludedCommands runs that outside the sandbox)")
-    if present and (procs := processes_inside(path)):
-        raise LaneError(f"processes still have their cwd in {path}: {', '.join(procs)}. Close "
-                        "those sessions (or cd out) first")
+    install_hold(repo, args.id, path, "nothing was signalled")
+    hits = {}
+    if present:  # every gate before any signal (lead_only refused a sandboxed run)
+        removable(args.id, path)
+        procs = lanelib.scan()
+        hits, refused = survey(args.id, path, procs)
+        self_guard(args.id, path, procs, hits)
+        if refused:
+            raise refusal(f"nothing proves these processes in {path} are lane {args.id}'s, so "
+                          "nothing was signalled", refused,
+                          f"End or move them, then rerun `lane done {args.id}`")
+        if hits:
+            closing_check(args.id, path)
     for hit in work_references(repo, lane) if present else []:
-        warn(f"reference into {lane['id']}/work: {hit}")
-    stamp = datetime.date.today().isoformat()
-    with lock(repo):
-        closed = os.path.join(repo.lanes_dir, lanelib.CLOSED)
-        archive = os.path.join(closed, f"{args.id}-{stamp}")
-        n = 2
-        while os.path.exists(archive):
-            archive = os.path.join(closed, f"{args.id}-{stamp}-{n}")
-            n += 1
-        # Built under a .tmp name and renamed into place only when complete, so a failure (or a
-        # retry after one) never leaves a partial archive.
-        tmp = archive + ".tmp"
-        source = lanelib.record_dir(lane)
-        if lanelib.record_is_link(lane):
-            warn(f"{source} is a symlink: its target is not archived (the last mirror is, if any)")
-            source = lanelib.mirror_dir(repo, args.id, restore=True)
-        elif not os.path.isdir(source):
-            source = lanelib.mirror_dir(repo, args.id, restore=True)  # under the lock
-        lane.update(state=state, closed=now_iso(), outcome=how)
+        warn(shown(f"reference into {lane['id']}/work: {hit}"))  # a path from another lane
+    if hits:
+        # Closing from here on: `open` refuses the lane, so no new session starts mid-close,
+        # and a refusal below leaves it closing for a rerun to finish. With nothing to end, a
+        # refusal leaves the lane as it was.
+        with lanes_lock(repo, f"nothing was signalled: rerun `lane done {args.id}`"):
+            reread(repo, lane, path)
+            lanelib.update_lane(repo, args.id, lambda x: x.update(state="closing"))
         try:
-            shutil.rmtree(tmp, ignore_errors=True)
-            os.makedirs(tmp)
-            if source and os.path.isdir(source):
-                lanelib.copy_record(source, os.path.join(tmp, lanelib.RECORD_DIR))
-            write_json(os.path.join(tmp, "lane.json"), lane)
-        except OSError as e:
-            shutil.rmtree(tmp, ignore_errors=True)
-            raise LaneError(f"could not archive lane {args.id} ({e}); nothing was removed")
-        if path in worktrees(repo):
-            p = git(["worktree", "remove", path], repo.toplevel)
-            if p.returncode != 0:
-                shutil.rmtree(tmp, ignore_errors=True)
-                raise LaneError(f"git worktree remove refused: {p.stderr.strip()}")
-        os.rename(tmp, archive)
-        shutil.rmtree(data_dir)
+            end_lane(repo, args.id, path, hits)
+        finally:  # a close refused partway has ended sessions all the same
+            sweep_open_sessions(path)
+    else:
+        if present:
+            end_lane(repo, args.id, path, hits)  # its final look only
+        sweep_open_sessions(path)
+    archive = close_record(repo, lane, path, data_dir, state, how, present)
     say(f"lane {args.id} closed ({how}); archived to {archive}")
     # With no upstream, -d judges against the main checkout's HEAD, which may not have pulled the
     # merge yet; the base as upstream makes it judge against what was actually merged.
@@ -1414,7 +2122,17 @@ def parser() -> argparse.ArgumentParser:
     p = sub.add_parser("note", help="append a timestamped line to this lane's State")
     p.add_argument("text", nargs="+")
     sub.add_parser("asks", help="every lane's open asks for Hayden")
-    p = sub.add_parser("done", help="close a merged (or abandoned) lane")
+    p = sub.add_parser("done", help="close a merged (or abandoned) lane, ending its sessions",
+                       description="Close a merged lane (an unmerged one with --abandon), from "
+                       "the main checkout only: end the "
+                       "processes that provably belong to it, archive its record, remove its "
+                       "worktree. Its sessions get SIGTERM, their pane shells SIGHUP, survivors "
+                       "SIGKILL. Anything else with its cwd in the lane refuses the close by name "
+                       "before any signal, as do installed links into the lane, a dirty, locked "
+                       "or submodule worktree, a repo with extensions.worktreeConfig and, when "
+                       "there is "
+                       "something to end, a failing `handoff-check --closing`. A close refused "
+                       "after a signal leaves the lane closing: rerun `lane done <id>`.")
     p.add_argument("id")
     p.add_argument("--abandon", action="store_true", help="close an unmerged lane")
     return ap

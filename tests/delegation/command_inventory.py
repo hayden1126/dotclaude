@@ -68,7 +68,7 @@ EXCLUDED = [
     Excluded("lane ls *", "asks gh for PR state and sees other sessions", ["lane ls --json"]),
     Excluded("lane open *", "opens a tmux window and sees other sessions",
              ["lane open chart-fix", "lane open chart-fix --print"]),
-    Excluded("lane done *", "checks the merge with gh, sees other sessions",
+    Excluded("lane done *", "checks the merge with gh, sees and signals the lane's sessions",
              ["lane done chart-fix"]),
     Excluded("pass-respawn", "respawns its tmux pane", ["pass-respawn"]),
     Excluded("pass-respawn *", "respawns its tmux pane", ["pass-respawn -C /x --compact"]),
@@ -399,4 +399,5 @@ NO_ASK = ["lane ls", "lane ls --json", "lane open chart-fix", "lane open chart-f
           "git ls-remote origin", "git pull --ff-only"]
 
 # Skill commands that ask by design, each rare and run by a person's decision.
-SKILL_ASKS = {"lane init --root": "moves where lanes live; the lead runs it once per repo"}
+SKILL_ASKS = {"lane init --root": "moves where lanes live; the lead runs it once per repo",
+              "claude stop": "ends a background session that lane done refuses to close"}
