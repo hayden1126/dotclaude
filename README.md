@@ -648,9 +648,8 @@ idle, the script rechecks the handoff and respawns the pane with a fresh `claude
   for you to type (`partial`): it stays in the status line until a key press, and `pass.log` has
   it whole. A `failed` after `/compact` went out hands over the prompt the same way, since a
   second `/pass` would compact twice. Every drop and `partial` also leave the session a
-  `[pass]` notice
-  (`pass-notice.sh`, Hooks above). It arrives as context at the session's next turn or tool
-  call, and says:
+  `[pass]` notice (`pass-notice.sh`, Hooks above). It arrives as context at the session's
+  next turn or tool call, and says:
   - the cause;
   - that no pass is pending;
   - the fix (for `partial`, the resume prompt).
