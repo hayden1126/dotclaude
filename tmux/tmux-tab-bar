@@ -1051,7 +1051,8 @@ SELF = '"$HOME/.local/bin/tmux-tab-bar"'     # as claude.conf runs it
 # pane over its first rows (tmux/claude.conf explains), else centred.
 OVERLAY_Y_CENTRE = "#{?#{==:#{status-position},top},0,#{popup_centre_y}}"
 MENU = (("◀ Left", "h", "left"), ("▶ Right", "l", "right"), ("▲ Up", "k", "up"),
-        ("▼ Down", "j", "down"), None, ("New row", "n", "newrow"), ("Auto place", "a", "auto"))
+        ("▼ Down", "j", "down"), None, ("New row", "n", "newrow"),
+        ("#{?@tab_row_custom,,-}Name row…", "N", "name-row"), ("Auto place", "a", "auto"))
 
 
 def put(groups: list, shared: list, src: str, dst: str, after: bool) -> dict:
@@ -1285,6 +1286,11 @@ def show_menu(client: str, wid: str) -> None:
             args.append("")
             continue
         label, key, how = item
+        if how == "name-row":           # the tap menu's prompt, aimed at wid; no reopening
+            shell = f"{SELF} name-row {client} {wid} >/dev/null 2>&1; true".replace('"', '\\"')
+            args += [label, key, f'command-prompt -p "row name:" "set -w -t {wid} '
+                                 f'@tab_row_name_in \\"%%%\\" ; run-shell \'{shell}\'"']
+            continue
         shell = f"{SELF} move {how} {client} {wid} --menu >/dev/null 2>&1; true"
         args += [label, key, command("run-shell", shell)]
     subprocess.Popen(args, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,

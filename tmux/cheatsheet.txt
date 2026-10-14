@@ -16,8 +16,9 @@
     drag a tab   onto a tab: before or after it; onto a row's edge: first or last
     C-b S-arrows carry this tab left / right, or up / down a row (repeats)
     Move…        ◀ ▶ ▲ ▼, New row (a row of its own below; a shared tab's sits just
-                 above the shared rows), Auto place (back where the bar puts it);
-                 stays open for the next step (phone)
+                 above the shared rows), Name row…, Auto place (back where the bar
+                 puts it); stays open for the next step (phone), but not after
+                 Name row…
     Name row…    name a custom row (empty clears it)
     C-b Enter    Move… / Reset bar (every tab back where the bar puts it)
 

@@ -1880,6 +1880,13 @@ class FakeTmux(unittest.TestCase):
         cmd = items[items.index("Auto place") + 2]
         self.assertEqual(tmux_words(cmd), [["run-shell", '"$HOME/.local/bin/tmux-tab-bar" move '
                                             'auto /dev/pts/7 @2 --menu >/dev/null 2>&1; true']])
+        # Name row…: the tap menu's verified prompt (a quoted template with %%%), aimed at the
+        # window, and not reopening the menu.
+        k = items.index("#{?@tab_row_custom,,-}Name row…")
+        self.assertEqual(items[k + 1:k + 3], [
+            "N", 'command-prompt -p "row name:" "set -w -t @2 @tab_row_name_in \\"%%%\\" ; '
+                 'run-shell \'\\"$HOME/.local/bin/tmux-tab-bar\\" name-row /dev/pts/7 @2 '
+                 '>/dev/null 2>&1; true\'"'])
         for args in (("menu", "/dev/pts/7;x"), ("menu", "/dev/pts/7", "@9"),
                      ("move", "sideways", "/dev/pts/7"), ("reset",), ("name-row",),
                      ("drop-row", "@1", "3", "0")):
@@ -2607,6 +2614,36 @@ class RealTmux(unittest.TestCase):
                                                     "@tab_place").stdout.rstrip("\n"))
                            or tb.Place("s", 0)).name == want, "the row was never named")
         self.find(want + "▸")
+        self.assertEqual(self.ti("show-options", "-wqv", "-t", "t:1",
+                                 "@tab_row_name_in").stdout, "")
+
+    def test_the_move_menus_name_row_stores_a_hostile_name_literally(self):
+        # The Move menu opened by the script itself, with no script in HOME yet: the prompt's
+        # run-shell finds nothing, so the typed text stays in @tab_row_name_in to be read.
+        self.run_layout()
+        self.ti("set-option", "-w", "-t", "t:1", "@tab_place",
+                tb.place_text(tb.Place("c:1", 0, "s")))
+        self.run_layout()
+        wid = self.ti("display", "-p", "-t", "t:1", "#{window_id}").stdout.strip()
+        client = self.ti("list-clients", "-F", "#{client_name}").stdout.strip()
+        p = subprocess.run([sys.executable, "-I", SCRIPT, "menu", client, wid],
+                           capture_output=True, text=True, timeout=30, env=self.layout_env)
+        self.assertEqual((p.returncode, p.stdout, p.stderr), (0, "", ""))
+        self.find("New row")
+        nx, ny = self.find("Name row…")
+        self.click(nx + 1, ny)
+        self.find("row name:")
+        hostile = "a\"b'c;d#[e%f$(g)$HOME~h\\i"
+        self.to("send-keys", "-t", "o", "-l", hostile)
+        self.to("send-keys", "-t", "o", "Enter")
+        self.wait(lambda: self.ti("show-options", "-wqv", "-t", "t:1",
+                                  "@tab_row_name_in").stdout == hostile + "\n",
+                  "the typed name was not stored literally")
+        self.link_script()
+        p = subprocess.run([sys.executable, "-I", SCRIPT, "name-row", client, wid],
+                           capture_output=True, text=True, timeout=30, env=self.layout_env)
+        self.settle()
+        self.find(tb.clean_row_name(hostile) + "▸")
         self.assertEqual(self.ti("show-options", "-wqv", "-t", "t:1",
                                  "@tab_row_name_in").stdout, "")
 
