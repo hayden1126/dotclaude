@@ -53,11 +53,14 @@ even when that later turn has ended too (a later end says nothing about the pass
 drops `resumed` at once, while waiting too. `waiting` (an open dialog) and any unknown status
 keep it waiting. It settles 1 s and re-reads both: a start marker after that end is `resumed`.
 Once the end is known the status alone is no resumption, since it flips among idle, shell and
-busy as delegated work starts and stops, with no turn (the spike saw `shell` to `busy`); but a
-statusUpdatedAt changed since the turn's end first waits 0.5 s and looks again, since a new
-turn sets the file busy about 150 ms before its user entry reaches the transcript. With no end
-marker seen, the status must hold (not idle, or a new statusUpdatedAt: a queued prompt
-restarted the turn, `resumed`). It re-runs
+busy as delegated work starts and stops, with no turn (the spike saw `shell` to `busy`). So once
+the end is known the settle and the final re-check always look twice, 0.5 s apart, whatever the
+status did: a new turn sets the file busy about 150 ms before its user entry reaches the
+transcript, and one that begins while an agent keeps the status busy changes no
+statusUpdatedAt at all. That costs about 1 s a pass; a turn that begins within about 150 ms of
+the second look can still be missed, as one after it always can. With no end marker seen, the
+status must hold (not idle, or a new statusUpdatedAt: a queued prompt restarted the turn,
+`resumed`). It re-runs
 handoff-check (a failure: work after the handoff made it stale, `stale`), drops `resumed` when
 the transcript gained a typed prompt after the call, or a prompt queued mid-turn (a queue
 enqueue, or a queued_command attachment from a person: Claude Code folds those into the running
@@ -238,9 +241,10 @@ MANAGED_SETTINGS = "/etc/claude-code/managed-settings.json"
 MANAGED_DIR = "/etc/claude-code/managed-settings.d"
 POLL = 0.2         # secs between session file reads
 SETTLE = 1.0       # secs idle must hold, so a queued prompt can restart the turn first
-# Secs a status change waits, once the turn's end is known, for a new turn's start marker: Claude
-# Code sets the session file busy about 150 ms before the turn's user entry reaches the transcript
-# (lane pass-timeout's spike, 20:17:40).
+# Secs the settle and the final re-check wait, once the turn's end is known, for a new turn's
+# start marker: Claude Code sets the session file busy about 150 ms before the turn's user entry
+# reaches the transcript (lane pass-timeout's spike, 20:17:40), and a turn that begins while an
+# agent keeps the status busy changes no statusUpdatedAt at all.
 TRANSCRIPT_LAG = 0.5
 # Session-file statuses that mean "at the prompt, turn over": `idle`, and `shell` when a
 # background shell is still running (live, 2026-10-12; a foreground Bash call reads `busy`).
@@ -607,9 +611,9 @@ def went_on(plan: Plan, state: str, detail: str, session: dict, seen, end_seen: 
     whether the transcript showed that end then), or None. A start marker after the passing
     turn's end always counts. Once the end is known, the status alone doesn't: it flips among
     idle, shell and busy as delegated work starts and stops, with no turn (the spike saw shell
-    to busy), and look_again has given a flip TRANSCRIPT_LAG for its start marker. With no end
-    marker seen (the transcript can't show it), the status must be unchanged: still at the
-    prompt, with the same statusUpdatedAt."""
+    to busy), and look_again has given a new turn TRANSCRIPT_LAG to show its start marker. With
+    no end marker seen (the transcript can't show it), the status must be unchanged: still at
+    the prompt, with the same statusUpdatedAt."""
     if began_after_end(plan):
         return "a new turn in the transcript"
     if state != "idle" or (not end_seen and session.get("statusUpdatedAt") != seen):
@@ -1193,14 +1197,16 @@ def observe(plan: Plan, procs=None) -> tuple[str, str, dict | None]:
     return ("idle" if idle else "busy"), str(status), session
 
 
-def look_again(plan: Plan, seen, end_seen: bool, procs=None) -> tuple[str, str, dict | None]:
-    """observe, for the settle and the final re-check. Once the end is known (end_seen), a
-    statusUpdatedAt other than seen may be a new turn whose user entry hasn't reached the
-    transcript yet, so it waits TRANSCRIPT_LAG and observes again (observe re-scans). A start
-    marker that lands in that window is a resumption (went_on); a flip with none, an agent
-    starting or stopping, is not."""
+def look_again(plan: Plan, end_seen: bool, procs=None) -> tuple[str, str, dict | None]:
+    """observe, for the settle and the final re-check. Once the end is known (end_seen), it
+    always waits TRANSCRIPT_LAG and observes again (observe re-scans), whatever the status did:
+    a turn that began before the first look may not have reached the transcript yet, and while
+    an agent keeps the status busy, its start marker is the only sign of it. A start marker
+    that lands in that window is a resumption (went_on); a status flip with none, an agent
+    starting or stopping, is not. A turn that begins within about 150 ms of the second look can
+    still be missed, as one that begins after it always can."""
     state, detail, session = observe(plan, procs)
-    if state != "gone" and end_seen and session.get("statusUpdatedAt") != seen:
+    if state != "gone" and end_seen:
         time.sleep(TRANSCRIPT_LAG)
         state, detail, session = observe(plan, procs)
     return state, detail, session
@@ -1664,7 +1670,7 @@ def wait_and_act(plan: Plan, procs) -> str:
         time.sleep(POLL)
     seen, end_seen = session.get("statusUpdatedAt"), plan.first_end is not None
     time.sleep(SETTLE)
-    state, detail, session = look_again(plan, seen, end_seen)
+    state, detail, session = look_again(plan, end_seen)
     if state == "gone":
         return drop(plan, "gone", detail)
     if why := went_on(plan, state, detail, session, seen, end_seen):
@@ -1685,7 +1691,7 @@ def wait_and_act(plan: Plan, procs) -> str:
     if plan.mode == "plain" and (problem := stop_problem(plan, rec)):
         return drop(plan, "busy", f"busy: {problem[0]}", problem[1],
                     cause=problem[1].removeprefix("pass refused: "))
-    state, detail, session = look_again(plan, seen, end_seen, procs)
+    state, detail, session = look_again(plan, end_seen, procs)
     if state == "gone":
         return drop(plan, "gone", detail)
     if why := went_on(plan, state, detail, session, seen, end_seen):

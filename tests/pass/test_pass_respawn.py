@@ -1377,8 +1377,11 @@ class TurnEnd(Handed):
         self.assertIn("mode=compact outcome=compact", self.log())
 
     def test_a_turn_start_after_the_end_drops_resumed(self):
+        # Once the end is known the settle reads the session file twice (look_again), so the
+        # final re-check's first read is the fourth after the wait's.
         for name, start in STARTS.items():
-            for where, between in (("in the settle", ()), ("at the final re-check", ("busy",))):
+            for where, between in (("in the settle", ()),
+                                   ("at the final re-check", ("busy", "busy"))):
                 with self.subTest(start=name, where=where):
                     self.reset()
                     code, out = self.compacts("busy", self.then("busy", END), *between,
@@ -1400,7 +1403,8 @@ class TurnEnd(Handed):
         # user entry reaches the transcript. A flip once the end is known waits TRANSCRIPT_LAG
         # for that start marker before it is let through.
         start = STARTS["a task notice"]
-        for where, between in (("in the settle", ()), ("at the final re-check", ("shell",))):
+        for where, between in (("in the settle", ()),
+                               ("at the final re-check", ("shell", "shell"))):
             with self.subTest(where=where):
                 self.reset()
                 code, out = self.compacts("busy", self.then("shell", END), *between,
