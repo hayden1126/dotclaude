@@ -905,7 +905,7 @@ class Conf(unittest.TestCase):
         self.assertNotIn("kill-window", block)
         self.assertNotIn("respawn-window", block)
         self.assertNotRegex(block, r"display-menu[^\n]* -O")
-        self.assertIn("unbind -n MouseDown1Status", text)
+        self.assertIn("bind -n MouseDown1Status set -F @tab_bar_drag '#{window_id}'\n", text)
 
     def test_every_hook_is_silent_exits_0_and_uses_the_full_path(self):
         # A run-shell -b that prints or fails puts the active pane into view mode.
