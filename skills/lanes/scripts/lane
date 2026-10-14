@@ -666,11 +666,11 @@ def finish(repo: Repo, lane: dict) -> None:
             lane_files(repo, lane, {})
             lane = lanelib.update_lane(repo, lane["id"], lambda x: x.update(setup_failed="setup"))
     run_setup(repo, lane)
+    check_worktree(lane, seed_ask=True)  # still setup-failed, which `open` refuses: no session
     with lock(repo):
         lane = lanelib.update_lane(repo, lane["id"], mark_active)
     say(f"finished lane {lane['id']}: branch {lane['branch']}, port {lane['port'] or 'none'}")
     say(f"  record {lanelib.record_path(lane)}")
-    check_worktree(lane, seed_ask=True)  # `open` refuses a setup-failed lane: no session yet
 
 
 def cmd_adopt(args) -> None:
@@ -801,10 +801,14 @@ def check_worktree(lane: dict, seed_ask: bool) -> None:
 
 
 def seed_line(lane: dict, heading: str, line: str) -> bool:
-    """Add `line` under `heading` (after its comment) in the record `new` seeded. The setup ran
-    in the lane in between, so every step goes through one fd of the real .lane dir, opened
-    without following a link: the record is read without following one, as a regular file under
-    the read limit, and replaced whole. False when it isn't there as seeded."""
+    """Add `line` under `heading` (after its comment) in the record `new` seeded, unless a
+    session is live in the lane: the record is then its to write (invariant 2). The setup ran in
+    the lane in between, so every step goes through one fd of the real .lane dir, opened without
+    following a link: the record is read without following one, as a regular file under the read
+    limit, and replaced whole, byte for byte. False when it isn't there as seeded."""
+    live = lanelib.live_sessions()
+    if live is None or sessions_in(live, os.path.realpath(lane["path"])):
+        return False
     try:
         d = os.open(lanelib.record_dir(lane), os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     except OSError:
@@ -818,13 +822,13 @@ def seed_line(lane: dict, heading: str, line: str) -> bool:
             data = f.read(RECORD_READ + 1)
         if len(data) > RECORD_READ:  # rewriting a cut read would lose the rest
             return False
-        text = data.decode(errors="replace")
-        m = re.search(rf"^{re.escape(heading)}\n(<!--.*?-->\n)?", text, re.M | re.S)
+        m = re.search(rb"^" + re.escape(heading.encode()) + rb"\n(<!--.*?-->\n)?", data,
+                      re.M | re.S)
         if not m:
             return False
         out = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644, dir_fd=d)
-        with os.fdopen(out, "w") as f:
-            f.write(text[:m.end()] + line + "\n" + text[m.end():])
+        with os.fdopen(out, "wb") as f:
+            f.write(data[:m.end()] + os.fsencode(line) + b"\n" + data[m.end():])
         os.replace(tmp, "STATUS.md", src_dir_fd=d, dst_dir_fd=d)
         return True
     except OSError:
@@ -2321,16 +2325,17 @@ def delete_branches(repo: Repo, branches: list[str]) -> None:
             continue
         # With no upstream, -d judges against the main checkout's HEAD, which may not have
         # pulled the merge yet; the base as upstream makes it judge against what was merged.
-        # A branch -d keeps gets its own upstream back.
-        up = git(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "--end-of-options",
-                  f"{branch}@{{upstream}}"], repo.toplevel)
-        before = up.stdout.strip() if up.returncode == 0 else ""
+        # A branch -d keeps gets its own config back as it was, even one naming a remote ref
+        # a fetch has since pruned.
+        keys = [f"branch.{branch}.remote", f"branch.{branch}.merge"]
+        before = {k: git(["config", "--get", k], repo.toplevel) for k in keys}
         git(["branch", f"--set-upstream-to={base_ref(cfg)}", "--end-of-options", branch],
             repo.toplevel)
         p = git(["branch", "-d", "--end-of-options", branch], repo.toplevel)
         if p.returncode != 0:
-            git(["branch", f"--set-upstream-to={before}", "--end-of-options", branch] if before
-                else ["branch", "--unset-upstream", "--end-of-options", branch], repo.toplevel)
+            for k, old in before.items():
+                git(["config", k, old.stdout.strip()] if old.returncode == 0
+                    else ["config", "--unset", k], repo.toplevel)
             warn(f"branch {branch} kept: {p.stderr.strip()} (a squash merge leaves it "
                  "unmerged to git; check, then delete it yourself)")
 

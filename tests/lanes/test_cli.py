@@ -2105,9 +2105,23 @@ class SwitchedBranch(LanesRepo):
         self.lane("done", "chart-fix")
         self.assertEqual(self.git("branch", "--list", "chart-more"), "")
 
-    def test_abandon_keeps_an_unmerged_switched_branch(self):
+    def test_abandon_keeps_an_unmerged_switched_branch_and_its_config(self):
+        # Its upstream names a remote ref a fetch has pruned: the config survives as it was.
+        self.git("config", "branch.chart-more.remote", "origin")
+        self.git("config", "branch.chart-more.merge", "refs/heads/chart-more")
         self.lane("done", "chart-fix", "--abandon")
         self.assertIn("chart-more", self.git("branch", "--list", "chart-more"))
+        self.assertEqual(self.git("config", "--get", "branch.chart-more.remote").strip(), "origin")
+        self.assertEqual(self.git("config", "--get", "branch.chart-more.merge").strip(),
+                         "refs/heads/chart-more")
+
+    def test_a_detached_lane_shows_its_registered_branch_s_pr(self):
+        self.git("switch", "-q", "--detach", cwd=self.path)  # mid-rebase looks the same
+        self.env["FAKE_GH_OUT"] = json.dumps(
+            [{"number": 7, "state": "OPEN", "headRefName": "chart-fix"}])
+        (row,) = json.loads(self.lane("ls", "--json"))
+        self.assertEqual(row["pr"], "#7 open")
+        self.assertTrue(row["branch"].startswith("(detached "))
 
     def test_a_switch_during_the_close_refuses_it(self):
         # What `done` judged is what it removes: a switch after the judging stops the close.
@@ -2180,21 +2194,53 @@ class ExcludedGuardRules(LanesRepo):
         self.assertIn(f"Edit(/{path}/.githooks/**)", p.stderr)
         self.assertNotIn("Edit(", self.asks("docs-lane"))
 
-    def test_a_record_past_the_read_limit_is_never_rewritten(self):
+    def test_seed_line_writes_only_a_record_as_new_seeded_it(self):
         lane_mod = load_lane_script()
         self.lane("new", "chart-fix")
-        lane = self.lane_json("chart-fix")
-        big = self.read(self.record("chart-fix")) + "x" * lane_mod.RECORD_READ
-        self.write(self.record("chart-fix"), big)
-        self.assertFalse(lane_mod.seed_line(lane, "## Asks for Hayden", "- ask"))
-        self.assertEqual(self.read(self.record("chart-fix")), big)
-        # A .lane that is a link is never written through.
-        shutil.rmtree(os.path.join(self.lane_path("chart-fix"), ".lane"))
-        target = os.path.join(self.tmp, "elsewhere-record")
-        self.write(os.path.join(target, "STATUS.md"), "## Asks for Hayden\n")
-        os.symlink(target, os.path.join(self.lane_path("chart-fix"), ".lane"))
-        self.assertFalse(lane_mod.seed_line(lane, "## Asks for Hayden", "- ask"))
-        self.assertEqual(self.read(os.path.join(target, "STATUS.md")), "## Asks for Hayden\n")
+        lane, record = self.lane_json("chart-fix"), self.record("chart-fix")
+        seeded = self.read(record)
+        outside = os.path.join(self.tmp, "elsewhere", "STATUS.md")
+        self.write(outside, "## Asks for Hayden\n")
+
+        def seed():
+            with mock.patch.dict(os.environ, self.env, clear=True):
+                return lane_mod.seed_line(lane, "## Asks for Hayden", "- ask \udcff")
+
+        self.assertTrue(seed())  # control: the seeded record takes it, bytes kept as they were
+        with open(record, "rb") as f:
+            self.assertIn(b"- ask \xff\n", f.read())
+        cases = {
+            "past the read limit": lambda: self.write(record, seeded + "x" * lane_mod.RECORD_READ),
+            "a link to another file": lambda: (os.remove(record), os.symlink(outside, record)),
+            "a FIFO": lambda: (os.remove(record), os.mkfifo(record)),
+            "a .lane that links elsewhere": lambda: (
+                shutil.rmtree(os.path.dirname(record)),
+                os.symlink(os.path.dirname(outside), os.path.dirname(record))),
+        }
+        for name, make in cases.items():
+            with self.subTest(case=name):
+                if os.path.islink(os.path.dirname(record)):
+                    os.remove(os.path.dirname(record))
+                os.makedirs(os.path.dirname(record), exist_ok=True)
+                if os.path.lexists(record):
+                    os.remove(record)
+                self.write(record, seeded)
+                make()
+                before = os.lstat(record)
+                self.assertFalse(seed())
+                self.assertEqual(os.lstat(record).st_mtime_ns, before.st_mtime_ns)
+                self.assertEqual(self.read(outside), "## Asks for Hayden\n")
+
+    def test_seed_line_leaves_a_live_session_s_record_alone(self):
+        lane_mod = load_lane_script()
+        self.lane("new", "chart-fix")
+        self.write(os.path.join(self.home, ".claude", "sessions", f"{os.getpid()}.json"),
+                   json.dumps({"pid": os.getpid(), "sessionId": "s",
+                               "cwd": self.lane_path("chart-fix")}))
+        with mock.patch.dict(os.environ, self.env, clear=True):
+            self.assertFalse(lane_mod.seed_line(self.lane_json("chart-fix"),
+                                                "## Asks for Hayden", "- ask"))
+        self.assertNotIn("- ask", self.read(self.record("chart-fix")))
 
     def test_done_names_the_deny_rules_its_worktree_leaves_behind(self):
         self.lane("new", "chart-fix")

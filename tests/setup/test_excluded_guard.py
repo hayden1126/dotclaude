@@ -16,6 +16,7 @@ import subprocess
 import tempfile
 import time
 import unittest
+from unittest import mock
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 HOOK = os.path.join(REPO, "hooks", "excluded-guard.sh")
@@ -860,6 +861,40 @@ class EveryRefusal(Guard):
         self.assertIsNone(refusals[0].fix)
 
 
+class Memo(Guard):
+    """A Machine's memo holds what a fresh Machine with the same deny list would find."""
+
+    def test_a_protected_machine_agrees_with_a_fresh_one(self):
+        # A home reached through a link (outside every root), and a PATH entry in it that links
+        # to a protected dir: the entry's rule names the real dir holding the link, which
+        # neither the entry's path nor its target sits under. The later writable entry must
+        # still be listed. Roots are just the home here: the temp dir sits under /tmp.
+        guard = load_guard()
+        os.symlink(self.home, os.path.join(self.tmp, "homelink"))
+        self.mkdir("home", ".local")
+        os.symlink(self.bin, os.path.join(self.home, ".local", "bin"))
+        entry = os.path.join(self.tmp, "homelink", ".local", "bin")
+        wbin = self.make_bin(os.path.join("home", "wbin"), protect=False)
+        path_var = f"{entry}:{wbin}:/usr/bin"
+        settings, _ = guard.load_settings(self.env)
+
+        def machine():
+            m = guard.Machine(self.env, settings, self.proj)
+            m.roots = [self.home]
+            return m
+
+        m = machine()
+        refusals, errors = guard.path_refusals(m, ["git", "gh"], path_var)
+        self.assertEqual(errors, [])
+        self.assertEqual([r.fix_dir for r in refusals],
+                         [os.path.join(self.home, ".local"), wbin])
+        fresh = machine()
+        fresh.deny += m.deny[len(fresh.deny):]
+        for p in (entry, wbin, os.path.join(wbin, "git"), self.bin):
+            with self.subTest(path=p):
+                self.assertEqual(m.exposed(p), fresh.exposed(p))
+
+
 class RulesNaming(Guard):
     """rules_naming: the Edit deny rules a removed dir (a closed lane's worktree) leaves behind."""
 
@@ -980,6 +1015,43 @@ class Session(Guard):
         for project in (self.lane, self.proj, self.lane):
             with self.subTest(project=project):
                 self.assertIsNone(self.start(project))
+
+    def test_a_projects_own_path_finding_is_keyed_by_path_too(self):
+        # A head only proj's settings exclude sits in a dir on one tab's PATH and runs through a
+        # writable interpreter: alternating tabs with and without that dir show it once.
+        tools = self.make_bin("tools", heads=())
+        interp = self.write(os.path.join(self.mkdir("wint"), "interp"), MARKER, 0o755)
+        self.write(os.path.join(tools, "mytool"), f"#!{interp}\n", 0o755)
+        self.write_settings()
+        self.write(os.path.join(self.proj, ".claude", "settings.json"),
+                   json.dumps({"sandbox": {"excludedCommands": ["mytool *"]}}))
+        with_it, without = f"{self.bin}:{tools}:/usr/bin", f"{self.bin}:/usr/bin"
+        for path, shows in ((with_it, True), (without, False), (with_it, False)):
+            with self.subTest(path=path):
+                self.env["PATH"] = path
+                out = self.start()
+                self.assertEqual(out is not None, shows, out)
+
+    def test_old_path_keys_go_and_a_reused_one_stays(self):
+        guard = load_guard()
+        state = os.path.join(self.tmp, "state")
+        with mock.patch.dict(os.environ, XDG_STATE_HOME=state):
+            for i in range(guard.MACHINE_KEYS + 2):
+                guard.unseen({f"{guard.MACHINE_KEY}:{i}": [f"line {i}"]})
+                if i == 3:
+                    guard.unseen({f"{guard.MACHINE_KEY}:0": ["line 0"]})  # back to tab 0
+        with open(os.path.join(state, "dotclaude", "excluded-check.json")) as f:
+            kept = list(json.load(f))
+        self.assertEqual(len(kept), guard.MACHINE_KEYS)
+        self.assertIn(f"{guard.MACHINE_KEY}:0", kept)
+        self.assertNotIn(f"{guard.MACHINE_KEY}:1", kept)
+
+    def test_a_fifo_where_the_state_goes_never_hangs_it(self):
+        self.env["PATH"] = f"{self.wbin}:/usr/bin"
+        d = self.mkdir("state", "dotclaude")
+        os.mkfifo(os.path.join(d, "excluded-check.json"))
+        os.mkfifo(os.path.join(d, "excluded-check.json.lock"))
+        self.assertIsNotNone(self.start())
 
     def test_racing_starts_show_a_finding_once(self):
         self.env["PATH"] = f"{self.wbin}:/usr/bin"

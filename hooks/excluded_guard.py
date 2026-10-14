@@ -280,15 +280,12 @@ class Machine:
 
     def protect(self, d):
         """Judge on as if `d` were protected: all_refusals puts a refusal's fix in place. More
-        protection only clears verdicts, so only those whose exposed path `d` covers go."""
+        protection can only clear a verdict, so the clean ones stand and every verdict that
+        found something exposed is judged again: the memo then holds what a fresh Machine with
+        this deny list would find."""
         self.deny.append(d)
-
-        def covered(verdict):
-            bad = verdict if isinstance(verdict, str) else (
-                verdict[1] if isinstance(verdict, tuple) and verdict[0] == "bad" else None)
-            return bad is not None and (under(bad, d) or under(os.path.realpath(bad), d))
-
-        self.memo = {k: v for k, v in self.memo.items() if not covered(v)}
+        self.memo = {k: v for k, v in self.memo.items()
+                     if v is None or (isinstance(v, tuple) and v[0] == "ok")}
 
     def resolved(self, p):
         """Realpath, but a symlink itself stays itself (it can be replaced by its dir's owner)."""
@@ -975,16 +972,18 @@ def session_findings(env, project):
     # also takes its deny rules with it, so the guard may refuse what they would clear.
     machine = [f"settings not read: {e}: the guard misses its rules and patterns" for e in unread]
     machine += path_lines(shared)
-    mine = []
+    key = f"{MACHINE_KEY}:{hashlib.sha256(path_var.encode()).hexdigest()[:16]}"
+    out = {key: machine}
     if any(settings[k] != shared[k] for k in ("excludedCommands", "allowWrite")):
-        mine += [line for line in path_lines(settings) if line not in machine]
+        # PATH too decides these, so they go under this PATH's key for this project.
+        out[f"{key}:{project}"] = [line for line in path_lines(settings) if line not in machine]
     refusals, error = all_refusals(lambda m: check_rule1(m, env, project, project),
                                    Machine(env, settings, project))
-    mine += [finding(r) for r in refusals]
+    mine = [finding(r) for r in refusals]
     if error:
         mine.append(f"its git config: could not check ({type(error).__name__}: {error})")
-    key = f"{MACHINE_KEY}:{hashlib.sha256(path_var.encode()).hexdigest()[:16]}"
-    return {key: machine, project: mine}
+    out[project] = mine
+    return out
 
 
 def unseen(findings):
@@ -998,7 +997,7 @@ def unseen(findings):
     # Starts that race (a tmux restore resumes every tab) take turns, so one shows a finding.
     with state_lock(path + ".lock"):
         try:
-            with open(path) as f:
+            with regular(path, os.O_RDONLY) as f:
                 seen = json.load(f)
             if not isinstance(seen, dict):
                 seen = {}
@@ -1023,7 +1022,8 @@ def unseen(findings):
         tmp = f"{path}.{os.getpid()}.tmp"
         try:
             os.makedirs(d, exist_ok=True)
-            with open(tmp, "w") as f:
+            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
+            with os.fdopen(fd, "w") as f:
                 json.dump(seen, f)
             os.replace(tmp, path)
         except OSError as e:
@@ -1035,6 +1035,17 @@ def unseen(findings):
     return out
 
 
+def regular(path, flags):
+    """`path` opened never waiting (a FIFO there) and never through a link, as a regular file,
+    or OSError. The state dir is any session's to write."""
+    fd = os.open(path, flags | os.O_NONBLOCK | os.O_NOFOLLOW, 0o644)
+    if not stat.S_ISREG(os.fstat(fd).st_mode):
+        os.close(fd)
+        raise OSError(f"{path} is no regular file")
+    os.set_blocking(fd, True)
+    return os.fdopen(fd, "r" if flags == os.O_RDONLY else "a")
+
+
 @contextlib.contextmanager
 def state_lock(path, wait=2.0):
     """An flock on `path` for up to `wait` seconds; past that, or when it can't be taken at all,
@@ -1042,7 +1053,7 @@ def state_lock(path, wait=2.0):
     f = None
     try:
         os.makedirs(os.path.dirname(path), exist_ok=True)
-        f = open(path, "a")
+        f = regular(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND)
         end = time.monotonic() + wait
         while True:
             try:
