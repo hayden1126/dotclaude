@@ -74,8 +74,8 @@ stored here).
   here. The config caps live lanes at 3, with locks `install` and `suite`.
   - Merged, installed from main and closed: `autopass-now` #90, `attach-tabs` #91, `pass-busy`
     #92, `narrow-excluded` Part 1 #93, the lead's `fix/json-depth` #94, `lane-close` #95,
-    `lane-addr` #98. `gh pr view <n>` and the closed records under `.git/lanes/_closed/` hold
-    the detail.
+    `lane-addr` #98, `excluded-guard` #100 (narrow-excluded Part 2 plus G8's fix, 2026-10-14).
+    `gh pr view <n>` and the closed records under `.git/lanes/_closed/` hold the detail.
   - `tab-bar`: PR 1 merged as #96, its review fixes and Shift+arrows as #97, the test fixes as
     #99, PR 2 (drag between rows, custom rows, placements in the tab record) as #101
     (2026-10-14, merged ahead of #100 by accident). #101's tmux side is live from main
@@ -86,15 +86,11 @@ stored here).
     Close it after that (Hayden's ask). Design: the research page
     https://claude.ai/artifact/E75uhqt2xskxUGQopLwvoA (private), `~/scratch/tab-bar/INVENTORY.md`
     and [[dotclaude-tab-bar]].
-  - `excluded-guard` (narrow-excluded Part 2, opened 2026-10-14): a PreToolUse guard that lets an
-    excluded command run only when its cwd's git dir and its PATH entries aren't
-    sandbox-writable, then the `lane` allow lines behind it (Hayden applies allow lines; the
-    classifier refuses them). Its sessions don't open the private findings.
-  - `turn-glyph` (opened 2026-10-14): PLAN.md "Next: two workflow fixes", the glyph half.
-  - **Merge order: `excluded-guard` (#100), then `turn-glyph`, then any `tab-bar` follow-up**
-    (`turn-glyph` and `excluded-guard` both touch `settings.json`). The lead installs only the
-    next to merge. #100 carries G8's fix (Hayden's option A, 2026-10-14: an Edit deny rule is
-    the guard's protection); its install order is in that lane's `.lane/PLAN.md` "Part 2b".
+  - `turn-glyph` (opened 2026-10-14): PLAN.md "Next: two workflow fixes", the glyph half, plus
+    owner-tagged waits for subagent dialogs (its `.lane/PLAN.md` amendment 4).
+  - `ask-owner` (opened 2026-10-14): PLAN.md "Next: two workflow fixes", the lead/lane half.
+  - **Merge order: `turn-glyph`, then `ask-owner` and any `tab-bar` follow-up by readiness.**
+    The lead installs only the next to merge.
   - The parked json-depth sweep (21 files, among them the delegation enforcement scripts) is on
     `fix/json-depth-sweep`. Shipping it first needs a check of how each enforcement site fails
     (a caught error must not turn a deny into an allow). Optional: the trigger is near
@@ -108,8 +104,11 @@ stored here).
   - Once pushed, a lane merges `origin/main` into its branch, since force pushes are denied.
 
   Backlog:
-  - `ask-owner`, when `excluded-guard` closes (both edit the lanes docs): PLAN.md "Next: two
-    workflow fixes", the lead/lane half.
+  - Excluded-guard group B (Hayden's split, 2026-10-14; design in the closed record's
+    `.lane/PLAN.md` "Part 2b"): a SessionStart check of the session's project and PATH (shown
+    once per finding change, fail open), `lane new` checking the new worktree and `lane done`
+    printing the Edit deny rule it orphans (Edit deny rules take no glob). Then the G8 open
+    probes (a) and (b) in the private findings file. Overlaps `ask-owner` on `skills/lanes/`.
   - `lane init --model/--effort` repo defaults and `lane open --model/--effort` overrides,
     passed through to `claude` (today `lane open` hardcodes the argv).
 
@@ -199,9 +198,6 @@ stored here).
   "merged #N" it runs the post-merge chain (In flight) and `lane done` without asking. Both
   live lanes were told the rule on 2026-10-14, and tab-bar was told to start its Next with
   `Keep open: PR 2`. Check that line before any `lane done tab-bar`.
-  - `excluded-guard` was told to merge main (b491625) and install as next in merge order.
-    Its one ask: Hayden merges its machine overlay into `~/.claude/settings.machine.json` at
-    install (`lane asks`).
   - Message a lane at what `lane addr <id>` prints, resolved just before each send.
   - Local leftovers, never pushed: `fix/json-depth-sweep` (the parked sweep) and
     `fix/pass-last-recursion` (the same sweep under its first name, plus the writer's
