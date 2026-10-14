@@ -232,6 +232,10 @@ class Base(LanesRepo):
         self.mod.proc_start = lambda pid: self.start_now if pid == CLAUDE else real_start(pid)
         self.real_load = self.mod.load_session
         self.mod.load_session = self.fake_load
+        # then()'s entries wait here for a scan that doesn't follow their own read (landed_scan).
+        self.pending, self.reads, self.scanned = [], 0, 0
+        self.real_scan = self.mod.scan_turns
+        self.mod.scan_turns = self.landed_scan
         self.write_session({"status": "busy"})
         self.say(typed("the prompt that ran /pass"))
 
@@ -258,6 +262,7 @@ class Base(LanesRepo):
             self.write(path, json.dumps(self.session_record(entry)))
 
     def fake_load(self, pid):
+        self.reads += 1
         entry = self.script.pop(0) if len(self.script) > 1 else self.script[0]
         if callable(entry):
             entry = entry()
@@ -265,20 +270,33 @@ class Base(LanesRepo):
         return self.real_load(pid)
 
     def then(self, status, *entries, stop=None):
-        """A scripted read that first appends entries to the transcript (once, however often
-        the script repeats it) and, given stop, writes the stop record with those waits, as
-        Claude Code writes the turn's end before the session file changes. Then it reads
-        status."""
+        """A scripted read whose status comes at once and whose transcript entries land a beat
+        later (once, however often the script repeats it), as the spike's poller saw: the
+        session file changes 0.1 to 0.4 s before turn_duration's bytes can be read. The entries
+        land at the next scan that doesn't directly follow this read (landed_scan): the settle's
+        fresh scan, or the next poll's. Given stop, the stop record (the Stop hook ran before
+        the turn's end) is written at once."""
         done = []
 
         def read():
             if not done:
                 done.append(True)
-                self.say(*entries)
+                self.pending.append((self.reads, entries))
                 if stop is not None:
                     self.write_stop(stop)
             return status
         return read
+
+    def landed_scan(self, plan):
+        """scan_turns, once then()'s entries have landed: every read's but the latest's when
+        this scan is the one right after that read (observe's own)."""
+        first = self.scanned != self.reads
+        self.scanned = self.reads
+        due = [e for n, e in self.pending if not (first and n == self.reads)]
+        self.pending = [(n, e) for n, e in self.pending if first and n == self.reads]
+        for entries in due:
+            self.say(*entries)
+        return self.real_scan(plan)
 
     def lagged(self, status, *entries, after=0.2):
         """A scripted read whose status comes at once and whose transcript entries land `after`
@@ -1377,8 +1395,9 @@ class TurnEnd(Handed):
         self.assertIn("mode=compact outcome=compact", self.log())
 
     def test_a_turn_start_after_the_end_drops_resumed(self):
-        # Once the end is known the settle reads the session file twice (look_again), so the
-        # final re-check's first read is the fourth after the wait's.
+        # The end lands at the read after then()'s (the break), the settle reads the session
+        # file twice (look_again), and a start queued at the settle's second read lands at the
+        # final re-check's first.
         for name, start in STARTS.items():
             for where, between in (("in the settle", ()),
                                    ("at the final re-check", ("busy", "busy"))):
@@ -1393,8 +1412,9 @@ class TurnEnd(Handed):
 
     def test_a_status_flip_with_no_turn_start_does_not_drop(self):
         # The spike: an agent resuming after its shell ended flipped `shell` to `busy` with no
-        # transcript entry, so once the end is known only a start marker means a new turn.
-        code, out = self.compacts("busy", self.then("busy", END), "shell", "busy")
+        # transcript entry, so once the end is known only a start marker means a new turn. The
+        # end lands at the read after then()'s, which is the break, at `busy`.
+        code, out = self.compacts("busy", self.then("busy", END), "busy", "shell", "busy")
         self.assertEqual(code, 0, out)
         self.assertIn("mode=compact outcome=compact", self.log())
 
@@ -1449,14 +1469,25 @@ class TurnEnd(Handed):
 
     def test_a_shell_break_then_a_bare_flip_to_busy_still_acts(self):
         # A background shell or an agent flips the status with no turn (the spike, 20:19:29).
+        # The break poll sees `shell` before the end lands; the settle's fresh scan finds it.
         code, out = self.compacts("busy", self.then("shell", END), "busy")
+        self.assertEqual(code, 0, out)
+        self.assertIn("mode=compact outcome=compact", self.log())
+
+    def test_a_shell_break_whose_end_lands_after_the_status_still_acts(self):
+        # The reviewer's case: turn_duration's bytes land 30 ms after the status went `shell`,
+        # so the break poll can't see them. The rule is picked after the settle (0.3 s here;
+        # 1 s live, past the spike's 0.1 to 0.4 s), so an agent resuming in it, `shell` to
+        # `busy` with no turn, is no resumption.
+        self.mod.SETTLE = 0.3
+        code, out = self.compacts("busy", self.lagged("shell", END, after=0.03), "busy")
         self.assertEqual(code, 0, out)
         self.assertIn("mode=compact outcome=compact", self.log())
 
     def test_a_busy_break_keeps_looking_while_the_status_flips(self):
         # A flip at the second look earns another TRANSCRIPT_LAG; a start marker that lands in
         # it drops resumed.
-        code, out = self.compacts("busy", self.then("busy", END), "shell",
+        code, out = self.compacts("busy", self.then("busy", END), "busy", "shell",
                                   self.lagged("busy", STARTS["a task notice"], after=0.3))
         self.assertEqual(code, 1, out)
         self.assertDropped("resumed", "pass dropped")
@@ -1465,7 +1496,8 @@ class TurnEnd(Handed):
 
     def test_a_status_that_keeps_flipping_is_looked_at_three_rounds_at_most(self):
         began = time.monotonic()
-        code, out = self.compacts("busy", self.then("busy", END), *["shell", "busy"] * 10)
+        code, out = self.compacts("busy", self.then("busy", END), "busy",
+                                  *["shell", "busy"] * 10)
         self.assertEqual(code, 0, out)
         self.assertIn("mode=compact outcome=compact", self.log())
         # The settle and the final re-check: at most LAG_ROUNDS waits each.
@@ -1666,25 +1698,32 @@ class Notices(Handed):
         self.assertEqual(seen, set(self.mod.DROPS) | {"partial"})
 
     def test_a_resumed_notice_names_its_reason(self):
+        # The notice and the brief status-line message (QUIET) both follow the reason.
         again = ("No pass is pending now; run the pass skill again once this work is done, if "
                  "it still applies.")
+        status = ("pass dropped: the session's status changed after its turn. /pass again if "
+                  "it still applies")
         cases = (
+            ("a typed prompt", lambda: ["busy", self.then("busy", typed("wait")), "idle"],
+             "a prompt was typed or queued after the call", again, self.mod.DROPS["resumed"]),
             ("a new turn", lambda: ["busy", self.then("busy", END),
                                     self.then("busy", STARTS["a task notice"])],
              "a new turn started after the call (a prompt, a task notice or an agent's "
-             "message)", again),
+             "message)", again,
+             "pass dropped: a new turn started after the call. /pass again if it still applies"),
             ("a dialog", lambda: ["busy", "idle", "waiting"],
              "the session's status became waiting (a dialog, or a change the waiter can't "
-             "read)", again),
+             "read)", again, status),
             ("a status change", lambda: ["busy", "idle", "busy"],
              "the session's status changed after its turn ended (now busy), so a new turn "
-             "can't be ruled out", again),
+             "can't be ruled out", again, status),
             # An autopass would loop on this one: passing again drops the same way.
             ("no transcript", lambda: (os.remove(self.transcript()), ["busy", "idle"])[1],
              "the transcript couldn't be read, so a prompt after the call can't be ruled out",
              "No pass is pending now. Tell Hayden; passing again drops the same way until the "
-             "transcript can be read."))
-        for name, script, cause, tail in cases:
+             "transcript can be read.",
+             "pass dropped: the transcript couldn't be read; passing again drops the same way"))
+        for name, script, cause, tail, shown in cases:
             with self.subTest(reason=name):
                 self.reset()
                 self.script = script()
@@ -1694,6 +1733,9 @@ class Notices(Handed):
                 self.assertEqual(n["outcome"], "resumed")
                 self.assertEqual(n["text"], f"[pass] The compact pass you queued at "
                                             f"{hms(n['called'])}Z was dropped: {cause}. {tail}")
+                (msg,) = self.notices()
+                self.assertEqual(msg[1:], ["display-message", "-t", "%4", shown])
+                self.assertEqual(self.toasts(tries=4), [])   # still QUIET
 
     def test_a_pane_tmux_cannot_answer_has_its_own_cause(self):
         # Not "pane in copy mode": tmux gave no answer at the final check.
@@ -1711,7 +1753,8 @@ class Notices(Handed):
 
     def test_a_prompt_that_failed_after_compact_went_out_is_handed_over(self):
         # send-keys 3 or 4: /compact and its Enter are out, so passing again would compact a
-        # second time. The outcome stays `failed`; the notice hands over the resume prompt.
+        # second time. The outcome stays `failed`; the notice, the held tmux line, the toast and
+        # pass.log hand over the resume prompt, as `partial`'s do.
         real = self.mod.tmux
         prompt = self.PROMPT + " Call EnterPlanMode first."
         for nth in (3, 4, 1):
@@ -1728,10 +1771,16 @@ class Notices(Handed):
                 self.mod.tmux = tmux
                 code, out = self.run_pass("--compact", "--foreground")
                 self.assertEqual(code, 1, out)
-                self.assertIn(f"outcome=failed send-keys {nth} of 4: can't find pane: %4",
-                              self.log())
-                self.assertLoud("pass failed in tab 3: tmux could not respawn or type into the "
-                                "pane")
+                (line,) = [ln for ln in self.log().splitlines() if "outcome=failed" in ln][-1:]
+                self.assertIn(f"outcome=failed send-keys {nth} of 4: can't find pane: %4", line)
+                if nth >= 3:
+                    self.assertTrue(line.endswith(f"; resume prompt: {prompt}"), line)
+                    self.assertLoud("pass failed after /compact was sent; type the resume prompt "
+                                    f"yourself in tab 3: {prompt}")
+                else:
+                    self.assertNotIn("resume prompt", line)
+                    self.assertLoud("pass failed in tab 3: tmux could not respawn or type into "
+                                    "the pane")
                 n = self.notice()
                 self.assertEqual(n["outcome"], "failed")
                 self.assertEqual(n["text"], (
