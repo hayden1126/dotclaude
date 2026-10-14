@@ -136,6 +136,27 @@ class RoundTrip(LanesRepo):
         self.assertEqual(self.git("branch", "--list", "chart-fix"), "")
         self.assertEqual(json.loads(self.lane("ls", "--json")), [])
 
+    def test_done_refuses_a_kept_lane_until_abandon(self):
+        # `Keep open:` in Next keeps a merged lane open even with no session to end, where
+        # `handoff-check --closing` never runs. --abandon (an ask rule) closes it anyway.
+        self.lane("new", "chart-fix")
+        path = self.lane_path("chart-fix")
+        self.commit("chart.txt", "axis\n", cwd=path)
+        self.git("push", "-q", "origin", "chart-fix:main", cwd=path)
+        rec = self.record("chart-fix")
+        self.write(rec, self.read(rec).replace(
+            "## Next\n", "## Next\n- Keep open: PR 2 follows\x1b]0;x\x07.\n"))
+        p = self.run_lane("done", "chart-fix")
+        self.assertEqual(p.returncode, 1, p.stderr)
+        self.assertIn("Keep open: PR 2 follows", p.stderr)
+        self.assertNotIn("\x1b", p.stderr)  # the record is lane-writable: masked for a terminal
+        self.assertTrue(os.path.isdir(path))
+        self.assertIn("closed", self.lane("done", "chart-fix", "--abandon"))
+        self.assertFalse(os.path.exists(path))
+        (archive,) = os.listdir(os.path.join(self.common, "lanes", "_closed"))
+        with open(os.path.join(self.common, "lanes", "_closed", archive, "lane.json")) as f:
+            self.assertEqual(json.load(f)["state"], "merged")
+
     def test_done_validates_the_id_before_touching_anything(self):
         self.lane("new", "chart-fix")
         self.lane("done", "chart-fix", "--abandon")
@@ -1039,6 +1060,22 @@ class Close(LanesRepo):
         # claude-restore will reopen nothing in the lane; another checkout's tab stays.
         self.assertFalse(os.path.exists(mine) or os.path.exists(stray))
         self.assertTrue(os.path.exists(other))
+
+    def test_keep_open_refuses_a_live_lane_until_abandon(self):
+        # Design B's usual case: the lane sent `merged #N` and its session is still up. Its own
+        # check refuses before any signal; --abandon gets past `handoff-check --closing` too.
+        self.commit("chart.txt", "axis\n", cwd=self.path)
+        self.git("push", "-q", "origin", "chart-fix:main", cwd=self.path)
+        self.hand_off()
+        self.write(self.record("chart-fix"), self.read(self.record("chart-fix")).replace(
+            "## Next\n", "## Next\nKeep open: PR 2 follows.\n\n"))
+        (claude,) = self.claude()
+        p = self.run_lane("done", "chart-fix")
+        self.assertIn("Next says 'Keep open: PR 2 follows.'", p.stderr)
+        self.assertRefusedUntouched(p, claude)
+        out = self.lane("done", "chart-fix", "--abandon")
+        self.assertIn("closed (fully in origin/main)", out)
+        self.assertClosed()
 
     # ---- 2. what a session file can't prove ------------------------------------------------
 

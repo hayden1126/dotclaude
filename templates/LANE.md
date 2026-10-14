@@ -25,12 +25,14 @@ range (origin/main..<sha>) and PRs by number, not their state. -->
 Copy evidence into .lane/artifacts/, don't link it: links are archived as links. -->
 
 ## Asks for Hayden
-<!-- What this lane is blocked on Hayden for: a design pick, a push or merge approval, a
-cleanup nod. Clear a line once answered. `lane asks` lists these across lanes. -->
+<!-- What this lane is blocked on Hayden for: a design pick, a push or merge approval. Clear a
+line once answered. `lane asks` lists these across lanes. -->
 
 ## Not mine
 <!-- Things noticed that belong elsewhere: "#57 looks like lane api-docs's files". Never an
 ownership claim for another lane. -->
 
 ## Next
-<!-- The exact next concrete step and what to verify. handoff-check fails while this is empty. -->
+<!-- The exact next concrete step and what to verify. handoff-check fails while this is empty.
+While more PRs will follow this one, start with `Keep open: <why>` on one line: `lane done`
+refuses the lane until it's gone. -->
