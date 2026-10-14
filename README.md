@@ -638,9 +638,9 @@ idle, the script rechecks the handoff and respawns the pane with a fresh `claude
   decides: the turn's `turn_duration` entry or an Esc interrupt after the call, with no new turn
   since. The pass drops, with nothing changed, when work landed after the handoff (`stale`), Hayden typed
   or queued a prompt after the call (`resumed`), the stop listed any background task but memory
-  upkeep or an artifact watch, or the pane was in copy mode or held a draft in the input box
-  (`busy`), the session or pane went away or changed (`gone`), or the turn never ended
-  (`timeout`). A refusal (`stale`, `busy`, `timeout`, `failed`, an `error` in the waiter, and
+  upkeep or an artifact watch, or the pane was in copy mode, held a draft in the input box or
+  tmux didn't answer (`busy`), the session or pane went away or changed (`gone`), or the turn
+  never ended (`timeout`). A refusal (`stale`, `busy`, `timeout`, `failed`, an `error` in the waiter, and
   `partial` below) shows its cause and fix on every terminal attached to the pane's tmux session
   until a key press, plus a Windows toast; `resumed`, `gone` and `cancelled`, which Hayden caused,
   show one brief line in the status line. Fix the cause and run `/pass` again. In compact mode,

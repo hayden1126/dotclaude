@@ -75,7 +75,7 @@ A refusal (`stale`, `busy`, `timeout`, `failed`, `error`, and the resume prompt 
 |---|---|---|
 | `stale` | work landed after the handoff (an edit, a commit) | run the delta handoff, then `/pass` again |
 | `resumed` | Hayden typed a prompt after the call, or a new turn started (a queued prompt, a task notice, an agent's hand-back) | finish that turn, then `/pass` again if it still applies |
-| `busy` | the stop listed background tasks (the notice names the first two with their ids, `pass.log` every one, as `tasks:`, `waits:` for real waits, or both) or wrote no record; or, at the last check, the pane was in copy mode, had a draft in the input box, or showed no input box | stop the leftovers (step 2: `--tasks`, then `TaskStop <id>`) or wait, then `/pass`; `/pass compact` keeps the tasks; leave copy mode or send or clear the draft, then `/pass` again |
+| `busy` | the stop listed background tasks (the notice names the first two with their ids, `pass.log` every one, as `tasks:`, `waits:` for real waits, or both) or wrote no record; or, at the last check, the pane was in copy mode, had a draft in the input box, or showed no input box, or tmux didn't answer | stop the leftovers (step 2: `--tasks`, then `TaskStop <id>`) or wait, then `/pass`; `/pass compact` keeps the tasks; leave copy mode or send or clear the draft, then `/pass` again |
 | `gone` | the session, its process or the pane went away or changed (a `/clear`, an exit) | `/pass` again from the live session |
 | `timeout` | the turn never ended (600 s) | `/pass` again |
 | `cancelled` | `pass-respawn -C <toplevel> --cancel` ended the waiter | nothing; `/pass` again when wanted |
