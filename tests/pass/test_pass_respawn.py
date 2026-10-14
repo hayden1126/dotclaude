@@ -338,7 +338,10 @@ class Base(LanesRepo):
 
     def log(self):
         path = os.path.join(self.state, "pass.log")
-        return open(path).read() if os.path.exists(path) else ""
+        if not os.path.exists(path):
+            return ""
+        with open(path) as f:
+            return f.read()
 
     def carry_marker(self):
         return os.path.join(self.state, "pass-carry", "4.json")

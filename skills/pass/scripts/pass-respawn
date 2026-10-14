@@ -185,6 +185,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import unicodedata
 
 INVOKED = os.path.abspath(sys.argv[0] if __name__ == "__main__" else __file__)
 HERE = os.path.dirname(os.path.realpath(__file__))
@@ -198,8 +199,12 @@ POLL = 0.2         # secs between session file reads
 SETTLE = 1.0       # secs idle must hold, so a queued prompt can restart the turn first
 # Session-file statuses that mean "at the prompt, turn over": `idle`, and `shell` when a
 # background shell is still running (live, 2026-10-12; a foreground Bash call reads `busy`).
-# `waiting` (an open dialog) and anything unknown keep the waiter waiting.
+# `busy` counts too once the transcript shows the turn ended (turn_over): Claude Code 2.1.300
+# says busy at the prompt while an agent, a teammate or a workflow runs. `waiting` (an open
+# dialog) and anything unknown keep the waiter waiting.
 AT_PROMPT = {"idle", "shell"}
+# The interrupt's text: Esc ends a turn with this user entry and no turn_duration (spike).
+INTERRUPTED = "[Request interrupted by user"
 COMPACT_GAP = 1.0  # secs between typing /compact and the prompt (it queues, S4)
 TIMEOUT = 600.0
 MAX_TIMEOUT = 3600.0
@@ -274,6 +279,17 @@ class Plan:
     acting: bool = False   # past the final re-check: SIGTERM no longer cancels
     late_cancel: bool = False  # a SIGTERM came while acting, and was ignored
     settled: bool = False  # the outcome is decided (a drop, or the end): SIGTERM is only noted
+    # The transcript past the call (scan_turns): the next byte to read (None: unreadable at
+    # the call), the line the last read cut short, and the turn markers read, numbered in order.
+    read_at: int | None = None
+    torn: bytes = b""
+    marks: int = 0
+    turn_end: int | None = None    # the last end marker's number
+    turn_start: int | None = None  # the last start marker's number
+
+    def __post_init__(self):
+        if self.read_at is None:
+            self.read_at = self.transcript_size
 
     @property
     def status_file(self) -> str:
@@ -464,6 +480,88 @@ def typed_since(path: str | None, offset: int | None) -> bool | None:
         if typed_prompt(entry) or queued_prompt(entry):
             return True
     return False
+
+
+def turn_marker(entry, ended: bool) -> str | None:
+    """`end`, `start` or None for a transcript entry (Claude Code 2.1.300, lane pass-timeout's
+    spike). An end is a `system` turn_duration entry (every real turn end, never a Stop a hook
+    blocked) or a user entry whose text block starts with the interrupt's text (Esc writes no
+    turn_duration). A start is a user entry with an origin kind (a typed prompt, a task notice,
+    an agent's message), a queue dequeue, or an assistant entry once a turn has ended (ended;
+    failing closed). Everything else is bookkeeping (tool results, hook feedback, titles,
+    modes, attachments, api requests), so a new turn is this allowlist, never "anything
+    newer". A sidechain entry is a subagent's, never this session's turn."""
+    if not isinstance(entry, dict) or entry.get("isSidechain"):
+        return None
+    kind = entry.get("type")
+    if kind == "system":
+        return "end" if entry.get("subtype") == "turn_duration" else None
+    if kind == "queue-operation":
+        return "start" if entry.get("operation") == "dequeue" else None
+    if kind == "assistant":
+        return "start" if ended else None
+    if kind != "user":
+        return None
+    origin = entry.get("origin")
+    if isinstance(origin, dict) and isinstance(origin.get("kind"), str):
+        return "start"
+    message = entry.get("message")
+    content = message.get("content") if isinstance(message, dict) else None
+    if isinstance(content, list) and any(
+            isinstance(c, dict) and c.get("type") == "text" and isinstance(c.get("text"), str)
+            and c["text"].startswith(INTERRUPTED) for c in content):
+        return "end"
+    return None
+
+
+def scan_turns(plan: Plan) -> None:
+    """Read the transcript's bytes past plan.read_at (its size at the call, then wherever the
+    last read stopped), so a 0.2 s poll never re-reads it, and number the turn markers in them
+    (turn_marker) on the plan: turn_end and turn_start. A line the read cut short waits in
+    plan.torn for its rest. An unreadable transcript (now, or at the call) changes nothing."""
+    if plan.read_at is None:
+        return
+    try:
+        with open(plan.transcript, "rb") as f:
+            f.seek(plan.read_at)
+            data = f.read()
+    except (OSError, TypeError, ValueError):
+        return
+    plan.read_at += len(data)
+    *lines, plan.torn = (plan.torn + data).split(b"\n")
+    for line in lines:
+        try:
+            entry = json.loads(line)
+        except (ValueError, RecursionError):   # json recurses on nesting
+            continue
+        mark = turn_marker(entry, plan.turn_end is not None)
+        if mark is not None:
+            plan.marks += 1
+            if mark == "end":
+                plan.turn_end = plan.marks
+            else:
+                plan.turn_start = plan.marks
+
+
+def turn_over(plan: Plan) -> bool:
+    """Whether the transcript past the call shows the turn ended: an end marker with no start
+    marker after it."""
+    return plan.turn_end is not None and (plan.turn_start or 0) < plan.turn_end
+
+
+def went_on(plan: Plan, state: str, detail: str, session: dict, seen, seen_end: int | None
+            ) -> str | None:
+    """Why the session went on since the waiter saw its turn end (statusUpdatedAt seen, the end
+    marker numbered seen_end), or None. A start marker after that end always counts. Once the
+    end is known, the status alone doesn't: it flips among idle, shell and busy as delegated
+    work starts and stops, with no turn (the spike saw shell to busy). With no end marker seen
+    (the transcript can't show it), the status must be unchanged: still at the prompt, with the
+    same statusUpdatedAt."""
+    if seen_end is not None and (plan.turn_start or 0) > seen_end:
+        return "a new turn in the transcript"
+    if state != "idle" or (seen_end is None and session.get("statusUpdatedAt") != seen):
+        return f"status {detail}"
+    return None
 
 
 def counted(labels: list[str]) -> str:
@@ -1014,9 +1112,13 @@ def tmux(plan: Plan, *args: str) -> subprocess.CompletedProcess | None:
 
 def observe(plan: Plan, procs=None) -> tuple[str, str, dict | None]:
     """(state, detail, session file): `gone` when the pane, the session file or the process
-    isn't this session's any more; `idle` when the file says idle since the call; else `busy`.
+    isn't this session's any more; `idle` when the turn is over: the file says idle (or shell)
+    since the call, or it says busy and the transcript past the call shows the turn ended
+    (scan_turns, turn_over; Claude Code 2.1.300 says busy at the prompt while delegated work
+    runs); else `busy` (`waiting` and any unknown status too). The transcript is read after the
+    session file, as Claude Code writes the turn's end there first (10 to 15 ms, the spike).
     Given procs (the final re-check), the pane must also run this claude: its pane_pid the claude
-    or an ancestor of it, its current command `claude`."""
+    or an ancestor of it, its current command `claude`. detail is the file's status."""
     p = tmux(plan, "display-message", "-p", "-t", plan.pane, PANE_FORMAT)
     if p is None or p.returncode != 0:
         return "gone", f"pane {plan.pane}: " + (p.stderr.strip() if p else "tmux didn't run"), None
@@ -1030,10 +1132,12 @@ def observe(plan: Plan, procs=None) -> tuple[str, str, dict | None]:
                                                                             plan.claude_pid):
             return "gone", f"pane {plan.pane} runs {cmd or '?'} (pid {pid or '?'}), not claude " \
                            f"{plan.claude_pid}", None
-    updated = session.get("statusUpdatedAt")
-    idle = (session.get("status") in AT_PROMPT and isinstance(updated, (int, float))
-            and not isinstance(updated, bool) and updated > plan.called * 1000)
-    return ("idle" if idle else "busy"), str(session.get("status")), session
+    scan_turns(plan)
+    status, updated = session.get("status"), session.get("statusUpdatedAt")
+    idle = ((status in AT_PROMPT and isinstance(updated, (int, float))
+             and not isinstance(updated, bool) and updated > plan.called * 1000)
+            or (status == "busy" and turn_over(plan)))
+    return ("idle" if idle else "busy"), str(status), session
 
 
 def pane_problem(plan: Plan) -> str | None:
@@ -1116,11 +1220,17 @@ def notify(plan: Plan, text: str) -> None:
     toast(plan, placed(text, f"tab {index}" + (f" ({name})" if name else "") if index else ""))
 
 
-def drop(plan: Plan, outcome: str, detail: str = "", shown: str | None = None) -> str:
-    """Log the drop, then show it: loud (notify) unless Hayden caused it (QUIET: a cancel, a
-    prompt after the call, his /clear or exit), which keeps the brief status-line message."""
+def drop(plan: Plan, outcome: str, detail: str = "", shown: str | None = None,
+         cause: str | None = None, fix: str | None = None) -> str:
+    """Log the drop, leave the session its notice (tell; cause and fix override the notice's
+    defaults for the outcome), then show it: loud (notify) unless Hayden caused it (QUIET: a
+    cancel, a prompt after the call, his /clear or exit), which keeps the brief status-line
+    message. The notice comes before any tmux call, so a dying tmux server can't delay or skip
+    it."""
     plan.settled = True
+    dropped = time.time()
     log(plan.mode, outcome, plan.pane, detail)
+    tell(plan, outcome, dropped, detail, cause=cause, fix=fix)
     text = shown or DROPS[outcome]
     if outcome in QUIET:
         tmux(plan, "display-message", "-t", plan.pane, shown_literally(text))
@@ -1128,6 +1238,97 @@ def drop(plan: Plan, outcome: str, detail: str = "", shown: str | None = None) -
         with contextlib.suppress(Exception):  # the outcome is logged; the notice is best-effort
             notify(plan, text)
     return outcome
+
+
+# ---- the session's notice ----
+
+NOTICE_CHARS = 300      # a notice's free-text detail is cut to this
+TAKEN_AGE = 86400       # a notice the hook claimed (*.taken) and left is pruned after a day
+CAUSES = {  # a loud drop's cause in the notice, from the drop's detail (drop's cause overrides)
+    "stale": "the handoff went stale (work landed after it: {detail})",
+    "timeout": "the turn didn't end within {timeout:g} s of the call",
+    "failed": "tmux could not respawn or type into the pane ({detail})",
+    "error": "the waiter hit an error ({detail})",
+}
+FIXES = {  # what the session does about a loud drop (drop's fix overrides)
+    "stale": "Run the delta handoff and handoff-check, then run the pass skill again if it still "
+             "applies.",
+    "busy": "Follow the pass skill's step 2 (pass-respawn -C {toplevel} --tasks, then TaskStop "
+            "the leftovers) or pass in compact mode.",
+    "timeout": "Make pass-respawn the turn's last action, then run the pass skill again.",
+    "failed": "Read pass.log, then run the pass skill again.",
+    "error": "Read pass.log, then run the pass skill again.",
+}
+
+
+def notice_path(sid: str) -> str:
+    """The session's notice, which hooks/pass-notice.sh injects into its next turn."""
+    return os.path.join(lanelib.state_dir(), "pass-notice", f"{sid}.json")
+
+
+def clock(when: float) -> str:
+    """Epoch secs as a UTC clock time, HH:MM:SS (the notice adds the Z)."""
+    return datetime.datetime.fromtimestamp(when, datetime.timezone.utc).strftime("%H:%M:%S")
+
+
+def clipped(text) -> str:
+    """Free text as one line for a notice: control and format characters dropped (an escape
+    sequence, a bidi override), whitespace (newlines too) folded to single spaces, cut to
+    NOTICE_CHARS characters."""
+    kept = "".join(c for c in str(text)
+                   if c.isspace() or unicodedata.category(c) not in ("Cc", "Cf"))
+    line = " ".join(kept.split())
+    return line if len(line) <= NOTICE_CHARS else line[:NOTICE_CHARS - 3] + "..."
+
+
+def told(plan: Plan, outcome: str, dropped: float, detail: str = "", cause: str | None = None,
+         fix: str | None = None, prompt: str = "") -> str:
+    """What the notice tells the session (model-facing, one paragraph): which pass, queued when,
+    and for a loud drop when and why it dropped (cause, by default CAUSES' with detail) and the
+    fix (FIXES'); that none is pending, so the session stops saying one is queued; for `partial`
+    the resume prompt it wasn't typed. detail is clipped; cause and fix come whole."""
+    head = f"[pass] The {plan.mode} pass you queued at {clock(plan.called)}Z"
+    if outcome == "partial":
+        return (f"{head} sent /compact, but the resume prompt wasn't typed ({clipped(detail)}). No "
+                "pass is pending now. Treat this as your resume prompt unless Hayden's message "
+                f"says otherwise: {prompt}")
+    if outcome == "cancelled":
+        return f"{head} was cancelled. No pass is pending now."
+    if outcome == "resumed":
+        return (f"{head} was dropped: a prompt arrived after the call ({clipped(detail)}). No pass "
+                "is pending now; run the pass skill again once this work is done, if it still "
+                "applies.")
+    if outcome == "gone":
+        return (f"{head} was dropped: the pane or its claude changed ({clipped(detail)}). No pass "
+                "is pending now.")
+    if cause is None:
+        cause = CAUSES.get(outcome, "{detail}").format(detail=clipped(detail),
+                                                         timeout=plan.timeout)
+    fix = fix or FIXES[outcome].format(toplevel=plan.toplevel)
+    return (f"{head} was dropped at {clock(dropped)}Z ({outcome}): {cause}. No pass is pending "
+            f"now, so don't tell anyone one is queued. {fix} Tell Hayden in one line.")
+
+
+def tell(plan: Plan, outcome: str, dropped: float, detail: str = "", **how) -> None:
+    """Leave the session its notice (notice_path): {v: 1, session_id, outcome, mode, called,
+    dropped, text (told)}, times in epoch secs, written atomically and 0600 (write_utf8_json's
+    mkstemp). Best-effort: a failure here never changes the outcome."""
+    with contextlib.suppress(Exception):
+        write_utf8_json(notice_path(plan.session_id), {
+            "v": 1, "session_id": plan.session_id, "outcome": outcome, "mode": plan.mode,
+            "called": plan.called, "dropped": dropped,
+            "text": told(plan, outcome, dropped, detail, **how)})
+
+
+def clear_notice(sid: str) -> None:
+    """At the call, with the pending lock held: the session's old notice goes (it told of an
+    earlier pass), and once a day so do notices older than 7 days and claimed ones (*.taken)
+    older than a day. The stamp sits beside the dir, which so holds only notices. Best-effort."""
+    with contextlib.suppress(Exception):
+        path = notice_path(sid)
+        remove(path)
+        prune(os.path.dirname(path), time.time(), {"*.json": PRUNE_AGE, "*.taken": TAKEN_AGE},
+              stamp=os.path.dirname(path) + ".pruned")
 
 
 def carry_path(pane: str) -> str:
@@ -1175,10 +1376,12 @@ def replies_of(record: dict | None) -> list[dict]:
         if isinstance(replies, list) else []
 
 
-def prune(directory: str, now: float) -> None:
-    """Delete the directory's *.json files older than PRUNE_AGE, at most once per PRUNE_EVERY
-    (the mtime of its .pruned stamp), as hooks/stop_ring.py prunes stops/. Best-effort."""
-    stamp = os.path.join(directory, ".pruned")
+def prune(directory: str, now: float, ages: dict[str, float] | None = None,
+          stamp: str | None = None) -> None:
+    """Delete the directory's files older than their pattern's age (ages, {glob: secs}; by
+    default *.json past PRUNE_AGE), at most once per PRUNE_EVERY (the mtime of stamp, by default
+    its .pruned), as hooks/stop_ring.py prunes stops/. Best-effort."""
+    stamp = stamp or os.path.join(directory, ".pruned")
     with contextlib.suppress(OSError):
         if now - os.path.getmtime(stamp) < PRUNE_EVERY:
             return
@@ -1189,10 +1392,11 @@ def prune(directory: str, now: float) -> None:
         os.utime(stamp, (now, now))
     except OSError:
         return
-    for path in glob.glob(os.path.join(directory, "*.json")):
-        with contextlib.suppress(OSError):
-            if now - os.path.getmtime(path) > PRUNE_AGE:
-                os.unlink(path)
+    for pattern, age in (ages or {"*.json": PRUNE_AGE}).items():
+        for path in glob.glob(os.path.join(glob.escape(directory), pattern)):
+            with contextlib.suppress(OSError):
+                if now - os.path.getmtime(path) > age:
+                    os.unlink(path)
 
 
 def write_utf8_json(path: str, data) -> None:
@@ -1390,18 +1594,18 @@ def wait_and_act(plan: Plan, procs) -> str:
         if time.monotonic() >= deadline:
             return drop(plan, "timeout", f"status {detail}")
         time.sleep(POLL)
-    seen = session["statusUpdatedAt"]
+    seen, seen_end = session.get("statusUpdatedAt"), plan.turn_end
     time.sleep(SETTLE)
     state, detail, session = observe(plan)
     if state == "gone":
         return drop(plan, "gone", detail)
-    if state != "idle" or session["statusUpdatedAt"] != seen:
-        return drop(plan, "resumed", f"status {detail} in the settle")
+    if why := went_on(plan, state, detail, session, seen, seen_end):
+        return drop(plan, "resumed", f"{why} in the settle")
     code, out = gate(plan.toplevel, plan.path)
     if code != 0:
         gaps = [ln.strip()[len("FAIL"):].strip() for ln in out.splitlines()
                 if ln.strip().startswith("FAIL")]
-        return drop(plan, "stale", "; ".join(gaps))
+        return drop(plan, "stale", "; ".join(gaps) or clipped(out))
     typed = typed_since(plan.transcript, plan.transcript_size)
     if typed is None:
         return drop(plan, "resumed", "resumed: transcript unreadable")
@@ -1411,14 +1615,17 @@ def wait_and_act(plan: Plan, procs) -> str:
     actions = plan.actions(approved)
     rec = stop_record(plan.session_id) if plan.mode == "plain" else None
     if plan.mode == "plain" and (problem := stop_problem(plan, rec)):
-        return drop(plan, "busy", f"busy: {problem[0]}", problem[1])
+        return drop(plan, "busy", f"busy: {problem[0]}", problem[1],
+                    cause=problem[1].removeprefix("pass refused: "))
     state, detail, session = observe(plan, procs)
     if state == "gone":
         return drop(plan, "gone", detail)
-    if state != "idle" or session["statusUpdatedAt"] != seen:
-        return drop(plan, "resumed", f"status {detail} at the final re-check")
+    if why := went_on(plan, state, detail, session, seen, seen_end):
+        return drop(plan, "resumed", f"{why} at the final re-check")
     if why := pane_problem(plan):
-        return drop(plan, "busy", f"busy: {why}", f"pass dropped: {why}. {PANE_FIXES[why]}")
+        return drop(plan, "busy", f"busy: {why}", f"pass dropped: {why}. {PANE_FIXES[why]}",
+                    cause=f"{why} at the final check",
+                    fix="Run the pass skill again once Hayden has cleared it.")
     begin_acting(plan)
     if plan.mode == "plain":
         carry = last = None
@@ -1449,6 +1656,7 @@ def wait_and_act(plan: Plan, procs) -> str:
                 log(plan.mode, "partial", plan.pane,
                     late(plan, f"/compact sent, resume prompt not typed: {why}")
                     + f"; resume prompt: {argv[-1]}")
+                tell(plan, "partial", time.time(), why, prompt=argv[-1])
                 with contextlib.suppress(Exception):
                     notify(plan, f"pass: /compact sent; type the resume prompt yourself: "
                                  f"{argv[-1]}")
@@ -1488,7 +1696,9 @@ def run_waiter(plan: Plan, procs) -> str:
         outcome = drop(plan, "cancelled", "on SIGTERM")
     except BaseException as e:  # noqa: BLE001  logged and shown, as nothing else can be
         plan.settled = True  # a SIGTERM from here on is only noted: the error still gets logged
-        log(plan.mode, "error", plan.pane, f"{type(e).__name__}: {e}")
+        dropped, detail = time.time(), f"{type(e).__name__}: {e}"
+        log(plan.mode, "error", plan.pane, detail)
+        tell(plan, "error", dropped, detail)
         with contextlib.suppress(Exception):
             notify(plan, DROPS["error"])
         outcome = "error"
@@ -1506,7 +1716,8 @@ def pending_path(sid: str) -> str:
 
 def take_pending(plan: Plan) -> int:
     """An fd holding the exclusive flock on the session's pending lock, which the waiter keeps
-    for its whole life; refused when another waiter holds it."""
+    for its whole life; refused when another waiter holds it. Once it holds the lock, the
+    session's old notice goes (clear_notice)."""
     path = pending_path(plan.session_id)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
@@ -1516,6 +1727,7 @@ def take_pending(plan: Plan) -> int:
         os.close(fd)
         raise Refuse(1, f"pass-respawn: a pass is already pending; `pass-respawn -C "
                      f"{plan.toplevel} --cancel` drops it", "pending") from None
+    clear_notice(plan.session_id)
     return fd
 
 
