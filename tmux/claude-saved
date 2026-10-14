@@ -89,7 +89,7 @@ case "$cmd" in
 esac
 
 IFS= read -r -d '' PY <<'EOF'
-import glob, json, os, re, sys, tempfile, time
+import contextlib, fcntl, glob, json, os, re, subprocess, sys, tempfile, time
 
 STORE, REG, CARRY = os.environ["SAVED_DIR"], os.environ["REG_DIR"], os.environ["CARRY_DIR"]
 CARRY_TTL = 120
@@ -128,6 +128,56 @@ def remove(path):
         os.remove(path)
     except OSError:
         pass
+
+@contextlib.contextmanager
+def reg_lock():
+    """open-sessions/.records.lock, held around a registry write or delete here (with what
+    decided it checked again inside), as session-registry.sh holds it, and as tmux-tab-bar
+    does around its read and replace of a record's place. Waits up to 2 s, then goes ahead
+    without."""
+    fd = None
+    try:
+        fd = os.open(os.path.join(REG, ".records.lock"), os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW,
+                     0o600)
+        deadline = time.monotonic() + 2
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except OSError:
+                if time.monotonic() >= deadline:
+                    os.close(fd)
+                    fd = None
+                    break
+                time.sleep(0.01)
+    except OSError:
+        fd = None
+    try:
+        yield
+    finally:
+        if fd is not None:
+            os.close(fd)
+
+PLACE_MAX = 2048   # bytes, as session-registry.sh keeps a place
+
+def window_place(pane, old):
+    """An attach tab's place for its record: its window's @tab_place (tmux-tab-bar's row and
+    position for it, opaque here), kept only as session-registry.sh keeps it (1 to PLACE_MAX
+    bytes of UTF-8, no control character); the old record's when tmux doesn't answer. A track
+    rewrites the record whole, so without this a moved attach tab came back in auto place."""
+    try:
+        p = subprocess.run(["tmux", "display", "-p", "-t", pane, "#{@tab_place}x"],
+                           capture_output=True, timeout=5)
+        out = p.stdout.decode() if p.returncode == 0 else ""
+    except (OSError, subprocess.SubprocessError, UnicodeDecodeError):
+        out = ""
+    v = out[:-2] if out.endswith("x\n") else old.get("place")
+    try:
+        ok = (isinstance(v, str) and 1 <= len(v.encode()) <= PLACE_MAX
+              and not re.search(r"[\x00-\x1f\x7f]", v))
+    except UnicodeEncodeError:
+        ok = False
+    return v if ok else None
 
 def spath(sid):
     return os.path.join(STORE, sid + ".json")
@@ -419,7 +469,8 @@ def op_shelve(mode, pane, start, pid, pane_pid, command, socket, title):
     e["shelved"] = True
     save(e)
     # claude-restore must not reopen it, and the SessionEnd `other` the kill sends finds no file.
-    remove(os.path.join(REG, sid + ".json"))
+    with reg_lock():
+        remove(os.path.join(REG, sid + ".json"))
     # The job, when the tab only attaches to a background session: closing the tab would leave
     # the chat running unseen, so the caller stops it.
     print("ok\x1f%s\x1f%s" % (job, label(e)))
@@ -538,15 +589,34 @@ def op_track():
             save(e)
         old = load(os.path.join(REG, sid + ".json")) or {}
         keep.add((sid, pane))
-        write(os.path.join(REG, sid + ".json"), dict(
-            server, session_id=sid, cwd=cwd, pane=pane, window_index=index,
-            transcript_path=transcript(sid, old.get("transcript_path")), attach=True,
-            job_id=s["jobId"], ts=round(NOW, 3)))
+        rec = dict(server, session_id=sid, cwd=cwd, pane=pane, window_index=index,
+                   transcript_path=transcript(sid, old.get("transcript_path")), attach=True,
+                   job_id=s["jobId"], ts=round(NOW, 3))
+        place = window_place(pane, old)
+        if place is not None:
+            rec["place"] = place
+        with reg_lock():
+            # A Shelve since the check above saved the chat as shelved and deleted this entry
+            # (under the lock): writing it now would bring it back.
+            now = entry(sid)
+            if now and now["shelved"] and NOW - num(now.get("saved_at")) < SHELVED_GRACE:
+                keep.discard((sid, pane))
+                continue
+            # The registry rewrote the record meanwhile (the chat resumed in a plain tab), or
+            # tmux-tab-bar changed its place: leave it, and the next track looks again.
+            if (load(os.path.join(REG, sid + ".json")) or {}) != old:
+                continue
+            write(os.path.join(REG, sid + ".json"), rec)
+
+    def gone(e):
+        return (e and e.get("attach") is True and on_server(e, server)
+                and (e.get("session_id"), e.get("pane")) not in keep)
+
     for path in glob.glob(os.path.join(REG, "*.json")):
-        e = load(path)
-        if (e and e.get("attach") is True and on_server(e, server)
-                and (e.get("session_id"), e.get("pane")) not in keep):
-            remove(path)
+        if gone(load(path)):
+            with reg_lock():
+                if gone(load(path)):    # the registry may have rewritten it meanwhile
+                    remove(path)
 
 def op_plan(sid):
     e = entry(sid)
@@ -851,7 +921,14 @@ case "$cmd" in
     fi
     heading=Shelf
     [ "$removing" = 1 ] && heading="Remove from shelf"
-    tmux display-menu "${cflag[@]}" -T "#[align=centre]$heading" -x C -y C "${items[@]}" ;;
+    # -M: a menu opened with no mouse event behind it (a script's, as here) otherwise ignores
+    # a click on an item and closes on its release. -t: the client's own session, since a
+    # window in grouped sessions alone resolves to the most recent one, whose bar (the phone's,
+    # at the bottom) would decide -y.
+    tflag=()
+    [[ "$csess" =~ ^\$[0-9]+$ ]] && tflag=(-t "$csess:")
+    tmux display-menu -M "${cflag[@]}" "${tflag[@]}" -T "#[align=centre]$heading" -x C \
+      -y '#{?#{==:#{status-position},top},0,#{popup_centre_y}}' "${items[@]}" ;;
 
   open)
     sid_ok "${1:-}" || exit 0

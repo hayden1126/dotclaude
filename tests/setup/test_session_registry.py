@@ -7,8 +7,10 @@ path and start time) so claude-restore can tell which tabs died with an earlier 
 SessionEnd deletes the entry on an explicit end (/exit, /clear, logout) and only marks it on
 `other`, which a window kill, a SIGTERM and a tmux server kill all send (probed 2026-10-05), so a
 shutdown can't be told from a closed window at hook time. In a tab it then hands the payload to
-~/.local/bin/claude-saved, fail-open. A stub tmux answers `display` and logs each call's argv, one
-argument per field."""
+~/.local/bin/claude-saved, fail-open. The entry also carries the window's @tab_place (the tab
+bar's placement, opaque here) as `place` when it is a valid one. A stub tmux answers `display` and
+logs each call's argv, one argument per field."""
+import fcntl
 import json
 import os
 import re
@@ -23,8 +25,12 @@ HOOK = os.path.join(REPO, "hooks", "session-registry.sh")
 
 STUB = """#!/usr/bin/env bash
 { printf '%s' "$(basename "$0")"; printf '\\x1f%s' "$@"; printf '\\n'; } >> "$STUB_LOG"
-case "$1" in
-  display|display-message)
+[ "$1" != -u ] || shift
+case "$1 $5" in
+  "display #{@tab_place}")
+    [ -z "${STUB_NO_PLACE:-}" ] || exit 1
+    printf '%s\\n' "${STUB_PLACE:-}" ;;
+  display*)
     [ -z "${STUB_NO_SERVER:-}" ] || exit 1
     printf '%s %s %s %s\\n' "$STUB_START" "$STUB_PID" "${STUB_WINDOW:-3}" "$STUB_SOCKET" ;;
 esac
@@ -38,6 +44,8 @@ START = 1791222157
 PID = 4321
 TAB = {"TMUX": "/tmp/tmux-1000/default,1,0", "TMUX_PANE": "%7",
        "CLAUDE_CODE_SESSION_ATTENDED": "1"}
+# A tab bar placement: opaque to the hook, so spaces, quotes, # and non-ASCII pass as they are.
+PLACE = '{"row": 1, "pos": 2, "k": "a b #{pane_id} \'q\' ' + chr(0xe9) + ';"}'
 
 
 class Registry(unittest.TestCase):
@@ -102,9 +110,13 @@ class Registry(unittest.TestCase):
         self.assertTrue(e["transcript_path"].endswith(SID + ".jsonl"))
         self.assertIsInstance(e["ts"], (int, float))
         self.assertNotIn("ended_other_at", e)
+        self.assertNotIn("place", e)   # the window has no @tab_place
         self.assertEqual(self.calls(), [["tmux", "display", "-p", "-t", "%7",
-                                         "#{start_time} #{pid} #{window_index} #{socket_path}"]])
-        self.assertEqual(sorted(os.listdir(self.dir)), [SID + ".json"])  # no tmp left behind
+                                         "#{start_time} #{pid} #{window_index} #{socket_path}"],
+                                        ["tmux", "-u", "display", "-p", "-t", "%7",
+                                         "#{@tab_place}"]])
+        self.assertEqual(sorted(os.listdir(self.dir)),                    # no tmp left behind
+                         [".records.lock", SID + ".json"])
 
     def test_every_source_refreshes_the_entry(self):
         self.start()
@@ -171,6 +183,83 @@ class Registry(unittest.TestCase):
         e = self.entries()[SID]
         self.assertIsInstance(e["ended_other_at"], (int, float))
         self.assertEqual((e["pane"], e["server_start"]), ("%7", START))
+
+    # --- the tab bar's placement ------------------------------------------------------------
+
+    def test_a_start_carries_the_windows_tab_place(self):
+        self.env["STUB_PLACE"] = PLACE
+        self.start()
+        self.assertEqual(self.entries()[SID]["place"], PLACE)
+
+    def test_clear_carries_the_place_to_the_new_id(self):
+        # The window option outlives /clear, so the new session's entry picks it up.
+        self.env["STUB_PLACE"] = PLACE
+        self.start()
+        self.end("clear")
+        self.fire("SessionStart", source="clear", session_id=NEW)
+        self.assertEqual(self.entries()[NEW]["place"], PLACE)
+
+    def test_other_keeps_the_place(self):
+        self.env["STUB_PLACE"] = PLACE
+        self.start()
+        self.end("other")
+        e = self.entries()[SID]
+        self.assertEqual(e["place"], PLACE)
+        self.assertIn("ended_other_at", e)
+
+    def test_the_longest_place_is_counted_in_bytes(self):
+        self.env["STUB_PLACE"] = chr(0xe9) * 1024   # 2048 bytes of UTF-8
+        self.start()
+        self.assertEqual(self.entries()[SID]["place"], chr(0xe9) * 1024)
+
+    def test_an_invalid_place_is_left_out(self):
+        # A trailing newline must not be stripped into a valid value, and chr(0xdcff) reaches the
+        # hook as a byte that is not UTF-8.
+        for place in ("", "x" * 2049, chr(0xe9) * 1024 + "x", "a\nb", "ab\n", "a\tb",
+                      "a" + chr(0x1b) + "b", "a" + chr(0x7f) + "b", "a" + chr(0xdcff) + "b"):
+            with self.subTest(place=place[:12]):
+                self.env["STUB_PLACE"] = place
+                self.start()
+                e = self.entries()[SID]
+                self.assertNotIn("place", e)
+                self.assertEqual(e["pane"], "%7")
+
+    def test_an_unreadable_place_still_writes_the_entry(self):
+        self.env["STUB_NO_PLACE"] = "1"
+        self.start()
+        self.assertNotIn("place", self.entries()[SID])
+
+    # --- the records lock, shared with tmux-tab-bar's record update ---------------------------
+
+    def hold_lock(self):
+        os.makedirs(self.dir, exist_ok=True)
+        fd = os.open(os.path.join(self.dir, ".records.lock"), os.O_RDWR | os.O_CREAT, 0o600)
+        self.addCleanup(os.close, fd)
+        fcntl.flock(fd, fcntl.LOCK_EX)
+
+    def test_a_lock_held_past_the_bound_still_writes_and_deletes(self):
+        self.hold_lock()
+        t = time.monotonic()
+        self.start()
+        self.assertGreaterEqual(time.monotonic() - t, 1.5)      # it waited for the lock
+        self.assertIn(SID, self.entries())
+        self.end("other")
+        self.assertIn("ended_other_at", self.entries()[SID])
+        self.end("prompt_input_exit")
+        self.assertEqual(self.entries(), {})
+
+    def test_a_start_writes_under_the_lock(self):
+        # tmux-tab-bar holds the lock across its compare and replace: a write must wait for it.
+        self.hold_lock()
+        p = subprocess.Popen(["bash", HOOK], stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL, env={**self.env, **TAB}, text=True)
+        p.stdin.write(json.dumps({"session_id": SID, "hook_event_name": "SessionStart",
+                                  "cwd": "/home/u/code/dna", "source": "startup"}))
+        p.stdin.close()
+        time.sleep(0.8)
+        self.assertNotIn(SID, self.entries())                   # waiting on the lock
+        self.assertEqual(p.wait(timeout=10), 0)
+        self.assertIn(SID, self.entries())
 
     def test_an_end_for_an_unknown_session_writes_nothing(self):
         self.end("other")
