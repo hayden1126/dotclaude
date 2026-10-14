@@ -305,6 +305,14 @@ class Approval(unittest.TestCase):
         self.assertEqual(self.state(alone), lanelib.UNAPPROVED)
 
 
+    def test_the_status_path_follows_the_lane_from_the_toplevel(self):
+        # In a lane the toplevel is the lane; lane.json's path (sandbox-writable) is never read.
+        repo = lanelib.Repo("/r/lanes/x", "/r/proj/.git")
+        self.assertEqual(lanelib.status_path(repo, None), "/r/lanes/x/STATUS.md")
+        self.assertEqual(lanelib.status_path(repo, {"path": "/r/lanes/$(evil)\nx"}),
+                         "/r/lanes/x/.lane/STATUS.md")
+
+
 class KeepOpen(unittest.TestCase):
     """lanelib.kept_open: a `Keep open:` item anywhere in Next keeps a merged lane open."""
 
@@ -347,13 +355,6 @@ class KeepOpen(unittest.TestCase):
         self.assertIsNotNone(self.kept("- Step.\n  - Keep open: PR 2.\n"))
         self.assertIsNotNone(self.kept("  Keep open: PR 2 follows.\n- Step.\n"))
         self.assertIsNone(lanelib.kept_open(None))
-
-    def test_the_status_path_follows_the_lane_from_the_toplevel(self):
-        # In a lane the toplevel is the lane; lane.json's path (sandbox-writable) is never read.
-        repo = lanelib.Repo("/r/lanes/x", "/r/proj/.git")
-        self.assertEqual(lanelib.status_path(repo, None), "/r/lanes/x/STATUS.md")
-        self.assertEqual(lanelib.status_path(repo, {"path": "/r/lanes/$(evil)\nx"}),
-                         "/r/lanes/x/.lane/STATUS.md")
 
 
 class Lane(Check):

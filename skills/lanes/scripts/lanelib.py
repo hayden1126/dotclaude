@@ -644,7 +644,9 @@ APPROVAL_OPEN = re.compile(r"\(approved by Hayden", re.IGNORECASE)
 APPROVAL_DATE = re.compile(r" (\d{4}-\d{2}-\d{2})\)")
 BULLET = re.compile(r"\s*(?:[-*+]|\d+[.)])\s")
 # `Keep open: <why>`, `- **Keep open:** <why>`: a lane with more PRs to come after a merge.
-KEEP_OPEN = re.compile(r"\s*(?:(?:[-*+]|\d+[.)])\s+)?[*_`]*keep open[*_`]*\s*:", re.IGNORECASE)
+# Spaces and tabs only: a match never runs past its own line.
+KEEP_OPEN = re.compile(r"[ \t]*(?:(?:[-*+]|\d+[.)])[ \t]+)?[*_`]*keep open[*_`]*[ \t]*:",
+                       re.IGNORECASE)
 
 
 def next_items(block: str | None) -> list[str]:

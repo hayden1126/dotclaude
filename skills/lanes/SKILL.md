@@ -155,8 +155,9 @@ inside a lane.
       lane's install hold, which `done` refuses while it stands.
    4. Check that no installed link or `source-file` line points into a lane: `lane ls` shows no
       `install: held by` line, and `done` names either.
-   5. Message each remaining lane: "main moved to `<sha>`: rebase; renumber the version if
-      taken". The board's `rebase` flag is the truth; the message is only a nudge.
+   5. Message each remaining lane: "main moved to `<sha>`: merge origin/main; renumber the
+      version if taken". A pushed branch merges main rather than rebasing, which would need a
+      force push. The board's `rebase` flag is the truth; the message is only a nudge.
    6. Add one backlog line to the project STATUS: lane id, PR number, outcome.
    7. `lane done <id>` once the hand-back gate (step 5) passes, unless the lane's Next has a
       `Keep open:` line: then leave it open. A gate that fails on a lane with no live session
