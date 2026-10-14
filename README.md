@@ -385,6 +385,21 @@ need nothing extra.
   last tab to the first), and Shift+Up and Shift+Down go to the tab above or below; for a window
   hidden in `+N`, left and right step by number and up and down do nothing (the same without
   `tmux-tab-bar` installed). Those four keys never reach the program in a pane.
+  Tabs can also be arranged by hand. Drag a tab onto another tab to put it before or after
+  that tab (by which half you let go on), or onto a row's left edge or empty end to make it that
+  row's first or last tab; a drag that ends over a pane does nothing (no copy mode). Ctrl-b then
+  Shift+arrows carry the tab you are on: left and right within its row, up and down onto the row
+  above or below (Shift+arrows go, Ctrl-b Shift+arrows carry, and each Shift+arrow within the
+  repeat time carries again). The tap menu's **Move…** opens a menu of the same moves (◀ ▶ ▲ ▼),
+  plus **New row**, a custom row of its own below the tab's row, and **Auto place**, back where
+  the bar puts it; it reopens after each step, so the phone can take several without retapping.
+  **Name row…** names a custom row (its header shows `name▸`, or a bare `▸` unnamed, in one colour
+  of its own). Ctrl-b Enter has **Move…** and **Reset bar**, which puts every tab of the session
+  back where the bar places it. A row you moved a tab into keeps the order you gave it; a new
+  tab joins its end. A lane tab outside its project's row shows as `repo·lane`. The arrangement
+  is kept in each window's `@tab_place` option, so it survives `/clear` and `/pass`, and in the
+  restore record (`place`), so `claude-restore` brings it back after tmux dies. A tab reopened
+  from the Shelf lands at the end of its project's row.
   `tmux/tmux-tab-bar` runs from
   tmux hooks and from `tmux-claude-status`, which catches a directory change, a lane opening or
   closing, or a swapped window within a few seconds. It never puts a title, a directory name or a lane record into a

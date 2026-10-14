@@ -8,9 +8,17 @@
   TAB BAR  (rows by project: a repo with lanes, then the rest)
     tap a tab    switch to it
     tap again    its menu: Star / Shelve / Shelf… / Replies before pass /
-                 Rename / Windows…
+                 Move… / Name row… / Rename / Windows…
     tap +N       the windows the bar has no room for
     S-arrows     the tab left / right / above / below, as drawn (no prefix)
+
+  ARRANGE TABS  (kept across /clear and a restore)
+    drag a tab   onto a tab: before or after it; onto a row's edge: first or last
+    C-b S-arrows carry this tab left / right, or up / down a row (repeats)
+    Move…        ◀ ▶ ▲ ▼, New row (a row of its own), Auto place (back where the
+                 bar puts it); stays open for the next step (phone)
+    Name row…    name a custom row (empty clears it)
+    C-b Enter    Move… / Reset bar (every tab back where the bar puts it)
 
   WINDOWS  (one per repo)
     C-b c        new window (keeps dir)

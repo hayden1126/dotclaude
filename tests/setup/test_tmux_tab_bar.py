@@ -513,9 +513,10 @@ class Render(unittest.TestCase):
                         want.append(tb.SEP)
                     if item[0] == "head":
                         want.append(tb.header(item[1], lay.head_w[item[1]] - 2, item[2],
-                                              lay.head))
+                                              lay.head, lay.colours[item[1]]))
                     elif item[0] == "div":
-                        want.append(tb.divider(item[1], lay.head_w[item[1]] - 2))
+                        want.append(tb.divider(item[1], lay.head_w[item[1]] - 2,
+                                               lay.colours[item[1]]))
                     elif item[0] == "tab":
                         want.append(tb.entry(item[1], item[2], lay.slots[r]))
                 want += [tb.right_part(16)] if r == 0 else []
@@ -524,8 +525,8 @@ class Render(unittest.TestCase):
         # Outside every range: each entry closes its range before the separator.
         self.assertTrue(tb.entry("@1", 1, 20).endswith("#[norange]" + tb.NORM + ",}}"))
         self.assertEqual(tb.SEP, "#[fg=colour240]│#[fg=colour250]")
-        self.assertIn("┃", tb.divider(0, 5))      # a packed group's divider reads differently
-        self.assertNotIn("│", tb.divider(0, 5))
+        self.assertIn("┃", tb.divider(0, 5, 75))  # a packed group's divider reads differently
+        self.assertNotIn("│", tb.divider(0, 5, 75))
 
     def test_the_gutter_draws_g_cells_on_every_row(self):
         # Count what each gutter piece draws: status-left pads to L, a header's name pads to its
@@ -777,6 +778,236 @@ class Nav(unittest.TestCase):
         self.assertEqual(select(rows, "@2", "right"), "@1")
 
 
+# --- arrange: placements, order and moves (pure) --------------------------------------------------
+
+P = tb.Place
+REPO_KEY, KAR_KEY = "p:/r/.git", "p:/k/.git"
+TAB_OF = {"@1": tb.Tab("shared", "", "hq", "hq:"), "@2": tb.Tab("lead", "/r/.git", "repo", "lead"),
+          "@3": tb.Tab("lane", "/r/.git", "repo", "a"), "@4": tb.Tab("lane", "/r/.git", "repo", "b"),
+          "@5": tb.Tab("lead", "/k/.git", "kar", "lead"), "@6": tb.Tab("shared", "", "x", "x:")}
+WINS = [(int(w[1:]), w) for w in TAB_OF]
+
+
+def arranged(places, wins=WINS):
+    groups, shared, names = tb.group_windows(wins, TAB_OF, places)
+    return [(g.key, [w for w, _ in g.tabs]) for g in groups] + [("s", [w for w, _ in shared])], \
+        groups, shared, names
+
+
+class Placement(unittest.TestCase):
+    def test_a_valid_placement_reads_back(self):
+        for p in (P("s", 0), P(REPO_KEY, 999), P("c:1", 3, REPO_KEY, "work ♯1"),
+                  P("c:9999", 0, "s", ""), P("c:2", 0, "c:1", "")):
+            with self.subTest(p=p):
+                self.assertEqual(tb.parse_place(tb.place_text(p)), p)
+
+    def test_each_bad_field_or_shape_is_no_placement(self):
+        good = {"row": "s", "pos": 0, "after": "", "name": ""}
+        self.assertEqual(tb.parse_place(json.dumps(good)), P("s", 0))
+        for change in ({"row": "x"}, {"row": "p:rel"}, {"row": "c:0"}, {"row": "c:10000"},
+                       {"row": "c:01"}, {"row": 5}, {"row": "s\n"}, {"row": "p:/a\x07"},
+                       {"pos": -1}, {"pos": 1000}, {"pos": True}, {"pos": 1.0}, {"pos": "1"},
+                       {"after": "x"}, {"after": None}, {"name": "a#b"}, {"name": "x" * 17},
+                       {"name": "a\x01"}, {"name": 3}, {"name": " a"}):
+            with self.subTest(change=change):
+                self.assertIsNone(tb.parse_place(json.dumps({**good, **change})))
+        for text in ("", "null", "[]", "{", json.dumps({**good, "extra": 1}),
+                     json.dumps({k: v for k, v in good.items() if k != "name"}),
+                     json.dumps({**good, "row": "p:/" + "a" * tb.PLACE_MAX}),
+                     json.dumps(good) + "\x07", "\t" + json.dumps(good),
+                     "[" * 1000 + "]" * 1000):
+            with self.subTest(text=text[:30]):
+                self.assertIsNone(tb.parse_place(text))
+        self.assertIsNone(tb.place_text(P("p:/" + "a" * tb.PLACE_MAX, 0)))   # can't read back
+        self.assertIsNone(tb.place_text(P("p:/a\nb", 0)))
+
+    def test_a_row_name_is_cleaned(self):
+        hostile = "a\"b'c;d#[e%f$(g)$HOME~h\\i"
+        self.assertEqual(tb.clean_row_name(hostile), "a\"b'c;d♯[e%f$(g…")
+        self.assertEqual(tb.clean_row_name("\x1b[31m red\x00 "), "[31m red")
+        self.assertEqual(tb.clean_row_name("   "), "")
+        for raw in (hostile, "漢字" * 10, "#" * 40, "\x01 x", "x" * 16):
+            with self.subTest(raw=raw):
+                name = tb.clean_row_name(raw)
+                self.assertLessEqual(tb.text_width(name), tb.ROW_NAME_CELLS)
+                self.assertNotIn("#", name)
+                self.assertEqual(tb.clean_row_name(name), name)   # a stored name stays valid
+
+    def test_the_custom_colour_is_outside_the_palette(self):
+        self.assertNotIn(tb.CUSTOM_COLOUR, tb.PALETTE)
+        lay = tb.lay_out([Group("", tabs(1), tb.CUSTOM_COLOUR, "c:1")], tabs(2), 188, "@1", 8, 22)
+        self.assertIn(f"#[fg=colour{tb.CUSTOM_COLOUR}]#[bold]▸", tb.render(lay)[0])
+
+
+class Order(unittest.TestCase):
+    def test_no_placement_is_todays_order(self):
+        rows, _, _, names = arranged({})
+        self.assertEqual(rows, [(REPO_KEY, ["@2", "@3", "@4"]), (KAR_KEY, ["@5"]),
+                                ("s", ["@1", "@6"])])
+        self.assertEqual(names["@3"], ("a", "0", ""))
+        self.assertEqual(names["@5"], ("lead", "1", ""))
+        self.assertEqual(names["@1"], ("hq:", "", ""))
+
+    def test_a_manual_row_puts_its_placed_tabs_first_then_the_rest_in_auto_order(self):
+        rows, *_ = arranged({"@4": P(REPO_KEY, 0), "@2": P(REPO_KEY, 1)})
+        self.assertEqual(rows[0], (REPO_KEY, ["@4", "@2", "@3"]))
+
+    def test_a_new_window_appends_and_a_closed_neighbour_leaves_no_gap(self):
+        places = {"@4": P(REPO_KEY, 0), "@3": P(REPO_KEY, 1), "@2": P(REPO_KEY, 2)}
+        tab_of = dict(TAB_OF, **{"@7": tb.Tab("lane", "/r/.git", "repo", "c")})
+        groups, _, _ = tb.group_windows(WINS + [(7, "@7")], tab_of, places)
+        self.assertEqual([w for w, _ in groups[0].tabs], ["@4", "@3", "@2", "@7"])
+        rows, *_ = arranged(places, [w for w in WINS if w[1] != "@3"])
+        self.assertEqual(rows[0], (REPO_KEY, ["@4", "@2"]))
+
+    def test_a_tab_outside_its_projects_row_keeps_its_colour_and_shows_its_repo(self):
+        rows, _, _, names = arranged({"@3": P("s", 0), "@1": P(KAR_KEY, 0)})
+        self.assertEqual(rows, [(REPO_KEY, ["@2", "@4"]), (KAR_KEY, ["@1", "@5"]),
+                                ("s", ["@3", "@6"])])
+        self.assertEqual(names["@3"], ("repo·a", "0", ""))
+        self.assertEqual(names["@1"], ("hq:", "", ""))    # a shared tab keeps its name
+
+    def test_a_project_row_no_window_classifies_into_falls_back_to_auto(self):
+        rows, _, _, names = arranged({"@1": P("p:/gone/.git", 0), "@3": P("p:/gone/.git", 1)})
+        self.assertEqual(rows, arranged({})[0])
+        self.assertEqual(names, arranged({})[3])
+
+    def test_moving_every_tab_out_of_a_project_recolours_nothing(self):
+        places = {w: P("s", k) for k, w in enumerate(("@2", "@3", "@4"))}
+        rows, groups, _, names = arranged(places)
+        self.assertEqual([g.key for g in groups], [KAR_KEY])
+        self.assertEqual(groups[0].colour, tb.PALETTE[1])
+        self.assertEqual(names["@5"][1], "1")
+        self.assertEqual(names["@2"], ("repo·lead", "0", ""))
+
+    def test_a_custom_row_follows_its_anchor_else_goes_last_among_the_groups(self):
+        cases = [({"@3": P("c:1", 0, REPO_KEY)}, [REPO_KEY, "c:1", KAR_KEY]),
+                 ({"@3": P("c:1", 0, KAR_KEY)}, [REPO_KEY, KAR_KEY, "c:1"]),
+                 ({"@3": P("c:1", 0, "s")}, [REPO_KEY, KAR_KEY, "c:1"]),
+                 ({"@3": P("c:1", 0, "p:/gone/.git")}, [REPO_KEY, KAR_KEY, "c:1"]),
+                 ({"@3": P("c:3", 0, REPO_KEY), "@4": P("c:2", 0, REPO_KEY)},
+                  [REPO_KEY, "c:2", "c:3", KAR_KEY]),
+                 ({"@3": P("c:1", 0, REPO_KEY), "@4": P("c:2", 0, "c:1")},
+                  [REPO_KEY, "c:1", "c:2", KAR_KEY]),
+                 ({"@3": P("c:1", 0, "c:2"), "@4": P("c:2", 0, "c:1")},    # a cycle: by id
+                  [REPO_KEY, KAR_KEY, "c:1", "c:2"]),
+                 ({"@5": P("c:1", 0, "c:1")}, [REPO_KEY, "c:1"])]          # itself, kar gone
+        for places, want in cases:
+            with self.subTest(places=places):
+                rows, groups, _, _ = arranged(places)
+                self.assertEqual([g.key for g in groups], want)
+
+    def test_a_custom_row_is_a_group_with_its_lowest_window_ids_name(self):
+        places = {"@6": P("c:4", 0, KAR_KEY, "late"), "@3": P("c:4", 1, REPO_KEY, "work")}
+        rows, groups, shared, names = arranged(places)
+        custom = groups[1]
+        self.assertEqual((custom.key, custom.name, custom.after, custom.colour),
+                         ("c:4", "work", REPO_KEY, tb.CUSTOM_COLOUR))
+        self.assertEqual([w for w, _ in custom.tabs], ["@6", "@3"])
+        self.assertEqual(names["@3"], ("repo·a", "0", "1"))
+        self.assertEqual(names["@6"], ("x:", "", "1"))
+
+    def test_custom_rows_pack_and_end_in_plus_n_like_project_rows(self):
+        groups = [Group("", tabs(1, 2), tb.CUSTOM_COLOUR, "c:1"), Group("bravo", tabs(3, 4, 5)),
+                  Group("charlie", tabs(6, 7, 8)), Group("delta", tabs(9, 10, 11))]
+        lay = tb.lay_out(groups, tabs(*range(12, 26)), 188, "@1", 28, 16)
+        self.assertIn(("div", 0), [i for row in lay.rows for i in row])
+        rows = tb.render(lay)
+        self.assertIn(f"#[fg=colour{tb.CUSTOM_COLOUR}]#[bold]┃▸", "".join(rows))
+        many = [Group(f"g{k}", tabs(*range(10 * k + 1, 10 * k + 11)),
+                      tb.CUSTOM_COLOUR if k == 2 else tb.PALETTE[0], f"c:{k}") for k in range(6)]
+        lay = tb.lay_out(many, [], 188, "@25", 28, 16)
+        self.assertEqual(len(lay.rows), tb.MAX_ROWS)
+        self.assertEqual(lay.rows[-1][-1][0], "more")
+        self.assertIn("@25", [w for row in lay.rows for w in tab_ids(row)])
+
+    def test_the_gutter_widens_for_a_long_row_name(self):
+        name = tb.clean_row_name("a very long row name indeed")
+        lay = tb.lay_out([Group("ab", tabs(1)), Group(name, tabs(2), tb.CUSTOM_COLOUR, "c:1")],
+                         tabs(3), 188, "@1", 8, 22)
+        self.assertEqual(lay.head, tb.ROW_NAME_CELLS + 2)
+        self.assertEqual(lay.heads[1], name)
+
+    def test_a_hostile_row_name_never_reaches_a_row(self):
+        name = tb.clean_row_name("#(touch x)%#{E:pwn}")
+        rows, groups, shared, _ = arranged({"@3": P("c:1", 0, REPO_KEY, name)})
+        for width in (188, 45):
+            lay = tb.lay_out(groups, shared, width, "@2", 8, 22)
+            for row in tb.render(lay):
+                self.assertNotIn("#(", row)
+                self.assertNotIn("touch", row)
+                self.assertLessEqual(set(row), ALPHABET)
+            self.assertIn(("@tab_bar_g1", tb.short(name, width < 100)), tb.session_ops(lay, []))
+
+
+class Moves(unittest.TestCase):
+    def test_put_rewrites_every_member_of_the_target_row(self):
+        _, groups, shared, _ = arranged({})
+        self.assertEqual(tb.put(groups, shared, "@1", "@3", False),
+                         {"@2": P(REPO_KEY, 0), "@1": P(REPO_KEY, 1), "@3": P(REPO_KEY, 2),
+                          "@4": P(REPO_KEY, 3)})
+        self.assertEqual(tb.put(groups, shared, "@2", "@4", True),
+                         {"@3": P(REPO_KEY, 0), "@4": P(REPO_KEY, 1), "@2": P(REPO_KEY, 2)})
+        self.assertEqual(tb.put(groups, shared, "@3", "@3", True), {})
+        _, groups, shared, _ = arranged({"@3": P("c:2", 0, KAR_KEY, "work")})
+        self.assertEqual(tb.put(groups, shared, "@6", "@3", True),
+                         {"@3": P("c:2", 0, KAR_KEY, "work"), "@6": P("c:2", 1, KAR_KEY, "work")})
+
+    def test_left_and_right_stop_at_the_rows_ends(self):
+        _, groups, shared, _ = arranged({})
+        self.assertEqual(tb.side_step(groups, shared, "@2", "left"), {})
+        self.assertEqual(tb.side_step(groups, shared, "@4", "right"), {})
+        self.assertEqual(tb.side_step(groups, shared, "@5", "right"), {})
+        self.assertEqual(tb.side_step(groups, shared, "@3", "left"),
+                         {"@3": P(REPO_KEY, 0), "@2": P(REPO_KEY, 1), "@4": P(REPO_KEY, 2)})
+        self.assertEqual(tb.side_step(groups, shared, "@1", "right"),
+                         {"@6": P("s", 0), "@1": P("s", 1)})
+
+    def test_up_and_down_cross_overflow_rows_and_stop_at_the_top_and_bottom(self):
+        rows = [[("@1", 8, 20), ("@2", 29, 20), ("@3", 50, 20)], [("@4", 8, 30), ("@5", 39, 30)],
+                [("@6", 8, 20)]]
+        self.assertEqual(tb.climb(rows, "@3", "down"), "@5")
+        self.assertEqual(tb.climb(rows, "@2", "down"), "@4")    # @4 spans 8-37: covers 29
+        self.assertEqual(tb.climb(rows, "@5", "down"), "@6")
+        self.assertEqual(tb.climb(rows, "@4", "up"), "@1")
+        self.assertIsNone(tb.climb(rows, "@1", "up"))
+        self.assertIsNone(tb.climb(rows, "@6", "down"))
+        self.assertIsNone(tb.climb(rows, "@9", "down"))         # hidden in +N
+
+    def test_a_new_row_takes_the_next_id_any_placement_names(self):
+        _, groups, shared, _ = arranged({})
+        self.assertEqual(tb.new_row(groups, shared, "@3", []), {"@3": P("c:1", 0, REPO_KEY)})
+        places = [P("c:4", 0, "s"), P("c:2", 0, "c:7"), P("s", 3)]
+        self.assertEqual(tb.new_row(groups, shared, "@1", places), {"@1": P("c:8", 0, "s")})
+        self.assertEqual(tb.new_row(groups, shared, "@1", [P("c:9999", 0)]), {})
+        _, groups, shared, _ = arranged({"@3": P("c:1", 0, REPO_KEY)})
+        self.assertEqual(tb.new_row(groups, shared, "@3", []), {})   # alone already
+        _, groups, shared, _ = arranged({"@3": P("c:1", 0, REPO_KEY), "@4": P("c:1", 1, REPO_KEY)})
+        self.assertEqual(tb.new_row(groups, shared, "@4", [P("c:1", 0)]),
+                         {"@4": P("c:2", 0, "c:1")})
+
+    def test_rename_row_names_every_member_and_only_in_a_custom_row(self):
+        _, groups, _, _ = arranged({"@3": P("c:1", 0, REPO_KEY), "@6": P("c:1", 1, REPO_KEY)})
+        self.assertEqual(tb.rename_row(groups, "@6", "work"),
+                         {"@3": P("c:1", 0, REPO_KEY, "work"), "@6": P("c:1", 1, REPO_KEY, "work")})
+        self.assertEqual(tb.rename_row(groups, "@2", "work"), {})
+
+    def test_a_drop_goes_before_or_after_by_the_half_of_the_slot(self):
+        rows = [(0, [("@2", 19, 32), ("@3", 52, 32)]), (1, [("@1", 19, 32)])]
+        for x, want in ((52, False), (67, False), (68, True), (83, True), (84, True)):
+            with self.subTest(x=x):
+                self.assertEqual(tb.drop_side(rows, "@3", x, 0), want)
+        self.assertIsNone(tb.drop_side(rows, "@9", 20, 0))
+        self.assertIsNone(tb.drop_side([], "@3", 20, 0))
+
+    def test_a_drop_on_a_rows_gutter_or_tail_goes_first_or_last(self):
+        rows = [(0, [("@2", 19, 32), ("@3", 52, 32)]), (2, [("@1", 19, 32)])]
+        self.assertEqual(tb.row_end(rows, 3, 0), ("@2", False))
+        self.assertEqual(tb.row_end(rows, 150, 0), ("@3", True))
+        self.assertEqual(tb.row_end(rows, 150, 2), ("@1", True))
+        self.assertIsNone(tb.row_end(rows, 3, 1))                 # no tabs on that line
+
+
 # --- the source-file write ----------------------------------------------------------------------
 
 # A model of tmux 3.7c's config lexer (cmd-parse.y yylex_token) for the words tmux-tab-bar writes,
@@ -904,7 +1135,7 @@ class Conf(unittest.TestCase):
         self.assertNotIn("kill-window", block)
         self.assertNotIn("respawn-window", block)
         self.assertNotRegex(block, r"display-menu[^\n]* -O")
-        self.assertIn("unbind -n MouseDown1Status", text)
+        self.assertIn("bind -n MouseDown1Status set -F @tab_bar_drag '#{window_id}'\n", text)
 
     def test_every_hook_is_silent_exits_0_and_uses_the_full_path(self):
         # A run-shell -b that prints or fails puts the active pane into view mode.
@@ -946,6 +1177,85 @@ class Conf(unittest.TestCase):
                 p = subprocess.run(["sh", "-c", cmd], capture_output=True, text=True,
                                    timeout=10, env={"HOME": home, "PATH": "/usr/bin:/bin"})
                 self.assertEqual((p.returncode, p.stdout, p.stderr), (0, "", ""))
+
+    def conf(self):
+        with open(CONF) as f:
+            return f.read()
+
+    def tap_menu(self, binding):
+        """The tap branch inside `binding`: from its window_active test to its switch-client."""
+        text = self.conf()
+        block = text[text.index(f"bind -n {binding} "):]
+        start = block.index("if -F -t = '#{window_active}' {")
+        end = block.index("switch-client -t =\n      }", start)
+        return block[start:end]
+
+    def test_a_drag_end_on_its_own_tab_is_exactly_the_tap(self):
+        tap, drag = self.tap_menu("MouseUp1Status"), self.tap_menu("MouseDragEnd1Status")
+        self.assertEqual(tap, drag)
+        self.assertIn('"Move…" m { run-shell \'"$HOME/.local/bin/tmux-tab-bar" menu '
+                      '"#{client_name}" "#{window_id}" >/dev/null 2>&1; true\' }', tap)
+        # The verified prompt shape: a quoted template with %%%, never the { } form.
+        self.assertIn('"#{?@tab_row_custom,,-}Name row…" N { command-prompt -p "row name:" '
+                      '"set -w @tab_row_name_in \\"%%%\\" ; run-shell \'\\"$HOME/.local/bin/'
+                      'tmux-tab-bar\\" name-row \\"#{client_name}\\" >/dev/null 2>&1; true\'" }',
+                      tap)
+
+    def test_the_drag_bindings_record_drop_and_clear(self):
+        text = self.conf()
+        self.assertIn("bind -n MouseUp1Status {\n  set -u @tab_bar_drag\n", text)
+        self.assertIn("bind -n MouseDragEnd1Status {\n  if -F '#{==:#{@tab_bar_drag},#{window_id}}'"
+                      " {\n    set -u @tab_bar_drag\n", text)
+        self.assertIn("    run-shell '\"$HOME/.local/bin/tmux-tab-bar\" drop \"#{@tab_bar_drag}\" "
+                      "\"#{window_id}\" \"#{mouse_x}\" \"#{mouse_status_line}\" "
+                      "\"#{mouse_status_range}\" \"#{client_name}\" >/dev/null 2>&1; true'\n"
+                      "    set -u @tab_bar_drag\n", text)
+        self.assertIn("bind -n MouseDragEnd1StatusDefault {\n  run-shell '\"$HOME/.local/bin/"
+                      "tmux-tab-bar\" drop-row \"#{@tab_bar_drag}\" \"#{mouse_x}\" "
+                      "\"#{mouse_status_line}\" \"#{client_name}\" >/dev/null 2>&1; true'\n"
+                      "  set -u @tab_bar_drag\n}", text)
+        self.assertNotIn("bind -n MouseDrag1Status", text)        # no live preview
+        self.assertNotRegex(text, r"tmux-tab-bar[^\n]*(drop|move|menu|name-row)[^\n]*-b")
+        # The pane guard: tmux 3.7c's default inside it, and the release kept for apps.
+        self.assertIn("bind -n MouseDrag1Pane if -F '#{==:#{@tab_bar_drag},}' { if -F "
+                      "'#{||:#{pane_in_mode},#{mouse_any_flag}}' { send-keys -M } "
+                      "{ copy-mode -M } }\n", text)
+        self.assertIn("bind -n MouseDragEnd1Pane if -F '#{@tab_bar_drag}' "
+                      "{ set -u @tab_bar_drag } { send-keys -M }\n", text)
+
+    def test_ctrl_b_shift_arrows_carry_the_tab(self):
+        text = self.conf()
+        for key in ("Left", "Right", "Up", "Down"):
+            with self.subTest(key=key):
+                self.assertIn(f"bind -r S-{key} if-shell '[ -x \"$HOME/.local/bin/tmux-tab-bar\" ]'"
+                              f" {{ run-shell '\"$HOME/.local/bin/tmux-tab-bar\" move "
+                              f"{key.lower()} \"#{{client_name}}\" >/dev/null 2>&1; true' }}\n",
+                              text)
+
+    def test_the_right_click_menu_moves_instead_of_swapping(self):
+        text = self.conf()
+        block = text[text.index("bind -n MouseDown3Status"):]
+        block = block[:block.index("\n\n")]
+        for side, key, how in (("◀", "l", "left"), ("▶", "r", "right")):
+            self.assertIn(f'"#{{?#{{>:#{{session_windows}},1}},,-}}Move {side}" {key} '
+                          f'{{ run-shell \'"$HOME/.local/bin/tmux-tab-bar" move {how} '
+                          f'"#{{client_name}}" "#{{window_id}}" >/dev/null 2>&1; true\' }}', block)
+        self.assertNotIn("swap-window", block)
+        self.assertNotIn("Swap", block)
+
+    def test_the_restore_hook_is_silent_and_exits_0(self):
+        self.assertIn("set-hook -g session-created[42] 'run-shell -b \"[ -x "
+                      "$HOME/.local/bin/claude-restore ] && $HOME/.local/bin/claude-restore "
+                      "--auto #{q:session_name} >/dev/null 2>&1; true\"'\n", self.conf())
+
+    def test_the_enter_menu_moves_and_resets_behind_a_confirm(self):
+        with open(os.path.join(REPO, "tmux", "base.conf")) as f:
+            base = f.read()
+        self.assertIn('"Move…"               m "run-shell \\"$HOME/.local/bin/tmux-tab-bar menu '
+                      '#{client_name} >/dev/null 2>&1; true\\""', base)
+        line = next(l for l in base.splitlines() if l.lstrip().startswith('"Reset bar"'))
+        self.assertIn("confirm-before", line)
+        self.assertIn("tmux-tab-bar reset #{client_name} >/dev/null 2>&1; true", line)
 
     def test_the_hook_command_exits_0_and_says_nothing_whatever_the_script_does(self):
         cmd = HOOK.split('"')[1].replace("$HOME", "$H")
@@ -1010,6 +1320,11 @@ def set_option(argv):
     record(argv)
     return True
 
+if args[0] == "set-option":            # a direct one (name-row unsets its input)
+    ok = set_option(args)
+    with open(path, "w") as f:
+        json.dump(st, f)
+    sys.exit(0 if ok else 1)
 if args != ["source-file", "-"]:
     sys.exit(1)
 ok = True
@@ -1062,9 +1377,10 @@ class FakeTmux(unittest.TestCase):
                          "window_active": "1" if w == "@2" else "0", "@claude_state": "idle"}
                         for w in cwds],
             "panes": [{"window_id": w, "pane_active": "1", "pane_current_path": p,
-                       "pane_title": "✳ [x] title", "@claude_star": ""}
+                       "pane_id": "%" + w[1:], "pane_title": "✳ [x] title", "@claude_star": ""}
                       for w, p in cwds.items()],
         })
+        self.common = os.path.join(lead, ".git")
 
     def write_state(self, st):
         with open(self.state, "w") as f:
@@ -1234,7 +1550,8 @@ class FakeTmux(unittest.TestCase):
         st = self.read_state()
         value = st["sessions"][0]["@tab_bar_nav"] if nav is None else nav
         st["clients"] = [{"session_id": "$0", "client_width": "188", "client_name": client,
-                          "window_id": current, "@tab_bar_nav": value}]
+                          "window_id": current, "@tab_bar_nav": value, "start_time": "1700",
+                          "pid": "42", "socket_path": "/fake/sock"}]
         self.write_state(st)
 
     def run_nav(self, *args, **env):
@@ -1291,6 +1608,154 @@ class FakeTmux(unittest.TestCase):
         self.assertEqual(self.run_nav("right", "/dev/pts/7", STUB_FAIL="list-clients"), [])
         with open(self.base + ".nav.err") as f:
             self.assertIn("list-clients", f.read())
+
+    # --- arrange: rows @2 @3 @4 (dotclaude: lead, tab-bar, lane-close), then the shared @1 ---
+
+    def run_cmd(self, *args, **env):
+        """An arrange command; its tmux calls."""
+        if os.path.exists(self.log):
+            os.remove(self.log)
+        p = subprocess.run([sys.executable, "-I", SCRIPT, *args], capture_output=True,
+                           text=True, timeout=30, env={**self.env, **env})
+        self.assertEqual((p.returncode, p.stdout, p.stderr), (0, "", ""))
+        self.assertFalse(os.path.exists(self.base + ".move.err"),
+                         open(self.base + ".move.err").read() if os.path.exists(
+                             self.base + ".move.err") else "")
+        return self.calls()
+
+    def places(self):
+        return {w["window_id"]: tb.parse_place(w["@tab_place"])
+                for w in self.read_state()["windows"] if w.get("@tab_place")}
+
+    def nav_rows(self):
+        return [[t[0] for t in row] for row in tb.parse_nav(self.session()["@tab_bar_nav"])]
+
+    def test_move_right_writes_the_row_then_lays_out(self):
+        self.nav_state("@2")
+        calls = self.run_cmd("move", "right", "/dev/pts/7")
+        key = "p:" + self.common
+        self.assertEqual(self.places(), {"@3": tb.Place(key, 0), "@2": tb.Place(key, 1),
+                                         "@4": tb.Place(key, 2)})
+        writes = [c for c in calls if c[0] == "set-option"]
+        self.assertEqual([c[3] for c in writes[:3]], ["@3", "@2", "@4"])
+        self.assertTrue(all(c[1:3] == ["-w", "-t"] and c[4] == "@tab_place" for c in writes[:3]))
+        self.assertEqual(self.nav_rows(), [["@3", "@2", "@4"], ["@1"]])   # laid out at once
+        self.nav_state("@2")
+        self.assertEqual(self.run_cmd("move", "up", "/dev/pts/7"), [c for c in self.calls()
+                                                                    if c[0].startswith("list-")])
+
+    def test_move_down_auto_and_reset(self):
+        self.nav_state("@3")
+        self.run_cmd("move", "down", "/dev/pts/7")      # before @1, the tab under it
+        self.assertEqual(self.nav_rows(), [["@2", "@4"], ["@3", "@1"]])
+        names = {w["window_id"]: w.get("@tab_name") for w in self.read_state()["windows"]}
+        self.assertEqual(names["@3"], "dotclaude·tab-bar")
+        self.nav_state("@3")
+        self.run_cmd("move", "auto", "/dev/pts/7", "@3")
+        self.assertNotIn("@3", self.places())
+        self.assertEqual(self.nav_rows(), [["@2", "@3", "@4"], ["@1"]])
+        self.assertEqual(self.places(), {"@1": tb.Place("s", 1)})   # the shared row stays manual
+        self.nav_state("@2")
+        self.run_cmd("reset", "/dev/pts/7")
+        self.assertEqual(self.places(), {})
+
+    def test_newrow_makes_a_custom_row_below_and_name_row_names_it(self):
+        self.nav_state("@3")
+        self.run_cmd("move", "newrow", "/dev/pts/7")
+        key = "p:" + self.common
+        self.assertEqual(self.places(), {"@3": tb.Place("c:1", 0, key)})
+        self.assertEqual(self.nav_rows(), [["@2", "@4"], ["@3"], ["@1"]])
+        window = {w["window_id"]: w for w in self.read_state()["windows"]}
+        self.assertEqual(window["@3"].get("@tab_row_custom"), "1")
+        self.assertNotIn("@tab_row_custom", window["@2"])
+        st = self.read_state()
+        hostile = "a\"b'c;d#[e%f$(g)$HOME~h\\i"
+        for w in st["windows"]:
+            if w["window_id"] == "@3":
+                w["@tab_row_name_in"] = hostile
+        self.write_state(st)
+        self.nav_state("@3")
+        self.run_cmd("name-row", "/dev/pts/7")
+        self.assertEqual(self.places()["@3"].name, tb.clean_row_name(hostile))
+        self.assertNotIn("@tab_row_name_in", self.read_state()["windows"][2])
+        self.assertEqual(self.session()["@tab_bar_g1"], tb.clean_row_name(hostile))
+        self.nav_state("@2")                            # not in a custom row: no name
+        self.run_cmd("name-row", "/dev/pts/7")
+        self.assertNotIn("@2", self.places())
+
+    def test_drop_by_the_half_of_the_slot_and_drop_row_by_the_end(self):
+        self.nav_state("@2")                             # row 0: @2 at 39, @3 at 72, @4 at 105
+        self.run_cmd("drop", "@4", "@2", "40", "0", "window", "/dev/pts/7")
+        self.assertEqual(self.nav_rows(), [["@4", "@2", "@3"], ["@1"]])
+        self.nav_state("@2")
+        self.run_cmd("drop", "@4", "@3", "121", "0", "window", "/dev/pts/7")   # @3 at 105
+        self.assertEqual(self.nav_rows(), [["@2", "@3", "@4"], ["@1"]])
+        for args in (("@4", "@3", "100", "0", "more"), ("@3", "@3", "80", "0", "window"),
+                     ("@9", "@3", "80", "0", "window"), ("@4", "@3", "x", "0", "window")):
+            with self.subTest(args=args):
+                self.nav_state("@2")
+                calls = self.run_cmd("drop", *args, "/dev/pts/7")
+                self.assertNotIn("source-file", [c[0] for c in calls])
+        self.nav_state("@2")
+        self.run_cmd("drop-row", "@1", "3", "0", "/dev/pts/7")      # the gutter: first
+        self.assertEqual(self.nav_rows()[0], ["@1", "@2", "@3", "@4"])
+        self.nav_state("@2")
+        self.assertNotIn("source-file", [c[0] for c in self.run_cmd(
+            "drop-row", "@1", "3", "4", "/dev/pts/7")])              # a line with no tabs
+
+    def test_the_menu_shows_moves_for_a_checked_client_and_window(self):
+        self.nav_state("@2")
+        self.run_cmd("menu", "/dev/pts/7")
+        deadline = time.time() + 10                     # display-menu runs detached
+        while time.time() < deadline and "display-menu" not in [c[0] for c in self.calls()]:
+            time.sleep(0.05)
+        menu = next(c for c in self.calls() if c[0] == "display-menu")
+        self.assertEqual(menu[:10], ["display-menu", "-c", "/dev/pts/7", "-t", "@2", "-x", "C",
+                                     "-y", "C", "-T"])
+        self.assertNotIn("-O", menu)
+        items = menu[11:]
+        self.assertIn("◀ Left", items)
+        cmd = items[items.index("Auto place") + 2]
+        self.assertEqual(tmux_words(cmd), [["run-shell", '"$HOME/.local/bin/tmux-tab-bar" move '
+                                            'auto /dev/pts/7 @2 --menu >/dev/null 2>&1; true']])
+        for args in (("menu", "/dev/pts/7;x"), ("menu", "/dev/pts/7", "@9"),
+                     ("move", "sideways", "/dev/pts/7"), ("reset",), ("name-row",),
+                     ("drop-row", "@1", "3", "0")):
+            with self.subTest(args=args):
+                calls = self.run_cmd(*args)
+                self.assertFalse([c for c in calls if c[0] in ("source-file", "display-menu")])
+
+    def test_a_move_updates_only_this_servers_records_of_the_window(self):
+        state_home = os.path.join(self.tmp, "state")
+        reg = os.path.join(state_home, "dotclaude", "open-sessions")
+        os.makedirs(reg)
+        base = {"cwd": "/x", "socket": "/fake/sock", "server_start": 1700, "server_pid": 42}
+        recs = {"mine": dict(base, session_id="a" * 8, pane="%2"),
+                "other-server": dict(base, session_id="b" * 8, pane="%2", server_pid=43),
+                "other-pane": dict(base, session_id="c" * 8, pane="%9", place="keep")}
+        for name, rec in recs.items():
+            with open(os.path.join(reg, name + ".json"), "w") as f:
+                json.dump(rec, f)
+        with open(os.path.join(reg, "bad.json"), "w") as f:
+            f.write("{not json")
+        with open(os.path.join(reg, "big.json"), "w") as f:
+            json.dump(dict(base, pane="%2", pad="x" * tb.RECORD_MAX), f)
+        before = {n: open(os.path.join(reg, n)).read() for n in os.listdir(reg)}
+        self.nav_state("@2")
+        self.run_cmd("move", "right", "/dev/pts/7", XDG_STATE_HOME=state_home)
+        with open(os.path.join(reg, "mine.json")) as f:
+            mine = json.load(f)
+        self.assertEqual(tb.parse_place(mine["place"]), tb.Place("p:" + self.common, 1))
+        self.assertEqual({k: v for k, v in mine.items() if k != "place"}, recs["mine"])
+        after = {n: open(os.path.join(reg, n)).read() for n in os.listdir(reg)}
+        self.assertEqual(set(after), set(before))       # none created, no temp file left
+        for n in before:
+            if n != "mine.json":
+                self.assertEqual(after[n], before[n], n)
+        self.nav_state("@2")
+        self.run_cmd("move", "auto", "/dev/pts/7", XDG_STATE_HOME=state_home)
+        with open(os.path.join(reg, "mine.json")) as f:
+            self.assertNotIn("place", json.load(f))
 
     def test_outside_tmux_nothing_runs(self):
         env = {k: v for k, v in self.env.items() if k != "TMUX"}
@@ -1718,7 +2183,60 @@ class RealTmux(unittest.TestCase):
         x, y = self.find("gamma-title")
         self.click(x, y, button=2, release=False)   # a release outside would close it
         self.find("2:hqwin")
-        self.find("Swap Left")
+        self.find("Move ◀")
+
+    def drag(self, start, end, button=0):
+        """An SGR press at start, motion (button 32) to end, release at end: (x, y) cells."""
+        self.to("send-keys", "-t", "o", "-l", f"\x1b[<{button};{start[0]};{start[1]}M")
+        self.to("send-keys", "-t", "o", "-l", f"\x1b[<{button + 32};{end[0]};{end[1]}M")
+        self.to("send-keys", "-t", "o", "-l", f"\x1b[<{button};{end[0]};{end[1]}m")
+
+    def test_a_drag_across_rows_reorders_and_a_drag_onto_the_pane_cancels(self):
+        self.link_script()
+        self.run_layout()
+        self.assertEqual(self.nav_rows(), [["0", "1"], ["2"]])
+        self.drag(self.find("gamma-title"), self.find("alpha-title"))    # hq before the lead
+        self.wait(lambda: self.nav_rows() == [["2", "0", "1"]], f"rows {self.nav_rows()}")
+        self.assertEqual(self.show("-v", "-t", "t:", "@tab_bar_drag").strip(), "")
+        rows = self.nav_rows()
+        self.drag(self.find("beta-title"), (40, 30))                      # onto the pane
+        time.sleep(1)
+        self.assertEqual(self.nav_rows(), rows)
+        modes = self.ti("list-panes", "-a", "-F", "#{pane_in_mode}").stdout.split()
+        self.assertEqual(set(modes), {"0"})
+        self.assertEqual(self.show("-v", "-t", "t:", "@tab_bar_drag").strip(), "")
+
+    def test_ctrl_b_shift_right_carries_the_tab(self):
+        self.link_script()
+        self.run_layout()
+        self.assertEqual(self.nav_rows(), [["0", "1"], ["2"]])
+        self.to("send-keys", "-t", "o", "C-b")
+        self.to("send-keys", "-t", "o", "S-Right")
+        self.wait(lambda: self.nav_rows() == [["1", "0"], ["2"]], f"rows {self.nav_rows()}")
+        self.assertEqual(self.current(), "0")
+
+    def test_the_name_prompt_stores_a_hostile_name_literally_and_draws_it_cleaned(self):
+        self.link_script()
+        self.run_layout()
+        self.ti("set-option", "-w", "-t", "t:1", "@tab_place",
+                tb.place_text(tb.Place("c:1", 0, "s")))
+        self.ti("select-window", "-t", "t:1")
+        self.run_layout()
+        x, y = self.find("beta-title")
+        self.click(x, y)                                # the current tab: its menu
+        nx, ny = self.find("Name row…")
+        self.click(nx + 1, ny)
+        self.find("row name:")
+        hostile = "a\"b'c;d#[e%f$(g)$HOME~h\\i"
+        self.to("send-keys", "-t", "o", "-l", hostile)
+        self.to("send-keys", "-t", "o", "Enter")
+        want = tb.clean_row_name(hostile)
+        self.wait(lambda: (tb.parse_place(self.ti("show-options", "-wv", "-t", "t:1",
+                                                    "@tab_place").stdout.rstrip("\n"))
+                           or tb.Place("s", 0)).name == want, "the row was never named")
+        self.find(want + "▸")
+        self.assertEqual(self.ti("show-options", "-wqv", "-t", "t:1",
+                                 "@tab_row_name_in").stdout, "")
 
     def link_script(self):
         """Put tmux-tab-bar where the conf's hooks and keys look for it."""
