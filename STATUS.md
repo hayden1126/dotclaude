@@ -116,6 +116,18 @@ stored here).
     the worktree's checked-out one, so a lane that switched branches is told the old one.
     Lane guard-b fixes `lane ls` and `lane done` for the same gap. Its helper may make this a
     one-line follow-up.
+  - **`handoff?` judges by merge, not session end** (Hayden, 2026-10-14; open after guard-b
+    merges, since both change `board()` and `closable()` in `skills/lanes/scripts/lane`).
+    - The problem: `needs_handoff` lights when any session ended after the record's last
+      write, but every session ends after its own last write. So the flag lights after each
+      `/pass` (seen on lane tab-bar), and it is always on for a merged lane with no live
+      session.
+    - Fix: a merged lane whose record was written after the PR's `mergedAt` did its post-merge
+      handoff, so the lead closes it. One whose record is older than the merge never saw it,
+      so the lead asks Hayden. On the board, an ended session lights `handoff?` only if it
+      never wrote the record after its last commit.
+    - Until then (Hayden's call): a merged lane with no live session fails the hand-back gate,
+      and its close is the lead's ask to Hayden.
   - `lane init --model/--effort` repo defaults and `lane open --model/--effort` overrides,
     passed through to `claude` (today `lane open` hardcodes the argv).
 
@@ -190,10 +202,6 @@ stored here).
   sandbox-off deletes, so the sandboxed gap stands):
   `python3 -I ~/scratch/sandbox-audit/rm_scan.py 2026-11-04`. Sending the drafted
   `$CLAUDE_JOB_DIR/tmp` bug report is Hayden's call; `CLAUDE.md` carries the workaround.
-- **Closing a merged lane with no live session** (raised by lane ask-owner, 2026-10-14): the
-  hand-back gate stands before the chain's `lane done`. Such a lane usually fails it on
-  `handoff?`, so its close becomes the lead's ask to Hayden, unless he says to close those
-  without asking.
 - **Setup's excluded-command guard scan flags a work repo's lane worktrees** (2026-10-14, after
   #103): its shared git config points `core.hooksPath` at each worktree's own writable hooks dir,
   so excluded commands in those worktrees are refused. Every flagged hook matched HEAD. The fix
