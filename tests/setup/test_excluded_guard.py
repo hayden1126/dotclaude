@@ -80,7 +80,8 @@ class Guard(unittest.TestCase):
         env = {"PATH": "/usr/bin:/bin", "HOME": self.home, "GIT_CONFIG_NOSYSTEM": "1",
                "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t",
                "GIT_COMMITTER_EMAIL": "t@t"}
-        subprocess.run(["git", *args], cwd=cwd, env=env, check=True, capture_output=True)
+        return subprocess.run(["git", *args], cwd=cwd, env=env, check=True, capture_output=True,
+                              text=True).stdout
 
     def protect(self, path):
         """List `path` in the user settings' denyWrite."""
@@ -224,6 +225,19 @@ class Rule1Layout(Guard):
         self.allowed("git push", cwd=top)
         self.write(os.path.join(top, ".git", "commondir"), "../..\n")
         self.denied("git push", "rule1", os.path.join(top, ".git"), cwd=top)
+
+
+    def test_a_bare_repo_marker_with_a_commondir_in_a_subdir_is_refused(self):
+        # git counts a dir holding HEAD and a commondir as a repo, finding objects/ and refs/
+        # in that common dir (probed: rev-parse prints `.` and the decoy, and reads its config).
+        decoy = self.mkdir("decoy")
+        os.makedirs(os.path.join(decoy, "objects"))
+        os.makedirs(os.path.join(decoy, "refs"))
+        sub = self.mkdir("proj", "sub")
+        self.write(os.path.join(sub, "HEAD"), "ref: refs/heads/main\n")
+        self.write(os.path.join(sub, "commondir"), decoy + "\n")
+        self.assertEqual(self.git("rev-parse", "--git-common-dir", cwd=sub).strip(), decoy)
+        self.denied("git push", "rule1", sub, cwd=sub)
 
 
 class Rule1Config(Guard):

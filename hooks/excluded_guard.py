@@ -302,8 +302,13 @@ def read_gitfile(path):
 
 
 def looks_like_gitdir(d):
-    return (os.path.isfile(os.path.join(d, "HEAD"))
-            and os.path.isdir(os.path.join(d, "objects")) and os.path.isdir(os.path.join(d, "refs")))
+    """A dir git takes as a repo itself: HEAD, plus objects/ and refs/ here or a commondir (git
+    then looks for them in the dir it names). Broader than git, never narrower: a dir counted
+    here meets gitdir_info's layout check."""
+    if not os.path.lexists(os.path.join(d, "HEAD")):
+        return False
+    return os.path.lexists(os.path.join(d, "commondir")) or (
+        os.path.isdir(os.path.join(d, "objects")) and os.path.isdir(os.path.join(d, "refs")))
 
 
 def discover(start, env=None):

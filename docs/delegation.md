@@ -226,7 +226,9 @@ For a match it refuses, naming the path, when:
    rests on Claude Code protecting the session's gitfile and its `worktrees/<name>/commondir`,
    not the main `.git/` dir, so the common dir comes from git's real layout: a gitdir with a
    `commondir` file must sit at `<common>/worktrees/<name>` and name that `<common>`, which holds
-   no `commondir` itself. Any other layout, in the cwd's repo or the project's, is refused. The
+   no `commondir` itself. Any other layout, in the cwd's repo or the project's, is refused. A
+   dir counts as a repo as soon as git would take it as one: a `.git` entry, or `HEAD` with
+   `objects/` and `refs/` or with a `commondir`. The
    other config git reads must be write-protected: the global and XDG files (or
    `GIT_CONFIG_GLOBAL`), `/etc/gitconfig` (or `GIT_CONFIG_SYSTEM`, skipped under
    `GIT_CONFIG_NOSYSTEM`), every `include.path` and `includeIf` target, and a `core.hooksPath`
