@@ -465,6 +465,11 @@ class Hooks(unittest.TestCase):
         self.assertEqual(self.glyph(), ("wait", "!agent-a1!"))
         self.stop()  # a1 no longer runs: its token is stale
         self.assertEqual(self.glyph(), ("idle", ""))
+        # Any running task keeps its id's dialog (a teammate's, a workflow's), counted or not:
+        # dropping a live agent's token would blank its open dialog.
+        self.dialog("t1")
+        self.stop(background_tasks=[{"id": "t1", "type": "teammate", "status": "running"}])
+        self.assertEqual(self.glyph(), ("wait", "!agent-t1!"))
 
     def test_a_stop_ends_a_main_wait_and_sets_its_turn(self):
         self.seed(claude_state="wait", claude_wait_by="!main!")

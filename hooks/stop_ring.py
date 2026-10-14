@@ -1,7 +1,7 @@
 """stop-ring's event reader: the facts the shim needs, and the session's stop record.
 
 hooks/stop-ring.sh runs this file with python3 -I, passing the Stop event on stdin, and reads one
-line back: "<spawned> <busy> <task labels or -> <subagent task ids or -> <prompt_id or ->
+line back: "<spawned> <busy> <task labels or -> <running task ids or -> <prompt_id or ->
 <transcript size or -> <transcript path>". The shim's header says what each means; with this
 file missing or failing, the shim reads nothing and rings by its defaults. Tests import merge_replies() and prune() directly
 (tests/setup/test_tmux_hooks.py). Stdlib only; keep the source ASCII.
@@ -369,10 +369,11 @@ def main() -> None:
             pass
     labels = ",".join(t.replace(" ", "_") for t in types if isinstance(t, str) and t.strip())
     # A subagent task's id is its agent_id (a task notice names it as <task-id>): the glyph keeps
-    # a subagent's open dialog green across this Stop only while the subagent still runs.
-    agents = ",".join(t["id"] for t, k in zip(raw, tasks) if k == "subagent"
-                      and isinstance(t, dict) and isinstance(t.get("id"), str)
-                      and ID.fullmatch(t["id"]))
+    # an agent's open dialog green across this Stop only while its task still runs. Every running
+    # task's id counts, not only a subagent's: dropping a live agent's token would blank its
+    # dialog, while keeping a stale one lasts only until the next main Stop.
+    agents = ",".join(t["id"] for t in raw if isinstance(t, dict)
+                      and isinstance(t.get("id"), str) and ID.fullmatch(t["id"]))
     prompt = d.get("prompt_id")
     prompt = prompt if isinstance(prompt, str) and PROMPT_ID.fullmatch(prompt) else "-"
     path = d.get("transcript_path")

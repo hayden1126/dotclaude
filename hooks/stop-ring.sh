@@ -73,7 +73,7 @@ settle_then_ring() {
 }
 
 # The Stop's glyph: the turn token, then the state with the main session's token and any
-# finished subagent's dropped. Args: pane, turn token, busy|idle, running subagent ids
+# finished agent's dropped. Args: pane, turn token, busy|idle, running task ids
 # (comma-joined, or -).
 stop_glyph() {
   local held id live=",$4,"
