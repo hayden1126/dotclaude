@@ -85,6 +85,7 @@ import json  # noqa: E402
 import re  # noqa: E402
 import stat  # noqa: E402
 import subprocess  # noqa: E402
+import tempfile  # noqa: E402
 import traceback  # noqa: E402
 import unicodedata  # noqa: E402
 
@@ -958,10 +959,10 @@ def layout(err_log: str) -> None:
 
 # --- nav: Shift+arrows ---------------------------------------------------------------------------
 
-def parse_nav(text: str) -> list | None:
-    """@tab_bar_nav read back as [[(wid, x, w), ...] per row, top to bottom], or None when it is
-    missing or not exactly what nav_value writes: every id and integer is checked, and row
-    numbers must rise."""
+def parse_nav_rows(text: str) -> list | None:
+    """@tab_bar_nav read back as [(status line, [(wid, x, w), ...]) per row, top to bottom], or
+    None when it is missing or not exactly what nav_value writes: every id and integer is
+    checked, and row numbers must rise."""
     if not text or len(text) > NAV_MAX:
         return None
     rows, last = [], -1
@@ -972,9 +973,23 @@ def parse_nav(text: str) -> list | None:
         if int(r) <= last:
             return None
         last = int(r)
-        rows.append([(wid, int(x), int(w)) for wid, x, w in
-                     (tab.split(":") for tab in tabs.split(","))])
+        rows.append((last, [(wid, int(x), int(w)) for wid, x, w in
+                            (tab.split(":") for tab in tabs.split(","))]))
     return rows
+
+
+def parse_nav(text: str) -> list | None:
+    """@tab_bar_nav as [[(wid, x, w), ...] per row, top to bottom], or None (parse_nav_rows)."""
+    rows = parse_nav_rows(text)
+    return None if rows is None else [tabs for _, tabs in rows]
+
+
+def column_pick(row: list, x: int) -> str:
+    """The tab of a drawn row whose span covers cell x, else the nearest (the left on a tie)."""
+    def distance(tab: tuple) -> int:
+        return max(tab[1] - x, x - (tab[1] + tab[2] - 1), 0)
+
+    return min(row, key=distance)[0]
 
 
 def nav_step(rows: list | None, current: str, direction: str) -> tuple | None:
@@ -997,13 +1012,8 @@ def nav_step(rows: list | None, current: str, direction: str) -> tuple | None:
         step = 1 if direction == "right" else -1
         target = flat[(flat.index(current) + step) % len(flat)]
     else:
-        x = rows[r][k][1]
         step = 1 if direction == "down" else -1
-
-        def distance(tab: tuple) -> int:
-            return max(tab[1] - x, x - (tab[1] + tab[2] - 1), 0)
-
-        target = min(rows[(r + step) % len(rows)], key=distance)[0]
+        target = column_pick(rows[(r + step) % len(rows)], rows[r][k][1])
     return None if target == current else ("select", target)
 
 
@@ -1025,6 +1035,318 @@ def nav(direction: str, client: str) -> None:
         tmux("select-window", "-t", f"{sid}:{step[1]}")
     else:
         tmux(step[0], "-t", sid)
+
+
+# --- arrange: keys, drags and the Move menu -------------------------------------------------------
+
+MOVES = DIRECTIONS + ("newrow", "auto")
+NUM = re.compile(r"[0-9]{1,6}\Z")            # a mouse x or status line
+DIGITS = re.compile(r"[0-9]{1,20}\Z")
+SELF = '"$HOME/.local/bin/tmux-tab-bar"'     # as claude.conf runs it
+MENU = (("◀ Left", "h", "left"), ("▶ Right", "l", "right"), ("▲ Up", "k", "up"),
+        ("▼ Down", "j", "down"), None, ("New row", "n", "newrow"), ("Auto place", "a", "auto"))
+
+
+def put(groups: list, shared: list, src: str, dst: str, after: bool) -> dict:
+    """The one primitive (pure): src goes before dst (after: after it) in dst's row, and every
+    member of that row gets a placement there, 0..n-1 ({wid: Place}). src's old row is left as
+    it is (a gap is fine). Joining a custom row copies its `after` and name."""
+    rows = rows_of(groups, shared)
+    key = next((k for k, wids in rows.items() if dst in wids), None)
+    if key is None or src == dst:
+        return {}
+    wids = [w for w in rows[key] if w != src]
+    wids.insert(wids.index(dst) + after, src)
+    group = next((g for g in groups if g.key == key), None)
+    anchor, name = (group.after, group.name) if key.startswith("c:") else ("", "")
+    return {w: Place(key, min(k, POS_MAX), anchor, name) for k, w in enumerate(wids)}
+
+
+def row_key_of(groups: list, shared: list, wid: str) -> str | None:
+    return next((k for k, wids in rows_of(groups, shared).items() if wid in wids), None)
+
+
+def side_step(groups: list, shared: list, src: str, direction: str) -> dict:
+    """Left or right: src before or after its neighbour in its own row (the logical row, across
+    its overflow rows); nothing at either end."""
+    row = rows_of(groups, shared).get(row_key_of(groups, shared, src), [])
+    k = row.index(src) + (1 if direction == "right" else -1) if src in row else -1
+    return put(groups, shared, src, row[k], direction == "right") if 0 <= k < len(row) else {}
+
+
+def climb(rows: list, src: str, direction: str) -> str | None:
+    """Up or down: the tab nav_step would pick in the drawn row above or below src's (rows: as
+    parse_nav gives them), without wrapping: None at the top or bottom, or when src isn't drawn."""
+    where = next(((r, k) for r, row in enumerate(rows) for k, tab in enumerate(row)
+                  if tab[0] == src), None)
+    if where is None:
+        return None
+    r, k = where
+    r2 = r + (1 if direction == "down" else -1)
+    return column_pick(rows[r2], rows[r][k][1]) if 0 <= r2 < len(rows) else None
+
+
+def new_row(groups: list, shared: list, src: str, places: list) -> dict:
+    """src alone in a new custom row below its own: `c:` 1 + the highest id any placement names
+    (places: every window's). A tab already alone in a custom row stays."""
+    rows = rows_of(groups, shared)
+    key = row_key_of(groups, shared, src)
+    if key is None or (key.startswith("c:") and rows[key] == [src]):
+        return {}
+    n = 1 + max((int(k[2:]) for p in places for k in (p.row, p.after) if k.startswith("c:")),
+                default=0)
+    return {src: Place(f"c:{n}", 0, key, "")} if n <= CUSTOM_MAX else {}
+
+
+def rename_row(groups: list, src: str, name: str) -> dict:
+    """Every member of src's custom row with the row's name set to `name` (cleaned); nothing
+    when src isn't in a custom row."""
+    group = next((g for g in groups if g.key.startswith("c:")
+                  and src in (w for w, _ in g.tabs)), None)
+    if group is None:
+        return {}
+    return {w: Place(group.key, min(k, POS_MAX), group.after, name)
+            for k, (w, _) in enumerate(group.tabs)}
+
+
+def drop_side(rows: list, dst: str, x: int, line: int) -> bool | None:
+    """A drop on dst (rows: as parse_nav_rows gives them): after it (True) when x is in the right
+    half of its slot, else before; None when the bar doesn't draw it."""
+    for _, tabs in sorted(rows, key=lambda row: row[0] != line):    # the release's row first
+        for wid, start, w in tabs:
+            if wid == dst:
+                return 2 * (x - start) >= w
+    return None
+
+
+def row_end(rows: list, x: int, line: int) -> tuple | None:
+    """A drop on a row's gutter or empty tail: (its first tab, before) when x is left of that
+    tab, else (its last tab, after); None for a line with no tabs."""
+    tabs = next((tabs for r, tabs in rows if r == line), None)
+    if not tabs:
+        return None
+    return (tabs[0][0], False) if x < tabs[0][1] else (tabs[-1][0], True)
+
+
+@dataclasses.dataclass
+class Context:
+    state: State
+    sid: str
+    wid: str                    # the tab the command acts on
+    nav: list                   # the session's drawn rows, as parse_nav_rows gives them
+    server: tuple | None        # (socket, start time, pid), as the restore records name it
+
+
+def context(client: str, wid: str | None) -> Context | None:
+    """What a command from `client` about window `wid` (default: the client's current one)
+    needs, or None when a word isn't valid or the window isn't in the client's session."""
+    if not CLIENT.match(client) or (wid is not None and not WID.match(wid)):
+        return None
+    found = [f for f in read(7, "list-clients", MOVE_FMT) if f[0] == client]
+    if len(found) != 1:
+        return None
+    _, sid, current, start, pid, nav, socket = found[0]
+    wid = wid or current
+    if not SID.match(sid) or not WID.match(wid):
+        return None
+    state = snapshot()
+    if wid not in [w for _, w, _ in state.windows.get(sid, [])]:
+        return None
+    server = (socket, int(start), int(pid)) if DIGITS.match(start) and DIGITS.match(pid) else None
+    return Context(state, sid, wid, parse_nav_rows(nav) or [], server)
+
+
+def registry_dir() -> str:
+    """hooks/session-registry.sh's record dir: $XDG_STATE_HOME/dotclaude/open-sessions."""
+    home = os.environ.get("XDG_STATE_HOME") or os.path.join(os.path.expanduser("~"),
+                                                              ".local", "state")
+    return os.path.join(home, "dotclaude", "open-sessions")
+
+
+def update_record(path: str, server: tuple, places: dict) -> None:
+    """Set or drop `place` in one restore record when it names this server and one of the
+    panes in `places` (pane id -> @tab_place, None: unset). A read-modify-write through an
+    fsynced temp file and os.replace, skipped when the file changed meanwhile (the registry
+    rewrites or deletes it), so a record is never created or brought back."""
+    before = os.lstat(path)
+    data = read_small(path, RECORD_MAX)
+    if data is None:
+        return
+    try:
+        entry = json.loads(data)
+    except (ValueError, RecursionError):
+        return
+    if not isinstance(entry, dict) \
+            or (entry.get("socket"), entry.get("server_start"), entry.get("server_pid")) != server:
+        return
+    pane = entry.get("pane")
+    if not isinstance(pane, str) or pane not in places or entry.get("place") == places[pane]:
+        return
+    if places[pane] is None:
+        del entry["place"]
+    else:
+        entry["place"] = places[pane]
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), prefix=".tmp-")
+    try:
+        with os.fdopen(fd, "w") as f:
+            json.dump(entry, f)
+            f.flush()
+            os.fsync(f.fileno())
+        now = os.lstat(path)
+        if (now.st_ino, now.st_mtime_ns, now.st_size) \
+                == (before.st_ino, before.st_mtime_ns, before.st_size):
+            os.replace(tmp, path)
+    finally:
+        if os.path.lexists(tmp):
+            os.unlink(tmp)
+
+
+def update_records(server: tuple, places: dict) -> None:
+    """update_record for every restore record; one it can't read or write is skipped."""
+    for path in glob.glob(os.path.join(glob.escape(registry_dir()), "*.json")):
+        try:
+            update_record(path, server, places)
+        except (OSError, ValueError):
+            continue
+
+
+def apply(ctx: Context, changes: dict, base: str) -> None:
+    """Write each @tab_place that changes ({wid: Place, or None to unset}), lay out at once
+    (under layout's lock, so a hook's run in flight lays out again instead), then copy the
+    changes into the restore records of each changed window's panes."""
+    lines, changed = [], {}
+    for wid, place in changes.items():
+        text = place_text(place) if place is not None else None
+        if (place is not None and text is None) or (text or "") == ctx.state.options[wid]["place"]:
+            continue
+        lines.append(command("set-option", "-w", "-t", wid, "@tab_place", text) if text
+                     else command("set-option", "-u", "-w", "-t", wid, "@tab_place"))
+        changed[wid] = text
+    if not lines:
+        return
+    tmux("source-file", "-", stdin="\n".join(lines) + "\n")
+    try:
+        run_locked(base)
+    finally:
+        if ctx.server is not None:
+            update_records(ctx.server, {pane: text for wid, text in changed.items()
+                                        for pane in ctx.state.panes.get(wid, [])})
+
+
+def show_menu(client: str, wid: str) -> None:
+    """The Move menu on `client`, centred, without -O (a touch tap has no hover). Each item
+    moves `wid` and opens the menu again, so the phone takes several steps without retapping;
+    a tap outside closes it. Only a validated client name and window id go in its commands.
+    display-menu holds its tmux client until the menu closes, so it runs detached: a run-shell
+    waiting on it would hold the client's queue, and a timeout would kill it under the menu."""
+    args = ["tmux", "-u", "display-menu", "-c", client, "-t", wid, "-x", "C", "-y", "C",
+            "-T", "#[align=centre]Move #{window_index}"]
+    for item in MENU:
+        if item is None:
+            args.append("")
+            continue
+        label, key, how = item
+        shell = f"{SELF} move {how} {client} {wid} --menu >/dev/null 2>&1; true"
+        args += [label, key, command("run-shell", shell)]
+    subprocess.Popen(args, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                     stderr=subprocess.DEVNULL, start_new_session=True)
+
+
+def arrange_command(words: list, base: str) -> None:
+    """One of move, drop, drop-row, name-row, menu and reset; a word count or a word that isn't
+    what it should be does nothing. Moves run one at a time (a lock beside layout's), so two
+    clients moving at once can't both rewrite a row from the same read."""
+    cmd, args = words[0], words[1:]
+    menu = cmd == "move" and args[-1:] == ["--menu"]
+    args = args[:-1] if menu else args
+    try:
+        fd = os.open(base + ".move", os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+        fcntl.flock(fd, fcntl.LOCK_EX)
+    except OSError:
+        fd = None                       # no lock to be had: still move
+    try:
+        if cmd == "move" and len(args) in (2, 3) and args[0] in MOVES:
+            move(args[0], args[1], args[2] if len(args) == 3 else None, menu, base)
+        elif cmd == "drop" and len(args) == 6:
+            drop(*args, base=base)
+        elif cmd == "drop-row" and len(args) == 4:
+            drop_row(*args, base=base)
+        elif cmd == "name-row" and len(args) in (1, 2):
+            name_row(args[0], args[1] if len(args) == 2 else None, base)
+        elif cmd == "menu" and len(args) in (1, 2):
+            ctx = context(args[0], args[1] if len(args) == 2 else None)
+            if ctx is not None:
+                show_menu(args[0], ctx.wid)
+        elif cmd == "reset" and len(args) == 1:
+            ctx = context(args[0], None)
+            if ctx is not None:
+                apply(ctx, {w: None for _, w, _ in ctx.state.windows[ctx.sid]}, base)
+    finally:
+        if fd is not None:
+            os.close(fd)
+
+
+def move(how: str, client: str, wid: str | None, menu: bool, base: str) -> None:
+    """Carry a tab: left, right, up, down, into a new row, or back to auto."""
+    ctx = context(client, wid)
+    if ctx is None:
+        return
+    groups, shared, _ = arrange(ctx.state, ctx.sid, {})
+    if how in ("left", "right"):
+        changes = side_step(groups, shared, ctx.wid, how)
+    elif how in ("up", "down"):
+        dst = climb([tabs for _, tabs in ctx.nav], ctx.wid, how)
+        changes = put(groups, shared, ctx.wid, dst, False) if dst else {}
+    elif how == "newrow":
+        places = [parse_place(o["place"]) for o in ctx.state.options.values()]
+        changes = new_row(groups, shared, ctx.wid, [p for p in places if p is not None])
+    else:
+        changes = {ctx.wid: None}
+    apply(ctx, changes, base)
+    if menu:
+        show_menu(client, ctx.wid)
+
+
+def drop(src: str, dst: str, x: str, line: str, rng: str, client: str, base: str) -> None:
+    """A tab pressed on src and released on dst's slot: before or after dst by which half of
+    its slot the release is in. A release on +N or on src itself does nothing (claude.conf
+    treats the latter as a tap)."""
+    if rng == "more" or src == dst or not WID.match(src) or not NUM.match(x) \
+            or not NUM.match(line):
+        return
+    ctx = context(client, dst)
+    if ctx is None or src not in [w for _, w, _ in ctx.state.windows[ctx.sid]]:
+        return
+    after = drop_side(ctx.nav, dst, int(x), int(line))
+    if after is not None:
+        groups, shared, _ = arrange(ctx.state, ctx.sid, {})
+        apply(ctx, put(groups, shared, src, dst, after), base)
+
+
+def drop_row(src: str, x: str, line: str, client: str, base: str) -> None:
+    """A tab released on a row's gutter or empty tail: first or last of that drawn row."""
+    if not NUM.match(x) or not NUM.match(line):
+        return
+    ctx = context(client, src)
+    end = ctx and row_end(ctx.nav, int(x), int(line))
+    if end:
+        groups, shared, _ = arrange(ctx.state, ctx.sid, {})
+        apply(ctx, put(groups, shared, src, end[0], end[1]), base)
+
+
+def name_row(client: str, wid: str | None, base: str) -> None:
+    """Name the tab's custom row from the window's @tab_row_name_in, which the Name row prompt
+    set (the typed text never passes through a shell), then unset it."""
+    ctx = context(client, wid)
+    if ctx is None:
+        return
+    raw = next((f[1] for f in read(2, "list-windows", NAME_IN_FMT, "-a") if f[0] == ctx.wid),
+               None)
+    if raw is None:
+        return
+    tmux("set-option", "-u", "-w", "-t", ctx.wid, "@tab_row_name_in")
+    groups, _, _ = arrange(ctx.state, ctx.sid, {})
+    apply(ctx, rename_row(groups, ctx.wid, clean_row_name(raw)), base)
 
 
 def log_error(path: str, text: str) -> None:
@@ -1097,9 +1419,11 @@ def run_locked(base: str, run=None) -> None:
 
 
 def main(argv: list) -> int:
-    """`layout`, or `nav <direction> <client>`; nav always exits 0, since a key runs it."""
-    is_nav = argv[1:2] == ["nav"]
-    if not is_nav and argv[1:] != ["layout"]:
+    """`layout`, `nav <direction> <client>`, or an arrange command (move, drop, drop-row,
+    name-row, menu, reset); all but a bad `layout` exit 0, since keys and mice run them."""
+    cmd = argv[1] if len(argv) > 1 else ""
+    if cmd not in ("nav", "move", "drop", "drop-row", "name-row", "menu", "reset") \
+            and argv[1:] != ["layout"]:
         return 2
     tmux_env = os.environ.get("TMUX")
     if not tmux_env:
@@ -1107,12 +1431,16 @@ def main(argv: list) -> int:
     run_dir = os.environ.get("TMUX_CLAUDE_STATUS_DIR") or "/tmp"
     base = os.path.join(run_dir, f".tmux-tab-bar.{os.getuid()}.{server_key(tmux_env)}")
     try:
-        if not is_nav:
+        if cmd == "layout":
             run_locked(base)
-        elif len(argv) == 4:
-            nav(argv[2], argv[3])
+        elif cmd == "nav":
+            if len(argv) == 4:
+                nav(argv[2], argv[3])
+        else:
+            arrange_command(argv[1:], base)
     except Exception:                   # fail-open: the bar keeps what it had
-        log_error(base + (".nav.err" if is_nav else ".err"), traceback.format_exc())
+        log_error(base + {"layout": ".err", "nav": ".nav.err"}.get(cmd, ".move.err"),
+                  traceback.format_exc())
     return 0
 
 
