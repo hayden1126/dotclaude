@@ -31,11 +31,12 @@
 
   SHELF  (Claude chats, kept after the tab closes)
     right-click a tab   Star (★, a bookmark) / Shelve (save + close) / Shelf…
+                        (or tap the tab you are on)
     C-b S        the shelf: reopen a starred or shelved chat
     C-b Enter    Star / Shelve / Shelf… too (no Shift)
 
   AFTER /pass
-    C-b Up       the replies before the pass (popup; also in both menus)
+    C-b Up       the replies before the pass (popup; also in the menus)
 
   SESSION
     C-b d        detach (keeps running)

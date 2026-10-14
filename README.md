@@ -364,14 +364,15 @@ need nothing extra.
   Every row starts with the same gutter (the delegation token's width, then the widest repo
   header), so the first tab of every row starts in the same column; row 0 shows the token there,
   a repo's rows show its header, and the shared rows leave it blank.
-  Each tab is 32 columns wide, left-justified, with a dim `│` between two tabs; a row with too
-  many tabs for that splits its width evenly, and a row spills over only when a tab would get too
-  narrow (the tabs then spread evenly over the rows they need). Widths depend only on how many
+  Each tab has a fixed width (the numbers live in `tmux/tmux-tab-bar`), left-justified, with a dim
+  `│` between two tabs; a row with too many tabs for that splits its width evenly, and a row
+  spills over only when a tab would get too narrow (the tabs then spread evenly over the rows
+  they need). Row 0's right end shows the host and the clock. Widths depend only on how many
   tabs there are and the terminal's width, so a title or glyph change never moves a tab or
   resizes the panes. Past 5 rows the smallest
   groups share the bottom rows behind a `┃repo▸` divider; still past 5, the bar ends in `+N`, which
-  opens the window list. The window you are on is always shown. On a terminal under 100 columns
-  (the phone over ssh) the bar moves to the bottom with shorter tabs and drops the clock. Tap a
+  opens the window list. The window you are on is always shown. On a narrow terminal (the phone over
+  ssh) the bar moves to the bottom with shorter tabs and drops the host and the clock. Tap a
   tab to switch to it; tap the tab you are on for its menu (Star, Shelve, Shelf…, Replies before
   pass, Rename and Windows…); right-click still opens the full menu. `tmux/tmux-tab-bar` runs from
   tmux hooks and from `tmux-claude-status`, which catches a directory change or a lane opening or
@@ -403,7 +404,8 @@ need nothing extra.
   marked `attach`. `tmux kill-server` leaves background sessions running, so such a tab comes back
   attached to its session; after a reboot it resumes the chat. Background sessions with no tab
   are not restored.
-- **Star and Shelve keep a chat after its tab closes**: right-click a Claude tab for **Star** (a
+- **Star and Shelve keep a chat after its tab closes**: right-click a Claude tab (or tap the tab
+  you are on) for **Star** (a
   bookmark: the tab shows ★, and the chat stays saved until unstarred, however the tab closes)
   or **Shelve** (save the chat and close the tab now; it won't come back on a tmux restore).
   **Shelf…** in the same menu, Ctrl-b S, or the Ctrl-b Enter menu (which has all three, no Shift) lists the saved chats newest first and reopens one

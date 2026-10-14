@@ -22,8 +22,8 @@ opened, closed or selected), and tmux-claude-status runs it in its rate-limited 
 catches what no hook reports (a cwd change, a lane opened or closed). Each window is classified
 by its active pane's cwd, from the filesystem alone: no git call. Writes are per session: every
 `status-format[0..N-1]` row (a session's first array write leaves the rows it didn't write blank),
-then `status` (the row count, set only when it changes), the header names as `@tab_bar_g<n>` and,
-on the phone, `status-position`, `status-left` and `status-right`. A hash of all of it in
+then `status` (the row count, set only when it changes), the header names as `@tab_bar_g<n>`, and
+`status-position`, `status-left` and `status-right` (set on the phone, unset on the desktop). A hash of all of it in
 `@tab_bar_sig` makes an unchanged run write nothing. The window options `@tab_name` (`lead`, a
 lane id, `repo:`) and `@tab_group` (the group's colour index) are written only when they change.
 Every write of a run goes to one `tmux source-file -` on stdin, one line per session with its sig
