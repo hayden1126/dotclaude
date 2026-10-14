@@ -184,6 +184,10 @@ show `?`), and `new`, `open`, `done` and `addr` refuse. `lane ls` also names any
 can't see a live session, so its command may start a second one. Every other subcommand runs
 sandboxed. `lane lock` must: the command it wraps inherits its sandbox.
 
+`ls`, `new`, `adopt`, `open`, `done` and `addr` have allow rules, so auto mode's classifier never refuses
+them. Each call meets the excluded-command guard first (docs/delegation.md), and the asks on
+`init --setup`, `init --root` and `done --abandon` still win over the allow rules.
+
 ## What to write where
 
 | Fact | Home |
