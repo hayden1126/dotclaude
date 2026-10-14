@@ -49,7 +49,9 @@ inside", and Codex sessions wouldn't get the convention.
 - Enforcement is the skill and CLI plus two hooks.
 - An optional **lead** session triages requests, proposes a lane split and, on approval, opens
   each lane as a real top-level session (`lane open`).
-- Each lane merges its own PR (Hayden approves each merge), and the lead sets the order.
+- Each lane merges its own PR (Hayden approves each merge), and the lead sets the order. After
+  a merge, the lead runs the post-merge chain and `lane done` on a standing approval
+  (2026-10-14, "Who asks what" below).
 - `/pass` runs handoff, then `handoff-check`, then respawns the pane (PR 3; README "Pass" and
   `skills/pass/SKILL.md`).
 
@@ -93,11 +95,11 @@ writer, and every other place links to it.
 | 6 | How will we build it? | Design | the lane's `.lane/PLAN.md`; cross-lane design goes in the project `PLAN.md` or `docs/` | the lane, or the lead for cross-lane | lane / durable |
 | 7 | What was decided, by whom, and on what evidence? | Rulings | the record's "Decisions": `Hayden picked chip row + preview (2026-10-11); evidence: <artifact path>, session <id>`. Promoted at merge into the PR body; also to memory if it constrains future work | the lane | lane, then durable |
 | 8 | Where does it stand, and what's next? | State + handoff | the record's State and Next. A shift-change note in SBAR order: situation, background, assessment, next step | the lane | lane |
-| 9 | What is this lane blocked on Hayden for? | Asks | the record's "Asks for Hayden" (a design pick, push or merge approval, a cleanup nod), shown by `lane asks` across lanes | the lane; cleared after Hayden answers | living |
+| 9 | What is this lane blocked on Hayden for? | Asks | the record's "Asks for Hayden" (a design pick, push or merge approval), shown by `lane asks` across lanes. Each ask has one owner, and the lead's stay in its window ("Who asks what") | the lane; cleared after Hayden answers | living |
 | 10 | What did a delegate produce? | Report (up) | a subagent's report JSON (the delegation contract); a lane's hand-back is a passing `handoff-check` plus a State summary; the PR body to outsiders | the delegate | ephemeral, then PR |
 | 11 | Proof behind a claim | Evidence | `.lane/artifacts/` (mocks, shots, gate logs), mirrored so it survives `worktree remove`; rulings point here | the lane | archived with the record |
 | 12 | Shared machine resources | Env state | `lane.json` port, live sessions and `lane lock` holders (derived; a hand-kept "machine state" list drifts) | the CLI | live |
-| 13 | Heads-up between peers | Message | SendMessage to the `uds:` address `lane addr <id>` prints, resolved before each send. A nudge only: anything that matters lands in a doc first, and a message never carries state or consent | anyone | ephemeral |
+| 13 | Heads-up between peers | Message | SendMessage to the `uds:` address `lane addr <id>` prints, resolved before each send. A nudge only: anything that matters lands in a doc first, and a message never carries state or consent. A lane's `merged #N` to the lead is one: the lead proves the merge itself and acts on Hayden's standing approval | anyone | ephemeral |
 | 14 | What did we learn? | Lessons | memory (Hayden's preferences, traps), `docs/` | any session | durable |
 | 15 | What happened? | History | git, PRs, transcripts. Never copied into a doc; docs point to them by SHA, PR # or session id | n/a | durable |
 | 16 | Tell the outside world | External | Hayden updates the tracker assignee from each lane's claims; PR comments | Hayden | durable |
@@ -130,7 +132,7 @@ higher levels link to lower ones through a derived view, not through copied pros
 
 | Level | Doc | Holds | Writer | Lifetime |
 |---|---|---|---|---|
-| Project (living) | `STATUS.md` in the main checkout | direction, backlog keyed by request #, merge order, blocked; a "Lanes: `lane ls`" line in place of lane prose | the main checkout or lead session; at merge a lane appends one promotion line (lane id, PR, outcome) | living |
+| Project (living) | `STATUS.md` in the main checkout | direction, backlog keyed by request #, merge order, blocked; a "Lanes: `lane ls`" line in place of lane prose | the main checkout or lead session, which adds one promotion line at each merge (lane id, PR, outcome) | living |
 | Project (durable) | `PLAN.md` (cross-lane design only), `docs/`, `CLAUDE.md`, memory | conventions, cross-lane design, lessons | whoever, through a PR or memory | durable |
 | Lane | `<lane>/.lane/STATUS.md` + `lanes/<id>/lane.json` | the lane's state, decisions with pointers, not-mine notes, next step | that lane's sessions | the lane's life, archived on `lane done` |
 | Lane | `<lane>/.lane/PLAN.md` | the lane's working design (the plan-mode file is overwritten by the next plan) | that lane | same |
@@ -145,6 +147,60 @@ higher levels link to lower ones through a derived view, not through copied pros
   Blocked, Notes); `templates/LANE.md` is the lane level, and a lane PLAN reuses
   `templates/PLAN.md`.
 - The guard's relative-phrase lint covers every status level.
+
+## Who asks what (one owner per ask)
+
+Hayden reads the lead's window and every lane's. Both kept asking "ready to merge?", "go for
+`lane done`?" and "approve the push?", and lanes repeated the lead's messages back to him. The
+duplicate started in the docs: `lane done` runs only from the lead (a lane's session is refused),
+yet the handoff skill told the lane to propose it, and the lanes skill told the lead to propose
+it too. No doc said which window owns which ask.
+
+**Hayden's call** (design B, 2026-10-14):
+
+- Each ask has one owner. The lane owns its plan, push, draft PR, ready and merge. The lead owns
+  new-lane tables, the merge order, the post-merge chain and `lane done`. The table is in
+  `skills/lanes/SKILL.md`, "Who asks Hayden what", and the chain is "The lead", step 7.
+- The lane that learns of a merge sends the lead `merged #N` and says nothing more about it to
+  Hayden.
+- The lead then runs the chain without asking: prove the merge, fetch, bring the main checkout
+  to it, reinstall (settings.json and `~/.tmux.conf` copied first and diffed), check that no
+  link points into a lane, nudge the other lanes, add the backlog line, and `lane done` once
+  the hand-back gate passes. It reports one line, or the failed step.
+- A lane with more PRs to come starts its Next with `Keep open: <why>`, and `lane done` refuses
+  it. `--abandon` closes it anyway and stays an ask rule (Hayden, 2026-10-14).
+- Lanes report their own state and asks, never the lead's messages.
+
+Why it works this way:
+
+- **The lane's message is the event.** No session watches for merges, and none needs to: every
+  merge so far went through a lane window. For #98 Hayden typed "merged" in lane-addr's window;
+  for #99 the tab-bar lane ran `gh pr merge` itself. A merge made on GitHub and told to no
+  session waits for the lead's next `lane ls`. With the lane's session gone, the lead runs the
+  chain itself, and closes the lane only once the hand-back gate passes: a failing gate is then
+  the lead's ask, since no lane is left to make it. That is the usual outcome: the gate's
+  `handoff?` flag lights once a session ended after the record's last write, the sign that it
+  may have merged and stopped before writing `Keep open:`. With the session live, the lead asks
+  the lane for its after-merge handoff first, since a lane that merged and is still writing
+  `Keep open:` must not be closed under it. A merge watcher lost: one per ready PR has to be
+  re-armed every 2 hours, and two that saw the same merge would run the chain twice (two
+  reinstalls, two reports).
+- **A nudge, never consent** (flow 13). `merged #N` says only when to look. The consent is the
+  standing approval written here; the lead proves the merge with `gh pr view` before it acts,
+  and `lane done` checks it again (a merged PR whose head is the tip, or the tip in the base).
+- **A scoped exception to "confirm before deleting"**, which CLAUDE.md names. `lane done`
+  refuses an unmerged branch, a dirty worktree, links into the lane and a `Keep open:` lane,
+  archives the record before the remove, and never passes `--force` or `-D`. The approval
+  covers `lane done` after a merge only; `--abandon` still asks.
+- **`lane done` reads `Keep open:` itself.** `handoff-check --closing` fails on the line too,
+  but `done` runs it only when there is something to end, so a kept lane whose session had
+  exited would have closed. `done` reads the record (bounded, as `ls` does) on every run while
+  the worktree exists. The flag goes on one line (a bullet may wrap, indented), and any item in
+  Next that starts with `Keep open:` counts, not only the first: a false hit holds a close,
+  while a miss ends a lane with work left. `lanelib.first_item` skips the line, so the step
+  `/pass` resumes with (and reads the approval marker from) is the one after it.
+- **The backlog line moved to the lead.** The lead owns the project STATUS, so the one line at
+  merge is a step of its chain, not the lane's.
 
 ## Layout
 
@@ -347,14 +403,17 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
   leftover must be named by its repo-relative path. Relative identity outside HTML comments and
   code fails in a lanes repo and only warns in a plain one, where long-lived text has no peer
   to mislead. `--closing`, which `lane done` runs, judges freshness against HEAD's commit only
-  and skips approval: after a `/pass`, the idle new session started after the handoff.
+  and skips approval: after a `/pass`, the idle new session started after the handoff. It also
+  fails on a `Keep open:` item in Next.
 - **`lane done`** validates the id and asserts its deletes stay inside `<common-dir>/lanes/`. It
   needs commits past the lane's base, then either a merged PR whose head commit is the branch tip
   (a squash merge) or the tip in the base. An adopted lane's base is a merge-base: with nothing
   past it, its tip is already in the base, so nothing can be lost and it closes without
   `--abandon`. It can't tell "no work" from "fast-forwarded in before adoption", so its state is
   `closed`, "closed (nothing past origin/main)", unless a merged PR names that tip; `abandoned`
-  means `--abandon`. The archive is built under a `.tmp` name and renamed into place only when
+  means `--abandon`. While the worktree exists it refuses a lane whose record's Next has a
+  `Keep open:` item, live session or not ("Who asks what"); `--abandon` closes it anyway, and a
+  merged lane keeps the state `merged`. The archive is built under a `.tmp` name and renamed into place only when
   complete. Sandboxed, `done` can't see
   other processes, so it refuses and asks for a bare `lane done <id>`. It detects the sandbox by
   `SANDBOX_RUNTIME=1` or by pid 1 of its namespace (the sandbox's `apply-seccomp` launcher, not

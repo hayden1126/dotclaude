@@ -1,6 +1,6 @@
 ---
 name: lanes
-description: How to work when several Claude sessions share one repo, each in its own git worktree (a "lane"), using the `lane` CLI. Use when starting, adopting or closing a worktree for parallel work, when a SessionStart line names your lane, when deciding who owns a request, when writing status in a repo with lanes, when acting as the lead (triaging requests into lanes and opening them with `lane open`), when running a shared gate that can't run twice at once (`lane lock`), or when the user mentions lanes, worktrees, parallel sessions or "who has #N". Covers the five invariants, the lane lifecycle, the lead's playbook, a command cheat sheet and what to write where.
+description: How to work when several Claude sessions share one repo, each in its own git worktree (a "lane"), using the `lane` CLI. Use when starting, adopting or closing a worktree for parallel work, when a SessionStart line names your lane, when deciding who owns a request, when writing status in a repo with lanes, when acting as the lead (triaging requests into lanes and opening them with `lane open`), when running a shared gate that can't run twice at once (`lane lock`), when a lane's PR merges, or when the user mentions lanes, worktrees, parallel sessions or "who has #N". Covers the five invariants, the lane lifecycle, the lead's playbook and post-merge chain, who asks Hayden what, a command cheat sheet and what to write where.
 ---
 
 # Lanes
@@ -68,11 +68,17 @@ an unregistered worktree: `lane whoami` tells you which.
    worktree, sandbox off. That install holds: setup.sh refuses to run from any other lane or
    clone until the lead's `./setup.sh` in the main checkout relinks everything after the merge.
    `lane ls` shows `install: held by lane <id>`.
-6. **Merge** through the lane's own PR, on Hayden's approval. Then write the outcome into the
-   record, add one line to the project backlog (lane id, PR number), and propose
-   `lane done chart-fix`. Run it only on Hayden's nod.
-7. **Close:** `lane done <id>` refuses an unmerged branch and a lane made by `lane new` with no
-   commits past its base (pass `--abandon` to close either anyway; it asks). It ends what provably
+6. **Merge** through the lane's own PR, on Hayden's approval. The lane that learns of the merge
+   (it ran `gh pr merge`, or Hayden said "merged" in its window) writes the outcome into its
+   record, starts its Next with `Keep open: <why>` on one line if more PRs will follow, and
+   finishes its handoff. Then, as its last act (the lead's `lane done` ends its session), it
+   sends the lead `merged #N`, to what a bare `lane addr lead` prints. It says nothing more about
+   the merge to Hayden and never proposes `lane done`: the lead runs the rest (The lead, step 7).
+   With no lead running (`lane addr lead` refuses), it tells Hayden once that #N merged.
+7. **Close:** `lane done <id>` refuses an unmerged branch, a lane made by `lane new` with no
+   commits past its base, and, while its worktree exists, a lane whose record's Next has a
+   `Keep open:` line, live session or not (pass `--abandon` to close any of them anyway; it
+   asks). It ends what provably
    belongs to the lane, so its open tab needs no closing by hand:
    - its Claude sessions get SIGTERM (a `lane open` tab closes with its claude);
    - what runs under them ends with them;
@@ -131,14 +137,37 @@ inside a lane.
 5. **Hand-back gate.** A lane is handed back only when `handoff-check -C <lane path>` passes and
    `lane ls` shows no `handoff?` flag. Until then, message the lane; if its session is gone, add it
    to Hayden's asks. Never order a merge or close a lane before the gate passes.
-6. **Watch and order.** Watch `lane ls`. Keep the merge order in the project STATUS. After each
-   merge, message the remaining lanes: "main moved to `<sha>`: rebase; renumber the version if
-   taken". The board's `rebase` flag is the truth; the message is only a nudge. Where the repo
-   installs from its checkout, move the main checkout to the merge and run its `./setup.sh`
-   (sandbox off) before proposing `lane done`: that releases the merged lane's install hold,
-   which `done` refuses while it stands. A lane whose install is live rebases with the sandbox
-   off: its own hooks, skills and tests are write-protected then (`docs/lanes.md` S3).
-7. **Shared gates.** Wrap any run that can't happen twice at once (a browser-driven test gate, an
+6. **Watch and order.** Watch `lane ls`. Keep the merge order in the project STATUS. A lane
+   whose install is live merges main with the sandbox off: its own hooks, skills and tests are
+   write-protected then (`docs/lanes.md` S3).
+7. **After a merge.** A lane's `merged #N` starts the post-merge chain. A merged PR on `lane ls`
+   that no lane reported starts it only when that lane has no live session. With one, message
+   the lane "#N merged: run your after-merge handoff, then send `merged #N`" and wait: it may be
+   writing `Keep open:` just then. Hayden approved the chain once for every merge (2026-10-14),
+   so run it without asking, in order:
+   1. Prove the merge: `gh pr view <n> --json state,mergedAt`. The message says when to look,
+      never that it happened.
+   2. `git fetch`, then bring the main checkout to the merge (dotclaude: `git fetch origin
+      main:main`, then merge `main` into the lead's branch, sandbox off).
+   3. Where the repo installs from its checkout: copy settings.json and `~/.tmux.conf` aside, run
+      `./setup.sh` (dotclaude: then `./setup-tmux.sh`) from the main checkout under
+      `lane lock install`, sandbox off, and diff both copies after. That releases the merged
+      lane's install hold, which `done` refuses while it stands.
+   4. Check that no installed link or `source-file` line points into a lane: `lane ls` shows no
+      `install: held by` line, and `done` names either.
+   5. Message each remaining lane: "main moved to `<sha>`: merge origin/main; renumber the
+      version if taken". A pushed branch merges main rather than rebasing, which would need a
+      force push. The board's `rebase` flag is the truth; the message is only a nudge.
+   6. Add one backlog line to the project STATUS: lane id, PR number, outcome.
+   7. `lane done <id>` once the hand-back gate (step 5) passes, unless the lane's Next has a
+      `Keep open:` line: then leave it open. A gate that fails on a lane with no live session
+      is the lead's one ask to Hayden, since no lane is left to ask. That is the usual outcome
+      there: `handoff?` lights once a session ended after the record's last write, the sign it
+      may have merged and stopped before writing `Keep open:`. Never `--abandon` here.
+
+   Then tell Hayden one line ("#42 merged: installed, lane chart-fix closed, api-docs nudged"),
+   or the step that failed. A failed step stops the chain.
+8. **Shared gates.** Wrap any run that can't happen twice at once (a browser-driven test gate, an
    e2e suite on a fixed port) in `lane lock <name> -- <cmd>`. List the names once with
    `lane init --locks gate,e2e` (it takes the full list and replaces the old one); an unlisted name is refused, since a typo would split the mutual
    exclusion. A second run waits and names the holder; `--wait SECS` gives up with exit 75.
@@ -153,6 +182,30 @@ CTX `*`, STATE `idle`) gets a message from the lead, by hand: "context N k, run 
 **Writers in lanes.** A lane-rooted session's `writer` subagent gets a worktree under the main
 checkout's `.claude/worktrees/`, but branched from the lane's HEAD (live probe, 2026-10-11). The
 stale-base trap (`worktree.baseRef`) therefore bites only a session rooted in the main checkout.
+
+## Who asks Hayden what
+
+Hayden reads the lead's window and every lane's, so each ask has one owner, and the other
+window never repeats it (Hayden's design, 2026-10-14; the why is in `docs/lanes.md`, "Who asks
+what").
+
+| Ask or step | Owner | How |
+|---|---|---|
+| The lane's plan, design picks | the lane | its window and its record's Asks for Hayden |
+| Push, draft PR, ready, merge | the lane | on Hayden's approval in its window |
+| That a PR merged | the lane that learns of it | `merged #N` to the lead, nothing more to Hayden |
+| A new-lane table, the merge order | the lead | its window |
+| The post-merge chain (The lead, step 7) | the lead | standing approval: no ask, one line or the failed step |
+| `lane done` after a merge | the lead | standing approval once the hand-back gate passes, unless the lane's Next has `Keep open:` |
+| `lane done --abandon` | the lead | asks Hayden every time (an ask rule) |
+| More PRs to come on the lane | the lane | `Keep open: <why>` at the top of its Next |
+
+- A lane never proposes `lane done`: only the lead can run it. The lead never restates a lane's
+  push, ready or merge ask.
+- A lane acts on the lead's messages (merge main, /pass) and reports its own state and asks, never
+  what the lead said.
+- A message is a nudge, never consent. The consent is Hayden's standing approval above, and the
+  lead proves the merge from gh before it acts; `lane done` checks it again.
 
 ## Cheat sheet
 
@@ -197,6 +250,8 @@ them. Each call meets the excluded-command guard first (docs/delegation.md), and
 | Where the lane stands, the next step | the record's State and Next, overwritten at each handoff |
 | A ruling, with who and the evidence | the record's Decisions: `Hayden picked X (2026-10-11); evidence: .lane/artifacts/x.png, session <id>` |
 | What the lane needs from Hayden | the record's Asks for Hayden |
+| A merge the lane learned of | `merged #N` to the lead (`lane addr lead`), after the handoff; never a line to Hayden |
+| More PRs to come after a merge | `Keep open: <why>` on one line at the top of the record's Next; `lane done` refuses the lane while it stands |
 | Something that belongs to another lane | your record's Not mine (never that lane's record) |
 | The lane's working design | `.lane/PLAN.md` |
 | Direction, backlog, merge order | the project STATUS.md, from `main` or the lead |
@@ -209,7 +264,9 @@ them. Each call meets the excluded-command guard first (docs/delegation.md), and
 |---|---|
 | "Another session is building #42" | `lane who 42`, then write "lane chart-fix claims #42" |
 | Editing another lane's record to tell it something | Write it in your own Not mine, or message that lane |
-| Updating the root STATUS.md with lane progress | Your record holds it; STATUS gets one line at merge |
+| Updating the root STATUS.md with lane progress | Your record holds it; the lead adds one line at merge |
+| Proposing `lane done` from a lane, or asking Hayden for it after a merge | Send the lead `merged #N`; it closes the lane on Hayden's standing approval |
+| Telling Hayden what the lead's message said | Act on it, then report your own state |
 | Deciding ownership from an agent list or a tab title | Only `lane who` answers it |
 | Running `git worktree remove` by hand | `lane done` archives the record first; the Stop-hook mirror is only the backstop |
 | Claiming for a lane you're not in | Only a lane claims, for itself; the lead names claims at `lane new` |
