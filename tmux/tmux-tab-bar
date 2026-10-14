@@ -97,8 +97,10 @@ GLYPH_ON = "#{?#{==:#{@claude_state},busy},1,#{?#{==:#{@claude_state},wait},1,0}
 #   (a title with no glyph whose first word is that short, then a word and ` · `, loses both
 #   words). The bound is repeated `?`, not `{1,3}`: a bare } ends the enclosing #{...} early.
 #   The match runs to the end and keeps \2, so tmux's global replace can't strip a second ` · `.
+#   \2 must be non-empty: tmux draws an empty group's reference as a literal "2", so a bare
+#   prefix (`repo · `) is left whole.
 BODY = ("#{?@tab_name,#{@tab_name} ,}"
-        "#{?pane_title,#{s/[#]/♯/;s/^([^ ][^ ]?[^ ]? )?[^ ]+ · (.*)$/\\2/:pane_title},"
+        "#{?pane_title,#{s/[#]/♯/;s/^([^ ][^ ]?[^ ]? )?[^ ]+ · (.+)$/\\2/:pane_title},"
         "#{s/[#]/♯/:pane_current_command}}")
 
 SESSION_FMT = ("#{session_id}\t#{status}\t#{status-left-length}\t#{status-right-length}"

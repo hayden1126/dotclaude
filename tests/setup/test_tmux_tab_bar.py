@@ -400,19 +400,19 @@ class Render(unittest.TestCase):
 
     def test_a_title_loses_its_hashes_then_claudes_prefix(self):
         e = tb.entry("@7", 7, 30)
-        strip = "s/^([^ ][^ ]?[^ ]? )?[^ ]+ · (.*)$/\\2/"
+        strip = "s/^([^ ][^ ]?[^ ]? )?[^ ]+ · (.+)$/\\2/"
         self.assertIn("#{s/[#]/♯/;" + strip + ":pane_title}", e)
         self.assertIn("#{s/[#]/♯/:pane_current_command}", e)
         self.assertEqual(e.count("pane_title}"), e.count("[#]/♯/;" + strip + ":pane_title}"))
         for bad in ("{", "}", ",", ":", ";"):   # each would end the modifier or the #{...}
             self.assertNotIn(bad, strip)
         # The same pattern in Python's dialect ([ escaped in a set): what it keeps.
-        py = re.compile(r"^([^ ][^ ]?[^ ]? )?[^ ]+ · (.*)$")
+        py = re.compile(r"^([^ ][^ ]?[^ ]? )?[^ ]+ · (.+)$")
         for title, label in (("✳ repo · label", "label"), ("⠂ repo · label", "label"),
                              ("⣿ repo · label", "label"), ("repo · label", "label"),
                              ("no prefix here", "no prefix here"),
                              ("✳ a · b · x", "b · x"), ("long word · x y", "long word · x y"),
-                             ("[repo] label", "[repo] label")):
+                             ("[repo] label", "[repo] label"), ("repo · ", "repo · ")):
             with self.subTest(title=title):
                 self.assertEqual(py.sub(r"\2", title), label)
 
