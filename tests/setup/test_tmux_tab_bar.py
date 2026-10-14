@@ -179,12 +179,14 @@ SHARED5 = tabs(1, 2, 3, 5, 9)
 
 class LayOut(unittest.TestCase):
     def check_fits(self, lay, width):
-        """Every row's headers, slots, separators and +N fit its width; no slot is over the
-        default width."""
+        """Every row's gutter, slots, separators, dividers and +N fit its width; no slot is
+        over the default width; a header fits the gutter."""
         for r, (row, slot) in enumerate(zip(lay.rows, lay.slots)):
-            avail = width - ((lay.left + lay.right) if r == 0 else 0)
-            fixed = sum(lay.head_w[i[1]] if i[0] in ("head", "div") else i[2]
-                        for i in row if i[0] != "tab")
+            avail = width - lay.gutter - (lay.right if r == 0 else 0)
+            fixed = sum(lay.head_w[i[1]] if i[0] == "div" else i[2]
+                        for i in row if i[0] in ("div", "more"))
+            if row[0][0] == "head":
+                self.assertLessEqual(lay.head_w[row[0][1]], lay.head)
             self.assertLessEqual(fixed + len(tab_ids(row)) * slot + tb.separators(row), avail,
                                  (r, row))
             self.assertLessEqual(slot, tb.DEFAULT_SLOT)
@@ -198,11 +200,22 @@ class LayOut(unittest.TestCase):
         self.check_fits(lay, 188)
 
     def test_the_live_shape_on_the_desktop(self):
-        lay = tb.lay_out([DOTCLAUDE], SHARED5, 188, "@4", 28, 16)
+        # claude.conf: status-left-length 8, status-right-length 22. G = 8 + "dotclaude▸ " = 19.
+        lay = tb.lay_out([DOTCLAUDE], SHARED5, 188, "@4", 8, 22)
         self.assertEqual([tab_ids(r) for r in lay.rows],
                          [["@4", "@6", "@7", "@8"], ["@1", "@2", "@3", "@5", "@9"]])
+        self.assertEqual((lay.left, lay.head, lay.gutter), (8, 11, 19))
         self.assertEqual(lay.slots, [32, 32])       # a row of 4 at 188: 32 each, left-justified
         self.check_fits(lay, 188)
+
+    def test_the_gutter_is_status_left_plus_the_widest_shown_header(self):
+        groups = [Group("ab", tabs(1)), Group("longername", tabs(2))]
+        lay = tb.lay_out(groups, tabs(3), 188, "@1", 8, 22)
+        self.assertEqual((lay.head, lay.gutter), (12, 20))
+        lay = tb.lay_out([], tabs(1, 2), 188, "@1", 8, 22)         # no laned row: H = 0
+        self.assertEqual((lay.head, lay.gutter), (0, 8))
+        lay = tb.lay_out(groups, tabs(3), 45, "@1", 8, 22)          # phone: PHONE_LEFT + "lon▸ "
+        self.assertEqual((lay.left, lay.head, lay.gutter), (tb.PHONE_LEFT, 5, tb.PHONE_LEFT + 5))
 
     def test_a_row_too_full_for_the_default_width_splits_evenly(self):
         # 9 shared: row 0 (144 cells after status-left and -right) holds 7 at 18 + 6
@@ -216,15 +229,15 @@ class LayOut(unittest.TestCase):
         self.assertEqual(lay.slots, [32, 32])
 
     def test_the_live_shape_on_the_phone_spreads_the_lanes_evenly(self):
-        # Row 0 holds 3 of the 4 dotclaude tabs, but 3+1 would leave the first three at 10
-        # cells (`narro…`): 2+2 gives each 16. 5 shared need 5 * 9 + 4 separators = 49 > 45.
-        lay = tb.lay_out([DOTCLAUDE], SHARED5, 45, "@4", 28, 16)
+        # G = PHONE_LEFT + "dot▸ " = 11, leaving 34 a row: 3 tabs at 9 + 2 separators, so 4
+        # dotclaude tabs go 2+2 at 16, and the 5 shared 3+2.
+        lay = tb.lay_out([DOTCLAUDE], SHARED5, 45, "@4", 8, 22)
         self.assertTrue(lay.phone)
         self.assertEqual(lay.heads, ["dot"])
         self.assertEqual(lay.rows[1][0], ("head", 0, True))     # the overflow header, dimmed
         self.assertEqual([tab_ids(r) for r in lay.rows],
                          [["@4", "@6"], ["@7", "@8"], ["@1", "@2", "@3"], ["@5", "@9"]])
-        self.assertEqual(lay.slots, [16, 19, 14, 22])
+        self.assertEqual(lay.slots, [16, 16, 10, 16])
         self.assertEqual((lay.left, lay.right), (tb.PHONE_LEFT, 0))
         self.check_fits(lay, 45)
 
@@ -289,6 +302,36 @@ class LayOut(unittest.TestCase):
         lay = tb.lay_out([], tabs(*range(1, 16)), 400, "@1", 28, 16)
         self.assertEqual([len(tab_ids(r)) for r in lay.rows], [15])   # (400 - 44 + 1) // 19
         self.assertEqual(lay.slots, [22])                              # (356 - 14) // 15
+
+    def test_every_rows_first_tab_starts_at_the_same_column(self):
+        # Drawn cells per item: what the renderer pads each piece to. Every row's first tab
+        # starts at G + 1, and with equal slots the separators line up across rows.
+        for width, slots in ((188, [32, 32]), (45, None)):
+            with self.subTest(width=width):
+                lay = tb.lay_out([DOTCLAUDE], SHARED5, width, "@4", 8, 22)
+                if slots:
+                    self.assertEqual(lay.slots, slots)
+                starts, seps = [], []
+                for row, slot in zip(lay.rows, lay.slots):
+                    col, row_seps = lay.gutter + 1, []
+                    tab_cols = []
+                    for k, item in enumerate(row):
+                        if item[0] == "head":
+                            continue                    # drawn in the gutter
+                        if item[0] == "tab" and k and row[k - 1][0] == "tab":
+                            row_seps.append(col)
+                            col += 1
+                        if item[0] == "tab":
+                            tab_cols.append(col)
+                            col += slot
+                        elif item[0] == "div":
+                            col += lay.head_w[item[1]]
+                    starts.append(tab_cols[0])
+                    seps.append(row_seps)
+                self.assertEqual(set(starts), {lay.gutter + 1})
+                if slots:
+                    common = min(len(s) for s in seps)
+                    self.assertEqual({tuple(s[:common]) for s in seps}, {tuple(seps[0][:common])})
         self.check_fits(lay, 400)
 
     def test_a_tiny_client_still_shows_one_tab_a_row(self):
@@ -307,12 +350,15 @@ class Render(unittest.TestCase):
         lay = tb.lay_out(groups, tabs(*range(12, 26)), 188, "@1", 28, 16)
         for r, (items, row) in enumerate(zip(lay.rows, tb.render(lay))):
             with self.subTest(row=r):
-                want = [tb.FILL, tb.NORM] + ([tb.left_part(28)] if r == 0 else [])
+                want = [tb.FILL, tb.NORM, tb.left_part(28) if r == 0 else " " * 28]
+                if items[0][0] != "head":
+                    want.append(" " * lay.head)          # the gutter's header column, blank
                 for k, item in enumerate(items):
                     if item[0] == "tab" and k and items[k - 1][0] == "tab":
                         want.append(tb.SEP)
                     if item[0] == "head":
-                        want.append(tb.header(item[1], lay.head_w[item[1]] - 2, item[2]))
+                        want.append(tb.header(item[1], lay.head_w[item[1]] - 2, item[2],
+                                              lay.head))
                     elif item[0] == "div":
                         want.append(tb.divider(item[1], lay.head_w[item[1]] - 2))
                     elif item[0] == "tab":
@@ -325,6 +371,21 @@ class Render(unittest.TestCase):
         self.assertEqual(tb.SEP, "#[fg=colour240]│#[fg=colour250]")
         self.assertIn("┃", tb.divider(0, 5))      # a packed group's divider reads differently
         self.assertNotIn("│", tb.divider(0, 5))
+
+    def test_the_gutter_draws_g_cells_on_every_row(self):
+        # Count what each gutter piece draws: status-left pads to L, a header's name pads to its
+        # own width, the rest is literal text. Styles draw nothing.
+        for width in (188, 45):
+            lay = tb.lay_out([DOTCLAUDE], SHARED5, width, "@4", 8, 22)
+            for r, row in enumerate(tb.render(lay)):
+                with self.subTest(width=width, row=r):
+                    gutter = row[:row.index("#{W:")]
+                    gutter = gutter.replace(tb.left_part(lay.left), "L" * lay.left)
+                    name = lay.head_w[0] - 2
+                    gutter = gutter.replace(tb.name_part(0, name), "n" * name)
+                    drawn = re.sub(r"#\[[^]]*\]", "", gutter)
+                    self.assertNotIn("#", drawn)
+                    self.assertEqual(tb.text_width(drawn), lay.gutter)
 
     def test_rows_hold_only_template_text(self):
         for width in (188, 45):
@@ -1062,6 +1123,14 @@ class RealTmux(unittest.TestCase):
         self.assertEqual(after, before)
         self.find("dotclaude▸")
         self.find("hq: gamma-title")
+
+    def test_every_rows_first_tab_starts_at_the_same_column(self):
+        # Row 1: the token, then `dotclaude▸ `; row 2 (shared): the same gutter, blank.
+        self.run_layout()
+        x0, y0 = self.find("0 lead")
+        x2, y2 = self.find("2 hq:")
+        self.assertEqual((y0, y2), (1, 2))
+        self.assertEqual(x0, x2)
 
     def test_hostile_words_go_through_source_file_byte_for_byte(self):
         words = ROUND_TRIP

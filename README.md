@@ -361,6 +361,9 @@ need nothing extra.
   then each lane (its id, cut to 12 cells, plus its title), then its other worktrees. Every other
   window goes on the shared row(s) at the bottom, as `repo: title`. A window counts as whatever
   its active pane's directory is in. Window numbers never change; only the order on the bar does.
+  Every row starts with the same gutter (the delegation token's width, then the widest repo
+  header), so the first tab of every row starts in the same column; row 0 shows the token there,
+  a repo's rows show its header, and the shared rows leave it blank.
   Each tab is 32 columns wide, left-justified, with a dim `│` between two tabs; a row with too
   many tabs for that splits its width evenly, and a row spills over only when a tab would get too
   narrow (the tabs then spread evenly over the rows they need). Widths depend only on how many

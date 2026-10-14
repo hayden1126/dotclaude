@@ -5,16 +5,17 @@
 
 A repo with lanes (skills/lanes) gets its own row: a coloured header with the repo's name, its
 lead checkout's tab first, then its lanes, then its other worktrees (agent worktrees). Every other
-window goes on the shared row(s), last. A tab is 32 cells wide, left-justified, with a dim `│`
-between two tabs; a row too full for that splits its width evenly among its tabs. A kind spills
-into another row only when a slot would fall under 18 cells (9 on a phone), its tabs then spread
-evenly over its rows. Widths come from counts and the client's width alone, so a title change
-never moves a tab or changes the row count (which would resize every pane). Past 5 rows the
-smallest lane groups move onto the shared rows behind a `┃repo▸` divider; still past 5, the last
-row ends in `+N`, which opens the window list. The current window is always shown. A client
-narrower than 100 cells (the phone) gets short slots and the bar at the bottom; a session's
-narrowest client decides its layout. Window numbers never change: the bar only draws tabs in
-another order.
+window goes on the shared row(s), last. Every row starts with the same gutter (status-left's
+width, then the widest header), so every row's first tab starts in the same column. A tab is 32
+cells wide, left-justified, with a dim `│` between two tabs; a row too full for that splits its
+width evenly among its tabs. A kind spills into another row only when a slot would fall under 18
+cells (9 on a phone), its tabs then spread evenly over its rows. Widths come from counts and the
+client's width alone, so a title change never moves a tab or changes the row count (which would
+resize every pane). Past 5 rows the smallest lane groups move onto the shared rows behind a
+`┃repo▸` divider; still past 5, the last row ends in `+N`, which opens the window list. The
+current window is always shown. A client narrower than 100 cells (the phone) gets short slots
+and the bar at the bottom; a session's narrowest client decides its layout. Window numbers never
+change: the bar only draws tabs in another order.
 
 tmux/claude.conf runs `layout` from hooks (attach, detach, resize, a session switch, a window
 opened, closed or selected), and tmux-claude-status runs it in its rate-limited pass, which
@@ -264,13 +265,19 @@ class Group:
 class Layout:
     phone: bool
     heads: list                 # per group: the header name shown (an option value, not format)
-    head_w: list                # per group: the header's cells (" " + name + "▸")
+    head_w: list                # per group: name + "▸" + a space, in cells (also its ┃ divider's)
     rows: list                  # per row: items ("head", g, dim) ("div", g) ("tab", wid, index)
-                                # ("more", hidden, cells)
+                                # ("more", hidden, cells); a "head" is drawn in the gutter
     slots: list                 # per row: the slot width of its tabs
     hidden: int
-    left: int                   # row 0's cells for status-left (padded to it)
+    left: int                   # L: row 0's cells for status-left (blank on the other rows)
+    head: int                   # H: the widest shown header's cells, 0 with no laned row
     right: int                  # row 0's cells for status-right (desktop)
+
+    @property
+    def gutter(self) -> int:
+        """G = L + H: every row's first tab starts at column G + 1."""
+        return self.left + self.head
 
 
 def group_windows(wins: list, tab_of: dict) -> tuple:
@@ -320,38 +327,44 @@ def lay_out(groups: list, shared: list, width: int, current: str | None = None,
             left_len: int = 0, right_len: int = 0) -> Layout:
     """Rows of tabs for one session (pure). groups: [Group] in order; shared: [(wid, index)];
     width: the session's narrowest client; current: its current window id; left_len and
-    right_len: status-left-length and status-right-length, reserved on row 0 (desktop)."""
+    right_len: status-left-length and status-right-length (desktop).
+
+    Every row starts with the same gutter of G = L + H cells, so every row's first tab starts
+    at the same column: L is status-left's reserve (PHONE_LEFT on the phone), shown on row 0 and
+    blank below; H is the widest header shown (`name▸ `), drawn on a laned group's rows and
+    blank on the shared ones. Tabs get the width after the gutter (and status-right on row 0)."""
     phone = width < PHONE_WIDTH
     min_slot = MIN_SLOT_PHONE if phone else MIN_SLOT
     left, right = (PHONE_LEFT, 0) if phone else (max(0, left_len), max(0, right_len))
     heads = [short(g.name, phone) for g in groups]
     head_w = [text_width(h) + 2 for h in heads]
 
-    def avail(r: int) -> int:
-        return max(0, width - (left + right if r == 0 else 0))
+    def avail(r: int, head: int) -> int:
+        return max(0, width - left - head - (right if r == 0 else 0))
 
-    def cap(r: int, fixed: int) -> int:     # k tabs take k * min_slot + (k - 1) separators
-        return max(1, (avail(r) - fixed + 1) // (min_slot + 1))
-
-    def run_w(k: int) -> int:
+    def run_w(k: int) -> int:                # k tabs take k * min_slot + (k - 1) separators
         return k * min_slot + k - 1
 
-    def kind_rows(first: int, tabs: list, fixed: int) -> list:
-        """A kind's tabs over as few rows as hold them from row `first` on, spread evenly."""
-        caps = []
-        while sum(caps) < len(tabs):
-            caps.append(cap(first + len(caps), fixed))
-        out, k = [], 0
-        for size in spread(len(tabs), caps):
-            out.append(tabs[k:k + size])
-            k += size
-        return out
+    def build(packed: set) -> tuple:
+        """(rows, H) with the groups in `packed` moved onto the shared rows."""
+        head = max((head_w[g] for g in range(len(groups)) if g not in packed), default=0)
 
-    def build(packed: set) -> list:
+        def kind_rows(first: int, tabs: list, fixed: int) -> list:
+            """A kind's tabs over as few rows as hold them from row `first`, spread evenly."""
+            caps = []
+            while sum(caps) < len(tabs):
+                r = first + len(caps)
+                caps.append(max(1, (avail(r, head) - fixed + 1) // (min_slot + 1)))
+            out, k = [], 0
+            for size in spread(len(tabs), caps):
+                out.append(tabs[k:k + size])
+                k += size
+            return out
+
         rows = []
         for g, group in enumerate(groups):
             if g not in packed:
-                for i, part in enumerate(kind_rows(len(rows), group.tabs, head_w[g])):
+                for i, part in enumerate(kind_rows(len(rows), group.tabs, 0)):
                     rows.append([("head", g, i > 0)] + [("tab", *t) for t in part])
         base = len(rows)
         bins = [[[("tab", *t) for t in part], run_w(len(part))]   # [items, cells used]
@@ -359,7 +372,7 @@ def lay_out(groups: list, shared: list, width: int, current: str | None = None,
         for g in sorted(packed):        # first fit, each group whole behind its divider
             need = head_w[g] + run_w(len(groups[g].tabs))
             for b, (items, used) in enumerate(bins):
-                if used + need <= avail(base + b):
+                if used + need <= avail(base + b, head):
                     items += [("div", g)] + [("tab", *t) for t in groups[g].tabs]
                     bins[b][1] += need
                     break
@@ -367,19 +380,23 @@ def lay_out(groups: list, shared: list, width: int, current: str | None = None,
                 for part in kind_rows(base + len(bins), groups[g].tabs, head_w[g]):
                     bins.append([[("div", g)] + [("tab", *t) for t in part],
                                  head_w[g] + run_w(len(part))])
-        return rows + [items for items, _ in bins]
+        return rows + [items for items, _ in bins], head
 
     # Pack the smallest groups one more at a time until the rows fit; if none fits, keep the
     # packing with the fewest rows (none on a tie), so a pack that saves nothing never happens.
-    rows = build(set())
+    rows, head = build(set())
     packed: set = set()
     for g in sorted(range(len(groups)), key=lambda g: (len(groups[g].tabs), g)):
         if len(rows) <= MAX_ROWS:
             break
         packed.add(g)
         trial = build(packed)
-        if len(trial) < len(rows):
-            rows = trial
+        if len(trial[0]) < len(rows):
+            rows, head = trial
+
+    def fixed(row: list) -> int:        # cells a row's tabs can't use: dividers and +N
+        return sum(head_w[i[1]] if i[0] == "div" else i[2]
+                   for i in row if i[0] in ("div", "more"))
 
     hidden = []
     if len(rows) > MAX_ROWS:
@@ -389,13 +406,9 @@ def lay_out(groups: list, shared: list, width: int, current: str | None = None,
             hidden += [i[1:] for i in row if i[0] == "tab"]
         rows = rows[:MAX_ROWS]
         last, r = rows[-1], MAX_ROWS - 1
-
-        def fixed() -> int:
-            return sum(head_w[i[1]] for i in last if i[0] in ("head", "div")) + more_w
-
         while sum(i[0] == "tab" for i in last) > 1 and \
-                fixed() + sum(i[0] == "tab" for i in last) * min_slot + separators(last) \
-                > avail(r):
+                fixed(last) + more_w + sum(i[0] == "tab" for i in last) * min_slot \
+                + separators(last) > avail(r, head):
             if last[-1][0] == "tab":
                 hidden.insert(0, last.pop()[1:])
             if last[-1][0] == "div":
@@ -411,11 +424,10 @@ def lay_out(groups: list, shared: list, width: int, current: str | None = None,
     slots = []
     for r, row in enumerate(rows):
         n = sum(i[0] == "tab" for i in row)
-        fixed_w = sum(head_w[i[1]] if i[0] in ("head", "div") else i[2]
-                      for i in row if i[0] != "tab")
-        slots.append(min(DEFAULT_SLOT, max(1, (avail(r) - fixed_w - separators(row)) // n))
+        slots.append(min(DEFAULT_SLOT,
+                         max(1, (avail(r, head) - fixed(row) - separators(row)) // n))
                      if n else 0)
-    return Layout(phone, heads, head_w, rows, slots, len(hidden), left, right)
+    return Layout(phone, heads, head_w, rows, slots, len(hidden), left, head, right)
 
 
 # --- render -------------------------------------------------------------------------------------
@@ -455,9 +467,11 @@ def name_part(g: int, cells: int) -> str:
     return f"#{{p{cells}:#{{={cells}:#{{@tab_bar_g{g}}}}}}}"
 
 
-def header(g: int, cells: int, dim: bool) -> str:
+def header(g: int, cells: int, dim: bool, width: int) -> str:
+    """Group g's `name▸` in the gutter, padded with spaces to `width` (H) cells; `cells` is the
+    name's own width, known at layout time, so the padding is fixed text."""
     return (f"#[fg=colour{PALETTE[g % len(PALETTE)]}]" + ("#[dim]" if dim else "#[bold]")
-            + " " + name_part(g, cells) + "▸" + NORM)
+            + name_part(g, cells) + "▸" + NORM + " " * max(0, width - cells - 1))
 
 
 def divider(g: int, cells: int) -> str:
@@ -477,14 +491,15 @@ def render(lay: Layout) -> list:
     """The status-format rows for a layout. Only window ids, integers and fixed text go in."""
     out = []
     for r, (items, slot) in enumerate(zip(lay.rows, lay.slots)):
-        parts = [FILL, NORM]
-        if r == 0:
-            parts.append(left_part(lay.left))
+        # The gutter: status-left (row 0) or blanks, then the header (a laned row) or blanks.
+        parts = [FILL, NORM, left_part(lay.left) if r == 0 else " " * lay.left]
+        if not (items and items[0][0] == "head"):
+            parts.append(" " * lay.head)
         for k, item in enumerate(items):
             if item[0] == "tab" and k and items[k - 1][0] == "tab":
                 parts.append(SEP)
             if item[0] == "head":
-                parts.append(header(item[1], lay.head_w[item[1]] - 2, item[2]))
+                parts.append(header(item[1], lay.head_w[item[1]] - 2, item[2], lay.head))
             elif item[0] == "div":
                 parts.append(divider(item[1], lay.head_w[item[1]] - 2))
             elif item[0] == "tab":
