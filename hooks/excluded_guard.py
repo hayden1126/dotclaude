@@ -99,16 +99,23 @@ def edit_rule_path(rule, home):
     return os.path.normpath(("/" if m.group(1) == "//" else home + "/") + m.group(2))
 
 
-def edit_rule(path, roots=()):
-    """The Edit deny rule that protects `path`: the real dir it is (or, for a file or a link,
-    the dir holding it) and everything under it. None when that dir is a write root or above
-    one, since the rule would cover the whole root, or when its name holds a glob character."""
+def protect_dir(path, roots=()):
+    """The real dir an Edit deny rule covers to protect `path`: the dir it is or, for a file or
+    a link, the dir holding it. None when that dir is a write root or above one, since the rule
+    would cover the whole root, or when its name holds a glob character."""
     home = os.path.realpath(os.path.expanduser("~"))
     leaf = os.path.islink(path) or (os.path.lexists(path) and not os.path.isdir(path))
     d = os.path.realpath(os.path.dirname(path) if leaf else path)
     if any(under(r, d) for r in [*roots, home]) or re.search(r"[*?\[\]]", d):
         return None
-    if under(d, home):
+    return d
+
+
+def edit_rule(d):
+    """The rule for the real dir `d`: the `~/` form only when $HOME holds no symlink, since a
+    `~/` rule counts only then (Machine)."""
+    home = os.path.abspath(os.path.expanduser("~"))
+    if os.path.realpath(home) == home and under(d, home):
         return f"Edit(~/{os.path.relpath(d, home)}/**)"
     return f"Edit(/{d}/**)"
 
@@ -116,7 +123,8 @@ def edit_rule(path, roots=()):
 class Refusal(Exception):
     def __init__(self, rule, path, reason, protect=None):
         # protect: the Machine, when the fix is to write-protect `path`; name the rule that does.
-        self.fix = edit_rule(path, getattr(protect, "roots", ())) if protect else None
+        self.fix_dir = protect_dir(path, getattr(protect, "roots", ())) if protect else None
+        self.fix = edit_rule(self.fix_dir) if self.fix_dir else None
         if self.fix:
             reason = f"{reason} {PROTECT_HINT.format(rule=self.fix)}."
         elif protect:
@@ -168,7 +176,9 @@ def load_settings(env):
         perms = data.get("permissions") if isinstance(data, dict) else None
         deny = perms.get("deny") if isinstance(perms, dict) else None
         if machine_wide and isinstance(deny, list):
-            for parsed in (edit_rule_path(r, os.path.realpath(home)) for r in deny):
+            # `~` as Claude Code is likely to expand it: $HOME as given, so a symlinked home
+            # fails Machine's no-symlink check rather than counting through the link.
+            for parsed in (edit_rule_path(r, os.path.abspath(home)) for r in deny):
                 if isinstance(parsed, str):
                     out["editDeny"].append(parsed)
         sandbox = data.get("sandbox") if isinstance(data, dict) else None
@@ -659,16 +669,17 @@ def scan(roots, env):
     heads = sorted({first_word(normalize(p)) for p in settings["excludedCommands"]} - {""})
     found, unchecked = [], []
     m = Machine(env, settings, env.get("HOME") or os.getcwd())
-    for entry in env.get("PATH", "").split(":"):
+    # Each entry on its own names every writable one; the full PATH, as the hook runs it,
+    # catches an interpreter one entry's head resolves through another entry.
+    path_var = env.get("PATH", "")
+    for p in [*path_var.split(":"), path_var]:
         for head in heads:
             try:
-                check_rule2(m, head, entry)
+                check_rule2(m, head, p)
             except Refusal as r:
                 found.append(("PATH", r))
-                break
             except Exception as e:
-                unchecked.append((entry or "(empty PATH entry)", e))
-                break
+                unchecked.append((p or "(empty PATH entry)", e))
     for root in roots:
         for repo in repos_under(root):
             try:
@@ -749,8 +760,9 @@ def run_scan(roots):
     found, unchecked, errors = scan(roots or [home], os.environ)
     for e in errors:
         print(f"settings not read: {e}")
-    for where, e in unchecked:
-        print(f"{where}: could not check ({type(e).__name__}: {e})")
+    for line in dict.fromkeys(f"{w}: could not check ({type(e).__name__}: {e})"
+                              for w, e in unchecked):
+        print(line)
     first = {}
     for where, r in found:
         first.setdefault(r.path, (where, r))
@@ -758,9 +770,9 @@ def run_scan(roots):
     for where, r in first.values():
         print(f"{where}: excluded-guard ({r.rule}): {r.reason}")
         if r.fix:
-            print(f"  {r.path} holds, before you protect it:")
+            print(f"  {r.fix_dir} holds, before you protect it:")
             try:
-                print("\n".join(evidence(r.path)))
+                print("\n".join(evidence(r.fix_dir)))
             except Exception as e:
                 print(f"    (could not read it: {type(e).__name__}: {e})")
             if r.fix not in rules:

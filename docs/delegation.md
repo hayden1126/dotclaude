@@ -259,7 +259,7 @@ A protecting entry is an Edit deny rule in `permissions.deny`, `Edit(//abs/dir/*
 the sandbox's write denials, and its Edit and Write tools refuse the path, so the rule binds
 both routes (probed 2026-10-14 on 2.1.299: a sandboxed write under one fails with a read-only
 filesystem, and the Write tool is refused). A rule counts only at its own path and only when no
-symlink sits along it (`~` resolves to the real home), so name a dir's real path. A rule for
+symlink sits along it, `$HOME` included for a `~/` rule, so name a dir's real path. A rule for
 one file isn't read: the file's dir must be protected too, and that rule covers the file. A `denyWrite` line binds
 sandboxed Bash only, so it protects only inside dotclaude's own checkouts (`~/dotclaude` and the
 one the guard runs from), whose hooks run outside the sandbox on every call anyway. Both count

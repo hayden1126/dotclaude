@@ -492,7 +492,8 @@ class Rule2Path(Guard):
         self.protect(os.path.dirname(interp))
         self.allowed("lane ls")
 
-    def test_a_symlinked_home_resolves_its_denywrite_entries(self):
+    def test_a_symlinked_home_counts_only_real_path_rules(self):
+        # Claude Code may expand `~` to the link, and a rule through a link wasn't probed.
         links = self.protect(self.mkdir("homelinks"))  # the link itself must be protected
         link = os.path.join(links, "home")
         os.symlink(self.home, link)
@@ -500,9 +501,12 @@ class Rule2Path(Guard):
         self.protect("~/bin")
         self.write(os.path.join(self.home, ".gitconfig"), "[user]\n\tname = x\n")
         self.env["HOME"] = link
-        self.env["PATH"] = f"{link}/bin:/usr/bin"
-        self.allowed("git push")
         self.env["PATH"] = f"{hbin}:/usr/bin"
+        reason = self.denied("git push", "rule2", hbin)
+        self.assertIn(f"Edit(/{hbin}/**)", reason)
+        self.protect(hbin)
+        self.allowed("git push")
+        self.env["PATH"] = f"{link}/bin:/usr/bin"
         self.allowed("git push")
         self.make_bin(os.path.join("home", "wbin"), protect=False)
         self.env["PATH"] = f"{link}/wbin:/usr/bin"
@@ -690,6 +694,14 @@ class Scan(Guard):
             self.git("config", k, v, cwd=self.proj)
         self.assertEqual(self.scan(self.tmp)[0], 1)
         self.assertFalse(os.path.exists(marker))
+        # A remote helper the config names (git-remote-<vcs> on PATH) fetches the same way.
+        helper = self.write(os.path.join(self.mkdir("helpers"), "git-remote-x"),
+                            f"#!/bin/sh\ntouch {marker}\n", 0o755)
+        self.git("config", "remote.origin.vcs", "x", cwd=self.proj)
+        self.git("config", "remote.origin.url", "x://y", cwd=self.proj)
+        self.env["PATH"] = f"{os.path.dirname(helper)}:{self.env['PATH']}"
+        self.assertEqual(self.scan(self.tmp)[0], 1)
+        self.assertFalse(os.path.exists(marker))
 
     def test_a_repo_it_cannot_check_is_reported_and_the_scan_goes_on(self):
         odd = self.mkdir("odd")
@@ -706,6 +718,30 @@ class Scan(Guard):
         out = self.scan(self.tmp)[1]
         for d in (self.wbin, w2):
             self.assertIn(f'"Edit(/{d}/**)"', out)
+
+    def test_an_interpreter_found_in_another_path_entry_is_judged(self):
+        # codex's `#!/usr/bin/env node` finds node in a second, protected entry whose node
+        # links to a writable target: the hook refuses, so the scan must list it too.
+        e1 = self.make_bin("e1", heads=())
+        self.write(os.path.join(e1, "codex"), "#!/usr/bin/env node\n", 0o755)
+        e2 = self.make_bin("e2", heads=())
+        target = self.write(os.path.join(self.mkdir("wnode"), "node"), MARKER, 0o755)
+        os.symlink(target, os.path.join(e2, "node"))
+        self.write_settings()
+        self.env["PATH"] = f"{e1}:{e2}:/usr/bin"
+        code, out = self.scan(self.tmp)
+        self.assertEqual(code, 1, out)
+        self.assertIn(os.path.dirname(target), out)
+
+    def test_the_listing_is_the_dir_the_rule_covers(self):
+        # A writable include file: the rule covers its dir, so the listing shows that dir.
+        d = self.mkdir("cfg")
+        inc = self.write(os.path.join(d, "inc.cfg"), "")
+        self.write(os.path.join(d, "other"), "")
+        self.write(os.path.join(self.home, ".gitconfig"), f"[include]\n\tpath = {inc}\n")
+        out = self.scan(self.tmp)[1]
+        self.assertIn(f"  {d} holds, before you protect it:", out)
+        self.assertRegex(out, r"  other\n")
 
     def test_no_rule_is_offered_for_a_write_root_itself(self):
         inc = self.write(os.path.join(self.home, ".gitconfig.local"), "")
