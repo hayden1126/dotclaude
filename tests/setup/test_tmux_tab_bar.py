@@ -37,7 +37,7 @@ Group = tb.Group
 
 # Every character a generated row may hold: the template's own text, digits and window ids.
 ALPHABET = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-               " #{}[]=,:;|/@?^()\\*+-_.!$…◐✳★▸│┃♯")
+               " #{}[]=,:;|/@?^()\\*+-_.!$…◐✳★▸│┃♯·")   # · from the title strip
 
 HOSTILE = "#(touch x)%,}\n\x1b[31m#{E:pwn}"   # cleans to "(touch x)%,}[31m{E:pwn}"
 BENIGN = "abcdefghijklmnopqrstuvwxyz"
@@ -555,7 +555,7 @@ class Render(unittest.TestCase):
 
     def test_a_title_loses_its_hashes_then_claudes_prefix(self):
         e = tb.entry("@7", 7, 30)
-        strip = "s/^([^ [][^ []?[^ []? )?\\[[^]]*\\] (.+)$/\\2/"
+        strip = "s/^([^ [][^ []?[^ []? )?(\\[[^]]*\\]|[^ []+ ·) (.+)$/\\3/"
         # Each substitution runs on the text cut to LABEL_CAP characters first (s/// is
         # quadratic), and the cut is a substitution too: `=` skips #[...] and counts ## once.
         cut = "#{s/^(.{128#}).+$/\\1/:%s}"
@@ -571,14 +571,22 @@ class Render(unittest.TestCase):
         for bad in ("{", "}", ",", ":", ";"):   # each would end the modifier or the #{...}
             self.assertNotIn(bad, strip)
         # The same pattern in Python's dialect ([ escaped in a set): what it keeps.
-        py = re.compile(r"^([^ \[][^ \[]?[^ \[]? )?\[[^]]*\] (.+)$")
-        for title, label in (("✳ [repo] label", "label"), ("⠂ [repo] label", "label"),
-                             ("⣿ [repo] label", "label"), ("[repo] label", "label"),
-                             ("no prefix here", "no prefix here"),
-                             ("✳ [a] [b] x", "[b] x"), ("long word [x] y", "long word [x] y"),
-                             ("✳ [repo] ", "✳ [repo] ")):       # nothing after it: unmatched
+        py = re.compile(r"^([^ \[][^ \[]?[^ \[]? )?(\[[^]]*\]|[^ \[]+ ·) (.+)$")
+        for title, label in (
+                # Today's form, and the bracketed one a session keeps until its next prompt.
+                ("✳ repo · label", "label"), ("⠂ repo · label", "label"),
+                ("⣿ repo · label", "label"), ("repo · label", "label"),
+                ("✳ [repo] label", "label"), ("⠂ [repo] label", "label"),
+                ("⣿ [repo] label", "label"), ("[repo] label", "label"),
+                # Neither form, or only the first prefix of two, or nothing after it.
+                ("no prefix here", "no prefix here"), ("✳ idle", "✳ idle"),
+                ("✳ a · b · x", "b · x"), ("✳ [a] [b] x", "[b] x"),
+                ("[a] b · x", "b · x"), ("a · [b] x", "[b] x"),
+                ("long word · x y", "long word · x y"), ("long word [x] y", "long word [x] y"),
+                ("repo · ", "repo · "), ("[repo] ", "[repo] "),
+                ("✳ [repo] ", "✳ [repo] "), ("✳ repo · ", "✳ repo · ")):
             with self.subTest(title=title):
-                self.assertEqual(py.sub(r"\2", title), label)
+                self.assertEqual(py.sub(r"\3", title), label)
 
     def test_row_0_keeps_status_left_and_right(self):
         rows = tb.render(tb.lay_out([DOTCLAUDE], SHARED5, 188, "@4", 28, 16))
@@ -1586,16 +1594,21 @@ class RealTmux(unittest.TestCase):
     def test_claudes_title_prefix_is_stripped_idle_busy_or_bare(self):
         self.ti("new-window", "-d", "-t", "t:3", "-c", self.plain, "sleep 600")
         self.run_layout()
-        titles = ("✳ [dotclaude] alpha label", "⠂ [tab-bar] beta label", "[hq] gamma label",
-                  "no prefix here")
-        for i, title in enumerate(titles):
-            self.ti("select-pane", "-t", f"t:{i}", "-T", title)
-        for text in ("lead alpha label", "tab-bar beta label", "hq: gamma label",
-                     "hq: no prefix here"):
-            self.find(text)
-        bar = "\n".join(self.screen()[:2])
-        for gone in ("✳", "⠂", "[dotclaude]", "[tab-bar]", "[hq]"):
-            self.assertNotIn(gone, bar)
+        # Both forms in each place, swapped between rounds: `repo · ` now, and `[repo] `, which a
+        # session that hasn't had a prompt since session-title.sh changed still carries.
+        rounds = (("✳ [dotclaude] alpha one", "⠂ tab-bar · beta one", "[hq] gamma one"),
+                  ("✳ dotclaude · alpha two", "⠂ [tab-bar] beta two", "hq · gamma two"))
+        for n, titles in zip(("one", "two"), rounds):
+            with self.subTest(round=n):
+                for i, title in enumerate(titles + ("no prefix " + n,)):
+                    self.ti("select-pane", "-t", f"t:{i}", "-T", title)
+                for text in (f"lead alpha {n}", f"tab-bar beta {n}", f"hq: gamma {n}",
+                             f"hq: no prefix {n}"):
+                    self.find(text)
+                bar = "\n".join(self.screen()[:2])
+                for gone in ("✳", "⠂", "[dotclaude]", "[tab-bar]", "[hq]", "dotclaude ·",
+                             "tab-bar ·", "hq ·"):
+                    self.assertNotIn(gone, bar)
 
     def test_a_hash_or_a_style_in_a_title_draws_as_text_and_keeps_the_width(self):
         self.run_layout()

@@ -97,7 +97,7 @@ force-push and a `reset --hard` on a dirty tree when the prompt named them.
 must cover, and `test_settings.py` ties it to `settings.json` in both directions. It holds the
 credential barrier (`git push` to `origin`, `fetch`, `pull`, `ls-remote`, and `gh`'s `pr`, `run`,
 `issue`, `api` and `search` with its read-only `repo`, `release` and `auth status` forms), our
-wrappers (`lane init`, `new`, `adopt`, `ls`, `open`, `done`, `pass-respawn`, `delegation-ledger`,
+wrappers (`lane init`, `new`, `adopt`, `ls`, `open`, `done`, `addr`, `pass-respawn`, `delegation-ledger`,
 `codex-delegate`), `claude`, the read-only tmux verbs (`ls`, `list-sessions`, `list-windows`,
 `list-panes`, `list-clients`, `list-keys`, `list-commands`, `capture-pane`, `display`, `show`,
 `show-options`, `show-environment`, `show-messages`, `show-hooks`), read-only codex (`login status`,
@@ -169,7 +169,7 @@ sees it.
 | `hooks/watch-guard.sh` | Stop hook (main thread): blocks a stop once when a `delegation-ledger wait` watch has lapsed or a background command was killed at its time limit, with the re-arm command (`skills/delegation/scripts/watch-guard`); fails open | symlink `~/.claude/hooks/watch-guard.sh` |
 | `hooks/report-check.sh` | PreToolUse(SubagentHandback)/SubagentStop hook: sends a delegated role's malformed report back, at most twice; fails open | symlink `~/.claude/hooks/report-check.sh` |
 | `hooks/handoff-reminder.sh` | UserPromptSubmit hook: on a wrap-up / handoff / clear-memory signal, reminds me to invoke the `handoff` skill instead of improvising it, or the `pass` skill on a terse "... and pass"; a shim over `hooks/handoff_reminder.py`, which holds the classifier | symlink `~/.claude/hooks/handoff-reminder.sh` and `handoff_reminder.py` |
-| `hooks/session-title.sh` | UserPromptSubmit hook: sets the terminal tab title to `[<repo>] <label>` via `sessionTitle`, so tabs are tellable apart; the label comes from the Stop-hook Haiku cache (`.title.txt`), falling back to the current prompt's first line | symlink `~/.claude/hooks/session-title.sh` |
+| `hooks/session-title.sh` | UserPromptSubmit hook: sets the terminal tab title to `<repo> · <label>` via `sessionTitle`, so tabs are tellable apart (the repo is the one the session launched in, so a Bash `cd` doesn't rename it); the label comes from the Stop-hook Haiku cache (`.title.txt`), falling back to the current prompt's first line | symlink `~/.claude/hooks/session-title.sh` |
 | `hooks/stop-ring.sh` | Stop hook: plays the Windows notify sound when a session you see finishes (a tab, a plain terminal or a mapped background session), not a subagent, an unmapped background session, a `claude -p` run, a turn that ends with an agent or shell still running for it, or one a queued notice or prompt restarts within a second; logs each decision to `ring.log`, and writes the session's stop record (`stops/<session>.json`: time, tasks in flight, the transcript path, the replies of the last 5 turns; records older than 7 days go) for `pass-respawn`; a shim over `hooks/stop_ring.py` | symlink `~/.claude/hooks/stop-ring.sh` and `stop_ring.py` |
 | `hooks/notify.sh` | Notification(permission_prompt) hook: pops a Windows toast, resolving the toast path per platform (WSL via `wslpath`, native Windows git-bash via `cygpath`), and rings like `stop-ring.sh` | symlink `~/.claude/hooks/notify.sh` |
 | `hooks/tmux-state.sh` | Prompt, tool, Stop and Notification hook: sets `@claude_state` (busy, wait, idle) on the tmux window the session is shown in, for the indicator in `tmux/claude.conf`; does nothing outside tmux | symlink `~/.claude/hooks/tmux-state.sh` |
@@ -310,12 +310,16 @@ need nothing extra.
   `hooks/handoff_reminder.py` with python3 and stays silent if that fails. After changing it, replay your own typed prompts through it with
   `python3 tests/setup/replay_history.py` (local only: the history holds private names).
 - **UserPromptSubmit: `session-title.sh`** (in this repo). Sets the session title (the terminal tab
-  title) to `[<repo>] <label>` so tabs are tellable apart. It emits the supported
+  title) to `<repo> · <label>` so tabs are tellable apart. It emits the supported
   `hookSpecificOutput.sessionTitle`, not raw OSC escapes, so the title has display precedence over
   Claude's own AI title and the tab's running/idle status icons stay intact. The repo name comes from
-  walking up for `.git` (no git subprocess). The label is chosen by a cascade: the Stop-hook Haiku
+  walking up for `.git` (no git subprocess) from `CLAUDE_PROJECT_DIR`, the directory the session
+  launched in: a Bash `cd` moves the payload `cwd` but not that, so a lead that steps into an agent
+  worktree keeps its own name, and a lane (launched in its worktree) shows the worktree's name. There are no
+  brackets, since ListAgents prints a session as `<name> [<ref>]` and a leading `[repo]` read like a
+  ref. The label is chosen by a cascade: the Stop-hook Haiku
   label (`session-summaries/<id>.title.txt`), else the first line of the current prompt, else the
-  first clause of the long summary, else the bare `[<repo>]`. (It used to read Claude Code's own
+  first clause of the long summary, else the bare `<repo>`. (It used to read Claude Code's own
   `ai-title`, but CC 2.1.237 stops generating that once a custom title is set, so the hook was
   suppressing the very record it read; it now owns the label instead.) A subagent's or teammate's
   prompt, or injected content (a task notification, another agent's message), leaves the title as
@@ -369,7 +373,9 @@ need nothing extra.
   spills over only when a tab would get too narrow (the tabs then spread evenly over the rows
   they need). Row 0's right end shows the host and the clock. Widths depend only on how many
   tabs there are and the terminal's width, so a title or glyph change never moves a tab or
-  resizes the panes. Past 5 rows the smallest
+  resizes the panes. A tab drops the prefix of Claude's title (its ✳ or spinner glyph, then
+  `repo · ` or the older `[repo] ` a tab keeps until its next prompt), since the row already
+  names the project. Past 5 rows the smallest
   groups share the bottom rows behind a `┃repo▸` divider; still past 5, the bar ends in `+N`, which
   opens the window list. The window you are on is always shown. On a narrow terminal (the phone over
   ssh) the bar moves to the bottom with shorter tabs and drops the host and the clock. Tap a
@@ -517,6 +523,9 @@ and status single-writer:
   tmux window, context (CTX: `312k*` past the auto-pass soft tier, `523k!` past hard) and
   state (STATE: busy, idle, waiting or shell).
   `lane who 42` is the only answer to who owns #42.
+- `lane addr chart-fix` (or `lane addr lead`) prints `uds:<socket>`, the SendMessage address of
+  that lane's live session. A session's ListAgents name is its tab title, which changes most
+  turns, and a pass gives it a new socket, so resolve the address just before each send.
 - `lane lock gate -- npm run e2e` runs a shared gate under a named lock, so a second lane's run
   waits instead of colliding.
 - A lane tests its change by installing from its own worktree (`lane lock install --

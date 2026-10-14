@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # UserPromptSubmit hook: set the Claude Code session title (== terminal tab title)
-# to "[<repo>] <label>" so tabs are tellable apart.
+# to "<repo> · <label>" so tabs are tellable apart. No brackets: ListAgents prints a
+# session as "<name> [<ref>]", and a title opening "[repo]" read like a ref there.
 #
 # The <label> is a short summary of the session. It does NOT come from Claude Code's
 # own "ai-title" record any more: as of CC 2.1.237 (Aug 2026) Claude only generates
@@ -9,7 +10,7 @@
 # label is ours: session-summary.sh (Stop hook) writes a <=32-char label to
 # session-summaries/<session_id>.title.txt, which we read here. Source cascade:
 #   1. that Haiku label                          (steady state, turn 2+)
-#   2. first line of this prompt                 (turn-1 seed / fallback; keeps [repo])
+#   2. first line of this prompt                 (turn-1 seed / fallback; keeps the repo)
 #   3. first clause of the long summary (.txt)   (degrade)
 #   4. repo only                                 (floor)
 #
@@ -26,7 +27,12 @@
 # per-hook JSON parse and be injected into the prompt as context instead.
 #
 # Uses python3 (jq is not installed here). No git subprocess: the repo root is
-# found by walking up for a .git entry (dir=repo, file=worktree/submodule). Reads
+# found by walking up for a .git entry (dir=repo, file=worktree/submodule) from
+# CLAUDE_PROJECT_DIR, the dir the session launched in. Not the payload cwd: a Bash
+# cd moves that (and $PWD), so a lead that cd'd into an agent worktree was retitled
+# after it; CLAUDE_PROJECT_DIR stays put (probed on 2.1.296). A lane launches in its
+# own worktree, so it shows the worktree's name (its lane id, unless adopted under
+# another). Reads
 # only the transcript TAIL for the DEDUP check, so cost is flat on any transcript size.
 set -uo pipefail
 
@@ -37,10 +43,10 @@ IFS= read -r -d '' src <<'PY'
 import sys, os, json
 
 # ---- tunables -------------------------------------------------------------
-LBRACK, RBRACK     = "[", "]"    # repo is wrapped: "[repo] summary"
+SEP                = " · "       # joins repo and summary: "repo · summary"
 TITLE_MAX          = 64          # total chars; terminals truncate long titles anyway
 REPO_MAX           = 40          # keep the repo (the disambiguator) always visible
-INCLUDE_BRANCH     = False       # append " (branch)" inside the brackets when in a git repo
+INCLUDE_BRANCH     = False       # append " (branch)" to the repo when in a git repo
 DEDUP              = True        # skip emitting if title == the one we last set
 # ---------------------------------------------------------------------------
 
@@ -97,11 +103,15 @@ def find_repo_root(start):
             return None, False
         cur = parent
 
-root, is_git = find_repo_root(cwd)
+# The launch dir names the repo; the payload cwd is only the floor (a run outside Claude Code).
+project = os.environ.get("CLAUDE_PROJECT_DIR", "").strip()
+if not (project and os.path.isdir(project)):
+    project = cwd
+root, is_git = find_repo_root(project)
 if root:
     name = os.path.basename(root)
-elif cwd:
-    name = os.path.basename(os.path.abspath(cwd).rstrip(os.sep))
+elif project:
+    name = os.path.basename(os.path.abspath(project).rstrip(os.sep))
 else:
     name = ""
 if not name:
@@ -204,7 +214,7 @@ if INCLUDE_BRANCH and is_git:
     if br:
         repo = "%s (%s)" % (repo, clip(br, 20))
 
-label = LBRACK + repo + RBRACK                       # "[dotclaude]"
+label = repo                                         # "dotclaude"
 if label_cache:
     summary = label_cache                            # (1) our Haiku short label
 elif prompt:
@@ -214,8 +224,8 @@ elif summary_cache:
 else:
     summary = ""                                     # (4) repo only
 if summary:
-    budget = TITLE_MAX - len(label) - 1              # 1 for the joining space
-    title = label + " " + clip(summary, budget) if budget >= 8 else label
+    budget = TITLE_MAX - len(label) - len(SEP)
+    title = label + SEP + clip(summary, budget) if budget >= 8 else label
 else:
     title = label
 

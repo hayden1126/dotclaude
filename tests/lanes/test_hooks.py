@@ -192,7 +192,8 @@ class IdentityHook(LanesRepo):
         ctx = out["additionalContext"]
         self.assertEqual(out["hookEventName"], "SessionStart")
         for piece in ("`chart-fix`", "branch `chart-fix`", "#42", "port 5191",
-                      self.record("chart-fix"), "read-only", "`lane who", "another session"):
+                      self.record("chart-fix"), "read-only", "`lane who", "another session",
+                      "`lane addr lead`", "just before each send"):
             self.assertIn(piece, ctx)
         self.assertNotIn("re-read", ctx)
         (s,) = self.lane_json("chart-fix")["sessions"]
@@ -213,6 +214,7 @@ class IdentityHook(LanesRepo):
         self.assertEqual(out["additionalContext"].count("\n"), 0)
         self.assertIn("chart-fix (#42)", out["additionalContext"])
         self.assertIn("`lane ls`", out["additionalContext"])
+        self.assertIn("`lane addr <id>`", out["additionalContext"])
 
     def test_subagents_and_plain_repos_get_nothing(self):
         self.assertIsNone(self.start(self.lane_dir, agent_id="a1"))

@@ -282,20 +282,21 @@ class Baseline(unittest.TestCase):
         for script in ("lane-guard.sh", "lane-identity.sh"):
             self.assertTrue(os.access(os.path.join(REPO, "hooks", script), os.X_OK), script)
         # `lane new`, `ls` and `done` need the network and gh's credential (spike S3); `ls`,
-        # `open` and `done` need to see other processes. Only those run sandbox-off: `lane lock
+        # `open`, `done` and `addr` need to see other processes. Only those run sandbox-off: `lane lock
         # -- <cmd>` must stay sandboxed, or the command it wraps would run outside the sandbox
         # without the dangerouslyDisableSandbox flag the delete guard checks. `new` and `adopt`
         # run the config's `setup` through a shell, so the config lives in the state dir, which
         # sandboxed Bash can't write (docs/lanes.md S3; tests/lanes ConfigTrust).
         excluded = S["sandbox"]["excludedCommands"]
         bare = ["lane init", "lane init *", "lane new *", "lane adopt *", "lane ls", "lane ls *",
-                "lane open *", "lane done *"]
+                "lane open *", "lane done *", "lane addr *"]
         self.assertEqual([p for p in excluded if p.split()[0] == "lane"], bare)
         self.assertNotIn("lane *", excluded)
         for cmd in ("lane lock gate -- true", "lane lock gate -- rm -rf build", "lane whoami",
                     "lane claim 42", "lane note x"):
             self.assertEqual([p for p in excluded if glob_match(p, cmd)], [], cmd)
-        for cmd in ("lane ls", "lane ls --json", "lane open chart-fix", "lane done chart-fix"):
+        for cmd in ("lane ls", "lane ls --json", "lane open chart-fix", "lane done chart-fix",
+                    "lane addr lead"):
             self.assertTrue(any(glob_match(p, cmd) for p in excluded), cmd)
 
     def test_pass_respawn_runs_outside_the_sandbox(self):
@@ -305,7 +306,7 @@ class Baseline(unittest.TestCase):
         excluded = S["sandbox"]["excludedCommands"]
         self.assertEqual([p for p in excluded if p.split()[0] == "pass-respawn"],
                          ["pass-respawn", "pass-respawn *"])
-        self.assertLess(excluded.index("lane done *"), excluded.index("pass-respawn"))
+        self.assertLess(excluded.index("lane addr *"), excluded.index("pass-respawn"))
         for cmd in ("pass-respawn", "pass-respawn --compact", "pass-respawn --print -C /x"):
             self.assertTrue(any(glob_match(p, cmd) for p in excluded), cmd)
         # The allow rule skips the auto-mode classifier, which once refused a bare call as
