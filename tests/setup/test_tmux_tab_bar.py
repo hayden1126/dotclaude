@@ -1909,7 +1909,8 @@ class FakeTmux(unittest.TestCase):
             mine = json.load(f)
         self.assertEqual(tb.parse_place(mine["place"]), tb.Place("p:" + self.common, 1))
         self.assertEqual({k: v for k, v in mine.items() if k != "place"}, recs["mine"])
-        after = {n: open(os.path.join(reg, n)).read() for n in os.listdir(reg)}
+        after = {n: open(os.path.join(reg, n)).read() for n in os.listdir(reg)
+                 if n != tb.RECORDS_LOCK}
         self.assertEqual(set(after), set(before))       # none created, no temp file left
         for n in before:
             if n != "mine.json":
@@ -1918,6 +1919,43 @@ class FakeTmux(unittest.TestCase):
         self.run_cmd("move", "auto", "/dev/pts/7", XDG_STATE_HOME=state_home)
         with open(os.path.join(reg, "mine.json")) as f:
             self.assertNotIn("place", json.load(f))
+
+    def test_a_record_deleted_before_the_replace_is_never_brought_back(self):
+        # The registry deletes a record (under the records lock) after the update read it: the
+        # update's compare and replace wait for the lock, then see it gone.
+        reg = os.path.join(self.tmp, "reg")
+        os.makedirs(reg)
+        path = os.path.join(reg, "a.json")
+        with open(path, "w") as f:
+            json.dump({"socket": "/fake/sock", "server_start": 1700, "server_pid": 42,
+                       "pane": "%2"}, f)
+        fd = os.open(os.path.join(reg, tb.RECORDS_LOCK), os.O_RDWR | os.O_CREAT, 0o600)
+        self.addCleanup(lambda: os.close(fd))
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        update = threading.Thread(target=tb.update_record,
+                                  args=(path, ("/fake/sock", 1700, 42), {"%2": '{"x":1}'}))
+        update.start()
+        deadline = time.time() + 5                      # its temp file: it is at the lock
+        while time.time() < deadline and not any(n.startswith(".tmp-") for n in os.listdir(reg)):
+            time.sleep(0.01)
+        os.remove(path)
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        update.join(10)
+        self.assertEqual(os.listdir(reg), [tb.RECORDS_LOCK])   # not recreated, no temp left
+
+    def test_a_record_update_goes_ahead_past_the_lock_bound(self):
+        reg = os.path.join(self.tmp, "reg")
+        os.makedirs(reg)
+        path = os.path.join(reg, "a.json")
+        with open(path, "w") as f:
+            json.dump({"socket": "/s", "server_start": 1, "server_pid": 2, "pane": "%2"}, f)
+        fd = os.open(os.path.join(reg, tb.RECORDS_LOCK), os.O_RDWR | os.O_CREAT, 0o600)
+        self.addCleanup(lambda: os.close(fd))
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        with unittest.mock.patch.object(tb, "LOCK_WAIT", 0.2):
+            tb.update_record(path, ("/s", 1, 2), {"%2": "p"})
+        with open(path) as f:
+            self.assertEqual(json.load(f)["place"], "p")
 
     def test_outside_tmux_nothing_runs(self):
         env = {k: v for k, v in self.env.items() if k != "TMUX"}
