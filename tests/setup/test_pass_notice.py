@@ -206,7 +206,8 @@ class SaysItOnce(Base):
 
 
 class NoPython(Base):
-    """With no *.json in pass-notice/, the common case, the shim never starts Python."""
+    """With no *.json in pass-notice/, the common case, the shim never starts Python (FastPath
+    has the case of another session's notice)."""
 
     def test_no_notice_starts_no_python(self):
         ran = self.stub_python()
@@ -230,6 +231,91 @@ class NoPython(Base):
         with open(ran) as f:
             self.assertEqual(f.read(), "-I %s\n" % os.path.realpath(
                 os.path.join(HOOKS, "pass_notice.py")))
+
+
+def spaced(d):
+    """d as JSON with blanks around every colon and a newline after every comma."""
+    return json.dumps(d, separators=(",\n", " :\t "))
+
+
+def runs(ran):
+    """How many times the stub python3 ran."""
+    return len(read(ran).splitlines()) if os.path.exists(ran) else 0
+
+
+class FastPath(Base):
+    """The shim reads the payload's session id itself (Claude Code writes session_id first), so
+    a notice no event will claim (a `gone` after /clear or exit) costs other sessions no
+    Python. With no plain id found, Python decides."""
+
+    def setUp(self):
+        super().setUp()
+        self.real = dict(self.env)  # without the stub, to see the notice said
+        self.ran = self.stub_python()
+
+    def test_another_sessions_notice_starts_no_python_here(self):
+        self.write(notice(session_id=OTHER), sid=OTHER)
+        for event in ("UserPromptSubmit", "PostToolUse"):
+            for raw in (json.dumps(payload(event)), spaced(payload(event))):
+                with self.subTest(event=event, raw=raw[:30]):
+                    self.assertEqual(self.run_shim(raw), "")
+        self.assertEqual(runs(self.ran), 0)
+        self.assertEqual(self.files(), [OTHER + ".json"])
+
+    def test_this_sessions_notice_is_still_said(self):
+        self.write(notice(session_id=OTHER), sid=OTHER)
+        self.write(notice())
+        self.assertEqual(self.run_shim(payload()), "")
+        self.assertEqual(runs(self.ran), 1)  # the stub ran: the fast path let it through
+        self.assertEqual(self.out(payload(), env=self.real), said("UserPromptSubmit"))
+        self.assertEqual(self.files(), [OTHER + ".json"])
+
+    def test_blanks_around_the_colon_still_find_the_id(self):
+        self.write(notice(session_id=OTHER), sid=OTHER)
+        self.assertEqual(self.run_shim(spaced(payload("PostToolUse"))), "")
+        self.assertEqual(runs(self.ran), 0)
+        self.write(notice())
+        self.assertEqual(self.out(spaced(payload("PostToolUse")), env=self.real),
+                         said("PostToolUse"))
+
+    def test_a_later_session_id_in_the_payload_is_not_taken(self):
+        # A prompt that quotes one arrives escaped; a tool's own session_id key arrives as a
+        # real key. Either way the first, Claude Code's, is the one.
+        later = [payload(prompt='see "session_id":"%s" in the log' % OTHER),
+                 payload("PostToolUse", tool_name="TaskStop", tool_input={"session_id": OTHER})]
+        self.write(notice(session_id=OTHER), sid=OTHER)
+        for d in later:
+            self.assertEqual(self.run_shim(d), "")
+        self.assertEqual(runs(self.ran), 0)
+        for d in later:
+            self.write(notice())
+            self.assertEqual(self.out(d, env=self.real),
+                             said(d["hook_event_name"]))
+        self.assertEqual(self.files(), [OTHER + ".json"])
+
+    def test_with_no_plain_id_found_python_decides(self):
+        # Fail toward delivery: Python parses the JSON for real. A JSON escape in the key or the
+        # value hides the id from the shim but not from json.loads.
+        bs = chr(92)
+        key = json.dumps(payload()).replace('"session_id"', '"session' + bs + 'u005fid"', 1)
+        value = json.dumps(payload()).replace('"%s"' % SID, '"%su0035%s"' % (bs, SID[1:]), 1)
+        no_id = json.dumps({k: v for k, v in payload().items() if k != "session_id"})
+        self.write(notice(session_id=OTHER), sid=OTHER)
+        for raw in (key, value, no_id):
+            self.assertEqual(self.run_shim(raw), "")
+        self.assertEqual(runs(self.ran), 3)
+        for raw in (key, value):
+            with self.subTest(raw=raw[:30]):
+                self.write(notice())
+                self.assertEqual(self.out(raw, env=self.real), said("UserPromptSubmit"))
+        self.assertEqual(self.files(), [OTHER + ".json"])
+
+    def test_a_symlinked_notice_still_reaches_python_to_be_deleted(self):
+        # A dangling link fails `-e`; the shim must not leave it for the prune.
+        os.makedirs(self.dir)
+        os.symlink(os.path.join(self.tmp, "gone.json"), os.path.join(self.dir, SID + ".json"))
+        self.assertIsNone(self.out(payload(), env=self.real))
+        self.assertEqual(self.files(), [])
 
 
 class LeftForLater(Base):

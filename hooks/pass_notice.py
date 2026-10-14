@@ -8,7 +8,8 @@ turn ends. When it drops the pass instead, it writes $XDG_STATE_HOME/dotclaude/p
 
 hooks/pass-notice.sh runs this file with python3 -I on UserPromptSubmit (a typed prompt, an
 agent's hand-back or a task notice) and on a main-thread PostToolUse, passing the event on
-stdin, and only when pass-notice/ holds a *.json. The first such event of the session claims the
+stdin, and only when the session's notice is there (or the shim found no plain session id in
+the payload: this file parses it for real). The first such event of the session claims the
 notice by renaming it to <session>.json.<pid>.taken (a FileNotFoundError means another hook took
 it: say nothing), reads it, deletes it, and gives its text to the model as
 hookSpecificOutput.additionalContext. So each notice is said exactly once.
