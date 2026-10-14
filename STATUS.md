@@ -74,23 +74,21 @@ stored here).
   here. The config caps live lanes at 3, with locks `install` and `suite`.
   - Merged, installed from main and closed: `autopass-now` #90, `attach-tabs` #91, `pass-busy`
     #92, `narrow-excluded` Part 1 #93, the lead's `fix/json-depth` #94, `lane-close` #95,
-    `lane-addr` #98, `excluded-guard` #100 (narrow-excluded Part 2 plus G8's fix, 2026-10-14).
+    `lane-addr` #98, `excluded-guard` #100 (narrow-excluded Part 2 plus G8's fix, 2026-10-14),
+    `tab-bar` #96, #97, #99 and #101 (2026-10-14), `turn-glyph` #102 (2026-10-14).
     `gh pr view <n>` and the closed records under `.git/lanes/_closed/` hold the detail.
-  - `tab-bar`: PR 1 merged as #96, its review fixes and Shift+arrows as #97, the test fixes as
-    #99, PR 2 (drag between rows, custom rows, placements in the tab record) as #101
-    (2026-10-14, merged ahead of #100 by accident). #101's tmux side is live from main
-    (`setup-tmux.sh` from the main checkout); its `hooks/session-registry.sh` went live when
-    excluded-guard merged main (a464a8c), since the held install's links point into that
-    worktree: a lane's merge of main changes live files with no reinstall. The lane stays open (`Keep open:`) for #101's
-    live smoke with Hayden; a follow-up PR carries anything it finds and #101's backlog line.
-    Close it after that (Hayden's ask). Design: the research page
+  - `tab-bar`: Hayden smoke-tested #101 live on 2026-10-14, all 8 items on desktop and phone
+    ("all works"). Design: the research page
     https://claude.ai/artifact/E75uhqt2xskxUGQopLwvoA (private), `~/scratch/tab-bar/INVENTORY.md`
     and [[dotclaude-tab-bar]].
-  - `turn-glyph` (opened 2026-10-14): PLAN.md "Next: two workflow fixes", the glyph half, plus
-    owner-tagged waits for subagent dialogs (its `.lane/PLAN.md` amendment 4).
+  - `turn-glyph` #102: the tab goes green when a reply wants Hayden, and stays busy while counted
+    work runs. Tabs opened before the 2026-10-14 install keep their old startup hooks (no
+    PermissionRequest or SubagentStop wiring) until they restart.
   - `ask-owner` (opened 2026-10-14): PLAN.md "Next: two workflow fixes", the lead/lane half.
-  - **Merge order: `turn-glyph`, then `ask-owner` and any `tab-bar` follow-up by readiness.**
-    The lead installs only the next to merge.
+  - `guard-b` (opened 2026-10-14): excluded-guard group B, the design in the closed record
+    `excluded-guard-2026-10-14`'s `.lane/PLAN.md` "Part 2b". Overlaps `ask-owner` on
+    `skills/lanes/` and `docs/lanes.md`.
+  - **Merge order: `ask-owner`, then `guard-b`.** The lead installs only the next to merge.
   - The parked json-depth sweep (21 files, among them the delegation enforcement scripts) is on
     `fix/json-depth-sweep`, a local branch never pushed: keep it while the sweep is in the
     backlog. Shipping it first needs a check of how each enforcement site fails
@@ -105,11 +103,15 @@ stored here).
   - Once pushed, a lane merges `origin/main` into its branch, since force pushes are denied.
 
   Backlog:
-  - Excluded-guard group B (Hayden's split, 2026-10-14; design in the closed record's
-    `.lane/PLAN.md` "Part 2b"): a SessionStart check of the session's project and PATH (shown
-    once per finding change, fail open), `lane new` checking the new worktree and `lane done`
-    printing the Edit deny rule it orphans (Edit deny rules take no glob). Then the G8 open
-    probes (a) and (b) in the private findings file. Overlaps `ask-owner` on `skills/lanes/`.
+  - tmux 3.8 (Hayden's call 2026-10-14, "backlog it, close the lane"): test-build 3.8 in temp,
+    rerun the menu-clip repro and the tmux suites. If it fixes the clip, install at a quiet
+    moment (a server restart; claude-restore reopens the tabs) and drop the row-0 menu rule.
+    Until then, 3.7c's default menus that dotclaude doesn't own still clip under a top bar.
+  - `lane ls` and `lane done` read `lane.json`'s branch, never the worktree's checked-out one
+    (`board()` and `closable()` in `skills/lanes/scripts/lane`). A lane that switched branches
+    shows the old branch's PR and `rebase`, and `done` could pass while an unmerged branch is
+    checked out (it leaves that branch behind, not lost). Found by lane tab-bar, whose worktree
+    had moved to `feat/tab-bar-arrange`.
   - `lane init --model/--effort` repo defaults and `lane open --model/--effort` overrides,
     passed through to `claude` (today `lane open` hardcodes the argv).
 
@@ -121,7 +123,8 @@ stored here).
   into a lane, nudges the other lanes to merge main, and runs `lane done` unless the lane's Next
   starts with `Keep open:`. Never `--abandon`. One line to Hayden, or the failure. Lead STATUS
   commits ride the next lane PR: that lane applies `git diff origin/main chore/after-pr4 --
-  STATUS.md` as one commit just before ready. A lane installs (`lane lock install --
+  STATUS.md PLAN.md` as one commit just before ready (PLAN.md too: main's glyph code cites its
+  "Next: two workflow fixes", which only `chore/after-pr4` holds). A lane installs (`lane lock install --
   ./setup.sh` from its worktree, sandbox off) only when next in merge order, and its install
   holds until the lead's reinstall from main.
 - **Lanes, handoff-check and `/pass`** (Hayden's design, approved 2026-10-11; `PLAN.md`, behavior in
@@ -195,11 +198,11 @@ stored here).
 ## Notes for next session
 - **Next (lead, main checkout):** watch for "merged #N" from a lane, then run the post-merge
   chain (In flight) and `lane done` without asking, unless that lane's Next starts with
-  `Keep open:`. Live lanes: `turn-glyph` (next to merge), `ask-owner` (opened 2026-10-14, plans
-  design B's docs) and `tab-bar` (#101's live smoke with Hayden; it said keep open, and was told
-  at 430k context to /pass). Check `lane ls` first, since a merge Hayden made on GitHub and
-  mentioned to no session sends no message. The cap of 3 is full, so excluded-guard group B
-  (backlog) waits for a slot. The lead follows design B by hand until `ask-owner` merges:
+  `Keep open:`. Live lanes: `ask-owner` (next to merge; design B's docs) and `guard-b` (opened
+  2026-10-14). Check `lane ls` first, since a merge Hayden made on GitHub and mentioned to no
+  session sends no message (#102 showed merged there before its lane's message came). One slot
+  of 3 is free; the backlog's next pick is Hayden's. The lead follows design B by hand until
+  `ask-owner` merges:
   no chat about a lane's own asks; speak on cross-lane orders, decisions raised with the lead,
   failed checks and lead-only actions.
   - Design reviews the lead sent to lanes on 2026-10-14 (turn-glyph's set of wait owners and its
