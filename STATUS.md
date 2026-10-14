@@ -203,7 +203,8 @@ stored here).
   failed checks and lead-only actions.
   - Design reviews the lead sent to lanes on 2026-10-14 (turn-glyph's set of wait owners and its
     classifier probe, excluded-guard's G8) live in those lanes' records and plans, and G8 in the
-    private findings file.
+    private findings file. The lead's commits of 2026-10-14: `git log 6503f0e..HEAD -- STATUS.md
+    PLAN.md` on `chore/after-pr4`.
   - Message a lane at what `lane addr <id>` prints, resolved just before each send.
   - Local leftovers, never pushed: `fix/json-depth-sweep` (the parked sweep) and
     `fix/pass-last-recursion` (the same sweep under its first name, plus the writer's
