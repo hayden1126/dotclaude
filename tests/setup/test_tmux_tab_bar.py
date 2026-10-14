@@ -1055,6 +1055,10 @@ class Moves(unittest.TestCase):
     def line_of(self, nav, wid):
         return next(line for line, tabs in nav for w, _, _ in tabs if w == wid)
 
+    def lines(self, changes):
+        """on_line's lines(): ROW4's drawn lines with `changes` as its placements."""
+        return [[w for w, _, _ in tabs] for _, tabs in self.drawn(changes)[2]]
+
     def test_a_same_row_move_lands_on_the_drawn_line_aimed_at(self):
         groups, shared, nav = self.drawn()
         self.assertEqual([[w for w, _, _ in tabs] for _, tabs in nav],
@@ -1068,7 +1072,7 @@ class Moves(unittest.TestCase):
                 ("@5", "@3", False, False),     # another row: put() leaves no gap here
                 ("@1", "@5", True, True)):
             with self.subTest(src=src, dst=dst, after=after):
-                self.assertEqual(tb.on_line(groups, shared, nav, src, dst, after), want)
+                self.assertEqual(tb.on_line(groups, shared, self.lines, src, dst, after), want)
                 places = tb.put(groups, shared, src, dst, want)
                 self.assertEqual(self.line_of(self.drawn(places)[2], src),
                                  self.line_of(nav, dst))
@@ -1080,7 +1084,7 @@ class Moves(unittest.TestCase):
             with self.subTest(src=src, line=line):
                 dst, after = tb.row_end(nav, x, line)
                 places = tb.put(groups, shared, src, dst,
-                                tb.on_line(groups, shared, nav, src, dst, after))
+                                tb.on_line(groups, shared, self.lines, src, dst, after))
                 drawn = self.drawn(places)[2]
                 self.assertEqual([w for w, _, _ in drawn[line][1]][:2], want)
 
@@ -1088,16 +1092,50 @@ class Moves(unittest.TestCase):
         groups, shared, nav = self.drawn()
         dst = tb.climb([tabs for _, tabs in nav], "@1", "down")
         self.assertEqual(dst, "@3")
-        places = tb.put(groups, shared, "@1", dst, tb.on_line(groups, shared, nav, "@1", dst, False))
+        places = tb.put(groups, shared, "@1", dst, tb.on_line(groups, shared, self.lines, "@1", dst, False))
         self.assertEqual(self.line_of(self.drawn(places)[2], "@1"), 1)
         # Without the flip, the gap put() closes puts it back on line 0.
         self.assertEqual(self.line_of(self.drawn(tb.put(groups, shared, "@1", dst, False))[2],
                                       "@1"), 0)
 
-    def test_a_hidden_member_leaves_the_side_alone(self):
-        groups, shared, nav = self.drawn()
-        hidden = [(line, [t for t in tabs if t[0] != "@4"]) for line, tabs in nav]
+    def test_a_hidden_target_or_the_tab_itself_leaves_the_side_alone(self):
+        # dst in +N (not drawn): no line to aim at. src == dst (a gutter or tail drop that
+        # resolves to the dragged tab, review round 2): put() moves nothing, and nothing raises.
+        groups, shared, _ = self.drawn()
+
+        def hidden(changes):
+            return [[w for w in line if w != "@3"] for line in self.lines(changes)]
+
         self.assertFalse(tb.on_line(groups, shared, hidden, "@1", "@3", False))
+        for after in (False, True):
+            with self.subTest(after=after):
+                self.assertEqual(tb.on_line(groups, shared, self.lines, "@1", "@1", after), after)
+                self.assertEqual(tb.put(groups, shared, "@1", "@1", after), {})
+
+    ROW7 = {f"@{i}": tb.Tab("lane", "/r/.git", "repo", n) for i, n in zip(range(1, 7), "abcdef")}
+    ROW7["@7"] = tb.Tab("lead", "/k/.git", "kar", "lead")
+
+    def test_a_tab_from_another_row_lands_on_the_line_aimed_at(self):
+        # Review round 2: a row drawn 3 + 3 that gains a tab redraws 4 + 3, so @7 put before @4
+        # (Up from the row below, or a left-half drop on @4) landed at the end of line 0.
+        # drawn_lines lays the session out as layout() would, from its snapshot.
+        wids = [f"@{i}" for i in range(1, 8)]
+        state = tb.State(sessions={"$0": {"status": "3", "left": 8, "right": 0, "sig": ""}},
+                         widths={"$0": 60},
+                         windows={"$0": [(i, w, w == "@7") for i, w in enumerate(wids, 1)]},
+                         options={w: {"name": "", "group": "", "custom": "", "place": ""}
+                                  for w in wids},
+                         cwds={w: w for w in wids}, panes={})
+        with unittest.mock.patch.object(tb, "classify", self.ROW7.get):
+            lines = tb.drawn_lines(tb.Context(state, "$0", "@7", [], None))
+            self.assertEqual(lines({}), [["@1", "@2", "@3"], ["@4", "@5", "@6"], ["@7"]])
+            groups, shared, _ = tb.arrange(state, "$0", {})
+            self.assertEqual(lines(tb.put(groups, shared, "@7", "@4", False)),
+                             [["@1", "@2", "@3", "@7"], ["@4", "@5", "@6"]])
+            side = tb.on_line(groups, shared, lines, "@7", "@4", False)
+            self.assertTrue(side)
+            self.assertEqual(lines(tb.put(groups, shared, "@7", "@4", side)),
+                             [["@1", "@2", "@3", "@4"], ["@7", "@5", "@6"]])
 
     def test_a_drop_on_a_rows_gutter_or_tail_goes_first_or_last(self):
         rows = [(0, [("@2", 19, 32), ("@3", 52, 32)]), (2, [("@1", 19, 32)])]
