@@ -260,7 +260,11 @@ sandbox off.
 It fails closed for excluded heads: an error while checking a match refuses it, so does a match
 when `CLAUDE_PROJECT_DIR` is unset, and a missing, failing or slow shim falls back to the settings
 command's own check, which blocks a call whose first word (after leading whitespace) is one of
-the excluded heads that command lists. A call that matches nothing passes with no output. Denies go to `$XDG_STATE_HOME/dotclaude/excluded-guard.log`.
+the excluded heads that command lists. A settings file that won't parse makes every call a
+candidate, since it may hold a pattern; an empty one holds none, as Claude Code reads it (the
+sandbox can leave empty files behind where it mounted over a missing protected file). A call that
+matches nothing passes with no output. Denies and unreadable settings files go to
+`$XDG_STATE_HOME/dotclaude/excluded-guard.log`.
 
 Not covered:
 - a session rooted at an ancestor of a repo (at `$HOME`, say) can write that repo's config; the
