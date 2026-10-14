@@ -400,7 +400,7 @@ class Render(unittest.TestCase):
 
     def test_a_title_loses_its_hashes_then_claudes_prefix(self):
         e = tb.entry("@7", 7, 30)
-        strip = "s/^([^ [][^ []?[^ []? )?\\[[^]]*\\] (.*)$/\\2/"
+        strip = "s/^([^ [][^ []?[^ []? )?\\[[^]]*\\] (.+)$/\\2/"
         # Each substitution runs on the text cut to 64 cells first: s/// is quadratic.
         self.assertIn("#{s/[#]/♯/;" + strip + ":#{=/64:pane_title}}", e)
         self.assertIn("#{s/[#]/♯/:#{=/64:pane_current_command}}", e)
@@ -413,11 +413,12 @@ class Render(unittest.TestCase):
         for bad in ("{", "}", ",", ":", ";"):   # each would end the modifier or the #{...}
             self.assertNotIn(bad, strip)
         # The same pattern in Python's dialect ([ escaped in a set): what it keeps.
-        py = re.compile(r"^([^ \[][^ \[]?[^ \[]? )?\[[^]]*\] (.*)$")
+        py = re.compile(r"^([^ \[][^ \[]?[^ \[]? )?\[[^]]*\] (.+)$")
         for title, label in (("✳ [repo] label", "label"), ("⠂ [repo] label", "label"),
                              ("⣿ [repo] label", "label"), ("[repo] label", "label"),
                              ("no prefix here", "no prefix here"),
-                             ("✳ [a] [b] x", "[b] x"), ("long word [x] y", "long word [x] y")):
+                             ("✳ [a] [b] x", "[b] x"), ("long word [x] y", "long word [x] y"),
+                             ("✳ [repo] ", "✳ [repo] ")):       # nothing after it: unmatched
             with self.subTest(title=title):
                 self.assertEqual(py.sub(r"\2", title), label)
 
