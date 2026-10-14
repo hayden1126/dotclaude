@@ -92,7 +92,8 @@ ring_log() {
 # subagent's tool calls never clear the main session's green. @claude_turn holds the token of
 # the last main Stop, whose classifier may still paint. The helpers queue tmux commands in
 # glyph_cmds; glyph_flush runs them as one tmux call (and clears the queue). Tokens and ids
-# reach tmux formats only as [A-Za-z0-9_:/-]: the callers validate them.
+# reach tmux formats only as [A-Za-z0-9_/-]: the callers validate them. Never a colon: one
+# inside a #{s/...} pattern ends the modifier there, which mangles the set.
 glyph_cmds=()
 glyph_cmd() { [ ${#glyph_cmds[@]} -eq 0 ] || glyph_cmds+=(';'); glyph_cmds+=("$@"); }
 # Args: pane, token. Adding first removes, so a token is never in the set twice.
