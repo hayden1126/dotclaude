@@ -51,16 +51,20 @@ requests) is bookkeeping. The passing turn's own end is the first end marker pas
 turn ended when no start marker follows it. A start marker after it means the session went on,
 even when that later turn has ended too (a later end says nothing about the passing turn), and
 drops `resumed` at once, while waiting too. `waiting` (an open dialog) and any unknown status
-keep it waiting. It settles 1 s and re-reads both: a start marker after that end is `resumed`.
-Once the end is known the status alone is no resumption, since it flips among idle, shell and
-busy as delegated work starts and stops, with no turn (the spike saw `shell` to `busy`). So once
-the end is known the settle and the final re-check always look twice, 0.5 s apart, whatever the
-status did: a new turn sets the file busy about 150 ms before its user entry reaches the
-transcript, and one that begins while an agent keeps the status busy changes no
-statusUpdatedAt at all. That costs about 1 s a pass; a turn that begins within about 150 ms of
-the second look can still be missed, as one after it always can. With no end marker seen, the
-status must hold (not idle, or a new statusUpdatedAt: a queued prompt restarted the turn,
-`resumed`). It re-runs
+keep it waiting. It settles 1 s and re-reads both: a start marker after that end is `resumed`,
+and so is a status no longer at the prompt (`waiting`, or an unknown one). The status at the
+turn's end picks the rest of the rule. At `idle` (no background work), or with no end marker
+seen, nothing flips the status but a turn, so the status must hold: any new statusUpdatedAt is
+`resumed` (a queued prompt restarted the turn). At `shell` or `busy` the status alone is no
+resumption, since delegated work or a background shell flips it among idle, shell and busy with
+no turn (the spike saw `shell` to `busy`), so only the transcript decides. Once the end is known
+the settle and the final re-check look twice, 0.5 s apart, whatever the status did: a new turn
+sets the file busy about 150 ms before its user entry reaches the transcript, and one that
+begins while an agent keeps the status busy changes no statusUpdatedAt at all. At `shell` or
+`busy` they look again after each flip, up to 3 looks after the first, so a flipping status
+gives a new turn's start marker its time too. That costs about 1 s a pass (3 s at most); a
+turn that begins within about 150 ms of the last look can still be missed, as one after it
+always can. It re-runs
 handoff-check (a failure: work after the handoff made it stale, `stale`), drops `resumed` when
 the transcript gained a typed prompt after the call, or a prompt queued mid-turn (a queue
 enqueue, or a queued_command attachment from a person: Claude Code folds those into the running
@@ -76,9 +80,10 @@ ends it, and the log line ends `; ignored: artifact watch <url> (<id>)`.
 Right before acting it re-checks: the turn still over, by the
 settle's rule (`resumed`), the process alive with the same procStart, the pane
 still running that claude (pane_pid is the claude or its ancestor, pane_current_command is
-`claude`), the pane not in copy mode (`#{pane_in_mode}` 0), and Claude Code's input box present
-and empty (`busy` otherwise: typing would join a draft and a respawn would discard it; the dim
-ghost suggestion is not a draft). A pane tmux can't find, a missing session file,
+`claude`), tmux answering for the pane and the pane not in copy mode (`#{pane_in_mode}` 0), and
+Claude Code's input box present and empty (`busy` otherwise, each with its own cause and fix:
+typing would join a draft and a respawn would discard it; the dim ghost suggestion is not a
+draft). A pane tmux can't find, a missing session file,
 a dead or replaced process, or a session file naming another session or pane drops `gone` at
 once, while waiting too. Past --timeout (600 s; at most 3600) it gives up (`timeout`). Each drop
 is logged, then told to the session (below), then shown, and touches nothing else. A refusal of
@@ -103,8 +108,13 @@ before any tmux call (a dying tmux server can't delay or skip it), best-effort (
 changes no outcome). hooks/pass-notice.sh claims it once and injects `text` into the session's
 next turn. The text is the model's: the mode, the call's and the drop's UTC times, the cause,
 that no pass is pending (so it stops saying one is queued), the fix and "Tell Hayden in one
-line" (the quiet drops say less; `partial` hands over the resume prompt). Its free-text detail
-is one line of at most 300 characters. The call, once it holds the pending lock, deletes the
+line". The quiet drops say less: `resumed` names its reason (a typed or queued prompt, a new
+turn in the transcript, a status change, or a transcript it couldn't read, whose fix is to tell
+Hayden, since passing again drops the same way and an autopass would loop). `partial`, and a
+`failed` compact whose resume prompt was lost after /compact and its Enter went out (send-keys
+3 or 4: passing again would compact twice), hand over the resume prompt instead; pass.log and
+tmux still say `failed` for the latter. Its free-text detail is one line of at most 300
+characters. The call, once it holds the pending lock, deletes the
 session's old notice and prunes, once a day, notices older than 7 days and claimed ones
 (*.taken) older than a day; the prune's stamp, pass-notice.pruned, sits beside the dir, which so
 holds only notices. A call-time refusal or detach error prints to the caller and leaves none.
@@ -119,7 +129,8 @@ holds only notices. A call-time refusal or detach error prints to the caller and
            fails (`failed`) or anything after writing them raises
   compact  type `/compact <focus>` and Enter, wait 1 s, type the prompt and Enter (it queues
            behind the compact, spike S4); no respawn and no carry. A send-keys that fails
-           stops there and logs `failed`. Before the prompt it re-checks the pane (copy mode,
+           stops there and logs `failed` (past /compact, its notice hands over the prompt).
+           Before the prompt it re-checks the pane (tmux not answering, copy mode,
            a draft, no input box): on a problem the prompt is not typed but shown loud, as a
            drop is (the status line until a key press, and the toast), for Hayden to type,
            and written whole into pass.log, and the outcome is `partial` (/compact sent, not
@@ -246,6 +257,7 @@ SETTLE = 1.0       # secs idle must hold, so a queued prompt can restart the tur
 # reaches the transcript (lane pass-timeout's spike, 20:17:40), and a turn that begins while an
 # agent keeps the status busy changes no statusUpdatedAt at all.
 TRANSCRIPT_LAG = 0.5
+LAG_ROUNDS = 3     # the most looks a status that keeps flipping gets (look_again)
 # Session-file statuses that mean "at the prompt, turn over": `idle`, and `shell` when a
 # background shell is still running (live, 2026-10-12; a foreground Bash call reads `busy`).
 # `busy` counts too once the transcript shows the turn ended (turn_over): Claude Code 2.1.300
@@ -292,6 +304,7 @@ PANE_FIXES = {  # pane_problem's causes, and what to do about each
     "pane in copy mode": "Leave copy mode (q), then /pass",
     "unsent draft in the input box": "Send or clear the draft, then /pass",
     "no input box": "Close the dialog or view, then /pass",
+    "tmux didn't answer": "/pass again once the tab is back",
 }
 
 
@@ -605,19 +618,33 @@ def turn_over(plan: Plan) -> bool:
     return plan.first_end is not None and not began_after_end(plan)
 
 
-def went_on(plan: Plan, state: str, detail: str, session: dict, seen, end_seen: bool
-            ) -> str | None:
-    """Why the session went on since the waiter saw its turn end (statusUpdatedAt seen; end_seen,
-    whether the transcript showed that end then), or None. A start marker after the passing
-    turn's end always counts. Once the end is known, the status alone doesn't: it flips among
-    idle, shell and busy as delegated work starts and stops, with no turn (the spike saw shell
-    to busy), and look_again has given a new turn TRANSCRIPT_LAG to show its start marker. With
-    no end marker seen (the transcript can't show it), the status must be unchanged: still at
-    the prompt, with the same statusUpdatedAt."""
+NEW_TURN = "a new turn started after the call (a prompt, a task notice or an agent's message)"
+
+
+def status_cause(status: str) -> str:
+    """The notice's cause for a resumption the session file showed."""
+    if status in ("idle", "shell", "busy"):
+        return (f"the session's status changed after its turn ended (now {status}), so a new "
+                "turn can't be ruled out")
+    return (f"the session's status became {clipped(status)} (a dialog, or a change the waiter "
+            "can't read)")
+
+
+def went_on(plan: Plan, state: str, detail: str, session: dict, seen, strict: bool
+            ) -> tuple[str, str] | None:
+    """Why the session went on since the waiter saw its turn end, as (pass.log's detail, the
+    notice's cause), or None. A start marker after the passing turn's end always counts, and so
+    does a status no longer at the prompt (`waiting`, or an unknown one). strict (the status at
+    the turn's end was `idle`, or no end marker was seen) also counts any change of
+    statusUpdatedAt since seen: at the prompt with no background work nothing flips idle to busy
+    but a turn. Otherwise (`shell` or `busy` at the end) the status alone doesn't count: delegated
+    work or a background shell flips it among idle, shell and busy with no turn (the spike saw
+    shell to busy), and look_again has given a new turn TRANSCRIPT_LAG to show its start
+    marker."""
     if began_after_end(plan):
-        return "a new turn in the transcript"
-    if state != "idle" or (not end_seen and session.get("statusUpdatedAt") != seen):
-        return f"status {detail}"
+        return "a new turn in the transcript", NEW_TURN
+    if state != "idle" or (strict and session.get("statusUpdatedAt") != seen):
+        return f"status {detail}", status_cause(detail)
     return None
 
 
@@ -1197,27 +1224,37 @@ def observe(plan: Plan, procs=None) -> tuple[str, str, dict | None]:
     return ("idle" if idle else "busy"), str(status), session
 
 
-def look_again(plan: Plan, end_seen: bool, procs=None) -> tuple[str, str, dict | None]:
-    """observe, for the settle and the final re-check. Once the end is known (end_seen), it
-    always waits TRANSCRIPT_LAG and observes again (observe re-scans), whatever the status did:
-    a turn that began before the first look may not have reached the transcript yet, and while
-    an agent keeps the status busy, its start marker is the only sign of it. A start marker
-    that lands in that window is a resumption (went_on); a status flip with none, an agent
-    starting or stopping, is not. A turn that begins within about 150 ms of the second look can
-    still be missed, as one that begins after it always can."""
+def look_again(plan: Plan, rounds: int, procs=None) -> tuple[str, str, dict | None]:
+    """observe, for the settle and the final re-check, then up to `rounds` more looks, each
+    TRANSCRIPT_LAG after the last (observe re-scans): the first whatever the status did, the
+    rest only while the latest look's statusUpdatedAt differs from the look before. A turn that
+    began before a look may not have reached the transcript yet, and while an agent keeps the
+    status busy its start marker is the only sign of it; a status that keeps flipping (delegated
+    work starting and stopping) gets a look after each flip, up to the cap. rounds is 0 with no
+    end marker seen (the status rule alone), 1 when the turn ended at `idle` (a turn flips the
+    status at once) and LAG_ROUNDS when it ended at `shell` or `busy`. A turn that begins
+    within about 150 ms of the last look can still be missed, as one after it always can."""
     state, detail, session = observe(plan, procs)
-    if state != "gone" and end_seen:
+    for _ in range(rounds):
+        if state == "gone":
+            break
+        before = session.get("statusUpdatedAt")
         time.sleep(TRANSCRIPT_LAG)
         state, detail, session = observe(plan, procs)
+        if state == "gone" or session.get("statusUpdatedAt") == before:
+            break
     return state, detail, session
 
 
 def pane_problem(plan: Plan) -> str | None:
-    """Why the pane can't take keys or a respawn now, or None: copy mode (keys would scroll it,
-    not type), or text Hayden is composing in the input box (typing would join it, a respawn
-    would discard it), or no input box at all (a dialog or a full-screen view)."""
+    """Why the pane can't take keys or a respawn now, or None: tmux gave no answer, copy mode
+    (keys would scroll it, not type), or text Hayden is composing in the input box (typing would
+    join it, a respawn would discard it), or no input box at all (a dialog or a full-screen
+    view)."""
     p = tmux(plan, "display-message", "-p", "-t", plan.pane, "#{pane_in_mode}")
-    if p is None or p.returncode != 0 or p.stdout.strip() != "0":
+    if p is None or p.returncode != 0:
+        return "tmux didn't answer"
+    if p.stdout.strip() != "0":
         return "pane in copy mode"
     p = tmux(plan, "capture-pane", "-e", "-p", "-t", plan.pane)
     box = input_box(p.stdout) if p is not None and p.returncode == 0 else None
@@ -1293,16 +1330,16 @@ def notify(plan: Plan, text: str) -> None:
 
 
 def drop(plan: Plan, outcome: str, detail: str = "", shown: str | None = None,
-         cause: str | None = None, fix: str | None = None) -> str:
+         cause: str | None = None, fix: str | None = None, prompt: str = "") -> str:
     """Log the drop, leave the session its notice (tell; cause and fix override the notice's
-    defaults for the outcome), then show it: loud (notify) unless Hayden caused it (QUIET: a
-    cancel, a prompt after the call, his /clear or exit), which keeps the brief status-line
-    message. The notice comes before any tmux call, so a dying tmux server can't delay or skip
-    it."""
+    defaults for the outcome, and prompt hands over a resume prompt lost after /compact), then
+    show it: loud (notify) unless Hayden caused it (QUIET: a cancel, a prompt after the call,
+    his /clear or exit), which keeps the brief status-line message. The notice comes before any
+    tmux call, so a dying tmux server can't delay or skip it."""
     plan.settled = True
     dropped = time.time()
     log(plan.mode, outcome, plan.pane, detail)
-    tell(plan, outcome, dropped, detail, cause=cause, fix=fix)
+    tell(plan, outcome, dropped, detail, cause=cause, fix=fix, prompt=prompt)
     text = shown or DROPS[outcome]
     if outcome in QUIET:
         tmux(plan, "display-message", "-t", plan.pane, shown_literally(text))
@@ -1357,19 +1394,26 @@ def told(plan: Plan, outcome: str, dropped: float, detail: str = "", cause: str 
          fix: str | None = None, prompt: str = "") -> str:
     """What the notice tells the session (model-facing, one paragraph): which pass, queued when,
     and for a loud drop when and why it dropped (cause, by default CAUSES' with detail) and the
-    fix (FIXES'); that none is pending, so the session stops saying one is queued; for `partial`
-    the resume prompt it wasn't typed. detail is clipped; cause and fix come whole."""
+    fix (FIXES'); that none is pending, so the session stops saying one is queued. For `partial`,
+    and for a `failed` whose resume prompt was lost after /compact went out (prompt given: a
+    second pass would compact again), it hands over the resume prompt instead. A `resumed`
+    names its reason (cause) and, given one, its fix. detail is clipped; cause and fix come
+    whole."""
     head = f"[pass] The {plan.mode} pass you queued at {clock(plan.called)}Z"
+    take = ("No pass is pending now. Treat this as your resume prompt unless Hayden's message "
+            f"says otherwise: {prompt}")
     if outcome == "partial":
-        return (f"{head} sent /compact, but the resume prompt wasn't typed ({clipped(detail)}). No "
-                "pass is pending now. Treat this as your resume prompt unless Hayden's message "
-                f"says otherwise: {prompt}")
+        return (f"{head} sent /compact, but the resume prompt wasn't typed ({clipped(detail)}). "
+                f"{take}")
+    if outcome == "failed" and prompt:
+        return (f"{head} sent /compact, but the resume prompt wasn't typed or sent (tmux: "
+                f"{clipped(cause or detail)}). {take}")
     if outcome == "cancelled":
         return f"{head} was cancelled. No pass is pending now."
     if outcome == "resumed":
-        return (f"{head} was dropped: a prompt arrived after the call ({clipped(detail)}). No pass "
-                "is pending now; run the pass skill again once this work is done, if it still "
-                "applies.")
+        tail = (f"No pass is pending now. {fix}" if fix else "No pass is pending now; run the "
+                "pass skill again once this work is done, if it still applies.")
+        return f"{head} was dropped: {cause or clipped(detail)}. {tail}"
     if outcome == "gone":
         return (f"{head} was dropped: the pane or its claude changed ({clipped(detail)}). No pass "
                 "is pending now.")
@@ -1662,19 +1706,25 @@ def wait_and_act(plan: Plan, procs) -> str:
         if state == "gone":
             return drop(plan, "gone", detail)
         if began_after_end(plan):  # a turn after the passing turn's end, before it was seen
-            return drop(plan, "resumed", "a new turn in the transcript while waiting")
+            return drop(plan, "resumed", "a new turn in the transcript while waiting",
+                        cause=NEW_TURN)
         if state == "idle":
             break
         if time.monotonic() >= deadline:
             return drop(plan, "timeout", f"status {detail}")
         time.sleep(POLL)
-    seen, end_seen = session.get("statusUpdatedAt"), plan.first_end is not None
+    # The status at the turn's end picks the resumption rule (went_on) and how many looks the
+    # settle and the final re-check take (look_again): at `idle` only a turn flips it, so any
+    # change counts; at `shell` or `busy` background work flips it too, so only the transcript.
+    seen = session.get("statusUpdatedAt")
+    strict = plan.first_end is None or session.get("status") == "idle"
+    rounds = 0 if plan.first_end is None else 1 if strict else LAG_ROUNDS
     time.sleep(SETTLE)
-    state, detail, session = look_again(plan, end_seen)
+    state, detail, session = look_again(plan, rounds)
     if state == "gone":
         return drop(plan, "gone", detail)
-    if why := went_on(plan, state, detail, session, seen, end_seen):
-        return drop(plan, "resumed", f"{why} in the settle")
+    if why := went_on(plan, state, detail, session, seen, strict):
+        return drop(plan, "resumed", f"{why[0]} in the settle", cause=why[1])
     code, out = gate(plan.toplevel, plan.path)
     if code != 0:
         gaps = [ln.strip()[len("FAIL"):].strip() for ln in out.splitlines()
@@ -1682,24 +1732,33 @@ def wait_and_act(plan: Plan, procs) -> str:
         return drop(plan, "stale", "; ".join(gaps) or clipped(out))
     typed = typed_since(plan.transcript, plan.transcript_size)
     if typed is None:
-        return drop(plan, "resumed", "resumed: transcript unreadable")
+        # Passing again drops the same way, so the notice sends it to Hayden, not round again
+        # (an autopass tier would loop).
+        return drop(plan, "resumed", "resumed: transcript unreadable",
+                    cause="the transcript couldn't be read, so a prompt after the call can't be "
+                          "ruled out",
+                    fix="Tell Hayden; passing again drops the same way until the transcript can "
+                        "be read.")
     if typed:
-        return drop(plan, "resumed", "a typed or queued prompt after the call")
+        return drop(plan, "resumed", "a typed or queued prompt after the call",
+                    cause="a prompt was typed or queued after the call")
     approved = approved_now(plan, session)
     actions = plan.actions(approved)
     rec = stop_record(plan.session_id) if plan.mode == "plain" else None
     if plan.mode == "plain" and (problem := stop_problem(plan, rec)):
         return drop(plan, "busy", f"busy: {problem[0]}", problem[1],
                     cause=problem[1].removeprefix("pass refused: "))
-    state, detail, session = look_again(plan, end_seen, procs)
+    state, detail, session = look_again(plan, rounds, procs)
     if state == "gone":
         return drop(plan, "gone", detail)
-    if why := went_on(plan, state, detail, session, seen, end_seen):
-        return drop(plan, "resumed", f"{why} at the final re-check")
+    if why := went_on(plan, state, detail, session, seen, strict):
+        return drop(plan, "resumed", f"{why[0]} at the final re-check", cause=why[1])
     if why := pane_problem(plan):
         return drop(plan, "busy", f"busy: {why}", f"pass dropped: {why}. {PANE_FIXES[why]}",
                     cause=f"{why} at the final check",
-                    fix="Run the pass skill again once Hayden has cleared it.")
+                    fix="Run the pass skill again once " + (
+                        "the tab is back." if why == "tmux didn't answer"
+                        else "Hayden has cleared it."))
     begin_acting(plan)
     if plan.mode == "plain":
         carry = last = None
@@ -1737,8 +1796,12 @@ def wait_and_act(plan: Plan, procs) -> str:
                 return "partial"
         p = tmux(plan, *argv[1:])
         if p is None or p.returncode != 0:
-            return drop(plan, "failed", late(plan, f"send-keys {i + 1} of 4: "
-                                             + (p.stderr.strip() if p else "tmux didn't run")))
+            said = p.stderr.strip() if p else "tmux didn't run"
+            # Past /compact and its Enter (i >= 2) a second pass would compact again, so the
+            # notice hands over the resume prompt, as `partial` does; pass.log and tmux keep
+            # `failed`.
+            return drop(plan, "failed", late(plan, f"send-keys {i + 1} of 4: {said}"),
+                        **({"cause": said, "prompt": actions[2][-1]} if i >= 2 else {}))
     log(plan.mode, "compact", plan.pane, late(plan, "default mode" if approved else "plan mode"))
     return "compact"
 
