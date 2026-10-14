@@ -226,8 +226,8 @@ def check_units():
             d = os.path.join(tests, suite)
             if not os.path.isdir(d):
                 continue
-            p = subprocess.run([sys.executable, "-m", "unittest", "discover", "-s", d, "-t", d],
-                               cwd=REPO, env=env, capture_output=True, text=True, timeout=600)
+            p = subprocess.run([sys.executable, "-I", "-m", "unittest", "discover", "-s", d,
+                                "-t", d], cwd=REPO, env=env, capture_output=True, text=True, timeout=600)
             if p.returncode:
                 lines = p.stderr.splitlines()
                 failed = [ln for ln in lines if ln.startswith(("FAIL:", "ERROR:"))]
@@ -327,7 +327,7 @@ def run_live(log):
     timed_out = False
     with open(log, "w") as f:
         try:
-            rc = subprocess.run([sys.executable, "-u", run_py, "--runner", "claude"], cwd=REPO,
+            rc = subprocess.run([sys.executable, "-I", "-u", run_py, "--runner", "claude"], cwd=REPO,
                                 stdout=f, stderr=subprocess.STDOUT, timeout=4 * 3600).returncode
         except subprocess.TimeoutExpired:
             rc, timed_out = None, True
@@ -592,7 +592,7 @@ def evaluate(version, canary_st, audit_st, due_st, items, now=None, today=None,
 def launch_background(jobs):
     if os.environ.get(CHILD_ENV):
         return  # inside the quick tier's own test run: never start another
-    subprocess.Popen([sys.executable, LEDGER, "due", "--background", *jobs], cwd=dc.HERE,
+    subprocess.Popen([sys.executable, "-I", LEDGER, "due", "--background", *jobs], cwd=dc.HERE,
                      stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                      stderr=subprocess.DEVNULL, start_new_session=True, close_fds=True)
 
@@ -671,7 +671,7 @@ def background(jobs):
             age = _age(read_state("audit.json").get("ts"), time.time())
             if "audit" in jobs and age >= AUDIT_EVERY_HOURS * 3600:
                 hours = min(168.0, age / 3600 + 0.1)
-                p = subprocess.run([sys.executable, LEDGER, "audit", "--hours", f"{hours:.2f}",
+                p = subprocess.run([sys.executable, "-I", LEDGER, "audit", "--hours", f"{hours:.2f}",
                                     "--unshown"], capture_output=True, text=True, timeout=600)
                 if p.returncode not in (0, 1):  # 1 means it warned, and its stamp holds that
                     log_error(f"daily audit exited {p.returncode}: {p.stderr[-2000:]}")

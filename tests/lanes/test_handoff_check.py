@@ -30,8 +30,8 @@ def marked(marker, text=GOOD):
 
 
 class Check(LanesRepo):
-    def check(self, cwd=None, **env):
-        p = subprocess.run([sys.executable, HANDOFF_CHECK], cwd=cwd or self.main,
+    def check(self, cwd=None, *args, **env):
+        p = subprocess.run([sys.executable, HANDOFF_CHECK, *args], cwd=cwd or self.main,
                            env=dict(self.env, **env), capture_output=True, text=True, timeout=60)
         self.assertIn(p.returncode, (0, 1), p.stderr)
         return p.returncode, p.stdout
@@ -329,6 +329,43 @@ class Lane(Check):
         self.write(self.record("chart-fix"), self.body)
         os.utime(self.record("chart-fix"), (past, past))
         self.assertGap(self.check(cwd=self.path), "during this session")
+
+    def test_closing_judges_freshness_by_head_alone(self):
+        # After /pass, the idle new session started after the handoff: the plain check fails
+        # the record that `lane done` must accept.
+        self.finish()
+        time.sleep(1.05)
+        self.hook("lane-identity.sh", {"session_id": "sess-0002", "cwd": self.path,
+                                       "source": "startup", "hook_event_name": "SessionStart"})
+        self.assertGap(self.check(self.path), "during this session")
+        code, out = self.check(self.path, "--closing")
+        self.assertPasses((code, out))
+        self.assertIn("handoff-check --closing: chart-fix", out)
+        # HEAD still counts: a commit after the record fails it.
+        past = time.time() - 3600
+        os.utime(self.record("chart-fix"), (past, past))
+        self.commit("chart.txt", "axis\n", cwd=self.path)
+        self.assertGap(self.check(self.path, "--closing"), "older than HEAD")
+
+    def test_closing_skips_approval(self):
+        old = TODAY - datetime.timedelta(days=1)
+        self.body = self.body.replace("then run it.", f"then run it (approved by Hayden {old}).")
+        self.finish()
+        self.assertGap(self.check(self.path), "predates this session")
+        self.assertPasses(self.check(self.path, "--closing"))
+
+    def test_closing_still_wants_next_a_clean_tree_and_claims(self):
+        self.finish()
+        self.assertPasses(self.check(self.path, "--closing"))
+        self.write(os.path.join(self.path, "scratch.txt"), "x")
+        self.assertGap(self.check(self.path, "--closing"), "uncommitted and not named")
+        os.remove(os.path.join(self.path, "scratch.txt"))
+        self.write(self.record("chart-fix"), self.read(self.record("chart-fix")).replace(
+            "- Write the axis test for #42, then run it.\n", ""))
+        self.assertGap(self.check(self.path, "--closing"), "## Next")
+        self.body = self.body.replace("#42", "the request")
+        self.finish()
+        self.assertGap(self.check(self.path, "--closing"), "claims not named in the record: #42")
 
 
 if __name__ == "__main__":
