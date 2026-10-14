@@ -91,10 +91,15 @@ stored here).
     into lanes, sandbox-off Python runs `-I`). Its first live `lane done` ended the lane's
     `claude` (session 8e31f81a) and 9 of its MCP children, each named with its pid, and left
     every other window alone.
-  - Live: `tab-bar` (opened 2026-10-13, below; PR 1 is draft #96, its screenshots approved by
-    Hayden) and `lane-addr` (opened 2026-10-13 from its
-    backlog entry below, whose text is now its Brief). **Merge order: 1 `tab-bar`, 2
-    `lane-addr`.** The lead installs only the next to merge.
+  - `tab-bar` PR 1 merged as #96 (2026-10-14) and is installed from main (main shows
+    `status 2`). It merged before its fresh review and live smoke, so both still run, with
+    Hayden's phone tap test, and anything found rides PR 2. The lane stays open for PR 2 (drag,
+    custom rows). Hayden asked the lead to close it when tab-bar is done (taken as: after PR 2
+    merges).
+  - Live: `tab-bar` (PR 2), `lane-addr` (opened 2026-10-13 from its backlog entry below, whose
+    text is now its Brief) and `excluded-guard` (narrow-excluded Part 2, opened 2026-10-14).
+    **Merge order by readiness: `lane-addr`, `excluded-guard`, `tab-bar` PR 2.** The lead
+    installs only the next to merge.
   - `lane new` with `|`, `<`, `>` or `;` inside its quoted `--goal` ran sandboxed and failed
     ("Read-only file system") even though `lane new *` is in `excludedCommands`. It left a
     stray branch, and nothing registered. The likely cause is that the matcher sees those
@@ -237,14 +242,13 @@ stored here).
   `claude -p` repro and the 2.1.285 boundary; the karaoke session's has the incident.
 
 ## Notes for next session
-- **Next (lead, main checkout): take `tab-bar`, then `lane-addr`, to merge** ("In flight").
-  As of 2026-10-14: #95 merged, installed from main (hold released), and lane-close closed.
-  tab-bar has merged main (623923d) and waits on Hayden's approval of its round-3 screenshots,
-  then installs and reports ready. lane-addr was told to merge main (#95 touched its files). A
-  slot is free (cap 3, 2 live): propose narrow-excluded Part 2 to Hayden. Start with `lane ls`
-  and `lane asks`. A lane is handed back only once `handoff-check -C <lane path>` passes and the
-  board shows no `handoff?` flag. After each merge, follow the install step in "In flight",
-  then propose `lane done <id>` (it now ends the lane's own session itself).
+- **Next (lead, main checkout): run `lane-addr`, `excluded-guard` and `tab-bar` PR 2 to merge
+  by readiness** ("In flight"). As of 2026-10-14: #96 merged and installed; lane-addr has merged
+  main 623923d and its `lane addr lead` reached the lead live; excluded-guard was just opened
+  (plan mode). Close `tab-bar` with `lane done` after its PR 2 merges (Hayden's ask). Start with
+  `lane ls` and `lane asks`. A lane is handed back only once `handoff-check -C <lane path>`
+  passes and the board shows no `handoff?` flag. After each merge, follow the install step in
+  "In flight", then propose `lane done <id>` (it ends the lane's own session itself).
   **Message a lane at its messaging socket**: `uds:/run/user/1000/cc-socks/<pid>.sock`, the
   `messagingSocketPath` in `~/.claude/sessions/<pid>.json` of the session whose cwd is in the
   lane. Resolve it fresh before each send, since a pass makes a new pid. A ListAgents name
