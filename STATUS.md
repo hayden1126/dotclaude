@@ -103,9 +103,11 @@ stored here).
     Hayden's phone tap test, and anything found rides PR 2. The lane stays open for PR 2 (drag,
     custom rows). Hayden asked the lead to close it when tab-bar is done (taken as: after PR 2
     merges).
-  - Live: `tab-bar` (PR 2), `lane-addr` (draft #98; opened 2026-10-13 from its backlog entry below, whose
-    text is now its Brief) and `excluded-guard` (narrow-excluded Part 2, opened 2026-10-14).
-    **Merge order: `lane-addr` (#98), tab-bar's `fix/tab-bar-tests`, then `excluded-guard` and `tab-bar` PR 2 by readiness.** The lead
+  - `lane-addr` merged as #98 (2026-10-14: `lane addr`, titles `repo · label` that keep the main
+    project, and a bar that strips both title forms). Installed from main, which released its hold.
+    #98 merged before the lane's own reinstall and live check, so the lead did them from main.
+  - Live: `tab-bar` (PR 2 and the `fix/tab-bar-tests` PR) and `excluded-guard` (narrow-excluded Part 2, opened 2026-10-14).
+    **Merge order: tab-bar's `fix/tab-bar-tests`, then `excluded-guard` and `tab-bar` PR 2 by readiness.** The lead
     installs only the next to merge.
   - `lane new` with `|`, `<`, `>` or `;` inside its quoted `--goal` ran sandboxed and failed
     ("Read-only file system") even though `lane new *` is in `excludedCommands`. It left a

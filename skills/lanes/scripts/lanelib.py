@@ -478,7 +478,7 @@ class Untrusted(ValueError):
 def record_problem(lane, lane_id: str) -> str | None:
     """Why a lane.json can't be trusted, or None. Sandboxed Bash can write every lane.json (the
     sandboxed `claim` and `note` do), and sandbox-off code (the hooks, `ls`, `open`, `done`,
-    `new`, `adopt`) acts on its fields: the id becomes a path, the branch a git argument, the
+    `new`, `adopt`, `addr`) acts on its fields: the id becomes a path, the branch a git argument, the
     path a cwd. So each field is checked at load, and a record that fails is never used."""
     if not isinstance(lane, dict):
         return "not a JSON object"
@@ -936,6 +936,32 @@ def proc_start_of(session: dict) -> int | None:
     if isinstance(v, str) and re.fullmatch(r"[0-9]{1,20}", v):
         return int(v)
     return v if type(v) is int else None
+
+
+def session_running(session: dict, proc: str = PROC) -> bool:
+    """Whether a session file's process still runs: its pid names the same process (procStart is
+    /proc/<pid>/stat field 22, so a reused pid fails) and it hasn't exited. A file without a
+    procStart can't be told from a reused pid, so it counts as gone."""
+    pid, start = session.get("pid"), proc_start_of(session)
+    if type(pid) is not int or pid <= 0 or start is None:
+        return False
+    st = proc_stat(pid, proc)
+    return st is not None and st[3] == start and st[1] not in EXITED
+
+
+def socket_of(session: dict) -> str | None:
+    """A session file's messagingSocketPath when it names a socket this user owns: absolute,
+    printable (it is printed as an address, so no control characters or line breaks), and still
+    on disk. A stale file's socket is usually gone, but a crash can leave one behind:
+    session_running decides liveness."""
+    path = session.get("messagingSocketPath")
+    if not isinstance(path, str) or not os.path.isabs(path) or not path.isprintable():
+        return None
+    try:
+        st = os.lstat(path)
+    except OSError:
+        return None
+    return path if stat.S_ISSOCK(st.st_mode) and st.st_uid == os.getuid() else None
 
 
 def transcript_cwd(path: str) -> str | None:

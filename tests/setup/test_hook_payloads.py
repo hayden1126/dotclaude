@@ -33,7 +33,8 @@ class Workspace(unittest.TestCase):
         os.makedirs(os.path.join(self.cwd, ".git"))
         self.transcript = os.path.join(self.tmp.name, "cfg", "projects", "slug", "sid.jsonl")
         open(self.transcript, "w").close()
-        self.env = {**os.environ, "HOME": self.tmp.name}
+        self.env = {k: v for k, v in os.environ.items() if k != "CLAUDE_PROJECT_DIR"}
+        self.env["HOME"] = self.tmp.name
 
 
 class SessionTitle(Workspace):
@@ -43,10 +44,47 @@ class SessionTitle(Workspace):
         return json.loads(out)["hookSpecificOutput"]["sessionTitle"] if out else None
 
     def test_a_prompt_seeds_the_title(self):
-        self.assertEqual(self.title(prompt="fix the parser\nmore"), "[proj] fix the parser")
+        self.assertEqual(self.title(prompt="fix the parser\nmore"), "proj · fix the parser")
+
+    def worktree(self, *parts):
+        """A linked worktree at parts under the temp dir: a .git file, as git writes one."""
+        path = os.path.join(self.tmp.name, *parts)
+        os.makedirs(os.path.join(path, "sub"))
+        with open(os.path.join(path, ".git"), "w") as f:
+            f.write("gitdir: " + os.path.join(self.cwd, ".git", "worktrees", parts[-1]) + "\n")
+        return path
+
+    def test_the_launch_dir_names_the_repo_after_a_bash_cd(self):
+        # A Bash cd moves the payload cwd (and $PWD) but not CLAUDE_PROJECT_DIR: the lead that
+        # cd'd into an agent worktree keeps its own repo in the title.
+        agent = self.worktree("proj", ".claude", "worktrees", "agent-a1")
+        self.env["CLAUDE_PROJECT_DIR"] = self.cwd
+        self.assertEqual(self.title(prompt="fix it", cwd=os.path.join(agent, "sub")),
+                         "proj · fix it")
+
+    def test_a_lane_shows_its_worktree_name(self):
+        # Launched in its worktree, even with its cwd moved into the main checkout.
+        lane = self.worktree("proj-lanes", "lane-x")
+        self.env["CLAUDE_PROJECT_DIR"] = lane
+        self.assertEqual(self.title(prompt="fix it", cwd=self.cwd),
+                         "lane-x · fix it")
+
+    def test_with_no_usable_launch_dir_the_cwd_names_the_repo(self):
+        agent = self.worktree("proj", ".claude", "worktrees", "agent-a1")
+        for project in (None, "", os.path.join(self.tmp.name, "gone")):
+            with self.subTest(project=project):
+                self.env.pop("CLAUDE_PROJECT_DIR", None)
+                if project is not None:
+                    self.env["CLAUDE_PROJECT_DIR"] = project
+                self.assertEqual(self.title(prompt="fix it", cwd=agent), "agent-a1 · fix it")
+
+    def test_a_long_summary_is_clipped_to_the_title_budget(self):
+        title = self.title(prompt="word " * 40)
+        self.assertEqual(len(title), 64)
+        self.assertTrue(title.startswith("proj · word") and title.endswith("\u2026"), title)
 
     def test_injected_content_leaves_the_title_alone(self):
-        # No output at all: falling through to a bare "[proj]" would overwrite the title the
+        # No output at all: falling through to a bare "proj" would overwrite the title the
         # user's own prompt set.
         for prompt in ("<task-notification><status>killed</status></task-notification>",
                        '<agent-message from="a1">[Subagent hand-back] done</agent-message>',
@@ -58,7 +96,7 @@ class SessionTitle(Workspace):
         self.assertIsNone(self.title(prompt="fix the parser", agent_id="a1"))
 
     def test_a_huge_prompt_still_titles(self):
-        self.assertEqual(self.title(prompt="fix the parser " + BIG)[:22], "[proj] fix the parser ")
+        self.assertEqual(self.title(prompt="fix the parser " + BIG)[:22], "proj · fix the parser ")
 
 
 class SessionSummary(Workspace):
