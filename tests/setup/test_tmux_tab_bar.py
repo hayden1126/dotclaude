@@ -1184,6 +1184,28 @@ class Conf(unittest.TestCase):
         return [line.strip().rstrip("\\").rstrip() for line in block.splitlines()
                 if self.CLAUDE_ITEM.match(line)]
 
+    # The commands the confs start a line with (names and aliases). A line starting with any
+    # other word is prose that lost its #, and tmux refuses the whole file on it.
+    COMMANDS = {"bind", "bind-key", "unbind", "unbind-key", "set", "set-option", "setw",
+                "set-window-option", "set-hook", "if", "if-shell", "run", "run-shell",
+                "display-menu", "menu", "display-popup", "popup", "display", "display-message",
+                "choose-tree", "switch-client", "switchc", "select-pane", "selectp",
+                "select-window", "selectw", "send-keys", "send", "copy-mode",
+                "command-prompt", "confirm-before", "source-file", "source", "new-window",
+                "neww", "split-window", "splitw", "resize-pane", "resizep", "}"}
+
+    def test_every_line_of_each_conf_is_a_comment_or_a_command(self):
+        # The real-tmux tests source claude.conf, but they can't run in the sandbox.
+        for path in (CONF, os.path.join(REPO, "tmux", "base.conf")):
+            cont = False
+            with open(path) as f:
+                for n, line in enumerate(f.read().splitlines(), 1):
+                    s = line.strip()
+                    if not cont and s and not s.startswith("#"):
+                        with self.subTest(conf=os.path.basename(path), line=n):
+                            self.assertIn(s.split()[0], self.COMMANDS, line)
+                    cont = line.endswith("\\") and not s.startswith("#")
+
     def test_the_tap_menu_has_the_right_click_menus_claude_items(self):
         right = self.items("bind -n MouseDown3Status")
         tap = self.items("bind -n MouseUp1Status")

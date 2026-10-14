@@ -67,7 +67,8 @@ path = os.path.join(reg, sid + ".json")
 
 def locked():
     """The records lock (shared with tmux-tab-bar, whose record update compares and replaces
-    under it), as a held fd; None when it cant be opened or had within 2 s: go ahead without."""
+    under it), as a held fd; None when it cannot be opened or is not free within 2 s: go ahead
+    without."""
     try:
         fd = os.open(os.path.join(reg, ".records.lock"),
                      os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
