@@ -554,6 +554,78 @@ def judge(heads, cwd, env, settings):
         check_rule3(head, cwd, project)
 
 
+# --- Scan ----------------------------------------------------------------------------------------
+
+SCAN_DEPTH = 4
+
+
+def repos_under(root, depth=SCAN_DEPTH):
+    """Dirs holding a .git entry, `root` and `depth` levels below it. Hidden dirs, node_modules
+    and symlinks are not walked: no session is rooted there, and a link can loop."""
+    found = []
+
+    def walk(d, left):
+        if os.path.lexists(os.path.join(d, ".git")):
+            found.append(d)
+        if left == 0:
+            return
+        try:
+            names = sorted(os.listdir(d))
+        except OSError:
+            return
+        for name in names:
+            p = os.path.join(d, name)
+            if name.startswith(".") or name == "node_modules" or os.path.islink(p) \
+                    or not os.path.isdir(p):
+                continue
+            walk(p, left - 1)
+
+    walk(os.path.abspath(root), depth)
+    return found
+
+
+def scan(roots, env):
+    """What judge() would refuse for an excluded call from each repo's root: rule 2 once per
+    excluded head, rule 1 per repo. Only machine-wide settings load, as for any project.
+    Returns [(where, Refusal)] and the settings read errors."""
+    env = {k: v for k, v in env.items() if k != "CLAUDE_PROJECT_DIR"}
+    settings, errors = load_settings(env)
+    heads = sorted({first_word(normalize(p)) for p in settings["excludedCommands"]} - {""})
+    found = []
+    m = Machine(env, settings, env.get("HOME") or os.getcwd())
+    for head in heads:
+        try:
+            check_rule2(m, head, env.get("PATH", ""))
+        except Refusal as r:
+            found.append(("PATH", r))
+    for root in roots:
+        for repo in repos_under(root):
+            try:
+                check_rule1(Machine(env, settings, repo), env, repo, repo)
+            except Refusal as r:
+                found.append((repo, r))
+    return found, errors
+
+
+def run_scan(roots):
+    """Print each refusal once per path, then the denyWrite lines that would clear them.
+    Exits 1 when anything would be refused."""
+    found, errors = scan(roots or [os.path.expanduser("~")], os.environ)
+    for e in errors:
+        print(f"settings not read: {e}")
+    first = {}
+    for where, r in found:
+        first.setdefault(r.path, (where, r))
+    for where, r in first.values():
+        print(f"{where}: excluded-guard ({r.rule}): {r.reason}")
+    fix = [p for p, (_, r) in first.items() if DENY_HINT in r.reason and os.path.isabs(p)]
+    if fix:
+        print("denyWrite lines for ~/.claude/settings.machine.json, then ./setup.sh:")
+        for p in fix:
+            print(f"  {json.dumps(p)},")
+    return 1 if first or errors else 0
+
+
 def deny(reason):
     print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse",
                                              "permissionDecision": "deny",
@@ -594,4 +666,6 @@ def main():
 
 
 if __name__ == "__main__":
+    if sys.argv[1:2] == ["--scan"]:
+        sys.exit(run_scan(sys.argv[2:]))
     main()

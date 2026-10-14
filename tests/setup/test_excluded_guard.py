@@ -584,6 +584,48 @@ class Matching(Guard):
                 self.denied("gh pr view", "rule2", self.wbin)
 
 
+class Scan(Guard):
+    """`--scan`: what the guard would refuse from each repo's root, before a call hits it."""
+
+    def scan(self, *roots):
+        p = subprocess.run(["python3", "-I", MODULE, "--scan", *roots], capture_output=True,
+                           text=True, env=self.env, timeout=60)
+        return p.returncode, p.stdout
+
+    def test_a_clean_machine_scans_clean(self):
+        self.assertEqual(self.scan(self.tmp), (0, ""))
+
+    def test_an_in_repo_hooks_path_is_listed_with_its_denywrite_line(self):
+        hooks = os.path.dirname(self.write(os.path.join(self.proj, ".githooks", "pre-push"),
+                                           MARKER, 0o755))
+        self.git("config", "core.hooksPath", ".githooks", cwd=self.proj)
+        code, out = self.scan(self.tmp)
+        self.assertEqual(code, 1, out)
+        self.assertIn(f"{self.proj}: excluded-guard (rule1)", out)
+        self.assertIn(f'  "{hooks}",', out)
+        # A relative hooksPath resolves in each worktree, so the lane's own dir is listed too.
+        lane_hooks = os.path.join(self.lane, ".githooks")
+        self.assertIn(f'  "{lane_hooks}",', out)
+        self.protect(hooks)
+        self.protect(lane_hooks)
+        self.assertEqual(self.scan(self.tmp), (0, ""))
+
+    def test_a_writable_path_dir_is_listed_once(self):
+        self.env["PATH"] = f"{self.wbin}:/usr/bin"
+        code, out = self.scan(self.tmp)
+        self.assertEqual(code, 1, out)
+        self.assertIn("PATH: excluded-guard (rule2)", out)
+        self.assertEqual(out.count(f'  "{self.wbin}",'), 1, out)
+
+    def test_hidden_dirs_and_node_modules_are_not_walked(self):
+        for d in (".hidden", "node_modules"):
+            repo = os.path.join(self.tmp, d, "r")
+            self.git("init", "-q", repo, cwd=self.tmp)
+            os.makedirs(os.path.join(repo, "h"))
+            self.git("config", "core.hooksPath", "h", cwd=repo)
+        self.assertEqual(self.scan(self.tmp), (0, ""))
+
+
 class FailsClosed(Guard):
     def test_an_unparsable_payload_falls_back_to_the_head_word(self):
         for command, deny in (("git push", True), ("  FOO=1 gh pr view", True),

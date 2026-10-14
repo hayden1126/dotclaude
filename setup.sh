@@ -372,6 +372,11 @@ python3 -I "$REPO_DIR/install-state.py" prune "$REPO_DIR" \
 # so name each one that changed since the last install: those sessions need /pass to see it.
 python3 -I "$REPO_DIR/install-state.py" plugins \
   || warn "the plugin change check failed (see above)"
+# The excluded-command guard refuses an excluded call that would act on something a sandboxed
+# session can write. Name each repo under ~ and each PATH dir it would refuse now (a new tool's
+# bin dir, a repo whose install step points core.hooksPath into it), with the denyWrite lines.
+python3 -I "$REPO_DIR/hooks/excluded_guard.py" --scan \
+  || warn "the excluded-command guard would refuse the calls above: add the denyWrite lines to settings.machine.json and rerun setup"
 
 # ---------------------------------------------------------------------------
 # 7. Final checklist
@@ -420,7 +425,9 @@ cat <<'EOF'
      need python3 and fail open; memory-git.sh needs git and never blocks.
      The excluded-command guard (hooks/excluded-guard.sh) needs python3 and
      FAILS CLOSED for excluded commands: without it, git push, gh, lane,
-     claude and the other excluded heads are refused.
+     claude and the other excluded heads are refused. Setup ends with its
+     scan (hooks/excluded_guard.py --scan): rerun it after adding a PATH dir
+     or cloning a repo with in-repo git hooks.
      The lane hooks (hooks/lane-identity.sh, hooks/lane-guard.sh) need
      python3 >= 3.11 (tomllib) and fail open; see docs/lanes.md.
 

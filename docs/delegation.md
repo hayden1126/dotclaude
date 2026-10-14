@@ -270,6 +270,14 @@ sandbox can leave empty files behind where it mounted over a missing protected f
 matches nothing passes with no output. Denies and unreadable settings files go to
 `$XDG_STATE_HOME/dotclaude/excluded-guard.log`.
 
+`python3 -I hooks/excluded_guard.py --scan [ROOT...]` finds a refusal before a call hits it: it
+runs rule 2 for each excluded head and rule 1 from the root of each repo under each root (`~` by
+default, four levels down, skipping hidden dirs, `node_modules` and symlinks), with the
+machine-wide settings only. It prints each refusal once per path, then the `denyWrite` lines that
+clear them, and exits 1 if anything would be refused. `setup.sh` runs it last and warns. A
+relative `core.hooksPath` resolves in each worktree, so a repo with lanes needs an entry per
+worktree.
+
 Not covered:
 - a session rooted at an ancestor of a repo (at `$HOME`, say) can write that repo's config; the
   guard trusts Claude Code's protection, which covers only the session's own repo;
