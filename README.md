@@ -361,8 +361,9 @@ need nothing extra.
   Haiku (`wants_input.py`) whether the reply wants you: a question, an approval, a step only you
   can do. A yes paints it waiting, usually within a second or two. A failed call paints it
   waiting too, so a broken check shows as green rather than as silence. The paint lands only if
-  nothing newer happened in the session since that Stop, and each verdict is a
-  `stop input=<yes|no|error> ... painted=<1|0>` line in `ring.log`. Each check is one small
+  the main session did nothing newer since that Stop, and each verdict is a
+  `stop input=<yes|no|error> ... painted=<1|0|->` line in `ring.log` (`-` when nothing was
+  painted). Each check is one small
   Haiku call on your subscription quota. A reply that leaves you a step for later ("run X when
   you're ready") often reads as a report and stays blank. A new, resumed or cleared session
   starts blank, and `claude -p` runs never set it. A
@@ -372,7 +373,8 @@ need nothing extra.
   `$XDG_STATE_HOME/dotclaude/tabs`, which `session-pane.sh` reads. State is per window, so two
   sessions split into one window share a glyph.
   Run `./setup-tmux.sh` once for the tmux side. A machine whose `settings.machine.json` still wires
-  `tmux-state.sh` should drop those entries before `./setup.sh`, or they fire twice.
+  `tmux-state.sh` should drop those entries before `./setup.sh`, or they fire twice (an old
+  Stop entry does nothing now: `idle` acts only on SessionStart).
 - **The tab bar groups tabs by project**: the status bar has up to 5 rows. A repo with lanes gets
   its own row, headed by its name (`dotclaude▸`): the lead checkout's tab (`lead` plus its title),
   then each lane (its id, cut to 12 cells, plus its title), then its other worktrees. Every other

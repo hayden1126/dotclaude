@@ -4,6 +4,8 @@
 #   busy  <- UserPromptSubmit, PreToolUse, PostToolUse, SubagentStop   (work is happening)
 #   wait  <- PermissionRequest, Notification permission_prompt|elicitation_dialog (a dialog)
 #   idle  <- SessionStart startup|resume|clear                        (a fresh or cleared chat)
+# idle acts on SessionStart only: a machine overlay or a session started before the install may
+# still wire it on Stop, where it would empty the wait set under an open subagent dialog.
 # A Stop's state is hooks/stop-ring.sh's (busy while counted background work runs, wait when
 # hooks/wants_input.py reads the reply as wanting the person), since it has the task facts.
 #
@@ -11,11 +13,15 @@
 # each owner's own later event removes it, so the tab shows wait until every open dialog is
 # answered. PermissionRequest fires 25-35 ms after PreToolUse when a dialog is shown (never for
 # a call the auto-mode classifier approves) and names the subagent whose dialog it is; the
-# Notification 6 s later never names one, so it adds the main token only when nothing holds the
-# wait, except an elicitation dialog (no PermissionRequest), which always adds it. A subagent's
-# own tool calls and its SubagentStop remove its token: approve fires its PostToolUse, deny
-# ends it. The main session's events remove the main token and the Stop's turn token, so a
-# classifier still running for that Stop never paints over newer work.
+# Notification 6 s later never names one (nor does an elicitation's, which has no
+# PermissionRequest), so it adds the unowned token "note": a permission prompt's only when
+# nothing holds the wait, an elicitation dialog's always. A subagent's own tool calls and its
+# SubagentStop remove its token: approve fires its PostToolUse, deny ends it. The main
+# session's events remove the main token and the Stop's turn token, so a classifier still
+# running for that Stop never paints over newer work. Anyone's event removes "note": an
+# unowned dialog's answer can't be told apart, so its green lasts until the next activity.
+# A subagent's event leaves an idle tab idle (a teammate or dream working after a Stop that
+# counted none, the ring's rule); otherwise, with the set empty, it shows busy.
 #
 # session-pane.sh finds the window: a tab's own pane, a background session's mapped pane, or none
 # (outside tmux, an unmapped background session, a `claude -p` run).
@@ -38,7 +44,7 @@ agent=""
 try: d = json.load(sys.stdin)
 except Exception: d = {}
 a = d.get("agent_id") if isinstance(d, dict) else None
-if isinstance(a, str) and re.fullmatch(r"[A-Za-z0-9_-]{1,64}", a): print(a)
+if isinstance(a, str) and re.fullmatch(r"[A-Za-z0-9_-]{1,128}", a): print(a)
 elif isinstance(d, dict) and (a or d.get("agent_type")): print("-")' 2>/dev/null)
 event="" kind=""
 re='"hook_event_name" *: *"([A-Za-z]+)"'
@@ -48,18 +54,22 @@ re='"notification_type" *: *"([a-z_]+)"'
 
 case "$mode" in
   busy)
+    glyph_drop "$pane" note
     if [ -z "$agent" ]; then
       glyph_cmd set-option -uw -t "$pane" @claude_turn
       glyph_drop "$pane" main
-    elif [ "$agent" != - ]; then
-      glyph_drop "$pane" "agent-$agent"
+      glyph_state "$pane" busy
+    else
+      [ "$agent" = - ] || glyph_drop "$pane" "agent-$agent"
+      glyph_state "$pane" "#{?#{==:#{@claude_state},idle},idle,busy}"
     fi
-    glyph_state "$pane" busy
     ;;
   wait)
-    if [ "$event" = Notification ] && [ "$kind" != elicitation_dialog ]; then
+    if [ "$event" = Notification ] && [ "$kind" = elicitation_dialog ]; then
+      glyph_add "$pane" note
+    elif [ "$event" = Notification ]; then
       glyph_cmd set-option -wF -t "$pane" @claude_wait_by \
-        "#{?#{@claude_wait_by},#{@claude_wait_by},!main!}"
+        "#{?#{@claude_wait_by},#{@claude_wait_by},!note!}"
     elif [ -n "$agent" ] && [ "$agent" != - ]; then
       glyph_add "$pane" "agent-$agent"
     else
@@ -68,7 +78,7 @@ case "$mode" in
     glyph_cmd set-option -w -t "$pane" @claude_state wait
     ;;
   idle)
-    [ -z "$agent" ] || exit 0
+    [ -z "$agent" ] && [ "$event" = SessionStart ] || exit 0
     glyph_cmd set-option -uw -t "$pane" @claude_turn
     glyph_cmd set-option -uw -t "$pane" @claude_wait_by
     glyph_cmd set-option -w -t "$pane" @claude_state idle

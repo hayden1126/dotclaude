@@ -1,7 +1,7 @@
 """stop-ring's event reader: the facts the shim needs, and the session's stop record.
 
 hooks/stop-ring.sh runs this file with python3 -I, passing the Stop event on stdin, and reads one
-line back: "<spawned> <busy> <task labels or -> <running task ids or -> <prompt_id or ->
+line back: "<spawned> <busy> <task labels or -> <running task ids, - or *> <prompt_id or ->
 <transcript size or -> <transcript path>". The shim's header says what each means; with this
 file missing or failing, the shim reads nothing and rings by its defaults. Tests import merge_replies() and prune() directly
 (tests/setup/test_tmux_hooks.py). Stdlib only; keep the source ASCII.
@@ -29,6 +29,9 @@ import time
 import unicodedata
 
 WAITS = {"subagent", "shell", "workflow", "cloud session"}
+# Task kinds that run no agent but their own (a subagent is its own agent_id; a cloud session
+# runs remotely, where its dialogs fire no hook here).
+HOSTS_NO_AGENTS = {"subagent", "shell", "monitor", "artifact watch", "cloud session"}
 ID = re.compile(r"[A-Za-z0-9_-]{1,128}")   # a task or tool-use id we search the transcript for
 SID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
 PROMPT_ID = re.compile(r"[A-Za-z0-9-]{1,64}")   # it goes into a tmux format: plain names only
@@ -370,10 +373,14 @@ def main() -> None:
     labels = ",".join(t.replace(" ", "_") for t in types if isinstance(t, str) and t.strip())
     # A subagent task's id is its agent_id (a task notice names it as <task-id>): the glyph keeps
     # an agent's open dialog green across this Stop only while its task still runs. Every running
-    # task's id counts, not only a subagent's: dropping a live agent's token would blank its
-    # dialog, while keeping a stale one lasts only until the next main Stop.
-    agents = ",".join(t["id"] for t in raw if isinstance(t, dict)
-                      and isinstance(t.get("id"), str) and ID.fullmatch(t["id"]))
+    # task's id counts, and while a task that may host agents of other ids runs (a workflow's,
+    # a teammate's, a kind not known here) "*" keeps them all: dropping a live agent's token
+    # blanks its open dialog, while keeping a stale one lasts only until a later main Stop.
+    if any(k not in HOSTS_NO_AGENTS for k in tasks):
+        agents = "*"
+    else:
+        agents = ",".join(t["id"] for t in raw if isinstance(t, dict)
+                          and isinstance(t.get("id"), str) and ID.fullmatch(t["id"]))
     prompt = d.get("prompt_id")
     prompt = prompt if isinstance(prompt, str) and PROMPT_ID.fullmatch(prompt) else "-"
     path = d.get("transcript_path")

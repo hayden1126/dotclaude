@@ -224,8 +224,9 @@ class Hooks(unittest.TestCase):
 
     def test_a_mapped_background_session_writes_its_tab(self):
         self.map_tabs("server 42\nother-id %3 @3\nabcdef12-0000 %9 @9\n")
-        for state in ("busy", "wait", "idle"):
-            self.run_hook("tmux-state.sh", BG, args=(state,))
+        for state, event in (("busy", "PostToolUse"), ("wait", "PermissionRequest"),
+                             ("idle", "SessionStart")):
+            self.run_hook("tmux-state.sh", BG, {"hook_event_name": event}, args=(state,))
             self.assertEqual(self.window("%9")["@claude_state"], state)
         self.assertEqual(self.window("%3"), {})
 
@@ -365,19 +366,32 @@ class Hooks(unittest.TestCase):
         self.tool()
         self.assertEqual(self.glyph(), ("busy", ""))
 
-    def test_the_6s_notice_adds_main_only_when_nothing_holds_the_wait(self):
+    def test_the_6s_notice_adds_an_unowned_wait_only_when_nothing_holds_one(self):
         self.dialog("a1")
         self.notice()  # that dialog's own notice: it names no agent
         self.assertEqual(self.glyph(), ("wait", "!agent-a1!"))
         self.tool("a1")
         self.notice()  # a dialog whose PermissionRequest was lost still turns green
-        self.assertEqual(self.glyph(), ("wait", "!main!"))
+        self.assertEqual(self.glyph(), ("wait", "!note!"))
+        # Its owner is unknown, so anyone's next event ends it: an agent's answer to a dialog
+        # whose notice raced it (about 6 s) leaves no green behind it until the main session.
+        self.tool("b2")
+        self.assertEqual(self.glyph(), ("busy", ""))
+        self.notice()
         self.tool()
+        self.assertEqual(self.glyph(), ("busy", ""))
+
+    def test_an_elicitation_is_an_unowned_wait_its_tools_answer_ends(self):
+        # An MCP form fires no PermissionRequest, and neither its Notification nor the
+        # Elicitation hook names an agent (2.1.299 builds both without the tool context).
         self.dialog("a1")
-        self.notice("elicitation_dialog")  # an MCP form fires no PermissionRequest
-        self.assertEqual(self.glyph(), ("wait", "!agent-a1!!main!"))
-        self.tool("a1")
-        self.assertEqual(self.glyph(), ("wait", "!main!"))
+        self.notice("elicitation_dialog")
+        self.assertEqual(self.glyph(), ("wait", "!agent-a1!!note!"))
+        self.tool("b2")  # a subagent's form: its tool call ends once the form is answered
+        self.assertEqual(self.glyph(), ("wait", "!agent-a1!"))
+        self.notice("elicitation_dialog")
+        self.stop()  # a main Stop ends it too
+        self.assertEqual(self.glyph(), ("idle", ""))
 
     def test_an_agent_type_without_an_id_never_clears_a_wait(self):
         self.dialog("a1")
@@ -396,6 +410,50 @@ class Hooks(unittest.TestCase):
         self.seed(claude_state="wait", claude_wait_by="!main!!agent-a1!", claude_turn="p/1")
         self.event("SessionStart", "idle", source="clear")
         self.assertEqual(self.window(), {"@claude_state": "idle"})
+
+    def test_idle_on_any_event_but_session_start_writes_nothing(self):
+        # A machine overlay, or a session started before the install, may still wire
+        # `tmux-state.sh idle` on Stop: it must not empty the set under an open dialog.
+        self.seed(claude_state="wait", claude_wait_by="!agent-a1!", claude_turn="p/1")
+        for payload in ({"hook_event_name": "Stop"}, {}):
+            with self.subTest(payload=payload):
+                self.run_hook("tmux-state.sh", TAB, payload, args=("idle",))
+                self.assertEqual(self.window_writes(), [])
+
+    def test_an_old_stop_wiring_beside_stop_ring_keeps_an_open_agent_dialog(self):
+        for first in ("old", "new"):
+            with self.subTest(first=first):
+                self.dialog("a1")
+                tasks = [{"id": "a1", "type": "subagent", "status": "running"}]
+                if first == "old":
+                    self.event("Stop", "idle")
+                self.stop(background_tasks=tasks)
+                if first == "new":
+                    self.event("Stop", "idle")
+                self.assertEqual(self.glyph(), ("wait", "!agent-a1!"))
+                self.notice()  # its 6 s notice adds nothing while a1 holds the wait
+                self.tool("a1")
+                self.assertEqual(self.glyph(), ("busy", ""))
+
+    def test_a_subagents_event_leaves_an_idle_tab_idle(self):
+        # The Stop counted no work (a teammate or a dream runs on): its tool calls and its end
+        # don't turn the tab busy, the ring's rule.
+        self.stop(background_tasks=[{"id": "t1", "type": "teammate", "status": "running"}])
+        self.assertEqual(self.glyph(), ("idle", ""))
+        self.tool("t1")
+        self.event("SubagentStop", "busy", "t1")
+        self.run_hook("tmux-state.sh", TAB, {"hook_event_name": "PostToolUse",
+                                             "agent_type": "dream"}, args=("busy",))
+        self.assertEqual(self.glyph(), ("idle", ""))
+        self.dialog("t1")  # its dialog still turns it green, and its answer ends that
+        self.tool("t1")
+        self.assertEqual(self.glyph(), ("busy", ""))
+
+    def test_a_long_agent_id_is_still_its_own(self):
+        self.dialog("a" * 128)
+        self.assertEqual(self.glyph(), ("wait", "!agent-%s!" % ("a" * 128)))
+        self.tool("a" * 128)
+        self.assertEqual(self.glyph(), ("busy", ""))
 
     def test_a_stop_is_busy_while_counted_work_runs_else_idle(self):
         # The ring's rule (stop_ring.WAITS): every Stop wrote idle before, a running subagent's
@@ -457,6 +515,49 @@ class Hooks(unittest.TestCase):
         self.transcript(self.DEQUEUE)
         self.assertIn("input=yes resumed=1 ms=40 painted=-", self.classified())
         self.assertEqual(self.glyph(), ("busy", ""))
+
+    def test_a_resumed_turn_shows_busy_at_the_settle_not_after_haiku(self):
+        self.env["STUB_INPUT_DELAY"] = "3"
+        path = self.transcript({"type": "assistant", "message": {"content": "done"}})
+        self.stop("yes - 3000", wait=False, transcript_path=path)
+        self.transcript(self.DEQUEUE)
+        deadline = time.time() + 2.5  # the settle is 0.3 s; Haiku answers at 3 s
+        while self.glyph()[0] != "busy" and time.time() < deadline:
+            time.sleep(0.05)
+        self.assertEqual(self.glyph(), ("busy", ""))
+        self.assertEqual(self.input_log(), [])  # Haiku hasn't answered yet
+        self.assertIn("input=yes resumed=1 ms=3000 painted=-", self.classified())
+        self.assertEqual(self.glyph(), ("busy", ""))
+
+    def test_a_dequeue_wins_over_any_verdict_and_never_over_a_newer_event(self):
+        for answer in ("no - 4", "error http-500 4"):
+            with self.subTest(answer=answer):
+                path = self.transcript({"type": "assistant", "message": {"content": "x"}})
+                self.stop(answer, wait=False, transcript_path=path)
+                self.transcript(self.DEQUEUE)
+                self.assertIn(" resumed=1 ms=4 painted=-", self.classified(len(self.input_log()) + 1))
+                self.assertEqual(self.glyph(), ("busy", ""))
+        # A main event after the Stop took the window: the dequeue's busy paint is refused.
+        self.env["STUB_INPUT_DELAY"] = "0.5"
+        path = self.transcript({"type": "assistant", "message": {"content": "y"}})
+        count = len(self.input_log())
+        self.stop("yes - 5", wait=False, transcript_path=path)
+        self.event("PreToolUse", "busy", tool_name="AskUserQuestion")
+        self.dialog()
+        self.transcript(self.DEQUEUE)
+        self.assertIn("resumed=1", self.classified(count + 1))
+        self.assertEqual(self.glyph(), ("wait", "!main!"))
+
+    def test_a_task_that_may_host_other_agents_keeps_every_dialog(self):
+        # A workflow's agents (and a teammate's, a dream's, a kind not known here) have ids no
+        # task lists: the Stop keeps every agent's token while one runs.
+        for kind in ("workflow", "teammate", "dream", "something new"):
+            with self.subTest(kind=kind):
+                self.dialog("w9")
+                self.stop(background_tasks=[{"id": "t1", "type": kind, "status": "running"}])
+                self.assertEqual(self.glyph()[1], "!agent-w9!")
+                self.stop()  # nothing runs: the stale token goes
+                self.assertEqual(self.glyph(), ("idle", ""))
 
     def test_a_stop_keeps_a_running_subagents_dialog_green(self):
         # Probe 4b: a main Stop landed 0.1 s after a background subagent's dialog opened.
@@ -1173,7 +1274,7 @@ class RealTmux(unittest.TestCase):
         self.assertEqual(self.glyph(), ("wait", "!agent-a1!"))
         self.hook("tmux-state.sh", "wait", hook_event_name="Notification",
                   notification_type="elicitation_dialog")
-        self.assertEqual(self.glyph(), ("wait", "!agent-a1!!main!"))
+        self.assertEqual(self.glyph(), ("wait", "!agent-a1!!note!"))
         self.hook("tmux-state.sh", "busy", hook_event_name="UserPromptSubmit")
         self.assertEqual(self.glyph(), ("wait", "!agent-a1!"))
         self.hook("tmux-state.sh", "busy", "a1", hook_event_name="SubagentStop")
@@ -1192,6 +1293,28 @@ class RealTmux(unittest.TestCase):
         n = self.stop("yes - 900", delay="1")
         self.hook("tmux-state.sh", "busy", hook_event_name="UserPromptSubmit")
         self.assertIn("painted=0", self.settled(n))
+        self.assertEqual(self.glyph(), ("busy", ""))
+
+    def test_the_other_formulas_on_real_tmux(self):
+        # The notice's add-when-empty, an agent event's idle-stays-idle, a main dialog, and the
+        # dequeue's nested busy paint.
+        self.hook("tmux-state.sh", "wait", hook_event_name="Notification",
+                  notification_type="permission_prompt")
+        self.assertEqual(self.glyph(), ("wait", "!note!"))
+        self.hook("tmux-state.sh", "busy", "a1", hook_event_name="PostToolUse")
+        self.assertEqual(self.glyph(), ("busy", ""))
+        self.hook("tmux-state.sh", "idle", hook_event_name="SessionStart")
+        self.hook("tmux-state.sh", "busy", "a1", hook_event_name="PostToolUse")
+        self.assertEqual(self.glyph(), ("idle", ""))
+        self.hook("tmux-state.sh", "wait", hook_event_name="PermissionRequest")
+        self.assertEqual(self.glyph(), ("wait", "!main!"))
+        path = os.path.join(self.tmp, "transcript.jsonl")
+        with open(path, "w") as f:
+            f.write('{"type":"assistant"}\n')
+        n = self.stop("yes - 5", delay="1", transcript_path=path)
+        with open(path, "a") as f:
+            f.write(json.dumps(Hooks.DEQUEUE) + "\n")
+        self.assertIn("resumed=1", self.settled(n))
         self.assertEqual(self.glyph(), ("busy", ""))
 
 

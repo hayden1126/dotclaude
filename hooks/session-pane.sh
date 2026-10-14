@@ -86,10 +86,11 @@ ring_log() {
 
 # The tab glyph's wait set (PLAN.md "Next: two workflow fixes"). A window's @claude_state is
 # wait while its @claude_wait_by holds a token: "!main!" (a dialog of the main session, or the
-# reply hooks/wants_input.py read as wanting the person) or "!agent-<id>!" (a subagent's
-# dialog). Each hook adds or removes only its own token, then derives the state from what is
-# left, so two dialogs open at once keep the tab green until both are answered, and a
-# subagent's tool calls never clear the main session's green. @claude_turn holds the token of
+# reply hooks/wants_input.py read as wanting the person), "!agent-<id>!" (a subagent's
+# dialog), or "!note!" (a dialog whose owner no hook names: anyone's next event ends it). Each
+# hook adds or removes only its own token, then derives the state from what is left, so two
+# dialogs open at once keep the tab green until both are answered, and a subagent's tool
+# calls never clear the main session's green. @claude_turn holds the token of
 # the last main Stop, whose classifier may still paint. The helpers queue tmux commands in
 # glyph_cmds; glyph_flush runs them as one tmux call (and clears the queue). Tokens and ids
 # reach tmux formats only as [A-Za-z0-9_/-]: the callers validate them. Never a colon: one

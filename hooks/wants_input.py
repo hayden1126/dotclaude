@@ -7,11 +7,11 @@ nor NO), and ms is the wall time. yes and error both paint the tab green (redund
 silence); no leaves it. An empty last_assistant_message is "no": nothing to read.
 
 The model reads the last TAIL characters of the payload's last_assistant_message, since asks
-come at the end. The prompt is v4 of the replay in PLAN.md "Next: two workflow fixes" (223
-real turn-ending replies, 47% YES): waiting on a reviewer, a subagent or a build is NO; a step
-only Hayden can do, or a next step that waits on his go, is YES. Two later wordings that tried
-to catch "run X when you're ready" asks each broke three other asks, so those stay a known
-miss. Stdlib only; keep the source ASCII.
+come at the end. The prompt is the fourth wording tried on a replay of 223 real turn-ending
+replies (47% YES; the design is PLAN.md "Next: two workflow fixes"): waiting on a reviewer, a
+subagent or a build is NO; a step only Hayden can do, or a next step that waits on his go, is
+YES. Two later wordings that tried to catch "run X when you're ready" asks each broke three
+other asks, so those stay a known miss. Stdlib only; keep the source ASCII.
 """
 import json
 import os

@@ -2,6 +2,7 @@
 "does this reply want Hayden?"). urlopen is mocked: nothing here reaches the network, and HOME
 points at an empty dir so the real credentials file is never read (stdlib only)."""
 import importlib.util
+import http.client
 import io
 import json
 import os
@@ -116,6 +117,8 @@ class Haiku(Base):
             (socket.timeout("timed out"), "timeout"),
             (urllib.error.URLError(ConnectionRefusedError()), "network"),
             (ConnectionResetError(), "network"),
+            (http.client.IncompleteRead(b"{"), "network"),   # the body cut short
+            (http.client.RemoteDisconnected("closed"), "network"),
             (Response(b"{not json"), "bad-response"),
             (Response(b'{"content": "x"}'), "bad-response"),
             (reply("", stop_reason="refusal"), "refusal"),
@@ -150,8 +153,8 @@ class WantsInput(Base):
                 self.assertEqual(wants_input.classify(self.event("Shall I push?")), want)
 
     def test_the_request_is_the_replay_tested_one(self):
-        # PLAN.md "Next: two workflow fixes": v4 of the replay ran on Haiku 4.5 at temperature
-        # 0 with the reply's last 2,000 characters; Haiku 5.5 answers 429 to this token.
+        # The replay of 223 real replies ran the shipped prompt on Haiku 4.5 at temperature 0
+        # with the reply's last 2,000 characters; Haiku 5.5 answers 429 to this token.
         self.token()
         self.urlopen(reply("NO"))
         wants_input.classify(self.event("x" * 2500 + "Add this line to settings.json."))

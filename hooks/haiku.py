@@ -11,6 +11,7 @@ with a short reason for the caller's log, and callers fail open. claude-haiku-5-
 to this token on every call (probed 2026-10-14, 21 of 21); claude-haiku-4-5 works. Stdlib
 only; keep the source ASCII.
 """
+import http.client
 import json
 import os
 import socket
@@ -79,7 +80,7 @@ def ask(system: str, user: str, *, model: str, max_tokens: int, timeout: float, 
     except urllib.error.URLError as e:
         timed_out = isinstance(e.reason, (socket.timeout, TimeoutError))
         raise HaikuError("timeout" if timed_out else "network") from None
-    except OSError:
+    except (OSError, http.client.HTTPException):   # a cut or garbled response too
         raise HaikuError("network") from None
     except ValueError:
         raise HaikuError("bad-response") from None

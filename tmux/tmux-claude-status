@@ -33,6 +33,10 @@
 # vanished mapping clears its window or, if an interactive session shares it, sets that
 # session's status. A status read just before a turn ends can still be filled stale until the
 # next hook (the cold fill always had this ~0.3 s race).
+# Each clear or fill also resets the hooks' glyph companions (hooks/session-pane.sh): it unsets
+# @claude_turn, so a reply check still running for an earlier Stop can't paint over it, and
+# sets @claude_wait_by to the unowned "note" token for a filled wait (whoever acts next ends
+# it) or unsets it, so no earlier owner's token outlives the handover.
 #
 # `claude agents --json` (0.2 s of CPU) runs only to fill, or when the claude panes, the
 # daemon's pty hosts or the tmux server changed, or every 60 s while hosts run (a new background
@@ -52,6 +56,19 @@ sig_file="$run_dir/.tmux-claude-status.$(id -u).sig"
 fail_file="$run_dir/.tmux-claude-status.$(id -u).fail"
 tabs="${XDG_STATE_HOME:-$HOME/.local/state}/dotclaude/tabs"
 age() { echo $(( $(date +%s) - $(stat -c %Y "$1" 2>/dev/null || echo 0) )); }
+# Write a window's state with its glyph companions, in one tmux call. Args: window, state (none
+# to clear).
+glyph_write() {
+  local by=(set-option -uw -t "$1" @claude_wait_by)
+  [ "${2:-}" = wait ] && by=(set-option -w -t "$1" @claude_wait_by '!note!')
+  if [ -n "${2:-}" ]; then
+    tmux set-option -uw -t "$1" @claude_turn \; "${by[@]}" \; \
+      set-option -w -t "$1" @claude_state "$2" 2>/dev/null
+  else
+    tmux set-option -uw -t "$1" @claude_turn \; "${by[@]}" \; \
+      set-option -uw -t "$1" @claude_state 2>/dev/null
+  fi
+}
 if [ -f "$stamp" ] && [ "$(age "$stamp")" -lt 3 ]; then
   cat "$cache" 2>/dev/null   # repeat the last delegation token between real runs
   exit 0
@@ -106,7 +123,7 @@ for wid in "${!win_state[@]}"; do
   if [ -n "${win_has_claude[$wid]:-}" ]; then
     [ -z "${win_state[$wid]}" ] && need_fill+=("$wid")                              # claude running, no state -> cold start
   else
-    [ -n "${win_state[$wid]}" ] && tmux set-option -uw -t "$wid" @claude_state 2>/dev/null  # no claude -> clear stale
+    [ -n "${win_state[$wid]}" ] && glyph_write "$wid"   # no claude -> clear stale
   fi
 done
 
@@ -265,8 +282,8 @@ rm -f "$fail_file"
 printf '%s' "$sig" > "$sig_file"
 while read -r op wid state; do
   case "$op" in
-    set) tmux set-option -w -t "$wid" @claude_state "$state" 2>/dev/null ;;
-    unset) tmux set-option -uw -t "$wid" @claude_state 2>/dev/null ;;
+    set) glyph_write "$wid" "$state" ;;
+    unset) glyph_write "$wid" ;;
   esac
 done <<< "$out"
 exit 0
