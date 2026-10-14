@@ -25,6 +25,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import threading
 import time
 import types
 import unittest
@@ -276,6 +277,22 @@ class Base(LanesRepo):
                 self.say(*entries)
                 if stop is not None:
                     self.write_stop(stop)
+            return status
+        return read
+
+    def lagged(self, status, *entries, after=0.2):
+        """A scripted read whose status comes at once and whose transcript entries land `after`
+        secs later (once), as a new turn's user entry trails the session file's busy (the spike,
+        20:17:40: about 150 ms)."""
+        timers = []
+
+        def read():
+            if not timers:
+                timer = threading.Timer(after, self.say, entries)
+                timers.append(timer)
+                timer.start()
+                self.addCleanup(timer.join)
+                self.addCleanup(timer.cancel)   # cleanups run last first: cancel, then join
             return status
         return read
 
@@ -1377,6 +1394,36 @@ class TurnEnd(Handed):
         code, out = self.compacts("busy", self.then("busy", END), "shell", "busy")
         self.assertEqual(code, 0, out)
         self.assertIn("mode=compact outcome=compact", self.log())
+
+    def test_a_status_flip_whose_start_marker_lands_late_drops_resumed(self):
+        # The spike (20:17:40): a new turn sets the session file busy about 150 ms before its
+        # user entry reaches the transcript. A flip once the end is known waits TRANSCRIPT_LAG
+        # for that start marker before it is let through.
+        start = STARTS["a task notice"]
+        for where, between in (("in the settle", ()), ("at the final re-check", ("shell",))):
+            with self.subTest(where=where):
+                self.reset()
+                code, out = self.compacts("busy", self.then("shell", END), *between,
+                                          self.lagged("busy", start))
+                self.assertEqual(code, 1, out)
+                self.assertDropped("resumed", "pass dropped")
+                self.assertIn("outcome=resumed a new turn in the transcript " + where,
+                              self.log().splitlines()[-1])
+
+    def test_a_whole_turn_after_the_passing_turns_end_drops_resumed(self):
+        # The end, then a notice turn's start and its own end, all before the first look: the
+        # latest end has no start after it, but the passing turn's own end (the first) does.
+        turn = (END, STARTS["a task notice"], STARTS["an assistant entry"], END)
+        for mode in ((), ("--compact",)):
+            for status in ("busy", "idle"):
+                with self.subTest(mode=mode, status=status):
+                    self.reset()
+                    self.script = ["busy", self.then(status, *turn)]
+                    code, out = self.run_pass(*mode, "--foreground", "--timeout", "5")
+                    self.assertEqual(code, 1, out)
+                    self.assertDropped("resumed", "pass dropped")
+                    self.assertIn("outcome=resumed a new turn in the transcript",
+                                  self.log().splitlines()[-1])
 
     def test_bookkeeping_after_the_end_does_not_count(self):
         code, out = self.compacts("busy", self.then("busy", END, *AFTER_END),
