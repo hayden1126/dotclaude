@@ -32,10 +32,26 @@ whether it blocks a plain pass) for /pass step 2, and changes nothing: no lock, 
 It exits 1 with no plain $CLAUDE_CODE_SESSION_ID, else 0, a missing or unreadable record
 included (an unreadable one says a plain pass would refuse).
 
-The waiter polls that session file every 0.2 s until its status is `idle` (or `shell`, at the
-prompt with a background shell running) with a statusUpdatedAt
-later than the call: this session's own turn has ended (the file says `busy` for the whole turn,
-tool calls included, and stays busy when a hook blocks the Stop). It settles 1 s and re-reads it
+The waiter polls that session file every 0.2 s until this session's own turn has ended: its
+status is `idle` (or `shell`, at the prompt with a background shell running) with a
+statusUpdatedAt later than the call (the file says `busy` for the whole turn, tool calls
+included, and stays busy when a hook blocks the Stop), or it says `busy` and the transcript past
+the call shows the turn ended. Claude Code (2.1.300) says `busy` at the prompt too while an
+agent, a teammate or a workflow runs (isLoading || delegatedActive), so without the transcript
+a pass with background agents never saw its turn end (two live compact passes timed out). The
+transcript is read from its size at the call, after the session file each poll (Claude Code
+writes the turn's end there first), incrementally: the offset and a torn last line are kept, so
+no poll re-reads it. Only main-chain entries count (a sidechain one is a subagent's). An end
+marker is a `system` turn_duration entry (at every real turn end, never at a Stop a hook
+blocked) or a user entry whose text block starts `[Request interrupted by user` (Esc writes no
+turn_duration). A start marker is a user entry with an origin kind (a typed prompt, a task
+notice, an agent's message), a queue `dequeue`, or an assistant entry after an end marker
+(failing closed). The turn ended when an end marker has no start marker after it; everything
+else (tool results, hook feedback, titles, modes, attachments, api requests) is bookkeeping.
+`waiting` (an open dialog) and any unknown status keep it waiting. It settles 1 s and re-reads
+both: a start marker after the end it saw is `resumed`. Once that end is known the status alone
+is no resumption, since it flips among idle, shell and busy as delegated work starts and stops,
+with no turn (the spike saw `shell` to `busy`); with no end marker seen, the status must hold
 (not idle, or a new statusUpdatedAt: a queued prompt restarted the turn, `resumed`). It re-runs
 handoff-check (a failure: work after the handoff made it stale, `stale`), drops `resumed` when
 the transcript gained a typed prompt after the call, or a prompt queued mid-turn (a queue
@@ -49,15 +65,16 @@ watch` (lanelib.plain_pass_ignores), since a respawn kills background work, in-p
 and monitors included, which no process check can see (`busy`, also with no record). An
 artifact watch is the Artifact tool's live watch, whose id the model never sees: the respawn
 ends it, and the log line ends `; ignored: artifact watch <url> (<id>)`.
-Right before acting it re-checks: the session file still idle
-with the same statusUpdatedAt (`resumed`), the process alive with the same procStart, the pane
+Right before acting it re-checks: the turn still over, by the
+settle's rule (`resumed`), the process alive with the same procStart, the pane
 still running that claude (pane_pid is the claude or its ancestor, pane_current_command is
 `claude`), the pane not in copy mode (`#{pane_in_mode}` 0), and Claude Code's input box present
 and empty (`busy` otherwise: typing would join a draft and a respawn would discard it; the dim
 ghost suggestion is not a draft). A pane tmux can't find, a missing session file,
 a dead or replaced process, or a session file naming another session or pane drops `gone` at
 once, while waiting too. Past --timeout (600 s; at most 3600) it gives up (`timeout`). Each drop
-is logged, then shown, and touches nothing else. A refusal of a pass Hayden expects (`stale`,
+is logged, then told to the session (below), then shown, and touches nothing else. A refusal of
+a pass Hayden expects (`stale`,
 `busy`, `timeout`, `failed`, `error`, and `partial` below) is loud: one line naming the cause,
 the tab and the fix (for `busy`, the stop record's tasks, the first two named with their
 description and id and the rest counted: 'monitor "deploy events" (b0fzd27l4) running ... Stop
@@ -70,6 +87,19 @@ offers as a way to cancel) and `gone` (his own /clear or exit). Outcomes at
 call time (`refused`, a detach `error`) and --cancel's (`too-late`, `none`) print to the
 caller, which reads them before its reply, so they show nothing in tmux. Never respawn or
 compact on a failing check: the respawn throws away the context that could fix the gap.
+tmux never reaches the session itself, which went on saying a dropped pass was still queued, so
+every drop the waiter makes, and `partial`, also leaves it a notice:
+$XDG_STATE_HOME/dotclaude/pass-notice/<session>.json, {"v": 1, session_id, outcome, mode,
+called, dropped (epoch secs), text}, written atomically and 0600 after the pass.log line and
+before any tmux call (a dying tmux server can't delay or skip it), best-effort (a failed write
+changes no outcome). hooks/pass-notice.sh claims it once and injects `text` into the session's
+next turn. The text is the model's: the mode, the call's and the drop's UTC times, the cause,
+that no pass is pending (so it stops saying one is queued), the fix and "Tell Hayden in one
+line" (the quiet drops say less; `partial` hands over the resume prompt). Its free-text detail
+is one line of at most 300 characters. The call, once it holds the pending lock, deletes the
+session's old notice and prunes, once a day, notices older than 7 days and claimed ones
+(*.taken) older than a day; the prune's stamp, pass-notice.pruned, sits beside the dir, which so
+holds only notices. A call-time refusal or detach error prints to the caller and leaves none.
   plain    write the Star carry marker (tmux/claude-saved re-keys a starred chat to the new
            session on its `startup`) and the replies of the last 5 turns
            (pass-last/<pane number>.json: the stop record's `replies`, Hayden's prompt for
@@ -146,13 +176,19 @@ the sandbox can write (docs/lanes.md S3). Every input, and why each is safe:
     call's; TMUX_PANE must be `%<n>`, and the session id must match the session file.
   - The session file (~/.claude/sessions/<pid>.json) is Claude Code's, and the sandbox can't
     write ~/.claude/sessions. Only `idle` there (or `shell`: at the prompt with a background
-    shell running) lets the waiter act.
+    shell running), or `busy` with the transcript's turn end, lets the waiter act.
   - The transcript (~/.claude/projects/...) is Claude Code's too, also out of the sandbox's
-    reach; it can only drop a pass.
-  - The stop record, the carry marker, the replies, the pending lock and pass.log live in
-    the state dir, which sandboxed Bash can't write. The session id names the stop record and
-    the lock, so it must be a plain id ([A-Za-z0-9][A-Za-z0-9._-]*). The replies are copied
-    as data, never run or interpolated.
+    reach. It only decides: whether the turn ended (with the session file's `busy`) and
+    whether a prompt came after the call (which drops a pass). Its entries are parsed as JSON
+    and matched against fixed markers, never run or interpolated.
+  - The stop record, the carry marker, the replies, the pending lock, the session's notice and
+    pass.log live in the state dir, which sandboxed Bash can't write, so a session can't forge
+    or plant a notice for the hook to inject. The session id names the stop record, the lock
+    and the notice, so it must be a plain id ([A-Za-z0-9][A-Za-z0-9._-]*). The replies are
+    copied as data, never run or interpolated. The notice's text is fixed text plus details
+    made one line of at most 300 characters (handoff-check's gaps, which name checkout files,
+    tmux's error text, an exception's text) and the stop record's tasks as the tmux notice
+    names them; it is data for the model, never run.
   - The pane's capture (the input box) is tmux's; it can only drop a pass.
   - The toast (toast_command, resolved at the call against the same roots): powershell.exe and
     wslpath resolve through the sanitized PATH and are refused (no toast) when sandbox-writable,
