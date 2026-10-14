@@ -26,6 +26,7 @@
 #     can (a background session's hooks have no TMUX_PANE). It runs when the claude panes change
 #     and at least every 60 s, so a /clear in an attach tab (same pane, new session id) lands
 #     within a minute.
+#   - LAY OUT the grouped tab bar (`tmux-tab-bar layout`), for the changes no tmux hook reports.
 # It never overwrites a live busy/wait/idle value, with two exceptions that hand a window over:
 # a new mapping (or its pane moving to a cold window, or a map old enough that hooks ignored
 # it: tmux detached or queries failing) fills it from the session's status, and a
@@ -61,6 +62,12 @@ fi
 # cache. CLAUDE_PID unset: a server started from a Claude Bash call would carry a dead one,
 # which trips the ledger's sandbox self-check. This is the script's only output.
 timeout 2 env -u CLAUDE_PID "$HOME/.local/bin/delegation-ledger" watch --summary 2>/dev/null | tee "$cache"
+
+# The grouped tab bar (tmux-tab-bar, tmux/claude.conf): its hooks miss a cwd change and a lane
+# opened or closed, so this pass lays it out too (an unchanged layout writes nothing).
+# Fail-open and bounded; output never reaches the bar.
+tab_bar="$HOME/.local/bin/tmux-tab-bar"
+[ -x "$tab_bar" ] && timeout 2 "$tab_bar" layout >/dev/null 2>&1
 
 # window -> current @claude_state (window option; same for every pane in the window).
 declare -A win_state

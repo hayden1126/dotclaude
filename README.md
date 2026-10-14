@@ -200,7 +200,7 @@ sees it.
 | `docs/prose-is-not-a-permission.md` | Blog post on the delegation work: why a prompt can't limit an agent's authority, and the layers that can | reference |
 | `docs/images/` | The post's diagram: `delegation-layers.svg` (source) and `delegation-layers.png` (2x render) | reference |
 | `tests/delegation/` | Unit tests for the delegation pieces (no model calls) and `run.py`, a live harness that spends model calls | run from the repo root |
-| `tests/setup/` | Unit tests for `merge-settings.py`, `git/install-ignore.py`, and the prompt and session hooks (`handoff_reminder.py`, `session-title.sh`, `session-summary.sh`), the tmux and sound hooks (`test_tmux_hooks.py`), `tmux/tmux-claude-status` (`test_tmux_claude_status.py`), the restore after tmux dies (`test_session_registry.py`, `test_claude_restore.py`), Star and Shelve (`test_claude_saved.py`), the replies across a pass (`test_pass_banner.py`, `test_pass_last.py`, `test_md_render.py`), the auto-pass watcher and `/autopass` (`test_context_watch.py`), the ctx widget's tiers, cue and window write (`test_ctx_breakdown.py`), `setup-tmux.sh`, the overwrite and delete guards, `memory-git.sh` and `claude-file-history`; `replay_history.py` is a local-only replay tool, not a unit test | `python3 -m unittest discover -s tests/setup -t tests/setup` |
+| `tests/setup/` | Unit tests for `merge-settings.py`, `git/install-ignore.py`, and the prompt and session hooks (`handoff_reminder.py`, `session-title.sh`, `session-summary.sh`), the tmux and sound hooks (`test_tmux_hooks.py`), `tmux/tmux-claude-status` (`test_tmux_claude_status.py`), the restore after tmux dies (`test_session_registry.py`, `test_claude_restore.py`), Star and Shelve (`test_claude_saved.py`), the grouped tab bar (`test_tmux_tab_bar.py`), the replies across a pass (`test_pass_banner.py`, `test_pass_last.py`, `test_md_render.py`), the auto-pass watcher and `/autopass` (`test_context_watch.py`), the ctx widget's tiers, cue and window write (`test_ctx_breakdown.py`), `setup-tmux.sh`, the overwrite and delete guards, `memory-git.sh` and `claude-file-history`; `replay_history.py` is a local-only replay tool, not a unit test | `python3 -m unittest discover -s tests/setup -t tests/setup` |
 | `tests/deck_production/` | Unit tests for `deck-production`'s `deckkit geometry` gate (rule matrix on canned probe output, plus an end-to-end run over the synthetic `fixtures/geodeck` that skips without a headless Chrome) `deckkit regress`'s geometry facts, and `deckkit doctor`'s exit codes | `python3 -m unittest discover -s tests/deck_production -t tests/deck_production` |
 | `tests/lanes/` | Unit tests for the `lane` CLI, the lane hooks and `handoff-check`, on a throwaway bare origin plus clone (no network) | `python3 -m unittest discover -s tests/lanes -t tests/lanes` |
 | `tests/pass/` | Unit tests for `pass-respawn` on fakes for tmux, the session file and the transcript (`test_pass_respawn.py`), plus its guards and checks on the pass docs (`test_pass_guards.py`); nothing reaches the live tmux server | `python3 -m unittest discover -s tests/pass -t tests/pass` |
@@ -209,8 +209,8 @@ sees it.
 | `docs/blind-overwrite-brief.md` | Why the overwrite guard and `memory-git.sh` exist: two incidents (a blind overwrite of a memory file, a job's state inferred instead of read), the experiments and the design calls | reference |
 | `docs/chrome-devtools-wsl.md` | WSL2-only: how to make `chrome-devtools-mcp` work (Strategy A headless Linux Chrome, plus B to attach to your Windows Chrome) | reference |
 | `chrome-debug.ps1` | Windows launcher for Strategy B (Chrome with a remote-debugging port) | run on Windows when needed |
-| `tmux/` | The tmux side of the indicator: `claude.conf` (titles, status bar, the ◐ busy and ✳ waiting glyphs), the optional `base.conf` (mouse, splits, the Ctrl-b Enter menu), `cheatsheet.txt`, `tmux-claude-status`, the backstop the status bar runs (it also maps background sessions to their tab and has `claude-saved track` record attach tabs for `claude-restore`), `claude-restore`, which reopens `main`'s Claude tabs after the tmux server dies, `claude-saved`, which stars and shelves a tab's chat (the tab's right-click menu, Ctrl-b S, or Ctrl-b Enter), and `pass-last`, which shows what Claude said before a `/pass` (Ctrl-b Up, or either menu) | sourced and linked by `setup-tmux.sh` |
-| `setup-tmux.sh` | Opt-in tmux installer: links `tmux-claude-status`, `claude-restore`, `claude-saved` and `pass-last` into `~/.local/bin` and keeps a marked `source-file` block in `~/.tmux.conf` (`--base` adds `base.conf` and the cheatsheet, `--no-base` drops them, and a run with neither keeps what the block has) | run once per machine that uses tmux; not called by `setup.sh` |
+| `tmux/` | The tmux side of the indicator: `claude.conf` (titles, status bar, the ◐ busy and ✳ waiting glyphs), the optional `base.conf` (mouse, splits, the Ctrl-b Enter menu), `cheatsheet.txt`, `tmux-claude-status`, the backstop the status bar runs (it also maps background sessions to their tab and has `claude-saved track` record attach tabs for `claude-restore`), `claude-restore`, which reopens `main`'s Claude tabs after the tmux server dies, `claude-saved`, which stars and shelves a tab's chat (the tab's right-click menu, Ctrl-b S, or Ctrl-b Enter), `pass-last`, which shows what Claude said before a `/pass` (Ctrl-b Up, or either menu), and `tmux-tab-bar`, which lays out the status bar in up to 5 rows grouped by project | sourced and linked by `setup-tmux.sh` |
+| `setup-tmux.sh` | Opt-in tmux installer: links `tmux-claude-status`, `claude-restore`, `claude-saved`, `pass-last` and `tmux-tab-bar` into `~/.local/bin` and keeps a marked `source-file` block in `~/.tmux.conf` (`--base` adds `base.conf` and the cheatsheet, `--no-base` drops them, and a run with neither keeps what the block has) | run once per machine that uses tmux; not called by `setup.sh` |
 | `setup-chrome-wsl.sh` | Opt-in WSL2 installer: installs Chrome for Testing and registers the user-scoped `chrome-devtools` override | run once on WSL2; not called by `setup.sh` |
 | `setup.sh` | The installer | run once per machine |
 | `sync.sh` | Regenerates the derived plugin lists from live `~/.claude/` | run after plugin changes |
@@ -360,6 +360,29 @@ need nothing extra.
   sessions split into one window share a glyph.
   Run `./setup-tmux.sh` once for the tmux side. A machine whose `settings.machine.json` still wires
   `tmux-state.sh` should drop those entries before `./setup.sh`, or they fire twice.
+- **The tab bar groups tabs by project**: the status bar has up to 5 rows. A repo with lanes gets
+  its own row, headed by its name (`dotclaude▸`): the lead checkout's tab (`lead` plus its title),
+  then each lane (its id, cut to 12 cells, plus its title), then its other worktrees. Every other
+  window goes on the shared row(s) at the bottom, as `repo: title`. A window counts as whatever
+  its active pane's directory is in. Window numbers never change; only the order on the bar does.
+  Every row starts with the same gutter (the delegation token's width, then the widest repo
+  header), so the first tab of every row starts in the same column; row 0 shows the token there,
+  a repo's rows show its header, and the shared rows leave it blank.
+  Each tab has a fixed width (the numbers live in `tmux/tmux-tab-bar`), left-justified, with a dim
+  `│` between two tabs; a row with too many tabs for that splits its width evenly, and a row
+  spills over only when a tab would get too narrow (the tabs then spread evenly over the rows
+  they need). Row 0's right end shows the host and the clock. Widths depend only on how many
+  tabs there are and the terminal's width, so a title or glyph change never moves a tab or
+  resizes the panes. Past 5 rows the smallest
+  groups share the bottom rows behind a `┃repo▸` divider; still past 5, the bar ends in `+N`, which
+  opens the window list. The window you are on is always shown. On a narrow terminal (the phone over
+  ssh) the bar moves to the bottom with shorter tabs and drops the host and the clock. Tap a
+  tab to switch to it; tap the tab you are on for its menu (Star, Shelve, Shelf…, Replies before
+  pass, Rename and Windows…); right-click still opens the full menu. `tmux/tmux-tab-bar` runs from
+  tmux hooks and from `tmux-claude-status`, which catches a directory change or a lane opening or
+  closing within a few seconds. It never puts a title, a directory name or a lane record into a
+  tmux format (a `#[...]` in a title draws as text), never prints into a pane, and if it fails
+  the bar stays as it was.
 - **Tabs come back after tmux dies**: a Windows restart, `wsl --shutdown`, `wsl --terminate` or
   `tmux kill-server` ends the tmux server and every Claude tab in `main`. `session-registry.sh`
   keeps one file per open tab in `$XDG_STATE_HOME/dotclaude/open-sessions/`: the session id, its
@@ -385,7 +408,8 @@ need nothing extra.
   marked `attach`. `tmux kill-server` leaves background sessions running, so such a tab comes back
   attached to its session; after a reboot it resumes the chat. Background sessions with no tab
   are not restored.
-- **Star and Shelve keep a chat after its tab closes**: right-click a Claude tab for **Star** (a
+- **Star and Shelve keep a chat after its tab closes**: right-click a Claude tab (or tap the tab
+  you are on) for **Star** (a
   bookmark: the tab shows ★, and the chat stays saved until unstarred, however the tab closes)
   or **Shelve** (save the chat and close the tab now; it won't come back on a tmux restore).
   **Shelf…** in the same menu, Ctrl-b S, or the Ctrl-b Enter menu (which has all three, no Shift) lists the saved chats newest first and reopens one

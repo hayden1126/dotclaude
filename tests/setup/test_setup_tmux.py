@@ -1,6 +1,6 @@
-"""setup-tmux.sh: links the status, restore and saved-chats scripts, upserts one marked
-source-file block into ~/.tmux.conf, keeps the user's own lines, and is idempotent (stdlib
-only)."""
+"""setup-tmux.sh: links the status, restore, saved-chats, pass-last and tab-bar scripts,
+upserts one marked source-file block into ~/.tmux.conf, keeps the user's own lines, and is
+idempotent (stdlib only)."""
 import glob
 import os
 import shutil
@@ -40,13 +40,15 @@ class SetupTmux(unittest.TestCase):
         for path in (SCRIPT, os.path.join(REPO, "tmux", "tmux-claude-status"),
                      os.path.join(REPO, "tmux", "claude-restore"),
                      os.path.join(REPO, "tmux", "claude-saved"),
-                     os.path.join(REPO, "tmux", "pass-last")):
+                     os.path.join(REPO, "tmux", "pass-last"),
+                     os.path.join(REPO, "tmux", "tmux-tab-bar")):
             with self.subTest(path=path):
                 self.assertTrue(os.access(path, os.X_OK))
 
     def test_a_fresh_home_gets_the_link_and_the_claude_block(self):
         self.run_setup()
-        for name in ("tmux-claude-status", "claude-restore", "claude-saved", "pass-last"):
+        for name in ("tmux-claude-status", "claude-restore", "claude-saved", "pass-last",
+                     "tmux-tab-bar"):
             link = os.path.join(self.home, ".local", "bin", name)
             self.assertEqual(os.readlink(link), os.path.join(REPO, "tmux", name))
         conf = self.read()
@@ -97,6 +99,11 @@ class SetupTmux(unittest.TestCase):
                            text=True, timeout=30, env=self.env)
         self.assertNotEqual(p.returncode, 0)
         self.assertFalse(os.path.exists(self.conf))
+
+    def test_help_prints_the_whole_header(self):
+        p = self.run_setup("--help")
+        self.assertIn("--no-base drop base.conf", p.stdout)
+        self.assertTrue(p.stdout.rstrip().endswith("(five, six with --base)."))
 
     def test_a_real_file_in_the_way_is_moved_aside(self):
         bin_dir = os.path.join(self.home, ".local", "bin")

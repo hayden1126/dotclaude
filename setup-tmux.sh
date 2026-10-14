@@ -3,13 +3,15 @@
 # delegation token in the status bar, and what lets a background session's hooks find its tab
 # (tmux-claude-status writes that map), plus claude-restore, which reopens main's Claude tabs
 # after the tmux server dies, claude-saved, which stars and shelves a tab's chat (the
-# right-click menu, Ctrl-b S), and pass-last, which shows what Claude said before a /pass (Ctrl-b Up).
+# right-click menu, Ctrl-b S), pass-last, which shows what Claude said before a /pass (Ctrl-b Up),
+# and tmux-tab-bar, which lays out the status bar in rows grouped by project.
 # Opt-in and idempotent; setup.sh never calls it. The hook side
 # (hooks/tmux-state.sh, hooks/session-registry.sh) is wired by setup.sh on every machine and does
 # nothing outside tmux.
 #
-#   ./setup-tmux.sh           link tmux-claude-status, claude-restore, claude-saved and
-#                             pass-last into ~/.local/bin, source tmux/claude.conf from ~/.tmux.conf
+#   ./setup-tmux.sh           link tmux-claude-status, claude-restore, claude-saved, pass-last
+#                             and tmux-tab-bar into ~/.local/bin, source tmux/claude.conf from
+#                             ~/.tmux.conf
 #   ./setup-tmux.sh --base    also source tmux/base.conf (mouse, splits, the Ctrl-b Enter menu)
 #                             and link the Ctrl-b h cheatsheet
 #   ./setup-tmux.sh --no-base drop base.conf and the cheatsheet link
@@ -18,7 +20,7 @@
 # A run with neither flag keeps base.conf as the block already has it, so a plain re-run (to link
 # a new script) can't strip the mouse and menus from the next tmux server. Your own lines outside
 # the block are kept; the block sits at the end, so its settings win. ~/.tmux.conf is backed up
-# before any change. To remove: delete the marked block and the links (four, five with --base).
+# before any change. To remove: delete the marked block and the links (five, six with --base).
 
 set -euo pipefail
 
@@ -36,7 +38,7 @@ for arg in "$@"; do
       want=1; [ "$arg" = --no-base ] && want=0
       [ -n "$base" ] && [ "$base" != "$want" ] && die "--base and --no-base conflict"
       base=$want ;;
-    -h|--help) sed -n '2,21p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,23p' "$0"; exit 0 ;;
     *) die "unknown argument: $arg (try --help)" ;;
   esac
 done
@@ -71,6 +73,7 @@ link "$REPO_DIR/tmux/tmux-claude-status" "$HOME/.local/bin/tmux-claude-status"
 link "$REPO_DIR/tmux/claude-restore" "$HOME/.local/bin/claude-restore"
 link "$REPO_DIR/tmux/claude-saved" "$HOME/.local/bin/claude-saved"
 link "$REPO_DIR/tmux/pass-last" "$HOME/.local/bin/pass-last"
+link "$REPO_DIR/tmux/tmux-tab-bar" "$HOME/.local/bin/tmux-tab-bar"
 cheat="$HOME/.tmux-cheatsheet.txt"
 if [ "$base" = 1 ]; then
   link "$REPO_DIR/tmux/cheatsheet.txt" "$cheat"
