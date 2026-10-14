@@ -13,7 +13,7 @@ cells (9 on a phone), its tabs then spread evenly over its rows. Widths come fro
 client's width alone, so a title change never moves a tab or changes the row count (which would
 resize every pane). Past 5 rows the smallest lane groups move onto the shared rows behind a
 `┃repo▸` divider; still past 5, the last row ends in `+N`, which opens the window list. The
-current window is always shown. A client narrower than 100 cells (the phone) gets short slots
+current window is always shown, under its own header. A client narrower than 100 cells (the phone) gets short slots
 and the bar at the bottom; a session's narrowest client decides its layout. Window numbers never
 change: the bar only draws tabs in another order.
 
@@ -316,6 +316,34 @@ def separators(row: list) -> int:
     return sum(a[0] == "tab" and b[0] == "tab" for a, b in zip(row, row[1:]))
 
 
+def marker_w(head_w: list, item: tuple) -> int:
+    """A divider's cells: `┃name▸` for a packed group, a lone `┃` (group None) before a shared
+    tab that the current window put on a laned row."""
+    return 1 if item[1] is None else head_w[item[1]]
+
+
+def owner(row: list, k: int) -> int | None:
+    """The group whose tab row[k] is drawn as: the last header or divider before it, or None
+    (a shared tab) when there is none."""
+    g = None
+    for item in row[:k]:
+        if item[0] in ("head", "div"):
+            g = item[1]
+    return g
+
+
+def prune(row: list) -> None:
+    """Drop each header or divider that no tab follows before the next one."""
+    keep = []
+    for k, item in enumerate(row):
+        if item[0] in ("head", "div"):
+            after = next((i for i in row[k + 1:] if i[0] != "more"), None)
+            if after is None or after[0] != "tab":
+                continue
+        keep.append(item)
+    row[:] = keep
+
+
 def spread(n: int, caps: list) -> list:
     """n tabs over rows holding at most caps[i] each, as evenly as the caps allow (4 over two
     rows is 2+2, not 3+1); a leftover tab goes to an earlier row. sum(caps) >= n."""
@@ -403,8 +431,11 @@ def lay_out(groups: list, shared: list, width: int, current: str | None = None,
             rows, head = trial
 
     def fixed(row: list) -> int:        # cells a row's tabs can't use: dividers and +N
-        return sum(head_w[i[1]] if i[0] == "div" else i[2]
+        return sum(marker_w(head_w, i) if i[0] == "div" else i[2]
                    for i in row if i[0] in ("div", "more"))
+
+    def tab_count(row: list) -> int:
+        return sum(i[0] == "tab" for i in row)
 
     hidden = []
     if len(rows) > MAX_ROWS:
@@ -414,19 +445,32 @@ def lay_out(groups: list, shared: list, width: int, current: str | None = None,
             hidden += [i[1:] for i in row if i[0] == "tab"]
         rows = rows[:MAX_ROWS]
         last, r = rows[-1], MAX_ROWS - 1
-        while sum(i[0] == "tab" for i in last) > 1 and \
-                fixed(last) + more_w + sum(i[0] == "tab" for i in last) * min_slot \
-                + separators(last) > avail(r, head):
-            if last[-1][0] == "tab":
-                hidden.insert(0, last.pop()[1:])
-            if last[-1][0] == "div":
-                last.pop()
+        # The current window is always shown, and under its own header: it takes the last
+        # shown slot of its own kind (a tab of its group, or a shared tab for a shared one),
+        # else the last row's last slot behind its own divider (a lone ┃ for a shared tab).
+        # Taking any other slot would draw it under another repo's name.
         cur = next((t for t in hidden if t[0] == current), None)
-        if cur is not None:             # the current window takes the last visible slot
-            k = max(i for i, item in enumerate(last) if item[0] == "tab")
+        if cur is not None:
+            g = next((g for g, grp in enumerate(groups) if cur in grp.tabs), None)
             hidden.remove(cur)
-            hidden.append(last[k][1:])
-            last[k] = ("tab", *cur)
+            spots = [(i, k) for i, row in enumerate(rows) for k, item in enumerate(row)
+                     if item[0] == "tab" and owner(row, k) == g]
+            if spots:
+                i, k = spots[-1]
+                hidden.append(rows[i][k][1:])
+                rows[i][k] = ("tab", *cur)
+            else:
+                k = max(k for k, item in enumerate(last) if item[0] == "tab")
+                hidden.append(last.pop(k)[1:])
+                last += [("div", g), ("tab", *cur)]
+                prune(last)
+        # Room for `+N`: drop the last row's last tabs (never the current one) and any
+        # header or divider left with no tab.
+        while tab_count(last) > 1 and fixed(last) + more_w + tab_count(last) * min_slot \
+                + separators(last) > avail(r, head):
+            k = max(k for k, item in enumerate(last) if item[0] == "tab" and item[1] != current)
+            hidden.insert(0, last.pop(k)[1:])
+            prune(last)
         last.append(("more", len(hidden), more_w))
 
     slots = []
@@ -488,7 +532,9 @@ def header(g: int, cells: int, dim: bool, width: int) -> str:
             + name_part(g, cells) + "▸" + NORM + " " * max(0, width - cells - 1))
 
 
-def divider(g: int, cells: int) -> str:
+def divider(g: int | None, cells: int) -> str:
+    if g is None:                       # before a shared tab on a laned row: no name
+        return "#[fg=colour250]#[bold]┃" + NORM
     return f"#[fg=colour{PALETTE[g % len(PALETTE)]}]#[bold]┃" + name_part(g, cells) + "▸" + NORM
 
 
@@ -515,7 +561,7 @@ def render(lay: Layout) -> list:
             if item[0] == "head":
                 parts.append(header(item[1], lay.head_w[item[1]] - 2, item[2], lay.head))
             elif item[0] == "div":
-                parts.append(divider(item[1], lay.head_w[item[1]] - 2))
+                parts.append(divider(item[1], marker_w(lay.head_w, item) - 2))
             elif item[0] == "tab":
                 parts.append(entry(item[1], item[2], slot))
             else:

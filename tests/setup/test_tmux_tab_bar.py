@@ -307,7 +307,7 @@ class LayOut(unittest.TestCase):
         over the default width; a header fits the gutter."""
         for r, (row, slot) in enumerate(zip(lay.rows, lay.slots)):
             avail = width - lay.gutter - (lay.right if r == 0 else 0)
-            fixed = sum(lay.head_w[i[1]] if i[0] == "div" else i[2]
+            fixed = sum(tb.marker_w(lay.head_w, i) if i[0] == "div" else i[2]
                         for i in row if i[0] in ("div", "more"))
             if row[0][0] == "head":
                 self.assertLessEqual(lay.head_w[row[0][1]], lay.head)
@@ -414,6 +414,39 @@ class LayOut(unittest.TestCase):
                 # Packing these saves no row, so none is packed: every row keeps its header.
                 self.assertTrue(all(row[0][0] == "head" for row in lay.rows))
                 self.check_fits(lay, 188)
+
+    def test_a_hidden_current_window_sits_under_its_own_header(self):
+        # 6 groups of 10 at 188: each takes 2 rows, so rows 0-4 show g0, g1 and g2's first
+        # row; g2's second row, g3-g5 and the shared tabs (61-65) are hidden.
+        groups = [Group(f"g{k}", tabs(*range(10 * k + 1, 10 * k + 11))) for k in range(6)]
+        shared = tabs(*range(61, 66))
+        cases = [("@28", 2, False),     # g2 has a shown row: it takes a g2 slot there
+                 ("@40", 3, True),      # g3 has none: the last slot, behind g3's divider
+                 ("@60", 5, True),
+                 ("@63", None, True),   # shared: behind a lone divider, never under g2
+                 ("@1", 0, False)]      # shown already: nothing moves
+        for current, group, divided in cases:
+            with self.subTest(current=current):
+                lay = tb.lay_out(groups, shared, 188, current, 28, 16)
+                self.assertEqual(len(lay.rows), tb.MAX_ROWS)
+                (r, k), = [(r, k) for r, row in enumerate(lay.rows)
+                           for k, item in enumerate(row) if item[:2] == ("tab", current)]
+                row = lay.rows[r]
+                self.assertEqual(tb.owner(row, k), group)
+                self.assertEqual(row[k - 1] == ("div", group), divided, row)
+                shown = [w for row in lay.rows for w in tab_ids(row)]
+                self.assertEqual(len(shown) + lay.hidden, 65)
+                self.assertEqual(len(set(shown)), len(shown))
+                self.check_fits(lay, 188)
+                rows = tb.render(lay)          # a lone divider renders inside the template
+                for text in rows:
+                    self.assertLessEqual(set(text), ALPHABET)
+                self.assertLessEqual(tb.text_width(draw(rows[-1], bar_env(lay))), 188)
+
+    def test_prune_drops_markers_with_no_tab(self):
+        row = [("head", 0, False), ("div", 1), ("tab", "@1", 1), ("div", 2), ("more", 3, 4)]
+        tb.prune(row)
+        self.assertEqual(row, [("div", 1), ("tab", "@1", 1), ("more", 3, 4)])
 
     def test_the_current_window_moves_nothing_while_nothing_is_hidden(self):
         a = tb.lay_out([DOTCLAUDE], SHARED5, 188, "@4", 28, 16)
