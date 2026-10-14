@@ -37,7 +37,7 @@ Group = tb.Group
 
 # Every character a generated row may hold: the template's own text, digits and window ids.
 ALPHABET = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-               " #{}[]=,:;|/@?^()\\*+-_.!$…◐✳★▸│┃♯")
+               " #{}[]=,:;|/@?^()\\*+-_.!$…◐✳★▸│┃♯·")   # · from the title strip
 
 HOSTILE = "#(touch x)%,}\n\x1b[31m#{E:pwn}"   # cleans to "(touch x)%,}[31m{E:pwn}"
 BENIGN = "abcdefghijklmnopqrstuvwxyz"
@@ -400,18 +400,19 @@ class Render(unittest.TestCase):
 
     def test_a_title_loses_its_hashes_then_claudes_prefix(self):
         e = tb.entry("@7", 7, 30)
-        strip = "s/^([^ [][^ []?[^ []? )?\\[[^]]*\\] (.*)$/\\2/"
+        strip = "s/^([^ ][^ ]?[^ ]? )?[^ ]+ · (.*)$/\\2/"
         self.assertIn("#{s/[#]/♯/;" + strip + ":pane_title}", e)
         self.assertIn("#{s/[#]/♯/:pane_current_command}", e)
         self.assertEqual(e.count("pane_title}"), e.count("[#]/♯/;" + strip + ":pane_title}"))
         for bad in ("{", "}", ",", ":", ";"):   # each would end the modifier or the #{...}
             self.assertNotIn(bad, strip)
         # The same pattern in Python's dialect ([ escaped in a set): what it keeps.
-        py = re.compile(r"^([^ \[][^ \[]?[^ \[]? )?\[[^]]*\] (.*)$")
-        for title, label in (("✳ [repo] label", "label"), ("⠂ [repo] label", "label"),
-                             ("⣿ [repo] label", "label"), ("[repo] label", "label"),
+        py = re.compile(r"^([^ ][^ ]?[^ ]? )?[^ ]+ · (.*)$")
+        for title, label in (("✳ repo · label", "label"), ("⠂ repo · label", "label"),
+                             ("⣿ repo · label", "label"), ("repo · label", "label"),
                              ("no prefix here", "no prefix here"),
-                             ("✳ [a] [b] x", "[b] x"), ("long word [x] y", "long word [x] y")):
+                             ("✳ a · b · x", "b · x"), ("long word · x y", "long word · x y"),
+                             ("[repo] label", "[repo] label")):
             with self.subTest(title=title):
                 self.assertEqual(py.sub(r"\2", title), label)
 
@@ -1162,7 +1163,7 @@ class RealTmux(unittest.TestCase):
     def test_claudes_title_prefix_is_stripped_idle_busy_or_bare(self):
         self.ti("new-window", "-d", "-t", "t:3", "-c", self.plain, "sleep 600")
         self.run_layout()
-        titles = ("✳ [dotclaude] alpha label", "⠂ [tab-bar] beta label", "[hq] gamma label",
+        titles = ("✳ dotclaude · alpha label", "⠂ tab-bar · beta label", "hq · gamma label",
                   "no prefix here")
         for i, title in enumerate(titles):
             self.ti("select-pane", "-t", f"t:{i}", "-T", title)
@@ -1170,7 +1171,7 @@ class RealTmux(unittest.TestCase):
                      "hq: no prefix here"):
             self.find(text)
         bar = "\n".join(self.screen()[:2])
-        for gone in ("✳", "⠂", "[dotclaude]", "[tab-bar]", "[hq]"):
+        for gone in ("✳", "⠂", "dotclaude ·", "tab-bar ·", "hq ·"):
             self.assertNotIn(gone, bar)
 
     def test_a_hash_or_a_style_in_a_title_draws_as_text_and_keeps_the_width(self):
