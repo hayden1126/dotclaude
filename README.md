@@ -62,9 +62,14 @@ A typical overlay sets a preference and the machine's own tools:
 name your own CLIs that must run outside the sandbox (say, ones that write outside the project),
 one pattern per command shape (`mytool *` for calls with arguments, `mytool` for the bare call).
 A pattern must match the whole command, so a call through a pipe, `&&` or `cd` still runs
-sandboxed. Every PATH dir under your home (`~/hq/bin` on HAYPC) goes in the overlay's
-`sandbox.filesystem.denyWrite`, or the excluded-command guard refuses every excluded command. Only
-user and managed settings count for that, so a project's `.claude/settings*.json` can't stand in.
+sandboxed. Every PATH dir under your home (`~/hq/bin` on HAYPC) gets an Edit deny rule in the
+overlay's `permissions.deny` (`"Edit(~/hq/bin/**)"`), or the excluded-command guard refuses every
+excluded command. Only user and managed settings count for that, so a project's
+`.claude/settings*.json` can't stand in. On a new machine, the first `./setup.sh` ends with the
+guard's scan: it lists each dir it would refuse with what the dir holds, then prints the whole
+`settings.machine.json` with the rules added. Look at each dir, paste the file, and run
+`./setup.sh` again. Rerun the scan (`python3 -I hooks/excluded_guard.py --scan`) after adding a
+PATH dir or cloning a repo whose install step sets in-repo git hooks.
 
 The baseline's `permissions` deny destructive git and ask before anything that can reach `main`,
 in auto mode too. Denied: force-push, `reset --hard`, `reset --merge` and `git clean -f`, plain or

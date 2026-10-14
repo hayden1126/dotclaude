@@ -3,8 +3,9 @@
 Each test builds a fake HOME (with .claude/settings.json), a project repo made by `git init` plus a
 `git worktree add` lane, and PATH dirs holding marker executables (`#!/bin/sh` echo scripts named
 git, gh, lane, claude, codex). The temp dir sits under a root ($TMPDIR or /tmp) and belongs to the
-user, so a "clean" (protected) dir is one listed in the user settings' denyWrite: permission bits
-protect nothing there, and only /usr/bin-style dirs outside every root are protected by location.
+user, so a "clean" (protected) dir is one an Edit deny rule in the user settings covers:
+permission bits protect nothing there, and only /usr/bin-style dirs outside every root are
+protected by location.
 """
 import importlib.util
 import json
@@ -40,7 +41,8 @@ class Guard(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.tmp)
         self.addCleanup(unlock, self.tmp)
         self.home = self.mkdir("home")
-        self.deny_write = []
+        self.deny_write = []  # paths an Edit deny rule covers (both routes)
+        self.sandbox_deny = []  # raw denyWrite lines (sandboxed Bash only)
         self.proj = os.path.join(self.tmp, "proj")
         self.lane = os.path.join(self.tmp, "lane")
         self.git("init", "-q", self.proj, cwd=self.tmp)
@@ -71,10 +73,12 @@ class Guard(unittest.TestCase):
 
     def write_settings(self, extra=None):
         sandbox = {"excludedCommands": EXCLUDED,
-                   "filesystem": {"denyWrite": self.deny_write, "allowWrite": []}}
+                   "filesystem": {"denyWrite": self.sandbox_deny, "allowWrite": []}}
         sandbox.update(extra or {})
+        deny = [f"Edit({p}/**)" if p.startswith("~") else f"Edit(/{p}/**)"
+                for p in self.deny_write]
         self.write(os.path.join(self.home, ".claude", "settings.json"),
-                   json.dumps({"sandbox": sandbox}))
+                   json.dumps({"sandbox": sandbox, "permissions": {"deny": deny}}))
 
     def git(self, *args, cwd):
         env = {"PATH": "/usr/bin:/bin", "HOME": self.home, "GIT_CONFIG_NOSYSTEM": "1",
@@ -84,7 +88,7 @@ class Guard(unittest.TestCase):
                               text=True).stdout
 
     def protect(self, path):
-        """List `path` in the user settings' denyWrite."""
+        """Cover `path` with an Edit deny rule in the user settings."""
         self.deny_write.append(path)
         self.write_settings()
         return path
@@ -398,12 +402,42 @@ class Rule2Path(Guard):
         self.env["PATH"] = f"{self.wbin}/:/usr/bin/"
         self.denied("git push", "rule2", self.wbin)
 
-    def test_a_denywrite_entry_protects_a_path_dir(self):
+    def test_an_edit_deny_rule_protects_a_path_dir(self):
         self.env["PATH"] = f"{self.wbin}:/usr/bin"
-        self.denied("lane ls", "rule2", self.wbin)
+        reason = self.denied("lane ls", "rule2", self.wbin)
+        self.assertIn(f"Edit(/{self.wbin}/**)", reason)
         self.deny_write.append(self.wbin)
         self.write_settings()
         self.allowed("lane ls")
+
+    def test_a_denywrite_line_alone_protects_only_inside_dotclaude_s_checkouts(self):
+        # A denyWrite line binds sandboxed Bash, not the Edit and Write tools.
+        self.env["PATH"] = f"{self.wbin}:/usr/bin"
+        self.sandbox_deny.append(self.wbin)
+        self.write_settings()
+        self.denied("git push", "rule2", self.wbin)
+        dbin = os.path.join(self.home, "dotclaude", "bin")
+        shutil.copytree(self.wbin, dbin)
+        self.sandbox_deny.append(dbin)
+        self.write_settings()
+        self.env["PATH"] = f"{dbin}:/usr/bin"
+        self.allowed("git push")
+
+    def test_edit_deny_rule_forms(self):
+        hbin = self.make_bin(os.path.join("home", "hbin"), protect=False)
+        self.env["PATH"] = f"{hbin}:/usr/bin"
+        for rules, ok in ((["Edit(~/hbin/**)"], True), ([f"Edit(/{hbin}/**)"], True),
+                          ([f"Edit(/{hbin})", f"Edit(/{hbin}/git)"], False),
+                          (["Edit(/hbin/**)"], False), ([f"Edit(/{self.home}/*/**)"], False),
+                          ([f"Read(/{hbin}/**)"], False)):
+            with self.subTest(rules=rules):
+                self.write(os.path.join(self.home, ".claude", "settings.json"), json.dumps(
+                    {"sandbox": {"excludedCommands": EXCLUDED},
+                     "permissions": {"deny": rules}}))
+                if ok:
+                    self.allowed("git push")
+                else:
+                    self.denied("git push", "rule2", hbin)
 
     def test_an_empty_or_relative_entry_is_refused(self):
         for path in (f":{self.bin}:/usr/bin", f"/nonexistent::{self.bin}:/usr/bin",
@@ -559,9 +593,9 @@ class Matching(Guard):
         self.denied("gh api user", "rule2")
         self.allowed("gh issue list")
 
-    def test_denywrite_counts_only_from_user_and_managed_settings(self):
+    def test_edit_deny_rules_count_only_from_user_and_managed_settings(self):
         self.env["PATH"] = f"{self.wbin}:/usr/bin"
-        local = {"sandbox": {"filesystem": {"denyWrite": [self.wbin]}}}
+        local = {"permissions": {"deny": [f"Edit(/{self.wbin}/**)"]}}
         self.write(os.path.join(self.proj, ".claude", "settings.local.json"), json.dumps(local))
         self.write(os.path.join(self.proj, ".claude", "settings.json"), json.dumps(local))
         self.denied("git push", "rule2", self.wbin)
@@ -595,17 +629,20 @@ class Scan(Guard):
     def test_a_clean_machine_scans_clean(self):
         self.assertEqual(self.scan(self.tmp), (0, ""))
 
-    def test_an_in_repo_hooks_path_is_listed_with_its_denywrite_line(self):
+    def test_an_in_repo_hooks_path_is_listed_with_what_it_holds_and_its_rule(self):
         hooks = os.path.dirname(self.write(os.path.join(self.proj, ".githooks", "pre-push"),
                                            MARKER, 0o755))
         self.git("config", "core.hooksPath", ".githooks", cwd=self.proj)
         code, out = self.scan(self.tmp)
         self.assertEqual(code, 1, out)
         self.assertIn(f"{self.proj}: excluded-guard (rule1)", out)
-        self.assertIn(f'  "{hooks}",', out)
+        self.assertRegex(out, r"\n    \d{4}-\d\d-\d\d \d\d:\d\d  pre-push  not in HEAD\n")
+        # The paste-ready settings.machine.json carries each rule once.
+        self.assertEqual(out.count(f'"Edit(/{hooks}/**)"'), 1, out)
         # A relative hooksPath resolves in each worktree, so the lane's own dir is listed too.
         lane_hooks = os.path.join(self.lane, ".githooks")
-        self.assertIn(f'  "{lane_hooks}",', out)
+        self.assertIn(f'"Edit(/{lane_hooks}/**)"', out)
+        self.assertIn(f"{lane_hooks} holds, before you protect it:\n    (missing", out)
         self.protect(hooks)
         self.protect(lane_hooks)
         self.assertEqual(self.scan(self.tmp), (0, ""))
@@ -615,7 +652,28 @@ class Scan(Guard):
         code, out = self.scan(self.tmp)
         self.assertEqual(code, 1, out)
         self.assertIn("PATH: excluded-guard (rule2)", out)
-        self.assertEqual(out.count(f'  "{self.wbin}",'), 1, out)
+        self.assertEqual(out.count(f'"Edit(/{self.wbin}/**)"'), 1, out)
+        self.assertIn(f"{self.wbin} holds, before you protect it:\n", out)
+
+    def test_the_paste_block_keeps_the_machine_overlay(self):
+        self.env["PATH"] = f"{self.wbin}:/usr/bin"
+        self.write(os.path.join(self.home, ".claude", "settings.machine.json"),
+                   json.dumps({"effortLevel": "high", "permissions": {"deny": ["Edit(~/x/**)"]}}))
+        code, out = self.scan(self.tmp)
+        block = json.loads(out[out.index("\n{\n") + 1:])
+        self.assertEqual(block["effortLevel"], "high")
+        self.assertEqual(block["permissions"]["deny"], ["Edit(~/x/**)", f"Edit(/{self.wbin}/**)"])
+
+    def test_evidence_runs_no_program_a_repo_config_names(self):
+        # The scan runs outside the sandbox; a repo's fsmonitor or diff driver must not run.
+        marker = os.path.join(self.tmp, "ran")
+        hooks = os.path.join(self.proj, ".githooks")
+        self.write(os.path.join(hooks, "pre-push"), MARKER, 0o755)
+        self.git("config", "core.hooksPath", ".githooks", cwd=self.proj)
+        self.git("config", "core.fsmonitor", f"touch {marker}; false", cwd=self.proj)
+        self.git("config", "diff.external", f"touch {marker}", cwd=self.proj)
+        self.assertEqual(self.scan(self.tmp)[0], 1)
+        self.assertFalse(os.path.exists(marker))
 
     def test_hidden_dirs_and_node_modules_are_not_walked(self):
         for d in (".hidden", "node_modules"):

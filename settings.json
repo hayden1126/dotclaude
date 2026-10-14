@@ -233,7 +233,12 @@
       "Bash(git -C * clean -*f*)",
       "Bash(bash -c *git push*--force*)",
       "Bash(bash -c *git reset*--hard*)",
-      "Bash(claude *ultrareview*)"
+      "Bash(claude *ultrareview*)",
+      "Edit(~/.local/bin/**)",
+      "Edit(~/.bun/bin/**)",
+      "Edit(~/.cargo/bin/**)",
+      "Edit(~/.local/share/claude/**)",
+      "Edit(~/.local/lib/node_modules/**)"
     ]
   },
   "sandbox": {
@@ -354,12 +359,7 @@
         "~/.claude/settings.json",
         "~/.claude/hooks",
         "~/.claude/skills",
-        "~/.claude/agents",
-        "~/.local/bin",
-        "~/.bun/bin",
-        "~/.cargo/bin",
-        "~/.local/share/claude",
-        "~/.local/lib/node_modules"
+        "~/.claude/agents"
       ],
       "allowWrite": [
         "~/.cache/uv",

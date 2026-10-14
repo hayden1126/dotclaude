@@ -374,9 +374,10 @@ python3 -I "$REPO_DIR/install-state.py" plugins \
   || warn "the plugin change check failed (see above)"
 # The excluded-command guard refuses an excluded call that would act on something a sandboxed
 # session can write. Name each repo under ~ and each PATH dir it would refuse now (a new tool's
-# bin dir, a repo whose install step points core.hooksPath into it), with the denyWrite lines.
+# bin dir, a repo whose install step points core.hooksPath into it), what each holds, and the
+# settings.machine.json with the Edit deny rules that clear them.
 python3 -I "$REPO_DIR/hooks/excluded_guard.py" --scan \
-  || warn "the excluded-command guard would refuse the calls above: add the denyWrite lines to settings.machine.json and rerun setup"
+  || warn "the excluded-command guard would refuse the calls above: look at each dir, paste the settings.machine.json it printed, and rerun setup"
 
 # ---------------------------------------------------------------------------
 # 7. Final checklist

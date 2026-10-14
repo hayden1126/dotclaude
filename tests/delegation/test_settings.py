@@ -387,11 +387,15 @@ class Baseline(unittest.TestCase):
 
     def test_the_excluded_guard_s_install_dirs_are_write_protected(self):
         # The PATH dirs and install dirs an excluded head resolves through on a stock setup; the
-        # machine's own (hq, sdk) go in settings.machine.json. Subagents' file tools too.
-        deny = S["sandbox"]["filesystem"]["denyWrite"]
+        # machine's own (hq, sdk) go in settings.machine.json. An Edit deny rule binds sandboxed
+        # Bash and the Edit and Write tools, so these are not denyWrite lines, which bind Bash
+        # only and protect nothing outside dotclaude to the guard. Subagents' file tools too.
+        deny = S["permissions"]["deny"]
+        sandbox_deny = S["sandbox"]["filesystem"]["denyWrite"]
         for p in ("~/.local/bin", "~/.bun/bin", "~/.cargo/bin", "~/.local/share/claude",
                   "~/.local/lib/node_modules"):
-            self.assertIn(p, deny)
+            self.assertIn(f"Edit({p}/**)", deny)
+            self.assertNotIn(p, sandbox_deny)
             self.assertIn(p, POLICY["protect"]["write_denied"])
 
     def test_every_allow_rule_on_an_excluded_command_sits_behind_the_guard(self):
@@ -513,11 +517,12 @@ class Baseline(unittest.TestCase):
             self.assertFalse(matching("allow", c), c)
         for c in asked:  # ask beats allow, so an allow rule may cover these too
             self.assertTrue(matching("ask", c), c)
-        # Every rule is the only one of its kind that catches some case, so dropping one fails.
-        # The inventory's rules bring their own cases.
+        # Every Bash rule is the only one of its kind that catches some case, so dropping one
+        # fails. The inventory's rules bring their own cases; the Edit deny rules are the
+        # excluded guard's (test_the_excluded_guard_s_install_dirs_are_write_protected).
         for kind, cases in (("deny", denied + [s for r in inv.DENIES for s in r.samples]),
                             ("ask", asked + [s for r in inv.ASKS for s in r.samples])):
-            for rule in S["permissions"][kind]:
+            for rule in [r for r in S["permissions"][kind] if r.startswith("Bash(")]:
                 self.assertIn([rule], [matching(kind, c) for c in cases], rule)
 
     def test_every_gh_step_the_workflow_names_has_a_rule(self):
