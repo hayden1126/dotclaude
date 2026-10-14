@@ -17,6 +17,7 @@ import sys
 import tempfile
 import time
 import unittest
+import unittest.mock
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 SCRIPT = os.path.join(REPO, "tmux", "tmux-tab-bar")
@@ -36,7 +37,7 @@ Group = tb.Group
 
 # Every character a generated row may hold: the template's own text, digits and window ids.
 ALPHABET = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-               " #{}[]=,:;|/@?^()\\*+-_.!…◐✳★▸│")
+               " #{}[]=,:;|/@?^()\\*+-_.!$…◐✳★▸│┃♯")
 
 HOSTILE = "#(touch x)%,}\n\x1b[31m#{E:pwn}"   # cleans to "(touch x)%,}[31m{E:pwn}"
 BENIGN = "abcdefghijklmnopqrstuvwxyz"
@@ -178,19 +179,21 @@ SHARED5 = tabs(1, 2, 3, 5, 9)
 
 class LayOut(unittest.TestCase):
     def check_fits(self, lay, width):
-        """Every row's headers, slots and +N fit its width; no slot is over the cap."""
+        """Every row's headers, slots, separators and +N fit its width; no slot is over the
+        default width."""
         for r, (row, slot) in enumerate(zip(lay.rows, lay.slots)):
             avail = width - ((lay.left + lay.right) if r == 0 else 0)
             fixed = sum(lay.head_w[i[1]] if i[0] in ("head", "div") else i[2]
                         for i in row if i[0] != "tab")
-            self.assertLessEqual(fixed + len(tab_ids(row)) * slot, avail, (r, row))
-            self.assertLessEqual(slot, tb.MAX_SLOT)
+            self.assertLessEqual(fixed + len(tab_ids(row)) * slot + tb.separators(row), avail,
+                                 (r, row))
+            self.assertLessEqual(slot, tb.DEFAULT_SLOT)
 
     def test_one_laned_group_and_a_shared_row(self):
         lay = tb.lay_out([Group("dotclaude", tabs(2, 3))], tabs(1, 4), 188, "@1", 28, 16)
         self.assertEqual(lay.rows, [[("head", 0, False), ("tab", "@2", 2), ("tab", "@3", 3)],
                                     [("tab", "@1", 1), ("tab", "@4", 4)]])
-        self.assertEqual(lay.slots, [48, 48])       # (144 - 11) // 2 and 188 // 2, capped
+        self.assertEqual(lay.slots, [32, 32])       # room for more: the default width
         self.assertEqual((lay.phone, lay.hidden, lay.heads), (False, 0, ["dotclaude"]))
         self.check_fits(lay, 188)
 
@@ -198,19 +201,30 @@ class LayOut(unittest.TestCase):
         lay = tb.lay_out([DOTCLAUDE], SHARED5, 188, "@4", 28, 16)
         self.assertEqual([tab_ids(r) for r in lay.rows],
                          [["@4", "@6", "@7", "@8"], ["@1", "@2", "@3", "@5", "@9"]])
-        self.assertEqual(lay.slots, [33, 37])
+        self.assertEqual(lay.slots, [32, 32])       # a row of 4 at 188: 32 each, left-justified
         self.check_fits(lay, 188)
 
+    def test_a_row_too_full_for_the_default_width_splits_evenly(self):
+        # 9 shared: row 0 (144 cells after status-left and -right) holds 7 at 18 + 6
+        # separators, so 5+4; 5 tabs get (144 - 4) // 5 = 28, the row of 4 gets 32.
+        lay = tb.lay_out([], tabs(*range(1, 10)), 188, "@1", 28, 16)
+        self.assertEqual([len(tab_ids(r)) for r in lay.rows], [5, 4])
+        self.assertEqual(lay.slots, [28, 32])
+        self.check_fits(lay, 188)
+        lay = tb.lay_out([], tabs(*range(1, 11)), 188, "@1", 0, 0)    # 10 in 188: 17 < 18
+        self.assertEqual([len(tab_ids(r)) for r in lay.rows], [5, 5])
+        self.assertEqual(lay.slots, [32, 32])
+
     def test_the_live_shape_on_the_phone_spreads_the_lanes_evenly(self):
-        # Row 0 holds 3 of the 4 dotclaude tabs, but 3+1 would leave the first three at 11
-        # cells (`narro…`): 2+2 gives each 17.
+        # Row 0 holds 3 of the 4 dotclaude tabs, but 3+1 would leave the first three at 10
+        # cells (`narro…`): 2+2 gives each 16. 5 shared need 5 * 9 + 4 separators = 49 > 45.
         lay = tb.lay_out([DOTCLAUDE], SHARED5, 45, "@4", 28, 16)
         self.assertTrue(lay.phone)
         self.assertEqual(lay.heads, ["dot"])
         self.assertEqual(lay.rows[1][0], ("head", 0, True))     # the overflow header, dimmed
         self.assertEqual([tab_ids(r) for r in lay.rows],
-                         [["@4", "@6"], ["@7", "@8"], ["@1", "@2", "@3", "@5", "@9"]])
-        self.assertEqual(lay.slots, [17, 20, 9])
+                         [["@4", "@6"], ["@7", "@8"], ["@1", "@2", "@3"], ["@5", "@9"]])
+        self.assertEqual(lay.slots, [16, 19, 14, 22])
         self.assertEqual((lay.left, lay.right), (tb.PHONE_LEFT, 0))
         self.check_fits(lay, 45)
 
@@ -273,7 +287,8 @@ class LayOut(unittest.TestCase):
     def test_a_wide_row_has_no_tab_cap(self):
         # Rows go to tmux through source-file, which has no 16 KB command limit.
         lay = tb.lay_out([], tabs(*range(1, 16)), 400, "@1", 28, 16)
-        self.assertEqual([len(tab_ids(r)) for r in lay.rows], [15])   # (400 - 44) // 18 = 19
+        self.assertEqual([len(tab_ids(r)) for r in lay.rows], [15])   # (400 - 44 + 1) // 19
+        self.assertEqual(lay.slots, [22])                              # (356 - 14) // 15
         self.check_fits(lay, 400)
 
     def test_a_tiny_client_still_shows_one_tab_a_row(self):
@@ -285,6 +300,32 @@ class LayOut(unittest.TestCase):
 # --- render -------------------------------------------------------------------------------------
 
 class Render(unittest.TestCase):
+    def test_a_dim_separator_between_two_tabs_and_nowhere_else(self):
+        # Packed: alpha's divider follows a shared tab, so no separator before it or its tab.
+        groups = [Group("alpha", tabs(1, 2)), Group("bravo", tabs(3, 4, 5)),
+                  Group("charlie", tabs(6, 7, 8)), Group("delta", tabs(9, 10, 11))]
+        lay = tb.lay_out(groups, tabs(*range(12, 26)), 188, "@1", 28, 16)
+        for r, (items, row) in enumerate(zip(lay.rows, tb.render(lay))):
+            with self.subTest(row=r):
+                want = [tb.FILL, tb.NORM] + ([tb.left_part(28)] if r == 0 else [])
+                for k, item in enumerate(items):
+                    if item[0] == "tab" and k and items[k - 1][0] == "tab":
+                        want.append(tb.SEP)
+                    if item[0] == "head":
+                        want.append(tb.header(item[1], lay.head_w[item[1]] - 2, item[2]))
+                    elif item[0] == "div":
+                        want.append(tb.divider(item[1], lay.head_w[item[1]] - 2))
+                    elif item[0] == "tab":
+                        want.append(tb.entry(item[1], item[2], lay.slots[r]))
+                want += [tb.right_part(16)] if r == 0 else []
+                self.assertEqual(row, "".join(want))
+                self.assertEqual(row.count(tb.SEP), tb.separators(items))
+        # Outside every range: each entry closes its range before the separator.
+        self.assertTrue(tb.entry("@1", 1, 20).endswith("#[norange]" + tb.NORM + ",}}"))
+        self.assertEqual(tb.SEP, "#[fg=colour240]│#[fg=colour250]")
+        self.assertIn("┃", tb.divider(0, 5))      # a packed group's divider reads differently
+        self.assertNotIn("│", tb.divider(0, 5))
+
     def test_rows_hold_only_template_text(self):
         for width in (188, 45):
             lay = tb.lay_out([DOTCLAUDE], SHARED5, width, "@4", 28, 16)
@@ -296,12 +337,22 @@ class Render(unittest.TestCase):
                     self.assertLessEqual(set(row), ALPHABET)
                     self.assertNotRegex(row, r"#\[[^]]*,")       # one style per #[ ]
 
-    def test_titles_are_drawn_with_their_hashes_doubled(self):
+    def test_a_title_loses_its_hashes_then_claudes_prefix(self):
         e = tb.entry("@7", 7, 30)
-        self.assertIn("#{s/^(✳ )?\\[[^]]*\\] //;q/h:pane_title}", e)
-        self.assertIn("#{q/h:pane_current_command}", e)
-        self.assertNotRegex(e.replace("q/h:pane_title", "").replace(
-            "q/h:pane_current_command", ""), r"pane_title}|pane_current_command}")
+        strip = "s/^([^ [][^ []?[^ []? )?\\[[^]]*\\] (.*)$/\\2/"
+        self.assertIn("#{s/[#]/♯/;" + strip + ":pane_title}", e)
+        self.assertIn("#{s/[#]/♯/:pane_current_command}", e)
+        self.assertEqual(e.count("pane_title}"), e.count("[#]/♯/;" + strip + ":pane_title}"))
+        for bad in ("{", "}", ",", ":", ";"):   # each would end the modifier or the #{...}
+            self.assertNotIn(bad, strip)
+        # The same pattern in Python's dialect ([ escaped in a set): what it keeps.
+        py = re.compile(r"^([^ \[][^ \[]?[^ \[]? )?\[[^]]*\] (.*)$")
+        for title, label in (("✳ [repo] label", "label"), ("⠂ [repo] label", "label"),
+                             ("⣿ [repo] label", "label"), ("[repo] label", "label"),
+                             ("no prefix here", "no prefix here"),
+                             ("✳ [a] [b] x", "[b] x"), ("long word [x] y", "long word [x] y")):
+            with self.subTest(title=title):
+                self.assertEqual(py.sub(r"\2", title), label)
 
     def test_row_0_keeps_status_left_and_right(self):
         rows = tb.render(tb.lay_out([DOTCLAUDE], SHARED5, 188, "@4", 28, 16))
@@ -445,10 +496,10 @@ class Quote(unittest.TestCase):
         line = tb.write_line("$3", tb.session_ops(lay, rows), "3", "SIG")
         cmds = tmux_words(line)
         names = [c[3] if c[1] == "-t" else c[4] for c in cmds]
-        self.assertEqual(names, ["@tab_bar_g0", "status-format[0]", "status-format[1]",
-                                 "status-format[2]", "status", "status-position", "status-left",
-                                 "status-right", "@tab_bar_sig"])
-        self.assertEqual([c[4] for c in cmds[1:4]], rows)
+        self.assertEqual(names, ["@tab_bar_g0"] + [f"status-format[{i}]" for i in range(len(rows))]
+                         + ["status", "status-position", "status-left", "status-right",
+                            "@tab_bar_sig"])
+        self.assertEqual([c[4] for c in cmds[1:1 + len(rows)]], rows)
         self.assertEqual(cmds[-1], ["set-option", "-t", "$3", "@tab_bar_sig", "SIG"])
         no_status = tmux_words(tb.write_line("$3", tb.session_ops(lay, rows), None, "SIG"))
         self.assertNotIn("status", [c[3] for c in no_status if c[1] == "-t"])
@@ -492,7 +543,8 @@ class Conf(unittest.TestCase):
         with open(CONF) as f:
             text = f.read()
         hooks = ("client-attached", "client-detached", "client-resized", "window-linked",
-                 "window-unlinked", "after-new-window", "session-window-changed")
+                 "window-unlinked", "after-new-window", "session-window-changed",
+                 "client-session-changed")
         for hook in hooks:
             with self.subTest(hook=hook):
                 self.assertIn(f"set-hook -g {hook}[43] {HOOK}\n", text)
@@ -763,6 +815,21 @@ class FakeTmux(unittest.TestCase):
         with open(self.base + ".err") as f:
             self.assertIn("source-file", f.read())
 
+    def test_a_newline_in_a_path_cannot_forge_another_panes_line(self):
+        # A directory named "x\n@1\t1\t<the lead>" would read, line by line, as a second pane
+        # line giving @1 (hq) the lead's directory.
+        st = self.read_state()
+        lead = st["panes"][1]["pane_current_path"]
+        forged = os.path.join(self.tmp, "x\n@1\t1\t" + lead)
+        st["panes"].append({"window_id": "@5", "pane_active": "1", "pane_current_path": forged})
+        st["windows"].append({"session_id": "$0", "window_id": "@5", "window_index": "5",
+                              "window_active": "0"})
+        self.write_state(st)
+        self.run_layout()
+        names = {w["window_id"]: w.get("@tab_name") for w in self.read_state()["windows"]}
+        self.assertEqual(names["@1"], "hq:")
+        self.assertNotEqual(names["@5"], "lead")
+
     def test_outside_tmux_nothing_runs(self):
         env = {k: v for k, v in self.env.items() if k != "TMUX"}
         p = subprocess.run([sys.executable, "-I", SCRIPT, "layout"], capture_output=True,
@@ -829,6 +896,20 @@ class Lock(unittest.TestCase):
 
         tb.run_locked(self.base, run)
         self.assertEqual(len(calls), 2 * tb.PASSES)   # the passes, then the one retry's
+
+    def test_a_run_marks_dirty_before_it_tries_the_lock(self):
+        # Otherwise a holder letting go between this run's failed flock and its mark would
+        # check, find nothing and leave, and this run's change would wait for the next event.
+        calls = []
+
+        def flock(fd, op):
+            self.assertTrue(os.path.exists(self.base + ".dirty"))
+            raise BlockingIOError
+
+        with unittest.mock.patch.object(tb.fcntl, "flock", flock):
+            tb.run_locked(self.base, lambda: calls.append(1))
+        self.assertEqual(calls, [])
+        self.assertTrue(os.path.exists(self.base + ".dirty"))
 
     def test_one_pass_when_nothing_marks(self):
         calls = []
@@ -1009,12 +1090,32 @@ class RealTmux(unittest.TestCase):
         time.sleep(2.5)                   # a status-interval: the row is drawn again
         self.assertFalse(os.path.exists(pwned))
 
-    def test_a_style_in_a_title_is_drawn_as_text(self):
+    def test_claudes_title_prefix_is_stripped_idle_busy_or_bare(self):
+        self.ti("new-window", "-d", "-t", "t:3", "-c", self.plain, "sleep 600")
         self.run_layout()
+        titles = ("✳ [dotclaude] alpha label", "⠂ [tab-bar] beta label", "[hq] gamma label",
+                  "no prefix here")
+        for i, title in enumerate(titles):
+            self.ti("select-pane", "-t", f"t:{i}", "-T", title)
+        for text in ("lead alpha label", "tab-bar beta label", "hq: gamma label",
+                     "hq: no prefix here"):
+            self.find(text)
+        bar = "\n".join(self.screen()[:2])
+        for gone in ("✳", "⠂", "[dotclaude]", "[tab-bar]", "[hq]"):
+            self.assertNotIn(gone, bar)
+
+    def test_a_hash_or_a_style_in_a_title_draws_as_text_and_keeps_the_width(self):
+        self.run_layout()
+        self.ti("select-pane", "-t", "t:0", "-T", "PR 93 x")
+        self.find("lead PR 93 x")
+        x0, y0 = self.find("tab-bar beta-title")
+        self.ti("select-pane", "-t", "t:0", "-T", "PR #93x")          # as many characters
+        self.find("lead PR ♯93x")
+        self.assertEqual(self.find("tab-bar beta-title"), (x0, y0))    # the next tab stays put
         self.ti("select-pane", "-t", "t:2", "-T", "#[range=window|1]x")
         self.assertEqual(self.ti("display", "-p", "-t", "t:2", "#{pane_title}").stdout,
                          "#[range=window|1]x\n")
-        self.find("hq: #[range=window|1]x")    # without q/h it would be a range and "hq: x"
+        self.find("hq: ♯[range=window|1]x")    # a # left in would make it a range: "hq: x"
 
     def test_a_click_on_row_2_switches(self):
         self.run_layout()
@@ -1023,6 +1124,17 @@ class RealTmux(unittest.TestCase):
         self.assertEqual(y, 2)
         self.click(x, y)
         self.wait(lambda: self.current() == "2", "the click on row 2 did not switch")
+
+    def test_a_click_on_a_separator_does_nothing(self):
+        # The separator sits outside both tabs' ranges: tmux sees no range there
+        # (MouseUp1StatusDefault, unbound), so no switch and no menu.
+        self.run_layout()
+        x, y = self.find("│")
+        self.assertEqual(y, 1)                  # between the lead and the lane on row 1
+        self.click(x, y)
+        time.sleep(0.5)
+        self.assertEqual(self.current(), "0")
+        self.assertFalse(any("Replies before pass" in line for line in self.screen()))
 
     def test_a_tap_on_the_current_tab_opens_its_menu_and_a_tap_on_an_item_runs_it(self):
         self.run_layout()
