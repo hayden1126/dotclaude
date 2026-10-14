@@ -91,8 +91,10 @@ stored here).
     into lanes, sandbox-off Python runs `-I`). Its first live `lane done` ended the lane's
     `claude` (session 8e31f81a) and 9 of its MCP children, each named with its pid, and left
     every other window alone.
-  - `tab-bar` PR 1 merged as #96 (2026-10-14) and is installed from main (main shows
-    `status 2`). It merged before its fresh review and live smoke, so both still run, with
+  - `tab-bar` PR 1 merged as #96 (2026-10-14) and was installed from main (main shows
+    `status 2`). Its review fixes and Shift+arrow navigation merged as #97 (968a8af). The lead
+    did not install #97 from main: lane-addr holds the install, and main's bar strips only the
+    old `[repo] ` title, so it goes live through lane-addr's install after lane-addr merges main. It merged before its fresh review and live smoke, so both still run, with
     Hayden's phone tap test, and anything found rides PR 2. The lane stays open for PR 2 (drag,
     custom rows). Hayden asked the lead to close it when tab-bar is done (taken as: after PR 2
     merges).
