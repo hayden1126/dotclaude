@@ -19,6 +19,7 @@ import unittest
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 HOOK = os.path.join(REPO, "hooks", "excluded-guard.sh")
+SESSION_HOOK = os.path.join(REPO, "hooks", "excluded-check.sh")
 MODULE = os.path.join(REPO, "hooks", "excluded_guard.py")
 EXCLUDED = ["git push", "git push origin *", "gh pr *", "lane ls", "lane ls *", "claude *",
             "codex login status"]
@@ -827,6 +828,125 @@ class Scan(Guard):
             os.makedirs(os.path.join(repo, "h"))
             self.git("config", "core.hooksPath", "h", cwd=repo)
         self.assertEqual(self.scan(self.tmp), (0, ""))
+
+
+class EveryRefusal(Guard):
+    """One run lists every rule a dir needs, not only the first refusal."""
+
+    def test_every_rule1_refusal_in_a_repo_is_listed_in_one_run(self):
+        inc = self.write(os.path.join(self.mkdir("wcfg"), "inc"), "[user]\n\tname = x\n")
+        self.git("config", "include.path", inc, cwd=self.proj)
+        self.git("config", "core.hooksPath", ".githooks", cwd=self.proj)
+        code, out = Scan.scan(self, self.proj)
+        self.assertEqual(code, 1, out)
+        for d in (os.path.dirname(inc), os.path.join(self.proj, ".githooks")):
+            self.assertIn(f'"Edit(/{d}/**)"', out)
+
+    def test_project_refusals_lists_them_all_and_stops_at_one_it_cannot_clear(self):
+        guard = load_guard()
+        inc = self.write(os.path.join(self.mkdir("wcfg"), "inc"), "")
+        self.git("config", "include.path", inc, cwd=self.lane)
+        self.git("config", "core.hooksPath", ".githooks", cwd=self.lane)
+        refusals, error = guard.project_refusals(self.env, self.lane)
+        self.assertIsNone(error)
+        self.assertCountEqual([r.fix_dir for r in refusals],
+                              [os.path.dirname(inc), os.path.join(self.lane, ".githooks")])
+        # A refusal with no rule to offer (a nested repo) ends the list.
+        nested = os.path.join(self.proj, "sub")
+        self.git("init", "-q", nested, cwd=self.proj)
+        refusals, error = guard.project_refusals(dict(self.env, CLAUDE_PROJECT_DIR=self.proj),
+                                                 nested, project=self.proj)
+        self.assertEqual([r.rule for r in refusals], ["rule1"])
+        self.assertIsNone(refusals[0].fix)
+
+
+class Session(Guard):
+    """`--session`, the SessionStart check: what an excluded call from this session's project
+    would meet, shown once per change in its findings, failing open."""
+
+    def start(self, project=None, raw=None, hook=SESSION_HOOK, **payload):
+        project = project or self.proj
+        event = {"session_id": "s1", "hook_event_name": "SessionStart", "source": "startup",
+                 "cwd": project, **payload}
+        env = dict(self.env, CLAUDE_PROJECT_DIR=project)
+        p = subprocess.run(["bash", hook], input=raw if raw is not None else json.dumps(event),
+                           capture_output=True, text=True, env=env, timeout=20, cwd=project)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        return json.loads(p.stdout) if p.stdout.strip() else None
+
+    def test_a_clean_session_says_nothing(self):
+        self.assertIsNone(self.start())
+        self.assertIsNone(self.start(self.lane))
+
+    def test_a_finding_shows_once_and_again_when_it_changes(self):
+        hooks = os.path.join(self.proj, ".githooks")
+        self.git("config", "core.hooksPath", ".githooks", cwd=self.proj)
+        out = self.start()
+        msg = out["systemMessage"]
+        self.assertIn(f"Edit(/{hooks}/**)", msg)
+        self.assertIn("--scan", msg)
+        self.assertIn("settings.machine.json", msg)
+        context = out["hookSpecificOutput"]
+        self.assertEqual(context["hookEventName"], "SessionStart")
+        self.assertIn("excluded-guard", context["additionalContext"])
+        self.assertIn(hooks, context["additionalContext"])
+        self.assertIsNone(self.start(), "the same findings showed twice")
+        inc = self.write(os.path.join(self.mkdir("wcfg"), "inc"), "")
+        self.git("config", "include.path", inc, cwd=self.proj)
+        msg = self.start()["systemMessage"]
+        for d in (hooks, os.path.dirname(inc)):
+            self.assertIn(f"Edit(/{d}/**)", msg)
+        self.protect(hooks)
+        self.protect(os.path.dirname(inc))
+        self.assertIsNone(self.start())  # cleared: nothing to say
+        self.deny_write.remove(hooks)
+        self.write_settings()
+        self.assertIn(f"Edit(/{hooks}/**)", self.start()["systemMessage"])
+
+    def test_a_path_finding_shows_once_across_projects(self):
+        self.env["PATH"] = f"{self.wbin}:/usr/bin"
+        self.assertIn(f"Edit(/{self.wbin}/**)", self.start()["systemMessage"])
+        self.assertIsNone(self.start(self.lane))
+
+    def test_each_lane_shows_its_own_hooks_dir(self):
+        self.git("config", "core.hooksPath", ".githooks", cwd=self.proj)
+        self.assertIn(os.path.join(self.proj, ".githooks"), self.start()["systemMessage"])
+        msg = self.start(self.lane)["systemMessage"]
+        self.assertIn(f"Edit(/{os.path.join(self.lane, '.githooks')}/**)", msg)
+        self.assertNotIn(os.path.join(self.proj, ".githooks"), msg)
+
+    def test_unattended_and_subagent_starts_say_nothing_and_keep_the_once(self):
+        self.env["PATH"] = f"{self.wbin}:/usr/bin"
+        self.assertIsNone(self.start(agent_id="a1"))
+        self.env["CLAUDE_CODE_SESSION_ATTENDED"] = "0"
+        self.assertIsNone(self.start())
+        del self.env["CLAUDE_CODE_SESSION_ATTENDED"]
+        self.assertIsNotNone(self.start())
+
+    def test_a_refusal_with_no_rule_is_shown_by_its_reason(self):
+        self.env["PATH"] = f":{self.bin}:/usr/bin"
+        self.assertIn("empty entry", self.start()["systemMessage"])
+
+    def test_the_payload_cwd_stands_in_for_a_missing_project_dir(self):
+        self.git("config", "core.hooksPath", ".githooks", cwd=self.proj)
+        del self.env["CLAUDE_PROJECT_DIR"]
+        event = {"session_id": "s1", "hook_event_name": "SessionStart", "cwd": self.proj}
+        p = subprocess.run(["bash", SESSION_HOOK], input=json.dumps(event), capture_output=True,
+                           text=True, env=self.env, timeout=20, cwd=self.tmp)
+        self.assertIn(os.path.join(self.proj, ".githooks"), json.loads(p.stdout)["systemMessage"])
+
+    def test_it_fails_open(self):
+        self.env["PATH"] = f"{self.wbin}:/usr/bin"
+        self.assertIsNone(self.start(raw="{not json"))
+        d = self.mkdir("broken")
+        shutil.copy(SESSION_HOOK, os.path.join(d, "excluded-check.sh"))
+        self.write(os.path.join(d, "excluded_guard.py"), "def (:\n")
+        self.assertIsNone(self.start(hook=os.path.join(d, "excluded-check.sh")))
+        # State it can't read or write: it still shows, every time, rather than hide a finding.
+        self.mkdir("state", "dotclaude", "excluded-check.json")
+        self.assertIsNotNone(self.start())
+        self.assertIsNotNone(self.start())
+        self.assertIn("excluded-check", self.log())
 
 
 class FailsClosed(Guard):

@@ -629,6 +629,58 @@ def judge(heads, cwd, env, settings):
         check_rule3(head, cwd, project)
 
 
+# --- Every refusal ----------------------------------------------------------------------------------
+
+def all_refusals(check, m, entries=None):
+    """Every refusal `check(m)` gives in turn, so one run lists every rule: after each, judge on
+    as if its fix were in place (its dir added to m.deny, or its empty or relative entry dropped
+    from `entries`, the PATH list `check` reads) until the check passes or a refusal can't be
+    cleared. Returns (refusals, the error that stopped it or None)."""
+    found = []
+    while True:
+        try:
+            check(m)
+            return found, None
+        except Refusal as r:
+            found.append(r)
+            bad = "" if r.path == "(empty)" else r.path
+            if r.fix_dir and r.fix_dir not in m.deny:
+                m.deny.append(r.fix_dir)
+            elif entries is not None and bad in entries and not os.path.isabs(bad):
+                entries.remove(bad)
+            else:
+                return found, None
+        except Exception as e:
+            return found, e
+
+
+def project_refusals(env, cwd, project=None):
+    """What rule 1 refuses for an excluded call from `cwd` in a session rooted at `project` (by
+    default `cwd` itself: a lane's own session), every one: (refusals, error or None)."""
+    project = project or cwd
+    env = dict(env, CLAUDE_PROJECT_DIR=project)
+    settings, _ = load_settings(env)
+    return all_refusals(lambda m: check_rule1(m, env, cwd, project),
+                        Machine(env, settings, cwd))
+
+
+def path_refusals(m, heads, path_var):
+    """What rule 2 refuses for each head on the full PATH, as the hook runs it, every one:
+    (refusals, errors). One Machine for all heads, so a dir is listed once."""
+    found, errors, entries = [], [], path_var.split(":")
+    for head in heads:
+        refusals, error = all_refusals(lambda m, head=head: check_rule2(m, head, ":".join(entries)),
+                                       m, entries)
+        found += refusals
+        if error:
+            errors.append(error)
+    return found, errors
+
+
+def excluded_heads(settings):
+    return sorted({first_word(normalize(p)) for p in settings["excludedCommands"]} - {""})
+
+
 # --- Scan ----------------------------------------------------------------------------------------
 
 SCAN_DEPTH = 4
@@ -667,7 +719,7 @@ def scan(roots, env):
     [(where, Refusal)], [(where, error)] for what it couldn't check, and the settings errors."""
     env = {k: v for k, v in env.items() if k != "CLAUDE_PROJECT_DIR"}
     settings, errors = load_settings(env)
-    heads = sorted({first_word(normalize(p)) for p in settings["excludedCommands"]} - {""})
+    heads = excluded_heads(settings)
     found, unchecked = [], []
     cwd = env.get("HOME") or os.getcwd()
     m = Machine(env, settings, cwd)
@@ -682,34 +734,17 @@ def scan(roots, env):
             except Exception as e:
                 unchecked.append((p or "(empty PATH entry)", e))
     # The full PATH, as the hook runs it, catches an interpreter one entry's head resolves
-    # through another. It stops at its first refusal, so judge on as if that refusal's rule were
-    # in place (or its empty or relative entry dropped) until it passes or can't be cleared.
-    fixed, entries = Machine(env, settings, cwd), path_var.split(":")
-    for head in heads:
-        while True:
-            try:
-                check_rule2(fixed, head, ":".join(entries))
-                break
-            except Refusal as r:
-                found.append(("PATH", r))
-                bad = "" if r.path == "(empty)" else r.path
-                if r.fix_dir and r.fix_dir not in fixed.deny:
-                    fixed.deny.append(r.fix_dir)
-                elif bad in entries and not os.path.isabs(bad):
-                    entries.remove(bad)
-                else:
-                    break
-            except Exception as e:
-                unchecked.append(("PATH", e))
-                break
+    # through another.
+    refusals, path_errors = path_refusals(Machine(env, settings, cwd), heads, path_var)
+    found += [("PATH", r) for r in refusals]
+    unchecked += [("PATH", e) for e in path_errors]
     for root in roots:
         for repo in repos_under(root):
-            try:
-                check_rule1(Machine(env, settings, repo), env, repo, repo)
-            except Refusal as r:
-                found.append((repo, r))
-            except Exception as e:
-                unchecked.append((repo, e))
+            refusals, error = all_refusals(lambda m, repo=repo: check_rule1(m, env, repo, repo),
+                                           Machine(env, settings, repo))
+            found += [(repo, r) for r in refusals]
+            if error:
+                unchecked.append((repo, error))
     return found, unchecked, errors
 
 
@@ -824,6 +859,113 @@ def run_scan(roots):
     return 1 if first or unchecked or errors else 0
 
 
+# --- SessionStart check (hooks/excluded-check.sh) ----------------------------------------------
+
+SESSION_STATE = "excluded-check.json"
+MACHINE_KEY = "machine"
+
+
+def finding(r):
+    return f"{r.path}: add {r.fix}" if r.fix else r.reason
+
+
+def session_findings(env, project):
+    """{key: [line]}: what the live guard would refuse an excluded call from the project's root
+    (rule 3 aside: only a call's cwd decides it). MACHINE_KEY holds what every session shares,
+    PATH and unread settings, so it shows once across projects and lanes. The git config is
+    keyed by the project's path: its repo names its own includes and hooks dir, and each
+    worktree has its own."""
+    env = dict(env, CLAUDE_PROJECT_DIR=project)
+    settings, errors = load_settings(env)
+    machine = [f"settings not read: {e}" for e in errors]
+    refusals, path_errors = path_refusals(Machine(env, settings, project),
+                                          excluded_heads(settings), env.get("PATH", ""))
+    machine += [finding(r) for r in refusals]
+    machine += [f"PATH: could not check ({type(e).__name__}: {e})" for e in path_errors]
+    refusals, error = all_refusals(lambda m: check_rule1(m, env, project, project),
+                                   Machine(env, settings, project))
+    mine = [finding(r) for r in refusals]
+    if error:
+        mine.append(f"its git config: could not check ({type(error).__name__}: {error})")
+    return {MACHINE_KEY: machine, project: mine}
+
+
+def unseen(findings):
+    """The findings whose key changed since the last start that showed them, and store the new
+    ones. A key going to none is stored, never shown. State that can't be read counts as none
+    seen and one that can't be written is logged: a finding then shows at every start rather
+    than never."""
+    d = os.path.join(os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state"),
+                     "dotclaude")
+    path = os.path.join(d, SESSION_STATE)
+    try:
+        with open(path) as f:
+            seen = json.load(f)
+        if not isinstance(seen, dict):
+            seen = {}
+    except FileNotFoundError:
+        seen = {}
+    except (OSError, ValueError) as e:
+        log(f"excluded-check state not read ({type(e).__name__}: {e})")
+        seen = {}
+    out = {}
+    for key, lines in findings.items():
+        digest = hashlib.sha256(json.dumps(sorted(lines)).encode()).hexdigest()
+        if lines and seen.get(key) != digest:
+            out[key] = lines
+        seen[key] = digest
+    # A closed lane's key goes with its dir, so the file stays as small as the live projects.
+    seen = {k: v for k, v in seen.items() if k == MACHINE_KEY or os.path.isdir(k)}
+    tmp = f"{path}.{os.getpid()}.tmp"
+    try:
+        os.makedirs(d, exist_ok=True)
+        with open(tmp, "w") as f:
+            json.dump(seen, f)
+        os.replace(tmp, path)
+    except OSError as e:
+        log(f"excluded-check state not written ({type(e).__name__}: {e})")
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+    return out
+
+
+def session_message(shown):
+    lines = [line for key in sorted(shown, key=lambda k: k != MACHINE_KEY) for line in shown[key]]
+    screen = ("excluded-guard: an excluded command (git push, gh, lane and the rest of "
+              "sandbox.excludedCommands) from this session would be refused:\n"
+              + "\n".join(f"  {line}" for line in lines)
+              + "\nLook at each dir first: `python3 -I ~/.claude/hooks/excluded_guard.py --scan`"
+              " (sandbox off) lists what it holds. Then add the rules to permissions.deny in "
+              "~/.claude/settings.machine.json and rerun ./setup.sh.")
+    context = ("excluded-guard will refuse excluded commands (git push, gh, lane and the rest) "
+               "from this session until the user fixes: " + "; ".join(lines) + ". The fix is "
+               "theirs (deny rules in their own settings): name it to them, and don't work "
+               "around a refusal.")
+    return {"systemMessage": screen,
+            "hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": context}}
+
+
+def run_session():
+    """The SessionStart check. Fails open: any error is logged and prints nothing. Skips a
+    subagent's start and an unattended one: no one would see it, and it would use up the once."""
+    try:
+        event = json.load(sys.stdin)
+        if not isinstance(event, dict) or event.get("agent_id") or \
+                os.environ.get("CLAUDE_CODE_SESSION_ATTENDED") == "0":
+            return 0
+        project = os.environ.get("CLAUDE_PROJECT_DIR") or event.get("cwd")
+        if not isinstance(project, str) or not os.path.isdir(project):
+            return 0
+        shown = unseen(session_findings(os.environ, os.path.realpath(project)))
+        if shown:
+            print(json.dumps(session_message(shown)))
+    except Exception as e:
+        log(f"excluded-check error {type(e).__name__}: {e}")
+    return 0
+
+
 def deny(reason):
     print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse",
                                              "permissionDecision": "deny",
@@ -866,4 +1008,6 @@ def main():
 if __name__ == "__main__":
     if sys.argv[1:2] == ["--scan"]:
         sys.exit(run_scan(sys.argv[2:]))
+    if sys.argv[1:2] == ["--session"]:
+        sys.exit(run_session())
     main()
