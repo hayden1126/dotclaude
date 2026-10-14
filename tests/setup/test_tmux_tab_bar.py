@@ -778,6 +778,236 @@ class Nav(unittest.TestCase):
         self.assertEqual(select(rows, "@2", "right"), "@1")
 
 
+# --- arrange: placements, order and moves (pure) --------------------------------------------------
+
+P = tb.Place
+REPO_KEY, KAR_KEY = "p:/r/.git", "p:/k/.git"
+TAB_OF = {"@1": tb.Tab("shared", "", "hq", "hq:"), "@2": tb.Tab("lead", "/r/.git", "repo", "lead"),
+          "@3": tb.Tab("lane", "/r/.git", "repo", "a"), "@4": tb.Tab("lane", "/r/.git", "repo", "b"),
+          "@5": tb.Tab("lead", "/k/.git", "kar", "lead"), "@6": tb.Tab("shared", "", "x", "x:")}
+WINS = [(int(w[1:]), w) for w in TAB_OF]
+
+
+def arranged(places, wins=WINS):
+    groups, shared, names = tb.group_windows(wins, TAB_OF, places)
+    return [(g.key, [w for w, _ in g.tabs]) for g in groups] + [("s", [w for w, _ in shared])], \
+        groups, shared, names
+
+
+class Placement(unittest.TestCase):
+    def test_a_valid_placement_reads_back(self):
+        for p in (P("s", 0), P(REPO_KEY, 999), P("c:1", 3, REPO_KEY, "work ♯1"),
+                  P("c:9999", 0, "s", ""), P("c:2", 0, "c:1", "")):
+            with self.subTest(p=p):
+                self.assertEqual(tb.parse_place(tb.place_text(p)), p)
+
+    def test_each_bad_field_or_shape_is_no_placement(self):
+        good = {"row": "s", "pos": 0, "after": "", "name": ""}
+        self.assertEqual(tb.parse_place(json.dumps(good)), P("s", 0))
+        for change in ({"row": "x"}, {"row": "p:rel"}, {"row": "c:0"}, {"row": "c:10000"},
+                       {"row": "c:01"}, {"row": 5}, {"row": "s\n"}, {"row": "p:/a\x07"},
+                       {"pos": -1}, {"pos": 1000}, {"pos": True}, {"pos": 1.0}, {"pos": "1"},
+                       {"after": "x"}, {"after": None}, {"name": "a#b"}, {"name": "x" * 17},
+                       {"name": "a\x01"}, {"name": 3}, {"name": " a"}):
+            with self.subTest(change=change):
+                self.assertIsNone(tb.parse_place(json.dumps({**good, **change})))
+        for text in ("", "null", "[]", "{", json.dumps({**good, "extra": 1}),
+                     json.dumps({k: v for k, v in good.items() if k != "name"}),
+                     json.dumps({**good, "row": "p:/" + "a" * tb.PLACE_MAX}),
+                     json.dumps(good) + "\x07", "\t" + json.dumps(good),
+                     "[" * 1000 + "]" * 1000):
+            with self.subTest(text=text[:30]):
+                self.assertIsNone(tb.parse_place(text))
+        self.assertIsNone(tb.place_text(P("p:/" + "a" * tb.PLACE_MAX, 0)))   # can't read back
+        self.assertIsNone(tb.place_text(P("p:/a\nb", 0)))
+
+    def test_a_row_name_is_cleaned(self):
+        hostile = "a\"b'c;d#[e%f$(g)$HOME~h\\i"
+        self.assertEqual(tb.clean_row_name(hostile), "a\"b'c;d♯[e%f$(g…")
+        self.assertEqual(tb.clean_row_name("\x1b[31m red\x00 "), "[31m red")
+        self.assertEqual(tb.clean_row_name("   "), "")
+        for raw in (hostile, "漢字" * 10, "#" * 40, "\x01 x", "x" * 16):
+            with self.subTest(raw=raw):
+                name = tb.clean_row_name(raw)
+                self.assertLessEqual(tb.text_width(name), tb.ROW_NAME_CELLS)
+                self.assertNotIn("#", name)
+                self.assertEqual(tb.clean_row_name(name), name)   # a stored name stays valid
+
+    def test_the_custom_colour_is_outside_the_palette(self):
+        self.assertNotIn(tb.CUSTOM_COLOUR, tb.PALETTE)
+        lay = tb.lay_out([Group("", tabs(1), tb.CUSTOM_COLOUR, "c:1")], tabs(2), 188, "@1", 8, 22)
+        self.assertIn(f"#[fg=colour{tb.CUSTOM_COLOUR}]#[bold]▸", tb.render(lay)[0])
+
+
+class Order(unittest.TestCase):
+    def test_no_placement_is_todays_order(self):
+        rows, _, _, names = arranged({})
+        self.assertEqual(rows, [(REPO_KEY, ["@2", "@3", "@4"]), (KAR_KEY, ["@5"]),
+                                ("s", ["@1", "@6"])])
+        self.assertEqual(names["@3"], ("a", "0", ""))
+        self.assertEqual(names["@5"], ("lead", "1", ""))
+        self.assertEqual(names["@1"], ("hq:", "", ""))
+
+    def test_a_manual_row_puts_its_placed_tabs_first_then_the_rest_in_auto_order(self):
+        rows, *_ = arranged({"@4": P(REPO_KEY, 0), "@2": P(REPO_KEY, 1)})
+        self.assertEqual(rows[0], (REPO_KEY, ["@4", "@2", "@3"]))
+
+    def test_a_new_window_appends_and_a_closed_neighbour_leaves_no_gap(self):
+        places = {"@4": P(REPO_KEY, 0), "@3": P(REPO_KEY, 1), "@2": P(REPO_KEY, 2)}
+        tab_of = dict(TAB_OF, **{"@7": tb.Tab("lane", "/r/.git", "repo", "c")})
+        groups, _, _ = tb.group_windows(WINS + [(7, "@7")], tab_of, places)
+        self.assertEqual([w for w, _ in groups[0].tabs], ["@4", "@3", "@2", "@7"])
+        rows, *_ = arranged(places, [w for w in WINS if w[1] != "@3"])
+        self.assertEqual(rows[0], (REPO_KEY, ["@4", "@2"]))
+
+    def test_a_tab_outside_its_projects_row_keeps_its_colour_and_shows_its_repo(self):
+        rows, _, _, names = arranged({"@3": P("s", 0), "@1": P(KAR_KEY, 0)})
+        self.assertEqual(rows, [(REPO_KEY, ["@2", "@4"]), (KAR_KEY, ["@1", "@5"]),
+                                ("s", ["@3", "@6"])])
+        self.assertEqual(names["@3"], ("repo·a", "0", ""))
+        self.assertEqual(names["@1"], ("hq:", "", ""))    # a shared tab keeps its name
+
+    def test_a_project_row_no_window_classifies_into_falls_back_to_auto(self):
+        rows, _, _, names = arranged({"@1": P("p:/gone/.git", 0), "@3": P("p:/gone/.git", 1)})
+        self.assertEqual(rows, arranged({})[0])
+        self.assertEqual(names, arranged({})[3])
+
+    def test_moving_every_tab_out_of_a_project_recolours_nothing(self):
+        places = {w: P("s", k) for k, w in enumerate(("@2", "@3", "@4"))}
+        rows, groups, _, names = arranged(places)
+        self.assertEqual([g.key for g in groups], [KAR_KEY])
+        self.assertEqual(groups[0].colour, tb.PALETTE[1])
+        self.assertEqual(names["@5"][1], "1")
+        self.assertEqual(names["@2"], ("repo·lead", "0", ""))
+
+    def test_a_custom_row_follows_its_anchor_else_goes_last_among_the_groups(self):
+        cases = [({"@3": P("c:1", 0, REPO_KEY)}, [REPO_KEY, "c:1", KAR_KEY]),
+                 ({"@3": P("c:1", 0, KAR_KEY)}, [REPO_KEY, KAR_KEY, "c:1"]),
+                 ({"@3": P("c:1", 0, "s")}, [REPO_KEY, KAR_KEY, "c:1"]),
+                 ({"@3": P("c:1", 0, "p:/gone/.git")}, [REPO_KEY, KAR_KEY, "c:1"]),
+                 ({"@3": P("c:3", 0, REPO_KEY), "@4": P("c:2", 0, REPO_KEY)},
+                  [REPO_KEY, "c:2", "c:3", KAR_KEY]),
+                 ({"@3": P("c:1", 0, REPO_KEY), "@4": P("c:2", 0, "c:1")},
+                  [REPO_KEY, "c:1", "c:2", KAR_KEY]),
+                 ({"@3": P("c:1", 0, "c:2"), "@4": P("c:2", 0, "c:1")},    # a cycle: by id
+                  [REPO_KEY, KAR_KEY, "c:1", "c:2"]),
+                 ({"@5": P("c:1", 0, "c:1")}, [REPO_KEY, "c:1"])]          # itself, kar gone
+        for places, want in cases:
+            with self.subTest(places=places):
+                rows, groups, _, _ = arranged(places)
+                self.assertEqual([g.key for g in groups], want)
+
+    def test_a_custom_row_is_a_group_with_its_lowest_window_ids_name(self):
+        places = {"@6": P("c:4", 0, KAR_KEY, "late"), "@3": P("c:4", 1, REPO_KEY, "work")}
+        rows, groups, shared, names = arranged(places)
+        custom = groups[1]
+        self.assertEqual((custom.key, custom.name, custom.after, custom.colour),
+                         ("c:4", "work", REPO_KEY, tb.CUSTOM_COLOUR))
+        self.assertEqual([w for w, _ in custom.tabs], ["@6", "@3"])
+        self.assertEqual(names["@3"], ("repo·a", "0", "1"))
+        self.assertEqual(names["@6"], ("x:", "", "1"))
+
+    def test_custom_rows_pack_and_end_in_plus_n_like_project_rows(self):
+        groups = [Group("", tabs(1, 2), tb.CUSTOM_COLOUR, "c:1"), Group("bravo", tabs(3, 4, 5)),
+                  Group("charlie", tabs(6, 7, 8)), Group("delta", tabs(9, 10, 11))]
+        lay = tb.lay_out(groups, tabs(*range(12, 26)), 188, "@1", 28, 16)
+        self.assertIn(("div", 0), [i for row in lay.rows for i in row])
+        rows = tb.render(lay)
+        self.assertIn(f"#[fg=colour{tb.CUSTOM_COLOUR}]#[bold]┃▸", "".join(rows))
+        many = [Group(f"g{k}", tabs(*range(10 * k + 1, 10 * k + 11)),
+                      tb.CUSTOM_COLOUR if k == 2 else tb.PALETTE[0], f"c:{k}") for k in range(6)]
+        lay = tb.lay_out(many, [], 188, "@25", 28, 16)
+        self.assertEqual(len(lay.rows), tb.MAX_ROWS)
+        self.assertEqual(lay.rows[-1][-1][0], "more")
+        self.assertIn("@25", [w for row in lay.rows for w in tab_ids(row)])
+
+    def test_the_gutter_widens_for_a_long_row_name(self):
+        name = tb.clean_row_name("a very long row name indeed")
+        lay = tb.lay_out([Group("ab", tabs(1)), Group(name, tabs(2), tb.CUSTOM_COLOUR, "c:1")],
+                         tabs(3), 188, "@1", 8, 22)
+        self.assertEqual(lay.head, tb.ROW_NAME_CELLS + 2)
+        self.assertEqual(lay.heads[1], name)
+
+    def test_a_hostile_row_name_never_reaches_a_row(self):
+        name = tb.clean_row_name("#(touch x)%#{E:pwn}")
+        rows, groups, shared, _ = arranged({"@3": P("c:1", 0, REPO_KEY, name)})
+        for width in (188, 45):
+            lay = tb.lay_out(groups, shared, width, "@2", 8, 22)
+            for row in tb.render(lay):
+                self.assertNotIn("#(", row)
+                self.assertNotIn("touch", row)
+                self.assertLessEqual(set(row), ALPHABET)
+            self.assertIn(("@tab_bar_g1", tb.short(name, width < 100)), tb.session_ops(lay, []))
+
+
+class Moves(unittest.TestCase):
+    def test_put_rewrites_every_member_of_the_target_row(self):
+        _, groups, shared, _ = arranged({})
+        self.assertEqual(tb.put(groups, shared, "@1", "@3", False),
+                         {"@2": P(REPO_KEY, 0), "@1": P(REPO_KEY, 1), "@3": P(REPO_KEY, 2),
+                          "@4": P(REPO_KEY, 3)})
+        self.assertEqual(tb.put(groups, shared, "@2", "@4", True),
+                         {"@3": P(REPO_KEY, 0), "@4": P(REPO_KEY, 1), "@2": P(REPO_KEY, 2)})
+        self.assertEqual(tb.put(groups, shared, "@3", "@3", True), {})
+        _, groups, shared, _ = arranged({"@3": P("c:2", 0, KAR_KEY, "work")})
+        self.assertEqual(tb.put(groups, shared, "@6", "@3", True),
+                         {"@3": P("c:2", 0, KAR_KEY, "work"), "@6": P("c:2", 1, KAR_KEY, "work")})
+
+    def test_left_and_right_stop_at_the_rows_ends(self):
+        _, groups, shared, _ = arranged({})
+        self.assertEqual(tb.side_step(groups, shared, "@2", "left"), {})
+        self.assertEqual(tb.side_step(groups, shared, "@4", "right"), {})
+        self.assertEqual(tb.side_step(groups, shared, "@5", "right"), {})
+        self.assertEqual(tb.side_step(groups, shared, "@3", "left"),
+                         {"@3": P(REPO_KEY, 0), "@2": P(REPO_KEY, 1), "@4": P(REPO_KEY, 2)})
+        self.assertEqual(tb.side_step(groups, shared, "@1", "right"),
+                         {"@6": P("s", 0), "@1": P("s", 1)})
+
+    def test_up_and_down_cross_overflow_rows_and_stop_at_the_top_and_bottom(self):
+        rows = [[("@1", 8, 20), ("@2", 29, 20), ("@3", 50, 20)], [("@4", 8, 30), ("@5", 39, 30)],
+                [("@6", 8, 20)]]
+        self.assertEqual(tb.climb(rows, "@3", "down"), "@5")
+        self.assertEqual(tb.climb(rows, "@2", "down"), "@4")    # @4 spans 8-37: covers 29
+        self.assertEqual(tb.climb(rows, "@5", "down"), "@6")
+        self.assertEqual(tb.climb(rows, "@4", "up"), "@1")
+        self.assertIsNone(tb.climb(rows, "@1", "up"))
+        self.assertIsNone(tb.climb(rows, "@6", "down"))
+        self.assertIsNone(tb.climb(rows, "@9", "down"))         # hidden in +N
+
+    def test_a_new_row_takes_the_next_id_any_placement_names(self):
+        _, groups, shared, _ = arranged({})
+        self.assertEqual(tb.new_row(groups, shared, "@3", []), {"@3": P("c:1", 0, REPO_KEY)})
+        places = [P("c:4", 0, "s"), P("c:2", 0, "c:7"), P("s", 3)]
+        self.assertEqual(tb.new_row(groups, shared, "@1", places), {"@1": P("c:8", 0, "s")})
+        self.assertEqual(tb.new_row(groups, shared, "@1", [P("c:9999", 0)]), {})
+        _, groups, shared, _ = arranged({"@3": P("c:1", 0, REPO_KEY)})
+        self.assertEqual(tb.new_row(groups, shared, "@3", []), {})   # alone already
+        _, groups, shared, _ = arranged({"@3": P("c:1", 0, REPO_KEY), "@4": P("c:1", 1, REPO_KEY)})
+        self.assertEqual(tb.new_row(groups, shared, "@4", [P("c:1", 0)]),
+                         {"@4": P("c:2", 0, "c:1")})
+
+    def test_rename_row_names_every_member_and_only_in_a_custom_row(self):
+        _, groups, _, _ = arranged({"@3": P("c:1", 0, REPO_KEY), "@6": P("c:1", 1, REPO_KEY)})
+        self.assertEqual(tb.rename_row(groups, "@6", "work"),
+                         {"@3": P("c:1", 0, REPO_KEY, "work"), "@6": P("c:1", 1, REPO_KEY, "work")})
+        self.assertEqual(tb.rename_row(groups, "@2", "work"), {})
+
+    def test_a_drop_goes_before_or_after_by_the_half_of_the_slot(self):
+        rows = [(0, [("@2", 19, 32), ("@3", 52, 32)]), (1, [("@1", 19, 32)])]
+        for x, want in ((52, False), (67, False), (68, True), (83, True), (84, True)):
+            with self.subTest(x=x):
+                self.assertEqual(tb.drop_side(rows, "@3", x, 0), want)
+        self.assertIsNone(tb.drop_side(rows, "@9", 20, 0))
+        self.assertIsNone(tb.drop_side([], "@3", 20, 0))
+
+    def test_a_drop_on_a_rows_gutter_or_tail_goes_first_or_last(self):
+        rows = [(0, [("@2", 19, 32), ("@3", 52, 32)]), (2, [("@1", 19, 32)])]
+        self.assertEqual(tb.row_end(rows, 3, 0), ("@2", False))
+        self.assertEqual(tb.row_end(rows, 150, 0), ("@3", True))
+        self.assertEqual(tb.row_end(rows, 150, 2), ("@1", True))
+        self.assertIsNone(tb.row_end(rows, 3, 1))                 # no tabs on that line
+
+
 # --- the source-file write ----------------------------------------------------------------------
 
 # A model of tmux 3.7c's config lexer (cmd-parse.y yylex_token) for the words tmux-tab-bar writes,
