@@ -1968,6 +1968,94 @@ class Close(LanesRepo):
         self.assertEqual(self.signals(), [(pid, "SIGTERM")])
 
 
+class SwitchedBranch(LanesRepo):
+    """A lane's worktree can leave lane.json's branch (a `git switch` for a follow-up PR): `ls`,
+    `whoami` and `done` go by the branch it has checked out."""
+
+    def setUp(self):
+        super().setUp()
+        self.lane("new", "chart-fix")
+        self.path = self.lane_path("chart-fix")
+        self.commit("chart.txt", "axis\n", cwd=self.path)
+        self.git("push", "-q", "origin", "chart-fix:main", cwd=self.path)  # merged
+        self.git("switch", "-q", "-c", "chart-more", cwd=self.path)
+        self.commit("more.txt", "labels\n", cwd=self.path)
+
+    def test_ls_and_whoami_show_the_checked_out_branch(self):
+        (row,) = json.loads(self.lane("ls", "--json"))
+        self.assertEqual((row["branch"], row["registered_branch"]), ("chart-more", "chart-fix"))
+        self.assertEqual((row["ahead"], row["behind"]), (1, 0))
+        self.assertIn("chart-more", self.lane("ls"))
+        self.assertEqual(json.loads(self.lane("whoami", "--json", cwd=self.path))["branch"],
+                         "chart-more")
+        self.assertIn("branch chart-more", self.lane("whoami", cwd=self.path))
+
+    def test_done_refuses_while_the_checked_out_branch_is_unmerged(self):
+        p = self.run_lane("done", "chart-fix")
+        self.assertEqual(p.returncode, 1)
+        self.assertIn("branch chart-more is not merged", p.stderr)
+        self.assertTrue(os.path.isdir(self.path))
+
+    def test_done_refuses_while_the_registered_branch_is_unmerged(self):
+        # The other way round: the lane switched away from work it never merged.
+        self.git("switch", "-q", "chart-fix", cwd=self.path)
+        self.commit("late.txt", "never pushed\n", cwd=self.path)
+        self.git("switch", "-q", "chart-more", cwd=self.path)
+        self.git("push", "-q", "origin", "chart-more:main", cwd=self.path)
+        p = self.run_lane("done", "chart-fix")
+        self.assertEqual(p.returncode, 1)
+        self.assertIn("branch chart-fix is not merged", p.stderr)
+        self.assertTrue(os.path.isdir(self.path))
+
+    def test_done_closes_once_both_are_merged_and_deletes_both(self):
+        self.git("push", "-q", "origin", "chart-more:main", cwd=self.path)
+        self.assertIn("closed", self.lane("done", "chart-fix"))
+        self.assertFalse(os.path.exists(self.path))
+        self.assertEqual(self.git("branch", "--list", "chart-fix", "chart-more"), "")
+
+    def test_a_detached_worktree_needs_abandon(self):
+        self.git("switch", "-q", "--detach", cwd=self.path)
+        (row,) = json.loads(self.lane("ls", "--json"))
+        self.assertTrue(row["branch"].startswith("(detached "), row["branch"])
+        p = self.run_lane("done", "chart-fix")
+        self.assertEqual(p.returncode, 1)
+        self.assertIn("detached HEAD", p.stderr)
+        self.lane("done", "chart-fix", "--abandon")
+        self.assertFalse(os.path.exists(self.path))
+        self.assertEqual(self.git("branch", "--list", "chart-fix"), "")  # merged: -d took it
+        self.assertIn("chart-more", self.git("branch", "--list", "chart-more"))  # never judged
+
+    def test_done_never_deletes_the_base_branch(self):
+        self.git("switch", "-q", "-c", "lead")  # the lead's checkout leaves main free
+        self.git("switch", "-q", "main", cwd=self.path)
+        self.lane("done", "chart-fix")
+        self.assertIn("main", self.git("branch", "--list", "main"))
+
+    def test_a_switch_during_the_close_refuses_it(self):
+        # What `done` judged is what it removes: a switch after the judging stops the close.
+        self.git("push", "-q", "origin", "chart-more:main", cwd=self.path)
+        lane_mod = load_lane_script()
+        real_fetch = lane_mod.fetch
+
+        def fetch_then_switch(repo):
+            fetched = real_fetch(repo)
+            subprocess.run(["git", "switch", "-q", "-c", "chart-late"], cwd=self.path,
+                           env=self.env, check=True)
+            return fetched
+
+        cwd = os.getcwd()
+        os.chdir(self.main)
+        try:
+            with mock.patch.dict(os.environ, self.env, clear=True), \
+                    mock.patch.object(lane_mod, "fetch", fetch_then_switch), \
+                    self.assertRaisesRegex(lane_mod.LaneError, "chart-late"):
+                lane_mod.cmd_done(argparse.Namespace(id="chart-fix", abandon=False))
+        finally:
+            os.chdir(cwd)
+        self.assertTrue(os.path.isdir(self.path))
+        self.assertEqual(self.lane_json("chart-fix")["state"], "active")
+
+
 class Shown(unittest.TestCase):
     def test_a_process_is_shown_by_its_program_never_its_arguments(self):
         # Any argument can hold a secret; comm and argv[0] are masked for the terminal (C0,
