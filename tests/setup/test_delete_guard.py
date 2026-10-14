@@ -187,7 +187,8 @@ class DeleteGuard(unittest.TestCase):
             f.write("cat >/dev/null; echo RAN\n")
         with open(os.path.join(REPO, "settings.json")) as f:
             (cmd,) = [h["command"] for e in json.load(f)["hooks"]["PreToolUse"]
-                      if e.get("matcher") == "Bash" for h in e["hooks"]]
+                      if e.get("matcher") == "Bash" for h in e["hooks"]
+                      if "delete-guard" in h["command"]]
         env = dict(self.env, HOME=home)
         event = {"tool_name": "Bash", "tool_input": {"command": 'rm -rf "$TMPDIR"/x',
                                                      "dangerouslyDisableSandbox": True}}

@@ -24,6 +24,13 @@
     "allow": [
       "Bash(delegation-ledger wait *)",
       "Bash(pass-respawn -C *)",
+      "Bash(lane ls)",
+      "Bash(lane ls *)",
+      "Bash(lane new *)",
+      "Bash(lane adopt *)",
+      "Bash(lane open *)",
+      "Bash(lane done *)",
+      "Bash(lane addr *)",
       "Bash(git push origin *)",
       "Bash(gh pr create *)",
       "Bash(gh pr ready *)",
@@ -226,7 +233,12 @@
       "Bash(git -C * clean -*f*)",
       "Bash(bash -c *git push*--force*)",
       "Bash(bash -c *git reset*--hard*)",
-      "Bash(claude *ultrareview*)"
+      "Bash(claude *ultrareview*)",
+      "Edit(~/.local/bin/**)",
+      "Edit(~/.bun/bin/**)",
+      "Edit(~/.cargo/bin/**)",
+      "Edit(~/.local/share/claude/**)",
+      "Edit(~/.local/lib/node_modules/**)"
     ]
   },
   "sandbox": {
@@ -434,6 +446,16 @@
           {
             "type": "command",
             "command": "i=$(cat); case \"$i\" in *'\"dangerouslyDisableSandbox\":true'*|*'\"dangerouslyDisableSandbox\": true'*) printf '%s' \"$i\" | bash \"$HOME/.claude/hooks/delete-guard.sh\" ;; esac",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "i=$(cat); printf '%s' \"$i\" | timeout 4 bash \"$HOME/.claude/hooks/excluded-guard.sh\" || { printf '%s' \"$i\" | grep -Eq '\"command\": ?\"[[:space:]]*(git|gh|lane|claude|codex|codex-delegate|delegation-ledger|pass-respawn|tmux|powershell[.]exe|cmd[.]exe)[ \"]' && { echo \"excluded-guard missing, failed or timed out: this excluded command is blocked\" >&2; exit 2; }; exit 0; }",
             "timeout": 5
           }
         ]

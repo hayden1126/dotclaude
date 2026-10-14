@@ -151,6 +151,8 @@ temp_roots = ["/tmp/claude-{uid}"]
 write_denied = ["~/.claude", "~/.gitconfig", "~/.config/git", "~/.zshrc", "~/.zshenv",
   "~/.zprofile", "~/.zlogin", "~/.bashrc", "~/.bash_profile", "~/.profile", "~/.oh-my-zsh",
   "~/.config/gh", "~/.ssh", "~/.local/bin",
+  # PATH dirs and install dirs an excluded command resolves through (hooks/excluded_guard.py).
+  "~/.bun/bin", "~/.cargo/bin", "~/.local/share/claude", "~/.local/lib/node_modules",
   "~/dotclaude/settings.json", "~/dotclaude/hooks", "~/dotclaude/skills", "~/dotclaude/agents",
   "~/dotclaude/CLAUDE.md", "~/dotclaude/codex", "~/.codex",
   # Run or installed outside the sandbox: ccstatusline, the Notification hook, setup.sh and

@@ -62,7 +62,14 @@ A typical overlay sets a preference and the machine's own tools:
 name your own CLIs that must run outside the sandbox (say, ones that write outside the project),
 one pattern per command shape (`mytool *` for calls with arguments, `mytool` for the bare call).
 A pattern must match the whole command, so a call through a pipe, `&&` or `cd` still runs
-sandboxed.
+sandboxed. Every PATH dir under your home (`~/hq/bin` on HAYPC) gets an Edit deny rule in the
+overlay's `permissions.deny` (`"Edit(~/hq/bin/**)"`), or the excluded-command guard refuses every
+excluded command. Only user and managed settings count for that, so a project's
+`.claude/settings*.json` can't stand in. On a new machine, the first `./setup.sh` ends with the
+guard's scan: it lists each dir it would refuse with what the dir holds, then prints the whole
+`settings.machine.json` with the rules added. Look at each dir, paste the file, and run
+`./setup.sh` again. Rerun the scan (`python3 -I hooks/excluded_guard.py --scan`) after adding a
+PATH dir or cloning a repo whose install step sets in-repo git hooks.
 
 The baseline's `permissions` deny destructive git and ask before anything that can reach `main`,
 in auto mode too. Denied: force-push, `reset --hard`, `reset --merge` and `git clean -f`, plain or
@@ -77,6 +84,8 @@ handoff skill's own `gh pr ready` as an unrequested commit, so `test_settings.py
 that every `gh pr` or `gh run` step CLAUDE.md, a skill or an agent names has a rule. Also
 allowed, because the classifier once refused a CI watch with no reason given: the read-only
 `gh pr checks`, `view`, `list`, `status` and `diff`, and `gh run list`, `view` and `watch`.
+`lane ls`, `new`, `adopt`, `open`, `done` and `addr` are allowed too, behind the excluded-command guard
+(docs/lanes.md S3).
 Read-only git (`status`, `log`, `diff`, `show`, `rev-parse`; the classifier once refused one as an
 "unrequested commit") is allowed too, with the pipe filters `head`, `tail`, `wc` and `grep`, since
 every part of a pipe needs its own rule. `git ... --output` writes a file, so it asks. A `cd <dir>
@@ -101,7 +110,8 @@ wrappers (`lane init`, `new`, `adopt`, `ls`, `open`, `done`, `addr`, `pass-respa
 `codex-delegate`), `claude`, the read-only tmux verbs (`ls`, `list-sessions`, `list-windows`,
 `list-panes`, `list-clients`, `list-keys`, `list-commands`, `capture-pane`, `display`, `show`,
 `show-options`, `show-environment`, `show-messages`, `show-hooks`), read-only codex (`login status`,
-`doctor` and a few lists) and the Windows shells. Any other call runs sandboxed, where tmux reaches
+`doctor` and a few lists) and the Windows shells. Each one meets `hooks/excluded-guard.sh` first
+(Hooks, below). Any other call runs sandboxed, where tmux reaches
 no socket, codex and any other `gh` form no credential, and a push to a local path no other repo's
 hooks, so it fails closed.
 
@@ -180,12 +190,13 @@ sees it.
 | `hooks/autopass_toggle.py` | Not a hook: the `skills/autopass` mod runs it for `/autopass on\|off\|status` (`autopass_toggle.py SESSION_ID CWD ARGS`), and it prints the one reply | symlink `~/.claude/hooks/autopass_toggle.py` |
 | `hooks/pass-banner.sh` | SessionStart (`startup`) hook: after a plain `/pass` respawned the tab, shows what the old session said in its last turn, once, as a banner you see and the model doesn't (its format and caps: the shim's header); a shim over `hooks/pass_banner.py`; fails open | symlink `~/.claude/hooks/pass-banner.sh` and `pass_banner.py` |
 | `hooks/md_render.py` | Not a hook: the stdlib markdown-to-terminal renderer (bold, italic, code, links, headings, lists, code blocks, tables, wrapped by terminal cells) that the banner and `tmux/pass-last` load by path | symlink `~/.claude/hooks/md_render.py` |
-| `hooks/session-registry.sh` | SessionStart/SessionEnd hook: records which session is open in which tmux tab (`$XDG_STATE_HOME/dotclaude/open-sessions/`), for `claude-restore`; deletes the entry on `/exit` or `/clear`, marks it when the window or claude is killed; then hands each payload to `claude-saved` (Star and Shelve; the star follows `/clear`); does nothing outside tmux | symlink `~/.claude/hooks/session-registry.sh` |
+| `hooks/session-registry.sh` | SessionStart/SessionEnd hook: records which session is open in which tmux tab (`$XDG_STATE_HOME/dotclaude/open-sessions/`), with the window's tab bar placement (`@tab_place`, as `place`), for `claude-restore`; deletes the entry on `/exit` or `/clear`, marks it when the window or claude is killed; then hands each payload to `claude-saved` (Star and Shelve; the star follows `/clear`); does nothing outside tmux | symlink `~/.claude/hooks/session-registry.sh` |
 | `hooks/session-summary.sh` | Stop hook: regenerates a 1-2 sentence session summary via a direct Haiku Messages-API call (`hooks/haiku.py`: Claude subscription OAuth token, stdlib urllib, no API key/jq), detached so it never blocks; caches the summary to `<config-dir>/session-summaries/<session_id>.txt` for the status-line widget and a short (`<=32`-char) tab label to `<session_id>.title.txt` for `session-title.sh` | symlink `~/.claude/hooks/session-summary.sh` |
 | `hooks/overwrite-guard.sh` | PreToolUse(Write) hook: denies a Write over a file this session hasn't read, or one that cuts a file of 1 KB or more to under a fifth; a shim over `hooks/overwrite_guard.py`; fails open | symlink `~/.claude/hooks/overwrite-guard.sh` and `overwrite_guard.py` |
 | `hooks/lane-identity.sh` | SessionStart/Stop/SessionEnd hook: tells a lane session its identity and registers it, prints one board line in a lanes repo's main checkout, mirrors a lane's record; a shim over `hooks/lane_identity.py`; fails open | symlink `~/.claude/hooks/lane-identity.sh` and `lane_identity.py` |
 | `hooks/lane-guard.sh` | PreToolUse(Edit/Write/MultiEdit) hook: denies writes to another lane's record or the lanes CLI's data, and relative identity in status files; a shim over `hooks/lane_guard.py`; fails open | symlink `~/.claude/hooks/lane-guard.sh` and `lane_guard.py` |
 | `hooks/delete-guard.sh` | PreToolUse(Bash) hook, sandbox-off commands only: denies a delete whose path uses a variable the command didn't set, a command substitution that would widen it if empty, or a top-level or home tree; a shim over `hooks/delete_guard.py`; fails open | symlink `~/.claude/hooks/delete-guard.sh` and `delete_guard.py` |
+| `hooks/excluded-guard.sh` | PreToolUse(Bash) hook, excluded commands only: refuses one whose cwd resolves to another repo, whose git config or PATH a sandboxed session could write, or a `claude` or `codex` call outside the project root; a shim over `hooks/excluded_guard.py`; fails closed for excluded heads | symlink `~/.claude/hooks/excluded-guard.sh` and `excluded_guard.py` |
 | `hooks/memory-git.sh` | SessionStart/Stop hook: commits every project's auto-memory to a local-only git repo (`$XDG_STATE_HOME/dotclaude/memory.git`); never blocks | symlink `~/.claude/hooks/memory-git.sh` |
 | `bin/claude-file-history` | Lists and restores Claude Code's own backups of a file (`~/.claude/file-history`), found through the transcripts | symlink `~/.local/bin/claude-file-history` when that dir exists |
 | `templates/` | `SPEC.md`, `PLAN.md`, `STATUS.md` scaffolds for full-track work that survive `/clear`, and `LANE.md`, a lane's record | symlink per file into `~/.claude/templates/` |
@@ -211,7 +222,7 @@ sees it.
 | `docs/blind-overwrite-brief.md` | Why the overwrite guard and `memory-git.sh` exist: two incidents (a blind overwrite of a memory file, a job's state inferred instead of read), the experiments and the design calls | reference |
 | `docs/chrome-devtools-wsl.md` | WSL2-only: how to make `chrome-devtools-mcp` work (Strategy A headless Linux Chrome, plus B to attach to your Windows Chrome) | reference |
 | `chrome-debug.ps1` | Windows launcher for Strategy B (Chrome with a remote-debugging port) | run on Windows when needed |
-| `tmux/` | The tmux side of the indicator: `claude.conf` (titles, status bar, the ◐ busy and ✳ waiting glyphs), the optional `base.conf` (mouse, splits, the Ctrl-b Enter menu), `cheatsheet.txt`, `tmux-claude-status`, the backstop the status bar runs (it also maps background sessions to their tab and has `claude-saved track` record attach tabs for `claude-restore`), `claude-restore`, which reopens `main`'s Claude tabs after the tmux server dies, `claude-saved`, which stars and shelves a tab's chat (the tab's right-click menu, Ctrl-b S, or Ctrl-b Enter), `pass-last`, which shows what Claude said before a `/pass` (Ctrl-b Up, or either menu), and `tmux-tab-bar`, which lays out the status bar in up to 5 rows grouped by project | sourced and linked by `setup-tmux.sh` |
+| `tmux/` | The tmux side of the indicator: `claude.conf` (titles, status bar, the ◐ busy and ✳ waiting glyphs), the optional `base.conf` (mouse, splits, the Ctrl-b Enter menu), `cheatsheet.txt`, `tmux-claude-status`, the backstop the status bar runs (it also maps background sessions to their tab and has `claude-saved track` record attach tabs for `claude-restore`), `claude-restore`, which reopens `main`'s Claude tabs after the tmux server dies, `claude-saved`, which stars and shelves a tab's chat (the tab's right-click menu, Ctrl-b S, or Ctrl-b Enter), `pass-last`, which shows what Claude said before a `/pass` (Ctrl-b Up, or either menu), and `tmux-tab-bar`, which lays out the status bar in up to 5 rows grouped by project and moves tabs you arrange by hand | sourced and linked by `setup-tmux.sh` |
 | `setup-tmux.sh` | Opt-in tmux installer: links `tmux-claude-status`, `claude-restore`, `claude-saved`, `pass-last` and `tmux-tab-bar` into `~/.local/bin` and keeps a marked `source-file` block in `~/.tmux.conf` (`--base` adds `base.conf` and the cheatsheet, `--no-base` drops them, and a run with neither keeps what the block has) | run once per machine that uses tmux; not called by `setup.sh` |
 | `setup-chrome-wsl.sh` | Opt-in WSL2 installer: installs Chrome for Testing and registers the user-scoped `chrome-devtools` override | run once on WSL2; not called by `setup.sh` |
 | `setup.sh` | The installer | run once per machine |
@@ -396,26 +407,48 @@ need nothing extra.
   opens the window list. The window you are on is always shown. On a narrow terminal (the phone over
   ssh) the bar moves to the bottom with shorter tabs and drops the host and the clock. Tap a
   tab to switch to it; tap the tab you are on for its menu (Star, Shelve, Shelf…, Replies before
-  pass, Rename and Windows…); right-click still opens the full menu. Shift+Left and Shift+Right
+  pass, Move…, Name row…, Rename and Windows…). Right-click opens tmux's window menu, with
+  **Move ◀** and **Move ▶** in place of its swaps, plus the same Claude items. Shift+Left and Shift+Right
   step through the tabs in the order the bar draws them, not by window number (wrapping from the
   last tab to the first), and Shift+Up and Shift+Down go to the tab above or below; for a window
   hidden in `+N`, left and right step by number and up and down do nothing (the same without
   `tmux-tab-bar` installed). Those four keys never reach the program in a pane.
-  `tmux/tmux-tab-bar` runs from
-  tmux hooks and from `tmux-claude-status`, which catches a directory change, a lane opening or
+  Tabs can also be arranged by hand. Drag a tab onto another tab to put it before or after
+  that tab (by which half you let go on, unless only the other side keeps it on that line when
+  the row redraws), or onto a row's left edge or empty end to make it that
+  row's first or last tab; a drag that ends over a pane does nothing (no copy mode). Ctrl-b then
+  Shift+arrows carry the tab you are on: left and right within its row, up and down onto the row
+  above or below (Shift+arrows go, Ctrl-b Shift+arrows carry, and each Shift+arrow within the
+  repeat time carries again). The tap menu's **Move…** opens a menu of the same moves (◀ ▶ ▲ ▼),
+  plus **New row**, a custom row of its own below the tab's row (from a shared tab, just above
+  the shared rows; nothing for a tab already alone in its row), and **Auto place**, back where
+  the bar puts it; it reopens after each step, so the phone can take several without retapping.
+  **Name row…** (in the tap menu and the Move menu; dim outside a custom row) names a custom row
+  (its header shows `name▸`, or a bare `▸` unnamed, in one colour of its own; an empty name
+  clears it). Every row header ends in the same column, its name right-aligned to the `▸`.
+  Ctrl-b Enter has **Move…** and **Reset bar**, which puts every tab of the session
+  back where the bar places it. A row you moved a tab into keeps the order you gave it; a new
+  tab joins its end. A lane tab outside its project's row shows as `repo·lane`. The arrangement
+  is kept in each window's `@tab_place` option, so it survives `/clear` and `/pass`, and in the
+  restore record (`place`), so `claude-restore` brings it back after tmux dies. A tab reopened
+  from the Shelf lands at the end of its project's row.
+  `tmux/tmux-tab-bar` runs from tmux hooks; from the keys, a drag's release, both tab menus and
+  Ctrl-b Enter; from `claude-restore`, once after it reopens tabs; and from `tmux-claude-status`,
+  which catches a directory change, a lane opening or
   closing, or a swapped window within a few seconds. It never puts a title, a directory name or a lane record into a
   tmux format (a `#[...]` in a title draws as text), never prints into a pane, and if it fails
   the bar stays as it was.
 - **Tabs come back after tmux dies**: a Windows restart, `wsl --shutdown`, `wsl --terminate` or
   `tmux kill-server` ends the tmux server and every Claude tab in `main`. `session-registry.sh`
   keeps one file per open tab in `$XDG_STATE_HOME/dotclaude/open-sessions/`: the session id, its
-  directory, transcript, pane, window index, and the tmux server it runs under (socket path,
-  start time and pid). `/exit` and `/clear` delete the old id's file (a `/clear`d tab is recorded again
+  directory, transcript, pane, window index, the tmux server it runs under (socket path,
+  start time and pid), and the window's tab bar placement (`place`). `/exit` and `/clear` delete the old id's file (a `/clear`d tab is recorded again
   under its new id). Killing the window, claude or the tmux server only marks it, since a
   shutdown that signals claude looks the same to a hook. When `main` is next created, tmux's
   `session-created` hook runs `claude-restore --auto main`. It takes the files from the same
   socket but an earlier server (other sockets, like a `tmux -L` test server, are left alone) and opens one window per tab, in the old order, running `claude --resume <id>` in its
-  directory. A marked tab comes back only if it ended within 120 s of its own server's
+  directory. It sets each window's tab bar placement before claude starts, then lays out the
+  bar once, so the tabs come back where you put them. A marked tab comes back only if it ended within 120 s of its own server's
   last activity (the shutdown itself); one closed earlier stays closed. It skips a session
   already running, a deleted directory, and an older session in the same pane (one claude runs
   in a pane at a time, so only the newest can be a live tab). A directory name with a `#` is
@@ -491,6 +524,12 @@ need nothing extra.
   `xargs rm`, a delete inside `bash -c`, `eval`, a function or a script, and a glob two levels
   down (`~/*/*`). Fails open; denies go to
   `$XDG_STATE_HOME/dotclaude/delete-guard.log`.
+- **PreToolUse(`Bash`): `excluded-guard.sh`** (in this repo), for commands that match
+  `sandbox.excludedCommands` and so run outside the sandbox. Rule: such a command must not act on
+  anything a sandboxed session can write. It refuses a call whose cwd resolves to a git repo
+  other than the project's, whose other git config or PATH dirs a sandboxed session could write,
+  or a `claude` or `codex` call outside the project root. Fails closed for excluded heads; denies go to `$XDG_STATE_HOME/dotclaude/excluded-guard.log`.
+  docs/delegation.md "The excluded-command guard" has the checks and what they don't cover.
 - **SessionStart / Stop: `memory-git.sh`** (in this repo). Commits every project's auto-memory
   (`~/.claude/projects/*/memory/`) to a local-only git repo at
   `$XDG_STATE_HOME/dotclaude/memory.git`, so a memory file broken by any means, a Bash heredoc
