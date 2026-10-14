@@ -640,6 +640,7 @@ def cmd_new(args) -> None:
         say(f"  copied {len(copied)} file(s) from .worktreeinclude")
     say(f"  record {lanelib.record_path(lane)}")
     run_setup(repo, lane)
+    check_worktree(lane, seed_ask=True)  # after the setup, which may set core.hooksPath
     say(f"cd {lane['path']} && claude")
 
 
@@ -656,6 +657,7 @@ def finish(repo: Repo, lane: dict) -> None:
         lane = lanelib.update_lane(repo, lane["id"], mark_active)
     say(f"finished lane {lane['id']}: branch {lane['branch']}, port {lane['port'] or 'none'}")
     say(f"  record {lanelib.record_path(lane)}")
+    check_worktree(lane, seed_ask=False)
 
 
 def cmd_adopt(args) -> None:
@@ -710,6 +712,7 @@ def cmd_adopt(args) -> None:
         write_json(repo.lane_json(lane_id), lane)
     say(f"adopted lane {lane_id}: branch {lane['branch']}, port {lane['port'] or 'none'}")
     say(f"  record {lanelib.record_path(lane)}")
+    check_worktree(lane, seed_ask=False)
 
 
 def pr_states(repo: Repo) -> dict[str, str] | None:
@@ -742,6 +745,97 @@ def autopass_state():
     except Exception:
         return None
     return mod
+
+
+def excluded_guard():
+    """hooks/excluded_guard (the excluded-command guard), found from this script's real path, or
+    None: `new` and `done` then say they couldn't check."""
+    if HOOKS not in sys.path:
+        sys.path.insert(0, HOOKS)
+    try:
+        import excluded_guard as mod
+    except Exception:
+        return None
+    return mod
+
+
+def check_worktree(lane: dict, seed_ask: bool) -> None:
+    """What the excluded-command guard would refuse an excluded call (git push, gh, lane) from
+    the lane's own session, each dir with the Edit deny rule that protects it. A repo whose setup
+    sets a relative core.hooksPath gives every worktree its own hooks dir, and the guard reads no
+    glob, so each lane needs a rule of its own. `new` also seeds the ask into the record it just
+    wrote, before any session; `adopt` only warns, as the record is the lane's to write. Advisory:
+    it never fails the lane."""
+    guard = excluded_guard()
+    try:
+        if guard is None:
+            raise ImportError(f"no excluded_guard in {HOOKS}")
+        refusals, error = guard.project_refusals(dict(os.environ), lane["path"])
+    except Exception as e:
+        refusals, error = [], e
+    if error:
+        warn(f"could not check lane {lane['id']}'s git config for the excluded-command guard "
+             f"({type(error).__name__}: {error})")
+    if not refusals:
+        return
+    found = [guard.finding(r) for r in refusals]
+    warn(f"excluded-guard will refuse lane {lane['id']}'s excluded calls (git push, gh, lane) "
+         "until these are fixed:")
+    for line in found:
+        warn(f"  {line}")
+    warn("Look at each dir first (`python3 -I ~/.claude/hooks/excluded_guard.py --scan`, sandbox "
+         "off), then add the rules to permissions.deny in ~/.claude/settings.machine.json and "
+         "rerun ./setup.sh")
+    if seed_ask:
+        ask = (f"- excluded-guard refuses this lane's excluded calls until: {'; '.join(found)} "
+               "(rules into ~/.claude/settings.machine.json, then ./setup.sh). Seeded by "
+               "`lane new`.")
+        if not seed_line(lane, "## Asks for Hayden", ask):
+            warn(f"could not add that to {lanelib.record_path(lane)}'s Asks for Hayden")
+
+
+def seed_line(lane: dict, heading: str, line: str) -> bool:
+    """Add `line` under `heading` (after its comment) in the record `new` just seeded. Read
+    without following a link and replaced whole, never written through one: the setup ran in
+    the lane in between. False when the record or heading isn't there as seeded."""
+    if lanelib.record_is_link(lane):
+        return False
+    path = lanelib.record_path(lane)
+    data = lanelib.read_head(path, RECORD_READ)
+    if data is None:
+        return False
+    text = data.decode(errors="replace")
+    m = re.search(rf"^{re.escape(heading)}\n(<!--.*?-->\n)?", text, re.M | re.S)
+    if not m:
+        return False
+    try:
+        lanelib.write_text(path, text[:m.end()] + line + "\n" + text[m.end():])
+    except OSError:
+        return False
+    return True
+
+
+def orphaned_rules(lane_id: str, path: str) -> None:
+    """After a close: the Edit deny rules that named paths in the removed worktree."""
+    guard = excluded_guard()
+    try:
+        if guard is None:
+            raise ImportError(f"no excluded_guard in {HOOKS}")
+        found = guard.rules_naming(path, os.environ)
+    except Exception as e:
+        warn(f"could not read the deny rules naming {path} ({type(e).__name__}: {e})")
+        return
+    claude = os.path.join(os.path.expanduser("~"), ".claude")
+    overlay = {rule for f, rule in found if f == os.path.join(claude, "settings.machine.json")}
+    # settings.json's copy of an overlay rule is setup.sh's: dropping it from the overlay drops it.
+    found = [(f, rule) for f, rule in found
+             if not (f == os.path.join(claude, "settings.json") and rule in overlay)]
+    if not found:
+        return
+    say(f"lane {lane_id}'s worktree is gone, so these permissions.deny rules name nothing now:")
+    for f, rule in found:
+        say(f"  {rule}  in {f}")
+    say("Drop each from its file (for settings.machine.json, then rerun ./setup.sh).")
 
 
 def status_of(session: dict) -> str:
@@ -2184,6 +2278,7 @@ def cmd_done(args) -> None:
         if p.returncode != 0:
             warn(f"branch {branch} kept: {p.stderr.strip()} (a squash merge leaves it "
                  "unmerged to git; check, then delete it yourself)")
+    orphaned_rules(args.id, path)
 
 
 def parser() -> argparse.ArgumentParser:

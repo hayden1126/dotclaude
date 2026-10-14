@@ -78,6 +78,7 @@ Each layer covers what the others can't.
 | Spawn guard | `hooks/agent-spawn-guard.sh`, `skills/delegation/scripts/agent-spawn-guard` | Enforces: denies a `writer` spawn without `isolation` on the call, and a named spawn without the `team-` prefix. Fails closed |
 | Sandbox | `settings.json` `sandbox` | Enforces (OS): the write roots, `denyRead` (the credential barrier, plus tool tokens and shell history), `denyWrite` (the enforcement sources, and the repo files that run outside the sandbox: `statusline/`, `notify-toast.ps1`, `codex/`, `tmux/`, `bin/`, `setup-tmux.sh`, `tests/` (the canary runs it), and `setup.sh` with the scripts and lists it installs from; installed from a lane, that checkout's copies too), and the network allowlist. The home PATH and install dirs an excluded command resolves through are Edit deny rules in `permissions.deny` instead, which Claude Code also merges into the sandbox and which bind the Edit and Write tools too (see "The excluded-command guard"). A sandboxed `git switch` or `merge` that touches a `denyWrite` file fails; `git pull` already runs outside. `failIfUnavailable`, and `autoAllowBashIfSandboxed: false`, so Hayden's prompts stay as they were |
 | Excluded-command guard | `hooks/excluded-guard.sh`, `hooks/excluded_guard.py`, a `Bash` entry in `settings.json` (timeout 5) | Enforces on every thread: an excluded command runs only when its cwd resolves to the project's own repository, the other git config it reads and every PATH dir and file its head resolves through are write-protected, and `claude` or `codex` runs from the project root. See "The excluded-command guard" below. Fails closed for excluded heads |
+| Excluded-command check | `hooks/excluded-check.sh` (`excluded_guard.py --session`), a SessionStart entry in `settings.json` (timeout 5) | Observes: what the guard would refuse from the session's project and PATH, shown once per change in its findings. Fails open |
 | Subagent policy | `hooks/subagent-policy.sh`, `skills/delegation/scripts/subagent-policy`, `skills/delegation/policy.toml` | Enforces: see "Subagent policy" below. Fails closed for the tools it polices |
 | Report check | `hooks/report-check.sh`, `skills/delegation/scripts/report-check` | Enforces acceptance: a schema-invalid report is sent back twice at most. Fails open |
 | Ledger | `hooks/delegation-ledger.sh`, `skills/delegation/scripts/delegation-ledger`, `skills/delegation/liveness.toml` | Observes: start and stop rows (`agent_type` is the resolved role; a teammate adds `name` and `teammate`), `report_ok`, denial rows, the main-checkout hash for a worktree agent (and the lane's, when the parent session runs in one); the per-agent liveness index (`agents/<id>.json`); `open` (the tool in flight and since when, thresholds in `liveness.toml`); `watch` (one line per live delegation, and a token like `2▶ 1⚠` for the tmux bar); `audit` (`--monthly` adds a month of usage for retuning, and `exclude` keeps probes out of it); `sandbox-denials`. Persuades: the deadline nudge, one PostToolUse `additionalContext` per activation past the role's `nudge_min`, and a `nudge` row. Fails open |
@@ -287,11 +288,10 @@ matches nothing passes with no output. Denies and unreadable settings files go t
 
 `python3 -I hooks/excluded_guard.py --scan [ROOT...]` finds a refusal before a call hits it: it
 runs rule 2 for each excluded head against each PATH entry on its own, then against the full
-PATH as the hook does, going on past each refusal as if its rule were in place (so one run lists
-what the next would, an interpreter found through another entry included), and rule 1 from the
-root of each repo under each root (`~` by default, four
-levels down, skipping hidden dirs, `node_modules` and symlinks), with the machine-wide settings
-only. A repo or entry it can't check is listed as such, and the scan goes on. It never offers
+PATH as the hook does, and rule 1 from the root of each repo under each root (`~` by default,
+four levels down, skipping hidden dirs, `node_modules` and symlinks), with the machine-wide
+settings only. Both go on past each refusal as if its rule were in place, so one run lists what
+the next would (an interpreter found through another entry included). A repo or entry it can't check is listed as such, and the scan goes on. It never offers
 a rule for a write root itself (`~`, say): a file there has to move into a dir a rule can
 cover. It prints each refusal once per path with what the path holds now
 (each entry's mtime, newest first, and inside a repo whether it matches `HEAD`), so the rule
@@ -303,6 +303,19 @@ runs it last and warns. While a lane holds the install, `./setup.sh` from the ma
 refuses, so that lane reruns its own install. A relative `core.hooksPath` resolves in each
 worktree, so a repo with lanes needs a rule per worktree (a `denyWrite` glob protected nothing
 when probed, and the guard reads no glob rule).
+
+Three checks bring a missing rule up before a call hits it:
+- **Session start.** `hooks/excluded-check.sh` runs the guard's own view of the project's root
+  and PATH (rule 3 aside: only a call's cwd decides it). It shows what would be refused on screen
+  and in one line of the model's context, once per change in those findings. PATH is keyed
+  machine-wide and git config per project, so a PATH dir shows once and each lane's hooks dir
+  shows in that lane. It skips subagent and unattended starts (no one would see them), and it
+  fails open: the guard still judges every call.
+- **`lane new`.** After the setup (the step that sets a `core.hooksPath`), it runs rule 1 on the
+  new worktree as the lane's own session will, prints each rule, and seeds the ask into the new
+  lane's record. `lane adopt` only prints them, since that record is already the lane's to write.
+- **`lane done`.** After a close, it names each Edit deny rule inside the removed worktree, and
+  the file it sits in: it now names nothing.
 
 Not covered:
 - a session rooted at an ancestor of a repo (at `$HOME`, say) can write that repo's config; the

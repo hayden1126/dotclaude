@@ -197,6 +197,7 @@ sees it.
 | `hooks/lane-guard.sh` | PreToolUse(Edit/Write/MultiEdit) hook: denies writes to another lane's record or the lanes CLI's data, and relative identity in status files; a shim over `hooks/lane_guard.py`; fails open | symlink `~/.claude/hooks/lane-guard.sh` and `lane_guard.py` |
 | `hooks/delete-guard.sh` | PreToolUse(Bash) hook, sandbox-off commands only: denies a delete whose path uses a variable the command didn't set, a command substitution that would widen it if empty, or a top-level or home tree; a shim over `hooks/delete_guard.py`; fails open | symlink `~/.claude/hooks/delete-guard.sh` and `delete_guard.py` |
 | `hooks/excluded-guard.sh` | PreToolUse(Bash) hook, excluded commands only: refuses one whose cwd resolves to another repo, whose git config or PATH a sandboxed session could write, or a `claude` or `codex` call outside the project root; a shim over `hooks/excluded_guard.py`; fails closed for excluded heads | symlink `~/.claude/hooks/excluded-guard.sh` and `excluded_guard.py` |
+| `hooks/excluded-check.sh` | SessionStart hook: shows what the excluded-command guard would refuse from the session's project and PATH, with the Edit deny rule for each dir, once per change in those findings; runs `excluded_guard.py --session`; fails open | symlink `~/.claude/hooks/excluded-check.sh` |
 | `hooks/memory-git.sh` | SessionStart/Stop hook: commits every project's auto-memory to a local-only git repo (`$XDG_STATE_HOME/dotclaude/memory.git`); never blocks | symlink `~/.claude/hooks/memory-git.sh` |
 | `bin/claude-file-history` | Lists and restores Claude Code's own backups of a file (`~/.claude/file-history`), found through the transcripts | symlink `~/.local/bin/claude-file-history` when that dir exists |
 | `templates/` | `SPEC.md`, `PLAN.md`, `STATUS.md` scaffolds for full-track work that survive `/clear`, and `LANE.md`, a lane's record | symlink per file into `~/.claude/templates/` |
@@ -530,6 +531,10 @@ need nothing extra.
   other than the project's, whose other git config or PATH dirs a sandboxed session could write,
   or a `claude` or `codex` call outside the project root. Fails closed for excluded heads; denies go to `$XDG_STATE_HOME/dotclaude/excluded-guard.log`.
   docs/delegation.md "The excluded-command guard" has the checks and what they don't cover.
+- **SessionStart: `excluded-check.sh`** (in this repo). The same guard's view of the session's
+  project and PATH, so a missing Edit deny rule shows when a session starts, not when a push gets
+  refused. Shown on screen and in the model's context, once per change in its findings. Fails
+  open.
 - **SessionStart / Stop: `memory-git.sh`** (in this repo). Commits every project's auto-memory
   (`~/.claude/projects/*/memory/`) to a local-only git repo at
   `$XDG_STATE_HOME/dotclaude/memory.git`, so a memory file broken by any means, a Bash heredoc

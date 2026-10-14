@@ -860,6 +860,32 @@ class EveryRefusal(Guard):
         self.assertIsNone(refusals[0].fix)
 
 
+class RulesNaming(Guard):
+    """rules_naming: the Edit deny rules a removed dir (a closed lane's worktree) leaves behind."""
+
+    def test_rules_inside_the_dir_in_any_form_and_only_those(self):
+        guard = load_guard()
+        lane = self.mkdir("home", "lanes", "chart-fix")
+        inside = ["Edit(~/lanes/chart-fix/.githooks/**)", f"Edit(/{lane}/tools/*.sh)",
+                  f"Edit(/{lane})", "Edit(~/lanes/chart-fix/[ab]/**)"]
+        outside = ["Edit(~/lanes/**)", "Edit(~/lanes/chart-fix2/**)", "Read(~/lanes/chart-fix/**)",
+                   "Edit(~/lanes/*/x/**)", 7]
+        machine = self.write(os.path.join(self.home, ".claude", "settings.machine.json"),
+                             json.dumps({"permissions": {"deny": inside[:2] + outside}}))
+        managed = self.write(os.path.join(self.tmp, "managed", "managed-settings.d", "a.json"),
+                             json.dumps({"permissions": {"deny": inside[2:]}}))
+        self.assertEqual(guard.rules_naming(lane, self.env),
+                         [(machine, r) for r in inside[:2]] + [(managed, r) for r in inside[2:]])
+
+    def test_an_unreadable_or_odd_settings_file_is_skipped(self):
+        guard = load_guard()
+        lane = self.mkdir("home", "lanes", "chart-fix")
+        self.mkdir("home", ".claude", "settings.machine.json")  # a dir: unreadable
+        self.write(os.path.join(self.home, ".claude", "settings.json"),
+                   json.dumps({"permissions": {"deny": "Edit(~/lanes/chart-fix/**)"}}))
+        self.assertEqual(guard.rules_naming(lane, self.env), [])
+
+
 class Session(Guard):
     """`--session`, the SessionStart check: what an excluded call from this session's project
     would meet, shown once per change in its findings, failing open."""

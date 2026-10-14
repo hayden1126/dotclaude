@@ -681,6 +681,47 @@ def excluded_heads(settings):
     return sorted({first_word(normalize(p)) for p in settings["excludedCommands"]} - {""})
 
 
+# An Edit rule's path, read looser than EDIT_RULE: its glob tail is cut, since a rule over a
+# removed dir names nothing whatever its form.
+EDIT_ANY = re.compile(r"Edit\((//|~/)([^)]*)\)")
+
+
+def rules_naming(path, env):
+    """(settings file, rule) for each Edit deny rule inside `path` in the machine overlay
+    (~/.claude/settings.machine.json, which dotclaude's setup.sh merges into settings.json),
+    the user's settings.json and the managed files, in that order. `lane done` prints them for
+    a closed lane's worktree: the guard reads no glob, so a lane's dir gets a rule of its own
+    (a relative core.hooksPath), and closing the lane leaves that rule naming nothing. A file
+    that can't be read is skipped."""
+    home = env.get("HOME") or os.path.expanduser("~")
+    managed = env.get(MANAGED_ENV) or MANAGED_DIR
+    files = [os.path.join(home, ".claude", "settings.machine.json"),
+             os.path.join(home, ".claude", "settings.json"),
+             os.path.join(managed, "managed-settings.json")]
+    files += sorted(glob.glob(os.path.join(managed, "managed-settings.d", "*.json")))
+    targets = {os.path.abspath(path), os.path.realpath(path)}
+    out = []
+    for f in files:
+        try:
+            with open(f) as fh:
+                text = fh.read()
+            data = json.loads(text) if text.strip() else {}
+        except (OSError, ValueError):
+            continue
+        perms = data.get("permissions") if isinstance(data, dict) else None
+        deny = perms.get("deny") if isinstance(perms, dict) else None
+        for rule in deny if isinstance(deny, list) else []:
+            m = EDIT_ANY.fullmatch(rule) if isinstance(rule, str) else None
+            if not m:
+                continue
+            literal = re.split(r"[*?\[]", m.group(2), maxsplit=1)[0]
+            d = os.path.normpath(("/" if m.group(1) == "//" else home.rstrip("/") + "/")
+                                 + literal)
+            if any(under(p, t) for p in (d, os.path.realpath(d)) for t in targets):
+                out.append((f, rule))
+    return out
+
+
 # --- Scan ----------------------------------------------------------------------------------------
 
 SCAN_DEPTH = 4

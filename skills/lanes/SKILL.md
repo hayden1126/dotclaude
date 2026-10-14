@@ -51,7 +51,9 @@ an unregistered worktree: `lane whoami` tells you which.
    --overlaps api-docs --done-when "axis test green"`. It fetches (and refuses if the fetch
    fails: a lane branches only from the commit the remote reports), branches from `origin/main`
    with no upstream, copies the gitignored files `.worktreeinclude` lists, seeds the record with
-   the brief, hands out a port and runs the setup command. Start the lane's session with
+   the brief, hands out a port and runs the setup command. Then it checks the worktree as the
+   excluded-command guard will, and seeds any Edit deny rule a dir needs (a `core.hooksPath` the
+   setup set, say) into the record's Asks for Hayden. Start the lane's session with
    `lane open chart-fix` (bare, from inside tmux): a new tmux window in the lane, in plan mode,
    told to read its record and plan the brief. Outside tmux, `cd <path> && claude`. Either way
    the session's cwd is the lane. Claude Code asks whether to trust each new folder, and a trusted
@@ -98,7 +100,10 @@ an unregistered worktree: `lane whoami` tells you which.
    `lane done`. Give its Bash call `timeout: 600000`: it can wait minutes (the fetch,
    handoff-check, two grace periods, the locks), and one cut off by a timeout needs a rerun.
    It archives `lane.json` and `.lane/` to `<common-dir>/lanes/_closed/<id>-<date>/`, runs
-   `git worktree remove` (never `--force`) and `git branch -d` (never `-D`).
+   `git worktree remove` (never `--force`) and `git branch -d` (never `-D`). It judges and
+   deletes the branch the worktree has checked out, and `lane.json`'s when that differs (a lane
+   that switched for a follow-up PR); a detached worktree needs `--abandon`. Last, it names any
+   Edit deny rule left naming the removed worktree: drop those from the file it names.
 
 Existing worktrees join with `lane adopt <path>`. A dir name that is no slug (a slug is letters,
 digits, `.`, `_` and `-`, starts with a letter or digit, runs at most 64 chars and isn't `main`)

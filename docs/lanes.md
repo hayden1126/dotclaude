@@ -266,7 +266,11 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
   takes the flock, so two `lane claim 42` calls can't both win. `lane new` reserves the port and
   writes `lane.json` under the lock, then runs the setup command outside it, so a slow
   `npm ci` never blocks a claim; a failed setup leaves the lane registered for a retry or
-  `lane done --abandon`. `lane done` sets the base as the branch's upstream before
+  `lane done --abandon`. After the setup (which may set a `core.hooksPath`), `new` checks the
+  worktree as the excluded-command guard will judge the lane's own calls, prints the Edit deny
+  rule each dir needs and seeds it into the record's Asks for Hayden; `adopt` only prints them
+  (docs/delegation.md, "The excluded-command guard"). `lane done` sets the base as the branch's
+  upstream before
   `git branch -d`, so `-d` judges the branch against what was merged rather than the main
   checkout's possibly unpulled HEAD.
 - **`lane open <id>`** (from `hq-open`) runs `tmux new-window -c <lane> -n <id> -d` with the
@@ -433,6 +437,15 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
   Nothing is chosen by name, start time or tmux window. A window id means something only on its
   own tmux server, and `kill-window` sends SIGHUP to everything on the pane's terminal (Hayden's
   call, 2026-10-13).
+
+  A lane can switch branches for a follow-up PR, which leaves `lane.json`'s branch behind (lane
+  tab-bar, 2026-10-14). So `ls`, `whoami` and `done` go by the branch the worktree has checked
+  out. `done` judges that branch and `lane.json`'s, when it differs and still exists: each must
+  pass, except one with nothing past the base once the other does. It refuses a detached
+  worktree without `--abandon` (its commit is on no branch to judge), refuses the remove if the
+  worktree's branch or HEAD moved since the judging, deletes each judged branch with `-d` but
+  never the base's own, and after the close names any Edit deny rule left naming the removed
+  worktree, with its file.
 - **Installing from a lane** (`install-state.py`, run by `setup.sh`). In a repo that installs
   from its checkout, the lane next in merge order tests its change by installing from its own
   worktree (`lane lock install -- ./setup.sh`). Before this, the next install from anywhere

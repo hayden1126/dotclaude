@@ -2056,6 +2056,74 @@ class SwitchedBranch(LanesRepo):
         self.assertEqual(self.lane_json("chart-fix")["state"], "active")
 
 
+class ExcludedGuardRules(LanesRepo):
+    """`new` names the Edit deny rule a lane's worktree needs before the excluded-command guard
+    passes its excluded calls; `done` names the ones its removed worktree leaves behind."""
+
+    def asks(self, lane_id):
+        text = self.read(self.record(lane_id))
+        return text[text.index("## Asks for Hayden"):text.index("## Not mine")]
+
+    def test_new_names_the_rule_a_setup_made_hooks_dir_needs_and_seeds_the_ask(self):
+        # A repo whose setup sets a relative core.hooksPath gives each worktree its own hooks
+        # dir, which only a rule naming that lane's path protects.
+        self.lane("init", "--setup", "git config core.hooksPath .githooks")
+        p = self.run_lane("new", "chart-fix")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        rule = f"Edit(/{self.lane_path('chart-fix')}/.githooks/**)"
+        self.assertIn(rule, p.stderr)
+        self.assertIn("settings.machine.json", p.stderr)
+        self.assertIn(rule, self.asks("chart-fix"))
+        self.assertEqual(self.lane_json("chart-fix")["state"], "active")
+
+    def test_a_clean_worktree_says_nothing(self):
+        p = self.run_lane("new", "chart-fix")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertNotIn("excluded-guard", p.stderr)
+        self.assertNotIn("Edit(", self.asks("chart-fix"))
+
+    def test_adopt_warns_but_leaves_the_record_to_the_lane(self):
+        self.lane("init", "--setup", "git config core.hooksPath .githooks && test -f ready.flag")
+        self.assertEqual(self.run_lane("new", "chart-fix").returncode, 1)
+        path = self.lane_path("chart-fix")
+        self.write(os.path.join(path, "ready.flag"), "")
+        p = self.run_lane("adopt", path)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn(f"Edit(/{path}/.githooks/**)", p.stderr)
+        self.assertNotIn("Edit(", self.asks("chart-fix"))
+
+    def test_done_names_the_deny_rules_its_worktree_leaves_behind(self):
+        self.lane("new", "chart-fix")
+        self.lane("new", "chart-fix2")
+        path, other = self.lane_path("chart-fix"), self.lane_path("chart-fix2")
+        hooks, extra = f"Edit(/{path}/.githooks/**)", f"Edit(/{path}/tools/*.sh)"
+        kept = [f"Edit(/{other}/.githooks/**)", f"Edit(/{self.root}/**)", "Edit(~/x/**)"]
+        claude = os.path.join(self.home, ".claude")
+        self.write(os.path.join(claude, "settings.machine.json"),
+                   json.dumps({"permissions": {"deny": [hooks, *kept]}}))
+        self.write(os.path.join(claude, "settings.json"),
+                   json.dumps({"permissions": {"deny": [hooks, extra, *kept]}}))
+        self.commit("chart.txt", "axis\n", cwd=path)
+        refused = self.run_lane("done", "chart-fix")
+        self.assertEqual(refused.returncode, 1)
+        self.assertNotIn(hooks, refused.stdout + refused.stderr)  # only after a close
+        self.git("push", "-q", "origin", "chart-fix:main", cwd=path)
+        out = self.lane("done", "chart-fix")
+        lines = out[out.index("closed"):].splitlines()
+        self.assertIn(f"  {hooks}  in {os.path.join(claude, 'settings.machine.json')}", lines)
+        self.assertIn(f"  {extra}  in {os.path.join(claude, 'settings.json')}", lines)
+        self.assertEqual(out.count(hooks), 1, out)  # the overlay's copy in settings.json is setup's
+        for rule in kept:
+            self.assertNotIn(rule, out)
+
+    def test_done_says_nothing_when_no_rule_names_the_lane(self):
+        self.lane("new", "chart-fix")
+        path = self.lane_path("chart-fix")
+        self.commit("chart.txt", "axis\n", cwd=path)
+        self.git("push", "-q", "origin", "chart-fix:main", cwd=path)
+        self.assertNotIn("permissions.deny", self.lane("done", "chart-fix"))
+
+
 class Shown(unittest.TestCase):
     def test_a_process_is_shown_by_its_program_never_its_arguments(self):
         # Any argument can hold a secret; comm and argv[0] are masked for the terminal (C0,
