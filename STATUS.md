@@ -92,7 +92,8 @@ stored here).
   - **Merge order: `turn-glyph`, then `ask-owner` and any `tab-bar` follow-up by readiness.**
     The lead installs only the next to merge.
   - The parked json-depth sweep (21 files, among them the delegation enforcement scripts) is on
-    `fix/json-depth-sweep`. Shipping it first needs a check of how each enforcement site fails
+    `fix/json-depth-sweep`, a local branch never pushed: keep it while the sweep is in the
+    backlog. Shipping it first needs a check of how each enforcement site fails
     (a caught error must not turn a deny into an allow). Optional: the trigger is near
     theoretical.
   - `lane new` with `|`, `<`, `>` or `;` inside its quoted `--goal` runs sandboxed and fails
@@ -206,9 +207,6 @@ stored here).
     private findings file. The lead's commits of 2026-10-14: `git log 6503f0e..HEAD -- STATUS.md
     PLAN.md` on `chore/after-pr4`.
   - Message a lane at what `lane addr <id>` prints, resolved just before each send.
-  - Local leftovers, never pushed: `fix/json-depth-sweep` (the parked sweep) and
-    `fix/pass-last-recursion` (the same sweep under its first name, plus the writer's
-    `worktree-agent-a8c1570566ac3d240` branch). Delete them once Hayden nods.
   - **Watch (PR 4, live on HAYPC):** `context-watch.err` in the state dir (a Stop that timed out
     waiting for its reply, and the watcher's Python errors). Not yet seen live: a refused pass's
     toast, and Hayden's verdict on the rendered popup.
