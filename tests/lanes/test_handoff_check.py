@@ -67,6 +67,26 @@ class Templates(unittest.TestCase):
             self.assertIn("~/.claude/skills/handoff/scripts/handoff-check", f.read())
         self.assertTrue(os.access(HANDOFF_CHECK, os.X_OK))
 
+    def test_the_lane_template_keeps_no_lane_open(self):
+        # Its Next comment names `Keep open:`, and a comment is no line: a fresh lane can close.
+        with open(os.path.join(REPO, "templates", "LANE.md")) as f:
+            text = f.read()
+        self.assertIn("Keep open:", text)
+        self.assertIsNone(lanelib.kept_open(lanelib.next_block(text)))
+
+    def test_only_the_lead_runs_lane_done_after_a_merge(self):
+        # One owner per ask (design B): the lane sends the lead `merged #N` and never proposes
+        # `lane done`, which only the lead can run.
+        with open(os.path.join(REPO, "skills", "handoff", "SKILL.md")) as f:
+            handoff = f.read()
+        self.assertNotIn("Propose `lane done", handoff)
+        self.assertIn("merged #N", handoff)
+        for doc in (("skills", "lanes", "SKILL.md"), ("docs", "lanes.md")):
+            with open(os.path.join(REPO, *doc)) as f:
+                text = f.read()
+            self.assertIn("Keep open:", text, doc)
+            self.assertIn("merged #N", text, doc)
+
 
 class PlainRepo(Check):
     init_lanes = False
@@ -263,6 +283,71 @@ class Approval(unittest.TestCase):
         self.assertEqual(self.state(marked("(approved by Hayden 2026-10-12)") +
                                     "- B (approved by Hayden)\n"), lanelib.MALFORMED)
 
+    def test_a_keep_open_line_is_a_flag_not_the_first_step(self):
+        # A lane with more PRs to come starts Next with `Keep open: <why>`; the step /pass
+        # resumes with is the item after it.
+        kept = GOOD.replace(FIRST, "Keep open: PR 2 follows.\n" + FIRST)
+        self.assertEqual(lanelib.first_item(lanelib.next_block(kept)), FIRST)
+        self.assertEqual(self.state(marked("(approved by Hayden 2026-10-12)", kept)),
+                         lanelib.APPROVED)
+        wrapped = GOOD.replace(FIRST, "- Keep open: PR 2\n  follows.\n" + FIRST)
+        self.assertEqual(self.state(marked("(approved by Hayden 2026-10-12)", wrapped)),
+                         lanelib.APPROVED)
+        # Only an indented line continues the flag, so a plain-text step after it is a step of
+        # its own, with or without a blank line between.
+        for gap in ("\n", "\n\n"):
+            plain = GOOD.replace(FIRST, f"Keep open: PR 2 follows.{gap}Run the chart tests "
+                                 "(approved by Hayden 2026-10-12).")
+            self.assertEqual(self.state(plain), lanelib.APPROVED, repr(gap))
+        # The flag alone is no step, so a marker on it approves nothing.
+        alone = GOOD.replace(FIRST, "- Keep open: PR 2 follows (approved by Hayden 2026-10-12).")
+        self.assertEqual(lanelib.first_item(lanelib.next_block(alone)), "")
+        self.assertEqual(self.state(alone), lanelib.UNAPPROVED)
+
+
+class KeepOpen(unittest.TestCase):
+    """lanelib.kept_open: a `Keep open:` item anywhere in Next keeps a merged lane open."""
+
+    def kept(self, body):
+        return lanelib.kept_open(lanelib.next_block(f"# LANE: x\n\n## Next\n{body}"))
+
+    def test_each_form_of_the_line_counts(self):
+        for body in ("Keep open: PR 2 follows.\n- Write the test.\n",
+                     "- Keep open: PR 2 follows.\n",
+                     "1. Keep open: PR 2 follows.\n",
+                     "**Keep open:** PR 2 follows.\n",
+                     "- **Keep open**: PR 2 follows.\n",
+                     "keep OPEN: PR 2 follows.\n",
+                     "- Write the test.\n- Keep open: PR 2 follows.\n",
+                     # A plain line after a step is its own item, never the step's wrap.
+                     "- Write the test.\nKeep open: PR 2 follows.\n",
+                     "1. Run the smoke.\n\n**Keep open:** PR 2 follows.\n",
+                     "Keep open:\n"):
+            self.assertIsNotNone(self.kept(body), body)
+        self.assertEqual(self.kept("- Step.\n- Keep open: PR 2\n  follows.\n- Last.\n"),
+                         "- Keep open: PR 2\n  follows.")
+
+    def test_a_mention_a_comment_or_another_section_does_not(self):
+        for body in ("- Drop the `Keep open:` line at the last merge.\n",
+                     "<!-- start with `Keep open: <why>` while more PRs follow -->\n- Step.\n",
+                     "- Keep it open until PR 2.\n",
+                     "- Keep open the PR until review.\n"):
+            self.assertIsNone(self.kept(body), body)
+        self.assertIsNone(lanelib.kept_open(lanelib.next_block(
+            "## State\nKeep open: PR 2.\n\n## Next\n- Step.\n")))
+        # A mention that wraps to the start of an indented line is the step's text, not a flag.
+        wrapped = "- After PR 2 merges, drop the\n  `Keep open:` line (approved by Hayden 2026-10-12).\n"
+        self.assertIsNone(self.kept(wrapped))
+        block = lanelib.next_block(f"## Next\n{wrapped}")
+        self.assertEqual(lanelib.first_item(block), wrapped.strip())
+        self.assertEqual(lanelib.approval(block, datetime.date(2026, 1, 1),
+                                          today=datetime.date(2026, 12, 31)), lanelib.APPROVED)
+        # A nested bullet is an item of its own, so it can be the flag, and so is an indented
+        # first line, which no step wraps into.
+        self.assertIsNotNone(self.kept("- Step.\n  - Keep open: PR 2.\n"))
+        self.assertIsNotNone(self.kept("  Keep open: PR 2 follows.\n- Step.\n"))
+        self.assertIsNone(lanelib.kept_open(None))
+
     def test_the_status_path_follows_the_lane_from_the_toplevel(self):
         # In a lane the toplevel is the lane; lane.json's path (sandbox-writable) is never read.
         repo = lanelib.Repo("/r/lanes/x", "/r/proj/.git")
@@ -353,6 +438,23 @@ class Lane(Check):
         self.finish()
         self.assertGap(self.check(self.path), "predates this session")
         self.assertPasses(self.check(self.path, "--closing"))
+
+    def test_closing_refuses_a_kept_lane(self):
+        # More PRs to come: the plain handoff passes, the check `lane done` runs does not.
+        self.body = self.body.replace("## Next\n", "## Next\nKeep open: PR 2 follows for #42.\n")
+        self.finish()
+        self.assertPasses(self.check(self.path))
+        self.assertGap(self.check(self.path, "--closing"), "Keep open: PR 2 follows for #42.")
+        # `lane done --abandon` passes --abandon on, since it closes a kept lane anyway.
+        self.assertPasses(self.check(self.path, "--closing", "--abandon"))
+
+    def test_a_next_with_only_keep_open_has_no_step(self):
+        # The flag is no step, so /pass would have nothing to resume with.
+        self.body = self.body.replace("- Write the axis test for #42, then run it.\n",
+                                      "Keep open: PR 2 follows for #42.\n")
+        self.finish()
+        self.assertGap(self.check(self.path), "only a `Keep open:` line")
+        self.assertPasses(self.check(self.path, "--closing", "--abandon"))
 
     def test_closing_still_wants_next_a_clean_tree_and_claims(self):
         self.finish()

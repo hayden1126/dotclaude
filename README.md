@@ -573,9 +573,12 @@ and status single-writer:
 - `lane done chart-fix` closes a merged lane in one run. It ends the lane's own sessions and
   what runs under them, proven from /proc and Claude Code's session files and never chosen by
   name or tmux window, and it refuses anything else by name. Then it archives the record and
-  removes the worktree.
+  removes the worktree. While the worktree exists, it refuses a lane whose record's Next has a
+  `Keep open:` line (more PRs to come) unless given `--abandon`.
 - An optional lead session triages requests into lanes, opens them on Hayden's approval and sets
-  the merge order (the skill's "The lead").
+  the merge order (the skill's "The lead"). After a lane's PR merges, the lane sends it
+  `merged #N`, and the lead reinstalls and runs `lane done` on Hayden's standing approval. Each
+  ask to Hayden has one owner, lane or lead (the skill's "Who asks Hayden what").
 - `lane-identity.sh` and `lane-guard.sh` (Hooks, above) tell each session which lane it is and
   keep it out of other lanes' records.
 - The handoff skill's lane mode updates the lane record, not STATUS.md, and ends with
@@ -600,8 +603,8 @@ idle, the script rechecks the handoff and respawns the pane with a fresh `claude
   fires, since it is also a "no thanks" to an offer; `/pass` is the explicit form. "pass
   compact", "handoff and compact" and "handoff and pass compact" pick the compact mode. "a
   later pass" or "the tests pass" never fire, and a bare "handoff" never passes.
-- The fresh session starts in plan mode, unless the Next block's first item carries `(approved by
-  Hayden YYYY-MM-DD)` dated within this session. The handoff skill writes that marker only for an
+- The fresh session starts in plan mode, unless the Next block's first item (the one after any
+  `Keep open:` line) carries `(approved by Hayden YYYY-MM-DD)` dated within this session. The handoff skill writes that marker only for an
   approval given in the session, and `handoff-check` fails one with a bad, older or future
   date, or when it can't find the session's start.
 - It waits for this session's own idle status (`~/.claude/sessions/<pid>.json`), not the tab's.

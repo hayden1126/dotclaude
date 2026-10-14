@@ -643,19 +643,44 @@ APPROVED, MALFORMED, UNAPPROVED, STALE = "approved", "malformed", "unapproved", 
 APPROVAL_OPEN = re.compile(r"\(approved by Hayden", re.IGNORECASE)
 APPROVAL_DATE = re.compile(r" (\d{4}-\d{2}-\d{2})\)")
 BULLET = re.compile(r"\s*(?:[-*+]|\d+[.)])\s")
+# `Keep open: <why>`, `- **Keep open:** <why>`: a lane with more PRs to come after a merge.
+KEEP_OPEN = re.compile(r"\s*(?:(?:[-*+]|\d+[.)])\s+)?[*_`]*keep open[*_`]*\s*:", re.IGNORECASE)
+
+
+def next_items(block: str | None) -> list[str]:
+    """The Next block's items: each a non-empty line (a bullet or not) with the wrapped
+    continuation lines after it, up to the next bullet at any depth. A nested bullet is a step
+    of its own, so it starts an item too. So does an unindented `Keep open:` line, which only
+    indented lines continue (section() has dropped the blank lines): it is never folded into
+    the step before it, nor a plain-text step after it into it. An indented plain line is a
+    wrapped step, whose text may start with a mention of the flag. So the flag is written on
+    one line, or as a bullet whose wrap is indented."""
+    items: list[list[str]] = []
+    kept = False
+    for ln in (block or "").splitlines():
+        if not ln.strip():
+            continue
+        if (not items or BULLET.match(ln) or (KEEP_OPEN.match(ln) and not ln[:1].isspace())
+                or (kept and not ln[:1].isspace())):
+            items.append([ln])
+            kept = bool(KEEP_OPEN.match(ln))
+        else:
+            items[-1].append(ln)
+    return ["\n".join(item) for item in items]
+
+
+def kept_open(block: str | None) -> str | None:
+    """The first `Keep open: <why>` item in the Next block, None without one. A lane with more
+    PRs to come starts its Next with it, and `lane done` and `handoff-check --closing` refuse
+    the lane while it stands. Any item counts, not only the first: a false hit only holds a
+    close, while a miss would end a lane that has work left."""
+    return next((item for item in next_items(block) if KEEP_OPEN.match(item)), None)
 
 
 def first_item(block: str | None) -> str:
-    """The Next block's first item: its first non-empty line (a bullet or not) with the wrapped
-    continuation lines after it, up to the next bullet at any depth. A nested bullet is a step
-    of its own, so it ends the item too."""
-    lines = [ln for ln in (block or "").splitlines() if ln.strip()]
-    item = lines[:1]
-    for ln in lines[1:]:
-        if BULLET.match(ln):
-            break
-        item.append(ln)
-    return "\n".join(item)
+    """The Next block's first step (next_items), "" without one. A `Keep open:` item is a flag
+    about the lane, not a step, so the step after it counts."""
+    return next((item for item in next_items(block) if not KEEP_OPEN.match(item)), "")
 
 
 def approval_dates(block: str | None) -> list[datetime.date]:

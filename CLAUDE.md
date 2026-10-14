@@ -7,7 +7,7 @@
 - On a design or architectural fork, present the options clearly and ask before implementing. Pick a direction, do not waffle.
 
 ## Boundaries (ask first)
-- Delete freely what this session made, build output, and anything under temp or an agent worktree. Propose and confirm before deleting tracked files, uncommitted work, or anything outside the repo.
+- Delete freely what this session made, build output, and anything under temp or an agent worktree. Propose and confirm before deleting tracked files, uncommitted work, or anything outside the repo. Exception: after a lane's PR merges, the lead runs `lane done` for it without asking (the `lanes` skill).
 - Never `git push`, open a PR or merge without my explicit approval in chat, and push only the changes I approved. Pushes that can reach `main` and merges also hit a permission prompt, so I click accept for those.
 - One PR per piece of work, finished before it merges: open it as a draft, and mark it ready only after cleanup, the doc updates and STATUS are committed and, where the repo installs from its checkout, the install and smoke test ran from the branch. A fact only knowable after the merge rides in the next PR, never a STATUS-only one.
 - Never run `git checkout`, reset, or any revert without confirmation.
