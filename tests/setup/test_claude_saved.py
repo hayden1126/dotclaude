@@ -982,6 +982,21 @@ class Saved(unittest.TestCase):
         self.assertEqual(p.wait(timeout=10), 0)
         self.assertEqual(self.reg_entry(1)["pane"], "%9")
 
+    def test_track_leaves_a_record_rewritten_while_it_waited(self):
+        # Review round 4: the chat resumed in a plain tab while track waited for the lock, and
+        # the registry rewrote the record for it; track's attach record must not replace it.
+        self.background(1)
+        self.client("attach", sid(1)[:8])
+        self.track_panes(("%7", self.ppid, 3))
+        p, fd = self.track_waiting()
+        plain = {"session_id": sid(1), "cwd": self.cwd(1), "pane": "%9", "window_index": 5,
+                 "socket": SOCKET, "server_start": START, "server_pid": PID}
+        with open(os.path.join(self.reg, sid(1) + ".json"), "w") as f:
+            json.dump(plain, f)
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        self.assertEqual(p.wait(timeout=10), 0)
+        self.assertEqual(self.reg_entry(1), plain)
+
     def test_track_drops_an_attach_entry_whose_tab_moved_on(self):
         # The tab closed, or a /clear gave the job a new session id (sid 2 under job 1's id),
         # so the entry for what it showed goes. A tab's own entry and another server's stay.

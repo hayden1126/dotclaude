@@ -602,6 +602,10 @@ def op_track():
             if now and now["shelved"] and NOW - num(now.get("saved_at")) < SHELVED_GRACE:
                 keep.discard((sid, pane))
                 continue
+            # The registry rewrote the record meanwhile (the chat resumed in a plain tab), or
+            # tmux-tab-bar changed its place: leave it, and the next track looks again.
+            if (load(os.path.join(REG, sid + ".json")) or {}) != old:
+                continue
             write(os.path.join(REG, sid + ".json"), rec)
 
     def gone(e):

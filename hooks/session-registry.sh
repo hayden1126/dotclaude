@@ -16,8 +16,8 @@
 # ahead without it), as claude-saved's do: tmux-tab-bar compares and replaces a record's place
 # under it, so a record deleted or rewritten here is never brought back or overwritten by a stale
 # copy. One race stays: a move landing between this hook's read of @tab_place and its write
-# leaves the record one move behind (the live bar is right) until this tab's next move or
-# SessionStart (a move elsewhere leaves this tab's record alone).
+# leaves the record one move behind (the live bar is right) until a move that changes this
+# tab's place, or its next SessionStart.
 # Only a tab counts: no TMUX_PANE, a `claude -p` run (ATTENDED=0, even with an inherited
 # TMUX_PANE), a subagent payload (agent_id), an empty cwd or an unreadable server write nothing.
 #

@@ -2031,9 +2031,28 @@ class FakeTmux(unittest.TestCase):
         self.addCleanup(patch.stop)
         return reg, fd
 
-    def test_records_update_under_the_lock_and_never_bring_one_back(self):
-        # The registry deletes a record (under the records lock) while a move waits for it:
-        # the move reads after it gets the lock, finds it gone and writes nothing back.
+    def test_records_update_reads_under_the_lock(self):
+        # The registry rewrites a record (under the records lock) while a move waits for it:
+        # the move reads after it gets the lock, so it keeps the rewrite and adds its place. A
+        # read before the lock would skip the replace (the file changed), and no lock at all
+        # would have written before the rewrite.
+        reg, fd = self.records()
+        path = os.path.join(reg, "r1.json")
+        update = threading.Thread(target=tb.update_records, args=(("/s", 1, 2), {"%1": "p"}))
+        update.start()
+        time.sleep(0.3)
+        with open(path) as f:
+            rec = json.load(f)
+        self.assertNotIn("place", rec)                  # still waiting
+        with open(path, "w") as f:
+            json.dump({**rec, "x": 1}, f)
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        update.join(10)
+        with open(path) as f:
+            rec = json.load(f)
+        self.assertEqual((rec.get("x"), rec.get("place")), (1, "p"))
+
+    def test_records_update_never_brings_back_one_deleted_while_it_waited(self):
         reg, fd = self.records()
         update = threading.Thread(target=tb.update_records, args=(("/s", 1, 2), {"%1": "p"}))
         update.start()
