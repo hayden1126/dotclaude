@@ -26,6 +26,13 @@ HEADS = ("git", "gh", "lane", "claude", "codex")
 MARKER = "#!/bin/sh\necho marker\n"
 
 
+def load_guard():
+    spec = importlib.util.spec_from_file_location("excluded_guard", MODULE)
+    guard = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(guard)
+    return guard
+
+
 def unlock(root):
     for d, dirs, files in os.walk(root):
         os.chmod(d, 0o755)
@@ -512,6 +519,19 @@ class Rule2Path(Guard):
         self.env["PATH"] = f"{link}/wbin:/usr/bin"
         self.denied("git push", "rule2", f"{link}/wbin")
 
+    def test_the_offered_home_rule_clears_the_refusal(self):
+        hbin = self.make_bin(os.path.join("home", "hbin"), protect=False)
+        self.env["PATH"] = f"{hbin}:/usr/bin"
+        self.assertIn("Edit(~/hbin/**)", self.denied("git push", "rule2", hbin))
+        self.protect("~/hbin")
+        self.allowed("git push")
+
+    def test_a_home_rule_under_a_root_home_is_its_plain_path(self):
+        guard = load_guard()
+        self.assertEqual(guard.edit_rule_path("Edit(~/opt/x/**)", "/"), "/opt/x")
+        self.assertEqual(guard.edit_rule_path("Edit(~/opt/x/**)", "/h"), "/h/opt/x")
+        self.assertEqual(guard.edit_rule_path("Edit(//opt/x/**)", "/h"), "/opt/x")
+
     def test_a_missing_path_entry_under_a_writable_root_is_refused(self):
         missing = os.path.join(self.tmp, "nobin", "bin")
         self.env["PATH"] = f"{missing}:{self.bin}:/usr/bin"
@@ -733,6 +753,32 @@ class Scan(Guard):
         self.assertEqual(code, 1, out)
         self.assertIn(os.path.dirname(target), out)
 
+    def test_an_earlier_refusal_does_not_hide_a_later_one(self):
+        # The full PATH stops at its first refusal, here an empty entry and then a writable one;
+        # the node target past them must still be listed in the same run.
+        e1 = self.make_bin("e1", heads=())
+        self.write(os.path.join(e1, "codex"), "#!/usr/bin/env node\n", 0o755)
+        e2 = self.make_bin("e2", heads=())
+        target = self.write(os.path.join(self.mkdir("wnode"), "node"), MARKER, 0o755)
+        os.symlink(target, os.path.join(e2, "node"))
+        self.write_settings()
+        self.env["PATH"] = f":{e1}:{e2}:{self.wbin}:/usr/bin"
+        code, out = self.scan(self.tmp)
+        self.assertEqual(code, 1, out)
+        for d in (self.wbin, os.path.dirname(target)):
+            self.assertIn(f'"Edit(/{d}/**)"', out)
+
+    def test_every_head_in_one_entry_is_judged(self):
+        e = self.make_bin("e", heads=())
+        for head in ("git", "gh"):
+            target = self.write(os.path.join(self.mkdir(f"w{head}"), head), MARKER, 0o755)
+            os.symlink(target, os.path.join(e, head))
+        self.write_settings()
+        self.env["PATH"] = f"{e}:/usr/bin"
+        out = self.scan(self.tmp)[1]
+        for head in ("git", "gh"):
+            self.assertIn(f'"Edit(/{os.path.join(self.tmp, "w" + head)}/**)"', out)
+
     def test_the_listing_is_the_dir_the_rule_covers(self):
         # A writable include file: the rule covers its dir, so the listing shows that dir.
         d = self.mkdir("cfg")
@@ -741,7 +787,7 @@ class Scan(Guard):
         self.write(os.path.join(self.home, ".gitconfig"), f"[include]\n\tpath = {inc}\n")
         out = self.scan(self.tmp)[1]
         self.assertIn(f"  {d} holds, before you protect it:", out)
-        self.assertRegex(out, r"  other\n")
+        self.assertRegex(out, r"  other( +not in HEAD)?\n")  # under a stray ancestor repo too
 
     def test_no_rule_is_offered_for_a_write_root_itself(self):
         inc = self.write(os.path.join(self.home, ".gitconfig.local"), "")
@@ -864,9 +910,7 @@ class SandboxReality(unittest.TestCase):
             sandboxed = False
         if not sandboxed:
             self.skipTest("not inside the Bash sandbox")
-        spec = importlib.util.spec_from_file_location("excluded_guard", MODULE)
-        guard = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(guard)
+        guard = load_guard()
         gitdir, common, _ = guard.discover(REPO)
         paths = [os.path.join(common, "config"), os.path.join(common, "hooks")]
         if os.path.exists(os.path.join(gitdir, "config.worktree")):
@@ -918,9 +962,7 @@ class DiscoveryMatchesGit(Guard):
                 into_lane, into_other, nested, os.path.join(nested, ".git"), other]
 
     def test_the_guard_never_finds_a_narrower_repo_than_git(self):
-        spec = importlib.util.spec_from_file_location("excluded_guard", MODULE)
-        guard = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(guard)
+        guard = load_guard()
         ceiling = {"GIT_CEILING_DIRECTORIES": os.path.dirname(self.tmp)}
         env = {"PATH": "/usr/bin:/bin", "HOME": self.home, "GIT_CONFIG_NOSYSTEM": "1", **ceiling}
         compared = 0

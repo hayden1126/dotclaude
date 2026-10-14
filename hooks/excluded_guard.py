@@ -96,7 +96,8 @@ def edit_rule_path(rule, home):
     m = EDIT_RULE.fullmatch(rule) if isinstance(rule, str) else None
     if not m:
         return None
-    return os.path.normpath(("/" if m.group(1) == "//" else home + "/") + m.group(2))
+    # rstrip: a home of / would give //x, which normpath keeps as two slashes.
+    return os.path.normpath(("/" if m.group(1) == "//" else home.rstrip("/") + "/") + m.group(2))
 
 
 def protect_dir(path, roots=()):
@@ -662,17 +663,17 @@ def repos_under(root, depth=SCAN_DEPTH):
 def scan(roots, env):
     """What judge() would refuse for an excluded call from each repo's root: rule 2 once per
     excluded head, rule 1 per repo. Only machine-wide settings load, as for any project.
-    Each PATH entry is judged on its own, so one run names every writable one. Returns
+    One run lists what the next would, so a single paste clears PATH. Returns
     [(where, Refusal)], [(where, error)] for what it couldn't check, and the settings errors."""
     env = {k: v for k, v in env.items() if k != "CLAUDE_PROJECT_DIR"}
     settings, errors = load_settings(env)
     heads = sorted({first_word(normalize(p)) for p in settings["excludedCommands"]} - {""})
     found, unchecked = [], []
-    m = Machine(env, settings, env.get("HOME") or os.getcwd())
-    # Each entry on its own names every writable one; the full PATH, as the hook runs it,
-    # catches an interpreter one entry's head resolves through another entry.
+    cwd = env.get("HOME") or os.getcwd()
+    m = Machine(env, settings, cwd)
+    # Each entry on its own names every writable one.
     path_var = env.get("PATH", "")
-    for p in [*path_var.split(":"), path_var]:
+    for p in path_var.split(":"):
         for head in heads:
             try:
                 check_rule2(m, head, p)
@@ -680,6 +681,27 @@ def scan(roots, env):
                 found.append(("PATH", r))
             except Exception as e:
                 unchecked.append((p or "(empty PATH entry)", e))
+    # The full PATH, as the hook runs it, catches an interpreter one entry's head resolves
+    # through another. It stops at its first refusal, so judge on as if that refusal's rule were
+    # in place (or its empty or relative entry dropped) until it passes or can't be cleared.
+    fixed, entries = Machine(env, settings, cwd), path_var.split(":")
+    for head in heads:
+        while True:
+            try:
+                check_rule2(fixed, head, ":".join(entries))
+                break
+            except Refusal as r:
+                found.append(("PATH", r))
+                bad = "" if r.path == "(empty)" else r.path
+                if r.fix_dir and r.fix_dir not in fixed.deny:
+                    fixed.deny.append(r.fix_dir)
+                elif bad in entries and not os.path.isabs(bad):
+                    entries.remove(bad)
+                else:
+                    break
+            except Exception as e:
+                unchecked.append(("PATH", e))
+                break
     for root in roots:
         for repo in repos_under(root):
             try:

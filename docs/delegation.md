@@ -286,8 +286,10 @@ matches nothing passes with no output. Denies and unreadable settings files go t
 `$XDG_STATE_HOME/dotclaude/excluded-guard.log`.
 
 `python3 -I hooks/excluded_guard.py --scan [ROOT...]` finds a refusal before a call hits it: it
-runs rule 2 for each excluded head against each PATH entry on its own (so one run names every
-writable one) and rule 1 from the root of each repo under each root (`~` by default, four
+runs rule 2 for each excluded head against each PATH entry on its own, then against the full
+PATH as the hook does, going on past each refusal as if its rule were in place (so one run lists
+what the next would, an interpreter found through another entry included), and rule 1 from the
+root of each repo under each root (`~` by default, four
 levels down, skipping hidden dirs, `node_modules` and symlinks), with the machine-wide settings
 only. A repo or entry it can't check is listed as such, and the scan goes on. It never offers
 a rule for a write root itself (`~`, say): a file there has to move into a dir a rule can
