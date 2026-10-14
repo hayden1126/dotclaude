@@ -86,9 +86,15 @@ stored here).
     PermissionRequest or SubagentStop wiring) until they restart.
   - `ask-owner` (opened 2026-10-14): PLAN.md "Next: two workflow fixes", the lead/lane half.
   - `guard-b` (opened 2026-10-14): excluded-guard group B, the design in the closed record
-    `excluded-guard-2026-10-14`'s `.lane/PLAN.md` "Part 2b". Overlaps `ask-owner` on
-    `skills/lanes/` and `docs/lanes.md`.
-  - **Merge order: `ask-owner`, then `guard-b`.** The lead installs only the next to merge.
+    `excluded-guard-2026-10-14`'s `.lane/PLAN.md` "Part 2b", plus (Hayden, 2026-10-14) `lane ls`
+    and `lane done` reading the worktree's checked-out branch, not `lane.json`'s (lane tab-bar's
+    worktree had moved branches). Overlaps `ask-owner` on `skills/lanes/` and `docs/lanes.md`.
+  - `pass-timeout` (opened 2026-10-14, Hayden's pick): a dropped `/pass` must reach the session
+    itself, not only the tmux client. Seen live twice in `pass.log` (compact, `outcome=timeout
+    status busy`, 2026-10-13 and 2026-10-14). On 2026-10-13 the tmux server died, and the
+    session kept saying the pass was "still queued".
+  - **Merge order: `ask-owner`, then `guard-b` and `pass-timeout` by readiness.** The lead
+    installs only the next to merge.
   - The parked json-depth sweep (21 files, among them the delegation enforcement scripts) is on
     `fix/json-depth-sweep`, a local branch never pushed: keep it while the sweep is in the
     backlog. Shipping it first needs a check of how each enforcement site fails
@@ -97,9 +103,6 @@ stored here).
   - `lane new` with `|`, `<`, `>` or `;` inside its quoted `--goal` runs sandboxed and fails
     ("Read-only file system"), leaving a stray branch. The matcher likely reads them as compound
     syntax (inferred). Keep briefs free of them.
-  - **/pass finding (2026-10-13):** a compact pass timed out (`pass.log` `outcome=timeout status
-    busy`), the tmux server died, and the session kept saying the pass was "still queued". A
-    timed-out pass should tell the session itself, not only the tmux client.
   - Once pushed, a lane merges `origin/main` into its branch, since force pushes are denied.
 
   Backlog:
@@ -107,11 +110,6 @@ stored here).
     rerun the menu-clip repro and the tmux suites. If it fixes the clip, install at a quiet
     moment (a server restart; claude-restore reopens the tabs) and drop the row-0 menu rule.
     Until then, 3.7c's default menus that dotclaude doesn't own still clip under a top bar.
-  - `lane ls` and `lane done` read `lane.json`'s branch, never the worktree's checked-out one
-    (`board()` and `closable()` in `skills/lanes/scripts/lane`). A lane that switched branches
-    shows the old branch's PR and `rebase`, and `done` could pass while an unmerged branch is
-    checked out (it leaves that branch behind, not lost). Found by lane tab-bar, whose worktree
-    had moved to `feat/tab-bar-arrange`.
   - `lane init --model/--effort` repo defaults and `lane open --model/--effort` overrides,
     passed through to `claude` (today `lane open` hardcodes the argv).
 
@@ -198,11 +196,11 @@ stored here).
 ## Notes for next session
 - **Next (lead, main checkout):** watch for "merged #N" from a lane, then run the post-merge
   chain (In flight) and `lane done` without asking, unless that lane's Next starts with
-  `Keep open:`. Live lanes: `ask-owner` (next to merge; design B's docs) and `guard-b` (opened
-  2026-10-14). Check `lane ls` first, since a merge Hayden made on GitHub and mentioned to no
-  session sends no message (#102 showed merged there before its lane's message came). One slot
-  of 3 is free; the backlog's next pick is Hayden's. The lead follows design B by hand until
-  `ask-owner` merges:
+  `Keep open:`. Live lanes: `ask-owner` (next to merge; design B's docs), `guard-b` and
+  `pass-timeout` (both opened 2026-10-14). Check `lane ls` first, since a merge Hayden made on
+  GitHub and mentioned to no session sends no message (#102 showed merged there before its
+  lane's message came). The cap of 3 is full; the backlog's next pick is Hayden's. The lead
+  follows design B by hand until `ask-owner` merges:
   no chat about a lane's own asks; speak on cross-lane orders, decisions raised with the lead,
   failed checks and lead-only actions.
   - Design reviews the lead sent to lanes on 2026-10-14 (turn-glyph's set of wait owners and its
