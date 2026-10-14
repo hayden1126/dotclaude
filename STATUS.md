@@ -192,12 +192,18 @@ stored here).
   `claude -p` repro and the 2.1.285 boundary; the karaoke session's has the incident.
 
 ## Notes for next session
-- **Next (lead, main checkout):** Hayden picked both designs on 2026-10-14 (PLAN.md "Next: two
-  workflow fixes"). Lane `turn-glyph` builds the glyph half. The lead follows design B by hand
-  until lane `ask-owner` lands it in the docs: no chat about lane asks, and after a lane's
-  "merged #N" it runs the post-merge chain (In flight) and `lane done` without asking. Both
-  live lanes were told the rule on 2026-10-14, and tab-bar was told to start its Next with
-  `Keep open: PR 2`. Check that line before any `lane done tab-bar`.
+- **Next (lead, main checkout):** watch for "merged #N" from a lane, then run the post-merge
+  chain (In flight) and `lane done` without asking, unless that lane's Next starts with
+  `Keep open:`. Live lanes: `turn-glyph` (next to merge), `ask-owner` (opened 2026-10-14, plans
+  design B's docs) and `tab-bar` (#101's live smoke with Hayden; it said keep open, and was told
+  at 430k context to /pass). Check `lane ls` first, since a merge Hayden made on GitHub and
+  mentioned to no session sends no message. The cap of 3 is full, so excluded-guard group B
+  (backlog) waits for a slot. The lead follows design B by hand until `ask-owner` merges:
+  no chat about a lane's own asks; speak on cross-lane orders, decisions raised with the lead,
+  failed checks and lead-only actions.
+  - Design reviews the lead sent to lanes on 2026-10-14 (turn-glyph's set of wait owners and its
+    classifier probe, excluded-guard's G8) live in those lanes' records and plans, and G8 in the
+    private findings file.
   - Message a lane at what `lane addr <id>` prints, resolved just before each send.
   - Local leftovers, never pushed: `fix/json-depth-sweep` (the parked sweep) and
     `fix/pass-last-recursion` (the same sweep under its first name, plus the writer's
