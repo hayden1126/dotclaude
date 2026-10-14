@@ -62,9 +62,9 @@ A typical overlay sets a preference and the machine's own tools:
 name your own CLIs that must run outside the sandbox (say, ones that write outside the project),
 one pattern per command shape (`mytool *` for calls with arguments, `mytool` for the bare call).
 A pattern must match the whole command, so a call through a pipe, `&&` or `cd` still runs
-sandboxed. A PATH dir under your home that comes before the one holding an excluded command
-(`~/hq/bin` on HAYPC) goes in the overlay's `sandbox.filesystem.denyWrite`, or the excluded-command
-guard refuses that command.
+sandboxed. Every PATH dir under your home (`~/hq/bin` on HAYPC) goes in the overlay's
+`sandbox.filesystem.denyWrite`, or the excluded-command guard refuses every excluded command. Only
+user and managed settings count for that, so a project's `.claude/settings*.json` can't stand in.
 
 The baseline's `permissions` deny destructive git and ask before anything that can reach `main`,
 in auto mode too. Denied: force-push, `reset --hard`, `reset --merge` and `git clean -f`, plain or
@@ -472,8 +472,9 @@ need nothing extra.
   `sandbox.excludedCommands` and so run outside the sandbox. Rule: such a command must not act on
   anything a sandboxed session can write. It refuses a call whose cwd resolves to a git repo
   other than the project's, whose other git config or PATH dirs a sandboxed session could write,
-  or a `claude` or `codex` call outside the project root. A home PATH dir needs a `denyWrite`
-  entry: the baseline names the stock ones, and a machine's own go in `settings.machine.json`.
+  or a `claude` or `codex` call outside the project root. Every home PATH dir needs a `denyWrite`
+  entry in user or managed settings: the baseline names the stock ones, and a machine's own go in
+  `settings.machine.json`.
   Fails closed for excluded heads; denies go to `$XDG_STATE_HOME/dotclaude/excluded-guard.log`.
   docs/delegation.md "The excluded-command guard" has the checks and what they don't cover.
 - **SessionStart / Stop: `memory-git.sh`** (in this repo). Commits every project's auto-memory

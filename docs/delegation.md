@@ -212,28 +212,39 @@ Rule: a command that runs outside the sandbox must not act on anything a sandbox
 write. `excludedCommands` takes a command out of the sandbox by its text alone, so the files that
 command trusts need their own check. `hooks/excluded-guard.sh` runs on every Bash call, main
 thread included, and checks only the ones that match an `excludedCommands` pattern. It matches
-more broadly than Claude Code (any line or `;`, `&&`, `||`, `|` piece, with leading `VAR=value`
-words dropped), since a missed match would skip the checks and an extra one only checks a
-sandboxed call. Patterns come from the user, managed, project and project-local settings.
+more broadly than Claude Code (any line or `;`, `&&`, `||`, `|` or `&` piece, with leading
+`VAR=value` words dropped), since a missed match would skip the checks and an extra one only
+checks a sandboxed call. Patterns come from the user, managed, project and project-local
+settings.
 
 For a match it refuses, naming the path, when:
 1. **The git repo is not the project's.** The cwd must resolve to the same common git dir as
    `CLAUDE_PROJECT_DIR`, or to no repo. A nested repo, a planted gitfile or a repo in a temp dir
-   has a config the session can write. The project's own `config`, `hooks/` and
-   `config.worktree` are trusted, since Claude Code keeps them read-only for the session. The
-   other config git reads must be write-protected: the global and XDG files, `/etc/gitconfig`,
-   every `include.path` and `includeIf` target, and a `core.hooksPath`.
-2. **The head resolves through a writable path.** Every PATH dir searched up to the one that
-   holds the head must be write-protected (an empty or relative entry is the cwd), then the file,
-   each symlink hop and the dir of each, and a script's interpreter (`#!/usr/bin/env node`
-   resolves `node` the same way).
+   has a config the session can write. The project's own `config` and `hooks/` are trusted, and
+   so is `config.worktree` when the cwd's gitdir is the project's own, since Claude Code keeps
+   them read-only for the session; another worktree's `config.worktree` is judged. The other
+   config git reads must be write-protected: the global and XDG files, `/etc/gitconfig`, every
+   `include.path` and `includeIf` target, and a `core.hooksPath` dir and each file in it. Each
+   is followed through its symlinks (each hop and the dir of each must be write-protected), and
+   anything that exists there is judged, not only a regular file.
+2. **The head resolves through a writable path.** Every PATH dir must be write-protected, not
+   only those before the head, since the head's children (git, gh, tmux, the tools claude
+   spawns) search PATH too. An empty or relative entry is the cwd. Then the file, each symlink
+   hop and the dir of each, and a script's interpreter (`#!/usr/bin/env node` resolves `node`
+   the same way).
 3. **`claude` or `codex` runs outside the project root.** Both read the cwd's project config.
 
-**Write-protected** is judged machine-wide, because PATH dirs are shared: a path is writable
-when the user can write it, it sits under `$HOME`, `/tmp`, `$TMPDIR` or an `allowWrite` entry,
-and no `denyWrite` entry, `~/.claude` or `~/.gitconfig` covers it. A session rooted in a dir
-that holds a PATH dir can write that dir, so every home PATH dir before the one that holds a
-head needs a `denyWrite` entry. The baseline names the stock ones; a machine's own (Hayden's
+**Write-protected** is judged machine-wide, because PATH dirs are shared. A path (or, if it is
+missing, its nearest existing ancestor) is writable when it sits under `$HOME`, `/tmp`, `$TMPDIR`
+or an `allowWrite` entry, no `denyWrite` entry, `~/.claude` or `~/.gitconfig` covers it, and the
+user owns or can write it or some dir above it up to that root. Permission bits are not
+protection: an owner can chmod a dir back, and a writable parent can rename it. A dir outside
+every root (`/usr/bin`) is protected. `~/.gitconfig` counts only as a regular file at that exact
+path; a symlink there is judged by its hops and target. `denyWrite` counts only from user and
+managed settings, since the machine view stands for every session and other sessions don't load
+this project's settings; project settings still add patterns and `allowWrite` roots. A session
+rooted in a dir that holds a PATH dir can write that dir, so every home PATH dir needs a
+`denyWrite` entry. The baseline names the stock ones; a machine's own (Hayden's
 `~/hq/bin`, `~/sdk/...`) go in its `settings.machine.json` (Hayden, 2026-10-14: machine-wide over
 this session's roots). A sandboxed install into one of them (`bun add -g`, `cargo install`)
 now fails and needs the sandbox off.
@@ -250,6 +261,9 @@ Not covered:
 - interpreter module paths (user site-packages, `NODE_PATH`), and config keys that name
   programs (`core.sshCommand`, `credential.helper`) in a file that is itself protected;
 - a `denyWrite` glob is read as a plain path, so it protects less and the guard refuses more;
+- a `denyWrite` path that doesn't exist yet is trusted, because Claude Code mounts `/dev/null`
+  over a missing protected name inside a session's writable root (probed 2026-10-14 on 2.1.296,
+  for its built-in names);
 - commands run with `dangerouslyDisableSandbox`, which reach the permission gate instead.
 
 Allow rules on excluded commands sit behind it: an allow rule skips the classifier, and
