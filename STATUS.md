@@ -94,11 +94,14 @@ stored here).
   - `tab-bar` PR 1 merged as #96 (2026-10-14) and was installed from main (main shows
     `status 2`). Its review fixes and Shift+arrow navigation merged as #97 (968a8af). The lead
     did not install #97 from main: lane-addr holds the install, and main's bar strips only the
-    old `[repo] ` title, so it goes live through lane-addr's install after lane-addr merges main. It merged before its fresh review and live smoke, so both still run, with
+    old `[repo] ` title, so it goes live through lane-addr's install after lane-addr merges main.
+    #97 left `test_claude_saved` Wiring red on main (it expects the old title substitution) and a
+    flaky RealTmux Shift+Up phone test (about 1 in 5; not the clock). Both are routed to lane
+    tab-bar (2026-10-14). Main's tests/setup isn't green until that fix lands. It merged before its fresh review and live smoke, so both still run, with
     Hayden's phone tap test, and anything found rides PR 2. The lane stays open for PR 2 (drag,
     custom rows). Hayden asked the lead to close it when tab-bar is done (taken as: after PR 2
     merges).
-  - Live: `tab-bar` (PR 2), `lane-addr` (opened 2026-10-13 from its backlog entry below, whose
+  - Live: `tab-bar` (PR 2), `lane-addr` (draft #98; opened 2026-10-13 from its backlog entry below, whose
     text is now its Brief) and `excluded-guard` (narrow-excluded Part 2, opened 2026-10-14).
     **Merge order by readiness: `lane-addr`, `excluded-guard`, `tab-bar` PR 2.** The lead
     installs only the next to merge.
