@@ -418,6 +418,9 @@ cat <<'EOF'
      docs/delegation.md for what each layer binds. The overwrite guard
      (hooks/overwrite-guard.sh) and the delete guard (hooks/delete-guard.sh)
      need python3 and fail open; memory-git.sh needs git and never blocks.
+     The excluded-command guard (hooks/excluded-guard.sh) needs python3 and
+     FAILS CLOSED for excluded commands: without it, git push, gh, lane,
+     claude and the other excluded heads are refused.
      The lane hooks (hooks/lane-identity.sh, hooks/lane-guard.sh) need
      python3 >= 3.11 (tomllib) and fail open; see docs/lanes.md.
 

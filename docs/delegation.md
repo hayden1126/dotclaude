@@ -76,7 +76,7 @@ Each layer covers what the others can't.
 | `reviewer` | `agents/reviewer.md` | Enforces: Read, Grep and Glob only |
 | `writer` | `agents/writer.md` | Enforces: `isolation: worktree`, no Agent tool, and the policy's worktree root |
 | Spawn guard | `hooks/agent-spawn-guard.sh`, `skills/delegation/scripts/agent-spawn-guard` | Enforces: denies a `writer` spawn without `isolation` on the call, and a named spawn without the `team-` prefix. Fails closed |
-| Sandbox | `settings.json` `sandbox` | Enforces (OS): the write roots, `denyRead` (the credential barrier, plus tool tokens and shell history), `denyWrite` (the enforcement sources, and the repo files that run outside the sandbox: `statusline/`, `notify-toast.ps1`, `codex/`, `tmux/`, `bin/`, `setup-tmux.sh`, `tests/` (the canary runs it), and `setup.sh` with the scripts and lists it installs from; installed from a lane, that checkout's copies too; the PATH and install dirs an excluded command resolves through: `~/.local/bin`, `~/.bun/bin`, `~/.cargo/bin`, `~/.local/share/claude`, `~/.local/lib/node_modules`), and the network allowlist. A sandboxed `git switch` or `merge` that touches a `denyWrite` file fails; `git pull` already runs outside. `failIfUnavailable`, and `autoAllowBashIfSandboxed: false`, so Hayden's prompts stay as they were |
+| Sandbox | `settings.json` `sandbox` | Enforces (OS): the write roots, `denyRead` (the credential barrier, plus tool tokens and shell history), `denyWrite` (the enforcement sources, and the repo files that run outside the sandbox: `statusline/`, `notify-toast.ps1`, `codex/`, `tmux/`, `bin/`, `setup-tmux.sh`, `tests/` (the canary runs it), and `setup.sh` with the scripts and lists it installs from; installed from a lane, that checkout's copies too; the home PATH and install dirs an excluded command resolves through, see "The excluded-command guard"), and the network allowlist. A sandboxed `git switch` or `merge` that touches a `denyWrite` file fails; `git pull` already runs outside. `failIfUnavailable`, and `autoAllowBashIfSandboxed: false`, so Hayden's prompts stay as they were |
 | Excluded-command guard | `hooks/excluded-guard.sh`, `hooks/excluded_guard.py`, a `Bash` entry in `settings.json` (timeout 5) | Enforces on every thread: an excluded command runs only when its cwd resolves to the project's own repository, the other git config it reads and every PATH dir and file its head resolves through are write-protected, and `claude` or `codex` runs from the project root. See "The excluded-command guard" below. Fails closed for excluded heads |
 | Subagent policy | `hooks/subagent-policy.sh`, `skills/delegation/scripts/subagent-policy`, `skills/delegation/policy.toml` | Enforces: see "Subagent policy" below. Fails closed for the tools it polices |
 | Report check | `hooks/report-check.sh`, `skills/delegation/scripts/report-check` | Enforces acceptance: a schema-invalid report is sent back twice at most. Fails open |
@@ -257,11 +257,10 @@ stock ones; a machine's own (Hayden's `~/hq/bin`, `~/sdk/...`) go in its
 sandboxed install into one of them (`bun add -g`, `cargo install`) now fails and needs the
 sandbox off.
 
-It fails closed for excluded heads: an error while checking a match refuses it, and a missing,
-failing or slow shim falls back to the settings command's own check, which blocks a call whose
-first word is `git`, `gh`, `lane`, `claude`, `codex`, `codex-delegate`, `delegation-ledger`,
-`pass-respawn`, `tmux`, `powershell.exe` or `cmd.exe`. A call that matches nothing passes with no
-output. Denies go to `$XDG_STATE_HOME/dotclaude/excluded-guard.log`.
+It fails closed for excluded heads: an error while checking a match refuses it, so does a match
+when `CLAUDE_PROJECT_DIR` is unset, and a missing, failing or slow shim falls back to the settings
+command's own check, which blocks a call whose first word (after leading whitespace) is one of
+the excluded heads that command lists. A call that matches nothing passes with no output. Denies go to `$XDG_STATE_HOME/dotclaude/excluded-guard.log`.
 
 Not covered:
 - a session rooted at an ancestor of a repo (at `$HOME`, say) can write that repo's config; the
@@ -274,7 +273,10 @@ Not covered:
 - a `denyWrite` path that doesn't exist yet is trusted, because Claude Code mounts `/dev/null`
   over a missing protected name inside a session's writable root (probed 2026-10-13 on 2.1.296,
   for its built-in names);
-- commands run with `dangerouslyDisableSandbox`, which reach the permission gate instead.
+- the cwd a command moves to itself (`cd X && git push`, `git -C X push`): the guard judges the
+  call's starting cwd, and such a call either matches no pattern or runs sandboxed (a compound
+  command stays in the sandbox). The guard doesn't read `dangerouslyDisableSandbox`: a sandbox-off
+  call is judged like any other, by its text.
 
 Allow rules on excluded commands sit behind it: an allow rule skips the classifier, and
 `test_settings.py` fails if one covers an excluded command while the guard isn't wired.

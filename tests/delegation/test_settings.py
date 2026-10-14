@@ -370,6 +370,20 @@ class Baseline(unittest.TestCase):
                                        text=True, env=env, timeout=10)
                     self.assertEqual(p.returncode, rc, p.stderr)
 
+    def test_the_two_fallbacks_block_the_same_heads(self):
+        # The settings command's fallback (shim missing or slow) and the shim's (module crashed)
+        # name the excluded heads separately; both must name every excluded head.
+        (cmd,) = [h["command"] for e in S["hooks"]["PreToolUse"] for h in e["hooks"]
+                  if "excluded-guard" in h["command"]]
+        settings_heads = set(re.search(r"\(([a-z|.\[\]-]+)\)\[ ", cmd).group(1)
+                             .replace("[.]", ".").split("|"))
+        with open(os.path.join(REPO, "hooks", "excluded-guard.sh")) as f:
+            shim = f.read()
+        shim_heads = set(re.search(r"\n\s+([a-z|.-]+)\)\n\s+printf", shim).group(1).split("|"))
+        heads = {p.split()[0] for p in S["sandbox"]["excludedCommands"]}
+        self.assertEqual(settings_heads, heads)
+        self.assertEqual(shim_heads, heads)
+
     def test_the_excluded_guard_s_install_dirs_are_write_protected(self):
         # The PATH dirs and install dirs an excluded head resolves through on a stock setup; the
         # machine's own (hq, sdk) go in settings.machine.json. Subagents' file tools too.

@@ -79,6 +79,8 @@ handoff skill's own `gh pr ready` as an unrequested commit, so `test_settings.py
 that every `gh pr` or `gh run` step CLAUDE.md, a skill or an agent names has a rule. Also
 allowed, because the classifier once refused a CI watch with no reason given: the read-only
 `gh pr checks`, `view`, `list`, `status` and `diff`, and `gh run list`, `view` and `watch`.
+`lane ls`, `new`, `adopt`, `open` and `done` are allowed too, behind the excluded-command guard
+(docs/lanes.md S3).
 Read-only git (`status`, `log`, `diff`, `show`, `rev-parse`; the classifier once refused one as an
 "unrequested commit") is allowed too, with the pipe filters `head`, `tail`, `wc` and `grep`, since
 every part of a pipe needs its own rule. `git ... --output` writes a file, so it asks. A `cd <dir>
@@ -472,10 +474,7 @@ need nothing extra.
   `sandbox.excludedCommands` and so run outside the sandbox. Rule: such a command must not act on
   anything a sandboxed session can write. It refuses a call whose cwd resolves to a git repo
   other than the project's, whose other git config or PATH dirs a sandboxed session could write,
-  or a `claude` or `codex` call outside the project root. Every home PATH dir needs a `denyWrite`
-  entry in user or managed settings: the baseline names the stock ones, and a machine's own go in
-  `settings.machine.json`.
-  Fails closed for excluded heads; denies go to `$XDG_STATE_HOME/dotclaude/excluded-guard.log`.
+  or a `claude` or `codex` call outside the project root. Fails closed for excluded heads; denies go to `$XDG_STATE_HOME/dotclaude/excluded-guard.log`.
   docs/delegation.md "The excluded-command guard" has the checks and what they don't cover.
 - **SessionStart / Stop: `memory-git.sh`** (in this repo). Commits every project's auto-memory
   (`~/.claude/projects/*/memory/`) to a local-only git repo at
