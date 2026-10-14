@@ -1000,6 +1000,66 @@ class Moves(unittest.TestCase):
         self.assertIsNone(tb.drop_side(rows, "@9", 20, 0))
         self.assertIsNone(tb.drop_side([], "@3", 20, 0))
 
+    # One logical row a b c d drawn as [a b] / [c d] (lines 0 and 1), and kar's lead on line 2.
+    ROW4 = {f"@{i}": tb.Tab("lane", "/r/.git", "repo", n) for i, n in zip(range(1, 5), "abcd")}
+    ROW4["@5"] = tb.Tab("lead", "/k/.git", "kar", "lead")
+    NAV4 = [(0, [("@1", 56, 18), ("@2", 75, 18)]), (1, [("@3", 56, 18), ("@4", 75, 18)]),
+            (2, [("@5", 56, 18)])]
+
+    def drawn(self, places=None):
+        """(groups, shared, nav rows) for ROW4 at a width that splits its row 2 + 2."""
+        groups, shared, _ = tb.group_windows([(i, f"@{i}") for i in range(1, 6)], self.ROW4,
+                                             places or {})
+        lay = tb.lay_out(groups, shared, 100, "@1", 50, 0)
+        return groups, shared, tb.parse_nav_rows(tb.nav_value(lay))
+
+    def line_of(self, nav, wid):
+        return next(line for line, tabs in nav for w, _, _ in tabs if w == wid)
+
+    def test_a_same_row_move_lands_on_the_drawn_line_aimed_at(self):
+        groups, shared, nav = self.drawn()
+        self.assertEqual([[w for w, _, _ in tabs] for _, tabs in nav],
+                         [["@1", "@2"], ["@3", "@4"], ["@5"]])
+        for src, dst, after, want in (
+                ("@1", "@3", False, True),      # Down on a, or a left-half drop of a on c
+                ("@4", "@2", True, False),      # a right-half drop of d on b
+                ("@1", "@3", True, True),       # already lands on line 1
+                ("@4", "@2", False, False),
+                ("@2", "@1", False, False),     # one line: nothing shifts across lines
+                ("@5", "@3", False, False),     # another row: put() leaves no gap here
+                ("@1", "@5", True, True)):
+            with self.subTest(src=src, dst=dst, after=after):
+                self.assertEqual(tb.on_line(groups, shared, nav, src, dst, after), want)
+                places = tb.put(groups, shared, src, dst, want)
+                self.assertEqual(self.line_of(self.drawn(places)[2], src),
+                                 self.line_of(nav, dst))
+
+    def test_a_drop_on_a_lines_gutter_or_tail_lands_on_that_line(self):
+        groups, shared, nav = self.drawn()
+        for src, x, line, want in (("@1", 3, 1, ["@1", "@4"]), ("@4", 150, 0, ["@1", "@4"]),
+                                   ("@5", 3, 1, ["@5", "@3"])):
+            with self.subTest(src=src, line=line):
+                dst, after = tb.row_end(nav, x, line)
+                places = tb.put(groups, shared, src, dst,
+                                tb.on_line(groups, shared, nav, src, dst, after))
+                drawn = self.drawn(places)[2]
+                self.assertEqual([w for w, _, _ in drawn[line][1]][:2], want)
+
+    def test_move_down_through_put_and_lay_out_lands_on_the_line_below(self):
+        groups, shared, nav = self.drawn()
+        dst = tb.climb([tabs for _, tabs in nav], "@1", "down")
+        self.assertEqual(dst, "@3")
+        places = tb.put(groups, shared, "@1", dst, tb.on_line(groups, shared, nav, "@1", dst, False))
+        self.assertEqual(self.line_of(self.drawn(places)[2], "@1"), 1)
+        # Without the flip, the gap put() closes puts it back on line 0.
+        self.assertEqual(self.line_of(self.drawn(tb.put(groups, shared, "@1", dst, False))[2],
+                                      "@1"), 0)
+
+    def test_a_hidden_member_leaves_the_side_alone(self):
+        groups, shared, nav = self.drawn()
+        hidden = [(line, [t for t in tabs if t[0] != "@4"]) for line, tabs in nav]
+        self.assertFalse(tb.on_line(groups, shared, hidden, "@1", "@3", False))
+
     def test_a_drop_on_a_rows_gutter_or_tail_goes_first_or_last(self):
         rows = [(0, [("@2", 19, 32), ("@3", 52, 32)]), (2, [("@1", 19, 32)])]
         self.assertEqual(tb.row_end(rows, 3, 0), ("@2", False))

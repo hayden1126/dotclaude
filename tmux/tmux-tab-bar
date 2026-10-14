@@ -1069,6 +1069,23 @@ def row_key_of(groups: list, shared: list, wid: str) -> str | None:
     return next((k for k, wids in rows_of(groups, shared).items() if wid in wids), None)
 
 
+def on_line(groups: list, shared: list, nav: list, src: str, dst: str, after: bool) -> bool:
+    """put()'s `after` for a move aimed at dst's drawn line (nav: as parse_nav_rows gives it).
+    put() closes src's gap, so when src is already in dst's logical row the tabs after src shift
+    back one slot, and before dst (or after it) can land on the line above (or below) dst's. A
+    reorder within a row keeps each drawn line's slot count, so the new order is mapped onto the
+    row's drawn slots in reading order, and before and after flip when src would land off dst's
+    line. Unchanged when src is in another row or some member isn't drawn (+N)."""
+    row = rows_of(groups, shared).get(row_key_of(groups, shared, dst), [])
+    slots = [(line, wid) for line, tabs in nav for wid, _, _ in tabs if wid in row]
+    if src not in row or sorted(w for _, w in slots) != sorted(row):
+        return after
+    order = [w for w in row if w != src]
+    order.insert(order.index(dst) + after, src)
+    line_of = {wid: line for line, wid in slots}
+    return after if slots[order.index(src)][0] == line_of[dst] else not after
+
+
 def side_step(groups: list, shared: list, src: str, direction: str) -> dict:
     """Left or right: src before or after its neighbour in its own row (the logical row, across
     its overflow rows); nothing at either end."""
@@ -1300,7 +1317,8 @@ def move(how: str, client: str, wid: str | None, menu: bool, base: str) -> None:
         changes = side_step(groups, shared, ctx.wid, how)
     elif how in ("up", "down"):
         dst = climb([tabs for _, tabs in ctx.nav], ctx.wid, how)
-        changes = put(groups, shared, ctx.wid, dst, False) if dst else {}
+        changes = put(groups, shared, ctx.wid, dst,
+                      on_line(groups, shared, ctx.nav, ctx.wid, dst, False)) if dst else {}
     elif how == "newrow":
         places = [parse_place(o["place"]) for o in ctx.state.options.values()]
         changes = new_row(groups, shared, ctx.wid, [p for p in places if p is not None])
@@ -1324,7 +1342,8 @@ def drop(src: str, dst: str, x: str, line: str, rng: str, client: str, base: str
     after = drop_side(ctx.nav, dst, int(x), int(line))
     if after is not None:
         groups, shared, _ = arrange(ctx.state, ctx.sid, {})
-        apply(ctx, put(groups, shared, src, dst, after), base)
+        apply(ctx, put(groups, shared, src, dst, on_line(groups, shared, ctx.nav, src, dst, after)),
+              base)
 
 
 def drop_row(src: str, x: str, line: str, client: str, base: str) -> None:
@@ -1335,7 +1354,8 @@ def drop_row(src: str, x: str, line: str, client: str, base: str) -> None:
     end = ctx and row_end(ctx.nav, int(x), int(line))
     if end:
         groups, shared, _ = arrange(ctx.state, ctx.sid, {})
-        apply(ctx, put(groups, shared, src, end[0], end[1]), base)
+        apply(ctx, put(groups, shared, src, end[0],
+                       on_line(groups, shared, ctx.nav, src, end[0], end[1])), base)
 
 
 def name_row(client: str, wid: str | None, base: str) -> None:
