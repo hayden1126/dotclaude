@@ -97,13 +97,15 @@ stored here).
     old `[repo] ` title, so it goes live through lane-addr's install after lane-addr merges main.
     #97 left `test_claude_saved` Wiring red on main (it expects the old title substitution) and a
     flaky RealTmux Shift+Up phone test (about 1 in 5; not the clock). Both are routed to lane
-    tab-bar (2026-10-14). Main's tests/setup isn't green until that fix lands. It merged before its fresh review and live smoke, so both still run, with
+    tab-bar (2026-10-14); it fixes them in a small PR (`fix/tab-bar-tests`) that merges right
+    after #98. Main's tests/setup isn't green until it lands. The cause was a last commit on #97
+    that only the tmux suites saw: rerun the full suite after a lane's last commit. It merged before its fresh review and live smoke, so both still run, with
     Hayden's phone tap test, and anything found rides PR 2. The lane stays open for PR 2 (drag,
     custom rows). Hayden asked the lead to close it when tab-bar is done (taken as: after PR 2
     merges).
   - Live: `tab-bar` (PR 2), `lane-addr` (draft #98; opened 2026-10-13 from its backlog entry below, whose
     text is now its Brief) and `excluded-guard` (narrow-excluded Part 2, opened 2026-10-14).
-    **Merge order by readiness: `lane-addr`, `excluded-guard`, `tab-bar` PR 2.** The lead
+    **Merge order: `lane-addr` (#98), tab-bar's `fix/tab-bar-tests`, then `excluded-guard` and `tab-bar` PR 2 by readiness.** The lead
     installs only the next to merge.
   - `lane new` with `|`, `<`, `>` or `;` inside its quoted `--goal` ran sandboxed and failed
     ("Read-only file system") even though `lane new *` is in `excludedCommands`. It left a
