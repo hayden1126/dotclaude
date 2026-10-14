@@ -513,9 +513,10 @@ class Render(unittest.TestCase):
                         want.append(tb.SEP)
                     if item[0] == "head":
                         want.append(tb.header(item[1], lay.head_w[item[1]] - 2, item[2],
-                                              lay.head))
+                                              lay.head, lay.colours[item[1]]))
                     elif item[0] == "div":
-                        want.append(tb.divider(item[1], lay.head_w[item[1]] - 2))
+                        want.append(tb.divider(item[1], lay.head_w[item[1]] - 2,
+                                               lay.colours[item[1]]))
                     elif item[0] == "tab":
                         want.append(tb.entry(item[1], item[2], lay.slots[r]))
                 want += [tb.right_part(16)] if r == 0 else []
@@ -524,8 +525,8 @@ class Render(unittest.TestCase):
         # Outside every range: each entry closes its range before the separator.
         self.assertTrue(tb.entry("@1", 1, 20).endswith("#[norange]" + tb.NORM + ",}}"))
         self.assertEqual(tb.SEP, "#[fg=colour240]│#[fg=colour250]")
-        self.assertIn("┃", tb.divider(0, 5))      # a packed group's divider reads differently
-        self.assertNotIn("│", tb.divider(0, 5))
+        self.assertIn("┃", tb.divider(0, 5, 75))  # a packed group's divider reads differently
+        self.assertNotIn("│", tb.divider(0, 5, 75))
 
     def test_the_gutter_draws_g_cells_on_every_row(self):
         # Count what each gutter piece draws: status-left pads to L, a header's name pads to its

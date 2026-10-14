@@ -4,6 +4,12 @@
   tmux-tab-bar layout                       lay out the bar of every session that has a client
   tmux-tab-bar nav <direction> <client>     move that client's session to the tab left, right,
                                             up or down of its current one, as the bar draws them
+  tmux-tab-bar move <left|right|up|down|newrow|auto> <client> [<window>] [--menu]
+                                            carry a tab (default: the client's current one)
+  tmux-tab-bar drop <src> <dst> <x> <line> <range> <client>      a tab dragged onto a tab
+  tmux-tab-bar drop-row <src> <x> <line> <client>                a tab dragged onto a row's gutter
+  tmux-tab-bar name-row <client> [<window>]  name the tab's custom row from @tab_row_name_in
+  tmux-tab-bar menu <client> [<window>]      the Move menu; reset <client> clears the session
 
 A repo with lanes (skills/lanes) gets its own row: a coloured header with the repo's name, its
 lead checkout's tab first, then its lanes, then its other worktrees (agent worktrees). Every other
@@ -41,6 +47,18 @@ cell, else the nearest), wrapping. Rows count top to bottom on both
 layouts (tmux draws row 0 on top even with the bar at the bottom). A window hidden in `+N`, or a
 session with no `@tab_bar_nav`: left and right fall back to tmux's previous-window and
 next-window, and up and down stay put.
+
+Tabs can be arranged by hand. A window's `@tab_place` (a JSON object, parse_place) puts it in a
+row (its project's, another project's, the shared row or a custom row) at a position. A row with
+any tab placed in it is manual: its placed tabs by position, then the rest in auto order; other
+rows stay auto. A placement in a project row that no window classifies into this pass falls back
+to auto. A custom row (`c:<n>`) is a group like a project's, drawn right after the row it was made
+below (else last among the groups), with a `▸` or `name▸` header in CUSTOM_COLOUR. A laned tab
+outside its project's row is named `repo·name`. Every move (keys, drag, the Move menu) is one
+primitive, put(): a tab goes before or after another in that tab's row, and every member of that
+row gets a placement 0..n-1. The move then lays out at once under the layout lock and copies each
+changed placement into the restore records of the window's panes (open-sessions/<sid>.json,
+field `place`), so tmux/claude-restore puts it back on the new window after tmux dies.
 
 Nothing from a window title, a directory name or a lane record enters a format string: the rows
 hold only window ids (`@N`), integers and fixed template text, names reach the bar through options
@@ -83,6 +101,11 @@ RECORD_MAX = 64 * 1024  # a lane.json is untrusted: read no more than this
 ERR_MAX = 16 * 1024     # the error log keeps the end of the traceback
 PASSES = 5              # passes per lock hold while hooks burst (2 holds: 2 x PASSES at most)
 PALETTE = (75, 179, 141, 114, 174, 110)   # header colours, by group order
+CUSTOM_COLOUR = 252     # every custom row's header, outside PALETTE
+ROW_NAME_CELLS = 16     # a custom row's name is cut to this many cells
+PLACE_MAX = 2048        # an @tab_place value, in bytes
+POS_MAX = 999
+CUSTOM_MAX = 9999       # custom row ids run 1..CUSTOM_MAX
 PHONE_STATUS_LEFT = "#(~/.local/bin/tmux-claude-status)"
 
 SID = re.compile(r"\$\d+\Z")
@@ -91,6 +114,7 @@ CLIENT = re.compile(r"[A-Za-z0-9_./][A-Za-z0-9_./-]{0,255}\Z")   # a tty path, c
 NAV_ROW = re.compile(r"\d{1,2};@\d{1,9}:\d{1,6}:\d{1,6}(?:,@\d{1,9}:\d{1,6}:\d{1,6})*\Z")
 NAV_MAX = 16 * 1024
 DIRECTIONS = ("left", "right", "up", "down")
+ROW_KEY = re.compile(r"(?:p:/.*|s|c:[1-9]\d{0,3})\Z", re.S)   # a project, the shared or a custom row
 PLAIN_WORD = re.compile(r"[A-Za-z0-9_@-][A-Za-z0-9_@\[\]-]*")   # needs no quotes in tmux's config
 
 FILL = "#[fill=colour236]"
@@ -138,9 +162,16 @@ CLIENT_FMT = "#{session_id}\t#{client_width}"
 # A client's session and current window, and that session's @tab_bar_nav (a list-clients format
 # has the client's session, its current window and pane, so the option resolves there).
 NAV_FMT = "#{client_name}\t#{session_id}\t#{window_id}\t#{@tab_bar_nav}"
+# The same for a move, plus the server a restore record names (its start time, pid and socket,
+# as hooks/session-registry.sh writes them; the socket last, since a path may hold a tab).
+MOVE_FMT = ("#{client_name}\t#{session_id}\t#{window_id}\t#{start_time}\t#{pid}"
+            "\t#{@tab_bar_nav}\t#{socket_path}")
+# The placement last: one holding a tab is invalid anyway. A tab in a name (never ours: clean
+# drops it) pushes its tail into the placement for one run, which then rewrites the name.
 WINDOW_FMT = ("#{session_id}\t#{window_id}\t#{window_index}\t#{window_active}\t#{@tab_group}"
-              "\t#{@tab_name}")         # the name last: it may hold a tab
-PANE_FMT = "#{window_id}\t#{pane_active}\t#{pane_current_path}"
+              "\t#{@tab_row_custom}\t#{@tab_name}\t#{@tab_place}")
+PANE_FMT = "#{window_id}\t#{pane_active}\t#{pane_id}\t#{pane_current_path}"
+NAME_IN_FMT = "#{window_id}\t#{@tab_row_name_in}"
 
 
 # --- names --------------------------------------------------------------------------------------
@@ -167,6 +198,12 @@ def clean(s: str, cells: int = NAME_CELLS) -> str:
         out.append(c)
         used += cell_width(c)
     return "".join(out) + "…"
+
+
+def clean_row_name(s: str) -> str:
+    """A custom row's name as typed: each '#' drawn as '♯' (a '#' would start a style when the
+    header is drawn), control and format characters dropped, cut to ROW_NAME_CELLS."""
+    return clean(s.replace("#", "♯"), ROW_NAME_CELLS).strip()
 
 
 def short(name: str, phone: bool) -> str:
@@ -288,12 +325,60 @@ def classify(cwd: str) -> Tab:
     return Tab(kind, common, repo_name, clean(os.path.basename(top)))
 
 
+# --- placements ---------------------------------------------------------------------------------
+
+@dataclasses.dataclass(frozen=True)
+class Place:
+    """A window's @tab_place: its row ("p:<common dir>", "s" or "c:<n>") and position there; a
+    custom row's members also carry the row it was made below (`after`) and its cleaned name."""
+    row: str
+    pos: int
+    after: str = ""
+    name: str = ""
+
+
+def plain(s: object) -> bool:
+    """s is a str with no control character or lone surrogate."""
+    return isinstance(s, str) and not any(unicodedata.category(c) in ("Cc", "Cs") for c in s)
+
+
+def parse_place(text: str) -> Place | None:
+    """An @tab_place value read strictly, or None: exactly the four keys, a row key, an int
+    position 0..POS_MAX, an `after` that is "" or a row key, and an already cleaned name; at most
+    PLACE_MAX bytes and no control characters, raw or decoded. It comes from a window option a
+    restore record can set, so it is untrusted, and it never reaches a format."""
+    if not text or not plain(text) or len(text.encode()) > PLACE_MAX:
+        return None
+    try:
+        d = json.loads(text)
+    except (ValueError, RecursionError):
+        return None
+    if not isinstance(d, dict) or set(d) != {"row", "pos", "after", "name"}:
+        return None
+    row, pos, after, name = d["row"], d["pos"], d["after"], d["name"]
+    if not plain(row) or not ROW_KEY.match(row) or type(pos) is not int \
+            or not 0 <= pos <= POS_MAX or not plain(after) or (after and not ROW_KEY.match(after)) \
+            or not plain(name) or name != clean_row_name(name):
+        return None
+    return Place(row, pos, after, name)
+
+
+def place_text(place: Place) -> str | None:
+    """The @tab_place value for `place`, or None when it wouldn't read back (a common dir too
+    long or holding a control character): such a tab stays where layout puts it."""
+    text = json.dumps(dataclasses.asdict(place), ensure_ascii=False, separators=(",", ":"))
+    return text if parse_place(text) == place else None
+
+
 # --- lay out ------------------------------------------------------------------------------------
 
 @dataclasses.dataclass
 class Group:
-    name: str                   # the cleaned repo name
+    name: str                   # the cleaned repo name, or a custom row's cleaned name
     tabs: list                  # [(window id, window index)], in tab order
+    colour: int = PALETTE[0]    # the header's colour
+    key: str = ""               # the row: "p:<common dir>" or "c:<n>"
+    after: str = ""             # a custom row: the row it was made below
 
 
 @dataclasses.dataclass
@@ -308,6 +393,7 @@ class Layout:
     left: int                   # L: row 0's cells for status-left (blank on the other rows)
     head: int                   # H: the widest shown header's cells, 0 with no laned row
     right: int                  # row 0's cells for status-right (desktop)
+    colours: list               # per group: its header's colour
 
     @property
     def gutter(self) -> int:
@@ -315,26 +401,81 @@ class Layout:
         return self.left + self.head
 
 
-def group_windows(wins: list, tab_of: dict) -> tuple:
-    """Split a session's windows ([(index, wid)] by index; tab_of: wid -> Tab) into its laned
-    groups (ordered by each group's lowest index; lead, lanes, then other worktrees, each by
-    index) and the shared tabs, plus each window's (@tab_name, @tab_group)."""
-    by_repo: dict = {}
-    shared, names = [], {}
-    for index, wid in sorted(wins):
+def group_windows(wins: list, tab_of: dict, place_of: dict | None = None) -> tuple:
+    """Split a session's windows ([(index, wid)]; tab_of: wid -> Tab; place_of: wid -> Place)
+    into its groups and the shared tabs, plus each window's (@tab_name, @tab_group,
+    @tab_row_custom).
+    A window sits in its placement's row when that row is the shared row, a custom row or a
+    project row some window here classifies into; else in its auto row (its project's, or the
+    shared row). A row with a placed member is manual: placed members by position, then the
+    others in auto order (lead, lanes, other worktrees, each by index; shared tabs by index).
+    Project rows go by their auto members' lowest index, which also picks their colour, so a
+    move never recolours a project. A custom row follows the row it was made below (several:
+    by id), else goes last among the groups; its `after` and name are its lowest window id's."""
+    place_of = place_of or {}
+    projects: dict = {}                 # project row key -> its first window's Tab
+    auto = {}
+    for _, wid in sorted(wins):
         tab = tab_of[wid]
-        if tab.kind == "shared":
-            shared.append((wid, index))
-            names[wid] = (tab.name, "")
+        auto[wid] = "s" if tab.kind == "shared" else "p:" + tab.repo
+        if auto[wid] != "s":
+            projects.setdefault(auto[wid], tab)
+    colour = {key: k % len(PALETTE) for k, key in enumerate(projects)}
+    members: dict = {}                  # row key -> [(order, wid, index)]
+    for index, wid in sorted(wins):
+        tab, place = tab_of[wid], place_of.get(wid)
+        if place is not None and (place.row in projects or not place.row.startswith("p:")):
+            row, order = place.row, (0, place.pos, tab.rank, index)
         else:
-            by_repo.setdefault(tab.repo, []).append((tab, wid, index))
-    groups = []
-    for g, members in enumerate(by_repo.values()):
-        members.sort(key=lambda m: (m[0].rank, m[2]))
-        groups.append(Group(members[0][0].repo_name, [(wid, i) for _, wid, i in members]))
-        for tab, wid, _ in members:
-            names[wid] = (tab.name, str(g % len(PALETTE)))
+            row, order = auto[wid], (1, 0, tab.rank, index)
+        members.setdefault(row, []).append((order, wid, index))
+
+    custom = sorted((k for k in members if k.startswith("c:")), key=lambda k: int(k[2:]))
+    meta = {key: place_of[min((m[1] for m in members[key]), key=lambda w: int(w[1:]))]
+            for key in custom}
+    laned = [k for k in projects if k in members]
+    children: dict = {}                 # anchor -> the custom rows made below it; "" = last
+    for key in custom:
+        anchor = meta[key].after
+        shown = anchor != key and (anchor in laned or anchor in meta)
+        children.setdefault(anchor if shown else "", []).append(key)
+    order, seen = [], set()
+    # Each row, then the rows made below it, depth first. Custom rows go once more at the end:
+    # rows anchored in a cycle (only a hand-made placement does that) are reached from nowhere.
+    for start in laned + children.get("", []) + custom:
+        stack = [start]
+        while stack:
+            key = stack.pop()
+            if key not in seen:
+                seen.add(key)
+                order.append(key)
+                stack.extend(reversed(children.get(key, [])))
+
+    groups, names = [], {}
+    for key in order:
+        tabs = [(wid, index) for _, wid, index in sorted(members[key])]
+        if key.startswith("p:"):
+            groups.append(Group(projects[key].repo_name, tabs, PALETTE[colour[key]], key))
+        else:
+            groups.append(Group(meta[key].name, tabs, CUSTOM_COLOUR, key, meta[key].after))
+    for key, mem in members.items():
+        for _, wid, _ in mem:
+            tab, in_custom = tab_of[wid], "1" if key.startswith("c:") else ""
+            if tab.kind == "shared":
+                names[wid] = (tab.name, "", in_custom)
+            else:
+                name = tab.name if key == auto[wid] else f"{tab.repo_name}·{tab.name}"
+                names[wid] = (name, str(colour[auto[wid]]), in_custom)
+    shared = [(wid, index) for _, wid, index in sorted(members.get("s", []))]
     return groups, shared, names
+
+
+def rows_of(groups: list, shared: list) -> dict:
+    """The logical rows: row key -> [wid] in bar order (the shared row is "s")."""
+    rows = {g.key: [wid for wid, _ in g.tabs] for g in groups}
+    if shared:
+        rows["s"] = [wid for wid, _ in shared]
+    return rows
 
 
 def separators(row: list) -> int:
@@ -506,7 +647,8 @@ def lay_out(groups: list, shared: list, width: int, current: str | None = None,
         slots.append(min(DEFAULT_SLOT,
                          max(1, (avail(r, head) - fixed(row) - separators(row)) // n))
                      if n else 0)
-    return Layout(phone, heads, head_w, rows, slots, len(hidden), left, head, right)
+    return Layout(phone, heads, head_w, rows, slots, len(hidden), left, head, right,
+                  [g.colour for g in groups])
 
 
 # --- render -------------------------------------------------------------------------------------
@@ -557,17 +699,17 @@ def name_part(g: int, cells: int) -> str:
     return f"#{{p{cells}:#{{={cells}:#{{@tab_bar_g{g}}}}}}}"
 
 
-def header(g: int, cells: int, dim: bool, width: int) -> str:
+def header(g: int, cells: int, dim: bool, width: int, colour: int) -> str:
     """Group g's `name▸` in the gutter, padded with spaces to `width` (H) cells; `cells` is the
     name's own width, known at layout time, so the padding is fixed text."""
-    return (f"#[fg=colour{PALETTE[g % len(PALETTE)]}]" + ("#[dim]" if dim else "#[bold]")
+    return (f"#[fg=colour{int(colour)}]" + ("#[dim]" if dim else "#[bold]")
             + name_part(g, cells) + "▸" + NORM + " " * max(0, width - cells - 1))
 
 
-def divider(g: int | None, cells: int) -> str:
+def divider(g: int | None, cells: int, colour: int) -> str:
     if g is None:                       # before a shared tab on a laned row: no name
         return "#[fg=colour250]#[bold]┃" + NORM
-    return f"#[fg=colour{PALETTE[g % len(PALETTE)]}]#[bold]┃" + name_part(g, cells) + "▸" + NORM
+    return f"#[fg=colour{int(colour)}]#[bold]┃" + name_part(g, cells) + "▸" + NORM
 
 
 def left_part(cells: int) -> str:
@@ -591,9 +733,11 @@ def render(lay: Layout) -> list:
             if item[0] == "tab" and k and items[k - 1][0] == "tab":
                 parts.append(SEP)
             if item[0] == "head":
-                parts.append(header(item[1], lay.head_w[item[1]] - 2, item[2], lay.head))
+                parts.append(header(item[1], lay.head_w[item[1]] - 2, item[2], lay.head,
+                                    lay.colours[item[1]]))
             elif item[0] == "div":
-                parts.append(divider(item[1], marker_w(lay.head_w, item) - 2))
+                parts.append(divider(item[1], marker_w(lay.head_w, item) - 2,
+                                     250 if item[1] is None else lay.colours[item[1]]))
             elif item[0] == "tab":
                 parts.append(entry(item[1], item[2], slot))
             else:
@@ -721,9 +865,18 @@ def to_int(s: str, default: int) -> int:
     return int(s) if s.isdigit() else default
 
 
-def layout(err_log: str) -> None:
-    """Read every session, window, pane and client once; write what changed in one
-    source-file."""
+@dataclasses.dataclass
+class State:
+    sessions: dict              # sid -> {"status", "left", "right", "sig"}
+    widths: dict                # sid -> its narrowest client's width
+    windows: dict               # sid -> [(index, wid, active)]
+    options: dict               # wid -> {"name", "group", "custom", "place"}, as read
+    cwds: dict                  # wid -> its active pane's cwd
+    panes: dict                 # wid -> [pane id]
+
+
+def snapshot() -> State:
+    """Every session, client, window and pane, read once."""
     sessions = {}
     for f in read(5, "list-sessions", SESSION_FMT):
         if SID.match(f[0]):
@@ -733,34 +886,49 @@ def layout(err_log: str) -> None:
     for f in read(2, "list-clients", CLIENT_FMT):
         if f[0] in sessions and f[1].isdigit() and int(f[1]) > 0:
             widths[f[0]] = min(widths.get(f[0], int(f[1])), int(f[1]))
-    windows, options = {}, {}           # session -> [(index, wid, active)]; wid -> (name, group)
-    for f in read(6, "list-windows", WINDOW_FMT, "-a"):
+    windows, options = {}, {}
+    for f in read(8, "list-windows", WINDOW_FMT, "-a"):
         if f[0] in sessions and WID.match(f[1]) and f[2].isdigit():
             windows.setdefault(f[0], []).append((int(f[2]), f[1], f[3] == "1"))
-            options[f[1]] = (f[5], f[4])
-    cwds = {}
-    for f in read(3, "list-panes", PANE_FMT, "-a"):
+            options[f[1]] = {"group": f[4], "custom": f[5], "name": f[6], "place": f[7]}
+    cwds, panes = {}, {}
+    for f in read(4, "list-panes", PANE_FMT, "-a"):
+        panes.setdefault(f[0], []).append(f[2])
         if f[1] == "1":
-            cwds[f[0]] = f[2]
+            cwds[f[0]] = f[3]
+    return State(sessions, widths, windows, options, cwds, panes)
 
+
+def arrange(state: State, sid: str, tabs: dict) -> tuple:
+    """group_windows for session sid; tabs: cwd -> Tab, classified once per run."""
+    wins = sorted(state.windows.get(sid, []))
+    tab_of, place_of = {}, {}
+    for _, wid, _ in wins:
+        cwd = state.cwds.get(wid, "")
+        if cwd not in tabs:
+            tabs[cwd] = classify(cwd)
+        tab_of[wid] = tabs[cwd]
+        place = parse_place(state.options[wid]["place"])
+        if place is not None:
+            place_of[wid] = place
+    return group_windows([(i, wid) for i, wid, _ in wins], tab_of, place_of)
+
+
+def layout(err_log: str) -> None:
+    """Read every session, window, pane and client once; write what changed in one
+    source-file."""
+    state = snapshot()
     tabs: dict = {}                     # cwd -> Tab, classified once per run
-    writes: dict = {}                   # wid -> (@tab_name, @tab_group) wanted
+    writes: dict = {}                   # wid -> (@tab_name, @tab_group, @tab_row_custom) wanted
     lines = []
-    for sid, sess in sessions.items():
-        if sid not in widths or not windows.get(sid):
+    for sid, sess in state.sessions.items():
+        if sid not in state.widths or not state.windows.get(sid):
             continue                    # nobody sees it
-        wins = sorted(windows[sid])
-        tab_of = {}
-        for _, wid, _ in wins:
-            cwd = cwds.get(wid, "")
-            if cwd not in tabs:
-                tabs[cwd] = classify(cwd)
-            tab_of[wid] = tabs[cwd]
-        groups, shared, names = group_windows([(i, wid) for i, wid, _ in wins], tab_of)
+        groups, shared, names = arrange(state, sid, tabs)
         for wid, value in names.items():
             writes.setdefault(wid, value)
-        current = next((wid for _, wid, active in wins if active), None)
-        lay = lay_out(groups, shared, widths[sid], current, sess["left"], sess["right"])
+        current = next((wid for _, wid, active in state.windows[sid] if active), None)
+        lay = lay_out(groups, shared, state.widths[sid], current, sess["left"], sess["right"])
         rows = render(lay)
         ops = session_ops(lay, rows)
         status, old = status_value(len(rows)), sess["status"]
@@ -773,11 +941,14 @@ def layout(err_log: str) -> None:
 
     # The window options go first (the rows read them), each on its own line.
     head = []
-    for wid, (name, group) in writes.items():
-        if options.get(wid, ("", ""))[0] != name:
-            head.append(command("set-option", "-w", "-t", wid, "@tab_name", name))
-        if options.get(wid, ("", ""))[1] != group:
-            head.append(command("set-option", "-w", "-t", wid, "@tab_group", group))
+    for wid, wanted in writes.items():
+        have = state.options[wid]
+        for opt, key, value in zip(("@tab_name", "@tab_group", "@tab_row_custom"),
+                                   ("name", "group", "custom"), wanted):
+            if have[key] != value:      # @tab_row_custom is 1 or unset, for the tap menu
+                head.append(command("set-option", "-w", "-t", wid, opt, value)
+                            if value or opt != "@tab_row_custom"
+                            else command("set-option", "-u", "-w", "-t", wid, opt))
     script = head + lines
     if script:
         p = tmux("source-file", "-", stdin="\n".join(script) + "\n")
