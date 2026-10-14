@@ -600,5 +600,76 @@ class Restore(unittest.TestCase):
         self.assertTrue(os.access(SCRIPT, os.X_OK))
 
 
+class RealTmux(unittest.TestCase):
+    """A private tmux server (-S, -f /dev/null) with session main stands in for a fresh one after
+    a death: records from an earlier server on its socket, each with a place, come back as windows
+    that carry that @tab_place. New windows run sleep and claude is a stub (agents: none), so the
+    typed `claude --resume` reaches nothing."""
+
+    def setUp(self):
+        self.tmux_bin = shutil.which("tmux")
+        if not self.tmux_bin:
+            self.skipTest("tmux not installed")
+        try:                    # a short path: a socket path has a 108-byte limit
+            self.tmp = os.path.realpath(tempfile.mkdtemp(dir="/tmp"))
+        except OSError:         # the sandbox's /tmp is read-only; tmux skips below anyway
+            self.tmp = os.path.realpath(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.sock = os.path.join(self.tmp, "s")
+        home = os.path.join(self.tmp, "home")
+        local_bin = os.path.join(home, ".local", "bin")
+        os.makedirs(local_bin)
+        claude = os.path.join(local_bin, "claude")
+        with open(claude, "w") as f:
+            f.write('#!/bin/sh\n[ "$1" != agents ] || echo "[]"\n')
+        os.chmod(claude, 0o755)
+        self.env = {k: v for k, v in os.environ.items() if not k.startswith(("TMUX", "CLAUDE"))}
+        self.env.update(HOME=home, XDG_STATE_HOME=os.path.join(self.tmp, "state"),
+                        LANG="C.UTF-8", PATH=os.path.dirname(self.tmux_bin) + os.pathsep
+                        + os.environ.get("PATH", "/usr/bin:/bin"))
+        p = self.tmux("-f", "/dev/null", "new-session", "-d", "-s", "main", "sleep 600",
+                      check=False)
+        if "Operation not permitted" in p.stderr:
+            self.skipTest("the Bash sandbox blocks tmux's socket; run outside it")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.addCleanup(self.tmux, "kill-server", check=False)
+        self.tmux("set", "-g", "default-command", "sleep 600")
+        pid = self.tmux("display", "-p", "#{pid}").stdout.strip()
+        self.env["TMUX"] = f"{self.sock},{pid},0"
+
+    def tmux(self, *args, check=True):
+        # -u: a client without a UTF-8 locale prints non-ASCII as _ (utf8_sanitize).
+        p = subprocess.run([self.tmux_bin, "-u", "-S", self.sock, *args], capture_output=True,
+                           text=True, encoding="utf-8", timeout=10, env=self.env)
+        if check:
+            self.assertEqual(p.returncode, 0, p.stderr)
+        return p
+
+    def test_a_restored_window_gets_its_place_back(self):
+        # A trailing ; and a trailing \; check the escape tmux needs for each.
+        places = (PLACE + " end;", "tail\\;")
+        start, socket = self.tmux("display", "-p", "#{start_time} #{socket_path}").stdout \
+            .rstrip("\n").split(" ", 1)
+        start = int(start)
+        reg = os.path.join(self.tmp, "state", "dotclaude", "open-sessions")
+        os.makedirs(reg)
+        for n, place in enumerate(places, 1):
+            cwd = os.path.join(self.tmp, f"repo{n}")
+            os.makedirs(cwd)
+            transcript = os.path.join(self.tmp, f"{sid(n)}.jsonl")
+            open(transcript, "w").close()
+            os.utime(transcript, (start - 600, start - 600))
+            with open(os.path.join(reg, sid(n) + ".json"), "w") as f:
+                json.dump({"session_id": sid(n), "cwd": cwd, "transcript_path": transcript,
+                           "pane": f"%{n}", "window_index": n, "socket": socket,
+                           "server_start": start - 3600, "server_pid": 1, "ts": start - 600,
+                           "place": place}, f)
+        p = subprocess.run(["bash", SCRIPT], capture_output=True, text=True, timeout=30,
+                           env=self.env)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(self.tmux("list-windows", "-t", "=main", "-F", "#{@tab_place}")
+                         .stdout.splitlines(), ["", *places])
+
+
 if __name__ == "__main__":
     unittest.main()
