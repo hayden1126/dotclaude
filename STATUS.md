@@ -79,8 +79,9 @@ stored here).
   - `tab-bar`: PR 1 merged as #96, its review fixes and Shift+arrows as #97, the test fixes as
     #99, PR 2 (drag between rows, custom rows, placements in the tab record) as #101
     (2026-10-14, merged ahead of #100 by accident). #101's tmux side is live from main
-    (`setup-tmux.sh` from the main checkout); its `hooks/session-registry.sh` goes live with
-    excluded-guard's next install or #100's merge. The lane stays open (`Keep open:`) for #101's
+    (`setup-tmux.sh` from the main checkout); its `hooks/session-registry.sh` went live when
+    excluded-guard merged main (a464a8c), since the held install's links point into that
+    worktree: a lane's merge of main changes live files with no reinstall. The lane stays open (`Keep open:`) for #101's
     live smoke with Hayden; a follow-up PR carries anything it finds and #101's backlog line.
     Close it after that (Hayden's ask). Design: the research page
     https://claude.ai/artifact/E75uhqt2xskxUGQopLwvoA (private), `~/scratch/tab-bar/INVENTORY.md`
