@@ -373,7 +373,9 @@ need nothing extra.
   spills over only when a tab would get too narrow (the tabs then spread evenly over the rows
   they need). Row 0's right end shows the host and the clock. Widths depend only on how many
   tabs there are and the terminal's width, so a title or glyph change never moves a tab or
-  resizes the panes. Past 5 rows the smallest
+  resizes the panes. A tab drops the prefix of Claude's title (its ✳ or spinner glyph, then
+  `repo · ` or the older `[repo] ` a tab keeps until its next prompt), since the row already
+  names the project. Past 5 rows the smallest
   groups share the bottom rows behind a `┃repo▸` divider; still past 5, the bar ends in `+N`, which
   opens the window list. The window you are on is always shown. On a narrow terminal (the phone over
   ssh) the bar moves to the bottom with shorter tabs and drops the host and the clock. Tap a
