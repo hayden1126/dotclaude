@@ -542,6 +542,15 @@ need nothing extra.
 - **Stop / PostToolUse: `context-watch.sh`** (in this repo). The auto-pass watcher (see
   Auto-pass, below); its `/autopass` toggle is the `skills/autopass` mod, not a settings hook.
   The PostToolUse entry skips a subagent's calls before any Python starts. Fails open.
+- **UserPromptSubmit / PostToolUse: `pass-notice.sh`** (in this repo).
+  - **What it does.** When a `/pass` drops (see Pass, below), the waiter leaves the session
+    a notice at `pass-notice/<session>.json` in the state dir. This hook adds it once, as
+    context, to the session's next prompt or next main-thread tool call. The prompt can be
+    typed or injected (an agent's hand-back, a task notice). So the session stops waiting
+    and says why.
+  - **Keyed by session id.** A session that restore resumed after tmux died still gets it.
+  - It exits before Python starts when no notice exists, skips a subagent's calls, and fails
+    open.
 - **SessionStart (`startup|resume|clear|compact`) / Stop / SessionEnd: `lane-identity.sh`** (in
   this repo). In a lane it tells the session its lane id, branch, claims, port and record, and
   registers it in `lane.json`; after a compact it adds "re-read your record". In the main
@@ -620,8 +629,11 @@ idle, the script rechecks the handoff and respawns the pane with a fresh `claude
   Hayden YYYY-MM-DD)` dated within this session. The handoff skill writes that marker only for an
   approval given in the session, and `handoff-check` fails one with a bad, older or future
   date, or when it can't find the session's start.
-- It waits for this session's own idle status (`~/.claude/sessions/<pid>.json`), not the tab's.
-  The pass drops, with nothing changed, when work landed after the handoff (`stale`), Hayden typed
+- It waits for this session's own turn to end, not the tab's. The session file
+  (`~/.claude/sessions/<pid>.json`) shows that by reading `idle`. But Claude Code keeps it
+  `busy` at the prompt while a background agent, teammate or workflow runs. Then the transcript
+  decides: the turn's `turn_duration` entry or an Esc interrupt after the call, with no new turn
+  since. The pass drops, with nothing changed, when work landed after the handoff (`stale`), Hayden typed
   or queued a prompt after the call (`resumed`), the stop listed any background task but memory
   upkeep or an artifact watch, or the pane was in copy mode or held a draft in the input box
   (`busy`), the session or pane went away or changed (`gone`), or the turn never ended
@@ -631,7 +643,14 @@ idle, the script rechecks the handoff and respawns the pane with a fresh `claude
   show one brief line in the status line. Fix the cause and run `/pass` again. In compact mode,
   copy mode, a draft or no input box between `/compact` and the resume prompt leaves the prompt
   for you to type (`partial`): it stays in the status line until a key press, and `pass.log` has
-  it whole.
+  it whole. Every drop and `partial` also leave the session a `[pass]` notice
+  (`pass-notice.sh`, Hooks above). It arrives as context at the session's next turn or tool
+  call, and says:
+  - the cause;
+  - that no pass is pending;
+  - the fix (for `partial`, the resume prompt).
+
+  So the session stops saying a pass is queued, even after tmux died and restore resumed it.
 - A `busy` refusal names the first two tasks with their description and id (`monitor "deploy
   events" (b0fzd27l4) running`), and `pass.log` names every one. Stop a leftover from `/tasks`,
   or ask Claude to `TaskStop` it. `/pass` checks first: `pass-respawn -C <dir> --tasks` lists

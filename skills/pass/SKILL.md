@@ -52,7 +52,13 @@ The record holds the exact facts and the fresh session re-reads it. So the hando
 
 ## What happens after the turn
 
-The waiter watches this session's own status in `~/.claude/sessions/<pid>.json` (not the tab's) until it reads idle, waits 1 s, and checks again. Then, in order:
+The waiter watches this session's own turn (not the tab's) until it has ended, waits 1 s, and checks again.
+
+- `~/.claude/sessions/<pid>.json` shows the end by reading idle.
+- But Claude Code keeps that file `busy` at the prompt while a background agent, teammate or workflow runs. Then the transcript decides: the turn's `turn_duration` entry or an Esc interrupt after the call, with no new turn since.
+- A new turn (a typed prompt, a task notice, an agent's hand-back) after the end drops the pass as `resumed`.
+
+Then, in order:
 
 1. It re-runs `handoff-check`.
 2. It drops the pass if Hayden typed a prompt after the call, or queued one mid-turn, or the transcript can't be read.
@@ -68,7 +74,7 @@ A refusal (`stale`, `busy`, `timeout`, `failed`, `error`, and the resume prompt 
 | Drop | Cause | What to do |
 |---|---|---|
 | `stale` | work landed after the handoff (an edit, a commit) | run the delta handoff, then `/pass` again |
-| `resumed` | Hayden typed a prompt after the call, or the turn restarted | finish that turn, then `/pass` again if it still applies |
+| `resumed` | Hayden typed a prompt after the call, or a new turn started (a queued prompt, a task notice, an agent's hand-back) | finish that turn, then `/pass` again if it still applies |
 | `busy` | the stop listed background tasks (the notice names the first two with their ids, `pass.log` every one, as `tasks:`, `waits:` for real waits, or both) or wrote no record; or, at the last check, the pane was in copy mode, had a draft in the input box, or showed no input box | stop the leftovers (step 2: `--tasks`, then `TaskStop <id>`) or wait, then `/pass`; `/pass compact` keeps the tasks; leave copy mode or send or clear the draft, then `/pass` again |
 | `gone` | the session, its process or the pane went away or changed (a `/clear`, an exit) | `/pass` again from the live session |
 | `timeout` | the turn never ended (600 s) | `/pass` again |
@@ -78,6 +84,12 @@ A refusal (`stale`, `busy`, `timeout`, `failed`, `error`, and the resume prompt 
 | `partial` | compact mode: `/compact` was sent (not confirmed), then copy mode, a draft or no input box came up before the resume prompt | type the prompt the status line shows (it stays until a key press, and `pass.log` has it whole) |
 
 Each decision appends one line to `$XDG_STATE_HOME/dotclaude/pass.log` (`~/.local/state/dotclaude/pass.log` by default).
+
+**A drop tells you too.** Every drop, and a compact whose resume prompt wasn't typed, also leaves this session a notice. It arrives as context at your next turn or tool call, starting `[pass]`. It names the cause and the fix, and says no pass is pending; after a compact it carries the resume prompt to follow.
+
+- The waiter decides within seconds of the turn's end, so by your next turn a pass has either run or dropped.
+- Never tell anyone a pass is still queued from memory: a `[pass]` notice means none is.
+- Pass again only when the reason still holds. Hayden asked for it, or an autopass tier is in effect: fix the notice's cause first.
 
 ## Auto-pass nudges
 
@@ -104,6 +116,7 @@ The fresh session starts in **plan mode** unless the status doc's Next block car
 | A plain pass with background tasks running | Stop the leftovers (`TaskStop <id>`); if any is still in use, use compact; a respawn kills them |
 | Checking `ps` for leftover tasks | Read `pass-respawn -C <toplevel> --tasks`: tasks aren't child processes, and the MCP servers that are look like the whole list |
 | Promising "the pane restarts" | Say it restarts unless the gate refuses; the checks run after your reply |
+| Saying a pass is "still queued" in a later turn | By your next turn it has run or dropped; a `[pass]` notice names the drop and its fix |
 | Skipping the delta handoff because a handoff ran earlier | Work after a handoff makes it stale; run the delta mode |
 | Writing the approval marker to get a normal-mode resume | Only for an approval Hayden gave this session, cited; never inferred |
 | Calling `pass-respawn` without `-C`, or behind `cd` or a pipe | Run `pass-respawn -C <toplevel>` bare |
