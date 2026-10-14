@@ -307,13 +307,17 @@ when probed, and the guard reads no glob rule).
 Three checks bring a missing rule up before a call hits it:
 - **Session start.** `hooks/excluded-check.sh` runs the guard's own view of the project's root
   and PATH (rule 3 aside: only a call's cwd decides it). It shows what would be refused on screen
-  and in one line of the model's context, once per change in those findings. PATH is keyed
-  machine-wide and git config per project, so a PATH dir shows once and each lane's hooks dir
-  shows in that lane. It skips subagent and unattended starts (no one would see them), and it
-  fails open: the guard still judges every call.
+  and in one line of the model's context, once per change in those findings. PATH, judged with
+  the machine-wide settings, is keyed by the PATH itself, so a PATH dir shows once across
+  projects and lanes. What the project's own settings add and its git config are keyed by the
+  project, so each lane's hooks dir shows in that lane. An unreadable user or managed settings
+  file is named too: it takes its deny rules with it. Starts that race (a tmux restore) take
+  turns on a lock, so one of them shows a finding. It skips subagent and unattended starts (no
+  one would see them), and it fails open: the guard still judges every call.
 - **`lane new`.** After the setup (the step that sets a `core.hooksPath`), it runs rule 1 on the
   new worktree as the lane's own session will, prints each rule, and seeds the ask into the new
-  lane's record. `lane adopt` only prints them, since that record is already the lane's to write.
+  lane's record; so does `lane adopt` finishing a lane `new` left setup-failed (`open` refuses
+  one). Adopting any other worktree only prints them: its record is already the lane's to write.
 - **`lane done`.** After a close, it names each Edit deny rule inside the removed worktree, and
   the file it sits in: it now names nothing.
 
