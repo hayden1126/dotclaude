@@ -77,9 +77,12 @@ stored here).
     `lane-addr` #98. `gh pr view <n>` and the closed records under `.git/lanes/_closed/` hold
     the detail.
   - `tab-bar`: PR 1 merged as #96, its review fixes and Shift+arrows as #97, the test fixes as
-    #99. The lane stays open for PR 2 (drag between rows, custom rows); close it after PR 2
-    merges (Hayden's ask). Still due from #97: a fresh review, the live smoke and Hayden's phone
-    tap test, with findings riding PR 2. Design: the research page
+    #99, PR 2 (drag between rows, custom rows, placements in the tab record) as #101
+    (2026-10-14, merged ahead of #100 by accident). #101's tmux side is live from main
+    (`setup-tmux.sh` from the main checkout); its `hooks/session-registry.sh` goes live with
+    excluded-guard's next install or #100's merge. The lane stays open (`Keep open:`) for #101's
+    live smoke with Hayden; a follow-up PR carries anything it finds and #101's backlog line.
+    Close it after that (Hayden's ask). Design: the research page
     https://claude.ai/artifact/E75uhqt2xskxUGQopLwvoA (private), `~/scratch/tab-bar/INVENTORY.md`
     and [[dotclaude-tab-bar]].
   - `excluded-guard` (narrow-excluded Part 2, opened 2026-10-14): a PreToolUse guard that lets an
@@ -87,9 +90,10 @@ stored here).
     sandbox-writable, then the `lane` allow lines behind it (Hayden applies allow lines; the
     classifier refuses them). Its sessions don't open the private findings.
   - `turn-glyph` (opened 2026-10-14): PLAN.md "Next: two workflow fixes", the glyph half.
-  - **Merge order: `excluded-guard`, then `tab-bar` PR 2 and `turn-glyph` by readiness**
+  - **Merge order: `excluded-guard` (#100), then `turn-glyph`, then any `tab-bar` follow-up**
     (`turn-glyph` and `excluded-guard` both touch `settings.json`). The lead installs only the
-    next to merge.
+    next to merge. #100 carries G8's fix (Hayden's option A, 2026-10-14: an Edit deny rule is
+    the guard's protection); its install order is in that lane's `.lane/PLAN.md` "Part 2b".
   - The parked json-depth sweep (21 files, among them the delegation enforcement scripts) is on
     `fix/json-depth-sweep`. Shipping it first needs a check of how each enforcement site fails
     (a caught error must not turn a deny into an allow). Optional: the trigger is near
