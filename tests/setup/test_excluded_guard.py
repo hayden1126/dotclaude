@@ -562,6 +562,16 @@ class Matching(Guard):
         self.write(os.path.join(self.proj, ".claude", "settings.json"), "{not json")
         self.denied("gh issue list", "rule2")
 
+    def test_an_empty_settings_file_is_no_settings(self):
+        # The sandbox's mount points for protected files it lacks can stay behind on disk as
+        # empty files; Claude Code reads one as no settings, so it can't hold a pattern.
+        self.env["PATH"] = f"{self.wbin}:/usr/bin"
+        for text in ("", " \n"):
+            with self.subTest(text=text):
+                self.write(os.path.join(self.proj, ".claude", "settings.json"), text)
+                self.allowed("gh issue list")
+                self.denied("gh pr view", "rule2", self.wbin)
+
 
 class FailsClosed(Guard):
     def test_an_unparsable_payload_falls_back_to_the_head_word(self):

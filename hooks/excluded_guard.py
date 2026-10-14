@@ -89,7 +89,8 @@ def expand(path, home):
 def load_settings(env):
     """Union of excludedCommands and allowWrite from user, managed, project and project-local
     settings; denyWrite from user and managed only. Returns (settings, errors): a file that
-    exists but can't be read makes the call a candidate (we may have missed a pattern)."""
+    exists but can't be read makes the call a candidate (we may have missed a pattern); an empty
+    one holds none."""
     home = env.get("HOME") or os.path.expanduser("~")
     managed = env.get(MANAGED_ENV) or MANAGED_DIR
     # (path, machine-wide): only machine-wide files load in every session, so only they protect.
@@ -106,7 +107,10 @@ def load_settings(env):
     for path, machine_wide in files:
         try:
             with open(path) as f:
-                data = json.load(f)
+                text = f.read()
+            # An empty file is no settings to Claude Code: the sandbox's mount points for
+            # protected files it lacks can stay behind as empty files on disk.
+            data = json.loads(text) if text.strip() else {}
         except FileNotFoundError:
             continue
         except (OSError, ValueError) as e:
