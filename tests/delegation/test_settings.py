@@ -264,6 +264,33 @@ class Baseline(unittest.TestCase):
         for f in ("context_watch.py", "autopass_state.py"):
             self.assertTrue(os.path.exists(os.path.join(REPO, "hooks", f)))
 
+    def test_the_pass_notice_is_wired_on_prompts_and_main_thread_tool_calls(self):
+        # pass-respawn's waiter leaves a notice when it drops a pass; the session's next turn
+        # start (a prompt, an agent's hand-back, a task notice) or main-thread tool call says it
+        # once. PostToolUse fires on a subagent's calls too, so the same inline pre-filter as
+        # context-watch's skips agent_id payloads before the hook starts. It never blocks by
+        # exit code.
+        notice = 'bash "$HOME/.claude/hooks/pass-notice.sh"'
+        (prompt,) = [e for e in S["hooks"]["UserPromptSubmit"]
+                     if any("pass-notice" in h["command"] for h in e["hooks"])]
+        self.assertNotIn("matcher", prompt)
+        self.assertEqual([h["command"] for h in prompt["hooks"]], [notice])
+        (tool,) = [e for e in S["hooks"]["PostToolUse"]
+                   if any("pass-notice" in h["command"] for h in e["hooks"])]
+        self.assertEqual(tool["matcher"], "*")
+        self.assertEqual([h["command"] for h in tool["hooks"]],
+                         ["i=$(cat); case \"$i\" in *'\"agent_id\"'*) ;; *) "
+                          "printf '%s' \"$i\" | " + notice + " ;; esac"])
+        hooks = [(event, h) for event, entries in S["hooks"].items() for e in entries
+                 for h in e["hooks"] if "pass-notice" in h["command"]]
+        self.assertEqual(sorted(event for event, _ in hooks), ["PostToolUse", "UserPromptSubmit"])
+        for _, h in hooks:
+            self.assertEqual(h["type"], "command")
+            self.assertEqual(h["timeout"], 5)  # every prompt and tool call waits for it
+            self.assertNotIn("exit 2", h["command"])
+        self.assertTrue(os.access(os.path.join(REPO, "hooks", "pass-notice.sh"), os.X_OK))
+        self.assertTrue(os.path.exists(os.path.join(REPO, "hooks", "pass_notice.py")))
+
     def test_autopass_is_a_mod_command_not_a_prompt_hook(self):
         # skills/autopass is a mod (<name>@skills-dir): it registers /autopass as an immediate
         # command and runs hooks/autopass_toggle.py. A SKILL.md of the same name would make

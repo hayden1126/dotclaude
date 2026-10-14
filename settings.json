@@ -492,6 +492,16 @@
         ]
       },
       {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "i=$(cat); case \"$i\" in *'\"agent_id\"'*) ;; *) printf '%s' \"$i\" | bash \"$HOME/.claude/hooks/pass-notice.sh\" ;; esac",
+            "timeout": 5
+          }
+        ]
+      },
+      {
         "hooks": [
           {
             "type": "command",
@@ -642,6 +652,15 @@
           {
             "type": "command",
             "command": "bash \"$HOME/.claude/hooks/tmux-state.sh\" busy",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$HOME/.claude/hooks/pass-notice.sh\"",
             "timeout": 5
           }
         ]
