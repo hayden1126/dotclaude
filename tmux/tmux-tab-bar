@@ -707,10 +707,12 @@ def name_part(g: int, cells: int) -> str:
 
 
 def header(g: int, cells: int, dim: bool, width: int, colour: int) -> str:
-    """Group g's `name▸` in the gutter, padded with spaces to `width` (H) cells; `cells` is the
-    name's own width, known at layout time, so the padding is fixed text."""
-    return (f"#[fg=colour{int(colour)}]" + ("#[dim]" if dim else "#[bold]")
-            + name_part(g, cells) + "▸" + NORM + " " * max(0, width - cells - 1))
+    """Group g's `name▸` in the gutter, right-aligned in `width` (H) cells: the spaces before it,
+    one after, so every row's ▸ sits in one column. `cells` is the name's own width, known at
+    layout time, so the padding is fixed text."""
+    pad = max(0, width - cells - 1)
+    return (" " * max(0, pad - 1) + f"#[fg=colour{int(colour)}]" + ("#[dim]" if dim else "#[bold]")
+            + name_part(g, cells) + "▸" + NORM + " " * min(pad, 1))
 
 
 def divider(g: int | None, cells: int, colour: int) -> str:

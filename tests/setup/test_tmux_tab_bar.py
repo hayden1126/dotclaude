@@ -499,6 +499,31 @@ class LayOut(unittest.TestCase):
 # --- render -------------------------------------------------------------------------------------
 
 class Render(unittest.TestCase):
+    def test_every_header_is_right_aligned_to_one_column(self):
+        # Hayden's ask (2026-10-14): `dotclaude▸` and `focus▸` end in one column. As drawn (the
+        # name's format as that many cells, styles dropped), every header fills the gutter's
+        # header column with its ▸ in the column's last cell but one, dim or bold, named or not.
+        def drawn(g, cells, dim, width):
+            text = tb.header(g, cells, dim, width, tb.CUSTOM_COLOUR)
+            return re.sub(r"#\[[^]]*\]", "", text.replace(tb.name_part(g, cells), "x" * cells))
+
+        groups = [Group("dotclaude", tabs(1, 2)), Group("focus", tabs(3), tb.CUSTOM_COLOUR, "c:1"),
+                  Group("", tabs(4), tb.CUSTOM_COLOUR, "c:2")]
+        lay = tb.lay_out(groups, tabs(5), 188, "@1", 8, 22)
+        heads = [item for items in lay.rows for item in items if item[0] == "head"]
+        self.assertEqual(len(heads), 3)
+        for item in heads:
+            g, dim = item[1], item[2]
+            cells = lay.head_w[g] - 2
+            with self.subTest(group=g):
+                self.assertIn(tb.header(g, cells, dim, lay.head, lay.colours[g]),
+                              "".join(tb.render(lay)))
+                text = drawn(g, cells, dim, lay.head)
+                self.assertEqual((len(text), text.index("▸")), (lay.head, lay.head - 2))
+        for cells, dim in ((0, False), (3, True), (9, False)):
+            with self.subTest(cells=cells, dim=dim):
+                self.assertEqual(drawn(0, cells, dim, 11), " " * (9 - cells) + "x" * cells + "▸ ")
+
     def test_a_dim_separator_between_two_tabs_and_nowhere_else(self):
         # Packed: alpha's divider follows a shared tab, so no separator before it or its tab.
         groups = [Group("alpha", tabs(1, 2)), Group("bravo", tabs(3, 4, 5)),
@@ -2321,6 +2346,16 @@ class RealTmux(unittest.TestCase):
         x2, y2 = self.find("2 hq:")
         self.assertEqual((y0, y2), (1, 2))
         self.assertEqual(x0, x2)
+
+    def test_a_custom_rows_header_ends_in_the_project_headers_column(self):
+        # Right-aligned headers: `dotclaude▸` and a short custom row's `ab▸` share the ▸ column.
+        self.ti("set-option", "-w", "-t", "t:1", "@tab_place",
+                tb.place_text(tb.Place("c:1", 0, "s", "ab")))
+        self.run_layout()
+        x0, y0 = self.find("dotclaude▸")
+        x1, y1 = self.find("ab▸")
+        self.assertNotEqual(y0, y1)
+        self.assertEqual(x0 + len("dotclaude"), x1 + len("ab"))
 
     def test_hostile_words_go_through_source_file_byte_for_byte(self):
         words = ROUND_TRIP
