@@ -272,6 +272,14 @@ class Machine:
                      + [self.resolved(os.path.abspath(d)) for d in sandbox_only]
                      + [os.path.join(self.home, ".claude")])
         self.gitconfig = os.path.join(self.home, ".gitconfig")
+        # exposed() and chain() by path: every head walks the same PATH entries, and an lstat
+        # on a /mnt/c entry (WSL's 9p) costs about a millisecond. Valid while deny stands.
+        self.memo = {}
+
+    def protect(self, d):
+        """Judge on as if `d` were protected: all_refusals puts a refusal's fix in place."""
+        self.deny.append(d)
+        self.memo.clear()
 
     def resolved(self, p):
         """Realpath, but a symlink itself stays itself (it can be replaced by its dir's owner)."""
@@ -322,6 +330,11 @@ class Machine:
     def exposed(self, path):
         """The first writable thing along `path` (a symlinked ancestor, then the path), or None."""
         p = os.path.abspath(os.path.join(self.cwd, path))
+        if ("exposed", p) not in self.memo:
+            self.memo["exposed", p] = self._exposed(p)
+        return self.memo["exposed", p]
+
+    def _exposed(self, p):
         parts = p.strip("/").split("/")
         for i in range(1, len(parts)):
             a = "/" + "/".join(parts[:i])
@@ -333,20 +346,31 @@ class Machine:
         """Follow `path`'s symlink chain, raising `refuse(bad)` for the first hop, or dir of a
         hop, that is exposed. Returns the final target. Rules 1 and 2 both judge files this way."""
         p = os.path.abspath(os.path.join(self.cwd, path))
+        if ("chain", p) not in self.memo:
+            self.memo["chain", p] = self._chain(p)
+        kind, at = self.memo["chain", p]
+        if kind == "bad":
+            raise refuse(at)
+        if kind == "loop":
+            raise Refusal(rule, at, f"{path} has a symlink loop at {at}; could not verify it.")
+        return at
+
+    def _chain(self, p):
+        """("ok", final target), ("bad", the exposed path) or ("loop", where it gave up)."""
         for _ in range(40):
             if self.always_protected(p):
-                return p
+                return "ok", p
             # A file or symlink is replaced by whoever writes its dir; a real dir stands on its
             # own, as a PATH entry does.
             real_dir = os.path.isdir(p) and not os.path.islink(p)
             for x in (p,) if real_dir else (p, os.path.dirname(p)):
                 bad = self.exposed(x)
                 if bad:
-                    raise refuse(bad)
+                    return "bad", bad
             if not os.path.islink(p):
-                return p
+                return "ok", p
             p = os.path.normpath(os.path.join(os.path.dirname(p), os.readlink(p)))
-        raise Refusal(rule, p, f"{path} has a symlink loop at {p}; could not verify it.")
+        return "loop", p
 
 
 # --- Rule 1: git config ------------------------------------------------------------------------
@@ -645,7 +669,7 @@ def all_refusals(check, m, entries=None):
             found.append(r)
             bad = "" if r.path == "(empty)" else r.path
             if r.fix_dir and r.fix_dir not in m.deny:
-                m.deny.append(r.fix_dir)
+                m.protect(r.fix_dir)
             elif entries is not None and bad in entries and not os.path.isabs(bad):
                 entries.remove(bad)
             else:
@@ -913,15 +937,15 @@ def finding(r):
 def session_findings(env, project):
     """{key: [line]}: what the live guard would refuse an excluded call from the project's root
     (rule 3 aside: only a call's cwd decides it). MACHINE_KEY holds what every session shares,
-    PATH and unread settings, so it shows once across projects and lanes. The git config is
+    PATH, so it shows once across projects and lanes. The git config is
     keyed by the project's path: its repo names its own includes and hooks dir, and each
     worktree has its own."""
     env = dict(env, CLAUDE_PROJECT_DIR=project)
-    settings, errors = load_settings(env)
-    machine = [f"settings not read: {e}" for e in errors]
+    # An unread settings file makes the guard judge more calls, not refuse them: not a finding.
+    settings, _ = load_settings(env)
     refusals, path_errors = path_refusals(Machine(env, settings, project),
                                           excluded_heads(settings), env.get("PATH", ""))
-    machine += [finding(r) for r in refusals]
+    machine = [finding(r) for r in refusals]
     machine += [f"PATH: could not check ({type(e).__name__}: {e})" for e in path_errors]
     refusals, error = all_refusals(lambda m: check_rule1(m, env, project, project),
                                    Machine(env, settings, project))

@@ -949,6 +949,11 @@ class Session(Guard):
         del self.env["CLAUDE_CODE_SESSION_ATTENDED"]
         self.assertIsNotNone(self.start())
 
+    def test_an_unreadable_settings_file_is_no_finding(self):
+        # The guard then judges more calls as candidates; it refuses none for that alone.
+        self.mkdir("proj", ".claude", "settings.json")
+        self.assertIsNone(self.start())
+
     def test_a_refusal_with_no_rule_is_shown_by_its_reason(self):
         self.env["PATH"] = f":{self.bin}:/usr/bin"
         self.assertIn("empty entry", self.start()["systemMessage"])
