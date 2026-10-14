@@ -180,16 +180,18 @@ sees it.
 | `hooks/report-check.sh` | PreToolUse(SubagentHandback)/SubagentStop hook: sends a delegated role's malformed report back, at most twice; fails open | symlink `~/.claude/hooks/report-check.sh` |
 | `hooks/handoff-reminder.sh` | UserPromptSubmit hook: on a wrap-up / handoff / clear-memory signal, reminds me to invoke the `handoff` skill instead of improvising it, or the `pass` skill on a terse "... and pass"; a shim over `hooks/handoff_reminder.py`, which holds the classifier | symlink `~/.claude/hooks/handoff-reminder.sh` and `handoff_reminder.py` |
 | `hooks/session-title.sh` | UserPromptSubmit hook: sets the terminal tab title to `<repo> · <label>` via `sessionTitle`, so tabs are tellable apart (the repo is the one the session launched in, so a Bash `cd` doesn't rename it); the label comes from the Stop-hook Haiku cache (`.title.txt`), falling back to the current prompt's first line | symlink `~/.claude/hooks/session-title.sh` |
-| `hooks/stop-ring.sh` | Stop hook: plays the Windows notify sound when a session you see finishes (a tab, a plain terminal or a mapped background session), not a subagent, an unmapped background session, a `claude -p` run, a turn that ends with an agent or shell still running for it, or one a queued notice or prompt restarts within a second; logs each decision to `ring.log`, and writes the session's stop record (`stops/<session>.json`: time, tasks in flight, the transcript path, the replies of the last 5 turns; records older than 7 days go) for `pass-respawn`; a shim over `hooks/stop_ring.py` | symlink `~/.claude/hooks/stop-ring.sh` and `stop_ring.py` |
+| `hooks/stop-ring.sh` | Stop hook: plays the Windows notify sound when a session you see finishes (a tab, a plain terminal or a mapped background session), not a subagent, an unmapped background session, a `claude -p` run, a turn that ends with an agent or shell still running for it, or one a queued notice or prompt restarts within a second; logs each decision to `ring.log`, and writes the session's stop record (`stops/<session>.json`: time, tasks in flight, the transcript path, the replies of the last 5 turns; records older than 7 days go) for `pass-respawn`; also sets the tab glyph for a main session's Stop (busy while a counted agent or shell runs, else idle) and runs `wants_input.py` in the background, which paints the tab green when the reply wants you; a shim over `hooks/stop_ring.py` | symlink `~/.claude/hooks/stop-ring.sh` and `stop_ring.py` |
 | `hooks/notify.sh` | Notification(permission_prompt) hook: pops a Windows toast, resolving the toast path per platform (WSL via `wslpath`, native Windows git-bash via `cygpath`), and rings like `stop-ring.sh` | symlink `~/.claude/hooks/notify.sh` |
-| `hooks/tmux-state.sh` | Prompt, tool, Stop and Notification hook: sets `@claude_state` (busy, wait, idle) on the tmux window the session is shown in, for the indicator in `tmux/claude.conf`; does nothing outside tmux | symlink `~/.claude/hooks/tmux-state.sh` |
-| `hooks/session-pane.sh` | Sourced by the three hooks above, not a hook: finds the tmux pane a session is shown in, and whether a person sees it | symlink `~/.claude/hooks/session-pane.sh` |
+| `hooks/tmux-state.sh` | Prompt, tool, SubagentStop, PermissionRequest, Notification and SessionStart hook: sets `@claude_state` (busy, wait, idle) on the tmux window the session is shown in, for the indicator in `tmux/claude.conf`; keeps a set of who holds a dialog open (`@claude_wait_by`), so the tab stays waiting until every open dialog is answered; the Stop's state is `stop-ring.sh`'s; does nothing outside tmux | symlink `~/.claude/hooks/tmux-state.sh` |
+| `hooks/session-pane.sh` | Sourced by the three hooks above, not a hook: finds the tmux pane a session is shown in, and whether a person sees it; holds the glyph's wait-set helpers | symlink `~/.claude/hooks/session-pane.sh` |
+| `hooks/wants_input.py` | Not a hook: `stop-ring.sh` runs it, detached, on a main session's Stop; asks Haiku whether the reply's last 2,000 characters want the person (a question, an approval, a step only they can do) and prints `yes`, `no` or `error` with the reason and the time taken | symlink `~/.claude/hooks/wants_input.py` |
+| `hooks/haiku.py` | Not a hook: the direct Haiku Messages-API call (Claude subscription OAuth token, stdlib urllib, no API key) that `session-summary.sh` and `wants_input.py` share | symlink `~/.claude/hooks/haiku.py` |
 | `hooks/context-watch.sh` | Stop and PostToolUse hook: the auto-pass watcher; writes the context size to `ctx/<session>.json` and, at 300k, 480k and 520k (derived from `autoCompactWindow`), tells the session to run the pass skill, or with autopass off shows you one line at 520k; a shim over `hooks/context_watch.py`, which shares `hooks/autopass_state.py` (tiers, the tab flag, on or off); fails open, with errors in `context-watch.err` in the state dir | symlink `~/.claude/hooks/context-watch.sh`, `context_watch.py` and `autopass_state.py` |
 | `hooks/autopass_toggle.py` | Not a hook: the `skills/autopass` mod runs it for `/autopass on\|off\|status` (`autopass_toggle.py SESSION_ID CWD ARGS`), and it prints the one reply | symlink `~/.claude/hooks/autopass_toggle.py` |
 | `hooks/pass-banner.sh` | SessionStart (`startup`) hook: after a plain `/pass` respawned the tab, shows what the old session said in its last turn, once, as a banner you see and the model doesn't (its format and caps: the shim's header); a shim over `hooks/pass_banner.py`; fails open | symlink `~/.claude/hooks/pass-banner.sh` and `pass_banner.py` |
 | `hooks/md_render.py` | Not a hook: the stdlib markdown-to-terminal renderer (bold, italic, code, links, headings, lists, code blocks, tables, wrapped by terminal cells) that the banner and `tmux/pass-last` load by path | symlink `~/.claude/hooks/md_render.py` |
 | `hooks/session-registry.sh` | SessionStart/SessionEnd hook: records which session is open in which tmux tab (`$XDG_STATE_HOME/dotclaude/open-sessions/`), with the window's tab bar placement (`@tab_place`, as `place`), for `claude-restore`; deletes the entry on `/exit` or `/clear`, marks it when the window or claude is killed; then hands each payload to `claude-saved` (Star and Shelve; the star follows `/clear`); does nothing outside tmux | symlink `~/.claude/hooks/session-registry.sh` |
-| `hooks/session-summary.sh` | Stop hook: regenerates a 1-2 sentence session summary via a direct Haiku Messages-API call (Claude subscription OAuth token, stdlib urllib, no API key/jq), detached so it never blocks; caches the summary to `<config-dir>/session-summaries/<session_id>.txt` for the status-line widget and a short (`<=32`-char) tab label to `<session_id>.title.txt` for `session-title.sh` | symlink `~/.claude/hooks/session-summary.sh` |
+| `hooks/session-summary.sh` | Stop hook: regenerates a 1-2 sentence session summary via a direct Haiku Messages-API call (`hooks/haiku.py`: Claude subscription OAuth token, stdlib urllib, no API key/jq), detached so it never blocks; caches the summary to `<config-dir>/session-summaries/<session_id>.txt` for the status-line widget and a short (`<=32`-char) tab label to `<session_id>.title.txt` for `session-title.sh` | symlink `~/.claude/hooks/session-summary.sh` |
 | `hooks/overwrite-guard.sh` | PreToolUse(Write) hook: denies a Write over a file this session hasn't read, or one that cuts a file of 1 KB or more to under a fifth; a shim over `hooks/overwrite_guard.py`; fails open | symlink `~/.claude/hooks/overwrite-guard.sh` and `overwrite_guard.py` |
 | `hooks/lane-identity.sh` | SessionStart/Stop/SessionEnd hook: tells a lane session its identity and registers it, prints one board line in a lanes repo's main checkout, mirrors a lane's record; a shim over `hooks/lane_identity.py`; fails open | symlink `~/.claude/hooks/lane-identity.sh` and `lane_identity.py` |
 | `hooks/lane-guard.sh` | PreToolUse(Edit/Write/MultiEdit) hook: denies writes to another lane's record or the lanes CLI's data, and relative identity in status files; a shim over `hooks/lane_guard.py`; fails open | symlink `~/.claude/hooks/lane-guard.sh` and `lane_guard.py` |
@@ -361,16 +363,30 @@ need nothing extra.
   for both WSL (`wslpath`) and native Windows git-bash (`cygpath`) and renders `notify-toast.ps1`;
   Windows' Do Not Disturb hides it. Windows-only: on macOS/Linux, swap for your platform's notifier
   (`osascript` / `notify-send`).
-- **tmux indicator**: `tmux-state.sh` marks the session's window busy (◐) on a prompt or tool
-  call, waiting (✳) on a permission prompt or a question (not `idle_prompt`) and idle on Stop; a background subagent's tool calls leave
-  a waiting window alone. `claude -p` runs never set it. A
+- **tmux indicator**: the session's window shows busy (◐) while Claude works, waiting (✳) when
+  it wants you, and nothing once it is done. `tmux-state.sh` marks it busy on a prompt or tool
+  call, and waiting while a permission dialog or a question is open (not on `idle_prompt`). A
+  subagent's permission dialog keeps it waiting until that dialog is answered, and two dialogs
+  open at once keep it waiting until both are. A dialog no hook names an owner for (an MCP
+  server's form) keeps it waiting only until the next activity, anyone's. At a Stop, `stop-ring.sh` marks it busy while an agent or shell
+  the session started still runs (the rule that keeps the ring quiet), else idle, then asks
+  Haiku (`wants_input.py`) whether the reply wants you: a question, an approval, a step only you
+  can do. A yes paints it waiting, usually within a second or two. A failed call paints it
+  waiting too, so a broken check shows as green rather than as silence. The paint lands only if
+  the main session did nothing newer since that Stop, and each verdict is a
+  `stop input=<yes|no|error> ... painted=<1|0|->` line in `ring.log` (`-` when it painted no
+  green: a no, or a queued prompt that started the next turn, `resumed=1`, which shows busy).
+  Each check is one small Haiku call on your subscription quota. A reply that leaves you a step for later ("run X when
+  you're ready") often reads as a report and stays blank. A new, resumed or cleared session
+  starts blank, and `claude -p` runs never set it. A
   background session has no pane of its own, so `tmux/tmux-claude-status` maps it by directory to
   the one client pane in its cwd (two background sessions in one directory map nothing, and a new
   mapping also needs a single client pane there) and writes
   `$XDG_STATE_HOME/dotclaude/tabs`, which `session-pane.sh` reads. State is per window, so two
   sessions split into one window share a glyph.
   Run `./setup-tmux.sh` once for the tmux side. A machine whose `settings.machine.json` still wires
-  `tmux-state.sh` should drop those entries before `./setup.sh`, or they fire twice.
+  `tmux-state.sh` should drop those entries before `./setup.sh`, or they fire twice (an old
+  Stop entry does nothing now: `idle` acts only on SessionStart).
 - **The tab bar groups tabs by project**: the status bar has up to 5 rows. A repo with lanes gets
   its own row, headed by its name (`dotclaude▸`): the lead checkout's tab (`lead` plus its title),
   then each lane (its id, cut to 12 cells, plus its title), then its other worktrees. Every other

@@ -111,7 +111,9 @@ class SessionSummary(Workspace):
         src = src.split("<<'PY'\n", 1)[1].split("\nPY\n", 1)[0]
         self.assertIn(self.MARK, src)
         src = src.split(self.MARK, 1)[0] + "print(recent_dialogue(transcript))\n"
-        p = subprocess.run(["python3", "-c", src], capture_output=True, text=True, timeout=20,
+        # The hook passes its own directory, where it imports haiku.py from.
+        p = subprocess.run(["python3", "-c", src, HOOKS], capture_output=True, text=True,
+                           timeout=20,
                            input=json.dumps({"session_id": "sid",
                                              "transcript_path": self.transcript, **payload}))
         self.assertEqual(p.returncode, 0, p.stderr)

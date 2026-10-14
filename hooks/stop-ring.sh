@@ -12,6 +12,20 @@
 # while its notice still waits in the queue (as does a prompt typed mid-turn). The dequeue lands
 # within 0.3 s of the Stop in 99% of past cases.
 #
+# The same hook sets the tab glyph for a main session's Stop in a known pane (tmux-state.sh has
+# the rest of the glyph's events). It writes the window's turn token (the prompt_id and the
+# time), then busy while a counted task runs (the ring's rule below), else idle, and drops the
+# wait-set tokens (session-pane.sh) of the main session, of an unowned notice, and of any agent
+# whose task no longer runs (all are kept while a workflow runs: its agents have ids of their
+# own).
+# Then a detached child asks hooks/wants_input.py whether the reply wants the person. yes, or
+# an error (redundancy over silence), paints wait, but only while the window still holds this
+# Stop's token: any later main event clears it. A queued prompt that started a new turn (a
+# dequeue, as above) fires no UserPromptSubmit (its hook ran when it was queued, before this
+# Stop), so on a dequeue the child paints busy instead: at the end of the settle window, without
+# waiting on Haiku, or when Haiku answers. Each verdict goes to ring.log as
+# `stop input=<yes|no|error> [reason=...] [resumed=1] ms=<n> painted=<1|0|->`.
+#
 # settings.json invokes this as `bash "$HOME/.claude/hooks/stop-ring.sh"`. Event JSON arrives
 # on stdin. Fail-open: any error skips the sound (exit 0), never blocks.
 set -uo pipefail
@@ -19,10 +33,11 @@ set -uo pipefail
 input=$(cat 2>/dev/null)
 . "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/session-pane.sh" 2>/dev/null || exit 0
 
-# Five facts from the event: "spawned" (a subagent's stop), "busy" (the session is paused on
+# Seven facts from the event: "spawned" (a subagent's stop), "busy" (the session is paused on
 # background work that will wake it, so it is neither done nor waiting on the person), "tasks"
-# (the in-flight task labels, for ring.log), and the transcript's size now and its path ("-" and
-# nothing when it can't be read). background_tasks' `type` is Claude Code's friendly label
+# (the in-flight task labels, for ring.log), "agents" (the running subagents' ids, for the wait
+# set), the prompt_id ("-" when it isn't a plain name), and the transcript's size now and its
+# path ("-" and nothing when it can't be read). background_tasks' `type` is Claude Code's friendly label
 # ("shell", "subagent"), not the internal task name (local_bash, local_agent), which appears only
 # for a type with no label. A Monitor arrives as "shell" too; stop_ring.task_types relabels it
 # "monitor" from the transcript (PLAN.md A10), and the Artifact tool's live watch "artifact
@@ -37,15 +52,22 @@ input=$(cat 2>/dev/null)
 # see; it reads the transcript there and copies `replies` for the respawned session's banner
 # (hooks/pass-banner.sh) and Ctrl-b Up (tmux/pass-last). hooks/stop_ring.py, beside this script's
 # real path and run with python3 -I, does all of this and has the details.
-read -r spawned busy tasks size transcript < <(printf '%s' "$input" | \
-  python3 -I "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/stop_ring.py" 2>/dev/null)
+here=$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")
+read -r spawned busy tasks agents prompt size transcript < <(printf '%s' "$input" | \
+  python3 -I "$here/stop_ring.py" 2>/dev/null)
 
-# Ring unless the transcript gained a queue dequeue (or popAll) past byte $2 within the settle
-# window. Args: transcript path, its size at the Stop ("-" when unreadable: ring), pane.
+# True when the transcript gained a queue dequeue (or popAll) past byte $2: a queued input
+# started the next turn. Args: transcript path, its size at the Stop ("-" when unreadable).
+resumed() {
+  [ "${2:--}" != - ] &&
+    grep -qE '"operation" *: *"(dequeue|popAll)"' < <(tail -c +"$(( $2 + 1 ))" "$1" 2>/dev/null)
+}
+
+# Ring unless a queued input resumed within the settle window. Args: transcript path, its size
+# at the Stop, pane.
 settle_then_ring() {
   sleep "${DOTCLAUDE_RING_SETTLE:-1}"
-  if [ "${2:--}" != - ] &&
-     grep -qE '"operation" *: *"(dequeue|popAll)"' < <(tail -c +"$(( $2 + 1 ))" "$1" 2>/dev/null); then
+  if resumed "$1" "$2"; then
     ring_log stop "quiet resumed=1 tasks=${tasks:--}" "$3" "$input"
   else
     ring_log stop "rang tasks=${tasks:--}" "$3" "$input"
@@ -53,7 +75,68 @@ settle_then_ring() {
   fi
 }
 
+# The Stop's glyph: the turn token, then the state with the main session's and an unowned
+# notice's tokens dropped, and any finished agent's. Args: pane, turn token, busy|idle, running
+# task ids (comma-joined, - for none, * to keep every agent's token).
+stop_glyph() {
+  local held id live=",$4,"
+  glyph_cmd set-option -w -t "$1" @claude_turn "$2"
+  glyph_drop "$1" main
+  glyph_drop "$1" note
+  held=$(tmux show-option -wqv -t "$1" @claude_wait_by 2>/dev/null)
+  [ "$4" = "*" ] && held=""
+  while [[ $held =~ \!agent-([A-Za-z0-9_-]+)\! ]]; do
+    id=${BASH_REMATCH[1]}
+    held=${held//"!agent-$id!"/}
+    [[ $live == *",$id,"* ]] || glyph_drop "$1" "agent-$id"
+  done
+  glyph_state "$1" "$3"
+  glyph_flush
+}
+
+# Classify the reply; paint wait on yes or error, busy when a queued input resumed, each only
+# while the window holds this Stop's token. The dequeue check runs at the end of the settle
+# window, while Haiku may still be answering, and again once it has. Args: transcript path, its
+# size at the Stop, pane, turn token.
+classify_then_paint() {
+  local fd verdict reason ms painted=- note="" mine="#{==:#{@claude_turn},$4}"
+  local busy_paint="#{?$mine,#{?#{@claude_wait_by},wait,busy},#{@claude_state}}"
+  exec {fd}< <(printf '%s' "$input" | timeout 12 python3 -I "$here/wants_input.py" 2>/dev/null)
+  sleep "${DOTCLAUDE_RING_SETTLE:-1}"
+  if resumed "$1" "$2"; then
+    note=" resumed=1"
+    glyph_cmd set-option -wF -t "$3" @claude_state "$busy_paint"
+    glyph_flush
+  fi
+  read -r -u "$fd" verdict reason ms
+  exec {fd}<&-
+  case "$verdict" in yes|no|error) ;; *) verdict=error reason=crash ms=- ;; esac
+  if [ -z "$note" ] && resumed "$1" "$2"; then
+    note=" resumed=1"
+    glyph_cmd set-option -wF -t "$3" @claude_state "$busy_paint"
+    glyph_flush
+  elif [ -z "$note" ] && [ "$verdict" != no ]; then
+    glyph_cmd set-option -wF -t "$3" @claude_wait_by \
+      "#{?$mine,#{s/!main!//:@claude_wait_by}!main!,#{@claude_wait_by}}"
+    glyph_cmd set-option -wF -t "$3" @claude_state "#{?$mine,wait,#{@claude_state}}"
+    glyph_flush
+    # 1 when this Stop's token still held right after the paint, so the paint landed.
+    [ "$(tmux show-option -wqv -t "$3" @claude_turn 2>/dev/null)" = "$4" ] && painted=1 || painted=0
+  fi
+  [ "${reason:--}" = - ] || note=" reason=$reason$note"
+  ring_log stop "input=$verdict$note ms=${ms:--} painted=$painted" "$3" "$input"
+}
+
 pane=$(session_pane "$input")
+if [ "${spawned:-0}" = 0 ] && [ -n "$pane" ]; then
+  [ "${busy:-0}" = 1 ] && state=busy || state=idle
+  now=${EPOCHREALTIME:-$(date +%s.%N)}
+  now=${now//[^0-9]/}   # EPOCHREALTIME's separator follows the locale: a "." or a ","
+  token="${prompt:--}/$now"
+  [ "${prompt:--}" = - ] && token="none/$now"
+  stop_glyph "$pane" "$token" "$state" "${agents:--}"
+  ( classify_then_paint "${transcript:-}" "${size:--}" "$pane" "$token" </dev/null >/dev/null 2>&1 & )
+fi
 if [ "${spawned:-0}" = 0 ] && [ "${busy:-0}" = 0 ] && session_in_view "$pane"; then
   ( settle_then_ring "${transcript:-}" "${size:--}" "$pane" </dev/null >/dev/null 2>&1 & )
 elif [ "${busy:-0}" = 1 ]; then
