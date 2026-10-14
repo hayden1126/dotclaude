@@ -86,11 +86,13 @@ stored here).
     files) is parked on `fix/json-depth-sweep`. Shipping any of it first needs a check of how
     each enforcement site fails (a caught error must not turn a deny into an allow). The trigger
     is near theoretical, so the sweep is optional.
-  - Live: `lane-close` (opened 2026-10-13, Hayden's call: `lane done` ends the lane's own
-    window and the leftovers that carry a lane session's id, the install lock holds until the
-    lead's reinstall, setup.sh prunes links into lanes and says when sessions need a restart)
-    `tab-bar` (opened 2026-10-13, below) and `lane-addr` (opened 2026-10-13 from its backlog
-    entry below, whose text is now its Brief). **Merge order: 1 `lane-close`, 2 `tab-bar`, 3
+  - Merged, installed from main, and closed (2026-10-13/14): `lane-close` as #95 (`lane done`
+    ends a lane's own processes, the install holds until main's reinstall, setup prunes links
+    into lanes, sandbox-off Python runs `-I`). Its first live `lane done` ended the lane's
+    `claude` (session 8e31f81a) and 9 of its MCP children, each named with its pid, and left
+    every other window alone.
+  - Live: `tab-bar` (opened 2026-10-13, below) and `lane-addr` (opened 2026-10-13 from its
+    backlog entry below, whose text is now its Brief). **Merge order: 1 `tab-bar`, 2
     `lane-addr`.** The lead installs only the next to merge.
   - `lane new` with `|`, `<`, `>` or `;` inside its quoted `--goal` ran sandboxed and failed
     ("Read-only file system") even though `lane new *` is in `excludedCommands`. It left a
@@ -234,21 +236,14 @@ stored here).
   `claude -p` repro and the 2.1.285 boundary; the karaoke session's has the incident.
 
 ## Notes for next session
-- **Next (lead, main checkout): take lane-close's PR to ready and merge, then `tab-bar`, then
-  `lane-addr`** ("In flight"). As of 2026-10-13, lane-close is done at `origin/main..3160bef`:
-  - review rounds 3-6 and the live probe;
-  - the lead's reviews of its post-merge fixes and of the G7 rounds (setup, sync and every
-    `sys.executable` start run Python with `-I`; private findings G7), with the last round
-    reviewed by the lead itself;
-  - all four suites green in one run, installed from the lane, and smoked.
-
-  Hayden approved its push and a draft PR; ready and merge still need his OK
-  (`gh pr list --head feat/lane-close`). After the merge: reinstall from main, which releases
-  lane-close's install hold (`lane ls` shows it). Then propose `lane done lane-close` and tell
-  tab-bar it is next. Start with `lane ls` and `lane asks`. A lane is handed back only once
-  `handoff-check -C <lane path>` passes and the board shows no `handoff?` flag. After each
-  merge, follow the install step in "In flight", then `lane done <id>` once its session exits.
-  narrow-excluded Part 2 opens at the next free slot.
+- **Next (lead, main checkout): take `tab-bar`, then `lane-addr`, to merge** ("In flight").
+  As of 2026-10-14: #95 merged, installed from main (hold released), and lane-close closed.
+  tab-bar has merged main (623923d) and waits on Hayden's approval of its round-3 screenshots,
+  then installs and reports ready. lane-addr was told to merge main (#95 touched its files). A
+  slot is free (cap 3, 2 live): propose narrow-excluded Part 2 to Hayden. Start with `lane ls`
+  and `lane asks`. A lane is handed back only once `handoff-check -C <lane path>` passes and the
+  board shows no `handoff?` flag. After each merge, follow the install step in "In flight",
+  then propose `lane done <id>` (it now ends the lane's own session itself).
   **Message a lane at its messaging socket**: `uds:/run/user/1000/cc-socks/<pid>.sock`, the
   `messagingSocketPath` in `~/.claude/sessions/<pid>.json` of the session whose cwd is in the
   lane. Resolve it fresh before each send, since a pass makes a new pid. A ListAgents name
