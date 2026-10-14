@@ -79,7 +79,7 @@ A refusal (`stale`, `busy`, `timeout`, `failed`, `error`, and the resume prompt 
 | `gone` | the session, its process or the pane went away or changed (a `/clear`, an exit) | `/pass` again from the live session |
 | `timeout` | the turn never ended (600 s) | `/pass` again |
 | `cancelled` | `pass-respawn -C <toplevel> --cancel` ended the waiter | nothing; `/pass` again when wanted |
-| `failed` | tmux could not respawn the pane or type into it | read `pass.log`, then `/pass` again |
+| `failed` | tmux could not respawn the pane or type into it | read `pass.log`, then `/pass` again; if it failed after `/compact` was sent, don't pass again (that compacts twice): type the resume prompt the status line shows (`pass.log` has it whole) |
 | `error` | an error in the waiter itself | read `pass.log`, then `/pass` again |
 | `partial` | compact mode: `/compact` was sent (not confirmed), then copy mode, a draft or no input box came up before the resume prompt | type the prompt the status line shows (it stays until a key press, and `pass.log` has it whole) |
 

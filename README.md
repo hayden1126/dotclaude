@@ -646,7 +646,9 @@ idle, the script rechecks the handoff and respawns the pane with a fresh `claude
   show one brief line in the status line. Fix the cause and run `/pass` again. In compact mode,
   copy mode, a draft or no input box between `/compact` and the resume prompt leaves the prompt
   for you to type (`partial`): it stays in the status line until a key press, and `pass.log` has
-  it whole. Every drop and `partial` also leave the session a `[pass]` notice
+  it whole. A `failed` after `/compact` went out hands over the prompt the same way, since a
+  second `/pass` would compact twice. Every drop and `partial` also leave the session a
+  `[pass]` notice
   (`pass-notice.sh`, Hooks above). It arrives as context at the session's next turn or tool
   call, and says:
   - the cause;
