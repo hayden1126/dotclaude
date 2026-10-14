@@ -86,12 +86,20 @@ stored here).
     files) is parked on `fix/json-depth-sweep`. Shipping any of it first needs a check of how
     each enforcement site fails (a caught error must not turn a deny into an allow). The trigger
     is near theoretical, so the sweep is optional.
-  - Live: `lane-close` (opened 2026-10-13, Hayden's call: `lane done` ends the lane's own
-    window and the leftovers that carry a lane session's id, the install lock holds until the
-    lead's reinstall, setup.sh prunes links into lanes and says when sessions need a restart)
-    `tab-bar` (opened 2026-10-13, below) and `lane-addr` (opened 2026-10-13 from its backlog
-    entry below, whose text is now its Brief). **Merge order: 1 `lane-close`, 2 `tab-bar`, 3
-    `lane-addr`.** The lead installs only the next to merge.
+  - Merged, installed from main, and closed (2026-10-13/14): `lane-close` as #95 (`lane done`
+    ends a lane's own processes, the install holds until main's reinstall, setup prunes links
+    into lanes, sandbox-off Python runs `-I`). Its first live `lane done` ended the lane's
+    `claude` (session 8e31f81a) and 9 of its MCP children, each named with its pid, and left
+    every other window alone.
+  - `tab-bar` PR 1 merged as #96 (2026-10-14) and is installed from main (main shows
+    `status 2`). It merged before its fresh review and live smoke, so both still run, with
+    Hayden's phone tap test, and anything found rides PR 2. The lane stays open for PR 2 (drag,
+    custom rows). Hayden asked the lead to close it when tab-bar is done (taken as: after PR 2
+    merges).
+  - Live: `tab-bar` (PR 2), `lane-addr` (opened 2026-10-13 from its backlog entry below, whose
+    text is now its Brief) and `excluded-guard` (narrow-excluded Part 2, opened 2026-10-14).
+    **Merge order by readiness: `lane-addr`, `excluded-guard`, `tab-bar` PR 2.** The lead
+    installs only the next to merge.
   - `lane new` with `|`, `<`, `>` or `;` inside its quoted `--goal` ran sandboxed and failed
     ("Read-only file system") even though `lane new *` is in `excludedCommands`. It left a
     stray branch, and nothing registered. The likely cause is that the matcher sees those
@@ -141,7 +149,7 @@ stored here).
   Hayden picked tmux over a migration after the research page
   (https://claude.ai/artifact/E75uhqt2xskxUGQopLwvoA, private; tmux inventory in
   `~/scratch/tab-bar/INVENTORY.md`). The design is in the lane's Brief, and the decisions are
-  in [[dotclaude-tab-bar]]: a row per lead with lanes, one shared row, overflow, at most 5 rows
+  in [[dotclaude-tab-bar]]: a row per lead with lanes, shared row(s) for the rest, overflow, at most 5 rows
   (pack, then `+N`); a narrow layout for the phone's grouped session; PR 2 adds manual drag
   between rows (spike first, popup board as the fallback), with placements kept in the tab
   record. Remote Control can't run `!` lines, so the phone needs the real pane. The
@@ -234,21 +242,13 @@ stored here).
   `claude -p` repro and the 2.1.285 boundary; the karaoke session's has the incident.
 
 ## Notes for next session
-- **Next (lead, main checkout): take lane-close's PR to ready and merge, then `tab-bar`, then
-  `lane-addr`** ("In flight"). As of 2026-10-13, lane-close is done at `origin/main..3160bef`:
-  - review rounds 3-6 and the live probe;
-  - the lead's reviews of its post-merge fixes and of the G7 rounds (setup, sync and every
-    `sys.executable` start run Python with `-I`; private findings G7), with the last round
-    reviewed by the lead itself;
-  - all four suites green in one run, installed from the lane, and smoked.
-
-  Hayden approved its push and a draft PR; ready and merge still need his OK
-  (`gh pr list --head feat/lane-close`). After the merge: reinstall from main, which releases
-  lane-close's install hold (`lane ls` shows it). Then propose `lane done lane-close` and tell
-  tab-bar it is next. Start with `lane ls` and `lane asks`. A lane is handed back only once
-  `handoff-check -C <lane path>` passes and the board shows no `handoff?` flag. After each
-  merge, follow the install step in "In flight", then `lane done <id>` once its session exits.
-  narrow-excluded Part 2 opens at the next free slot.
+- **Next (lead, main checkout): run `lane-addr`, `excluded-guard` and `tab-bar` PR 2 to merge
+  by readiness** ("In flight"). As of 2026-10-14: #96 merged and installed; lane-addr has merged
+  main 623923d and its `lane addr lead` reached the lead live; excluded-guard was just opened
+  (plan mode). Close `tab-bar` with `lane done` after its PR 2 merges (Hayden's ask). Start with
+  `lane ls` and `lane asks`. A lane is handed back only once `handoff-check -C <lane path>`
+  passes and the board shows no `handoff?` flag. After each merge, follow the install step in
+  "In flight", then propose `lane done <id>` (it ends the lane's own session itself).
   **Message a lane at its messaging socket**: `uds:/run/user/1000/cc-socks/<pid>.sock`, the
   `messagingSocketPath` in `~/.claude/sessions/<pid>.json` of the session whose cwd is in the
   lane. Resolve it fresh before each send, since a pass makes a new pid. A ListAgents name
