@@ -6,6 +6,7 @@ The session in a pane comes from Claude's live-session files (~/.claude/sessions
 interactive session with a live pid) and else from hooks/session-registry.sh's open-sessions
 entries on the current server. A stub tmux answers the display formats the script reads and logs
 each call's argv, one argument per field; os.getpid() stands in for a live claude pid."""
+import fcntl
 import json
 import os
 import shutil
@@ -33,6 +34,7 @@ case "$1" in
       '#{pane_title}') printf '%s\n' "$STUB_TITLE" ;;
       '#{pane_current_command}') printf '%s\n' "$STUB_COMMAND" ;;
       '#{window_panes}') echo "${STUB_WINDOW_PANES:-1}" ;;
+      '#{@tab_place}x') printf '%sx\n' "${STUB_PLACE:-}" ;;
       '#{pane_id} #{session_id} #{client_height} #{client_width}')
         echo "$STUB_CLIENT_PANE \$1 $STUB_HEIGHT $STUB_WIDTH" ;;
     esac ;;
@@ -892,6 +894,53 @@ class Saved(unittest.TestCase):
                           "job_id": sid(1)[:8]})
         self.assertNotIn("ended_other_at", e)
         self.assertAlmostEqual(e["ts"], time.time(), delta=30)
+
+    def test_track_keeps_the_tabs_place(self):
+        # Review round 2: track rewrites an attach tab's record whole, so it carries the
+        # window's @tab_place (tmux-tab-bar's, opaque here) as session-registry.sh does: read
+        # live, the old record's when tmux doesn't answer, none when empty or junk.
+        self.background(1)
+        self.client("attach", sid(1)[:8])
+        self.track_panes(("%7", self.ppid, 3))
+        place = '{"row": "c:1", "pos": 0, "after": "s", "name": "a b"}'
+        self.env["STUB_PLACE"] = place
+        self.run_saved("track")
+        self.assertEqual(self.reg_entry(1)["place"], place)
+        self.assertIn(["tmux", "display", "-p", "-t", "%7", "#{@tab_place}x"],
+                      self.calls("tmux", "display"))
+        self.env.update(STUB_PLACE="other", STUB_GONE="%7")
+        self.run_saved("track")
+        self.assertEqual(self.reg_entry(1)["place"], place)       # no answer: the old one
+        del self.env["STUB_GONE"]
+        for bad in ("", "x\x01y", "x" * 2049):
+            with self.subTest(bad=bad):
+                self.env["STUB_PLACE"] = bad
+                self.run_saved("track")
+                self.assertNotIn("place", self.reg_entry(1))
+                self.assertIs(self.reg_entry(1)["attach"], True)
+
+    def test_track_writes_and_sweeps_under_the_records_lock(self):
+        # tmux-tab-bar compares and replaces a record's place under open-sessions/.records.lock;
+        # track's write (and its sweep of a gone tab's entry) must wait for it.
+        self.background(1)
+        self.client("attach", sid(1)[:8])
+        self.track_panes(("%7", self.ppid, 3))
+        os.makedirs(self.reg, exist_ok=True)
+        fd = os.open(os.path.join(self.reg, ".records.lock"), os.O_RDWR | os.O_CREAT, 0o600)
+        self.addCleanup(os.close, fd)
+        for want in (True, False):
+            with self.subTest(written=want):
+                if not want:
+                    self.track_panes(("%7", 1, 3))                 # the tab moved on: swept
+                fcntl.flock(fd, fcntl.LOCK_EX)
+                p = subprocess.Popen(["bash", SCRIPT, "track"], stdin=subprocess.DEVNULL,
+                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                     env=self.env)
+                time.sleep(0.8)
+                self.assertEqual(self.reg_entry(1) is None, want)  # waiting on the lock
+                fcntl.flock(fd, fcntl.LOCK_UN)
+                self.assertEqual(p.wait(timeout=10), 0)
+                self.assertEqual(self.reg_entry(1) is not None, want)
 
     def test_track_drops_an_attach_entry_whose_tab_moved_on(self):
         # The tab closed, or a /clear gave the job a new session id (sid 2 under job 1's id),
