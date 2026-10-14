@@ -83,3 +83,24 @@ ring_log() {
   fi
   return 0
 }
+
+# The tab glyph's wait set (PLAN.md "Next: two workflow fixes"). A window's @claude_state is
+# wait while its @claude_wait_by holds a token: "!main!" (a dialog of the main session, or the
+# reply hooks/wants_input.py read as wanting the person) or "!agent-<id>!" (a subagent's
+# dialog). Each hook adds or removes only its own token, then derives the state from what is
+# left, so two dialogs open at once keep the tab green until both are answered, and a
+# subagent's tool calls never clear the main session's green. @claude_turn holds the token of
+# the last main Stop, whose classifier may still paint. The helpers queue tmux commands in
+# glyph_cmds; glyph_flush runs them as one tmux call (and clears the queue). Tokens and ids
+# reach tmux formats only as [A-Za-z0-9_:/-]: the callers validate them.
+glyph_cmds=()
+glyph_cmd() { [ ${#glyph_cmds[@]} -eq 0 ] || glyph_cmds+=(';'); glyph_cmds+=("$@"); }
+# Args: pane, token. Adding first removes, so a token is never in the set twice.
+glyph_add() { glyph_cmd set-option -wF -t "$1" @claude_wait_by "#{s/!$2!//:@claude_wait_by}!$2!"; }
+glyph_drop() { glyph_cmd set-option -wF -t "$1" @claude_wait_by "#{s/!$2!//:@claude_wait_by}"; }
+# Args: pane, the state to show when the set is empty (busy, idle).
+glyph_state() { glyph_cmd set-option -wF -t "$1" @claude_state "#{?#{@claude_wait_by},wait,$2}"; }
+glyph_flush() {
+  [ ${#glyph_cmds[@]} -eq 0 ] || tmux "${glyph_cmds[@]}" 2>/dev/null
+  glyph_cmds=()
+}

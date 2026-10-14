@@ -8,9 +8,9 @@
 #
 # Generation is a direct Haiku Messages-API call authenticated with the Claude
 # subscription OAuth token from <config-dir>/.credentials.json (no API key on this
-# machine). That is ~3x cheaper on the 5h/7d quota than spinning a headless
-# `claude -p` session, because it skips the full system-prompt overhead. Uses only
-# the Python stdlib (urllib) -- no deps, no jq.
+# machine), through hooks/haiku.py, which the tab glyph's classifier shares. That is
+# ~3x cheaper on the 5h/7d quota than spinning a headless `claude -p` session, because
+# it skips the full system-prompt overhead. Uses only the Python stdlib -- no deps, no jq.
 #
 # Detaches the call so Stop never blocks the turn. Fails open on everything (exit
 # 0, nothing on stdout): a missing/expired token or a failed call just leaves the
@@ -24,13 +24,15 @@ input=$(cat 2>/dev/null)
 
 # The script goes to python3 as -c and the event on stdin: passed as one argv string, an event
 # over 128 KiB (a long last_assistant_message) would fail the exec and skip the summary. -I
-# keeps the current directory off sys.path, so a project's own json.py can't run here.
+# keeps the current directory off sys.path, so a project's own json.py can't run here; the
+# script's one argument is this file's real directory, for hooks/haiku.py.
 IFS= read -r -d '' src <<'PY'
-import sys, os, json, re, urllib.request, urllib.error
+import sys, os, json, re
+sys.path.insert(0, sys.argv[1])
+import haiku
 
 # ---- tunables -------------------------------------------------------------
 MODEL        = "claude-haiku-4-5-20251001"
-API_URL      = "https://api.anthropic.com/v1/messages"
 MIN_GROWTH   = 2048     # bytes; skip regen if the transcript grew less than this
 RECENT_MSGS  = 10       # trailing user/assistant messages fed to the model
 MSG_CLIP     = 400      # chars kept per message
@@ -55,14 +57,7 @@ transcript = (data.get("transcript_path") or "").strip()
 if not session_id or not transcript:
     die()
 
-def config_dir(tp):
-    if tp:
-        d = os.path.dirname(tp)
-        if os.path.basename(os.path.dirname(d)) == "projects":
-            return os.path.dirname(os.path.dirname(d))
-    return os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude")
-
-cfg = config_dir(transcript)
+cfg = haiku.config_dir(transcript)
 out_dir = os.path.join(cfg, "session-summaries")
 state_dir = os.path.join(out_dir, ".state")
 cache_file = os.path.join(out_dir, session_id + ".txt")
@@ -154,21 +149,6 @@ dialogue = recent_dialogue(transcript)
 if not dialogue:
     die()
 
-def oauth_token(cfg):
-    for p in (os.path.join(cfg, ".credentials.json"),
-              os.path.expanduser("~/.claude/.credentials.json")):
-        try:
-            with open(p) as f:
-                return json.load(f)["claudeAiOauth"]["accessToken"]
-        except (OSError, ValueError, KeyError, TypeError):
-            continue
-    return ""
-
-token = oauth_token(cfg)
-if not token:
-    sys.stderr.write("session-summary: no OAuth token found\n")
-    die()
-
 system = (
     "You summarize an excerpt of a developer's coding-session transcript so they "
     "can re-orient at a glance after switching between several terminals. The "
@@ -192,29 +172,12 @@ user = (
       "<label> is a 3-6 word terminal-tab label (at most 32 characters) naming the "
       "project/feature or current task, with no trailing punctuation."
 )
-body = json.dumps({
-    "model": MODEL,
-    "max_tokens": MAX_TOKENS,
-    "temperature": 0.3,
-    "system": system,
-    "messages": [{"role": "user", "content": user}],
-}).encode()
-req = urllib.request.Request(API_URL, data=body, method="POST", headers={
-    "content-type": "application/json",
-    "authorization": f"Bearer {token}",
-    "anthropic-version": "2023-06-01",
-    "anthropic-beta": "oauth-2025-04-20",
-})
 try:
-    with urllib.request.urlopen(req, timeout=CALL_TIMEOUT) as r:
-        resp = json.load(r)
-except Exception as e:
-    sys.stderr.write(f"session-summary: api call failed: {e}\n")
+    raw = haiku.ask(system, user, model=MODEL, max_tokens=MAX_TOKENS, timeout=CALL_TIMEOUT,
+                    cfg=cfg, temperature=0.3)
+except haiku.HaikuError as e:
+    sys.stderr.write(f"session-summary: api call failed: {e.reason}\n")
     die()
-
-raw = "".join(
-    b.get("text", "") for b in resp.get("content", []) if isinstance(b, dict)
-)
 
 # Peel off a trailing "LABEL: ..." line (if the model emitted one) BEFORE collapsing
 # whitespace, so the label never leaks into the prose summary the statusline shows.
@@ -268,7 +231,8 @@ try:
 except OSError:
     die()
 PY
-generate() { printf '%s' "$1" | python3 -I -c "$src"; }
+hooks_dir=$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")
+generate() { printf '%s' "$1" | python3 -I -c "$src" "$hooks_dir"; }
 
 # Detach fully so Stop returns immediately; orphan the job via ( ... & ).
 ( generate "$input" >/dev/null 2>&1 & )
