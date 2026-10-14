@@ -789,8 +789,9 @@ class Hooks(unittest.TestCase):
         self.assertEqual([(r["prompt_id"], r["text"]) for r in rec["replies"]],
                          [("p1", "One."), ("p1", "Two, " + chr(0x00E9))])
         self.assertEqual(rec["waits"], [])  # the rest of the record is as before
-        raw = open(os.path.join(self.state, "dotclaude", "stops", "abcdef12-0000.json"),
-                   "rb").read()
+        with open(os.path.join(self.state, "dotclaude", "stops", "abcdef12-0000.json"),
+                  "rb") as f:
+            raw = f.read()
         self.assertIn(chr(0x00E9).encode(), raw)  # ensure_ascii=False, as UTF-8
         self.run_hook("stop-ring.sh", TAB, {"prompt_id": "p2", "last_assistant_message": None})
         self.assertEqual(len(self.stop_record()["replies"]), 2)  # nothing to add
