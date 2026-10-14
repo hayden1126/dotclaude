@@ -389,6 +389,25 @@ class Baseline(unittest.TestCase):
             self.assertTrue(any("excluded-guard.sh" in c for c in commands("PreToolUse", "Bash")),
                             covered)
 
+    def test_the_lane_allow_rules_are_the_ones_the_docs_name(self):
+        # The lanes skill and docs/lanes.md name the subcommands that skip the classifier; the
+        # allow rules must be exactly those, every one an excluded command behind the guard, and
+        # the asks on their raw flags must still catch.
+        allowed = {r[len("Bash(lane "):-1].split()[0] for r in S["permissions"]["allow"]
+                   if r.startswith("Bash(lane ")}
+        for doc in ("skills/lanes/SKILL.md", "docs/lanes.md"):
+            with open(os.path.join(REPO, doc)) as f:
+                text = " ".join(f.read().split())
+            m = re.search(r"((?:`\w+`, )+`\w+` and `\w+`) (?:have|take) allow rules", text)
+            self.assertIsNotNone(m, doc)
+            self.assertEqual(set(re.findall(r"`(\w+)`", m.group(1))), allowed, doc)
+        for sub in sorted(allowed):
+            sample = "lane ls" if sub == "ls" else f"lane {sub} x"
+            self.assertTrue(matching("allow", sample), sample)
+            self.assertTrue(excluded_by(sample), sample)
+        for raw in ("lane done x --abandon", "lane init --setup y", "lane init --root y"):
+            self.assertTrue(matching("ask", raw), raw)
+
     def test_memory_is_committed_at_session_start_and_stop(self):
         # Every SessionStart source (a /clear too) and every Stop: Bash edits to memory are
         # caught within a turn. Never blocks.

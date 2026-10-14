@@ -24,6 +24,12 @@
     "allow": [
       "Bash(delegation-ledger wait *)",
       "Bash(pass-respawn -C *)",
+      "Bash(lane ls)",
+      "Bash(lane ls *)",
+      "Bash(lane new *)",
+      "Bash(lane adopt *)",
+      "Bash(lane open *)",
+      "Bash(lane done *)",
       "Bash(git push origin *)",
       "Bash(gh pr create *)",
       "Bash(gh pr ready *)",
