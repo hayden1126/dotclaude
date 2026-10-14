@@ -38,9 +38,9 @@ Ordered. Doc-drift reconciliation is an early gate: the durable docs must match 
 5. **Commit cleanly and verify.** Stage the doc fixes, STATUS, and memory files together and commit via `/commit` (branch-first on the default branch, never push without approval). Confirm everything intended is committed; note any deliberately uncommitted work in STATUS. Run the verification target (tests, build, lint) and record green, or note red and why. A PR for this work (opened only with Hayden's approval) stays a draft (`gh pr create --draft`) until this step is done, and goes ready (`gh pr ready <n>`) only after it, so it merges once with its docs and STATUS; if the repo installs from its checkout, install and smoke-test from the branch first, so STATUS can say so. A fact only knowable after the merge rides in the next PR, not a STATUS-only one. **In a lane:** commit on the lane branch. The record is outside the tree (hidden by `info/exclude`), so there is nothing to stage for it; note an unpushed branch in the record, since pushes wait for Hayden.
 
 6. **Leave next-session pointers.** Ensure the status doc's next-step block ("Notes for next session", or Next in a lane record) names the exact next concrete step and what to verify, and include the commit range so the next session can `git log` the work. In a lane, write the range into the record after the step-5 commit, so the record postdates it. Close with a short summary to Hayden: drift found and fixed or flagged, STATUS updated, memory changes, git and verification state.
-    - **Approval marker:** append `(approved by Hayden YYYY-MM-DD)` to the Next block's **first** item (the step the next session starts with) only when Hayden approved that exact step in this session, and cite the approval (his words or the plan he accepted) beside it. Never infer one from a general "go ahead" or an earlier session. `/pass` reads only the first item: with a marker dated within this session the fresh session starts in the default mode and continues, otherwise in plan mode; a marker on a later item is ignored. `handoff-check` fails a marker with no valid date, and a first-item marker dated before this session started (remove it, or get a fresh approval).
+    - **Approval marker:** append `(approved by Hayden YYYY-MM-DD)` to the Next block's **first** item (the step the next session starts with; a `Keep open:` line is a flag, not a step, so the item after it) only when Hayden approved that exact step in this session, and cite the approval (his words or the plan he accepted) beside it. Never infer one from a general "go ahead" or an earlier session. `/pass` reads only the first item: with a marker dated within this session the fresh session starts in the default mode and continues, otherwise in plan mode; a marker on a later item is ignored. `handoff-check` fails a marker with no valid date, and a first-item marker dated before this session started (remove it, or get a fresh approval).
 
-7. **Run `~/.claude/skills/handoff/scripts/handoff-check`** from the checkout, by that path: the skill dir is linked live, while the `~/.local/bin` link waits for the next `setup.sh`. It checks a clean tree (or leftovers named in the status doc by their repo-relative path; agent worktrees don't count), a status doc written after HEAD's commit and during this session, a non-empty Next block, approval markers in it (each `(approved by Hayden YYYY-MM-DD)` carries a valid date, and one on the first item is dated within this session, not after today, and fails when the session's start is unknown), no relative identity (a warning only in a repo with no lanes) and, in a lane, that every claim is named and an unpushed branch is noted. It exits non-zero and lists each gap: fix them and re-run. Say the handoff is done only after it passes.
+7. **Run `~/.claude/skills/handoff/scripts/handoff-check`** from the checkout, by that path: the skill dir is linked live, while the `~/.local/bin` link waits for the next `setup.sh`. It checks a clean tree (or leftovers named in the status doc by their repo-relative path; agent worktrees don't count), a status doc written after HEAD's commit and during this session, a Next block with a step besides any `Keep open:` line, approval markers in it (each `(approved by Hayden YYYY-MM-DD)` carries a valid date, and one on the first item is dated within this session, not after today, and fails when the session's start is unknown), no relative identity (a warning only in a repo with no lanes) and, in a lane, that every claim is named and an unpushed branch is noted. It exits non-zero and lists each gap: fix them and re-run. Say the handoff is done only after it passes.
 
 ### Delta mode
 
@@ -54,13 +54,12 @@ Use it when a handoff already ran this session, or when `handoff-check` says the
 
 ### After a merge ("merged, cleanup and handoff")
 
-In a lane, once Hayden has merged the lane's PR:
+In a lane, once the lane's PR has merged (it ran `gh pr merge`, or Hayden said "merged"):
 
-1. Write the final outcome into the lane record.
-2. Add one line to the project STATUS backlog naming the lane id and the PR number.
-3. Propose `lane done <id>`. Cleanup still needs Hayden's nod.
-
-Then finish the procedure as usual, `handoff-check` last.
+1. Write the final outcome into the lane record. If more PRs will follow on this lane, start the Next block with `Keep open: <why>` on one line (a bullet may wrap, indented): `lane done` refuses the lane while that line stands, and the step after it is the first item.
+2. Finish the procedure as usual, `handoff-check` last.
+3. Send the lead `merged #N` (SendMessage to what a bare `lane addr lead` prints, run just before the send) as the session's last act. Say nothing more about the merge to Hayden: the lead proves it, reinstalls, adds the backlog line and runs `lane done` on Hayden's standing approval, then reports (the `lanes` skill, "Who asks Hayden what"). Never propose `lane done`: only the lead can run it.
+4. No lead running (`lane addr lead` refuses): tell Hayden once that #N merged.
 
 ## Volatile git state: derive, never store
 
@@ -92,7 +91,8 @@ Always `git fetch` first: a stale remote-tracking ref is the other direction thi
 | Storing push/merge/PR state as a fact ("pushed", "merged", "nothing unpushed") | It is stale the moment it is committed and merges flip on GitHub unseen. Store the derive-command + immutable ids; see "Volatile git state" |
 | Citing raw `file.py ~line` numbers in durable docs | Anchor to function/section names instead; line numbers drift on the next edit |
 | Wrote "another session" (or "this session", "my lane") into a status doc | Name the lane id (`lane whoami`, `lane who #<n>`) or the session id; a relative name reads as someone else in every other lane |
-| Updated STATUS.md from a lane | The lane's state goes in its record; the project STATUS gets only backlog or direction items no lane owns, plus one line at merge |
+| Updated STATUS.md from a lane | The lane's state goes in its record; the project STATUS gets only backlog or direction items no lane owns, and the lead adds the one line at merge |
+| Proposed `lane done` after a merge, or told Hayden what the lead's message said | Send the lead `merged #N` after the handoff; the lead closes the lane and reports. A lane reports only its own state and asks |
 | Said the handoff was done without running `handoff-check` | Run it last; fix each gap it lists and re-run until it passes |
 
 ## Why doc-drift is the gate

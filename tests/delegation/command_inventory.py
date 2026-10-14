@@ -402,4 +402,7 @@ NO_ASK = ["lane ls", "lane ls --json", "lane open chart-fix", "lane open chart-f
 
 # Skill commands that ask by design, each rare and run by a person's decision.
 SKILL_ASKS = {"lane init --root": "moves where lanes live; the lead runs it once per repo",
-              "claude stop": "ends a background session that lane done refuses to close"}
+              "claude stop": "ends a background session that lane done refuses to close",
+              "gh pr merge": "a merge waits on Hayden's click (CLAUDE.md Boundaries)",
+              "lane done --abandon": "closes unmerged or kept-open work, never in the lead's "
+                                     "post-merge chain"}
