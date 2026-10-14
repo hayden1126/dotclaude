@@ -287,10 +287,13 @@ stored here).
      `tmux/tmux-claude-status`, and the Notification matcher in settings.json; memory
      `dotclaude-tmux-indicator`.
   **Board at handoff (derive fresh with `lane ls`):**
-  - tab-bar's `fix/tab-bar-tests` is verified and holds the install. It waits for Hayden's
-    push approval (in its window), and it must first re-take the lead STATUS diff.
-  - excluded-guard is next after it. It waits for Hayden to add `"Bash(lane addr *)",` to
-    settings.json, then the lead's go to install.
+  - tab-bar's test fix merged as #99 (2026-10-14). The post-merge steps were not done by the lead:
+    likely lane tab-bar ran them (unconfirmed). be5ff79 merged main into chore/after-pr4, and
+    the live install points at the main checkout (no links or `~/.tmux.conf` sources into
+    lanes). Count that as evidence for problem 1, since a lane ran the lead's install step.
+    tab-bar stays open for PR 2.
+  - excluded-guard is next. It needs to merge main (its board shows `rebase`), and Hayden must
+    add `"Bash(lane addr *)",` to settings.json. Then it gets the lead's go to install.
   - After each merge, reinstall from main (check `~/.tmux.conf`'s `source-file` lines too),
     then `lane done`. Close `tab-bar` after its PR 2 merges (Hayden's ask).
   - STATUS is far past its ceiling (about 330 lines): collapse the finished tracks to
