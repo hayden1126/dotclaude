@@ -979,6 +979,37 @@ class Lock(unittest.TestCase):
         self.assertEqual(calls, [])
         self.assertTrue(os.path.exists(self.base + ".dirty"))
 
+    def test_a_raising_pass_still_looks_for_a_mark_after_letting_go(self):
+        # A run that left while the holder's pass was failing counts on the holder's look:
+        # the error ends the hold, the look still finds the mark and lays out again, and the
+        # first error then reaches main's catch-all.
+        calls = []
+
+        def run():
+            calls.append(1)
+            if len(calls) == 1:
+                tb.touch(self.base + ".dirty")     # a hook fired, found the lock held, left
+                raise RuntimeError("first")
+
+        with self.assertRaisesRegex(RuntimeError, "first"):
+            tb.run_locked(self.base, run)
+        self.assertEqual(len(calls), 2)
+        self.assertFalse(os.path.exists(self.base + ".dirty"))
+        fd = os.open(self.base + ".lock", os.O_RDWR)
+        self.addCleanup(os.close, fd)
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)   # let go: nothing still holds it
+
+    def test_a_raising_pass_with_no_mark_runs_once_and_raises(self):
+        calls = []
+
+        def run():
+            calls.append(1)
+            raise RuntimeError("boom")
+
+        with self.assertRaisesRegex(RuntimeError, "boom"):
+            tb.run_locked(self.base, run)
+        self.assertEqual(len(calls), 1)
+
     def test_one_pass_when_nothing_marks(self):
         calls = []
         tb.run_locked(self.base, lambda: calls.append(1))

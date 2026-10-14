@@ -708,34 +708,43 @@ def run_locked(base: str, run=None) -> None:
     that finds the lock held leaves; the holder lays out again while dirty reappears (PASSES
     times per hold), and after letting go it looks once more and takes the lock again if dirty.
     Marking first means a holder that lets go can't miss a run that failed to get the lock: the
-    mark is already there when it looks.
+    mark is already there when it looks. A pass that raises ends its hold, but the look after
+    letting go still happens (the runs that left meanwhile are counting on it); the first error
+    is raised at the end, for main's catch-all to log.
     `run` stands in for layout() in tests."""
     run = run or (lambda: layout(base + ".err"))
     lock, dirty = base + ".lock", base + ".dirty"
+    failure = None
     for _ in range(2):
         touch(dirty)                    # before the lock: a holder letting go will see it
         try:
             fd = os.open(lock, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
         except OSError:
             run()                       # no lock to be had: still lay out
-            return
+            break
         try:
             try:
                 fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except OSError:
-                return                  # the holder lays out again for this one
+                break                   # the holder lays out again for this one
             for _ in range(PASSES):
                 try:
                     os.unlink(dirty)
                 except OSError:
                     pass
-                run()
+                try:
+                    run()
+                except Exception as e:  # raised below, after the look
+                    failure = failure or e
+                    break
                 if not os.path.exists(dirty):
                     break
         finally:
             os.close(fd)
         if not os.path.exists(dirty):
-            return
+            break
+    if failure is not None:
+        raise failure
 
 
 def main(argv: list) -> int:
