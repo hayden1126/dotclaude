@@ -234,6 +234,10 @@ For a match it refuses, naming the path, when:
    `GIT_CONFIG_NOSYSTEM`), every `include.path` and `includeIf` target, and a `core.hooksPath`
    dir and each file in it. Each is followed through its symlinks (each hop and the dir of each
    must be write-protected), and anything that exists there is judged, not only a regular file.
+   A repo whose install step points `core.hooksPath` into the repo (husky and similar) is
+   refused on its first excluded call, `gh` included (it runs git, and `gh pr checkout` runs
+   hooks), until that dir gets a `denyWrite` entry in `settings.machine.json` and `./setup.sh`
+   reruns. The refusal names the dir.
 2. **The head resolves through a writable path.** Every PATH dir must be write-protected, not
    only those before the head, since the head's children (git, gh, tmux, the tools claude
    spawns) search PATH too. An empty or relative entry is the cwd. Then the file, each symlink

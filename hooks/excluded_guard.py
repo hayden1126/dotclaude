@@ -59,6 +59,10 @@ ASSIGN = re.compile(r"""[A-Za-z_][A-Za-z0-9_]*=("[^"]*"|'[^']*'|\S*)\s*""")
 PROJECT_HEADS = {"claude", "codex"}
 SHEBANG_DEPTH = 3
 INCLUDE_DEPTH = 10
+# Only user and managed denyWrite count (load_settings), so the hint names where an entry lands.
+DENY_HINT = ("Add it to sandbox.filesystem.denyWrite in user or managed settings, since a "
+             "project's own don't count (dotclaude: ~/.claude/settings.machine.json, then "
+             "./setup.sh)")
 
 
 def log(line):
@@ -431,7 +435,7 @@ def check_rule1(m, env, cwd, project):
         if not is_trusted:
             target = m.chain(path, "rule1", lambda bad, path=path: Refusal(
                 "rule1", bad, f"git reads the config file {path}, which a sandboxed session can "
-                f"write ({bad}). Add it to sandbox.filesystem.denyWrite."))
+                f"write ({bad}). {DENY_HINT}."))
         if not os.path.isfile(target):
             continue  # judged above; only a regular file is parsed
         includes, hooks = config_refs(target, home)
@@ -444,7 +448,8 @@ def check_rule1(m, env, cwd, project):
 def check_hooks_dir(m, hdir):
     def refuse(bad):
         return Refusal("rule1", bad, f"core.hooksPath points at {hdir}, which a sandboxed "
-                       f"session can write ({bad}). Add it to sandbox.filesystem.denyWrite.")
+                       f"session can write ({bad}); a repo's install step (husky and similar) "
+                       f"often sets it. {DENY_HINT}.")
     if not os.path.lexists(hdir):
         bad = m.exposed(hdir)
         if bad:
@@ -460,7 +465,7 @@ def check_hooks_dir(m, hdir):
 
 def path_refusal(head, path):
     return Refusal("rule2", path, f"`{head}` resolves through {path}, which a sandboxed session "
-                   "can write. Add it to sandbox.filesystem.denyWrite or drop it from PATH.")
+                   f"can write. {DENY_HINT}, or drop it from PATH.")
 
 
 def which(m, head, path_var, label, depth):

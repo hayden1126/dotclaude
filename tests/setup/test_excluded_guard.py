@@ -259,6 +259,17 @@ class Rule1Config(Guard):
         self.gitconfig(f"[core]\n\thooksPath = {hooks}\n")
         self.denied("git push", "rule1", hooks)
 
+    def test_an_in_repo_hooks_path_is_refused_until_user_settings_protect_it(self):
+        # An install step (husky and similar) points core.hooksPath into the repo. The refusal
+        # names that case and where a denyWrite entry counts, since project settings don't.
+        hooks = self.write(os.path.join(self.proj, ".githooks", "pre-push"), MARKER, 0o755)
+        self.git("config", "core.hooksPath", ".githooks", cwd=self.proj)
+        reason = self.denied("git push", "rule1", os.path.dirname(hooks))
+        self.assertIn("install step", reason)
+        self.assertIn("user or managed settings", reason)
+        self.protect(os.path.dirname(hooks))
+        self.allowed("git push")
+
     def test_a_protected_include_passes_and_its_own_includes_are_followed(self):
         inc = self.write(os.path.join(self.protect(self.mkdir("pcfg")), "inc.cfg"),
                          "[user]\n\tname = x\n")
