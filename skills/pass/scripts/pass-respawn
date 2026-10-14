@@ -46,13 +46,18 @@ marker is a `system` turn_duration entry (at every real turn end, never at a Sto
 blocked) or a user entry whose text block starts `[Request interrupted by user` (Esc writes no
 turn_duration). A start marker is a user entry with an origin kind (a typed prompt, a task
 notice, an agent's message), a queue `dequeue`, or an assistant entry after an end marker
-(failing closed). The turn ended when an end marker has no start marker after it; everything
-else (tool results, hook feedback, titles, modes, attachments, api requests) is bookkeeping.
-`waiting` (an open dialog) and any unknown status keep it waiting. It settles 1 s and re-reads
-both: a start marker after the end it saw is `resumed`. Once that end is known the status alone
-is no resumption, since it flips among idle, shell and busy as delegated work starts and stops,
-with no turn (the spike saw `shell` to `busy`); with no end marker seen, the status must hold
-(not idle, or a new statusUpdatedAt: a queued prompt restarted the turn, `resumed`). It re-runs
+(failing closed). Everything else (tool results, hook feedback, titles, modes, attachments, api
+requests) is bookkeeping. The passing turn's own end is the first end marker past the call; the
+turn ended when no start marker follows it. A start marker after it means the session went on,
+even when that later turn has ended too (a later end says nothing about the passing turn), and
+drops `resumed` at once, while waiting too. `waiting` (an open dialog) and any unknown status
+keep it waiting. It settles 1 s and re-reads both: a start marker after that end is `resumed`.
+Once the end is known the status alone is no resumption, since it flips among idle, shell and
+busy as delegated work starts and stops, with no turn (the spike saw `shell` to `busy`); but a
+statusUpdatedAt changed since the turn's end first waits 0.5 s and looks again, since a new
+turn sets the file busy about 150 ms before its user entry reaches the transcript. With no end
+marker seen, the status must hold (not idle, or a new statusUpdatedAt: a queued prompt
+restarted the turn, `resumed`). It re-runs
 handoff-check (a failure: work after the handoff made it stale, `stale`), drops `resumed` when
 the transcript gained a typed prompt after the call, or a prompt queued mid-turn (a queue
 enqueue, or a queued_command attachment from a person: Claude Code folds those into the running
@@ -233,6 +238,10 @@ MANAGED_SETTINGS = "/etc/claude-code/managed-settings.json"
 MANAGED_DIR = "/etc/claude-code/managed-settings.d"
 POLL = 0.2         # secs between session file reads
 SETTLE = 1.0       # secs idle must hold, so a queued prompt can restart the turn first
+# Secs a status change waits, once the turn's end is known, for a new turn's start marker: Claude
+# Code sets the session file busy about 150 ms before the turn's user entry reaches the transcript
+# (lane pass-timeout's spike, 20:17:40).
+TRANSCRIPT_LAG = 0.5
 # Session-file statuses that mean "at the prompt, turn over": `idle`, and `shell` when a
 # background shell is still running (live, 2026-10-12; a foreground Bash call reads `busy`).
 # `busy` counts too once the transcript shows the turn ended (turn_over): Claude Code 2.1.300
@@ -320,7 +329,7 @@ class Plan:
     read_at: int | None = None
     torn: bytes = b""
     marks: int = 0
-    turn_end: int | None = None    # the last end marker's number
+    first_end: int | None = None   # the first end marker's number: the passing turn's own end
     turn_start: int | None = None  # the last start marker's number
 
     def __post_init__(self):
@@ -553,7 +562,8 @@ def turn_marker(entry, ended: bool) -> str | None:
 def scan_turns(plan: Plan) -> None:
     """Read the transcript's bytes past plan.read_at (its size at the call, then wherever the
     last read stopped), so a 0.2 s poll never re-reads it, and number the turn markers in them
-    (turn_marker) on the plan: turn_end and turn_start. A line the read cut short waits in
+    (turn_marker) on the plan: first_end, set once (the passing turn's own end; a later end is a
+    later turn's), and turn_start, the latest start. A line the read cut short waits in
     plan.torn for its rest. An unreadable transcript (now, or at the call) changes nothing."""
     if plan.read_at is None:
         return
@@ -570,32 +580,39 @@ def scan_turns(plan: Plan) -> None:
             entry = json.loads(line)
         except (ValueError, RecursionError):   # json recurses on nesting
             continue
-        mark = turn_marker(entry, plan.turn_end is not None)
+        mark = turn_marker(entry, plan.first_end is not None)
         if mark is not None:
             plan.marks += 1
-            if mark == "end":
-                plan.turn_end = plan.marks
-            else:
+            if mark == "start":
                 plan.turn_start = plan.marks
+            elif plan.first_end is None:
+                plan.first_end = plan.marks
+
+
+def began_after_end(plan: Plan) -> bool:
+    """Whether a start marker came after the passing turn's own end (the first end marker past
+    the call): the session went on. A whole later turn, its start and its own end, still counts:
+    the latest end having no start after it says nothing about the passing turn."""
+    return plan.first_end is not None and (plan.turn_start or 0) > plan.first_end
 
 
 def turn_over(plan: Plan) -> bool:
-    """Whether the transcript past the call shows the turn ended: an end marker with no start
-    marker after it."""
-    return plan.turn_end is not None and (plan.turn_start or 0) < plan.turn_end
+    """Whether the transcript past the call shows the passing turn ended, and nothing since."""
+    return plan.first_end is not None and not began_after_end(plan)
 
 
-def went_on(plan: Plan, state: str, detail: str, session: dict, seen, seen_end: int | None
+def went_on(plan: Plan, state: str, detail: str, session: dict, seen, end_seen: bool
             ) -> str | None:
-    """Why the session went on since the waiter saw its turn end (statusUpdatedAt seen, the end
-    marker numbered seen_end), or None. A start marker after that end always counts. Once the
-    end is known, the status alone doesn't: it flips among idle, shell and busy as delegated
-    work starts and stops, with no turn (the spike saw shell to busy). With no end marker seen
-    (the transcript can't show it), the status must be unchanged: still at the prompt, with the
-    same statusUpdatedAt."""
-    if seen_end is not None and (plan.turn_start or 0) > seen_end:
+    """Why the session went on since the waiter saw its turn end (statusUpdatedAt seen; end_seen,
+    whether the transcript showed that end then), or None. A start marker after the passing
+    turn's end always counts. Once the end is known, the status alone doesn't: it flips among
+    idle, shell and busy as delegated work starts and stops, with no turn (the spike saw shell
+    to busy), and look_again has given a flip TRANSCRIPT_LAG for its start marker. With no end
+    marker seen (the transcript can't show it), the status must be unchanged: still at the
+    prompt, with the same statusUpdatedAt."""
+    if began_after_end(plan):
         return "a new turn in the transcript"
-    if state != "idle" or (seen_end is None and session.get("statusUpdatedAt") != seen):
+    if state != "idle" or (not end_seen and session.get("statusUpdatedAt") != seen):
         return f"status {detail}"
     return None
 
@@ -1176,6 +1193,19 @@ def observe(plan: Plan, procs=None) -> tuple[str, str, dict | None]:
     return ("idle" if idle else "busy"), str(status), session
 
 
+def look_again(plan: Plan, seen, end_seen: bool, procs=None) -> tuple[str, str, dict | None]:
+    """observe, for the settle and the final re-check. Once the end is known (end_seen), a
+    statusUpdatedAt other than seen may be a new turn whose user entry hasn't reached the
+    transcript yet, so it waits TRANSCRIPT_LAG and observes again (observe re-scans). A start
+    marker that lands in that window is a resumption (went_on); a flip with none, an agent
+    starting or stopping, is not."""
+    state, detail, session = observe(plan, procs)
+    if state != "gone" and end_seen and session.get("statusUpdatedAt") != seen:
+        time.sleep(TRANSCRIPT_LAG)
+        state, detail, session = observe(plan, procs)
+    return state, detail, session
+
+
 def pane_problem(plan: Plan) -> str | None:
     """Why the pane can't take keys or a respawn now, or None: copy mode (keys would scroll it,
     not type), or text Hayden is composing in the input box (typing would join it, a respawn
@@ -1625,17 +1655,19 @@ def wait_and_act(plan: Plan, procs) -> str:
         state, detail, session = observe(plan)
         if state == "gone":
             return drop(plan, "gone", detail)
+        if began_after_end(plan):  # a turn after the passing turn's end, before it was seen
+            return drop(plan, "resumed", "a new turn in the transcript while waiting")
         if state == "idle":
             break
         if time.monotonic() >= deadline:
             return drop(plan, "timeout", f"status {detail}")
         time.sleep(POLL)
-    seen, seen_end = session.get("statusUpdatedAt"), plan.turn_end
+    seen, end_seen = session.get("statusUpdatedAt"), plan.first_end is not None
     time.sleep(SETTLE)
-    state, detail, session = observe(plan)
+    state, detail, session = look_again(plan, seen, end_seen)
     if state == "gone":
         return drop(plan, "gone", detail)
-    if why := went_on(plan, state, detail, session, seen, seen_end):
+    if why := went_on(plan, state, detail, session, seen, end_seen):
         return drop(plan, "resumed", f"{why} in the settle")
     code, out = gate(plan.toplevel, plan.path)
     if code != 0:
@@ -1653,10 +1685,10 @@ def wait_and_act(plan: Plan, procs) -> str:
     if plan.mode == "plain" and (problem := stop_problem(plan, rec)):
         return drop(plan, "busy", f"busy: {problem[0]}", problem[1],
                     cause=problem[1].removeprefix("pass refused: "))
-    state, detail, session = observe(plan, procs)
+    state, detail, session = look_again(plan, seen, end_seen, procs)
     if state == "gone":
         return drop(plan, "gone", detail)
-    if why := went_on(plan, state, detail, session, seen, seen_end):
+    if why := went_on(plan, state, detail, session, seen, end_seen):
         return drop(plan, "resumed", f"{why} at the final re-check")
     if why := pane_problem(plan):
         return drop(plan, "busy", f"busy: {why}", f"pass dropped: {why}. {PANE_FIXES[why]}",
