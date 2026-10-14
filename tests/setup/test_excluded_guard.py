@@ -661,5 +661,66 @@ class SandboxReality(unittest.TestCase):
                                 f"{p} is writable inside the sandbox")
 
 
+class DiscoveryMatchesGit(Guard):
+    """Wherever git finds a repo, the guard finds the same gitdir and common dir, or refuses. A
+    narrower guard would trust a project's config while git reads another; three review rounds
+    found that class of gap one layout at a time."""
+
+    def layouts(self):
+        other = self.mkdir("other")
+        self.git("init", "-q", other, cwd=self.tmp)
+        bare = os.path.join(self.tmp, "proj", "bare")
+        self.git("init", "-q", "--bare", bare, cwd=self.tmp)
+        decoy = self.mkdir("decoy")
+        for d in ("objects", "refs"):
+            os.makedirs(os.path.join(decoy, d))
+        marker = self.mkdir("proj", "marker")
+        self.write(os.path.join(marker, "HEAD"), "ref: refs/heads/main\n")
+        self.write(os.path.join(marker, "commondir"), decoy + "\n")
+        empty_common = self.mkdir("proj", "marker2")
+        self.write(os.path.join(empty_common, "HEAD"), "ref: refs/heads/main\n")
+        self.write(os.path.join(empty_common, "commondir"), self.mkdir("nothing") + "\n")
+        head_only = self.mkdir("proj", "head-only")
+        self.write(os.path.join(head_only, "HEAD"), "ref: refs/heads/main\n")
+        fake_bare = self.mkdir("proj", "fake-bare")
+        self.write(os.path.join(fake_bare, "HEAD"), "ref: refs/heads/main\n")
+        for d in ("objects", "refs"):
+            os.makedirs(os.path.join(fake_bare, d))
+        into_lane = self.mkdir("proj", "into-lane")
+        self.write(os.path.join(into_lane, ".git"),
+                   f"gitdir: {os.path.join(self.proj, '.git', 'worktrees', 'lane')}\n")
+        into_other = self.mkdir("proj", "into-other")
+        self.write(os.path.join(into_other, ".git"), f"gitdir: {os.path.join(other, '.git')}\n")
+        nested = self.mkdir("proj", "nested")
+        self.git("init", "-q", nested, cwd=self.tmp)
+        return [self.proj, self.mkdir("proj", "sub", "deep"), self.lane, self.mkdir("lane", "sub"),
+                os.path.join(self.proj, ".git"), bare, marker, empty_common, head_only, fake_bare,
+                into_lane, into_other, nested, os.path.join(nested, ".git"), other]
+
+    def test_the_guard_never_finds_a_narrower_repo_than_git(self):
+        spec = importlib.util.spec_from_file_location("excluded_guard", MODULE)
+        guard = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(guard)
+        ceiling = {"GIT_CEILING_DIRECTORIES": os.path.dirname(self.tmp)}
+        env = {"PATH": "/usr/bin:/bin", "HOME": self.home, "GIT_CONFIG_NOSYSTEM": "1", **ceiling}
+        compared = 0
+        for cwd in self.layouts():
+            with self.subTest(cwd=os.path.relpath(cwd, self.tmp)):
+                p = subprocess.run(["git", "rev-parse", "--path-format=absolute", "--git-dir",
+                                    "--git-common-dir"], cwd=cwd, env=env, capture_output=True,
+                                   text=True)
+                if p.returncode != 0:
+                    continue  # git finds no repo: a guard that finds one only refuses more
+                want = tuple(os.path.realpath(x) for x in p.stdout.split())
+                try:
+                    found = guard.discover(cwd, ceiling)
+                except guard.Refusal:
+                    continue
+                self.assertIsNotNone(found, f"git uses {want}, the guard found no repo")
+                self.assertEqual(found[:2], want)
+                compared += 1
+        self.assertGreaterEqual(compared, 13)  # not vacuous: the two markers refuse, 13 match
+
+
 if __name__ == "__main__":
     unittest.main()
