@@ -110,6 +110,10 @@ stored here).
     rerun the menu-clip repro and the tmux suites. If it fixes the clip, install at a quiet
     moment (a server restart; claude-restore reopens the tabs) and drop the row-0 menu rule.
     Until then, 3.7c's default menus that dotclaude doesn't own still clip under a top bar.
+  - The SessionStart identity line (`hooks/lane_identity.py:47`) names `lane.json`'s branch, not
+    the worktree's checked-out one, so a lane that switched branches is told the old one.
+    Lane guard-b fixes `lane ls` and `lane done` for the same gap. Its helper may make this a
+    one-line follow-up.
   - `lane init --model/--effort` repo defaults and `lane open --model/--effort` overrides,
     passed through to `claude` (today `lane open` hardcodes the argv).
 
