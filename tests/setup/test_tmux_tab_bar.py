@@ -1315,6 +1315,14 @@ class Conf(unittest.TestCase):
                       "{ copy-mode -M } }\n", text)
         self.assertIn("bind -n MouseDragEnd1Pane if -F '#{@tab_bar_drag}' "
                       "{ set -u @tab_bar_drag } { send-keys -M }\n", text)
+        # A pane in copy mode looks its keys up in the mode's table first: guarded there too.
+        for table in ("copy-mode", "copy-mode-vi"):
+            with self.subTest(table=table):
+                self.assertIn(f"bind -T {table} MouseDrag1Pane if -F '#{{==:#{{@tab_bar_drag}},}}'"
+                              " { select-pane ; send-keys -X begin-selection }\n", text)
+                self.assertIn(f"bind -T {table} MouseDragEnd1Pane if -F '#{{@tab_bar_drag}}' "
+                              "{ set -u @tab_bar_drag } { send-keys -X copy-pipe-and-cancel }\n",
+                              text)
 
     def test_ctrl_b_shift_arrows_carry_the_tab(self):
         text = self.conf()
@@ -2334,6 +2342,57 @@ class RealTmux(unittest.TestCase):
         modes = self.ti("list-panes", "-a", "-F", "#{pane_in_mode}").stdout.split()
         self.assertEqual(set(modes), {"0"})
         self.assertEqual(self.show("-qv", "-t", "t:", "@tab_bar_drag").strip(), "")
+
+    # Each tmux default claude.conf wraps (table, key), and the keys it binds that have none.
+    WRAPPED = (("copy-mode", "MouseDown1Pane"), ("copy-mode", "MouseDrag1Pane"),
+               ("copy-mode", "MouseDragEnd1Pane"), ("copy-mode-vi", "MouseDown1Pane"),
+               ("copy-mode-vi", "MouseDrag1Pane"), ("copy-mode-vi", "MouseDragEnd1Pane"),
+               ("root", "MouseDown1Pane"), ("root", "MouseDown1Border"),
+               ("root", "MouseDrag1Pane"), ("root", "MouseDrag1Border"))
+    UNBOUND = (("root", "MouseDown1StatusDefault"), ("root", "MouseDown1StatusLeft"),
+               ("root", "MouseDown1StatusRight"), ("root", "MouseDragEnd1Border"),
+               ("root", "MouseDragEnd1Pane"))
+
+    def keys(self, sock):
+        """{(table, key): command} from a server's full list-keys (a single key's listing
+        prints nothing in 3.7c), each command with its ; separators spelled alike: list-keys
+        writes `\\;` between top-level commands and `;` inside braces."""
+        out = {}
+        for line in self.tmux(sock, ["list-keys"]).stdout.splitlines():
+            m = re.match(r"bind-key\s+(?:-r\s+)?-T\s+(\S+)\s+(\S+)\s+(.*)$", line)
+            if m:
+                out[m.group(1), m.group(2)] = re.sub(r"\s*(?:\\?;)+\s*", " ; ", m.group(3))
+        return out
+
+    def test_every_wrapped_tmux_default_is_kept_whole_inside_its_guard(self):
+        # A tmux upgrade that changes one of these defaults fails here, not silently in a pane.
+        bare = os.path.join(self.tmp, "bare")
+        self.tmux(bare, ["-f", "/dev/null", "new-session", "-d", "-s", "b", "sleep 600"])
+        self.addCleanup(self.tmux, bare, ["kill-server"], False)
+        defaults, ours = self.keys(bare), self.keys(self.sock)
+        for key in self.WRAPPED:
+            with self.subTest(key=key):
+                self.assertIn(key, defaults)
+                self.assertIn(defaults[key], ours[key])
+        for key in self.UNBOUND:
+            with self.subTest(key=key):
+                self.assertNotIn(key, defaults)
+                self.assertIn("@tab_bar_drag", ours[key])
+
+    def test_a_tab_dragged_onto_a_pane_in_copy_mode_copies_nothing(self):
+        self.link_script()
+        self.ti("respawn-pane", "-k", "-t", "t:0", "printf 'one two three four\\n'; sleep 600")
+        self.run_layout()
+        self.find("one two three four")
+        self.ti("copy-mode", "-t", "t:0")
+        self.drag(self.find("beta-title"), (40, 30))                      # a tab onto the pane
+        time.sleep(1)
+        self.assertEqual(self.ti("list-buffers").stdout, "")
+        self.assertEqual(self.show("-qv", "-t", "t:", "@tab_bar_drag").strip(), "")
+        self.assertEqual(self.nav_rows(), [["0", "1"], ["2"]])
+        x, y = self.find("one two three four")                            # a plain drag copies
+        self.drag((x, y), (x + 6, y))
+        self.wait(lambda: self.ti("list-buffers").stdout != "", "the copy-mode drag copied nothing")
 
     def test_ctrl_b_shift_right_carries_the_tab(self):
         self.link_script()
