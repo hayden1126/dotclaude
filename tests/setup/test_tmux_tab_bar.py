@@ -1287,6 +1287,29 @@ class Conf(unittest.TestCase):
         with open(CONF) as f:
             return f.read()
 
+    def bindings(self):
+        """Every `bind` in claude.conf, whole: a { block to its closing } at column 0, else
+        the line and its \\ continuations."""
+        out, block = [], None
+        for line in self.conf().splitlines():
+            if block is None and line.startswith("bind "):
+                block = [line]
+                if not line.endswith(("{", "\\")):
+                    out.append(line)
+                    block = None
+            elif block is not None:
+                block.append(line)
+                if (block[0].endswith("{") and line == "}") \
+                        or (block[0].endswith("\\") and not line.endswith("\\")):
+                    out.append("\n".join(block))
+                    block = None
+        return out
+
+    def test_the_b_check_sees_a_b_anywhere_in_a_binding(self):
+        for bad in ("run-shell -b 'x'", "run-shell -C -b 'x'", "run-shell -bC 'x'"):
+            self.assertRegex(f"bind -n X {{\n  if -F '1' {{\n    {bad}\n  }}\n}}",
+                             r"\brun-shell(?:\s+-\w+)*?\s+-\w*b")
+
     def tap_menu(self, binding):
         """The tap branch inside `binding`: from its window_active test to its switch-client."""
         text = self.conf()
@@ -1340,7 +1363,12 @@ class Conf(unittest.TestCase):
                       "\"#{mouse_status_line}\" \"#{client_name}\" >/dev/null 2>&1; true'\n"
                       "  set -u @tab_bar_drag\n}", text)
         self.assertNotIn("bind -n MouseDrag1Status", text)        # no live preview
-        self.assertNotRegex(text, r"tmux-tab-bar[^\n]*(drop|move|menu|name-row)[^\n]*-b")
+        # No -b anywhere in a binding: two quick drops or moves must queue, not race.
+        bindings = self.bindings()
+        self.assertGreater(len(bindings), 25)
+        for block in bindings:
+            with self.subTest(binding=block[:60]):
+                self.assertNotRegex(block, r"\brun-shell(?:\s+-\w+)*?\s+-\w*b")
         # The pane guard: tmux 3.7c's default inside it, and the release kept for apps.
         self.assertIn("bind -n MouseDrag1Pane if -F '#{==:#{@tab_bar_drag},}' { if -F "
                       "'#{||:#{pane_in_mode},#{mouse_any_flag}}' { send-keys -M } "
