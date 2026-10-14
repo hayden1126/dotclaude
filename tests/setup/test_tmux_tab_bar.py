@@ -877,6 +877,17 @@ class Conf(unittest.TestCase):
         self.assertEqual(len(right), 4)
         self.assertEqual(tap, right)
 
+    def test_the_fallback_tab_formats_cut_the_title_before_stripping_it(self):
+        # The single row drawn before the first layout (or with no script): s/// is quadratic,
+        # so an uncut 212 KB title of "✳ " took 41 ms a tab; cut, 13 ms.
+        with open(CONF) as f:
+            text = f.read()
+        for opt in ("window-status-format", "window-status-current-format"):
+            with self.subTest(opt=opt):
+                line = next(l for l in text.splitlines() if l.startswith(f"setw -g {opt} "))
+                self.assertIn("#{s/✳ //:#{s/^(.{128#}).+$/\\\\1/:pane_title}}", line)
+                self.assertEqual(line.count("pane_title}"), 1)
+
     def test_the_tap_menu_has_no_kill_or_respawn_and_no_stay_open(self):
         with open(CONF) as f:
             text = f.read()
