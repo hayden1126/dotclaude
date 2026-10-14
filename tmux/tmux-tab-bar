@@ -1108,10 +1108,12 @@ def climb(rows: list, src: str, direction: str) -> str | None:
 
 def new_row(groups: list, shared: list, src: str, places: list) -> dict:
     """src alone in a new custom row below its own: `c:` 1 + the highest id any placement names
-    (places: every window's). A tab already alone in a custom row stays."""
+    (places: every window's). A tab already alone in its row (of any kind) stays. Made from a
+    shared tab, the row sits just above the shared rows (group_windows: a custom row whose anchor
+    is no group goes last among the groups)."""
     rows = rows_of(groups, shared)
     key = row_key_of(groups, shared, src)
-    if key is None or (key.startswith("c:") and rows[key] == [src]):
+    if key is None or rows[key] == [src]:
         return {}
     n = 1 + max((int(k[2:]) for p in places for k in (p.row, p.after) if k.startswith("c:")),
                 default=0)

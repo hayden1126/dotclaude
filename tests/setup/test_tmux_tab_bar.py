@@ -986,6 +986,19 @@ class Moves(unittest.TestCase):
         self.assertEqual(tb.new_row(groups, shared, "@4", [P("c:1", 0)]),
                          {"@4": P("c:2", 0, "c:1")})
 
+    def test_a_new_row_from_a_lone_tab_does_nothing(self):
+        _, groups, shared, _ = arranged({})
+        self.assertEqual(tb.new_row(groups, shared, "@5", []), {})     # kar's only tab
+        _, groups, shared, _ = arranged({}, [w for w in WINS if w[1] != "@6"])
+        self.assertEqual(tb.new_row(groups, shared, "@1", []), {})     # the shared row's only
+
+    def test_a_new_row_from_a_shared_tab_sits_just_above_the_shared_rows(self):
+        _, groups, shared, _ = arranged({})
+        places = tb.new_row(groups, shared, "@6", [])
+        rows, *_ = arranged(places)
+        self.assertEqual(rows, [(REPO_KEY, ["@2", "@3", "@4"]), (KAR_KEY, ["@5"]),
+                                ("c:1", ["@6"]), ("s", ["@1"])])
+
     def test_rename_row_names_every_member_and_only_in_a_custom_row(self):
         _, groups, _, _ = arranged({"@3": P("c:1", 0, REPO_KEY), "@6": P("c:1", 1, REPO_KEY)})
         self.assertEqual(tb.rename_row(groups, "@6", "work"),

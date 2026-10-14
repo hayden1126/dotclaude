@@ -391,7 +391,8 @@ need nothing extra.
   Shift+arrows carry the tab you are on: left and right within its row, up and down onto the row
   above or below (Shift+arrows go, Ctrl-b Shift+arrows carry, and each Shift+arrow within the
   repeat time carries again). The tap menu's **Move…** opens a menu of the same moves (◀ ▶ ▲ ▼),
-  plus **New row**, a custom row of its own below the tab's row, and **Auto place**, back where
+  plus **New row**, a custom row of its own below the tab's row (from a shared tab, just above
+  the shared rows; nothing for a tab already alone in its row), and **Auto place**, back where
   the bar puts it; it reopens after each step, so the phone can take several without retapping.
   **Name row…** names a custom row (its header shows `name▸`, or a bare `▸` unnamed, in one colour
   of its own). Ctrl-b Enter has **Move…** and **Reset bar**, which puts every tab of the session
