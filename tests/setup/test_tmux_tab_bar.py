@@ -15,6 +15,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 import unittest.mock
@@ -1944,6 +1945,21 @@ class FakeTmux(unittest.TestCase):
         self.assertEqual(self.calls(), [])
         self.assertTrue(os.path.exists(self.base + ".dirty"))
 
+    def test_a_move_waits_for_a_layout_in_flight_and_lays_out_before_returning(self):
+        # A hook's layout holds the lock briefly: the move waits for it, so the next queued move
+        # reads the bar this one drew (it used to mark the state dirty and return).
+        self.nav_state("@2")
+        fd = os.open(self.base + ".lock", os.O_RDWR | os.O_CREAT, 0o600)
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        timer = threading.Timer(0.5, os.close, (fd,))
+        timer.start()
+        self.addCleanup(timer.join)
+        start = time.monotonic()
+        self.run_cmd("move", "right", "/dev/pts/7")
+        self.assertGreaterEqual(time.monotonic() - start, 0.4)
+        self.assertEqual(self.nav_rows(), [["@3", "@2", "@4"], ["@1"]])
+        self.assertFalse(os.path.exists(self.base + ".dirty"))
+
     def test_the_lock_is_per_tmux_server(self):
         fd = os.open(self.base + ".lock", os.O_RDWR | os.O_CREAT, 0o600)
         self.addCleanup(os.close, fd)
@@ -2029,6 +2045,24 @@ class Lock(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "boom"):
             tb.run_locked(self.base, run)
         self.assertEqual(len(calls), 1)
+
+    def test_a_wait_runs_once_the_lock_is_free_or_without_it_past_the_bound(self):
+        fd = os.open(self.base + ".lock", os.O_RDWR | os.O_CREAT, 0o600)
+        self.addCleanup(lambda: os.close(fd) if fd is not None else None)
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        calls = []
+        tb.run_locked(self.base, lambda: calls.append(1))           # a hook: marks and leaves
+        self.assertEqual(calls, [])
+        start = time.monotonic()
+        tb.run_locked(self.base, lambda: calls.append(1), wait=0.3)  # still held: runs anyway
+        self.assertEqual(calls, [1])
+        self.assertGreaterEqual(time.monotonic() - start, 0.25)
+        timer = threading.Timer(0.2, fcntl.flock, (fd, fcntl.LOCK_UN))
+        timer.start()
+        self.addCleanup(timer.join)
+        tb.run_locked(self.base, lambda: calls.append(1), wait=5)     # freed: runs under it
+        self.assertEqual(calls, [1, 1])
+        self.assertFalse(os.path.exists(self.base + ".dirty"))
 
     def test_one_pass_when_nothing_marks(self):
         calls = []

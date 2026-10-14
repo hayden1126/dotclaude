@@ -56,7 +56,8 @@ to auto. A custom row (`c:<n>`) is a group like a project's, drawn right after t
 below (else last among the groups), with a `▸` or `name▸` header in CUSTOM_COLOUR. A laned tab
 outside its project's row is named `repo·name`. Every move (keys, drag, the Move menu) is one
 primitive, put(): a tab goes before or after another in that tab's row, and every member of that
-row gets a placement 0..n-1. The move then lays out at once under the layout lock and copies each
+row gets a placement 0..n-1. The move then lays out at once under the layout lock (waiting for a
+hook's run in flight, so the next queued move reads a fresh @tab_bar_nav) and copies each
 changed placement into the restore records of the window's panes (open-sessions/<sid>.json,
 field `place`), so tmux/claude-restore puts it back on the new window after tmux dies.
 
@@ -86,6 +87,7 @@ import re  # noqa: E402
 import stat  # noqa: E402
 import subprocess  # noqa: E402
 import tempfile  # noqa: E402
+import time  # noqa: E402
 import traceback  # noqa: E402
 import unicodedata  # noqa: E402
 
@@ -105,6 +107,7 @@ PALETTE = (75, 179, 141, 114, 174, 110)   # header colours, by group order
 CUSTOM_COLOUR = 252     # every custom row's header, outside PALETTE
 ROW_NAME_CELLS = 16     # a custom row's name is cut to this many cells
 PLACE_MAX = 2048        # an @tab_place value, in bytes
+LOCK_WAIT = 2.0         # seconds a move waits for the layout lock, a record write for its own
 POS_MAX = 999
 CUSTOM_MAX = 9999       # custom row ids run 1..CUSTOM_MAX
 PHONE_STATUS_LEFT = "#(~/.local/bin/tmux-claude-status)"
@@ -1234,8 +1237,9 @@ def update_records(server: tuple, places: dict) -> None:
 
 def apply(ctx: Context, changes: dict, base: str) -> None:
     """Write each @tab_place that changes ({wid: Place, or None to unset}), lay out at once
-    (under layout's lock, so a hook's run in flight lays out again instead), then copy the
-    changes into the restore records of each changed window's panes."""
+    (under layout's lock, waiting up to LOCK_WAIT for a hook's run in flight, so the next
+    queued move reads the bar this one drew), then copy the changes into the restore records of
+    each changed window's panes."""
     lines, changed = [], {}
     for wid, place in changes.items():
         text = place_text(place) if place is not None else None
@@ -1248,7 +1252,7 @@ def apply(ctx: Context, changes: dict, base: str) -> None:
         return
     tmux("source-file", "-", stdin="\n".join(lines) + "\n")
     try:
-        run_locked(base)
+        run_locked(base, wait=LOCK_WAIT)
     finally:
         if ctx.server is not None:
             update_records(ctx.server, {pane: text for wid, text in changed.items()
@@ -1399,7 +1403,21 @@ def touch(path: str) -> None:
         pass
 
 
-def run_locked(base: str, run=None) -> None:
+def flock_within(fd: int, wait: float) -> bool:
+    """Take an exclusive flock on fd, trying again for up to `wait` seconds; False if still
+    held then (wait 0: one try)."""
+    deadline = time.monotonic() + wait
+    while True:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return True
+        except OSError:
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(0.01)
+
+
+def run_locked(base: str, run=None, wait: float = 0.0) -> None:
     """layout() under a lock (files `<base>.lock` and `<base>.dirty`). Hooks fire in bursts (a
     restore opens 8 windows): every run marks the state dirty before it tries the lock, and one
     that finds the lock held leaves; the holder lays out again while dirty reappears (PASSES
@@ -1408,6 +1426,9 @@ def run_locked(base: str, run=None) -> None:
     mark is already there when it looks. A pass that raises ends its hold, but the look after
     letting go still happens (the runs that left meanwhile are counting on it); the first error
     is raised at the end, for main's catch-all to log.
+    A move passes `wait` (LOCK_WAIT): it waits that long for a hook's layout in flight instead
+    of leaving, so it has laid out when it returns and the next queued move reads the bar it
+    drew; still held after that, it lays out without the lock.
     `run` stands in for layout() in tests."""
     run = run or (lambda: layout(base + ".err"))
     lock, dirty = base + ".lock", base + ".dirty"
@@ -1420,10 +1441,10 @@ def run_locked(base: str, run=None) -> None:
             run()                       # no lock to be had: still lay out
             break
         try:
-            try:
-                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except OSError:
-                break                   # the holder lays out again for this one
+            if not flock_within(fd, wait):
+                if wait:
+                    run()               # a move: lay out now, without the lock
+                break                   # a hook: the holder lays out again for this one
             for _ in range(PASSES):
                 try:
                     os.unlink(dirty)
