@@ -5,6 +5,7 @@ A wrong type or a missing suffix here fails silently in Claude Code (an unknown 
 ignored; a hook that exits non-2 doesn't block), so the baseline is pinned by test."""
 import contextlib
 import glob
+import importlib.util
 import io
 import json
 import os
@@ -19,6 +20,13 @@ from _paths import REPO, load_script
 with open(os.path.join(REPO, "settings.json")) as f:
     S = json.load(f)
 POLICY = load_script("subagent-policy").load_policy()
+
+
+def load_hook(name):
+    spec = importlib.util.spec_from_file_location(name, os.path.join(REPO, "hooks", name + ".py"))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
 
 
 def glob_match(pattern, command):
@@ -323,12 +331,63 @@ class Baseline(unittest.TestCase):
     def test_the_delete_guard_runs_on_sandbox_off_bash_only_and_fails_open(self):
         # Every Bash call passes the matcher; the prefilter keeps Python off the sandboxed ones,
         # which can only reach the cwd and $TMPDIR. The guard denies by JSON, never by exit code.
-        (cmd,) = commands("PreToolUse", "Bash")
+        (cmd,) = [c for c in commands("PreToolUse", "Bash") if "delete-guard" in c]
         self.assertIn("""*'"dangerouslyDisableSandbox":true'*""", cmd)
         self.assertIn("""*'"dangerouslyDisableSandbox": true'*""", cmd)
         self.assertIn('bash "$HOME/.claude/hooks/delete-guard.sh"', cmd)
         self.assertNotIn("exit 2", cmd)
         self.assertTrue(os.access(os.path.join(REPO, "hooks", "delete-guard.sh"), os.X_OK))
+
+    def test_the_excluded_guard_runs_on_bash_and_fails_closed_for_excluded_heads(self):
+        # Every Bash call passes the matcher; the guard itself decides which ones run outside the
+        # sandbox. A missing, failing or slow shim falls back to a head check that blocks.
+        (entry,) = [e for e in S["hooks"]["PreToolUse"]
+                    if any("excluded-guard" in h["command"] for h in e["hooks"])]
+        self.assertEqual(entry["matcher"], "Bash")
+        (h,) = entry["hooks"]
+        self.assertIn('timeout 4 bash "$HOME/.claude/hooks/excluded-guard.sh"', h["command"])
+        self.assertIn("exit 2", h["command"])
+        self.assertLessEqual(h["timeout"], 5)
+        self.assertTrue(os.access(os.path.join(REPO, "hooks", "excluded-guard.sh"), os.X_OK))
+
+    def test_the_excluded_guard_fallback_blocks_excluded_heads_only(self):
+        # Run the real settings.json command with no shim installed (HOME is an empty dir).
+        (cmd,) = [h["command"] for e in S["hooks"]["PreToolUse"] for h in e["hooks"]
+                  if "excluded-guard" in h["command"]]
+        home = os.path.join(os.environ.get("TMPDIR", "/tmp"), f"eg-home-{os.getpid()}")
+        os.makedirs(home, exist_ok=True)
+        self.addCleanup(shutil.rmtree, home, True)
+        env = dict(os.environ, HOME=home)
+        cases = (("git push origin feat/x", 2), ("gh pr view 5", 2), ("lane ls", 2),
+                 ("  claude --version", 2), ("codex-delegate status", 2), ("tmux ls", 2),
+                 ("ls -la", 0), ("gitk", 0), ("echo git push", 0))
+        for command, rc in cases:
+            for sep in ((",", ":"), (", ", ": ")):
+                payload = json.dumps({"tool_name": "Bash", "tool_input": {"command": command}},
+                                     separators=sep)
+                with self.subTest(command=command, sep=sep):
+                    p = subprocess.run(["sh", "-c", cmd], input=payload, capture_output=True,
+                                       text=True, env=env, timeout=10)
+                    self.assertEqual(p.returncode, rc, p.stderr)
+
+    def test_the_excluded_guard_s_install_dirs_are_write_protected(self):
+        # The PATH dirs and install dirs an excluded head resolves through on a stock setup; the
+        # machine's own (hq, sdk) go in settings.machine.json. Subagents' file tools too.
+        deny = S["sandbox"]["filesystem"]["denyWrite"]
+        for p in ("~/.local/bin", "~/.bun/bin", "~/.cargo/bin", "~/.local/share/claude",
+                  "~/.local/lib/node_modules"):
+            self.assertIn(p, deny)
+            self.assertIn(p, POLICY["protect"]["write_denied"])
+
+    def test_every_allow_rule_on_an_excluded_command_sits_behind_the_guard(self):
+        # An allow rule skips the classifier, so an excluded command it covers must meet the
+        # guard first.
+        samples = [s for e in inv.EXCLUDED for s in e.samples] + inv.NO_ASK
+        covered = [r for r in S["permissions"]["allow"]
+                   if any(glob_match(r[len("Bash("):-1], s) for s in samples)]
+        if covered:
+            self.assertTrue(any("excluded-guard.sh" in c for c in commands("PreToolUse", "Bash")),
+                            covered)
 
     def test_memory_is_committed_at_session_start_and_stop(self):
         # Every SessionStart source (a /clear too) and every Stop: Bash edits to memory are
@@ -486,6 +545,13 @@ class Inventory(unittest.TestCase):
             self.assertTrue(excluded_by(s), s)
         for s in inv.SANDBOXED:
             self.assertEqual(excluded_by(s), [], s)
+
+    def test_the_guard_treats_every_excluded_sample_as_a_candidate(self):
+        # The guard matches more broadly than Claude Code; it must never match less.
+        guard = load_hook("excluded_guard")
+        patterns = S["sandbox"]["excludedCommands"]
+        for s in [s for e in inv.EXCLUDED for s in e.samples] + inv.NO_ASK:
+            self.assertTrue(guard.candidates(s, patterns), s)
 
     def test_the_inventory_rules_are_in_settings(self):
         self.assertLessEqual({r.rule for r in inv.ASKS}, set(S["permissions"]["ask"]))

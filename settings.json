@@ -346,7 +346,12 @@
         "~/.claude/settings.json",
         "~/.claude/hooks",
         "~/.claude/skills",
-        "~/.claude/agents"
+        "~/.claude/agents",
+        "~/.local/bin",
+        "~/.bun/bin",
+        "~/.cargo/bin",
+        "~/.local/share/claude",
+        "~/.local/lib/node_modules"
       ],
       "allowWrite": [
         "~/.cache/uv",
@@ -433,6 +438,16 @@
           {
             "type": "command",
             "command": "i=$(cat); case \"$i\" in *'\"dangerouslyDisableSandbox\":true'*|*'\"dangerouslyDisableSandbox\": true'*) printf '%s' \"$i\" | bash \"$HOME/.claude/hooks/delete-guard.sh\" ;; esac",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "i=$(cat); printf '%s' \"$i\" | timeout 4 bash \"$HOME/.claude/hooks/excluded-guard.sh\" || { printf '%s' \"$i\" | grep -Eq '\"command\": ?\"[[:space:]]*(git|gh|lane|claude|codex|codex-delegate|delegation-ledger|pass-respawn|tmux|powershell[.]exe|cmd[.]exe)[ \"]' && { echo \"excluded-guard missing, failed or timed out: this excluded command is blocked\" >&2; exit 2; }; exit 0; }",
             "timeout": 5
           }
         ]
