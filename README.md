@@ -62,7 +62,9 @@ A typical overlay sets a preference and the machine's own tools:
 name your own CLIs that must run outside the sandbox (say, ones that write outside the project),
 one pattern per command shape (`mytool *` for calls with arguments, `mytool` for the bare call).
 A pattern must match the whole command, so a call through a pipe, `&&` or `cd` still runs
-sandboxed.
+sandboxed. A PATH dir under your home that comes before the one holding an excluded command
+(`~/hq/bin` on HAYPC) goes in the overlay's `sandbox.filesystem.denyWrite`, or the excluded-command
+guard refuses that command.
 
 The baseline's `permissions` deny destructive git and ask before anything that can reach `main`,
 in auto mode too. Denied: force-push, `reset --hard`, `reset --merge` and `git clean -f`, plain or
@@ -101,7 +103,8 @@ wrappers (`lane init`, `new`, `adopt`, `ls`, `open`, `done`, `pass-respawn`, `de
 `codex-delegate`), `claude`, the read-only tmux verbs (`ls`, `list-sessions`, `list-windows`,
 `list-panes`, `list-clients`, `list-keys`, `list-commands`, `capture-pane`, `display`, `show`,
 `show-options`, `show-environment`, `show-messages`, `show-hooks`), read-only codex (`login status`,
-`doctor` and a few lists) and the Windows shells. Any other call runs sandboxed, where tmux reaches
+`doctor` and a few lists) and the Windows shells. Each one meets `hooks/excluded-guard.sh` first
+(Hooks, below). Any other call runs sandboxed, where tmux reaches
 no socket, codex and any other `gh` form no credential, and a push to a local path no other repo's
 hooks, so it fails closed.
 
@@ -184,6 +187,7 @@ sees it.
 | `hooks/lane-identity.sh` | SessionStart/Stop/SessionEnd hook: tells a lane session its identity and registers it, prints one board line in a lanes repo's main checkout, mirrors a lane's record; a shim over `hooks/lane_identity.py`; fails open | symlink `~/.claude/hooks/lane-identity.sh` and `lane_identity.py` |
 | `hooks/lane-guard.sh` | PreToolUse(Edit/Write/MultiEdit) hook: denies writes to another lane's record or the lanes CLI's data, and relative identity in status files; a shim over `hooks/lane_guard.py`; fails open | symlink `~/.claude/hooks/lane-guard.sh` and `lane_guard.py` |
 | `hooks/delete-guard.sh` | PreToolUse(Bash) hook, sandbox-off commands only: denies a delete whose path uses a variable the command didn't set, a command substitution that would widen it if empty, or a top-level or home tree; a shim over `hooks/delete_guard.py`; fails open | symlink `~/.claude/hooks/delete-guard.sh` and `delete_guard.py` |
+| `hooks/excluded-guard.sh` | PreToolUse(Bash) hook, excluded commands only: refuses one whose cwd resolves to another repo, whose git config or PATH a sandboxed session could write, or a `claude` or `codex` call outside the project root; a shim over `hooks/excluded_guard.py`; fails closed for excluded heads | symlink `~/.claude/hooks/excluded-guard.sh` and `excluded_guard.py` |
 | `hooks/memory-git.sh` | SessionStart/Stop hook: commits every project's auto-memory to a local-only git repo (`$XDG_STATE_HOME/dotclaude/memory.git`); never blocks | symlink `~/.claude/hooks/memory-git.sh` |
 | `bin/claude-file-history` | Lists and restores Claude Code's own backups of a file (`~/.claude/file-history`), found through the transcripts | symlink `~/.local/bin/claude-file-history` when that dir exists |
 | `templates/` | `SPEC.md`, `PLAN.md`, `STATUS.md` scaffolds for full-track work that survive `/clear`, and `LANE.md`, a lane's record | symlink per file into `~/.claude/templates/` |
@@ -464,6 +468,14 @@ need nothing extra.
   `xargs rm`, a delete inside `bash -c`, `eval`, a function or a script, and a glob two levels
   down (`~/*/*`). Fails open; denies go to
   `$XDG_STATE_HOME/dotclaude/delete-guard.log`.
+- **PreToolUse(`Bash`): `excluded-guard.sh`** (in this repo), for commands that match
+  `sandbox.excludedCommands` and so run outside the sandbox. Rule: such a command must not act on
+  anything a sandboxed session can write. It refuses a call whose cwd resolves to a git repo
+  other than the project's, whose other git config or PATH dirs a sandboxed session could write,
+  or a `claude` or `codex` call outside the project root. A home PATH dir needs a `denyWrite`
+  entry: the baseline names the stock ones, and a machine's own go in `settings.machine.json`.
+  Fails closed for excluded heads; denies go to `$XDG_STATE_HOME/dotclaude/excluded-guard.log`.
+  docs/delegation.md "The excluded-command guard" has the checks and what they don't cover.
 - **SessionStart / Stop: `memory-git.sh`** (in this repo). Commits every project's auto-memory
   (`~/.claude/projects/*/memory/`) to a local-only git repo at
   `$XDG_STATE_HOME/dotclaude/memory.git`, so a memory file broken by any means, a Bash heredoc
