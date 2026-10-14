@@ -76,7 +76,8 @@ Each layer covers what the others can't.
 | `reviewer` | `agents/reviewer.md` | Enforces: Read, Grep and Glob only |
 | `writer` | `agents/writer.md` | Enforces: `isolation: worktree`, no Agent tool, and the policy's worktree root |
 | Spawn guard | `hooks/agent-spawn-guard.sh`, `skills/delegation/scripts/agent-spawn-guard` | Enforces: denies a `writer` spawn without `isolation` on the call, and a named spawn without the `team-` prefix. Fails closed |
-| Sandbox | `settings.json` `sandbox` | Enforces (OS): the write roots, `denyRead` (the credential barrier, plus tool tokens and shell history), `denyWrite` (the enforcement sources, and the repo files that run outside the sandbox: `statusline/`, `notify-toast.ps1`, `codex/`, `tmux/`, `bin/`, `setup-tmux.sh`, `tests/` (the canary runs it), and `setup.sh` with the scripts and lists it installs from; installed from a lane, that checkout's copies too), and the network allowlist. A sandboxed `git switch` or `merge` that touches a `denyWrite` file fails; `git pull` already runs outside. `failIfUnavailable`, and `autoAllowBashIfSandboxed: false`, so Hayden's prompts stay as they were |
+| Sandbox | `settings.json` `sandbox` | Enforces (OS): the write roots, `denyRead` (the credential barrier, plus tool tokens and shell history), `denyWrite` (the enforcement sources, and the repo files that run outside the sandbox: `statusline/`, `notify-toast.ps1`, `codex/`, `tmux/`, `bin/`, `setup-tmux.sh`, `tests/` (the canary runs it), and `setup.sh` with the scripts and lists it installs from; installed from a lane, that checkout's copies too), and the network allowlist. The home PATH and install dirs an excluded command resolves through are Edit deny rules in `permissions.deny` instead, which Claude Code also merges into the sandbox and which bind the Edit and Write tools too (see "The excluded-command guard"). A sandboxed `git switch` or `merge` that touches a `denyWrite` file fails; `git pull` already runs outside. `failIfUnavailable`, and `autoAllowBashIfSandboxed: false`, so Hayden's prompts stay as they were |
+| Excluded-command guard | `hooks/excluded-guard.sh`, `hooks/excluded_guard.py`, a `Bash` entry in `settings.json` (timeout 5) | Enforces on every thread: an excluded command runs only when its cwd resolves to the project's own repository, the other git config it reads and every PATH dir and file its head resolves through are write-protected, and `claude` or `codex` runs from the project root. See "The excluded-command guard" below. Fails closed for excluded heads |
 | Subagent policy | `hooks/subagent-policy.sh`, `skills/delegation/scripts/subagent-policy`, `skills/delegation/policy.toml` | Enforces: see "Subagent policy" below. Fails closed for the tools it polices |
 | Report check | `hooks/report-check.sh`, `skills/delegation/scripts/report-check` | Enforces acceptance: a schema-invalid report is sent back twice at most. Fails open |
 | Ledger | `hooks/delegation-ledger.sh`, `skills/delegation/scripts/delegation-ledger`, `skills/delegation/liveness.toml` | Observes: start and stop rows (`agent_type` is the resolved role; a teammate adds `name` and `teammate`), `report_ok`, denial rows, the main-checkout hash for a worktree agent (and the lane's, when the parent session runs in one); the per-agent liveness index (`agents/<id>.json`); `open` (the tool in flight and since when, thresholds in `liveness.toml`); `watch` (one line per live delegation, and a token like `2▶ 1⚠` for the tmux bar); `audit` (`--monthly` adds a month of usage for retuning, and `exclude` keeps probes out of it); `sandbox-denials`. Persuades: the deadline nudge, one PostToolUse `additionalContext` per activation past the role's `nudge_min`, and a `nudge` row. Fails open |
@@ -204,6 +205,124 @@ For public data:
 Code search needs a token. A classic token with **no scopes** at
 `~/.config/dotclaude/github-public-token` can read public data only, and it lifts the rate limit
 from 60 to 5,000 requests an hour.
+
+### The excluded-command guard
+
+Rule: a command that runs outside the sandbox must not act on anything a sandboxed session can
+write. `excludedCommands` takes a command out of the sandbox by its text alone, so the files that
+command trusts need their own check. `hooks/excluded-guard.sh` runs on every Bash call, main
+thread included, and checks only the ones that match an `excludedCommands` pattern. It matches
+more broadly than Claude Code (any line or `;`, `&&`, `||`, `|` or `&` piece, with leading
+`VAR=value` words dropped), since a missed match would skip the checks and an extra one only
+checks a sandboxed call. Patterns come from the user, managed, project and project-local
+settings.
+
+For a match it refuses, naming the path, when:
+1. **The git repo is not the project's.** The cwd must resolve to the same common git dir as
+   `CLAUDE_PROJECT_DIR`, or to no repo. A nested repo, a planted gitfile or a repo in a temp dir
+   has a config the session can write. The project's own `config` and `hooks/` are trusted, and
+   so is `config.worktree` when the cwd's gitdir is the project's own, since Claude Code keeps
+   them read-only for the session; another worktree's `config.worktree` is judged. That trust
+   rests on Claude Code protecting the session's gitfile and its `worktrees/<name>/commondir`,
+   not the main `.git/` dir, so the common dir comes from git's real layout: a gitdir with a
+   `commondir` file must sit at `<common>/worktrees/<name>` and name that `<common>`, which holds
+   no `commondir` itself. Any other layout, in the cwd's repo or the project's, is refused. A
+   dir counts as a repo as soon as git would take it as one: a `.git` entry, or `HEAD` with
+   `objects/` and `refs/` or with a `commondir`. The
+   other config git reads must be write-protected: the global and XDG files (or
+   `GIT_CONFIG_GLOBAL`), `/etc/gitconfig` (or `GIT_CONFIG_SYSTEM`, skipped under
+   `GIT_CONFIG_NOSYSTEM`), every `include.path` and `includeIf` target, and a `core.hooksPath`
+   dir and each file in it. Each is followed through its symlinks (each hop and the dir of each
+   must be write-protected), and anything that exists there is judged, not only a regular file.
+   A repo whose install step points `core.hooksPath` into the repo (husky and similar) is
+   refused on its first excluded call, `gh` included (it runs git, and `gh pr checkout` runs
+   hooks), until an Edit deny rule for that dir is in `settings.machine.json` and `./setup.sh`
+   reruns. The refusal names the dir and the rule.
+2. **The head resolves through a writable path.** Every PATH dir must be write-protected, not
+   only those before the head, since the head's children (git, gh, tmux, the tools claude
+   spawns) search PATH too. An empty or relative entry is the cwd. Then the file, each symlink
+   hop and the dir of each, and a script's interpreter (`#!/usr/bin/env node` resolves `node`
+   the same way).
+3. **`claude` or `codex` runs outside the project root.** Both read the cwd's project config.
+
+**Write-protected** is judged machine-wide, because PATH dirs are shared. A path (or, if it is
+missing, its nearest existing ancestor, at its target when that ancestor is a symlink) is
+writable when it sits under `$HOME`, `/tmp`, `$TMPDIR` or an `allowWrite` entry, no protecting
+entry, `~/.claude` or `~/.gitconfig` covers it, and the user owns or can write it or some dir
+above it up to that root. Permission bits are not protection: an owner can chmod a dir back,
+and a writable parent can rename it. A dir outside every root (`/usr/bin`) is protected.
+`~/.gitconfig` counts only as a regular file at that exact path; a symlink there is judged by
+its hops and target.
+
+A protecting entry is an Edit deny rule in `permissions.deny`, `Edit(//abs/dir/**)` or
+`Edit(~/dir/**)`, covering a dir and everything in it. Claude Code merges an Edit deny rule into
+the sandbox's write denials, and its Edit and Write tools refuse the path, so the rule binds
+both routes (probed 2026-10-14 on 2.1.299: a sandboxed write under one fails with a read-only
+filesystem, and the Write tool is refused). A rule counts only at its own path and only when no
+symlink sits along it, `$HOME` included for a `~/` rule, so name a dir's real path. A rule for
+one file isn't read: the file's dir must be protected too, and that rule covers the file. A `denyWrite` line binds
+sandboxed Bash only, so it protects only inside dotclaude's own checkouts (`~/dotclaude` and the
+one the guard runs from), whose hooks run outside the sandbox on every call anyway. Both count
+only from user and managed settings, since the machine view stands for every session and other
+sessions don't load this project's settings; project settings still add patterns and
+`allowWrite` roots. A session rooted in a dir that holds a PATH dir can write that dir, so every
+home PATH dir needs an Edit deny rule. The baseline names the stock ones; a machine's own
+(Hayden's `~/hq/bin`, `~/sdk/...`) go in its `settings.machine.json` (Hayden, 2026-10-13:
+machine-wide over this session's roots; 2026-10-14: Edit deny rules over `denyWrite`). A
+sandboxed install into one of them (`bun add -g`, `cargo install`) fails and needs the sandbox
+off.
+
+The cost: no Claude session can edit a protected dir, that repo's own included. Edit one by
+hand, or lift the rule: remove it from `settings.machine.json`, run `./setup.sh`, make the edit,
+review the diff, restore the rule and run `./setup.sh` again.
+
+It fails closed for excluded heads: an error while checking a match refuses it, so does a match
+when `CLAUDE_PROJECT_DIR` is unset, and a missing, failing or slow shim falls back to the settings
+command's own check, which blocks a call whose first word (after leading whitespace) is one of
+the excluded heads that command lists. A settings file that won't parse makes every call a
+candidate, since it may hold a pattern; an empty one holds none, as Claude Code reads it (the
+sandbox can leave empty files behind where it mounted over a missing protected file). A call that
+matches nothing passes with no output. Denies and unreadable settings files go to
+`$XDG_STATE_HOME/dotclaude/excluded-guard.log`.
+
+`python3 -I hooks/excluded_guard.py --scan [ROOT...]` finds a refusal before a call hits it: it
+runs rule 2 for each excluded head against each PATH entry on its own, then against the full
+PATH as the hook does, going on past each refusal as if its rule were in place (so one run lists
+what the next would, an interpreter found through another entry included), and rule 1 from the
+root of each repo under each root (`~` by default, four
+levels down, skipping hidden dirs, `node_modules` and symlinks), with the machine-wide settings
+only. A repo or entry it can't check is listed as such, and the scan goes on. It never offers
+a rule for a write root itself (`~`, say): a file there has to move into a dir a rule can
+cover. It prints each refusal once per path with what the path holds now
+(each entry's mtime, newest first, and inside a repo whether it matches `HEAD`), so the rule
+follows a look, then the whole `settings.machine.json` with the Edit deny rules added, ready to
+paste on a new device too, and exits 1 if anything would be refused. It reads git objects only
+(`rev-parse`, `ls-tree`) with a system git, never PATH's, and with every transport refused, so a
+repo's config can attach no program to it, not even through a partial clone's fetch. `setup.sh`
+runs it last and warns. While a lane holds the install, `./setup.sh` from the main checkout
+refuses, so that lane reruns its own install. A relative `core.hooksPath` resolves in each
+worktree, so a repo with lanes needs a rule per worktree (a `denyWrite` glob protected nothing
+when probed, and the guard reads no glob rule).
+
+Not covered:
+- a session rooted at an ancestor of a repo (at `$HOME`, say) can write that repo's config; the
+  guard trusts Claude Code's protection, which covers only the session's own repo;
+- interpreter module paths (user site-packages, `NODE_PATH`), and config keys that name
+  programs (`core.sshCommand`, `credential.helper`) in a file that is itself protected;
+- a user-owned dir outside every root (under `/mnt/c`, say) counts as protected, so a session
+  rooted there isn't seen;
+- an Edit deny rule in another form (a glob mid-path, a project-relative path) protects nothing
+  to the guard, and a `denyWrite` glob is read as a plain path, so the guard refuses more;
+- a protected path that doesn't exist yet is trusted, because Claude Code mounts `/dev/null`
+  over a missing protected name inside a session's writable root (probed 2026-10-13 on 2.1.296,
+  for its built-in names);
+- the cwd a command moves to itself (`cd X && git push`, `git -C X push`): the guard judges the
+  call's starting cwd, and such a call either matches no pattern or runs sandboxed (a compound
+  command stays in the sandbox). The guard doesn't read `dangerouslyDisableSandbox`: a sandbox-off
+  call is judged like any other, by its text.
+
+Allow rules on excluded commands sit behind it: an allow rule skips the classifier, and
+`test_settings.py` fails if one covers an excluded command while the guard isn't wired.
 
 ### Where enforcement stops (known gaps)
 
