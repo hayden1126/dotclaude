@@ -1,4 +1,7 @@
-"""setup.sh's two merge helpers: the settings overlay and the git excludes block (stdlib only)."""
+"""setup.sh's two merge helpers (the settings overlay, the git excludes block) and its wiring,
+install-state.py's calls and source globs among it (stdlib only). test_install_state.py tests
+install-state.py itself."""
+import glob
 import importlib.machinery
 import importlib.util
 import json
@@ -12,6 +15,7 @@ import unittest
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 MERGE = os.path.join(REPO, "merge-settings.py")
 IGNORE = os.path.join(REPO, "git", "install-ignore.py")
+INSTALL_STATE = os.path.join(REPO, "install-state.py")
 
 
 def load(path):
@@ -24,6 +28,7 @@ def load(path):
 
 merge_settings = load(MERGE)
 install_ignore = load(IGNORE)
+install_state = load(INSTALL_STATE)
 
 
 def run(*args, env=None):
@@ -324,32 +329,153 @@ class IgnoreBlock(unittest.TestCase):
             self.assertEqual(f.read(), f"{install_ignore.BEGIN}\n/.x\n")
 
 
+def setup_lines():
+    """setup.sh's lines, backslash continuations joined."""
+    with open(os.path.join(REPO, "setup.sh")) as f:
+        return f.read().replace("\\\n", " ").splitlines()
+
+
+def first(lines, pattern):
+    return next(i for i, l in enumerate(lines) if re.match(pattern, l))
+
+
+# Lines that name Python without starting it, per script. Anything else that names a Python
+# interpreter or a .py file outside a heredoc body must be a call in the strict form.
+PYTHON_NON_CALLS = {
+    "setup.sh": ('for f in "$REPO_DIR"/hooks/*.sh "$REPO_DIR"/hooks/*.py; do',
+                 'for pyf in "$REPO_DIR"/statusline/*.py; do'),
+    "setup-tmux.sh": ('command -v python3 >/dev/null || die "python3 not found."',),
+}
+
+
+def python_lines(text, non_calls):
+    """A shell script's lines that name Python: (bad, ok, unclosed). ok holds the calls in the
+    strict form: the line's first command is `python3 -I` then a quoted arg or `-`, and nothing
+    after it (past &&, ||, ;, |, & or a command substitution) names Python. bad holds every
+    other line naming a Python interpreter (python, python3, python3.12) or a .py file, so a
+    bare python3, an interpreter in a variable (its assignment names it) and a direct run of a
+    .py all land there. Full-line comments are dropped before continuations join (bash doesn't
+    continue a comment), heredoc bodies (the Python a call reads, or printed text) are skipped,
+    and unclosed is the delimiter of a heredoc still open at the end. Lines are
+    whitespace-normalized.
+
+    Known limits (no top-level script does any of these today): a `<<WORD` inside a string or
+    an arithmetic `$((x << 2))` opens a heredoc that isn't there (the unclosed check catches one
+    that never ends); a trailing `cmd # note \\` reads as a continuation; and an extensionless
+    script run through its shebang, or an interpreter in a variable whose assignment names no
+    Python (`"$PYTHON"` from the environment), isn't seen."""
+    bad, ok, delim, buf = [], [], None, ""
+    for raw in text.splitlines():
+        if delim is not None:
+            if raw.strip() == delim:
+                delim = None
+            continue
+        if not buf and raw.lstrip().startswith("#"):
+            continue
+        if raw.endswith("\\"):
+            buf += raw[:-1] + " "
+            continue
+        line, buf = " ".join((buf + raw).split()), ""
+        m = re.search(r"(?<!<)<<(?!<)-?\s*(['\"]?)(\w+)\1", line)  # a <<< here-string isn't one
+        if m:
+            delim = m.group(2)
+        if line in non_calls:
+            continue
+        first, *rest = re.split(r"&&|\|\||[;|&`]|\$\(", line)
+        if (re.match(r"python3 -I [\"'-]", first)
+                and len(re.findall(r"\bpython[0-9.]*\b", first)) == 1
+                and not any(re.search(r"\bpython[0-9.]*\b|\.py\b", s) for s in rest)):
+            ok.append(line)
+        elif re.search(r"\bpython[0-9.]*\b|\.py\b", line):
+            bad.append(line)
+    return bad, ok, delim
+
+
+# Python a script starts through sys.executable runs isolated (-I), like the shell scripts'
+# Python: the cwd or a writable dir never comes first on its import path. Each exception is a
+# path and why.
+EXECUTABLE_EXCEPTIONS = {
+    "skills/deck-production/scripts/parity_check.py":
+        "runs the deck build scripts in the sandbox, and they may need the user's "
+        "site-packages, which -I drops",
+}
+
+
+def unisolated_executable_calls(text):
+    """The lines that start sys.executable without -I as the first argument: a list or tuple
+    that begins with sys.executable and whose next item isn't "-I"."""
+    return [m.group(0) for m in re.finditer(r"(?:\[\s*sys\.executable\s*[,\]]|"
+                                            r"\(\s*sys\.executable\s*,)[^\n]*", text)
+            if not re.match(r"[\[(]\s*sys\.executable\s*,\s*[\"']-I[\"']", m.group(0))]
+
+
+def setup_link_sources():
+    """Every repo path setup.sh links, relative to the repo: the `for ... in` lists and the
+    literal `link "$REPO_DIR/..."` sources, expanded by bash against this checkout."""
+    words = []
+    for line in setup_lines():
+        m = re.match(r"\s*for \w+ in (.*); do$", line)
+        if m:
+            words += [w for w in m.group(1).split() if "$REPO_DIR" in w]
+        m = re.match(r'\s*link ("\$REPO_DIR/[^"$]+")', line)
+        if m:
+            words.append(m.group(1))
+    script = ('shopt -s nullglob; for f in ' + " ".join(words)
+              + '; do printf "%s\\n" "${f#"$REPO_DIR"/}"; done')
+    out = subprocess.run(["bash", "-c", script], env={**os.environ, "REPO_DIR": REPO},
+                         capture_output=True, text=True, check=True).stdout
+    return sorted({p.rstrip("/") for p in out.splitlines()
+                   if os.path.lexists(os.path.join(REPO, p))})
+
+
 class SetupWiring(unittest.TestCase):
-    def test_a_hook_removed_from_the_repo_has_its_link_pruned(self):
-        # setup.sh's prune_stale_hook_links, run on its own: only a dangling link into this
-        # checkout's hooks/ goes; a live link, another repo's dangling link and a file stay.
-        with open(os.path.join(REPO, "setup.sh")) as f:
-            text = f.read()
-        start = text.index("prune_stale_hook_links() {")
-        func = text[start:text.index("\n}\n", start) + 3]
-        with tempfile.TemporaryDirectory() as tmp:
-            repo, claude = os.path.join(tmp, "repo"), os.path.join(tmp, "claude")
-            os.makedirs(os.path.join(repo, "hooks"))
-            os.makedirs(os.path.join(claude, "hooks"))
-            with open(os.path.join(repo, "hooks", "live.sh"), "w"):
-                pass
-            hooks = os.path.join(claude, "hooks")
-            os.symlink(os.path.join(repo, "hooks", "live.sh"), os.path.join(hooks, "live.sh"))
-            os.symlink(os.path.join(repo, "hooks", "gone.sh"), os.path.join(hooks, "gone.sh"))
-            os.symlink(os.path.join(tmp, "other", "hooks", "x.sh"), os.path.join(hooks, "x.sh"))
-            with open(os.path.join(hooks, "plugin.sh"), "w"):
-                pass
-            r = subprocess.run(["bash", "-c", 'set -euo pipefail; say() { echo "$*"; }\n'
-                                + func + "\nprune_stale_hook_links"],
-                               env={**os.environ, "REPO_DIR": repo, "CLAUDE_DIR": claude},
-                               capture_output=True, text=True, timeout=20)
-            self.assertEqual((r.returncode, r.stdout), (0, "removed stale link hooks/gone.sh\n"))
-            self.assertEqual(sorted(os.listdir(hooks)), ["live.sh", "plugin.sh", "x.sh"])
+    def test_setup_locks_and_holds_before_changing_anything(self):
+        lines = setup_lines()
+        hold = first(lines, r'python3 -I "\$REPO_DIR/install-state\.py" hold "\$REPO_DIR"')
+        self.assertLess(first(lines, r"\s*flock -n 9"), hold)
+        self.assertLess(first(lines, r"\s*flock -w 300 9"), hold)
+        # Every flock on fd 9 is bounded: a sandboxed process can hold the lock, unnamed.
+        calls = [m.group(1) for l in lines if not l.lstrip().startswith("#")
+                 for m in re.finditer(r"\bflock((?: -\w+(?: \d+)?)*) 9\b", l)]
+        self.assertEqual(sorted(calls), [" -n", " -w 300"])
+        self.assertLess(hold, first(lines, r'mkdir -p "\$CLAUDE_DIR"'))
+        self.assertLess(hold, first(lines, r"\s*(copy_managed|link) \""))
+        self.assertLess(hold, first(lines, r'python3 -I "\$REPO_DIR/merge-settings\.py"'))
+        # A plugin or tool installer that outlives the run must not inherit the lock.
+        for name in ("plugins/marketplaces.json", "plugins/enabled.json", "tools.json"):
+            line = lines[first(lines, rf'\s*python3 -I - "\$REPO_DIR/{re.escape(name)}"')]
+            self.assertIn(" 9>&- ", line, name)
+
+    def test_setup_prunes_after_the_last_link_then_checks_plugins(self):
+        lines = setup_lines()
+        prune = first(lines, r'python3 -I "\$REPO_DIR/install-state\.py" prune "\$REPO_DIR"')
+        last_link = max(i for i, l in enumerate(lines) if re.match(r'\s*link "', l))
+        plugins = first(lines, r'python3 -I "\$REPO_DIR/install-state\.py" plugins')
+        self.assertLess(last_link, prune)
+        self.assertLess(prune, plugins)
+        self.assertLess(plugins, first(lines, r"# \d+\. Final checklist"))
+        self.assertLess(first(lines, r"# \d+\. Register marketplaces"), prune)
+        self.assertNotIn("prune_stale_hook_links", "\n".join(lines))
+
+    def test_every_path_setup_links_matches_a_source_glob(self):
+        sources = setup_link_sources()
+        for known in ("CLAUDE.md", "notify-toast.ps1", "hooks/session-title.sh", "skills/lanes",
+                      "agents/Explore.md", "skills/lanes/scripts/lane", "codex/AGENTS.md",
+                      "statusline/ctx-breakdown.py"):
+            self.assertIn(known, sources)  # the parse found each kind of source
+        for rel in sources:
+            with self.subTest(rel):
+                self.assertTrue(install_state.managed(rel), rel)
+
+    def test_no_tmux_path_matches_a_source_glob(self):
+        # setup-tmux.sh's links are its own: setup.sh's prune and hold leave them alone.
+        tmux = [os.path.relpath(p, REPO) for p in glob.glob(os.path.join(REPO, "tmux", "*"))]
+        with open(os.path.join(REPO, "setup-tmux.sh")) as f:
+            tmux += re.findall(r'^link "\$REPO_DIR/([^"]+)"', f.read(), re.M)
+        self.assertIn("tmux/pass-last", tmux)
+        for rel in tmux:
+            with self.subTest(rel):
+                self.assertFalse(install_state.managed(rel), rel)
 
     def test_setup_installs_the_merged_settings_and_the_block(self):
         with open(os.path.join(REPO, "setup.sh")) as f:
@@ -360,6 +486,94 @@ class SetupWiring(unittest.TestCase):
         self.assertIn('copy_managed "$MERGED_SETTINGS" "$CLAUDE_DIR/settings.json"', text)
         self.assertNotIn('copy_managed "$REPO_DIR/settings.json"', text)
         self.assertIn('git/install-ignore.py" "$REPO_DIR/git/sandbox-stubs.ignore"', text)
+
+    def test_the_top_level_scripts_run_their_python_isolated(self):
+        # The top-level scripts run outside the sandbox (setup*.sh, sync.sh), and the repo root
+        # isn't in denyWrite (only its files and subdirs are), so every Python they start runs
+        # isolated: no import path from the cwd, the script's dir or the environment.
+        scripts = sorted(os.path.basename(p) for p in glob.glob(os.path.join(REPO, "*.sh")))
+        self.assertEqual(scripts, ["setup-chrome-wsl.sh", "setup-tmux.sh", "setup.sh", "sync.sh"])
+        calls = {}
+        for name in scripts:
+            with open(os.path.join(REPO, name)) as f:
+                bad, ok, unclosed = python_lines(f.read(), PYTHON_NON_CALLS.get(name, ()))
+            with self.subTest(name):
+                self.assertEqual(bad, [])
+                self.assertIsNone(unclosed)  # every heredoc ended, so nothing after it was skipped
+            calls[name] = ok
+        # The scan reached each kind of call, past every heredoc.
+        self.assertIn('python3 -I "$REPO_DIR/install-state.py" hold "$REPO_DIR" || hold=$?',
+                      calls["setup.sh"])
+        self.assertIn('python3 -I "$REPO_DIR/install-state.py" plugins '
+                      '|| warn "the plugin change check failed (see above)"', calls["setup.sh"])
+        self.assertEqual(len(calls["setup.sh"]), 10)
+        self.assertEqual(len(calls["sync.sh"]), 2)
+        self.assertEqual(len(calls["setup-tmux.sh"]), 1)
+
+    def test_the_isolation_scan_flags_every_other_way_to_start_python(self):
+        planted = [
+            "python3 <<'PY'", "python3 ./x.py", "python3 ~/x.py", "python3.12 -I x.py",
+            "python x.py", 'PY="$(command -v python3)"', '"$PY" "$REPO_DIR/x.py"',
+            '"$REPO_DIR/x.py" --flag', "./tool.py", "python3 -I x.py | python3 y.py",
+            "if python3 x.py; then :; fi", "python3 -c 'import x'", "exec python3 x.py",
+            "python3 -I \"$a\" && ./tool.py", "python3 -I - \"$a\" | sh -c 'python x'",
+            "python3 -I \"$a\"; \"$REPO_DIR/x.py\"", "python3 -I \"$a\" \"$(python3 y)\"",
+        ]
+        for line in planted:
+            with self.subTest(line):
+                bad, _, _ = python_lines(line + "\nPY\n", ())
+                self.assertEqual(bad, [line])
+        # A comment doesn't continue, so the call after a `# note \` line is its own line.
+        self.assertEqual(python_lines("# note \\\npython3 x.py\n", ()), (["python3 x.py"], [], None))
+        text = ("python3 -I - \"$A\" <<'PY'\nimport os  # python x.py inside the heredoc\nPY\n"
+                "cat <<EOF\n  needs python3 on PATH\nEOF\n"
+                "command -v python3 >/dev/null\n"
+                'python3 -I "$REPO_DIR/merge.py" \\\n  "$B" > "$C"\n')
+        bad, ok, unclosed = python_lines(text, ("command -v python3 >/dev/null",))
+        self.assertEqual(bad, [])
+        self.assertEqual(ok, ["python3 -I - \"$A\" <<'PY'",
+                              'python3 -I "$REPO_DIR/merge.py" "$B" > "$C"'])
+        self.assertIsNone(unclosed)
+        self.assertEqual(python_lines("python3 -I - <<'PY'\nimport os\n", ())[2], "PY")
+        self.assertEqual(python_lines("sed -n '/<<< x <<</p' f\npython3 y.py\n", ()),
+                         (["python3 y.py"], [], None))
+
+    def test_python_started_through_sys_executable_runs_isolated(self):
+        roots = [os.path.join(REPO, "hooks"), os.path.join(REPO, "bin")]
+        roots += glob.glob(os.path.join(REPO, "skills", "*", "scripts"))
+        seen = set()
+        for root in roots:
+            for dirpath, _, files in os.walk(root):
+                for name in files:
+                    path = os.path.join(dirpath, name)
+                    rel = os.path.relpath(path, REPO)
+                    with open(path, "rb") as f:
+                        text = f.read().decode("utf-8", "replace")
+                    if "sys.executable" not in text:
+                        continue
+                    seen.add(rel)
+                    calls = unisolated_executable_calls(text)
+                    with self.subTest(rel):
+                        if rel in EXECUTABLE_EXCEPTIONS:
+                            self.assertTrue(calls, f"{rel} is isolated now: drop its exception")
+                        else:
+                            self.assertEqual(calls, [])
+        # The walk reached each kind of caller, and every exception still names a file.
+        for rel in ("skills/delegation/scripts/delegation_checks.py",
+                    "skills/delegation/scripts/watch-guard", "skills/lanes/scripts/lane",
+                    "skills/pass/scripts/pass-respawn", *EXECUTABLE_EXCEPTIONS):
+            self.assertIn(rel, seen)
+
+    def test_the_executable_scan_flags_a_call_without_isolation(self):
+        for text in ("subprocess.run([sys.executable, x])", "run([sys.executable, '-m', 'y'])",
+                     "Popen((sys.executable, LEDGER))", "argv = [sys.executable]",
+                     "run([\n    sys.executable, '-u', x])", "run([sys.executable, \"-u\", \"-I\"])"):
+            with self.subTest(text):
+                self.assertEqual(len(unisolated_executable_calls(text)), 1)
+        for text in ("run([sys.executable, \"-I\", x])", "run([ sys.executable , '-I', '-m', y])",
+                     "return sys.executable", "print(sys.executable)"):
+            with self.subTest(text):
+                self.assertEqual(unisolated_executable_calls(text), [])
 
     def test_codex_gets_the_portable_skills_and_each_exists(self):
         with open(os.path.join(REPO, "setup.sh")) as f:

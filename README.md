@@ -31,6 +31,11 @@ symlinked, because the Claude Code runtime rewrites it (persisting managed keys 
 `extraKnownMarketplaces`). A symlink would push that churn back into the repo; the copy keeps the
 repo file as a curated baseline while the runtime owns its own copy.
 
+A run also prunes installed links that no longer belong: dangling ones into this checkout, and
+ones into a lane worktree (Lanes, below). When a mod or plugin changed since the last install,
+it says so in one line. A session that started before the install loads those only at its start,
+so it needs `/pass`.
+
 Each run replaces that copy, so a value added to a key the baseline sets is lost. Settings that belong
 to one machine, such as hooks for its own scripts or `sandbox.excludedCommands` for its own tools, go
 in `~/.claude/settings.machine.json` instead. It isn't in this repo; `setup.sh` installs the baseline
@@ -485,6 +490,13 @@ and status single-writer:
   `lane who 42` is the only answer to who owns #42.
 - `lane lock gate -- npm run e2e` runs a shared gate under a named lock, so a second lane's run
   waits instead of colliding.
+- A lane tests its change by installing from its own worktree (`lane lock install --
+  ./setup.sh`), and that install holds. setup.sh refuses to run from any other lane or clone
+  until the main checkout's own run relinks everything.
+- `lane done chart-fix` closes a merged lane in one run. It ends the lane's own sessions and
+  what runs under them, proven from /proc and Claude Code's session files and never chosen by
+  name or tmux window, and it refuses anything else by name. Then it archives the record and
+  removes the worktree.
 - An optional lead session triages requests into lanes, opens them on Hayden's approval and sets
   the merge order (the skill's "The lead").
 - `lane-identity.sh` and `lane-guard.sh` (Hooks, above) tell each session which lane it is and

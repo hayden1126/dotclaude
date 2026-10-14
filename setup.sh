@@ -4,6 +4,9 @@
 # Idempotent: safe to re-run. Existing non-symlink files are backed up to
 # ~/.claude/backups/pre-dotclaude-<unix-ts>/ before being replaced with symlinks
 # back to this repo, so future edits in either place stay in sync.
+#
+# It runs outside the sandbox, so every python3 it starts runs isolated (-I): no path it imports
+# from comes from the cwd, the script's dir or the environment.
 
 set -euo pipefail
 
@@ -14,6 +17,52 @@ BACKUP_DIR="$CLAUDE_DIR/backups/pre-dotclaude-$TS"
 
 say()  { printf "\033[1;36m==>\033[0m %s\n" "$*"; }
 warn() { printf "\033[1;33m!!\033[0m  %s\n" "$*" >&2; }
+
+# ---------------------------------------------------------------------------
+# 0. One run at a time, and a lane's install holds until the lead's
+# ---------------------------------------------------------------------------
+# Two runs at once would interleave their links, so a run first takes a flock on install.lock in
+# the state dir. While another holds it, the run says so and waits up to 5 minutes: a sandboxed
+# process can hold that lock too (a read-only fd is enough), and flock can't name the holder. A
+# timeout, a lock file it can't open (a dir, another user's, a read-only file system) or any
+# other flock error stops the run before it changes anything. Only where flock is missing or the
+# state dir can't be made (git-bash, macOS) does the run go on unlocked. The children that may
+# outlive the run (plugin installs, tool installers) get fd 9 closed, or they'd keep it.
+STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/dotclaude"
+if command -v flock >/dev/null 2>&1 && mkdir -p "$STATE_DIR" 2>/dev/null; then
+  if ! { exec 9>"$STATE_DIR/install.lock"; }; then
+    warn "couldn't open $STATE_DIR/install.lock to lock it (see above); setup.sh stopped before changing anything"
+    exit 1
+  fi
+  locked=0
+  flock -n 9 || locked=$?
+  if [[ $locked -eq 1 ]]; then  # flock's exit for a lock held elsewhere, and for a timeout
+    say "another process holds $STATE_DIR/install.lock: this run (pid $$, from $REPO_DIR) waits up to 5 minutes for it"
+    locked=0
+    flock -w 300 9 || locked=$?
+    if [[ $locked -eq 1 ]]; then
+      warn "timed out after 5 minutes waiting for $STATE_DIR/install.lock (\`fuser -v\` on it lists who has it open); setup.sh stopped before changing anything"
+      exit 1
+    fi
+  fi
+  if [[ $locked -ne 0 ]]; then
+    warn "couldn't lock $STATE_DIR/install.lock (flock exit $locked, see above); setup.sh stopped before changing anything"
+    exit 1
+  fi
+fi
+# A lane installs from its own worktree to test a change, and an install from anywhere else
+# would replace those links mid-test. So links into a live lane worktree hold the install: the
+# run stops here, before changing anything, unless this checkout is that lane or its main
+# checkout (whose run relinks everything, releasing it). install-state.py has the rule. Any
+# other failure warns and goes on, like the lane hooks.
+hold=0
+python3 -I "$REPO_DIR/install-state.py" hold "$REPO_DIR" || hold=$?
+if [[ $hold -eq 3 ]]; then
+  warn "setup.sh stopped before changing anything"
+  exit 1
+elif [[ $hold -ne 0 ]]; then
+  warn "the install hold check failed (exit $hold, see above); installing anyway"
+fi
 
 mkdir -p "$CLAUDE_DIR"
 
@@ -70,7 +119,7 @@ copy_managed() {
 MERGED_SETTINGS="$(mktemp)"
 trap 'rm -f "$MERGED_SETTINGS"' EXIT
 chmod 644 "$MERGED_SETTINGS"  # mktemp's 0600 would carry over to the installed copy
-python3 "$REPO_DIR/merge-settings.py" --checkout "$REPO_DIR" "$REPO_DIR/settings.json" \
+python3 -I "$REPO_DIR/merge-settings.py" --checkout "$REPO_DIR" "$REPO_DIR/settings.json" \
   "$CLAUDE_DIR/settings.machine.json" "$CLAUDE_DIR/settings.json" > "$MERGED_SETTINGS" \
   || { warn "settings.machine.json or the live settings.json is not valid JSON; settings.json left unchanged"; exit 1; }
 copy_managed "$MERGED_SETTINGS" "$CLAUDE_DIR/settings.json"
@@ -85,18 +134,6 @@ for f in "$REPO_DIR"/hooks/*.sh "$REPO_DIR"/hooks/*.py; do
   [[ -e "$f" ]] || continue
   link "$f" "$CLAUDE_DIR/hooks/$(basename "$f")"
 done
-
-# A hook removed from the repo leaves its link dangling (hooks/autopass-toggle.sh went in
-# 2026-10). Drop the dangling links into this checkout's hooks/; any other link is left alone.
-prune_stale_hook_links() {
-  local l
-  for l in "$CLAUDE_DIR"/hooks/*; do
-    [[ -L "$l" && ! -e "$l" && "$(readlink "$l")" == "$REPO_DIR/hooks/"* ]] || continue
-    rm "$l"
-    say "removed stale link ${l#"$CLAUDE_DIR/"}"
-  done
-}
-prune_stale_hook_links
 
 # skills/ — one symlink per authored skill directory (plugin skills come from plugins). A
 # directory holding .claude-plugin/ loads as a mod, <name>@skills-dir (skills/autopass).
@@ -146,7 +183,7 @@ done
 CODEX_DIR="${CODEX_HOME:-$HOME/.codex}"
 mkdir -p "$CODEX_DIR"
 link "$REPO_DIR/codex/AGENTS.md" "$CODEX_DIR/AGENTS.md"
-python3 "$REPO_DIR/codex/merge-config.py" "$REPO_DIR/codex/config.toml" "$CODEX_DIR/config.toml" \
+python3 -I "$REPO_DIR/codex/merge-config.py" "$REPO_DIR/codex/config.toml" "$CODEX_DIR/config.toml" \
   || warn "codex config.toml merge failed (see above); $CODEX_DIR/config.toml left unchanged"
 # The skills Codex gets: the portable ones (Hayden's list, 2026-10-01). The others lean on Claude
 # Code: its subagents, its own skills, chrome-devtools-mcp.
@@ -166,7 +203,7 @@ if ! command -v claude >/dev/null 2>&1; then
   warn "claude CLI not on PATH — skipping plugin install (install Claude Code, then re-run)"
 else
   say "registering marketplaces"
-  python3 - "$REPO_DIR/plugins/marketplaces.json" <<'PY'
+  python3 -I - "$REPO_DIR/plugins/marketplaces.json" 9>&- <<'PY'
 import json, subprocess, sys
 with open(sys.argv[1]) as f:
     data = json.load(f)
@@ -180,7 +217,7 @@ for name, entry in data.items():
 PY
 
   say "installing plugins"
-  python3 - "$REPO_DIR/plugins/enabled.json" <<'PY'
+  python3 -I - "$REPO_DIR/plugins/enabled.json" 9>&- <<'PY'
 import json, subprocess, sys
 with open(sys.argv[1]) as f:
     data = json.load(f)
@@ -196,7 +233,7 @@ fi
 # 4. Standalone CLI tools (ccstatusline, etc.)
 # ---------------------------------------------------------------------------
 say "installing standalone CLI tools from tools.json"
-python3 - "$REPO_DIR/tools.json" <<'PY'
+python3 -I - "$REPO_DIR/tools.json" 9>&- <<'PY'
 import json, subprocess, sys, shutil
 with open(sys.argv[1]) as f:
     tools = json.load(f)
@@ -228,7 +265,7 @@ for pyf in "$REPO_DIR"/statusline/*.py; do
   [[ -e "$pyf" ]] || continue
   link "$pyf" "$CC_CFG_DIR/$(basename "$pyf")"
 done
-python3 - "$REPO_DIR/statusline/ccstatusline-settings.json" "$CC_CFG_DIR/settings.json" <<'PY'
+python3 -I - "$REPO_DIR/statusline/ccstatusline-settings.json" "$CC_CFG_DIR/settings.json" <<'PY'
 import json, os, shutil, sys, time
 baseline_path, dst = sys.argv[1], sys.argv[2]
 cfgdir = os.path.dirname(dst)
@@ -318,12 +355,26 @@ if [[ "$(uname -s)" == "Linux" ]]; then
   done
   # The sandbox mounts /dev/null over protected dotfiles a repo lacks, which breaks
   # `git add -A` inside it; the block (explained in the file) hides them from git.
-  python3 "$REPO_DIR/git/install-ignore.py" "$REPO_DIR/git/sandbox-stubs.ignore" \
+  python3 -I "$REPO_DIR/git/install-ignore.py" "$REPO_DIR/git/sandbox-stubs.ignore" \
     || warn "sandbox stub block not installed into the git excludes file (see above)"
 fi
 
 # ---------------------------------------------------------------------------
-# 6. Final checklist
+# 6. Stale links and plugin changes
+# ---------------------------------------------------------------------------
+# After the last link: remove the managed links this run didn't replace that point into another
+# live lane worktree (a file only that lane has), and the dangling ones into this checkout or
+# the lanes root (a removed hook, a closed lane). setup-tmux.sh's links and plugin files are
+# left alone; install-state.py has the rule.
+python3 -I "$REPO_DIR/install-state.py" prune "$REPO_DIR" \
+  || warn "pruning stale links failed (see above); they are left in place"
+# A running session loads plugins and mods only at its start (SKILL.md text it picks up live),
+# so name each one that changed since the last install: those sessions need /pass to see it.
+python3 -I "$REPO_DIR/install-state.py" plugins \
+  || warn "the plugin change check failed (see above)"
+
+# ---------------------------------------------------------------------------
+# 7. Final checklist
 # ---------------------------------------------------------------------------
 cat <<'EOF'
 

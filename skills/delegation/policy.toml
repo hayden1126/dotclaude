@@ -156,8 +156,8 @@ write_denied = ["~/.claude", "~/.gitconfig", "~/.config/git", "~/.zshrc", "~/.zs
   # Run or installed outside the sandbox: ccstatusline, the Notification hook, setup.sh and
   # what it reads, and the tests the canary runs.
   "~/dotclaude/statusline", "~/dotclaude/notify-toast.ps1", "~/dotclaude/setup.sh",
-  "~/dotclaude/merge-settings.py", "~/dotclaude/setup-chrome-wsl.sh", "~/dotclaude/sync.sh",
-  "~/dotclaude/chrome-debug.ps1", "~/dotclaude/git", "~/dotclaude/plugins",
+  "~/dotclaude/merge-settings.py", "~/dotclaude/install-state.py",
+  "~/dotclaude/setup-chrome-wsl.sh", "~/dotclaude/sync.sh", "~/dotclaude/chrome-debug.ps1", "~/dotclaude/git", "~/dotclaude/plugins",
   "~/dotclaude/tools.json", "~/dotclaude/tmux", "~/dotclaude/setup-tmux.sh", "~/dotclaude/bin",
   "~/dotclaude/tests",
   # The ledger and the liveness index: an agent that rewrote its own index could reset its

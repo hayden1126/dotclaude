@@ -24,6 +24,11 @@ in a plain repo (the root STATUS.md). Checks:
   claims     in a lane, every lane.json claim is named in the record
   pushed     in a lane, unpushed commits are noted in the record (a warning: pushes need Hayden)
 The handoff skill runs it last; a handoff is not done until it passes.
+
+--closing is the check `lane done` runs before it ends a lane's sessions. It keeps clean, next,
+absolute, claims and pushed, but fresh compares the status file against HEAD's commit only, not
+against the session's start (after /pass, the idle new session started after the handoff), and
+approval is skipped (no session resumes from that Next block).
 """
 import argparse
 import datetime
@@ -120,14 +125,15 @@ def unpushed(repo: lanelib.Repo, lane: dict) -> int:
     return int(p.stdout.strip()) if p.returncode == 0 else 0
 
 
-def check(cwd: str) -> tuple[str, list[str], list[str]]:
-    """(header, failures, warnings) for the checkout holding cwd."""
+def check(cwd: str, closing: bool = False) -> tuple[str, list[str], list[str]]:
+    """(header, failures, warnings) for the checkout holding cwd; closing: --closing's checks."""
     repo = lanelib.resolve(cwd)
     if repo is None:
         return "handoff-check: not inside a git work tree", ["not a git work tree"], []
     kind, lane = repo.identity()
     status = lanelib.status_path(repo, lane)
-    header = f"handoff-check: {lane['id'] if lane else kind} ({status})"
+    mode = " --closing" if closing else ""
+    header = f"handoff-check{mode}: {lane['id'] if lane else kind} ({status})"
     fails, warns = [], []
     try:
         with open(status) as f:
@@ -145,16 +151,16 @@ def check(cwd: str) -> tuple[str, list[str], list[str]]:
         if mtime < float(head.stdout.strip()) and not head_carries(repo, status):
             fails.append("the status file is older than HEAD's commit: update it after the last "
                          "commit (it should cite the commit range)")
-    start, source = session_start(repo, lane)
-    if start is None:
+    start, source = (None, "") if closing else session_start(repo, lane)
+    if start is None and not closing:
         warns.append(f"session start unknown ({source}): freshness against this session skipped")
-    elif mtime < start:
+    elif start is not None and mtime < start:
         fails.append(f"the status file was not written during this session ({source})")
 
     block = lanelib.next_block(text)
     if not block:
         fails.append("no non-empty `## Next...` (or `## Notes for next session`) section")
-    else:
+    elif not closing:
         since = datetime.date.fromtimestamp(start) if start is not None else None
         state = lanelib.approval(block, since)
         if state == lanelib.MALFORMED:
@@ -188,8 +194,11 @@ def check(cwd: str) -> tuple[str, list[str], list[str]]:
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="handoff-check", description=__doc__.split("\n\n")[0])
     ap.add_argument("-C", dest="cwd", default=os.getcwd(), help="check this dir's checkout")
+    ap.add_argument("--closing", action="store_true",
+                    help="the check before `lane done` ends the lane's sessions: fresh against "
+                         "HEAD's commit only, approval skipped")
     args = ap.parse_args(argv)
-    header, fails, warns = check(args.cwd)
+    header, fails, warns = check(args.cwd, args.closing)
     print(header)
     for w in warns:
         print(f"  warn  {w}")
