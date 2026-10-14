@@ -2183,7 +2183,60 @@ class RealTmux(unittest.TestCase):
         x, y = self.find("gamma-title")
         self.click(x, y, button=2, release=False)   # a release outside would close it
         self.find("2:hqwin")
-        self.find("Swap Left")
+        self.find("Move ◀")
+
+    def drag(self, start, end, button=0):
+        """An SGR press at start, motion (button 32) to end, release at end: (x, y) cells."""
+        self.to("send-keys", "-t", "o", "-l", f"\x1b[<{button};{start[0]};{start[1]}M")
+        self.to("send-keys", "-t", "o", "-l", f"\x1b[<{button + 32};{end[0]};{end[1]}M")
+        self.to("send-keys", "-t", "o", "-l", f"\x1b[<{button};{end[0]};{end[1]}m")
+
+    def test_a_drag_across_rows_reorders_and_a_drag_onto_the_pane_cancels(self):
+        self.link_script()
+        self.run_layout()
+        self.assertEqual(self.nav_rows(), [["0", "1"], ["2"]])
+        self.drag(self.find("gamma-title"), self.find("alpha-title"))    # hq before the lead
+        self.wait(lambda: self.nav_rows() == [["2", "0", "1"]], f"rows {self.nav_rows()}")
+        self.assertEqual(self.show("-v", "-t", "t:", "@tab_bar_drag").strip(), "")
+        rows = self.nav_rows()
+        self.drag(self.find("beta-title"), (40, 30))                      # onto the pane
+        time.sleep(1)
+        self.assertEqual(self.nav_rows(), rows)
+        modes = self.ti("list-panes", "-a", "-F", "#{pane_in_mode}").stdout.split()
+        self.assertEqual(set(modes), {"0"})
+        self.assertEqual(self.show("-v", "-t", "t:", "@tab_bar_drag").strip(), "")
+
+    def test_ctrl_b_shift_right_carries_the_tab(self):
+        self.link_script()
+        self.run_layout()
+        self.assertEqual(self.nav_rows(), [["0", "1"], ["2"]])
+        self.to("send-keys", "-t", "o", "C-b")
+        self.to("send-keys", "-t", "o", "S-Right")
+        self.wait(lambda: self.nav_rows() == [["1", "0"], ["2"]], f"rows {self.nav_rows()}")
+        self.assertEqual(self.current(), "0")
+
+    def test_the_name_prompt_stores_a_hostile_name_literally_and_draws_it_cleaned(self):
+        self.link_script()
+        self.run_layout()
+        self.ti("set-option", "-w", "-t", "t:1", "@tab_place",
+                tb.place_text(tb.Place("c:1", 0, "s")))
+        self.ti("select-window", "-t", "t:1")
+        self.run_layout()
+        x, y = self.find("beta-title")
+        self.click(x, y)                                # the current tab: its menu
+        nx, ny = self.find("Name row…")
+        self.click(nx + 1, ny)
+        self.find("row name:")
+        hostile = "a\"b'c;d#[e%f$(g)$HOME~h\\i"
+        self.to("send-keys", "-t", "o", "-l", hostile)
+        self.to("send-keys", "-t", "o", "Enter")
+        want = tb.clean_row_name(hostile)
+        self.wait(lambda: (tb.parse_place(self.ti("show-options", "-wv", "-t", "t:1",
+                                                    "@tab_place").stdout.rstrip("\n"))
+                           or tb.Place("s", 0)).name == want, "the row was never named")
+        self.find(want + "▸")
+        self.assertEqual(self.ti("show-options", "-wqv", "-t", "t:1",
+                                 "@tab_row_name_in").stdout, "")
 
     def link_script(self):
         """Put tmux-tab-bar where the conf's hooks and keys look for it."""
