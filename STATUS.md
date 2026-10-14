@@ -91,7 +91,8 @@ stored here).
     into lanes, sandbox-off Python runs `-I`). Its first live `lane done` ended the lane's
     `claude` (session 8e31f81a) and 9 of its MCP children, each named with its pid, and left
     every other window alone.
-  - Live: `tab-bar` (opened 2026-10-13, below) and `lane-addr` (opened 2026-10-13 from its
+  - Live: `tab-bar` (opened 2026-10-13, below; PR 1 is draft #96, its screenshots approved by
+    Hayden) and `lane-addr` (opened 2026-10-13 from its
     backlog entry below, whose text is now its Brief). **Merge order: 1 `tab-bar`, 2
     `lane-addr`.** The lead installs only the next to merge.
   - `lane new` with `|`, `<`, `>` or `;` inside its quoted `--goal` ran sandboxed and failed
@@ -143,7 +144,7 @@ stored here).
   Hayden picked tmux over a migration after the research page
   (https://claude.ai/artifact/E75uhqt2xskxUGQopLwvoA, private; tmux inventory in
   `~/scratch/tab-bar/INVENTORY.md`). The design is in the lane's Brief, and the decisions are
-  in [[dotclaude-tab-bar]]: a row per lead with lanes, one shared row, overflow, at most 5 rows
+  in [[dotclaude-tab-bar]]: a row per lead with lanes, shared row(s) for the rest, overflow, at most 5 rows
   (pack, then `+N`); a narrow layout for the phone's grouped session; PR 2 adds manual drag
   between rows (spike first, popup board as the fallback), with placements kept in the tab
   record. Remote Control can't run `!` lines, so the phone needs the real pane. The
