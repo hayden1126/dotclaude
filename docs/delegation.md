@@ -254,11 +254,13 @@ and a writable parent can rename it. A dir outside every root (`/usr/bin`) is pr
 `~/.gitconfig` counts only as a regular file at that exact path; a symlink there is judged by
 its hops and target.
 
-A protecting entry is an Edit deny rule in `permissions.deny`: `Edit(//abs/dir/**)` or
-`Edit(~/dir/**)` for a dir and everything in it, `Edit(//abs/file)` for one file. Claude Code
-merges an Edit deny rule into the sandbox's write denials, and its Edit and Write tools refuse
-the path, so the rule binds both routes (probed 2026-10-14 on 2.1.299: a sandboxed write under
-one fails with a read-only filesystem, and the Write tool is refused). A `denyWrite` line binds
+A protecting entry is an Edit deny rule in `permissions.deny`, `Edit(//abs/dir/**)` or
+`Edit(~/dir/**)`, covering a dir and everything in it. Claude Code merges an Edit deny rule into
+the sandbox's write denials, and its Edit and Write tools refuse the path, so the rule binds
+both routes (probed 2026-10-14 on 2.1.299: a sandboxed write under one fails with a read-only
+filesystem, and the Write tool is refused). A rule counts only at its own path and only when no
+symlink sits along it (`~` resolves to the real home), so name a dir's real path. A rule for
+one file isn't read: the file's dir must be protected too, and that rule covers the file. A `denyWrite` line binds
 sandboxed Bash only, so it protects only inside dotclaude's own checkouts (`~/dotclaude` and the
 one the guard runs from), whose hooks run outside the sandbox on every call anyway. Both count
 only from user and managed settings, since the machine view stands for every session and other
@@ -284,13 +286,17 @@ matches nothing passes with no output. Denies and unreadable settings files go t
 `$XDG_STATE_HOME/dotclaude/excluded-guard.log`.
 
 `python3 -I hooks/excluded_guard.py --scan [ROOT...]` finds a refusal before a call hits it: it
-runs rule 2 for each excluded head and rule 1 from the root of each repo under each root (`~` by
-default, four levels down, skipping hidden dirs, `node_modules` and symlinks), with the
-machine-wide settings only. It prints each refusal once per path with what the path holds now
+runs rule 2 for each excluded head against each PATH entry on its own (so one run names every
+writable one) and rule 1 from the root of each repo under each root (`~` by default, four
+levels down, skipping hidden dirs, `node_modules` and symlinks), with the machine-wide settings
+only. A repo or entry it can't check is listed as such, and the scan goes on. It never offers
+a rule for a write root itself (`~`, say): a file there has to move into a dir a rule can
+cover. It prints each refusal once per path with what the path holds now
 (each entry's mtime, newest first, and inside a repo whether it matches `HEAD`), so the rule
 follows a look, then the whole `settings.machine.json` with the Edit deny rules added, ready to
 paste on a new device too, and exits 1 if anything would be refused. It reads git objects only
-(`rev-parse`, `ls-tree`), never a command a repo's config can attach a program to. `setup.sh`
+(`rev-parse`, `ls-tree`) with a system git, never PATH's, and with every transport refused, so a
+repo's config can attach no program to it, not even through a partial clone's fetch. `setup.sh`
 runs it last and warns. While a lane holds the install, `./setup.sh` from the main checkout
 refuses, so that lane reruns its own install. A relative `core.hooksPath` resolves in each
 worktree, so a repo with lanes needs a rule per worktree (a `denyWrite` glob protected nothing

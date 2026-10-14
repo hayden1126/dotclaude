@@ -27,8 +27,9 @@ Protected means not writable in the machine view. A path (or, if missing, its ne
 ancestor, at its target when that ancestor is a symlink) is writable when it sits under a root
 ($HOME, /tmp, $TMPDIR or an allowWrite entry; realpaths compared), no protecting entry,
 ~/.claude or ~/.gitconfig covers it, and some component from it up to its root is owned by the
-user or writable by the user. A protecting entry is an `Edit(//abs[/**])` or `Edit(~/path[/**])`
-deny rule, which binds sandboxed Bash and the Edit and Write tools, or a denyWrite line inside
+user or writable by the user. A protecting entry is an `Edit(//abs/dir/**)` or `Edit(~/dir/**)`
+deny rule with no symlink along its path, which binds sandboxed Bash and the Edit and Write
+tools, or a denyWrite line inside
 dotclaude's own checkouts (this guard's, and ~/dotclaude): a denyWrite line binds Bash only, and
 dotclaude's hooks run outside the sandbox on every call anyway. Permission bits are not
 protection: an owner can chmod a dir back, and a writable parent can rename it. Outside every
@@ -79,10 +80,11 @@ def log(line):
         pass
 
 
-# `Edit(//abs/path)` or `Edit(~/path)`, with an optional trailing `/**`. Claude Code merges an
-# Edit deny rule into the sandbox's write denials and its Edit and Write tools refuse the path,
-# so the rule binds both routes. Other forms (project-relative, globs mid-path) are not read.
-EDIT_RULE = re.compile(r"Edit\((//|~/)([^*?\[\]]*?)/?(/\*\*)?\)")
+# `Edit(//abs/dir/**)` or `Edit(~/dir/**)`. Claude Code merges an Edit deny rule into the
+# sandbox's write denials and its Edit and Write tools refuse the path, so the rule binds both
+# routes. Other forms (one file, project-relative, globs mid-path) are not read: a file's dir
+# must be protected too, so a one-file rule never clears a refusal.
+EDIT_RULE = re.compile(r"Edit\((//|~/)([^*?\[\]]*?)/?/\*\*\)")
 PROTECT_HINT = ("Add the permissions.deny rule {rule} to user or managed settings (a project's "
                 "own don't count): it binds sandboxed Bash and the Edit and Write tools. "
                 "dotclaude: ~/.claude/settings.machine.json, then ./setup.sh (while a lane holds "
@@ -90,30 +92,36 @@ PROTECT_HINT = ("Add the permissions.deny rule {rule} to user or managed setting
 
 
 def edit_rule_path(rule, home):
-    """(path, subtree) for a deny rule in EDIT_RULE's form, or None. A rule with `/**` covers the
-    path and everything under it; one without covers that exact path only (probed for a file)."""
+    """The dir a deny rule in EDIT_RULE's form covers, with everything under it, or None."""
     m = EDIT_RULE.fullmatch(rule) if isinstance(rule, str) else None
     if not m:
         return None
-    return (os.path.normpath(("/" if m.group(1) == "//" else home + "/") + m.group(2)),
-            bool(m.group(3)))
+    return os.path.normpath(("/" if m.group(1) == "//" else home + "/") + m.group(2))
 
 
-def edit_rule(path):
-    """The Edit deny rule that protects `path`: a dir and everything under it, or one file."""
+def edit_rule(path, roots=()):
+    """The Edit deny rule that protects `path`: the real dir it is (or, for a file or a link,
+    the dir holding it) and everything under it. None when that dir is a write root or above
+    one, since the rule would cover the whole root, or when its name holds a glob character."""
     home = os.path.realpath(os.path.expanduser("~"))
-    tail = "" if os.path.isfile(path) and not os.path.islink(path) else "/**"
-    if under(path, home) and path != home:
-        return f"Edit(~/{os.path.relpath(path, home)}{tail})"
-    return f"Edit(/{path}{tail})"
+    leaf = os.path.islink(path) or (os.path.lexists(path) and not os.path.isdir(path))
+    d = os.path.realpath(os.path.dirname(path) if leaf else path)
+    if any(under(r, d) for r in [*roots, home]) or re.search(r"[*?\[\]]", d):
+        return None
+    if under(d, home):
+        return f"Edit(~/{os.path.relpath(d, home)}/**)"
+    return f"Edit(/{d}/**)"
 
 
 class Refusal(Exception):
-    def __init__(self, rule, path, reason, protect=False):
-        # protect: the fix is to write-protect `path`, so name the rule that does.
-        self.fix = edit_rule(path) if protect else None
+    def __init__(self, rule, path, reason, protect=None):
+        # protect: the Machine, when the fix is to write-protect `path`; name the rule that does.
+        self.fix = edit_rule(path, getattr(protect, "roots", ())) if protect else None
         if self.fix:
             reason = f"{reason} {PROTECT_HINT.format(rule=self.fix)}."
+        elif protect:
+            reason = (f"{reason} Move it into a dir an Edit deny rule can protect (a rule can't "
+                      "cover a write root itself or a name with a glob character).")
         super().__init__(reason)
         self.rule, self.path, self.reason = rule, path, reason
 
@@ -143,8 +151,7 @@ def load_settings(env):
     if project:
         files += [(os.path.join(project, ".claude", "settings.json"), False),
                   (os.path.join(project, ".claude", "settings.local.json"), False)]
-    out = {"excludedCommands": [], "denyWrite": [], "allowWrite": [], "editDeny": [],
-           "editDenyExact": []}
+    out = {"excludedCommands": [], "denyWrite": [], "allowWrite": [], "editDeny": []}
     errors = []
     for path, machine_wide in files:
         try:
@@ -161,9 +168,9 @@ def load_settings(env):
         perms = data.get("permissions") if isinstance(data, dict) else None
         deny = perms.get("deny") if isinstance(perms, dict) else None
         if machine_wide and isinstance(deny, list):
-            for parsed in (edit_rule_path(r, home) for r in deny):
-                if parsed:
-                    out["editDeny" if parsed[1] else "editDenyExact"].append(parsed[0])
+            for parsed in (edit_rule_path(r, os.path.realpath(home)) for r in deny):
+                if isinstance(parsed, str):
+                    out["editDeny"].append(parsed)
         sandbox = data.get("sandbox") if isinstance(data, dict) else None
         if not isinstance(sandbox, dict):
             continue
@@ -242,15 +249,17 @@ class Machine:
         own = [os.path.realpath(os.path.join(os.path.dirname(os.path.realpath(__file__)),
                                              os.pardir)),
                os.path.realpath(os.path.join(self.home, "dotclaude"))]
-        deny = settings["editDeny"] + [
+        sandbox_only = [
             d for d in settings["denyWrite"]
             if any(under(os.path.abspath(d), o) or under(os.path.realpath(d), o) for o in own)]
-        self.deny = ([os.path.abspath(d) for d in deny] + [os.path.realpath(d) for d in deny]
-                     + [self.resolved(os.path.abspath(d)) for d in deny]
+        # An Edit rule counts at its own path only, and only when no symlink sits along it: what
+        # a rule through a link binds wasn't probed, and a link's target can change.
+        self.deny = ([os.path.abspath(d) for d in settings["editDeny"]
+                      if os.path.realpath(d) == os.path.abspath(d)]
+                     + [os.path.abspath(d) for d in sandbox_only]
+                     + [os.path.realpath(d) for d in sandbox_only]
+                     + [self.resolved(os.path.abspath(d)) for d in sandbox_only]
                      + [os.path.join(self.home, ".claude")])
-        exact = settings["editDenyExact"]
-        self.deny_exact = {f(d) for d in exact
-                           for f in (os.path.abspath, os.path.realpath, self.resolved)}
         self.gitconfig = os.path.join(self.home, ".gitconfig")
 
     def resolved(self, p):
@@ -283,9 +292,7 @@ class Machine:
         # Resolved only: a path reached through a symlink in a denied dir is not in that dir.
         # The missing tail has no symlinks, so a denied name that doesn't exist yet still counts.
         full = os.path.normpath(os.path.join(real, os.path.relpath(p, q)))
-        # An exact rule protects a regular file; a dir needs `/**` (only files were probed).
-        if any(under(full, d) for d in self.deny) or \
-                (full in self.deny_exact and os.path.isfile(full)):
+        if any(under(full, d) for d in self.deny):
             return False
         uid = os.getuid()
         c = real
@@ -492,7 +499,7 @@ def check_rule1(m, env, cwd, project):
         if not is_trusted:
             target = m.chain(path, "rule1", lambda bad, path=path: Refusal(
                 "rule1", bad, f"git reads the config file {path}, which a sandboxed session can "
-                f"write ({bad}).", protect=True))
+                f"write ({bad}).", protect=m))
         if not os.path.isfile(target):
             continue  # judged above; only a regular file is parsed
         includes, hooks = config_refs(target, home)
@@ -506,7 +513,7 @@ def check_hooks_dir(m, hdir):
     def refuse(bad):
         return Refusal("rule1", bad, f"core.hooksPath points at {hdir}, which a sandboxed "
                        f"session can write ({bad}); a repo's install step (husky and similar) "
-                       "often sets it.", protect=True)
+                       "often sets it.", protect=m)
     if not os.path.lexists(hdir):
         bad = m.exposed(hdir)
         if bad:
@@ -520,9 +527,9 @@ def check_hooks_dir(m, hdir):
 
 # --- Rule 2: PATH ------------------------------------------------------------------------------
 
-def path_refusal(head, path):
+def path_refusal(head, path, m):
     return Refusal("rule2", path, f"`{head}` resolves through {path}, which a sandboxed session "
-                   "can write. Drop it from PATH, or protect it.", protect=True)
+                   "can write. Drop it from PATH, or protect it.", protect=m)
 
 
 def which(m, head, path_var, label, depth):
@@ -535,11 +542,11 @@ def which(m, head, path_var, label, depth):
                           f"PATH holds {entry or 'an empty entry'!r}, which searches the working "
                           f"directory for `{label}`. Drop it from PATH.")
         if os.path.lexists(entry):
-            m.chain(entry, "rule2", lambda bad: path_refusal(label, bad))
+            m.chain(entry, "rule2", lambda bad: path_refusal(label, bad, m))
         else:
             bad = m.exposed(entry)
             if bad:
-                raise path_refusal(label, bad)
+                raise path_refusal(label, bad, m)
         cand = os.path.join(entry, head)
         if found is None and os.path.isfile(cand) and os.access(cand, os.X_OK):
             found = cand
@@ -551,7 +558,7 @@ def check_file(m, path, path_var, label, depth):
     if depth > SHEBANG_DEPTH:
         raise Refusal("rule2", path, f"`{label}` runs through more than {SHEBANG_DEPTH} "
                       "interpreters; could not verify it.")
-    p = m.chain(path, "rule2", lambda bad: path_refusal(label, bad))
+    p = m.chain(path, "rule2", lambda bad: path_refusal(label, bad, m))
     try:
         with open(p, "rb") as f:
             line = f.readline(512)
@@ -584,7 +591,7 @@ def check_rule2(m, head, path_var):
         else:
             bad = m.exposed(p)
             if bad:
-                raise path_refusal(head, bad)
+                raise path_refusal(head, bad, m)
     else:
         which(m, head, path_var, head, 0)
 
@@ -614,6 +621,7 @@ def judge(heads, cwd, env, settings):
 # --- Scan ----------------------------------------------------------------------------------------
 
 SCAN_DEPTH = 4
+SYSTEM_GITS = ("/usr/bin/git", "/usr/local/bin/git", "/opt/homebrew/bin/git")
 
 
 def repos_under(root, depth=SCAN_DEPTH):
@@ -644,35 +652,49 @@ def repos_under(root, depth=SCAN_DEPTH):
 def scan(roots, env):
     """What judge() would refuse for an excluded call from each repo's root: rule 2 once per
     excluded head, rule 1 per repo. Only machine-wide settings load, as for any project.
-    Returns [(where, Refusal)] and the settings read errors."""
+    Each PATH entry is judged on its own, so one run names every writable one. Returns
+    [(where, Refusal)], [(where, error)] for what it couldn't check, and the settings errors."""
     env = {k: v for k, v in env.items() if k != "CLAUDE_PROJECT_DIR"}
     settings, errors = load_settings(env)
     heads = sorted({first_word(normalize(p)) for p in settings["excludedCommands"]} - {""})
-    found = []
+    found, unchecked = [], []
     m = Machine(env, settings, env.get("HOME") or os.getcwd())
-    for head in heads:
-        try:
-            check_rule2(m, head, env.get("PATH", ""))
-        except Refusal as r:
-            found.append(("PATH", r))
+    for entry in env.get("PATH", "").split(":"):
+        for head in heads:
+            try:
+                check_rule2(m, head, entry)
+            except Refusal as r:
+                found.append(("PATH", r))
+                break
+            except Exception as e:
+                unchecked.append((entry or "(empty PATH entry)", e))
+                break
     for root in roots:
         for repo in repos_under(root):
             try:
                 check_rule1(Machine(env, settings, repo), env, repo, repo)
             except Refusal as r:
                 found.append((repo, r))
-    return found, errors
+            except Exception as e:
+                unchecked.append((repo, e))
+    return found, unchecked, errors
 
 
 def git_read(cwd, *args):
     """A git command that reads objects only. The scan runs outside the sandbox in repos whose
     config it hasn't judged, so it runs no command a config can attach a program to (status
     runs fsmonitor and filters, diff runs drivers), and skips the global and system config."""
+    # A system git only: PATH's may be one the scan just found writable. No transport, so a
+    # partial clone can't fetch a missing object through a program its config names.
+    git = next((g for g in SYSTEM_GITS if os.path.isfile(g)), None)
+    if not git:
+        return None
     env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
-    env.update(GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull, GIT_OPTIONAL_LOCKS="0")
+    env.update(GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull, GIT_OPTIONAL_LOCKS="0",
+               GIT_ALLOW_PROTOCOL="none", GIT_NO_LAZY_FETCH="1")
     try:
-        p = subprocess.run(["git", "--no-pager", *args], cwd=cwd, env=env, capture_output=True,
-                           text=True, timeout=10)
+        p = subprocess.run([git, "--no-pager", *args], cwd=cwd, env=env, capture_output=True,
+                           text=True, errors="surrogateescape", timeout=10)
     except (OSError, subprocess.SubprocessError):
         return None
     return p.stdout if p.returncode == 0 else None
@@ -688,10 +710,11 @@ def evidence(path, limit=12):
     top = (git_read(d, "rev-parse", "--show-toplevel") or "").strip()
     head = {}
     if top:
-        for line in (git_read(top, "ls-tree", "-r", "HEAD", "--", os.path.relpath(d, top))
-                     or "").splitlines():
-            meta, _, name = line.partition("\t")
-            head[os.path.join(top, name)] = meta.split()[-1]
+        for entry in (git_read(top, "ls-tree", "-r", "-z", "HEAD", "--",
+                               os.path.relpath(d, top)) or "").split("\0"):
+            meta, _, name = entry.partition("\t")
+            if name:
+                head[os.path.join(top, name)] = meta.split()[-1]
     rows = []
     for name in names:
         p = os.path.join(d, name)
@@ -700,7 +723,7 @@ def evidence(path, limit=12):
         except OSError:
             continue
         state = ""
-        if top:
+        if top and not stat.S_ISDIR(st.st_mode):  # ls-tree -r lists blobs, not dirs
             oid = head.get(p)
             if oid is None:
                 state = "  not in HEAD"
@@ -723,9 +746,11 @@ def run_scan(roots):
     """Print each refusal once per path with what the path holds now, then settings.machine.json
     with the Edit deny rules that would clear them. Exits 1 when anything would be refused."""
     home = os.path.expanduser("~")
-    found, errors = scan(roots or [home], os.environ)
+    found, unchecked, errors = scan(roots or [home], os.environ)
     for e in errors:
         print(f"settings not read: {e}")
+    for where, e in unchecked:
+        print(f"{where}: could not check ({type(e).__name__}: {e})")
     first = {}
     for where, r in found:
         first.setdefault(r.path, (where, r))
@@ -734,8 +759,12 @@ def run_scan(roots):
         print(f"{where}: excluded-guard ({r.rule}): {r.reason}")
         if r.fix:
             print(f"  {r.path} holds, before you protect it:")
-            print("\n".join(evidence(r.path)))
-            rules.append(r.fix)
+            try:
+                print("\n".join(evidence(r.path)))
+            except Exception as e:
+                print(f"    (could not read it: {type(e).__name__}: {e})")
+            if r.fix not in rules:
+                rules.append(r.fix)
     if rules:
         machine = os.path.join(home, ".claude", "settings.machine.json")
         try:
@@ -758,7 +787,7 @@ def run_scan(roots):
         print(f"After a look at each dir above, {machine} with the rules added (then ./setup.sh, "
               "or while a lane holds the install, that lane's `lane lock install -- ./setup.sh`):")
         print(json.dumps(data, indent=2))
-    return 1 if first or errors else 0
+    return 1 if first or unchecked or errors else 0
 
 
 def deny(reason):
@@ -785,8 +814,7 @@ def main():
             heads = [first_word(normalize(command)) or "(unknown)"]
     except Exception as e:
         log(f"match error {type(e).__name__}: {e}: treating as a candidate")
-        settings = {"excludedCommands": [], "denyWrite": [], "allowWrite": [], "editDeny": [],
-                    "editDenyExact": []}
+        settings = {"excludedCommands": [], "denyWrite": [], "allowWrite": [], "editDeny": []}
         heads = [first_word(normalize(command)) or "(unknown)"]
     if not heads:
         return

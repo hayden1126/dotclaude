@@ -423,6 +423,17 @@ class Rule2Path(Guard):
         self.env["PATH"] = f"{dbin}:/usr/bin"
         self.allowed("git push")
 
+    def test_an_edit_rule_through_a_symlink_protects_nothing(self):
+        # What a rule through a link binds wasn't probed, so the guard doesn't follow it.
+        real = self.make_bin("realbin", protect=False)
+        link = os.path.join(self.tmp, "linkbin")
+        os.symlink(real, link)
+        self.env["PATH"] = f"{real}:/usr/bin"
+        self.protect(link)
+        self.denied("git push", "rule2", real)
+        self.protect(real)
+        self.allowed("git push")
+
     def test_edit_deny_rule_forms(self):
         hbin = self.make_bin(os.path.join("home", "hbin"), protect=False)
         self.env["PATH"] = f"{hbin}:/usr/bin"
@@ -663,6 +674,58 @@ class Scan(Guard):
         block = json.loads(out[out.index("\n{\n") + 1:])
         self.assertEqual(block["effortLevel"], "high")
         self.assertEqual(block["permissions"]["deny"], ["Edit(~/x/**)", f"Edit(/{self.wbin}/**)"])
+
+    def test_a_partial_clone_s_lazy_fetch_runs_nothing(self):
+        # ls-tree in a partial clone fetches a missing object through the repo's own transport.
+        marker = os.path.join(self.tmp, "ran")
+        self.write(os.path.join(self.proj, "sub", "f"), "x")
+        self.git("add", ".", cwd=self.proj)
+        self.git("commit", "-qm", "sub", cwd=self.proj)
+        tree = self.git("rev-parse", "HEAD:sub", cwd=self.proj).strip()
+        os.remove(os.path.join(self.proj, ".git", "objects", tree[:2], tree[2:]))
+        for k, v in (("core.repositoryformatversion", "1"), ("extensions.partialClone", "origin"),
+                     ("remote.origin.url", f"ext::sh -c touch% {marker}"),
+                     ("remote.origin.promisor", "true"), ("protocol.ext.allow", "always"),
+                     ("core.hooksPath", "sub")):
+            self.git("config", k, v, cwd=self.proj)
+        self.assertEqual(self.scan(self.tmp)[0], 1)
+        self.assertFalse(os.path.exists(marker))
+
+    def test_a_repo_it_cannot_check_is_reported_and_the_scan_goes_on(self):
+        odd = self.mkdir("odd")
+        self.write(os.path.join(odd, ".git"), "")
+        self.env["PATH"] = f"{self.wbin}:/usr/bin"
+        code, out = self.scan(self.tmp)
+        self.assertEqual(code, 1, out)
+        self.assertIn(f"{odd}: could not check", out)
+        self.assertIn(f'"Edit(/{self.wbin}/**)"', out)
+
+    def test_every_writable_path_dir_is_listed_in_one_run(self):
+        w2 = self.make_bin("wbin2", protect=False)
+        self.env["PATH"] = f"{self.wbin}:{w2}:/usr/bin"
+        out = self.scan(self.tmp)[1]
+        for d in (self.wbin, w2):
+            self.assertIn(f'"Edit(/{d}/**)"', out)
+
+    def test_no_rule_is_offered_for_a_write_root_itself(self):
+        inc = self.write(os.path.join(self.home, ".gitconfig.local"), "")
+        self.write(os.path.join(self.home, ".gitconfig"), f"[include]\n\tpath = {inc}\n")
+        code, out = self.scan(self.tmp)
+        self.assertEqual(code, 1, out)
+        self.assertIn("Move it into a dir", out)
+        self.assertNotIn(f"Edit(/{self.home}", out)
+        self.assertNotIn("Edit(~/**)", out)
+
+    def test_evidence_reads_odd_names_and_tracked_subdirs(self):
+        hooks = os.path.join(self.proj, ".githooks")
+        self.write(os.path.join(hooks, "pre push é"), MARKER, 0o755)
+        self.write(os.path.join(hooks, "lib", "x"), "x")
+        self.git("add", ".", cwd=self.proj)
+        self.git("commit", "-qm", "hooks", cwd=self.proj)
+        self.git("config", "core.hooksPath", ".githooks", cwd=self.proj)
+        out = self.scan(self.tmp)[1]
+        self.assertIn("pre push é  same as HEAD", out)
+        self.assertRegex(out, r"  lib/\n")
 
     def test_evidence_runs_no_program_a_repo_config_names(self):
         # The scan runs outside the sandbox; a repo's fsmonitor or diff driver must not run.
