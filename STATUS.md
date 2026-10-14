@@ -106,6 +106,9 @@ stored here).
   - `lane-addr` merged as #98 (2026-10-14: `lane addr`, titles `repo · label` that keep the main
     project, and a bar that strips both title forms). Installed from main, which released its hold.
     #98 merged before the lane's own reinstall and live check, so the lead did them from main.
+    Live check (lead, 2026-10-14): every tab's label renders clean in both title forms, and
+    Hayden confirmed #97's Shift+arrows work. The lane is closed (`lane done` ended its session
+    8a52a566 and 9 children).
   - Live: `tab-bar` (PR 2 and the `fix/tab-bar-tests` PR) and `excluded-guard` (narrow-excluded Part 2, opened 2026-10-14).
     **Merge order: tab-bar's `fix/tab-bar-tests`, then `excluded-guard` and `tab-bar` PR 2 by readiness.** The lead
     installs only the next to merge.
@@ -251,13 +254,16 @@ stored here).
   `claude -p` repro and the 2.1.285 boundary; the karaoke session's has the incident.
 
 ## Notes for next session
-- **Next (lead, main checkout): run `lane-addr`, `excluded-guard` and `tab-bar` PR 2 to merge
-  by readiness** ("In flight"). As of 2026-10-14: #96 merged and installed; lane-addr has merged
-  main 623923d and its `lane addr lead` reached the lead live; excluded-guard was just opened
-  (plan mode). Close `tab-bar` with `lane done` after its PR 2 merges (Hayden's ask). Start with
-  `lane ls` and `lane asks`. A lane is handed back only once `handoff-check -C <lane path>`
-  passes and the board shows no `handoff?` flag. After each merge, follow the install step in
-  "In flight", then propose `lane done <id>` (it ends the lane's own session itself).
+- **Next (lead, main checkout): take tab-bar's `fix/tab-bar-tests` to merge, then
+  `excluded-guard` and `tab-bar` PR 2 by readiness** ("In flight"). As of 2026-10-14: #98
+  merged, installed from main, and lane-addr closed. The fix PR repairs #97's
+  `test_claude_saved` Wiring failure (fails every run on main) and the Shift+Up phone flake
+  (about 1 in 5). It holds the install and is running the full suites. After it merges:
+  reinstall from main, and check `~/.tmux.conf`'s `source-file` lines too, not only symlinks.
+  Then tab-bar runs its live smoke and Hayden's phone tap test. Start with `lane ls` and
+  `lane asks`. A lane is handed back only once `handoff-check -C <lane path>` passes and the
+  board shows no `handoff?` flag. Close `tab-bar` with `lane done` after its PR 2 merges
+  (Hayden's ask).
   **Message a lane at its messaging socket**: `uds:/run/user/1000/cc-socks/<pid>.sock`, the
   `messagingSocketPath` in `~/.claude/sessions/<pid>.json` of the session whose cwd is in the
   lane. Resolve it fresh before each send, since a pass makes a new pid. A ListAgents name
