@@ -15,6 +15,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 import unittest.mock
@@ -986,6 +987,19 @@ class Moves(unittest.TestCase):
         self.assertEqual(tb.new_row(groups, shared, "@4", [P("c:1", 0)]),
                          {"@4": P("c:2", 0, "c:1")})
 
+    def test_a_new_row_from_a_lone_tab_does_nothing(self):
+        _, groups, shared, _ = arranged({})
+        self.assertEqual(tb.new_row(groups, shared, "@5", []), {})     # kar's only tab
+        _, groups, shared, _ = arranged({}, [w for w in WINS if w[1] != "@6"])
+        self.assertEqual(tb.new_row(groups, shared, "@1", []), {})     # the shared row's only
+
+    def test_a_new_row_from_a_shared_tab_sits_just_above_the_shared_rows(self):
+        _, groups, shared, _ = arranged({})
+        places = tb.new_row(groups, shared, "@6", [])
+        rows, *_ = arranged(places)
+        self.assertEqual(rows, [(REPO_KEY, ["@2", "@3", "@4"]), (KAR_KEY, ["@5"]),
+                                ("c:1", ["@6"]), ("s", ["@1"])])
+
     def test_rename_row_names_every_member_and_only_in_a_custom_row(self):
         _, groups, _, _ = arranged({"@3": P("c:1", 0, REPO_KEY), "@6": P("c:1", 1, REPO_KEY)})
         self.assertEqual(tb.rename_row(groups, "@6", "work"),
@@ -999,6 +1013,66 @@ class Moves(unittest.TestCase):
                 self.assertEqual(tb.drop_side(rows, "@3", x, 0), want)
         self.assertIsNone(tb.drop_side(rows, "@9", 20, 0))
         self.assertIsNone(tb.drop_side([], "@3", 20, 0))
+
+    # One logical row a b c d drawn as [a b] / [c d] (lines 0 and 1), and kar's lead on line 2.
+    ROW4 = {f"@{i}": tb.Tab("lane", "/r/.git", "repo", n) for i, n in zip(range(1, 5), "abcd")}
+    ROW4["@5"] = tb.Tab("lead", "/k/.git", "kar", "lead")
+    NAV4 = [(0, [("@1", 56, 18), ("@2", 75, 18)]), (1, [("@3", 56, 18), ("@4", 75, 18)]),
+            (2, [("@5", 56, 18)])]
+
+    def drawn(self, places=None):
+        """(groups, shared, nav rows) for ROW4 at a width that splits its row 2 + 2."""
+        groups, shared, _ = tb.group_windows([(i, f"@{i}") for i in range(1, 6)], self.ROW4,
+                                             places or {})
+        lay = tb.lay_out(groups, shared, 100, "@1", 50, 0)
+        return groups, shared, tb.parse_nav_rows(tb.nav_value(lay))
+
+    def line_of(self, nav, wid):
+        return next(line for line, tabs in nav for w, _, _ in tabs if w == wid)
+
+    def test_a_same_row_move_lands_on_the_drawn_line_aimed_at(self):
+        groups, shared, nav = self.drawn()
+        self.assertEqual([[w for w, _, _ in tabs] for _, tabs in nav],
+                         [["@1", "@2"], ["@3", "@4"], ["@5"]])
+        for src, dst, after, want in (
+                ("@1", "@3", False, True),      # Down on a, or a left-half drop of a on c
+                ("@4", "@2", True, False),      # a right-half drop of d on b
+                ("@1", "@3", True, True),       # already lands on line 1
+                ("@4", "@2", False, False),
+                ("@2", "@1", False, False),     # one line: nothing shifts across lines
+                ("@5", "@3", False, False),     # another row: put() leaves no gap here
+                ("@1", "@5", True, True)):
+            with self.subTest(src=src, dst=dst, after=after):
+                self.assertEqual(tb.on_line(groups, shared, nav, src, dst, after), want)
+                places = tb.put(groups, shared, src, dst, want)
+                self.assertEqual(self.line_of(self.drawn(places)[2], src),
+                                 self.line_of(nav, dst))
+
+    def test_a_drop_on_a_lines_gutter_or_tail_lands_on_that_line(self):
+        groups, shared, nav = self.drawn()
+        for src, x, line, want in (("@1", 3, 1, ["@1", "@4"]), ("@4", 150, 0, ["@1", "@4"]),
+                                   ("@5", 3, 1, ["@5", "@3"])):
+            with self.subTest(src=src, line=line):
+                dst, after = tb.row_end(nav, x, line)
+                places = tb.put(groups, shared, src, dst,
+                                tb.on_line(groups, shared, nav, src, dst, after))
+                drawn = self.drawn(places)[2]
+                self.assertEqual([w for w, _, _ in drawn[line][1]][:2], want)
+
+    def test_move_down_through_put_and_lay_out_lands_on_the_line_below(self):
+        groups, shared, nav = self.drawn()
+        dst = tb.climb([tabs for _, tabs in nav], "@1", "down")
+        self.assertEqual(dst, "@3")
+        places = tb.put(groups, shared, "@1", dst, tb.on_line(groups, shared, nav, "@1", dst, False))
+        self.assertEqual(self.line_of(self.drawn(places)[2], "@1"), 1)
+        # Without the flip, the gap put() closes puts it back on line 0.
+        self.assertEqual(self.line_of(self.drawn(tb.put(groups, shared, "@1", dst, False))[2],
+                                      "@1"), 0)
+
+    def test_a_hidden_member_leaves_the_side_alone(self):
+        groups, shared, nav = self.drawn()
+        hidden = [(line, [t for t in tabs if t[0] != "@4"]) for line, tabs in nav]
+        self.assertFalse(tb.on_line(groups, shared, hidden, "@1", "@3", False))
 
     def test_a_drop_on_a_rows_gutter_or_tail_goes_first_or_last(self):
         rows = [(0, [("@2", 19, 32), ("@3", 52, 32)]), (2, [("@1", 19, 32)])]
@@ -1168,7 +1242,6 @@ class Conf(unittest.TestCase):
         self.assertNotIn("kill-window", block)
         self.assertNotIn("respawn-window", block)
         self.assertNotRegex(block, r"display-menu[^\n]* -O")
-        self.assertIn("bind -n MouseDown1Status set -F @tab_bar_drag '#{window_id}'\n", text)
 
     def test_every_hook_is_silent_exits_0_and_uses_the_full_path(self):
         # A run-shell -b that prints or fails puts the active pane into view mode.
@@ -1215,6 +1288,29 @@ class Conf(unittest.TestCase):
         with open(CONF) as f:
             return f.read()
 
+    def bindings(self):
+        """Every `bind` in claude.conf, whole: a { block to its closing } at column 0, else
+        the line and its \\ continuations."""
+        out, block = [], None
+        for line in self.conf().splitlines():
+            if block is None and line.startswith("bind "):
+                block = [line]
+                if not line.endswith(("{", "\\")):
+                    out.append(line)
+                    block = None
+            elif block is not None:
+                block.append(line)
+                if (block[0].endswith("{") and line == "}") \
+                        or (block[0].endswith("\\") and not line.endswith("\\")):
+                    out.append("\n".join(block))
+                    block = None
+        return out
+
+    def test_the_b_check_sees_a_b_anywhere_in_a_binding(self):
+        for bad in ("run-shell -b 'x'", "run-shell -C -b 'x'", "run-shell -bC 'x'"):
+            self.assertRegex(f"bind -n X {{\n  if -F '1' {{\n    {bad}\n  }}\n}}",
+                             r"\brun-shell(?:\s+-\w+)*?\s+-\w*b")
+
     def tap_menu(self, binding):
         """The tap branch inside `binding`: from its window_active test to its switch-client."""
         text = self.conf()
@@ -1237,24 +1333,57 @@ class Conf(unittest.TestCase):
     def test_the_drag_bindings_record_drop_and_clear(self):
         text = self.conf()
         self.assertIn("bind -n MouseUp1Status {\n  set -u @tab_bar_drag\n", text)
-        self.assertIn("bind -n MouseDragEnd1Status {\n  if -F '#{==:#{@tab_bar_drag},#{window_id}}'"
-                      " {\n    set -u @tab_bar_drag\n", text)
-        self.assertIn("    run-shell '\"$HOME/.local/bin/tmux-tab-bar\" drop \"#{@tab_bar_drag}\" "
+        # A press records a tab's id, or `more` for +N; every other press clears the flag.
+        self.assertIn("bind -n MouseDown1Status set -F @tab_bar_drag '#{?#{==:#{mouse_status_range},"
+                      "window},#{window_id},#{mouse_status_range}}'\n", text)
+        for key in ("MouseDown1StatusDefault", "MouseDown1StatusLeft", "MouseDown1StatusRight",
+                    "MouseDragEnd1Border"):
+            with self.subTest(key=key):
+                self.assertIn(f"bind -n {key} set -u @tab_bar_drag\n", text)
+        for line in ("bind -n MouseDown1Pane { set -u @tab_bar_drag ; select-pane -t = ; "
+                     "send-keys -M }\n",
+                     "bind -n MouseDown1Border { set -u @tab_bar_drag ; select-pane -M }\n",
+                     "bind -T copy-mode MouseDown1Pane { set -u @tab_bar_drag ; select-pane }\n",
+                     "bind -T copy-mode-vi MouseDown1Pane { set -u @tab_bar_drag ; select-pane }\n"):
+            with self.subTest(line=line):
+                self.assertIn(line, text)
+        # The end: the tap on its own tab, the window list from +N to +N, a drop from a tab,
+        # else nothing; the flag cleared on every path.
+        self.assertIn("bind -n MouseDragEnd1Status {\n  if -F '#{&&:#{==:#{mouse_status_range},"
+                      "window},#{==:#{@tab_bar_drag},#{window_id}}}' {\n    set -u @tab_bar_drag\n",
+                      text)
+        self.assertIn("  } {\n    if -F '#{&&:#{==:#{mouse_status_range},more},"
+                      "#{==:#{@tab_bar_drag},more}}' {\n      set -u @tab_bar_drag\n"
+                      "      choose-tree -Zw\n    } {\n      if -F '#{m:@*,#{@tab_bar_drag}}' {\n"
+                      "        run-shell '\"$HOME/.local/bin/tmux-tab-bar\" drop \"#{@tab_bar_drag}\" "
                       "\"#{window_id}\" \"#{mouse_x}\" \"#{mouse_status_line}\" "
                       "\"#{mouse_status_range}\" \"#{client_name}\" >/dev/null 2>&1; true'\n"
-                      "    set -u @tab_bar_drag\n", text)
+                      "      }\n      set -u @tab_bar_drag\n    }\n  }\n}\n", text)
         self.assertIn("bind -n MouseDragEnd1StatusDefault {\n  run-shell '\"$HOME/.local/bin/"
                       "tmux-tab-bar\" drop-row \"#{@tab_bar_drag}\" \"#{mouse_x}\" "
                       "\"#{mouse_status_line}\" \"#{client_name}\" >/dev/null 2>&1; true'\n"
                       "  set -u @tab_bar_drag\n}", text)
         self.assertNotIn("bind -n MouseDrag1Status", text)        # no live preview
-        self.assertNotRegex(text, r"tmux-tab-bar[^\n]*(drop|move|menu|name-row)[^\n]*-b")
+        # No -b anywhere in a binding: two quick drops or moves must queue, not race.
+        bindings = self.bindings()
+        self.assertGreater(len(bindings), 25)
+        for block in bindings:
+            with self.subTest(binding=block[:60]):
+                self.assertNotRegex(block, r"\brun-shell(?:\s+-\w+)*?\s+-\w*b")
         # The pane guard: tmux 3.7c's default inside it, and the release kept for apps.
         self.assertIn("bind -n MouseDrag1Pane if -F '#{==:#{@tab_bar_drag},}' { if -F "
                       "'#{||:#{pane_in_mode},#{mouse_any_flag}}' { send-keys -M } "
                       "{ copy-mode -M } }\n", text)
         self.assertIn("bind -n MouseDragEnd1Pane if -F '#{@tab_bar_drag}' "
                       "{ set -u @tab_bar_drag } { send-keys -M }\n", text)
+        # A pane in copy mode looks its keys up in the mode's table first: guarded there too.
+        for table in ("copy-mode", "copy-mode-vi"):
+            with self.subTest(table=table):
+                self.assertIn(f"bind -T {table} MouseDrag1Pane if -F '#{{==:#{{@tab_bar_drag}},}}'"
+                              " { select-pane ; send-keys -X begin-selection }\n", text)
+                self.assertIn(f"bind -T {table} MouseDragEnd1Pane if -F '#{{@tab_bar_drag}}' "
+                              "{ set -u @tab_bar_drag } { send-keys -X copy-pipe-and-cancel }\n",
+                              text)
 
     def test_ctrl_b_shift_arrows_carry_the_tab(self):
         text = self.conf()
@@ -1751,6 +1880,13 @@ class FakeTmux(unittest.TestCase):
         cmd = items[items.index("Auto place") + 2]
         self.assertEqual(tmux_words(cmd), [["run-shell", '"$HOME/.local/bin/tmux-tab-bar" move '
                                             'auto /dev/pts/7 @2 --menu >/dev/null 2>&1; true']])
+        # Name row…: the tap menu's verified prompt (a quoted template with %%%), aimed at the
+        # window, and not reopening the menu.
+        k = items.index("#{?@tab_row_custom,,-}Name row…")
+        self.assertEqual(items[k + 1:k + 3], [
+            "N", 'command-prompt -p "row name:" "set -w -t @2 @tab_row_name_in \\"%%%\\" ; '
+                 'run-shell \'\\"$HOME/.local/bin/tmux-tab-bar\\" name-row /dev/pts/7 @2 '
+                 '>/dev/null 2>&1; true\'"'])
         for args in (("menu", "/dev/pts/7;x"), ("menu", "/dev/pts/7", "@9"),
                      ("move", "sideways", "/dev/pts/7"), ("reset",), ("name-row",),
                      ("drop-row", "@1", "3", "0")):
@@ -1780,7 +1916,8 @@ class FakeTmux(unittest.TestCase):
             mine = json.load(f)
         self.assertEqual(tb.parse_place(mine["place"]), tb.Place("p:" + self.common, 1))
         self.assertEqual({k: v for k, v in mine.items() if k != "place"}, recs["mine"])
-        after = {n: open(os.path.join(reg, n)).read() for n in os.listdir(reg)}
+        after = {n: open(os.path.join(reg, n)).read() for n in os.listdir(reg)
+                 if n != tb.RECORDS_LOCK}
         self.assertEqual(set(after), set(before))       # none created, no temp file left
         for n in before:
             if n != "mine.json":
@@ -1789,6 +1926,43 @@ class FakeTmux(unittest.TestCase):
         self.run_cmd("move", "auto", "/dev/pts/7", XDG_STATE_HOME=state_home)
         with open(os.path.join(reg, "mine.json")) as f:
             self.assertNotIn("place", json.load(f))
+
+    def test_a_record_deleted_before_the_replace_is_never_brought_back(self):
+        # The registry deletes a record (under the records lock) after the update read it: the
+        # update's compare and replace wait for the lock, then see it gone.
+        reg = os.path.join(self.tmp, "reg")
+        os.makedirs(reg)
+        path = os.path.join(reg, "a.json")
+        with open(path, "w") as f:
+            json.dump({"socket": "/fake/sock", "server_start": 1700, "server_pid": 42,
+                       "pane": "%2"}, f)
+        fd = os.open(os.path.join(reg, tb.RECORDS_LOCK), os.O_RDWR | os.O_CREAT, 0o600)
+        self.addCleanup(lambda: os.close(fd))
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        update = threading.Thread(target=tb.update_record,
+                                  args=(path, ("/fake/sock", 1700, 42), {"%2": '{"x":1}'}))
+        update.start()
+        deadline = time.time() + 5                      # its temp file: it is at the lock
+        while time.time() < deadline and not any(n.startswith(".tmp-") for n in os.listdir(reg)):
+            time.sleep(0.01)
+        os.remove(path)
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        update.join(10)
+        self.assertEqual(os.listdir(reg), [tb.RECORDS_LOCK])   # not recreated, no temp left
+
+    def test_a_record_update_goes_ahead_past_the_lock_bound(self):
+        reg = os.path.join(self.tmp, "reg")
+        os.makedirs(reg)
+        path = os.path.join(reg, "a.json")
+        with open(path, "w") as f:
+            json.dump({"socket": "/s", "server_start": 1, "server_pid": 2, "pane": "%2"}, f)
+        fd = os.open(os.path.join(reg, tb.RECORDS_LOCK), os.O_RDWR | os.O_CREAT, 0o600)
+        self.addCleanup(lambda: os.close(fd))
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        with unittest.mock.patch.object(tb, "LOCK_WAIT", 0.2):
+            tb.update_record(path, ("/s", 1, 2), {"%2": "p"})
+        with open(path) as f:
+            self.assertEqual(json.load(f)["place"], "p")
 
     def test_outside_tmux_nothing_runs(self):
         env = {k: v for k, v in self.env.items() if k != "TMUX"}
@@ -1815,6 +1989,21 @@ class FakeTmux(unittest.TestCase):
         self.run_layout()
         self.assertEqual(self.calls(), [])
         self.assertTrue(os.path.exists(self.base + ".dirty"))
+
+    def test_a_move_waits_for_a_layout_in_flight_and_lays_out_before_returning(self):
+        # A hook's layout holds the lock briefly: the move waits for it, so the next queued move
+        # reads the bar this one drew (it used to mark the state dirty and return).
+        self.nav_state("@2")
+        fd = os.open(self.base + ".lock", os.O_RDWR | os.O_CREAT, 0o600)
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        timer = threading.Timer(0.5, os.close, (fd,))
+        timer.start()
+        self.addCleanup(timer.join)
+        start = time.monotonic()
+        self.run_cmd("move", "right", "/dev/pts/7")
+        self.assertGreaterEqual(time.monotonic() - start, 0.4)
+        self.assertEqual(self.nav_rows(), [["@3", "@2", "@4"], ["@1"]])
+        self.assertFalse(os.path.exists(self.base + ".dirty"))
 
     def test_the_lock_is_per_tmux_server(self):
         fd = os.open(self.base + ".lock", os.O_RDWR | os.O_CREAT, 0o600)
@@ -1901,6 +2090,24 @@ class Lock(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "boom"):
             tb.run_locked(self.base, run)
         self.assertEqual(len(calls), 1)
+
+    def test_a_wait_runs_once_the_lock_is_free_or_without_it_past_the_bound(self):
+        fd = os.open(self.base + ".lock", os.O_RDWR | os.O_CREAT, 0o600)
+        self.addCleanup(lambda: os.close(fd) if fd is not None else None)
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        calls = []
+        tb.run_locked(self.base, lambda: calls.append(1))           # a hook: marks and leaves
+        self.assertEqual(calls, [])
+        start = time.monotonic()
+        tb.run_locked(self.base, lambda: calls.append(1), wait=0.3)  # still held: runs anyway
+        self.assertEqual(calls, [1])
+        self.assertGreaterEqual(time.monotonic() - start, 0.25)
+        timer = threading.Timer(0.2, fcntl.flock, (fd, fcntl.LOCK_UN))
+        timer.start()
+        self.addCleanup(timer.join)
+        tb.run_locked(self.base, lambda: calls.append(1), wait=5)     # freed: runs under it
+        self.assertEqual(calls, [1, 1])
+        self.assertFalse(os.path.exists(self.base + ".dirty"))
 
     def test_one_pass_when_nothing_marks(self):
         calls = []
@@ -2275,6 +2482,109 @@ class RealTmux(unittest.TestCase):
         self.assertEqual(set(modes), {"0"})
         self.assertEqual(self.show("-qv", "-t", "t:", "@tab_bar_drag").strip(), "")
 
+    # Each tmux default claude.conf wraps (table, key), and the keys it binds that have none.
+    WRAPPED = (("copy-mode", "MouseDown1Pane"), ("copy-mode", "MouseDrag1Pane"),
+               ("copy-mode", "MouseDragEnd1Pane"), ("copy-mode-vi", "MouseDown1Pane"),
+               ("copy-mode-vi", "MouseDrag1Pane"), ("copy-mode-vi", "MouseDragEnd1Pane"),
+               ("root", "MouseDown1Pane"), ("root", "MouseDown1Border"),
+               ("root", "MouseDrag1Pane"), ("root", "MouseDrag1Border"))
+    UNBOUND = (("root", "MouseDown1StatusDefault"), ("root", "MouseDown1StatusLeft"),
+               ("root", "MouseDown1StatusRight"), ("root", "MouseDragEnd1Border"),
+               ("root", "MouseDragEnd1Pane"))
+
+    def keys(self, sock):
+        """{(table, key): command} from a server's full list-keys (a single key's listing
+        prints nothing in 3.7c), each command with its ; separators spelled alike: list-keys
+        writes `\\;` between top-level commands and `;` inside braces."""
+        out = {}
+        for line in self.tmux(sock, ["list-keys"]).stdout.splitlines():
+            m = re.match(r"bind-key\s+(?:-r\s+)?-T\s+(\S+)\s+(\S+)\s+(.*)$", line)
+            if m:
+                out[m.group(1), m.group(2)] = re.sub(r"\s*(?:\\?;)+\s*", " ; ", m.group(3))
+        return out
+
+    def test_every_wrapped_tmux_default_is_kept_whole_inside_its_guard(self):
+        # A tmux upgrade that changes one of these defaults fails here, not silently in a pane.
+        bare = os.path.join(self.tmp, "bare")
+        self.tmux(bare, ["-f", "/dev/null", "new-session", "-d", "-s", "b", "sleep 600"])
+        self.addCleanup(self.tmux, bare, ["kill-server"], False)
+        defaults, ours = self.keys(bare), self.keys(self.sock)
+        for key in self.WRAPPED:
+            with self.subTest(key=key):
+                self.assertIn(key, defaults)
+                self.assertIn(defaults[key], ours[key])
+        for key in self.UNBOUND:
+            with self.subTest(key=key):
+                self.assertNotIn(key, defaults)
+                self.assertIn("@tab_bar_drag", ours[key])
+
+    def test_a_tab_dragged_onto_a_pane_in_copy_mode_copies_nothing(self):
+        self.link_script()
+        self.ti("respawn-pane", "-k", "-t", "t:0", "printf 'one two three four\\n'; sleep 600")
+        self.run_layout()
+        self.find("one two three four")
+        self.ti("copy-mode", "-t", "t:0")
+        self.drag(self.find("beta-title"), (40, 30))                      # a tab onto the pane
+        time.sleep(1)
+        self.assertEqual(self.ti("list-buffers").stdout, "")
+        self.assertEqual(self.show("-qv", "-t", "t:", "@tab_bar_drag").strip(), "")
+        self.assertEqual(self.nav_rows(), [["0", "1"], ["2"]])
+        x, y = self.find("one two three four")                            # a plain drag copies
+        self.drag((x, y), (x + 6, y))
+        self.wait(lambda: self.ti("list-buffers").stdout != "", "the copy-mode drag copied nothing")
+
+    def plus_n(self):
+        """Enough shared windows on a 100-cell client for the bar to end in +N: its (x, y)."""
+        self.link_script()
+        self.ti("source-file", "-", stdin="".join(
+            f"new-window -d -t t:{i} -c {self.plain} 'sleep 600'\n" for i in range(3, 30)))
+        self.to("resize-window", "-t", "o", "-x", "100")
+        self.wait(lambda: self.ti("list-clients", "-F", "#{client_width}").stdout.strip() == "100",
+                  "the client never shrank to 100")
+        self.run_layout()
+        found = []
+
+        def look():
+            for y, line in enumerate(self.screen()[:tb.MAX_ROWS]):
+                m = re.search(r" \+\d+ ", line)
+                if m:
+                    found.append((m.start() + 2, y + 1))
+                    return True
+            return False
+
+        self.wait(look, f"no +N drawn: {self.screen()[:6]}")
+        return found[0]
+
+    def test_a_jittery_tap_on_plus_n_opens_the_window_list(self):
+        x, y = self.plus_n()
+        self.drag((x, y), (x + 1, y))
+        self.wait(lambda: self.ti("display", "-p", "-t", "t:", "#{pane_mode}").stdout.strip()
+                  == "tree-mode", "a jittery tap on +N did not open the window list")
+        self.assertEqual(self.show("-qv", "-t", "t:", "@tab_bar_drag").strip(), "")
+
+    def test_a_drag_from_plus_n_onto_a_tab_moves_nothing(self):
+        x, y = self.plus_n()
+        rows = self.nav_rows()
+        self.drag((x, y), self.find("alpha-title"))
+        time.sleep(1)
+        self.assertEqual(self.nav_rows(), rows)
+        self.assertEqual(self.ti("show-options", "-wqv", "-t", "t:0", "@tab_place").stdout, "")
+        self.assertEqual(self.show("-qv", "-t", "t:", "@tab_bar_drag").strip(), "")
+
+    def test_a_stuck_flag_cleared_by_a_gutter_press_moves_nothing(self):
+        # A release tmux never reported left the flag on a tab; a drag from the gutter onto a
+        # tab must not drop that tab.
+        self.link_script()
+        self.run_layout()
+        rows = self.nav_rows()
+        wid = self.ti("display", "-p", "-t", "t:2", "#{window_id}").stdout.strip()
+        self.ti("set-option", "-t", "t:", "@tab_bar_drag", wid)
+        _, y = self.find("alpha-title")
+        self.drag((2, y + 1), self.find("alpha-title"))                   # row 2's gutter
+        time.sleep(1)
+        self.assertEqual(self.nav_rows(), rows)
+        self.assertEqual(self.show("-qv", "-t", "t:", "@tab_bar_drag").strip(), "")
+
     def test_ctrl_b_shift_right_carries_the_tab(self):
         self.link_script()
         self.run_layout()
@@ -2304,6 +2614,36 @@ class RealTmux(unittest.TestCase):
                                                     "@tab_place").stdout.rstrip("\n"))
                            or tb.Place("s", 0)).name == want, "the row was never named")
         self.find(want + "▸")
+        self.assertEqual(self.ti("show-options", "-wqv", "-t", "t:1",
+                                 "@tab_row_name_in").stdout, "")
+
+    def test_the_move_menus_name_row_stores_a_hostile_name_literally(self):
+        # The Move menu opened by the script itself, with no script in HOME yet: the prompt's
+        # run-shell finds nothing, so the typed text stays in @tab_row_name_in to be read.
+        self.run_layout()
+        self.ti("set-option", "-w", "-t", "t:1", "@tab_place",
+                tb.place_text(tb.Place("c:1", 0, "s")))
+        self.run_layout()
+        wid = self.ti("display", "-p", "-t", "t:1", "#{window_id}").stdout.strip()
+        client = self.ti("list-clients", "-F", "#{client_name}").stdout.strip()
+        p = subprocess.run([sys.executable, "-I", SCRIPT, "menu", client, wid],
+                           capture_output=True, text=True, timeout=30, env=self.layout_env)
+        self.assertEqual((p.returncode, p.stdout, p.stderr), (0, "", ""))
+        self.find("New row")
+        nx, ny = self.find("Name row…")
+        self.click(nx + 1, ny)
+        self.find("row name:")
+        hostile = "a\"b'c;d#[e%f$(g)$HOME~h\\i"
+        self.to("send-keys", "-t", "o", "-l", hostile)
+        self.to("send-keys", "-t", "o", "Enter")
+        self.wait(lambda: self.ti("show-options", "-wqv", "-t", "t:1",
+                                  "@tab_row_name_in").stdout == hostile + "\n",
+                  "the typed name was not stored literally")
+        self.link_script()
+        p = subprocess.run([sys.executable, "-I", SCRIPT, "name-row", client, wid],
+                           capture_output=True, text=True, timeout=30, env=self.layout_env)
+        self.settle()
+        self.find(tb.clean_row_name(hostile) + "▸")
         self.assertEqual(self.ti("show-options", "-wqv", "-t", "t:1",
                                  "@tab_row_name_in").stdout, "")
 

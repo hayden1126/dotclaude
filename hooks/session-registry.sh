@@ -9,7 +9,10 @@
 # and, when the window has one, place, written as an fsynced tmp file plus rename. socket,
 # server_start and server_pid (tmux's #{socket_path}, #{start_time} and #{pid}; the pid tells
 # apart two servers started in the same second) name the server the tab lives in: claude inherits
-# the pane's TMUX, so `tmux display` reaches it. place is the window's @tab_place, the tab bar's
+# the pane's TMUX, so `tmux display` reaches it. Every write and delete holds open-sessions/
+# .records.lock (flock, waiting up to 2 s, then going ahead without it), the lock tmux-tab-bar
+# holds while it compares and replaces a record's place, so neither undoes the other's change.
+# place is the window's @tab_place, the tab bar's
 # row and position for it (tmux/tmux-tab-bar owns the format; here it is an opaque string, kept
 # only as 1 to 2048 bytes of UTF-8 with no control character), which claude-restore sets back.
 # Only a tab counts: no TMUX_PANE, a `claude -p` run (ATTENDED=0, even with an inherited
@@ -49,7 +52,7 @@ esac
 printf '%s' "$input" | \
   REG_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/dotclaude/open-sessions" \
   REG_SERVER="$server" REG_PANE="${TMUX_PANE:-}" REG_PLACE="$place" python3 -I -c '
-import json, os, re, sys, tempfile, time
+import fcntl, json, os, re, sys, tempfile, time
 try:
     d = json.load(sys.stdin)
 except Exception:
@@ -62,8 +65,26 @@ if not isinstance(sid, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{7,127
 reg = os.environ["REG_DIR"]
 path = os.path.join(reg, sid + ".json")
 
+def locked():
+    """The records lock (shared with tmux-tab-bar, whose record update compares and replaces
+    under it), as a held fd; None when it cant be opened or had within 2 s: go ahead without."""
+    try:
+        fd = os.open(os.path.join(reg, ".records.lock"),
+                     os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    except OSError:
+        return None
+    deadline = time.monotonic() + 2
+    while True:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return fd
+        except OSError:
+            if time.monotonic() >= deadline:
+                os.close(fd)
+                return None
+            time.sleep(0.01)
+
 def write(entry):
-    os.makedirs(reg, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=reg, prefix=".tmp-")
     with os.fdopen(fd, "w") as f:
         json.dump(entry, f)
@@ -91,8 +112,11 @@ if event == "SessionStart":
         size = 0
     if 1 <= size <= 2048 and not re.search(r"[\x00-\x1f\x7f]", place):
         entry["place"] = place
+    os.makedirs(reg, exist_ok=True)
+    lock = locked()   # held until exit, as below
     write(entry)
 elif event == "SessionEnd":
+    lock = locked()
     if d.get("reason") == "other":
         try:
             with open(path) as f:

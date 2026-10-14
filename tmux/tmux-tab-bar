@@ -56,7 +56,8 @@ to auto. A custom row (`c:<n>`) is a group like a project's, drawn right after t
 below (else last among the groups), with a `▸` or `name▸` header in CUSTOM_COLOUR. A laned tab
 outside its project's row is named `repo·name`. Every move (keys, drag, the Move menu) is one
 primitive, put(): a tab goes before or after another in that tab's row, and every member of that
-row gets a placement 0..n-1. The move then lays out at once under the layout lock and copies each
+row gets a placement 0..n-1. The move then lays out at once under the layout lock (waiting for a
+hook's run in flight, so the next queued move reads a fresh @tab_bar_nav) and copies each
 changed placement into the restore records of the window's panes (open-sessions/<sid>.json,
 field `place`), so tmux/claude-restore puts it back on the new window after tmux dies.
 
@@ -86,6 +87,7 @@ import re  # noqa: E402
 import stat  # noqa: E402
 import subprocess  # noqa: E402
 import tempfile  # noqa: E402
+import time  # noqa: E402
 import traceback  # noqa: E402
 import unicodedata  # noqa: E402
 
@@ -105,6 +107,8 @@ PALETTE = (75, 179, 141, 114, 174, 110)   # header colours, by group order
 CUSTOM_COLOUR = 252     # every custom row's header, outside PALETTE
 ROW_NAME_CELLS = 16     # a custom row's name is cut to this many cells
 PLACE_MAX = 2048        # an @tab_place value, in bytes
+LOCK_WAIT = 2.0         # seconds a move waits for the layout lock, a record write for its own
+RECORDS_LOCK = ".records.lock"   # in open-sessions, shared with hooks/session-registry.sh
 POS_MAX = 999
 CUSTOM_MAX = 9999       # custom row ids run 1..CUSTOM_MAX
 PHONE_STATUS_LEFT = "#(~/.local/bin/tmux-claude-status)"
@@ -1047,7 +1051,8 @@ SELF = '"$HOME/.local/bin/tmux-tab-bar"'     # as claude.conf runs it
 # pane over its first rows (tmux/claude.conf explains), else centred.
 OVERLAY_Y_CENTRE = "#{?#{==:#{status-position},top},0,#{popup_centre_y}}"
 MENU = (("◀ Left", "h", "left"), ("▶ Right", "l", "right"), ("▲ Up", "k", "up"),
-        ("▼ Down", "j", "down"), None, ("New row", "n", "newrow"), ("Auto place", "a", "auto"))
+        ("▼ Down", "j", "down"), None, ("New row", "n", "newrow"),
+        ("#{?@tab_row_custom,,-}Name row…", "N", "name-row"), ("Auto place", "a", "auto"))
 
 
 def put(groups: list, shared: list, src: str, dst: str, after: bool) -> dict:
@@ -1067,6 +1072,23 @@ def put(groups: list, shared: list, src: str, dst: str, after: bool) -> dict:
 
 def row_key_of(groups: list, shared: list, wid: str) -> str | None:
     return next((k for k, wids in rows_of(groups, shared).items() if wid in wids), None)
+
+
+def on_line(groups: list, shared: list, nav: list, src: str, dst: str, after: bool) -> bool:
+    """put()'s `after` for a move aimed at dst's drawn line (nav: as parse_nav_rows gives it).
+    put() closes src's gap, so when src is already in dst's logical row the tabs after src shift
+    back one slot, and before dst (or after it) can land on the line above (or below) dst's. A
+    reorder within a row keeps each drawn line's slot count, so the new order is mapped onto the
+    row's drawn slots in reading order, and before and after flip when src would land off dst's
+    line. Unchanged when src is in another row or some member isn't drawn (+N)."""
+    row = rows_of(groups, shared).get(row_key_of(groups, shared, dst), [])
+    slots = [(line, wid) for line, tabs in nav for wid, _, _ in tabs if wid in row]
+    if src not in row or sorted(w for _, w in slots) != sorted(row):
+        return after
+    order = [w for w in row if w != src]
+    order.insert(order.index(dst) + after, src)
+    line_of = {wid: line for line, wid in slots}
+    return after if slots[order.index(src)][0] == line_of[dst] else not after
 
 
 def side_step(groups: list, shared: list, src: str, direction: str) -> dict:
@@ -1091,10 +1113,12 @@ def climb(rows: list, src: str, direction: str) -> str | None:
 
 def new_row(groups: list, shared: list, src: str, places: list) -> dict:
     """src alone in a new custom row below its own: `c:` 1 + the highest id any placement names
-    (places: every window's). A tab already alone in a custom row stays."""
+    (places: every window's). A tab already alone in its row (of any kind) stays. Made from a
+    shared tab, the row sits just above the shared rows (group_windows: a custom row whose anchor
+    is no group goes last among the groups)."""
     rows = rows_of(groups, shared)
     key = row_key_of(groups, shared, src)
-    if key is None or (key.startswith("c:") and rows[key] == [src]):
+    if key is None or rows[key] == [src]:
         return {}
     n = 1 + max((int(k[2:]) for p in places for k in (p.row, p.after) if k.startswith("c:")),
                 default=0)
@@ -1170,7 +1194,10 @@ def update_record(path: str, server: tuple, places: dict) -> None:
     """Set or drop `place` in one restore record when it names this server and one of the
     panes in `places` (pane id -> @tab_place, None: unset). A read-modify-write through an
     fsynced temp file and os.replace, skipped when the file changed meanwhile (the registry
-    rewrites or deletes it), so a record is never created or brought back."""
+    rewrites or deletes it), so a record is never created or brought back. The compare and the
+    replace hold the records' lock (RECORDS_LOCK, which hooks/session-registry.sh takes for its
+    writes and deletes), so the registry can't delete or rewrite the file between them; a lock
+    not had within LOCK_WAIT is gone without (fail-open)."""
     before = os.lstat(path)
     data = read_small(path, RECORD_MAX)
     if data is None:
@@ -1195,10 +1222,18 @@ def update_record(path: str, server: tuple, places: dict) -> None:
             json.dump(entry, f)
             f.flush()
             os.fsync(f.fileno())
-        now = os.lstat(path)
-        if (now.st_ino, now.st_mtime_ns, now.st_size) \
-                == (before.st_ino, before.st_mtime_ns, before.st_size):
-            os.replace(tmp, path)
+        lock = lock_within(os.path.join(os.path.dirname(path), RECORDS_LOCK), LOCK_WAIT)
+        try:
+            try:
+                now = os.lstat(path)
+            except FileNotFoundError:
+                return                  # deleted meanwhile: never brought back
+            if (now.st_ino, now.st_mtime_ns, now.st_size) \
+                    == (before.st_ino, before.st_mtime_ns, before.st_size):
+                os.replace(tmp, path)
+        finally:
+            if lock is not None:
+                os.close(lock)
     finally:
         if os.path.lexists(tmp):
             os.unlink(tmp)
@@ -1215,8 +1250,9 @@ def update_records(server: tuple, places: dict) -> None:
 
 def apply(ctx: Context, changes: dict, base: str) -> None:
     """Write each @tab_place that changes ({wid: Place, or None to unset}), lay out at once
-    (under layout's lock, so a hook's run in flight lays out again instead), then copy the
-    changes into the restore records of each changed window's panes."""
+    (under layout's lock, waiting up to LOCK_WAIT for a hook's run in flight, so the next
+    queued move reads the bar this one drew), then copy the changes into the restore records of
+    each changed window's panes."""
     lines, changed = [], {}
     for wid, place in changes.items():
         text = place_text(place) if place is not None else None
@@ -1229,7 +1265,7 @@ def apply(ctx: Context, changes: dict, base: str) -> None:
         return
     tmux("source-file", "-", stdin="\n".join(lines) + "\n")
     try:
-        run_locked(base)
+        run_locked(base, wait=LOCK_WAIT)
     finally:
         if ctx.server is not None:
             update_records(ctx.server, {pane: text for wid, text in changed.items()
@@ -1250,6 +1286,11 @@ def show_menu(client: str, wid: str) -> None:
             args.append("")
             continue
         label, key, how = item
+        if how == "name-row":           # the tap menu's prompt, aimed at wid; no reopening
+            shell = f"{SELF} name-row {client} {wid} >/dev/null 2>&1; true".replace('"', '\\"')
+            args += [label, key, f'command-prompt -p "row name:" "set -w -t {wid} '
+                                 f'@tab_row_name_in \\"%%%\\" ; run-shell \'{shell}\'"']
+            continue
         shell = f"{SELF} move {how} {client} {wid} --menu >/dev/null 2>&1; true"
         args += [label, key, command("run-shell", shell)]
     subprocess.Popen(args, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
@@ -1300,7 +1341,8 @@ def move(how: str, client: str, wid: str | None, menu: bool, base: str) -> None:
         changes = side_step(groups, shared, ctx.wid, how)
     elif how in ("up", "down"):
         dst = climb([tabs for _, tabs in ctx.nav], ctx.wid, how)
-        changes = put(groups, shared, ctx.wid, dst, False) if dst else {}
+        changes = put(groups, shared, ctx.wid, dst,
+                      on_line(groups, shared, ctx.nav, ctx.wid, dst, False)) if dst else {}
     elif how == "newrow":
         places = [parse_place(o["place"]) for o in ctx.state.options.values()]
         changes = new_row(groups, shared, ctx.wid, [p for p in places if p is not None])
@@ -1324,7 +1366,8 @@ def drop(src: str, dst: str, x: str, line: str, rng: str, client: str, base: str
     after = drop_side(ctx.nav, dst, int(x), int(line))
     if after is not None:
         groups, shared, _ = arrange(ctx.state, ctx.sid, {})
-        apply(ctx, put(groups, shared, src, dst, after), base)
+        apply(ctx, put(groups, shared, src, dst, on_line(groups, shared, ctx.nav, src, dst, after)),
+              base)
 
 
 def drop_row(src: str, x: str, line: str, client: str, base: str) -> None:
@@ -1335,7 +1378,8 @@ def drop_row(src: str, x: str, line: str, client: str, base: str) -> None:
     end = ctx and row_end(ctx.nav, int(x), int(line))
     if end:
         groups, shared, _ = arrange(ctx.state, ctx.sid, {})
-        apply(ctx, put(groups, shared, src, end[0], end[1]), base)
+        apply(ctx, put(groups, shared, src, end[0],
+                       on_line(groups, shared, ctx.nav, src, end[0], end[1])), base)
 
 
 def name_row(client: str, wid: str | None, base: str) -> None:
@@ -1377,7 +1421,35 @@ def touch(path: str) -> None:
         pass
 
 
-def run_locked(base: str, run=None) -> None:
+def flock_within(fd: int, wait: float) -> bool:
+    """Take an exclusive flock on fd, trying again for up to `wait` seconds; False if still
+    held then (wait 0: one try)."""
+    deadline = time.monotonic() + wait
+    while True:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return True
+        except OSError:
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(0.01)
+
+
+def lock_within(path: str, wait: float) -> int | None:
+    """An fd holding an exclusive flock on `path` (made owner-only, never through a link), or
+    None when it can't be opened or isn't free within `wait` seconds: the caller goes ahead
+    without it."""
+    try:
+        fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    except OSError:
+        return None
+    if flock_within(fd, wait):
+        return fd
+    os.close(fd)
+    return None
+
+
+def run_locked(base: str, run=None, wait: float = 0.0) -> None:
     """layout() under a lock (files `<base>.lock` and `<base>.dirty`). Hooks fire in bursts (a
     restore opens 8 windows): every run marks the state dirty before it tries the lock, and one
     that finds the lock held leaves; the holder lays out again while dirty reappears (PASSES
@@ -1386,6 +1458,9 @@ def run_locked(base: str, run=None) -> None:
     mark is already there when it looks. A pass that raises ends its hold, but the look after
     letting go still happens (the runs that left meanwhile are counting on it); the first error
     is raised at the end, for main's catch-all to log.
+    A move passes `wait` (LOCK_WAIT): it waits that long for a hook's layout in flight instead
+    of leaving, so it has laid out when it returns and the next queued move reads the bar it
+    drew; still held after that, it lays out without the lock.
     `run` stands in for layout() in tests."""
     run = run or (lambda: layout(base + ".err"))
     lock, dirty = base + ".lock", base + ".dirty"
@@ -1398,10 +1473,10 @@ def run_locked(base: str, run=None) -> None:
             run()                       # no lock to be had: still lay out
             break
         try:
-            try:
-                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except OSError:
-                break                   # the holder lays out again for this one
+            if not flock_within(fd, wait):
+                if wait:
+                    run()               # a move: lay out now, without the lock
+                break                   # a hook: the holder lays out again for this one
             for _ in range(PASSES):
                 try:
                     os.unlink(dirty)

@@ -10,6 +10,7 @@ shutdown can't be told from a closed window at hook time. In a tab it then hands
 ~/.local/bin/claude-saved, fail-open. The entry also carries the window's @tab_place (the tab
 bar's placement, opaque here) as `place` when it is a valid one. A stub tmux answers `display` and
 logs each call's argv, one argument per field."""
+import fcntl
 import json
 import os
 import re
@@ -114,7 +115,8 @@ class Registry(unittest.TestCase):
                                          "#{start_time} #{pid} #{window_index} #{socket_path}"],
                                         ["tmux", "-u", "display", "-p", "-t", "%7",
                                          "#{@tab_place}"]])
-        self.assertEqual(sorted(os.listdir(self.dir)), [SID + ".json"])  # no tmp left behind
+        self.assertEqual(sorted(os.listdir(self.dir)),                    # no tmp left behind
+                         [".records.lock", SID + ".json"])
 
     def test_every_source_refreshes_the_entry(self):
         self.start()
@@ -226,6 +228,38 @@ class Registry(unittest.TestCase):
         self.env["STUB_NO_PLACE"] = "1"
         self.start()
         self.assertNotIn("place", self.entries()[SID])
+
+    # --- the records lock, shared with tmux-tab-bar's record update ---------------------------
+
+    def hold_lock(self):
+        os.makedirs(self.dir, exist_ok=True)
+        fd = os.open(os.path.join(self.dir, ".records.lock"), os.O_RDWR | os.O_CREAT, 0o600)
+        self.addCleanup(os.close, fd)
+        fcntl.flock(fd, fcntl.LOCK_EX)
+
+    def test_a_lock_held_past_the_bound_still_writes_and_deletes(self):
+        self.hold_lock()
+        t = time.monotonic()
+        self.start()
+        self.assertGreaterEqual(time.monotonic() - t, 1.5)      # it waited for the lock
+        self.assertIn(SID, self.entries())
+        self.end("other")
+        self.assertIn("ended_other_at", self.entries()[SID])
+        self.end("prompt_input_exit")
+        self.assertEqual(self.entries(), {})
+
+    def test_a_start_writes_under_the_lock(self):
+        # tmux-tab-bar holds the lock across its compare and replace: a write must wait for it.
+        self.hold_lock()
+        p = subprocess.Popen(["bash", HOOK], stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL, env={**self.env, **TAB}, text=True)
+        p.stdin.write(json.dumps({"session_id": SID, "hook_event_name": "SessionStart",
+                                  "cwd": "/home/u/code/dna", "source": "startup"}))
+        p.stdin.close()
+        time.sleep(0.8)
+        self.assertNotIn(SID, self.entries())                   # waiting on the lock
+        self.assertEqual(p.wait(timeout=10), 0)
+        self.assertIn(SID, self.entries())
 
     def test_an_end_for_an_unknown_session_writes_nothing(self):
         self.end("other")
