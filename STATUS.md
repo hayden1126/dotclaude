@@ -146,6 +146,10 @@ stored here).
   between rows (spike first, popup board as the fallback), with placements kept in the tab
   record. Remote Control can't run `!` lines, so the phone needs the real pane. The
   remote-access side is private (the hq remote-access doc).
+  - PR 1 merged as #96 (2026-10-14) before its fresh review and live smoke; the lead installed it
+    from main the same day. Its review findings ride `fix/tab-bar-nav` (PR 1.5), with Shift+arrows
+    that follow the bar's layout (Hayden's ask). Still open: Hayden's desktop and phone tap checks
+    on the live bar, then PR 2.
 
   How lanes install, Hayden's call 2026-10-12: after its last review round, a lane runs
   `lane lock install -- ./setup.sh` from its own worktree, sandbox off. Until it merges, every
