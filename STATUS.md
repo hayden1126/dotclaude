@@ -86,12 +86,22 @@ stored here).
     files) is parked on `fix/json-depth-sweep`. Shipping any of it first needs a check of how
     each enforcement site fails (a caught error must not turn a deny into an allow). The trigger
     is near theoretical, so the sweep is optional.
-  - Live: `lane-close` (opened 2026-10-13, Hayden's call: `lane done` ends the lane's own
-    window and the leftovers that carry a lane session's id, the install lock holds until the
-    lead's reinstall, setup.sh prunes links into lanes and says when sessions need a restart)
-    `tab-bar` (opened 2026-10-13, below) and `lane-addr` (opened 2026-10-13 from its backlog
-    entry below, whose text is now its Brief). **Merge order: 1 `lane-close`, 2 `tab-bar`, 3
-    `lane-addr`.** The lead installs only the next to merge.
+  - Merged, installed from main, and closed (2026-10-13/14): `lane-close` as #95 (`lane done`
+    ends a lane's own processes, the install holds until main's reinstall, setup prunes links
+    into lanes, sandbox-off Python runs `-I`). Its first live `lane done` ended the lane's
+    `claude` (session 8e31f81a) and 9 of its MCP children, each named with its pid, and left
+    every other window alone.
+  - `tab-bar` PR 1 merged as #96 (2026-10-14) and was installed from main (main shows
+    `status 2`). Its review fixes and Shift+arrow navigation merged as #97 (968a8af). The lead
+    did not install #97 from main: lane-addr holds the install, and main's bar strips only the
+    old `[repo] ` title, so it goes live through lane-addr's install after lane-addr merges main. It merged before its fresh review and live smoke, so both still run, with
+    Hayden's phone tap test, and anything found rides PR 2. The lane stays open for PR 2 (drag,
+    custom rows). Hayden asked the lead to close it when tab-bar is done (taken as: after PR 2
+    merges).
+  - Live: `tab-bar` (PR 2), `lane-addr` (opened 2026-10-13 from its backlog entry below, whose
+    text is now its Brief) and `excluded-guard` (narrow-excluded Part 2, opened 2026-10-14).
+    **Merge order by readiness: `lane-addr`, `excluded-guard`, `tab-bar` PR 2.** The lead
+    installs only the next to merge.
   - `lane new` with `|`, `<`, `>` or `;` inside its quoted `--goal` ran sandboxed and failed
     ("Read-only file system") even though `lane new *` is in `excludedCommands`. It left a
     stray branch, and nothing registered. The likely cause is that the matcher sees those
@@ -141,11 +151,15 @@ stored here).
   Hayden picked tmux over a migration after the research page
   (https://claude.ai/artifact/E75uhqt2xskxUGQopLwvoA, private; tmux inventory in
   `~/scratch/tab-bar/INVENTORY.md`). The design is in the lane's Brief, and the decisions are
-  in [[dotclaude-tab-bar]]: a row per lead with lanes, one shared row, overflow, at most 5 rows
+  in [[dotclaude-tab-bar]]: a row per lead with lanes, shared row(s) for the rest, overflow, at most 5 rows
   (pack, then `+N`); a narrow layout for the phone's grouped session; PR 2 adds manual drag
   between rows (spike first, popup board as the fallback), with placements kept in the tab
   record. Remote Control can't run `!` lines, so the phone needs the real pane. The
   remote-access side is private (the hq remote-access doc).
+  - PR 1 merged as #96 (2026-10-13) before its fresh review and live smoke; the lead installed it
+    from main the same day. Its review findings ride `fix/tab-bar-nav` (PR 1.5), with Shift+arrows
+    that follow the bar's layout (Hayden's ask). Still open: Hayden's desktop and phone tap checks
+    on the live bar, then PR 2.
 
   How lanes install, Hayden's call 2026-10-12: after its last review round, a lane runs
   `lane lock install -- ./setup.sh` from its own worktree, sandbox off. Until it merges, every
@@ -234,21 +248,13 @@ stored here).
   `claude -p` repro and the 2.1.285 boundary; the karaoke session's has the incident.
 
 ## Notes for next session
-- **Next (lead, main checkout): take lane-close's PR to ready and merge, then `tab-bar`, then
-  `lane-addr`** ("In flight"). As of 2026-10-13, lane-close is done at `origin/main..3160bef`:
-  - review rounds 3-6 and the live probe;
-  - the lead's reviews of its post-merge fixes and of the G7 rounds (setup, sync and every
-    `sys.executable` start run Python with `-I`; private findings G7), with the last round
-    reviewed by the lead itself;
-  - all four suites green in one run, installed from the lane, and smoked.
-
-  Hayden approved its push and a draft PR; ready and merge still need his OK
-  (`gh pr list --head feat/lane-close`). After the merge: reinstall from main, which releases
-  lane-close's install hold (`lane ls` shows it). Then propose `lane done lane-close` and tell
-  tab-bar it is next. Start with `lane ls` and `lane asks`. A lane is handed back only once
-  `handoff-check -C <lane path>` passes and the board shows no `handoff?` flag. After each
-  merge, follow the install step in "In flight", then `lane done <id>` once its session exits.
-  narrow-excluded Part 2 opens at the next free slot.
+- **Next (lead, main checkout): run `lane-addr`, `excluded-guard` and `tab-bar` PR 2 to merge
+  by readiness** ("In flight"). As of 2026-10-14: #96 merged and installed; lane-addr has merged
+  main 623923d and its `lane addr lead` reached the lead live; excluded-guard was just opened
+  (plan mode). Close `tab-bar` with `lane done` after its PR 2 merges (Hayden's ask). Start with
+  `lane ls` and `lane asks`. A lane is handed back only once `handoff-check -C <lane path>`
+  passes and the board shows no `handoff?` flag. After each merge, follow the install step in
+  "In flight", then propose `lane done <id>` (it ends the lane's own session itself).
   **Message a lane at its messaging socket**: `uds:/run/user/1000/cc-socks/<pid>.sock`, the
   `messagingSocketPath` in `~/.claude/sessions/<pid>.json` of the session whose cwd is in the
   lane. Resolve it fresh before each send, since a pass makes a new pid. A ListAgents name
@@ -267,11 +273,13 @@ stored here).
   - Verify from the main checkout (`test_subagent_policy` refuses to load under
     `.claude/worktrees/`): `tests/setup`, `tests/pass`, `tests/lanes`, `tests/delegation`. The
     last full run on `feat/autopass` (2026-10-12) was green: 532, 148, 155 and 646 tests.
-  - **Flakes got worse under load (2026-10-13, lane-close's runs):** about half of loaded runs
-    fail one timing test in `tests/pass` (a 600 s compact wait, a run killed at 900 s) or
-    `tests/delegation` (`test_wait`'s 30 s subprocess timeout, `test_ledger` minute rounding);
-    each passes 3/3 alone. Worth a small PR that bounds those waits on a fake clock; it is slowing
-    every lane's verification.
+  - **Root cause of the timing flakes (lane lane-addr, 2026-10-14):** HAYPC's wall clock steps
+    -2.7 s then +5.4 s about every 33 s (`time.time()` minus `time.monotonic()`; evidence in
+    lane-addr's `.lane/artifacts/clock-steps.txt`). It matches the setup, ctx, handoff-reminder and
+    ledger flakes. `systemd-timesyncd` is active inside WSL2 beside WSL's own host time sync,
+    which likely means two sources fighting (inferred). Hayden's call: `sudo systemctl disable
+    --now systemd-timesyncd`, then re-sample. Separately, tests should measure durations with
+    `time.monotonic()`, not `time.time()`.
   - **Flakes:** `tests/pass` fails timing asserts under a load spike, so judge it on a run of
     about 46 s. `test_tmux_hooks` flaked on `main` too; its ring-decision wait is now 15 s.
     Watch `seen()`'s 3 s wait, which also serves negative checks.

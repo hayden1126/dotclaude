@@ -166,6 +166,7 @@ stale-base trap (`worktree.baseRef`) therefore bites only a session rooted in th
 | `lane note "<text>"` | append a timestamped line to your record's State |
 | `lane asks` | every lane's open "Asks for Hayden", one list |
 | `lane open <id>` | the lane's session in a new tmux window, in plan mode; `--focus` switches to it, or to the live session's window; `--print` shows the tmux command |
+| `lane addr <id>` / `lane addr lead` | `uds:<socket>`, the SendMessage address of the lane's (or the lead's) one live session; refuses on none or several. Bare: it must see other processes |
 | `lane lock gate -- <cmd>` | run `<cmd>` under the named lock, waiting while another run holds it; `--wait SECS` gives up with exit 75 (docs/lanes.md: telling it from the command's own 75) |
 | `lane new` / `adopt` / `done` | lifecycle, above |
 
@@ -175,10 +176,10 @@ commit or session end is newer than the record), `setup-failed` (half made: it s
 port, claims and a cap slot; finish it with `lane adopt <path>`), `closing` (a `lane done`
 stopped partway; rerun it).
 
-Run `lane init`, `new`, `adopt`, `ls`, `open` and `done` as bare commands: those are in
+Run `lane init`, `new`, `adopt`, `ls`, `open`, `done` and `addr` as bare commands: those are in
 `excludedCommands`, so they run outside the sandbox with the network, gh's credential and a view
 of other processes. Piped or sandboxed, `ls` says what it skipped (PR state, sessions and window
-show `?`), and `new`, `open` and `done` refuse. `lane ls` also names any record it left out (a
+show `?`), and `new`, `open`, `done` and `addr` refuse. `lane ls` also names any record it left out (a
 `lane.json` the CLI didn't write, or two claiming one path): look at it before removing it. `open --print` still prints, but warns that it
 can't see a live session, so its command may start a second one. Every other subcommand runs
 sandboxed. `lane lock` must: the command it wraps inherits its sandbox.
@@ -199,7 +200,8 @@ them. Each call meets the excluded-command guard first (docs/delegation.md), and
 | Something that belongs to another lane | your record's Not mine (never that lane's record) |
 | The lane's working design | `.lane/PLAN.md` |
 | Direction, backlog, merge order | the project STATUS.md, from `main` or the lead |
-| A heads-up to a peer lane | SendMessage, as a nudge only; anything that matters goes in a record first |
+| A heads-up to a peer lane | SendMessage to what `lane addr <id>` prints, as a nudge only; anything that matters goes in a record first |
+| Messaging a lane or the lead by its ListAgents name or tab title | `lane addr <id>` or `lane addr lead`, run just before each send: the name is the title, which changes most turns, and a pass gives the session a new pid and socket |
 
 ## Common mistakes
 

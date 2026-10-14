@@ -8,6 +8,7 @@
   lane adopt <path> [--id SLUG]
   lane ls [--json] [--requests]
   lane open <id> [--focus] [--print] [prompt]
+  lane addr <id> | lane addr lead
   lane lock <name> [--wait SECS] -- <cmd...>
   lane whoami [--json]
   lane claim <req> ... | lane release <req> ... | lane who <req>
@@ -19,10 +20,10 @@ Records: CLI data in <common-dir>/lanes/<id>/lane.json, the lane's prose in <lan
 the config in $XDG_STATE_HOME/dotclaude/lanes/ (why, and what is checked before sandbox-off code
 acts on a sandbox-writable file: docs/lanes.md S3). Every write takes the flock on <common-dir>/lanes/.lock. Board fields (ahead/behind, PR state,
 liveness, flags) are derived on each `ls`, never stored. skills/lanes/SKILL.md is the guide and
-docs/lanes.md the design. Run `init`, `new`, `adopt`, `ls`, `open` and `done` bare, so their
+docs/lanes.md the design. Run `init`, `new`, `adopt`, `ls`, `open`, `done` and `addr` bare, so their
 excludedCommands entries take them out of the sandbox: `new`, `ls` and `done` need the network and
 the GitHub credential (`new` refuses without them; `ls` and `done` say what they skipped), and
-`ls`, `open` and `done` need to see other processes. Every other subcommand runs sandboxed; `lock` must, so the command it wraps
+`ls`, `open`, `done` and `addr` need to see other processes. Every other subcommand runs sandboxed; `lock` must, so the command it wraps
 stays sandboxed too.
 
 `lock` exits with its command's code, or dies of the signal that killed it; `--wait` running out
@@ -298,6 +299,9 @@ def requests(raw: list[str]) -> list[str]:
 
 def check_unregistered(repo: Repo, lane_id: str) -> None:
     check_id(lane_id)
+    if lane_id == "lead":  # refused only for a new lane, so an existing one still loads
+        raise LaneError("lane id 'lead' is reserved: `lane addr lead` names the main checkout's "
+                        "session")
     if os.path.lexists(repo.lane_dir(lane_id)):
         raise LaneError(f"lane {lane_id} is already registered (or {repo.lane_dir(lane_id)} "
                         "exists)")
@@ -1125,6 +1129,46 @@ def focus_session(args, here: list[dict]) -> None:
     if p.returncode != 0:
         raise LaneError(f"tmux select-window failed: {p.stderr.strip()}")
     say(f"lane {args.id} already has a live session: focused tmux window {window}")
+
+
+def cmd_addr(args) -> None:
+    """`uds:<socket>` of the one live session in a lane, or in the main checkout for `lead`: a
+    SendMessage address that holds while the session's title (its ListAgents name) changes. A
+    pass or restart gives the session a new pid and socket, so resolve it before each send.
+    A session is where its file's cwd says, the dir it launched in (as `ls` and `open` read it;
+    a Bash cd doesn't move it, probed on 2.1.296), and live when /proc agrees
+    (lanelib.session_running): sandboxed Bash can write neither. A lane's path comes from its
+    lane.json, which it can, so load_lane and usable_path check it first."""
+    if not lanelib.pids_visible():
+        raise LaneError(f"sandboxed: other sessions' processes are out of sight, so a live "
+                        f"session can't be told from a stale file. Run it as a bare `lane addr "
+                        f"{args.id}` (excludedCommands runs that outside the sandbox)")
+    repo = lanes_repo()
+    if args.id == "lead":
+        # Agent worktrees sit under main, so they count as the lead's; a lane never does
+        # (lanelib.worktree_problem refuses a lane path inside the main checkout).
+        where, hint, path = "the main checkout (the lead)", "", repo.main
+        if os.path.lexists(repo.lane_dir("lead")):  # a lane from before `lead` was reserved
+            raise LaneError("ambiguous: a lane is named lead too. `lane addr lead` means the main "
+                            "checkout; rename that lane (`lane done lead`, then a new id)")
+    else:
+        lane = load_lane(repo, args.id)
+        if not lanelib.is_live(lane):
+            raise LaneError(f"lane {args.id} is stale: its worktree {lane['path']} is gone")
+        path = usable_path(repo, lane)
+        where, hint = f"lane {args.id}", f": `lane open {args.id}` starts one"
+    found = [(s, sock) for s in lanelib.session_files()
+             if lanelib.cwd_inside(s.get("cwd"), path) and lanelib.session_running(s)
+             and (sock := lanelib.socket_of(s))]
+    if not found:
+        raise LaneError(f"no live session in {where}{hint}")
+    if len(found) > 1:
+        rows = "; ".join(shown(" ".join([f"pid {s['pid']}", str(s.get("kind") or "?"),
+                                         str(s.get("tmux") or "no tmux"),
+                                         str(s.get("status") or "?"), "uds:" + sock]))
+                         for s, sock in found)
+        raise LaneError(f"{len(found)} live sessions in {where}, so no one address: {rows}")
+    say("uds:" + found[0][1])
 
 
 def holder_line(repo: Repo, command: list[str]) -> str:
@@ -2105,6 +2149,9 @@ def parser() -> argparse.ArgumentParser:
                    help="switch to the window (a new one, or the live session's)")
     p.add_argument("--print", action="store_true", help="print the tmux command, run nothing")
     p.add_argument("prompt", nargs="?", help="first prompt (default: read the record, plan the brief)")
+    p = sub.add_parser("addr", help="the messaging address (uds:<socket>) of a lane's live "
+                                    "session, or the lead's; resolve it before each send")
+    p.add_argument("id", help="a lane id, or `lead`")
     p = sub.add_parser("lock", help="run a command under a named lock (`lane lock <name> -- <cmd>`)",
                        usage="lane lock <name> [--wait SECS] -- <cmd...>")
     p.add_argument("name")

@@ -70,6 +70,8 @@ EXCLUDED = [
              ["lane open chart-fix", "lane open chart-fix --print"]),
     Excluded("lane done *", "checks the merge with gh, sees and signals the lane's sessions",
              ["lane done chart-fix"]),
+    Excluded("lane addr *", "sees other sessions' processes to tell a live one from a stale file",
+             ["lane addr chart-fix", "lane addr lead"]),
     Excluded("pass-respawn", "respawns its tmux pane", ["pass-respawn"]),
     Excluded("pass-respawn *", "respawns its tmux pane", ["pass-respawn -C /x --compact"]),
 ] + [

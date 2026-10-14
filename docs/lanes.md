@@ -97,7 +97,7 @@ writer, and every other place links to it.
 | 10 | What did a delegate produce? | Report (up) | a subagent's report JSON (the delegation contract); a lane's hand-back is a passing `handoff-check` plus a State summary; the PR body to outsiders | the delegate | ephemeral, then PR |
 | 11 | Proof behind a claim | Evidence | `.lane/artifacts/` (mocks, shots, gate logs), mirrored so it survives `worktree remove`; rulings point here | the lane | archived with the record |
 | 12 | Shared machine resources | Env state | `lane.json` port, live sessions and `lane lock` holders (derived; a hand-kept "machine state" list drifts) | the CLI | live |
-| 13 | Heads-up between peers | Message | SendMessage. A nudge only: anything that matters lands in a doc first, and a message never carries state or consent | anyone | ephemeral |
+| 13 | Heads-up between peers | Message | SendMessage to the `uds:` address `lane addr <id>` prints, resolved before each send. A nudge only: anything that matters lands in a doc first, and a message never carries state or consent | anyone | ephemeral |
 | 14 | What did we learn? | Lessons | memory (Hayden's preferences, traps), `docs/` | any session | durable |
 | 15 | What happened? | History | git, PRs, transcripts. Never copied into a doc; docs point to them by SHA, PR # or session id | n/a | durable |
 | 16 | Tell the outside world | External | Hayden updates the tracker assignee from each lane's claims; PR comments | Hayden | durable |
@@ -195,13 +195,13 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
   acceptEdits mode succeeds with no prompt, and the shared `info/exclude` hides it
   (`git status --ignored` shows `!! .lane/`).
 - **S3, `excludedCommands`:** `lane new` fetches and `lane ls` asks gh for PR state, and both
-  need the credential the sandbox hides; `ls`, `open` and `done` also need to see other
+  need the credential the sandbox hides; `ls`, `open`, `done` and `addr` also need to see other
   processes. PR 1 excluded `lane *`. PR 2 narrowed it to `lane init`, `new`, `adopt`, `ls`,
-  `open` and `done`, each by name, because `lane lock -- <cmd>` must stay sandboxed: under
+  `open` and `done` (and lane-addr added `addr`), each by name, because `lane lock -- <cmd>` must stay sandboxed: under
   `lane *`, any command wrapped in it ran sandbox-off without the `dangerouslyDisableSandbox`
   flag the delete guard checks. `whoami`, `claim`, `release`, `who`, `note`, `asks` and `lock`
   touch only `<common-dir>/lanes/` and the lane's `.lane/`, which a lane-rooted sandbox can
-  write (S1). A sandboxed (piped) `ls` says what it skipped; `new`, `open` and `done` refuse.
+  write (S1). A sandboxed (piped) `ls` says what it skipped; `new`, `open`, `done` and `addr` refuse.
   `new` and `adopt` also run the config's `setup` command through a shell, sandbox-off, and
   `new` makes its worktree under the config's `root`. So the config lives in the state dir, not
   the common dir: sandboxed Bash can read it but not write it, and only a bare `lane init`
@@ -244,6 +244,20 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
 - **Session facts** for `handoff-check`: `~/.claude/sessions/<pid>.json` carries `sessionId`,
   `cwd`, `startedAt` (ms), `status`, `tmux` (`session:@window.%pane`) and
   `messagingSocketPath`. A session's own shell also has `$CLAUDE_CODE_SESSION_ID`.
+- **Addressing** (lane lane-addr, 2026-10-13): a ListAgents name is the session's title, which
+  `session-title.sh` rewrites as the summary changes, so a name goes stale between turns (a
+  lane's send to the lead failed "not reachable"). The messaging socket holds for the life of
+  the process: SendMessage takes `uds:<messagingSocketPath>` (tested lead to lane and back).
+  `lane addr <id|lead>` prints it for the one session whose file's `cwd` is in the lane's
+  worktree (or in the main checkout, agent worktrees included, for `lead`). That `cwd` is the
+  launch dir: a Bash `cd` moves the session's working directory and its hook payloads, not the
+  file (every live session's file `cwd` matched its process cwd, probed on 2.1.296). Session
+  files outlive their process
+  (74 files against 7 live sockets on one machine that day), so a file counts only when its
+  pid runs with the `procStart` it records, not exited, and its socket is on disk, printable
+  and ours. A pass makes a new pid, so callers resolve it before each send. It runs
+  sandbox-off, since a sandboxed command has its own pid namespace and sees no other process.
+  The id `lead` is reserved for new lanes.
 
 ## The pieces
 

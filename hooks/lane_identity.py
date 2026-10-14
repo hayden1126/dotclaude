@@ -52,6 +52,9 @@ def lane_context(lane: dict, source: str) -> str:
         "session', 'this session'): name lanes by id, requests by number, sessions by id.",
         "STATUS.md in the main checkout is project direction, not your state: your next step "
         "lives in your record.",
+        "To message the lead, SendMessage to what a bare `lane addr lead` prints, run just before "
+        "each send (a pass gives it a new address); never its ListAgents name or tab title, "
+        "which change most turns.",
     ]
     if source == "compact":
         lines.append("Context was just compacted: re-read your record before acting.")
@@ -66,7 +69,8 @@ def board_line(repo: lanelib.Repo, lanes: list[dict]) -> str:
         parts.append(f"{lane['id']}" + (f" ({claims})" if claims else "") + stale)
     return (f"Main checkout of a lanes repo; lanes: {'; '.join(parts)}. Board: `lane ls`; owner of "
             "a request: `lane who #<n>`. STATUS.md here is project direction; each lane's state "
-            "is in its own record.")
+            "is in its own record. To message a lane, SendMessage to what a bare `lane addr <id>` "
+            "prints, run just before each send.")
 
 
 def start(repo: lanelib.Repo, lane: dict, event: dict) -> None:

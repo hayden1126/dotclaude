@@ -275,6 +275,7 @@
       "lane ls *",
       "lane open *",
       "lane done *",
+      "lane addr *",
       "pass-respawn",
       "pass-respawn *",
       "tmux ls",
