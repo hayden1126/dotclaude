@@ -851,7 +851,8 @@ case "$cmd" in
     fi
     heading=Shelf
     [ "$removing" = 1 ] && heading="Remove from shelf"
-    tmux display-menu "${cflag[@]}" -T "#[align=centre]$heading" -x C -y C "${items[@]}" ;;
+    tmux display-menu "${cflag[@]}" -T "#[align=centre]$heading" -x C \
+      -y '#{?#{==:#{status-position},top},0,#{popup_centre_y}}' "${items[@]}" ;;
 
   open)
     sid_ok "${1:-}" || exit 0

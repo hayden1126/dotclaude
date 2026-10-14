@@ -1043,6 +1043,9 @@ MOVES = DIRECTIONS + ("newrow", "auto")
 NUM = re.compile(r"[0-9]{1,6}\Z")            # a mouse x or status line
 DIGITS = re.compile(r"[0-9]{1,20}\Z")
 SELF = '"$HOME/.local/bin/tmux-tab-bar"'     # as claude.conf runs it
+# display-menu -y for a menu or popup: row 0 under a top bar, where tmux 3.7c can't draw a busy
+# pane over its first rows (tmux/claude.conf explains), else centred.
+OVERLAY_Y_CENTRE = "#{?#{==:#{status-position},top},0,#{popup_centre_y}}"
 MENU = (("◀ Left", "h", "left"), ("▶ Right", "l", "right"), ("▲ Up", "k", "up"),
         ("▼ Down", "j", "down"), None, ("New row", "n", "newrow"), ("Auto place", "a", "auto"))
 
@@ -1239,7 +1242,8 @@ def show_menu(client: str, wid: str) -> None:
     a tap outside closes it. Only a validated client name and window id go in its commands.
     display-menu holds its tmux client until the menu closes, so it runs detached: a run-shell
     waiting on it would hold the client's queue, and a timeout would kill it under the menu."""
-    args = ["tmux", "-u", "display-menu", "-c", client, "-t", wid, "-x", "C", "-y", "C",
+    args = ["tmux", "-u", "display-menu", "-c", client, "-t", wid, "-x", "C",
+            "-y", OVERLAY_Y_CENTRE,
             "-T", "#[align=centre]Move #{window_index}"]
     for item in MENU:
         if item is None:

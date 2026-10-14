@@ -965,8 +965,9 @@ class Saved(unittest.TestCase):
         self.put(2, shelved=True, age=5 * 60, title="[repo2] issue #12")
         self.put(3, starred=True, shelved=True, age=2 * 86400, title="")
         m = self.menu(CLIENT)
+        # Row 0 under a top bar, where tmux 3.7c can't draw a busy pane over the menu's top rows.
         self.assertEqual(m[2:11], ["-c", CLIENT, "-T", "#[align=centre]Shelf", "-x", "C",
-                                   "-y", "C", "Star this tab"])
+                                   "-y", "#{?#{==:#{status-position},top},0,#{popup_centre_y}}", "Star this tab"])
         items = m[10:]
         self.assertEqual(items[:7], [
             "Star this tab", "*", f"run-shell '{SCRIPT} star %4 {CLIENT}'",

@@ -1116,6 +1116,39 @@ class Conf(unittest.TestCase):
         self.assertEqual(len(right), 4)
         self.assertEqual(tap, right)
 
+    def test_every_menu_and_popup_opens_at_row_0_under_a_top_bar(self):
+        # tmux 3.7c masks a menu or popup out of a pane's redraw at the line's window y, not its
+        # screen y, so under a top bar a busy pane painted over an overlay's first rows (the tap
+        # menu lost its Star row). Row 0 escapes it; a bar at the bottom keeps tmux's spot. A
+        # menu item's command is expanded when the menu opens, so a popup inside one has ##.
+        tab = "#{?#{==:#{status-position},top},0,#{popup_window_status_line_y}}"
+        centre = "#{?#{==:#{status-position},top},0,#{popup_centre_y}}"
+        self.assertEqual(tb.OVERLAY_Y_CENTRE, centre)
+        with open(CONF) as f:
+            text = f.read()
+        self.assertIn(f"set -g @overlay_y_tab '{tab}'\n", text)
+        self.assertIn(f"set -g @overlay_y_centre '{centre}'\n", text)
+        with open(os.path.join(REPO, "tmux", "base.conf")) as f:
+            base = f.read()
+        seen = 0
+        for name, body, want in (("claude.conf", text, {"tab": "#{E:@overlay_y_tab}",
+                                                         "top": "#{E:@overlay_y_centre}"}),
+                                 ("base.conf", base, {"top": centre})):
+            for line in body.splitlines():
+                if line.lstrip().startswith("#"):
+                    continue
+                for m in re.finditer(r"display-(menu|popup)\b(.*)", line):
+                    seen += 1
+                    with self.subTest(conf=name, line=line.strip()[:60]):
+                        y = re.search(r"-y '([^']*)'", m.group(2))
+                        self.assertIsNotNone(y, "no -y")
+                        kind = "tab" if "-x W" in m.group(2) else "top"
+                        expect = want[kind]
+                        if line.lstrip().startswith('"'):          # inside a menu item
+                            expect = expect.replace("#", "##")
+                        self.assertEqual(y.group(1), expect)
+        self.assertEqual(seen, 11)
+
     def test_the_fallback_tab_formats_cut_the_title_before_stripping_it(self):
         # The single row drawn before the first layout (or with no script): s/// is quadratic,
         # so an uncut 212 KB title of "✳ " took 41 ms a tab; cut, 13 ms.
@@ -1711,7 +1744,7 @@ class FakeTmux(unittest.TestCase):
             time.sleep(0.05)
         menu = next(c for c in self.calls() if c[0] == "display-menu")
         self.assertEqual(menu[:10], ["display-menu", "-c", "/dev/pts/7", "-t", "@2", "-x", "C",
-                                     "-y", "C", "-T"])
+                                     "-y", tb.OVERLAY_Y_CENTRE, "-T"])
         self.assertNotIn("-O", menu)
         items = menu[11:]
         self.assertIn("◀ Left", items)
@@ -2184,6 +2217,42 @@ class RealTmux(unittest.TestCase):
         self.click(x, y, button=2, release=False)   # a release outside would close it
         self.find("2:hqwin")
         self.find("Move ◀")
+
+    def test_a_busy_pane_behind_the_tap_menu_leaves_the_menu_whole(self):
+        # The pane behind redraws whole every frame under synchronized output, as Claude Code
+        # does. Before the menus opened at row 0, it painted over the menu's first row.
+        self.run_layout()
+        x, y = self.find("alpha-title")
+        writer = os.path.join(self.tmp, "writer.py")
+        with open(writer, "w") as f:
+            f.write("import sys, time\n"
+                    "for n in range(100000):\n"
+                    "    sys.stdout.write('\\x1b[?2026h' + ''.join("
+                    "'\\x1b[%d;1H\\x1b[2K\\x1b[41m row %d frame %d \\x1b[0m' % (r, r, n)"
+                    " for r in range(1, 14)) + '\\x1b[?2026l')\n"
+                    "    sys.stdout.flush()\n"
+                    "    time.sleep(0.05)\n")
+        replies = os.path.join(self.home, ".local", "bin", "pass-last")
+        os.makedirs(os.path.dirname(replies), exist_ok=True)
+        with open(replies, "w") as f:
+            f.write("#!/bin/sh\necho replies-probe\nexec sleep 30\n")
+        os.chmod(replies, 0o755)
+        self.ti("respawn-pane", "-k", "-t", "t:0", f"{sys.executable} -I {writer}")
+        self.wait(lambda: any("frame" in line for line in self.screen()), "the writer never drew")
+        self.click(x, y)                                    # the current tab: its menu
+        self.find("Replies before pass")
+        time.sleep(1.5)                                     # about 30 frames behind it
+        screen = self.screen()
+        self.assertTrue(screen[0].count("┌"), screen[:3])  # its top edge on row 0
+        for item in ("Star", "Shelve", "Shelf…", "Replies before pass", "Windows…"):
+            self.assertTrue(any(item in line for line in screen), (item, screen[:14]))
+        wx, wy = self.find("Replies before pass")
+        self.click(wx + 1, wy)                              # a popup from inside a menu item
+        self.find("replies-probe")
+        time.sleep(1.5)
+        screen = self.screen()
+        self.assertIn("replies before the pass", screen[0])  # row 0, title kept
+        self.assertTrue(any("replies-probe" in line for line in screen[1:3]), screen[:3])
 
     def drag(self, start, end, button=0):
         """An SGR press at start, motion (button 32) to end, release at end: (x, y) cells."""
