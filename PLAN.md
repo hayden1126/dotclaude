@@ -916,3 +916,100 @@ Patterns to reuse:
 Process: each PR runs as a full-track effort with a `writer` in a worktree and a fresh
 `reviewer` per fix round. It opens as a draft and is marked ready after docs, STATUS, install
 and the smoke test from the branch. Push and merge only on Hayden's approval.
+
+## Next: two workflow fixes (2026-10-14)
+
+Hayden raised both on 2026-10-14 and picked a design for each the same day. Evidence: the
+transcripts of that day and `~/scratch/lanes-ux/snapshot-2026-10-14.txt` (private).
+
+### Lead and lanes say the same things twice (lane `ask-owner`, queued)
+
+Hayden reads the lead's window and every lane's. Both kept asking "ready to merge?", "go for
+`lane done`?" and "approve the push?". The root duplicate is in the docs: `lane done` runs only
+from the lead (a lane's session is refused), yet the handoff skill tells the lane to propose it
+and the lanes skill tells the lead to propose it too. Lanes also narrate the lead's messages
+back to Hayden. No doc says which window owns which ask.
+
+No session watches for merges. Hayden's words are the trigger: for #98 he typed "merged" in
+lane-addr's window, and the lane told the lead; for #99 he typed "push and PR and merge" in
+tab-bar's window, the lane ran `gh pr merge`, and then he ran the lead's reinstall himself with
+`!` lines, because waiting on the lead was slower.
+
+**Picked: B, the lane tells the lead and the lead acts on a standing approval.**
+- Each ask has one owner. The lane owns its plan, push, draft PR, ready and merge. The lead owns
+  new-lane tables, merge order, the post-merge chain and `lane done`.
+- The lane that learns of a merge sends the lead "merged #N" and says nothing more about it to
+  Hayden.
+- The lead then runs, without asking: fetch, merge `main` into its branch, reinstall from the
+  main checkout (settings and `~/.tmux.conf` copied first and diffed), the link check, rebase
+  nudges to the other lanes, and `lane done`. It reports one line, or a failure.
+- A lane with more PRs to come starts its record's Next with `Keep open: <why>`, and the lead
+  skips `lane done` for it. `handoff-check --closing` fails on that line, so `lane done`
+  refuses a kept lane mechanically. `--abandon` stays an ask rule.
+- Lanes report their own state and asks, never the lead's messages.
+
+| Situation | A: one owner per ask, docs only | B: A plus the standing approval | C: B plus a lead merge watcher |
+|---|---|---|---|
+| Normal merge from the lane | one lead ask per lane | no ask, one line | no ask, one line |
+| Merge on GitHub, told to no session | lead asks when next spoken to | waits until Hayden says "merged" anywhere | caught within the poll interval |
+| Lane session gone at the merge | same as above | lead catches it on its next turn (`lane ls`) | caught by the waiter |
+| A post-merge step fails | lead reports | chain stops, lead reports | same as B |
+| Lane stays open for more PRs | Hayden says no | `Keep open:` line, enforced by handoff-check | same as B |
+| Safety boundary | unchanged | a scoped exception to "confirm before deleting" for `lane done` after a merge | same as B |
+| Machinery | docs | docs, one message per merge | B plus a waiter per ready PR, re-armed every 2 h |
+
+C lost because every merge so far went through a lane window, so the lane's message is the
+event. Two watchers would also double the chain: two reinstalls, two reports.
+
+Files: `skills/lanes/SKILL.md` (lifecycle step 6, "The lead" step 6, a one-owner table),
+`docs/lanes.md`, `skills/handoff/SKILL.md` (stop proposing `lane done`),
+`skills/handoff/scripts/handoff-check` (the `Keep open:` rule under `--closing`), tests in
+`tests/lanes`. It overlaps lane excluded-guard on the two lanes docs, so it opens after that lane
+closes. Until then the lead follows B by hand.
+
+### The tab glyph misses "input wanted" (lane `turn-glyph`)
+
+Hayden wants green whenever input from him is required or preferred, busy as now, and blank only
+when nothing is wanted and no work runs. Two bugs stand in the way:
+- Green comes only from the Notification matcher `permission_prompt|elicitation_dialog`. A turn
+  that ends asking in plain text (lane excluded-guard's "add this line to settings.json", 01:11)
+  leaves the tab blank.
+- Every Stop writes idle, even while a subagent or a background shell runs. Only the ring knows
+  the task rule (`hooks/stop_ring.py` `WAITS`: subagent, shell, workflow, cloud session).
+
+**Picked: B, Haiku reads the reply.**
+- Stop decides the state in one place, with the ring's task rule: counted tasks running means
+  busy, otherwise idle. A background dev server therefore keeps the tab busy until the next turn
+  (accepted).
+- A detached call sends the tail of the Stop payload's `last_assistant_message` to Haiku for a
+  yes or no: does the reply want something from Hayden (a question, an approval, a choice, a
+  step only he can do, a proposed next step waiting on his go)? Yes paints green, which beats
+  busy.
+- The call writes only if the window still holds that Stop's turn (its `prompt_id`), so a new
+  prompt or a queued restart is never painted over.
+- An API error paints green and logs `input=error` in `ring.log`: redundancy over silence.
+- `hooks/session-summary.sh` already calls Haiku with the subscription token, but it skips turns
+  that grew the transcript less than 2 KiB, which are exactly the short asks. The classifier
+  shares its HTTP code, not its gate.
+
+| Situation | A: every finished turn green | B: Haiku reads the reply | C: a marker the model writes |
+|---|---|---|---|
+| Turn ends with a plain-text ask | green | green after about 1 to 2 s | green if the model wrote it |
+| Turn ends with a report | green (the spec says blank) | blank | blank |
+| Eight tabs, six idle (the snapshot) | nearly all green: no signal | green only where asked | depends on compliance |
+| API or classifier failure | none | green, logged | none |
+| Model drift, other repos | none | the model id can retire | silent misses, the bug today |
+| Cost | none | one tiny Haiku call per attended Stop | marker noise in every asking reply |
+
+A lost on the common case: most turns end with a report, so green would mean nothing. C fails
+silently whenever a session forgets the rule. Routing every ask through AskUserQuestion was
+rejected outright: it fits choices, not "add this line".
+
+Probes before building: Haiku latency for a one-word answer; a replay of about 200 real
+turn-ending replies from `~/.claude/projects` transcripts (the green rate, and a sample of each
+class for Hayden to judge); that UserPromptSubmit fires for queued prompts and task notices, so
+busy overwrites a stale green.
+
+Files: `hooks/tmux-state.sh`, `hooks/stop_ring.py`, `hooks/session-summary.sh` (the shared Haiku
+call), the Stop wiring in `settings.json`, `tests/setup/test_tmux_hooks.py`,
+`tests/delegation/test_settings.py` (it pins Stop as idle), README's indicator section.
