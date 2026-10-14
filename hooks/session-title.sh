@@ -31,7 +31,8 @@
 # CLAUDE_PROJECT_DIR, the dir the session launched in. Not the payload cwd: a Bash
 # cd moves that (and $PWD), so a lead that cd'd into an agent worktree was retitled
 # after it; CLAUDE_PROJECT_DIR stays put (probed on 2.1.296). A lane launches in its
-# own worktree, so it shows the lane id. Reads
+# own worktree, so it shows the worktree's name (its lane id, unless adopted under
+# another). Reads
 # only the transcript TAIL for the DEDUP check, so cost is flat on any transcript size.
 set -uo pipefail
 

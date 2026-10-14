@@ -97,7 +97,7 @@ force-push and a `reset --hard` on a dirty tree when the prompt named them.
 must cover, and `test_settings.py` ties it to `settings.json` in both directions. It holds the
 credential barrier (`git push` to `origin`, `fetch`, `pull`, `ls-remote`, and `gh`'s `pr`, `run`,
 `issue`, `api` and `search` with its read-only `repo`, `release` and `auth status` forms), our
-wrappers (`lane init`, `new`, `adopt`, `ls`, `open`, `done`, `pass-respawn`, `delegation-ledger`,
+wrappers (`lane init`, `new`, `adopt`, `ls`, `open`, `done`, `addr`, `pass-respawn`, `delegation-ledger`,
 `codex-delegate`), `claude`, the read-only tmux verbs (`ls`, `list-sessions`, `list-windows`,
 `list-panes`, `list-clients`, `list-keys`, `list-commands`, `capture-pane`, `display`, `show`,
 `show-options`, `show-environment`, `show-messages`, `show-hooks`), read-only codex (`login status`,
@@ -315,7 +315,7 @@ need nothing extra.
   Claude's own AI title and the tab's running/idle status icons stay intact. The repo name comes from
   walking up for `.git` (no git subprocess) from `CLAUDE_PROJECT_DIR`, the directory the session
   launched in: a Bash `cd` moves the payload `cwd` but not that, so a lead that steps into an agent
-  worktree keeps its own name, and a lane (launched in its worktree) shows its lane id. There are no
+  worktree keeps its own name, and a lane (launched in its worktree) shows the worktree's name. There are no
   brackets, since ListAgents prints a session as `<name> [<ref>]` and a leading `[repo]` read like a
   ref. The label is chosen by a cascade: the Stop-hook Haiku
   label (`session-summaries/<id>.title.txt`), else the first line of the current prompt, else the
@@ -492,6 +492,9 @@ and status single-writer:
   tmux window, context (CTX: `312k*` past the auto-pass soft tier, `523k!` past hard) and
   state (STATE: busy, idle, waiting or shell).
   `lane who 42` is the only answer to who owns #42.
+- `lane addr chart-fix` (or `lane addr lead`) prints `uds:<socket>`, the SendMessage address of
+  that lane's live session. A session's ListAgents name is its tab title, which changes most
+  turns, and a pass gives it a new socket, so resolve the address just before each send.
 - `lane lock gate -- npm run e2e` runs a shared gate under a named lock, so a second lane's run
   waits instead of colliding.
 - A lane tests its change by installing from its own worktree (`lane lock install --

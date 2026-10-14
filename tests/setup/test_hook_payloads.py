@@ -62,10 +62,11 @@ class SessionTitle(Workspace):
         self.assertEqual(self.title(prompt="fix it", cwd=os.path.join(agent, "sub")),
                          "proj · fix it")
 
-    def test_a_lane_shows_its_lane_id(self):
+    def test_a_lane_shows_its_worktree_name(self):
+        # Launched in its worktree, even with its cwd moved into the main checkout.
         lane = self.worktree("proj-lanes", "lane-x")
         self.env["CLAUDE_PROJECT_DIR"] = lane
-        self.assertEqual(self.title(prompt="fix it", cwd=os.path.join(lane, "sub")),
+        self.assertEqual(self.title(prompt="fix it", cwd=self.cwd),
                          "lane-x · fix it")
 
     def test_with_no_usable_launch_dir_the_cwd_names_the_repo(self):
