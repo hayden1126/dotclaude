@@ -15,13 +15,15 @@ cells (9 on a phone), its tabs then spread evenly over its rows. Widths come fro
 client's width alone, so a title change never moves a tab or changes the row count (which would
 resize every pane). Past 5 rows the smallest lane groups move onto the shared rows behind a
 `┃repo▸` divider; still past 5, the last row ends in `+N`, which opens the window list. The
-current window is always shown, under its own header. A client narrower than 100 cells (the phone) gets short slots
+current window is always shown, under its own header: hidden, it takes a slot of its own group
+or kind, else the `+N` row's last slot behind its own divider. A client narrower than 100 cells (the phone) gets short slots
 and the bar at the bottom; a session's narrowest client decides its layout. Window numbers never
 change: the bar only draws tabs in another order.
 
 tmux/claude.conf runs `layout` from hooks (attach, detach, resize, a session switch, a window
 opened, closed or selected), and tmux-claude-status runs it in its rate-limited pass, which
-catches what no hook reports (a cwd change, a lane opened or closed). Each window is classified
+catches what no hook reports (a cwd change, a lane opened or closed, a swap-window or a
+move-window -r, which fire no hook in tmux 3.7c) within about 4 s. Each window is classified
 by its active pane's cwd, from the filesystem alone: no git call. Writes are per session: every
 `status-format[0..N-1]` row (a session's first array write leaves the rows it didn't write blank),
 then `status` (the row count, set only when it changes), the header names as `@tab_bar_g<n>`, and
@@ -34,9 +36,11 @@ last, so a session that vanished mid-run (an error drops the rest of its line) r
 Shift+arrows (claude.conf) run `nav`, which reads the client's session, its current window and
 the session's `@tab_bar_nav` (each shown row's tabs with their columns, written by `layout` like
 the rows) and selects one window. Left and right step in the order the bar draws the tabs,
-wrapping; up and down go to the tab above or below, wrapping. Rows count top to bottom on both
+wrapping; up and down go to the tab above or below (the one under the current tab's first
+cell, else the nearest), wrapping. Rows count top to bottom on both
 layouts (tmux draws row 0 on top even with the bar at the bottom). A window hidden in `+N`, or a
-session with no `@tab_bar_nav`, falls back to tmux's previous-window and next-window.
+session with no `@tab_bar_nav`: left and right fall back to tmux's previous-window and
+next-window, and up and down stay put.
 
 Nothing from a window title, a directory name or a lane record enters a format string: the rows
 hold only window ids (`@N`), integers and fixed template text, names reach the bar through options
@@ -515,7 +519,8 @@ def fit(width: int) -> str:
 def entry(wid: str, index: int, slot: int) -> str:
     """One slot: a W loop that draws only window `wid`, normal or (as tmux's current window)
     highlighted, as ` #I ★ ◐ name label` padded to `slot` cells. The star and the glyph come and
-    go at render time, so the text is a 4-way conditional over literal widths."""
+    go at render time, so the text is a 4-way conditional over literal widths. A slot too narrow
+    for the index, a star and a glyph draws only the index, cut to the slot."""
     if not WID.match(wid) or not isinstance(index, int) or index < 0:
         raise ValueError(f"bad window {wid!r} {index!r}")
     base = slot - (len(str(index)) + 2)
@@ -802,7 +807,8 @@ def parse_nav(text: str) -> list | None:
 def nav_step(rows: list | None, current: str, direction: str) -> tuple | None:
     """Where a Shift+arrow goes from `current` (pure): ("select", wid), (command,) for tmux's
     previous-window or next-window when the bar has no place for the current window (no
-    @tab_bar_nav, or the window is hidden in +N), or None to stay.
+    @tab_bar_nav, or the window is hidden in +N; left and right only), or None to stay (up
+    and down there).
     Left and right step in reading order, past a row's end to the next row's first tab and from
     the last tab to the first. Up and down go to the next row up or down (wrapping between the
     top and bottom rows), to the tab whose span covers the current tab's first cell, else the
