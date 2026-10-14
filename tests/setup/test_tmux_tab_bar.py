@@ -51,6 +51,130 @@ def tab_ids(row):
     return [item[1] for item in row if item[0] == "tab"]
 
 
+# --- a model of tmux's format expansion: what a row draws ----------------------------------------
+# Enough of tmux 3.7c's format language for the rows tmux-tab-bar writes: #{?c,a,b}, #{==:a,b},
+# #{W:a,b} (env["windows"], with env["current"] drawn by b), variables, #I, and the modifiers
+# =N, =/N/marker and pN (s/// is taken as identity: the tests' titles have no prefix to strip).
+# Styles (#[...]) draw nothing. It measures cells, so a test can check the columns a row draws
+# instead of the ones the layout claims.
+
+def _close(s, i):
+    """The index of the } closing the #{ at s[i]."""
+    depth, j = 0, i
+    while j < len(s):
+        if s.startswith("#{", j):
+            depth, j = depth + 1, j + 2
+            continue
+        if s[j] == "}":
+            depth -= 1
+            if depth == 0:
+                return j
+        j += 1
+    raise ValueError(f"an unclosed #{{ at {i}")
+
+
+def _split(s, n):
+    """s split at its n - 1 top-level commas (outside any #{...})."""
+    parts, depth, start, j = [], 0, 0, 0
+    while j < len(s):
+        if s.startswith("#{", j):
+            depth, j = depth + 1, j + 2
+            continue
+        if s[j] == "}":
+            depth -= 1
+        elif s[j] == "," and depth == 0:
+            parts.append(s[start:j])
+            start = j + 1
+        j += 1
+    parts.append(s[start:])
+    if len(parts) != n:
+        raise ValueError(f"{len(parts)} parts, not {n}: {s[:60]!r}")
+    return parts
+
+
+def _cut(text, cells):
+    out, used = [], 0
+    for c in text:
+        if used + tb.cell_width(c) > cells:
+            break
+        out.append(c)
+        used += tb.cell_width(c)
+    return "".join(out)
+
+
+def _directive(body, env):
+    if body.startswith("?"):
+        cond, a, b = _split(body[1:], 3)
+        value = draw(cond, env) if cond.startswith("#{") else str(env.get(cond, ""))
+        return draw(a if value not in ("", "0") else b, env)
+    if body.startswith("==:"):
+        x, y = _split(body[3:], 2)
+        return "1" if draw(x, env) == draw(y, env) else "0"
+    if body.startswith("W:"):
+        a, b = _split(body[2:], 2)
+        return "".join(draw(b if w["window_id"] == env["current"] else a, {**env, **w})
+                       for w in env["windows"])
+    if ":" not in body.split("#{", 1)[0]:
+        return str(env.get(body, ""))
+    mods, value = body.split(":", 1)
+    text = draw(value, env) if value.startswith("#{") else str(env.get(value, ""))
+    for mod in mods.split(";"):         # in tmux's order: substitutions, the cut, the pad
+        if mod.startswith("="):
+            n, _, marker = mod[1:].lstrip("/").partition("/")
+            if tb.text_width(text) > int(n):
+                text = _cut(text, int(n)) + marker
+        elif mod.startswith("p"):
+            text += " " * max(0, int(mod[1:]) - tb.text_width(text))
+    return text
+
+
+def draw(fmt, env, starts=None):
+    """The text tmux draws for fmt. With `starts`, each top-level W loop that draws anything
+    appends the 0-based cell it starts at."""
+    out, i = [], 0
+    while i < len(fmt):
+        if fmt.startswith("#[", i):
+            i = fmt.index("]", i) + 1
+        elif fmt.startswith("#{", i):
+            j = _close(fmt, i)
+            text = _directive(fmt[i + 2:j], env)
+            if starts is not None and fmt.startswith("#{W:", i) and text:
+                starts.append(tb.text_width("".join(out)))
+            out.append(text)
+            i = j + 1
+        elif fmt.startswith("#I", i):
+            out.append(str(env["window_index"]))
+            i += 2
+        else:
+            out.append(fmt[i])
+            i += 1
+    return "".join(out)
+
+
+def window(wid, index, star="1", state="busy", title="a title longer than any slot gets"):
+    return {"window_id": wid, "window_index": index, "@tab_name": "tab-bar",
+            "pane_title": title, "@claude_star": star, "@claude_state": state}
+
+
+def bar_env(lay, current=None):
+    """Every shown tab as a window with a star, a glyph and a long title (the widest case)."""
+    wins = [window(i[1], i[2]) for row in lay.rows for i in row if i[0] == "tab"]
+    env = {"windows": wins, "current": current or wins[0]["window_id"],
+           "status-left": " " + "x" * 40, "status-right": " " + "y" * 40}
+    env.update({f"@tab_bar_g{g}": h for g, h in enumerate(lay.heads)})
+    return env
+
+
+def cells(text, ch):
+    """The 0-based cells where ch is drawn in text."""
+    out, col = [], 0
+    for c in text:
+        if c == ch:
+            out.append(col)
+        col += tb.cell_width(c)
+    return out
+
+
 # --- repos on disk ------------------------------------------------------------------------------
 
 def make_repo(root, name, lanes=(), others=(), records=None):
@@ -304,35 +428,27 @@ class LayOut(unittest.TestCase):
         self.assertEqual(lay.slots, [22])                              # (356 - 14) // 15
 
     def test_every_rows_first_tab_starts_at_the_same_column(self):
-        # Drawn cells per item: what the renderer pads each piece to. Every row's first tab
-        # starts at G + 1, and with equal slots the separators line up across rows.
+        # Measured from what each row draws, not from the gutter the layout claims: every row's
+        # first tab starts at the same cell (G, 0-based), with equal slots the separators line
+        # up across rows, and no row draws past the client's width.
         for width, slots in ((188, [32, 32]), (45, None)):
             with self.subTest(width=width):
                 lay = tb.lay_out([DOTCLAUDE], SHARED5, width, "@4", 8, 22)
                 if slots:
                     self.assertEqual(lay.slots, slots)
+                env = bar_env(lay)
                 starts, seps = [], []
-                for row, slot in zip(lay.rows, lay.slots):
-                    col, row_seps = lay.gutter + 1, []
-                    tab_cols = []
-                    for k, item in enumerate(row):
-                        if item[0] == "head":
-                            continue                    # drawn in the gutter
-                        if item[0] == "tab" and k and row[k - 1][0] == "tab":
-                            row_seps.append(col)
-                            col += 1
-                        if item[0] == "tab":
-                            tab_cols.append(col)
-                            col += slot
-                        elif item[0] == "div":
-                            col += lay.head_w[item[1]]
-                    starts.append(tab_cols[0])
-                    seps.append(row_seps)
-                self.assertEqual(set(starts), {lay.gutter + 1})
+                for row in tb.render(lay):
+                    cols = []
+                    text = draw(row, env, cols)
+                    self.assertLessEqual(tb.text_width(text), width)
+                    starts.append(cols[0])
+                    seps.append(cells(text, "│"))
+                self.assertEqual(set(starts), {lay.gutter})
                 if slots:
                     common = min(len(s) for s in seps)
                     self.assertEqual({tuple(s[:common]) for s in seps}, {tuple(seps[0][:common])})
-        self.check_fits(lay, 400)
+                self.check_fits(lay, width)
 
     def test_a_tiny_client_still_shows_one_tab_a_row(self):
         lay = tb.lay_out([DOTCLAUDE], SHARED5, 12, "@4", 28, 16)
