@@ -65,6 +65,9 @@ def _close(s, i):
         if s.startswith("#{", j):
             depth, j = depth + 1, j + 2
             continue
+        if s[j] == "#" and s[j + 1:j + 2] in (",", "#", "}", ":"):
+            j += 2                      # an escape (format_skip): `#}` doesn't close
+            continue
         if s[j] == "}":
             depth -= 1
             if depth == 0:
@@ -79,6 +82,9 @@ def _split(s, n):
     while j < len(s):
         if s.startswith("#{", j):
             depth, j = depth + 1, j + 2
+            continue
+        if s[j] == "#" and s[j + 1:j + 2] in (",", "#", "}", ":"):
+            j += 2
             continue
         if s[j] == "}":
             depth -= 1
@@ -550,15 +556,18 @@ class Render(unittest.TestCase):
     def test_a_title_loses_its_hashes_then_claudes_prefix(self):
         e = tb.entry("@7", 7, 30)
         strip = "s/^([^ [][^ []?[^ []? )?\\[[^]]*\\] (.+)$/\\2/"
-        # Each substitution runs on the text cut to 64 cells first: s/// is quadratic.
-        self.assertIn("#{s/[#]/♯/;" + strip + ":#{=/64:pane_title}}", e)
-        self.assertIn("#{s/[#]/♯/:#{=/64:pane_current_command}}", e)
+        # Each substitution runs on the text cut to LABEL_CAP characters first (s/// is
+        # quadratic), and the cut is a substitution too: `=` skips #[...] and counts ## once.
+        cut = "#{s/^(.{128#}).+$/\\1/:%s}"
+        self.assertIn("#{s/[#]/♯/;" + strip + ":" + cut % "pane_title" + "}", e)
+        self.assertIn("#{s/[#]/♯/:" + cut % "pane_current_command" + "}", e)
         self.assertEqual(e.count("pane_title}"),
-                         e.count("[#]/♯/;" + strip + ":#{=/64:pane_title}}"))
+                         e.count("[#]/♯/;" + strip + ":" + cut % "pane_title" + "}"))
         self.assertEqual(e.count("pane_current_command}"),
-                         e.count("#{s/[#]/♯/:#{=/64:pane_current_command}}"))
-        self.assertEqual(tb.LABEL_CAP, 64)
-        self.assertGreater(tb.LABEL_CAP, tb.DEFAULT_SLOT)
+                         e.count("#{s/[#]/♯/:" + cut % "pane_current_command" + "}"))
+        self.assertNotIn("#{=/" + str(tb.LABEL_CAP), e)
+        self.assertEqual(tb.LABEL_CAP, 128)
+        self.assertGreater(tb.LABEL_CAP, 3 * tb.DEFAULT_SLOT)  # bytes, under a C locale
         for bad in ("{", "}", ",", ":", ";"):   # each would end the modifier or the #{...}
             self.assertNotIn(bad, strip)
         # The same pattern in Python's dialect ([ escaped in a set): what it keeps.
@@ -596,10 +605,12 @@ class Render(unittest.TestCase):
     def test_a_tab_draws_exactly_its_slot_at_any_index_width(self):
         # The worst case on the phone: a 3-digit index, a star and a glyph take 9 cells, the
         # whole minimum slot; the label then shrinks to '…' or nothing, never past the slot.
+        # Below that (a client a few cells wide, a 4-digit index) the tab is its index, cut to
+        # the slot, so the nav columns still match what the bar draws.
         self.assertGreaterEqual(tb.MIN_SLOT_PHONE, len(" 999 ") + len("★ ◐ "))
-        for index in (7, 42, 999):
-            for slot in (tb.MIN_SLOT_PHONE, tb.MIN_SLOT_PHONE + 1, tb.MIN_SLOT_PHONE + 2,
-                         tb.MIN_SLOT, tb.DEFAULT_SLOT):
+        for index in (7, 42, 999, 1234):
+            for slot in (1, 2, 3, 5, 8, tb.MIN_SLOT_PHONE, tb.MIN_SLOT_PHONE + 1,
+                         tb.MIN_SLOT_PHONE + 2, tb.MIN_SLOT, tb.DEFAULT_SLOT):
                 for star in ("", "1"):
                     for state in ("idle", "busy", "wait"):
                         for current in ("@5", "@6"):
@@ -609,7 +620,7 @@ class Render(unittest.TestCase):
                                        "current": current}
                                 text = draw(tb.entry("@5", index, slot), env)
                                 self.assertEqual(tb.text_width(text), slot, text)
-                                self.assertTrue(text.startswith(f" {index} "), text)
+                                self.assertTrue(text.startswith(f" {index} "[:slot]), text)
 
     def test_plus_n_is_a_user_range(self):
         groups = [Group(f"g{k}", tabs(*range(10 * k + 1, 10 * k + 11))) for k in range(6)]
@@ -845,7 +856,7 @@ HOOK = ("'run-shell -b \"[ -x $HOME/.local/bin/tmux-tab-bar ] && "
 # The script when it is installed, else window order for Left and Right (Up and Down do nothing).
 NAV_CMD = "\"$HOME/.local/bin/tmux-tab-bar\" nav {dir} \"#{{client_name}}\" >/dev/null 2>&1; true"
 NAV_BIND = ("bind -n S-{key} if-shell '[ -x \"$HOME/.local/bin/tmux-tab-bar\" ]' "
-            "{{ run-shell -b '" + NAV_CMD + "' }}{fallback}\n")
+            "{{ run-shell '" + NAV_CMD + "' }}{fallback}\n")
 NAV_FALLBACK = {"Left": " { previous-window }", "Right": " { next-window }", "Up": "", "Down": ""}
 
 
@@ -1591,18 +1602,27 @@ class RealTmux(unittest.TestCase):
     def test_a_huge_osc_title_expands_fast(self):
         # A pane can set a title of any length with OSC 2 (select-pane -T that long hits
         # ARG_MAX). s/// is quadratic in its input: uncut, a 160k title took 98 ms to expand.
-        self.ti("new-window", "-d", "-t", "t:3", "-c", self.plain,
-                "printf '\\033]2;%s\\033\\\\' \"$(head -c 160000 /dev/zero | tr '\\0' x)\"; "
-                "sleep 600")
-        self.wait(lambda: len(self.ti("display", "-p", "-t", "t:3", "#{pane_title}").stdout)
-                  > 150000, "the OSC 2 title never arrived")
-        times = []
-        for _ in range(5):
-            start = time.perf_counter()
-            got = self.ti("display", "-p", "-t", "t:3", tb.BODY).stdout.rstrip("\n")
-            times.append(time.perf_counter() - start)
-        self.assertLessEqual(len(got), tb.LABEL_CAP + 16, got[:80])
-        self.assertLess(min(times), 0.020, times)
+        # `=` skips a #[...] style and counts ## as one cell, so the cut can't be #{=/N:...}:
+        # the second and third titles passed that whole (88 ms for the ## one).
+        titles = ("x" * 160000, "#[" + "##" * 80000 + "]", "#[" + "x" * 160000 + "]")
+        for i, title in enumerate(titles):
+            with self.subTest(title=title[:6]):
+                path = os.path.join(self.tmp, f"title{i}")
+                with open(path, "w") as f:
+                    f.write(title)
+                win = f"t:{3 + i}"
+                self.ti("new-window", "-d", "-t", win, "-c", self.plain,
+                        f"printf '\\033]2;%s\\033\\\\' \"$(cat {path})\"; sleep 600")
+                self.wait(lambda: len(self.ti("display", "-p", "-t", win,
+                                              "#{pane_title}").stdout) > 150000,
+                          "the OSC 2 title never arrived")
+                times = []
+                for _ in range(5):
+                    start = time.perf_counter()
+                    got = self.ti("display", "-p", "-t", win, tb.BODY).stdout.rstrip("\n")
+                    times.append(time.perf_counter() - start)
+                self.assertLessEqual(len(got), tb.LABEL_CAP + 16, got[:80])
+                self.assertLess(min(times), 0.020, times)
 
     def test_a_click_on_row_2_switches(self):
         self.run_layout()
@@ -1683,6 +1703,16 @@ class RealTmux(unittest.TestCase):
             self.press(key, want)
         self.run_layout()                       # and the keys left no error behind
 
+    def test_rapid_shift_arrows_each_take_a_step(self):
+        # Key repeat or quick presses: each nav must see the window the one before it chose.
+        self.link_script()
+        self.add_second_laned_repo()
+        self.run_layout()
+        self.to("send-keys", "-t", "o", "S-Right", "S-Right", "S-Right")
+        self.wait(lambda: self.current() == "2", f"three S-Right ended at {self.current()}")
+        time.sleep(0.5)
+        self.assertEqual(self.current(), "2")
+
     def test_shift_up_goes_to_the_row_above_on_the_phone_too(self):
         # The phone's bar is at the bottom, but tmux still draws row 0 on top.
         self.link_script()
@@ -1713,7 +1743,7 @@ class RealTmux(unittest.TestCase):
 
     def test_no_hook_puts_a_pane_in_view_mode(self):
         # HOME has no tmux-tab-bar: every hook's command must still exit 0 and print nothing.
-        self.ti("new-window", "-t", "t", "-c", self.plain, "sleep 600")
+        self.ti("new-window", "-t", "t:", "-c", self.plain, "sleep 600")
         self.ti("select-window", "-t", "t:0")
         deadline = time.time() + 2
         while time.time() < deadline:

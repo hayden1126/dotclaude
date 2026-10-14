@@ -111,15 +111,20 @@ GLYPH_ON = "#{?#{==:#{@claude_state},busy},1,#{?#{==:#{@claude_state},wait},1,0}
 #   runs to the end and keeps \2, so tmux's global replace can't strip a second [bracket].
 #   `(.+)`, not `(.*)`: a title that is only the prefix would leave \2 empty, and tmux draws an
 #   empty group's reference as a literal 2; unmatched, that title draws as it is.
-# Both run on the text cut to LABEL_CAP cells first (the nested #{=/N:...} expands before the
-# substitutions): s/// is quadratic in its input (regsub runs regexec once per match, each from
-# the strlen of the rest), and a pane can set a title of any length with OSC 2, so a 160k-cell
-# title took 98 ms a row to draw, against tmux's 100 ms limit for a whole row. Cut, it takes 3 ms.
-LABEL_CAP = 64                  # cells: well over any slot
+# Both run on the text cut to LABEL_CAP characters first: s/// is quadratic in its input (regsub
+# runs regexec once per match, each from the strlen of the rest), and a pane can set a title of
+# any length with OSC 2, so a 160k-cell title took 98 ms a row to draw, against tmux's 100 ms
+# limit for a whole row. The cut is itself a substitution, one anchored match that keeps the
+# first LABEL_CAP characters (bytes, under a C locale), not #{=/N:...}: `=` skips a `#[...]`
+# style and counts `##` as one cell, so a title of "#[" + "##" * 80000 + "]" passed it whole
+# and took 88 ms. The bound's brace is escaped (`#}`): a bare } ends the format. 128 bytes
+# still hold 42 three-byte glyphs, more than the widest slot; cut, the label takes 3 ms.
+LABEL_CAP = 128
+CUT = "#{s/^(.{" + str(LABEL_CAP) + "#}).+$/\\1/:%s}"
 BODY = ("#{?@tab_name,#{@tab_name} ,}"
         "#{?pane_title,#{s/[#]/♯/;s/^([^ [][^ []?[^ []? )?\\[[^]]*\\] (.+)$/\\2/:"
-        f"#{{=/{LABEL_CAP}:pane_title}}}},"
-        f"#{{s/[#]/♯/:#{{=/{LABEL_CAP}:pane_current_command}}}}}}")
+        + CUT % "pane_title" + "},"
+        "#{s/[#]/♯/:" + CUT % "pane_current_command" + "}}")
 
 SESSION_FMT = ("#{session_id}\t#{status}\t#{status-left-length}\t#{status-right-length}"
                "\t#{@tab_bar_sig}")
@@ -522,6 +527,10 @@ def entry(wid: str, index: int, slot: int) -> str:
         return fit(cells) if cells >= 2 else "…" if cells == 1 else ""
 
     def one(style: str, fg: str) -> str:
+        if base < 4:                    # no room for a star and a glyph (a client a few cells
+            text = f" {index} "[:slot]  # wide, a 4-digit index): the index, cut to the slot
+            return ("#[range=window|#{window_index}]" + style + text.ljust(slot) + "#[norange]"
+                    + NORM)
         glyph = ("#{?#{==:#{@claude_state},busy},◐ ,#{?#{==:#{@claude_state},wait},"
                  f"#[fg=colour46]✳ #[fg={fg}],}}}}")
         rest = (f"#{{?@claude_star,#{{?{GLYPH_ON},{label(base - 4)},{label(base - 2)}}},"
