@@ -1320,6 +1320,11 @@ def set_option(argv):
     record(argv)
     return True
 
+if args[0] == "set-option":            # a direct one (name-row unsets its input)
+    ok = set_option(args)
+    with open(path, "w") as f:
+        json.dump(st, f)
+    sys.exit(0 if ok else 1)
 if args != ["source-file", "-"]:
     sys.exit(1)
 ok = True
@@ -1372,9 +1377,10 @@ class FakeTmux(unittest.TestCase):
                          "window_active": "1" if w == "@2" else "0", "@claude_state": "idle"}
                         for w in cwds],
             "panes": [{"window_id": w, "pane_active": "1", "pane_current_path": p,
-                       "pane_title": "✳ [x] title", "@claude_star": ""}
+                       "pane_id": "%" + w[1:], "pane_title": "✳ [x] title", "@claude_star": ""}
                       for w, p in cwds.items()],
         })
+        self.common = os.path.join(lead, ".git")
 
     def write_state(self, st):
         with open(self.state, "w") as f:
@@ -1544,7 +1550,8 @@ class FakeTmux(unittest.TestCase):
         st = self.read_state()
         value = st["sessions"][0]["@tab_bar_nav"] if nav is None else nav
         st["clients"] = [{"session_id": "$0", "client_width": "188", "client_name": client,
-                          "window_id": current, "@tab_bar_nav": value}]
+                          "window_id": current, "@tab_bar_nav": value, "start_time": "1700",
+                          "pid": "42", "socket_path": "/fake/sock"}]
         self.write_state(st)
 
     def run_nav(self, *args, **env):
@@ -1601,6 +1608,154 @@ class FakeTmux(unittest.TestCase):
         self.assertEqual(self.run_nav("right", "/dev/pts/7", STUB_FAIL="list-clients"), [])
         with open(self.base + ".nav.err") as f:
             self.assertIn("list-clients", f.read())
+
+    # --- arrange: rows @2 @3 @4 (dotclaude: lead, tab-bar, lane-close), then the shared @1 ---
+
+    def run_cmd(self, *args, **env):
+        """An arrange command; its tmux calls."""
+        if os.path.exists(self.log):
+            os.remove(self.log)
+        p = subprocess.run([sys.executable, "-I", SCRIPT, *args], capture_output=True,
+                           text=True, timeout=30, env={**self.env, **env})
+        self.assertEqual((p.returncode, p.stdout, p.stderr), (0, "", ""))
+        self.assertFalse(os.path.exists(self.base + ".move.err"),
+                         open(self.base + ".move.err").read() if os.path.exists(
+                             self.base + ".move.err") else "")
+        return self.calls()
+
+    def places(self):
+        return {w["window_id"]: tb.parse_place(w["@tab_place"])
+                for w in self.read_state()["windows"] if w.get("@tab_place")}
+
+    def nav_rows(self):
+        return [[t[0] for t in row] for row in tb.parse_nav(self.session()["@tab_bar_nav"])]
+
+    def test_move_right_writes_the_row_then_lays_out(self):
+        self.nav_state("@2")
+        calls = self.run_cmd("move", "right", "/dev/pts/7")
+        key = "p:" + self.common
+        self.assertEqual(self.places(), {"@3": tb.Place(key, 0), "@2": tb.Place(key, 1),
+                                         "@4": tb.Place(key, 2)})
+        writes = [c for c in calls if c[0] == "set-option"]
+        self.assertEqual([c[3] for c in writes[:3]], ["@3", "@2", "@4"])
+        self.assertTrue(all(c[1:3] == ["-w", "-t"] and c[4] == "@tab_place" for c in writes[:3]))
+        self.assertEqual(self.nav_rows(), [["@3", "@2", "@4"], ["@1"]])   # laid out at once
+        self.nav_state("@2")
+        self.assertEqual(self.run_cmd("move", "up", "/dev/pts/7"), [c for c in self.calls()
+                                                                    if c[0].startswith("list-")])
+
+    def test_move_down_auto_and_reset(self):
+        self.nav_state("@3")
+        self.run_cmd("move", "down", "/dev/pts/7")      # before @1, the tab under it
+        self.assertEqual(self.nav_rows(), [["@2", "@4"], ["@3", "@1"]])
+        names = {w["window_id"]: w.get("@tab_name") for w in self.read_state()["windows"]}
+        self.assertEqual(names["@3"], "dotclaude·tab-bar")
+        self.nav_state("@3")
+        self.run_cmd("move", "auto", "/dev/pts/7", "@3")
+        self.assertNotIn("@3", self.places())
+        self.assertEqual(self.nav_rows(), [["@2", "@3", "@4"], ["@1"]])
+        self.assertEqual(self.places(), {"@1": tb.Place("s", 1)})   # the shared row stays manual
+        self.nav_state("@2")
+        self.run_cmd("reset", "/dev/pts/7")
+        self.assertEqual(self.places(), {})
+
+    def test_newrow_makes_a_custom_row_below_and_name_row_names_it(self):
+        self.nav_state("@3")
+        self.run_cmd("move", "newrow", "/dev/pts/7")
+        key = "p:" + self.common
+        self.assertEqual(self.places(), {"@3": tb.Place("c:1", 0, key)})
+        self.assertEqual(self.nav_rows(), [["@2", "@4"], ["@3"], ["@1"]])
+        window = {w["window_id"]: w for w in self.read_state()["windows"]}
+        self.assertEqual(window["@3"].get("@tab_row_custom"), "1")
+        self.assertNotIn("@tab_row_custom", window["@2"])
+        st = self.read_state()
+        hostile = "a\"b'c;d#[e%f$(g)$HOME~h\\i"
+        for w in st["windows"]:
+            if w["window_id"] == "@3":
+                w["@tab_row_name_in"] = hostile
+        self.write_state(st)
+        self.nav_state("@3")
+        self.run_cmd("name-row", "/dev/pts/7")
+        self.assertEqual(self.places()["@3"].name, tb.clean_row_name(hostile))
+        self.assertNotIn("@tab_row_name_in", self.read_state()["windows"][2])
+        self.assertEqual(self.session()["@tab_bar_g1"], tb.clean_row_name(hostile))
+        self.nav_state("@2")                            # not in a custom row: no name
+        self.run_cmd("name-row", "/dev/pts/7")
+        self.assertNotIn("@2", self.places())
+
+    def test_drop_by_the_half_of_the_slot_and_drop_row_by_the_end(self):
+        self.nav_state("@2")                             # row 0: @2 at 39, @3 at 72, @4 at 105
+        self.run_cmd("drop", "@4", "@2", "40", "0", "window", "/dev/pts/7")
+        self.assertEqual(self.nav_rows(), [["@4", "@2", "@3"], ["@1"]])
+        self.nav_state("@2")
+        self.run_cmd("drop", "@4", "@3", "121", "0", "window", "/dev/pts/7")   # @3 at 105
+        self.assertEqual(self.nav_rows(), [["@2", "@3", "@4"], ["@1"]])
+        for args in (("@4", "@3", "100", "0", "more"), ("@3", "@3", "80", "0", "window"),
+                     ("@9", "@3", "80", "0", "window"), ("@4", "@3", "x", "0", "window")):
+            with self.subTest(args=args):
+                self.nav_state("@2")
+                calls = self.run_cmd("drop", *args, "/dev/pts/7")
+                self.assertNotIn("source-file", [c[0] for c in calls])
+        self.nav_state("@2")
+        self.run_cmd("drop-row", "@1", "3", "0", "/dev/pts/7")      # the gutter: first
+        self.assertEqual(self.nav_rows()[0], ["@1", "@2", "@3", "@4"])
+        self.nav_state("@2")
+        self.assertNotIn("source-file", [c[0] for c in self.run_cmd(
+            "drop-row", "@1", "3", "4", "/dev/pts/7")])              # a line with no tabs
+
+    def test_the_menu_shows_moves_for_a_checked_client_and_window(self):
+        self.nav_state("@2")
+        self.run_cmd("menu", "/dev/pts/7")
+        deadline = time.time() + 10                     # display-menu runs detached
+        while time.time() < deadline and "display-menu" not in [c[0] for c in self.calls()]:
+            time.sleep(0.05)
+        menu = next(c for c in self.calls() if c[0] == "display-menu")
+        self.assertEqual(menu[:10], ["display-menu", "-c", "/dev/pts/7", "-t", "@2", "-x", "C",
+                                     "-y", "C", "-T"])
+        self.assertNotIn("-O", menu)
+        items = menu[11:]
+        self.assertIn("◀ Left", items)
+        cmd = items[items.index("Auto place") + 2]
+        self.assertEqual(tmux_words(cmd), [["run-shell", '"$HOME/.local/bin/tmux-tab-bar" move '
+                                            'auto /dev/pts/7 @2 --menu >/dev/null 2>&1; true']])
+        for args in (("menu", "/dev/pts/7;x"), ("menu", "/dev/pts/7", "@9"),
+                     ("move", "sideways", "/dev/pts/7"), ("reset",), ("name-row",),
+                     ("drop-row", "@1", "3", "0")):
+            with self.subTest(args=args):
+                calls = self.run_cmd(*args)
+                self.assertFalse([c for c in calls if c[0] in ("source-file", "display-menu")])
+
+    def test_a_move_updates_only_this_servers_records_of_the_window(self):
+        state_home = os.path.join(self.tmp, "state")
+        reg = os.path.join(state_home, "dotclaude", "open-sessions")
+        os.makedirs(reg)
+        base = {"cwd": "/x", "socket": "/fake/sock", "server_start": 1700, "server_pid": 42}
+        recs = {"mine": dict(base, session_id="a" * 8, pane="%2"),
+                "other-server": dict(base, session_id="b" * 8, pane="%2", server_pid=43),
+                "other-pane": dict(base, session_id="c" * 8, pane="%9", place="keep")}
+        for name, rec in recs.items():
+            with open(os.path.join(reg, name + ".json"), "w") as f:
+                json.dump(rec, f)
+        with open(os.path.join(reg, "bad.json"), "w") as f:
+            f.write("{not json")
+        with open(os.path.join(reg, "big.json"), "w") as f:
+            json.dump(dict(base, pane="%2", pad="x" * tb.RECORD_MAX), f)
+        before = {n: open(os.path.join(reg, n)).read() for n in os.listdir(reg)}
+        self.nav_state("@2")
+        self.run_cmd("move", "right", "/dev/pts/7", XDG_STATE_HOME=state_home)
+        with open(os.path.join(reg, "mine.json")) as f:
+            mine = json.load(f)
+        self.assertEqual(tb.parse_place(mine["place"]), tb.Place("p:" + self.common, 1))
+        self.assertEqual({k: v for k, v in mine.items() if k != "place"}, recs["mine"])
+        after = {n: open(os.path.join(reg, n)).read() for n in os.listdir(reg)}
+        self.assertEqual(set(after), set(before))       # none created, no temp file left
+        for n in before:
+            if n != "mine.json":
+                self.assertEqual(after[n], before[n], n)
+        self.nav_state("@2")
+        self.run_cmd("move", "auto", "/dev/pts/7", XDG_STATE_HOME=state_home)
+        with open(os.path.join(reg, "mine.json")) as f:
+            self.assertNotIn("place", json.load(f))
 
     def test_outside_tmux_nothing_runs(self):
         env = {k: v for k, v in self.env.items() if k != "TMUX"}
