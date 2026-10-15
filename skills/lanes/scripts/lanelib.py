@@ -1080,14 +1080,16 @@ def write_lead(repo: Repo, record: dict) -> None:
 
 def read_lead(repo: Repo) -> dict | None:
     """The lead record with its shape checked ({pid, procStart, sessionId, tmux, at}, tmux a
-    tuple or None), or None when it is missing, too long, not JSON or of another shape. Only
-    bare commands write it, but it is read as data all the same: a bad one names no lead."""
+    tuple or None), or None when it is missing, too long, not JSON, nested deeper than json
+    parses (RecursionError: before 3.12, or in pure Python, near the recursion limit of 1000
+    levels, which LEAD_MAX bytes reach) or of another shape. Only bare commands write it, but
+    it is read as data all the same: a bad one names no lead."""
     data = read_head(repo.lead_path, LEAD_MAX + 1)
     if data is None or len(data) > LEAD_MAX:
         return None
     try:
         rec = json.loads(data)
-    except ValueError:
+    except (ValueError, RecursionError):  # json recurses on nesting, as tmux-tab-bar knows
         return None
     if not isinstance(rec, dict):
         return None
