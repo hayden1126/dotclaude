@@ -77,21 +77,9 @@ stored here).
     `lane-addr` #98, `excluded-guard` #100 (narrow-excluded Part 2 plus G8's fix, 2026-10-14),
     `tab-bar` #96, #97, #99 and #101 (2026-10-14), `turn-glyph` #102 (2026-10-14), `ask-owner`
     #103 (2026-10-14), `guard-b` #104 (2026-10-14).
-    `gh pr view <n>` and the closed records under `.git/lanes/_closed/` hold the detail.
-  - `tab-bar`: Hayden smoke-tested #101 live on 2026-10-14, all 8 items on desktop and phone
-    ("all works"). Design: the research page
-    https://claude.ai/artifact/E75uhqt2xskxUGQopLwvoA (private), `~/scratch/tab-bar/INVENTORY.md`
-    and [[dotclaude-tab-bar]].
-  - `turn-glyph` #102: the tab goes green when a reply wants Hayden, and stays busy while counted
-    work runs. Tabs opened before the 2026-10-14 install keep their old startup hooks (no
-    PermissionRequest or SubagentStop wiring) until they restart.
-  - `ask-owner` #103: one owner per ask. The post-merge chain and the hand-back gate before
-    `lane done` now live in `skills/lanes/SKILL.md` (The lead, step 7).
-  - `guard-b` #104 (2026-10-14): excluded-guard group B (a SessionStart check, rule lines from
-    `lane new` and `lane done`), plus `lane ls` and `lane done` reading the worktree's
-    checked-out branch. Hayden merged it before its live smoke. The smoke then ran against the
-    lead's install from main and passed: in a real tab the finding showed once, and a second start
-    was silent. `claude -p` can't show it, since `-p` forces `ATTENDED=0`.
+    `gh pr view <n>` and the closed records under `.git/lanes/_closed/` hold the detail; tab-bar's
+    design is in [[dotclaude-tab-bar]]. Tabs opened before #102's install (2026-10-14) keep the
+    old startup hooks (no PermissionRequest or SubagentStop wiring) until they restart.
   - `handoff-flag` (opened 2026-10-14, Hayden's option C): `handoff?` judges a merged lane by
     its record against the PR's `mergedAt`, not by session end. Today every session ends after
     its own last write, so the flag lights after each `/pass` and stays on for a merged lane with
@@ -137,11 +125,10 @@ stored here).
     passed through to `claude` (today `lane open` hardcodes the argv).
 
   **The post-merge chain** (Hayden's design B, standing approval 2026-10-14): `skills/lanes/SKILL.md`,
-  The lead, step 7. Lead STATUS commits ride the next lane PR: that lane applies `git diff origin/main chore/after-pr4 --
-  STATUS.md PLAN.md` as one commit just before ready (PLAN.md too: main's glyph code cites its
-  "Next: two workflow fixes", which only `chore/after-pr4` holds). A lane installs (`lane lock install --
-  ./setup.sh` from its worktree, sandbox off) only when next in merge order, and its install
-  holds until the lead's reinstall from main.
+  The lead, step 7. Lead commits ride the next lane PR: that lane applies `git diff origin/main
+  chore/after-pr4 -- STATUS.md PLAN.md` as one commit just before ready. A lane installs (`lane
+  lock install -- ./setup.sh` from its worktree, sandbox off) only when next in merge order, and
+  its install holds until the lead's reinstall from main.
 - **Lanes, handoff-check and `/pass`** (Hayden's design, approved 2026-10-11; `PLAN.md`, behavior in
   `docs/lanes.md` and `skills/lanes/SKILL.md`). Four PRs:
   - PR 1 (lanes core) merged as #86 (`gh pr view 86`); its smoke test and guard replay are in
@@ -213,28 +200,34 @@ stored here).
   is Hayden's: rerun `python3 -I hooks/excluded_guard.py --scan`, look, paste its
   `settings.machine.json`, rerun `./setup.sh`. Each new lane there needs its own rule (Edit deny
   rules take no glob), which is what lane guard-b's `lane new` check is for.
+- **A stale trust entry from lane guard-b's smoke** (2026-10-14): `~/.claude.json` still trusts
+  the deleted `/tmp/claude-1000/guard-b-tab`. A sandboxed session can recreate that path with its
+  own `.claude/settings.json`, so the lead recommends removing the entry. Asked Hayden whether he
+  or the lead removes it. Its two transcripts expire on their own.
 - **Two Write-tool bug drafts wait in `/feedback`** (Hayden's call to send): the overwrite-guard session's has the
   `claude -p` repro and the 2.1.285 boundary; the karaoke session's has the incident.
 
 ## Notes for next session
 - **Next (lead, main checkout):** watch for "merged #N" from a lane, then run the post-merge
   chain (`skills/lanes/SKILL.md`, The lead, step 7). Live lanes: `pass-timeout` (next to merge;
-  its install is live from its lane) and `handoff-flag`. The next lane PR carries the lead's
-  STATUS and PLAN.md commits. Check `lane ls` first: a merge Hayden made on GitHub and mentioned
-  to no session sends no message (#102 showed merged there before its lane's message came). One
-  slot of 3 is free; the backlog's next pick is Hayden's. No chat about a lane's own asks; speak on cross-lane orders,
-  decisions raised with the lead, failed checks and lead-only actions.
-  - Design reviews the lead sent to lanes on 2026-10-14 (turn-glyph's set of wait owners and its
-    classifier probe, excluded-guard's G8) live in those lanes' records and plans, and G8 in the
-    private findings file. The lead's commits of 2026-10-14: `git log 6503f0e..HEAD -- STATUS.md
-    PLAN.md` on `chore/after-pr4`.
+  its install is live from its lane) and `handoff-flag`. Check `lane ls` first: a merge Hayden
+  made on GitHub and mentioned to no session sends no message (#102 showed merged there before
+  its lane's message came). One slot of 3 is free; the backlog's next pick is Hayden's. No chat
+  about a lane's own asks; speak on cross-lane orders, decisions raised with the lead, failed
+  checks and lead-only actions.
+  - The lead's commits of 2026-10-14 (second session): `git log --first-parent 696cc44..HEAD`
+    on `chore/after-pr4`, STATUS only, plus merges of main.
+  - A config rewrite with the sandbox off (`git config`, `branch -d`) while a lane's suite runs
+    can fail its SandboxReality test once: the rewrite swaps `.git/config` under the running
+    sandbox's mount. Avoid config writes while `lane ls` shows `suite` held.
   - Message a lane at what `lane addr <id>` prints, resolved just before each send.
   - **Watch (PR 4, live on HAYPC):** `context-watch.err` in the state dir (a Stop that timed out
     waiting for its reply, and the watcher's Python errors). Not yet seen live: a refused pass's
     toast, and Hayden's verdict on the rendered popup.
   - Verify from the main checkout (`test_subagent_policy` refuses to load under
     `.claude/worktrees/`): `tests/setup`, `tests/pass`, `tests/lanes`, `tests/delegation`. The
-    last full run on `feat/autopass` (2026-10-12) was green: 532, 148, 155 and 646 tests.
+    last full run (lane guard-b at 210c7e2, 2026-10-14, under `lane lock suite`) was green:
+    setup 992, lanes 260, delegation 671.
   - **Root cause of the timing flakes (lane lane-addr, 2026-10-14):** HAYPC's wall clock steps
     -2.7 s then +5.4 s about every 33 s (`time.time()` minus `time.monotonic()`; evidence:
     `.git/lanes/_closed/lane-addr-2026-10-14/.lane/artifacts/clock-steps.txt`). It matches the setup, ctx, handoff-reminder and
