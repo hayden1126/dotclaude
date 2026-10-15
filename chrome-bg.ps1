@@ -11,7 +11,8 @@
 # profile goes in <id>\profile) and the log <id>.log, which outlives the run. A chrome.exe belongs
 # to the run when its command line holds \chrome-bg\<id>\ (in any case).
 #
-# Protocol: one JSON request per stdin line, exactly one compact JSON reply line per request.
+# Protocol: one JSON request per stdin line, exactly one compact JSON reply line per request,
+# and none once stdin has closed.
 #   {"op":"hello"}                      ok, version 1, chrome, runDir, virtualScreen, monitors
 #                                       [{rect, work, dpi, hz, primary}], fg, fglock
 #   {"op":"launch","args":"..."}        ok, pid. The args must hold the run dir.
@@ -22,20 +23,24 @@
 #   Failures reply {"ok":false,"error":"..."}. Rects are {x, y, w, h} in physical pixels. Replies
 #   are ASCII: other characters go out as \uXXXX escapes.
 #   EOF on stdin: kill every chrome.exe of the run, delete the run dir, log, exit. No reply.
+# Exit code: 0 only when the EOF cleanup left no chrome.exe of the run and no run dir; 3 when it
+# was incomplete or failed, and bin/chrome-bg then runs -Kill. -Kill and -Scan exit 0 after their line.
 # Log lines read t=<ms> KIND ...; bin/chrome-bg's log judge parses the kinds.
 #
 # Rules from the Phase 0 probes, each pinned by tests/setup/test_chrome_bg_ps1.py:
 # - Launch Chrome through WMI (Win32_Process Create), never Start-Process. Started from this
 #   console-attached process, Chrome inherited foreground rights and took the foreground from
 #   the user's terminal for about 45 s (probes A and K); started through WMI it took none (W).
-# - Stdout carries replies only, all through Send-Reply. A stdout write after the owner died
-#   killed the supervisor and left 8 chrome.exe running (probe C2). Events go to the log file.
-# - No WMI or CIM in the WinEvent callback or anything it calls: the call pumps messages and
-#   re-enters the callback, which crashed the first prototype. Run pids come from the launch pid
-#   plus a refresh thread.
-# - Only the refresh thread untags a pid, once no pass has seen the tag in its command line for
-#   about 1.5 s (UNTAG). Windows reuses pids, and a stale one would make another program's window
-#   a run window: sunk by the keeper, its title logged, its foreground read as the run's.
+# - Stdout carries replies only, all through Send-Reply, and nothing after stdin closes. A stdout
+#   write after the owner died killed the supervisor and left 8 chrome.exe running (probe C2).
+#   Events go to the log file.
+# - No WMI inside the WinEvent callback or anything it calls; ops may call WMI on the hook thread
+#   between pumps. WMI pumps messages, and inside the callback that re-entered it and crashed the
+#   first prototype. Run pids come from the launch pid plus a refresh thread.
+# - A run pid is its process: IsTagged checks the creation time recorded at tagging, so a pid
+#   Windows reused is never the run's. The refresh thread alone untags a pid once no pass has seen
+#   the tag in its command line for about 1.5 s (UNTAG). A stale pid would make another program's
+#   window a run window: sunk by the keeper, its title logged, its foreground read as the run's.
 # - Each new run frame sinks to HWND_BOTTOM, unactivated, at EVENT_OBJECT_CREATE while it is still
 #   hidden. Off-screen bounds alone left a 7-9 ms flash on top of the screen.
 # - With -Keep, while no run window has the foreground, a run window seen above another on-screen
@@ -60,12 +65,16 @@ param(
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 $Root = Join-Path ([IO.Path]::GetTempPath()) 'chrome-bg'
+# True once the supervisor type is loaded (per-run mode only).
+$Supervised = $false
 
 # The one stdout writer. Every reply is a single compact JSON line.
 function Send-Reply([System.Collections.IDictionary]$Reply) {
   $json = ConvertTo-Json -InputObject $Reply -Compress -Depth 6
   $json = [regex]::Replace($json, '[^\x00-\x7F]', [Text.RegularExpressions.MatchEvaluator] {
       param($m) '\u{0:x4}' -f [int][char]$m.Value })
+  # Stdin closed: the owner is gone, and a write could take the WSL relay down with it (probe C2).
+  if ($Supervised -and [ChromeBgSup]::StdinClosed) { return }
   try { [Console]::Out.WriteLine($json); [Console]::Out.Flush() } catch { }
 }
 
@@ -93,36 +102,48 @@ function ConvertTo-ProcInfo($Proc) {
   return [ordered]@{ pid = [int]$Proc.ProcessId; ppid = [int]$Proc.ParentProcessId; type = $type }
 }
 
-# Kills every chrome.exe of the run, for up to about 5 s.
+# Kills every chrome.exe of the run, for up to about 5 s. A round whose query fails is retried;
+# .error holds the last failure, and .left is -1 when the final count can't be read.
 function Stop-RunProcs {
   $killed = [System.Collections.Generic.HashSet[int]]::new()
+  $err = $null
   foreach ($round in 1..20) {
-    $procs = @(Get-TaggedProcs)
-    if ($procs.Count -eq 0) { break }
-    foreach ($p in $procs) {
-      try { Stop-Process -Id $p.ProcessId -Force -ErrorAction Stop; [void]$killed.Add([int]$p.ProcessId) } catch { }
-    }
+    try {
+      $procs = @(Get-TaggedProcs)
+      if ($procs.Count -eq 0) { break }
+      foreach ($p in $procs) {
+        try { Stop-Process -Id $p.ProcessId -Force -ErrorAction Stop; [void]$killed.Add([int]$p.ProcessId) } catch { }
+      }
+    } catch { $err = $_.Exception.Message }
     Start-Sleep -Milliseconds 250
   }
-  return [ordered]@{ killed = $killed.Count; left = @(Get-TaggedProcs).Count }
+  $left = -1
+  try { $left = @(Get-TaggedProcs).Count } catch { $err = $_.Exception.Message }
+  return [ordered]@{ killed = $killed.Count; left = $left; error = $err }
 }
 
 # Deletes the run dir, retrying while Chrome's last files close. Returns whether it still exists.
 function Remove-RunDir {
   foreach ($round in 1..20) {
-    if (-not (Test-Path -LiteralPath $RunDir)) { break }
-    try { Remove-Item -LiteralPath $RunDir -Recurse -Force -ErrorAction Stop } catch { Start-Sleep -Milliseconds 250 }
+    try {
+      if (-not (Test-Path -LiteralPath $RunDir)) { break }
+      Remove-Item -LiteralPath $RunDir -Recurse -Force -ErrorAction Stop
+    } catch { Start-Sleep -Milliseconds 250 }
   }
-  return (Test-Path -LiteralPath $RunDir)
+  return [bool](Test-Path -LiteralPath $RunDir)
 }
 
+# EOF: kill, then delete even if the kill failed, then set the exit code to 0 only if both finished.
 function Close-Run {
   [ChromeBgSup]::Log('EOF')
-  try {
-    $k = Stop-RunProcs
-    [ChromeBgSup]::Log("EOFKILL left=$($k.left) killed=$($k.killed)")
-    [ChromeBgSup]::Log("EOFCLEAN dirExists=$(Remove-RunDir)")
-  } catch { [ChromeBgSup]::Log('ERROR eof ' + ($_.Exception.Message -replace '[\r\n]+', ' ')) }
+  $k = [ordered]@{ killed = 0; left = -1; error = $null }
+  try { $k = Stop-RunProcs } catch { $k.error = $_.Exception.Message }
+  $why = if ($k.error) { ' error=' + ($k.error -replace '[\r\n]+', ' ') } else { '' }
+  [ChromeBgSup]::Log("EOFKILL left=$($k.left) killed=$($k.killed)$why")
+  $exists = $true
+  try { $exists = Remove-RunDir } catch { [ChromeBgSup]::Log('ERROR eofclean ' + ($_.Exception.Message -replace '[\r\n]+', ' ')) }
+  [ChromeBgSup]::Log("EOFCLEAN dirExists=$exists")
+  if ($k.left -eq 0 -and -not $exists) { $script:ExitCode = 0 }
 }
 
 # Answers one request line. Returns the reply; never writes stdout.
@@ -216,11 +237,15 @@ if ($Kill) {
   try {
     $k = Stop-RunProcs
     $exists = Remove-RunDir
-    Send-Reply ([ordered]@{ ok = ($k.left -eq 0 -and -not $exists); killed = $k.killed; left = $k.left; dirExists = $exists })
+    $reply = [ordered]@{ ok = ($k.left -eq 0 -and -not $exists); killed = $k.killed; left = $k.left; dirExists = $exists }
+    if ($k.error) { $reply.error = $k.error }
+    Send-Reply $reply
   } catch { Send-Reply (New-ErrorReply $_.Exception.Message) }
   exit 0
 }
 
+# 3 until Close-Run proves the cleanup complete: any other way out makes bin/chrome-bg run -Kill.
+$ExitCode = 3
 [void](New-Item -ItemType Directory -Path $RunDir -Force)
 $Chrome = Find-Chrome
 
@@ -269,6 +294,10 @@ public static class ChromeBgSup {
   [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern bool EnumDisplaySettings(string dev, int mode, ref DEVMODE dm);
   [DllImport("shcore.dll")] static extern int GetDpiForMonitor(IntPtr hMon, int type, out uint dx, out uint dy);
   [DllImport("dwmapi.dll")] static extern int DwmGetWindowAttribute(IntPtr h, int attr, out int v, int size);
+  [DllImport("kernel32.dll")] static extern IntPtr OpenProcess(uint access, bool inherit, uint pid);
+  [DllImport("kernel32.dll")] static extern bool GetProcessTimes(IntPtr h, out long created, out long exited, out long kernel, out long user);
+  [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr h);
+  const uint PROCESS_QUERY_LIMITED_INFORMATION = 0x1000;
 
   static readonly IntPtr HWND_BOTTOM = (IntPtr)1;
   const uint SWP_NOSIZE = 0x1, SWP_NOMOVE = 0x2, SWP_NOACTIVATE = 0x10;
@@ -278,10 +307,14 @@ public static class ChromeBgSup {
   static readonly object gate = new object();
   static Stopwatch sw = Stopwatch.StartNew();
   static string tag; static StreamWriter file; static bool keeper;
-  // Run pids -> the ms each was last confirmed, by its launch (AddPid) or by a refresh pass.
-  static Dictionary<uint, long> tagged = new Dictionary<uint, long>();
-  // A pid no pass has confirmed for this long has left the run: Windows may give it to another program.
+  // A run pid: its process's creation time (FILETIME ticks, 0 when unreadable) and the ms it was
+  // last confirmed, by its launch (AddPid) or by a refresh pass.
+  class RunPid { public long Created, Seen; }
+  static Dictionary<uint, RunPid> tagged = new Dictionary<uint, RunPid>();
+  // A pid no pass has confirmed for this long has left the run.
   const long UntagMs = 1500;
+  // Set by the stdin reader at end of input: the owner is gone, so no reply goes out (probe C2).
+  public static volatile bool StdinClosed;
   static WinEventProc keep; static volatile bool done; static Queue<string> cmds = new Queue<string>();
   static string lastFg = "", lastTop = "", lastRanks = "";
 
@@ -297,9 +330,34 @@ public static class ChromeBgSup {
   static bool Cloaked(IntPtr h) { int v; return DwmGetWindowAttribute(h, 14, out v, 4) == 0 && v != 0; }
   public static uint Idle() { var l = new LASTINPUTINFO(); l.cbSize = 8; GetLastInputInfo(ref l); return (uint)Environment.TickCount - l.dwTime; }
   public static uint FgLock() { uint v = 0; SystemParametersInfo(0x2000, 0, ref v, 0); return v; }
-  // A set lookup only: WMI on the hook thread pumps messages and re-enters the callback.
-  public static bool IsTagged(uint pid) { lock (tagged) { return tagged.ContainsKey(pid); } }
-  public static void AddPid(uint pid) { lock (tagged) { tagged[pid] = sw.ElapsedMilliseconds; } }
+  // The creation time of process pid (FILETIME ticks), or 0 when it can't be read. Plain syscalls
+  // that pump no messages, so the hook thread may call it.
+  static long CreationTime(uint pid) {
+    IntPtr h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid);
+    if (h == IntPtr.Zero) return 0;
+    try { long c, x, k, u; return GetProcessTimes(h, out c, out x, out k, out u) ? c : 0; }
+    finally { CloseHandle(h); }
+  }
+  // A lookup plus the creation-time check: a pid Windows reused belongs to a newer process, never
+  // to the run. No WMI here: the WinEvent callback calls this.
+  public static bool IsTagged(uint pid) {
+    long created;
+    lock (tagged) { RunPid r; if (!tagged.TryGetValue(pid, out r)) return false; created = r.Created; }
+    // 0: the creation time was unreadable at tagging, so only UNTAG guards this pid.
+    return created == 0 || CreationTime(pid) == created;
+  }
+  public static void AddPid(uint pid) { Confirm(pid, CreationTime(pid), sw.ElapsedMilliseconds); }
+  // Records pid as a run pid confirmed at ms seen. A new creation time is a new process on a reused pid.
+  static void Confirm(uint pid, long created, long seen) {
+    bool fresh;
+    lock (tagged) {
+      RunPid r;
+      fresh = !tagged.TryGetValue(pid, out r) || (created != 0 && r.Created != created);
+      if (fresh) tagged[pid] = new RunPid { Created = created, Seen = seen };
+      else if (r.Seen < seen) r.Seen = seen;
+    }
+    if (fresh) Log("TAG pid=" + pid + " created=" + created);
+  }
   // Twice a second on its own MTA thread: confirms every chrome.exe holding the run's tag, then
   // untags pids unconfirmed for UntagMs. A pass stamps with its start time, so a launch made while
   // its query ran keeps the later AddPid stamp and can't be dropped by a query that missed it.
@@ -314,11 +372,10 @@ public static class ChromeBgSup {
               var cl = o["CommandLine"] as string;
               if (cl != null && cl.IndexOf(tag, StringComparison.OrdinalIgnoreCase) >= 0) live.Add((uint)o["ProcessId"]);
             }
+          foreach (var pid in live) Confirm(pid, CreationTime(pid), start);
           var gone = new List<uint>();
           lock (tagged) {
-            long prev;
-            foreach (var pid in live) if (!tagged.TryGetValue(pid, out prev) || prev < start) tagged[pid] = start;
-            foreach (var kv in tagged) if (kv.Value < start - UntagMs) gone.Add(kv.Key);
+            foreach (var kv in tagged) if (kv.Value.Seen < start - UntagMs) gone.Add(kv.Key);
             foreach (var pid in gone) tagged.Remove(pid);
           }
           foreach (var pid in gone) Log("UNTAG pid=" + pid);
@@ -497,12 +554,14 @@ public static class ChromeBgSup {
   public static void ReadStdin() {
     var t = new Thread(delegate() {
       try { string l; while ((l = Console.In.ReadLine()) != null) Push(l); } catch { }
+      StdinClosed = true;
       Push(EofLine);
     });
     t.IsBackground = true; t.Start();
   }
 }
 '@
+$Supervised = $true
 
 [ChromeBgSup]::Start($Tag, $LogFile, [bool]$Keep)
 [ChromeBgSup]::ReadStdin()
@@ -516,5 +575,6 @@ $handler = [Func[string, bool]] {
   Send-Reply $reply
   return $true
 }
-[ChromeBgSup]::Loop($handler)
-[ChromeBgSup]::Log('EXIT')
+try { [ChromeBgSup]::Loop($handler) } catch { [ChromeBgSup]::Log('ERROR loop ' + ($_.Exception.Message -replace '[\r\n]+', ' ')) }
+[ChromeBgSup]::Log("EXIT code=$ExitCode")
+exit $ExitCode

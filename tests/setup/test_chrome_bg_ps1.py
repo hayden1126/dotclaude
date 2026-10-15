@@ -28,11 +28,17 @@ OPS = {"hello", "launch", "place", "procs", "fg", "mark"}
 LOG_KINDS = [
     "VSCREEN", "FGLOCK", "MONITOR", "READY", "FOREGROUND", "TOP", "RANKS", "EV", "SINK-AT-CREATE",
     "KEEP-SINK", "PLACE", "LAUNCHED", "PROC", "PROCS", "MARK", "EOF", "EOFKILL", "EOFCLEAN", "EXIT",
-    "UNTAG",
+    "UNTAG", "TAG",
 ]
+KEYWORD_BLOCK = re.compile(
+    r"\s*(?:if|elseif|else|try|catch|finally|foreach|for|while|do|switch|trap)\b", re.I)
+SILENT = re.compile(
+    r"(?:if|elseif|else|try|catch|finally|foreach|for|while|do|switch|trap|function|param|exit|return|"
+    r"break|continue|throw)\b|\[CmdletBinding\b|\[void\]|Send-Reply\b"
+    r"|\$[\w:]+(?:\.\w+|\[[^\]]*\])*\s*[-+*/]?=(?!=)", re.I)
 UNTAG = re.compile(r"\btagged\s*\.\s*(?:Remove|Clear)\s*\(|\btagged\s*=\s*new\b")
 METHOD = re.compile(
-    r"(?m)^[ \t]*(?:(?:public|private|internal|static|readonly|unsafe)\s+)+[\w<>\[\], ]+?\s+"
+    r"(?m)^[ \t]*(?:(?:public|private|internal|static|readonly|unsafe)\s+)+([\w<>\[\], ]+?)\s+"
     r"(\w+)\s*\([^;{)]*\)\s*\{")
 
 
@@ -69,9 +75,11 @@ class Parts:
         self.cs = blank(r"(?m)^[ \t]*//.*$", m.group(2))
         self.ps = blank(r"(?m)^[ \t]*#.*$", src[:m.start(2)] + src[m.end(2):])
         self.methods = {}  # name -> (header start, body start, body end)
+        self.returns = {}  # name -> return type
         for h in METHOD.finditer(self.cs):
             open_ = h.end() - 1
-            self.methods[h.group(1)] = (h.start(), open_, close_of(self.cs, open_))
+            self.methods[h.group(2)] = (h.start(), open_, close_of(self.cs, open_))
+            self.returns[h.group(2)] = h.group(1)
 
     def body(self, name):
         _, start, end = self.methods[name]
@@ -164,7 +172,12 @@ def stdout_problems(src):
 
 def callback_reach(p):
     """Names of the C# methods reachable from the WinEvent callbacks."""
-    todo = re.findall(r"new\s+WinEventProc\s*\(\s*(\w+)\s*\)", p.cs)
+    return reach(p, re.findall(r"new\s+WinEventProc\s*\(\s*(\w+)\s*\)", p.cs))
+
+
+def reach(p, roots):
+    """Names of the C# methods reachable from the methods named in roots."""
+    todo = list(roots)
     seen = set()
     while todo:
         name = todo.pop()
@@ -329,6 +342,186 @@ def untag_problems(src):
     return problems
 
 
+def spans(text, opener):
+    """(start, end) of every {...} block whose opening matches opener."""
+    return [(m.end() - 1, close_of(text, m.end() - 1)) for m in re.finditer(opener + r"\s*\{", text, re.I)]
+
+
+def inside(pos, blocks):
+    return any(a <= pos <= b for a, b in blocks)
+
+
+def handler_text(p):
+    return p.text(p.ps_block(r"\$handler\s*=\s*\[Func\[string,\s*bool\]\]\s*"))
+
+
+def eof_problems(src):
+    """EOF cleans up through Close-Run, and ends the loop whatever the handler returns or throws."""
+    p = Parts(src)
+    problems = []
+    handler = handler_text(p)
+    m = re.search(r"\bEofLine\b[^{]*\{", handler)
+    branch = handler[m.end() - 1:close_of(handler, m.end() - 1) + 1] if m else ""
+    if not re.search(r"\bClose-Run\b", branch, re.I):
+        problems.append("the handler's EofLine branch doesn't call Close-Run")
+    loop = p.body("Loop") if "Loop" in p.methods else ""
+    if not re.search(r"try\s*\{[^{}]*\bhandle\s*\([^{}]*\}\s*catch\b", loop):
+        problems.append("Loop doesn't catch a throwing handler")
+    if not re.search(r"if\s*\((?=[^{;]*\bEofLine\b)[^{;]*\)\s*\{?\s*done\s*=\s*true", loop):
+        problems.append("Loop doesn't end on EofLine whatever the handler returns")
+    return problems
+
+
+def exit_code_problems(src):
+    """Exit 0 only after a complete EOF cleanup; 3 otherwise, so bin/chrome-bg runs -Kill."""
+    p = Parts(src)
+    problems = []
+    functions = spans(p.ps, r"(?m)^[ \t]*function[ \t]+[\w-]+[^{\n]*")
+    oneshots = spans(p.ps, r"(?m)^[ \t]*if\s*\(\s*\$(?:Scan|Kill)\s*\)")
+    start = [m for m in re.finditer(r"\$ExitCode\s*=\s*3\b", p.ps) if not inside(m.start(), functions)]
+    if not start:
+        problems.append("no top-level $ExitCode = 3 before the loop")
+    for m in re.finditer(r"(?im)\bexit\b(?=[ \t]*(?:\d|\$|;|\}|$))", p.ps):
+        if not (re.match(r"exit\s+\$ExitCode\b", p.ps[m.start():], re.I) or inside(m.start(), oneshots)):
+            problems.append("an exit outside -Scan and -Kill skips the exit code: %r"
+                            % p.ps[m.start():m.start() + 12])
+    if not re.search(r"\bexit\s+\$ExitCode\b", p.ps, re.I):
+        problems.append("the script doesn't exit with $ExitCode")
+    close = p.function("Close-Run")
+    for m in re.finditer(r"\$(?:script:)?ExitCode\s*=\s*0\b", p.ps):
+        head = p.ps[max(p.ps.rfind(c, 0, p.ps.rfind("{", 0, m.start())) for c in ";{}\n") + 1:m.start()]
+        guarded = re.search(r"if\s*\((?=[^{]*\.left\s+-eq\s+0)(?=[^{]*-not\s+\$)", head, re.I)
+        if not (close and inside(m.start(), [close]) and guarded):
+            problems.append("exit code 0 set outside Close-Run's left-0, dir-gone check")
+    return problems
+
+
+def reply_after_eof_problems(src):
+    """No reply once stdin has closed: the owner is gone (probe C2)."""
+    p = Parts(src)
+    problems = []
+    send = p.text(p.function("Send-Reply"))
+    flag = re.search(r"\bStdinClosed\b", send)
+    write = re.search(r"\[Console\]::Out\b", send, re.I)
+    if not flag or not write or flag.start() > write.start():
+        problems.append("Send-Reply doesn't check StdinClosed before writing")
+    reader = p.body("ReadStdin") if "ReadStdin" in p.methods else ""
+    if not re.search(r"\bStdinClosed\s*=\s*true\s*;[^}]*\bPush\s*\(\s*EofLine\b", reader):
+        problems.append("the stdin reader doesn't set StdinClosed before queuing EofLine")
+    return problems
+
+
+def tag_match_problems(src):
+    """Kills and process lists go by the run's tag, never by every chrome.exe."""
+    p = Parts(src)
+    problems = []
+    if not re.search(r"CommandLine[^\n]*\$Tag\b", p.text(p.function("Get-TaggedProcs")), re.I):
+        problems.append("Get-TaggedProcs doesn't match CommandLine on $Tag")
+    stop = p.text(p.function("Stop-RunProcs"))
+    direct = re.search(r"Get-CimInstance|Get-WmiObject|Get-Process\b", stop, re.I)
+    if direct or not re.search(r"\bGet-TaggedProcs\b", stop, re.I):
+        problems.append("Stop-RunProcs must pick processes through Get-TaggedProcs only")
+    return problems
+
+
+def cleanup_problems(src):
+    """A failing query can't stop the cleanup: each kill round catches its own error, the run dir
+    is deleted even after a failed kill, and EOFKILL carries the error."""
+    p = Parts(src)
+    problems = []
+    stop = p.text(p.function("Stop-RunProcs"))
+    tries = spans(stop, r"\btry")
+    for m in re.finditer(r"\bGet-TaggedProcs\b", stop, re.I):
+        if not inside(m.start(), tries):
+            problems.append("a Get-TaggedProcs call in Stop-RunProcs is outside a try")
+    close = p.text(p.function("Close-Run"))
+    tries = spans(close, r"\btry")
+    kill = re.search(r"\bStop-RunProcs\b", close, re.I)
+    rm = re.search(r"\bRemove-RunDir\b", close, re.I)
+    if not kill or not rm:
+        problems.append("Close-Run doesn't both kill and delete")
+    elif not inside(kill.start(), tries) or any(inside(kill.start(), [t]) and inside(rm.start(), [t])
+                                                for t in tries):
+        problems.append("Close-Run's delete doesn't run independently of a failed kill")
+    if not re.search(r"EOFKILL", close) or "error=" not in close:
+        problems.append("EOFKILL doesn't carry the kill's error")
+    return problems
+
+
+def top_statements(ps):
+    """The script's own statements: splits at newlines and ';' and opens keyword blocks (if, try,
+    catch...) whose bodies run at top level; functions, hashtables and script blocks stay whole."""
+    out, cur, paren, i = [], [], 0, 0
+    while i < len(ps):
+        ch = ps[i]
+        if ch in "'\"":
+            j = i + 1
+            while j < len(ps) and ps[j] != ch:
+                j += 2 if ch == '"' and ps[j] == "`" else 1
+            cur.append(ps[i:j + 1])
+            i = j + 1
+            continue
+        if ch == "(":
+            paren += 1
+        elif ch == ")":
+            paren -= 1
+        elif ch == "{" and not (paren == 0 and KEYWORD_BLOCK.match("".join(cur))):
+            j = close_of(ps, i)
+            cur.append(ps[i:j + 1])
+            i = j + 1
+            continue
+        if paren == 0 and ch in "\n;{}":
+            out.append("".join(cur).strip())
+            cur = []
+        else:
+            cur.append(ch)
+        i += 1
+    out.append("".join(cur).strip())
+    return [s for s in out if s]
+
+
+def top_output_problems(src):
+    """No top-level statement emits pipeline output, which would reach stdout: each one assigns,
+    casts to [void], pipes to Out-Null, is a keyword or Send-Reply, or calls a void C# method."""
+    p = Parts(src)
+    statements = top_statements(p.ps)
+    problems = []
+    if not any(s.startswith("Add-Type") for s in statements):
+        problems.append("top-level parse found no Add-Type")
+    for s in statements:
+        if SILENT.match(s) or re.search(r"\|\s*Out-Null\s*$", s, re.I):
+            continue
+        if re.match(r"Add-Type\b", s, re.I) and not re.search(r"-PassThru\b", s, re.I):
+            continue
+        call = re.match(r"\[\w+\]::(\w+)\s*\(", s)
+        if call and p.returns.get(call.group(1)) == "void":
+            continue
+        problems.append("top-level statement may emit output: %r" % s[:60])
+    return problems
+
+
+def created_problems(src):
+    """A run pid is its process: IsTagged compares the creation time recorded when tagging, AddPid
+    and Refresh record it, and every process handle is closed in a finally."""
+    p = Parts(src)
+    problems = []
+    readers = {n for n in p.methods if "GetProcessTimes(" in p.body(n)}
+    if not readers:
+        return ["nothing reads a process creation time"]
+    for name in ("IsTagged", "AddPid", "Refresh"):
+        if name not in p.methods or not reach(p, [name]) & readers:
+            problems.append("%s doesn't read the process creation time" % name)
+    calls = r"\b(?:%s)\s*\(" % "|".join(sorted(readers))
+    is_tagged = p.body("IsTagged") if "IsTagged" in p.methods else ""
+    if not any(re.search(calls, s) and re.search(r"[!=]=", s) for s in is_tagged.split(";")):
+        problems.append("IsTagged doesn't compare the creation time")
+    for name in p.methods:
+        body = p.body(name)
+        if "OpenProcess(" in body and not re.search(r"finally\s*\{[^}]*\bCloseHandle\s*\(", body):
+            problems.append("%s opens a process without closing it in a finally" % name)
+    return problems
+
+
 def log_kind_problems(src):
     p = Parts(src)
     return ["no log line of kind %s" % kind for kind in LOG_KINDS
@@ -370,6 +563,27 @@ class Rules(unittest.TestCase):
 
     def test_only_the_refresh_thread_untags_pids(self):
         self.assertEqual(untag_problems(self.src), [])
+
+    def test_eof_cleans_up_and_ends_the_loop(self):
+        self.assertEqual(eof_problems(self.src), [])
+
+    def test_exit_code_reports_the_cleanup(self):
+        self.assertEqual(exit_code_problems(self.src), [])
+
+    def test_no_reply_after_stdin_closes(self):
+        self.assertEqual(reply_after_eof_problems(self.src), [])
+
+    def test_processes_match_the_run_tag(self):
+        self.assertEqual(tag_match_problems(self.src), [])
+
+    def test_cleanup_survives_a_failing_query(self):
+        self.assertEqual(cleanup_problems(self.src), [])
+
+    def test_no_top_level_output(self):
+        self.assertEqual(top_output_problems(self.src), [])
+
+    def test_run_pids_carry_their_creation_time(self):
+        self.assertEqual(created_problems(self.src), [])
 
 
 def mutate(src, pattern, repl, flags=0):
@@ -415,7 +629,8 @@ class CatchesRegressions(unittest.TestCase):
         self.assertCaught(stdout_problems, mutate(self.src, r"('fg'\s*\{)", r"\1 Write-Warning 'x';"))
 
     def test_second_reply_in_the_handler(self):
-        self.assertCaught(stdout_problems, mutate(self.src, r"(\n[ \t]*Send-Reply \$reply)", r"\1\1"))
+        bad = mutate(self.src, r"(\n[ \t]*Send-Reply \$reply)(\s*\n[ \t]*return \$true)", r"\1\1\2")
+        self.assertCaught(stdout_problems, bad)
 
     def test_wmi_two_calls_below_the_callback(self):
         wmi = 'using (var q = new ManagementObjectSearcher("SELECT ProcessId FROM Win32_Process")) { }'
@@ -479,6 +694,59 @@ class CatchesRegressions(unittest.TestCase):
 
     def test_no_untag_grace(self):
         self.assertCaught(untag_problems, mutate(self.src, r"(UntagMs\s*=\s*)\d+", r"\g<1>0"))
+
+    def test_eof_without_close_run(self):
+        self.assertCaught(eof_problems, mutate(self.src, r"Close-Run;\s*", ""))
+
+    def test_loop_trusting_the_handler(self):
+        self.assertCaught(eof_problems, in_method(self.src, "Loop", r"\bc\s*==\s*EofLine\b", "false"))
+        bad = in_method(self.src, "Loop", r"try\s*\{\s*(more = handle\(c\);)\s*\}\s*catch[^}]*\}", r"\1")
+        self.assertCaught(eof_problems, bad)
+
+    def test_exit_code_starting_at_0(self):
+        self.assertCaught(exit_code_problems, mutate(self.src, r"(\$ExitCode\s*=\s*)3\b", r"\g<1>0"))
+
+    def test_early_exit_0(self):
+        bad = mutate(self.src, r"(\n\[ChromeBgSup\]::Log\(\"EXIT)", r"\nexit 0\1")
+        self.assertCaught(exit_code_problems, bad)
+
+    def test_unguarded_exit_code_0(self):
+        bad = mutate(self.src, r"if\s*\([^)]*\)\s*\{\s*(\$script:ExitCode\s*=\s*0)\s*\}", r"\1")
+        self.assertCaught(exit_code_problems, bad)
+
+    def test_reply_after_eof(self):
+        self.assertCaught(reply_after_eof_problems, mutate(self.src, r"\n[^\n]*::StdinClosed\)[^\n]*", ""))
+        bad = in_method(self.src, "ReadStdin", r"StdinClosed = true;", "")
+        self.assertCaught(reply_after_eof_problems, bad)
+
+    def test_kill_by_name_not_tag(self):
+        bad = mutate(self.src, r"(CommandLine\.IndexOf\()\$Tag", r"\1'chrome'")
+        self.assertCaught(tag_match_problems, bad)
+        every = "@(Get-CimInstance Win32_Process -Filter \"Name='chrome.exe'\")"
+        bad = mutate(self.src, r"@\(Get-TaggedProcs\)", every)
+        self.assertCaught(tag_match_problems, bad)
+
+    def test_unguarded_final_count(self):
+        guarded = r"\$left = -1\s*\n\s*try \{ \$left = (@\(Get-TaggedProcs\)\.Count) \} catch \{[^}]*\}"
+        bad = mutate(self.src, guarded, r"$left = \1")
+        self.assertCaught(cleanup_problems, bad)
+
+    def test_delete_tied_to_the_kill(self):
+        joint = "try { $k = Stop-RunProcs; $exists = Remove-RunDir }"
+        bad = mutate(self.src, r"try \{ \$k = Stop-RunProcs \}", joint)
+        self.assertCaught(cleanup_problems, bad)
+
+    def test_top_level_output(self):
+        self.assertCaught(top_output_problems, mutate(self.src, r"\[void\]\((New-Item[^\n]*)\)", r"\1"))
+        bad = mutate(self.src, r"(\n\[ChromeBgSup\]::ReadStdin\(\))", r"\n[ChromeBgSup]::FgLock()\1")
+        self.assertCaught(top_output_problems, bad)
+
+    def test_lookup_only_is_tagged(self):
+        bad = in_method(self.src, "IsTagged", r"return[^;]*CreationTime[^;]*;", "return true;")
+        self.assertCaught(created_problems, bad)
+
+    def test_leaked_process_handle(self):
+        self.assertCaught(created_problems, in_method(self.src, "CreationTime", r"finally\s*\{[^}]*\}", ""))
 
     def test_missing_log_kind(self):
         self.assertCaught(log_kind_problems, mutate(self.src, r"EOFCLEAN dirExists", "CLEANED dirExists"))
