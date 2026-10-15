@@ -434,7 +434,12 @@ class Judge(unittest.TestCase):
         # A3 logs the KEEP-SINK with the closing RANKS line's t, just before that line.
         for why, lines, ms in (("A3", A3, 12),
                                ("sunk mid-lift", [rises(1712), keeper_sinks(1718), falls(1724)], 12),
-                               ("at the tolerance", [rises(1712), keeper_sinks(1762), falls(1762)], 50)):
+                               ("at the tolerance", [rises(1712), keeper_sinks(1762), falls(1762)], 50),
+                               # KeepSink logs after SetWindowPos returns; a Check nested in that
+                               # call may log the fall first, in the same ms.
+                               ("nested Check logged the fall first", [*A3[::2], keeper_sinks(1724)], 12),
+                               ("closed by none-onscreen",
+                                [rises(1712), keeper_sinks(1720), "t=1724 RANKS via=ev-HIDE none-onscreen"], 12)):
             with self.subTest(why=why):
                 verdict, rows, fails, warns = self.run_judge(with_action(BTN, *lines))
                 self.assertEqual((verdict, fails, warns), ("PASS", [], [lift_note(ms)]))
@@ -447,7 +452,11 @@ class Judge(unittest.TestCase):
                 ("80 ms", [rises(1712), keeper_sinks(1790), falls(1792)], 80),
                 ("51 ms", [rises(1712), keeper_sinks(1763), falls(1763)], 51),
                 ("KEEP-SINK logged before it opened", [keeper_sinks(1712), *A3[::2]], 12),
-                ("KEEP-SINK logged after it closed", [*A3[::2], keeper_sinks(1724)], 12)):
+                ("KEEP-SINK a ms after it closed", [*A3[::2], keeper_sinks(1725)], 12),
+                ("a failed KEEP-SINK", [rises(1712), keeper_sinks(1718).replace("ok=True", "ok=False"),
+                                        falls(1724)], 12),
+                ("no KEEP-SINK, closed by none-onscreen",
+                 [rises(1712), "t=1724 RANKS via=ev-HIDE none-onscreen"], 12)):
             with self.subTest(why=why):
                 verdict, rows, fails, warns = self.run_judge(with_action(BTN, *lines))
                 self.assertEqual(verdict, "FAIL")
@@ -455,16 +464,39 @@ class Judge(unittest.TestCase):
                 self.assertEqual((warns, dict(rows)[BTN]["kept"]), ([], 0))
 
     def test_each_lift_is_judged_on_its_own(self):
+        # One tolerated lift per action: a second is a re-raise loop, which KEEP-FIGHT (over 20
+        # sinks in 1 s) misses below that rate.
         two = [*A3, rises(1740), keeper_sinks(1752), falls(1752)]
         verdict, rows, fails, warns = self.run_judge(with_action(BTN, *two))
-        self.assertEqual((verdict, fails, warns), ("PASS", [], [lift_note(12), lift_note(12)]))
+        self.assertEqual(verdict, "FAIL")
+        self.assertEqual(fails, [f"{BTN}: a run window rose above another window 2 times; one lift "
+                                 "per action is tolerated, more is a re-raise loop"])
+        self.assertEqual(warns, [lift_note(12), lift_note(12)])
         self.assertEqual((dict(rows)[BTN]["above"], dict(rows)[BTN]["kept"]), (0, 24))
+        apart = [*A3, "t=1730 MARK begin other", rises(1740), keeper_sinks(1752), falls(1752)]
+        verdict, rows, fails, warns = self.run_judge(with_action(BTN, *apart))
+        self.assertEqual((verdict, fails, warns), ("PASS", [], [lift_note(12), lift_note(12, "other")]))
         # A tolerated lift doesn't excuse the others, which still sum per action.
         mixed = [*A3, rises(1740), falls(1748), rises(1760), falls(1765)]
         verdict, rows, fails, warns = self.run_judge(with_action(BTN, *mixed))
         self.assertEqual(verdict, "FAIL")
         self.assertEqual(fails, [f"{BTN}: a run window sat above another window for 13 ms"])
         self.assertEqual(warns, [lift_note(12)])
+
+    def test_a_lift_is_charged_to_the_action_it_began_in(self):
+        lines = [rises(1712), "t=1715 MARK begin other", falls(1724)]
+        verdict, rows, fails, _ = self.run_judge(with_action(BTN, *lines))
+        self.assertEqual(verdict, "FAIL")
+        self.assertEqual(fails, [f"{BTN}: a run window sat above another window for 12 ms"])
+        self.assertEqual(dict(rows)["other"]["above"], 0)
+
+    def test_a_same_ms_keep_sink_past_the_next_rise_is_not_this_lifts(self):
+        # The fall's look-ahead stops at the next RANKS line: that sink ended the second lift.
+        lines = [rises(1712), falls(1724), rises(1724), keeper_sinks(1724), falls(1730)]
+        verdict, _, fails, warns = self.run_judge(with_action(BTN, *lines))
+        self.assertEqual(verdict, "FAIL")
+        self.assertEqual(fails, [f"{BTN}: a run window sat above another window for 12 ms"])
+        self.assertEqual(warns, [lift_note(6)])
 
     def test_a_tolerated_lift_with_top_or_a_steal_fails(self):
         top = [f"t=1712 TOP tagged=1 via=ev-reorder {WIN} vis=1 iconic=0 cloaked=0", *A3,

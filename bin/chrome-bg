@@ -1604,9 +1604,11 @@ def judge(lines, raf=None, hz=None, leftover=None, errors=()):
     Time on top (TOP tagged=1) and a foreground steal (FOREGROUND tagged=1) always fail. Time
     above other windows is judged one interval at a time: an interval opens at a RANKS line with
     any aboveOthers>0 and closes at the next RANKS line with none, or at the log's end. One the
-    keeper ended (a KEEP-SINK logged inside it) within KEEP_TOLERANCE_MS is tolerated: a NOTE in
-    the warnings, its ms in the row's "kept". Every other interval's ms add to the action's
-    "above" and fail. Any KEEP-FIGHT fails, so tolerated lifts can't hide a re-raise loop."""
+    keeper ended (a KEEP-SINK ok=True logged inside it) within KEEP_TOLERANCE_MS is tolerated: a
+    NOTE in the warnings, its ms in the row's "kept". Every other interval's ms add to the
+    action's "above" and fail. One tolerated lift per action passes (A3 saw one); a second
+    fails, since KEEP-FIGHT (over 20 sinks in 1 s) alone misses a slower re-raise loop. Any
+    KEEP-FIGHT fails too."""
     rows, order = {}, []
     action, after_stop, first_fg, last_t = "launch", False, None, 0
     since = {"top": None, "fg": None}
@@ -1615,8 +1617,8 @@ def judge(lines, raf=None, hz=None, leftover=None, errors=()):
 
     def row(name):
         if name not in rows:
-            rows[name] = {"top": 0, "above": 0, "kept": 0, "fg": 0, "sunk": 0, "keep": 0,
-                          "fight": 0}
+            rows[name] = {"top": 0, "above": 0, "kept": 0, "lifts": 0, "fg": 0, "sunk": 0,
+                          "keep": 0, "fight": 0}
             order.append(name)
         return rows[name]
 
@@ -1631,16 +1633,21 @@ def judge(lines, raf=None, hz=None, leftover=None, errors=()):
         above, ms = None, t - start
         if kept and ms <= KEEP_TOLERANCE_MS:
             row(name)["kept"] += ms
+            row(name)["lifts"] += 1
             warns.append(f"NOTE: {name}: a run window rose above another window, under the "
                          f"foreground, for {ms} ms until the keeper sank it")
         else:
             row(name)["above"] += ms
 
+    def keeper_sank(rest):
+        return rest.startswith("KEEP-SINK ok=True")
+
+    parsed = []
     for line in lines:
         m = re.match(r"t=(\d+) (.*)", line.rstrip("\r\n"))
-        if not m:
-            continue
-        t, rest = int(m.group(1)), m.group(2)
+        if m:
+            parsed.append((int(m.group(1)), m.group(2)))
+    for k, (t, rest) in enumerate(parsed):
         last_t = max(last_t, t)
         b = re.match(r"MARK begin (?:create )?(\S+)", rest)
         if b:
@@ -1656,6 +1663,14 @@ def judge(lines, raf=None, hz=None, leftover=None, errors=()):
                 if above is None:
                     above = [t, action, False]
             elif above is not None:
+                # KeepSink logs its line after SetWindowPos returns, and a Check nested in that
+                # call may log the fall first: a KEEP-SINK in the same ms, before the next RANKS
+                # line, ended this lift too.
+                j = k + 1
+                while not above[2] and j < len(parsed) and parsed[j][0] == t \
+                        and not parsed[j][1].startswith("RANKS "):
+                    above[2] = keeper_sank(parsed[j][1])
+                    j += 1
                 close_above(t)
         elif rest.startswith("FOREGROUND "):
             close(t, "fg")
@@ -1674,7 +1689,7 @@ def judge(lines, raf=None, hz=None, leftover=None, errors=()):
             row(action)["sunk"] += 1
         elif rest.startswith("KEEP-SINK"):
             row(action)["keep"] += 1
-            if above is not None:
+            if above is not None and keeper_sank(rest):
                 above[2] = True
         elif rest.startswith("KEEP-FIGHT"):
             row(action)["fight"] += 1
@@ -1688,6 +1703,9 @@ def judge(lines, raf=None, hz=None, leftover=None, errors=()):
             fails.append(f"{name}: a run window was on top of the screen for {r['top']} ms")
         if r["above"]:
             fails.append(f"{name}: a run window sat above another window for {r['above']} ms")
+        if r["lifts"] > 1:
+            fails.append(f"{name}: a run window rose above another window {r['lifts']} times; "
+                         "one lift per action is tolerated, more is a re-raise loop")
         if r["fight"]:
             fails.append(f"{name}: the keeper fought a run window (more than 20 sinks in 1 s)")
     parts = str(raf).split() if raf is not None else []
@@ -1745,8 +1763,9 @@ def print_report(verdict, rows, fails, warns, raf):
 def cmd_check(args):
     """The live self-test (probe.mjs plus classify.py): every action a fixture may take, each
     between marks in the supervisor's log, then the log judged (judge()). bringToFront-newPage
-    is a fixture's page.bringToFront() then browser.newPage(): live, the pair lifted the run
-    window under the foreground until the keeper sank it, where each alone did not. It opens a
+    is a fixture's page.bringToFront() then browser.newPage() from a loaded page: live, the pair
+    lifted the run window under the foreground until the keeper sank it, where each alone did
+    not. An action that can't be taken fails the run. It opens a
     Chrome window behind yours for about half a minute."""
     gc_first()
     rid = new_id()

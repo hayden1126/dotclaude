@@ -185,16 +185,17 @@ chrome-bg check
 - `ls` lists runs: id, port, Chrome pids, owner, age, cwd. A run dir with no
   record shows as `no record`.
 - `check` is the live self-test. It opens a window behind yours for about 30 s,
-  takes each action a fixture might (a default `newPage`, `bringToFront`,
-  `bringToFront` then a `newPage`, maximize and restore, `window.open`), then
-  judges the supervisor's log. It passes when no run window took the
-  foreground or went on top, none sat above another window (except a lift the
-  keeper sank within 50 ms, printed as a `NOTE`), the keeper never had to
-  fight a window, the covered page stayed `visible` and drew frames within 10%
-  of the monitor's rate, and nothing was left after stop. Exit 0 is a pass, 1
-  a fail, 3 inconclusive. Inconclusive means the window in front at the start
-  was not a visible one, so a steal can't be told from Windows handing over a
-  dead foreground: put one of your windows in front and rerun.
+  takes each action a fixture might (`bringToFront` then a `newPage` from a
+  loaded page, a default `newPage`, `bringToFront`, maximize and restore,
+  `window.open`), then judges the supervisor's log. It passes when every action
+  was taken, no run window took the foreground or went on top, none sat above
+  another window (except one lift per action that the keeper sank within
+  50 ms, printed as a `NOTE`), the keeper never had to fight a window, the
+  covered page stayed `visible` and drew frames within 10% of the monitor's
+  rate, and nothing was left after stop. Exit 0 is a pass, 1 a fail, 3
+  inconclusive. Inconclusive means the window in front at the start was not a
+  visible one, so a steal can't be told from Windows handing over a dead
+  foreground: put one of your windows in front and rerun.
 
 **How it works:** each run gets an 8-hex id, a fresh profile in its own run
 dir, and Chrome on `--remote-debugging-port=0`. Its flags are puppeteer's
@@ -237,7 +238,8 @@ path), does the Windows half. The rules, and why:
 - **The keeper is a backstop.** While no run window has the foreground, the
   supervisor sinks any run window it sees above another on-screen window, at
   most 20 times per window per second. Under the WMI launch one sequence still
-  lifts a window: `bringToFront` followed by a `newPage` put it just under the
+  lifts a window: once its first page has loaded a page of its own (not
+  `about:blank`), `bringToFront` followed by a `newPage` put it just under the
   foreground, above your other windows, for about 12 ms until the keeper sank
   it. Neither call alone did, and the lifted window never took the foreground
   or went on top. The keeper stands down while a run window has the
