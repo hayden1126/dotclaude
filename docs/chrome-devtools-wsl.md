@@ -217,7 +217,12 @@ path), does the Windows half. The rules, and why:
 - **The supervisor writes stdout only in reply.** It takes one JSON command per
   stdin line and answers each with one line; window events go to its log. A
   stray stdout write after its owner died killed the supervisor and left 8
-  chrome.exe running.
+  chrome.exe running. `bin/chrome-bg` also starts it with SIGPIPE ignored and
+  in a session of its own: a reply still in flight when the owner is killed
+  then can't take the WSL relay down, and a ctrl-c in the terminal can't reach
+  it. Only its stdin closing ends it, and it cleans up first. If it exits any
+  other way, or reports an incomplete cleanup (exit 3), `bin/chrome-bg` kills
+  the run by its dir itself.
 - **Cleanup goes by run dir, never by port.** A chrome.exe belongs to a run
   when its command line holds `\chrome-bg\<id>\`. Chrome may relaunch itself
   and its children outlive their parent, so a recorded pid isn't proof, while
@@ -248,6 +253,9 @@ path), does the Windows half. The rules, and why:
   `<id>\profile`), deleted at stop, and the supervisor's log `<id>.log`. The
   log outlives the run, for `check` and post-mortems; gc prunes logs after 7
   days.
+- One WSL distro per Windows user: gc takes every run dir under
+  `%TEMP%\chrome-bg\` that no local record claims as its own, so a second distro
+  running chrome-bg would have its runs killed after 2 minutes.
 
 **Keep Bash off the display (`hooks/blank-display.sh`):** in a repo whose
 fixtures launch a headed browser, a fixture run from Bash with `DISPLAY` set
