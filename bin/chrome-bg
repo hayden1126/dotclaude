@@ -30,6 +30,7 @@ record once they are 2 minutes old, and prunes logs older than 7 days.
 """
 import argparse
 import base64
+import contextlib
 import hashlib
 import http.client
 import json
@@ -486,6 +487,550 @@ def browser_ws(port, path):
         raise WrongChrome(f"chrome-bg: refusing port {port}: its browser WebSocket {got!r} is not "
                           f"this run's {path!r}, so it is another Chrome")
     return f"ws://127.0.0.1:{port}{path}"
+
+
+# ---- run records ----------------------------------------------------------------------------
+
+def state_dir():
+    base = os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state")
+    return os.path.join(base, "dotclaude", "chrome-bg")
+
+
+def record_path(rid):
+    return os.path.join(state_dir(), rid + ".json")
+
+
+def holder_log(rid):
+    return os.path.join(state_dir(), rid + ".holder.log")
+
+
+def write_record(rec):
+    """Atomically: a reader sees the old record or the new one, never half of one."""
+    d = state_dir()
+    os.makedirs(d, mode=0o700, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=d, prefix=f".{rec['id']}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w") as f:
+            json.dump(rec, f, indent=1)
+            f.write("\n")
+        os.replace(tmp, record_path(rec["id"]))
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp)
+        raise
+
+
+def load_record(rid):
+    try:
+        with open(record_path(rid)) as f:
+            rec = json.load(f)
+    except (OSError, ValueError):
+        return None
+    return rec if isinstance(rec, dict) and rec.get("id") == rid else None
+
+
+def read_records():
+    try:
+        names = sorted(os.listdir(state_dir()))
+    except OSError:
+        return []
+    recs = []
+    for name in names:
+        m = re.fullmatch(r"([0-9a-f]{8})\.json", name)
+        rec = load_record(m.group(1)) if m else None
+        if rec:
+            recs.append(rec)
+    return recs
+
+
+def remove_record(rid):
+    with contextlib.suppress(FileNotFoundError):
+        os.remove(record_path(rid))
+
+
+def new_id():
+    while True:
+        rid = secrets.token_hex(4)
+        if not os.path.exists(record_path(rid)):
+            return rid
+
+
+def proc_stat(pid):
+    """(state, start time in clock ticks) from /proc/<pid>/stat, or None for no such process."""
+    try:
+        with open(f"/proc/{int(pid)}/stat") as f:
+            data = f.read()
+    except (OSError, ValueError):
+        return None
+    rest = data[data.rindex(")") + 2:].split()
+    return rest[0], rest[19]
+
+
+def owner_dead(rec):
+    """Provably dead: no such pid, a zombie, or the pid now names a process that started at
+    another time (reused). A record with no owner pid proves nothing."""
+    owner = rec.get("owner") if isinstance(rec.get("owner"), dict) else {}
+    pid = owner.get("pid")
+    if not isinstance(pid, int) or pid <= 0:
+        return False
+    st = proc_stat(pid)
+    if st is None or st[0] in ("Z", "X"):
+        return True
+    return owner.get("start") is not None and st[1] != owner.get("start")
+
+
+def owner_proven(rec):
+    """The owner is alive and is the very process that wrote the record (same start time)."""
+    owner = rec.get("owner") if isinstance(rec.get("owner"), dict) else {}
+    st = proc_stat(owner.get("pid")) if isinstance(owner.get("pid"), int) else None
+    return bool(st) and st[0] not in ("Z", "X") and owner.get("start") == st[1]
+
+
+# ---- the supervisor -------------------------------------------------------------------------
+
+class Supervisor:
+    """One chrome-bg.ps1 per run. Its stdout carries replies only (a write after the owner died
+    killed a probe supervisor and left Chrome running), so every op reads exactly one line."""
+
+    def __init__(self, rid):
+        self.rid = rid
+        os.makedirs(state_dir(), mode=0o700, exist_ok=True)
+        self.err_path = os.path.join(state_dir(), rid + ".err")
+        self.buf = b""
+        with open(self.err_path, "ab") as err:
+            self.p = subprocess.Popen(ps_argv("-Id", rid, "-Keep"), stdin=subprocess.PIPE,
+                                      stdout=subprocess.PIPE, stderr=err)
+
+    def err_tail(self):
+        try:
+            with open(self.err_path, errors="replace") as f:
+                text = f.read()[-400:].strip()
+        except OSError:
+            return ""
+        return f" (its stderr: {text})" if text else ""
+
+    def call(self, op, timeout=20, **fields):
+        try:
+            self.p.stdin.write((json.dumps({"op": op, **fields}) + "\n").encode())
+            self.p.stdin.flush()
+        except (OSError, ValueError):
+            raise Fail(f"chrome-bg: the supervisor exited before {op}{self.err_tail()}") from None
+        deadline = time.monotonic() + timeout
+        line = ""
+        while not line:
+            while b"\n" not in self.buf:
+                left = deadline - time.monotonic()
+                if left <= 0:
+                    raise Fail(f"chrome-bg: no reply from the supervisor to {op} in {timeout:g}s")
+                if select.select([self.p.stdout], [], [], left)[0]:
+                    chunk = os.read(self.p.stdout.fileno(), 65536)
+                    if not chunk:
+                        raise Fail(f"chrome-bg: the supervisor exited during {op}{self.err_tail()}")
+                    self.buf += chunk
+            raw, self.buf = self.buf.split(b"\n", 1)
+            line = raw.decode("utf-8", "replace").strip().lstrip("﻿")
+        try:
+            reply = json.loads(line)
+        except ValueError:
+            raise Fail(f"chrome-bg: the supervisor answered {op} with {line[:200]!r}") from None
+        if not isinstance(reply, dict) or reply.get("ok") is not True:
+            raise Fail(f"chrome-bg: the supervisor's {op} failed: {pick(reply, 'error', default=reply)}")
+        return reply
+
+    def close(self, timeout=20):
+        """Close its stdin: it kills this run's chrome.exe, deletes the run dir and exits.
+        Returns its exit code, or None while it still runs."""
+        with contextlib.suppress(OSError, ValueError):
+            self.p.stdin.close()
+        try:
+            code = self.p.wait(timeout)
+        except subprocess.TimeoutExpired:
+            return None
+        self.p.stdout.close()
+        with contextlib.suppress(OSError):
+            if os.path.getsize(self.err_path) == 0:
+                os.remove(self.err_path)
+        return code
+
+
+def one_shot(*args, timeout=60):
+    """chrome-bg.ps1 -Kill -Id <id> or -Scan: one JSON line, then it exits."""
+    try:
+        r = subprocess.run(ps_argv(*args), stdin=subprocess.DEVNULL, capture_output=True,
+                           timeout=timeout)
+    except subprocess.TimeoutExpired:
+        raise Fail(f"chrome-bg: chrome-bg.ps1 {' '.join(args)} timed out after {timeout}s") from None
+    lines = [ln.strip().lstrip("﻿")
+             for ln in r.stdout.decode("utf-8", "replace").splitlines() if ln.strip()]
+    reply = None
+    if lines:
+        with contextlib.suppress(ValueError):
+            reply = json.loads(lines[-1])
+    if not isinstance(reply, dict) or reply.get("ok") is not True:
+        why = (pick(reply, "error") or r.stderr.decode("utf-8", "replace").strip()[-300:]
+               or f"exit {r.returncode}")
+        raise Fail(f"chrome-bg: chrome-bg.ps1 {' '.join(args)} failed: {why}")
+    return reply
+
+
+def kill_run(rid):
+    """Kill a run's chrome.exe by its dir and delete the dir, in a fresh one-shot: a WMI-launched
+    Chrome is not the supervisor's child, so a dead supervisor leaves it running."""
+    if not ID_RE.fullmatch(str(rid)):
+        raise Fail(f"chrome-bg: {rid!r} is not a run id")
+    return one_shot("-Kill", "-Id", rid)
+
+
+# ---- start and stop -------------------------------------------------------------------------
+
+class Run:
+    def __init__(self, rec):
+        self.rec = rec
+        self.sup = None
+        self.cdp = None
+        self.hello = {}
+        self.target = None
+        self.window = None
+
+    @property
+    def url(self):
+        return self.rec["browserURL"]
+
+
+def wait_port(path, sup, timeout=PORT_WAIT_S):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            with open(path, errors="replace") as f:
+                got = parse_port_file(f.read())
+        except OSError:
+            got = None
+        if got:
+            return got
+        if sup.p.poll() is not None:
+            raise Fail(f"chrome-bg: the supervisor exited before Chrome wrote its port{sup.err_tail()}")
+        time.sleep(0.1)
+    raise Fail(f"chrome-bg: Chrome wrote no DevToolsActivePort in {timeout}s")
+
+
+def start_run(rid, url, size, kind, ttl=None, cwd=None, marks=False, on_hello=None,
+              keep_cdp=False):
+    """The start sequence (PLAN.md "Start sequence"). On any failure, or a signal, it ends the
+    run it began before raising."""
+    w, h = size
+    now = time.time()
+    st = proc_stat(os.getpid())
+    rec = {"id": rid, "kind": kind, "owner": {"pid": os.getpid(), "start": st[1] if st else None},
+           "cwd": cwd or os.getcwd(), "created": now, "expires": now + ttl if ttl else None,
+           "url": url, "size": [w, h], "port": None, "browserURL": None, "wsPath": None,
+           "pid": None, "runDir": None, "log": None}
+    # Written before the supervisor exists, so gc never takes this run's young dir for an orphan.
+    write_record(rec)
+    run = Run(rec)
+    try:
+        run.sup = Supervisor(rid)
+        hello = run.hello = run.sup.call("hello", timeout=60)
+        if on_hello:
+            on_hello(hello)
+        run_dir = str(pick(hello, "runDir", default="") or "")
+        if not holds_tag(run_dir, rid):
+            raise Fail(f"chrome-bg: the supervisor's run dir {run_dir!r} does not end in "
+                       f"\\chrome-bg\\{rid}")
+        rec["runDir"] = run_dir
+        rec["log"] = str(pick(hello, "log", "logFile", default="")
+                         or win_join(win_parent(run_dir), rid + ".log"))
+        write_record(rec)
+        x = offscreen_x(rect(pick(hello, "virtualScreen", "vscreen", "virtual"))[0], w)
+        profile = win_join(run_dir, "profile")
+        launched = run.sup.call("launch", args=" ".join(chrome_args(profile)), timeout=60)
+        rec["pid"] = pick(launched, "pid")
+        port, path = wait_port(wslpath("-u", win_join(profile, "DevToolsActivePort")), run.sup)
+        ws_url = browser_ws(port, path)
+        rec.update(port=port, wsPath=path, browserURL=f"http://127.0.0.1:{port}")
+        write_record(rec)
+        run.cdp = cdp = CDP(ws_url)
+        if marks:
+            run.sup.call("mark", text="begin page0")
+        run.target = cdp.send("Target.createTarget", {
+            "url": url, "newWindow": True, "background": True, "left": x, "top": 10,
+            "width": w, "height": h})["targetId"]
+        win = cdp.send("Browser.getWindowForTarget", {"targetId": run.target})
+        run.window = win.get("windowId")
+        left = (win.get("bounds") or {}).get("left")
+        if left != x:
+            rec["clamped"] = {"asked": x, "got": left}
+            print(f"chrome-bg: Chrome put the first window at left={left}, not {x}: clamped onto "
+                  "a monitor (the supervisor sinks it at create)", file=sys.stderr)
+        mon = primary_monitor(hello)
+        work = rect(pick(mon, "work", "workArea", "rect", default=[0, 0, w, h]))
+        try:
+            scale = float(pick(mon, "dpi", default=96) or 96) / 96
+        except (TypeError, ValueError):
+            scale = 1.0
+        run.sup.call("place", x=work[0] + 10, y=work[1] + 10, w=round(w * scale),
+                     h=round(h * scale))
+        got = cdp.send("Browser.getWindowForTarget", {"targetId": run.target}).get("bounds") or {}
+        if (got.get("width"), got.get("height")) != (w, h):
+            # A DPI change on the way resized it. Size only: a window state could raise it.
+            cdp.send("Browser.setWindowBounds",
+                     {"windowId": run.window, "bounds": {"width": w, "height": h}})
+            rec["resized"] = [got.get("width"), got.get("height")]
+        if marks:
+            run.sup.call("mark", text="end page0")
+        write_record(rec)
+        if not keep_cdp:
+            cdp.close()
+            run.cdp = None
+        return run
+    except BaseException:
+        finish(run)
+        raise
+
+
+def browser_close(rec):
+    """Browser.close on a recorded run's Chrome. Gone counts as done (a fixture's own
+    browser.close() may have closed it), and a port that now answers as another browser is
+    left alone."""
+    port, path = rec.get("port"), rec.get("wsPath")
+    if not port or not path:
+        return "gone"
+    try:
+        cdp = CDP(browser_ws(port, path), timeout=5)
+    except (Fail, OSError, ValueError):
+        return "gone"
+    try:
+        cdp.send("Browser.close", timeout=5)
+        return "closed"
+    except OSError:
+        return "closed"
+    except Fail:
+        return "timeout"
+    finally:
+        cdp.close()
+
+
+def finish(run):
+    """End a run this process owns: Browser.close, then close the supervisor's stdin (it kills
+    what is left by run dir and deletes the dir), then drop the record."""
+    rid = run.rec["id"]
+    if run.cdp is not None:
+        with contextlib.suppress(Fail, OSError, ValueError):
+            run.cdp.send("Browser.close", timeout=5)
+        run.cdp.close()
+        run.cdp = None
+    else:
+        browser_close(run.rec)
+    if run.sup is not None and run.sup.close(timeout=20) is None:
+        print(f"chrome-bg: the supervisor of {rid} did not exit; killing the run by its dir",
+              file=sys.stderr)
+        with contextlib.suppress(Fail):
+            kill_run(rid)
+        run.sup.p.kill()
+        with contextlib.suppress(subprocess.TimeoutExpired):
+            run.sup.p.wait(5)
+    remove_record(rid)
+
+
+def stop_record(rec, wait=25):
+    """Stop a run some other process owns. A live owner gets SIGTERM after Browser.close and
+    cleans up itself; a provably dead one can't, so a one-shot kills the run by its dir."""
+    rid = rec.get("id")
+    if not ID_RE.fullmatch(str(rid)):
+        return
+    if not owner_dead(rec):
+        browser_close(rec)
+        if owner_proven(rec):
+            with contextlib.suppress(OSError):
+                os.kill(rec["owner"]["pid"], signal.SIGTERM)
+            deadline = time.monotonic() + wait
+            while not owner_dead(rec) and time.monotonic() < deadline:
+                time.sleep(0.2)
+    if owner_dead(rec) and load_record(rid) is None:
+        return  # the owner cleaned up and dropped the record itself
+    kill_run(rid)
+    remove_record(rid)
+
+
+def resolve(target):
+    """A run record by id or browserURL. Never a bare port: chrome-debug.ps1 serves 9222,
+    maybe with Hayden's real profile."""
+    t = target.strip()
+    if ID_RE.fullmatch(t):
+        rec = load_record(t)
+        if rec is None:
+            raise Fail(f"chrome-bg: no run {t} (chrome-bg ls lists the runs)")
+        return rec
+    try:
+        u = urlparse(t)
+        port = u.port
+    except ValueError:
+        u, port = None, None
+    if u and u.scheme in ("http", "ws") and u.hostname in ("127.0.0.1", "localhost") and port:
+        for rec in read_records():
+            if rec.get("port") == port:
+                return rec
+        raise Fail(f"chrome-bg: no run serves {t}; stop acts only on a run's record, never on a "
+                   "bare port")
+    raise Fail(f"chrome-bg: stop takes a run id (8 hex) or its browserURL, not {t!r}: a bare "
+               "port could be another Chrome (chrome-debug.ps1 serves 9222)")
+
+
+def cmd_run(args):
+    cmd = args.cmd[1:] if args.cmd[:1] == ["--"] else args.cmd
+    if not cmd:
+        raise Fail("chrome-bg: run wants a command: chrome-bg run [options] -- CMD...")
+    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", args.env):
+        raise Fail(f"chrome-bg: --env wants a variable name, not {args.env!r}")
+    rid = new_id()
+    state = {"child": None, "stopping": False}
+
+    def on_signal(signum, frame):
+        child = state["child"]
+        if child is not None:
+            if child.poll() is None:
+                with contextlib.suppress(OSError):
+                    os.kill(child.pid, signum)
+        elif not state["stopping"]:
+            raise Stopped(signum)
+
+    old = {s: signal.signal(s, on_signal) for s in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)}
+    run = None
+    try:
+        try:
+            run = start_run(rid, args.url, args.size, "run")
+        except Stopped as e:
+            return 128 + e.signum
+        try:
+            state["child"] = subprocess.Popen(cmd, env=dict(os.environ, **{args.env: run.url}))
+        except OSError as e:
+            print(f"chrome-bg: can't run {cmd[0]}: {e}", file=sys.stderr)
+            return 127
+        rc = state["child"].wait()
+        return 128 - rc if rc < 0 else rc
+    finally:
+        state["stopping"] = True
+        if run is not None:
+            finish(run)
+        for s, h in old.items():
+            signal.signal(s, h)
+
+
+def holder(rid, args, ttl, cwd, ready):
+    """The detached owner of a `start` run: holds the supervisor until stop (SIGTERM), the TTL,
+    or the supervisor's exit, then ends the run. Reports ready or failed on the `ready` pipe."""
+    fd = os.open(holder_log(rid), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+    null = os.open(os.devnull, os.O_RDONLY)
+    os.dup2(null, 0)
+    os.dup2(fd, 1)
+    os.dup2(fd, 2)
+    os.close(null)
+    os.close(fd)
+    os.chdir("/")
+
+    def on_signal(signum, frame):
+        raise Stopped(signum)
+
+    for s in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+        signal.signal(s, on_signal)
+
+    def tell(obj):
+        nonlocal ready
+        if ready is not None:
+            with contextlib.suppress(OSError):
+                os.write(ready, json.dumps(obj).encode())
+            os.close(ready)
+            ready = None
+
+    def say(text):
+        print(f"{time.strftime('%Y-%m-%dT%H:%M:%S')} {rid} {text}", flush=True)
+
+    run, code = None, 0
+    try:
+        run = start_run(rid, args.url, args.size, "start", ttl=ttl, cwd=cwd)
+        tell({"ok": True, "id": rid, "url": run.url, "port": run.rec["port"],
+              "pid": run.rec["pid"]})
+        say(f"ready at {run.url}")
+        while time.time() < run.rec["expires"] and run.sup.p.poll() is None:
+            time.sleep(min(1.0, max(0.05, run.rec["expires"] - time.time())))
+        say("supervisor exited" if run.sup.p.poll() is not None else "TTL reached")
+    except Stopped as e:
+        say(f"signal {e.signum}")
+        tell({"ok": False, "error": f"chrome-bg: start stopped by signal {e.signum}"})
+    except Fail as e:
+        say(str(e))
+        tell({"ok": False, "error": str(e)})
+        code = 1
+    except BaseException as e:
+        say(f"crashed: {e!r}")
+        tell({"ok": False, "error": f"chrome-bg: the holder crashed: {e!r} (see {holder_log(rid)})"})
+        code = 1
+    finally:
+        for s in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+            signal.signal(s, signal.SIG_IGN)
+        if run is not None:
+            finish(run)
+            say("stopped")
+    return code
+
+
+def read_pipe(fd, timeout):
+    data, deadline = b"", time.monotonic() + timeout
+    while True:
+        left = deadline - time.monotonic()
+        if left <= 0 or not select.select([fd], [], [], left)[0]:
+            return data, False
+        chunk = os.read(fd, 65536)
+        if not chunk:
+            return data, True
+        data += chunk
+
+
+def cmd_start(args):
+    ttl = parse_duration(args.ttl)
+    rid = new_id()
+    cwd = os.getcwd()
+    os.makedirs(state_dir(), mode=0o700, exist_ok=True)
+    r, w = os.pipe()
+    sys.stdout.flush()
+    sys.stderr.flush()
+    pid = os.fork()
+    if pid == 0:
+        code = 1
+        try:
+            os.close(r)
+            os.setsid()
+            code = 0 if os.fork() else holder(rid, args, ttl, cwd, w)
+        finally:
+            os._exit(code)
+    os.close(w)
+    os.waitpid(pid, 0)
+    data, done = read_pipe(r, timeout=150)
+    os.close(r)
+    try:
+        res = json.loads(data)
+    except ValueError:
+        res = None
+    if not isinstance(res, dict) or res.get("ok") is not True:
+        why = pick(res, "error") or (
+            f"chrome-bg: the holder gave no word in 150s; chrome-bg ls shows run {rid}, "
+            f"chrome-bg stop {rid} ends it" if not done else
+            f"chrome-bg: the holder exited without a word (see {holder_log(rid)})")
+        print(why, file=sys.stderr)
+        return 1
+    if args.json:
+        print(json.dumps({k: res.get(k) for k in ("id", "url", "port", "pid")}))
+    else:
+        print(res["url"])
+    return 0
+
+
+def cmd_stop(args):
+    if args.gc == bool(args.target):
+        raise Fail("chrome-bg: stop takes a run id or browserURL, or --gc")
+    rec = resolve(args.target)
+    stop_record(rec)
+    print(f"chrome-bg: stopped {rec['id']}")
+    return 0
 
 
 # ---- CLI ------------------------------------------------------------------------------------
