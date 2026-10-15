@@ -534,6 +534,10 @@ class Merged(Machine):
         self.assertEqual((r.returncode, r.stdout), (3, ""), r.stderr)
         self.assertIn(f"the lane worktree {self.a} (detached at {tip[:12]}) has no commit past "
                       "origin/main", r.stderr)
+        self.git("switch", "-q", "-c", "detached-fix", cwd=self.a)  # a branch, whatever its name
+        r = self.cli("hold", self.a)
+        self.assertIn(f"the lane worktree {self.a} (branch detached-fix) has no commit past "
+                      "origin/main", r.stderr)
 
     def test_an_agent_worktree_inside_main_is_never_checked(self):
         inner = os.path.join(self.main, ".claude", "worktrees", "agent-x")

@@ -564,7 +564,9 @@ def merged_refusal(repo_dir: str, env=None) -> str | None:
         return None
     common, head = common_dir(me), branch(wt)
     base, ref = base_ref(common, places(env))
-    where = f"the lane worktree {me} ({head if head.startswith('detached') else 'branch ' + head})"
+    # branch() gives a detached HEAD as "detached at <sha>"; a branch name holds no space.
+    label = head if head.startswith("detached at ") else f"branch {head}"
+    where = f"the lane worktree {me} ({label})"
     if common is None or head == "?":
         count, why = None, "its HEAD or commondir file doesn't read as git's"
     else:

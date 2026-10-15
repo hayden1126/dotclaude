@@ -710,6 +710,15 @@ class Scan(Guard):
         # The last line, where setup.sh's warning points.
         self.assertTrue(out.endswith(f"\nThen {load_guard().RERUN}.\n"), out)
 
+    def test_a_finding_with_no_rule_still_ends_with_where_to_rerun(self):
+        # $HOME itself can't take an Edit deny rule (it would cover the whole home).
+        self.env["PATH"] = f"{self.home}:/usr/bin"
+        code, out = self.scan(self.tmp)
+        self.assertEqual(code, 1, out)
+        self.assertIn("PATH: excluded-guard (rule2)", out)
+        self.assertNotIn("with the rules added", out)
+        self.assertTrue(out.endswith(f"\nThen {load_guard().RERUN}.\n"), out)
+
     def test_a_rule_it_cant_paste_still_ends_with_where_to_rerun(self):
         self.env["PATH"] = f"{self.wbin}:/usr/bin"
         rerun = f"\nThen {load_guard().RERUN}.\n"

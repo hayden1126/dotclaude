@@ -921,8 +921,10 @@ def run_scan(roots):
                 rules.append(r.fix)
     if rules:
         print_paste(os.path.join(home, ".claude", "settings.machine.json"), rules)
-        print(f"Then {RERUN}.")  # last, where setup.sh's warning points
-    return 1 if first or unchecked or errors else 0
+    if not (first or unchecked or errors):
+        return 0
+    print(f"Then {RERUN}.")  # last, where setup.sh's warning points
+    return 1
 
 
 def print_paste(machine, rules):

@@ -379,7 +379,7 @@ python3 -I "$REPO_DIR/install-state.py" plugins \
 # bin dir, a repo whose install step points core.hooksPath into it), what each holds, and the
 # settings.machine.json with the Edit deny rules that clear them.
 python3 -I "$REPO_DIR/hooks/excluded_guard.py" --scan \
-  || warn "the excluded-command guard would refuse the calls above: look at each dir, paste the settings.machine.json it printed, and rerun setup where its last line says"
+  || warn "the excluded-command guard would refuse the calls above: look at each dir, fix each as the scan says (most by pasting the settings.machine.json it printed), and rerun setup where its last line says"
 
 # ---------------------------------------------------------------------------
 # 7. Final checklist
