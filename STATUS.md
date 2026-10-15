@@ -77,20 +77,26 @@ stored here).
     `lane-addr` #98, `excluded-guard` #100 (narrow-excluded Part 2 plus G8's fix, 2026-10-14),
     `tab-bar` #96, #97, #99 and #101 (2026-10-14), `turn-glyph` #102 (2026-10-14), `ask-owner`
     #103 (2026-10-14), `guard-b` #104 (2026-10-14), `pass-timeout` #105 (2026-10-14: a dropped
-    pass now tells the session itself).
+    pass now tells the session itself), `handoff-flag` #106 (2026-10-14: `handoff?` judges a
+    merged lane by its record against `mergedAt`, so a lane that handed off after its merge
+    closes without an ask).
     `gh pr view <n>` and the closed records under `.git/lanes/_closed/` hold the detail; tab-bar's
     design is in [[dotclaude-tab-bar]]. Tabs opened before #102's install (2026-10-14) keep the
     old startup hooks (no PermissionRequest or SubagentStop wiring) until they restart.
-  - `handoff-flag` (opened 2026-10-14, Hayden's option C): `handoff?` judges a merged lane by
-    its record against the PR's `mergedAt`, not by session end. Today every session ends after
-    its own last write, so the flag lights after each `/pass` and stays on for a merged lane with
-    no live session. Until it merges (Hayden's call), such a lane fails the hand-back gate, and
-    its close is the lead's ask to Hayden.
   - `identity-branch` and `install-hint` (opened 2026-10-14, Hayden's pick): the identity
     line's checked-out branch, and a stale rerun hint that put the install back into a merged
-    lane. Their briefs are in their records. Neither touches handoff-flag's files.
-  - **Merge order: `handoff-flag`, then `identity-branch` and `install-hint`, whichever is
-    ready first** (they don't overlap each other). The lead installs only the next to merge.
+    lane. Their briefs are in their records.
+  - `chrome-bg` (opened 2026-10-14, Hayden's ask and picks): `bin/chrome-bg` opens a Windows
+    Chrome for test probes behind every window without taking focus, for `puppeteer.connect`,
+    and one dotclaude hook blanks `DISPLAY` and `WAYLAND_DISPLAY` for Bash in opted-in repos.
+    Spike, logs and the measured mechanism: `~/scratch/chrome-bg-spike/NOTES.md`. Until it
+    merges, every Vulcan checkout (the main one and its 11 worktrees) carries that hook in an
+    untracked `.claude/settings.local.json`, written by the lead 2026-10-14 (git ignores it
+    machine-wide); the lane lists them for removal once its hook is live. At merge the lead also
+    updates Vulcan's memory `no-chrome-windows-in-front.md` (it says `chrome-bg` isn't installed
+    yet).
+  - **Merge order: `identity-branch`, `install-hint` and `chrome-bg`, whichever is ready
+    first** (none overlap). The lead installs only the next to merge.
   - The parked json-depth sweep (21 files, among them the delegation enforcement scripts) is on
     `fix/json-depth-sweep`, a local branch never pushed: keep it while the sweep is in the
     backlog. Shipping it first needs a check of how each enforcement site fails
@@ -115,10 +121,10 @@ stored here).
     `classify()` keys on the pane's directory. Fix: `lane ls` flags a main checkout with more
     than one live session, and the bar marks the extra tab (for example `lead²`). The stopgap
     used: tell each lane to pick the lead's `main:@N` entry from the refusal, and tell the old
-    session it isn't the lead. Waits for handoff-flag's merge (`skills/lanes/scripts/lane`).
+    session it isn't the lead. Next pick once a slot frees (`skills/lanes/scripts/lane`).
   - `lane init --model/--effort` repo defaults and `lane open --model/--effort` overrides,
-    passed through to `claude` (today `lane open` hardcodes the argv). Waits for handoff-flag's
-    merge too; it may share a lane with the item above.
+    passed through to `claude` (today `lane open` hardcodes the argv). It may share a lane with
+    the item above.
   - Tests time durations with `time.monotonic()`, not `time.time()` (122 calls in 23 test
     files). It touches every suite, so it opens only when no lane runs.
 
@@ -209,11 +215,11 @@ stored here).
 
 ## Notes for next session
 - **Next (lead, main checkout):** watch for "merged #N" from a lane, then run the post-merge
-  chain (`skills/lanes/SKILL.md`, The lead, step 7). Live lanes: `handoff-flag` (next to
-  merge), `identity-branch`, `install-hint`. Check `lane ls` first: a merge Hayden made on
-  GitHub and mentioned to no session sends no message (#102 showed merged there before its
-  lane's message came). All 3 slots are full; after handoff-flag merges, the two-sessions flag
-  and `lane open --model` are the next picks (Hayden's call). No chat
+  chain (`skills/lanes/SKILL.md`, The lead, step 7). Live lanes: `identity-branch`,
+  `install-hint`, `chrome-bg`. Check `lane ls` first: a merge Hayden made on GitHub and
+  mentioned to no session sends no message (#102 showed merged there before its lane's message
+  came). All 3 slots are full (Hayden picked a cap of 4 for chrome-bg, unneeded once #106 freed
+  a slot); the two-sessions flag and `lane open --model` are the next picks. No chat
   about a lane's own asks; speak on cross-lane orders, decisions raised with the lead, failed
   checks and lead-only actions.
   - The lead's commits of 2026-10-14 (second session): `git log --first-parent 696cc44..HEAD`
