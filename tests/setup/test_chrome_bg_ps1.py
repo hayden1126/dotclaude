@@ -557,7 +557,10 @@ def kill_problems(src):
     if re.search(r"\bStop-Process\b|\btaskkill\b|(?:^|[;|{(])[ \t]*(?:kill|spps)\b(?!-)", p.ps, re.I | re.M):
         problems.append("something kills by bare pid")
     stop = p.text(p.function("Stop-RunProcs"))
-    stamp = re.search(r"\$(\w+)\s*=\s*\[DateTime\]::UtcNow\b", stop, re.I)
+    # Backed off at least one timer tick (15.6 ms): a creation stamp can read that early.
+    stamp = re.search(r"\$(\w+)\s*=\s*\[DateTime\]::UtcNow\.AddMilliseconds\(\s*-\s*(\d+)\s*\)", stop, re.I)
+    if stamp and int(stamp.group(2)) < 16:
+        stamp = None
     listing = re.search(r"\bGet-TaggedProcs\b", stop, re.I)
     passed = stamp and re.search(r"\bStop-RunProc\b(?!s)[^\n]*\$%s\b" % stamp.group(1), stop, re.I)
     if not (passed and listing and stamp.start() < listing.start()):
@@ -838,6 +841,11 @@ class CatchesRegressions(unittest.TestCase):
         drift = ("if ([Math]::Abs(($proc.StartTime.ToUniversalTime()"
                  " - $Row.CreationDate.ToUniversalTime()).Ticks) -ge 10) { return $false }")
         self.assertCaught(kill_problems, mutate(self.src, r"if \(\$proc\.StartTime[^\n]*", lambda m: drift))
+
+    def test_listing_time_not_backed_off(self):
+        self.assertCaught(kill_problems, mutate(self.src, r"AddMilliseconds\(-50\)", "AddMilliseconds(50)"))
+        self.assertCaught(kill_problems, mutate(self.src, r"\.AddMilliseconds\(-50\)", ""))
+        self.assertCaught(kill_problems, mutate(self.src, r"AddMilliseconds\(-50\)", "AddMilliseconds(-5)"))
 
     def test_listing_timed_after_it_ran(self):
         swap = r"(\n[ \t]*\$listedAt = [^\n]*)(\n[ \t]*\$procs = @\(Get-TaggedProcs\))"
