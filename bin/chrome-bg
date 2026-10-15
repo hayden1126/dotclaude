@@ -192,46 +192,126 @@ def holds_tag(run_dir, rid):
     return run_dir.rstrip("\\").lower().endswith("\\chrome-bg\\" + rid)
 
 
-def pick(d, *names, default=None):
-    """d[name] for the first of names present, ignoring case (PowerShell may capitalize keys)."""
-    if not isinstance(d, dict):
-        return default
-    low = {str(k).lower(): v for k, v in d.items()}
-    for n in names:
-        if n.lower() in low:
-            return low[n.lower()]
-    return default
+# ---- supervisor replies ---------------------------------------------------------------------
+# chrome-bg.ps1 answers in exact shapes (PLAN.md "Supervisor protocol"; the replies the real one
+# sent are pinned in tests/setup/test_chrome_bg.py). No aliases and no defaults: a missing or
+# retyped field fails here, naming the op and the field, instead of reading as None.
+
+KINDS = {
+    "int": lambda v: isinstance(v, int) and not isinstance(v, bool),
+    "num": lambda v: isinstance(v, (int, float)) and not isinstance(v, bool),
+    "str": lambda v: isinstance(v, str),
+    "bool": lambda v: isinstance(v, bool),
+    "list": lambda v: isinstance(v, list),
+    "dict": lambda v: isinstance(v, dict),
+}
 
 
-def rect(v):
-    """(left, top, right, bottom) from {left,top,right,bottom}, {x,y,w|width,h|height},
-    [l, t, r, b] or "l,t,r,b"."""
-    try:
-        if isinstance(v, str):
-            v = [int(float(x)) for x in v.split(",")]
-        if isinstance(v, (list, tuple)) and len(v) == 4:
-            return tuple(int(x) for x in v)
-        if isinstance(v, dict):
-            left = pick(v, "left", "l", "x")
-            top = pick(v, "top", "t", "y")
-            right = pick(v, "right", "r")
-            bottom = pick(v, "bottom", "b")
-            if right is None:
-                right = left + pick(v, "width", "w")
-            if bottom is None:
-                bottom = top + pick(v, "height", "h")
-            return int(left), int(top), int(right), int(bottom)
-    except (TypeError, ValueError):
-        pass
-    raise Fail(f"chrome-bg: unreadable rect {v!r} from the supervisor")
+def need(obj, key, kind, where):
+    """obj[key], of the given kind. `where` is the op and the path to obj, as in hello.fg."""
+    if not isinstance(obj, dict):
+        raise Fail(f"chrome-bg: supervisor {where} is {obj!r}, not an object")
+    if key not in obj:
+        raise Fail(f"chrome-bg: supervisor {where} has no {key!r}")
+    if not KINDS[kind](obj[key]):
+        raise Fail(f"chrome-bg: supervisor {where}.{key} is {obj[key]!r}, not a {kind}")
+    return obj[key]
 
 
-def primary_monitor(hello):
-    mons = [m for m in (pick(hello, "monitors") or []) if isinstance(m, dict)]
-    for m in mons:
-        if pick(m, "primary") in (True, 1, "1", "true", "True"):
-            return m
-    return mons[0] if mons else {}
+def rect(v, where):
+    """(x, y, w, h) from {"x", "y", "w", "h"}."""
+    return tuple(need(v, k, "int", where) for k in ("x", "y", "w", "h"))
+
+
+def failure(reply):
+    """What a supervisor reply that is not ok says went wrong."""
+    if isinstance(reply, dict) and isinstance(reply.get("error"), str):
+        code = f" (code {reply['code']})" if "code" in reply else ""
+        return reply["error"] + code
+    return repr(reply)
+
+
+def parse_fg(fg, where):
+    return {"visible": need(fg, "visible", "bool", where),
+            "iconic": need(fg, "iconic", "bool", where),
+            "cloaked": need(fg, "cloaked", "bool", where),
+            "cls": need(fg, "cls", "str", where), "pid": need(fg, "pid", "int", where)}
+
+
+def parse_hello(reply):
+    """hello: the run dir, the virtual screen, the primary monitor and the foreground."""
+    primary = None
+    for i, m in enumerate(need(reply, "monitors", "list", "hello")):
+        where = f"hello.monitors[{i}]"
+        mon = {"work": rect(need(m, "work", "dict", where), where + ".work"),
+               "dpi": need(m, "dpi", "int", where), "hz": need(m, "hz", "int", where)}
+        if need(m, "primary", "bool", where) and primary is None:
+            primary = mon
+    if primary is None:
+        raise Fail("chrome-bg: supervisor hello.monitors names no primary monitor")
+    return {"runDir": need(reply, "runDir", "str", "hello"),
+            "screen": rect(need(reply, "virtualScreen", "dict", "hello"), "hello.virtualScreen"),
+            "primary": primary, "fg": parse_fg(need(reply, "fg", "dict", "hello"), "hello.fg")}
+
+
+def proc_pids(items, where):
+    """The pids of a list of chrome.exe {pid, ppid, type}."""
+    pids = []
+    for i, p in enumerate(items):
+        need(p, "ppid", "int", f"{where}[{i}]")
+        need(p, "type", "str", f"{where}[{i}]")
+        pids.append(need(p, "pid", "int", f"{where}[{i}]"))
+    return pids
+
+
+def parse_procs(reply):
+    return proc_pids(need(reply, "procs", "list", "procs"), "procs.procs")
+
+
+def parse_place(reply):
+    """place: the run frames it moved, as (hwnd, (x, y, w, h))."""
+    out = []
+    for i, w in enumerate(need(reply, "windows", "list", "place")):
+        where = f"place.windows[{i}]"
+        out.append((need(w, "hwnd", "int", where), rect(need(w, "rect", "dict", where), where + ".rect")))
+    return out
+
+
+def parse_scan(reply):
+    """-Scan as ({id: {"age": dir age in s or None, "pids": [...]}}, {id: log age in s}, root).
+    Names that are not run ids can't be a run's and are skipped."""
+    root = need(reply, "root", "str", "-Scan")
+    runs, logs = {}, {}
+
+    def entry(rid):
+        return runs.setdefault(rid, {"age": None, "pids": []})
+
+    for i, d in enumerate(need(reply, "dirs", "list", "-Scan")):
+        where = f"-Scan.dirs[{i}]"
+        rid, age = need(d, "id", "str", where), need(d, "ageSec", "num", where)
+        need(d, "createdUtc", "str", where)
+        if ID_RE.fullmatch(rid):
+            entry(rid)["age"] = float(age)
+    for i, d in enumerate(need(reply, "logs", "list", "-Scan")):
+        where = f"-Scan.logs[{i}]"
+        rid, age = need(d, "id", "str", where), need(d, "ageSec", "num", where)
+        if ID_RE.fullmatch(rid):
+            logs[rid] = float(age)
+    for rid, items in need(reply, "procs", "dict", "-Scan").items():
+        pids = proc_pids(need({rid: items}, rid, "list", "-Scan.procs"), f"-Scan.procs.{rid}")
+        if ID_RE.fullmatch(rid):
+            entry(rid)["pids"] += pids
+    return runs, logs, root
+
+
+def parse_kill(reply):
+    """-Kill: ok only once no chrome.exe is left and the run dir is gone."""
+    got = {"killed": need(reply, "killed", "int", "-Kill"), "left": need(reply, "left", "int", "-Kill"),
+           "dirExists": need(reply, "dirExists", "bool", "-Kill")}
+    if got["left"] or got["dirExists"]:
+        raise Fail(f"chrome-bg: -Kill left {got['left']} chrome.exe and the run dir "
+                   f"{'in place' if got['dirExists'] else 'gone'}")
+    return got
 
 
 def parse_port_file(text):
@@ -637,7 +717,7 @@ class Supervisor:
         except ValueError:
             raise Fail(f"chrome-bg: the supervisor answered {op} with {line[:200]!r}") from None
         if not isinstance(reply, dict) or reply.get("ok") is not True:
-            raise Fail(f"chrome-bg: the supervisor's {op} failed: {pick(reply, 'error', default=reply)}")
+            raise Fail(f"chrome-bg: the supervisor's {op} failed: {failure(reply)}")
         return reply
 
     def close(self, timeout=20):
@@ -670,8 +750,8 @@ def one_shot(*args, timeout=60):
         with contextlib.suppress(ValueError):
             reply = json.loads(lines[-1])
     if not isinstance(reply, dict) or reply.get("ok") is not True:
-        why = (pick(reply, "error") or r.stderr.decode("utf-8", "replace").strip()[-300:]
-               or f"exit {r.returncode}")
+        why = (failure(reply) if reply is not None else
+               r.stderr.decode("utf-8", "replace").strip()[-300:] or f"exit {r.returncode}")
         raise Fail(f"chrome-bg: chrome-bg.ps1 {' '.join(args)} failed: {why}")
     return reply
 
@@ -681,7 +761,7 @@ def kill_run(rid):
     Chrome is not the supervisor's child, so a dead supervisor leaves it running."""
     if not ID_RE.fullmatch(str(rid)):
         raise Fail(f"chrome-bg: {rid!r} is not a run id")
-    return one_shot("-Kill", "-Id", rid)
+    return parse_kill(one_shot("-Kill", "-Id", rid))
 
 
 # ---- start and stop -------------------------------------------------------------------------
@@ -720,12 +800,7 @@ def place_args(hello, size):
     """The supervisor's `place`: the primary monitor's work area at (+10, +10), sized in physical
     pixels by that monitor's DPI."""
     w, h = size
-    mon = primary_monitor(hello)
-    work = rect(pick(mon, "work", "workArea", "rect", default=[0, 0, w, h]))
-    try:
-        scale = float(pick(mon, "dpi", default=96) or 96) / 96
-    except (TypeError, ValueError):
-        scale = 1.0
+    work, scale = hello["primary"]["work"], hello["primary"]["dpi"] / 96
     return {"x": work[0] + 10, "y": work[1] + 10, "w": round(w * scale), "h": round(h * scale)}
 
 
@@ -745,21 +820,20 @@ def start_run(rid, url, size, kind, ttl=None, cwd=None, marks=False, on_hello=No
     run = Run(rec)
     try:
         run.sup = Supervisor(rid)
-        hello = run.hello = run.sup.call("hello", timeout=60)
+        hello = run.hello = parse_hello(run.sup.call("hello", timeout=60))
         if on_hello:
             on_hello(hello)
-        run_dir = str(pick(hello, "runDir", default="") or "")
+        run_dir = hello["runDir"]
         if not holds_tag(run_dir, rid):
             raise Fail(f"chrome-bg: the supervisor's run dir {run_dir!r} does not end in "
                        f"\\chrome-bg\\{rid}")
         rec["runDir"] = run_dir
-        rec["log"] = str(pick(hello, "log", "logFile", default="")
-                         or win_join(win_parent(run_dir), rid + ".log"))
+        rec["log"] = win_join(win_parent(run_dir), rid + ".log")
         write_record(rec)
-        x = offscreen_x(rect(pick(hello, "virtualScreen", "vscreen", "virtual"))[0], w)
+        x = offscreen_x(hello["screen"][0], w)
         profile = win_join(run_dir, "profile")
         launched = run.sup.call("launch", args=" ".join(chrome_args(profile)), timeout=60)
-        rec["pid"] = pick(launched, "pid")
+        rec["pid"] = need(launched, "pid", "int", "launch")
         port, path = wait_port(wslpath("-u", win_join(profile, "DevToolsActivePort")), run.sup)
         ws_url = browser_ws(port, path)
         rec.update(port=port, wsPath=path, browserURL=f"http://127.0.0.1:{port}")
@@ -777,7 +851,7 @@ def start_run(rid, url, size, kind, ttl=None, cwd=None, marks=False, on_hello=No
             rec["clamped"] = {"asked": x, "got": left}
             print(f"chrome-bg: Chrome put the first window at left={left}, not {x}: clamped onto "
                   "a monitor (the supervisor sinks it at create)", file=sys.stderr)
-        run.sup.call("place", **place_args(hello, size))
+        parse_place(run.sup.call("place", **place_args(hello, size)))
         got =cdp.send("Browser.getWindowForTarget", {"targetId": run.target}).get("bounds") or {}
         if (got.get("width"), got.get("height")) != (w, h):
             # A DPI change on the way resized it. Size only: a window state could raise it.
@@ -884,6 +958,21 @@ def resolve(target):
                "port could be another Chrome (chrome-debug.ps1 serves 9222)")
 
 
+def in_tty_foreground():
+    """Whether this process is in its terminal's foreground process group. False with no
+    terminal."""
+    try:
+        fd = os.open("/dev/tty", os.O_RDONLY | os.O_NOCTTY)
+    except OSError:
+        return False
+    try:
+        return os.tcgetpgrp(fd) == os.getpgrp()
+    except OSError:
+        return False
+    finally:
+        os.close(fd)
+
+
 def cmd_run(args):
     cmd = args.cmd[1:] if args.cmd[:1] == ["--"] else args.cmd
     if not cmd:
@@ -897,6 +986,10 @@ def cmd_run(args):
     def on_signal(signum, frame):
         child = state["child"]
         if child is not None:
+            # A terminal's ctrl-c goes to its whole foreground process group, CMD included, so
+            # forwarding it then would deliver it twice.
+            if signum == signal.SIGINT and in_tty_foreground():
+                return
             if child.poll() is None:
                 with contextlib.suppress(OSError):
                     os.kill(child.pid, signum)
@@ -1021,7 +1114,7 @@ def cmd_start(args):
     except ValueError:
         res = None
     if not isinstance(res, dict) or res.get("ok") is not True:
-        why = pick(res, "error") or (
+        why = (res.get("error") if isinstance(res, dict) else None) or (
             f"chrome-bg: the holder gave no word in 150s; chrome-bg ls shows run {rid}, "
             f"chrome-bg stop {rid} ends it" if not done else
             f"chrome-bg: the holder exited without a word (see {holder_log(rid)})")
@@ -1036,43 +1129,9 @@ def cmd_start(args):
 
 # ---- gc and ls ------------------------------------------------------------------------------
 
-def scan_age(d):
-    for key, scale in (("age", 1), ("ageS", 1), ("ageSec", 1), ("ageSeconds", 1), ("ageMs", 0.001)):
-        v = pick(d, key)
-        if isinstance(v, (int, float)) and not isinstance(v, bool):
-            return float(v) * scale
-    return None
-
-
 def scan_runs():
-    """chrome-bg.ps1 -Scan as ({id: {"age": dir age in s or None, "pids": [chrome.exe pids]}},
-    the Windows root of the run dirs and logs)."""
-    reply = one_shot("-Scan")
-    runs = {}
-
-    def entry(rid):
-        return runs.setdefault(rid, {"age": None, "pids": []})
-
-    dirs = pick(reply, "dirs", default=[]) or []
-    if isinstance(dirs, dict):
-        dirs = [{"id": k, "age": v} for k, v in dirs.items()]
-    for d in dirs:
-        rid = str(pick(d, "id", default="")) if isinstance(d, dict) else ""
-        if ID_RE.fullmatch(rid):
-            entry(rid)["age"] = scan_age(d)
-    procs = pick(reply, "procs", "processes", default=[]) or []
-    if isinstance(procs, dict):
-        procs = [{"id": k, "pids": v} for k, v in procs.items()]
-    for p in procs:
-        rid = str(pick(p, "id", default="")) if isinstance(p, dict) else ""
-        if not ID_RE.fullmatch(rid):
-            continue
-        pids = pick(p, "pids", "pid", default=[])
-        for x in pids if isinstance(pids, list) else [pids]:
-            x = pick(x, "pid") if isinstance(x, dict) else x
-            if isinstance(x, int) and not isinstance(x, bool):
-                entry(rid)["pids"].append(x)
-    return runs, str(pick(reply, "root", default="") or "")
+    """chrome-bg.ps1 -Scan, parsed (parse_scan)."""
+    return parse_scan(one_shot("-Scan"))
 
 
 def expired(rec):
@@ -1080,28 +1139,27 @@ def expired(rec):
     return isinstance(exp, (int, float)) and time.time() >= exp
 
 
-def prune_logs(win_roots):
-    """Logs older than LOG_DAYS: the supervisors' <id>.log under the Windows root, and the
-    holders' and supervisors' stderr here. A live run's are kept."""
-    cutoff = time.time() - LOG_DAYS * 86400
-    dirs = [state_dir()]
-    for root in sorted(r for r in win_roots if r):
-        with contextlib.suppress(Fail):
-            dirs.append(wslpath("-u", root))
+def prune_logs(logs, root):
+    """Logs older than LOG_DAYS: the supervisors' <id>.log that -Scan lists under the Windows
+    root, and the holders' and supervisors' stderr here. A live run's are kept."""
     live = {r["id"] for r in read_records()}
-    for d in dirs:
-        try:
-            names = os.listdir(d)
-        except OSError:
+    for rid, age in sorted(logs.items()):
+        if age > LOG_DAYS * 86400 and rid not in live:
+            with contextlib.suppress(Fail, OSError):
+                os.remove(wslpath("-u", win_join(root, rid + ".log")))
+    cutoff = time.time() - LOG_DAYS * 86400
+    try:
+        names = os.listdir(state_dir())
+    except OSError:
+        return
+    for name in names:
+        m = re.fullmatch(r"([0-9a-f]{8})\.(?:holder\.log|err)", name)
+        if not m or m.group(1) in live:
             continue
-        for name in names:
-            m = re.fullmatch(r"([0-9a-f]{8})\.(?:log|holder\.log|err)", name)
-            if not m or m.group(1) in live:
-                continue
-            p = os.path.join(d, name)
-            with contextlib.suppress(OSError):
-                if os.path.isfile(p) and os.path.getmtime(p) < cutoff:
-                    os.remove(p)
+        p = os.path.join(state_dir(), name)
+        with contextlib.suppress(OSError):
+            if os.path.isfile(p) and os.path.getmtime(p) < cutoff:
+                os.remove(p)
 
 
 def gc():
@@ -1109,7 +1167,7 @@ def gc():
     claims once they are YOUNG_S old (a younger one may be a run still launching); prune old
     logs. Returns one line per action."""
     done = []
-    runs, root = scan_runs()
+    runs, logs, root = scan_runs()
     # Records after the scan: a run writes its record before its supervisor starts, so every dir
     # in the scan already has its record, if it has one.
     recs = read_records()
@@ -1136,7 +1194,7 @@ def gc():
             done.append(f"killed {rid}: a run dir with no record, {fmt_age(info['age'])} old")
         except Fail as e:
             done.append(f"could not kill {rid}: {e}")
-    prune_logs({root} | {win_parent(r["runDir"]) for r in recs if r.get("runDir")})
+    prune_logs(logs, root)
     return done
 
 
@@ -1169,7 +1227,7 @@ def fmt_pids(pids):
 
 
 def cmd_ls(args):
-    runs, _ = scan_runs()
+    runs = scan_runs()[0]
     now = time.time()
     rows = []
     for rec in read_records():
@@ -1208,14 +1266,9 @@ class Inconclusive(Fail):
     pass
 
 
-def truthy(v):
-    return v in (True, 1, "1", "true", "True")
-
-
 def fg_visible(fg):
-    """hello's foreground: a visible window, not minimized or cloaked."""
-    return (isinstance(fg, dict) and truthy(pick(fg, "visible", "vis"))
-            and not truthy(pick(fg, "iconic")) and not truthy(pick(fg, "cloaked")))
+    """A parsed foreground (parse_fg): a visible window, not minimized or cloaked."""
+    return fg["visible"] and not fg["iconic"] and not fg["cloaked"]
 
 
 def fg_line_visible(text):
@@ -1341,14 +1394,6 @@ def print_report(verdict, rows, fails, warns, raf):
     print(verdict)
 
 
-def proc_list(reply):
-    procs = pick(reply, "procs", "pids", "processes")
-    if isinstance(procs, list):
-        return procs
-    n = pick(reply, "count")
-    return [None] * n if isinstance(n, int) else []
-
-
 def cmd_check(args):
     """The live self-test (probe.mjs plus classify.py): every action a fixture may take, each
     between marks in the supervisor's log, then the log judged. It opens a Chrome window behind
@@ -1357,10 +1402,10 @@ def cmd_check(args):
     rid = new_id()
 
     def guard(hello):
-        fg = pick(hello, "fg", "foreground")
+        fg = hello["fg"]
         if not fg_visible(fg):
             raise Inconclusive("the foreground is not a visible window "
-                               f"({pick(fg, 'desc', default=fg)}), so a steal could not be "
+                               f"(cls={fg['cls']} pid={fg['pid']}), so a steal could not be "
                                "told apart; put one of your windows in front and rerun")
 
     try:
@@ -1369,11 +1414,7 @@ def cmd_check(args):
     except Inconclusive as e:
         print(f"INCONCLUSIVE: {e}")
         return 3
-    sup, cdp, raf = run.sup, run.cdp, None
-    try:
-        hz = float(pick(primary_monitor(run.hello), "hz", default=0) or 0) or None
-    except (TypeError, ValueError):
-        hz = None
+    sup, cdp, raf, hz = run.sup, run.cdp, None, run.hello["primary"]["hz"]
     try:
         session = cdp.send("Target.attachToTarget",
                            {"targetId": run.target, "flatten": True})["sessionId"]
@@ -1411,7 +1452,7 @@ def cmd_check(args):
             print(f"chrome-bg check: {name}: {json.dumps(result)[:120]}", file=sys.stderr)
             time.sleep(SETTLE_S)
             sup.call("mark", text=f"end {name}")
-            sup.call("place", **place_args(run.hello, SIZE))  # each action starts from the bottom
+            parse_place(sup.call("place", **place_args(run.hello, SIZE)))  # restart from the bottom
             time.sleep(RESINK_S)
         sup.call("mark", text="begin stop")
         with contextlib.suppress(Fail, OSError):
@@ -1419,7 +1460,7 @@ def cmd_check(args):
         cdp.close()
         run.cdp = None
         deadline = time.monotonic() + 15
-        while proc_list(sup.call("procs")) and time.monotonic() < deadline:
+        while parse_procs(sup.call("procs")) and time.monotonic() < deadline:
             time.sleep(0.5)
         time.sleep(AFTER_STOP_S)  # W saw a hidden #32770 dialog take the foreground 1.9 s after
     finally:

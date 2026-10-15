@@ -36,6 +36,46 @@ def load():
 
 cb = load()
 
+# The supervisor's replies, as the real chrome-bg.ps1 sent them under PowerShell 5.1 (lane
+# chrome-bg, 2026-10-15; the username redacted to `someone`, the shapes verbatim). The fake
+# supervisor below answers from these same objects, so it can't drift from the real one.
+HELLO = (r'{"ok":true,"version":1,"chrome":"C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",'
+         r'"runDir":"C:\\Users\\someone\\AppData\\Local\\Temp\\chrome-bg\\5a0ce001",'
+         r'"virtualScreen":{"x":0,"y":0,"w":1920,"h":1080},'
+         r'"monitors":[{"rect":{"x":0,"y":0,"w":1920,"h":1080},"work":{"x":0,"y":0,"w":1920,"h":1032},'
+         r'"dpi":96,"hz":120,"primary":true}],'
+         r'"fg":{"hwnd":524472,"pid":43776,"cls":"CASCADIA_HOSTING_WINDOW_CLASS",'
+         r'"rect":{"x":-8,"y":-8,"w":1936,"h":1048},"visible":true,"iconic":false,"cloaked":false,'
+         r'"tagged":false,"idleMs":973625},"fglock":2147483647}')
+FG = (r'{"ok":true,"fg":{"hwnd":524472,"pid":43776,"cls":"CASCADIA_HOSTING_WINDOW_CLASS",'
+      r'"rect":{"x":-8,"y":-8,"w":1936,"h":1048},"visible":true,"iconic":false,"cloaked":false,'
+      r'"tagged":false,"idleMs":973625}}')
+PROCS_EMPTY = r'{"ok":true,"procs":[]}'
+PROCS = (r'{"ok":true,"procs":[{"pid":47292,"ppid":1234,"type":"browser"},'
+         r'{"pid":47300,"ppid":47292,"type":"renderer"}]}')
+LAUNCH = r'{"ok":true,"pid":47292}'
+LAUNCH_FAIL_WMI = r'{"ok":false,"error":"Win32_Process Create failed","code":9}'
+LAUNCH_FAIL_ARGS = r'{"ok":false,"error":"launch args must hold the run dir (\\chrome-bg\\5a0ce001\\)"}'
+PLACE = r'{"ok":true,"windows":[{"hwnd":9569902,"rect":{"x":10,"y":10,"w":1280,"h":900}}]}'
+MARK = r'{"ok":true}'
+OP_ERROR = r'{"ok":false,"error":"unknown op: bogus"}'
+SCAN = (r'{"ok":true,"root":"C:\\Users\\someone\\AppData\\Local\\Temp\\chrome-bg",'
+        r'"dirs":[{"id":"5a0ce001","createdUtc":"2026-10-15T03:20:00.0000000Z","ageSec":12}],'
+        r'"logs":[{"id":"5a0ce001","ageSec":2}],'
+        r'"procs":{"5a0ce001":[{"pid":47292,"ppid":1234,"type":"browser"}]}}')
+SCAN_EMPTY = (r'{"ok":true,"root":"C:\\Users\\someone\\AppData\\Local\\Temp\\chrome-bg",'
+              r'"dirs":[],"logs":[],"procs":{}}')
+KILL = r'{"ok":true,"killed":0,"left":0,"dirExists":false}'
+LOG_FG = ("t=15 FOREGROUND tagged=0 idle=973468 via=start hwnd=524472 pid=43776 "
+          "cls=CASCADIA_HOSTING_WINDOW_CLASS rect=-8,-8,1928,1040 onscreen=1 vis=1 iconic=0 cloaked=0")
+CONTRACT = {name: json.loads(text) for name, text in (
+    ("hello", HELLO), ("fg", FG), ("procs_empty", PROCS_EMPTY), ("procs", PROCS),
+    ("launch", LAUNCH), ("launch_fail_wmi", LAUNCH_FAIL_WMI), ("launch_fail_args", LAUNCH_FAIL_ARGS),
+    ("place", PLACE), ("mark", MARK), ("op_error", OP_ERROR), ("scan", SCAN),
+    ("scan_empty", SCAN_EMPTY), ("kill", KILL))}
+CONTRACT["log_fg"] = LOG_FG
+WINROOT = CONTRACT["scan"]["root"]  # C:\Users\someone\AppData\Local\Temp\chrome-bg
+
 
 class Framing(unittest.TestCase):
     """The WebSocket client's frames: masked out, 7/16/64-bit lengths, fragments, ping."""
@@ -207,14 +247,18 @@ class Flags(unittest.TestCase):
         self.assertEqual(cb.parse_port_file("51234\n/devtools/browser/ab-12"), (51234, "/devtools/browser/ab-12"))
         self.assertEqual(cb.parse_port_file("51234\r\n/devtools/browser/ab-12\r\n"), (51234, "/devtools/browser/ab-12"))
 
-    def test_rect_forms(self):
+    def test_rect_is_xywh_only(self):
+        self.assertEqual(cb.rect({"x": -8, "y": -8, "w": 1936, "h": 1048}, "hello.fg.rect"),
+                         (-8, -8, 1936, 1048))
         for v in ({"left": -8, "top": 0, "right": 1912, "bottom": 1040},
-                  {"Left": -8, "Top": 0, "Right": 1912, "Bottom": 1040},
+                  {"X": -8, "Y": 0, "W": 1920, "H": 1040},
                   {"x": -8, "y": 0, "width": 1920, "height": 1040},
+                  {"x": -8, "y": 0, "w": "1920", "h": 1040},
+                  {"x": -8, "y": 0, "w": True, "h": 1040},
                   [-8, 0, 1912, 1040], "-8,0,1912,1040"):
-            self.assertEqual(cb.rect(v), (-8, 0, 1912, 1040))
-        with self.assertRaises(cb.Fail):
-            cb.rect({"nope": 1})
+            with self.subTest(v=v), self.assertRaises(cb.Fail) as e:
+                cb.rect(v, "hello.virtualScreen")
+            self.assertIn("hello.virtualScreen", str(e.exception))
 
 
 TERM = "hwnd=100 pid=10 cls=TestTerminal rect=0,0,1920,1040 onscreen=1 vis=1 iconic=0 cloaked=0"
@@ -285,8 +329,21 @@ class Judge(unittest.TestCase):
         self.assertEqual(self.run_judge(lines)[0], "INCONCLUSIVE")
         cloaked = [CLEAN[0].replace("cloaked=0", "cloaked=2"), *CLEAN[1:]]
         self.assertEqual(self.run_judge(cloaked)[0], "INCONCLUSIVE")
-        self.assertFalse(cb.fg_visible({"desc": "x", "visible": False, "idleMs": 1}))
-        self.assertTrue(cb.fg_visible({"desc": "x", "visible": True, "idleMs": 1}))
+        fg = cb.parse_fg(CONTRACT["fg"]["fg"], "fg.fg")
+        self.assertTrue(cb.fg_visible(fg))
+        for key in ("visible", "iconic", "cloaked"):
+            flipped = dict(CONTRACT["fg"]["fg"], **{key: not CONTRACT["fg"]["fg"][key]})
+            self.assertFalse(cb.fg_visible(cb.parse_fg(flipped, "fg.fg")), key)
+
+    def test_unknown_kinds_are_skipped(self):
+        lines = with_lines("t=70 ", "t=71 UNTAG pid=47300", "t=72 ERROR keeper: SetWindowPos failed 5",
+                           "t=73 SOMETHING-NEW tagged=1 aboveOthers=1")
+        verdict, rows, fails, warns = self.run_judge(lines)
+        self.assertEqual((verdict, fails, warns), ("PASS", [], []))
+
+    def test_real_first_line_reads_visible(self):
+        verdict, _, fails, _ = self.run_judge([LOG_FG, *CLEAN[1:]])
+        self.assertEqual((verdict, fails), ("PASS", []))
 
     def test_warn_on_an_untagged_foreground_after_stop(self):
         lines = with_lines("t=95 ", "t=97 FOREGROUND tagged=0 idle=74531 via=ev-foreground hwnd=300 pid=47 "
@@ -317,6 +374,86 @@ class Judge(unittest.TestCase):
         self.assertEqual(lines[0].split(), ["action", "onTop", "aboveOthers", "fg", "sunk", "keep"])
         self.assertEqual(lines[1].split(), ["page0", "0ms", "0ms", "0ms", "1", "0"])
         self.assertEqual(lines[-1], "PASS")
+
+
+class Contract(unittest.TestCase):
+    """The real supervisor's replies through the real parsers, and drift failing loudly."""
+
+    def test_hello(self):
+        hello = cb.parse_hello(CONTRACT["hello"])
+        self.assertEqual(cb.place_args(hello, (1280, 900)), {"x": 10, "y": 10, "w": 1280, "h": 900})
+        self.assertEqual(cb.offscreen_x(hello["screen"][0], 1280), -2280)
+        self.assertEqual(hello["primary"]["hz"], 120)
+        self.assertTrue(cb.holds_tag(hello["runDir"], "5a0ce001"))
+        self.assertEqual(cb.win_join(cb.win_parent(hello["runDir"]), "5a0ce001.log"),
+                         WINROOT + "\\5a0ce001.log")
+        self.assertTrue(cb.fg_visible(hello["fg"]))
+        self.assertIn("\\chrome-bg\\5a0ce001\\",
+                      " ".join(cb.chrome_args(cb.win_join(hello["runDir"], "profile"))),
+                      "launch's args hold the run dir, as the supervisor requires")
+
+    def test_other_ops(self):
+        self.assertTrue(cb.fg_visible(cb.parse_fg(CONTRACT["fg"]["fg"], "fg.fg")))
+        self.assertEqual(cb.parse_procs(CONTRACT["procs"]), [47292, 47300])
+        self.assertEqual(cb.parse_procs(CONTRACT["procs_empty"]), [])
+        self.assertEqual(cb.need(CONTRACT["launch"], "pid", "int", "launch"), 47292)
+        self.assertEqual(cb.parse_place(CONTRACT["place"]), [(9569902, (10, 10, 1280, 900))])
+        self.assertEqual(cb.failure(CONTRACT["launch_fail_wmi"]), "Win32_Process Create failed (code 9)")
+        self.assertIn("\\chrome-bg\\5a0ce001\\", cb.failure(CONTRACT["launch_fail_args"]))
+        self.assertEqual(cb.failure(CONTRACT["op_error"]), "unknown op: bogus")
+
+    def test_scan_and_kill(self):
+        runs, logs, root = cb.parse_scan(CONTRACT["scan"])
+        self.assertEqual(runs, {"5a0ce001": {"age": 12.0, "pids": [47292]}})
+        self.assertEqual((logs, root), ({"5a0ce001": 2.0}, WINROOT))
+        self.assertEqual(cb.parse_scan(CONTRACT["scan_empty"]), ({}, {}, WINROOT))
+        self.assertEqual(cb.parse_kill(CONTRACT["kill"]), {"killed": 0, "left": 0, "dirExists": False})
+        for bad in ({"left": 2}, {"dirExists": True}):
+            with self.assertRaises(cb.Fail):
+                cb.parse_kill(dict(CONTRACT["kill"], **bad))
+
+    def test_drift_fails_loudly(self):
+        """A renamed or retyped field raises Fail naming the op and the field."""
+        cases = []
+        for path, new in ((["virtualScreen"], "vscreen"), (["runDir"], "rundir"),
+                          (["monitors", 0, "work"], "workArea"), (["monitors", 0, "work", "w"], "width"),
+                          (["monitors", 0, "primary"], "Primary"), (["fg", "visible"], "vis")):
+            top = json.loads(json.dumps(CONTRACT["hello"]))
+            node = top
+            for p in path[:-1]:
+                node = node[p]
+            node[new] = node.pop(path[-1])
+            cases.append(("hello", cb.parse_hello, top, repr(path[-1])))
+        retyped = json.loads(json.dumps(CONTRACT["hello"]))
+        retyped["monitors"][0]["dpi"] = "96"
+        cases.append(("hello", cb.parse_hello, retyped, "dpi"))
+        for key, new in (("ageSec", "age"), ("id", "ID")):
+            top = json.loads(json.dumps(CONTRACT["scan"]))
+            top["dirs"][0][new] = top["dirs"][0].pop(key)
+            cases.append(("-Scan", cb.parse_scan, top, repr(key)))
+        top = json.loads(json.dumps(CONTRACT["scan"]))
+        top["dirs"] = {"5a0ce001": 12}
+        cases.append(("-Scan", cb.parse_scan, top, "dirs"))
+        top = json.loads(json.dumps(CONTRACT["scan"]))
+        top["procs"] = [{"id": "5a0ce001", "pids": [47292]}]
+        cases.append(("-Scan", cb.parse_scan, top, "procs"))
+        top = json.loads(json.dumps(CONTRACT["procs"]))
+        top["procs"][0]["pids"] = top["procs"][0].pop("pid")
+        cases.append(("procs", cb.parse_procs, top, "'pid'"))
+        top = dict(CONTRACT["procs"])
+        top["count"] = top.pop("procs")
+        cases.append(("procs", cb.parse_procs, top, "'procs'"))
+        top = dict(CONTRACT["kill"])
+        top["leftover"] = top.pop("left")
+        cases.append(("-Kill", cb.parse_kill, top, "'left'"))
+        top = json.loads(json.dumps(CONTRACT["place"]))
+        top["windows"][0]["rect"] = [10, 10, 1290, 910]
+        cases.append(("place", cb.parse_place, top, "rect"))
+        for op, parse, reply, field in cases:
+            with self.subTest(op=op, field=field), self.assertRaises(cb.Fail) as e:
+                parse(reply)
+            self.assertIn(f"supervisor {op}", str(e.exception))
+            self.assertIn(field, str(e.exception))
 
 
 class Trust(unittest.TestCase):
@@ -398,8 +535,15 @@ import base64, hashlib, json, os, re, shutil, socket, struct, sys, threading, ti
 
 args = sys.argv[1:]
 root = args[args.index("--root") + 1]
-WIN = "C:\\T\\chrome-bg\\"
+with open(os.path.join(root, "contract.json")) as f:
+    C = json.load(f)  # the real supervisor's replies: every reply below is one of them
+TEMPLATE_ID = "5a0ce001"
+WIN = C["scan"]["root"] + "\\"
 env = os.environ
+
+
+def copy(x):
+    return json.loads(json.dumps(x))
 
 
 def unix(w):
@@ -420,16 +564,24 @@ def note(name, text=""):
 base = unix(WIN)
 os.makedirs(base, exist_ok=True)
 if "-Scan" in args:
-    dirs, procs = [], []
+    scan, full = copy(C["scan_empty"]), C["scan"]
     for name in sorted(os.listdir(base)):
-        if os.path.isdir(os.path.join(base, name)):
-            dirs.append({"id": name, "age": time.time() - os.path.getmtime(os.path.join(base, name))})
-        if os.path.exists(os.path.join(root, "alive-" + name)):
-            procs.append({"id": name, "pids": [4242, 4243]})
-    out({"ok": True, "root": WIN, "dirs": dirs, "procs": procs})
+        p = os.path.join(base, name)
+        age = int(time.time() - os.path.getmtime(p))
+        if re.fullmatch(r"[0-9a-f]{8}", name) and os.path.isdir(p):
+            scan["dirs"].append(dict(full["dirs"][0], id=name, ageSec=age))
+            if os.path.exists(os.path.join(root, "alive-" + name)):
+                scan["procs"][name] = copy(full["procs"][TEMPLATE_ID])
+        m = re.fullmatch(r"([0-9a-f]{8})\.log", name)
+        if m:
+            scan["logs"].append(dict(full["logs"][0], id=m.group(1), ageSec=age))
+    out(scan)
     sys.exit(0)
 
 rid = args[args.index("-Id") + 1]
+if not re.fullmatch(r"[0-9a-f]{8}", rid):
+    out({"ok": False, "error": "bad -Id"})
+    sys.exit(1)
 run_dir = os.path.join(base, rid)
 
 
@@ -444,7 +596,7 @@ def cleanup():
 if "-Kill" in args:
     note("kill-" + rid)
     cleanup()
-    out({"ok": True, "killed": 0})
+    out(C["kill"])
     sys.exit(0)
 
 t0 = time.monotonic()
@@ -452,11 +604,10 @@ logf = open(os.path.join(base, rid + ".log"), "a", buffering=1)
 
 
 def log(text):
-    logf.write("t=%d %s\n" % (int((time.monotonic() - t0) * 1000), text))
+    logf.write("t=%d %s\n" % (int((time.monotonic() - t0) * 1000) + 20, text))
 
 
-log("FOREGROUND tagged=0 idle=900 via=start hwnd=100 pid=10 cls=TestTerminal rect=0,0,1920,1040 "
-    "onscreen=1 vis=1 iconic=0 cloaked=0")
+logf.write(C["log_fg"] + "\n")  # the real supervisor's first line: t=15 FOREGROUND ... via=start
 guid = str(uuid.uuid4())
 bounds = {}
 state = {"closed": False, "srv": None, "port": None}
@@ -608,15 +759,18 @@ for line in sys.stdin:
     op = msg.get("op")
     if op == "hello":
         os.makedirs(run_dir, exist_ok=True)
+        h = copy(C["hello"])
+        h["runDir"] = WIN + rid
         vs = int(env.get("FAKE_VS_LEFT", "0"))
-        sys.stdout.write(chr(0xFEFF))  # PowerShell may open its stdout with a BOM
-        out({"ok": True, "version": 1, "chrome": "C:\\Chrome\\chrome.exe", "runDir": WIN + rid + "\\",
-             "virtualScreen": {"x": vs, "y": 0, "w": 1920 - vs, "h": 1080},
-             "monitors": [{"rect": {"left": 0, "top": 0, "right": 1920, "bottom": 1080},
-                           "work": {"left": 0, "top": 0, "right": 1920, "bottom": 1032},
-                           "dpi": int(env.get("FAKE_DPI", "96")), "hz": 120, "primary": True}],
-             "fg": {"desc": "cls=TestTerminal", "visible": not env.get("FAKE_FG_HIDDEN"), "idleMs": 900},
-             "fglock": 200000})
+        h["virtualScreen"].update(x=vs, w=1920 - vs)
+        h["monitors"][0]["dpi"] = int(env.get("FAKE_DPI", "96"))
+        h["fg"]["visible"] = not env.get("FAKE_FG_HIDDEN")
+        if env.get("FAKE_RENAME"):  # old=new: drift in a top-level key
+            old, new = env["FAKE_RENAME"].split("=")
+            h[new] = h.pop(old)
+        out(h)
+    elif op == "launch" and "\\chrome-bg\\%s\\" % rid not in msg["args"]:
+        out(json.loads(json.dumps(C["launch_fail_args"]).replace(TEMPLATE_ID, rid)))
     elif op == "launch":
         note("launch-" + rid, msg["args"])
         srv = state["srv"] = socket.socket()
@@ -628,22 +782,22 @@ for line in sys.stdin:
         os.makedirs(profile, exist_ok=True)
         open(os.path.join(root, "alive-" + rid), "w").close()
         threading.Thread(target=write_port, args=(profile,), daemon=True).start()
-        out({"ok": True, "pid": 4242})
+        out(C["launch"])
     elif op == "place":
         note("place-" + rid, json.dumps(msg))
-        log("PLACE [True hwnd=200 pid=4242 cls=Chrome_WidgetWin_1 rect=10,10,1290,910 onscreen=1 vis=1]")
+        log("PLACE [True hwnd=9569902 pid=47292 cls=Chrome_WidgetWin_1 rect=10,10,1290,910 onscreen=1 vis=1]")
         if env.get("FAKE_PLACE_RESIZE"):
             bounds.update(width=bounds["width"] * 2 // 3, height=bounds["height"] * 2 // 3)
-        out({"ok": True, "windows": [{"hwnd": 200, "rect": [10, 10, 1290, 910]}]})
+        out(C["place"])
     elif op == "procs":
-        out({"ok": True, "procs": [] if state["closed"] else [{"pid": 4242, "type": ""}]})
+        out(C["procs_empty"] if state["closed"] else C["procs"])
     elif op == "fg":
-        out({"ok": True, "fg": {"desc": "cls=TestTerminal", "visible": True, "idleMs": 900}})
+        out(C["fg"])
     elif op == "mark":
         log("MARK " + msg["text"])
-        out({"ok": True})
+        out(C["mark"])
     else:
-        out({"ok": False, "error": "unknown op %r" % op})
+        out(dict(C["op_error"], error="unknown op: %s" % op))
 
 log("EOFKILL left=0")
 cleanup()
@@ -674,6 +828,8 @@ def wslpath(flag, p):
 mod.wslpath = wslpath
 if os.environ.get("DRIVER_FAST"):
     mod.AFTER_STOP_S = mod.SETTLE_S = mod.RESINK_S = 0.05
+if "DRIVER_TTY_FG" in os.environ:  # stands in for /dev/tty's foreground process group check
+    mod.in_tty_foreground = lambda: os.environ["DRIVER_TTY_FG"] == "1"
 sys.exit(mod.main(sys.argv[3:]))
 '''
 
@@ -685,10 +841,12 @@ class Live(unittest.TestCase):
         self.tmp = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, self.tmp, True)
         self.root = os.path.join(self.tmp, "c")
-        self.base = os.path.join(self.root, "T", "chrome-bg")
+        self.base = os.path.join(self.root, *WINROOT[3:].split("\\"))
         os.makedirs(self.base)
         with open(os.path.join(self.root, "fake_sup.py"), "w") as f:
             f.write(FAKE_SUP)
+        with open(os.path.join(self.root, "contract.json"), "w") as f:
+            json.dump(CONTRACT, f)
         self.driver = os.path.join(self.tmp, "driver.py")
         with open(self.driver, "w") as f:
             f.write(DRIVER)
@@ -759,7 +917,7 @@ class Live(unittest.TestCase):
         # Chrome's args: one merged --disable-features and the quoted profile in the run dir.
         launch = self.notes("launch-" + rid)[0]
         self.assertEqual(launch.count("--disable-features="), 1)
-        self.assertIn(f'"--user-data-dir=C:\\T\\chrome-bg\\{rid}\\profile"', launch)
+        self.assertIn(f'"--user-data-dir={WINROOT}\\{rid}\\profile"', launch)
         calls = self.cdp_calls(rid)
         create = calls[0]
         self.assertEqual(create["method"], "Target.createTarget")
@@ -805,6 +963,64 @@ class Live(unittest.TestCase):
         rid = self.only_run_id()
         self.assertTrue(self.has("eof-" + rid), "stop ran and the supervisor saw EOF")
         self.assertEqual(self.cdp_calls(rid)[-1]["method"], "Browser.close")
+        self.assertEqual(self.records(), [])
+
+    def child_with_handlers(self):
+        """A CMD that notes SIGINT and SIGTERM in files, then dies of the signal."""
+        ready = os.path.join(self.tmp, "ready")
+        code = ("import os, signal, sys, time\n"
+                "def h(s, f):\n"
+                "    open(os.path.join(sys.argv[2], 'got-%d' % s), 'w').close()\n"
+                "    signal.signal(s, signal.SIG_DFL)\n"
+                "    os.kill(os.getpid(), s)\n"
+                "signal.signal(signal.SIGTERM, h)\n"
+                "signal.signal(signal.SIGINT, h)\n"
+                "open(sys.argv[1], 'w').close()\n"
+                "time.sleep(60)\n")
+        return ready, [sys.executable, "-c", code, ready, self.tmp]
+
+    def got(self, sig):
+        return os.path.exists(os.path.join(self.tmp, f"got-{int(sig)}"))
+
+    def run_and_signal(self, tty_fg, *sigs):
+        ready, cmd = self.child_with_handlers()
+        p = subprocess.Popen([sys.executable, "-I", self.driver, CLI, self.root, "run", "--", *cmd],
+                             env={**self.env, "DRIVER_TTY_FG": tty_fg}, stdout=subprocess.PIPE,
+                             stderr=subprocess.PIPE, text=True)
+        try:
+            self.wait_for(lambda: os.path.exists(ready), what="the child to start")
+            for sig in sigs:
+                p.send_signal(sig)
+                time.sleep(0.5)
+            _, err = p.communicate(timeout=30)
+        finally:
+            if p.poll() is None:
+                p.kill()
+                p.communicate()
+        return p.returncode, err
+
+    def test_sigint_forwarded_without_a_terminal(self):
+        rc, err = self.run_and_signal("0", signal.SIGINT)
+        self.assertEqual(rc, 128 + signal.SIGINT, err)
+        self.assertTrue(self.got(signal.SIGINT), "no terminal sent it to CMD, so run did")
+        self.assertTrue(self.has("eof-" + self.only_run_id()))
+
+    def test_sigint_not_forwarded_from_the_terminal(self):
+        # In the terminal's foreground group, CMD got the ctrl-c itself: run must not repeat it.
+        rc, err = self.run_and_signal("1", signal.SIGINT, signal.SIGTERM)
+        self.assertEqual(rc, 128 + signal.SIGTERM, err)
+        self.assertFalse(self.got(signal.SIGINT), "run delivered SIGINT a second time")
+        self.assertTrue(self.got(signal.SIGTERM), "SIGTERM still forwards")
+        self.assertTrue(self.has("eof-" + self.only_run_id()))
+
+    def test_renamed_key_fails_loudly_and_cleans_up(self):
+        r = self.cli("run", "--", sys.executable, "-c", "pass",
+                     env={"FAKE_RENAME": "virtualScreen=vscreen"})
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("supervisor hello has no 'virtualScreen'", r.stderr)
+        self.assertFalse([n for n in os.listdir(self.root) if n.startswith("launch-")],
+                         "Chrome never launched on a reply it could not read")
+        self.assertTrue([n for n in os.listdir(self.root) if n.startswith("eof-")])
         self.assertEqual(self.records(), [])
 
     def test_start_then_stop_by_id_and_by_url(self):
@@ -874,7 +1090,7 @@ class Live(unittest.TestCase):
         os.makedirs(self.recdir, exist_ok=True)
         rec = {"id": rid, "kind": "start", "owner": {"pid": pid, "start": start}, "cwd": "/x",
                "created": time.time() - 60, "expires": None, "port": None, "wsPath": None,
-               "runDir": f"C:\\T\\chrome-bg\\{rid}\\", **extra}
+               "runDir": f"{WINROOT}\\{rid}", **extra}
         with open(os.path.join(self.recdir, rid + ".json"), "w") as f:
             json.dump(rec, f)
 
@@ -957,7 +1173,7 @@ class Live(unittest.TestCase):
         self.assertEqual(lines[0].split(), ["ID", "PORT", "PIDS", "OWNER", "AGE", "CWD"])
         mine = [ln for ln in lines if ln.startswith(info["id"])][0]
         self.assertIn(str(info["port"]), mine)
-        self.assertIn("4242,4243", mine)
+        self.assertIn("  47292  ", mine)
         self.assertIn("alive (start)", mine)
         self.assertTrue(mine.rstrip().endswith(os.getcwd()))
         orphan = [ln for ln in lines if ln.startswith("ffff0001")][0]
