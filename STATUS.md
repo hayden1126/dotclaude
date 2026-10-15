@@ -126,6 +126,13 @@ stored here).
     #104 fixed `lane ls` and `lane done` for the same gap with `lane_head` in
     `skills/lanes/scripts/lane`. The hook runs apart from the CLI, so it needs the worktree's
     HEAD read on its own.
+  - **Two live sessions in a main checkout** (seen 2026-10-14 in a work repo the night it got
+    its first lanes). `lane addr lead` refuses ("2 live sessions in the main checkout"), so no
+    lane can send "merged #N", and the tab bar names both tabs `lead` in the repo's row, since
+    `classify()` keys on the pane's directory. Fix: `lane ls` flags a main checkout with more
+    than one live session, and the bar marks the extra tab (for example `lead²`). The stopgap
+    used: tell each lane to pick the lead's `main:@N` entry from the refusal, and tell the old
+    session it isn't the lead.
   - `lane init --model/--effort` repo defaults and `lane open --model/--effort` overrides,
     passed through to `claude` (today `lane open` hardcodes the argv).
 
