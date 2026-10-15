@@ -189,6 +189,7 @@ sees it.
 | `hooks/context-watch.sh` | Stop and PostToolUse hook: the auto-pass watcher; writes the context size to `ctx/<session>.json` and, at 300k, 480k and 520k (derived from `autoCompactWindow`), tells the session to run the pass skill, or with autopass off shows you one line at 520k; a shim over `hooks/context_watch.py`, which shares `hooks/autopass_state.py` (tiers, the tab flag, on or off); fails open, with errors in `context-watch.err` in the state dir | symlink `~/.claude/hooks/context-watch.sh`, `context_watch.py` and `autopass_state.py` |
 | `hooks/autopass_toggle.py` | Not a hook: the `skills/autopass` mod runs it for `/autopass on\|off\|status` (`autopass_toggle.py SESSION_ID CWD ARGS`), and it prints the one reply | symlink `~/.claude/hooks/autopass_toggle.py` |
 | `hooks/pass-banner.sh` | SessionStart (`startup`) hook: after a plain `/pass` respawned the tab, shows what the old session said in its last turn, once, as a banner you see and the model doesn't (its format and caps: the shim's header); a shim over `hooks/pass_banner.py`; fails open | symlink `~/.claude/hooks/pass-banner.sh` and `pass_banner.py` |
+| `hooks/pass-notice.sh` | UserPromptSubmit and PostToolUse (main thread) hook: when `pass-respawn`'s waiter dropped a `/pass`, adds its notice (`pass-notice/<session>.json` in the state dir) once as context to the session's next prompt or tool call, so the session stops waiting and says why; exits before Python when no notice is there; a shim over `hooks/pass_notice.py`; fails open, with errors in `pass-notice.err` in the state dir | symlink `~/.claude/hooks/pass-notice.sh` and `pass_notice.py` |
 | `hooks/md_render.py` | Not a hook: the stdlib markdown-to-terminal renderer (bold, italic, code, links, headings, lists, code blocks, tables, wrapped by terminal cells) that the banner and `tmux/pass-last` load by path | symlink `~/.claude/hooks/md_render.py` |
 | `hooks/session-registry.sh` | SessionStart/SessionEnd hook: records which session is open in which tmux tab (`$XDG_STATE_HOME/dotclaude/open-sessions/`), with the window's tab bar placement (`@tab_place`, as `place`), for `claude-restore`; deletes the entry on `/exit` or `/clear`, marks it when the window or claude is killed; then hands each payload to `claude-saved` (Star and Shelve; the star follows `/clear`); does nothing outside tmux | symlink `~/.claude/hooks/session-registry.sh` |
 | `hooks/session-summary.sh` | Stop hook: regenerates a 1-2 sentence session summary via a direct Haiku Messages-API call (`hooks/haiku.py`: Claude subscription OAuth token, stdlib urllib, no API key/jq), detached so it never blocks; caches the summary to `<config-dir>/session-summaries/<session_id>.txt` for the status-line widget and a short (`<=32`-char) tab label to `<session_id>.title.txt` for `session-title.sh` | symlink `~/.claude/hooks/session-summary.sh` |
@@ -214,7 +215,7 @@ sees it.
 | `docs/prose-is-not-a-permission.md` | Blog post on the delegation work: why a prompt can't limit an agent's authority, and the layers that can | reference |
 | `docs/images/` | The post's diagram: `delegation-layers.svg` (source) and `delegation-layers.png` (2x render) | reference |
 | `tests/delegation/` | Unit tests for the delegation pieces (no model calls) and `run.py`, a live harness that spends model calls | run from the repo root |
-| `tests/setup/` | Unit tests for `merge-settings.py`, `git/install-ignore.py`, and the prompt and session hooks (`handoff_reminder.py`, `session-title.sh`, `session-summary.sh`), the tmux and sound hooks (`test_tmux_hooks.py`), `tmux/tmux-claude-status` (`test_tmux_claude_status.py`), the restore after tmux dies (`test_session_registry.py`, `test_claude_restore.py`), Star and Shelve (`test_claude_saved.py`), the grouped tab bar (`test_tmux_tab_bar.py`), the replies across a pass (`test_pass_banner.py`, `test_pass_last.py`, `test_md_render.py`), the auto-pass watcher and `/autopass` (`test_context_watch.py`), the ctx widget's tiers, cue and window write (`test_ctx_breakdown.py`), `setup-tmux.sh`, the overwrite and delete guards, `memory-git.sh` and `claude-file-history`; `replay_history.py` is a local-only replay tool, not a unit test | `python3 -m unittest discover -s tests/setup -t tests/setup` |
+| `tests/setup/` | Unit tests for `merge-settings.py`, `git/install-ignore.py`, and the prompt and session hooks (`handoff_reminder.py`, `session-title.sh`, `session-summary.sh`), the tmux and sound hooks (`test_tmux_hooks.py`), `tmux/tmux-claude-status` (`test_tmux_claude_status.py`), the restore after tmux dies (`test_session_registry.py`, `test_claude_restore.py`), Star and Shelve (`test_claude_saved.py`), the grouped tab bar (`test_tmux_tab_bar.py`), the replies across a pass (`test_pass_banner.py`, `test_pass_last.py`, `test_md_render.py`), the drop notice (`test_pass_notice.py`), the auto-pass watcher and `/autopass` (`test_context_watch.py`), the ctx widget's tiers, cue and window write (`test_ctx_breakdown.py`), `setup-tmux.sh`, the overwrite and delete guards, `memory-git.sh` and `claude-file-history`; `replay_history.py` is a local-only replay tool, not a unit test | `python3 -m unittest discover -s tests/setup -t tests/setup` |
 | `tests/deck_production/` | Unit tests for `deck-production`'s `deckkit geometry` gate (rule matrix on canned probe output, plus an end-to-end run over the synthetic `fixtures/geodeck` that skips without a headless Chrome) `deckkit regress`'s geometry facts, and `deckkit doctor`'s exit codes | `python3 -m unittest discover -s tests/deck_production -t tests/deck_production` |
 | `tests/lanes/` | Unit tests for the `lane` CLI, the lane hooks and `handoff-check`, on a throwaway bare origin plus clone (no network) | `python3 -m unittest discover -s tests/lanes -t tests/lanes` |
 | `tests/pass/` | Unit tests for `pass-respawn` on fakes for tmux, the session file and the transcript (`test_pass_respawn.py`), plus its guards and checks on the pass docs (`test_pass_guards.py`); nothing reaches the live tmux server | `python3 -m unittest discover -s tests/pass -t tests/pass` |
@@ -547,6 +548,15 @@ need nothing extra.
 - **Stop / PostToolUse: `context-watch.sh`** (in this repo). The auto-pass watcher (see
   Auto-pass, below); its `/autopass` toggle is the `skills/autopass` mod, not a settings hook.
   The PostToolUse entry skips a subagent's calls before any Python starts. Fails open.
+- **UserPromptSubmit / PostToolUse: `pass-notice.sh`** (in this repo).
+  - **What it does.** When a `/pass` drops (see Pass, below), the waiter leaves the session
+    a notice at `pass-notice/<session>.json` in the state dir. This hook adds it once, as
+    context, to the session's next prompt or next main-thread tool call. The prompt can be
+    typed or injected (an agent's hand-back, a task notice). So the session stops waiting
+    and says why.
+  - **Keyed by session id.** A session that restore resumed after tmux died still gets it.
+  - It exits before Python starts when no notice exists, skips a subagent's calls, and fails
+    open.
 - **SessionStart (`startup|resume|clear|compact`) / Stop / SessionEnd: `lane-identity.sh`** (in
   this repo). In a lane it tells the session its lane id, branch, claims, port and record, and
   registers it in `lane.json`; after a compact it adds "re-read your record". In the main
@@ -613,8 +623,8 @@ A repo with no lanes is unchanged. `skills/lanes/SKILL.md` is the operating guid
 `/pass` hands a session off and restarts it fresh in its tmux pane, so the next session starts
 from the status doc instead of a long context. It runs the handoff (or its delta mode, when a
 handoff already ran this session), gates on `handoff-check`, and calls
-`pass-respawn -C <toplevel>` last. Once the turn ends and the session's own status reads
-idle, the script rechecks the handoff and respawns the pane with a fresh `claude`.
+`pass-respawn -C <toplevel>` last. Once the session's own turn ends (below), the script
+rechecks the handoff and respawns the pane with a fresh `claude`.
 
 - `pass compact` keeps the session and types `/compact` and the resume prompt instead. Use it
   mid-task with tacit state or with background tasks in flight, which a respawn would kill (a
@@ -628,18 +638,33 @@ idle, the script rechecks the handoff and respawns the pane with a fresh `claude
   `Keep open:` line) carries `(approved by Hayden YYYY-MM-DD)` dated within this session. The handoff skill writes that marker only for an
   approval given in the session, and `handoff-check` fails one with a bad, older or future
   date, or when it can't find the session's start.
-- It waits for this session's own idle status (`~/.claude/sessions/<pid>.json`), not the tab's.
-  The pass drops, with nothing changed, when work landed after the handoff (`stale`), Hayden typed
-  or queued a prompt after the call (`resumed`), the stop listed any background task but memory
-  upkeep or an artifact watch, or the pane was in copy mode or held a draft in the input box
-  (`busy`), the session or pane went away or changed (`gone`), or the turn never ended
-  (`timeout`). A refusal (`stale`, `busy`, `timeout`, `failed`, an `error` in the waiter, and
-  `partial` below) shows its cause and fix on every terminal attached to the pane's tmux session
-  until a key press, plus a Windows toast; `resumed`, `gone` and `cancelled`, which Hayden caused,
-  show one brief line in the status line. Fix the cause and run `/pass` again. In compact mode,
-  copy mode, a draft or no input box between `/compact` and the resume prompt leaves the prompt
-  for you to type (`partial`): it stays in the status line until a key press, and `pass.log` has
-  it whole.
+- It waits for this session's own turn to end, not the tab's. The session file
+  (`~/.claude/sessions/<pid>.json`) shows that by reading `idle`. But Claude Code keeps it `busy`
+  at the prompt while a background agent, teammate or workflow runs. Then the transcript decides:
+  the turn's `turn_duration` entry or an Esc interrupt after the call, with no new turn since. The
+  pass drops, with nothing changed, when work landed after the handoff (`stale`), a prompt or a
+  new turn came after the call, or the status changed after the turn (`resumed`), the stop listed
+  any background task but memory upkeep or an artifact watch, or the pane was in copy mode, held
+  a draft in the input box or tmux didn't answer (`busy`), the session or pane went away or
+  changed (`gone`), or the turn never ended (`timeout`). A refusal (`stale`, `busy`, `timeout`,
+  `failed`, an `error` in the waiter, and `partial` below) shows its cause and fix on every
+  terminal attached to the pane's tmux session until a key press, plus a Windows toast; `resumed`
+  (but for an unreadable transcript, which is loud), `gone` and `cancelled` show one brief line in
+  the status line. Fix the cause and run `/pass` again. In compact mode, copy mode, a draft or
+  no input box between `/compact` and the resume prompt leaves the prompt for you to type
+  (`partial`): it stays in the status line until a key press, and `pass.log` has it whole. A
+  `failed` after `/compact` went out hands over the prompt too (or says to press Enter when it may
+  already sit in the box), since a second `/pass`
+  would compact twice. Every drop and `partial` also leave the session a `[pass]` notice
+  (`pass-notice.sh`, Hooks above). It arrives as context at the session's next turn or tool call,
+  and says:
+  - that no pass is pending, always;
+  - the cause, for a loud drop; a quiet one says less (`resumed` its reason, `gone` what
+    changed, `cancelled` nothing more);
+  - the fix, for a loud drop (for `partial`, and a `failed` after `/compact` went out, the
+    resume prompt).
+
+  So the session stops saying a pass is queued, even after tmux died and restore resumed it.
 - A `busy` refusal names the first two tasks with their description and id (`monitor "deploy
   events" (b0fzd27l4) running`), and `pass.log` names every one. Stop a leftover from `/tasks`,
   or ask Claude to `TaskStop` it. `/pass` checks first: `pass-respawn -C <dir> --tasks` lists
