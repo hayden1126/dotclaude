@@ -119,9 +119,19 @@ stored here).
     rerun the menu-clip repro and the tmux suites. If it fixes the clip, install at a quiet
     moment (a server restart; claude-restore reopens the tabs) and drop the row-0 menu rule.
     Until then, 3.7c's default menus that dotclaude doesn't own still clip under a top bar.
-  - `lane init --model/--effort` repo defaults and `lane open --model/--effort` overrides,
-    passed through to `claude` (today `lane open` hardcodes the argv). It edits
-    `skills/lanes/scripts/lane`, so it waits for lane two-sessions' merge.
+  - **`lane open --model/--effort`** (next to open, after two-sessions merges: both edit
+    `skills/lanes/scripts/lane`, SKILL.md and `docs/lanes.md`). `lane init --model/--effort`
+    sets repo defaults in the lanes config, `lane open --model/--effort` overrides them for one
+    lane, and both pass through to `claude` (2.1.296 has `--model` and `--effort
+    low|medium|high|xhigh|max`). Today `cmd_open` hardcodes the argv. The trap: auto-pass
+    relaunches through `pass-respawn`, whose plain mode runs `claude [--permission-mode plan]
+    <prompt>` (`actions()`), so a pick lasts only until the lane's first plain pass (compact
+    keeps the running session). The lane rates where the pick lives (the session's own command
+    line, which `pass-respawn` already reads for `--add-dir` and `--settings`; `lane.json`; or
+    the lanes config) across a plain pass, a `/model` change mid-session, a default changed
+    after the lane opened, the lead's main checkout, and a bad model name failing in a detached
+    window nobody watches. Files: the lane script (init, open),
+    `skills/pass/scripts/pass-respawn`, SKILL.md, `docs/lanes.md`, `tests/lanes`, `tests/pass`.
   - Tests time durations with `time.monotonic()`, not `time.time()` (122 calls in 23 test
     files). It touches every suite, so it opens only when no lane runs.
 
