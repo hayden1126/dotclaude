@@ -219,8 +219,13 @@ stored here).
   `lane open --model` is the next pick after two-sessions merges. No chat
   about a lane's own asks; speak on cross-lane orders, decisions raised with the lead, failed
   checks and lead-only actions.
-  - The lead's commits of 2026-10-14 (second session): `git log --first-parent 696cc44..HEAD`
-    on `chore/after-pr4`, STATUS only, plus merges of main.
+  - The lead's commits of 2026-10-14 (second and third sessions): `git log --first-parent
+    696cc44..HEAD` on `chore/after-pr4`, STATUS only, plus merges of main. The third session
+    (69d146cc) started at 433fe8f: it opened identity-branch, install-hint, chrome-bg and
+    two-sessions, and ran the chain for #106 and #107.
+  - **Vulcan sessions that were already running keep their display** until they restart: the
+    blanking hook fires only at session start. The `ro-lesson` lane was opening WSLg windows
+    at 21:43 local; Hayden tells it to go headless or `/pass`.
   - A config rewrite with the sandbox off (`git config`, `branch -d`) while a lane's suite runs
     can fail its SandboxReality test once: the rewrite swaps `.git/config` under the running
     sandbox's mount. Avoid config writes while `lane ls` shows `suite` held.
