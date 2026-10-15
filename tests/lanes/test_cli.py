@@ -2367,6 +2367,18 @@ class LeadAct(Fakes):
         self.assertEqual(res["rc"], 0, res["err"])
         self.assertLead(other, sid="sess-main-0002")
 
+    def test_a_session_farther_up_counts_by_its_real_cwd_too(self):
+        # A session launched in main whose process now sits in a lane, running a claude that
+        # runs `lane lead`: farther up, the real cwd counts (lane_above), so it refuses.
+        before = self.read(self.lead_path) if os.path.exists(self.lead_path) else None
+        top, _, res = self.chain(["lead"], dict(real_cwd=self.path, sid=self.SID),
+                                 sid="sess-main-0002")
+        self.assertEqual((res["rc"], res["out"]), (1, ""), res["err"])
+        self.assertIn(f"this runs under session {self.SID} ({top} {self.comms[top]}), in linked "
+                      f"worktree {self.path}: a lane's session never leads", res["err"])
+        after = self.read(self.lead_path) if os.path.exists(self.lead_path) else None
+        self.assertEqual(after, before)
+
     def test_a_record_step_that_fails_never_fails_the_act(self):
         # The act already succeeded and printed when its session is recorded: a failure there
         # leaves its exit code and output alone, and the lead where it was. A session file

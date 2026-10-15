@@ -2330,7 +2330,9 @@ def lead_claim(repo: Repo) -> tuple[dict, dict]:
     # With no absolute root in the config (lead_only refuses there), linked worktrees alone.
     root = repo.config().get("root")
     root = os.path.realpath(root) if isinstance(root, str) and os.path.isabs(root) else None
-    if hit := lane_above(repo, root, above[1:]):  # the nearest passed by its launch dir above
+    # The nearest passed by its launch dir above; by pid, not position, in case two session
+    # files name its process.
+    if hit := lane_above(repo, root, [x for x in above if x[1].pid != p.pid]):
         lane_s, lane_p, where = hit
         raise LaneError(shown(f"this runs under session {sid_of(lane_s)} ({lane_p.pid} "
                               f"{lane_p.comm}), {where}: a lane's session never leads, nor any "
