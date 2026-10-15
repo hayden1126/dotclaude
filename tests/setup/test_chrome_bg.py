@@ -609,6 +609,7 @@ for line in sys.stdin:
     if op == "hello":
         os.makedirs(run_dir, exist_ok=True)
         vs = int(env.get("FAKE_VS_LEFT", "0"))
+        sys.stdout.write(chr(0xFEFF))  # PowerShell may open its stdout with a BOM
         out({"ok": True, "version": 1, "chrome": "C:\\Chrome\\chrome.exe", "runDir": WIN + rid + "\\",
              "virtualScreen": {"x": vs, "y": 0, "w": 1920 - vs, "h": 1080},
              "monitors": [{"rect": {"left": 0, "top": 0, "right": 1920, "bottom": 1080},

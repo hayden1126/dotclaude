@@ -61,6 +61,7 @@ YOUNG_S = 120            # a run dir younger than this may belong to a run that 
 LOG_DAYS = 7
 PORT_WAIT_S = 20
 SCREEN_LIMIT = 32767     # Windows window coordinates are 16-bit
+BOM = chr(0xFEFF)        # PowerShell may open its stdout with one
 SANDBOX_MSG = ("chrome-bg: run it with the sandbox off (powershell.exe and Chrome's port are "
                "unreachable inside it)")
 
@@ -630,7 +631,7 @@ class Supervisor:
                         raise Fail(f"chrome-bg: the supervisor exited during {op}{self.err_tail()}")
                     self.buf += chunk
             raw, self.buf = self.buf.split(b"\n", 1)
-            line = raw.decode("utf-8", "replace").strip().lstrip("﻿")
+            line = raw.decode("utf-8", "replace").strip().lstrip(BOM)
         try:
             reply = json.loads(line)
         except ValueError:
@@ -662,7 +663,7 @@ def one_shot(*args, timeout=60):
                            timeout=timeout)
     except subprocess.TimeoutExpired:
         raise Fail(f"chrome-bg: chrome-bg.ps1 {' '.join(args)} timed out after {timeout}s") from None
-    lines = [ln.strip().lstrip("﻿")
+    lines = [ln.strip().lstrip(BOM)
              for ln in r.stdout.decode("utf-8", "replace").splitlines() if ln.strip()]
     reply = None
     if lines:
