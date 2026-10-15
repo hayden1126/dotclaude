@@ -76,7 +76,8 @@ stored here).
     #92, `narrow-excluded` Part 1 #93, the lead's `fix/json-depth` #94, `lane-close` #95,
     `lane-addr` #98, `excluded-guard` #100 (narrow-excluded Part 2 plus G8's fix, 2026-10-14),
     `tab-bar` #96, #97, #99 and #101 (2026-10-14), `turn-glyph` #102 (2026-10-14), `ask-owner`
-    #103 (2026-10-14), `guard-b` #104 (2026-10-14).
+    #103 (2026-10-14), `guard-b` #104 (2026-10-14), `pass-timeout` #105 (2026-10-14: a dropped
+    pass now tells the session itself).
     `gh pr view <n>` and the closed records under `.git/lanes/_closed/` hold the detail; tab-bar's
     design is in [[dotclaude-tab-bar]]. Tabs opened before #102's install (2026-10-14) keep the
     old startup hooks (no PermissionRequest or SubagentStop wiring) until they restart.
@@ -85,11 +86,7 @@ stored here).
     its own last write, so the flag lights after each `/pass` and stays on for a merged lane with
     no live session. Until it merges (Hayden's call), such a lane fails the hand-back gate, and
     its close is the lead's ask to Hayden.
-  - `pass-timeout` (opened 2026-10-14, Hayden's pick): a dropped `/pass` must reach the session
-    itself, not only the tmux client. Seen live twice in `pass.log` (compact, `outcome=timeout
-    status busy`, 2026-10-13 and 2026-10-14). On 2026-10-13 the tmux server died, and the
-    session kept saying the pass was "still queued".
-  - **Merge order: `pass-timeout`, then `handoff-flag`.** The lead installs only the next to
+  - **Merge order: `handoff-flag` (the only live lane).** The lead installs only the next to
     merge.
   - The parked json-depth sweep (21 files, among them the delegation enforcement scripts) is on
     `fix/json-depth-sweep`, a local branch never pushed: keep it while the sweep is in the
@@ -121,6 +118,12 @@ stored here).
     than one live session, and the bar marks the extra tab (for example `lead²`). The stopgap
     used: tell each lane to pick the lead's `main:@N` entry from the refusal, and tell the old
     session it isn't the lead.
+  - **The scan's rerun hint goes stale** (2026-10-14). Setup's excluded-guard hint says "while
+    a lane holds the install, rerun that lane's `lane lock install -- ./setup.sh`". At 01:20:12Z
+    a rerun that followed it, 3 s after the lead's reinstall from main, put the live install
+    back into merged lane pass-timeout's worktree. The lead reinstalled from main again. Fix:
+    the hint names the current holder at print time and says to check `lane ls` first, or
+    setup refuses a lane install whose branch is already in `origin/main`.
   - `lane init --model/--effort` repo defaults and `lane open --model/--effort` overrides,
     passed through to `claude` (today `lane open` hardcodes the argv).
 
@@ -195,11 +198,12 @@ stored here).
   `python3 -I ~/scratch/sandbox-audit/rm_scan.py 2026-11-04`. Sending the drafted
   `$CLAUDE_JOB_DIR/tmp` bug report is Hayden's call; `CLAUDE.md` carries the workaround.
 - **Setup's excluded-command guard scan flags a work repo's lane worktrees** (2026-10-14, after
-  #103; still 10 after #104's install): its shared git config points `core.hooksPath` at each worktree's own writable hooks dir,
-  so excluded commands in those worktrees are refused. Every flagged hook matched HEAD. The fix
-  is Hayden's: rerun `python3 -I hooks/excluded_guard.py --scan`, look, paste its
-  `settings.machine.json`, rerun `./setup.sh`. Each new lane there needs its own rule (Edit deny
-  rules take no glob), which is what lane guard-b's `lane new` check is for.
+  #103): its shared git config points `core.hooksPath` at each worktree's own writable hooks
+  dir, so excluded commands in those worktrees are refused. Every flagged hook matched HEAD. The
+  overlay gained rules for that repo's four current lanes at 21:20 local; the scan still flags 7
+  older worktrees. The rest is Hayden's: rerun `python3 -I hooks/excluded_guard.py --scan`, look,
+  paste its `settings.machine.json`, rerun `./setup.sh` from the main checkout. Each new lane
+  there needs its own rule (Edit deny rules take no glob); `lane new` prints it since #104.
 - **A stale trust entry from lane guard-b's smoke** (2026-10-14): `~/.claude.json` still trusts
   the deleted `/tmp/claude-1000/guard-b-tab`. A sandboxed session can recreate that path with its
   own `.claude/settings.json`, so the lead recommends removing the entry. Asked Hayden whether he
@@ -209,10 +213,10 @@ stored here).
 
 ## Notes for next session
 - **Next (lead, main checkout):** watch for "merged #N" from a lane, then run the post-merge
-  chain (`skills/lanes/SKILL.md`, The lead, step 7). Live lanes: `pass-timeout` (next to merge;
-  its install is live from its lane) and `handoff-flag`. Check `lane ls` first: a merge Hayden
-  made on GitHub and mentioned to no session sends no message (#102 showed merged there before
-  its lane's message came). One slot of 3 is free; the backlog's next pick is Hayden's. No chat
+  chain (`skills/lanes/SKILL.md`, The lead, step 7). The one live lane is `handoff-flag` (next
+  to merge). Check `lane ls` first: a merge Hayden made on GitHub and mentioned to no session
+  sends no message (#102 showed merged there before its lane's message came). Two slots of 3 are
+  free; the backlog's next pick is Hayden's. No chat
   about a lane's own asks; speak on cross-lane orders, decisions raised with the lead, failed
   checks and lead-only actions.
   - The lead's commits of 2026-10-14 (second session): `git log --first-parent 696cc44..HEAD`
