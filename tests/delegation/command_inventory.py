@@ -72,7 +72,9 @@ EXCLUDED = [
              ["lane done chart-fix"]),
     Excluded("lane addr *", "sees other sessions' processes to tell a live one from a stale file",
              ["lane addr chart-fix", "lane addr lead"]),
-    Excluded("pass-respawn", "respawns its tmux pane", ["pass-respawn"]),
+    Excluded("lane lead", "sees the session above it and writes the lead record in the state dir",
+             ["lane lead"]),
+    Excluded("pass-respawn","respawns its tmux pane", ["pass-respawn"]),
     Excluded("pass-respawn *", "respawns its tmux pane", ["pass-respawn -C /x --compact"]),
 ] + [
     # Read-only tmux, anchored on the verb, in the spellings real use shows. A global flag
@@ -383,7 +385,7 @@ DENIES = CLAUDE_DENY
 # no ask or deny.
 NO_ASK = ["lane ls", "lane ls --json", "lane open chart-fix", "lane open chart-fix --print",
           "lane new chart-fix --claim 42 --goal x", "lane done chart-fix", "lane init --cap 4",
-          "lane adopt ../x", "pass-respawn -C /x --compact", "pass-respawn -C /x --print",
+          "lane adopt ../x", "lane lead", "pass-respawn -C /x --compact", "pass-respawn -C /x --print",
           "delegation-ledger wait --pid 1 --max 30", "delegation-ledger canary --quick",
           "codex-delegate run --model sol --dir /x --brief b.md", "tmux ls",
           "tmux list-panes -a -F '#{pane_id} #{pane_current_path}'",

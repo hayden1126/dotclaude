@@ -244,7 +244,7 @@ newer, or a session that started after it has ended; on whenever one of those ca
 `setup-failed` (half made: it still holds its port, claims and a cap slot; finish it with
 `lane adopt <path>`), `closing` (a `lane done` stopped partway; rerun it).
 
-Run `lane init`, `new`, `adopt`, `ls`, `open`, `done` and `addr` as bare commands: those are in
+Run `lane init`, `new`, `adopt`, `ls`, `open`, `done`, `addr` and `lead` as bare commands: those are in
 `excludedCommands`, so they run outside the sandbox with the network, gh's credential and a view
 of other processes. Piped or sandboxed, `ls` says what it skipped (PR state, sessions and window
 show `?`), and `new`, `open`, `done` and `addr` refuse. `lane ls` also names any record it left out (a
@@ -252,7 +252,7 @@ show `?`), and `new`, `open`, `done` and `addr` refuse. `lane ls` also names any
 can't see a live session, so its command may start a second one. Every other subcommand runs
 sandboxed. `lane lock` must: the command it wraps inherits its sandbox.
 
-`ls`, `new`, `adopt`, `open`, `done` and `addr` have allow rules, so auto mode's classifier never refuses
+`ls`, `new`, `adopt`, `open`, `done`, `addr` and `lead` have allow rules, so auto mode's classifier never refuses
 them. Each call meets the excluded-command guard first (docs/delegation.md), and the asks on
 `init --setup`, `init --root` and `done --abandon` still win over the allow rules.
 

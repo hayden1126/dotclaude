@@ -1036,7 +1036,7 @@ FAKE = r'''
   drop      a file it removes on SIGTERM, before on_term ({pid} its pid: its session file,
             gone mid-exit)
   children  configs of fakes it starts, each with its own cwd and env
-  then      {argv, cwd, go, out}: once go exists, run argv in cwd and write {rc, err} to out
+  then      {argv, cwd, go, out}: once go exists, run argv in cwd and write {rc, out, err} to out
   comm      the comm it gives itself (/proc/self/comm), e.g. "tmux: server"
   session   {file, sid}: Claude Code's session file it writes for itself (pid, procStart)
 It prints "ready <pid> <its descendants' pids>" once set up, then sleeps."""
@@ -1087,18 +1087,17 @@ if then := cfg.get("then"):
     p = subprocess.run(then["argv"], cwd=then["cwd"], capture_output=True, text=True,
                        timeout=60)
     with open(then["out"] + ".tmp", "w") as f:
-        json.dump({"rc": p.returncode, "err": p.stderr}, f)
+        json.dump({"rc": p.returncode, "out": p.stdout, "err": p.stderr}, f)
     os.rename(then["out"] + ".tmp", then["out"])
 while True:
     time.sleep(60)
 '''
 
 
-class Close(LanesRepo):
-    """`lane done` ends what provably belongs to the lane and refuses, by name and before any
-    signal, what doesn't: the kill-scope matrix. Every process here is a disposable fake this
-    test starts (FAKE), proven the lane's or not by session files and transcripts under the temp
-    HOME; cleanup kills each one still running as the process the test started."""
+class Fakes(LanesRepo):
+    """A lanes repo with lane chart-fix and disposable fake processes (FAKE) this test starts,
+    proven a lane's or the lead's by session files and transcripts under the temp HOME; cleanup
+    kills each one still running as the process the test started."""
 
     SID = "sess-lane-0001"
 
@@ -1197,6 +1196,32 @@ class Close(LanesRepo):
         path = os.path.join(self.tmp, "state", "dotclaude", "open-sessions", f"{sid}.json")
         self.write(path, json.dumps({"session_id": sid, "cwd": cwd, "pane": "%1"}))
         return path
+
+    def act_under(self, cfg, argv, cwd=None):
+        """Start the fake cfg, which runs `lane <argv>` from cwd (the main checkout's by default)
+        as its child once told to; its pid, and the go and out files await_done takes."""
+        go, out = os.path.join(self.tmp, "go"), os.path.join(self.tmp, "done.json")
+        cfg["then"] = {"argv": [sys.executable, LANE, *argv], "cwd": cwd or self.main,
+                       "go": go, "out": out}
+        pid, *_ = self.start(cfg)
+        return pid, go, out
+
+    def done_under(self, cfg, lane_id="chart-fix"):
+        """act_under for `lane done <lane_id> --abandon`."""
+        return self.act_under(cfg, ["done", lane_id, "--abandon"])
+
+    def await_done(self, go, out):
+        """Let the act run; its {rc, out, err}."""
+        self.write(go, "")
+        deadline = time.monotonic() + 60
+        while not os.path.exists(out) and time.monotonic() < deadline:
+            time.sleep(0.05)
+        return json.loads(self.read(out))
+
+
+class Close(Fakes):
+    """`lane done` ends what provably belongs to the lane and refuses, by name and before any
+    signal, what doesn't: the kill-scope matrix."""
 
     def assertClosed(self):
         self.assertFalse(os.path.exists(self.path))
@@ -1628,22 +1653,6 @@ class Close(LanesRepo):
         self.assertIn(f"{bg} {self.comms[bg]} (background session {self.SID}, which the daemon "
                       "owns: run `claude stop job-1234abcd`)", p.stderr)
         self.assertRefusedUntouched(p, bg)
-
-    def done_under(self, cfg, lane_id="chart-fix"):
-        """Start the fake cfg, which runs `lane done <lane_id> --abandon` from the main
-        checkout's cwd as its child once told to; its pid and the run's {rc, err}."""
-        go, out = os.path.join(self.tmp, "go"), os.path.join(self.tmp, "done.json")
-        cfg["then"] = {"argv": [sys.executable, LANE, "done", lane_id, "--abandon"],
-                       "cwd": self.main, "go": go, "out": out}
-        pid, *_ = self.start(cfg)
-        return pid, go, out
-
-    def await_done(self, go, out):
-        self.write(go, "")
-        deadline = time.monotonic() + 60
-        while not os.path.exists(out) and time.monotonic() < deadline:
-            time.sleep(0.05)
-        return json.loads(self.read(out))
 
     def test_only_the_lead_closes_lanes(self):
         # Another lane's session, cd'd to the main checkout or not, never closes this lane.
