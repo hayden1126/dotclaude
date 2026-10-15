@@ -178,9 +178,14 @@ class ProjectFilesStayOut(Workspace):
         ran = os.path.join(self.tmp.name, "ran")
         with open(os.path.join(self.cwd, "json.py"), "w") as f:
             f.write(f"open({ran!r}, 'a').write(__name__)\n")
+        # excluded-check prints only on a finding: a hooks dir the sandbox can write.
+        with open(os.path.join(self.cwd, ".git", "config"), "w") as f:
+            f.write("[core]\n\thooksPath = .githooks\n")
+        self.env["XDG_STATE_HOME"] = os.path.join(self.tmp.name, "state")
         events = {"handoff-reminder.sh": {"prompt": "let's wrap up"},
                   "session-title.sh": {"cwd": self.cwd, "transcript_path": self.transcript,
-                                       "prompt": "fix the parser"}}
+                                       "prompt": "fix the parser"},
+                  "excluded-check.sh": {"hook_event_name": "SessionStart", "cwd": self.cwd}}
         for name, event in events.items():
             with self.subTest(hook=name):
                 p = subprocess.run(["bash", os.path.join(HOOKS, name)], input=json.dumps(event),

@@ -16,9 +16,11 @@ import subprocess
 import tempfile
 import time
 import unittest
+from unittest import mock
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 HOOK = os.path.join(REPO, "hooks", "excluded-guard.sh")
+SESSION_HOOK = os.path.join(REPO, "hooks", "excluded-check.sh")
 MODULE = os.path.join(REPO, "hooks", "excluded_guard.py")
 EXCLUDED = ["git push", "git push origin *", "gh pr *", "lane ls", "lane ls *", "claude *",
             "codex login status"]
@@ -31,6 +33,11 @@ def load_guard():
     guard = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(guard)
     return guard
+
+
+def slurp(path):
+    with open(path) as f:
+        return f.read()
 
 
 def unlock(root):
@@ -827,6 +834,309 @@ class Scan(Guard):
             os.makedirs(os.path.join(repo, "h"))
             self.git("config", "core.hooksPath", "h", cwd=repo)
         self.assertEqual(self.scan(self.tmp), (0, ""))
+
+
+class EveryRefusal(Guard):
+    """One run lists every rule a dir needs, not only the first refusal."""
+
+    def test_every_rule1_refusal_in_a_repo_is_listed_in_one_run(self):
+        inc = self.write(os.path.join(self.mkdir("wcfg"), "inc"), "[user]\n\tname = x\n")
+        self.git("config", "include.path", inc, cwd=self.proj)
+        self.git("config", "core.hooksPath", ".githooks", cwd=self.proj)
+        code, out = Scan.scan(self, self.proj)
+        self.assertEqual(code, 1, out)
+        for d in (os.path.dirname(inc), os.path.join(self.proj, ".githooks")):
+            self.assertIn(f'"Edit(/{d}/**)"', out)
+
+    def test_project_refusals_lists_them_all_and_stops_at_one_it_cannot_clear(self):
+        guard = load_guard()
+        inc = self.write(os.path.join(self.mkdir("wcfg"), "inc"), "")
+        self.git("config", "include.path", inc, cwd=self.lane)
+        self.git("config", "core.hooksPath", ".githooks", cwd=self.lane)
+        refusals, error = guard.project_refusals(self.env, self.lane)
+        self.assertIsNone(error)
+        self.assertCountEqual([r.fix_dir for r in refusals],
+                              [os.path.dirname(inc), os.path.join(self.lane, ".githooks")])
+        # A refusal with no rule to offer (a nested repo) ends the list.
+        nested = os.path.join(self.proj, "sub")
+        self.git("init", "-q", nested, cwd=self.proj)
+        refusals, error = guard.project_refusals(dict(self.env, CLAUDE_PROJECT_DIR=self.proj),
+                                                 nested, project=self.proj)
+        self.assertEqual([r.rule for r in refusals], ["rule1"])
+        self.assertIsNone(refusals[0].fix)
+
+
+class Memo(Guard):
+    """A Machine's memo holds what a fresh Machine with the same deny list would find."""
+
+    def test_a_protected_machine_agrees_with_a_fresh_one(self):
+        # A home reached through a link (outside every root), and a PATH entry in it that links
+        # to a protected dir: the entry's rule names the real dir holding the link, which
+        # neither the entry's path nor its target sits under. The later writable entry must
+        # still be listed. Roots are just the home here: the temp dir sits under /tmp.
+        guard = load_guard()
+        os.symlink(self.home, os.path.join(self.tmp, "homelink"))
+        self.mkdir("home", ".local")
+        os.symlink(self.bin, os.path.join(self.home, ".local", "bin"))
+        entry = os.path.join(self.tmp, "homelink", ".local", "bin")
+        wbin = self.make_bin(os.path.join("home", "wbin"), protect=False)
+        path_var = f"{entry}:{wbin}:/usr/bin"
+        settings, _ = guard.load_settings(self.env)
+
+        def machine():
+            m = guard.Machine(self.env, settings, self.proj)
+            m.roots = [self.home]
+            return m
+
+        m = machine()
+        refusals, errors = guard.path_refusals(m, ["git", "gh"], path_var)
+        self.assertEqual(errors, [])
+        self.assertEqual([r.fix_dir for r in refusals],
+                         [os.path.join(self.home, ".local"), wbin])
+        fresh = machine()
+        fresh.deny += m.deny[len(fresh.deny):]
+        for p in (entry, wbin, os.path.join(wbin, "git"), self.bin):
+            with self.subTest(path=p):
+                self.assertEqual(m.exposed(p), fresh.exposed(p))
+
+
+class RulesNaming(Guard):
+    """rules_naming: the Edit deny rules a removed dir (a closed lane's worktree) leaves behind."""
+
+    def test_rules_inside_the_dir_in_any_form_and_only_those(self):
+        guard = load_guard()
+        lane = self.mkdir("home", "lanes", "chart-fix")
+        inside = ["Edit(~/lanes/chart-fix/.githooks/**)", f"Edit(/{lane}/tools/*.sh)",
+                  f"Edit(/{lane})", "Edit(~/lanes/chart-fix/[ab]/**)"]
+        # A glob mid-name widens to the parent: it covers sibling lanes too, so it stays.
+        outside = ["Edit(~/lanes/**)", "Edit(~/lanes/chart-fix2/**)", "Read(~/lanes/chart-fix/**)",
+                   "Edit(~/lanes/*/x/**)", "Edit(~/lanes/chart-fix*/**)",
+                   "Edit(~/lanes/chart-fix[0-9]/**)", "Edit(~/la*/chart-fix/**)", 7]
+        machine = self.write(os.path.join(self.home, ".claude", "settings.machine.json"),
+                             json.dumps({"permissions": {"deny": inside[:2] + outside}}))
+        managed = self.write(os.path.join(self.tmp, "managed", "managed-settings.d", "a.json"),
+                             json.dumps({"permissions": {"deny": inside[2:]}}))
+        self.assertEqual(guard.rules_naming(lane, self.env),
+                         [(machine, r) for r in inside[:2]] + [(managed, r) for r in inside[2:]])
+
+    def test_an_unreadable_or_odd_settings_file_is_skipped(self):
+        guard = load_guard()
+        lane = self.mkdir("home", "lanes", "chart-fix")
+        self.mkdir("home", ".claude", "settings.machine.json")  # a dir: unreadable
+        self.write(os.path.join(self.home, ".claude", "settings.json"),
+                   json.dumps({"permissions": {"deny": "Edit(~/lanes/chart-fix/**)"}}))
+        self.assertEqual(guard.rules_naming(lane, self.env), [])
+
+
+class Session(Guard):
+    """`--session`, the SessionStart check: what an excluded call from this session's project
+    would meet, shown once per change in its findings, failing open."""
+
+    def start(self, project=None, raw=None, hook=SESSION_HOOK, **payload):
+        project = project or self.proj
+        event = {"session_id": "s1", "hook_event_name": "SessionStart", "source": "startup",
+                 "cwd": project, **payload}
+        env = dict(self.env, CLAUDE_PROJECT_DIR=project)
+        p = subprocess.run(["bash", hook], input=raw if raw is not None else json.dumps(event),
+                           capture_output=True, text=True, env=env, timeout=20, cwd=project)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        return json.loads(p.stdout) if p.stdout.strip() else None
+
+    def test_a_clean_session_says_nothing(self):
+        self.assertIsNone(self.start())
+        self.assertIsNone(self.start(self.lane))
+
+    def test_a_finding_shows_once_and_again_when_it_changes(self):
+        hooks = os.path.join(self.proj, ".githooks")
+        self.git("config", "core.hooksPath", ".githooks", cwd=self.proj)
+        out = self.start()
+        msg = out["systemMessage"]
+        self.assertIn(f"Edit(/{hooks}/**)", msg)
+        self.assertIn("--scan", msg)
+        self.assertIn("settings.machine.json", msg)
+        context = out["hookSpecificOutput"]
+        self.assertEqual(context["hookEventName"], "SessionStart")
+        self.assertIn("excluded-guard", context["additionalContext"])
+        self.assertIn(hooks, context["additionalContext"])
+        self.assertIsNone(self.start(), "the same findings showed twice")
+        inc = self.write(os.path.join(self.mkdir("wcfg"), "inc"), "")
+        self.git("config", "include.path", inc, cwd=self.proj)
+        msg = self.start()["systemMessage"]
+        for d in (hooks, os.path.dirname(inc)):
+            self.assertIn(f"Edit(/{d}/**)", msg)
+        self.protect(hooks)
+        self.protect(os.path.dirname(inc))
+        self.assertIsNone(self.start())  # cleared: nothing to say
+        self.deny_write.remove(hooks)
+        self.write_settings()
+        self.assertIn(f"Edit(/{hooks}/**)", self.start()["systemMessage"])
+
+    def test_a_path_finding_shows_once_across_projects(self):
+        self.env["PATH"] = f"{self.wbin}:/usr/bin"
+        self.assertIn(f"Edit(/{self.wbin}/**)", self.start()["systemMessage"])
+        self.assertIsNone(self.start(self.lane))
+
+    def test_each_lane_shows_its_own_hooks_dir(self):
+        self.git("config", "core.hooksPath", ".githooks", cwd=self.proj)
+        self.assertIn(os.path.join(self.proj, ".githooks"), self.start()["systemMessage"])
+        msg = self.start(self.lane)["systemMessage"]
+        self.assertIn(f"Edit(/{os.path.join(self.lane, '.githooks')}/**)", msg)
+        self.assertNotIn(os.path.join(self.proj, ".githooks"), msg)
+
+    def test_unattended_and_subagent_starts_say_nothing_and_keep_the_once(self):
+        self.env["PATH"] = f"{self.wbin}:/usr/bin"
+        self.assertIsNone(self.start(agent_id="a1"))
+        self.env["CLAUDE_CODE_SESSION_ATTENDED"] = "0"
+        self.assertIsNone(self.start())
+        del self.env["CLAUDE_CODE_SESSION_ATTENDED"]
+        self.assertIsNotNone(self.start())
+
+    def test_an_unreadable_project_settings_file_is_no_finding(self):
+        # The guard then judges more calls as candidates; it refuses none for that alone.
+        self.mkdir("proj", ".claude", "settings.json")
+        self.assertIsNone(self.start())
+
+    def test_an_unreadable_user_settings_file_is_named(self):
+        # It takes its deny rules with it, so the guard may refuse what they would clear.
+        self.write(os.path.join(self.home, ".claude", "settings.json"), "{not json")
+        self.assertIn("settings not read", self.start()["systemMessage"])
+
+    def test_each_path_shows_once_however_tabs_alternate(self):
+        w2 = self.make_bin("wbin2", protect=False)
+        for path, shows in ((self.wbin, True), (w2, True), (self.wbin, False), (w2, False)):
+            with self.subTest(path=path):
+                self.env["PATH"] = f"{path}:/usr/bin"
+                out = self.start()
+                self.assertEqual(out is not None, shows, out)
+
+    def test_what_a_projects_own_settings_add_is_its_own(self):
+        # A head only proj's settings exclude runs through a writable interpreter: proj shows
+        # it, the lane doesn't, and alternating starts show nothing again.
+        interp = self.write(os.path.join(self.mkdir("wint"), "interp"), MARKER, 0o755)
+        self.write(os.path.join(self.bin, "mytool"), f"#!{interp}\n", 0o755)
+        self.write(os.path.join(self.proj, ".claude", "settings.json"),
+                   json.dumps({"sandbox": {"excludedCommands": ["mytool *"]}}))
+        self.assertIn(os.path.dirname(interp), self.start()["systemMessage"])
+        for project in (self.lane, self.proj, self.lane):
+            with self.subTest(project=project):
+                self.assertIsNone(self.start(project))
+
+    def test_a_projects_own_path_finding_is_keyed_by_path_too(self):
+        # A head only proj's settings exclude sits in a dir on one tab's PATH and runs through a
+        # writable interpreter: alternating tabs with and without that dir show it once.
+        tools = self.make_bin("tools", heads=())
+        interp = self.write(os.path.join(self.mkdir("wint"), "interp"), MARKER, 0o755)
+        self.write(os.path.join(tools, "mytool"), f"#!{interp}\n", 0o755)
+        self.write_settings()
+        self.write(os.path.join(self.proj, ".claude", "settings.json"),
+                   json.dumps({"sandbox": {"excludedCommands": ["mytool *"]}}))
+        with_it, without = f"{self.bin}:{tools}:/usr/bin", f"{self.bin}:/usr/bin"
+        for path, shows in ((with_it, True), (without, False), (with_it, False)):
+            with self.subTest(path=path):
+                self.env["PATH"] = path
+                out = self.start()
+                self.assertEqual(out is not None, shows, out)
+
+    def test_old_path_keys_go_and_a_reused_one_stays(self):
+        guard = load_guard()
+        state = os.path.join(self.tmp, "state")
+        with mock.patch.dict(os.environ, XDG_STATE_HOME=state):
+            for i in range(guard.MACHINE_KEYS + 2):
+                guard.unseen({f"{guard.MACHINE_KEY}:{i}": [f"line {i}"]})
+                if i == 3:
+                    guard.unseen({f"{guard.MACHINE_KEY}:0": ["line 0"]})  # back to tab 0
+        with open(os.path.join(state, "dotclaude", "excluded-check.json")) as f:
+            kept = list(json.load(f))
+        self.assertEqual(len(kept), guard.MACHINE_KEYS)
+        self.assertIn(f"{guard.MACHINE_KEY}:0", kept)
+        self.assertNotIn(f"{guard.MACHINE_KEY}:1", kept)
+
+    def test_links_where_the_state_goes_are_never_followed(self):
+        self.env["PATH"] = f"{self.wbin}:/usr/bin"
+        d = self.mkdir("state", "dotclaude")
+        state, lock = (self.write(os.path.join(self.tmp, n), "{}") for n in ("st", "lk"))
+        os.symlink(state, os.path.join(d, "excluded-check.json"))
+        os.symlink(lock, os.path.join(d, "excluded-check.json.lock"))
+        self.assertIsNotNone(self.start())
+        self.assertEqual((slurp(state), slurp(lock)), ("{}", "{}"))
+        # The link itself is replaced by the new state, never written through.
+        self.assertFalse(os.path.islink(os.path.join(d, "excluded-check.json")))
+
+    def test_a_planted_temp_name_is_never_written_through(self):
+        guard = load_guard()
+        d = self.mkdir("state", "dotclaude")
+        target = self.write(os.path.join(self.tmp, "target"), "keep")
+        os.symlink(target, os.path.join(d, f"excluded-check.json.{os.getpid()}.tmp"))
+        with mock.patch.dict(os.environ, XDG_STATE_HOME=os.path.join(self.tmp, "state")):
+            self.assertEqual(guard.unseen({"machine:x": ["a"]}), {"machine:x": ["a"]})
+        self.assertEqual(slurp(target), "keep")
+        self.assertIn("state not written", self.log())
+
+    def test_keys_with_nothing_to_say_are_not_stored(self):
+        self.assertIsNone(self.start())
+        with open(os.path.join(self.tmp, "state", "dotclaude", "excluded-check.json")) as f:
+            self.assertEqual(json.load(f), {})
+
+    def test_a_fifo_where_the_state_goes_never_hangs_it(self):
+        self.env["PATH"] = f"{self.wbin}:/usr/bin"
+        d = self.mkdir("state", "dotclaude")
+        os.mkfifo(os.path.join(d, "excluded-check.json"))
+        os.mkfifo(os.path.join(d, "excluded-check.json.lock"))
+        self.assertIsNotNone(self.start())
+
+    def test_racing_starts_show_a_finding_once(self):
+        self.env["PATH"] = f"{self.wbin}:/usr/bin"
+        event = json.dumps({"session_id": "s1", "hook_event_name": "SessionStart",
+                            "cwd": self.proj})
+        procs = [subprocess.Popen(["bash", SESSION_HOOK], stdin=subprocess.PIPE,
+                                  stdout=subprocess.PIPE, text=True, env=self.env, cwd=self.proj)
+                 for _ in range(4)]
+        outs = [p.communicate(event, timeout=30)[0] for p in procs]
+        self.assertEqual(sum(bool(o.strip()) for o in outs), 1, outs)
+
+    def test_a_stuck_state_lock_still_shows(self):
+        import fcntl
+        self.env["PATH"] = f"{self.wbin}:/usr/bin"
+        lock = os.path.join(self.mkdir("state", "dotclaude"), "excluded-check.json.lock")
+        with open(lock, "a") as f:
+            fcntl.flock(f, fcntl.LOCK_EX)
+            self.assertIsNotNone(self.start())
+        self.assertIn("lock busy", self.log())
+
+    def test_a_fifo_interpreter_never_hangs_it(self):
+        # Judging on past the writable dir reaches the file it holds; a FIFO must not block.
+        fifo = os.path.join(self.mkdir("wfifo"), "interp")
+        os.mkfifo(fifo)
+        self.write(os.path.join(self.wbin, "git"), f"#!{fifo}\n", 0o755)
+        self.env["PATH"] = f"{self.wbin}:/usr/bin"
+        msg = self.start()["systemMessage"]
+        for d in (self.wbin, os.path.dirname(fifo)):
+            self.assertIn(f"Edit(/{d}/**)", msg)
+
+    def test_a_refusal_with_no_rule_is_shown_by_its_reason(self):
+        self.env["PATH"] = f":{self.bin}:/usr/bin"
+        self.assertIn("empty entry", self.start()["systemMessage"])
+
+    def test_the_payload_cwd_stands_in_for_a_missing_project_dir(self):
+        self.git("config", "core.hooksPath", ".githooks", cwd=self.proj)
+        del self.env["CLAUDE_PROJECT_DIR"]
+        event = {"session_id": "s1", "hook_event_name": "SessionStart", "cwd": self.proj}
+        p = subprocess.run(["bash", SESSION_HOOK], input=json.dumps(event), capture_output=True,
+                           text=True, env=self.env, timeout=20, cwd=self.tmp)
+        self.assertIn(os.path.join(self.proj, ".githooks"), json.loads(p.stdout)["systemMessage"])
+
+    def test_it_fails_open(self):
+        self.env["PATH"] = f"{self.wbin}:/usr/bin"
+        self.assertIsNone(self.start(raw="{not json"))
+        d = self.mkdir("broken")
+        shutil.copy(SESSION_HOOK, os.path.join(d, "excluded-check.sh"))
+        self.write(os.path.join(d, "excluded_guard.py"), "def (:\n")
+        self.assertIsNone(self.start(hook=os.path.join(d, "excluded-check.sh")))
+        # State it can't read or write: it still shows, every time, rather than hide a finding.
+        self.mkdir("state", "dotclaude", "excluded-check.json")
+        self.assertIsNotNone(self.start())
+        self.assertIsNotNone(self.start())
+        self.assertIn("excluded-check", self.log())
 
 
 class FailsClosed(Guard):

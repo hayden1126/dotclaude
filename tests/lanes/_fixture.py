@@ -52,6 +52,9 @@ class LanesRepo(unittest.TestCase):
                         GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@example.com",
                         GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@example.com",
                         GIT_CONFIG_NOSYSTEM="1",
+                        # The excluded-command guard `new` and `done` load reads managed
+                        # settings from here, never the machine's /etc/claude-code.
+                        EXCLUDED_GUARD_MANAGED_DIR=os.path.join(self.tmp, "managed"),
                         # The suite may itself run in the Bash sandbox, whose pid 1 the CLI
                         # would read as sandboxed; its processes share one namespace, so `done`'s
                         # process check still sees them. A test hook, not a user setting.

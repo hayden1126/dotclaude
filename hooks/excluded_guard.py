@@ -49,6 +49,8 @@ Fails closed for candidates: any error while matching makes the call a candidate
 while checking one refuses it. A non-candidate exits silently. An unreadable payload raises, so
 the shim's head-word fallback decides. Denies go to $XDG_STATE_HOME/dotclaude/excluded-guard.log.
 """
+import contextlib
+import fcntl
 import glob
 import hashlib
 import json
@@ -272,6 +274,18 @@ class Machine:
                      + [self.resolved(os.path.abspath(d)) for d in sandbox_only]
                      + [os.path.join(self.home, ".claude")])
         self.gitconfig = os.path.join(self.home, ".gitconfig")
+        # exposed() and chain() by path: every head walks the same PATH entries, and an lstat
+        # on a /mnt/c entry (WSL's 9p) costs about a millisecond. Valid while deny stands.
+        self.memo = {}
+
+    def protect(self, d):
+        """Judge on as if `d` were protected: all_refusals puts a refusal's fix in place. More
+        protection can only clear a verdict, so the clean ones stand and every verdict that
+        found something exposed is judged again: the memo then holds what a fresh Machine with
+        this deny list would find."""
+        self.deny.append(d)
+        self.memo = {k: v for k, v in self.memo.items()
+                     if v is None or (isinstance(v, tuple) and v[0] == "ok")}
 
     def resolved(self, p):
         """Realpath, but a symlink itself stays itself (it can be replaced by its dir's owner)."""
@@ -322,6 +336,11 @@ class Machine:
     def exposed(self, path):
         """The first writable thing along `path` (a symlinked ancestor, then the path), or None."""
         p = os.path.abspath(os.path.join(self.cwd, path))
+        if ("exposed", p) not in self.memo:
+            self.memo["exposed", p] = self._exposed(p)
+        return self.memo["exposed", p]
+
+    def _exposed(self, p):
         parts = p.strip("/").split("/")
         for i in range(1, len(parts)):
             a = "/" + "/".join(parts[:i])
@@ -333,20 +352,31 @@ class Machine:
         """Follow `path`'s symlink chain, raising `refuse(bad)` for the first hop, or dir of a
         hop, that is exposed. Returns the final target. Rules 1 and 2 both judge files this way."""
         p = os.path.abspath(os.path.join(self.cwd, path))
+        if ("chain", p) not in self.memo:
+            self.memo["chain", p] = self._chain(p)
+        kind, at = self.memo["chain", p]
+        if kind == "bad":
+            raise refuse(at)
+        if kind == "loop":
+            raise Refusal(rule, at, f"{path} has a symlink loop at {at}; could not verify it.")
+        return at
+
+    def _chain(self, p):
+        """("ok", final target), ("bad", the exposed path) or ("loop", where it gave up)."""
         for _ in range(40):
             if self.always_protected(p):
-                return p
+                return "ok", p
             # A file or symlink is replaced by whoever writes its dir; a real dir stands on its
             # own, as a PATH entry does.
             real_dir = os.path.isdir(p) and not os.path.islink(p)
             for x in (p,) if real_dir else (p, os.path.dirname(p)):
                 bad = self.exposed(x)
                 if bad:
-                    raise refuse(bad)
+                    return "bad", bad
             if not os.path.islink(p):
-                return p
+                return "ok", p
             p = os.path.normpath(os.path.join(os.path.dirname(p), os.readlink(p)))
-        raise Refusal(rule, p, f"{path} has a symlink loop at {p}; could not verify it.")
+        return "loop", p
 
 
 # --- Rule 1: git config ------------------------------------------------------------------------
@@ -571,7 +601,11 @@ def check_file(m, path, path_var, label, depth):
                       "interpreters; could not verify it.")
     p = m.chain(path, "rule2", lambda bad: path_refusal(label, bad, m))
     try:
-        with open(p, "rb") as f:
+        # Never waiting on a FIFO: judging on past a refusal reaches files in writable dirs.
+        fd = os.open(p, os.O_RDONLY | os.O_NONBLOCK)
+        with os.fdopen(fd, "rb") as f:
+            if not stat.S_ISREG(os.fstat(f.fileno()).st_mode):
+                return  # no regular file: it can't run as a script
             line = f.readline(512)
     except OSError:
         return  # unreadable: it can't run as a script
@@ -629,6 +663,104 @@ def judge(heads, cwd, env, settings):
         check_rule3(head, cwd, project)
 
 
+# --- Every refusal ----------------------------------------------------------------------------------
+
+def all_refusals(check, m, entries=None):
+    """Every refusal `check(m)` gives in turn, so one run lists every rule: after each, judge on
+    as if its fix were in place (its dir added to m.deny, or its empty or relative entry dropped
+    from `entries`, the PATH list `check` reads) until the check passes or a refusal can't be
+    cleared. Returns (refusals, the error that stopped it or None)."""
+    found = []
+    while True:
+        try:
+            check(m)
+            return found, None
+        except Refusal as r:
+            found.append(r)
+            bad = "" if r.path == "(empty)" else r.path
+            if r.fix_dir and r.fix_dir not in m.deny:
+                m.protect(r.fix_dir)
+            elif entries is not None and bad in entries and not os.path.isabs(bad):
+                entries.remove(bad)
+            else:
+                return found, None
+        except Exception as e:
+            return found, e
+
+
+def project_refusals(env, cwd, project=None):
+    """What rule 1 refuses for an excluded call from `cwd` in a session rooted at `project` (by
+    default `cwd` itself: a lane's own session), every one: (refusals, error or None)."""
+    project = project or cwd
+    env = dict(env, CLAUDE_PROJECT_DIR=project)
+    settings, _ = load_settings(env)
+    return all_refusals(lambda m: check_rule1(m, env, cwd, project),
+                        Machine(env, settings, cwd))
+
+
+def path_refusals(m, heads, path_var):
+    """What rule 2 refuses for each head on the full PATH, as the hook runs it, every one:
+    (refusals, errors). One Machine for all heads, so a dir is listed once."""
+    found, errors, entries = [], [], path_var.split(":")
+    for head in heads:
+        refusals, error = all_refusals(lambda m, head=head: check_rule2(m, head, ":".join(entries)),
+                                       m, entries)
+        # One that can't be cleared stops every head at the same place: list it once.
+        found += [r for r in refusals if (r.rule, r.path) not in {(f.rule, f.path) for f in found}]
+        if error:
+            errors.append(error)
+    return found, errors
+
+
+def excluded_heads(settings):
+    return sorted({first_word(normalize(p)) for p in settings["excludedCommands"]} - {""})
+
+
+# An Edit rule's path, read looser than EDIT_RULE: its glob tail is cut back to a whole dir,
+# since a rule over a removed dir names nothing whatever its form.
+EDIT_ANY = re.compile(r"Edit\((//|~/)([^)]*)\)")
+
+
+def rules_naming(path, env):
+    """(settings file, rule) for each Edit deny rule inside `path` in the machine overlay
+    (~/.claude/settings.machine.json, which dotclaude's setup.sh merges into settings.json),
+    the user's settings.json and the managed files, in that order. `lane done` prints them for
+    a closed lane's worktree: the guard reads no glob, so a lane's dir gets a rule of its own
+    (a relative core.hooksPath), and closing the lane leaves that rule naming nothing. A file
+    that can't be read is skipped."""
+    home = env.get("HOME") or os.path.expanduser("~")
+    managed = env.get(MANAGED_ENV) or MANAGED_DIR
+    files = [os.path.join(home, ".claude", "settings.machine.json"),
+             os.path.join(home, ".claude", "settings.json"),
+             os.path.join(managed, "managed-settings.json")]
+    files += sorted(glob.glob(os.path.join(managed, "managed-settings.d", "*.json")))
+    targets = {os.path.abspath(path), os.path.realpath(path)}
+    out = []
+    for f in files:
+        try:
+            with open(f) as fh:
+                text = fh.read()
+            data = json.loads(text) if text.strip() else {}
+        except (OSError, ValueError):
+            continue
+        perms = data.get("permissions") if isinstance(data, dict) else None
+        deny = perms.get("deny") if isinstance(perms, dict) else None
+        for rule in deny if isinstance(deny, list) else []:
+            m = EDIT_ANY.fullmatch(rule) if isinstance(rule, str) else None
+            if not m:
+                continue
+            # The literal dirs before the first glob. A glob mid-name (`lanes/x*/**`) widens to
+            # its parent dir, which covers sibling lanes too, so such a rule never reads as inside.
+            rest = m.group(2)
+            g = re.search(r"[*?\[]", rest)
+            literal = rest[:rest.rfind("/", 0, g.start()) + 1] if g else rest
+            d = os.path.normpath(("/" if m.group(1) == "//" else home.rstrip("/") + "/")
+                                 + literal)
+            if any(under(p, t) for p in (d, os.path.realpath(d)) for t in targets):
+                out.append((f, rule))
+    return out
+
+
 # --- Scan ----------------------------------------------------------------------------------------
 
 SCAN_DEPTH = 4
@@ -667,7 +799,7 @@ def scan(roots, env):
     [(where, Refusal)], [(where, error)] for what it couldn't check, and the settings errors."""
     env = {k: v for k, v in env.items() if k != "CLAUDE_PROJECT_DIR"}
     settings, errors = load_settings(env)
-    heads = sorted({first_word(normalize(p)) for p in settings["excludedCommands"]} - {""})
+    heads = excluded_heads(settings)
     found, unchecked = [], []
     cwd = env.get("HOME") or os.getcwd()
     m = Machine(env, settings, cwd)
@@ -682,34 +814,17 @@ def scan(roots, env):
             except Exception as e:
                 unchecked.append((p or "(empty PATH entry)", e))
     # The full PATH, as the hook runs it, catches an interpreter one entry's head resolves
-    # through another. It stops at its first refusal, so judge on as if that refusal's rule were
-    # in place (or its empty or relative entry dropped) until it passes or can't be cleared.
-    fixed, entries = Machine(env, settings, cwd), path_var.split(":")
-    for head in heads:
-        while True:
-            try:
-                check_rule2(fixed, head, ":".join(entries))
-                break
-            except Refusal as r:
-                found.append(("PATH", r))
-                bad = "" if r.path == "(empty)" else r.path
-                if r.fix_dir and r.fix_dir not in fixed.deny:
-                    fixed.deny.append(r.fix_dir)
-                elif bad in entries and not os.path.isabs(bad):
-                    entries.remove(bad)
-                else:
-                    break
-            except Exception as e:
-                unchecked.append(("PATH", e))
-                break
+    # through another.
+    refusals, path_errors = path_refusals(Machine(env, settings, cwd), heads, path_var)
+    found += [("PATH", r) for r in refusals]
+    unchecked += [("PATH", e) for e in path_errors]
     for root in roots:
         for repo in repos_under(root):
-            try:
-                check_rule1(Machine(env, settings, repo), env, repo, repo)
-            except Refusal as r:
-                found.append((repo, r))
-            except Exception as e:
-                unchecked.append((repo, e))
+            refusals, error = all_refusals(lambda m, repo=repo: check_rule1(m, env, repo, repo),
+                                           Machine(env, settings, repo))
+            found += [(repo, r) for r in refusals]
+            if error:
+                unchecked.append((repo, error))
     return found, unchecked, errors
 
 
@@ -824,6 +939,177 @@ def run_scan(roots):
     return 1 if first or unchecked or errors else 0
 
 
+# --- SessionStart check (hooks/excluded-check.sh) ----------------------------------------------
+
+SESSION_STATE = "excluded-check.json"
+MACHINE_KEY = "machine"
+MACHINE_KEYS = 8  # PATH keys kept: a PATH a tab started with, or that PATH and a project
+
+
+def finding(r):
+    return f"{r.path}: add {r.fix}" if r.fix else r.reason
+
+
+def session_findings(env, project):
+    """{key: [line]}: what the live guard would refuse an excluded call from the project's root
+    (rule 3 aside: only a call's cwd decides it). PATH judged with the machine-wide settings
+    alone is what every session shares: keyed MACHINE_KEY plus the PATH's hash, it shows once
+    across projects and lanes, and a tab with another PATH gets its own key. What the project's
+    own settings add to that (heads, write roots) and its git config are keyed by the project's
+    path: its repo names its own includes and hooks dir, and each worktree has its own."""
+    shared_env = {k: v for k, v in env.items() if k != "CLAUDE_PROJECT_DIR"}
+    env = dict(env, CLAUDE_PROJECT_DIR=project)
+    path_var = env.get("PATH", "")
+    shared, unread = load_settings(shared_env)
+    settings, _ = load_settings(env)
+
+    def path_lines(s):
+        refusals, errors = path_refusals(Machine(env, s, project), excluded_heads(s), path_var)
+        return [finding(r) for r in refusals] + [
+            f"PATH: could not check ({type(e).__name__}: {e})" for e in errors]
+
+    # An unread project file only widens what the guard judges. An unread user or managed file
+    # also takes its deny rules with it, so the guard may refuse what they would clear.
+    machine = [f"settings not read: {e}: the guard misses its rules and patterns" for e in unread]
+    machine += path_lines(shared)
+    key = f"{MACHINE_KEY}:{hashlib.sha256(path_var.encode()).hexdigest()[:16]}"
+    out = {key: machine}
+    if any(settings[k] != shared[k] for k in ("excludedCommands", "allowWrite")):
+        # PATH too decides these, so they go under this PATH's key for this project.
+        out[f"{key}:{project}"] = [line for line in path_lines(settings) if line not in machine]
+    refusals, error = all_refusals(lambda m: check_rule1(m, env, project, project),
+                                   Machine(env, settings, project))
+    mine = [finding(r) for r in refusals]
+    if error:
+        mine.append(f"its git config: could not check ({type(error).__name__}: {error})")
+    out[project] = mine
+    return out
+
+
+def unseen(findings):
+    """The findings whose key changed since the last start that showed them, and store the new
+    ones. A key going to none is dropped, never shown. State that can't be read counts as none
+    seen and one that can't be written is logged: a finding then shows at every start rather
+    than never."""
+    d = os.path.join(os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state"),
+                     "dotclaude")
+    path = os.path.join(d, SESSION_STATE)
+    # Starts that race (a tmux restore resumes every tab) take turns, so one shows a finding.
+    with state_lock(path + ".lock"):
+        try:
+            with regular(path, os.O_RDONLY) as f:
+                seen = json.load(f)
+            if not isinstance(seen, dict):
+                seen = {}
+        except FileNotFoundError:
+            seen = {}
+        except (OSError, ValueError) as e:
+            log(f"excluded-check state not read ({type(e).__name__}: {e})")
+            seen = {}
+        out = {}
+        for key, lines in findings.items():
+            digest = hashlib.sha256(json.dumps(sorted(lines)).encode()).hexdigest()
+            if lines and seen.get(key) != digest:
+                out[key] = lines
+            seen.pop(key, None)
+            if lines:  # none and no key read the same, and an empty key would take a slot
+                seen[key] = digest  # last, so the newest keys stay
+        # A closed lane's key goes with its dir and a PATH key past the newest few with its
+        # tab, so the file stays small.
+        paths = [k for k in seen if k.startswith(MACHINE_KEY + ":")]
+        keep = set(paths[-MACHINE_KEYS:])
+        seen = {k: v for k, v in seen.items()
+                if k in keep or (k not in paths and os.path.isdir(k))}
+        tmp = f"{path}.{os.getpid()}.tmp"
+        try:
+            os.makedirs(d, exist_ok=True)
+            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
+            with os.fdopen(fd, "w") as f:
+                json.dump(seen, f)
+            os.replace(tmp, path)
+        except OSError as e:
+            log(f"excluded-check state not written ({type(e).__name__}: {e})")
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+    return out
+
+
+def regular(path, flags):
+    """`path` opened never waiting (a FIFO there) and never through a link, as a regular file,
+    or OSError. The state dir is any session's to write."""
+    fd = os.open(path, flags | os.O_NONBLOCK | os.O_NOFOLLOW, 0o644)
+    if not stat.S_ISREG(os.fstat(fd).st_mode):
+        os.close(fd)
+        raise OSError(f"{path} is no regular file")
+    os.set_blocking(fd, True)
+    return os.fdopen(fd, "r" if flags == os.O_RDONLY else "a")
+
+
+@contextlib.contextmanager
+def state_lock(path, wait=2.0):
+    """An flock on `path` for up to `wait` seconds; past that, or when it can't be taken at all,
+    on without it (a finding then may show twice, never not at all)."""
+    f = None
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        f = regular(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND)
+        end = time.monotonic() + wait
+        while True:
+            try:
+                fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() > end:
+                    log("excluded-check state lock busy: going on without it")
+                    break
+                time.sleep(0.05)
+    except OSError as e:
+        log(f"excluded-check state lock not taken ({type(e).__name__}: {e})")
+    try:
+        yield
+    finally:
+        if f:
+            f.close()
+
+
+def session_message(shown):
+    lines = [line for key in sorted(shown, key=lambda k: not k.startswith(MACHINE_KEY + ":"))
+             for line in shown[key]]
+    screen = ("excluded-guard: an excluded command (git push, gh, lane and the rest of "
+              "sandbox.excludedCommands) from this session would be refused:\n"
+              + "\n".join(f"  {line}" for line in lines)
+              + "\nLook at each dir first: `python3 -I ~/.claude/hooks/excluded_guard.py --scan`"
+              " (sandbox off) lists what it holds. Then add the rules to permissions.deny in "
+              "~/.claude/settings.machine.json and rerun ./setup.sh.")
+    context = ("excluded-guard will refuse excluded commands (git push, gh, lane and the rest) "
+               "from this session until the user fixes: " + "; ".join(lines) + ". The fix is "
+               "theirs (deny rules in their own settings): name it to them, and don't work "
+               "around a refusal.")
+    return {"systemMessage": screen,
+            "hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": context}}
+
+
+def run_session():
+    """The SessionStart check. Fails open: any error is logged and prints nothing. Skips a
+    subagent's start and an unattended one: no one would see it, and it would use up the once."""
+    try:
+        event = json.load(sys.stdin)
+        if not isinstance(event, dict) or event.get("agent_id") or \
+                os.environ.get("CLAUDE_CODE_SESSION_ATTENDED") == "0":
+            return 0
+        project = os.environ.get("CLAUDE_PROJECT_DIR") or event.get("cwd")
+        if not isinstance(project, str) or not os.path.isdir(project):
+            return 0
+        shown = unseen(session_findings(os.environ, os.path.realpath(project)))
+        if shown:
+            print(json.dumps(session_message(shown)))
+    except Exception as e:
+        log(f"excluded-check error {type(e).__name__}: {e}")
+    return 0
+
+
 def deny(reason):
     print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse",
                                              "permissionDecision": "deny",
@@ -866,4 +1152,6 @@ def main():
 if __name__ == "__main__":
     if sys.argv[1:2] == ["--scan"]:
         sys.exit(run_scan(sys.argv[2:]))
+    if sys.argv[1:2] == ["--session"]:
+        sys.exit(run_session())
     main()

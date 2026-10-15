@@ -206,6 +206,20 @@ class Baseline(unittest.TestCase):
         self.assertLessEqual(h["timeout"], 10)  # the first reply waits for SessionStart hooks
         self.assertTrue(os.access(os.path.join(REPO, "hooks", "delegation-due.sh"), os.X_OK))
 
+    def test_the_excluded_check_runs_at_session_start_and_fails_open(self):
+        # The guard's own check of the project and PATH, once per change in its findings. Not
+        # on compact: nothing it reads changes there. The first reply waits for it.
+        (entry,) = [e for e in S["hooks"]["SessionStart"]
+                    if any("excluded-check.sh" in h["command"] for h in e["hooks"])]
+        self.assertEqual(entry["matcher"], "startup|resume|clear")
+        (h,) = entry["hooks"]
+        self.assertEqual(h["command"], 'bash "$HOME/.claude/hooks/excluded-check.sh"')
+        self.assertLessEqual(h["timeout"], 5)
+        self.assertEqual([c for entries in S["hooks"].values() for e in entries
+                          for c in (x["command"] for x in e["hooks"]) if "excluded-check" in c],
+                         [h["command"]])
+        self.assertTrue(os.access(os.path.join(REPO, "hooks", "excluded-check.sh"), os.X_OK))
+
     def test_the_watch_guard_is_wired_on_stop_and_fails_open(self):
         (entry,) = [e for e in S["hooks"]["Stop"]
                     if any("watch-guard.sh" in h["command"] for h in e["hooks"])]
