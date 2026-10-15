@@ -79,13 +79,13 @@ stored here).
     #103 (2026-10-14), `guard-b` #104 (2026-10-14), `pass-timeout` #105 (2026-10-14: a dropped
     pass now tells the session itself), `handoff-flag` #106 (2026-10-14: `handoff?` judges a
     merged lane by its record against `mergedAt`, so a lane that handed off after its merge
-    closes without an ask).
+    closes without an ask), `identity-branch` #107 (2026-10-14: the SessionStart identity line
+    names the branch the worktree has checked out).
     `gh pr view <n>` and the closed records under `.git/lanes/_closed/` hold the detail; tab-bar's
     design is in [[dotclaude-tab-bar]]. Tabs opened before #102's install (2026-10-14) keep the
     old startup hooks (no PermissionRequest or SubagentStop wiring) until they restart.
-  - `identity-branch` and `install-hint` (opened 2026-10-14, Hayden's pick): the identity
-    line's checked-out branch, and a stale rerun hint that put the install back into a merged
-    lane. Their briefs are in their records.
+  - `install-hint` (opened 2026-10-14, Hayden's pick): a stale rerun hint that put the install
+    back into a merged lane. Its brief is in its record.
   - `chrome-bg` (opened 2026-10-14, Hayden's ask and picks): `bin/chrome-bg` opens a Windows
     Chrome for test probes behind every window without taking focus, for `puppeteer.connect`,
     and one dotclaude hook blanks `DISPLAY` and `WAYLAND_DISPLAY` for Bash in opted-in repos.
@@ -95,8 +95,8 @@ stored here).
     machine-wide); the lane lists them for removal once its hook is live. At merge the lead also
     updates Vulcan's memory `no-chrome-windows-in-front.md` (it says `chrome-bg` isn't installed
     yet).
-  - **Merge order: `identity-branch`, `install-hint` and `chrome-bg`, whichever is ready
-    first** (none overlap). The lead installs only the next to merge.
+  - **Merge order: `install-hint` and `chrome-bg`, whichever is ready first** (they don't
+    overlap). The lead installs only the next to merge.
   - The parked json-depth sweep (21 files, among them the delegation enforcement scripts) is on
     `fix/json-depth-sweep`, a local branch never pushed: keep it while the sweep is in the
     backlog. Shipping it first needs a check of how each enforcement site fails
@@ -215,11 +215,11 @@ stored here).
 
 ## Notes for next session
 - **Next (lead, main checkout):** watch for "merged #N" from a lane, then run the post-merge
-  chain (`skills/lanes/SKILL.md`, The lead, step 7). Live lanes: `identity-branch`,
-  `install-hint`, `chrome-bg`. Check `lane ls` first: a merge Hayden made on GitHub and
-  mentioned to no session sends no message (#102 showed merged there before its lane's message
-  came). All 3 slots are full (Hayden picked a cap of 4 for chrome-bg, unneeded once #106 freed
-  a slot); the two-sessions flag and `lane open --model` are the next picks. No chat
+  chain (`skills/lanes/SKILL.md`, The lead, step 7). Live lanes: `install-hint`, `chrome-bg`.
+  Check `lane ls` first: a merge Hayden made on GitHub and mentioned to no session sends no
+  message (#102 showed merged there before its lane's message came). One slot of 3 is free
+  (Hayden picked a cap of 4 for chrome-bg, unneeded once #106 freed a slot); the two-sessions
+  flag and `lane open --model` are the next picks, Hayden's call. No chat
   about a lane's own asks; speak on cross-lane orders, decisions raised with the lead, failed
   checks and lead-only actions.
   - The lead's commits of 2026-10-14 (second session): `git log --first-parent 696cc44..HEAD`
