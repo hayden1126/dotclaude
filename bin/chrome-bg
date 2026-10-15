@@ -63,6 +63,7 @@ LOG_DAYS = 7
 PORT_WAIT_S = 20
 STOP_WAIT_S = 25         # stop waits this long for a SIGTERMed owner to clean up
 PROCS_POLL_S = 5         # a `start` holder checks this often whether Chrome is still there
+PROCS_FAILURES = 3       # ... and gives up on the run after this many failed checks in a row
 SCREEN_LIMIT = 32767     # Windows window coordinates are 16-bit
 BOM = chr(0xFEFF)        # PowerShell may open its stdout with one
 SANDBOX_MSG = ("chrome-bg: run it with the sandbox off (powershell.exe and Chrome's port are "
@@ -103,6 +104,45 @@ class Stopped(BaseException):
     def __init__(self, signum):
         super().__init__(signum)
         self.signum = signum
+
+
+# ---- stop signals ---------------------------------------------------------------------------
+# main() blocks SIGINT, SIGTERM and SIGHUP for the whole command, so no handler ever runs at an
+# arbitrary point (between an exception and its cleanup, say). They wait, pending, for an explicit
+# poll at a wait point (take_signal), which raises Stopped. Cleanup never polls, so nothing cuts
+# it short. Every child unblocks them before exec (unblock_held); the `start` holder, a fork,
+# keeps them blocked and polls like the rest. When main() ends, the cleanup done, any still
+# pending take their default effect and end the process with 128+n.
+
+HELD = {signal.SIGINT, signal.SIGTERM, signal.SIGHUP}
+POLL_S = 0.1
+CLEANING = [0]  # depth of cleanups under way: no poll raises in one
+
+
+def take_signal(timeout=0.0):
+    """Wait up to timeout s for a held stop signal and raise Stopped for it. In a cleanup it
+    only waits."""
+    if CLEANING[0]:
+        if timeout:
+            time.sleep(timeout)
+        return
+    info = signal.sigtimedwait(HELD, timeout)
+    if info is not None:
+        raise Stopped(info.si_signo)
+
+
+@contextlib.contextmanager
+def cleaning():
+    CLEANING[0] += 1
+    try:
+        yield
+    finally:
+        CLEANING[0] -= 1
+
+
+def unblock_held():
+    """preexec_fn for every child process: none inherits the blocked stop signals."""
+    signal.pthread_sigmask(signal.SIG_UNBLOCK, HELD)
 
 
 # Copied from skills/lanes/scripts/lanelib.py sandboxed(), so this script stands alone.
@@ -155,7 +195,8 @@ def ps1():
 
 def wslpath(flag, path):
     try:
-        r = subprocess.run([WSLPATH, flag, path], capture_output=True, text=True, timeout=10)
+        r = subprocess.run([WSLPATH, flag, path], capture_output=True, text=True, timeout=10,
+                           preexec_fn=unblock_held)
     except (OSError, subprocess.TimeoutExpired) as e:
         raise Fail(f"chrome-bg: {WSLPATH} {flag} failed: {e}")
     if r.returncode or not r.stdout.strip():
@@ -410,6 +451,7 @@ class WebSocket:
         self.sock = socket.create_connection((host, port), timeout=timeout)
         self.buf = b""
         self.closed = False
+        self.partial = None  # (opcode, fragments) of a message still arriving
         key = base64.b64encode(os.urandom(16)).decode()
         # No Origin header: Chrome refuses a DevTools WebSocket whose Origin it doesn't allow.
         self.sock.sendall((f"GET {path} HTTP/1.1\r\nHost: {host}:{port}\r\n"
@@ -455,10 +497,11 @@ class WebSocket:
 
     def recv(self, timeout=None):
         """The next whole message (str for text, bytes for binary). Pings are answered and
-        control frames between fragments handled; a close frame raises ConnectionClosed."""
+        control frames between fragments handled; a close frame raises ConnectionClosed. A
+        timeout keeps the fragments read so far for the next call."""
         deadline = None if timeout is None else time.monotonic() + timeout
-        op, parts = None, []
         while True:
+            op, parts = self.partial or (None, [])
             frame = decode_frame(self.buf)
             if frame is None:
                 self._fill(deadline)
@@ -488,9 +531,12 @@ class WebSocket:
                 parts.append(payload)
             else:
                 raise ConnectionError(f"WebSocket: unknown opcode {opcode}")
-            if fin:
-                data = b"".join(parts)
-                return data.decode() if op == OP_TEXT else data
+            if not fin:
+                self.partial = (op, parts)
+                continue
+            self.partial = None
+            data = b"".join(parts)
+            return data.decode() if op == OP_TEXT else data
 
     def close(self):
         if not self.closed:
@@ -528,10 +574,14 @@ class CDP:
         self.ws.send(json.dumps(msg))
         deadline = time.monotonic() + timeout
         while mid not in self.replies:
+            left = deadline - time.monotonic()
+            if left <= 0:
+                raise Fail(f"chrome-bg: no CDP reply to {method} in {timeout}s")
+            take_signal()
             try:
-                m = json.loads(self.ws.recv(max(0.0, deadline - time.monotonic()) or 0.001))
+                m = json.loads(self.ws.recv(min(left, 2 * POLL_S)))
             except TimeoutError:
-                raise Fail(f"chrome-bg: no CDP reply to {method} in {timeout}s") from None
+                continue
             if not isinstance(m, dict):
                 continue
             if "id" in m:
@@ -612,25 +662,60 @@ def write_record(rec):
         raise
 
 
-def load_record(rid):
-    """The record named <rid>.json, or None unless it is an object whose id is that rid.
+def is_num(v):
+    return isinstance(v, (int, float)) and not isinstance(v, bool)
+
+
+def record_problem(rec, rid):
+    """Why rec is not a well-formed record named <rid>.json, or None. The schema is checked once,
+    here, so nothing later trips on a missing or retyped field."""
+    if not isinstance(rec, dict):
+        return "not a JSON object"
+    if rec.get("id") != rid:
+        return f"its id {rec.get('id')!r} is not its name"
+    owner = rec.get("owner")
+    if not isinstance(owner, dict):
+        return "it has no owner object"
+    pid = owner.get("pid")
+    if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
+        return f"owner.pid {pid!r} is not a pid"
+    if "start" not in owner or not (owner["start"] is None or isinstance(owner["start"], str)):
+        return f"owner.start {owner.get('start')!r} is not a start time"
+    if "expires" not in rec or not (rec["expires"] is None or is_num(rec["expires"])):
+        return f"expires {rec.get('expires')!r} is not a time"
+    if not is_num(rec.get("created")):
+        return f"created {rec.get('created')!r} is not a time"
+    for key in ("cwd", "kind"):
+        if not isinstance(rec.get(key), str):
+            return f"{key} {rec.get(key)!r} is not a string"
+    return None
+
+
+def read_record(rid):
+    """(record, None) for a well-formed <rid>.json; else (None, why), why None if it is absent.
     Records are untrusted input: nothing in one is signalled or connected to unverified."""
     if not ID_RE.fullmatch(str(rid)):
-        return None
+        return None, "its name is not an 8-hex run id"
     try:
         with open(record_path(rid)) as f:
             rec = json.load(f)
-    except (OSError, ValueError):
-        return None
-    return rec if isinstance(rec, dict) and rec.get("id") == rid else None
+    except FileNotFoundError:
+        return None, None
+    except (OSError, ValueError) as e:
+        return None, f"unreadable: {e}"
+    why = record_problem(rec, rid)
+    return (None, why) if why else (rec, None)
+
+
+def load_record(rid):
+    return read_record(rid)[0]
 
 
 REPORTED = set()
 
 
 def read_records():
-    """Every valid record. A *.json here that is not one (its name or id is not a run id, or
-    the two differ) is ignored and reported once."""
+    """Every well-formed record. A *.json here that is not one is ignored and reported once."""
     try:
         names = sorted(os.listdir(state_dir()))
     except OSError:
@@ -640,13 +725,13 @@ def read_records():
         if not name.endswith(".json") or name.startswith("."):
             continue
         m = re.fullmatch(r"([0-9a-f]{8})\.json", name)
-        rec = load_record(m.group(1)) if m else None
+        rec, why = read_record(m.group(1)) if m else (None, "its name is not an 8-hex run id")
         if rec:
             recs.append(rec)
-        elif name not in REPORTED and os.path.exists(os.path.join(state_dir(), name)):
+        elif why and name not in REPORTED:
             REPORTED.add(name)
             print(f"chrome-bg: ignoring {os.path.join(state_dir(), name)}: not a run record "
-                  "(its name and its id must be the same 8-hex run id)", file=sys.stderr)
+                  f"({why})", file=sys.stderr)
     return recs
 
 
@@ -686,12 +771,19 @@ def owner_dead(rec):
     return owner.get("start") is not None and st[1] != owner.get("start")
 
 
+def cmdline(pid):
+    try:
+        with open(f"/proc/{int(pid)}/cmdline", "rb") as f:
+            return [a.decode(errors="replace") for a in f.read().split(b"\0") if a]
+    except (OSError, ValueError):
+        return []
+
+
 def runs_this_script(pid):
     """Whether /proc/<pid>/cmdline is a python running this chrome-bg: argv[0] is a python and
     some later argument resolves (against that process's cwd) to this script's real path."""
+    argv = cmdline(pid)
     try:
-        with open(f"/proc/{int(pid)}/cmdline", "rb") as f:
-            argv = [a.decode(errors="replace") for a in f.read().split(b"\0") if a]
         cwd = os.readlink(f"/proc/{int(pid)}/cwd")
     except (OSError, ValueError):
         return False
@@ -700,16 +792,49 @@ def runs_this_script(pid):
     return any(os.path.realpath(os.path.join(cwd, a)) == SELF for a in argv[1:])
 
 
+def child_pids(pid):
+    """pid's child processes: /proc/<pid>/task/*/children, or else a scan of /proc/*/stat."""
+    kids = set()
+    try:
+        for tid in os.listdir(f"/proc/{pid}/task"):
+            with open(f"/proc/{pid}/task/{tid}/children") as f:
+                kids.update(int(k) for k in f.read().split())
+        return kids
+    except (OSError, ValueError):
+        kids.clear()
+    for name in os.listdir("/proc"):
+        if name.isdigit():
+            try:
+                with open(f"/proc/{name}/stat") as f:
+                    data = f.read()
+                if int(data[data.rindex(")") + 2:].split()[1]) == pid:
+                    kids.add(int(name))
+            except (OSError, ValueError):
+                continue
+    return kids
+
+
+def holds_run(pid, rid):
+    """Whether pid has a child whose argv holds `-Id <rid>`: this run's supervisor (its WSL
+    relay stays the owner's child, start_new_session or not)."""
+    for kid in child_pids(pid):
+        argv = cmdline(kid)
+        if any(a == "-Id" and b == rid for a, b in zip(argv, argv[1:])):
+            return True
+    return False
+
+
 def owner_proven(rec):
-    """The owner is alive, is the very process that wrote the record (same start time) and is
-    a chrome-bg: only then may it be signalled. A forged record proves none of this."""
+    """The owner is alive, is the very process that wrote the record (same start time), is a
+    chrome-bg, and holds this run's supervisor: only then may it be signalled. A forged record
+    naming some other run's owner proves the first three, not the last."""
     owner = rec.get("owner") if isinstance(rec.get("owner"), dict) else {}
     pid = owner.get("pid")
     if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 1:
         return False
     st = proc_stat(pid)
     return (bool(st) and st[0] not in ("Z", "X") and owner.get("start") == st[1]
-            and runs_this_script(pid))
+            and runs_this_script(pid) and holds_run(pid, rec["id"]))
 
 
 # ---- the supervisor -------------------------------------------------------------------------
@@ -730,9 +855,11 @@ class Supervisor:
         # stayed; with SIGPIPE ignored the relay survived and EOF cleanup ran.
         # start_new_session=True: a terminal's ctrl-c or a process-group kill never reaches the
         # supervisor; only its stdin's EOF ends it.
+        # preexec_fn: it starts with the stop signals unblocked, like every child.
         with open(self.err_path, "ab") as err:
             self.p = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                      stderr=err, restore_signals=False, start_new_session=True)
+                                      stderr=err, restore_signals=False, start_new_session=True,
+                                      preexec_fn=unblock_held)
 
     def err_tail(self):
         try:
@@ -755,7 +882,8 @@ class Supervisor:
                 left = deadline - time.monotonic()
                 if left <= 0:
                     raise Fail(f"chrome-bg: no reply from the supervisor to {op} in {timeout:g}s")
-                if select.select([self.p.stdout], [], [], left)[0]:
+                take_signal()
+                if select.select([self.p.stdout], [], [], min(left, POLL_S))[0]:
                     chunk = os.read(self.p.stdout.fileno(), 65536)
                     if not chunk:
                         raise Fail(f"chrome-bg: the supervisor exited during {op}{self.err_tail()}")
@@ -790,7 +918,7 @@ def one_shot(*args, timeout=60):
     """chrome-bg.ps1 -Kill -Id <id> or -Scan: one JSON line, then it exits."""
     try:
         r = subprocess.run(ps_argv(*args), stdin=subprocess.DEVNULL, capture_output=True,
-                           timeout=timeout)
+                           timeout=timeout, preexec_fn=unblock_held)
     except subprocess.TimeoutExpired:
         raise Fail(f"chrome-bg: chrome-bg.ps1 {' '.join(args)} timed out after {timeout}s") from None
     lines = [ln.strip().lstrip(BOM)
@@ -842,7 +970,7 @@ def wait_port(path, sup, timeout=PORT_WAIT_S):
             return got
         if sup.p.poll() is not None:
             raise Fail(f"chrome-bg: the supervisor exited before Chrome wrote its port{sup.err_tail()}")
-        time.sleep(0.1)
+        take_signal(POLL_S)
     raise Fail(f"chrome-bg: Chrome wrote no DevToolsActivePort in {timeout}s")
 
 
@@ -920,20 +1048,6 @@ def start_run(rid, url, size, kind, ttl=None, cwd=None, marks=False, on_hello=No
         raise
 
 
-HELD = {signal.SIGINT, signal.SIGTERM, signal.SIGHUP}
-
-
-@contextlib.contextmanager
-def signals_held():
-    """Hold SIGINT, SIGTERM and SIGHUP through a cleanup, so a second ctrl-c can't cut it
-    short; whatever arrived is delivered when it ends."""
-    old = signal.pthread_sigmask(signal.SIG_BLOCK, HELD)
-    try:
-        yield
-    finally:
-        signal.pthread_sigmask(signal.SIG_SETMASK, old)
-
-
 def run_devtools(rid, root):
     """(port, browser ws path) from the run's own DevToolsActivePort under the -Scan root, or
     None. Never from its record: records are untrusted."""
@@ -965,12 +1079,12 @@ def close_browser(port, path):
 
 
 def finish(run):
-    """End a run this process owns, with signals held: Browser.close, then close the
-    supervisor's stdin (it kills what is left by run dir, deletes the dir and exits 0). A
-    supervisor that had already exited, exits non-zero (3: its cleanup was incomplete; any other
-    code: it crashed) or hangs is not trusted, so a one-shot -Kill ends the run by its dir. The
-    record goes once the run is known to be over; otherwise it stays for gc."""
-    with signals_held():
+    """End a run this process owns, a cleanup no stop signal interrupts: Browser.close, then
+    close the supervisor's stdin (it kills what is left by run dir, deletes the dir and exits 0).
+    A supervisor that had already exited, exits non-zero (3: its cleanup was incomplete; any
+    other code: it crashed) or hangs is not trusted, so a one-shot -Kill ends the run by its dir.
+    The record goes once the run is known to be over; otherwise it stays for gc."""
+    with cleaning():
         rid = run.rec["id"]
         if run.cdp is not None:
             with contextlib.suppress(Fail, OSError, ValueError, http.client.HTTPException):
@@ -995,7 +1109,7 @@ def finish(run):
                       file=sys.stderr)
                 try:
                     kill_run(rid)
-                except Fail as e:
+                except (Fail, OSError) as e:
                     print(f"{e}; the record stays for chrome-bg stop --gc", file=sys.stderr)
                     over = False
         if over:
@@ -1003,9 +1117,9 @@ def finish(run):
 
 
 def stop_record(rec, root):
-    """Stop a run some other process owns. A live owner that is provably this chrome-bg gets
-    Browser.close, then SIGTERM, and cleans up itself. Otherwise (the owner is dead, is not
-    provably a chrome-bg, or outlasts STOP_WAIT_S) a one-shot -Kill ends the run by its dir.
+    """Stop a run some other process owns. A live owner that is provably this run's chrome-bg
+    gets Browser.close, then SIGTERM, and cleans up itself. Otherwise (the owner is dead, is not
+    provably this run's, or outlasts STOP_WAIT_S) a one-shot -Kill ends the run by its dir.
     Returns how it ended."""
     rid = rec["id"]
     how = "killed by its dir"
@@ -1019,13 +1133,14 @@ def stop_record(rec, root):
                 os.kill(pid, signal.SIGTERM)
             deadline = time.monotonic() + STOP_WAIT_S
             while not owner_dead(rec) and time.monotonic() < deadline:
-                time.sleep(0.2)
+                take_signal(2 * POLL_S)
             if owner_dead(rec) and load_record(rid) is None:
                 return "stopped by its owner"
             if not owner_dead(rec):
                 how += f" (its owner {pid} was still there after {STOP_WAIT_S:g}s)"
         else:
-            how += f" (its owner {pid} is not provably this chrome-bg, so it was not signalled)"
+            how += (f" (its owner {pid} is not provably this run's chrome-bg, so it was not "
+                    "signalled)")
     kill_run(rid)
     remove_record(rid)
     return how
@@ -1037,9 +1152,10 @@ def resolve(target):
     serves 9222, maybe with Hayden's real profile."""
     t = target.strip()
     if ID_RE.fullmatch(t):
-        rec = load_record(t)
+        rec, why = read_record(t)
         if rec is None:
-            raise Fail(f"chrome-bg: no run {t} (chrome-bg ls lists the runs)")
+            raise Fail(f"chrome-bg: no run {t}: " + (f"its record is malformed ({why})" if why
+                                                     else "chrome-bg ls lists the runs"))
         return rec
     try:
         u = urlparse(t)
@@ -1084,48 +1200,44 @@ def cmd_run(args):
     if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", args.env):
         raise Fail(f"chrome-bg: --env wants a variable name, not {args.env!r}")
     gc_first()
-    rid = new_id()
-    state = {"child": None, "stopping": False}
-
-    def on_signal(signum, frame):
-        child = state["child"]
-        if child is not None:
-            # A terminal's ctrl-c goes to its whole foreground process group, CMD included, so
-            # forwarding it then would deliver it twice.
-            if signum == signal.SIGINT and in_tty_foreground():
-                return
-            if child.poll() is None:
-                with contextlib.suppress(OSError):
-                    os.kill(child.pid, signum)
-        elif not state["stopping"]:
-            raise Stopped(signum)
-
-    old = {s: signal.signal(s, on_signal) for s in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)}
     run = None
     try:
-        run = start_run(rid, args.url, args.size, "run")
+        # A stop signal before CMD exists raises Stopped from a wait inside start_run, which
+        # ends what it began; main() turns it into 128+n.
+        run = start_run(new_id(), args.url, args.size, "run")
         try:
-            state["child"] = subprocess.Popen(cmd, env=dict(os.environ, **{args.env: run.url}))
+            child = subprocess.Popen(cmd, env=dict(os.environ, **{args.env: run.url}),
+                                     preexec_fn=unblock_held)
         except OSError as e:
             print(f"chrome-bg: can't run {cmd[0]}: {e}", file=sys.stderr)
             return 127
-        rc = state["child"].wait()
-        return 128 - rc if rc < 0 else rc
-    except Stopped as e:
-        return 128 + e.signum
+        return wait_forwarding(child)
     finally:
-        state["stopping"] = True
         if run is not None:
             finish(run)
-        for s, h in old.items():
-            signal.signal(s, h)
+
+
+def wait_forwarding(child):
+    """Wait for CMD, passing it the stop signals that reach run: SIGTERM and SIGHUP always,
+    SIGINT only when no terminal sent it to CMD already (a terminal's ctrl-c goes to its whole
+    foreground process group, CMD included). CMD's exit code, or 128+n for a signal."""
+    while True:
+        rc = child.poll()
+        if rc is not None:
+            return 128 - rc if rc < 0 else rc
+        info = signal.sigtimedwait(HELD, POLL_S)
+        if info is None or (info.si_signo == signal.SIGINT and in_tty_foreground()):
+            continue
+        with contextlib.suppress(OSError):
+            os.kill(child.pid, info.si_signo)
 
 
 def holder(rid, args, ttl, cwd, ready):
     """The detached owner of a `start` run: holds the supervisor until stop (SIGTERM), the TTL,
     Chrome's exit (a fixture's own browser.close(): `procs` every PROCS_POLL_S comes back empty)
     or the supervisor's exit, then ends the run. Reports ready or failed on the `ready` pipe.
-    It keeps the cwd it was started in, so a relative argv still proves it is chrome-bg."""
+    It keeps the cwd it was started in, so a relative argv still proves it is chrome-bg. Forked
+    from main(), it keeps the stop signals blocked and polls for them like any other wait."""
     fd = os.open(holder_log(rid), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
     null = os.open(os.devnull, os.O_RDONLY)
     os.dup2(null, 0)
@@ -1133,12 +1245,6 @@ def holder(rid, args, ttl, cwd, ready):
     os.dup2(fd, 2)
     os.close(null)
     os.close(fd)
-
-    def on_signal(signum, frame):
-        raise Stopped(signum)
-
-    for s in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
-        signal.signal(s, on_signal)
 
     def tell(obj):
         nonlocal ready
@@ -1157,17 +1263,27 @@ def holder(rid, args, ttl, cwd, ready):
         tell({"ok": True, "id": rid, "url": run.url, "port": run.rec["port"],
               "pid": run.rec["pid"]})
         say(f"ready at {run.url}")
-        why, next_poll = "TTL reached", time.monotonic() + PROCS_POLL_S
+        why, next_poll, failed = "TTL reached", time.monotonic() + PROCS_POLL_S, 0
         while time.time() < run.rec["expires"]:
             if run.sup.p.poll() is not None:
                 why = "the supervisor exited"  # finish() then kills the run by its dir
                 break
             if time.monotonic() >= next_poll:
-                if not parse_procs(run.sup.call("procs")):
-                    why = "Chrome is gone"
-                    break
                 next_poll = time.monotonic() + PROCS_POLL_S
-            time.sleep(min(0.5, PROCS_POLL_S, max(0.05, run.rec["expires"] - time.time())))
+                try:
+                    procs = parse_procs(run.sup.call("procs"))
+                except Fail as e:
+                    failed += 1
+                    say(f"procs failed ({failed} in a row): {e}")
+                    if failed >= PROCS_FAILURES:
+                        why = f"procs failed {failed} times in a row"
+                        break
+                else:
+                    failed = 0
+                    if not procs:  # only an ok:true empty list means Chrome is gone
+                        why = "Chrome is gone"
+                        break
+            take_signal(min(0.5, PROCS_POLL_S, max(0.05, run.rec["expires"] - time.time())))
         say(why)
     except Stopped as e:
         say(f"signal {e.signum}")
@@ -1181,8 +1297,6 @@ def holder(rid, args, ttl, cwd, ready):
         tell({"ok": False, "error": f"chrome-bg: the holder crashed: {e!r} (see {holder_log(rid)})"})
         code = 1
     finally:
-        for s in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
-            signal.signal(s, signal.SIG_IGN)
         if run is not None:
             finish(run)
             say("stopped")
@@ -1190,11 +1304,15 @@ def holder(rid, args, ttl, cwd, ready):
 
 
 def read_pipe(fd, timeout):
+    """Read fd to EOF, for up to timeout s: (data, whether EOF came)."""
     data, deadline = b"", time.monotonic() + timeout
     while True:
         left = deadline - time.monotonic()
-        if left <= 0 or not select.select([fd], [], [], left)[0]:
+        if left <= 0:
             return data, False
+        take_signal()
+        if not select.select([fd], [], [], min(left, POLL_S))[0]:
+            continue
         chunk = os.read(fd, 65536)
         if not chunk:
             return data, True
@@ -1221,29 +1339,20 @@ def cmd_start(args):
             os._exit(code)
     os.close(w)
     os.waitpid(pid, 0)
-
-    def on_signal(signum, frame):
-        raise Stopped(signum)
-
-    old = {s: signal.signal(s, on_signal) for s in HELD}
     try:
         data, done = read_pipe(r, timeout=150)
     except Stopped as e:
-        # Interrupted while the holder starts: stop it. The intermediate child's setsid made its
-        # pid the holder's process group (the supervisor has a session of its own); the holder
-        # closes the pipe when it exits. Further signals are ignored, not held: a held one would
-        # raise again from the handler the moment it was released.
-        for s in HELD:
-            signal.signal(s, signal.SIG_IGN)
-        with contextlib.suppress(OSError):
-            os.killpg(pid, signal.SIGTERM)
-        read_pipe(r, timeout=STOP_WAIT_S)
+        # Interrupted while the holder starts: stop it, and wait (uninterrupted) for it to end.
+        # The intermediate child's setsid made its pid the holder's process group (the
+        # supervisor has a session of its own); the holder closes the pipe when it exits.
+        with cleaning():
+            with contextlib.suppress(OSError):
+                os.killpg(pid, signal.SIGTERM)
+            read_pipe(r, timeout=STOP_WAIT_S)
         print(f"chrome-bg: start interrupted by signal {e.signum}; run {rid} was stopped",
               file=sys.stderr)
         return 128 + e.signum
     finally:
-        for s, h in old.items():
-            signal.signal(s, h)
         os.close(r)
     try:
         res = json.loads(data)
@@ -1308,13 +1417,13 @@ def gc():
     # in the scan already has its record, if it has one.
     recs = read_records()
     for rec in recs:
-        why = "its owner is gone" if owner_dead(rec) else "its TTL ran out" if expired(rec) else None
-        if why:
-            try:
-                how = stop_record(rec, root)
-                done.append(f"stopped {rec['id']}: {why}; {how}")
-            except (Fail, OSError) as e:
-                done.append(f"could not stop {rec['id']} ({why}): {e}")
+        try:  # no one record may stop gc, whatever is wrong with it
+            why = ("its owner is gone" if owner_dead(rec) else "its TTL ran out" if expired(rec)
+                   else None)
+            if why:
+                done.append(f"stopped {rec['id']}: {why}; {stop_record(rec, root)}")
+        except Exception as e:
+            done.append(f"could not stop {rec['id']}: {e if isinstance(e, Fail) else repr(e)}")
     known = {r["id"] for r in recs}
     for rid, info in sorted(runs.items()):
         if rid in known:
@@ -1328,18 +1437,18 @@ def gc():
         try:
             kill_run(rid)
             done.append(f"killed {rid}: a run dir with no record, {fmt_age(info['age'])} old")
-        except Fail as e:
-            done.append(f"could not kill {rid}: {e}")
+        except Exception as e:
+            done.append(f"could not kill {rid}: {e if isinstance(e, Fail) else repr(e)}")
     prune_logs(logs, root)
     return done
 
 
 def gc_first():
-    """gc before a start or run; a failure there is reported, not fatal."""
+    """gc before a start, run or check; a failure there is reported, not fatal."""
     try:
         lines = gc()
-    except Fail as e:
-        lines = [f"skipped: {e}"]
+    except Exception as e:
+        lines = [f"skipped: {e if isinstance(e, Fail) else repr(e)}"]
     for line in lines:
         print(f"chrome-bg gc: {line}", file=sys.stderr)
 
@@ -1505,9 +1614,11 @@ def judge(lines, raf=None, hz=None, leftover=None):
         warns.append("WARN: the log has no FOREGROUND line before the first action; only "
                      "hello vouched for the start")
     # Only a foreground steal needs a real foreground to be judged: with a dead one, Windows may
-    # hand the foreground to Chrome. Time on top, a hidden or slow page and leftovers fail anyway.
+    # hand the foreground to Chrome. Time on top, a hidden or slow page and leftovers fail anyway,
+    # and a FAIL lists every failure, steals included.
     if fails:
         verdict = "FAIL"
+        fails = [*fg_fails, *fails]
     elif first_fg is not None and "tagged=1" not in first_fg and not fg_line_visible(first_fg):
         verdict = "INCONCLUSIVE"
         fails = ["the first foreground was not a visible window, so a steal could not be told "
@@ -1589,10 +1700,10 @@ def cmd_check(args):
             except (Fail, OSError) as e:
                 result = f"ERROR {e}"
             print(f"chrome-bg check: {name}: {json.dumps(result)[:120]}", file=sys.stderr)
-            time.sleep(SETTLE_S)
+            take_signal(SETTLE_S)  # a wait a stop signal ends: main() returns 128+n after finish
             sup.call("mark", text=f"end {name}")
             parse_place(sup.call("place", **place_args(run.hello, SIZE)))  # restart from the bottom
-            time.sleep(RESINK_S)
+            take_signal(RESINK_S)
         sup.call("mark", text="begin stop")
         with contextlib.suppress(Fail, OSError):
             cdp.send("Browser.close", timeout=10)
@@ -1600,8 +1711,8 @@ def cmd_check(args):
         run.cdp = None
         deadline = time.monotonic() + 15
         while parse_procs(sup.call("procs")) and time.monotonic() < deadline:
-            time.sleep(0.5)
-        time.sleep(AFTER_STOP_S)  # W saw a hidden #32770 dialog take the foreground 1.9 s after
+            take_signal(0.5)
+        take_signal(AFTER_STOP_S)  # W saw a hidden #32770 dialog take the foreground 1.9 s after
     finally:
         finish(run)
     try:
@@ -1680,16 +1791,24 @@ def main(argv=None):
     if sandboxed():
         print(SANDBOX_MSG, file=sys.stderr)
         return 2
+    mask = signal.pthread_sigmask(signal.SIG_BLOCK, HELD)  # see "stop signals" above
     try:
         return args.func(args)
+    except Stopped as e:
+        return 128 + e.signum
     except Fail as e:
         print(e, file=sys.stderr)
         return 1
     except OSError as e:
         print(f"chrome-bg: {e}", file=sys.stderr)
         return 1
-    except KeyboardInterrupt:
-        return 130
+    finally:
+        # Cleanup is done: a stop signal still pending now takes its default effect and ends
+        # the process with 128+n. Dispositions change only while the signals are blocked.
+        handlers = {s: signal.signal(s, signal.SIG_DFL) for s in HELD}
+        signal.pthread_sigmask(signal.SIG_SETMASK, mask)
+        for s, h in handlers.items():
+            signal.signal(s, h)
 
 
 if __name__ == "__main__":

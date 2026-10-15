@@ -122,8 +122,17 @@ class Framing(unittest.TestCase):
         self.addCleanup(b.close)
         b.settimeout(5)
         ws = cb.WebSocket.__new__(cb.WebSocket)
-        ws.sock, ws.buf, ws.closed = a, b"", False
+        ws.sock, ws.buf, ws.closed, ws.partial = a, b"", False, None
         return ws, b
+
+    def test_fragments_survive_a_timeout(self):
+        # CDP.send reads in short slices to poll for stop signals: a slice may end mid-message.
+        ws, peer = self.pair()
+        peer.sendall(self.server_frame(cb.OP_TEXT, b'{"id":1,', fin=False))
+        with self.assertRaises(TimeoutError):
+            ws.recv(timeout=0.2)
+        peer.sendall(self.server_frame(cb.OP_CONT, b'"result":{}}'))
+        self.assertEqual(ws.recv(timeout=5), '{"id":1,"result":{}}')
 
     def test_fragments_and_ping(self):
         ws, peer = self.pair()
@@ -335,6 +344,13 @@ class Judge(unittest.TestCase):
         for key in ("visible", "iconic", "cloaked"):
             flipped = dict(CONTRACT["fg"]["fg"], **{key: not CONTRACT["fg"]["fg"][key]})
             self.assertFalse(cb.fg_visible(cb.parse_fg(flipped, "fg.fg")), key)
+
+    def test_a_fail_lists_every_failure(self):
+        steal = f"t=72 FOREGROUND tagged=1 idle=8000 via=ev-foreground {WIN} vis=1 iconic=0 cloaked=0"
+        verdict, _, fails, _ = self.run_judge(with_lines("t=70 ", steal), raf="hidden 1")
+        self.assertEqual(verdict, "FAIL")
+        self.assertTrue(any("took the foreground during newPage-default" in f for f in fails), fails)
+        self.assertTrue(any("read 'hidden'" in f for f in fails), fails)
 
     def test_definite_failures_beat_an_invisible_first_foreground(self):
         dead = CLEAN[0].replace("vis=1", "vis=0")
@@ -644,7 +660,7 @@ def log(text):
 
 
 logf.write(C["log_fg"] + "\n")  # the real supervisor's first line: t=15 FOREGROUND ... via=start
-chrome = None
+chrome, procs_failures = None, 0
 for line in sys.stdin:
     msg = json.loads(line)
     op = msg.get("op")
@@ -685,6 +701,9 @@ for line in sys.stdin:
         out(C["place"])
         if env.get("FAKE_SUP_DIES_AFTER_PLACE"):
             os._exit(0)  # a crashed supervisor: no EOF cleanup, "Chrome" orphaned
+    elif op == "procs" and procs_failures < int(env.get("FAKE_PROCS_FAIL", "0")):
+        procs_failures += 1  # the op errs (the real error shape), the run goes on
+        out(dict(C["op_error"], error="procs: Get-CimInstance failed"))
     elif op == "procs":
         out(C["procs"] if chrome is not None and chrome.poll() is None else C["procs_empty"])
     elif op == "fg":
@@ -696,6 +715,7 @@ for line in sys.stdin:
         out(dict(C["op_error"], error="unknown op: %s" % op))
 
 note("eof-" + rid)
+time.sleep(float(env.get("FAKE_SLOW_EOF", "0")))
 code = int(env.get("FAKE_EOF_EXIT", "0"))  # 3: the real one's "cleanup incomplete"
 if code == 0:
     log("EOFKILL left=0")
@@ -716,9 +736,12 @@ srv = socket.socket()
 srv.bind(("127.0.0.1", 0))
 srv.listen(8)
 port = srv.getsockname()[1]
+note("chromepid-" + rid, str(os.getpid()))  # kept after exit, so a test can check it is gone
 
 
 def exit_chrome():
+    if env.get("FAKE_CHROME_IGNORE_CLOSE"):  # a Chrome that won't close: only -Kill or EOF end it
+        return
     rm(os.path.join(root, "alive-" + rid))
     rm(os.path.join(root, "chrome-%s.pid" % rid))
     os._exit(0)
@@ -853,8 +876,9 @@ while True:
 '''
 
 # Runs bin/chrome-bg as a module with its seams patched: argv = CLI ROOT ARGS... The supervisor
-# goes through /bin/sh first, which logs its ignored signals (SigIgn) to ROOT/sigign.log before
-# exec: a Python process ignores SIGPIPE whatever it inherited, so only a shell can tell.
+# goes through /bin/sh first, which logs the signals it inherited blocked (SigBlk) and ignored
+# (SigIgn) to ROOT/sigign.log before exec: a Python process ignores SIGPIPE whatever it
+# inherited, so only a shell can tell.
 DRIVER = r'''
 import importlib.machinery, importlib.util, os, sys
 cli, root = sys.argv[1], sys.argv[2]
@@ -864,7 +888,8 @@ mod = importlib.util.module_from_spec(spec)
 loader.exec_module(mod)
 fake = os.path.join(root, "fake_sup.py")
 mod.sandboxed = lambda proc="/proc": False
-mod.ps_argv = lambda *a: ["/bin/sh", "-c", 'echo "$$ $(grep "^SigIgn:" /proc/self/status)" >> "$0"; exec "$@"',
+mod.ps_argv = lambda *a: ["/bin/sh", "-c",
+                          'echo "$$ $(grep -E "^Sig(Ign|Blk):" /proc/self/status | tr -d "\t" | tr "\n" " ")" >> "$0"; exec "$@"',
                           os.path.join(root, "sigign.log"), sys.executable, "-I", fake, "--root", root, *a]
 
 
@@ -940,15 +965,18 @@ class Live(unittest.TestCase):
         self.addCleanup(end)
         return p
 
-    def owner(self, *, ignore_term=False, mine=True):
-        """A stand-in owner process: a python whose argv names bin/chrome-bg (so it passes
-        owner_proven) unless mine=False, which gives a plain `sleep`. Returns (Popen, start)."""
+    def owner(self, rid=None, *, ignore_term=False, mine=True):
+        """A stand-in owner process: a python whose argv names bin/chrome-bg, with a child whose
+        argv holds `-Id <rid>` standing for that run's supervisor (it exits with its parent), so
+        it passes owner_proven for rid. mine=False gives a plain `sleep`. (Popen, start time)."""
         if mine:
-            code = ("import signal, sys, time\n"
+            code = ("import signal, subprocess, sys, time\n"
                     + ("signal.signal(signal.SIGTERM, signal.SIG_IGN)\n" if ignore_term else "")
-                    + "open(sys.argv[1], 'w').close()\ntime.sleep(60)\n")
+                    + "subprocess.Popen([sys.executable, '-c', 'import os, time\\np = os.getppid()\\n"
+                    "while os.getppid() == p: time.sleep(0.1)', '-Id', sys.argv[3]])\n"
+                    "open(sys.argv[1], 'w').close()\ntime.sleep(60)\n")
             ready = os.path.join(self.tmp, f"owner-{time.monotonic_ns()}")
-            p = subprocess.Popen([sys.executable, "-c", code, ready, CLI])
+            p = subprocess.Popen([sys.executable, "-c", code, ready, CLI, rid])
             self.wait_for(lambda: os.path.exists(ready), what="the owner to start")
         else:
             p = subprocess.Popen(["sleep", "60"])
@@ -1209,7 +1237,7 @@ class Live(unittest.TestCase):
         self.assertIn("stopped aaaa0001: its owner is gone", r.stdout)
 
     def test_gc_stops_a_run_past_its_ttl(self):
-        owner, start = self.owner()
+        owner, start = self.owner("bbbb0001")
         self.put_record("bbbb0001", owner.pid, start, expires=time.time() - 1)
         r = self.cli("stop", "--gc")
         self.assertEqual(r.returncode, 0, r.stderr)
@@ -1222,14 +1250,140 @@ class Live(unittest.TestCase):
         self.put_record("bbbb0002", owner.pid, start)
         r = self.cli("stop", "bbbb0002")
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertIn("not provably this chrome-bg, so it was not signalled", r.stdout)
+        self.assertIn("not provably this run's chrome-bg, so it was not signalled", r.stdout)
         time.sleep(0.3)
         self.assertIsNone(owner.poll(), "no SIGTERM to a pid that is not chrome-bg")
         self.assertTrue(self.has("kill-bbbb0002"))
+
+    def test_forged_record_naming_another_runs_owner(self):
+        r = self.cli("start", "--json")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        a = json.loads(r.stdout)
+        [arec] = self.records()
+        # X names A's live holder (a chrome-bg, right start time) but A's supervisor is not X's.
+        self.put_record("cafe0001", arec["owner"]["pid"], arec["owner"]["start"],
+                        expires=time.time() - 1)
+        r = self.cli("stop", "--gc")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("not provably this run's chrome-bg, so it was not signalled", r.stdout)
+        self.assertTrue(self.has("kill-cafe0001"))
+        self.assertFalse(self.has("eof-" + a["id"]), "run A was not torn down")
+        self.assertTrue(cb.owner_proven(arec), "A's holder still runs")
+        self.assertEqual([x["id"] for x in self.records()], [a["id"]])
+        r = self.cli("stop", a["id"])
+        self.assertIn("stopped by its owner", r.stdout)
+
+    def put_raw(self, rid, rec):
+        os.makedirs(self.recdir, exist_ok=True)
+        with open(os.path.join(self.recdir, rid + ".json"), "w") as f:
+            json.dump(rec, f)
+
+    def test_malformed_records_cannot_stop_gc(self):
+        base = {"kind": "start", "cwd": "/x", "created": time.time() - 60,
+                "expires": time.time() - 1}
+        self.put_raw("dddd0101", dict(base, id="dddd0101"))                          # no owner
+        self.put_raw("dddd0102", dict(base, id="dddd0102", owner={"pid": "123", "start": "1"}))
+        self.put_raw("dddd0103", dict(base, id="dddd0103", owner=[]))
+        self.put_raw("dddd0104", dict(base, id="dddd0104", owner={"start": "1"}))   # no pid
+        r = self.cli("run", "--", sys.executable, "-c", "pass")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertNotIn("Traceback", r.stderr)
+        for rid in ("dddd0101", "dddd0102", "dddd0103", "dddd0104"):
+            self.assertIn(f"{rid}.json: not a run record", r.stderr)
+        self.assertEqual(self.cli("stop", "--gc").returncode, 0)
+        r = self.cli("stop", "dddd0101")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("its record is malformed (it has no owner object)", r.stderr)
+        self.assertNotIn("Traceback", r.stderr)
+
+    def test_children_start_with_the_stop_signals_unblocked(self):
+        out = os.path.join(self.tmp, "status")
+        code = "import sys; open(sys.argv[1], 'w').write(open('/proc/self/status').read())"
+        r = self.cli("run", "--", sys.executable, "-c", code, out)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        held = sum(1 << (s - 1) for s in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP))
+        with open(out) as f:
+            blk = int(re.search(r"SigBlk:\s*([0-9a-f]+)", f.read()).group(1), 16)
+        self.assertEqual(blk & held, 0, "CMD")
+        pid = self.notes("session-" + self.only_run_id())[0].split()[0]
+        [line] = [ln for ln in self.notes("sigign.log") if ln.split()[0] == pid]
+        self.assertEqual(int(re.search(r"SigBlk:([0-9a-f]+)", line).group(1), 16) & held, 0,
+                         "the supervisor")
+
+    def test_holder_rides_out_failed_procs_polls(self):
+        r = self.cli("start", "--json", env={"FAKE_PROCS_FAIL": "2"})
+        self.assertEqual(r.returncode, 0, r.stderr)
+        rid = json.loads(r.stdout)["id"]
+        log = os.path.join(self.recdir, rid + ".holder.log")
+
+        def failures():
+            with open(log) as f:
+                return f.read().count("procs failed")
+        self.wait_for(lambda: failures() == 2, what="2 failed polls")
+        time.sleep(0.6)  # more polls, now answered
+        [rec] = self.records()
+        self.assertTrue(cb.owner_proven(rec), "two failed polls don't end a live run")
+        self.assertFalse(self.has("eof-" + rid))
+        self.assertIn("stopped by its owner", self.cli("stop", rid).stdout)
+
+    def test_holder_ends_after_three_failed_polls(self):
+        r = self.cli("start", "--json", env={"FAKE_PROCS_FAIL": "99"})
+        self.assertEqual(r.returncode, 0, r.stderr)
+        rid = json.loads(r.stdout)["id"]
+        self.wait_for(lambda: self.has("eof-" + rid) and not self.records(), what="the end")
+        with open(os.path.join(self.recdir, rid + ".holder.log")) as f:
+            log = f.read()
+        self.assertEqual(log.count("procs failed ("), 3)
+        self.assertIn("procs failed 3 times in a row", log)
+
+    def test_check_stops_cleanly_on_sigterm_and_sighup(self):
+        for sig in (signal.SIGTERM, signal.SIGHUP):
+            with self.subTest(sig=sig.name):
+                for n in os.listdir(self.root):
+                    if n.startswith(("launch-", "eof-", "kill-")):
+                        os.remove(os.path.join(self.root, n))
+                p = self.popen("check")
+                self.wait_for(lambda: self.started("launch-"), what="Chrome's launch")
+                time.sleep(0.5)
+                p.send_signal(sig)
+                _, err = p.communicate(timeout=40)
+                self.assertEqual(p.returncode, 128 + sig, err)
+                [rid] = self.started("launch-")
+                self.assertTrue(self.has("eof-" + rid), "finish ran")
+                self.assertFalse(self.has("alive-" + rid))
+                self.assertEqual(self.records(), [])
+
+    def test_holder_cleanup_survives_more_signals(self):
+        # A stop signal while the holder starts, then another while it cleans up after it.
+        p = self.popen("start", env={"FAKE_SLOW_HELLO": "2"})
+        self.wait_for(lambda: self.started("hello-") and self.records(), what="the holder")
+        [rec] = self.records()
+        holder = rec["owner"]["pid"]
+        os.kill(holder, signal.SIGTERM)
+        time.sleep(0.3)
+        os.kill(holder, signal.SIGTERM)
+        _, err = p.communicate(timeout=40)
+        self.assertEqual(p.returncode, 1)
+        self.assertIn("start stopped by signal 15", err)
+        [rid] = self.started("hello-")
+        self.assertTrue(self.has("eof-" + rid))
+        self.assertEqual(self.records(), [])
+        # A second SIGTERM while the holder's finish waits on its supervisor.
+        r = self.cli("start", "--json", env={"FAKE_SLOW_EOF": "1.5"})
+        rid = json.loads(r.stdout)["id"]
+        [rec] = self.records()
+        stop = self.popen("stop", rid)
+        self.wait_for(lambda: self.has("eof-" + rid), what="the holder's finish")
+        os.kill(rec["owner"]["pid"], signal.SIGTERM)
+        out, err = stop.communicate(timeout=40)
+        self.assertEqual(stop.returncode, 0, err)
+        self.assertIn("stopped by its owner", out)
+        self.assertFalse(self.has("kill-" + rid), "the holder finished its own cleanup")
+        self.assertEqual(self.records(), [])
         self.assertEqual(self.records(), [])
 
     def test_stop_times_out_on_an_owner_that_stays(self):
-        owner, start = self.owner(ignore_term=True)
+        owner, start = self.owner("bbbb0003", ignore_term=True)
         self.put_record("bbbb0003", owner.pid, start)
         r = self.cli("stop", "bbbb0003", env={"DRIVER_STOP_WAIT": "1"})
         self.assertEqual(r.returncode, 0, r.stderr)
@@ -1257,7 +1411,7 @@ class Live(unittest.TestCase):
                 with c:
                     c.sendall(b"not http at all\r\n\r\n")
         threading.Thread(target=serve, daemon=True).start()
-        owner, start = self.owner()
+        owner, start = self.owner("bbbb0004")
         self.put_record("bbbb0004", owner.pid, start, expires=time.time() - 1)
         self.put_dir("bbbb0004", 600)
         with open(os.path.join(self.base, "bbbb0004", "profile", "DevToolsActivePort"), "w") as f:
@@ -1318,15 +1472,19 @@ class Live(unittest.TestCase):
                          ({"FAKE_EOF_EXIT": "3"}, "exited 3")):
             with self.subTest(why=why):
                 for n in os.listdir(self.root):
-                    if n.startswith(("launch-", "kill-", "eof-", "alive-")):
+                    if n.startswith(("launch-", "kill-", "eof-", "alive-", "chromepid-")):
                         os.remove(os.path.join(self.root, n))
+                # This "Chrome" ignores Browser.close: only the one-shot -Kill can end it.
                 r = self.cli("run", "--", sys.executable, "-c", "import time; time.sleep(0.3)",
-                             env=env)
+                             env={**env, "FAKE_CHROME_IGNORE_CLOSE": "1"})
                 self.assertEqual(r.returncode, 0, r.stderr)
                 rid = self.only_run_id()
                 self.assertIn(f"the supervisor of {rid} {why}; killing the run by its dir", r.stderr)
                 self.assertTrue(self.has("kill-" + rid))
-                self.assertFalse(self.has("alive-" + rid), "the orphaned Chrome is gone")
+                chrome = int(self.notes("chromepid-" + rid)[0])
+                st = cb.proc_stat(chrome)
+                self.assertTrue(st is None or st[0] == "Z", "-Kill reaped the orphaned Chrome")
+                self.assertFalse(self.has("alive-" + rid))
                 self.assertEqual(self.records(), [])
 
     def test_supervisor_ignores_sigpipe_in_a_session_of_its_own(self):
@@ -1335,7 +1493,7 @@ class Live(unittest.TestCase):
         pid, sid = map(int, self.notes("session-" + self.only_run_id())[0].split())
         self.assertEqual(pid, sid, "start_new_session: the supervisor leads its own session")
         [line] = [ln for ln in self.notes("sigign.log") if ln.split()[0] == str(pid)]
-        mask = int(line.split()[-1], 16)
+        mask = int(re.search(r"SigIgn:([0-9a-f]+)", line).group(1), 16)
         self.assertTrue(mask >> (signal.SIGPIPE - 1) & 1, "restore_signals=False: SIGPIPE ignored")
 
     def test_start_failing_in_the_holder(self):
@@ -1358,7 +1516,9 @@ class Live(unittest.TestCase):
                 time.sleep(0.3)
                 p.send_signal(signal.SIGTERM)  # held while cleanup runs, so it can't cut it short
                 _, err = p.communicate(timeout=40)
-                self.assertEqual(p.returncode, 128 + signal.SIGTERM, err)
+                # Exit 143, or (the second one still pending once cleanup is done) killed by
+                # SIGTERM, which a shell reports as 143 too.
+                self.assertIn(p.returncode, (128 + signal.SIGTERM, -signal.SIGTERM), err)
                 [rid] = self.started("hello-")
                 self.assertTrue(self.has("eof-" + rid), "the supervisor was ended")
                 self.assertFalse(self.started("launch-"), "Chrome never launched")
