@@ -28,7 +28,9 @@ OPS = {"hello", "launch", "place", "procs", "fg", "mark"}
 LOG_KINDS = [
     "VSCREEN", "FGLOCK", "MONITOR", "READY", "FOREGROUND", "TOP", "RANKS", "EV", "SINK-AT-CREATE",
     "KEEP-SINK", "PLACE", "LAUNCHED", "PROC", "PROCS", "MARK", "EOF", "EOFKILL", "EOFCLEAN", "EXIT",
+    "UNTAG",
 ]
+UNTAG = re.compile(r"\btagged\s*\.\s*(?:Remove|Clear)\s*\(|\btagged\s*=\s*new\b")
 METHOD = re.compile(
     r"(?m)^[ \t]*(?:(?:public|private|internal|static|readonly|unsafe)\s+)+[\w<>\[\], ]+?\s+"
     r"(\w+)\s*\([^;{)]*\)\s*\{")
@@ -304,6 +306,29 @@ def setwindowpos_problems(src):
     return problems
 
 
+def untag_problems(src):
+    """Run pids leave the set once refresh passes stop confirming them (Windows reuses pids), and
+    only the refresh thread removes them: the hook thread keeps a lock-plus-lookup."""
+    p = Parts(src)
+    if "Refresh" not in p.methods:
+        return ["no Refresh method"]
+    problems = []
+    refresh = p.body("Refresh")
+    m = re.search(r"new\s+Thread\s*\(\s*delegate\s*\(\s*\)\s*\{", refresh)
+    thread = refresh[m.end() - 1:close_of(refresh, m.end() - 1) + 1] if m else ""
+    if not re.search(r"\btagged\s*\.\s*Remove\s*\(", thread):
+        problems.append("the refresh thread never untags a pid")
+    for name in p.methods:
+        if name != "Refresh" and UNTAG.search(p.body(name)):
+            problems.append("%s removes run pids; only the refresh thread may" % name)
+    grace = re.search(r"\bconst\s+long\s+UntagMs\s*=\s*(\d+)", p.cs)
+    if not grace or not 1000 <= int(grace.group(1)) <= 5000:
+        problems.append("the untag grace must be 1-5 s, so a launch pid outlives a pass that missed it")
+    elif "UntagMs" not in thread:
+        problems.append("the refresh thread doesn't apply the untag grace")
+    return problems
+
+
 def log_kind_problems(src):
     p = Parts(src)
     return ["no log line of kind %s" % kind for kind in LOG_KINDS
@@ -342,6 +367,9 @@ class Rules(unittest.TestCase):
 
     def test_log_kinds_for_the_judge(self):
         self.assertEqual(log_kind_problems(self.src), [])
+
+    def test_only_the_refresh_thread_untags_pids(self):
+        self.assertEqual(untag_problems(self.src), [])
 
 
 def mutate(src, pattern, repl, flags=0):
@@ -440,6 +468,17 @@ class CatchesRegressions(unittest.TestCase):
 
     def test_activating_place(self):
         self.assertCaught(setwindowpos_problems, in_method(self.src, "Place", r"SWP_NOACTIVATE", "0"))
+
+    def test_pids_never_untagged(self):
+        bad = in_method(self.src, "Refresh", r"tagged\.Remove\(", "tagged.ContainsKey(")
+        self.assertCaught(untag_problems, bad)
+
+    def test_untag_on_the_hook_thread(self):
+        bad = in_method(self.src, "Check", r"\{", "{ lock (tagged) { tagged.Clear(); }")
+        self.assertCaught(untag_problems, bad)
+
+    def test_no_untag_grace(self):
+        self.assertCaught(untag_problems, mutate(self.src, r"(UntagMs\s*=\s*)\d+", r"\g<1>0"))
 
     def test_missing_log_kind(self):
         self.assertCaught(log_kind_problems, mutate(self.src, r"EOFCLEAN dirExists", "CLEANED dirExists"))

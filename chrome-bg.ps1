@@ -33,6 +33,9 @@
 # - No WMI or CIM in the WinEvent callback or anything it calls: the call pumps messages and
 #   re-enters the callback, which crashed the first prototype. Run pids come from the launch pid
 #   plus a refresh thread.
+# - Only the refresh thread untags a pid, once no pass has seen the tag in its command line for
+#   about 1.5 s (UNTAG). Windows reuses pids, and a stale one would make another program's window
+#   a run window: sunk by the keeper, its title logged, its foreground read as the run's.
 # - Each new run frame sinks to HWND_BOTTOM, unactivated, at EVENT_OBJECT_CREATE while it is still
 #   hidden. Off-screen bounds alone left a 7-9 ms flash on top of the screen.
 # - With -Keep, while no run window has the foreground, a run window seen above another on-screen
@@ -275,7 +278,10 @@ public static class ChromeBgSup {
   static readonly object gate = new object();
   static Stopwatch sw = Stopwatch.StartNew();
   static string tag; static StreamWriter file; static bool keeper;
-  static Dictionary<uint, bool> tagged = new Dictionary<uint, bool>();
+  // Run pids -> the ms each was last confirmed, by its launch (AddPid) or by a refresh pass.
+  static Dictionary<uint, long> tagged = new Dictionary<uint, long>();
+  // A pid no pass has confirmed for this long has left the run: Windows may give it to another program.
+  const long UntagMs = 1500;
   static WinEventProc keep; static volatile bool done; static Queue<string> cmds = new Queue<string>();
   static string lastFg = "", lastTop = "", lastRanks = "";
 
@@ -293,17 +299,29 @@ public static class ChromeBgSup {
   public static uint FgLock() { uint v = 0; SystemParametersInfo(0x2000, 0, ref v, 0); return v; }
   // A set lookup only: WMI on the hook thread pumps messages and re-enters the callback.
   public static bool IsTagged(uint pid) { lock (tagged) { return tagged.ContainsKey(pid); } }
-  public static void AddPid(uint pid) { lock (tagged) { tagged[pid] = true; } }
-  // Tags every chrome.exe holding the run's tag, twice a second, on its own MTA thread.
+  public static void AddPid(uint pid) { lock (tagged) { tagged[pid] = sw.ElapsedMilliseconds; } }
+  // Twice a second on its own MTA thread: confirms every chrome.exe holding the run's tag, then
+  // untags pids unconfirmed for UntagMs. A pass stamps with its start time, so a launch made while
+  // its query ran keeps the later AddPid stamp and can't be dropped by a query that missed it.
   static void Refresh() {
     var t = new Thread(delegate() {
       while (!done) {
         try {
+          long start = sw.ElapsedMilliseconds;
+          var live = new List<uint>();
           using (var s = new ManagementObjectSearcher("SELECT ProcessId, CommandLine FROM Win32_Process WHERE Name='chrome.exe'"))
             foreach (ManagementObject o in s.Get()) {
               var cl = o["CommandLine"] as string;
-              if (cl != null && cl.IndexOf(tag, StringComparison.OrdinalIgnoreCase) >= 0) AddPid((uint)o["ProcessId"]);
+              if (cl != null && cl.IndexOf(tag, StringComparison.OrdinalIgnoreCase) >= 0) live.Add((uint)o["ProcessId"]);
             }
+          var gone = new List<uint>();
+          lock (tagged) {
+            long prev;
+            foreach (var pid in live) if (!tagged.TryGetValue(pid, out prev) || prev < start) tagged[pid] = start;
+            foreach (var kv in tagged) if (kv.Value < start - UntagMs) gone.Add(kv.Key);
+            foreach (var pid in gone) tagged.Remove(pid);
+          }
+          foreach (var pid in gone) Log("UNTAG pid=" + pid);
         } catch { }
         Thread.Sleep(500);
       }
