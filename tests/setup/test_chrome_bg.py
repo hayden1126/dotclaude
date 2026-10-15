@@ -21,6 +21,7 @@ import sys
 import tempfile
 import time
 import unittest
+from urllib.parse import urlparse
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 CLI = os.path.join(REPO, "bin", "chrome-bg")
@@ -335,6 +336,19 @@ class Judge(unittest.TestCase):
             flipped = dict(CONTRACT["fg"]["fg"], **{key: not CONTRACT["fg"]["fg"][key]})
             self.assertFalse(cb.fg_visible(cb.parse_fg(flipped, "fg.fg")), key)
 
+    def test_definite_failures_beat_an_invisible_first_foreground(self):
+        dead = CLEAN[0].replace("vis=1", "vis=0")
+        steal = f"t=72 FOREGROUND tagged=1 idle=8000 via=ev-foreground {WIN} vis=1 iconic=0 cloaked=0"
+        top = f"t=71 TOP tagged=1 via=ev-REORDER {WIN} vis=1 iconic=0 cloaked=0"
+        stolen = [dead, *with_lines("t=70 ", steal)[1:]]
+        self.assertEqual(self.run_judge(stolen)[0], "INCONCLUSIVE", "a steal needs a real foreground")
+        for why, lines, kw in (("on top", [dead, *with_lines("t=70 ", top)[1:]], {}),
+                               ("hidden", [dead, *CLEAN[1:]], {"raf": "hidden 118"}),
+                               ("slow", [dead, *CLEAN[1:]], {"raf": "visible 60"}),
+                               ("leftover", [dead, *CLEAN[1:]], {"leftover": "1 chrome.exe"})):
+            with self.subTest(why=why):
+                self.assertEqual(self.run_judge(lines, **kw)[0], "FAIL")
+
     def test_unknown_kinds_are_skipped(self):
         lines = with_lines("t=70 ", "t=71 UNTAG pid=47300", "t=72 ERROR keeper: SetWindowPos failed 5",
                            "t=73 SOMETHING-NEW tagged=1 aboveOthers=1")
@@ -408,9 +422,8 @@ class Contract(unittest.TestCase):
         self.assertEqual((logs, root), ({"5a0ce001": 2.0}, WINROOT))
         self.assertEqual(cb.parse_scan(CONTRACT["scan_empty"]), ({}, {}, WINROOT))
         self.assertEqual(cb.parse_kill(CONTRACT["kill"]), {"killed": 0, "left": 0, "dirExists": False})
-        for bad in ({"left": 2}, {"dirExists": True}):
-            with self.assertRaises(cb.Fail):
-                cb.parse_kill(dict(CONTRACT["kill"], **bad))
+        # -Kill answers ok:false whenever a chrome.exe or the dir is left; that is a failure.
+        self.assertIn("Win32_Process Create failed", cb.failure(CONTRACT["launch_fail_wmi"]))
 
     def test_drift_fails_loudly(self):
         """A renamed or retyped field raises Fail naming the op and the field."""
@@ -526,24 +539,24 @@ class Trust(unittest.TestCase):
         self.assertIn("chrome-bg run", out.getvalue())
 
 
-# The Windows side, faked: chrome-bg.ps1's protocol (PLAN.md "Supervisor protocol") over stdin and
-# stdout, and on `launch` a CDP server (HTTP /json/version plus a WebSocket) with a
-# DevToolsActivePort in the run dir. --root stands for C:\. It notes what it saw in files under
-# --root: launch-<id> (Chrome's args), cdp-<id> (each CDP call), place-<id>, eof-<id>, kill-<id>.
-FAKE_SUP = r'''
-import base64, hashlib, json, os, re, shutil, socket, struct, sys, threading, time, uuid
+# The Windows side, faked. FAKE_SUP speaks chrome-bg.ps1's protocol (PLAN.md "Supervisor
+# protocol") over stdin and stdout and answers only with CONTRACT's replies. On `launch` it starts
+# FAKE_CHROME (HTTP /json/version plus a CDP WebSocket, and the DevToolsActivePort in the run dir)
+# in a process and session of its own, as WMI launches chrome.exe: killing the supervisor leaves
+# "Chrome" running. --root stands for C:\. They note what they saw in files under --root:
+# launch-<id> (Chrome's args), cdp-<id> (each CDP call), place-<id>, hello-<id>, eof-<id> (the
+# supervisor saw stdin EOF), kill-<id> (a one-shot -Kill ran), session-<id> (the supervisor's pid
+# and session id), alive-<id> (while "Chrome" runs) and chrome-<id>.pid.
+FAKE_COMMON = r'''
+import json, os, re, sys, time
 
 args = sys.argv[1:]
 root = args[args.index("--root") + 1]
 with open(os.path.join(root, "contract.json")) as f:
-    C = json.load(f)  # the real supervisor's replies: every reply below is one of them
+    C = json.load(f)  # the real supervisor's replies: every reply the fake sends is one of them
 TEMPLATE_ID = "5a0ce001"
 WIN = C["scan"]["root"] + "\\"
 env = os.environ
-
-
-def copy(x):
-    return json.loads(json.dumps(x))
 
 
 def unix(w):
@@ -551,14 +564,29 @@ def unix(w):
     return os.path.join(root, w[3:].replace("\\", "/"))
 
 
-def out(obj):
-    sys.stdout.write(json.dumps(obj) + "\n")
-    sys.stdout.flush()
-
-
 def note(name, text=""):
     with open(os.path.join(root, name), "a") as f:
         f.write(text + "\n")
+
+
+def rm(path):
+    try:
+        os.remove(path)
+    except FileNotFoundError:
+        pass
+'''
+
+FAKE_SUP = FAKE_COMMON + r'''
+import shutil, signal, subprocess
+
+
+def copy(x):
+    return json.loads(json.dumps(x))
+
+
+def out(obj):
+    sys.stdout.write(json.dumps(obj) + "\n")
+    sys.stdout.flush()
 
 
 base = unix(WIN)
@@ -583,14 +611,21 @@ if not re.fullmatch(r"[0-9a-f]{8}", rid):
     out({"ok": False, "error": "bad -Id"})
     sys.exit(1)
 run_dir = os.path.join(base, rid)
+alive = os.path.join(root, "alive-" + rid)
+pidfile = os.path.join(root, "chrome-%s.pid" % rid)
 
 
 def cleanup():
-    shutil.rmtree(run_dir, ignore_errors=True)
+    """Kill this run's "Chrome" (by its pid file, as the real one kills by run dir) and delete
+    the run dir."""
     try:
-        os.remove(os.path.join(root, "alive-" + rid))
-    except FileNotFoundError:
+        with open(pidfile) as f:
+            os.kill(int(f.read()), signal.SIGKILL)
+    except (OSError, ValueError):
         pass
+    rm(pidfile)
+    rm(alive)
+    shutil.rmtree(run_dir, ignore_errors=True)
 
 
 if "-Kill" in args:
@@ -599,6 +634,7 @@ if "-Kill" in args:
     out(C["kill"])
     sys.exit(0)
 
+note("session-" + rid, "%d %d" % (os.getpid(), os.getsid(0)))
 t0 = time.monotonic()
 logf = open(os.path.join(base, rid + ".log"), "a", buffering=1)
 
@@ -608,9 +644,84 @@ def log(text):
 
 
 logf.write(C["log_fg"] + "\n")  # the real supervisor's first line: t=15 FOREGROUND ... via=start
+chrome = None
+for line in sys.stdin:
+    msg = json.loads(line)
+    op = msg.get("op")
+    if op == "hello":
+        note("hello-" + rid)
+        time.sleep(float(env.get("FAKE_SLOW_HELLO", "0")))
+        os.makedirs(run_dir, exist_ok=True)
+        h = copy(C["hello"])
+        h["runDir"] = WIN + rid
+        vs = int(env.get("FAKE_VS_LEFT", "0"))
+        h["virtualScreen"].update(x=vs, w=1920 - vs)
+        h["monitors"][0]["dpi"] = int(env.get("FAKE_DPI", "96"))
+        h["fg"]["visible"] = not env.get("FAKE_FG_HIDDEN")
+        if env.get("FAKE_RENAME"):  # old=new: drift in a top-level key
+            old, new = env["FAKE_RENAME"].split("=")
+            h[new] = h.pop(old)
+        out(h)
+    elif op == "launch" and "\\chrome-bg\\%s\\" % rid not in msg["args"]:
+        out(json.loads(json.dumps(C["launch_fail_args"]).replace(TEMPLATE_ID, rid)))
+    elif op == "launch" and env.get("FAKE_LAUNCH_FAIL"):
+        out(C["launch_fail_wmi"])
+    elif op == "launch":
+        note("launch-" + rid, msg["args"])
+        profile = unix(re.search(r'"--user-data-dir=([^"]+)"', msg["args"]).group(1))
+        os.makedirs(profile, exist_ok=True)
+        open(alive, "w").close()
+        chrome = subprocess.Popen([sys.executable, "-I", os.path.join(root, "fake_chrome.py"),
+                                   "--root", root, "--rid", rid, "--profile", profile],
+                                  start_new_session=True)
+        with open(pidfile, "w") as f:
+            f.write(str(chrome.pid))
+        out(C["launch"])
+    elif op == "place":
+        note("place-" + rid, json.dumps(msg))
+        log("PLACE [True hwnd=9569902 pid=47292 cls=Chrome_WidgetWin_1 rect=10,10,1290,910 onscreen=1 vis=1]")
+        if env.get("FAKE_PLACE_RESIZE"):
+            open(os.path.join(root, "resize-" + rid), "w").close()
+        out(C["place"])
+        if env.get("FAKE_SUP_DIES_AFTER_PLACE"):
+            os._exit(0)  # a crashed supervisor: no EOF cleanup, "Chrome" orphaned
+    elif op == "procs":
+        out(C["procs"] if chrome is not None and chrome.poll() is None else C["procs_empty"])
+    elif op == "fg":
+        out(C["fg"])
+    elif op == "mark":
+        log("MARK " + msg["text"])
+        out(C["mark"])
+    else:
+        out(dict(C["op_error"], error="unknown op: %s" % op))
+
+note("eof-" + rid)
+code = int(env.get("FAKE_EOF_EXIT", "0"))  # 3: the real one's "cleanup incomplete"
+if code == 0:
+    log("EOFKILL left=0")
+    cleanup()
+    log("EOFCLEAN dirExists=False")
+log("EXIT")
+sys.exit(code)
+'''
+
+FAKE_CHROME = FAKE_COMMON + r'''
+import base64, hashlib, socket, struct, threading, uuid
+
+rid = args[args.index("--rid") + 1]
+profile = args[args.index("--profile") + 1]
 guid = str(uuid.uuid4())
 bounds = {}
-state = {"closed": False, "srv": None, "port": None}
+srv = socket.socket()
+srv.bind(("127.0.0.1", 0))
+srv.listen(8)
+port = srv.getsockname()[1]
+
+
+def exit_chrome():
+    rm(os.path.join(root, "alive-" + rid))
+    rm(os.path.join(root, "chrome-%s.pid" % rid))
+    os._exit(0)
 
 
 def frame(op, payload, fin=True):
@@ -659,6 +770,10 @@ def dispatch(msg):
                           windowState="normal")
         return {"result": {"targetId": "T%d" % msg["id"]}}
     if m == "Browser.getWindowForTarget":
+        flag = os.path.join(root, "resize-" + rid)  # the supervisor's place moved it across DPIs
+        if os.path.exists(flag):
+            rm(flag)
+            bounds.update(width=bounds["width"] * 2 // 3, height=bounds["height"] * 2 // 3)
         return {"result": {"windowId": 1, "bounds": dict(bounds)}}
     if m == "Browser.setWindowBounds":
         bounds.update(p["bounds"])
@@ -672,15 +787,6 @@ def dispatch(msg):
     if m == "Runtime.evaluate":
         return {"result": {"result": {"type": "string", "value": env.get("FAKE_RAF", "visible 118")}}}
     return {"error": {"code": -32601, "message": "'%s' wasn't found" % m}}
-
-
-def close_browser():
-    state["closed"] = True
-    try:
-        os.remove(os.path.join(root, "alive-" + rid))
-    except FileNotFoundError:
-        pass
-    state["srv"].close()
 
 
 def handle(c):
@@ -698,7 +804,7 @@ def handle(c):
         if path == "/json/version":
             ws = ("0" * 8 + guid[8:]) if env.get("FAKE_WRONG_PATH") else guid
             body = json.dumps({"Browser": "FakeChrome/1.0", "webSocketDebuggerUrl":
-                               "ws://127.0.0.1:%d/devtools/browser/%s" % (state["port"], ws)}).encode()
+                               "ws://127.0.0.1:%d/devtools/browser/%s" % (port, ws)}).encode()
             c.sendall(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: %d\r\n\r\n"
                       % len(body) + body)
             return
@@ -728,85 +834,27 @@ def handle(c):
             else:
                 c.sendall(frame(0x1, reply))
             if msg["method"] == "Browser.close":
-                close_browser()
-                return
+                exit_chrome()  # Chrome exits: its port closes
     except (EOFError, OSError):
         pass
     finally:
         c.close()
 
 
-def serve(srv):
-    while True:
-        try:
-            c, _ = srv.accept()
-        except OSError:
-            return
-        threading.Thread(target=handle, args=(c,), daemon=True).start()
-
-
-def write_port(profile):
-    path = os.path.join(profile, "DevToolsActivePort")
-    with open(path, "w") as f:  # one line first: the client must wait for both
-        f.write("%d\n" % state["port"])
-    time.sleep(0.3)
-    with open(path, "w") as f:
-        f.write("%d\n/devtools/browser/%s" % (state["port"], guid))
-
-
-for line in sys.stdin:
-    msg = json.loads(line)
-    op = msg.get("op")
-    if op == "hello":
-        os.makedirs(run_dir, exist_ok=True)
-        h = copy(C["hello"])
-        h["runDir"] = WIN + rid
-        vs = int(env.get("FAKE_VS_LEFT", "0"))
-        h["virtualScreen"].update(x=vs, w=1920 - vs)
-        h["monitors"][0]["dpi"] = int(env.get("FAKE_DPI", "96"))
-        h["fg"]["visible"] = not env.get("FAKE_FG_HIDDEN")
-        if env.get("FAKE_RENAME"):  # old=new: drift in a top-level key
-            old, new = env["FAKE_RENAME"].split("=")
-            h[new] = h.pop(old)
-        out(h)
-    elif op == "launch" and "\\chrome-bg\\%s\\" % rid not in msg["args"]:
-        out(json.loads(json.dumps(C["launch_fail_args"]).replace(TEMPLATE_ID, rid)))
-    elif op == "launch":
-        note("launch-" + rid, msg["args"])
-        srv = state["srv"] = socket.socket()
-        srv.bind(("127.0.0.1", 0))
-        srv.listen(8)
-        state["port"] = srv.getsockname()[1]
-        threading.Thread(target=serve, args=(srv,), daemon=True).start()
-        profile = unix(re.search(r'"--user-data-dir=([^"]+)"', msg["args"]).group(1))
-        os.makedirs(profile, exist_ok=True)
-        open(os.path.join(root, "alive-" + rid), "w").close()
-        threading.Thread(target=write_port, args=(profile,), daemon=True).start()
-        out(C["launch"])
-    elif op == "place":
-        note("place-" + rid, json.dumps(msg))
-        log("PLACE [True hwnd=9569902 pid=47292 cls=Chrome_WidgetWin_1 rect=10,10,1290,910 onscreen=1 vis=1]")
-        if env.get("FAKE_PLACE_RESIZE"):
-            bounds.update(width=bounds["width"] * 2 // 3, height=bounds["height"] * 2 // 3)
-        out(C["place"])
-    elif op == "procs":
-        out(C["procs_empty"] if state["closed"] else C["procs"])
-    elif op == "fg":
-        out(C["fg"])
-    elif op == "mark":
-        log("MARK " + msg["text"])
-        out(C["mark"])
-    else:
-        out(dict(C["op_error"], error="unknown op: %s" % op))
-
-log("EOFKILL left=0")
-cleanup()
-log("EOFCLEAN dirExists=False")
-log("EXIT")
-note("eof-" + rid)
+path = os.path.join(profile, "DevToolsActivePort")
+with open(path, "w") as f:  # one line first: the client must wait for both
+    f.write("%d\n" % port)
+time.sleep(0.3)
+with open(path, "w") as f:
+    f.write("%d\n/devtools/browser/%s" % (port, guid))
+while True:
+    c, _ = srv.accept()
+    threading.Thread(target=handle, args=(c,), daemon=True).start()
 '''
 
-# Runs bin/chrome-bg as a module with its seams patched: argv = CLI ROOT ARGS...
+# Runs bin/chrome-bg as a module with its seams patched: argv = CLI ROOT ARGS... The supervisor
+# goes through /bin/sh first, which logs its ignored signals (SigIgn) to ROOT/sigign.log before
+# exec: a Python process ignores SIGPIPE whatever it inherited, so only a shell can tell.
 DRIVER = r'''
 import importlib.machinery, importlib.util, os, sys
 cli, root = sys.argv[1], sys.argv[2]
@@ -816,7 +864,8 @@ mod = importlib.util.module_from_spec(spec)
 loader.exec_module(mod)
 fake = os.path.join(root, "fake_sup.py")
 mod.sandboxed = lambda proc="/proc": False
-mod.ps_argv = lambda *a: [sys.executable, "-I", fake, "--root", root, *a]
+mod.ps_argv = lambda *a: ["/bin/sh", "-c", 'echo "$$ $(grep "^SigIgn:" /proc/self/status)" >> "$0"; exec "$@"',
+                          os.path.join(root, "sigign.log"), sys.executable, "-I", fake, "--root", root, *a]
 
 
 def wslpath(flag, p):
@@ -826,8 +875,11 @@ def wslpath(flag, p):
 
 
 mod.wslpath = wslpath
+mod.PROCS_POLL_S = 0.2
 if os.environ.get("DRIVER_FAST"):
     mod.AFTER_STOP_S = mod.SETTLE_S = mod.RESINK_S = 0.05
+if os.environ.get("DRIVER_STOP_WAIT"):
+    mod.STOP_WAIT_S = float(os.environ["DRIVER_STOP_WAIT"])
 if "DRIVER_TTY_FG" in os.environ:  # stands in for /dev/tty's foreground process group check
     mod.in_tty_foreground = lambda: os.environ["DRIVER_TTY_FG"] == "1"
 sys.exit(mod.main(sys.argv[3:]))
@@ -845,6 +897,8 @@ class Live(unittest.TestCase):
         os.makedirs(self.base)
         with open(os.path.join(self.root, "fake_sup.py"), "w") as f:
             f.write(FAKE_SUP)
+        with open(os.path.join(self.root, "fake_chrome.py"), "w") as f:
+            f.write(FAKE_CHROME)
         with open(os.path.join(self.root, "contract.json"), "w") as f:
             json.dump(CONTRACT, f)
         self.driver = os.path.join(self.tmp, "driver.py")
@@ -857,26 +911,65 @@ class Live(unittest.TestCase):
         self.addCleanup(self.reap)
 
     def reap(self):
-        """SIGKILL any holder a failed test left behind (its fake supervisor then sees EOF)."""
-        for rec in self.records():
+        """SIGKILL what a failed test left behind: holders (their fake supervisors then see EOF)
+        and orphaned fake Chromes."""
+        home = os.path.join(self.tmp, "home", ".local", "state", "dotclaude", "chrome-bg")
+        for rec in self.records() + self.records(home):
             if cb.owner_proven(rec) and rec["owner"]["pid"] != os.getpid():
                 with contextlib.suppress(OSError):
                     os.kill(rec["owner"]["pid"], signal.SIGKILL)
+        for name in os.listdir(self.root):
+            if re.fullmatch(r"chrome-[0-9a-f]{8}\.pid", name):
+                with contextlib.suppress(OSError, ValueError), open(os.path.join(self.root, name)) as f:
+                    os.kill(int(f.read()), signal.SIGKILL)
 
-    def cli(self, *argv, env=None, timeout=60):
+    def cli(self, *argv, env=None, timeout=60, cwd=None):
         return subprocess.run([sys.executable, "-I", self.driver, CLI, self.root, *argv],
                               env={**self.env, **(env or {})}, capture_output=True, text=True,
-                              timeout=timeout)
+                              timeout=timeout, cwd=cwd)
 
-    def records(self):
+    def popen(self, *argv, env=None):
+        p = subprocess.Popen([sys.executable, "-I", self.driver, CLI, self.root, *argv],
+                             env={**self.env, **(env or {})}, stdout=subprocess.PIPE,
+                             stderr=subprocess.PIPE, text=True)
+
+        def end():
+            if p.poll() is None:
+                p.kill()
+            p.communicate(timeout=10)
+        self.addCleanup(end)
+        return p
+
+    def owner(self, *, ignore_term=False, mine=True):
+        """A stand-in owner process: a python whose argv names bin/chrome-bg (so it passes
+        owner_proven) unless mine=False, which gives a plain `sleep`. Returns (Popen, start)."""
+        if mine:
+            code = ("import signal, sys, time\n"
+                    + ("signal.signal(signal.SIGTERM, signal.SIG_IGN)\n" if ignore_term else "")
+                    + "open(sys.argv[1], 'w').close()\ntime.sleep(60)\n")
+            ready = os.path.join(self.tmp, f"owner-{time.monotonic_ns()}")
+            p = subprocess.Popen([sys.executable, "-c", code, ready, CLI])
+            self.wait_for(lambda: os.path.exists(ready), what="the owner to start")
+        else:
+            p = subprocess.Popen(["sleep", "60"])
+        self.addCleanup(p.wait, 10)
+        self.addCleanup(p.kill)
+        return p, cb.proc_stat(p.pid)[1]
+
+    def started(self, prefix):
+        """The run ids the fake noted under prefix (hello-, launch-, eof-, kill-)."""
+        return sorted(n[len(prefix):] for n in os.listdir(self.root) if n.startswith(prefix))
+
+    def records(self, recdir=None):
+        recdir = recdir or self.recdir
         try:
-            names = os.listdir(self.recdir)
+            names = os.listdir(recdir)
         except OSError:
             return []
         out = []
         for n in sorted(names):
             if re.fullmatch(r"[0-9a-f]{8}\.json", n):
-                with open(os.path.join(self.recdir, n)) as f:
+                with open(os.path.join(recdir, n)) as f:
                     out.append(json.load(f))
         return out
 
@@ -975,7 +1068,7 @@ class Live(unittest.TestCase):
                 "    os.kill(os.getpid(), s)\n"
                 "signal.signal(signal.SIGTERM, h)\n"
                 "signal.signal(signal.SIGINT, h)\n"
-                "open(sys.argv[1], 'w').close()\n"
+                "open(sys.argv[1], 'w').write(str(os.getpid()))\n"
                 "time.sleep(60)\n")
         return ready, [sys.executable, "-c", code, ready, self.tmp]
 
@@ -1116,13 +1209,215 @@ class Live(unittest.TestCase):
         self.assertIn("stopped aaaa0001: its owner is gone", r.stdout)
 
     def test_gc_stops_a_run_past_its_ttl(self):
-        owner = self.sleeper()
-        self.put_record("bbbb0001", owner.pid, cb.proc_stat(owner.pid)[1], expires=time.time() - 1)
+        owner, start = self.owner()
+        self.put_record("bbbb0001", owner.pid, start, expires=time.time() - 1)
         r = self.cli("stop", "--gc")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(owner.wait(10), -signal.SIGTERM, "the holder got SIGTERM")
         self.assertTrue(self.has("kill-bbbb0001"), "it did not clean up, so a one-shot did")
         self.assertEqual(self.records(), [])
+
+    def test_forged_record_owner_is_never_signalled(self):
+        owner, start = self.owner(mine=False)  # alive, right start time, but not a chrome-bg
+        self.put_record("bbbb0002", owner.pid, start)
+        r = self.cli("stop", "bbbb0002")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("not provably this chrome-bg, so it was not signalled", r.stdout)
+        time.sleep(0.3)
+        self.assertIsNone(owner.poll(), "no SIGTERM to a pid that is not chrome-bg")
+        self.assertTrue(self.has("kill-bbbb0002"))
+        self.assertEqual(self.records(), [])
+
+    def test_stop_times_out_on_an_owner_that_stays(self):
+        owner, start = self.owner(ignore_term=True)
+        self.put_record("bbbb0003", owner.pid, start)
+        r = self.cli("stop", "bbbb0003", env={"DRIVER_STOP_WAIT": "1"})
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("was still there after 1s", r.stdout)
+        self.assertIsNone(owner.poll())
+        self.assertTrue(self.has("kill-bbbb0003"), "the run was killed by its dir instead")
+        self.assertEqual(self.records(), [])
+
+    def test_gc_survives_a_non_http_listener(self):
+        import threading
+        srv = socket.socket()
+        srv.bind(("127.0.0.1", 0))
+        srv.listen(8)
+        srv.settimeout(0.2)
+        self.addCleanup(srv.close)
+        stop = []
+        self.addCleanup(stop.append, True)
+
+        def serve():
+            while not stop:
+                try:
+                    c, _ = srv.accept()
+                except OSError:
+                    continue
+                with c:
+                    c.sendall(b"not http at all\r\n\r\n")
+        threading.Thread(target=serve, daemon=True).start()
+        owner, start = self.owner()
+        self.put_record("bbbb0004", owner.pid, start, expires=time.time() - 1)
+        self.put_dir("bbbb0004", 600)
+        with open(os.path.join(self.base, "bbbb0004", "profile", "DevToolsActivePort"), "w") as f:
+            f.write("%d\n/devtools/browser/abc" % srv.getsockname()[1])
+        self.put_record("bbbb0005", 99999999, "5")
+        r = self.cli("stop", "--gc")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertNotIn("Traceback", r.stderr)
+        self.assertTrue(self.has("kill-bbbb0004") and self.has("kill-bbbb0005"), r.stdout)
+        self.assertEqual(owner.wait(10), -signal.SIGTERM)
+        self.assertEqual(self.records(), [])
+
+    def test_bad_records_are_ignored_and_reported(self):
+        os.makedirs(self.recdir)
+        with open(os.path.join(self.recdir, "aaaa0009.json"), "w") as f:
+            json.dump({"id": "bbbb0009", "owner": {"pid": os.getpid(), "start": "1"}}, f)
+        with open(os.path.join(self.recdir, "notarun.json"), "w") as f:
+            json.dump({"id": "notarun"}, f)
+        r = self.cli("ls")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("aaaa0009.json: not a run record", r.stderr)
+        self.assertIn("notarun.json: not a run record", r.stderr)
+        self.assertEqual(self.cli("stop", "--gc").returncode, 0)
+        self.assertFalse(self.started("kill-"))
+
+    def test_run_sigkilled_then_gc(self):
+        ready, cmd = self.child_with_handlers()
+        p = self.popen("run", "--", *cmd)
+        self.wait_for(lambda: os.path.exists(ready) and os.path.getsize(ready),
+                      what="the child to start")
+        rid = self.only_run_id()
+        p.kill()
+        with open(ready) as f:  # CMD holds the driver's pipes; end it too
+            os.kill(int(f.read()), signal.SIGKILL)
+        p.communicate(timeout=10)
+        self.wait_for(lambda: self.has("eof-" + rid), what="the supervisor to see EOF")
+        self.assertEqual([x["id"] for x in self.records()], [rid], "the record outlives its owner")
+        r = self.cli("stop", "--gc")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertTrue(self.has("kill-" + rid))
+        self.assertEqual(self.records(), [])
+
+    def test_holder_sigkilled_then_gc(self):
+        r = self.cli("start", "--json")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        rid = json.loads(r.stdout)["id"]
+        [rec] = self.records()
+        os.kill(rec["owner"]["pid"], signal.SIGKILL)
+        self.wait_for(lambda: self.has("eof-" + rid), what="the supervisor to see EOF")
+        self.wait_for(lambda: cb.owner_dead(rec), what="the holder to die")
+        r = self.cli("stop", "--gc")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertTrue(self.has("kill-" + rid))
+        self.assertEqual(self.records(), [])
+
+    def test_supervisor_ending_badly_gets_a_one_shot_kill(self):
+        for env, why in (({"FAKE_SUP_DIES_AFTER_PLACE": "1"}, "had already exited"),
+                         ({"FAKE_EOF_EXIT": "3"}, "exited 3")):
+            with self.subTest(why=why):
+                for n in os.listdir(self.root):
+                    if n.startswith(("launch-", "kill-", "eof-", "alive-")):
+                        os.remove(os.path.join(self.root, n))
+                r = self.cli("run", "--", sys.executable, "-c", "import time; time.sleep(0.3)",
+                             env=env)
+                self.assertEqual(r.returncode, 0, r.stderr)
+                rid = self.only_run_id()
+                self.assertIn(f"the supervisor of {rid} {why}; killing the run by its dir", r.stderr)
+                self.assertTrue(self.has("kill-" + rid))
+                self.assertFalse(self.has("alive-" + rid), "the orphaned Chrome is gone")
+                self.assertEqual(self.records(), [])
+
+    def test_supervisor_ignores_sigpipe_in_a_session_of_its_own(self):
+        r = self.cli("run", "--", sys.executable, "-c", "pass")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        pid, sid = map(int, self.notes("session-" + self.only_run_id())[0].split())
+        self.assertEqual(pid, sid, "start_new_session: the supervisor leads its own session")
+        [line] = [ln for ln in self.notes("sigign.log") if ln.split()[0] == str(pid)]
+        mask = int(line.split()[-1], 16)
+        self.assertTrue(mask >> (signal.SIGPIPE - 1) & 1, "restore_signals=False: SIGPIPE ignored")
+
+    def test_start_failing_in_the_holder(self):
+        r = self.cli("start", env={"FAKE_LAUNCH_FAIL": "1"})
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("Win32_Process Create failed (code 9)", r.stderr)
+        [rid] = self.started("hello-")
+        self.assertTrue(self.has("eof-" + rid), "the holder ended its supervisor")
+        self.assertEqual(self.records(), [])
+
+    def test_signal_before_the_child_exists(self):
+        for argv in (["run", "--", sys.executable, "-c", "pass"], ["start"]):
+            with self.subTest(cmd=argv[0]):
+                for n in os.listdir(self.root):
+                    if n.startswith(("hello-", "eof-")):
+                        os.remove(os.path.join(self.root, n))
+                p = self.popen(*argv, env={"FAKE_SLOW_HELLO": "2"})
+                self.wait_for(lambda: self.started("hello-"), what="hello")
+                p.send_signal(signal.SIGTERM)
+                time.sleep(0.3)
+                p.send_signal(signal.SIGTERM)  # held while cleanup runs, so it can't cut it short
+                _, err = p.communicate(timeout=40)
+                self.assertEqual(p.returncode, 128 + signal.SIGTERM, err)
+                [rid] = self.started("hello-")
+                self.assertTrue(self.has("eof-" + rid), "the supervisor was ended")
+                self.assertFalse(self.started("launch-"), "Chrome never launched")
+                self.assertEqual(self.records(), [])
+
+    def test_holder_ends_when_chrome_is_gone(self):
+        r = self.cli("start", "--json")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        info = json.loads(r.stdout)
+        path = urlparse(cb.json_version(info["port"])["webSocketDebuggerUrl"]).path
+        cdp = cb.CDP(cb.browser_ws(info["port"], path))
+        with contextlib.suppress(OSError):
+            cdp.send("Browser.close", timeout=5)  # what a fixture's browser.close() sends
+        cdp.close()
+        self.wait_for(lambda: self.has("eof-" + info["id"]) and not self.records(),
+                      what="the holder to see Chrome gone and stop")
+
+    def test_stop_by_url_checks_the_runs_own_port_file(self):
+        r = self.cli("start", "--json")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        a = json.loads(r.stdout)
+        # A forged record claiming A's port: its run's port file names another browser path.
+        forger, start = self.owner(mine=False)
+        self.put_record("ffff0001", forger.pid, start, port=a["port"])
+        self.put_dir("ffff0001", 5)
+        with open(os.path.join(self.base, "ffff0001", "profile", "DevToolsActivePort"), "w") as f:
+            f.write("%d\n/devtools/browser/forged" % a["port"])
+        r = self.cli("stop", a["url"])
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn(f"stopped {a['id']}", r.stdout)
+        self.assertEqual([x["id"] for x in self.records()], ["ffff0001"])
+        self.assertIsNone(forger.poll())
+        # B's own port file no longer matches what its port serves: no record for that URL.
+        r = self.cli("start", "--json")
+        b = json.loads(r.stdout)
+        with open(os.path.join(self.base, b["id"], "profile", "DevToolsActivePort"), "w") as f:
+            f.write("%d\n/devtools/browser/other" % b["port"])
+        r = self.cli("stop", b["url"])
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("no run serves", r.stderr)
+        self.assertEqual(self.cli("stop", b["id"]).returncode, 0)
+
+    def test_relative_xdg_state_home_is_ignored(self):
+        home = os.path.join(self.tmp, "home")
+        env = {"XDG_STATE_HOME": "rel/state", "HOME": home}
+        r = self.cli("start", "--json", env=env, cwd=self.tmp)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        rid = json.loads(r.stdout)["id"]
+        recdir = os.path.join(home, ".local", "state", "dotclaude", "chrome-bg")
+        self.assertTrue(os.path.exists(os.path.join(recdir, rid + ".json")),
+                        "the holder wrote its record under ~/.local/state")
+        ls = self.cli("ls", env=env, cwd=self.root)
+        self.assertIn(rid, ls.stdout, "the start parent and the holder read the same dir")
+        r = self.cli("stop", rid, env=env, cwd=self.root)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("stopped by its owner", r.stdout)
+        self.assertFalse(os.path.exists(os.path.join(recdir, rid + ".json")))
+        self.assertFalse(os.path.exists(os.path.join(self.tmp, "rel")))
+        self.assertFalse(os.path.exists(os.path.join(self.root, "rel")))
 
     def test_gc_skips_young_unrecorded_dirs(self):
         self.put_dir("cccc0001", 5)
