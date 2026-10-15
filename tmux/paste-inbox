@@ -26,21 +26,24 @@ and so is an upload still unfinished after 2 minutes (a link that died leaves no
 would otherwise wait for TCP to give up); --check prints the path it would use and keeps
 nothing (the laptop installer's self-test).
 
-`paste` takes the newest non-empty image file (.png, .jpg, .jpeg, .gif or .webp, any case; no
-dotfiles) modified in the last 10 minutes, and no more than 10 minutes in the future (Downloads
-times come from Windows' clock, which WSL2's can fall behind after a sleep), in the inbox or
-Windows Downloads, where Taildrop saves (Tailscale 1.34 and later; mtime is the arrival time).
-The newest wins across both, so a Taildrop after an upload, or a browser download on this PC,
-beats it. The Downloads folder is $PASTE_INBOX_DOWNLOADS (empty: none), else the path cached in
-$XDG_STATE_HOME/dotclaude/paste-inbox/downloads, else the user profile from powershell.exe
-(printed as base64 of its UTF-8, since a console prints a non-ASCII name in its own code page)
-through `wslpath -u` plus Downloads, cached once it exists (powershell.exe from PATH only, so
-outside WSL the inbox alone counts). A pane in copy mode leaves it first. The path goes in as
-bytes through `load-buffer -` into a buffer named for the pane (two clients at once don't share
-one) and out through `paste-buffer -p -d`, quoted when it holds a space. Silent, exit 0: Alt+V
-runs it (tmux/claude.conf), and a failing run-shell would put the pane in view mode, so a crash
-goes to $XDG_STATE_HOME/dotclaude/paste-inbox/error.log and a line on the client. Linked into
-~/.local/bin by setup-tmux.sh; tests/setup/test_paste_inbox.py holds the cases.
+`paste` takes an image the inbox received in the last 30 seconds (the laptop's Ctrl+V sends
+Alt+V right after its upload; inbox times and that check both use WSL's clock), else the newest
+non-empty image file (.png, .jpg, .jpeg, .gif or .webp, any case; no dotfiles) modified in the
+last 10 minutes, and no more than 10 minutes in the future (Downloads times come from Windows'
+clock, which WSL2's can fall behind after a sleep), in the inbox or Windows Downloads, where
+Taildrop saves (Tailscale 1.34 and later; mtime is the arrival time). So past those 30 seconds a
+Taildrop, or a browser download on this PC, beats an older upload. The Downloads folder is
+$PASTE_INBOX_DOWNLOADS (empty: none), else the path cached in
+$XDG_STATE_HOME/dotclaude/paste-inbox/downloads while that folder exists, else Windows'
+Downloads known folder from powershell.exe (printed as base64 of its UTF-8, since a console
+prints a non-ASCII name in its own code page) through `wslpath -u`, cached once found
+(powershell.exe from PATH only, so outside WSL the inbox alone counts). A pane in copy mode
+leaves it first. The path goes in as bytes through `load-buffer -` into a buffer named for the
+pane (two clients at once don't share one) and out through `paste-buffer -p -d`, quoted when it
+holds a space. Silent, exit 0: Alt+V runs it (tmux/claude.conf), and a failing run-shell would
+put the pane in view mode, so a crash goes to $XDG_STATE_HOME/dotclaude/paste-inbox/error.log
+and a line on the client. Linked into ~/.local/bin by setup-tmux.sh;
+tests/setup/test_paste_inbox.py holds the cases.
 """
 import base64
 import os
@@ -59,14 +62,16 @@ CAP = 50 * 1024 * 1024
 FRESH = 10 * 60
 SKEW = FRESH
 STALL = 120
+RECENT = 30
 KEEP = 24 * 3600
 IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".gif", ".webp")   # Claude Code's pasted-path pattern
 MAGIC = ((b"\x89PNG\r\n\x1a\n", "png"), (b"\xff\xd8\xff", "jpg"), (b"GIF87a", "gif"),
          (b"GIF89a", "gif"))
 OWN = re.compile(r"^(\d{8}T\d{6}Z-[a-z0-9._-]+-[0-9a-f]{6}\.(png|jpg|gif|webp)"
                  r"|\.incoming-.*\.tmp)$")
-PROFILE_B64 = ("[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes("
-               "[Environment]::GetFolderPath('UserProfile')))")
+DOWNLOADS_B64 = ("[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes("
+                 "(New-Object -ComObject Shell.Application).NameSpace('shell:Downloads')"
+                 ".Self.Path))")
 NONE_FRESH = ("No image arrived in the last 10 minutes. Ctrl+V a screenshot on a laptop with "
               "laptop/remote-paste, or Taildrop it to this PC, then Alt+V.")
 
@@ -159,14 +164,16 @@ def refuse(why: str) -> int:
 
 
 def downloads_dir() -> str | None:
-    """Windows Downloads as a WSL path ($PASTE_INBOX_DOWNLOADS, the cache, else asked of
-    Windows once), or None. The cache is a shortcut only: failing to write it changes nothing."""
+    """Windows Downloads as a WSL path ($PASTE_INBOX_DOWNLOADS, the cache while that folder
+    exists, else asked of Windows), or None. Failing to write the cache changes nothing."""
     if "PASTE_INBOX_DOWNLOADS" in os.environ:
         return os.environ["PASTE_INBOX_DOWNLOADS"] or None
     cache = os.path.join(state_dir(), "downloads")
     try:
         with open(cache) as f:
-            return f.read().strip() or None
+            cached = f.read().strip()
+        if os.path.isdir(cached):
+            return cached
     except OSError:
         pass
     found = windows_downloads()
@@ -185,44 +192,52 @@ def windows_downloads() -> str | None:
     if not ps:
         return None
     try:
-        out = subprocess.run([ps, "-NoProfile", "-NonInteractive", "-Command", PROFILE_B64],
+        out = subprocess.run([ps, "-NoProfile", "-NonInteractive", "-Command", DOWNLOADS_B64],
                              capture_output=True, timeout=10).stdout
-        home = base64.b64decode(out.strip(), validate=True).decode("utf-8")
-        if not re.match(r"^[A-Za-z]:\\", home):
+        win = base64.b64decode(out.strip(), validate=True).decode("utf-8")
+        if not re.match(r"^[A-Za-z]:\\", win):
             return None
-        wsl = subprocess.run(["wslpath", "-u", home], capture_output=True, text=True,
-                             timeout=5).stdout.strip()
+        path = subprocess.run(["wslpath", "-u", win], capture_output=True, text=True,
+                              timeout=5).stdout.strip()
     except (OSError, subprocess.SubprocessError, ValueError):
         return None
-    path = os.path.join(wsl, "Downloads") if wsl else ""
-    return path if os.path.isdir(path) else None
+    return path if path and os.path.isdir(path) else None
+
+
+def images(folder: str | None, now: float) -> list:
+    """(mtime, path) of each non-empty image file in folder modified within FRESH seconds
+    (SKEW at most ahead)."""
+    if not folder:
+        return []
+    try:
+        entries = list(os.scandir(folder))
+    except OSError:
+        return []
+    found = []
+    for entry in entries:
+        if entry.name.startswith(".") or not entry.name.lower().endswith(IMAGE_EXTS):
+            continue
+        try:
+            if not entry.is_file():
+                continue
+            st = entry.stat()
+        except OSError:
+            continue
+        if st.st_size > 0 and now - FRESH <= st.st_mtime <= now + SKEW:
+            found.append((st.st_mtime, entry.path))
+    return found
 
 
 def newest_image() -> str | None:
-    """The newest non-empty image file modified within FRESH seconds (SKEW at most ahead) in
-    the inbox or Downloads."""
+    """An inbox upload from the last RECENT seconds (the laptop's Ctrl+V sends Alt+V right
+    after one), else the newest image in the inbox or Downloads."""
     now = time.time()
-    best, best_time = None, 0.0
-    for folder in (inbox_dir(), downloads_dir()):
-        if not folder:
-            continue
-        try:
-            entries = list(os.scandir(folder))
-        except OSError:
-            continue
-        for entry in entries:
-            if entry.name.startswith(".") or not entry.name.lower().endswith(IMAGE_EXTS):
-                continue
-            try:
-                if not entry.is_file():
-                    continue
-                st = entry.stat()
-            except OSError:
-                continue
-            if st.st_size > 0 and now - FRESH <= st.st_mtime <= now + SKEW \
-                    and st.st_mtime > best_time:
-                best, best_time = entry.path, st.st_mtime
-    return best
+    inbox = images(inbox_dir(), now)
+    recent = [item for item in inbox if item[0] >= now - RECENT]
+    if recent:
+        return max(recent)[1]
+    found = inbox + images(downloads_dir(), now)
+    return max(found)[1] if found else None
 
 
 def tmux(*args: str, stdin: bytes | None = None) -> str:

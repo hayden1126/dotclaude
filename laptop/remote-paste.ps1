@@ -31,7 +31,6 @@ message, with a plain line instead for a PC without paste-inbox or with a differ
 param([switch]$SelfTest)
 Set-StrictMode -Version 3
 $ErrorActionPreference = 'Stop'
-Add-Type -AssemblyName System.Windows.Forms, System.Drawing
 
 $errFile = Join-Path $env:TEMP 'remote-paste.err'
 Remove-Item -LiteralPath $errFile -ErrorAction SilentlyContinue
@@ -41,6 +40,10 @@ function Fail([string]$why) {
     [Console]::Error.WriteLine("remote-paste: $why")
     exit 1
 }
+# Anything else that throws (the clipboard held by another app, a locked file) fails the same
+# way, so the reason still reaches the tooltip.
+trap { Fail $_.Exception.Message }
+Add-Type -AssemblyName System.Windows.Forms, System.Drawing
 
 $ini = Join-Path $PSScriptRoot 'remote-paste.ini'
 if (-not (Test-Path -LiteralPath $ini)) { Fail "no $ini (run install-remote-paste.ps1)" }
@@ -65,6 +68,7 @@ if ($SelfTest) {
     if ($clip::ContainsText()) { exit 3 }
     if ($clip::ContainsImage()) {
         $img = $clip::GetImage()
+        if (-not $img) { exit 3 }
     } elseif ($clip::ContainsFileDropList()) {
         $files = $clip::GetFileDropList()
         if ($files.Count -ne 1 -or $files[0] -notmatch '\.(png|jpe?g|gif|webp)$') { exit 3 }

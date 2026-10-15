@@ -498,24 +498,24 @@ need nothing extra.
   What Claude Code does attach is an image path that arrives as a bracketed paste, so **Alt+V**
   (`tmux/paste-inbox`, linked by `setup-tmux.sh`) pastes the path of the newest image that reached
   the PC in the last 10 minutes: from its inbox (`~/.cache/claude-paste`) or from Windows Downloads,
-  where Taildrop saves (the newest wins, so a browser download on the PC in those minutes beats an
-  upload). Once installed, Alt+V no longer reaches a pane's own program (less, nano, an editor).
-  With nothing installed on the other device, Taildrop the screenshot to the PC (Explorer's Send
-  with Tailscale, or a phone's share sheet), then press Alt+V. On a Windows laptop, `laptop/` makes
-  it one key: Ctrl+V of a screenshot uploads it and presses Alt+V for you. It needs AutoHotkey v2,
-  and the laptop's WSL `ssh` reaching an SSH port on the PC that runs a plain shell (a second
-  Windows OpenSSH port, when port 22 is forced into tmux), with a key that asks no passphrase and a
-  known host entry. Clone this repo where the laptop's Windows can read it, then run `powershell
-  -ExecutionPolicy Bypass -File laptop\install-remote-paste.ps1 -Target <user>@<pc host>` (`-Port`
-  if not 2222). It installs into `%LOCALAPPDATA%\remote-paste` with a Startup shortcut, keeps the
-  host name there and out of the repo, and ends with a test upload the PC checks but doesn't keep;
-  `-Uninstall` removes it. The hotkey acts only while the Windows Terminal title is a remote tmux
-  view of the PC (`view-<pid> · ...` by default; `-TitlePattern` for other session names, and leave
-  the profile's `suppressApplicationTitle` off) and the clipboard holds an image or one copied image
-  file but no text, so a text Ctrl+V never reaches it. `paste-inbox receive` keeps a PNG, JPEG, GIF
-  or WebP up to 50 MB (judged by its first bytes, and refused unless all the bytes the laptop sent
-  arrived) and, each time it receives one, deletes its own files older than a day; Downloads is
-  never pruned.
+  where Taildrop saves (an upload from the last 30 seconds wins; otherwise the newest does, so a
+  browser download on the PC can beat an older upload). Once installed, Alt+V no longer reaches a
+  pane's own program (less, nano, an editor). With nothing installed on the other device, Taildrop
+  the screenshot to the PC (Explorer's Send with Tailscale, or a phone's share sheet), then press
+  Alt+V. On a Windows laptop, `laptop/` makes it one key: Ctrl+V of a screenshot uploads it and
+  presses Alt+V for you. It needs AutoHotkey v2, and the laptop's WSL `ssh` reaching an SSH port on
+  the PC that runs a plain shell (a second Windows OpenSSH port, when port 22 is forced into tmux),
+  with a key that asks no passphrase and a known host entry. Clone this repo where the laptop's
+  Windows can read it, then run `powershell -ExecutionPolicy Bypass -File
+  laptop\install-remote-paste.ps1 -Target <user>@<pc host>` (`-Port` if not 2222). It installs into
+  `%LOCALAPPDATA%\remote-paste` with a Startup shortcut, keeps the host name there and out of the
+  repo, and ends with a test upload the PC checks but doesn't keep; `-Uninstall` removes it. The
+  hotkey acts only while the Windows Terminal title is a remote tmux view of the PC (`view-<pid> ·
+  ...` by default; `-TitlePattern` for other session names, and leave the profile's
+  `suppressApplicationTitle` off) and the clipboard holds an image or one copied image file but no
+  text, so a text Ctrl+V never reaches it. `paste-inbox receive` keeps a PNG, JPEG, GIF or WebP up
+  to 50 MB (judged by its first bytes, and refused unless all the bytes the laptop sent arrived)
+  and, each time it receives one, deletes its own files older than a day; Downloads is never pruned.
 - **PreToolUse(`Write`): `overwrite-guard.sh`** (in this repo). The Write tool's own "File has not
   been read yet" check last fired in Claude Code 2.1.285, and on 2.1.289 a Write of `PLACEHOLDER`
   replaced an unread 6 KB memory file (`docs/blind-overwrite-brief.md`). The guard denies a Write

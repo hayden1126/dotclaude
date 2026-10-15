@@ -16,6 +16,7 @@ import os
 import pty
 import re
 import shutil
+import signal
 import struct
 import subprocess
 import sys
@@ -57,7 +58,7 @@ STUB_PS = """#!%s -I
 import base64, json, os, sys
 with open(os.environ["STUB_LOG"], "a") as f:
     f.write(json.dumps(["powershell.exe"] + sys.argv[1:]) + "\\n")
-profile = os.environ.get("STUB_PROFILE", "C:\\\\Users\\\\tester")
+profile = os.environ.get("STUB_WINDL", "C:\\\\Users\\\\tester\\\\Downloads")
 out = os.environ.get("STUB_PS_OUT") or base64.b64encode(profile.encode()).decode()
 sys.stdout.write(out + "\\r\\n")
 """ % sys.executable
@@ -66,7 +67,7 @@ STUB_WSLPATH = """#!%s -I
 import json, os, sys
 with open(os.environ["STUB_LOG"], "a") as f:
     f.write(json.dumps(["wslpath"] + sys.argv[1:]) + "\\n")
-print(os.environ["STUB_WINHOME"])
+print(os.environ["STUB_WSLDL"])
 """ % sys.executable
 
 
@@ -91,7 +92,7 @@ class Inbox(unittest.TestCase):
                     "PATH": self.stubs + os.pathsep + "/usr/bin:/bin",
                     "PASTE_INBOX_DIR": self.inbox, "PASTE_INBOX_DOWNLOADS": self.downloads,
                     "STUB_LOG": self.log, "STUB_BUFFER": self.buffer,
-                    "STUB_WINHOME": os.path.join(self.tmp, "winhome")}
+                    "STUB_WSLDL": os.path.join(self.tmp, "winhome", "Downloads")}
 
     def stub(self, name, text):
         path = os.path.join(self.stubs, name)
@@ -300,6 +301,20 @@ class Paste(Inbox):
         self.paste()
         self.assertEqual(self.pasted(), shot)
 
+    def test_mtimes_count_up_to_ten_minutes_ahead_not_more(self):
+        # Windows' clock (Downloads) can run ahead of WSL2's after a sleep
+        shot = self.put(self.downloads, "ahead.png", age=-500)
+        self.put(self.downloads, "too-far.png", age=-700)
+        self.paste()
+        self.assertEqual(self.pasted(), shot)
+
+    def test_a_recent_upload_beats_a_newer_looking_download(self):
+        # the laptop's Ctrl+V sends Alt+V right after its upload, whatever Windows' clock says
+        upload = self.put(self.inbox, "20261015T000000Z-laptop-aaaaaa.png", age=10)
+        self.put(self.downloads, "browser.png", age=-300)
+        self.paste()
+        self.assertEqual(self.pasted(), upload)
+
     def test_a_non_ascii_path_pastes_intact(self):
         shot = self.put(self.downloads, "\u00e9cran.png", age=5)
         self.paste()
@@ -322,8 +337,8 @@ class Paste(Inbox):
         self.assertEqual([c[0] for c in self.calls() if c[0] != "tmux"],
                          ["powershell.exe", "wslpath"])
         self.assertEqual(self.calls()[0][1:4], ["-NoProfile", "-NonInteractive", "-Command"])
-        self.assertIn("GetFolderPath('UserProfile')", self.calls()[0][4])
-        self.assertEqual(self.calls()[1][1:], ["-u", "C:\\Users\\tester"])
+        self.assertIn("NameSpace('shell:Downloads')", self.calls()[0][4])
+        self.assertEqual(self.calls()[1][1:], ["-u", "C:\\Users\\tester\\Downloads"])
         os.remove(self.log)
         os.remove(self.buffer)
         os.remove(os.path.join(self.stubs, "powershell.exe"))
@@ -331,16 +346,30 @@ class Paste(Inbox):
         self.assertEqual(self.pasted(), shot)
         self.assertEqual([c[0] for c in self.calls() if c[0] != "tmux"], [])
 
-    def test_a_non_ascii_windows_profile_is_found(self):
+    def test_a_non_ascii_windows_downloads_is_found(self):
         del self.env["PASTE_INBOX_DOWNLOADS"]
         shot = self.put(os.path.join(self.tmp, "winhome", "Downloads"), "a.png", age=5)
-        self.paste(STUB_PROFILE="C:\\Users\\Zo\u00eb")
+        self.paste(STUB_WINDL="C:\\Users\\Zo\u00eb\\Downloads")
         self.assertEqual(self.pasted(), shot)
-        self.assertEqual(self.calls()[1][1:], ["-u", "C:\\Users\\Zo\u00eb"])
+        self.assertEqual(self.calls()[1][1:], ["-u", "C:\\Users\\Zo\u00eb\\Downloads"])
+
+    def test_a_cached_downloads_that_is_gone_is_looked_up_again(self):
+        del self.env["PASTE_INBOX_DOWNLOADS"]
+        cache = os.path.join(self.tmp, "state", "dotclaude", "paste-inbox", "downloads")
+        os.makedirs(os.path.dirname(cache))
+        with open(cache, "w") as f:
+            f.write(os.path.join(self.tmp, "moved-away") + "\n")
+        shot = self.put(os.path.join(self.tmp, "winhome", "Downloads"), "a.png", age=5)
+        self.paste()
+        self.assertEqual(self.pasted(), shot)
+        with open(cache) as f:
+            self.assertEqual(f.read().strip(), os.path.dirname(shot))
 
     def test_garbage_from_windows_falls_back_to_the_inbox(self):
+        # a newer image waits where the stub's wslpath points, so only the checks keep it out
         del self.env["PASTE_INBOX_DOWNLOADS"]
-        upload = self.put(self.inbox, "20261015T000000Z-laptop-aaaaaa.png", age=5)
+        upload = self.put(self.inbox, "20261015T000000Z-laptop-aaaaaa.png", age=60)
+        self.put(os.path.join(self.tmp, "winhome", "Downloads"), "decoy.png", age=5)
         for out in ("not base64 at all!", "w4k=", "QzpcVXNlcnNc8A=="):   # junk, "é", bad UTF-8
             with self.subTest(out=out):
                 if os.path.exists(self.buffer):
@@ -384,6 +413,13 @@ class InProcess(unittest.TestCase):
         patch.start()
         self.addCleanup(patch.stop)
 
+    @staticmethod
+    def close_quietly(fd):
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+
     def test_a_crash_in_paste_is_logged_shown_and_exits_zero(self):
         said = []
         boom = unittest.mock.patch.object(self.pi, "newest_image", side_effect=RuntimeError("boom"))
@@ -398,8 +434,12 @@ class InProcess(unittest.TestCase):
                                  "paste-inbox failed; see %s" % log)])
 
     def test_an_upload_that_stalls_is_refused_and_leaves_nothing(self):
+        self.addCleanup(signal.signal, signal.SIGALRM, signal.getsignal(signal.SIGALRM))
         r, w = os.pipe()
-        self.addCleanup(os.close, w)
+        guard = threading.Timer(10, self.close_quietly, (w,))   # EOF if the alarm never fires
+        guard.start()
+        self.addCleanup(guard.cancel)
+        self.addCleanup(self.close_quietly, w)
         stdin = io.TextIOWrapper(open(r, "rb"))
         self.addCleanup(stdin.close)
         os.write(w, PNG)                      # a start, then nothing and no EOF
@@ -483,6 +523,14 @@ class Laptop(unittest.TestCase):
         pattern = re.search(r"\$stderr -match '([^']+)'", self.read("remote-paste.ps1"))[1]
         self.assertRegex(line, pattern)
         self.assertNotRegex(line.replace("paste-inbox", "other"), pattern)
+
+    def test_a_version_mismatch_is_named_from_the_usage_line(self):
+        p = subprocess.run([SCRIPT, "receive", "laptop"], capture_output=True, text=True)
+        self.assertEqual(p.returncode, 2)
+        pattern = re.search(r"if \(\$stderr -match '([^']+)'\) \{\n        Fail \"the PC's "
+                            r"paste-inbox doesn't match", self.read("remote-paste.ps1"))[1]
+        self.assertRegex(p.stderr, pattern)
+        self.assertNotRegex("paste-inbox: refused: not a PNG, JPEG, GIF or WebP image", pattern)
 
     def test_no_host_or_account_name_ships(self):
         for name in sorted(os.listdir(LAPTOP)):

@@ -34,9 +34,14 @@ ImageOnClipboard() {
         return false
     if DllCall("IsClipboardFormatAvailable", "UInt", 8)    ; CF_DIB: an image
         return true
-    ; CF_HDROP 15: copied files, whose paths A_Clipboard holds one per line
-    return DllCall("IsClipboardFormatAvailable", "UInt", 15)
-        && RegExMatch(A_Clipboard, "i)^[^\r\n]+\.(png|jpe?g|gif|webp)$")
+    ; CF_HDROP 15: copied files, whose paths A_Clipboard holds one per line (reading it opens
+    ; the clipboard, which throws when another app holds it: then Ctrl+V stays native)
+    if !DllCall("IsClipboardFormatAvailable", "UInt", 15)
+        return false
+    try
+        return RegExMatch(A_Clipboard, "i)^[^\r\n]+\.(png|jpe?g|gif|webp)$")
+    catch
+        return false
 }
 
 #HotIf PcView(ActiveTerminal()) != "" && ImageOnClipboard()
