@@ -1,7 +1,9 @@
 """SessionStart/Stop/SessionEnd hook for lanes; hooks/lane-identity.sh runs it.
 
 SessionStart (startup, resume, clear, compact):
-  in a lane     tells the model its absolute identity (lane id, branch, claims, port, record path)
+  in a lane     tells the model its absolute identity (lane id, what its worktree has checked
+                out: a branch, or a detached HEAD's commit; lane.json's branch, labeled, when
+                HEAD can't be read; claims, port, record path)
                 and the rules that keep it absolute, and appends {session_id, startedAt} to
                 lane.json sessions[] (not again for a session already listed and not ended, so a
                 compact keeps its start). On compact it adds "re-read your record": the summary
@@ -18,7 +20,9 @@ failure is logged to $XDG_STATE_HOME/dotclaude/lane-identity.log and stays silen
 """
 import json
 import os
+import re
 import shutil
+import subprocess
 import sys
 import time
 
@@ -27,6 +31,12 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.realpath
 import lanelib  # noqa: E402
 
 LOCK_WAIT = 2.0
+# Each git call that reads HEAD. settings.json kills the hook at 5 s, which costs the whole line,
+# so the lock wait and two calls (a detached HEAD makes two) must time out well before that.
+# resolve()'s git keeps lanelib's 60 s: one that hangs there leaves no lane to name anyway, and
+# a slow one under load still finishes inside the 5 s.
+GIT_WAIT = 1.0
+SHA_RE = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
 MAX_SESSIONS = 50
 
 
@@ -41,10 +51,38 @@ def log(line):
         pass
 
 
-def lane_context(lane: dict, source: str) -> str:
+def checked_out(repo: lanelib.Repo, lane: dict) -> str:
+    """What the worktree has checked out, for the identity line: lane.json's branch is stale once
+    the lane runs `git switch` for a follow-up PR. `lane_head` in the lane CLI names the same
+    thing from `git worktree list`; the hook doesn't import the CLI, so it asks git here. The
+    admin dir is sandbox-writable, so only a valid_branch name or a hex commit reaches the
+    context; anything else names lane.json's branch and says so."""
+    def fallback(why):
+        log(f"head unreadable lane={lane['id']}: {why}")
+        return f"branch `{lane['branch']}` (lane.json's: the worktree's HEAD couldn't be read)"
+
+    try:
+        p = lanelib.git(["symbolic-ref", "-q", "HEAD"], repo.toplevel, timeout=GIT_WAIT)
+        if p.returncode == 1:  # detached
+            p = lanelib.git(["rev-parse", "--verify", "-q", "HEAD"], repo.toplevel,
+                            timeout=GIT_WAIT)
+            sha = p.stdout.strip()
+            if p.returncode == 0 and SHA_RE.fullmatch(sha):
+                return f"a detached HEAD at `{sha[:12]}`"
+            return fallback(f"rev-parse exit {p.returncode}")
+    except (OSError, ValueError, subprocess.SubprocessError) as e:  # ValueError: not UTF-8
+        return fallback(f"{type(e).__name__}: {e}")
+    ref = p.stdout.strip()
+    name = ref.removeprefix("refs/heads/")
+    if p.returncode != 0 or name == ref or not lanelib.valid_branch(name):
+        return fallback(f"symbolic-ref exit {p.returncode}, {ref[:80]!r}")
+    return f"branch `{name}`"
+
+
+def lane_context(lane: dict, source: str, where: str) -> str:
     claims = ", ".join(lane.get("claims", [])) or "none"
     lines = [
-        f"You are lane `{lane['id']}`: branch `{lane['branch']}`, claims {claims}, "
+        f"You are lane `{lane['id']}`: {where}, claims {claims}, "
         f"port {lane.get('port') or 'none'}. Your record is {lanelib.record_path(lane)} "
         "(Brief, State, Decisions, Asks for Hayden, Not mine, Next): read it before acting.",
         "Other lanes' records are read-only. Ownership comes only from `lane who #<n>` (claims), "
@@ -163,7 +201,7 @@ def main():
                 start(repo, lane, event)
             except (lanelib.LockTimeout, OSError, ValueError) as e:  # identity still matters
                 log(f"register skipped {type(e).__name__}: {e}")
-            text = lane_context(lane, event.get("source") or "")
+            text = lane_context(lane, event.get("source") or "", checked_out(repo, lane))
         elif kind == "main" and lanes:
             text = board_line(repo, lanes)
         else:
