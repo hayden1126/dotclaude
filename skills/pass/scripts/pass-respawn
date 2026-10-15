@@ -142,8 +142,11 @@ holds only notices. A call-time refusal or detach error prints to the caller and
            banner and the Ctrl-b Up popup, tmux/pass-last; with no reply text, any older one
            for the pane goes),
            then `tmux respawn-pane -k -t <pane> -c <toplevel> -- <abs claude>
-           [--permission-mode plan] <prompt>`; both files are removed again when the respawn
-           fails (`failed`) or anything after writing them raises
+           [--model M] [--effort E] [--permission-mode plan] <prompt>`; both files are removed
+           again when the respawn fails (`failed`) or anything after writing them raises. M and
+           E are carried_pick's: each flag the old claude launched with, or after a /model (for
+           the effort, a /model or /effort) what the last main-chain assistant entry since ran
+           with, the flag dropped when none can be passed on (docs/lanes.md, "Model and effort")
   compact  type `/compact <focus>` and Enter, wait 1 s, type the prompt and Enter (it queues
            behind the compact, spike S4); no respawn and no carry. A send-keys that fails
            stops there and logs `failed` (past /compact, every report of it hands over the
@@ -201,6 +204,13 @@ the sandbox can write (docs/lanes.md S3). Every input, and why each is safe:
     --settings check, made before git runs, knows only the dirs that need no git: a --settings
     file in the main checkout of a lane session launched from the lane is caught only by the
     late check, after lanelib's git has run once.
+  - The respawn's --model and --effort come from the session claude's command line (the
+    kernel's) and the transcript (Claude Code's), never from a sandbox-writable file. Each goes
+    to tmux as one argv element, never interpolated, and only in a fixed shape: an effort is one
+    of lanelib.EFFORTS; a launch model passes lanelib.safe_model (it starts with a letter or
+    digit, so it never reads as a flag, and carries no space or shell syntax), and a
+    transcript's must be a lanelib.MODEL_ID (`claude-...`). A launch value outside its shape
+    refuses the pass at call time; a transcript value outside it drops the flag.
   - PATH is the call's, so it keeps only the absolute entries outside those dirs (as given and
     resolved). git, tmux and claude resolve through that PATH and must also resolve, as found
     and through their links, outside them; otherwise it refuses. The sanitized PATH replaces

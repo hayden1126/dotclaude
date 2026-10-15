@@ -416,6 +416,37 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
   `opened` in `lane.json`. The window is derived from the live session's `tmux` field on each
   `lane ls`, never stored (invariant 4): a stored window id drifts the moment the window closes
   or tmux renumbers it.
+- **Model and effort** (lane lane-model, 2026-10-15). `lane init --model M --effort E` stores
+  repo defaults in the lanes config (`model`, `effort`; an empty value removes one), and
+  `lane open <id> --model M --effort E` overrides them for one launch (an empty flag skips the
+  default). Both go to claude ahead of `--permission-mode plan`. A model must be an alias
+  (`default`, `opus`, `sonnet`, `haiku`, `fable`, `opusplan`) or a `claude-` full name, either
+  with an optional `[1m]` (quote it: zsh globs the brackets), and an effort one of `low`,
+  `medium`, `high`, `xhigh`, `max`. The check is strict because a bad name fails where nobody
+  looks: claude stays up in the detached window and shows "There's an issue with the selected
+  model" at its first request (spike S1). A typo inside a full name still gets through. `open`
+  refuses a pick for a lane with a live session, since `/model` or `/effort` in its window is
+  what changes a live one.
+
+  A plain pass keeps the pick (pass-respawn's `carried_pick`). The respawn carries each flag the
+  old claude launched with, read from its `/proc` command line. After a `/model` (or, for the
+  effort, an `/effort`) in the transcript, it carries instead what the last main-chain assistant
+  entry after that command ran with (`message.model`, `effort`). When no usable entry follows
+  (a `<synthetic>` one, a model that takes no effort), it drops the flag: both commands save
+  their pick as the default for new sessions, which then applies. A session launched without
+  the flags respawns as before. Hayden picked this over a plain copy of the flags (which undoes
+  a mid-session `/model` at the next pass) and a stored per-lane pick (the same flaw, plus new
+  state). How each case comes out:
+  - a plain pass or an auto-pass: the pick holds; a compact pass keeps the same process;
+  - a `/model` or `/effort` mid-session: the new pick holds at the next pass;
+  - a default changed after a lane opened: that lane keeps its launch pick until `/model` or
+    `/effort` in its window moves it;
+  - the lead's main checkout: no repo default reaches it, and it carries what it launched with;
+  - a tmux restart: `claude-restore` types `claude --resume <id>`, which keeps the model but not
+    the effort (spike S3), so the effort falls back to the user's default.
+
+  Only these two flags carry: `--fallback-model`, `--name` and the rest still drop at a plain
+  pass.
 - **Auto-pass in lanes** (README "Auto-pass", PLAN.md "PR 4: auto-pass"). Auto-pass is on by
   default in every lane and in the main checkout of a repo with lanes, so the lead passes itself
   the same way. `lane init --no-autopass` turns it off for the repo (`autopass = false` in the
