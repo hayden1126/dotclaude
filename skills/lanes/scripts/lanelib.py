@@ -12,6 +12,9 @@ Layout (PLAN.md "Layout"):
                                 the config, written only by a bare `lane init`: `new` and `adopt`
                                 run its `setup` sandbox-off, so it lives where sandboxed Bash
                                 can't write (state_dir())
+  <state-dir>/lanes/<repo>-<hash>.lead.json
+                                the lead record (read_lead): the main-checkout session that last
+                                acted as lead, written only by bare commands
 """
 import contextlib
 import datetime
@@ -205,6 +208,12 @@ class Repo:
         common dir."""
         key = hashlib.sha256(self.common_dir.encode()).hexdigest()[:12]
         return os.path.join(state_dir(), LANES, f"{os.path.basename(self.main)}-{key}.toml")
+
+    @property
+    def lead_path(self) -> str:
+        """The lead record (read_lead), beside the config: only a bare command can write it, so
+        no lane's sandboxed Bash can make itself the lead. tmux/tmux-tab-bar reads this path."""
+        return self.config_path.removesuffix(".toml") + ".lead.json"
 
     @property
     def has_lanes(self) -> bool:
@@ -1015,3 +1024,117 @@ def lane_sid(sid, path: str, files: list[dict]) -> bool:
         return True
     return any(cwd_inside(transcript_cwd(t), path)
                for t in glob.glob(os.path.join(config_dir(), "projects", "*", sid + ".jsonl")))
+
+
+# ---- the lead -------------------------------------------------------------------------------
+# The lead is the main-checkout session that last acted as lead (a bare `lane init`, `new`,
+# `adopt`, `open` or `done`, or `lane lead`), recorded at Repo.lead_path. `lane addr lead`, the
+# board's main-checkout footer and tmux/tmux-tab-bar only read the record, so a look never takes
+# the lead. Its tmux facts come from the claude process's own environment, never its session
+# file's `tmux` field: that names a tmux session, not a server, and pane ids restart at %0 on
+# every server.
+
+ENVIRON_MAX = 1 << 20  # bytes of /proc/<pid>/environ read for TMUX and TMUX_PANE
+LEAD_MAX = 4096  # bytes of a lead record; a longer one is no record
+PANE = re.compile(r"%[0-9]{1,9}")
+NUMBER = re.compile(r"[0-9]{1,20}")
+
+
+def proc_tmux(pid: int, proc: str = PROC) -> tuple[str, int, int, str] | None:
+    """(socket, serverPid, serverStart, pane) from the TMUX and TMUX_PANE pid was started with,
+    or None outside tmux or when a part is missing or malformed. TMUX is `socket,pid,session`,
+    split from the right as tmux-tab-bar's server_key splits it (a socket path may hold a comma).
+    serverStart is the server pid's stat field 22, so a server pid reused after a tmux restart
+    fails a match. Read bounded, never through a link or waiting on a FIFO (read_head)."""
+    raw = read_head(os.path.join(proc, str(pid), "environ"), ENVIRON_MAX)
+    env = {}
+    for entry in (raw or b"").split(b"\0"):
+        key, sep, value = entry.partition(b"=")
+        if sep and key in (b"TMUX", b"TMUX_PANE"):
+            try:
+                env[key] = value.decode()
+            except UnicodeDecodeError:
+                return None
+    parts = env.get(b"TMUX", "").rsplit(",", 2)
+    pane = env.get(b"TMUX_PANE", "")
+    if len(parts) != 3 or not PANE.fullmatch(pane) or not NUMBER.fullmatch(parts[1]):
+        return None
+    socket, server = parts[0], int(parts[1])
+    if not (os.path.isabs(socket) and socket.isprintable()) or server <= 0:
+        return None
+    start = proc_start(server, proc)
+    return None if start is None else (socket, server, start, pane)
+
+
+def lead_record(session: dict, tmux: tuple[str, int, int, str] | None) -> dict:
+    """The record naming a session (a session file whose process runs) with its proc_tmux."""
+    return {"pid": session["pid"], "procStart": proc_start_of(session),
+            "sessionId": session.get("sessionId"), "tmux": list(tmux) if tmux else None,
+            "at": now_iso()}
+
+
+def write_lead(repo: Repo, record: dict) -> None:
+    """Atomic. The state dir is out of the sandbox's reach, so only a bare command gets here."""
+    write_json(repo.lead_path, record)
+
+
+def read_lead(repo: Repo) -> dict | None:
+    """The lead record with its shape checked ({pid, procStart, sessionId, tmux, at}, tmux a
+    tuple or None), or None when it is missing, too long, not JSON, nested deeper than json
+    parses (RecursionError: before 3.12, or in pure Python, near the recursion limit of 1000
+    levels, which LEAD_MAX bytes reach) or of another shape. Only bare commands write it, but
+    it is read as data all the same: a bad one names no lead."""
+    data = read_head(repo.lead_path, LEAD_MAX + 1)
+    if data is None or len(data) > LEAD_MAX:
+        return None
+    try:
+        rec = json.loads(data)
+    except (ValueError, RecursionError):  # json recurses on nesting, as tmux-tab-bar knows
+        return None
+    if not isinstance(rec, dict):
+        return None
+    pid, start, sid, tmux, at = (rec.get(k) for k in ("pid", "procStart", "sessionId", "tmux",
+                                                      "at"))
+    if type(pid) is not int or pid <= 0 or type(start) is not int or start < 0:
+        return None
+    if not (isinstance(sid, str) and SID.fullmatch(sid)) or not isinstance(at, str):
+        return None
+    if tmux is not None:
+        if not (isinstance(tmux, list) and len(tmux) == 4):
+            return None
+        socket, server, server_start, pane = tmux
+        if not (isinstance(socket, str) and os.path.isabs(socket) and socket.isprintable()
+                and type(server) is int and server > 0 and type(server_start) is int
+                and server_start >= 0 and isinstance(pane, str) and PANE.fullmatch(pane)):
+            return None
+        tmux = (socket, server, server_start, pane)
+    return {"pid": pid, "procStart": start, "sessionId": sid, "tmux": tmux, "at": at}
+
+
+def main_sessions(repo: Repo) -> list[dict]:
+    """The live sessions in the main checkout, by pid: session files whose process runs
+    (session_running), with a socket (socket_of: a `claude -p` has none, so it never counts)
+    and a cwd inside repo.main, agent worktrees under it included. `lane addr lead`, the board's
+    footer and lead_of share this one set. Call it only where pids_visible()."""
+    return sorted((s for s in session_files() if cwd_inside(s.get("cwd"), repo.main)
+                   and session_running(s) and socket_of(s)), key=lambda s: s["pid"])
+
+
+def lead_of(repo: Repo, sessions: list[dict]) -> dict | None:
+    """The lead among main_sessions(repo): with one, that one, whatever the record says; with
+    two or more, the one whose pid and procStart the record holds (a /clear keeps both); else
+    the one session whose own environment names the record's tmux server (socket, pid and
+    start) and pane, which is a /pass successor (`respawn-pane -k` keeps the pane). Two in that
+    pane (a child claude inherits TMUX_PANE), a tmux restart, or no record: None."""
+    if len(sessions) <= 1:
+        return sessions[0] if sessions else None
+    rec = read_lead(repo)
+    if rec is None:
+        return None
+    for s in sessions:
+        if s["pid"] == rec["pid"] and proc_start_of(s) == rec["procStart"]:
+            return s
+    if rec["tmux"] is None:
+        return None
+    on = [s for s in sessions if proc_tmux(s["pid"]) == rec["tmux"]]
+    return on[0] if len(on) == 1 else None

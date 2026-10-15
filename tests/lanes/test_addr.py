@@ -1,55 +1,52 @@
 """`lane addr`: the messaging address of the one live session in a lane, or in the main checkout
-for `lead`. A live session is a session file whose pid runs with the procStart the file records
-(a child `sleep` here, started in the session's launch dir) and whose messagingSocketPath is a
-socket on disk (made with mknod, which the Bash sandbox allows where socket() is refused). Where a
-session is comes from its file's cwd, as `lane ls` and `open` read it."""
+for `lead`, where the lead record picks one among several. A live session is a session file
+whose pid runs with the procStart the file records (a child `sleep` here, started in the
+session's launch dir) and whose messagingSocketPath is a socket on disk (_fixture.LiveSessions).
+Where a session is comes from its file's cwd, as `lane ls` and `open` read it."""
+import contextlib
 import json
+import json.decoder
+import json.scanner
 import os
 import shutil
 import stat
 import subprocess
+import sys
 import time
 import unittest
 from unittest import mock
 
-from _fixture import LanesRepo
+from _fixture import LANE, LiveSessions
 import lanelib  # noqa: E402  (on sys.path once _fixture is imported)
 
+# Lead records that fit in LEAD_MAX bytes and nest past json's reach in pure Python (pure_json).
+DEEP_RECORDS = {"nested lists": "[" * 2048 + "]" * 2048,
+                "a nested object": '{"pid": ' + "[" * 2040 + "]" * 2040 + "}"}
+# `lane` (argv[1], its arguments after) with json's pure-Python scanner, as pure_json sets.
+PURE_JSON_LANE = """
+import json, json.decoder, json.scanner, runpy, sys
+json.scanner.make_scanner = json.scanner.py_make_scanner
+json._default_decoder = json.decoder.JSONDecoder()
+sys.argv = sys.argv[1:]
+runpy.run_path(sys.argv[0], run_name="__main__")
+"""
 
-class Addr(LanesRepo):
+
+@contextlib.contextmanager
+def pure_json():
+    """json.loads through json's pure-Python scanner, CPython's own fallback when its C one is
+    missing. It recurses in Python, so it raises RecursionError near the recursion limit (1000
+    levels). This interpreter's C scanner reaches about 10000 levels, more than LEAD_MAX bytes
+    can nest, so without this no lead record raises here; older or other builds stop sooner."""
+    with mock.patch.object(json.scanner, "make_scanner", json.scanner.py_make_scanner), \
+            mock.patch.object(json, "_default_decoder", json.decoder.JSONDecoder()):
+        yield
+
+
+class Addr(LiveSessions):
     def setUp(self):
         super().setUp()
-        self.socks = os.path.join(self.tmp, "socks")
-        os.makedirs(self.socks)
         self.lane("new", "chart-fix")
-
-    def child(self, cwd=None, done=False):
-        """A process in cwd: running (`sleep`), or exited and reaped (done)."""
-        p = subprocess.Popen(["sleep", "60"] if not done else ["true"], cwd=cwd)
-        self.addCleanup(lambda: p.poll() is None and (p.kill(), p.wait()))
-        if done:
-            p.wait()
-        return p.pid
-
-    def session(self, at, pid=None, start=None, skew=0, sock="socket", path=None, **extra):
-        """A session file for pid (by default a fresh child running in at, the launch dir)
-        whose cwd field is at unless extra overrides it. sock: "socket" makes one at path (by
-        default under self.socks), "file" a regular file there, None leaves it missing. skew
-        shifts the recorded procStart off the real one: the pid, reused."""
-        os.makedirs(at, exist_ok=True)
-        pid = pid or self.child(at)
-        if start is None:
-            start = (lanelib.proc_start(pid) or 1) + skew
-        path = path or os.path.join(self.socks, f"{pid}.sock")
-        if sock == "socket":
-            os.mknod(path, stat.S_IFSOCK | 0o600)
-        elif sock == "file":
-            self.write(path, "")
-        self.write(os.path.join(self.home, ".claude", "sessions", f"{pid}.json"),
-                   json.dumps({"pid": pid, "procStart": str(start), "sessionId": f"s-{pid}", "kind": "interactive",
-                               "cwd": at, "tmux": f"proj:@{pid}.%{pid}", "status": "idle",
-                               "messagingSocketPath": path, **extra}))
-        return "uds:" + path
 
     def refused(self, lane_id, *needles):
         p = self.run_lane("addr", lane_id)
@@ -177,6 +174,153 @@ class Addr(LanesRepo):
         p = self.run_lane(*argv)
         self.assertEqual(p.returncode, 1, p.stdout)
         self.assertIn(needle, p.stderr)
+
+
+class LeadPick(LiveSessions):
+    """`lane addr lead` with two or more live sessions in the main checkout: the lead record
+    (lanelib.read_lead) picks one by pid and procStart, else by the tmux server and pane its
+    process runs in (a /pass successor), else none, and the refusal says how to pick."""
+
+    def setUp(self):
+        super().setUp()
+        self.lane("new", "chart-fix")
+
+    def addr_lead(self):
+        """What a lane gets when it asks for the lead, from inside its worktree."""
+        return self.lane("addr", "lead", cwd=self.lane_path("chart-fix")).strip()
+
+    def refused(self, *needles):
+        p = self.run_lane("addr", "lead")
+        self.assertEqual((p.returncode, p.stdout), (1, ""), p.stderr)
+        for needle in needles:
+            self.assertIn(needle, p.stderr)
+        return p.stderr
+
+    def pair(self, panes=("new", "new")):
+        """Two live sessions in the main checkout, one in each pane: [(pid, uds)]."""
+        out = []
+        for pane in panes:
+            pid = self.child(self.main, pane=pane)
+            out.append((pid, self.session(self.main, pid=pid)))
+        return out
+
+    def test_the_record_picks_the_lead_by_pid_and_start(self):
+        (_, _), (b, want) = self.pair()
+        self.write_lead(b)
+        self.assertEqual(self.addr_lead(), want)
+
+    def test_a_clear_keeps_the_lead(self):
+        # /clear starts a new session id in the same process: pid and procStart still match.
+        (a, want), _ = self.pair()
+        self.write_lead(a, sid="s-before-clear")
+        self.assertEqual(self.addr_lead(), want)
+
+    def test_a_pass_successor_in_the_recorded_pane_takes_the_lead(self):
+        # The recorded claude is gone; `respawn-pane -k` keeps the pane, so its successor runs
+        # in the same pane on the same server.
+        gone = self.child(self.main, done=True)
+        (_, want), _ = self.pair(("%7", "%8"))
+        self.write_lead(gone, start=1, tmux=self.tmux_of("%7"))
+        self.assertEqual(self.addr_lead(), want)
+
+    def test_the_recorded_pane_on_another_server_picks_none(self):
+        # Pane ids restart at %0 on every server, and a tmux restart may reuse the server pid.
+        gone = self.child(self.main, done=True)
+        self.pair(("%7", "%8"))
+        sock, pid, start, pane = self.tmux_of("%7")
+        cases = {"another socket": [sock + "-2", pid, start, pane],
+                 "another server": self.tmux_of("%7", self.tmux_server("other")),
+                 "the server pid reused": [sock, pid, start + 1, pane]}
+        for why, tmux in cases.items():
+            with self.subTest(why):
+                self.write_lead(gone, start=1, tmux=tmux)
+                self.refused("2 live sessions in the main checkout", "No lead picked")
+
+    def test_two_sessions_in_the_recorded_pane_pick_none(self):
+        # A claude started from the lead's Bash inherits its TMUX_PANE.
+        gone = self.child(self.main, done=True)
+        self.pair(("%7", "%7"))
+        self.write_lead(gone, start=1, tmux=self.tmux_of("%7"))
+        self.refused("No lead picked")
+
+    def test_one_live_session_is_the_lead_whatever_the_record_names(self):
+        want = self.session(self.main)
+        other = self.child(self.main)
+        self.write_lead(other, tmux=self.tmux_of("%1"))
+        self.assertEqual(self.addr_lead(), want)
+
+    def test_no_pick_refuses_with_each_window_and_the_way_to_pick(self):
+        (a, ua), (b, ub) = self.pair()
+        err = self.refused("2 live sessions in the main checkout (the lead), so no one address",
+                           f"pid {a} interactive proj:@{a} idle {ua}",
+                           f"pid {b} interactive proj:@{b} idle {ub}",
+                           "No lead picked: the lead takes it with a bare `lane lead`",
+                           "(Hayden: `! lane lead` at the lead's prompt)",
+                           "or any bare lane new, open, adopt or done it runs",
+                           "After a tmux restart the lead must act again")
+        self.assertNotIn(f"%{a}", err)  # the window, not the pane
+
+    def test_a_bad_record_picks_none(self):
+        (a, _), _ = self.pair()
+        start = lanelib.proc_start(a)
+        good = {"pid": a, "procStart": start, "sessionId": f"s-{a}", "tmux": None,
+                "at": "2026-10-14T21:05:00+00:00"}
+        cases = {"not JSON": "{", "a list": "[]", "pid a string": dict(good, pid=str(a)),
+                 "procStart a string": dict(good, procStart=str(start)),
+                 "pid a bool": dict(good, pid=True), "no session id": dict(good, sessionId=None),
+                 "a bad session id": dict(good, sessionId="../x"),
+                 "no at": {k: v for k, v in good.items() if k != "at"},
+                 "tmux too short": dict(good, tmux=["/s", 1, 1]),
+                 "tmux pane bad": dict(good, tmux=["/s", 1, 1, "7"]),
+                 "tmux socket relative": dict(good, tmux=["s", 1, 1, "%7"]),
+                 "too long": dict(good, pad="x" * lanelib.LEAD_MAX), **DEEP_RECORDS}
+        for why, rec in cases.items():
+            with self.subTest(why):
+                self.write(self.lead_path, rec if isinstance(rec, str) else json.dumps(rec))
+                self.assertIsNone(lanelib.read_lead(lanelib.Repo(self.main, self.common)))
+                self.refused("No lead picked")
+        self.write(self.lead_path, json.dumps(good))
+        self.assertEqual(lanelib.read_lead(lanelib.Repo(self.main, self.common)), good)
+
+    def test_a_record_nested_past_json_reach_picks_none(self):
+        # json raises RecursionError, not ValueError, on deep nesting: `addr lead` and `ls`
+        # printed a traceback. pure_json makes that reachable here (its docstring says why).
+        self.pair()
+        for why, rec in DEEP_RECORDS.items():
+            with self.subTest(why):
+                self.assertLessEqual(len(rec), lanelib.LEAD_MAX)
+                self.write(self.lead_path, rec)
+                with pure_json():
+                    self.assertRaises(RecursionError, json.loads, rec)
+                    self.assertIsNone(lanelib.read_lead(lanelib.Repo(self.main, self.common)))
+                p = self.run_pure_json("addr", "lead")
+                self.assertEqual((p.returncode, p.stdout), (1, ""), p.stderr)
+                self.assertIn("2 live sessions in the main checkout", p.stderr)
+                self.assertIn("No lead picked", p.stderr)
+                self.assertNotIn("Traceback", p.stderr)
+                p = self.run_pure_json("ls")
+                self.assertEqual(p.returncode, 0, p.stderr)
+                self.assertIn("main checkout: 2 live sessions", p.stdout)
+                self.assertIn("No lead picked", p.stdout)
+
+    def run_pure_json(self, *args):
+        """run_lane with json's pure-Python scanner (pure_json)."""
+        return subprocess.run([sys.executable, "-c", PURE_JSON_LANE, LANE, *args], cwd=self.main,
+                              env=self.env, capture_output=True, text=True, timeout=60)
+
+    def test_proc_tmux_reads_the_process_own_environment(self):
+        sock, server, start, _ = self.tmux_of("%3")
+        self.assertEqual(lanelib.proc_tmux(self.child(pane="%3")), (sock, server, start, "%3"))
+        self.assertIsNone(lanelib.proc_tmux(self.child(pane=None)))
+        # A socket path may hold a comma: split from the right, as tmux-tab-bar does.
+        odd = self.tmux_server("a,b")
+        self.assertEqual(lanelib.proc_tmux(self.child(pane="%4", server=odd))[0],
+                         os.path.join(self.tmp, "tmux-sock", "a,b"))
+        gone = self.child(done=True)  # a server pid that no longer runs has no start
+        self.assertIsNone(lanelib.proc_tmux(self.child(pane="%5", server=f"/s,{gone},0")))
+        for bad in ("/s,x,0", "rel,1,0", "/s,1"):
+            with self.subTest(bad):
+                self.assertIsNone(lanelib.proc_tmux(self.child(pane="%5", server=bad)))
 
 
 if __name__ == "__main__":

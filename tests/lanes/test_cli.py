@@ -13,6 +13,7 @@ import os
 import shlex
 import shutil
 import signal
+import stat
 import subprocess
 import sys
 import threading
@@ -1036,7 +1037,7 @@ FAKE = r'''
   drop      a file it removes on SIGTERM, before on_term ({pid} its pid: its session file,
             gone mid-exit)
   children  configs of fakes it starts, each with its own cwd and env
-  then      {argv, cwd, go, out}: once go exists, run argv in cwd and write {rc, err} to out
+  then      {argv, cwd, go, out}: once go exists, run argv in cwd and write {rc, out, err} to out
   comm      the comm it gives itself (/proc/self/comm), e.g. "tmux: server"
   session   {file, sid}: Claude Code's session file it writes for itself (pid, procStart)
 It prints "ready <pid> <its descendants' pids>" once set up, then sleeps."""
@@ -1087,18 +1088,17 @@ if then := cfg.get("then"):
     p = subprocess.run(then["argv"], cwd=then["cwd"], capture_output=True, text=True,
                        timeout=60)
     with open(then["out"] + ".tmp", "w") as f:
-        json.dump({"rc": p.returncode, "err": p.stderr}, f)
+        json.dump({"rc": p.returncode, "out": p.stdout, "err": p.stderr}, f)
     os.rename(then["out"] + ".tmp", then["out"])
 while True:
     time.sleep(60)
 '''
 
 
-class Close(LanesRepo):
-    """`lane done` ends what provably belongs to the lane and refuses, by name and before any
-    signal, what doesn't: the kill-scope matrix. Every process here is a disposable fake this
-    test starts (FAKE), proven the lane's or not by session files and transcripts under the temp
-    HOME; cleanup kills each one still running as the process the test started."""
+class Fakes(LanesRepo):
+    """A lanes repo with lane chart-fix and disposable fake processes (FAKE) this test starts,
+    proven a lane's or the lead's by session files and transcripts under the temp HOME; cleanup
+    kills each one still running as the process the test started."""
 
     SID = "sess-lane-0001"
 
@@ -1197,6 +1197,33 @@ class Close(LanesRepo):
         path = os.path.join(self.tmp, "state", "dotclaude", "open-sessions", f"{sid}.json")
         self.write(path, json.dumps({"session_id": sid, "cwd": cwd, "pane": "%1"}))
         return path
+
+    def act_under(self, cfg, argv, cwd=None, tag=""):
+        """Start the fake cfg, which runs `lane <argv>` from cwd (the main checkout's by default)
+        as its child once told to; its pid, and the go and out files await_done takes (tag
+        tells several in one test apart)."""
+        go, out = os.path.join(self.tmp, f"go{tag}"), os.path.join(self.tmp, f"done{tag}.json")
+        cfg["then"] = {"argv": [sys.executable, LANE, *argv], "cwd": cwd or self.main,
+                       "go": go, "out": out}
+        pid, *_ = self.start(cfg)
+        return pid, go, out
+
+    def done_under(self, cfg, lane_id="chart-fix"):
+        """act_under for `lane done <lane_id> --abandon`."""
+        return self.act_under(cfg, ["done", lane_id, "--abandon"])
+
+    def await_done(self, go, out):
+        """Let the act run; its {rc, out, err}."""
+        self.write(go, "")
+        deadline = time.monotonic() + 60
+        while not os.path.exists(out) and time.monotonic() < deadline:
+            time.sleep(0.05)
+        return json.loads(self.read(out))
+
+
+class Close(Fakes):
+    """`lane done` ends what provably belongs to the lane and refuses, by name and before any
+    signal, what doesn't: the kill-scope matrix."""
 
     def assertClosed(self):
         self.assertFalse(os.path.exists(self.path))
@@ -1628,22 +1655,6 @@ class Close(LanesRepo):
         self.assertIn(f"{bg} {self.comms[bg]} (background session {self.SID}, which the daemon "
                       "owns: run `claude stop job-1234abcd`)", p.stderr)
         self.assertRefusedUntouched(p, bg)
-
-    def done_under(self, cfg, lane_id="chart-fix"):
-        """Start the fake cfg, which runs `lane done <lane_id> --abandon` from the main
-        checkout's cwd as its child once told to; its pid and the run's {rc, err}."""
-        go, out = os.path.join(self.tmp, "go"), os.path.join(self.tmp, "done.json")
-        cfg["then"] = {"argv": [sys.executable, LANE, "done", lane_id, "--abandon"],
-                       "cwd": self.main, "go": go, "out": out}
-        pid, *_ = self.start(cfg)
-        return pid, go, out
-
-    def await_done(self, go, out):
-        self.write(go, "")
-        deadline = time.monotonic() + 60
-        while not os.path.exists(out) and time.monotonic() < deadline:
-            time.sleep(0.05)
-        return json.loads(self.read(out))
 
     def test_only_the_lead_closes_lanes(self):
         # Another lane's session, cd'd to the main checkout or not, never closes this lane.
@@ -2178,6 +2189,286 @@ class Close(LanesRepo):
             self.assertTrue(lane_mod.signal_proc(proc, signal.SIGTERM))
         self.assertTrue(self.gone(pid))
         self.assertEqual(self.signals(), [(pid, "SIGTERM")])
+
+
+class LeadAct(Fakes):
+    """A bare lead act (init, new, adopt, open without --print, done) that succeeds records the
+    nearest Claude session above it as the lead, when that session is interactive, has a socket
+    and launched in the main checkout; `lane lead` does the same or says why it can't. Each
+    session is a fake here whose TMUX names this test runner as its server."""
+
+    MAIN_SID = "sess-main-0001"
+
+    def setUp(self):
+        super().setUp()
+        self.socks = os.path.join(self.tmp, "socks")
+        os.makedirs(self.socks)
+        self.tmux_sock = os.path.join(self.tmp, "tmux-sock", "default")
+        self.acts = 0
+
+    def act(self, argv, run_in=None, **session):
+        """A fake session (session: the keywords session() takes) runs `lane <argv>` from run_in
+        (the main checkout by default); its pid and the act's {rc, out, err}."""
+        (pid,), res = self.acts_in_chain(argv, [session], run_in)
+        return pid, res
+
+    def chain(self, argv, under, run_in=None, **session):
+        """act, from a fake session that another one (under: session() keywords) started, so
+        the act's nearest session is not the only one above it; both pids, the farther first,
+        and the act's {rc, out, err}."""
+        (top, pid), res = self.acts_in_chain(argv, [under, session], run_in)
+        return top, pid, res
+
+    def acts_in_chain(self, argv, sessions, run_in=None):
+        """Fake sessions (each session()'s keywords), each started by the one before it, the
+        last of which runs `lane <argv>` from run_in (the main checkout by default) once their
+        session files are written; their pids, the first started first, and the act's result.
+        A fake on a pane runs with TMUX naming this test runner as its server."""
+        self.acts += 1
+        go = os.path.join(self.tmp, f"go{self.acts}")
+        out = os.path.join(self.tmp, f"done{self.acts}.json")
+        extra = {"then": {"argv": [sys.executable, LANE, *argv], "cwd": run_in or self.main,
+                          "go": go, "out": out}}  # the nearest runs the act
+        for kw in reversed(sessions):
+            cfg = self.fake(kw.get("real_cwd") or kw.get("cwd") or self.main, **extra)
+            if pane := kw.get("pane", "%3"):
+                cfg["env"].update(TMUX=f"{self.tmux_sock},{os.getpid()},0", TMUX_PANE=pane)
+            extra = {"children": [cfg]}  # the next one out starts it
+        pids = self.start(cfg)
+        for pid, kw in zip(pids, sessions):
+            self.session(pid, **{k: v for k, v in kw.items() if k != "real_cwd"})
+        return pids, self.await_done(go, out)
+
+    def session(self, pid, cwd=None, sid=MAIN_SID, kind="interactive", pane="%3", sock=True,
+                **extra):
+        """pid's session file: launched in cwd (the main checkout by default), of kind, on pane
+        (None: no tmux), with a messaging socket unless sock is False, and extra in it."""
+        path = os.path.join(self.socks, f"{pid}.sock")
+        if sock:
+            os.mknod(path, stat.S_IFSOCK | 0o600)
+        self.session_file(pid, sid, cwd=cwd or self.main, kind=kind, messagingSocketPath=path,
+                          **({"tmux": f"proj:@3.{pane}"} if pane else {}), **extra)
+
+    def assertLead(self, pid, sid=MAIN_SID, pane="%3"):
+        rec = self.lead()
+        self.assertIsNotNone(rec, "no lead record")
+        tmux = [self.tmux_sock, os.getpid(), lanelib.proc_start(os.getpid()), pane]
+        self.assertEqual({k: v for k, v in rec.items() if k != "at"},
+                         {"pid": pid, "procStart": self.starts[pid], "sessionId": sid,
+                          "tmux": tmux if pane else None})
+        self.assertIsNotNone(lanelib.parse_iso(rec["at"]))
+        self.assertIsNotNone(lanelib.read_lead(lanelib.Repo(self.main, self.common)))
+
+    def test_a_new_from_the_main_checkout_takes_the_lead(self):
+        pid, res = self.act(["new", "api-docs"])
+        self.assertEqual(res["rc"], 0, res["err"])
+        self.assertLead(pid)
+        self.assertEqual(len(self.config_files()), 1)  # the record is no config
+
+    def test_each_lead_act_takes_it(self):
+        self.git("worktree", "add", "-q", "-b", "side", os.path.join(self.root, "side"))
+        # A real `open` (chart-fix has no live session): the fake's TMUX is set, and a tmux on
+        # PATH that opens the window.
+        tmux = os.path.join(self.fake_bin, "tmux")
+        self.write(tmux, "#!/bin/sh\n[ \"$1\" = new-window ] && echo 'proj:3 (chart-fix)'\n"
+                         "exit 0\n")
+        os.chmod(tmux, 0o755)
+        for n, argv in enumerate((["init"], ["adopt", os.path.join(self.root, "side")],
+                                  ["done", "side", "--abandon"], ["open", "chart-fix"])):
+            with self.subTest(argv=argv):
+                pid, res = self.act(argv, sid=f"sess-main-000{n}")
+                self.assertEqual(res["rc"], 0, res["err"])
+                self.assertLead(pid, f"sess-main-000{n}")
+        self.assertEqual(res["out"], "opened chart-fix in tmux window proj:3 (chart-fix)\n")
+        self.assertIn("opened", self.lane_json("chart-fix"))
+
+    def test_a_refused_or_failed_act_leaves_the_lead_where_it_was(self):
+        _, res = self.act(["new", "chart-fix"])  # it exists
+        self.assertEqual(res["rc"], 1)
+        self.assertIsNone(self.lead())
+        lead, res = self.act(["new", "api-docs"], sid="sess-main-0002")
+        self.assertLead(lead, "sess-main-0002")
+        _, res = self.act(["done", "nope"], sid="sess-main-0003")
+        self.assertEqual(res["rc"], 1)
+        self.assertLead(lead, "sess-main-0002")
+
+    def test_a_look_or_open_print_never_takes_it(self):
+        for argv in (["open", "chart-fix", "--print"], ["ls"], ["addr", "lead"], ["whoami"]):
+            with self.subTest(argv=argv):
+                pid, res = self.act(argv)
+                self.assertEqual(res["rc"], 0, res["err"])  # a failed run proves nothing
+                self.assertIsNone(self.lead())
+                # Each runs alone: two live sessions in main and no lead make `addr lead` refuse.
+                self.kill_ours([pid])
+                self.assertTrue(self.gone(pid))
+
+    def test_a_lane_session_never_takes_it(self):
+        # Its session file's cwd is the lane, though the act runs from the main checkout.
+        _, res = self.act(["new", "api-docs"], cwd=self.path, sid=self.SID)
+        self.assertEqual(res["rc"], 0, res["err"])
+        self.assertIsNone(self.lead())
+
+    def test_the_walk_takes_the_nearest_session_and_only_an_interactive_one(self):
+        for kind in ("sdk-cli", "bg"):
+            with self.subTest(kind=kind):
+                _, res = self.act(["new", f"x-{kind}"], kind=kind)
+                self.assertEqual(res["rc"], 0, res["err"])
+                self.assertIsNone(self.lead())
+        _, res = self.act(["new", "y"], sock=False)  # no socket: no lane could reach it
+        self.assertIsNone(self.lead())
+
+    def test_an_agent_worktree_session_never_takes_it(self):
+        agent = os.path.join(self.main, ".claude", "worktrees", "agent-a1")
+        self.git("worktree", "add", "-q", "-b", "agent-a1", agent)
+        _, res = self.act(["lead"], cwd=agent)
+        self.assertEqual(res["rc"], 1)
+        self.assertIn(f"in linked worktree {agent}: only a session in the main checkout leads",
+                      res["err"])
+        self.assertIsNone(self.lead())
+
+    def test_only_the_nearest_session_can_take_it(self):
+        # An interactive main-checkout session runs a `claude -p`, which runs the act: the
+        # nearest is no lead, and the walk never passes it by for the one above.
+        main = dict(sid=self.MAIN_SID)
+        cli = dict(sid="sess-cli-0001", kind="sdk-cli", sock=False, entrypoint="sdk-cli")
+        _, _, res = self.chain(["new", "api-docs"], main, **cli)
+        self.assertEqual(res["rc"], 0, res["err"])
+        self.assertIsNone(self.lead())
+        _, _, res = self.chain(["lead"], main, **cli)
+        self.assertEqual((res["rc"], res["out"]), (1, ""), res["err"])
+        self.assertIn("session sess-cli-0001 is a sdk-cli session, not an interactive one",
+                      res["err"])
+        self.assertIsNone(self.lead())
+
+    def test_a_session_a_lane_runs_never_takes_it(self):
+        # A lane's claude runs an interactive claude launched in the main checkout: the nearest
+        # passes every check of its own, but any session above being a lane's refuses, by
+        # lead_only's rule, or a lane could make itself the lead.
+        lead, _ = self.act(["new", "api-docs"])
+        self.assertLead(lead)
+        before = self.read(self.lead_path)
+        lane = dict(cwd=self.path, sid=self.SID, pane="%5")
+        top, _, res = self.chain(["lead"], lane, sid="sess-main-0002")
+        self.assertEqual((res["rc"], res["out"]), (1, ""), res["err"])
+        self.assertIn(f"this runs under session {self.SID} ({top} {self.comms[top]}), in linked "
+                      f"worktree {self.path}: a lane's session never leads", res["err"])
+        _, _, res = self.chain(["new", "docs-2"], lane, sid="sess-main-0003")
+        self.assertEqual(res["rc"], 0, res["err"])
+        self.assertEqual(self.read(self.lead_path), before)
+
+    def test_the_leads_own_cd_never_vetoes_it(self):
+        # A Bash cd moves the lead's process cwd, not its session file's: the nearest session
+        # is judged by its launch dir, so a lead cd'd into a lane still takes the lead. Only the
+        # sessions farther up are judged by their real cwd too (lane_above).
+        pid, res = self.act(["lead"], real_cwd=self.path)
+        self.assertEqual(res["rc"], 0, res["err"])
+        self.assertLead(pid)
+        other, res = self.act(["new", "api-docs"], real_cwd=self.path, sid="sess-main-0002")
+        self.assertEqual(res["rc"], 0, res["err"])
+        self.assertLead(other, sid="sess-main-0002")
+
+    def test_a_session_farther_up_counts_by_its_real_cwd_too(self):
+        # A session launched in main whose process now sits in a lane, running a claude that
+        # runs `lane lead`: farther up, the real cwd counts (lane_above), so it refuses.
+        before = self.read(self.lead_path) if os.path.exists(self.lead_path) else None
+        top, _, res = self.chain(["lead"], dict(real_cwd=self.path, sid=self.SID),
+                                 sid="sess-main-0002")
+        self.assertEqual((res["rc"], res["out"]), (1, ""), res["err"])
+        self.assertIn(f"this runs under session {self.SID} ({top} {self.comms[top]}), in linked "
+                      f"worktree {self.path}: a lane's session never leads", res["err"])
+        after = self.read(self.lead_path) if os.path.exists(self.lead_path) else None
+        self.assertEqual(after, before)
+
+    def test_a_record_step_that_fails_never_fails_the_act(self):
+        # The act already succeeded and printed when its session is recorded: a failure there
+        # leaves its exit code and output alone, and the lead where it was. A session file
+        # nested past json's reach raises RecursionError (not ValueError) in session_files,
+        # under lead_claim. Bare from this runner, so no session above could take it anyway.
+        lead, _ = self.act(["new", "api-docs"])
+        self.assertLead(lead)
+        before = self.read(self.lead_path)
+        self.write(os.path.join(self.home, ".claude", "sessions", "nested.json"), "[" * 100000)
+        p = self.run_lane("new", "docs-2")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertNotIn("Traceback", p.stderr)
+        self.assertTrue(p.stdout.startswith("lane docs-2: branch docs-2 from "), p.stdout)
+        self.assertEqual(self.read(self.lead_path), before)
+
+    @unittest.skipIf(os.geteuid() == 0, "root writes through a read-only dir")
+    def test_a_state_dir_it_cannot_write_never_fails_the_act(self):
+        lead, _ = self.act(["new", "api-docs"])
+        before = self.read(self.lead_path)
+        state = os.path.dirname(self.lead_path)
+        os.chmod(state, 0o555)
+        self.addCleanup(os.chmod, state, 0o755)
+        _, res = self.act(["new", "docs-2"], sid="sess-main-0002")
+        self.assertEqual(res["rc"], 0, res["err"])
+        self.assertTrue(res["out"].startswith("lane docs-2: branch docs-2 from "), res["out"])
+        self.assertEqual(self.read(self.lead_path), before)
+        os.chmod(state, 0o755)  # the same session takes it once it can write
+        pid, res = self.act(["lead"], sid="sess-main-0003")
+        self.assertLead(pid, "sess-main-0003")
+
+    def test_take_lead_never_raises(self):
+        # In process: an error of any kind from the claim, and a cwd that is gone
+        # (os.getcwd raises FileNotFoundError), leave the lead where it was.
+        lead, _ = self.act(["new", "api-docs"])
+        before = self.read(self.lead_path)
+        cli = load_lane_script()
+        gone = os.path.join(self.tmp, "gone")
+        os.makedirs(gone)
+        self.addCleanup(os.chdir, os.getcwd())
+        with mock.patch.dict(os.environ, self.env, clear=True):
+            os.chdir(self.main)
+            with mock.patch.object(cli, "lead_claim", side_effect=RuntimeError("boom")) as claim:
+                cli.take_lead()
+            claim.assert_called_once()
+            os.chdir(gone)
+            os.rmdir(gone)
+            cli.take_lead()
+        self.assertEqual(self.read(self.lead_path), before)
+
+    def test_lane_lead_takes_it_and_says_where(self):
+        first, _ = self.act(["new", "api-docs"])
+        self.assertLead(first)
+        pid, res = self.act(["lead"], sid="sess-main-0002", pane="%9")
+        self.assertEqual(res["rc"], 0, res["err"])
+        self.assertEqual(res["out"], f"lead of {self.main}: session sess-main-0002 in proj:@3\n")
+        self.assertLead(pid, "sess-main-0002", "%9")
+        pid, res = self.act(["lead"], sid="sess-main-0003", pane=None,
+                            run_in=self.lane_path("chart-fix"))  # any cwd in the repo
+        self.assertEqual(res["out"], f"lead of {self.main}: session sess-main-0003 in no tmux\n")
+        self.assertLead(pid, "sess-main-0003", None)
+
+    def test_lane_lead_refuses_naming_why(self):
+        cases = [
+            ("a lane's session", dict(cwd=self.path, sid=self.SID),
+             f"session {self.SID} launched in {self.path}, outside the main checkout"),
+            ("a background session", dict(kind="bg"),
+             f"session {self.MAIN_SID} is a background session"),
+            ("a claude -p", dict(kind="sdk-cli"), "is a sdk-cli session, not an interactive one"),
+            ("no socket", dict(sock=False), "has no messaging socket"),
+        ]
+        for why, kw, needle in cases:
+            with self.subTest(why):
+                _, res = self.act(["lead"], **kw)
+                self.assertEqual((res["rc"], res["out"]), (1, ""), res["err"])
+                self.assertIn(needle, res["err"])
+        p = self.run_lane("lead")  # this test runner: no session file above it
+        self.assertEqual(p.returncode, 1)
+        self.assertIn("no Claude session runs this command", p.stderr)
+        self.env["_LANE_TEST_SANDBOXED"] = "1"
+        p = self.run_lane("lead")
+        self.assertEqual(p.returncode, 1)
+        self.assertIn("sandboxed", p.stderr)
+        self.assertIn("bare `lane lead`", p.stderr)
+        self.env["_LANE_TEST_SANDBOXED"] = "0"
+        plain = os.path.join(self.tmp, "plain")
+        self.git("init", "-q", plain, cwd=self.tmp)
+        p = self.run_lane("lead", cwd=plain)
+        self.assertEqual(p.returncode, 1)
+        self.assertIn("no lanes config", p.stderr)
+        self.assertIsNone(self.lead())
 
 
 class SwitchedBranch(LanesRepo):
