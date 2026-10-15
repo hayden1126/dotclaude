@@ -1,0 +1,541 @@
+#!/usr/bin/python3 -I
+"""chrome-bg: run Windows Chrome from WSL behind all windows, for headed puppeteer probes.
+
+  chrome-bg run [--url U] [--size WxH] [--env NAME] -- CMD...   NAME defaults to CHROME_BG_URL
+  chrome-bg start [--url U] [--size WxH] [--ttl 2h] [--json]    detached holder; prints the URL
+  chrome-bg stop <id|url> | --gc
+  chrome-bg ls                                                  id, port, pids, owner, age, cwd
+  chrome-bg check                                               live self-test (opens a window)
+
+A fixture connects with puppeteer.connect({browserURL: process.env.CHROME_BG_URL,
+defaultViewport: null}) and uses (await browser.pages())[0]. Run it with the sandbox off:
+powershell.exe and Chrome's port are unreachable inside it.
+
+Each run has one supervisor, chrome-bg.ps1 beside this repo's bin/, fed one JSON line per op on
+its stdin (hello, launch, place, procs, fg, mark) and answering one JSON line on its stdout. It
+launches Chrome through WMI (so Chrome never inherits the console's right to take the
+foreground), sinks each new run window to the bottom of the z-order, and logs window events to
+<Temp>\\chrome-bg\\<id>.log. The run's owner (this process, or the holder `start` forks) keeps the
+supervisor's stdin open; when it closes, cleanly or because the owner was SIGKILLed, the
+supervisor kills every chrome.exe whose command line holds the run dir and deletes the dir.
+
+Start: hello (geometry, run dir), launch Chrome with --remote-debugging-port=0 and a profile in
+the run dir, read DevToolsActivePort, refuse a port whose /json/version names another browser,
+open the first window off-screen in the background over CDP, then have the supervisor place it
+on the primary monitor at the bottom of the z-order. Records of live runs sit in
+$XDG_STATE_HOME/dotclaude/chrome-bg/<id>.json. `stop` takes a run id or its browserURL, never a
+bare port (chrome-debug.ps1 serves 9222, maybe with your real profile). `--gc` (also run by
+each start and run) stops runs whose owner is gone or whose TTL ran out, kills run dirs with no
+record once they are 2 minutes old, and prunes logs older than 7 days.
+"""
+import argparse
+import base64
+import hashlib
+import http.client
+import json
+import os
+import re
+import secrets
+import select
+import signal
+import socket
+import struct
+import subprocess
+import sys
+import tempfile
+import time
+from urllib.parse import urlparse
+
+# Trusted paths. No env var or PATH entry may change what runs outside the sandbox; tests import
+# this file as a module and patch these names.
+REPO = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+MNT = "/mnt"
+WSLPATH = "/usr/bin/wslpath"
+PS_RE = re.compile(r"/mnt/[a-z]/(?:Windows|WINDOWS)/System32/WindowsPowerShell/v1\.0/powershell\.exe")
+
+ID_RE = re.compile(r"[0-9a-f]{8}")
+SIZE = (1280, 900)
+DEFAULT_ENV = "CHROME_BG_URL"
+YOUNG_S = 120            # a run dir younger than this may belong to a run that is still launching
+LOG_DAYS = 7
+PORT_WAIT_S = 20
+SCREEN_LIMIT = 32767     # Windows window coordinates are 16-bit
+SANDBOX_MSG = ("chrome-bg: run it with the sandbox off (powershell.exe and Chrome's port are "
+               "unreachable inside it)")
+
+# puppeteer-core 23.11.1 ChromeLauncher defaults (probe.mjs) less --disable-popup-blocking (it lets
+# a gestureless window.open put a popup on screen), about:blank and the Linux/mac-only flags.
+# --enable-automation stays so navigator.webdriver matches a launched run.
+FLAGS = [
+    "--allow-pre-commit-input", "--disable-background-networking",
+    "--disable-background-timer-throttling", "--disable-backgrounding-occluded-windows",
+    "--disable-breakpad", "--disable-client-side-phishing-detection",
+    "--disable-component-extensions-with-background-pages", "--disable-crash-reporter",
+    "--disable-default-apps", "--disable-extensions", "--disable-hang-monitor",
+    "--disable-infobars", "--disable-ipc-flooding-protection", "--disable-prompt-on-repost",
+    "--disable-renderer-backgrounding", "--disable-search-engine-choice-screen", "--disable-sync",
+    "--enable-automation", "--export-tagged-pdf", "--force-color-profile=srgb",
+    "--generate-pdf-document-outline", "--metrics-recording-only", "--no-first-run",
+    "--no-default-browser-check", "--no-startup-window", "--remote-debugging-port=0",
+    "--enable-features=PdfOopif"]
+# Chrome keeps only the last --disable-features, so puppeteer's list and ours go in one flag.
+# CalculateNativeWinOcclusion off keeps a covered page `visible` (a second guard beside
+# --disable-backgrounding-occluded-windows, probe B).
+DISABLED = ["Translate", "AcceptCHFrame", "MediaRouter", "OptimizationHints",
+            "ProcessPerSiteUpToMainFrameThreshold", "IsolateSandboxedIframes",
+            "CalculateNativeWinOcclusion"]
+
+
+class Fail(Exception):
+    """An error with a message for the user."""
+
+
+class WrongChrome(Fail):
+    """The port answers, but as a browser this run did not start."""
+
+
+class Stopped(BaseException):
+    def __init__(self, signum):
+        super().__init__(signum)
+        self.signum = signum
+
+
+# Copied from skills/lanes/scripts/lanelib.py sandboxed(), so this script stands alone.
+SANDBOX_INITS = {"apply-seccomp", "bwrap"}
+
+
+def sandboxed(proc: str = "/proc") -> bool:
+    """Whether this process runs in the Bash sandbox, by its pid namespace's pid 1: there it is
+    the sandbox's own launcher (cmdline argv0 `apply-seccomp`, measured on Claude Code 2.1.296,
+    whose comm can read `3`), outside it is init. CLAUDE_PID can't tell: it is set in both."""
+    names = set()
+    try:
+        with open(os.path.join(proc, "1", "cmdline"), "rb") as f:
+            names.add(os.path.basename(f.read().split(b"\0")[0].decode(errors="replace")))
+    except OSError:
+        pass
+    try:
+        with open(os.path.join(proc, "1", "comm")) as f:
+            names.add(f.read().strip())
+    except OSError:
+        pass
+    return bool(names & SANDBOX_INITS)
+
+
+# ---- trusted paths --------------------------------------------------------------------------
+
+def powershell():
+    """Windows PowerShell under /mnt/<drive>/, never from PATH: a sandbox-writable dir on PATH
+    must not be able to plant a powershell.exe that runs sandbox-off."""
+    try:
+        drives = sorted(os.listdir(MNT))
+    except OSError:
+        drives = []
+    for drive in drives:
+        for win in ("Windows", "WINDOWS"):
+            p = os.path.join(MNT, drive, win, "System32", "WindowsPowerShell", "v1.0",
+                             "powershell.exe")
+            if PS_RE.fullmatch(p) and PS_RE.fullmatch(os.path.realpath(p)) and os.path.isfile(p):
+                return p
+    raise Fail("chrome-bg: no powershell.exe at /mnt/<drive>/Windows/System32/WindowsPowerShell/"
+               "v1.0/ (it is never looked up on PATH)")
+
+
+def ps1():
+    p = os.path.join(REPO, "chrome-bg.ps1")
+    if not os.path.isfile(p):
+        raise Fail(f"chrome-bg: {p} is missing (the supervisor ships beside bin/)")
+    return p
+
+
+def wslpath(flag, path):
+    try:
+        r = subprocess.run([WSLPATH, flag, path], capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        raise Fail(f"chrome-bg: {WSLPATH} {flag} failed: {e}")
+    if r.returncode or not r.stdout.strip():
+        raise Fail(f"chrome-bg: {WSLPATH} {flag} {path!r} failed: {r.stderr.strip()}")
+    return r.stdout.strip()
+
+
+def ps_argv(*args):
+    """The supervisor's argv: a per-run supervisor (-Id <id> -Keep) or a one-shot (-Kill, -Scan)."""
+    return [powershell(), "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+            "-File", wslpath("-w", ps1()), *args]
+
+
+# ---- pure helpers ---------------------------------------------------------------------------
+
+def offscreen_x(screen_left, width):
+    """Chrome's `left` (DIPs) for a first window wholly left of the virtual screen. The screen's
+    left edge comes in physical pixels; read as DIPs it can only push the window further left, so
+    a 150% monitor or one at negative x can't catch it. Kept inside Windows' 16-bit range."""
+    return max(-SCREEN_LIMIT, min(SCREEN_LIMIT, min(screen_left, 0) - width - 1000))
+
+
+def chrome_args(profile):
+    return [*FLAGS, "--disable-features=" + ",".join(DISABLED), f'"--user-data-dir={profile}"']
+
+
+def win_join(base, *parts):
+    return "\\".join([base.rstrip("\\"), *parts])
+
+
+def win_parent(path):
+    return path.rstrip("\\").rsplit("\\", 1)[0]
+
+
+def holds_tag(run_dir, rid):
+    """Whether a Windows run dir is this run's: ...\\chrome-bg\\<id>."""
+    return run_dir.rstrip("\\").lower().endswith("\\chrome-bg\\" + rid)
+
+
+def pick(d, *names, default=None):
+    """d[name] for the first of names present, ignoring case (PowerShell may capitalize keys)."""
+    if not isinstance(d, dict):
+        return default
+    low = {str(k).lower(): v for k, v in d.items()}
+    for n in names:
+        if n.lower() in low:
+            return low[n.lower()]
+    return default
+
+
+def rect(v):
+    """(left, top, right, bottom) from {left,top,right,bottom}, {x,y,w|width,h|height},
+    [l, t, r, b] or "l,t,r,b"."""
+    try:
+        if isinstance(v, str):
+            v = [int(float(x)) for x in v.split(",")]
+        if isinstance(v, (list, tuple)) and len(v) == 4:
+            return tuple(int(x) for x in v)
+        if isinstance(v, dict):
+            left = pick(v, "left", "l", "x")
+            top = pick(v, "top", "t", "y")
+            right = pick(v, "right", "r")
+            bottom = pick(v, "bottom", "b")
+            if right is None:
+                right = left + pick(v, "width", "w")
+            if bottom is None:
+                bottom = top + pick(v, "height", "h")
+            return int(left), int(top), int(right), int(bottom)
+    except (TypeError, ValueError):
+        pass
+    raise Fail(f"chrome-bg: unreadable rect {v!r} from the supervisor")
+
+
+def primary_monitor(hello):
+    mons = [m for m in (pick(hello, "monitors") or []) if isinstance(m, dict)]
+    for m in mons:
+        if pick(m, "primary") in (True, 1, "1", "true", "True"):
+            return m
+    return mons[0] if mons else {}
+
+
+def parse_port_file(text):
+    """(port, browser ws path) once DevToolsActivePort holds two well-formed lines, else None."""
+    lines = text.split("\n")
+    if len(lines) < 2:
+        return None
+    port, path = lines[0].strip(), lines[1].strip()
+    if not re.fullmatch(r"\d{1,5}", port) or not 0 < int(port) < 65536:
+        return None
+    if not re.fullmatch(r"/devtools/browser/[0-9A-Za-z-]+", path):
+        return None
+    return int(port), path
+
+
+def parse_duration(text):
+    m = re.fullmatch(r"(\d+(?:\.\d+)?)([smhd]?)", text.strip())
+    if not m or float(m.group(1)) <= 0:
+        raise Fail(f"chrome-bg: --ttl wants a duration like 90s, 30m or 2h, not {text!r}")
+    return float(m.group(1)) * {"": 1, "s": 1, "m": 60, "h": 3600, "d": 86400}[m.group(2)]
+
+
+def parse_size(text):
+    m = re.fullmatch(r"(\d+)x(\d+)", text.strip())
+    if not m or not all(200 <= int(n) <= 8000 for n in m.groups()):
+        raise argparse.ArgumentTypeError(f"--size wants WxH between 200 and 8000, not {text!r}")
+    return int(m.group(1)), int(m.group(2))
+
+
+# ---- WebSocket and CDP ----------------------------------------------------------------------
+
+WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+OP_CONT, OP_TEXT, OP_BINARY, OP_CLOSE, OP_PING, OP_PONG = 0x0, 0x1, 0x2, 0x8, 0x9, 0xA
+
+
+class ConnectionClosed(ConnectionError):
+    pass
+
+
+def ws_mask(data, key):
+    if not data:
+        return b""
+    k = (key * (len(data) // 4 + 1))[:len(data)]
+    return (int.from_bytes(data, "big") ^ int.from_bytes(k, "big")).to_bytes(len(data), "big")
+
+
+def encode_frame(opcode, payload, fin=True, mask_key=None):
+    """One client frame: always masked (RFC 6455 5.3)."""
+    key = mask_key if mask_key is not None else os.urandom(4)
+    n = len(payload)
+    head = bytes([(0x80 if fin else 0) | opcode])
+    if n < 126:
+        head += bytes([0x80 | n])
+    elif n < 65536:
+        head += bytes([0x80 | 126]) + struct.pack("!H", n)
+    else:
+        head += bytes([0x80 | 127]) + struct.pack("!Q", n)
+    return head + key + ws_mask(payload, key)
+
+
+def decode_frame(buf):
+    """(fin, opcode, payload, bytes used) for the first whole frame in buf, or None."""
+    if len(buf) < 2:
+        return None
+    b0, b1 = buf[0], buf[1]
+    n, i = b1 & 0x7F, 2
+    if n == 126:
+        if len(buf) < 4:
+            return None
+        n, i = struct.unpack("!H", buf[2:4])[0], 4
+    elif n == 127:
+        if len(buf) < 10:
+            return None
+        n, i = struct.unpack("!Q", buf[2:10])[0], 10
+    key = None
+    if b1 & 0x80:
+        if len(buf) < i + 4:
+            return None
+        key, i = bytes(buf[i:i + 4]), i + 4
+    if len(buf) < i + n:
+        return None
+    payload = bytes(buf[i:i + n])
+    return bool(b0 & 0x80), b0 & 0x0F, ws_mask(payload, key) if key else payload, i + n
+
+
+class WebSocket:
+    """A minimal RFC 6455 client: enough for Chrome's DevTools socket."""
+
+    def __init__(self, url, timeout=10):
+        u = urlparse(url)
+        host, port = u.hostname, u.port or 80
+        path = (u.path or "/") + (f"?{u.query}" if u.query else "")
+        self.sock = socket.create_connection((host, port), timeout=timeout)
+        self.buf = b""
+        self.closed = False
+        key = base64.b64encode(os.urandom(16)).decode()
+        # No Origin header: Chrome refuses a DevTools WebSocket whose Origin it doesn't allow.
+        self.sock.sendall((f"GET {path} HTTP/1.1\r\nHost: {host}:{port}\r\n"
+                           "Upgrade: websocket\r\nConnection: Upgrade\r\n"
+                           f"Sec-WebSocket-Key: {key}\r\nSec-WebSocket-Version: 13\r\n\r\n").encode())
+        deadline = time.monotonic() + timeout
+        while b"\r\n\r\n" not in self.buf:
+            if len(self.buf) > 65536:
+                raise ConnectionError("WebSocket handshake reply too long")
+            self._fill(deadline)
+        head, self.buf = self.buf.split(b"\r\n\r\n", 1)
+        lines = head.decode("latin-1").split("\r\n")
+        if not re.match(r"HTTP/1\.[01] 101\b", lines[0]):
+            self.sock.close()
+            raise ConnectionError(f"WebSocket handshake refused: {lines[0]!r}")
+        headers = {k.strip().lower(): v.strip()
+                   for k, v in (ln.split(":", 1) for ln in lines[1:] if ":" in ln)}
+        want = base64.b64encode(hashlib.sha1((key + WS_GUID).encode()).digest()).decode()
+        if headers.get("sec-websocket-accept") != want:
+            self.sock.close()
+            raise ConnectionError("WebSocket handshake: wrong Sec-WebSocket-Accept")
+
+    def _fill(self, deadline):
+        left = None if deadline is None else deadline - time.monotonic()
+        if left is not None and left <= 0:
+            raise TimeoutError("WebSocket read timed out")
+        self.sock.settimeout(left)
+        try:
+            chunk = self.sock.recv(65536)
+        except socket.timeout:
+            raise TimeoutError("WebSocket read timed out") from None
+        if not chunk:
+            self.closed = True
+            raise ConnectionClosed("WebSocket closed by the peer")
+        self.buf += chunk
+
+    def send_frame(self, opcode, payload, fin=True):
+        self.sock.sendall(encode_frame(opcode, payload, fin))
+
+    def send(self, text):
+        self.send_frame(OP_TEXT, text.encode())
+
+    def recv(self, timeout=None):
+        """The next whole message (str for text, bytes for binary). Pings are answered and
+        control frames between fragments handled; a close frame raises ConnectionClosed."""
+        deadline = None if timeout is None else time.monotonic() + timeout
+        op, parts = None, []
+        while True:
+            frame = decode_frame(self.buf)
+            if frame is None:
+                self._fill(deadline)
+                continue
+            fin, opcode, payload, used = frame
+            self.buf = self.buf[used:]
+            if opcode == OP_PING:
+                self.send_frame(OP_PONG, payload)
+                continue
+            if opcode == OP_PONG:
+                continue
+            if opcode == OP_CLOSE:
+                if not self.closed:
+                    self.closed = True
+                    try:
+                        self.send_frame(OP_CLOSE, payload[:2])
+                    except OSError:
+                        pass
+                raise ConnectionClosed("WebSocket closed by the peer")
+            if opcode in (OP_TEXT, OP_BINARY):
+                if op is not None:
+                    raise ConnectionError("WebSocket: a new message inside a fragmented one")
+                op, parts = opcode, [payload]
+            elif opcode == OP_CONT:
+                if op is None:
+                    raise ConnectionError("WebSocket: a continuation frame with no message")
+                parts.append(payload)
+            else:
+                raise ConnectionError(f"WebSocket: unknown opcode {opcode}")
+            if fin:
+                data = b"".join(parts)
+                return data.decode() if op == OP_TEXT else data
+
+    def close(self):
+        if not self.closed:
+            self.closed = True
+            try:
+                self.send_frame(OP_CLOSE, struct.pack("!H", 1000))
+            except OSError:
+                pass
+        try:
+            self.sock.close()
+        except OSError:
+            pass
+
+
+class CDPError(Fail):
+    pass
+
+
+class CDP:
+    """Chrome DevTools Protocol over one WebSocket: calls carry ids and wait for the matching
+    reply; events and replies to other calls are buffered."""
+
+    def __init__(self, ws_url, timeout=10):
+        self.ws = WebSocket(ws_url, timeout)
+        self.next_id = 0
+        self.events = []
+        self.replies = {}
+
+    def send(self, method, params=None, session=None, timeout=15):
+        self.next_id += 1
+        mid = self.next_id
+        msg = {"id": mid, "method": method, "params": params or {}}
+        if session:
+            msg["sessionId"] = session
+        self.ws.send(json.dumps(msg))
+        deadline = time.monotonic() + timeout
+        while mid not in self.replies:
+            try:
+                m = json.loads(self.ws.recv(max(0.0, deadline - time.monotonic()) or 0.001))
+            except TimeoutError:
+                raise Fail(f"chrome-bg: no CDP reply to {method} in {timeout}s") from None
+            if not isinstance(m, dict):
+                continue
+            if "id" in m:
+                self.replies[m["id"]] = m
+            elif "method" in m:
+                self.events.append(m)
+        m = self.replies.pop(mid)
+        if "error" in m:
+            raise CDPError(f"chrome-bg: CDP {method} failed: {m['error']}")
+        return m.get("result") or {}
+
+    def close(self):
+        self.ws.close()
+
+
+def json_version(port, timeout=5):
+    """GET /json/version straight from 127.0.0.1 (http.client: no proxy env applies)."""
+    c = http.client.HTTPConnection("127.0.0.1", port, timeout=timeout)
+    try:
+        c.request("GET", "/json/version")
+        r = c.getresponse()
+        body = r.read()
+    finally:
+        c.close()
+    if r.status != 200:
+        raise Fail(f"chrome-bg: 127.0.0.1:{port}/json/version answered {r.status}")
+    v = json.loads(body)
+    if not isinstance(v, dict):
+        raise Fail(f"chrome-bg: 127.0.0.1:{port}/json/version is not an object")
+    return v
+
+
+def browser_ws(port, path):
+    """This run's browser WebSocket URL, refusing a port whose /json/version names another
+    browser (the port was reused, or it is someone else's Chrome)."""
+    got = urlparse(str(json_version(port).get("webSocketDebuggerUrl") or "")).path
+    if got != path:
+        raise WrongChrome(f"chrome-bg: refusing port {port}: its browser WebSocket {got!r} is not "
+                          f"this run's {path!r}, so it is another Chrome")
+    return f"ws://127.0.0.1:{port}{path}"
+
+
+# ---- CLI ------------------------------------------------------------------------------------
+
+def build_parser():
+    ap = argparse.ArgumentParser(prog="chrome-bg", description=__doc__.split("\n")[0],
+                                 formatter_class=argparse.RawDescriptionHelpFormatter,
+                                 epilog="\n".join(__doc__.split("\n")[2:]))
+    sub = ap.add_subparsers(dest="cmd", required=True)
+
+    def chrome_opts(p):
+        p.add_argument("--url", default="about:blank", help="the first page (default about:blank)")
+        p.add_argument("--size", type=parse_size, default=SIZE, metavar="WxH",
+                       help="window size in DIPs (default 1280x900)")
+
+    p = sub.add_parser("run", help="start, run CMD with the URL in $NAME, stop when it ends")
+    chrome_opts(p)
+    p.add_argument("--env", default=DEFAULT_ENV, metavar="NAME",
+                   help=f"env var for the browserURL (default {DEFAULT_ENV})")
+    p.add_argument("cmd", nargs=argparse.REMAINDER, metavar="-- CMD...")
+    p.set_defaults(func=lambda a: cmd_run(a))
+    p = sub.add_parser("start", help="start a detached run; print its browserURL")
+    chrome_opts(p)
+    p.add_argument("--ttl", default="2h", help="stop it after this long (default 2h)")
+    p.add_argument("--json", action="store_true", help="print {id, url, port, pid}")
+    p.set_defaults(func=lambda a: cmd_start(a))
+    p = sub.add_parser("stop", help="stop a run by id or browserURL, or --gc")
+    p.add_argument("target", nargs="?", metavar="id|url")
+    p.add_argument("--gc", action="store_true",
+                   help="stop runs whose owner is gone or TTL ran out; kill unrecorded run dirs")
+    p.set_defaults(func=lambda a: cmd_stop(a))
+    p = sub.add_parser("ls", help="list runs: id, port, pids, owner, age, cwd")
+    p.set_defaults(func=lambda a: cmd_ls(a))
+    p = sub.add_parser("check", help="live self-test: opens a window behind yours for ~30 s")
+    p.set_defaults(func=lambda a: cmd_check(a))
+    return ap, sub
+
+
+def main(argv=None):
+    ap, _ = build_parser()
+    args = ap.parse_args(argv)
+    if sandboxed():
+        print(SANDBOX_MSG, file=sys.stderr)
+        return 2
+    try:
+        return args.func(args)
+    except Fail as e:
+        print(e, file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
