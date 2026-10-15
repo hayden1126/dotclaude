@@ -1,6 +1,7 @@
-"""The lead's tools in skills/lanes/scripts/lane: `open`, `lock`, and the board's WINDOW column and
-locks footer. tmux is a stub that logs its argv; a live session is a session file whose pid is
-this test process."""
+"""The lead's tools in skills/lanes/scripts/lane: `open`, `lock`, and the board's WINDOW column,
+locks footer and main-checkout footer. tmux is a stub that logs its argv; a live session is a
+session file whose pid is this test process, or for the main-checkout footer a child of it
+(_fixture.LiveSessions)."""
 import contextlib
 import fcntl
 import io
@@ -15,7 +16,7 @@ import time
 import unittest
 from unittest import mock
 
-from _fixture import LANE, LanesRepo
+from _fixture import LANE, LanesRepo, LiveSessions
 from test_cli import load_lane_script
 
 TMUX_STUB = """#!/bin/sh
@@ -214,6 +215,60 @@ class Board(Lead):
         self.assertIsNone(row["window"])
         self.assertIsNone(row["ctx"])
         self.assertIsNone(row["states"])
+
+
+class MainFooter(LiveSessions):
+    """The board's line for a crowded main checkout: shown only with two or more live sessions
+    there, each by window, the recorded lead marked first."""
+
+    def setUp(self):
+        super().setUp()
+        self.lane("new", "chart-fix")
+
+    def footer(self):
+        """The board's `main checkout:` line, or None."""
+        lines = [ln for ln in self.lane("ls").splitlines() if ln.startswith("main checkout:")]
+        self.assertLessEqual(len(lines), 1)
+        return lines[0] if lines else None
+
+    def test_only_two_or_more_live_sessions_show_and_the_lead_comes_first(self):
+        self.assertIsNone(self.footer())
+        a = self.child(self.main)
+        self.session(self.main, pid=a, status="busy")
+        self.session(self.lane_path("chart-fix"))  # a lane's: not the main checkout's
+        self.assertIsNone(self.footer())
+        b = self.child(self.main)
+        self.session(self.main, pid=b)
+        self.write_lead(b)
+        self.assertEqual(self.footer(), f"main checkout: 2 live sessions: proj:@{b} (lead, pid "
+                                        f"{b}, idle), proj:@{a} (pid {a}, busy)")
+        self.assertTrue(self.lane("ls").rstrip().endswith(self.footer()))  # under the board
+
+    def test_no_tmux_an_agent_worktree_and_the_way_to_pick(self):
+        agent = os.path.join(self.main, ".claude", "worktrees", "agent-a1")
+        os.makedirs(agent)
+        a, b = self.child(self.main, pane=None), self.child(agent)
+        self.session(self.main, pid=a, tmux=None)
+        self.session(agent, pid=b)
+        line = self.footer()
+        self.assertTrue(line.startswith("main checkout: 2 live sessions: "), line)
+        self.assertIn(f"no tmux (pid {a}, idle)", line)
+        self.assertIn(f"proj:@{b} (pid {b}, idle, agent worktree)", line)
+        self.assertIn("). No lead picked: the lead takes it with a bare `lane lead`", line)
+
+    def test_no_footer_when_sandboxed(self):
+        self.session(self.main)
+        self.session(self.main)
+        self.assertIsNotNone(self.footer())
+        self.env["_LANE_TEST_SANDBOXED"] = "1"
+        self.assertIsNone(self.footer())
+
+    def test_json_keeps_its_shape(self):
+        self.session(self.main)
+        self.session(self.main)
+        rows = json.loads(self.lane("ls", "--json"))
+        self.assertEqual([r["id"] for r in rows], ["chart-fix"])
+        self.assertFalse(any("main" in k or "lead" in k for k in rows[0]))
 
 
 class Ctx(Lead):

@@ -226,6 +226,51 @@ Why it works this way:
 - **The backlog line moved to the lead.** The lead owns the project STATUS, so the one line at
   merge is a step of its chain, not the lane's.
 
+## One lead per main checkout (lane two-sessions, 2026-10-14)
+
+The night capella-studio got its first lanes, its main checkout held two live sessions. The lead,
+in `main:@3`, had started at 21:05 and ran every `lane new`, `open` and `adopt`. A stray,
+in `main:@2`, had been resumed at 20:16 and never acted as lead. `lane addr lead` refused ("2 live
+sessions in the main checkout"), so no lane could send `merged #N`. The tab bar named both tabs
+`lead`, since it classifies a window by its pane's directory. The fix that night was by hand: each
+lane was told to pick `main:@3` from the refusal.
+
+Hayden's rule: **the lead is the last main-checkout session to act as lead.** A bare `lane init`,
+`new`, `adopt`, `open` (not `--print`) or `done` that succeeds records the Claude session above
+it, and `lane lead` does so on purpose. The other two candidates lose on the one real case:
+
+| Situation | Last to act | Oldest | None until Hayden picks |
+|---|---|---|---|
+| One session (the usual) | that one | that one | that one |
+| capella-studio | `main:@3`, from its acts | `main:@2`, the stray (20:16) | each lane asks Hayden, every merge |
+| The lead passes or clears | kept: same pane, same server | lost: the pass makes the lead youngest | nothing to lose |
+| A side chat in main | never leads: `ls` and `addr` are looks | leads if it started first | asks |
+| Hayden starts a fresh lead by hand | `! lane lead` in it | never, while the old one lives | asks |
+| tmux restarts | none until the lead acts again | the restored order | asks |
+
+How it holds:
+- **The record** sits beside the lanes config in the state dir (`Repo.lead_path`), which
+  sandboxed Bash can't write, so no lane can make itself the lead. It names the session by pid
+  and `procStart` (a /clear keeps both), plus the tmux socket, server pid, server start and pane
+  from the claude process's own environment. The session file's `tmux` field names a tmux
+  session, not a server, and pane ids restart at `%0` on every server, so it can't carry a pick.
+- **Who counts.** The nearest Claude session above the command, found by its process chain as
+  `lane done` finds it, and only when it is interactive, has a messaging socket, and launched in
+  the main checkout outside any linked worktree. A lane's session, an agent worktree's, a
+  `claude -p` or a background session never leads. A refused or failed act changes nothing.
+- **The pick** (`lanelib.lead_of`): one live session is the lead whatever the record says. With
+  two or more, the record's pid and start match first. Then comes exactly one session in the
+  record's pane on the record's server: the pass successor, since `respawn-pane -k` keeps the
+  pane. Anything else is no pick. `lane addr lead` then refuses with each session's window and
+  the way to pick, and the lane tells Hayden once that #N merged, as with no lead at all.
+- **The board** (`lane ls`) adds a line under the table when the main checkout has two or more
+  live sessions: each one's window, pid and state, the lead first, `no tmux` or `agent worktree`
+  where it applies.
+- **The bar** reads the same record. The window holding its pane, on the bar's own server
+  (socket, pid and that pid's start), is `lead`; the main checkout's other tabs, a shell
+  included, are `lead²`, `lead³` in bar order. With no pick, the first keeps `lead`. A new lead
+  renames tabs and moves none.
+
 ## Layout
 
 Claude Code treats every path under `.git/` as a "sensitive file", so Edit/Write there always
@@ -243,6 +288,10 @@ $XDG_STATE_HOME/dotclaude/lanes/<repo>-<hash>.toml
                                 the config: root, setup cmd, port range, live-lane cap, base
                                 (<remote>/<branch>, default origin/main), locks; written only
                                 by a bare `lane init`
+$XDG_STATE_HOME/dotclaude/lanes/<repo>-<hash>.lead.json
+                                the lead record: the main-checkout session that last acted as
+                                lead, written only by bare `lane` commands ("One lead per main
+                                checkout")
 
 <common-dir>/lanes/             CLI-owned; written by `lane` and by hooks, never by the Edit tool
   .lock                         flock for every CLI write (claims are atomic)
@@ -275,13 +324,13 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
   acceptEdits mode succeeds with no prompt, and the shared `info/exclude` hides it
   (`git status --ignored` shows `!! .lane/`).
 - **S3, `excludedCommands`:** `lane new` fetches and `lane ls` asks gh for PR state, and both
-  need the credential the sandbox hides; `ls`, `open`, `done` and `addr` also need to see other
-  processes. PR 1 excluded `lane *`. PR 2 narrowed it to `lane init`, `new`, `adopt`, `ls`,
-  `open` and `done` (and lane-addr added `addr`), each by name, because `lane lock -- <cmd>` must stay sandboxed: under
+  need the credential the sandbox hides; `ls`, `open`, `done`, `addr` and `lead` also need to
+  see other processes. PR 1 excluded `lane *`. PR 2 narrowed it to `lane init`, `new`, `adopt`, `ls`,
+  `open` and `done` (lane-addr added `addr`, and two-sessions `lead`), each by name, because `lane lock -- <cmd>` must stay sandboxed: under
   `lane *`, any command wrapped in it ran sandbox-off without the `dangerouslyDisableSandbox`
   flag the delete guard checks. `whoami`, `claim`, `release`, `who`, `note`, `asks` and `lock`
   touch only `<common-dir>/lanes/` and the lane's `.lane/`, which a lane-rooted sandbox can
-  write (S1). A sandboxed (piped) `ls` says what it skipped; `new`, `open`, `done` and `addr` refuse.
+  write (S1). A sandboxed (piped) `ls` says what it skipped; `new`, `open`, `done`, `addr` and `lead` refuse.
   `new` and `adopt` also run the config's `setup` command through a shell, sandbox-off, and
   `new` makes its worktree under the config's `root`. So the config lives in the state dir, not
   the common dir: sandboxed Bash can read it but not write it, and only a bare `lane init`
@@ -308,8 +357,8 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
   The excluded-command inventory (2026-10-13, `tests/delegation/command_inventory.py`) adds three
   asks: `lane init --setup` names the command each new lane runs, `lane init --root` moves where
   lanes live, and `lane done --abandon` closes unmerged work. The rest of `lane` asks nothing.
-  The excluded-command guard (docs/delegation.md) then let `ls`, `new`, `adopt`, `open`, `done`
-  and `addr` take allow rules, so the classifier never refuses them: an allow rule skips the
+  The excluded-command guard (docs/delegation.md) then let `ls`, `new`, `adopt`, `open`, `done`,
+  `addr` and `lead` take allow rules, so the classifier never refuses them: an allow rule skips the
   classifier, and the guard checks each call's git config, PATH and cwd first. The three asks
   still win.
   A lane that installs from its worktree (`lane lock install -- ./setup.sh`) points the installed
@@ -338,7 +387,8 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
   pid runs with the `procStart` it records, not exited, and its socket is on disk, printable
   and ours. A pass makes a new pid, so callers resolve it before each send. It runs
   sandbox-off, since a sandboxed command has its own pid namespace and sees no other process.
-  The id `lead` is reserved for new lanes.
+  The id `lead` is reserved for new lanes. With two or more live sessions in the main checkout,
+  `lead` picks the recorded lead ("One lead per main checkout").
 
 ## The pieces
 

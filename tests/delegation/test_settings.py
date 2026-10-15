@@ -368,14 +368,14 @@ class Baseline(unittest.TestCase):
         # sandboxed Bash can't write (docs/lanes.md S3; tests/lanes ConfigTrust).
         excluded = S["sandbox"]["excludedCommands"]
         bare = ["lane init", "lane init *", "lane new *", "lane adopt *", "lane ls", "lane ls *",
-                "lane open *", "lane done *", "lane addr *"]
+                "lane open *", "lane done *", "lane addr *", "lane lead"]
         self.assertEqual([p for p in excluded if p.split()[0] == "lane"], bare)
         self.assertNotIn("lane *", excluded)
         for cmd in ("lane lock gate -- true", "lane lock gate -- rm -rf build", "lane whoami",
                     "lane claim 42", "lane note x"):
             self.assertEqual([p for p in excluded if glob_match(p, cmd)], [], cmd)
         for cmd in ("lane ls", "lane ls --json", "lane open chart-fix", "lane done chart-fix",
-                    "lane addr lead"):
+                    "lane addr lead", "lane lead"):
             self.assertTrue(any(glob_match(p, cmd) for p in excluded), cmd)
 
     def test_pass_respawn_runs_outside_the_sandbox(self):
@@ -492,7 +492,8 @@ class Baseline(unittest.TestCase):
             self.assertIsNotNone(m, doc)
             self.assertEqual(set(re.findall(r"`(\w+)`", m.group(1))), allowed, doc)
         for sub in sorted(allowed):
-            sample = "lane ls" if sub == "ls" else f"lane {sub} x"
+            # `ls` and `lead` take no argument: `lane lead x` matches neither of its rules.
+            sample = f"lane {sub}" if sub in ("ls", "lead") else f"lane {sub} x"
             self.assertTrue(matching("allow", sample), sample)
             self.assertTrue(excluded_by(sample), sample)
         for raw in ("lane done x --abandon", "lane init --setup y", "lane init --root y"):
