@@ -614,28 +614,30 @@ class HandoffFlag(LanesRepo):
         self.sessions((-900, 120))
         self.assertIn("handoff?", self.flags())
 
-    def test_a_write_within_the_clock_slack_of_the_merge_lights_it(self):
+    def test_a_write_within_10_s_of_the_merge_lights_it(self):
         # HAYPC's clock steps by seconds, so a write this close may predate the merge.
-        self.merged(mergedAt=self.iso(-5))
+        self.merged(mergedAt=self.iso(-8))
         self.assertIn("handoff?", self.flags())
+        self.merged(mergedAt=self.iso(-13))
+        self.assertNotIn("handoff?", self.flags())
 
-    def test_every_merge_from_the_lane_s_branches_counts(self):
-        # A merge older than the record's last write is fine, so each case fails on one merge.
+    def test_every_merge_from_the_lane_s_branch_counts(self):
+        # The merge (#7) came after the record's last write; neither case may hide it.
+        merge = {"number": 7, "state": "MERGED", "headRefName": "chart-fix",
+                 "mergedAt": self.iso(60)}
         cases = {
             # A follow-up PR from the same branch is the newest, and the label shows it.
-            "follow-up PR": [{"number": 8, "state": "OPEN", "headRefName": "chart-fix"}],
-            # A fork's PR of the same branch name is never the lane's: neither label nor merge.
-            "fork PR": [{"number": 8, "state": "MERGED", "headRefName": "chart-fix",
-                         "mergedAt": self.iso(-300), "isCrossRepository": True}],
+            "follow-up PR": ([merge, {"number": 8, "state": "OPEN", "headRefName": "chart-fix"}],
+                             "#8 open"),
+            # A lane may push to a fork: its PR counts like any other.
+            "fork": ([dict(merge, isCrossRepository=True)], "#7 merged"),
         }
-        for name, extra in cases.items():
+        for name, (rows, label) in cases.items():
             with self.subTest(name):
-                self.env["FAKE_GH_OUT"] = json.dumps(
-                    [{"number": 7, "state": "MERGED", "headRefName": "chart-fix",
-                      "mergedAt": self.iso(60), "isCrossRepository": False}] + extra)
+                self.env["FAKE_GH_OUT"] = json.dumps(rows)
                 (row,) = json.loads(self.lane("ls", "--json"))
                 self.assertIn("handoff?", row["flags"])
-                self.assertEqual(row["pr"], "#8 open" if name == "follow-up PR" else "#7 merged")
+                self.assertEqual(row["pr"], label)
 
     def test_a_merge_from_the_branch_switched_away_from_counts(self):
         # The lane moved to a follow-up branch with no PR yet; its first branch's merge is unseen.
@@ -652,8 +654,14 @@ class HandoffFlag(LanesRepo):
         created = lanelib.parse_iso(self.lane_json("chart-fix")["created"])
         for name, oldest, flagged in (("lane newer", created - 3600, False),
                                       ("lane older", created + 3600, True),
-                                      ("createdAt garbled", "soon", True)):
+                                      ("createdAt garbled", "soon", True),
+                                      # Its branch predates the lane, and so may its PR.
+                                      ("lane adopted", created - 3600, True)):
             with self.subTest(name):
+                repo = lanelib.resolve(self.main)
+                with lanelib.lock(repo):
+                    lanelib.update_lane(repo, "chart-fix",
+                                        lambda rec: rec.update(adopted=name == "lane adopted"))
                 stamp = oldest if isinstance(oldest, str) else datetime.datetime.fromtimestamp(
                     oldest, datetime.timezone.utc).isoformat(timespec="seconds")
                 rows = [{"number": n, "state": "OPEN", "headRefName": f"other-{n}",
@@ -668,10 +676,10 @@ class HandoffFlag(LanesRepo):
         self.assertIn("handoff?", self.flags())
 
     def test_a_session_stamped_just_before_the_write_counts_as_after_it(self):
-        # The clock may have stepped back between the write and the session's start.
-        self.sessions((-5, 900))
+        # The clock may have stepped back between the write and the session's start: 10 s slack.
+        self.sessions((-8, 900))
         self.assertIn("handoff?", self.flags())
-        self.sessions((-60, 900))
+        self.sessions((-13, 900))
         self.assertNotIn("handoff?", self.flags())
 
     def test_a_commit_newer_than_the_record_lights_it(self):

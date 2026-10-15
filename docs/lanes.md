@@ -190,20 +190,24 @@ Why it works this way:
   record is judged against the PR's `mergedAt` instead: written after it, the lane did its
   after-merge handoff; older, the lane never saw the merge and may lack `Keep open:`. Every
   merged PR from the lane's branches counts (the checked-out one and lane.json's, which a switch
-  for a follow-up PR leaves behind), even under a newer PR; a fork's PR never does. An ended
-  session lights the flag only when it started after the record's last write, so it never wrote
-  it, and a newer commit still lights it. Both time checks allow 10 s (`CLOCK_SLACK`): HAYPC's
-  wall clock steps by about 5 s, and GitHub's clock is not the local one. On the 11 lanes merged
-  and closed by 2026-10-14, the old rule flagged all 11 and this one none; 4 of them wrote their
-  after-merge record within 40 s of the merge, so a wider slack would cost asks.
+  for a follow-up PR leaves behind), even under a newer PR, and a fork's too: a lane may push to
+  one, and a stranger's merge can only light the flag. An ended session lights it only when it
+  started after the record's last write, so it never wrote it, and a newer commit still lights
+  it. The merge and session checks allow 10 s (`CLOCK_SLACK`; the commit check keeps its 1 s):
+  HAYPC's wall clock steps by about 5 s, and GitHub's clock is not the local one. On the 11
+  lanes merged and closed by 2026-10-14, the old rule flagged all 11 and this one none; 4 of
+  them wrote their after-merge record within 40 s of the merge, so a wider slack would cost
+  asks.
 - **What it can't tell.** A write after the merge is taken as the after-merge handoff, so a lane
   that never heard of a GitHub merge, then wrote a routine update and exited, passes; the lead's
   message to a live lane covers that window. Whatever can't be read (gh, a `mergedAt`, a session
   stamp, the last commit) leaves the flag on, so an offline or sandboxed `lane ls` shows it on
-  every lane: judge the gate from a bare one. So does a lane older than the oldest PR in `ls`'s
-  list once it holds its 200 (its PR may be cut). A session that ends with no SessionEnd stamp
-  is skipped, as a live one is; for a merged lane the `mergedAt` check still catches the merge
-  it never recorded.
+  every lane: judge the gate from a bare one. Once `ls`'s one gh call returns its full 200 PRs,
+  a lane older than the oldest of them, or adopted (its branch may hold an older PR), keeps the
+  flag too, since its PR may be cut. Only two branches are judged, as `lane done` judges them: a
+  merge from a third branch the lane passed through is missed. A session that ends with no
+  SessionEnd stamp is skipped, as a live one is; for a merged lane the `mergedAt` check still
+  catches the merge it never recorded.
 - **A nudge, never consent** (flow 13). `merged #N` says only when to look. The consent is the
   standing approval written here; the lead proves the merge with `gh pr view` before it acts,
   and `lane done` checks it again (a merged PR whose head is the tip, or the tip in the base).

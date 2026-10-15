@@ -318,8 +318,8 @@ def rebasing_branch(repo: Repo, path: str) -> str:
     """The branch a detached worktree at `path` is rebasing, from the head-name git keeps in
     its admin dir (the one whose gitdir file names `path`), or ''. Any lane can write that dir,
     so it is read bounded, never through a link, and only a valid branch name counts: it picks
-    only the PR `ls` shows and merges that can light handoff? (lane.json's branch is judged as
-    well, so a planted name can add a merge but never hide one)."""
+    only the PR `ls` shows and the merges handoff? judges besides lane.json's branch's, which a
+    planted name can't hide."""
     for admin in glob.glob(os.path.join(repo.common_dir, "worktrees", "*")):
         named = lanelib.read_head(os.path.join(admin, "gitdir"), 4096)
         if named is None or os.path.realpath(os.path.dirname(
@@ -759,13 +759,13 @@ class PRs(NamedTuple):
 
 
 def pr_states(repo: Repo) -> PRs | None:
-    """The repo's own PRs from one gh call: a fork's PR is never a lane's, whatever its branch is
-    called. None when gh can't answer (no network or token)."""
+    """The newest PR_LIMIT PRs from one gh call, a fork's too: a lane may push to one, and a
+    stranger's merge can only light handoff?, never clear it. None when gh can't answer (no
+    network or token)."""
     try:
         p = subprocess.run(["gh", "pr", "list", "--state", "all", "--limit", str(PR_LIMIT),
-                            "--json", "number,state,headRefName,mergedAt,createdAt,"
-                            "isCrossRepository"], cwd=repo.toplevel, capture_output=True,
-                           text=True, timeout=30)
+                            "--json", "number,state,headRefName,mergedAt,createdAt"],
+                           cwd=repo.toplevel, capture_output=True, text=True, timeout=30)
     except (OSError, subprocess.SubprocessError):
         return None
     if p.returncode != 0:
@@ -776,8 +776,6 @@ def pr_states(repo: Repo) -> PRs | None:
         return None
     label, merges = {}, {}
     for row in sorted(rows, key=lambda r: r.get("number", 0)):  # the newest PR wins the label
-        if row.get("isCrossRepository"):
-            continue
         state, head = str(row.get("state")), row.get("headRefName")
         label[head] = f"#{row.get('number')} {state.lower()}"
         if state == "MERGED":
@@ -792,11 +790,13 @@ def pr_states(repo: Repo) -> PRs | None:
 def merges_of(prs: PRs | None, lane: dict, guess: str) -> list[float | None] | None:
     """The mergedAt of every merged PR from the lane's branches: the one `ls` shows the PR of,
     and lane.json's, which a switch for a follow-up PR leaves behind. None when that can't be
-    known: gh can't answer, or the lane is older than the list's horizon (its PRs may be cut)."""
+    known: gh can't answer, or a full list may have cut the lane's PRs (the lane is older than
+    its horizon, or adopted, so its branch may hold a PR older than the lane)."""
     if prs is None:
         return None
     created = lanelib.parse_iso(lane.get("created"))
-    if prs.horizon is not None and (created is None or created < prs.horizon):
+    if prs.horizon is not None and (lane.get("adopted") or created is None
+                                    or created < prs.horizon):
         return None
     return [m for b in dict.fromkeys((guess, lane["branch"])) for m in prs.merges.get(b, [])]
 
