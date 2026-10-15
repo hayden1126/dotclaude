@@ -403,17 +403,21 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
   only the "gave up on lock" stderr line tells a timeout apart. A wait first retries once after
   50 ms, so one `lane ls` probe (an instant shared lock) doesn't read as a holder; two probes
   50 ms apart still can, and make `--wait 0` give up on a lock nobody runs under.
-- **`hooks/lane-identity.sh`** (SessionStart, Stop, SessionEnd): the identity line, the
-  `sessions[]` entry, the mirror and the end stamp. A compact keeps its session's entry, so the
-  session's start (which `handoff-check` uses) doesn't move. The mirror is crash-safe: it builds
-  `mirror.new`, swaps, then deletes. A `mirror.old` left by a killed run is restored under the
-  lock by the hook or `done`, and read in place by lock-free readers such as `lane asks`. It
-  copies every symlink as a link and never follows one, and skips the copy when nothing in
-  `.lane/` changed. Following links once copied whatever they reached (`../..`, a home dir) into
-  every archive, so evidence must be real files. A `.lane` that is itself a symlink (a repo can
-  commit `.lane -> ..`) is never mirrored or archived, and `lane new` and `adopt` refuse it.
-  SessionEnd stamps `endedAt` before it mirrors, so a slow or failed mirror never costs the
-  stamp.
+- **`hooks/lane-identity.sh`** (SessionStart, Stop, SessionEnd): the identity line, the `sessions[]`
+  entry, the mirror and the end stamp. The identity line names the branch the worktree has checked
+  out, or a detached HEAD by its commit, as `ls` and `whoami` do, since a lane that switched for a
+  follow-up PR leaves `lane.json`'s branch behind. The hook asks git itself (it doesn't import the
+  CLI), and only a valid branch name or a commit reaches the context: the admin dir is
+  sandbox-writable. Anything else names `lane.json`'s branch and says HEAD couldn't be read. A
+  compact keeps its session's entry, so the session's start (which `handoff-check` uses) doesn't
+  move. The mirror is crash-safe: it builds `mirror.new`, swaps, then deletes. A `mirror.old` left
+  by a killed run is restored under the lock by the hook or `done`, and read in place by lock-free
+  readers such as `lane asks`. It copies every symlink as a link and never follows one, and skips
+  the copy when nothing in `.lane/` changed. Following links once copied whatever they reached
+  (`../..`, a home dir) into every archive, so evidence must be real files. A `.lane` that is itself
+  a symlink (a repo can commit `.lane -> ..`) is never mirrored or archived, and `lane new` and
+  `adopt` refuse it. SessionEnd stamps `endedAt` before it mirrors, so a slow or failed mirror never
+  costs the stamp.
 - **`hooks/lane-guard.sh`** (PreToolUse `Edit|Write|MultiEdit`): denies a write through a
   symlinked `.lane` (checked on the path as given, before resolving it), a write to another lane's
   `.lane/`, any Edit-tool write under `<common-dir>/lanes/` (the lane's own included: the CLI
