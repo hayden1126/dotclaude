@@ -226,14 +226,11 @@ def base_ref(cfg: dict) -> str:
     return base if base.startswith("refs/") else f"refs/remotes/{base}"
 
 
-def fetched_base(repo: Repo, cfg: dict) -> str:
-    """The commit the remote's base branch is at now, fetched. `new` branches only from this:
-    sandboxed Bash can write every local ref, so neither a failed fetch's fallback to the local
-    remote-tracking ref nor a ref rewritten after the fetch may choose the commit a lane's
-    setup then runs on, sandbox-off."""
+def base_parts(repo: Repo, cfg: dict) -> tuple[str, str]:
+    """(remote, branch) of the config's base, by the longest remote name that prefixes it: a
+    remote's name may hold a '/' (my/fork)."""
     ref = base_ref(cfg)
     rest = ref.removeprefix("refs/remotes/")
-    # The longest remote name that prefixes it: a remote's name may hold a '/' (my/fork).
     remotes = git(["remote"], repo.toplevel).stdout.split()
     remote = max((r for r in remotes if rest.startswith(r + "/")), key=len, default="")
     branch = rest[len(remote) + 1:] if remote else ""
@@ -241,6 +238,16 @@ def fetched_base(repo: Repo, cfg: dict) -> str:
         raise LaneError(f"the config's base {cfg.get('base')!r} must be <remote>/<branch> for a "
                         f"remote this repo has (a lane branches from the remote's commit): fix it "
                         f"in {repo.config_path}")
+    return remote, branch
+
+
+def fetched_base(repo: Repo, cfg: dict) -> str:
+    """The commit the remote's base branch is at now, fetched. `new` branches only from this:
+    sandboxed Bash can write every local ref, so neither a failed fetch's fallback to the local
+    remote-tracking ref nor a ref rewritten after the fetch may choose the commit a lane's
+    setup then runs on, sandbox-off."""
+    remote, branch = base_parts(repo, cfg)
+
     def failed(what, p):
         line = (p.stderr.strip().splitlines() or ["unknown error"])[-1]
         return LaneError(f"{what} failed ({line}): a lane branches only from a freshly fetched "
@@ -268,17 +275,59 @@ def fetched_base(repo: Repo, cfg: dict) -> str:
     return shas[0]
 
 
-def worktrees(repo: Repo) -> dict[str, str]:
-    """Registered worktree path (real) -> branch name ('' when detached)."""
+def worktree_heads(repo: Repo) -> dict[str, tuple[str, str]]:
+    """Registered worktree path (real) -> (branch name, '' when detached; HEAD commit, '' when
+    unborn)."""
     p = git(["worktree", "list", "--porcelain"], repo.toplevel, check=True)
     out, path = {}, None
     for line in p.stdout.splitlines():
         if line.startswith("worktree "):
             path = os.path.realpath(line[len("worktree "):])
-            out[path] = ""
+            out[path] = ("", "")
+        elif line.startswith("HEAD ") and path:
+            out[path] = (out[path][0], line[len("HEAD "):])
         elif line.startswith("branch ") and path:
-            out[path] = line[len("branch "):].removeprefix("refs/heads/")
+            out[path] = (line[len("branch "):].removeprefix("refs/heads/"), out[path][1])
     return out
+
+
+def worktrees(repo: Repo) -> dict[str, str]:
+    """Registered worktree path (real) -> branch name ('' when detached)."""
+    return {path: branch for path, (branch, _) in worktree_heads(repo).items()}
+
+
+def lane_head(lane: dict, heads: dict[str, tuple[str, str]]) -> tuple[str, str]:
+    """(branch, ref) of the lane's work: the branch its worktree has checked out, since a `git
+    switch` in the lane leaves lane.json's behind. A detached worktree gives ('', its HEAD
+    commit); one that is gone, lane.json's branch."""
+    path = os.path.realpath(lane["path"])
+    if path in heads:
+        branch, sha = heads[path]
+        return (branch, f"refs/heads/{branch}") if branch else ("", sha)
+    return lane["branch"], f"refs/heads/{lane['branch']}"
+
+
+def branch_label(branch: str, ref: str) -> str:
+    """lane_head's branch as `ls` and `whoami` show it."""
+    return branch or f"(detached {ref[:12]})"
+
+
+def rebasing_branch(repo: Repo, path: str) -> str:
+    """The branch a detached worktree at `path` is rebasing, from the head-name git keeps in
+    its admin dir (the one whose gitdir file names `path`), or ''. Any lane can write that dir,
+    so it is read bounded, never through a link, and only a valid branch name counts: it only
+    picks the PR `ls` shows."""
+    for admin in glob.glob(os.path.join(repo.common_dir, "worktrees", "*")):
+        named = lanelib.read_head(os.path.join(admin, "gitdir"), 4096)
+        if named is None or os.path.realpath(os.path.dirname(
+                named.decode(errors="replace").strip())) != path:
+            continue
+        for sub in ("rebase-merge", "rebase-apply"):
+            head = lanelib.read_head(os.path.join(admin, sub, "head-name"), 4096)
+            name = (head or b"").decode(errors="replace").strip().removeprefix("refs/heads/")
+            if head and lanelib.valid_branch(name):
+                return name
+    return ""
 
 
 def check_id(lane_id: str) -> None:
@@ -622,6 +671,7 @@ def cmd_new(args) -> None:
         say(f"  copied {len(copied)} file(s) from .worktreeinclude")
     say(f"  record {lanelib.record_path(lane)}")
     run_setup(repo, lane)
+    check_worktree(lane, seed_ask=True)  # after the setup, which may set core.hooksPath
     say(f"cd {lane['path']} && claude")
 
 
@@ -634,6 +684,7 @@ def finish(repo: Repo, lane: dict) -> None:
             lane_files(repo, lane, {})
             lane = lanelib.update_lane(repo, lane["id"], lambda x: x.update(setup_failed="setup"))
     run_setup(repo, lane)
+    check_worktree(lane, seed_ask=True)  # still setup-failed, which `open` refuses: no session
     with lock(repo):
         lane = lanelib.update_lane(repo, lane["id"], mark_active)
     say(f"finished lane {lane['id']}: branch {lane['branch']}, port {lane['port'] or 'none'}")
@@ -692,6 +743,7 @@ def cmd_adopt(args) -> None:
         write_json(repo.lane_json(lane_id), lane)
     say(f"adopted lane {lane_id}: branch {lane['branch']}, port {lane['port'] or 'none'}")
     say(f"  record {lanelib.record_path(lane)}")
+    check_worktree(lane, seed_ask=False)
 
 
 def pr_states(repo: Repo) -> dict[str, str] | None:
@@ -714,16 +766,120 @@ def pr_states(repo: Repo) -> dict[str, str] | None:
     return out
 
 
-def autopass_state():
-    """hooks/autopass_state (the tiers, the ctx files), found from this script's real path, or
-    None: the board's CTX is then unknown."""
+def hook_module(name: str):
+    """A module in hooks/, found from this script's real path, or None."""
     if HOOKS not in sys.path:
         sys.path.insert(0, HOOKS)
     try:
-        import autopass_state as mod
+        return importlib.import_module(name)
     except Exception:
         return None
-    return mod
+
+
+def autopass_state():
+    """hooks/autopass_state (the tiers, the ctx files), or None: the board's CTX is then
+    unknown."""
+    return hook_module("autopass_state")
+
+
+def check_worktree(lane: dict, seed_ask: bool) -> None:
+    """What the excluded-command guard (hooks/excluded_guard) would refuse an excluded call (git
+    push, gh, lane) from the lane's own session, each dir with the Edit deny rule that protects
+    it. A repo whose setup sets a relative core.hooksPath gives every worktree its own hooks dir,
+    and the guard reads no glob, so each lane needs a rule of its own. `new`, and `adopt`
+    finishing a lane `new` left setup-failed (which `open` refuses), also seed the ask into the
+    record `new` wrote, before any session; adopting another worktree only warns, as its record
+    is the lane's to write. Advisory: it never fails the lane."""
+    guard = hook_module("excluded_guard")
+    try:
+        if guard is None:
+            raise ImportError(f"no excluded_guard in {HOOKS}")
+        refusals, error = guard.project_refusals(dict(os.environ), lane["path"])
+    except Exception as e:
+        refusals, error = [], e
+    if error:
+        warn(f"could not check lane {lane['id']}'s git config for the excluded-command guard "
+             f"({type(error).__name__}: {error})")
+    if not refusals:
+        return
+    found = [guard.finding(r) for r in refusals]
+    warn(f"excluded-guard will refuse lane {lane['id']}'s excluded calls (git push, gh, lane) "
+         "until these are fixed:")
+    for line in found:
+        warn(f"  {line}")
+    warn("Look at each dir first (`python3 -I ~/.claude/hooks/excluded_guard.py --scan`, sandbox "
+         "off), then add the rules to permissions.deny in ~/.claude/settings.machine.json and "
+         "rerun ./setup.sh")
+    if seed_ask:
+        ask = (f"- excluded-guard refuses this lane's excluded calls until: {'; '.join(found)} "
+               "(rules into ~/.claude/settings.machine.json, then ./setup.sh). Seeded by "
+               "`lane new`.")
+        if not seed_line(lane, "## Asks for Hayden", ask):
+            warn(f"could not add that to {lanelib.record_path(lane)}'s Asks for Hayden")
+
+
+def seed_line(lane: dict, heading: str, line: str) -> bool:
+    """Add `line` under `heading` (after its comment) in the record `new` seeded, unless a
+    session is live in the lane: the record is then its to write (invariant 2). The setup ran in
+    the lane in between, so every step goes through one fd of the real .lane dir, opened without
+    following a link: the record is read without following one, as a regular file under the read
+    limit, and replaced whole, byte for byte. False when it isn't there as seeded."""
+    live = lanelib.live_sessions()
+    if live is None or sessions_in(live, os.path.realpath(lane["path"])):
+        return False
+    try:
+        d = os.open(lanelib.record_dir(lane), os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    except OSError:
+        return False
+    tmp = f".tmp-seed-{os.getpid()}"
+    try:
+        fd = os.open("STATUS.md", os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW, dir_fd=d)
+        with os.fdopen(fd, "rb") as f:
+            if not stat.S_ISREG(os.fstat(f.fileno()).st_mode):
+                return False
+            data = f.read(RECORD_READ + 1)
+        if len(data) > RECORD_READ:  # rewriting a cut read would lose the rest
+            return False
+        m = re.search(rb"^" + re.escape(heading.encode()) + rb"\n(<!--.*?-->\n)?", data,
+                      re.M | re.S)
+        if not m:
+            return False
+        out = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644, dir_fd=d)
+        with os.fdopen(out, "wb") as f:
+            f.write(data[:m.end()] + os.fsencode(line) + b"\n" + data[m.end():])
+        os.replace(tmp, "STATUS.md", src_dir_fd=d, dst_dir_fd=d)
+        return True
+    except OSError:
+        try:
+            os.unlink(tmp, dir_fd=d)
+        except OSError:
+            pass
+        return False
+    finally:
+        os.close(d)
+
+
+def orphaned_rules(lane_id: str, path: str) -> None:
+    """After a close: the Edit deny rules that named paths in the removed worktree."""
+    guard = hook_module("excluded_guard")
+    try:
+        if guard is None:
+            raise ImportError(f"no excluded_guard in {HOOKS}")
+        found = guard.rules_naming(path, os.environ)
+    except Exception as e:
+        warn(f"could not read the deny rules naming {path} ({type(e).__name__}: {e})")
+        return
+    claude = os.path.join(os.path.expanduser("~"), ".claude")
+    overlay = {rule for f, rule in found if f == os.path.join(claude, "settings.machine.json")}
+    # settings.json's copy of an overlay rule is setup.sh's: dropping it from the overlay drops it.
+    found = [(f, rule) for f, rule in found
+             if not (f == os.path.join(claude, "settings.json") and rule in overlay)]
+    if not found:
+        return
+    say(f"lane {lane_id}'s worktree is gone, so these permissions.deny rules name nothing now:")
+    for f, rule in found:
+        say(f"  {rule}  in {f}")
+    say("Drop each from its file (for settings.machine.json, then rerun ./setup.sh).")
 
 
 def status_of(session: dict) -> str:
@@ -779,7 +935,7 @@ def board(repo: Repo) -> list[dict]:
     """Each lane's record plus its derived state: nothing here is stored."""
     cfg = repo.config()
     base = base_ref(cfg)
-    trees = worktrees(repo)
+    trees = worktree_heads(repo)
     prs = pr_states(repo)
     live = lanelib.live_sessions()
     aps = autopass_state()
@@ -793,10 +949,14 @@ def board(repo: Repo) -> list[dict]:
     for lane in lanes:
         path = os.path.realpath(lane["path"])
         stale = path not in trees or not os.path.isdir(path)
-        row = dict(lane, stale=stale, ahead=None, behind=None,
-                   pr=(prs.get(lane["branch"], "none") if prs is not None else "?"))
+        branch, ref = lane_head(lane, trees)
+        # Detached mid-rebase, the PR is the rebased branch's; otherwise lane.json's best guess.
+        guess = branch or rebasing_branch(repo, path) or lane["branch"]
+        row = dict(lane, branch=branch_label(branch, ref), registered_branch=lane["branch"],
+                   stale=stale, ahead=None, behind=None,
+                   pr="?" if prs is None else prs.get(guess, "none"))
         counts = git(["rev-list", "--left-right", "--count", "--end-of-options",
-                      f"{base}...refs/heads/{lane['branch']}"], repo.toplevel)
+                      f"{base}...{ref}"], repo.toplevel)
         if counts.returncode == 0:
             row["behind"], row["ahead"] = (int(x) for x in counts.stdout.split())
         here = sessions_in(live or [], path)
@@ -819,7 +979,7 @@ def board(repo: Repo) -> list[dict]:
             flags.append("conflict")
         if not stale and row["live_sessions"] == []:
             flags.append("orphan")
-        if needs_handoff(repo, lane, stale):
+        if needs_handoff(repo, lane, ref):
             flags.append("handoff?")
         row["flags"] = flags
         rows.append(row)
@@ -852,13 +1012,13 @@ def record_text(repo: Repo, lane: dict) -> tuple[str | None, float | None]:
     return None, None
 
 
-def needs_handoff(repo: Repo, lane: dict, stale: bool) -> bool:
-    """The lane's last commit or last session end is newer than its record."""
+def needs_handoff(repo: Repo, lane: dict, ref: str) -> bool:
+    """The last commit at `ref` (lane_head's) or the lane's last session end is newer than its
+    record."""
     _, mtime = record_text(repo, lane)
     if mtime is None:
         return True
-    p = git(["log", "-1", "--format=%ct", "--end-of-options", f"refs/heads/{lane['branch']}"],
-            repo.toplevel)
+    p = git(["log", "-1", "--format=%ct", "--end-of-options", ref], repo.toplevel)
     last = [float(p.stdout.strip())] if p.returncode == 0 and p.stdout.strip() else []
     last += [t for s in lane.get("sessions", []) if (t := lanelib.parse_iso(s.get("endedAt")))]
     return bool(last) and max(last) > mtime + 1
@@ -936,13 +1096,18 @@ def cmd_whoami(args) -> None:
     info = {"identity": lane["id"] if lane else kind, "kind": kind, "toplevel": repo.toplevel,
             "common_dir": repo.common_dir}
     if lane:
-        info.update(branch=lane["branch"], port=lane.get("port"), claims=lane.get("claims", []),
+        try:
+            branch, ref = lane_head(lane, worktree_heads(repo))
+        except (OSError, subprocess.SubprocessError):  # git can't list them: the stored name
+            branch, ref = lane["branch"], ""
+        info.update(branch=branch_label(branch, ref), registered_branch=lane["branch"],
+                    port=lane.get("port"), claims=lane.get("claims", []),
                     record=lanelib.record_path(lane))
     if args.json:
         say(json.dumps(info, indent=2))
         return
     if lane:
-        say(f"{lane['id']}  (lane; branch {lane['branch']}, port {lane.get('port') or 'none'}, "
+        say(f"{lane['id']}  (lane; branch {info['branch']}, port {lane.get('port') or 'none'}, "
             f"claims {', '.join(lane.get('claims', [])) or 'none'})")
         say(f"record {info['record']}")
     else:
@@ -1867,17 +2032,16 @@ def work_references(repo: Repo, lane: dict) -> list[str]:
     return hits
 
 
-def closable(repo: Repo, lane: dict, fetched: bool) -> tuple[str | None, str, str]:
-    """(label, state, why not) for closing a lane without --abandon; label None means it needs
-    --abandon. Merged means the branch has commits past its base and either a merged PR's head
-    commit is the branch tip (a squash merge leaves the tip out of the base) or the tip is in the
-    base; an old PR from a same-named branch at another commit proves nothing. A lane made by
-    `new` with nothing past its base did no work, so it needs --abandon. An adopted lane's base is
-    a merge-base: with nothing past it the tip is already in the base, so nothing can be lost. It
-    can't tell "no work" from "fast-forwarded in before adoption", so it closes with state
-    `closed`, "closed (nothing past <base>)", unless a merged PR names that tip. `abandoned` is
-    kept for --abandon."""
-    branch = lane["branch"]
+def closable(repo: Repo, lane: dict, fetched: bool, branch: str) -> tuple[str | None, str, str]:
+    """(label, state, why not) for closing a lane on `branch` without --abandon; label None
+    means it needs --abandon. Merged means the branch has commits past its base and either a
+    merged PR's head commit is the branch tip (a squash merge leaves the tip out of the base) or
+    the tip is in the base; an old PR from a same-named branch at another commit proves nothing.
+    A lane made by `new` with nothing past its base did no work, so it needs --abandon (state
+    `empty`). An adopted lane's base is a merge-base: with nothing past it the tip is already in
+    the base, so nothing can be lost. It can't tell "no work" from "fast-forwarded in before
+    adoption", so it closes with state `closed`, "closed (nothing past <base>)", unless a merged
+    PR names that tip. `abandoned` is kept for --abandon."""
     tip = rev(repo, f"refs/heads/{branch}")
     if tip is None:
         return None, "", f"branch {branch} does not exist"
@@ -1887,7 +2051,7 @@ def closable(repo: Repo, lane: dict, fetched: bool) -> tuple[str | None, str, st
     count = git(["rev-list", "--count", "--end-of-options", f"{fork}..{tip}"], repo.toplevel)
     no_work = count.returncode == 0 and count.stdout.strip() == "0"
     if no_work and not lane.get("adopted"):
-        return None, "", f"no commits past its base {fork[:12]}"
+        return None, "empty", f"no commits past its base {fork[:12]}"
     try:
         p = subprocess.run(["gh", "pr", "list", "--head", branch, "--state", "merged", "--json",
                             "number,headRefOid"], cwd=repo.toplevel, capture_output=True,
@@ -1905,6 +2069,37 @@ def closable(repo: Repo, lane: dict, fetched: bool) -> tuple[str | None, str, st
     if in_base:
         return f"fully in {base}" + ("" if fetched else " (unfetched copy)"), "merged", ""
     return None, "", f"no merged PR at its tip {tip[:12]}, and the tip is not in {base}"
+
+
+def done_branches(repo: Repo, lane: dict, heads: dict[str, tuple[str, str]]) -> list[str]:
+    """The branches `done` judges and deletes: the one the worktree has checked out (lane_head),
+    then lane.json's when it differs and still exists. A detached worktree gives lane.json's
+    alone; lane_head's detached commit is judged by closable_all."""
+    branch, _ = lane_head(lane, heads)
+    out = [branch] if branch else []
+    if lane["branch"] not in out and (not out or rev(repo, f"refs/heads/{lane['branch']}")):
+        out.append(lane["branch"])
+    return out
+
+
+def closable_all(repo: Repo, lane: dict, heads: dict[str, tuple[str, str]], branches: list[str],
+                 fetched: bool) -> tuple[str | None, str, str]:
+    """closable over every branch done_branches gave: each must pass, except that a branch with
+    nothing past the base loses nothing once another passed (a switch to a fresh branch). A
+    detached worktree needs --abandon: its commit is on no branch for closable to judge."""
+    branch, sha = lane_head(lane, heads)
+    if not branch:
+        return None, "", (f"lane {lane['id']}'s worktree is on a detached HEAD at {sha[:12]}, so "
+                          "`done` can't tell its work is merged: check out its branch")
+    results = [(b, closable(repo, lane, fetched, b)) for b in branches]
+    passed = [(b, r) for b, r in results if r[0]]
+    for b, (label, state, why) in results:
+        if not label and not (passed and state == "empty"):
+            return None, "", f"branch {b} is not merged: {why}"
+    if len(results) == 1:
+        return results[0][1]
+    state = "merged" if any(r[1] == "merged" for _, r in passed) else "closed"
+    return "; ".join(f"{b}: {r[0]}" for b, r in passed), state, ""
 
 
 def lane_place(repo: Repo, root: str, cwd) -> str | None:
@@ -1965,14 +2160,16 @@ def close_record(repo: Repo,
     state: str,
     how: str,
     present: bool,
+    judged: tuple[str, str] | None = None,
 ) -> str:
     """Archive the lane's record and remove its worktree, all under install.lock: (a) under the
     lanes lock, re-read lane.json (a SessionEnd hook may have stamped endedAt, which the archive
-    keeps) and build the archive under a .tmp name; (b) without it, check the install once more
-    and `git worktree remove`, which can take seconds while every lane's hooks give up on that
-    lock after 2 s; (c) under it again, re-read (refused if the record vanished or its path or
-    branch changed), rename the archive into place and remove the data dir. A failure anywhere
-    removes the .tmp, so no partial archive is left. Returns the archive's path."""
+    keeps) and build the archive under a .tmp name; (b) without it, check the install once more,
+    and that the worktree still has `judged` (its branch and HEAD when `done` judged it) checked
+    out, then `git worktree remove`, which can take seconds while every lane's hooks give up on
+    that lock after 2 s; (c) under it again, re-read (refused if the record vanished or its path
+    or branch changed), rename the archive into place and remove the data dir. A failure
+    anywhere removes the .tmp, so no partial archive is left. Returns the archive's path."""
     lane_id = lane["id"]
     stamp = datetime.date.today().isoformat()
     closed = os.path.join(repo.lanes_dir, lanelib.CLOSED)
@@ -2016,7 +2213,15 @@ def close_record(repo: Repo,
                 # `git worktree remove` would run git in it sandbox-off.
                 raise LaneError(f"{path} reappeared during the close of lane {lane_id}, so nothing "
                                 f"checked it: {rerun}")
-            if path in worktrees(repo):
+            if path in (heads := worktree_heads(repo)):
+                # A switch since `done` judged the branches would remove a worktree on one it
+                # never judged (and keep that branch, unjudged, from `branch -d`).
+                if judged is not None and heads[path] != judged:
+                    now, sha = heads[path]
+                    moved = (f"got commit {sha[:12]} on {now}" if now == judged[0] else
+                             f"moved to {now or f'a detached HEAD at {sha[:12]}'}")
+                    raise LaneError(f"lane {lane_id}'s worktree {moved} during the close, so it "
+                                    f"was not removed: {rerun}")
                 # An install run since the first links check (setup.sh from the lane, mid-close)
                 # would point every hook into the worktree this removes: check again, under its
                 # lock.
@@ -2069,11 +2274,12 @@ def cmd_done(args) -> None:
                         "if nothing needs it (`git sparse-checkout` turns it on)")
     if present:  # its record is archived and its worktree removed, sandbox-off
         usable_path(repo, lane)
+    heads = worktree_heads(repo)  # judged once: close_record refuses if it moves meanwhile
+    branches = done_branches(repo, lane, heads)
     fetched = fetch(repo)
-    how, state, why = closable(repo, lane, fetched)
+    how, state, why = closable_all(repo, lane, heads, branches, fetched)
     if not how and not args.abandon:
-        raise LaneError(f"branch {lane['branch']} is not merged: {why}. Pass --abandon to close "
-                        "it anyway")
+        raise LaneError(f"{why}. Pass --abandon to close it anyway")
     how, state = (how, state) if how else ("abandoned", "abandoned")
     # Read here, live session or not: `handoff-check --closing` (which fails on it too) runs only
     # when there is something to end.
@@ -2112,16 +2318,57 @@ def cmd_done(args) -> None:
         if present:
             end_lane(repo, args.id, path, hits)  # its final look only
         sweep_open_sessions(path)
-    archive = close_record(repo, lane, path, data_dir, state, how, present)
+    archive = close_record(repo, lane, path, data_dir, state, how, present, heads.get(path))
     say(f"lane {args.id} closed ({how}); archived to {archive}")
-    # With no upstream, -d judges against the main checkout's HEAD, which may not have pulled the
-    # merge yet; the base as upstream makes it judge against what was actually merged.
-    git(["branch", f"--set-upstream-to={base_ref(repo.config())}", "--end-of-options",
-         lane["branch"]], repo.toplevel)
-    p = git(["branch", "-d", "--end-of-options", lane["branch"]], repo.toplevel)
-    if p.returncode != 0:
-        warn(f"branch {lane['branch']} kept: {p.stderr.strip()} (a squash merge leaves it "
-             "unmerged to git; check, then delete it yourself)")
+    delete_branches(repo, branches)
+    orphaned_rules(args.id, path)
+
+
+def delete_branches(repo: Repo, branches: list[str]) -> None:
+    """`git branch -d` each branch `done` judged, never the base's own local branch (a lane can
+    check it out) and never one another worktree has checked out (Hayden testing it, say)."""
+    cfg = repo.config()
+    try:
+        base_branch = base_parts(repo, cfg)[1]
+    except LaneError:  # a base no remote matches: keep any branch named like its tail
+        base_branch = base_ref(cfg).rsplit("/", 1)[-1]
+    try:
+        elsewhere = {b for b, _ in worktree_heads(repo).values() if b}
+    except (OSError, subprocess.SubprocessError):
+        elsewhere = set(branches)  # can't tell: keep them all
+    for branch in branches:
+        if branch == base_branch:
+            continue
+        if branch in elsewhere:
+            warn(f"branch {branch} kept: another worktree has it checked out")
+            continue
+        # With no upstream, -d judges against the main checkout's HEAD, which may not have
+        # pulled the merge yet; the base as upstream makes it judge against what was merged.
+        # A branch -d keeps gets its config section back as it was (an upstream naming a
+        # pruned remote ref, a rebase setting, a key with several values).
+        before = branch_config(repo, branch)
+        git(["branch", f"--set-upstream-to={base_ref(cfg)}", "--end-of-options", branch],
+            repo.toplevel)
+        p = git(["branch", "-d", "--end-of-options", branch], repo.toplevel)
+        if p.returncode != 0:
+            git(["config", "--remove-section", f"branch.{branch}"], repo.toplevel)
+            for key, value in before:
+                git(["config", "--add", key, value], repo.toplevel)
+            warn(f"branch {branch} kept: {p.stderr.strip()} (a squash merge leaves it "
+                 "unmerged to git; check, then delete it yourself)")
+
+
+def branch_config(repo: Repo, branch: str) -> list[tuple[str, str]]:
+    """Every (key, value) in the branch's config section, in order. A branch name can hold dots,
+    so a key is the branch's when its tail past `branch.<name>.` is one bare name."""
+    p = git(["config", "-z", "--get-regexp", r"^branch\."], repo.toplevel)
+    out = []
+    for record in p.stdout.split("\0") if p.returncode == 0 else []:
+        key, _, value = record.partition("\n")
+        var = key.removeprefix(f"branch.{branch}.")
+        if var != key and var and "." not in var:
+            out.append((key, value))
+    return out
 
 
 def parser() -> argparse.ArgumentParser:
