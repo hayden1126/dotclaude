@@ -9,7 +9,9 @@ opt-in: `setup.sh` does not apply it, and users who are not on WSL2 need none of
 this.
 
 Two strategies. **A is the recommended default.** B is a switch for when you
-need your real, logged-in Windows browser.
+need your real, logged-in Windows browser. Separately, `chrome-bg` runs Windows
+Chrome behind all your windows for headed puppeteer probes (see
+[Background Windows Chrome for probes](#background-windows-chrome-for-probes-chrome-bg)).
 
 ## Strategy A (default): native Linux Chrome, headless, autonomous
 
@@ -113,6 +115,169 @@ Restart Claude Code. The MCP now attaches to the running Windows Chrome; it will
 fail if that Chrome is not up (it attaches, it cannot spawn the browser).
 
 **Revert to A:** re-run the Strategy A `claude mcp add` command above.
+
+## Background Windows Chrome for probes (chrome-bg)
+
+Strategies A and B serve the MCP. `bin/chrome-bg` serves a headed puppeteer
+probe or fixture of your own. A Chrome window opened from WSL normally comes to
+the front and keeps the foreground, so your keystrokes land in it. chrome-bg
+runs Windows Chrome so that its window never takes the foreground and never
+shows on top: it sits behind all your windows, a normal window you can still
+switch to, and a page covered by other windows keeps rendering.
+
+**Requirements:**
+
+- WSL2 with mirrored networking (see Strategy B): the fixture reaches Chrome at
+  `http://127.0.0.1:<port>` on the Windows side.
+- Run `chrome-bg` and the fixture with the sandbox off. `powershell.exe` and
+  Chrome's port are unreachable inside it, and chrome-bg refuses to start there
+  (exit 2).
+- Serve the pages under test over http from WSL, sandbox-off as well (the
+  sandbox has its own network namespace). Windows Chrome can't read
+  `file:///home/...`, while `http://localhost:<port>` served from WSL works.
+
+**The fixture:** connect when chrome-bg handed you a URL, launch otherwise, and
+drive the page chrome-bg already placed:
+
+```js
+const browser = process.env.CHROME_BG_URL
+  ? await puppeteer.connect({ browserURL: process.env.CHROME_BG_URL, defaultViewport: null })
+  : await puppeteer.launch({ headless: false });
+const page = (await browser.pages())[0];
+```
+
+Page 0 is the window chrome-bg opened in the background and sank to the bottom.
+A fresh `newPage()` opens a foreground tab, which activates its window. The
+WMI launch below kept that from raising anything in the probes, but page 0
+doesn't depend on it. `defaultViewport: null` lets the page take the window's
+size (`--size`) rather than puppeteer's 800x600. Calling `browser.close()` at
+the end is fine: chrome-bg treats a Chrome that is already gone as stopped.
+
+**The CLI:**
+
+```
+chrome-bg run [--url U] [--size WxH] [--env NAME] -- CMD...
+chrome-bg start [--url U] [--size WxH] [--ttl 2h] [--json]
+chrome-bg stop <id|url>
+chrome-bg stop --gc
+chrome-bg ls
+chrome-bg check
+```
+
+- `run` starts Chrome, runs CMD with the browserURL in `$NAME` (default
+  `CHROME_BG_URL`), and stops Chrome when CMD ends. It exits with CMD's code
+  (128 plus the signal when CMD dies by one, 127 when CMD can't start). TERM,
+  HUP and ctrl-c reach CMD, and Chrome stops after it. `--url` sets the first
+  page (default `about:blank`), `--size` the window in DIPs (default
+  `1280x900`).
+- `start` makes a detached run and prints its browserURL, or
+  `{id, url, port, pid}` with `--json`. A holder process owns the run until
+  `stop` or `--ttl` (default `2h`; takes `90s`, `30m`, `2h` or `1d`). Use it
+  when a probe spans several commands:
+  `export CHROME_BG_URL=$(chrome-bg start)`.
+- `stop <id|url>` stops one run by its id or browserURL, never by a bare port
+  (see the cleanup rule below).
+- `stop --gc` stops runs whose owner is gone or whose TTL ran out, kills run
+  dirs that no record claims once they are 2 minutes old (a younger one may be
+  a run still launching), and prunes logs older than 7 days. Every `start` and
+  `run` does this first.
+- `ls` lists runs: id, port, Chrome pids, owner, age, cwd. A run dir with no
+  record shows as `no record`.
+- `check` is the live self-test. It opens a window behind yours for about 30 s,
+  takes each action a fixture might (a default `newPage`, `bringToFront`,
+  maximize and restore, `window.open`), then judges the supervisor's log. It
+  passes when no run window took the foreground or sat above another window,
+  the covered page stayed `visible` and drew frames within 10% of the
+  monitor's rate, and nothing was left after stop. Exit 0 is a pass, 1 a fail,
+  3 inconclusive. Inconclusive means the window in front at the start was not a
+  visible one, so a steal can't be told from Windows handing over a dead
+  foreground: put one of your windows in front and rerun.
+
+**How it works:** each run gets an 8-hex id, a fresh profile in its own run
+dir, and Chrome on `--remote-debugging-port=0`. Its flags are puppeteer's
+launch defaults less `--disable-popup-blocking`, which would let a
+gestureless `window.open` put a popup on screen. One supervisor per run,
+`chrome-bg.ps1` (Windows PowerShell, found beside `bin/chrome-bg`'s real
+path), does the Windows half. The rules, and why:
+
+- **Chrome launches through WMI, never `Start-Process`.** Started by the
+  console-attached supervisor, Chrome inherited the console's right to take
+  the foreground. On its first `newPage()` it took the foreground from the
+  terminal and held it for about 45 s. Launched through WMI
+  (`Win32_Process.Create`), it took the foreground in none of 21 actions.
+- **The window starts off-screen, in the background.** The first window opens
+  over CDP with `background: true`, left of every monitor. The supervisor then
+  moves it onto the primary monitor at the bottom of the z-order without
+  activating it (`SetWindowPos(HWND_BOTTOM, SWP_NOACTIVATE)`).
+- **Each new frame sinks at creation.** Off-screen bounds alone still left the
+  first window on top of the screen for 7-9 ms before they applied: too short
+  for a 50 ms poll to catch, long enough to see. So the supervisor sinks every
+  new run frame to the bottom at `EVENT_OBJECT_CREATE`, while it is still
+  hidden.
+- **The supervisor writes stdout only in reply.** It takes one JSON command per
+  stdin line and answers each with one line; window events go to its log. A
+  stray stdout write after its owner died killed the supervisor and left 8
+  chrome.exe running.
+- **Cleanup goes by run dir, never by port.** A chrome.exe belongs to a run
+  when its command line holds `\chrome-bg\<id>\`. Chrome may relaunch itself
+  and its children outlive their parent, so a recorded pid isn't proof, while
+  the run dir is unique to the run. A port isn't proof either: 9222
+  may be `chrome-debug.ps1` with your real profile, and a start refuses a port
+  whose `/json/version` names another browser. When the run's owner (`run`, or
+  the `start` holder) exits, cleanly or killed, the supervisor's stdin closes,
+  and it kills the run's chrome.exe and deletes the dir.
+- **The keeper is a backstop.** While no run window has the foreground, the
+  supervisor sinks any run window it sees above another on-screen window, at
+  most 20 times per window per second. Under the WMI launch it had nothing to
+  do. It stands down while a run window has the foreground, so a window you
+  clicked stays up.
+- **A covered page still renders.** `--disable-backgrounding-occluded-windows`
+  plus `CalculateNativeWinOcclusion` in the disabled features keep the page
+  `visible`, at the monitor's frame rate, behind other windows. The flag alone
+  sufficed in the probes; the feature entry is a second guard.
+- **Window titles are logged only for run windows.** The log records which
+  window holds the foreground and where run windows rank, so your windows show
+  up in it, but by class and pid only. A log you share carries none of your
+  terminal or session titles.
+
+**Where things live:**
+
+- Records of live runs: `$XDG_STATE_HOME/dotclaude/chrome-bg/<id>.json`
+  (default `~/.local/state`), with each `start` holder's log beside them.
+- On Windows, under `%TEMP%\chrome-bg\`: the run dir `<id>\` (the profile is in
+  `<id>\profile`), deleted at stop, and the supervisor's log `<id>.log`. The
+  log outlives the run, for `check` and post-mortems; gc prunes logs after 7
+  days.
+
+**Keep Bash off the display (`hooks/blank-display.sh`):** in a repo whose
+fixtures launch a headed browser, a fixture run from Bash with `DISPLAY` set
+opens a WSLg window in front of you. This SessionStart hook takes the display
+away from Bash in a repo that opts in:
+
+```bash
+git config dotclaude.blankDisplay true      # opt in
+git config --unset dotclaude.blankDisplay   # opt out
+```
+
+The hook reads the key with `--local`. In a linked worktree that reads the
+common dir's config, so every worktree of the repo is covered, including ones
+added later. Global and system config never opt a repo in.
+
+Opted in, the hook appends three lines to `CLAUDE_ENV_FILE`, which Claude Code
+sources before each Bash command:
+
+```bash
+export DISPLAY=
+export WAYLAND_DISPLAY=
+unset WAYLAND_SOCKET
+```
+
+The two vars are set empty rather than unset, since an unset var can fall back
+to the default sockets (`/tmp/.X11-unix/X0`, `$XDG_RUNTIME_DIR/wayland-0`). The
+hook also tells the model why, and to use `chrome-bg run` sandbox-off for a
+visible browser. It is never a settings `env` entry: Claude Code's own image
+paste runs `xclip` and `wl-paste` with that env, so paste would break. Errors
+go to `$XDG_STATE_HOME/dotclaude/blank-display.log`, and the hook fails open.
 
 ## Troubleshooting
 
