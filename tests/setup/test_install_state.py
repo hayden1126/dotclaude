@@ -494,17 +494,53 @@ class Merged(Machine):
         self.assertIn("git took over 5 s", line)
 
     def test_git_runs_no_program_the_config_or_environment_names(self):
-        self.merge("a")  # before the traps: the fixture's own git would spring them
+        # Each trap springs on an unhardened rev-list: a partial clone fetches a missing commit
+        # through its remote, and an ext:: remote runs a command; GIT_TRACE writes a file;
+        # GIT_DIR points git at another repo, which would fail b's verdict.
         marker = os.path.join(self.tmp, "ran")
-        self.git("config", "core.fsmonitor", f"touch {marker}-fsmonitor")
-        self.git("config", "pager.rev-list", f"touch {marker}-pager; cat")
-        write(os.path.join(self.home, ".gitconfig"), f"[pager]\n\trev-list = touch {marker}-global\n")
-        # A GIT_DIR from the environment would point git at another repo.
-        self.env.update(GIT_DIR=os.path.join(self.tmp, "nowhere"), GIT_PAGER=f"touch {marker}-env")
+        tip = self.git("rev-parse", "a").strip()
+        os.remove(os.path.join(self.common, "objects", tip[:2], tip[2:]))
+        for k, v in (("core.repositoryformatversion", "1"), ("extensions.partialClone", "origin"),
+                     ("remote.origin.url", f"ext::sh -c touch% {marker}-fetch"),
+                     ("remote.origin.promisor", "true"), ("protocol.ext.allow", "always")):
+            self.git("config", k, v)
+        self.env.update(GIT_DIR=os.path.join(self.tmp, "nowhere"), GIT_TRACE=f"{marker}-trace")
         r = self.cli("hold", self.b)
         self.assertEqual((r.returncode, r.stderr), (0, ""))
-        self.refused(self.cli("hold", self.a), self.a, "a")
+        r = self.cli("hold", self.a)  # its tip is the missing commit: no fetch, so no verdict
+        self.assertEqual(r.returncode, 3, r.stderr)
+        self.assertIn(f"can't tell whether the lane worktree {self.a} (branch a)", r.stderr)
         self.assertEqual([n for n in os.listdir(self.tmp) if n.startswith("ran")], [])
+
+    def test_a_lane_git_reads_as_another_users_is_still_judged(self):
+        # A git-bash or exFAT checkout reads as foreign-owned, and the global config holding the
+        # user's safe.directory is skipped, so the call sets its own.
+        self.merge("a")
+        real = subprocess.run
+
+        def foreign(args, **kw):
+            return real(args, **dict(kw, env=dict(kw["env"], GIT_TEST_ASSUME_DIFFERENT_OWNER="1")))
+
+        with mock.patch("subprocess.run", side_effect=foreign):
+            self.assertIsNone(install_state.merged_refusal(self.b, self.env))
+            self.assertIn("has no commit past origin/main",
+                          install_state.merged_refusal(self.a, self.env))
+
+    def test_a_detached_lane_is_named_by_its_commit(self):
+        self.merge("a")
+        tip = self.git("rev-parse", "a").strip()
+        self.git("switch", "-q", "--detach", "a", cwd=self.a)
+        r = self.cli("hold", self.a)
+        self.assertEqual((r.returncode, r.stdout), (3, ""), r.stderr)
+        self.assertIn(f"the lane worktree {self.a} (detached at {tip[:12]}) has no commit past "
+                      "origin/main", r.stderr)
+
+    def test_an_agent_worktree_inside_main_is_never_checked(self):
+        inner = os.path.join(self.main, ".claude", "worktrees", "agent-x")
+        self.git("worktree", "add", "-q", "-b", "agent-x", inner)  # nothing past origin/main
+        with mock.patch("subprocess.run") as run:
+            self.assertIsNone(install_state.merged_refusal(inner, self.env))
+        run.assert_not_called()
 
 
 class Prune(Machine):
@@ -629,12 +665,13 @@ class ConfigRoot(unittest.TestCase):
             'root = "/x/a \\"q\\" b\\\\c"\nsetup = ""\ncap = 8\nautopass = true\n')
 
     def test_tomllib_and_the_regex_read_the_same_values(self):
-        text = self.TEXT + 'base = "origin/dev"\n'
+        text = self.TEXT + 'base = "origin/dev"\nlit = \'C:\\x\\"y\' # hand-edited\n'
         for tomllib in ("present", None):  # None: Python 3.10, no tomllib
             with self.subTest(tomllib=tomllib), \
                     mock.patch.dict(sys.modules, {"tomllib": None} if tomllib is None else {}):
                 self.assertEqual(install_state.config_value(text, "root"), '/x/a "q" b\\c')
                 self.assertEqual(install_state.config_value(text, "base"), "origin/dev")
+                self.assertEqual(install_state.config_value(text, "lit"), 'C:\\x\\"y')
                 self.assertIsNone(install_state.config_value(text, "missing"))
                 self.assertIsNone(install_state.config_value(text, "cap"))  # not a string
                 self.assertIsNone(install_state.config_value("setup = 'x'\n", "root"))

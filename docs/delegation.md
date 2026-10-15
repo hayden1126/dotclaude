@@ -299,8 +299,10 @@ follows a look, then the whole `settings.machine.json` with the Edit deny rules 
 paste on a new device too, and exits 1 if anything would be refused. It reads git objects only
 (`rev-parse`, `ls-tree`) with a system git, never PATH's, and with every transport refused, so a
 repo's config can attach no program to it, not even through a partial clone's fetch. `setup.sh`
-runs it last and warns. While a lane holds the install, `./setup.sh` from the main checkout
-refuses, so that lane reruns its own install. A relative `core.hooksPath` resolves in each
+runs it last and warns. Its last line says where to rerun setup: from the main checkout, or,
+while `lane ls` shows an unmerged lane holding the install, from that lane, since a main
+checkout's run releases the hold mid-test. It never names the lane when it prints: a name goes
+stale once the lead's reinstall releases the hold. A relative `core.hooksPath` resolves in each
 worktree, so a repo with lanes needs a rule per worktree (a `denyWrite` glob protected nothing
 when probed, and the guard reads no glob rule).
 

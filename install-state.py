@@ -472,10 +472,13 @@ def config_value(text: str, key: str) -> str | None:
     lines, so where tomllib is missing (before 3.11) a regex reads the same value."""
     try:
         import tomllib  # here, not at the top: this module must import on Python 3.10
-    except ImportError:
-        m = re.search(rf'^{re.escape(key)}\s*=\s*"((?:[^"\\]|\\.)*)"\s*(?:#.*)?$', text, re.M)
+    except ImportError:  # a basic string unescaped, or a literal one ('...', no escapes) as is
+        quoted = r'''(?:"((?:[^"\\]|\\.)*)"|'([^'\n]*)')'''
+        m = re.search(rf"^{re.escape(key)}\s*=\s*{quoted}\s*(?:#.*)?$", text, re.M)
         if not m:
             return None
+        if m.group(2) is not None:
+            return m.group(2)
         return re.sub(r"\\(.)", lambda e: {"n": "\n", "t": "\t"}.get(e.group(1), e.group(1)),
                       m.group(1))
     try:
@@ -514,17 +517,23 @@ def base_ref(common: str | None, p: Places) -> tuple[str, str]:
 
 def commits_past(checkout: str, ref: str, env) -> tuple[int | None, str]:
     """(how many commits checkout's HEAD has that ref lacks, ""), or (None, why git couldn't
-    tell). git reads objects only (rev-list: no index, no transport), without the global and
-    system config or any GIT_* variable, its output captured (so no pager), and stops after
-    GIT_WAIT."""
+    tell). git reads objects only (rev-list: no index, no hook), with every transport refused
+    (GIT_ALLOW_PROTOCOL=none, so not even a partial clone's lazy fetch runs a program), no GIT_*
+    variable from the environment, no system config, no global config (git 2.32 and later),
+    its output captured (so no pager), and stops after GIT_WAIT.
+
+    safe.directory is `*` for this call: the global config that would hold the user's entry is
+    skipped, and an ownership check adds nothing here, since the run is this checkout's own
+    setup.sh, already running its code."""
     import subprocess  # here, not at the top: on Linux it imports fcntl, which git-bash lacks
     genv = {k: v for k, v in env.items() if not k.startswith("GIT_")}
     genv.update(GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull, GIT_OPTIONAL_LOCKS="0",
                 GIT_ALLOW_PROTOCOL="none", GIT_NO_LAZY_FETCH="1", LC_ALL="C")
     try:
-        r = subprocess.run(["git", "--no-pager", "-C", checkout, "rev-list", "--count",
-                            "--end-of-options", f"{ref}..HEAD"], env=genv, capture_output=True,
-                           text=True, errors="replace", timeout=GIT_WAIT)
+        r = subprocess.run(["git", "--no-pager", "-c", "safe.directory=*", "-C", checkout,
+                            "rev-list", "--count", "--end-of-options", f"{ref}..HEAD"],
+                           env=genv, capture_output=True, text=True, errors="replace",
+                           timeout=GIT_WAIT)
     except FileNotFoundError:
         return None, "git not found"
     except subprocess.TimeoutExpired:
