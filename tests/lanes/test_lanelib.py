@@ -88,5 +88,39 @@ class Walk(unittest.TestCase):
         self.assertEqual(lanelib.newest_mtime(rec), before)  # a target's change is not ours
 
 
+class Picks(unittest.TestCase):
+    """The model and effort `lane init` and `lane open` accept, and what pass-respawn carries."""
+
+    def test_a_model_is_an_alias_or_a_claude_full_name_with_an_optional_1m(self):
+        for name in ("opus", "sonnet", "haiku", "fable", "opusplan", "default", "sonnet[1m]",
+                     "claude-sonnet-5-5", "claude-haiku-4-5-20251001", "claude-opus-5-5[1m]"):
+            with self.subTest(name=name):
+                self.assertIsNone(lanelib.model_problem(name))
+
+    def test_a_typo_a_flag_or_shell_syntax_is_no_model(self):
+        for name in ("sonet", "Opus", "-x", "--dangerously-skip-permissions", "opus;x", "opus x",
+                     "claude-", "claude-opus-", "claude-Opus-5", "opus[2m]", "", None, 5):
+            with self.subTest(name=name):
+                self.assertIn("is not a model", lanelib.model_problem(name))
+
+    def test_an_effort_is_one_of_the_five_levels(self):
+        for level in lanelib.EFFORTS:
+            self.assertIsNone(lanelib.effort_problem(level))
+        for level in ("extreme", "High", "ultracode", "", None):
+            with self.subTest(level=level):
+                self.assertIn("low, medium, high, xhigh, max", lanelib.effort_problem(level))
+
+    def test_a_carried_model_needs_only_a_safe_shape(self):
+        # A value the old claude already launched with: no typo check, only nothing that reads
+        # as a flag or carries shell or control characters.
+        for name in ("opus", "us.anthropic.claude-sonnet-5-5-v1:0", "claude-opus-5-5[1m]",
+                     "my/model"):
+            with self.subTest(name=name):
+                self.assertTrue(lanelib.safe_model(name))
+        for name in ("-x", "", "a b", "a;b", "a\nb", "x" * 101, None):
+            with self.subTest(name=name):
+                self.assertFalse(lanelib.safe_model(name))
+
+
 if __name__ == "__main__":
     unittest.main()
