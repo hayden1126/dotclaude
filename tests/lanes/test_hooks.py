@@ -222,6 +222,9 @@ class IdentityHook(LanesRepo):
         # name that isn't UTF-8 fails the decode.
         admin = self.git("rev-parse", "--absolute-git-dir", cwd=self.lane_dir).strip()
         log = os.path.join(self.tmp, "state", "dotclaude", "lane-identity.log")
+        # The hook decodes git's output in the locale's encoding; a single-byte one reads \xff
+        # cleanly (valid_branch still refuses it), so the decode reason needs a UTF-8 locale.
+        self.env["LC_ALL"] = "C.UTF-8"
         for head, why in ((b"ref: refs/heads/-bad name", "symbolic-ref exit 128"),
                           (b"ref: refs/heads/a`b", "symbolic-ref exit 0, 'refs/heads/a`b'"),
                           (b"ref: refs/tags/v1", "symbolic-ref exit 0, 'refs/tags/v1'"),
