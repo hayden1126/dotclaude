@@ -97,7 +97,8 @@ stored here).
     machine-wide); the lane lists them for removal once its hook is live. At merge the lead also
     updates Vulcan's memory `no-chrome-windows-in-front.md` (it says `chrome-bg` isn't installed
     yet).
-  - **Merge order: `chrome-bg` is the only live lane, so it merges next.** The lead's STATUS
+  - **Merge order: `chrome-bg`, then `lane-model` and `remote-paste`, whichever is ready
+    first.** The lead's STATUS
     commits rode neither #108 (Hayden merged it before its ready step) nor #109, so main's
     STATUS.md is far behind `chore/after-pr4`. chrome-bg's ready step carries them (a
     STATUS-only PR is ruled out).
@@ -119,8 +120,8 @@ stored here).
     rerun the menu-clip repro and the tmux suites. If it fixes the clip, install at a quiet
     moment (a server restart; claude-restore reopens the tabs) and drop the row-0 menu rule.
     Until then, 3.7c's default menus that dotclaude doesn't own still clip under a top bar.
-  - **`lane open --model/--effort`** (unblocked by #109, which edited the same lane script,
-    SKILL.md and `docs/lanes.md`; opens on Hayden's go). `lane init --model/--effort`
+  - **`lane open --model/--effort`** (open as lane `lane-model` since 2026-10-15; this note
+    is its design pointer). `lane init --model/--effort`
     sets repo defaults in the lanes config, `lane open --model/--effort` overrides them for one
     lane, and both pass through to `claude` (2.1.296 has `--model` and `--effort
     low|medium|high|xhigh|max`). Today `cmd_open` hardcodes the argv. The trap: auto-pass
@@ -236,14 +237,15 @@ stored here).
 
 ## Notes for next session
 - **Next (lead, main checkout):** watch for "merged #N" from a lane, then run the post-merge
-  chain (`skills/lanes/SKILL.md`, The lead, step 7). Live lane: `chrome-bg`. Check `lane ls`
-  first: a merge Hayden made on GitHub and mentioned to no session sends no message (#102
-  showed merged there before its lane's message came). Two of 3 slots are free:
-  `lane open --model` and the laptop paste fit them (neither overlaps chrome-bg beyond
-  README), each on Hayden's go.
-  - **Lane two-sessions is `closing`:** its tab main:8 (window `@8`, pane `%8`) still holds a
-    bare login shell in the lane's dir. Once Hayden closes that tab, the lead reruns `lane
-    done two-sessions`. Each new work-repo lane still needs its own Edit deny rule
+  chain (`skills/lanes/SKILL.md`, The lead, step 7). Live lanes: `chrome-bg`, `lane-model`
+  (opened 2026-10-15, Hayden's pick; brief in its record). Check `lane ls` first: a merge
+  Hayden made on GitHub and mentioned to no session sends no message (#102 showed merged there
+  before its lane's message came).
+  - **Lane two-sessions is `closing`:** its tab main:8 (window `@8`, pane `%8`, shell pid 816)
+    still holds a bare login shell in the lane's dir. Once Hayden closes that tab, the lead
+    reruns `lane done two-sessions`, then opens `remote-paste` (Hayden's pick, 2026-10-15;
+    the cap of 3 refused it while two-sessions holds a slot). Its `lane new` brief: the laptop
+    paste backlog line, branch `feat/remote-paste`, overlaps chrome-bg on README. Each new work-repo lane still needs its own Edit deny rule
   (they take no glob); `lane new` prints it since #104. No chat
   about a lane's own asks; speak on cross-lane orders, decisions raised with the lead, failed
   checks and lead-only actions.
