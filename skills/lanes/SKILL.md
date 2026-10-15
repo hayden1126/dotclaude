@@ -58,8 +58,8 @@ an unregistered worktree: `lane whoami` tells you which.
    setup set, say) into the record's Asks for Hayden. Start the lane's session with
    `lane open chart-fix` (bare, from inside tmux): a new tmux window in the lane, in plan mode,
    told to read its record and plan the brief. `lane open chart-fix --model sonnet --effort low`
-   overrides init's defaults for that launch; a plain pass keeps them, and so does a later
-   `/model` or `/effort` in its window (docs/lanes.md, "Model and effort"). Outside tmux,
+   overrides init's defaults for that launch. A plain pass keeps them, or what a later `/model`
+   or `/effort` in its window picked (docs/lanes.md, "Model and effort"). Outside tmux,
    `cd <path> && claude`. Either way
    the session's cwd is the lane. Claude Code asks whether to trust each new folder, and a trusted
    parent covers its subdirs, so trust the lanes root once (`lane init` prints the line);

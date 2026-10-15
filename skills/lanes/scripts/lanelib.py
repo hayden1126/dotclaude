@@ -484,9 +484,13 @@ def valid_branch(name) -> bool:
 # `lane open` check a model against the aliases strictly: a typo reaches a detached window, where
 # claude stays up and shows an API error nobody watches (docs/lanes.md, "Model and effort").
 MODEL_ALIASES = ("default", "opus", "sonnet", "haiku", "fable", "opusplan")
+# The aliases with a 1M form: default[1m] fails at its first request, and /model says opusplan has
+# none (probed 2026-10-15).
+ONE_M = ("opus", "sonnet", "haiku", "fable")
 EFFORTS = ("low", "medium", "high", "xhigh", "max")
 MODEL_ID = re.compile(r"claude-[a-z0-9]+(?:[.-][a-z0-9]+)*")  # a full name, as transcripts carry it
-MODEL_NAME = re.compile(rf"(?:{'|'.join(MODEL_ALIASES)}|{MODEL_ID.pattern})(?:\[1m\])?")
+MODEL_ALIAS = re.compile(rf"(?:{'|'.join(ONE_M)})(?:\[1m\])?|default|opusplan")
+MODEL_NAME = re.compile(rf"{MODEL_ALIAS.pattern}|{MODEL_ID.pattern}(?:\[1m\])?")
 MODEL_SHAPE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/\[\]-]{0,99}")  # never a flag, no shell syntax
 
 
@@ -494,8 +498,15 @@ def model_problem(name) -> str | None:
     """Why name can't be a `lane init` or `lane open` model, or None."""
     if isinstance(name, str) and MODEL_NAME.fullmatch(name):
         return None
-    return (f"{name!r} is not a model: give an alias ({', '.join(MODEL_ALIASES)}) or a full name "
-            "like claude-sonnet-5-5, either with an optional [1m]")
+    return (f"{name!r} is not a model: give an alias ({', '.join(MODEL_ALIASES)}; "
+            f"{', '.join(ONE_M)} also take [1m]) or a full name like claude-sonnet-5-5 or "
+            "claude-sonnet-5-5[1m]")
+
+
+def model_alias(name) -> bool:
+    """Whether name is an alias form model_problem accepts: unlike a full name, it can't hold a
+    typo, and it keeps what a resolved id loses (opusplan's per-mode switch, a 1M form)."""
+    return isinstance(name, str) and bool(MODEL_ALIAS.fullmatch(name))
 
 
 def effort_problem(level) -> str | None:

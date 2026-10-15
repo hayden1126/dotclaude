@@ -146,7 +146,8 @@ holds only notices. A call-time refusal or detach error prints to the caller and
            again when the respawn fails (`failed`) or anything after writing them raises. M and
            E are carried_pick's: each flag the old claude launched with, or after a /model (for
            the effort, a /model or /effort) what the last main-chain assistant entry since ran
-           with, the flag dropped when none can be passed on (docs/lanes.md, "Model and effort")
+           with (a /model <alias>: the alias), the flag dropped when none can be passed on
+           (docs/lanes.md, "Model and effort")
   compact  type `/compact <focus>` and Enter, wait 1 s, type the prompt and Enter (it queues
            behind the compact, spike S4); no respawn and no carry. A send-keys that fails
            stops there and logs `failed` (past /compact, every report of it hands over the
@@ -209,7 +210,8 @@ the sandbox can write (docs/lanes.md S3). Every input, and why each is safe:
     to tmux as one argv element, never interpolated, and only in a fixed shape: an effort is one
     of lanelib.EFFORTS; a launch model passes lanelib.safe_model (it starts with a letter or
     digit, so it never reads as a flag, and carries no space or shell syntax), and a
-    transcript's must be a lanelib.MODEL_ID (`claude-...`). A launch value outside its shape
+    transcript's must be a lanelib.MODEL_ID (`claude-...`) or, from a /model argument, a
+    lanelib.model_alias. A launch value outside its shape
     refuses the pass at call time; a transcript value outside it drops the flag.
   - PATH is the call's, so it keeps only the absolute entries outside those dirs (as given and
     resolved). git, tmux and claude resolve through that PATH and must also resolve, as found
@@ -304,7 +306,8 @@ SID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
 # own), and both save their pick as the default for new sessions.
 PICK_FLAGS = ("--model", "--effort")
 CHANGED_BY = {"/model": ("--model", "--effort"), "/effort": ("--effort",)}
-COMMAND_TAG = re.compile(rb"<command-name>(/model|/effort)</command-name>")
+COMMAND = re.compile(r"\s*<command-name>(/model|/effort)</command-name>")
+COMMAND_ARGS = re.compile(r"<command-args>(.*?)</command-args>", re.DOTALL)
 PANE_FORMAT = "#{pane_pid} #{pane_current_command}"
 PROMPT_MARK = chr(0x276F)  # the input box's prompt mark, then a no-break space
 PROMPT_LINE = re.compile(PROMPT_MARK + "[" + chr(0xA0) + " ]")
@@ -373,7 +376,8 @@ class Plan:
     timeout: float
     path: str = ""         # the sanitized PATH every child gets
     toast: list[str] | None = None  # the toast's argv less its message (toast_command)
-    pick: list[str] = dataclasses.field(default_factory=list)  # --model/--effort (carried_pick)
+    launched: dict = dataclasses.field(default_factory=dict)  # launch_pick, checked at the call
+    pick: list[str] = dataclasses.field(default_factory=list)  # carried_pick, read at act time
     lock_fd: int | None = None  # the pending lock the waiter holds (None: not taken)
     acting: bool = False   # past the final re-check: SIGTERM no longer cancels
     late_cancel: bool = False  # a SIGTERM came while acting, and was ignored
@@ -961,19 +965,22 @@ def main_chain(line: bytes, kind: str) -> dict | None:
     return entry
 
 
-def command_run(line: bytes) -> list[str]:
-    """The /model and /effort commands a transcript line runs: a main-chain user entry whose text
-    starts with the command's tag. A tool result that quotes the tag (a grep's output) or a
-    prompt that mentions it runs nothing."""
-    names = {m.decode() for m in COMMAND_TAG.findall(line)}
-    if not names:
-        return []
+def command_run(line: bytes) -> tuple[str, str] | None:
+    """The /model or /effort a transcript line runs, and its argument: the main-chain user entry
+    Claude Code writes for the command (no origin, not meta), its text opening with the tag. Only
+    an accepted command gets one: a refused `/model x` leaves no entry (probed 2026-10-15). A tool
+    result quoting the tag, a prompt typed or sent by an agent (each has an origin) and a
+    subagent's entry run nothing."""
+    if b"<command-name>/" not in line:
+        return None
     entry = main_chain(line, "user")
-    text = entry["message"].get("content") if entry else None
-    if not isinstance(text, str):
-        return []
-    text = text.lstrip()
-    return [n for n in names if text.startswith(f"<command-name>{n}</command-name>")]
+    if not entry or "origin" in entry or entry.get("isMeta"):
+        return None
+    text = entry["message"].get("content")
+    if not isinstance(text, str) or not (m := COMMAND.match(text)):
+        return None
+    args = COMMAND_ARGS.search(text)
+    return m.group(1), args.group(1).strip() if args else ""
 
 
 def ran(line: bytes) -> dict[str, str | None] | None:
@@ -990,34 +997,46 @@ def ran(line: bytes) -> dict[str, str | None] | None:
 
 def picks_since(path: str | None) -> dict[str, str | None] | None:
     """For each pick flag a /model or /effort changed in the transcript: what the last main-chain
-    assistant entry after its last such command ran with (None: no usable entry since). None when
-    the transcript can't be read."""
-    since = {}
+    assistant entry after its last such command ran with (None: no usable entry since). For the
+    model, a last /model whose argument is an alias carries that alias once an entry ran after it:
+    the resolved id loses what the alias means (opusplan's per-mode switch, a 1M form), and an
+    alias from lanelib's list can't hold a typo. None when the transcript can't be read."""
+    since, alias = {}, None
     try:
         with open(path, "rb") as f:
             for line in f:
-                for name in command_run(line):
+                if run := command_run(line):
+                    name, args = run
                     since.update(dict.fromkeys(CHANGED_BY[name]))
-                if since and (values := ran(line)):
+                    if name == "/model":
+                        alias = args if lanelib.model_alias(args) else None
+                elif since and (values := ran(line)):
+                    values["--model"] = alias or values["--model"]
                     since.update({flag: values[flag] for flag in since})
     except (OSError, TypeError, ValueError):
         return None
     return since
 
 
-def carried_pick(argv: list[str] | None, transcript: str | None) -> list[str]:
-    """The --model and --effort a plain pass gives the respawned claude (docs/lanes.md, "Model
-    and effort"): each one the session launched with, unless a /model (or, for the effort, an
-    /effort) ran since. Then it is what the session last ran after that command, or nothing when
-    no usable entry follows, since the command saved its pick as the default for new sessions.
-    The transcript is read only when a flag is there to carry. Raises Refuse for a launch value
-    that can't be passed on."""
+def launch_pick(argv: list[str] | None) -> dict[str, str]:
+    """The session claude's launch --model and --effort (pick_flags), checked at the call so a
+    value that can't be passed on refuses while the session can still read why."""
     launched = pick_flags(argv)
     for flag, value in launched.items():
         if not (lanelib.safe_model(value) if flag == "--model" else value in lanelib.EFFORTS):
             raise Refuse(1, f"pass-respawn: this session's claude launched with {flag} {value!r}, "
                          "which a respawn can't pass on. /pass compact keeps the session as it "
                          "is", f"bad {flag}")
+    return launched
+
+
+def carried_pick(launched: dict[str, str], transcript: str | None) -> list[str]:
+    """The --model and --effort a plain pass gives the respawned claude (docs/lanes.md, "Model
+    and effort"): each one the session launched with (launch_pick), unless a /model (or, for the
+    effort, an /effort) ran since. Then it is what the session last ran after that command, or
+    nothing when no usable entry follows, since the command saved its pick as the default for
+    new sessions. Read at act time, as the resume mode is, so a /model during the passing turn
+    counts; the transcript is read only when a flag is there to carry."""
     since = (picks_since(transcript) if launched else None) or {}
     out = []
     for flag in (f for f in PICK_FLAGS if f in launched):  # a flag it didn't launch with: none
@@ -1311,7 +1330,7 @@ def prepare(args: argparse.Namespace, procs, cmdline=proc_cmdline) -> Plan:
     resolve_bin("git", roots, path)
     tmux = resolve_bin("tmux", roots, path)
     claude = None if args.compact else resolve_bin("claude", roots, path)
-    pick = [] if args.compact else carried_pick(claude_argv, transcript)
+    launched = {} if args.compact else launch_pick(claude_argv)
     code, out = gate(repo.toplevel, path)
     if code != 0:
         raise Refuse(1, out.rstrip() + "\npass-respawn: refused: handoff-check failed; fix the "
@@ -1321,7 +1340,7 @@ def prepare(args: argparse.Namespace, procs, cmdline=proc_cmdline) -> Plan:
                      "checked); it can't tell when this session's turn ends", why)
     return Plan(mode, pane, repo.toplevel, lane is not None, status_rel, tmux, claude, claude_pid,
                 proc_start(claude_pid), sid, session, called, transcript, size, args.timeout,
-                path, toast_command(roots, path), pick)
+                path, toast_command(roots, path), launched)
 
 
 # ---- the waiter ----
@@ -1897,6 +1916,7 @@ def wait_and_act(plan: Plan, procs) -> str:
         return drop(plan, "resumed", "a typed or queued prompt after the call",
                     cause="a prompt was typed or queued after the call")
     approved = approved_now(plan, session)
+    plan.pick = carried_pick(plan.launched, plan.transcript)
     actions = plan.actions(approved)
     rec = stop_record(plan.session_id) if plan.mode == "plain" else None
     if plan.mode == "plain" and (problem := stop_problem(plan, rec)):
@@ -2304,6 +2324,7 @@ def main(argv=None, procs=proc_table, cmdline=proc_cmdline) -> int:
         return r.code
     if args.print:
         approved = approved_now(plan, plan.session)
+        plan.pick = carried_pick(plan.launched, plan.transcript)
         print(f"mode: {plan.mode} ({'default' if approved else 'plan'})")
         if plan.mode == "plain":
             print(f"carry: {carry_path(plan.pane)}")

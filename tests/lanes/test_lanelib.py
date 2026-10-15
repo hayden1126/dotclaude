@@ -91,17 +91,26 @@ class Walk(unittest.TestCase):
 class Picks(unittest.TestCase):
     """The model and effort `lane init` and `lane open` accept, and what pass-respawn carries."""
 
-    def test_a_model_is_an_alias_or_a_claude_full_name_with_an_optional_1m(self):
+    def test_a_model_is_an_alias_or_a_claude_full_name_with_a_1m_where_one_exists(self):
         for name in ("opus", "sonnet", "haiku", "fable", "opusplan", "default", "sonnet[1m]",
-                     "claude-sonnet-5-5", "claude-haiku-4-5-20251001", "claude-opus-5-5[1m]"):
+                     "haiku[1m]", "claude-sonnet-5-5", "claude-haiku-4-5-20251001",
+                     "claude-opus-5-5[1m]"):
             with self.subTest(name=name):
                 self.assertIsNone(lanelib.model_problem(name))
 
     def test_a_typo_a_flag_or_shell_syntax_is_no_model(self):
+        # default[1m] fails at its first request and opusplan has no 1M form (probed 2026-10-15).
         for name in ("sonet", "Opus", "-x", "--dangerously-skip-permissions", "opus;x", "opus x",
-                     "claude-", "claude-opus-", "claude-Opus-5", "opus[2m]", "", None, 5):
+                     "claude-", "claude-opus-", "claude-Opus-5", "opus[2m]", "default[1m]",
+                     "opusplan[1m]", "", None, 5):
             with self.subTest(name=name):
                 self.assertIn("is not a model", lanelib.model_problem(name))
+
+    def test_an_alias_is_told_from_a_full_name(self):
+        for name in ("opus", "opusplan", "sonnet[1m]", "haiku[1m]", "default"):
+            self.assertTrue(lanelib.model_alias(name), name)
+        for name in ("claude-opus-5-5", "claude-sonnet-5-5[1m]", "sonet", "default[1m]", None):
+            self.assertFalse(lanelib.model_alias(name), name)
 
     def test_an_effort_is_one_of_the_five_levels(self):
         for level in lanelib.EFFORTS:

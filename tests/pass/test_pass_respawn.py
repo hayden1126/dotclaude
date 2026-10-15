@@ -353,20 +353,22 @@ class Base(LanesRepo):
 
     # --- running and reading -------------------------------------------------------------
 
-    def run_pass(self, *args, procs=None, cwd=None, launched=None):
-        """main() on the checkout; launched, when given, is the session claude's argv past its
-        path, as /proc/<pid>/cmdline shows it."""
+    def cmdline(self, launched=()):
+        """The fake /proc/<pid>/cmdline: the session claude launched with launched (a real pid
+        900000 on the machine must never lend its argv to a test)."""
+        return lambda pid: [self.claude, *launched] if pid == CLAUDE else None
+
+    def run_pass(self, *args, procs=None, cwd=None, launched=()):
+        """main() on the checkout, its session claude launched with launched."""
         out = io.StringIO()
         argv = [*args, "-C", cwd or self.main]
-        cmdline = (self.mod.proc_cmdline if launched is None
-                   else lambda pid: [self.claude, *launched] if pid == CLAUDE else None)
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
-            code = self.mod.main(argv, procs=procs or table, cmdline=cmdline)
+            code = self.mod.main(argv, procs=procs or table, cmdline=self.cmdline(launched))
         return code, out.getvalue()
 
     def plan(self, *args, cwd=None):
         return self.mod.prepare(self.mod.parse([*args, "--foreground", "-C", cwd or self.main]),
-                                table)
+                                table, self.cmdline())
 
     def calls(self, *prefix):
         if not os.path.exists(self.tmux_log):
@@ -1377,6 +1379,11 @@ class Pick(Base):
         super().setUp()
         self.commit("STATUS.md", GOOD, msg="Handoff")
 
+    def history(self, *entries):
+        """The transcript as entries alone, then the prompt that ran /pass."""
+        os.remove(self.transcript())
+        self.say(*entries, typed("the prompt that ran /pass"))
+
     def respawned(self, launched, *args):
         """The respawn argv --print shows for a session launched with launched, past claude."""
         code, out = self.run_pass("--print", *args, launched=launched)
@@ -1392,19 +1399,36 @@ class Pick(Base):
                          ["--model", "claude-sonnet-5-5", "--permission-mode", "plan"])
 
     def test_only_the_flags_it_launched_with_carry(self):
-        # The /model saved its pick as the default for new sessions, which the respawn takes.
+        # The command saved its pick as the default for new sessions, which the respawn takes.
         self.say(command("/model"), reply("claude-haiku-5-5", "high"))
         self.assertEqual(self.respawned(["--permission-mode", "plan", "x"]),
                          ["--permission-mode", "plan"])
         self.assertEqual(self.respawned(["--effort", "low"]),
                          ["--effort", "high", "--permission-mode", "plan"])
+        self.history(command("/effort", "max"), reply("claude-haiku-5-5", "max"))
+        self.assertEqual(self.respawned(["--model", "sonnet"]),
+                         ["--model", "sonnet", "--permission-mode", "plan"])
 
-    def test_after_a_model_command_it_carries_what_the_session_last_ran(self):
-        self.say(reply("claude-sonnet-5-5", "low"), command("/model", "opus"),
+    def test_after_a_picker_model_it_carries_the_id_the_session_last_ran(self):
+        self.say(reply("claude-sonnet-5-5", "low"), command("/model"),
                  reply("claude-opus-5-5", "xhigh"), reply("<synthetic>", None),
                  reply("claude-haiku-5-5", "max", sidechain=True))
         self.assertEqual(self.respawned(self.LAUNCH), ["--model", "claude-opus-5-5", "--effort",
                                                        "xhigh", "--permission-mode", "plan"])
+
+    def test_an_alias_argument_carries_as_typed(self):
+        # opusplan ran sonnet outside plan mode: its id would lose the per-mode switch.
+        self.say(command("/model", "opusplan"), reply("claude-sonnet-5-5", "high"))
+        self.assertEqual(self.respawned(self.LAUNCH), ["--model", "opusplan", "--effort", "high",
+                                                       "--permission-mode", "plan"])
+        self.say(command("/model", "sonnet[1m]"), reply("claude-sonnet-5-5", "high"))
+        self.assertEqual(self.respawned(self.LAUNCH)[:2], ["--model", "sonnet[1m]"])
+        # A full name gives what ran; a later picker /model resets to the id.
+        self.say(command("/model", "claude-opus-4-8"), reply("claude-opus-4-8", "high"))
+        self.assertEqual(self.respawned(self.LAUNCH)[:2], ["--model", "claude-opus-4-8"])
+        self.say(command("/model", "opusplan"), reply("claude-sonnet-5-5", "high"),
+                 command("/model"), reply("claude-opus-5-5", "high"))
+        self.assertEqual(self.respawned(self.LAUNCH)[:2], ["--model", "claude-opus-5-5"])
 
     def test_an_effort_command_moves_only_the_effort(self):
         self.say(command("/effort", "high"), reply("claude-sonnet-5-5", "high"))
@@ -1412,18 +1436,32 @@ class Pick(Base):
                          ["--model", "sonnet", "--effort", "high", "--permission-mode", "plan"])
 
     def test_a_flag_drops_when_no_usable_entry_follows_its_command(self):
-        # Haiku runs no effort; a /model with nothing after it leaves the saved default.
-        self.say(command("/model"), reply("claude-haiku-5-5", None))
-        self.assertEqual(self.respawned(self.LAUNCH),
-                         ["--model", "claude-haiku-5-5", "--permission-mode", "plan"])
-        self.say(command("/model"), reply("<synthetic>", None))
-        self.assertEqual(self.respawned(self.LAUNCH), ["--permission-mode", "plan"])
+        # The command saved its pick as the default for new sessions, which then applies.
+        cases = (
+            ([command("/model")], []),  # nothing at all after it
+            ([command("/model", "opusplan"), reply("<synthetic>", None)], []),  # an API error
+            ([command("/model"), reply("claude-haiku-4-5-20251001", None)],  # haiku 4.5: no effort
+             ["--model", "claude-haiku-4-5-20251001"]),
+            ([command("/effort", "max"), reply("claude-haiku-4-5-20251001", None)],
+             ["--model", "sonnet"]),
+            ([command("/model"), reply("us.anthropic.claude-sonnet-5-5-v1:0", "low")],
+             ["--effort", "low"]),  # no claude- id to carry
+        )
+        for entries, pick in cases:
+            with self.subTest(entries=entries):
+                self.history(reply("claude-sonnet-5-5", "low"), *entries)
+                self.assertEqual(self.respawned(self.LAUNCH),
+                                 [*pick, "--permission-mode", "plan"])
 
-    def test_a_quoted_tag_runs_no_command(self):
+    def test_only_a_command_entry_runs_a_command(self):
+        # A tool result quoting the tag, a prompt typed or sent by an agent starting with it,
+        # and a subagent's command: none is the session's own /model.
+        tag = command("/model", "opusplan")["message"]["content"]
         quoted = {"type": "user", "isSidechain": False, "message": {"role": "user", "content": [
             {"type": "tool_result", "content": "  18 <command-name>/model</command-name>"}]}}
-        self.say(quoted, typed("what does <command-name>/model</command-name> do?"),
-                 dict(command("/model"), isSidechain=True), reply("claude-opus-5-5", "max"))
+        peer = dict(STARTS["an agent's message"], message={"role": "user", "content": tag})
+        self.say(quoted, typed("what does <command-name>/model</command-name> do?"), typed(tag),
+                 peer, dict(command("/model"), isSidechain=True), reply("claude-opus-5-5", "max"))
         self.assertEqual(self.respawned(self.LAUNCH),
                          ["--model", "sonnet", "--effort", "low", "--permission-mode", "plan"])
 
@@ -1454,6 +1492,19 @@ class Pick(Base):
         self.assertEqual(respawn[1:], self.respawn("--model", "sonnet", "--effort", "low",
                                                    "--permission-mode", "plan")[1:])
         self.assertIn("outcome=respawn plan mode with --model sonnet --effort low", self.log())
+
+    def test_a_model_picked_during_the_passing_turn_counts(self):
+        # The pick is read at act time, as the resume mode is: a /model entry has no origin, so
+        # it is no typed prompt that would drop the pass.
+        def picked():
+            self.say(command("/model", "opus"), reply("claude-opus-5-5", "high"))
+            return "busy"
+        self.script = ["busy", picked, "idle"]
+        code, out = self.run_pass("--foreground", launched=self.LAUNCH)
+        self.assertEqual(code, 0, out)
+        (respawn,) = self.calls("tmux", "respawn-pane")
+        self.assertEqual(respawn[1:], self.respawn("--model", "opus", "--effort", "high",
+                                                   "--permission-mode", "plan")[1:])
 
 
 class Handed(Base):

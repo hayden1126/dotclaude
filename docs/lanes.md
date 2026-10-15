@@ -420,21 +420,28 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
   repo defaults in the lanes config (`model`, `effort`; an empty value removes one), and
   `lane open <id> --model M --effort E` overrides them for one launch (an empty flag skips the
   default). Both go to claude ahead of `--permission-mode plan`. A model must be an alias
-  (`default`, `opus`, `sonnet`, `haiku`, `fable`, `opusplan`) or a `claude-` full name, either
-  with an optional `[1m]` (quote it: zsh globs the brackets), and an effort one of `low`,
-  `medium`, `high`, `xhigh`, `max`. The check is strict because a bad name fails where nobody
-  looks: claude stays up in the detached window and shows "There's an issue with the selected
-  model" at its first request (spike S1). A typo inside a full name still gets through. `open`
+  (`default`, `opus`, `sonnet`, `haiku`, `fable`, `opusplan`) or a `claude-` full name, and an
+  effort one of `low`, `medium`, `high`, `xhigh`, `max`. `opus`, `sonnet`, `haiku`, `fable` and
+  the full names also take `[1m]` (quote it: zsh globs the brackets); `default[1m]` fails at
+  its first request and `opusplan` has no 1M form (probed 2026-10-15). The check is strict
+  because a bad name fails where nobody looks: claude stays up in the detached window and shows
+  "There's an issue with the selected model" at its first request (spike S1). A typo inside a full name still gets through. `open`
   refuses a pick for a lane with a live session, since `/model` or `/effort` in its window is
   what changes a live one.
 
   A plain pass keeps the pick (pass-respawn's `carried_pick`). The respawn carries each flag the
   old claude launched with, read from its `/proc` command line. After a `/model` (or, for the
   effort, an `/effort`) in the transcript, it carries instead what the last main-chain assistant
-  entry after that command ran with (`message.model`, `effort`). When no usable entry follows
-  (a `<synthetic>` one, a model that takes no effort), it drops the flag: both commands save
-  their pick as the default for new sessions, which then applies. A session launched without
-  the flags respawns as before. Hayden picked this over a plain copy of the flags (which undoes
+  entry after that command ran with (`message.model`, `effort`). A `/model <alias>` carries the
+  alias itself once an entry ran after it, since the entry's resolved id (`claude-sonnet-5-5`)
+  loses what `opusplan` or a 1M form means. A `/model` picked from its menu has no argument, so
+  it carries the id. Only an accepted `/model` reaches the transcript (a refused one leaves no
+  entry), and only Claude Code's own command entry counts, never a prompt or a tool result that
+  quotes its tag. When no usable entry follows (a `<synthetic>` one, a model that takes no
+  effort), the flag drops: both commands save their pick as the default for new sessions,
+  which then applies. The transcript is read just before the respawn, as the resume mode is, so
+  a `/model` during the passing turn counts; a launch value that can't be passed on refuses at
+  the call. A session launched without the flags respawns as before. Hayden picked this over a plain copy of the flags (which undoes
   a mid-session `/model` at the next pass) and a stored per-lane pick (the same flaw, plus new
   state). How each case comes out:
   - a plain pass or an auto-pass: the pick holds; a compact pass keeps the same process;
@@ -443,7 +450,8 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
     `/effort` in its window moves it;
   - the lead's main checkout: no repo default reaches it, and it carries what it launched with;
   - a tmux restart: `claude-restore` types `claude --resume <id>`, which keeps the model but not
-    the effort (spike S3), so the effort falls back to the user's default.
+    the effort (spike S3). The resumed claude has no flags either, so from its first plain pass
+    on the lane runs the user's default model too. A follow-up for `tmux/claude-restore`.
 
   Only these two flags carry: `--fallback-model`, `--name` and the rest still drop at a plain
   pass.
