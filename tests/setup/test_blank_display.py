@@ -195,6 +195,10 @@ class BlankDisplay(unittest.TestCase):
         gd = os.path.join(self.opted, ".git")
         self.assertUntouched(self.run_hook({"cwd": self.plain}, GIT_DIR=gd,
                                            GIT_WORK_TREE=self.opted))
+
+    def test_command_scope_config_never_opts_in(self):
+        """--local reads only the repo's own config file, so this holds with or without the
+        GIT_* strip; the GIT_DIR case above is the one that pins the strip."""
         self.assertUntouched(self.run_hook({"cwd": self.plain}, GIT_CONFIG_COUNT="1",
                                            GIT_CONFIG_KEY_0="dotclaude.blankDisplay",
                                            GIT_CONFIG_VALUE_0="true"))

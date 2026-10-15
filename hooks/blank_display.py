@@ -9,7 +9,8 @@ opts in (unset, false, not a repo, an error or a timeout all do nothing).
 
 Opted in, the hook appends three lines to $CLAUDE_ENV_FILE, which Claude Code sources before each
 Bash command, and tells the model why. DISPLAY and WAYLAND_DISPLAY are set empty, not unset: an
-unset var falls back to the default sockets (/tmp/.X11-unix/X0, $XDG_RUNTIME_DIR/wayland-0).
+unset var can fall back to a default socket (libwayland connects to $XDG_RUNTIME_DIR/wayland-0
+when WAYLAND_DISPLAY is unset), while an empty one names no display at all.
 Subagent payloads (agent_id) blank too, the safe direction. A settings `env` entry is not the
 way to do this: Claude Code's own image paste runs xclip and wl-paste with that env.
 
