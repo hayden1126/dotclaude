@@ -64,7 +64,7 @@ Then, in order:
 2. It drops the pass if Hayden typed a prompt after the call, or queued one mid-turn, or the transcript can't be read.
 3. It reads the resume mode.
 4. In plain mode, it checks the session's stop record for background work: any task but memory upkeep (`dream`) or an artifact watch drops it.
-5. Right before acting, it checks once more: the session is still idle, the pane still runs the same `claude`, the pane is not in copy mode, and the input box is empty. A draft Hayden is composing drops the pass in both modes, since typing would join it and a respawn would discard it. The dim ghost suggestion doesn't count.
+5. Right before acting, it checks once more: the turn is still over (by the same rule), the pane still runs the same `claude`, the pane is not in copy mode, and the input box is empty. A draft Hayden is composing drops the pass in both modes, since typing would join it and a respawn would discard it. The dim ghost suggestion doesn't count.
 6. In compact mode it checks the pane again between `/compact` and the resume prompt. If copy mode, a draft or no input box came up in that second, it doesn't type the prompt: it shows it in the status line for Hayden to type, where it stays until a key press, and writes it whole into `pass.log` (logged `partial`).
 
 After a plain respawn, the fresh session shows the last turn once as a banner (Hayden sees it, the model doesn't): its time, the first line of Hayden's prompt, and the replies rendered from markdown. Ctrl-b Up reopens the last 5 turns in a popup, each with its prompt. `pass-respawn` saves the prompts from the transcript beside the replies; a turn a background notice started says it had no prompt, and one whose start is past what it reads says the prompt wasn't saved.
@@ -85,9 +85,9 @@ A refusal (`stale`, `busy`, `timeout`, `failed`, `error`, and the resume prompt 
 
 Each decision appends one line to `$XDG_STATE_HOME/dotclaude/pass.log` (`~/.local/state/dotclaude/pass.log` by default).
 
-**A drop tells you too.** Every drop, and a compact whose resume prompt wasn't typed, also leaves this session a notice. It arrives as context at your next turn or tool call, starting `[pass]`. It names the cause and the fix, and says no pass is pending; after a compact it carries the resume prompt to follow.
+**A drop tells you too.** Every drop, and a compact whose resume prompt wasn't typed, also leaves this session a notice. It arrives as context at your next turn or tool call, starting `[pass]`. It says no pass is pending. A loud drop also names the cause and the fix; a quiet one says less (a `gone` names what changed, a `cancelled` only that it was cancelled). After a half-done compact it carries the resume prompt to follow.
 
-- The waiter decides within seconds of the turn's end, so by your next turn a pass has either run or dropped.
+- The waiter decides within about a second of the turn's end, so by your next turn a pass has either run or dropped. A turn that starts inside that second gets the notice at its first tool call or your next turn, not at its prompt.
 - Never tell anyone a pass is still queued from memory: a `[pass]` notice means none is.
 - Pass again only when the reason still holds. Hayden asked for it, or an autopass tier is in effect: fix the notice's cause first.
 

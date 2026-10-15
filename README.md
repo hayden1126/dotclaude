@@ -215,7 +215,7 @@ sees it.
 | `docs/prose-is-not-a-permission.md` | Blog post on the delegation work: why a prompt can't limit an agent's authority, and the layers that can | reference |
 | `docs/images/` | The post's diagram: `delegation-layers.svg` (source) and `delegation-layers.png` (2x render) | reference |
 | `tests/delegation/` | Unit tests for the delegation pieces (no model calls) and `run.py`, a live harness that spends model calls | run from the repo root |
-| `tests/setup/` | Unit tests for `merge-settings.py`, `git/install-ignore.py`, and the prompt and session hooks (`handoff_reminder.py`, `session-title.sh`, `session-summary.sh`), the tmux and sound hooks (`test_tmux_hooks.py`), `tmux/tmux-claude-status` (`test_tmux_claude_status.py`), the restore after tmux dies (`test_session_registry.py`, `test_claude_restore.py`), Star and Shelve (`test_claude_saved.py`), the grouped tab bar (`test_tmux_tab_bar.py`), the replies across a pass (`test_pass_banner.py`, `test_pass_last.py`, `test_md_render.py`), the auto-pass watcher and `/autopass` (`test_context_watch.py`), the ctx widget's tiers, cue and window write (`test_ctx_breakdown.py`), `setup-tmux.sh`, the overwrite and delete guards, `memory-git.sh` and `claude-file-history`; `replay_history.py` is a local-only replay tool, not a unit test | `python3 -m unittest discover -s tests/setup -t tests/setup` |
+| `tests/setup/` | Unit tests for `merge-settings.py`, `git/install-ignore.py`, and the prompt and session hooks (`handoff_reminder.py`, `session-title.sh`, `session-summary.sh`), the tmux and sound hooks (`test_tmux_hooks.py`), `tmux/tmux-claude-status` (`test_tmux_claude_status.py`), the restore after tmux dies (`test_session_registry.py`, `test_claude_restore.py`), Star and Shelve (`test_claude_saved.py`), the grouped tab bar (`test_tmux_tab_bar.py`), the replies across a pass (`test_pass_banner.py`, `test_pass_last.py`, `test_md_render.py`), the drop notice (`test_pass_notice.py`), the auto-pass watcher and `/autopass` (`test_context_watch.py`), the ctx widget's tiers, cue and window write (`test_ctx_breakdown.py`), `setup-tmux.sh`, the overwrite and delete guards, `memory-git.sh` and `claude-file-history`; `replay_history.py` is a local-only replay tool, not a unit test | `python3 -m unittest discover -s tests/setup -t tests/setup` |
 | `tests/deck_production/` | Unit tests for `deck-production`'s `deckkit geometry` gate (rule matrix on canned probe output, plus an end-to-end run over the synthetic `fixtures/geodeck` that skips without a headless Chrome) `deckkit regress`'s geometry facts, and `deckkit doctor`'s exit codes | `python3 -m unittest discover -s tests/deck_production -t tests/deck_production` |
 | `tests/lanes/` | Unit tests for the `lane` CLI, the lane hooks and `handoff-check`, on a throwaway bare origin plus clone (no network) | `python3 -m unittest discover -s tests/lanes -t tests/lanes` |
 | `tests/pass/` | Unit tests for `pass-respawn` on fakes for tmux, the session file and the transcript (`test_pass_respawn.py`), plus its guards and checks on the pass docs (`test_pass_guards.py`); nothing reaches the live tmux server | `python3 -m unittest discover -s tests/pass -t tests/pass` |
@@ -623,8 +623,8 @@ A repo with no lanes is unchanged. `skills/lanes/SKILL.md` is the operating guid
 `/pass` hands a session off and restarts it fresh in its tmux pane, so the next session starts
 from the status doc instead of a long context. It runs the handoff (or its delta mode, when a
 handoff already ran this session), gates on `handoff-check`, and calls
-`pass-respawn -C <toplevel>` last. Once the turn ends and the session's own status reads
-idle, the script rechecks the handoff and respawns the pane with a fresh `claude`.
+`pass-respawn -C <toplevel>` last. Once the session's own turn ends (below), the script
+rechecks the handoff and respawns the pane with a fresh `claude`.
 
 - `pass compact` keeps the session and types `/compact` and the resume prompt instead. Use it
   mid-task with tacit state or with background tasks in flight, which a respawn would kill (a
@@ -658,9 +658,11 @@ idle, the script rechecks the handoff and respawns the pane with a fresh `claude
   would compact twice. Every drop and `partial` also leave the session a `[pass]` notice
   (`pass-notice.sh`, Hooks above). It arrives as context at the session's next turn or tool call,
   and says:
-  - the cause;
-  - that no pass is pending;
-  - the fix (for `partial`, the resume prompt).
+  - that no pass is pending, always;
+  - the cause, for a loud drop; a quiet one says less (`resumed` its reason, `gone` what
+    changed, `cancelled` nothing more);
+  - the fix, for a loud drop (for `partial`, and a `failed` after `/compact` went out, the
+    resume prompt).
 
   So the session stops saying a pass is queued, even after tmux died and restore resumed it.
 - A `busy` refusal names the first two tasks with their description and id (`monitor "deploy
