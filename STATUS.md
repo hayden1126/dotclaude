@@ -95,8 +95,12 @@ stored here).
     machine-wide); the lane lists them for removal once its hook is live. At merge the lead also
     updates Vulcan's memory `no-chrome-windows-in-front.md` (it says `chrome-bg` isn't installed
     yet).
-  - **Merge order: `install-hint` and `chrome-bg`, whichever is ready first** (they don't
-    overlap). The lead installs only the next to merge.
+  - `two-sessions` (opened 2026-10-14, Hayden's pick): `lane ls` flags a main checkout with
+    more than one live session, and the tab bar marks the extra lead tab. Its brief is in its
+    record.
+  - **Merge order: `install-hint`, `chrome-bg` and `two-sessions`, whichever is ready first**
+    (none overlap, except that `lane` imports `install-state.py`, which install-hint may
+    change). The lead installs only the next to merge.
   - The parked json-depth sweep (21 files, among them the delegation enforcement scripts) is on
     `fix/json-depth-sweep`, a local branch never pushed: keep it while the sweep is in the
     backlog. Shipping it first needs a check of how each enforcement site fails
@@ -115,16 +119,9 @@ stored here).
     rerun the menu-clip repro and the tmux suites. If it fixes the clip, install at a quiet
     moment (a server restart; claude-restore reopens the tabs) and drop the row-0 menu rule.
     Until then, 3.7c's default menus that dotclaude doesn't own still clip under a top bar.
-  - **Two live sessions in a main checkout** (seen 2026-10-14 in a work repo the night it got
-    its first lanes). `lane addr lead` refuses ("2 live sessions in the main checkout"), so no
-    lane can send "merged #N", and the tab bar names both tabs `lead` in the repo's row, since
-    `classify()` keys on the pane's directory. Fix: `lane ls` flags a main checkout with more
-    than one live session, and the bar marks the extra tab (for example `lead²`). The stopgap
-    used: tell each lane to pick the lead's `main:@N` entry from the refusal, and tell the old
-    session it isn't the lead. Next pick once a slot frees (`skills/lanes/scripts/lane`).
   - `lane init --model/--effort` repo defaults and `lane open --model/--effort` overrides,
-    passed through to `claude` (today `lane open` hardcodes the argv). It may share a lane with
-    the item above.
+    passed through to `claude` (today `lane open` hardcodes the argv). It edits
+    `skills/lanes/scripts/lane`, so it waits for lane two-sessions' merge.
   - Tests time durations with `time.monotonic()`, not `time.time()` (122 calls in 23 test
     files). It touches every suite, so it opens only when no lane runs.
 
@@ -215,11 +212,11 @@ stored here).
 
 ## Notes for next session
 - **Next (lead, main checkout):** watch for "merged #N" from a lane, then run the post-merge
-  chain (`skills/lanes/SKILL.md`, The lead, step 7). Live lanes: `install-hint`, `chrome-bg`.
-  Check `lane ls` first: a merge Hayden made on GitHub and mentioned to no session sends no
-  message (#102 showed merged there before its lane's message came). One slot of 3 is free
-  (Hayden picked a cap of 4 for chrome-bg, unneeded once #106 freed a slot); the two-sessions
-  flag and `lane open --model` are the next picks, Hayden's call. No chat
+  chain (`skills/lanes/SKILL.md`, The lead, step 7). Live lanes: `install-hint`, `chrome-bg`,
+  `two-sessions`. Check `lane ls` first: a merge Hayden made on GitHub and mentioned to no
+  session sends no message (#102 showed merged there before its lane's message came). All 3
+  slots are full (Hayden picked a cap of 4 for chrome-bg, unneeded once #106 freed a slot);
+  `lane open --model` is the next pick after two-sessions merges. No chat
   about a lane's own asks; speak on cross-lane orders, decisions raised with the lead, failed
   checks and lead-only actions.
   - The lead's commits of 2026-10-14 (second session): `git log --first-parent 696cc44..HEAD`
