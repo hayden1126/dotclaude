@@ -87,10 +87,15 @@ def log(line):
 # routes. Other forms (one file, project-relative, globs mid-path) are not read: a file's dir
 # must be protected too, so a one-file rule never clears a refusal.
 EDIT_RULE = re.compile(r"Edit\((//|~/)([^*?\[\]]*?)/?/\*\*\)")
+# Where to rerun setup after a fix. It never names the lane holding the install when it prints:
+# that goes stale once the lead's reinstall releases the hold (a rerun from merged lane
+# pass-timeout took the install back, 2026-10-15). install-state.py refuses such a rerun too.
+RERUN = ("rerun setup from the main checkout (`./setup.sh`), or, if `lane ls` shows an unmerged "
+         "lane holding the install when you rerun, from that lane "
+         "(`lane lock install -- ./setup.sh`)")
 PROTECT_HINT = ("Add the permissions.deny rule {rule} to user or managed settings (a project's "
                 "own don't count): it binds sandboxed Bash and the Edit and Write tools. "
-                "dotclaude: ~/.claude/settings.machine.json, then ./setup.sh (while a lane holds "
-                "the install, rerun that lane's `lane lock install -- ./setup.sh`)")
+                "dotclaude: ~/.claude/settings.machine.json, then " + RERUN)
 
 
 def edit_rule_path(rule, home):
@@ -915,28 +920,35 @@ def run_scan(roots):
             if r.fix not in rules:
                 rules.append(r.fix)
     if rules:
-        machine = os.path.join(home, ".claude", "settings.machine.json")
-        try:
-            with open(machine) as f:
-                text = f.read()
-            data = json.loads(text) if text.strip() else {}
-        except FileNotFoundError:
-            data = {}
-        except (OSError, ValueError) as e:
-            print(f"{machine} not read ({type(e).__name__}); add these to its permissions.deny:")
-            print("\n".join(f"  {json.dumps(r)}," for r in rules))
-            return 1
-        perms = data.setdefault("permissions", {}) if isinstance(data, dict) else None
-        deny = perms.setdefault("deny", []) if isinstance(perms, dict) else None
-        if not isinstance(deny, list):
-            print(f"{machine} has no usable permissions.deny; add these to it:")
-            print("\n".join(f"  {json.dumps(r)}," for r in rules))
-            return 1
-        deny += [r for r in rules if r not in deny]
-        print(f"After a look at each dir above, {machine} with the rules added (then ./setup.sh, "
-              "or while a lane holds the install, that lane's `lane lock install -- ./setup.sh`):")
-        print(json.dumps(data, indent=2))
-    return 1 if first or unchecked or errors else 0
+        print_paste(os.path.join(home, ".claude", "settings.machine.json"), rules)
+    if not (first or unchecked or errors):
+        return 0
+    print(f"Then {RERUN}.")  # last, where setup.sh's warning points
+    return 1
+
+
+def print_paste(machine, rules):
+    """Print machine with the rules added to its permissions.deny, ready to paste; or, when it
+    can't be read or has no usable deny list, the rules to add by hand."""
+    try:
+        with open(machine) as f:
+            text = f.read()
+        data = json.loads(text) if text.strip() else {}
+    except FileNotFoundError:
+        data = {}
+    except (OSError, ValueError) as e:
+        print(f"{machine} not read ({type(e).__name__}); add these to its permissions.deny:")
+        print("\n".join(f"  {json.dumps(r)}," for r in rules))
+        return
+    perms = data.setdefault("permissions", {}) if isinstance(data, dict) else None
+    deny = perms.setdefault("deny", []) if isinstance(perms, dict) else None
+    if not isinstance(deny, list):
+        print(f"{machine} has no usable permissions.deny; add these to it:")
+        print("\n".join(f"  {json.dumps(r)}," for r in rules))
+        return
+    deny += [r for r in rules if r not in deny]
+    print(f"After a look at each dir above, {machine} with the rules added:")
+    print(json.dumps(data, indent=2))
 
 
 # --- SessionStart check (hooks/excluded-check.sh) ----------------------------------------------
@@ -1082,7 +1094,7 @@ def session_message(shown):
               + "\n".join(f"  {line}" for line in lines)
               + "\nLook at each dir first: `python3 -I ~/.claude/hooks/excluded_guard.py --scan`"
               " (sandbox off) lists what it holds. Then add the rules to permissions.deny in "
-              "~/.claude/settings.machine.json and rerun ./setup.sh.")
+              f"~/.claude/settings.machine.json, then {RERUN}.")
     context = ("excluded-guard will refuse excluded commands (git push, gh, lane and the rest) "
                "from this session until the user fixes: " + "; ".join(lines) + ". The fix is "
                "theirs (deny rules in their own settings): name it to them, and don't work "

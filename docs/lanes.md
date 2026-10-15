@@ -546,6 +546,16 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
     dir setup.sh links into, and its path inside its checkout matches one that setup.sh links.
   - **Released:** the lead's `./setup.sh` in the main checkout relinks everything, which
     releases the hold.
+  - **Merged:** a run from a lane with no commit past the lanes config's base (`origin/main`)
+    stops too: its work is merged, or there is none yet. On 2026-10-15 a rerun from merged lane
+    pass-timeout, 3 s after the lead's reinstall from main, took the install back. It followed
+    a hint printed while pass-timeout still held the install. The check runs under setup.sh's
+    `install.lock`, so it judges the moment of the run, not of the hint. It fails closed (no
+    git, no base ref, git past its 5 s limit), and git runs only in a lane's own run, reading
+    objects only. Two misses are accepted: a merge nobody fetched yet (the post-merge chain
+    fetches before it reinstalls) and a squash merge (dotclaude merges with merge commits).
+    The excluded-guard hint no longer names a lane either: it says to rerun from the main
+    checkout, or from the unmerged lane `lane ls` shows holding the install at rerun time.
   - **What counts as a lane:** a linked worktree of this repo, or a worktree of another clone
     with `install-state.py` and `setup.sh` at its root. Another project's worktree, and one
     inside the main checkout (an agent's), never holds. A lane registered in the main
@@ -556,7 +566,9 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
     The accepted cost: an entry planted there naming another clone's lane releases that lane's
     hold too, which equals an install from this main and prunes nothing outside a dotclaude
     checkout. Every file these checks read goes through one bounded, non-blocking reader, so a
-    FIFO or a huge file planted in a lane can't hang `setup.sh`.
+    FIFO or a huge file planted in a lane can't hang `setup.sh`. The one exception is the merged
+    check's git call, in a lane's own run: git reads the repo's config, refs and objects itself,
+    so a FIFO there costs at most its 5 s limit, and then the run stops.
   - **Prune:** after linking, `setup.sh` removes managed links that point into another lane of
     this repo (or into a dotclaude checkout the main checkout's `.git/worktrees/` registers or
     the lanes root holds, whatever its `.git` file says), and dangling ones into its own checkout, the lanes root or `.claude/worktrees/`

@@ -389,6 +389,17 @@ class Rule2Path(Guard):
         self.denied("git push", "rule2", self.wbin)
         self.assertIn("deny rule2 " + self.wbin, self.log())
 
+    def test_the_fix_says_where_to_rerun_setup_without_naming_a_lane(self):
+        # A hint naming the holder goes stale once the lead's reinstall releases it (a rerun
+        # from merged lane pass-timeout took the install back, 2026-10-15): it defers to
+        # `lane ls` at rerun time.
+        rerun = load_guard().RERUN
+        self.assertIn("main checkout", rerun)
+        self.assertIn("if `lane ls` shows an unmerged lane holding the install when you rerun",
+                      rerun)
+        self.env["PATH"] = f"{self.wbin}:/usr/bin"
+        self.assertIn(rerun, self.denied("git push", "rule2", self.wbin))
+
     def test_a_writable_dir_after_the_head_is_refused(self):
         # The head's children (git hooks, gh's git, claude's tools) search the whole PATH.
         self.env["PATH"] = f"{self.bin}:/usr/bin:{self.wbin}"
@@ -696,13 +707,38 @@ class Scan(Guard):
         self.assertIn("PATH: excluded-guard (rule2)", out)
         self.assertEqual(out.count(f'"Edit(/{self.wbin}/**)"'), 1, out)
         self.assertIn(f"{self.wbin} holds, before you protect it:\n", out)
+        # The last line, where setup.sh's warning points.
+        self.assertTrue(out.endswith(f"\nThen {load_guard().RERUN}.\n"), out)
+
+    def test_a_finding_with_no_rule_still_ends_with_where_to_rerun(self):
+        # $HOME itself can't take an Edit deny rule (it would cover the whole home).
+        self.env["PATH"] = f"{self.home}:/usr/bin"
+        code, out = self.scan(self.tmp)
+        self.assertEqual(code, 1, out)
+        self.assertIn("PATH: excluded-guard (rule2)", out)
+        self.assertNotIn("with the rules added", out)
+        self.assertTrue(out.endswith(f"\nThen {load_guard().RERUN}.\n"), out)
+
+    def test_a_rule_it_cant_paste_still_ends_with_where_to_rerun(self):
+        self.env["PATH"] = f"{self.wbin}:/usr/bin"
+        rerun = f"\nThen {load_guard().RERUN}.\n"
+        machine = os.path.join(self.home, ".claude", "settings.machine.json")
+        for text, says in (("{not json", "not read (JSONDecodeError)"),
+                           ('{"permissions": {"deny": "x"}}', "has no usable permissions.deny")):
+            with self.subTest(says):
+                self.write(machine, text)
+                code, out = self.scan(self.tmp)
+                self.assertEqual(code, 1, out)
+                self.assertIn(says, out)
+                self.assertIn(f'  "Edit(/{self.wbin}/**)",\n', out)
+                self.assertTrue(out.endswith(rerun), out)
 
     def test_the_paste_block_keeps_the_machine_overlay(self):
         self.env["PATH"] = f"{self.wbin}:/usr/bin"
         self.write(os.path.join(self.home, ".claude", "settings.machine.json"),
                    json.dumps({"effortLevel": "high", "permissions": {"deny": ["Edit(~/x/**)"]}}))
         code, out = self.scan(self.tmp)
-        block = json.loads(out[out.index("\n{\n") + 1:])
+        block, _ = json.JSONDecoder().raw_decode(out[out.index("\n{\n") + 1:])
         self.assertEqual(block["effortLevel"], "high")
         self.assertEqual(block["permissions"]["deny"], ["Edit(~/x/**)", f"Edit(/{self.wbin}/**)"])
 
@@ -973,7 +1009,9 @@ class Session(Guard):
 
     def test_a_path_finding_shows_once_across_projects(self):
         self.env["PATH"] = f"{self.wbin}:/usr/bin"
-        self.assertIn(f"Edit(/{self.wbin}/**)", self.start()["systemMessage"])
+        msg = self.start()["systemMessage"]
+        self.assertIn(f"Edit(/{self.wbin}/**)", msg)
+        self.assertIn(load_guard().RERUN, msg)
         self.assertIsNone(self.start(self.lane))
 
     def test_each_lane_shows_its_own_hooks_dir(self):
