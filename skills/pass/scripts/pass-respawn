@@ -124,11 +124,13 @@ Hayden, since passing again drops the same way and an autopass would loop). `par
 3 or 4: passing again would compact twice), hand over the resume prompt instead. The latter
 stays `failed`, but its held tmux line and toast hand the prompt over too ("pass failed after
 /compact was sent; type the resume prompt yourself: ..."), and its pass.log line ends with it,
-as `partial`'s do. Once the prompt may already sit in the input box (the final Enter failed, or
-tmux gave no answer, so the keys may have gone), typing it again would double it: the line says
-"pass failed after the resume prompt was typed; press Enter (or type it if the box is empty):
-...", and the notice says the prompt may sit unsent there. A tmux error with no text reads "no
-error text". Its free-text detail is one line of at most 300
+as `partial`'s do. Once the prompt may already sit in the input box, typing it again would
+double it. When the final Enter failed (or got no answer), the line says "pass failed after the
+resume prompt was typed; press Enter (or type it if the box is empty): ...", and the notice says
+the prompt may sit unsent there. When tmux gave no answer while typing it, nothing is known
+either way: the line says "pass failed while typing the resume prompt; press Enter if it is in
+the box, else type it: ...", and the notice says it may or may not sit unsent. A tmux error with
+no text reads "no error text". Its free-text detail is one line of at most 300
 characters. The call, once it holds the pending lock, deletes the
 session's old notice and prunes, once a day, notices older than 7 days and claimed ones
 (*.taken) older than a day; the prune's stamp, pass-notice.pruned, sits beside the dir, which so
@@ -1231,7 +1233,8 @@ def observe(plan: Plan, procs=None) -> tuple[str, str, dict | None]:
     or an ancestor of it, its current command `claude`. detail is the file's status."""
     p = tmux(plan, "display-message", "-p", "-t", plan.pane, PANE_FORMAT)
     if p is None or p.returncode != 0:
-        return "gone", f"pane {plan.pane}: " + (p.stderr.strip() if p else "tmux didn't run"), None
+        return "gone", f"pane {plan.pane}: " + ((p.stderr.strip() if p else "tmux didn't run")
+                                                or "no error text"), None
     session = load_session(plan.claude_pid)
     if why := session_problem(session, plan.session_id, plan.claude_pid, plan.proc_start,
                               plan.pane):

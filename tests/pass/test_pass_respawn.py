@@ -1280,6 +1280,17 @@ class Plain(Base):
         self.assertLoud("pass failed in tab 3: tmux could not respawn or type into the pane. "
                         "See pass.log")
 
+    def test_a_pane_check_error_with_no_text_is_named(self):
+        # Not a blank reason: pass.log and the notice say tmux gave no error text.
+        real = self.mod.tmux
+        self.mod.tmux = lambda plan, *args: (
+            subprocess.CompletedProcess(args, 1, "", "") if self.mod.PANE_FORMAT in args
+            else real(plan, *args))
+        self.assertEqual(self.mod.wait_and_act(self.plan(), table), "gone")
+        self.assertIn("outcome=gone pane %4: no error text", self.log())
+        self.assertIn("the pane or its claude changed (pane %4: no error text)",
+                      self.notice()["text"])
+
     def test_an_error_after_the_carry_removes_it_and_logs_error(self):
         real = self.mod.tmux
 
@@ -1757,12 +1768,26 @@ class Notices(Handed):
         self.assertEqual(n["text"], self.loud(n, "tmux didn't answer at the final check",
                                               "Run the pass skill again once the tab is back."))
 
+    def test_a_respawn_error_with_no_text_is_named(self):
+        # Not a blank reason: pass.log and the notice say tmux gave no error text.
+        real = self.mod.tmux
+        self.mod.tmux = lambda plan, *args: (
+            subprocess.CompletedProcess(args, 1, "", "") if args[0] == "respawn-pane"
+            else real(plan, *args))
+        code, out = self.run_pass("--foreground")
+        self.assertEqual(code, 1, out)
+        self.assertIn("outcome=failed no error text", self.log())
+        n = self.notice()
+        self.assertEqual(n["text"], self.loud(
+            n, "tmux could not respawn or type into the pane (no error text)", self.READ_LOG))
+
     def test_a_prompt_that_failed_after_compact_went_out_is_handed_over(self):
         # send-keys 3 or 4: /compact and its Enter are out, so passing again would compact a
         # second time. The outcome stays `failed`; the notice, the held tmux line, the toast and
         # pass.log hand over the resume prompt, as `partial`'s do. Once the prompt may be in the
-        # box (the Enter failed, or tmux gave no answer, so the keys may have gone), telling
-        # Hayden to type it would double it: he is told to press Enter instead.
+        # box (its Enter failed or got no answer), telling Hayden to type it would double it: he
+        # is told to press Enter instead. With no answer while typing it, nothing is known either
+        # way: he presses Enter if it is in the box, else types it.
         real = self.mod.tmux
         prompt = self.PROMPT + " Call EnterPlanMode first."
         pane_err = "can't find pane: %4"
