@@ -53,8 +53,10 @@ fi
 # A lane installs from its own worktree to test a change, and an install from anywhere else
 # would replace those links mid-test. So links into a live lane worktree hold the install: the
 # run stops here, before changing anything, unless this checkout is that lane or its main
-# checkout (whose run relinks everything, releasing it). install-state.py has the rule. Any
-# other failure warns and goes on, like the lane hooks.
+# checkout (whose run relinks everything, releasing it). A run from a lane with no commit past
+# the base (merged, or nothing committed yet) stops here too, as does one where git can't tell:
+# a rerun after the lead's release would take the install back. install-state.py has the rules.
+# Any other failure warns and goes on, like the lane hooks.
 hold=0
 python3 -I "$REPO_DIR/install-state.py" hold "$REPO_DIR" || hold=$?
 if [[ $hold -eq 3 ]]; then
@@ -377,7 +379,7 @@ python3 -I "$REPO_DIR/install-state.py" plugins \
 # bin dir, a repo whose install step points core.hooksPath into it), what each holds, and the
 # settings.machine.json with the Edit deny rules that clear them.
 python3 -I "$REPO_DIR/hooks/excluded_guard.py" --scan \
-  || warn "the excluded-command guard would refuse the calls above: look at each dir, paste the settings.machine.json it printed, and rerun setup"
+  || warn "the excluded-command guard would refuse the calls above: look at each dir, paste the settings.machine.json it printed, and rerun setup where its last line says"
 
 # ---------------------------------------------------------------------------
 # 7. Final checklist

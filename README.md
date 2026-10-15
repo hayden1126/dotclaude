@@ -600,7 +600,8 @@ and status single-writer:
   waits instead of colliding.
 - A lane tests its change by installing from its own worktree (`lane lock install --
   ./setup.sh`), and that install holds. setup.sh refuses to run from any other lane or clone
-  until the main checkout's own run relinks everything.
+  until the main checkout's own run relinks everything. It also refuses a lane with no commit
+  past `origin/main`, so a merged lane can't take the install back.
 - `lane done chart-fix` closes a merged lane in one run. It ends the lane's own sessions and
   what runs under them, proven from /proc and Claude Code's session files and never chosen by
   name or tmux window, and it refuses anything else by name. Then it archives the record and

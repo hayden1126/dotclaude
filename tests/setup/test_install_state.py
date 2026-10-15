@@ -48,7 +48,8 @@ def write(path, text=""):
 
 class Machine(unittest.TestCase):
     """self.main is a repo whose lane worktrees self.a and self.b (branches a, b) sit under the
-    lanes root self.root, which its lanes config names."""
+    lanes root self.root, which its lanes config names. Each lane has a commit past
+    origin/main, which points at main's."""
 
     def setUp(self):
         self.tmp = os.path.realpath(tempfile.mkdtemp())
@@ -73,6 +74,9 @@ class Machine(unittest.TestCase):
         self.a, self.b = j(self.root, "a"), j(self.root, "b")
         self.git("worktree", "add", "-q", "-b", "a", self.a)
         self.git("worktree", "add", "-q", "-b", "b", self.b)
+        for lane in (self.a, self.b):  # distinct messages: same-second twins would be one commit
+            self.git("commit", "-q", "--allow-empty", "-m", f"work in {lane}", cwd=lane)
+        self.git("update-ref", "refs/remotes/origin/main", "main")
         self.common = j(self.main, ".git")
         key = hashlib.sha256(self.common.encode()).hexdigest()[:12]
         self.config = j(self.state, "dotclaude", "lanes", f"proj-{key}.toml")
@@ -379,6 +383,130 @@ class Hold(Machine):
         self.assertEqual(self.cli("hold", self.b).returncode, 0)
 
 
+class Merged(Machine):
+    """A run from a lane with no commit past the lanes config's base is refused: its work is
+    merged, or there is none yet. At 2026-10-15T01:20:12Z a rerun from merged lane
+    pass-timeout's worktree, 3 s after the lead's reinstall from main, took the install back."""
+
+    def merge(self, branch):
+        """branch merged into main with a merge commit, and origin/main moved to it."""
+        self.git("merge", "-q", "--no-ff", "-m", f"Merge {branch}", branch)
+        self.git("update-ref", "refs/remotes/origin/main", "main")
+
+    def refused(self, r, lane, branch, base="origin/main"):
+        self.assertEqual((r.returncode, r.stdout), (3, ""), r.stderr)
+        self.assertIn(f"the lane worktree {lane} (branch {branch}) has no commit past {base}",
+                      r.stderr)
+        self.assertIn(f"Install from the main checkout {self.main}", r.stderr)
+
+    def cant_tell(self, r, why):
+        self.assertEqual((r.returncode, r.stdout), (3, ""), r.stderr)
+        self.assertIn(f"can't tell whether the lane worktree {self.a} (branch a) has a commit "
+                      "past origin/main", r.stderr)
+        self.assertIn(why, r.stderr)
+        self.assertIn(f"Install from the main checkout {self.main}", r.stderr)
+
+    def test_a_merged_lane_cant_take_the_install_back_after_mains_release(self):
+        self.install(self.a)
+        self.merge("a")
+        self.assertIn(f"releases the install held by {self.a}", self.cli("hold", self.main).stdout)
+        self.install(self.main)
+        self.assertEqual(install_state.holders(self.a, self.env), [])
+        before = self.snapshot()
+        self.refused(self.cli("hold", self.a), self.a, "a")
+        self.assertEqual(self.snapshot(), before)
+
+    def test_a_merged_holder_is_refused_its_own_rerun(self):
+        self.install(self.a)
+        self.merge("a")
+        self.refused(self.cli("hold", self.a), self.a, "a")
+
+    def test_a_held_and_merged_run_names_both(self):
+        self.install(self.b)
+        self.merge("a")
+        r = self.cli("hold", self.a)
+        self.refused(r, self.a, "a")
+        self.assertIn(f"install held by the lane worktree {self.b}", r.stderr)
+
+    def test_an_unmerged_lane_proceeds_beside_a_merged_one(self):
+        self.merge("a")
+        r = self.cli("hold", self.b)
+        self.assertEqual((r.returncode, r.stdout, r.stderr), (0, "", ""))
+
+    def test_a_lane_with_nothing_committed_is_refused(self):
+        fresh = os.path.join(self.root, "c")
+        self.git("worktree", "add", "-q", "--no-track", "-b", "c", fresh, "origin/main")
+        self.refused(self.cli("hold", fresh), fresh, "c")
+
+    def test_a_follow_up_branch_proceeds_once_it_has_a_commit(self):
+        self.merge("a")
+        self.git("switch", "-q", "--no-track", "-c", "a2", "origin/main", cwd=self.a)
+        self.refused(self.cli("hold", self.a), self.a, "a2")
+        self.git("commit", "-q", "--allow-empty", "-m", "follow-up", cwd=self.a)
+        r = self.cli("hold", self.a)
+        self.assertEqual((r.returncode, r.stdout, r.stderr), (0, "", ""))
+
+    def test_the_main_checkout_and_a_plain_clone_are_never_checked(self):
+        clone = os.path.join(self.tmp, "clone")
+        self.git("clone", "-q", self.main, clone, cwd=self.tmp)
+        self.git("update-ref", "-d", "refs/remotes/origin/main")
+        self.git("update-ref", "-d", "refs/remotes/origin/main", cwd=clone)
+        for run_from in (self.main, clone):
+            with self.subTest(run_from):
+                r = self.cli("hold", run_from)
+                self.assertEqual((r.returncode, r.stdout, r.stderr), (0, "", ""))
+
+    def test_the_lanes_config_base_is_the_ref(self):
+        tip = self.git("rev-parse", "a").strip()
+        with open(self.config) as f:
+            config = f.read()
+        for base, ref in (("origin/dev", "refs/remotes/origin/dev"),
+                          ("refs/heads/release", "refs/heads/release")):
+            with self.subTest(base):
+                write(self.config, config + f'base = "{base}"\n')
+                self.git("update-ref", ref, tip)
+                self.refused(self.cli("hold", self.a), self.a, "a", base=base)
+                r = self.cli("hold", self.b)
+                self.assertEqual((r.returncode, r.stderr), (0, ""))
+
+    def test_a_missing_base_ref_fails_closed(self):
+        self.git("update-ref", "-d", "refs/remotes/origin/main")
+        self.cant_tell(self.cli("hold", self.a), "refs/remotes/origin/main")
+
+    def test_no_git_fails_closed(self):
+        self.env["PATH"] = self.tmp  # holds no git
+        self.cant_tell(self.cli("hold", self.a), "git not found")
+
+    def test_a_head_the_bounded_reads_reject_fails_closed_without_git(self):
+        head = os.path.join(self.common, "worktrees", "a", "HEAD")
+        os.unlink(head)
+        os.mkfifo(head)  # git would wait on it until its timeout
+        with mock.patch("subprocess.run") as run:
+            line = install_state.merged_refusal(self.a, self.env)
+        run.assert_not_called()
+        self.assertIn(f"can't tell whether the lane worktree {self.a} (branch ?)", line)
+        self.assertIn("its HEAD or commondir file doesn't read as git's", line)
+
+    def test_a_git_that_runs_too_long_fails_closed(self):
+        with mock.patch("subprocess.run", side_effect=subprocess.TimeoutExpired("git", 5)):
+            line = install_state.merged_refusal(self.a, self.env)
+        self.assertIn("can't tell whether", line)
+        self.assertIn("git took over 5 s", line)
+
+    def test_git_runs_no_program_the_config_or_environment_names(self):
+        self.merge("a")  # before the traps: the fixture's own git would spring them
+        marker = os.path.join(self.tmp, "ran")
+        self.git("config", "core.fsmonitor", f"touch {marker}-fsmonitor")
+        self.git("config", "pager.rev-list", f"touch {marker}-pager; cat")
+        write(os.path.join(self.home, ".gitconfig"), f"[pager]\n\trev-list = touch {marker}-global\n")
+        # A GIT_DIR from the environment would point git at another repo.
+        self.env.update(GIT_DIR=os.path.join(self.tmp, "nowhere"), GIT_PAGER=f"touch {marker}-env")
+        r = self.cli("hold", self.b)
+        self.assertEqual((r.returncode, r.stderr), (0, ""))
+        self.refused(self.cli("hold", self.a), self.a, "a")
+        self.assertEqual([n for n in os.listdir(self.tmp) if n.startswith("ran")], [])
+
+
 class Prune(Machine):
     def prune(self, repo_dir):
         return install_state.prune(repo_dir, self.env)
@@ -500,15 +628,20 @@ class ConfigRoot(unittest.TestCase):
     TEXT = ('# lanes config, written by `lane init`; flat keys only.\n'
             'root = "/x/a \\"q\\" b\\\\c"\nsetup = ""\ncap = 8\nautopass = true\n')
 
-    def test_tomllib_and_the_regex_read_the_same_root(self):
-        self.assertEqual(install_state.config_root(self.TEXT), '/x/a "q" b\\c')
-        with mock.patch.dict(sys.modules, {"tomllib": None}):  # Python 3.10: no tomllib
-            self.assertEqual(install_state.config_root(self.TEXT), '/x/a "q" b\\c')
-            self.assertIsNone(install_state.config_root("setup = 'x'\n"))
+    def test_tomllib_and_the_regex_read_the_same_values(self):
+        text = self.TEXT + 'base = "origin/dev"\n'
+        for tomllib in ("present", None):  # None: Python 3.10, no tomllib
+            with self.subTest(tomllib=tomllib), \
+                    mock.patch.dict(sys.modules, {"tomllib": None} if tomllib is None else {}):
+                self.assertEqual(install_state.config_value(text, "root"), '/x/a "q" b\\c')
+                self.assertEqual(install_state.config_value(text, "base"), "origin/dev")
+                self.assertIsNone(install_state.config_value(text, "missing"))
+                self.assertIsNone(install_state.config_value(text, "cap"))  # not a string
+                self.assertIsNone(install_state.config_value("setup = 'x'\n", "root"))
 
-    def test_a_config_nested_past_the_recursion_limit_has_no_root(self):
+    def test_a_config_nested_past_the_recursion_limit_has_no_value(self):
         # tomllib raises RecursionError there, not TOMLDecodeError.
-        self.assertIsNone(install_state.config_root("root = " + "[" * 100000))
+        self.assertIsNone(install_state.config_value("root = " + "[" * 100000, "root"))
 
 
 class LinksInto(Machine):
@@ -1023,6 +1156,22 @@ class SetupHold(Machine):
         self.assertEqual(r.returncode, 1)
         self.assertNotIn("past the hold", r.stdout)
         self.assertIn(self.a, r.stderr)
+        self.assertIn("setup.sh stopped before changing anything", r.stderr)
+        after = self.snapshot()
+        lock = os.path.join(self.state, "dotclaude", "install.lock")
+        if shutil.which("flock"):
+            self.assertEqual(after.pop(lock), "file")
+        self.assertEqual(after, before)
+
+    def test_a_merged_lane_stops_before_changing_anything(self):
+        self.git("merge", "-q", "--no-ff", "-m", "Merge a", "a")
+        self.git("update-ref", "refs/remotes/origin/main", "main")
+        before = self.snapshot()
+        r = self.head(self.a)
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertNotIn("past the hold", r.stdout)
+        self.assertIn(f"the lane worktree {self.a} (branch a) has no commit past origin/main",
+                      r.stderr)
         self.assertIn("setup.sh stopped before changing anything", r.stderr)
         after = self.snapshot()
         lock = os.path.join(self.state, "dotclaude", "install.lock")

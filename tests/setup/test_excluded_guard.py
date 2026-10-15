@@ -389,6 +389,16 @@ class Rule2Path(Guard):
         self.denied("git push", "rule2", self.wbin)
         self.assertIn("deny rule2 " + self.wbin, self.log())
 
+    def test_the_fix_says_where_to_rerun_setup_without_naming_a_lane(self):
+        # A hint naming the holder goes stale once the lead's reinstall releases it (a rerun
+        # from merged lane pass-timeout took the install back, 2026-10-15): it defers to
+        # `lane ls` at rerun time.
+        rerun = load_guard().RERUN
+        self.assertIn("main checkout", rerun)
+        self.assertIn("if `lane ls` shows a lane holding the install when you rerun", rerun)
+        self.env["PATH"] = f"{self.wbin}:/usr/bin"
+        self.assertIn(rerun, self.denied("git push", "rule2", self.wbin))
+
     def test_a_writable_dir_after_the_head_is_refused(self):
         # The head's children (git hooks, gh's git, claude's tools) search the whole PATH.
         self.env["PATH"] = f"{self.bin}:/usr/bin:{self.wbin}"
@@ -696,6 +706,7 @@ class Scan(Guard):
         self.assertIn("PATH: excluded-guard (rule2)", out)
         self.assertEqual(out.count(f'"Edit(/{self.wbin}/**)"'), 1, out)
         self.assertIn(f"{self.wbin} holds, before you protect it:\n", out)
+        self.assertIn(f"with the rules added ({load_guard().RERUN}):\n", out)
 
     def test_the_paste_block_keeps_the_machine_overlay(self):
         self.env["PATH"] = f"{self.wbin}:/usr/bin"
@@ -973,7 +984,9 @@ class Session(Guard):
 
     def test_a_path_finding_shows_once_across_projects(self):
         self.env["PATH"] = f"{self.wbin}:/usr/bin"
-        self.assertIn(f"Edit(/{self.wbin}/**)", self.start()["systemMessage"])
+        msg = self.start()["systemMessage"]
+        self.assertIn(f"Edit(/{self.wbin}/**)", msg)
+        self.assertIn(load_guard().RERUN, msg)
         self.assertIsNone(self.start(self.lane))
 
     def test_each_lane_shows_its_own_hooks_dir(self):

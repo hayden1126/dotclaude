@@ -87,10 +87,14 @@ def log(line):
 # routes. Other forms (one file, project-relative, globs mid-path) are not read: a file's dir
 # must be protected too, so a one-file rule never clears a refusal.
 EDIT_RULE = re.compile(r"Edit\((//|~/)([^*?\[\]]*?)/?/\*\*\)")
+# Where to rerun setup after a fix. It never names the lane holding the install when it prints:
+# that goes stale once the lead's reinstall releases the hold (a rerun from merged lane
+# pass-timeout took the install back, 2026-10-15). install-state.py refuses such a rerun too.
+RERUN = ("then rerun setup from the main checkout (`./setup.sh`), or, if `lane ls` shows a lane "
+         "holding the install when you rerun, from that lane (`lane lock install -- ./setup.sh`)")
 PROTECT_HINT = ("Add the permissions.deny rule {rule} to user or managed settings (a project's "
                 "own don't count): it binds sandboxed Bash and the Edit and Write tools. "
-                "dotclaude: ~/.claude/settings.machine.json, then ./setup.sh (while a lane holds "
-                "the install, rerun that lane's `lane lock install -- ./setup.sh`)")
+                "dotclaude: ~/.claude/settings.machine.json, " + RERUN)
 
 
 def edit_rule_path(rule, home):
@@ -933,8 +937,7 @@ def run_scan(roots):
             print("\n".join(f"  {json.dumps(r)}," for r in rules))
             return 1
         deny += [r for r in rules if r not in deny]
-        print(f"After a look at each dir above, {machine} with the rules added (then ./setup.sh, "
-              "or while a lane holds the install, that lane's `lane lock install -- ./setup.sh`):")
+        print(f"After a look at each dir above, {machine} with the rules added ({RERUN}):")
         print(json.dumps(data, indent=2))
     return 1 if first or unchecked or errors else 0
 
@@ -1082,7 +1085,7 @@ def session_message(shown):
               + "\n".join(f"  {line}" for line in lines)
               + "\nLook at each dir first: `python3 -I ~/.claude/hooks/excluded_guard.py --scan`"
               " (sandbox off) lists what it holds. Then add the rules to permissions.deny in "
-              "~/.claude/settings.machine.json and rerun ./setup.sh.")
+              f"~/.claude/settings.machine.json, {RERUN}.")
     context = ("excluded-guard will refuse excluded commands (git push, gh, lane and the rest) "
                "from this session until the user fixes: " + "; ".join(lines) + ". The fix is "
                "theirs (deny rules in their own settings): name it to them, and don't work "

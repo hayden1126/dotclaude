@@ -69,7 +69,9 @@ an unregistered worktree: `lane whoami` tells you which.
    merge order, after its last review round, runs `lane lock install -- ./setup.sh` from its
    worktree, sandbox off. That install holds: setup.sh refuses to run from any other lane or
    clone until the lead's `./setup.sh` in the main checkout relinks everything after the merge.
-   `lane ls` shows `install: held by lane <id>`.
+   `lane ls` shows `install: held by lane <id>`. setup.sh also refuses a lane with no commit
+   past `origin/main` (merged, or nothing committed yet): after the merge, install from the
+   main checkout.
 6. **Merge** through the lane's own PR, on Hayden's approval. The lane that learns of the merge
    (it ran `gh pr merge`, or Hayden said "merged" in its window) writes the outcome into its
    record, starts its Next with `Keep open: <why>` on one line if more PRs will follow, and
