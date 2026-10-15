@@ -438,6 +438,9 @@ class Judge(unittest.TestCase):
                                # KeepSink logs after SetWindowPos returns; a Check nested in that
                                # call may log the fall first, in the same ms.
                                ("nested Check logged the fall first", [*A3[::2], keeper_sinks(1724)], 12),
+                               ("KEEP-SINK a ms after the fall", [*A3[::2], keeper_sinks(1725)], 12),
+                               ("a refresh-thread line between", [*A3[::2], "t=1726 TAG pid=4243 created=1",
+                                                                  keeper_sinks(1727)], 12),
                                ("closed by none-onscreen",
                                 [rises(1712), keeper_sinks(1720), "t=1724 RANKS via=ev-HIDE none-onscreen"], 12)):
             with self.subTest(why=why):
@@ -452,7 +455,6 @@ class Judge(unittest.TestCase):
                 ("80 ms", [rises(1712), keeper_sinks(1790), falls(1792)], 80),
                 ("51 ms", [rises(1712), keeper_sinks(1763), falls(1763)], 51),
                 ("KEEP-SINK logged before it opened", [keeper_sinks(1712), *A3[::2]], 12),
-                ("KEEP-SINK a ms after it closed", [*A3[::2], keeper_sinks(1725)], 12),
                 ("a failed KEEP-SINK", [rises(1712), keeper_sinks(1718).replace("ok=True", "ok=False"),
                                         falls(1724)], 12),
                 ("no KEEP-SINK, closed by none-onscreen",
@@ -491,7 +493,8 @@ class Judge(unittest.TestCase):
         self.assertEqual(dict(rows)["other"]["above"], 0)
 
     def test_a_same_ms_keep_sink_past_the_next_rise_is_not_this_lifts(self):
-        # The fall's look-ahead stops at the next RANKS line: that sink ended the second lift.
+        # The fall's look-ahead stops at the next RANKS line: that sink ended the second lift,
+        # in the same ms or later.
         lines = [rises(1712), falls(1724), rises(1724), keeper_sinks(1724), falls(1730)]
         verdict, _, fails, warns = self.run_judge(with_action(BTN, *lines))
         self.assertEqual(verdict, "FAIL")
@@ -971,7 +974,14 @@ def dispatch(msg):
             return {"result": {"frameId": "F1", "errorText": env["FAKE_NAV_ERROR"]}}
         return {"result": {"frameId": "F1", "loaderId": "L1"}}
     if m == "Runtime.evaluate":
-        return {"result": {"result": {"type": "string", "value": env.get("FAKE_RAF", "visible 118")}}}
+        expr = p.get("expression", "")
+        if "location.protocol" in expr:  # page0 loaded check's data: page
+            value = env.get("FAKE_LOADED", "data: complete")
+        elif "window.open" in expr:
+            value = env.get("FAKE_POPUP", "true")
+        else:
+            value = env.get("FAKE_RAF", "visible 118")
+        return {"result": {"result": {"type": "string", "value": value}}}
     return {"error": {"code": -32601, "message": "'%s' wasn't found" % m}}
 
 
@@ -1066,6 +1076,7 @@ mod.wslpath = wslpath
 mod.PROCS_POLL_S = 0.2
 if os.environ.get("DRIVER_FAST"):
     mod.AFTER_STOP_S = mod.SETTLE_S = mod.RESINK_S = 0.05
+    mod.LOADED_WAIT_S = 0.5
 if os.environ.get("DRIVER_STOP_WAIT"):
     mod.STOP_WAIT_S = float(os.environ["DRIVER_STOP_WAIT"])
 if "DRIVER_TTY_FG" in os.environ:  # stands in for /dev/tty's foreground process group check
@@ -1991,7 +2002,7 @@ class Live(unittest.TestCase):
                                               "Page.bringToFront", "Target.createTarget"])
         nav, loaded, front, new_page = self.cdp_calls(rid)[i - 2:i + 2]
         self.assertTrue(nav["params"]["url"].startswith("data:text/html,"), nav)
-        self.assertTrue(loaded["params"]["awaitPromise"], "waits for page0's load")
+        self.assertEqual(loaded["params"]["expression"], cb.LOADED_JS, "waits for page0's data: page")
         for c in (nav, loaded, front):
             self.assertEqual(c.get("sessionId"), "S1", "on page0's session")
         self.assertEqual(new_page["params"], {"url": "about:blank"})
@@ -2014,6 +2025,19 @@ class Live(unittest.TestCase):
         self.assertRegex(r.stdout, rf"(?m)^FAIL: {re.escape(BTN)}: the action could not be taken "
                                    r"\(.*ERR_ABORTED.*\), so it went untested$")
         self.assertEqual(self.records(), [])
+
+    def test_check_fails_when_page0_never_loads_or_no_popup_opens(self):
+        for env, text in (({"FAKE_LOADED": "about: complete"},
+                           rf"{re.escape(BTN)}: the action could not be taken \(page0 never loaded "
+                           r".*; it read 'about: complete'\)"),
+                          ({"FAKE_POPUP": "false"},
+                           r"window\.open: the action could not be taken \(window\.open returned "
+                           r"'false', so no popup opened\)")):
+            with self.subTest(env=env):
+                r = self.check(**env)
+                self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+                self.assertRegex(r.stdout, rf"(?m)^FAIL: {text}, so it went untested$")
+                self.assertEqual(self.records(), [])
 
     def test_check_inconclusive_without_a_visible_foreground(self):
         r = self.check(FAKE_FG_HIDDEN="1")

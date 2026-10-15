@@ -1530,8 +1530,8 @@ SETTLE_S = 1.5    # after each action, for its window events to land in the log
 RESINK_S = 0.5    # after each re-place
 KEEP_TOLERANCE_MS = 50  # A3, 3 of 3 live runs: bringToFront then newPage lifted it ~12 ms
 LOADED_URL = "data:text/html,<title>chrome-bg check</title>page0"
-LOADED_JS = ("new Promise((r) => document.readyState === 'complete' ? r('loaded')"
-             " : addEventListener('load', () => r('loaded')))")
+LOADED_JS = "location.protocol + ' ' + document.readyState"  # page0 loaded LOADED_URL: 'data: complete'
+LOADED_WAIT_S = 10
 RAF_JS = ("new Promise((r) => { let n = 0; const t = performance.now();"
           " const f = () => { n++; if (performance.now() - t < 1000) requestAnimationFrame(f);"
           " else r(document.visibilityState + ' ' + n); };"
@@ -1664,11 +1664,12 @@ def judge(lines, raf=None, hz=None, leftover=None, errors=()):
                     above = [t, action, False]
             elif above is not None:
                 # KeepSink logs its line after SetWindowPos returns, and a Check nested in that
-                # call may log the fall first: a KEEP-SINK in the same ms, before the next RANKS
-                # line, ended this lift too.
+                # call may log the fall first. A KEEP-SINK after the fall and before the next
+                # RANKS line can only be that outer Check's (a later Check that found a window
+                # above would log a RANKS line before sinking it), so it ended this lift too,
+                # however many ms or refresh-thread lines came between.
                 j = k + 1
-                while not above[2] and j < len(parsed) and parsed[j][0] == t \
-                        and not parsed[j][1].startswith("RANKS "):
+                while not above[2] and j < len(parsed) and not parsed[j][1].startswith("RANKS "):
                     above[2] = keeper_sank(parsed[j][1])
                     j += 1
                 close_above(t)
@@ -1805,26 +1806,38 @@ def cmd_check(args):
             nav = cdp.send("Page.navigate", {"url": LOADED_URL}, session=session, timeout=10)
             if nav.get("errorText"):
                 raise Fail(f"page0 did not load {LOADED_URL!r}: {nav['errorText']}")
-            evaluate(LOADED_JS, awaitPromise=True)
+            # Page.navigate answers at the browser's commit, when the renderer may still hold
+            # about:blank (which also reads 'complete'): wait for the data: document itself.
+            deadline, got = time.monotonic() + LOADED_WAIT_S, None
+            while (got := evaluate(LOADED_JS)) != "data: complete":
+                if time.monotonic() >= deadline:
+                    raise Fail(f"page0 never loaded {LOADED_URL!r}; it read {got!r}")
+                take_signal(POLL_S)
             cdp.send("Page.bringToFront", session=session)
             return cdp.send("Target.createTarget", {"url": "about:blank"})
+
+        def open_popup():
+            got = evaluate("String(!!window.open('about:blank', '_blank', 'width=500,height=400'))",
+                           userGesture=True)
+            if got != "true":
+                raise Fail(f"window.open returned {got!r}, so no popup opened")
+            return got
 
         def bounds(state):
             return lambda: cdp.send("Browser.setWindowBounds", {"windowId": run.window,
                                                                 "bounds": {"windowState": state}})
 
-        # bringToFront-newPage goes first, while page0 is its window's only tab, as in A3: later, it
-        # lifted nothing live. The plain bringToFront goes after every new page, so page0 is its
-        # window's active tab again when raf-covered reads it.
+        # bringToFront-newPage goes first, so page0 is its window's only tab as in A3 (what the
+        # lift needs is the loaded page; the position is A3's, not a proven need). The plain
+        # bringToFront goes after every new page, so page0 is its window's active tab again when
+        # raf-covered reads it.
         actions = [
             ("bringToFront-newPage", front_then_new_page),
             ("newPage-default", lambda: cdp.send("Target.createTarget", {"url": "about:blank"})),
             ("bringToFront", lambda: cdp.send("Page.bringToFront", session=session)),
             ("setWindowBounds-maximized", bounds("maximized")),
             ("setWindowBounds-normal", bounds("normal")),
-            ("window.open", lambda: evaluate(
-                "String(!!window.open('about:blank', '_blank', 'width=500,height=400'))",
-                userGesture=True)),
+            ("window.open", open_popup),
             ("raf-covered", read_raf),
         ]
         for name, act in actions:
