@@ -84,7 +84,8 @@ LOCK_BUSY = 75  # EX_TEMPFAIL: `lane lock --wait` gave up on a held lock
 PROBE_GRACE = 0.05  # secs `lane lock` waits out a `lane ls` probe before it reports a holder
 HOLDER_CMD_MAX = 120  # chars of the wrapped command kept in a lock's holder line
 RECORD_READ = 1 << 20  # bytes of a lane's STATUS.md read by `ls` and `done`
-MERGE_SLACK = 30  # secs past mergedAt a record write must be to count as after it (clock steps)
+PR_LIMIT = 200  # PRs `ls` lists in its one gh call, newest first
+CLOCK_SLACK = 10  # secs: HAYPC's wall clock steps by about 5 s, and GitHub keeps another clock
 # new's brief flags -> the <placeholder> each fills in templates/LANE.md
 BRIEF = {"goal": "goal", "files": "files", "overlaps": "overlaps", "done_when": "done-when",
          "constraints": "constraints"}
@@ -316,8 +317,9 @@ def branch_label(branch: str, ref: str) -> str:
 def rebasing_branch(repo: Repo, path: str) -> str:
     """The branch a detached worktree at `path` is rebasing, from the head-name git keeps in
     its admin dir (the one whose gitdir file names `path`), or ''. Any lane can write that dir,
-    so it is read bounded, never through a link, and only a valid branch name counts: it only
-    picks the PR `ls` shows."""
+    so it is read bounded, never through a link, and only a valid branch name counts: it picks
+    only the PR `ls` shows and merges that can light handoff? (lane.json's branch is judged as
+    well, so a planted name can add a merge but never hide one)."""
     for admin in glob.glob(os.path.join(repo.common_dir, "worktrees", "*")):
         named = lanelib.read_head(os.path.join(admin, "gitdir"), 4096)
         if named is None or os.path.realpath(os.path.dirname(
@@ -747,13 +749,23 @@ def cmd_adopt(args) -> None:
     check_worktree(lane, seed_ask=False)
 
 
-def pr_states(repo: Repo) -> dict[str, dict] | None:
-    """Head branch -> {"label": "#N state", "merged", "merged_at"} from one gh call, merged_at
-    None when gh gave no readable mergedAt; None when gh can't answer (no network or token)."""
+class PRs(NamedTuple):
+    """pr_states' answer, by head branch. label: the newest PR's "#N state". merges: the mergedAt
+    of each merged PR (None where unreadable). horizon: when the list hit PR_LIMIT, the oldest
+    createdAt it holds, since older PRs may be cut (inf when one won't parse); else None."""
+    label: dict[str, str]
+    merges: dict[str, list[float | None]]
+    horizon: float | None
+
+
+def pr_states(repo: Repo) -> PRs | None:
+    """The repo's own PRs from one gh call: a fork's PR is never a lane's, whatever its branch is
+    called. None when gh can't answer (no network or token)."""
     try:
-        p = subprocess.run(["gh", "pr", "list", "--state", "all", "--limit", "200", "--json",
-                            "number,state,headRefName,mergedAt"], cwd=repo.toplevel,
-                           capture_output=True, text=True, timeout=30)
+        p = subprocess.run(["gh", "pr", "list", "--state", "all", "--limit", str(PR_LIMIT),
+                            "--json", "number,state,headRefName,mergedAt,createdAt,"
+                            "isCrossRepository"], cwd=repo.toplevel, capture_output=True,
+                           text=True, timeout=30)
     except (OSError, subprocess.SubprocessError):
         return None
     if p.returncode != 0:
@@ -762,13 +774,31 @@ def pr_states(repo: Repo) -> dict[str, dict] | None:
         rows = json.loads(p.stdout)
     except ValueError:
         return None
-    out = {}
-    for row in sorted(rows, key=lambda r: r.get("number", 0)):  # the newest PR wins
-        state = str(row.get("state"))
-        out[row.get("headRefName")] = {"label": f"#{row.get('number')} {state.lower()}",
-                                       "merged": state == "MERGED",
-                                       "merged_at": lanelib.parse_iso(row.get("mergedAt"))}
-    return out
+    label, merges = {}, {}
+    for row in sorted(rows, key=lambda r: r.get("number", 0)):  # the newest PR wins the label
+        if row.get("isCrossRepository"):
+            continue
+        state, head = str(row.get("state")), row.get("headRefName")
+        label[head] = f"#{row.get('number')} {state.lower()}"
+        if state == "MERGED":
+            merges.setdefault(head, []).append(lanelib.parse_iso(row.get("mergedAt")))
+    horizon = None
+    if len(rows) >= PR_LIMIT:  # gh lists newest first, so what it cut is older than all it kept
+        stamps = [lanelib.parse_iso(r.get("createdAt")) for r in rows]
+        horizon = float("inf") if None in stamps else min(stamps)
+    return PRs(label, merges, horizon)
+
+
+def merges_of(prs: PRs | None, lane: dict, guess: str) -> list[float | None] | None:
+    """The mergedAt of every merged PR from the lane's branches: the one `ls` shows the PR of,
+    and lane.json's, which a switch for a follow-up PR leaves behind. None when that can't be
+    known: gh can't answer, or the lane is older than the list's horizon (its PRs may be cut)."""
+    if prs is None:
+        return None
+    created = lanelib.parse_iso(lane.get("created"))
+    if prs.horizon is not None and (created is None or created < prs.horizon):
+        return None
+    return [m for b in dict.fromkeys((guess, lane["branch"])) for m in prs.merges.get(b, [])]
 
 
 def hook_module(name: str):
@@ -957,10 +987,9 @@ def board(repo: Repo) -> list[dict]:
         branch, ref = lane_head(lane, trees)
         # Detached mid-rebase, the PR is the rebased branch's; otherwise lane.json's best guess.
         guess = branch or rebasing_branch(repo, path) or lane["branch"]
-        pr = None if prs is None else prs.get(guess, {})
         row = dict(lane, branch=branch_label(branch, ref), registered_branch=lane["branch"],
                    stale=stale, ahead=None, behind=None,
-                   pr="?" if pr is None else pr.get("label", "none"))
+                   pr="?" if prs is None else prs.label.get(guess, "none"))
         counts = git(["rev-list", "--left-right", "--count", "--end-of-options",
                       f"{base}...{ref}"], repo.toplevel)
         if counts.returncode == 0:
@@ -985,7 +1014,7 @@ def board(repo: Repo) -> list[dict]:
             flags.append("conflict")
         if not stale and row["live_sessions"] == []:
             flags.append("orphan")
-        if needs_handoff(repo, lane, ref, pr):
+        if needs_handoff(repo, lane, ref, merges_of(prs, lane, guess)):
             flags.append("handoff?")
         row["flags"] = flags
         rows.append(row)
@@ -1018,17 +1047,17 @@ def record_text(repo: Repo, lane: dict) -> tuple[str | None, float | None]:
     return None, None
 
 
-def needs_handoff(repo: Repo, lane: dict, ref: str, pr: dict | None) -> bool:
-    """Whether the lane's record may be behind its work: its PR merged and the record isn't newer
-    than mergedAt + MERGE_SLACK (the lane never did its after-merge handoff); the last commit at
-    `ref` (lane_head's) is newer; or a session ended that started after the record's last write,
-    so it never wrote it. A session's end alone proves nothing: every session ends after its own
-    last write, a /pass's too. pr is pr_states' entry ({} for no PR, None when gh can't answer).
-    Anything it can't read lights the flag: the hand-back gate fails closed."""
+def needs_handoff(repo: Repo, lane: dict, ref: str, merges: list[float | None] | None) -> bool:
+    """Whether the lane's record may be behind its work: a PR from its branches merged and the
+    record isn't newer than mergedAt + CLOCK_SLACK (the lane never did its after-merge handoff);
+    the last commit at `ref` (lane_head's) is newer; or a session ended that started after the
+    record's last write, so it never wrote it. A session's end alone proves nothing: every
+    session ends after its own last write, a /pass's too. merges is merges_of's. Anything it
+    can't read lights the flag: the hand-back gate fails closed."""
     _, mtime = record_text(repo, lane)
-    if mtime is None or pr is None:
+    if mtime is None or merges is None:
         return True
-    if pr.get("merged") and (pr["merged_at"] is None or mtime <= pr["merged_at"] + MERGE_SLACK):
+    if any(m is None or mtime <= m + CLOCK_SLACK for m in merges):
         return True
     p = git(["log", "-1", "--format=%ct", "--end-of-options", ref], repo.toplevel)
     try:
@@ -1041,8 +1070,8 @@ def needs_handoff(repo: Repo, lane: dict, ref: str, pr: dict | None) -> bool:
         if not s.get("endedAt"):
             continue  # live, or ended unstamped
         start, end = lanelib.parse_iso(s.get("startedAt")), lanelib.parse_iso(s["endedAt"])
-        # startedAt is cut to the second, so a start that may fall after the write counts as after.
-        if start is None or end is None or start > mtime - 1:
+        # One local clock, but it steps by seconds: a start this close may follow the write.
+        if start is None or end is None or start > mtime - CLOCK_SLACK:
             return True
     return False
 

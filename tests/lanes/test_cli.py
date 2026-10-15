@@ -614,14 +614,65 @@ class HandoffFlag(LanesRepo):
         self.sessions((-900, 120))
         self.assertIn("handoff?", self.flags())
 
-    def test_a_write_within_the_merge_slack_lights_it(self):
+    def test_a_write_within_the_clock_slack_of_the_merge_lights_it(self):
         # HAYPC's clock steps by seconds, so a write this close may predate the merge.
-        self.merged(mergedAt=self.iso(-10))
+        self.merged(mergedAt=self.iso(-5))
         self.assertIn("handoff?", self.flags())
+
+    def test_every_merge_from_the_lane_s_branches_counts(self):
+        # A merge older than the record's last write is fine, so each case fails on one merge.
+        cases = {
+            # A follow-up PR from the same branch is the newest, and the label shows it.
+            "follow-up PR": [{"number": 8, "state": "OPEN", "headRefName": "chart-fix"}],
+            # A fork's PR of the same branch name is never the lane's: neither label nor merge.
+            "fork PR": [{"number": 8, "state": "MERGED", "headRefName": "chart-fix",
+                         "mergedAt": self.iso(-300), "isCrossRepository": True}],
+        }
+        for name, extra in cases.items():
+            with self.subTest(name):
+                self.env["FAKE_GH_OUT"] = json.dumps(
+                    [{"number": 7, "state": "MERGED", "headRefName": "chart-fix",
+                      "mergedAt": self.iso(60), "isCrossRepository": False}] + extra)
+                (row,) = json.loads(self.lane("ls", "--json"))
+                self.assertIn("handoff?", row["flags"])
+                self.assertEqual(row["pr"], "#8 open" if name == "follow-up PR" else "#7 merged")
+
+    def test_a_merge_from_the_branch_switched_away_from_counts(self):
+        # The lane moved to a follow-up branch with no PR yet; its first branch's merge is unseen.
+        self.git("switch", "-q", "-c", "chart-more", cwd=self.path)
+        self.merged(mergedAt=self.iso(60))
+        (row,) = json.loads(self.lane("ls", "--json"))
+        self.assertEqual(row["pr"], "none")
+        self.assertIn("handoff?", row["flags"])
+
+    def test_a_lane_older_than_a_full_pr_list_lights_it(self):
+        # gh lists PR_LIMIT PRs, newest first: a lane created before the oldest may have its PR
+        # cut from the list, so its merge can't be ruled out.
+        limit = load_lane_script().PR_LIMIT
+        created = lanelib.parse_iso(self.lane_json("chart-fix")["created"])
+        for name, oldest, flagged in (("lane newer", created - 3600, False),
+                                      ("lane older", created + 3600, True),
+                                      ("createdAt garbled", "soon", True)):
+            with self.subTest(name):
+                stamp = oldest if isinstance(oldest, str) else datetime.datetime.fromtimestamp(
+                    oldest, datetime.timezone.utc).isoformat(timespec="seconds")
+                rows = [{"number": n, "state": "OPEN", "headRefName": f"other-{n}",
+                         "createdAt": self.iso(0)} for n in range(2, limit + 1)]
+                self.env["FAKE_GH_OUT"] = json.dumps(
+                    rows + [{"number": 1, "state": "OPEN", "headRefName": "x",
+                             "createdAt": stamp}])
+                self.assertEqual("handoff?" in self.flags(), flagged)
 
     def test_a_session_that_ended_without_writing_lights_it(self):
         self.sessions((-600, 20), (40, 900))
         self.assertIn("handoff?", self.flags())
+
+    def test_a_session_stamped_just_before_the_write_counts_as_after_it(self):
+        # The clock may have stepped back between the write and the session's start.
+        self.sessions((-5, 900))
+        self.assertIn("handoff?", self.flags())
+        self.sessions((-60, 900))
+        self.assertNotIn("handoff?", self.flags())
 
     def test_a_commit_newer_than_the_record_lights_it(self):
         self.env["GIT_COMMITTER_DATE"] = f"@{int(self.t) + 100} +0000"
@@ -650,6 +701,7 @@ class HandoffFlag(LanesRepo):
         self.hook("lane-identity.sh", {"session_id": "s0", "cwd": self.path,
                                        "hook_event_name": "Stop"})
         self.git("worktree", "remove", self.path)
+        self.assertEqual(self.flags(), ["stale"])  # the mirror's record is read, and it's current
         self.git("branch", "-D", "chart-fix")
         self.assertEqual(self.flags(), ["stale", "handoff?"])
 

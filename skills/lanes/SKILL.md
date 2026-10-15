@@ -141,10 +141,11 @@ inside a lane.
    project STATUS backlog.
 5. **Hand-back gate.** A lane is handed back only when `handoff-check -C <lane path>` passes and
    a bare `lane ls` shows no `handoff?` flag. The flag lights when the record may be behind the
-   lane's work: its PR merged after the record's last write, a commit is newer than it, or a
-   session that started after it has ended, so that session never wrote it. It stays on whenever
-   gh, the record or a session stamp can't be read. Until then, message the lane; if its session
-   is gone, add it to Hayden's asks. Never order a merge or close a lane before the gate passes.
+   lane's work: a PR from the lane's branches merged after the record's last write, a commit is
+   newer than it, or a session that started after it has ended, so that session never wrote it.
+   It stays on whenever any of that can't be read (gh, a `mergedAt`, the record, a session stamp,
+   the last commit). Until then, message the lane; if its session is gone, add it to Hayden's
+   asks. Never order a merge or close a lane before the gate passes.
 6. **Watch and order.** Watch `lane ls`. Keep the merge order in the project STATUS. A lane
    whose install is live merges main with the sandbox off: its own hooks, skills and tests are
    write-protected then (`docs/lanes.md` S3).
@@ -235,10 +236,10 @@ what").
 
 Board flags: `stale` (worktree gone; its claims are void), `rebase` (behind the base),
 `conflict` (two live lanes claim one request), `orphan` (no live session), `handoff?` (the record
-may be behind: the PR merged after its last write, a commit is newer, or a session that started
-after it has ended; on whenever gh can't answer), `setup-failed` (half made: it still holds its
-port, claims and a cap slot; finish it with `lane adopt <path>`), `closing` (a `lane done`
-stopped partway; rerun it).
+may be behind: a PR merged after its last write, a commit is newer, or a session that started
+after it has ended; on whenever one of those can't be read, gh included), `setup-failed` (half
+made: it still holds its port, claims and a cap slot; finish it with `lane adopt <path>`),
+`closing` (a `lane done` stopped partway; rerun it).
 
 Run `lane init`, `new`, `adopt`, `ls`, `open`, `done` and `addr` as bare commands: those are in
 `excludedCommands`, so they run outside the sandbox with the network, gh's credential and a view
