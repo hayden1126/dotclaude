@@ -222,8 +222,10 @@ class IdentityHook(LanesRepo):
         # name that isn't UTF-8 fails the decode.
         admin = self.git("rev-parse", "--absolute-git-dir", cwd=self.lane_dir).strip()
         log = os.path.join(self.tmp, "state", "dotclaude", "lane-identity.log")
-        for head in (b"ref: refs/heads/-bad name", b"ref: refs/heads/a`b", b"ref: refs/tags/v1",
-                     b"ref: refs/heads/\xff"):
+        for head, why in ((b"ref: refs/heads/-bad name", "symbolic-ref exit 128"),
+                          (b"ref: refs/heads/a`b", "symbolic-ref exit 0, 'refs/heads/a`b'"),
+                          (b"ref: refs/tags/v1", "symbolic-ref exit 0, 'refs/tags/v1'"),
+                          (b"ref: refs/heads/\xff", "UnicodeDecodeError")):
             with self.subTest(head=head):
                 with open(os.path.join(admin, "HEAD"), "wb") as f:
                     f.write(head + b"\n")
@@ -234,7 +236,7 @@ class IdentityHook(LanesRepo):
                 self.assertNotIn("a`b", ctx)
                 self.assertNotIn("refs/", ctx)
                 (line,) = self.read(log).splitlines()[seen:]
-                self.assertIn("head unreadable lane=chart-fix", line)
+                self.assertIn(f"head unreadable lane=chart-fix: {why}", line)
 
     def identity_module(self):
         spec = importlib.util.spec_from_file_location(
@@ -256,8 +258,9 @@ class IdentityHook(LanesRepo):
 
     def test_the_git_calls_fit_inside_the_hook_s_timeout(self):
         # Claude Code kills the hook at its settings.json timeout, which costs the whole line, so
-        # a hung git must time out first: the lock wait and both git calls (a detached HEAD
-        # makes two) fit inside it, with a second to spare for the rest.
+        # a HEAD read that hangs must time out first: the lock wait and both reads (a detached
+        # HEAD makes two) fit inside it, with a second to spare for resolve() and the rest. A
+        # git that hangs in resolve() leaves no lane to name, so its 60 s doesn't count here.
         mod = self.identity_module()
         with open(os.path.join(os.path.dirname(HOOKS), "settings.json")) as f:
             settings = json.load(f)

@@ -33,6 +33,8 @@ import lanelib  # noqa: E402
 LOCK_WAIT = 2.0
 # Each git call that reads HEAD. settings.json kills the hook at 5 s, which costs the whole line,
 # so the lock wait and two calls (a detached HEAD makes two) must time out well before that.
+# resolve()'s git keeps lanelib's 60 s: one that hangs there leaves no lane to name anyway, and
+# a slow one under load still finishes inside the 5 s.
 GIT_WAIT = 1.0
 SHA_RE = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
 MAX_SESSIONS = 50
@@ -51,10 +53,10 @@ def log(line):
 
 def checked_out(repo: lanelib.Repo, lane: dict) -> str:
     """What the worktree has checked out, for the identity line: lane.json's branch is stale once
-    the lane runs `git switch` for a follow-up PR (`lane_head` in the lane CLI reads it the same
-    way). Read here, not through the CLI, which the hook doesn't import. The admin dir is
-    sandbox-writable, so only a valid_branch name or a hex commit reaches the context; anything
-    else names lane.json's branch and says so."""
+    the lane runs `git switch` for a follow-up PR. `lane_head` in the lane CLI names the same
+    thing from `git worktree list`; the hook doesn't import the CLI, so it asks git here. The
+    admin dir is sandbox-writable, so only a valid_branch name or a hex commit reaches the
+    context; anything else names lane.json's branch and says so."""
     def fallback(why):
         log(f"head unreadable lane={lane['id']}: {why}")
         return f"branch `{lane['branch']}` (lane.json's: the worktree's HEAD couldn't be read)"
