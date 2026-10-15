@@ -86,8 +86,11 @@ stored here).
     its own last write, so the flag lights after each `/pass` and stays on for a merged lane with
     no live session. Until it merges (Hayden's call), such a lane fails the hand-back gate, and
     its close is the lead's ask to Hayden.
-  - **Merge order: `handoff-flag` (the only live lane).** The lead installs only the next to
-    merge.
+  - `identity-branch` and `install-hint` (opened 2026-10-14, Hayden's pick): the identity
+    line's checked-out branch, and a stale rerun hint that put the install back into a merged
+    lane. Their briefs are in their records. Neither touches handoff-flag's files.
+  - **Merge order: `handoff-flag`, then `identity-branch` and `install-hint`, whichever is
+    ready first** (they don't overlap each other). The lead installs only the next to merge.
   - The parked json-depth sweep (21 files, among them the delegation enforcement scripts) is on
     `fix/json-depth-sweep`, a local branch never pushed: keep it while the sweep is in the
     backlog. Shipping it first needs a check of how each enforcement site fails
@@ -106,26 +109,18 @@ stored here).
     rerun the menu-clip repro and the tmux suites. If it fixes the clip, install at a quiet
     moment (a server restart; claude-restore reopens the tabs) and drop the row-0 menu rule.
     Until then, 3.7c's default menus that dotclaude doesn't own still clip under a top bar.
-  - The SessionStart identity line (`hooks/lane_identity.py:47`) names `lane.json`'s branch, not
-    the worktree's checked-out one, so a lane that switched branches is told the old one.
-    #104 fixed `lane ls` and `lane done` for the same gap with `lane_head` in
-    `skills/lanes/scripts/lane`. The hook runs apart from the CLI, so it needs the worktree's
-    HEAD read on its own.
   - **Two live sessions in a main checkout** (seen 2026-10-14 in a work repo the night it got
     its first lanes). `lane addr lead` refuses ("2 live sessions in the main checkout"), so no
     lane can send "merged #N", and the tab bar names both tabs `lead` in the repo's row, since
     `classify()` keys on the pane's directory. Fix: `lane ls` flags a main checkout with more
     than one live session, and the bar marks the extra tab (for example `lead²`). The stopgap
     used: tell each lane to pick the lead's `main:@N` entry from the refusal, and tell the old
-    session it isn't the lead.
-  - **The scan's rerun hint goes stale** (2026-10-14). Setup's excluded-guard hint says "while
-    a lane holds the install, rerun that lane's `lane lock install -- ./setup.sh`". At 01:20:12Z
-    a rerun that followed it, 3 s after the lead's reinstall from main, put the live install
-    back into merged lane pass-timeout's worktree. The lead reinstalled from main again. Fix:
-    the hint names the current holder at print time and says to check `lane ls` first, or
-    setup refuses a lane install whose branch is already in `origin/main`.
+    session it isn't the lead. Waits for handoff-flag's merge (`skills/lanes/scripts/lane`).
   - `lane init --model/--effort` repo defaults and `lane open --model/--effort` overrides,
-    passed through to `claude` (today `lane open` hardcodes the argv).
+    passed through to `claude` (today `lane open` hardcodes the argv). Waits for handoff-flag's
+    merge too; it may share a lane with the item above.
+  - Tests time durations with `time.monotonic()`, not `time.time()` (122 calls in 23 test
+    files). It touches every suite, so it opens only when no lane runs.
 
   **The post-merge chain** (Hayden's design B, standing approval 2026-10-14): `skills/lanes/SKILL.md`,
   The lead, step 7. Lead commits ride the next lane PR: that lane applies `git diff origin/main
@@ -206,17 +201,19 @@ stored here).
   there needs its own rule (Edit deny rules take no glob); `lane new` prints it since #104.
 - **A stale trust entry from lane guard-b's smoke** (2026-10-14): `~/.claude.json` still trusts
   the deleted `/tmp/claude-1000/guard-b-tab`. A sandboxed session can recreate that path with its
-  own `.claude/settings.json`, so the lead recommends removing the entry. Asked Hayden whether he
-  or the lead removes it. Its two transcripts expire on their own.
+  own `.claude/settings.json`, so the lead recommends removing the entry. Hayden removes it by
+  hand (his call, 2026-10-14): the `projects` key `/tmp/claude-1000/guard-b-tab`. Its two
+  transcripts expire on their own.
 - **Two Write-tool bug drafts wait in `/feedback`** (Hayden's call to send): the overwrite-guard session's has the
   `claude -p` repro and the 2.1.285 boundary; the karaoke session's has the incident.
 
 ## Notes for next session
 - **Next (lead, main checkout):** watch for "merged #N" from a lane, then run the post-merge
-  chain (`skills/lanes/SKILL.md`, The lead, step 7). The one live lane is `handoff-flag` (next
-  to merge). Check `lane ls` first: a merge Hayden made on GitHub and mentioned to no session
-  sends no message (#102 showed merged there before its lane's message came). Two slots of 3 are
-  free; the backlog's next pick is Hayden's. No chat
+  chain (`skills/lanes/SKILL.md`, The lead, step 7). Live lanes: `handoff-flag` (next to
+  merge), `identity-branch`, `install-hint`. Check `lane ls` first: a merge Hayden made on
+  GitHub and mentioned to no session sends no message (#102 showed merged there before its
+  lane's message came). All 3 slots are full; after handoff-flag merges, the two-sessions flag
+  and `lane open --model` are the next picks (Hayden's call). No chat
   about a lane's own asks; speak on cross-lane orders, decisions raised with the lead, failed
   checks and lead-only actions.
   - The lead's commits of 2026-10-14 (second session): `git log --first-parent 696cc44..HEAD`
