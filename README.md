@@ -633,23 +633,24 @@ idle, the script rechecks the handoff and respawns the pane with a fresh `claude
   approval given in the session, and `handoff-check` fails one with a bad, older or future
   date, or when it can't find the session's start.
 - It waits for this session's own turn to end, not the tab's. The session file
-  (`~/.claude/sessions/<pid>.json`) shows that by reading `idle`. But Claude Code keeps it
-  `busy` at the prompt while a background agent, teammate or workflow runs. Then the transcript
-  decides: the turn's `turn_duration` entry or an Esc interrupt after the call, with no new turn
-  since. The pass drops, with nothing changed, when work landed after the handoff (`stale`), Hayden typed
-  or queued a prompt after the call (`resumed`), the stop listed any background task but memory
-  upkeep or an artifact watch, or the pane was in copy mode, held a draft in the input box or
-  tmux didn't answer (`busy`), the session or pane went away or changed (`gone`), or the turn
-  never ended (`timeout`). A refusal (`stale`, `busy`, `timeout`, `failed`, an `error` in the waiter, and
-  `partial` below) shows its cause and fix on every terminal attached to the pane's tmux session
-  until a key press, plus a Windows toast; `resumed`, `gone` and `cancelled`, which Hayden caused,
-  show one brief line in the status line. Fix the cause and run `/pass` again. In compact mode,
-  copy mode, a draft or no input box between `/compact` and the resume prompt leaves the prompt
-  for you to type (`partial`): it stays in the status line until a key press, and `pass.log` has
-  it whole. A `failed` after `/compact` went out hands over the prompt the same way, since a
-  second `/pass` would compact twice. Every drop and `partial` also leave the session a
-  `[pass]` notice (`pass-notice.sh`, Hooks above). It arrives as context at the session's
-  next turn or tool call, and says:
+  (`~/.claude/sessions/<pid>.json`) shows that by reading `idle`. But Claude Code keeps it `busy`
+  at the prompt while a background agent, teammate or workflow runs. Then the transcript decides:
+  the turn's `turn_duration` entry or an Esc interrupt after the call, with no new turn since. The
+  pass drops, with nothing changed, when work landed after the handoff (`stale`), a prompt or a
+  new turn came after the call, or the status changed after the turn (`resumed`), the stop listed
+  any background task but memory upkeep or an artifact watch, or the pane was in copy mode, held
+  a draft in the input box or tmux didn't answer (`busy`), the session or pane went away or
+  changed (`gone`), or the turn never ended (`timeout`). A refusal (`stale`, `busy`, `timeout`,
+  `failed`, an `error` in the waiter, and `partial` below) shows its cause and fix on every
+  terminal attached to the pane's tmux session until a key press, plus a Windows toast; `resumed`
+  (but for an unreadable transcript, which is loud), `gone` and `cancelled` show one brief line in
+  the status line. Fix the cause and run `/pass` again. In compact mode, copy mode, a draft or
+  no input box between `/compact` and the resume prompt leaves the prompt for you to type
+  (`partial`): it stays in the status line until a key press, and `pass.log` has it whole. A
+  `failed` after `/compact` went out hands over the prompt the same way, since a second `/pass`
+  would compact twice. Every drop and `partial` also leave the session a `[pass]` notice
+  (`pass-notice.sh`, Hooks above). It arrives as context at the session's next turn or tool call,
+  and says:
   - the cause;
   - that no pass is pending;
   - the fix (for `partial`, the resume prompt).
