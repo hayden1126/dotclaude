@@ -441,6 +441,8 @@ class Judge(unittest.TestCase):
                                ("KEEP-SINK a ms after the fall", [*A3[::2], keeper_sinks(1725)], 12),
                                ("a refresh-thread line between", [*A3[::2], "t=1726 TAG pid=4243 created=1",
                                                                   keeper_sinks(1727)], 12),
+                               ("nested falls before the sink", [*A3[::2], "t=1724 RANKS via=ev-reorder "
+                                                                  "[200 rank=3/4 aboveOthers=0]", keeper_sinks(1725)], 12),
                                ("closed by none-onscreen",
                                 [rises(1712), keeper_sinks(1720), "t=1724 RANKS via=ev-HIDE none-onscreen"], 12)):
             with self.subTest(why=why):
@@ -894,6 +896,7 @@ rid = args[args.index("--rid") + 1]
 profile = args[args.index("--profile") + 1]
 guid = str(uuid.uuid4())
 bounds = {}
+loaded_reads = [0]  # page0's load-check evaluates so far (FAKE_LOADED_AFTER)
 srv = socket.socket()
 srv.bind(("127.0.0.1", 0))
 srv.listen(8)
@@ -976,7 +979,10 @@ def dispatch(msg):
     if m == "Runtime.evaluate":
         expr = p.get("expression", "")
         if "location.protocol" in expr:  # page0 loaded check's data: page
+            loaded_reads[0] += 1
             value = env.get("FAKE_LOADED", "data: complete")
+            if loaded_reads[0] <= int(env.get("FAKE_LOADED_AFTER", "0")):
+                value = "about: complete"  # the old about:blank answered first
         elif "window.open" in expr:
             value = env.get("FAKE_POPUP", "true")
         else:
@@ -2025,6 +2031,15 @@ class Live(unittest.TestCase):
         self.assertRegex(r.stdout, rf"(?m)^FAIL: {re.escape(BTN)}: the action could not be taken "
                                    r"\(.*ERR_ABORTED.*\), so it went untested$")
         self.assertEqual(self.records(), [])
+
+    def test_check_polls_until_page0_reports_its_data_page(self):
+        # Page.navigate answers at the browser's commit: the old about:blank may answer first.
+        r = self.check(FAKE_LOADED_AFTER="2")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(r.stdout.splitlines()[-1], "PASS")
+        calls = [c["method"] for c in self.cdp_calls(self.only_run_id())]
+        nav, front = calls.index("Page.navigate"), calls.index("Page.bringToFront")
+        self.assertEqual(calls[nav + 1:front], ["Runtime.evaluate"] * 3)
 
     def test_check_fails_when_page0_never_loads_or_no_popup_opens(self):
         for env, text in (({"FAKE_LOADED": "about: complete"},

@@ -1604,8 +1604,8 @@ def judge(lines, raf=None, hz=None, leftover=None, errors=()):
     Time on top (TOP tagged=1) and a foreground steal (FOREGROUND tagged=1) always fail. Time
     above other windows is judged one interval at a time: an interval opens at a RANKS line with
     any aboveOthers>0 and closes at the next RANKS line with none, or at the log's end. One the
-    keeper ended (a KEEP-SINK ok=True logged inside it) within KEEP_TOLERANCE_MS is tolerated: a
-    NOTE in the warnings, its ms in the row's "kept". Every other interval's ms add to the
+    keeper ended (a KEEP-SINK ok=True logged inside it, or after its close and before the next
+    rising RANKS line) within KEEP_TOLERANCE_MS is tolerated: a NOTE in the warnings, its ms in the row's "kept". Every other interval's ms add to the
     action's "above" and fail. One tolerated lift per action passes (A3 saw one); a second
     fails, since KEEP-FIGHT (over 20 sinks in 1 s) alone misses a slower re-raise loop. Any
     KEEP-FIGHT fails too."""
@@ -1642,6 +1642,9 @@ def judge(lines, raf=None, hz=None, leftover=None, errors=()):
     def keeper_sank(rest):
         return rest.startswith("KEEP-SINK ok=True")
 
+    def rising(rest):
+        return rest.startswith("RANKS ") and any(int(x) for x in re.findall(r"aboveOthers=(\d+)", rest))
+
     parsed = []
     for line in lines:
         m = re.match(r"t=(\d+) (.*)", line.rstrip("\r\n"))
@@ -1659,17 +1662,18 @@ def judge(lines, raf=None, hz=None, leftover=None, errors=()):
             if "tagged=1" in rest:
                 since["top"] = (t, action)
         elif rest.startswith("RANKS "):
-            if any(int(x) for x in re.findall(r"aboveOthers=(\d+)", rest)):
+            if rising(rest):
                 if above is None:
                     above = [t, action, False]
             elif above is not None:
                 # KeepSink logs its line after SetWindowPos returns, and a Check nested in that
                 # call may log the fall first. A KEEP-SINK after the fall and before the next
-                # RANKS line can only be that outer Check's (a later Check that found a window
-                # above would log a RANKS line before sinking it), so it ended this lift too,
-                # however many ms or refresh-thread lines came between.
+                # rising RANKS line can only be that outer Check's (a later Check that found a
+                # window above would log a rising RANKS line before sinking it), so it ended
+                # this lift too, however many ms, refresh-thread lines or other falls (nested
+                # Checks seeing ranks change below) came between.
                 j = k + 1
-                while not above[2] and j < len(parsed) and not parsed[j][1].startswith("RANKS "):
+                while not above[2] and j < len(parsed) and not rising(parsed[j][1]):
                     above[2] = keeper_sank(parsed[j][1])
                     j += 1
                 close_above(t)
