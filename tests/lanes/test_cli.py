@@ -656,12 +656,16 @@ class HandoffFlag(LanesRepo):
                                       ("lane older", created + 3600, True),
                                       ("createdAt garbled", "soon", True),
                                       # Its branch predates the lane, and so may its PR.
-                                      ("lane adopted", created - 3600, True)):
+                                      ("lane adopted", created - 3600, True),
+                                      # So may the branch it switched to (last: it stays).
+                                      ("lane switched", created - 3600, True)):
             with self.subTest(name):
                 repo = lanelib.resolve(self.main)
                 with lanelib.lock(repo):
                     lanelib.update_lane(repo, "chart-fix",
                                         lambda rec: rec.update(adopted=name == "lane adopted"))
+                if name == "lane switched":
+                    self.git("switch", "-q", "-c", "chart-more", cwd=self.path)
                 stamp = oldest if isinstance(oldest, str) else datetime.datetime.fromtimestamp(
                     oldest, datetime.timezone.utc).isoformat(timespec="seconds")
                 rows = [{"number": n, "state": "OPEN", "headRefName": f"other-{n}",

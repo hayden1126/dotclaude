@@ -203,11 +203,12 @@ Why it works this way:
   message to a live lane covers that window. Whatever can't be read (gh, a `mergedAt`, a session
   stamp, the last commit) leaves the flag on, so an offline or sandboxed `lane ls` shows it on
   every lane: judge the gate from a bare one. Once `ls`'s one gh call returns its full 200 PRs,
-  a lane older than the oldest of them, or adopted (its branch may hold an older PR), keeps the
-  flag too, since its PR may be cut. Only two branches are judged, as `lane done` judges them: a
-  merge from a third branch the lane passed through is missed. A session that ends with no
-  SessionEnd stamp is skipped, as a live one is; for a merged lane the `mergedAt` check still
-  catches the merge it never recorded.
+  a lane older than the oldest of them, adopted, or switched off lane.json's branch keeps the
+  flag too, since a branch of its may hold a PR older than the lane, which the list may have
+  cut. Only two branches are judged, the checked-out one (or, detached mid-rebase, the one being
+  rebased) and lane.json's: a merge from a third branch the lane passed through is missed. A
+  session that ends with no SessionEnd stamp is skipped, as a live one is; for a merged lane the
+  `mergedAt` check still catches the merge it never recorded.
 - **A nudge, never consent** (flow 13). `merged #N` says only when to look. The consent is the
   standing approval written here; the lead proves the merge with `gh pr view` before it acts,
   and `lane done` checks it again (a merged PR whose head is the tip, or the tip in the base).

@@ -791,12 +791,12 @@ def merges_of(prs: PRs | None, lane: dict, guess: str) -> list[float | None] | N
     """The mergedAt of every merged PR from the lane's branches: the one `ls` shows the PR of,
     and lane.json's, which a switch for a follow-up PR leaves behind. None when that can't be
     known: gh can't answer, or a full list may have cut the lane's PRs (the lane is older than
-    its horizon, or adopted, so its branch may hold a PR older than the lane)."""
+    its horizon, adopted, or switched branches, so a branch may hold a PR older than the lane)."""
     if prs is None:
         return None
     created = lanelib.parse_iso(lane.get("created"))
-    if prs.horizon is not None and (lane.get("adopted") or created is None
-                                    or created < prs.horizon):
+    if prs.horizon is not None and (lane.get("adopted") or guess != lane["branch"]
+                                    or created is None or created < prs.horizon):
         return None
     return [m for b in dict.fromkeys((guess, lane["branch"])) for m in prs.merges.get(b, [])]
 
