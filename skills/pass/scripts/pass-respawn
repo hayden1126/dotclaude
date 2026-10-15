@@ -289,6 +289,12 @@ TIMEOUT = 600.0
 MAX_TIMEOUT = 3600.0
 PANE_RE = re.compile(r"%\d+")
 SID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
+# The launch flags a plain pass carries to the respawned claude (carried_pick), and the slash
+# commands that change each mid-session: /model can move the effort too (each model keeps its
+# own), and both save their pick as the default for new sessions.
+PICK_FLAGS = ("--model", "--effort")
+CHANGED_BY = {"/model": ("--model", "--effort"), "/effort": ("--effort",)}
+COMMAND_TAG = re.compile(rb"<command-name>(/model|/effort)</command-name>")
 PANE_FORMAT = "#{pane_pid} #{pane_current_command}"
 PROMPT_MARK = chr(0x276F)  # the input box's prompt mark, then a no-break space
 PROMPT_LINE = re.compile(PROMPT_MARK + "[" + chr(0xA0) + " ]")
@@ -357,6 +363,7 @@ class Plan:
     timeout: float
     path: str = ""         # the sanitized PATH every child gets
     toast: list[str] | None = None  # the toast's argv less its message (toast_command)
+    pick: list[str] = dataclasses.field(default_factory=list)  # --model/--effort (carried_pick)
     lock_fd: int | None = None  # the pending lock the waiter holds (None: not taken)
     acting: bool = False   # past the final re-check: SIGTERM no longer cancels
     late_cancel: bool = False  # a SIGTERM came while acting, and was ignored
@@ -382,7 +389,7 @@ class Plan:
         if self.mode == "plain":
             perm = [] if approved else ["--permission-mode", "plan"]
             return [[self.tmux, "respawn-pane", "-k", "-t", self.pane, "-c", self.toplevel, "--",
-                     self.claude, *perm, prompt]]
+                     self.claude, *self.pick, *perm, prompt]]
         keys = [self.tmux, "send-keys", "-t", self.pane]
         return [[*keys, "-l", f"/compact {compact_focus(self.status_rel)}"], [*keys, "Enter"],
                 [*keys, "-l", prompt], [*keys, "Enter"]]
@@ -913,6 +920,102 @@ def session_flags(argv: list[str] | None) -> tuple[list[str], list[str]]:
     return [d for d in dirs if d], [v for v in settings if v]
 
 
+def pick_flags(argv: list[str] | None) -> dict[str, str]:
+    """The session claude's own --model and --effort values, from its argv (`--model X` or
+    `--model=X`); the last of each wins, as Claude Code's parser takes it. The scan goes past
+    `--`, as session_flags' does."""
+    found, args, i = {}, (argv or [])[1:], 0
+    while i < len(args):
+        name, eq, value = args[i].partition("=")
+        i += 1
+        if name not in PICK_FLAGS:
+            continue
+        if not eq:
+            if i == len(args):
+                break
+            value, i = args[i], i + 1
+        found[name] = value
+    return found
+
+
+def main_chain(line: bytes, kind: str) -> dict | None:
+    """The transcript line as an entry of type kind on the main chain (not a subagent's) with a
+    message object, or None."""
+    try:
+        entry = json.loads(line)
+    except (ValueError, RecursionError):   # json recurses on nesting
+        return None
+    if (not isinstance(entry, dict) or entry.get("type") != kind or entry.get("isSidechain")
+            or not isinstance(entry.get("message"), dict)):
+        return None
+    return entry
+
+
+def command_run(line: bytes) -> list[str]:
+    """The /model and /effort commands a transcript line runs: a main-chain user entry whose text
+    starts with the command's tag. A tool result that quotes the tag (a grep's output) or a
+    prompt that mentions it runs nothing."""
+    names = {m.decode() for m in COMMAND_TAG.findall(line)}
+    if not names:
+        return []
+    entry = main_chain(line, "user")
+    text = entry["message"].get("content") if entry else None
+    if not isinstance(text, str):
+        return []
+    text = text.lstrip()
+    return [n for n in names if text.startswith(f"<command-name>{n}</command-name>")]
+
+
+def ran(line: bytes) -> dict[str, str | None] | None:
+    """What a main-chain assistant entry ran with ({--model: id, --effort: level}, a value None
+    when it can't be passed on), or None for any other line. A `<synthetic>` entry (an API error,
+    an interrupt) ran no model, so it is None too."""
+    entry = main_chain(line, "assistant") if b'"assistant"' in line else None
+    if not entry or entry["message"].get("model") == "<synthetic>":
+        return None
+    model, effort = entry["message"].get("model"), entry.get("effort")
+    return {"--model": model if isinstance(model, str) and lanelib.MODEL_ID.fullmatch(model)
+            else None, "--effort": effort if effort in lanelib.EFFORTS else None}
+
+
+def picks_since(path: str | None) -> dict[str, str | None] | None:
+    """For each pick flag a /model or /effort changed in the transcript: what the last main-chain
+    assistant entry after its last such command ran with (None: no usable entry since). None when
+    the transcript can't be read."""
+    since = {}
+    try:
+        with open(path, "rb") as f:
+            for line in f:
+                for name in command_run(line):
+                    since.update(dict.fromkeys(CHANGED_BY[name]))
+                if since and (values := ran(line)):
+                    since.update({flag: values[flag] for flag in since})
+    except (OSError, TypeError, ValueError):
+        return None
+    return since
+
+
+def carried_pick(argv: list[str] | None, transcript: str | None) -> list[str]:
+    """The --model and --effort a plain pass gives the respawned claude (docs/lanes.md, "Model
+    and effort"): each one the session launched with, unless a /model (or, for the effort, an
+    /effort) ran since. Then it is what the session last ran after that command, or nothing when
+    no usable entry follows, since the command saved its pick as the default for new sessions.
+    The transcript is read only when a flag is there to carry. Raises Refuse for a launch value
+    that can't be passed on."""
+    launched = pick_flags(argv)
+    for flag, value in launched.items():
+        if not (lanelib.safe_model(value) if flag == "--model" else value in lanelib.EFFORTS):
+            raise Refuse(1, f"pass-respawn: this session's claude launched with {flag} {value!r}, "
+                         "which a respawn can't pass on. /pass compact keeps the session as it "
+                         "is", f"bad {flag}")
+    since = (picks_since(transcript) if launched else None) or {}
+    out = []
+    for flag in (f for f in PICK_FLAGS if f in launched):  # a flag it didn't launch with: none
+        if value := since.get(flag, launched[flag]):
+            out += [flag, value]
+    return out
+
+
 def tier_files() -> list[str]:
     """The user's and the managed settings files: out of the sandbox's reach."""
     return [os.path.join(config_dir(), "settings.json"), MANAGED_SETTINGS,
@@ -1198,6 +1301,7 @@ def prepare(args: argparse.Namespace, procs, cmdline=proc_cmdline) -> Plan:
     resolve_bin("git", roots, path)
     tmux = resolve_bin("tmux", roots, path)
     claude = None if args.compact else resolve_bin("claude", roots, path)
+    pick = [] if args.compact else carried_pick(claude_argv, transcript)
     code, out = gate(repo.toplevel, path)
     if code != 0:
         raise Refuse(1, out.rstrip() + "\npass-respawn: refused: handoff-check failed; fix the "
@@ -1207,7 +1311,7 @@ def prepare(args: argparse.Namespace, procs, cmdline=proc_cmdline) -> Plan:
                      "checked); it can't tell when this session's turn ends", why)
     return Plan(mode, pane, repo.toplevel, lane is not None, status_rel, tmux, claude, claude_pid,
                 proc_start(claude_pid), sid, session, called, transcript, size, args.timeout,
-                path, toast_command(roots, path))
+                path, toast_command(roots, path), pick)
 
 
 # ---- the waiter ----
@@ -1817,7 +1921,8 @@ def wait_and_act(plan: Plan, procs) -> str:
             remove(last)
             raise
         log(plan.mode, "respawn", plan.pane,
-            late(plan, ("default mode" if approved else "plan mode") + ignored(rec)))
+            late(plan, ("default mode" if approved else "plan mode")
+                 + (f" with {shlex.join(plan.pick)}" if plan.pick else "") + ignored(rec)))
         return "respawn"
     for i, argv in enumerate(actions):  # /compact <focus>, Enter, the prompt, Enter
         if i == 2:

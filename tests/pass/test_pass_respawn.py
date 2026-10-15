@@ -353,11 +353,15 @@ class Base(LanesRepo):
 
     # --- running and reading -------------------------------------------------------------
 
-    def run_pass(self, *args, procs=None, cwd=None):
+    def run_pass(self, *args, procs=None, cwd=None, launched=None):
+        """main() on the checkout; launched, when given, is the session claude's argv past its
+        path, as /proc/<pid>/cmdline shows it."""
         out = io.StringIO()
         argv = [*args, "-C", cwd or self.main]
+        cmdline = (self.mod.proc_cmdline if launched is None
+                   else lambda pid: [self.claude, *launched] if pid == CLAUDE else None)
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
-            code = self.mod.main(argv, procs=procs or table)
+            code = self.mod.main(argv, procs=procs or table, cmdline=cmdline)
         return code, out.getvalue()
 
     def plan(self, *args, cwd=None):
@@ -1345,6 +1349,111 @@ class Plain(Base):
         self.commit("late.txt", "x")
         self.assertEqual(self.mod.wait_and_act(plan, table), "stale")
         self.assertDropped("stale", "handoff is stale")
+
+
+def command(name, args=""):
+    """A slash command's user entry, as Claude Code 2.1.301 writes /model and /effort."""
+    return {"type": "user", "isSidechain": False, "message": {"role": "user", "content": (
+        f"<command-name>{name}</command-name>\n            <command-message>{name[1:]}"
+        f"</command-message>\n            <command-args>{args}</command-args>")}}
+
+
+def reply(model, effort="medium", sidechain=False):
+    """A main-chain (or subagent) assistant entry and what it ran with."""
+    return {"type": "assistant", "isSidechain": sidechain, "effort": effort,
+            "message": {"model": model, "role": "assistant",
+                        "content": [{"type": "text", "text": "ok"}]}}
+
+
+class Pick(Base):
+    """A plain pass carries the --model and --effort the session launched with, or what it last
+    ran after a /model or /effort (docs/lanes.md, "Model and effort")."""
+
+    LAUNCH = ["--model", "sonnet", "--effort=low", "--permission-mode", "plan", "Read STATUS.md"]
+    PROMPT = Plain.PROMPT
+    respawn = Plain.respawn
+
+    def setUp(self):
+        super().setUp()
+        self.commit("STATUS.md", GOOD, msg="Handoff")
+
+    def respawned(self, launched, *args):
+        """The respawn argv --print shows for a session launched with launched, past claude."""
+        code, out = self.run_pass("--print", *args, launched=launched)
+        self.assertEqual(code, 0, out)
+        (line,) = [x for x in out.splitlines() if "respawn-pane" in x]
+        argv = shlex.split(line)
+        return argv[argv.index(self.claude) + 1:-1]
+
+    def test_the_launch_flags_carry_and_the_last_of_each_wins(self):
+        self.assertEqual(self.respawned(self.LAUNCH),
+                         ["--model", "sonnet", "--effort", "low", "--permission-mode", "plan"])
+        self.assertEqual(self.respawned(["--model", "opus", "--model=claude-sonnet-5-5"]),
+                         ["--model", "claude-sonnet-5-5", "--permission-mode", "plan"])
+
+    def test_only_the_flags_it_launched_with_carry(self):
+        # The /model saved its pick as the default for new sessions, which the respawn takes.
+        self.say(command("/model"), reply("claude-haiku-5-5", "high"))
+        self.assertEqual(self.respawned(["--permission-mode", "plan", "x"]),
+                         ["--permission-mode", "plan"])
+        self.assertEqual(self.respawned(["--effort", "low"]),
+                         ["--effort", "high", "--permission-mode", "plan"])
+
+    def test_after_a_model_command_it_carries_what_the_session_last_ran(self):
+        self.say(reply("claude-sonnet-5-5", "low"), command("/model", "opus"),
+                 reply("claude-opus-5-5", "xhigh"), reply("<synthetic>", None),
+                 reply("claude-haiku-5-5", "max", sidechain=True))
+        self.assertEqual(self.respawned(self.LAUNCH), ["--model", "claude-opus-5-5", "--effort",
+                                                       "xhigh", "--permission-mode", "plan"])
+
+    def test_an_effort_command_moves_only_the_effort(self):
+        self.say(command("/effort", "high"), reply("claude-sonnet-5-5", "high"))
+        self.assertEqual(self.respawned(self.LAUNCH),
+                         ["--model", "sonnet", "--effort", "high", "--permission-mode", "plan"])
+
+    def test_a_flag_drops_when_no_usable_entry_follows_its_command(self):
+        # Haiku runs no effort; a /model with nothing after it leaves the saved default.
+        self.say(command("/model"), reply("claude-haiku-5-5", None))
+        self.assertEqual(self.respawned(self.LAUNCH),
+                         ["--model", "claude-haiku-5-5", "--permission-mode", "plan"])
+        self.say(command("/model"), reply("<synthetic>", None))
+        self.assertEqual(self.respawned(self.LAUNCH), ["--permission-mode", "plan"])
+
+    def test_a_quoted_tag_runs_no_command(self):
+        quoted = {"type": "user", "isSidechain": False, "message": {"role": "user", "content": [
+            {"type": "tool_result", "content": "  18 <command-name>/model</command-name>"}]}}
+        self.say(quoted, typed("what does <command-name>/model</command-name> do?"),
+                 dict(command("/model"), isSidechain=True), reply("claude-opus-5-5", "max"))
+        self.assertEqual(self.respawned(self.LAUNCH),
+                         ["--model", "sonnet", "--effort", "low", "--permission-mode", "plan"])
+
+    def test_an_unreadable_transcript_carries_the_launch_flags(self):
+        self.say(command("/model"), reply("claude-opus-5-5", "max"))
+        os.chmod(self.transcript(), 0)
+        self.addCleanup(os.chmod, self.transcript(), 0o600)
+        if os.access(self.transcript(), os.R_OK):
+            self.skipTest("root reads a mode 0 file")
+        self.assertEqual(self.respawned(self.LAUNCH),
+                         ["--model", "sonnet", "--effort", "low", "--permission-mode", "plan"])
+
+    def test_a_launch_value_that_cant_pass_on_refuses_but_compact_keeps_it(self):
+        for launched in (["--model=-x"], ["--model", "a b"], ["--effort", "extreme"]):
+            with self.subTest(launched=launched):
+                code, out = self.run_pass("--print", launched=launched)
+                self.assertEqual(code, 1, out)
+                self.assertIn("which a respawn can't pass on", out)
+                self.assertIn("/pass compact keeps", out)
+        code, out = self.run_pass("--compact", "--print", launched=["--model=-x"])
+        self.assertEqual(code, 0, out)
+        self.assertNotIn("--model", out)
+
+    def test_the_waiter_respawns_with_the_pick_and_logs_it(self):
+        code, out = self.run_pass("--foreground", launched=self.LAUNCH)
+        self.assertEqual(code, 0, out)
+        (respawn,) = self.calls("tmux", "respawn-pane")
+        self.assertEqual(respawn[1:], self.respawn("--model", "sonnet", "--effort", "low",
+                                                   "--permission-mode", "plan")[1:])
+        self.assertIn("outcome=respawn plan mode with --model sonnet --effort low", self.log())
 
 
 class Handed(Base):
