@@ -2276,8 +2276,6 @@ LEAD_ACTS = ("init", "new", "adopt", "open", "done")  # each, when it succeeds, 
 LEAD_HINT = ("No lead picked: the lead takes it with a bare `lane lead` (Hayden: `! lane lead` at "
              "the lead's prompt), or any bare lane new, open, adopt or done it runs. After a tmux "
              "restart the lead must act again")
-
-
 SANDBOXED_LEAD = ("sandboxed: the Claude session above this command is out of sight, and the "
                   "state dir is read-only. Run it as a bare `lane lead` (excludedCommands runs "
                   "that outside the sandbox)")
@@ -2324,11 +2322,10 @@ def take_lead() -> None:
     """After a lead act (LEAD_ACTS) succeeds: record its session as the lead, or do nothing.
     The act is done either way, so nothing here fails it: from a lane, sandboxed, or with no
     session above, the lead stays where it was."""
-    repo = lanelib.resolve(os.getcwd())
-    if repo is None or not repo.has_lanes:
-        return
     try:
-        lanelib.write_lead(repo, lead_claim(repo)[1])
+        repo = lanelib.resolve(os.getcwd())
+        if repo is not None and repo.has_lanes:
+            lanelib.write_lead(repo, lead_claim(repo)[1])
     except (LaneError, OSError):
         pass
 
