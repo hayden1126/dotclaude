@@ -28,8 +28,9 @@ OPS = {"hello", "launch", "place", "procs", "fg", "mark"}
 LOG_KINDS = [
     "VSCREEN", "FGLOCK", "MONITOR", "READY", "FOREGROUND", "TOP", "RANKS", "EV", "SINK-AT-CREATE",
     "KEEP-SINK", "PLACE", "LAUNCHED", "PROC", "PROCS", "MARK", "EOF", "EOFKILL", "EOFCLEAN", "EXIT",
-    "UNTAG", "TAG",
+    "UNTAG", "TAG", "STALE",
 ]
+FUNCTION = r"(?m)^[ \t]*function[ \t]+[\w-]+[^{\n]*"
 KEYWORD_BLOCK = re.compile(
     r"\s*(?:if|elseif|else|try|catch|finally|foreach|for|while|do|switch|trap)\b", re.I)
 SILENT = re.compile(
@@ -376,10 +377,12 @@ def exit_code_problems(src):
     """Exit 0 only after a complete EOF cleanup; 3 otherwise, so bin/chrome-bg runs -Kill."""
     p = Parts(src)
     problems = []
-    functions = spans(p.ps, r"(?m)^[ \t]*function[ \t]+[\w-]+[^{\n]*")
+    functions = spans(p.ps, FUNCTION)
     oneshots = spans(p.ps, r"(?m)^[ \t]*if\s*\(\s*\$(?:Scan|Kill)\s*\)")
-    start = [m for m in re.finditer(r"\$ExitCode\s*=\s*3\b", p.ps) if not inside(m.start(), functions)]
-    if not start:
+    loop = re.search(r"::Loop\s*\(", p.ps)
+    start = [m.start() for m in re.finditer(r"\$ExitCode\s*=\s*3\b", p.ps)
+             if not inside(m.start(), functions)]
+    if not (start and loop and min(start) < loop.start()):
         problems.append("no top-level $ExitCode = 3 before the loop")
     for m in re.finditer(r"(?im)\bexit\b(?=[ \t]*(?:\d|\$|;|\}|$))", p.ps):
         if not (re.match(r"exit\s+\$ExitCode\b", p.ps[m.start():], re.I) or inside(m.start(), oneshots)):
@@ -388,11 +391,18 @@ def exit_code_problems(src):
     if not re.search(r"\bexit\s+\$ExitCode\b", p.ps, re.I):
         problems.append("the script doesn't exit with $ExitCode")
     close = p.function("Close-Run")
-    for m in re.finditer(r"\$(?:script:)?ExitCode\s*=\s*0\b", p.ps):
-        head = p.ps[max(p.ps.rfind(c, 0, p.ps.rfind("{", 0, m.start())) for c in ";{}\n") + 1:m.start()]
-        guarded = re.search(r"if\s*\((?=[^{]*\.left\s+-eq\s+0)(?=[^{]*-not\s+\$)", head, re.I)
-        if not (close and inside(m.start(), [close]) and guarded):
-            problems.append("exit code 0 set outside Close-Run's left-0, dir-gone check")
+    zeros = list(re.finditer(r"\$(script:)?ExitCode\s*=\s*0\b", p.ps, re.I))
+    if not any(m.group(1) for m in zeros):
+        problems.append("nothing sets $script:ExitCode = 0, so a clean EOF exits 3")
+    for m in zeros:
+        brace = p.ps.rfind("{", 0, m.start())
+        head = p.ps[max(p.ps.rfind(c, 0, brace) for c in ";{}\n") + 1:brace]
+        guarded = re.search(r"if\s*\((?![^{]*\s-or\s)(?=[^{]*\.left\s+-eq\s+0\b)(?=[^{]*\s-and\s)"
+                            r"(?=[^{]*-not\s+\$)", head, re.I)
+        if not m.group(1):
+            problems.append("$ExitCode = 0 without $script: only sets a local")
+        elif not (close and inside(m.start(), [close]) and guarded):
+            problems.append("exit code 0 set outside Close-Run's left-0 -and dir-gone check")
     return problems
 
 
@@ -401,10 +411,18 @@ def reply_after_eof_problems(src):
     p = Parts(src)
     problems = []
     send = p.text(p.function("Send-Reply"))
-    flag = re.search(r"\bStdinClosed\b", send)
+    guard = re.search(r"if\s*\((?=[^{]*\$Supervised\s+-and\b)(?=[^{]*\bStdinClosed\b)[^{]*\)\s*\{\s*return\b",
+                      send, re.I)
     write = re.search(r"\[Console\]::Out\b", send, re.I)
-    if not flag or not write or flag.start() > write.start():
-        problems.append("Send-Reply doesn't check StdinClosed before writing")
+    if not guard or not write or guard.start() > write.start():
+        problems.append("Send-Reply doesn't return on StdinClosed before writing")
+    functions = spans(p.ps, FUNCTION)
+    gates = [m.start() for m in re.finditer(r"\$Supervised\s*=\s*\$true\b", p.ps, re.I)
+             if not inside(m.start(), functions)]
+    add_type = re.search(r"\bAdd-Type\b", p.ps)
+    loop = re.search(r"::Loop\s*\(", p.ps)
+    if not (add_type and loop and any(add_type.start() < g < loop.start() for g in gates)):
+        problems.append("$Supervised isn't set between Add-Type and the loop, so the guard never fires")
     reader = p.body("ReadStdin") if "ReadStdin" in p.methods else ""
     if not re.search(r"\bStdinClosed\s*=\s*true\s*;[^}]*\bPush\s*\(\s*EofLine\b", reader):
         problems.append("the stdin reader doesn't set StdinClosed before queuing EofLine")
@@ -511,14 +529,47 @@ def created_problems(src):
     for name in ("IsTagged", "AddPid", "Refresh"):
         if name not in p.methods or not reach(p, [name]) & readers:
             problems.append("%s doesn't read the process creation time" % name)
-    calls = r"\b(?:%s)\s*\(" % "|".join(sorted(readers))
     is_tagged = p.body("IsTagged") if "IsTagged" in p.methods else ""
-    if not any(re.search(calls, s) and re.search(r"[!=]=", s) for s in is_tagged.split(";")):
-        problems.append("IsTagged doesn't compare the creation time")
+    # The comparison itself: a fresh reading == the time the record holds, not a literal.
+    reading = r"\b(?:%s)\s*\([^()]*\)\s*==\s*([A-Za-z_]\w*)\b" % "|".join(sorted(readers))
+    compare = re.search(reading, is_tagged)
+    if not compare or not re.search(r"\b%s\s*=\s*\w+\.Created\b" % compare.group(1), is_tagged):
+        problems.append("IsTagged doesn't compare a fresh creation time with the recorded one")
+    refresh = p.body("Refresh") if "Refresh" in p.methods else ""
+    if not re.search(r"SELECT[^\"]*\bCreationDate\b", refresh):
+        problems.append("Refresh's query doesn't list CreationDate")
+    guard = re.search(r"if\s*\(([^;{]*)\)\s*Confirm\s*\(", refresh)
+    if not guard or "SameStart(" not in guard.group(1):
+        problems.append("Refresh confirms a pid without matching the CreationDate its query listed")
     for name in p.methods:
         body = p.body(name)
         if "OpenProcess(" in body and not re.search(r"finally\s*\{[^}]*\bCloseHandle\s*\(", body):
             problems.append("%s opens a process without closing it in a finally" % name)
+    return problems
+
+
+def kill_problems(src):
+    """Kills go through a handle opened first and checked against the row's CreationDate, never by
+    bare pid: Chrome frees pids while it shuts down, and Windows reuses them."""
+    p = Parts(src)
+    problems = []
+    if re.search(r"\bStop-Process\b|\btaskkill\b|(?:^|[;|{(])[ \t]*(?:kill|spps)\b(?!-)", p.ps, re.I | re.M):
+        problems.append("something kills by bare pid")
+    if not re.search(r"\bStop-RunProc\b(?!s)", p.text(p.function("Stop-RunProcs")), re.I):
+        problems.append("Stop-RunProcs doesn't kill through Stop-RunProc")
+    killer = p.text(p.function("Stop-RunProc"))
+    opened = re.search(r"\bGet-Process\s+-Id\b", killer, re.I)
+    pinned = re.search(r"\.Handle\b", killer)
+    checked = re.search(r"\.StartTime\b[^\n]*\bCreationDate\b|\bCreationDate\b[^\n]*\.StartTime\b", killer)
+    kill = re.search(r"\.Kill\s*\(", killer)
+    found = opened and pinned and checked and kill
+    order = found and opened.start() < pinned.start() < checked.start() < kill.start()
+    if not order or not re.search(r"\{\s*return\s+\$false\s*\}", killer[checked.end():kill.start()]):
+        problems.append("Stop-RunProc must open the process, pin its handle, check its start, then kill it")
+    elif not re.search(r"finally\s*\{[^}]*\.Dispose\s*\(", killer):
+        problems.append("Stop-RunProc doesn't close the handle in a finally")
+    if len(re.findall(r"\.Kill\s*\(", p.ps)) != len(re.findall(r"\.Kill\s*\(", killer)):
+        problems.append("a .Kill() outside Stop-RunProc")
     return problems
 
 
@@ -584,6 +635,9 @@ class Rules(unittest.TestCase):
 
     def test_run_pids_carry_their_creation_time(self):
         self.assertEqual(created_problems(self.src), [])
+
+    def test_kills_go_through_a_checked_handle(self):
+        self.assertEqual(kill_problems(self.src), [])
 
 
 def mutate(src, pattern, repl, flags=0):
@@ -747,6 +801,46 @@ class CatchesRegressions(unittest.TestCase):
 
     def test_leaked_process_handle(self):
         self.assertCaught(created_problems, in_method(self.src, "CreationTime", r"finally\s*\{[^}]*\}", ""))
+
+    def test_is_tagged_compare_inverted_or_literal(self):
+        compare = r"CreationTime\(pid\) == created"
+        bad = in_method(self.src, "IsTagged", compare, "CreationTime(pid) != created")
+        self.assertCaught(created_problems, bad)
+        bad = in_method(self.src, "IsTagged", compare, "CreationTime(pid) == 0")
+        self.assertCaught(created_problems, bad)
+
+    def test_refresh_trusting_the_pid(self):
+        self.assertCaught(created_problems, in_method(self.src, "Refresh", r", CreationDate", ""))
+        bad = in_method(self.src, "Refresh", r"SameStart\(row\.Value, now\) \|\| ", "")
+        self.assertCaught(created_problems, bad)
+
+    def test_kill_by_bare_pid(self):
+        bad = mutate(self.src, r"\$proc\.Kill\(\)", "Stop-Process -Id $Row.ProcessId -Force")
+        self.assertCaught(kill_problems, bad)
+
+    def test_kill_without_pin_or_start_check(self):
+        self.assertCaught(kill_problems, mutate(self.src, r"\n[ \t]*\[void\]\$proc\.Handle", ""))
+        bail = r"\n[ \t]*if \(\$drift -ge 10\) \{ return \$false \}"
+        self.assertCaught(kill_problems, mutate(self.src, bail, ""))
+
+    def test_supervised_never_set(self):
+        self.assertCaught(reply_after_eof_problems, mutate(self.src, r"\n\$Supervised = \$true\b", ""))
+
+    def test_eof_guard_without_return(self):
+        bad = mutate(self.src, r"(StdinClosed\) \{ )return( \})", r"\1\2")
+        self.assertCaught(reply_after_eof_problems, bad)
+
+    def test_exit_code_0_as_a_local(self):
+        self.assertCaught(exit_code_problems, mutate(self.src, r"\$script:ExitCode = 0", "$ExitCode = 0"))
+
+    def test_exit_code_guard_with_or(self):
+        bad = mutate(self.src, r"(\.left -eq 0) -and (-not \$exists\) \{ \$script:ExitCode)", r"\1 -or \2")
+        self.assertCaught(exit_code_problems, bad)
+
+    def test_exit_code_3_after_the_loop(self):
+        bad = mutate(self.src, r"\n\$ExitCode = 3\n", "\n")
+        bad = mutate(bad, r"(\ntry \{ \[ChromeBgSup\]::Loop[^\n]*)", r"\1\n$ExitCode = 3")
+        self.assertCaught(exit_code_problems, bad)
 
     def test_missing_log_kind(self):
         self.assertCaught(log_kind_problems, mutate(self.src, r"EOFCLEAN dirExists", "CLEANED dirExists"))

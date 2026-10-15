@@ -38,9 +38,13 @@
 #   between pumps. WMI pumps messages, and inside the callback that re-entered it and crashed the
 #   first prototype. Run pids come from the launch pid plus a refresh thread.
 # - A run pid is its process: IsTagged checks the creation time recorded at tagging, so a pid
-#   Windows reused is never the run's. The refresh thread alone untags a pid once no pass has seen
-#   the tag in its command line for about 1.5 s (UNTAG). A stale pid would make another program's
-#   window a run window: sunk by the keeper, its title logged, its foreground read as the run's.
+#   Windows reused is never the run's (unless that time was unreadable: TAG created=0). Refresh
+#   records a time only when the process at the pid still matches the CreationDate its query listed
+#   (STALE otherwise). The refresh thread alone untags a pid once no pass has seen the tag in its
+#   command line for about 1.5 s (UNTAG). A stale pid would make another program's window a run
+#   window: sunk by the keeper, its title logged, its foreground read as the run's.
+# - Kills go through a handle opened first and checked against the row's CreationDate, never by
+#   bare pid: Chrome frees pids while it shuts down, and Windows reuses them.
 # - Each new run frame sinks to HWND_BOTTOM, unactivated, at EVENT_OBJECT_CREATE while it is still
 #   hidden. Off-screen bounds alone left a 7-9 ms flash on top of the screen.
 # - With -Keep, while no run window has the foreground, a run window seen above another on-screen
@@ -103,23 +107,41 @@ function ConvertTo-ProcInfo($Proc) {
 }
 
 # Kills every chrome.exe of the run, for up to about 5 s. A round whose query fails is retried;
-# .error holds the last failure, and .left is -1 when the final count can't be read.
+# .error holds the last failure, and .left is -1 when the final count can't be read. .skipped
+# counts listed pids not killed: gone, held by another process, or not openable.
 function Stop-RunProcs {
   $killed = [System.Collections.Generic.HashSet[int]]::new()
+  $skipped = [System.Collections.Generic.HashSet[int]]::new()
   $err = $null
   foreach ($round in 1..20) {
     try {
       $procs = @(Get-TaggedProcs)
       if ($procs.Count -eq 0) { break }
-      foreach ($p in $procs) {
-        try { Stop-Process -Id $p.ProcessId -Force -ErrorAction Stop; [void]$killed.Add([int]$p.ProcessId) } catch { }
+      foreach ($row in $procs) {
+        if (Stop-RunProc $row) { [void]$killed.Add([int]$row.ProcessId) } else { [void]$skipped.Add([int]$row.ProcessId) }
       }
     } catch { $err = $_.Exception.Message }
     Start-Sleep -Milliseconds 250
   }
+  $skipped.ExceptWith($killed)
   $left = -1
   try { $left = @(Get-TaggedProcs).Count } catch { $err = $_.Exception.Message }
-  return [ordered]@{ killed = $killed.Count; left = $left; error = $err }
+  return [ordered]@{ killed = $killed.Count; skipped = $skipped.Count; left = $left; error = $err }
+}
+
+# Kills the process of one Win32_Process row if it is still that process. The handle opened first
+# pins the pid, so the start-time check and the kill see the same process. Returns whether it killed.
+function Stop-RunProc($Row) {
+  $proc = $null
+  try {
+    $proc = Get-Process -Id $Row.ProcessId -ErrorAction Stop
+    [void]$proc.Handle
+    $drift = [Math]::Abs(($proc.StartTime.ToUniversalTime() - $Row.CreationDate.ToUniversalTime()).Ticks)
+    # WMI keeps microseconds (10 ticks): a later start is another process on a reused pid.
+    if ($drift -ge 10) { return $false }
+    $proc.Kill()
+    return $true
+  } catch { return $false } finally { if ($proc) { $proc.Dispose() } }
 }
 
 # Deletes the run dir, retrying while Chrome's last files close. Returns whether it still exists.
@@ -136,10 +158,10 @@ function Remove-RunDir {
 # EOF: kill, then delete even if the kill failed, then set the exit code to 0 only if both finished.
 function Close-Run {
   [ChromeBgSup]::Log('EOF')
-  $k = [ordered]@{ killed = 0; left = -1; error = $null }
+  $k = [ordered]@{ killed = 0; skipped = 0; left = -1; error = $null }
   try { $k = Stop-RunProcs } catch { $k.error = $_.Exception.Message }
   $why = if ($k.error) { ' error=' + ($k.error -replace '[\r\n]+', ' ') } else { '' }
-  [ChromeBgSup]::Log("EOFKILL left=$($k.left) killed=$($k.killed)$why")
+  [ChromeBgSup]::Log("EOFKILL left=$($k.left) killed=$($k.killed) skipped=$($k.skipped)$why")
   $exists = $true
   try { $exists = Remove-RunDir } catch { [ChromeBgSup]::Log('ERROR eofclean ' + ($_.Exception.Message -replace '[\r\n]+', ' ')) }
   [ChromeBgSup]::Log("EOFCLEAN dirExists=$exists")
@@ -237,7 +259,9 @@ if ($Kill) {
   try {
     $k = Stop-RunProcs
     $exists = Remove-RunDir
-    $reply = [ordered]@{ ok = ($k.left -eq 0 -and -not $exists); killed = $k.killed; left = $k.left; dirExists = $exists }
+    $reply = [ordered]@{
+      ok = ($k.left -eq 0 -and -not $exists); killed = $k.killed; skipped = $k.skipped; left = $k.left; dirExists = $exists
+    }
     if ($k.error) { $reply.error = $k.error }
     Send-Reply $reply
   } catch { Send-Reply (New-ErrorReply $_.Exception.Message) }
@@ -358,6 +382,21 @@ public static class ChromeBgSup {
     }
     if (fresh) Log("TAG pid=" + pid + " created=" + created);
   }
+  // A CIM datetime (yyyymmddHHMMSS.mmmmmmsUUU: local time and its UTC offset in minutes) as FILETIME
+  // ticks, or 0 when it doesn't parse. The string carries its own offset, so no time zone lookup.
+  static long FromCim(string s) {
+    if (s == null || s.Length != 25) return 0;
+    try {
+      var t = new DateTime(int.Parse(s.Substring(0, 4)), int.Parse(s.Substring(4, 2)), int.Parse(s.Substring(6, 2)),
+        int.Parse(s.Substring(8, 2)), int.Parse(s.Substring(10, 2)), int.Parse(s.Substring(12, 2)), DateTimeKind.Utc);
+      int offset = int.Parse(s.Substring(22, 3)) * (s[21] == '-' ? -1 : 1);
+      return t.AddTicks(long.Parse(s.Substring(15, 6)) * 10).AddMinutes(-offset).ToFileTimeUtc();
+    } catch { return 0; }
+  }
+  // One process's start read twice: WMI keeps microseconds (10 ticks), GetProcessTimes 100 ns ticks.
+  static bool SameStart(long a, long b) { return a != 0 && b != 0 && Math.Abs(a - b) < 10; }
+  static bool LookupOnly(uint pid) { lock (tagged) { RunPid r; return tagged.TryGetValue(pid, out r) && r.Created == 0; } }
+  static HashSet<uint> staleLogged = new HashSet<uint>();   // refresh thread only
   // Twice a second on its own MTA thread: confirms every chrome.exe holding the run's tag, then
   // untags pids unconfirmed for UntagMs. A pass stamps with its start time, so a launch made while
   // its query ran keeps the later AddPid stamp and can't be dropped by a query that missed it.
@@ -366,13 +405,21 @@ public static class ChromeBgSup {
       while (!done) {
         try {
           long start = sw.ElapsedMilliseconds;
-          var live = new List<uint>();
-          using (var s = new ManagementObjectSearcher("SELECT ProcessId, CommandLine FROM Win32_Process WHERE Name='chrome.exe'"))
+          var live = new List<KeyValuePair<uint, long>>();   // pid -> its CreationDate as FILETIME ticks
+          using (var s = new ManagementObjectSearcher("SELECT ProcessId, CommandLine, CreationDate FROM Win32_Process WHERE Name='chrome.exe'"))
             foreach (ManagementObject o in s.Get()) {
               var cl = o["CommandLine"] as string;
-              if (cl != null && cl.IndexOf(tag, StringComparison.OrdinalIgnoreCase) >= 0) live.Add((uint)o["ProcessId"]);
+              if (cl != null && cl.IndexOf(tag, StringComparison.OrdinalIgnoreCase) >= 0)
+                live.Add(new KeyValuePair<uint, long>((uint)o["ProcessId"], FromCim(o["CreationDate"] as string)));
             }
-          foreach (var pid in live) Confirm(pid, CreationTime(pid), start);
+          foreach (var row in live) {
+            // The process at the pid now must be the one the query listed: a run process that exited
+            // during the pass may have handed its pid to another program. An unreadable pid is
+            // confirmed only when it was unreadable at tagging too (lookup-only).
+            long now = CreationTime(row.Key);
+            if (SameStart(row.Value, now) || (now == 0 && LookupOnly(row.Key))) Confirm(row.Key, now, start);
+            else if (staleLogged.Add(row.Key)) Log("STALE pid=" + row.Key + " listed=" + row.Value + " now=" + now);
+          }
           var gone = new List<uint>();
           lock (tagged) {
             foreach (var kv in tagged) if (kv.Value.Seen < start - UntagMs) gone.Add(kv.Key);
