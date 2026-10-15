@@ -2273,7 +2273,7 @@ def sessions_above() -> list[tuple[dict, lanelib.Proc]]:
 
 
 LEAD_ACTS = ("init", "new", "adopt", "open", "done")  # each, when it succeeds, takes the lead
-LEAD_HINT = ("no lead picked: the lead takes it with a bare `lane lead` (Hayden: `! lane lead` at "
+LEAD_HINT = ("No lead picked: the lead takes it with a bare `lane lead` (Hayden: `! lane lead` at "
              "the lead's prompt), or any bare lane new, open, adopt or done it runs. After a tmux "
              "restart the lead must act again")
 

@@ -207,14 +207,14 @@ class LeadPick(LiveSessions):
         for why, tmux in cases.items():
             with self.subTest(why):
                 self.write_lead(gone, start=1, tmux=tmux)
-                self.refused("2 live sessions in the main checkout", "no lead picked")
+                self.refused("2 live sessions in the main checkout", "No lead picked")
 
     def test_two_sessions_in_the_recorded_pane_pick_none(self):
         # A claude started from the lead's Bash inherits its TMUX_PANE.
         gone = self.child(self.main, done=True)
         self.pair(("%7", "%7"))
         self.write_lead(gone, start=1, tmux=self.tmux_of("%7"))
-        self.refused("no lead picked")
+        self.refused("No lead picked")
 
     def test_one_live_session_is_the_lead_whatever_the_record_names(self):
         want = self.session(self.main)
@@ -227,7 +227,7 @@ class LeadPick(LiveSessions):
         err = self.refused("2 live sessions in the main checkout (the lead), so no one address",
                            f"pid {a} interactive proj:@{a} idle {ua}",
                            f"pid {b} interactive proj:@{b} idle {ub}",
-                           "no lead picked: the lead takes it with a bare `lane lead`",
+                           "No lead picked: the lead takes it with a bare `lane lead`",
                            "(Hayden: `! lane lead` at the lead's prompt)",
                            "or any bare lane new, open, adopt or done it runs",
                            "After a tmux restart the lead must act again")
@@ -251,7 +251,7 @@ class LeadPick(LiveSessions):
             with self.subTest(why):
                 self.write(self.lead_path, rec if isinstance(rec, str) else json.dumps(rec))
                 self.assertIsNone(lanelib.read_lead(lanelib.Repo(self.main, self.common)))
-                self.refused("no lead picked")
+                self.refused("No lead picked")
         self.write(self.lead_path, json.dumps(good))
         self.assertEqual(lanelib.read_lead(lanelib.Repo(self.main, self.common)), good)
 
