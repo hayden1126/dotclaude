@@ -79,7 +79,8 @@ an unregistered worktree: `lane whoami` tells you which.
    finishes its handoff. Then, as its last act (the lead's `lane done` ends its session), it
    sends the lead `merged #N`, to what a bare `lane addr lead` prints. It says nothing more about
    the merge to Hayden and never proposes `lane done`: the lead runs the rest (The lead, step 7).
-   With no lead running (`lane addr lead` refuses), it tells Hayden once that #N merged.
+   When `lane addr lead` refuses (no lead running, or several sessions and none picked), it
+   tells Hayden once that #N merged, with the refusal's way to pick the lead if it gives one.
 7. **Close:** `lane done <id>` refuses an unmerged branch, a lane made by `lane new` with no
    commits past its base, and, while its worktree exists, a lane whose record's Next has a
    `Keep open:` line, live session or not (pass `--abandon` to close any of them anyway; it
@@ -126,6 +127,14 @@ failed step (copies never overwrite a file the lane already has).
 The lead is an optional session, usually in the main checkout, that splits a batch of requests
 into lanes and keeps them moving. It owns the project STATUS (backlog, merge order) and nothing
 inside a lane.
+
+**Which session leads.** A main checkout can hold two live sessions: a stray resumed there, or a
+side chat. The lead is the last one to act as lead. A bare `lane init`, `new`, `adopt`, `open` or
+`done` that succeeds from an interactive session in the main checkout records it in the state
+dir, where no lane can write, and `lane lead` takes it on purpose (Hayden: `! lane lead` at its
+prompt). A /clear or a /pass in its pane keeps it; after a tmux restart it acts again. Looks
+(`ls`, `addr`) never take it. `lane addr lead` prints the lead's address, `lane ls` names a
+crowded main checkout under the board, and the tab bar calls its other tabs `lead²`, `lead³`.
 
 1. **Triage.** Collect the requests. Explore the code to estimate the files each one touches,
    group requests whose files overlap, and pick lane ids and branches.
@@ -228,14 +237,15 @@ what").
 | Command | What it does |
 |---|---|
 | `lane whoami` | your lane id, `main`, `unregistered` or `plain` (`--json` for scripts) |
-| `lane ls` | the board: branch, ahead/behind, PR, port, claims, live sessions, context (CTX: `312k*` past the auto-pass soft tier, `523k!` past hard), state (STATE: busy, idle, waiting, shell; message a lane idle past soft to run /pass), tmux window, flags; then any held locks and the install hold |
+| `lane ls` | the board: branch, ahead/behind, PR, port, claims, live sessions, context (CTX: `312k*` past the auto-pass soft tier, `523k!` past hard), state (STATE: busy, idle, waiting, shell; message a lane idle past soft to run /pass), tmux window, flags; then any held locks, a main checkout with two or more live sessions (each one's window, the lead first) and the install hold |
 | `lane ls --requests` | request to lane, from claims only |
 | `lane who 42` | the lane that claims #42, or "unclaimed" |
 | `lane claim 42` / `lane release 42` | claim or drop a request for your lane |
 | `lane note "<text>"` | append a timestamped line to your record's State |
 | `lane asks` | every lane's open "Asks for Hayden", one list |
 | `lane open <id>` | the lane's session in a new tmux window, in plan mode; `--focus` switches to it, or to the live session's window; `--print` shows the tmux command |
-| `lane addr <id>` / `lane addr lead` | `uds:<socket>`, the SendMessage address of the lane's (or the lead's) one live session; refuses on none or several. Bare: it must see other processes |
+| `lane addr <id>` / `lane addr lead` | `uds:<socket>`, the SendMessage address of the lane's (or the lead's) one live session; refuses on none or several, except that `lead` picks the recorded lead among several (and refuses with the way to pick when none is). Bare: it must see other processes |
+| `lane lead` | makes the session that runs it the lead (from the main checkout only; Hayden: `! lane lead` at its prompt). Bare |
 | `lane lock gate -- <cmd>` | run `<cmd>` under the named lock, waiting while another run holds it; `--wait SECS` gives up with exit 75 (docs/lanes.md: telling it from the command's own 75) |
 | `lane new` / `adopt` / `done` | lifecycle, above |
 

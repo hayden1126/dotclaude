@@ -84,7 +84,7 @@ handoff skill's own `gh pr ready` as an unrequested commit, so `test_settings.py
 that every `gh pr` or `gh run` step CLAUDE.md, a skill or an agent names has a rule. Also
 allowed, because the classifier once refused a CI watch with no reason given: the read-only
 `gh pr checks`, `view`, `list`, `status` and `diff`, and `gh run list`, `view` and `watch`.
-`lane ls`, `new`, `adopt`, `open`, `done` and `addr` are allowed too, behind the excluded-command guard
+`lane ls`, `new`, `adopt`, `open`, `done`, `addr` and `lead` are allowed too, behind the excluded-command guard
 (docs/lanes.md S3).
 Read-only git (`status`, `log`, `diff`, `show`, `rev-parse`; the classifier once refused one as an
 "unrequested commit") is allowed too, with the pipe filters `head`, `tail`, `wc` and `grep`, since
@@ -106,7 +106,7 @@ force-push and a `reset --hard` on a dirty tree when the prompt named them.
 must cover, and `test_settings.py` ties it to `settings.json` in both directions. It holds the
 credential barrier (`git push` to `origin`, `fetch`, `pull`, `ls-remote`, and `gh`'s `pr`, `run`,
 `issue`, `api` and `search` with its read-only `repo`, `release` and `auth status` forms), our
-wrappers (`lane init`, `new`, `adopt`, `ls`, `open`, `done`, `addr`, `pass-respawn`, `delegation-ledger`,
+wrappers (`lane init`, `new`, `adopt`, `ls`, `open`, `done`, `addr`, `lead`, `pass-respawn`, `delegation-ledger`,
 `codex-delegate`), `claude`, the read-only tmux verbs (`ls`, `list-sessions`, `list-windows`,
 `list-panes`, `list-clients`, `list-keys`, `list-commands`, `capture-pane`, `display`, `show`,
 `show-options`, `show-environment`, `show-messages`, `show-hooks`), read-only codex (`login status`,
@@ -390,8 +390,10 @@ need nothing extra.
   `tmux-state.sh` should drop those entries before `./setup.sh`, or they fire twice (an old
   Stop entry does nothing now: `idle` acts only on SessionStart).
 - **The tab bar groups tabs by project**: the status bar has up to 5 rows. A repo with lanes gets
-  its own row, headed by its name (`dotclaude▸`): the lead checkout's tab (`lead` plus its title),
-  then each lane (its id, cut to 12 cells, plus its title), then its other worktrees. Every other
+  its own row, headed by its name (`dotclaude▸`): the main checkout's tabs (`lead` plus its title),
+  then each lane (its id, cut to 12 cells, plus its title), then its other worktrees. A second tab
+  in the main checkout, a stray session or a shell, reads `lead²` (a third `lead³`), and `lead`
+  stays on the session `lane addr lead` picks; a flip renames tabs and moves none. Every other
   window goes on the shared row(s) at the bottom, as `repo: title`. A window counts as whatever
   its active pane's directory is in. Window numbers never change; only the order on the bar does.
   Every row starts with the same gutter (the delegation token's width, then the widest repo
@@ -597,6 +599,9 @@ and status single-writer:
 - `lane addr chart-fix` (or `lane addr lead`) prints `uds:<socket>`, the SendMessage address of
   that lane's live session. A session's ListAgents name is its tab title, which changes most
   turns, and a pass gives it a new socket, so resolve the address just before each send.
+  With two live sessions in the main checkout, `lane addr lead` prints the lead's: the last one
+  to run a bare `lane init`, `new`, `adopt`, `open` or `done`, or `lane lead` to take it on
+  purpose (`! lane lead` at its prompt). `lane ls` names both, with their windows.
 - `lane lock gate -- npm run e2e` runs a shared gate under a named lock, so a second lane's run
   waits instead of colliding.
 - A lane tests its change by installing from its own worktree (`lane lock install --
