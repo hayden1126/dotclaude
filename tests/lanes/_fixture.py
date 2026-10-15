@@ -6,12 +6,16 @@ PR state is the degraded `?` and `done` falls back to git. A fake `claude` sits 
 XDG_STATE_HOME, TMUX_TMPDIR and the Claude session variables point into the temp dir, so nothing
 reads or writes the real machine's state.
 """
+import glob
+import itertools
 import json
 import os
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from unittest import mock
 
@@ -20,6 +24,7 @@ LANE = os.path.join(REPO, "skills", "lanes", "scripts", "lane")
 HANDOFF_CHECK = os.path.join(REPO, "skills", "handoff", "scripts", "handoff-check")
 HOOKS = os.path.join(REPO, "hooks")
 sys.path.insert(0, os.path.join(REPO, "skills", "lanes", "scripts"))
+import lanelib  # noqa: E402  (on sys.path from the line above)
 
 
 class LanesRepo(unittest.TestCase):
@@ -106,9 +111,19 @@ class LanesRepo(unittest.TestCase):
             return json.load(f)
 
     def config_files(self):
-        """The lanes configs `lane init` wrote: they live in the state dir, out of the repo."""
+        """The lanes configs `lane init` wrote: they live in the state dir, out of the repo,
+        beside the lead records (<repo>-<hash>.lead.json), which this leaves out."""
         d = os.path.join(self.tmp, "state", "dotclaude", "lanes")
-        return sorted(os.path.join(d, n) for n in os.listdir(d)) if os.path.isdir(d) else []
+        return sorted(glob.glob(os.path.join(d, "*.toml")))
+
+    @property
+    def lead_path(self):
+        """This repo's lead record (lanelib.Repo.lead_path)."""
+        return lanelib.Repo(self.main, self.common).lead_path
+
+    def lead(self):
+        """The lead record as written, or None."""
+        return json.loads(self.read(self.lead_path)) if os.path.exists(self.lead_path) else None
 
     def hook(self, script, payload):
         p = subprocess.run(["bash", os.path.join(HOOKS, script)], input=json.dumps(payload),
@@ -124,3 +139,83 @@ class LanesRepo(unittest.TestCase):
     def read(self, path):
         with open(path) as f:
             return f.read()
+
+
+class LiveSessions(LanesRepo):
+    """Live sessions for `lane addr` and the board's main-checkout footer. A live session is a
+    session file whose pid runs with the procStart the file records (a child `sleep`, started
+    in the session's launch dir) and whose messagingSocketPath is a socket on disk (made with
+    mknod, which the Bash sandbox allows where socket() is refused). Each child runs with this
+    test's own TMUX and TMUX_PANE, never the runner's (lanelib.proc_tmux reads them from its
+    environment): TMUX names a stand-in server, another `sleep`, and each child gets a pane of
+    its own unless told one."""
+
+    def setUp(self):
+        super().setUp()
+        self.socks = os.path.join(self.tmp, "socks")
+        os.makedirs(self.socks)
+        self.panes = itertools.count(1)
+        self.server = self.tmux_server()
+
+    def spawn(self, argv, cwd=None, env=None, wait=False):
+        """A child, killed at cleanup: exited and reaped (wait), or running with its environment
+        in place. Popen returns once a vfork child execs, a moment before the kernel has set up
+        the new image's environment, and /proc/<pid>/environ reads empty until then."""
+        p = subprocess.Popen(argv, cwd=cwd, env=env if env is not None else self.env)
+        self.addCleanup(lambda: p.poll() is None and (p.kill(), p.wait()))
+        if wait:
+            p.wait()
+            return p.pid
+        deadline = time.monotonic() + 10
+        while not lanelib.read_head(f"/proc/{p.pid}/environ", 1) and time.monotonic() < deadline:
+            time.sleep(0.005)
+        return p.pid
+
+    def tmux_server(self, name="default"):
+        """A stand-in tmux server (a running child) and the TMUX value naming it."""
+        pid = self.spawn(["sleep", "60"], cwd=self.tmp)
+        return f"{os.path.join(self.tmp, 'tmux-sock', name)},{pid},0"
+
+    def child(self, cwd=None, done=False, pane="new", server=None):
+        """A process in cwd: running (`sleep`), or exited and reaped (done). pane "new" gives
+        it a pane of its own on server (this test's by default), a "%N" string that pane, None
+        no tmux at all."""
+        env = dict(self.env)
+        if pane is not None:
+            env.update(TMUX=server or self.server,
+                       TMUX_PANE=f"%{next(self.panes)}" if pane == "new" else pane)
+        return self.spawn(["sleep", "60"] if not done else ["true"], cwd=cwd, env=env, wait=done)
+
+    def session(self, at, pid=None, start=None, skew=0, sock="socket", path=None, pane="new",
+                server=None, **extra):
+        """A session file for pid (by default a fresh child running in at, the launch dir, on
+        pane and server) whose cwd field is at unless extra overrides it. sock: "socket" makes
+        one at path (by default under self.socks), "file" a regular file there, None leaves it
+        missing. skew shifts the recorded procStart off the real one: the pid, reused."""
+        os.makedirs(at, exist_ok=True)
+        pid = pid or self.child(at, pane=pane, server=server)
+        if start is None:
+            start = (lanelib.proc_start(pid) or 1) + skew
+        path = path or os.path.join(self.socks, f"{pid}.sock")
+        if sock == "socket":
+            os.mknod(path, stat.S_IFSOCK | 0o600)
+        elif sock == "file":
+            self.write(path, "")
+        self.write(os.path.join(self.home, ".claude", "sessions", f"{pid}.json"),
+                   json.dumps({"pid": pid, "procStart": str(start), "sessionId": f"s-{pid}",
+                               "kind": "interactive", "cwd": at, "tmux": f"proj:@{pid}.%{pid}",
+                               "status": "idle", "messagingSocketPath": path, **extra}))
+        return "uds:" + path
+
+    def write_lead(self, pid, start=None, sid=None, tmux=None, **extra):
+        """A lead record naming pid (with its real start unless given) and tmux, as the CLI
+        writes one."""
+        rec = {"pid": pid, "procStart": lanelib.proc_start(pid) if start is None else start,
+               "sessionId": sid or f"s-{pid}", "tmux": tmux, "at": "2026-10-14T21:05:00+00:00",
+               **extra}
+        self.write(self.lead_path, json.dumps(rec))
+
+    def tmux_of(self, pane, server=None):
+        """The record's tmux list for pane on server (this test's by default)."""
+        sock, pid, _ = (server or self.server).rsplit(",", 2)
+        return [sock, int(pid), lanelib.proc_start(int(pid)), pane]

@@ -308,8 +308,8 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
   The excluded-command inventory (2026-10-13, `tests/delegation/command_inventory.py`) adds three
   asks: `lane init --setup` names the command each new lane runs, `lane init --root` moves where
   lanes live, and `lane done --abandon` closes unmerged work. The rest of `lane` asks nothing.
-  The excluded-command guard (docs/delegation.md) then let `ls`, `new`, `adopt`, `open`, `done`
-  and `addr` take allow rules, so the classifier never refuses them: an allow rule skips the
+  The excluded-command guard (docs/delegation.md) then let `ls`, `new`, `adopt`, `open`, `done`,
+  `addr` and `lead` take allow rules, so the classifier never refuses them: an allow rule skips the
   classifier, and the guard checks each call's git config, PATH and cwd first. The three asks
   still win.
   A lane that installs from its worktree (`lane lock install -- ./setup.sh`) points the installed
