@@ -134,6 +134,15 @@ stored here).
     `skills/pass/scripts/pass-respawn`, SKILL.md, `docs/lanes.md`, `tests/lanes`, `tests/pass`.
   - Tests time durations with `time.monotonic()`, not `time.time()` (122 calls in 23 test
     files). It touches every suite, so it opens only when no lane runs.
+  - **A screenshot or file pasted into tmux over Tailscale usually pastes nothing** (Hayden,
+    2026-10-15; now and then it works). Likely cause, inferred and unprobed: Claude Code's
+    image paste reads the clipboard of the machine it runs on (HAYPC), not the remote device's,
+    and a remote terminal carries only text; a dropped file arrives as the remote device's path.
+    The odd success would be HAYPC's own clipboard holding an image. HAYPC runs Windows OpenSSH
+    (SFTP on) and Windows Tailscale (Taildrop), so the remote path is likely sshd, `wsl`, tmux.
+    First probes: the device and terminal Hayden pastes from, what Ctrl+V reads under WSL, and
+    whether a working paste matches HAYPC's clipboard. A fix would move the file first
+    (Taildrop or SFTP) and paste its HAYPC path.
 
   **The post-merge chain** (Hayden's design B, standing approval 2026-10-14): `skills/lanes/SKILL.md`,
   The lead, step 7. Lead commits ride the next lane PR: that lane applies `git diff origin/main
