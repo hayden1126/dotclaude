@@ -76,7 +76,7 @@ stored here).
     #92, `narrow-excluded` Part 1 #93, the lead's `fix/json-depth` #94, `lane-close` #95,
     `lane-addr` #98, `excluded-guard` #100 (narrow-excluded Part 2 plus G8's fix, 2026-10-14),
     `tab-bar` #96, #97, #99 and #101 (2026-10-14), `turn-glyph` #102 (2026-10-14), `ask-owner`
-    #103 (2026-10-14).
+    #103 (2026-10-14), `guard-b` #104 (2026-10-14).
     `gh pr view <n>` and the closed records under `.git/lanes/_closed/` hold the detail.
   - `tab-bar`: Hayden smoke-tested #101 live on 2026-10-14, all 8 items on desktop and phone
     ("all works"). Design: the research page
@@ -89,9 +89,9 @@ stored here).
     `lane done` now live in `skills/lanes/SKILL.md` (The lead, step 7).
   - `guard-b` #104 (2026-10-14): excluded-guard group B (a SessionStart check, rule lines from
     `lane new` and `lane done`), plus `lane ls` and `lane done` reading the worktree's
-    checked-out branch. Hayden merged it before its install and live smoke from the branch, so
-    the lead's install from main was the first live run. The lane stays open (`Keep open:`) for
-    that smoke and the G8 probes (its Asks). A smoke finding rides in a follow-up PR.
+    checked-out branch. Hayden merged it before its live smoke. The smoke then ran against the
+    lead's install from main and passed: in a real tab the finding showed once, and a second start
+    was silent. `claude -p` can't show it, since `-p` forces `ATTENDED=0`.
   - `handoff-flag` (opened 2026-10-14, Hayden's option C): `handoff?` judges a merged lane by
     its record against the PR's `mergedAt`, not by session end. Today every session ends after
     its own last write, so the flag lights after each `/pass` and stays on for a merged lane with
@@ -101,8 +101,8 @@ stored here).
     itself, not only the tmux client. Seen live twice in `pass.log` (compact, `outcome=timeout
     status busy`, 2026-10-13 and 2026-10-14). On 2026-10-13 the tmux server died, and the
     session kept saying the pass was "still queued".
-  - **Merge order: `pass-timeout`, then `handoff-flag` and any `guard-b` follow-up by
-    readiness.** The lead installs only the next to merge.
+  - **Merge order: `pass-timeout`, then `handoff-flag`.** The lead installs only the next to
+    merge.
   - The parked json-depth sweep (21 files, among them the delegation enforcement scripts) is on
     `fix/json-depth-sweep`, a local branch never pushed: keep it while the sweep is in the
     backlog. Shipping it first needs a check of how each enforcement site fails
@@ -114,6 +114,9 @@ stored here).
   - Once pushed, a lane merges `origin/main` into its branch, since force pushes are denied.
 
   Backlog:
+  - G8 open probes (a) and (b) (Hayden's pick, 2026-10-14): Hayden runs
+    `~/scratch/sandbox-audit/g8-probe/run.py` by hand with the sandbox off, because the auto-mode
+    classifier refused the run. Results go into the private findings file's G8 section.
   - tmux 3.8 (Hayden's call 2026-10-14, "backlog it, close the lane"): test-build 3.8 in temp,
     rerun the menu-clip repro and the tmux suites. If it fixes the clip, install at a quiet
     moment (a server restart; claude-restore reopens the tabs) and drop the row-0 menu rule.
@@ -208,11 +211,11 @@ stored here).
 
 ## Notes for next session
 - **Next (lead, main checkout):** watch for "merged #N" from a lane, then run the post-merge
-  chain (`skills/lanes/SKILL.md`, The lead, step 7). Live lanes: `guard-b` (kept open for #104's
-  smoke), `pass-timeout` and `handoff-flag`. The next lane PR carries the lead's STATUS and
-  PLAN.md commits. Check `lane ls` first: a merge Hayden made on GitHub and mentioned to no
-  session sends no message (#102 showed merged there before its lane's message came). The cap of
-  3 is full; the backlog's next pick is Hayden's. No chat about a lane's own asks; speak on cross-lane orders,
+  chain (`skills/lanes/SKILL.md`, The lead, step 7). Live lanes: `pass-timeout` (next to merge;
+  its install is live from its lane) and `handoff-flag`. The next lane PR carries the lead's
+  STATUS and PLAN.md commits. Check `lane ls` first: a merge Hayden made on GitHub and mentioned
+  to no session sends no message (#102 showed merged there before its lane's message came). One
+  slot of 3 is free; the backlog's next pick is Hayden's. No chat about a lane's own asks; speak on cross-lane orders,
   decisions raised with the lead, failed checks and lead-only actions.
   - Design reviews the lead sent to lanes on 2026-10-14 (turn-glyph's set of wait owners and its
     classifier probe, excluded-guard's G8) live in those lanes' records and plans, and G8 in the
