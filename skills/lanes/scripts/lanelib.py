@@ -105,11 +105,12 @@ def parse_iso(stamp) -> float | None:
 def git(args: list[str],
     cwd: str,
     check: bool = False,
+    timeout: float = 60,
 ) -> subprocess.CompletedProcess:
     """Run git with C-locale output; check raises CalledProcessError on a non-zero exit."""
     env = dict(os.environ, LC_ALL="C", GIT_TERMINAL_PROMPT="0")
     return subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, env=env,
-                          check=check, timeout=60)
+                          check=check, timeout=timeout)
 
 
 # A plain /pass respawns the pane, which kills every background task with it. So it goes ahead
