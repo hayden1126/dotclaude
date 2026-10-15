@@ -140,8 +140,14 @@ inside a lane.
 4. **Cap.** The lanes config's `cap` (default 4, `lane init --cap`) limits live lanes. Requests beyond it wait in the
    project STATUS backlog.
 5. **Hand-back gate.** A lane is handed back only when `handoff-check -C <lane path>` passes and
-   `lane ls` shows no `handoff?` flag. Until then, message the lane; if its session is gone, add it
-   to Hayden's asks. Never order a merge or close a lane before the gate passes.
+   a bare `lane ls` shows no `handoff?` flag. The flag lights when the record may be behind the
+   lane's work: a PR from the lane's branches merged after the record's last write, a commit is
+   newer than it, or a session that started after it has ended, so that session never wrote it
+   (both times within 10 s count as after, for the clock's steps). It stays on whenever any of
+   that can't be read (gh, a `mergedAt`, the record, a session stamp, the last commit), and,
+   once gh's list holds its full 200 PRs, for a lane older than the oldest, adopted or switched
+   to another branch (its PR may be cut). Until then, message the lane; if its session is gone,
+   add it to Hayden's asks. Never order a merge or close a lane before the gate passes.
 6. **Watch and order.** Watch `lane ls`. Keep the merge order in the project STATUS. A lane
    whose install is live merges main with the sandbox off: its own hooks, skills and tests are
    write-protected then (`docs/lanes.md` S3).
@@ -165,10 +171,12 @@ inside a lane.
       force push. The board's `rebase` flag is the truth; the message is only a nudge.
    6. Add one backlog line to the project STATUS: lane id, PR number, outcome.
    7. `lane done <id>` once the hand-back gate (step 5) passes, unless the lane's Next has a
-      `Keep open:` line: then leave it open. A gate that fails on a lane with no live session
-      is the lead's one ask to Hayden, since no lane is left to ask. That is the usual outcome
-      there: `handoff?` lights once a session ended after the record's last write, the sign it
-      may have merged and stopped before writing `Keep open:`. Never `--abandon` here.
+      `Keep open:` line: then leave it open. A merged lane with no live session passes when its
+      record was written after the merge (its after-merge handoff), so it closes without an
+      ask. A gate that fails on a lane with no live session is the lead's one ask to Hayden,
+      since no lane is left to ask: its record is older than the merge, so it may have stopped
+      before writing `Keep open:`, or its last session ended without writing it. Never
+      `--abandon` here.
 
    Then tell Hayden one line ("#42 merged: installed, lane chart-fix closed, api-docs nudged"),
    or the step that failed. A failed step stops the chain.
@@ -229,10 +237,11 @@ what").
 | `lane new` / `adopt` / `done` | lifecycle, above |
 
 Board flags: `stale` (worktree gone; its claims are void), `rebase` (behind the base),
-`conflict` (two live lanes claim one request), `orphan` (no live session), `handoff?` (the last
-commit or session end is newer than the record), `setup-failed` (half made: it still holds its
-port, claims and a cap slot; finish it with `lane adopt <path>`), `closing` (a `lane done`
-stopped partway; rerun it).
+`conflict` (two live lanes claim one request), `orphan` (no live session), `handoff?` (the record
+may be behind, as The lead step 5 spells out: a PR merged after its last write, a commit is
+newer, or a session that started after it has ended; on whenever one of those can't be read),
+`setup-failed` (half made: it still holds its port, claims and a cap slot; finish it with
+`lane adopt <path>`), `closing` (a `lane done` stopped partway; rerun it).
 
 Run `lane init`, `new`, `adopt`, `ls`, `open`, `done` and `addr` as bare commands: those are in
 `excludedCommands`, so they run outside the sandbox with the network, gh's credential and a view

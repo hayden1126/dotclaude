@@ -178,13 +178,37 @@ Why it works this way:
   for #99 the tab-bar lane ran `gh pr merge` itself. A merge made on GitHub and told to no
   session waits for the lead's next `lane ls`. With the lane's session gone, the lead runs the
   chain itself, and closes the lane only once the hand-back gate passes: a failing gate is then
-  the lead's ask, since no lane is left to make it. That is the usual outcome: the gate's
-  `handoff?` flag lights once a session ended after the record's last write, the sign that it
-  may have merged and stopped before writing `Keep open:`. With the session live, the lead asks
-  the lane for its after-merge handoff first, since a lane that merged and is still writing
+  the lead's ask, since no lane is left to make it. A lane that wrote its after-merge handoff
+  before its session ended passes, so it closes without one. With the session live, the lead
+  asks the lane for its after-merge handoff first, since a lane that merged and is still writing
   `Keep open:` must not be closed under it. A merge watcher lost: one per ready PR has to be
   re-armed every 2 hours, and two that saw the same merge would run the chain twice (two
   reinstalls, two reports).
+- **`handoff?` judges by the merge, not by session end** (Hayden, 2026-10-14). Every session
+  ends after its own last write, so a flag keyed on session end lit after each `/pass` and on
+  every merged lane whose session had exited, which made each such close an ask. A merged lane's
+  record is judged against the PR's `mergedAt` instead: written after it, the lane did its
+  after-merge handoff; older, the lane never saw the merge and may lack `Keep open:`. Every
+  merged PR from the lane's branches counts (the checked-out one and lane.json's, which a switch
+  for a follow-up PR leaves behind), even under a newer PR, and a fork's too: a lane may push to
+  one, and a stranger's merge can only light the flag. An ended session lights it only when it
+  started after the record's last write, so it never wrote it, and a newer commit still lights
+  it. The merge and session checks allow 10 s (`CLOCK_SLACK`; the commit check keeps its 1 s):
+  HAYPC's wall clock steps by about 5 s, and GitHub's clock is not the local one. On the 11
+  lanes merged and closed by 2026-10-14, the old rule flagged all 11 and this one none; 4 of
+  them wrote their after-merge record within 40 s of the merge, so a wider slack would cost
+  asks.
+- **What it can't tell.** A write after the merge is taken as the after-merge handoff, so a lane
+  that never heard of a GitHub merge, then wrote a routine update and exited, passes; the lead's
+  message to a live lane covers that window. Whatever can't be read (gh, a `mergedAt`, a session
+  stamp, the last commit) leaves the flag on, so an offline or sandboxed `lane ls` shows it on
+  every lane: judge the gate from a bare one. Once `ls`'s one gh call returns its full 200 PRs,
+  a lane older than the oldest of them, adopted, or switched off lane.json's branch keeps the
+  flag too, since a branch of its may hold a PR older than the lane, which the list may have
+  cut. Only two branches are judged, the checked-out one (or, detached mid-rebase, the one being
+  rebased) and lane.json's: a merge from a third branch the lane passed through is missed. A
+  session that ends with no SessionEnd stamp is skipped, as a live one is; for a merged lane the
+  `mergedAt` check still catches the merge it never recorded.
 - **A nudge, never consent** (flow 13). `merged #N` says only when to look. The consent is the
   standing approval written here; the lead proves the merge with `gh pr view` before it acts,
   and `lane done` checks it again (a merged PR whose head is the tip, or the tip in the base).
