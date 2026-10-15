@@ -2201,26 +2201,37 @@ def closable_all(repo: Repo, lane: dict, heads: dict[str, tuple[str, str]], bran
     return "; ".join(f"{b}: {r[0]}" for b, r in passed), state, ""
 
 
-def lane_place(repo: Repo, root: str, cwd) -> str | None:
+def lane_place(repo: Repo, root: str | None, cwd) -> str | None:
     """Where a session's cwd (its session file's, or its real one) makes it a lane's, or None:
-    in a linked worktree of this repo (lanelib.linked_worktree), or under the lanes root but
-    outside the main checkout (a root that holds main must not count the lead as a lane; no lane
-    lives inside main, since worktree_problem refuses one)."""
+    in a linked worktree of this repo (lanelib.linked_worktree), or under the lanes root (when
+    there is one) but outside the main checkout (a root that holds main must not count the lead
+    as a lane; no lane lives inside main, since worktree_problem refuses one)."""
     if wt := lanelib.linked_worktree(repo, cwd):
         return f"in linked worktree {wt}"
-    if lanelib.cwd_inside(cwd, root) and not lanelib.cwd_inside(cwd, repo.main):
+    if root and lanelib.cwd_inside(cwd, root) and not lanelib.cwd_inside(cwd, repo.main):
         return f"under the lanes root {root}"
+    return None
+
+
+def lane_above(repo: Repo, root: str | None,
+               above: list[tuple[dict, lanelib.Proc]]) -> tuple[dict, lanelib.Proc, str] | None:
+    """The first session in above (sessions_above) that is a lane's by its session file's cwd
+    or its real one (a lane session that cd'd to main): lane_place. That session, its process
+    and where it is, or None. Every one counts, not only the nearest: a lane's claude may run
+    another claude, and no lane may close lanes (lead_only) or take the lead (lead_claim) that
+    way. Only trusted facts decide: the lanes root from the config, which sandboxed Bash can't
+    write, and git's own worktree links. Never lane.json's paths, which it can: a planted
+    "/home" made every `done` refuse the lead, and a lane could drop its own path."""
+    for s, p in above:
+        if where := lane_place(repo, root, s.get("cwd")) or lane_place(repo, root, p.cwd):
+            return s, p, where
     return None
 
 
 def lead_only(repo: Repo, lane_id: str, path: str) -> None:
     """Only the lead closes lanes: refuse unless this runs from the main checkout, and when a
-    Claude session above it (a session file's own process, by pid and procStart) is a lane's by
-    its session file's cwd or its real one (a lane session that cd'd to main): lane_place. Only
-    trusted facts decide that: the lanes root from the config, which sandboxed Bash can't write,
-    and git's own worktree links. Never lane.json's paths, which it can: a planted "/home" made
-    every `done` refuse the lead, and a lane could drop its own path. Sandboxed, the processes
-    above it can't be seen, so that refuses too."""
+    Claude session above it (a session file's own process, by pid and procStart) is a lane's:
+    lane_above. Sandboxed, the processes above it can't be seen, so that refuses too."""
     lead = (f"only the lead (the main checkout) closes lanes: run `lane done {lane_id}` from "
             f"{repo.main}")
     if not repo.is_main:
@@ -2234,11 +2245,10 @@ def lead_only(repo: Repo, lane_id: str, path: str) -> None:
     if not (isinstance(root, str) and os.path.isabs(root)):
         raise LaneError(f"the lanes config {repo.config_path} has no absolute root: rerun "
                         "`lane init --root DIR`")
-    root = os.path.realpath(root)
-    for s, p in sessions_above():  # every one, not only the nearest: a lane's claude may run one
-        if where := lane_place(repo, root, s.get("cwd")) or lane_place(repo, root, p.cwd):
-            raise LaneError(shown(f"refusing: {lead}. This `lane done` runs under session "
-                                  f"{sid_of(s)} ({p.pid} {p.comm}), {where}"))
+    if hit := lane_above(repo, os.path.realpath(root), sessions_above()):
+        s, p, where = hit
+        raise LaneError(shown(f"refusing: {lead}. This `lane done` runs under session "
+                              f"{sid_of(s)} ({p.pid} {p.comm}), {where}"))
 
 
 def sid_of(session: dict) -> str:
@@ -2287,8 +2297,9 @@ def lead_claim(repo: Repo) -> tuple[dict, dict]:
     be interactive, have a session id and a messaging socket (or no lane could reach it), and
     have launched in the main checkout, outside lane_place: inside main that means outside any
     linked worktree, so a session in an agent worktree never leads, nor does a lane's session
-    cd'd to main. Its session file's cwd decides, as it does for `addr`; a Bash cd doesn't move
-    that."""
+    cd'd to main. Its session file's cwd decides that, as it does for `addr`; a Bash cd doesn't
+    move it. Then no session above may be a lane's, by lead_only's rule (lane_above): else a
+    lane's session could run an interactive claude in main and make it the lead."""
     if not lanelib.pids_visible():
         raise LaneError(SANDBOXED_LEAD)
     above = sessions_above()
@@ -2315,18 +2326,29 @@ def lead_claim(repo: Repo) -> tuple[dict, dict]:
     if where := lanelib.linked_worktree(repo, cwd):
         raise LaneError(shown(f"session {sid} is a lane's or an agent's, in linked worktree "
                               f"{where}: only a session in the main checkout leads"))
+    # With no absolute root in the config (lead_only refuses there), linked worktrees alone.
+    root = repo.config().get("root")
+    root = os.path.realpath(root) if isinstance(root, str) and os.path.isabs(root) else None
+    if hit := lane_above(repo, root, above):
+        lane_s, lane_p, where = hit
+        raise LaneError(shown(f"this runs under session {sid_of(lane_s)} ({lane_p.pid} "
+                              f"{lane_p.comm}), {where}: a lane's session never leads, nor any "
+                              "session it runs"))
     return s, lanelib.lead_record(s, lanelib.proc_tmux(p.pid))
 
 
 def take_lead() -> None:
     """After a lead act (LEAD_ACTS) succeeds: record its session as the lead, or do nothing.
-    The act is done either way, so nothing here fails it: from a lane, sandboxed, or with no
-    session above, the lead stays where it was."""
+    The act is done either way, so nothing here fails it: from a lane, sandboxed, with no
+    session above, or on any error, the lead stays where it was."""
     try:
         repo = lanelib.resolve(os.getcwd())
         if repo is not None and repo.has_lanes:
             lanelib.write_lead(repo, lead_claim(repo)[1])
-    except (LaneError, OSError):
+    # Every Exception, not only LaneError and OSError: the act already succeeded and printed,
+    # and the record is a best effort, so a crash here (a RecursionError from a session file
+    # nested past json's limit, say) must not turn its exit code into a traceback's.
+    except Exception:
         pass
 
 

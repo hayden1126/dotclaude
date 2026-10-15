@@ -3,17 +3,44 @@ for `lead`, where the lead record picks one among several. A live session is a s
 whose pid runs with the procStart the file records (a child `sleep` here, started in the
 session's launch dir) and whose messagingSocketPath is a socket on disk (_fixture.LiveSessions).
 Where a session is comes from its file's cwd, as `lane ls` and `open` read it."""
+import contextlib
 import json
+import json.decoder
+import json.scanner
 import os
 import shutil
 import stat
 import subprocess
+import sys
 import time
 import unittest
 from unittest import mock
 
-from _fixture import LiveSessions
+from _fixture import LANE, LiveSessions
 import lanelib  # noqa: E402  (on sys.path once _fixture is imported)
+
+# Lead records that fit in LEAD_MAX bytes and nest past json's reach in pure Python (pure_json).
+DEEP_RECORDS = {"nested lists": "[" * 2048 + "]" * 2048,
+                "a nested object": '{"pid": ' + "[" * 2040 + "]" * 2040 + "}"}
+# `lane` (argv[1], its arguments after) with json's pure-Python scanner, as pure_json sets.
+PURE_JSON_LANE = """
+import json, json.decoder, json.scanner, runpy, sys
+json.scanner.make_scanner = json.scanner.py_make_scanner
+json._default_decoder = json.decoder.JSONDecoder()
+sys.argv = sys.argv[1:]
+runpy.run_path(sys.argv[0], run_name="__main__")
+"""
+
+
+@contextlib.contextmanager
+def pure_json():
+    """json.loads through json's pure-Python scanner, CPython's own fallback when its C one is
+    missing. It recurses in Python, so it raises RecursionError near the recursion limit (1000
+    levels). This interpreter's C scanner reaches about 10000 levels, more than LEAD_MAX bytes
+    can nest, so without this no lead record raises here; older or other builds stop sooner."""
+    with mock.patch.object(json.scanner, "make_scanner", json.scanner.py_make_scanner), \
+            mock.patch.object(json, "_default_decoder", json.decoder.JSONDecoder()):
+        yield
 
 
 class Addr(LiveSessions):
@@ -246,7 +273,7 @@ class LeadPick(LiveSessions):
                  "tmux too short": dict(good, tmux=["/s", 1, 1]),
                  "tmux pane bad": dict(good, tmux=["/s", 1, 1, "7"]),
                  "tmux socket relative": dict(good, tmux=["s", 1, 1, "%7"]),
-                 "too long": dict(good, pad="x" * lanelib.LEAD_MAX)}
+                 "too long": dict(good, pad="x" * lanelib.LEAD_MAX), **DEEP_RECORDS}
         for why, rec in cases.items():
             with self.subTest(why):
                 self.write(self.lead_path, rec if isinstance(rec, str) else json.dumps(rec))
@@ -254,6 +281,32 @@ class LeadPick(LiveSessions):
                 self.refused("No lead picked")
         self.write(self.lead_path, json.dumps(good))
         self.assertEqual(lanelib.read_lead(lanelib.Repo(self.main, self.common)), good)
+
+    def test_a_record_nested_past_json_reach_picks_none(self):
+        # json raises RecursionError, not ValueError, on deep nesting: `addr lead` and `ls`
+        # printed a traceback. pure_json makes that reachable here (its docstring says why).
+        self.pair()
+        for why, rec in DEEP_RECORDS.items():
+            with self.subTest(why):
+                self.assertLessEqual(len(rec), lanelib.LEAD_MAX)
+                self.write(self.lead_path, rec)
+                with pure_json():
+                    self.assertRaises(RecursionError, json.loads, rec)
+                    self.assertIsNone(lanelib.read_lead(lanelib.Repo(self.main, self.common)))
+                p = self.run_pure_json("addr", "lead")
+                self.assertEqual((p.returncode, p.stdout), (1, ""), p.stderr)
+                self.assertIn("2 live sessions in the main checkout", p.stderr)
+                self.assertIn("No lead picked", p.stderr)
+                self.assertNotIn("Traceback", p.stderr)
+                p = self.run_pure_json("ls")
+                self.assertEqual(p.returncode, 0, p.stderr)
+                self.assertIn("main checkout: 2 live sessions", p.stdout)
+                self.assertIn("No lead picked", p.stdout)
+
+    def run_pure_json(self, *args):
+        """run_lane with json's pure-Python scanner (pure_json)."""
+        return subprocess.run([sys.executable, "-c", PURE_JSON_LANE, LANE, *args], cwd=self.main,
+                              env=self.env, capture_output=True, text=True, timeout=60)
 
     def test_proc_tmux_reads_the_process_own_environment(self):
         sock, server, start, _ = self.tmux_of("%3")
