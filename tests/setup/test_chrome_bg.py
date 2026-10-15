@@ -217,6 +217,108 @@ class Flags(unittest.TestCase):
             cb.rect({"nope": 1})
 
 
+TERM = "hwnd=100 pid=10 cls=TestTerminal rect=0,0,1920,1040 onscreen=1 vis=1 iconic=0 cloaked=0"
+WIN = "hwnd=200 pid=4242 cls=Chrome_WidgetWin_1 rect=10,10,1290,910 onscreen=1"
+CLEAN = [
+    f"t=5 FOREGROUND tagged=0 idle=900 via=start {TERM}",
+    f"t=6 TOP tagged=0 via=start {TERM}",
+    "t=7 MONITOR \\\\.\\DISPLAY1 rect=0,0,1920,1080 work=0,0,1920,1032 primary=1 dpi=96 hz=120",
+    "t=20 MARK begin page0",
+    f"t=30 SINK-AT-CREATE ok=True ev=8000 style=14cf0000 {WIN} vis=0 iconic=0 cloaked=0 title=''",
+    f"t=40 PLACE [True {WIN} vis=1 iconic=0 cloaked=0 title='about:blank - Google Chrome']",
+    "t=41 RANKS via=ev-LOCATION [200 rank=3/4 aboveOthers=0]",
+    "t=50 MARK end page0",
+    "t=60 MARK begin newPage-default",
+    "t=70 RANKS via=ev-REORDER [200 rank=3/4 aboveOthers=0] [300 rank=4/4 aboveOthers=0]",
+    "t=80 MARK end newPage-default",
+    "t=90 MARK begin stop",
+    "t=95 PROCS count=0",
+    "t=99 EOFKILL left=0",
+    "t=100 EOFCLEAN dirExists=False",
+    "t=101 EXIT",
+]
+
+
+def with_lines(after, *lines):
+    """CLEAN with lines inserted after the line starting with `after`."""
+    i = next(i for i, ln in enumerate(CLEAN) if ln.startswith(after)) + 1
+    return CLEAN[:i] + list(lines) + CLEAN[i:]
+
+
+class Judge(unittest.TestCase):
+    """check's verdict from synthetic supervisor logs (the probe's line format)."""
+
+    def run_judge(self, lines, raf="visible 118", hz=120, leftover=None):
+        return cb.judge(lines, raf=raf, hz=hz, leftover=leftover)
+
+    def test_pass(self):
+        verdict, rows, fails, warns = self.run_judge(CLEAN)
+        self.assertEqual((verdict, fails, warns), ("PASS", [], []))
+        self.assertEqual([n for n, _ in rows], ["page0", "newPage-default", "stop"])
+        self.assertEqual(dict(rows)["page0"]["sunk"], 1)
+
+    def test_fail_on_a_tagged_foreground(self):
+        lines = with_lines("t=70 ", f"t=72 FOREGROUND tagged=1 idle=8000 via=ev-foreground {WIN} vis=1 iconic=0 cloaked=0",
+                           f"t=78 FOREGROUND tagged=0 idle=8006 via=ev-foreground {TERM}")
+        verdict, rows, fails, _ = self.run_judge(lines)
+        self.assertEqual(verdict, "FAIL")
+        self.assertEqual(dict(rows)["newPage-default"]["fg"], 6)
+        self.assertIn("took the foreground during newPage-default", fails[0])
+
+    def test_fail_on_top_and_above_time(self):
+        lines = with_lines("t=70 ", f"t=71 TOP tagged=1 via=ev-REORDER {WIN} vis=1 iconic=0 cloaked=0",
+                           "t=71 RANKS via=ev-REORDER [200 rank=0/4 aboveOthers=1]",
+                           f"t=75 TOP tagged=0 via=ev-REORDER {TERM}",
+                           "t=76 RANKS via=ev-REORDER [200 rank=3/4 aboveOthers=0]")
+        verdict, rows, fails, _ = self.run_judge(lines)
+        self.assertEqual(verdict, "FAIL")
+        self.assertEqual((dict(rows)["newPage-default"]["top"], dict(rows)["newPage-default"]["above"]), (4, 5))
+        self.assertEqual(len(fails), 2)
+
+    def test_open_interval_counts_to_the_end(self):
+        lines = with_lines("t=70 ", f"t=71 TOP tagged=1 via=ev-REORDER {WIN} vis=1 iconic=0 cloaked=0")
+        verdict, rows, _, _ = self.run_judge(lines)
+        self.assertEqual((verdict, dict(rows)["newPage-default"]["top"]), ("FAIL", 101 - 71))
+
+    def test_inconclusive_when_the_first_foreground_is_invisible(self):
+        lines = [CLEAN[0].replace("vis=1", "vis=0").replace("cls=TestTerminal", "cls=XamlExplorerHostIslandWindow"), *CLEAN[1:]]
+        self.assertEqual(self.run_judge(lines)[0], "INCONCLUSIVE")
+        cloaked = [CLEAN[0].replace("cloaked=0", "cloaked=2"), *CLEAN[1:]]
+        self.assertEqual(self.run_judge(cloaked)[0], "INCONCLUSIVE")
+        self.assertFalse(cb.fg_visible({"desc": "x", "visible": False, "idleMs": 1}))
+        self.assertTrue(cb.fg_visible({"desc": "x", "visible": True, "idleMs": 1}))
+
+    def test_warn_on_an_untagged_foreground_after_stop(self):
+        lines = with_lines("t=95 ", "t=97 FOREGROUND tagged=0 idle=74531 via=ev-foreground hwnd=300 pid=47 "
+                           "cls=#32770 rect=0,0,550,45 onscreen=1 vis=0 iconic=0 cloaked=0")
+        verdict, _, fails, warns = self.run_judge(lines)
+        self.assertEqual((verdict, fails), ("PASS", []))
+        self.assertEqual(len(warns), 1)
+        self.assertTrue(warns[0].startswith("WARN: after stop"))
+        self.assertIn("cls=#32770", warns[0])
+        # A log with no start foreground: the hidden dialog after stop is still only a WARN.
+        verdict, _, fails, warns = self.run_judge(lines[1:])
+        self.assertEqual((verdict, fails), ("PASS", []))
+        self.assertEqual(len(warns), 2)
+        self.assertIn("no FOREGROUND line before the first action", warns[1])
+
+    def test_fail_on_page_state_and_leftovers(self):
+        self.assertEqual(self.run_judge(CLEAN, raf="hidden 118")[0], "FAIL")
+        self.assertEqual(self.run_judge(CLEAN, raf="visible 100")[0], "FAIL")  # under 108 = 90% of 120
+        self.assertEqual(self.run_judge(CLEAN, raf="visible 108")[0], "PASS")
+        self.assertEqual(self.run_judge(CLEAN, raf=None)[0], "FAIL")
+        self.assertEqual(self.run_judge(CLEAN, leftover="2 chrome.exe")[0], "FAIL")
+
+    def test_report_table(self):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            cb.print_report(*self.run_judge(CLEAN), "visible 118")
+        lines = out.getvalue().splitlines()
+        self.assertEqual(lines[0].split(), ["action", "onTop", "aboveOthers", "fg", "sunk", "keep"])
+        self.assertEqual(lines[1].split(), ["page0", "0ms", "0ms", "0ms", "1", "0"])
+        self.assertEqual(lines[-1], "PASS")
+
+
 class Trust(unittest.TestCase):
     """What runs sandbox-off can't be moved by PATH or the environment."""
 
@@ -569,8 +671,8 @@ def wslpath(flag, p):
 
 
 mod.wslpath = wslpath
-if os.environ.get("DRIVER_AFTER_STOP"):
-    mod.AFTER_STOP_S = float(os.environ["DRIVER_AFTER_STOP"])
+if os.environ.get("DRIVER_FAST"):
+    mod.AFTER_STOP_S = mod.SETTLE_S = mod.RESINK_S = 0.05
 sys.exit(mod.main(sys.argv[3:]))
 '''
 
@@ -860,6 +962,41 @@ class Live(unittest.TestCase):
         orphan = [ln for ln in lines if ln.startswith("ffff0001")][0]
         self.assertIn("no record", orphan)
         self.assertEqual(self.cli("stop", info["id"]).returncode, 0)
+
+    # ---- check against the fake ----
+
+    def check(self, **env):
+        return self.cli("check", env={"DRIVER_FAST": "1", **env}, timeout=90)
+
+    def test_check_passes_a_clean_run(self):
+        r = self.check()
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(r.stdout.splitlines()[-1], "PASS")
+        for action in ("page0", "newPage-default", "bringToFront", "setWindowBounds-maximized",
+                       "setWindowBounds-normal", "window.open", "raf-covered", "stop"):
+            self.assertRegex(r.stdout, rf"(?m)^{re.escape(action)}\s+0ms\s+0ms\s+0ms")
+        rid = self.only_run_id()
+        calls = [c["method"] for c in self.cdp_calls(rid)]
+        self.assertEqual(calls[-1], "Browser.close")
+        evals = [c for c in self.cdp_calls(rid) if c["method"] == "Runtime.evaluate"]
+        self.assertTrue(evals[0]["params"]["userGesture"], "window.open carries a user gesture")
+        self.assertEqual({c.get("sessionId") for c in evals}, {"S1"})
+        self.assertIn({"windowState": "maximized"},
+                      [c["params"].get("bounds") for c in self.cdp_calls(rid)])
+        self.assertTrue(self.has("eof-" + rid))
+        self.assertEqual(self.records(), [])
+
+    def test_check_inconclusive_without_a_visible_foreground(self):
+        r = self.check(FAKE_FG_HIDDEN="1")
+        self.assertEqual(r.returncode, 3, r.stdout + r.stderr)
+        self.assertIn("INCONCLUSIVE", r.stdout)
+        self.assertFalse([n for n in os.listdir(self.root) if n.startswith("launch-")],
+                         "Chrome never launched")
+
+    def test_check_fails_a_hidden_page(self):
+        r = self.check(FAKE_RAF="hidden 3")
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("FAIL: page0 read 'hidden'", r.stdout)
 
     def test_stop_refuses_a_bare_port(self):
         for target, why in (("9222", "not '9222'"), (":9222", "bare"),

@@ -363,6 +363,7 @@ class WebSocket:
         self.buf += chunk
 
     def send_frame(self, opcode, payload, fin=True):
+        self.sock.settimeout(10)  # not whatever the last read left
         self.sock.sendall(encode_frame(opcode, payload, fin))
 
     def send(self, text):
@@ -597,8 +598,9 @@ class Supervisor:
         os.makedirs(state_dir(), mode=0o700, exist_ok=True)
         self.err_path = os.path.join(state_dir(), rid + ".err")
         self.buf = b""
+        argv = ps_argv("-Id", rid, "-Keep")
         with open(self.err_path, "ab") as err:
-            self.p = subprocess.Popen(ps_argv("-Id", rid, "-Keep"), stdin=subprocess.PIPE,
+            self.p = subprocess.Popen(argv, stdin=subprocess.PIPE,
                                       stdout=subprocess.PIPE, stderr=err)
 
     def err_tail(self):
@@ -713,6 +715,19 @@ def wait_port(path, sup, timeout=PORT_WAIT_S):
     raise Fail(f"chrome-bg: Chrome wrote no DevToolsActivePort in {timeout}s")
 
 
+def place_args(hello, size):
+    """The supervisor's `place`: the primary monitor's work area at (+10, +10), sized in physical
+    pixels by that monitor's DPI."""
+    w, h = size
+    mon = primary_monitor(hello)
+    work = rect(pick(mon, "work", "workArea", "rect", default=[0, 0, w, h]))
+    try:
+        scale = float(pick(mon, "dpi", default=96) or 96) / 96
+    except (TypeError, ValueError):
+        scale = 1.0
+    return {"x": work[0] + 10, "y": work[1] + 10, "w": round(w * scale), "h": round(h * scale)}
+
+
 def start_run(rid, url, size, kind, ttl=None, cwd=None, marks=False, on_hello=None,
               keep_cdp=False):
     """The start sequence (PLAN.md "Start sequence"). On any failure, or a signal, it ends the
@@ -761,15 +776,8 @@ def start_run(rid, url, size, kind, ttl=None, cwd=None, marks=False, on_hello=No
             rec["clamped"] = {"asked": x, "got": left}
             print(f"chrome-bg: Chrome put the first window at left={left}, not {x}: clamped onto "
                   "a monitor (the supervisor sinks it at create)", file=sys.stderr)
-        mon = primary_monitor(hello)
-        work = rect(pick(mon, "work", "workArea", "rect", default=[0, 0, w, h]))
-        try:
-            scale = float(pick(mon, "dpi", default=96) or 96) / 96
-        except (TypeError, ValueError):
-            scale = 1.0
-        run.sup.call("place", x=work[0] + 10, y=work[1] + 10, w=round(w * scale),
-                     h=round(h * scale))
-        got = cdp.send("Browser.getWindowForTarget", {"targetId": run.target}).get("bounds") or {}
+        run.sup.call("place", **place_args(hello, size))
+        got =cdp.send("Browser.getWindowForTarget", {"targetId": run.target}).get("bounds") or {}
         if (got.get("width"), got.get("height")) != (w, h):
             # A DPI change on the way resized it. Size only: a window state could raise it.
             cdp.send("Browser.setWindowBounds",
@@ -897,10 +905,7 @@ def cmd_run(args):
     old = {s: signal.signal(s, on_signal) for s in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)}
     run = None
     try:
-        try:
-            run = start_run(rid, args.url, args.size, "run")
-        except Stopped as e:
-            return 128 + e.signum
+        run = start_run(rid, args.url, args.size, "run")
         try:
             state["child"] = subprocess.Popen(cmd, env=dict(os.environ, **{args.env: run.url}))
         except OSError as e:
@@ -908,6 +913,8 @@ def cmd_run(args):
             return 127
         rc = state["child"].wait()
         return 128 - rc if rc < 0 else rc
+    except Stopped as e:
+        return 128 + e.signum
     finally:
         state["stopping"] = True
         if run is not None:
@@ -1184,6 +1191,259 @@ def cmd_ls(args):
     return 0
 
 
+# ---- check ----------------------------------------------------------------------------------
+
+AFTER_STOP_S = 5  # the supervisor keeps logging the foreground this long after Chrome exits
+SETTLE_S = 1.5    # after each action, for its window events to land in the log
+RESINK_S = 0.5    # after each re-place
+RAF_JS = ("new Promise((r) => { let n = 0; const t = performance.now();"
+          " const f = () => { n++; if (performance.now() - t < 1000) requestAnimationFrame(f);"
+          " else r(document.visibilityState + ' ' + n); };"
+          " requestAnimationFrame(f);"
+          " setTimeout(() => r(document.visibilityState + ' ' + n + ' timeout'), 3000); })")
+
+
+class Inconclusive(Fail):
+    pass
+
+
+def truthy(v):
+    return v in (True, 1, "1", "true", "True")
+
+
+def fg_visible(fg):
+    """hello's foreground: a visible window, not minimized or cloaked."""
+    return (isinstance(fg, dict) and truthy(pick(fg, "visible", "vis"))
+            and not truthy(pick(fg, "iconic")) and not truthy(pick(fg, "cloaked")))
+
+
+def fg_line_visible(text):
+    """A FOREGROUND log line names a visible window, not minimized or cloaked."""
+    def num(key):
+        m = re.search(rf"\b{key}=(-?\d+)", text)
+        return int(m.group(1)) if m else None
+    return num("vis") == 1 and not num("iconic") and not num("cloaked")
+
+
+def judge(lines, raf=None, hz=None, leftover=None):
+    """classify.py's per-action timings from a supervisor log, then check's verdict.
+
+    raf is page0's "<visibilityState> <frames in 1 s>" read while covered, hz the primary
+    monitor's refresh rate, leftover what -Scan still found of the run after stop.
+    Returns (verdict, [(action, row)], fails, warnings), verdict PASS, FAIL or INCONCLUSIVE."""
+    rows, order = {}, []
+    action, after_stop, first_fg, last_t = "launch", False, None, 0
+    since = {"top": None, "above": None, "fg": None}
+    fails, warns = [], []
+
+    def row(name):
+        if name not in rows:
+            rows[name] = {"top": 0, "above": 0, "fg": 0, "sunk": 0, "keep": 0, "fight": 0}
+            order.append(name)
+        return rows[name]
+
+    def close(t, kind):
+        if since[kind] is not None:
+            row(since[kind][1])[kind] += t - since[kind][0]
+            since[kind] = None
+
+    for line in lines:
+        m = re.match(r"t=(\d+) (.*)", line.rstrip("\r\n"))
+        if not m:
+            continue
+        t, rest = int(m.group(1)), m.group(2)
+        last_t = max(last_t, t)
+        b = re.match(r"MARK begin (?:create )?(\S+)", rest)
+        if b:
+            action = b.group(1)
+            row(action)
+            after_stop = after_stop or action == "stop"
+        elif rest.startswith("TOP "):
+            close(t, "top")
+            if "tagged=1" in rest:
+                since["top"] = (t, action)
+        elif rest.startswith("RANKS "):
+            if any(int(x) for x in re.findall(r"aboveOthers=(\d+)", rest)):
+                if since["above"] is None:
+                    since["above"] = (t, action)
+            else:
+                close(t, "above")
+        elif rest.startswith("FOREGROUND "):
+            close(t, "fg")
+            if first_fg is None and action == "launch":
+                first_fg = rest  # the foreground before any action, as the run began
+            if "tagged=1" in rest:
+                since["fg"] = (t, action)
+                idle = re.search(r"idle=(\d+)", rest)
+                fails.append(f"a run window took the foreground during {action} at t={t}"
+                             + (f" (idle {idle.group(1)} ms)" if idle else ""))
+            elif after_stop:
+                desc = " ".join(re.findall(r"\b(?:pid|cls|vis|cloaked)=\S+", rest))
+                warns.append(f"WARN: after stop the foreground moved to an untagged window at "
+                             f"t={t} ({desc})")
+        elif rest.startswith("SINK-AT-CREATE") and "Chrome_WidgetWin_1" in rest:
+            row(action)["sunk"] += 1
+        elif rest.startswith("KEEP-SINK"):
+            row(action)["keep"] += 1
+        elif rest.startswith("KEEP-FIGHT"):
+            row(action)["fight"] += 1
+    for kind in since:
+        close(last_t, kind)
+    for name in order:
+        r = rows[name]
+        if r["top"]:
+            fails.append(f"{name}: a run window was on top of the screen for {r['top']} ms")
+        if r["above"]:
+            fails.append(f"{name}: a run window sat above another window for {r['above']} ms")
+    parts = str(raf).split() if raf is not None else []
+    if not parts:
+        fails.append("page0's visibility and frame rate were not read")
+    else:
+        if parts[0] != "visible":
+            fails.append(f"page0 read {parts[0]!r} while covered, not 'visible'")
+        frames = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else None
+        if frames is None:
+            fails.append(f"page0's frame count is unreadable: {raf!r}")
+        elif hz and frames < 0.9 * hz:
+            fails.append(f"page0 drew {frames} frames in 1 s while covered, more than 10% under "
+                         f"the primary monitor's {hz:g} Hz")
+        elif not hz:
+            warns.append("WARN: hello gave no refresh rate, so the frame rate went unjudged")
+    if leftover:
+        fails.append(f"left after stop: {leftover}")
+    if first_fg is None:
+        warns.append("WARN: the log has no FOREGROUND line before the first action; only "
+                     "hello vouched for the start")
+    if leftover:
+        verdict = "FAIL"
+    elif first_fg is not None and "tagged=1" not in first_fg and not fg_line_visible(first_fg):
+        verdict = "INCONCLUSIVE"
+        fails.insert(0, "the first foreground was not a visible window, so a steal could not "
+                        "be told from Windows handing over a dead foreground")
+    else:
+        verdict = "FAIL" if fails else "PASS"
+    return verdict, [(n, rows[n]) for n in order], fails, warns
+
+
+def print_report(verdict, rows, fails, warns, raf):
+    print(f"{'action':28} {'onTop':>8} {'aboveOthers':>12} {'fg':>8} {'sunk':>5} {'keep':>5}")
+    for name, r in rows:
+        keep = str(r["keep"]) + (f" FIGHT={r['fight']}" if r["fight"] else "")
+        print(f"{name:28} {r['top']:>6}ms {r['above']:>10}ms {r['fg']:>6}ms {r['sunk']:>5} "
+              f"{keep:>5}")
+    if raf is not None:
+        print(f"page0 while covered: {raf}")
+    for w in warns:
+        print(w)
+    for f in fails:
+        print(f"{'NOTE' if verdict == 'INCONCLUSIVE' else 'FAIL'}: {f}")
+    print(verdict)
+
+
+def proc_list(reply):
+    procs = pick(reply, "procs", "pids", "processes")
+    if isinstance(procs, list):
+        return procs
+    n = pick(reply, "count")
+    return [None] * n if isinstance(n, int) else []
+
+
+def cmd_check(args):
+    """The live self-test (probe.mjs plus classify.py): every action a fixture may take, each
+    between marks in the supervisor's log, then the log judged. It opens a Chrome window behind
+    yours for about half a minute."""
+    gc_first()
+    rid = new_id()
+
+    def guard(hello):
+        fg = pick(hello, "fg", "foreground")
+        if not fg_visible(fg):
+            raise Inconclusive("the foreground is not a visible window "
+                               f"({pick(fg, 'desc', default=fg)}), so a steal could not be "
+                               "told apart; put one of your windows in front and rerun")
+
+    try:
+        run = start_run(rid, "about:blank", SIZE, "check", marks=True, on_hello=guard,
+                        keep_cdp=True)
+    except Inconclusive as e:
+        print(f"INCONCLUSIVE: {e}")
+        return 3
+    sup, cdp, raf = run.sup, run.cdp, None
+    try:
+        hz = float(pick(primary_monitor(run.hello), "hz", default=0) or 0) or None
+    except (TypeError, ValueError):
+        hz = None
+    try:
+        session = cdp.send("Target.attachToTarget",
+                           {"targetId": run.target, "flatten": True})["sessionId"]
+
+        def evaluate(expr, **extra):
+            res = cdp.send("Runtime.evaluate", {"expression": expr, "returnByValue": True, **extra},
+                           session=session, timeout=10)
+            return (res.get("result") or {}).get("value")
+
+        def read_raf():
+            nonlocal raf
+            raf = evaluate(RAF_JS, awaitPromise=True)
+            return raf
+
+        def bounds(state):
+            return lambda: cdp.send("Browser.setWindowBounds", {"windowId": run.window,
+                                                                "bounds": {"windowState": state}})
+
+        actions = [
+            ("newPage-default", lambda: cdp.send("Target.createTarget", {"url": "about:blank"})),
+            ("bringToFront", lambda: cdp.send("Page.bringToFront", session=session)),
+            ("setWindowBounds-maximized", bounds("maximized")),
+            ("setWindowBounds-normal", bounds("normal")),
+            ("window.open", lambda: evaluate(
+                "String(!!window.open('about:blank', '_blank', 'width=500,height=400'))",
+                userGesture=True)),
+            ("raf-covered", read_raf),
+        ]
+        for name, act in actions:
+            sup.call("mark", text=f"begin {name}")
+            try:
+                result = act()
+            except (Fail, OSError) as e:
+                result = f"ERROR {e}"
+            print(f"chrome-bg check: {name}: {json.dumps(result)[:120]}", file=sys.stderr)
+            time.sleep(SETTLE_S)
+            sup.call("mark", text=f"end {name}")
+            sup.call("place", **place_args(run.hello, SIZE))  # each action starts from the bottom
+            time.sleep(RESINK_S)
+        sup.call("mark", text="begin stop")
+        with contextlib.suppress(Fail, OSError):
+            cdp.send("Browser.close", timeout=10)
+        cdp.close()
+        run.cdp = None
+        deadline = time.monotonic() + 15
+        while proc_list(sup.call("procs")) and time.monotonic() < deadline:
+            time.sleep(0.5)
+        time.sleep(AFTER_STOP_S)  # W saw a hidden #32770 dialog take the foreground 1.9 s after
+    finally:
+        finish(run)
+    try:
+        left = scan_runs()[0].get(rid)
+    except Fail as e:
+        left = {"error": str(e)}
+    leftover = None
+    if left and "error" in left:
+        leftover = f"unknown, -Scan failed: {left['error']}"
+    elif left and (left["pids"] or left["age"] is not None):
+        leftover = (f"{len(left['pids'])} chrome.exe, run dir "
+                    f"{'still there' if left['age'] is not None else 'gone'}")
+    try:
+        with open(wslpath("-u", run.rec["log"]), encoding="utf-8", errors="replace") as f:
+            lines = f.read().splitlines()
+    except (OSError, Fail) as e:
+        print(f"chrome-bg: can't read the supervisor's log {run.rec['log']}: {e}", file=sys.stderr)
+        return 1
+    verdict, rows, fails, warns = judge(lines, raf=raf, hz=hz, leftover=leftover)
+    print_report(verdict, rows, fails, warns, raf)
+    return {"PASS": 0, "FAIL": 1, "INCONCLUSIVE": 3}[verdict]
+
+
 def cmd_stop(args):
     if args.gc == bool(args.target):
         raise Fail("chrome-bg: stop takes a run id or browserURL, or --gc")
@@ -1244,6 +1504,11 @@ def main(argv=None):
     except Fail as e:
         print(e, file=sys.stderr)
         return 1
+    except OSError as e:
+        print(f"chrome-bg: {e}", file=sys.stderr)
+        return 1
+    except KeyboardInterrupt:
+        return 130
 
 
 if __name__ == "__main__":
