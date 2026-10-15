@@ -416,45 +416,52 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
   `opened` in `lane.json`. The window is derived from the live session's `tmux` field on each
   `lane ls`, never stored (invariant 4): a stored window id drifts the moment the window closes
   or tmux renumbers it.
-- **Model and effort** (lane lane-model, 2026-10-15). `lane init --model M --effort E` stores
-  repo defaults in the lanes config (`model`, `effort`; an empty value removes one), and
-  `lane open <id> --model M --effort E` overrides them for one launch (an empty flag skips the
-  default). Both go to claude ahead of `--permission-mode plan`. A model must be an alias
-  (`default`, `opus`, `sonnet`, `haiku`, `fable`, `opusplan`) or a `claude-` full name, and an
-  effort one of `low`, `medium`, `high`, `xhigh`, `max`. `opus`, `sonnet`, `haiku`, `fable` and
-  the full names also take `[1m]` (quote it: zsh globs the brackets); `default[1m]` fails at
-  its first request and `opusplan` has no 1M form (probed 2026-10-15). The check is strict
-  because a bad name fails where nobody looks: claude stays up in the detached window and shows
-  "There's an issue with the selected model" at its first request (spike S1). A typo inside a full name still gets through. `open`
-  refuses a pick for a lane with a live session, since `/model` or `/effort` in its window is
-  what changes a live one.
+- **Model and effort** (lane lane-model, 2026-10-15). `lane init --model M --effort E` stores repo
+  defaults in the lanes config (`model`, `effort`; an empty value removes one), and `lane open <id>
+  --model M --effort E` overrides them for one launch (an empty flag skips the default). Both go to
+  claude ahead of `--permission-mode plan`. A model must be an alias (`default`, `opus`, `sonnet`,
+  `haiku`, `fable`, `opusplan`) or a `claude-` full name, and an effort one of `low`, `medium`,
+  `high`, `xhigh`, `max`. `opus`, `sonnet`, `fable` and the full names also take `[1m]` (quote it:
+  zsh globs the brackets); `default[1m]` fails at its first request, and `/model` says `haiku` and
+  `opusplan` have no 1M form (probed 2026-10-15). The check is strict because a bad name fails where
+  nobody looks: claude stays up in the detached window and shows "There's an issue with the selected
+  model" at its first request (spike S1). A typo inside a full name still gets through. `open`
+  refuses a pick for a lane with a live session, since `/model` or `/effort` in its window is what
+  changes a live one.
 
-  A plain pass keeps the pick (pass-respawn's `carried_pick`). The respawn carries each flag the
-  old claude launched with, read from its `/proc` command line. After a `/model` (or, for the
-  effort, an `/effort`) in the transcript, it carries instead what the last main-chain assistant
-  entry after that command ran with (`message.model`, `effort`). A `/model <alias>` carries the
-  alias itself once an entry ran after it, since the entry's resolved id (`claude-sonnet-5-5`)
-  loses what `opusplan` or a 1M form means. A `/model` picked from its menu has no argument, so
-  it carries the id. Only an accepted `/model` reaches the transcript (a refused one leaves no
-  entry), and only Claude Code's own command entry counts, never a prompt or a tool result that
-  quotes its tag. When no usable entry follows (a `<synthetic>` one, a model that takes no
-  effort), the flag drops: both commands save their pick as the default for new sessions,
-  which then applies. The transcript is read just before the respawn, as the resume mode is, so
-  a `/model` during the passing turn counts; a launch value that can't be passed on refuses at
-  the call. A session launched without the flags respawns as before. Hayden picked this over a plain copy of the flags (which undoes
-  a mid-session `/model` at the next pass) and a stored per-lane pick (the same flaw, plus new
-  state). How each case comes out:
+  A plain pass keeps the pick (pass-respawn's `carried_pick`), for each flag the old claude launched
+  with, read from its `/proc` command line:
+  - After a `/model` (for the effort, a `/model` or `/effort`) in the transcript, it carries what
+    the last main-chain assistant entry since ran with (`message.model`, `effort`). That id loses
+    what an alias means (`opusplan`'s switch per mode, a 1M form), so the model is instead the alias
+    the `/model` named, or for a pick from its menu the alias it saved as the user's default,
+    whenever that alias could have run as the id: another session's later pick can't fit, so it
+    never leaks in. When no usable entry follows (a `<synthetic>` one, a model that takes no effort,
+    an id that isn't `claude-`), the flag drops, and the default the command saved applies.
+  - With no such command, it carries the launch value, unless the last entry ran with something that
+    value can't be (an alias of another family, another full name, another effort). That is a change
+    the transcript can't show, such as one before a `/clear`, which starts a new transcript in the
+    same process; then it carries what ran. A change there that stays in the launch alias's
+    family (`opus` to `claude-opus-4-8`) can't be told from none, so it reverts.
+
+  Only an accepted `/model` reaches the transcript (a refused one leaves no entry), and only Claude
+  Code's own command entry counts, never a prompt or a tool result that quotes its tag. The
+  transcript is read just before the respawn, as the resume mode is, so a `/model` during the
+  passing turn counts; a launch value that can't be passed on refuses at the call. A session
+  launched without the flags respawns as before. Hayden picked this over a plain copy of the flags
+  (which undoes a mid-session `/model` at the next pass) and a stored per-lane pick (the same flaw,
+  plus new state). How each case comes out:
   - a plain pass or an auto-pass: the pick holds; a compact pass keeps the same process;
-  - a `/model` or `/effort` mid-session: the new pick holds at the next pass;
+  - a `/model` or `/effort` mid-session: the new pick holds at the next pass, and across a
+    `/clear` too unless it stayed in the launch alias's family;
   - a default changed after a lane opened: that lane keeps its launch pick until `/model` or
     `/effort` in its window moves it;
   - the lead's main checkout: no repo default reaches it, and it carries what it launched with;
-  - a tmux restart: `claude-restore` types `claude --resume <id>`, which keeps the model but not
-    the effort (spike S3). The resumed claude has no flags either, so from its first plain pass
-    on the lane runs the user's default model too. A follow-up for `tmux/claude-restore`.
+  - a tmux restart: `claude-restore` types `claude --resume <id>`, which keeps the model but not the
+    effort (spike S3). The resumed claude has no flags either, so from its first plain pass on the
+    lane runs the user's default model too. A follow-up for `tmux/claude-restore`.
 
-  Only these two flags carry: `--fallback-model`, `--name` and the rest still drop at a plain
-  pass.
+  Only these two flags carry: `--fallback-model`, `--name` and the rest still drop at a plain pass.
 - **Auto-pass in lanes** (README "Auto-pass", PLAN.md "PR 4: auto-pass"). Auto-pass is on by
   default in every lane and in the main checkout of a repo with lanes, so the lead passes itself
   the same way. `lane init --no-autopass` turns it off for the repo (`autopass = false` in the

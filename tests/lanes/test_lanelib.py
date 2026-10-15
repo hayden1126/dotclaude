@@ -93,24 +93,38 @@ class Picks(unittest.TestCase):
 
     def test_a_model_is_an_alias_or_a_claude_full_name_with_a_1m_where_one_exists(self):
         for name in ("opus", "sonnet", "haiku", "fable", "opusplan", "default", "sonnet[1m]",
-                     "haiku[1m]", "claude-sonnet-5-5", "claude-haiku-4-5-20251001",
+                     "fable[1m]", "claude-sonnet-5-5", "claude-haiku-4-5-20251001",
                      "claude-opus-5-5[1m]"):
             with self.subTest(name=name):
                 self.assertIsNone(lanelib.model_problem(name))
 
     def test_a_typo_a_flag_or_shell_syntax_is_no_model(self):
-        # default[1m] fails at its first request and opusplan has no 1M form (probed 2026-10-15).
+        # default[1m] fails at its first request, and /model says haiku and opusplan have no 1M
+        # form (probed 2026-10-15).
         for name in ("sonet", "Opus", "-x", "--dangerously-skip-permissions", "opus;x", "opus x",
                      "claude-", "claude-opus-", "claude-Opus-5", "opus[2m]", "default[1m]",
-                     "opusplan[1m]", "", None, 5):
+                     "haiku[1m]", "opusplan[1m]", "", None, 5):
             with self.subTest(name=name):
                 self.assertIn("is not a model", lanelib.model_problem(name))
 
     def test_an_alias_is_told_from_a_full_name(self):
-        for name in ("opus", "opusplan", "sonnet[1m]", "haiku[1m]", "default"):
+        for name in ("opus", "opusplan", "sonnet[1m]", "fable[1m]", "default"):
             self.assertTrue(lanelib.model_alias(name), name)
         for name in ("claude-opus-5-5", "claude-sonnet-5-5[1m]", "sonet", "default[1m]", None):
             self.assertFalse(lanelib.model_alias(name), name)
+
+    def test_a_model_could_run_as_an_id_of_its_own_family_only(self):
+        for name, ran in (("sonnet", "claude-sonnet-5-5"), ("sonnet[1m]", "claude-sonnet-5-5"),
+                          ("opusplan", "claude-sonnet-5-5"), ("opusplan", "claude-opus-5-5"),
+                          ("default", "claude-haiku-5-5"), ("claude-opus-5-5", "claude-opus-5-5"),
+                          ("claude-opus-5-5[1m]", "claude-opus-5-5"),
+                          ("claude-sonnet-4@20250514", "claude-opus-5-5")):  # can't be judged
+            with self.subTest(name=name, ran=ran):
+                self.assertTrue(lanelib.could_run(name, ran))
+        for name, ran in (("sonnet", "claude-opus-5-5"), ("opusplan", "claude-haiku-5-5"),
+                          ("claude-opus-5-5", "claude-opus-4-8"), ("haiku", "claude-sonnet-5-5")):
+            with self.subTest(name=name, ran=ran):
+                self.assertFalse(lanelib.could_run(name, ran))
 
     def test_an_effort_is_one_of_the_five_levels(self):
         for level in lanelib.EFFORTS:
@@ -123,7 +137,7 @@ class Picks(unittest.TestCase):
         # A value the old claude already launched with: no typo check, only nothing that reads
         # as a flag or carries shell or control characters.
         for name in ("opus", "us.anthropic.claude-sonnet-5-5-v1:0", "claude-opus-5-5[1m]",
-                     "my/model"):
+                     "my/model", "claude-sonnet-4@20250514"):
             with self.subTest(name=name):
                 self.assertTrue(lanelib.safe_model(name))
         for name in ("-x", "", "a b", "a;b", "a\nb", "x" * 101, None):

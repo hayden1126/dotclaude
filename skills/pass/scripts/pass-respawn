@@ -144,10 +144,9 @@ holds only notices. A call-time refusal or detach error prints to the caller and
            then `tmux respawn-pane -k -t <pane> -c <toplevel> -- <abs claude>
            [--model M] [--effort E] [--permission-mode plan] <prompt>`; both files are removed
            again when the respawn fails (`failed`) or anything after writing them raises. M and
-           E are carried_pick's: each flag the old claude launched with, or after a /model (for
-           the effort, a /model or /effort) what the last main-chain assistant entry since ran
-           with (a /model <alias>: the alias), the flag dropped when none can be passed on
-           (docs/lanes.md, "Model and effort")
+           E are carried_pick's, for each flag the old claude launched with: its value, or what
+           the session last ran with when a /model or /effort since (or what ran) says it
+           changed (docs/lanes.md, "Model and effort")
   compact  type `/compact <focus>` and Enter, wait 1 s, type the prompt and Enter (it queues
            behind the compact, spike S4); no respawn and no carry. A send-keys that fails
            stops there and logs `failed` (past /compact, every report of it hands over the
@@ -206,13 +205,14 @@ the sandbox can write (docs/lanes.md S3). Every input, and why each is safe:
     file in the main checkout of a lane session launched from the lane is caught only by the
     late check, after lanelib's git has run once.
   - The respawn's --model and --effort come from the session claude's command line (the
-    kernel's) and the transcript (Claude Code's), never from a sandbox-writable file. Each goes
-    to tmux as one argv element, never interpolated, and only in a fixed shape: an effort is one
-    of lanelib.EFFORTS; a launch model passes lanelib.safe_model (it starts with a letter or
-    digit, so it never reads as a flag, and carries no space or shell syntax), and a
-    transcript's must be a lanelib.MODEL_ID (`claude-...`) or, from a /model argument, a
-    lanelib.model_alias. A launch value outside its shape
-    refuses the pass at call time; a transcript value outside it drops the flag.
+    kernel's), the transcript and the user settings' `model` (Claude Code's, which /model
+    writes), never from a sandbox-writable file. Each goes to tmux as one argv element, never
+    interpolated, and only in a fixed shape: an effort is one of lanelib.EFFORTS; a launch model
+    passes lanelib.safe_model (it starts with a letter or digit, so it never reads as a flag,
+    and carries no space or shell syntax); a transcript's must be a lanelib.MODEL_ID
+    (`claude-...`), and a /model argument or the saved `model` a lanelib.model_alias that could
+    have run as that id. A launch value outside its shape refuses the pass at call time; a
+    transcript value outside it drops the flag.
   - PATH is the call's, so it keeps only the absolute entries outside those dirs (as given and
     resolved). git, tmux and claude resolve through that PATH and must also resolve, as found
     and through their links, outside them; otherwise it refuses. The sanitized PATH replaces
@@ -227,9 +227,9 @@ the sandbox can write (docs/lanes.md S3). Every input, and why each is safe:
     write ~/.claude/sessions. Only `idle` there (or `shell`: at the prompt with a background
     shell running), or `busy` with the transcript's turn end, lets the waiter act.
   - The transcript (~/.claude/projects/...) is Claude Code's too, also out of the sandbox's
-    reach. It only decides: whether the turn ended (with the session file's `busy`) and
-    whether a prompt came after the call (which drops a pass). Its entries are parsed as JSON
-    and matched against fixed markers, never run or interpolated.
+    reach. It only decides: whether the turn ended (with the session file's `busy`), whether a
+    prompt came after the call (which drops a pass) and the respawn's model and effort (above).
+    Its entries are parsed as JSON and matched against fixed markers, never run or interpolated.
   - The stop record, the carry marker, the replies, the pending lock, the session's notice and
     pass.log live in the state dir, which sandboxed Bash can't write, so a session can't forge
     or plant a notice for the hook to inject. The session id names the stop record, the lock
@@ -995,13 +995,13 @@ def ran(line: bytes) -> dict[str, str | None] | None:
             else None, "--effort": effort if effort in lanelib.EFFORTS else None}
 
 
-def picks_since(path: str | None) -> dict[str, str | None] | None:
-    """For each pick flag a /model or /effort changed in the transcript: what the last main-chain
-    assistant entry after its last such command ran with (None: no usable entry since). For the
-    model, a last /model whose argument is an alias carries that alias once an entry ran after it:
-    the resolved id loses what the alias means (opusplan's per-mode switch, a 1M form), and an
-    alias from lanelib's list can't hold a typo. None when the transcript can't be read."""
-    since, alias = {}, None
+def picks_since(path: str | None) -> tuple[dict, dict, str | None] | None:
+    """What the transcript says of the session's model and effort, as (since, last, chosen):
+    since maps each pick flag a /model or /effort changed to what the last main-chain assistant
+    entry after its last such command ran with (None: no usable entry since); last is what the
+    transcript's last such entry ran with ({}: none); chosen is the last /model's argument (""
+    for a pick from its menu; None: no /model). None when the transcript can't be read."""
+    since, last, chosen = {}, {}, None
     try:
         with open(path, "rb") as f:
             for line in f:
@@ -1009,13 +1009,29 @@ def picks_since(path: str | None) -> dict[str, str | None] | None:
                     name, args = run
                     since.update(dict.fromkeys(CHANGED_BY[name]))
                     if name == "/model":
-                        alias = args if lanelib.model_alias(args) else None
-                elif since and (values := ran(line)):
-                    values["--model"] = alias or values["--model"]
+                        chosen = args
+                elif values := ran(line):
+                    last = values
                     since.update({flag: values[flag] for flag in since})
     except (OSError, TypeError, ValueError):
         return None
-    return since
+    return since, last, chosen
+
+
+def saved_model() -> str | None:
+    """The user's default model, where /model saves its pick (the config dir's settings.json
+    `model`, out of the sandbox's reach), or None."""
+    try:
+        with open(os.path.join(config_dir(), "settings.json")) as f:
+            model = json.load(f).get("model")
+    except (OSError, ValueError, RecursionError, AttributeError):   # json recurses on nesting
+        return None
+    return model if isinstance(model, str) else None
+
+
+def fits(flag: str, launched: str, ran_with: str) -> bool:
+    """Whether what an entry ran with agrees with the session's launch value for flag."""
+    return lanelib.could_run(launched, ran_with) if flag == "--model" else launched == ran_with
 
 
 def launch_pick(argv: list[str] | None) -> dict[str, str]:
@@ -1032,15 +1048,31 @@ def launch_pick(argv: list[str] | None) -> dict[str, str]:
 
 def carried_pick(launched: dict[str, str], transcript: str | None) -> list[str]:
     """The --model and --effort a plain pass gives the respawned claude (docs/lanes.md, "Model
-    and effort"): each one the session launched with (launch_pick), unless a /model (or, for the
-    effort, an /effort) ran since. Then it is what the session last ran after that command, or
-    nothing when no usable entry follows, since the command saved its pick as the default for
-    new sessions. Read at act time, as the resume mode is, so a /model during the passing turn
-    counts; the transcript is read only when a flag is there to carry."""
-    since = (picks_since(transcript) if launched else None) or {}
+    and effort"), for each flag the session launched with (launch_pick):
+    - after a /model (for the effort, a /model or /effort) in the transcript, what the last entry
+      since ran with, or nothing when none did, since the command saved its pick as the default
+      for new sessions. For the model, the alias the /model named, or for a pick from its menu
+      the one it saved (saved_model), when that alias could have run as that entry's id: the id
+      loses what an alias means (opusplan's per-mode switch, a 1M form), and another session's
+      later pick can't fit;
+    - with no such command, the launch value, unless the transcript's last entry ran with
+      something it can't be (fits): a change this transcript can't show, such as one before a
+      /clear, which starts a new transcript in the same process. Then what that entry ran with.
+    Read at act time, as the resume mode is, so a /model during the passing turn counts; the
+    transcript is read only when a flag is there to carry."""
+    since, last, chosen = (picks_since(transcript) if launched else None) or ({}, {}, None)
     out = []
     for flag in (f for f in PICK_FLAGS if f in launched):  # a flag it didn't launch with: none
-        if value := since.get(flag, launched[flag]):
+        value = launched[flag]
+        if flag in since:
+            value = since[flag]
+            if flag == "--model" and value:
+                named = (chosen, saved_model() if chosen == "" else None)
+                value = next((a for a in named if lanelib.model_alias(a)
+                              and lanelib.could_run(a, value)), value)
+        elif last.get(flag) and not fits(flag, value, last[flag]):
+            value = last[flag]
+        if value:
             out += [flag, value]
     return out
 

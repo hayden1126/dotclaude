@@ -1405,7 +1405,7 @@ class Pick(Base):
                          ["--permission-mode", "plan"])
         self.assertEqual(self.respawned(["--effort", "low"]),
                          ["--effort", "high", "--permission-mode", "plan"])
-        self.history(command("/effort", "max"), reply("claude-haiku-5-5", "max"))
+        self.history(command("/effort", "max"), reply("claude-sonnet-5-5", "max"))
         self.assertEqual(self.respawned(["--model", "sonnet"]),
                          ["--model", "sonnet", "--permission-mode", "plan"])
 
@@ -1442,8 +1442,7 @@ class Pick(Base):
             ([command("/model", "opusplan"), reply("<synthetic>", None)], []),  # an API error
             ([command("/model"), reply("claude-haiku-4-5-20251001", None)],  # haiku 4.5: no effort
              ["--model", "claude-haiku-4-5-20251001"]),
-            ([command("/effort", "max"), reply("claude-haiku-4-5-20251001", None)],
-             ["--model", "sonnet"]),
+            ([command("/effort", "max"), reply("<synthetic>", None)], ["--model", "sonnet"]),
             ([command("/model"), reply("us.anthropic.claude-sonnet-5-5-v1:0", "low")],
              ["--effort", "low"]),  # no claude- id to carry
         )
@@ -1460,10 +1459,46 @@ class Pick(Base):
         quoted = {"type": "user", "isSidechain": False, "message": {"role": "user", "content": [
             {"type": "tool_result", "content": "  18 <command-name>/model</command-name>"}]}}
         peer = dict(STARTS["an agent's message"], message={"role": "user", "content": tag})
-        self.say(quoted, typed("what does <command-name>/model</command-name> do?"), typed(tag),
-                 peer, dict(command("/model"), isSidechain=True), reply("claude-opus-5-5", "max"))
+        self.history(quoted, typed("what does <command-name>/model</command-name> do?"), typed(tag),
+                 peer, dict(command("/model"), isSidechain=True),
+                 dict(command("/model", "opus"), isMeta=True), reply("claude-sonnet-5-5", "low"))
         self.assertEqual(self.respawned(self.LAUNCH),
                          ["--model", "sonnet", "--effort", "low", "--permission-mode", "plan"])
+
+    def test_the_last_entry_after_the_command_decides(self):
+        self.history(command("/model"), reply("claude-haiku-5-5", "low"),
+                     reply("claude-opus-5-5", "max"))
+        self.assertEqual(self.respawned(self.LAUNCH), ["--model", "claude-opus-5-5", "--effort",
+                                                       "max", "--permission-mode", "plan"])
+
+    def test_a_change_the_transcript_cant_show_carries_what_ran(self):
+        # A /model or /effort before a /clear sits in the old transcript: what ran since tells.
+        self.history(reply("claude-opus-5-5", "xhigh"))
+        self.assertEqual(self.respawned(self.LAUNCH), ["--model", "claude-opus-5-5", "--effort",
+                                                       "xhigh", "--permission-mode", "plan"])
+
+    def test_what_ran_within_the_launch_pick_keeps_it(self):
+        for model, ran in (("sonnet", "claude-sonnet-5-5"), ("opusplan", "claude-sonnet-5-5"),
+                           ("default", "claude-haiku-5-5"), ("claude-sonnet-5-5[1m]",
+                                                             "claude-sonnet-5-5"),
+                           ("claude-sonnet-4@20250514", "claude-sonnet-4")):
+            with self.subTest(model=model):
+                self.history(reply(ran, None))  # no effort to judge: the launch one holds
+                self.assertEqual(self.respawned(["--model", model, "--effort", "low"]),
+                                 ["--model", model, "--effort", "low", "--permission-mode",
+                                  "plan"])
+
+    def test_a_menu_model_carries_the_saved_alias_that_fits_what_ran(self):
+        # The menu's pick has no argument, but /model saved it as the default: it carries when
+        # it could have run as what the session ran since, never another session's later pick.
+        settings = os.path.join(self.home, ".claude", "settings.json")
+        self.history(command("/model"), reply("claude-sonnet-5-5", "high"))
+        for saved, model in (("sonnet[1m]", "sonnet[1m]"), ("opusplan", "opusplan"),
+                             ("haiku", "claude-sonnet-5-5"), ("claude-sonnet-5-5[1m]",
+                                                             "claude-sonnet-5-5")):
+            with self.subTest(saved=saved):
+                self.write(settings, json.dumps({"model": saved}))
+                self.assertEqual(self.respawned(self.LAUNCH)[:2], ["--model", model])
 
     def test_an_unreadable_transcript_carries_the_launch_flags(self):
         self.say(command("/model"), reply("claude-opus-5-5", "max"))
