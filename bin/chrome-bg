@@ -116,7 +116,7 @@ class Stopped(BaseException):
 # under nohup) stays ignored and is left out: Linux would queue it while blocked and
 # sigtimedwait would take it, ending the run.
 
-HELD = {signal.SIGINT, signal.SIGTERM, signal.SIGHUP}  # main() drops the inherited-ignored ones
+HELD = {signal.SIGINT, signal.SIGTERM, signal.SIGHUP}  # main() drops the inherited-ignored ones; a holder keeps SIGTERM
 POLL_S = 0.1
 CLEANING = [0]  # depth of cleanups under way: no poll raises in one
 
@@ -1355,6 +1355,13 @@ def cmd_start(args):
         try:
             os.close(r)
             os.setsid()
+            # SIGTERM is the holder's stop channel (stop sends it, and so does an interrupted
+            # start below), so the holder holds it whatever chrome-bg inherited: an inherited
+            # ignore would leave the run alive until its TTL. Set before the fork, so it is in
+            # place before this process exits and the waitpid below returns.
+            HELD.add(signal.SIGTERM)
+            signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGTERM})
+            signal.signal(signal.SIGTERM, signal.SIG_DFL)
             code = 0 if os.fork() else holder(rid, args, ttl, cwd, w)
         finally:
             os._exit(code)

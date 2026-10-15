@@ -1586,6 +1586,46 @@ class Live(unittest.TestCase):
         self.assertTrue(self.has("eof-" + rid))
         self.assertEqual(self.records(), [])
 
+    def test_the_holder_keeps_sigterm_when_start_inherits_it_ignored(self):
+        # SIGTERM is the holder's stop channel: an ignore chrome-bg inherited must not reach it.
+        def under_ignored_term(*argv, env=None):
+            return subprocess.Popen(["/bin/sh", "-c", 'trap "" TERM; exec "$@"', "sh",
+                                     sys.executable, "-I", self.driver, CLI, self.root, *argv],
+                                    env={**self.env, **(env or {})}, stdout=subprocess.PIPE,
+                                    stderr=subprocess.PIPE, text=True)
+        # Its Chrome ignores Browser.close, so only stop's SIGTERM can end the holder.
+        p = under_ignored_term("start", "--json", env={"FAKE_CHROME_IGNORE_CLOSE": "1"})
+        out, err = p.communicate(timeout=60)
+        self.assertEqual(p.returncode, 0, err)
+        rid = json.loads(out)["id"]
+        r = self.cli("stop", rid, env={"DRIVER_STOP_WAIT": "5"})
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("stopped by its owner", r.stdout)
+        with open(os.path.join(self.recdir, rid + ".holder.log")) as f:
+            self.assertIn("signal 15", f.read())
+        self.assertFalse(self.has("kill-" + rid), "the holder ended the run itself")
+        self.assertEqual(self.records(), [])
+        # An interrupted start stops its holder with SIGTERM too (SIGINT here, as SIGTERM is
+        # ignored by the start process itself).
+        p = under_ignored_term("start", env={"FAKE_SLOW_HELLO": "2"})
+        try:
+            self.wait_for(lambda: len(self.started("hello-")) == 2 and len(self.records()) == 1,
+                          what="the second holder")
+            p.send_signal(signal.SIGINT)
+            _, err = p.communicate(timeout=40)
+        finally:
+            if p.poll() is None:
+                p.kill()
+                p.communicate()
+        self.assertEqual(p.returncode, 128 + signal.SIGINT, err)
+        [rid2] = [i for i in self.started("hello-") if i != rid]
+        self.assertIn(f"start interrupted by signal 2; run {rid2} was stopped", err)
+        with open(os.path.join(self.recdir, rid2 + ".holder.log")) as f:
+            self.assertIn("signal 15", f.read())
+        self.assertTrue(self.has("eof-" + rid2))
+        self.assertEqual(self.started("launch-"), [rid], "the second run never launched")
+        self.assertEqual(self.records(), [])
+
     def test_post_ready_sigterm_to_the_holder(self):
         # stop's SIGTERM reaches a ready holder whose Chrome ignores Browser.close: the holder
         # still ends the run itself, through its supervisor's EOF cleanup, with no -Kill.
