@@ -31,7 +31,8 @@ what. `docs/lanes.md` holds the design and why; this is the operating guide.
 
 ## At session start
 
-The `lane-identity` hook names your lane, branch, claims, port and record. Then read, in order:
+The `lane-identity` hook names your lane, the branch (or detached commit) your worktree has checked
+out, claims, port and record. Then read, in order:
 
 1. your record, `<lane>/.lane/STATUS.md` (Brief, Asks for Hayden, Next);
 2. the project STATUS.md (direction, backlog);
