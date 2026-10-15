@@ -1698,7 +1698,8 @@ class Notices(Handed):
         self.assertEqual(seen, set(self.mod.DROPS) | {"partial"})
 
     def test_a_resumed_notice_names_its_reason(self):
-        # The notice and the brief status-line message (QUIET) both follow the reason.
+        # The notice and the brief status-line message (QUIET) both follow the reason; an
+        # unreadable transcript is loud.
         again = ("No pass is pending now; run the pass skill again once this work is done, if "
                  "it still applies.")
         status = ("pass dropped: the session's status changed after its turn. /pass again if "
@@ -1733,6 +1734,11 @@ class Notices(Handed):
                 self.assertEqual(n["outcome"], "resumed")
                 self.assertEqual(n["text"], f"[pass] The compact pass you queued at "
                                             f"{hms(n['called'])}Z was dropped: {cause}. {tail}")
+                if name == "no transcript":
+                    # Not Hayden's doing and it recurs on every pass, so it is loud: the held
+                    # line and the toast, though the outcome stays `resumed`.
+                    self.assertLoud(shown.replace("pass dropped: ", "pass dropped in tab 3: "))
+                    continue
                 (msg,) = self.notices()
                 self.assertEqual(msg[1:], ["display-message", "-t", "%4", shown])
                 self.assertEqual(self.toasts(tries=4), [])   # still QUIET
@@ -1754,42 +1760,63 @@ class Notices(Handed):
     def test_a_prompt_that_failed_after_compact_went_out_is_handed_over(self):
         # send-keys 3 or 4: /compact and its Enter are out, so passing again would compact a
         # second time. The outcome stays `failed`; the notice, the held tmux line, the toast and
-        # pass.log hand over the resume prompt, as `partial`'s do.
+        # pass.log hand over the resume prompt, as `partial`'s do. Once the prompt may be in the
+        # box (the Enter failed, or tmux gave no answer, so the keys may have gone), telling
+        # Hayden to type it would double it: he is told to press Enter instead.
         real = self.mod.tmux
         prompt = self.PROMPT + " Call EnterPlanMode first."
-        for nth in (3, 4, 1):
-            with self.subTest(nth=nth):
+        pane_err = "can't find pane: %4"
+        head = f"[pass] The compact pass you queued at {{}}Z sent /compact"
+        take = ("No pass is pending now. Treat this as your resume prompt unless Hayden's "
+                f"message says otherwise: {prompt}")
+        not_typed = (f"pass failed after /compact was sent; type the resume prompt yourself in "
+                     f"tab 3: {prompt}")
+        typed_in = (f"pass failed after the resume prompt was typed; press Enter (or type it if "
+                    f"the box is empty) in tab 3: {prompt}")
+
+        def maybe_typed(said):
+            return (f" and typed the resume prompt, but its Enter may not have gone through "
+                    f"(tmux: {said}), so the prompt may sit unsent in the input box. {take}")
+        cases = (  # (send-keys call that fails, tmux's answer, what pass.log and the notice say)
+            (3, pane_err, pane_err, not_typed,
+             f", but the resume prompt wasn't typed or sent (tmux: {pane_err}). {take}"),
+            # An error with no text: the notice says so rather than repeat pass.log's prompt.
+            (3, "", "no error text", not_typed,
+             f", but the resume prompt wasn't typed or sent (tmux: no error text). {take}"),
+            (4, pane_err, pane_err, typed_in, maybe_typed(pane_err)),
+            # No answer at all (a timeout): the keys may have gone, so the prompt may be in.
+            (3, None, "tmux didn't run", typed_in, maybe_typed("tmux didn't run")),
+            (1, pane_err, pane_err, "pass failed in tab 3: tmux could not respawn or type into "
+                                    "the pane", None))
+        for nth, answer, said, shown, notice in cases:
+            with self.subTest(nth=nth, answer=answer):
                 self.reset()
                 sent = []
 
-                def tmux(plan, *args, nth=nth, sent=sent):
+                def tmux(plan, *args, nth=nth, answer=answer, sent=sent):
                     if args[0] == "send-keys":
                         sent.append(args)
                         if len(sent) == nth:
-                            return subprocess.CompletedProcess(args, 1, "", "can't find pane: %4")
+                            return (None if answer is None
+                                    else subprocess.CompletedProcess(args, 1, "", answer))
                     return real(plan, *args)
                 self.mod.tmux = tmux
                 code, out = self.run_pass("--compact", "--foreground")
                 self.assertEqual(code, 1, out)
                 (line,) = [ln for ln in self.log().splitlines() if "outcome=failed" in ln][-1:]
-                self.assertIn(f"outcome=failed send-keys {nth} of 4: can't find pane: %4", line)
-                if nth >= 3:
-                    self.assertTrue(line.endswith(f"; resume prompt: {prompt}"), line)
-                    self.assertLoud("pass failed after /compact was sent; type the resume prompt "
-                                    f"yourself in tab 3: {prompt}")
-                else:
-                    self.assertNotIn("resume prompt", line)
-                    self.assertLoud("pass failed in tab 3: tmux could not respawn or type into "
-                                    "the pane")
+                self.assertIn(f"outcome=failed send-keys {nth} of 4: {said}", line)
+                self.assertLoud(shown)
                 n = self.notice()
                 self.assertEqual(n["outcome"], "failed")
-                self.assertEqual(n["text"], (
-                    f"[pass] The compact pass you queued at {hms(n['called'])}Z sent /compact, "
-                    "but the resume prompt wasn't typed or sent (tmux: can't find pane: %4). No "
-                    "pass is pending now. Treat this as your resume prompt unless Hayden's "
-                    f"message says otherwise: {prompt}") if nth >= 3 else self.loud(
-                    n, f"tmux could not respawn or type into the pane (send-keys {nth} of 4: "
-                       "can't find pane: %4)", self.READ_LOG))
+                if notice is None:
+                    self.assertNotIn("resume prompt", line)
+                    self.assertEqual(n["text"], self.loud(
+                        n, f"tmux could not respawn or type into the pane (send-keys {nth} of 4: "
+                           f"{pane_err})", self.READ_LOG))
+                    continue
+                self.assertTrue(line.endswith(f"; resume prompt: {prompt}"), line)
+                self.assertEqual(n["text"], head.format(hms(n["called"])) + notice)
+                self.assertEqual(n["text"].count(prompt), 1)   # handed over once, not repeated
         self.mod.tmux = real
 
     def test_the_notice_comes_after_the_log_and_before_any_tmux_call(self):
