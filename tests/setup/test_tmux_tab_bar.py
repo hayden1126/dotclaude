@@ -5,6 +5,7 @@ in-process. `layout` runs as a subprocess against a fake tmux (a stateful Python
 answers the list commands from a JSON file and runs `source-file -` through a model of tmux's
 config lexer), and against real tmux servers on private sockets, which the Bash sandbox blocks:
 that class skips there."""
+import dataclasses
 import fcntl
 import importlib.machinery
 import importlib.util
@@ -35,6 +36,15 @@ def load():
 
 tb = load()
 Group = tb.Group
+LANELIB = os.path.join(REPO, "skills", "lanes", "scripts", "lanelib.py")
+
+
+def load_lanelib():
+    """skills/lanes' lanelib, loaded only by the tests that pin the bar to it."""
+    spec = importlib.util.spec_from_file_location("lanelib_for_tab_bar", LANELIB)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 # Every character a generated row may hold: the template's own text, digits and window ids.
 ALPHABET = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
@@ -966,6 +976,203 @@ class Order(unittest.TestCase):
             self.assertIn(("@tab_bar_g1", tb.short(name, width < 100)), tb.session_ops(lay, []))
 
 
+# --- the lead: several tabs in one main checkout --------------------------------------------------
+
+# TAB_OF plus @7 and @8 in repo's main checkout: three lead tabs (@2 @7 @8), kar's lone @5.
+LEAD = tb.Tab("lead", "/r/.git", "repo", "lead")
+LEADS_TAB_OF = dict(TAB_OF, **{"@7": LEAD, "@8": LEAD})
+LEADS_WINS = [(int(w[1:]), w) for w in LEADS_TAB_OF]
+
+
+def lead_names(lead_of=None, places=None, wins=LEADS_WINS):
+    """wid -> @tab_name, as group_windows names the three-lead session."""
+    _, _, names = tb.group_windows(wins, LEADS_TAB_OF, places, lead_of)
+    return {w: n[0] for w, n in names.items()}
+
+
+class Leads(unittest.TestCase):
+    def test_the_leads_tab_is_lead_and_the_others_count_up_in_bar_order(self):
+        names = lead_names({"/r/.git": "@7"})
+        self.assertEqual((names["@2"], names["@7"], names["@8"]), ("lead²", "lead", "lead³"))
+        names = lead_names({"/r/.git": "@8"})
+        self.assertEqual((names["@2"], names["@7"], names["@8"]), ("lead²", "lead³", "lead"))
+        self.assertEqual((names["@5"], names["@3"], names["@1"]), ("lead", "a", "hq:"))
+
+    def test_with_no_lead_the_first_in_bar_order_keeps_lead(self):
+        want = {"@2": "lead", "@7": "lead²", "@8": "lead³"}
+        # No pick, or one that isn't among repo's lead tabs (a lane, kar's lead, no window).
+        for lead_of in (None, {}, {"/r/.git": "@3"}, {"/r/.git": "@5"}, {"/r/.git": "@99"},
+                        {"/k/.git": "@7"}):
+            with self.subTest(lead_of=lead_of):
+                names = lead_names(lead_of)
+                self.assertEqual({w: names[w] for w in want}, want)
+        # Bar order, not window order: a manual row puts @8 first.
+        names = lead_names(places={"@8": P(REPO_KEY, 0)})
+        self.assertEqual((names["@8"], names["@2"], names["@7"]), ("lead", "lead²", "lead³"))
+
+    def test_a_lead_tab_moved_out_of_its_row_reads_repo_lead2(self):
+        wins = [w for w in LEADS_WINS if w[1] != "@8"]          # two lead tabs: @2 and @7
+        names = lead_names(places={"@2": P("s", 0)}, wins=wins)
+        self.assertEqual((names["@7"], names["@2"]), ("lead", "repo·lead²"))   # rows go first
+        names = lead_names({"/r/.git": "@2"}, {"@2": P("s", 0)}, wins)
+        self.assertEqual((names["@7"], names["@2"]), ("lead²", "repo·lead"))
+        _, _, names = tb.group_windows(wins, LEADS_TAB_OF, {"@7": P("c:1", 0, REPO_KEY)})
+        self.assertEqual((names["@2"], names["@7"]), (("lead", "0", ""), ("repo·lead²", "0", "1")))
+
+    def test_a_single_lead_tab_is_unchanged(self):
+        want = tb.group_windows(WINS, TAB_OF, {})
+        self.assertEqual((want[2]["@2"], want[2]["@5"]), (("lead", "0", ""), ("lead", "1", "")))
+        for lead_of in ({"/r/.git": "@2"}, {"/r/.git": "@3"}, {"/k/.git": "@2"}):
+            with self.subTest(lead_of=lead_of):
+                self.assertEqual(tb.group_windows(WINS, TAB_OF, {}, lead_of), want)
+
+    def test_a_new_lead_renames_tabs_and_moves_none(self):
+        for places in ({}, {"@8": P(REPO_KEY, 0), "@3": P(REPO_KEY, 1)}, {"@7": P("s", 0)}):
+            with self.subTest(places=places):
+                base = tb.group_windows(LEADS_WINS, LEADS_TAB_OF, places)
+                for pick in ("@2", "@7", "@8"):
+                    groups, shared, names = tb.group_windows(LEADS_WINS, LEADS_TAB_OF, places,
+                                                             {"/r/.git": pick})
+                    self.assertEqual((groups, shared), base[:2])
+                    self.assertEqual({w: n[1:] for w, n in names.items()},
+                                     {w: n[1:] for w, n in base[2].items()})
+                    self.assertEqual(names["@3"], base[2]["@3"])
+                    self.assertIn(names[pick][0], ("lead", "repo·lead"))
+
+    def test_lead_names_are_single_cell_superscripts_for_any_n(self):
+        self.assertEqual([tb.lead_name(n) for n in (1, 2, 3, 10, 123)],
+                         ["lead", "lead²", "lead³", "lead¹⁰", "lead¹²³"])
+        for n in range(2, 1000):
+            name = tb.lead_name(n)
+            self.assertEqual([tb.cell_width(c) for c in name[4:]], [1] * len(str(n)), n)
+            self.assertEqual(tb.clean(name), name)
+
+    def test_arrange_reads_the_record_only_for_two_or_more_lead_tabs(self):
+        wids = ["@2", "@7", "@8"]
+        state = tb.State(sessions={}, widths={}, windows={"$0": [(2, "@2", True)]},
+                         options={w: {"name": "", "group": "", "custom": "", "place": ""}
+                                  for w in wids},
+                         cwds={w: w for w in wids}, panes={w: ["%" + w[1:]] for w in wids},
+                         server=("/s", 2, 3))
+        tab_of = {w: LEAD for w in wids}.get
+        with unittest.mock.patch.object(tb, "classify", tab_of), \
+                unittest.mock.patch.object(tb, "lead_pane", side_effect=AssertionError):
+            self.assertEqual(tb.arrange(state, "$0", {})[2]["@2"][0], "lead")
+        state.windows["$0"] = [(int(w[1:]), w, w == "@2") for w in wids]
+        for rec, want in ((("/s", 2, 3, "%8"), "@8"), (("/s", 2, 3, "%7"), "@7"),
+                          (("/t", 2, 3, "%8"), "@2"), (("/s", 9, 3, "%8"), "@2"),
+                          (("/s", 2, 9, "%8"), "@2"), (("/s", 2, 3, "%9"), "@2"), (None, "@2")):
+            with self.subTest(rec=rec), unittest.mock.patch.object(tb, "classify", tab_of), \
+                    unittest.mock.patch.object(tb, "lead_pane", return_value=rec):
+                names = tb.arrange(state, "$0", {})[2]
+                self.assertEqual([w for w in wids if names[w][0] == "lead"], [want])
+        with unittest.mock.patch.object(tb, "classify", tab_of), \
+                unittest.mock.patch.object(tb, "lead_pane", return_value=("/s", 2, 3, "%8")):
+            self.assertEqual(tb.arrange(dataclasses.replace(state, server=None), "$0", {})[2]
+                             ["@2"][0], "lead")                 # no server known: no pick
+
+
+GOOD_LEAD = {"pid": 4410, "procStart": 123, "sessionId": "0d602c86", "at": "2026-10-14T21:05:00Z",
+             "tmux": ["/tmp/tmux-1000/default", 77, 456, "%3"]}
+
+
+class LeadRecord(unittest.TestCase):
+    """The lane CLI's lead record: read bounded, every field type-checked, else ignored."""
+
+    def setUp(self):
+        self.tmp = os.path.realpath(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp)
+        patch = unittest.mock.patch.dict(os.environ,
+                                         {"XDG_STATE_HOME": os.path.join(self.tmp, "state")})
+        patch.start()
+        self.addCleanup(patch.stop)
+        self.main = make_repo(self.tmp, "dotclaude", lanes=["tab-bar"])
+        self.common = os.path.join(self.main, ".git")
+        self.path = tb.lead_record_path(self.common)
+        os.makedirs(os.path.dirname(self.path))
+
+    def write(self, rec):
+        with open(self.path, "wb") as f:
+            f.write(rec if isinstance(rec, bytes) else json.dumps(rec).encode())
+
+    def test_a_valid_record_names_its_pane(self):
+        self.assertIsNone(tb.lead_pane(self.common))            # no record yet
+        self.write(GOOD_LEAD)
+        self.assertEqual(tb.lead_pane(self.common), ("/tmp/tmux-1000/default", 77, 456, "%3"))
+        self.write(dict(GOOD_LEAD, later="a key lanelib may add"))
+        self.assertEqual(tb.lead_pane(self.common)[3], "%3")
+        self.write(dict(GOOD_LEAD, tmux=None))                  # the lead runs outside tmux
+        self.assertIsNone(tb.lead_pane(self.common))
+
+    def test_a_malformed_or_oversized_record_is_ignored(self):
+        bad = [{k: v for k, v in GOOD_LEAD.items() if k != key} for key in GOOD_LEAD]
+        for key, values in (("pid", ("1", True, 1.0, None)), ("procStart", ("1", False, 1.5)),
+                            ("sessionId", (1, None, [])), ("at", (0, None))):
+            bad += [dict(GOOD_LEAD, **{key: v}) for v in values]
+        sock = GOOD_LEAD["tmux"][0]
+        for tmux in ("x", [], {"0": sock}, [sock, 77, 456], [sock, 77, 456, "%3", 5],
+                     [1, 77, 456, "%3"], ["", 77, 456, "%3"], [sock, "77", 456, "%3"],
+                     [sock, True, 456, "%3"], [sock, 77, 456.0, "%3"], [sock, 77, False, "%3"],
+                     [sock, 77, 456, "3"], [sock, 77, 456, "%"], [sock, 77, 456, "%3\n"],
+                     [sock, 77, 456, "%" + chr(0x663)], [sock, 77, 456, 3], [sock, 77, 456, "@3"],
+                     [sock, 77, 456, "%1234567890"]):
+            bad.append(dict(GOOD_LEAD, tmux=tmux))
+        bad += [b"", b"not json", b"[]", b"null", b'"%3"', b"\xff\xfe{}",
+                b"[" * 2000 + b"]" * 2000,                      # under the cap, too deep
+                json.dumps(dict(GOOD_LEAD, pad="x" * tb.LEAD_MAX)).encode()]
+        for rec in bad:
+            with self.subTest(rec=rec if not isinstance(rec, bytes) else rec[:40]):
+                self.write(rec)
+                self.assertIsNone(tb.lead_pane(self.common))
+        text = json.dumps(dict(GOOD_LEAD, pad=""))
+        self.write(json.dumps(dict(GOOD_LEAD, pad="x" * (tb.LEAD_MAX - len(text)))).encode())
+        self.assertEqual(os.path.getsize(self.path), tb.LEAD_MAX)
+        self.assertIsNotNone(tb.lead_pane(self.common))         # the cap itself still reads
+
+    def test_a_linked_or_odd_record_is_ignored(self):
+        real = os.path.join(self.tmp, "real.json")
+        with open(real, "w") as f:
+            json.dump(GOOD_LEAD, f)
+        os.symlink(real, self.path)
+        self.assertIsNone(tb.lead_pane(self.common))
+        os.remove(self.path)
+        os.mkfifo(self.path)
+        self.assertIsNone(tb.lead_pane(self.common))            # no hang
+        os.remove(self.path)
+        os.mkdir(self.path)
+        self.assertIsNone(tb.lead_pane(self.common))
+
+    def test_the_server_start_is_stat_field_22_after_the_last_paren(self):
+        proc = os.path.join(self.tmp, "proc")
+        os.makedirs(os.path.join(proc, "42"))
+        rest = ["S"] + [str(i) for i in range(4, 22)] + ["987654", "0", "0"]
+        with open(os.path.join(proc, "42", "stat"), "w") as f:
+            f.write("42 (a) b (c) " + " ".join(rest) + "\n")    # a comm holding ") ("
+        self.assertEqual(tb.proc_start(42, proc), 987654)
+        self.assertEqual(tb.this_server("/s,42,0", proc), ("/s", 42, 987654))
+        self.assertEqual(tb.this_server("/a,b/sock,42,7", proc), ("/a,b/sock", 42, 987654))
+        for env in (None, "", "/s", "/s,42", "/s,x,0", "/s,43,0", "/s,-42,0",
+                    "/s," + chr(0x664) + chr(0x662) + ",0"):      # Arabic-Indic 42
+            with self.subTest(env=env):
+                self.assertIsNone(tb.this_server(env, proc))
+        for data in (b"", b"42 a S 1 2", b"42 (a) S " + b"1 " * 10,
+                     b"42 (a) " + " ".join(rest[:19] + ["x"]).encode()):
+            with self.subTest(data=data):
+                self.assertIsNone(tb.stat_start(data))
+        lanelib = load_lanelib()
+        self.assertEqual(tb.proc_start(os.getpid()), lanelib.proc_start(os.getpid()))
+        self.assertEqual(tb.proc_start(42, proc), lanelib.proc_start(42, proc))
+
+    def test_the_record_path_sits_beside_lanelibs_config(self):
+        repo = load_lanelib().Repo(self.main, self.common)
+        self.assertEqual(repo.config_path[:-len(".toml")] + ".lead.json", self.path)
+        self.assertTrue(self.path.startswith(os.path.join(self.tmp, "state", "dotclaude", "")))
+
+    def test_the_record_path_is_lanelibs_lead_path(self):
+        # Fails until the lane CLI's side (lanelib's Repo.lead_path) merges.
+        self.assertEqual(load_lanelib().Repo(self.main, self.common).lead_path, self.path)
+
+
 class Moves(unittest.TestCase):
     def test_put_rewrites_every_member_of_the_target_row(self):
         _, groups, shared, _ = arranged({})
@@ -1606,7 +1813,8 @@ class FakeTmux(unittest.TestCase):
         self.env = {k: v for k, v in os.environ.items() if not k.startswith(("TMUX", "CLAUDE"))}
         self.env.update(PATH=stubs + os.pathsep + "/usr/bin:/bin", STUB_LOG=self.log,
                         STUB_STATE=self.state, TMUX="/fake/sock,1,0",
-                        TMUX_CLAUDE_STATUS_DIR=self.run_dir)
+                        TMUX_CLAUDE_STATUS_DIR=self.run_dir,
+                        XDG_STATE_HOME=os.path.join(self.tmp, "xdg"))   # never the live one
         self.base = os.path.join(self.run_dir,
                                  f".tmux-tab-bar.{os.getuid()}.{tb.server_key('/fake/sock,1,0')}")
         repos = os.path.join(self.tmp, "code")
@@ -1789,6 +1997,88 @@ class FakeTmux(unittest.TestCase):
         names = {w["window_id"]: w.get("@tab_name") for w in self.read_state()["windows"]}
         self.assertEqual(names["@1"], "hq:")
         self.assertNotEqual(names["@5"], "lead")
+
+    # --- the lead: a second tab @5 (pane %5) in dotclaude's main checkout ---
+
+    def second_lead(self):
+        """Add @5 in the lead's dir; return $TMUX naming a live server pid (this test's own,
+        whose /proc start the bar reads) and that server as the lead record holds it."""
+        st = self.read_state()
+        lead = next(p["pane_current_path"] for p in st["panes"] if p["window_id"] == "@2")
+        st["windows"].append({"session_id": "$0", "window_id": "@5", "window_index": "5",
+                              "window_active": "0", "@claude_state": "idle"})
+        st["panes"].append({"window_id": "@5", "pane_active": "1", "pane_current_path": lead,
+                            "pane_id": "%5", "pane_title": "x", "@claude_star": ""})
+        self.write_state(st)
+        pid = os.getpid()
+        return f"/fake/sock,{pid},0", ["/fake/sock", pid, tb.proc_start(pid)]
+
+    def write_lead(self, server, pane, raw=None):
+        with unittest.mock.patch.dict(os.environ, {"XDG_STATE_HOME": self.env["XDG_STATE_HOME"]}):
+            path = tb.lead_record_path(self.common)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        rec = {"pid": 4410, "procStart": 1, "sessionId": "s", "tmux": [*server, pane], "at": "t"}
+        with open(path, "wb") as f:
+            f.write(raw if raw is not None else json.dumps(rec).encode())
+        return path
+
+    def names(self):
+        return {w["window_id"]: w.get("@tab_name") for w in self.read_state()["windows"]}
+
+    def test_the_recorded_lead_is_lead_and_the_other_main_tab_lead2(self):
+        tmux_env, server = self.second_lead()
+        self.run_layout(TMUX=tmux_env)                  # no record: the first keeps lead
+        self.assertEqual((self.names()["@2"], self.names()["@5"]), ("lead", "lead²"))
+        path = self.write_lead(server, "%5")
+        self.run_layout(TMUX=tmux_env)
+        names = self.names()
+        self.assertEqual((names["@2"], names["@5"], names["@3"]), ("lead²", "lead", "tab-bar"))
+        os.remove(path)
+        self.run_layout(TMUX=tmux_env)
+        self.assertEqual((self.names()["@2"], self.names()["@5"]), ("lead", "lead²"))
+
+    def test_a_new_lead_renames_tabs_and_moves_none(self):
+        tmux_env, server = self.second_lead()
+        self.write_lead(server, "%5")
+        self.run_layout(TMUX=tmux_env)
+        rows, nav = self.rows(), self.session()["@tab_bar_nav"]
+        self.write_lead(server, "%2")
+        self.run_layout(TMUX=tmux_env)
+        self.assertEqual((self.rows(), self.session()["@tab_bar_nav"]), (rows, nav))
+        self.assertEqual(sorted(self.writes()),
+                         [["set-option", "-w", "-t", "@2", "@tab_name", "lead"],
+                          ["set-option", "-w", "-t", "@5", "@tab_name", "lead²"]])
+
+    def test_a_record_from_another_server_or_pane_names_no_lead(self):
+        tmux_env, server = self.second_lead()
+        sock, pid, start = server
+        for label, other, pane in (("socket", ["/other/sock", pid, start], "%5"),
+                                   ("pid", [sock, pid + 1, start], "%5"),
+                                   ("start", [sock, pid, start + 1], "%5"),
+                                   ("a lane's pane", server, "%3"),
+                                   ("no such pane", server, "%9")):
+            with self.subTest(label):
+                self.write_lead(server, "%5")
+                self.run_layout(TMUX=tmux_env)
+                self.assertEqual(self.names()["@5"], "lead")
+                self.write_lead(other, pane)
+                self.run_layout(TMUX=tmux_env)
+                self.assertEqual((self.names()["@2"], self.names()["@5"]), ("lead", "lead²"))
+        # A server pid with no /proc entry: no server known, so no record matches it.
+        gone = 2 ** 31
+        self.write_lead(["/fake/sock", gone, 0], "%5")
+        self.run_layout(TMUX=f"/fake/sock,{gone},0")
+        self.assertEqual((self.names()["@2"], self.names()["@5"]), ("lead", "lead²"))
+
+    def test_a_malformed_or_oversized_record_fails_open_silently(self):
+        tmux_env, server = self.second_lead()
+        for raw in (b"{not json", b"[" * 2000 + b"]" * 2000, b"x" * (tb.LEAD_MAX + 1),
+                    json.dumps({"tmux": [*server, "%5"]}).encode()):
+            with self.subTest(raw=raw[:20]):
+                self.write_lead(server, "%5", raw)
+                self.run_layout(TMUX=tmux_env)
+                self.assertEqual((self.names()["@2"], self.names()["@5"]), ("lead", "lead²"))
+                self.assertFalse(os.path.exists(self.base + ".err"))
 
     def nav_state(self, current, nav=None, client="/dev/pts/7"):
         """Lay out, then give the fake one client on $0 at window `current`, whose
@@ -2276,7 +2566,7 @@ class RealTmux(unittest.TestCase):
         os.makedirs(self.home)
         self.env = {k: v for k, v in os.environ.items() if not k.startswith(("TMUX", "CLAUDE"))}
         self.env.update(HOME=self.home, TERM="xterm-256color", TMUX_CLAUDE_STATUS_DIR=self.tmp,
-                        LANG="C.UTF-8")
+                        LANG="C.UTF-8", XDG_STATE_HOME=os.path.join(self.tmp, "xdg"))
         repos = os.path.join(self.tmp, "code")
         os.makedirs(repos)
         self.lead = make_repo(repos, "dotclaude", lanes=["tab-bar"])
