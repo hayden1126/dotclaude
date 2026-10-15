@@ -1528,6 +1528,7 @@ def cmd_ls(args):
 AFTER_STOP_S = 5  # the supervisor keeps logging the foreground this long after Chrome exits
 SETTLE_S = 1.5    # after each action, for its window events to land in the log
 RESINK_S = 0.5    # after each re-place
+KEEP_TOLERANCE_MS = 50  # A3, 3 of 3 live runs: bringToFront then newPage lifted it ~12 ms
 RAF_JS = ("new Promise((r) => { let n = 0; const t = performance.now();"
           " const f = () => { n++; if (performance.now() - t < 1000) requestAnimationFrame(f);"
           " else r(document.visibilityState + ' ' + n); };"
@@ -1594,15 +1595,24 @@ def judge(lines, raf=None, hz=None, leftover=None):
 
     raf is page0's "<visibilityState> <frames in 1 s>" read while covered, hz the primary
     monitor's refresh rate, leftover what -Scan still found of the run after stop.
-    Returns (verdict, [(action, row)], fails, warnings), verdict PASS, FAIL or INCONCLUSIVE."""
+    Returns (verdict, [(action, row)], fails, warnings), verdict PASS, FAIL or INCONCLUSIVE.
+
+    Time on top (TOP tagged=1) and a foreground steal (FOREGROUND tagged=1) always fail. Time
+    above other windows is judged one interval at a time: an interval opens at a RANKS line with
+    any aboveOthers>0 and closes at the next RANKS line with none, or at the log's end. One the
+    keeper ended (a KEEP-SINK logged inside it) within KEEP_TOLERANCE_MS is tolerated: a NOTE in
+    the warnings, its ms in the row's "kept". Every other interval's ms add to the action's
+    "above" and fail. Any KEEP-FIGHT fails, so tolerated lifts can't hide a re-raise loop."""
     rows, order = {}, []
     action, after_stop, first_fg, last_t = "launch", False, None, 0
-    since = {"top": None, "above": None, "fg": None}
+    since = {"top": None, "fg": None}
+    above = None  # the open above-interval: [start t, action, whether a KEEP-SINK fell in it]
     fails, fg_fails, warns = [], [], []  # fails are definite; fg_fails need a real first fg
 
     def row(name):
         if name not in rows:
-            rows[name] = {"top": 0, "above": 0, "fg": 0, "sunk": 0, "keep": 0, "fight": 0}
+            rows[name] = {"top": 0, "above": 0, "kept": 0, "fg": 0, "sunk": 0, "keep": 0,
+                          "fight": 0}
             order.append(name)
         return rows[name]
 
@@ -1610,6 +1620,17 @@ def judge(lines, raf=None, hz=None, leftover=None):
         if since[kind] is not None:
             row(since[kind][1])[kind] += t - since[kind][0]
             since[kind] = None
+
+    def close_above(t):
+        nonlocal above
+        start, name, kept = above
+        above, ms = None, t - start
+        if kept and ms <= KEEP_TOLERANCE_MS:
+            row(name)["kept"] += ms
+            warns.append(f"NOTE: {name}: a run window rose above another window, under the "
+                         f"foreground, for {ms} ms until the keeper sank it")
+        else:
+            row(name)["above"] += ms
 
     for line in lines:
         m = re.match(r"t=(\d+) (.*)", line.rstrip("\r\n"))
@@ -1628,10 +1649,10 @@ def judge(lines, raf=None, hz=None, leftover=None):
                 since["top"] = (t, action)
         elif rest.startswith("RANKS "):
             if any(int(x) for x in re.findall(r"aboveOthers=(\d+)", rest)):
-                if since["above"] is None:
-                    since["above"] = (t, action)
-            else:
-                close(t, "above")
+                if above is None:
+                    above = [t, action, False]
+            elif above is not None:
+                close_above(t)
         elif rest.startswith("FOREGROUND "):
             close(t, "fg")
             if first_fg is None and action == "launch":
@@ -1649,16 +1670,22 @@ def judge(lines, raf=None, hz=None, leftover=None):
             row(action)["sunk"] += 1
         elif rest.startswith("KEEP-SINK"):
             row(action)["keep"] += 1
+            if above is not None:
+                above[2] = True
         elif rest.startswith("KEEP-FIGHT"):
             row(action)["fight"] += 1
     for kind in since:
         close(last_t, kind)
+    if above is not None:
+        close_above(last_t)
     for name in order:
         r = rows[name]
         if r["top"]:
             fails.append(f"{name}: a run window was on top of the screen for {r['top']} ms")
         if r["above"]:
             fails.append(f"{name}: a run window sat above another window for {r['above']} ms")
+        if r["fight"]:
+            fails.append(f"{name}: the keeper fought a run window (more than 20 sinks in 1 s)")
     parts = str(raf).split() if raf is not None else []
     if not parts:
         fails.append("page0's visibility and frame rate were not read")
@@ -1712,8 +1739,10 @@ def print_report(verdict, rows, fails, warns, raf):
 
 def cmd_check(args):
     """The live self-test (probe.mjs plus classify.py): every action a fixture may take, each
-    between marks in the supervisor's log, then the log judged. It opens a Chrome window behind
-    yours for about half a minute."""
+    between marks in the supervisor's log, then the log judged (judge()). bringToFront-newPage
+    is a fixture's page.bringToFront() then browser.newPage(): live, the pair lifted the run
+    window under the foreground until the keeper sank it, where each alone did not. It opens a
+    Chrome window behind yours for about half a minute."""
     gc_first()
     rid = new_id()
 
@@ -1745,6 +1774,10 @@ def cmd_check(args):
             raf = evaluate(RAF_JS, awaitPromise=True)
             return raf
 
+        def front_then_new_page():
+            cdp.send("Page.bringToFront", session=session)
+            return cdp.send("Target.createTarget", {"url": "about:blank"})
+
         def bounds(state):
             return lambda: cdp.send("Browser.setWindowBounds", {"windowId": run.window,
                                                                 "bounds": {"windowState": state}})
@@ -1752,6 +1785,7 @@ def cmd_check(args):
         actions = [
             ("newPage-default", lambda: cdp.send("Target.createTarget", {"url": "about:blank"})),
             ("bringToFront", lambda: cdp.send("Page.bringToFront", session=session)),
+            ("bringToFront-newPage", front_then_new_page),
             ("setWindowBounds-maximized", bounds("maximized")),
             ("setWindowBounds-normal", bounds("normal")),
             ("window.open", lambda: evaluate(

@@ -301,6 +301,37 @@ def with_lines(after, *lines):
     return CLEAN[:i] + list(lines) + CLEAN[i:]
 
 
+def with_action(name, *lines):
+    """CLEAN with one more action before stop, its lines between t=1700 and t=1800; stop and
+    the lines after it move 2000 ms later."""
+    i = CLEAN.index("t=90 MARK begin stop")
+    later = [re.sub(r"^t=(\d+)", lambda m: "t=%d" % (int(m.group(1)) + 2000), ln) for ln in CLEAN[i:]]
+    return [*CLEAN[:i], f"t=1700 MARK begin {name}", *lines, f"t=1800 MARK end {name}", *later]
+
+
+# A3's lift (live, 2026-10-15; hwnd and pid made up): the run window rises under the foreground,
+# the keeper sinks it 12 ms later, and the poll's RANKS line at the same t shows it back down.
+def rises(t):
+    return f"t={t} RANKS via=ev-reorder [200 rank=1/3 aboveOthers=1]"
+
+
+def keeper_sinks(t):
+    return f"t={t} KEEP-SINK ok=True via=ev-reorder {WIN} vis=1 iconic=0 cloaked=0 title='about:blank'"
+
+
+def falls(t):
+    return f"t={t} RANKS via=poll [200 rank=2/3 aboveOthers=0]"
+
+
+A3 = [rises(1712), keeper_sinks(1724), falls(1724)]
+BTN = "bringToFront-newPage"
+
+
+def lift_note(ms, name=BTN):
+    return (f"NOTE: {name}: a run window rose above another window, under the foreground, for "
+            f"{ms} ms until the keeper sank it")
+
+
 class Judge(unittest.TestCase):
     """check's verdict from synthetic supervisor logs (the probe's line format)."""
 
@@ -398,6 +429,70 @@ class Judge(unittest.TestCase):
             with self.subTest(why=why):
                 verdict, _, fails, _ = self.run_judge(lines)
                 self.assertEqual((verdict, fails), ("PASS", []))
+
+    def test_a_lift_the_keeper_sinks_fast_is_tolerated(self):
+        # A3 logs the KEEP-SINK with the closing RANKS line's t, just before that line.
+        for why, lines, ms in (("A3", A3, 12),
+                               ("sunk mid-lift", [rises(1712), keeper_sinks(1718), falls(1724)], 12),
+                               ("at the tolerance", [rises(1712), keeper_sinks(1762), falls(1762)], 50)):
+            with self.subTest(why=why):
+                verdict, rows, fails, warns = self.run_judge(with_action(BTN, *lines))
+                self.assertEqual((verdict, fails, warns), ("PASS", [], [lift_note(ms)]))
+                r = dict(rows)[BTN]
+                self.assertEqual((r["above"], r["kept"], r["keep"]), (0, ms, 1))
+
+    def test_a_lift_fails_unless_the_keeper_sank_it_in_time(self):
+        for why, lines, ms in (
+                ("no KEEP-SINK", [rises(1712), falls(1724)], 12),
+                ("80 ms", [rises(1712), keeper_sinks(1790), falls(1792)], 80),
+                ("51 ms", [rises(1712), keeper_sinks(1763), falls(1763)], 51),
+                ("KEEP-SINK logged before it opened", [keeper_sinks(1712), *A3[::2]], 12),
+                ("KEEP-SINK logged after it closed", [*A3[::2], keeper_sinks(1724)], 12)):
+            with self.subTest(why=why):
+                verdict, rows, fails, warns = self.run_judge(with_action(BTN, *lines))
+                self.assertEqual(verdict, "FAIL")
+                self.assertEqual(fails, [f"{BTN}: a run window sat above another window for {ms} ms"])
+                self.assertEqual((warns, dict(rows)[BTN]["kept"]), ([], 0))
+
+    def test_each_lift_is_judged_on_its_own(self):
+        two = [*A3, rises(1740), keeper_sinks(1752), falls(1752)]
+        verdict, rows, fails, warns = self.run_judge(with_action(BTN, *two))
+        self.assertEqual((verdict, fails, warns), ("PASS", [], [lift_note(12), lift_note(12)]))
+        self.assertEqual((dict(rows)[BTN]["above"], dict(rows)[BTN]["kept"]), (0, 24))
+        # A tolerated lift doesn't excuse the others, which still sum per action.
+        mixed = [*A3, rises(1740), falls(1748), rises(1760), falls(1765)]
+        verdict, rows, fails, warns = self.run_judge(with_action(BTN, *mixed))
+        self.assertEqual(verdict, "FAIL")
+        self.assertEqual(fails, [f"{BTN}: a run window sat above another window for 13 ms"])
+        self.assertEqual(warns, [lift_note(12)])
+
+    def test_a_tolerated_lift_with_top_or_a_steal_fails(self):
+        top = [f"t=1712 TOP tagged=1 via=ev-reorder {WIN} vis=1 iconic=0 cloaked=0", *A3,
+               f"t=1724 TOP tagged=0 via=poll {TERM}"]
+        verdict, _, fails, warns = self.run_judge(with_action(BTN, *top))
+        self.assertEqual(verdict, "FAIL")
+        self.assertEqual(fails, [f"{BTN}: a run window was on top of the screen for 12 ms"])
+        self.assertEqual(warns, [lift_note(12)])
+        steal = [*A3[:2], f"t=1724 FOREGROUND tagged=1 idle=8000 via=ev-foreground {WIN} vis=1 "
+                 "iconic=0 cloaked=0", A3[2], f"t=1730 FOREGROUND tagged=0 idle=8006 via=ev-foreground {TERM}"]
+        verdict, _, fails, warns = self.run_judge(with_action(BTN, *steal))
+        self.assertEqual(verdict, "FAIL")
+        self.assertEqual(fails, [f"a run window took the foreground during {BTN} at t=1724 (idle 8000 ms)"])
+        self.assertEqual(warns, [lift_note(12)])
+
+    def test_a_keeper_fight_fails(self):
+        fight = [*A3[:2], f"t=1724 KEEP-FIGHT sinks=21 via=ev-reorder {WIN}", A3[2]]
+        verdict, rows, fails, warns = self.run_judge(with_action(BTN, *fight))
+        self.assertEqual(verdict, "FAIL")
+        self.assertEqual(fails, [f"{BTN}: the keeper fought a run window (more than 20 sinks in 1 s)"])
+        self.assertEqual(dict(rows)[BTN]["fight"], 1)
+
+    def test_an_unclosed_lift_runs_to_the_log_end(self):
+        # Opened at t=96 in stop and never closed: 5 ms to the last line, t=101, with no sink.
+        verdict, rows, fails, _ = self.run_judge(with_lines("t=95 ", rises(96)))
+        self.assertEqual(verdict, "FAIL")
+        self.assertEqual(fails, ["stop: a run window sat above another window for 5 ms"])
+        self.assertEqual(dict(rows)["stop"]["above"], 5)
 
     def test_real_first_line_reads_visible(self):
         verdict, _, fails, _ = self.run_judge([LOG_FG, *CLEAN[1:]])
@@ -1841,12 +1936,21 @@ class Live(unittest.TestCase):
         r = self.check()
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertEqual(r.stdout.splitlines()[-1], "PASS")
-        for action in ("page0", "newPage-default", "bringToFront", "setWindowBounds-maximized",
+        for action in ("page0", "newPage-default", "bringToFront", BTN, "setWindowBounds-maximized",
                        "setWindowBounds-normal", "window.open", "raf-covered", "stop"):
             self.assertRegex(r.stdout, rf"(?m)^{re.escape(action)}\s+0ms\s+0ms\s+0ms")
         rid = self.only_run_id()
         calls = [c["method"] for c in self.cdp_calls(rid)]
         self.assertEqual(calls[-1], "Browser.close")
+        # bringToFront-newPage runs right after bringToFront: page0's bringToFront, then a new page.
+        with open(os.path.join(self.base, rid + ".log")) as f:
+            marks = [ln.split(" ", 1)[1] for ln in f.read().splitlines() if " MARK " in ln]
+        self.assertEqual(marks[marks.index("MARK end bringToFront") + 1], f"MARK begin {BTN}")
+        i = calls.index("Page.bringToFront")
+        self.assertEqual(calls[i:i + 3], ["Page.bringToFront", "Page.bringToFront", "Target.createTarget"])
+        second, new_page = self.cdp_calls(rid)[i + 1:i + 3]
+        self.assertEqual(second.get("sessionId"), "S1", "on page0's session")
+        self.assertEqual(new_page["params"], {"url": "about:blank"})
         evals = [c for c in self.cdp_calls(rid) if c["method"] == "Runtime.evaluate"]
         self.assertTrue(evals[0]["params"]["userGesture"], "window.open carries a user gesture")
         self.assertEqual({c.get("sessionId") for c in evals}, {"S1"})
