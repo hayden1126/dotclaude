@@ -934,6 +934,10 @@ def dispatch(msg):
         return {"result": {"sessionId": "S1"}}
     if m == "Page.bringToFront":
         return {"result": {}}
+    if m == "Page.navigate":
+        if env.get("FAKE_NAV_ERROR"):
+            return {"result": {"frameId": "F1", "errorText": env["FAKE_NAV_ERROR"]}}
+        return {"result": {"frameId": "F1", "loaderId": "L1"}}
     if m == "Runtime.evaluate":
         return {"result": {"result": {"type": "string", "value": env.get("FAKE_RAF", "visible 118")}}}
     return {"error": {"code": -32601, "message": "'%s' wasn't found" % m}}
@@ -1942,21 +1946,41 @@ class Live(unittest.TestCase):
         rid = self.only_run_id()
         calls = [c["method"] for c in self.cdp_calls(rid)]
         self.assertEqual(calls[-1], "Browser.close")
-        # bringToFront-newPage runs right after bringToFront: page0's bringToFront, then a new page.
+        # bringToFront-newPage is the first action (page0 still its window's only tab), page0's
+        # bringToFront then a new page; the plain bringToFront follows every new page, so page0
+        # is the active tab when raf-covered reads it.
         with open(os.path.join(self.base, rid + ".log")) as f:
-            marks = [ln.split(" ", 1)[1] for ln in f.read().splitlines() if " MARK " in ln]
-        self.assertEqual(marks[marks.index("MARK end bringToFront") + 1], f"MARK begin {BTN}")
+            marks = [ln.split(" ", 1)[1] for ln in f.read().splitlines() if " MARK begin " in ln]
+        self.assertEqual(marks[:2], ["MARK begin page0", f"MARK begin {BTN}"])
+        self.assertLess(marks.index(f"MARK begin {BTN}"), marks.index("MARK begin bringToFront"))
+        # page0 loads a page of its own first: on about:blank the pair lifted nothing live.
         i = calls.index("Page.bringToFront")
-        self.assertEqual(calls[i:i + 3], ["Page.bringToFront", "Page.bringToFront", "Target.createTarget"])
-        second, new_page = self.cdp_calls(rid)[i + 1:i + 3]
-        self.assertEqual(second.get("sessionId"), "S1", "on page0's session")
+        self.assertEqual(calls[i - 2:i + 2], ["Page.navigate", "Runtime.evaluate",
+                                              "Page.bringToFront", "Target.createTarget"])
+        nav, loaded, front, new_page = self.cdp_calls(rid)[i - 2:i + 2]
+        self.assertTrue(nav["params"]["url"].startswith("data:text/html,"), nav)
+        self.assertTrue(loaded["params"]["awaitPromise"], "waits for page0's load")
+        for c in (nav, loaded, front):
+            self.assertEqual(c.get("sessionId"), "S1", "on page0's session")
         self.assertEqual(new_page["params"], {"url": "about:blank"})
+        last_front = len(calls) - 1 - calls[::-1].index("Page.bringToFront")
+        self.assertNotIn("Target.createTarget", calls[last_front:], "a new page after the last bringToFront")
         evals = [c for c in self.cdp_calls(rid) if c["method"] == "Runtime.evaluate"]
-        self.assertTrue(evals[0]["params"]["userGesture"], "window.open carries a user gesture")
+        opens = [c for c in evals if "window.open" in c["params"]["expression"]]
+        self.assertEqual(len(opens), 1)
+        self.assertTrue(opens[0]["params"]["userGesture"], "window.open carries a user gesture")
         self.assertEqual({c.get("sessionId") for c in evals}, {"S1"})
         self.assertIn({"windowState": "maximized"},
                       [c["params"].get("bounds") for c in self.cdp_calls(rid)])
         self.assertTrue(self.has("eof-" + rid))
+        self.assertEqual(self.records(), [])
+
+    def test_check_fails_an_action_it_could_not_take(self):
+        r = self.check(FAKE_NAV_ERROR="net::ERR_ABORTED")
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertEqual(r.stdout.splitlines()[-1], "FAIL")
+        self.assertRegex(r.stdout, rf"(?m)^FAIL: {re.escape(BTN)}: the action could not be taken "
+                                   r"\(.*ERR_ABORTED.*\), so it went untested$")
         self.assertEqual(self.records(), [])
 
     def test_check_inconclusive_without_a_visible_foreground(self):

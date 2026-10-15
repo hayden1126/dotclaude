@@ -1529,6 +1529,9 @@ AFTER_STOP_S = 5  # the supervisor keeps logging the foreground this long after 
 SETTLE_S = 1.5    # after each action, for its window events to land in the log
 RESINK_S = 0.5    # after each re-place
 KEEP_TOLERANCE_MS = 50  # A3, 3 of 3 live runs: bringToFront then newPage lifted it ~12 ms
+LOADED_URL = "data:text/html,<title>chrome-bg check</title>page0"
+LOADED_JS = ("new Promise((r) => document.readyState === 'complete' ? r('loaded')"
+             " : addEventListener('load', () => r('loaded')))")
 RAF_JS = ("new Promise((r) => { let n = 0; const t = performance.now();"
           " const f = () => { n++; if (performance.now() - t < 1000) requestAnimationFrame(f);"
           " else r(document.visibilityState + ' ' + n); };"
@@ -1590,11 +1593,12 @@ def tracking_problems(lines):
     return problems
 
 
-def judge(lines, raf=None, hz=None, leftover=None):
+def judge(lines, raf=None, hz=None, leftover=None, errors=()):
     """classify.py's per-action timings from a supervisor log, then check's verdict.
 
     raf is page0's "<visibilityState> <frames in 1 s>" read while covered, hz the primary
-    monitor's refresh rate, leftover what -Scan still found of the run after stop.
+    monitor's refresh rate, leftover what -Scan still found of the run after stop, errors the
+    actions that could not be taken (each fails: an action not taken was not tested).
     Returns (verdict, [(action, row)], fails, warnings), verdict PASS, FAIL or INCONCLUSIVE.
 
     Time on top (TOP tagged=1) and a foreground steal (FOREGROUND tagged=1) always fail. Time
@@ -1702,6 +1706,7 @@ def judge(lines, raf=None, hz=None, leftover=None):
             warns.append("WARN: hello gave no refresh rate, so the frame rate went unjudged")
     if leftover:
         fails.append(f"left after stop: {leftover}")
+    fails.extend(errors)
     fails.extend(tracking_problems(lines))
     if first_fg is None:
         warns.append("WARN: the log has no FOREGROUND line before the first action; only "
@@ -1760,6 +1765,7 @@ def cmd_check(args):
         print(f"INCONCLUSIVE: {e}")
         return 3
     sup, cdp, raf, hz = run.sup, run.cdp, None, run.hello["primary"]["hz"]
+    errors = []
     try:
         session = cdp.send("Target.attachToTarget",
                            {"targetId": run.target, "flatten": True})["sessionId"]
@@ -1775,6 +1781,12 @@ def cmd_check(args):
             return raf
 
         def front_then_new_page():
+            # Live (A3 bisect), the pair lifted nothing while page0 sat on about:blank, and lifted
+            # it once page0 had loaded a page of its own, an http or a data: URL alike.
+            nav = cdp.send("Page.navigate", {"url": LOADED_URL}, session=session, timeout=10)
+            if nav.get("errorText"):
+                raise Fail(f"page0 did not load {LOADED_URL!r}: {nav['errorText']}")
+            evaluate(LOADED_JS, awaitPromise=True)
             cdp.send("Page.bringToFront", session=session)
             return cdp.send("Target.createTarget", {"url": "about:blank"})
 
@@ -1782,10 +1794,13 @@ def cmd_check(args):
             return lambda: cdp.send("Browser.setWindowBounds", {"windowId": run.window,
                                                                 "bounds": {"windowState": state}})
 
+        # bringToFront-newPage goes first, while page0 is its window's only tab, as in A3: later, it
+        # lifted nothing live. The plain bringToFront goes after every new page, so page0 is its
+        # window's active tab again when raf-covered reads it.
         actions = [
+            ("bringToFront-newPage", front_then_new_page),
             ("newPage-default", lambda: cdp.send("Target.createTarget", {"url": "about:blank"})),
             ("bringToFront", lambda: cdp.send("Page.bringToFront", session=session)),
-            ("bringToFront-newPage", front_then_new_page),
             ("setWindowBounds-maximized", bounds("maximized")),
             ("setWindowBounds-normal", bounds("normal")),
             ("window.open", lambda: evaluate(
@@ -1799,6 +1814,7 @@ def cmd_check(args):
                 result = act()
             except (Fail, OSError) as e:
                 result = f"ERROR {e}"
+                errors.append(f"{name}: the action could not be taken ({e}), so it went untested")
             print(f"chrome-bg check: {name}: {json.dumps(result)[:120]}", file=sys.stderr)
             take_signal(SETTLE_S)  # a wait a stop signal ends: main() returns 128+n after finish
             sup.call("mark", text=f"end {name}")
@@ -1831,7 +1847,7 @@ def cmd_check(args):
     except (OSError, Fail) as e:
         print(f"chrome-bg: can't read the supervisor's log {run.rec['log']}: {e}", file=sys.stderr)
         return 1
-    verdict, rows, fails, warns = judge(lines, raf=raf, hz=hz, leftover=leftover)
+    verdict, rows, fails, warns = judge(lines, raf=raf, hz=hz, leftover=leftover, errors=errors)
     print_report(verdict, rows, fails, warns, raf)
     return {"PASS": 0, "FAIL": 1, "INCONCLUSIVE": 3}[verdict]
 
