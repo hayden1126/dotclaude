@@ -393,7 +393,8 @@ need nothing extra.
   its own row, headed by its name (`dotclaude▸`): the main checkout's tabs (`lead` plus its title),
   then each lane (its id, cut to 12 cells, plus its title), then its other worktrees. A second tab
   in the main checkout, a stray session or a shell, reads `lead²` (a third `lead³`), and `lead`
-  stays on the tab holding the recorded lead's pane (the first tab when none is recorded); a new
+  stays on the tab holding the recorded lead's pane (the first tab when no record names a pane on
+  this tmux server); a new
   lead renames tabs and moves none. Every other
   window goes on the shared row(s) at the bottom, as `repo: title`. A window counts as whatever
   its active pane's directory is in. Window numbers never change; only the order on the bar does.
@@ -601,7 +602,8 @@ and status single-writer:
   that lane's live session. A session's ListAgents name is its tab title, which changes most
   turns, and a pass gives it a new socket, so resolve the address just before each send.
   With two live sessions in the main checkout, `lane addr lead` prints the lead's: the last one
-  to run a bare `lane init`, `new`, `adopt`, `open` or `done`, or `lane lead` to take it on
+  to run a bare `lane init`, `new`, `adopt`, `open` (not `--print`) or `done` that succeeds,
+  or `lane lead` to take it on
   purpose (`! lane lead` at its prompt). `lane ls` names both, with their windows.
 - `lane lock gate -- npm run e2e` runs a shared gate under a named lock, so a second lane's run
   waits instead of colliding.

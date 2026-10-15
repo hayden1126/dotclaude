@@ -2298,8 +2298,9 @@ def lead_claim(repo: Repo) -> tuple[dict, dict]:
     have launched in the main checkout, outside lane_place: inside main that means outside any
     linked worktree, so a session in an agent worktree never leads, nor does a lane's session
     cd'd to main. Its session file's cwd decides that, as it does for `addr`; a Bash cd doesn't
-    move it. Then no session above may be a lane's, by lead_only's rule (lane_above): else a
-    lane's session could run an interactive claude in main and make it the lead."""
+    move it, so a lead cd'd into a lane still leads. Then no session farther up may be a
+    lane's, by lead_only's rule (lane_above, real cwd included): else a lane's session could
+    run an interactive claude in main and make it the lead."""
     if not lanelib.pids_visible():
         raise LaneError(SANDBOXED_LEAD)
     above = sessions_above()
@@ -2329,7 +2330,7 @@ def lead_claim(repo: Repo) -> tuple[dict, dict]:
     # With no absolute root in the config (lead_only refuses there), linked worktrees alone.
     root = repo.config().get("root")
     root = os.path.realpath(root) if isinstance(root, str) and os.path.isabs(root) else None
-    if hit := lane_above(repo, root, above):
+    if hit := lane_above(repo, root, above[1:]):  # the nearest passed by its launch dir above
         lane_s, lane_p, where = hit
         raise LaneError(shown(f"this runs under session {sid_of(lane_s)} ({lane_p.pid} "
                               f"{lane_p.comm}), {where}: a lane's session never leads, nor any "

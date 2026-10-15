@@ -2230,13 +2230,13 @@ class LeadAct(Fakes):
         extra = {"then": {"argv": [sys.executable, LANE, *argv], "cwd": run_in or self.main,
                           "go": go, "out": out}}  # the nearest runs the act
         for kw in reversed(sessions):
-            cfg = self.fake(kw.get("cwd") or self.main, **extra)
+            cfg = self.fake(kw.get("real_cwd") or kw.get("cwd") or self.main, **extra)
             if pane := kw.get("pane", "%3"):
                 cfg["env"].update(TMUX=f"{self.tmux_sock},{os.getpid()},0", TMUX_PANE=pane)
             extra = {"children": [cfg]}  # the next one out starts it
         pids = self.start(cfg)
         for pid, kw in zip(pids, sessions):
-            self.session(pid, **kw)
+            self.session(pid, **{k: v for k, v in kw.items() if k != "real_cwd"})
         return pids, self.await_done(go, out)
 
     def session(self, pid, cwd=None, sid=MAIN_SID, kind="interactive", pane="%3", sock=True,
@@ -2355,6 +2355,17 @@ class LeadAct(Fakes):
         _, _, res = self.chain(["new", "docs-2"], lane, sid="sess-main-0003")
         self.assertEqual(res["rc"], 0, res["err"])
         self.assertEqual(self.read(self.lead_path), before)
+
+    def test_the_leads_own_cd_never_vetoes_it(self):
+        # A Bash cd moves the lead's process cwd, not its session file's: the nearest session
+        # is judged by its launch dir, so a lead cd'd into a lane still takes the lead. Only the
+        # sessions farther up are judged by their real cwd too (lane_above).
+        pid, res = self.act(["lead"], real_cwd=self.path)
+        self.assertEqual(res["rc"], 0, res["err"])
+        self.assertLead(pid)
+        other, res = self.act(["new", "api-docs"], real_cwd=self.path, sid="sess-main-0002")
+        self.assertEqual(res["rc"], 0, res["err"])
+        self.assertLead(other, sid="sess-main-0002")
 
     def test_a_record_step_that_fails_never_fails_the_act(self):
         # The act already succeeded and printed when its session is recorded: a failure there
