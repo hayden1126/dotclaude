@@ -172,7 +172,8 @@ chrome-bg check
   `1280x900`).
 - `start` makes a detached run and prints its browserURL, or
   `{id, url, port, pid}` with `--json`. A holder process owns the run until
-  `stop` or `--ttl` (default `2h`; takes `90s`, `30m`, `2h` or `1d`). Use it
+  `stop`, `--ttl` (default `2h`; takes `90s`, `30m`, `2h` or `1d`), or Chrome
+  exiting (a fixture's `browser.close()`, or you closing the window). Use it
   when a probe spans several commands:
   `export CHROME_BG_URL=$(chrome-bg start)`.
 - `stop <id|url>` stops one run by its id or browserURL, never by a bare port
