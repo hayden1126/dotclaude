@@ -25,13 +25,19 @@ read_bounded opens without following a link (~/.tmux.conf alone follows one) and
 on a FIFO, reads only a regular file, and stops at a per-file limit (GIT_READ, TEXT_READ,
 JSON_READ): a FIFO, a device, a link, a dir, a file past its limit or one it can't read all read
 as absent. tests/setup sweeps each of those files with a FIFO, a link to /dev/zero and a 2 GiB
-file, and fails on any other open() of a file to read.
+file, and fails on any other open() of a file to read. The one git call (commits_past, from
+merged_refusal) runs only in a lane's own run, once those reads have validated the worktree and
+read its HEAD and commondir, and stops after GIT_WAIT.
 
 Usage:
   install-state.py hold REPO_DIR   exit 3, naming the holder on stderr, when a live lane other
                                    than REPO_DIR holds the install and REPO_DIR is not that
                                    lane's main checkout. A run from the main checkout relinks
                                    everything, so it proceeds and says it releases the hold.
+                                   Exit 3 too when REPO_DIR is a lane with no commit past the
+                                   lanes config's base (merged, or nothing committed yet), or
+                                   when git can't tell: its install would take the live install
+                                   back from main.
   install-state.py prune REPO_DIR  remove the managed links into another live lane of this repo,
                                    and the dangling ones under REPO_DIR, its lanes root or an
                                    agent worktree in its main's .claude/worktrees/.
@@ -55,6 +61,7 @@ import sys
 from typing import NamedTuple
 
 HELD = 3
+GIT_WAIT = 5  # seconds for merged_refusal's git: hold must finish inside tests/setup's 10 s sweep
 
 # What setup.sh links, as paths inside its checkout (tests/setup ties these to its link lines).
 SOURCES = ("CLAUDE.md", "notify-toast.ps1", "hooks/*.sh", "hooks/*.py", "skills/*",
@@ -460,34 +467,119 @@ def common_dir(checkout: str) -> str | None:
     return git_path(gitdir, "commondir")
 
 
-def config_root(text: str) -> str | None:
-    """The `root` key of a lanes config. `lane init` writes flat `key = "value"` lines, so where
-    tomllib is missing (before 3.11) a regex reads the same value."""
+def config_value(text: str, key: str) -> str | None:
+    """The string value of `key` in a lanes config. `lane init` writes flat `key = "value"`
+    lines, so where tomllib is missing (before 3.11) a regex reads the same value."""
     try:
         import tomllib  # here, not at the top: this module must import on Python 3.10
-    except ImportError:
-        m = re.search(r'^root\s*=\s*"((?:[^"\\]|\\.)*)"\s*(?:#.*)?$', text, re.M)
+    except ImportError:  # a basic string unescaped, or a literal one ('...', no escapes) as is
+        quoted = r'''(?:"((?:[^"\\]|\\.)*)"|'([^'\n]*)')'''
+        m = re.search(rf"^{re.escape(key)}\s*=\s*{quoted}\s*(?:#.*)?$", text, re.M)
         if not m:
             return None
+        if m.group(2) is not None:
+            return m.group(2)
         return re.sub(r"\\(.)", lambda e: {"n": "\n", "t": "\t"}.get(e.group(1), e.group(1)),
                       m.group(1))
     try:
-        root = tomllib.loads(text).get("root")
+        value = tomllib.loads(text).get(key)
     except (tomllib.TOMLDecodeError, RecursionError):  # RecursionError: nested past the limit
         return None
-    return root if isinstance(root, str) else None
+    return value if isinstance(value, str) else None
 
 
-def lanes_root(common: str | None, p: Places) -> str | None:
-    """The lanes root of the repo whose git common dir is common, from the config `lane init`
-    wrote (lanelib.Repo.config_path); None without one."""
+def lanes_config(common: str | None, p: Places) -> str | None:
+    """The text of the lanes config `lane init` wrote for the repo whose git common dir is common
+    (lanelib.Repo.config_path); None without one."""
     if common is None:
         return None
     key = hashlib.sha256(common.encode()).hexdigest()[:12]
     name = f"{os.path.basename(os.path.dirname(common))}-{key}.toml"
-    text = read_text(os.path.join(p.state, "lanes", name), TEXT_READ)
-    root = config_root(text) if text is not None else None
+    return read_text(os.path.join(p.state, "lanes", name), TEXT_READ)
+
+
+def lanes_root(common: str | None, p: Places) -> str | None:
+    """The lanes root of the repo whose git common dir is common, from its lanes config; None
+    without one."""
+    text = lanes_config(common, p)
+    root = config_value(text, "root") if text is not None else None
     return os.path.realpath(root) if root and os.path.isabs(root) and "\0" not in root else None
+
+
+def base_ref(common: str | None, p: Places) -> tuple[str, str]:
+    """(the lanes config's base as written, as a full ref), origin/main by default. A short base
+    becomes refs/remotes/<base>, as `lane`'s base_ref has it: a tag or branch of that name,
+    which sandboxed Bash can make, would otherwise win."""
+    text = lanes_config(common, p)
+    base = (config_value(text, "base") if text is not None else None) or "origin/main"
+    return base, base if base.startswith("refs/") else f"refs/remotes/{base}"
+
+
+def commits_past(checkout: str, ref: str, env) -> tuple[int | None, str]:
+    """(how many commits checkout's HEAD has that ref lacks, ""), or (None, why git couldn't
+    tell). git reads objects only (rev-list: no index, no hook), with every transport refused
+    (GIT_ALLOW_PROTOCOL=none, so not even a partial clone's lazy fetch runs a program), no GIT_*
+    variable from the environment, no system config, no global config (git 2.32 and later),
+    its output captured (so no pager), and stops after GIT_WAIT.
+
+    safe.directory is `*` for this call: the global config that would hold the user's entry is
+    skipped, and an ownership check adds nothing here, since the run is this checkout's own
+    setup.sh, already running its code."""
+    import subprocess  # here, not at the top: on Linux it imports fcntl, which git-bash lacks
+    genv = {k: v for k, v in env.items() if not k.startswith("GIT_")}
+    genv.update(GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull, GIT_OPTIONAL_LOCKS="0",
+                GIT_ALLOW_PROTOCOL="none", GIT_NO_LAZY_FETCH="1", LC_ALL="C")
+    try:
+        r = subprocess.run(["git", "--no-pager", "-c", "safe.directory=*", "-C", checkout,
+                            "rev-list", "--count", "--end-of-options", f"{ref}..HEAD"],
+                           env=genv, capture_output=True, text=True, errors="replace",
+                           timeout=GIT_WAIT)
+    except FileNotFoundError:
+        return None, "git not found"
+    except subprocess.TimeoutExpired:
+        return None, f"git took over {GIT_WAIT} s"
+    except (OSError, ValueError) as e:  # ValueError: a NUL in the ref
+        return None, f"git didn't run: {e}"
+    count = r.stdout.strip()
+    if r.returncode == 0 and count.isdigit():
+        return int(count), ""
+    return None, next(iter(r.stderr.strip().splitlines()), f"git exit {r.returncode}")
+
+
+def merged_refusal(repo_dir: str, env=None) -> str | None:
+    """The line refusing a run from a lane worktree with no commit past the lanes config's base:
+    its work is merged (or there is none yet), so its install would take the live install back
+    from main for nothing. A rerun that followed a hint printed while that lane held the install
+    did just that, 3 s after the lead's reinstall from main released it (2026-10-15). None for
+    any other run. It fails closed: when git can't tell, the line says why.
+
+    Only a live linked worktree is checked, and git runs only once the bounded reads have read
+    its HEAD and commondir (a FIFO there would hold git to its timeout): so only in a lane's own
+    run, never on a lane's files from another run. It guards against a mistake, not a hostile
+    lane, which could move the ref or edit its own copy of this file."""
+    env = os.environ if env is None else env
+    me = os.path.realpath(repo_dir)
+    wt = linked_worktree(me)
+    if wt is None:
+        return None
+    common, head = common_dir(me), branch(wt)
+    base, ref = base_ref(common, places(env))
+    # branch() gives a detached HEAD as "detached at <sha>"; a branch name holds no space.
+    label = head if head.startswith("detached at ") else f"branch {head}"
+    where = f"the lane worktree {me} ({label})"
+    if common is None or head == "?":
+        count, why = None, "its HEAD or commondir file doesn't read as git's"
+    else:
+        count, why = commits_past(me, ref, env)
+    if count is None:
+        return (f"!!  can't tell whether {where} has a commit past {base} ({why}), and a merged "
+                "lane must not take the install back from main. Install from the main checkout "
+                f"{wt.main}, or fix that and rerun.\n")
+    if count:
+        return None
+    return (f"!!  {where} has no commit past {base} (merged, or nothing committed yet), so an "
+            "install from here would point the live install at work main already has. Install "
+            f"from the main checkout {wt.main}, or commit the change here first.\n")
 
 
 def stale(link: Link, run: Run) -> bool:
@@ -647,7 +739,10 @@ def main(argv: list[str]) -> int:
                 f"!!  install held by the lane worktree {h['root']} (branch {h['branch']}, "
                 f"{link_count(h)} into it): its install is under test. The lead's ./setup.sh in "
                 f"{h['main']} releases it (it relinks everything).\n")
-        if held:
+        merged = merged_refusal(args[0])
+        if merged:
+            sys.stderr.write(merged)
+        if held or merged:
             return HELD
         for h in released:
             print(f"==> this run releases the install held by {h['root']} "

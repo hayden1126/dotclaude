@@ -67,8 +67,8 @@ overlay's `permissions.deny` (`"Edit(~/hq/bin/**)"`), or the excluded-command gu
 excluded command. Only user and managed settings count for that, so a project's
 `.claude/settings*.json` can't stand in. On a new machine, the first `./setup.sh` ends with the
 guard's scan: it lists each dir it would refuse with what the dir holds, then prints the whole
-`settings.machine.json` with the rules added. Look at each dir, paste the file, and run
-`./setup.sh` again. Rerun the scan (`python3 -I hooks/excluded_guard.py --scan`) after adding a
+`settings.machine.json` with the rules added. Look at each dir, paste the file, and rerun setup
+where the scan's last line says. Rerun the scan (`python3 -I hooks/excluded_guard.py --scan`) after adding a
 PATH dir or cloning a repo whose install step sets in-repo git hooks.
 
 The baseline's `permissions` deny destructive git and ask before anything that can reach `main`,
@@ -601,7 +601,8 @@ and status single-writer:
   waits instead of colliding.
 - A lane tests its change by installing from its own worktree (`lane lock install --
   ./setup.sh`), and that install holds. setup.sh refuses to run from any other lane or clone
-  until the main checkout's own run relinks everything.
+  until the main checkout's own run relinks everything. It also refuses a lane with no commit
+  past `origin/main`, so a merged lane can't take the install back.
 - `lane done chart-fix` closes a merged lane in one run. It ends the lane's own sessions and
   what runs under them, proven from /proc and Claude Code's session files and never chosen by
   name or tmux window, and it refuses anything else by name. Then it archives the record and
