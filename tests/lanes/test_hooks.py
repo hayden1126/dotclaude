@@ -1,6 +1,7 @@
 """hooks/lane-guard.sh and hooks/lane-identity.sh, run as Claude Code runs them: the event JSON on
 stdin to the bash shim."""
 import importlib.util
+import json
 import os
 import shutil
 import subprocess
@@ -180,7 +181,8 @@ class GuardPlain(LanesRepo):
 class IdentityHook(LanesRepo):
     def setUp(self):
         super().setUp()
-        self.lane("new", "chart-fix", "--claim", "42")
+        # A branch apart from the id, so a line that named one for the other would show.
+        self.lane("new", "chart-fix", "--claim", "42", "--branch", "fix/chart")
         self.lane_dir = self.lane_path("chart-fix")
 
     def start(self, cwd, source="startup", sid="sess-0001", **extra):
@@ -191,7 +193,7 @@ class IdentityHook(LanesRepo):
         out = self.start(os.path.join(self.lane_dir))
         ctx = out["additionalContext"]
         self.assertEqual(out["hookEventName"], "SessionStart")
-        for piece in ("`chart-fix`", "branch `chart-fix`", "#42", "port 5191",
+        for piece in ("`chart-fix`", "branch `fix/chart`", "#42", "port 5191",
                       self.record("chart-fix"), "read-only", "`lane who", "another session",
                       "`lane addr lead`", "just before each send"):
             self.assertIn(piece, ctx)
@@ -205,7 +207,7 @@ class IdentityHook(LanesRepo):
         self.git("switch", "-q", "-c", "chart-more", cwd=self.lane_dir)
         ctx = self.start(self.lane_dir)["additionalContext"]
         self.assertIn("branch `chart-more`, claims #42", ctx)
-        self.assertNotIn("branch `chart-fix`", ctx)
+        self.assertNotIn("fix/chart", ctx)
 
     def test_a_detached_lane_is_told_its_commit(self):
         self.git("switch", "-q", "--detach", cwd=self.lane_dir)
@@ -216,32 +218,59 @@ class IdentityHook(LanesRepo):
 
     def test_an_unusable_head_names_lane_json_s_branch_and_says_so(self):
         # The admin dir is sandbox-writable. git refuses the first; it reports the others, which
-        # must not reach the context: a backtick ends the code span, a tag is no branch.
+        # must not reach the context: a backtick ends the code span, a tag is no branch, and a
+        # name that isn't UTF-8 fails the decode.
         admin = self.git("rev-parse", "--absolute-git-dir", cwd=self.lane_dir).strip()
         log = os.path.join(self.tmp, "state", "dotclaude", "lane-identity.log")
-        for head in ("ref: refs/heads/-bad name", "ref: refs/heads/a`b", "ref: refs/tags/v1"):
+        for head in (b"ref: refs/heads/-bad name", b"ref: refs/heads/a`b", b"ref: refs/tags/v1",
+                     b"ref: refs/heads/\xff"):
             with self.subTest(head=head):
-                self.write(os.path.join(admin, "HEAD"), head + "\n")
+                with open(os.path.join(admin, "HEAD"), "wb") as f:
+                    f.write(head + b"\n")
+                seen = len(self.read(log).splitlines()) if os.path.exists(log) else 0
                 ctx = self.start(self.lane_dir)["additionalContext"]
-                self.assertIn("branch `chart-fix` (lane.json's: the worktree's HEAD couldn't be "
+                self.assertIn("branch `fix/chart` (lane.json's: the worktree's HEAD couldn't be "
                               "read), claims #42", ctx)
                 self.assertNotIn("a`b", ctx)
                 self.assertNotIn("refs/", ctx)
-                self.assertIn("head unreadable", self.read(log).splitlines()[-1])
+                (line,) = self.read(log).splitlines()[seen:]
+                self.assertIn("head unreadable lane=chart-fix", line)
 
-    def test_git_failing_falls_back_to_lane_json_s_branch(self):
+    def identity_module(self):
         spec = importlib.util.spec_from_file_location(
             "lane_identity_t", os.path.join(HOOKS, "lane_identity.py"))
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
+        return mod
+
+    def test_git_failing_falls_back_to_lane_json_s_branch(self):
+        mod = self.identity_module()
         repo = mod.lanelib.resolve(self.lane_dir)
         lane = repo.lane_at(self.lane_dir)
-        for error in (OSError("no git"), subprocess.TimeoutExpired(["git"], 60)):
+        for error in (OSError("no git"), subprocess.TimeoutExpired(["git"], mod.GIT_WAIT)):
             with self.subTest(error=type(error).__name__):
                 with mock.patch.object(mod.lanelib, "git", side_effect=error):
                     self.assertEqual(mod.checked_out(repo, lane),
-                                     "branch `chart-fix` (lane.json's: the worktree's HEAD "
+                                     "branch `fix/chart` (lane.json's: the worktree's HEAD "
                                      "couldn't be read)")
+
+    def test_the_git_calls_fit_inside_the_hook_s_timeout(self):
+        # Claude Code kills the hook at its settings.json timeout, which costs the whole line, so
+        # a hung git must time out first: the lock wait and both git calls (a detached HEAD
+        # makes two) fit inside it, with a second to spare for the rest.
+        mod = self.identity_module()
+        with open(os.path.join(os.path.dirname(HOOKS), "settings.json")) as f:
+            settings = json.load(f)
+        (timeout,) = [h["timeout"] for group in settings["hooks"]["SessionStart"]
+                      for h in group["hooks"] if "lane-identity.sh" in h["command"]]
+        self.assertLessEqual(mod.LOCK_WAIT + 2 * mod.GIT_WAIT, timeout - 1)
+        self.git("switch", "-q", "--detach", cwd=self.lane_dir)
+        repo = mod.lanelib.resolve(self.lane_dir)
+        lane = repo.lane_at(self.lane_dir)
+        with mock.patch.object(mod.lanelib, "git", wraps=mod.lanelib.git) as git:
+            self.assertTrue(mod.checked_out(repo, lane).startswith("a detached HEAD at `"))
+        self.assertEqual([c.kwargs.get("timeout") for c in git.call_args_list],
+                         [mod.GIT_WAIT, mod.GIT_WAIT])
 
     def test_compact_says_reread_and_keeps_the_session_start(self):
         self.start(self.lane_dir)

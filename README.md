@@ -558,9 +558,9 @@ need nothing extra.
   - It exits before Python starts when no notice exists, skips a subagent's calls, and fails
     open.
 - **SessionStart (`startup|resume|clear|compact`) / Stop / SessionEnd: `lane-identity.sh`** (in this
-  repo). In a lane it tells the session its lane id, the branch its worktree has checked out,
-  claims, port and record, and registers it in `lane.json`; after a compact it adds "re-read your
-  record". In the main checkout of a lanes repo it prints one board line. On Stop and SessionEnd it
+  repo). In a lane it tells the session its lane id, what its worktree has checked out (a branch,
+  or a detached HEAD's commit), claims, port and record, and registers it in `lane.json`; after a
+  compact it adds "re-read your record". In the main checkout of a lanes repo it prints one board line. On Stop and SessionEnd it
   mirrors the lane's `.lane/` into the common dir. Silent in a repo with no lanes; fails open (see
   Lanes, below).
 - **PreToolUse(`Edit|Write|MultiEdit`): `lane-guard.sh`** (in this repo). In a lanes repo it

@@ -1,8 +1,9 @@
 """SessionStart/Stop/SessionEnd hook for lanes; hooks/lane-identity.sh runs it.
 
 SessionStart (startup, resume, clear, compact):
-  in a lane     tells the model its absolute identity (lane id, the branch its worktree has
-                checked out, claims, port, record path)
+  in a lane     tells the model its absolute identity (lane id, what its worktree has checked
+                out: a branch, or a detached HEAD's commit; lane.json's branch, labeled, when
+                HEAD can't be read; claims, port, record path)
                 and the rules that keep it absolute, and appends {session_id, startedAt} to
                 lane.json sessions[] (not again for a session already listed and not ended, so a
                 compact keeps its start). On compact it adds "re-read your record": the summary
@@ -30,6 +31,9 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.realpath
 import lanelib  # noqa: E402
 
 LOCK_WAIT = 2.0
+# Each git call that reads HEAD. settings.json kills the hook at 5 s, which costs the whole line,
+# so the lock wait and two calls (a detached HEAD makes two) must time out well before that.
+GIT_WAIT = 1.0
 SHA_RE = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
 MAX_SESSIONS = 50
 
@@ -56,14 +60,15 @@ def checked_out(repo: lanelib.Repo, lane: dict) -> str:
         return f"branch `{lane['branch']}` (lane.json's: the worktree's HEAD couldn't be read)"
 
     try:
-        p = lanelib.git(["symbolic-ref", "-q", "HEAD"], repo.toplevel)
+        p = lanelib.git(["symbolic-ref", "-q", "HEAD"], repo.toplevel, timeout=GIT_WAIT)
         if p.returncode == 1:  # detached
-            p = lanelib.git(["rev-parse", "--verify", "-q", "HEAD"], repo.toplevel)
+            p = lanelib.git(["rev-parse", "--verify", "-q", "HEAD"], repo.toplevel,
+                            timeout=GIT_WAIT)
             sha = p.stdout.strip()
             if p.returncode == 0 and SHA_RE.fullmatch(sha):
                 return f"a detached HEAD at `{sha[:12]}`"
             return fallback(f"rev-parse exit {p.returncode}")
-    except (OSError, subprocess.SubprocessError) as e:
+    except (OSError, ValueError, subprocess.SubprocessError) as e:  # ValueError: not UTF-8
         return fallback(f"{type(e).__name__}: {e}")
     ref = p.stdout.strip()
     name = ref.removeprefix("refs/heads/")
