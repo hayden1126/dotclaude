@@ -277,6 +277,8 @@ CLEAN = [
     f"t=5 FOREGROUND tagged=0 idle=900 via=start {TERM}",
     f"t=6 TOP tagged=0 via=start {TERM}",
     "t=7 MONITOR \\\\.\\DISPLAY1 rect=0,0,1920,1080 work=0,0,1920,1032 primary=1 dpi=96 hz=120",
+    "t=10 LAUNCHED pid=4242 via=wmi chrome=C:\\Chrome\\chrome.exe",
+    "t=11 TAG pid=4242 created=134052216000000000",
     "t=20 MARK begin page0",
     f"t=30 SINK-AT-CREATE ok=True ev=8000 style=14cf0000 {WIN} vis=0 iconic=0 cloaked=0 title=''",
     f"t=40 PLACE [True {WIN} vis=1 iconic=0 cloaked=0 title='about:blank - Google Chrome']",
@@ -361,7 +363,8 @@ class Judge(unittest.TestCase):
         for why, lines, kw in (("on top", [dead, *with_lines("t=70 ", top)[1:]], {}),
                                ("hidden", [dead, *CLEAN[1:]], {"raf": "hidden 118"}),
                                ("slow", [dead, *CLEAN[1:]], {"raf": "visible 60"}),
-                               ("leftover", [dead, *CLEAN[1:]], {"leftover": "1 chrome.exe"})):
+                               ("leftover", [dead, *CLEAN[1:]], {"leftover": "1 chrome.exe"}),
+                               ("untracked", [dead, *(ln for ln in CLEAN[1:] if " TAG " not in ln)], {})):
             with self.subTest(why=why):
                 self.assertEqual(self.run_judge(lines, **kw)[0], "FAIL")
 
@@ -370,6 +373,31 @@ class Judge(unittest.TestCase):
                            "t=73 SOMETHING-NEW tagged=1 aboveOthers=1")
         verdict, rows, fails, warns = self.run_judge(lines)
         self.assertEqual((verdict, fails, warns), ("PASS", [], []))
+
+    def test_the_browser_must_stay_tracked_until_stop(self):
+        # Every tagged=0 reading assumes the supervisor knew the run's windows: LAUNCHED's pid
+        # needs a TAG with a real creation time, and no STALE or UNTAG before MARK begin stop.
+        tag = "t=11 TAG pid=4242 created=134052216000000000"
+        for why, lines, text in (
+                ("no TAG", [ln for ln in CLEAN if ln != tag], "pid 4242 was never tagged"),
+                ("created=0", [ln.replace("created=134052216000000000", "created=0") for ln in CLEAN],
+                 "pid 4242 was never tagged"),
+                ("TAG of another pid", [ln.replace("TAG pid=4242", "TAG pid=4243") for ln in CLEAN],
+                 "pid 4242 was never tagged"),
+                ("STALE", with_lines("t=60 ", "t=65 STALE pid=4242 created=134052216000000000"),
+                 "pid 4242 went STALE at t=65"),
+                ("UNTAG", with_lines("t=60 ", "t=65 UNTAG pid=4242"), "pid 4242 went UNTAG at t=65"),
+                ("no LAUNCHED", [ln for ln in CLEAN if "LAUNCHED" not in ln], "no LAUNCHED pid=N line")):
+            with self.subTest(why=why):
+                verdict, _, fails, _ = self.run_judge(lines)
+                self.assertEqual(verdict, "FAIL")
+                self.assertTrue(any(text in f for f in fails), fails)
+        for why, lines in (("UNTAG after stop", with_lines("t=95 ", "t=96 UNTAG pid=4242")),
+                           ("another pid", with_lines("t=60 ", "t=65 UNTAG pid=4243",
+                                                      "t=66 STALE pid=4243 created=1"))):
+            with self.subTest(why=why):
+                verdict, _, fails, _ = self.run_judge(lines)
+                self.assertEqual((verdict, fails), ("PASS", []))
 
     def test_real_first_line_reads_visible(self):
         verdict, _, fails, _ = self.run_judge([LOG_FG, *CLEAN[1:]])
@@ -645,6 +673,8 @@ def cleanup():
 
 
 if "-Kill" in args:
+    note("killstart-" + rid)
+    time.sleep(float(env.get("FAKE_SLOW_KILL", "0")))  # a signal to the caller lands mid-kill
     note("kill-" + rid)
     cleanup()
     out(C["kill"])
@@ -692,13 +722,15 @@ for line in sys.stdin:
                                   start_new_session=True)
         with open(pidfile, "w") as f:
             f.write(str(chrome.pid))
+        log("LAUNCHED pid=%d via=wmi chrome=C:\\Chrome\\chrome.exe" % C["launch"]["pid"])
+        log("TAG pid=%d created=134052216000000000" % C["launch"]["pid"])
         out(C["launch"])
     elif op == "place":
         note("place-" + rid, json.dumps(msg))
         log("PLACE [True hwnd=9569902 pid=47292 cls=Chrome_WidgetWin_1 rect=10,10,1290,910 onscreen=1 vis=1]")
         if env.get("FAKE_PLACE_RESIZE"):
             open(os.path.join(root, "resize-" + rid), "w").close()
-        out(C["place"])
+        out(dict(C["place"], windows=[]) if env.get("FAKE_PLACE_EMPTY") else C["place"])
         if env.get("FAKE_SUP_DIES_AFTER_PLACE"):
             os._exit(0)  # a crashed supervisor: no EOF cleanup, "Chrome" orphaned
     elif op == "procs" and procs_failures < int(env.get("FAKE_PROCS_FAIL", "0")):
@@ -1479,12 +1511,137 @@ class Live(unittest.TestCase):
                              env={**env, "FAKE_CHROME_IGNORE_CLOSE": "1"})
                 self.assertEqual(r.returncode, 0, r.stderr)
                 rid = self.only_run_id()
-                self.assertIn(f"the supervisor of {rid} {why}; killing the run by its dir", r.stderr)
+                self.assertIn(f"the supervisor of {rid} {why}; killed the run by its dir", r.stderr)
                 self.assertTrue(self.has("kill-" + rid))
                 chrome = int(self.notes("chromepid-" + rid)[0])
                 st = cb.proc_stat(chrome)
                 self.assertTrue(st is None or st[0] == "Z", "-Kill reaped the orphaned Chrome")
                 self.assertFalse(self.has("alive-" + rid))
+                self.assertEqual(self.records(), [])
+
+    def test_a_group_signal_cannot_cut_the_one_shot_kill_short(self):
+        # run in a session of its own, so killpg reaches it as a terminal's ctrl-c would reach
+        # its foreground group. The SIGINT lands while finish's -Kill one-shot runs.
+        p = subprocess.Popen([sys.executable, "-I", self.driver, CLI, self.root, "run", "--",
+                              sys.executable, "-c", "pass"],
+                             env={**self.env, "FAKE_EOF_EXIT": "3", "FAKE_SLOW_KILL": "2"},
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                             start_new_session=True)
+        try:
+            self.wait_for(lambda: self.started("killstart-"), what="the one-shot -Kill")
+            os.killpg(p.pid, signal.SIGINT)
+            _, err = p.communicate(timeout=40)
+        finally:
+            if p.poll() is None:
+                p.kill()
+                p.communicate()
+        # The SIGINT stays pending through cleanup, then ends run: 130 or killed by SIGINT.
+        self.assertIn(p.returncode, (128 + signal.SIGINT, -signal.SIGINT), err)
+        rid = self.only_run_id()
+        self.assertTrue(self.has("kill-" + rid), "the -Kill ran to the end")
+        self.assertIn(f"the supervisor of {rid} exited 3; killed the run by its dir", err)
+        self.assertFalse(self.has("alive-" + rid))
+        self.assertEqual(self.records(), [])
+
+    def test_a_closed_stderr_cannot_skip_the_cleanup(self):
+        # Nothing finish prints may raise past the kill and the record's removal.
+        p = subprocess.Popen([sys.executable, "-I", self.driver, CLI, self.root, "run", "--",
+                              sys.executable, "-c", "import time; time.sleep(0.5)"],
+                             env={**self.env, "FAKE_EOF_EXIT": "3"},
+                             stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        p.stderr.close()  # every write to stderr now fails with EPIPE
+        try:
+            p.wait(timeout=40)
+        finally:
+            if p.poll() is None:
+                p.kill()
+                p.wait()
+        rid = self.only_run_id()
+        self.assertTrue(self.has("kill-" + rid))
+        self.assertFalse(self.has("alive-" + rid))
+        self.assertEqual(self.records(), [])
+
+    def test_an_inherited_ignored_sighup_stays_ignored(self):
+        # As under nohup: SIGHUP neither stops run nor reaches CMD.
+        out = os.path.join(self.tmp, "status")
+        code = "import sys; open(sys.argv[1], 'w').write(open('/proc/self/status').read())"
+        p = subprocess.Popen(["/bin/sh", "-c", 'trap "" HUP; exec "$@"', "sh",
+                              sys.executable, "-I", self.driver, CLI, self.root, "run", "--",
+                              sys.executable, "-c", code, out],
+                             env={**self.env, "FAKE_SLOW_HELLO": "2"},
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        try:
+            self.wait_for(lambda: self.started("hello-"), what="hello")
+            p.send_signal(signal.SIGHUP)
+            _, err = p.communicate(timeout=40)
+        finally:
+            if p.poll() is None:
+                p.kill()
+                p.communicate()
+        self.assertEqual(p.returncode, 0, err)
+        rid = self.only_run_id()
+        with open(out) as f:
+            ign = int(re.search(r"SigIgn:\s*([0-9a-f]+)", f.read()).group(1), 16)
+        self.assertTrue(ign >> (signal.SIGHUP - 1) & 1, "CMD inherits SIGHUP ignored")
+        self.assertTrue(self.has("eof-" + rid))
+        self.assertEqual(self.records(), [])
+
+    def test_post_ready_sigterm_to_the_holder(self):
+        # stop's SIGTERM reaches a ready holder whose Chrome ignores Browser.close: the holder
+        # still ends the run itself, through its supervisor's EOF cleanup, with no -Kill.
+        r = self.cli("start", "--json", env={"FAKE_CHROME_IGNORE_CLOSE": "1"})
+        self.assertEqual(r.returncode, 0, r.stderr)
+        rid = json.loads(r.stdout)["id"]
+        chrome = int(self.notes("chromepid-" + rid)[0])
+        r = self.cli("stop", rid)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("stopped by its owner", r.stdout)
+        with open(os.path.join(self.recdir, rid + ".holder.log")) as f:
+            self.assertIn("signal 15", f.read())
+        self.assertTrue(self.has("eof-" + rid))
+        self.assertFalse(self.has("kill-" + rid), "the holder's own cleanup ended Chrome")
+        st = cb.proc_stat(chrome)
+        self.assertTrue(st is None or st[0] == "Z", "Chrome is gone")
+        self.assertEqual(self.records(), [])
+
+    def test_group_sigterm_to_run(self):
+        # The whole process group (run and CMD) gets SIGTERM; the supervisor, in a session of
+        # its own, gets only the EOF of a normal cleanup.
+        ready, cmd = self.child_with_handlers()
+        p = subprocess.Popen([sys.executable, "-I", self.driver, CLI, self.root, "run", "--", *cmd],
+                             env=self.env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                             start_new_session=True)
+        try:
+            self.wait_for(lambda: os.path.exists(ready), what="the child to start")
+            os.killpg(p.pid, signal.SIGTERM)
+            _, err = p.communicate(timeout=40)
+        finally:
+            if p.poll() is None:
+                p.kill()
+                p.communicate()
+        self.assertIn(p.returncode, (128 + signal.SIGTERM, -signal.SIGTERM), err)
+        self.assertTrue(self.got(signal.SIGTERM), "CMD got SIGTERM")
+        rid = self.only_run_id()
+        self.assertTrue(self.has("eof-" + rid), "the supervisor saw EOF")
+        self.assertFalse(self.has("kill-" + rid), "it cleaned up without a -Kill")
+        self.assertEqual(self.cdp_calls(rid)[-1]["method"], "Browser.close")
+        self.assertEqual(self.records(), [])
+
+    def test_no_window_to_place_fails_the_start(self):
+        marker = os.path.join(self.tmp, "ran")
+        for argv in (["run", "--", sys.executable, "-c", "import sys; open(sys.argv[1], 'w').close()",
+                      marker], ["start"]):
+            with self.subTest(cmd=argv[0]):
+                for n in os.listdir(self.root):
+                    if n.startswith(("launch-", "eof-", "alive-")):
+                        os.remove(os.path.join(self.root, n))
+                r = self.cli(*argv, env={"FAKE_PLACE_EMPTY": "1"})
+                self.assertEqual(r.returncode, 1, r.stderr)
+                self.assertIn("no run window to place", r.stderr)
+                rid = self.only_run_id()
+                self.assertTrue(self.has("eof-" + rid), "the supervisor was ended")
+                self.assertFalse(self.has("alive-" + rid), "Chrome was closed")
+                self.assertFalse(os.path.exists(marker), "CMD never ran")
                 self.assertEqual(self.records(), [])
 
     def test_supervisor_ignores_sigpipe_in_a_session_of_its_own(self):
