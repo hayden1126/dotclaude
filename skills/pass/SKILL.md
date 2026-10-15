@@ -52,32 +52,44 @@ The record holds the exact facts and the fresh session re-reads it. So the hando
 
 ## What happens after the turn
 
-The waiter watches this session's own status in `~/.claude/sessions/<pid>.json` (not the tab's) until it reads idle, waits 1 s, and checks again. Then, in order:
+The waiter watches this session's own turn (not the tab's) until it has ended, waits 1 s, and checks again.
+
+- `~/.claude/sessions/<pid>.json` shows the end by reading idle.
+- But Claude Code keeps that file `busy` at the prompt while a background agent, teammate or workflow runs. Then the transcript decides: the turn's `turn_duration` entry or an Esc interrupt after the call, with no new turn since.
+- A new turn (a typed prompt, a task notice, an agent's hand-back) after the end drops the pass as `resumed`.
+
+Then, in order:
 
 1. It re-runs `handoff-check`.
 2. It drops the pass if Hayden typed a prompt after the call, or queued one mid-turn, or the transcript can't be read.
 3. It reads the resume mode.
 4. In plain mode, it checks the session's stop record for background work: any task but memory upkeep (`dream`) or an artifact watch drops it.
-5. Right before acting, it checks once more: the session is still idle, the pane still runs the same `claude`, the pane is not in copy mode, and the input box is empty. A draft Hayden is composing drops the pass in both modes, since typing would join it and a respawn would discard it. The dim ghost suggestion doesn't count.
+5. Right before acting, it checks once more: the turn is still over (by the same rule), the pane still runs the same `claude`, the pane is not in copy mode, and the input box is empty. A draft Hayden is composing drops the pass in both modes, since typing would join it and a respawn would discard it. The dim ghost suggestion doesn't count.
 6. In compact mode it checks the pane again between `/compact` and the resume prompt. If copy mode, a draft or no input box came up in that second, it doesn't type the prompt: it shows it in the status line for Hayden to type, where it stays until a key press, and writes it whole into `pass.log` (logged `partial`).
 
 After a plain respawn, the fresh session shows the last turn once as a banner (Hayden sees it, the model doesn't): its time, the first line of Hayden's prompt, and the replies rendered from markdown. Ctrl-b Up reopens the last 5 turns in a popup, each with its prompt. `pass-respawn` saves the prompts from the transcript beside the replies; a turn a background notice started says it had no prompt, and one whose start is past what it reads says the prompt wasn't saved.
 
-A refusal (`stale`, `busy`, `timeout`, `failed`, `error`, and the resume prompt a partial compact leaves) is loud: one line naming the cause, the tab and the fix, on the status line of every terminal attached to the pane's tmux session, held until a key press, plus the Windows toast. A drop Hayden caused (`resumed`, `gone`, `cancelled`) shows a brief line in the status line. A drop changes nothing else:
+A refusal (`stale`, `busy`, `timeout`, `failed`, `error`, and the resume prompt a partial compact leaves) is loud: one line naming the cause, the tab and the fix, on the status line of every terminal attached to the pane's tmux session, held until a key press, plus the Windows toast. A `resumed`, `gone` or `cancelled` drop (a prompt or a new turn after the call, a status change after the turn, a `/clear` or exit, a cancel) shows a brief line in the status line; a `resumed` for an unreadable transcript is loud, since every pass drops the same way until it can be read. A drop changes nothing else:
 
 | Drop | Cause | What to do |
 |---|---|---|
 | `stale` | work landed after the handoff (an edit, a commit) | run the delta handoff, then `/pass` again |
-| `resumed` | Hayden typed a prompt after the call, or the turn restarted | finish that turn, then `/pass` again if it still applies |
-| `busy` | the stop listed background tasks (the notice names the first two with their ids, `pass.log` every one, as `tasks:`, `waits:` for real waits, or both) or wrote no record; or, at the last check, the pane was in copy mode, had a draft in the input box, or showed no input box | stop the leftovers (step 2: `--tasks`, then `TaskStop <id>`) or wait, then `/pass`; `/pass compact` keeps the tasks; leave copy mode or send or clear the draft, then `/pass` again |
+| `resumed` | Hayden typed a prompt after the call, or a new turn started (a queued prompt, a task notice, an agent's hand-back) | finish that turn, then `/pass` again if it still applies; for an unreadable transcript (a loud line), tell Hayden instead, since every pass drops the same way until it can be read |
+| `busy` | the stop listed background tasks (the notice names the first two with their ids, `pass.log` every one, as `tasks:`, `waits:` for real waits, or both) or wrote no record; or, at the last check, the pane was in copy mode, had a draft in the input box, or showed no input box, or tmux didn't answer | stop the leftovers (step 2: `--tasks`, then `TaskStop <id>`) or wait, then `/pass`; `/pass compact` keeps the tasks; leave copy mode or send or clear the draft, then `/pass` again |
 | `gone` | the session, its process or the pane went away or changed (a `/clear`, an exit) | `/pass` again from the live session |
 | `timeout` | the turn never ended (600 s) | `/pass` again |
 | `cancelled` | `pass-respawn -C <toplevel> --cancel` ended the waiter | nothing; `/pass` again when wanted |
-| `failed` | tmux could not respawn the pane or type into it | read `pass.log`, then `/pass` again |
+| `failed` | tmux could not respawn the pane or type into it | read `pass.log`, then `/pass` again; if it failed after `/compact` was sent, don't pass again (that compacts twice): the status line hands over the resume prompt (`pass.log` has it whole); type it, or press Enter if it already sits in the input box, as the line says |
 | `error` | an error in the waiter itself | read `pass.log`, then `/pass` again |
 | `partial` | compact mode: `/compact` was sent (not confirmed), then copy mode, a draft or no input box came up before the resume prompt | type the prompt the status line shows (it stays until a key press, and `pass.log` has it whole) |
 
 Each decision appends one line to `$XDG_STATE_HOME/dotclaude/pass.log` (`~/.local/state/dotclaude/pass.log` by default).
+
+**A drop tells you too.** Every drop, and a compact whose resume prompt wasn't typed, also leaves this session a notice. It arrives as context at your next turn or tool call, starting `[pass]`. It says no pass is pending. A loud drop also names the cause and the fix; a quiet one says less (a `gone` names what changed, a `cancelled` only that it was cancelled). After a half-done compact it carries the resume prompt to follow.
+
+- The waiter decides within about a second of the turn's end, so by your next turn a pass has either run or dropped. A turn that starts inside that second gets the notice at its first tool call or your next turn, not at its prompt.
+- Never tell anyone a pass is still queued from memory: a `[pass]` notice means none is.
+- Pass again only when the reason still holds. Hayden asked for it, or an autopass tier is in effect: fix the notice's cause first.
 
 ## Auto-pass nudges
 
@@ -104,6 +116,7 @@ The fresh session starts in **plan mode** unless the status doc's Next block car
 | A plain pass with background tasks running | Stop the leftovers (`TaskStop <id>`); if any is still in use, use compact; a respawn kills them |
 | Checking `ps` for leftover tasks | Read `pass-respawn -C <toplevel> --tasks`: tasks aren't child processes, and the MCP servers that are look like the whole list |
 | Promising "the pane restarts" | Say it restarts unless the gate refuses; the checks run after your reply |
+| Saying a pass is "still queued" in a later turn | By your next turn it has run or dropped; a `[pass]` notice names the drop and its fix |
 | Skipping the delta handoff because a handoff ran earlier | Work after a handoff makes it stale; run the delta mode |
 | Writing the approval marker to get a normal-mode resume | Only for an approval Hayden gave this session, cited; never inferred |
 | Calling `pass-respawn` without `-C`, or behind `cd` or a pipe | Run `pass-respawn -C <toplevel>` bare |
