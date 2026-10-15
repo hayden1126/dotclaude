@@ -43,8 +43,9 @@
 #   (STALE otherwise). The refresh thread alone untags a pid once no pass has seen the tag in its
 #   command line for about 1.5 s (UNTAG). A stale pid would make another program's window a run
 #   window: sunk by the keeper, its title logged, its foreground read as the run's.
-# - Kills go through a handle opened first and checked against the row's CreationDate, never by
-#   bare pid: Chrome frees pids while it shuts down, and Windows reuses them.
+# - Kills go through a handle opened first, never by bare pid, and only to a process that was
+#   already running when its listing began: pids are unique among live processes, so that is the
+#   listed one. A later start means Chrome freed the pid while shutting down and Windows reused it.
 # - Each new run frame sinks to HWND_BOTTOM, unactivated, at EVENT_OBJECT_CREATE while it is still
 #   hidden. Off-screen bounds alone left a 7-9 ms flash on top of the screen.
 # - With -Keep, while no run window has the foreground, a run window seen above another on-screen
@@ -115,10 +116,13 @@ function Stop-RunProcs {
   $err = $null
   foreach ($round in 1..20) {
     try {
+      # When the listing began, less 50 ms: a creation stamp can read up to a timer tick (15.6 ms) early.
+      $listedAt = [DateTime]::UtcNow.AddMilliseconds(-50)
       $procs = @(Get-TaggedProcs)
       if ($procs.Count -eq 0) { break }
       foreach ($row in $procs) {
-        if (Stop-RunProc $row) { [void]$killed.Add([int]$row.ProcessId) } else { [void]$skipped.Add([int]$row.ProcessId) }
+        $id = [int]$row.ProcessId
+        if (Stop-RunProc $id $listedAt) { [void]$killed.Add($id) } else { [void]$skipped.Add($id) }
       }
     } catch { $err = $_.Exception.Message }
     Start-Sleep -Milliseconds 250
@@ -129,16 +133,15 @@ function Stop-RunProcs {
   return [ordered]@{ killed = $killed.Count; skipped = $skipped.Count; left = $left; error = $err }
 }
 
-# Kills the process of one Win32_Process row if it is still that process. The handle opened first
-# pins the pid, so the start-time check and the kill see the same process. Returns whether it killed.
-function Stop-RunProc($Row) {
+# Kills a listed pid if its process was already running when the listing began, so it is the listed
+# process; a later start is another process on a reused pid. The handle opened first pins the pid,
+# so the check and the kill see the same process. Returns whether it killed.
+function Stop-RunProc([int]$ProcessId, [DateTime]$ListedAt) {
   $proc = $null
   try {
-    $proc = Get-Process -Id $Row.ProcessId -ErrorAction Stop
+    $proc = Get-Process -Id $ProcessId -ErrorAction Stop
     [void]$proc.Handle
-    $drift = [Math]::Abs(($proc.StartTime.ToUniversalTime() - $Row.CreationDate.ToUniversalTime()).Ticks)
-    # WMI keeps microseconds (10 ticks): a later start is another process on a reused pid.
-    if ($drift -ge 10) { return $false }
+    if ($proc.StartTime.ToUniversalTime() -gt $ListedAt) { return $false }
     $proc.Kill()
     return $true
   } catch { return $false } finally { if ($proc) { $proc.Dispose() } }

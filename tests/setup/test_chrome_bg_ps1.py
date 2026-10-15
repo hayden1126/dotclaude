@@ -549,23 +549,30 @@ def created_problems(src):
 
 
 def kill_problems(src):
-    """Kills go through a handle opened first and checked against the row's CreationDate, never by
-    bare pid: Chrome frees pids while it shuts down, and Windows reuses them."""
+    """Kills go through a handle opened first, never by bare pid, and only to a process already
+    running when its listing began; the CIM date stays out (its local-time rebuild can be an hour
+    off in the repeated fall-back hour)."""
     p = Parts(src)
     problems = []
     if re.search(r"\bStop-Process\b|\btaskkill\b|(?:^|[;|{(])[ \t]*(?:kill|spps)\b(?!-)", p.ps, re.I | re.M):
         problems.append("something kills by bare pid")
-    if not re.search(r"\bStop-RunProc\b(?!s)", p.text(p.function("Stop-RunProcs")), re.I):
-        problems.append("Stop-RunProcs doesn't kill through Stop-RunProc")
+    stop = p.text(p.function("Stop-RunProcs"))
+    stamp = re.search(r"\$(\w+)\s*=\s*\[DateTime\]::UtcNow\b", stop, re.I)
+    listing = re.search(r"\bGet-TaggedProcs\b", stop, re.I)
+    passed = stamp and re.search(r"\bStop-RunProc\b(?!s)[^\n]*\$%s\b" % stamp.group(1), stop, re.I)
+    if not (passed and listing and stamp.start() < listing.start()):
+        problems.append("Stop-RunProcs doesn't time the listing before it and pass that time to Stop-RunProc")
     killer = p.text(p.function("Stop-RunProc"))
+    if re.search(r"\bCreationDate\b", killer, re.I):
+        problems.append("Stop-RunProc identifies the process by the CIM date")
     opened = re.search(r"\bGet-Process\s+-Id\b", killer, re.I)
     pinned = re.search(r"\.Handle\b", killer)
-    checked = re.search(r"\.StartTime\b[^\n]*\bCreationDate\b|\bCreationDate\b[^\n]*\.StartTime\b", killer)
+    checked = re.search(r"\.StartTime\.ToUniversalTime\(\)\s*-gt\s*\$\w+\s*\)\s*\{\s*return\s+\$false\b",
+                        killer)
     kill = re.search(r"\.Kill\s*\(", killer)
     found = opened and pinned and checked and kill
-    order = found and opened.start() < pinned.start() < checked.start() < kill.start()
-    if not order or not re.search(r"\{\s*return\s+\$false\s*\}", killer[checked.end():kill.start()]):
-        problems.append("Stop-RunProc must open the process, pin its handle, check its start, then kill it")
+    if not (found and opened.start() < pinned.start() < checked.start() < kill.start()):
+        problems.append("Stop-RunProc must open the process, pin its handle, skip a later start, then kill")
     elif not re.search(r"finally\s*\{[^}]*\.Dispose\s*\(", killer):
         problems.append("Stop-RunProc doesn't close the handle in a finally")
     if len(re.findall(r"\.Kill\s*\(", p.ps)) != len(re.findall(r"\.Kill\s*\(", killer)):
@@ -820,8 +827,22 @@ class CatchesRegressions(unittest.TestCase):
 
     def test_kill_without_pin_or_start_check(self):
         self.assertCaught(kill_problems, mutate(self.src, r"\n[ \t]*\[void\]\$proc\.Handle", ""))
-        bail = r"\n[ \t]*if \(\$drift -ge 10\) \{ return \$false \}"
-        self.assertCaught(kill_problems, mutate(self.src, bail, ""))
+        self.assertCaught(kill_problems, mutate(self.src, r"\n[ \t]*if \(\$proc\.StartTime[^\n]*", ""))
+
+    def test_kill_check_inverted_or_local(self):
+        bad = mutate(self.src, r"(\$proc\.StartTime\.ToUniversalTime\(\)) -gt", r"\1 -le")
+        self.assertCaught(kill_problems, bad)
+        self.assertCaught(kill_problems, mutate(self.src, r"(\$proc\.StartTime)\.ToUniversalTime\(\)", r"\1"))
+
+    def test_kill_by_the_cim_date(self):
+        drift = ("if ([Math]::Abs(($proc.StartTime.ToUniversalTime()"
+                 " - $Row.CreationDate.ToUniversalTime()).Ticks) -ge 10) { return $false }")
+        self.assertCaught(kill_problems, mutate(self.src, r"if \(\$proc\.StartTime[^\n]*", lambda m: drift))
+
+    def test_listing_timed_after_it_ran(self):
+        swap = r"(\n[ \t]*\$listedAt = [^\n]*)(\n[ \t]*\$procs = @\(Get-TaggedProcs\))"
+        bad = mutate(self.src, swap, r"\2\1")
+        self.assertCaught(kill_problems, bad)
 
     def test_supervised_never_set(self):
         self.assertCaught(reply_after_eof_problems, mutate(self.src, r"\n\$Supervised = \$true\b", ""))
