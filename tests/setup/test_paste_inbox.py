@@ -18,6 +18,7 @@ REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 SCRIPT = os.path.join(REPO, "tmux", "paste-inbox")
 CONF = os.path.join(REPO, "tmux", "claude.conf")
 CHEATSHEET = os.path.join(REPO, "tmux", "cheatsheet.txt")
+LAPTOP = os.path.join(REPO, "laptop")
 
 PNG = b"\x89PNG\r\n\x1a\n" + b"\x00\x00\x00\rIHDR" + b"\x01" * 40
 JPEG = b"\xff\xd8\xff\xe0" + b"\x02" * 40
@@ -310,6 +311,56 @@ class Wiring(unittest.TestCase):
     def test_the_cheatsheet_names_alt_v(self):
         with open(CHEATSHEET) as f:
             self.assertRegex(f.read(), r"\n    M-v +\S")
+
+
+class Laptop(unittest.TestCase):
+    """laptop/: the Windows side. No AutoHotkey here, so the .ahk gets static checks; the .ps1
+    files parse in Windows PowerShell where WSL interop works (the Bash sandbox blocks it, so
+    that test skips there)."""
+
+    def read(self, name):
+        with open(os.path.join(LAPTOP, name), encoding="utf-8") as f:
+            return f.read()
+
+    def test_the_title_pattern_matches_only_a_remote_tmux_view(self):
+        installer = re.search(r"\[string\]\$TitlePattern = '([^']*)'",
+                              self.read("install-remote-paste.ps1"))[1]
+        ahk = re.search(r'"remote-paste", "title", "([^"]*)"\)', self.read("remote-paste.ahk"))[1]
+        self.assertEqual(ahk, installer)
+        for title in ("view-2313 · ✳ Claude Code", "view-17890 · zsh"):
+            self.assertRegex(title, installer)
+        for title in ("main · Claude Code", "~ : zsh", "Ubuntu", "preview-1 · x", "view-x · y"):
+            self.assertNotRegex(title, installer)
+
+    def test_the_pieces_name_each_other(self):
+        self.assertIn('Send "!v"', self.read("remote-paste.ahk"))    # tmux's M-v
+        self.assertIn("remote-paste.ps1", self.read("remote-paste.ahk"))
+        ps1 = self.read("remote-paste.ps1")
+        self.assertIn("'--exec', '.local/bin/paste-inbox',\n    'receive', $device", ps1)
+        with open(os.path.join(REPO, "setup-tmux.sh")) as f:
+            self.assertIn('"$HOME/.local/bin/paste-inbox"', f.read())
+
+    def test_no_host_or_account_name_ships(self):
+        for name in sorted(os.listdir(LAPTOP)):
+            with self.subTest(name=name):
+                self.assertNotRegex(self.read(name), r"(?i)ts\.net|tail[0-9a-f]{6}|hayde|haypc")
+
+    def test_the_powershell_scripts_parse(self):
+        ps = shutil.which("powershell.exe") \
+            or "/mnt/c/WINDOWS/System32/WindowsPowerShell/v1.0/powershell.exe"
+        if not os.path.exists(ps):
+            self.skipTest("no Windows PowerShell here")
+        check = ("$e = $null; [void][System.Management.Automation.Language.Parser]::ParseFile("
+                 "$env:RP_PS1, [ref]$null, [ref]$e); 'errors=' + $e.Count; $e | ForEach-Object "
+                 "{ $_.Extent.StartLineNumber.ToString() + ': ' + $_.Message }")
+        for name in ("remote-paste.ps1", "install-remote-paste.ps1"):
+            with self.subTest(name=name):
+                env = {**os.environ, "RP_PS1": os.path.join(LAPTOP, name), "WSLENV": "RP_PS1/p"}
+                p = subprocess.run([ps, "-NoProfile", "-NonInteractive", "-Command", check],
+                                   capture_output=True, text=True, timeout=60, env=env)
+                if "UtilConnectUnix" in p.stderr or "UtilConnectUnix" in p.stdout:
+                    self.skipTest("the Bash sandbox blocks WSL interop; run outside it")
+                self.assertEqual(p.stdout.replace("\r", "").strip(), "errors=0", p.stderr)
 
 
 class RealTmux(unittest.TestCase):
