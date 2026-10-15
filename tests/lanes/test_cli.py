@@ -2,6 +2,7 @@
 `done` ends."""
 import argparse
 import contextlib
+import datetime
 import errno
 import fcntl
 import importlib.machinery
@@ -83,7 +84,8 @@ class RoundTrip(LanesRepo):
         self.assertEqual(set(rows), {"chart-fix", "api-docs"})
         self.assertEqual((rows["chart-fix"]["ahead"], rows["chart-fix"]["behind"]), (0, 0))
         self.assertEqual(rows["chart-fix"]["pr"], "?")  # the fake gh fails: degraded, not wrong
-        self.assertEqual(rows["chart-fix"]["flags"], ["orphan"])  # no live session
+        # No live session, and with gh failing no merge can be ruled out, so handoff? stays on.
+        self.assertEqual(rows["chart-fix"]["flags"], ["orphan", "handoff?"])
         board = self.lane("ls")
         self.assertIn("chart-fix", board)
         self.assertIn("#42", board)
@@ -541,6 +543,115 @@ class Stale(LanesRepo):
         # done still archives and unregisters it, from the mirror if the worktree is gone.
         self.lane("done", "chart-fix", "--abandon")
         self.assertEqual([r["id"] for r in json.loads(self.lane("ls", "--json"))], ["api-docs"])
+
+
+class HandoffFlag(LanesRepo):
+    """`ls`'s handoff? flag: lit when the record may be behind the lane's work (a newer commit, a
+    session that ended without ever writing it, a merge it never saw), and whenever any of that
+    can't be read. Times are seconds from self.t, past the base commit, so it trips nothing."""
+
+    def setUp(self):
+        super().setUp()
+        self.lane("new", "chart-fix")
+        self.path = self.lane_path("chart-fix")
+        self.t = time.time() + 600
+        self.env["FAKE_GH_OUT"] = "[]"  # gh answers: no PR
+        self.wrote(0)
+
+    def iso(self, off):
+        return datetime.datetime.fromtimestamp(self.t + off, datetime.timezone.utc).isoformat(
+            timespec="seconds")
+
+    def wrote(self, off):
+        """The record's last write, off seconds from self.t."""
+        os.utime(self.record("chart-fix"), (self.t + off, self.t + off))
+
+    def sessions(self, *spans):
+        """lane.json's sessions: (start, end) offsets, end None for one not yet ended; a string
+        is used as the stamp itself."""
+        stamp = lambda v: v if isinstance(v, str) else self.iso(v)  # noqa: E731
+        rows = [dict({"session_id": f"s{i}", "startedAt": stamp(start)},
+                     **({} if end is None else {"endedAt": stamp(end), "reason": "other"}))
+                for i, (start, end) in enumerate(spans)]
+        repo = lanelib.resolve(self.main)
+        with lanelib.lock(repo):
+            lanelib.update_lane(repo, "chart-fix", lambda rec: rec.update(sessions=rows))
+
+    def merged(self, **row):
+        """gh's answer: the lane's PR #7 merged; row overrides its fields (mergedAt among them)."""
+        self.env["FAKE_GH_OUT"] = json.dumps(
+            [dict({"number": 7, "state": "MERGED", "headRefName": "chart-fix"}, **row)])
+
+    def live(self):
+        """A live session in the lane: this test's own pid, so /proc has it."""
+        self.write(os.path.join(self.home, ".claude", "sessions", f"{os.getpid()}.json"),
+                   json.dumps({"pid": os.getpid(), "sessionId": "s-live", "cwd": self.path}))
+
+    def flags(self):
+        (row,) = json.loads(self.lane("ls", "--json"))
+        return row["flags"]
+
+    def test_a_live_lane_mid_work_is_clear(self):
+        self.sessions((60, None))  # started after the last write, still running
+        self.live()
+        self.assertEqual(self.flags(), [])
+
+    def test_a_live_lane_right_after_a_pass_is_clear(self):
+        # The passing session wrote its handoff, then ended; its successor is live.
+        self.sessions((-600, 20), (40, None))
+        self.live()
+        self.assertEqual(self.flags(), [])
+
+    def test_a_merged_lane_handed_off_after_the_merge_is_clear(self):
+        # The post-merge handoff came after the merge; the session ended later still.
+        self.merged(mergedAt=self.iso(-120))
+        self.sessions((-900, 60))
+        self.assertEqual(self.flags(), ["orphan"])
+
+    def test_a_merged_lane_whose_record_predates_the_merge_lights_it(self):
+        # Merged after the record's last write: the lane never saw it (Keep open: may be missing).
+        self.merged(mergedAt=self.iso(60))
+        self.sessions((-900, 120))
+        self.assertIn("handoff?", self.flags())
+
+    def test_a_write_within_the_merge_slack_lights_it(self):
+        # HAYPC's clock steps by seconds, so a write this close may predate the merge.
+        self.merged(mergedAt=self.iso(-10))
+        self.assertIn("handoff?", self.flags())
+
+    def test_a_session_that_ended_without_writing_lights_it(self):
+        self.sessions((-600, 20), (40, 900))
+        self.assertIn("handoff?", self.flags())
+
+    def test_a_commit_newer_than_the_record_lights_it(self):
+        self.env["GIT_COMMITTER_DATE"] = f"@{int(self.t) + 100} +0000"
+        self.commit("chart.txt", "axis\n", cwd=self.path)
+        self.assertIn("handoff?", self.flags())
+
+    def test_what_cannot_be_read_lights_it(self):
+        cases = {
+            "gh can't answer": lambda: self.env.pop("FAKE_GH_OUT"),
+            "merged, no mergedAt": lambda: self.merged(),
+            "merged, null mergedAt": lambda: self.merged(mergedAt=None),
+            "merged, garbled mergedAt": lambda: self.merged(mergedAt="yesterday"),
+            "garbled startedAt": lambda: self.sessions(("soon", 900)),
+            "garbled endedAt": lambda: self.sessions((-900, "later")),
+        }
+        for name, setup in cases.items():
+            with self.subTest(name):
+                self.env["FAKE_GH_OUT"] = "[]"
+                self.sessions()
+                setup()
+                self.assertIn("handoff?", self.flags())
+
+    def test_a_branch_git_cannot_read_lights_it(self):
+        # The worktree and its branch gone: the record survives in the mirror (the Stop hook's
+        # copy keeps its mtime), and only the unreadable last commit is left to judge.
+        self.hook("lane-identity.sh", {"session_id": "s0", "cwd": self.path,
+                                       "hook_event_name": "Stop"})
+        self.git("worktree", "remove", self.path)
+        self.git("branch", "-D", "chart-fix")
+        self.assertEqual(self.flags(), ["stale", "handoff?"])
 
 
 class Claims(LanesRepo):

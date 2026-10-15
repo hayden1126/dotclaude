@@ -178,13 +178,24 @@ Why it works this way:
   for #99 the tab-bar lane ran `gh pr merge` itself. A merge made on GitHub and told to no
   session waits for the lead's next `lane ls`. With the lane's session gone, the lead runs the
   chain itself, and closes the lane only once the hand-back gate passes: a failing gate is then
-  the lead's ask, since no lane is left to make it. That is the usual outcome: the gate's
-  `handoff?` flag lights once a session ended after the record's last write, the sign that it
-  may have merged and stopped before writing `Keep open:`. With the session live, the lead asks
-  the lane for its after-merge handoff first, since a lane that merged and is still writing
+  the lead's ask, since no lane is left to make it. A lane that wrote its after-merge handoff
+  before its session ended passes, so it closes without one. With the session live, the lead
+  asks the lane for its after-merge handoff first, since a lane that merged and is still writing
   `Keep open:` must not be closed under it. A merge watcher lost: one per ready PR has to be
   re-armed every 2 hours, and two that saw the same merge would run the chain twice (two
   reinstalls, two reports).
+- **`handoff?` judges by the merge, not by session end** (Hayden, 2026-10-14). Every session
+  ends after its own last write, so a flag keyed on session end lit after each `/pass` and on
+  every merged lane whose session had exited, which made each such close an ask. A merged lane's
+  record is judged against the PR's `mergedAt` instead: written after it, the lane did its
+  after-merge handoff; older, the lane never saw the merge and may lack `Keep open:`. A write
+  counts as after only 30 s past `mergedAt` (`MERGE_SLACK`): HAYPC's wall clock steps by seconds,
+  and GitHub's clock is not the local one. An ended session lights the flag only when it started
+  after the record's last write, so it never wrote it, and a newer commit still lights it.
+  Whatever can't be read (gh, `mergedAt`, a session stamp, the last commit) leaves it on, so an
+  offline or sandboxed `lane ls` shows it on every lane: judge the gate from a bare one. A
+  session that ends with no SessionEnd stamp is skipped, as a live one is; for a merged lane the
+  `mergedAt` check still catches the merge it never recorded.
 - **A nudge, never consent** (flow 13). `merged #N` says only when to look. The consent is the
   standing approval written here; the lead proves the merge with `gh pr view` before it acts,
   and `lane done` checks it again (a merged PR whose head is the tip, or the tip in the base).
