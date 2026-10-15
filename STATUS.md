@@ -80,12 +80,12 @@ stored here).
     pass now tells the session itself), `handoff-flag` #106 (2026-10-14: `handoff?` judges a
     merged lane by its record against `mergedAt`, so a lane that handed off after its merge
     closes without an ask), `identity-branch` #107 (2026-10-14: the SessionStart identity line
-    names the branch the worktree has checked out).
+    names the branch the worktree has checked out), `install-hint` #108 (2026-10-14: a merged
+    lane can't take the install back; the excluded-guard scan after its reinstall came back
+    clean, so the work repo's flagged worktrees are cleared).
     `gh pr view <n>` and the closed records under `.git/lanes/_closed/` hold the detail; tab-bar's
     design is in [[dotclaude-tab-bar]]. Tabs opened before #102's install (2026-10-14) keep the
     old startup hooks (no PermissionRequest or SubagentStop wiring) until they restart.
-  - `install-hint` (opened 2026-10-14, Hayden's pick): a stale rerun hint that put the install
-    back into a merged lane. Its brief is in its record.
   - `chrome-bg` (opened 2026-10-14, Hayden's ask and picks): `bin/chrome-bg` opens a Windows
     Chrome for test probes behind every window without taking focus, for `puppeteer.connect`,
     and one dotclaude hook blanks `DISPLAY` and `WAYLAND_DISPLAY` for Bash in opted-in repos.
@@ -98,9 +98,9 @@ stored here).
   - `two-sessions` (opened 2026-10-14, Hayden's pick): `lane ls` flags a main checkout with
     more than one live session, and the tab bar marks the extra lead tab. Its brief is in its
     record.
-  - **Merge order: `install-hint`, `chrome-bg` and `two-sessions`, whichever is ready first**
-    (none overlap, except that `lane` imports `install-state.py`, which install-hint may
-    change). The lead installs only the next to merge.
+  - **Merge order: `chrome-bg` and `two-sessions`, whichever is ready first** (they don't
+    overlap). The lead installs only the next to merge. Hayden merged #108 before its ready
+    step, so the lead's STATUS commits ride the next lane PR instead.
   - The parked json-depth sweep (21 files, among them the delegation enforcement scripts) is on
     `fix/json-depth-sweep`, a local branch never pushed: keep it while the sweep is in the
     backlog. Shipping it first needs a check of how each enforcement site fails
@@ -205,13 +205,6 @@ stored here).
   sandbox-off deletes, so the sandboxed gap stands):
   `python3 -I ~/scratch/sandbox-audit/rm_scan.py 2026-11-04`. Sending the drafted
   `$CLAUDE_JOB_DIR/tmp` bug report is Hayden's call; `CLAUDE.md` carries the workaround.
-- **Setup's excluded-command guard scan flags a work repo's lane worktrees** (2026-10-14, after
-  #103): its shared git config points `core.hooksPath` at each worktree's own writable hooks
-  dir, so excluded commands in those worktrees are refused. Every flagged hook matched HEAD. The
-  overlay gained rules for that repo's four current lanes at 21:20 local; the scan still flags 7
-  older worktrees. The rest is Hayden's: rerun `python3 -I hooks/excluded_guard.py --scan`, look,
-  paste its `settings.machine.json`, rerun `./setup.sh` from the main checkout. Each new lane
-  there needs its own rule (Edit deny rules take no glob); `lane new` prints it since #104.
 - **A stale trust entry from lane guard-b's smoke** (2026-10-14): `~/.claude.json` still trusts
   the deleted `/tmp/claude-1000/guard-b-tab`. A sandboxed session can recreate that path with its
   own `.claude/settings.json`, so the lead recommends removing the entry. Hayden removes it by
@@ -222,17 +215,20 @@ stored here).
 
 ## Notes for next session
 - **Next (lead, main checkout):** watch for "merged #N" from a lane, then run the post-merge
-  chain (`skills/lanes/SKILL.md`, The lead, step 7). Live lanes: `install-hint`, `chrome-bg`,
-  `two-sessions`. Check `lane ls` first: a merge Hayden made on GitHub and mentioned to no
-  session sends no message (#102 showed merged there before its lane's message came). All 3
-  slots are full (Hayden picked a cap of 4 for chrome-bg, unneeded once #106 freed a slot);
-  `lane open --model` is the next pick after two-sessions merges. No chat
+  chain (`skills/lanes/SKILL.md`, The lead, step 7). Live lanes: `chrome-bg`, `two-sessions`.
+  Check `lane ls` first: a merge Hayden made on GitHub and mentioned to no session sends no
+  message (#102 showed merged there before its lane's message came). One of 3 slots is free,
+  but every backlog item overlaps a live lane or waits on one; `lane open --model` is the next
+  pick after two-sessions merges. Each new work-repo lane still needs its own Edit deny rule
+  (they take no glob); `lane new` prints it since #104. No chat
   about a lane's own asks; speak on cross-lane orders, decisions raised with the lead, failed
   checks and lead-only actions.
   - The lead's commits of 2026-10-14 (second and third sessions): `git log --first-parent
     696cc44..HEAD` on `chore/after-pr4`, STATUS only, plus merges of main. The third session
     (69d146cc) started at 433fe8f: it opened identity-branch, install-hint, chrome-bg and
-    two-sessions, and ran the chain for #106 and #107.
+    two-sessions, and ran the chain for #106 and #107. The fourth (64626d32) started at 5cb88d8:
+    it wrote the `lane open --model` design note, removed two leftover writer worktrees from
+    #105 (every patch already in main), and ran the chain for #108.
   - **Vulcan sessions that were already running keep their display** until they restart: the
     blanking hook fires only at session start. The `ro-lesson` lane was opening WSLg windows
     at 21:43 local; Hayden tells it to go headless or `/pass`.
