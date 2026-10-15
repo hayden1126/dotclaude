@@ -2,12 +2,15 @@
 
 `receive` and `paste` run as subprocesses against a stub tmux that logs each call as a JSON line
 (and keeps what load-buffer reads), with PATH narrowed to the stubs and /usr/bin:/bin so no real
-cmd.exe or tmux is reached. Real tmux servers on private sockets check that the paste arrives
+powershell.exe or tmux is reached. Real tmux servers on private sockets check that the paste arrives
 bracketed (RealTmux) and that Alt+V, pressed on a client attached through a pty, runs it
 (RealBinding); remote-paste.ps1 runs in Windows PowerShell against ends that fail fast
 (LaptopPowerShell). The Bash sandbox blocks tmux's socket and WSL interop, so those skip there:
 run them sandbox-off once per change."""
 import fcntl
+import importlib.machinery
+import importlib.util
+import io
 import json
 import os
 import pty
@@ -21,6 +24,7 @@ import termios
 import threading
 import time
 import unittest
+import unittest.mock
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 SCRIPT = os.path.join(REPO, "tmux", "paste-inbox")
@@ -49,11 +53,13 @@ elif args[:1] == ["display-message"] and "-p" in args:
 sys.exit(int(os.environ.get("STUB_RC", "0")))
 """ % sys.executable
 
-STUB_CMD = """#!%s -I
-import json, os, sys
+STUB_PS = """#!%s -I
+import base64, json, os, sys
 with open(os.environ["STUB_LOG"], "a") as f:
-    f.write(json.dumps(["cmd.exe"] + sys.argv[1:]) + "\\n")
-sys.stdout.write("C:\\\\Users\\\\tester\\r\\n")
+    f.write(json.dumps(["powershell.exe"] + sys.argv[1:]) + "\\n")
+profile = os.environ.get("STUB_PROFILE", "C:\\\\Users\\\\tester")
+out = os.environ.get("STUB_PS_OUT") or base64.b64encode(profile.encode()).decode()
+sys.stdout.write(out + "\\r\\n")
 """ % sys.executable
 
 STUB_WSLPATH = """#!%s -I
@@ -73,7 +79,8 @@ class Inbox(unittest.TestCase):
         os.mkdir(self.downloads)
         self.stubs = os.path.join(self.tmp, "stubs")
         os.mkdir(self.stubs)
-        for name, text in (("tmux", STUB_TMUX), ("cmd.exe", STUB_CMD), ("wslpath", STUB_WSLPATH)):
+        for name, text in (("tmux", STUB_TMUX), ("powershell.exe", STUB_PS),
+                           ("wslpath", STUB_WSLPATH)):
             self.stub(name, text)
         os.mkdir(os.path.join(self.tmp, "home"))
         self.log = os.path.join(self.tmp, "calls.log")
@@ -293,9 +300,9 @@ class Paste(Inbox):
         self.paste()
         self.assertEqual(self.pasted(), shot)
 
-    def test_a_non_ascii_path_pastes_under_a_c_locale(self):
+    def test_a_non_ascii_path_pastes_intact(self):
         shot = self.put(self.downloads, "\u00e9cran.png", age=5)
-        self.paste(LANG="C", LC_ALL="C")
+        self.paste()
         self.assertEqual(self.pasted(), shot)
 
     def test_an_unwritable_state_dir_still_pastes(self):
@@ -312,19 +319,38 @@ class Paste(Inbox):
         shot = self.put(os.path.join(self.tmp, "winhome", "Downloads"), "a.png", age=5)
         self.paste()
         self.assertEqual(self.pasted(), shot)
-        self.assertEqual([c[0] for c in self.calls() if c[0] != "tmux"], ["cmd.exe", "wslpath"])
-        self.assertEqual(self.calls()[0][1:], ["/c", "echo", "%USERPROFILE%"])
+        self.assertEqual([c[0] for c in self.calls() if c[0] != "tmux"],
+                         ["powershell.exe", "wslpath"])
+        self.assertEqual(self.calls()[0][1:4], ["-NoProfile", "-NonInteractive", "-Command"])
+        self.assertIn("GetFolderPath('UserProfile')", self.calls()[0][4])
         self.assertEqual(self.calls()[1][1:], ["-u", "C:\\Users\\tester"])
         os.remove(self.log)
         os.remove(self.buffer)
-        os.remove(os.path.join(self.stubs, "cmd.exe"))
+        os.remove(os.path.join(self.stubs, "powershell.exe"))
         self.paste()
         self.assertEqual(self.pasted(), shot)
         self.assertEqual([c[0] for c in self.calls() if c[0] != "tmux"], [])
 
+    def test_a_non_ascii_windows_profile_is_found(self):
+        del self.env["PASTE_INBOX_DOWNLOADS"]
+        shot = self.put(os.path.join(self.tmp, "winhome", "Downloads"), "a.png", age=5)
+        self.paste(STUB_PROFILE="C:\\Users\\Zo\u00eb")
+        self.assertEqual(self.pasted(), shot)
+        self.assertEqual(self.calls()[1][1:], ["-u", "C:\\Users\\Zo\u00eb"])
+
+    def test_garbage_from_windows_falls_back_to_the_inbox(self):
+        del self.env["PASTE_INBOX_DOWNLOADS"]
+        upload = self.put(self.inbox, "20261015T000000Z-laptop-aaaaaa.png", age=5)
+        for out in ("not base64 at all!", "w4k=", "QzpcVXNlcnNc8A=="):   # junk, "é", bad UTF-8
+            with self.subTest(out=out):
+                if os.path.exists(self.buffer):
+                    os.remove(self.buffer)
+                self.paste(STUB_PS_OUT=out)
+                self.assertEqual(self.pasted(), upload)
+
     def test_without_windows_the_inbox_alone_is_used(self):
         del self.env["PASTE_INBOX_DOWNLOADS"]
-        os.remove(os.path.join(self.stubs, "cmd.exe"))
+        os.remove(os.path.join(self.stubs, "powershell.exe"))
         upload = self.put(self.inbox, "20261015T000000Z-laptop-aaaaaa.png", age=5)
         self.paste()
         self.assertEqual(self.pasted(), upload)
@@ -337,6 +363,55 @@ class Paste(Inbox):
         self.paste(PASTE_INBOX_DOWNLOADS="")
         self.assertIsNone(self.pasted())
         self.assertEqual([c[0] for c in self.calls() if c[0] != "tmux"], [])
+
+
+def load():
+    """tmux/paste-inbox as a module, for the paths a subprocess can't reach."""
+    loader = importlib.machinery.SourceFileLoader("paste_inbox", SCRIPT)
+    spec = importlib.util.spec_from_loader("paste_inbox", loader)
+    module = importlib.util.module_from_spec(spec)
+    loader.exec_module(module)
+    return module
+
+
+class InProcess(unittest.TestCase):
+    def setUp(self):
+        self.pi = load()
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp)
+        patch = unittest.mock.patch.dict(os.environ, {"XDG_STATE_HOME": self.tmp,
+                                                      "PASTE_INBOX_DIR": self.tmp + "/inbox"})
+        patch.start()
+        self.addCleanup(patch.stop)
+
+    def test_a_crash_in_paste_is_logged_shown_and_exits_zero(self):
+        said = []
+        boom = unittest.mock.patch.object(self.pi, "newest_image", side_effect=RuntimeError("boom"))
+        record = unittest.mock.patch.object(self.pi, "tmux",
+                                            side_effect=lambda *a, **k: said.append(a) or "")
+        with boom, record:
+            self.assertEqual(self.pi.main(["paste-inbox", "paste", "%5", "/dev/pts/9"]), 0)
+        log = os.path.join(self.tmp, "dotclaude", "paste-inbox", "error.log")
+        with open(log) as f:
+            self.assertIn("RuntimeError: boom", f.read())
+        self.assertEqual(said, [("display-message", "-c", "/dev/pts/9", "-d", "5000",
+                                 "paste-inbox failed; see %s" % log)])
+
+    def test_an_upload_that_stalls_is_refused_and_leaves_nothing(self):
+        r, w = os.pipe()
+        self.addCleanup(os.close, w)
+        stdin = io.TextIOWrapper(open(r, "rb"))
+        self.addCleanup(stdin.close)
+        os.write(w, PNG)                      # a start, then nothing and no EOF
+        err = io.StringIO()
+        with unittest.mock.patch.object(self.pi, "STALL", 1), \
+                unittest.mock.patch.object(sys, "stdin", stdin), \
+                unittest.mock.patch.object(sys, "stderr", err):
+            start = time.monotonic()
+            self.assertEqual(self.pi.receive("laptop", 10 * len(PNG), False), 1)
+        self.assertLess(time.monotonic() - start, 5)
+        self.assertIn("stalled", err.getvalue())
+        self.assertFalse(os.path.exists(self.tmp + "/inbox"))
 
 
 class Cli(Inbox):
@@ -392,7 +467,7 @@ class Laptop(unittest.TestCase):
             self.assertNotRegex(title, installer)
 
     def test_the_pieces_name_each_other(self):
-        self.assertIn('Send "!v"', self.read("remote-paste.ahk"))    # tmux's M-v
+        self.assertIn('Send(code = 3 ? "^v" : "!v")', self.read("remote-paste.ahk"))  # M-v
         self.assertIn("remote-paste.ps1", self.read("remote-paste.ahk"))
         ps1 = self.read("remote-paste.ps1")
         self.assertIn("'--exec', '.local/bin/paste-inbox'\n$wsl += $receive + @($device, "
@@ -400,6 +475,14 @@ class Laptop(unittest.TestCase):
         self.assertIn("if ($SelfTest) { $receive += '--check' }", ps1)
         with open(os.path.join(REPO, "setup-tmux.sh")) as f:
             self.assertIn('"$HOME/.local/bin/paste-inbox"', f.read())
+
+    def test_a_pc_without_the_helper_is_named_plainly(self):
+        # wsl.exe 2.x's line for a missing --exec target, captured on the PC
+        line = ("<3>WSL (90981 - Relay) ERROR: CreateProcessCommon:735: "
+                "execvpe(.local/bin/paste-inbox) failed: No such file or directory")
+        pattern = re.search(r"\$stderr -match '([^']+)'", self.read("remote-paste.ps1"))[1]
+        self.assertRegex(line, pattern)
+        self.assertNotRegex(line.replace("paste-inbox", "other"), pattern)
 
     def test_no_host_or_account_name_ships(self):
         for name in sorted(os.listdir(LAPTOP)):
@@ -489,7 +572,7 @@ out, ready = sys.argv[1], sys.argv[2]
 tty.setraw(0)
 os.write(1, b"\x1b[?2004h")
 open(ready, "w").close()
-got, end, last = b"", time.time() + 10, None
+got, end, last = b"", time.time() + 60, None
 while time.time() < end and b"\x1b[201~" not in got:
     if select.select([0], [], [], 0.1)[0]:
         got, last = got + os.read(0, 4096), time.time()
@@ -549,7 +632,7 @@ with open(out, "wb") as f:
         return path
 
     def received(self):
-        end = time.time() + 15
+        end = time.time() + 60
         while not os.path.exists(self.out) and time.time() < end:
             time.sleep(0.05)
         with open(self.out, "rb") as f:

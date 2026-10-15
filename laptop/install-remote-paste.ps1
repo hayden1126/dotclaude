@@ -1,7 +1,7 @@
 <#
 install-remote-paste.ps1: install the laptop side of remote-paste (opt-in: nothing else runs it).
 
-  powershell -ExecutionPolicy Bypass -File install-remote-paste.ps1 -Target <user>@<pc host>|<ssh Host>
+  powershell -ExecutionPolicy Bypass -File install-remote-paste.ps1 -Target <user>@<host>|<ssh Host>
       [-Port 2222] [-Distro Ubuntu] [-LaptopDistro <name>] [-TitlePattern '^view-\d+\s']
   powershell -ExecutionPolicy Bypass -File install-remote-paste.ps1 -Uninstall
 
@@ -44,7 +44,8 @@ function Find-AutoHotkey {
         $item = Get-ItemProperty -LiteralPath $key -Name InstallDir -ErrorAction SilentlyContinue
         if ($item) { $dirs += $item.InstallDir }
     }
-    $dirs += (Join-Path $env:ProgramFiles 'AutoHotkey'), (Join-Path $env:LOCALAPPDATA 'Programs\AutoHotkey')
+    $dirs += (Join-Path $env:ProgramFiles 'AutoHotkey'),
+        (Join-Path $env:LOCALAPPDATA 'Programs\AutoHotkey')
     foreach ($dir in $dirs) {
         foreach ($exe in 'v2\AutoHotkey64.exe', 'v2\AutoHotkey32.exe') {
             $path = Join-Path $dir $exe
@@ -62,13 +63,16 @@ if ($Uninstall) {
     exit 0
 }
 
-if ($Target -notmatch '^([A-Za-z0-9._-]+@)?[A-Za-z0-9.-]+$') { throw '-Target <user>@<pc host> or an ssh Host is required' }
+if ($Target -notmatch '^([A-Za-z0-9._-]+@)?[A-Za-z0-9._:-]+$') {
+    throw '-Target <user>@<pc host> or an ssh Host is required'
+}
 if ($Distro -notmatch '^[A-Za-z0-9._-]+$') { throw "bad -Distro: $Distro" }
 if ($LaptopDistro -notmatch '^[A-Za-z0-9._-]*$') { throw "bad -LaptopDistro: $LaptopDistro" }
 if ($TitlePattern -match '[\r\n]') { throw 'bad -TitlePattern' }
 $ahk = Find-AutoHotkey
 if (-not $ahk) {
-    Write-Host 'AutoHotkey v2 not found. Install it, then rerun: winget install --id AutoHotkey.AutoHotkey'
+    Write-Host 'AutoHotkey v2 not found. Install it, then rerun:'
+    Write-Host '  winget install --id AutoHotkey.AutoHotkey'
     exit 1
 }
 
@@ -90,10 +94,12 @@ Start-Process -FilePath $ahk -ArgumentList ('"' + $script + '"')
 Write-Host "installed in $dest; the hotkey runs now and at sign-in ($lnk)"
 
 $test = Join-Path $dest 'remote-paste.ps1'
-$stored = & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Sta -File $test -SelfTest
+$stored = & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Sta -File $test `
+    -SelfTest
 if ($LASTEXITCODE -ne 0) {
-    Write-Host 'self-test failed (the reason is above). Check: Tailscale is up; ssh -p' $Port $Target
-    Write-Host 'works by hand from this laptop''s WSL without a passphrase prompt; setup-tmux.sh ran on the PC.'
+    Write-Host 'self-test failed (the reason is above). Check: Tailscale is up;'
+    Write-Host "ssh -p $Port $Target works by hand from this laptop's WSL with no passphrase"
+    Write-Host 'prompt; setup-tmux.sh ran on the PC.'
     exit 1
 }
 Write-Host "self-test passed: the PC would keep an upload as $stored"

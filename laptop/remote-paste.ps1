@@ -16,14 +16,17 @@ PNG with `receive --check`, which validates it and keeps nothing. The process is
 ProcessStartInfo with no argument holding a space or a quote, since Windows PowerShell 5.1
 mangles native arguments with embedded quotes, and with a BOM-free console input encoding (put
 back right after), since .NET Framework writes the encoding's preamble into a child's stdin at
-start (a UTF-8 code page would put EF BB BF before the image). WSL_UTF8=1 makes wsl.exe's own errors (which it prints on stdout) UTF-8 like ssh's.
+start (a UTF-8 code page would put EF BB BF before the image). WSL_UTF8=1 makes the laptop
+wsl.exe's own errors (it prints them on stdout) UTF-8 like ssh's; the PC's wsl.exe doesn't get
+it through ssh, so NULs are dropped from whatever comes back.
 BatchMode: a key that needs a passphrase fails at once instead of waiting in a hidden window.
 ConnectTimeout 5 s, keepalives every 5 s (a link that dies ends ssh within about 15 s), and 60 s
 in all: the upload is written asynchronously, so a stalled pipe can't hold it past that.
 
 Exit 0: stored; prints the PC's path. Exit 3: no image (text, nothing, or not one image file),
 so the caller pastes as usual. Exit 1: failed; the reason goes to stderr and to
-%TEMP%\remote-paste.err, which remote-paste.ahk shows.
+%TEMP%\remote-paste.err, which remote-paste.ahk shows: ssh's last stderr line, or wsl.exe's
+message, with a plain line instead for a PC without paste-inbox or with a different version.
 #>
 param([switch]$SelfTest)
 Set-StrictMode -Version 3
@@ -45,7 +48,7 @@ $cfg = @{ port = '2222'; distro = 'Ubuntu'; laptopDistro = ''; target = '' }
 foreach ($line in Get-Content -LiteralPath $ini) {
     if ($line -match '^\s*([A-Za-z]+)\s*=(.*)$') { $cfg[$Matches[1]] = $Matches[2].Trim() }
 }
-if ($cfg.target -notmatch '^([A-Za-z0-9._-]+@)?[A-Za-z0-9.-]+$') { Fail "bad target in $ini" }
+if ($cfg.target -notmatch '^([A-Za-z0-9._-]+@)?[A-Za-z0-9._:-]+$') { Fail "bad target in $ini" }
 if ($cfg.port -notmatch '^\d+$') { Fail "bad port in $ini" }
 if ($cfg.distro -notmatch '^[A-Za-z0-9._-]+$') { Fail "bad distro in $ini" }
 if ($cfg.laptopDistro -notmatch '^[A-Za-z0-9._-]*$') { Fail "bad laptopDistro in $ini" }
@@ -76,6 +79,7 @@ if ($img) {
     $img.Dispose()
     $bytes = $ms.ToArray()
 }
+if ($bytes.Length -eq 0) { Fail 'the copied file is empty' }
 if ($bytes.Length -gt 50MB) { Fail 'image over 50 MB' }
 
 $wsl = @()
@@ -130,9 +134,21 @@ if (-not $sent -or -not $p.WaitForExit($left)) {
 }
 $path = $out.Result.Trim()
 if ($p.ExitCode -ne 0 -or -not $path) {
-    # ssh's reason is stderr's last line; wsl.exe's own (a bad laptopDistro, say) is all of stdout
-    $why = $err.Result -split "`r?`n" | Where-Object { $_.Trim() } | Select-Object -Last 1
-    if (-not $why) { $why = ($out.Result -split "`r?`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ }) -join ' ' }
+    # ssh's reason is stderr's last line; wsl.exe's own (a bad distro, say) is all of stdout,
+    # UTF-16 from the PC's wsl.exe, which WSL_UTF8 doesn't reach
+    $stderr = $err.Result -replace "`0", ''
+    $stdout = $out.Result -replace "`0", ''
+    if ($stderr -match 'execvpe\(\.local/bin/paste-inbox\) failed') {
+        Fail 'the PC has no ~/.local/bin/paste-inbox: run setup-tmux.sh there'
+    }
+    if ($stderr -match '(?m)^usage:') {
+        Fail "the PC's paste-inbox doesn't match this laptop's remote-paste: update both"
+    }
+    $why = $stderr -split "`r?`n" | Where-Object { $_.Trim() } | Select-Object -Last 1
+    if (-not $why) {
+        $why = ($stdout -split "`r?`n" | ForEach-Object { $_.Trim() } |
+            Where-Object { $_ }) -join ' '
+    }
     if (-not $why) { $why = "ssh exited $($p.ExitCode)" }
     Fail $why.Trim()
 }
