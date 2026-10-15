@@ -200,6 +200,49 @@ class IdentityHook(LanesRepo):
         self.assertEqual((s["session_id"], s["source"]), ("sess-0001", "startup"))
         self.assertIn("startedAt", s)
 
+    def test_a_switched_lane_is_told_its_checked_out_branch(self):
+        # A `git switch` for a follow-up PR leaves lane.json's branch behind.
+        self.git("switch", "-q", "-c", "chart-more", cwd=self.lane_dir)
+        ctx = self.start(self.lane_dir)["additionalContext"]
+        self.assertIn("branch `chart-more`, claims #42", ctx)
+        self.assertNotIn("branch `chart-fix`", ctx)
+
+    def test_a_detached_lane_is_told_its_commit(self):
+        self.git("switch", "-q", "--detach", cwd=self.lane_dir)
+        sha = self.git("rev-parse", "HEAD", cwd=self.lane_dir).strip()
+        ctx = self.start(self.lane_dir)["additionalContext"]
+        self.assertIn(f"`chart-fix`: a detached HEAD at `{sha[:12]}`, claims #42", ctx)
+        self.assertNotIn("branch `", ctx)
+
+    def test_an_unusable_head_names_lane_json_s_branch_and_says_so(self):
+        # The admin dir is sandbox-writable. git refuses the first; it reports the others, which
+        # must not reach the context: a backtick ends the code span, a tag is no branch.
+        admin = self.git("rev-parse", "--absolute-git-dir", cwd=self.lane_dir).strip()
+        log = os.path.join(self.tmp, "state", "dotclaude", "lane-identity.log")
+        for head in ("ref: refs/heads/-bad name", "ref: refs/heads/a`b", "ref: refs/tags/v1"):
+            with self.subTest(head=head):
+                self.write(os.path.join(admin, "HEAD"), head + "\n")
+                ctx = self.start(self.lane_dir)["additionalContext"]
+                self.assertIn("branch `chart-fix` (lane.json's: the worktree's HEAD couldn't be "
+                              "read), claims #42", ctx)
+                self.assertNotIn("a`b", ctx)
+                self.assertNotIn("refs/", ctx)
+                self.assertIn("head unreadable", self.read(log).splitlines()[-1])
+
+    def test_git_failing_falls_back_to_lane_json_s_branch(self):
+        spec = importlib.util.spec_from_file_location(
+            "lane_identity_t", os.path.join(HOOKS, "lane_identity.py"))
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        repo = mod.lanelib.resolve(self.lane_dir)
+        lane = repo.lane_at(self.lane_dir)
+        for error in (OSError("no git"), subprocess.TimeoutExpired(["git"], 60)):
+            with self.subTest(error=type(error).__name__):
+                with mock.patch.object(mod.lanelib, "git", side_effect=error):
+                    self.assertEqual(mod.checked_out(repo, lane),
+                                     "branch `chart-fix` (lane.json's: the worktree's HEAD "
+                                     "couldn't be read)")
+
     def test_compact_says_reread_and_keeps_the_session_start(self):
         self.start(self.lane_dir)
         first = self.lane_json("chart-fix")["sessions"][0]["startedAt"]
