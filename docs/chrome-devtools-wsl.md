@@ -186,13 +186,15 @@ chrome-bg check
   record shows as `no record`.
 - `check` is the live self-test. It opens a window behind yours for about 30 s,
   takes each action a fixture might (a default `newPage`, `bringToFront`,
-  maximize and restore, `window.open`), then judges the supervisor's log. It
-  passes when no run window took the foreground or sat above another window,
-  the covered page stayed `visible` and drew frames within 10% of the
-  monitor's rate, and nothing was left after stop. Exit 0 is a pass, 1 a fail,
-  3 inconclusive. Inconclusive means the window in front at the start was not a
-  visible one, so a steal can't be told from Windows handing over a dead
-  foreground: put one of your windows in front and rerun.
+  `bringToFront` then a `newPage`, maximize and restore, `window.open`), then
+  judges the supervisor's log. It passes when no run window took the
+  foreground or went on top, none sat above another window (except a lift the
+  keeper sank within 50 ms, printed as a `NOTE`), the keeper never had to
+  fight a window, the covered page stayed `visible` and drew frames within 10%
+  of the monitor's rate, and nothing was left after stop. Exit 0 is a pass, 1
+  a fail, 3 inconclusive. Inconclusive means the window in front at the start
+  was not a visible one, so a steal can't be told from Windows handing over a
+  dead foreground: put one of your windows in front and rerun.
 
 **How it works:** each run gets an 8-hex id, a fresh profile in its own run
 dir, and Chrome on `--remote-debugging-port=0`. Its flags are puppeteer's
@@ -234,9 +236,12 @@ path), does the Windows half. The rules, and why:
   and it kills the run's chrome.exe and deletes the dir.
 - **The keeper is a backstop.** While no run window has the foreground, the
   supervisor sinks any run window it sees above another on-screen window, at
-  most 20 times per window per second. Under the WMI launch it had nothing to
-  do. It stands down while a run window has the foreground, so a window you
-  clicked stays up.
+  most 20 times per window per second. Under the WMI launch one sequence still
+  lifts a window: `bringToFront` followed by a `newPage` put it just under the
+  foreground, above your other windows, for about 12 ms until the keeper sank
+  it. Neither call alone did, and the lifted window never took the foreground
+  or went on top. The keeper stands down while a run window has the
+  foreground, so a window you clicked stays up.
 - **A covered page still renders.** `--disable-backgrounding-occluded-windows`
   plus `CalculateNativeWinOcclusion` in the disabled features keep the page
   `visible`, at the monitor's frame rate, behind other windows. The flag alone
