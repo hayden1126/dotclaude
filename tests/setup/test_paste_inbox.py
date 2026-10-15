@@ -244,7 +244,8 @@ class Paste(Inbox):
                                       "-t", "%5"]])
 
     def test_the_inbox_image_wins_when_it_is_newer(self):
-        upload = self.put(self.inbox, "20261015T000000Z-laptop-aaaaaa.png", age=5)
+        # both past the 30 s rule, so the newest across inbox and Downloads decides
+        upload = self.put(self.inbox, "20261015T000000Z-laptop-aaaaaa.png", age=60)
         self.put(self.downloads, "older.png", age=120)
         self.paste()
         self.assertEqual(self.pasted(), upload)
@@ -380,7 +381,8 @@ class Paste(Inbox):
     def test_without_windows_the_inbox_alone_is_used(self):
         del self.env["PASTE_INBOX_DOWNLOADS"]
         os.remove(os.path.join(self.stubs, "powershell.exe"))
-        upload = self.put(self.inbox, "20261015T000000Z-laptop-aaaaaa.png", age=5)
+        # past the 30 s rule, so paste looks for Downloads (and finds no Windows)
+        upload = self.put(self.inbox, "20261015T000000Z-laptop-aaaaaa.png", age=60)
         self.paste()
         self.assertEqual(self.pasted(), upload)
         self.paste()   # nothing was cached: a later run still looks for Windows
