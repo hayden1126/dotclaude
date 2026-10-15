@@ -47,6 +47,9 @@ shared row, so a client's width never renames a tab); with no lead among them, t
 state dir, read bounded and type-checked as untrusted), and only when the record names this
 server: its socket, its pid and that pid's /proc start time all match $TMUX's, since a pane id
 restarts at %0 on every server and a pid can be reused. A new lead renames tabs and moves none.
+A window linked into two sessions takes the first session's name: grouped sessions (the phone's
+and the desktop's) share every window, so they agree, and only a window linked alone into
+another session can number differently there.
 Every write of a run goes to one `tmux source-file -` on stdin, one line per session with its sig
 last, so a session that vanished mid-run (an error drops the rest of its line) records no sig.
 

@@ -324,13 +324,13 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
   acceptEdits mode succeeds with no prompt, and the shared `info/exclude` hides it
   (`git status --ignored` shows `!! .lane/`).
 - **S3, `excludedCommands`:** `lane new` fetches and `lane ls` asks gh for PR state, and both
-  need the credential the sandbox hides; `ls`, `open`, `done` and `addr` also need to see other
-  processes. PR 1 excluded `lane *`. PR 2 narrowed it to `lane init`, `new`, `adopt`, `ls`,
-  `open` and `done` (and lane-addr added `addr`), each by name, because `lane lock -- <cmd>` must stay sandboxed: under
+  need the credential the sandbox hides; `ls`, `open`, `done`, `addr` and `lead` also need to
+  see other processes. PR 1 excluded `lane *`. PR 2 narrowed it to `lane init`, `new`, `adopt`, `ls`,
+  `open` and `done` (lane-addr added `addr`, and two-sessions `lead`), each by name, because `lane lock -- <cmd>` must stay sandboxed: under
   `lane *`, any command wrapped in it ran sandbox-off without the `dangerouslyDisableSandbox`
   flag the delete guard checks. `whoami`, `claim`, `release`, `who`, `note`, `asks` and `lock`
   touch only `<common-dir>/lanes/` and the lane's `.lane/`, which a lane-rooted sandbox can
-  write (S1). A sandboxed (piped) `ls` says what it skipped; `new`, `open`, `done` and `addr` refuse.
+  write (S1). A sandboxed (piped) `ls` says what it skipped; `new`, `open`, `done`, `addr` and `lead` refuse.
   `new` and `adopt` also run the config's `setup` command through a shell, sandbox-off, and
   `new` makes its worktree under the config's `root`. So the config lives in the state dir, not
   the common dir: sandboxed Bash can read it but not write it, and only a bare `lane init`

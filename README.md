@@ -393,7 +393,8 @@ need nothing extra.
   its own row, headed by its name (`dotclaude▸`): the main checkout's tabs (`lead` plus its title),
   then each lane (its id, cut to 12 cells, plus its title), then its other worktrees. A second tab
   in the main checkout, a stray session or a shell, reads `lead²` (a third `lead³`), and `lead`
-  stays on the session `lane addr lead` picks; a flip renames tabs and moves none. Every other
+  stays on the tab holding the recorded lead's pane (the first tab when none is recorded); a new
+  lead renames tabs and moves none. Every other
   window goes on the shared row(s) at the bottom, as `repo: title`. A window counts as whatever
   its active pane's directory is in. Window numbers never change; only the order on the bar does.
   Every row starts with the same gutter (the delegation token's width, then the widest repo

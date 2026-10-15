@@ -129,8 +129,8 @@ into lanes and keeps them moving. It owns the project STATUS (backlog, merge ord
 inside a lane.
 
 **Which session leads.** A main checkout can hold two live sessions: a stray resumed there, or a
-side chat. The lead is the last one to act as lead. A bare `lane init`, `new`, `adopt`, `open` or
-`done` that succeeds from an interactive session in the main checkout records it in the state
+side chat. The lead is the last one to act as lead. A bare `lane init`, `new`, `adopt`, `open` (not
+`--print`) or `done` that succeeds from an interactive session in the main checkout records it in the state
 dir, where no lane can write, and `lane lead` takes it on purpose (Hayden: `! lane lead` at its
 prompt). A /clear or a /pass in its pane keeps it; after a tmux restart it acts again. Looks
 (`ls`, `addr`) never take it. `lane addr lead` prints the lead's address, `lane ls` names a
@@ -259,7 +259,7 @@ newer, or a session that started after it has ended; on whenever one of those ca
 Run `lane init`, `new`, `adopt`, `ls`, `open`, `done`, `addr` and `lead` as bare commands: those are in
 `excludedCommands`, so they run outside the sandbox with the network, gh's credential and a view
 of other processes. Piped or sandboxed, `ls` says what it skipped (PR state, sessions and window
-show `?`), and `new`, `open`, `done` and `addr` refuse. `lane ls` also names any record it left out (a
+show `?`), and `new`, `open`, `done`, `addr` and `lead` refuse. `lane ls` also names any record it left out (a
 `lane.json` the CLI didn't write, or two claiming one path): look at it before removing it. `open --print` still prints, but warns that it
 can't see a live session, so its command may start a second one. Every other subcommand runs
 sandboxed. `lane lock` must: the command it wraps inherits its sandbox.
