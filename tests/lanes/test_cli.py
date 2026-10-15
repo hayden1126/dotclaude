@@ -2106,14 +2106,36 @@ class SwitchedBranch(LanesRepo):
         self.assertEqual(self.git("branch", "--list", "chart-more"), "")
 
     def test_abandon_keeps_an_unmerged_switched_branch_and_its_config(self):
-        # Its upstream names a remote ref a fetch has pruned: the config survives as it was.
+        # Its upstream names a remote ref a fetch has pruned, a key holds two values, and
+        # setting an upstream would add a rebase key: the section survives exactly as it was.
+        self.git("config", "branch.autoSetupRebase", "always")
         self.git("config", "branch.chart-more.remote", "origin")
-        self.git("config", "branch.chart-more.merge", "refs/heads/chart-more")
+        self.git("config", "--add", "branch.chart-more.merge", "refs/heads/chart-more")
+        self.git("config", "--add", "branch.chart-more.merge", "refs/heads/other")
+        before = self.git("config", "--get-regexp", r"^branch\.chart-more\.")
         self.lane("done", "chart-fix", "--abandon")
         self.assertIn("chart-more", self.git("branch", "--list", "chart-more"))
-        self.assertEqual(self.git("config", "--get", "branch.chart-more.remote").strip(), "origin")
-        self.assertEqual(self.git("config", "--get", "branch.chart-more.merge").strip(),
-                         "refs/heads/chart-more")
+        self.assertEqual(self.git("config", "--get-regexp", r"^branch\.chart-more\."), before)
+
+    def test_a_branch_without_config_is_left_without_any(self):
+        self.lane("done", "chart-fix", "--abandon")
+        p = subprocess.run(["git", "config", "--get-regexp", r"^branch\.chart-more\."],
+                           cwd=self.main, env=self.env, capture_output=True, text=True)
+        self.assertEqual((p.returncode, p.stdout), (1, ""))
+
+    def test_a_lane_mid_rebase_shows_the_rebased_branch_s_pr(self):
+        # Git keeps the branch a rebase works on in the worktree's admin dir; HEAD is detached.
+        self.git("switch", "-q", "--detach", cwd=self.path)
+        admin = self.git("rev-parse", "--absolute-git-dir", cwd=self.path).strip()
+        self.write(os.path.join(admin, "rebase-merge", "head-name"), "refs/heads/chart-more\n")
+        self.env["FAKE_GH_OUT"] = json.dumps(
+            [{"number": 7, "state": "MERGED", "headRefName": "chart-fix"},
+             {"number": 8, "state": "OPEN", "headRefName": "chart-more"}])
+        (row,) = json.loads(self.lane("ls", "--json"))
+        self.assertEqual(row["pr"], "#8 open")
+        self.write(os.path.join(admin, "rebase-merge", "head-name"), "refs/heads/-bad name\n")
+        (row,) = json.loads(self.lane("ls", "--json"))
+        self.assertEqual(row["pr"], "#7 merged")  # no valid name: lane.json's guess
 
     def test_a_detached_lane_shows_its_registered_branch_s_pr(self):
         self.git("switch", "-q", "--detach", cwd=self.path)  # mid-rebase looks the same
@@ -2230,6 +2252,35 @@ class ExcludedGuardRules(LanesRepo):
                 self.assertFalse(seed())
                 self.assertEqual(os.lstat(record).st_mtime_ns, before.st_mtime_ns)
                 self.assertEqual(self.read(outside), "## Asks for Hayden\n")
+
+    def test_finish_seeds_while_the_lane_is_still_setup_failed(self):
+        # `open` refuses a setup-failed lane, so no session can start while the ask goes in.
+        lane_mod = load_lane_script()
+        self.lane("init", "--setup", "test -f ready.flag")
+        self.assertEqual(self.run_lane("new", "chart-fix").returncode, 1)
+        path = self.lane_path("chart-fix")
+        self.write(os.path.join(path, "ready.flag"), "")
+        states = []
+        cwd = os.getcwd()
+        os.chdir(self.main)
+        try:
+            with mock.patch.dict(os.environ, self.env, clear=True), \
+                    mock.patch.object(lane_mod, "check_worktree", lambda lane, seed_ask: (
+                        states.append((self.lane_json("chart-fix")["state"], seed_ask)))):
+                lane_mod.cmd_adopt(argparse.Namespace(path=path, id=None))
+        finally:
+            os.chdir(cwd)
+        self.assertEqual(states, [("setup-failed", True)])
+        self.assertEqual(self.lane_json("chart-fix")["state"], "active")
+
+    def test_seed_line_writes_nothing_when_it_cannot_see_sessions(self):
+        lane_mod = load_lane_script()
+        self.lane("new", "chart-fix")
+        seeded = self.read(self.record("chart-fix"))
+        with mock.patch.dict(os.environ, dict(self.env, _LANE_TEST_SANDBOXED="1"), clear=True):
+            self.assertFalse(lane_mod.seed_line(self.lane_json("chart-fix"),
+                                                "## Asks for Hayden", "- ask"))
+        self.assertEqual(self.read(self.record("chart-fix")), seeded)
 
     def test_seed_line_leaves_a_live_session_s_record_alone(self):
         lane_mod = load_lane_script()

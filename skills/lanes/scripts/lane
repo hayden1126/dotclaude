@@ -312,6 +312,24 @@ def branch_label(branch: str, ref: str) -> str:
     return branch or f"(detached {ref[:12]})"
 
 
+def rebasing_branch(repo: Repo, path: str) -> str:
+    """The branch a detached worktree at `path` is rebasing, from the head-name git keeps in
+    its admin dir (the one whose gitdir file names `path`), or ''. Any lane can write that dir,
+    so it is read bounded, never through a link, and only a valid branch name counts: it only
+    picks the PR `ls` shows."""
+    for admin in glob.glob(os.path.join(repo.common_dir, "worktrees", "*")):
+        named = lanelib.read_head(os.path.join(admin, "gitdir"), 4096)
+        if named is None or os.path.realpath(os.path.dirname(
+                named.decode(errors="replace").strip())) != path:
+            continue
+        for sub in ("rebase-merge", "rebase-apply"):
+            head = lanelib.read_head(os.path.join(admin, sub, "head-name"), 4096)
+            name = (head or b"").decode(errors="replace").strip().removeprefix("refs/heads/")
+            if head and lanelib.valid_branch(name):
+                return name
+    return ""
+
+
 def check_id(lane_id: str) -> None:
     """Every subcommand that takes an id checks it first: an id becomes a path under lanes/."""
     if not lanelib.valid_id(lane_id):
@@ -932,10 +950,11 @@ def board(repo: Repo) -> list[dict]:
         path = os.path.realpath(lane["path"])
         stale = path not in trees or not os.path.isdir(path)
         branch, ref = lane_head(lane, trees)
-        # Detached (mid-rebase, say), the PR is still lane.json's branch's best guess.
+        # Detached mid-rebase, the PR is the rebased branch's; otherwise lane.json's best guess.
+        guess = branch or rebasing_branch(repo, path) or lane["branch"]
         row = dict(lane, branch=branch_label(branch, ref), registered_branch=lane["branch"],
                    stale=stale, ahead=None, behind=None,
-                   pr="?" if prs is None else prs.get(branch or lane["branch"], "none"))
+                   pr="?" if prs is None else prs.get(guess, "none"))
         counts = git(["rev-list", "--left-right", "--count", "--end-of-options",
                       f"{base}...{ref}"], repo.toplevel)
         if counts.returncode == 0:
@@ -2325,19 +2344,31 @@ def delete_branches(repo: Repo, branches: list[str]) -> None:
             continue
         # With no upstream, -d judges against the main checkout's HEAD, which may not have
         # pulled the merge yet; the base as upstream makes it judge against what was merged.
-        # A branch -d keeps gets its own config back as it was, even one naming a remote ref
-        # a fetch has since pruned.
-        keys = [f"branch.{branch}.remote", f"branch.{branch}.merge"]
-        before = {k: git(["config", "--get", k], repo.toplevel) for k in keys}
+        # A branch -d keeps gets its config section back as it was (an upstream naming a
+        # pruned remote ref, a rebase setting, a key with several values).
+        before = branch_config(repo, branch)
         git(["branch", f"--set-upstream-to={base_ref(cfg)}", "--end-of-options", branch],
             repo.toplevel)
         p = git(["branch", "-d", "--end-of-options", branch], repo.toplevel)
         if p.returncode != 0:
-            for k, old in before.items():
-                git(["config", k, old.stdout.strip()] if old.returncode == 0
-                    else ["config", "--unset", k], repo.toplevel)
+            git(["config", "--remove-section", f"branch.{branch}"], repo.toplevel)
+            for key, value in before:
+                git(["config", "--add", key, value], repo.toplevel)
             warn(f"branch {branch} kept: {p.stderr.strip()} (a squash merge leaves it "
                  "unmerged to git; check, then delete it yourself)")
+
+
+def branch_config(repo: Repo, branch: str) -> list[tuple[str, str]]:
+    """Every (key, value) in the branch's config section, in order. A branch name can hold dots,
+    so a key is the branch's when its tail past `branch.<name>.` is one bare name."""
+    p = git(["config", "-z", "--get-regexp", r"^branch\."], repo.toplevel)
+    out = []
+    for record in p.stdout.split("\0") if p.returncode == 0 else []:
+        key, _, value = record.partition("\n")
+        var = key.removeprefix(f"branch.{branch}.")
+        if var != key and var and "." not in var:
+            out.append((key, value))
+    return out
 
 
 def parser() -> argparse.ArgumentParser:

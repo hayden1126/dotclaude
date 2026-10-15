@@ -35,6 +35,11 @@ def load_guard():
     return guard
 
 
+def slurp(path):
+    with open(path) as f:
+        return f.read()
+
+
 def unlock(root):
     for d, dirs, files in os.walk(root):
         os.chmod(d, 0o755)
@@ -1045,6 +1050,32 @@ class Session(Guard):
         self.assertEqual(len(kept), guard.MACHINE_KEYS)
         self.assertIn(f"{guard.MACHINE_KEY}:0", kept)
         self.assertNotIn(f"{guard.MACHINE_KEY}:1", kept)
+
+    def test_links_where_the_state_goes_are_never_followed(self):
+        self.env["PATH"] = f"{self.wbin}:/usr/bin"
+        d = self.mkdir("state", "dotclaude")
+        state, lock = (self.write(os.path.join(self.tmp, n), "{}") for n in ("st", "lk"))
+        os.symlink(state, os.path.join(d, "excluded-check.json"))
+        os.symlink(lock, os.path.join(d, "excluded-check.json.lock"))
+        self.assertIsNotNone(self.start())
+        self.assertEqual((slurp(state), slurp(lock)), ("{}", "{}"))
+        # The link itself is replaced by the new state, never written through.
+        self.assertFalse(os.path.islink(os.path.join(d, "excluded-check.json")))
+
+    def test_a_planted_temp_name_is_never_written_through(self):
+        guard = load_guard()
+        d = self.mkdir("state", "dotclaude")
+        target = self.write(os.path.join(self.tmp, "target"), "keep")
+        os.symlink(target, os.path.join(d, f"excluded-check.json.{os.getpid()}.tmp"))
+        with mock.patch.dict(os.environ, XDG_STATE_HOME=os.path.join(self.tmp, "state")):
+            self.assertEqual(guard.unseen({"machine:x": ["a"]}), {"machine:x": ["a"]})
+        self.assertEqual(slurp(target), "keep")
+        self.assertIn("state not written", self.log())
+
+    def test_keys_with_nothing_to_say_are_not_stored(self):
+        self.assertIsNone(self.start())
+        with open(os.path.join(self.tmp, "state", "dotclaude", "excluded-check.json")) as f:
+            self.assertEqual(json.load(f), {})
 
     def test_a_fifo_where_the_state_goes_never_hangs_it(self):
         self.env["PATH"] = f"{self.wbin}:/usr/bin"

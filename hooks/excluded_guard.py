@@ -943,7 +943,7 @@ def run_scan(roots):
 
 SESSION_STATE = "excluded-check.json"
 MACHINE_KEY = "machine"
-MACHINE_KEYS = 8  # PATH keys kept: one per PATH a tab started with
+MACHINE_KEYS = 8  # PATH keys kept: a PATH a tab started with, or that PATH and a project
 
 
 def finding(r):
@@ -988,7 +988,7 @@ def session_findings(env, project):
 
 def unseen(findings):
     """The findings whose key changed since the last start that showed them, and store the new
-    ones. A key going to none is stored, never shown. State that can't be read counts as none
+    ones. A key going to none is dropped, never shown. State that can't be read counts as none
     seen and one that can't be written is logged: a finding then shows at every start rather
     than never."""
     d = os.path.join(os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state"),
@@ -1012,7 +1012,8 @@ def unseen(findings):
             if lines and seen.get(key) != digest:
                 out[key] = lines
             seen.pop(key, None)
-            seen[key] = digest  # last, so the newest keys stay
+            if lines:  # none and no key read the same, and an empty key would take a slot
+                seen[key] = digest  # last, so the newest keys stay
         # A closed lane's key goes with its dir and a PATH key past the newest few with its
         # tab, so the file stays small.
         paths = [k for k in seen if k.startswith(MACHINE_KEY + ":")]
