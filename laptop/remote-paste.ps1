@@ -8,12 +8,18 @@ tmux/paste-inbox), so Alt+V in the PC's tmux pastes it into Claude Code.
 
 remote-paste.ahk runs it on Ctrl+V in a PC tmux tab; install-remote-paste.ps1 runs -SelfTest.
 It reads remote-paste.ini beside it (target, port, distro, laptopDistro) and sends the bytes on
-stdin through this laptop's WSL ssh (`wsl.exe -e ssh`: the key and known_hosts behind a
-`ssh -p 2222 <target>` alias) to the PC's Windows shell port, whose cmd.exe runs
-`wsl.exe -d <distro> --cd ~ --exec .local/bin/paste-inbox receive <COMPUTERNAME>`. The process
-is started through ProcessStartInfo with no argument holding a space or a quote, since Windows
-PowerShell 5.1 mangles native arguments with embedded quotes. BatchMode: a key that needs a
-passphrase fails at once instead of waiting in a hidden window; ConnectTimeout 5 s, 60 s in all.
+stdin through this laptop's WSL ssh (`wsl.exe -e ssh`, so the key, known_hosts and any ssh config
+Host the target names are the ones `ssh -p <port> <target>` uses there) to the PC's Windows
+shell port, whose cmd.exe runs `wsl.exe -d <distro> --cd ~ --exec .local/bin/paste-inbox receive
+<COMPUTERNAME> <bytes>`; the byte count makes the PC refuse a cut upload. -SelfTest sends a 1x1
+PNG with `receive --check`, which validates it and keeps nothing. The process is started through
+ProcessStartInfo with no argument holding a space or a quote, since Windows PowerShell 5.1
+mangles native arguments with embedded quotes, and with a BOM-free console input encoding (put
+back right after), since .NET Framework writes the encoding's preamble into a child's stdin at
+start (a UTF-8 code page would put EF BB BF before the image). WSL_UTF8=1 makes wsl.exe's own errors (which it prints on stdout) UTF-8 like ssh's.
+BatchMode: a key that needs a passphrase fails at once instead of waiting in a hidden window.
+ConnectTimeout 5 s, keepalives every 5 s (a link that dies ends ssh within about 15 s), and 60 s
+in all: the upload is written asynchronously, so a stalled pipe can't hold it past that.
 
 Exit 0: stored; prints the PC's path. Exit 3: no image (text, nothing, or not one image file),
 so the caller pastes as usual. Exit 1: failed; the reason goes to stderr and to
@@ -39,7 +45,7 @@ $cfg = @{ port = '2222'; distro = 'Ubuntu'; laptopDistro = ''; target = '' }
 foreach ($line in Get-Content -LiteralPath $ini) {
     if ($line -match '^\s*([A-Za-z]+)\s*=(.*)$') { $cfg[$Matches[1]] = $Matches[2].Trim() }
 }
-if ($cfg.target -notmatch '^[A-Za-z0-9._-]+@[A-Za-z0-9.-]+$') { Fail "bad target in $ini" }
+if ($cfg.target -notmatch '^([A-Za-z0-9._-]+@)?[A-Za-z0-9.-]+$') { Fail "bad target in $ini" }
 if ($cfg.port -notmatch '^\d+$') { Fail "bad port in $ini" }
 if ($cfg.distro -notmatch '^[A-Za-z0-9._-]+$') { Fail "bad distro in $ini" }
 if ($cfg.laptopDistro -notmatch '^[A-Za-z0-9._-]*$') { Fail "bad laptopDistro in $ini" }
@@ -74,9 +80,20 @@ if ($bytes.Length -gt 50MB) { Fail 'image over 50 MB' }
 
 $wsl = @()
 if ($cfg.laptopDistro) { $wsl += '-d', $cfg.laptopDistro }
-$wsl += '-e', 'ssh', '-p', $cfg.port, '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=5', '--',
-    $cfg.target, 'wsl.exe', '-d', $cfg.distro, '--cd', '~', '--exec', '.local/bin/paste-inbox',
-    'receive', $device
+$receive = @('receive')
+if ($SelfTest) { $receive += '--check' }
+$wsl += '-e', 'ssh', '-p', $cfg.port, '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=5',
+    '-o', 'ServerAliveInterval=5', '-o', 'ServerAliveCountMax=3', '--', $cfg.target,
+    'wsl.exe', '-d', $cfg.distro, '--cd', '~', '--exec', '.local/bin/paste-inbox'
+$wsl += $receive + @($device, $bytes.Length)
+$oldInput = $null
+try {
+    $oldInput = [Console]::InputEncoding
+    [Console]::InputEncoding = New-Object System.Text.UTF8Encoding $false
+} catch {
+    # no console to set (the encoding then has no preamble either)
+}
+$utf8 = New-Object System.Text.UTF8Encoding $false
 $psi = New-Object System.Diagnostics.ProcessStartInfo
 $psi.FileName = 'wsl.exe'
 $psi.Arguments = $wsl -join ' '
@@ -85,26 +102,37 @@ $psi.CreateNoWindow = $true
 $psi.RedirectStandardInput = $true
 $psi.RedirectStandardOutput = $true
 $psi.RedirectStandardError = $true
+$psi.StandardOutputEncoding = $utf8
+$psi.StandardErrorEncoding = $utf8
+$psi.EnvironmentVariables['WSL_UTF8'] = '1'
 try {
     $p = [System.Diagnostics.Process]::Start($psi)
 } catch {
     Fail "can't start wsl.exe: $($_.Exception.Message)"
+} finally {
+    # the console may be the caller's (the installer's window): give its code page back
+    if ($oldInput) { try { [Console]::InputEncoding = $oldInput } catch { } }
 }
+$deadline = [DateTime]::UtcNow.AddSeconds(60)
 $out = $p.StandardOutput.ReadToEndAsync()
 $err = $p.StandardError.ReadToEndAsync()
+$sent = $true
 try {
-    $p.StandardInput.BaseStream.Write($bytes, 0, $bytes.Length)
-    $p.StandardInput.Close()
+    $sent = $p.StandardInput.BaseStream.WriteAsync($bytes, 0, $bytes.Length).Wait(60000)
+    if ($sent) { $p.StandardInput.Close() }
 } catch {
     # ssh ended before reading it all (no route, refused): its exit code and stderr say why
 }
-if (-not $p.WaitForExit(60000)) {
-    $p.Kill()
+$left = [int][Math]::Max(0, ($deadline - [DateTime]::UtcNow).TotalMilliseconds)
+if (-not $sent -or -not $p.WaitForExit($left)) {
+    try { $p.Kill() } catch { }
     Fail 'no answer from the PC within 60 s'
 }
 $path = $out.Result.Trim()
 if ($p.ExitCode -ne 0 -or -not $path) {
-    $why = ($err.Result -split "`r?`n" | Where-Object { $_.Trim() } | Select-Object -Last 1)
+    # ssh's reason is stderr's last line; wsl.exe's own (a bad laptopDistro, say) is all of stdout
+    $why = $err.Result -split "`r?`n" | Where-Object { $_.Trim() } | Select-Object -Last 1
+    if (-not $why) { $why = ($out.Result -split "`r?`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ }) -join ' ' }
     if (-not $why) { $why = "ssh exited $($p.ExitCode)" }
     Fail $why.Trim()
 }

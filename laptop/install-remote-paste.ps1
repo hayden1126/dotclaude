@@ -1,17 +1,19 @@
 <#
 install-remote-paste.ps1: install the laptop side of remote-paste (opt-in: nothing else runs it).
 
-  powershell -ExecutionPolicy Bypass -File install-remote-paste.ps1 -Target <user>@<pc host>
+  powershell -ExecutionPolicy Bypass -File install-remote-paste.ps1 -Target <user>@<pc host>|<ssh Host>
       [-Port 2222] [-Distro Ubuntu] [-LaptopDistro <name>] [-TitlePattern '^view-\d+\s']
   powershell -ExecutionPolicy Bypass -File install-remote-paste.ps1 -Uninstall
 
 Copies remote-paste.ahk and remote-paste.ps1 to %LOCALAPPDATA%\remote-paste and writes
 remote-paste.ini there: the target and the rest stay on this laptop (dotclaude is public, so
 no host name lives in it). Then it adds a Startup shortcut so the hotkey runs at sign-in,
-starts it, and sends a 1x1 PNG to check the whole link. Needs AutoHotkey v2 (winget install
---id AutoHotkey.AutoHotkey), this laptop's WSL ssh reaching the PC's Windows shell port with
-a key that needs no typed passphrase, and a known_hosts entry for that port (connect once by
-hand: ssh -p 2222 <target>). The PC needs dotclaude's setup-tmux.sh (tmux/paste-inbox).
+starts it, and checks the whole link with a 1x1 PNG the PC validates and doesn't keep. Needs
+AutoHotkey v2 (winget install --id AutoHotkey.AutoHotkey), this laptop's WSL ssh reaching the
+PC's Windows shell port with a key that needs no typed passphrase, and a known_hosts entry for
+that port (connect once by hand: ssh -p 2222 <target>). -Target is user@host or a Host from the
+laptop WSL's ~/.ssh/config (-Port still applies). The PC needs dotclaude's setup-tmux.sh
+(tmux/paste-inbox).
 -Port is the PC's Windows shell port, -Distro the PC's WSL distro, -LaptopDistro this laptop's
 WSL distro when ssh isn't in the default one, -TitlePattern the Windows Terminal title of a PC
 tmux tab. Rerun to change a setting; -Uninstall stops the hotkey and removes the folder and
@@ -60,7 +62,7 @@ if ($Uninstall) {
     exit 0
 }
 
-if ($Target -notmatch '^[A-Za-z0-9._-]+@[A-Za-z0-9.-]+$') { throw '-Target <user>@<pc host> is required' }
+if ($Target -notmatch '^([A-Za-z0-9._-]+@)?[A-Za-z0-9.-]+$') { throw '-Target <user>@<pc host> or an ssh Host is required' }
 if ($Distro -notmatch '^[A-Za-z0-9._-]+$') { throw "bad -Distro: $Distro" }
 if ($LaptopDistro -notmatch '^[A-Za-z0-9._-]*$') { throw "bad -LaptopDistro: $LaptopDistro" }
 if ($TitlePattern -match '[\r\n]') { throw 'bad -TitlePattern' }
@@ -94,4 +96,4 @@ if ($LASTEXITCODE -ne 0) {
     Write-Host 'works by hand from this laptop''s WSL without a passphrase prompt; setup-tmux.sh ran on the PC.'
     exit 1
 }
-Write-Host "self-test: the PC stored $stored"
+Write-Host "self-test passed: the PC would keep an upload as $stored"

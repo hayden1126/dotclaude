@@ -1,9 +1,12 @@
 #!/usr/bin/python3 -I
 """paste-inbox: paste the newest image that reached this PC into a tmux pane (Alt+V).
 
-  paste-inbox receive <device>        one image on stdin into the inbox; prints its path
-  paste-inbox paste <pane> <client>   the newest image of the last 10 minutes, as a bracketed
-                                      paste into the pane; else a message on the client
+  paste-inbox receive [--check] <device> <bytes>   one image of <bytes> bytes on stdin into the
+                                                   inbox; prints its path (--check: validate
+                                                   it, keep nothing)
+  paste-inbox paste <pane> <client>                the newest image of the last 10 minutes, as a
+                                                   bracketed paste into the pane; else a
+                                                   message on the client
 
 Why: under WSL, Claude Code's Ctrl+V and an empty paste read this PC's Windows clipboard
 (powershell.exe through the tmux server's WSL interop), so a screenshot copied on another device
@@ -11,24 +14,29 @@ never arrives. Claude Code does attach an image whose path is pasted (bracketed,
 800 characters; read from the 2.1.301 binary), so this pastes a path.
 
 `receive` is what a remote device runs over ssh on the Windows shell port, through
-`wsl.exe -d Ubuntu --cd ~ --exec .local/bin/paste-inbox receive <device>` (laptop/ holds the
-Windows side). It keeps a PNG, JPEG, GIF or WebP up to 50 MB, judged by its first bytes, which
-also pick the extension, as `<UTC time>-<device>-<random>.<ext>` in $PASTE_INBOX_DIR (default
-~/.cache/claude-paste, mode 700, files 600), written to a temp file and renamed. The device
-name is cut to [a-z0-9._-], so it can't steer the path. Each receive deletes the inbox's own
+`wsl.exe -d Ubuntu --cd ~ --exec .local/bin/paste-inbox receive <device> <bytes>` (laptop/ holds
+the Windows side). It keeps a PNG, JPEG, GIF or WebP of exactly the size given (so a cut upload,
+or a byte added on the way, is refused) and at most 50 MB, judged by its first bytes, which also
+pick the extension, as `<UTC time>-<device>-<random>.<ext>` in $PASTE_INBOX_DIR (default
+~/.cache/claude-paste, mode 700, files 600), written to a temp file and renamed. The device name
+is cut to [a-z0-9._-], so it can't steer the path. Each receive first deletes the inbox's own
 files (that name pattern and stale temp files) older than a day; Claude Code reads an image at
-paste time, so a pasted copy is not needed after. Anything else is refused on stderr, exit 1.
+paste time, so a pasted copy is not needed after. Anything else is refused on stderr, exit 1;
+--check prints the path it would use and keeps nothing (the laptop installer's self-test).
 
-`paste` takes the newest image file (.png, .jpg, .jpeg, .gif or .webp, any case; no dotfiles)
-modified in the last 10 minutes in the inbox or Windows Downloads, where Taildrop saves (Tailscale
-1.34 and later; mtime is the arrival time). The Downloads folder is $PASTE_INBOX_DOWNLOADS (empty:
-none), else the path cached in $XDG_STATE_HOME/dotclaude/paste-inbox/downloads, else
-`cmd.exe /c echo %USERPROFILE%` through `wslpath -u` plus Downloads, cached once it exists (cmd.exe
-from PATH only, so outside WSL the inbox alone counts). A pane in copy mode leaves it first. The
-path goes in through `load-buffer -` and out through `paste-buffer -p -d`, quoted when it holds a
-space. Silent, exit 0: Alt+V runs it (tmux/claude.conf), and a failing run-shell would put the
-pane in view mode. Linked into ~/.local/bin by setup-tmux.sh; tests/setup/test_paste_inbox.py
-holds the cases.
+`paste` takes the newest non-empty image file (.png, .jpg, .jpeg, .gif or .webp, any case; no
+dotfiles) modified in the last 10 minutes, and not over a minute in the future, in the inbox or
+Windows Downloads, where Taildrop saves (Tailscale 1.34 and later; mtime is the arrival time).
+The newest wins across both, so a Taildrop after an upload, or a browser download on this PC,
+beats it. The Downloads folder is $PASTE_INBOX_DOWNLOADS (empty: none), else the path cached in
+$XDG_STATE_HOME/dotclaude/paste-inbox/downloads, else `cmd.exe /c echo %USERPROFILE%` through
+`wslpath -u` plus Downloads, cached once it exists (cmd.exe from PATH only, so outside WSL the
+inbox alone counts). A pane in copy mode leaves it first. The path goes in as bytes through
+`load-buffer -` into a buffer named for the pane (two clients at once don't share one) and out
+through `paste-buffer -p -d`, quoted when it holds a space. Silent, exit 0: Alt+V runs it
+(tmux/claude.conf), and a failing run-shell would put the pane in view mode, so a crash goes to
+$XDG_STATE_HOME/dotclaude/paste-inbox/error.log and a line on the client. Linked into
+~/.local/bin by setup-tmux.sh; tests/setup/test_paste_inbox.py holds the cases.
 """
 import os
 import re
@@ -38,12 +46,13 @@ import subprocess
 import sys
 import tempfile
 import time
+import traceback
 
 USAGE = __doc__.split("\n\n")[1]
 CAP = 50 * 1024 * 1024
 FRESH = 10 * 60
+SKEW = 60
 KEEP = 24 * 3600
-BUFFER = "claude-paste"
 IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".gif", ".webp")   # Claude Code's pasted-path pattern
 MAGIC = ((b"\x89PNG\r\n\x1a\n", "png"), (b"\xff\xd8\xff", "jpg"), (b"GIF87a", "gif"),
          (b"GIF89a", "gif"))
@@ -54,6 +63,11 @@ NONE_FRESH = ("No image arrived in the last 10 minutes. Ctrl+V a screenshot on a
 
 def inbox_dir() -> str:
     return os.environ.get("PASTE_INBOX_DIR") or os.path.expanduser("~/.cache/claude-paste")
+
+
+def state_dir() -> str:
+    state = os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state")
+    return os.path.join(state, "dotclaude", "paste-inbox")
 
 
 def image_ext(data: bytes) -> str | None:
@@ -82,21 +96,30 @@ def prune(inbox: str) -> None:
             pass
 
 
-def receive(device: str) -> int:
+def receive(device: str, size: int, check: bool) -> int:
+    if size > CAP:
+        return refuse("over 50 MB")
     data = sys.stdin.buffer.read(CAP + 1)
     if not data:
         return refuse("nothing on stdin")
     if len(data) > CAP:
         return refuse("over 50 MB")
+    if len(data) != size:
+        return refuse(f"got {len(data)} bytes, expected {size} (the upload was cut or changed)")
     ext = image_ext(data)
     if ext is None:
         return refuse("not a PNG, JPEG, GIF or WebP image")
     inbox = inbox_dir()
     os.makedirs(inbox, exist_ok=True)
     os.chmod(inbox, 0o700)
-    prune(inbox)
     stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
     final = os.path.join(inbox, f"{stamp}-{slug(device)}-{secrets.token_hex(3)}.{ext}")
+    if check:
+        if not os.access(inbox, os.W_OK):
+            return refuse(f"can't write {inbox}")
+        print(final)
+        return 0
+    prune(inbox)
     fd, tmp = tempfile.mkstemp(prefix=".incoming-", suffix=".tmp", dir=inbox)
     try:
         with os.fdopen(fd, "wb") as f:
@@ -116,11 +139,10 @@ def refuse(why: str) -> int:
 
 def downloads_dir() -> str | None:
     """Windows Downloads as a WSL path ($PASTE_INBOX_DOWNLOADS, the cache, else asked of
-    Windows once), or None."""
+    Windows once), or None. The cache is a shortcut only: failing to write it changes nothing."""
     if "PASTE_INBOX_DOWNLOADS" in os.environ:
         return os.environ["PASTE_INBOX_DOWNLOADS"] or None
-    state = os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state")
-    cache = os.path.join(state, "dotclaude", "paste-inbox", "downloads")
+    cache = os.path.join(state_dir(), "downloads")
     try:
         with open(cache) as f:
             return f.read().strip() or None
@@ -128,9 +150,12 @@ def downloads_dir() -> str | None:
         pass
     found = windows_downloads()
     if found:
-        os.makedirs(os.path.dirname(cache), exist_ok=True)
-        with open(cache, "w") as f:
-            f.write(found + "\n")
+        try:
+            os.makedirs(os.path.dirname(cache), exist_ok=True)
+            with open(cache, "w") as f:
+                f.write(found + "\n")
+        except OSError:
+            pass
     return found
 
 
@@ -152,8 +177,10 @@ def windows_downloads() -> str | None:
 
 
 def newest_image() -> str | None:
-    """The newest image file modified in the last FRESH seconds in the inbox or Downloads."""
-    cutoff, best, best_time = time.time() - FRESH, None, 0.0
+    """The newest non-empty image file modified within FRESH seconds (SKEW at most ahead) in
+    the inbox or Downloads."""
+    now = time.time()
+    best, best_time = None, 0.0
     for folder in (inbox_dir(), downloads_dir()):
         if not folder:
             continue
@@ -167,21 +194,22 @@ def newest_image() -> str | None:
             try:
                 if not entry.is_file():
                     continue
-                mtime = entry.stat().st_mtime
+                st = entry.stat()
             except OSError:
                 continue
-            if mtime >= cutoff and mtime > best_time:
-                best, best_time = entry.path, mtime
+            if st.st_size > 0 and now - FRESH <= st.st_mtime <= now + SKEW \
+                    and st.st_mtime > best_time:
+                best, best_time = entry.path, st.st_mtime
     return best
 
 
-def tmux(*args: str, stdin: str | None = None) -> str:
+def tmux(*args: str, stdin: bytes | None = None) -> str:
     """One tmux command; its stdout, or "" when tmux fails or is missing."""
     try:
-        return subprocess.run(["tmux", *args], input=stdin, capture_output=True, text=True,
-                              timeout=5).stdout
+        out = subprocess.run(["tmux", *args], input=stdin, capture_output=True, timeout=5).stdout
     except (OSError, subprocess.SubprocessError):
         return ""
+    return out.decode("utf-8", "replace")
 
 
 def paste(pane: str, client: str) -> int:
@@ -192,8 +220,22 @@ def paste(pane: str, client: str) -> int:
     if tmux("display-message", "-p", "-t", pane, "#{pane_in_mode}").strip() == "1":
         tmux("send-keys", "-X", "-t", pane, "cancel")
     text = f'"{path}"' if re.search(r"\s", path) else path
-    tmux("load-buffer", "-b", BUFFER, "-", stdin=text)
-    tmux("paste-buffer", "-p", "-d", "-b", BUFFER, "-t", pane)
+    buffer = "claude-paste-" + re.sub(r"[^0-9A-Za-z]", "", pane)
+    tmux("load-buffer", "-b", buffer, "-", stdin=os.fsencode(text))
+    tmux("paste-buffer", "-p", "-d", "-b", buffer, "-t", pane)
+    return 0
+
+
+def crashed(client: str) -> int:
+    """paste's backstop: the traceback to error.log, one line on the client, exit 0."""
+    log = os.path.join(state_dir(), "error.log")
+    try:
+        os.makedirs(os.path.dirname(log), exist_ok=True)
+        with open(log, "a") as f:
+            f.write(time.strftime("%Y-%m-%dT%H:%M:%S ") + traceback.format_exc())
+    except OSError:
+        pass
+    tmux("display-message", "-c", client, "-d", "5000", f"paste-inbox failed; see {log}")
     return 0
 
 
@@ -202,10 +244,16 @@ def main(argv: list) -> int:
     if args[:1] in (["-h"], ["--help"]):
         print(USAGE)
         return 0
-    if len(args) == 2 and args[0] == "receive":
-        return receive(args[1])
+    if args[:1] == ["receive"]:
+        check = args[1:2] == ["--check"]
+        rest = args[2:] if check else args[1:]
+        if len(rest) == 2 and re.fullmatch(r"[1-9][0-9]{0,9}", rest[1]):
+            return receive(rest[0], int(rest[1]), check)
     if len(args) == 3 and args[0] == "paste":
-        return paste(args[1], args[2])
+        try:
+            return paste(args[1], args[2])
+        except Exception:
+            return crashed(args[2])
     print("usage:\n" + USAGE, file=sys.stderr)
     return 2
 

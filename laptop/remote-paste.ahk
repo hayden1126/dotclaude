@@ -9,8 +9,9 @@
 ; runs remote-paste.ps1 hidden, which uploads the image to the PC's inbox; then it sends Alt+V,
 ; which the PC's tmux turns into a bracketed paste of that image's path (tmux/paste-inbox).
 ; remote-paste.ps1 exiting 3 (the file copied isn't one image) gives Windows Terminal its own
-; paste; a failure shows its reason in a tooltip. If another window took focus during the
-; upload, the tooltip says to press Alt+V in the PC's tab instead.
+; paste; a failure shows its reason in a tooltip. Alt+V goes only to the tab that was pressed:
+; if another window or tab (another view-<pid>) took focus during the upload, the tooltip says to
+; press Alt+V in the PC's tab instead.
 ; Installed into %LOCALAPPDATA%\remote-paste, with a Startup shortcut, by
 ; install-remote-paste.ps1.
 
@@ -19,11 +20,13 @@
 
 TitlePattern := IniRead(A_ScriptDir "\remote-paste.ini", "remote-paste", "title", "^view-\d+\s")
 
-IsPcTab() {
+; The PC tmux view the window shows (the title's match, e.g. "view-2313 "), or "" for none.
+PcView(hwnd) {
     global TitlePattern
-    hwnd := WinActive("ahk_exe WindowsTerminal.exe")
-    return hwnd && RegExMatch(WinGetTitle(hwnd), TitlePattern)
+    return hwnd && RegExMatch(WinGetTitle(hwnd), TitlePattern, &m) ? m[0] : ""
 }
+
+ActiveTerminal() => WinActive("ahk_exe WindowsTerminal.exe")
 
 ImageOnClipboard() {
     ; CF_UNICODETEXT 13 (text wins: a text paste never comes here), CF_DIB 8, CF_HDROP 15
@@ -32,12 +35,13 @@ ImageOnClipboard() {
             || DllCall("IsClipboardFormatAvailable", "UInt", 15))
 }
 
-#HotIf IsPcTab() && ImageOnClipboard()
+#HotIf PcView(ActiveTerminal()) != "" && ImageOnClipboard()
 $^v::RemotePaste()
 #HotIf
 
 RemotePaste() {
-    hwnd := WinActive("A")
+    hwnd := ActiveTerminal()
+    view := PcView(hwnd)
     ToolTip "Sending the screenshot to the PC..."
     code := RunWait('powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Sta -File "'
         A_ScriptDir '\remote-paste.ps1"', , "Hide")
@@ -50,7 +54,7 @@ RemotePaste() {
         Notify("remote-paste: " LastError(code))
         return
     }
-    if WinActive(hwnd)
+    if (ActiveTerminal() = hwnd && PcView(hwnd) == view)
         Send "!v"
     else
         Notify("Sent to the PC: press Alt+V in its tab")
