@@ -759,6 +759,108 @@ class Live(unittest.TestCase):
         self.assertEqual((place["w"], place["h"]), (1500, 1050))
         self.assertIn("clamped onto a monitor", r.stderr)
 
+    # ---- gc and ls ----
+
+    def sleeper(self):
+        p = subprocess.Popen(["sleep", "60"])
+        self.addCleanup(p.wait, 10)
+        self.addCleanup(p.kill)
+        return p
+
+    def put_record(self, rid, pid, start, **extra):
+        os.makedirs(self.recdir, exist_ok=True)
+        rec = {"id": rid, "kind": "start", "owner": {"pid": pid, "start": start}, "cwd": "/x",
+               "created": time.time() - 60, "expires": None, "port": None, "wsPath": None,
+               "runDir": f"C:\\T\\chrome-bg\\{rid}\\", **extra}
+        with open(os.path.join(self.recdir, rid + ".json"), "w") as f:
+            json.dump(rec, f)
+
+    def put_dir(self, rid, age):
+        d = os.path.join(self.base, rid)
+        os.makedirs(os.path.join(d, "profile"), exist_ok=True)
+        os.utime(d, (time.time() - age,) * 2)
+
+    def test_gc_stops_runs_whose_owner_is_dead(self):
+        live = self.sleeper()
+        start = cb.proc_stat(live.pid)[1]
+        self.put_record("aaaa0001", live.pid, str(int(start) + 1))  # pid reused by a later process
+        self.put_record("aaaa0002", 99999999, "5")                  # no such pid
+        self.put_record("aaaa0003", live.pid, start)                # alive: left alone
+        for rid in ("aaaa0001", "aaaa0002", "aaaa0003"):
+            self.put_dir(rid, 600)
+        r = self.cli("stop", "--gc")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertTrue(self.has("kill-aaaa0001") and self.has("kill-aaaa0002"), r.stdout)
+        self.assertFalse(self.has("kill-aaaa0003"))
+        self.assertEqual([x["id"] for x in self.records()], ["aaaa0003"])
+        self.assertIsNone(live.poll(), "a reused pid is never signalled")
+        self.assertIn("stopped aaaa0001: its owner is gone", r.stdout)
+
+    def test_gc_stops_a_run_past_its_ttl(self):
+        owner = self.sleeper()
+        self.put_record("bbbb0001", owner.pid, cb.proc_stat(owner.pid)[1], expires=time.time() - 1)
+        r = self.cli("stop", "--gc")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(owner.wait(10), -signal.SIGTERM, "the holder got SIGTERM")
+        self.assertTrue(self.has("kill-bbbb0001"), "it did not clean up, so a one-shot did")
+        self.assertEqual(self.records(), [])
+
+    def test_gc_skips_young_unrecorded_dirs(self):
+        self.put_dir("cccc0001", 5)
+        self.put_dir("cccc0002", 600)
+        r = self.cli("stop", "--gc")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertFalse(self.has("kill-cccc0001"), "a young dir may be a run still launching")
+        self.assertTrue(os.path.isdir(os.path.join(self.base, "cccc0001")))
+        self.assertTrue(self.has("kill-cccc0002"))
+        self.assertFalse(os.path.exists(os.path.join(self.base, "cccc0002")))
+
+    def test_gc_prunes_old_logs(self):
+        os.makedirs(self.recdir)
+        old, new = time.time() - 8 * 86400, time.time() - 86400
+        paths = {os.path.join(self.base, "dddd0001.log"): old,
+                 os.path.join(self.base, "dddd0002.log"): new,
+                 os.path.join(self.base, "notes.log"): old,
+                 os.path.join(self.recdir, "dddd0003.holder.log"): old,
+                 os.path.join(self.recdir, "dddd0004.err"): old}
+        for p, t in paths.items():
+            open(p, "w").close()
+            os.utime(p, (t, t))
+        r = self.cli("stop", "--gc")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        left = {os.path.basename(p) for p in paths if os.path.exists(p)}
+        self.assertEqual(left, {"dddd0002.log", "notes.log"})
+
+    def test_run_and_start_gc_first(self):
+        self.put_dir("eeee0001", 600)
+        r = self.cli("run", "--", sys.executable, "-c", "pass")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertTrue(self.has("kill-eeee0001"))
+        self.assertIn("chrome-bg gc: killed eeee0001", r.stderr)
+        self.put_dir("eeee0002", 600)
+        r = self.cli("start")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertTrue(self.has("kill-eeee0002"))
+        self.assertEqual(self.cli("stop", r.stdout.strip()).returncode, 0)
+
+    def test_ls(self):
+        r = self.cli("start", "--json")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        info = json.loads(r.stdout)
+        self.put_dir("ffff0001", 5)
+        r = self.cli("ls")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        lines = r.stdout.splitlines()
+        self.assertEqual(lines[0].split(), ["ID", "PORT", "PIDS", "OWNER", "AGE", "CWD"])
+        mine = [ln for ln in lines if ln.startswith(info["id"])][0]
+        self.assertIn(str(info["port"]), mine)
+        self.assertIn("4242,4243", mine)
+        self.assertIn("alive (start)", mine)
+        self.assertTrue(mine.rstrip().endswith(os.getcwd()))
+        orphan = [ln for ln in lines if ln.startswith("ffff0001")][0]
+        self.assertIn("no record", orphan)
+        self.assertEqual(self.cli("stop", info["id"]).returncode, 0)
+
     def test_stop_refuses_a_bare_port(self):
         for target, why in (("9222", "not '9222'"), (":9222", "bare"),
                             ("http://127.0.0.1:9222", "no run serves"), ("0123abcd", "no run 0123abcd")):

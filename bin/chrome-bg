@@ -881,6 +881,7 @@ def cmd_run(args):
         raise Fail("chrome-bg: run wants a command: chrome-bg run [options] -- CMD...")
     if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", args.env):
         raise Fail(f"chrome-bg: --env wants a variable name, not {args.env!r}")
+    gc_first()
     rid = new_id()
     state = {"child": None, "stopping": False}
 
@@ -987,6 +988,7 @@ def read_pipe(fd, timeout):
 
 def cmd_start(args):
     ttl = parse_duration(args.ttl)
+    gc_first()
     rid = new_id()
     cwd = os.getcwd()
     os.makedirs(state_dir(), mode=0o700, exist_ok=True)
@@ -1024,9 +1026,171 @@ def cmd_start(args):
     return 0
 
 
+# ---- gc and ls ------------------------------------------------------------------------------
+
+def scan_age(d):
+    for key, scale in (("age", 1), ("ageS", 1), ("ageSec", 1), ("ageSeconds", 1), ("ageMs", 0.001)):
+        v = pick(d, key)
+        if isinstance(v, (int, float)) and not isinstance(v, bool):
+            return float(v) * scale
+    return None
+
+
+def scan_runs():
+    """chrome-bg.ps1 -Scan as ({id: {"age": dir age in s or None, "pids": [chrome.exe pids]}},
+    the Windows root of the run dirs and logs)."""
+    reply = one_shot("-Scan")
+    runs = {}
+
+    def entry(rid):
+        return runs.setdefault(rid, {"age": None, "pids": []})
+
+    dirs = pick(reply, "dirs", default=[]) or []
+    if isinstance(dirs, dict):
+        dirs = [{"id": k, "age": v} for k, v in dirs.items()]
+    for d in dirs:
+        rid = str(pick(d, "id", default="")) if isinstance(d, dict) else ""
+        if ID_RE.fullmatch(rid):
+            entry(rid)["age"] = scan_age(d)
+    procs = pick(reply, "procs", "processes", default=[]) or []
+    if isinstance(procs, dict):
+        procs = [{"id": k, "pids": v} for k, v in procs.items()]
+    for p in procs:
+        rid = str(pick(p, "id", default="")) if isinstance(p, dict) else ""
+        if not ID_RE.fullmatch(rid):
+            continue
+        pids = pick(p, "pids", "pid", default=[])
+        for x in pids if isinstance(pids, list) else [pids]:
+            x = pick(x, "pid") if isinstance(x, dict) else x
+            if isinstance(x, int) and not isinstance(x, bool):
+                entry(rid)["pids"].append(x)
+    return runs, str(pick(reply, "root", default="") or "")
+
+
+def expired(rec):
+    exp = rec.get("expires")
+    return isinstance(exp, (int, float)) and time.time() >= exp
+
+
+def prune_logs(win_roots):
+    """Logs older than LOG_DAYS: the supervisors' <id>.log under the Windows root, and the
+    holders' and supervisors' stderr here. A live run's are kept."""
+    cutoff = time.time() - LOG_DAYS * 86400
+    dirs = [state_dir()]
+    for root in sorted(r for r in win_roots if r):
+        with contextlib.suppress(Fail):
+            dirs.append(wslpath("-u", root))
+    live = {r["id"] for r in read_records()}
+    for d in dirs:
+        try:
+            names = os.listdir(d)
+        except OSError:
+            continue
+        for name in names:
+            m = re.fullmatch(r"([0-9a-f]{8})\.(?:log|holder\.log|err)", name)
+            if not m or m.group(1) in live:
+                continue
+            p = os.path.join(d, name)
+            with contextlib.suppress(OSError):
+                if os.path.isfile(p) and os.path.getmtime(p) < cutoff:
+                    os.remove(p)
+
+
+def gc():
+    """Stop runs whose owner is provably dead or whose TTL ran out; kill run dirs no record
+    claims once they are YOUNG_S old (a younger one may be a run still launching); prune old
+    logs. Returns one line per action."""
+    done = []
+    runs, root = scan_runs()
+    # Records after the scan: a run writes its record before its supervisor starts, so every dir
+    # in the scan already has its record, if it has one.
+    recs = read_records()
+    for rec in recs:
+        why = "its owner is gone" if owner_dead(rec) else "its TTL ran out" if expired(rec) else None
+        if why:
+            try:
+                stop_record(rec)
+                done.append(f"stopped {rec['id']}: {why}")
+            except Fail as e:
+                done.append(f"could not stop {rec['id']} ({why}): {e}")
+    known = {r["id"] for r in recs}
+    for rid, info in sorted(runs.items()):
+        if rid in known:
+            continue
+        if info["age"] is None:
+            if info["pids"]:
+                done.append(f"left {rid} alone: chrome.exe with no run dir, so no age to judge")
+            continue
+        if info["age"] < YOUNG_S:
+            continue
+        try:
+            kill_run(rid)
+            done.append(f"killed {rid}: a run dir with no record, {fmt_age(info['age'])} old")
+        except Fail as e:
+            done.append(f"could not kill {rid}: {e}")
+    prune_logs({root} | {win_parent(r["runDir"]) for r in recs if r.get("runDir")})
+    return done
+
+
+def gc_first():
+    """gc before a start or run; a failure there is reported, not fatal."""
+    try:
+        lines = gc()
+    except Fail as e:
+        lines = [f"skipped: {e}"]
+    for line in lines:
+        print(f"chrome-bg gc: {line}", file=sys.stderr)
+
+
+def fmt_age(s):
+    if s is None:
+        return "-"
+    if s < 120:
+        return f"{int(s)}s"
+    if s < 7200:
+        return f"{int(s // 60)}m"
+    if s < 172800:
+        return f"{s / 3600:.1f}h"
+    return f"{int(s // 86400)}d"
+
+
+def fmt_pids(pids):
+    if not pids:
+        return "-"
+    return ",".join(map(str, pids[:4])) + (f",+{len(pids) - 4}" if len(pids) > 4 else "")
+
+
+def cmd_ls(args):
+    runs, _ = scan_runs()
+    now = time.time()
+    rows = []
+    for rec in read_records():
+        info = runs.pop(rec["id"], {"age": None, "pids": []})
+        owner = rec.get("owner") if isinstance(rec.get("owner"), dict) else {}
+        alive = "alive" if owner_proven(rec) else "gone" if owner_dead(rec) else "?"
+        created = rec.get("created") if isinstance(rec.get("created"), (int, float)) else None
+        rows.append([rec["id"], str(rec.get("port") or "-"), fmt_pids(info["pids"]),
+                     f"{owner.get('pid')} {alive} ({rec.get('kind')})",
+                     fmt_age(now - created if created else None), str(rec.get("cwd") or "-")])
+    for rid, info in sorted(runs.items()):
+        rows.append([rid, "-", fmt_pids(info["pids"]), "no record", fmt_age(info["age"]), "-"])
+    if not rows:
+        print("chrome-bg: no runs")
+        return 0
+    head = ["ID", "PORT", "PIDS", "OWNER", "AGE", "CWD"]
+    widths = [max(len(r[i]) for r in [head, *rows]) for i in range(5)]
+    for r in [head, *rows]:
+        print("  ".join(c.ljust(w) for c, w in zip(r, widths)) + "  " + r[5])
+    return 0
+
+
 def cmd_stop(args):
     if args.gc == bool(args.target):
         raise Fail("chrome-bg: stop takes a run id or browserURL, or --gc")
+    if args.gc:
+        for line in gc() or ["nothing to collect"]:
+            print(f"chrome-bg gc: {line}")
+        return 0
     rec = resolve(args.target)
     stop_record(rec)
     print(f"chrome-bg: stopped {rec['id']}")
