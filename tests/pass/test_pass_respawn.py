@@ -1773,6 +1773,8 @@ class Notices(Handed):
                      f"tab 3: {prompt}")
         typed_in = (f"pass failed after the resume prompt was typed; press Enter (or type it if "
                     f"the box is empty) in tab 3: {prompt}")
+        unknown = (f"pass failed while typing the resume prompt; press Enter if it is in the box, "
+                   f"else type it in tab 3: {prompt}")
 
         def maybe_typed(said):
             return (f" and typed the resume prompt, but its Enter may not have gone through "
@@ -1784,8 +1786,13 @@ class Notices(Handed):
             (3, "", "no error text", not_typed,
              f", but the resume prompt wasn't typed or sent (tmux: no error text). {take}"),
             (4, pane_err, pane_err, typed_in, maybe_typed(pane_err)),
-            # No answer at all (a timeout): the keys may have gone, so the prompt may be in.
-            (3, None, "tmux didn't run", typed_in, maybe_typed("tmux didn't run")),
+            # No answer while typing the prompt (a timeout, or tmux didn't run): it may or may
+            # not be in the box, so the notice claims neither.
+            (3, None, "tmux didn't run", unknown,
+             f", but tmux gave no answer while typing the resume prompt (tmux didn't run), so it "
+             f"may or may not sit unsent in the input box. {take}"),
+            # No answer at the Enter: the prompt was typed, so it may sit in the box.
+            (4, None, "tmux didn't run", typed_in, maybe_typed("tmux didn't run")),
             (1, pane_err, pane_err, "pass failed in tab 3: tmux could not respawn or type into "
                                     "the pane", None))
         for nth, answer, said, shown, notice in cases:

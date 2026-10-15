@@ -1807,8 +1807,8 @@ def wait_and_act(plan: Plan, procs) -> str:
             if p is None or p.returncode != 0:
                 remove(carry)
                 remove(last)
-                return drop(plan, "failed", late(plan, p.stderr.strip() if p
-                                                 else "tmux didn't run"))
+                return drop(plan, "failed", late(plan, (p.stderr.strip() if p
+                                                  else "tmux didn't run") or "no error text"))
         except BaseException:
             remove(carry)
             remove(last)
@@ -1840,15 +1840,21 @@ def wait_and_act(plan: Plan, procs) -> str:
             # Past /compact and its Enter a second pass would compact again, so the held tmux
             # line, the toast, pass.log and the notice hand over the resume prompt, as
             # `partial`'s do; the outcome stays `failed`. Once the prompt may be in the box (the
-            # Enter failed, or tmux gave no answer, so the keys may have gone), typing it again
-            # would double it: Hayden presses Enter instead.
-            prompt, in_box = actions[2][-1], i == 3 or p is None
-            if in_box:
+            # Enter failed, or tmux gave no answer while typing it, so the keys may have gone),
+            # typing it again would double it: Hayden presses Enter instead, or types it into an
+            # empty box. With no answer at the typing step nothing is known either way.
+            prompt = actions[2][-1]
+            if i == 3:
                 shown = ("pass failed after the resume prompt was typed; press Enter (or type it "
                          f"if the box is empty): {prompt}")
                 cause = (f"sent /compact and typed the resume prompt, but its Enter may not have "
                          f"gone through (tmux: {clipped(said)}), so the prompt may sit unsent in "
                          "the input box")
+            elif p is None:
+                shown = ("pass failed while typing the resume prompt; press Enter if it is in the "
+                         f"box, else type it: {prompt}")
+                cause = (f"sent /compact, but tmux gave no answer while typing the resume prompt "
+                         f"({clipped(said)}), so it may or may not sit unsent in the input box")
             else:
                 shown = ("pass failed after /compact was sent; type the resume prompt yourself: "
                          f"{prompt}")
