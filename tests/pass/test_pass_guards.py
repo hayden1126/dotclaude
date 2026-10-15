@@ -905,8 +905,8 @@ class LoudNotice(Plain):
         self.assertEqual(msg[1:4], ["display-message", "-d", "0"])
         self.assertNotIn("-t", msg)
         self.assertNotIn("-c", msg)
-        self.assertIn("the turn never went idle", msg[-1])
-        self.assertIn("the turn never went idle", self.toasts()[0][-1])
+        self.assertIn("the turn didn't end", msg[-1])
+        self.assertIn("the turn didn't end", self.toasts()[0][-1])
 
     def test_every_loud_text_names_a_fix(self):
         for outcome in self.LOUD:

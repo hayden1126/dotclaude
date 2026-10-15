@@ -302,7 +302,7 @@ DROPS = {
             "or wait for it and /pass",
     "gone": "pass dropped: the pane or its claude went away or changed (a /clear, an exit). "
             "/pass again from the live session",
-    "timeout": "pass dropped: the turn never went idle before the timeout. /pass again",
+    "timeout": "pass dropped: the turn didn't end before the timeout. /pass again",
     "failed": "pass failed: tmux could not respawn or type into the pane. See pass.log, then "
               "/pass again",
     "error": "pass failed: an error in the waiter. See pass.log, then /pass again",
