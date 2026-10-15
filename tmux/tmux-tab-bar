@@ -12,7 +12,7 @@
   tmux-tab-bar menu <client> [<window>]      the Move menu; reset <client> clears the session
 
 A repo with lanes (skills/lanes) gets its own row: a coloured header with the repo's name, its
-lead checkout's tab first, then its lanes, then its other worktrees (agent worktrees). Every other
+main checkout's tabs first, then its lanes, then its other worktrees (agent worktrees). Every other
 window goes on the shared row(s), last. Every row starts with the same gutter (status-left's
 width, then the widest header), so every row's first tab starts in the same column. A tab is 32
 cells wide, left-justified, with a dim `│` between two tabs; a row too full for that splits its
@@ -34,10 +34,19 @@ by its active pane's cwd, from the filesystem alone: no git call. Writes are per
 `status-format[0..N-1]` row (a session's first array write leaves the rows it didn't write blank),
 then `status` (the row count, set only when it changes), the header names as `@tab_bar_g<n>`, and
 `status-position`, `status-left` and `status-right` (set on the phone, unset on the desktop). A hash of all of it in
-`@tab_bar_sig` makes an unchanged run write nothing. The window options `@tab_name` (`lead`, a
-lane id, `repo:`, or `repo·name` for a laned tab moved out of its project's row), `@tab_group`
-(the group's colour index) and `@tab_row_custom` (1 in a custom row, else unset, for the menus'
-Name row…) are written only when they change.
+`@tab_bar_sig` makes an unchanged run write nothing. The window options `@tab_name` (`lead`,
+`lead²`, a lane id, `repo:`, or `repo·name` for a laned tab moved out of its project's row),
+`@tab_group` (the group's colour index) and `@tab_row_custom` (1 in a custom row, else unset, for
+the menus' Name row…) are written only when they change, and only by `layout`: a move writes
+placements and then lays out, so its names never fight these.
+
+A main checkout can hold several tabs (two Claude sessions, or one and a shell). The lead's tab
+is `lead` and the others `lead²`, `lead³`… in bar order (a repo's rows in group order, then the
+shared row, so a client's width never renames a tab); with no lead among them, the first is
+`lead`. The lead is the pane the lane CLI records (lanelib's Repo.lead_path, a JSON file in the
+state dir, read bounded and type-checked as untrusted), and only when the record names this
+server: its socket, its pid and that pid's /proc start time all match $TMUX's, since a pane id
+restarts at %0 on every server and a pid can be reused. A new lead renames tabs and moves none.
 Every write of a run goes to one `tmux source-file -` on stdin, one line per session with its sig
 last, so a session that vanished mid-run (an error drops the rest of its line) records no sig.
 
@@ -63,10 +72,11 @@ hook's run in flight, so the next queued move reads a fresh @tab_bar_nav) and co
 changed placement into the restore records of the window's panes (open-sessions/<sid>.json,
 field `place`), so tmux/claude-restore puts it back on the new window after tmux dies.
 
-Nothing from a window title, a directory name or a lane record enters a format string: the rows
-hold only window ids (`@N`), integers and fixed template text, names reach the bar through options
-read plainly (`#{@tab_name}`), and titles with each `#` drawn as `♯`, so a `#[...]` in a title
-draws as text and a `#` can't change a tab's width. No `%` either (tmux runs each row through
+Nothing from a window title, a directory name, a lane record or the lead record enters a format
+string (the lead record only picks one of the windows tmux listed): the rows hold only window ids
+(`@N`), integers and fixed template text, names reach the bar through options read plainly
+(`#{@tab_name}`), and titles with each `#` drawn as `♯`, so a `#[...]` in a title draws as text
+and a `#` can't change a tab's width. No `%` either (tmux runs each row through
 strftime). The script never writes to stdout or stderr (tmux puts a hook's output in the pane):
 it fails open, leaving the bar as it was (tmux's default single row before the first layout),
 with the traceback in the run dir. Linked into ~/.local/bin by setup-tmux.sh;
@@ -103,6 +113,10 @@ NAME_CELLS = 12         # tab and header names are cut to this many cells
 PHONE_HEAD_CHARS = 3    # the phone's header shows this much of the repo name
 GITFILE_MAX = 4096
 RECORD_MAX = 64 * 1024  # a lane.json is untrusted: read no more than this
+LEAD_MAX = 4096         # the lane CLI's lead record (a few hundred bytes), read no further
+STAT_MAX = 4096         # a /proc/<pid>/stat
+PROC = "/proc"
+SUPERSCRIPT = str.maketrans("0123456789", "⁰¹²³⁴⁵⁶⁷⁸⁹")   # every one a single cell
 ERR_MAX = 16 * 1024     # the error log keeps the end of the traceback
 PASSES = 5              # passes per lock hold while hooks burst (2 holds: 2 x PASSES at most)
 PALETTE = (75, 179, 141, 114, 174, 110)   # header colours, by group order
@@ -117,6 +131,7 @@ PHONE_STATUS_LEFT = "#(~/.local/bin/tmux-claude-status)"
 
 SID = re.compile(r"\$\d+\Z")
 WID = re.compile(r"@\d+\Z")
+PANE_ID = re.compile(r"%[0-9]{1,9}\Z")
 CLIENT = re.compile(r"[A-Za-z0-9_./][A-Za-z0-9_./-]{0,255}\Z")   # a tty path, client-<pid>
 NAV_ROW = re.compile(r"\d{1,2};@\d{1,9}:\d{1,6}:\d{1,6}(?:,@\d{1,9}:\d{1,6}:\d{1,6})*\Z")
 NAV_MAX = 16 * 1024
@@ -332,6 +347,88 @@ def classify(cwd: str) -> Tab:
     return Tab(kind, common, repo_name, clean(os.path.basename(top)))
 
 
+# --- the lead: which of a main checkout's tabs is `lead` ------------------------------------------
+
+def state_dir() -> str:
+    """$XDG_STATE_HOME/dotclaude (default ~/.local/state/dotclaude), lanelib's state_dir: the
+    restore records and the lane CLI's files."""
+    home = os.environ.get("XDG_STATE_HOME") or os.path.join(os.path.expanduser("~"), ".local",
+                                                            "state")
+    return os.path.join(home, "dotclaude")
+
+
+def lead_record_path(common: str) -> str | None:
+    """lanelib's Repo.lead_path for the repo whose git common dir is `common` (a realpath, as
+    common_dir gives it): lanes/<main checkout's basename>-<sha256(common)[:12]>.lead.json in
+    the state dir, beside `lane init`'s config. Duplicated rather than imported (the bar runs
+    `python3 -I` from ~/.local/bin); a test pins both to one path. None for a common dir that
+    lanelib couldn't encode either."""
+    try:
+        key = hashlib.sha256(common.encode()).hexdigest()[:12]
+    except UnicodeEncodeError:
+        return None
+    name = f"{os.path.basename(os.path.dirname(common))}-{key}.lead.json"
+    return os.path.join(state_dir(), "lanes", name)
+
+
+def lead_pane(common: str) -> tuple | None:
+    """The pane the lane CLI records as the repo's lead, as (socket, server pid, server start,
+    pane id), or None: no record, a record with no tmux, or one not exactly in lanelib's shape
+    ({"pid": int, "procStart": int, "sessionId": str, "tmux": [str, int, int, "%N"] | null,
+    "at": str}; other keys are ignored). Untrusted: read bounded and never through a link, every
+    field's type checked, and the result is only compared with what tmux and /proc report."""
+    path = lead_record_path(common)
+    data = read_small(path, LEAD_MAX) if path else None
+    if data is None:
+        return None
+    try:
+        rec = json.loads(data)
+    except (ValueError, RecursionError):
+        return None
+    if not isinstance(rec, dict) or any(type(rec.get(k)) is not t for k, t in (
+            ("pid", int), ("procStart", int), ("sessionId", str), ("at", str))):
+        return None
+    where = rec.get("tmux")
+    if not isinstance(where, list) or len(where) != 4:
+        return None
+    socket, pid, start, pane = where
+    if not isinstance(socket, str) or not socket or type(pid) is not int \
+            or type(start) is not int or not isinstance(pane, str) or not PANE_ID.match(pane):
+        return None
+    return socket, pid, start, pane
+
+
+def stat_start(data: bytes | None) -> int | None:
+    """Field 22 of a /proc/<pid>/stat (the start time, clock ticks after boot), read as
+    lanelib's proc_stat reads it: the comm in parentheses may hold spaces and ')', so the
+    fields split after the last ')'. None when it isn't there."""
+    head, sep, rest = (data or b"").rpartition(b")")
+    fields = rest.split()
+    if not sep or b"(" not in head or len(fields) < 20 or not fields[19].isdigit():
+        return None
+    return int(fields[19])
+
+
+def proc_start(pid: int, proc: str = PROC) -> int | None:
+    return stat_start(read_small(os.path.join(proc, str(pid), "stat"), STAT_MAX))
+
+
+def this_server(tmux_env: str | None, proc: str = PROC) -> tuple | None:
+    """(socket, pid, start) of the server $TMUX names ("<socket>,<pid>,<session>", split as
+    server_key splits it), the start from /proc as the lead record holds it; None when a part
+    can't be had."""
+    parts = (tmux_env or "").rsplit(",", 2)
+    if len(parts) != 3 or not DIGITS.match(parts[1]):
+        return None
+    start = proc_start(int(parts[1]), proc)
+    return None if start is None else (parts[0], int(parts[1]), start)
+
+
+def lead_name(n: int) -> str:
+    """The n-th (1-based) lead tab of a repo, in bar order: `lead`, then `lead²`, `lead³`…"""
+    return "lead" if n <= 1 else "lead" + str(n).translate(SUPERSCRIPT)
+
+
 # --- placements ---------------------------------------------------------------------------------
 
 @dataclasses.dataclass(frozen=True)
@@ -408,10 +505,15 @@ class Layout:
         return self.left + self.head
 
 
-def group_windows(wins: list, tab_of: dict, place_of: dict | None = None) -> tuple:
-    """Split a session's windows ([(index, wid)]; tab_of: wid -> Tab; place_of: wid -> Place)
-    into its groups and the shared tabs, plus each window's (@tab_name, @tab_group,
-    @tab_row_custom).
+def group_windows(wins: list, tab_of: dict, place_of: dict | None = None,
+                  lead_of: dict | None = None) -> tuple:
+    """Split a session's windows ([(index, wid)]; tab_of: wid -> Tab; place_of: wid -> Place;
+    lead_of: common dir -> the lead's window) into its groups and the shared tabs, plus each
+    window's (@tab_name, @tab_group, @tab_row_custom).
+    A repo's lead tabs (every tab in its main checkout) are named in bar order (the groups in
+    order, then the shared row; never the drawn order, which a client's width changes): the
+    lead's window is `lead` and the others `lead²`, `lead³`…; with no lead among them, the
+    first is `lead`. The lead only renames tabs: it never moves one.
     A window sits in its placement's row when that row is the shared row, a custom row or a
     project row some window here classifies into; else in its auto row (its project's, or the
     shared row). A row with a placed member is manual: placed members by position, then the
@@ -465,15 +567,28 @@ def group_windows(wins: list, tab_of: dict, place_of: dict | None = None) -> tup
             groups.append(Group(projects[key].repo_name, tabs, PALETTE[colour[key]], key))
         else:
             groups.append(Group(meta[key].name, tabs, CUSTOM_COLOUR, key, meta[key].after))
+    shared = [(wid, index) for _, wid, index in sorted(members.get("s", []))]
+
+    leads: dict = {}                    # common dir -> its lead tabs, in bar order
+    for wid, _ in [t for g in groups for t in g.tabs] + shared:
+        if tab_of[wid].kind == "lead":
+            leads.setdefault(tab_of[wid].repo, []).append(wid)
+    own = {}                            # lead tab -> its name in its own row
+    for repo, wids in leads.items():
+        pick = (lead_of or {}).get(repo)
+        first = pick if pick in wids else wids[0]
+        for n, wid in enumerate([first] + [w for w in wids if w != first], 1):
+            own[wid] = lead_name(n)
+
     for key, mem in members.items():
         for _, wid, _ in mem:
             tab, in_custom = tab_of[wid], "1" if key.startswith("c:") else ""
             if tab.kind == "shared":
                 names[wid] = (tab.name, "", in_custom)
             else:
-                name = tab.name if key == auto[wid] else f"{tab.repo_name}·{tab.name}"
+                name = own.get(wid, tab.name)
+                name = name if key == auto[wid] else f"{tab.repo_name}·{name}"
                 names[wid] = (name, str(colour[auto[wid]]), in_custom)
-    shared = [(wid, index) for _, wid, index in sorted(members.get("s", []))]
     return groups, shared, names
 
 
@@ -882,6 +997,9 @@ class State:
     options: dict               # wid -> {"name", "group", "custom", "place"}, as read
     cwds: dict                  # wid -> its active pane's cwd
     panes: dict                 # wid -> [pane id]
+    # (socket, pid, /proc start) of this server, the lead record's order (this_server); not
+    # Context.server, which holds tmux's start_time in the restore records' order.
+    server: tuple | None = None
 
 
 def snapshot() -> State:
@@ -905,22 +1023,43 @@ def snapshot() -> State:
         panes.setdefault(f[0], []).append(f[2])
         if f[1] == "1":
             cwds[f[0]] = f[3]
-    return State(sessions, widths, windows, options, cwds, panes)
+    return State(sessions, widths, windows, options, cwds, panes,
+                 this_server(os.environ.get("TMUX")))
+
+
+def lead_window(state: State, common: str, wids: list) -> str | None:
+    """Which of a repo's lead tabs `wids` holds its lead: the window holding the pane the lane
+    CLI's record names (lead_pane), when the record names this very server (socket, pid and
+    the pid's start all match: a pane id restarts at %0 on every server, and a pid can be
+    reused). None otherwise."""
+    rec = lead_pane(common)
+    if rec is None or state.server is None or rec[:3] != state.server:
+        return None
+    return next((wid for wid in wids if rec[3] in state.panes.get(wid, [])), None)
 
 
 def arrange(state: State, sid: str, tabs: dict) -> tuple:
-    """group_windows for session sid; tabs: cwd -> Tab, classified once per run."""
+    """group_windows for session sid; tabs: cwd -> Tab, classified once per run. A repo with
+    two or more lead tabs here gets its lead's window (lead_window); one alone is `lead`
+    anyway, so its record isn't read."""
     wins = sorted(state.windows.get(sid, []))
-    tab_of, place_of = {}, {}
+    tab_of, place_of, leads = {}, {}, {}
     for _, wid, _ in wins:
         cwd = state.cwds.get(wid, "")
         if cwd not in tabs:
             tabs[cwd] = classify(cwd)
         tab_of[wid] = tabs[cwd]
+        if tab_of[wid].kind == "lead":
+            leads.setdefault(tab_of[wid].repo, []).append(wid)
         place = parse_place(state.options[wid]["place"])
         if place is not None:
             place_of[wid] = place
-    return group_windows([(i, wid) for i, wid, _ in wins], tab_of, place_of)
+    lead_of = {}
+    for common, wids in leads.items():
+        wid = lead_window(state, common, wids) if len(wids) > 1 else None
+        if wid is not None:
+            lead_of[common] = wid
+    return group_windows([(i, wid) for i, wid, _ in wins], tab_of, place_of, lead_of)
 
 
 def layout(err_log: str) -> None:
@@ -1217,9 +1356,7 @@ def context(client: str, wid: str | None) -> Context | None:
 
 def registry_dir() -> str:
     """hooks/session-registry.sh's record dir: $XDG_STATE_HOME/dotclaude/open-sessions."""
-    home = os.environ.get("XDG_STATE_HOME") or os.path.join(os.path.expanduser("~"),
-                                                              ".local", "state")
-    return os.path.join(home, "dotclaude", "open-sessions")
+    return os.path.join(state_dir(), "open-sessions")
 
 
 def update_record(path: str, server: tuple, places: dict) -> None:
