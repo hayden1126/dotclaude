@@ -525,7 +525,11 @@ class Transcript(Plain):
             with self.subTest(mode=mode):
                 self.reset()
                 self.assertEqual(self.mod.wait_and_act(self.plan(*mode), t.table), "resumed")
-                self.assertDropped("resumed", "pass dropped")
+                # Loud, though `resumed` is QUIET: Hayden didn't cause it, and every pass drops
+                # the same way until the transcript can be read.
+                self.assertEqual(self.calls("tmux", "respawn-pane"), [])
+                self.assertEqual(self.calls("tmux", "send-keys"), [])
+                self.assertLoud("pass dropped in tab 3: the transcript couldn't be read")
                 self.assertIn("resumed: transcript unreadable", self.log())
 
     def test_typed_since_says_none_when_unreadable(self):

@@ -101,9 +101,11 @@ it (/tasks, or ask Claude to TaskStop it), or /pass compact keeps it'; pass.log 
 whole) on the status line of every client attached to the pane's session,
 held until a key press (`display-message -d 0 -c <client>`), plus the Windows toast notify.sh
 sends (toast_command; best-effort). The drops Hayden caused keep the brief status-line
-message (QUIET): `cancelled`, `resumed` (he typed a prompt after the call, which SKILL.md
-offers as a way to cancel; its line names the reason: a typed or queued prompt, a new turn, a
-status change, or a transcript it couldn't read) and `gone` (his own /clear or exit). Outcomes at
+message (QUIET): `cancelled`, `resumed` and `gone` (his own /clear or exit). A quiet `resumed`
+is a prompt or a new turn after the call (his prompt, which SKILL.md offers as a way to cancel,
+a queued prompt, a task notice or an agent's message) or a status change after the turn, and
+its line names which. A `resumed` for a transcript it couldn't read is loud: Hayden didn't
+cause it, and every pass drops the same way until it can be read. Outcomes at
 call time (`refused`, a detach `error`) and --cancel's (`too-late`, `none`) print to the
 caller, which reads them before its reply, so they show nothing in tmux. Never respawn or
 compact on a failing check: the respawn throws away the context that could fix the gap.
@@ -122,7 +124,11 @@ Hayden, since passing again drops the same way and an autopass would loop). `par
 3 or 4: passing again would compact twice), hand over the resume prompt instead. The latter
 stays `failed`, but its held tmux line and toast hand the prompt over too ("pass failed after
 /compact was sent; type the resume prompt yourself: ..."), and its pass.log line ends with it,
-as `partial`'s do. Its free-text detail is one line of at most 300
+as `partial`'s do. Once the prompt may already sit in the input box (the final Enter failed, or
+tmux gave no answer, so the keys may have gone), typing it again would double it: the line says
+"pass failed after the resume prompt was typed; press Enter (or type it if the box is empty):
+...", and the notice says the prompt may sit unsent there. A tmux error with no text reads "no
+error text". Its free-text detail is one line of at most 300
 characters. The call, once it holds the pending lock, deletes the
 session's old notice and prunes, once a day, notices older than 7 days and claimed ones
 (*.taken) older than a day; the prune's stamp, pass-notice.pruned, sits beside the dir, which so
@@ -300,9 +306,11 @@ DROPS = {
     "error": "pass failed: an error in the waiter. See pass.log, then /pass again",
     "cancelled": "pass cancelled",
 }
-# The drops Hayden caused, which keep the brief status-line message: a cancel, a prompt he typed
-# after the call (SKILL.md documents typing one as a way to cancel), and his own /clear or exit
-# (`gone`). Every other drop is a refusal of a pass he expects, so it is loud (notify).
+# The drops Hayden caused, which keep the brief status-line message: a cancel, a prompt or a new
+# turn after the call or a status change after the turn (`resumed`; SKILL.md documents typing a
+# prompt as a way to cancel), and his own /clear or exit (`gone`). Every other drop is a refusal
+# of a pass he expects, so it is loud (notify). One `resumed` is loud too (drop's loud): an
+# unreadable transcript, which he didn't cause and which drops every pass the same way.
 QUIET = {"cancelled", "resumed", "gone"}
 # How a task label reads in a count ("3 monitors"); any other label reads as itself.
 NOUNS = lanelib.TASK_NOUNS
@@ -1349,18 +1357,21 @@ def notify(plan: Plan, text: str) -> None:
 
 
 def drop(plan: Plan, outcome: str, detail: str = "", shown: str | None = None,
-         cause: str | None = None, fix: str | None = None, prompt: str = "") -> str:
+         cause: str | None = None, fix: str | None = None, prompt: str = "",
+         loud: bool = False) -> str:
     """Log the drop, leave the session its notice (tell; cause and fix override the notice's
     defaults for the outcome, and prompt hands over a resume prompt lost after /compact), then
-    show it: loud (notify) unless Hayden caused it (QUIET: a cancel, a prompt after the call,
-    his /clear or exit), which keeps the brief status-line message. The notice comes before any
-    tmux call, so a dying tmux server can't delay or skip it."""
+    show it: loud (notify) unless Hayden caused it (QUIET: a cancel, a prompt or a new turn after
+    the call, his /clear or exit), which keeps the brief status-line message. loud makes one
+    drop of a QUIET outcome loud: an unreadable transcript drops `resumed` though Hayden did
+    nothing, and drops every pass the same way. The notice comes before any tmux call, so a
+    dying tmux server can't delay or skip it."""
     plan.settled = True
     dropped = time.time()
     log(plan.mode, outcome, plan.pane, detail)
     tell(plan, outcome, dropped, detail, cause=cause, fix=fix, prompt=prompt)
     text = shown or DROPS[outcome]
-    if outcome in QUIET:
+    if outcome in QUIET and not loud:
         tmux(plan, "display-message", "-t", plan.pane, shown_literally(text))
     else:
         with contextlib.suppress(Exception):  # the outcome is logged; the notice is best-effort
@@ -1415,7 +1426,8 @@ def told(plan: Plan, outcome: str, dropped: float, detail: str = "", cause: str 
     and for a loud drop when and why it dropped (cause, by default CAUSES' with detail) and the
     fix (FIXES'); that none is pending, so the session stops saying one is queued. For `partial`,
     and for a `failed` whose resume prompt was lost after /compact went out (prompt given: a
-    second pass would compact again), it hands over the resume prompt instead. A `resumed`
+    second pass would compact again, and cause says how far the keys got, the prompt perhaps
+    sitting unsent in the input box), it hands over the resume prompt instead. A `resumed`
     names its reason (cause) and, given one, its fix. detail is clipped; cause and fix come
     whole."""
     head = f"[pass] The {plan.mode} pass you queued at {clock(plan.called)}Z"
@@ -1424,9 +1436,9 @@ def told(plan: Plan, outcome: str, dropped: float, detail: str = "", cause: str 
     if outcome == "partial":
         return (f"{head} sent /compact, but the resume prompt wasn't typed ({clipped(detail)}). "
                 f"{take}")
-    if outcome == "failed" and prompt:
-        return (f"{head} sent /compact, but the resume prompt wasn't typed or sent (tmux: "
-                f"{clipped(cause or detail)}). {take}")
+    if outcome == "failed" and prompt:   # cause says how far the keys got
+        return (f"{head} {cause or 'sent /compact, but the resume prompt was not sent'}. "
+                f"{take}")
     if outcome == "cancelled":
         return f"{head} was cancelled. No pass is pending now."
     if outcome == "resumed":
@@ -1763,7 +1775,7 @@ def wait_and_act(plan: Plan, procs) -> str:
                     cause="the transcript couldn't be read, so a prompt after the call can't be "
                           "ruled out",
                     fix="Tell Hayden; passing again drops the same way until the transcript can "
-                        "be read.")
+                        "be read.", loud=True)
     if typed:
         return drop(plan, "resumed", "a typed or queued prompt after the call",
                     cause="a prompt was typed or queued after the call")
@@ -1821,17 +1833,29 @@ def wait_and_act(plan: Plan, procs) -> str:
                 return "partial"
         p = tmux(plan, *argv[1:])
         if p is None or p.returncode != 0:
-            said = p.stderr.strip() if p else "tmux didn't run"
+            said = (p.stderr.strip() if p else "tmux didn't run") or "no error text"
             detail = late(plan, f"send-keys {i + 1} of 4: {said}")
             if i < 2:
                 return drop(plan, "failed", detail)
             # Past /compact and its Enter a second pass would compact again, so the held tmux
             # line, the toast, pass.log and the notice hand over the resume prompt, as
-            # `partial`'s do; the outcome stays `failed`.
-            prompt = actions[2][-1]
-            return drop(plan, "failed", f"{detail}; resume prompt: {prompt}",
-                        "pass failed after /compact was sent; type the resume prompt yourself: "
-                        f"{prompt}", cause=said, prompt=prompt)
+            # `partial`'s do; the outcome stays `failed`. Once the prompt may be in the box (the
+            # Enter failed, or tmux gave no answer, so the keys may have gone), typing it again
+            # would double it: Hayden presses Enter instead.
+            prompt, in_box = actions[2][-1], i == 3 or p is None
+            if in_box:
+                shown = ("pass failed after the resume prompt was typed; press Enter (or type it "
+                         f"if the box is empty): {prompt}")
+                cause = (f"sent /compact and typed the resume prompt, but its Enter may not have "
+                         f"gone through (tmux: {clipped(said)}), so the prompt may sit unsent in "
+                         "the input box")
+            else:
+                shown = ("pass failed after /compact was sent; type the resume prompt yourself: "
+                         f"{prompt}")
+                cause = (f"sent /compact, but the resume prompt wasn't typed or sent (tmux: "
+                         f"{clipped(said)})")
+            return drop(plan, "failed", f"{detail}; resume prompt: {prompt}", shown,
+                        cause=cause, prompt=prompt)
     log(plan.mode, "compact", plan.pane, late(plan, "default mode" if approved else "plan mode"))
     return "compact"
 
