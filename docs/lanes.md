@@ -286,8 +286,8 @@ stays in the common dir, which sandboxed Bash can write (S1).
 
 $XDG_STATE_HOME/dotclaude/lanes/<repo>-<hash>.toml
                                 the config: root, setup cmd, port range, live-lane cap, base
-                                (<remote>/<branch>, default origin/main), locks; written only
-                                by a bare `lane init`
+                                (<remote>/<branch>, default origin/main), locks, autopass,
+                                model, effort; written only by a bare `lane init`
 $XDG_STATE_HOME/dotclaude/lanes/<repo>-<hash>.lead.json
                                 the lead record: the main-checkout session that last acted as
                                 lead, written only by bare `lane` commands ("One lead per main
@@ -404,9 +404,10 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
   upstream before
   `git branch -d`, so `-d` judges the branch against what was merged rather than the main
   checkout's possibly unpulled HEAD.
-- **`lane open <id>`** (from `hq-open`) runs `tmux new-window -c <lane> -n <id> -d` with the
-  absolute `claude` path (tmux's PATH lacks `~/.local/bin`), `--permission-mode plan` and a first
-  prompt to read the record and plan its brief. The window stops at Claude Code's "trust this
+- **`lane open <id>`** (from `hq-open`) runs `tmux new-window -P -F ... -c <lane> -n <id> -d --`
+  (no `-d` under `--focus`) with the absolute `claude` path (tmux's PATH lacks `~/.local/bin`),
+  `[--model M] [--effort E]` (Model and effort, below), `--permission-mode plan` and a first prompt
+  to read the record and plan its brief. The window stops at Claude Code's "trust this
   folder?" dialog unless the lanes root (or a parent) is trusted; a trusted parent covers every
   lane under it (probed 2026-10-11, 2.1.296), so `lane init` prints the one-time line that
   trusts the root. It refuses a stale or `setup-failed` lane, and a
