@@ -62,8 +62,9 @@ YOUNG_S = 120            # a run dir younger than this may belong to a run that 
 LOG_DAYS = 7
 PORT_WAIT_S = 20
 STOP_WAIT_S = 25         # stop waits this long for a SIGTERMed owner to clean up
-PROCS_POLL_S = 5         # a `start` holder checks this often whether Chrome is still there
+PROCS_POLL_S = 5         # a `start` holder checks this often whether Chrome and a page are there
 PROCS_FAILURES = 3       # ... and gives up on the run after this many failed checks in a row
+PAGES_GONE_S = 5         # ... and ends it once Chrome has listed no page for this long
 SCREEN_LIMIT = 32767     # Windows window coordinates are 16-bit
 BOM = chr(0xFEFF)        # PowerShell may open its stdout with one
 SANDBOX_MSG = ("chrome-bg: run it with the sandbox off (powershell.exe and Chrome's port are "
@@ -599,34 +600,53 @@ class CDP:
         self.ws.close()
 
 
-def json_version(port, timeout=5):
-    """GET /json/version straight from 127.0.0.1 (http.client: no proxy env applies)."""
+def json_get(port, what, timeout=5):
+    """GET /json/<what> straight from 127.0.0.1 (http.client: no proxy env applies)."""
     c = http.client.HTTPConnection("127.0.0.1", port, timeout=timeout)
     try:
-        c.request("GET", "/json/version")
+        c.request("GET", f"/json/{what}")
         r = c.getresponse()
         body = r.read()
         v = json.loads(body) if r.status == 200 else None
     except (http.client.HTTPException, ValueError) as e:
         # Not HTTP, or not JSON: something else listens there.
-        raise Fail(f"chrome-bg: 127.0.0.1:{port}/json/version: {e!r}") from None
+        raise Fail(f"chrome-bg: 127.0.0.1:{port}/json/{what}: {e!r}") from None
     finally:
         c.close()
     if r.status != 200:
-        raise Fail(f"chrome-bg: 127.0.0.1:{port}/json/version answered {r.status}")
+        raise Fail(f"chrome-bg: 127.0.0.1:{port}/json/{what} answered {r.status}")
+    return v
+
+
+def json_version(port, timeout=5):
+    v = json_get(port, "version", timeout)
     if not isinstance(v, dict):
         raise Fail(f"chrome-bg: 127.0.0.1:{port}/json/version is not an object")
     return v
 
 
-def browser_ws(port, path):
+def browser_ws(port, path, timeout=5):
     """This run's browser WebSocket URL, refusing a port whose /json/version names another
     browser (the port was reused, or it is someone else's Chrome)."""
-    got = urlparse(str(json_version(port).get("webSocketDebuggerUrl") or "")).path
+    got = urlparse(str(json_version(port, timeout).get("webSocketDebuggerUrl") or "")).path
     if got != path:
         raise WrongChrome(f"chrome-bg: refusing port {port}: its browser WebSocket {got!r} is not "
                           f"this run's {path!r}, so it is another Chrome")
     return f"ws://127.0.0.1:{port}{path}"
+
+
+def page_count(port, path, timeout=2):
+    """How many page targets the run's browser lists on /json/list, read once its /json/version
+    proves the port is still this run's browser. Fail when either read fails: a reading that
+    isn't there is never zero pages."""
+    try:
+        browser_ws(port, path, timeout)
+        targets = json_get(port, "list", timeout)
+    except OSError as e:
+        raise Fail(f"chrome-bg: 127.0.0.1:{port}/json/list: {e!r}") from None
+    if not isinstance(targets, list):
+        raise Fail(f"chrome-bg: 127.0.0.1:{port}/json/list is not a list")
+    return sum(1 for t in targets if isinstance(t, dict) and t.get("type") == "page")
 
 
 # ---- run records ----------------------------------------------------------------------------
@@ -1255,8 +1275,10 @@ def wait_forwarding(child):
 
 def holder(rid, args, ttl, cwd, ready):
     """The detached owner of a `start` run: holds the supervisor until stop (SIGTERM), the TTL,
-    Chrome's exit (a fixture's own browser.close(): `procs` every PROCS_POLL_S comes back empty)
-    or the supervisor's exit, then ends the run. Reports ready or failed on the `ready` pipe.
+    Chrome's exit (a fixture's own browser.close(): `procs` every PROCS_POLL_S comes back empty),
+    its last page closing (you closed the window: --no-startup-window keeps a windowless Chrome
+    running, so /json/list has listed no page for PAGES_GONE_S) or the supervisor's exit, then
+    ends the run. Reports ready or failed on the `ready` pipe.
     It keeps the cwd it was started in, so a relative argv still proves it is chrome-bg. Forked
     from main(), it keeps the stop signals blocked and polls for them like any other wait."""
     fd = os.open(holder_log(rid), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
@@ -1285,24 +1307,36 @@ def holder(rid, args, ttl, cwd, ready):
               "pid": run.rec["pid"]})
         say(f"ready at {run.url}")
         why, next_poll, failed = "TTL reached", time.monotonic() + PROCS_POLL_S, 0
+        empty_since = None  # when an unbroken run of polls listing no page began
         while time.time() < run.rec["expires"]:
             if run.sup.p.poll() is not None:
                 why = "the supervisor exited"  # finish() then kills the run by its dir
                 break
-            if time.monotonic() >= next_poll:
-                next_poll = time.monotonic() + PROCS_POLL_S
+            polled = time.monotonic()  # each poll's start: starts are PROCS_POLL_S apart
+            if polled >= next_poll:
+                next_poll = polled + PROCS_POLL_S
                 try:
                     procs = parse_procs(run.sup.call("procs"))
+                    # This process read the port and path from the run's own DevToolsActivePort.
+                    pages = page_count(run.rec["port"], run.rec["wsPath"]) if procs else None
                 except Fail as e:
                     failed += 1
-                    say(f"procs failed ({failed} in a row): {e}")
+                    empty_since = None  # a failed poll breaks the run of empty ones
+                    say(f"poll failed ({failed} in a row): {e}")
                     if failed >= PROCS_FAILURES:
-                        why = f"procs failed {failed} times in a row"
+                        why = f"polls failed {failed} times in a row"
                         break
                 else:
                     failed = 0
                     if not procs:  # only an ok:true empty list means Chrome is gone
                         why = "Chrome is gone"
+                        break
+                    if pages:
+                        empty_since = None
+                    elif empty_since is None:
+                        empty_since = polled
+                    elif polled - empty_since >= PAGES_GONE_S:
+                        why = "its last page closed"
                         break
             take_signal(min(0.5, PROCS_POLL_S, max(0.05, run.rec["expires"] - time.time())))
         say(why)

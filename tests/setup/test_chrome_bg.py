@@ -717,12 +717,14 @@ class Trust(unittest.TestCase):
 
 # The Windows side, faked. FAKE_SUP speaks chrome-bg.ps1's protocol (PLAN.md "Supervisor
 # protocol") over stdin and stdout and answers only with CONTRACT's replies. On `launch` it starts
-# FAKE_CHROME (HTTP /json/version plus a CDP WebSocket, and the DevToolsActivePort in the run dir)
-# in a process and session of its own, as WMI launches chrome.exe: killing the supervisor leaves
-# "Chrome" running. --root stands for C:\. They note what they saw in files under --root:
-# launch-<id> (Chrome's args), cdp-<id> (each CDP call), place-<id>, hello-<id>, eof-<id> (the
-# supervisor saw stdin EOF), kill-<id> (a one-shot -Kill ran), session-<id> (the supervisor's pid
-# and session id), alive-<id> (while "Chrome" runs) and chrome-<id>.pid.
+# FAKE_CHROME (HTTP /json/version and /json/list plus a CDP WebSocket, and the DevToolsActivePort
+# in the run dir) in a process and session of its own, as WMI launches chrome.exe: killing the
+# supervisor leaves "Chrome" running. --root stands for C:\. They note what they saw in files
+# under --root: launch-<id> (Chrome's args), cdp-<id> (each CDP call), list-<id> (each /json/list
+# answer), place-<id>, hello-<id>, eof-<id> (the supervisor saw stdin EOF), kill-<id> (a one-shot
+# -Kill ran), session-<id> (the supervisor's pid and session id), alive-<id> (while "Chrome" runs)
+# and chrome-<id>.pid. A test scripts /json/list in pages-<id>: one answer per read ("0", "1", or
+# "fail" for a 500), the last one kept.
 FAKE_COMMON = r'''
 import json, os, re, sys, time
 
@@ -897,6 +899,7 @@ profile = args[args.index("--profile") + 1]
 guid = str(uuid.uuid4())
 bounds = {}
 loaded_reads = [0]  # page0's load-check evaluates so far (FAKE_LOADED_AFTER)
+pages = [0]  # unless pages-<rid> says otherwise, /json/list holds one page per createTarget
 srv = socket.socket()
 srv.bind(("127.0.0.1", 0))
 srv.listen(8)
@@ -910,6 +913,22 @@ def exit_chrome():
     rm(os.path.join(root, "alive-" + rid))
     rm(os.path.join(root, "chrome-%s.pid" % rid))
     os._exit(0)
+
+
+def list_answer():
+    """The next /json/list answer: pages-<rid>'s first token, which a read consumes unless it is
+    the last; else the page count."""
+    seq = os.path.join(root, "pages-" + rid)
+    try:
+        with open(seq) as f:
+            tokens = f.read().split()
+    except FileNotFoundError:
+        return str(pages[0])
+    if len(tokens) > 1:
+        with open(seq + ".tmp", "w") as f:
+            f.write(" ".join(tokens[1:]))
+        os.replace(seq + ".tmp", seq)
+    return tokens[0]
 
 
 def frame(op, payload, fin=True):
@@ -952,6 +971,7 @@ def dispatch(msg):
     m, p = msg["method"], msg.get("params") or {}
     note("cdp-" + rid, json.dumps(msg))
     if m == "Target.createTarget":
+        pages[0] += 1
         if p.get("newWindow"):
             left = 0 if env.get("FAKE_CLAMP") else p["left"]
             bounds.update(left=left, top=p["top"], width=p["width"], height=p["height"],
@@ -1007,6 +1027,19 @@ def handle(c):
             ws = ("0" * 8 + guid[8:]) if env.get("FAKE_WRONG_PATH") else guid
             body = json.dumps({"Browser": "FakeChrome/1.0", "webSocketDebuggerUrl":
                                "ws://127.0.0.1:%d/devtools/browser/%s" % (port, ws)}).encode()
+            c.sendall(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: %d\r\n\r\n"
+                      % len(body) + body)
+            return
+        if path == "/json/list":
+            answer = list_answer()
+            note("list-" + rid, answer)
+            if answer == "fail":
+                c.sendall(b"HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\n\r\n")
+                return
+            # A service worker is no page: only type "page" counts.
+            targets = [{"type": "service_worker", "id": "W1"}] + [
+                {"type": "page", "id": "T%d" % i} for i in range(int(answer))]
+            body = json.dumps(targets).encode()
             c.sendall(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: %d\r\n\r\n"
                       % len(body) + body)
             return
@@ -1085,6 +1118,8 @@ if os.environ.get("DRIVER_FAST"):
     mod.LOADED_WAIT_S = 0.5
 if os.environ.get("DRIVER_STOP_WAIT"):
     mod.STOP_WAIT_S = float(os.environ["DRIVER_STOP_WAIT"])
+if os.environ.get("DRIVER_PAGES_GONE"):
+    mod.PAGES_GONE_S = float(os.environ["DRIVER_PAGES_GONE"])
 if "DRIVER_TTY_FG" in os.environ:  # stands in for /dev/tty's foreground process group check
     mod.in_tty_foreground = lambda: os.environ["DRIVER_TTY_FG"] == "1"
 sys.exit(mod.main(sys.argv[3:]))
@@ -1498,7 +1533,7 @@ class Live(unittest.TestCase):
 
         def failures():
             with open(log) as f:
-                return f.read().count("procs failed")
+                return f.read().count("poll failed")
         self.wait_for(lambda: failures() == 2, what="2 failed polls")
         time.sleep(0.6)  # more polls, now answered
         [rec] = self.records()
@@ -1513,8 +1548,8 @@ class Live(unittest.TestCase):
         self.wait_for(lambda: self.has("eof-" + rid) and not self.records(), what="the end")
         with open(os.path.join(self.recdir, rid + ".holder.log")) as f:
             log = f.read()
-        self.assertEqual(log.count("procs failed ("), 3)
-        self.assertIn("procs failed 3 times in a row", log)
+        self.assertEqual(log.count("poll failed ("), 3)
+        self.assertIn("polls failed 3 times in a row", log)
 
     def test_check_stops_cleanly_on_sigterm_and_sighup(self):
         for sig in (signal.SIGTERM, signal.SIGHUP):
@@ -1880,6 +1915,72 @@ class Live(unittest.TestCase):
         cdp.close()
         self.wait_for(lambda: self.has("eof-" + info["id"]) and not self.records(),
                       what="the holder to see Chrome gone and stop")
+
+    def start_scripted(self, gone_s, answers):
+        """A `start` run whose /json/list answers follow `answers`, with PAGES_GONE_S = gone_s:
+        (run id, holder log path, when the script went in)."""
+        r = self.cli("start", "--json", env={"DRIVER_PAGES_GONE": str(gone_s)})
+        self.assertEqual(r.returncode, 0, r.stderr)
+        rid = json.loads(r.stdout)["id"]
+        seq = os.path.join(self.root, "pages-" + rid)
+        with open(seq + ".tmp", "w") as f:
+            f.write(" ".join(answers))
+        os.replace(seq + ".tmp", seq)
+        return rid, os.path.join(self.recdir, rid + ".holder.log"), time.monotonic()
+
+    def lists(self, rid):
+        return self.notes("list-" + rid) if self.has("list-" + rid) else []
+
+    def assert_lives_through(self, rid, log, answers):
+        """Every scripted answer read and two more polls, and the run still up."""
+        self.wait_for(lambda: len(self.lists(rid)) >= len(answers) + 2 or self.has("eof-" + rid),
+                      what="the scripted reads")
+        self.assertFalse(self.has("eof-" + rid), "the holder ended the run")
+        [rec] = self.records()
+        self.assertTrue(cb.owner_proven(rec), "the holder still holds the run")
+        with open(log) as f:
+            self.assertNotIn("its last page closed", f.read())
+        self.assertIn("stopped by its owner", self.cli("stop", rid).stdout)
+
+    def test_holder_ends_when_its_last_page_closes(self):
+        # You closed the window: Chrome runs on windowless (--no-startup-window), its /json/list
+        # holds no page (a service worker is no page), and procs still lists it.
+        rid, log, t0 = self.start_scripted(1, ["0"])
+        self.wait_for(lambda: self.has("eof-" + rid) and not self.records(),
+                      what="the holder to see no page and stop")
+        self.assertGreaterEqual(time.monotonic() - t0, 1, "it waits PAGES_GONE_S first")
+        self.assertGreaterEqual(len(self.lists(rid)), 2)
+        self.assertFalse(self.has("alive-" + rid))
+        with open(log) as f:
+            text = f.read()
+        self.assertIn("its last page closed", text)
+        self.assertIn("stopped", text)
+
+    def test_a_page_back_within_pages_gone_s_keeps_the_run(self):
+        # Each spell of no page is under PAGES_GONE_S (5 polls at 0.2 s against 2 s), all three
+        # together are over it: a page back must restart the clock.
+        answers = ["0"] * 6 + ["1"] + ["0"] * 6 + ["1"] + ["0"] * 6 + ["1"]
+        rid, log, _ = self.start_scripted(2, answers)
+        self.assert_lives_through(rid, log, answers)
+
+    def test_a_failed_page_read_never_counts_as_zero_pages(self):
+        # As above, with failed reads between the spells: a failure is no page count, so it
+        # neither counts toward PAGES_GONE_S nor lets the spells join.
+        answers = ["0"] * 6 + ["fail"] + ["0"] * 6 + ["fail"] + ["0"] * 6 + ["1"]
+        rid, log, _ = self.start_scripted(2, answers)
+        self.assert_lives_through(rid, log, answers)
+        with open(log) as f:
+            text = f.read()
+        self.assertIn("poll failed (1 in a row)", text)
+        self.assertIn("/json/list answered 500", text)
+
+    def test_holder_ends_after_three_failed_page_reads(self):
+        rid, log, _ = self.start_scripted(60, ["fail"])
+        self.wait_for(lambda: self.has("eof-" + rid) and not self.records(), what="the end")
+        with open(log) as f:
+            text = f.read()
+        self.assertEqual(text.count("/json/list answered 500"), 3)
+        self.assertIn("polls failed 3 times in a row", text)
 
     def test_stop_by_url_checks_the_runs_own_port_file(self):
         r = self.cli("start", "--json")

@@ -172,10 +172,13 @@ chrome-bg check
   `1280x900`).
 - `start` makes a detached run and prints its browserURL, or
   `{id, url, port, pid}` with `--json`. A holder process owns the run until
-  `stop`, `--ttl` (default `2h`; takes `90s`, `30m`, `2h` or `1d`), or Chrome
-  exiting (a fixture's `browser.close()`, or you closing the window). Use it
-  when a probe spans several commands:
-  `export CHROME_BG_URL=$(chrome-bg start)`.
+  `stop`, `--ttl` (default `2h`; takes `90s`, `30m`, `2h` or `1d`), Chrome
+  exiting (a fixture's `browser.close()`), or its last page closing (you
+  closing the window), which ends the run 5 to 10 s later. Chrome itself runs
+  on with no window, so the holder reads the run's page list every 5 s and
+  stops once it has been empty for 5 s. A fixture that closes its last page
+  must open the next one within that time. Use `start` when a probe spans
+  several commands: `export CHROME_BG_URL=$(chrome-bg start)`.
 - `stop <id|url>` stops one run by its id or browserURL, never by a bare port
   (see the cleanup rule below).
 - `stop --gc` stops runs whose owner is gone or whose TTL ran out, kills run
@@ -243,7 +246,9 @@ path), does the Windows half. The rules, and why:
   foreground, above your other windows, for about 12 ms until the keeper sank
   it. Neither call alone did, and the lifted window never took the foreground
   or went on top. The keeper stands down while a run window has the
-  foreground, so a window you clicked stays up.
+  foreground, so a window you clicked stays up. Once focus leaves it, the
+  keeper sinks it to the very bottom (10 ms after an alt-tab away, live), so
+  it comes last in the alt-tab order.
 - **A covered page still renders.** `--disable-backgrounding-occluded-windows`
   plus `CalculateNativeWinOcclusion` in the disabled features keep the page
   `visible`, at the monitor's frame rate, behind other windows. The flag alone
