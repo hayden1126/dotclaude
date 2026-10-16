@@ -507,19 +507,14 @@ def model_problem(name) -> str | None:
             "claude-sonnet-5-5[1m]")
 
 
-def model_alias(name) -> bool:
-    """Whether name is an alias form model_problem accepts: unlike a full name, it can't hold a
-    typo, and it keeps what a resolved id loses (opusplan's per-mode switch, a 1M form)."""
-    return isinstance(name, str) and bool(MODEL_ALIAS.fullmatch(name))
-
-
 def could_run(name: str, ran: str) -> bool:
     """Whether a session given --model name could have run as ran, a resolved id (MODEL_ID): a
-    full name only as itself, an alias as an id of its family (FAMILIES). A name of another shape
-    (a Bedrock or Vertex id) can't be judged, so it is never contradicted."""
+    full name as itself or its dated id (claude-haiku-4-5 runs as claude-haiku-4-5-20251001), an
+    alias as an id of its family (FAMILIES). A name of another shape (a Bedrock or Vertex id)
+    can't be judged, so it is never contradicted."""
     base = name.removesuffix("[1m]")
     if MODEL_ID.fullmatch(base):
-        return base == ran
+        return bool(re.fullmatch(re.escape(base) + r"(?:-\d{8})?", ran))
     if base == "default" or base not in FAMILIES:
         return True
     return ran.split("-")[1] in FAMILIES[base]

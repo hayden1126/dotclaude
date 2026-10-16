@@ -433,16 +433,21 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
   with, read from its `/proc` command line:
   - After a `/model` (for the effort, a `/model` or `/effort`) in the transcript, it carries what
     the last main-chain assistant entry since ran with (`message.model`, `effort`). That id loses
-    what an alias means (`opusplan`'s switch per mode, a 1M form), so the model is instead the alias
-    the `/model` named, or for a pick from its menu the alias it saved as the user's default,
-    whenever that alias could have run as the id: another session's later pick can't fit, so it
-    never leaks in. When no usable entry follows (a `<synthetic>` one, a model that takes no effort,
-    an id that isn't `claude-`), the flag drops, and the default the command saved applies.
-  - With no such command, it carries the launch value, unless the last entry ran with something that
-    value can't be (an alias of another family, another full name, another effort). That is a change
-    the transcript can't show, such as one before a `/clear`, which starts a new transcript in the
-    same process; then it carries what ran. A change there that stays in the launch alias's
-    family (`opus` to `claude-opus-4-8`) can't be told from none, so it reverts.
+    what an alias or a 1M form means (`opusplan`'s switch per mode, `sonnet[1m]`), so the model is
+    instead the `/model`'s own argument, whenever it is a name `lane open` would accept and could
+    have run as the id. A pick from the menu has no argument, so it carries the id, and an
+    `opusplan` or 1M form picked there loses its meaning. The user's saved default is never read: it
+    is machine-wide, so another session's later pick of the same family would pass for this
+    session's. When no usable entry follows (a `<synthetic>` one, a model that takes no effort, an
+    id that isn't `claude-`), the flag drops, and the default the command saved applies.
+  - With no such command, it carries the launch value, except a model the last entry can't have run
+    as (an alias of another family, another full name; a dated id such as
+    `claude-haiku-4-5-20251001` fits `claude-haiku-4-5`). That is a change the transcript can't
+    show, such as one before a `/clear`, which starts a new transcript in the same process; then it
+    carries the id that ran. A change there within the launch alias's family (`opus` to
+    `claude-opus-4-8`) can't be told from none, so it reverts. The effort has no such check: Claude
+    Code moves it without a command (a level per model, a one-turn bump), so an `/effort` before a
+    `/clear` reverts too.
 
   Only an accepted `/model` reaches the transcript (a refused one leaves no entry), and only Claude
   Code's own command entry counts, never a prompt or a tool result that quotes its tag. The
@@ -452,8 +457,8 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
   (which undoes a mid-session `/model` at the next pass) and a stored per-lane pick (the same flaw,
   plus new state). How each case comes out:
   - a plain pass or an auto-pass: the pick holds; a compact pass keeps the same process;
-  - a `/model` or `/effort` mid-session: the new pick holds at the next pass, and across a
-    `/clear` too unless it stayed in the launch alias's family;
+  - a `/model` or `/effort` mid-session: the new pick holds at the next pass; across a `/clear`,
+    only a model the launch value can't have run as does;
   - a default changed after a lane opened: that lane keeps its launch pick until `/model` or
     `/effort` in its window moves it;
   - the lead's main checkout: no repo default reaches it, and it carries what it launched with;

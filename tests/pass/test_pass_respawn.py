@@ -1416,18 +1416,26 @@ class Pick(Base):
         self.assertEqual(self.respawned(self.LAUNCH), ["--model", "claude-opus-5-5", "--effort",
                                                        "xhigh", "--permission-mode", "plan"])
 
-    def test_an_alias_argument_carries_as_typed(self):
-        # opusplan ran sonnet outside plan mode: its id would lose the per-mode switch.
-        self.say(command("/model", "opusplan"), reply("claude-sonnet-5-5", "high"))
+    def test_a_model_argument_carries_as_typed_when_it_could_have_run(self):
+        # opusplan ran sonnet outside plan mode: its id would lose the per-mode switch, and an
+        # id loses a 1M form.
+        self.history(command("/model", "opusplan"), reply("claude-sonnet-5-5", "high"))
         self.assertEqual(self.respawned(self.LAUNCH), ["--model", "opusplan", "--effort", "high",
                                                        "--permission-mode", "plan"])
-        self.say(command("/model", "sonnet[1m]"), reply("claude-sonnet-5-5", "high"))
-        self.assertEqual(self.respawned(self.LAUNCH)[:2], ["--model", "sonnet[1m]"])
-        # A full name gives what ran; a later picker /model resets to the id.
-        self.say(command("/model", "claude-opus-4-8"), reply("claude-opus-4-8", "high"))
-        self.assertEqual(self.respawned(self.LAUNCH)[:2], ["--model", "claude-opus-4-8"])
-        self.say(command("/model", "opusplan"), reply("claude-sonnet-5-5", "high"),
-                 command("/model"), reply("claude-opus-5-5", "high"))
+        for args, ran, model in (("sonnet[1m]", "claude-sonnet-5-5", "sonnet[1m]"),
+                                 ("claude-opus-5-5[1m]", "claude-opus-5-5", "claude-opus-5-5[1m]"),
+                                 ("claude-haiku-4-5", "claude-haiku-4-5-20251001",
+                                  "claude-haiku-4-5"),
+                                 # what ran can't be the argument: what ran decides
+                                 ("sonnet", "claude-opus-5-5", "claude-opus-5-5"),
+                                 ("claude-opus-5-5", "claude-opus-4-8", "claude-opus-4-8"),
+                                 ("sonet", "claude-sonnet-5-5", "claude-sonnet-5-5")):
+            with self.subTest(args=args):
+                self.history(command("/model", args), reply(ran, "high"))
+                self.assertEqual(self.respawned(self.LAUNCH)[:2], ["--model", model])
+        # A later pick from the menu has no argument: the id that ran.
+        self.history(command("/model", "opusplan"), reply("claude-sonnet-5-5", "high"),
+                     command("/model"), reply("claude-opus-5-5", "high"))
         self.assertEqual(self.respawned(self.LAUNCH)[:2], ["--model", "claude-opus-5-5"])
 
     def test_an_effort_command_moves_only_the_effort(self):
@@ -1471,16 +1479,22 @@ class Pick(Base):
         self.assertEqual(self.respawned(self.LAUNCH), ["--model", "claude-opus-5-5", "--effort",
                                                        "max", "--permission-mode", "plan"])
 
-    def test_a_change_the_transcript_cant_show_carries_what_ran(self):
-        # A /model or /effort before a /clear sits in the old transcript: what ran since tells.
+    def test_a_model_the_launch_pick_cant_be_carries_what_ran(self):
+        # A /model before a /clear sits in the old transcript: a model of another family since
+        # tells. An effort that moved tells nothing (a level per model, a one-turn bump).
         self.history(reply("claude-opus-5-5", "xhigh"))
         self.assertEqual(self.respawned(self.LAUNCH), ["--model", "claude-opus-5-5", "--effort",
-                                                       "xhigh", "--permission-mode", "plan"])
+                                                       "low", "--permission-mode", "plan"])
+        self.history(reply("claude-sonnet-5-5", "max"))
+        self.assertEqual(self.respawned(self.LAUNCH),
+                         ["--model", "sonnet", "--effort", "low", "--permission-mode", "plan"])
 
     def test_what_ran_within_the_launch_pick_keeps_it(self):
         for model, ran in (("sonnet", "claude-sonnet-5-5"), ("opusplan", "claude-sonnet-5-5"),
                            ("default", "claude-haiku-5-5"), ("claude-sonnet-5-5[1m]",
                                                              "claude-sonnet-5-5"),
+                           ("claude-haiku-4-5", "claude-haiku-4-5-20251001"),
+                           ("claude-sonnet-4-5[1m]", "claude-sonnet-4-5-20250929"),
                            ("claude-sonnet-4@20250514", "claude-sonnet-4")):
             with self.subTest(model=model):
                 self.history(reply(ran, None))  # no effort to judge: the launch one holds
@@ -1488,17 +1502,13 @@ class Pick(Base):
                                  ["--model", model, "--effort", "low", "--permission-mode",
                                   "plan"])
 
-    def test_a_menu_model_carries_the_saved_alias_that_fits_what_ran(self):
-        # The menu's pick has no argument, but /model saved it as the default: it carries when
-        # it could have run as what the session ran since, never another session's later pick.
-        settings = os.path.join(self.home, ".claude", "settings.json")
+    def test_a_menu_pick_never_reads_the_saved_default(self):
+        # The default is machine-wide: another session's later pick of the same family would
+        # fit what ran, so a pick from the menu carries the id.
+        self.write(os.path.join(self.home, ".claude", "settings.json"),
+                   json.dumps({"model": "sonnet[1m]"}))
         self.history(command("/model"), reply("claude-sonnet-5-5", "high"))
-        for saved, model in (("sonnet[1m]", "sonnet[1m]"), ("opusplan", "opusplan"),
-                             ("haiku", "claude-sonnet-5-5"), ("claude-sonnet-5-5[1m]",
-                                                             "claude-sonnet-5-5")):
-            with self.subTest(saved=saved):
-                self.write(settings, json.dumps({"model": saved}))
-                self.assertEqual(self.respawned(self.LAUNCH)[:2], ["--model", model])
+        self.assertEqual(self.respawned(self.LAUNCH)[:2], ["--model", "claude-sonnet-5-5"])
 
     def test_an_unreadable_transcript_carries_the_launch_flags(self):
         self.say(command("/model"), reply("claude-opus-5-5", "max"))

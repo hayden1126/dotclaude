@@ -107,22 +107,20 @@ class Picks(unittest.TestCase):
             with self.subTest(name=name):
                 self.assertIn("is not a model", lanelib.model_problem(name))
 
-    def test_an_alias_is_told_from_a_full_name(self):
-        for name in ("opus", "opusplan", "sonnet[1m]", "fable[1m]", "default"):
-            self.assertTrue(lanelib.model_alias(name), name)
-        for name in ("claude-opus-5-5", "claude-sonnet-5-5[1m]", "sonet", "default[1m]", None):
-            self.assertFalse(lanelib.model_alias(name), name)
-
     def test_a_model_could_run_as_an_id_of_its_own_family_only(self):
         for name, ran in (("sonnet", "claude-sonnet-5-5"), ("sonnet[1m]", "claude-sonnet-5-5"),
                           ("opusplan", "claude-sonnet-5-5"), ("opusplan", "claude-opus-5-5"),
                           ("default", "claude-haiku-5-5"), ("claude-opus-5-5", "claude-opus-5-5"),
                           ("claude-opus-5-5[1m]", "claude-opus-5-5"),
+                          ("claude-haiku-4-5", "claude-haiku-4-5-20251001"),  # a dated id
+                          ("claude-sonnet-4-5[1m]", "claude-sonnet-4-5-20250929"),
                           ("claude-sonnet-4@20250514", "claude-opus-5-5")):  # can't be judged
             with self.subTest(name=name, ran=ran):
                 self.assertTrue(lanelib.could_run(name, ran))
         for name, ran in (("sonnet", "claude-opus-5-5"), ("opusplan", "claude-haiku-5-5"),
-                          ("claude-opus-5-5", "claude-opus-4-8"), ("haiku", "claude-sonnet-5-5")):
+                          ("claude-opus-5-5", "claude-opus-4-8"), ("haiku", "claude-sonnet-5-5"),
+                          ("claude-opus-5", "claude-opus-5-5"),  # a prefix is no date
+                          ("claude-opus-4.5", "claude-opus-4-5")):  # a '.' is no wildcard
             with self.subTest(name=name, ran=ran):
                 self.assertFalse(lanelib.could_run(name, ran))
 

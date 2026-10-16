@@ -205,14 +205,13 @@ the sandbox can write (docs/lanes.md S3). Every input, and why each is safe:
     file in the main checkout of a lane session launched from the lane is caught only by the
     late check, after lanelib's git has run once.
   - The respawn's --model and --effort come from the session claude's command line (the
-    kernel's), the transcript and the user settings' `model` (Claude Code's, which /model
-    writes), never from a sandbox-writable file. Each goes to tmux as one argv element, never
-    interpolated, and only in a fixed shape: an effort is one of lanelib.EFFORTS; a launch model
-    passes lanelib.safe_model (it starts with a letter or digit, so it never reads as a flag,
-    and carries no space or shell syntax); a transcript's must be a lanelib.MODEL_ID
-    (`claude-...`), and a /model argument or the saved `model` a lanelib.model_alias that could
-    have run as that id. A launch value outside its shape refuses the pass at call time; a
-    transcript value outside it drops the flag.
+    kernel's) and the transcript (Claude Code's), never from a sandbox-writable file. Each goes
+    to tmux as one argv element, never interpolated, and only in a fixed shape: an effort is one
+    of lanelib.EFFORTS; a launch model passes lanelib.safe_model (it starts with a letter or
+    digit, so it never reads as a flag, and carries no space or shell syntax); a transcript's
+    must be a lanelib.MODEL_ID (`claude-...`), and a /model argument a name lanelib.model_problem
+    accepts that could have run as that id. A launch value outside its shape refuses the pass at
+    call time; a transcript value outside it drops the flag.
   - PATH is the call's, so it keeps only the absolute entries outside those dirs (as given and
     resolved). git, tmux and claude resolve through that PATH and must also resolve, as found
     and through their links, outside them; otherwise it refuses. The sanitized PATH replaces
@@ -1018,22 +1017,6 @@ def picks_since(path: str | None) -> tuple[dict, dict, str | None] | None:
     return since, last, chosen
 
 
-def saved_model() -> str | None:
-    """The user's default model, where /model saves its pick (the config dir's settings.json
-    `model`, out of the sandbox's reach), or None."""
-    try:
-        with open(os.path.join(config_dir(), "settings.json")) as f:
-            model = json.load(f).get("model")
-    except (OSError, ValueError, RecursionError, AttributeError):   # json recurses on nesting
-        return None
-    return model if isinstance(model, str) else None
-
-
-def fits(flag: str, launched: str, ran_with: str) -> bool:
-    """Whether what an entry ran with agrees with the session's launch value for flag."""
-    return lanelib.could_run(launched, ran_with) if flag == "--model" else launched == ran_with
-
-
 def launch_pick(argv: list[str] | None) -> dict[str, str]:
     """The session claude's launch --model and --effort (pick_flags), checked at the call so a
     value that can't be passed on refuses while the session can still read why."""
@@ -1051,13 +1034,13 @@ def carried_pick(launched: dict[str, str], transcript: str | None) -> list[str]:
     and effort"), for each flag the session launched with (launch_pick):
     - after a /model (for the effort, a /model or /effort) in the transcript, what the last entry
       since ran with, or nothing when none did, since the command saved its pick as the default
-      for new sessions. For the model, the alias the /model named, or for a pick from its menu
-      the one it saved (saved_model), when that alias could have run as that entry's id: the id
-      loses what an alias means (opusplan's per-mode switch, a 1M form), and another session's
-      later pick can't fit;
-    - with no such command, the launch value, unless the transcript's last entry ran with
-      something it can't be (fits): a change this transcript can't show, such as one before a
-      /clear, which starts a new transcript in the same process. Then what that entry ran with.
+      for new sessions. For the model, the /model's own argument when it is a name lanelib
+      accepts and could have run as that entry's id (an id loses what an alias or a 1M form
+      means); a pick from the menu has none, so it carries the id;
+    - with no such command, the launch value, except a model the transcript's last entry can't
+      have run as (lanelib.could_run): a change the transcript can't show, such as one before a
+      /clear, which starts a new transcript in the same process. Then the id that ran. An effort
+      has no such check: it moves without a command (a level per model, a one-turn bump).
     Read at act time, as the resume mode is, so a /model during the passing turn counts; the
     transcript is read only when a flag is there to carry."""
     since, last, chosen = (picks_since(transcript) if launched else None) or ({}, {}, None)
@@ -1066,11 +1049,10 @@ def carried_pick(launched: dict[str, str], transcript: str | None) -> list[str]:
         value = launched[flag]
         if flag in since:
             value = since[flag]
-            if flag == "--model" and value:
-                named = (chosen, saved_model() if chosen == "" else None)
-                value = next((a for a in named if lanelib.model_alias(a)
-                              and lanelib.could_run(a, value)), value)
-        elif last.get(flag) and not fits(flag, value, last[flag]):
+            if (flag == "--model" and value and not lanelib.model_problem(chosen)
+                    and lanelib.could_run(chosen, value)):
+                value = chosen
+        elif flag == "--model" and last.get(flag) and not lanelib.could_run(value, last[flag]):
             value = last[flag]
         if value:
             out += [flag, value]
