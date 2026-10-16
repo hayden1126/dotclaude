@@ -132,6 +132,14 @@ stored here).
     after the lane opened, the lead's main checkout, and a bad model name failing in a detached
     window nobody watches. Files: the lane script (init, open),
     `skills/pass/scripts/pass-respawn`, SKILL.md, `docs/lanes.md`, `tests/lanes`, `tests/pass`.
+  - **Tab restore and the shelf's Open drop a session's effort** (from lane `lane-model`,
+    2026-10-16). `tmux/claude-restore` and `tmux/claude-saved` (Open) both relaunch with a bare
+    `claude --resume <id>`, which keeps the model but not the effort (lane-model's spike S3,
+    [[cc-model-command-saves-default]]). After a tmux restart a lane runs at the default effort,
+    and its next plain pass loses the model too, since #110's `carried_pick` carries only the flags
+    the old claude launched with (its `/proc` command line). #110's `docs/lanes.md` "Model and
+    effort" documents the gap. Fix in restore's files: save the session's `--model` and `--effort`
+    with its entry and pass them back on resume.
   - Tests time durations with `time.monotonic()`, not `time.time()` (122 calls in 23 test
     files). It touches every suite, so it opens only when no lane runs.
   - **`lane done`'s rerun can't finish a restored tab** (seen 2026-10-15 closing two-sessions).
