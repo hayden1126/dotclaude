@@ -764,6 +764,8 @@ class PageCount(unittest.TestCase):
             ("a 500", {"/json/version": good, "/json/list": (500, b"")}, "/json/list answered 500"),
             ("not JSON", {"/json/version": good, "/json/list": (200, b"<html>")}, "/json/list"),
             ("not a list", {"/json/version": good, "/json/list": (200, b"{}")}, "/json/list is not a list"),
+            ("nested too deep", {"/json/version": good,
+                                 "/json/list": (200, b"[" * 100000 + b"]" * 100000)}, "/json/list: RecursionError"),
         ]
         for name, got, says in cases:
             with self.subTest(name):
@@ -790,7 +792,8 @@ class PageCount(unittest.TestCase):
 # -Kill ran), session-<id> (the supervisor's pid and session id), alive-<id> (while "Chrome" runs)
 # and chrome-<id>.pid. /json/list holds one page per createTarget less each closeTarget, unless a
 # test scripts it in pages-<id>: one answer per read ("0", "1", or "fail" for a 500), the last one
-# kept. list-<id> notes each answer and the time.time() it went out.
+# kept. list-<id> notes each answer and the time.time() it went out. FAKE_LIST_DELAY slows every
+# /json/list answer, FAKE_FIRST_EMPTY_DELAY the first "0".
 FAKE_COMMON = r'''
 import json, os, re, sys, time
 
@@ -966,6 +969,7 @@ guid = str(uuid.uuid4())
 bounds = {}
 loaded_reads = [0]  # page0's load-check evaluates so far (FAKE_LOADED_AFTER)
 pages = [0]  # page targets open, unless pages-<rid> says otherwise
+empty_delayed = []  # FAKE_FIRST_EMPTY_DELAY was spent
 srv = socket.socket()
 srv.bind(("127.0.0.1", 0))
 srv.listen(8)
@@ -1101,6 +1105,10 @@ def handle(c):
             return
         if path == "/json/list":
             answer = list_answer()
+            time.sleep(float(env.get("FAKE_LIST_DELAY", "0")))
+            if answer == "0" and not empty_delayed:  # the first read that finds no page is slow
+                empty_delayed.append(True)
+                time.sleep(float(env.get("FAKE_FIRST_EMPTY_DELAY", "0")))
             note("list-" + rid, "%s %.3f" % (answer, time.time()))
             if answer == "fail":
                 c.sendall(b"HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\n\r\n")
@@ -1189,22 +1197,36 @@ if os.environ.get("DRIVER_STOP_WAIT"):
     mod.STOP_WAIT_S = float(os.environ["DRIVER_STOP_WAIT"])
 if os.environ.get("DRIVER_PAGES_GONE"):
     mod.PAGES_GONE_S = float(os.environ["DRIVER_PAGES_GONE"])
+if os.environ.get("DRIVER_POLL"):
+    mod.PROCS_POLL_S = float(os.environ["DRIVER_POLL"])
 if os.environ.get("DRIVER_STALL_PROCS"):
-    # The first procs call made while the next scripted /json/list answer is "0" stalls this long:
-    # a holder that read the pages after procs would read that first empty list late.
-    call, stalled = mod.Supervisor.call, []
+    # procs calls stall DRIVER_STALL_PROCS s. DRIVER_STALL_AT picks which: "before" is the first
+    # one made while the next scripted /json/list answer is "0" (a holder reading the pages after
+    # procs would read that first empty list late); "second" is the first one after the second
+    # read that found no page (a holder judging the wait after procs would count the stall);
+    # "every" is each one.
+    call, count, stalled, empty = mod.Supervisor.call, mod.page_count, [], [0]
+
+    def counting(*a, **kw):
+        n = count(*a, **kw)
+        empty[0] += n == 0
+        return n
+
+    def upcoming(rid):
+        try:
+            with open(os.path.join(root, "pages-" + rid)) as f:
+                return f.read().split()[:1]
+        except OSError:
+            return []
 
     def stalling_call(self, op, *a, **kw):
-        if op == "procs" and not stalled:
-            try:
-                with open(os.path.join(root, "pages-" + self.rid)) as f:
-                    upcoming = f.read().split()[:1]
-            except OSError:
-                upcoming = []
-            if upcoming == ["0"]:
-                stalled.append(True)
-                time.sleep(float(os.environ["DRIVER_STALL_PROCS"]))
+        at = os.environ.get("DRIVER_STALL_AT", "before")
+        if op == "procs" and (at == "every" or not stalled and (
+                at == "before" and upcoming(self.rid) == ["0"] or at == "second" and empty[0] == 2)):
+            stalled.append(True)
+            time.sleep(float(os.environ["DRIVER_STALL_PROCS"]))
         return call(self, op, *a, **kw)
+    mod.page_count = counting
     mod.Supervisor.call = stalling_call
 if "DRIVER_TTY_FG" in os.environ:  # stands in for /dev/tty's foreground process group check
     mod.in_tty_foreground = lambda: os.environ["DRIVER_TTY_FG"] == "1"
@@ -2049,22 +2071,43 @@ class Live(unittest.TestCase):
         cdp.close()
         self.wait_for(lambda: self.has("eof-" + rid) and not self.records(),
                       what="the holder to see no page and stop")
-        empty = [t for a, t in self.lists(rid) if t > t0]
+        empty = [t for a, t in self.lists(rid) if a == "0" and t > t0]
         self.assertGreaterEqual(len(empty), 2)
         self.assertGreaterEqual(empty[-1] - empty[0], 1, "two empty reads PAGES_GONE_S apart")
         self.assertFalse(self.has("alive-" + rid))
         self.assertTrue(self.holder_log_says(log, "its last page closed"))
         self.assertTrue(self.holder_log_says(log, "stopped"))
 
-    def test_a_slow_procs_never_shortens_the_wait(self):
-        # procs stalls 1.5 s in the poll before the first empty read. Read after procs, against
-        # the poll's start, that read would count 1.5 s it never saw, and the run would end with
-        # its empty reads 0.5 s apart.
-        rid, log = self.start_scripted(2, ["1", "1", "0"], env={"DRIVER_STALL_PROCS": "1.5"})
+    def test_no_stall_shortens_the_wait(self):
+        # A stall where a wrong clock would count it as time with no page, against a 2 s
+        # PAGES_GONE_S: the two empty reads that end the run must still be 2 s apart.
+        stalls = {
+            # Read after procs, against the poll's start: the first empty read comes late.
+            "procs before the first empty read": {"DRIVER_STALL_PROCS": "1.5"},
+            # Timed from the read's start: the first empty read's own wait would count.
+            "the first empty read": {"FAKE_FIRST_EMPTY_DELAY": "1.5"},
+            # Judged after procs: the second empty read's procs would count. That read comes
+            # 0.2 s after the first, so the stall must pass the 1.8 s left.
+            "procs after the second empty read": {"DRIVER_STALL_PROCS": "2.5",
+                                                  "DRIVER_STALL_AT": "second"},
+        }
+        for where, env in stalls.items():
+            with self.subTest(where):
+                rid, log = self.start_scripted(2, ["1", "1", "0"], env=env)
+                self.wait_for(lambda: self.has("eof-" + rid) and not self.records(), what="the end")
+                empty = [t for a, t in self.lists(rid) if a == "0"]
+                self.assertGreaterEqual(empty[-1] - empty[0], 2, "the empty reads span PAGES_GONE_S")
+                self.assertTrue(self.holder_log_says(log, "its last page closed"))
+
+    def test_the_second_empty_read_ends_the_run(self):
+        # PROCS_POLL_S = PAGES_GONE_S = 1, with the loop waking every 0.5 s: procs takes 0.495 s
+        # and each read 20 ms. Due PROCS_POLL_S after a poll's start, the next read would start
+        # 20 ms short of a second after the last one ended, so a third empty read would be needed.
+        rid, _ = self.start_scripted(1, ["1", "0"], env={
+            "DRIVER_POLL": "1", "DRIVER_STALL_PROCS": "0.495", "DRIVER_STALL_AT": "every",
+            "FAKE_LIST_DELAY": "0.02"})
         self.wait_for(lambda: self.has("eof-" + rid) and not self.records(), what="the end")
-        empty = [t for a, t in self.lists(rid) if a == "0"]
-        self.assertGreaterEqual(empty[-1] - empty[0], 2 - 0.05, "the empty reads span PAGES_GONE_S")
-        self.assertTrue(self.holder_log_says(log, "its last page closed"))
+        self.assertEqual([a for a, _ in self.lists(rid)].count("0"), 2)
 
     def test_a_page_back_within_pages_gone_s_keeps_the_run(self):
         # Each spell of no page is under PAGES_GONE_S (5 polls at 0.2 s against 3 s), all three

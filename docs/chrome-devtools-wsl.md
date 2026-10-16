@@ -174,7 +174,7 @@ chrome-bg check
   `{id, url, port, pid}` with `--json`. A holder process owns the run until
   `stop`, `--ttl` (default `2h`; takes `90s`, `30m`, `2h` or `1d`), Chrome
   exiting (a fixture's `browser.close()`), or its last page closing (you
-  closing the window), which ends the run 5 to 11 s later. Chrome itself runs
+  closing the window), which ends the run 5 to 12 s later. Chrome itself runs
   on with no window, so the holder reads the run's page list every 5 s and
   stops when two reads at least 5 s apart find no page. A fixture that closes
   its last page must open the next one within 5 s. Use `start` when a probe
