@@ -228,7 +228,8 @@ sees it.
 | `chrome-debug.ps1` | Windows launcher for Strategy B (Chrome with a remote-debugging port) | run on Windows when needed |
 | `chrome-bg.ps1` | The Windows half of `bin/chrome-bg`: one supervisor per run that launches Chrome through WMI, keeps its windows at the bottom of the z-order, logs their events, and kills the run's Chrome when its owner goes away; see docs/chrome-devtools-wsl.md "Background Windows Chrome for probes" | not installed: `bin/chrome-bg` runs it from beside its own real path |
 | `tmux/` | The tmux side of the indicator: `claude.conf` (titles, status bar, the ◐ busy and ✳ waiting glyphs), the optional `base.conf` (mouse, splits, the Ctrl-b Enter menu), `cheatsheet.txt`, `tmux-claude-status`, the backstop the status bar runs (it also maps background sessions to their tab and has `claude-saved track` record attach tabs for `claude-restore`), `claude-restore`, which reopens `main`'s Claude tabs after the tmux server dies, `claude-saved`, which stars and shelves a tab's chat (the tab's right-click menu, Ctrl-b S, or Ctrl-b Enter), `pass-last`, which shows what Claude said before a `/pass` (Ctrl-b Up, or either menu), and `tmux-tab-bar`, which lays out the status bar in up to 5 rows grouped by project and moves tabs you arrange by hand | sourced and linked by `setup-tmux.sh` |
-| `setup-tmux.sh` | Opt-in tmux installer: links `tmux-claude-status`, `claude-restore`, `claude-saved`, `pass-last` and `tmux-tab-bar` into `~/.local/bin` and keeps a marked `source-file` block in `~/.tmux.conf` (`--base` adds `base.conf` and the cheatsheet, `--no-base` drops them, and a run with neither keeps what the block has) | run once per machine that uses tmux; not called by `setup.sh` |
+| `setup-tmux.sh` | Opt-in tmux installer: links `tmux-claude-status`, `claude-restore`, `claude-saved`, `pass-last`, `paste-inbox` and `tmux-tab-bar` into `~/.local/bin` and keeps a marked `source-file` block in `~/.tmux.conf` (`--base` adds `base.conf` and the cheatsheet, `--no-base` drops them, and a run with neither keeps what the block has) | run once per machine that uses tmux; not called by `setup.sh` |
+| `laptop/` | The Windows laptop side of Alt+V: `remote-paste.ahk` (AutoHotkey v2) turns Ctrl+V of a screenshot in a tab showing the PC's tmux into an upload plus Alt+V, `remote-paste.ps1` uploads, `install-remote-paste.ps1` installs both (see Hooks, "Paste a screenshot from another device") | run once on the laptop; nothing on the PC installs it |
 | `setup-chrome-wsl.sh` | Opt-in WSL2 installer: installs Chrome for Testing and registers the user-scoped `chrome-devtools` override | run once on WSL2; not called by `setup.sh` |
 | `setup.sh` | The installer | run once per machine |
 | `sync.sh` | Regenerates the derived plugin lists from live `~/.claude/` | run after plugin changes |
@@ -494,6 +495,30 @@ need nothing extra.
   (`claude stop`), since closing the tab alone would leave it running unseen; reopening a chat
   that still runs in the background attaches to it. A `/clear` in such a tab doesn't move its
   star: the session's hooks can't see the tab.
+- **Paste a screenshot from another device**: under WSL, Claude Code's Ctrl+V reads the PC's own
+  Windows clipboard. So a screenshot copied on a laptop that SSHes into the PC's tmux never arrives
+  (for an image, Windows Terminal sends an empty paste, and Claude Code answers that the same way).
+  What Claude Code does attach is an image path that arrives as a bracketed paste, so **Alt+V**
+  (`tmux/paste-inbox`, linked by `setup-tmux.sh`) pastes the path of the newest image that reached
+  the PC in the last 10 minutes: from its inbox (`~/.cache/claude-paste`) or from Windows Downloads,
+  where Taildrop saves (an upload from the last 30 seconds wins; otherwise the newest does, so a
+  browser download on the PC can beat an older upload). Once installed, Alt+V no longer reaches a
+  pane's own program (less, nano, an editor). With nothing installed on the other device, Taildrop
+  the screenshot to the PC (Explorer's Send with Tailscale, or a phone's share sheet), then press
+  Alt+V. On a Windows laptop, `laptop/` makes it one key: Ctrl+V of a screenshot uploads it and
+  presses Alt+V for you. It needs AutoHotkey v2, and the laptop's WSL `ssh` reaching an SSH port on
+  the PC that runs a plain shell (a second Windows OpenSSH port, when port 22 is forced into tmux),
+  with a key that asks no passphrase and a known host entry. Clone this repo where the laptop's
+  Windows can read it, then run `powershell -ExecutionPolicy Bypass -File
+  laptop\install-remote-paste.ps1 -Target <user>@<pc host>` (`-Port` if not 2222). It installs into
+  `%LOCALAPPDATA%\remote-paste` with a Startup shortcut, keeps the host name there and out of the
+  repo, and ends with a test upload the PC checks but doesn't keep; `-Uninstall` removes it. The
+  hotkey acts only while the Windows Terminal title is a remote tmux view of the PC (`view-<pid> ·
+  ...` by default; `-TitlePattern` for other session names, and leave the profile's
+  `suppressApplicationTitle` off) and the clipboard holds an image or one copied image file but no
+  text, so a text Ctrl+V never reaches it. `paste-inbox receive` keeps a PNG, JPEG, GIF or WebP up
+  to 50 MB (judged by its first bytes, and refused unless all the bytes the laptop sent arrived)
+  and, each time it receives one, deletes its own files older than a day; Downloads is never pruned.
 - **PreToolUse(`Write`): `overwrite-guard.sh`** (in this repo). The Write tool's own "File has not
   been read yet" check last fired in Claude Code 2.1.285, and on 2.1.289 a Write of `PLACEHOLDER`
   replaced an unread 6 KB memory file (`docs/blind-overwrite-brief.md`). The guard denies a Write
