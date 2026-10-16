@@ -83,8 +83,11 @@ stored here).
     names the branch the worktree has checked out), `install-hint` #108 (2026-10-14: a merged
     lane can't take the install back; the excluded-guard scan after its reinstall came back
     clean, so the work repo's flagged worktrees are cleared), `two-sessions` #109 (2026-10-15:
-    one lead per main checkout, the last to act as lead, `lane lead`, and lead² tabs).
-    `gh pr view <n>` and the closed records under `.git/lanes/_closed/` hold the detail; tab-bar's
+    one lead per main checkout, the last to act as lead, `lane lead`, and lead² tabs),
+    `remote-paste` #111 (2026-10-16: Alt+V in tmux pastes the newest image sent to HAYPC, and an
+    opt-in laptop Ctrl+V uploads its clipboard image first; the lane stays open, `Keep open:`, for
+    a follow-up PR with the laptop's non-image files and README's `tmux/` and `tests/setup/` rows
+    once chrome-bg merges). `gh pr view <n>` and the closed records under `.git/lanes/_closed/` hold the detail; tab-bar's
     design is in [[dotclaude-tab-bar]]. Tabs opened before #102's install (2026-10-14) keep the
     old startup hooks (no PermissionRequest or SubagentStop wiring) until they restart.
   - `chrome-bg` (opened 2026-10-14, Hayden's ask and picks): `bin/chrome-bg` opens a Windows
@@ -96,11 +99,10 @@ stored here).
     machine-wide); the lane lists them for removal once its hook is live. At merge the lead also
     updates Vulcan's memory `no-chrome-windows-in-front.md` (it says `chrome-bg` isn't installed
     yet).
-  - **Merge order: `chrome-bg`, then `lane-model` and `remote-paste`, whichever is ready
-    first.** The lead's STATUS
-    commits rode neither #108 (Hayden merged it before its ready step) nor #109, so main's
-    STATUS.md is far behind `chore/after-pr4`. chrome-bg's ready step carries them (a
-    STATUS-only PR is ruled out).
+  - **Merge order: `chrome-bg`, then `lane-model` (#110) and remote-paste's follow-up, whichever
+    is ready first.** The lead's STATUS commits rode none of #108 (Hayden merged it before its
+    ready step), #109 or #111 (merged from draft), so main's STATUS.md is far behind
+    `chore/after-pr4`. The next lane's ready step carries them (a STATUS-only PR is ruled out).
   - The parked json-depth sweep (21 files, among them the delegation enforcement scripts) is on
     `fix/json-depth-sweep`, a local branch never pushed: keep it while the sweep is in the
     backlog. Shipping it first needs a check of how each enforcement site fails
@@ -150,21 +152,6 @@ stored here).
     restored the proof. Fix in
     `skills/lanes/scripts/lane` (done): record the proven shell before the first signal so a
     rerun keeps the proof, or wait out a child that exits within the grace period.
-  - **A screenshot pasted into Claude Code from the laptop usually pastes nothing** (Hayden,
-    2026-10-15: Windows laptop, Windows Terminal, over Tailscale into HAYPC's tmux; now and then
-    it works). Cause, read from the 2.1.300 binary: under WSL, Ctrl+V (`chat:imagePaste`) runs
-    `powershell.exe` with `[System.Windows.Forms.Clipboard]::GetImage()`, which reads HAYPC's
-    Windows clipboard. The laptop's terminal sends only text, so its image never arrives
-    (Claude Code's own message for SSH is "try scp?"). HAYPC has clipboard history on and no
-    cloud sync keys, so an odd success likely pasted an image already on HAYPC's clipboard
-    (inferred: ask Hayden whether it was the right image). Claude Code attaches a pasted image
-    path (it matches `.png`, `.jpg`, `.gif`, `.webp` and Windows paths), so a fix moves the file
-    to HAYPC first and pastes its path. Options for the lane to rate: (A) a laptop hotkey saves
-    the clipboard image, sends it over SFTP (Windows OpenSSH, SFTP on) and types the HAYPC path,
-    one key but a laptop install; (B) Taildrop from the laptop (Windows Tailscale on both) plus
-    a tmux key on HAYPC that runs `tailscale.exe file get` and types the newest path, no laptop
-    code but more steps. Setting HAYPC's clipboard from the SSH session likely fails (sshd runs
-    outside the desktop session; inferred).
 
   **The post-merge chain** (Hayden's design B, standing approval 2026-10-14): `skills/lanes/SKILL.md`,
   The lead, step 7. Lead commits ride the next lane PR: that lane applies `git diff origin/main
@@ -247,8 +234,8 @@ stored here).
 ## Notes for next session
 - **Next (lead, main checkout):** watch for "merged #N" from a lane, then run the post-merge
   chain (`skills/lanes/SKILL.md`, The lead, step 7). Live lanes: `chrome-bg`, `lane-model` and
-  `remote-paste` (both opened 2026-10-15, Hayden's picks; briefs in their records). All 3
-  slots are full. Check `lane ls` first: a merge Hayden made on GitHub and mentioned to no
+  `remote-paste` (both opened 2026-10-15, Hayden's picks; briefs in their records; remote-paste
+  merged #111 and stays open for its follow-up). All 3 slots are full. Check `lane ls` first: a merge Hayden made on GitHub and mentioned to no
   session sends no message (#102 showed merged there before its lane's message came). Each new work-repo lane still needs its own Edit deny rule
   (they take no glob); `lane new` prints it since #104. No chat
   about a lane's own asks; speak on cross-lane orders, decisions raised with the lead, failed
@@ -258,8 +245,8 @@ stored here).
     (69d146cc) started at 433fe8f: it opened identity-branch, install-hint, chrome-bg and
     two-sessions, and ran the chain for #106 and #107. The fourth (64626d32) started at 5cb88d8:
     it wrote the `lane open --model` design note, removed two leftover writer worktrees from
-    #105 (every patch already in main), ran the chain for #108 and #109, and opened lane-model
-    and remote-paste.
+    #105 (every patch already in main), ran the chain for #108, #109 and #111, and opened
+    lane-model and remote-paste.
   - **Vulcan sessions that were already running keep their display** until they restart: the
     blanking hook fires only at session start. The `ro-lesson` lane was opening WSLg windows
     at 21:43 local; Hayden tells it to go headless or `/pass`.
