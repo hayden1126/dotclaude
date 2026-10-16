@@ -46,6 +46,10 @@
     C-b S        the shelf: reopen a starred or shelved chat
     C-b Enter    Star / Shelve / Shelf… too (no Shift)
 
+  SCREENSHOT FROM ANOTHER DEVICE
+    M-v          paste the newest image that reached this PC (10 min): the
+                 laptop's Ctrl+V upload, or a Taildrop; Claude attaches it
+
   AFTER /pass
     C-b Up       the replies before the pass (popup; also in the menus)
 

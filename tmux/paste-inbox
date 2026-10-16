@@ -1,0 +1,299 @@
+#!/usr/bin/python3 -I
+"""paste-inbox: paste the newest image that reached this PC into a tmux pane (Alt+V).
+
+  paste-inbox receive [--check] <device> <bytes>   one image of <bytes> bytes on stdin into the
+                                                   inbox; prints its path (--check: validate
+                                                   it, keep nothing)
+  paste-inbox paste <pane> <client>                the newest image of the last 10 minutes, as a
+                                                   bracketed paste into the pane; else a
+                                                   message on the client
+
+Why: under WSL, Claude Code's Ctrl+V and an empty paste read this PC's Windows clipboard
+(powershell.exe through the tmux server's WSL interop), so a screenshot copied on another device
+never arrives. Claude Code does attach an image whose path is pasted (bracketed, or a chunk over
+800 characters; read from the 2.1.301 binary), so this pastes a path.
+
+`receive` is what a remote device runs over ssh on the Windows shell port, through
+`wsl.exe -d Ubuntu --cd ~ --exec .local/bin/paste-inbox receive <device> <bytes>` (laptop/ holds
+the Windows side). It keeps a PNG, JPEG, GIF or WebP of exactly the size given (so a cut upload,
+or a byte added on the way, is refused) and at most 50 MB, judged by its first bytes, which also
+pick the extension, as `<UTC time>-<device>-<random>.<ext>` in $PASTE_INBOX_DIR (default
+~/.cache/claude-paste, mode 700, files 600), written to a temp file and renamed. The device name
+is cut to [a-z0-9._-], so it can't steer the path. Each receive first deletes the inbox's own
+files (that name pattern and stale temp files) older than a day; Claude Code reads an image at
+paste time, so a pasted copy is not needed after. Anything else is refused on stderr, exit 1,
+and so is an upload still unfinished after 2 minutes (a link that died leaves no FIN, and this
+would otherwise wait for TCP to give up); --check prints the path it would use and keeps
+nothing (the laptop installer's self-test).
+
+`paste` takes an image the inbox received in the last 30 seconds (the laptop's Ctrl+V sends
+Alt+V right after its upload; inbox times and that check both use WSL's clock), else the newest
+non-empty image file (.png, .jpg, .jpeg, .gif or .webp, any case; no dotfiles) modified in the
+last 10 minutes, and no more than 10 minutes in the future (Downloads times come from Windows'
+clock, which WSL2's can fall behind after a sleep), in the inbox or Windows Downloads, where
+Taildrop saves (Tailscale 1.34 and later; mtime is the arrival time). So past those 30 seconds a
+Taildrop, or a browser download on this PC, beats an older upload. The Downloads folder is
+$PASTE_INBOX_DOWNLOADS (empty: none), else the path cached in
+$XDG_STATE_HOME/dotclaude/paste-inbox/downloads while that folder exists, else Windows'
+Downloads known folder from powershell.exe (printed as base64 of its UTF-8, since a console
+prints a non-ASCII name in its own code page) through `wslpath -u`, cached once found
+(powershell.exe from PATH only, so outside WSL the inbox alone counts). A pane in copy mode
+leaves it first. The path goes in as bytes through `load-buffer -` into a buffer named for the
+pane (two clients at once don't share one) and out through `paste-buffer -p -d`, quoted when it
+holds a space. Silent, exit 0: Alt+V runs it (tmux/claude.conf), and a failing run-shell would
+put the pane in view mode, so a crash goes to $XDG_STATE_HOME/dotclaude/paste-inbox/error.log
+and a line on the client. Linked into ~/.local/bin by setup-tmux.sh;
+tests/setup/test_paste_inbox.py holds the cases.
+"""
+import base64
+import os
+import re
+import secrets
+import shutil
+import signal
+import subprocess
+import sys
+import tempfile
+import time
+import traceback
+
+USAGE = __doc__.split("\n\n")[1]
+CAP = 50 * 1024 * 1024
+FRESH = 10 * 60
+SKEW = FRESH
+STALL = 120
+RECENT = 30
+KEEP = 24 * 3600
+IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".gif", ".webp")   # Claude Code's pasted-path pattern
+MAGIC = ((b"\x89PNG\r\n\x1a\n", "png"), (b"\xff\xd8\xff", "jpg"), (b"GIF87a", "gif"),
+         (b"GIF89a", "gif"))
+OWN = re.compile(r"^(\d{8}T\d{6}Z-[a-z0-9._-]+-[0-9a-f]{6}\.(png|jpg|gif|webp)"
+                 r"|\.incoming-.*\.tmp)$")
+DOWNLOADS_B64 = ("[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes("
+                 "(New-Object -ComObject Shell.Application).NameSpace('shell:Downloads')"
+                 ".Self.Path))")
+NONE_FRESH = ("No image arrived in the last 10 minutes. Ctrl+V a screenshot on a laptop with "
+              "laptop/remote-paste, or Taildrop it to this PC, then Alt+V.")
+
+
+def inbox_dir() -> str:
+    return os.environ.get("PASTE_INBOX_DIR") or os.path.expanduser("~/.cache/claude-paste")
+
+
+def state_dir() -> str:
+    state = os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state")
+    return os.path.join(state, "dotclaude", "paste-inbox")
+
+
+def image_ext(data: bytes) -> str | None:
+    """The extension the bytes' magic names, or None for anything Claude Code won't attach."""
+    for magic, ext in MAGIC:
+        if data.startswith(magic):
+            return ext
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "webp"
+    return None
+
+
+def slug(device: str) -> str:
+    return re.sub(r"[^a-z0-9._-]+", "-", device.lower()).strip("-.")[:32].strip("-.") or "device"
+
+
+def prune(inbox: str) -> None:
+    """Delete the inbox's own files (OWN) older than KEEP; leave anything else."""
+    cutoff = time.time() - KEEP
+    for entry in os.scandir(inbox):
+        try:
+            if OWN.match(entry.name) and entry.is_file(follow_symlinks=False) \
+                    and entry.stat(follow_symlinks=False).st_mtime < cutoff:
+                os.unlink(entry.path)
+        except OSError:
+            pass
+
+
+def stalled(signum, frame):
+    raise TimeoutError
+
+
+def receive(device: str, size: int, check: bool) -> int:
+    if size > CAP:
+        return refuse("over 50 MB")
+    signal.signal(signal.SIGALRM, stalled)
+    signal.alarm(STALL)
+    try:
+        data = sys.stdin.buffer.read(CAP + 1)
+    except TimeoutError:
+        return refuse(f"the upload stalled for {STALL} s")
+    finally:
+        signal.alarm(0)
+    if not data:
+        return refuse("nothing on stdin")
+    if len(data) > CAP:
+        return refuse("over 50 MB")
+    if len(data) != size:
+        return refuse(f"got {len(data)} bytes, expected {size} (the upload was cut or changed)")
+    ext = image_ext(data)
+    if ext is None:
+        return refuse("not a PNG, JPEG, GIF or WebP image")
+    inbox = inbox_dir()
+    os.makedirs(inbox, exist_ok=True)
+    os.chmod(inbox, 0o700)
+    stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+    final = os.path.join(inbox, f"{stamp}-{slug(device)}-{secrets.token_hex(3)}.{ext}")
+    if check:
+        if not os.access(inbox, os.W_OK):
+            return refuse(f"can't write {inbox}")
+        print(final)
+        return 0
+    prune(inbox)
+    fd, tmp = tempfile.mkstemp(prefix=".incoming-", suffix=".tmp", dir=inbox)
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
+        os.replace(tmp, final)
+    except BaseException:
+        os.unlink(tmp)
+        raise
+    print(final)
+    return 0
+
+
+def refuse(why: str) -> int:
+    print(f"paste-inbox: refused: {why}", file=sys.stderr)
+    return 1
+
+
+def downloads_dir() -> str | None:
+    """Windows Downloads as a WSL path ($PASTE_INBOX_DOWNLOADS, the cache while that folder
+    exists, else asked of Windows), or None. Failing to write the cache changes nothing."""
+    if "PASTE_INBOX_DOWNLOADS" in os.environ:
+        return os.environ["PASTE_INBOX_DOWNLOADS"] or None
+    cache = os.path.join(state_dir(), "downloads")
+    try:
+        with open(cache) as f:
+            cached = f.read().strip()
+        if os.path.isdir(cached):
+            return cached
+    except OSError:
+        pass
+    found = windows_downloads()
+    if found:
+        try:
+            os.makedirs(os.path.dirname(cache), exist_ok=True)
+            with open(cache, "w") as f:
+                f.write(found + "\n")
+        except OSError:
+            pass
+    return found
+
+
+def windows_downloads() -> str | None:
+    ps = shutil.which("powershell.exe")
+    if not ps:
+        return None
+    try:
+        out = subprocess.run([ps, "-NoProfile", "-NonInteractive", "-Command", DOWNLOADS_B64],
+                             capture_output=True, timeout=10).stdout
+        win = base64.b64decode(out.strip(), validate=True).decode("utf-8")
+        if not re.match(r"^[A-Za-z]:\\", win):
+            return None
+        path = subprocess.run(["wslpath", "-u", win], capture_output=True, text=True,
+                              timeout=5).stdout.strip()
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return None
+    return path if path and os.path.isdir(path) else None
+
+
+def images(folder: str | None, now: float) -> list:
+    """(mtime, path) of each non-empty image file in folder modified within FRESH seconds
+    (SKEW at most ahead)."""
+    if not folder:
+        return []
+    try:
+        entries = list(os.scandir(folder))
+    except OSError:
+        return []
+    found = []
+    for entry in entries:
+        if entry.name.startswith(".") or not entry.name.lower().endswith(IMAGE_EXTS):
+            continue
+        try:
+            if not entry.is_file():
+                continue
+            st = entry.stat()
+        except OSError:
+            continue
+        if st.st_size > 0 and now - FRESH <= st.st_mtime <= now + SKEW:
+            found.append((st.st_mtime, entry.path))
+    return found
+
+
+def newest_image() -> str | None:
+    """An inbox upload from the last RECENT seconds (the laptop's Ctrl+V sends Alt+V right
+    after one), else the newest image in the inbox or Downloads."""
+    now = time.time()
+    inbox = images(inbox_dir(), now)
+    recent = [item for item in inbox if item[0] >= now - RECENT]
+    if recent:
+        return max(recent)[1]
+    found = inbox + images(downloads_dir(), now)
+    return max(found)[1] if found else None
+
+
+def tmux(*args: str, stdin: bytes | None = None) -> str:
+    """One tmux command; its stdout, or "" when tmux fails or is missing."""
+    try:
+        out = subprocess.run(["tmux", *args], input=stdin, capture_output=True, timeout=5).stdout
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return out.decode("utf-8", "replace")
+
+
+def paste(pane: str, client: str) -> int:
+    path = newest_image()
+    if path is None:
+        tmux("display-message", "-c", client, "-d", "5000", NONE_FRESH)
+        return 0
+    if tmux("display-message", "-p", "-t", pane, "#{pane_in_mode}").strip() == "1":
+        tmux("send-keys", "-X", "-t", pane, "cancel")
+    text = f'"{path}"' if re.search(r"\s", path) else path
+    buffer = "claude-paste-" + re.sub(r"[^0-9A-Za-z]", "", pane)
+    tmux("load-buffer", "-b", buffer, "-", stdin=os.fsencode(text))
+    tmux("paste-buffer", "-p", "-d", "-b", buffer, "-t", pane)
+    return 0
+
+
+def crashed(client: str) -> int:
+    """paste's backstop: the traceback to error.log, one line on the client, exit 0."""
+    log = os.path.join(state_dir(), "error.log")
+    try:
+        os.makedirs(os.path.dirname(log), exist_ok=True)
+        with open(log, "a") as f:
+            f.write(time.strftime("%Y-%m-%dT%H:%M:%S ") + traceback.format_exc())
+    except OSError:
+        pass
+    tmux("display-message", "-c", client, "-d", "5000", f"paste-inbox failed; see {log}")
+    return 0
+
+
+def main(argv: list) -> int:
+    args = argv[1:]
+    if args[:1] in (["-h"], ["--help"]):
+        print(USAGE)
+        return 0
+    if args[:1] == ["receive"]:
+        check = args[1:2] == ["--check"]
+        rest = args[2:] if check else args[1:]
+        if len(rest) == 2 and re.fullmatch(r"[1-9][0-9]{0,9}", rest[1]):
+            return receive(rest[0], int(rest[1]), check)
+    if len(args) == 3 and args[0] == "paste":
+        try:
+            return paste(args[1], args[2])
+        except Exception:
+            return crashed(args[2])
+    print("usage:\n" + USAGE, file=sys.stderr)
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))
