@@ -64,7 +64,7 @@ PORT_WAIT_S = 20
 STOP_WAIT_S = 25         # stop waits this long for a SIGTERMed owner to clean up
 PROCS_POLL_S = 5         # a `start` holder checks this often whether Chrome and a page are there
 PROCS_FAILURES = 3       # ... and gives up on the run after this many failed checks in a row
-PAGES_GONE_S = 5         # ... and ends it once Chrome has listed no page for this long
+PAGES_GONE_S = 5         # ... and ends it once two page reads this far apart found none
 SCREEN_LIMIT = 32767     # Windows window coordinates are 16-bit
 BOM = chr(0xFEFF)        # PowerShell may open its stdout with one
 SANDBOX_MSG = ("chrome-bg: run it with the sandbox off (powershell.exe and Chrome's port are "
@@ -625,25 +625,27 @@ def json_version(port, timeout=5):
     return v
 
 
-def browser_ws(port, path, timeout=5):
+def browser_ws(port, path):
     """This run's browser WebSocket URL, refusing a port whose /json/version names another
     browser (the port was reused, or it is someone else's Chrome)."""
-    got = urlparse(str(json_version(port, timeout).get("webSocketDebuggerUrl") or "")).path
+    got = urlparse(str(json_version(port).get("webSocketDebuggerUrl") or "")).path
     if got != path:
         raise WrongChrome(f"chrome-bg: refusing port {port}: its browser WebSocket {got!r} is not "
                           f"this run's {path!r}, so it is another Chrome")
     return f"ws://127.0.0.1:{port}{path}"
 
 
-def page_count(port, path, timeout=2):
+def page_count(port, path):
     """How many page targets the run's browser lists on /json/list, read once its /json/version
     proves the port is still this run's browser. Fail when either read fails: a reading that
     isn't there is never zero pages."""
+    what = "version"
     try:
-        browser_ws(port, path, timeout)
-        targets = json_get(port, "list", timeout)
-    except OSError as e:
-        raise Fail(f"chrome-bg: 127.0.0.1:{port}/json/list: {e!r}") from None
+        browser_ws(port, path)
+        what = "list"
+        targets = json_get(port, "list")
+    except (OSError, ValueError) as e:  # ValueError: urlparse on a malformed WebSocket URL
+        raise Fail(f"chrome-bg: 127.0.0.1:{port}/json/{what}: {e!r}") from None
     if not isinstance(targets, list):
         raise Fail(f"chrome-bg: 127.0.0.1:{port}/json/list is not a list")
     return sum(1 for t in targets if isinstance(t, dict) and t.get("type") == "page")
@@ -1277,8 +1279,8 @@ def holder(rid, args, ttl, cwd, ready):
     """The detached owner of a `start` run: holds the supervisor until stop (SIGTERM), the TTL,
     Chrome's exit (a fixture's own browser.close(): `procs` every PROCS_POLL_S comes back empty),
     its last page closing (you closed the window: --no-startup-window keeps a windowless Chrome
-    running, so /json/list has listed no page for PAGES_GONE_S) or the supervisor's exit, then
-    ends the run. Reports ready or failed on the `ready` pipe.
+    running, so two /json/list reads PAGES_GONE_S apart found no page) or the supervisor's exit,
+    then ends the run. Reports ready or failed on the `ready` pipe.
     It keeps the cwd it was started in, so a relative argv still proves it is chrome-bg. Forked
     from main(), it keeps the stop signals blocked and polls for them like any other wait."""
     fd = os.open(holder_log(rid), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
@@ -1307,18 +1309,26 @@ def holder(rid, args, ttl, cwd, ready):
               "pid": run.rec["pid"]})
         say(f"ready at {run.url}")
         why, next_poll, failed = "TTL reached", time.monotonic() + PROCS_POLL_S, 0
-        empty_since = None  # when an unbroken run of polls listing no page began
+        empty_since = None  # when the first of an unbroken run of reads finding no page ended
         while time.time() < run.rec["expires"]:
             if run.sup.p.poll() is not None:
                 why = "the supervisor exited"  # finish() then kills the run by its dir
                 break
-            polled = time.monotonic()  # each poll's start: starts are PROCS_POLL_S apart
-            if polled >= next_poll:
-                next_poll = polled + PROCS_POLL_S
+            started = time.monotonic()
+            if started >= next_poll:
+                next_poll = started + PROCS_POLL_S
+                # The page read goes first, at the poll's start, so two reads that found no page
+                # are PROCS_POLL_S apart however long procs takes. This process read the port and
+                # path from the run's own DevToolsActivePort.
+                try:
+                    pages, unread = page_count(run.rec["port"], run.rec["wsPath"]), None
+                except Fail as e:
+                    pages, unread = None, e
+                read = time.monotonic()
                 try:
                     procs = parse_procs(run.sup.call("procs"))
-                    # This process read the port and path from the run's own DevToolsActivePort.
-                    pages = page_count(run.rec["port"], run.rec["wsPath"]) if procs else None
+                    if procs and unread:
+                        raise unread  # Chrome is there, so the failed read is a failed poll
                 except Fail as e:
                     failed += 1
                     empty_since = None  # a failed poll breaks the run of empty ones
@@ -1334,8 +1344,8 @@ def holder(rid, args, ttl, cwd, ready):
                     if pages:
                         empty_since = None
                     elif empty_since is None:
-                        empty_since = polled
-                    elif polled - empty_since >= PAGES_GONE_S:
+                        empty_since = read
+                    elif started - empty_since >= PAGES_GONE_S:  # no page all that time
                         why = "its last page closed"
                         break
             take_signal(min(0.5, PROCS_POLL_S, max(0.05, run.rec["expires"] - time.time())))

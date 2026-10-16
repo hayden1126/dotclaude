@@ -715,6 +715,71 @@ class Trust(unittest.TestCase):
         self.assertIn("chrome-bg run", out.getvalue())
 
 
+class PageCount(unittest.TestCase):
+    """page_count against a stub DevTools HTTP server: only pages count, and every failure is a
+    Fail naming the read that failed, never a crash or a zero."""
+
+    def serve(self, routes):
+        """A server answering each path in routes with (status, body); its port."""
+        import http.server
+        import threading
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                status, body = routes.get(self.path, (404, b""))
+                self.send_response(status)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *a):
+                pass
+
+        srv = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        self.addCleanup(srv.server_close)
+        self.addCleanup(srv.shutdown)
+        return srv.server_address[1]
+
+    def version(self, port, ws_path):
+        return (200, json.dumps({"webSocketDebuggerUrl": f"ws://127.0.0.1:{port}{ws_path}"}).encode())
+
+    def test_only_pages_count(self):
+        routes = {}
+        port = self.serve(routes)
+        routes["/json/version"] = self.version(port, "/devtools/browser/b")
+        routes["/json/list"] = (200, json.dumps([{"type": "page"}, {"type": "service_worker"},
+                                                 {"type": "iframe"}, {"type": "page"}, 7]).encode())
+        self.assertEqual(cb.page_count(port, "/devtools/browser/b"), 2)
+
+    def test_failures_name_the_read(self):
+        routes = {}
+        port = self.serve(routes)
+        good = self.version(port, "/devtools/browser/b")
+        cases = [
+            ("a malformed WebSocket URL", {"/json/version": (200, b'{"webSocketDebuggerUrl": "ws://[x"}')},
+             "/json/version"),
+            ("another browser", {"/json/version": self.version(port, "/devtools/browser/other")},
+             "so it is another Chrome"),
+            ("a 500", {"/json/version": good, "/json/list": (500, b"")}, "/json/list answered 500"),
+            ("not JSON", {"/json/version": good, "/json/list": (200, b"<html>")}, "/json/list"),
+            ("not a list", {"/json/version": good, "/json/list": (200, b"{}")}, "/json/list is not a list"),
+        ]
+        for name, got, says in cases:
+            with self.subTest(name):
+                routes.clear()
+                routes.update(got)
+                with self.assertRaises(cb.Fail) as cm:
+                    cb.page_count(port, "/devtools/browser/b")
+                self.assertIn(says, str(cm.exception))
+        with socket.socket() as sock:  # a port nothing listens on: the version read is refused
+            sock.bind(("127.0.0.1", 0))
+            dead = sock.getsockname()[1]
+        with self.assertRaises(cb.Fail) as cm:
+            cb.page_count(dead, "/devtools/browser/b")
+        self.assertIn(f"{dead}/json/version: ConnectionRefusedError", str(cm.exception))
+
+
 # The Windows side, faked. FAKE_SUP speaks chrome-bg.ps1's protocol (PLAN.md "Supervisor
 # protocol") over stdin and stdout and answers only with CONTRACT's replies. On `launch` it starts
 # FAKE_CHROME (HTTP /json/version and /json/list plus a CDP WebSocket, and the DevToolsActivePort
@@ -723,8 +788,9 @@ class Trust(unittest.TestCase):
 # under --root: launch-<id> (Chrome's args), cdp-<id> (each CDP call), list-<id> (each /json/list
 # answer), place-<id>, hello-<id>, eof-<id> (the supervisor saw stdin EOF), kill-<id> (a one-shot
 # -Kill ran), session-<id> (the supervisor's pid and session id), alive-<id> (while "Chrome" runs)
-# and chrome-<id>.pid. A test scripts /json/list in pages-<id>: one answer per read ("0", "1", or
-# "fail" for a 500), the last one kept.
+# and chrome-<id>.pid. /json/list holds one page per createTarget less each closeTarget, unless a
+# test scripts it in pages-<id>: one answer per read ("0", "1", or "fail" for a 500), the last one
+# kept. list-<id> notes each answer and the time.time() it went out.
 FAKE_COMMON = r'''
 import json, os, re, sys, time
 
@@ -899,7 +965,7 @@ profile = args[args.index("--profile") + 1]
 guid = str(uuid.uuid4())
 bounds = {}
 loaded_reads = [0]  # page0's load-check evaluates so far (FAKE_LOADED_AFTER)
-pages = [0]  # unless pages-<rid> says otherwise, /json/list holds one page per createTarget
+pages = [0]  # page targets open, unless pages-<rid> says otherwise
 srv = socket.socket()
 srv.bind(("127.0.0.1", 0))
 srv.listen(8)
@@ -988,6 +1054,9 @@ def dispatch(msg):
         return {"result": {}}
     if m == "Browser.close":
         return {"result": {}}
+    if m == "Target.closeTarget":
+        pages[0] = max(0, pages[0] - 1)
+        return {"result": {"success": True}}
     if m == "Target.attachToTarget":
         return {"result": {"sessionId": "S1"}}
     if m == "Page.bringToFront":
@@ -1032,7 +1101,7 @@ def handle(c):
             return
         if path == "/json/list":
             answer = list_answer()
-            note("list-" + rid, answer)
+            note("list-" + rid, "%s %.3f" % (answer, time.time()))
             if answer == "fail":
                 c.sendall(b"HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\n\r\n")
                 return
@@ -1092,7 +1161,7 @@ while True:
 # (SigIgn) to ROOT/sigign.log before exec: a Python process ignores SIGPIPE whatever it
 # inherited, so only a shell can tell.
 DRIVER = r'''
-import importlib.machinery, importlib.util, os, sys
+import importlib.machinery, importlib.util, os, sys, time
 cli, root = sys.argv[1], sys.argv[2]
 loader = importlib.machinery.SourceFileLoader("chrome_bg", cli)
 spec = importlib.util.spec_from_loader("chrome_bg", loader)
@@ -1120,6 +1189,23 @@ if os.environ.get("DRIVER_STOP_WAIT"):
     mod.STOP_WAIT_S = float(os.environ["DRIVER_STOP_WAIT"])
 if os.environ.get("DRIVER_PAGES_GONE"):
     mod.PAGES_GONE_S = float(os.environ["DRIVER_PAGES_GONE"])
+if os.environ.get("DRIVER_STALL_PROCS"):
+    # The first procs call made while the next scripted /json/list answer is "0" stalls this long:
+    # a holder that read the pages after procs would read that first empty list late.
+    call, stalled = mod.Supervisor.call, []
+
+    def stalling_call(self, op, *a, **kw):
+        if op == "procs" and not stalled:
+            try:
+                with open(os.path.join(root, "pages-" + self.rid)) as f:
+                    upcoming = f.read().split()[:1]
+            except OSError:
+                upcoming = []
+            if upcoming == ["0"]:
+                stalled.append(True)
+                time.sleep(float(os.environ["DRIVER_STALL_PROCS"]))
+        return call(self, op, *a, **kw)
+    mod.Supervisor.call = stalling_call
 if "DRIVER_TTY_FG" in os.environ:  # stands in for /dev/tty's foreground process group check
     mod.in_tty_foreground = lambda: os.environ["DRIVER_TTY_FG"] == "1"
 sys.exit(mod.main(sys.argv[3:]))
@@ -1916,20 +2002,27 @@ class Live(unittest.TestCase):
         self.wait_for(lambda: self.has("eof-" + info["id"]) and not self.records(),
                       what="the holder to see Chrome gone and stop")
 
-    def start_scripted(self, gone_s, answers):
+    def start_scripted(self, gone_s, answers, env=None):
         """A `start` run whose /json/list answers follow `answers`, with PAGES_GONE_S = gone_s:
-        (run id, holder log path, when the script went in)."""
-        r = self.cli("start", "--json", env={"DRIVER_PAGES_GONE": str(gone_s)})
+        (run id, holder log path)."""
+        r = self.cli("start", "--json", env={"DRIVER_PAGES_GONE": str(gone_s), **(env or {})})
         self.assertEqual(r.returncode, 0, r.stderr)
         rid = json.loads(r.stdout)["id"]
         seq = os.path.join(self.root, "pages-" + rid)
         with open(seq + ".tmp", "w") as f:
             f.write(" ".join(answers))
         os.replace(seq + ".tmp", seq)
-        return rid, os.path.join(self.recdir, rid + ".holder.log"), time.monotonic()
+        return rid, os.path.join(self.recdir, rid + ".holder.log")
 
     def lists(self, rid):
-        return self.notes("list-" + rid) if self.has("list-" + rid) else []
+        """The /json/list answers so far: (answer, time.time() it went out)."""
+        if not self.has("list-" + rid):
+            return []
+        return [(a, float(t)) for a, t in (ln.split() for ln in self.notes("list-" + rid))]
+
+    def holder_log_says(self, log, text):
+        with open(log) as f:
+            return text in f.read()
 
     def assert_lives_through(self, rid, log, answers):
         """Every scripted answer read and two more polls, and the run still up."""
@@ -1938,44 +2031,59 @@ class Live(unittest.TestCase):
         self.assertFalse(self.has("eof-" + rid), "the holder ended the run")
         [rec] = self.records()
         self.assertTrue(cb.owner_proven(rec), "the holder still holds the run")
-        with open(log) as f:
-            self.assertNotIn("its last page closed", f.read())
+        self.assertFalse(self.holder_log_says(log, "its last page closed"))
         self.assertIn("stopped by its owner", self.cli("stop", rid).stdout)
 
     def test_holder_ends_when_its_last_page_closes(self):
-        # You closed the window: Chrome runs on windowless (--no-startup-window), its /json/list
-        # holds no page (a service worker is no page), and procs still lists it.
-        rid, log, t0 = self.start_scripted(1, ["0"])
+        # A fixture closed its last page, or you closed the window: Chrome runs on windowless
+        # (--no-startup-window), procs still lists it, and /json/list holds only a service
+        # worker, which is no page.
+        r = self.cli("start", "--json", env={"DRIVER_PAGES_GONE": "1"})
+        self.assertEqual(r.returncode, 0, r.stderr)
+        info = json.loads(r.stdout)
+        rid, log = info["id"], os.path.join(self.recdir, info["id"] + ".holder.log")
+        path = urlparse(cb.json_version(info["port"])["webSocketDebuggerUrl"]).path
+        cdp = cb.CDP(cb.browser_ws(info["port"], path))
+        t0 = time.time()
+        cdp.send("Target.closeTarget", {"targetId": "T1"})  # page0 (the fake doesn't check ids)
+        cdp.close()
         self.wait_for(lambda: self.has("eof-" + rid) and not self.records(),
                       what="the holder to see no page and stop")
-        self.assertGreaterEqual(time.monotonic() - t0, 1, "it waits PAGES_GONE_S first")
-        self.assertGreaterEqual(len(self.lists(rid)), 2)
+        empty = [t for a, t in self.lists(rid) if t > t0]
+        self.assertGreaterEqual(len(empty), 2)
+        self.assertGreaterEqual(empty[-1] - empty[0], 1, "two empty reads PAGES_GONE_S apart")
         self.assertFalse(self.has("alive-" + rid))
-        with open(log) as f:
-            text = f.read()
-        self.assertIn("its last page closed", text)
-        self.assertIn("stopped", text)
+        self.assertTrue(self.holder_log_says(log, "its last page closed"))
+        self.assertTrue(self.holder_log_says(log, "stopped"))
+
+    def test_a_slow_procs_never_shortens_the_wait(self):
+        # procs stalls 1.5 s in the poll before the first empty read. Read after procs, against
+        # the poll's start, that read would count 1.5 s it never saw, and the run would end with
+        # its empty reads 0.5 s apart.
+        rid, log = self.start_scripted(2, ["1", "1", "0"], env={"DRIVER_STALL_PROCS": "1.5"})
+        self.wait_for(lambda: self.has("eof-" + rid) and not self.records(), what="the end")
+        empty = [t for a, t in self.lists(rid) if a == "0"]
+        self.assertGreaterEqual(empty[-1] - empty[0], 2 - 0.05, "the empty reads span PAGES_GONE_S")
+        self.assertTrue(self.holder_log_says(log, "its last page closed"))
 
     def test_a_page_back_within_pages_gone_s_keeps_the_run(self):
-        # Each spell of no page is under PAGES_GONE_S (5 polls at 0.2 s against 2 s), all three
+        # Each spell of no page is under PAGES_GONE_S (5 polls at 0.2 s against 3 s), all three
         # together are over it: a page back must restart the clock.
         answers = ["0"] * 6 + ["1"] + ["0"] * 6 + ["1"] + ["0"] * 6 + ["1"]
-        rid, log, _ = self.start_scripted(2, answers)
+        rid, log = self.start_scripted(3, answers)
         self.assert_lives_through(rid, log, answers)
 
     def test_a_failed_page_read_never_counts_as_zero_pages(self):
         # As above, with failed reads between the spells: a failure is no page count, so it
         # neither counts toward PAGES_GONE_S nor lets the spells join.
         answers = ["0"] * 6 + ["fail"] + ["0"] * 6 + ["fail"] + ["0"] * 6 + ["1"]
-        rid, log, _ = self.start_scripted(2, answers)
+        rid, log = self.start_scripted(3, answers)
         self.assert_lives_through(rid, log, answers)
-        with open(log) as f:
-            text = f.read()
-        self.assertIn("poll failed (1 in a row)", text)
-        self.assertIn("/json/list answered 500", text)
+        self.assertTrue(self.holder_log_says(log, "poll failed (1 in a row)"))
+        self.assertTrue(self.holder_log_says(log, "/json/list answered 500"))
 
     def test_holder_ends_after_three_failed_page_reads(self):
-        rid, log, _ = self.start_scripted(60, ["fail"])
+        rid, log = self.start_scripted(60, ["fail"])
         self.wait_for(lambda: self.has("eof-" + rid) and not self.records(), what="the end")
         with open(log) as f:
             text = f.read()
