@@ -194,7 +194,7 @@ sees it.
 | `hooks/session-registry.sh` | SessionStart/SessionEnd hook: records which session is open in which tmux tab (`$XDG_STATE_HOME/dotclaude/open-sessions/`), with the window's tab bar placement (`@tab_place`, as `place`), for `claude-restore`; deletes the entry on `/exit` or `/clear`, marks it when the window or claude is killed; then hands each payload to `claude-saved` (Star and Shelve; the star follows `/clear`); does nothing outside tmux | symlink `~/.claude/hooks/session-registry.sh` |
 | `hooks/session-summary.sh` | Stop hook: regenerates a 1-2 sentence session summary via a direct Haiku Messages-API call (`hooks/haiku.py`: Claude subscription OAuth token, stdlib urllib, no API key/jq), detached so it never blocks; caches the summary to `<config-dir>/session-summaries/<session_id>.txt` for the status-line widget and a short (`<=32`-char) tab label to `<session_id>.title.txt` for `session-title.sh` | symlink `~/.claude/hooks/session-summary.sh` |
 | `hooks/overwrite-guard.sh` | PreToolUse(Write) hook: denies a Write over a file this session hasn't read, or one that cuts a file of 1 KB or more to under a fifth; a shim over `hooks/overwrite_guard.py`; fails open | symlink `~/.claude/hooks/overwrite-guard.sh` and `overwrite_guard.py` |
-| `hooks/lane-identity.sh` | SessionStart/Stop/SessionEnd hook: tells a lane session its identity and registers it, prints one board line in a lanes repo's main checkout, mirrors a lane's record; a shim over `hooks/lane_identity.py`; fails open | symlink `~/.claude/hooks/lane-identity.sh` and `lane_identity.py` |
+| `hooks/lane-identity.sh` | SessionStart/Stop/SessionEnd hook: tells a lane session its identity and registers it, prints one board line in a lanes repo's main checkout and relinks the lead record on a proven resume, /clear or /pass of the lead, mirrors a lane's record; a shim over `hooks/lane_identity.py`; fails open | symlink `~/.claude/hooks/lane-identity.sh` and `lane_identity.py` |
 | `hooks/lane-guard.sh` | PreToolUse(Edit/Write/MultiEdit) hook: denies writes to another lane's record or the lanes CLI's data, and relative identity in status files; a shim over `hooks/lane_guard.py`; fails open | symlink `~/.claude/hooks/lane-guard.sh` and `lane_guard.py` |
 | `hooks/delete-guard.sh` | PreToolUse(Bash) hook, sandbox-off commands only: denies a delete whose path uses a variable the command didn't set, a command substitution that would widen it if empty, or a top-level or home tree; a shim over `hooks/delete_guard.py`; fails open | symlink `~/.claude/hooks/delete-guard.sh` and `delete_guard.py` |
 | `hooks/excluded-guard.sh` | PreToolUse(Bash) hook, excluded commands only: refuses one whose cwd resolves to another repo, whose git config or PATH a sandboxed session could write, or a `claude` or `codex` call outside the project root; a shim over `hooks/excluded_guard.py`; fails closed for excluded heads | symlink `~/.claude/hooks/excluded-guard.sh` and `excluded_guard.py` |
@@ -604,8 +604,10 @@ need nothing extra.
   repo). In a lane it tells the session its lane id, what its worktree has checked out (a branch, or
   a detached HEAD's commit), claims, port and record, and registers it in `lane.json`; after a
   compact it adds "re-read your record". In the main checkout of a lanes repo it prints one board
-  line. On Stop and SessionEnd it mirrors the lane's `.lane/` into the common dir. Silent in a repo
-  with no lanes; fails open (see Lanes, below).
+  line, and on SessionStart and Stop it runs `lane lead` when the session proves it continues the
+  recorded lead (a resume, a /clear or a /pass successor). On Stop and SessionEnd it mirrors the
+  lane's `.lane/` into the common dir. Silent in a repo with no lanes; fails open (see Lanes,
+  below).
 - **PreToolUse(`Edit|Write|MultiEdit`): `lane-guard.sh`** (in this repo). In a lanes repo it
   denies a write to another lane's record or to the CLI's data under `<common-dir>/lanes/`, and
   relative identity ("another session", "this session") in a lane record or the root STATUS.md.

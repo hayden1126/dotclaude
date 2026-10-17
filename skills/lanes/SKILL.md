@@ -83,21 +83,25 @@ an unregistered worktree: `lane whoami` tells you which.
    finishes its handoff. Then, as its last act (the lead's `lane done` ends its session), it
    sends the lead `merged #N`, to what a bare `lane addr lead` prints. It says nothing more about
    the merge to Hayden and never proposes `lane done`: the lead runs the rest (The lead, step 7).
-   When `lane addr lead` refuses (no lead running, or several sessions and none picked), it
-   tells Hayden once that #N merged, with the refusal's way to pick the lead if it gives one.
+   When `lane addr lead` refuses (no lead running, several sessions and none picked, or the
+   lead stopped), it tells Hayden once that #N merged, with the refusal's way to pick the lead
+   or the stopped lead's window if it gives one.
 7. **Close:** `lane done <id>` refuses an unmerged branch, a lane made by `lane new` with no
    commits past its base, and, while its worktree exists, a lane whose record's Next has a
    `Keep open:` line, live session or not (pass `--abandon` to close any of them anyway; it
    asks). It ends what provably
    belongs to the lane, so its open tab needs no closing by hand:
-   - its Claude sessions get SIGTERM (a `lane open` tab closes with its claude);
+   - its Claude sessions get SIGTERM (a `lane open` tab closes with its claude), and a stopped
+     one SIGCONT right after, with its stopped tree (Ctrl+Z stops the whole job), so the
+     SIGTERM lands;
    - what runs under them ends with them;
    - a restored tab's shell gets SIGHUP;
    - leftovers started with a lane session's id get SIGTERM;
    - survivors get SIGTERM, then SIGKILL.
 
-   Every signal but a session's first is checked just before it is sent, and held (named in
-   the refusal) while anything in the target's tree has a file open in the git dir. The proof
+   Every signal but a session's first (and the SIGCONTs that land it) is checked just before
+   it is sent, and held (named in the refusal) while anything in the target's tree has a file
+   open in the git dir. The proof
    comes from /proc and Claude Code's own session files and transcripts, never from
    `lane.json`. Before any signal, it refuses, by name:
    - anything else with its cwd in the lane;
@@ -136,9 +140,13 @@ inside a lane.
 side chat. The lead is the last one to act as lead. A bare `lane init`, `new`, `adopt`, `open` (not
 `--print`) or `done` that succeeds from an interactive session in the main checkout records it in the state
 dir, where no lane can write, and `lane lead` takes it on purpose (Hayden: `! lane lead` at its
-prompt). A /clear or a /pass in its pane keeps it; after a tmux restart it acts again. Looks
-(`ls`, `addr`) never take it. `lane addr lead` prints the lead's address, `lane ls` names a
-crowded main checkout under the board, and the tab bar calls its other tabs `lead²`, `lead³`.
+prompt). A /clear, a /pass in its pane, or a resume of its session (in another tab, or the tab a
+tmux restart restores) keeps it: the lane-identity hook relinks the record on proof, so a restart
+after a /pass keeps it too. Otherwise it acts again. Looks (`ls`, `addr`) never take it.
+`lane addr lead` prints the lead's address, `lane ls` names a crowded main checkout under the
+board, and the tab bar calls its other tabs `lead²`, `lead³`. A lead stopped with Ctrl+Z answers
+nothing until `fg`: `addr` and the board name its window instead, and a lone side chat never
+inherits the lead from it.
 
 1. **Triage.** Collect the requests. Explore the code to estimate the files each one touches,
    group requests whose files overlap, and pick lane ids and branches.
@@ -241,22 +249,23 @@ what").
 | Command | What it does |
 |---|---|
 | `lane whoami` | your lane id, `main`, `unregistered` or `plain` (`--json` for scripts) |
-| `lane ls` | the board: branch, ahead/behind, PR, port, claims, live sessions, context (CTX: `312k*` past the auto-pass soft tier, `523k!` past hard), state (STATE: busy, idle, waiting, shell; message a lane idle past soft to run /pass), tmux window, flags; then any held locks, a main checkout with two or more live sessions (each one's window, the lead first) and the install hold |
+| `lane ls` | the board: branch, ahead/behind, PR, port, claims, live sessions, context (CTX: `312k*` past the auto-pass soft tier, `523k!` past hard), state (STATE: busy, idle, waiting, shell; message a lane idle past soft to run /pass), tmux window, flags; then any held locks, a main checkout with two or more live sessions (each one's window, the lead first) or a stopped lead (its window to `fg` it in), and the install hold |
 | `lane ls --requests` | request to lane, from claims only |
 | `lane who 42` | the lane that claims #42, or "unclaimed" |
 | `lane claim 42` / `lane release 42` | claim or drop a request for your lane |
 | `lane note "<text>"` | append a timestamped line to your record's State |
 | `lane asks` | every lane's open "Asks for Hayden", one list |
 | `lane open <id>` | the lane's session in a new tmux window, in plan mode; `--model`/`--effort` override init's defaults for the launch; `--focus` switches to it, or to the live session's window; `--print` shows the tmux command |
-| `lane addr <id>` / `lane addr lead` | `uds:<socket>`, the SendMessage address of the lane's (or the lead's) one live session; refuses on none or several, except that `lead` picks the recorded lead among several (and refuses with the way to pick when none is). Bare: it must see other processes |
+| `lane addr <id>` / `lane addr lead` | `uds:<socket>`, the SendMessage address of the lane's (or the lead's) one live session; refuses on none or several, except that `lead` picks the recorded lead or its resume among several (and refuses with the way to pick when none is). A stopped session (Ctrl+Z) is never an address: the refusal names its window to `fg` it in. Bare: it must see other processes |
 | `lane lead` | makes the session that runs it the lead (from the main checkout only; Hayden: `! lane lead` at its prompt). Bare |
 | `lane lock gate -- <cmd>` | run `<cmd>` under the named lock, waiting while another run holds it; `--wait SECS` gives up with exit 75 (docs/lanes.md: telling it from the command's own 75) |
 | `lane new` / `adopt` / `done` | lifecycle, above |
 
 Board flags: `stale` (worktree gone; its claims are void), `rebase` (behind the base),
-`conflict` (two live lanes claim one request), `orphan` (no live session), `handoff?` (the record
-may be behind, as The lead step 5 spells out: a PR merged after its last write, a commit is
-newer, or a session that started after it has ended; on whenever one of those can't be read),
+`conflict` (two live lanes claim one request), `orphan` (no live session), `stopped` (a session
+there is stopped with Ctrl+Z: `fg` it in its window; it still holds the lane), `handoff?` (the
+record may be behind, as The lead step 5 spells out: a PR merged after its last write, a commit
+is newer, or a session that started after it has ended; on whenever one of those can't be read),
 `setup-failed` (half made: it still holds its port, claims and a cap slot; finish it with
 `lane adopt <path>`), `closing` (a `lane done` stopped partway; rerun it).
 
