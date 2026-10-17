@@ -5,15 +5,17 @@
 ; this laptop never arrives. This takes Ctrl+V only while three things hold: Windows Terminal is
 ; the active window, its title matches the `title` pattern in remote-paste.ini (default
 ; ^view-\d+\s: the PC's tmux titles a remote device's session view-<pid>, set-titles-string
-; "#S · ..." in dotclaude tmux/claude.conf), and the clipboard holds an image (CF_DIB) or one
-; copied file of any type that is not a folder (CF_HDROP), and no text. Otherwise Ctrl+V never
-; reaches this script. On a hit it runs remote-paste.ps1 hidden, which uploads the image or file
-; to the PC's inbox; then it sends Alt+V, which the PC's tmux turns into a bracketed paste of its
-; path there (tmux/paste-inbox): Claude Code attaches an image, and reads another file when asked.
-; remote-paste.ps1 exiting 3 (the clipboard changed under it) gives Windows Terminal its own
-; paste; a failure shows its reason in a tooltip. Alt+V or that paste goes only to the tab that
-; was pressed: if another window or tab (another view-<pid>) took focus during the upload, the
-; tooltip says so instead.
+; "#S · ..." in dotclaude tmux/claude.conf), and the clipboard holds an image (CF_DIB) or one copied
+; file of any type (CF_HDROP), and no text. Otherwise Ctrl+V never reaches this script. That check
+; reads no disk, since it runs inside the keyboard hook on every Ctrl+V in a PC tab (a dead
+; network share can block for seconds, and Windows drops a hook that stalls), so a copied folder
+; gets Windows Terminal's own paste from the hotkey. Otherwise it runs remote-paste.ps1 hidden,
+; which uploads the image or file to the PC's inbox; then it sends Alt+V, which the PC's tmux
+; turns into a bracketed paste of its path there (tmux/paste-inbox): Claude Code attaches an
+; image, and reads another file when asked. remote-paste.ps1 exiting 3 (the clipboard changed
+; under it, or the file is gone) gives Windows Terminal its own paste; a failure shows its reason
+; in a tooltip. Alt+V or that paste goes only to the tab that was pressed: if another window or
+; tab (another view-<pid>) took focus during the upload, the tooltip says so instead.
 ; Installed into %LOCALAPPDATA%\remote-paste, with a Startup shortcut, by
 ; install-remote-paste.ps1.
 
@@ -32,9 +34,9 @@ ActiveTerminal() => WinActive("ahk_exe WindowsTerminal.exe")
 
 ImageOnClipboard() => DllCall("IsClipboardFormatAvailable", "UInt", 8)   ; CF_DIB
 
-; The one copied file's path, or "" for none, several or a folder. CF_HDROP 15 holds copied
-; files, whose paths A_Clipboard gives one per line (reading it opens the clipboard, which throws
-; when another app holds it: then Ctrl+V stays native).
+; The one copied file or folder's path, or "" for none or several; no disk read. CF_HDROP 15
+; holds copied files, whose paths A_Clipboard gives one per line (reading it opens the clipboard,
+; which throws when another app holds it: then Ctrl+V stays native).
 CopiedFile() {
     if !DllCall("IsClipboardFormatAvailable", "UInt", 15)
         return ""
@@ -42,8 +44,7 @@ CopiedFile() {
         path := A_Clipboard
     catch
         return ""
-    return RegExMatch(path, "^[^\r\n]+$") && FileExist(path) && !InStr(FileExist(path), "D")
-        ? path : ""
+    return RegExMatch(path, "^[^\r\n]+$") ? path : ""
 }
 
 UploadOnClipboard() {
@@ -60,8 +61,14 @@ RemotePaste() {
     hwnd := ActiveTerminal()
     view := PcView(hwnd)
     name := ""
-    if !ImageOnClipboard()
-        SplitPath CopiedFile(), &name
+    if !ImageOnClipboard() {
+        path := CopiedFile()
+        if InStr(FileExist(path), "D") {
+            Send("^v")
+            return
+        }
+        SplitPath path, &name
+    }
     ToolTip "Sending " (name != "" ? name : "the image") " to the PC..."
     code := RunWait('powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Sta -File "'
         A_ScriptDir '\remote-paste.ps1"', , "Hide")

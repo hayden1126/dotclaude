@@ -756,9 +756,18 @@ class Laptop(unittest.TestCase):
     def test_the_hotkey_takes_one_copied_file_but_not_a_folder(self):
         ahk = self.read("remote-paste.ahk")
         self.assertIn('RegExMatch(path, "^[^\\r\\n]+$")', ahk)       # one path, not several
-        self.assertIn('!InStr(FileExist(path), "D")', ahk)
         self.assertIn("#HotIf PcView(ActiveTerminal()) != \"\" && UploadOnClipboard()", ahk)
         self.assertNotIn("png|jpe?g", ahk)                         # any type now
+        # the #HotIf runs on every Ctrl+V in a PC tab, inside the keyboard hook: no disk there
+        # (a dead network share can block for seconds, and Windows drops a hook that stalls),
+        # so the folder check runs in the hotkey, which hands a folder to Windows Terminal
+        for name in ("UploadOnClipboard", "CopiedFile", "ImageOnClipboard", "PcView",
+                     "ActiveTerminal"):
+            with self.subTest(function=name):
+                body = re.search(r"^%s\(.*?(?=^\S)" % name, ahk, re.M | re.S)[0]
+                self.assertNotIn("FileExist", body)
+        remote = re.search(r"^RemotePaste\(\) \{.*?^\}", ahk, re.M | re.S)[0]
+        self.assertRegex(remote, r'if InStr\(FileExist\(path\), "D"\) \{\n\s+Send\("\^v"\)')
         with open(os.path.join(REPO, "setup-tmux.sh")) as f:
             self.assertIn('"$HOME/.local/bin/paste-inbox"', f.read())
 
@@ -920,6 +929,48 @@ class LaptopPowerShell(unittest.TestCase):
         self.assertEqual(p.stdout.decode().split("\r\n")[:3],
                          ["leaf=True", "hidden=hidden [1].txt|hidden bytes",
                           "open=open.xlsx|open bytes"], out)
+
+    def test_a_file_over_the_cap_is_refused_before_any_byte_is_read(self):
+        # the size comes from the opened stream: Get-Item reports a symlink's own length (0)
+        # while File.Open follows it. A symlink needs admin or Developer Mode; without either,
+        # only the plain file runs.
+        with open(os.path.join(LAPTOP, "remote-paste.ps1"), encoding="utf-8") as f:
+            func = re.search(r"^function Read-CopiedFile\b.*?^\}", f.read(), re.M | re.S)[0]
+        command = "\n".join([
+            "Set-StrictMode -Version 3", "$ErrorActionPreference = 'Stop'",
+            "function Fail([string]$why) { throw \"FAIL: $why\" }", func,
+            "function Try-Read([string]$label, [string]$path) {",
+            "  $ms = New-Object IO.MemoryStream",
+            "  try { Read-CopiedFile $path $ms | Out-Null; $label + '=read ' + $ms.Length }",
+            "  catch { $label + '=' + $_.Exception.Message + ' after ' + $ms.Length }",
+            "}",
+            "$dir = Join-Path $env:TEMP ('rp-test-' + [guid]::NewGuid())",
+            "New-Item -ItemType Directory -Path $dir | Out-Null",
+            "try {",
+            "  $big = Join-Path $dir 'big.pdf'",
+            "  $fs = [IO.File]::Create($big); $fs.SetLength(60MB); $fs.Dispose()",
+            "  Try-Read 'plain' $big",
+            "  $link = Join-Path $dir 'link.pdf'",
+            "  try { New-Item -ItemType SymbolicLink -Path $link -Target $big | Out-Null }",
+            "  catch { 'link=unprivileged' }",
+            "  if (Test-Path -LiteralPath $link) { Try-Read 'link' $link }",
+            "} finally { Remove-Item -LiteralPath $dir -Recurse -Force }"])
+        p = subprocess.run([self.ps, "-NoProfile", "-NonInteractive", "-EncodedCommand",
+                            base64.b64encode(command.encode("utf-16-le")).decode()],
+                           capture_output=True, timeout=60)
+        out = p.stdout.decode("utf-8", "replace") + p.stderr.decode("utf-8", "replace")
+        if "UtilConnectUnix" in out:
+            self.skipTest("the Bash sandbox blocks WSL interop; run outside it")
+        lines = [line for line in p.stdout.decode().split("\r\n") if line]
+        self.assertEqual(lines[0], "plain=FAIL: big.pdf is over 50 MB after 0", out)
+        self.assertIn(lines[1], ("link=unprivileged", "link=FAIL: link.pdf is over 50 MB after 0"),
+                      out)
+
+    def test_the_size_check_reads_the_opened_stream(self):
+        with open(os.path.join(LAPTOP, "remote-paste.ps1"), encoding="utf-8") as f:
+            func = re.search(r"^function Read-CopiedFile\b.*?^\}", f.read(), re.M | re.S)[0]
+        self.assertIn("if ($stream.Length -gt 50MB)", func)
+        self.assertNotIn("$file.Length", func)
 
 
 class RealTmux(unittest.TestCase):

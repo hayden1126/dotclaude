@@ -61,12 +61,18 @@ function Get-Name64([string]$name) {
 
 # One copied file's bytes into $into; returns its FileInfo. -Force, or Get-Item -LiteralPath
 # can't see a hidden file. Opened shared for writing and deleting too, as Explorer copies, so a
-# document open in Office still goes (a read that shares only reading would refuse it).
+# document open in Office still goes (a read that shares only reading would refuse it). The size
+# is the opened stream's, checked before any byte is read: a symlink's FileInfo says 0 while
+# File.Open follows the link.
 function Read-CopiedFile([string]$path, [System.IO.MemoryStream]$into) {
     $file = Get-Item -LiteralPath $path -Force
-    if ($file.Length -gt 50MB) { Fail "$($file.Name) is over 50 MB" }
     $stream = [System.IO.File]::Open($file.FullName, 'Open', 'Read', 'ReadWrite, Delete')
-    try { $stream.CopyTo($into) } finally { $stream.Dispose() }
+    try {
+        if ($stream.Length -gt 50MB) { Fail "$($file.Name) is over 50 MB" }
+        $stream.CopyTo($into)
+    } finally {
+        $stream.Dispose()
+    }
     return $file
 }
 
