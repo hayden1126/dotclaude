@@ -246,7 +246,9 @@ it, and `lane lead` does so on purpose. The other two candidates lose on the one
 | The lead passes or clears | kept: same pane, same server | lost: the pass makes the lead youngest | nothing to lose |
 | A side chat in main | never leads: `ls` and `addr` are looks | leads if it started first | asks |
 | Hayden starts a fresh lead by hand | `! lane lead` in it | never, while the old one lives | asks |
-| tmux restarts | none until the lead acts again | the restored order | asks |
+| tmux restarts | kept when the restored tab resumes the lead's session; else none until the lead acts again | the restored order | asks |
+| The lead resumes in another tab | kept: the same session id | lost: the resume is youngest | asks |
+| The lead is stopped (Ctrl+Z) | its resume if one runs; else none, naming the stopped lead to `fg`, even beside one side chat | the stopped one, which answers nothing | asks |
 
 How it holds:
 - **The record** sits beside the lanes config in the state dir (`Repo.lead_path`), which
@@ -258,14 +260,27 @@ How it holds:
   `lane done` finds it, and only when it is interactive, has a messaging socket, and launched in
   the main checkout outside any linked worktree. A lane's session, an agent worktree's, a
   `claude -p` or a background session never leads. A refused or failed act changes nothing.
-- **The pick** (`lanelib.lead_of`): one live session is the lead whatever the record says. With
-  two or more, the record's pid and start match first. Then comes exactly one session in the
-  record's pane on the record's server: the pass successor, since `respawn-pane -k` keeps the
-  pane. Anything else is no pick. `lane addr lead` then refuses with each session's window and
-  the way to pick, and the lane tells Hayden once that #N merged, as with no lead at all.
+- **Liveness** (lane stopped-lead, 2026-10-17). On 2026-10-17 the lead (pid 1107) was stopped
+  with Ctrl+Z while a resume of its session ran as pid 40133 in the same pane, and `lane addr
+  lead` kept handing out 1107's socket: a stopped process's socket still accepts connections, so
+  `merged #110` timed out twice. A session is now *present* while its pid runs with the
+  `procStart` its file records, and *running* only while it isn't stopped (ps state `T`).
+  Addresses, the pick and the footer count running sessions. `open` and the record seeding
+  count present ones, so a stopped session still holds its lane.
+- **The pick** (`lanelib.lead_of`), among running sessions: the record's pid and start match
+  first (a /clear keeps both). Then the record's one continuation: a session with the record's
+  session id (a resume, in the same tab, another tab, or the tab a tmux restart restores) or one
+  in the record's pane on the record's server (the pass successor, since `respawn-pane -k` keeps
+  the pane). Two continuations (a resume beside a fresh claude in the old pane, two resumes) are
+  no pick. With none, one running session is the lead, unless the recorded process exists and
+  is stopped (Hayden's call, 2026-10-17): beside a lead that `fg` brings back, the one running is
+  likely a side chat. Anything else is no pick. `lane addr lead` then refuses with each
+  session's window, the way to pick, and a stopped lead's window to `fg` it in, and the lane
+  tells Hayden once that #N merged, as with no lead at all.
 - **The board** (`lane ls`) adds a line under the table when the main checkout has two or more
   live sessions: each one's window, pid and state, the lead first, `no tmux` or `agent worktree`
-  where it applies.
+  where it applies. With no running session picked and the recorded lead stopped, the line
+  names the stopped lead's window, however few sessions run.
 - **The bar** reads the same record. The window holding its pane, on the bar's own server
   (socket, pid and that pid's start), is `lead`; the main checkout's other tabs, a shell
   included, are `lead²`, `lead³` in bar order. With no pick, the first keeps `lead`. A new lead
@@ -384,11 +399,13 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
   file (every live session's file `cwd` matched its process cwd, probed on 2.1.296). Session
   files outlive their process
   (74 files against 7 live sockets on one machine that day), so a file counts only when its
-  pid runs with the `procStart` it records, not exited, and its socket is on disk, printable
-  and ours. A pass makes a new pid, so callers resolve it before each send. It runs
+  pid runs with the `procStart` it records, neither exited nor stopped, and its socket is on
+  disk, printable and ours. A stopped session (Ctrl+Z) is named in the refusal with its window,
+  "fg it there", in place of the `lane open` hint, since `open` refuses beside it. A pass makes
+  a new pid, so callers resolve it before each send. It runs
   sandbox-off, since a sandboxed command has its own pid namespace and sees no other process.
-  The id `lead` is reserved for new lanes. With two or more live sessions in the main checkout,
-  `lead` picks the recorded lead ("One lead per main checkout").
+  The id `lead` is reserved for new lanes. In the main checkout, `lead` picks the lead ("One
+  lead per main checkout").
 
 ## The pieces
 
@@ -411,7 +428,8 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
   folder?" dialog unless the lanes root (or a parent) is trusted; a trusted parent covers every
   lane under it (probed 2026-10-11, 2.1.296), so `lane init` prints the one-time line that
   trusts the root. It refuses a stale or `setup-failed` lane, and a
-  lane with a live session (naming its tmux target; `--focus` selects that window instead).
+  lane with a live session (naming its tmux target, a stopped one marked `(stopped: fg it
+  there)`; `--focus` selects that window instead).
   Sandboxed, it can't see other sessions, so it refuses and asks for a bare run; `--print` still
   prints, warning that the command may duplicate a live session. It stamps only
   `opened` in `lane.json`. The window is derived from the live session's `tmux` field on each
@@ -480,7 +498,8 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
   and `?` when sandboxed; `--json` has it as `ctx` (`session`, `tokens`, `tier`, `status`). The
   STATE column after it lists each live session's `status` from its session file (`busy`,
   `idle`, `waiting`, or `shell` while a background shell runs at the prompt), as `states` in
-  `--json`. The lead messages a lane that sits idle past soft: "context N k, run /pass". It does this by hand for now; no code
+  `--json`. A stopped session (Ctrl+Z) drives none of these columns: its lane gets the `stopped`
+  flag (beside `orphan` when no session runs), and `--json` lists it in `stopped_sessions`. The lead messages a lane that sits idle past soft: "context N k, run /pass". It does this by hand for now; no code
   sends that message. The lead never respawns another lane's pane, since only that lane holds
   the context its handoff needs.
 - **`lane lock <name> -- <cmd>`** serializes shared gates with a flock on
@@ -586,14 +605,17 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
   session's `open-sessions` entry, as Shelve does, so claude-restore never reopens it. Signals go
   through a pidfd once the start time is checked again:
   1. SIGTERM to sessions and leftovers, then a wait of up to 10 s: longer than the 5 s
-     SessionEnd hooks, which run as the session's children and are left to it.
+     SessionEnd hooks, which run as the session's children and are left to it. A session found
+     stopped (Ctrl+Z) right after its SIGTERM gets SIGCONT, since the signal waits while a
+     process is stopped and its SessionEnd hooks would never run (Hayden's call, 2026-10-17).
+     One that stops again on the terminal (SIGTTOU) still ends at step 3.
   2. SIGHUP to each pane shell after that wait (an interactive shell ignores SIGTERM), unless
      it started another job meanwhile. zsh passes it on to a session still exiting, which Claude
      Code handles as a closing tab.
   3. Whatever survives, classified afresh: SIGTERM (SIGHUP again for a pane shell), a wait,
      then SIGKILL.
 
-  Every signal but a session's first SIGTERM is guarded: just before it, `done` rescans the
+  Every signal but a session's first SIGTERM (and that SIGCONT) is guarded: just before it, `done` rescans the
   target's process tree and holds the signal while anything in it has a file open in the git dir
   (a killed git leaves lock files). A held signal is named in the refusal, and a process held at
   step 3's SIGTERM is never SIGKILLed, nor is anything under a session whose signal was held. A session's first SIGTERM goes unchecked: Claude Code
