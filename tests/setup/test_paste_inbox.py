@@ -995,9 +995,12 @@ class LaptopPowerShell(unittest.TestCase):
             "  Read-CopiedFile $big $ms | Out-Null",
             "  'not reached'",
             "} finally {",
-            "  Remove-Item -LiteralPath $dir -Recurse -Force",   # fails if the stream is open
+            # an exclusive open fails while any handle is open; a delete wouldn't, since the
+            # file is opened with delete sharing (and NTFS deletes with POSIX semantics)
+            "  try { [IO.File]::Open($big, 'Open', 'Read', 'None').Dispose(); 'closed=True' }",
+            "  catch { 'closed=False' }",
+            "  Remove-Item -LiteralPath $dir -Recurse -Force",
             "  Remove-Item -LiteralPath $errFile -ErrorAction SilentlyContinue",
-            "  'cleaned=' + -not (Test-Path -LiteralPath $dir)",
             "}"])
         p = subprocess.run([self.ps, "-NoProfile", "-NonInteractive", "-EncodedCommand",
                             base64.b64encode(command.encode("utf-16-le")).decode()],
@@ -1009,7 +1012,7 @@ class LaptopPowerShell(unittest.TestCase):
         self.assertEqual(p.returncode, 1, out + err)
         self.assertIn("remote-paste: big.pdf is over 50 MB", err)
         self.assertNotIn("not reached", out)
-        self.assertIn("cleaned=True", out)
+        self.assertIn("closed=True", out)
 
 
 

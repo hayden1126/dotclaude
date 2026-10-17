@@ -520,13 +520,14 @@ need nothing extra.
   but a file of another type, and the installer's test, say to update both. The hotkey acts only
   while the Windows Terminal title is a remote tmux view of the PC (`view-<pid> · ...` by default;
   `-TitlePattern` for other session names, and leave the profile's `suppressApplicationTitle` off)
-  and the clipboard holds an image or one copied file (not several, not a folder) but no text, so a
-  text Ctrl+V never reaches it. `paste-inbox receive` keeps a PNG, JPEG, GIF or WebP (judged by its
-  first bytes), or with the file's name any file, up to 50 MB and only once all the bytes the laptop
-  sent arrived. A file keeps its name's letters, digits and extension (`Q3 report.pdf` lands as
-  `<time>-<device>-<random>-Q3-report.pdf`), and a non-image named like an image is refused. Each
-  time it receives one, it deletes its own images older than a day (Claude Code reads an image when
-  it is pasted) and other files older than 7 days; Downloads is never pruned.
+  and the clipboard holds an image or one copied file or folder but no text, so a text Ctrl+V or
+  several copied files never reach it; a folder gets Windows Terminal's own paste. `paste-inbox
+  receive` keeps a PNG, JPEG, GIF or WebP (judged by its first bytes), or with the file's name any
+  file, up to 50 MB and only once all the bytes the laptop sent arrived. A file keeps its name's
+  letters, digits and extension (`Q3 report.pdf` lands as `<time>-<device>-<random>-Q3-report.pdf`),
+  and a non-image named like an image is refused. Each time it receives one, it deletes its own
+  images older than a day (Claude Code reads an image when it is pasted) and other files older than
+  7 days; Downloads is never pruned.
 - **PreToolUse(`Write`): `overwrite-guard.sh`** (in this repo). The Write tool's own "File has not
   been read yet" check last fired in Claude Code 2.1.285, and on 2.1.289 a Write of `PLACEHOLDER`
   replaced an unread 6 KB memory file (`docs/blind-overwrite-brief.md`). The guard denies a Write
