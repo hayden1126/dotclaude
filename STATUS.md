@@ -131,7 +131,7 @@ stored here).
     script's lead lookup: skip a stopped claude (state `T`), or prefer the newest live process of
     the lead's session id.
   - **Green tab for an ask the reply only announces** (Hayden, 2026-10-17: Vulcan lane `keys`,
-    pane %44). Its turn ended "...that needs your OK. I'll ask when the probes come up. Waiting
+    pane %44; open as lane `future-ask` since 2026-10-17, brief in its record). Its turn ended "...that needs your OK. I'll ask when the probes come up. Waiting
     on S2b." with a writer subagent running. `ring.log` 18:52:20: `quiet busy=1 tasks=subagent`,
     then `input=yes painted=1`, so the tab sat green while nothing was wanted. Of 66 green verdicts
     that day, 21 came with agents running. About 3 of those 21 were wrong (an ask announced for
@@ -244,8 +244,9 @@ stored here).
 
 ## Notes for next session
 - **Next (lead, main checkout):** watch for "merged #N" from a lane, then run the post-merge
-  chain (`skills/lanes/SKILL.md`, The lead, step 7). Live lane: `stopped-lead` (opened
-  2026-10-17, Hayden's go; brief in its record). Two of 3 slots are free. Check `lane ls` first: a merge Hayden made on GitHub and mentioned to no
+  chain (`skills/lanes/SKILL.md`, The lead, step 7). Live lanes: `stopped-lead` and
+  `future-ask` (both opened 2026-10-17, Hayden's go; briefs in their records; disjoint files, so
+  either merges first). One of 3 slots is free. Check `lane ls` first: a merge Hayden made on GitHub and mentioned to no
   session sends no message (#102 showed merged there before its lane's message came). Each new work-repo lane still needs its own Edit deny rule
   (they take no glob); `lane new` prints it since #104. No chat
   about a lane's own asks; speak on cross-lane orders, decisions raised with the lead, failed
