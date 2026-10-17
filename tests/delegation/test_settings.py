@@ -95,11 +95,13 @@ class Baseline(unittest.TestCase):
     def test_code_that_runs_outside_the_sandbox_is_write_protected(self):
         # Sandbox audit, 2026-10-04. ccstatusline and the Notification hook run these unsandboxed
         # on every refresh or toast; setup.sh runs or installs the rest, including the plugins
-        # and tools its JSON lists; the canary (an excluded command) runs tests/.
+        # and tools its JSON lists; the canary (an excluded command) runs tests/; bin/chrome-bg
+        # runs chrome-bg.ps1 sandbox-off on every start.
         deny = S["sandbox"]["filesystem"]["denyWrite"]
         for p in ("statusline", "notify-toast.ps1", "codex", "setup.sh", "merge-settings.py",
                   "install-state.py", "setup-chrome-wsl.sh", "sync.sh", "chrome-debug.ps1",
-                  "git", "plugins", "tools.json", "tmux", "setup-tmux.sh", "bin", "tests"):
+                  "chrome-bg.ps1", "git", "plugins", "tools.json", "tmux", "setup-tmux.sh", "bin",
+                  "tests"):
             self.assertIn("~/dotclaude/" + p, deny)
 
     def test_tool_credentials_and_shell_history_are_read_protected(self):
@@ -219,6 +221,23 @@ class Baseline(unittest.TestCase):
                           for c in (x["command"] for x in e["hooks"]) if "excluded-check" in c],
                          [h["command"]])
         self.assertTrue(os.access(os.path.join(REPO, "hooks", "excluded-check.sh"), os.X_OK))
+
+    def test_the_display_blanker_runs_on_every_context_reset_and_fails_open(self):
+        # A repo opts in by git config dotclaude.blankDisplay; the hook writes CLAUDE_ENV_FILE,
+        # never a settings env entry (Claude Code's own image paste calls xclip and wl-paste).
+        # The first reply waits for SessionStart hooks.
+        blank = 'bash "$HOME/.claude/hooks/blank-display.sh"'
+        (entry,) = [e for e in S["hooks"]["SessionStart"]
+                    if any("blank-display" in h["command"] for h in e["hooks"])]
+        self.assertEqual(entry["matcher"], "startup|resume|clear|compact")
+        (h,) = entry["hooks"]
+        self.assertEqual(h["command"], blank)
+        self.assertLessEqual(h["timeout"], 5)
+        self.assertEqual([c for entries in S["hooks"].values() for e in entries
+                          for c in (x["command"] for x in e["hooks"]) if "blank-display" in c],
+                         [blank])
+        self.assertFalse({"DISPLAY", "WAYLAND_DISPLAY"} & set(S.get("env", {})))
+        self.assertTrue(os.access(os.path.join(REPO, "hooks", "blank-display.sh"), os.X_OK))
 
     def test_the_watch_guard_is_wired_on_stop_and_fails_open(self):
         (entry,) = [e for e in S["hooks"]["Stop"]
