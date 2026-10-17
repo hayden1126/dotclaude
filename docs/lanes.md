@@ -296,7 +296,9 @@ How it holds:
   continuation: beside another (a second resume, a successor in the recorded pane) neither does,
   and Hayden picks. A claude started by hand in the old tab has no marker; nor has a pass whose
   session left no reply text, which pass-respawn skips, so that pass relinks only by the pane
-  rule until tmux restarts. A running lead is never displaced. On proof the hook runs its
+  rule until tmux restarts, and not at all while a stopped session still holds the lead's
+  earlier id (the pane rule waits for it, since without a marker a successor can't be told from
+  a claude typed in the pane). A running lead is never displaced. On proof the hook runs its
   sibling `lane lead --expect-sid <id>`, so every check under "Who counts" still applies to the
   very session proved, and a refusal is retried at the next Stop. Nearly every call costs one
   file read and one stat.
