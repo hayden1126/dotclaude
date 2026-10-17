@@ -1038,7 +1038,8 @@ FAKE = r'''
   drop      a file it removes on SIGTERM, before on_term ({pid} its pid: its session file,
             gone mid-exit)
   children  configs of fakes it starts, each with its own cwd and env
-  then      {argv, cwd, go, out}: once go exists, run argv in cwd and write {rc, out, err} to out
+  then      {argv, cwd, go, out, stdin}: once go exists, run argv in cwd with stdin (text, if
+            any: a hook's event) and write {rc, out, err} to out
   comm      the comm it gives itself (/proc/self/comm), e.g. "tmux: server"
   session   {file, sid}: Claude Code's session file it writes for itself (pid, procStart)
 It prints "ready <pid> <its descendants' pids>" once set up, then sleeps."""
@@ -1086,8 +1087,8 @@ print("ready", os.getpid(), *pids, flush=True)
 if then := cfg.get("then"):
     while not os.path.exists(then["go"]):
         time.sleep(0.05)
-    p = subprocess.run(then["argv"], cwd=then["cwd"], capture_output=True, text=True,
-                       timeout=60)
+    p = subprocess.run(then["argv"], cwd=then["cwd"], input=then.get("stdin"),
+                       capture_output=True, text=True, timeout=60)
     with open(then["out"] + ".tmp", "w") as f:
         json.dump({"rc": p.returncode, "out": p.stdout, "err": p.stderr}, f)
     os.rename(then["out"] + ".tmp", then["out"])
@@ -2321,11 +2322,10 @@ class Close(Fakes):
         self.assertEqual(self.signals(), [(pid, "SIGTERM")])
 
 
-class LeadAct(Fakes):
-    """A bare lead act (init, new, adopt, open without --print, done) that succeeds records the
-    nearest Claude session above it as the lead, when that session is interactive, has a socket
-    and launched in the main checkout; `lane lead` does the same or says why it can't. Each
-    session is a fake here whose TMUX names this test runner as its server."""
+class LeadChain(Fakes):
+    """Fake sessions in a chain, the nearest of which runs a command as Claude Code would (a
+    lead act, or a hook with its event); each one whose TMUX names this test runner as its
+    server. LeadAct's harness, without its tests, for test_hooks.LeadHeal to build on."""
 
     MAIN_SID = "sess-main-0001"
 
@@ -2354,11 +2354,16 @@ class LeadAct(Fakes):
         last of which runs `lane <argv>` from run_in (the main checkout by default) once their
         session files are written; their pids, the first started first, and the act's result.
         A fake on a pane runs with TMUX naming this test runner as its server."""
+        return self.runs_in_chain([sys.executable, LANE, *argv], sessions, run_in)
+
+    def runs_in_chain(self, cmd, sessions, run_in=None, stdin=None, before=None):
+        """acts_in_chain for any command (cmd, a full argv, run with stdin), calling before
+        with the pids once their session files are written, just ahead of the run."""
         self.acts += 1
         go = os.path.join(self.tmp, f"go{self.acts}")
         out = os.path.join(self.tmp, f"done{self.acts}.json")
-        extra = {"then": {"argv": [sys.executable, LANE, *argv], "cwd": run_in or self.main,
-                          "go": go, "out": out}}  # the nearest runs the act
+        extra = {"then": {"argv": cmd, "cwd": run_in or self.main, "stdin": stdin, "go": go,
+                          "out": out}}  # the nearest runs the act
         for kw in reversed(sessions):
             cfg = self.fake(kw.get("real_cwd") or kw.get("cwd") or self.main, **extra)
             if pane := kw.get("pane", "%3"):
@@ -2367,6 +2372,8 @@ class LeadAct(Fakes):
         pids = self.start(cfg)
         for pid, kw in zip(pids, sessions):
             self.session(pid, **{k: v for k, v in kw.items() if k != "real_cwd"})
+        if before:
+            before(pids)
         return pids, self.await_done(go, out)
 
     def session(self, pid, cwd=None, sid=MAIN_SID, kind="interactive", pane="%3", sock=True,
@@ -2388,6 +2395,13 @@ class LeadAct(Fakes):
                           "tmux": tmux if pane else None})
         self.assertIsNotNone(lanelib.parse_iso(rec["at"]))
         self.assertIsNotNone(lanelib.read_lead(lanelib.Repo(self.main, self.common)))
+
+
+class LeadAct(LeadChain):
+    """A bare lead act (init, new, adopt, open without --print, done) that succeeds records the
+    nearest Claude session above it as the lead, when that session is interactive, has a socket
+    and launched in the main checkout; `lane lead` does the same or says why it can't. Each
+    session is a fake here whose TMUX names this test runner as its server."""
 
     def test_a_new_from_the_main_checkout_takes_the_lead(self):
         pid, res = self.act(["new", "api-docs"])

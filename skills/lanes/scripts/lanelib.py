@@ -22,6 +22,7 @@ import fcntl
 import glob
 import hashlib
 import json
+import math
 import os
 import re
 import shutil
@@ -954,6 +955,38 @@ def ancestors(pid: int, procs: dict[int, Proc]) -> list[int]:
     return out
 
 
+ANCESTRY_MAX = 64  # ppid hops ancestry() walks: a session's hook sits a handful below it
+
+
+def ancestry(pid: int, proc: str = PROC, limit: int = ANCESTRY_MAX) -> list[tuple[int, int]]:
+    """(pid, start) of pid's ancestors, nearest first, by each one's stat alone: no scan, so a
+    hook can afford it on every turn. It stops at limit hops, init, or a stat it can't read."""
+    out, seen, st = [], {pid}, proc_stat(pid, proc)
+    while st and st[2] > 0 and st[2] not in seen and len(out) < limit:
+        pid = st[2]
+        seen.add(pid)
+        if (st := proc_stat(pid, proc)) is None:
+            break
+        out.append((pid, st[3]))
+    return out
+
+
+def boot_time(proc: str = PROC) -> int | None:
+    """The boot time in epoch seconds (/proc/stat's btime), or None."""
+    for line in (read_head(os.path.join(proc, "stat"), 1 << 20) or b"").splitlines():
+        if line.startswith(b"btime "):
+            value = line[6:].strip()
+            return int(value) if NUMBER.fullmatch(value.decode(errors="replace")) else None
+    return None
+
+
+def proc_epoch(ticks: int, proc: str = PROC) -> float | None:
+    """A process's start (stat field 22, clock ticks since boot) in epoch seconds, or None. The
+    boot time is whole seconds, so this runs up to a second early."""
+    boot = boot_time(proc)
+    return None if boot is None else boot + ticks / os.sysconf("SC_CLK_TCK")
+
+
 def descendants(pid: int, kids: dict[int, list[int]]) -> list[int]:
     """Every process whose parent chain reaches pid (children())."""
     out, todo, seen = [], list(kids.get(pid, [])), {pid}
@@ -1039,6 +1072,32 @@ def session_state(session: dict, proc: str = PROC) -> str | None:
         return None
     st = proc_stat(pid, proc)
     return st[1] if st is not None and st[3] == start and st[1] not in EXITED else None
+
+
+def sessions_above(pid: int | None = None) -> list[tuple[dict, Proc]]:
+    """The Claude sessions above pid (this process by default), nearest first, each with its
+    process: an ancestor whose pid has a session file recording its procStart, so a stale file
+    of a reused pid never counts. One stat-only scan finds the chain, and only a matched pid's
+    real cwd is read (Proc.cwd, None when it can't be). Sandboxed, no ancestor is in sight: an
+    empty list. `done`'s lead_only checks each one; a lead act takes the nearest, and the lead
+    heal (lead_relink) times a /pass by it."""
+    procs = scan(full=False)
+    by_pid = {}
+    for s in session_files():
+        if type(s.get("pid")) is int:
+            by_pid.setdefault(s["pid"], []).append(s)
+    out = []
+    for a in ancestors(os.getpid() if pid is None else pid, procs):
+        p = procs.get(a)
+        for s in by_pid.get(a, []):
+            if p is None or proc_start_of(s) != p.start:
+                continue
+            try:
+                cwd = os.readlink(os.path.join(PROC, str(a), "cwd"))
+            except OSError:
+                cwd = None
+            out.append((s, p._replace(cwd=cwd)))
+    return out
 
 
 def session_running(session: dict, proc: str = PROC) -> bool:
@@ -1228,3 +1287,75 @@ def stopped_lead(repo: Repo) -> dict | None:
                 and proc_start_of(s) == rec["procStart"]:
             return s
     return {"pid": rec["pid"]}
+
+
+# ---- the heal --------------------------------------------------------------------------------
+# hooks/lane_identity.py runs lead_relink on every SessionStart and Stop in the main checkout,
+# and on proof runs a bare `lane lead`, which applies every lead check and writes the record.
+
+PASS_LAST_MAX = 1 << 20  # bytes of a pass-last marker: its replies hold up to 128 KiB of text
+PASS_TTL = 120  # hooks/pass_banner.py's TTL: a claude started later than this isn't the respawn
+PASS_SLACK = 2  # seconds a marker may postdate the start: proc_epoch runs up to 1 s early
+
+
+def pass_marker(rec: dict) -> float | None:
+    """When the pass-last marker in the record's pane (pass-last/<pane number>.json, which
+    skills/pass/scripts/pass-respawn's write_last writes right before it respawns the pane)
+    names the recorded session passing in the recorded tab (socket, server pid and pane): its
+    written_at, else None. The tab's server_start is tmux's #{start_time}, epoch seconds where
+    the record holds stat ticks; it isn't compared, as the caller's proc_tmux match already
+    names the live server by its start. The state dir is out of the sandbox's reach, and the
+    marker is read as data all the same: bounded, never through a link, each field's type
+    checked."""
+    socket, server, _, pane = rec["tmux"]
+    raw = read_head(os.path.join(state_dir(), "pass-last", pane[1:] + ".json"), PASS_LAST_MAX + 1)
+    if raw is None or len(raw) > PASS_LAST_MAX:
+        return None
+    try:
+        marker = json.loads(raw)
+    except (ValueError, RecursionError):
+        return None
+    if not isinstance(marker, dict) or not isinstance(tab := marker.get("tab"), dict):
+        return None
+    at = marker.get("written_at")
+    if not (isinstance(marker.get("from_session"), str)
+            and marker["from_session"] == rec["sessionId"] and tab.get("socket") == socket
+            and type(tab.get("server_pid")) is int and tab["server_pid"] == server
+            and tab.get("pane") == pane and type(at) in (int, float) and math.isfinite(at)):
+        return None
+    return float(at)
+
+
+def lead_relink(repo: Repo, sid: str, pid: int | None = None, proc: str = PROC) -> str | None:
+    """Why the session whose hook runs as pid (this process by default) continues the recorded
+    lead, or None. The hook inherits its claude's environment, and its claude is an ancestor.
+      "clear"   the recorded process runs, is an ancestor (ancestry), and the session id
+                differs: a /clear keeps the process and starts a new id.
+      "resume"  the recorded process is gone or stopped (Ctrl+Z), and sid is the record's: a
+                resume keeps the id, in the same tab, another, or a tmux restart's restored one.
+      "pass"    the recorded process is gone, pid runs in the recorded tmux pane on the recorded
+                server (proc_tmux), and that pane's pass-last marker (pass_marker) names the
+                recorded session passing there at most PASS_TTL before this session's claude
+                started (the nearest of sessions_above). A claude started by hand in the old
+                tab has no such marker.
+    A running lead is never displaced. Nearly every call costs one read and one stat: the
+    recorded process runs and sid is the record's."""
+    rec = read_lead(repo)
+    if rec is None:
+        return None
+    me = os.getpid() if pid is None else pid
+    state = session_state(rec, proc)
+    if state is not None and state not in STOPPED:
+        if sid == rec["sessionId"]:
+            return None
+        return "clear" if (rec["pid"], rec["procStart"]) in ancestry(me, proc) else None
+    if sid == rec["sessionId"]:
+        return "resume"
+    if state is not None or rec["tmux"] is None or proc_tmux(me, proc) != rec["tmux"]:
+        return None
+    if (written := pass_marker(rec)) is None or not (above := sessions_above(me)):
+        return None
+    started = proc_epoch(above[0][1].start, proc)
+    if started is None or not started - PASS_TTL <= written <= started + PASS_SLACK:
+        return None
+    return "pass"

@@ -2304,13 +2304,14 @@ def lane_place(repo: Repo, root: str | None, cwd) -> str | None:
 
 def lane_above(repo: Repo, root: str | None,
                above: list[tuple[dict, lanelib.Proc]]) -> tuple[dict, lanelib.Proc, str] | None:
-    """The first session in above (sessions_above) that is a lane's by its session file's cwd
-    or its real one (a lane session that cd'd to main): lane_place. That session, its process
-    and where it is, or None. Every one counts, not only the nearest: a lane's claude may run
-    another claude, and no lane may close lanes (lead_only) or take the lead (lead_claim) that
-    way. Only trusted facts decide: the lanes root from the config, which sandboxed Bash can't
-    write, and git's own worktree links. Never lane.json's paths, which it can: a planted
-    "/home" made every `done` refuse the lead, and a lane could drop its own path."""
+    """The first session in above (lanelib.sessions_above) that is a lane's by its session
+    file's cwd or its real one (a lane session that cd'd to main): lane_place. That session,
+    its process and where it is, or None. Every one counts, not only the nearest: a lane's
+    claude may run another claude, and no lane may close lanes (lead_only) or take the lead
+    (lead_claim) that way. Only trusted facts decide: the lanes root from the config, which
+    sandboxed Bash can't write, and git's own worktree links. Never lane.json's paths, which it
+    can: a planted "/home" made every `done` refuse the lead, and a lane could drop its own
+    path."""
     for s, p in above:
         if where := lane_place(repo, root, s.get("cwd")) or lane_place(repo, root, p.cwd):
             return s, p, where
@@ -2334,7 +2335,7 @@ def lead_only(repo: Repo, lane_id: str, path: str) -> None:
     if not (isinstance(root, str) and os.path.isabs(root)):
         raise LaneError(f"the lanes config {repo.config_path} has no absolute root: rerun "
                         "`lane init --root DIR`")
-    if hit := lane_above(repo, os.path.realpath(root), sessions_above()):
+    if hit := lane_above(repo, os.path.realpath(root), lanelib.sessions_above()):
         s, p, where = hit
         raise LaneError(shown(f"refusing: {lead}. This `lane done` runs under session "
                               f"{sid_of(s)} ({p.pid} {p.comm}), {where}"))
@@ -2344,31 +2345,6 @@ def sid_of(session: dict) -> str:
     """A session file's sessionId when it is one (lanelib.SID), else "?"."""
     sid = session.get("sessionId")
     return sid if isinstance(sid, str) and lanelib.SID.fullmatch(sid) else "?"
-
-
-def sessions_above() -> list[tuple[dict, lanelib.Proc]]:
-    """The Claude sessions above this process, nearest first, each with its process: an
-    ancestor whose pid has a session file recording its procStart, so a stale file of a reused
-    pid never counts. One stat-only scan finds the chain, and only a matched pid's real cwd is
-    read (Proc.cwd, None when it can't be). Sandboxed, no ancestor is in sight: an empty list.
-    `done`'s lead_only checks each one; a lead act takes the nearest."""
-    procs = lanelib.scan(full=False)
-    by_pid = {}
-    for s in lanelib.session_files():
-        if type(s.get("pid")) is int:
-            by_pid.setdefault(s["pid"], []).append(s)
-    out = []
-    for a in lanelib.ancestors(os.getpid(), procs):
-        p = procs.get(a)
-        for s in by_pid.get(a, []):
-            if p is None or lanelib.proc_start_of(s) != p.start:
-                continue
-            try:
-                cwd = os.readlink(os.path.join(lanelib.PROC, str(a), "cwd"))
-            except OSError:
-                cwd = None
-            out.append((s, p._replace(cwd=cwd)))
-    return out
 
 
 LEAD_ACTS = ("init", "new", "adopt", "open", "done")  # each, when it succeeds, takes the lead
@@ -2383,17 +2359,19 @@ SANDBOXED_LEAD = ("sandboxed: the Claude session above this command is out of si
 
 def lead_claim(repo: Repo) -> tuple[dict, dict]:
     """(session file, record) that make the session running this command the lead, or a
-    LaneError saying why it can't be. The nearest Claude session above (sessions_above) must
-    be interactive, have a session id and a messaging socket (or no lane could reach it), and
-    have launched in the main checkout, outside lane_place: inside main that means outside any
-    linked worktree, so a session in an agent worktree never leads, nor does a lane's session
-    cd'd to main. Its session file's cwd decides that, as it does for `addr`; a Bash cd doesn't
-    move it, so a lead cd'd into a lane still leads. Then no session farther up may be a
-    lane's, by lead_only's rule (lane_above, real cwd included): else a lane's session could
-    run an interactive claude in main and make it the lead."""
+    LaneError saying why it can't be. The nearest Claude session above
+    (lanelib.sessions_above) must be interactive, have a session id and a messaging socket (or
+    no lane could reach it), and have launched in the main checkout, outside lane_place: inside
+    main that means outside any linked worktree, so a session in an agent worktree never leads,
+    nor does a lane's session cd'd to main. Its session file's cwd decides that, as it does for
+    `addr`; a Bash cd doesn't move it, so a lead cd'd into a lane still leads. Then no session
+    farther up may be a lane's, by lead_only's rule (lane_above, real cwd included): else a
+    lane's session could run an interactive claude in main and make it the lead. The
+    lane-identity hook runs `lane lead` on a proven continuation (lanelib.lead_relink), so
+    these checks bind it too."""
     if not lanelib.pids_visible():
         raise LaneError(SANDBOXED_LEAD)
-    above = sessions_above()
+    above = lanelib.sessions_above()
     if not above:
         raise LaneError("no Claude session runs this command (no process above it has a session "
                         "file): run it from the lead, as `! lane lead` at its prompt")

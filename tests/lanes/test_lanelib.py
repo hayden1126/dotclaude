@@ -157,6 +157,133 @@ class Walk(unittest.TestCase):
         self.assertEqual(lanelib.newest_mtime(rec), before)  # a target's change is not ours
 
 
+class LeadRelink(_fixture.LiveSessions):
+    """lanelib.lead_relink in process, for a child standing in for the hook (its pid): which
+    proof, if any, says the session running it continues the recorded lead. This test runner
+    plays that session's claude where one must be above the child."""
+
+    OLD, NEW = "s-old", "s-new"
+
+    def setUp(self):
+        super().setUp()
+        self.repo = lanelib.Repo(self.main, self.common)
+        patch = mock.patch.dict(os.environ, CLAUDE_CONFIG_DIR=os.path.join(self.home, ".claude"))
+        patch.start()
+        self.addCleanup(patch.stop)
+
+    def relink(self, sid, pane="new"):
+        return lanelib.lead_relink(self.repo, sid, pid=self.child(self.main, pane=pane))
+
+    def marker(self, pane="%3", **fields):
+        """A pass-last marker for pane, written as pass-respawn's write_last writes it, of the
+        recorded session passing there on this test's server, unless fields say otherwise."""
+        sock, server, _ = self.server.rsplit(",", 2)
+        tab = {"socket": sock, "server_start": 0, "server_pid": int(server), "pane": pane}
+        self.write(os.path.join(lanelib.state_dir(), "pass-last", pane[1:] + ".json"),
+                   json.dumps({"tab": tab, "from_session": self.OLD, "written_at": 0, **fields}))
+
+    def test_no_record_proves_nothing(self):
+        self.assertIsNone(self.relink(self.OLD))
+
+    def test_a_running_lead_is_kept_but_for_a_clear_in_it(self):
+        self.write_lead(self.child(self.main), sid=self.OLD)
+        self.assertIsNone(self.relink(self.OLD))  # the fast path
+        self.assertIsNone(self.relink(self.NEW))  # a side chat: the lead isn't above it
+        self.write_lead(os.getpid(), sid=self.OLD)  # this runner is above every child
+        self.assertEqual(self.relink(self.NEW), "clear")
+        self.assertIsNone(self.relink(self.OLD))
+
+    def test_a_resume_needs_the_lead_gone_or_stopped(self):
+        self.write_lead(self.child(self.main, done=True), start=1, sid=self.OLD)
+        self.assertEqual(self.relink(self.OLD), "resume")
+        self.assertIsNone(self.relink(self.NEW))
+        stopped = self.child(self.main)
+        self.stop(stopped)
+        self.write_lead(stopped, sid=self.OLD)
+        self.assertEqual(self.relink(self.OLD), "resume")
+        self.assertIsNone(self.relink(self.NEW))
+
+    def test_a_pass_needs_a_fresh_marker_of_the_lead_leaving_this_pane(self):
+        self.session(self.main, pid=os.getpid(), sock=None)  # the claude above the child
+        started = lanelib.proc_epoch(lanelib.proc_start(os.getpid()))
+        self.write_lead(self.child(self.main, done=True), start=1, sid=self.OLD,
+                        tmux=self.tmux_of("%3"))
+        sock, server, _ = self.server.rsplit(",", 2)
+        for at in (started - 10, started - 119, started + 1):
+            with self.subTest(written_at=at - started):
+                self.marker(written_at=at)
+                self.assertEqual(self.relink(self.NEW, pane="%3"), "pass")
+        cases = {
+            "written too early": dict(written_at=started - 200),
+            "written after the start": dict(written_at=started + 5),
+            "another session's pass": dict(written_at=started, from_session="s-other"),
+            "a tab on another socket": dict(written_at=started, tab=dict(
+                socket=sock + "x", server_start=0, server_pid=int(server), pane="%3")),
+            "a tab on another server": dict(written_at=started, tab=dict(
+                socket=sock, server_start=0, server_pid=int(server) + 1, pane="%3")),
+            "a tab of another pane": dict(written_at=started, tab=dict(
+                socket=sock, server_start=0, server_pid=int(server), pane="%4")),
+        }
+        for why, fields in cases.items():
+            with self.subTest(why):
+                self.marker(**fields)
+                self.assertIsNone(self.relink(self.NEW, pane="%3"))
+        self.marker(written_at=started)
+        self.assertIsNone(self.relink(self.NEW, pane="%4"))  # this session in another pane
+        self.assertIsNone(self.relink(self.NEW, pane=None))  # or outside tmux
+        os.remove(os.path.join(self.home, ".claude", "sessions", f"{os.getpid()}.json"))
+        self.assertIsNone(self.relink(self.NEW, pane="%3"))  # no claude above it
+        self.session(self.main, pid=os.getpid(), sock=None)
+        self.assertEqual(self.relink(self.NEW, pane="%3"), "pass")
+        self.write_lead(self.child(self.main, done=True), start=1, sid=self.OLD)  # no tmux
+        self.assertIsNone(self.relink(self.NEW, pane="%3"))
+
+    def test_only_a_well_formed_marker_counts(self):
+        rec = {"sessionId": self.OLD, "tmux": tuple(self.tmux_of("%3"))}
+        path = os.path.join(lanelib.state_dir(), "pass-last", "3.json")
+        self.marker(written_at=1.5)
+        self.assertEqual(lanelib.pass_marker(rec), 1.5)
+        good = self.read(path)
+        bad = {"not JSON": "{", "a list": "[]", "nested past json's reach": "[" * 100000,
+               "too long": good[:-1] + " " * lanelib.PASS_LAST_MAX + "}"}
+        for why, fields in {"no tab": dict(tab=None), "a server pid string": dict(tab=dict(
+                                json.loads(good)["tab"], server_pid=str(self.tmux_of("%3")[1]))),
+                            "a written_at bool": dict(written_at=True),
+                            "a written_at string": dict(written_at="1.5"),
+                            "a written_at NaN": dict(written_at=float("nan")),
+                            "a from_session list": dict(from_session=[self.OLD])}.items():
+            bad[why] = json.dumps({**json.loads(good), **fields})
+        for why, text in bad.items():
+            with self.subTest(why):
+                self.write(path, text)
+                self.assertIsNone(lanelib.pass_marker(rec))
+        elsewhere = os.path.join(self.tmp, "elsewhere.json")
+        self.write(elsewhere, good)
+        os.remove(path)
+        os.symlink(elsewhere, path)
+        self.assertIsNone(lanelib.pass_marker(rec))  # never through a link
+        os.remove(path)
+        os.mkfifo(path)
+        self.assertIsNone(lanelib.pass_marker(rec))  # nor waiting on a FIFO
+
+    def test_ticks_become_epoch_seconds_by_the_boot_time(self):
+        pid = self.child(self.main)
+        self.assertLess(abs(lanelib.proc_epoch(lanelib.proc_start(pid)) - time.time()), 2)
+        fake = os.path.join(self.tmp, "proc")
+        self.write(os.path.join(fake, "stat"), "cpu  1 2 3\nintr 5 6\nbtime 1700000000\n")
+        hz = os.sysconf("SC_CLK_TCK")
+        self.assertEqual(lanelib.proc_epoch(250 * hz, fake), 1700000250)
+        self.write(os.path.join(fake, "stat"), "cpu  1 2 3\nbtime x\n")
+        self.assertIsNone(lanelib.proc_epoch(1, fake))
+
+    def test_the_ancestry_walk_is_bounded(self):
+        pid = self.child(self.main)
+        me = (os.getpid(), lanelib.proc_start(os.getpid()))
+        self.assertEqual(lanelib.ancestry(pid)[0], me)
+        self.assertIn((os.getppid(), lanelib.proc_start(os.getppid())), lanelib.ancestry(pid))
+        self.assertEqual(lanelib.ancestry(pid, limit=1), [me])
+
+
 class Picks(unittest.TestCase):
     """The model and effort `lane init` and `lane open` accept, and what pass-respawn carries."""
 

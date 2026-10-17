@@ -5,11 +5,14 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import time
 import unittest
 from unittest import mock
 
 from _fixture import HOOKS, LanesRepo
+import lanelib  # on sys.path through _fixture
+import test_cli  # by module: a class imported by name would have its tests collected here too
 
 RELATIVE = "Next: another session is building #42.\n"
 CLEAN = "Next: lane api-docs builds #42.\n"
@@ -422,6 +425,202 @@ class IdentityHook(LanesRepo):
         # A resume after the end is a new work block: a new entry.
         self.start(self.lane_dir, source="resume")
         self.assertEqual(len(self.lane_json("chart-fix")["sessions"]), 2)
+
+
+class LeadHeal(test_cli.LeadChain):
+    """In the main checkout, the hook relinks the lead record on proof that the session running
+    it continues the recorded lead (lanelib.lead_relink): a resume of the recorded session id
+    while the recorded process is gone or stopped, a /clear in the recorded process, or a /pass
+    successor the pass-last marker names. Each session is a fake claude that runs the hook as
+    its child, as Claude Code does, so the `lane lead` the hook runs finds it above."""
+
+    OLD, NEW = "sess-main-0001", "sess-main-0002"  # the recorded session id, and another
+
+    def setUp(self):
+        super().setUp()
+        self.log_path = os.path.join(self.tmp, "state", "dotclaude", "lane-identity.log")
+
+    def write_record(self, pid, start, sid=OLD, pane="%3"):
+        """A lead record as `lane lead` writes one, on this test's server (the runner)."""
+        tmux = [self.tmux_sock, os.getpid(), lanelib.proc_start(os.getpid()), pane]
+        self.write(self.lead_path, json.dumps({"pid": pid, "procStart": start, "sessionId": sid,
+                                               "tmux": tmux if pane else None,
+                                               "at": "2026-10-17T09:00:00+00:00"}))
+        return self.read(self.lead_path)
+
+    def exited(self):
+        """The pid of a process that has exited and been reaped: a lead that is gone."""
+        p = subprocess.Popen(["true"])
+        p.wait()
+        return p.pid
+
+    def marker(self, pane="%3", tab_pane=None, **fields):
+        """pass-respawn's pass-last marker for pane, as write_last writes it: the session that
+        passed (OLD by default) and the tab it passed in (pane on this test's server)."""
+        tab = {"socket": self.tmux_sock, "server_start": int(time.time()) - 600,
+               "server_pid": os.getpid(), "pane": tab_pane or pane}
+        self.write(os.path.join(self.tmp, "state", "dotclaude", "pass-last", pane[1:] + ".json"),
+                   json.dumps({"tab": tab, "from_session": self.OLD,
+                               "written_at": time.time() - 1, "shown": False,
+                               "replies": [{"prompt_id": "p1", "text": "done", "time": 1.0}],
+                               **fields}))
+
+    def run_hook(self, sid, name="SessionStart", source="resume", at=None, before=None,
+                 **session):
+        """A fake session (session(): its keywords; its session id is sid and its launch dir
+        at unless they say) runs hooks/lane_identity.py as its child from at (the main
+        checkout by default), with an event for sid there; its pid and the hook's
+        {rc, out, err}."""
+        at = at or self.main
+        event = {"session_id": sid, "cwd": at, "hook_event_name": name,
+                 **({"source": source} if name == "SessionStart" else {})}
+        session.setdefault("sid", sid)
+        session.setdefault("cwd", at)
+        (pid,), res = self.runs_in_chain(
+            [sys.executable, "-I", os.path.join(HOOKS, "lane_identity.py")], [session],
+            run_in=at, stdin=json.dumps(event), before=before)
+        self.assertEqual((res["rc"], res["err"]), (0, ""))
+        return pid, res
+
+    def relinks(self):
+        """The hook's relink lines in lane-identity.log."""
+        try:
+            return [line for line in self.read(self.log_path).splitlines() if " relink " in line]
+        except FileNotFoundError:
+            return []
+
+    def assertBoardOnly(self, res):
+        """SessionStart's output is the board line alone, as before the heal."""
+        out = json.loads(res["out"])
+        self.assertEqual(list(out), ["hookSpecificOutput"])
+        self.assertTrue(out["hookSpecificOutput"]["additionalContext"].startswith(
+            "Main checkout of a lanes repo; lanes: chart-fix"))
+
+    def test_a_resume_of_a_gone_lead_relinks_it(self):
+        self.write_record(self.exited(), 1)
+        pid, res = self.run_hook(self.OLD)
+        self.assertLead(pid, self.OLD)
+        self.assertBoardOnly(res)
+        (line,) = self.relinks()
+        self.assertIn(f" relink resume sid={self.OLD} rc=0: lead of {self.main}: session "
+                      f"{self.OLD} in proj:@3", line)
+
+    def test_a_resume_beside_the_stopped_lead_relinks_it(self):
+        # The incident: the lead sits stopped (Ctrl+Z) while `claude --resume` runs it again.
+        (stopped,) = self.start(self.fake(self.main))
+        self.stop(stopped)
+        self.write_record(stopped, self.starts[stopped])
+        pid, _ = self.run_hook(self.OLD)
+        self.assertLead(pid, self.OLD)
+
+    def test_a_running_lead_is_never_displaced(self):
+        # A resume of its session id elsewhere, and a side chat: the recorded process runs.
+        (lead,) = self.start(self.fake(self.main))
+        before = self.write_record(lead, self.starts[lead])
+        self.run_hook(self.OLD)
+        self.run_hook(self.NEW, source="startup", pane="%4")
+        self.assertEqual(self.read(self.lead_path), before)
+        self.assertEqual(self.relinks(), [])
+
+    def test_a_clear_updates_the_session_id(self):
+        # /clear keeps the process and starts a new session id, which its session file holds.
+        pid, res = self.run_hook(self.NEW, source="clear", before=lambda pids: self.write_record(
+            pids[0], self.starts[pids[0]], sid=self.OLD))
+        self.assertLead(pid, self.NEW)
+        self.assertBoardOnly(res)
+        (line,) = self.relinks()
+        self.assertIn(f" relink clear sid={self.NEW} rc=0: ", line)
+
+    def test_a_pass_successor_relinks_by_the_marker(self):
+        before = self.write_record(self.exited(), 1)
+        cases = {
+            "no marker": dict(),
+            "a stale marker": dict(written_at=time.time() - 300),
+            "another session's pass": dict(from_session="sess-other-0001"),
+            "another pane's pass": dict(pane="%4"),
+            "a tab naming another pane": dict(tab_pane="%4"),
+            "a tab on another server": dict(tab=dict(socket=self.tmux_sock, server_start=1,
+                                                     server_pid=1, pane="%3")),
+            "a written_at that isn't a time": dict(written_at=True),
+            "a successor in another pane": dict(at="%4"),
+        }
+        for why, kw in cases.items():
+            with self.subTest(why):
+                shutil.rmtree(os.path.join(self.tmp, "state", "dotclaude", "pass-last"), True)
+                at = kw.pop("at", "%3")
+                if why != "no marker":
+                    self.marker(**kw)
+                self.run_hook(self.NEW, source="startup", pane=at)
+                self.assertEqual(self.read(self.lead_path), before)
+        self.assertEqual(self.relinks(), [])
+        self.marker()
+        pid, res = self.run_hook(self.NEW, source="startup")
+        self.assertLead(pid, self.NEW)
+        self.assertBoardOnly(res)
+        (line,) = self.relinks()
+        self.assertIn(f" relink pass sid={self.NEW} rc=0: ", line)
+
+    def test_a_fresh_session_never_takes_it(self):
+        before = self.write_record(self.exited(), 1)
+        self.run_hook(self.NEW, source="startup", pane="%9")
+        self.run_hook(self.NEW, name="Stop", pane="%9")
+        self.assertEqual(self.read(self.lead_path), before)
+        self.assertEqual(self.relinks(), [])
+
+    def test_a_lane_session_with_the_recorded_id_never_takes_it(self):
+        before = self.write_record(self.exited(), 1)
+        _, res = self.run_hook(self.OLD, at=self.path)  # its event and session file in the lane
+        self.assertIn("You are lane `chart-fix`", res["out"])
+        self.assertEqual(self.relinks(), [])
+        # One cd'd to main: the hook sees main, and `lane lead` refuses by its launch dir.
+        self.run_hook(self.OLD, name="Stop", cwd=self.path)
+        self.assertEqual(self.read(self.lead_path), before)
+        (line,) = self.relinks()
+        self.assertIn(f" relink resume sid={self.OLD} rc=1: lane: session {self.OLD} launched "
+                      f"in {self.path}, outside the main checkout", line)
+
+    def test_a_stop_heals_as_session_start_does(self):
+        self.write_record(self.exited(), 1)
+        pid, res = self.run_hook(self.OLD, name="Stop")
+        self.assertEqual(res["out"], "")
+        self.assertLead(pid, self.OLD)
+
+    def test_the_fast_path_runs_no_lane_lead(self):
+        # The recorded process runs and runs the hook, with the recorded session id.
+        def lead(pids):
+            self.before = self.write_record(pids[0], self.starts[pids[0]])
+
+        for name in ("SessionStart", "Stop"):
+            with self.subTest(name):
+                self.run_hook(self.OLD, name=name, before=lead)
+                self.assertEqual(self.read(self.lead_path), self.before)
+        self.assertEqual(self.relinks(), [])
+
+    def test_a_malformed_record_changes_nothing(self):
+        for bad in ("{not json", json.dumps({"pid": "1", "procStart": 1, "sessionId": self.OLD}),
+                    "[" * 100000):
+            with self.subTest(bad=bad[:20]):
+                self.write(self.lead_path, bad)
+                _, res = self.run_hook(self.OLD, source="startup")
+                self.assertBoardOnly(res)
+                self.run_hook(self.OLD, name="Stop")
+                self.assertEqual(self.read(self.lead_path), bad)
+        self.assertEqual(self.relinks(), [])
+
+    def test_the_relink_fits_inside_the_hook_s_timeout(self):
+        # Claude Code kills the hook at its settings.json timeout: `lane lead` must give up a
+        # second ahead of it, leaving room for resolve() and the proof.
+        spec = importlib.util.spec_from_file_location(
+            "lane_identity_t", os.path.join(HOOKS, "lane_identity.py"))
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        with open(os.path.join(os.path.dirname(HOOKS), "settings.json")) as f:
+            settings = json.load(f)
+        timeouts = [h["timeout"] for event in ("SessionStart", "Stop")
+                    for group in settings["hooks"][event] for h in group["hooks"]
+                    if "lane-identity.sh" in h["command"]]
+        self.assertEqual(len(timeouts), 2)
+        self.assertLessEqual(mod.RELINK_WAIT, min(timeouts) - 1)
 
 
 if __name__ == "__main__":
