@@ -351,6 +351,7 @@
         "~/dotclaude/setup-chrome-wsl.sh",
         "~/dotclaude/sync.sh",
         "~/dotclaude/chrome-debug.ps1",
+        "~/dotclaude/chrome-bg.ps1",
         "~/dotclaude/git",
         "~/dotclaude/plugins",
         "~/dotclaude/tools.json",
@@ -550,6 +551,16 @@
           {
             "type": "command",
             "command": "bash \"$HOME/.claude/hooks/lane-identity.sh\"",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "startup|resume|clear|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$HOME/.claude/hooks/blank-display.sh\"",
             "timeout": 5
           }
         ]
