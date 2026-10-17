@@ -251,7 +251,8 @@ stored here).
     two-sessions, and ran the chain for #106 and #107. The fourth (64626d32) started at 5cb88d8:
     it wrote the `lane open --model` design note, removed two leftover writer worktrees from
     #105 (every patch already in main), ran the chain for #108 to #114, opened
-    lane-model and remote-paste, and walked Hayden through #113's live test.
+    lane-model, remote-paste, stopped-lead and future-ask, and walked Hayden through #113's live
+    test.
   - **Vulcan sessions that were already running keep their display** until they restart: the
     blanking hook fires only at session start. The `ro-lesson` lane was opening WSLg windows
     at 21:43 local; Hayden tells it to go headless or `/pass`.
