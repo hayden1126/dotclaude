@@ -86,23 +86,22 @@ stored here).
     one lead per main checkout, the last to act as lead, `lane lead`, and lead² tabs),
     `remote-paste` #111 (2026-10-16: Alt+V in tmux pastes the newest image sent to HAYPC, and an
     opt-in laptop Ctrl+V uploads its clipboard image first; the lane stays open, `Keep open:`, for
-    a follow-up PR with the laptop's non-image files and README's `tmux/` and `tests/setup/` rows
-    once chrome-bg merges). `gh pr view <n>` and the closed records under `.git/lanes/_closed/` hold the detail; tab-bar's
+    a follow-up PR with the laptop's non-image files and README's `tmux/` and `tests/setup/`
+    rows), `chrome-bg` #112 (2026-10-17: `bin/chrome-bg` runs a Windows Chrome for headed probes
+    behind every window without taking focus, and `hooks/blank-display.sh` blanks the display for
+    Bash in repos with `dotclaude.blankDisplay true`; Vulcan is opted in, and the lead updated
+    Vulcan's memory `no-chrome-windows-in-front.md` to match). `gh pr view <n>` and the closed
+    records under `.git/lanes/_closed/` hold the detail; tab-bar's
     design is in [[dotclaude-tab-bar]]. Tabs opened before #102's install (2026-10-14) keep the
     old startup hooks (no PermissionRequest or SubagentStop wiring) until they restart.
-  - `chrome-bg` (opened 2026-10-14, Hayden's ask and picks): `bin/chrome-bg` opens a Windows
-    Chrome for test probes behind every window without taking focus, for `puppeteer.connect`,
-    and one dotclaude hook blanks `DISPLAY` and `WAYLAND_DISPLAY` for Bash in opted-in repos.
-    Spike, logs and the measured mechanism: `~/scratch/chrome-bg-spike/NOTES.md`. Until it
-    merges, every Vulcan checkout (the main one and its 11 worktrees) carries that hook in an
-    untracked `.claude/settings.local.json`, written by the lead 2026-10-14 (git ignores it
-    machine-wide); the lane lists them for removal once its hook is live. At merge the lead also
-    updates Vulcan's memory `no-chrome-windows-in-front.md` (it says `chrome-bg` isn't installed
-    yet).
-  - **Merge order: `chrome-bg`, then `lane-model` (#110) and remote-paste's follow-up, whichever
-    is ready first.** The lead's STATUS commits rode none of #108 (Hayden merged it before its
-    ready step), #109 or #111 (merged from draft), so main's STATUS.md is far behind
-    `chore/after-pr4`. The next lane's ready step carries them (a STATUS-only PR is ruled out).
+  - Nine Vulcan checkouts still carry the old copy of the display hook in an untracked
+    `.claude/settings.local.json` (the lead wrote them 2026-10-14, before #112's hook):
+    `~/code/capella-studio`, `~/code/vulcan-docs` and seven under `~/code/vulcan-lanes/`
+    (chrome-bg's closed record lists them), now redundant with the live hook. Removing them is the Vulcan lead's ask for Hayden.
+  - **Merge order: `lane-model` (#110) and remote-paste's follow-up, whichever is ready
+    first.** #112 carried the lead's STATUS commits through `c7e1e81` (its `dbc75a3`); the next
+    lane's ready step carries whatever `git diff origin/main chore/after-pr4 -- STATUS.md
+    PLAN.md` still shows.
   - The parked json-depth sweep (21 files, among them the delegation enforcement scripts) is on
     `fix/json-depth-sweep`, a local branch never pushed: keep it while the sweep is in the
     backlog. Shipping it first needs a check of how each enforcement site fails
@@ -233,9 +232,9 @@ stored here).
 
 ## Notes for next session
 - **Next (lead, main checkout):** watch for "merged #N" from a lane, then run the post-merge
-  chain (`skills/lanes/SKILL.md`, The lead, step 7). Live lanes: `chrome-bg`, `lane-model` and
+  chain (`skills/lanes/SKILL.md`, The lead, step 7). Live lanes: `lane-model` and
   `remote-paste` (both opened 2026-10-15, Hayden's picks; briefs in their records; remote-paste
-  merged #111 and stays open for its follow-up). All 3 slots are full. Check `lane ls` first: a merge Hayden made on GitHub and mentioned to no
+  merged #111 and stays open for its follow-up). One of 3 slots is free. Check `lane ls` first: a merge Hayden made on GitHub and mentioned to no
   session sends no message (#102 showed merged there before its lane's message came). Each new work-repo lane still needs its own Edit deny rule
   (they take no glob); `lane new` prints it since #104. No chat
   about a lane's own asks; speak on cross-lane orders, decisions raised with the lead, failed
@@ -245,7 +244,7 @@ stored here).
     (69d146cc) started at 433fe8f: it opened identity-branch, install-hint, chrome-bg and
     two-sessions, and ran the chain for #106 and #107. The fourth (64626d32) started at 5cb88d8:
     it wrote the `lane open --model` design note, removed two leftover writer worktrees from
-    #105 (every patch already in main), ran the chain for #108, #109 and #111, and opened
+    #105 (every patch already in main), ran the chain for #108, #109, #111 and #112, and opened
     lane-model and remote-paste.
   - **Vulcan sessions that were already running keep their display** until they restart: the
     blanking hook fires only at session start. The `ro-lesson` lane was opening WSLg windows
