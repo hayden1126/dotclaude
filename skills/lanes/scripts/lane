@@ -222,6 +222,14 @@ def window_label(session: dict) -> str:
     return window_of(tmux) if isinstance(tmux, str) and tmux else "no tmux"
 
 
+def stopped_note(who: str, session: dict) -> str:
+    """`<who> (pid N, <window>) is stopped (Ctrl+Z): fg it there`, for a session whose process
+    exists but is stopped (lanelib.session_stopped): its socket still accepts a message that
+    nothing reads until it is continued. Unmasked, like window_label."""
+    return (f"{who} (pid {session['pid']}, {window_label(session)}) is stopped (Ctrl+Z): fg it "
+            "there")
+
+
 def fetch(repo: Repo) -> bool:
     p = git(["fetch", "--quiet", "origin"], repo.toplevel)
     if p.returncode != 0:
@@ -1429,11 +1437,12 @@ def cmd_addr(args) -> None:
     SendMessage address that holds while the session's title (its ListAgents name) changes. A
     pass or restart gives the session a new pid and socket, so resolve it before each send.
     A session is where its file's cwd says, the dir it launched in (as `ls` and `open` read it;
-    a Bash cd doesn't move it, probed on 2.1.296), and live when /proc agrees
-    (lanelib.session_running): sandboxed Bash can write neither. A lane's path comes from its
-    lane.json, which it can, so load_lane and usable_path check it first. With two or more
-    live sessions in the main checkout, `lead` names the recorded lead (lanelib.lead_of), or
-    refuses with the way to pick one (LEAD_HINT)."""
+    a Bash cd doesn't move it, probed on 2.1.296), and live when /proc agrees it runs
+    (lanelib.session_running): sandboxed Bash can write neither. A stopped session (Ctrl+Z) is
+    never an address, since nothing reads its socket until `fg`; a refusal names its window
+    instead. A lane's path comes from its lane.json, which it can, so load_lane and usable_path
+    check it first. `lead` names the lead lanelib.lead_of picks among the main checkout's live
+    sessions, or refuses with the way to pick one (LEAD_HINT) and any stopped lead's window."""
     if not lanelib.pids_visible():
         raise LaneError(f"sandboxed: other sessions' processes are out of sight, so a live "
                         f"session can't be told from a stale file. Run it as a bare `lane addr "
@@ -1452,23 +1461,34 @@ def cmd_addr(args) -> None:
             raise LaneError(f"lane {args.id} is stale: its worktree {lane['path']} is gone")
         path = usable_path(repo, lane)
         where, hint = f"lane {args.id}", f": `lane open {args.id}` starts one"
+    pick, note, stopped = None, None, []
     if args.id == "lead":
         found = lanelib.main_sessions(repo)
-        pick = lanelib.lead_of(repo, found)  # the one there is, or the recorded lead's
-        found = [pick] if pick else found
+        pick = lanelib.lead_of(repo, found)  # the recorded lead, its continuation, or the one
+        if pick:
+            found = [pick]
+        elif lead := lanelib.stopped_lead(repo):
+            note = shown(stopped_note("The lead", lead))
     else:
-        found = [s for s in lanelib.session_files() if lanelib.cwd_inside(s.get("cwd"), path)
-                 and lanelib.session_running(s)]
+        here = [s for s in lanelib.session_files() if lanelib.cwd_inside(s.get("cwd"), path)]
+        found = [s for s in here if lanelib.session_running(s)]
+        stopped = [s for s in here if lanelib.session_stopped(s)]
     found = [(s, sock) for s in found if (sock := lanelib.socket_of(s))]
     if not found:
-        raise LaneError(f"no live session in {where}{hint}")
-    if len(found) > 1:
+        if stopped:  # instead of `lane open`, which refuses beside a stopped session
+            hint = ": " + "; ".join(shown(stopped_note("a session", s)) for s in stopped)
+        raise LaneError(f"no live session in {where}{hint}" + (f". {note}" if note else ""))
+    if len(found) > 1 or (args.id == "lead" and not pick):
         rows = "; ".join(shown(" ".join([f"pid {s['pid']}", str(s.get("kind") or "?"),
                                          window_label(s), str(s.get("status") or "?"),
                                          "uds:" + sock]))
                          for s, sock in found)
-        tail = f". {LEAD_HINT}" if args.id == "lead" else ""
-        raise LaneError(f"{len(found)} live sessions in {where}, so no one address: {rows}{tail}")
+        tail = []
+        if args.id == "lead":  # one running beside a stopped lead isn't it (lanelib.lead_of)
+            tail = ([LEAD_HINT] if len(found) > 1 or not note else []) + ([note] if note else [])
+        head = (f"{len(found)} live sessions in {where}, so no one address" if len(found) > 1
+                else f"1 live session in {where}, and it is not the lead")
+        raise LaneError(". ".join([f"{head}: {rows}", *tail]))
     say("uds:" + found[0][1])
 
 
@@ -2321,7 +2341,8 @@ def sessions_above() -> list[tuple[dict, lanelib.Proc]]:
 LEAD_ACTS = ("init", "new", "adopt", "open", "done")  # each, when it succeeds, takes the lead
 LEAD_HINT = ("No lead picked: the lead takes it with a bare `lane lead` (Hayden: `! lane lead` at "
              "the lead's prompt), or any bare lane new, open, adopt or done it runs. After a tmux "
-             "restart the lead must act again")
+             "restart, a restored tab that resumes the lead's session keeps the lead; otherwise "
+             "the lead must act again")
 SANDBOXED_LEAD = ("sandboxed: the Claude session above this command is out of sight, and the "
                   "state dir is read-only. Run it as a bare `lane lead` (excludedCommands runs "
                   "that outside the sandbox)")

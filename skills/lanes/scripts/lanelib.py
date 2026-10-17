@@ -1182,7 +1182,7 @@ def read_lead(repo: Repo) -> dict | None:
 
 def main_sessions(repo: Repo) -> list[dict]:
     """The live sessions in the main checkout, by pid: session files whose process runs
-    (session_running), with a socket (socket_of: a `claude -p` has none, so it never counts)
+    (session_running: a stopped one answers nothing), with a socket (socket_of: a `claude -p` has none, so it never counts)
     and a cwd inside repo.main, agent worktrees under it included. `lane addr lead`, the board's
     footer and lead_of share this one set. Call it only where pids_visible()."""
     return sorted((s for s in session_files() if cwd_inside(s.get("cwd"), repo.main)
@@ -1190,20 +1190,40 @@ def main_sessions(repo: Repo) -> list[dict]:
 
 
 def lead_of(repo: Repo, sessions: list[dict]) -> dict | None:
-    """The lead among main_sessions(repo): with one, that one, whatever the record says; with
-    two or more, the one whose pid and procStart the record holds (a /clear keeps both); else
-    the one session whose own environment names the record's tmux server (socket, pid and
-    start) and pane, which is a /pass successor (`respawn-pane -k` keeps the pane). Two in that
-    pane (a child claude inherits TMUX_PANE), a tmux restart, or no record: None."""
-    if len(sessions) <= 1:
-        return sessions[0] if sessions else None
+    """The lead among main_sessions(repo), which run (a stopped one is out of reach): the one
+    whose pid and procStart the record holds (a /clear keeps both); else the record's one
+    continuation, a session with the record's session id (a resume: in the same tab, another,
+    or a tmux restart's restored tab) or one whose own environment names the record's tmux
+    server (socket, pid and start) and pane (a /pass successor: `respawn-pane -k` keeps the
+    pane). Two continuations (a resume beside a fresh claude in the old pane, two resumes, a
+    child claude that inherits TMUX_PANE) give None. With none, one session is the lead, as
+    long as the recorded process isn't stopped (Ctrl+Z): beside a lead that `fg` brings back,
+    the one running is likely a side chat (Hayden's call, 2026-10-17). Else None."""
+    if not sessions:
+        return None
     rec = read_lead(repo)
-    if rec is None:
+    if rec is not None:
+        for s in sessions:
+            if s["pid"] == rec["pid"] and proc_start_of(s) == rec["procStart"]:
+                return s
+        on = {s["pid"]: s for s in sessions if s.get("sessionId") == rec["sessionId"]
+              or (rec["tmux"] is not None and proc_tmux(s["pid"]) == rec["tmux"])}
+        if len(on) == 1:
+            return next(iter(on.values()))
+    if len(sessions) == 1 and not (rec is not None and session_stopped(rec)):
+        return sessions[0]
+    return None
+
+
+def stopped_lead(repo: Repo) -> dict | None:
+    """The recorded lead when its process exists and is stopped (Ctrl+Z): its session file (by
+    pid and procStart), or {"pid"} when none names it; else None. The refusals and the board
+    footer name it, so Hayden knows which tab to `fg` in."""
+    rec = read_lead(repo)
+    if rec is None or not session_stopped(rec):
         return None
-    for s in sessions:
-        if s["pid"] == rec["pid"] and proc_start_of(s) == rec["procStart"]:
+    for s in session_files():
+        if type(s.get("pid")) is int and s["pid"] == rec["pid"] \
+                and proc_start_of(s) == rec["procStart"]:
             return s
-    if rec["tmux"] is None:
-        return None
-    on = [s for s in sessions if proc_tmux(s["pid"]) == rec["tmux"]]
-    return on[0] if len(on) == 1 else None
+    return {"pid": rec["pid"]}

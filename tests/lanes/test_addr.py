@@ -131,6 +131,19 @@ class Addr(LiveSessions):
         self.session(self.lane_path("chart-fix"), pid=p.pid)
         self.refused("chart-fix", "no live session")
 
+    def test_a_stopped_session_is_named_never_addressed(self):
+        # Its socket still accepts connections, but nothing answers until `fg` continues it.
+        path = self.lane_path("chart-fix")
+        stopped = self.child(path)
+        self.session(path, pid=stopped, sessionId="s-lane")
+        self.stop(stopped)
+        err = self.refused("chart-fix", "no live session in lane chart-fix",
+                           f"a session (pid {stopped}, proj:@{stopped}) is stopped (Ctrl+Z): "
+                           "fg it there")
+        self.assertNotIn("lane open", err)
+        twin = self.session(path, sessionId="s-lane")  # resumed elsewhere: the one that answers
+        self.assertEqual(self.lane("addr", "chart-fix"), twin + "\n")
+
     def test_sandboxed_it_refuses_rather_than_guess(self):
         self.session(self.lane_path("chart-fix"))
         self.env["_LANE_TEST_SANDBOXED"] = "1"
@@ -249,6 +262,91 @@ class LeadPick(LiveSessions):
         self.write_lead(other, tmux=self.tmux_of("%1"))
         self.assertEqual(self.addr_lead(), want)
 
+    def test_a_gone_record_and_one_unrelated_session_picks_that_one(self):
+        gone = self.child(self.main, done=True)
+        want = self.session(self.main)
+        self.write_lead(gone, start=1, tmux=self.tmux_of("%7"))
+        self.assertEqual(self.addr_lead(), want)
+
+    # ---- a stopped lead (Ctrl+Z) and the continuations of the lead's session ----------------
+
+    def incident(self):
+        """2026-10-17: the recorded lead stopped in pane %3, the same session id resumed there
+        as a twin, and a side session in a pane of its own. (lead pid, its uds, twin's uds)."""
+        lead = self.child(self.main, pane="%3")
+        lead_uds = self.session(self.main, pid=lead, sessionId="s-lead")
+        twin = self.child(self.main, pane="%3")
+        twin_uds = self.session(self.main, pid=twin, sessionId="s-lead")
+        self.session(self.main)
+        self.write_lead(lead, sid="s-lead", tmux=self.tmux_of("%3"))
+        self.stop(lead)
+        return lead, lead_uds, twin_uds
+
+    def test_a_stopped_lead_resumed_in_its_pane_picks_the_twin(self):
+        _, _, twin = self.incident()
+        self.assertEqual(self.addr_lead(), twin)
+
+    def test_a_stopped_lead_continued_is_the_lead_again(self):
+        lead, want, _ = self.incident()
+        self.cont(lead)
+        self.assertEqual(self.addr_lead(), want)
+
+    def test_a_resume_in_another_tab_beside_a_side_session_is_the_lead(self):
+        gone = self.child(self.main, done=True)
+        want = self.session(self.main, sessionId="s-lead")
+        self.session(self.main)
+        self.write_lead(gone, start=1, sid="s-lead", tmux=self.tmux_of("%7"))
+        self.assertEqual(self.addr_lead(), want)
+
+    def test_a_tmux_restart_that_resumes_the_lead_keeps_it(self):
+        # The record names a pane on the old server; the restored tab resumes the session id in
+        # a new pane (pane ids restart at %0, so it may even reuse the old id).
+        gone = self.child(self.main, done=True)
+        restored = self.child(self.main, pane="%7")
+        want = self.session(self.main, pid=restored, sessionId="s-lead")
+        self.session(self.main)
+        self.write_lead(gone, start=1, sid="s-lead",
+                        tmux=self.tmux_of("%7", self.tmux_server("old")))
+        self.assertEqual(self.addr_lead(), want)
+
+    def test_a_resume_and_another_claude_in_the_recorded_pane_pick_none(self):
+        gone = self.child(self.main, done=True)
+        in_pane = self.child(self.main, pane="%7")
+        self.session(self.main, pid=in_pane)
+        self.session(self.main, sessionId="s-lead")
+        self.write_lead(gone, start=1, sid="s-lead", tmux=self.tmux_of("%7"))
+        self.refused("2 live sessions in the main checkout", "No lead picked")
+
+    def test_two_resumes_of_the_recorded_session_pick_none(self):
+        gone = self.child(self.main, done=True)
+        self.session(self.main, sessionId="s-lead")
+        self.session(self.main, sessionId="s-lead")
+        self.write_lead(gone, start=1, sid="s-lead")
+        self.refused("2 live sessions in the main checkout", "No lead picked")
+
+    def test_a_stopped_lead_beside_one_unrelated_session_refuses_naming_it(self):
+        # Hayden's call (2026-10-17): the one running session is likely a side chat, so it
+        # never inherits the lead from a lead that is only stopped.
+        lead = self.child(self.main, pane="%3")
+        self.session(self.main, pid=lead)
+        side = self.session(self.main)
+        self.write_lead(lead, tmux=self.tmux_of("%3"))
+        self.stop(lead)
+        err = self.refused("1 live session in the main checkout (the lead), and it is not the "
+                           "lead", f"The lead (pid {lead}, proj:@{lead}) is stopped (Ctrl+Z): "
+                           "fg it there")
+        self.assertIn(side, err)  # listed, never printed as the address
+        self.cont(lead)
+        self.assertEqual(self.addr_lead(), f"uds:{os.path.join(self.socks, f'{lead}.sock')}")
+
+    def test_a_stopped_lead_alone_refuses_naming_it(self):
+        lead = self.child(self.main, pane="%3")
+        self.session(self.main, pid=lead)
+        self.write_lead(lead, tmux=self.tmux_of("%3"))
+        self.stop(lead)
+        self.refused("no live session in the main checkout (the lead)",
+                     f"The lead (pid {lead}, proj:@{lead}) is stopped (Ctrl+Z): fg it there")
+
     def test_no_pick_refuses_with_each_window_and_the_way_to_pick(self):
         (a, ua), (b, ub) = self.pair()
         err = self.refused("2 live sessions in the main checkout (the lead), so no one address",
@@ -257,7 +355,9 @@ class LeadPick(LiveSessions):
                            "No lead picked: the lead takes it with a bare `lane lead`",
                            "(Hayden: `! lane lead` at the lead's prompt)",
                            "or any bare lane new, open, adopt or done it runs",
-                           "After a tmux restart the lead must act again")
+                           "After a tmux restart, a restored tab that resumes the lead's "
+                           "session keeps the lead; otherwise the lead must act again")
+        self.assertNotIn("stopped", err)
         self.assertNotIn(f"%{a}", err)  # the window, not the pane
 
     def test_a_bad_record_picks_none(self):
