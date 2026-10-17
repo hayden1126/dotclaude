@@ -8,7 +8,8 @@ install-remote-paste.ps1: install the laptop side of remote-paste (opt-in: nothi
 Copies remote-paste.ahk and remote-paste.ps1 to %LOCALAPPDATA%\remote-paste and writes
 remote-paste.ini there: the target and the rest stay on this laptop (dotclaude is public, so
 no host name lives in it). Then it adds a Startup shortcut so the hotkey runs at sign-in,
-starts it, and checks the whole link with a 1x1 PNG the PC validates and doesn't keep. Needs
+starts it, and checks the whole link with a 1x1 PNG, sent with a file name, that the PC
+validates and doesn't keep (a PC whose paste-inbox predates files fails it). Needs
 AutoHotkey v2 (winget install --id AutoHotkey.AutoHotkey), this laptop's WSL ssh reaching the
 PC's Windows shell port with a key that needs no typed passphrase, and a known_hosts entry for
 that port (connect once by hand: ssh -p 2222 <target>). -Target is user@host or a Host from the
