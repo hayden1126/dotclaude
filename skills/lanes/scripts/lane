@@ -2,12 +2,12 @@
 """lane: parallel Claude sessions, one git worktree ("lane") each, with single-writer records.
 
   lane init [--root DIR] [--setup CMD] [--ports A-B] [--cap N] [--locks A,B]
-            [--autopass | --no-autopass]
+            [--autopass | --no-autopass] [--model M] [--effort E]
   lane new <id> [--branch B] [--claim N ...] [--goal T] [--files T] [--overlaps T]
                [--done-when T] [--constraints T]
   lane adopt <path> [--id SLUG]
   lane ls [--json] [--requests]
-  lane open <id> [--focus] [--print] [prompt]
+  lane open <id> [--focus] [--print] [--model M] [--effort E] [prompt]
   lane addr <id> | lane addr lead
   lane lead
   lane lock <name> [--wait SECS] -- <cmd...>
@@ -93,6 +93,8 @@ HOLDER_CMD_MAX = 120  # chars of the wrapped command kept in a lock's holder lin
 RECORD_READ = 1 << 20  # bytes of a lane's STATUS.md read by `ls` and `done`
 PR_LIMIT = 200  # PRs `ls` lists in its one gh call, newest first
 CLOCK_SLACK = 10  # secs: HAYPC's wall clock steps by about 5 s, and GitHub keeps another clock
+# init's defaults and open's flags for claude's --model and --effort -> each one's check
+PICKS = {"model": lanelib.model_problem, "effort": lanelib.effort_problem}
 # new's brief flags -> the <placeholder> each fills in templates/LANE.md
 BRIEF = {"goal": "goal", "files": "files", "overlaps": "overlaps", "done_when": "done-when",
          "constraints": "constraints"}
@@ -613,6 +615,9 @@ def cmd_init(args) -> None:
     parse_ports(args.ports or "")
     if args.locks is not None:
         args.locks = ",".join(parse_locks(args.locks))
+    for key, problem in PICKS.items():
+        if (value := getattr(args, key)) and (why := problem(value)):
+            raise LaneError(why)
     with lock(repo):
         cfg = repo.config() if repo.has_lanes else {}
         name = os.path.basename(repo.main)
@@ -628,6 +633,12 @@ def cmd_init(args) -> None:
                 cfg[key] = os.path.abspath(os.path.expanduser(value)) if key == "root" else value
         if args.autopass is not None:  # unset means on (autopass_state.decide)
             cfg["autopass"] = args.autopass
+        for key in PICKS:  # empty means the user's default: no flag at `open`
+            value = getattr(args, key)
+            if value == "":
+                cfg.pop(key, None)
+            elif value is not None:
+                cfg[key] = value
         try:
             write_config(repo, cfg)
         except OSError as e:
@@ -1343,8 +1354,12 @@ def cmd_open(args) -> None:
                             "(excludedCommands runs that outside the sandbox)")
         warn(f"{unknown}: the printed command may duplicate a live session")
     if here := sessions_in(live or [], path):
+        if args.model is not None or args.effort is not None:
+            raise LaneError(f"lane {args.id} already has a live session, and a pick applies only "
+                            "at launch: /model or /effort in its window changes it")
         focus_session(args, here)
         return
+    pick = open_pick(args, repo.config())
     claude = shutil.which("claude")
     if claude is None:
         raise LaneError("claude is not on PATH")
@@ -1353,7 +1368,7 @@ def cmd_open(args) -> None:
     # The absolute claude path: tmux's PATH lacks ~/.local/bin.
     argv = ["tmux", "new-window", "-P", "-F", "#{session_name}:#{window_index} (#{window_name})",
             "-c", path, "-n", args.id, *([] if args.focus else ["-d"]), "--",
-            os.path.abspath(claude), "--permission-mode", "plan", prompt]
+            os.path.abspath(claude), *pick, "--permission-mode", "plan", prompt]
     if args.print:
         say(shlex.join(argv))
         return
@@ -1365,7 +1380,28 @@ def cmd_open(args) -> None:
     # Only the time: the window is derived from the live session on each `ls` (invariant 4).
     with lock(repo):
         lanelib.update_lane(repo, args.id, lambda x: x.update(opened=now_iso()))
-    say(f"opened {args.id} in tmux window {p.stdout.strip()}")
+    say(f"opened {args.id} in tmux window {p.stdout.strip()}"
+        + (f" with {shlex.join(pick)}" if pick else ""))
+
+
+def open_pick(args, cfg: dict) -> list[str]:
+    """claude's --model and --effort for `open`: each flag, else the lanes config's default, else
+    none (the user's default; an empty flag skips the config's). A plain pass carries them
+    (pass-respawn's carried_pick), so they are checked here, where Hayden sees the refusal: a
+    bad model would only show as an API error in a detached window (docs/lanes.md, "Model and
+    effort")."""
+    pick = []
+    for key, problem in PICKS.items():
+        value, flag = getattr(args, key), getattr(args, key) is not None
+        if not flag:
+            value = cfg.get(key)
+        if not value:
+            continue
+        if why := problem(value):
+            raise LaneError(why if flag else f"the lanes config's {key}: {why}. Fix it with "
+                            f"`lane init --{key} <{key}>`, or `lane init --{key} ''` for none")
+        pick += [f"--{key}", value]
+    return pick
 
 
 def focus_session(args, here: list[dict]) -> None:
@@ -2600,6 +2636,9 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--locks", help="comma-separated names `lane lock` accepts, e.g. gate,e2e")
     p.add_argument("--autopass", action=argparse.BooleanOptionalAction, default=None,
                    help="auto-pass in the lanes and the main checkout (on when never set)")
+    p.add_argument("--model", help="claude --model for each `lane open` ('' for the user's default)")
+    p.add_argument("--effort", help="claude --effort for each `lane open` ('' for the user's "
+                                    "default)")
     p = sub.add_parser("new", help="make a lane: worktree, branch, record, port, setup")
     p.add_argument("id")
     p.add_argument("--branch", help="branch name (default: the id)")
@@ -2621,6 +2660,9 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--focus", action="store_true",
                    help="switch to the window (a new one, or the live session's)")
     p.add_argument("--print", action="store_true", help="print the tmux command, run nothing")
+    p.add_argument("--model", help="claude --model for this launch (default: init's; '' for none)")
+    p.add_argument("--effort", help="claude --effort for this launch (default: init's; '' for "
+                                    "none)")
     p.add_argument("prompt", nargs="?", help="first prompt (default: read the record, plan the brief)")
     p = sub.add_parser("addr", help="the messaging address (uds:<socket>) of a lane's live "
                                     "session, or the lead's; resolve it before each send")

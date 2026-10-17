@@ -640,7 +640,9 @@ and status single-writer:
   copies the files `.worktreeinclude` lists, hands out a port, runs the repo's setup command and
   seeds the lane's record (`<lane>/.lane/STATUS.md`, from `templates/LANE.md`).
 - `lane open chart-fix` starts the lane's session in a new tmux window, in plan mode, told to
-  read its record; `--focus` switches to a session already running there. Trust the lanes root
+  read its record; `--focus` switches to a session already running there. `--model` and
+  `--effort` (repo defaults from `lane init`) pick its model and effort, and a plain pass keeps
+  them (docs/lanes.md, "Model and effort"). Trust the lanes root
   in Claude Code once (`lane init` prints how), or each new window waits at the trust dialog.
 - `lane ls` is the board, derived live from git, gh and the session files, down to each lane's
   tmux window, context (CTX: `312k*` past the auto-pass soft tier, `523k!` past hard) and
