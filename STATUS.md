@@ -93,7 +93,9 @@ stored here).
     natively with no upload), `chrome-bg` #112 (2026-10-17: `bin/chrome-bg` runs a Windows Chrome for headed probes
     behind every window without taking focus, and `hooks/blank-display.sh` blanks the display for
     Bash in repos with `dotclaude.blankDisplay true`; Vulcan is opted in, and the lead updated
-    Vulcan's memory `no-chrome-windows-in-front.md` to match). `gh pr view <n>` and the closed
+    Vulcan's memory `no-chrome-windows-in-front.md` to match), `lane-model` #110 (2026-10-17:
+    `lane init` and `lane open` take `--model` and `--effort`, and a plain pass keeps them;
+    docs/lanes.md "Model and effort"). `gh pr view <n>` and the closed
     records under `.git/lanes/_closed/` hold the detail; tab-bar's
     design is in [[dotclaude-tab-bar]]. Tabs opened before #102's install (2026-10-14) keep the
     old startup hooks (no PermissionRequest or SubagentStop wiring) until they restart.
@@ -101,13 +103,8 @@ stored here).
     `.claude/settings.local.json` (the lead wrote them 2026-10-14, before #112's hook):
     `~/code/capella-studio`, `~/code/vulcan-docs` and seven under `~/code/vulcan-lanes/`
     (chrome-bg's closed record lists them), now redundant with the live hook. Removing them is the Vulcan lead's ask for Hayden.
-  - **Merge order: `lane-model` (#110) is the only PR left.** #112 carried the lead's STATUS
-    commits through `c7e1e81` (its `dbc75a3`), #113 none; #110's ready step carries whatever `git
-    diff origin/main chore/after-pr4 -- STATUS.md PLAN.md` still shows. #113 merged while
-    lane-model held the install (its smoke passed at 2678e75), so the lead's `./setup.sh` from
-    main after #113 released that hold, as setup's first line said: the machine runs main without
-    #110 until #110 merges and the lead reinstalls. Lane-model was told; reinstalling from its
-    branch meanwhile is its call with Hayden.
+  - No lane is open and no PR is pending (2026-10-17). #110 carried the lead's STATUS commits
+    through `cf95efa`; whatever the lead commits after rides the next lane PR's ready step.
   - The parked json-depth sweep (21 files, among them the delegation enforcement scripts) is on
     `fix/json-depth-sweep`, a local branch never pushed: keep it while the sweep is in the
     backlog. Shipping it first needs a check of how each enforcement site fails
@@ -126,19 +123,22 @@ stored here).
     rerun the menu-clip repro and the tmux suites. If it fixes the clip, install at a quiet
     moment (a server restart; claude-restore reopens the tabs) and drop the row-0 menu rule.
     Until then, 3.7c's default menus that dotclaude doesn't own still clip under a top bar.
-  - **`lane open --model/--effort`** (open as lane `lane-model` since 2026-10-15; this note
-    is its design pointer). `lane init --model/--effort`
-    sets repo defaults in the lanes config, `lane open --model/--effort` overrides them for one
-    lane, and both pass through to `claude` (2.1.296 has `--model` and `--effort
-    low|medium|high|xhigh|max`). Today `cmd_open` hardcodes the argv. The trap: auto-pass
-    relaunches through `pass-respawn`, whose plain mode runs `claude [--permission-mode plan]
-    <prompt>` (`actions()`), so a pick lasts only until the lane's first plain pass (compact
-    keeps the running session). The lane rates where the pick lives (the session's own command
-    line, which `pass-respawn` already reads for `--add-dir` and `--settings`; `lane.json`; or
-    the lanes config) across a plain pass, a `/model` change mid-session, a default changed
-    after the lane opened, the lead's main checkout, and a bad model name failing in a detached
-    window nobody watches. Files: the lane script (init, open),
-    `skills/pass/scripts/pass-respawn`, SKILL.md, `docs/lanes.md`, `tests/lanes`, `tests/pass`.
+  - **A lead stopped with Ctrl+Z keeps the lead role** (seen 2026-10-17; open as lane
+    `stopped-lead` since 2026-10-17, brief in its record). Hayden suspended the
+    lead's claude (pid 1107, `ps` state `T`) and resumed the same session id in the same shell as
+    pid 40133. `lane addr lead` still gave 1107's socket, so lane-model's `merged #110` timed out
+    twice, and the board named 1107 lead until the new process ran `lane lead`. Fix in the lane
+    script's lead lookup: skip a stopped claude (state `T`), or prefer the newest live process of
+    the lead's session id.
+  - **Green tab for an ask the reply only announces** (Hayden, 2026-10-17: Vulcan lane `keys`,
+    pane %44; open as lane `future-ask` since 2026-10-17, brief in its record). Its turn ended "...that needs your OK. I'll ask when the probes come up. Waiting
+    on S2b." with a writer subagent running. `ring.log` 18:52:20: `quiet busy=1 tasks=subagent`,
+    then `input=yes painted=1`, so the tab sat green while nothing was wanted. Of 66 green verdicts
+    that day, 21 came with agents running. About 3 of those 21 were wrong (an ask announced for
+    later, a list of next steps), and 2 more were borderline ("pushing waits for your OK"). The
+    hook did what it should, so the fix is in the classifier (`hooks/wants_input.py`, prompt v4
+    from #102): one bounded prompt round, judged on #102's 223-reply set plus these cases. Haiku
+    flips about five borderline replies per wording change, so stop after one round.
   - **The post-merge chain says nothing about another lane's install hold.** SKILL.md, The
     lead, step 7.3 assumes the hold belongs to the merged lane. When a PR merges out of order
     (#113 ahead of #110, 2026-10-17), the lead's reinstall from main releases the next lane's
@@ -244,8 +244,9 @@ stored here).
 
 ## Notes for next session
 - **Next (lead, main checkout):** watch for "merged #N" from a lane, then run the post-merge
-  chain (`skills/lanes/SKILL.md`, The lead, step 7). Live lane: `lane-model` (opened
-  2026-10-15, Hayden's pick; brief in its record; #110 is ready). Two of 3 slots are free. Check `lane ls` first: a merge Hayden made on GitHub and mentioned to no
+  chain (`skills/lanes/SKILL.md`, The lead, step 7). Live lanes: `stopped-lead` and
+  `future-ask` (both opened 2026-10-17, Hayden's go; briefs in their records; disjoint files, so
+  either merges first). One of 3 slots is free. Check `lane ls` first: a merge Hayden made on GitHub and mentioned to no
   session sends no message (#102 showed merged there before its lane's message came). Each new work-repo lane still needs its own Edit deny rule
   (they take no glob); `lane new` prints it since #104. No chat
   about a lane's own asks; speak on cross-lane orders, decisions raised with the lead, failed
@@ -255,8 +256,8 @@ stored here).
     (69d146cc) started at 433fe8f: it opened identity-branch, install-hint, chrome-bg and
     two-sessions, and ran the chain for #106 and #107. The fourth (64626d32) started at 5cb88d8:
     it wrote the `lane open --model` design note, removed two leftover writer worktrees from
-    #105 (every patch already in main), ran the chain for #108, #109, #111, #112 and #113, and opened
-    lane-model and remote-paste.
+    #105 (every patch already in main), ran the chain for #108, #109, #110, #111, #112 and #113, opened
+    lane-model and remote-paste, and walked Hayden through #113's live test.
   - **Vulcan sessions that were already running keep their display** until they restart: the
     blanking hook fires only at session start. The `ro-lesson` lane was opening WSLg windows
     at 21:43 local; Hayden tells it to go headless or `/pass`.

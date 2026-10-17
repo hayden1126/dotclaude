@@ -11,6 +11,7 @@ import itertools
 import json
 import os
 import shutil
+import signal
 import stat
 import subprocess
 import sys
@@ -130,6 +131,27 @@ class LanesRepo(unittest.TestCase):
                            capture_output=True, text=True, env=self.env, timeout=30)
         self.assertEqual(p.returncode, 0, p.stderr)
         return json.loads(p.stdout)["hookSpecificOutput"] if p.stdout.strip() else None
+
+    def stop(self, pid):
+        """Stop pid as Ctrl+Z does (SIGSTOP) and wait until /proc says so. Cleanup continues it
+        while its pid still names it, ahead of the cleanup that ends it."""
+        start = lanelib.proc_start(pid)
+        os.kill(pid, signal.SIGSTOP)
+        self.addCleanup(lambda: lanelib.proc_start(pid) == start
+                        and os.kill(pid, signal.SIGCONT))
+        self.wait_stopped(pid, True)
+
+    def cont(self, pid):
+        """Continue a stopped pid (SIGCONT, as `fg` sends) and wait until it runs."""
+        os.kill(pid, signal.SIGCONT)
+        self.wait_stopped(pid, False)
+
+    def wait_stopped(self, pid, stopped):
+        deadline = time.monotonic() + 10
+        while ((lanelib.proc_stat(pid) or ("", ""))[1] in lanelib.STOPPED) != stopped:
+            if time.monotonic() > deadline:
+                self.fail(f"{pid} never {'stopped' if stopped else 'continued'}")
+            time.sleep(0.01)
 
     def write(self, path, text):
         os.makedirs(os.path.dirname(path), exist_ok=True)
