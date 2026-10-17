@@ -6,7 +6,7 @@
 > [[dotclaude-chrome-devtools-wsl]]). Per-effort design lives in the repo's `PLAN.md` or its doc,
 > not only under `~/.claude/plans/`, which the next plan overwrites ([[plan-file-not-durable]]).
 
-Last updated: 2026-10-14
+Last updated: 2026-10-17
 Base: `main`. For branch / PR / push state, run `gh pr list` and `git log main..HEAD` (derive it; not
 stored here).
 
@@ -72,44 +72,12 @@ stored here).
 - **dotclaude runs in lanes (since 2026-10-12).** The lead is the main checkout. Lanes live in
   `~/dotclaude-lanes/`, and each lane's state is in its record (`lane ls`, `lane asks`), not
   here. The config caps live lanes at 3, with locks `install` and `suite`.
-  - Merged, installed from main and closed: `autopass-now` #90, `attach-tabs` #91, `pass-busy`
-    #92, `narrow-excluded` Part 1 #93, the lead's `fix/json-depth` #94, `lane-close` #95,
-    `lane-addr` #98, `excluded-guard` #100 (narrow-excluded Part 2 plus G8's fix, 2026-10-14),
-    `tab-bar` #96, #97, #99 and #101 (2026-10-14), `turn-glyph` #102 (2026-10-14), `ask-owner`
-    #103 (2026-10-14), `guard-b` #104 (2026-10-14), `pass-timeout` #105 (2026-10-14: a dropped
-    pass now tells the session itself), `handoff-flag` #106 (2026-10-14: `handoff?` judges a
-    merged lane by its record against `mergedAt`, so a lane that handed off after its merge
-    closes without an ask), `identity-branch` #107 (2026-10-14: the SessionStart identity line
-    names the branch the worktree has checked out), `install-hint` #108 (2026-10-14: a merged
-    lane can't take the install back; the excluded-guard scan after its reinstall came back
-    clean, so the work repo's flagged worktrees are cleared), `two-sessions` #109 (2026-10-15:
-    one lead per main checkout, the last to act as lead, `lane lead`, and lead² tabs),
-    `remote-paste` #111 (2026-10-16: Alt+V in tmux pastes the newest image sent to HAYPC, and an
-    opt-in laptop Ctrl+V uploads its clipboard image first) and its follow-up #113 (2026-10-17: a
-    copied file from the laptop pastes too, as its inbox path, through the new
-    `Read(~/.cache/claude-paste/**)` allow; live test passed 2026-10-17 in the lead's tab after
-    the laptop reinstall from main: a pdf the lead read with no prompt, `café notes [1].txt` as
-    `café-notes-1.txt`, an xlsx open in Excel, a screenshot attached, a folder and text pasted
-    natively with no upload), `chrome-bg` #112 (2026-10-17: `bin/chrome-bg` runs a Windows Chrome for headed probes
-    behind every window without taking focus, and `hooks/blank-display.sh` blanks the display for
-    Bash in repos with `dotclaude.blankDisplay true`; Vulcan is opted in, and the lead updated
-    Vulcan's memory `no-chrome-windows-in-front.md` to match), `lane-model` #110 (2026-10-17:
-    `lane init` and `lane open` take `--model` and `--effort`, and a plain pass keeps them;
-    docs/lanes.md "Model and effort"), `stopped-lead` #114 (2026-10-17: a stopped claude no
-    longer counts as live, so a lead paused with Ctrl+Z and resumed relinks by itself),
-    `future-ask` #115 (2026-10-17: the one prompt round for a green tab on an ask the reply only
-    announces failed the ship rule, flipping 10 verdicts: 4 fixes, 3 new misses, 3 unclear. Prompt
-    v4 stays, and `hooks/wants_input.py` and README name that ask as a second known miss).
-    `gh pr view <n>` and the closed
-    records under `.git/lanes/_closed/` hold the detail; tab-bar's
-    design is in [[dotclaude-tab-bar]]. Tabs opened before #102's install (2026-10-14) keep the
-    old startup hooks (no PermissionRequest or SubagentStop wiring) until they restart.
-  - Nine Vulcan checkouts still carry the old copy of the display hook in an untracked
-    `.claude/settings.local.json` (the lead wrote them 2026-10-14, before #112's hook):
-    `~/code/capella-studio`, `~/code/vulcan-docs` and seven under `~/code/vulcan-lanes/`
-    (chrome-bg's closed record lists them), now redundant with the live hook. Removing them is the Vulcan lead's ask for Hayden.
-  - No lane is open and no PR is pending (2026-10-17). #110 carried the lead's STATUS commits
-    through `cf95efa`; whatever the lead commits after rides the next lane PR's ready step.
+  - Merged through lanes, installed from main and closed: #90 to #115 (2026-10-12 to
+    2026-10-17). `gh pr list --state merged --limit 30` names each, and the closed records under
+    `.git/lanes/_closed/<id>-<date>/` hold the detail; tab-bar's design is in
+    [[dotclaude-tab-bar]], remote-paste's live tests in [[dotclaude-remote-paste]]. #115 left the
+    tab glyph's prompt at v4: an ask a reply only announces for later stays a documented known
+    miss (`hooks/wants_input.py`'s docstring), since its one prompt round flipped 10 verdicts.
   - The parked json-depth sweep (21 files, among them the delegation enforcement scripts) is on
     `fix/json-depth-sweep`, a local branch never pushed: keep it while the sweep is in the
     backlog. Shipping it first needs a check of how each enforcement site fails
@@ -121,6 +89,10 @@ stored here).
   - Once pushed, a lane merges `origin/main` into its branch, since force pushes are denied.
 
   Backlog:
+  - **The lead's STATUS commits miss main whenever a lane merges from draft.** It happened with
+    #108, #111, #113 and #115: Hayden merged before the lane's ready step, which is where the lead
+    diff gets applied. Main's STATUS then lags until a lane happens to reach ready. Fix in the
+    lanes skill: apply the lead diff at the push that opens the draft PR as well as at ready.
   - G8 open probes (a) and (b) (Hayden's pick, 2026-10-14): Hayden runs
     `~/scratch/sandbox-audit/g8-probe/run.py` by hand with the sandbox off, because the auto-mode
     classifier refused the run. Results go into the private findings file's G8 section.
@@ -160,19 +132,11 @@ stored here).
   its install holds until the lead's reinstall from main.
 - **Lanes, handoff-check and `/pass`** (Hayden's design, approved 2026-10-11; `PLAN.md`, behavior in
   `docs/lanes.md` and `skills/lanes/SKILL.md`). Four PRs:
-  - PR 1 (lanes core) merged as #86 (`gh pr view 86`); its smoke test and guard replay are in
-    `git show cc6b3df:STATUS.md`.
-  - PR 2 (the lead) merged as #87 (`gh pr view 87`); its smoke test is in
-    `git show e6040de:STATUS.md`.
-  - **Security follow-up found while building PR 2** (excluded commands; detail and plan are
-    private: `~/scratch/sandbox-audit/FINDINGS.md`, "Follow-up 2026-10-11"). **Step 0 is done on
-    `feat/lanes-lead`, merged in #87**: the lanes config lives in the state dir, and what the
-    sandbox can still write is checked before sandbox-off code acts on it (docs/lanes.md S3).
-    Step 1 is lane `narrow-excluded`, and it merges before the work repo migration; step 2 later.
-  - PR 3 (`/pass`) merged as #88 (`gh pr view 88`), installed with its allow rule; its live runs
-    and the as-built notes are in PLAN.md PR 3 "As built".
-  - PR 4 (auto-pass, the rendered banner and popup) merged as #89 (`gh pr view 89`), installed
-    on HAYPC from its branch and smoke-tested (PLAN.md PR 4 "As built" and spikes A8 to A10).
+  - All four PRs merged and installed: #86 (lanes core), #87 (the lead), #88 (`/pass`), #89
+    (auto-pass, the banner and popup); smoke tests and as-built notes in PLAN.md,
+    `git show cc6b3df:STATUS.md` (#86) and `git show e6040de:STATUS.md` (#87). The security follow-up's steps 0 and 1 shipped in #87 and
+    #93/#100; its detail is private (`~/scratch/sandbox-audit/FINDINGS.md`, "Follow-up
+    2026-10-11").
   - The release skill in the work repos gets its post-release Next block and a closing
     `handoff-check` (PLAN.md PR 3 "Delta handoff"). Hayden's call (2026-10-12): it becomes the
     first lane of the work repo migration, after `narrow-excluded` merges, led from that repo's
@@ -233,26 +197,23 @@ stored here).
 
 ## Notes for next session
 - **Next (lead, main checkout):** watch for "merged #N" from a lane, then run the post-merge
-  chain (`skills/lanes/SKILL.md`, The lead, step 7). No live lanes; all 3 slots are free. Check `lane ls` first: a merge Hayden made on GitHub and mentioned to no
-  session sends no message (#102 showed merged there before its lane's message came). Each new work-repo lane still needs its own Edit deny rule
-  (they take no glob); `lane new` prints it since #104. No chat
-  about a lane's own asks; speak on cross-lane orders, decisions raised with the lead, failed
-  checks and lead-only actions.
-  - The lead's commits of 2026-10-14 (second and third sessions): `git log --first-parent
-    696cc44..HEAD` on `chore/after-pr4`, STATUS only, plus merges of main. The third session
-    (69d146cc) started at 433fe8f: it opened identity-branch, install-hint, chrome-bg and
-    two-sessions, and ran the chain for #106 and #107. The fourth (64626d32) started at 5cb88d8:
-    it wrote the `lane open --model` design note, removed two leftover writer worktrees from
-    #105 (every patch already in main), ran the chain for #108 to #115, opened
-    lane-model, remote-paste, stopped-lead and future-ask, and walked Hayden through #113's live
-    test.
-  - **Vulcan sessions that were already running keep their display** until they restart: the
-    blanking hook fires only at session start. The `ro-lesson` lane was opening WSLg windows
-    at 21:43 local; Hayden tells it to go headless or `/pass`.
-  - A config rewrite with the sandbox off (`git config`, `branch -d`) while a lane's suite runs
-    can fail its SandboxReality test once: the rewrite swaps `.git/config` under the running
-    sandbox's mount. Avoid config writes while `lane ls` shows `suite` held.
-  - Message a lane at what `lane addr <id>` prints, resolved just before each send.
+  chain (`skills/lanes/SKILL.md`, The lead, step 7). Check `lane ls` first (it shows which
+  lanes are live): a merge Hayden made on GitHub and mentioned to no session sends no message.
+  No chat about a lane's own asks; speak on cross-lane orders, decisions raised with the lead,
+  failed checks and lead-only actions.
+  - The lead's commits: `git log --first-parent main..chore/after-pr4` (STATUS only, plus merges
+    of main). Session 64626d32 (2026-10-14 to 10-17) started at 5cb88d8 and ended at this
+    handoff: it ran the chain for #108 to #115 and opened lane-model, remote-paste, stopped-lead
+    and future-ask. Nothing waits on the lead now. Hayden picks the next work, from the backlog
+    or new.
+  - Open with Hayden, nothing for the lead to do: the capella-studio lead asked how a new lane
+    should clear the excluded-command guard, and the lead recommended (2026-10-17) pointing
+    capella's `core.hooksPath` at the main checkout's protected `.githooks` (absolute path)
+    instead of one Edit deny rule per lane. If capella adopts it, the per-lane lines (polish,
+    mcp, blockfix, keys) can leave `settings.machine.json` (Hayden's edit, then `./setup.sh`).
+  - A config rewrite with the sandbox off (`git config`, `branch -d`, so `lane done` too) while a
+    lane's suite runs can fail its SandboxReality test once: the rewrite swaps `.git/config`
+    under the running sandbox's mount. Wait for `lane ls` to drop the `suite` lock.
   - **Watch (PR 4, live on HAYPC):** `context-watch.err` in the state dir (a Stop that timed out
     waiting for its reply, and the watcher's Python errors). Not yet seen live: a refused pass's
     toast, and Hayden's verdict on the rendered popup.
