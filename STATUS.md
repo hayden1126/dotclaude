@@ -87,7 +87,10 @@ stored here).
     `remote-paste` #111 (2026-10-16: Alt+V in tmux pastes the newest image sent to HAYPC, and an
     opt-in laptop Ctrl+V uploads its clipboard image first) and its follow-up #113 (2026-10-17: a
     copied file from the laptop pastes too, as its inbox path, through the new
-    `Read(~/.cache/claude-paste/**)` allow), `chrome-bg` #112 (2026-10-17: `bin/chrome-bg` runs a Windows Chrome for headed probes
+    `Read(~/.cache/claude-paste/**)` allow; live test passed 2026-10-17 in the lead's tab after
+    the laptop reinstall from main: a pdf the lead read with no prompt, `café notes [1].txt` as
+    `café-notes-1.txt`, an xlsx open in Excel, a screenshot attached, a folder and text pasted
+    natively with no upload), `chrome-bg` #112 (2026-10-17: `bin/chrome-bg` runs a Windows Chrome for headed probes
     behind every window without taking focus, and `hooks/blank-display.sh` blanks the display for
     Bash in repos with `dotclaude.blankDisplay true`; Vulcan is opted in, and the lead updated
     Vulcan's memory `no-chrome-windows-in-front.md` to match). `gh pr view <n>` and the closed
@@ -136,13 +139,6 @@ stored here).
     after the lane opened, the lead's main checkout, and a bad model name failing in a detached
     window nobody watches. Files: the lane script (init, open),
     `skills/pass/scripts/pass-respawn`, SKILL.md, `docs/lanes.md`, `tests/lanes`, `tests/pass`.
-  - **Live test of #113** (Hayden, at the laptop; handed over by lane remote-paste, which
-    closed): the lead's install from main put the new `Read(~/.cache/claude-paste/**)` rule in
-    place, so what's left is to copy main's `laptop/` to the laptop (over `pcwin`, tar on stdout,
-    as in #111), rerun `install-remote-paste.ps1` (its self-test now sends a file name), then
-    Ctrl+V into a PC Claude prompt: a copied .pdf (lands as the inbox path; Claude reads it), a
-    .txt with a non-ASCII name and `[1]`, an .xlsx open in Excel, a screenshot (still attaches),
-    a folder and text (native). A bug it finds is a new request.
   - **The post-merge chain says nothing about another lane's install hold.** SKILL.md, The
     lead, step 7.3 assumes the hold belongs to the merged lane. When a PR merges out of order
     (#113 ahead of #110, 2026-10-17), the lead's reinstall from main releases the next lane's
