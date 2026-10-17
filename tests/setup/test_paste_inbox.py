@@ -744,6 +744,14 @@ class Laptop(unittest.TestCase):
         self.assertIn("[System.IO.File]::Open($file.FullName, 'Open', 'Read', "
                       "'ReadWrite, Delete')", ps1)
 
+    def test_the_size_check_reads_the_opened_stream(self):
+        # the symlink case of the test below needs admin or Developer Mode, so this text check
+        # is what guards it on most machines, and on any without Windows PowerShell
+        func = re.search(r"^function Read-CopiedFile\b.*?^\}", self.read("remote-paste.ps1"),
+                         re.M | re.S)[0]
+        self.assertIn("if ($stream.Length -gt 50MB)", func)
+        self.assertNotIn("$file.Length", func)
+
     def test_the_answer_wait_covers_what_ssh_still_holds(self):
         # after the last piece, ssh and TCP may still hold up to the whole file: the wait grows
         # with it (16 KB/s), capped at 10 minutes; keepalives end a dead link long before
@@ -767,7 +775,11 @@ class Laptop(unittest.TestCase):
                 body = re.search(r"^%s\(.*?(?=^\S)" % name, ahk, re.M | re.S)[0]
                 self.assertNotIn("FileExist", body)
         remote = re.search(r"^RemotePaste\(\) \{.*?^\}", ahk, re.M | re.S)[0]
-        self.assertRegex(remote, r'if InStr\(FileExist\(path\), "D"\) \{\n\s+Send\("\^v"\)')
+        self.assertRegex(remote, r'if InStr\(FileExist\(path\), "D"\) \{\n\s+code := 3\b')
+        # one Send, after the focus check: a slow folder check can't paste into another window
+        self.assertEqual(remote.count("Send("), 1, remote)
+        self.assertRegex(remote, r'if \(ActiveTerminal\(\) != hwnd \|\| PcView\(hwnd\) != view\)'
+                                 r'\n.*\n.*\n\s+else\n\s+Send\(code = 3 \? "\^v" : "!v"\)')
         with open(os.path.join(REPO, "setup-tmux.sh")) as f:
             self.assertIn('"$HOME/.local/bin/paste-inbox"', f.read())
 
@@ -966,11 +978,39 @@ class LaptopPowerShell(unittest.TestCase):
         self.assertIn(lines[1], ("link=unprivileged", "link=FAIL: link.pdf is over 50 MB after 0"),
                       out)
 
-    def test_the_size_check_reads_the_opened_stream(self):
+    def test_the_real_fail_inside_the_read_exits_1_and_still_closes_the_file(self):
+        # the script's own Fail (exit 1, past its trap) from inside Read-CopiedFile's try: the
+        # reason reaches stderr, the finally closes the stream, and the run stops there
         with open(os.path.join(LAPTOP, "remote-paste.ps1"), encoding="utf-8") as f:
-            func = re.search(r"^function Read-CopiedFile\b.*?^\}", f.read(), re.M | re.S)[0]
-        self.assertIn("if ($stream.Length -gt 50MB)", func)
-        self.assertNotIn("$file.Length", func)
+            head = re.search(r"^Set-StrictMode\b.*?^function Read-CopiedFile\b.*?^\}", f.read(),
+                             re.M | re.S)[0]
+        command = "\n".join([
+            head,
+            "$dir = Join-Path $env:TEMP ('rp-test-' + [guid]::NewGuid())",
+            "New-Item -ItemType Directory -Path $dir | Out-Null",
+            "$big = Join-Path $dir 'big.pdf'",
+            "$fs = [IO.File]::Create($big); $fs.SetLength(60MB); $fs.Dispose()",
+            "try {",
+            "  $ms = New-Object IO.MemoryStream",
+            "  Read-CopiedFile $big $ms | Out-Null",
+            "  'not reached'",
+            "} finally {",
+            "  Remove-Item -LiteralPath $dir -Recurse -Force",   # fails if the stream is open
+            "  Remove-Item -LiteralPath $errFile -ErrorAction SilentlyContinue",
+            "  'cleaned=' + -not (Test-Path -LiteralPath $dir)",
+            "}"])
+        p = subprocess.run([self.ps, "-NoProfile", "-NonInteractive", "-EncodedCommand",
+                            base64.b64encode(command.encode("utf-16-le")).decode()],
+                           capture_output=True, timeout=60)
+        out = p.stdout.decode("utf-8", "replace")
+        err = p.stderr.decode("utf-8", "replace")
+        if "UtilConnectUnix" in out + err:
+            self.skipTest("the Bash sandbox blocks WSL interop; run outside it")
+        self.assertEqual(p.returncode, 1, out + err)
+        self.assertIn("remote-paste: big.pdf is over 50 MB", err)
+        self.assertNotIn("not reached", out)
+        self.assertIn("cleaned=True", out)
+
 
 
 class RealTmux(unittest.TestCase):

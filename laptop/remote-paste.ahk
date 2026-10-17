@@ -60,19 +60,18 @@ $^v::RemotePaste()
 RemotePaste() {
     hwnd := ActiveTerminal()
     view := PcView(hwnd)
-    name := ""
-    if !ImageOnClipboard() {
-        path := CopiedFile()
-        if InStr(FileExist(path), "D") {
-            Send("^v")
-            return
-        }
+    path := ImageOnClipboard() ? "" : CopiedFile()
+    ; a copied folder: Windows Terminal's own paste, through the same focus check below, since
+    ; FileExist on a slow share can take long enough for the focus to move
+    if InStr(FileExist(path), "D") {
+        code := 3
+    } else {
         SplitPath path, &name
+        ToolTip "Sending " (name != "" ? name : "the image") " to the PC..."
+        code := RunWait('powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Sta '
+            '-File "' A_ScriptDir '\remote-paste.ps1"', , "Hide")
+        ToolTip
     }
-    ToolTip "Sending " (name != "" ? name : "the image") " to the PC..."
-    code := RunWait('powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Sta -File "'
-        A_ScriptDir '\remote-paste.ps1"', , "Hide")
-    ToolTip
     if (code != 0 && code != 3) {
         Notify("remote-paste: " LastError(code))
         return
