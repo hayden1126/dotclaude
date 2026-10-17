@@ -1,0 +1,630 @@
+# chrome-bg.ps1: the Windows half of bin/chrome-bg. One supervisor per run starts Windows Chrome
+# so that its windows never take the foreground and stay behind all other windows, watches the
+# run's windows through WinEvent hooks, and kills the run's Chrome when its owner goes away.
+# Usage and background: docs/chrome-devtools-wsl.md. Windows PowerShell 5.1; keep this file ASCII.
+#
+# Invocation (bin/chrome-bg runs it sandbox-off, one per run):
+#   powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File chrome-bg.ps1 -Id <id> [-Keep]
+#   ... -File chrome-bg.ps1 -Id <id> -Kill   kill the run's chrome.exe, delete its dir, print one JSON line
+#   ... -File chrome-bg.ps1 -Scan            print run dirs, logs and chrome.exe by run id as one JSON line
+# <id> is 8 lowercase hex. Under <temp>\chrome-bg\ ([IO.Path]::GetTempPath()): the run dir <id>\ (the
+# profile goes in <id>\profile) and the log <id>.log, which outlives the run. A chrome.exe belongs
+# to the run when its command line holds \chrome-bg\<id>\ (in any case).
+#
+# Protocol: one JSON request per stdin line, exactly one compact JSON reply line per request,
+# and none once stdin has closed.
+#   {"op":"hello"}                      ok, version 1, chrome, runDir, virtualScreen, monitors
+#                                       [{rect, work, dpi, hz, primary}], fg, fglock
+#   {"op":"launch","args":"..."}        ok, pid. The args must hold the run dir.
+#   {"op":"place","x":..,"y":..,"w":..,"h":..}  ok, windows [{hwnd, rect}], rects read after the move
+#   {"op":"procs"}                      ok, procs [{pid, ppid, type}]
+#   {"op":"fg"}                         ok, fg {hwnd, pid, cls, rect, visible, iconic, cloaked, tagged, idleMs}
+#   {"op":"mark","text":"..."}          ok (logs MARK)
+#   Failures reply {"ok":false,"error":"..."}. Rects are {x, y, w, h} in physical pixels. Replies
+#   are ASCII: other characters go out as \uXXXX escapes.
+#   EOF on stdin: kill every chrome.exe of the run, delete the run dir, log, exit. No reply.
+# Exit code: 0 only when the EOF cleanup left no chrome.exe of the run and no run dir; 3 when it
+# was incomplete or failed, and bin/chrome-bg then runs -Kill. -Kill and -Scan exit 0 after their line.
+# Log lines read t=<ms> KIND ...; bin/chrome-bg's log judge parses the kinds.
+#
+# Rules from the Phase 0 probes, each pinned by tests/setup/test_chrome_bg_ps1.py:
+# - Launch Chrome through WMI (Win32_Process Create), never Start-Process. Started from this
+#   console-attached process, Chrome inherited foreground rights and took the foreground from
+#   the user's terminal for about 45 s (probes A and K); started through WMI it took none (W).
+# - Stdout carries replies only, all through Send-Reply, and nothing after stdin closes. A stdout
+#   write after the owner died killed the supervisor and left 8 chrome.exe running (probe C2).
+#   Events go to the log file.
+# - No WMI inside the WinEvent callback or anything it calls; ops may call WMI on the hook thread
+#   between pumps. WMI pumps messages, and inside the callback that re-entered it and crashed the
+#   first prototype. Run pids come from the launch pid plus a refresh thread.
+# - A run pid is its process: IsTagged checks the creation time recorded at tagging, so a pid
+#   Windows reused is never the run's (unless that time was unreadable: TAG created=0). Refresh
+#   records a time only when the process at the pid still matches the CreationDate its query listed
+#   (STALE otherwise). The refresh thread alone untags a pid once no pass has seen the tag in its
+#   command line for about 1.5 s (UNTAG). A stale pid would make another program's window a run
+#   window: sunk by the keeper, its title logged, its foreground read as the run's.
+# - Kills go through a handle opened first, never by bare pid, and only to a process that was
+#   already running when its listing began: pids are unique among live processes, so that is the
+#   listed one. A later start means Chrome freed the pid while shutting down and Windows reused it.
+# - Each new run frame sinks to HWND_BOTTOM, unactivated, at EVENT_OBJECT_CREATE while it is still
+#   hidden. Off-screen bounds alone left a 7-9 ms flash on top of the screen.
+# - With -Keep, while no run window has the foreground, a run window seen above another on-screen
+#   window sinks to HWND_BOTTOM, unactivated (KEEP-SINK), at most 20 times per window per second.
+# - Window titles reach the log only for run windows: the repo is public, other titles are not ours.
+
+[CmdletBinding(DefaultParameterSetName = 'Run')]
+param(
+  # (?-i): ValidatePattern ignores case unless told otherwise. \z: $ would accept a trailing newline.
+  [Parameter(Mandatory, ParameterSetName = 'Run')]
+  [Parameter(Mandatory, ParameterSetName = 'Kill')]
+  [ValidatePattern('^(?-i)[0-9a-f]{8}\z')]
+  [string]$Id,
+  [Parameter(ParameterSetName = 'Run')]
+  [switch]$Keep,
+  [Parameter(Mandatory, ParameterSetName = 'Kill')]
+  [switch]$Kill,
+  [Parameter(Mandatory, ParameterSetName = 'Scan')]
+  [switch]$Scan
+)
+
+$ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
+$Root = Join-Path ([IO.Path]::GetTempPath()) 'chrome-bg'
+# True once the supervisor type is loaded (per-run mode only).
+$Supervised = $false
+
+# The one stdout writer. Every reply is a single compact JSON line.
+function Send-Reply([System.Collections.IDictionary]$Reply) {
+  $json = ConvertTo-Json -InputObject $Reply -Compress -Depth 6
+  $json = [regex]::Replace($json, '[^\x00-\x7F]', [Text.RegularExpressions.MatchEvaluator] {
+      param($m) '\u{0:x4}' -f [int][char]$m.Value })
+  # Stdin closed: the owner is gone, and a write could take the WSL relay down with it (probe C2).
+  if ($Supervised -and [ChromeBgSup]::StdinClosed) { return }
+  try { [Console]::Out.WriteLine($json); [Console]::Out.Flush() } catch { }
+}
+
+function New-ErrorReply([string]$Message) {
+  return [ordered]@{ ok = $false; error = $Message }
+}
+
+# The lookup chrome-debug.ps1 uses.
+function Find-Chrome {
+  $candidates = @(
+    "$env:ProgramFiles\Google\Chrome\Application\chrome.exe",
+    "${env:ProgramFiles(x86)}\Google\Chrome\Application\chrome.exe",
+    "$env:LocalAppData\Google\Chrome\Application\chrome.exe"
+  )
+  return $candidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+}
+
+function Get-TaggedProcs {
+  Get-CimInstance Win32_Process -Filter "Name='chrome.exe'" |
+    Where-Object { $_.CommandLine -and $_.CommandLine.IndexOf($Tag, [StringComparison]::OrdinalIgnoreCase) -ge 0 }
+}
+
+function ConvertTo-ProcInfo($Proc) {
+  $type = if ($Proc.CommandLine -match '--type=(\S+)') { $Matches[1] } else { 'browser' }
+  return [ordered]@{ pid = [int]$Proc.ProcessId; ppid = [int]$Proc.ParentProcessId; type = $type }
+}
+
+# Kills every chrome.exe of the run, for up to about 5 s. A round whose query fails is retried;
+# .error holds the last failure, and .left is -1 when the final count can't be read. .skipped
+# counts listed pids not killed: gone, held by another process, or not openable.
+function Stop-RunProcs {
+  $killed = [System.Collections.Generic.HashSet[int]]::new()
+  $skipped = [System.Collections.Generic.HashSet[int]]::new()
+  $err = $null
+  foreach ($round in 1..20) {
+    try {
+      # When the listing began, less 50 ms: a creation stamp can read up to a timer tick (15.6 ms) early.
+      $listedAt = [DateTime]::UtcNow.AddMilliseconds(-50)
+      $procs = @(Get-TaggedProcs)
+      if ($procs.Count -eq 0) { break }
+      foreach ($row in $procs) {
+        $id = [int]$row.ProcessId
+        if (Stop-RunProc $id $listedAt) { [void]$killed.Add($id) } else { [void]$skipped.Add($id) }
+      }
+    } catch { $err = $_.Exception.Message }
+    Start-Sleep -Milliseconds 250
+  }
+  $skipped.ExceptWith($killed)
+  $left = -1
+  try { $left = @(Get-TaggedProcs).Count } catch { $err = $_.Exception.Message }
+  return [ordered]@{ killed = $killed.Count; skipped = $skipped.Count; left = $left; error = $err }
+}
+
+# Kills a listed pid if its process was already running when the listing began, so it is the listed
+# process; a later start is another process on a reused pid. The handle opened first pins the pid,
+# so the check and the kill see the same process. Returns whether it killed.
+function Stop-RunProc([int]$ProcessId, [DateTime]$ListedAt) {
+  $proc = $null
+  try {
+    $proc = Get-Process -Id $ProcessId -ErrorAction Stop
+    [void]$proc.Handle
+    if ($proc.StartTime.ToUniversalTime() -gt $ListedAt) { return $false }
+    $proc.Kill()
+    return $true
+  } catch { return $false } finally { if ($proc) { $proc.Dispose() } }
+}
+
+# Deletes the run dir, retrying while Chrome's last files close. Returns whether it still exists.
+function Remove-RunDir {
+  foreach ($round in 1..20) {
+    try {
+      if (-not (Test-Path -LiteralPath $RunDir)) { break }
+      Remove-Item -LiteralPath $RunDir -Recurse -Force -ErrorAction Stop
+    } catch { Start-Sleep -Milliseconds 250 }
+  }
+  return [bool](Test-Path -LiteralPath $RunDir)
+}
+
+# EOF: kill, then delete even if the kill failed, then set the exit code to 0 only if both finished.
+function Close-Run {
+  [ChromeBgSup]::Log('EOF')
+  $k = [ordered]@{ killed = 0; skipped = 0; left = -1; error = $null }
+  try { $k = Stop-RunProcs } catch { $k.error = $_.Exception.Message }
+  $why = if ($k.error) { ' error=' + ($k.error -replace '[\r\n]+', ' ') } else { '' }
+  [ChromeBgSup]::Log("EOFKILL left=$($k.left) killed=$($k.killed) skipped=$($k.skipped)$why")
+  $exists = $true
+  try { $exists = Remove-RunDir } catch { [ChromeBgSup]::Log('ERROR eofclean ' + ($_.Exception.Message -replace '[\r\n]+', ' ')) }
+  [ChromeBgSup]::Log("EOFCLEAN dirExists=$exists")
+  if ($k.left -eq 0 -and -not $exists) { $script:ExitCode = 0 }
+}
+
+# Answers one request line. Returns the reply; never writes stdout.
+function Invoke-Op([string]$Line) {
+  try { $req = ConvertFrom-Json -InputObject $Line } catch { return New-ErrorReply 'bad json' }
+  $op = $req.op
+  if ($op -isnot [string]) { return New-ErrorReply 'bad request: no op' }
+  switch -CaseSensitive ($op) {
+    'hello' {
+      if (-not $Chrome) { return New-ErrorReply 'chrome.exe not found' }
+      return [ordered]@{
+        ok = $true; version = 1; chrome = $Chrome; runDir = $RunDir
+        virtualScreen = [ChromeBgSup]::VirtualScreen()
+        monitors = @([ChromeBgSup]::Monitors())
+        fg = [ChromeBgSup]::FgInfo()
+        fglock = [long][ChromeBgSup]::FgLock()
+      }
+    }
+    'launch' {
+      if (-not $Chrome) { return New-ErrorReply 'chrome.exe not found' }
+      $a = $req.args
+      if ($a -isnot [string]) { return New-ErrorReply 'launch needs args, a string' }
+      # Untagged processes would escape the EOF kill.
+      if ($a.IndexOf($Tag, [StringComparison]::OrdinalIgnoreCase) -lt 0) { return New-ErrorReply "launch args must hold the run dir ($Tag)" }
+      $r = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = "`"$Chrome`" $a" }
+      if ($r.ReturnValue -ne 0) {
+        [ChromeBgSup]::Log("LAUNCHED failed rv=$($r.ReturnValue) via=wmi")
+        return [ordered]@{ ok = $false; error = 'Win32_Process Create failed'; code = [int]$r.ReturnValue }
+      }
+      [ChromeBgSup]::AddPid([uint32]$r.ProcessId)
+      [ChromeBgSup]::Log("LAUNCHED pid=$($r.ProcessId) via=wmi chrome=$Chrome")
+      return [ordered]@{ ok = $true; pid = [int]$r.ProcessId }
+    }
+    'place' {
+      foreach ($key in 'x', 'y', 'w', 'h') {
+        if ($null -eq $req.$key) { return New-ErrorReply 'place needs x, y, w and h' }
+      }
+      if ([int]$req.w -le 0 -or [int]$req.h -le 0) { return New-ErrorReply 'place needs a positive w and h' }
+      return [ordered]@{ ok = $true; windows = @([ChromeBgSup]::Place([int]$req.x, [int]$req.y, [int]$req.w, [int]$req.h)) }
+    }
+    'procs' {
+      $list = @(Get-TaggedProcs | ForEach-Object { ConvertTo-ProcInfo $_ })
+      foreach ($p in $list) { [ChromeBgSup]::Log("PROC pid=$($p.pid) ppid=$($p.ppid) type=$($p.type)") }
+      [ChromeBgSup]::Log("PROCS count=$($list.Count)")
+      return [ordered]@{ ok = $true; procs = $list }
+    }
+    'fg' {
+      return [ordered]@{ ok = $true; fg = [ChromeBgSup]::FgInfo() }
+    }
+    'mark' {
+      $text = [string]$req.text -replace '[\r\n]+', ' '
+      [ChromeBgSup]::Log("MARK $text idle=$([ChromeBgSup]::Idle())")
+      return [ordered]@{ ok = $true }
+    }
+    default { return New-ErrorReply "unknown op: $op" }
+  }
+}
+
+function Get-Scan {
+  $now = [DateTime]::UtcNow
+  $dirs = @()
+  $logs = @()
+  if (Test-Path -LiteralPath $Root) {
+    $dirs = @(Get-ChildItem -LiteralPath $Root -Directory | Where-Object { $_.Name -cmatch '^[0-9a-f]{8}$' } | ForEach-Object {
+        [ordered]@{ id = $_.Name; createdUtc = $_.CreationTimeUtc.ToString('o'); ageSec = [long][Math]::Floor(($now - $_.CreationTimeUtc).TotalSeconds) } })
+    $logs = @(Get-ChildItem -LiteralPath $Root -File -Filter '*.log' | Where-Object { $_.Name -cmatch '^[0-9a-f]{8}\.log$' } | ForEach-Object {
+        [ordered]@{ id = $_.BaseName; ageSec = [long][Math]::Floor(($now - $_.LastWriteTimeUtc).TotalSeconds) } })
+  }
+  $procs = [ordered]@{}
+  foreach ($p in @(Get-CimInstance Win32_Process -Filter "Name='chrome.exe'")) {
+    if (-not $p.CommandLine) { continue }
+    $m = [regex]::Match($p.CommandLine, '\\chrome-bg\\([0-9a-f]{8})\\', 'IgnoreCase')
+    if (-not $m.Success) { continue }
+    $runId = $m.Groups[1].Value.ToLowerInvariant()
+    if (-not $procs.Contains($runId)) { $procs[$runId] = [System.Collections.Generic.List[object]]::new() }
+    $procs[$runId].Add((ConvertTo-ProcInfo $p))
+  }
+  return [ordered]@{ ok = $true; root = $Root; dirs = $dirs; logs = $logs; procs = $procs }
+}
+
+if ($Scan) {
+  try { Send-Reply (Get-Scan) } catch { Send-Reply (New-ErrorReply $_.Exception.Message) }
+  exit 0
+}
+
+$RunDir = Join-Path $Root $Id
+$LogFile = Join-Path $Root "$Id.log"
+$Tag = "\chrome-bg\$Id\"
+
+if ($Kill) {
+  try {
+    $k = Stop-RunProcs
+    $exists = Remove-RunDir
+    $reply = [ordered]@{
+      ok = ($k.left -eq 0 -and -not $exists); killed = $k.killed; skipped = $k.skipped; left = $k.left; dirExists = $exists
+    }
+    if ($k.error) { $reply.error = $k.error }
+    Send-Reply $reply
+  } catch { Send-Reply (New-ErrorReply $_.Exception.Message) }
+  exit 0
+}
+
+# 3 until Close-Run proves the cleanup complete: any other way out makes bin/chrome-bg run -Kill.
+$ExitCode = 3
+[void](New-Item -ItemType Directory -Path $RunDir -Force)
+$Chrome = Find-Chrome
+
+Add-Type -ReferencedAssemblies System.Management -TypeDefinition @'
+using System; using System.Runtime.InteropServices; using System.Text; using System.Collections.Generic;
+using System.Collections.Specialized; using System.Threading; using System.Management; using System.Diagnostics; using System.IO;
+public static class ChromeBgSup {
+  public delegate void WinEventProc(IntPtr hook, uint ev, IntPtr hwnd, int idObject, int idChild, uint thread, uint time);
+  public delegate bool MonitorEnumProc(IntPtr hMon, IntPtr hdc, ref RECT r, IntPtr data);
+  [StructLayout(LayoutKind.Sequential)] public struct RECT { public int L, T, R, B; }
+  [StructLayout(LayoutKind.Sequential)] public struct MSG { public IntPtr hwnd; public uint message; public IntPtr wParam; public IntPtr lParam; public uint time; public int x; public int y; }
+  [StructLayout(LayoutKind.Sequential)] public struct LASTINPUTINFO { public uint cbSize; public uint dwTime; }
+  [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)] public struct MONITORINFOEX { public int cbSize; public RECT rcMonitor; public RECT rcWork; public uint dwFlags; [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string szDevice; }
+  [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)] public struct DEVMODE {
+    [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string dmDeviceName;
+    public short dmSpecVersion, dmDriverVersion, dmSize, dmDriverExtra; public int dmFields;
+    public int dmPositionX, dmPositionY, dmDisplayOrientation, dmDisplayFixedOutput;
+    public short dmColor, dmDuplex, dmYResolution, dmTTOption, dmCollate;
+    [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string dmFormName;
+    public short dmLogPixels; public int dmBitsPerPel, dmPelsWidth, dmPelsHeight, dmDisplayFlags, dmDisplayFrequency;
+    public int dmICMMethod, dmICMIntent, dmMediaType, dmDitherType, dmReserved1, dmReserved2, dmPanningWidth, dmPanningHeight; }
+  [DllImport("user32.dll")] static extern IntPtr SetWinEventHook(uint min, uint max, IntPtr hmod, WinEventProc cb, uint pid, uint tid, uint flags);
+  [DllImport("user32.dll")] static extern uint MsgWaitForMultipleObjectsEx(uint n, IntPtr[] h, uint ms, uint wake, uint flags);
+  [DllImport("user32.dll")] static extern bool PeekMessage(out MSG m, IntPtr h, uint min, uint max, uint remove);
+  [DllImport("user32.dll")] static extern bool TranslateMessage(ref MSG m);
+  [DllImport("user32.dll")] static extern IntPtr DispatchMessage(ref MSG m);
+  [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr h, out RECT r);
+  [DllImport("user32.dll")] static extern IntPtr MonitorFromRect(ref RECT r, uint flags);
+  [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
+  [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetWindowText(IntPtr h, StringBuilder s, int n);
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetClassName(IntPtr h, StringBuilder s, int n);
+  [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr h);
+  [DllImport("user32.dll")] static extern bool IsIconic(IntPtr h);
+  [DllImport("user32.dll")] static extern IntPtr GetWindow(IntPtr h, uint cmd);
+  [DllImport("user32.dll")] static extern IntPtr GetTopWindow(IntPtr h);
+  [DllImport("user32.dll")] static extern IntPtr GetAncestor(IntPtr h, uint flags);
+  [DllImport("user32.dll")] static extern int GetWindowLong(IntPtr h, int idx);
+  [DllImport("user32.dll")] static extern bool SetWindowPos(IntPtr h, IntPtr after, int x, int y, int cx, int cy, uint flags);
+  [DllImport("user32.dll")] static extern IntPtr SetThreadDpiAwarenessContext(IntPtr ctx);
+  [DllImport("user32.dll")] static extern bool GetLastInputInfo(ref LASTINPUTINFO l);
+  [DllImport("user32.dll")] static extern int GetSystemMetrics(int i);
+  [DllImport("user32.dll")] static extern bool SystemParametersInfo(uint a, uint b, ref uint v, uint c);
+  [DllImport("user32.dll")] static extern bool EnumDisplayMonitors(IntPtr hdc, IntPtr clip, MonitorEnumProc cb, IntPtr data);
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern bool GetMonitorInfo(IntPtr hMon, ref MONITORINFOEX mi);
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern bool EnumDisplaySettings(string dev, int mode, ref DEVMODE dm);
+  [DllImport("shcore.dll")] static extern int GetDpiForMonitor(IntPtr hMon, int type, out uint dx, out uint dy);
+  [DllImport("dwmapi.dll")] static extern int DwmGetWindowAttribute(IntPtr h, int attr, out int v, int size);
+  [DllImport("kernel32.dll")] static extern IntPtr OpenProcess(uint access, bool inherit, uint pid);
+  [DllImport("kernel32.dll")] static extern bool GetProcessTimes(IntPtr h, out long created, out long exited, out long kernel, out long user);
+  [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr h);
+  const uint PROCESS_QUERY_LIMITED_INFORMATION = 0x1000;
+
+  static readonly IntPtr HWND_BOTTOM = (IntPtr)1;
+  const uint SWP_NOSIZE = 0x1, SWP_NOMOVE = 0x2, SWP_NOACTIVATE = 0x10;
+  // What the stdin reader queues at end of input.
+  public const string EofLine = "\u0000EOF";
+
+  static readonly object gate = new object();
+  static Stopwatch sw = Stopwatch.StartNew();
+  static string tag; static StreamWriter file; static bool keeper;
+  // A run pid: its process's creation time (FILETIME ticks, 0 when unreadable) and the ms it was
+  // last confirmed, by its launch (AddPid) or by a refresh pass.
+  class RunPid { public long Created, Seen; }
+  static Dictionary<uint, RunPid> tagged = new Dictionary<uint, RunPid>();
+  // A pid no pass has confirmed for this long has left the run.
+  const long UntagMs = 1500;
+  // Set by the stdin reader at end of input: the owner is gone, so no reply goes out (probe C2).
+  public static volatile bool StdinClosed;
+  static WinEventProc keep; static volatile bool done; static Queue<string> cmds = new Queue<string>();
+  static string lastFg = "", lastTop = "", lastRanks = "";
+
+  // Events go to the log file only; this class never writes stdout or stderr.
+  public static void Log(string s) {
+    string line = "t=" + sw.ElapsedMilliseconds + " " + s;
+    lock (gate) { try { if (file != null) { file.WriteLine(line); file.Flush(); } } catch { } }
+  }
+  static string OneLine(string s) { return s == null ? "" : s.Replace('\r', ' ').Replace('\n', ' '); }
+  static uint Pid(IntPtr h) { uint p; GetWindowThreadProcessId(h, out p); return p; }
+  static string Title(IntPtr h) { var s = new StringBuilder(256); GetWindowText(h, s, 256); return s.ToString(); }
+  static string Cls(IntPtr h) { var s = new StringBuilder(128); GetClassName(h, s, 128); return s.ToString(); }
+  static bool Cloaked(IntPtr h) { int v; return DwmGetWindowAttribute(h, 14, out v, 4) == 0 && v != 0; }
+  public static uint Idle() { var l = new LASTINPUTINFO(); l.cbSize = 8; GetLastInputInfo(ref l); return (uint)Environment.TickCount - l.dwTime; }
+  public static uint FgLock() { uint v = 0; SystemParametersInfo(0x2000, 0, ref v, 0); return v; }
+  // The creation time of process pid (FILETIME ticks), or 0 when it can't be read. Plain syscalls
+  // that pump no messages, so the hook thread may call it.
+  static long CreationTime(uint pid) {
+    IntPtr h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid);
+    if (h == IntPtr.Zero) return 0;
+    try { long c, x, k, u; return GetProcessTimes(h, out c, out x, out k, out u) ? c : 0; }
+    finally { CloseHandle(h); }
+  }
+  // A lookup plus the creation-time check: a pid Windows reused belongs to a newer process, never
+  // to the run. No WMI here: the WinEvent callback calls this.
+  public static bool IsTagged(uint pid) {
+    long created;
+    lock (tagged) { RunPid r; if (!tagged.TryGetValue(pid, out r)) return false; created = r.Created; }
+    // 0: the creation time was unreadable at tagging, so only UNTAG guards this pid.
+    return created == 0 || CreationTime(pid) == created;
+  }
+  public static void AddPid(uint pid) { Confirm(pid, CreationTime(pid), sw.ElapsedMilliseconds); }
+  // Records pid as a run pid confirmed at ms seen. A new creation time is a new process on a reused pid.
+  static void Confirm(uint pid, long created, long seen) {
+    bool fresh;
+    lock (tagged) {
+      RunPid r;
+      fresh = !tagged.TryGetValue(pid, out r) || (created != 0 && r.Created != created);
+      if (fresh) tagged[pid] = new RunPid { Created = created, Seen = seen };
+      else if (r.Seen < seen) r.Seen = seen;
+    }
+    if (fresh) Log("TAG pid=" + pid + " created=" + created);
+  }
+  // A CIM datetime (yyyymmddHHMMSS.mmmmmmsUUU: local time and its UTC offset in minutes) as FILETIME
+  // ticks, or 0 when it doesn't parse. The string carries its own offset, so no time zone lookup.
+  static long FromCim(string s) {
+    if (s == null || s.Length != 25) return 0;
+    try {
+      var t = new DateTime(int.Parse(s.Substring(0, 4)), int.Parse(s.Substring(4, 2)), int.Parse(s.Substring(6, 2)),
+        int.Parse(s.Substring(8, 2)), int.Parse(s.Substring(10, 2)), int.Parse(s.Substring(12, 2)), DateTimeKind.Utc);
+      int offset = int.Parse(s.Substring(22, 3)) * (s[21] == '-' ? -1 : 1);
+      return t.AddTicks(long.Parse(s.Substring(15, 6)) * 10).AddMinutes(-offset).ToFileTimeUtc();
+    } catch { return 0; }
+  }
+  // One process's start read twice: WMI keeps microseconds (10 ticks), GetProcessTimes 100 ns ticks.
+  static bool SameStart(long a, long b) { return a != 0 && b != 0 && Math.Abs(a - b) < 10; }
+  static bool LookupOnly(uint pid) { lock (tagged) { RunPid r; return tagged.TryGetValue(pid, out r) && r.Created == 0; } }
+  static HashSet<uint> staleLogged = new HashSet<uint>();   // refresh thread only
+  // Twice a second on its own MTA thread: confirms every chrome.exe holding the run's tag, then
+  // untags pids unconfirmed for UntagMs. A pass stamps with its start time, so a launch made while
+  // its query ran keeps the later AddPid stamp and can't be dropped by a query that missed it.
+  static void Refresh() {
+    var t = new Thread(delegate() {
+      while (!done) {
+        try {
+          long start = sw.ElapsedMilliseconds;
+          var live = new List<KeyValuePair<uint, long>>();   // pid -> its CreationDate as FILETIME ticks
+          using (var s = new ManagementObjectSearcher("SELECT ProcessId, CommandLine, CreationDate FROM Win32_Process WHERE Name='chrome.exe'"))
+            foreach (ManagementObject o in s.Get()) {
+              var cl = o["CommandLine"] as string;
+              if (cl != null && cl.IndexOf(tag, StringComparison.OrdinalIgnoreCase) >= 0)
+                live.Add(new KeyValuePair<uint, long>((uint)o["ProcessId"], FromCim(o["CreationDate"] as string)));
+            }
+          foreach (var row in live) {
+            // The process at the pid now must be the one the query listed: a run process that exited
+            // during the pass may have handed its pid to another program. An unreadable pid is
+            // confirmed only when it was unreadable at tagging too (lookup-only).
+            long now = CreationTime(row.Key);
+            if (SameStart(row.Value, now) || (now == 0 && LookupOnly(row.Key))) Confirm(row.Key, now, start);
+            else if (staleLogged.Add(row.Key)) Log("STALE pid=" + row.Key + " listed=" + row.Value + " now=" + now);
+          }
+          var gone = new List<uint>();
+          lock (tagged) {
+            foreach (var kv in tagged) if (kv.Value.Seen < start - UntagMs) gone.Add(kv.Key);
+            foreach (var pid in gone) tagged.Remove(pid);
+          }
+          foreach (var pid in gone) Log("UNTAG pid=" + pid);
+        } catch { }
+        Thread.Sleep(500);
+      }
+    });
+    t.IsBackground = true; t.SetApartmentState(ApartmentState.MTA); t.Start();
+  }
+  static bool OnScreen(IntPtr h, out RECT r) { GetWindowRect(h, out r); return MonitorFromRect(ref r, 0) != IntPtr.Zero; }
+  static string Ltrb(RECT r) { return r.L + "," + r.T + "," + r.R + "," + r.B; }
+  static string Desc(IntPtr h) {
+    RECT r; bool on = OnScreen(h, out r); uint p = Pid(h);
+    string s = "hwnd=" + h + " pid=" + p + " cls=" + Cls(h) + " rect=" + Ltrb(r) +
+      " onscreen=" + (on ? 1 : 0) + " vis=" + (IsWindowVisible(h) ? 1 : 0) + " iconic=" + (IsIconic(h) ? 1 : 0) +
+      " cloaked=" + (Cloaked(h) ? 1 : 0);
+    // Titles only for run windows: every other title belongs to the user's own work.
+    if (IsTagged(p)) s += " title='" + Title(h) + "'";
+    return s;
+  }
+  // Windows a person can see: visible, titled, not cloaked, not minimized, not a tool window, on a monitor.
+  static List<IntPtr> Seen() {
+    var l = new List<IntPtr>();
+    for (IntPtr h = GetTopWindow(IntPtr.Zero); h != IntPtr.Zero; h = GetWindow(h, 2)) {
+      if (!IsWindowVisible(h) || IsIconic(h) || Cloaked(h)) continue;
+      if ((GetWindowLong(h, -20) & 0x80) != 0) continue;
+      if (Title(h).Length == 0) continue;
+      RECT r; if (!OnScreen(h, out r)) continue;
+      l.Add(h);
+    }
+    return l;
+  }
+  static bool inKeep;
+  static Dictionary<IntPtr, long[]> keepRate = new Dictionary<IntPtr, long[]>();   // hwnd -> [window start ms, sinks]
+  static void KeepSink(IntPtr h, string why) {
+    long now = sw.ElapsedMilliseconds; long[] r;
+    if (!keepRate.TryGetValue(h, out r) || now - r[0] >= 1000) { r = new long[] { now, 0 }; keepRate[h] = r; }
+    if (++r[1] > 20) { if (r[1] == 21) Log("KEEP-FIGHT hwnd=" + h + " via=" + why); return; }
+    bool ok = SetWindowPos(h, HWND_BOTTOM, 0, 0, 0, 0, SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE);
+    Log("KEEP-SINK ok=" + ok + " via=" + why + " " + Desc(h));
+  }
+  static void Check(string why) {
+    IntPtr fg = GetForegroundWindow(); uint fp = Pid(fg);
+    string f = fg + "/" + fp;
+    if (f != lastFg) { lastFg = f; Log("FOREGROUND tagged=" + (IsTagged(fp) ? 1 : 0) + " idle=" + Idle() + " via=" + why + " " + Desc(fg)); }
+    var seen = Seen();
+    string top = seen.Count > 0 ? seen[0].ToString() : "none";
+    if (top != lastTop) { lastTop = top; Log("TOP tagged=" + (seen.Count > 0 && IsTagged(Pid(seen[0])) ? 1 : 0) + " via=" + why + " " + (seen.Count > 0 ? Desc(seen[0]) : "none")); }
+    var sb = new StringBuilder();
+    var sink = new List<IntPtr>();
+    for (int i = 0; i < seen.Count; i++) {
+      if (!IsTagged(Pid(seen[i]))) continue;
+      int below = 0; for (int j = i + 1; j < seen.Count; j++) if (!IsTagged(Pid(seen[j]))) below++;
+      sb.Append(" [" + seen[i] + " rank=" + i + "/" + seen.Count + " aboveOthers=" + below + "]");
+      if (keeper && below > 0 && !IsTagged(fp)) sink.Add(seen[i]);
+    }
+    string ranks = sb.ToString();
+    if (ranks != lastRanks) { lastRanks = ranks; Log("RANKS via=" + why + (ranks.Length > 0 ? ranks : " none-onscreen")); }
+    // A cross-thread SetWindowPos may dispatch incoming events, so Check can re-enter here.
+    if (sink.Count == 0 || inKeep) return;
+    inKeep = true;
+    try { foreach (var h in sink) KeepSink(h, why); } finally { inKeep = false; }
+  }
+  static HashSet<IntPtr> sunk = new HashSet<IntPtr>();
+  // A browser frame: unowned, with a caption (menus, bubbles and tooltips are owned popups).
+  static bool IsFrame(IntPtr h) { return GetWindow(h, 4) == IntPtr.Zero && (GetWindowLong(h, -16) & 0x00C00000) == 0x00C00000; }
+  // Events: 0x3 foreground, 0x16/0x17 minimize start/end, 0x8000 create, 0x8001 destroy, 0x8002 show,
+  // 0x8003 hide, 0x8004 reorder, 0x800B location change, 0x8017/0x8018 cloak/uncloak.
+  static void OnEvent(IntPtr hook, uint ev, IntPtr h, int obj, int child, uint thread, uint time) {
+    if (ev == 3) { Check("ev-foreground"); return; }
+    if (obj != 0 || child != 0 || h == IntPtr.Zero) { if (ev == 0x8004) Check("ev-reorder"); return; }
+    if (GetAncestor(h, 2) != h) return;
+    if (!IsTagged(Pid(h))) { if (ev == 0x8002 || ev == 0x8004 || ev == 0x800B) Check("ev-other-" + ev.ToString("x")); return; }
+    // Sink a new frame while it is still hidden: an unactivated show keeps its z-order slot.
+    if ((ev == 0x8000 || ev == 0x800B) && !IsWindowVisible(h) && !sunk.Contains(h) && IsFrame(h)) {
+      sunk.Add(h);
+      bool ok = SetWindowPos(h, HWND_BOTTOM, 0, 0, 0, 0, SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE);
+      Log("SINK-AT-CREATE ok=" + ok + " ev=" + ev.ToString("x") + " style=" + GetWindowLong(h, -16).ToString("x") + " " + Desc(h));
+    }
+    string name;
+    switch (ev) { case 0x8000: return; case 0x8001: name = "DESTROY"; break; case 0x8002: name = "SHOW"; break;
+      case 0x8003: name = "HIDE"; break; case 0x8004: name = "REORDER"; break; case 0x800B: name = "LOCATION"; break;
+      case 0x16: name = "MINSTART"; break; case 0x17: name = "MINEND"; break; case 0x8017: name = "CLOAK"; break; case 0x8018: name = "UNCLOAK"; break;
+      default: return; }
+    if (ev == 0x800B) { RECT r; GetWindowRect(h, out r); Log("EV " + name + " hwnd=" + h + " rect=" + Ltrb(r)); }
+    else Log("EV " + name + " " + (ev == 0x8001 ? "hwnd=" + h : Desc(h)));
+    Check("ev-" + name);
+  }
+
+  class Mon { public string Dev; public RECT Rc, Work; public uint Dpi; public int Hz; public bool Primary; }
+  static List<Mon> EnumMonitors() {
+    var l = new List<Mon>();
+    EnumDisplayMonitors(IntPtr.Zero, IntPtr.Zero, delegate(IntPtr m, IntPtr hdc, ref RECT rr, IntPtr d) {
+      var mi = new MONITORINFOEX(); mi.cbSize = Marshal.SizeOf(typeof(MONITORINFOEX)); GetMonitorInfo(m, ref mi);
+      uint dx, dy; GetDpiForMonitor(m, 0, out dx, out dy);
+      var dm = new DEVMODE(); dm.dmSize = (short)Marshal.SizeOf(typeof(DEVMODE)); EnumDisplaySettings(mi.szDevice, -1, ref dm);
+      var o = new Mon(); o.Dev = mi.szDevice; o.Rc = mi.rcMonitor; o.Work = mi.rcWork; o.Dpi = dx; o.Hz = dm.dmDisplayFrequency; o.Primary = (mi.dwFlags & 1) != 0;
+      l.Add(o);
+      return true; }, IntPtr.Zero);
+    return l;
+  }
+  static void Env() {
+    Log("VSCREEN " + GetSystemMetrics(76) + " " + GetSystemMetrics(77) + " " + GetSystemMetrics(78) + " " + GetSystemMetrics(79));
+    Log("FGLOCK " + FgLock() + " idle=" + Idle());
+    foreach (var m in EnumMonitors())
+      Log("MONITOR " + m.Dev + " rect=" + Ltrb(m.Rc) + " work=" + Ltrb(m.Work) + " primary=" + (m.Primary ? 1 : 0) + " dpi=" + m.Dpi + " hz=" + m.Hz);
+  }
+
+  // Reply pieces, as dictionaries for the script's ConvertTo-Json.
+  static OrderedDictionary D(params object[] kv) {
+    var d = new OrderedDictionary();
+    for (int i = 0; i + 1 < kv.Length; i += 2) d.Add(kv[i], kv[i + 1]);
+    return d;
+  }
+  static OrderedDictionary Xywh(RECT r) { return D("x", r.L, "y", r.T, "w", r.R - r.L, "h", r.B - r.T); }
+  public static OrderedDictionary VirtualScreen() { return D("x", GetSystemMetrics(76), "y", GetSystemMetrics(77), "w", GetSystemMetrics(78), "h", GetSystemMetrics(79)); }
+  public static object[] Monitors() {
+    var l = new List<object>();
+    foreach (var m in EnumMonitors()) l.Add(D("rect", Xywh(m.Rc), "work", Xywh(m.Work), "dpi", (long)m.Dpi, "hz", m.Hz, "primary", m.Primary));
+    return l.ToArray();
+  }
+  public static OrderedDictionary FgInfo() {
+    IntPtr h = GetForegroundWindow(); RECT r; GetWindowRect(h, out r); uint p = Pid(h);
+    return D("hwnd", h.ToInt64(), "pid", (long)p, "cls", Cls(h), "rect", Xywh(r), "visible", IsWindowVisible(h),
+      "iconic", IsIconic(h), "cloaked", Cloaked(h), "tagged", IsTagged(p), "idleMs", (long)Idle());
+  }
+  // Every visible run frame to HWND_BOTTOM at x,y and w by hgt, unactivated.
+  public static object[] Place(int x, int y, int w, int hgt) {
+    // Collect first: a window moved to the bottom ends a GetWindow(next) walk early.
+    var frames = new List<IntPtr>();
+    for (IntPtr h = GetTopWindow(IntPtr.Zero); h != IntPtr.Zero; h = GetWindow(h, 2))
+      if (IsWindowVisible(h) && IsTagged(Pid(h)) && IsFrame(h)) frames.Add(h);
+    var l = new List<object>(); var sb = new StringBuilder();
+    foreach (var h in frames) {
+      bool ok = SetWindowPos(h, HWND_BOTTOM, x, y, w, hgt, SWP_NOACTIVATE);
+      RECT r; GetWindowRect(h, out r);
+      l.Add(D("hwnd", h.ToInt64(), "rect", Xywh(r)));
+      sb.Append(" [" + ok + " " + Desc(h) + "]");
+    }
+    Log("PLACE" + sb);
+    return l.ToArray();
+  }
+
+  static void Push(string c) { lock (cmds) cmds.Enqueue(c); }
+  static string Pop() { lock (cmds) return cmds.Count > 0 ? cmds.Dequeue() : null; }
+  // Per-monitor DPI awareness (v2) for this thread, which then runs Loop: geometry is in physical pixels.
+  public static void Start(string t, string logFile, bool keepOn) {
+    tag = t; keeper = keepOn;
+    file = new StreamWriter(logFile, true);
+    SetThreadDpiAwarenessContext((IntPtr)(-4));
+    Env();
+    Refresh();
+  }
+  // Runs on the calling thread: hooks plus a message loop, polling every 50 ms, until EOF.
+  public static void Loop(Func<string, bool> handle) {
+    keep = new WinEventProc(OnEvent);
+    SetWinEventHook(0x3, 0x3, IntPtr.Zero, keep, 0, 0, 2);
+    SetWinEventHook(0x16, 0x17, IntPtr.Zero, keep, 0, 0, 2);
+    SetWinEventHook(0x8000, 0x800B, IntPtr.Zero, keep, 0, 0, 2);
+    SetWinEventHook(0x8017, 0x8018, IntPtr.Zero, keep, 0, 0, 2);
+    Log("READY");
+    Check("start");
+    while (!done) {
+      MsgWaitForMultipleObjectsEx(0, null, 50, 0x4FF, 0);
+      MSG m; while (PeekMessage(out m, IntPtr.Zero, 0, 0, 1)) { TranslateMessage(ref m); DispatchMessage(ref m); }
+      Check("poll");
+      string c;
+      while ((c = Pop()) != null) {
+        bool more;
+        try { more = handle(c); } catch (Exception e) { Log("ERROR handler " + e.GetType().Name + " " + OneLine(e.Message)); more = true; }
+        // EOF ends the run even if its handler failed: the supervisor must not outlive its owner.
+        if (!more || c == EofLine) { done = true; break; }
+      }
+    }
+  }
+  public static void ReadStdin() {
+    var t = new Thread(delegate() {
+      try { string l; while ((l = Console.In.ReadLine()) != null) Push(l); } catch { }
+      StdinClosed = true;
+      Push(EofLine);
+    });
+    t.IsBackground = true; t.Start();
+  }
+}
+'@
+$Supervised = $true
+
+[ChromeBgSup]::Start($Tag, $LogFile, [bool]$Keep)
+[ChromeBgSup]::ReadStdin()
+# Runs on the hook thread between message pumps, never inside the WinEvent callback, so the ops
+# may call WMI. Exactly one reply per request line.
+$handler = [Func[string, bool]] {
+  param([string]$Line)
+  if ($Line -ceq [ChromeBgSup]::EofLine) { Close-Run; return $false }
+  try { $reply = Invoke-Op $Line } catch { $reply = New-ErrorReply $_.Exception.Message }
+  if ($reply -isnot [System.Collections.IDictionary]) { $reply = New-ErrorReply 'internal: an op emitted stray output' }
+  Send-Reply $reply
+  return $true
+}
+try { [ChromeBgSup]::Loop($handler) } catch { [ChromeBgSup]::Log('ERROR loop ' + ($_.Exception.Message -replace '[\r\n]+', ' ')) }
+[ChromeBgSup]::Log("EXIT code=$ExitCode")
+exit $ExitCode
