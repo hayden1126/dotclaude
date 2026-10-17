@@ -1335,15 +1335,20 @@ def pass_marker(rec: dict) -> float | None:
 def lead_relink(repo: Repo, sid: str, pid: int | None = None, proc: str = PROC) -> str | None:
     """Why the session whose hook runs as pid (this process by default) continues the recorded
     lead, or None. The hook inherits its claude's environment, and its claude is an ancestor.
-      "clear"   the recorded process runs and is the nearest session above (sessions_above),
-                and its file holds sid, a new id: a /clear keeps the process and starts one.
-      "resume"  the recorded process is gone or stopped (Ctrl+Z), and sid is the record's: a
-                resume keeps the id, in the same tab, another, or a tmux restart's restored one.
+    Every proof is about the session `lane lead` then records, the nearest above the hook
+    (sessions_above), whose own file must hold sid: before a claude's file is written, the
+    nearest is whatever ran it (a `claude -p` from a side chat), which holds another id.
+      "clear"   the recorded process runs and is that session: a /clear keeps the process and
+                starts a new id, which its file already holds (else the next Stop).
+      "resume"  the recorded process is gone or stopped (Ctrl+Z), sid is the record's, and no
+                other running main-checkout session holds it: a resume keeps the id, in the same
+                tab, another, or a tmux restart's restored one. Two resumes are no pick
+                (lead_of), so neither heals.
       "pass"    the recorded process is gone, pid runs in the recorded tmux pane on the recorded
                 server (proc_tmux), and that pane's pass-last marker (pass_marker) names the
-                recorded session passing there at most PASS_TTL before this session's claude
-                started (the nearest of sessions_above). A claude started by hand in the old
-                tab has no such marker.
+                recorded session passing there at most PASS_TTL before that session's claude
+                started. A claude started by hand in the old tab has no such marker, nor has a
+                pass whose session left no reply text (pass-respawn's write_last skips it).
     A running lead is never displaced. Nearly every call costs one read and one stat: the
     recorded process runs and sid is the record's."""
     rec = read_lead(repo)
@@ -1351,24 +1356,25 @@ def lead_relink(repo: Repo, sid: str, pid: int | None = None, proc: str = PROC) 
         return None
     me = os.getpid() if pid is None else pid
     state = session_state(rec, proc)
-    if state is not None and state not in STOPPED:
-        if sid == rec["sessionId"] or (rec["pid"], rec["procStart"]) not in ancestry(me, proc):
-            return None
-        # A /clear runs the hook in the recorded process itself: the nearest session above,
-        # whose file already holds the new id. A claude the lead runs is no clear of it (a
-        # `claude -p` writes no session file, so the lead is the nearest above its hook too,
-        # but its file holds the lead's id). Before the file takes the new id, the next Stop.
-        above = sessions_above(me)
-        if not above or (above[0][1].pid, above[0][1].start) != (rec["pid"], rec["procStart"]):
-            return None
-        return "clear" if above[0][0].get("sessionId") == sid else None
+    running = state is not None and state not in STOPPED
+    if running and (sid == rec["sessionId"]
+                    or (rec["pid"], rec["procStart"]) not in ancestry(me, proc)):
+        return None
+    if not running and sid != rec["sessionId"] and (
+            state is not None or rec["tmux"] is None or proc_tmux(me, proc) != rec["tmux"]):
+        return None
+    above = sessions_above(me)
+    if not above or above[0][0].get("sessionId") != sid:
+        return None
+    nearest = above[0][1]
+    if running:
+        return "clear" if (nearest.pid, nearest.start) == (rec["pid"], rec["procStart"]) else None
     if sid == rec["sessionId"]:
-        return "resume"
-    if state is not None or rec["tmux"] is None or proc_tmux(me, proc) != rec["tmux"]:
+        twins = [s for s in main_sessions(repo) if s.get("sessionId") == sid
+                 and (s["pid"], proc_start_of(s)) != (nearest.pid, nearest.start)]
+        return None if twins else "resume"
+    written = pass_marker(rec)
+    started = proc_epoch(nearest.start, proc)
+    if written is None or started is None:
         return None
-    if (written := pass_marker(rec)) is None or not (above := sessions_above(me)):
-        return None
-    started = proc_epoch(above[0][1].start, proc)
-    if started is None or not started - PASS_TTL <= written <= started + PASS_SLACK:
-        return None
-    return "pass"
+    return "pass" if started - PASS_TTL <= written <= started + PASS_SLACK else None

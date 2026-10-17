@@ -482,6 +482,17 @@ class LeadHeal(test_cli.LeadChain):
         self.assertEqual((res["rc"], res["err"]), (0, ""))
         return pid, res
 
+    def hook_in_chain(self, sid, sessions, before=None):
+        """run_hook's Stop for sid, from the nearest of a chain of fake sessions (session()
+        keywords, file=False for one whose file isn't written yet), each started by the one
+        before it; their pids and the hook's {rc, out, err}."""
+        event = {"session_id": sid, "cwd": self.main, "hook_event_name": "Stop"}
+        pids, res = self.runs_in_chain(
+            [sys.executable, "-I", os.path.join(HOOKS, "lane_identity.py")], sessions,
+            stdin=json.dumps(event), before=before)
+        self.assertEqual((res["rc"], res["err"]), (0, ""))
+        return pids, res
+
     def relinks(self):
         """The hook's relink lines in lane-identity.log."""
         try:
@@ -521,6 +532,52 @@ class LeadHeal(test_cli.LeadChain):
         self.run_hook(self.NEW, source="startup", pane="%4")
         self.assertEqual(self.read(self.lead_path), before)
         self.assertEqual(self.relinks(), [])
+
+    def test_a_resume_proves_only_the_session_holding_the_id(self):
+        # `claude -p --resume <lead id>` run from a side chat: `lane lead` records the nearest
+        # session above the hook, so the proof is about that one. Before the -p's own file
+        # exists, the nearest is the side chat, which holds another id; once it does, the -p
+        # (no socket) is the nearest, and `lane lead` refuses it.
+        before = self.write_record(self.exited(), 1)
+        self.hook_in_chain(self.OLD, [dict(sid=self.NEW, pane="%4"), dict(file=False)])
+        self.assertEqual(self.read(self.lead_path), before)
+        self.assertEqual(self.relinks(), [])
+        self.hook_in_chain(self.OLD, [dict(sid=self.NEW, pane="%4"), dict(sid=self.OLD,
+                                                                          sock=False)])
+        self.assertEqual(self.read(self.lead_path), before)
+        (line,) = self.relinks()
+        self.assertIn(f" relink resume sid={self.OLD} rc=1: ", line)
+
+    def test_two_resumes_heal_neither(self):
+        # Two running resumes of the lead's id are no pick (lanelib.lead_of), so the heal
+        # leaves the choice to Hayden, not to whichever heals first.
+        before = self.write_record(self.exited(), 1)
+        (other,) = self.start(self.fake(self.main))
+        self.session(other, sid=self.OLD, pane="%4")
+        self.run_hook(self.OLD, name="Stop")
+        self.assertEqual(self.read(self.lead_path), before)
+        self.assertEqual(self.relinks(), [])
+
+    def test_a_claude_the_running_lead_started_is_no_clear(self):
+        # An interactive claude under the lead (its own file, a new id) has the lead above it,
+        # but `lane lead` would record the child: only the recorded process itself clears.
+        def lead(pids):
+            self.before = self.write_record(pids[0], self.starts[pids[0]])
+
+        self.hook_in_chain(self.NEW, [dict(sid=self.OLD), dict(sid=self.NEW)], before=lead)
+        self.assertEqual(self.read(self.lead_path), self.before)
+        self.assertEqual(self.relinks(), [])
+
+    def test_lane_lead_records_only_the_expected_session(self):
+        # The hook passes the proved id along, so a session that changed between the proof
+        # and the write is never recorded.
+        pid, res = self.act(["lead", "--expect-sid", self.NEW], sid=self.OLD)
+        self.assertEqual(res["rc"], 1, res)
+        self.assertIn(f"session {self.OLD} runs this, not {self.NEW}", res["err"])
+        self.assertIsNone(self.lead())
+        pid, res = self.act(["lead", "--expect-sid", self.OLD], sid=self.OLD)
+        self.assertEqual(res["rc"], 0, res)
+        self.assertLead(pid, self.OLD)
 
     def test_a_clear_updates_the_session_id(self):
         # /clear keeps the process and starts a new session id, which its session file holds.

@@ -17,9 +17,9 @@ Stop, SessionEnd (in a lane):
   session's entry, which `lane ls` uses for its handoff? flag.
 SessionStart and Stop (in main): the lead heal. When lanelib.lead_relink proves this session
   continues the recorded lead (a resume, a /clear or a /pass successor), it runs the sibling
-  `lane lead`, which applies every lead check and rewrites the record, so `lane addr lead` and
-  the tab bar follow. Nearly every call costs one read and one stat, and a refusal is retried on
-  the next Stop.
+  `lane lead --expect-sid <id>`, which applies every lead check to that very session and
+  rewrites the record, so `lane addr lead` and the tab bar follow. Nearly every call costs one
+  read and one stat, and a refusal is retried on the next Stop.
 
 Subagent payloads (agent_id) are skipped. Writes take the lanes lock with a short timeout. Any
 failure is logged to $XDG_STATE_HOME/dotclaude/lane-identity.log and stays silent (fail open).
@@ -194,10 +194,11 @@ def end(repo: lanelib.Repo, lane: dict, event: dict) -> None:
 
 def relink(repo: lanelib.Repo, event: dict) -> None:
     """The lead heal: on proof (lanelib.lead_relink) that this session continues the recorded
-    lead, run this checkout's own `lane lead` from the session's cwd. It applies every lead
-    check (interactive, a socket, the main checkout, no linked worktree, no lane's session
-    above) and writes the record atomically; until the session file or socket exists it
-    refuses, and the next Stop tries again. One log line per attempt; never any output."""
+    lead, run this checkout's own `lane lead` from the session's cwd, expecting the proved id.
+    It applies every lead check (interactive, a socket, the main checkout, no linked worktree,
+    no lane's session above) and writes the record atomically; until the session file or
+    socket exists it refuses, and the next Stop tries again. One log line per attempt; never
+    any output."""
     sid = event.get("session_id")
     if not isinstance(sid, str) or not lanelib.SID.fullmatch(sid):
         return
@@ -205,9 +206,10 @@ def relink(repo: lanelib.Repo, event: dict) -> None:
     if why is None:
         return
     try:
-        p = subprocess.run([sys.executable, "-I", os.path.join(SCRIPTS, "lane"), "lead"],
-                           cwd=event["cwd"], stdin=subprocess.DEVNULL, capture_output=True,
-                           text=True, timeout=RELINK_WAIT)
+        # --expect-sid: `lane lead` records only the session the proof was about.
+        p = subprocess.run([sys.executable, "-I", os.path.join(SCRIPTS, "lane"), "lead",
+                            "--expect-sid", sid], cwd=event["cwd"], stdin=subprocess.DEVNULL,
+                           capture_output=True, text=True, timeout=RELINK_WAIT)
     except subprocess.TimeoutExpired:
         log(f"relink {why} sid={sid} timed out after {RELINK_WAIT:g} s")
         return

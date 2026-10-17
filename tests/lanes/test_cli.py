@@ -2384,7 +2384,9 @@ class LeadChain(Fakes):
             extra = {"children": [cfg]}  # the next one out starts it
         pids = self.start(cfg)
         for pid, kw in zip(pids, sessions):
-            self.session(pid, **{k: v for k, v in kw.items() if k != "real_cwd"})
+            if kw.get("file", True):  # file=False: a session whose file isn't written yet
+                self.session(pid, **{k: v for k, v in kw.items() if k not in ("real_cwd",
+                                                                               "file")})
         if before:
             before(pids)
         return pids, self.await_done(go, out)

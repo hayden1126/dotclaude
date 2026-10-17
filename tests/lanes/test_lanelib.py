@@ -195,17 +195,24 @@ class LeadRelink(_fixture.LiveSessions):
         self.session(self.main, pid=os.getpid(), sock=None, sessionId=self.NEW)
         self.assertEqual(self.relink(self.NEW), "clear")
         self.assertIsNone(self.relink(self.OLD))
-        # A claude the lead runs (a `claude -p` writes no session file, so the lead is the
-        # nearest session above its hook) carries an id the lead's file doesn't: no clear.
+        # A claude the lead runs, before its own session file is written (the lead is then the
+        # nearest session above its hook), carries an id the lead's file doesn't: no clear.
         self.assertIsNone(self.relink("s-child"))
         # Nor before the lead's own file has taken the new id: the next Stop sees it.
         self.session(self.main, pid=os.getpid(), sock=None, sessionId=self.OLD)
         self.assertIsNone(self.relink(self.NEW))
 
     def test_a_resume_needs_the_lead_gone_or_stopped(self):
+        # This runner plays the resumed session, the nearest above every child, holding the id.
+        self.session(self.main, pid=os.getpid(), sock=None, sessionId=self.OLD)
         self.write_lead(self.child(self.main, done=True), start=1, sid=self.OLD)
         self.assertEqual(self.relink(self.OLD), "resume")
         self.assertIsNone(self.relink(self.NEW))
+        # The nearest session must hold the id itself: a claude a side chat runs, before its
+        # own file exists, proves nothing for the side chat.
+        self.session(self.main, pid=os.getpid(), sock=None, sessionId=self.NEW)
+        self.assertIsNone(self.relink(self.OLD))
+        self.session(self.main, pid=os.getpid(), sock=None, sessionId=self.OLD)
         stopped = self.child(self.main)
         self.stop(stopped)
         self.write_lead(stopped, sid=self.OLD)
@@ -213,7 +220,8 @@ class LeadRelink(_fixture.LiveSessions):
         self.assertIsNone(self.relink(self.NEW))
 
     def test_a_pass_needs_a_fresh_marker_of_the_lead_leaving_this_pane(self):
-        self.session(self.main, pid=os.getpid(), sock=None)  # the claude above the child
+        # The claude above the child: the successor, with its own new id.
+        self.session(self.main, pid=os.getpid(), sock=None, sessionId=self.NEW)
         started = lanelib.proc_epoch(lanelib.proc_start(os.getpid()))
         self.write_lead(self.child(self.main, done=True), start=1, sid=self.OLD,
                         tmux=self.tmux_of("%3"))
@@ -243,6 +251,8 @@ class LeadRelink(_fixture.LiveSessions):
         os.remove(os.path.join(self.home, ".claude", "sessions", f"{os.getpid()}.json"))
         self.assertIsNone(self.relink(self.NEW, pane="%3"))  # no claude above it
         self.session(self.main, pid=os.getpid(), sock=None)
+        self.assertIsNone(self.relink(self.NEW, pane="%3"))  # one holding another id
+        self.session(self.main, pid=os.getpid(), sock=None, sessionId=self.NEW)
         self.assertEqual(self.relink(self.NEW, pane="%3"), "pass")
         self.write_lead(self.child(self.main, done=True), start=1, sid=self.OLD)  # no tmux
         self.assertIsNone(self.relink(self.NEW, pane="%3"))

@@ -284,16 +284,20 @@ How it holds:
   tmux restarts: the restored tab resumes the successor's session id, which the record never
   held, and the bar reads only the recorded pane. So the lane-identity hook, on SessionStart and
   Stop in the main checkout, rewrites the record when this session proves it continues the
-  recorded lead. A /clear: the recorded process runs, is the nearest session above the hook, and
-  its session file already holds the event's new id (a `claude -p` the lead runs writes no
-  session file, but its id isn't the one the lead's file holds). A resume: the recorded process
-  is gone or stopped, and the session id is the record's. A /pass: the recorded process is gone,
-  this session runs in the recorded pane, and that pane's `pass-last` marker (pass-respawn
-  writes it in the state dir just before the respawn) names the recorded session leaving it at
-  most 120 s before this claude started. A claude started by hand in the old tab has no marker,
-  and a running lead is never displaced. On proof the hook runs its sibling `lane lead`, so
-  every check under "Who counts" still applies, and a refusal is retried at the next Stop.
-  Nearly every call costs one file read and one stat.
+  recorded lead. Every proof is about the session `lane lead` then records, the nearest above
+  the hook, and its own session file must hold the event's id: before a claude's file is
+  written, the nearest is whatever ran it (a `claude -p` run from a side chat), which holds
+  another id. A /clear: the recorded process runs and is that session. A resume: the recorded
+  process is gone or stopped, the session id is the record's, and no other running session in
+  the main checkout holds it (two resumes are no pick, so neither heals). A /pass: the recorded
+  process is gone, this session runs in the recorded pane, and that pane's `pass-last` marker
+  (pass-respawn writes it in the state dir just before the respawn) names the recorded session
+  leaving it at most 120 s before this claude started. A claude started by hand in the old tab
+  has no marker; nor has a pass whose session left no reply text, which pass-respawn skips, so
+  that pass relinks only by the pane rule until tmux restarts. A running lead is never
+  displaced. On proof the hook runs its sibling `lane lead --expect-sid <id>`, so every check
+  under "Who counts" still applies to the very session proved, and a refusal is retried at the
+  next Stop. Nearly every call costs one file read and one stat.
 - **The board** (`lane ls`) adds a line under the table when the main checkout has two or more
   live sessions: each one's window, pid and state, the lead first, `no tmux` or `agent worktree`
   where it applies. With no running session picked and the recorded lead stopped, the line

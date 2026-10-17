@@ -2439,6 +2439,9 @@ def cmd_lead(args) -> None:
         raise LaneError(SANDBOXED_LEAD)
     repo = lanes_repo()
     session, rec = lead_claim(repo)
+    if args.expect_sid is not None and rec["sessionId"] != args.expect_sid:
+        raise LaneError(shown(f"session {rec['sessionId']} runs this, not {args.expect_sid}: "
+                              "the lead stays where it was"))
     try:
         lanelib.write_lead(repo, rec)
     except OSError as e:
@@ -2708,8 +2711,11 @@ def parser() -> argparse.ArgumentParser:
     p = sub.add_parser("addr", help="the messaging address (uds:<socket>) of a lane's live "
                                     "session, or the lead's; resolve it before each send")
     p.add_argument("id", help="a lane id, or `lead`")
-    sub.add_parser("lead", help="make the session that runs this the lead, the one `lane addr "
-                                "lead` names (a bare init, new, adopt, open or done does too)")
+    p = sub.add_parser("lead", help="make the session that runs this the lead, the one `lane addr "
+                                    "lead` names (a bare init, new, adopt, open or done does too)")
+    p.add_argument("--expect-sid", metavar="SID",
+                   help="refuse unless that session holds this id (the lane-identity hook's "
+                        "relink passes the id it proved)")
     p = sub.add_parser("lock", help="run a command under a named lock (`lane lock <name> -- <cmd>`)",
                        usage="lane lock <name> [--wait SECS] -- <cmd...>")
     p.add_argument("name")
