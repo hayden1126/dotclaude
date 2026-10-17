@@ -240,9 +240,9 @@ def holds_tag(run_dir, rid):
 
 
 # ---- supervisor replies ---------------------------------------------------------------------
-# chrome-bg.ps1 answers in exact shapes (PLAN.md "Supervisor protocol"; the replies the real one
-# sent are pinned in tests/setup/test_chrome_bg.py). No aliases and no defaults: a missing or
-# retyped field fails here, naming the op and the field, instead of reading as None.
+# chrome-bg.ps1 answers in exact shapes (the Protocol block atop chrome-bg.ps1; the replies the
+# real one sent are pinned in tests/setup/test_chrome_bg.py). No aliases and no defaults: a
+# missing or retyped field fails here, naming the op and the field, instead of reading as None.
 
 KINDS = {
     "int": lambda v: isinstance(v, int) and not isinstance(v, bool),
@@ -1010,8 +1010,8 @@ def place_args(hello, size):
 
 def start_run(rid, url, size, kind, ttl=None, cwd=None, marks=False, on_hello=None,
               keep_cdp=False):
-    """The start sequence (PLAN.md "Start sequence"). On any failure, or a signal, it ends the
-    run it began before raising."""
+    """The start sequence (the module docstring's "Start:"). On any failure, or a signal, it ends
+    the run it began before raising."""
     w, h = size
     now = time.time()
     st = proc_stat(os.getpid())

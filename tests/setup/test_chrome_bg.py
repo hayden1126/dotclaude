@@ -782,8 +782,8 @@ class PageCount(unittest.TestCase):
         self.assertIn(f"{dead}/json/version: ConnectionRefusedError", str(cm.exception))
 
 
-# The Windows side, faked. FAKE_SUP speaks chrome-bg.ps1's protocol (PLAN.md "Supervisor
-# protocol") over stdin and stdout and answers only with CONTRACT's replies. On `launch` it starts
+# The Windows side, faked. FAKE_SUP speaks chrome-bg.ps1's protocol (the Protocol block atop
+# chrome-bg.ps1) over stdin and stdout and answers only with CONTRACT's replies. On `launch` it starts
 # FAKE_CHROME (HTTP /json/version and /json/list plus a CDP WebSocket, and the DevToolsActivePort
 # in the run dir) in a process and session of its own, as WMI launches chrome.exe: killing the
 # supervisor leaves "Chrome" running. --root stands for C:\. They note what they saw in files
