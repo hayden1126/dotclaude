@@ -7,11 +7,16 @@ nor NO), and ms is the wall time. yes and error both paint the tab green (redund
 silence); no leaves it. An empty last_assistant_message is "no": nothing to read.
 
 The model reads the last TAIL characters of the payload's last_assistant_message, since asks
-come at the end. The prompt is the fourth wording tried on a replay of 223 real turn-ending
+come at the end. The prompt is the fourth wording tried on a replay of 227 real turn-ending
 replies (47% YES; the design is PLAN.md "Next: two workflow fixes"): waiting on a reviewer, a
 subagent or a build is NO; a step only Hayden can do, or a next step that waits on his go, is
-YES. Two later wordings that tried to catch "run X when you're ready" asks each broke three
-other asks, so those stay a known miss. Stdlib only; keep the source ASCII.
+YES. Two known misses stay, since each later wording that tried to fix one changed three to six
+other verdicts the wrong way: a "run X when you're ready" ask can read NO (two wordings tried),
+and an ask the reply only announces for later ("that needs your OK. I'll ask when the probes
+come up.") can read YES (one wording, replayed on the 227, plus the 167 replies logged on
+2026-10-17). Haiku 4.5 at temperature 0 gave the same verdict on every rerun, so each change
+came from the wording.
+Stdlib only; keep the source ASCII.
 """
 import json
 import os
