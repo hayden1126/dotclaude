@@ -1271,7 +1271,7 @@ def lead_of(repo: Repo, sessions: list[dict]) -> dict | None:
         for s in sessions:
             if s["pid"] == rec["pid"] and proc_start_of(s) == rec["procStart"]:
                 return s
-        on = {s["pid"]: s for s in continuations(rec, sessions)}
+        on = {s["pid"]: s for s in continuations(repo, rec, sessions)}
         if len(on) == 1:
             return next(iter(on.values()))
     if len(sessions) == 1 and (rec is None or stopped_lead(repo, rec) is None):
@@ -1279,14 +1279,16 @@ def lead_of(repo: Repo, sessions: list[dict]) -> dict | None:
     return None
 
 
-def continuations(rec: dict, sessions: list[dict]) -> list[dict]:
+def continuations(repo: Repo, rec: dict, sessions: list[dict]) -> list[dict]:
     """The sessions among sessions (main_sessions) that carry on the recorded lead (rec): one
-    with its session id (a resume), or, once the recorded process is gone, one whose own
-    environment names its tmux server (socket, pid and start) and pane (a /pass successor:
-    `respawn-pane -k` ends the old claude and keeps the pane; beside one only stopped, a claude
-    in its pane is a fresh one). lead_of picks one only when it is the one, and lead_relink
-    heals only then."""
-    pane = rec["tmux"] if session_state(rec) is None else None
+    with its session id (a resume), or, once the recorded process is gone and no stopped lead
+    remains (stopped_lead: the original a heal moved the record off may still sit stopped in
+    that pane), one whose own environment names its tmux server (socket, pid and start) and
+    pane (a /pass successor: `respawn-pane -k` ends the old claude and keeps the pane; beside
+    one only stopped, a claude in its pane is a fresh one). lead_of picks one only when it is
+    the one, and lead_relink heals only then."""
+    gone = session_state(rec) is None and stopped_lead(repo, rec) is None
+    pane = rec["tmux"] if gone else None
     return [s for s in sessions if s.get("sessionId") == rec["sessionId"]
             or (pane is not None and proc_tmux(s["pid"]) == pane)]
 
@@ -1398,6 +1400,6 @@ def lead_relink(repo: Repo, sid: str, pid: int | None = None, proc: str = PROC) 
             return None
     # As lead_of: beside another continuation (a second resume, a successor in the recorded
     # pane), none is the lead, so neither heals ahead of the other and Hayden picks.
-    others = [s for s in continuations(rec, main_sessions(repo))
+    others = [s for s in continuations(repo, rec, main_sessions(repo))
               if (s["pid"], proc_start_of(s)) != nearest]
     return None if others else why

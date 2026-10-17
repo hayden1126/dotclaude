@@ -270,17 +270,17 @@ How it holds:
 - **The pick** (`lanelib.lead_of`), among running sessions: the record's pid and start match
   first (a /clear keeps both). Then the record's one continuation: a session with the record's
   session id (a resume, in the same tab, another tab, or the tab a tmux restart restores) or,
-  once the recorded process is gone, one in the record's pane on the record's server (the pass
-  successor, since `respawn-pane -k` ends the old claude and keeps the pane; beside a lead that
-  is only stopped, a claude in its pane is a fresh one). Only interactive sessions count: a
-  background session has a socket too, but the lead is one Hayden talks to. Two continuations (a
-  resume beside a fresh claude in the old pane, two resumes) are no pick. With none, one running
-  session is the lead, unless the recorded lead is stopped: its process, or, once a heal moved
-  the record to a resume that has since ended, the original holding its session id (Hayden's
-  call, 2026-10-17): beside a lead that `fg` brings back, the one running is likely a side chat.
-  Anything else is no pick. `lane addr lead` then refuses with each session's window, the way to
-  pick, and a stopped lead's window to `fg` it in, and the lane tells Hayden once that #N
-  merged, as with no lead at all.
+  once the recorded process is gone and no stopped lead remains, one in the record's pane on the
+  record's server (the pass successor, since `respawn-pane -k` ends the old claude and keeps the
+  pane; beside a lead that is only stopped, a claude in its pane is a fresh one). Only
+  interactive sessions count: a background session has a socket too, but the lead is one Hayden
+  talks to. Two continuations (a resume beside a fresh claude in the old pane, two resumes) are
+  no pick. With none, one running session is the lead, unless the recorded lead is stopped: its
+  process, or, once a heal moved the record to a resume that has since ended, the original
+  holding its session id (Hayden's call, 2026-10-17): beside a lead that `fg` brings back, the
+  one running is likely a side chat. Anything else is no pick. `lane addr lead` then refuses
+  with each session's window, the way to pick, and a stopped lead's window to `fg` it in, and
+  the lane tells Hayden once that #N merged, as with no lead at all.
 - **The heal** (`lanelib.lead_relink`, lane stopped-lead). The pick alone loses a /pass once
   tmux restarts: the restored tab resumes the successor's session id, which the record never
   held, and the bar reads only the recorded pane. So the lane-identity hook, on SessionStart and

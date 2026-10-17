@@ -331,6 +331,26 @@ class LeadPick(LiveSessions):
                            f"The lead (pid {lead}, proj:@{lead}) is stopped (Ctrl+Z): fg it there")
         self.assertIn(side, err)  # listed, never printed as the address
 
+    def test_a_fresh_claude_in_the_pane_of_a_healed_twin_that_ended_never_takes_it(self):
+        # As above, but the side session is a plain `claude` typed in the twin's pane, where
+        # the original is still a stopped job: the recorded process is gone, yet the pane rule
+        # stays off while a stopped session holds the recorded id (review round 4).
+        lead = self.child(self.main, pane="%3")
+        self.session(self.main, pid=lead, sessionId="s-lead")
+        twin = self.child(self.main, pane="%3")
+        self.session(self.main, pid=twin, sessionId="s-lead")
+        self.stop(lead)
+        self.write_lead(twin, sid="s-lead", tmux=self.tmux_of("%3"))
+        os.kill(twin, signal.SIGKILL)
+        deadline = time.monotonic() + 10
+        while (lanelib.proc_stat(twin) or "xx")[1] not in lanelib.EXITED \
+                and time.monotonic() < deadline:
+            time.sleep(0.01)
+        fresh = self.session(self.main, pane="%3")
+        err = self.refused("it is not the lead",
+                           f"The lead (pid {lead}, proj:@{lead}) is stopped (Ctrl+Z): fg it there")
+        self.assertIn(fresh, err)
+
     def test_a_stopped_lead_resumed_in_its_pane_picks_the_twin(self):
         _, _, twin = self.incident()
         self.assertEqual(self.addr_lead(), twin)
