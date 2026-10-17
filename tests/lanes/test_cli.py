@@ -586,7 +586,8 @@ class HandoffFlag(LanesRepo):
     def live(self):
         """A live session in the lane: this test's own pid, so /proc has it."""
         self.write(os.path.join(self.home, ".claude", "sessions", f"{os.getpid()}.json"),
-                   json.dumps({"pid": os.getpid(), "sessionId": "s-live", "cwd": self.path}))
+                   json.dumps({"pid": os.getpid(), "sessionId": "s-live", "cwd": self.path,
+                               "procStart": str(lanelib.proc_start(os.getpid()))}))
 
     def flags(self):
         (row,) = json.loads(self.lane("ls", "--json"))
@@ -1037,7 +1038,8 @@ FAKE = r'''
   drop      a file it removes on SIGTERM, before on_term ({pid} its pid: its session file,
             gone mid-exit)
   children  configs of fakes it starts, each with its own cwd and env
-  then      {argv, cwd, go, out}: once go exists, run argv in cwd and write {rc, out, err} to out
+  then      {argv, cwd, go, out, stdin}: once go exists, run argv in cwd with stdin (text, if
+            any: a hook's event) and write {rc, out, err} to out
   comm      the comm it gives itself (/proc/self/comm), e.g. "tmux: server"
   session   {file, sid}: Claude Code's session file it writes for itself (pid, procStart)
 It prints "ready <pid> <its descendants' pids>" once set up, then sleeps."""
@@ -1085,8 +1087,8 @@ print("ready", os.getpid(), *pids, flush=True)
 if then := cfg.get("then"):
     while not os.path.exists(then["go"]):
         time.sleep(0.05)
-    p = subprocess.run(then["argv"], cwd=then["cwd"], capture_output=True, text=True,
-                       timeout=60)
+    p = subprocess.run(then["argv"], cwd=then["cwd"], input=then.get("stdin"),
+                       capture_output=True, text=True, timeout=60)
     with open(then["out"] + ".tmp", "w") as f:
         json.dump({"rc": p.returncode, "out": p.stdout, "err": p.stderr}, f)
     os.rename(then["out"] + ".tmp", then["out"])
@@ -1312,9 +1314,60 @@ class ModelPick(Fakes):
                 self.assertIn("/model or /effort in its window", p.stderr)
 
 
+class Stopped(Fakes):
+    """A lane session stopped with Ctrl+Z: present, so it still holds the lane, but out of reach
+    until `fg`, so the board flags it."""
+
+    def test_a_lane_whose_only_session_is_stopped_is_orphan_and_stopped(self):
+        (claude,) = self.claude()
+        (row,) = json.loads(self.lane("ls", "--json"))
+        self.assertEqual((row["live_sessions"], row["stopped_sessions"]), ([self.SID], []))
+        self.assertNotIn("stopped", row["flags"])
+        self.stop(claude)
+        (row,) = json.loads(self.lane("ls", "--json"))
+        self.assertEqual((row["live_sessions"], row["stopped_sessions"]), ([], [self.SID]))
+        self.assertEqual(row["flags"][:2], ["orphan", "stopped"])
+        self.assertIn(" orphan stopped", self.lane("ls").splitlines()[1])
+        self.env["_LANE_TEST_SANDBOXED"] = "1"
+        (row,) = json.loads(self.lane("ls", "--json"))
+        self.assertIsNone(row["stopped_sessions"])
+
+    def test_open_refuses_a_lane_with_a_stopped_session_and_labels_it(self):
+        (claude,) = self.claude()
+        self.stop(claude)
+        p = self.run_lane("open", "chart-fix", "--print")
+        self.assertEqual(p.returncode, 1, p.stdout)
+        self.assertIn(f"already has a live session: session {self.SID} (not in tmux) "
+                      "(stopped: fg it there)", p.stderr)
+
+
 class Close(Fakes):
     """`lane done` ends what provably belongs to the lane and refuses, by name and before any
     signal, what doesn't: the kill-scope matrix."""
+
+    def test_a_stopped_lane_session_is_continued_and_ends_in_round_one(self):
+        # SIGTERM waits while a process is stopped, so its SessionEnd hook would never run;
+        # SIGCONT delivers it. Without it the fake would log nothing and die of round 2's SIGKILL.
+        self.hand_off()
+        (claude,) = self.claude()
+        self.stop(claude)
+        out = self.lane("done", "chart-fix", "--abandon")
+        self.assertIn(f"ended {claude} {self.comms[claude]} (lane session {self.SID})", out)
+        self.assertEqual(self.signals(), [(claude, "SIGTERM")])
+        self.assertClosed()
+
+    def test_a_stopped_session_s_stopped_tree_is_continued_too(self):
+        # Ctrl+Z stops the whole foreground process group: claude's MCP servers and tool
+        # children too. Each is continued with the session, so the signals meant for it land:
+        # without that the child would log nothing and die of the SIGKILL.
+        self.hand_off()
+        claude, child = self.claude(children=[self.fake(self.path)])
+        self.stop(child)
+        self.stop(claude)
+        out = self.lane("done", "chart-fix", "--abandon")
+        self.assertIn(f"ended {child} {self.comms[child]} (under lane session {self.SID})", out)
+        self.assertEqual(self.signals(), [(claude, "SIGTERM"), (child, "SIGTERM")])
+        self.assertClosed()
 
     def assertClosed(self):
         self.assertFalse(os.path.exists(self.path))
@@ -2282,11 +2335,10 @@ class Close(Fakes):
         self.assertEqual(self.signals(), [(pid, "SIGTERM")])
 
 
-class LeadAct(Fakes):
-    """A bare lead act (init, new, adopt, open without --print, done) that succeeds records the
-    nearest Claude session above it as the lead, when that session is interactive, has a socket
-    and launched in the main checkout; `lane lead` does the same or says why it can't. Each
-    session is a fake here whose TMUX names this test runner as its server."""
+class LeadChain(Fakes):
+    """Fake sessions in a chain, the nearest of which runs a command as Claude Code would (a
+    lead act, or a hook with its event); each one whose TMUX names this test runner as its
+    server. LeadAct's harness, without its tests, for test_hooks.LeadHeal to build on."""
 
     MAIN_SID = "sess-main-0001"
 
@@ -2315,11 +2367,16 @@ class LeadAct(Fakes):
         last of which runs `lane <argv>` from run_in (the main checkout by default) once their
         session files are written; their pids, the first started first, and the act's result.
         A fake on a pane runs with TMUX naming this test runner as its server."""
+        return self.runs_in_chain([sys.executable, LANE, *argv], sessions, run_in)
+
+    def runs_in_chain(self, cmd, sessions, run_in=None, stdin=None, before=None):
+        """acts_in_chain for any command (cmd, a full argv, run with stdin), calling before
+        with the pids once their session files are written, just ahead of the run."""
         self.acts += 1
         go = os.path.join(self.tmp, f"go{self.acts}")
         out = os.path.join(self.tmp, f"done{self.acts}.json")
-        extra = {"then": {"argv": [sys.executable, LANE, *argv], "cwd": run_in or self.main,
-                          "go": go, "out": out}}  # the nearest runs the act
+        extra = {"then": {"argv": cmd, "cwd": run_in or self.main, "stdin": stdin, "go": go,
+                          "out": out}}  # the nearest runs the act
         for kw in reversed(sessions):
             cfg = self.fake(kw.get("real_cwd") or kw.get("cwd") or self.main, **extra)
             if pane := kw.get("pane", "%3"):
@@ -2327,7 +2384,11 @@ class LeadAct(Fakes):
             extra = {"children": [cfg]}  # the next one out starts it
         pids = self.start(cfg)
         for pid, kw in zip(pids, sessions):
-            self.session(pid, **{k: v for k, v in kw.items() if k != "real_cwd"})
+            if kw.get("file", True):  # file=False: a session whose file isn't written yet
+                self.session(pid, **{k: v for k, v in kw.items() if k not in ("real_cwd",
+                                                                               "file")})
+        if before:
+            before(pids)
         return pids, self.await_done(go, out)
 
     def session(self, pid, cwd=None, sid=MAIN_SID, kind="interactive", pane="%3", sock=True,
@@ -2349,6 +2410,13 @@ class LeadAct(Fakes):
                           "tmux": tmux if pane else None})
         self.assertIsNotNone(lanelib.parse_iso(rec["at"]))
         self.assertIsNotNone(lanelib.read_lead(lanelib.Repo(self.main, self.common)))
+
+
+class LeadAct(LeadChain):
+    """A bare lead act (init, new, adopt, open without --print, done) that succeeds records the
+    nearest Claude session above it as the lead, when that session is interactive, has a socket
+    and launched in the main checkout; `lane lead` does the same or says why it can't. Each
+    session is a fake here whose TMUX names this test runner as its server."""
 
     def test_a_new_from_the_main_checkout_takes_the_lead(self):
         pid, res = self.act(["new", "api-docs"])
@@ -2844,7 +2912,8 @@ class ExcludedGuardRules(LanesRepo):
         self.lane("new", "chart-fix")
         self.write(os.path.join(self.home, ".claude", "sessions", f"{os.getpid()}.json"),
                    json.dumps({"pid": os.getpid(), "sessionId": "s",
-                               "cwd": self.lane_path("chart-fix")}))
+                               "cwd": self.lane_path("chart-fix"),
+                               "procStart": str(lanelib.proc_start(os.getpid()))}))
         with mock.patch.dict(os.environ, self.env, clear=True):
             self.assertFalse(lane_mod.seed_line(self.lane_json("chart-fix"),
                                                 "## Asks for Hayden", "- ask"))

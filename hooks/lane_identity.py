@@ -8,12 +8,18 @@ SessionStart (startup, resume, clear, compact):
                 lane.json sessions[] (not again for a session already listed and not ended, so a
                 compact keeps its start). On compact it adds "re-read your record": the summary
                 holds the feel, the record the facts.
-  in main       one board line when the repo has lanes, from the records alone (no git or gh).
+  in main       one board line when the repo has lanes, from the records alone (no git or gh),
+                then the lead heal (below), which prints nothing.
   otherwise     silent: a repo with no lanes is unchanged.
 Stop, SessionEnd (in a lane):
   copies <lane>/.lane/ to <common-dir>/lanes/<id>/mirror/, so a raw `git worktree remove` (which
   deletes ignored files) loses nothing. SessionEnd also stamps endedAt and the reason on the
   session's entry, which `lane ls` uses for its handoff? flag.
+SessionStart and Stop (in main): the lead heal. When lanelib.lead_relink proves this session
+  continues the recorded lead (a resume, a /clear or a /pass successor), it runs the sibling
+  `lane lead --expect-sid <id>`, which applies every lead check to that very session and
+  rewrites the record, so `lane addr lead` and the tab bar follow. Nearly every call costs one
+  read and one stat, and a refusal is retried on the next Stop.
 
 Subagent payloads (agent_id) are skipped. Writes take the lanes lock with a short timeout. Any
 failure is logged to $XDG_STATE_HOME/dotclaude/lane-identity.log and stays silent (fail open).
@@ -26,8 +32,9 @@ import subprocess
 import sys
 import time
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.realpath(__file__))),
-                                "skills", "lanes", "scripts"))
+SCRIPTS = os.path.join(os.path.dirname(os.path.dirname(os.path.realpath(__file__))), "skills",
+                       "lanes", "scripts")
+sys.path.insert(0, SCRIPTS)
 import lanelib  # noqa: E402
 
 LOCK_WAIT = 2.0
@@ -38,6 +45,9 @@ LOCK_WAIT = 2.0
 GIT_WAIT = 1.0
 SHA_RE = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
 MAX_SESSIONS = 50
+# The `lane lead` a proven relink runs: it gives up a second ahead of the hook's 5 s, leaving
+# room for resolve() and the proof.
+RELINK_WAIT = 3.0
 
 
 def log(line):
@@ -182,6 +192,31 @@ def end(repo: lanelib.Repo, lane: dict, event: dict) -> None:
             shutil.rmtree(os.path.join(repo.lane_dir(lane["id"]), "mirror.new"), ignore_errors=True)
 
 
+def relink(repo: lanelib.Repo, event: dict) -> None:
+    """The lead heal: on proof (lanelib.lead_relink) that this session continues the recorded
+    lead, run this checkout's own `lane lead` from the session's cwd, expecting the proved id.
+    It applies every lead check (interactive, a socket, the main checkout, no linked worktree,
+    no lane's session above) and writes the record atomically; until the session file or
+    socket exists it refuses, and the next Stop tries again. One log line per attempt; never
+    any output."""
+    sid = event.get("session_id")
+    if not isinstance(sid, str) or not lanelib.SID.fullmatch(sid):
+        return
+    why = lanelib.lead_relink(repo, sid)
+    if why is None:
+        return
+    try:
+        # --expect-sid: `lane lead` records only the session the proof was about.
+        p = subprocess.run([sys.executable, "-I", os.path.join(SCRIPTS, "lane"), "lead",
+                            "--expect-sid", sid], cwd=event["cwd"], stdin=subprocess.DEVNULL,
+                           capture_output=True, text=True, timeout=RELINK_WAIT)
+    except subprocess.TimeoutExpired:
+        log(f"relink {why} sid={sid} timed out after {RELINK_WAIT:g} s")
+        return
+    said = (p.stdout.strip() or p.stderr.strip()).partition("\n")[0]
+    log(f"relink {why} sid={sid} rc={p.returncode}: {said[:300]}")
+
+
 def main():
     event = json.load(sys.stdin)
     if not isinstance(event, dict) or event.get("agent_id"):
@@ -205,11 +240,17 @@ def main():
         elif kind == "main" and lanes:
             text = board_line(repo, lanes)
         else:
-            return
-        print(json.dumps({"hookSpecificOutput": {"hookEventName": "SessionStart",
-                                                 "additionalContext": text}}))
+            text = None
+        if text is not None:
+            print(json.dumps({"hookSpecificOutput": {"hookEventName": "SessionStart",
+                                                     "additionalContext": text}}), flush=True)
     elif name in ("Stop", "SessionEnd") and kind == "lane":
         end(repo, lane, event)
+    if kind == "main" and name in ("SessionStart", "Stop"):
+        try:  # after the board line, so nothing here can cost it
+            relink(repo, event)
+        except Exception as e:  # fail open, as main's caller does, but say where
+            log(f"relink error {type(e).__name__}: {e}")
 
 
 if __name__ == "__main__":

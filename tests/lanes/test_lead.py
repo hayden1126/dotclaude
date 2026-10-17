@@ -18,6 +18,7 @@ from unittest import mock
 
 from _fixture import LANE, LanesRepo, LiveSessions
 from test_cli import load_lane_script
+import lanelib  # noqa: E402  (on sys.path once _fixture is imported)
 
 TMUX_STUB = """#!/bin/sh
 printf '%s\\n' "tmux $*" >> "$STUB_LOG"
@@ -67,6 +68,7 @@ class Lead(LanesRepo):
         """A session file for a live pid (this test's own) with its cwd in the lane."""
         self.write(os.path.join(self.home, ".claude", "sessions", f"{os.getpid()}.json"),
                    json.dumps({"pid": os.getpid(), "sessionId": "s-1", "cwd": cwd,
+                               "procStart": str(lanelib.proc_start(os.getpid())),
                                "tmux": tmux}))
 
     def start(self, *args, cwd=None):
@@ -256,6 +258,23 @@ class MainFooter(LiveSessions):
         self.assertIn(f"proj:@{b} (pid {b}, idle, agent worktree)", line)
         self.assertIn("). No lead picked: the lead takes it with a bare `lane lead`", line)
 
+    def test_a_stopped_lead_is_named_until_a_continuation_is_picked(self):
+        lead = self.child(self.main, pane="%3")
+        self.session(self.main, pid=lead, sessionId="s-lead")
+        self.write_lead(lead, sid="s-lead", tmux=self.tmux_of("%3"))
+        self.assertIsNone(self.footer())
+        self.stop(lead)
+        stopped = f"The lead (pid {lead}, proj:@{lead}) is stopped (Ctrl+Z): fg it there"
+        self.assertEqual(self.footer(), f"main checkout: no live session. {stopped}")
+        side = self.child(self.main)
+        self.session(self.main, pid=side)
+        self.assertEqual(self.footer(), f"main checkout: 1 live session: proj:@{side} (pid "
+                                        f"{side}, idle). {stopped}")
+        twin = self.child(self.main, pane="%3")  # the resume: picked, so nothing to fg
+        self.session(self.main, pid=twin, sessionId="s-lead")
+        self.assertEqual(self.footer(), f"main checkout: 2 live sessions: proj:@{twin} (lead, "
+                                        f"pid {twin}, idle), proj:@{side} (pid {side}, idle)")
+
     def test_no_footer_when_sandboxed(self):
         self.session(self.main)
         self.session(self.main)
@@ -282,6 +301,7 @@ class Ctx(Lead):
     def session(self, pid, sid, status="idle"):
         self.write(os.path.join(self.home, ".claude", "sessions", f"{pid}.json"),
                    json.dumps({"pid": pid, "sessionId": sid, "cwd": self.lane_path("chart-fix"),
+                               "procStart": str(lanelib.proc_start(pid)),
                                "tmux": "proj:@3.%7", "status": status}))
 
     def ctx(self, sid, tokens, window=None):
