@@ -130,6 +130,15 @@ stored here).
     twice, and the board named 1107 lead until the new process ran `lane lead`. Fix in the lane
     script's lead lookup: skip a stopped claude (state `T`), or prefer the newest live process of
     the lead's session id.
+  - **Green tab for an ask the reply only announces** (Hayden, 2026-10-17: Vulcan lane `keys`,
+    pane %44). Its turn ended "...that needs your OK. I'll ask when the probes come up. Waiting
+    on S2b." with a writer subagent running. `ring.log` 18:52:20: `quiet busy=1 tasks=subagent`,
+    then `input=yes painted=1`, so the tab sat green while nothing was wanted. Of 66 green verdicts
+    that day, 21 came with agents running. About 3 of those 21 were wrong (an ask announced for
+    later, a list of next steps), and 2 more were borderline ("pushing waits for your OK"). The
+    hook did what it should, so the fix is in the classifier (`hooks/wants_input.py`, prompt v4
+    from #102): one bounded prompt round, judged on #102's 223-reply set plus these cases. Haiku
+    flips about five borderline replies per wording change, so stop after one round.
   - **The post-merge chain says nothing about another lane's install hold.** SKILL.md, The
     lead, step 7.3 assumes the hold belongs to the merged lane. When a PR merges out of order
     (#113 ahead of #110, 2026-10-17), the lead's reinstall from main releases the next lane's
