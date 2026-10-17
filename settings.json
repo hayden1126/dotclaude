@@ -62,7 +62,8 @@
       "Bash(tail *)",
       "Bash(wc)",
       "Bash(wc *)",
-      "Bash(grep *)"
+      "Bash(grep *)",
+      "Read(~/.cache/claude-paste/**)"
     ],
     "ask": [
       "Bash(git push)",

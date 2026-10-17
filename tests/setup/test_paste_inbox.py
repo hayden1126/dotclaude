@@ -1,4 +1,4 @@
-"""tmux/paste-inbox and laptop/: the image inbox behind Alt+V (stdlib only).
+"""tmux/paste-inbox and laptop/: the image and file inbox behind Alt+V (stdlib only).
 
 `receive` and `paste` run as subprocesses against a stub tmux that logs each call as a JSON line
 (and keeps what load-buffer reads), with PATH narrowed to the stubs and /usr/bin:/bin so no real
@@ -7,6 +7,7 @@ bracketed (RealTmux) and that Alt+V, pressed on a client attached through a pty,
 (RealBinding); remote-paste.ps1 runs in Windows PowerShell against ends that fail fast
 (LaptopPowerShell). The Bash sandbox blocks tmux's socket and WSL interop, so those skip there:
 run them sandbox-off once per change."""
+import base64
 import fcntl
 import importlib.machinery
 import importlib.util
@@ -38,8 +39,17 @@ JPEG = b"\xff\xd8\xff\xe0" + b"\x02" * 40
 GIF87 = b"GIF87a" + b"\x03" * 40
 GIF89 = b"GIF89a" + b"\x03" * 40
 WEBP = b"RIFF\x24\x00\x00\x00WEBPVP8 " + b"\x04" * 40
+PDF = b"%PDF-1.7\n" + b"x" * 40
 CAP = 50 * 1024 * 1024
+DAY = 24 * 3600
 NAME = re.compile(r"^\d{8}T\d{6}Z-(?P<device>[a-z0-9._-]+)-[0-9a-f]{6}\.(?P<ext>png|jpg|gif|webp)$")
+NAMED = re.compile(r"^\d{8}T\d{6}Z-(?P<device>[a-z0-9._-]+)-[0-9a-f]{6}-(?P<stem>[\w-]+)"
+                   r"(?:\.(?P<ext>[a-z0-9]{1,10}))?$")
+
+
+def name64(name):
+    """A file name as the laptop sends it: base64url of its UTF-8, unpadded."""
+    return base64.urlsafe_b64encode(name.encode()).rstrip(b"=").decode()
 
 STUB_TMUX = """#!%s -I
 import json, os, sys
@@ -104,10 +114,20 @@ class Inbox(unittest.TestCase):
         return subprocess.run([SCRIPT, *args], input=data, capture_output=True, timeout=30,
                               env={**self.env, **env})
 
-    def receive(self, data, device="laptop", size=None, check=False, **env):
+    def receive(self, data, device="laptop", size=None, check=False, name=None, raw=None, **env):
+        """receive, with the file name `name` encoded as the laptop does, or `raw` as given."""
         size = len(data) if size is None else size
-        return self.run_script(["receive", *(["--check"] if check else []), device, str(size)],
-                               data, **env)
+        named = [name64(name)] if name is not None else [raw] if raw is not None else []
+        return self.run_script(["receive", *(["--check"] if check else []), device, str(size),
+                                *named], data, **env)
+
+    def received_as(self, data, name, **kw):
+        """receive a named file; the basename it was kept as."""
+        p = self.receive(data, name=name, **kw)
+        self.assertEqual((p.returncode, p.stderr), (0, b""), name)
+        path = p.stdout.decode().strip()
+        self.assertEqual(os.path.dirname(path), self.inbox)
+        return os.path.basename(path)
 
     def paste(self, **env):
         p = self.run_script(["paste", "%5", "/dev/pts/12"], **env)
@@ -214,22 +234,130 @@ class Receive(Inbox):
                 self.assertEqual(NAME.match(os.path.basename(path))["device"], slug)
 
     def test_old_inbox_files_are_pruned_on_receive(self):
-        day = 24 * 3600
-        old = self.put(self.inbox, "20261001T000000Z-laptop-aaaaaa.png", age=day + 60)
-        fresh = self.put(self.inbox, "20261015T000000Z-laptop-bbbbbb.png", age=day - 60)
-        stale_tmp = self.put(self.inbox, ".incoming-1234.tmp", age=day + 60)
-        foreign = self.put(self.inbox, "notes.txt", age=day + 60, data=b"mine")
+        # images after a day (Claude Code read them at paste time), other files after 7 days
+        # (Claude reads them when it decides to, maybe in a resumed session)
+        gone = [self.put(self.inbox, "20261001T000000Z-laptop-aaaaaa.png", age=DAY + 60),
+                self.put(self.inbox, "20261001T000000Z-laptop-aaaaab-shot.jpg", age=DAY + 60),
+                self.put(self.inbox, ".incoming-1234.tmp", age=DAY + 60),
+                self.put(self.inbox, "20261001T000000Z-laptop-aaaaac-report.pdf",
+                         age=7 * DAY + 60, data=PDF),
+                self.put(self.inbox, "20261001T000000Z-laptop-aaaaad-Makefile",
+                         age=7 * DAY + 60, data=b"all:")]
+        kept = [self.put(self.inbox, "20261015T000000Z-laptop-bbbbbb.png", age=DAY - 60),
+                self.put(self.inbox, "20261010T000000Z-laptop-bbbbbc-report.pdf",
+                         age=2 * DAY, data=PDF),
+                self.put(self.inbox, "20261010T000000Z-laptop-bbbbbd-notes-png-old",
+                         age=2 * DAY, data=b"text"),
+                self.put(self.inbox, "20261010T000000Z-laptop-bbbbbe-Makefile",
+                         age=7 * DAY - 60, data=b"all:"),
+                self.put(self.inbox, "notes.txt", age=30 * DAY, data=b"mine"),
+                self.put(self.inbox, "mine.png", age=30 * DAY)]
         p = self.receive(PNG)
         self.assertEqual(p.returncode, 0, p.stderr)
-        self.assertFalse(os.path.exists(old))
-        self.assertFalse(os.path.exists(stale_tmp))
-        self.assertTrue(os.path.exists(fresh))
-        self.assertTrue(os.path.exists(foreign))
+        for path in gone:
+            self.assertFalse(os.path.exists(path), path)
+        for path in kept:
+            self.assertTrue(os.path.exists(path), path)
 
     def test_the_inbox_and_its_files_are_private(self):
         path = self.receive(PNG).stdout.decode().strip()
         self.assertEqual(os.stat(self.inbox).st_mode & 0o777, 0o700)
         self.assertEqual(os.stat(path).st_mode & 0o777, 0o600)
+
+
+class ReceiveFile(Inbox):
+    """`receive <device> <bytes> <name64>`: one copied file of any type, its name made safe."""
+
+    def test_a_named_file_keeps_its_stem_and_extension(self):
+        base = self.received_as(PDF, "Q3 report.PDF")
+        match = NAMED.match(base)
+        self.assertIsNotNone(match, base)
+        self.assertEqual((match["device"], match["stem"], match["ext"]),
+                         ("laptop", "Q3-report", "pdf"))
+        path = os.path.join(self.inbox, base)
+        with open(path, "rb") as f:
+            self.assertEqual(f.read(), PDF)
+        self.assertEqual(os.stat(path).st_mode & 0o777, 0o600)
+
+    def test_letters_in_any_script_are_kept_and_the_rest_become_dashes(self):
+        for name, stem in (("\u5831\u544a v2 (final).pdf", "\u5831\u544a-v2-final"),
+                           ("Zo\u00eb's notes [1].txt", "Zo\u00eb-s-notes-1"),
+                           ("a&b%PATH%^c.txt", "a-b-PATH-c"),
+                           ("snake_case-name.txt", "snake_case-name"),
+                           ("\u202egnp.txt", "gnp")):   # a bidi override is dropped
+            with self.subTest(name=name):
+                self.assertEqual(NAMED.match(self.received_as(b"text", name))["stem"], stem)
+
+    def test_the_name_cannot_steer_the_path_or_end_the_paste(self):
+        for name, stem, ext in (("../../x.pdf", "x", "pdf"), ("C:\\a\\b.txt", "b", "txt"),
+                                ("/etc/passwd", "passwd", None), (".bashrc", "bashrc", None),
+                                ("Makefile", "Makefile", None), ("...", "file", None),
+                                ("a\x1b[201~b.txt", "a-201-b", "txt"), ("-_x_-.md", "x", "md"),
+                                ("archive.tar.gz", "archive-tar", "gz")):
+            with self.subTest(name=name):
+                match = NAMED.match(self.received_as(b"text", name))
+                self.assertEqual((match["stem"], match["ext"]), (stem, ext))
+
+    def test_a_suffix_that_is_no_extension_never_leaves_an_image_name(self):
+        # the only dot left is the extension's, so no name ends .png unless its bytes are one
+        for name, stem in (("notes.png~", "notes-png"),
+                           ("a" * 44 + ".png-old", "a" * 44 + "-png-old")):
+            with self.subTest(name=name):
+                match = NAMED.match(self.received_as(b"text", name))
+                self.assertEqual((match["stem"], match["ext"]), (stem, None))
+
+    def test_a_long_name_is_cut_by_bytes_on_a_character_boundary(self):
+        wide = "\U00020000" * 60                      # 4 bytes each in UTF-8
+        base = self.received_as(b"text", wide + ".abcdefghij", device="d" * 40)
+        match = NAMED.match(base)
+        self.assertEqual(match["stem"], "\U00020000" * 24)
+        self.assertEqual(match["ext"], "abcdefghij")
+        self.assertLessEqual(len(os.fsencode(base)), 255)
+        self.assertEqual(NAMED.match(self.received_as(b"text", "x" * 300 + ".txt"))["stem"],
+                         "x" * 96)
+
+    def test_image_bytes_name_their_own_extension(self):
+        for data, name, stem, ext in ((JPEG, "photo.jfif", "photo", "jpg"),
+                                      (PNG, "scan.pdf", "scan", "png"),
+                                      (WEBP, "IMG_1.HEIC", "IMG_1", "webp")):
+            with self.subTest(name=name):
+                match = NAMED.match(self.received_as(data, name))
+                self.assertEqual((match["stem"], match["ext"]), (stem, ext))
+
+    def test_a_non_image_named_like_an_image_is_refused(self):
+        for name in ("fake.png", "FAKE.JPEG", "x.gif", "y.Webp", "z.jpg"):
+            with self.subTest(name=name):
+                p = self.receive(PDF, name=name)
+                self.assertEqual(p.returncode, 1)
+                self.assertIn(b"refused", p.stderr)
+                self.assertEqual(self.files(), [])
+
+    def test_check_with_a_name_keeps_nothing(self):
+        p = self.receive(PNG, "selftest", check=True, name="selftest.png")
+        self.assertEqual((p.returncode, p.stderr), (0, b""))
+        self.assertEqual(NAMED.match(os.path.basename(p.stdout.decode().strip()))["stem"],
+                         "selftest")
+        self.assertEqual(self.files(), [])
+
+    def test_a_file_over_the_cap_is_refused(self):
+        p = self.receive(PDF, size=CAP + 1, name="big.pdf")
+        self.assertEqual(p.returncode, 1)
+        self.assertIn(b"50 MB", p.stderr)
+
+    def test_a_bad_name_is_refused_not_answered_with_usage(self):
+        # usage would tell the laptop the versions differ
+        for raw in ("Q", "QUJDR", "QUJDR=", "QUJD+", "QUJD/", "QUJD===", "a" * 1025, "__4", ""):
+            with self.subTest(raw=raw[:12]):
+                p = self.receive(PDF, raw=raw)
+                self.assertEqual(p.returncode, 1, p.stderr)
+                self.assertIn(b"refused: bad file name", p.stderr)
+                self.assertNotIn(b"usage", p.stderr)
+                self.assertEqual(self.files(), [])
+
+    def test_padding_is_optional_and_the_longest_name_fits(self):
+        for raw in ("QUJDLnR4dA", "QUJDLnR4dA==", "QUJD" * 256):
+            with self.subTest(raw=raw[:12]):
+                self.assertEqual(self.receive(b"text", raw=raw).returncode, 0)
 
 
 class Paste(Inbox):
@@ -263,7 +391,39 @@ class Paste(Inbox):
         said = [c for c in self.calls() if c[1:2] == ["display-message"] and "-p" not in c]
         self.assertEqual(len(said), 1, self.calls())
         self.assertEqual(said[0][1:6], ["display-message", "-c", "/dev/pts/12", "-d", "5000"])
-        self.assertIn("10 minutes", said[0][6])
+        self.assertIn("No image or file arrived in the last 10 minutes", said[0][6])
+
+    def test_an_inbox_file_of_any_type_is_pasted(self):
+        for name in ("20261015T000000Z-laptop-aaaaaa-report.pdf",
+                     "20261015T000000Z-laptop-aaaaab-Makefile"):
+            with self.subTest(name=name):
+                upload = self.put(self.inbox, name, age=5, data=PDF)
+                self.paste()
+                self.assertEqual(self.pasted(), upload)
+                os.remove(upload)
+
+    def test_only_the_inbox_s_own_files_and_images_count_there(self):
+        # a file someone dropped in by hand is no upload; an image there still pastes, as before
+        self.put(self.inbox, "notes.txt", age=5, data=b"mine")
+        self.put(self.inbox, ".incoming-1234.tmp", age=1, data=PDF)
+        self.paste()
+        self.assertIsNone(self.pasted())
+        mine = self.put(self.inbox, "mine.png", age=5)
+        self.paste()
+        self.assertEqual(self.pasted(), mine)
+
+    def test_a_recent_file_upload_beats_a_newer_looking_download(self):
+        upload = self.put(self.inbox, "20261015T000000Z-laptop-aaaaaa-notes.txt", age=10,
+                          data=b"text")
+        self.put(self.downloads, "browser.png", age=-300)
+        self.paste()
+        self.assertEqual(self.pasted(), upload)
+
+    def test_a_unicode_file_name_pastes_unquoted_and_intact(self):
+        upload = self.put(self.inbox, "20261015T000000Z-laptop-aaaaaa-報告-v2.pdf",
+                          age=5, data=PDF)
+        self.paste()
+        self.assertEqual(self.pasted(), upload)
 
     def test_extensions_match_in_any_case(self):
         shot = self.put(self.downloads, "IMG_0042.JPEG", age=5, data=JPEG)
@@ -424,7 +584,7 @@ class InProcess(unittest.TestCase):
 
     def test_a_crash_in_paste_is_logged_shown_and_exits_zero(self):
         said = []
-        boom = unittest.mock.patch.object(self.pi, "newest_image", side_effect=RuntimeError("boom"))
+        boom = unittest.mock.patch.object(self.pi, "newest", side_effect=RuntimeError("boom"))
         record = unittest.mock.patch.object(self.pi, "tmux",
                                             side_effect=lambda *a, **k: said.append(a) or "")
         with boom, record:
@@ -455,6 +615,35 @@ class InProcess(unittest.TestCase):
         self.assertIn("stalled", err.getvalue())
         self.assertFalse(os.path.exists(self.tmp + "/inbox"))
 
+    def test_a_slow_upload_that_keeps_moving_is_kept(self):
+        # the stall is time with no bytes, not a total: 4 pieces 0.5 s apart outlast a 1 s
+        # stall, and each gap is shorter than it
+        self.addCleanup(signal.signal, signal.SIGALRM, signal.getsignal(signal.SIGALRM))
+        r, w = os.pipe()
+        self.addCleanup(self.close_quietly, w)
+        stdin = io.TextIOWrapper(open(r, "rb"))
+        self.addCleanup(stdin.close)
+        data = PDF * 4
+
+        def trickle():
+            for i in range(4):
+                time.sleep(0.5)
+                os.write(w, data[i * len(PDF):(i + 1) * len(PDF)])
+            os.close(w)
+
+        writer = threading.Thread(target=trickle)
+        out, err = io.StringIO(), io.StringIO()
+        with unittest.mock.patch.object(self.pi, "STALL", 1), \
+                unittest.mock.patch.object(sys, "stdin", stdin), \
+                unittest.mock.patch.object(sys, "stdout", out), \
+                unittest.mock.patch.object(sys, "stderr", err):
+            writer.start()
+            code = self.pi.receive("laptop", len(data), False, name64("slow.pdf"))
+            writer.join(10)
+        self.assertEqual(code, 0, err.getvalue())
+        with open(out.getvalue().strip(), "rb") as f:
+            self.assertEqual(f.read(), data)
+
 
 class Cli(Inbox):
     def test_the_cli_is_executable(self):
@@ -467,7 +656,7 @@ class Cli(Inbox):
         self.assertIn(b"paste-inbox paste", p.stdout)
         for args in ([], ["receive"], ["receive", "laptop"], ["receive", "laptop", "0"],
                      ["receive", "laptop", "12x"], ["receive", "--check", "laptop"],
-                     ["paste", "%5"], ["bogus"]):
+                     ["receive", "laptop", "12", "QUJD", "extra"], ["paste", "%5"], ["bogus"]):
             with self.subTest(args=args):
                 p = self.run_script(args)
                 self.assertEqual(p.returncode, 2)
@@ -487,6 +676,17 @@ class Wiring(unittest.TestCase):
     def test_the_cheatsheet_names_alt_v(self):
         with open(CHEATSHEET) as f:
             self.assertRegex(f.read(), r"\n    M-v +\S")
+
+    def test_claude_may_read_the_default_inbox_without_asking(self):
+        # a pasted file's path reaches Claude as text, and its Read would ask (probe 0b,
+        # Claude Code 2.1.302); the rule must name the inbox paste-inbox really uses
+        with open(os.path.join(REPO, "settings.json")) as f:
+            allow = json.load(f)["permissions"]["allow"]
+        rules = [r for r in allow if "claude-paste" in r]
+        self.assertEqual(rules, ["Read(~/.cache/claude-paste/**)"])
+        with unittest.mock.patch.dict(os.environ, {"HOME": "/home/u"}):
+            os.environ.pop("PASTE_INBOX_DIR", None)
+            self.assertEqual(load().inbox_dir(), "/home/u/.cache/claude-paste")
 
 
 class Laptop(unittest.TestCase):
@@ -513,8 +713,32 @@ class Laptop(unittest.TestCase):
         self.assertIn("remote-paste.ps1", self.read("remote-paste.ahk"))
         ps1 = self.read("remote-paste.ps1")
         self.assertIn("'--exec', '.local/bin/paste-inbox'\n$wsl += $receive + @($device, "
-                      "$bytes.Length)", ps1)
+                      "$bytes.Length)\nif ($name64) { $wsl += $name64 }", ps1)
         self.assertIn("if ($SelfTest) { $receive += '--check' }", ps1)
+        self.assertIn("$name64 = Get-Name64 'selftest.png'", ps1)
+
+    def test_an_image_file_sends_no_name_so_an_old_pc_still_takes_it(self):
+        # receive without a name is the image-only form every paste-inbox version knows
+        ps1 = self.read("remote-paste.ps1")
+        self.assertIn("if ($file.Extension -notmatch '^\\.(png|jpe?g|gif|webp)$') {\n"
+                      "            $name64 = Get-Name64 $file.Name\n", ps1)
+        self.assertEqual(ps1.count("Get-Name64 "), 2, "the self-test and a non-image file only")
+
+    def test_paths_are_never_wildcards(self):
+        # -Path reads [1] as a wildcard: notes[1].txt would test as notes1.txt and stay native
+        ps1 = self.read("remote-paste.ps1")
+        self.assertRegex(ps1, r"Test-Path -LiteralPath \$files\[0\] -PathType Leaf")
+        self.assertNotRegex(ps1, r"(Test-Path|Get-Item|Get-Content|Remove-Item) (?!-LiteralPath)")
+        self.assertNotIn("ReadAllBytes", ps1)    # it denies a file Office has open for writing
+        self.assertIn("[System.IO.File]::Open($file.FullName, 'Open', 'Read', "
+                      "'ReadWrite, Delete')", ps1)
+
+    def test_the_hotkey_takes_one_copied_file_but_not_a_folder(self):
+        ahk = self.read("remote-paste.ahk")
+        self.assertIn('RegExMatch(path, "^[^\\r\\n]+$")', ahk)       # one path, not several
+        self.assertIn('!InStr(FileExist(path), "D")', ahk)
+        self.assertIn("#HotIf PcView(ActiveTerminal()) != \"\" && UploadOnClipboard()", ahk)
+        self.assertNotIn("png|jpe?g", ahk)                         # any type now
         with open(os.path.join(REPO, "setup-tmux.sh")) as f:
             self.assertIn('"$HOME/.local/bin/paste-inbox"', f.read())
 
@@ -607,6 +831,37 @@ class LaptopPowerShell(unittest.TestCase):
         code, err = self.self_test(target="a b@c")
         self.assertEqual(code, 1, err)
         self.assertIn("bad target", err)
+
+    def test_a_file_name_reaches_the_inbox_intact(self):
+        # Get-Name64 from remote-paste.ps1, run where the laptop runs it. A mangled name would
+        # still decode, so its output must equal Python's base64url, and receive must keep the
+        # name's letters. The names travel in env vars (a BOM-less .ps1 is read in the ANSI code
+        # page) and the command as -EncodedCommand (no native-argument quoting).
+        with open(os.path.join(LAPTOP, "remote-paste.ps1"), encoding="utf-8") as f:
+            func = re.search(r"^function Get-Name64\b.*?^\}", f.read(), re.M | re.S)[0]
+        names = {"report.pdf": "report", "報告 v2 (final).pdf": "報告-v2-final",
+                 "Zoë's notes [1].txt": "Zoë-s-notes-1",
+                 'a&b%PATH%^c "q".txt': "a-b-PATH-c-q", "\U0001F600.txt": "file"}
+        env = {**os.environ, "WSLENV": ":".join("RP_N%d" % i for i in range(len(names)))}
+        env.update({"RP_N%d" % i: n for i, n in enumerate(names)})
+        command = func + "\n" + "\n".join("Get-Name64 $env:RP_N%d" % i for i in range(len(names)))
+        p = subprocess.run([self.ps, "-NoProfile", "-NonInteractive", "-EncodedCommand",
+                            base64.b64encode(command.encode("utf-16-le")).decode()],
+                           capture_output=True, timeout=60, env=env)
+        out = p.stdout.decode("utf-8", "replace") + p.stderr.decode("utf-8", "replace")
+        if "UtilConnectUnix" in out:
+            self.skipTest("the Bash sandbox blocks WSL interop; run outside it")
+        got = p.stdout.decode().split()
+        self.assertEqual(got, [name64(n) for n in names], out)
+        inbox = os.path.join(self.tmp, "inbox")
+        for (name, stem), encoded in zip(names.items(), got):
+            with self.subTest(name=name):
+                r = subprocess.run([SCRIPT, "receive", "laptop", "4", encoded], input=b"text",
+                                   capture_output=True, env={**os.environ,
+                                                             "PASTE_INBOX_DIR": inbox})
+                self.assertEqual(r.returncode, 0, r.stderr)
+                self.assertEqual(NAMED.match(os.path.basename(r.stdout.decode().strip()))["stem"],
+                                 stem)
 
 
 class RealTmux(unittest.TestCase):
