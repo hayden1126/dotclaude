@@ -383,7 +383,8 @@ need nothing extra.
   `stop input=<yes|no|error> ... painted=<1|0|->` line in `ring.log` (`-` when it painted no
   green: a no, or a queued prompt that started the next turn, `resumed=1`, which shows busy).
   Each check is one small Haiku call on your subscription quota. A reply that leaves you a step for later ("run X when
-  you're ready") often reads as a report and stays blank. A new, resumed or cleared session
+  you're ready") often reads as a report and stays blank, and one that only announces an ask
+  for later ("I'll ask when the probes come up") can still paint it waiting. A new, resumed or cleared session
   starts blank, and `claude -p` runs never set it. A
   background session has no pane of its own, so `tmux/tmux-claude-status` maps it by directory to
   the one client pane in its cwd (two background sessions in one directory map nothing, and a new
