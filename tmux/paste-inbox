@@ -29,13 +29,13 @@ end like one is refused, since Claude Code would try to attach it. Either way th
 exactly the size given (so a cut upload, or a byte added on the way, is refused) and at most 50
 MB. The inbox is $PASTE_INBOX_DIR (default ~/.cache/claude-paste, mode 700, files 600); a file
 goes to a temp file and is renamed. The device name is cut to [a-z0-9._-], so neither name can
-steer the path or put a control character in the paste. Each receive first deletes the inbox's
-own files (that name pattern and stale temp files) once older than a day for images, which
-Claude Code reads at paste time, or 7 days for other files, which Claude reads when it decides
-to. Anything else is refused on stderr, exit 1, and so is an upload that sends no bytes for 60
-seconds (a link that died leaves no FIN, and this would otherwise wait for TCP to give up; a
-slow link that keeps moving is fine); --check prints the path it would use and keeps nothing
-(the laptop installer's self-test).
+steer the path or put a control character in the paste. Each upload it keeps first deletes the
+inbox's own files (that name pattern and stale temp files) once older than a day for images,
+which Claude Code reads at paste time, or 7 days for other files, which Claude reads when it
+decides to. Anything else is refused on stderr, exit 1, and so is an upload that sends no bytes
+for 60 seconds (a link that died leaves no FIN, and this would otherwise wait for TCP to give
+up; a slow link that keeps moving is fine); --check prints the path it would use and keeps
+nothing (the laptop installer's self-test).
 
 `paste` takes a file the inbox received in the last 30 seconds (the laptop's Ctrl+V sends
 Alt+V right after its upload; inbox times and that check both use WSL's clock), else the newest

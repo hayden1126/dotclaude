@@ -509,7 +509,9 @@ need nothing extra.
   Taildrop the screenshot to the PC (Explorer's Send with Tailscale, or a phone's share sheet), then
   press Alt+V; Alt+V takes no other file from Downloads, where browser downloads land too. On a
   Windows laptop, `laptop/` makes it one key: Ctrl+V of a screenshot, or of one file copied in
-  Explorer, uploads it and presses Alt+V for you. It needs AutoHotkey v2, and the laptop's WSL `ssh`
+  Explorer, uploads it and presses Alt+V for you. Without it, Windows Terminal pastes a copied file
+  as the laptop's own path (`C:\Users\...`), which on the PC names no file, or a different one where
+  both machines share a Windows user name. It needs AutoHotkey v2, and the laptop's WSL `ssh`
   reaching an SSH port on the PC that runs a plain shell (a second Windows OpenSSH port, when port
   22 is forced into tmux), with a key that asks no passphrase and a known host entry. Clone this
   repo where the laptop's Windows can read it, then run `powershell -ExecutionPolicy Bypass -File
