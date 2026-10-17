@@ -78,6 +78,11 @@ stored here).
     [[dotclaude-tab-bar]], remote-paste's live tests in [[dotclaude-remote-paste]]. #115 left the
     tab glyph's prompt at v4: an ask a reply only announces for later stays a documented known
     miss (`hooks/wants_input.py`'s docstring), since its one prompt round flipped 10 verdicts.
+  - **Live lanes (opened 2026-10-17), merge order:** 1 lead-chain (`fix/lead-chain`: the lead
+    diff at the draft push, another lane's install hold), 2 done-rerun (`fix/done-rerun`: `lane
+    done`'s rerun on a restored tab), 3 restore-effort (`fix/restore-effort`: restore and the
+    shelf's Open keep `--model`/`--effort`). Their briefs hold the backlog detail; state is in
+    each record. lead-chain carries the lead's lagging STATUS to main.
   - The parked json-depth sweep (21 files, among them the delegation enforcement scripts) is on
     `fix/json-depth-sweep`, a local branch never pushed: keep it while the sweep is in the
     backlog. Shipping it first needs a check of how each enforcement site fails
@@ -89,10 +94,6 @@ stored here).
   - Once pushed, a lane merges `origin/main` into its branch, since force pushes are denied.
 
   Backlog:
-  - **The lead's STATUS commits miss main whenever a lane merges from draft.** It happened with
-    #108, #111, #113 and #115: Hayden merged before the lane's ready step, which is where the lead
-    diff gets applied. Main's STATUS then lags until a lane happens to reach ready. Fix in the
-    lanes skill: apply the lead diff at the push that opens the draft PR as well as at ready.
   - G8 open probes (a) and (b) (Hayden's pick, 2026-10-14): Hayden runs
     `~/scratch/sandbox-audit/g8-probe/run.py` by hand with the sandbox off, because the auto-mode
     classifier refused the run. Results go into the private findings file's G8 section.
@@ -100,30 +101,9 @@ stored here).
     rerun the menu-clip repro and the tmux suites. If it fixes the clip, install at a quiet
     moment (a server restart; claude-restore reopens the tabs) and drop the row-0 menu rule.
     Until then, 3.7c's default menus that dotclaude doesn't own still clip under a top bar.
-  - **The post-merge chain says nothing about another lane's install hold.** SKILL.md, The
-    lead, step 7.3 assumes the hold belongs to the merged lane. When a PR merges out of order
-    (#113 ahead of #110, 2026-10-17), the lead's reinstall from main releases the next lane's
-    hold before its merge. Setup announces it, but nothing tells that lane. Fix in SKILL.md: before
-    the reinstall, read `lane ls` for `install: held by` another lane and message it with the
-    release.
-  - **Tab restore and the shelf's Open drop a session's effort** (from lane `lane-model`,
-    2026-10-16). `tmux/claude-restore` and `tmux/claude-saved` (Open) both relaunch with a bare
-    `claude --resume <id>`, which keeps the model but not the effort (lane-model's spike S3,
-    [[cc-model-command-saves-default]]). After a tmux restart a lane runs at the default effort,
-    and its next plain pass loses the model too, since #110's `carried_pick` carries only the flags
-    the old claude launched with (its `/proc` command line). #110's `docs/lanes.md` "Model and
-    effort" documents the gap. Fix in restore's files: save the session's `--model` and `--effort`
-    with its entry and pass them back on resume.
-  - Tests time durations with `time.monotonic()`, not `time.time()` (122 calls in 23 test
-    files). It touches every suite, so it opens only when no lane runs.
-  - **`lane done`'s rerun can't finish a restored tab** (seen 2026-10-15 closing two-sessions).
-    The first run ended the lane's claude, then refused because the tab's shell (pid 816) had a
-    short-lived child `zsh` with no session id. Its refusal said to rerun, but the rerun found
-    the session gone, so nothing proved the shell was the lane's, and it refused again. A
-    later rerun closed it only because the lane's session had been resumed in that tab, which
-    restored the proof. Fix in
-    `skills/lanes/scripts/lane` (done): record the proven shell before the first signal so a
-    rerun keeps the proof, or wait out a child that exits within the grace period.
+  - Tests time durations with `time.monotonic()`, not `time.time()` (151 calls in 27 test
+    files on 2026-10-17). It touches every suite, so it opens only when no lane runs: after the
+    three live lanes close. Mostly hygiene once timesyncd is off (Blocked).
 
   **The post-merge chain** (Hayden's design B, standing approval 2026-10-14): `skills/lanes/SKILL.md`,
   The lead, step 7. Lead commits ride the next lane PR: that lane applies `git diff origin/main
@@ -183,6 +163,10 @@ stored here).
   `delegation-ledger exclude --id <id> --why probe`.
 
 ## Blocked / decisions needed
+- **Disable `systemd-timesyncd`** (Hayden's call 2026-10-14, not yet run): on 2026-10-17 it was
+  still `active` and `enabled`, and a 40 s sample of `time.time()` minus `time.monotonic()`
+  stepped 1.07 s. Hayden runs `! sudo systemctl disable --now systemd-timesyncd`; the lead then
+  re-samples (expect no step over 0.5 s).
 - **Rescan the `rm` gap around 2026-11-04** (Hayden's call; the delete guard covers only
   sandbox-off deletes, so the sandboxed gap stands):
   `python3 -I ~/scratch/sandbox-audit/rm_scan.py 2026-11-04`. Sending the drafted
@@ -204,8 +188,8 @@ stored here).
   - The lead's commits: `git log --first-parent main..chore/after-pr4` (STATUS only, plus merges
     of main). Session 64626d32 (2026-10-14 to 10-17) started at 5cb88d8 and ended at this
     handoff: it ran the chain for #108 to #115 and opened lane-model, remote-paste, stopped-lead
-    and future-ask. Nothing waits on the lead now. Hayden picks the next work, from the backlog
-    or new.
+    and future-ask. Session 3a153a27 (2026-10-17) opened lead-chain, done-rerun and
+    restore-effort (Hayden's pick from the backlog) and removed six stale agent worktrees.
   - Open with Hayden, nothing for the lead to do: the capella-studio lead asked how a new lane
     should clear the excluded-command guard, and the lead recommended (2026-10-17) pointing
     capella's `core.hooksPath` at the main checkout's protected `.githooks` (absolute path)
