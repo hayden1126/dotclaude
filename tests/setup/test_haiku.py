@@ -153,7 +153,7 @@ class WantsInput(Base):
                 self.assertEqual(wants_input.classify(self.event("Shall I push?")), want)
 
     def test_the_request_is_the_replay_tested_one(self):
-        # The replay of 223 real replies ran the shipped prompt on Haiku 4.5 at temperature 0
+        # The replay of 227 real replies ran the shipped prompt on Haiku 4.5 at temperature 0
         # with the reply's last 2,000 characters; Haiku 5.5 answers 429 to this token.
         self.token()
         self.urlopen(reply("NO"))
@@ -167,6 +167,11 @@ class WantsInput(Base):
         self.assertTrue(content.startswith("<message>\n" + chr(0x2026)), content[:20])
         self.assertTrue(content.endswith("Add this line to settings.json.\n</message>"))
         self.assertEqual(len(content), len("<message>\n\n</message>") + 1 + 2000)
+
+    def test_the_prompt_and_its_source_are_ascii(self):
+        self.assertTrue(wants_input.SYSTEM.isascii())
+        with open(os.path.join(HOOKS, "wants_input.py"), "rb") as f:
+            self.assertTrue(f.read().isascii())
 
     def test_an_empty_reply_is_no_without_a_call(self):
         self.urlopen()
