@@ -519,10 +519,28 @@ class LeadHeal(test_cli.LeadChain):
     def test_a_resume_beside_the_stopped_lead_relinks_it(self):
         # The incident: the lead sits stopped (Ctrl+Z) while `claude --resume` runs it again.
         (stopped,) = self.start(self.fake(self.main))
+        self.session(stopped, sid=self.OLD)  # with its socket: present, yet no twin
         self.stop(stopped)
         self.write_record(stopped, self.starts[stopped])
         pid, _ = self.run_hook(self.OLD)
         self.assertLead(pid, self.OLD)
+
+    def test_a_pass_successor_beside_a_resume_heals_neither(self):
+        # lead_of's two continuations are no pick, a successor in the recorded pane and a resume
+        # of the recorded id, so neither heals ahead of the other: Hayden picks.
+        before = self.write_record(self.exited(), 1)
+        self.marker()
+        (resumed,) = self.start(self.fake(self.main))
+        self.session(resumed, sid=self.OLD, pane="%4")
+        self.run_hook(self.NEW, source="startup")  # the successor, in the recorded pane
+        self.assertEqual(self.read(self.lead_path), before)
+        cfg = self.fake(self.main)
+        cfg["env"].update(TMUX=f"{self.tmux_sock},{os.getpid()},0", TMUX_PANE="%3")
+        (successor,) = self.start(cfg)
+        self.session(successor, sid=self.NEW)
+        self.run_hook(self.OLD, pane="%5")  # a resume, in a tab of its own
+        self.assertEqual(self.read(self.lead_path), before)
+        self.assertEqual(self.relinks(), [])
 
     def test_a_running_lead_is_never_displaced(self):
         # A resume of its session id elsewhere, and a side chat: the recorded process runs.
@@ -607,8 +625,11 @@ class LeadHeal(test_cli.LeadChain):
                 at = kw.pop("at", "%3")
                 if why != "no marker":
                     self.marker(**kw)
-                self.run_hook(self.NEW, source="startup", pane=at)
+                pid, _ = self.run_hook(self.NEW, source="startup", pane=at)
                 self.assertEqual(self.read(self.lead_path), before)
+                # Ended, or the next case's successor would heal beside a second one in the
+                # pane, which is no pick.
+                self.kill_ours([pid])
         self.assertEqual(self.relinks(), [])
         self.marker()
         pid, res = self.run_hook(self.NEW, source="startup")

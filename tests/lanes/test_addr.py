@@ -9,6 +9,7 @@ import json.decoder
 import json.scanner
 import os
 import shutil
+import signal
 import stat
 import subprocess
 import sys
@@ -309,6 +310,26 @@ class LeadPick(LiveSessions):
         self.write_lead(lead, sid="s-lead", tmux=self.tmux_of("%3"))
         self.stop(lead)
         return lead, lead_uds, twin_uds
+
+    def test_a_stopped_lead_whose_healed_twin_ended_still_refuses(self):
+        # The heal moved the record to the twin, and the twin exited while the original stays
+        # stopped: the record names a gone process, but the original still holds the session
+        # id, so the one side chat never inherits the lead (Hayden's call 2).
+        lead = self.child(self.main, pane="%3")
+        self.session(self.main, pid=lead, sessionId="s-lead")
+        twin = self.child(self.main, pane="%3")
+        self.session(self.main, pid=twin, sessionId="s-lead")
+        side = self.session(self.main, pane="%4")
+        self.stop(lead)
+        self.write_lead(twin, sid="s-lead", tmux=self.tmux_of("%3"))
+        os.kill(twin, signal.SIGKILL)  # a zombie until cleanup reaps it: exited all the same
+        deadline = time.monotonic() + 10
+        while (lanelib.proc_stat(twin) or "xx")[1] not in lanelib.EXITED \
+                and time.monotonic() < deadline:
+            time.sleep(0.01)
+        err = self.refused("it is not the lead",
+                           f"The lead (pid {lead}, proj:@{lead}) is stopped (Ctrl+Z): fg it there")
+        self.assertIn(side, err)  # listed, never printed as the address
 
     def test_a_stopped_lead_resumed_in_its_pane_picks_the_twin(self):
         _, _, twin = self.incident()

@@ -275,8 +275,9 @@ How it holds:
   is only stopped, a claude in its pane is a fresh one). Only interactive sessions count: a
   background session has a socket too, but the lead is one Hayden talks to. Two continuations (a
   resume beside a fresh claude in the old pane, two resumes) are no pick. With none, one running
-  session is the lead, unless the recorded process exists and is stopped (Hayden's call,
-  2026-10-17): beside a lead that `fg` brings back, the one running is likely a side chat.
+  session is the lead, unless the recorded lead is stopped: its process, or, once a heal moved
+  the record to a resume that has since ended, the original holding its session id (Hayden's
+  call, 2026-10-17): beside a lead that `fg` brings back, the one running is likely a side chat.
   Anything else is no pick. `lane addr lead` then refuses with each session's window, the way to
   pick, and a stopped lead's window to `fg` it in, and the lane tells Hayden once that #N
   merged, as with no lead at all.
@@ -288,16 +289,17 @@ How it holds:
   the hook, and its own session file must hold the event's id: before a claude's file is
   written, the nearest is whatever ran it (a `claude -p` run from a side chat), which holds
   another id. A /clear: the recorded process runs and is that session. A resume: the recorded
-  process is gone or stopped, the session id is the record's, and no other running session in
-  the main checkout holds it (two resumes are no pick, so neither heals). A /pass: the recorded
-  process is gone, this session runs in the recorded pane, and that pane's `pass-last` marker
+  process is gone or stopped, and the session id is the record's. A /pass: the recorded process
+  is gone, this session runs in the recorded pane, and that pane's `pass-last` marker
   (pass-respawn writes it in the state dir just before the respawn) names the recorded session
-  leaving it at most 120 s before this claude started. A claude started by hand in the old tab
-  has no marker; nor has a pass whose session left no reply text, which pass-respawn skips, so
-  that pass relinks only by the pane rule until tmux restarts. A running lead is never
-  displaced. On proof the hook runs its sibling `lane lead --expect-sid <id>`, so every check
-  under "Who counts" still applies to the very session proved, and a refusal is retried at the
-  next Stop. Nearly every call costs one file read and one stat.
+  leaving it at most 120 s before this claude started. Either heals only as the pick's one
+  continuation: beside another (a second resume, a successor in the recorded pane) neither does,
+  and Hayden picks. A claude started by hand in the old tab has no marker; nor has a pass whose
+  session left no reply text, which pass-respawn skips, so that pass relinks only by the pane
+  rule until tmux restarts. A running lead is never displaced. On proof the hook runs its
+  sibling `lane lead --expect-sid <id>`, so every check under "Who counts" still applies to the
+  very session proved, and a refusal is retried at the next Stop. Nearly every call costs one
+  file read and one stat.
 - **The board** (`lane ls`) adds a line under the table when the main checkout has two or more
   live sessions: each one's window, pid and state, the lead first, `no tmux` or `agent worktree`
   where it applies. With no running session picked and the recorded lead stopped, the line

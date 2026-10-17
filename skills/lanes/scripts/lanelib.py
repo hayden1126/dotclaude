@@ -1271,28 +1271,45 @@ def lead_of(repo: Repo, sessions: list[dict]) -> dict | None:
         for s in sessions:
             if s["pid"] == rec["pid"] and proc_start_of(s) == rec["procStart"]:
                 return s
-        pane = rec["tmux"] if session_state(rec) is None else None
-        on = {s["pid"]: s for s in sessions if s.get("sessionId") == rec["sessionId"]
-              or (pane is not None and proc_tmux(s["pid"]) == pane)}
+        on = {s["pid"]: s for s in continuations(rec, sessions)}
         if len(on) == 1:
             return next(iter(on.values()))
-    if len(sessions) == 1 and not (rec is not None and session_stopped(rec)):
+    if len(sessions) == 1 and (rec is None or stopped_lead(repo, rec) is None):
         return sessions[0]
     return None
 
 
-def stopped_lead(repo: Repo) -> dict | None:
-    """The recorded lead when its process exists and is stopped (Ctrl+Z): its session file (by
-    pid and procStart), or {"pid"} when none names it; else None. The refusals and the board
-    footer name it, so Hayden knows which tab to `fg` in."""
-    rec = read_lead(repo)
-    if rec is None or not session_stopped(rec):
+def continuations(rec: dict, sessions: list[dict]) -> list[dict]:
+    """The sessions among sessions (main_sessions) that carry on the recorded lead (rec): one
+    with its session id (a resume), or, once the recorded process is gone, one whose own
+    environment names its tmux server (socket, pid and start) and pane (a /pass successor:
+    `respawn-pane -k` ends the old claude and keeps the pane; beside one only stopped, a claude
+    in its pane is a fresh one). lead_of picks one only when it is the one, and lead_relink
+    heals only then."""
+    pane = rec["tmux"] if session_state(rec) is None else None
+    return [s for s in sessions if s.get("sessionId") == rec["sessionId"]
+            or (pane is not None and proc_tmux(s["pid"]) == pane)]
+
+
+def stopped_lead(repo: Repo, rec: dict | None = None) -> dict | None:
+    """The recorded lead (rec, else read_lead) when it is stopped (Ctrl+Z): the recorded
+    process, by its session file (pid and procStart) or {"pid"} when none names it; or, with
+    the recorded process gone, an interactive main-checkout session that holds the recorded
+    session id and is stopped (the original a heal moved the record off, to a resume that has
+    since ended). Else None. The refusals and the board footer name it, so Hayden knows which
+    tab to `fg` in, and lead_of hands no side chat the lead beside it."""
+    rec = rec or read_lead(repo)
+    if rec is None:
         return None
-    for s in session_files():
-        if type(s.get("pid")) is int and s["pid"] == rec["pid"] \
-                and proc_start_of(s) == rec["procStart"]:
-            return s
-    return {"pid": rec["pid"]}
+    files = session_files()
+    if session_stopped(rec):
+        return next((s for s in files if type(s.get("pid")) is int and s["pid"] == rec["pid"]
+                     and proc_start_of(s) == rec["procStart"]), {"pid": rec["pid"]})
+    if session_state(rec) is not None:
+        return None  # the recorded process runs
+    return next((s for s in files if s.get("sessionId") == rec["sessionId"]
+                 and s.get("kind") == "interactive" and cwd_inside(s.get("cwd"), repo.main)
+                 and session_stopped(s)), None)
 
 
 # ---- the heal --------------------------------------------------------------------------------
@@ -1340,41 +1357,47 @@ def lead_relink(repo: Repo, sid: str, pid: int | None = None, proc: str = PROC) 
     nearest is whatever ran it (a `claude -p` from a side chat), which holds another id.
       "clear"   the recorded process runs and is that session: a /clear keeps the process and
                 starts a new id, which its file already holds (else the next Stop).
-      "resume"  the recorded process is gone or stopped (Ctrl+Z), sid is the record's, and no
-                other running main-checkout session holds it: a resume keeps the id, in the same
-                tab, another, or a tmux restart's restored one. Two resumes are no pick
-                (lead_of), so neither heals.
+      "resume"  the recorded process is gone or stopped (Ctrl+Z), and sid is the record's: a
+                resume keeps the id, in the same tab, another, or a tmux restart's restored one.
       "pass"    the recorded process is gone, pid runs in the recorded tmux pane on the recorded
                 server (proc_tmux), and that pane's pass-last marker (pass_marker) names the
                 recorded session passing there at most PASS_TTL before that session's claude
                 started. A claude started by hand in the old tab has no such marker, nor has a
                 pass whose session left no reply text (pass-respawn's write_last skips it).
-    A running lead is never displaced. Nearly every call costs one read and one stat: the
+    A resume or a pass heals only as lead_of's one continuation (continuations): beside another,
+    a second resume or a successor in the recorded pane, neither does, and Hayden picks. A
+    running lead is never displaced. Nearly every call costs one read and one stat: the
     recorded process runs and sid is the record's."""
     rec = read_lead(repo)
     if rec is None:
         return None
     me = os.getpid() if pid is None else pid
     state = session_state(rec, proc)
-    running = state is not None and state not in STOPPED
-    if running and (sid == rec["sessionId"]
-                    or (rec["pid"], rec["procStart"]) not in ancestry(me, proc)):
-        return None
-    if not running and sid != rec["sessionId"] and (
-            state is not None or rec["tmux"] is None or proc_tmux(me, proc) != rec["tmux"]):
+    written = None
+    # The cheap checks first: past them, sessions_above scans /proc and the session files.
+    if state is not None and state not in STOPPED:
+        if sid == rec["sessionId"] or (rec["pid"], rec["procStart"]) not in ancestry(me, proc):
+            return None
+        why = "clear"
+    elif sid == rec["sessionId"]:
+        why = "resume"
+    elif state is None and rec["tmux"] is not None and proc_tmux(me, proc) == rec["tmux"] \
+            and (written := pass_marker(rec)) is not None:
+        why = "pass"
+    else:
         return None
     above = sessions_above(me)
     if not above or above[0][0].get("sessionId") != sid:
         return None
-    nearest = above[0][1]
-    if running:
-        return "clear" if (nearest.pid, nearest.start) == (rec["pid"], rec["procStart"]) else None
-    if sid == rec["sessionId"]:
-        twins = [s for s in main_sessions(repo) if s.get("sessionId") == sid
-                 and (s["pid"], proc_start_of(s)) != (nearest.pid, nearest.start)]
-        return None if twins else "resume"
-    written = pass_marker(rec)
-    started = proc_epoch(nearest.start, proc)
-    if written is None or started is None:
-        return None
-    return "pass" if started - PASS_TTL <= written <= started + PASS_SLACK else None
+    nearest = (above[0][1].pid, above[0][1].start)
+    if why == "clear":
+        return why if nearest == (rec["pid"], rec["procStart"]) else None
+    if why == "pass":
+        started = proc_epoch(nearest[1], proc)
+        if started is None or not started - PASS_TTL <= written <= started + PASS_SLACK:
+            return None
+    # As lead_of: beside another continuation (a second resume, a successor in the recorded
+    # pane), none is the lead, so neither heals ahead of the other and Hayden picks.
+    others = [s for s in continuations(rec, main_sessions(repo))
+              if (s["pid"], proc_start_of(s)) != nearest]
+    return None if others else why
