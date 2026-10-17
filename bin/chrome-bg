@@ -1,0 +1,2015 @@
+#!/usr/bin/python3 -I
+"""chrome-bg: run Windows Chrome from WSL behind all windows, for headed puppeteer probes.
+
+  chrome-bg run [--url U] [--size WxH] [--env NAME] -- CMD...   NAME defaults to CHROME_BG_URL
+  chrome-bg start [--url U] [--size WxH] [--ttl 2h] [--json]    detached holder; prints the URL
+  chrome-bg stop <id|url> | --gc
+  chrome-bg ls                                                  id, port, pids, owner, age, cwd
+  chrome-bg check                                               live self-test (opens a window)
+
+A fixture connects with puppeteer.connect({browserURL: process.env.CHROME_BG_URL,
+defaultViewport: null}) and uses (await browser.pages())[0]. Run it with the sandbox off:
+powershell.exe and Chrome's port are unreachable inside it.
+
+Each run has one supervisor, chrome-bg.ps1 beside this repo's bin/, fed one JSON line per op on
+its stdin (hello, launch, place, procs, fg, mark) and answering one JSON line on its stdout. It
+launches Chrome through WMI (so Chrome never inherits the console's right to take the
+foreground), sinks each new run window to the bottom of the z-order, and logs window events to
+<Temp>\\chrome-bg\\<id>.log. The run's owner (this process, or the holder `start` forks) keeps the
+supervisor's stdin open; when it closes, cleanly or because the owner was SIGKILLed, the
+supervisor kills every chrome.exe whose command line holds the run dir and deletes the dir.
+
+Start: hello (geometry, run dir), launch Chrome with --remote-debugging-port=0 and a profile in
+the run dir, read DevToolsActivePort, refuse a port whose /json/version names another browser,
+open the first window off-screen in the background over CDP, then have the supervisor place it
+on the primary monitor at the bottom of the z-order. Records of live runs sit in
+$XDG_STATE_HOME/dotclaude/chrome-bg/<id>.json. `stop` takes a run id or its browserURL, never a
+bare port (chrome-debug.ps1 serves 9222, maybe with your real profile). `--gc` (also run by
+each start and run) stops runs whose owner is gone or whose TTL ran out, kills run dirs with no
+record once they are 2 minutes old, and prunes logs older than 7 days.
+"""
+import argparse
+import base64
+import contextlib
+import hashlib
+import http.client
+import json
+import os
+import re
+import secrets
+import select
+import signal
+import socket
+import struct
+import subprocess
+import sys
+import tempfile
+import time
+from urllib.parse import urlparse
+
+# Trusted paths. No env var or PATH entry may change what runs outside the sandbox; tests import
+# this file as a module and patch these names.
+SELF = os.path.realpath(__file__)
+REPO = os.path.dirname(os.path.dirname(SELF))
+MNT = "/mnt"
+WSLPATH = "/usr/bin/wslpath"
+PS_RE = re.compile(r"/mnt/[a-z]/(?:Windows|WINDOWS)/System32/WindowsPowerShell/v1\.0/powershell\.exe")
+
+ID_RE = re.compile(r"[0-9a-f]{8}")
+SIZE = (1280, 900)
+DEFAULT_ENV = "CHROME_BG_URL"
+YOUNG_S = 120            # a run dir younger than this may belong to a run that is still launching
+LOG_DAYS = 7
+PORT_WAIT_S = 20
+STOP_WAIT_S = 25         # stop waits this long for a SIGTERMed owner to clean up
+PROCS_POLL_S = 5         # a `start` holder checks this often whether Chrome and a page are there
+PROCS_FAILURES = 3       # ... and gives up on the run after this many failed checks in a row
+PAGES_GONE_S = 5         # ... and ends it once two page reads this far apart found none
+SCREEN_LIMIT = 32767     # Windows window coordinates are 16-bit
+BOM = chr(0xFEFF)        # PowerShell may open its stdout with one
+SANDBOX_MSG = ("chrome-bg: run it with the sandbox off (powershell.exe and Chrome's port are "
+               "unreachable inside it)")
+
+# puppeteer-core 23.11.1 ChromeLauncher defaults (probe.mjs) less --disable-popup-blocking (it lets
+# a gestureless window.open put a popup on screen), about:blank and the Linux/mac-only flags.
+# --enable-automation stays so navigator.webdriver matches a launched run.
+FLAGS = [
+    "--allow-pre-commit-input", "--disable-background-networking",
+    "--disable-background-timer-throttling", "--disable-backgrounding-occluded-windows",
+    "--disable-breakpad", "--disable-client-side-phishing-detection",
+    "--disable-component-extensions-with-background-pages", "--disable-crash-reporter",
+    "--disable-default-apps", "--disable-extensions", "--disable-hang-monitor",
+    "--disable-infobars", "--disable-ipc-flooding-protection", "--disable-prompt-on-repost",
+    "--disable-renderer-backgrounding", "--disable-search-engine-choice-screen", "--disable-sync",
+    "--enable-automation", "--export-tagged-pdf", "--force-color-profile=srgb",
+    "--generate-pdf-document-outline", "--metrics-recording-only", "--no-first-run",
+    "--no-default-browser-check", "--no-startup-window", "--remote-debugging-port=0",
+    "--enable-features=PdfOopif"]
+# Chrome keeps only the last --disable-features, so puppeteer's list and ours go in one flag.
+# CalculateNativeWinOcclusion off keeps a covered page `visible` (a second guard beside
+# --disable-backgrounding-occluded-windows, probe B).
+DISABLED = ["Translate", "AcceptCHFrame", "MediaRouter", "OptimizationHints",
+            "ProcessPerSiteUpToMainFrameThreshold", "IsolateSandboxedIframes",
+            "CalculateNativeWinOcclusion"]
+
+
+class Fail(Exception):
+    """An error with a message for the user."""
+
+
+class WrongChrome(Fail):
+    """The port answers, but as a browser this run did not start."""
+
+
+class Stopped(BaseException):
+    def __init__(self, signum):
+        super().__init__(signum)
+        self.signum = signum
+
+
+# ---- stop signals ---------------------------------------------------------------------------
+# main() blocks SIGINT, SIGTERM and SIGHUP for the whole command, so no handler ever runs at an
+# arbitrary point (between an exception and its cleanup, say). They wait, pending, for an explicit
+# poll at a wait point (take_signal), which raises Stopped. Cleanup never polls, so nothing cuts
+# it short. Every child unblocks them before exec (unblock_held); the `start` holder, a fork,
+# keeps them blocked and polls like the rest. When main() ends, the cleanup done, any still
+# pending take their default effect and end the process with 128+n. One inherited ignored (as
+# under nohup) stays ignored and is left out: Linux would queue it while blocked and
+# sigtimedwait would take it, ending the run.
+
+HELD = {signal.SIGINT, signal.SIGTERM, signal.SIGHUP}  # main() drops the inherited-ignored ones; a holder keeps SIGTERM
+POLL_S = 0.1
+CLEANING = [0]  # depth of cleanups under way: no poll raises in one
+
+
+def take_signal(timeout=0.0):
+    """Wait up to timeout s for a held stop signal and raise Stopped for it. In a cleanup it
+    only waits."""
+    if CLEANING[0]:
+        if timeout:
+            time.sleep(timeout)
+        return
+    info = signal.sigtimedwait(HELD, timeout)
+    if info is not None:
+        raise Stopped(info.si_signo)
+
+
+@contextlib.contextmanager
+def cleaning():
+    CLEANING[0] += 1
+    try:
+        yield
+    finally:
+        CLEANING[0] -= 1
+
+
+def unblock_held():
+    """preexec_fn for every child process: none inherits the blocked stop signals."""
+    signal.pthread_sigmask(signal.SIG_UNBLOCK, HELD)
+
+
+# Copied from skills/lanes/scripts/lanelib.py sandboxed(), so this script stands alone.
+SANDBOX_INITS = {"apply-seccomp", "bwrap"}
+
+
+def sandboxed(proc: str = "/proc") -> bool:
+    """Whether this process runs in the Bash sandbox, by its pid namespace's pid 1: there it is
+    the sandbox's own launcher (cmdline argv0 `apply-seccomp`, measured on Claude Code 2.1.296,
+    whose comm can read `3`), outside it is init. CLAUDE_PID can't tell: it is set in both."""
+    names = set()
+    try:
+        with open(os.path.join(proc, "1", "cmdline"), "rb") as f:
+            names.add(os.path.basename(f.read().split(b"\0")[0].decode(errors="replace")))
+    except OSError:
+        pass
+    try:
+        with open(os.path.join(proc, "1", "comm")) as f:
+            names.add(f.read().strip())
+    except OSError:
+        pass
+    return bool(names & SANDBOX_INITS)
+
+
+# ---- trusted paths --------------------------------------------------------------------------
+
+def powershell():
+    """Windows PowerShell under /mnt/<drive>/, never from PATH: a sandbox-writable dir on PATH
+    must not be able to plant a powershell.exe that runs sandbox-off."""
+    try:
+        drives = sorted(os.listdir(MNT))
+    except OSError:
+        drives = []
+    for drive in drives:
+        for win in ("Windows", "WINDOWS"):
+            p = os.path.join(MNT, drive, win, "System32", "WindowsPowerShell", "v1.0",
+                             "powershell.exe")
+            if PS_RE.fullmatch(p) and PS_RE.fullmatch(os.path.realpath(p)) and os.path.isfile(p):
+                return p
+    raise Fail("chrome-bg: no powershell.exe at /mnt/<drive>/Windows/System32/WindowsPowerShell/"
+               "v1.0/ (it is never looked up on PATH)")
+
+
+def ps1():
+    p = os.path.join(REPO, "chrome-bg.ps1")
+    if not os.path.isfile(p):
+        raise Fail(f"chrome-bg: {p} is missing (the supervisor ships beside bin/)")
+    return p
+
+
+def wslpath(flag, path):
+    try:
+        r = subprocess.run([WSLPATH, flag, path], capture_output=True, text=True, timeout=10,
+                           preexec_fn=unblock_held, start_new_session=True)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        raise Fail(f"chrome-bg: {WSLPATH} {flag} failed: {e}")
+    if r.returncode or not r.stdout.strip():
+        raise Fail(f"chrome-bg: {WSLPATH} {flag} {path!r} failed: {r.stderr.strip()}")
+    return r.stdout.strip()
+
+
+def ps_argv(*args):
+    """The supervisor's argv: a per-run supervisor (-Id <id> -Keep) or a one-shot (-Kill, -Scan)."""
+    return [powershell(), "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+            "-File", wslpath("-w", ps1()), *args]
+
+
+# ---- pure helpers ---------------------------------------------------------------------------
+
+def offscreen_x(screen_left, width):
+    """Chrome's `left` (DIPs) for a first window wholly left of the virtual screen. The screen's
+    left edge comes in physical pixels; read as DIPs it can only push the window further left, so
+    a 150% monitor or one at negative x can't catch it. Kept inside Windows' 16-bit range."""
+    return max(-SCREEN_LIMIT, min(SCREEN_LIMIT, min(screen_left, 0) - width - 1000))
+
+
+def chrome_args(profile):
+    return [*FLAGS, "--disable-features=" + ",".join(DISABLED), f'"--user-data-dir={profile}"']
+
+
+def win_join(base, *parts):
+    return "\\".join([base.rstrip("\\"), *parts])
+
+
+def win_parent(path):
+    return path.rstrip("\\").rsplit("\\", 1)[0]
+
+
+def holds_tag(run_dir, rid):
+    """Whether a Windows run dir is this run's: ...\\chrome-bg\\<id>."""
+    return run_dir.rstrip("\\").lower().endswith("\\chrome-bg\\" + rid)
+
+
+# ---- supervisor replies ---------------------------------------------------------------------
+# chrome-bg.ps1 answers in exact shapes (the Protocol block atop chrome-bg.ps1; the replies the
+# real one sent are pinned in tests/setup/test_chrome_bg.py). No aliases and no defaults: a
+# missing or retyped field fails here, naming the op and the field, instead of reading as None.
+
+KINDS = {
+    "int": lambda v: isinstance(v, int) and not isinstance(v, bool),
+    "num": lambda v: isinstance(v, (int, float)) and not isinstance(v, bool),
+    "str": lambda v: isinstance(v, str),
+    "bool": lambda v: isinstance(v, bool),
+    "list": lambda v: isinstance(v, list),
+    "dict": lambda v: isinstance(v, dict),
+}
+
+
+def need(obj, key, kind, where):
+    """obj[key], of the given kind. `where` is the op and the path to obj, as in hello.fg."""
+    if not isinstance(obj, dict):
+        raise Fail(f"chrome-bg: supervisor {where} is {obj!r}, not an object")
+    if key not in obj:
+        raise Fail(f"chrome-bg: supervisor {where} has no {key!r}")
+    if not KINDS[kind](obj[key]):
+        raise Fail(f"chrome-bg: supervisor {where}.{key} is {obj[key]!r}, not a {kind}")
+    return obj[key]
+
+
+def rect(v, where):
+    """(x, y, w, h) from {"x", "y", "w", "h"}."""
+    return tuple(need(v, k, "int", where) for k in ("x", "y", "w", "h"))
+
+
+def failure(reply):
+    """What a supervisor reply that is not ok says went wrong."""
+    if isinstance(reply, dict) and isinstance(reply.get("error"), str):
+        code = f" (code {reply['code']})" if "code" in reply else ""
+        return reply["error"] + code
+    return repr(reply)
+
+
+def parse_fg(fg, where):
+    return {"visible": need(fg, "visible", "bool", where),
+            "iconic": need(fg, "iconic", "bool", where),
+            "cloaked": need(fg, "cloaked", "bool", where),
+            "cls": need(fg, "cls", "str", where), "pid": need(fg, "pid", "int", where)}
+
+
+def parse_hello(reply):
+    """hello: the run dir, the virtual screen, the primary monitor and the foreground."""
+    primary = None
+    for i, m in enumerate(need(reply, "monitors", "list", "hello")):
+        where = f"hello.monitors[{i}]"
+        mon = {"work": rect(need(m, "work", "dict", where), where + ".work"),
+               "dpi": need(m, "dpi", "int", where), "hz": need(m, "hz", "int", where)}
+        if need(m, "primary", "bool", where) and primary is None:
+            primary = mon
+    if primary is None:
+        raise Fail("chrome-bg: supervisor hello.monitors names no primary monitor")
+    return {"runDir": need(reply, "runDir", "str", "hello"),
+            "screen": rect(need(reply, "virtualScreen", "dict", "hello"), "hello.virtualScreen"),
+            "primary": primary, "fg": parse_fg(need(reply, "fg", "dict", "hello"), "hello.fg")}
+
+
+def proc_pids(items, where):
+    """The pids of a list of chrome.exe {pid, ppid, type}."""
+    pids = []
+    for i, p in enumerate(items):
+        need(p, "ppid", "int", f"{where}[{i}]")
+        need(p, "type", "str", f"{where}[{i}]")
+        pids.append(need(p, "pid", "int", f"{where}[{i}]"))
+    return pids
+
+
+def parse_procs(reply):
+    return proc_pids(need(reply, "procs", "list", "procs"), "procs.procs")
+
+
+def parse_place(reply):
+    """place: the run frames it moved, as (hwnd, (x, y, w, h))."""
+    out = []
+    for i, w in enumerate(need(reply, "windows", "list", "place")):
+        where = f"place.windows[{i}]"
+        out.append((need(w, "hwnd", "int", where), rect(need(w, "rect", "dict", where), where + ".rect")))
+    return out
+
+
+def parse_scan(reply):
+    """-Scan as ({id: {"age": dir age in s or None, "pids": [...]}}, {id: log age in s}, root).
+    Names that are not run ids can't be a run's and are skipped."""
+    root = need(reply, "root", "str", "-Scan")
+    runs, logs = {}, {}
+
+    def entry(rid):
+        return runs.setdefault(rid, {"age": None, "pids": []})
+
+    for i, d in enumerate(need(reply, "dirs", "list", "-Scan")):
+        where = f"-Scan.dirs[{i}]"
+        rid, age = need(d, "id", "str", where), need(d, "ageSec", "num", where)
+        need(d, "createdUtc", "str", where)
+        if ID_RE.fullmatch(rid):
+            entry(rid)["age"] = float(age)
+    for i, d in enumerate(need(reply, "logs", "list", "-Scan")):
+        where = f"-Scan.logs[{i}]"
+        rid, age = need(d, "id", "str", where), need(d, "ageSec", "num", where)
+        if ID_RE.fullmatch(rid):
+            logs[rid] = float(age)
+    for rid, items in need(reply, "procs", "dict", "-Scan").items():
+        pids = proc_pids(need({rid: items}, rid, "list", "-Scan.procs"), f"-Scan.procs.{rid}")
+        if ID_RE.fullmatch(rid):
+            entry(rid)["pids"] += pids
+    return runs, logs, root
+
+
+def parse_kill(reply):
+    """-Kill: ok only once no chrome.exe is left and the run dir is gone."""
+    got = {"killed": need(reply, "killed", "int", "-Kill"), "left": need(reply, "left", "int", "-Kill"),
+           "dirExists": need(reply, "dirExists", "bool", "-Kill")}
+    if got["left"] or got["dirExists"]:
+        raise Fail(f"chrome-bg: -Kill left {got['left']} chrome.exe and the run dir "
+                   f"{'in place' if got['dirExists'] else 'gone'}")
+    return got
+
+
+def parse_port_file(text):
+    """(port, browser ws path) once DevToolsActivePort holds two well-formed lines, else None."""
+    lines = text.split("\n")
+    if len(lines) < 2:
+        return None
+    port, path = lines[0].strip(), lines[1].strip()
+    if not re.fullmatch(r"\d{1,5}", port) or not 0 < int(port) < 65536:
+        return None
+    if not re.fullmatch(r"/devtools/browser/[0-9A-Za-z-]+", path):
+        return None
+    return int(port), path
+
+
+def parse_duration(text):
+    m = re.fullmatch(r"(\d+(?:\.\d+)?)([smhd]?)", text.strip())
+    if not m or float(m.group(1)) <= 0:
+        raise Fail(f"chrome-bg: --ttl wants a duration like 90s, 30m or 2h, not {text!r}")
+    return float(m.group(1)) * {"": 1, "s": 1, "m": 60, "h": 3600, "d": 86400}[m.group(2)]
+
+
+def parse_size(text):
+    m = re.fullmatch(r"(\d+)x(\d+)", text.strip())
+    if not m or not all(200 <= int(n) <= 8000 for n in m.groups()):
+        raise argparse.ArgumentTypeError(f"--size wants WxH between 200 and 8000, not {text!r}")
+    return int(m.group(1)), int(m.group(2))
+
+
+# ---- WebSocket and CDP ----------------------------------------------------------------------
+
+WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+OP_CONT, OP_TEXT, OP_BINARY, OP_CLOSE, OP_PING, OP_PONG = 0x0, 0x1, 0x2, 0x8, 0x9, 0xA
+
+
+class ConnectionClosed(ConnectionError):
+    pass
+
+
+def ws_mask(data, key):
+    if not data:
+        return b""
+    k = (key * (len(data) // 4 + 1))[:len(data)]
+    return (int.from_bytes(data, "big") ^ int.from_bytes(k, "big")).to_bytes(len(data), "big")
+
+
+def encode_frame(opcode, payload, fin=True, mask_key=None):
+    """One client frame: always masked (RFC 6455 5.3)."""
+    key = mask_key if mask_key is not None else os.urandom(4)
+    n = len(payload)
+    head = bytes([(0x80 if fin else 0) | opcode])
+    if n < 126:
+        head += bytes([0x80 | n])
+    elif n < 65536:
+        head += bytes([0x80 | 126]) + struct.pack("!H", n)
+    else:
+        head += bytes([0x80 | 127]) + struct.pack("!Q", n)
+    return head + key + ws_mask(payload, key)
+
+
+def decode_frame(buf):
+    """(fin, opcode, payload, bytes used) for the first whole frame in buf, or None."""
+    if len(buf) < 2:
+        return None
+    b0, b1 = buf[0], buf[1]
+    n, i = b1 & 0x7F, 2
+    if n == 126:
+        if len(buf) < 4:
+            return None
+        n, i = struct.unpack("!H", buf[2:4])[0], 4
+    elif n == 127:
+        if len(buf) < 10:
+            return None
+        n, i = struct.unpack("!Q", buf[2:10])[0], 10
+    key = None
+    if b1 & 0x80:
+        if len(buf) < i + 4:
+            return None
+        key, i = bytes(buf[i:i + 4]), i + 4
+    if len(buf) < i + n:
+        return None
+    payload = bytes(buf[i:i + n])
+    return bool(b0 & 0x80), b0 & 0x0F, ws_mask(payload, key) if key else payload, i + n
+
+
+class WebSocket:
+    """A minimal RFC 6455 client: enough for Chrome's DevTools socket."""
+
+    def __init__(self, url, timeout=10):
+        u = urlparse(url)
+        host, port = u.hostname, u.port or 80
+        path = (u.path or "/") + (f"?{u.query}" if u.query else "")
+        self.sock = socket.create_connection((host, port), timeout=timeout)
+        self.buf = b""
+        self.closed = False
+        self.partial = None  # (opcode, fragments) of a message still arriving
+        key = base64.b64encode(os.urandom(16)).decode()
+        # No Origin header: Chrome refuses a DevTools WebSocket whose Origin it doesn't allow.
+        self.sock.sendall((f"GET {path} HTTP/1.1\r\nHost: {host}:{port}\r\n"
+                           "Upgrade: websocket\r\nConnection: Upgrade\r\n"
+                           f"Sec-WebSocket-Key: {key}\r\nSec-WebSocket-Version: 13\r\n\r\n").encode())
+        deadline = time.monotonic() + timeout
+        while b"\r\n\r\n" not in self.buf:
+            if len(self.buf) > 65536:
+                raise ConnectionError("WebSocket handshake reply too long")
+            self._fill(deadline)
+        head, self.buf = self.buf.split(b"\r\n\r\n", 1)
+        lines = head.decode("latin-1").split("\r\n")
+        if not re.match(r"HTTP/1\.[01] 101\b", lines[0]):
+            self.sock.close()
+            raise ConnectionError(f"WebSocket handshake refused: {lines[0]!r}")
+        headers = {k.strip().lower(): v.strip()
+                   for k, v in (ln.split(":", 1) for ln in lines[1:] if ":" in ln)}
+        want = base64.b64encode(hashlib.sha1((key + WS_GUID).encode()).digest()).decode()
+        if headers.get("sec-websocket-accept") != want:
+            self.sock.close()
+            raise ConnectionError("WebSocket handshake: wrong Sec-WebSocket-Accept")
+
+    def _fill(self, deadline):
+        left = None if deadline is None else deadline - time.monotonic()
+        if left is not None and left <= 0:
+            raise TimeoutError("WebSocket read timed out")
+        self.sock.settimeout(left)
+        try:
+            chunk = self.sock.recv(65536)
+        except socket.timeout:
+            raise TimeoutError("WebSocket read timed out") from None
+        if not chunk:
+            self.closed = True
+            raise ConnectionClosed("WebSocket closed by the peer")
+        self.buf += chunk
+
+    def send_frame(self, opcode, payload, fin=True):
+        self.sock.settimeout(10)  # not whatever the last read left
+        self.sock.sendall(encode_frame(opcode, payload, fin))
+
+    def send(self, text):
+        self.send_frame(OP_TEXT, text.encode())
+
+    def recv(self, timeout=None):
+        """The next whole message (str for text, bytes for binary). Pings are answered and
+        control frames between fragments handled; a close frame raises ConnectionClosed. A
+        timeout keeps the fragments read so far for the next call."""
+        deadline = None if timeout is None else time.monotonic() + timeout
+        while True:
+            op, parts = self.partial or (None, [])
+            frame = decode_frame(self.buf)
+            if frame is None:
+                self._fill(deadline)
+                continue
+            fin, opcode, payload, used = frame
+            self.buf = self.buf[used:]
+            if opcode == OP_PING:
+                self.send_frame(OP_PONG, payload)
+                continue
+            if opcode == OP_PONG:
+                continue
+            if opcode == OP_CLOSE:
+                if not self.closed:
+                    self.closed = True
+                    try:
+                        self.send_frame(OP_CLOSE, payload[:2])
+                    except OSError:
+                        pass
+                raise ConnectionClosed("WebSocket closed by the peer")
+            if opcode in (OP_TEXT, OP_BINARY):
+                if op is not None:
+                    raise ConnectionError("WebSocket: a new message inside a fragmented one")
+                op, parts = opcode, [payload]
+            elif opcode == OP_CONT:
+                if op is None:
+                    raise ConnectionError("WebSocket: a continuation frame with no message")
+                parts.append(payload)
+            else:
+                raise ConnectionError(f"WebSocket: unknown opcode {opcode}")
+            if not fin:
+                self.partial = (op, parts)
+                continue
+            self.partial = None
+            data = b"".join(parts)
+            return data.decode() if op == OP_TEXT else data
+
+    def close(self):
+        if not self.closed:
+            self.closed = True
+            try:
+                self.send_frame(OP_CLOSE, struct.pack("!H", 1000))
+            except OSError:
+                pass
+        try:
+            self.sock.close()
+        except OSError:
+            pass
+
+
+class CDPError(Fail):
+    pass
+
+
+class CDP:
+    """Chrome DevTools Protocol over one WebSocket: calls carry ids and wait for the matching
+    reply; events and replies to other calls are buffered."""
+
+    def __init__(self, ws_url, timeout=10):
+        self.ws = WebSocket(ws_url, timeout)
+        self.next_id = 0
+        self.events = []
+        self.replies = {}
+
+    def send(self, method, params=None, session=None, timeout=15):
+        self.next_id += 1
+        mid = self.next_id
+        msg = {"id": mid, "method": method, "params": params or {}}
+        if session:
+            msg["sessionId"] = session
+        self.ws.send(json.dumps(msg))
+        deadline = time.monotonic() + timeout
+        while mid not in self.replies:
+            left = deadline - time.monotonic()
+            if left <= 0:
+                raise Fail(f"chrome-bg: no CDP reply to {method} in {timeout}s")
+            take_signal()
+            try:
+                m = json.loads(self.ws.recv(min(left, 2 * POLL_S)))
+            except TimeoutError:
+                continue
+            if not isinstance(m, dict):
+                continue
+            if "id" in m:
+                self.replies[m["id"]] = m
+            elif "method" in m:
+                self.events.append(m)
+        m = self.replies.pop(mid)
+        if "error" in m:
+            raise CDPError(f"chrome-bg: CDP {method} failed: {m['error']}")
+        return m.get("result") or {}
+
+    def close(self):
+        self.ws.close()
+
+
+def json_get(port, what, timeout=5):
+    """GET /json/<what> straight from 127.0.0.1 (http.client: no proxy env applies)."""
+    c = http.client.HTTPConnection("127.0.0.1", port, timeout=timeout)
+    try:
+        c.request("GET", f"/json/{what}")
+        r = c.getresponse()
+        body = r.read()
+        v = json.loads(body) if r.status == 200 else None
+    except (http.client.HTTPException, ValueError) as e:
+        # Not HTTP, or not JSON: something else listens there.
+        raise Fail(f"chrome-bg: 127.0.0.1:{port}/json/{what}: {e!r}") from None
+    finally:
+        c.close()
+    if r.status != 200:
+        raise Fail(f"chrome-bg: 127.0.0.1:{port}/json/{what} answered {r.status}")
+    return v
+
+
+def json_version(port, timeout=5):
+    v = json_get(port, "version", timeout)
+    if not isinstance(v, dict):
+        raise Fail(f"chrome-bg: 127.0.0.1:{port}/json/version is not an object")
+    return v
+
+
+def browser_ws(port, path):
+    """This run's browser WebSocket URL, refusing a port whose /json/version names another
+    browser (the port was reused, or it is someone else's Chrome)."""
+    got = urlparse(str(json_version(port).get("webSocketDebuggerUrl") or "")).path
+    if got != path:
+        raise WrongChrome(f"chrome-bg: refusing port {port}: its browser WebSocket {got!r} is not "
+                          f"this run's {path!r}, so it is another Chrome")
+    return f"ws://127.0.0.1:{port}{path}"
+
+
+def page_count(port, path):
+    """How many page targets the run's browser lists on /json/list, read once its /json/version
+    proves the port is still this run's browser. Fail when either read fails: a reading that
+    isn't there is never zero pages."""
+    what = "version"
+    try:
+        browser_ws(port, path)
+        what = "list"
+        targets = json_get(port, "list")
+    # ValueError: urlparse on a malformed WebSocket URL; RecursionError: JSON nested too deep.
+    except (OSError, ValueError, RecursionError) as e:
+        raise Fail(f"chrome-bg: 127.0.0.1:{port}/json/{what}: {e!r}") from None
+    if not isinstance(targets, list):
+        raise Fail(f"chrome-bg: 127.0.0.1:{port}/json/list is not a list")
+    return sum(1 for t in targets if isinstance(t, dict) and t.get("type") == "page")
+
+
+# ---- run records ----------------------------------------------------------------------------
+
+def state_dir():
+    """$XDG_STATE_HOME/dotclaude/chrome-bg. A relative XDG_STATE_HOME is invalid (XDG Base
+    Directory spec) and ignored."""
+    base = os.environ.get("XDG_STATE_HOME", "")
+    if not os.path.isabs(base):  # relative: it would resolve against whatever the cwd is
+        base = os.path.expanduser("~/.local/state")
+    return os.path.join(base, "dotclaude", "chrome-bg")
+
+
+def record_path(rid):
+    return os.path.join(state_dir(), rid + ".json")
+
+
+def holder_log(rid):
+    return os.path.join(state_dir(), rid + ".holder.log")
+
+
+def write_record(rec):
+    """Atomically: a reader sees the old record or the new one, never half of one."""
+    d = state_dir()
+    os.makedirs(d, mode=0o700, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=d, prefix=f".{rec['id']}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w") as f:
+            json.dump(rec, f, indent=1)
+            f.write("\n")
+        os.replace(tmp, record_path(rec["id"]))
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp)
+        raise
+
+
+def is_num(v):
+    return isinstance(v, (int, float)) and not isinstance(v, bool)
+
+
+def record_problem(rec, rid):
+    """Why rec is not a well-formed record named <rid>.json, or None. The schema is checked once,
+    here, so nothing later trips on a missing or retyped field."""
+    if not isinstance(rec, dict):
+        return "not a JSON object"
+    if rec.get("id") != rid:
+        return f"its id {rec.get('id')!r} is not its name"
+    owner = rec.get("owner")
+    if not isinstance(owner, dict):
+        return "it has no owner object"
+    pid = owner.get("pid")
+    if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
+        return f"owner.pid {pid!r} is not a pid"
+    if "start" not in owner or not (owner["start"] is None or isinstance(owner["start"], str)):
+        return f"owner.start {owner.get('start')!r} is not a start time"
+    if "expires" not in rec or not (rec["expires"] is None or is_num(rec["expires"])):
+        return f"expires {rec.get('expires')!r} is not a time"
+    if not is_num(rec.get("created")):
+        return f"created {rec.get('created')!r} is not a time"
+    for key in ("cwd", "kind"):
+        if not isinstance(rec.get(key), str):
+            return f"{key} {rec.get(key)!r} is not a string"
+    return None
+
+
+def read_record(rid):
+    """(record, None) for a well-formed <rid>.json; else (None, why), why None if it is absent.
+    Records are untrusted input: nothing in one is signalled or connected to unverified."""
+    if not ID_RE.fullmatch(str(rid)):
+        return None, "its name is not an 8-hex run id"
+    try:
+        with open(record_path(rid)) as f:
+            rec = json.load(f)
+    except FileNotFoundError:
+        return None, None
+    except (OSError, ValueError) as e:
+        return None, f"unreadable: {e}"
+    why = record_problem(rec, rid)
+    return (None, why) if why else (rec, None)
+
+
+def load_record(rid):
+    return read_record(rid)[0]
+
+
+REPORTED = set()
+
+
+def read_records():
+    """Every well-formed record. A *.json here that is not one is ignored and reported once."""
+    try:
+        names = sorted(os.listdir(state_dir()))
+    except OSError:
+        return []
+    recs = []
+    for name in names:
+        if not name.endswith(".json") or name.startswith("."):
+            continue
+        m = re.fullmatch(r"([0-9a-f]{8})\.json", name)
+        rec, why = read_record(m.group(1)) if m else (None, "its name is not an 8-hex run id")
+        if rec:
+            recs.append(rec)
+        elif why and name not in REPORTED:
+            REPORTED.add(name)
+            print(f"chrome-bg: ignoring {os.path.join(state_dir(), name)}: not a run record "
+                  f"({why})", file=sys.stderr)
+    return recs
+
+
+def remove_record(rid):
+    with contextlib.suppress(FileNotFoundError):
+        os.remove(record_path(rid))
+
+
+def new_id():
+    while True:
+        rid = secrets.token_hex(4)
+        if not os.path.exists(record_path(rid)):
+            return rid
+
+
+def proc_stat(pid):
+    """(state, start time in clock ticks) from /proc/<pid>/stat, or None for no such process."""
+    try:
+        with open(f"/proc/{int(pid)}/stat") as f:
+            data = f.read()
+    except (OSError, ValueError):
+        return None
+    rest = data[data.rindex(")") + 2:].split()
+    return rest[0], rest[19]
+
+
+def owner_dead(rec):
+    """Provably dead: no such pid, a zombie, or the pid now names a process that started at
+    another time (reused). A record with no owner pid proves nothing."""
+    owner = rec.get("owner") if isinstance(rec.get("owner"), dict) else {}
+    pid = owner.get("pid")
+    if not isinstance(pid, int) or pid <= 0:
+        return False
+    st = proc_stat(pid)
+    if st is None or st[0] in ("Z", "X"):
+        return True
+    return owner.get("start") is not None and st[1] != owner.get("start")
+
+
+def cmdline(pid):
+    try:
+        with open(f"/proc/{int(pid)}/cmdline", "rb") as f:
+            return [a.decode(errors="replace") for a in f.read().split(b"\0") if a]
+    except (OSError, ValueError):
+        return []
+
+
+def runs_this_script(pid):
+    """Whether /proc/<pid>/cmdline is a python running this chrome-bg: argv[0] is a python and
+    some later argument resolves (against that process's cwd) to this script's real path."""
+    argv = cmdline(pid)
+    try:
+        cwd = os.readlink(f"/proc/{int(pid)}/cwd")
+    except (OSError, ValueError):
+        return False
+    if not argv or not re.fullmatch(r"python[0-9.]*", os.path.basename(argv[0])):
+        return False
+    return any(os.path.realpath(os.path.join(cwd, a)) == SELF for a in argv[1:])
+
+
+def child_pids(pid):
+    """pid's child processes: /proc/<pid>/task/*/children, or else a scan of /proc/*/stat."""
+    kids = set()
+    try:
+        for tid in os.listdir(f"/proc/{pid}/task"):
+            with open(f"/proc/{pid}/task/{tid}/children") as f:
+                kids.update(int(k) for k in f.read().split())
+        return kids
+    except (OSError, ValueError):
+        kids.clear()
+    for name in os.listdir("/proc"):
+        if name.isdigit():
+            try:
+                with open(f"/proc/{name}/stat") as f:
+                    data = f.read()
+                if int(data[data.rindex(")") + 2:].split()[1]) == pid:
+                    kids.add(int(name))
+            except (OSError, ValueError):
+                continue
+    return kids
+
+
+def holds_run(pid, rid):
+    """Whether pid has a child whose argv holds `-Id <rid>`: this run's supervisor (its WSL
+    relay stays the owner's child, start_new_session or not)."""
+    for kid in child_pids(pid):
+        argv = cmdline(kid)
+        if any(a == "-Id" and b == rid for a, b in zip(argv, argv[1:])):
+            return True
+    return False
+
+
+def owner_proven(rec):
+    """The owner is alive, is the very process that wrote the record (same start time), is a
+    chrome-bg, and holds this run's supervisor: only then may it be signalled. A forged record
+    naming some other run's owner proves the first three, not the last."""
+    owner = rec.get("owner") if isinstance(rec.get("owner"), dict) else {}
+    pid = owner.get("pid")
+    if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 1:
+        return False
+    st = proc_stat(pid)
+    return (bool(st) and st[0] not in ("Z", "X") and owner.get("start") == st[1]
+            and runs_this_script(pid) and holds_run(pid, rec["id"]))
+
+
+# ---- the supervisor -------------------------------------------------------------------------
+
+class Supervisor:
+    """One chrome-bg.ps1 per run. Its stdout carries replies only (a write after the owner died
+    killed a probe supervisor and left Chrome running), so every op reads exactly one line."""
+
+    def __init__(self, rid):
+        self.rid = rid
+        os.makedirs(state_dir(), mode=0o700, exist_ok=True)
+        self.err_path = os.path.join(state_dir(), rid + ".err")
+        self.buf = b""
+        argv = ps_argv("-Id", rid, "-Keep")
+        # restore_signals=False: the WSL relay inherits Python's ignored SIGPIPE. Measured by the
+        # lane (2026-10-15, real supervisor): an owner SIGKILLed with a `procs` reply in flight
+        # left the relay dead of SIGPIPE under the default, so no EOF cleanup ran and the run dir
+        # stayed; with SIGPIPE ignored the relay survived and EOF cleanup ran.
+        # start_new_session=True: a terminal's ctrl-c or a process-group kill never reaches the
+        # supervisor; only its stdin's EOF ends it.
+        # preexec_fn: it starts with the stop signals unblocked, like every child.
+        with open(self.err_path, "ab") as err:
+            self.p = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                      stderr=err, restore_signals=False, start_new_session=True,
+                                      preexec_fn=unblock_held)
+
+    def err_tail(self):
+        try:
+            with open(self.err_path, errors="replace") as f:
+                text = f.read()[-400:].strip()
+        except OSError:
+            return ""
+        return f" (its stderr: {text})" if text else ""
+
+    def call(self, op, timeout=20, **fields):
+        try:
+            self.p.stdin.write((json.dumps({"op": op, **fields}) + "\n").encode())
+            self.p.stdin.flush()
+        except (OSError, ValueError):
+            raise Fail(f"chrome-bg: the supervisor exited before {op}{self.err_tail()}") from None
+        deadline = time.monotonic() + timeout
+        line = ""
+        while not line:
+            while b"\n" not in self.buf:
+                left = deadline - time.monotonic()
+                if left <= 0:
+                    raise Fail(f"chrome-bg: no reply from the supervisor to {op} in {timeout:g}s")
+                take_signal()
+                if select.select([self.p.stdout], [], [], min(left, POLL_S))[0]:
+                    chunk = os.read(self.p.stdout.fileno(), 65536)
+                    if not chunk:
+                        raise Fail(f"chrome-bg: the supervisor exited during {op}{self.err_tail()}")
+                    self.buf += chunk
+            raw, self.buf = self.buf.split(b"\n", 1)
+            line = raw.decode("utf-8", "replace").strip().lstrip(BOM)
+        try:
+            reply = json.loads(line)
+        except ValueError:
+            raise Fail(f"chrome-bg: the supervisor answered {op} with {line[:200]!r}") from None
+        if not isinstance(reply, dict) or reply.get("ok") is not True:
+            raise Fail(f"chrome-bg: the supervisor's {op} failed: {failure(reply)}")
+        return reply
+
+    def close(self, timeout=20):
+        """Close its stdin: it kills this run's chrome.exe, deletes the run dir and exits.
+        Returns its exit code, or None while it still runs."""
+        with contextlib.suppress(OSError, ValueError):
+            self.p.stdin.close()
+        try:
+            code = self.p.wait(timeout)
+        except subprocess.TimeoutExpired:
+            return None
+        self.p.stdout.close()
+        with contextlib.suppress(OSError):
+            if os.path.getsize(self.err_path) == 0:
+                os.remove(self.err_path)
+        return code
+
+
+def one_shot(*args, timeout=60):
+    """chrome-bg.ps1 -Kill -Id <id> or -Scan: one JSON line, then it exits."""
+    try:
+        r = subprocess.run(ps_argv(*args), stdin=subprocess.DEVNULL, capture_output=True,
+                           timeout=timeout, preexec_fn=unblock_held,
+                           start_new_session=True)  # a ctrl-c or group kill can't cut a -Kill short
+    except subprocess.TimeoutExpired:
+        raise Fail(f"chrome-bg: chrome-bg.ps1 {' '.join(args)} timed out after {timeout}s") from None
+    lines = [ln.strip().lstrip(BOM)
+             for ln in r.stdout.decode("utf-8", "replace").splitlines() if ln.strip()]
+    reply = None
+    if lines:
+        with contextlib.suppress(ValueError):
+            reply = json.loads(lines[-1])
+    if not isinstance(reply, dict) or reply.get("ok") is not True:
+        why = (failure(reply) if reply is not None else
+               r.stderr.decode("utf-8", "replace").strip()[-300:] or f"exit {r.returncode}")
+        raise Fail(f"chrome-bg: chrome-bg.ps1 {' '.join(args)} failed: {why}")
+    return reply
+
+
+def kill_run(rid):
+    """Kill a run's chrome.exe by its dir and delete the dir, in a fresh one-shot: a WMI-launched
+    Chrome is not the supervisor's child, so a dead supervisor leaves it running."""
+    if not ID_RE.fullmatch(str(rid)):
+        raise Fail(f"chrome-bg: {rid!r} is not a run id")
+    return parse_kill(one_shot("-Kill", "-Id", rid))
+
+
+# ---- start and stop -------------------------------------------------------------------------
+
+class Run:
+    def __init__(self, rec):
+        self.rec = rec
+        self.sup = None
+        self.cdp = None
+        self.hello = {}
+        self.target = None
+        self.window = None
+
+    @property
+    def url(self):
+        return self.rec["browserURL"]
+
+
+def wait_port(path, sup, timeout=PORT_WAIT_S):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            with open(path, errors="replace") as f:
+                got = parse_port_file(f.read())
+        except OSError:
+            got = None
+        if got:
+            return got
+        if sup.p.poll() is not None:
+            raise Fail(f"chrome-bg: the supervisor exited before Chrome wrote its port{sup.err_tail()}")
+        take_signal(POLL_S)
+    raise Fail(f"chrome-bg: Chrome wrote no DevToolsActivePort in {timeout}s")
+
+
+def place_args(hello, size):
+    """The supervisor's `place`: the primary monitor's work area at (+10, +10), sized in physical
+    pixels by that monitor's DPI."""
+    w, h = size
+    work, scale = hello["primary"]["work"], hello["primary"]["dpi"] / 96
+    return {"x": work[0] + 10, "y": work[1] + 10, "w": round(w * scale), "h": round(h * scale)}
+
+
+def start_run(rid, url, size, kind, ttl=None, cwd=None, marks=False, on_hello=None,
+              keep_cdp=False):
+    """The start sequence (the module docstring's "Start:"). On any failure, or a signal, it ends
+    the run it began before raising."""
+    w, h = size
+    now = time.time()
+    st = proc_stat(os.getpid())
+    rec = {"id": rid, "kind": kind, "owner": {"pid": os.getpid(), "start": st[1] if st else None},
+           "cwd": cwd or os.getcwd(), "created": now, "expires": now + ttl if ttl else None,
+           "url": url, "size": [w, h], "port": None, "browserURL": None, "wsPath": None,
+           "pid": None, "runDir": None, "log": None}
+    # Written before the supervisor exists, so gc never takes this run's young dir for an orphan.
+    write_record(rec)
+    run = Run(rec)
+    try:
+        run.sup = Supervisor(rid)
+        hello = run.hello = parse_hello(run.sup.call("hello", timeout=60))
+        if on_hello:
+            on_hello(hello)
+        run_dir = hello["runDir"]
+        if not holds_tag(run_dir, rid):
+            raise Fail(f"chrome-bg: the supervisor's run dir {run_dir!r} does not end in "
+                       f"\\chrome-bg\\{rid}")
+        rec["runDir"] = run_dir
+        rec["log"] = win_join(win_parent(run_dir), rid + ".log")
+        write_record(rec)
+        x = offscreen_x(hello["screen"][0], w)
+        profile = win_join(run_dir, "profile")
+        launched = run.sup.call("launch", args=" ".join(chrome_args(profile)), timeout=60)
+        rec["pid"] = need(launched, "pid", "int", "launch")
+        port, path = wait_port(wslpath("-u", win_join(profile, "DevToolsActivePort")), run.sup)
+        ws_url = browser_ws(port, path)
+        rec.update(port=port, wsPath=path, browserURL=f"http://127.0.0.1:{port}")
+        write_record(rec)
+        run.cdp = cdp = CDP(ws_url)
+        if marks:
+            run.sup.call("mark", text="begin page0")
+        run.target = cdp.send("Target.createTarget", {
+            "url": url, "newWindow": True, "background": True, "left": x, "top": 10,
+            "width": w, "height": h})["targetId"]
+        win = cdp.send("Browser.getWindowForTarget", {"targetId": run.target})
+        run.window = win.get("windowId")
+        left = (win.get("bounds") or {}).get("left")
+        if left != x:
+            rec["clamped"] = {"asked": x, "got": left}
+            print(f"chrome-bg: Chrome put the first window at left={left}, not {x}: clamped onto "
+                  "a monitor (the supervisor sinks it at create)", file=sys.stderr)
+        if not parse_place(run.sup.call("place", **place_args(hello, size))):
+            # Nothing tagged: every later reading would say tagged=0 about a run it can't see.
+            raise Fail("chrome-bg: the supervisor found no run window to place (it tagged none "
+                       "of Chrome's windows), so it could neither sink nor watch them")
+        got =cdp.send("Browser.getWindowForTarget", {"targetId": run.target}).get("bounds") or {}
+        if (got.get("width"), got.get("height")) != (w, h):
+            # A DPI change on the way resized it. Size only: a window state could raise it.
+            cdp.send("Browser.setWindowBounds",
+                     {"windowId": run.window, "bounds": {"width": w, "height": h}})
+            rec["resized"] = [got.get("width"), got.get("height")]
+        if marks:
+            run.sup.call("mark", text="end page0")
+        write_record(rec)
+        if not keep_cdp:
+            cdp.close()
+            run.cdp = None
+        return run
+    except BaseException:
+        finish(run)
+        raise
+
+
+def run_devtools(rid, root):
+    """(port, browser ws path) from the run's own DevToolsActivePort under the -Scan root, or
+    None. Never from its record: records are untrusted."""
+    try:
+        with open(wslpath("-u", win_join(root, rid, "profile", "DevToolsActivePort")),
+                  errors="replace") as f:
+            return parse_port_file(f.read())
+    except (Fail, OSError):
+        return None
+
+
+def close_browser(port, path):
+    """Browser.close on the browser at port, verified by its ws path. Gone counts as done (a
+    fixture's own browser.close() may have closed it); a port that answers as another browser,
+    or as something that is not HTTP at all, is left alone."""
+    try:
+        cdp = CDP(browser_ws(port, path), timeout=5)
+    except (Fail, OSError, ValueError, http.client.HTTPException):
+        return "gone"
+    try:
+        cdp.send("Browser.close", timeout=5)
+        return "closed"
+    except OSError:
+        return "closed"
+    except (Fail, ValueError, http.client.HTTPException):
+        return "timeout"
+    finally:
+        cdp.close()
+
+
+def finish(run):
+    """End a run this process owns, a cleanup no stop signal interrupts: Browser.close, then
+    close the supervisor's stdin (it kills what is left by run dir, deletes the dir and exits 0).
+    A supervisor that had already exited, exits non-zero (3: its cleanup was incomplete; any
+    other code: it crashed) or hangs is not trusted, so a one-shot -Kill ends the run by its dir.
+    The record goes once the run is known to be over; otherwise it stays for gc. No step can
+    raise past the kill and the record's removal: each is fenced, and its notes (warn) can't
+    fail on a hung-up terminal or a closed pipe."""
+    with cleaning():
+        rid = run.rec["id"]
+        with contextlib.suppress(Exception):
+            if run.cdp is not None:
+                with contextlib.suppress(Fail, OSError, ValueError, http.client.HTTPException):
+                    run.cdp.send("Browser.close", timeout=5)
+                run.cdp.close()
+            elif run.rec.get("port") and run.rec.get("wsPath"):
+                # This process read these from the run's own DevToolsActivePort.
+                close_browser(run.rec["port"], run.rec["wsPath"])
+        run.cdp = None
+        over = True
+        if run.sup is not None:
+            early, code = True, None  # until shown otherwise, the supervisor is not trusted
+            try:
+                early = run.sup.p.poll() is not None
+                code = run.sup.close(timeout=20)
+                if code is None:
+                    run.sup.p.kill()
+                    run.sup.p.wait(5)
+            except Exception:
+                pass
+            if early or code != 0:
+                why = ("had already exited" if early else "did not exit" if code is None
+                       else f"exited {code}")
+                try:
+                    kill_run(rid)
+                    warn(f"chrome-bg: the supervisor of {rid} {why}; killed the run by its dir")
+                except Exception as e:
+                    warn(f"chrome-bg: the supervisor of {rid} {why}, and the kill by its dir "
+                         f"failed ({e}); the record stays for chrome-bg stop --gc")
+                    over = False
+        if over:
+            try:
+                remove_record(rid)
+            except OSError as e:
+                warn(f"chrome-bg: could not remove the record of {rid}: {e}")
+
+
+def warn(text):
+    """A note on stderr that can't fail a cleanup (EIO after a hangup, EPIPE on a closed pipe)."""
+    with contextlib.suppress(OSError, ValueError):
+        print(text, file=sys.stderr, flush=True)
+
+
+def stop_record(rec, root):
+    """Stop a run some other process owns. A live owner that is provably this run's chrome-bg
+    gets Browser.close, then SIGTERM, and cleans up itself. Otherwise (the owner is dead, is not
+    provably this run's, or outlasts STOP_WAIT_S) a one-shot -Kill ends the run by its dir.
+    Returns how it ended."""
+    rid = rec["id"]
+    how = "killed by its dir"
+    if not owner_dead(rec):
+        got = run_devtools(rid, root)
+        if got:
+            close_browser(*got)
+        pid = rec["owner"]["pid"]
+        if owner_proven(rec):
+            with contextlib.suppress(OSError):
+                os.kill(pid, signal.SIGTERM)
+            deadline = time.monotonic() + STOP_WAIT_S
+            while not owner_dead(rec) and time.monotonic() < deadline:
+                take_signal(2 * POLL_S)
+            if owner_dead(rec) and load_record(rid) is None:
+                return "stopped by its owner"
+            if not owner_dead(rec):
+                how += f" (its owner {pid} was still there after {STOP_WAIT_S:g}s)"
+        else:
+            how += (f" (its owner {pid} is not provably this run's chrome-bg, so it was not "
+                    "signalled)")
+    kill_run(rid)
+    remove_record(rid)
+    return how
+
+
+def resolve(target):
+    """A run record by id, or by browserURL: the record whose run's own DevToolsActivePort names
+    that port and the browser path the port serves now. Never a bare port: chrome-debug.ps1
+    serves 9222, maybe with Hayden's real profile."""
+    t = target.strip()
+    if ID_RE.fullmatch(t):
+        rec, why = read_record(t)
+        if rec is None:
+            raise Fail(f"chrome-bg: no run {t}: " + (f"its record is malformed ({why})" if why
+                                                     else "chrome-bg ls lists the runs"))
+        return rec
+    try:
+        u = urlparse(t)
+        port = u.port
+    except ValueError:
+        u, port = None, None
+    if u and u.scheme in ("http", "ws") and u.hostname in ("127.0.0.1", "localhost") and port:
+        try:
+            live = urlparse(str(json_version(port).get("webSocketDebuggerUrl") or "")).path
+        except (Fail, OSError):
+            live = None
+        if live:
+            root = scan_runs()[2]
+            for rec in read_records():
+                if run_devtools(rec["id"], root) == (port, live):
+                    return rec
+        raise Fail(f"chrome-bg: no run serves {t}; stop acts only on a run's record, never on a "
+                   "bare port")
+    raise Fail(f"chrome-bg: stop takes a run id (8 hex) or its browserURL, not {t!r}: a bare "
+               "port could be another Chrome (chrome-debug.ps1 serves 9222)")
+
+
+def in_tty_foreground():
+    """Whether this process is in its terminal's foreground process group. False with no
+    terminal."""
+    try:
+        fd = os.open("/dev/tty", os.O_RDONLY | os.O_NOCTTY)
+    except OSError:
+        return False
+    try:
+        return os.tcgetpgrp(fd) == os.getpgrp()
+    except OSError:
+        return False
+    finally:
+        os.close(fd)
+
+
+def cmd_run(args):
+    cmd = args.cmd[1:] if args.cmd[:1] == ["--"] else args.cmd
+    if not cmd:
+        raise Fail("chrome-bg: run wants a command: chrome-bg run [options] -- CMD...")
+    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", args.env):
+        raise Fail(f"chrome-bg: --env wants a variable name, not {args.env!r}")
+    gc_first()
+    run = None
+    try:
+        # A stop signal before CMD exists raises Stopped from a wait inside start_run, which
+        # ends what it began; main() turns it into 128+n.
+        run = start_run(new_id(), args.url, args.size, "run")
+        try:
+            child = subprocess.Popen(cmd, env=dict(os.environ, **{args.env: run.url}),
+                                     preexec_fn=unblock_held)
+        except OSError as e:
+            print(f"chrome-bg: can't run {cmd[0]}: {e}", file=sys.stderr)
+            return 127
+        return wait_forwarding(child)
+    finally:
+        if run is not None:
+            finish(run)
+
+
+def wait_forwarding(child):
+    """Wait for CMD, passing it the stop signals that reach run: SIGTERM and SIGHUP always,
+    SIGINT only when no terminal sent it to CMD already (a terminal's ctrl-c goes to its whole
+    foreground process group, CMD included). CMD's exit code, or 128+n for a signal."""
+    while True:
+        rc = child.poll()
+        if rc is not None:
+            return 128 - rc if rc < 0 else rc
+        info = signal.sigtimedwait(HELD, POLL_S)
+        if info is None or (info.si_signo == signal.SIGINT and in_tty_foreground()):
+            continue
+        with contextlib.suppress(OSError):
+            os.kill(child.pid, info.si_signo)
+
+
+def holder(rid, args, ttl, cwd, ready):
+    """The detached owner of a `start` run: holds the supervisor until stop (SIGTERM), the TTL,
+    Chrome's exit (a fixture's own browser.close(): `procs` every PROCS_POLL_S comes back empty),
+    its last page closing (you closed the window: --no-startup-window keeps a windowless Chrome
+    running, so two /json/list reads PAGES_GONE_S apart found no page) or the supervisor's exit,
+    then ends the run. Reports ready or failed on the `ready` pipe.
+    It keeps the cwd it was started in, so a relative argv still proves it is chrome-bg. Forked
+    from main(), it keeps the stop signals blocked and polls for them like any other wait."""
+    fd = os.open(holder_log(rid), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+    null = os.open(os.devnull, os.O_RDONLY)
+    os.dup2(null, 0)
+    os.dup2(fd, 1)
+    os.dup2(fd, 2)
+    os.close(null)
+    os.close(fd)
+
+    def tell(obj):
+        nonlocal ready
+        if ready is not None:
+            with contextlib.suppress(OSError):
+                os.write(ready, json.dumps(obj).encode())
+            os.close(ready)
+            ready = None
+
+    def say(text):
+        print(f"{time.strftime('%Y-%m-%dT%H:%M:%S')} {rid} {text}", flush=True)
+
+    run, code = None, 0
+    try:
+        run = start_run(rid, args.url, args.size, "start", ttl=ttl, cwd=cwd)
+        tell({"ok": True, "id": rid, "url": run.url, "port": run.rec["port"],
+              "pid": run.rec["pid"]})
+        say(f"ready at {run.url}")
+        why, next_poll, failed = "TTL reached", time.monotonic() + PROCS_POLL_S, 0
+        empty_since = None  # when the first of an unbroken run of reads finding no page ended
+        while time.time() < run.rec["expires"]:
+            if run.sup.p.poll() is not None:
+                why = "the supervisor exited"  # finish() then kills the run by its dir
+                break
+            started = time.monotonic()
+            if started >= next_poll:
+                # The page read goes first, and the next poll is due PROCS_POLL_S after it ends,
+                # so each read starts at least that long after the last one ended, however long
+                # procs or the reads take. This process read the port and path from the run's
+                # own DevToolsActivePort.
+                try:
+                    pages, unread = page_count(run.rec["port"], run.rec["wsPath"]), None
+                except Fail as e:
+                    pages, unread = None, e
+                read = time.monotonic()
+                next_poll = read + PROCS_POLL_S
+                try:
+                    procs = parse_procs(run.sup.call("procs"))
+                    if procs and unread:
+                        raise unread  # Chrome is there, so the failed read is a failed poll
+                except Fail as e:
+                    failed += 1
+                    empty_since = None  # a failed poll breaks the run of empty ones
+                    say(f"poll failed ({failed} in a row): {e}")
+                    if failed >= PROCS_FAILURES:
+                        why = f"polls failed {failed} times in a row"
+                        break
+                else:
+                    failed = 0
+                    if not procs:  # only an ok:true empty list means Chrome is gone
+                        why = "Chrome is gone"
+                        break
+                    if pages:
+                        empty_since = None
+                    elif empty_since is None:
+                        empty_since = read
+                    elif started - empty_since >= PAGES_GONE_S:  # no page all that time
+                        why = "its last page closed"
+                        break
+            take_signal(min(0.5, PROCS_POLL_S, max(0.05, run.rec["expires"] - time.time())))
+        say(why)
+    except Stopped as e:
+        say(f"signal {e.signum}")
+        tell({"ok": False, "error": f"chrome-bg: start stopped by signal {e.signum}"})
+    except Fail as e:
+        say(str(e))
+        tell({"ok": False, "error": str(e)})
+        code = 1
+    except BaseException as e:
+        say(f"crashed: {e!r}")
+        tell({"ok": False, "error": f"chrome-bg: the holder crashed: {e!r} (see {holder_log(rid)})"})
+        code = 1
+    finally:
+        if run is not None:
+            finish(run)
+            say("stopped")
+    return code
+
+
+def read_pipe(fd, timeout):
+    """Read fd to EOF, for up to timeout s: (data, whether EOF came)."""
+    data, deadline = b"", time.monotonic() + timeout
+    while True:
+        left = deadline - time.monotonic()
+        if left <= 0:
+            return data, False
+        take_signal()
+        if not select.select([fd], [], [], min(left, POLL_S))[0]:
+            continue
+        chunk = os.read(fd, 65536)
+        if not chunk:
+            return data, True
+        data += chunk
+
+
+def cmd_start(args):
+    ttl = parse_duration(args.ttl)
+    gc_first()
+    rid = new_id()
+    cwd = os.getcwd()
+    os.makedirs(state_dir(), mode=0o700, exist_ok=True)
+    r, w = os.pipe()
+    sys.stdout.flush()
+    sys.stderr.flush()
+    pid = os.fork()
+    if pid == 0:
+        code = 1
+        try:
+            os.close(r)
+            os.setsid()
+            # SIGTERM is the holder's stop channel (stop sends it, and so does an interrupted
+            # start below), so the holder holds it whatever chrome-bg inherited: an inherited
+            # ignore would leave the run alive until its TTL. Set before the fork, so it is in
+            # place before this process exits and the waitpid below returns.
+            HELD.add(signal.SIGTERM)
+            signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGTERM})
+            signal.signal(signal.SIGTERM, signal.SIG_DFL)
+            code = 0 if os.fork() else holder(rid, args, ttl, cwd, w)
+        finally:
+            os._exit(code)
+    os.close(w)
+    os.waitpid(pid, 0)
+    try:
+        data, done = read_pipe(r, timeout=150)
+    except Stopped as e:
+        # Interrupted while the holder starts: stop it, and wait (uninterrupted) for it to end.
+        # The intermediate child's setsid made its pid the holder's process group (the
+        # supervisor has a session of its own); the holder closes the pipe when it exits.
+        with cleaning():
+            with contextlib.suppress(OSError):
+                os.killpg(pid, signal.SIGTERM)
+            read_pipe(r, timeout=STOP_WAIT_S)
+        print(f"chrome-bg: start interrupted by signal {e.signum}; run {rid} was stopped",
+              file=sys.stderr)
+        return 128 + e.signum
+    finally:
+        os.close(r)
+    try:
+        res = json.loads(data)
+    except ValueError:
+        res = None
+    if not isinstance(res, dict) or res.get("ok") is not True:
+        why = (res.get("error") if isinstance(res, dict) else None) or (
+            f"chrome-bg: the holder gave no word in 150s; chrome-bg ls shows run {rid}, "
+            f"chrome-bg stop {rid} ends it" if not done else
+            f"chrome-bg: the holder exited without a word (see {holder_log(rid)})")
+        print(why, file=sys.stderr)
+        return 1
+    if args.json:
+        print(json.dumps({k: res.get(k) for k in ("id", "url", "port", "pid")}))
+    else:
+        print(res["url"])
+    return 0
+
+
+# ---- gc and ls ------------------------------------------------------------------------------
+
+def scan_runs():
+    """chrome-bg.ps1 -Scan, parsed (parse_scan)."""
+    return parse_scan(one_shot("-Scan"))
+
+
+def expired(rec):
+    exp = rec.get("expires")
+    return isinstance(exp, (int, float)) and time.time() >= exp
+
+
+def prune_logs(logs, root):
+    """Logs older than LOG_DAYS: the supervisors' <id>.log that -Scan lists under the Windows
+    root, and the holders' and supervisors' stderr here. A live run's are kept."""
+    live = {r["id"] for r in read_records()}
+    for rid, age in sorted(logs.items()):
+        if age > LOG_DAYS * 86400 and rid not in live:
+            with contextlib.suppress(Fail, OSError):
+                os.remove(wslpath("-u", win_join(root, rid + ".log")))
+    cutoff = time.time() - LOG_DAYS * 86400
+    try:
+        names = os.listdir(state_dir())
+    except OSError:
+        return
+    for name in names:
+        m = re.fullmatch(r"([0-9a-f]{8})\.(?:holder\.log|err)", name)
+        if not m or m.group(1) in live:
+            continue
+        p = os.path.join(state_dir(), name)
+        with contextlib.suppress(OSError):
+            if os.path.isfile(p) and os.path.getmtime(p) < cutoff:
+                os.remove(p)
+
+
+def gc():
+    """Stop runs whose owner is provably dead or whose TTL ran out; kill run dirs no record
+    claims once they are YOUNG_S old (a younger one may be a run still launching); prune old
+    logs. Returns one line per action."""
+    done = []
+    runs, logs, root = scan_runs()
+    # Records after the scan: a run writes its record before its supervisor starts, so every dir
+    # in the scan already has its record, if it has one.
+    recs = read_records()
+    for rec in recs:
+        try:  # no one record may stop gc, whatever is wrong with it
+            why = ("its owner is gone" if owner_dead(rec) else "its TTL ran out" if expired(rec)
+                   else None)
+            if why:
+                done.append(f"stopped {rec['id']}: {why}; {stop_record(rec, root)}")
+        except Exception as e:
+            done.append(f"could not stop {rec['id']}: {e if isinstance(e, Fail) else repr(e)}")
+    known = {r["id"] for r in recs}
+    for rid, info in sorted(runs.items()):
+        if rid in known:
+            continue
+        if info["age"] is None:
+            if info["pids"]:
+                done.append(f"left {rid} alone: chrome.exe with no run dir, so no age to judge")
+            continue
+        if info["age"] < YOUNG_S:
+            continue
+        try:
+            kill_run(rid)
+            done.append(f"killed {rid}: a run dir with no record, {fmt_age(info['age'])} old")
+        except Exception as e:
+            done.append(f"could not kill {rid}: {e if isinstance(e, Fail) else repr(e)}")
+    prune_logs(logs, root)
+    return done
+
+
+def gc_first():
+    """gc before a start, run or check; a failure there is reported, not fatal."""
+    try:
+        lines = gc()
+    except Exception as e:
+        lines = [f"skipped: {e if isinstance(e, Fail) else repr(e)}"]
+    for line in lines:
+        warn(f"chrome-bg gc: {line}")
+
+
+def fmt_age(s):
+    if s is None:
+        return "-"
+    if s < 120:
+        return f"{int(s)}s"
+    if s < 7200:
+        return f"{int(s // 60)}m"
+    if s < 172800:
+        return f"{s / 3600:.1f}h"
+    return f"{int(s // 86400)}d"
+
+
+def fmt_pids(pids):
+    if not pids:
+        return "-"
+    return ",".join(map(str, pids[:4])) + (f",+{len(pids) - 4}" if len(pids) > 4 else "")
+
+
+def cmd_ls(args):
+    runs = scan_runs()[0]
+    now = time.time()
+    rows = []
+    for rec in read_records():
+        info = runs.pop(rec["id"], {"age": None, "pids": []})
+        owner = rec.get("owner") if isinstance(rec.get("owner"), dict) else {}
+        alive = "alive" if owner_proven(rec) else "gone" if owner_dead(rec) else "?"
+        created = rec.get("created") if isinstance(rec.get("created"), (int, float)) else None
+        rows.append([rec["id"], str(rec.get("port") or "-"), fmt_pids(info["pids"]),
+                     f"{owner.get('pid')} {alive} ({rec.get('kind')})",
+                     fmt_age(now - created if created else None), str(rec.get("cwd") or "-")])
+    for rid, info in sorted(runs.items()):
+        rows.append([rid, "-", fmt_pids(info["pids"]), "no record", fmt_age(info["age"]), "-"])
+    if not rows:
+        print("chrome-bg: no runs")
+        return 0
+    head = ["ID", "PORT", "PIDS", "OWNER", "AGE", "CWD"]
+    widths = [max(len(r[i]) for r in [head, *rows]) for i in range(5)]
+    for r in [head, *rows]:
+        print("  ".join(c.ljust(w) for c, w in zip(r, widths)) + "  " + r[5])
+    return 0
+
+
+# ---- check ----------------------------------------------------------------------------------
+
+AFTER_STOP_S = 5  # the supervisor keeps logging the foreground this long after Chrome exits
+SETTLE_S = 1.5    # after each action, for its window events to land in the log
+RESINK_S = 0.5    # after each re-place
+KEEP_TOLERANCE_MS = 50  # A3, 3 of 3 live runs: bringToFront then newPage lifted it ~12 ms
+LOADED_URL = "data:text/html,<title>chrome-bg check</title>page0"
+LOADED_JS = "location.protocol + ' ' + document.readyState"  # page0 loaded LOADED_URL: 'data: complete'
+LOADED_WAIT_S = 10
+RAF_JS = ("new Promise((r) => { let n = 0; const t = performance.now();"
+          " const f = () => { n++; if (performance.now() - t < 1000) requestAnimationFrame(f);"
+          " else r(document.visibilityState + ' ' + n); };"
+          " requestAnimationFrame(f);"
+          " setTimeout(() => r(document.visibilityState + ' ' + n + ' timeout'), 3000); })")
+
+
+class Inconclusive(Fail):
+    pass
+
+
+def fg_visible(fg):
+    """A parsed foreground (parse_fg): a visible window, not minimized or cloaked."""
+    return fg["visible"] and not fg["iconic"] and not fg["cloaked"]
+
+
+def fg_line_visible(text):
+    """A FOREGROUND log line names a visible window, not minimized or cloaked."""
+    def num(key):
+        m = re.search(rf"\b{key}=(-?\d+)", text)
+        return int(m.group(1)) if m else None
+    return num("vis") == 1 and not num("iconic") and not num("cloaked")
+
+
+def tracking_problems(lines):
+    """Why the log can't show that the supervisor tracked the browser until stop, or []. The
+    browser pid is LAUNCHED's; it needs a TAG with a real creation time, and no STALE (the pid
+    now names another process) or UNTAG before MARK begin stop. Without that, every tagged=0
+    reading is about windows the supervisor couldn't tell were the run's."""
+    events, pid, stop_at = [], None, None
+    for i, line in enumerate(lines):
+        m = re.match(r"t=(\d+) (.*)", line.rstrip("\r\n"))
+        if not m:
+            continue
+        t, rest = int(m.group(1)), m.group(2)
+        if stop_at is None and re.match(r"MARK begin stop\b", rest):
+            stop_at = i
+        launched = re.match(r"LAUNCHED pid=(\d+)", rest)
+        if launched and pid is None:
+            pid = launched.group(1)
+        ev = re.match(r"(TAG|STALE|UNTAG) pid=(\d+)(.*)", rest)
+        if ev:
+            events.append((i, t, ev.group(1), ev.group(2), ev.group(3)))
+    if pid is None:
+        return ["the log has no LAUNCHED pid=N line, so the browser's tracking can't be shown"]
+    problems, tagged = [], False
+    for i, t, kind, p, tail in events:
+        if p != pid:
+            continue
+        if kind == "TAG":
+            created = re.search(r"created=(\S+)", tail)
+            tagged = tagged or bool(created and not re.fullmatch(r"0+", created.group(1)))
+        elif stop_at is None or i < stop_at:
+            problems.append(f"the browser pid {pid} went {kind} at t={t}, before stop: the "
+                            "supervisor lost track of the run's windows")
+    if not tagged:
+        problems.insert(0, f"the browser pid {pid} was never tagged with a creation time "
+                           f"(TAG pid={pid} created=...)")
+    return problems
+
+
+def judge(lines, raf=None, hz=None, leftover=None, errors=()):
+    """classify.py's per-action timings from a supervisor log, then check's verdict.
+
+    raf is page0's "<visibilityState> <frames in 1 s>" read while covered, hz the primary
+    monitor's refresh rate, leftover what -Scan still found of the run after stop, errors the
+    actions that could not be taken (each fails: an action not taken was not tested).
+    Returns (verdict, [(action, row)], fails, warnings), verdict PASS, FAIL or INCONCLUSIVE.
+
+    Time on top (TOP tagged=1) and a foreground steal (FOREGROUND tagged=1) always fail. Time
+    above other windows is judged one interval at a time: an interval opens at a RANKS line with
+    any aboveOthers>0 and closes at the next RANKS line with none, or at the log's end. One the
+    keeper ended (a KEEP-SINK ok=True logged inside it, or after its close and before the next
+    rising RANKS line) within KEEP_TOLERANCE_MS is tolerated: a NOTE in the warnings, its ms in the row's "kept". Every other interval's ms add to the
+    action's "above" and fail. One tolerated lift per action passes (A3 saw one); a second
+    fails, since KEEP-FIGHT (over 20 sinks in 1 s) alone misses a slower re-raise loop. Any
+    KEEP-FIGHT fails too."""
+    rows, order = {}, []
+    action, after_stop, first_fg, last_t = "launch", False, None, 0
+    since = {"top": None, "fg": None}
+    above = None  # the open above-interval: [start t, action, whether a KEEP-SINK fell in it]
+    fails, fg_fails, warns = [], [], []  # fails are definite; fg_fails need a real first fg
+
+    def row(name):
+        if name not in rows:
+            rows[name] = {"top": 0, "above": 0, "kept": 0, "lifts": 0, "fg": 0, "sunk": 0,
+                          "keep": 0, "fight": 0}
+            order.append(name)
+        return rows[name]
+
+    def close(t, kind):
+        if since[kind] is not None:
+            row(since[kind][1])[kind] += t - since[kind][0]
+            since[kind] = None
+
+    def close_above(t):
+        nonlocal above
+        start, name, kept = above
+        above, ms = None, t - start
+        if kept and ms <= KEEP_TOLERANCE_MS:
+            row(name)["kept"] += ms
+            row(name)["lifts"] += 1
+            warns.append(f"NOTE: {name}: a run window rose above another window, under the "
+                         f"foreground, for {ms} ms until the keeper sank it")
+        else:
+            row(name)["above"] += ms
+
+    def keeper_sank(rest):
+        return rest.startswith("KEEP-SINK ok=True")
+
+    def rising(rest):
+        return rest.startswith("RANKS ") and any(int(x) for x in re.findall(r"aboveOthers=(\d+)", rest))
+
+    parsed = []
+    for line in lines:
+        m = re.match(r"t=(\d+) (.*)", line.rstrip("\r\n"))
+        if m:
+            parsed.append((int(m.group(1)), m.group(2)))
+    for k, (t, rest) in enumerate(parsed):
+        last_t = max(last_t, t)
+        b = re.match(r"MARK begin (?:create )?(\S+)", rest)
+        if b:
+            action = b.group(1)
+            row(action)
+            after_stop = after_stop or action == "stop"
+        elif rest.startswith("TOP "):
+            close(t, "top")
+            if "tagged=1" in rest:
+                since["top"] = (t, action)
+        elif rest.startswith("RANKS "):
+            if rising(rest):
+                if above is None:
+                    above = [t, action, False]
+            elif above is not None:
+                # KeepSink logs its line after SetWindowPos returns, and a Check nested in that
+                # call may log the fall first. A KEEP-SINK after the fall and before the next
+                # rising RANKS line can only be that outer Check's (a later Check that found a
+                # window above would log a rising RANKS line before sinking it), so it ended
+                # this lift too, however many ms, refresh-thread lines or other falls (nested
+                # Checks seeing ranks change below) came between.
+                j = k + 1
+                while not above[2] and j < len(parsed) and not rising(parsed[j][1]):
+                    above[2] = keeper_sank(parsed[j][1])
+                    j += 1
+                close_above(t)
+        elif rest.startswith("FOREGROUND "):
+            close(t, "fg")
+            if first_fg is None and action == "launch":
+                first_fg = rest  # the foreground before any action, as the run began
+            if "tagged=1" in rest:
+                since["fg"] = (t, action)
+                idle = re.search(r"idle=(\d+)", rest)
+                fg_fails.append(f"a run window took the foreground during {action} at t={t}"
+                             + (f" (idle {idle.group(1)} ms)" if idle else ""))
+            elif after_stop:
+                desc = " ".join(re.findall(r"\b(?:pid|cls|vis|cloaked)=\S+", rest))
+                warns.append(f"WARN: after stop the foreground moved to an untagged window at "
+                             f"t={t} ({desc})")
+        elif rest.startswith("SINK-AT-CREATE") and "Chrome_WidgetWin_1" in rest:
+            row(action)["sunk"] += 1
+        elif rest.startswith("KEEP-SINK"):
+            row(action)["keep"] += 1
+            if above is not None and keeper_sank(rest):
+                above[2] = True
+        elif rest.startswith("KEEP-FIGHT"):
+            row(action)["fight"] += 1
+    for kind in since:
+        close(last_t, kind)
+    if above is not None:
+        close_above(last_t)
+    for name in order:
+        r = rows[name]
+        if r["top"]:
+            fails.append(f"{name}: a run window was on top of the screen for {r['top']} ms")
+        if r["above"]:
+            fails.append(f"{name}: a run window sat above another window for {r['above']} ms")
+        if r["lifts"] > 1:
+            fails.append(f"{name}: a run window rose above another window {r['lifts']} times; "
+                         "one lift per action is tolerated, more is a re-raise loop")
+        if r["fight"]:
+            fails.append(f"{name}: the keeper fought a run window (more than 20 sinks in 1 s)")
+    parts = str(raf).split() if raf is not None else []
+    if not parts:
+        fails.append("page0's visibility and frame rate were not read")
+    else:
+        if parts[0] != "visible":
+            fails.append(f"page0 read {parts[0]!r} while covered, not 'visible'")
+        frames = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else None
+        if frames is None:
+            fails.append(f"page0's frame count is unreadable: {raf!r}")
+        elif hz and frames < 0.9 * hz:
+            fails.append(f"page0 drew {frames} frames in 1 s while covered, more than 10% under "
+                         f"the primary monitor's {hz:g} Hz")
+        elif not hz:
+            warns.append("WARN: hello gave no refresh rate, so the frame rate went unjudged")
+    if leftover:
+        fails.append(f"left after stop: {leftover}")
+    fails.extend(errors)
+    fails.extend(tracking_problems(lines))
+    if first_fg is None:
+        warns.append("WARN: the log has no FOREGROUND line before the first action; only "
+                     "hello vouched for the start")
+    # Only a foreground steal needs a real foreground to be judged: with a dead one, Windows may
+    # hand the foreground to Chrome. Time on top, a hidden or slow page, leftovers and a browser
+    # the supervisor lost track of fail anyway, and a FAIL lists every failure, steals included.
+    if fails:
+        verdict = "FAIL"
+        fails = [*fg_fails, *fails]
+    elif first_fg is not None and "tagged=1" not in first_fg and not fg_line_visible(first_fg):
+        verdict = "INCONCLUSIVE"
+        fails = ["the first foreground was not a visible window, so a steal could not be told "
+                 "from Windows handing over a dead foreground", *fg_fails]
+    else:
+        verdict = "FAIL" if fg_fails else "PASS"
+        fails = fg_fails
+    return verdict, [(n, rows[n]) for n in order], fails, warns
+
+
+def print_report(verdict, rows, fails, warns, raf):
+    print(f"{'action':28} {'onTop':>8} {'aboveOthers':>12} {'fg':>8} {'sunk':>5} {'keep':>5}")
+    for name, r in rows:
+        keep = str(r["keep"]) + (f" FIGHT={r['fight']}" if r["fight"] else "")
+        print(f"{name:28} {r['top']:>6}ms {r['above']:>10}ms {r['fg']:>6}ms {r['sunk']:>5} "
+              f"{keep:>5}")
+    if raf is not None:
+        print(f"page0 while covered: {raf}")
+    for w in warns:
+        print(w)
+    for f in fails:
+        print(f"{'NOTE' if verdict == 'INCONCLUSIVE' else 'FAIL'}: {f}")
+    print(verdict)
+
+
+def cmd_check(args):
+    """The live self-test (probe.mjs plus classify.py): every action a fixture may take, each
+    between marks in the supervisor's log, then the log judged (judge()). bringToFront-newPage
+    is a fixture's page.bringToFront() then browser.newPage() from a loaded page: live, the pair
+    lifted the run window under the foreground until the keeper sank it, where each alone did
+    not. An action that can't be taken fails the run. It opens a
+    Chrome window behind yours for about half a minute."""
+    gc_first()
+    rid = new_id()
+
+    def guard(hello):
+        fg = hello["fg"]
+        if not fg_visible(fg):
+            raise Inconclusive("the foreground is not a visible window "
+                               f"(cls={fg['cls']} pid={fg['pid']}), so a steal could not be "
+                               "told apart; put one of your windows in front and rerun")
+
+    try:
+        run = start_run(rid, "about:blank", SIZE, "check", marks=True, on_hello=guard,
+                        keep_cdp=True)
+    except Inconclusive as e:
+        print(f"INCONCLUSIVE: {e}")
+        return 3
+    sup, cdp, raf, hz = run.sup, run.cdp, None, run.hello["primary"]["hz"]
+    errors = []
+    try:
+        session = cdp.send("Target.attachToTarget",
+                           {"targetId": run.target, "flatten": True})["sessionId"]
+
+        def evaluate(expr, **extra):
+            res = cdp.send("Runtime.evaluate", {"expression": expr, "returnByValue": True, **extra},
+                           session=session, timeout=10)
+            return (res.get("result") or {}).get("value")
+
+        def read_raf():
+            nonlocal raf
+            raf = evaluate(RAF_JS, awaitPromise=True)
+            return raf
+
+        def front_then_new_page():
+            # Live (A3 bisect), the pair lifted nothing while page0 sat on about:blank, and lifted
+            # it once page0 had loaded a page of its own, an http or a data: URL alike.
+            nav = cdp.send("Page.navigate", {"url": LOADED_URL}, session=session, timeout=10)
+            if nav.get("errorText"):
+                raise Fail(f"page0 did not load {LOADED_URL!r}: {nav['errorText']}")
+            # Page.navigate answers at the browser's commit, when the renderer may still hold
+            # about:blank (which also reads 'complete'): wait for the data: document itself.
+            deadline, got = time.monotonic() + LOADED_WAIT_S, None
+            while (got := evaluate(LOADED_JS)) != "data: complete":
+                if time.monotonic() >= deadline:
+                    raise Fail(f"page0 never loaded {LOADED_URL!r}; it read {got!r}")
+                take_signal(POLL_S)
+            cdp.send("Page.bringToFront", session=session)
+            return cdp.send("Target.createTarget", {"url": "about:blank"})
+
+        def open_popup():
+            got = evaluate("String(!!window.open('about:blank', '_blank', 'width=500,height=400'))",
+                           userGesture=True)
+            if got != "true":
+                raise Fail(f"window.open returned {got!r}, so no popup opened")
+            return got
+
+        def bounds(state):
+            return lambda: cdp.send("Browser.setWindowBounds", {"windowId": run.window,
+                                                                "bounds": {"windowState": state}})
+
+        # bringToFront-newPage goes first, so page0 is its window's only tab as in A3 (what the
+        # lift needs is the loaded page; the position is A3's, not a proven need). The plain
+        # bringToFront goes after every new page, so page0 is its window's active tab again when
+        # raf-covered reads it.
+        actions = [
+            ("bringToFront-newPage", front_then_new_page),
+            ("newPage-default", lambda: cdp.send("Target.createTarget", {"url": "about:blank"})),
+            ("bringToFront", lambda: cdp.send("Page.bringToFront", session=session)),
+            ("setWindowBounds-maximized", bounds("maximized")),
+            ("setWindowBounds-normal", bounds("normal")),
+            ("window.open", open_popup),
+            ("raf-covered", read_raf),
+        ]
+        for name, act in actions:
+            sup.call("mark", text=f"begin {name}")
+            try:
+                result = act()
+            except (Fail, OSError) as e:
+                result = f"ERROR {e}"
+                errors.append(f"{name}: the action could not be taken ({e}), so it went untested")
+            print(f"chrome-bg check: {name}: {json.dumps(result)[:120]}", file=sys.stderr)
+            take_signal(SETTLE_S)  # a wait a stop signal ends: main() returns 128+n after finish
+            sup.call("mark", text=f"end {name}")
+            parse_place(sup.call("place", **place_args(run.hello, SIZE)))  # restart from the bottom
+            take_signal(RESINK_S)
+        sup.call("mark", text="begin stop")
+        with contextlib.suppress(Fail, OSError):
+            cdp.send("Browser.close", timeout=10)
+        cdp.close()
+        run.cdp = None
+        deadline = time.monotonic() + 15
+        while parse_procs(sup.call("procs")) and time.monotonic() < deadline:
+            take_signal(0.5)
+        take_signal(AFTER_STOP_S)  # W saw a hidden #32770 dialog take the foreground 1.9 s after
+    finally:
+        finish(run)
+    try:
+        left = scan_runs()[0].get(rid)
+    except Fail as e:
+        left = {"error": str(e)}
+    leftover = None
+    if left and "error" in left:
+        leftover = f"unknown, -Scan failed: {left['error']}"
+    elif left and (left["pids"] or left["age"] is not None):
+        leftover = (f"{len(left['pids'])} chrome.exe, run dir "
+                    f"{'still there' if left['age'] is not None else 'gone'}")
+    try:
+        with open(wslpath("-u", run.rec["log"]), encoding="utf-8", errors="replace") as f:
+            lines = f.read().splitlines()
+    except (OSError, Fail) as e:
+        print(f"chrome-bg: can't read the supervisor's log {run.rec['log']}: {e}", file=sys.stderr)
+        return 1
+    verdict, rows, fails, warns = judge(lines, raf=raf, hz=hz, leftover=leftover, errors=errors)
+    print_report(verdict, rows, fails, warns, raf)
+    return {"PASS": 0, "FAIL": 1, "INCONCLUSIVE": 3}[verdict]
+
+
+def cmd_stop(args):
+    if args.gc == bool(args.target):
+        raise Fail("chrome-bg: stop takes a run id or browserURL, or --gc")
+    if args.gc:
+        for line in gc() or ["nothing to collect"]:
+            print(f"chrome-bg gc: {line}")
+        return 0
+    rec = resolve(args.target)
+    how = stop_record(rec, scan_runs()[2])
+    print(f"chrome-bg: stopped {rec['id']}: {how}")
+    return 0
+
+
+# ---- CLI ------------------------------------------------------------------------------------
+
+def build_parser():
+    ap = argparse.ArgumentParser(prog="chrome-bg", description=__doc__.split("\n")[0],
+                                 formatter_class=argparse.RawDescriptionHelpFormatter,
+                                 epilog="\n".join(__doc__.split("\n")[2:]))
+    sub = ap.add_subparsers(dest="cmd", required=True)
+
+    def chrome_opts(p):
+        p.add_argument("--url", default="about:blank", help="the first page (default about:blank)")
+        p.add_argument("--size", type=parse_size, default=SIZE, metavar="WxH",
+                       help="window size in DIPs (default 1280x900)")
+
+    p = sub.add_parser("run", help="start, run CMD with the URL in $NAME, stop when it ends")
+    chrome_opts(p)
+    p.add_argument("--env", default=DEFAULT_ENV, metavar="NAME",
+                   help=f"env var for the browserURL (default {DEFAULT_ENV})")
+    p.add_argument("cmd", nargs=argparse.REMAINDER, metavar="-- CMD...")
+    p.set_defaults(func=lambda a: cmd_run(a))
+    p = sub.add_parser("start", help="start a detached run; print its browserURL")
+    chrome_opts(p)
+    p.add_argument("--ttl", default="2h", help="stop it after this long (default 2h)")
+    p.add_argument("--json", action="store_true", help="print {id, url, port, pid}")
+    p.set_defaults(func=lambda a: cmd_start(a))
+    p = sub.add_parser("stop", help="stop a run by id or browserURL, or --gc")
+    p.add_argument("target", nargs="?", metavar="id|url")
+    p.add_argument("--gc", action="store_true",
+                   help="stop runs whose owner is gone or TTL ran out; kill unrecorded run dirs")
+    p.set_defaults(func=lambda a: cmd_stop(a))
+    p = sub.add_parser("ls", help="list runs: id, port, pids, owner, age, cwd")
+    p.set_defaults(func=lambda a: cmd_ls(a))
+    p = sub.add_parser("check", help="live self-test: opens a window behind yours for ~30 s")
+    p.set_defaults(func=lambda a: cmd_check(a))
+    return ap, sub
+
+
+def main(argv=None):
+    ap, _ = build_parser()
+    args = ap.parse_args(argv)
+    if sandboxed():
+        print(SANDBOX_MSG, file=sys.stderr)
+        return 2
+    # See "stop signals" above. One ignored on entry (nohup) is neither blocked nor touched.
+    HELD.difference_update({s for s in HELD if signal.getsignal(s) is signal.SIG_IGN})
+    mask = signal.pthread_sigmask(signal.SIG_BLOCK, HELD)
+    try:
+        return args.func(args)
+    except Stopped as e:
+        return 128 + e.signum
+    except Fail as e:
+        warn(str(e))
+        return 1
+    except OSError as e:
+        warn(f"chrome-bg: {e}")
+        return 1
+    finally:
+        # Cleanup is done: a stop signal still pending now takes its default effect and ends
+        # the process with 128+n. Dispositions change only while the signals are blocked.
+        handlers = {s: signal.signal(s, signal.SIG_DFL) for s in HELD}
+        signal.pthread_sigmask(signal.SIG_SETMASK, mask)
+        for s, h in handlers.items():
+            signal.signal(s, h)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

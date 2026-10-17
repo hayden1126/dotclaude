@@ -76,33 +76,33 @@ stored here).
     #92, `narrow-excluded` Part 1 #93, the lead's `fix/json-depth` #94, `lane-close` #95,
     `lane-addr` #98, `excluded-guard` #100 (narrow-excluded Part 2 plus G8's fix, 2026-10-14),
     `tab-bar` #96, #97, #99 and #101 (2026-10-14), `turn-glyph` #102 (2026-10-14), `ask-owner`
-    #103 (2026-10-14), `guard-b` #104 (2026-10-14).
-    `gh pr view <n>` and the closed records under `.git/lanes/_closed/` hold the detail.
-  - `tab-bar`: Hayden smoke-tested #101 live on 2026-10-14, all 8 items on desktop and phone
-    ("all works"). Design: the research page
-    https://claude.ai/artifact/E75uhqt2xskxUGQopLwvoA (private), `~/scratch/tab-bar/INVENTORY.md`
-    and [[dotclaude-tab-bar]].
-  - `turn-glyph` #102: the tab goes green when a reply wants Hayden, and stays busy while counted
-    work runs. Tabs opened before the 2026-10-14 install keep their old startup hooks (no
-    PermissionRequest or SubagentStop wiring) until they restart.
-  - `ask-owner` #103: one owner per ask. The post-merge chain and the hand-back gate before
-    `lane done` now live in `skills/lanes/SKILL.md` (The lead, step 7).
-  - `guard-b` #104 (2026-10-14): excluded-guard group B (a SessionStart check, rule lines from
-    `lane new` and `lane done`), plus `lane ls` and `lane done` reading the worktree's
-    checked-out branch. Hayden merged it before its live smoke. The smoke then ran against the
-    lead's install from main and passed: in a real tab the finding showed once, and a second start
-    was silent. `claude -p` can't show it, since `-p` forces `ATTENDED=0`.
-  - `handoff-flag` (opened 2026-10-14, Hayden's option C): `handoff?` judges a merged lane by
-    its record against the PR's `mergedAt`, not by session end. Today every session ends after
-    its own last write, so the flag lights after each `/pass` and stays on for a merged lane with
-    no live session. Until it merges (Hayden's call), such a lane fails the hand-back gate, and
-    its close is the lead's ask to Hayden.
-  - `pass-timeout` (opened 2026-10-14, Hayden's pick): a dropped `/pass` must reach the session
-    itself, not only the tmux client. Seen live twice in `pass.log` (compact, `outcome=timeout
-    status busy`, 2026-10-13 and 2026-10-14). On 2026-10-13 the tmux server died, and the
-    session kept saying the pass was "still queued".
-  - **Merge order: `pass-timeout`, then `handoff-flag`.** The lead installs only the next to
-    merge.
+    #103 (2026-10-14), `guard-b` #104 (2026-10-14), `pass-timeout` #105 (2026-10-14: a dropped
+    pass now tells the session itself), `handoff-flag` #106 (2026-10-14: `handoff?` judges a
+    merged lane by its record against `mergedAt`, so a lane that handed off after its merge
+    closes without an ask), `identity-branch` #107 (2026-10-14: the SessionStart identity line
+    names the branch the worktree has checked out), `install-hint` #108 (2026-10-14: a merged
+    lane can't take the install back; the excluded-guard scan after its reinstall came back
+    clean, so the work repo's flagged worktrees are cleared), `two-sessions` #109 (2026-10-15:
+    one lead per main checkout, the last to act as lead, `lane lead`, and lead² tabs),
+    `remote-paste` #111 (2026-10-16: Alt+V in tmux pastes the newest image sent to HAYPC, and an
+    opt-in laptop Ctrl+V uploads its clipboard image first; the lane stays open, `Keep open:`, for
+    a follow-up PR with the laptop's non-image files and README's `tmux/` and `tests/setup/` rows
+    once chrome-bg merges). `gh pr view <n>` and the closed records under `.git/lanes/_closed/` hold the detail; tab-bar's
+    design is in [[dotclaude-tab-bar]]. Tabs opened before #102's install (2026-10-14) keep the
+    old startup hooks (no PermissionRequest or SubagentStop wiring) until they restart.
+  - `chrome-bg` (opened 2026-10-14, Hayden's ask and picks): `bin/chrome-bg` opens a Windows
+    Chrome for test probes behind every window without taking focus, for `puppeteer.connect`,
+    and one dotclaude hook blanks `DISPLAY` and `WAYLAND_DISPLAY` for Bash in opted-in repos.
+    Spike, logs and the measured mechanism: `~/scratch/chrome-bg-spike/NOTES.md`. Until it
+    merges, every Vulcan checkout (the main one and its 11 worktrees) carries that hook in an
+    untracked `.claude/settings.local.json`, written by the lead 2026-10-14 (git ignores it
+    machine-wide); the lane lists them for removal once its hook is live. At merge the lead also
+    updates Vulcan's memory `no-chrome-windows-in-front.md` (it says `chrome-bg` isn't installed
+    yet).
+  - **Merge order: `chrome-bg`, then `lane-model` (#110) and remote-paste's follow-up, whichever
+    is ready first.** The lead's STATUS commits rode none of #108 (Hayden merged it before its
+    ready step), #109 or #111 (merged from draft), so main's STATUS.md is far behind
+    `chore/after-pr4`. The next lane's ready step carries them (a STATUS-only PR is ruled out).
   - The parked json-depth sweep (21 files, among them the delegation enforcement scripts) is on
     `fix/json-depth-sweep`, a local branch never pushed: keep it while the sweep is in the
     backlog. Shipping it first needs a check of how each enforcement site fails
@@ -121,20 +121,43 @@ stored here).
     rerun the menu-clip repro and the tmux suites. If it fixes the clip, install at a quiet
     moment (a server restart; claude-restore reopens the tabs) and drop the row-0 menu rule.
     Until then, 3.7c's default menus that dotclaude doesn't own still clip under a top bar.
-  - The SessionStart identity line (`hooks/lane_identity.py:47`) names `lane.json`'s branch, not
-    the worktree's checked-out one, so a lane that switched branches is told the old one.
-    #104 fixed `lane ls` and `lane done` for the same gap with `lane_head` in
-    `skills/lanes/scripts/lane`. The hook runs apart from the CLI, so it needs the worktree's
-    HEAD read on its own.
-  - `lane init --model/--effort` repo defaults and `lane open --model/--effort` overrides,
-    passed through to `claude` (today `lane open` hardcodes the argv).
+  - **`lane open --model/--effort`** (open as lane `lane-model` since 2026-10-15; this note
+    is its design pointer). `lane init --model/--effort`
+    sets repo defaults in the lanes config, `lane open --model/--effort` overrides them for one
+    lane, and both pass through to `claude` (2.1.296 has `--model` and `--effort
+    low|medium|high|xhigh|max`). Today `cmd_open` hardcodes the argv. The trap: auto-pass
+    relaunches through `pass-respawn`, whose plain mode runs `claude [--permission-mode plan]
+    <prompt>` (`actions()`), so a pick lasts only until the lane's first plain pass (compact
+    keeps the running session). The lane rates where the pick lives (the session's own command
+    line, which `pass-respawn` already reads for `--add-dir` and `--settings`; `lane.json`; or
+    the lanes config) across a plain pass, a `/model` change mid-session, a default changed
+    after the lane opened, the lead's main checkout, and a bad model name failing in a detached
+    window nobody watches. Files: the lane script (init, open),
+    `skills/pass/scripts/pass-respawn`, SKILL.md, `docs/lanes.md`, `tests/lanes`, `tests/pass`.
+  - **Tab restore and the shelf's Open drop a session's effort** (from lane `lane-model`,
+    2026-10-16). `tmux/claude-restore` and `tmux/claude-saved` (Open) both relaunch with a bare
+    `claude --resume <id>`, which keeps the model but not the effort (lane-model's spike S3,
+    [[cc-model-command-saves-default]]). After a tmux restart a lane runs at the default effort,
+    and its next plain pass loses the model too, since #110's `carried_pick` carries only the flags
+    the old claude launched with (its `/proc` command line). #110's `docs/lanes.md` "Model and
+    effort" documents the gap. Fix in restore's files: save the session's `--model` and `--effort`
+    with its entry and pass them back on resume.
+  - Tests time durations with `time.monotonic()`, not `time.time()` (122 calls in 23 test
+    files). It touches every suite, so it opens only when no lane runs.
+  - **`lane done`'s rerun can't finish a restored tab** (seen 2026-10-15 closing two-sessions).
+    The first run ended the lane's claude, then refused because the tab's shell (pid 816) had a
+    short-lived child `zsh` with no session id. Its refusal said to rerun, but the rerun found
+    the session gone, so nothing proved the shell was the lane's, and it refused again. A
+    later rerun closed it only because the lane's session had been resumed in that tab, which
+    restored the proof. Fix in
+    `skills/lanes/scripts/lane` (done): record the proven shell before the first signal so a
+    rerun keeps the proof, or wait out a child that exits within the grace period.
 
   **The post-merge chain** (Hayden's design B, standing approval 2026-10-14): `skills/lanes/SKILL.md`,
-  The lead, step 7. Lead STATUS commits ride the next lane PR: that lane applies `git diff origin/main chore/after-pr4 --
-  STATUS.md PLAN.md` as one commit just before ready (PLAN.md too: main's glyph code cites its
-  "Next: two workflow fixes", which only `chore/after-pr4` holds). A lane installs (`lane lock install --
-  ./setup.sh` from its worktree, sandbox off) only when next in merge order, and its install
-  holds until the lead's reinstall from main.
+  The lead, step 7. Lead commits ride the next lane PR: that lane applies `git diff origin/main
+  chore/after-pr4 -- STATUS.md PLAN.md` as one commit just before ready. A lane installs (`lane
+  lock install -- ./setup.sh` from its worktree, sandbox off) only when next in merge order, and
+  its install holds until the lead's reinstall from main.
 - **Lanes, handoff-check and `/pass`** (Hayden's design, approved 2026-10-11; `PLAN.md`, behavior in
   `docs/lanes.md` and `skills/lanes/SKILL.md`). Four PRs:
   - PR 1 (lanes core) merged as #86 (`gh pr view 86`); its smoke test and guard replay are in
@@ -200,34 +223,44 @@ stored here).
   sandbox-off deletes, so the sandboxed gap stands):
   `python3 -I ~/scratch/sandbox-audit/rm_scan.py 2026-11-04`. Sending the drafted
   `$CLAUDE_JOB_DIR/tmp` bug report is Hayden's call; `CLAUDE.md` carries the workaround.
-- **Setup's excluded-command guard scan flags a work repo's lane worktrees** (2026-10-14, after
-  #103; still 10 after #104's install): its shared git config points `core.hooksPath` at each worktree's own writable hooks dir,
-  so excluded commands in those worktrees are refused. Every flagged hook matched HEAD. The fix
-  is Hayden's: rerun `python3 -I hooks/excluded_guard.py --scan`, look, paste its
-  `settings.machine.json`, rerun `./setup.sh`. Each new lane there needs its own rule (Edit deny
-  rules take no glob), which is what lane guard-b's `lane new` check is for.
+- **A stale trust entry from lane guard-b's smoke** (2026-10-14): `~/.claude.json` still trusts
+  the deleted `/tmp/claude-1000/guard-b-tab`. A sandboxed session can recreate that path with its
+  own `.claude/settings.json`, so the lead recommends removing the entry. Hayden removes it by
+  hand (his call, 2026-10-14): the `projects` key `/tmp/claude-1000/guard-b-tab`. Its two
+  transcripts expire on their own.
 - **Two Write-tool bug drafts wait in `/feedback`** (Hayden's call to send): the overwrite-guard session's has the
   `claude -p` repro and the 2.1.285 boundary; the karaoke session's has the incident.
 
 ## Notes for next session
 - **Next (lead, main checkout):** watch for "merged #N" from a lane, then run the post-merge
-  chain (`skills/lanes/SKILL.md`, The lead, step 7). Live lanes: `pass-timeout` (next to merge;
-  its install is live from its lane) and `handoff-flag`. The next lane PR carries the lead's
-  STATUS and PLAN.md commits. Check `lane ls` first: a merge Hayden made on GitHub and mentioned
-  to no session sends no message (#102 showed merged there before its lane's message came). One
-  slot of 3 is free; the backlog's next pick is Hayden's. No chat about a lane's own asks; speak on cross-lane orders,
-  decisions raised with the lead, failed checks and lead-only actions.
-  - Design reviews the lead sent to lanes on 2026-10-14 (turn-glyph's set of wait owners and its
-    classifier probe, excluded-guard's G8) live in those lanes' records and plans, and G8 in the
-    private findings file. The lead's commits of 2026-10-14: `git log 6503f0e..HEAD -- STATUS.md
-    PLAN.md` on `chore/after-pr4`.
+  chain (`skills/lanes/SKILL.md`, The lead, step 7). Live lanes: `chrome-bg`, `lane-model` and
+  `remote-paste` (both opened 2026-10-15, Hayden's picks; briefs in their records; remote-paste
+  merged #111 and stays open for its follow-up). All 3 slots are full. Check `lane ls` first: a merge Hayden made on GitHub and mentioned to no
+  session sends no message (#102 showed merged there before its lane's message came). Each new work-repo lane still needs its own Edit deny rule
+  (they take no glob); `lane new` prints it since #104. No chat
+  about a lane's own asks; speak on cross-lane orders, decisions raised with the lead, failed
+  checks and lead-only actions.
+  - The lead's commits of 2026-10-14 (second and third sessions): `git log --first-parent
+    696cc44..HEAD` on `chore/after-pr4`, STATUS only, plus merges of main. The third session
+    (69d146cc) started at 433fe8f: it opened identity-branch, install-hint, chrome-bg and
+    two-sessions, and ran the chain for #106 and #107. The fourth (64626d32) started at 5cb88d8:
+    it wrote the `lane open --model` design note, removed two leftover writer worktrees from
+    #105 (every patch already in main), ran the chain for #108, #109 and #111, and opened
+    lane-model and remote-paste.
+  - **Vulcan sessions that were already running keep their display** until they restart: the
+    blanking hook fires only at session start. The `ro-lesson` lane was opening WSLg windows
+    at 21:43 local; Hayden tells it to go headless or `/pass`.
+  - A config rewrite with the sandbox off (`git config`, `branch -d`) while a lane's suite runs
+    can fail its SandboxReality test once: the rewrite swaps `.git/config` under the running
+    sandbox's mount. Avoid config writes while `lane ls` shows `suite` held.
   - Message a lane at what `lane addr <id>` prints, resolved just before each send.
   - **Watch (PR 4, live on HAYPC):** `context-watch.err` in the state dir (a Stop that timed out
     waiting for its reply, and the watcher's Python errors). Not yet seen live: a refused pass's
     toast, and Hayden's verdict on the rendered popup.
   - Verify from the main checkout (`test_subagent_policy` refuses to load under
     `.claude/worktrees/`): `tests/setup`, `tests/pass`, `tests/lanes`, `tests/delegation`. The
-    last full run on `feat/autopass` (2026-10-12) was green: 532, 148, 155 and 646 tests.
+    last full run (lane guard-b at 210c7e2, 2026-10-14, under `lane lock suite`) was green:
+    setup 992, lanes 260, delegation 671.
   - **Root cause of the timing flakes (lane lane-addr, 2026-10-14):** HAYPC's wall clock steps
     -2.7 s then +5.4 s about every 33 s (`time.time()` minus `time.monotonic()`; evidence:
     `.git/lanes/_closed/lane-addr-2026-10-14/.lane/artifacts/clock-steps.txt`). It matches the setup, ctx, handoff-reminder and
