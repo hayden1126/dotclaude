@@ -30,8 +30,12 @@ command it wraps stays sandboxed too.
 
 The lead is the main-checkout session that last acted as lead: a bare `init`, `new`, `adopt`,
 `open` (not `--print`) or `done` that succeeds from an interactive session in the main checkout,
-or `lead`, records it in the state dir (lanelib.read_lead). `addr lead` picks it when two or more
-sessions run in the main checkout, and `ls` names such a crowded checkout under the board.
+or `lead`, records it in the state dir (lanelib.read_lead). `addr lead` picks it among the main
+checkout's running sessions by its pid, else by the one continuation of it (a resume of its
+session id, or a /pass successor in its pane), else the one session there unless the recorded
+lead is stopped (lanelib.lead_of). `ls` names a crowded checkout, or a stopped lead to `fg`, under
+the board. A stopped session (Ctrl+Z) is never an address: nothing reads its socket until it is
+continued. It still holds its lane, which the board flags `stopped`.
 
 `lock` exits with its command's code, or dies of the signal that killed it; `--wait` running out
 exits 75, which a command's own 75 can't be told from: only the "gave up on lock" line on stderr
@@ -39,10 +43,11 @@ marks a timeout.
 
 `done` runs only from the main checkout (the lead), never under a lane's session. It ends what
 provably belongs to the lane before it archives the record and removes the worktree: the lane's
-Claude sessions (SIGTERM), the processes under them, their tmux pane shells (SIGHUP) and
+Claude sessions (SIGTERM, and SIGCONT for a stopped one so the SIGTERM lands), the processes
+under them, their tmux pane shells (SIGHUP) and
 leftovers started with a lane session's id; survivors get SIGTERM (a pane shell SIGHUP), then
-SIGKILL. Every signal but a session's first is checked just before it is sent, and held while
-the target or a process under it holds a file open in the git dir. Proof comes only
+SIGKILL. Every signal but a session's first (and its SIGCONT) is checked just before it is sent,
+and held while the target or a process under it holds a file open in the git dir. Proof comes only
 from /proc and Claude Code's own session files and transcripts, never lane.json. Anything else with
 its cwd in the lane refuses the close by name before any signal, as do installed links into the
 lane (it holds the install: install-state.py, checked again under setup.sh's install.lock just
@@ -1027,8 +1032,13 @@ def board(repo: Repo) -> list[dict]:
                       f"{base}...{ref}"], repo.toplevel)
         if counts.returncode == 0:
             row["behind"], row["ahead"] = (int(x) for x in counts.stdout.split())
+        # A stopped session (Ctrl+Z) still holds the lane but answers nothing until `fg`, so it
+        # drives no column: only the `stopped` flag.
         here = sessions_in(live or [], path)
+        stopped = [s for s in here if lanelib.session_stopped(s)]
+        here = [s for s in here if s not in stopped]
         row["live_sessions"] = None if live is None else [s.get("sessionId") for s in here]
+        row["stopped_sessions"] = None if live is None else [s.get("sessionId") for s in stopped]
         row["states"] = None if live is None else [status_of(s) for s in here]
         row["ctx"] = ctx_of(aps, here)
         # Derived from the live session, never stored: a stored window id drifts when the window
@@ -1047,6 +1057,8 @@ def board(repo: Repo) -> list[dict]:
             flags.append("conflict")
         if not stale and row["live_sessions"] == []:
             flags.append("orphan")
+        if stopped:
+            flags.append("stopped")
         if needs_handoff(repo, lane, ref, merges_of(prs, lane, guess)):
             flags.append("handoff?")
         row["flags"] = flags
@@ -1155,16 +1167,20 @@ def cmd_ls(args) -> None:
 
 
 def main_footer(repo: Repo) -> str | None:
-    """The board's line for a crowded main checkout, None with fewer than two live sessions
-    there or sandboxed (none in sight): each session's window, the lead marked first, then the
-    rest by pid, `no tmux` outside tmux and `agent worktree` for one launched in
-    .claude/worktrees; with no lead picked, the way to pick one (LEAD_HINT)."""
+    """The board's line for a crowded main checkout or a stopped lead, None otherwise or
+    sandboxed (none in sight): each live session's window, the lead marked first, then the rest
+    by pid, `no tmux` outside tmux and `agent worktree` for one launched in .claude/worktrees;
+    with two or more and no lead picked, the way to pick one (LEAD_HINT); with no lead picked
+    and the recorded one stopped (Ctrl+Z), its window to `fg` it in. A picked continuation (a
+    resume of the stopped lead's session) leaves nothing to fg, so it says nothing of the
+    stopped one."""
     if not lanelib.pids_visible():
         return None
     sessions = lanelib.main_sessions(repo)
-    if len(sessions) < 2:
-        return None
     lead = lanelib.lead_of(repo, sessions)
+    stopped = None if lead else lanelib.stopped_lead(repo)
+    if len(sessions) < 2 and not stopped:
+        return None
     agents = os.path.join(repo.main, ".claude", "worktrees")
     cells = []
     for s in sorted(sessions, key=lambda x: x is not lead):  # stable: by pid after the lead
@@ -1172,8 +1188,12 @@ def main_footer(repo: Repo) -> str | None:
         if lanelib.cwd_inside(s.get("cwd"), agents):
             notes.append("agent worktree")
         cells.append(f"{window_label(s)} ({', '.join(notes)})")
-    line = f"main checkout: {len(sessions)} live sessions: {', '.join(cells)}"
-    return shown(line if lead else f"{line}. {LEAD_HINT}")
+    n = len(sessions)
+    line = ("main checkout: no live session" if not n else
+            f"main checkout: {n} live session{'' if n == 1 else 's'}: {', '.join(cells)}")
+    tail = ([LEAD_HINT] if n > 1 and not lead else []) + (
+        [stopped_note("The lead", stopped)] if stopped else [])
+    return shown(". ".join([line, *tail]))
 
 
 def print_board(rows: list[dict]) -> None:
@@ -1413,9 +1433,15 @@ def open_pick(args, cfg: dict) -> list[str]:
 
 
 def focus_session(args, here: list[dict]) -> None:
-    """`open` on a lane that has a live session: refuse, or with --focus select its window."""
-    targets = [s["tmux"] for s in here if s.get("tmux")]
-    named = ", ".join(targets or [f"session {s.get('sessionId')} (not in tmux)" for s in here])
+    """`open` on a lane that has a live session, a stopped one (Ctrl+Z) among them: refuse, or
+    with --focus select its window, where `fg` brings a stopped one back."""
+    def label(s: dict) -> str:
+        name = s["tmux"] if s.get("tmux") else f"session {s.get('sessionId')} (not in tmux)"
+        return f"{name} (stopped: fg it there)" if lanelib.session_stopped(s) else name
+
+    tmuxed = [s for s in here if s.get("tmux")]
+    targets = [s["tmux"] for s in tmuxed]
+    named = ", ".join(label(s) for s in tmuxed or here)
     if not args.focus:
         raise LaneError(f"lane {args.id} already has a live session: {named}. "
                         f"`lane open {args.id} --focus` switches to its window")
@@ -1972,7 +1998,8 @@ def end_lane(repo: Repo, lane_id: str, path: str, hits: dict[int, Hit]) -> None:
     still in the lane refuses, nothing is archived, and a rerun carries on. The lanes lock is
     never held here: a session's SessionEnd hook takes it to stamp endedAt. Each session's
     open-sessions entry goes before its SIGTERM, in either round (forget_sessions). Every signal
-    but round 1's SIGTERM to a session goes through guarded."""
+    but round 1's SIGTERM to a session, and the SIGCONT that lands it on a stopped one, goes
+    through guarded."""
     wait = grace()
     known = {(h.proc.pid, h.proc.start): h for h in hits.values()}
     ended, held, forgotten = set(), {}, set()
@@ -2021,6 +2048,13 @@ def end_lane(repo: Repo, lane_id: str, path: str, hits: dict[int, Hit]) -> None:
         for h in first:
             if h.kind == SESSION:
                 signal_proc(h.proc, signal.SIGTERM)
+                # A stopped claude (Ctrl+Z) holds that SIGTERM pending, so its SessionEnd hook
+                # never runs: SIGCONT delivers it. Only this first signal, unguarded by design,
+                # is continued; one that stops again on the terminal (SIGTTOU) still ends by
+                # round 2's SIGTERM and SIGKILL.
+                st = lanelib.proc_stat(h.proc.pid)
+                if st and st[3] == h.proc.start and st[1] in lanelib.STOPPED:
+                    signal_proc(h.proc, signal.SIGCONT)
             else:
                 send(h, signal.SIGTERM)
         settle(first, wait)
@@ -2711,8 +2745,8 @@ def parser() -> argparse.ArgumentParser:
                        description="Close a merged lane (an unmerged one with --abandon), from "
                        "the main checkout only: end the "
                        "processes that provably belong to it, archive its record, remove its "
-                       "worktree. Its sessions get SIGTERM, their pane shells SIGHUP, survivors "
-                       "SIGKILL. Anything else with its cwd in the lane refuses the close by name "
+                       "worktree. Its sessions get SIGTERM (a stopped one SIGCONT too), their pane "
+                       "shells SIGHUP, survivors SIGKILL. Anything else with its cwd in the lane refuses the close by name "
                        "before any signal, as do installed links into the lane, a dirty, locked "
                        "or submodule worktree, a repo with extensions.worktreeConfig, a record "
                        "whose Next says `Keep open:` (unless --abandon) and, when there is "

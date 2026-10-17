@@ -1313,9 +1313,47 @@ class ModelPick(Fakes):
                 self.assertIn("/model or /effort in its window", p.stderr)
 
 
+class Stopped(Fakes):
+    """A lane session stopped with Ctrl+Z: present, so it still holds the lane, but out of reach
+    until `fg`, so the board flags it."""
+
+    def test_a_lane_whose_only_session_is_stopped_is_orphan_and_stopped(self):
+        (claude,) = self.claude()
+        (row,) = json.loads(self.lane("ls", "--json"))
+        self.assertEqual((row["live_sessions"], row["stopped_sessions"]), ([self.SID], []))
+        self.assertNotIn("stopped", row["flags"])
+        self.stop(claude)
+        (row,) = json.loads(self.lane("ls", "--json"))
+        self.assertEqual((row["live_sessions"], row["stopped_sessions"]), ([], [self.SID]))
+        self.assertEqual(row["flags"][:2], ["orphan", "stopped"])
+        self.assertIn(" orphan stopped", self.lane("ls").splitlines()[1])
+        self.env["_LANE_TEST_SANDBOXED"] = "1"
+        (row,) = json.loads(self.lane("ls", "--json"))
+        self.assertIsNone(row["stopped_sessions"])
+
+    def test_open_refuses_a_lane_with_a_stopped_session_and_labels_it(self):
+        (claude,) = self.claude()
+        self.stop(claude)
+        p = self.run_lane("open", "chart-fix", "--print")
+        self.assertEqual(p.returncode, 1, p.stdout)
+        self.assertIn(f"already has a live session: session {self.SID} (not in tmux) "
+                      "(stopped: fg it there)", p.stderr)
+
+
 class Close(Fakes):
     """`lane done` ends what provably belongs to the lane and refuses, by name and before any
     signal, what doesn't: the kill-scope matrix."""
+
+    def test_a_stopped_lane_session_is_continued_and_ends_in_round_one(self):
+        # SIGTERM waits while a process is stopped, so its SessionEnd hook would never run;
+        # SIGCONT delivers it. Without it the fake would log nothing and die of round 2's SIGKILL.
+        self.hand_off()
+        (claude,) = self.claude()
+        self.stop(claude)
+        out = self.lane("done", "chart-fix", "--abandon")
+        self.assertIn(f"ended {claude} {self.comms[claude]} (lane session {self.SID})", out)
+        self.assertEqual(self.signals(), [(claude, "SIGTERM")])
+        self.assertClosed()
 
     def assertClosed(self):
         self.assertFalse(os.path.exists(self.path))

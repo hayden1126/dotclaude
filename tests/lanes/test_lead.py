@@ -258,6 +258,23 @@ class MainFooter(LiveSessions):
         self.assertIn(f"proj:@{b} (pid {b}, idle, agent worktree)", line)
         self.assertIn("). No lead picked: the lead takes it with a bare `lane lead`", line)
 
+    def test_a_stopped_lead_is_named_until_a_continuation_is_picked(self):
+        lead = self.child(self.main, pane="%3")
+        self.session(self.main, pid=lead, sessionId="s-lead")
+        self.write_lead(lead, sid="s-lead", tmux=self.tmux_of("%3"))
+        self.assertIsNone(self.footer())
+        self.stop(lead)
+        stopped = f"The lead (pid {lead}, proj:@{lead}) is stopped (Ctrl+Z): fg it there"
+        self.assertEqual(self.footer(), f"main checkout: no live session. {stopped}")
+        side = self.child(self.main)
+        self.session(self.main, pid=side)
+        self.assertEqual(self.footer(), f"main checkout: 1 live session: proj:@{side} (pid "
+                                        f"{side}, idle). {stopped}")
+        twin = self.child(self.main, pane="%3")  # the resume: picked, so nothing to fg
+        self.session(self.main, pid=twin, sessionId="s-lead")
+        self.assertEqual(self.footer(), f"main checkout: 2 live sessions: proj:@{twin} (lead, "
+                                        f"pid {twin}, idle), proj:@{side} (pid {side}, idle)")
+
     def test_no_footer_when_sandboxed(self):
         self.session(self.main)
         self.session(self.main)
