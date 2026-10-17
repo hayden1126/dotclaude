@@ -1221,6 +1221,97 @@ class Fakes(LanesRepo):
         return json.loads(self.read(out))
 
 
+class ModelPick(Fakes):
+    """`lane init --model/--effort` sets the repo's defaults, `lane open --model/--effort`
+    overrides them for one launch, and both reach claude's argv ahead of its own flags."""
+
+    def opened(self, *args):
+        """The claude argv `open --print` shows: everything after tmux's `--`."""
+        argv = shlex.split(self.lane("open", "chart-fix", "--print", *args).strip())
+        return argv[argv.index("--") + 1:]
+
+    def test_init_stores_prints_and_unsets_the_defaults(self):
+        out = self.lane("init", "--model", "sonnet", "--effort", "low")
+        self.assertIn("  model = sonnet\n", out)
+        self.assertIn("  effort = low\n", out)
+        (cfg,) = self.config_files()
+        self.assertIn('model = "sonnet"\neffort = "low"\n', self.read(cfg))
+        self.lane("init", "--cap", "3")  # a re-init without the flags keeps them
+        self.assertIn('model = "sonnet"\n', self.read(cfg))
+        out = self.lane("init", "--model", "")  # empty: back to the user's default
+        self.assertNotIn("model =", self.read(cfg))
+        self.assertNotIn("  model", out)
+        self.assertIn('effort = "low"\n', self.read(cfg))
+
+    def test_init_refuses_a_bad_model_or_effort_and_writes_nothing(self):
+        (cfg,) = self.config_files()
+        before = self.read(cfg)
+        for flag, value, why in (("--model", "sonet", "is not a model"),
+                                 ("--model", "opus;x", "is not a model"),
+                                 ("--model", "-x", "is not a model"),
+                                 ("--effort", "extreme", "is not an effort")):
+            with self.subTest(value=value):
+                p = self.run_lane("init", f"{flag}={value}")
+                self.assertEqual(p.returncode, 1, p.stdout)
+                self.assertIn(why, p.stderr)
+                self.assertEqual(self.read(cfg), before)
+
+    def test_open_passes_the_defaults_and_an_override_beats_them(self):
+        claude = os.path.join(self.fake_bin, "claude")
+        prompt = self.opened()[-1]
+        self.assertEqual(self.opened(), [claude, "--permission-mode", "plan", prompt])
+        self.lane("init", "--model", "sonnet", "--effort", "low")
+        self.assertEqual(self.opened(), [claude, "--model", "sonnet", "--effort", "low",
+                                         "--permission-mode", "plan", prompt])
+        self.assertEqual(self.opened("--effort", "max"),
+                         [claude, "--model", "sonnet", "--effort", "max", "--permission-mode",
+                          "plan", prompt])
+        self.assertEqual(self.opened("--model", "claude-opus-5-5"),
+                         [claude, "--model", "claude-opus-5-5", "--effort", "low",
+                          "--permission-mode", "plan", prompt])
+        self.assertEqual(self.opened("--model", ""),  # empty: the user's default, not init's
+                         [claude, "--effort", "low", "--permission-mode", "plan", prompt])
+
+    def test_a_real_open_launches_with_the_pick_and_says_so(self):
+        argv_file = os.path.join(self.tmp, "tmux.argv")
+        tmux = os.path.join(self.fake_bin, "tmux")
+        self.write(tmux, f"#!/bin/sh\nprintf '%s\\0' \"$@\" > {shlex.quote(argv_file)}\n"
+                         "echo 'proj:3 (chart-fix)'\n")
+        os.chmod(tmux, 0o755)
+        self.env["TMUX"] = "/tmp/fake-tmux,1,0"
+        self.lane("init", "--model", "sonnet")
+        out = self.lane("open", "chart-fix", "--effort", "low")
+        self.assertEqual(out, "opened chart-fix in tmux window proj:3 (chart-fix) with --model "
+                              "sonnet --effort low\n")
+        argv = self.read(argv_file).split("\0")[:-1]
+        self.assertEqual(argv[argv.index("--") + 1:][:6],
+                         [os.path.join(self.fake_bin, "claude"), "--model", "sonnet", "--effort",
+                          "low", "--permission-mode"])
+
+    def test_open_refuses_a_bad_override_or_a_bad_default(self):
+        p = self.run_lane("open", "chart-fix", "--print", "--model", "sonet")
+        self.assertEqual(p.returncode, 1)
+        self.assertIn("'sonet' is not a model", p.stderr)
+        p = self.run_lane("open", "chart-fix", "--print", "--effort", "extreme")
+        self.assertEqual(p.returncode, 1)
+        self.assertIn("'extreme' is not an effort", p.stderr)
+        (cfg,) = self.config_files()
+        self.write(cfg, self.read(cfg) + 'model = "sonet"\n')  # a hand edit
+        p = self.run_lane("open", "chart-fix", "--print")
+        self.assertEqual(p.returncode, 1)
+        self.assertIn("the lanes config's model: 'sonet' is not a model", p.stderr)
+        self.assertIn("lane init --model", p.stderr)
+
+    def test_open_with_a_pick_refuses_a_lane_that_has_a_live_session(self):
+        self.claude()
+        for args in (("--model", "sonnet"), ("--effort", "low", "--focus")):
+            with self.subTest(args=args):
+                p = self.run_lane("open", "chart-fix", "--print", *args)
+                self.assertEqual(p.returncode, 1, p.stdout)
+                self.assertIn("already has a live session", p.stderr)
+                self.assertIn("/model or /effort in its window", p.stderr)
+
+
 class Close(Fakes):
     """`lane done` ends what provably belongs to the lane and refuses, by name and before any
     signal, what doesn't: the kill-scope matrix."""

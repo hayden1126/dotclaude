@@ -47,7 +47,8 @@ an unregistered worktree: `lane whoami` tells you which.
 1. **Init, once per repo**, from the main checkout:
    `lane init --root ~/code/<repo>-lanes --setup "npm ci" --ports 5191-5199 --cap 4`. It asks
    for Hayden's click: `--setup` names the command each new lane runs, and `--root` moves where
-   lanes live.
+   lanes live. `--model` and `--effort` set the claude model and effort each `lane open`
+   launches with (an empty value: the user's default).
 2. **New lane:** `lane new chart-fix --claim 42 --goal "fix the axis labels" --files src/chart/
    --overlaps api-docs --done-when "axis test green"`. It fetches (and refuses if the fetch
    fails: a lane branches only from the commit the remote reports), branches from `origin/main`
@@ -56,7 +57,10 @@ an unregistered worktree: `lane whoami` tells you which.
    excluded-command guard will, and seeds any Edit deny rule a dir needs (a `core.hooksPath` the
    setup set, say) into the record's Asks for Hayden. Start the lane's session with
    `lane open chart-fix` (bare, from inside tmux): a new tmux window in the lane, in plan mode,
-   told to read its record and plan the brief. Outside tmux, `cd <path> && claude`. Either way
+   told to read its record and plan the brief. `lane open chart-fix --model sonnet --effort low`
+   overrides init's defaults for that launch. A plain pass keeps them, or what a later `/model`
+   or `/effort` in its window picked (docs/lanes.md, "Model and effort"). Outside tmux,
+   `cd <path> && claude`. Either way
    the session's cwd is the lane. Claude Code asks whether to trust each new folder, and a trusted
    parent covers its subdirs, so trust the lanes root once (`lane init` prints the line);
    otherwise each new window waits at that dialog and `lane ls` shows it `orphan`.
@@ -243,7 +247,7 @@ what").
 | `lane claim 42` / `lane release 42` | claim or drop a request for your lane |
 | `lane note "<text>"` | append a timestamped line to your record's State |
 | `lane asks` | every lane's open "Asks for Hayden", one list |
-| `lane open <id>` | the lane's session in a new tmux window, in plan mode; `--focus` switches to it, or to the live session's window; `--print` shows the tmux command |
+| `lane open <id>` | the lane's session in a new tmux window, in plan mode; `--model`/`--effort` override init's defaults for the launch; `--focus` switches to it, or to the live session's window; `--print` shows the tmux command |
 | `lane addr <id>` / `lane addr lead` | `uds:<socket>`, the SendMessage address of the lane's (or the lead's) one live session; refuses on none or several, except that `lead` picks the recorded lead among several (and refuses with the way to pick when none is). Bare: it must see other processes |
 | `lane lead` | makes the session that runs it the lead (from the main checkout only; Hayden: `! lane lead` at its prompt). Bare |
 | `lane lock gate -- <cmd>` | run `<cmd>` under the named lock, waiting while another run holds it; `--wait SECS` gives up with exit 75 (docs/lanes.md: telling it from the command's own 75) |

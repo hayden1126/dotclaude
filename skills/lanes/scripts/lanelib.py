@@ -480,6 +480,59 @@ def valid_branch(name) -> bool:
             and "//" not in name and "/." not in name and not name.endswith((".lock", "/", ".")))
 
 
+# What `claude --model` and `--effort` take (Claude Code 2.1.301's --help). `lane init` and
+# `lane open` check a model against the aliases strictly: a typo reaches a detached window, where
+# claude stays up and shows an API error nobody watches (docs/lanes.md, "Model and effort").
+MODEL_ALIASES = ("default", "opus", "sonnet", "haiku", "fable", "opusplan")
+# The aliases with a 1M form: default[1m] fails at its first request, and /model says haiku and
+# opusplan have none (probed 2026-10-15).
+ONE_M = ("opus", "sonnet", "fable")
+# The model families (the id's second part, claude-<family>-...) each alias can run as; default
+# is the account's own and can run as any.
+FAMILIES = {"opus": ("opus",), "sonnet": ("sonnet",), "haiku": ("haiku",), "fable": ("fable",),
+            "opusplan": ("opus", "sonnet")}
+EFFORTS = ("low", "medium", "high", "xhigh", "max")
+MODEL_ID = re.compile(r"claude-[a-z0-9]+(?:[.-][a-z0-9]+)*")  # a full name, as transcripts carry it
+MODEL_ALIAS = re.compile(rf"(?:{'|'.join(ONE_M)})(?:\[1m\])?|default|haiku|opusplan")
+MODEL_NAME = re.compile(rf"{MODEL_ALIAS.pattern}|{MODEL_ID.pattern}(?:\[1m\])?")
+MODEL_SHAPE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/@\[\]-]{0,99}")  # never a flag, no shell syntax
+
+
+def model_problem(name) -> str | None:
+    """Why name can't be a `lane init` or `lane open` model, or None."""
+    if isinstance(name, str) and MODEL_NAME.fullmatch(name):
+        return None
+    return (f"{name!r} is not a model: give an alias ({', '.join(MODEL_ALIASES)}; "
+            f"{', '.join(ONE_M)} also take [1m]) or a full name like claude-sonnet-5-5 or "
+            "claude-sonnet-5-5[1m]")
+
+
+def could_run(name: str, ran: str) -> bool:
+    """Whether a session given --model name could have run as ran, a resolved id (MODEL_ID): a
+    full name as itself or its dated id (claude-haiku-4-5 runs as claude-haiku-4-5-20251001), an
+    alias as an id of its family (FAMILIES). A name of another shape (a Bedrock or Vertex id)
+    can't be judged, so it is never contradicted."""
+    base = name.removesuffix("[1m]")
+    if MODEL_ID.fullmatch(base):
+        return bool(re.fullmatch(re.escape(base) + r"(?:-\d{8})?", ran))
+    if base == "default" or base not in FAMILIES:
+        return True
+    return ran.split("-")[1] in FAMILIES[base]
+
+
+def effort_problem(level) -> str | None:
+    """Why level can't be an effort, or None."""
+    if level in EFFORTS:
+        return None
+    return f"{level!r} is not an effort: give one of {', '.join(EFFORTS)}"
+
+
+def safe_model(name) -> bool:
+    """Whether a --model value the old claude launched with can go on to the next one: it already
+    ran, so only its shape is checked (it can't read as a flag or carry shell syntax)."""
+    return isinstance(name, str) and bool(MODEL_SHAPE.fullmatch(name))
+
+
 class Untrusted(ValueError):
     """A lanes file that sandboxed Bash could have planted, refused before sandbox-off code acts
     on it."""

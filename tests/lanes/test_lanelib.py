@@ -88,5 +88,60 @@ class Walk(unittest.TestCase):
         self.assertEqual(lanelib.newest_mtime(rec), before)  # a target's change is not ours
 
 
+class Picks(unittest.TestCase):
+    """The model and effort `lane init` and `lane open` accept, and what pass-respawn carries."""
+
+    def test_a_model_is_an_alias_or_a_claude_full_name_with_a_1m_where_one_exists(self):
+        for name in ("opus", "sonnet", "haiku", "fable", "opusplan", "default", "sonnet[1m]",
+                     "fable[1m]", "claude-sonnet-5-5", "claude-haiku-4-5-20251001",
+                     "claude-opus-5-5[1m]"):
+            with self.subTest(name=name):
+                self.assertIsNone(lanelib.model_problem(name))
+
+    def test_a_typo_a_flag_or_shell_syntax_is_no_model(self):
+        # default[1m] fails at its first request, and /model says haiku and opusplan have no 1M
+        # form (probed 2026-10-15).
+        for name in ("sonet", "Opus", "-x", "--dangerously-skip-permissions", "opus;x", "opus x",
+                     "claude-", "claude-opus-", "claude-Opus-5", "opus[2m]", "default[1m]",
+                     "haiku[1m]", "opusplan[1m]", "", None, 5):
+            with self.subTest(name=name):
+                self.assertIn("is not a model", lanelib.model_problem(name))
+
+    def test_a_model_could_run_as_an_id_of_its_own_family_only(self):
+        for name, ran in (("sonnet", "claude-sonnet-5-5"), ("sonnet[1m]", "claude-sonnet-5-5"),
+                          ("opusplan", "claude-sonnet-5-5"), ("opusplan", "claude-opus-5-5"),
+                          ("default", "claude-haiku-5-5"), ("claude-opus-5-5", "claude-opus-5-5"),
+                          ("claude-opus-5-5[1m]", "claude-opus-5-5"),
+                          ("claude-haiku-4-5", "claude-haiku-4-5-20251001"),  # a dated id
+                          ("claude-sonnet-4-5[1m]", "claude-sonnet-4-5-20250929"),
+                          ("claude-sonnet-4@20250514", "claude-opus-5-5")):  # can't be judged
+            with self.subTest(name=name, ran=ran):
+                self.assertTrue(lanelib.could_run(name, ran))
+        for name, ran in (("sonnet", "claude-opus-5-5"), ("opusplan", "claude-haiku-5-5"),
+                          ("claude-opus-5-5", "claude-opus-4-8"), ("haiku", "claude-sonnet-5-5"),
+                          ("claude-opus-5", "claude-opus-5-5"),  # a prefix is no date
+                          ("claude-opus-4.5", "claude-opus-4-5")):  # a '.' is no wildcard
+            with self.subTest(name=name, ran=ran):
+                self.assertFalse(lanelib.could_run(name, ran))
+
+    def test_an_effort_is_one_of_the_five_levels(self):
+        for level in lanelib.EFFORTS:
+            self.assertIsNone(lanelib.effort_problem(level))
+        for level in ("extreme", "High", "ultracode", "", None):
+            with self.subTest(level=level):
+                self.assertIn("low, medium, high, xhigh, max", lanelib.effort_problem(level))
+
+    def test_a_carried_model_needs_only_a_safe_shape(self):
+        # A value the old claude already launched with: no typo check, only nothing that reads
+        # as a flag or carries shell or control characters.
+        for name in ("opus", "us.anthropic.claude-sonnet-5-5-v1:0", "claude-opus-5-5[1m]",
+                     "my/model", "claude-sonnet-4@20250514"):
+            with self.subTest(name=name):
+                self.assertTrue(lanelib.safe_model(name))
+        for name in ("-x", "", "a b", "a;b", "a\nb", "x" * 101, None):
+            with self.subTest(name=name):
+                self.assertFalse(lanelib.safe_model(name))
+
+
 if __name__ == "__main__":
     unittest.main()
