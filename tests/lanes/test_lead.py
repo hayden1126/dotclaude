@@ -18,6 +18,7 @@ from unittest import mock
 
 from _fixture import LANE, LanesRepo, LiveSessions
 from test_cli import load_lane_script
+import lanelib  # noqa: E402  (on sys.path once _fixture is imported)
 
 TMUX_STUB = """#!/bin/sh
 printf '%s\\n' "tmux $*" >> "$STUB_LOG"
@@ -67,6 +68,7 @@ class Lead(LanesRepo):
         """A session file for a live pid (this test's own) with its cwd in the lane."""
         self.write(os.path.join(self.home, ".claude", "sessions", f"{os.getpid()}.json"),
                    json.dumps({"pid": os.getpid(), "sessionId": "s-1", "cwd": cwd,
+                               "procStart": str(lanelib.proc_start(os.getpid())),
                                "tmux": tmux}))
 
     def start(self, *args, cwd=None):
@@ -282,6 +284,7 @@ class Ctx(Lead):
     def session(self, pid, sid, status="idle"):
         self.write(os.path.join(self.home, ".claude", "sessions", f"{pid}.json"),
                    json.dumps({"pid": pid, "sessionId": sid, "cwd": self.lane_path("chart-fix"),
+                               "procStart": str(lanelib.proc_start(pid)),
                                "tmux": "proj:@3.%7", "status": status}))
 
     def ctx(self, sid, tokens, window=None):

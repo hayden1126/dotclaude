@@ -821,11 +821,12 @@ def pids_visible(proc: str = "/proc") -> bool:
 
 
 def live_sessions() -> list[dict] | None:
-    """Claude Code's per-process session files whose pid is alive; None when pids can't be seen."""
+    """Claude Code's per-process session files whose process exists (session_state), stopped or
+    not: a stopped session still holds its lane, so `open` and seed_line leave it be. None when
+    pids can't be seen."""
     if not pids_visible():
         return None
-    return [s for s in session_files()
-            if isinstance(s.get("pid"), int) and os.path.exists(f"/proc/{s['pid']}")]
+    return [s for s in session_files() if session_state(s) is not None]
 
 
 def inside(path: str, root: str) -> bool:
@@ -845,6 +846,7 @@ def cwd_inside(value, root: str) -> bool:
 
 PROC = "/proc"
 EXITED = ("Z", "X")  # /proc/<pid>/stat states of a process that has exited (zombie, dead)
+STOPPED = ("T", "t")  # stopped (Ctrl+Z) and traced: tmux/claude-saved's stopped() reads the same
 TRANSCRIPT_HEAD = 64 * 1024  # bytes of a transcript read for its first recorded cwd
 
 
@@ -1028,15 +1030,29 @@ def proc_start_of(session: dict) -> int | None:
     return v if type(v) is int else None
 
 
-def session_running(session: dict, proc: str = PROC) -> bool:
-    """Whether a session file's process still runs: its pid names the same process (procStart is
-    /proc/<pid>/stat field 22, so a reused pid fails) and it hasn't exited. A file without a
-    procStart can't be told from a reused pid, so it counts as gone."""
+def session_state(session: dict, proc: str = PROC) -> str | None:
+    """The /proc/<pid>/stat state of a session file's process while it exists: its pid names the
+    same process (procStart is stat field 22, so a reused pid fails) and it hasn't exited; else
+    None. A file without a procStart can't be told from a reused pid, so it counts as gone."""
     pid, start = session.get("pid"), proc_start_of(session)
     if type(pid) is not int or pid <= 0 or start is None:
-        return False
+        return None
     st = proc_stat(pid, proc)
-    return st is not None and st[3] == start and st[1] not in EXITED
+    return st[1] if st is not None and st[3] == start and st[1] not in EXITED else None
+
+
+def session_running(session: dict, proc: str = PROC) -> bool:
+    """Whether a session file's process exists (session_state) and isn't stopped. A stopped
+    claude (Ctrl+Z) answers nothing until it is continued, but its socket still accepts
+    connections, so a send to it waits out its timeout."""
+    state = session_state(session, proc)
+    return state is not None and state not in STOPPED
+
+
+def session_stopped(session: dict, proc: str = PROC) -> bool:
+    """Whether a session file's process exists (session_state) and is stopped: present, so no
+    second session starts beside it, yet deaf until `fg` continues it."""
+    return session_state(session, proc) in STOPPED
 
 
 def socket_of(session: dict) -> str | None:

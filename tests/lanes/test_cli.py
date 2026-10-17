@@ -586,7 +586,8 @@ class HandoffFlag(LanesRepo):
     def live(self):
         """A live session in the lane: this test's own pid, so /proc has it."""
         self.write(os.path.join(self.home, ".claude", "sessions", f"{os.getpid()}.json"),
-                   json.dumps({"pid": os.getpid(), "sessionId": "s-live", "cwd": self.path}))
+                   json.dumps({"pid": os.getpid(), "sessionId": "s-live", "cwd": self.path,
+                               "procStart": str(lanelib.proc_start(os.getpid()))}))
 
     def flags(self):
         (row,) = json.loads(self.lane("ls", "--json"))
@@ -2844,7 +2845,8 @@ class ExcludedGuardRules(LanesRepo):
         self.lane("new", "chart-fix")
         self.write(os.path.join(self.home, ".claude", "sessions", f"{os.getpid()}.json"),
                    json.dumps({"pid": os.getpid(), "sessionId": "s",
-                               "cwd": self.lane_path("chart-fix")}))
+                               "cwd": self.lane_path("chart-fix"),
+                               "procStart": str(lanelib.proc_start(os.getpid()))}))
         with mock.patch.dict(os.environ, self.env, clear=True):
             self.assertFalse(lane_mod.seed_line(self.lane_json("chart-fix"),
                                                 "## Asks for Hayden", "- ask"))

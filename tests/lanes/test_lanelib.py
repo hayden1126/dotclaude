@@ -1,7 +1,12 @@
-"""skills/lanes/scripts/lanelib.py: the shared lint and the sandbox detection, in-process."""
+"""skills/lanes/scripts/lanelib.py: the shared lint, the sandbox detection and session liveness,
+in-process."""
+import json
 import os
 import shutil
+import signal
+import subprocess
 import tempfile
+import time
 import unittest
 from unittest import mock
 
@@ -65,6 +70,70 @@ class Sandbox(unittest.TestCase):
         with mock.patch.dict(os.environ, {"LANE_SANDBOXED": "0"}):
             os.environ.pop("_LANE_TEST_SANDBOXED", None)
             self.assertFalse(lanelib.pids_visible(self.proc("apply-seccomp")))
+
+
+class SessionState(unittest.TestCase):
+    """A session file's process by its pid and procStart: present while it exists (stopped or
+    not), running only while it isn't stopped (Ctrl+Z), gone once exited or its pid reused."""
+
+    def child(self):
+        """A running `sleep` and its session file's fields, killed at cleanup (SIGKILL ends a
+        stopped process too)."""
+        p = subprocess.Popen(["sleep", "60"])
+        self.addCleanup(lambda: (p.kill(), p.wait()))
+        return p.pid, {"pid": p.pid, "procStart": str(lanelib.proc_start(p.pid))}
+
+    def wait_state(self, pid, stopped):
+        deadline = time.monotonic() + 10
+        while ((lanelib.proc_stat(pid) or ("", ""))[1] in lanelib.STOPPED) != stopped:
+            if time.monotonic() > deadline:
+                self.fail(f"{pid} never {'stopped' if stopped else 'continued'}")
+            time.sleep(0.01)
+
+    def facts(self, session):
+        return lanelib.session_running(session), lanelib.session_stopped(session)
+
+    def test_a_stopped_session_is_present_but_not_running_until_continued(self):
+        pid, s = self.child()
+        self.assertNotIn(lanelib.session_state(s), (None, *lanelib.STOPPED))
+        self.assertEqual(self.facts(s), (True, False))
+        os.kill(pid, signal.SIGSTOP)
+        self.wait_state(pid, True)
+        self.assertIn(lanelib.session_state(s), lanelib.STOPPED)
+        self.assertEqual(self.facts(s), (False, True))
+        os.kill(pid, signal.SIGCONT)
+        self.wait_state(pid, False)
+        self.assertEqual(self.facts(s), (True, False))
+
+    def test_a_reused_pid_an_exited_one_or_no_proc_start_is_gone(self):
+        pid, s = self.child()
+        os.kill(pid, signal.SIGSTOP)  # stopped or not, a pid that names another process is gone
+        self.wait_state(pid, True)
+        done = subprocess.Popen(["true"])
+        done.wait()
+        cases = {"pid reused": dict(s, procStart=str(int(s["procStart"]) + 1)),
+                 "no procStart": {"pid": pid}, "procStart None": dict(s, procStart=None),
+                 "exited": {"pid": done.pid, "procStart": "1"}, "pid a bool": dict(s, pid=True)}
+        for why, gone in cases.items():
+            with self.subTest(why):
+                self.assertIsNone(lanelib.session_state(gone))
+                self.assertEqual(self.facts(gone), (False, False))
+
+    def test_live_sessions_hold_a_stopped_session_and_drop_a_reused_pid(self):
+        cfg = os.path.realpath(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, cfg)
+        os.makedirs(os.path.join(cfg, "sessions"))
+        running, a = self.child()
+        stopped, b = self.child()
+        _, c = self.child()
+        os.kill(stopped, signal.SIGSTOP)
+        self.wait_state(stopped, True)
+        for s in (a, b, dict(c, procStart=str(int(c["procStart"]) + 1))):
+            with open(os.path.join(cfg, "sessions", f"{s['pid']}.json"), "w") as f:
+                json.dump(s, f)
+        with mock.patch.dict(os.environ, CLAUDE_CONFIG_DIR=cfg, _LANE_TEST_SANDBOXED="0"):
+            self.assertEqual(sorted(s["pid"] for s in lanelib.live_sessions()),
+                             sorted([running, stopped]))
 
 
 class Walk(unittest.TestCase):
