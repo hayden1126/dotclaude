@@ -15,27 +15,27 @@ never arrives. Claude Code does attach an image whose path is pasted (bracketed,
 lands as text, which Claude reads with Read (settings.json allows that for the default inbox,
 since a Read outside the project asks first).
 
-`receive` is what a remote device runs over ssh on the Windows shell port, through
-`wsl.exe -d Ubuntu --cd ~ --exec .local/bin/paste-inbox receive <device> <bytes> [<name64>]`
-(laptop/ holds the Windows side). Without <name64> it keeps a PNG, JPEG, GIF or WebP, judged by
-its first bytes, which also pick the extension, as `<UTC time>-<device>-<random>.<ext>`. With
-<name64>, the copied file's name as base64url of its UTF-8 (padding optional; the one charset
-that crosses the laptop's PowerShell, the PC's cmd.exe and wsl.exe untouched), it keeps any
-file as `<UTC time>-<device>-<random>-<stem>[.<ext>]`: the stem is the name's last part with
-anything but letters (any script), digits, `_` and `-` turned into `-`, cut to 96 UTF-8 bytes,
-and the extension 1-10 ASCII letters or digits, lowercased. An image's first bytes still pick
-its extension, and a file that isn't an image but whose kept name would end like one is
-refused, since Claude Code would try to attach it. Either way the file must be exactly the size
-given (so a cut upload, or a byte added on the way, is refused) and at most 50 MB. The inbox is
-$PASTE_INBOX_DIR (default ~/.cache/claude-paste, mode 700, files 600); a file goes to a temp
-file and is renamed. The device name is cut to [a-z0-9._-], so neither name can steer the path
-or put a control character in the paste. Each receive first deletes the inbox's own files (that
-name pattern and stale temp files) once older than a day for images, which Claude Code reads at
-paste time, or 7 days for other files, which Claude reads when it decides to. Anything else is
-refused on stderr, exit 1, and so is an upload that sends no bytes for 60 seconds (a link that
-died leaves no FIN, and this would otherwise wait for TCP to give up; a slow link that keeps
-moving is fine); --check prints the path it would use and keeps nothing (the laptop installer's
-self-test).
+`receive` is what a remote device runs over ssh on the Windows shell port, through `wsl.exe -d
+Ubuntu --cd ~ --exec .local/bin/paste-inbox receive <device> <bytes> [<name64>]` (laptop/ holds
+the Windows side). Without <name64> it keeps a PNG, JPEG, GIF or WebP, judged by its first
+bytes, which also pick the extension, as `<UTC time>-<device>-<random>.<ext>`. With <name64>,
+the copied file's name as base64url of its UTF-8 (padding optional; the one charset that crosses
+the laptop's PowerShell, the PC's cmd.exe and wsl.exe untouched), it keeps any file as `<UTC
+time>-<device>-<random>-<stem>[.<ext>]`: the stem is the name's last part (NFC) with anything
+but letters, digits and marks of any script, `_` and `-` turned into `-`, cut to 96 UTF-8 bytes
+on a character boundary, and the extension 1-10 ASCII letters or digits, lowercased. An image's
+first bytes still pick its extension, and a file that isn't an image but whose kept name would
+end like one is refused, since Claude Code would try to attach it. Either way the file must be
+exactly the size given (so a cut upload, or a byte added on the way, is refused) and at most 50
+MB. The inbox is $PASTE_INBOX_DIR (default ~/.cache/claude-paste, mode 700, files 600); a file
+goes to a temp file and is renamed. The device name is cut to [a-z0-9._-], so neither name can
+steer the path or put a control character in the paste. Each receive first deletes the inbox's
+own files (that name pattern and stale temp files) once older than a day for images, which
+Claude Code reads at paste time, or 7 days for other files, which Claude reads when it decides
+to. Anything else is refused on stderr, exit 1, and so is an upload that sends no bytes for 60
+seconds (a link that died leaves no FIN, and this would otherwise wait for TCP to give up; a
+slow link that keeps moving is fine); --check prints the path it would use and keeps nothing
+(the laptop installer's self-test).
 
 `paste` takes a file the inbox received in the last 30 seconds (the laptop's Ctrl+V sends
 Alt+V right after its upload; inbox times and that check both use WSL's clock), else the newest
@@ -69,6 +69,7 @@ import sys
 import tempfile
 import time
 import traceback
+import unicodedata
 
 USAGE = __doc__.split("\n\n")[1]
 CAP = 50 * 1024 * 1024
@@ -84,7 +85,7 @@ IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".gif", ".webp")   # Claude Code's pasted
 MAGIC = ((b"\x89PNG\r\n\x1a\n", "png"), (b"\xff\xd8\xff", "jpg"), (b"GIF87a", "gif"),
          (b"GIF89a", "gif"))
 NAME64 = re.compile(r"[A-Za-z0-9_-]{1,1024}={0,2}")
-OWN = re.compile(r"^(\d{8}T\d{6}Z-[a-z0-9._-]+-[0-9a-f]{6}(-[\w-]+)?(\.[a-z0-9]{1,10})?"
+OWN = re.compile(r"^(\d{8}T\d{6}Z-[a-z0-9._-]+-[0-9a-f]{6}(-[^.]+)?(\.[a-z0-9]{1,10})?"
                  r"|\.incoming-.*\.tmp)$")
 DOWNLOADS_B64 = ("[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes("
                  "(New-Object -ComObject Shell.Application).NameSpace('shell:Downloads')"
@@ -123,8 +124,9 @@ def slug(device: str) -> str:
 
 def file_name(name64: str) -> tuple[str, str] | None:
     """(stem, ext) kept from a copied file's name sent as base64url, ext "" for none; None
-    when name64 isn't base64url of UTF-8. Only letters, digits, `_` and `-` stay in the stem,
-    so the extension's is the one dot."""
+    when name64 isn't base64url of UTF-8. Only letters, digits and marks (a vowel sign or an
+    accent is a mark) of any script, `_` and `-` stay in the stem, so the extension's is the
+    one dot; the name is NFC first, so an accent a Mac stored apart joins its letter."""
     if not NAME64.fullmatch(name64):
         return None
     bare = name64.rstrip("=")
@@ -133,11 +135,13 @@ def file_name(name64: str) -> tuple[str, str] | None:
                                 validate=True).decode("utf-8")
     except ValueError:                     # binascii.Error and UnicodeDecodeError both are
         return None
-    base = re.split(r"[/\\]", name)[-1].lstrip(".")
+    base = re.split(r"[/\\]", unicodedata.normalize("NFC", name))[-1].lstrip(".")
     stem, dot, ext = base.rpartition(".")
     if not dot or not re.fullmatch(r"[A-Za-z0-9]{1,10}", ext):
         stem, ext = base, ""
-    stem = re.sub(r"[^\w-]+", "-", stem).encode()[:STEM_BYTES].decode("utf-8", "ignore")
+    # each run of anything else becomes one -: "/" marks it, since no "/" is left in base
+    stem = "".join(c if c in "-_" or unicodedata.category(c)[0] in "LNM" else "/" for c in stem)
+    stem = re.sub("/+", "-", stem).encode()[:STEM_BYTES].decode("utf-8", "ignore")
     return stem.strip("-_") or "file", ext.lower()
 
 

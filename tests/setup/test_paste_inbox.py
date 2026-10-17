@@ -43,7 +43,7 @@ PDF = b"%PDF-1.7\n" + b"x" * 40
 CAP = 50 * 1024 * 1024
 DAY = 24 * 3600
 NAME = re.compile(r"^\d{8}T\d{6}Z-(?P<device>[a-z0-9._-]+)-[0-9a-f]{6}\.(?P<ext>png|jpg|gif|webp)$")
-NAMED = re.compile(r"^\d{8}T\d{6}Z-(?P<device>[a-z0-9._-]+)-[0-9a-f]{6}-(?P<stem>[\w-]+)"
+NAMED = re.compile(r"^\d{8}T\d{6}Z-(?P<device>[a-z0-9._-]+)-[0-9a-f]{6}-(?P<stem>[^.]+)"
                    r"(?:\.(?P<ext>[a-z0-9]{1,10}))?$")
 
 
@@ -284,7 +284,11 @@ class ReceiveFile(Inbox):
                            ("Zo\u00eb's notes [1].txt", "Zo\u00eb-s-notes-1"),
                            ("a&b%PATH%^c.txt", "a-b-PATH-c"),
                            ("snake_case-name.txt", "snake_case-name"),
-                           ("\u202egnp.txt", "gnp")):   # a bidi override is dropped
+                           ("\u202egnp.txt", "gnp"),    # a bidi override is dropped
+                           # a vowel sign is a mark, not a letter, and still belongs
+                           ("\u0939\u093f\u0902\u0926\u0940.pdf",
+                            "\u0939\u093f\u0902\u0926\u0940"),
+                           ("Zoe\u0308.txt", "Zo\u00eb")):  # decomposed, as a Mac writes it
             with self.subTest(name=name):
                 self.assertEqual(NAMED.match(self.received_as(b"text", name))["stem"], stem)
 
@@ -315,6 +319,9 @@ class ReceiveFile(Inbox):
         self.assertLessEqual(len(os.fsencode(base)), 255)
         self.assertEqual(NAMED.match(self.received_as(b"text", "x" * 300 + ".txt"))["stem"],
                          "x" * 96)
+        # 1 + 3 * 31 = 94 bytes; the 32nd character would end at byte 97, so it goes whole
+        self.assertEqual(NAMED.match(self.received_as(b"text", "a" + "\u5831" * 40 + ".txt"))
+                         ["stem"], "a" + "\u5831" * 31)
 
     def test_image_bytes_name_their_own_extension(self):
         for data, name, stem, ext in ((JPEG, "photo.jfif", "photo", "jpg"),
@@ -420,10 +427,14 @@ class Paste(Inbox):
         self.assertEqual(self.pasted(), upload)
 
     def test_a_unicode_file_name_pastes_unquoted_and_intact(self):
-        upload = self.put(self.inbox, "20261015T000000Z-laptop-aaaaaa-報告-v2.pdf",
-                          age=5, data=PDF)
-        self.paste()
-        self.assertEqual(self.pasted(), upload)
+        # a stem with marks (a vowel sign) is still the inbox's own
+        for stem in ("\u5831\u544a-v2", "\u0939\u093f\u0902\u0926\u0940"):
+            with self.subTest(stem=stem):
+                upload = self.put(self.inbox, "20261015T000000Z-laptop-aaaaaa-%s.pdf" % stem,
+                                  age=5, data=PDF)
+                self.paste()
+                self.assertEqual(self.pasted(), upload)
+                os.remove(upload)
 
     def test_extensions_match_in_any_case(self):
         shot = self.put(self.downloads, "IMG_0042.JPEG", age=5, data=JPEG)
@@ -616,24 +627,24 @@ class InProcess(unittest.TestCase):
         self.assertFalse(os.path.exists(self.tmp + "/inbox"))
 
     def test_a_slow_upload_that_keeps_moving_is_kept(self):
-        # the stall is time with no bytes, not a total: 4 pieces 0.5 s apart outlast a 1 s
-        # stall, and each gap is shorter than it
+        # the stall is time with no bytes, not a total: 6 pieces 0.5 s apart outlast a 2 s
+        # stall, and each gap is a quarter of it
         self.addCleanup(signal.signal, signal.SIGALRM, signal.getsignal(signal.SIGALRM))
         r, w = os.pipe()
         self.addCleanup(self.close_quietly, w)
         stdin = io.TextIOWrapper(open(r, "rb"))
         self.addCleanup(stdin.close)
-        data = PDF * 4
+        data = PDF * 6
 
         def trickle():
-            for i in range(4):
+            for i in range(6):
                 time.sleep(0.5)
                 os.write(w, data[i * len(PDF):(i + 1) * len(PDF)])
             os.close(w)
 
         writer = threading.Thread(target=trickle)
         out, err = io.StringIO(), io.StringIO()
-        with unittest.mock.patch.object(self.pi, "STALL", 1), \
+        with unittest.mock.patch.object(self.pi, "STALL", 2), \
                 unittest.mock.patch.object(sys, "stdin", stdin), \
                 unittest.mock.patch.object(sys, "stdout", out), \
                 unittest.mock.patch.object(sys, "stderr", err):
@@ -732,6 +743,15 @@ class Laptop(unittest.TestCase):
         self.assertNotIn("ReadAllBytes", ps1)    # it denies a file Office has open for writing
         self.assertIn("[System.IO.File]::Open($file.FullName, 'Open', 'Read', "
                       "'ReadWrite, Delete')", ps1)
+
+    def test_the_answer_wait_covers_what_ssh_still_holds(self):
+        # after the last piece, ssh and TCP may still hold up to the whole file: the wait grows
+        # with it (16 KB/s), capped at 10 minutes; keepalives end a dead link long before
+        ps1 = self.read("remote-paste.ps1")
+        self.assertIn("$wait = [int][Math]::Min(600000, 30000 + $bytes.Length / 16KB * 1000)",
+                      ps1)
+        self.assertIn("$p.WaitForExit($wait)", ps1)
+        self.assertNotIn("WaitForExit(30000)", ps1)
 
     def test_the_hotkey_takes_one_copied_file_but_not_a_folder(self):
         ahk = self.read("remote-paste.ahk")
@@ -839,8 +859,8 @@ class LaptopPowerShell(unittest.TestCase):
         # page) and the command as -EncodedCommand (no native-argument quoting).
         with open(os.path.join(LAPTOP, "remote-paste.ps1"), encoding="utf-8") as f:
             func = re.search(r"^function Get-Name64\b.*?^\}", f.read(), re.M | re.S)[0]
-        names = {"report.pdf": "report", "報告 v2 (final).pdf": "報告-v2-final",
-                 "Zoë's notes [1].txt": "Zoë-s-notes-1",
+        names = {"report.pdf": "report", "\u5831\u544a v2 (final).pdf": "\u5831\u544a-v2-final",
+                 "Zo\u00eb's notes [1].txt": "Zo\u00eb-s-notes-1",
                  'a&b%PATH%^c "q".txt': "a-b-PATH-c-q", "\U0001F600.txt": "file"}
         env = {**os.environ, "WSLENV": ":".join("RP_N%d" % i for i in range(len(names)))}
         env.update({"RP_N%d" % i: n for i, n in enumerate(names)})
@@ -862,6 +882,44 @@ class LaptopPowerShell(unittest.TestCase):
                 self.assertEqual(r.returncode, 0, r.stderr)
                 self.assertEqual(NAMED.match(os.path.basename(r.stdout.decode().strip()))["stem"],
                                  stem)
+
+    def test_a_hidden_file_and_one_open_for_writing_are_read(self):
+        # Read-CopiedFile from remote-paste.ps1, on Windows files it makes in %TEMP%: a hidden
+        # one (Get-Item without -Force can't see it) and one another handle holds open for
+        # writing, as Excel holds an open workbook (ReadAllBytes would refuse it)
+        with open(os.path.join(LAPTOP, "remote-paste.ps1"), encoding="utf-8") as f:
+            func = re.search(r"^function Read-CopiedFile\b.*?^\}", f.read(), re.M | re.S)[0]
+        command = "\n".join([
+            "Set-StrictMode -Version 3", "$ErrorActionPreference = 'Stop'",
+            "function Fail([string]$why) { throw $why }", func,
+            "$dir = Join-Path $env:TEMP ('rp-test-' + [guid]::NewGuid())",
+            "New-Item -ItemType Directory -Path $dir | Out-Null",
+            "try {",
+            "  $hidden = Join-Path $dir 'hidden [1].txt'",
+            "  [IO.File]::WriteAllText($hidden, 'hidden bytes')",
+            "  (Get-Item -LiteralPath $hidden).Attributes = 'Hidden'",
+            "  'leaf=' + (Test-Path -LiteralPath $hidden -PathType Leaf)",
+            "  $ms = New-Object IO.MemoryStream",
+            "  $f = Read-CopiedFile $hidden $ms",
+            "  'hidden=' + $f.Name + '|' + [Text.Encoding]::ASCII.GetString($ms.ToArray())",
+            "  $open = Join-Path $dir 'open.xlsx'",
+            "  [IO.File]::WriteAllText($open, 'open bytes')",
+            "  $held = [IO.File]::Open($open, 'Open', 'ReadWrite', 'ReadWrite')",
+            "  try {",
+            "    $ms = New-Object IO.MemoryStream",
+            "    $f = Read-CopiedFile $open $ms",
+            "    'open=' + $f.Name + '|' + [Text.Encoding]::ASCII.GetString($ms.ToArray())",
+            "  } finally { $held.Dispose() }",
+            "} finally { Remove-Item -LiteralPath $dir -Recurse -Force }"])
+        p = subprocess.run([self.ps, "-NoProfile", "-NonInteractive", "-EncodedCommand",
+                            base64.b64encode(command.encode("utf-16-le")).decode()],
+                           capture_output=True, timeout=60)
+        out = p.stdout.decode("utf-8", "replace") + p.stderr.decode("utf-8", "replace")
+        if "UtilConnectUnix" in out:
+            self.skipTest("the Bash sandbox blocks WSL interop; run outside it")
+        self.assertEqual(p.stdout.decode().split("\r\n")[:3],
+                         ["leaf=True", "hidden=hidden [1].txt|hidden bytes",
+                          "open=open.xlsx|open bytes"], out)
 
 
 class RealTmux(unittest.TestCase):

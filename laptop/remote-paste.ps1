@@ -14,10 +14,10 @@ shell port, whose cmd.exe runs `wsl.exe -d <distro> --cd ~ --exec .local/bin/pas
 <COMPUTERNAME> <bytes> [<name64>]`; the byte count makes the PC refuse a cut upload. A copied
 file that isn't a .png, .jpg, .jpeg, .gif or .webp also sends its name as base64url of its
 UTF-8 (<name64>), the one form that crosses this PowerShell's argument joining, the PC's cmd.exe
-and wsl.exe untouched; an image sends none, so a PC that predates files still takes it. The file
-is opened shared for writing too, as Explorer copies it, so a document open in Office still
-goes. -SelfTest sends a 1x1 PNG named selftest.png with `receive --check`, which validates it
-and keeps nothing, and so also checks the PC takes names. The process is started through
+and wsl.exe untouched; an image sends none, so a PC that predates files still takes it. A
+hidden file goes too, and so does a document open in Office (Read-CopiedFile). -SelfTest sends
+a 1x1 PNG named selftest.png with `receive --check`, which validates it and keeps nothing, and
+so also checks the PC takes names. The process is started through
 ProcessStartInfo with no argument holding a space or a quote, since Windows PowerShell 5.1
 mangles native arguments with embedded quotes, and with a BOM-free console input encoding (put
 back right after), since .NET Framework writes the encoding's preamble into a child's stdin at
@@ -26,9 +26,10 @@ wsl.exe's own errors (it prints them on stdout) UTF-8 like ssh's; the PC's wsl.e
 it through ssh, so NULs are dropped from whatever comes back.
 BatchMode: a key that needs a passphrase fails at once instead of waiting in a hidden window.
 ConnectTimeout 5 s, keepalives every 5 s (a link that dies ends ssh within about 15 s). The
-upload is written asynchronously in 256 KB pieces, each given 30 s, so a stalled pipe fails
-while a slow link that keeps moving can take as long as the file needs; then the PC has 30 s to
-answer.
+upload is written asynchronously in 256 KB pieces, each given 30 s, so a stalled pipe fails;
+then, since ssh and TCP may still hold the end of the file, the PC gets 30 s plus 1 s per 16 KB
+(at most 10 minutes) to answer. So any file up to 50 MB goes over a link that keeps moving at
+about 16 KB/s or more.
 
 Exit 0: stored; prints the PC's path. Exit 3: nothing to send (text, nothing, several files or
 a folder), so the caller pastes as usual. Exit 1: failed; the reason goes to stderr and to
@@ -56,6 +57,17 @@ Add-Type -AssemblyName System.Windows.Forms, System.Drawing
 function Get-Name64([string]$name) {
     $b64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($name))
     return $b64.TrimEnd('=').Replace('+', '-').Replace('/', '_')
+}
+
+# One copied file's bytes into $into; returns its FileInfo. -Force, or Get-Item -LiteralPath
+# can't see a hidden file. Opened shared for writing and deleting too, as Explorer copies, so a
+# document open in Office still goes (a read that shares only reading would refuse it).
+function Read-CopiedFile([string]$path, [System.IO.MemoryStream]$into) {
+    $file = Get-Item -LiteralPath $path -Force
+    if ($file.Length -gt 50MB) { Fail "$($file.Name) is over 50 MB" }
+    $stream = [System.IO.File]::Open($file.FullName, 'Open', 'Read', 'ReadWrite, Delete')
+    try { $stream.CopyTo($into) } finally { $stream.Dispose() }
+    return $file
 }
 
 $ini = Join-Path $PSScriptRoot 'remote-paste.ini'
@@ -90,13 +102,10 @@ if ($SelfTest) {
         $files = $clip::GetFileDropList()
         if ($files.Count -ne 1) { exit 3 }
         if (-not (Test-Path -LiteralPath $files[0] -PathType Leaf)) { exit 3 }
-        $file = Get-Item -LiteralPath $files[0]
-        if ($file.Length -gt 50MB) { Fail "$($file.Name) is over 50 MB" }
+        $file = Read-CopiedFile $files[0] $ms
         if ($file.Extension -notmatch '^\.(png|jpe?g|gif|webp)$') {
             $name64 = Get-Name64 $file.Name
         }
-        $stream = [System.IO.File]::Open($file.FullName, 'Open', 'Read', 'ReadWrite, Delete')
-        try { $stream.CopyTo($ms) } finally { $stream.Dispose() }
     } else {
         exit 3
     }
@@ -162,9 +171,12 @@ if (-not $sent) {
     try { $p.Kill() } catch { }
     Fail 'the upload stalled: nothing moved for 30 s'
 }
-if (-not $p.WaitForExit(30000)) {
+# ssh and TCP may still hold up to the whole file after its last piece: 30 s plus 1 s per
+# 16 KB to drain it, at most 10 minutes; ssh's keepalives end a dead link long before that
+$wait = [int][Math]::Min(600000, 30000 + $bytes.Length / 16KB * 1000)
+if (-not $p.WaitForExit($wait)) {
     try { $p.Kill() } catch { }
-    Fail 'no answer from the PC within 30 s of the upload'
+    Fail "no answer from the PC within $([int]($wait / 1000)) s of the upload"
 }
 $path = $out.Result.Trim()
 if ($p.ExitCode -ne 0 -or -not $path) {
