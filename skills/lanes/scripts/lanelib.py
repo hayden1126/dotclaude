@@ -1182,9 +1182,10 @@ def read_lead(repo: Repo) -> dict | None:
 
 def main_sessions(repo: Repo) -> list[dict]:
     """The live sessions in the main checkout, by pid: session files whose process runs
-    (session_running: a stopped one answers nothing), with a socket (socket_of: a `claude -p` has none, so it never counts)
-    and a cwd inside repo.main, agent worktrees under it included. `lane addr lead`, the board's
-    footer and lead_of share this one set. Call it only where pids_visible()."""
+    (session_running: a stopped one answers nothing), with a socket (socket_of: a `claude -p`
+    has none, so it never counts) and a cwd inside repo.main, agent worktrees under it included.
+    `lane addr lead`, the board's footer and lead_of share this one set. Call it only where
+    pids_visible()."""
     return sorted((s for s in session_files() if cwd_inside(s.get("cwd"), repo.main)
                    and session_running(s) and socket_of(s)), key=lambda s: s["pid"])
 
