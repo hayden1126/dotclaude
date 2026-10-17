@@ -123,7 +123,8 @@ stored here).
     rerun the menu-clip repro and the tmux suites. If it fixes the clip, install at a quiet
     moment (a server restart; claude-restore reopens the tabs) and drop the row-0 menu rule.
     Until then, 3.7c's default menus that dotclaude doesn't own still clip under a top bar.
-  - **A lead stopped with Ctrl+Z keeps the lead role** (seen 2026-10-17). Hayden suspended the
+  - **A lead stopped with Ctrl+Z keeps the lead role** (seen 2026-10-17; open as lane
+    `stopped-lead` since 2026-10-17, brief in its record). Hayden suspended the
     lead's claude (pid 1107, `ps` state `T`) and resumed the same session id in the same shell as
     pid 40133. `lane addr lead` still gave 1107's socket, so lane-model's `merged #110` timed out
     twice, and the board named 1107 lead until the new process ran `lane lead`. Fix in the lane
@@ -234,7 +235,8 @@ stored here).
 
 ## Notes for next session
 - **Next (lead, main checkout):** watch for "merged #N" from a lane, then run the post-merge
-  chain (`skills/lanes/SKILL.md`, The lead, step 7). No live lanes; all 3 slots are free. Check `lane ls` first: a merge Hayden made on GitHub and mentioned to no
+  chain (`skills/lanes/SKILL.md`, The lead, step 7). Live lane: `stopped-lead` (opened
+  2026-10-17, Hayden's go; brief in its record). Two of 3 slots are free. Check `lane ls` first: a merge Hayden made on GitHub and mentioned to no
   session sends no message (#102 showed merged there before its lane's message came). Each new work-repo lane still needs its own Edit deny rule
   (they take no glob); `lane new` prints it since #104. No chat
   about a lane's own asks; speak on cross-lane orders, decisions raised with the lead, failed
