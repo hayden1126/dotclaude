@@ -139,7 +139,8 @@ side chat. The lead is the last one to act as lead. A bare `lane init`, `new`, `
 `--print`) or `done` that succeeds from an interactive session in the main checkout records it in the state
 dir, where no lane can write, and `lane lead` takes it on purpose (Hayden: `! lane lead` at its
 prompt). A /clear, a /pass in its pane, or a resume of its session (in another tab, or the tab a
-tmux restart restores) keeps it; otherwise it acts again. Looks (`ls`, `addr`) never take it.
+tmux restart restores) keeps it: the lane-identity hook relinks the record on proof, so a restart
+after a /pass keeps it too. Otherwise it acts again. Looks (`ls`, `addr`) never take it.
 `lane addr lead` prints the lead's address, `lane ls` names a crowded main checkout under the
 board, and the tab bar calls its other tabs `lead²`, `lead³`. A lead stopped with Ctrl+Z answers
 nothing until `fg`: `addr` and the board name its window instead, and a lone side chat never

@@ -243,11 +243,11 @@ it, and `lane lead` does so on purpose. The other two candidates lose on the one
 |---|---|---|---|
 | One session (the usual) | that one | that one | that one |
 | capella-studio | `main:@3`, from its acts | `main:@2`, the stray (20:16) | each lane asks Hayden, every merge |
-| The lead passes or clears | kept: same pane, same server | lost: the pass makes the lead youngest | nothing to lose |
+| The lead passes or clears | kept and healed: same pane, same server | lost: the pass makes the lead youngest | nothing to lose |
 | A side chat in main | never leads: `ls` and `addr` are looks | leads if it started first | asks |
 | Hayden starts a fresh lead by hand | `! lane lead` in it | never, while the old one lives | asks |
-| tmux restarts | kept when the restored tab resumes the lead's session; else none until the lead acts again | the restored order | asks |
-| The lead resumes in another tab | kept: the same session id | lost: the resume is youngest | asks |
+| tmux restarts | kept when the restored tab resumes the lead's session, after a pass too (the heal keeps the record's session id current); else none until the lead acts again | the restored order | asks |
+| The lead resumes in another tab | kept and healed: the same session id | lost: the resume is youngest | asks |
 | The lead is stopped (Ctrl+Z) | its resume if one runs; else none, naming the stopped lead to `fg`, even beside one side chat | the stopped one, which answers nothing | asks |
 
 How it holds:
@@ -277,6 +277,19 @@ How it holds:
   likely a side chat. Anything else is no pick. `lane addr lead` then refuses with each
   session's window, the way to pick, and a stopped lead's window to `fg` it in, and the lane
   tells Hayden once that #N merged, as with no lead at all.
+- **The heal** (`lanelib.lead_relink`, lane stopped-lead). The pick alone loses a /pass once
+  tmux restarts: the restored tab resumes the successor's session id, which the record never
+  held, and the bar reads only the recorded pane. So the lane-identity hook, on SessionStart
+  and Stop in the main checkout, rewrites the record when this session proves it continues the
+  recorded lead. A /clear: the recorded process runs, is the hook's ancestor, and the session
+  id is new. A resume: the recorded process is gone or stopped, and the session id is the
+  record's. A /pass: the recorded process is gone, this session runs in the recorded pane, and
+  that pane's `pass-last` marker (pass-respawn writes it in the state dir just before the
+  respawn) names the recorded session leaving it at most 120 s before this claude started. A
+  claude started by hand in the old tab has no marker, and a running lead is never displaced.
+  On proof the hook runs its sibling `lane lead`, so every check under "Who counts" still
+  applies, and a refusal is retried at the next Stop. Nearly every call costs one file read
+  and one stat.
 - **The board** (`lane ls`) adds a line under the table when the main checkout has two or more
   live sessions: each one's window, pid and state, the lead first, `no tmux` or `agent worktree`
   where it applies. With no running session picked and the recorded lead stopped, the line
@@ -284,7 +297,8 @@ How it holds:
 - **The bar** reads the same record. The window holding its pane, on the bar's own server
   (socket, pid and that pid's start), is `lead`; the main checkout's other tabs, a shell
   included, are `lead²`, `lead³` in bar order. With no pick, the first keeps `lead`. A new lead
-  renames tabs and moves none.
+  renames tabs and moves none. Once the heal rewrites the record, the bar follows a resume in
+  another tab with no change of its own.
 
 ## Layout
 
@@ -525,7 +539,8 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
   50 ms, so one `lane ls` probe (an instant shared lock) doesn't read as a holder; two probes
   50 ms apart still can, and make `--wait 0` give up on a lock nobody runs under.
 - **`hooks/lane-identity.sh`** (SessionStart, Stop, SessionEnd): the identity line, the `sessions[]`
-  entry, the mirror and the end stamp. The identity line names the branch the worktree has checked
+  entry, the mirror and the end stamp, and in the main checkout the board line and the lead heal
+  ("One lead per main checkout"). The identity line names the branch the worktree has checked
   out, or a detached HEAD by its commit, as `ls` and `whoami` do, since a lane that switched for a
   follow-up PR leaves `lane.json`'s branch behind. The hook asks git itself (it doesn't import the
   CLI), and only a valid branch name or a commit reaches the context: the admin dir is

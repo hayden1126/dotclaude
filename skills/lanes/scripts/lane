@@ -30,7 +30,9 @@ command it wraps stays sandboxed too.
 
 The lead is the main-checkout session that last acted as lead: a bare `init`, `new`, `adopt`,
 `open` (not `--print`) or `done` that succeeds from an interactive session in the main checkout,
-or `lead`, records it in the state dir (lanelib.read_lead). `addr lead` picks it among the main
+or `lead`, records it in the state dir (lanelib.read_lead). hooks/lane_identity.py runs `lead`
+for a session that proves it continues the recorded lead (lanelib.lead_relink: a resume, a
+/clear or a /pass successor), so the record follows it. `addr lead` picks it among the main
 checkout's running sessions by its pid, else by the one continuation of it (a resume of its
 session id, or a /pass successor in its pane), else the one session there unless the recorded
 lead is stopped (lanelib.lead_of). `ls` names a crowded checkout, or a stopped lead to `fg`, under

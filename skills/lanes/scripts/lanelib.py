@@ -1158,7 +1158,8 @@ def lane_sid(sid, path: str, files: list[dict]) -> bool:
 # The lead is the main-checkout session that last acted as lead (a bare `lane init`, `new`,
 # `adopt`, `open` or `done`, or `lane lead`), recorded at Repo.lead_path. `lane addr lead`, the
 # board's main-checkout footer and tmux/tmux-tab-bar only read the record, so a look never takes
-# the lead. Its tmux facts come from the claude process's own environment, never its session
+# the lead; the lane-identity hook runs `lane lead` for a proven continuation of it (the heal,
+# below). Its tmux facts come from the claude process's own environment, never its session
 # file's `tmux` field: that names a tmux session, not a server, and pane ids restart at %0 on
 # every server.
 
