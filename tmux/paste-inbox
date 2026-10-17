@@ -1,38 +1,51 @@
 #!/usr/bin/python3 -I
-"""paste-inbox: paste the newest image that reached this PC into a tmux pane (Alt+V).
+"""paste-inbox: paste the newest image or file that reached this PC into a tmux pane (Alt+V).
 
-  paste-inbox receive [--check] <device> <bytes>   one image of <bytes> bytes on stdin into the
-                                                   inbox; prints its path (--check: validate
-                                                   it, keep nothing)
-  paste-inbox paste <pane> <client>                the newest image of the last 10 minutes, as a
-                                                   bracketed paste into the pane; else a
-                                                   message on the client
+  paste-inbox receive [--check] <device> <bytes> [<name64>]
+      one image, or with <name64> one file of any type, of <bytes> bytes on stdin into the
+      inbox; prints its path (--check: validate it, keep nothing)
+  paste-inbox paste <pane> <client>
+      the newest image or file of the last 10 minutes, as a bracketed paste of its path into
+      the pane; else a message on the client
 
 Why: under WSL, Claude Code's Ctrl+V and an empty paste read this PC's Windows clipboard
 (powershell.exe through the tmux server's WSL interop), so a screenshot copied on another device
 never arrives. Claude Code does attach an image whose path is pasted (bracketed, or a chunk over
-800 characters; read from the 2.1.301 binary), so this pastes a path.
+800 characters; read from the 2.1.301 binary), so this pastes a path. Any other file's path
+lands as text, which Claude reads with Read (settings.json allows that for the default inbox,
+since a Read outside the project asks first).
 
-`receive` is what a remote device runs over ssh on the Windows shell port, through
-`wsl.exe -d Ubuntu --cd ~ --exec .local/bin/paste-inbox receive <device> <bytes>` (laptop/ holds
-the Windows side). It keeps a PNG, JPEG, GIF or WebP of exactly the size given (so a cut upload,
-or a byte added on the way, is refused) and at most 50 MB, judged by its first bytes, which also
-pick the extension, as `<UTC time>-<device>-<random>.<ext>` in $PASTE_INBOX_DIR (default
-~/.cache/claude-paste, mode 700, files 600), written to a temp file and renamed. The device name
-is cut to [a-z0-9._-], so it can't steer the path. Each receive first deletes the inbox's own
-files (that name pattern and stale temp files) older than a day; Claude Code reads an image at
-paste time, so a pasted copy is not needed after. Anything else is refused on stderr, exit 1,
-and so is an upload still unfinished after 2 minutes (a link that died leaves no FIN, and this
-would otherwise wait for TCP to give up); --check prints the path it would use and keeps
+`receive` is what a remote device runs over ssh on the Windows shell port, through `wsl.exe -d
+Ubuntu --cd ~ --exec .local/bin/paste-inbox receive <device> <bytes> [<name64>]` (laptop/ holds
+the Windows side). Without <name64> it keeps a PNG, JPEG, GIF or WebP, judged by its first
+bytes, which also pick the extension, as `<UTC time>-<device>-<random>.<ext>`. With <name64>,
+the copied file's name as base64url of its UTF-8 (padding optional; the one charset that crosses
+the laptop's PowerShell, the PC's cmd.exe and wsl.exe untouched), it keeps any file as `<UTC
+time>-<device>-<random>-<stem>[.<ext>]`: the stem is the name's last part (NFC) with anything
+but letters, digits and marks of any script, `_` and `-` turned into `-`, cut to 96 UTF-8 bytes
+on a character boundary, and the extension 1-10 ASCII letters or digits, lowercased. An image's
+first bytes still pick its extension, and a file that isn't an image but whose kept name would
+end like one is refused, since Claude Code would try to attach it. Either way the file must be
+exactly the size given (so a cut upload, or a byte added on the way, is refused) and at most 50
+MB. The inbox is $PASTE_INBOX_DIR (default ~/.cache/claude-paste, mode 700, files 600); a file
+goes to a temp file and is renamed. The device name is cut to [a-z0-9._-], so neither name can
+steer the path or put a control character in the paste. Each upload it keeps first deletes the
+inbox's own files (that name pattern and stale temp files) once older than a day for images,
+which Claude Code reads at paste time, or 7 days for other files, which Claude reads when it
+decides to. Anything else is refused on stderr, exit 1, and so is an upload that sends no bytes
+for 60 seconds (a link that died leaves no FIN, and this would otherwise wait for TCP to give
+up; a slow link that keeps moving is fine); --check prints the path it would use and keeps
 nothing (the laptop installer's self-test).
 
-`paste` takes an image the inbox received in the last 30 seconds (the laptop's Ctrl+V sends
+`paste` takes a file the inbox received in the last 30 seconds (the laptop's Ctrl+V sends
 Alt+V right after its upload; inbox times and that check both use WSL's clock), else the newest
-non-empty image file (.png, .jpg, .jpeg, .gif or .webp, any case; no dotfiles) modified in the
-last 10 minutes, and no more than 10 minutes in the future (Downloads times come from Windows'
-clock, which WSL2's can fall behind after a sleep), in the inbox or Windows Downloads, where
-Taildrop saves (Tailscale 1.34 and later; mtime is the arrival time). So past those 30 seconds a
-Taildrop, or a browser download on this PC, beats an older upload. The Downloads folder is
+non-empty file modified in the last 10 minutes, and no more than 10 minutes in the future
+(Downloads times come from Windows' clock, which WSL2's can fall behind after a sleep): in the
+inbox, its own files of any type and any image; in Windows Downloads, where Taildrop saves
+(Tailscale 1.34 and later; mtime is the arrival time), images only, since browser downloads
+land there too. An image is a .png, .jpg, .jpeg, .gif or .webp, any case; dotfiles never count.
+So past those 30 seconds a Taildrop, or a browser download on this PC, beats an older upload.
+The Downloads folder is
 $PASTE_INBOX_DOWNLOADS (empty: none), else the path cached in
 $XDG_STATE_HOME/dotclaude/paste-inbox/downloads while that folder exists, else Windows'
 Downloads known folder from powershell.exe (printed as base64 of its UTF-8, since a console
@@ -56,24 +69,30 @@ import sys
 import tempfile
 import time
 import traceback
+import unicodedata
 
 USAGE = __doc__.split("\n\n")[1]
 CAP = 50 * 1024 * 1024
+CHUNK = 1024 * 1024
 FRESH = 10 * 60
 SKEW = FRESH
-STALL = 120
+STALL = 60
 RECENT = 30
 KEEP = 24 * 3600
+KEEP_FILES = 7 * 24 * 3600
+STEM_BYTES = 96
 IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".gif", ".webp")   # Claude Code's pasted-path pattern
 MAGIC = ((b"\x89PNG\r\n\x1a\n", "png"), (b"\xff\xd8\xff", "jpg"), (b"GIF87a", "gif"),
          (b"GIF89a", "gif"))
-OWN = re.compile(r"^(\d{8}T\d{6}Z-[a-z0-9._-]+-[0-9a-f]{6}\.(png|jpg|gif|webp)"
+NAME64 = re.compile(r"[A-Za-z0-9_-]{1,1024}={0,2}")
+OWN = re.compile(r"^(\d{8}T\d{6}Z-[a-z0-9._-]+-[0-9a-f]{6}(-[^.]+)?(\.[a-z0-9]{1,10})?"
                  r"|\.incoming-.*\.tmp)$")
 DOWNLOADS_B64 = ("[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes("
                  "(New-Object -ComObject Shell.Application).NameSpace('shell:Downloads')"
                  ".Self.Path))")
-NONE_FRESH = ("No image arrived in the last 10 minutes. Ctrl+V a screenshot on a laptop with "
-              "laptop/remote-paste, or Taildrop it to this PC, then Alt+V.")
+NONE_FRESH = ("No image or file arrived in the last 10 minutes. Ctrl+V a screenshot or a copied "
+              "file on a laptop with laptop/remote-paste, or Taildrop an image to this PC, then "
+              "Alt+V.")
 
 
 def inbox_dir() -> str:
@@ -95,17 +114,46 @@ def image_ext(data: bytes) -> str | None:
     return None
 
 
+def is_image(name: str) -> bool:
+    return name.lower().endswith(IMAGE_EXTS)
+
+
 def slug(device: str) -> str:
     return re.sub(r"[^a-z0-9._-]+", "-", device.lower()).strip("-.")[:32].strip("-.") or "device"
 
 
+def file_name(name64: str) -> tuple[str, str] | None:
+    """(stem, ext) kept from a copied file's name sent as base64url, ext "" for none; None
+    when name64 isn't base64url of UTF-8. Only letters, digits and marks (a vowel sign or an
+    accent is a mark) of any script, `_` and `-` stay in the stem, so the extension's is the
+    one dot; the name is NFC first, so an accent a Mac stored apart joins its letter."""
+    if not NAME64.fullmatch(name64):
+        return None
+    bare = name64.rstrip("=")
+    try:
+        name = base64.b64decode(bare.translate(str.maketrans("-_", "+/")) + "=" * (-len(bare) % 4),
+                                validate=True).decode("utf-8")
+    except ValueError:                     # binascii.Error and UnicodeDecodeError both are
+        return None
+    base = re.split(r"[/\\]", unicodedata.normalize("NFC", name))[-1].lstrip(".")
+    stem, dot, ext = base.rpartition(".")
+    if not dot or not re.fullmatch(r"[A-Za-z0-9]{1,10}", ext):
+        stem, ext = base, ""
+    # each run of anything else becomes one -: "/" marks it, since no "/" is left in base
+    stem = "".join(c if c in "-_" or unicodedata.category(c)[0] in "LNM" else "/" for c in stem)
+    stem = re.sub("/+", "-", stem).encode()[:STEM_BYTES].decode("utf-8", "ignore")
+    return stem.strip("-_") or "file", ext.lower()
+
+
 def prune(inbox: str) -> None:
-    """Delete the inbox's own files (OWN) older than KEEP; leave anything else."""
-    cutoff = time.time() - KEEP
+    """Delete the inbox's own files (OWN) once older than KEEP for an image or a temp file,
+    KEEP_FILES for anything else; leave the rest."""
+    now = time.time()
     for entry in os.scandir(inbox):
+        keep = KEEP if entry.name.startswith(".") or is_image(entry.name) else KEEP_FILES
         try:
             if OWN.match(entry.name) and entry.is_file(follow_symlinks=False) \
-                    and entry.stat(follow_symlinks=False).st_mtime < cutoff:
+                    and entry.stat(follow_symlinks=False).st_mtime < now - keep:
                 os.unlink(entry.path)
         except OSError:
             pass
@@ -115,31 +163,55 @@ def stalled(signum, frame):
     raise TimeoutError
 
 
-def receive(device: str, size: int, check: bool) -> int:
-    if size > CAP:
-        return refuse("over 50 MB")
+def read_upload() -> bytes:
+    """stdin, up to CAP + 1 bytes; TimeoutError once STALL seconds pass with no bytes."""
     signal.signal(signal.SIGALRM, stalled)
-    signal.alarm(STALL)
+    chunks, got = [], 0
     try:
-        data = sys.stdin.buffer.read(CAP + 1)
-    except TimeoutError:
-        return refuse(f"the upload stalled for {STALL} s")
+        while got <= CAP:
+            signal.alarm(STALL)
+            chunk = sys.stdin.buffer.read1(min(CHUNK, CAP + 1 - got))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            got += len(chunk)
     finally:
         signal.alarm(0)
+    return b"".join(chunks)
+
+
+def receive(device: str, size: int, check: bool, name64: str | None = None) -> int:
+    named = None
+    if name64 is not None:
+        named = file_name(name64)
+        if named is None:
+            return refuse("bad file name (not base64url of UTF-8, or over 1024 characters)")
+    if size > CAP:
+        return refuse("over 50 MB")
+    try:
+        data = read_upload()
+    except TimeoutError:
+        return refuse(f"the upload stalled for {STALL} s")
     if not data:
         return refuse("nothing on stdin")
     if len(data) > CAP:
         return refuse("over 50 MB")
     if len(data) != size:
         return refuse(f"got {len(data)} bytes, expected {size} (the upload was cut or changed)")
-    ext = image_ext(data)
-    if ext is None:
+    magic = image_ext(data)
+    if magic is None and named is None:
         return refuse("not a PNG, JPEG, GIF or WebP image")
+    stem = named[0] if named else ""
+    ext = magic or named[1]
+    stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+    leaf = f"{stamp}-{slug(device)}-{secrets.token_hex(3)}" + (f"-{stem}" if stem else "") \
+        + (f".{ext}" if ext else "")
+    if magic is None and leaf.lower().endswith(IMAGE_EXTS):
+        return refuse(f"named .{ext} but not a PNG, JPEG, GIF or WebP image")
     inbox = inbox_dir()
     os.makedirs(inbox, exist_ok=True)
     os.chmod(inbox, 0o700)
-    stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
-    final = os.path.join(inbox, f"{stamp}-{slug(device)}-{secrets.token_hex(3)}.{ext}")
+    final = os.path.join(inbox, leaf)
     if check:
         if not os.access(inbox, os.W_OK):
             return refuse(f"can't write {inbox}")
@@ -204,9 +276,14 @@ def windows_downloads() -> str | None:
     return path if path and os.path.isdir(path) else None
 
 
-def images(folder: str | None, now: float) -> list:
-    """(mtime, path) of each non-empty image file in folder modified within FRESH seconds
-    (SKEW at most ahead)."""
+def is_upload(name: str) -> bool:
+    """An inbox file worth pasting: one receive kept (any type), or any image."""
+    return bool(OWN.match(name)) or is_image(name)
+
+
+def fresh(folder: str | None, now: float, wanted) -> list:
+    """(mtime, path) of each non-empty file in folder whose name wanted() takes (never a
+    dotfile), modified within FRESH seconds (SKEW at most ahead)."""
     if not folder:
         return []
     try:
@@ -215,7 +292,7 @@ def images(folder: str | None, now: float) -> list:
         return []
     found = []
     for entry in entries:
-        if entry.name.startswith(".") or not entry.name.lower().endswith(IMAGE_EXTS):
+        if entry.name.startswith(".") or not wanted(entry.name):
             continue
         try:
             if not entry.is_file():
@@ -228,15 +305,15 @@ def images(folder: str | None, now: float) -> list:
     return found
 
 
-def newest_image() -> str | None:
+def newest() -> str | None:
     """An inbox upload from the last RECENT seconds (the laptop's Ctrl+V sends Alt+V right
-    after one), else the newest image in the inbox or Downloads."""
+    after one), else the newest upload in the inbox or image in Downloads."""
     now = time.time()
-    inbox = images(inbox_dir(), now)
+    inbox = fresh(inbox_dir(), now, is_upload)
     recent = [item for item in inbox if item[0] >= now - RECENT]
     if recent:
         return max(recent)[1]
-    found = inbox + images(downloads_dir(), now)
+    found = inbox + fresh(downloads_dir(), now, is_image)
     return max(found)[1] if found else None
 
 
@@ -250,7 +327,7 @@ def tmux(*args: str, stdin: bytes | None = None) -> str:
 
 
 def paste(pane: str, client: str) -> int:
-    path = newest_image()
+    path = newest()
     if path is None:
         tmux("display-message", "-c", client, "-d", "5000", NONE_FRESH)
         return 0
@@ -284,8 +361,8 @@ def main(argv: list) -> int:
     if args[:1] == ["receive"]:
         check = args[1:2] == ["--check"]
         rest = args[2:] if check else args[1:]
-        if len(rest) == 2 and re.fullmatch(r"[1-9][0-9]{0,9}", rest[1]):
-            return receive(rest[0], int(rest[1]), check)
+        if len(rest) in (2, 3) and re.fullmatch(r"[1-9][0-9]{0,9}", rest[1]):
+            return receive(rest[0], int(rest[1]), check, *rest[2:])
     if len(args) == 3 and args[0] == "paste":
         try:
             return paste(args[1], args[2])
