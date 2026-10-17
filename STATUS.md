@@ -96,7 +96,10 @@ stored here).
     Vulcan's memory `no-chrome-windows-in-front.md` to match), `lane-model` #110 (2026-10-17:
     `lane init` and `lane open` take `--model` and `--effort`, and a plain pass keeps them;
     docs/lanes.md "Model and effort"), `stopped-lead` #114 (2026-10-17: a stopped claude no
-    longer counts as live, so a lead paused with Ctrl+Z and resumed relinks by itself).
+    longer counts as live, so a lead paused with Ctrl+Z and resumed relinks by itself),
+    `future-ask` #115 (2026-10-17: the one prompt round for a green tab on an ask the reply only
+    announces failed the ship rule, flipping 10 verdicts: 4 fixes, 3 new misses, 3 unclear. Prompt
+    v4 stays, and `hooks/wants_input.py` and README name that ask as a second known miss).
     `gh pr view <n>` and the closed
     records under `.git/lanes/_closed/` hold the detail; tab-bar's
     design is in [[dotclaude-tab-bar]]. Tabs opened before #102's install (2026-10-14) keep the
@@ -125,15 +128,6 @@ stored here).
     rerun the menu-clip repro and the tmux suites. If it fixes the clip, install at a quiet
     moment (a server restart; claude-restore reopens the tabs) and drop the row-0 menu rule.
     Until then, 3.7c's default menus that dotclaude doesn't own still clip under a top bar.
-  - **Green tab for an ask the reply only announces** (Hayden, 2026-10-17: Vulcan lane `keys`,
-    pane %44; open as lane `future-ask` since 2026-10-17, brief in its record). Its turn ended "...that needs your OK. I'll ask when the probes come up. Waiting
-    on S2b." with a writer subagent running. `ring.log` 18:52:20: `quiet busy=1 tasks=subagent`,
-    then `input=yes painted=1`, so the tab sat green while nothing was wanted. Of 66 green verdicts
-    that day, 21 came with agents running. About 3 of those 21 were wrong (an ask announced for
-    later, a list of next steps), and 2 more were borderline ("pushing waits for your OK"). The
-    hook did what it should, so the fix is in the classifier (`hooks/wants_input.py`, prompt v4
-    from #102): one bounded prompt round, judged on #102's 223-reply set plus these cases. Haiku
-    flips about five borderline replies per wording change, so stop after one round.
   - **The post-merge chain says nothing about another lane's install hold.** SKILL.md, The
     lead, step 7.3 assumes the hold belongs to the merged lane. When a PR merges out of order
     (#113 ahead of #110, 2026-10-17), the lead's reinstall from main releases the next lane's
@@ -239,8 +233,7 @@ stored here).
 
 ## Notes for next session
 - **Next (lead, main checkout):** watch for "merged #N" from a lane, then run the post-merge
-  chain (`skills/lanes/SKILL.md`, The lead, step 7). Live lane: `future-ask` (opened
-  2026-10-17, Hayden's go; brief in its record). Two of 3 slots are free. Check `lane ls` first: a merge Hayden made on GitHub and mentioned to no
+  chain (`skills/lanes/SKILL.md`, The lead, step 7). No live lanes; all 3 slots are free. Check `lane ls` first: a merge Hayden made on GitHub and mentioned to no
   session sends no message (#102 showed merged there before its lane's message came). Each new work-repo lane still needs its own Edit deny rule
   (they take no glob); `lane new` prints it since #104. No chat
   about a lane's own asks; speak on cross-lane orders, decisions raised with the lead, failed
@@ -250,7 +243,7 @@ stored here).
     (69d146cc) started at 433fe8f: it opened identity-branch, install-hint, chrome-bg and
     two-sessions, and ran the chain for #106 and #107. The fourth (64626d32) started at 5cb88d8:
     it wrote the `lane open --model` design note, removed two leftover writer worktrees from
-    #105 (every patch already in main), ran the chain for #108 to #114, opened
+    #105 (every patch already in main), ran the chain for #108 to #115, opened
     lane-model, remote-paste, stopped-lead and future-ask, and walked Hayden through #113's live
     test.
   - **Vulcan sessions that were already running keep their display** until they restart: the
