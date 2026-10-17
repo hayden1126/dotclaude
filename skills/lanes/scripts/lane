@@ -44,11 +44,10 @@ marks a timeout.
 `done` runs only from the main checkout (the lead), never under a lane's session. It ends what
 provably belongs to the lane before it archives the record and removes the worktree: the lane's
 Claude sessions (SIGTERM, and SIGCONT for a stopped one so the SIGTERM lands), the processes
-under them, their tmux pane shells (SIGHUP) and
-leftovers started with a lane session's id; survivors get SIGTERM (a pane shell SIGHUP), then
-SIGKILL. Every signal but a session's first (and its SIGCONT) is checked just before it is sent,
-and held while the target or a process under it holds a file open in the git dir. Proof comes only
-from /proc and Claude Code's own session files and transcripts, never lane.json. Anything else with
+under them, their tmux pane shells (SIGHUP) and leftovers started with a lane session's id;
+survivors get SIGTERM (a pane shell SIGHUP), then SIGKILL. Every signal but a session's first
+(and its SIGCONT) is checked just before it is sent, and held while the target or a process
+under it holds a file open in the git dir. Proof comes only from /proc and Claude Code's own session files and transcripts, never lane.json. Anything else with
 its cwd in the lane refuses the close by name before any signal, as do installed links into the
 lane (it holds the install: install-state.py, checked again under setup.sh's install.lock just
 before the remove), a dirty, locked or submodule worktree, a background session, a `done` run
@@ -2743,11 +2742,11 @@ def parser() -> argparse.ArgumentParser:
     sub.add_parser("asks", help="every lane's open asks for Hayden")
     p = sub.add_parser("done", help="close a merged (or abandoned) lane, ending its sessions",
                        description="Close a merged lane (an unmerged one with --abandon), from "
-                       "the main checkout only: end the "
-                       "processes that provably belong to it, archive its record, remove its "
-                       "worktree. Its sessions get SIGTERM (a stopped one SIGCONT too), their pane "
-                       "shells SIGHUP, survivors SIGKILL. Anything else with its cwd in the lane "
-                       "refuses the close by name before any signal, as do installed links into the lane, a dirty, locked "
+                       "the main checkout only: end the processes that provably belong to it, "
+                       "archive its record, remove its worktree. Its sessions get SIGTERM (a "
+                       "stopped one SIGCONT too), their pane shells SIGHUP, survivors SIGKILL. "
+                       "Anything else with its cwd in the lane refuses the close by name before "
+                       "any signal, as do installed links into the lane, a dirty, locked "
                        "or submodule worktree, a repo with extensions.worktreeConfig, a record "
                        "whose Next says `Keep open:` (unless --abandon) and, when there is "
                        "something to end, a failing `handoff-check --closing`. A close refused "

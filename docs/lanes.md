@@ -615,11 +615,12 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
   3. Whatever survives, classified afresh: SIGTERM (SIGHUP again for a pane shell), a wait,
      then SIGKILL.
 
-  Every signal but a session's first SIGTERM (and that SIGCONT) is guarded: just before it, `done` rescans the
-  target's process tree and holds the signal while anything in it has a file open in the git dir
-  (a killed git leaves lock files). A held signal is named in the refusal, and a process held at
-  step 3's SIGTERM is never SIGKILLed, nor is anything under a session whose signal was held. A session's first SIGTERM goes unchecked: Claude Code
-  handles it as when its tab closes, running its SessionEnd hooks and ending its own children.
+  Every signal but a session's first SIGTERM (and that SIGCONT) is guarded: just before it,
+  `done` rescans the target's process tree and holds the signal while anything in it has a file
+  open in the git dir (a killed git leaves lock files). A held signal is named in the refusal,
+  and a process held at step 3's SIGTERM is never SIGKILLed, nor is anything under a session
+  whose signal was held. A session's first SIGTERM goes unchecked: Claude Code handles it as
+  when its tab closes, running its SessionEnd hooks and ending its own children.
   Nothing is stopped for the check. tmux continues a pane process that gets SIGSTOP at once, and
   a job-control shell reports a stopped job suspended and takes back the terminal (probe on tmux
   3.7c), so a freeze can't hold a tab's session still. A git that starts or opens a lock file

@@ -260,9 +260,9 @@ what").
 
 Board flags: `stale` (worktree gone; its claims are void), `rebase` (behind the base),
 `conflict` (two live lanes claim one request), `orphan` (no live session), `stopped` (a session
-there is stopped with Ctrl+Z: `fg` it in its window; it still holds the lane), `handoff?` (the record
-may be behind, as The lead step 5 spells out: a PR merged after its last write, a commit is
-newer, or a session that started after it has ended; on whenever one of those can't be read),
+there is stopped with Ctrl+Z: `fg` it in its window; it still holds the lane), `handoff?` (the
+record may be behind, as The lead step 5 spells out: a PR merged after its last write, a commit
+is newer, or a session that started after it has ended; on whenever one of those can't be read),
 `setup-failed` (half made: it still holds its port, claims and a cap slot; finish it with
 `lane adopt <path>`), `closing` (a `lane done` stopped partway; rerun it).
 
