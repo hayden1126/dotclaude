@@ -4,8 +4,8 @@
 # (tmux-claude-status writes that map), plus claude-restore, which reopens main's Claude tabs
 # after the tmux server dies, claude-saved, which stars and shelves a tab's chat (the
 # right-click menu, Ctrl-b S), pass-last, which shows what Claude said before a /pass (Ctrl-b Up),
-# paste-inbox, which pastes a screenshot sent from another device (Alt+V), and tmux-tab-bar,
-# which lays out the status bar in rows grouped by project.
+# paste-inbox, which pastes a screenshot or file sent from another device (Alt+V), and
+# tmux-tab-bar, which lays out the status bar in rows grouped by project.
 # Opt-in and idempotent; setup.sh never calls it. The hook side
 # (hooks/tmux-state.sh, hooks/session-registry.sh) is wired by setup.sh on every machine and does
 # nothing outside tmux.
