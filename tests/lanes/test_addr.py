@@ -257,9 +257,37 @@ class LeadPick(LiveSessions):
         self.refused("No lead picked")
 
     def test_one_live_session_is_the_lead_whatever_the_record_names(self):
+        # The record names a process that runs but isn't a main-checkout session, in a pane
+        # of its own: no continuation, so the one-session rule alone picks.
+        want = self.session(self.main, pane="%1")
+        other = self.child(self.main, pane="%2")
+        self.write_lead(other, tmux=self.tmux_of("%2"))
+        self.assertEqual(self.addr_lead(), want)
+
+    def test_a_fresh_claude_in_a_stopped_lead_s_pane_never_takes_it(self):
+        # Ctrl+Z, then a plain `claude` (a new session id) in the same shell: the pane rule is
+        # for a /pass successor, whose `respawn-pane -k` ends the old claude. Beside a recorded
+        # process that only stopped, a claude in its pane is a fresh one (Hayden's call 2).
+        lead = self.child(self.main, pane="%3")
+        self.session(self.main, pid=lead)
+        fresh = self.session(self.main, pane="%3")
+        self.write_lead(lead, tmux=self.tmux_of("%3"))
+        self.stop(lead)
+        err = self.refused("it is not the lead",
+                           f"The lead (pid {lead}, proj:@{lead}) is stopped (Ctrl+Z): fg it there")
+        self.assertIn(fresh, err)  # listed, never printed as the address
+        self.session(self.main, pane="%4")  # beside a side chat too
+        self.refused("2 live sessions in the main checkout", "No lead picked",
+                     f"The lead (pid {lead}, proj:@{lead}) is stopped (Ctrl+Z): fg it there")
+
+    def test_a_background_session_never_leads(self):
+        # A `claude --bg` session has a messaging socket too, but the lead is one Hayden talks
+        # to (`lane lead` refuses kind bg): not a main session, so not counted or picked, even
+        # as a resume of the lead's session id.
+        gone = self.child(self.main, done=True)
         want = self.session(self.main)
-        other = self.child(self.main)
-        self.write_lead(other, tmux=self.tmux_of("%1"))
+        self.session(self.main, kind="bg", sessionId="s-lead")
+        self.write_lead(gone, start=1, sid="s-lead")
         self.assertEqual(self.addr_lead(), want)
 
     def test_a_gone_record_and_one_unrelated_session_picks_that_one(self):

@@ -1356,6 +1356,19 @@ class Close(Fakes):
         self.assertEqual(self.signals(), [(claude, "SIGTERM")])
         self.assertClosed()
 
+    def test_a_stopped_session_s_stopped_tree_is_continued_too(self):
+        # Ctrl+Z stops the whole foreground process group: claude's MCP servers and tool
+        # children too. Each is continued with the session, so the signals meant for it land:
+        # without that the child would log nothing and die of the SIGKILL.
+        self.hand_off()
+        claude, child = self.claude(children=[self.fake(self.path)])
+        self.stop(child)
+        self.stop(claude)
+        out = self.lane("done", "chart-fix", "--abandon")
+        self.assertIn(f"ended {child} {self.comms[child]} (under lane session {self.SID})", out)
+        self.assertEqual(self.signals(), [(claude, "SIGTERM"), (child, "SIGTERM")])
+        self.assertClosed()
+
     def assertClosed(self):
         self.assertFalse(os.path.exists(self.path))
         self.assertFalse(os.path.exists(os.path.join(self.common, "lanes", "chart-fix")))

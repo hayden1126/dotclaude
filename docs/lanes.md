@@ -269,27 +269,31 @@ How it holds:
   count present ones, so a stopped session still holds its lane.
 - **The pick** (`lanelib.lead_of`), among running sessions: the record's pid and start match
   first (a /clear keeps both). Then the record's one continuation: a session with the record's
-  session id (a resume, in the same tab, another tab, or the tab a tmux restart restores) or one
-  in the record's pane on the record's server (the pass successor, since `respawn-pane -k` keeps
-  the pane). Two continuations (a resume beside a fresh claude in the old pane, two resumes) are
-  no pick. With none, one running session is the lead, unless the recorded process exists and
-  is stopped (Hayden's call, 2026-10-17): beside a lead that `fg` brings back, the one running is
-  likely a side chat. Anything else is no pick. `lane addr lead` then refuses with each
-  session's window, the way to pick, and a stopped lead's window to `fg` it in, and the lane
-  tells Hayden once that #N merged, as with no lead at all.
+  session id (a resume, in the same tab, another tab, or the tab a tmux restart restores) or,
+  once the recorded process is gone, one in the record's pane on the record's server (the pass
+  successor, since `respawn-pane -k` ends the old claude and keeps the pane; beside a lead that
+  is only stopped, a claude in its pane is a fresh one). Only interactive sessions count: a
+  background session has a socket too, but the lead is one Hayden talks to. Two continuations (a
+  resume beside a fresh claude in the old pane, two resumes) are no pick. With none, one running
+  session is the lead, unless the recorded process exists and is stopped (Hayden's call,
+  2026-10-17): beside a lead that `fg` brings back, the one running is likely a side chat.
+  Anything else is no pick. `lane addr lead` then refuses with each session's window, the way to
+  pick, and a stopped lead's window to `fg` it in, and the lane tells Hayden once that #N
+  merged, as with no lead at all.
 - **The heal** (`lanelib.lead_relink`, lane stopped-lead). The pick alone loses a /pass once
   tmux restarts: the restored tab resumes the successor's session id, which the record never
-  held, and the bar reads only the recorded pane. So the lane-identity hook, on SessionStart
-  and Stop in the main checkout, rewrites the record when this session proves it continues the
-  recorded lead. A /clear: the recorded process runs, is the hook's ancestor, and the session
-  id is new. A resume: the recorded process is gone or stopped, and the session id is the
-  record's. A /pass: the recorded process is gone, this session runs in the recorded pane, and
-  that pane's `pass-last` marker (pass-respawn writes it in the state dir just before the
-  respawn) names the recorded session leaving it at most 120 s before this claude started. A
-  claude started by hand in the old tab has no marker, and a running lead is never displaced.
-  On proof the hook runs its sibling `lane lead`, so every check under "Who counts" still
-  applies, and a refusal is retried at the next Stop. Nearly every call costs one file read
-  and one stat.
+  held, and the bar reads only the recorded pane. So the lane-identity hook, on SessionStart and
+  Stop in the main checkout, rewrites the record when this session proves it continues the
+  recorded lead. A /clear: the recorded process runs, is the nearest session above the hook, and
+  its session file already holds the event's new id (a `claude -p` the lead runs writes no
+  session file, but its id isn't the one the lead's file holds). A resume: the recorded process
+  is gone or stopped, and the session id is the record's. A /pass: the recorded process is gone,
+  this session runs in the recorded pane, and that pane's `pass-last` marker (pass-respawn
+  writes it in the state dir just before the respawn) names the recorded session leaving it at
+  most 120 s before this claude started. A claude started by hand in the old tab has no marker,
+  and a running lead is never displaced. On proof the hook runs its sibling `lane lead`, so
+  every check under "Who counts" still applies, and a refusal is retried at the next Stop.
+  Nearly every call costs one file read and one stat.
 - **The board** (`lane ls`) adds a line under the table when the main checkout has two or more
   live sessions: each one's window, pid and state, the lead first, `no tmux` or `agent worktree`
   where it applies. With no running session picked and the recorded lead stopped, the line
@@ -623,14 +627,16 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
      SessionEnd hooks, which run as the session's children and are left to it. A session found
      stopped (Ctrl+Z) right after its SIGTERM gets SIGCONT, since the signal waits while a
      process is stopped and its SessionEnd hooks would never run (Hayden's call, 2026-10-17).
-     One that stops again on the terminal (SIGTTOU) still ends at step 3.
+     Each stopped process under it gets SIGCONT too: Ctrl+Z stops the whole job, MCP servers
+     and tool children included, and the signals the session's exit sends them would wait
+     as well. One that stops again on the terminal (SIGTTOU) still ends at step 3.
   2. SIGHUP to each pane shell after that wait (an interactive shell ignores SIGTERM), unless
      it started another job meanwhile. zsh passes it on to a session still exiting, which Claude
      Code handles as a closing tab.
   3. Whatever survives, classified afresh: SIGTERM (SIGHUP again for a pane shell), a wait,
      then SIGKILL.
 
-  Every signal but a session's first SIGTERM (and that SIGCONT) is guarded: just before it,
+  Every signal but a session's first SIGTERM (and those SIGCONTs) is guarded: just before it,
   `done` rescans the target's process tree and holds the signal while anything in it has a file
   open in the git dir (a killed git leaves lock files). A held signal is named in the refusal,
   and a process held at step 3's SIGTERM is never SIGKILLed, nor is anything under a session

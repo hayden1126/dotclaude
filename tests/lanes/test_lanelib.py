@@ -189,9 +189,18 @@ class LeadRelink(_fixture.LiveSessions):
         self.write_lead(self.child(self.main), sid=self.OLD)
         self.assertIsNone(self.relink(self.OLD))  # the fast path
         self.assertIsNone(self.relink(self.NEW))  # a side chat: the lead isn't above it
-        self.write_lead(os.getpid(), sid=self.OLD)  # this runner is above every child
+        # This runner plays the lead, the nearest session above every child; its file holds the
+        # id the /clear gave it.
+        self.write_lead(os.getpid(), sid=self.OLD)
+        self.session(self.main, pid=os.getpid(), sock=None, sessionId=self.NEW)
         self.assertEqual(self.relink(self.NEW), "clear")
         self.assertIsNone(self.relink(self.OLD))
+        # A claude the lead runs (a `claude -p` writes no session file, so the lead is the
+        # nearest session above its hook) carries an id the lead's file doesn't: no clear.
+        self.assertIsNone(self.relink("s-child"))
+        # Nor before the lead's own file has taken the new id: the next Stop sees it.
+        self.session(self.main, pid=os.getpid(), sock=None, sessionId=self.OLD)
+        self.assertIsNone(self.relink(self.NEW))
 
     def test_a_resume_needs_the_lead_gone_or_stopped(self):
         self.write_lead(self.child(self.main, done=True), start=1, sid=self.OLD)

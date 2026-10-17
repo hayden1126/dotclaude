@@ -1241,25 +1241,29 @@ def read_lead(repo: Repo) -> dict | None:
 
 
 def main_sessions(repo: Repo) -> list[dict]:
-    """The live sessions in the main checkout, by pid: session files whose process runs
-    (session_running: a stopped one answers nothing), with a socket (socket_of: a `claude -p`
-    has none, so it never counts) and a cwd inside repo.main, agent worktrees under it included.
-    `lane addr lead`, the board's footer and lead_of share this one set. Call it only where
-    pids_visible()."""
-    return sorted((s for s in session_files() if cwd_inside(s.get("cwd"), repo.main)
-                   and session_running(s) and socket_of(s)), key=lambda s: s["pid"])
+    """The live sessions in the main checkout, by pid: interactive session files (a background
+    session has a socket too, but the lead is one Hayden talks to, as `lane lead` requires)
+    whose process runs (session_running: a stopped one answers nothing), with a socket
+    (socket_of: a `claude -p` has none, so it never counts) and a cwd inside repo.main, agent
+    worktrees under it included. `lane addr lead`, the board's footer and lead_of share this
+    one set. Call it only where pids_visible()."""
+    return sorted((s for s in session_files() if s.get("kind") == "interactive"
+                   and cwd_inside(s.get("cwd"), repo.main) and session_running(s)
+                   and socket_of(s)), key=lambda s: s["pid"])
 
 
 def lead_of(repo: Repo, sessions: list[dict]) -> dict | None:
     """The lead among main_sessions(repo), which run (a stopped one is out of reach): the one
     whose pid and procStart the record holds (a /clear keeps both); else the record's one
     continuation, a session with the record's session id (a resume: in the same tab, another,
-    or a tmux restart's restored tab) or one whose own environment names the record's tmux
-    server (socket, pid and start) and pane (a /pass successor: `respawn-pane -k` keeps the
-    pane). Two continuations (a resume beside a fresh claude in the old pane, two resumes, a
-    child claude that inherits TMUX_PANE) give None. With none, one session is the lead, as
-    long as the recorded process isn't stopped (Ctrl+Z): beside a lead that `fg` brings back,
-    the one running is likely a side chat (Hayden's call, 2026-10-17). Else None."""
+    or a tmux restart's restored tab) or, once the recorded process is gone, one whose own
+    environment names the record's tmux server (socket, pid and start) and pane (a /pass
+    successor: `respawn-pane -k` ends the old claude and keeps the pane; beside one that is
+    only stopped, a claude in its pane is a fresh one). Two continuations (a resume beside a
+    fresh claude in the old pane, two resumes, a child claude that inherits TMUX_PANE) give
+    None. With none, one session is the lead, as long as the recorded process isn't stopped
+    (Ctrl+Z): beside a lead that `fg` brings back, the one running is likely a side chat
+    (Hayden's call, 2026-10-17). Else None."""
     if not sessions:
         return None
     rec = read_lead(repo)
@@ -1267,8 +1271,9 @@ def lead_of(repo: Repo, sessions: list[dict]) -> dict | None:
         for s in sessions:
             if s["pid"] == rec["pid"] and proc_start_of(s) == rec["procStart"]:
                 return s
+        pane = rec["tmux"] if session_state(rec) is None else None
         on = {s["pid"]: s for s in sessions if s.get("sessionId") == rec["sessionId"]
-              or (rec["tmux"] is not None and proc_tmux(s["pid"]) == rec["tmux"])}
+              or (pane is not None and proc_tmux(s["pid"]) == pane)}
         if len(on) == 1:
             return next(iter(on.values()))
     if len(sessions) == 1 and not (rec is not None and session_stopped(rec)):
@@ -1330,8 +1335,8 @@ def pass_marker(rec: dict) -> float | None:
 def lead_relink(repo: Repo, sid: str, pid: int | None = None, proc: str = PROC) -> str | None:
     """Why the session whose hook runs as pid (this process by default) continues the recorded
     lead, or None. The hook inherits its claude's environment, and its claude is an ancestor.
-      "clear"   the recorded process runs, is an ancestor (ancestry), and the session id
-                differs: a /clear keeps the process and starts a new id.
+      "clear"   the recorded process runs and is the nearest session above (sessions_above),
+                and its file holds sid, a new id: a /clear keeps the process and starts one.
       "resume"  the recorded process is gone or stopped (Ctrl+Z), and sid is the record's: a
                 resume keeps the id, in the same tab, another, or a tmux restart's restored one.
       "pass"    the recorded process is gone, pid runs in the recorded tmux pane on the recorded
@@ -1347,9 +1352,16 @@ def lead_relink(repo: Repo, sid: str, pid: int | None = None, proc: str = PROC) 
     me = os.getpid() if pid is None else pid
     state = session_state(rec, proc)
     if state is not None and state not in STOPPED:
-        if sid == rec["sessionId"]:
+        if sid == rec["sessionId"] or (rec["pid"], rec["procStart"]) not in ancestry(me, proc):
             return None
-        return "clear" if (rec["pid"], rec["procStart"]) in ancestry(me, proc) else None
+        # A /clear runs the hook in the recorded process itself: the nearest session above,
+        # whose file already holds the new id. A claude the lead runs is no clear of it (a
+        # `claude -p` writes no session file, so the lead is the nearest above its hook too,
+        # but its file holds the lead's id). Before the file takes the new id, the next Stop.
+        above = sessions_above(me)
+        if not above or (above[0][1].pid, above[0][1].start) != (rec["pid"], rec["procStart"]):
+            return None
+        return "clear" if above[0][0].get("sessionId") == sid else None
     if sid == rec["sessionId"]:
         return "resume"
     if state is not None or rec["tmux"] is None or proc_tmux(me, proc) != rec["tmux"]:

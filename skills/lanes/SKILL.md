@@ -92,14 +92,16 @@ an unregistered worktree: `lane whoami` tells you which.
    asks). It ends what provably
    belongs to the lane, so its open tab needs no closing by hand:
    - its Claude sessions get SIGTERM (a `lane open` tab closes with its claude), and a stopped
-     one SIGCONT right after, so the SIGTERM lands;
+     one SIGCONT right after, with its stopped tree (Ctrl+Z stops the whole job), so the
+     SIGTERM lands;
    - what runs under them ends with them;
    - a restored tab's shell gets SIGHUP;
    - leftovers started with a lane session's id get SIGTERM;
    - survivors get SIGTERM, then SIGKILL.
 
-   Every signal but a session's first is checked just before it is sent, and held (named in
-   the refusal) while anything in the target's tree has a file open in the git dir. The proof
+   Every signal but a session's first (and the SIGCONTs that land it) is checked just before
+   it is sent, and held (named in the refusal) while anything in the target's tree has a file
+   open in the git dir. The proof
    comes from /proc and Claude Code's own session files and transcripts, never from
    `lane.json`. Before any signal, it refuses, by name:
    - anything else with its cwd in the lane;

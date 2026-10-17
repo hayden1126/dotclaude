@@ -45,11 +45,12 @@ marks a timeout.
 
 `done` runs only from the main checkout (the lead), never under a lane's session. It ends what
 provably belongs to the lane before it archives the record and removes the worktree: the lane's
-Claude sessions (SIGTERM, and SIGCONT for a stopped one so the SIGTERM lands), the processes
-under them, their tmux pane shells (SIGHUP) and leftovers started with a lane session's id;
-survivors get SIGTERM (a pane shell SIGHUP), then SIGKILL. Every signal but a session's first
-(and its SIGCONT) is checked just before it is sent, and held while the target or a process
-under it holds a file open in the git dir. Proof comes only from /proc and Claude Code's own session files and transcripts, never lane.json. Anything else with
+Claude sessions (SIGTERM, and SIGCONT for a stopped one and its stopped tree so the SIGTERM
+lands), the processes under them, their tmux pane shells (SIGHUP) and leftovers started with a
+lane session's id; survivors get SIGTERM (a pane shell SIGHUP), then SIGKILL. Every signal but
+a session's first (and its SIGCONTs) is checked just before it is sent, and held while the
+target or a process under it holds a file open in the git dir. Proof comes only from /proc and
+Claude Code's own session files and transcripts, never lane.json. Anything else with
 its cwd in the lane refuses the close by name before any signal, as do installed links into the
 lane (it holds the install: install-state.py, checked again under setup.sh's install.lock just
 before the remove), a dirty, locked or submodule worktree, a background session, a `done` run
@@ -1999,8 +2000,8 @@ def end_lane(repo: Repo, lane_id: str, path: str, hits: dict[int, Hit]) -> None:
     still in the lane refuses, nothing is archived, and a rerun carries on. The lanes lock is
     never held here: a session's SessionEnd hook takes it to stamp endedAt. Each session's
     open-sessions entry goes before its SIGTERM, in either round (forget_sessions). Every signal
-    but round 1's SIGTERM to a session, and the SIGCONT that lands it on a stopped one, goes
-    through guarded."""
+    but round 1's SIGTERM to a session, and the SIGCONTs that land it on a stopped one and its
+    stopped tree, goes through guarded."""
     wait = grace()
     known = {(h.proc.pid, h.proc.start): h for h in hits.values()}
     ended, held, forgotten = set(), {}, set()
@@ -2050,11 +2051,17 @@ def end_lane(repo: Repo, lane_id: str, path: str, hits: dict[int, Hit]) -> None:
             if h.kind == SESSION:
                 signal_proc(h.proc, signal.SIGTERM)
                 # A stopped claude (Ctrl+Z) holds that SIGTERM pending, so its SessionEnd hook
-                # never runs: SIGCONT delivers it. Only this first signal, unguarded by design,
-                # is continued; one that stops again on the terminal (SIGTTOU) still ends by
-                # round 2's SIGTERM and SIGKILL.
+                # never runs: SIGCONT delivers it. Ctrl+Z stops its whole process group, so
+                # its stopped tree (MCP servers, tool children) is continued too, or the
+                # signals its exit sends them would wait as well. Only this first signal,
+                # unguarded by design, is continued; one that stops again on the terminal
+                # (SIGTTOU) still ends by round 2's SIGTERM and SIGKILL.
                 st = lanelib.proc_stat(h.proc.pid)
                 if st and st[3] == h.proc.start and st[1] in lanelib.STOPPED:
+                    procs = lanelib.scan(full=False)
+                    for d in lanelib.descendants(h.proc.pid, lanelib.children(procs)):
+                        if (q := procs.get(d)) and q.state in lanelib.STOPPED:
+                            signal_proc(q, signal.SIGCONT)
                     signal_proc(h.proc, signal.SIGCONT)
             else:
                 send(h, signal.SIGTERM)
