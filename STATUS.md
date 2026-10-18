@@ -126,6 +126,17 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     runs the suites there under `lane lock suite` (the trial-tree traps are in
     [[dotclaude-lanes]]). The lead plan review (C) was not picked. Files: `skills/lanes/scripts/
     lane`, `lanelib.py`, `tests/lanes`, `skills/lanes/SKILL.md`, `docs/lanes.md`.
+  - **A tab-bar pin outlives the reason for it, after the cross-lane checks** (Hayden's design
+    2026-10-18). Seen 2026-10-17: done-rerun's close at 22:05 left dotclaude with no lanes, so
+    the lead's tab (`@3`) fell to the shared row. A move there at 22:37:33 ran `put()`, which pins
+    every member of the row (`@tab_place` row `s`, pos 0-3 on `@1 @51 @3 @57`, same second), and
+    when lane monotonic opened at about 22:40 the pin kept the lead off dotclaude's returning row
+    (`dotclaude·lead`). Hayden cleared it with Auto place. The rule: a tab Hayden moves keeps a
+    hard pin, but a tab that turns from a regular (shared) tab into a lead, whether it was a lead
+    before or not, resets its pin and opens its repo's row. That needs the kind at pin time in
+    the placement; `parse_place` reads exactly four keys, so the old form must keep reading (no
+    kind: no reset, today's behavior). Files: `tmux/tmux-tab-bar`,
+    `tests/setup/test_tmux_tab_bar.py`, README's tab-bar section.
 
   **The post-merge chain** (Hayden's design B, standing approval 2026-10-14): `skills/lanes/SKILL.md`,
   The lead, step 7. Lead commits on the lead branch ride the PR of the lane next in merge order,
