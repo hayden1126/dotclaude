@@ -279,6 +279,76 @@ class OverlapGuards(LaneWork):
         self.assertEqual(changed(GIT_INDEX_FILE=os.path.join(other, ".git", "index")),
                          ({"shared.txt", "loose.txt"}, None))
 
+    def changed_in_process(self, lane_mod, lane_id):
+        """changed_files for lane_id in this process, with the fixture's environment."""
+        repo = lanelib.Repo(self.main, self.common)
+        with mock.patch.dict(os.environ, self.env, clear=True):
+            return lane_mod.changed_files(repo, self.lane_json(lane_id), "refs/remotes/origin/main",
+                                          f"refs/heads/{lane_id}", repo.lanes(shared=True), False)
+
+    def test_a_relative_fsmonitor_in_the_repo_config_never_runs_from_the_lane(self):
+        # A relative core.fsmonitor resolves in the worktree git runs in: the lane's own file.
+        alpha = self.new("alpha")
+        script, ran = self.trap("fsmonitor-in-lane")
+        os.rename(script, os.path.join(alpha, "fsm.sh"))
+        self.git("config", "core.fsmonitor", "./fsm.sh")
+        _, err = self.rows()
+        self.assertNotIn("may be short", err)  # the status ran
+        self.assertFalse(os.path.exists(ran))
+        self.lane_status(alpha)  # the trap is real
+        self.assertTrue(os.path.exists(ran))
+
+    def test_the_status_takes_its_config_from_the_common_dir_even_after_a_swap(self):
+        # The lane can repoint its admin dir's commondir after the gates read the config: the
+        # status must not take a decoy's clean filter from there.
+        lane_mod = load_lane_script()
+        alpha = self.new("alpha")
+        self.write(os.path.join(alpha, ".gitattributes"), "* filter=x\n")
+        os.utime(os.path.join(alpha, "README.md"), (OLD, OLD))
+        clean, ran = self.trap("decoy-clean", "cat\n")
+        decoy = os.path.join(self.tmp, "decoy-common")
+        shutil.copytree(self.common, decoy, symlinks=True,
+                        ignore=shutil.ignore_patterns("worktrees", "lanes"))
+        with open(os.path.join(decoy, "config"), "a") as f:
+            f.write(f'[filter "x"]\n\tclean = {clean}\n')
+        commondir = os.path.join(self.common, "worktrees", "alpha", "commondir")
+        real = self.read(commondir)
+        self.addCleanup(self.write, commondir, real)
+        read_git = lane_mod.read_git
+
+        def swap_after_the_gates(args, *rest, **kw):
+            out = read_git(args, *rest, **kw)
+            if args[:2] == ["config", "--get-regexp"]:
+                self.write(commondir, decoy + "\n")
+            return out
+
+        with mock.patch.object(lane_mod, "read_git", side_effect=swap_after_the_gates):
+            files, why = self.changed_in_process(lane_mod, "alpha")
+        self.assertIsNone(why)
+        self.assertIn(".gitattributes", files)
+        self.assertFalse(os.path.exists(ran))
+        subprocess.run(["git", "status", "--porcelain"], cwd=alpha, env=self.env,
+                       capture_output=True, timeout=60)  # the trap is real
+        self.assertTrue(os.path.exists(ran))
+
+    def test_every_git_behind_the_flag_runs_with_no_transport(self):
+        lane_mod = load_lane_script()
+        alpha = self.new("alpha")
+        self.commit_files(alpha, ["shared.txt"])
+        envs = []
+
+        def record(args, cwd, **kw):
+            envs.append(kw.get("env"))
+            return lanelib.git(args, cwd, **kw)
+
+        with mock.patch.object(lane_mod, "git", side_effect=record):
+            files, _ = self.changed_in_process(lane_mod, "alpha")
+        self.assertIn("shared.txt", files)
+        self.assertEqual(len(envs), 3)  # the diff, the filter config, the status
+        for env in envs:
+            self.assertEqual((env.get("GIT_NO_LAZY_FETCH"), env.get("GIT_ALLOW_PROTOCOL")),
+                             ("1", "none"))
+
     def test_a_git_failure_never_fails_the_board(self):
         # A base ref that doesn't resolve: each lane's commits go unread, and `ls` still shows.
         alpha, beta = self.new("alpha"), self.new("beta")
