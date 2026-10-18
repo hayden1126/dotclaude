@@ -1416,10 +1416,10 @@ def cmd_open(args) -> None:
 
 def open_pick(args, cfg: dict) -> list[str]:
     """claude's --model and --effort for `open`: each flag, else the lanes config's default, else
-    none (the user's default; an empty flag skips the config's). A plain pass carries them
-    (pass-respawn's carried_pick), so they are checked here, where Hayden sees the refusal: a
-    bad model would only show as an API error in a detached window (docs/lanes.md, "Model and
-    effort")."""
+    none (the user's default; an empty flag skips the config's). A plain pass, a tab restore and
+    the shelf's Open carry them (lanelib.carried_pick), so they are checked here, where Hayden
+    sees the refusal: a bad model would only show as an API error in a detached window
+    (docs/lanes.md, "Model and effort")."""
     pick = []
     for key, problem in PICKS.items():
         value, flag = getattr(args, key), getattr(args, key) is not None
