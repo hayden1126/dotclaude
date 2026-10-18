@@ -164,8 +164,8 @@ class SessionSummary(Workspace):
                  "last_assistant_message": BIG}
         env = {**self.env, "PATH": shim_dir + os.pathsep + os.environ["PATH"], "SHIM_OUT": out}
         self.assertEqual(hook("session-summary.sh", event, env=env), "")
-        deadline = time.time() + 10
-        while not os.path.exists(out) and time.time() < deadline:
+        deadline = time.monotonic() + 10
+        while not os.path.exists(out) and time.monotonic() < deadline:
             time.sleep(0.05)
         with open(out) as f:
             self.assertEqual(f.read().split(), ["-I", str(len(json.dumps(event).encode()))])

@@ -108,7 +108,7 @@ class ReportCheck(unittest.TestCase):
         self.run_hook(self.handback("bad", aid="old"))
         d = os.path.join(self.tmp.name, "state", "dotclaude", "report-check")
         stale = os.path.join(d, os.listdir(d)[0])
-        os.utime(stale, (time.time() - 2 * 86400,) * 2)
+        os.utime(stale, (time.time() - 2 * 86400,) * 2)  # wall clock
         self.run_hook(self.handback(GOOD, aid="other"))
         self.assertFalse(os.path.exists(stale))
 

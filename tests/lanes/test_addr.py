@@ -126,8 +126,8 @@ class Addr(LiveSessions):
     def test_a_zombie_is_not_live(self):
         p = subprocess.Popen(["true"], cwd=self.lane_path("chart-fix"))
         self.addCleanup(p.wait)
-        deadline = time.time() + 10
-        while (lanelib.proc_stat(p.pid) or ("", "Z"))[1] != "Z" and time.time() < deadline:
+        deadline = time.monotonic() + 10
+        while (lanelib.proc_stat(p.pid) or ("", "Z"))[1] != "Z" and time.monotonic() < deadline:
             time.sleep(0.02)
         self.session(self.lane_path("chart-fix"), pid=p.pid)
         self.refused("chart-fix", "no live session")

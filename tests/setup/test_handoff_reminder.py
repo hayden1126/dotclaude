@@ -168,9 +168,9 @@ class HandoffReminder(unittest.TestCase):
         for prompt in ("a" + "=" * 50000 + " b", "let" + "!" * 200000 + "s wrap up",
                        "x " * 9 + "-" * 100000):
             with self.subTest(size=len(prompt)):
-                start = time.time()
+                start = time.monotonic()
                 fires(prompt)
-                self.assertLess(time.time() - start, 2)
+                self.assertLess(time.monotonic() - start, 2)
 
     def test_a_comma_then_another_task_is_not_a_wrap_up(self):
         self.assertFalse(fires("stop here, then explain why the test fails"))
