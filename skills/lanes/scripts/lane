@@ -112,7 +112,7 @@ HOLDER_CMD_MAX = 120  # chars of the wrapped command kept in a lock's holder lin
 RECORD_READ = 1 << 20  # bytes of a lane's STATUS.md read by `ls` and `done`
 PR_LIMIT = 200  # PRs `ls` lists in its one gh call, newest first
 CLOCK_SLACK = 10  # secs: HAYPC's wall clock steps by about 5 s, and GitHub keeps another clock
-TEE_GRACE = 1.0  # secs run_child keeps reading a teed pipe a grandchild holds once its child exits
+TEE_GRACE = 10.0  # secs run_child keeps reading a teed pipe once its child exits
 TRIAL_GIT_WAIT = 120  # secs each git call of `lane trial` may take
 TRIAL_IDENTITY = ("lane-trial", "lane-trial@localhost")  # the author of its dangling merges
 # The lock every trial holds, one name for all: a trial clears this lane's leftover trees under
@@ -1703,21 +1703,31 @@ def take_lock(fd: int, name: str, wait: float | None) -> bool:
 
 def tee(stream, on_line) -> None:
     """Copy stream (a child's merged stdout and stderr) to stdout line by line as it comes, and
-    hand each line, newline cut, to on_line."""
-    for raw in stream:
-        line = raw.decode(errors="replace")
-        sys.stdout.write(line)
-        sys.stdout.flush()
-        on_line(line.rstrip("\r\n"))
+    hand each line, newline cut, to on_line, then None at its end. A stdout that fails (closed,
+    a reader gone) stops the echo only: the stream is still drained and handed on, or the
+    command would block on a full pipe and never exit."""
+    echo = True
+    with stream:
+        for raw in stream:
+            line = raw.decode(errors="replace")
+            if echo:
+                try:
+                    sys.stdout.write(line)
+                    sys.stdout.flush()
+                except (OSError, ValueError):  # ValueError: a closed sys.stdout
+                    echo = False
+            on_line(line.rstrip("\r\n"))
+    on_line(None)
 
 
 def run_child(command: list[str], cwd: str | None = None, on_line=None) -> int:
     """Run command and wait for it; its exit code, or -n (as Popen has it) if signal n killed it.
 
     With on_line, its stdout and stderr go through one pipe that tee streams to stdout and hands
-    on line by line (`trial` parses failing test ids from them). A reader thread drains it while
-    this thread waits, so signals land here as they do without it; a grandchild left holding the
-    pipe once the command exits gets TEE_GRACE before the rest of its output is dropped.
+    on line by line, then None at the end (`trial` parses failing test ids from them). A reader
+    thread drains it while this thread waits, so signals land here as they do without it; a
+    grandchild left holding the pipe once the command exits gets TEE_GRACE, and then the rest
+    of its output is dropped: on_line never gets its None, which is how a caller tells.
 
     The command shares this process group, so a Ctrl-C from the tty or a kill of the whole tree
     (Claude Code's Bash tool stops a command that way) already reaches it. SIGINT and SIGTERM are
@@ -1948,19 +1958,30 @@ def trial_leftovers(repo: Repo, lane_id: str, tmp: str) -> None:
                        f"git worktree remove --force {shlex.quote(p)}" for p in stuck)))
 
 
-def run_suites(tree: str, commands: list[str], label: str,
-               picked) -> list[tuple[int, list[str]]]:
-    """Run each picked command (by index) as `sh -c` in tree, its output streamed: (exit code,
-    failing_ids) each. A suite that dies of SIGINT or SIGTERM (a Ctrl-C, a stop of the whole
-    tree) stops the trial."""
+class SuiteRun(NamedTuple):
+    """One run of a suite: its exit code, the failing ids it printed, and whether its output was
+    cut (a process it started still held the pipe past TEE_GRACE, so ids may be missing)."""
+    rc: int
+    ids: list[str]
+    cut: bool = False
+
+    @property
+    def failed(self) -> bool:
+        return bool(self.rc or self.ids or self.cut)
+
+
+def run_suites(tree: str, commands: list[str], label: str, picked) -> list[SuiteRun]:
+    """Run each picked command (by index) as `sh -c` in tree, its output streamed. A suite that
+    dies of SIGINT or SIGTERM (a Ctrl-C, a stop of the whole tree) stops the trial."""
     out = []
     for i in picked:
         say(shown(f"lane trial: {label} run of suite {i + 1}/{len(commands)}: {commands[i]}"))
-        lines = []
-        rc = run_child(["sh", "-c", commands[i]], cwd=tree, on_line=lines.append)
+        lines, ended = [], []
+        rc = run_child(["sh", "-c", commands[i]], cwd=tree,
+                       on_line=lambda x: lines.append(x) if x is not None else ended.append(x))
         if rc in (-signal.SIGINT, -signal.SIGTERM):
             raise TrialStopped(-rc)
-        out.append((rc, failing_ids(list(lines))))
+        out.append(SuiteRun(rc, failing_ids(list(lines)), cut=not ended))
     return out
 
 
@@ -2053,7 +2074,7 @@ def trial(repo: Repo, me: dict, args) -> int:
         trial_git(repo, ["worktree", "add", "--detach", "--quiet", "--end-of-options", tree, cur])
         holds = "merge"
         runs = run_suites(tree, args.run, "merge", range(len(args.run)))
-        failed = [i for i, (rc, ids) in enumerate(runs) if rc or ids]
+        failed = [i for i, run in enumerate(runs) if run.failed]
         again = {}
         if failed:
             # At the same path: subtest ids that embed it, and the admin dir's name, then match.
@@ -2114,22 +2135,27 @@ def drop_tree(repo: Repo, tree: str, tmpdir: str) -> None:
     shutil.rmtree(tmpdir, ignore_errors=True)
 
 
-def trial_report(commands: list[str], runs: list[tuple[int, list[str]]],
-                 again: dict[int, tuple[int, list[str]]]) -> int:
+def trial_report(commands: list[str], runs: list[SuiteRun], again: dict[int, SuiteRun]) -> int:
     """Say how each suite did on the merge, judged against its baseline rerun (again, by suite
     index) when it failed: 0 when no failure is the merge's, else 1. A failed suite passes only
     when every id it failed on the merge also fails on the baseline, and its exit doesn't get
     worse there: non-zero on the merge but zero on the baseline, or a death by signal on the
     merge only, is the merge's (a `--run` can chain a runner whose ids it parses with a check
-    that prints none). One with no ids to compare fails, to be compared by hand. Ids come from
-    the suites' output, so they are masked."""
+    that prints none). One with no ids to compare, or whose output either run cut, fails, to be
+    compared by hand. Ids come from the suites' output, so they are masked."""
     new = 0
-    for i, (cmd, (rc, ids)) in enumerate(zip(commands, runs)):
+    for i, (cmd, (rc, ids, cut)) in enumerate(zip(commands, runs)):
         head = f"lane trial: suite {i + 1} ({cmd}):"
         if i not in again:
             say(shown(f"{head} ok"))
             continue
-        base_rc, base_ids = again[i]
+        base_rc, base_ids, base_cut = again[i]
+        if cut or base_cut:
+            new += 1
+            which = "both runs" if cut and base_cut else "the merge" if cut else "the baseline"
+            say(shown(f"{head} its output on {which} was cut (a process it started still holds "
+                      "it), so test ids may be missing: compare by hand"))
+            continue
         if not ids:
             new += 1
             say(shown(f"{head} failed (exit {rc}) with no test id to compare against the "

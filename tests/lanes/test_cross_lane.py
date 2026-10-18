@@ -5,13 +5,18 @@ and `lane trial` (the suites on a merge with every other live lane).
 Each guard has a test that fails with the guard taken out, and each trap is shown to fire without
 it: a trap that never fires proves nothing."""
 import contextlib
+import errno
 import fcntl
 import glob
+import io
 import json
 import os
 import shlex
+import shutil
+import signal
 import subprocess
 import sys
+import tempfile
 import unittest
 from unittest import mock
 
@@ -365,6 +370,59 @@ class FailingIds(unittest.TestCase):
         self.assertEqual(lane_mod.failing_ids(lines),
                          ["FAIL: test_x (a.B.test_x) (path='/tmp/t/tree')",
                           "ERROR: test_y (a.B.test_y)", "t.py::test_z", "t.py::test_w"])
+
+
+class Tee(unittest.TestCase):
+    """run_child's teed output, in process: a short TEE_GRACE patched in, a SIGALRM watchdog in
+    place of a hang (run_child sets signal handlers, so it runs on the main thread)."""
+
+    def setUp(self):
+        self.lane_mod = load_lane_script()
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+
+        def hung(*_):
+            raise TimeoutError("run_child never returned")
+
+        self.addCleanup(signal.signal, signal.SIGALRM, signal.signal(signal.SIGALRM, hung))
+        self.addCleanup(signal.alarm, 0)
+        signal.alarm(30)
+
+    def test_output_a_leftover_process_holds_is_cut_and_fails_the_suite(self):
+        # The suite exits, but a process it backgrounded keeps the pipe past the grace: ids it
+        # would still print are lost, so the run can't pass, even with ids that match.
+        pid_file = os.path.join(self.tmp, "bg.pid")
+        self.addCleanup(lambda: os.path.exists(pid_file) and os.kill(
+            int(self.read(pid_file)), signal.SIGKILL))
+        cmd = f"sleep 30 & echo $! > {pid_file}; echo 'FAIL: test_x (t.T.test_x)'"
+        out = io.StringIO()
+        with mock.patch.object(self.lane_mod, "TEE_GRACE", 0.3), contextlib.redirect_stdout(out):
+            runs = self.lane_mod.run_suites(self.tmp, [cmd], "merge", [0])
+            again = {0: self.lane_mod.SuiteRun(1, ["FAIL: test_x (t.T.test_x)"])}
+            rc = self.lane_mod.trial_report([cmd], runs, again)
+        self.assertEqual(runs[0].ids, ["FAIL: test_x (t.T.test_x)"])
+        self.assertTrue(runs[0].cut)
+        self.assertEqual(rc, 1)
+        self.assertIn("its output on the merge was cut (a process it started still holds it)",
+                      out.getvalue())
+
+    def test_a_closed_stdout_stops_the_echo_but_never_the_drain(self):
+        # More output than a pipe holds: a reader that stopped at the failed echo would leave
+        # the command blocked on a full pipe, and run_child waiting on it.
+        class Closed(io.StringIO):
+            def write(self, s):
+                raise BrokenPipeError(errno.EPIPE, "Broken pipe")
+
+        lines = []
+        with mock.patch.object(self.lane_mod.sys, "stdout", Closed()):
+            rc = self.lane_mod.run_child(["sh", "-c", "seq 1 100000; echo 'FAIL: test_last "
+                                          "(t.T.test_last)'"], on_line=lines.append)
+        self.assertEqual(rc, 0)
+        self.assertEqual(lines[-2:], ["FAIL: test_last (t.T.test_last)", None])
+
+    def read(self, path):
+        with open(path) as f:
+            return f.read()
 
 
 # A suite for the trial tests: fails test_ab only where both lanes' files meet.
