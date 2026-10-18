@@ -358,6 +358,9 @@ $XDG_STATE_HOME/dotclaude/lanes/<repo>-<hash>.lead.json
                                 the lead record: the main-checkout session that last acted as
                                 lead, written only by bare `lane` commands ("One lead per main
                                 checkout")
+$XDG_STATE_HOME/dotclaude/lanes/<repo>-<hash>.closing/<id>.json
+                                the pane shells a `lane done` of lane <id> proved the lane's,
+                                kept for a rerun until the close completes
 
 <common-dir>/lanes/             CLI-owned; written by `lane` and by hooks, never by the Edit tool
   .lock                         flock for every CLI write (claims are atomic)
@@ -691,9 +694,14 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
      Each stopped process under it gets SIGCONT too: Ctrl+Z stops the whole job, MCP servers
      and tool children included, and the signals the session's exit sends them would wait
      as well. One that stops again on the terminal (SIGTTOU) still ends at step 3.
-  2. SIGHUP to each pane shell after that wait (an interactive shell ignores SIGTERM), unless
-     it started another job meanwhile. zsh passes it on to a session still exiting, which Claude
-     Code handles as a closing tab.
+  2. SIGHUP to each pane shell after that wait (an interactive shell ignores SIGTERM). A
+     restored tab draws its prompt the moment its claude exits, and a prompt can fork as it
+     draws: agnoster's `$(build_prompt)` runs git in a `-zsh` child, and one refused the
+     2026-10-15 close of lane two-sessions. So each shell gets its SIGHUP once it runs no job of
+     its own and nothing under it holds a git file open, within 10 s. A shell still running a
+     job then gets none, since the SIGHUP would reach the job too: step 3 refuses it, or sends
+     it if the job has ended by then. zsh passes
+     the SIGHUP on to a session still exiting, which Claude Code handles as a closing tab.
   3. Whatever survives, classified afresh: SIGTERM (SIGHUP again for a pane shell), a wait,
      then SIGKILL.
 
@@ -721,6 +729,21 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
   (`git worktree remove` can outlast the hooks' 2 s), then re-reads the record under it and
   moves the archive into place. No install relinks into the lane in between, and a failure
   leaves no partial archive.
+
+  A rerun keeps what the first run proved. A pane shell's only proof is the session it ran,
+  which the close itself ends, so on 2026-10-15 each rerun refused the two-sessions tab's shell
+  until its session was resumed there. So once it marks the lane `closing`, and again before
+  step 3's signals, `done` records each pane shell it proved the lane's in
+  `<state-dir>/lanes/<repo>-<hash>.closing/<id>.json`: the boot id, the lane's created stamp,
+  then each shell's pid, start time and comm. When the first write fails, it signals nothing and
+  leaves the lane `closing` for a rerun; a failed second one only warns, and the first stands.
+  A completed close deletes the record.
+
+  A rerun keeps a recorded shell's class only for the same boot, lane (id and created stamp, so
+  a later lane of that id never inherits it) and path, while a process with that pid, start
+  time and comm runs, its parent is a tmux server and it carries no foreign session id. Every
+  other process is proven afresh, as on a first run, and a recorded shell running a job still
+  refuses. The record lives in the state dir because sandboxed Bash can write `lane.json`.
 
   Every git `done` runs in the lane takes its config from the repo's common dir
   (`GIT_COMMON_DIR`), and the lane's path must be a worktree whose admin dir's `commondir` names
