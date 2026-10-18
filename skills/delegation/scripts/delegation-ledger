@@ -175,15 +175,21 @@ def main_checkout(cwd):
 def checkout_status(root):
     """sha256 of `git status` in the checkout at root, or "unknown" when git can't run.
 
-    The hook runs it sandbox-off in a checkout whose index and git dir the session's own
-    sandbox can write, so the status runs nothing that checkout configures.
-    --ignore-submodules=dirty still sees a submodule whose commit moved, but never runs a
-    status inside one, whose own config (a core.fsmonitor in it) sits where the sandbox can
-    write it. --no-optional-locks keeps the index unwritten, so no post-index-change hook
-    fires."""
+    The hook runs it sandbox-off in a checkout whose files and index the session's own sandbox
+    can write. What it guards, each by one flag:
+    - submodule contents: --ignore-submodules=dirty still sees a submodule whose commit moved,
+      but never runs a status inside one, whose own config the sandbox can write;
+    - index writes: --no-optional-locks, so no post-index-change hook fires;
+    - fsmonitor: -c core.fsmonitor=false, since a relative fsmonitor command in the config
+      resolves inside the checkout.
+    The checkout's own pointers (its .git, the admin dir's commondir) and its config are
+    sandbox-protected, so they aren't checked again here. A configured filter driver (a program
+    the user installed, such as git-lfs) still runs on the files the checkout routes to it, by
+    design: turning it off would make every file it tracks read as modified."""
     try:
-        out = subprocess.run(["git", "--no-optional-locks", "-C", root, "status",
-                              "--porcelain=v1", "-uall", "--ignore-submodules=dirty"],
+        out = subprocess.run(["git", "--no-optional-locks", "-c", "core.fsmonitor=false", "-C",
+                              root, "status", "--porcelain=v1", "-uall",
+                              "--ignore-submodules=dirty"],
                              capture_output=True, timeout=3).stdout
     except (OSError, subprocess.SubprocessError):
         return "unknown"

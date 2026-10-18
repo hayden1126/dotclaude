@@ -2424,8 +2424,10 @@ def removable(lane_id: str, path: str) -> None:
     The status skips submodules: one with changes in it would run its own `git status`, whose
     config (core.fsmonitor among it) sits where the lane can write it, and GIT_COMMON_DIR never
     reaches that child. The lane's sessions still run here, so refusing submodules first would
-    race a lane that adds one after the check: the submodule refusal below stays the gate."""
-    p = git(["status", "--porcelain", "--ignore-submodules=all"], path)
+    race a lane that adds one after the check: the submodule refusal below stays the gate. And
+    fsmonitor is off: a relative core.fsmonitor in the repo's config resolves in the lane."""
+    p = git(["-c", "core.fsmonitor=false", "status", "--porcelain", "--ignore-submodules=all"],
+            path)
     if p.returncode != 0:
         raise LaneError(f"git status failed in {path}: {p.stderr.strip()}")
     if dirty := [line[3:] for line in p.stdout.splitlines()]:
@@ -2440,7 +2442,8 @@ def removable(lane_id: str, path: str) -> None:
         elif tree == path and (line == "locked" or line.startswith("locked ")):
             raise LaneError(f"lane {lane_id}'s worktree is locked, so git won't remove it: "
                             f"`git worktree unlock {path}`, then rerun `lane done {lane_id}`")
-    staged = git(["ls-files", "--stage"], path).stdout.splitlines()
+    # ls-files queries fsmonitor too, as it reads the index.
+    staged = git(["-c", "core.fsmonitor=false", "ls-files", "--stage"], path).stdout.splitlines()
     admin = git(["rev-parse", "--absolute-git-dir"], path).stdout.strip()
     if any(line.startswith("160000 ") for line in staged) or (
             admin and os.path.isdir(os.path.join(admin, "modules"))):
@@ -3171,6 +3174,12 @@ def cmd_done(args) -> None:
     # And none of them writes the lane's index: a status that refreshes it fires the
     # post-index-change hook, which a relative core.hooksPath runs from the lane's worktree.
     os.environ["GIT_OPTIONAL_LOCKS"] = "0"
+    # Nor does any of them query fsmonitor: a relative core.fsmonitor in the repo's config runs
+    # from the lane's worktree, and `git worktree remove` runs a status there of its own, past
+    # any -c on our command line. Config from the environment reaches it, and submodules.
+    count = int(os.environ.get("GIT_CONFIG_COUNT", "0") or 0)
+    os.environ.update({f"GIT_CONFIG_KEY_{count}": "core.fsmonitor",
+                       f"GIT_CONFIG_VALUE_{count}": "false", "GIT_CONFIG_COUNT": str(count + 1)})
     # Not even then, where the repo turns on per-worktree config: git would read the lane's
     # <admin>/config.worktree too, which its sandbox can write and no variable overrides.
     present = os.path.isdir(path)

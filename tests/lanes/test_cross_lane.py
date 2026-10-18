@@ -8,6 +8,8 @@ import contextlib
 import errno
 import fcntl
 import glob
+import importlib.machinery
+import importlib.util
 import io
 import json
 import os
@@ -368,16 +370,70 @@ class DoneStatus(LaneWork):
         super().setUp()
         self.path = self.new("alpha")
 
-    def test_done_refuses_a_submodule_without_running_its_fsmonitor(self):
+    def submodule_traps(self):
+        """A planted submodule whose own config sets core.fsmonitor and a clean filter its
+        .gitattributes routes a stat-dirty file to; returns both markers. The -c (or config from
+        the environment) that turns fsmonitor off reaches the submodule's own status too, so the
+        filter is what only the --ignore-submodules flag keeps from running."""
         gitdir = self.plant_submodule(self.path)
-        fsmonitor, ran = self.trap("fsmonitor")
+        fsmonitor, fsmonitor_ran = self.trap("fsmonitor")
+        clean, clean_ran = self.trap("clean", "cat\n")
         self.git("config", "--file", os.path.join(gitdir, "config"), "core.fsmonitor", fsmonitor)
+        self.git("config", "--file", os.path.join(gitdir, "config"), "filter.x.clean", clean)
+        self.write(os.path.join(self.path, SUB, ".gitattributes"), "* filter=x\n")
+        os.utime(os.path.join(self.path, SUB, "f.txt"), (OLD, OLD))
+        return fsmonitor_ran, clean_ran
+
+    def fsmonitor_in_lane(self):
+        """A relative core.fsmonitor in the repo's (protected) config, which resolves in the
+        lane's worktree, to the lane's own fsm.sh, committed; returns its marker."""
+        script, ran = self.trap("fsmonitor-in-lane")
+        os.rename(script, os.path.join(self.path, "fsm.sh"))
+        self.git("add", "fsm.sh", cwd=self.path)
+        self.git("commit", "-q", "-m", "fsm", cwd=self.path)
+        self.git("config", "core.fsmonitor", "./fsm.sh")
+        return ran
+
+    def test_done_refuses_a_submodule_without_running_its_config(self):
+        markers = self.submodule_traps()
         p = self.run_lane("done", "alpha", "--abandon")
         self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
         self.assertIn("worktree has submodules", p.stderr)
-        self.assertFalse(os.path.exists(ran))
+        self.assertEqual([os.path.exists(m) for m in markers], [False, False])
         self.assertTrue(os.path.isdir(self.path))
-        self.lane_status(self.path, "--ignore-submodules=none")  # the trap is real
+        self.lane_status(self.path, "--ignore-submodules=none")  # the traps are real
+        self.assertEqual([os.path.exists(m) for m in markers], [True, True])
+
+    def test_removable_never_runs_a_relative_fsmonitor(self):
+        lane_mod = load_lane_script()
+        ran = self.fsmonitor_in_lane()
+        with mock.patch.dict(os.environ, dict(self.env, GIT_COMMON_DIR=self.common), clear=True):
+            lane_mod.removable("alpha", self.path)
+        self.assertFalse(os.path.exists(ran))
+        self.lane_status(self.path)  # the trap is real
+        self.assertTrue(os.path.exists(ran))
+
+    def test_done_never_runs_a_relative_fsmonitor(self):
+        # `git worktree remove` runs a status in the lane of its own, past any -c of ours.
+        ran = self.fsmonitor_in_lane()
+        self.assertIn("closed", self.lane("done", "alpha", "--abandon"))
+        self.assertFalse(os.path.exists(ran))
+
+    def test_handoff_check_never_runs_a_relative_fsmonitor(self):
+        ran = self.fsmonitor_in_lane()
+        p = self.handoff_check()
+        self.assertIn(p.returncode, (0, 1), p.stderr)
+        self.assertFalse(os.path.exists(ran))
+        # Its check that HEAD carries the record runs git in the lane too (only when the record
+        # is older than HEAD's commit, so called here directly).
+        loader = importlib.machinery.SourceFileLoader("handoff_check", HANDOFF_CHECK)
+        hc = importlib.util.module_from_spec(importlib.util.spec_from_loader("handoff_check",
+                                                                             loader))
+        loader.exec_module(hc)
+        with mock.patch.dict(os.environ, self.env, clear=True):
+            hc.head_carries(lanelib.resolve(self.path), self.record("alpha"))
+        self.assertFalse(os.path.exists(ran))
+        self.lane_status(self.path)  # the trap is real
         self.assertTrue(os.path.exists(ran))
 
     def test_dones_status_never_writes_the_lanes_index(self):
@@ -400,15 +456,13 @@ class DoneStatus(LaneWork):
         return subprocess.run([sys.executable, HANDOFF_CHECK, "-C", self.path], env=self.env,
                               capture_output=True, text=True, timeout=60)
 
-    def test_handoff_check_never_runs_a_submodules_fsmonitor(self):
-        gitdir = self.plant_submodule(self.path)
-        fsmonitor, ran = self.trap("fsmonitor")
-        self.git("config", "--file", os.path.join(gitdir, "config"), "core.fsmonitor", fsmonitor)
+    def test_handoff_check_never_runs_a_submodules_config(self):
+        markers = self.submodule_traps()
         p = self.handoff_check()
         self.assertIn(p.returncode, (0, 1), p.stderr)
-        self.assertFalse(os.path.exists(ran))
-        self.lane_status(self.path, "--untracked-files=all")  # the trap is real
-        self.assertTrue(os.path.exists(ran))
+        self.assertEqual([os.path.exists(m) for m in markers], [False, False])
+        self.lane_status(self.path, "--untracked-files=all")  # the traps are real
+        self.assertEqual([os.path.exists(m) for m in markers], [True, True])
 
     def test_handoff_check_still_sees_a_moved_submodule_commit(self):
         # --ignore-submodules=dirty hides only what is inside the submodule's worktree.

@@ -519,9 +519,21 @@ class CheckoutStatus(unittest.TestCase):
         self.marker_script(script, marker)
         self.git(self.tmp, "config", "--file", os.path.join(gitdir, "config"), "core.fsmonitor",
                  script)
+        # The -c that turns fsmonitor off reaches a submodule's own status too, so its clean
+        # filter (on a stat-dirty file) is what only =dirty keeps from running.
+        cleaned, clean = os.path.join(self.tmp, "CLEAN"), os.path.join(self.tmp, "clean.sh")
+        with open(clean, "w") as f:
+            f.write(f"#!/bin/sh\ntouch {cleaned}\ncat\n")
+        os.chmod(clean, 0o755)
+        self.git(self.tmp, "config", "--file", os.path.join(gitdir, "config"), "filter.x.clean",
+                 clean)
+        with open(os.path.join(self.repo, "s", ".gitattributes"), "w") as f:
+            f.write("* filter=x\n")
+        os.utime(os.path.join(self.repo, "s", "f"), (0, 0))
         before = self.status()
         self.assertNotEqual(before, "unknown")
         self.assertFalse(os.path.exists(marker), "the submodule's core.fsmonitor ran")
+        self.assertFalse(os.path.exists(cleaned), "the submodule's clean filter ran")
         # A submodule whose commit moved still shows (=dirty, not =all).
         # This commit runs in the submodule, so it would run the planted fsmonitor itself.
         self.git(os.path.join(self.repo, "s"), "-c", "core.fsmonitor=false", "commit", "-q",
@@ -542,6 +554,16 @@ class CheckoutStatus(unittest.TestCase):
         with open(index, "rb") as f:
             self.assertEqual(f.read(), before)
         self.assertFalse(os.path.exists(marker), "post-index-change ran")
+
+    def test_a_relative_fsmonitor_never_runs_from_the_checkout(self):
+        # The repo's config is protected, but a relative command in it resolves in the checkout.
+        marker = os.path.join(self.tmp, "FSM")
+        self.marker_script(os.path.join(self.repo, "fsm.sh"), marker)
+        self.git(self.repo, "config", "core.fsmonitor", "./fsm.sh")
+        self.assertNotEqual(self.status(), "unknown")
+        self.assertFalse(os.path.exists(marker), "the checkout's fsmonitor ran")
+        subprocess.run(["git", "status"], cwd=self.repo, env=self.env, capture_output=True)
+        self.assertTrue(os.path.exists(marker), "the trap never fires")
 
 
 class AgentIndex(LedgerEnv):
