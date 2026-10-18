@@ -521,8 +521,11 @@ class Trial(LaneWork):
         self.assertEqual(self.leftovers(), (sorted([lane_b, other_repo]), []))
 
     def test_it_holds_the_lock_and_a_held_lock_with_wait_0_exits_75(self):
+        # A process outside the trial's tree (here: one that drops what the trial hands its
+        # suites) finds the lock held.
         rc_file = os.path.join(self.tmp, "inner-rc")
-        inner = shlex.join([sys.executable, LANE, "lock", "suite", "--wait", "0", "--", "true"])
+        inner = shlex.join(["env", "-u", "LANE_LOCKS_HELD", sys.executable, LANE, "lock", "suite",
+                            "--wait", "0", "--", "true"])
         rc, out, err = self.trial("--run", f"{inner}; echo $? > {shlex.quote(rc_file)}")
         self.assertEqual(rc, 0, out + err)
         self.assertEqual(self.read(rc_file).strip(), "75")  # held by the trial meanwhile
@@ -536,6 +539,26 @@ class Trial(LaneWork):
         self.assertEqual(rc, 75, out + err)
         self.assertIn("gave up on lock suite", err)
         self.assertNotIn("merged", out)
+
+    def test_a_suite_that_takes_the_suite_lock_runs_under_the_trials_hold(self):
+        # It would wait on its own trial forever. The same holds for `lane lock` inside itself.
+        inner = shlex.join([sys.executable, LANE, "lock", "suite", "--", "true"])
+        p = subprocess.run([sys.executable, LANE, "trial", "--run", inner], cwd=self.alpha,
+                           env=self.env, capture_output=True, text=True, timeout=30)
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertIn("lock suite is held by a command this one runs under: running under its "
+                      "hold", p.stdout)
+        p = subprocess.run([sys.executable, LANE, "lock", "suite", "--", sys.executable, LANE,
+                            "lock", "suite", "--", "true"], cwd=self.alpha, env=self.env,
+                           capture_output=True, text=True, timeout=30)
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertIn("running under its hold", p.stderr)
+        # A trial under a hold refuses: an outer trial's live tree would look like a leftover.
+        p = subprocess.run([sys.executable, LANE, "lock", "suite", "--", sys.executable, LANE,
+                            "trial", "--run", "true"], cwd=self.alpha, env=self.env,
+                           capture_output=True, text=True, timeout=30)
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn("a trial can't run under a hold of the suite lock", p.stderr)
 
     def test_a_repo_without_the_suite_lock_and_a_run_from_the_main_checkout_refuse(self):
         self.lane("init", "--locks", "gate")

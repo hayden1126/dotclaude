@@ -118,6 +118,7 @@ TRIAL_IDENTITY = ("lane-trial", "lane-trial@localhost")  # the author of its dan
 # The lock every trial holds, one name for all: a trial clears this lane's leftover trees under
 # it, so a second trial of the lane under another lock could remove the first one's live tree
 TRIAL_LOCK = "suite"
+LOCKS_HELD = "LANE_LOCKS_HELD"  # env: locks the commands above this one hold, `<repo key>/<name>,`
 OVERLAP_WAIT = 10  # secs each git call behind the board's overlap flag may take
 OVERLAP_SHOWN = 5  # files each overlap line under the board names
 # Every git behind the overlap flag: no transport at all, so not even a partial clone's lazy
@@ -1771,18 +1772,33 @@ def die_of(sig: int) -> int:
     return 128 + sig
 
 
+def held_by_caller(repo: Repo, name: str) -> bool:
+    """Whether a command this process runs under holds lock name of this repo (LOCKS_HELD)."""
+    return f"{repo.key}/{name}" in os.environ.get(LOCKS_HELD, "").split(",")
+
+
 @contextlib.contextmanager
 def held_lock(repo: Repo, name: str, wait: float | None, command: list[str]):
     """Hold lock name, one of the config's locks, with its holder line naming command, for the
     body of a `with`: yields True once held, False when wait ran out (nothing held). The holder
     line is cleared and the lock let go however the body ends. `lock` and `trial` both run under
-    it; a Ctrl-C while waiting comes out as KeyboardInterrupt."""
+    it; a Ctrl-C while waiting comes out as KeyboardInterrupt.
+
+    Re-entrant for descendants: the body runs with the lock named in LOCKS_HELD, so a command
+    it starts that takes the same lock (a `--run` of `lane trial` that wraps a suite in `lane
+    lock suite`) runs under this hold instead of waiting on it forever. The locks are
+    cooperative and their commands sandboxed, and a process can hand the variable only to its
+    own children, so it proves enough."""
     names = parse_locks(repo.config().get("locks", ""))
     if name not in names:
         raise LaneError(f"no lock {name!r} in the lanes config (locks:"
                         f"{', '.join(names) or 'none'}): add it with `lane init --locks "
                         "<full,list>` (it replaces the list); an unlisted name would split the "
                         "mutual exclusion")
+    if held_by_caller(repo, name):
+        warn(f"lock {name} is held by a command this one runs under: running under its hold")
+        yield True
+        return
     path = lock_path(repo, name)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     # O_CLOEXEC, and Popen's close_fds: the command and anything it backgrounds never inherit the
@@ -1792,11 +1808,17 @@ def held_lock(repo: Repo, name: str, wait: float | None, command: list[str]):
         if not take_lock(fd, name, wait):
             yield False
             return
+        before = os.environ.get(LOCKS_HELD)
         try:
             os.ftruncate(fd, 0)
             os.pwrite(fd, (holder_line(repo, command) + "\n").encode(), 0)
+            os.environ[LOCKS_HELD] = ",".join(filter(None, [before, f"{repo.key}/{name}"]))
             yield True
         finally:
+            if before is None:
+                os.environ.pop(LOCKS_HELD, None)
+            else:
+                os.environ[LOCKS_HELD] = before
             # Cleared while still held: a waiter that reads between the next holder's acquire and
             # its write sees "an unknown holder", never this run.
             os.ftruncate(fd, 0)
@@ -1964,6 +1986,10 @@ def cmd_trial(args) -> int:
     PLAN.md of lane cross-lane, section B, and docs/lanes.md have the design."""
     repo = lanes_repo()
     me = own_lane(repo)
+    if held_by_caller(repo, TRIAL_LOCK):  # held_lock would let it in, and its sweep then clear
+        raise LaneError(f"a trial can't run under a hold of the {TRIAL_LOCK} lock (inside "
+                        "another trial's suite, or `lane lock suite`): an outer trial's live tree "
+                        "would look like a leftover to clear. Run it on its own")
     command = ["lane", "trial", *args.ids, *[x for c in args.run for x in ("--run", c)]]
     try:
         with held_lock(repo, TRIAL_LOCK, args.wait, command) as held:
