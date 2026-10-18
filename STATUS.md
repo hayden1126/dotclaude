@@ -80,7 +80,9 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     [[dotclaude-tab-bar]], remote-paste's live tests in [[dotclaude-remote-paste]]. #115 left the
     tab glyph's prompt at v4: an ask a reply only announces for later stays a documented known
     miss (`hooks/wants_input.py`'s docstring), since its one prompt round flipped 10 verdicts.
-  - **No live lanes.** Merge order: lead PR #117 alone; it carries the lead's notes.
+  - **Live lane (opened 2026-10-18), merge order:** 1 monotonic (`fix/monotonic-tests`: tests
+    time durations with `time.monotonic()`, 152 `time.time()` calls in 27 test files; tests
+    only, so it runs alone). It carries the lead's notes. Its brief holds the detail.
   - done-rerun merged as #119 (2026-10-18): `lane done` keeps a restored tab's shell proof
     across a rerun. Installed from main; the lane closed with the installed fix.
   - lead-chain merged as #118 (2026-10-18): the lane next in merge order carries the lead's
@@ -93,11 +95,10 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     and the shelf's Open each brought a `--model sonnet --effort low` tab back at sonnet/low, and
     an entry without the fields restored bare (evidence in the closed record,
     `.git/lanes/_closed/restore-effort-2026-10-17/.lane/artifacts/smoke-2026-10-17.txt`). Closed.
-  - Lead PR #117 (`fix/pass-invoke-handoff`, worktree `.claude/worktrees/pass-handoff`): the pass
-    skill's step 3 loads the handoff skill with the Skill tool. Draft; Hayden skipped its install
-    from the branch (2026-10-18: `setup.sh` never reads the skill's text). Before ready: merge
-    main (it shares `tests/pass/test_pass_guards.py` with #116, a clean trial merge), rerun
-    `tests/pass`. Remove the worktree after it merges.
+  - Lead PR #117 merged (2026-10-18): the pass skill's step 3 loads the handoff skill with the
+    Skill tool, not from memory. No install from the branch (Hayden's call: `setup.sh` never
+    reads the skill's text); reinstalled from main after. **Check:** the next real `/pass`
+    transcript should show a Skill call for `handoff` before `handoff-check`.
   - The parked json-depth sweep (21 files, among them the delegation enforcement scripts) is on
     `fix/json-depth-sweep`, a local branch never pushed: keep it while the sweep is in the
     backlog. Shipping it first needs a check of how each enforcement site fails
@@ -116,10 +117,26 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     rerun the menu-clip repro and the tmux suites. If it fixes the clip, install at a quiet
     moment (a server restart; claude-restore reopens the tabs) and drop the row-0 menu rule.
     Until then, 3.7c's default menus that dotclaude doesn't own still clip under a top bar.
-  - Tests time durations with `time.monotonic()`, not `time.time()` (151 calls in 27 test
-    files on 2026-10-17). It touches every suite, so it opens only when no lane runs: after the
-    three live lanes close. It is the flakes' real fix: the wall clock still steps with timesyncd
-    off (Notes, "Root cause of the timing flakes").
+  - **Cross-lane checks, next after monotonic** (Hayden's pick 2026-10-18: A and B as one lane).
+    Lanes plan alone, and nothing compares their designs: on 2026-10-17 restore-effort's brief
+    listed 7 files, #116 changed 14 (among them `lane` and `lanelib.py`, done-rerun's files), and
+    the brief named no overlap with done-rerun. A: `lane ls` flags two live lanes whose actual
+    changed files overlap (committed and uncommitted against `origin/main`, derived on each call).
+    B: before ready, a lane trial-merges every other live lane's branch into a scratch tree and
+    runs the suites there under `lane lock suite` (the trial-tree traps are in
+    [[dotclaude-lanes]]). The lead plan review (C) was not picked. Files: `skills/lanes/scripts/
+    lane`, `lanelib.py`, `tests/lanes`, `skills/lanes/SKILL.md`, `docs/lanes.md`.
+  - **A tab-bar pin outlives the reason for it, after the cross-lane checks** (Hayden's design
+    2026-10-18). Seen 2026-10-17: done-rerun's close at 22:05 left dotclaude with no lanes, so
+    the lead's tab (`@3`) fell to the shared row. A move there at 22:37:33 ran `put()`, which pins
+    every member of the row (`@tab_place` row `s`, pos 0-3 on `@1 @51 @3 @57`, same second), and
+    when lane monotonic opened at about 22:40 the pin kept the lead off dotclaude's returning row
+    (`dotclaude·lead`). Hayden cleared it with Auto place. The rule: a tab Hayden moves keeps a
+    hard pin, but a tab that turns from a regular (shared) tab into a lead, whether it was a lead
+    before or not, resets its pin and opens its repo's row. That needs the kind at pin time in
+    the placement; `parse_place` reads exactly four keys, so the old form must keep reading (no
+    kind: no reset, today's behavior). Files: `tmux/tmux-tab-bar`,
+    `tests/setup/test_tmux_tab_bar.py`, README's tab-bar section.
 
   **The post-merge chain** (Hayden's design B, standing approval 2026-10-14): `skills/lanes/SKILL.md`,
   The lead, step 7. Lead commits on the lead branch ride the PR of the lane next in merge order,
