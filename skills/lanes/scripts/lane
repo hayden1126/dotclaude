@@ -1815,7 +1815,9 @@ def cmd_lock(args) -> int:
 
 # ---- trial: the suites on a merge with every other live lane ---------------------------------
 UNITTEST_FAIL = re.compile(r"(?:FAIL|ERROR): \S")
-PYTEST_FAIL = re.compile(r"(?:FAILED|ERROR) (\S.*?)(?: - .*)?")
+# An id never starts with '(': unittest's own summary, `FAILED (failures=12, skipped=4)`, isn't
+# one, and its counts change whenever a lane adds a test.
+PYTEST_FAIL = re.compile(r"(?:FAILED|ERROR) ([^\s(].*?)(?: - .*)?")
 
 
 class TrialStopped(Exception):

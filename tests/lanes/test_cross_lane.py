@@ -360,7 +360,8 @@ class FailingIds(unittest.TestCase):
         lines = ["FAIL: test_x (a.B.test_x) (path='/tmp/t/tree')", "ERROR: test_y (a.B.test_y)",
                  "FAILED t.py::test_z - assert 1 == 2", "ERROR t.py::test_w",
                  "FAIL: test_x (a.B.test_x) (path='/tmp/t/tree')",  # once
-                 "ERROR:root:a log line", "FAILED", "ok", "Ran 3 tests in 0.1s"]
+                 "ERROR:root:a log line", "FAILED", "ok", "Ran 3 tests in 0.1s",
+                 "FAILED (failures=12, skipped=4)", "FAILED (errors=1)"]  # unittest's summary
         self.assertEqual(lane_mod.failing_ids(lines),
                          ["FAIL: test_x (a.B.test_x) (path='/tmp/t/tree')",
                           "ERROR: test_y (a.B.test_y)", "t.py::test_z", "t.py::test_w"])
