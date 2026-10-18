@@ -2243,8 +2243,8 @@ class FakeTmux(unittest.TestCase):
     def test_the_menu_shows_moves_for_a_checked_client_and_window(self):
         self.nav_state("@2")
         self.run_cmd("menu", "/dev/pts/7")
-        deadline = time.time() + 10                     # display-menu runs detached
-        while time.time() < deadline and "display-menu" not in [c[0] for c in self.calls()]:
+        deadline = time.monotonic() + 10                     # display-menu runs detached
+        while time.monotonic() < deadline and "display-menu" not in [c[0] for c in self.calls()]:
             time.sleep(0.05)
         menu = next(c for c in self.calls() if c[0] == "display-menu")
         # -M: taps work in a menu no mouse event opened; the client's own session in -t.
@@ -2615,8 +2615,8 @@ class RealTmux(unittest.TestCase):
         return self.tmux(self.out_sock, args, check)
 
     def wait(self, pred, why, timeout=5.0):
-        deadline = time.time() + timeout
-        while time.time() < deadline:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
             if pred():
                 return
             time.sleep(0.05)
@@ -2661,8 +2661,8 @@ class RealTmux(unittest.TestCase):
         of its own, since no holder will see it."""
         base = os.path.join(self.tmp, f".tmux-tab-bar.{os.getuid()}."
                                       f"{tb.server_key(self.layout_env['TMUX'])}")
-        deadline = time.time() + timeout
-        while time.time() < deadline:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
             fd = os.open(base + ".lock", os.O_RDWR | os.O_CREAT, 0o600)
             try:
                 fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -3159,8 +3159,8 @@ class RealTmux(unittest.TestCase):
         # HOME has no tmux-tab-bar: every hook's command must still exit 0 and print nothing.
         self.ti("new-window", "-t", "t:", "-c", self.plain, "sleep 600")
         self.ti("select-window", "-t", "t:0")
-        deadline = time.time() + 2
-        while time.time() < deadline:
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline:
             modes = self.ti("list-panes", "-a", "-F", "#{pane_in_mode}").stdout.split()
             self.assertEqual(set(modes), {"0"})
             time.sleep(0.1)

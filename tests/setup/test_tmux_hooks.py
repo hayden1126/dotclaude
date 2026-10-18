@@ -113,8 +113,8 @@ class Hooks(unittest.TestCase):
         """Wait for the run's ring.log line: stop-ring logs a ring after its settle, detached.
         A positive-only wait, so a long deadline costs nothing when it passes; 3 s flaked under
         machine load (on main too, 2026-10-12)."""
-        deadline = time.time() + 15
-        while len(self.ring_log()) == self.logged_before and time.time() < deadline:
+        deadline = time.monotonic() + 15
+        while len(self.ring_log()) == self.logged_before and time.monotonic() < deadline:
             time.sleep(0.05)
         self.assertNotEqual(len(self.ring_log()), self.logged_before, "no decision logged")
 
@@ -137,8 +137,8 @@ class Hooks(unittest.TestCase):
         return [c for c in self.calls() if c.startswith("tmux set-option")]
 
     def seen(self, mark):
-        deadline = time.time() + 3
-        while time.time() < deadline:
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline:
             if any(mark in c for c in self.calls()):
                 return True
             time.sleep(0.05)
@@ -173,8 +173,8 @@ class Hooks(unittest.TestCase):
     def classified(self, count=1):
         """Wait until ring.log holds count classifier lines (stop-ring's detached child logs
         after its settle); return the last."""
-        deadline = time.time() + 15
-        while len(self.input_log()) < count and time.time() < deadline:
+        deadline = time.monotonic() + 15
+        while len(self.input_log()) < count and time.monotonic() < deadline:
             time.sleep(0.05)
         self.assertGreaterEqual(len(self.input_log()), count, "no classifier verdict logged")
         return self.input_log()[-1]
@@ -202,7 +202,7 @@ class Hooks(unittest.TestCase):
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "w") as f:
             f.write(text)
-        then = time.time() - age
+        then = time.time() - age  # wall clock
         os.utime(path, (then, then))
 
     # --- tmux-state.sh: which window gets the state --------------------------------------
@@ -525,8 +525,8 @@ class Hooks(unittest.TestCase):
         path = self.transcript({"type": "assistant", "message": {"content": "done"}})
         self.stop("yes - 3000", wait=False, transcript_path=path)
         self.transcript(self.DEQUEUE)
-        deadline = time.time() + 2.5  # the settle is 0.3 s; Haiku answers at 3 s
-        while self.glyph()[0] != "busy" and time.time() < deadline:
+        deadline = time.monotonic() + 2.5  # the settle is 0.3 s; Haiku answers at 3 s
+        while self.glyph()[0] != "busy" and time.monotonic() < deadline:
             time.sleep(0.05)
         self.assertEqual(self.glyph(), ("busy", ""))
         self.assertEqual(self.input_log(), [])  # Haiku hasn't answered yet
@@ -660,14 +660,14 @@ class Hooks(unittest.TestCase):
 
     def test_each_stop_writes_the_sessions_stop_record(self):
         # pass-respawn reads it: a plain pass respawns only after a Stop with no waits.
-        before = time.time()
+        before = time.time()  # wall clock
         self.run_hook("stop-ring.sh", TAB, {"background_tasks": [
             {"id": "t1", "type": "teammate", "status": "running"}]})
         rec = self.stop_record()
         self.assertEqual((rec["session_id"], rec["waits"], rec["tasks"]),
                          ("abcdef12-0000", [], [{"label": "teammate", "id": "t1"}]))
         self.assertGreaterEqual(rec["time"], before - 1)
-        self.assertLessEqual(rec["time"], time.time() + 1)
+        self.assertLessEqual(rec["time"], time.time() + 1)  # wall clock
         tasks = [{"id": "b1", "type": "shell"}, {"id": "a1", "type": "subagent"},
                  {"id": "d1", "type": "dream"}]
         self.run_hook("stop-ring.sh", TAB, {"background_tasks": tasks})
@@ -1062,7 +1062,7 @@ class Hooks(unittest.TestCase):
     def test_old_stop_records_are_pruned_once_a_day(self):
         stops = os.path.join(self.state, "dotclaude", "stops")
         os.makedirs(stops)
-        now = time.time()
+        now = time.time()  # wall clock
 
         def touch(name, age):
             path = os.path.join(stops, name)
@@ -1269,8 +1269,8 @@ class RealTmux(unittest.TestCase):
         return count
 
     def settled(self, count):
-        deadline = time.time() + 15
-        while len(self.verdicts()) <= count and time.time() < deadline:
+        deadline = time.monotonic() + 15
+        while len(self.verdicts()) <= count and time.monotonic() < deadline:
             time.sleep(0.05)
         return self.verdicts()[-1]
 

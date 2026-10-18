@@ -556,7 +556,7 @@ class HandoffFlag(LanesRepo):
         super().setUp()
         self.lane("new", "chart-fix")
         self.path = self.lane_path("chart-fix")
-        self.t = time.time() + 600
+        self.t = time.time() + 600  # wall clock
         self.env["FAKE_GH_OUT"] = "[]"  # gh answers: no PR
         self.wrote(0)
 
@@ -1186,7 +1186,7 @@ class Fakes(LanesRepo):
         """Claude Code's session file for pid; procStart is its real start unless given."""
         rec = {"pid": pid, "sessionId": sid, "cwd": cwd or self.path, "kind": "interactive",
                "procStart": str(self.starts[pid] if start is None else start),
-               "startedAt": int(time.time() * 1000), **extra}
+               "startedAt": int(time.time() * 1000), **extra}  # wall clock
         self.write(os.path.join(self.home, ".claude", "sessions", f"{pid}.json"),
                    json.dumps(rec))
 

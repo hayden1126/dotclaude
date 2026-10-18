@@ -151,7 +151,7 @@ class Base(unittest.TestCase):
         d = os.path.join(self.state, "dotclaude", "stops")
         os.makedirs(d, exist_ok=True)
         with open(os.path.join(d, SID + ".json"), "w") as f:
-            json.dump({"session_id": SID, "time": time.time() - age, "waits": waits,
+            json.dump({"session_id": SID, "time": time.time() - age, "waits": waits,  # wall clock
                        "tasks": tasks}, f)
 
     # ---- running ----
@@ -214,7 +214,7 @@ class Tiers(Base):
         self.assertEqual(self.tool(519_999, session_id="s3"), context("wrap_unknown", "520k"))
         self.assertIsNone(self.stop(299_999))
         self.assertEqual(self.ctx()["tokens"], 299_999)
-        self.assertLess(time.time() - self.ctx()["time"], 30)
+        self.assertLess(time.time() - self.ctx()["time"], 30)  # wall clock
 
     def test_soft_fires_once_per_crossing_and_only_on_stop(self):
         self.on()
@@ -444,7 +444,7 @@ class Background(Base):
         self.on()
         d = os.path.join(self.state, "dotclaude", "stops", SID + ".json")
         with open(d, "w") as f:
-            json.dump({"time": time.time(), "waits": []}, f)
+            json.dump({"time": time.time(), "waits": []}, f)  # wall clock
         self.assertEqual(self.tool(485_000), context("wrap_unknown", "485k"))
 
     def test_the_plain_pass_rule_is_pass_respawns(self):
@@ -1011,7 +1011,7 @@ class PassRuleParity(Base):
                                                                               loader))
         loader.exec_module(pr)
         # Called a minute before each record, as in a real pass.
-        plan = types.SimpleNamespace(session_id=SID, called=time.time() - 60)
+        plan = types.SimpleNamespace(session_id=SID, called=time.time() - 60)  # wall clock
         watch = {"label": "artifact watch", "id": "s1", "url": "https://claude.ai/artifact/x"}
         cases = [({"waits": [], "tasks": []}, True),
                  ({"waits": [], "tasks": [watch, {"label": "dream"}, "dream"]}, True),
@@ -1040,7 +1040,7 @@ class PassRuleParity(Base):
         os.makedirs(os.path.dirname(path), exist_ok=True)
         for body, clear in cases:
             with self.subTest(body=body):
-                rec = {"session_id": SID, "time": time.time(), **body}
+                rec = {"session_id": SID, "time": time.time(), **body}  # wall clock
                 with open(path, "w") as f:
                     json.dump(rec, f)
                 self.assertEqual(pr.stop_problem(plan, rec) is None, clear)
@@ -1261,14 +1261,14 @@ class LockPrune(Base):
     def test_a_lock_in_use_is_never_pruned_and_an_old_idle_one_is(self):
         d = os.path.join(self.state, "dotclaude", "ctx-watch")
         os.makedirs(d)
-        old = time.time() - 30 * 86400
+        old = time.time() - 30 * 86400  # wall clock
         for name in (SID, "idle"):
             path = os.path.join(d, name + ".lock")
             open(path, "w").close()
             os.utime(path, (old, old))
         with aps.watch_lock(SID) as locked:
             self.assertTrue(locked)
-            cw.prune_locks(d, time.time())
+            cw.prune_locks(d, time.time())  # wall clock
         self.assertTrue(os.path.exists(os.path.join(d, SID + ".lock")))
         self.assertFalse(os.path.exists(os.path.join(d, "idle.lock")))
 

@@ -520,9 +520,9 @@ class AgentIndex(LedgerEnv):
 
     def test_a_stale_entry_is_pruned_and_a_fresh_one_kept(self):
         os.makedirs(self.agents())
-        week = time.time() - 8 * 86400
+        week = time.time() - 8 * 86400  # wall clock
         for name, mtime in (("old.json", week), (".old.x.tmp", week),
-                            ("fresh.json", time.time() - 86400)):
+                            ("fresh.json", time.time() - 86400)):  # wall clock
             path = os.path.join(self.agents(), name)
             open(path, "w").close()
             os.utime(path, (mtime, mtime))
@@ -826,7 +826,7 @@ class Liveness(LiveSession):
         os.makedirs(out_dir)
         events = os.path.join(out_dir, "events.jsonl")
         open(events, "w").close()
-        old = time.time() - 40 * 60
+        old = time.time() - 40 * 60  # wall clock
         os.utime(events, (old, old))
         os.makedirs(os.path.dirname(self.ledger), exist_ok=True)
         with open(self.ledger, "w") as f:
@@ -1244,7 +1244,7 @@ class MonthlyAudit(LedgerEnv):
                     'allow = ["SubagentHandback", "SendMessage", "ToolSearch"]\n'
                     'default = { nudge_min = 30 }\nExplore = { nudge_min = 10 }\n')
         self.env["DELEGATION_POLICY"] = policy
-        self.now = time.time()
+        self.now = time.time()  # wall clock
 
     def append(self, *rows):
         os.makedirs(os.path.dirname(self.ledger), exist_ok=True)

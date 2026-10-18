@@ -201,21 +201,21 @@ class Cue(Widget):
 class Window(Widget):
     def test_merges_into_an_existing_ctx_file(self):
         self.write_ctx({"tokens": 123456, "time": 1.5})
-        before = time.time()
+        before = time.time()  # wall clock
         self.run_widget(self.payload(100000))
         rec = self.read_ctx()
         self.assertEqual((rec["tokens"], rec["time"], rec["window"]), (123456, 1.5, 600000))
         self.assertGreaterEqual(rec["window_at"], before)
 
     def test_writes_a_change_even_when_fresh(self):
-        self.write_ctx({"tokens": 5, "window": 600000, "window_at": time.time()})
+        self.write_ctx({"tokens": 5, "window": 600000, "window_at": time.time()})  # wall clock
         self.run_widget(self.payload(100000, 200000))
         self.assertEqual(self.read_ctx()["window"], 200000)
         self.run_widget(self.payload(100000, 1000000))  # and back up
         self.assertEqual(self.read_ctx()["window"], 1000000)
 
     def test_skips_an_unchanged_fresh_window_and_rewrites_a_stale_one(self):
-        fresh = time.time() - 5
+        fresh = time.time() - 5  # wall clock
         self.write_ctx({"tokens": 5, "window": 600000, "window_at": fresh})
         self.run_widget(self.payload(100000))
         self.assertEqual(self.read_ctx()["window_at"], fresh)
@@ -338,7 +338,7 @@ class InProcess(Widget):
         for path in (old, fresh):
             with open(path, "w") as f:
                 f.write("{}")
-        week = time.time() - 8 * 86400
+        week = time.time() - 8 * 86400  # wall clock
         os.utime(old, (week, week))
         self.run_widget(self.payload(100000))
         self.assertFalse(os.path.exists(old))

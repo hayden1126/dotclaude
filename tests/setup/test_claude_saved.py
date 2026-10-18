@@ -153,7 +153,7 @@ class Saved(unittest.TestCase):
                    pick=None):
         e = {"session_id": sid(n), "cwd": self.cwd(n), "transcript_path": "", "pane": pane,
              "window_index": 1, "socket": SOCKET, "server_start": server_start,
-             "server_pid": PID, "ts": ts or time.time()}
+             "server_pid": PID, "ts": ts or time.time()}  # wall clock
         if ended:
             e["ended_other_at"] = ended
         if attach:
@@ -207,7 +207,7 @@ class Saved(unittest.TestCase):
         e = {"session_id": sid(n), "cwd": self.cwd(n) if cwd is None else cwd,
              "title": f"[repo{n}] chat {n}" if title is None else title,
              "transcript_path": "", "starred": starred, "shelved": shelved,
-             "saved_at": time.time() - age,
+             "saved_at": time.time() - age,  # wall clock
              "tab": {"socket": SOCKET, "server_start": START, "server_pid": PID, "pane": pane},
              **(pick or {})}
         with open(os.path.join(self.store, sid(n) + ".json"), "w") as f:
@@ -272,10 +272,11 @@ class Saved(unittest.TestCase):
         self.assertIn("starred", self.messages()[-1])
 
     def test_star_falls_back_to_the_registry(self):
-        self.registered(1, "%4", ts=time.time() - 100)
-        self.registered(2, "%4", ts=time.time())
-        self.registered(3, "%4", ts=time.time() + 50, server_start=START - 9)  # another server
-        self.registered(5, "%4", ts=time.time() + 60, ended=time.time())        # window killed
+        now = time.time()  # wall clock
+        self.registered(1, "%4", ts=now - 100)
+        self.registered(2, "%4", ts=now)
+        self.registered(3, "%4", ts=now + 50, server_start=START - 9)  # another server
+        self.registered(5, "%4", ts=now + 60, ended=now)               # window killed
         self.transcript(2)
         self.run_saved("star", "%4", CLIENT)
         self.assertEqual(list(self.saved()), [sid(2)])
@@ -391,7 +392,7 @@ class Saved(unittest.TestCase):
         os.makedirs(d, exist_ok=True)
         path = os.path.join(d, pane[1:] + ".json")
         with open(path, "w") as f:
-            json.dump({"session_id": sid(n), "written_at": time.time() - age,
+            json.dump({"session_id": sid(n), "written_at": time.time() - age,  # wall clock
                        "tab": {"socket": SOCKET, "server_start": server_start,
                                "server_pid": PID, "pane": pane}}, f)
         return path
@@ -737,7 +738,7 @@ class Saved(unittest.TestCase):
     def test_track_keeps_the_flags_of_the_tab_it_ran_in(self):
         self.background(1)
         self.transcript(1)
-        self.registered(1, "%33", ended=time.time() - 600, pick=PICK)
+        self.registered(1, "%33", ended=time.time() - 600, pick=PICK)  # wall clock
         self.client("attach", sid(1)[:8])
         self.track_panes(("%7", self.ppid, 3))
         self.run_saved("track")
@@ -1018,7 +1019,8 @@ class Saved(unittest.TestCase):
     def test_track_records_an_attach_tab_for_restore(self):
         self.background(1)
         t = self.transcript(1)
-        self.registered(1, "%33", ended=time.time() - 600)   # the tab it ran in before
+        # The tab it ran in before.
+        self.registered(1, "%33", ended=time.time() - 600)  # wall clock
         self.client("attach", sid(1)[:8])
         self.track_panes(("%4", 1, 1), ("%7", self.ppid, 3))
         self.run_saved("track")
@@ -1031,7 +1033,7 @@ class Saved(unittest.TestCase):
                           "server_start": START, "server_pid": PID, "attach": True,
                           "job_id": sid(1)[:8]})
         self.assertNotIn("ended_other_at", e)
-        self.assertAlmostEqual(e["ts"], time.time(), delta=30)
+        self.assertAlmostEqual(e["ts"], time.time(), delta=30)  # wall clock
 
     def test_track_keeps_the_tabs_place(self):
         # Review round 2: track rewrites an attach tab's record whole, so it carries the

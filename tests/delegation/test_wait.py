@@ -356,7 +356,7 @@ class ScanLog(unittest.TestCase):
         self.log = os.path.join(self.tmp.name, "job.log")
         with open(self.log, "w") as f:
             f.write("seen\nOK")
-        self.now = time.time()
+        self.now = time.time()  # wall clock
 
     def age(self, s, path=None):
         os.utime(path or self.log, (self.now - s, self.now - s))
@@ -941,7 +941,7 @@ class Exits(WaitEnv):
         self.assertEqual(self.run_("--file", target).returncode, 0)
         wid = self.only()["id"]
         path = os.path.join(self.watches, f"{wid}.json")
-        os.utime(path, (time.time() - 3 * 86400,) * 2)
+        os.utime(path, (time.time() - 3 * 86400,) * 2)  # wall clock
         before = os.stat(path).st_mtime
         p = self.run_("--drop", wid)
         self.assertEqual((p.returncode, p.stdout), (0, f"watch {wid} is already done\n"))
@@ -1391,7 +1391,7 @@ class Codex(WaitEnv):
 class Prune(WaitEnv):
     def test_a_wait_prunes_old_temp_files_and_long_ended_watches(self):
         os.makedirs(self.watches)
-        now = time.time()
+        now = time.time()  # wall clock
 
         def put(name, age_days, state=None):
             path = os.path.join(self.watches, name)
@@ -1546,7 +1546,8 @@ class Views(WaitEnv):
 
     def test_an_unresolved_watch_shows_however_old_it_is(self):
         wid = self.lapsed(self.job())
-        old = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 72 * 3600))
+        old = time.strftime("%Y-%m-%dT%H:%M:%SZ",
+                            time.gmtime(time.time() - 72 * 3600))  # wall clock
         self.update(wid, created=old, waiter_heartbeat=old)
         self.assertIn(f"no live waiter ⚠ re-arm: delegation-ledger wait --resume {wid}",
                       self.cli("watch").splitlines()[2])

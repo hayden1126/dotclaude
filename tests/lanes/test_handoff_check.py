@@ -110,7 +110,7 @@ class PlainRepo(Check):
 
     def setUp(self):
         super().setUp()
-        self.session(self.main, time.time() - 60)
+        self.session(self.main, time.time() - 60)  # wall clock
         self.status = os.path.join(self.main, "STATUS.md")
         self.commit("STATUS.md", GOOD, msg="Handoff")
 
@@ -125,17 +125,17 @@ class PlainRepo(Check):
 
     def test_the_status_file_must_postdate_head(self):
         self.commit("code.py", "x = 1\n")
-        past = time.time() - 3600
+        past = time.time() - 3600  # wall clock
         os.utime(self.status, (past, past))
         self.session(self.main, past - 60)
         self.assertGap(self.check(), "older than HEAD")
 
     def test_the_status_file_must_be_written_in_this_session(self):
-        self.session(self.main, time.time() + 120)
+        self.session(self.main, time.time() + 120)  # wall clock
         self.assertGap(self.check(), "not written during this session")
 
     def test_the_session_id_env_picks_the_session(self):
-        self.session(self.tmp, time.time() + 120, sid="other-sess", pid=2)
+        self.session(self.tmp, time.time() + 120, sid="other-sess", pid=2)  # wall clock
         self.assertPasses(self.check())  # the other session's cwd is elsewhere
         self.assertGap(self.check(CLAUDE_CODE_SESSION_ID="other-sess"), "during this session")
 
@@ -422,13 +422,13 @@ class Lane(Check):
 
     def test_a_commit_after_the_record_fails(self):
         self.finish()
-        past = time.time() - 3600
+        past = time.time() - 3600  # wall clock
         os.utime(self.record("chart-fix"), (past, past))
         self.commit("chart.txt", "axis\n", cwd=self.path)
         self.assertGap(self.check(cwd=self.path), "older than HEAD")
 
     def test_a_record_from_before_the_session_fails(self):
-        past = time.time() - 3600
+        past = time.time() - 3600  # wall clock
         self.write(self.record("chart-fix"), self.body)
         os.utime(self.record("chart-fix"), (past, past))
         self.assertGap(self.check(cwd=self.path), "during this session")
@@ -445,7 +445,7 @@ class Lane(Check):
         self.assertPasses((code, out))
         self.assertIn("handoff-check --closing: chart-fix", out)
         # HEAD still counts: a commit after the record fails it.
-        past = time.time() - 3600
+        past = time.time() - 3600  # wall clock
         os.utime(self.record("chart-fix"), (past, past))
         self.commit("chart.txt", "axis\n", cwd=self.path)
         self.assertGap(self.check(self.path, "--closing"), "older than HEAD")

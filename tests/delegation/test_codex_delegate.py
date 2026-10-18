@@ -382,8 +382,8 @@ class FullRun(unittest.TestCase):
                                       f"{wid}.json"), w)
 
     def wait_gone(self, pid):
-        deadline = time.time() + 15
-        while time.time() < deadline and cd.dc.pid_alive(pid):
+        deadline = time.monotonic() + 15
+        while time.monotonic() < deadline and cd.dc.pid_alive(pid):
             time.sleep(0.1)
 
     def ledger_run(self, *args):
@@ -480,8 +480,8 @@ class FullRun(unittest.TestCase):
              self.brief, "--no-scope"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             env=dict(self.env, FAKE_SLEEP="2"))
         path = os.path.join(self.tmp.name, "state", "dotclaude", "delegations.jsonl")
-        deadline = time.time() + 10
-        while time.time() < deadline:
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
             if os.path.exists(path) and any(r["event"] == "start" for r in self.ledger()):
                 break
             time.sleep(0.1)
@@ -493,8 +493,8 @@ class FullRun(unittest.TestCase):
         self.assertFalse(cd.dc.waiter_alive(w))
         self.assertNotIn("_prompt", json.dumps(self.ledger()))
         codex_pid = self.ledger()[-1]["pid"]
-        deadline = time.time() + 15
-        while time.time() < deadline and cd.dc.pid_alive(codex_pid):
+        deadline = time.monotonic() + 15
+        while time.monotonic() < deadline and cd.dc.pid_alive(codex_pid):
             time.sleep(0.1)
         run_id = self.ledger()[0]["run_id"]
         out = self.ledger()[0]["out"]
@@ -507,8 +507,8 @@ class FullRun(unittest.TestCase):
     def pid_file(self):
         """The run's codex.pid record, once the supervisor has written it."""
         path = os.path.join(self.ledger()[0]["out"], "codex.pid")
-        deadline = time.time() + 10
-        while not os.path.exists(path) and time.time() < deadline:
+        deadline = time.monotonic() + 10
+        while not os.path.exists(path) and time.monotonic() < deadline:
             time.sleep(0.05)
         with open(path) as f:
             return json.load(f)
@@ -624,8 +624,8 @@ class FullRun(unittest.TestCase):
         proc.stdout.close()
 
     def wait_for_start(self):
-        deadline = time.time() + 10
-        while time.time() < deadline:
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
             if any(r["event"] == "start" for r in self.ledger()):
                 return
             time.sleep(0.1)
@@ -808,8 +808,8 @@ class FullRun(unittest.TestCase):
         self.assertEqual(p.returncode, 75, p.stderr)
         detached = self.ledger()[-1]
         self.assertEqual((detached["event"], detached["thread_id"]), ("detached", None))
-        deadline = time.time() + 15
-        while time.time() < deadline and cd.dc.pid_alive(detached["pid"]):
+        deadline = time.monotonic() + 15
+        while time.monotonic() < deadline and cd.dc.pid_alive(detached["pid"]):
             time.sleep(0.1)
         f = self.run_cd("finalize", detached["run_id"])
         self.assertEqual(f.returncode, 0, f.stderr)
@@ -890,8 +890,8 @@ class FullRun(unittest.TestCase):
     def codex_pid(self):
         """The pid in the run's codex.pid, once the wrapper has written it."""
         path = os.path.join(self.ledger()[0]["out"], "codex.pid")
-        deadline = time.time() + 10
-        while not os.path.exists(path) and time.time() < deadline:
+        deadline = time.monotonic() + 10
+        while not os.path.exists(path) and time.monotonic() < deadline:
             time.sleep(0.05)
         with open(path) as f:
             return json.load(f)["pid"]
