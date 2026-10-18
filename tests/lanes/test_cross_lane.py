@@ -631,6 +631,11 @@ class Trial(LaneWork):
         self.commit_files(self.alpha, ["a.txt"])
         self.commit_files(self.beta, ["b.txt"])
 
+    def needs_base(self, lane_id, paths):
+        """The line for a lane that conflicts with origin/main itself."""
+        return (f"lane trial: lane {lane_id} conflicts with origin/main ({paths}): it needs to "
+                "merge origin/main before a trial can tell whether it conflicts with this lane")
+
     def trial(self, *args, cwd=None):
         p = self.run_lane("trial", *args, cwd=cwd or self.alpha)
         return p.returncode, p.stdout, p.stderr
@@ -692,17 +697,16 @@ class Trial(LaneWork):
         self.commit_files(self.beta, ["shared.txt"])
         rc, out, err = self.trial("--run", "true")
         self.assertEqual(rc, 1, out + err)
-        self.assertIn("lane trial: lane beta conflicts with origin/main (shared.txt), not with "
-                      "this lane: it needs to merge origin/main", out)
+        self.assertIn(self.needs_base("beta", "shared.txt"), out)
         self.assertNotIn("conflict with lane beta", out)
-        # One that conflicts with this lane too gets the base's verdict only (the known limit):
-        # its own trial, once it merges the base, finds the rest. The trial still fails.
+        # One that conflicts with this lane too gets the base's verdict only (the known limit),
+        # which claims nothing about this lane: its own trial, once it merges the base, finds
+        # the rest. The trial still fails.
         self.commit_files(self.alpha, ["g.txt"])
         self.commit_files(self.beta, ["g.txt"])
         rc, out, err = self.trial("--run", "true")
         self.assertEqual(rc, 1, out + err)
-        self.assertIn("lane trial: lane beta conflicts with origin/main (shared.txt), not with "
-                      "this lane: it needs to merge origin/main", out)
+        self.assertIn(self.needs_base("beta", "shared.txt"), out)
 
     def test_a_lane_that_holds_the_base_still_leaves_a_base_conflict_to_the_other_lane(self):
         # alpha merged origin/main, so its HEAD conflicts with beta wherever main does: only a
@@ -713,8 +717,7 @@ class Trial(LaneWork):
         self.commit_files(self.beta, ["shared.txt"])
         rc, out, err = self.trial("--run", "true")
         self.assertEqual(rc, 1, out + err)
-        self.assertIn("lane trial: lane beta conflicts with origin/main (shared.txt), not with "
-                      "this lane: it needs to merge origin/main", out)
+        self.assertIn(self.needs_base("beta", "shared.txt"), out)
         self.assertNotIn("conflict with lane beta", out)
 
     def edit_lines(self, cwd, name, edits):
@@ -762,8 +765,7 @@ class Trial(LaneWork):
         self.edit_lines(self.beta, "x.txt", {1: "beta"})
         rc, out, err = self.trial("--run", "true")
         self.assertEqual(rc, 1, out + err)
-        self.assertIn("lane trial: lane beta conflicts with origin/main (x.txt), not with this "
-                      "lane: it needs to merge origin/main", out)
+        self.assertIn(self.needs_base("beta", "x.txt"), out)
 
     def test_a_lane_that_renames_a_file_this_lane_edits_conflicts_with_this_lane(self):
         # gamma renames old.txt to new.txt and edits line 10, which alpha edits too: git names

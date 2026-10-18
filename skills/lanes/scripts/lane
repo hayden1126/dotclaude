@@ -2125,8 +2125,9 @@ def conflict_line(repo: Repo, lane_id: str, sha: str, conflicted: list[str], cha
                   merged: list[tuple[str, str]], commands: list[str]) -> str:
     """The report's line for lane lane_id, whose head sha conflicted with the merge so far
     (chain: the base commit and its name, and the baseline). Merges decide, in this order:
-      - with the base alone: the lane conflicts with the base itself, so it is that lane's to
-        merge the base;
+      - with the base alone: the lane conflicts with the base itself, so it needs to merge the
+        base before a trial can tell whether it conflicts with this lane (the line claims
+        nothing about this lane, which the known limit below may hide);
       - with none merged before it, the merge so far is the baseline: this lane's conflict;
       - with the baseline: the base merges cleanly with the lane, so a conflict there needs this
         lane's own changes: this lane's conflict;
@@ -2142,8 +2143,8 @@ def conflict_line(repo: Repo, lane_id: str, sha: str, conflicted: list[str], cha
     tree, with_base = merge_tree(repo, chain["base"], sha, f"{lane_id} and {base}")
     if tree is None:
         return (f"lane trial: lane {lane_id} conflicts with {base} ("
-                f"{', '.join(with_base) or 'git named no path'}), not with this lane: it needs "
-                f"to merge {base}")
+                f"{', '.join(with_base) or 'git named no path'}): it needs to merge {base} "
+                "before a trial can tell whether it conflicts with this lane")
     if not merged or merge_tree(repo, chain["baseline"], sha, lane_id)[0] is None:
         return f"lane trial: conflict with lane {lane_id}: {paths}"
     pairs = []
