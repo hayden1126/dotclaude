@@ -374,10 +374,12 @@ So every sandbox-off status in a checkout now skips submodule contents: `lane do
 `removable()` (`=all`, its submodule refusal stays), `handoff-check` and `delegation-ledger`'s
 hook (`=dirty`, which still reports a moved gitlink), each with optional locks off and
 `core.fsmonitor=false` (a relative fsmonitor command resolves inside the checkout; `done` sets
-it for every git it runs, `git worktree remove`'s own status included). A configured filter
-driver (a program the user installed, such as git-lfs) still runs on the files a checkout
-routes to it: turning it off would make every file it tracks read as modified, so `done` would
-refuse every LFS lane. `ls` alone skips the uncommitted read then, since it can afford to.
+it for every git it runs, `git worktree remove`'s own status included), and the ledger's hook,
+like `ls` and `done`, runs no status in a repo whose own config sets `extensions.worktreeConfig`
+(`audit` names those runs unchecked). A configured filter driver (a program the user
+installed, such as git-lfs) still runs on the files a checkout routes to it: turning it off
+would make every file it tracks read as modified, so `done` would refuse every LFS lane. `ls`
+alone skips the uncommitted read then, since it can afford to.
 
 **`lane trial`.** Before a lane asks Hayden for ready, it runs
 `lane trial --run "<suite>" --run "<suite>" ...`, sandboxed:
@@ -391,12 +393,12 @@ refuse every LFS lane. `ls` alone skips the uncommitted read then, since it can 
 2. It builds the merge with no worktree: from the lane's HEAD, `git merge-tree --write-tree`
    merges the base, then each other live lane's head by id, and `git commit-tree` turns each
    clean result into a dangling commit (a fixed `lane-trial` identity, unsigned; no ref moves).
-   A conflict with the base aborts ("merge origin/main first"). A lane that conflicts is
-   skipped and the trial fails, and the report says whose conflict it is. Merges decide, in
-   order. When the other lane conflicts with the base alone, it needs to merge the base before
-   a trial can tell whether it conflicts with this lane, and this lane's ask for ready goes
-   ahead. Else, with no lane merged before it, or when it conflicts with the baseline (this
-   lane's HEAD plus the base, which merges cleanly with it), it is this lane's. Else it is
+   A conflict with the base aborts ("merge origin/main into the lane first"). A lane that
+   conflicts is skipped and the trial fails, and the report says whose conflict it is. Merges
+   decide, in order. When the other lane conflicts with the base alone, it needs to merge the
+   base before a trial can tell whether it conflicts with this lane, and this lane's ask for
+   ready goes ahead. Else, with no lane merged before it, or when it conflicts with the baseline
+   (this lane's HEAD plus the base, which merges cleanly with it), it is this lane's. Else it is
    between that lane and lanes merged before it: the report names each of them it conflicts
    with by itself, or the merge of them all when none does alone, and the `lane trial <id>`
    that tries it with this lane alone. Not paths, since git conflicts by hunk, not by file (and
