@@ -191,7 +191,7 @@ sees it.
 | `hooks/pass-banner.sh` | SessionStart (`startup`) hook: after a plain `/pass` respawned the tab, shows what the old session said in its last turn, once, as a banner you see and the model doesn't (its format and caps: the shim's header); a shim over `hooks/pass_banner.py`; fails open | symlink `~/.claude/hooks/pass-banner.sh` and `pass_banner.py` |
 | `hooks/pass-notice.sh` | UserPromptSubmit and PostToolUse (main thread) hook: when `pass-respawn`'s waiter dropped a `/pass`, adds its notice (`pass-notice/<session>.json` in the state dir) once as context to the session's next prompt or tool call, so the session stops waiting and says why; exits before Python when no notice is there; a shim over `hooks/pass_notice.py`; fails open, with errors in `pass-notice.err` in the state dir | symlink `~/.claude/hooks/pass-notice.sh` and `pass_notice.py` |
 | `hooks/md_render.py` | Not a hook: the stdlib markdown-to-terminal renderer (bold, italic, code, links, headings, lists, code blocks, tables, wrapped by terminal cells) that the banner and `tmux/pass-last` load by path | symlink `~/.claude/hooks/md_render.py` |
-| `hooks/session-registry.sh` | SessionStart/SessionEnd hook: records which session is open in which tmux tab (`$XDG_STATE_HOME/dotclaude/open-sessions/`), with the window's tab bar placement (`@tab_place`, as `place`), for `claude-restore`; deletes the entry on `/exit` or `/clear`, marks it when the window or claude is killed; then hands each payload to `claude-saved` (Star and Shelve; the star follows `/clear`); does nothing outside tmux | symlink `~/.claude/hooks/session-registry.sh` |
+| `hooks/session-registry.sh` | SessionStart/SessionEnd hook: records which session is open in which tmux tab (`$XDG_STATE_HOME/dotclaude/open-sessions/`), with the window's tab bar placement (`@tab_place`, as `place`) and the `--model` and `--effort` its claude launched with (as `model` and `effort`), for `claude-restore`; deletes the entry on `/exit` or `/clear`, marks it when the window or claude is killed; then hands each payload to `claude-saved` (Star and Shelve; the star follows `/clear`); does nothing outside tmux | symlink `~/.claude/hooks/session-registry.sh` |
 | `hooks/session-summary.sh` | Stop hook: regenerates a 1-2 sentence session summary via a direct Haiku Messages-API call (`hooks/haiku.py`: Claude subscription OAuth token, stdlib urllib, no API key/jq), detached so it never blocks; caches the summary to `<config-dir>/session-summaries/<session_id>.txt` for the status-line widget and a short (`<=32`-char) tab label to `<session_id>.title.txt` for `session-title.sh` | symlink `~/.claude/hooks/session-summary.sh` |
 | `hooks/overwrite-guard.sh` | PreToolUse(Write) hook: denies a Write over a file this session hasn't read, or one that cuts a file of 1 KB or more to under a fifth; a shim over `hooks/overwrite_guard.py`; fails open | symlink `~/.claude/hooks/overwrite-guard.sh` and `overwrite_guard.py` |
 | `hooks/lane-identity.sh` | SessionStart/Stop/SessionEnd hook: tells a lane session its identity and registers it, prints one board line in a lanes repo's main checkout and relinks the lead record on a proven resume, /clear or /pass of the lead, mirrors a lane's record; a shim over `hooks/lane_identity.py`; fails open | symlink `~/.claude/hooks/lane-identity.sh` and `lane_identity.py` |
@@ -453,18 +453,22 @@ need nothing extra.
   `tmux kill-server` ends the tmux server and every Claude tab in `main`. `session-registry.sh`
   keeps one file per open tab in `$XDG_STATE_HOME/dotclaude/open-sessions/`: the session id, its
   directory, transcript, pane, window index, the tmux server it runs under (socket path,
-  start time and pid), and the window's tab bar placement (`place`). `/exit` and `/clear` delete the old id's file (a `/clear`d tab is recorded again
+  start time and pid), the window's tab bar placement (`place`), and the `--model` and `--effort`
+  its claude launched with (`model`, `effort`). `/exit` and `/clear` delete the old id's file (a `/clear`d tab is recorded again
   under its new id). Killing the window, claude or the tmux server only marks it, since a
   shutdown that signals claude looks the same to a hook. When `main` is next created, tmux's
   `session-created` hook runs `claude-restore --auto main`. It takes the files from the same
   socket but an earlier server (other sockets, like a `tmux -L` test server, are left alone) and opens one window per tab, in the old order, running `claude --resume <id>` in its
-  directory. It sets each window's tab bar placement before claude starts, then lays out the
+  directory with the session's `--model` and `--effort`, or what a later `/model` or `/effort`
+  picked (a bare resume keeps the model but drops the effort; docs/lanes.md, "Model and
+  effort"). It sets each window's tab bar placement before claude starts, then lays out the
   bar once, so the tabs come back where you put them. A marked tab comes back only if it ended within 120 s of its own server's
   last activity (the shutdown itself); one closed earlier stays closed. It skips a session
   already running, a deleted directory, and an older session in the same pane (one claude runs
   in a pane at a time, so only the newest can be a live tab). A directory name with a `#` is
   skipped (tmux would expand it), and so is one with a control character. A tab with no transcript yet (fresh from startup or `/clear`: a
-  session writes none until its first input) reopens as a plain `claude` in its directory.
+  session writes none until its first input) reopens as `claude` in its directory, with its
+  launch flags.
   `claude-restore --list` shows what it would do and why; `claude-restore` with no flag restores
   now. If tmux fails to open a window, the entry stays for the next run. Each decision is a line in `$XDG_STATE_HOME/dotclaude/restore.log`, and
   the last restore's files stay in `open-sessions/restored/`. Known limit: a window killed just
@@ -480,7 +484,8 @@ need nothing extra.
   bookmark: the tab shows ★, and the chat stays saved until unstarred, however the tab closes)
   or **Shelve** (save the chat and close the tab now; it won't come back on a tmux restore).
   **Shelf…** in the same menu, Ctrl-b S, or the Ctrl-b Enter menu (which has all three, no Shift) lists the saved chats newest first and reopens one
-  as `claude --resume <id>` in its directory, or goes to its pane if it is still running.
+  as `claude --resume <id>` in its directory, with its `--model` and `--effort` as a restore
+  carries them, or goes to its pane if it is still running.
   Reopening takes a chat off the shelf; a starred one stays starred. On `/clear` in a starred tab
   the star follows the tab to the new session. Star and Shelve work only where Claude is running
   and refuse a chat with no messages yet; Shelve asks first while Claude is busy. The ★ belongs
@@ -644,8 +649,8 @@ and status single-writer:
   seeds the lane's record (`<lane>/.lane/STATUS.md`, from `templates/LANE.md`).
 - `lane open chart-fix` starts the lane's session in a new tmux window, in plan mode, told to
   read its record; `--focus` switches to a session already running there. `--model` and
-  `--effort` (repo defaults from `lane init`) pick its model and effort, and a plain pass keeps
-  them (docs/lanes.md, "Model and effort"). Trust the lanes root
+  `--effort` (repo defaults from `lane init`) pick its model and effort, and a plain pass, a tab
+  restore and the shelf's Open keep them (docs/lanes.md, "Model and effort"). Trust the lanes root
   in Claude Code once (`lane init` prints how), or each new window waits at the trust dialog.
 - `lane ls` is the board, derived live from git, gh and the session files, down to each lane's
   tmux window, context (CTX: `312k*` past the auto-pass soft tier, `523k!` past hard) and

@@ -357,6 +357,93 @@ class Picks(unittest.TestCase):
             with self.subTest(name=name):
                 self.assertFalse(lanelib.safe_model(name))
 
+    def test_a_pick_flag_takes_a_safe_model_or_one_of_the_five_efforts(self):
+        for flag, value in (("--model", "opus"), ("--model", "claude-opus-5-5[1m]"),
+                            ("--effort", "low"), ("--effort", "max")):
+            with self.subTest(flag=flag, value=value):
+                self.assertTrue(lanelib.pick_ok(flag, value))
+        for flag, value in (("--model", "-x"), ("--model", "a b"), ("--model", None),
+                            ("--effort", "extreme"), ("--effort", "High"), ("--effort", 3),
+                            ("--name", "opus")):
+            with self.subTest(flag=flag, value=value):
+                self.assertFalse(lanelib.pick_ok(flag, value))
+
+    def test_a_stored_pick_keeps_each_field_only_in_its_shape(self):
+        # An entry written before the fields existed has neither, and a bad field costs only its
+        # own flag.
+        for entry, pick in (({"model": "sonnet", "effort": "low"},
+                             {"--model": "sonnet", "--effort": "low"}),
+                            ({"effort": "high"}, {"--effort": "high"}),
+                            ({}, {}),
+                            ({"session_id": "x", "cwd": "/x"}, {}),
+                            ({"model": "a b", "effort": "high"}, {"--effort": "high"}),
+                            ({"model": 5, "effort": "extreme"}, {}),
+                            ({"model": ["opus"], "effort": None}, {})):
+            with self.subTest(entry=entry):
+                self.assertEqual(lanelib.stored_pick(entry), pick)
+
+
+def command(name, args=""):
+    """A slash command's user entry, as Claude Code 2.1.301 writes /model and /effort."""
+    return {"type": "user", "isSidechain": False, "message": {"role": "user", "content": (
+        f"<command-name>{name}</command-name>\n            <command-message>{name[1:]}"
+        f"</command-message>\n            <command-args>{args}</command-args>")}}
+
+
+def reply(model, effort="medium"):
+    """A main-chain assistant entry and what it ran with."""
+    return {"type": "assistant", "isSidechain": False, "effort": effort,
+            "message": {"model": model, "role": "assistant",
+                        "content": [{"type": "text", "text": "ok"}]}}
+
+
+class CarriedPick(unittest.TestCase):
+    """carried_pick in-process: tests/pass covers the plain pass through pass-respawn's CLI; this
+    covers what only a resume (tab restore, the shelf's Open) does differently."""
+
+    LAUNCHED = {"--model": "sonnet", "--effort": "low"}
+
+    def transcript(self, *entries):
+        fd, path = tempfile.mkstemp(suffix=".jsonl")
+        self.addCleanup(os.remove, path)
+        with os.fdopen(fd, "w") as f:
+            f.writelines(json.dumps(e) + "\n" for e in entries)
+        return path
+
+    def test_a_resume_carries_a_model_argument_no_reply_followed(self):
+        # The server died between the /model and its first reply. A pass drops the flag (the
+        # default the command saved applies to a new session); a resume would keep the model the
+        # session ran before it, so it carries the argument.
+        for after in ([], [reply("<synthetic>", None)]):
+            with self.subTest(after=after):
+                path = self.transcript(reply("claude-sonnet-5-5", "low"),
+                                       command("/model", "opus[1m]"), *after)
+                self.assertEqual(lanelib.carried_pick(self.LAUNCHED, path), [])
+                self.assertEqual(lanelib.carried_pick(self.LAUNCHED, path, resume=True),
+                                 ["--model", "opus[1m]"])
+
+    def test_a_resume_still_drops_a_menu_pick_or_a_bad_argument_with_no_reply(self):
+        for args in ("", "sonet", "-x"):
+            with self.subTest(args=args):
+                path = self.transcript(reply("claude-sonnet-5-5", "low"), command("/model", args))
+                self.assertEqual(lanelib.carried_pick(self.LAUNCHED, path, resume=True), [])
+
+    def test_a_resume_after_a_reply_carries_what_a_pass_does(self):
+        path = self.transcript(command("/model", "sonnet"), reply("claude-opus-5-5", "high"),
+                               command("/effort", "max"), reply("claude-opus-5-5", "max"))
+        self.assertEqual(lanelib.carried_pick(self.LAUNCHED, path, resume=True),
+                         ["--model", "claude-opus-5-5", "--effort", "max"])
+        self.assertEqual(lanelib.carried_pick(self.LAUNCHED, path, resume=True),
+                         lanelib.carried_pick(self.LAUNCHED, path))
+
+    def test_no_transcript_carries_the_launch_flags(self):
+        # A tab with no input yet: nothing to read, so what it launched with.
+        for path in (None, "/nonexistent/x.jsonl"):
+            with self.subTest(path=path):
+                self.assertEqual(lanelib.carried_pick(self.LAUNCHED, path, resume=True),
+                                 ["--model", "sonnet", "--effort", "low"])
+        self.assertEqual(lanelib.carried_pick({}, None, resume=True), [])
+
 
 if __name__ == "__main__":
     unittest.main()

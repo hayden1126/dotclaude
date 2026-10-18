@@ -27,6 +27,19 @@
 # transcript yet (fresh from startup or /clear: a session writes none until its first input)
 # reopens as a plain `claude`.
 #
+# A tab comes back with the --model and --effort its claude launched with (the entry's model and
+# effort, which session-registry.sh reads from /proc), or what it ran after a /model or /effort
+# since: lanelib.carried_pick, the plain pass's rule (docs/lanes.md, "Model and effort"), with the
+# one difference a resume makes (a /model no reply followed carries its argument). A bare
+# `--resume` keeps the model but drops the effort to the default, so this is what keeps a lane's
+# pick across a tmux restart. A fresh tab gets its launch flags; an attach tab that attaches to
+# its running session gets none (the session keeps its own), nor does one resumed while
+# `claude agents` fails or answers no list. A transcript is read only as a regular file. An
+# entry with neither field (one from before them, or a claude launched with none) comes back
+# bare, and a field outside its shape costs its flag, never the tab. lanelib is found through
+# this script's link, by absolute path only; a missing or broken one, or a carried_pick that
+# raises, costs the flags alone.
+#
 # An attach tab (a `claude attach <job>` client showing a background session) has an entry
 # from `claude-saved track` instead, marked `attach`. Its session outlives a `tmux kill-server`
 # (the daemon is detached), so one still running in the background is what to reopen, not a
@@ -76,6 +89,12 @@ esac
 
 say() { [ "$mode" = auto ] || printf 'claude-restore: %s\n' "$*" >&2; }
 
+# lanelib, through this script's link as installed: an absolute path only, since a relative one
+# would import from the cwd in code that runs outside the sandbox.
+self=$(readlink -f "$0" 2>/dev/null)
+lib=""
+[[ "$self" != /* ]] || lib="$(dirname "$(dirname "$self")")/skills/lanes/scripts"
+
 state="${XDG_STATE_HOME:-$HOME/.local/state}/dotclaude"
 reg="$state/open-sessions"
 log="$state/restore.log"
@@ -103,14 +122,22 @@ if [[ ! "${start:-}" =~ ^[0-9]+$ ]] || [[ ! "${pid:-}" =~ ^[0-9]+$ ]] || [ -z "$
 fi
 
 # The plan: one line per candidate, in old window order, fields split by \x1f (not whitespace,
-# so an empty field can't shift the rest): decision, id, cwd, reason, file, place (last, as the
-# one field that may hold anything but a control character, or empty). With "live" it reads
-# `claude agents --json` on stdin; without, it prints "yes" when there is any candidate.
+# so an empty field can't shift the rest): decision, id, cwd, reason, file, model, effort (each
+# empty when not passed), place (last, as the one field that may hold anything but a control
+# character, or empty). With "live" it reads `claude agents --json` on stdin; without, it prints
+# "yes" when there is any candidate.
 decide() {
   python3 -I -c '
 import json, os, re, sys
 reg, socket, start, pid = sys.argv[1], sys.argv[2], int(sys.argv[3]), int(sys.argv[4])
 live_mode = sys.argv[5] == "live"
+lanelib = None
+if os.path.isabs(sys.argv[6]):
+    sys.path.insert(0, sys.argv[6])
+    try:
+        import lanelib
+    except Exception:   # a missing or broken lanelib costs the launch flags, never a tab
+        lanelib = None
 
 def num(v):
     return v if isinstance(v, (int, float)) and not isinstance(v, bool) else None
@@ -163,11 +190,13 @@ def server(e):
 if not live_mode:
     print("yes" if cands else "")
     sys.exit(0)
-live, background = set(), set()
+live, background, known = set(), set(), False
 try:
-    agents = [a for a in json.load(sys.stdin) if isinstance(a, dict) and a.get("pid")]
+    answer = json.load(sys.stdin)
+    agents = [a for a in answer if isinstance(a, dict) and a.get("pid")]
     live = {a.get("sessionId") for a in agents}
     background = {a.get("sessionId") for a in agents if a.get("kind") == "background"}
+    known = isinstance(answer, list)   # an error object says no more than a failed call
 except Exception:
     pass  # claude agents failed: restore anyway; a duplicate tab is cheaper than none
 
@@ -234,7 +263,11 @@ for name, e in cands:
         why = "restore", "ended in the shutdown"
     else:
         why = "restore", "open when its server died"
-    rows.append([name, e, why])
+    # No flags for a resume that attaches to a running session (it keeps its own pick), nor for
+    # an attach tab resumed when claude agents could not say whether its session still runs. A
+    # fresh one starts a new session, which attaches to nothing.
+    bare = attaching or (e.get("attach") is True and not known and why[0] == "restore")
+    rows.append([name, e, why, bare])
 
 def clean(s):
     return re.sub(r"[\x00-\x1f]", " ", str(s))
@@ -247,14 +280,30 @@ def place(e):
         return ""
     return v if 1 <= len(v.encode("utf-8")) <= 2048 else ""
 
+def pick(e, decision, bare):
+    """{--model, --effort} to start the tab with: lanelib.carried_pick of the launch flags in the
+    entry and, for a resume, its transcript (a regular file only: a FIFO would block the whole
+    restore). {} for a skip, for a bare row and on any failure, which costs the flags, never the
+    tab."""
+    if decision not in ("restore", "fresh") or bare:
+        return {}
+    try:
+        tpath = e.get("transcript_path") if decision == "restore" else None
+        tpath = tpath if tpath and os.path.isfile(tpath) else None
+        out = lanelib.carried_pick(lanelib.stored_pick(e), tpath, resume=True)
+        return {f: v for f, v in zip(out[::2], out[1::2]) if lanelib.pick_ok(f, v)}
+    except Exception:
+        return {}
+
 def order(row):
     w = row[1].get("window_index")
     return (w if num(w) is not None else float("inf"), num(row[1].get("ts")) or 0)
 
-for name, e, why in sorted(rows, key=order):
+for name, e, why, bare in sorted(rows, key=order):
+    flags = pick(e, why[0], bare)
     print("\x1f".join((why[0], clean(e.get("session_id")), clean(e.get("cwd")), clean(why[1]), name,
-                       place(e))))
-' "$reg" "$socket" "$start" "$pid" "$1"
+                       flags.get("--model", ""), flags.get("--effort", ""), place(e))))
+' "$reg" "$socket" "$start" "$pid" "$1" "$lib"
 }
 
 [ -n "$(decide count </dev/null 2>/dev/null)" ] || {
@@ -264,9 +313,14 @@ for name, e, why in sorted(rows, key=order):
 plan=$(timeout 5 claude agents --json 2>/dev/null 9>&- | decide live 2>/dev/null)
 [ -n "$plan" ] || exit 0
 
+# The flags as the log and --list show them (unquoted): " --model M --effort E", or empty.
+shown() { printf '%s%s' "${1:+ --model $1}" "${2:+ --effort $2}"; }
+
 if [ "$mode" = list ]; then
-  while IFS=$'\x1f' read -r decision sid cwd why _; do
-    printf '%-8s %-8s %-24s %s\n' "$decision" "${sid:0:8}" "$(basename "${cwd:-?}")" "$why"
+  while IFS=$'\x1f' read -r decision sid cwd why _ model effort _; do
+    flags=$(shown "$model" "$effort")
+    printf '%-8s %-8s %-24s %s\n' "$decision" "${sid:0:8}" "$(basename "${cwd:-?}")" \
+      "$why${flags:+, with$flags}"
   done <<< "$plan"
   exit 0
 fi
@@ -282,7 +336,7 @@ mkdir -p "$done_dir"
 rm -f "$done_dir/"*.json
 
 opened=0
-while IFS=$'\x1f' read -r decision sid cwd why file place; do
+while IFS=$'\x1f' read -r decision sid cwd why file model effort place; do
   if [ "$decision" != restore ] && [ "$decision" != fresh ]; then
     mv -f "$reg/$file" "$done_dir/$file"
     note skipped "$sid" "$cwd" "$why"
@@ -309,8 +363,12 @@ while IFS=$'\x1f' read -r decision sid cwd why file place; do
   else
     printf -v cmd 'claude --resume %q' "$sid"
   fi
+  # %q: the pane's shell must take each value as one word (zsh would glob a model's [1m]).
+  [ -z "$model" ] || printf -v cmd '%s --model %q' "$cmd" "$model"
+  [ -z "$effort" ] || printf -v cmd '%s --effort %q' "$cmd" "$effort"
+  flags=$(shown "$model" "$effort")
   if tmux send-keys -t "$pane" "$cmd" Enter; then
-    note restored "$sid" "$cwd" "$why, in pane $pane"
+    note restored "$sid" "$cwd" "$why${flags:+, with$flags}, in pane $pane"
   else
     mv -f "$done_dir/$file" "$reg/$file"
     note failed "$sid" "$cwd" "tmux send-keys to $pane failed; kept for the next run"

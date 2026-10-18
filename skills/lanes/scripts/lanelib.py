@@ -534,6 +534,151 @@ def safe_model(name) -> bool:
     return isinstance(name, str) and bool(MODEL_SHAPE.fullmatch(name))
 
 
+def pick_ok(flag: str, value) -> bool:
+    """Whether value can go on to a claude as flag's (PICK_FLAGS): a safe_model for --model, one
+    of EFFORTS for --effort."""
+    if flag == "--model":
+        return safe_model(value)
+    return flag == "--effort" and value in EFFORTS
+
+
+def stored_pick(entry: dict) -> dict[str, str]:
+    """The launch flags an open-sessions or saved entry records (its `model` and `effort`, which
+    hooks/session-registry.sh reads from the session's claude), as carried_pick takes them. Each
+    is kept only in its shape (pick_ok), so a bad field costs its own flag and nothing else."""
+    pick = {"--" + k: entry.get(k) for k in ("model", "effort")}
+    return {flag: value for flag, value in pick.items() if pick_ok(flag, value)}
+
+
+# The launch flags a plain pass carries to the respawned claude, and a tab restore or the shelf's
+# Open to the resumed one (carried_pick), and the slash commands that change each mid-session:
+# /model can move the effort too (each model keeps its own), and both save their pick as the
+# default for new sessions.
+PICK_FLAGS = ("--model", "--effort")
+CHANGED_BY = {"/model": ("--model", "--effort"), "/effort": ("--effort",)}
+COMMAND = re.compile(r"\s*<command-name>(/model|/effort)</command-name>")
+COMMAND_ARGS = re.compile(r"<command-args>(.*?)</command-args>", re.DOTALL)
+
+
+def pick_flags(argv: list[str] | None) -> dict[str, str]:
+    """The session claude's own --model and --effort values, from its argv (`--model X` or
+    `--model=X`); the last of each wins, as Claude Code's parser takes it. The scan goes past
+    `--`: Claude Code's parser can take it as an option's value and still read a later flag."""
+    found, args, i = {}, (argv or [])[1:], 0
+    while i < len(args):
+        name, eq, value = args[i].partition("=")
+        i += 1
+        if name not in PICK_FLAGS:
+            continue
+        if not eq:
+            if i == len(args):
+                break
+            value, i = args[i], i + 1
+        found[name] = value
+    return found
+
+
+def main_chain(line: bytes, kind: str) -> dict | None:
+    """The transcript line as an entry of type kind on the main chain (not a subagent's) with a
+    message object, or None."""
+    try:
+        entry = json.loads(line)
+    except (ValueError, RecursionError):   # json recurses on nesting
+        return None
+    if (not isinstance(entry, dict) or entry.get("type") != kind or entry.get("isSidechain")
+            or not isinstance(entry.get("message"), dict)):
+        return None
+    return entry
+
+
+def command_run(line: bytes) -> tuple[str, str] | None:
+    """The /model or /effort a transcript line runs, and its argument: the main-chain user entry
+    Claude Code writes for the command (no origin, not meta), its text opening with the tag. Only
+    an accepted command gets one: a refused `/model x` leaves no entry (probed 2026-10-15). A tool
+    result quoting the tag, a prompt typed or sent by an agent (each has an origin) and a
+    subagent's entry run nothing."""
+    if b"<command-name>/" not in line:
+        return None
+    entry = main_chain(line, "user")
+    if not entry or "origin" in entry or entry.get("isMeta"):
+        return None
+    text = entry["message"].get("content")
+    if not isinstance(text, str) or not (m := COMMAND.match(text)):
+        return None
+    args = COMMAND_ARGS.search(text)
+    return m.group(1), args.group(1).strip() if args else ""
+
+
+def ran(line: bytes) -> dict[str, str | None] | None:
+    """What a main-chain assistant entry ran with ({--model: id, --effort: level}, a value None
+    when it can't be passed on), or None for any other line. A `<synthetic>` entry (an API error,
+    an interrupt) ran no model, so it is None too."""
+    entry = main_chain(line, "assistant") if b'"assistant"' in line else None
+    if not entry or entry["message"].get("model") == "<synthetic>":
+        return None
+    model, effort = entry["message"].get("model"), entry.get("effort")
+    return {"--model": model if isinstance(model, str) and MODEL_ID.fullmatch(model)
+            else None, "--effort": effort if effort in EFFORTS else None}
+
+
+def picks_since(path: str | None) -> tuple[dict, dict, str | None] | None:
+    """What the transcript says of the session's model and effort, as (since, last, chosen):
+    since maps each pick flag a /model or /effort changed to what the last main-chain assistant
+    entry after its last such command ran with (None: no usable entry since); last is what the
+    transcript's last such entry ran with ({}: none); chosen is the last /model's argument (""
+    for a pick from its menu; None: no /model). None when the transcript can't be read."""
+    since, last, chosen = {}, {}, None
+    try:
+        with open(path, "rb") as f:
+            for line in f:
+                if run := command_run(line):
+                    name, args = run
+                    since.update(dict.fromkeys(CHANGED_BY[name]))
+                    if name == "/model":
+                        chosen = args
+                elif values := ran(line):
+                    last = values
+                    since.update({flag: values[flag] for flag in since})
+    except (OSError, TypeError, ValueError):
+        return None
+    return since, last, chosen
+
+
+def carried_pick(launched: dict[str, str], transcript: str | None,
+                 resume: bool = False) -> list[str]:
+    """The --model and --effort a plain pass gives the respawned claude, or a tab restore or the
+    shelf's Open the resumed one (docs/lanes.md, "Model and effort"), for each flag the session
+    launched with (launched, as pick_flags reads them):
+    - after a /model (for the effort, a /model or /effort) in the transcript, what the last entry
+      since ran with, or nothing when none did, since the command saved its pick as the default
+      for new sessions. For the model, the /model's own argument when it is a name model_problem
+      accepts and could have run as that entry's id (an id loses what an alias or a 1M form
+      means); a pick from the menu has none, so it carries the id;
+    - with no such command, the launch value, except a model the transcript's last entry can't
+      have run as (could_run): a change the transcript can't show, such as one before a /clear,
+      which starts a new transcript in the same process. Then the id that ran. An effort has no
+      such check: it moves without a command (a level per model, a one-turn bump).
+    resume: for a `claude --resume`, which keeps the session's own model rather than taking the
+    default a /model saved, so a /model with no usable entry since carries its argument when
+    model_problem accepts it. A pass reads the transcript at act time, so a /model during the
+    passing turn counts. The transcript is read only when a flag is there to carry; None (no
+    transcript yet) carries the launch flags."""
+    since, last, chosen = (picks_since(transcript) if launched else None) or ({}, {}, None)
+    out = []
+    for flag in (f for f in PICK_FLAGS if f in launched):  # a flag it didn't launch with: none
+        value = launched[flag]
+        if flag in since:
+            value = since[flag]
+            if (flag == "--model" and not model_problem(chosen)
+                    and (could_run(chosen, value) if value else resume)):
+                value = chosen
+        elif flag == "--model" and last.get(flag) and not could_run(value, last[flag]):
+            value = last[flag]
+        if value:
+            out += [flag, value]
+    return out
+
+
 class Untrusted(ValueError):
     """A lanes file that sandboxed Bash could have planted, refused before sandbox-off code acts
     on it."""
@@ -901,6 +1046,19 @@ def proc_env_sid(pid: int, proc: str = PROC) -> str | None:
             sid = entry.partition(b"=")[2].decode(errors="replace")
             return sid if SID.fullmatch(sid) else None
     return None
+
+
+def proc_cmdline(pid: int, proc: str = PROC) -> list[str] | None:
+    """pid's argv (/proc/<pid>/cmdline, NUL-separated), or None when it can't be read."""
+    try:
+        with open(os.path.join(proc, str(int(pid)), "cmdline"), "rb") as f:
+            data = f.read()
+    except (OSError, ValueError, TypeError):
+        return None
+    args = data.split(b"\0")
+    if args and args[-1] == b"":
+        args.pop()  # the terminating NUL
+    return [a.decode("utf-8", "surrogateescape") for a in args]
 
 
 def scan(proc: str = PROC, full: bool = True) -> dict[int, Proc]:

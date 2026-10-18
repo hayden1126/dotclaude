@@ -18,8 +18,12 @@
 #
 # One file per saved chat: $XDG_STATE_HOME/dotclaude/saved/<session_id>.json, holding
 # {session_id, cwd, title, transcript_path, starred, shelved, saved_at, tab: {socket,
-# server_start, server_pid, pane}}, written as an fsynced tmp file plus rename. A file exists only
-# while the chat is starred or shelved. The session in a pane comes from Claude's own live-session
+# server_start, server_pid, pane}}, plus model and effort when its open-sessions entry has them,
+# written as an fsynced tmp file plus rename. A file exists only while the chat is starred or
+# shelved. model and effort are the --model and --effort the chat's claude launched with, which
+# session-registry.sh reads from /proc: Star, Shelve and each SessionStart copy them from the
+# chat's open-sessions entry as it stands (dropping them when it has none), and track keeps them
+# in the attach entry it rewrites. The session in a pane comes from Claude's own live-session
 # files (~/.claude/sessions/<pid>.json: an interactive session whose `tmux` field ends in the pane
 # id and whose pid runs under the pane's #{pane_pid}, read from /proc; undocumented, but /clear
 # updates it), else from an attach client under the pane (a `claude attach <job>` process, which
@@ -42,12 +46,15 @@
 #     anywhere else (outside tmux, another tmux server), and otherwise opens a window in the
 #     client's session in its directory (the directory must exist and hold no # or control
 #     character, as in claude-restore, and the transcript must still be there), running
-#     `claude --resume <id>`. Open never deletes the entry: the resumed session's SessionStart
-#     takes it off the shelf, and a starred one stays starred. Until that SessionStart, the
-#     entry's `opening` names the new window for 60 s, so a second open goes there. A chat
-#     running in the background goes to an attach tab showing it, or else gets the same
-#     `claude --resume`, which attaches to it; no SessionStart follows, so Open takes it off the
-#     shelf itself.
+#     `claude --resume <id>` with the --model and --effort lanelib.carried_pick makes of its saved
+#     launch flags and its transcript (docs/lanes.md, "Model and effort"): a bare resume keeps
+#     the model but drops the effort. lanelib is found through this script's link, by absolute
+#     path only, and any failure there costs the flags, never the chat. Open never deletes the
+#     entry: the resumed session's SessionStart takes it off the shelf, and a starred one stays
+#     starred. Until that SessionStart, the entry's `opening` names the new window for 60 s, so a
+#     second open goes there. A chat running in the background goes to an attach tab showing it,
+#     or else gets the same `claude --resume` with no flags, which attaches to it (the session
+#     keeps its own pick); no SessionStart follows, so Open takes it off the shelf itself.
 #   - The star follows the tab: on SessionStart `clear` a starred chat whose tab is this pane is
 #     re-keyed to the new session id. A /pass respawn starts as `startup`, so pass-respawn first
 #     writes a one-shot marker, $XDG_STATE_HOME/dotclaude/pass-carry/<pane number>.json holding
@@ -76,6 +83,11 @@ PATH="$HOME/.local/bin:$PATH"
 
 self="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
 state="${XDG_STATE_HOME:-$HOME/.local/state}/dotclaude"
+# lanelib, through this script's link as installed: an absolute path only, since a relative one
+# would import from the cwd in code that runs outside the sandbox.
+real=$(readlink -f "$0" 2>/dev/null)
+lib=""
+[[ "$real" != /* ]] || lib="$(dirname "$(dirname "$real")")/skills/lanes/scripts"
 cmd="${1:-}"
 [ $# -gt 0 ] && shift
 client=""
@@ -90,6 +102,13 @@ esac
 
 IFS= read -r -d '' PY <<'EOF'
 import contextlib, fcntl, glob, json, os, re, subprocess, sys, tempfile, time
+lanelib = None
+if os.path.isabs(os.environ.get("LANELIB_DIR", "")):
+    sys.path.insert(0, os.environ["LANELIB_DIR"])
+    try:
+        import lanelib
+    except Exception:   # a missing or broken lanelib costs Open the launch flags, never the chat
+        lanelib = None
 
 STORE, REG, CARRY = os.environ["SAVED_DIR"], os.environ["REG_DIR"], os.environ["CARRY_DIR"]
 CARRY_TTL = 120
@@ -412,11 +431,33 @@ def run_shell(*args):
         raise SystemExit(1)
     return "run-shell '%s'" % " ".join(re.sub(r"([^\w./%@:,+=-])", r"\\\1", a) for a in args)
 
+def take_pick(e, sid):
+    """Copy the launch flags (model, effort) from sid's open-sessions entry as it stands, which
+    session-registry.sh refreshes at each SessionStart; drop them when it has none. Open checks
+    their shape (lanelib.stored_pick)."""
+    r = load(os.path.join(REG, sid + ".json")) or {}
+    for k in ("model", "effort"):
+        if k in r:
+            e[k] = r[k]
+        else:
+            e.pop(k, None)
+
+def resume_pick(e, tpath):
+    """{--model, --effort} to resume the chat with: lanelib.carried_pick of its saved launch
+    flags and its transcript, each value in its shape. {} on any failure, which costs the flags,
+    never the chat."""
+    try:
+        out = lanelib.carried_pick(lanelib.stored_pick(e), tpath or None, resume=True)
+        return {f: v for f, v in zip(out[::2], out[1::2]) if lanelib.pick_ok(f, v)}
+    except Exception:
+        return {}
+
 def save_tab(e, sid, cwd, tpath, title, tab):
     e.update(session_id=sid, cwd=cwd, transcript_path=tpath, saved_at=round(NOW, 3), tab=tab)
     title = clean_title(title)
     if title or not isinstance(e.get("title"), str):
         e["title"] = title
+    take_pick(e, sid)
 
 def op_resolve(pane, start, pid, pane_pid, command, socket):
     tab = make_tab(pane, start, pid, socket)
@@ -592,6 +633,8 @@ def op_track():
         rec = dict(server, session_id=sid, cwd=cwd, pane=pane, window_index=index,
                    transcript_path=transcript(sid, old.get("transcript_path")), attach=True,
                    job_id=s["jobId"], ts=round(NOW, 3))
+        # The launch flags of the tab it ran in before: a restore after a reboot resumes with them.
+        rec |= {k: old[k] for k in ("model", "effort") if k in old}
         place = window_place(pane, old)
         if place is not None:
             rec["place"] = place
@@ -623,17 +666,19 @@ def op_plan(sid):
     if not e:
         print("bad\x1f%s is not saved" % sid[:8])
         return
-    cwd = e["cwd"]
+    cwd, tpath = e["cwd"], transcript(sid, e.get("transcript_path"))
     if re.search(r"[\x00-\x1f]", cwd):
         why = "its directory name has a control character"
     elif not cwd or not os.path.isdir(cwd):
         why = "its directory is gone"
     elif "#" in cwd:
         why = "its directory name has a # (tmux would expand it)"
-    elif not transcript(sid, e.get("transcript_path")):
+    elif not tpath:
         why = "its transcript is gone"
     else:
-        print("\x1f".join(("open", cwd)))
+        flags = resume_pick(e, tpath)
+        # The directory last: it may hold anything but a control character.
+        print("\x1f".join(("open", flags.get("--model", ""), flags.get("--effort", ""), cwd)))
         return
     print("bad\x1fcan't reopen %s: %s" % (label(e), why))
 
@@ -757,6 +802,7 @@ def op_hook(pane, start, pid, socket, title):
         e["shelved"] = False     # reopened, however: off the shelf
         if e["starred"] and tab:
             e["tab"] = tab
+        take_pick(e, sid)        # session-registry.sh has just written this start's entry
         save(e)
     print("on" if e and e["starred"] else "off")
 
@@ -768,7 +814,7 @@ EOF
 
 py() {
   SAVED_DIR="$state/saved" REG_DIR="$state/open-sessions" CARRY_DIR="$state/pass-carry" \
-    SESSIONS_DIR="$HOME/.claude/sessions" \
+    SESSIONS_DIR="$HOME/.claude/sessions" LANELIB_DIR="$lib" \
     PROJECTS_DIR="$HOME/.claude/projects" python3 -I -c "$PY" "$@"
 }
 
@@ -950,17 +996,24 @@ case "$cmd" in
       fi
       exit 0
     fi
-    IFS=$'\x1f' read -r decision dir < <(py plan "$sid")
-    [ "${decision:-}" = open ] || { msg "$dir"; exit 0; }
+    IFS=$'\x1f' read -r decision rest < <(py plan "$sid")
+    [ "${decision:-}" = open ] || { msg "$rest"; exit 0; }
+    IFS=$'\x1f' read -r model effort dir <<< "$rest"
     new=$(tmux new-window -P -F '#{pane_id}' -t "$csess:" -c "$dir" 2>/dev/null)
     [ -n "$new" ] || { msg "tmux couldn't open a window"; exit 0; }
     printf -v line 'claude --resume %q' "$sid"
     # The entry stays: the resumed session's SessionStart takes it off the shelf (a starred one
     # keeps its star), so a resume that never starts leaves the chat saved. Until then the
     # entry names this window, so a second open goes here instead of resuming it twice. A chat
-    # live in the background has no start to wait for: the resume attaches to it.
+    # live in the background has no start to wait for: the resume attaches to it, and the
+    # session keeps its own pick, so it gets no flags.
     attaching=0
     [ "$live" = background ] && attaching=1
+    if [ "$attaching" = 0 ]; then
+      # %q: the pane's shell must take each value as one word (zsh would glob a model's [1m]).
+      [ -z "$model" ] || printf -v line '%s --model %q' "$line" "$model"
+      [ -z "$effort" ] || printf -v line '%s --effort %q' "$line" "$effort"
+    fi
     if tmux send-keys -t "$new" "$line" Enter; then
       [ "$(py opening "$sid" "$new" "$start" "$pid" "$socket" "$attaching")" = on ] &&
         mark "$new" on
