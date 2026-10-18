@@ -82,9 +82,12 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     miss (`hooks/wants_input.py`'s docstring), since its one prompt round flipped 10 verdicts.
   - **Live lanes (opened 2026-10-17), merge order:** 1 lead-chain (`fix/lead-chain`: the lead
     diff at the draft push, another lane's install hold), 2 done-rerun (`fix/done-rerun`: `lane
-    done`'s rerun on a restored tab), 3 restore-effort (`fix/restore-effort`: restore and the
-    shelf's Open keep `--model`/`--effort`). Their briefs hold the backlog detail; state is in
-    each record. lead-chain carries the lead's lagging STATUS to main. Lead PR #117
+    done`'s rerun on a restored tab). Their briefs hold the backlog detail; state is in each
+    record. lead-chain carries the lead's lagging STATUS to main.
+  - restore-effort merged ahead of order as #116 (2026-10-18): tab restore and the shelf's Open
+    relaunch with the session's `--model`/`--effort`. Installed from main, which released
+    lead-chain's install hold. The lane stays open (`Keep open:`) for its Done-when smoke, a
+    restored tab at its saved effort, which #116 merged before. Lead PR #117
     (`fix/pass-invoke-handoff`, worktree `.claude/worktrees/pass-handoff`): the pass skill's step
     3 loads the handoff skill with the Skill tool. Draft; it shares `tests/pass/test_pass_guards.py`
     with #116 (restore-effort), a clean trial merge. Remove the worktree after it merges.
