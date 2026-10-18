@@ -205,16 +205,18 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
   `claude -p` repro and the 2.1.285 boundary; the karaoke session's has the incident.
 
 ## Notes for next session
-- **Next (lead, main checkout):** watch for "merged #N" from lane monotonic, then run the
-  post-merge chain (`skills/lanes/SKILL.md`, The lead, step 7; never amend or rebase the lead
-  branch). Check `lane ls` first: a merge Hayden made on GitHub and mentioned to no session sends
-  no message. After monotonic closes, propose the cross-lane checks lane (Backlog), then the
-  tab-bar pin fix. No chat about a lane's own asks; speak on cross-lane orders, decisions raised
-  with the lead, failed checks and lead-only actions.
+- **Next (lead, main checkout):** watch lanes tab-pin and cross-lane (In flight, merge order). On
+  each "merged #N", run the post-merge chain (`skills/lanes/SKILL.md`, The lead, step 7; never
+  amend or rebase the lead branch). Check `lane ls` first: a merge Hayden made on GitHub and
+  mentioned to no session sends no message. After tab-pin's merge, step 7.6 tells cross-lane to
+  merge origin/main and to carry the lead's notes from then on. If cross-lane is ready first, swap
+  the order in STATUS and tell both lanes. When both are closed, the backlog's chrome-bg TTL loop
+  is the next candidate (optional). No chat about a lane's own asks; speak on cross-lane orders,
+  decisions raised with the lead, failed checks and lead-only actions.
   - The lead's commits: `git log --first-parent main..chore/after-pr4` (STATUS only, plus merges
-    of main). Session 3a153a27 (2026-10-17 to 10-18) started at 8a28fc3 and ended at this
-    handoff: it opened lead-chain, done-rerun, restore-effort and monotonic, ran the chain for
-    #116, #118 and #119, shipped lead PR #117, and removed six stale agent worktrees.
+    of main). Session 9dd86d28 (2026-10-18) started at ee36b32 and ended at this handoff: it ran
+    the chain for #120 (lane monotonic closed), checked #117 on the previous lead's pass, and
+    opened tab-pin and cross-lane.
   - Open with Hayden, nothing for the lead to do: the capella-studio lead asked how a new lane
     should clear the excluded-command guard, and the lead recommended (2026-10-17) pointing
     capella's `core.hooksPath` at the main checkout's protected `.githooks` (absolute path)
