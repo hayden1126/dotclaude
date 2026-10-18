@@ -80,9 +80,9 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     [[dotclaude-tab-bar]], remote-paste's live tests in [[dotclaude-remote-paste]]. #115 left the
     tab glyph's prompt at v4: an ask a reply only announces for later stays a documented known
     miss (`hooks/wants_input.py`'s docstring), since its one prompt round flipped 10 verdicts.
-  - **Merge order:** 1 done-rerun (`fix/done-rerun`: `lane done`'s rerun on a restored tab;
-    installs from its branch next), 2 lead PR #117 (last, so its merge can't release
-    done-rerun's install). The brief holds the backlog detail; state is in the record.
+  - **No live lanes.** Merge order: lead PR #117 alone; it carries the lead's notes.
+  - done-rerun merged as #119 (2026-10-18): `lane done` keeps a restored tab's shell proof
+    across a rerun. Installed from main; the lane closed with the installed fix.
   - lead-chain merged as #118 (2026-10-18): the lane next in merge order carries the lead's
     notes before each push and before ready, the lead never amends or rebases its branch, and
     the chain tells a lane its install was released. Installed from main. Its carry brought
