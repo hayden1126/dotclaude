@@ -1933,11 +1933,12 @@ def merge_tree(repo: Repo, ours: str, theirs: str, label: str) -> tuple[str | No
 
 def trial_commit(repo: Repo, tree: str, parents: list[str], message: str) -> str:
     """A commit of tree with parents. It is dangling (no ref moves) and carries a fixed identity,
-    so no user config is needed and none signs it."""
+    so no user config is needed and none signs it: no inherited GIT_* passes (env={}), since
+    GIT_AUTHOR_* and GIT_COMMITTER_* would beat the -c identity."""
     return trial_git(repo, ["-c", f"user.name={TRIAL_IDENTITY[0]}", "-c",
                             f"user.email={TRIAL_IDENTITY[1]}", "commit-tree", "--no-gpg-sign",
                             *[x for p in parents for x in ("-p", p)], "-m", message,
-                            tree]).stdout.strip()
+                            tree], env={}).stdout.strip()
 
 
 def merge_onto(repo: Repo, cur: str, sha: str, label: str) -> tuple[str, list[str] | None]:
@@ -1973,10 +1974,9 @@ class Lead(NamedTuple):
     oid: str
 
 
-def lead_status(repo: Repo, commit: str) -> Lead | None:
-    """The lead's notes when commit's STATUS.md is a file with a `Lead branch:` line naming a
-    plain branch (lanelib.BRANCH_RE) that resolves and holds STATUS.md as a file, else None.
-    Objects only; a STATUS.md that isn't text fails it."""
+def lead_line(repo: Repo, commit: str) -> str | None:
+    """The branch commit's STATUS.md names on its `Lead branch:` line, or None: no STATUS.md
+    file, one that isn't text, or no such line. Objects only."""
     own = status_entry(repo, commit)
     if own is None:
         return None
@@ -1985,7 +1985,14 @@ def lead_status(repo: Repo, commit: str) -> Lead | None:
     except NotUtf8:
         return None
     m = LEAD_LINE_RE.search(text)
-    name = m.group(1) if m else None
+    return m.group(1) if m else None
+
+
+def lead_status(repo: Repo, head: str, base: str) -> Lead | None:
+    """The lead's notes when head's STATUS.md, else the base's (a lane that branched before the
+    line and hasn't merged the base since), has a `Lead branch:` line naming a plain branch
+    (lanelib.BRANCH_RE) that resolves and holds STATUS.md as a file, else None."""
+    name = lead_line(repo, head) or lead_line(repo, base)
     if name is None or not lanelib.BRANCH_RE.fullmatch(name):
         return None
     p = trial_git(repo, ["rev-parse", "--verify", "--quiet", "--end-of-options",
@@ -2153,11 +2160,11 @@ def cmd_trial(args) -> int:
 
 
 def trial(repo: Repo, me: dict, args) -> int:
-    """cmd_trial's work, under its lock. When this lane's HEAD names the lead's branch in its
-    STATUS.md (lead_status), every commit it merges (HEAD, the base, each lane's head) and each
-    one conflict_line tries holds the lead's STATUS.md first (LeadStatus), so carries of the
-    lead's notes never conflict, as a carry settles them; the already-in checks use the commits
-    as they are."""
+    """cmd_trial's work, under its lock. When this lane's HEAD, else the base, names the lead's
+    branch in its STATUS.md (lead_status), every commit it merges (HEAD, the base, each lane's
+    head) and each one conflict_line tries holds the lead's STATUS.md first (LeadStatus), so
+    carries of the lead's notes never conflict, as a carry settles them; the already-in checks
+    use the commits as they are."""
     cfg = repo.config()
     base_name = cfg.get("base", "origin/main")
     trees = worktree_heads(repo)
@@ -2170,7 +2177,8 @@ def trial(repo: Repo, me: dict, args) -> int:
         raise LaneError(f"{'HEAD' if head is None else base_name} doesn't name a commit here")
     if trial_git(repo, ["status", "--porcelain"]).stdout.strip():
         warn(f"lane {me['id']} has uncommitted changes: only its HEAD is tried")
-    with LeadStatus(repo, lead_status(repo, head), trial_prefix(repo, me["id"]), tmp) as norm:
+    with LeadStatus(repo, lead_status(repo, head, base), trial_prefix(repo, me["id"]),
+                    tmp) as norm:
         cur = norm(head)
         if not merged_in(repo, base, head):
             cur, conflicted = merge_onto(repo, cur, norm(base), base_name)

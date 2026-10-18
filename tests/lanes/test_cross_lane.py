@@ -897,20 +897,56 @@ class Trial(LaneWork):
         self.git("switch", "-q", "main")
         self.assertStillConflicts()
 
-    def test_this_lane_without_a_status_file_stays_a_conflict(self):
-        # alpha deletes STATUS.md, beta carries: a modify/delete conflict in STATUS.md, with no
-        # `Lead branch:` line on this lane's side to read.
-        self.carries()
+    def assertNormalized(self, lead, *runs):
+        rc, out, err = self.trial(*(runs or ("--run", "test -f b.txt")))
+        self.assertEqual(rc, 0, out + err)
+        self.assertIn(self.NORMALIZED.format(lead[:12]), out)
+        self.assertNotIn("Traceback", err)
+        return out
+
+    def test_this_lane_without_a_status_file_takes_the_bases_line(self):
+        # alpha deletes STATUS.md, beta carries: with no line on this lane's side, the base's
+        # names the lead, and a carry would bring the file back.
+        lead = self.carries()[2]
         self.git("rm", "-q", "STATUS.md", cwd=self.alpha)
         self.git("commit", "-q", "-m", "no status", cwd=self.alpha)
-        self.assertStillConflicts()
+        self.assertNormalized(lead)
 
-    def test_a_status_that_isnt_text_fails_the_gate_with_no_traceback(self):
-        self.carries()
+    def test_a_status_that_isnt_text_falls_back_to_the_bases_line(self):
+        lead = self.carries()[2]
         with open(os.path.join(self.alpha, "STATUS.md"), "ab") as f:
             f.write(b"\xff\xfe not text\n")
         self.git("commit", "-q", "-am", "binary status", cwd=self.alpha)
-        self.assertStillConflicts()
+        self.assertNormalized(lead)
+
+    def test_a_lane_from_before_the_lead_line_takes_the_bases(self):
+        # alpha merged main while its STATUS.md had no `Lead branch:` line and hasn't since;
+        # beta and gamma carry two lead heads. The base's line settles their clash.
+        gamma = self.new("gamma")
+        self.write(os.path.join(self.main, "STATUS.md"), "# Status\n\nend\n")
+        self.git("add", "STATUS.md")
+        self.git("commit", "-q", "-m", "status without the line")
+        self.push_main()
+        self.git("merge", "-q", "--no-edit", "origin/main", cwd=self.alpha)
+        lead = self.carries(carriers=((self.beta, 0), (gamma, 1)))[2]
+        out = self.assertNormalized(lead)
+        self.assertNotIn("(STATUS.md)", out)
+        self.assertIn("merged beta (", out)
+        self.assertIn("gamma (", out)
+
+    def test_the_trials_commits_carry_its_own_identity(self):
+        # The fixture sets GIT_AUTHOR_* and GIT_COMMITTER_*, which would beat `-c user.name`.
+        self.carries()
+        rc, out, err = self.trial("--keep", "--run", "true")
+        self.assertEqual(rc, 0, out + err)
+        (tree,) = glob.glob(os.path.join(self.scratch, self.prefix + "*", "tree"))
+        want = "lane-trial <lane-trial@localhost> | lane-trial <lane-trial@localhost>"
+        for commit in ("HEAD", "HEAD^1", "HEAD^2"):  # the merge, and both STATUS.md commits
+            self.assertEqual(self.git("log", "-1", "--format=%an <%ae> | %cn <%ce>", commit,
+                                      cwd=tree).strip(), want, commit)
+        self.assertIn("STATUS.md from lead", self.git("log", "-1", "--format=%s", "HEAD^2",
+                                                      cwd=tree))
+        self.git("worktree", "remove", "--force", tree)
 
     def test_a_carry_clash_beside_a_code_conflict_names_the_other_lane(self):
         # alpha and gamma carry two lead heads; gamma conflicts in x.txt with beta, merged
