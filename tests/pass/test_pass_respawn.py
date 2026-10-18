@@ -248,10 +248,12 @@ class Base(LanesRepo):
             if status in ("idle", "shell") and self.stop_waits is not None and not self.stopped:
                 self.write_stop(self.stop_waits)
                 self.stopped = True
-        return {"sessionId": SID, "pid": CLAUDE, "procStart": START, "status": status,
-                "statusUpdatedAt": self.updated, "startedAt": int(self.started * 1000),
-                "cwd": self.session_cwd, "tmux": "main:@3.%4",
-                **{k: v for k, v in entry.items() if k != "status"}}
+        # An entry's key set to None is left out: a background session's file has no tmux.
+        record = {"sessionId": SID, "pid": CLAUDE, "procStart": START, "status": status,
+                  "statusUpdatedAt": self.updated, "startedAt": int(self.started * 1000),
+                  "cwd": self.session_cwd, "kind": "interactive", "tmux": "main:@3.%4",
+                  **{k: v for k, v in entry.items() if k != "status"}}
+        return {k: v for k, v in record.items() if v is not None}
 
     def write_session(self, entry):
         path = os.path.join(self.sessions, f"{CLAUDE}.json")
@@ -566,6 +568,91 @@ class Plain(Base):
         self.assertIn(f"/compact {self.mod.compact_focus('STATUS.md')}, then: {self.PROMPT}", out)
         self.assertEqual(self.calls("tmux"), [])
         self.assertIn("mode=compact outcome=refused no tmux pane", self.log())
+
+    BG = {"status": "busy", "kind": "bg", "jobId": "07618dd3", "tmux": None}
+
+    def assertBackground(self, out, by_hand, job="07618dd3", resume=None):
+        named = f", job {job}" if job else ""
+        stop = (f"`claude stop {job}`" if job
+                else "`claude stop <jobId>` (`claude agents --json` lists it)")
+        resume = resume or (f"`cd {shlex.quote(self.main)} && claude --resume {SID}` in a tmux "
+                            "pane.")
+        self.assertIn(f"session {SID} is a background session (daemon-hosted{named}): ", out)
+        self.assertIn(f"Do it by hand: {by_hand}, then: {self.PROMPT}", out)
+        self.assertIn(f"from another terminal, run {stop}, then {resume}", out)
+        self.assertNotIn("not in a tmux pane", out)
+        self.assertEqual(self.calls("tmux"), [])
+
+    def test_a_background_session_names_itself_and_the_way_into_a_pane(self):
+        del os.environ["TMUX_PANE"]
+        self.script = [self.BG]
+        code, out = self.run_pass()
+        self.assertEqual(code, 2, out)
+        self.assertBackground(out, "/clear")
+        self.assertIn("mode=plain outcome=refused background session", self.log())
+
+    def test_a_compact_pass_in_a_background_session_prints_the_manual_compact(self):
+        del os.environ["TMUX_PANE"]
+        self.script = [self.BG]
+        code, out = self.run_pass("--compact")
+        self.assertEqual(code, 2, out)
+        self.assertBackground(out, f"/compact {self.mod.compact_focus('STATUS.md')}")
+        self.assertIn("mode=compact outcome=refused background session", self.log())
+
+    def test_a_background_session_refuses_the_same_with_a_tmux_pane_set(self):
+        # Its claude is the daemon's, never the pane's: a respawn would end whatever runs there.
+        self.script = [self.BG]
+        code, out = self.run_pass()
+        self.assertEqual(code, 2, out)
+        self.assertBackground(out, "/clear")
+
+    def test_a_background_session_refuses_before_the_handoff_gate(self):
+        self.write(os.path.join(self.main, "scratch.txt"), "x")
+        self.script = [self.BG]
+        code, out = self.run_pass()
+        self.assertEqual(code, 2, out)
+        self.assertBackground(out, "/clear")
+        self.assertNotIn("FAIL", out)
+
+    def test_a_job_id_that_isnt_a_plain_id_is_not_printed(self):
+        del os.environ["TMUX_PANE"]
+        for job in ("$(reboot)", "", None, 7):
+            with self.subTest(job=job):
+                self.script = [{**self.BG, "jobId": job}]
+                code, out = self.run_pass()
+                self.assertEqual(code, 2, out)
+                self.assertBackground(out, "/clear", job=None)
+                self.assertNotIn("$(reboot)", out)
+
+    def test_the_resume_line_cds_to_a_plain_session_dir_shell_quoted(self):
+        del os.environ["TMUX_PANE"]
+        bare = f"`claude --resume {SID}` in a tmux pane in the session's directory."
+        quoted = f"`cd '/tmp/has space' && claude --resume {SID}` in a tmux pane."
+        for cwd, resume in (("/tmp/has space", quoted), ("/tmp/a\nb", bare),
+                            ("/tmp/a`b", bare), ("relative/dir", bare), (None, bare)):
+            with self.subTest(cwd=cwd):
+                self.script = [{**self.BG, "cwd": cwd}]
+                code, out = self.run_pass()
+                self.assertEqual(code, 2, out)
+                self.assertBackground(out, "/clear", resume=resume)
+
+    def test_only_this_sessions_own_file_can_say_background(self):
+        del os.environ["TMUX_PANE"]
+        self.script = [{**self.BG, "sessionId": "other"}]
+        code, out = self.run_pass()
+        self.assertEqual(code, 2, out)
+        self.assertIn(f"not in a tmux pane. Do it by hand: /clear, then: {self.PROMPT}", out)
+        self.assertNotIn("background session", out)
+
+    def test_any_kind_but_bg_in_its_pane_passes(self):
+        # The fixture's file says interactive; a file with no kind, or one Claude Code might
+        # add later, still passes in its pane. Only bg refuses.
+        for kind in (None, "background"):
+            with self.subTest(kind=kind):
+                self.script = [{"status": "busy", "kind": kind}]
+                code, out = self.run_pass("--print")
+                self.assertEqual(code, 0, out)
+                self.assertIn("mode: plain (plan)", out)
 
     def test_a_failing_handoff_check_refuses(self):
         self.write(os.path.join(self.main, "scratch.txt"), "x")

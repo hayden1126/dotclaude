@@ -479,6 +479,23 @@ class PartialDocs(unittest.TestCase):
                 self.assertEqual(partial_gaps(f.read()), [])
 
 
+class BackgroundDocs(unittest.TestCase):
+    def test_step_5_and_the_docstring_name_the_background_refusal(self):
+        with open(os.path.join(REPO, "skills/pass/SKILL.md")) as f:
+            skill = f.read()
+        (step,) = [p for p in re.split(r"\n(?=\d+\. )", skill)
+                   if p.startswith("5. **Run `pass-respawn")]
+        doc = " ".join(t.load().__doc__.split())
+        for text in (" ".join(step.split()), doc):
+            for words in ("background session", "claude stop", "claude --resume"):
+                self.assertIn(words, text)
+        self.assertIn("claude attach", step)
+        (row,) = [ln for ln in skill.splitlines()
+                  if ln.startswith("| Passing a background session after `claude attach` |")]
+        for words in ("once the turn ends", "from another terminal", "end the turn"):
+            self.assertIn(words, row)
+
+
 # ---- 5. prompts typed mid-turn and the transcript ----------------------------------------------
 
 ENQUEUE = {"type": "queue-operation", "operation": "enqueue", "content": "wait, don't pass"}

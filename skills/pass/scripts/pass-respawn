@@ -8,7 +8,12 @@ a passing handoff.
 
 /pass runs it last (skills/pass/SKILL.md; PLAN.md "PR 3: /pass" has the design and the spike
 results it rests on). At call time it refuses unless $TMUX_PANE names a pane (exit 2, printing
-the line to do by hand) and `handoff-check -C <dir>` passes (exit 1, echoing its gaps). It also
+the line to do by hand) and `handoff-check -C <dir>` passes (exit 1, echoing its gaps). A
+background session (its session file says kind `bg`: the daemon runs it, never a pane) refuses
+with exit 2 too, $TMUX_PANE or not, printing the line to do by hand and the way into a pane of
+its own: `claude stop <jobId>`, then `claude --resume <sessionId>` in its directory (live on
+2.1.302, 2026-10-18: the session kept its id there and passed). `claude attach` only shows it,
+still daemon-run. It also
 refuses (exit 1) when it can't find this session: the nearest `claude` ancestor process, whose
 Claude Code session file ~/.claude/sessions/<pid>.json must name $CLAUDE_CODE_SESSION_ID, the
 process's own start time (procStart, so a reused pid can't pass) and this pane. One pass may be
@@ -224,7 +229,10 @@ the sandbox can write (docs/lanes.md S3). Every input, and why each is safe:
     call's; TMUX_PANE must be `%<n>`, and the session id must match the session file.
   - The session file (~/.claude/sessions/<pid>.json) is Claude Code's, and the sandbox can't
     write ~/.claude/sessions. Only `idle` there (or `shell`: at the prompt with a background
-    shell running), or `busy` with the transcript's turn end, lets the waiter act.
+    shell running), or `busy` with the transcript's turn end, lets the waiter act. Its `kind`
+    can only make the call refuse (bg), never let a pass through. That refusal prints its jobId
+    only as a plain id, and its cwd only as an absolute, printable path with no backtick,
+    shell-quoted; both are shown, never run.
   - The transcript (~/.claude/projects/...) is Claude Code's too, also out of the sandbox's
     reach. It only decides: whether the turn ended (with the session file's `busy`), whether a
     prompt came after the call (which drops a pass) and the respawn's model and effort (above).
@@ -1192,15 +1200,35 @@ def prepare(args: argparse.Namespace, procs, cmdline=lanelib.proc_cmdline) -> Pl
     except OSError:
         size = None
     pane = os.environ.get("TMUX_PANE") or ""
-    if not PANE_RE.fullmatch(pane):
+    ours = session if session and session.get("sessionId") == sid else None
+    # The daemon runs a background session, never a pane, even with a TMUX_PANE set: a respawn
+    # or the keys would reach whatever session that pane shows.
+    background = ours is not None and ours.get("kind") == "bg"
+    if background or not PANE_RE.fullmatch(pane):
         draft = Plan(mode, "", repo.toplevel, lane is not None, status_rel, "", None, 0, 0, sid,
                      {}, called, None, 0, args.timeout)
-        ours = session if session and session.get("sessionId") == sid else None
         prompt = resume_prompt(status_rel, lane is not None, approved_now(draft, ours),
                                args.compact)
         by_hand = f"/compact {compact_focus(status_rel)}" if args.compact else "/clear"
-        raise Refuse(2, f"pass-respawn: not in a tmux pane. Do it by hand: {by_hand}, then: "
-                     f"{prompt}", "no tmux pane")
+        if not background:
+            raise Refuse(2, f"pass-respawn: not in a tmux pane. Do it by hand: {by_hand}, then: "
+                         f"{prompt}", "no tmux pane")
+        # The job id and the cwd are printed only when plain: a plain id, and an absolute,
+        # printable path with no backtick (it would end the code span), shell-quoted. --resume
+        # finds the session from its directory.
+        job = ours.get("jobId")
+        job = job if isinstance(job, str) and SID_RE.fullmatch(job) else None
+        stop = (f"`claude stop {job}`" if job
+                else "`claude stop <jobId>` (`claude agents --json` lists it)")
+        cwd = ours.get("cwd")
+        resume = f"`claude --resume {sid}` in a tmux pane in the session's directory"
+        if isinstance(cwd, str) and os.path.isabs(cwd) and cwd.isprintable() and "`" not in cwd:
+            resume = f"`cd {shlex.quote(cwd)} && claude --resume {sid}` in a tmux pane"
+        raise Refuse(2, f"pass-respawn: session {sid} is a background session (daemon-hosted"
+                     f"{f', job {job}' if job else ''}): the daemon runs it, not a tmux pane, so "
+                     f"there is no pane to respawn. Do it by hand: {by_hand}, then: {prompt} Or "
+                     f"move it into a pane of its own and pass there: once this turn ends, from "
+                     f"another terminal, run {stop}, then {resume}.", "background session")
     roots = writable_roots(repo, args.cwd, launch, session_argv=claude_argv)
     # Again against the full roots: the main checkout and the toplevel's relative allowWrite
     # entries are known only now, and without a launch dir a relative --settings value
