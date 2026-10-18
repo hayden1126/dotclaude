@@ -6,7 +6,7 @@
 > [[dotclaude-chrome-devtools-wsl]]). Per-effort design lives in the repo's `PLAN.md` or its doc,
 > not only under `~/.claude/plans/`, which the next plan overwrites ([[plan-file-not-durable]]).
 
-Last updated: 2026-10-17
+Last updated: 2026-10-18
 Base: `main`. For branch / PR / push state, run `gh pr list` and `git log main..HEAD` (derive it; not
 stored here).
 Lead branch: `chore/after-pr4` (the lead's STATUS commits; the lane next in merge order carries
@@ -74,31 +74,16 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
 - **dotclaude runs in lanes (since 2026-10-12).** The lead is the main checkout. Lanes live in
   `~/dotclaude-lanes/`, and each lane's state is in its record (`lane ls`, `lane asks`), not
   here. The config caps live lanes at 3, with locks `install` and `suite`.
-  - Merged through lanes, installed from main and closed: #90 to #115 (2026-10-12 to
-    2026-10-17). `gh pr list --state merged --limit 30` names each, and the closed records under
-    `.git/lanes/_closed/<id>-<date>/` hold the detail; tab-bar's design is in
+  - Merged through lanes, installed from main and closed: #90 to #119 (2026-10-12 to
+    2026-10-18), with lead PR #117 among them. `gh pr list --state merged --limit 30` names each,
+    and the closed records under `.git/lanes/_closed/<id>-<date>/` hold the detail (#116's
+    post-merge smoke is in restore-effort's artifacts); tab-bar's design is in
     [[dotclaude-tab-bar]], remote-paste's live tests in [[dotclaude-remote-paste]]. #115 left the
     tab glyph's prompt at v4: an ask a reply only announces for later stays a documented known
     miss (`hooks/wants_input.py`'s docstring), since its one prompt round flipped 10 verdicts.
   - **Live lane (opened 2026-10-18), merge order:** 1 monotonic (`fix/monotonic-tests`: tests
     time durations with `time.monotonic()`, 152 `time.time()` calls in 27 test files; tests
     only, so it runs alone). It carries the lead's notes. Its brief holds the detail.
-  - done-rerun merged as #119 (2026-10-18): `lane done` keeps a restored tab's shell proof
-    across a rerun. Installed from main; the lane closed with the installed fix.
-  - lead-chain merged as #118 (2026-10-18): the lane next in merge order carries the lead's
-    notes before each push and before ready, the lead never amends or rebases its branch, and
-    the chain tells a lane its install was released. Installed from main. Its carry brought
-    main's STATUS level with the lead branch for the first time since #108.
-  - restore-effort merged ahead of order as #116 (2026-10-18): tab restore and the shelf's Open
-    relaunch with the session's `--model`/`--effort`. Installed from main, which released
-    lead-chain's install hold. Its Done-when smoke passed after the merge (2026-10-18): restore
-    and the shelf's Open each brought a `--model sonnet --effort low` tab back at sonnet/low, and
-    an entry without the fields restored bare (evidence in the closed record,
-    `.git/lanes/_closed/restore-effort-2026-10-17/.lane/artifacts/smoke-2026-10-17.txt`). Closed.
-  - Lead PR #117 merged (2026-10-18): the pass skill's step 3 loads the handoff skill with the
-    Skill tool, not from memory. No install from the branch (Hayden's call: `setup.sh` never
-    reads the skill's text); reinstalled from main after. **Check:** the next real `/pass`
-    transcript should show a Skill call for `handoff` before `handoff-check`.
   - The parked json-depth sweep (21 files, among them the delegation enforcement scripts) is on
     `fix/json-depth-sweep`, a local branch never pushed: keep it while the sweep is in the
     backlog. Shipping it first needs a check of how each enforcement site fails
@@ -136,7 +121,15 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     before or not, resets its pin and opens its repo's row. That needs the kind at pin time in
     the placement; `parse_place` reads exactly four keys, so the old form must keep reading (no
     kind: no reset, today's behavior). Files: `tmux/tmux-tab-bar`,
-    `tests/setup/test_tmux_tab_bar.py`, README's tab-bar section.
+    `tests/setup/test_tmux_tab_bar.py`, README's tab-bar section. Branch after monotonic merges
+    (it changes 8 lines of that test file); any new `time.time()` in tests needs a `# wall clock`
+    marker, or monotonic's guard (`tests/setup/test_clock_use.py`) fails.
+  - **chrome-bg's TTL loop counts down on the wall clock** (from lane monotonic, 2026-10-18).
+    `bin/chrome-bg:1314` and `:1353` wait until the run record's `expires`, so a forward clock
+    step cuts a TTL short by up to 0.6 s. The record stays wall clock (`ls` and gc read it,
+    `:1458`); the loop can keep a monotonic deadline beside it. The only duration site in shipped
+    code: the other 46 `time.time()` calls are stamps or windows on persisted stamps. Optional
+    with it: the monotonic rule in `skills/coding-practices`, since the guard covers `tests/` only.
 
   **The post-merge chain** (Hayden's design B, standing approval 2026-10-14): `skills/lanes/SKILL.md`,
   The lead, step 7. Lead commits on the lead branch ride the PR of the lane next in merge order,
@@ -209,16 +202,18 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
   `claude -p` repro and the 2.1.285 boundary; the karaoke session's has the incident.
 
 ## Notes for next session
-- **Next (lead, main checkout):** watch for "merged #N" from a lane, then run the post-merge
-  chain (`skills/lanes/SKILL.md`, The lead, step 7). Check `lane ls` first (it shows which
-  lanes are live): a merge Hayden made on GitHub and mentioned to no session sends no message.
-  No chat about a lane's own asks; speak on cross-lane orders, decisions raised with the lead,
-  failed checks and lead-only actions.
+- **Next (lead, main checkout):** watch for "merged #N" from lane monotonic, then run the
+  post-merge chain (`skills/lanes/SKILL.md`, The lead, step 7; never amend or rebase the lead
+  branch). Check `lane ls` first: a merge Hayden made on GitHub and mentioned to no session sends
+  no message. After monotonic closes, propose the cross-lane checks lane (Backlog), then the
+  tab-bar pin fix. No chat about a lane's own asks; speak on cross-lane orders, decisions raised
+  with the lead, failed checks and lead-only actions.
+  - **Check:** the next real `/pass` transcript should show a Skill call for `handoff` before
+    `handoff-check` (#117). Session 3a153a27's own pass (2026-10-18) is the first sample.
   - The lead's commits: `git log --first-parent main..chore/after-pr4` (STATUS only, plus merges
-    of main). Session 64626d32 (2026-10-14 to 10-17) started at 5cb88d8 and ended at this
-    handoff: it ran the chain for #108 to #115 and opened lane-model, remote-paste, stopped-lead
-    and future-ask. Session 3a153a27 (2026-10-17) opened lead-chain, done-rerun and
-    restore-effort (Hayden's pick from the backlog) and removed six stale agent worktrees.
+    of main). Session 3a153a27 (2026-10-17 to 10-18) started at 8a28fc3 and ended at this
+    handoff: it opened lead-chain, done-rerun, restore-effort and monotonic, ran the chain for
+    #116, #118 and #119, shipped lead PR #117, and removed six stale agent worktrees.
   - Open with Hayden, nothing for the lead to do: the capella-studio lead asked how a new lane
     should clear the excluded-command guard, and the lead recommended (2026-10-17) pointing
     capella's `core.hooksPath` at the main checkout's protected `.githooks` (absolute path)
@@ -243,7 +238,7 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     with no time daemon running (a 120 s sample: +0.47, +0.59, +0.44, +0.29 at 1, 31, 61, 91 s).
     The likely source is Hyper-V's host time sync correcting a guest clock about 1.5% slow
     (inferred; clocksource `tsc`, `ptp0` present). So tests must measure durations with
-    `time.monotonic()`, not `time.time()` (the backlog sweep).
+    `time.monotonic()`, not `time.time()` (lane monotonic).
   - **Flakes:** `tests/pass` fails timing asserts under a load spike, so judge it on a run of
     about 46 s. `test_tmux_hooks` flaked on `main` too; its ring-decision wait is now 15 s.
     Watch `seen()`'s 3 s wait, which also serves negative checks.
