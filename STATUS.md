@@ -9,6 +9,8 @@
 Last updated: 2026-10-17
 Base: `main`. For branch / PR / push state, run `gh pr list` and `git log main..HEAD` (derive it; not
 stored here).
+Lead branch: `chore/after-pr4` (the lead's STATUS commits; the lane next in merge order carries
+them, `skills/lanes/SKILL.md` Lifecycle step 6).
 
 ## Done (recent; git, the linked plans and memory hold the detail)
 - **tmux indicator and sounds** (live on HAYPC; [[dotclaude-tmux-indicator]]):
@@ -107,8 +109,8 @@ stored here).
     off (Notes, "Root cause of the timing flakes").
 
   **The post-merge chain** (Hayden's design B, standing approval 2026-10-14): `skills/lanes/SKILL.md`,
-  The lead, step 7. Lead commits ride the next lane PR: that lane applies `git diff origin/main
-  chore/after-pr4 -- STATUS.md PLAN.md` as one commit just before ready. A lane installs (`lane
+  The lead, step 7. Lead commits on the lead branch ride the PR of the lane next in merge order,
+  carried before each push and before ready (Lifecycle, step 6). A lane installs (`lane
   lock install -- ./setup.sh` from its worktree, sandbox off) only when next in merge order, and
   its install holds until the lead's reinstall from main.
 - **Lanes, handoff-check and `/pass`** (Hayden's design, approved 2026-10-11; `PLAN.md`, behavior in
