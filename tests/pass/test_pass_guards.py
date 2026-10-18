@@ -172,6 +172,20 @@ class WritableRoots(Plain):
         self.assertIn("can't find this session's claude", out.getvalue())
         self.assertFalse(os.path.exists(git_log))
 
+    def test_another_sessions_file_refuses_before_git_runs(self):
+        # A nested `claude -p` (pid 900020) whose own file is missing: the walk reaches the outer
+        # session's file, whose flags aren't the caller's, so nothing may run sandbox-off.
+        os.environ["CLAUDE_CODE_SESSION_ID"] = "inner-sid"
+        added = os.path.join(self.tmp, "added")
+        git_log = self.logging_git()
+        nested = t.table((t.SHELL, "zsh", 900020), (900020, "claude", t.CLAUDE))
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            code = self.mod.main(["--print", "-C", self.main], procs=lambda: nested,
+                                 cmdline=lambda pid: ["claude", "-p", "--add-dir", added])
+        self.assertEqual(code, 1, out.getvalue())
+        self.assertIn(f"has session id {t.SID!r}, not inner-sid", out.getvalue())
+        self.assertFalse(os.path.exists(git_log))
+
     def test_session_flags_past_a_double_dash_still_count(self):
         # Claude Code's parser can take `--` as an option's value and parse a later --settings,
         # so the scan goes past it: a false hit only refuses more, or adds a root.
