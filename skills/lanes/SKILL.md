@@ -73,11 +73,34 @@ an unregistered worktree: `lane whoami` tells you which.
 5. **Install**, in a repo that installs from its checkout (dotclaude): only the lane next in
    merge order, after its last review round, runs `lane lock install -- ./setup.sh` from its
    worktree, sandbox off. That install holds: setup.sh refuses to run from any other lane or
-   clone until the lead's `./setup.sh` in the main checkout relinks everything after the merge.
+   clone until the lead's `./setup.sh` in the main checkout relinks everything after the next
+   merge, whichever lane's it is (The lead, step 7.6 tells a lane whose install that released).
    `lane ls` shows `install: held by lane <id>`. setup.sh also refuses a lane with no commit
    past `origin/main` (merged, or nothing committed yet): after the merge, install from the
    main checkout.
-6. **Merge** through the lane's own PR, on Hayden's approval. The lane that learns of the merge
+6. **PR and merge**, each on Hayden's approval: the lane pushes, opens its PR as a draft, marks
+   it ready and merges it. Where the project STATUS has a `Lead branch:` line (or the lead's
+   message names the branch), the lane next in merge order carries the lead's commits on that
+   branch into its PR, before each push (the one that opens the draft included) and before
+   ready (a carry then needs one more push). Hayden often readies and merges a draft in one
+   step, so a carry left for ready misses main. A commit newer than the record lights
+   `handoff?`, so carry before the handoff, and follow any carry made after it (before ready,
+   or before a review-fix push) with a delta handoff. With origin/main merged and nothing else
+   staged:
+   1. Read `<sha>` with `git rev-parse --short <lead-branch>`. Until
+      `git merge-base --is-ancestor origin/main <sha>` passes, the lead hasn't merged main (The
+      lead, step 7.2), and its files would undo what main gained: message the lead (Hayden, when
+      `lane addr lead` refuses), wait, and start again at 1.
+   2. STATUS.md is the lead's alone, so take its copy: `git show <sha>:STATUS.md > STATUS.md`.
+   3. PLAN.md has other writers, so apply only the lead's change:
+      `git diff <base> <sha> -- PLAN.md | git apply -3 --allow-empty`. `<base>` is the sha the
+      last carry's message names, or `origin/main` for the first carry. Resolve any conflict
+      it reports in PLAN.md.
+   4. `git add STATUS.md` (`git apply -3` staged PLAN.md already; after resolving a conflict,
+      `git add PLAN.md`) and, if anything is staged, commit it alone as
+      `STATUS: the lead's notes through <sha>`.
+
+   The lane that learns of the merge
    (it ran `gh pr merge`, or Hayden said "merged" in its window) writes the outcome into its
    record, starts its Next with `Keep open: <why>` on one line if more PRs will follow, and
    finishes its handoff. Then, as its last act (the lead's `lane done` ends its session), it
@@ -134,7 +157,10 @@ failed step (copies never overwrite a file the lane already has).
 
 The lead is an optional session, usually in the main checkout, that splits a batch of requests
 into lanes and keeps them moving. It owns the project STATUS (backlog, merge order) and nothing
-inside a lane.
+inside a lane. It commits that STATUS on a branch of its own, named on the STATUS's
+`Lead branch:` line, and opens no STATUS-only PR: the lane next in merge order carries those
+commits to main in its PR (Lifecycle, step 6). It only adds commits there, never amends or
+rebases: a carry names the lead's head, and the next carry diffs from it.
 
 **Which session leads.** A main checkout can hold two live sessions: a stray resumed there, or a
 side chat. The lead is the last one to act as lead. A bare `lane init`, `new`, `adopt`, `open` (not
@@ -183,17 +209,31 @@ inherits the lead from it.
    1. Prove the merge: `gh pr view <n> --json state,mergedAt`. The message says when to look,
       never that it happened.
    2. `git fetch`, then bring the main checkout to the merge (dotclaude: `git fetch origin
-      main:main`, then merge `main` into the lead's branch, sandbox off).
-   3. Where the repo installs from its checkout: copy settings.json and `~/.tmux.conf` aside, run
-      `./setup.sh` (dotclaude: then `./setup-tmux.sh`) from the main checkout under
-      `lane lock install`, sandbox off, and diff both copies after. That releases the merged
-      lane's install hold, which `done` refuses while it stands.
+      main:main`, then merge `main` into the lead's branch, sandbox off). On the lead's branch,
+      commit STATUS.md first and merge with `--no-ff --no-commit` (nothing to do when git says
+      Already up to date). Main holds older carries of the lead's STATUS.md, so a clean merge
+      would bring back a line the lead deleted since. Read main's side
+      (`git diff HEAD...MERGE_HEAD -- STATUS.md`), keep the lead's file whole
+      (`git show HEAD:STATUS.md > STATUS.md`), add back by hand any line from main that isn't
+      an older carry, then `git add STATUS.md` and commit. PLAN.md merges as usual: delete
+      again any line the lead removed since its last carry.
+   3. Where the repo installs from its checkout: first note any `install: held by lane <id>` line
+      on `lane ls`. Copy settings.json and `~/.tmux.conf` aside, run `./setup.sh` (dotclaude:
+      then `./setup-tmux.sh`) from the main checkout under `lane lock install`, sandbox off,
+      and diff both copies after. That releases the merged lane's install hold, which `done`
+      refuses while it stands, and also a hold by a lane whose PR hasn't merged (a PR merged
+      ahead of it). Step 6 tells that lane; if the chain stops before step 6, message it anyway.
    4. Check that no installed link or `source-file` line points into a lane: `lane ls` shows no
       `install: held by` line, and `done` names either.
-   5. Message each remaining lane: "main moved to `<sha>`: merge origin/main; renumber the
-      version if taken". A pushed branch merges main rather than rebasing, which would need a
+   5. Add one backlog line to the project STATUS on the lead's branch (lane id, PR number,
+      outcome) and commit it, so the next carry takes it.
+   6. Message each remaining lane: "main moved to `<sha>`: merge origin/main; renumber the
+      version if taken". An unmerged lane whose install step 3 released gets instead: "#N merged and
+      the lead's reinstall from main released your install: merge origin/main, then reinstall
+      from your worktree before ready; renumber the version if taken". To the lane next in
+      merge order, add "carry the lead's notes from `<lead-branch>` before your next push"
+      (Lifecycle, step 6). A pushed branch merges main rather than rebasing, which would need a
       force push. The board's `rebase` flag is the truth; the message is only a nudge.
-   6. Add one backlog line to the project STATUS: lane id, PR number, outcome.
    7. `lane done <id>` once the hand-back gate (step 5) passes, unless the lane's Next has a
       `Keep open:` line: then leave it open. A merged lane with no live session passes when its
       record was written after the merge (its after-merge handoff), so it closes without an
@@ -293,8 +333,9 @@ them. Each call meets the excluded-command guard first (docs/delegation.md), and
 | A merge the lane learned of | `merged #N` to the lead (`lane addr lead`), after the handoff; never a line to Hayden |
 | More PRs to come after a merge | `Keep open: <why>` on one line at the top of the record's Next; `lane done` refuses the lane while it stands |
 | Something that belongs to another lane | your record's Not mine (never that lane's record) |
+| A backlog or direction item no lane owns, where the project STATUS has a `Lead branch:` line | your record's Not mine, then a message to the lead (Hayden, when `lane addr lead` refuses); the lead adds it, since a carry overwrites a lane's STATUS.md |
 | The lane's working design | `.lane/PLAN.md` |
-| Direction, backlog, merge order | the project STATUS.md, from `main` or the lead |
+| Direction, backlog, merge order | the project STATUS.md, from `main` or the lead's branch (its `Lead branch:` line), carried to main in a lane's PR (Lifecycle, step 6) |
 | A heads-up to a peer lane | SendMessage to what `lane addr <id>` prints, as a nudge only; anything that matters goes in a record first |
 | Messaging a lane or the lead by its ListAgents name or tab title | `lane addr <id>` or `lane addr lead`, run just before each send: the name is the title, which changes most turns, and a pass gives the session a new pid and socket |
 

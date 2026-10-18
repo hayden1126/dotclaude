@@ -87,6 +87,23 @@ class Templates(unittest.TestCase):
             self.assertIn("Keep open:", text, doc)
             self.assertIn("merged #N", text, doc)
 
+    def test_the_lead_chain_carries_the_leads_notes_and_names_a_released_hold(self):
+        # Hayden readies and merges a draft in one step, so the lead's notes ride every push, not
+        # only the ready step; and a PR merged out of order releases the next lane's install,
+        # which the lead tells it.
+        rules = {("skills", "lanes", "SKILL.md"): (
+                     "Lead branch:", "before each push", "the lead's notes through",
+                     "git show <sha>:STATUS.md > STATUS.md", "git apply -3 --allow-empty",
+                     "--no-ff --no-commit",
+                     "git merge-base --is-ancestor origin/main",
+                     "released your install: merge origin/main, then reinstall"),
+                 ("docs", "lanes.md"): ("Lead branch:", "before each push",
+                                        "released your install")}
+        for doc, phrases in rules.items():
+            with open(os.path.join(REPO, *doc)) as f:
+                text = f.read()
+            self.assertEqual([p for p in phrases if p not in text], [], doc)
+
 
 class PlainRepo(Check):
     init_lanes = False
