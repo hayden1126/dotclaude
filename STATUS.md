@@ -74,16 +74,20 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
 - **dotclaude runs in lanes (since 2026-10-12).** The lead is the main checkout. Lanes live in
   `~/dotclaude-lanes/`, and each lane's state is in its record (`lane ls`, `lane asks`), not
   here. The config caps live lanes at 3, with locks `install` and `suite`.
-  - Merged through lanes, installed from main and closed: #90 to #119 (2026-10-12 to
-    2026-10-18), with lead PR #117 among them. `gh pr list --state merged --limit 30` names each,
+  - Merged through lanes, installed from main and closed: #90 to #120 (2026-10-12 to
+    2026-10-18), with lead PR #117 among them (its check passed: session 3a153a27's auto-pass
+    loaded the handoff skill before pass-respawn's `handoff-check`). Last: monotonic, #120 (tests time durations
+    with `time.monotonic()`; `tests/setup/test_clock_use.py` fails an unmarked `time.time()`). `gh pr list --state merged --limit 30` names each,
     and the closed records under `.git/lanes/_closed/<id>-<date>/` hold the detail (#116's
     post-merge smoke is in restore-effort's artifacts); tab-bar's design is in
     [[dotclaude-tab-bar]], remote-paste's live tests in [[dotclaude-remote-paste]]. #115 left the
     tab glyph's prompt at v4: an ask a reply only announces for later stays a documented known
     miss (`hooks/wants_input.py`'s docstring), since its one prompt round flipped 10 verdicts.
-  - **Live lane (opened 2026-10-18), merge order:** 1 monotonic (`fix/monotonic-tests`: tests
-    time durations with `time.monotonic()`, 152 `time.time()` calls in 27 test files; tests
-    only, so it runs alone). It carries the lead's notes. Its brief holds the detail.
+  - **Live lanes (opened 2026-10-18, Hayden's pick: both at once, disjoint files), merge
+    order:** 1 tab-pin (`fix/tab-pin-lead`), 2 cross-lane (`feat/cross-lane-checks`). Both
+    branched from e2a2294. Their only shared file is README.md, in different sections. tab-pin
+    carries the lead's notes. If cross-lane is ready first, the lead swaps the order. Each
+    record's Brief has the detail; the backlog items below keep the evidence.
   - The parked json-depth sweep (21 files, among them the delegation enforcement scripts) is on
     `fix/json-depth-sweep`, a local branch never pushed: keep it while the sweep is in the
     backlog. Shipping it first needs a check of how each enforcement site fails
@@ -102,7 +106,7 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     rerun the menu-clip repro and the tmux suites. If it fixes the clip, install at a quiet
     moment (a server restart; claude-restore reopens the tabs) and drop the row-0 menu rule.
     Until then, 3.7c's default menus that dotclaude doesn't own still clip under a top bar.
-  - **Cross-lane checks, next after monotonic** (Hayden's pick 2026-10-18: A and B as one lane).
+  - **Cross-lane checks (lane cross-lane, live)** (Hayden's pick 2026-10-18: A and B as one lane).
     Lanes plan alone, and nothing compares their designs: on 2026-10-17 restore-effort's brief
     listed 7 files, #116 changed 14 (among them `lane` and `lanelib.py`, done-rerun's files), and
     the brief named no overlap with done-rerun. A: `lane ls` flags two live lanes whose actual
@@ -111,7 +115,7 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     runs the suites there under `lane lock suite` (the trial-tree traps are in
     [[dotclaude-lanes]]). The lead plan review (C) was not picked. Files: `skills/lanes/scripts/
     lane`, `lanelib.py`, `tests/lanes`, `skills/lanes/SKILL.md`, `docs/lanes.md`.
-  - **A tab-bar pin outlives the reason for it, after the cross-lane checks** (Hayden's design
+  - **A tab-bar pin outlives the reason for it (lane tab-pin, live)** (Hayden's design
     2026-10-18). Seen 2026-10-17: done-rerun's close at 22:05 left dotclaude with no lanes, so
     the lead's tab (`@3`) fell to the shared row. A move there at 22:37:33 ran `put()`, which pins
     every member of the row (`@tab_place` row `s`, pos 0-3 on `@1 @51 @3 @57`, same second), and
@@ -121,9 +125,8 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     before or not, resets its pin and opens its repo's row. That needs the kind at pin time in
     the placement; `parse_place` reads exactly four keys, so the old form must keep reading (no
     kind: no reset, today's behavior). Files: `tmux/tmux-tab-bar`,
-    `tests/setup/test_tmux_tab_bar.py`, README's tab-bar section. Branch after monotonic merges
-    (it changes 8 lines of that test file); any new `time.time()` in tests needs a `# wall clock`
-    marker, or monotonic's guard (`tests/setup/test_clock_use.py`) fails.
+    `tests/setup/test_tmux_tab_bar.py`, README's tab-bar section. Any new `time.time()` in tests
+    needs a `# wall clock` marker, or the guard (`tests/setup/test_clock_use.py`) fails.
   - **chrome-bg's TTL loop counts down on the wall clock** (from lane monotonic, 2026-10-18).
     `bin/chrome-bg:1314` and `:1353` wait until the run record's `expires`, so a forward clock
     step cuts a TTL short by up to 0.6 s. The record stays wall clock (`ls` and gc read it,
@@ -202,18 +205,18 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
   `claude -p` repro and the 2.1.285 boundary; the karaoke session's has the incident.
 
 ## Notes for next session
-- **Next (lead, main checkout):** watch for "merged #N" from lane monotonic, then run the
-  post-merge chain (`skills/lanes/SKILL.md`, The lead, step 7; never amend or rebase the lead
-  branch). Check `lane ls` first: a merge Hayden made on GitHub and mentioned to no session sends
-  no message. After monotonic closes, propose the cross-lane checks lane (Backlog), then the
-  tab-bar pin fix. No chat about a lane's own asks; speak on cross-lane orders, decisions raised
-  with the lead, failed checks and lead-only actions.
-  - **Check:** the next real `/pass` transcript should show a Skill call for `handoff` before
-    `handoff-check` (#117). Session 3a153a27's own pass (2026-10-18) is the first sample.
+- **Next (lead, main checkout):** watch lanes tab-pin and cross-lane (In flight, merge order). On
+  each "merged #N", run the post-merge chain (`skills/lanes/SKILL.md`, The lead, step 7; never
+  amend or rebase the lead branch). Check `lane ls` first: a merge Hayden made on GitHub and
+  mentioned to no session sends no message. After tab-pin's merge, step 7.6 tells cross-lane to
+  merge origin/main and to carry the lead's notes from then on. If cross-lane is ready first, swap
+  the order in STATUS and tell both lanes. When both are closed, the backlog's chrome-bg TTL loop
+  is the next candidate (optional). No chat about a lane's own asks; speak on cross-lane orders,
+  decisions raised with the lead, failed checks and lead-only actions.
   - The lead's commits: `git log --first-parent main..chore/after-pr4` (STATUS only, plus merges
-    of main). Session 3a153a27 (2026-10-17 to 10-18) started at 8a28fc3 and ended at this
-    handoff: it opened lead-chain, done-rerun, restore-effort and monotonic, ran the chain for
-    #116, #118 and #119, shipped lead PR #117, and removed six stale agent worktrees.
+    of main). Session 9dd86d28 (2026-10-18) started at ee36b32 and ended at this handoff: it ran
+    the chain for #120 (lane monotonic closed), checked #117 on the previous lead's pass, and
+    opened tab-pin and cross-lane.
   - Open with Hayden, nothing for the lead to do: the capella-studio lead asked how a new lane
     should clear the excluded-command guard, and the lead recommended (2026-10-17) pointing
     capella's `core.hooksPath` at the main checkout's protected `.githooks` (absolute path)
@@ -237,8 +240,10 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     `disabled`). The swings stopped, but the clock still steps forward 0.3 to 0.6 s every 30 s
     with no time daemon running (a 120 s sample: +0.47, +0.59, +0.44, +0.29 at 1, 31, 61, 91 s).
     The likely source is Hyper-V's host time sync correcting a guest clock about 1.5% slow
-    (inferred; clocksource `tsc`, `ptp0` present). So tests must measure durations with
-    `time.monotonic()`, not `time.time()` (lane monotonic).
+    (inferred; clocksource `tsc`, `ptp0` present). Since #120, tests measure durations
+    with `time.monotonic()`, and `tests/setup/test_clock_use.py` fails any `time.time()` in
+    tests/ without a `# wall clock` marker. Shipped code has no guard; chrome-bg's TTL loop is
+    its one duration site left (Backlog). Whether the flakes are gone takes repeated runs.
   - **Flakes:** `tests/pass` fails timing asserts under a load spike, so judge it on a run of
     about 46 s. `test_tmux_hooks` flaked on `main` too; its ring-decision wait is now 15 s.
     Watch `seen()`'s 3 s wait, which also serves negative checks.
