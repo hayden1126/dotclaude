@@ -530,6 +530,32 @@ class Tee(unittest.TestCase):
         self.assertIn("its output on the merge was cut (a process it started still holds it)",
                       out.getvalue())
 
+    def test_a_reader_that_ends_while_the_ids_are_read_never_reads_as_whole(self):
+        # The reader may end in the window between reading the run's lines and asking whether
+        # its stream ended. A stand-in run_child keeps its reader's callback, and failing_ids
+        # (called on the copy of the lines) finishes that reader: a late id and the end.
+        held = {}
+
+        def child(command, cwd=None, on_line=None):
+            held["on_line"] = on_line
+            on_line("ok")
+            return 0
+
+        real = self.lane_mod.failing_ids
+
+        def finish(lines):
+            on_line = held.pop("on_line", None)
+            if on_line:
+                on_line("FAIL: test_late (t.T.test_late)")
+                on_line(None)
+            return real(lines)
+
+        with mock.patch.object(self.lane_mod, "run_child", side_effect=child), \
+                mock.patch.object(self.lane_mod, "failing_ids", side_effect=finish), \
+                contextlib.redirect_stdout(io.StringIO()):
+            (run,) = self.lane_mod.run_suites(self.tmp, ["x"], "merge", [0])
+        self.assertTrue(run.cut or "FAIL: test_late (t.T.test_late)" in run.ids, run)
+
     def test_a_closed_stdout_stops_the_echo_but_never_the_drain(self):
         # More output than a pipe holds: a reader that stopped at the failed echo would leave
         # the command blocked on a full pipe, and run_child waiting on it.

@@ -1992,7 +1992,11 @@ def run_suites(tree: str, commands: list[str], label: str, picked) -> list[Suite
                        on_line=lambda x: lines.append(x) if x is not None else ended.append(x))
         if rc in (-signal.SIGINT, -signal.SIGTERM):
             raise TrialStopped(-rc)
-        out.append(SuiteRun(rc, failing_ids(list(lines)), cut=not ended))
+        # The end first, the lines after: the reader hands on every line before its None, so a
+        # copy taken once the end is seen holds them all. In the other order a reader that ends
+        # between the two reads drops its last ids from a run that reads as whole.
+        cut = not ended
+        out.append(SuiteRun(rc, failing_ids(list(lines)), cut=cut))
     return out
 
 
