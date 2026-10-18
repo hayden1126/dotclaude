@@ -425,7 +425,9 @@ alone skips the uncommitted read then, since it can afford to.
    output was cut (a process it started kept the pipe 10 s past its exit), fails, to be
    judged by hand.
 6. It exits 0 with no conflict and no failure of the merge's own, 1 otherwise, and 75 when
-   `--wait` runs out.
+   `--wait` runs out. A conflicted file whose name isn't UTF-8 stops the trial at once, naming
+   the lane (or the base) it was merging: `lane trial <id> ...` with the other lanes' ids tries
+   the rest.
 
 Why the baseline: some tests fail on location alone. In a scratch tree of origin/main
 (2026-10-18) tests/lanes and tests/pass passed. tests/setup failed three SandboxReality

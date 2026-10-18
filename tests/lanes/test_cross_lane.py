@@ -1039,8 +1039,9 @@ class Trial(LaneWork):
             self.git("commit", "-q", "-m", "odd name", cwd=lane)
         rc, out, err = self.trial("--run", "true")
         self.assertEqual(rc, 1, out + err)
-        self.assertIn("lane: git merge-tree's output isn't UTF-8 (a lane names its own files), "
-                      "so the trial stopped", err)
+        self.assertIn("lane: git merge-tree's output merging beta isn't UTF-8 (a lane names its "
+                      "own files), so the trial stopped; `lane trial <id> ...` with the other "
+                      "lanes' ids tries the rest", err)
         self.assertNotIn("Traceback", err)
         self.assertEqual(self.leftovers(), ([], []))
 

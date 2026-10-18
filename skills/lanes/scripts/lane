@@ -1920,9 +1920,15 @@ def merged_in(repo: Repo, sha: str, cur: str) -> bool:
 def merge_tree(repo: Repo, ours: str, theirs: str, label: str) -> tuple[str | None, list[str]]:
     """(the merged tree, []) when commit theirs merges cleanly into ours, else (None, the paths
     git names as conflicted, which may be none). Writes objects only. Any other git outcome
-    (unrelated histories, a bad commit) aborts."""
-    p = trial_git(repo, ["merge-tree", "--write-tree", "-z", "--name-only", "--no-messages",
-                         "--end-of-options", ours, theirs], ok=(0, 1))
+    (unrelated histories, a bad commit) aborts, and a conflicted name that isn't UTF-8 stops
+    the trial naming label, so the lane needn't bisect for it."""
+    try:
+        p = trial_git(repo, ["merge-tree", "--write-tree", "-z", "--name-only", "--no-messages",
+                             "--end-of-options", ours, theirs], ok=(0, 1))
+    except NotUtf8:
+        raise NotUtf8(shown(f"git merge-tree's output merging {label} isn't UTF-8 (a lane names "
+                            "its own files), so the trial stopped; `lane trial <id> ...` with "
+                            "the other lanes' ids tries the rest")) from None
     tree, *paths = p.stdout.split("\0")
     if p.returncode == 1:
         return None, [x for x in paths if x]
