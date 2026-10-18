@@ -759,6 +759,31 @@ class Trial(LaneWork):
         self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
         self.assertIn("a trial can't run under a hold of the suite lock", p.stderr)
 
+    def test_a_hold_counts_only_while_its_holder_is_an_ancestor(self):
+        # A process the hold left running inherits LANE_LOCKS_HELD; once its holder is gone, or
+        # for any holder not above it, it takes the lock like anyone (here: held, so 75).
+        lock = os.path.join(self.common, "lanes", "_locks", "suite")
+        os.makedirs(os.path.dirname(lock), exist_ok=True)
+        fd = os.open(lock, os.O_RDWR | os.O_CREAT)
+        self.addCleanup(os.close, fd)
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        key = lanelib.Repo(self.main, self.common).key
+        sibling = subprocess.Popen(["sleep", "30"])
+        self.addCleanup(lambda: (sibling.kill(), sibling.wait()))
+        done = subprocess.Popen(["true"])
+        done.wait()
+        me = os.getpid()
+        for holder in (f"{sibling.pid}:{lanelib.proc_start(sibling.pid)}",  # alive, not above
+                       f"{done.pid}:1",  # gone
+                       f"{me}:{(lanelib.proc_start(me) or 0) + 1}"):  # its pid, reused
+            with self.subTest(holder=holder):
+                p = subprocess.run([sys.executable, LANE, "lock", "suite", "--wait", "0", "--",
+                                    "true"], cwd=self.alpha, capture_output=True, text=True,
+                                   env=dict(self.env, LANE_LOCKS_HELD=f"{key}/suite@{holder}"),
+                                   timeout=30)
+                self.assertEqual(p.returncode, 75, p.stdout + p.stderr)
+                self.assertNotIn("running under its hold", p.stderr)
+
     def test_a_repo_without_the_suite_lock_and_a_run_from_the_main_checkout_refuse(self):
         self.lane("init", "--locks", "gate")
         rc, out, err = self.trial("--run", "true")

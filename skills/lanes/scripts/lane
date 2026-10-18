@@ -118,7 +118,8 @@ TRIAL_IDENTITY = ("lane-trial", "lane-trial@localhost")  # the author of its dan
 # The lock every trial holds, one name for all: a trial clears this lane's leftover trees under
 # it, so a second trial of the lane under another lock could remove the first one's live tree
 TRIAL_LOCK = "suite"
-LOCKS_HELD = "LANE_LOCKS_HELD"  # env: locks the commands above this one hold, `<repo key>/<name>,`
+# env: the locks `lane` processes above this one hold, `<repo key>/<name>@<pid>:<start ticks>,...`
+LOCKS_HELD = "LANE_LOCKS_HELD"
 OVERLAP_WAIT = 10  # secs each git call behind the board's overlap flag may take
 OVERLAP_SHOWN = 5  # files each overlap line under the board names
 # Every git behind the overlap flag: no transport at all, so not even a partial clone's lazy
@@ -1783,8 +1784,16 @@ def die_of(sig: int) -> int:
 
 
 def held_by_caller(repo: Repo, name: str) -> bool:
-    """Whether a command this process runs under holds lock name of this repo (LOCKS_HELD)."""
-    return f"{repo.key}/{name}" in os.environ.get(LOCKS_HELD, "").split(",")
+    """Whether a `lane` process above this one holds lock name of this repo: a LOCKS_HELD entry
+    `<repo key>/<name>@<pid>:<start ticks>` whose process, pid and start alike, is an ancestor.
+    A process the hold leaves running (a `&` job, a daemon) inherits the variable, but once the
+    holder exits it is reparented, so it takes the lock as anyone does."""
+    want, holders = f"{repo.key}/{name}@", set()
+    for entry in os.environ.get(LOCKS_HELD, "").split(","):
+        pid, _, start = entry.removeprefix(want).partition(":")
+        if entry.startswith(want) and pid.isdigit() and start.isdigit():
+            holders.add((int(pid), int(start)))
+    return bool(holders) and any(a in holders for a in lanelib.ancestry(os.getpid()))
 
 
 @contextlib.contextmanager
@@ -1794,11 +1803,11 @@ def held_lock(repo: Repo, name: str, wait: float | None, command: list[str]):
     line is cleared and the lock let go however the body ends. `lock` and `trial` both run under
     it; a Ctrl-C while waiting comes out as KeyboardInterrupt.
 
-    Re-entrant for descendants: the body runs with the lock named in LOCKS_HELD, so a command
-    it starts that takes the same lock (a `--run` of `lane trial` that wraps a suite in `lane
-    lock suite`) runs under this hold instead of waiting on it forever. The locks are
-    cooperative and their commands sandboxed, and a process can hand the variable only to its
-    own children, so it proves enough."""
+    Re-entrant for descendants: the body runs with the lock, and this process, named in
+    LOCKS_HELD, so a command it starts that takes the same lock (a `--run` of `lane trial` that
+    wraps a suite in `lane lock suite`) runs under this hold instead of waiting on it forever,
+    while this process is its ancestor (held_by_caller). The locks are cooperative and their
+    commands sandboxed, so that proves enough."""
     names = parse_locks(repo.config().get("locks", ""))
     if name not in names:
         raise LaneError(f"no lock {name!r} in the lanes config (locks:"
@@ -1822,7 +1831,9 @@ def held_lock(repo: Repo, name: str, wait: float | None, command: list[str]):
         try:
             os.ftruncate(fd, 0)
             os.pwrite(fd, (holder_line(repo, command) + "\n").encode(), 0)
-            os.environ[LOCKS_HELD] = ",".join(filter(None, [before, f"{repo.key}/{name}"]))
+            me = os.getpid()
+            os.environ[LOCKS_HELD] = ",".join(filter(None, [
+                before, f"{repo.key}/{name}@{me}:{lanelib.proc_start(me) or 0}"]))
             yield True
         finally:
             if before is None:
