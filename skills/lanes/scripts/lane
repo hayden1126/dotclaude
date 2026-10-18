@@ -1991,8 +1991,11 @@ def run_suites(tree: str, commands: list[str], label: str, picked) -> list[Suite
     for i in picked:
         say(shown(f"lane trial: {label} run of suite {i + 1}/{len(commands)}: {commands[i]}"))
         lines, ended = [], []
-        rc = run_child(["sh", "-c", commands[i]], cwd=tree,
-                       on_line=lambda x: lines.append(x) if x is not None else ended.append(x))
+
+        def take(x, lines=lines, ended=ended):  # bound now: a cut run's reader writes on later
+            (lines if x is not None else ended).append(x)
+
+        rc = run_child(["sh", "-c", commands[i]], cwd=tree, on_line=take)
         if rc in (-signal.SIGINT, -signal.SIGTERM):
             raise TrialStopped(-rc)
         # The end first, the lines after: the reader hands on every line before its None, so a

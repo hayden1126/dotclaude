@@ -512,12 +512,22 @@ class Tee(unittest.TestCase):
         self.addCleanup(signal.alarm, 0)
         signal.alarm(30)
 
+    def kill_at_cleanup(self):
+        """A pid file for a process a suite backgrounds, which cleanup kills if it still runs."""
+        pid_file = os.path.join(self.tmp, "bg.pid")
+
+        def kill():
+            if os.path.exists(pid_file):
+                with contextlib.suppress(ProcessLookupError):  # it ended on its own
+                    os.kill(int(self.read(pid_file)), signal.SIGKILL)
+
+        self.addCleanup(kill)
+        return pid_file
+
     def test_output_a_leftover_process_holds_is_cut_and_fails_the_suite(self):
         # The suite exits, but a process it backgrounded keeps the pipe past the grace: ids it
         # would still print are lost, so the run can't pass, even with ids that match.
-        pid_file = os.path.join(self.tmp, "bg.pid")
-        self.addCleanup(lambda: os.path.exists(pid_file) and os.kill(
-            int(self.read(pid_file)), signal.SIGKILL))
+        pid_file = self.kill_at_cleanup()
         cmd = f"sleep 30 & echo $! > {pid_file}; echo 'FAIL: test_x (t.T.test_x)'"
         out = io.StringIO()
         with mock.patch.object(self.lane_mod, "TEE_GRACE", 0.3), contextlib.redirect_stdout(out):
@@ -529,6 +539,18 @@ class Tee(unittest.TestCase):
         self.assertEqual(rc, 1)
         self.assertIn("its output on the merge was cut (a process it started still holds it)",
                       out.getvalue())
+
+    def test_a_cut_runs_late_output_stays_its_own(self):
+        # Suite 1 leaves a process that writes a failing id after the grace, then ends its
+        # stream, while suite 2 still runs: neither may land in suite 2's run.
+        pid_file = self.kill_at_cleanup()
+        late = "(sleep 0.5; echo 'FAIL: test_late (t.T.test_late)') & echo $! > " + pid_file
+        with mock.patch.object(self.lane_mod, "TEE_GRACE", 0.2), \
+                contextlib.redirect_stdout(io.StringIO()):
+            first, second = self.lane_mod.run_suites(self.tmp, [late, "sleep 1.5; echo ok"],
+                                                     "merge", [0, 1])
+        self.assertTrue(first.cut)
+        self.assertEqual((second.ids, second.cut), ([], False))
 
     def test_a_reader_that_ends_while_the_ids_are_read_never_reads_as_whole(self):
         # The reader may end in the window between reading the run's lines and asking whether
