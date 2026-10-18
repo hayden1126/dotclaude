@@ -70,7 +70,7 @@ an unregistered worktree: `lane whoami` tells you which.
    it points at, so a linked shot is gone once its target is. When `lane ls` flags your lane
    `overlap`, the lines under the board name the other lane and the files you both change:
    tell that lane (`lane addr <id>`, a nudge), note it in your record, and run
-   `lane trial <id>` early instead of finding out at ready.
+   `lane trial <id> --run "<suite>" ...` early instead of finding out at ready.
 4. **Hand off** with the handoff skill. Its lane mode updates the record, not STATUS.md, and
    finishes with `handoff-check`, which must pass.
 5. **Install**, in a repo that installs from its checkout (dotclaude): only the lane next in
@@ -107,9 +107,12 @@ an unregistered worktree: `lane whoami` tells you which.
    suite your Done when names, in the background (it takes as long as the suites, longer when
    one fails). It merges origin/main and every other live lane's commits onto your HEAD in a
    scratch tree and runs the suites there under the `suite` lock, so it finds what a merge
-   breaks without a textual conflict. Quote its last lines in the ask. A conflict or a failure
-   only on the merge concerns both lanes: write it in your record, tell the other lane, and
-   don't ask for ready until the two of you (and the lead, for the merge order) have settled it.
+   breaks without a textual conflict. Pass each suite bare, not wrapped in `lane lock suite`
+   (the trial holds it already), and never start a trial under that lock. Quote its last lines
+   in the ask. A conflict or a failure only on the merge concerns both lanes: write it in your
+   record, tell the other lane, and don't ask for ready until the two of you (and the lead, for
+   the merge order) have settled it. A conflict the trial says is between two other lanes is
+   theirs: rerun with the `lane trial <id> ...` it names to try that lane with yours alone.
 
    The lane that learns of the merge
    (it ran `gh pr merge`, or Hayden said "merged" in its window) writes the outcome into its

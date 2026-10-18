@@ -379,21 +379,30 @@ hook (`=dirty`, which still reports a moved gitlink), each with optional locks o
 
 1. It takes the `suite` lock for the whole run. One name for every trial: a trial clears its
    lane's leftover trees under that lock, so a second trial under another lock could remove a
-   live tree.
+   live tree. Locks are re-entrant for descendants (`LANE_LOCKS_HELD`, keyed by repo), so a
+   `--run` that wraps its suite in `lane lock suite` runs under the trial's hold instead of
+   waiting on it forever. A trial itself refuses to start under a `suite` hold: its sweep would
+   take the outer trial's tree for a leftover.
 2. It builds the merge with no worktree: from the lane's HEAD, `git merge-tree --write-tree`
    merges the base, then each other live lane's head by id, and `git commit-tree` turns each
    clean result into a dangling commit (a fixed `lane-trial` identity, unsigned; no ref moves).
-   A conflict with the base aborts ("merge origin/main first"); a conflict with a lane is
-   reported by path, that lane is skipped, and the trial fails. Other lanes' uncommitted work
-   isn't in it.
-3. It checks the merge out in a fresh `mkdtemp` tree under the temp dir and runs each `--run`
-   there as `sh -c`, streaming its output. One `--run` per suite: a chained `a && b` stops at
-   the first failure, and `a; b` reports only the last exit.
+   A conflict with the base aborts ("merge origin/main first"). A lane that conflicts is
+   skipped and the trial fails; when it merges cleanly onto the baseline alone, the conflict is
+   between it and a lane merged before it, and the report names that pair and the
+   `lane trial <id>` that tries it with this lane alone. Other lanes' uncommitted work isn't
+   in the merge.
+3. It checks the merge out in a fresh `mkdtemp` tree under the temp dir, named by repo key and
+   lane id, and runs each `--run` there as `sh -c`, streaming its output. One `--run` per
+   suite: a chained `a && b` stops at the first failure, and `a; b` reports only the last exit.
 4. A suite fails when it exits non-zero or prints a failing test id (unittest's `FAIL:` and
-   `ERROR:` lines, pytest's `FAILED` and `ERROR`), whatever its exit code.
+   `ERROR:` lines, pytest's `FAILED` and `ERROR`, never unittest's `FAILED (failures=N)`
+   summary), whatever its exit code.
 5. A failed suite reruns on the baseline (HEAD plus the base alone), in a tree at the same path,
-   so ids that embed the path match. It passes when every id it failed on the merge also fails
-   there. A failure with no id to compare fails, to be judged by hand.
+   so ids that embed the path match. It passes only when every id it failed on the merge also
+   fails there and its exit is no worse (non-zero on the merge but zero on the baseline, or a
+   signal on the merge only, is the merge's). A failure with no id to compare, or a run whose
+   output was cut (a process it started kept the pipe 10 s past its exit), fails, to be
+   judged by hand.
 6. It exits 0 with no conflict and no failure of the merge's own, 1 otherwise, and 75 when
    `--wait` runs out.
 
