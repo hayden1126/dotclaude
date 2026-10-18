@@ -80,17 +80,19 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     [[dotclaude-tab-bar]], remote-paste's live tests in [[dotclaude-remote-paste]]. #115 left the
     tab glyph's prompt at v4: an ask a reply only announces for later stays a documented known
     miss (`hooks/wants_input.py`'s docstring), since its one prompt round flipped 10 verdicts.
-  - **Merge order:** 1 done-rerun (`fix/done-rerun`: `lane done`'s rerun on a restored tab;
-    installs from its branch next), 2 lead PR #117 (last, so its merge can't release
-    done-rerun's install). The brief holds the backlog detail; state is in the record.
+  - **No live lanes.** Merge order: lead PR #117 alone; it carries the lead's notes.
+  - done-rerun merged as #119 (2026-10-18): `lane done` keeps a restored tab's shell proof
+    across a rerun. Installed from main; the lane closed with the installed fix.
   - lead-chain merged as #118 (2026-10-18): the lane next in merge order carries the lead's
     notes before each push and before ready, the lead never amends or rebases its branch, and
     the chain tells a lane its install was released. Installed from main. Its carry brought
     main's STATUS level with the lead branch for the first time since #108.
   - restore-effort merged ahead of order as #116 (2026-10-18): tab restore and the shelf's Open
     relaunch with the session's `--model`/`--effort`. Installed from main, which released
-    lead-chain's install hold. The lane stays open (`Keep open:`) for its Done-when smoke, a
-    restored tab at its saved effort, which #116 merged before.
+    lead-chain's install hold. Its Done-when smoke passed after the merge (2026-10-18): restore
+    and the shelf's Open each brought a `--model sonnet --effort low` tab back at sonnet/low, and
+    an entry without the fields restored bare (evidence in the closed record,
+    `.git/lanes/_closed/restore-effort-2026-10-17/.lane/artifacts/smoke-2026-10-17.txt`). Closed.
   - Lead PR #117 (`fix/pass-invoke-handoff`, worktree `.claude/worktrees/pass-handoff`): the pass
     skill's step 3 loads the handoff skill with the Skill tool. Draft; Hayden skipped its install
     from the branch (2026-10-18: `setup.sh` never reads the skill's text). Before ready: merge
