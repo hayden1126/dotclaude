@@ -474,8 +474,9 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
   refuses a pick for a lane with a live session, since `/model` or `/effort` in its window is what
   changes a live one.
 
-  A plain pass keeps the pick (pass-respawn's `carried_pick`), for each flag the old claude launched
-  with, read from its `/proc` command line:
+  A plain pass keeps the pick (`carried_pick` in lanelib, which pass-respawn, `claude-restore` and
+  `claude-saved` share), for each flag the old claude launched with, read from its `/proc` command
+  line:
   - After a `/model` (for the effort, a `/model` or `/effort`) in the transcript, it carries what
     the last main-chain assistant entry since ran with (`message.model`, `effort`). That id loses
     what an alias or a 1M form means (`opusplan`'s switch per mode, `sonnet[1m]`), so the model is
@@ -507,11 +508,38 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
   - a default changed after a lane opened: that lane keeps its launch pick until `/model` or
     `/effort` in its window moves it;
   - the lead's main checkout: no repo default reaches it, and it carries what it launched with;
-  - a tmux restart: `claude-restore` types `claude --resume <id>`, which keeps the model but not the
-    effort (spike S3). The resumed claude has no flags either, so from its first plain pass on the
-    lane runs the user's default model too. A follow-up for `tmux/claude-restore`.
+  - a tmux restart, or a reopen from the shelf: the pick holds, as below.
 
-  Only these two flags carry: `--fallback-model`, `--name` and the rest still drop at a plain pass.
+  A tab restore (`tmux/claude-restore`) and the shelf's Open (`tmux/claude-saved`) keep the pick
+  the same way (lane restore-effort, 2026-10-17). A bare `claude --resume <id>` keeps the model but
+  drops the effort to the default (spike S3, again on 2.1.302), and the resumed claude would have no
+  flags for its next plain pass to carry, so each types the flags instead (`--resume` honors both,
+  probed 2026-10-17 on 2.1.302). `hooks/session-registry.sh` saves the flags the session's claude launched with, as
+  `model` and `effort` in its open-sessions entry, at each SessionStart: the hook's nearest
+  ancestor named `claude`, its `/proc` command line, each value only in the shape a pass would
+  pass on. `claude-saved` copies them into a starred or shelved chat's entry at Star, Shelve and
+  each SessionStart. At relaunch, `carried_pick` reads them with the transcript, which by then is
+  complete, with one difference for a resume: when no usable entry follows a `/model` (the server
+  died before the reply), it carries the `/model`'s argument if `lane open` would accept it, since
+  a resume keeps the session's own model where a new session takes the default the command saved.
+  Hayden approved launch flags plus the transcript over either alone: the flags alone undo a
+  mid-session `/model`, and the transcript alone loses an alias or a 1M form and would pin a
+  session launched without flags to what it last ran. How each case comes out:
+  - launched without flags, or an entry from before the fields (a session started before the
+    install keeps one until its next SessionStart: a compact, `/clear` or resume): a bare resume,
+    as before, so the user's default effort applies, as at a pass;
+  - a field outside its shape: that flag drops, never the tab;
+  - a tab with no transcript yet: `claude` with its launch flags;
+  - an attach tab, or Open of a chat running in the background: no flags, since the resume
+    attaches to the running session, which keeps its own pick. So does an attach tab resumed
+    when `claude agents` fails and can't say whether its session runs. A chat once seen in a
+    flagged tab keeps that tab's flags in its attach entry (`claude-saved track`), so after a
+    reboot it resumes with them;
+  - lanelib missing or broken, or `carried_pick` raising: no flags, and every tab still comes back
+    (each script imports lanelib through its own link, by absolute path only).
+
+  `claude-restore --list` and `restore.log` name the flags each tab gets. Only these two flags
+  carry: `--fallback-model`, `--name` and the rest still drop at a plain pass, a restore or Open.
 - **Auto-pass in lanes** (README "Auto-pass", PLAN.md "PR 4: auto-pass"). Auto-pass is on by
   default in every lane and in the main checkout of a repo with lanes, so the lead passes itself
   the same way. `lane init --no-autopass` turns it off for the repo (`autopass = false` in the
