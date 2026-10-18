@@ -113,7 +113,9 @@ an unregistered worktree: `lane whoami` tells you which.
    in the ask. A conflict or a failure only on the merge concerns both lanes: write it in your
    record, tell the other lane, and don't ask for ready until the two of you (and the lead, for
    the merge order) have settled it. A conflict the trial says is between two other lanes is
-   theirs: rerun with the `lane trial <id> ...` it names to try that lane with yours alone.
+   theirs: rerun with the `lane trial <id> ...` it names to try that lane with yours alone. One
+   it says is between another lane and origin/main ("it needs to merge origin/main") is that
+   lane's: tell it, and ask for ready anyway, quoting the line.
 
    The lane that learns of the merge
    (it ran `gh pr merge`, or Hayden said "merged" in its window) writes the outcome into its
