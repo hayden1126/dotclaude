@@ -80,17 +80,22 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     [[dotclaude-tab-bar]], remote-paste's live tests in [[dotclaude-remote-paste]]. #115 left the
     tab glyph's prompt at v4: an ask a reply only announces for later stays a documented known
     miss (`hooks/wants_input.py`'s docstring), since its one prompt round flipped 10 verdicts.
-  - **Live lanes (opened 2026-10-17), merge order:** 1 lead-chain (`fix/lead-chain`: the lead
-    diff at the draft push, another lane's install hold), 2 done-rerun (`fix/done-rerun`: `lane
-    done`'s rerun on a restored tab). Their briefs hold the backlog detail; state is in each
-    record. lead-chain carries the lead's lagging STATUS to main.
+  - **Merge order:** 1 done-rerun (`fix/done-rerun`: `lane done`'s rerun on a restored tab;
+    installs from its branch next), 2 lead PR #117 (last, so its merge can't release
+    done-rerun's install). The brief holds the backlog detail; state is in the record.
+  - lead-chain merged as #118 (2026-10-18): the lane next in merge order carries the lead's
+    notes before each push and before ready, the lead never amends or rebases its branch, and
+    the chain tells a lane its install was released. Installed from main. Its carry brought
+    main's STATUS level with the lead branch for the first time since #108.
   - restore-effort merged ahead of order as #116 (2026-10-18): tab restore and the shelf's Open
     relaunch with the session's `--model`/`--effort`. Installed from main, which released
     lead-chain's install hold. The lane stays open (`Keep open:`) for its Done-when smoke, a
-    restored tab at its saved effort, which #116 merged before. Lead PR #117
-    (`fix/pass-invoke-handoff`, worktree `.claude/worktrees/pass-handoff`): the pass skill's step
-    3 loads the handoff skill with the Skill tool. Draft; it shares `tests/pass/test_pass_guards.py`
-    with #116 (restore-effort), a clean trial merge. Remove the worktree after it merges.
+    restored tab at its saved effort, which #116 merged before.
+  - Lead PR #117 (`fix/pass-invoke-handoff`, worktree `.claude/worktrees/pass-handoff`): the pass
+    skill's step 3 loads the handoff skill with the Skill tool. Draft; Hayden skipped its install
+    from the branch (2026-10-18: `setup.sh` never reads the skill's text). Before ready: merge
+    main (it shares `tests/pass/test_pass_guards.py` with #116, a clean trial merge), rerun
+    `tests/pass`. Remove the worktree after it merges.
   - The parked json-depth sweep (21 files, among them the delegation enforcement scripts) is on
     `fix/json-depth-sweep`, a local branch never pushed: keep it while the sweep is in the
     backlog. Shipping it first needs a check of how each enforcement site fails
