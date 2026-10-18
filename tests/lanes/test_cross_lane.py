@@ -449,8 +449,27 @@ class Trial(LaneWork):
         rc, out, err = self.trial("--run", 'echo "FAIL: test_where (t.T.test_where) '
                                            '(path=$PWD)"; exit 1')
         self.assertEqual(rc, 0, out + err)
-        self.assertIn("every failure also fails on the baseline, so none is the merge's", out)
+        self.assertIn("every failure also fails on the baseline (exit 1 on the merge, 1 on the "
+                      "baseline), so none is the merge's", out)
         self.assertRegex(out, r"FAIL: test_where \(t\.T\.test_where\) \(path=\S+/tree\)")
+
+    def test_an_exit_worse_on_the_merge_fails_though_its_ids_fail_on_the_baseline_too(self):
+        # A runner's id fails in both runs (the location), and a check chained after it, which
+        # prints no id, fails only on the merge: the exit codes decide.
+        where = 'echo "FAIL: test_where (t.T.test_where) (path=$PWD)"; '
+        rc, out, err = self.trial("--run", where + "test ! -f b.txt")
+        self.assertEqual(rc, 1, out + err)
+        self.assertIn("its ids fail on the baseline too, but it exits 1 on the merge and 0 on the "
+                      "baseline, so a failure is the merge's", out)
+        # A death by signal on the merge only, where the baseline exits non-zero.
+        rc, out, err = self.trial("--run", where + "if [ -f b.txt ]; then kill -KILL $$; fi; "
+                                  "exit 1")
+        self.assertEqual(rc, 1, out + err)
+        self.assertIn(f"it exits -{9} on the merge and 1 on the baseline", out)
+        # Both exits alike: none is the merge's.
+        rc, out, err = self.trial("--run", where + "exit 1")
+        self.assertEqual(rc, 0, out + err)
+        self.assertIn("(exit 1 on the merge, 1 on the baseline), so none is the merge's", out)
 
     def test_a_failure_behind_a_zero_exit_still_counts(self):
         # `a; b` exits with b's code: the failing id a printed decides.

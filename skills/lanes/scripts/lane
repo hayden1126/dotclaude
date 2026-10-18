@@ -2051,27 +2051,37 @@ def trial_report(commands: list[str], runs: list[tuple[int, list[str]]],
                  again: dict[int, tuple[int, list[str]]]) -> int:
     """Say how each suite did on the merge, judged against its baseline rerun (again, by suite
     index) when it failed: 0 when no failure is the merge's, else 1. A failed suite passes only
-    when every id it failed on the merge also fails on the baseline; one with no ids to compare
-    fails, to be compared by hand. Ids come from the suites' output, so they are masked."""
+    when every id it failed on the merge also fails on the baseline, and its exit doesn't get
+    worse there: non-zero on the merge but zero on the baseline, or a death by signal on the
+    merge only, is the merge's (a `--run` can chain a runner whose ids it parses with a check
+    that prints none). One with no ids to compare fails, to be compared by hand. Ids come from
+    the suites' output, so they are masked."""
     new = 0
     for i, (cmd, (rc, ids)) in enumerate(zip(commands, runs)):
         head = f"lane trial: suite {i + 1} ({cmd}):"
         if i not in again:
             say(shown(f"{head} ok"))
             continue
-        _, base_ids = again[i]
+        base_rc, base_ids = again[i]
         if not ids:
             new += 1
             say(shown(f"{head} failed (exit {rc}) with no test id to compare against the "
                       "baseline: compare the two runs above by hand"))
             continue
         only = [x for x in ids if x not in base_ids]
-        if only:
+        worse = (rc != 0 and base_rc == 0) or (rc < 0 <= base_rc)
+        if only or worse:
             new += 1
+        if only:
             say(shown(f"{head} {len(only)} failure(s) only on the merge:"))
+        elif worse:
+            say(shown(f"{head} its ids fail on the baseline too, but it exits {rc} on the merge "
+                      f"and {base_rc} on the baseline, so a failure is the merge's: compare "
+                      "the two runs above"))
         else:
-            say(shown(f"{head} every failure also fails on the baseline, so none is the merge's:"))
-        for x in only or ids:
+            say(shown(f"{head} every failure also fails on the baseline (exit {rc} on the merge, "
+                      f"{base_rc} on the baseline), so none is the merge's:"))
+        for x in only or ([] if worse else ids):
             say(shown(f"  {x}"))
     if new:
         say(f"lane trial: FAILED: {new} suite(s) fail on the merge")
