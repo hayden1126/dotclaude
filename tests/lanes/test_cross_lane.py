@@ -497,10 +497,12 @@ class Trial(LaneWork):
         self.assertIn("gave up on lock suite", err)
         self.assertNotIn("merged", out)
 
-    def test_an_unlisted_lock_and_a_run_from_the_main_checkout_refuse(self):
-        rc, out, err = self.trial("--lock", "nope", "--run", "true")
+    def test_a_repo_without_the_suite_lock_and_a_run_from_the_main_checkout_refuse(self):
+        self.lane("init", "--locks", "gate")
+        rc, out, err = self.trial("--run", "true")
         self.assertEqual(rc, 1)
-        self.assertIn("no lock 'nope' in the lanes config", err)
+        self.assertIn("no lock 'suite' in the lanes config", err)
+        self.lane("init", "--locks", "suite")
         rc, out, err = self.trial("--run", "true", cwd=self.main)
         self.assertEqual(rc, 1)
         self.assertIn("not a lane", err)

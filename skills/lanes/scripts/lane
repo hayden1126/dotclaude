@@ -11,7 +11,7 @@
   lane addr <id> | lane addr lead
   lane lead
   lane lock <name> [--wait SECS] -- <cmd...>
-  lane trial [<id> ...] [--lock NAME] [--wait SECS] [--keep] --run CMD [--run CMD ...]
+  lane trial [<id> ...] [--wait SECS] [--keep] --run CMD [--run CMD ...]
   lane whoami [--json]
   lane claim <req> ... | lane release <req> ... | lane who <req>
   lane note <text>
@@ -31,7 +31,7 @@ must, so the commands they run stay sandboxed too.
 
 `trial`, from inside a lane, merges the base and every other live lane's commits (or only the
 ids given) onto the lane's HEAD in dangling commits, checks the merge out in a fresh scratch
-tree under the temp dir, and runs each `--run` there under a lock (`suite` by default). A suite
+tree under the temp dir, and runs each `--run` there under the `suite` lock. A suite
 that fails reruns on the baseline (HEAD plus the base) at the same path; it passes when every
 test id it failed on the merge fails there too. It exits 0 with no conflict and no failure of
 the merge's own, 1 otherwise, and 75 when `--wait` runs out, as `lock` does.
@@ -115,6 +115,9 @@ CLOCK_SLACK = 10  # secs: HAYPC's wall clock steps by about 5 s, and GitHub keep
 TEE_GRACE = 1.0  # secs run_child keeps reading a teed pipe a grandchild holds once its child exits
 TRIAL_GIT_WAIT = 120  # secs each git call of `lane trial` may take
 TRIAL_IDENTITY = ("lane-trial", "lane-trial@localhost")  # the author of its dangling merges
+# The lock every trial holds, one name for all: a trial clears this lane's leftover trees under
+# it, so a second trial of the lane under another lock could remove the first one's live tree
+TRIAL_LOCK = "suite"
 OVERLAP_WAIT = 10  # secs each git call behind the board's overlap flag may take
 OVERLAP_SHOWN = 5  # files each overlap line under the board names
 # Every git behind the overlap flag: no transport at all, so not even a partial clone's lazy
@@ -1945,7 +1948,7 @@ def cmd_trial(args) -> int:
     me = own_lane(repo)
     command = ["lane", "trial", *args.ids, *[x for c in args.run for x in ("--run", c)]]
     try:
-        with held_lock(repo, args.lock, args.wait, command) as held:
+        with held_lock(repo, TRIAL_LOCK, args.wait, command) as held:
             return trial(repo, me, args) if held else LOCK_BUSY
     except KeyboardInterrupt:  # a Ctrl-C while waiting, merging or cleaning up
         return -signal.SIGINT
@@ -3250,16 +3253,14 @@ def parser() -> argparse.ArgumentParser:
                         f"takes); the command's own {LOCK_BUSY} looks the same, but only a "
                         "timeout prints \"gave up on lock\" on stderr")
     p = sub.add_parser("trial", help="run the suites on a merge of this lane with every other "
-                                     "live lane, in a scratch tree, under a lock",
-                       usage="lane trial [<id> ...] [--lock NAME] [--wait SECS] [--keep] "
+                                     "live lane, in a scratch tree, under the suite lock",
+                       usage="lane trial [<id> ...] [--wait SECS] [--keep] "
                              "--run CMD [--run CMD ...]")
     p.add_argument("ids", nargs="*", metavar="id",
                    help="merge only these lanes (default: every other live lane)")
     p.add_argument("--run", action="append", required=True, metavar="CMD",
                    help="a suite, run as `sh -c CMD` in the tree and judged on its own; repeat "
                         "it per suite (a chained `a && b` stops at the first failure)")
-    p.add_argument("--lock", default="suite", metavar="NAME",
-                   help="the lock it holds throughout, one of the config's (default: suite)")
     p.add_argument("--wait", type=float, metavar="SECS",
                    help=f"give up on the lock after SECS, exit {LOCK_BUSY} (default: wait)")
     p.add_argument("--keep", action="store_true",
