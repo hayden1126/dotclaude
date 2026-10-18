@@ -665,6 +665,19 @@ class Trial(LaneWork):
         self.assertEqual(rc, 1, out + err)
         self.assertRegex(out, r"lane trial: conflict with lane beta: \S")
 
+    def test_a_lane_that_holds_the_base_still_leaves_a_base_conflict_to_the_other_lane(self):
+        # alpha merged origin/main, so its HEAD conflicts with beta wherever main does: only
+        # the paths tell that shared.txt is main's change, never alpha's.
+        self.commit_files(self.main, ["shared.txt"])
+        self.git("push", "-q", "origin", "main")
+        self.git("merge", "-q", "--no-edit", "origin/main", cwd=self.alpha)
+        self.commit_files(self.beta, ["shared.txt"])
+        rc, out, err = self.trial("--run", "true")
+        self.assertEqual(rc, 1, out + err)
+        self.assertIn("lane trial: lane beta conflicts with origin/main (shared.txt), not with "
+                      "this lane: it needs to merge origin/main", out)
+        self.assertNotIn("conflict with lane beta", out)
+
     def test_a_base_conflict_aborts_before_any_suite(self):
         self.commit_files(self.alpha, ["shared.txt"])
         self.commit_files(self.main, ["shared.txt"])

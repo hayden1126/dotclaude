@@ -2061,6 +2061,9 @@ def trial(repo: Repo, me: dict, args) -> int:
                                   f"{', '.join(conflicted) or 'git named no path'}): merge "
                                   f"{base_name} into the lane first"))
     baseline = cur
+    own = trial_git(repo, ["diff", "--name-only", "-z", "--no-renames", "--no-ext-diff",
+                           "--end-of-options", f"{base}...{head}", "--"]).stdout.split("\0")
+    chain = {"base": base, "base_name": base_name, "own": set(filter(None, own))}
     merged, already, conflicts = [], [], {}
     for lane in others:
         sha = rev(repo, lane_head(lane, trees)[1])
@@ -2074,7 +2077,6 @@ def trial(repo: Repo, me: dict, args) -> int:
         if conflicted is None:
             merged.append((lane["id"], sha))
         else:
-            chain = {"head": head, "base": base, "base_name": base_name, "baseline": baseline}
             conflicts[lane["id"]] = conflict_line(repo, lane["id"], sha, conflicted, chain,
                                                   merged, args.run)
     if already:
@@ -2121,21 +2123,25 @@ def trial(repo: Repo, me: dict, args) -> int:
 def conflict_line(repo: Repo, lane_id: str, sha: str, conflicted: list[str], chain: dict,
                   merged: list[tuple[str, str]], commands: list[str]) -> str:
     """The report's line for lane lane_id, whose head sha conflicted with the merge so far
-    (chain: this lane's head, the base and its name, and the baseline). When it merges cleanly
-    into the baseline alone, the conflict is with lanes merged before it, not with this one: it
-    names each of them it conflicts with by itself (or, when none does, the merge of them all)
-    and how to try the lane with this one alone. When it conflicts with the base itself and not
-    with this lane's HEAD, it is that lane's to merge the base. Otherwise the conflict is this
-    lane's, with the paths git named."""
+    (chain: the base commit and its name, and `own`, the files this lane changes past the
+    base). Decided by paths, since this lane's HEAD may hold the base already and then conflicts
+    wherever the base does: the conflict is this lane's when a path git names is one it
+    changes. Else, when the lane conflicts with the base itself, it is that lane's to merge the
+    base. Else it is with lanes merged before it: the line names each of them it conflicts with
+    by itself (or, when none does, the merge of them all) and how to try the lane with this one
+    alone. With none merged, it is this lane's."""
     paths = ", ".join(conflicted) or "git named no path"
-    if not merged or merge_tree(repo, chain["baseline"], sha, lane_id)[0] is None:
-        base = chain["base_name"]
-        tree, with_base = merge_tree(repo, chain["base"], sha, f"{lane_id} and {base}")
-        if tree is None and merge_tree(repo, chain["head"], sha, lane_id)[0] is not None:
-            return (f"lane trial: lane {lane_id} conflicts with {base} ("
-                    f"{', '.join(with_base) or 'git named no path'}), not with this lane: it "
-                    f"needs to merge {base}")
-        return f"lane trial: conflict with lane {lane_id}: {paths}"
+    mine = f"lane trial: conflict with lane {lane_id}: {paths}"
+    if set(conflicted) & chain["own"]:
+        return mine
+    base = chain["base_name"]
+    tree, with_base = merge_tree(repo, chain["base"], sha, f"{lane_id} and {base}")
+    if tree is None:
+        return (f"lane trial: lane {lane_id} conflicts with {base} ("
+                f"{', '.join(with_base) or 'git named no path'}), not with this lane: it needs "
+                f"to merge {base}")
+    if not merged:
+        return mine
     pairs = []
     for other, other_sha in merged:
         tree, both = merge_tree(repo, other_sha, sha, f"{lane_id} and {other}")
