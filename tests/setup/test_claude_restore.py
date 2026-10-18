@@ -85,7 +85,7 @@ class Restore(unittest.TestCase):
         self.state = os.path.join(self.tmp, "state", "dotclaude")
         self.reg = os.path.join(self.state, "open-sessions")
         os.makedirs(self.reg)
-        self.now = time.time()
+        self.now = time.time()  # wall clock
         # The old server died an hour ago; the current one started a minute ago.
         self.died = self.now - 3600
         self.start = int(self.now - 60)

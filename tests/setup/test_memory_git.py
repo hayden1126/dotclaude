@@ -100,7 +100,7 @@ class MemoryGit(unittest.TestCase):
         self.fire("SessionStart")
         lock = os.path.join(self.gd, "index.lock")
         self.write(lock, "")
-        old = time.time() - 300
+        old = time.time() - 300  # wall clock
         os.utime(lock, (old, old))
         self.write(os.path.join(self.mem, "karaoke.md"), "v2\n")
         self.fire("Stop")

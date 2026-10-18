@@ -305,7 +305,7 @@ class Ctx(Lead):
                                "tmux": "proj:@3.%7", "status": status}))
 
     def ctx(self, sid, tokens, window=None):
-        rec = {"tokens": tokens, "time": time.time()}
+        rec = {"tokens": tokens, "time": time.time()}  # wall clock
         if window is not None:
             rec["window"] = window
         self.write(os.path.join(self.tmp, "state", "dotclaude", "ctx", sid + ".json"),
@@ -363,7 +363,7 @@ class Ctx(Lead):
         cfg = os.path.join(self.tmp, "other-config")
         self.write(os.path.join(cfg, "settings.json"), json.dumps({"autoCompactWindow": 200000}))
         self.write(os.path.join(self.tmp, "state", "dotclaude", "stops", "s-1.json"),
-                   json.dumps({"session_id": "s-1", "time": time.time(),
+                   json.dumps({"session_id": "s-1", "time": time.time(),  # wall clock
                                "transcript_path": os.path.join(cfg, "projects", "p", "s-1.jsonl")}))
         self.assertEqual(self.board()[0], "160k!")  # its stop record's config dir: 200k
 

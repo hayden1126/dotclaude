@@ -154,7 +154,7 @@ class Inbox(unittest.TestCase):
         path = os.path.join(folder, name)
         with open(path, "wb") as f:
             f.write(data)
-        when = time.time() - age
+        when = time.time() - age  # wall clock
         os.utime(path, (when, when))
         return path
 
@@ -1029,11 +1029,11 @@ out, ready = sys.argv[1], sys.argv[2]
 tty.setraw(0)
 os.write(1, b"\x1b[?2004h")
 open(ready, "w").close()
-got, end, last = b"", time.time() + 60, None
-while time.time() < end and b"\x1b[201~" not in got:
+got, end, last = b"", time.monotonic() + 60, None
+while time.monotonic() < end and b"\x1b[201~" not in got:
     if select.select([0], [], [], 0.1)[0]:
-        got, last = got + os.read(0, 4096), time.time()
-    elif last and time.time() - last > 0.5:
+        got, last = got + os.read(0, 4096), time.monotonic()
+    elif last and time.monotonic() - last > 0.5:
         break
 with open(out, "wb") as f:
     f.write(got)
@@ -1073,8 +1073,8 @@ with open(out, "wb") as f:
         self.addCleanup(subprocess.run, self.server + ["kill-server"], capture_output=True)
         self.pane, pid = self.ask("#{pane_id} #{pid}").split()
         self.tmux_env = {**self.env, "TMUX": "%s,%s,0" % (self.sock, pid)}
-        end = time.time() + 10
-        while not os.path.exists(self.ready) and time.time() < end:
+        end = time.monotonic() + 10
+        while not os.path.exists(self.ready) and time.monotonic() < end:
             time.sleep(0.05)
         self.assertTrue(os.path.exists(self.ready), "the reader never started")
 
@@ -1089,8 +1089,8 @@ with open(out, "wb") as f:
         return path
 
     def received(self):
-        end = time.time() + 60
-        while not os.path.exists(self.out) and time.time() < end:
+        end = time.monotonic() + 60
+        while not os.path.exists(self.out) and time.monotonic() < end:
             time.sleep(0.05)
         with open(self.out, "rb") as f:
             return f.read()
@@ -1124,9 +1124,9 @@ class RealBinding(RealTmux):
         self.addCleanup(client.terminate)
         drain = threading.Thread(target=self.drain, args=(master,), daemon=True)
         drain.start()
-        end = time.time() + 10
+        end = time.monotonic() + 10
         self.client = ""
-        while not self.client and time.time() < end:
+        while not self.client and time.monotonic() < end:
             self.client = subprocess.run(self.server + ["list-clients", "-F", "#{client_name}"],
                                          capture_output=True, text=True,
                                          env=self.env).stdout.strip()

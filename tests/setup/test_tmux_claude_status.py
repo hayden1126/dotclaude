@@ -78,8 +78,8 @@ class Status(unittest.TestCase):
         self.addCleanup(p.wait)
         self.addCleanup(p.kill)
         path = f"/proc/{p.pid}/task/{p.pid}/children"
-        deadline = time.time() + 3
-        while time.time() < deadline:
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline:
             with open(path) as f:
                 kids = f.read().split()
             if kids:
@@ -243,7 +243,7 @@ class Status(unittest.TestCase):
         self.pane("%2", "@2", DNA)
         self.run_status([self.bg()])
         self.windows["@2"] = "busy"
-        old = time.time() - 100
+        old = time.time() - 100  # wall clock
         os.utime(os.path.join(self.state, "dotclaude", "tabs"), (old, old))
         os.utime(self.run_file("sig"), (old, old))
         self.run_status([self.bg(status="idle")])
@@ -361,7 +361,7 @@ class Status(unittest.TestCase):
     def test_a_stale_signature_queries_again(self):
         self.pane("%2", "@2", DNA, state="idle")
         self.run_status([])
-        old = time.time() - 61
+        old = time.time() - 61  # wall clock
         os.utime(self.run_file("sig"), (old, old))
         self.run_status([self.bg()])
         self.assertTrue(self.queried())
@@ -393,16 +393,16 @@ class Status(unittest.TestCase):
                 self.run_status([self.bg()], hosts="501 509")
                 self.assertFalse(self.queried())  # backing off
         # The backoff stays under the 30 s between the 60 s refresh and the hooks' 90 s limit.
-        old = time.time() - 21
+        old = time.time() - 21  # wall clock
         os.utime(self.run_file("fail"), (old, old))
         self.run_status([self.bg()], hosts="501 509")
         self.assertTrue(self.queried())
 
     def test_a_hung_query_times_out(self):
         self.pane("%2", "@2", DNA)
-        start = time.time()
+        start = time.monotonic()
         self.run_status([self.bg()], STUB_HANG="1")
-        self.assertLess(time.time() - start, 8)
+        self.assertLess(time.monotonic() - start, 8)
         self.assertIsNone(self.tabs())
 
     # --- the cold fill and the clear -------------------------------------------------------
@@ -495,7 +495,7 @@ class Status(unittest.TestCase):
         self.pane("%5", "@5", "/y", state="idle")
         self.run_status([], hosts="")
         self.assertEqual(tracked(), ["claude-saved track"])
-        old = time.time() - 61
+        old = time.time() - 61  # wall clock
         os.utime(self.run_file("track"), (old, old))
         self.run_status([], hosts="")
         self.assertEqual(tracked(), ["claude-saved track"])
@@ -519,9 +519,9 @@ class Status(unittest.TestCase):
     def test_a_hung_tab_bar_is_bounded(self):
         self.tab_bar_stub("exec sleep 30\n")
         self.pane("%2", "@2", DNA, state="idle")
-        start = time.time()
+        start = time.monotonic()
         self.run_status([], hosts="")
-        self.assertLess(time.time() - start, 8)
+        self.assertLess(time.monotonic() - start, 8)
 
     def test_the_rate_limited_runs_skip_the_tab_bar(self):
         self.tab_bar_stub("exit 0\n")

@@ -287,7 +287,8 @@ class LeadRelink(_fixture.LiveSessions):
 
     def test_ticks_become_epoch_seconds_by_the_boot_time(self):
         pid = self.child(self.main)
-        self.assertLess(abs(lanelib.proc_epoch(lanelib.proc_start(pid)) - time.time()), 2)
+        epoch = lanelib.proc_epoch(lanelib.proc_start(pid))
+        self.assertLess(abs(epoch - time.time()), 2)  # wall clock
         fake = os.path.join(self.tmp, "proc")
         self.write(os.path.join(fake, "stat"), "cpu  1 2 3\nintr 5 6\nbtime 1700000000\n")
         hz = os.sysconf("SC_CLK_TCK")

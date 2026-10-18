@@ -504,7 +504,7 @@ class Hook(StateTest):
 
     def test_a_month_old_ledger_asks_for_the_monthly_audit(self):
         self.settled()
-        self.ledger(json.dumps({"ts": iso(checks.time.time() - 31 * DAY)}),
+        self.ledger(json.dumps({"ts": iso(checks.time.time() - 31 * DAY)}),  # wall clock
                     json.dumps({"ts": checks.dc.now_iso()}))
         checks.hook_main("{}", out=self.out.append)
         (line,) = self.out
@@ -866,7 +866,7 @@ class CLI(StateTest):
         self.assertEqual(self.state("audit.json")["hours"], 2.0)
 
     def test_audit_pairs_a_writer_that_spans_the_window_edge(self):
-        now = checks.time.time()
+        now = checks.time.time()  # wall clock
         base = {"runner": "claude", "id": "w1", "agent_type": "writer"}
         self.rows(dict(base, event="start", ts=iso(now - 3 * 3600), main_before="aaa"),
                   dict(base, event="stop", ts=iso(now - 600), main_after="bbb"))
@@ -876,7 +876,7 @@ class CLI(StateTest):
     def test_audit_warns_for_each_moved_activation_not_only_the_latest(self):
         # A resume or a teammate's next message starts another activation; an escape in the
         # first must still show once the second has started and stopped clean.
-        now = checks.time.time()
+        now = checks.time.time()  # wall clock
         base = {"runner": "claude", "id": "w1", "agent_type": "writer", "parent_root": "/lane"}
         self.rows(dict(base, event="start", ts=iso(now - 900), main_before="aaa",
                        parent_before="ppp"),
@@ -894,7 +894,7 @@ class CLI(StateTest):
     def test_audit_ignores_edits_between_activations(self):
         # The lead edits between two clean activations: no agent's doing, whether the second
         # is still running (a start row carries no *_after) or has stopped.
-        now = checks.time.time()
+        now = checks.time.time()  # wall clock
         base = {"runner": "claude", "id": "w1", "agent_type": "writer"}
         first = [dict(base, event="start", ts=iso(now - 900), main_before="aaa"),
                  dict(base, event="stop", ts=iso(now - 800), main_after="aaa"),
@@ -907,7 +907,7 @@ class CLI(StateTest):
                 self.assertNotIn("changed while", out)
 
     def test_audit_skips_an_activation_that_stopped_before_the_window(self):
-        now = checks.time.time()
+        now = checks.time.time()  # wall clock
         base = {"runner": "claude", "id": "w1", "agent_type": "writer"}
         self.rows(dict(base, event="start", ts=iso(now - 3 * 3600), main_before="aaa"),
                   dict(base, event="stop", ts=iso(now - 2 * 3600), main_after="bbb"),

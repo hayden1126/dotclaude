@@ -89,7 +89,7 @@ class GuardEnv(unittest.TestCase):
         os.environ.pop("SANDBOX_RUNTIME", None)
         self.watches = os.path.join(self.state, "dotclaude", "watches")
         self.transcript = self.path("s1.jsonl")
-        self.now = time.time()
+        self.now = time.time()  # wall clock
         # Each acknowledgment starts a detached waiter (spawn_waiter). Here that is recorded
         # instead, and reads as started, unless a test sets self.spawner to another function.
         self.spawned, self.spawner = [], self.record_spawn
@@ -1561,7 +1561,7 @@ class DetachedWaiters(GuardEnv):
         def lapsed_at_max(w):  # what its beats, then its exit at --max, leave
             dc.unblock(w)
             w.update(waiter_detached=True, waiter_heartbeat=dc.now_iso(),
-                     detached_at=guard.iso(time.time() - dc.DETACHED_MAX_MIN * 60))
+                     detached_at=guard.iso(time.time() - dc.DETACHED_MAX_MIN * 60))  # wall clock
         dc.update_watch("w-1", lapsed_at_max)
         self.assertEqual(self.decide(prompt_id="p3"), self.block(self.lapse_reason()))
         self.decide(prompt_id="p4")

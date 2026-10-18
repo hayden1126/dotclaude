@@ -457,11 +457,11 @@ class LeadHeal(test_cli.LeadChain):
     def marker(self, pane="%3", tab_pane=None, **fields):
         """pass-respawn's pass-last marker for pane, as write_last writes it: the session that
         passed (OLD by default) and the tab it passed in (pane on this test's server)."""
-        tab = {"socket": self.tmux_sock, "server_start": int(time.time()) - 600,
+        tab = {"socket": self.tmux_sock, "server_start": int(time.time()) - 600,  # wall clock
                "server_pid": os.getpid(), "pane": tab_pane or pane}
         self.write(os.path.join(self.tmp, "state", "dotclaude", "pass-last", pane[1:] + ".json"),
                    json.dumps({"tab": tab, "from_session": self.OLD,
-                               "written_at": time.time() - 1, "shown": False,
+                               "written_at": time.time() - 1, "shown": False,  # wall clock
                                "replies": [{"prompt_id": "p1", "text": "done", "time": 1.0}],
                                **fields}))
 
@@ -610,7 +610,7 @@ class LeadHeal(test_cli.LeadChain):
         before = self.write_record(self.exited(), 1)
         cases = {
             "no marker": dict(),
-            "a stale marker": dict(written_at=time.time() - 300),
+            "a stale marker": dict(written_at=time.time() - 300),  # wall clock
             "another session's pass": dict(from_session="sess-other-0001"),
             "another pane's pass": dict(pane="%4"),
             "a tab naming another pane": dict(tab_pane="%4"),

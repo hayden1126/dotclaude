@@ -511,8 +511,8 @@ class Transcript(Plain):
         other = os.path.join(self.tmp, "elsewhere", f"{t.SID}.jsonl")
         self.write(other, json.dumps(t.typed("before")) + "\n")
         self.write(os.path.join(self.state, "stops", f"{t.SID}.json"),
-                   json.dumps({"session_id": t.SID, "time": time.time() - 30, "waits": [],
-                               "tasks": [], "transcript_path": other}))
+                   json.dumps({"session_id": t.SID, "time": time.time() - 30,  # wall clock
+                               "waits": [], "tasks": [], "transcript_path": other}))
         plan = self.plan()
         self.assertEqual(plan.transcript, other)
         with open(other, "a") as f:

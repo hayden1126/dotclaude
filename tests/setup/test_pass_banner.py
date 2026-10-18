@@ -112,7 +112,7 @@ class Banner(unittest.TestCase):
 
     def entry(self, pane="7", message=REPLY, **fields):
         """A pass-last entry; message= gives it one reply."""
-        e = {"tab": TAB, "from_session": "old-session-1", "written_at": time.time(),
+        e = {"tab": TAB, "from_session": "old-session-1", "written_at": time.time(),  # wall clock
              "replies": [{"prompt_id": "p1", "text": message, "time": 1.0}], "shown": False,
              **fields}
         os.makedirs(self.dir, exist_ok=True)
@@ -140,10 +140,11 @@ class Banner(unittest.TestCase):
         self.assertEqual(os.listdir(self.dir), ["7.json"])  # renamed into place
 
     def test_a_stale_entry_shows_nothing(self):
-        self.entry(written_at=time.time() - 121)
+        self.entry(written_at=time.time() - 121)  # wall clock
         self.assertIsNone(self.start())
         self.assertIs(self.read()["shown"], False)
-        self.entry(written_at=time.time() + 60)  # from the future: not this respawn either
+        # From the future: not this respawn either.
+        self.entry(written_at=time.time() + 60)  # wall clock
         self.assertIsNone(self.start())
 
     def test_the_wrong_tab_shows_nothing(self):
@@ -210,7 +211,7 @@ class Banner(unittest.TestCase):
     def test_a_lone_surrogate_does_not_break_it(self):
         os.makedirs(self.dir)
         with open(os.path.join(self.dir, "7.json"), "w") as f:
-            f.write(json.dumps({"tab": TAB, "written_at": time.time(), "shown": False,
+            f.write(json.dumps({"tab": TAB, "written_at": time.time(), "shown": False,  # wall clock
                                 "replies": [{"prompt_id": "p1", "text": "a@b"}]})
                     .replace("@", "\\ud800"))
         self.assertEqual(self.start(), head(at=None) + "a?b")

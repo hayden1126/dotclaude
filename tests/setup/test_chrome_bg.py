@@ -792,8 +792,9 @@ class PageCount(unittest.TestCase):
 # -Kill ran), session-<id> (the supervisor's pid and session id), alive-<id> (while "Chrome" runs)
 # and chrome-<id>.pid. /json/list holds one page per createTarget less each closeTarget, unless a
 # test scripts it in pages-<id>: one answer per read ("0", "1", or "fail" for a 500), the last one
-# kept. list-<id> notes each answer and the time.time() it went out. FAKE_LIST_DELAY slows every
-# /json/list answer, FAKE_FIRST_EMPTY_DELAY the first "0".
+# kept. list-<id> notes each answer and the time.monotonic() it went out (system-wide, so the
+# tests compare it with their own). FAKE_LIST_DELAY slows every /json/list answer,
+# FAKE_FIRST_EMPTY_DELAY the first "0".
 FAKE_COMMON = r'''
 import json, os, re, sys, time
 
@@ -842,7 +843,7 @@ if "-Scan" in args:
     scan, full = copy(C["scan_empty"]), C["scan"]
     for name in sorted(os.listdir(base)):
         p = os.path.join(base, name)
-        age = int(time.time() - os.path.getmtime(p))
+        age = int(time.time() - os.path.getmtime(p))  # wall clock
         if re.fullmatch(r"[0-9a-f]{8}", name) and os.path.isdir(p):
             scan["dirs"].append(dict(full["dirs"][0], id=name, ageSec=age))
             if os.path.exists(os.path.join(root, "alive-" + name)):
@@ -1109,7 +1110,7 @@ def handle(c):
             if answer == "0" and not empty_delayed:  # the first read that finds no page is slow
                 empty_delayed.append(True)
                 time.sleep(float(env.get("FAKE_FIRST_EMPTY_DELAY", "0")))
-            note("list-" + rid, "%s %.3f" % (answer, time.time()))
+            note("list-" + rid, "%s %.3f" % (answer, time.monotonic()))
             if answer == "fail":
                 c.sendall(b"HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\n\r\n")
                 return
@@ -1533,7 +1534,8 @@ class Live(unittest.TestCase):
     def put_record(self, rid, pid, start, **extra):
         os.makedirs(self.recdir, exist_ok=True)
         rec = {"id": rid, "kind": "start", "owner": {"pid": pid, "start": start}, "cwd": "/x",
-               "created": time.time() - 60, "expires": None, "port": None, "wsPath": None,
+               "created": time.time() - 60,  # wall clock
+               "expires": None, "port": None, "wsPath": None,
                "runDir": f"{WINROOT}\\{rid}", **extra}
         with open(os.path.join(self.recdir, rid + ".json"), "w") as f:
             json.dump(rec, f)
@@ -1541,7 +1543,7 @@ class Live(unittest.TestCase):
     def put_dir(self, rid, age):
         d = os.path.join(self.base, rid)
         os.makedirs(os.path.join(d, "profile"), exist_ok=True)
-        os.utime(d, (time.time() - age,) * 2)
+        os.utime(d, (time.time() - age,) * 2)  # wall clock
 
     def test_gc_stops_runs_whose_owner_is_dead(self):
         live = self.sleeper()
@@ -1561,7 +1563,7 @@ class Live(unittest.TestCase):
 
     def test_gc_stops_a_run_past_its_ttl(self):
         owner, start = self.owner("bbbb0001")
-        self.put_record("bbbb0001", owner.pid, start, expires=time.time() - 1)
+        self.put_record("bbbb0001", owner.pid, start, expires=time.time() - 1)  # wall clock
         r = self.cli("stop", "--gc")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(owner.wait(10), -signal.SIGTERM, "the holder got SIGTERM")
@@ -1585,7 +1587,7 @@ class Live(unittest.TestCase):
         [arec] = self.records()
         # X names A's live holder (a chrome-bg, right start time) but A's supervisor is not X's.
         self.put_record("cafe0001", arec["owner"]["pid"], arec["owner"]["start"],
-                        expires=time.time() - 1)
+                        expires=time.time() - 1)  # wall clock
         r = self.cli("stop", "--gc")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("not provably this run's chrome-bg, so it was not signalled", r.stdout)
@@ -1602,8 +1604,8 @@ class Live(unittest.TestCase):
             json.dump(rec, f)
 
     def test_malformed_records_cannot_stop_gc(self):
-        base = {"kind": "start", "cwd": "/x", "created": time.time() - 60,
-                "expires": time.time() - 1}
+        base = {"kind": "start", "cwd": "/x", "created": time.time() - 60,  # wall clock
+                "expires": time.time() - 1}  # wall clock
         self.put_raw("dddd0101", dict(base, id="dddd0101"))                          # no owner
         self.put_raw("dddd0102", dict(base, id="dddd0102", owner={"pid": "123", "start": "1"}))
         self.put_raw("dddd0103", dict(base, id="dddd0103", owner=[]))
@@ -1735,7 +1737,7 @@ class Live(unittest.TestCase):
                     c.sendall(b"not http at all\r\n\r\n")
         threading.Thread(target=serve, daemon=True).start()
         owner, start = self.owner("bbbb0004")
-        self.put_record("bbbb0004", owner.pid, start, expires=time.time() - 1)
+        self.put_record("bbbb0004", owner.pid, start, expires=time.time() - 1)  # wall clock
         self.put_dir("bbbb0004", 600)
         with open(os.path.join(self.base, "bbbb0004", "profile", "DevToolsActivePort"), "w") as f:
             f.write("%d\n/devtools/browser/abc" % srv.getsockname()[1])
@@ -2037,7 +2039,7 @@ class Live(unittest.TestCase):
         return rid, os.path.join(self.recdir, rid + ".holder.log")
 
     def lists(self, rid):
-        """The /json/list answers so far: (answer, time.time() it went out)."""
+        """The /json/list answers so far: (answer, time.monotonic() it went out)."""
         if not self.has("list-" + rid):
             return []
         return [(a, float(t)) for a, t in (ln.split() for ln in self.notes("list-" + rid))]
@@ -2066,7 +2068,7 @@ class Live(unittest.TestCase):
         rid, log = info["id"], os.path.join(self.recdir, info["id"] + ".holder.log")
         path = urlparse(cb.json_version(info["port"])["webSocketDebuggerUrl"]).path
         cdp = cb.CDP(cb.browser_ws(info["port"], path))
-        t0 = time.time()
+        t0 = time.monotonic()
         cdp.send("Target.closeTarget", {"targetId": "T1"})  # page0 (the fake doesn't check ids)
         cdp.close()
         self.wait_for(lambda: self.has("eof-" + rid) and not self.records(),
@@ -2188,7 +2190,7 @@ class Live(unittest.TestCase):
 
     def test_gc_prunes_old_logs(self):
         os.makedirs(self.recdir)
-        old, new = time.time() - 8 * 86400, time.time() - 86400
+        old, new = time.time() - 8 * 86400, time.time() - 86400  # wall clock
         paths = {os.path.join(self.base, "dddd0001.log"): old,
                  os.path.join(self.base, "dddd0002.log"): new,
                  os.path.join(self.base, "notes.log"): old,

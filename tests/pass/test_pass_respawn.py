@@ -218,14 +218,14 @@ class Base(LanesRepo):
         self.addCleanup(patch.stop)
         self.state = os.path.join(self.tmp, "state", "dotclaude")
         self.sessions = os.path.join(self.home, ".claude", "sessions")
-        self.started = time.time() - 60
+        self.started = time.time() - 60  # wall clock
         self.session_cwd = self.main
         self.script = ["busy", "idle"]
         self.stop_waits = []
         self.stop_tasks = None  # every task label; None means the waits
         # The stop record's `replies` (hooks/stop_ring.py); None writes no key.
         self.stop_replies = [{"prompt_id": "p1", "text": "Done: the handoff is committed.",
-                              "time": time.time()}]
+                              "time": time.time()}]  # wall clock
         self.start_now = START
         self.status, self.updated, self.stopped = None, 0, False
         real_start = self.mod.proc_start
@@ -244,7 +244,7 @@ class Base(LanesRepo):
     def session_record(self, entry):
         status = entry.get("status")
         if status != self.status:
-            self.status, self.updated = status, int(time.time() * 1000) + 1
+            self.status, self.updated = status, int(time.time() * 1000) + 1  # wall clock
             if status in ("idle", "shell") and self.stop_waits is not None and not self.stopped:
                 self.write_stop(self.stop_waits)
                 self.stopped = True
@@ -324,7 +324,8 @@ class Base(LanesRepo):
 
     def write_stop(self, waits, at=None):
         tasks = waits if self.stop_tasks is None else self.stop_tasks
-        rec = {"session_id": SID, "time": at or time.time(), "waits": waits, "tasks": tasks}
+        rec = {"session_id": SID, "time": at or time.time(),  # wall clock
+               "waits": waits, "tasks": tasks}
         if self.stop_replies is not None:
             rec["replies"] = self.stop_replies
         self.write(os.path.join(self.state, "stops", f"{SID}.json"), json.dumps(rec))
@@ -499,7 +500,7 @@ class Plain(Base):
         # Past the gate (which fails it) the waiter's own read still says unapproved.
         self.commit("STATUS.md", APPROVED, msg="Handoff")
         plan = self.plan()
-        later = {"startedAt": int((time.time() + 2 * 86400) * 1000)}
+        later = {"startedAt": int((time.time() + 2 * 86400) * 1000)}  # wall clock
         self.assertFalse(self.mod.approved_now(plan, later))
         self.assertTrue(self.mod.approved_now(plan, {"startedAt": int(self.started * 1000)}))
         self.assertFalse(self.mod.approved_now(plan, {}))
@@ -678,7 +679,7 @@ class Plain(Base):
         self.assertEqual(carry["tab"], {"socket": "/tmp/tmux-1000/default",
                                         "server_start": 1791000000, "server_pid": 222,
                                         "pane": "%4"})
-        self.assertLess(abs(time.time() - carry["written_at"]), 30)
+        self.assertLess(abs(time.time() - carry["written_at"]), 30)  # wall clock
         self.assertIn(f"session={SID} pane=%4 mode=plain outcome=respawn", self.log())
 
     def test_compact_waits_for_idle_and_never_respawns(self):
@@ -714,7 +715,7 @@ class Plain(Base):
                                        "pane": "%4"})
         self.assertEqual((last["from_session"], last["replies"], last["shown"]),
                          (SID, self.REPLIES, False))
-        self.assertLess(abs(time.time() - last["written_at"]), 30)
+        self.assertLess(abs(time.time() - last["written_at"]), 30)  # wall clock
         self.assertTrue(os.path.exists(self.carry_marker()))  # its own file, beside the carry
 
     def test_only_replies_with_text_are_copied(self):
@@ -888,7 +889,7 @@ class Plain(Base):
 
     def test_old_last_replies_are_pruned_once_a_day(self):
         lasts = os.path.dirname(self.last_reply())
-        now = time.time()
+        now = time.time()  # wall clock
 
         def touch(name, age):
             self.write(os.path.join(lasts, name), "{}")
@@ -1145,7 +1146,7 @@ class Plain(Base):
         # Skill step 2 reads this, never ps: tasks aren't child processes, MCP servers are.
         self.stop_tasks = [DEPLOY, {"label": "shell", "id": "b2", "description": "npm run dev"},
                            WATCH, {"label": "dream", "id": "d1"}, "teammate"]
-        self.write_stop(["shell"], at=time.time() - 90)
+        self.write_stop(["shell"], at=time.time() - 90)  # wall clock
         code, out = self.run_pass("--tasks")
         self.assertEqual(code, 0, out)
         self.assertIn(f"session {SID} at its last Stop, 1 min ago", out)
@@ -1172,7 +1173,7 @@ class Plain(Base):
     def test_a_record_time_that_isnt_finite_refuses(self):
         for when in (float("nan"), float("inf")):
             with self.subTest(when=when):
-                plan = types.SimpleNamespace(session_id=SID, called=time.time())
+                plan = types.SimpleNamespace(session_id=SID, called=time.time())  # wall clock
                 rec = {"time": when, "waits": [], "tasks": []}
                 self.assertEqual(self.mod.stop_problem(plan, rec)[0],
                                  "no stop record since the call")
@@ -1186,12 +1187,14 @@ class Plain(Base):
         # Review round 1: a wait with no task entry, or waits that aren't a list, must not
         # print "none" or "doesn't block" when the waiter would refuse that record.
         stops = os.path.join(self.state, "stops", f"{SID}.json")
-        self.write(stops, json.dumps({"time": time.time(), "waits": ["shell"], "tasks": []}))
+        self.write(stops, json.dumps({"time": time.time(),  # wall clock
+                                      "waits": ["shell"], "tasks": []}))
         code, out = self.run_pass("--tasks")
         self.assertEqual(code, 0, out)
         self.assertIn("\n  shell: blocks a plain pass; the turn waits on it\n", out)
         self.assertNotIn("\n  none\n", out)
-        self.write(stops, json.dumps({"time": time.time(), "waits": "shell", "tasks": [WATCH]}))
+        self.write(stops, json.dumps({"time": time.time(),  # wall clock
+                                      "waits": "shell", "tasks": [WATCH]}))
         code, out = self.run_pass("--tasks")
         self.assertIn("\n  (waits can't be read: a plain pass would refuse)\n", out)
 
@@ -1222,7 +1225,7 @@ class Plain(Base):
                 self.assertNotIn("no stop record", out)
                 self.assertIn(says, out)
         os.rmdir(path)
-        self.write(path, json.dumps({"time": time.time(), "waits": []}))
+        self.write(path, json.dumps({"time": time.time(), "waits": []}))  # wall clock
         code, out = self.run_pass("--tasks")
         self.assertIn("no task list: a plain pass would refuse", out)
         self.write_stop([])
@@ -1242,7 +1245,7 @@ class Plain(Base):
 
     def test_a_stop_record_from_before_the_call_drops_busy(self):
         self.stop_waits = None
-        self.write_stop([], at=time.time() - 30)
+        self.write_stop([], at=time.time() - 30)  # wall clock
         code, out = self.run_pass("--foreground")
         self.assertEqual(code, 1, out)
         self.assertDropped("busy", "no record since the call")
@@ -1901,13 +1904,14 @@ class Notices(Handed):
                 self.mod.tmux, self.mod.pane_problem = real
                 with contextlib.suppress(FileNotFoundError):
                     os.remove(self.notice_file())
-                began = time.time()
+                began = time.time()  # wall clock
                 outcome, mode, want = case()
                 n = self.notice()
                 self.assertEqual(set(n), self.FIELDS)
                 self.assertEqual((n["v"], n["session_id"], n["outcome"], n["mode"]),
                                  (1, SID, outcome, mode))
-                self.assertTrue(began <= n["called"] <= n["dropped"] <= time.time(), n)
+                ended = time.time()  # wall clock
+                self.assertTrue(began <= n["called"] <= n["dropped"] <= ended, n)
                 self.assertEqual(n["text"], want(n))
                 self.assertEqual(os.stat(self.notice_file()).st_mode & 0o777, 0o600)
                 seen.add(outcome)
@@ -2109,7 +2113,7 @@ class Notices(Handed):
         self.assertTrue(os.path.exists(self.notice_file("other-session")))
 
     def test_old_notices_and_taken_files_are_pruned_at_the_call(self):
-        notices, now = os.path.dirname(self.notice_file()), time.time()
+        notices, now = os.path.dirname(self.notice_file()), time.time()  # wall clock
         for name, age in (("old.json", 8 * 86400), ("new.json", 6 * 86400),
                           ("a.json.12.taken", 2 * 86400), ("b.json.13.taken", 12 * 3600)):
             self.write(os.path.join(notices, name), "{}")
