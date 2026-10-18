@@ -83,6 +83,11 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     [[dotclaude-tab-bar]], remote-paste's live tests in [[dotclaude-remote-paste]]. #115 left the
     tab glyph's prompt at v4: an ask a reply only announces for later stays a documented known
     miss (`hooks/wants_input.py`'s docstring), since its one prompt round flipped 10 verdicts.
+  - **Live lanes (opened 2026-10-18, Hayden's pick: both at once, disjoint files), merge
+    order:** 1 tab-pin (`fix/tab-pin-lead`), 2 cross-lane (`feat/cross-lane-checks`). Both
+    branched from e2a2294. Their only shared file is README.md, in different sections. tab-pin
+    carries the lead's notes. If cross-lane is ready first, the lead swaps the order. Each
+    record's Brief has the detail; the backlog items below keep the evidence.
   - The parked json-depth sweep (21 files, among them the delegation enforcement scripts) is on
     `fix/json-depth-sweep`, a local branch never pushed: keep it while the sweep is in the
     backlog. Shipping it first needs a check of how each enforcement site fails
@@ -101,7 +106,7 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     rerun the menu-clip repro and the tmux suites. If it fixes the clip, install at a quiet
     moment (a server restart; claude-restore reopens the tabs) and drop the row-0 menu rule.
     Until then, 3.7c's default menus that dotclaude doesn't own still clip under a top bar.
-  - **Cross-lane checks, next after monotonic** (Hayden's pick 2026-10-18: A and B as one lane).
+  - **Cross-lane checks (lane cross-lane, live)** (Hayden's pick 2026-10-18: A and B as one lane).
     Lanes plan alone, and nothing compares their designs: on 2026-10-17 restore-effort's brief
     listed 7 files, #116 changed 14 (among them `lane` and `lanelib.py`, done-rerun's files), and
     the brief named no overlap with done-rerun. A: `lane ls` flags two live lanes whose actual
@@ -110,7 +115,7 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     runs the suites there under `lane lock suite` (the trial-tree traps are in
     [[dotclaude-lanes]]). The lead plan review (C) was not picked. Files: `skills/lanes/scripts/
     lane`, `lanelib.py`, `tests/lanes`, `skills/lanes/SKILL.md`, `docs/lanes.md`.
-  - **A tab-bar pin outlives the reason for it, after the cross-lane checks** (Hayden's design
+  - **A tab-bar pin outlives the reason for it (lane tab-pin, live)** (Hayden's design
     2026-10-18). Seen 2026-10-17: done-rerun's close at 22:05 left dotclaude with no lanes, so
     the lead's tab (`@3`) fell to the shared row. A move there at 22:37:33 ran `put()`, which pins
     every member of the row (`@tab_place` row `s`, pos 0-3 on `@1 @51 @3 @57`, same second), and
@@ -120,9 +125,8 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     before or not, resets its pin and opens its repo's row. That needs the kind at pin time in
     the placement; `parse_place` reads exactly four keys, so the old form must keep reading (no
     kind: no reset, today's behavior). Files: `tmux/tmux-tab-bar`,
-    `tests/setup/test_tmux_tab_bar.py`, README's tab-bar section. Branch after monotonic merges
-    (it changes 8 lines of that test file); any new `time.time()` in tests needs a `# wall clock`
-    marker, or monotonic's guard (`tests/setup/test_clock_use.py`) fails.
+    `tests/setup/test_tmux_tab_bar.py`, README's tab-bar section. Any new `time.time()` in tests
+    needs a `# wall clock` marker, or the guard (`tests/setup/test_clock_use.py`) fails.
   - **chrome-bg's TTL loop counts down on the wall clock** (from lane monotonic, 2026-10-18).
     `bin/chrome-bg:1314` and `:1353` wait until the run record's `expires`, so a forward clock
     step cuts a TTL short by up to 0.6 s. The record stays wall clock (`ls` and gc read it,
