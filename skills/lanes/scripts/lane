@@ -1889,12 +1889,13 @@ def failing_ids(lines: list[str]) -> list[str]:
 
 
 def trial_git(repo: Repo, args: list[str], ok: tuple[int, ...] = (0,),
-              input: str | None = None) -> subprocess.CompletedProcess:
+              env: dict[str, str] | None = None) -> subprocess.CompletedProcess:
     """git in the lane (`trial` runs sandboxed), bounded by TRIAL_GIT_WAIT. Running out, or an
-    exit outside ok, aborts the trial with git's message."""
+    exit outside ok, aborts the trial with git's message. env, when given, replaces every
+    inherited GIT_* variable (lanelib.git)."""
     sub = next((a for a in args if a[:1] != "-" and "=" not in a), "git")
     try:
-        p = git(args, repo.toplevel, timeout=TRIAL_GIT_WAIT, input=input)
+        p = git(args, repo.toplevel, timeout=TRIAL_GIT_WAIT, env=env)
     except subprocess.TimeoutExpired:
         raise LaneError(f"git {sub} took over {TRIAL_GIT_WAIT} s, so the trial stopped")
     if p.returncode not in ok:
@@ -1909,32 +1910,26 @@ def merged_in(repo: Repo, sha: str, cur: str) -> bool:
                      ok=(0, 1)).returncode == 0
 
 
-def merge_written(repo: Repo, ours: str, theirs: str,
-                  label: str) -> tuple[str, list[str] | None]:
-    """(the tree git wrote, None) when commit theirs merges cleanly into ours, else (the tree it
-    wrote with conflict markers in, the paths it names as conflicted, which may be none). Writes
-    objects only. Any other git outcome (unrelated histories, a bad commit) aborts."""
+def merge_tree(repo: Repo, ours: str, theirs: str, label: str) -> tuple[str | None, list[str]]:
+    """(the merged tree, []) when commit theirs merges cleanly into ours, else (None, the paths
+    git names as conflicted, which may be none). Writes objects only. Any other git outcome
+    (unrelated histories, a bad commit) aborts."""
     p = trial_git(repo, ["merge-tree", "--write-tree", "-z", "--name-only", "--no-messages",
                          "--end-of-options", ours, theirs], ok=(0, 1))
     tree, *paths = p.stdout.split("\0")
+    if p.returncode == 1:
+        return None, [x for x in paths if x]
     if not lanelib.SHA_RE.fullmatch(tree):
         raise LaneError(f"git merge-tree gave no tree for {label}, so the trial stopped")
-    return tree, ([x for x in paths if x] if p.returncode == 1 else None)
+    return tree, []
 
 
-def merge_tree(repo: Repo, ours: str, theirs: str, label: str) -> tuple[str | None, list[str]]:
-    """(the merged tree, []) when commit theirs merges cleanly into ours, else (None, the paths
-    git names as conflicted, which may be none)."""
-    tree, conflicted = merge_written(repo, ours, theirs, label)
-    return (tree, []) if conflicted is None else (None, conflicted)
-
-
-def trial_commit(repo: Repo, tree: str, cur: str, sha: str, label: str) -> str:
-    """The merge commit of tree with parents cur and sha. It is dangling (no ref moves) and
-    carries a fixed identity, so no user config is needed and none signs it."""
+def trial_commit(repo: Repo, tree: str, parents: list[str], message: str) -> str:
+    """A commit of tree with parents. It is dangling (no ref moves) and carries a fixed identity,
+    so no user config is needed and none signs it."""
     return trial_git(repo, ["-c", f"user.name={TRIAL_IDENTITY[0]}", "-c",
                             f"user.email={TRIAL_IDENTITY[1]}", "commit-tree", "--no-gpg-sign",
-                            "-p", cur, "-p", sha, "-m", f"lane trial: merge {label}",
+                            *[x for p in parents for x in ("-p", p)], "-m", message,
                             tree]).stdout.strip()
 
 
@@ -1944,46 +1939,45 @@ def merge_onto(repo: Repo, cur: str, sha: str, label: str) -> tuple[str, list[st
     tree, paths = merge_tree(repo, cur, sha, label)
     if tree is None:
         return cur, paths
-    return trial_commit(repo, tree, cur, sha, label), None
+    return trial_commit(repo, tree, [cur, sha], f"lane trial: merge {label}"), None
 
 
-def tree_entries(repo: Repo, treeish: str) -> list[tuple[str, str, str, str]]:
-    """treeish's top-level entries in git's order, each (mode, type, oid, name). Objects only."""
-    out = []
-    for record in trial_git(repo, ["ls-tree", "-z", "--end-of-options", treeish]).stdout.split(
-            "\0"):
-        if record:
-            meta, name = record.split("\t", 1)
-            mode, kind, oid = meta.split(" ")
-            out.append((mode, kind, oid, name))
-    return out
-
-
-def status_file(entries: list[tuple[str, str, str, str]]) -> tuple[str, str] | None:
-    """(mode, oid) of the top-level STATUS.md among entries when it is a file, else None."""
-    return next(((mode, oid) for mode, kind, oid, name in entries
-                 if name == "STATUS.md" and kind == "blob"), None)
+def status_entry(repo: Repo, commit: str) -> tuple[str, str] | None:
+    """(mode, oid) of commit's top-level STATUS.md when it is a file, else None. Objects only,
+    and only that entry is listed, so no other name passes through text."""
+    out = trial_git(repo, ["ls-tree", "-z", "--end-of-options", commit, "STATUS.md"]).stdout
+    for record in filter(None, out.split("\0")):
+        meta, name = record.split("\t", 1)
+        mode, kind, oid = meta.split(" ")
+        if name == "STATUS.md" and kind == "blob":
+            return mode, oid
+    return None
 
 
 LEAD_LINE_RE = re.compile(r"^Lead branch: `([^`\n]+)`", re.MULTILINE)
 
 
-def carry_merge(repo: Repo, cur: str, sha: str, lane_id: str, conflicted: list[str],
-                baseline: str) -> tuple[str, str] | None:
-    """(the merge commit, the report's line) when lane lane_id's head sha conflicts with cur in
-    STATUS.md alone, the baseline's STATUS.md names the lead's branch (its `Lead branch:` line),
-    and that branch holds a STATUS.md. Lanes that carry the lead's notes from different lead
-    heads (after the merge order changes) always conflict there, and a carry settles it by
-    taking the lead branch's STATUS.md whole, so the merge does too: git's merged tree with
-    that file swapped in. None otherwise, and the conflict stays one (PLAN.md has other
-    writers, so a conflict there is always real)."""
-    if conflicted != ["STATUS.md"]:
+class Lead(NamedTuple):
+    """The lead's notes a trial puts in every commit it merges: the branch, its commit, and that
+    commit's STATUS.md (mode, oid)."""
+    name: str
+    commit: str
+    mode: str
+    oid: str
+
+
+def lead_status(repo: Repo, commit: str) -> Lead | None:
+    """The lead's notes when commit's STATUS.md is a file with a `Lead branch:` line naming a
+    plain branch (lanelib.BRANCH_RE) that resolves and holds STATUS.md as a file, else None.
+    Objects only; a STATUS.md that isn't text fails it."""
+    own = status_entry(repo, commit)
+    if own is None:
         return None
-    ours = status_file(tree_entries(repo, baseline))
-    if ours is None:
+    try:
+        text = trial_git(repo, ["cat-file", "blob", own[1]]).stdout
+    except UnicodeDecodeError:
         return None
-    m = LEAD_LINE_RE.search(trial_git(repo, ["cat-file", "blob", "--end-of-options",
-                                             ours[1]]).stdout)
+    m = LEAD_LINE_RE.search(text)
     name = m.group(1) if m else None
     if name is None or not lanelib.BRANCH_RE.fullmatch(name):
         return None
@@ -1992,18 +1986,57 @@ def carry_merge(repo: Repo, cur: str, sha: str, lane_id: str, conflicted: list[s
     if p.returncode:
         return None
     lead = p.stdout.strip()
-    theirs = status_file(tree_entries(repo, lead))
+    theirs = status_entry(repo, lead)
     if theirs is None:
         return None
-    tree, _ = merge_written(repo, cur, sha, lane_id)
-    # mktree sorts what it reads, so the lead's entry can go last.
-    entries = [e for e in tree_entries(repo, tree) if e[3] != "STATUS.md"]
-    entries.append((theirs[0], "blob", theirs[1], "STATUS.md"))
-    spliced = trial_git(repo, ["mktree", "-z"], input="".join(
-        f"{mode} {kind} {oid}\t{path}\0" for mode, kind, oid, path in entries)).stdout.strip()
-    return (trial_commit(repo, spliced, cur, sha, lane_id),
-            f"lane trial: lane {lane_id} conflicts in STATUS.md alone, which carries the lead's "
-            f"notes: the merge takes {name}'s ({lead[:12]}), as a carry would")
+    return Lead(name, lead, *theirs)
+
+
+class LeadStatus:
+    """Gives each commit a trial merges the lead's STATUS.md (`Lead branch:`, from lead_status),
+    so lanes that carry the lead's notes from different lead heads (after the merge order
+    changes) never conflict there: a carry takes the lead branch's STATUS.md whole, so every
+    merge holds that file already. A commit whose STATUS.md is the lead's stays itself; any
+    other gets a dangling child with that one entry set, built in a temporary index so no other
+    name passes through text. With no lead, every commit stays itself. A context manager: it
+    removes its scratch dir (trial_prefix's name, so a killed run's is a leftover)."""
+
+    def __init__(self, repo: Repo, lead: Lead | None, prefix: str, tmp: str):
+        self.repo, self.lead, self.prefix, self.tmp = repo, lead, prefix, tmp
+        self.made: dict[str, str] = {}
+        self.scratch: str | None = None
+
+    def __enter__(self) -> "LeadStatus":
+        return self
+
+    def __exit__(self, *exc) -> None:
+        if self.scratch:
+            shutil.rmtree(self.scratch, ignore_errors=True)
+
+    @property
+    def changed(self) -> bool:
+        return any(k != v for k, v in self.made.items())
+
+    def __call__(self, commit: str) -> str:
+        if self.lead is None:
+            return commit
+        if commit not in self.made:
+            self.made[commit] = self.build(commit)
+        return self.made[commit]
+
+    def build(self, commit: str) -> str:
+        lead = self.lead
+        if status_entry(self.repo, commit) == (lead.mode, lead.oid):
+            return commit
+        if self.scratch is None:
+            self.scratch = tempfile.mkdtemp(prefix=self.prefix, dir=self.tmp)
+        env = {"GIT_INDEX_FILE": os.path.join(self.scratch, "index")}
+        trial_git(self.repo, ["read-tree", "--end-of-options", commit], env=env)
+        trial_git(self.repo, ["update-index", "--add", "--replace", "--cacheinfo",
+                              f"{lead.mode},{lead.oid},STATUS.md"], env=env)
+        tree = trial_git(self.repo, ["write-tree"], env=env).stdout.strip()
+        return trial_commit(self.repo, tree, [commit],
+                            f"lane trial: STATUS.md from {lead.name}")
 
 
 def trial_prefix(repo: Repo, lane_id: str) -> str:
@@ -2113,7 +2146,11 @@ def cmd_trial(args) -> int:
 
 
 def trial(repo: Repo, me: dict, args) -> int:
-    """cmd_trial's work, under its lock."""
+    """cmd_trial's work, under its lock. When this lane's HEAD names the lead's branch in its
+    STATUS.md (lead_status), every commit it merges (HEAD, the base, each lane's head) and each
+    one conflict_line tries holds the lead's STATUS.md first (LeadStatus), so carries of the
+    lead's notes never conflict, as a carry settles them; the already-in checks use the commits
+    as they are."""
     cfg = repo.config()
     base_name = cfg.get("base", "origin/main")
     trees = worktree_heads(repo)
@@ -2126,38 +2163,38 @@ def trial(repo: Repo, me: dict, args) -> int:
         raise LaneError(f"{'HEAD' if head is None else base_name} doesn't name a commit here")
     if trial_git(repo, ["status", "--porcelain"]).stdout.strip():
         warn(f"lane {me['id']} has uncommitted changes: only its HEAD is tried")
-    cur = head
-    if not merged_in(repo, base, cur):
-        cur, conflicted = merge_onto(repo, cur, base, base_name)
-        if conflicted is not None:
-            raise LaneError(shown(f"{base_name} doesn't merge cleanly into lane {me['id']} ("
-                                  f"{', '.join(conflicted) or 'git named no path'}): merge "
-                                  f"{base_name} into the lane first"))
-    baseline = cur
-    chain = {"base": base, "base_name": base_name, "baseline": baseline}
-    merged, already, conflicts, carried = [], [], {}, []
-    for lane in others:
-        sha = rev(repo, lane_head(lane, trees)[1])
-        if sha is None:
-            raise LaneError(f"lane {lane['id']}'s head doesn't name a commit, so the trial "
-                            "stopped")
-        if merged_in(repo, sha, cur):
-            already.append(lane["id"])
-            continue
-        cur, conflicted = merge_onto(repo, cur, sha, lane["id"])
-        if conflicted is not None and (
-                carry := carry_merge(repo, cur, sha, lane["id"], conflicted, baseline)):
-            cur, line = carry
-            carried.append(line)
-            conflicted = None
-        if conflicted is None:
-            merged.append((lane["id"], sha))
-        else:
-            conflicts[lane["id"]] = conflict_line(repo, lane["id"], sha, conflicted, chain,
-                                                  merged, args.run)
+    with LeadStatus(repo, lead_status(repo, head), trial_prefix(repo, me["id"]), tmp) as norm:
+        cur = norm(head)
+        if not merged_in(repo, base, head):
+            cur, conflicted = merge_onto(repo, cur, norm(base), base_name)
+            if conflicted is not None:
+                raise LaneError(shown(f"{base_name} doesn't merge cleanly into lane {me['id']} ("
+                                      f"{', '.join(conflicted) or 'git named no path'}): merge "
+                                      f"{base_name} into the lane first"))
+        baseline = cur
+        chain = {"base": norm(base), "base_name": base_name, "baseline": baseline, "norm": norm}
+        merged, already, conflicts = [], [], {}
+        for lane in others:
+            sha = rev(repo, lane_head(lane, trees)[1])
+            if sha is None:
+                raise LaneError(f"lane {lane['id']}'s head doesn't name a commit, so the trial "
+                                "stopped")
+            if merged_in(repo, sha, cur):
+                already.append(lane["id"])
+                continue
+            cur, conflicted = merge_onto(repo, cur, norm(sha), lane["id"])
+            if conflicted is None:
+                merged.append((lane["id"], sha))
+            else:
+                conflicts[lane["id"]] = conflict_line(repo, lane["id"], sha, conflicted, chain,
+                                                      merged, args.run)
+        lead = norm.lead if norm.changed else None
+    if lead:
+        say(f"lane trial: STATUS.md is the lead's notes on {lead.name} ({lead.commit[:12]}) in "
+            "every merge, as a carry would make it")
     if already:
         say(f"lane trial: nothing to merge from {', '.join(already)} (already in)")
-    for line in carried + list(conflicts.values()):
+    for line in conflicts.values():
         say(shown(line))
     if not merged:
         say("lane trial: no other lane's work merged, so no suite ran")
@@ -2199,7 +2236,7 @@ def trial(repo: Repo, me: dict, args) -> int:
 def conflict_line(repo: Repo, lane_id: str, sha: str, conflicted: list[str], chain: dict,
                   merged: list[tuple[str, str]], commands: list[str]) -> str:
     """The report's line for lane lane_id, whose head sha conflicted with the merge so far
-    (chain: the base commit and its name, and the baseline). Merges decide, in this order:
+    (chain: the base commit and its name, the baseline, and norm). Merges decide, in this order:
       - with the base alone: the lane conflicts with the base itself, so it needs to merge the
         base before a trial can tell whether it conflicts with this lane (the line claims
         nothing about this lane, which the known limit below may hide);
@@ -2212,10 +2249,12 @@ def conflict_line(repo: Repo, lane_id: str, sha: str, conflicted: list[str], cha
     Not by paths: git conflicts by hunk, not by file, and names a renamed file by its new path.
     Not by this lane's HEAD: it may hold the base already, and then conflicts wherever the base
     does. A lane behind the base that also conflicts with this lane gets the first verdict
-    only; its own trial, once it merges the base, finds the rest. A conflict in STATUS.md alone
-    between carries of the lead's notes never gets here: carry_merge settles it as a carry
-    would."""
+    only; its own trial, once it merges the base, finds the rest. Each merge here takes its
+    commits through chain's norm (LeadStatus), as the trial's own merges do, so a clash of
+    carries of the lead's notes never decides a verdict."""
     paths = ", ".join(conflicted) or "git named no path"
+    norm = chain["norm"]
+    sha = norm(sha)
     base = chain["base_name"]
     tree, with_base = merge_tree(repo, chain["base"], sha, f"{lane_id} and {base}")
     if tree is None:
@@ -2226,7 +2265,7 @@ def conflict_line(repo: Repo, lane_id: str, sha: str, conflicted: list[str], cha
         return f"lane trial: conflict with lane {lane_id}: {paths}"
     pairs = []
     for other, other_sha in merged:
-        tree, both = merge_tree(repo, other_sha, sha, f"{lane_id} and {other}")
+        tree, both = merge_tree(repo, norm(other_sha), sha, f"{lane_id} and {other}")
         if tree is None:
             pairs.append(f"lane {other} ({', '.join(both) or 'git named no path'})")
     whom = (" and ".join(pairs) if pairs else

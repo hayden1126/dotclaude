@@ -114,10 +114,8 @@ def git(args: list[str],
     check: bool = False,
     timeout: float = 60,
     env: dict[str, str] | None = None,
-    input: str | None = None,
 ) -> subprocess.CompletedProcess:
-    """Run git with C-locale output; check raises CalledProcessError on a non-zero exit, and
-    input, when given, is its stdin.
+    """Run git with C-locale output; check raises CalledProcessError on a non-zero exit.
 
     Without env, the caller's environment passes through whole: `done` sets GIT_COMMON_DIR for
     every git it runs, and the tests set GIT_AUTHOR_*. With env, every inherited GIT_* variable
@@ -131,7 +129,7 @@ def git(args: list[str],
         full.update(LC_ALL="C", GIT_TERMINAL_PROMPT="0")
         full.update(env)
     return subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, env=full,
-                          check=check, timeout=timeout, input=input)
+                          check=check, timeout=timeout)
 
 
 # A plain /pass respawns the pane, which kills every background task with it. So it goes ahead

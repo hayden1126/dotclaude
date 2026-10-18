@@ -393,23 +393,24 @@ alone skips the uncommitted read then, since it can afford to.
 2. It builds the merge with no worktree: from the lane's HEAD, `git merge-tree --write-tree`
    merges the base, then each other live lane's head by id, and `git commit-tree` turns each
    clean result into a dangling commit (a fixed `lane-trial` identity, unsigned; no ref moves).
-   A conflict with the base aborts ("merge origin/main into the lane first"). A lane that
-   conflicts is skipped and the trial fails, and the report says whose conflict it is. Merges
-   decide, in order. When the other lane conflicts with the base alone, it needs to merge the
-   base before a trial can tell whether it conflicts with this lane, and this lane's ask for
-   ready goes ahead. Else, with no lane merged before it, or when it conflicts with the baseline
-   (this lane's HEAD plus the base, which merges cleanly with it), it is this lane's. Else it is
-   between that lane and lanes merged before it: the report names each of them it conflicts
-   with by itself, or the merge of them all when none does alone, and the `lane trial <id>`
-   that tries it with this lane alone. Not paths, since git conflicts by hunk, not by file (and
-   names a renamed file by its new path); not a merge with this lane's HEAD, which may hold the
-   base already and then conflicts wherever the base does. A lane behind the base that also
-   conflicts with this lane gets the base's verdict only; its own trial, once it merges the
-   base, finds the rest. One conflict is settled instead: in STATUS.md alone, when this lane's
-   STATUS.md names the lead's branch (its `Lead branch:` line) and that branch holds one. After
-   the merge order changes, two lanes carry the lead's notes from different lead heads, which
-   always conflict, so the merge takes the lead branch's STATUS.md whole, as a carry would, and
-   the report says so. Other lanes' uncommitted work isn't in the merge.
+   When the lane's STATUS.md names the lead's branch (its `Lead branch:` line) and that branch
+   holds one, every commit the trial merges or tries (this lane's HEAD, the base, each lane's
+   head) first gets the lead branch's STATUS.md, as a carry would make it, and the report says
+   so: after the merge order changes, lanes carry the lead's notes from different lead heads,
+   and those carries always conflict. A conflict with the base aborts ("merge origin/main into
+   the lane first"), except such a clash of carries in STATUS.md. A lane that conflicts is
+   skipped and the trial fails, and the report says whose conflict it is. Merges decide, in
+   order. When the other lane conflicts with the base alone, it needs to merge the base before a
+   trial can tell whether it conflicts with this lane, and this lane's ask for ready goes ahead.
+   Else, with no lane merged before it, or when it conflicts with the baseline (this lane's HEAD
+   plus the base, which merges cleanly with it), it is this lane's. Else it is between that lane
+   and lanes merged before it: the report names each of them it conflicts with by itself, or the
+   merge of them all when none does alone, and the `lane trial <id>` that tries it with this
+   lane alone. Not paths, since git conflicts by hunk, not by file (and names a renamed file by
+   its new path); not a merge with this lane's HEAD, which may hold the base already and then
+   conflicts wherever the base does. A lane behind the base that also conflicts with this lane
+   gets the base's verdict only; its own trial, once it merges the base, finds the rest. Other
+   lanes' uncommitted work isn't in the merge.
 3. It checks the merge out in a fresh `mkdtemp` tree under the temp dir, named by repo key and
    lane id, and runs each `--run` there as `sh -c`, streaming its output. One `--run` per
    suite: a chained `a && b` stops at the first failure, and `a; b` reports only the last exit.
