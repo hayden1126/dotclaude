@@ -173,9 +173,17 @@ def main_checkout(cwd):
 
 
 def checkout_status(root):
-    """sha256 of `git status` in the checkout at root, or "unknown" when git can't run."""
+    """sha256 of `git status` in the checkout at root, or "unknown" when git can't run.
+
+    The hook runs it sandbox-off in a checkout whose index and git dir the session's own
+    sandbox can write, so the status runs nothing that checkout configures.
+    --ignore-submodules=dirty still sees a submodule whose commit moved, but never runs a
+    status inside one, whose own config (a core.fsmonitor in it) sits where the sandbox can
+    write it. --no-optional-locks keeps the index unwritten, so no post-index-change hook
+    fires."""
     try:
-        out = subprocess.run(["git", "-C", root, "status", "--porcelain=v1", "-uall"],
+        out = subprocess.run(["git", "--no-optional-locks", "-C", root, "status",
+                              "--porcelain=v1", "-uall", "--ignore-submodules=dirty"],
                              capture_output=True, timeout=3).stdout
     except (OSError, subprocess.SubprocessError):
         return "unknown"

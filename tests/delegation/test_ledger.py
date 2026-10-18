@@ -474,6 +474,76 @@ def ended(ago):
         "stop_reason": "end_turn", "content": [{"type": "text", "text": "done"}]}}
 
 
+class CheckoutStatus(unittest.TestCase):
+    """checkout_status runs sandbox-off in a checkout the session's sandbox can write: git there
+    runs nothing that checkout configures. Each guard's test fails with it reverted."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.tmp = os.path.realpath(tmp.name)
+        self.env = dict(os.environ, HOME=self.tmp, GIT_CONFIG_NOSYSTEM="1",
+                        GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@example.com",
+                        GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@example.com")
+        self.repo = self.init("repo")
+
+    def git(self, cwd, *args):
+        return subprocess.run(["git", "-c", "protocol.file.allow=always", *args], cwd=cwd,
+                              env=self.env, check=True, capture_output=True, text=True).stdout
+
+    def init(self, name):
+        path = os.path.join(self.tmp, name)
+        self.git(self.tmp, "init", "-q", "-b", "main", path)
+        with open(os.path.join(path, "f"), "w") as f:
+            f.write(name)
+        self.git(path, "add", "f")
+        self.git(path, "commit", "-q", "-m", name)
+        return path
+
+    def marker_script(self, path, marker):
+        with open(path, "w") as f:
+            f.write(f"#!/bin/sh\ntouch {marker}\n")
+        os.chmod(path, 0o755)
+
+    def status(self):
+        with mock.patch.dict(os.environ, self.env):
+            return ledger_mod.checkout_status(self.repo)
+
+    def test_a_submodules_own_fsmonitor_never_runs(self):
+        sub = self.init("sub")
+        self.git(self.repo, "submodule", "add", "-q", sub, "s")
+        self.git(self.repo, "commit", "-q", "-m", "s")
+        gitdir = self.git(os.path.join(self.repo, "s"), "rev-parse", "--path-format=absolute",
+                          "--git-dir").strip()
+        marker, script = os.path.join(self.tmp, "FSM"), os.path.join(self.tmp, "fsm.sh")
+        self.marker_script(script, marker)
+        self.git(self.tmp, "config", "--file", os.path.join(gitdir, "config"), "core.fsmonitor",
+                 script)
+        before = self.status()
+        self.assertNotEqual(before, "unknown")
+        self.assertFalse(os.path.exists(marker), "the submodule's core.fsmonitor ran")
+        # A submodule whose commit moved still shows (=dirty, not =all).
+        # This commit runs in the submodule, so it would run the planted fsmonitor itself.
+        self.git(os.path.join(self.repo, "s"), "-c", "core.fsmonitor=false", "commit", "-q",
+                 "--allow-empty", "-m", "moved")
+        self.assertNotEqual(self.status(), before)
+        self.assertFalse(os.path.exists(marker), "the submodule's core.fsmonitor ran")
+
+    def test_the_index_is_never_written(self):
+        marker = os.path.join(self.tmp, "PIC")
+        os.makedirs(os.path.join(self.repo, "hk"))
+        self.marker_script(os.path.join(self.repo, "hk", "post-index-change"), marker)
+        self.git(self.repo, "config", "core.hooksPath", "hk")
+        os.utime(os.path.join(self.repo, "f"), (0, 0))  # stat-dirty: a status would refresh it
+        index = os.path.join(self.repo, ".git", "index")
+        with open(index, "rb") as f:
+            before = f.read()
+        self.assertNotEqual(self.status(), "unknown")
+        with open(index, "rb") as f:
+            self.assertEqual(f.read(), before)
+        self.assertFalse(os.path.exists(marker), "post-index-change ran")
+
+
 class AgentIndex(LedgerEnv):
     """agents/<id>.json, the per-agent liveness index the hook keeps."""
 
