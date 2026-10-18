@@ -5,13 +5,20 @@
 #   SessionStart (startup, resume, clear, compact)  write or refresh the session's entry
 #   SessionEnd                                      delete it, or mark it on reason `other`
 # One file per session: $XDG_STATE_HOME/dotclaude/open-sessions/<session_id>.json, holding
-# {session_id, cwd, transcript_path, pane, window_index, socket, server_start, server_pid, ts}
-# and, when the window has one, place, written as an fsynced tmp file plus rename. socket,
+# {session_id, cwd, transcript_path, pane, window_index, socket, server_start, server_pid, ts},
+# place when the window has one, and model and effort when the session's claude launched with
+# --model or --effort, written as an fsynced tmp file plus rename. socket,
 # server_start and server_pid (tmux's #{socket_path}, #{start_time} and #{pid}; the pid tells
 # apart two servers started in the same second) name the server the tab lives in: claude inherits
 # the pane's TMUX, so `tmux display` reaches it. place is the window's @tab_place, the tab bar's
 # row and position for it (tmux/tmux-tab-bar owns the format; here it is an opaque string, kept
 # only as 1 to 2048 bytes of UTF-8 with no control character), which claude-restore sets back.
+# model and effort are the session's claude's own launch flags: its nearest ancestor named claude
+# (a hook runs a few processes below it), read from /proc and kept only in their shape
+# (lanelib.pick_ok). claude-restore and claude-saved's Open resume the session with them, as a
+# plain pass would carry them (lanelib.carried_pick; docs/lanes.md, "Model and effort"). lanelib
+# is found through this hook's link, by absolute path only; any failure there writes the entry
+# without them.
 # Every write and delete holds open-sessions/.records.lock (flock, waiting up to 2 s, then going
 # ahead without it), as claude-saved's do: tmux-tab-bar compares and replaces a record's place
 # under it, so a record deleted or rewritten here is never brought back or overwritten by a stale
@@ -52,10 +59,23 @@ case "$input" in
   *) exit 0 ;;
 esac
 
+# lanelib, through the hook's link as installed: an absolute path only, since a relative one would
+# import from the session's cwd in code that runs outside the sandbox.
+self=$(readlink -f "$0" 2>/dev/null)
+lib=""
+[[ "$self" != /* ]] || lib="$(dirname "$(dirname "$self")")/skills/lanes/scripts"
+
 printf '%s' "$input" | \
-  REG_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/dotclaude/open-sessions" \
+  REG_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/dotclaude/open-sessions" REG_LIB="$lib" \
   REG_SERVER="$server" REG_PANE="${TMUX_PANE:-}" REG_PLACE="$place" python3 -I -c '
 import fcntl, json, os, re, sys, tempfile, time
+lanelib = None
+if os.path.isabs(os.environ.get("REG_LIB", "")):
+    sys.path.insert(0, os.environ["REG_LIB"])
+    try:
+        import lanelib
+    except Exception:   # a missing or broken lanelib costs the launch flags, never the entry
+        lanelib = None
 try:
     d = json.load(sys.stdin)
 except Exception:
@@ -88,6 +108,18 @@ def locked():
                 return None
             time.sleep(0.01)
 
+def launch_pick():
+    """The --model and --effort the session claude launched with, as entry fields: the nearest
+    ancestor named claude, its argv from /proc. {} on any failure (no lanelib, no claude above
+    this hook, an unreadable /proc), so the entry is still written."""
+    try:
+        claude = next(pid for pid, _ in lanelib.ancestry(os.getpid())
+                      if (lanelib.proc_stat(pid) or ("",))[0] == "claude")
+        flags = lanelib.pick_flags(lanelib.proc_cmdline(claude))
+        return {flag[2:]: value for flag, value in flags.items() if lanelib.pick_ok(flag, value)}
+    except Exception:
+        return {}
+
 def write(entry):
     fd, tmp = tempfile.mkstemp(dir=reg, prefix=".tmp-")
     with os.fdopen(fd, "w") as f:
@@ -116,6 +148,7 @@ if event == "SessionStart":
         size = 0
     if 1 <= size <= 2048 and not re.search(r"[\x00-\x1f\x7f]", place):
         entry["place"] = place
+    entry.update(launch_pick())
     os.makedirs(reg, exist_ok=True)
     lock = locked()   # held until exit, as below
     write(entry)

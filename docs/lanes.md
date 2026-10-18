@@ -143,6 +143,31 @@ higher levels link to lower ones through a derived view, not through copied pros
 - **Promotion at lane close:** a decision future work needs goes to memory or a committed doc,
   inside the lane's PR; the outcome goes up as one line in the project STATUS; the rest is
   archived with the record.
+- **The lead's commits ride a lane PR.** The lead commits the project STATUS on its own branch,
+  named on the STATUS's `Lead branch:` line, and opens no STATUS-only PR. The lane next in
+  merge order carries those commits in before each push and before ready (`skills/lanes/SKILL.md`,
+  Lifecycle step 6). The carry used to wait for ready, but #108, #111, #113 and #115 each went
+  ready and merged within 5 s, so the lead's notes missed main four times. One carrier, not
+  every lane (Hayden, 2026-10-17): two lanes holding two snapshots of the lead's file conflict
+  once the second merges main, while an out-of-order merge only delays the notes one PR.
+- **A copy for STATUS.md, a diff for PLAN.md.** STATUS.md is the lead's alone, so its copy is
+  right whatever the lane holds, and a copy can't conflict, even in a lane behind main. PLAN.md
+  has other writers whose edits a copy would undo, so it takes the lead's diff, from the sha the
+  last carry names: a second diff from `origin/main` no longer applies on top of the first
+  (`.lane/artifacts/carry-sim.txt` in lead-chain's closed record). `git apply -3` merges a
+  change main and the lead both hold, and the ancestor check, run before every carry
+  (`origin/main` inside the lead's branch), keeps the lead's files from undoing what main
+  gained since the lead last merged it. So the lead never amends or rebases its branch: on
+  2026-10-17 it amended a commit lead-chain had just carried, and the next carry's base was
+  left off the branch, alive only in the reflog until git expires it.
+- **The lead keeps its STATUS.md whole when it merges main**, conflict or not. Main holds
+  older carries of it. If the lead deletes a line after a carry, the lead's side shows no change
+  against the merge base while main's shows the line added, so a clean merge brings the line
+  back. The lead still reads main's side first and adds back by hand any line that isn't a
+  carry (a lane's backlog line from before the `Lead branch:` line existed). From then on a
+  lane sends such items to the lead instead of editing STATUS.md: the next carry's copy would
+  erase them. PLAN.md, with other writers, merges as usual, and the lead deletes again a line
+  it removed since its last carry: an accepted manual step, since the lead rarely edits it.
 - `templates/STATUS.md` is the project level (Direction, Backlog, Lanes, Asks, Decisions,
   Blocked, Notes); `templates/LANE.md` is the lane level, and a lane PLAN reuses
   `templates/PLAN.md`.
@@ -165,8 +190,8 @@ it too. No doc said which window owns which ask.
   Hayden.
 - The lead then runs the chain without asking: prove the merge, fetch, bring the main checkout
   to it, reinstall (settings.json and `~/.tmux.conf` copied first and diffed), check that no
-  link points into a lane, nudge the other lanes, add the backlog line, and `lane done` once
-  the hand-back gate passes. It reports one line, or the failed step.
+  link points into a lane, add the backlog line, nudge the other lanes (an unmerged lane whose
+  install the reinstall released hears so), and `lane done` once the hand-back gate passes. It reports one line, or the failed step.
 - A lane with more PRs to come starts its Next with `Keep open: <why>`, and `lane done` refuses
   it. `--abandon` closes it anyway and stays an ask rule (Hayden, 2026-10-14).
 - Lanes report their own state and asks, never the lead's messages.
@@ -333,6 +358,9 @@ $XDG_STATE_HOME/dotclaude/lanes/<repo>-<hash>.lead.json
                                 the lead record: the main-checkout session that last acted as
                                 lead, written only by bare `lane` commands ("One lead per main
                                 checkout")
+$XDG_STATE_HOME/dotclaude/lanes/<repo>-<hash>.closing/<id>.json
+                                the pane shells a `lane done` of lane <id> proved the lane's,
+                                kept for a rerun until the close completes
 
 <common-dir>/lanes/             CLI-owned; written by `lane` and by hooks, never by the Edit tool
   .lock                         flock for every CLI write (claims are atomic)
@@ -474,8 +502,9 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
   refuses a pick for a lane with a live session, since `/model` or `/effort` in its window is what
   changes a live one.
 
-  A plain pass keeps the pick (pass-respawn's `carried_pick`), for each flag the old claude launched
-  with, read from its `/proc` command line:
+  A plain pass keeps the pick (`carried_pick` in lanelib, which pass-respawn, `claude-restore` and
+  `claude-saved` share), for each flag the old claude launched with, read from its `/proc` command
+  line:
   - After a `/model` (for the effort, a `/model` or `/effort`) in the transcript, it carries what
     the last main-chain assistant entry since ran with (`message.model`, `effort`). That id loses
     what an alias or a 1M form means (`opusplan`'s switch per mode, `sonnet[1m]`), so the model is
@@ -507,11 +536,38 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
   - a default changed after a lane opened: that lane keeps its launch pick until `/model` or
     `/effort` in its window moves it;
   - the lead's main checkout: no repo default reaches it, and it carries what it launched with;
-  - a tmux restart: `claude-restore` types `claude --resume <id>`, which keeps the model but not the
-    effort (spike S3). The resumed claude has no flags either, so from its first plain pass on the
-    lane runs the user's default model too. A follow-up for `tmux/claude-restore`.
+  - a tmux restart, or a reopen from the shelf: the pick holds, as below.
 
-  Only these two flags carry: `--fallback-model`, `--name` and the rest still drop at a plain pass.
+  A tab restore (`tmux/claude-restore`) and the shelf's Open (`tmux/claude-saved`) keep the pick
+  the same way (lane restore-effort, 2026-10-17). A bare `claude --resume <id>` keeps the model but
+  drops the effort to the default (spike S3, again on 2.1.302), and the resumed claude would have no
+  flags for its next plain pass to carry, so each types the flags instead (`--resume` honors both,
+  probed 2026-10-17 on 2.1.302). `hooks/session-registry.sh` saves the flags the session's claude launched with, as
+  `model` and `effort` in its open-sessions entry, at each SessionStart: the hook's nearest
+  ancestor named `claude`, its `/proc` command line, each value only in the shape a pass would
+  pass on. `claude-saved` copies them into a starred or shelved chat's entry at Star, Shelve and
+  each SessionStart. At relaunch, `carried_pick` reads them with the transcript, which by then is
+  complete, with one difference for a resume: when no usable entry follows a `/model` (the server
+  died before the reply), it carries the `/model`'s argument if `lane open` would accept it, since
+  a resume keeps the session's own model where a new session takes the default the command saved.
+  Hayden approved launch flags plus the transcript over either alone: the flags alone undo a
+  mid-session `/model`, and the transcript alone loses an alias or a 1M form and would pin a
+  session launched without flags to what it last ran. How each case comes out:
+  - launched without flags, or an entry from before the fields (a session started before the
+    install keeps one until its next SessionStart: a compact, `/clear` or resume): a bare resume,
+    as before, so the user's default effort applies, as at a pass;
+  - a field outside its shape: that flag drops, never the tab;
+  - a tab with no transcript yet: `claude` with its launch flags;
+  - an attach tab, or Open of a chat running in the background: no flags, since the resume
+    attaches to the running session, which keeps its own pick. So does an attach tab resumed
+    when `claude agents` fails and can't say whether its session runs. A chat once seen in a
+    flagged tab keeps that tab's flags in its attach entry (`claude-saved track`), so after a
+    reboot it resumes with them;
+  - lanelib missing or broken, or `carried_pick` raising: no flags, and every tab still comes back
+    (each script imports lanelib through its own link, by absolute path only).
+
+  `claude-restore --list` and `restore.log` name the flags each tab gets. Only these two flags
+  carry: `--fallback-model`, `--name` and the rest still drop at a plain pass, a restore or Open.
 - **Auto-pass in lanes** (README "Auto-pass", PLAN.md "PR 4: auto-pass"). Auto-pass is on by
   default in every lane and in the main checkout of a repo with lanes, so the lead passes itself
   the same way. `lane init --no-autopass` turns it off for the repo (`autopass = false` in the
@@ -638,9 +694,14 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
      Each stopped process under it gets SIGCONT too: Ctrl+Z stops the whole job, MCP servers
      and tool children included, and the signals the session's exit sends them would wait
      as well. One that stops again on the terminal (SIGTTOU) still ends at step 3.
-  2. SIGHUP to each pane shell after that wait (an interactive shell ignores SIGTERM), unless
-     it started another job meanwhile. zsh passes it on to a session still exiting, which Claude
-     Code handles as a closing tab.
+  2. SIGHUP to each pane shell after that wait (an interactive shell ignores SIGTERM). A
+     restored tab draws its prompt the moment its claude exits, and a prompt can fork as it
+     draws: agnoster's `$(build_prompt)` runs git in a `-zsh` child, and one refused the
+     2026-10-15 close of lane two-sessions. So each shell gets its SIGHUP once it runs no job of
+     its own and nothing under it holds a git file open, within 10 s. A shell still running a
+     job then gets none, since the SIGHUP would reach the job too: step 3 refuses it, or sends
+     it if the job has ended by then. zsh passes
+     the SIGHUP on to a session still exiting, which Claude Code handles as a closing tab.
   3. Whatever survives, classified afresh: SIGTERM (SIGHUP again for a pane shell), a wait,
      then SIGKILL.
 
@@ -668,6 +729,21 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
   (`git worktree remove` can outlast the hooks' 2 s), then re-reads the record under it and
   moves the archive into place. No install relinks into the lane in between, and a failure
   leaves no partial archive.
+
+  A rerun keeps what the first run proved. A pane shell's only proof is the session it ran,
+  which the close itself ends, so on 2026-10-15 each rerun refused the two-sessions tab's shell
+  until its session was resumed there. So once it marks the lane `closing`, and again before
+  step 3's signals, `done` records each pane shell it proved the lane's in
+  `<state-dir>/lanes/<repo>-<hash>.closing/<id>.json`: the boot id, the lane's id, created stamp
+  and path, then each shell's pid, start time and comm. When the first write fails, it signals
+  nothing and leaves the lane `closing` for a rerun; a failed second one only warns, and the
+  first stands. A completed close deletes the record, or warns and names the file when it can't.
+
+  A rerun keeps a recorded shell's class only for the same boot, lane (id and created stamp, so
+  a later lane of that id never inherits it) and path, while a process with that pid, start
+  time and comm runs, its parent is a tmux server and it carries no foreign session id. Every
+  other process is proven afresh, as on a first run, and a recorded shell running a job still
+  refuses. The record lives in the state dir because sandboxed Bash can write `lane.json`.
 
   Every git `done` runs in the lane takes its config from the repo's common dir
   (`GIT_COMMON_DIR`), and the lane's path must be a worktree whose admin dir's `commondir` names
@@ -699,7 +775,13 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
     anything, to run from anywhere but that lane or its main checkout. A managed link sits in a
     dir setup.sh links into, and its path inside its checkout matches one that setup.sh links.
   - **Released:** the lead's `./setup.sh` in the main checkout relinks everything, which
-    releases the hold.
+    releases the hold. That includes a hold by a lane whose PR hasn't merged: on 2026-10-17
+    #113 merged ahead of #110, and the reinstall for #113 released lane-model's install.
+    setup.sh printed the release, but nothing told the lane. So the lead now notes the hold
+    line on `lane ls` before it reinstalls (`skills/lanes/SKILL.md`, The lead, step 7.3) and
+    tells that lane with the other nudges (step 7.6): "released your install: merge
+    origin/main, then reinstall". The message waits for step 7.6 because a lane that
+    reinstalled at once would fail step 7.4's check that no link points into a lane.
   - **Merged:** a run from a lane with no commit past the lanes config's base (`origin/main`)
     stops too: its work is merged, or there is none yet. On 2026-10-15 a rerun from merged lane
     pass-timeout, 3 s after the lead's reinstall from main, took the install back. It followed

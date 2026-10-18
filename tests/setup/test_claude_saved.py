@@ -4,8 +4,10 @@ star on its tab across /clear (stdlib only).
 
 The session in a pane comes from Claude's live-session files (~/.claude/sessions/*.json, an
 interactive session with a live pid) and else from hooks/session-registry.sh's open-sessions
-entries on the current server. A stub tmux answers the display formats the script reads and logs
-each call's argv, one argument per field; os.getpid() stands in for a live claude pid."""
+entries on the current server. A saved chat keeps the `model` and `effort` its open-sessions entry
+records (the flags its claude launched with), and Open resumes it with what lanelib.carried_pick
+makes of them. A stub tmux answers the display formats the script reads and logs each call's argv,
+one argument per field; os.getpid() stands in for a live claude pid."""
 import fcntl
 import json
 import os
@@ -60,6 +62,21 @@ PID = 222
 CLIENT = "/dev/pts/3"
 DEAD = 99_999_999   # above any pid_max: never a live process
 TITLE = "✳ [repo1] Fix the parser"
+PICK = {"model": "sonnet", "effort": "low"}
+
+
+def command(name, args=""):
+    """A slash command's user entry, as Claude Code 2.1.301 writes /model and /effort."""
+    return {"type": "user", "isSidechain": False, "message": {"role": "user", "content": (
+        f"<command-name>{name}</command-name>\n            <command-message>{name[1:]}"
+        f"</command-message>\n            <command-args>{args}</command-args>")}}
+
+
+def reply(model, effort="medium"):
+    """A main-chain assistant entry and what it ran with."""
+    return {"type": "assistant", "isSidechain": False, "effort": effort,
+            "message": {"model": model, "role": "assistant",
+                        "content": [{"type": "text", "text": "ok"}]}}
 
 
 def items_of(menu):
@@ -113,10 +130,11 @@ class Saved(unittest.TestCase):
         os.makedirs(path, exist_ok=True)
         return path
 
-    def transcript(self, n):
+    def transcript(self, n, history=()):
         path = os.path.join(self.home, ".claude", "projects", f"-code-repo{n}", f"{sid(n)}.jsonl")
         os.makedirs(os.path.dirname(path), exist_ok=True)
-        open(path, "w").close()
+        with open(path, "w") as f:
+            f.writelines(json.dumps(h) + "\n" for h in history)
         return path
 
     def live(self, n, pane, pid=None, kind="interactive", tmux=None, proc_start=None):
@@ -131,7 +149,8 @@ class Saved(unittest.TestCase):
                        "tmux": f"main:@1.{pane}" if tmux is None else tmux,
                        "updatedAt": self.n}, f)
 
-    def registered(self, n, pane, server_start=START, ended=None, ts=None, attach=False):
+    def registered(self, n, pane, server_start=START, ended=None, ts=None, attach=False,
+                   pick=None):
         e = {"session_id": sid(n), "cwd": self.cwd(n), "transcript_path": "", "pane": pane,
              "window_index": 1, "socket": SOCKET, "server_start": server_start,
              "server_pid": PID, "ts": ts or time.time()}
@@ -139,6 +158,7 @@ class Saved(unittest.TestCase):
             e["ended_other_at"] = ended
         if attach:
             e |= {"attach": True, "job_id": sid(n)[:8]}
+        e |= pick or {}
         with open(os.path.join(self.reg, sid(n) + ".json"), "w") as f:
             json.dump(e, f)
 
@@ -181,13 +201,15 @@ class Saved(unittest.TestCase):
     def first_client(self):
         return self.clients[0]
 
-    def put(self, n, starred=False, shelved=False, pane="%4", age=60, title=None, cwd=None):
+    def put(self, n, starred=False, shelved=False, pane="%4", age=60, title=None, cwd=None,
+            pick=None):
         os.makedirs(self.store, exist_ok=True)
         e = {"session_id": sid(n), "cwd": self.cwd(n) if cwd is None else cwd,
              "title": f"[repo{n}] chat {n}" if title is None else title,
              "transcript_path": "", "starred": starred, "shelved": shelved,
              "saved_at": time.time() - age,
-             "tab": {"socket": SOCKET, "server_start": START, "server_pid": PID, "pane": pane}}
+             "tab": {"socket": SOCKET, "server_start": START, "server_pid": PID, "pane": pane},
+             **(pick or {})}
         with open(os.path.join(self.store, sid(n) + ".json"), "w") as f:
             json.dump(e, f)
 
@@ -666,6 +688,122 @@ class Saved(unittest.TestCase):
     def test_an_unsafe_id_is_never_typed(self):
         self.run_saved("open", "x; rm -rf ~", CLIENT)
         self.assertEqual(self.calls("tmux", "send-keys"), [])
+
+    # --- the launch flags (docs/lanes.md, "Model and effort") ------------------------------
+
+    def picked(self, n):
+        e = self.saved()[sid(n)]
+        return {k: e[k] for k in ("model", "effort") if k in e}
+
+    def test_star_and_shelve_copy_the_flags_from_the_registry(self):
+        for action in ("star", "shelve"):
+            with self.subTest(action=action):
+                self.setUp()
+                self.live(1, "%4")
+                self.registered(1, "%4", pick=PICK)
+                self.transcript(1)
+                self.run_saved(action, "%4", CLIENT)
+                self.assertEqual(self.picked(1), PICK)
+
+    def test_a_registry_entry_without_flags_clears_the_saved_ones(self):
+        # A claude launched with none, or an entry from before the fields: no stale pick stays.
+        self.live(1, "%4")
+        self.registered(1, "%4")
+        self.transcript(1)
+        self.put(1, starred=True, pick=PICK)
+        self.run_saved("shelve", "%4", CLIENT)
+        self.assertEqual(self.picked(1), {})
+
+    def test_each_start_refreshes_the_saved_flags(self):
+        self.put(1, starred=True, pick=PICK)
+        self.registered(1, "%4", pick={"effort": "max"})
+        self.hook("SessionStart", 1, source="resume")
+        self.assertEqual(self.picked(1), {"effort": "max"})
+        self.registered(1, "%4")
+        self.hook("SessionStart", 1, source="compact")
+        self.assertEqual(self.picked(1), {})
+
+    def test_clear_moves_the_star_with_the_new_sessions_flags(self):
+        self.live(1, "%4")
+        self.registered(1, "%4", pick=PICK)
+        self.transcript(1)
+        self.run_saved("star", "%4", CLIENT)
+        self.hook("SessionEnd", 1, reason="clear")
+        self.registered(2, "%4", pick={"model": "opus"})
+        self.hook("SessionStart", 2, source="clear")
+        self.assertEqual(list(self.saved()), [sid(2)])
+        self.assertEqual(self.picked(2), {"model": "opus"})
+
+    def test_track_keeps_the_flags_of_the_tab_it_ran_in(self):
+        self.background(1)
+        self.transcript(1)
+        self.registered(1, "%33", ended=time.time() - 600, pick=PICK)
+        self.client("attach", sid(1)[:8])
+        self.track_panes(("%7", self.ppid, 3))
+        self.run_saved("track")
+        e = self.reg_entry(1)
+        self.assertEqual((e["attach"], e["model"], e["effort"]), (True, "sonnet", "low"))
+
+    def test_open_resumes_with_the_carried_flags(self):
+        self.put(1, shelved=True, pick=PICK)
+        self.transcript(1)
+        self.put(2, shelved=True, pick=PICK)
+        self.transcript(2, history=[command("/model", "opus"), reply("claude-opus-5-5", "high")])
+        self.put(3, shelved=True, pick={"model": "sonnet[1m]"})
+        self.transcript(3)
+        for n in (1, 2, 3):
+            self.run_saved("open", sid(n), CLIENT)
+        self.assertEqual([c for _, _, c in self.opened()],
+                         [f"claude --resume {sid(1)} --model sonnet --effort low",
+                          f"claude --resume {sid(2)} --model opus --effort high",
+                          f"claude --resume {sid(3)} --model sonnet\\[1m\\]"])
+
+    def test_open_an_old_or_malformed_entry_resumes_bare(self):
+        self.put(1, shelved=True)
+        self.transcript(1)
+        self.put(2, shelved=True, pick={"model": "a b", "effort": "extreme"})
+        self.transcript(2)
+        self.put(3, shelved=True, pick={"model": ["opus"], "effort": 5})
+        self.transcript(3)
+        for n in (1, 2, 3):
+            self.run_saved("open", sid(n), CLIENT)
+        self.assertEqual([c for _, _, c in self.opened()],
+                         [f"claude --resume {sid(n)}" for n in (1, 2, 3)])
+
+    def test_open_a_chat_live_in_the_background_attaches_bare(self):
+        # The resume attaches to the running session, whose pick is its own.
+        self.put(1, shelved=True, pick=PICK)
+        self.transcript(1)
+        self.background(1)
+        self.env["STUB_PANES"] = "$1 @1 %4 1 claude\n"
+        self.run_saved("open", sid(1), CLIENT)
+        self.assertEqual(self.opened(), [("$1:", self.cwd(1), f"claude --resume {sid(1)}")])
+
+    def test_open_still_opens_when_lanelib_fails(self):
+        # A copy of the script with no lanelib beside it, one that raises on import, and one
+        # whose carried_pick raises: the chat opens bare, and a refusal still says why.
+        repo = os.path.join(self.tmp, "repo")
+        os.makedirs(os.path.join(repo, "tmux"))
+        shutil.copy(SCRIPT, os.path.join(repo, "tmux"))
+        script = os.path.join(repo, "tmux", "claude-saved")
+        lib = os.path.join(repo, "skills", "lanes", "scripts", "lanelib.py")
+        for n, body in enumerate((None, "raise RuntimeError('broken')\n",
+                                  "def stored_pick(e):\n    return {'--model': 'x'}\n"
+                                  "def carried_pick(*a, **k):\n    raise RuntimeError('broken')\n"),
+                                 1):
+            with self.subTest(lanelib=body):
+                if body:
+                    os.makedirs(os.path.dirname(lib), exist_ok=True)
+                    with open(lib, "w") as f:
+                        f.write(body)
+                self.put(n, shelved=True, pick=PICK)
+                self.transcript(n)
+                for args in (("open", sid(n), CLIENT), ("open", sid(9), CLIENT)):
+                    p = subprocess.run(["bash", script, *args], capture_output=True, text=True,
+                                       timeout=20, env=self.env)
+                    self.assertEqual(p.returncode, 0, p.stderr)
+                self.assertEqual(self.opened()[-1][2], f"claude --resume {sid(n)}")
+                self.assertIn("is not saved", self.messages()[-1])
 
     # --- attach tabs: a tab whose `claude attach <job>` shows a background session --------
 
