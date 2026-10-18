@@ -38,7 +38,8 @@ then `status` (the row count, set only when it changes), the header names as `@t
 `lead²`, a lane id, `repo:`, or `repo·name` for a laned tab moved out of its project's row),
 `@tab_group` (the group's colour index) and `@tab_row_custom` (1 in a custom row, else unset, for
 the menus' Name row…) are written only when they change, and only by `layout`: a move writes
-placements and then lays out, so its names never fight these.
+placements and then lays out, so its names never fight these. `layout` writes one placement
+change of its own: it unsets a void one (below).
 
 A main checkout can hold several tabs (two Claude sessions, or one and a shell). The lead's tab
 is `lead` and the others `lead²`, `lead³`… in bar order (a repo's rows in group order, then the
@@ -74,6 +75,17 @@ row gets a placement 0..n-1. The move then lays out at once under the layout loc
 hook's run in flight, so the next queued move reads a fresh @tab_bar_nav) and copies each
 changed placement into the restore records of the window's panes (open-sessions/<sid>.json,
 field `place`), so tmux/claude-restore puts it back on the new window after tmux dies.
+A placement records the tab's kind when the move made it (`kind`). One made while the tab was
+shared is void once the tab is laned: a repo with no lanes puts its tabs in the shared row, a
+move there pins them all, and without this the pin kept a lead off its repo's row once a lane
+opened (2026-10-17). Hayden's rule (2026-10-18): a tab moved while laned keeps its pin, but one
+pinned as a shared tab goes back to its repo's row. group_windows skips a void placement and
+`layout` unsets it in the same source-file, as Auto place would. A placement from before
+`kind` (four keys) is never void. Two gaps are accepted: a move whose write lands between a
+layout's read and its unset loses that one tab's new placement (it sits in auto order in its
+row), and the restore records keep a void placement until the session's next SessionStart
+(hooks/session-registry.sh rereads @tab_place); a restore meanwhile sets it back, void again
+while the repo has lanes.
 
 Nothing from a window title, a directory name, a lane record or the lead record enters a format
 string (the lead record only picks one of the windows tmux listed): the rows hold only window ids
@@ -238,6 +250,9 @@ def short(name: str, phone: bool) -> str:
 
 # --- classify -----------------------------------------------------------------------------------
 
+KINDS = ("lead", "lane", "other", "shared")     # a Tab's kinds, in auto order within a row
+
+
 @dataclasses.dataclass(frozen=True)
 class Tab:
     kind: str       # lead | lane | other (a laned repo's worktrees) | shared
@@ -247,7 +262,7 @@ class Tab:
 
     @property
     def rank(self) -> int:
-        return ("lead", "lane", "other").index(self.kind) if self.kind != "shared" else 3
+        return KINDS.index(self.kind)
 
 
 def read_small(path: str, limit: int) -> bytes | None:
@@ -437,11 +452,14 @@ def lead_name(n: int) -> str:
 @dataclasses.dataclass(frozen=True)
 class Place:
     """A window's @tab_place: its row ("p:<common dir>", "s" or "c:<n>") and position there; a
-    custom row's members also carry the row it was made below (`after`) and its cleaned name."""
+    custom row's members also carry the row it was made below (`after`) and its cleaned name.
+    `kind` is the tab's kind when the move made it (apply), "" in a placement from before
+    kinds; one made as a shared tab is void once the tab is laned (void)."""
     row: str
     pos: int
     after: str = ""
     name: str = ""
+    kind: str = ""
 
 
 def plain(s: object) -> bool:
@@ -450,31 +468,43 @@ def plain(s: object) -> bool:
 
 
 def parse_place(text: str) -> Place | None:
-    """An @tab_place value read strictly, or None: exactly the four keys, a row key, an int
-    position 0..POS_MAX, an `after` that is "" or a row key, and an already cleaned name; at most
-    PLACE_MAX bytes and no control characters, raw or decoded. It comes from a window option a
-    restore record can set, so it is untrusted, and it never reaches a format."""
+    """An @tab_place value read strictly, or None: exactly the four keys, or those and a `kind`
+    from KINDS; a row key, an int position 0..POS_MAX, an `after` that is "" or a row key, and
+    an already cleaned name; at most PLACE_MAX bytes and no control characters, raw or decoded.
+    It comes from a window option a restore record can set, so it is untrusted, and it never
+    reaches a format."""
     if not text or not plain(text) or len(text.encode()) > PLACE_MAX:
         return None
     try:
         d = json.loads(text)
     except (ValueError, RecursionError):
         return None
-    if not isinstance(d, dict) or set(d) != {"row", "pos", "after", "name"}:
+    if not isinstance(d, dict) or set(d) - {"kind"} != {"row", "pos", "after", "name"}:
         return None
-    row, pos, after, name = d["row"], d["pos"], d["after"], d["name"]
+    row, pos, after, name, kind = d["row"], d["pos"], d["after"], d["name"], d.get("kind", "")
     if not plain(row) or not ROW_KEY.match(row) or type(pos) is not int \
             or not 0 <= pos <= POS_MAX or not plain(after) or (after and not ROW_KEY.match(after)) \
-            or not plain(name) or name != clean_row_name(name):
+            or not plain(name) or name != clean_row_name(name) \
+            or ("kind" in d and kind not in KINDS):
         return None
-    return Place(row, pos, after, name)
+    return Place(row, pos, after, name, kind)
 
 
 def place_text(place: Place) -> str | None:
-    """The @tab_place value for `place`, or None when it wouldn't read back (a common dir too
-    long or holding a control character): such a tab stays where layout puts it."""
-    text = json.dumps(dataclasses.asdict(place), ensure_ascii=False, separators=(",", ":"))
+    """The @tab_place value for `place` (no `kind` key when it has none), or None when it
+    wouldn't read back (a common dir too long or holding a control character): such a tab stays
+    where layout puts it."""
+    d = {k: v for k, v in dataclasses.asdict(place).items() if k != "kind" or v}
+    text = json.dumps(d, ensure_ascii=False, separators=(",", ":"))
     return text if parse_place(text) == place else None
+
+
+def void(place: Place, tab: Tab) -> bool:
+    """A placement made while the tab was shared, on a tab now laned: its repo had no row then
+    (put() pins every member of the row it moves in), so the tab goes back to its repo's row
+    and layout unsets the placement, whether the move carried this tab or another (Hayden's
+    rule, 2026-10-18)."""
+    return place.kind == "shared" and tab.kind != "shared"
 
 
 # --- lay out ------------------------------------------------------------------------------------
@@ -518,9 +548,10 @@ def group_windows(wins: list, tab_of: dict, place_of: dict | None = None,
     lead's window is `lead` and the others `lead²`, `lead³`…; with no lead among them, the
     first is `lead`. The lead only renames tabs: it never moves one.
     A window sits in its placement's row when that row is the shared row, a custom row or a
-    project row some window here classifies into; else in its auto row (its project's, or the
-    shared row). A row with a placed member is manual: placed members by position, then the
-    others in auto order (lead, lanes, other worktrees, each by index; shared tabs by index).
+    project row some window here classifies into, and the placement isn't void; else in its
+    auto row (its project's, or the shared row). A row with a placed member is manual: placed
+    members by position, then the others in auto order (lead, lanes, other worktrees, each by
+    index; shared tabs by index).
     Project rows go by their auto members' lowest index, which also picks their colour, so a
     move never recolours a project. A custom row follows the row it was made below (several:
     by id), else goes last among the groups; its `after` and name are its lowest window id's."""
@@ -536,7 +567,8 @@ def group_windows(wins: list, tab_of: dict, place_of: dict | None = None,
     members: dict = {}                  # row key -> [(order, wid, index)]
     for index, wid in sorted(wins):
         tab, place = tab_of[wid], place_of.get(wid)
-        if place is not None and (place.row in projects or not place.row.startswith("p:")):
+        if place is not None and not void(place, tab) \
+                and (place.row in projects or not place.row.startswith("p:")):
             row, order = place.row, (0, place.pos, tab.rank, index)
         else:
             row, order = auto[wid], (1, 0, tab.rank, index)
@@ -1041,6 +1073,14 @@ def lead_window(state: State, common: str, wids: list) -> str | None:
     return next((wid for wid in wids if rec[3] in state.panes.get(wid, [])), None)
 
 
+def tab_in(state: State, wid: str, tabs: dict) -> Tab:
+    """What window wid is, by its active pane's cwd; tabs: cwd -> Tab, filled as it goes."""
+    cwd = state.cwds.get(wid, "")
+    if cwd not in tabs:
+        tabs[cwd] = classify(cwd)
+    return tabs[cwd]
+
+
 def arrange(state: State, sid: str, tabs: dict) -> tuple:
     """group_windows for session sid; tabs: cwd -> Tab, classified once per run. A repo with
     two or more lead tabs here gets its lead's window (lead_window); one alone is `lead`
@@ -1048,10 +1088,7 @@ def arrange(state: State, sid: str, tabs: dict) -> tuple:
     wins = sorted(state.windows.get(sid, []))
     tab_of, place_of, leads = {}, {}, {}
     for _, wid, _ in wins:
-        cwd = state.cwds.get(wid, "")
-        if cwd not in tabs:
-            tabs[cwd] = classify(cwd)
-        tab_of[wid] = tabs[cwd]
+        tab_of[wid] = tab_in(state, wid, tabs)
         if tab_of[wid].kind == "lead":
             leads.setdefault(tab_of[wid].repo, []).append(wid)
         place = parse_place(state.options[wid]["place"])
@@ -1071,6 +1108,7 @@ def layout(err_log: str) -> None:
     state = snapshot()
     tabs: dict = {}                     # cwd -> Tab, classified once per run
     writes: dict = {}                   # wid -> (@tab_name, @tab_group, @tab_row_custom) wanted
+    voids = []                          # windows whose @tab_place is void, to unset
     lines = []
     for sid, sess in state.sessions.items():
         if sid not in state.widths or not state.windows.get(sid):
@@ -1078,6 +1116,10 @@ def layout(err_log: str) -> None:
         groups, shared, names = arrange(state, sid, tabs)
         for wid, value in names.items():
             writes.setdefault(wid, value)
+        for _, wid, _ in sorted(state.windows[sid]):
+            place = parse_place(state.options[wid]["place"])
+            if place is not None and void(place, tab_in(state, wid, tabs)) and wid not in voids:
+                voids.append(wid)
         current = next((wid for _, wid, active in state.windows[sid] if active), None)
         lay = lay_out(groups, shared, state.widths[sid], current, sess["left"], sess["right"])
         rows = render(lay)
@@ -1100,6 +1142,8 @@ def layout(err_log: str) -> None:
                 head.append(command("set-option", "-w", "-t", wid, opt, value)
                             if value or opt != "@tab_row_custom"
                             else command("set-option", "-u", "-w", "-t", wid, opt))
+    # A void placement is unset, as Auto place would; the rows already skip it (group_windows).
+    head += [command("set-option", "-u", "-w", "-t", wid, "@tab_place") for wid in voids]
     script = head + lines
     if script:
         p = tmux("source-file", "-", stdin="\n".join(script) + "\n")
@@ -1428,12 +1472,14 @@ def update_records(server: tuple, places: dict) -> None:
 
 
 def apply(ctx: Context, changes: dict, base: str) -> None:
-    """Write each @tab_place that changes ({wid: Place, or None to unset}), lay out at once
-    (under layout's lock, waiting up to LOCK_WAIT for a hook's run in flight, so the next
-    queued move reads the bar this one drew), then copy the changes into the restore records of
-    each changed window's panes."""
-    lines, changed = [], {}
+    """Write each @tab_place that changes ({wid: Place, or None to unset}), each Place with its
+    tab's kind now (Place.kind), lay out at once (under layout's lock, waiting up to LOCK_WAIT
+    for a hook's run in flight, so the next queued move reads the bar this one drew), then copy
+    the changes into the restore records of each changed window's panes."""
+    lines, changed, tabs = [], {}, {}
     for wid, place in changes.items():
+        if place is not None:
+            place = dataclasses.replace(place, kind=tab_in(ctx.state, wid, tabs).kind)
         text = place_text(place) if place is not None else None
         if (place is not None and text is None) or (text or "") == ctx.state.options[wid]["place"]:
             continue

@@ -833,9 +833,17 @@ def arranged(places, wins=WINS):
 class Placement(unittest.TestCase):
     def test_a_valid_placement_reads_back(self):
         for p in (P("s", 0), P(REPO_KEY, 999), P("c:1", 3, REPO_KEY, "work ♯1"),
-                  P("c:9999", 0, "s", ""), P("c:2", 0, "c:1", "")):
+                  P("c:9999", 0, "s", ""), P("c:2", 0, "c:1", ""),
+                  *(P("s", 1, kind=kind) for kind in tb.KINDS)):
             with self.subTest(p=p):
                 self.assertEqual(tb.parse_place(tb.place_text(p)), p)
+
+    def test_the_four_key_form_still_reads_and_writes_back_as_four_keys(self):
+        old = '{"row":"s","pos":2,"after":"","name":""}'      # every pin made before `kind`
+        self.assertEqual(tb.parse_place(old), P("s", 2))
+        self.assertEqual(tb.place_text(P("s", 2)), old)
+        self.assertEqual(json.loads(tb.place_text(P("s", 2, kind="shared"))),
+                         {**json.loads(old), "kind": "shared"})
 
     def test_each_bad_field_or_shape_is_no_placement(self):
         good = {"row": "s", "pos": 0, "after": "", "name": ""}
@@ -847,7 +855,11 @@ class Placement(unittest.TestCase):
                        {"name": "a\x01"}, {"name": 3}, {"name": " a"}):
             with self.subTest(change=change):
                 self.assertIsNone(tb.parse_place(json.dumps({**good, **change})))
+        for kind in ("", "x", "Lead", None, 1, "shared\n", ["lead"]):
+            with self.subTest(kind=kind):
+                self.assertIsNone(tb.parse_place(json.dumps({**good, "kind": kind})))
         for text in ("", "null", "[]", "{", json.dumps({**good, "extra": 1}),
+                     json.dumps({**good, "kind": "lead", "extra": 1}),
                      json.dumps({k: v for k, v in good.items() if k != "name"}),
                      json.dumps({**good, "row": "p:/" + "a" * tb.PLACE_MAX}),
                      json.dumps(good) + "\x07", "\t" + json.dumps(good),
@@ -907,6 +919,27 @@ class Order(unittest.TestCase):
         rows, _, _, names = arranged({"@1": P("p:/gone/.git", 0), "@3": P("p:/gone/.git", 1)})
         self.assertEqual(rows, arranged({})[0])
         self.assertEqual(names, arranged({})[3])
+
+    def test_a_pin_made_while_shared_is_void_once_the_tab_is_laned(self):
+        # A move in the shared row while repo had no lanes pinned its tabs as shared ones; with
+        # lanes again they go back to repo's row, from the shared row or a custom one. Tabs
+        # still shared keep their pins.
+        rows, _, _, names = arranged({"@2": P("s", 1, kind="shared"),
+                                      "@3": P("c:1", 0, "s", kind="shared"),
+                                      "@6": P("s", 0, kind="shared"),
+                                      "@1": P("s", 2, kind="shared")})
+        self.assertEqual(rows, [(REPO_KEY, ["@2", "@3", "@4"]), (KAR_KEY, ["@5"]),
+                                ("s", ["@6", "@1"])])
+        self.assertEqual((names["@2"][0], names["@3"][0]), ("lead", "a"))
+
+    def test_a_pin_made_while_laned_or_before_kinds_holds(self):
+        for lead, lane in (("lead", "lane"), ("", "")):         # "": a four-key pin
+            with self.subTest(kind=lead):
+                rows, _, _, names = arranged({"@2": P("s", 0, kind=lead),
+                                              "@3": P("s", 1, kind=lane)})
+                self.assertEqual(rows, [(REPO_KEY, ["@4"]), (KAR_KEY, ["@5"]),
+                                        ("s", ["@2", "@3", "@1", "@6"])])
+                self.assertEqual(names["@2"][0], "repo·lead")
 
     def test_moving_every_tab_out_of_a_project_recolours_nothing(self):
         places = {w: P("s", k) for k, w in enumerate(("@2", "@3", "@4"))}
@@ -2171,8 +2204,9 @@ class FakeTmux(unittest.TestCase):
         self.nav_state("@2")
         calls = self.run_cmd("move", "right", "/dev/pts/7")
         key = "p:" + self.common
-        self.assertEqual(self.places(), {"@3": tb.Place(key, 0), "@2": tb.Place(key, 1),
-                                         "@4": tb.Place(key, 2)})
+        self.assertEqual(self.places(), {"@3": tb.Place(key, 0, kind="lane"),
+                                         "@2": tb.Place(key, 1, kind="lead"),
+                                         "@4": tb.Place(key, 2, kind="lane")})
         writes = [c for c in calls if c[0] == "set-option"]
         self.assertEqual([c[3] for c in writes[:3]], ["@3", "@2", "@4"])
         self.assertTrue(all(c[1:3] == ["-w", "-t"] and c[4] == "@tab_place" for c in writes[:3]))
@@ -2191,7 +2225,7 @@ class FakeTmux(unittest.TestCase):
         self.run_cmd("move", "auto", "/dev/pts/7", "@3")
         self.assertNotIn("@3", self.places())
         self.assertEqual(self.nav_rows(), [["@2", "@3", "@4"], ["@1"]])
-        self.assertEqual(self.places(), {"@1": tb.Place("s", 1)})   # the shared row stays manual
+        self.assertEqual(self.places(), {"@1": tb.Place("s", 1, kind="shared")})   # still manual
         self.nav_state("@2")
         self.run_cmd("reset", "/dev/pts/7")
         self.assertEqual(self.places(), {})
@@ -2200,7 +2234,7 @@ class FakeTmux(unittest.TestCase):
         self.nav_state("@3")
         self.run_cmd("move", "newrow", "/dev/pts/7")
         key = "p:" + self.common
-        self.assertEqual(self.places(), {"@3": tb.Place("c:1", 0, key)})
+        self.assertEqual(self.places(), {"@3": tb.Place("c:1", 0, key, kind="lane")})
         self.assertEqual(self.nav_rows(), [["@2", "@4"], ["@3"], ["@1"]])
         window = {w["window_id"]: w for w in self.read_state()["windows"]}
         self.assertEqual(window["@3"].get("@tab_row_custom"), "1")
@@ -2239,6 +2273,53 @@ class FakeTmux(unittest.TestCase):
         self.nav_state("@2")
         self.assertNotIn("source-file", [c[0] for c in self.run_cmd(
             "drop-row", "@1", "3", "4", "/dev/pts/7")])              # a line with no tabs
+
+    def lanes(self, on):
+        """dotclaude with setUp's lane records, or without them (all its tabs shared then)."""
+        here, away = os.path.join(self.common, "lanes"), os.path.join(self.tmp, "lanes-away")
+        os.rename(*((away, here) if on else (here, away)))
+
+    def unsets(self):
+        return [c[4] for c in self.writes() if c[1:3] == ["-u", "-w"] and c[-1] == "@tab_place"]
+
+    def test_a_pin_made_while_shared_resets_once_the_repo_has_lanes(self):
+        # 2026-10-17: dotclaude had no lanes, so a move in the shared row pinned its lead
+        # there, and the pin kept the lead off dotclaude's row once a lane opened.
+        self.lanes(False)
+        self.nav_state("@1")
+        self.assertEqual(self.nav_rows(), [["@1", "@2", "@3", "@4"]])
+        self.run_cmd("move", "right", "/dev/pts/7")
+        self.assertEqual(self.places(), {w: tb.Place("s", k, kind="shared")
+                                         for k, w in enumerate(("@2", "@1", "@3", "@4"))})
+        self.lanes(True)
+        self.run_layout()
+        self.assertEqual(self.nav_rows(), [["@2", "@3", "@4"], ["@1"]])
+        self.assertEqual(sorted(self.unsets()), ["@2", "@3", "@4"])
+        self.assertEqual(self.places(), {"@1": tb.Place("s", 1, kind="shared")})
+        names = {w["window_id"]: w.get("@tab_name") for w in self.read_state()["windows"]}
+        self.assertEqual(names["@2"], "lead")
+        self.run_layout()
+        self.assertEqual(self.writes(), [])             # the clear changed no row
+
+        # A tab moved while laned keeps its pin through the repo losing its lanes and back.
+        self.nav_state("@2")                            # row 1: @1 at 39
+        self.run_cmd("drop", "@2", "@1", "40", "1", "window", "/dev/pts/7")
+        self.assertEqual(self.places()["@2"], tb.Place("s", 0, kind="lead"))
+        for on in (False, True):
+            self.lanes(on)
+            self.run_layout()
+            self.assertEqual(self.unsets(), [])
+        self.assertEqual(self.nav_rows(), [["@3", "@4"], ["@2", "@1"]])
+
+    def test_a_pin_from_before_kinds_never_resets(self):
+        st = self.read_state()
+        for w in st["windows"]:
+            if w["window_id"] == "@2":
+                w["@tab_place"] = '{"row":"s","pos":0,"after":"","name":""}'
+        self.write_state(st)
+        self.run_layout()
+        self.assertEqual(self.unsets(), [])
+        self.assertEqual(self.nav_rows(), [["@3", "@4"], ["@2", "@1"]])
 
     def test_the_menu_shows_moves_for_a_checked_client_and_window(self):
         self.nav_state("@2")
@@ -2290,7 +2371,8 @@ class FakeTmux(unittest.TestCase):
         self.run_cmd("move", "right", "/dev/pts/7", XDG_STATE_HOME=state_home)
         with open(os.path.join(reg, "mine.json")) as f:
             mine = json.load(f)
-        self.assertEqual(tb.parse_place(mine["place"]), tb.Place("p:" + self.common, 1))
+        self.assertEqual(tb.parse_place(mine["place"]),
+                         tb.Place("p:" + self.common, 1, kind="lead"))
         self.assertEqual({k: v for k, v in mine.items() if k != "place"}, recs["mine"])
         after = {n: open(os.path.join(reg, n)).read() for n in os.listdir(reg)
                  if n != tb.RECORDS_LOCK}
@@ -3008,6 +3090,13 @@ class RealTmux(unittest.TestCase):
         time.sleep(1)
         self.assertEqual(self.nav_rows(), rows)
         self.assertEqual(self.show("-qv", "-t", "t:", "@tab_bar_drag").strip(), "")
+
+    def test_a_pin_made_while_shared_is_unset_on_a_laned_tab(self):
+        self.ti("set-option", "-w", "-t", "t:0", "@tab_place",
+                tb.place_text(tb.Place("s", 0, kind="shared")))
+        self.run_layout()
+        self.assertEqual(self.ti("show-options", "-wqv", "-t", "t:0", "@tab_place").stdout, "")
+        self.assertEqual(self.nav_rows(), [["0", "1"], ["2"]])
 
     def test_ctrl_b_shift_right_carries_the_tab(self):
         self.link_script()
