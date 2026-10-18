@@ -158,7 +158,7 @@ higher levels link to lower ones through a derived view, not through copied pros
   change main and the lead both hold, and the ancestor check, run before every carry
   (`origin/main` inside the lead's branch), keeps the lead's files from undoing what main
   gained since the lead last merged it. So the lead never amends or rebases its branch: on
-  2026-10-18 it amended a commit lead-chain had just carried, and the next carry's base was
+  2026-10-17 it amended a commit lead-chain had just carried, and the next carry's base was
   left off the branch, alive only in the reflog until git expires it.
 - **The lead keeps its STATUS.md whole when it merges main**, conflict or not. Main holds
   older carries of it. If the lead deletes a line after a carry, the lead's side shows no change
