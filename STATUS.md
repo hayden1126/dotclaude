@@ -89,8 +89,10 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     main's STATUS level with the lead branch for the first time since #108.
   - restore-effort merged ahead of order as #116 (2026-10-18): tab restore and the shelf's Open
     relaunch with the session's `--model`/`--effort`. Installed from main, which released
-    lead-chain's install hold. The lane stays open (`Keep open:`) for its Done-when smoke, a
-    restored tab at its saved effort, which #116 merged before.
+    lead-chain's install hold. Its Done-when smoke passed after the merge (2026-10-18): restore
+    and the shelf's Open each brought a `--model sonnet --effort low` tab back at sonnet/low, and
+    an entry without the fields restored bare (evidence in the closed record,
+    `.git/lanes/_closed/restore-effort-2026-10-17/.lane/artifacts/smoke-2026-10-17.txt`). Closed.
   - Lead PR #117 (`fix/pass-invoke-handoff`, worktree `.claude/worktrees/pass-handoff`): the pass
     skill's step 3 loads the handoff skill with the Skill tool. Draft; Hayden skipped its install
     from the branch (2026-10-18: `setup.sh` never reads the skill's text). Before ready: merge
