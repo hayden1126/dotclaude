@@ -143,6 +143,31 @@ higher levels link to lower ones through a derived view, not through copied pros
 - **Promotion at lane close:** a decision future work needs goes to memory or a committed doc,
   inside the lane's PR; the outcome goes up as one line in the project STATUS; the rest is
   archived with the record.
+- **The lead's commits ride a lane PR.** The lead commits the project STATUS on its own branch,
+  named on the STATUS's `Lead branch:` line, and opens no STATUS-only PR. The lane next in
+  merge order carries those commits in before each push and before ready (`skills/lanes/SKILL.md`,
+  Lifecycle step 6). The carry used to wait for ready, but #108, #111, #113 and #115 each went
+  ready and merged within 5 s, so the lead's notes missed main four times. One carrier, not
+  every lane (Hayden, 2026-10-17): two lanes holding two snapshots of the lead's file conflict
+  once the second merges main, while an out-of-order merge only delays the notes one PR.
+- **A copy for STATUS.md, a diff for PLAN.md.** STATUS.md is the lead's alone, so its copy is
+  right whatever the lane holds, and a copy can't conflict, even in a lane behind main. PLAN.md
+  has other writers whose edits a copy would undo, so it takes the lead's diff, from the sha the
+  last carry names: a second diff from `origin/main` no longer applies on top of the first
+  (`.lane/artifacts/carry-sim.txt` in lead-chain's closed record). `git apply -3` merges a
+  change main and the lead both hold, and the ancestor check, run before every carry
+  (`origin/main` inside the lead's branch), keeps the lead's files from undoing what main
+  gained since the lead last merged it. So the lead never amends or rebases its branch: on
+  2026-10-17 it amended a commit lead-chain had just carried, and the next carry's base was
+  left off the branch, alive only in the reflog until git expires it.
+- **The lead keeps its STATUS.md whole when it merges main**, conflict or not. Main holds
+  older carries of it. If the lead deletes a line after a carry, the lead's side shows no change
+  against the merge base while main's shows the line added, so a clean merge brings the line
+  back. The lead still reads main's side first and adds back by hand any line that isn't a
+  carry (a lane's backlog line from before the `Lead branch:` line existed). From then on a
+  lane sends such items to the lead instead of editing STATUS.md: the next carry's copy would
+  erase them. PLAN.md, with other writers, merges as usual, and the lead deletes again a line
+  it removed since its last carry: an accepted manual step, since the lead rarely edits it.
 - `templates/STATUS.md` is the project level (Direction, Backlog, Lanes, Asks, Decisions,
   Blocked, Notes); `templates/LANE.md` is the lane level, and a lane PLAN reuses
   `templates/PLAN.md`.
@@ -165,8 +190,8 @@ it too. No doc said which window owns which ask.
   Hayden.
 - The lead then runs the chain without asking: prove the merge, fetch, bring the main checkout
   to it, reinstall (settings.json and `~/.tmux.conf` copied first and diffed), check that no
-  link points into a lane, nudge the other lanes, add the backlog line, and `lane done` once
-  the hand-back gate passes. It reports one line, or the failed step.
+  link points into a lane, add the backlog line, nudge the other lanes (an unmerged lane whose
+  install the reinstall released hears so), and `lane done` once the hand-back gate passes. It reports one line, or the failed step.
 - A lane with more PRs to come starts its Next with `Keep open: <why>`, and `lane done` refuses
   it. `--abandon` closes it anyway and stays an ask rule (Hayden, 2026-10-14).
 - Lanes report their own state and asks, never the lead's messages.
@@ -727,7 +752,13 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
     anything, to run from anywhere but that lane or its main checkout. A managed link sits in a
     dir setup.sh links into, and its path inside its checkout matches one that setup.sh links.
   - **Released:** the lead's `./setup.sh` in the main checkout relinks everything, which
-    releases the hold.
+    releases the hold. That includes a hold by a lane whose PR hasn't merged: on 2026-10-17
+    #113 merged ahead of #110, and the reinstall for #113 released lane-model's install.
+    setup.sh printed the release, but nothing told the lane. So the lead now notes the hold
+    line on `lane ls` before it reinstalls (`skills/lanes/SKILL.md`, The lead, step 7.3) and
+    tells that lane with the other nudges (step 7.6): "released your install: merge
+    origin/main, then reinstall". The message waits for step 7.6 because a lane that
+    reinstalled at once would fail step 7.4's check that no link points into a lane.
   - **Merged:** a run from a lane with no commit past the lanes config's base (`origin/main`)
     stops too: its work is merged, or there is none yet. On 2026-10-15 a rerun from merged lane
     pass-timeout, 3 s after the lead's reinstall from main, took the install back. It followed
