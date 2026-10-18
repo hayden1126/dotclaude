@@ -74,19 +74,20 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
 - **dotclaude runs in lanes (since 2026-10-12).** The lead is the main checkout. Lanes live in
   `~/dotclaude-lanes/`, and each lane's state is in its record (`lane ls`, `lane asks`), not
   here. The config caps live lanes at 3, with locks `install` and `suite`.
-  - Merged through lanes, installed from main and closed: #90 to #121 (2026-10-12 to
+  - Merged through lanes, installed from main and closed: #90 to #122 (2026-10-12 to
     2026-10-18), with lead PR #117 among them (its check passed: session 3a153a27's auto-pass
-    loaded the handoff skill before pass-respawn's `handoff-check`). Last: tab-pin, #121 (a
-    tab-bar pin made as a shared tab resets once its repo has lanes; [[dotclaude-tab-bar]]).
+    loaded the handoff skill before pass-respawn's `handoff-check`). Last: pass-bg, #122
+    (pass-respawn names a background session instead of "not in a tmux pane", and finds the
+    calling session by its session file; [[cc-background-sessions]]).
     `gh pr list --state merged --limit 30` names each, and the closed records under `.git/lanes/_closed/<id>-<date>/` hold the detail (#116's
     post-merge smoke is in restore-effort's artifacts); tab-bar's design is in
     [[dotclaude-tab-bar]], remote-paste's live tests in [[dotclaude-remote-paste]]. #115 left the
     tab glyph's prompt at v4: an ask a reply only announces for later stays a documented known
     miss (`hooks/wants_input.py`'s docstring), since its one prompt round flipped 10 verdicts.
-  - **Live lanes (opened 2026-10-18), merge order:** 1 pass-bg (`fix/pass-bg-session`, from
-    53d3a11, draft #122; swapped ahead on 2026-10-18 because it was ready while cross-lane was
-    still in review; it carries the lead's notes), 2 cross-lane (`feat/cross-lane-checks`, from
-    e2a2294). Each Brief has the detail; the backlog items below keep the evidence.
+  - **Live lanes (opened 2026-10-18), merge order:** 1 cross-lane (`feat/cross-lane-checks`, from
+    e2a2294; it carries the lead's notes), 2 launch-path (`fix/launch-path-checks`, from
+    6583c7b; Hayden's go after #122). No shared files: launch-path only reads `lanelib.py`.
+    Each Brief has the detail; the backlog items below keep the evidence.
   - The parked json-depth sweep (21 files, among them the delegation enforcement scripts) is on
     `fix/json-depth-sweep`, a local branch never pushed: keep it while the sweep is in the
     backlog. Shipping it first needs a check of how each enforcement site fails
@@ -114,16 +115,30 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     runs the suites there under `lane lock suite` (the trial-tree traps are in
     [[dotclaude-lanes]]). The lead plan review (C) was not picked. Files: `skills/lanes/scripts/
     lane`, `lanelib.py`, `tests/lanes`, `skills/lanes/SKILL.md`, `docs/lanes.md`.
-  - **pass-respawn misreports a background session (lane pass-bg, live)** (reported by the karaoke session 07618dd3,
-    2026-10-18; Hayden asked it to send it here). A `kind: "bg"` session (daemon-hosted:
-    `claude bg-pty-host` under `claude daemon run --origin transient`, under the interactive
-    claude in pane %1) has no `TMUX_PANE`, so `pass-respawn` refuses with "not in a tmux pane"
-    (its pane check, before the session file is read) while Hayden watches it in a pane.
-    Refusing is right: respawning %1 would kill the hosting session, not the bg one. Fix: read
-    the session file's `kind` and, for `bg`, refuse with "background session (daemon-hosted):
-    pass by hand with /clear, or run it in a pane of its own first"; name the case in the pass
-    skill's step 5. Later, maybe: pass a bg session through the daemon (`claude attach`).
-    Files: `skills/pass/scripts/pass-respawn`, `tests/pass/`, `skills/pass/SKILL.md`.
+  - **pass-respawn's final re-check wants the pane's command to read `claude`** (lane
+    launch-path, live; from lane pass-bg, 2026-10-18; the tmux half probed by the lead). `observe()` checks
+    `pane_current_command`, which tmux takes from argv[0]'s basename: a private-server pane
+    with argv[0] `~/.local/share/claude/versions/2.1.302` read `2.1.302`. So a pane whose
+    claude runs under its versioned path drops the pass as `gone` (safe: nothing respawns).
+    Not seen live: all 9 pane claudes on 2026-10-18 ran as `~/.local/bin/claude`. Cheap fix:
+    also accept the basename of the claude's own argv[0]. Keep the check itself: it is what
+    catches a Ctrl+Z'd claude with another program in front. Files:
+    `skills/pass/scripts/pass-respawn`, `tests/pass/`.
+  - **The tab scripts find claude by the pane's command too** (from lane launch-path,
+    2026-10-18; Hayden's pick: log it, not that lane's work). Same cause as the item above: a
+    claude run under its versioned path reads `2.1.302`. In `tmux/tmux-claude-status`'s pane
+    loop, such a pane counts toward no window's `win_has_claude`, and a starred one loses its
+    star and gets `@claude_star_away` on every tick. In `tmux/claude-saved`'s session lookup,
+    the branch with no live session file requires `claude`, so the pane maps to no session.
+    Needs its own design: the status script reads only `pane_current_command` per pane per
+    tick, so a per-pane session-file lookup (or matching the claude's argv[0] basename) has a
+    cost to weigh. Not seen live (same 9-pane check).
+  - **A background session passes on its own (log only: Hayden kept the bg pass manual,
+    2026-10-18; don't build it without his ask)** (from lane pass-bg). After the turn ends, the
+    waiter finds the pane running `claude attach <jobId>` (`tmux/claude-saved` already maps
+    it), runs `claude stop <job>` and respawns that pane with a fresh claude. Unknowns: a pane
+    in agent view leaves no link on disk, two clients can attach to one job, and the order of
+    the stop and the respawn.
   - **Bug reports from sessions outside dotclaude reach its lead, after cross-lane merges**
     (Hayden's pick 2026-10-18, option A). The karaoke session's report (pass-bg) worked over
     SendMessage only because Hayden told it where to send, since `lane addr` refuses outside its
@@ -135,8 +150,8 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     context); revisit only if a report gets lost. The CLAUDE.md line is Hayden's edit (proposed
     via `/revise-claude-md`). Files: `skills/lanes/scripts/lane` (cross-lane's file, hence the
     wait), `tests/lanes`, `skills/lanes/SKILL.md`, `docs/lanes.md`, `CLAUDE.md`.
-  - **`session-registry.sh`'s `launch_pick()` finds the session by comm `claude`** (from lane
-    pass-bg's reviewer, 2026-10-18, read from code). A bg session's comm is the version
+  - **`session-registry.sh`'s `launch_pick()` finds the session by comm `claude`** (lane
+    launch-path, live; from lane pass-bg's reviewer, 2026-10-18, read from code). A bg session's comm is the version
     (`2.1.302`), so the lookup would land on the daemon. Unreachable today: the hook exits
     before it for a bg session (`ATTENDED=0`, no `TMUX_PANE`). Optional, cheap: switch to
     lanelib `sessions_above` (the ancestor whose `sessions/<pid>.json` records its own
@@ -220,19 +235,20 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
   `claude -p` repro and the 2.1.285 boundary; the karaoke session's has the incident.
 
 ## Notes for next session
-- **Next (lead, main checkout):** watch lanes cross-lane and pass-bg (In flight, merge order). On
-  each "merged #N", run the post-merge chain (`skills/lanes/SKILL.md`, The lead, step 7; never
+- **Next (lead, main checkout):** watch lanes cross-lane and launch-path (In flight, merge
+  order). On each "merged #N", run the post-merge chain (`skills/lanes/SKILL.md`, The lead, step 7; never
   amend or rebase the lead branch). Check `lane ls` first: a merge Hayden made on GitHub and
-  mentioned to no session sends no message. If a lane later in order is ready first, swap the order in STATUS
-  and tell both lanes (the one next in order carries the lead's notes). Hold `lane done` while
+  mentioned to no session sends no message. If a lane later in order is ready first, swap the
+  order in STATUS and tell both lanes (the one next in order carries the lead's notes). Hold
+  `lane done` while
   another lane holds the `suite` lock (its `branch -d` rewrites `.git/config`). After cross-lane
   merges, propose the bug-report lane (Backlog, option A). No chat about a lane's own asks; speak
   on cross-lane orders, decisions raised with the lead, failed checks and lead-only actions.
   - The lead's commits: `git log --first-parent main..chore/after-pr4` (STATUS only, plus merges
     of main). Session 9dd86d28 (2026-10-18) started at ee36b32 and ended at this handoff: it ran
-    the chain for #120 and #121 (lanes monotonic and tab-pin closed), checked #117 on the
-    previous lead's pass, opened tab-pin, cross-lane and pass-bg, and logged the karaoke
-    session's report and Hayden's bug-report pick.
+    the chain for #120 to #122 (`ls .git/lanes/_closed/` shows each close), checked #117 on the
+    previous lead's pass, opened tab-pin, cross-lane, pass-bg and launch-path, and logged the karaoke
+    session's report, Hayden's bug-report pick and pass-bg's Not mine items.
   - Open with Hayden, nothing for the lead to do: the capella-studio lead asked how a new lane
     should clear the excluded-command guard, and the lead recommended (2026-10-17) pointing
     capella's `core.hooksPath` at the main checkout's protected `.githooks` (absolute path)

@@ -87,7 +87,9 @@ class RoundTrip(LanesRepo):
         self.assertEqual((rows["chart-fix"]["ahead"], rows["chart-fix"]["behind"]), (0, 0))
         self.assertEqual(rows["chart-fix"]["pr"], "?")  # the fake gh fails: degraded, not wrong
         # No live session, and with gh failing no merge can be ruled out, so handoff? stays on.
-        self.assertEqual(rows["chart-fix"]["flags"], ["orphan", "handoff?"])
+        # Each lane's setup wrote an untracked setup.out, which no .gitignore covers: overlap.
+        self.assertEqual(rows["chart-fix"]["flags"], ["overlap", "orphan", "handoff?"])
+        self.assertEqual(rows["chart-fix"]["overlaps"], {"api-docs": ["setup.out"]})
         board = self.lane("ls")
         self.assertIn("chart-fix", board)
         self.assertIn("#42", board)

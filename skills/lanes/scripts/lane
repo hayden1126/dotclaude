@@ -11,6 +11,7 @@
   lane addr <id> | lane addr lead
   lane lead
   lane lock <name> [--wait SECS] -- <cmd...>
+  lane trial [<id> ...] [--wait SECS] [--keep] --run CMD [--run CMD ...]
   lane whoami [--json]
   lane claim <req> ... | lane release <req> ... | lane who <req>
   lane note <text>
@@ -25,8 +26,18 @@ docs/lanes.md the design. Run `init`, `new`, `adopt`, `ls`, `open`, `done`, `add
 so their excludedCommands entries take them out of the sandbox: `new`, `ls` and `done` need the
 network and the GitHub credential (`new` refuses without them; `ls` and `done` say what they
 skipped), `ls`, `open`, `done`, `addr` and `lead` need to see other processes, and `lead` writes
-the lead record in the state dir. Every other subcommand runs sandboxed; `lock` must, so the
-command it wraps stays sandboxed too.
+the lead record in the state dir. Every other subcommand runs sandboxed; `lock` and `trial`
+must, so the commands they run stay sandboxed too.
+
+`trial`, from inside a lane, merges the base and every other live lane's commits (or only the
+ids given) onto the lane's HEAD in dangling commits, checks the merge out in a fresh scratch
+tree under the temp dir, and runs each `--run` there under the `suite` lock. A suite
+that fails reruns on the baseline (HEAD plus the base) at the same path. It passes only when
+every test id it failed on the merge also fails on the baseline and its exit is no worse there
+(not non-zero on the merge but zero on the baseline, nor a death by signal on the merge only);
+one that printed no id, or whose output either run cut, fails, to be compared by hand. It exits
+0 with no conflict and no failure of the merge's own, 1 otherwise, and 75 when `--wait` runs
+out, as `lock` does.
 
 The lead is the main-checkout session that last acted as lead: a bare `init`, `new`, `adopt`,
 `open` (not `--print`) or `done` that succeeds from an interactive session in the main checkout,
@@ -81,6 +92,8 @@ import signal
 import stat
 import subprocess
 import sys
+import tempfile
+import threading
 import time
 from typing import NamedTuple
 
@@ -102,6 +115,19 @@ HOLDER_CMD_MAX = 120  # chars of the wrapped command kept in a lock's holder lin
 RECORD_READ = 1 << 20  # bytes of a lane's STATUS.md read by `ls` and `done`
 PR_LIMIT = 200  # PRs `ls` lists in its one gh call, newest first
 CLOCK_SLACK = 10  # secs: HAYPC's wall clock steps by about 5 s, and GitHub keeps another clock
+TEE_GRACE = 10.0  # secs run_child keeps reading a teed pipe once its child exits
+TRIAL_GIT_WAIT = 120  # secs each git call of `lane trial` may take
+TRIAL_IDENTITY = ("lane-trial", "lane-trial@localhost")  # the author of its dangling merges
+# The lock every trial holds, one name for all: a trial clears this lane's leftover trees under
+# it, so a second trial of the lane under another lock could remove the first one's live tree
+TRIAL_LOCK = "suite"
+# env: the locks `lane` processes above this one hold, `<repo key>/<name>@<pid>:<start ticks>,...`
+LOCKS_HELD = "LANE_LOCKS_HELD"
+OVERLAP_WAIT = 10  # secs each git call behind the board's overlap flag may take
+OVERLAP_SHOWN = 5  # files each overlap line under the board names
+# Every git behind the overlap flag: no transport at all, so not even a partial clone's lazy
+# fetch runs a program its config names (install-state.py commits_past's set)
+OVERLAP_ENV = {"GIT_NO_LAZY_FETCH": "1", "GIT_ALLOW_PROTOCOL": "none"}
 # init's defaults and open's flags for claude's --model and --effort -> each one's check
 PICKS = {"model": lanelib.model_problem, "effort": lanelib.effort_problem}
 # new's brief flags -> the <placeholder> each fills in templates/LANE.md
@@ -1008,6 +1034,105 @@ def ctx_cell(ctx: dict | None) -> str:
     return "%dk%s" % (round(ctx["tokens"] / 1000), CTX_MARK.get(ctx["tier"], ""))
 
 
+def read_git(args: list[str], cwd: str, env: dict[str, str],
+             ok: tuple[int, ...] = (0,)) -> tuple[subprocess.CompletedProcess | None, str]:
+    """(git's result, '') when it exits with a code in ok, else (None, why): `ls` shows its board
+    whatever git does, so a failure, OVERLAP_WAIT running out, or output that isn't UTF-8 (a
+    lane names its own files) becomes a reason to warn with. env is lanelib.git's."""
+    try:
+        p = git(args, cwd, timeout=OVERLAP_WAIT, env=env)
+    except subprocess.TimeoutExpired:
+        return None, f"git took over {OVERLAP_WAIT} s"
+    except (OSError, subprocess.SubprocessError, ValueError) as e:  # ValueError: not UTF-8
+        return None, f"git didn't run: {e}"
+    if p.returncode not in ok:
+        return None, next(iter(p.stderr.strip().splitlines()), f"git exit {p.returncode}")
+    return p, ""
+
+
+def per_worktree_config(repo: Repo) -> bool | None:
+    """Whether the repo sets extensions.worktreeConfig, as `done` checks it (the common dir's own
+    config file); None when git can't tell, which `ls` treats as set."""
+    p, _ = read_git(["config", "--file", os.path.join(repo.common_dir, "config"), "--type=bool",
+                     "--get", "extensions.worktreeConfig"], repo.main, dict(OVERLAP_ENV),
+                    ok=(0, 1))  # 1: unset
+    return None if p is None else p.stdout.strip() == "true"
+
+
+def changed_files(repo: Repo, lane: dict, base: str, ref: str, lanes: list[dict],
+                  per_worktree: bool | None) -> tuple[set[str], str | None]:
+    """The files a live lane's work changes, for the board's overlap flag, and why part of them
+    went unread (None when nothing did). Committed: the three-dot diff from base to ref
+    (lane_head's), so main's later commits and a merged lane's work drop out; it reads objects
+    only. Uncommitted: modified, staged and untracked files, from `git status` in the lane.
+
+    That status is the first git `ls` runs in a lane, sandbox-off, so it runs only once each
+    gate passes, else the lane keeps its committed set and `ls` warns. lanes is every record
+    (Repo.lanes(shared=True)) for worktree_problem; per_worktree is per_worktree_config's.
+      - worktree_problem: the lane is a real worktree of this repo;
+      - per_worktree false: git there would read the lane-writable config.worktree too;
+      - no filter's clean or process command configured: status re-hashes a stat-dirty file
+        through the clean filter the lane picks by its own .gitattributes (or by the
+        sandbox-writable <common>/info/attributes);
+      - GIT_COMMON_DIR: config only from this repo's common dir, never the lane-writable
+        commondir file worktree_problem checked (a lane could repoint it after);
+      - GIT_OPTIONAL_LOCKS=0: no index write, so no index.lock taken under the lane's own `git
+        commit`, and no post-index-change hook, which a relative core.hooksPath would run from
+        the lane's worktree;
+      - core.fsmonitor=false: a relative fsmonitor command would resolve in the lane;
+      - --ignore-submodules=all: git never runs a status in a submodule, whose own config the
+        lane can write. That child gets GIT_CONFIG_PARAMETERS, so the -c above turns off its
+        fsmonitor too, but nothing else here would keep its clean filter from running."""
+    env = dict(OVERLAP_ENV)
+    files, unread = set(), []
+    p, why = read_git(["diff", "--name-only", "-z", "--no-renames", "--no-ext-diff",
+                       "--end-of-options", f"{base}...{ref}", "--"], repo.toplevel, env)
+    if p is not None:
+        files.update(filter(None, p.stdout.split("\0")))
+    else:
+        unread.append(f"its commits went unread ({why})")
+    path = lane["path"]
+    env.update(GIT_COMMON_DIR=repo.common_dir, GIT_OPTIONAL_LOCKS="0")
+    why = lanelib.worktree_problem(repo, path, lanes)
+    if why is None and per_worktree is not False:
+        why = ("this repo sets extensions.worktreeConfig, so git there reads the lane-writable "
+               "config.worktree" if per_worktree else
+               "can't tell whether this repo sets extensions.worktreeConfig")
+    if why is None:
+        p, err = read_git(["config", "--get-regexp", r"^filter\..*\.(clean|process)$"], path, env,
+                          ok=(0, 1))  # 1: none set
+        if p is None:
+            why = f"its filter config went unread: {err}"
+        elif p.returncode == 0:
+            why = ("a filter's clean or process command is configured, which `git status` there "
+                   "would run on files the lane picks")
+    if why is None:
+        p, why = read_git(["-c", "core.fsmonitor=false", "status", "--porcelain=v1", "-z",
+                           "--untracked-files=all", "--no-renames", "--ignore-submodules=all"],
+                          path, env)
+        if p is not None:  # each entry is `XY path`: --no-renames leaves no second path
+            files.update(entry[3:] for entry in p.stdout.split("\0") if entry)
+    if why:
+        unread.append(f"its uncommitted files went unread ({why})")
+    return files, "; ".join(unread) or None
+
+
+def overlap_lines(rows: list[dict]) -> list[str]:
+    """The board's line for each pair of lanes whose changed files overlap (board's overlaps),
+    naming at most OVERLAP_SHOWN files, control characters masked: a lane names its own
+    files."""
+    out = []
+    for row in rows:
+        for other, both in sorted(row["overlaps"].items()):
+            if other < row["id"]:
+                continue  # each pair once, from its first lane
+            more = (f" (and {len(both) - OVERLAP_SHOWN} more)" if len(both) > OVERLAP_SHOWN
+                    else "")
+            out.append(shown(f"overlap: {row['id']} and {other} both change "
+                             f"{', '.join(both[:OVERLAP_SHOWN])}{more}"))
+    return out
+
+
 def board(repo: Repo) -> list[dict]:
     """Each lane's record plus its derived state: nothing here is stored."""
     cfg = repo.config()
@@ -1022,6 +1147,17 @@ def board(repo: Repo) -> list[dict]:
         if os.path.realpath(lane["path"]) in trees and os.path.isdir(lane["path"]):
             for r in lane.get("claims", []):
                 claimers.setdefault(r, []).append(lane["id"])
+    # The overlap flag: each live lane's changed files, read now and never stored. A stale
+    # lane's are left out, as its claims are.
+    shared, per_worktree, changed = repo.lanes(shared=True), per_worktree_config(repo), {}
+    for lane in lanes:
+        if os.path.realpath(lane["path"]) in trees and os.path.isdir(lane["path"]):
+            changed[lane["id"]], why = changed_files(repo, lane, base, lane_head(lane, trees)[1],
+                                                     shared, per_worktree)
+            if why:
+                warn(shown(f"overlap for lane {lane['id']} may be short: {why}"))
+    overlaps = {a: {b: sorted(changed[a] & changed[b]) for b in changed
+                    if b != a and changed[a] & changed[b]} for a in changed}
     rows = []
     for lane in lanes:
         path = os.path.realpath(lane["path"])
@@ -1059,6 +1195,9 @@ def board(repo: Repo) -> list[dict]:
             flags.append("rebase")
         if any(len(claimers.get(r, [])) > 1 for r in lane.get("claims", [])):
             flags.append("conflict")
+        row["overlaps"] = overlaps.get(lane["id"], {})
+        if row["overlaps"]:
+            flags.append("overlap")
         if not stale and row["live_sessions"] == []:
             flags.append("orphan")
         if stopped:
@@ -1155,6 +1294,8 @@ def cmd_ls(args) -> None:
     for name in parse_locks(repo.config().get("locks", "")):
         if (holder := lock_holder(repo, name)) is not None:
             say(f"locks: {name} held by {holder}")
+    for line in overlap_lines(rows):
+        say(line)
     if line := main_footer(repo):
         say(line)
     try:
@@ -1564,8 +1705,33 @@ def take_lock(fd: int, name: str, wait: float | None) -> bool:
     return False
 
 
-def run_child(command: list[str]) -> int:
+def tee(stream, on_line) -> None:
+    """Copy stream (a child's merged stdout and stderr) to stdout line by line as it comes, and
+    hand each line, newline cut, to on_line, then None at its end. A stdout that fails (closed,
+    a reader gone) stops the echo only: the stream is still drained and handed on, or the
+    command would block on a full pipe and never exit."""
+    echo = True
+    with stream:
+        for raw in stream:
+            line = raw.decode(errors="replace")
+            if echo:
+                try:
+                    sys.stdout.write(line)
+                    sys.stdout.flush()
+                except (OSError, ValueError):  # ValueError: a closed sys.stdout
+                    echo = False
+            on_line(line.rstrip("\r\n"))
+    on_line(None)
+
+
+def run_child(command: list[str], cwd: str | None = None, on_line=None) -> int:
     """Run command and wait for it; its exit code, or -n (as Popen has it) if signal n killed it.
+
+    With on_line, its stdout and stderr go through one pipe that tee streams to stdout and hands
+    on line by line, then None at the end (`trial` parses failing test ids from them). A reader
+    thread drains it while this thread waits, so signals land here as they do without it; a
+    grandchild left holding the pipe once the command exits gets TEE_GRACE, and then the rest
+    of its output is dropped: on_line never gets its None, which is how a caller tells.
 
     The command shares this process group, so a Ctrl-C from the tty or a kill of the whole tree
     (Claude Code's Bash tool stops a command that way) already reaches it. SIGINT and SIGTERM are
@@ -1586,15 +1752,22 @@ def run_child(command: list[str]) -> int:
             pending.append(sig)
 
     old = {sig: signal.signal(sig, record) for sig in (signal.SIGINT, signal.SIGTERM)}
+    piped = {"stdout": subprocess.PIPE, "stderr": subprocess.STDOUT} if on_line else {}
     try:
         try:
-            child = subprocess.Popen(command)
+            child = subprocess.Popen(command, cwd=cwd, **piped)
         except OSError as e:
             warn(f"can't run {command[0]}: {e.strerror}")
             return 127
         for sig in pending:
             child.send_signal(sig)
+        reader = None
+        if on_line:
+            reader = threading.Thread(target=tee, args=(child.stdout, on_line), daemon=True)
+            reader.start()
         rc = child.wait()
+        if reader:
+            reader.join(TEE_GRACE)
     finally:
         for sig, handler in old.items():
             signal.signal(sig, handler)
@@ -1613,33 +1786,574 @@ def die_of(sig: int) -> int:
     return 128 + sig
 
 
-def cmd_lock(args) -> int:
-    repo = lanes_repo()
+def held_by_caller(repo: Repo, name: str) -> bool:
+    """Whether a `lane` process above this one holds lock name of this repo: a LOCKS_HELD entry
+    `<repo key>/<name>@<pid>:<start ticks>` whose process, pid and start alike, is an ancestor.
+    A process the hold leaves running (a `&` job, a daemon) inherits the variable, but once the
+    holder exits it is reparented, so it takes the lock as anyone does."""
+    want, holders = f"{repo.key}/{name}@", set()
+    for entry in os.environ.get(LOCKS_HELD, "").split(","):
+        pid, _, start = entry.removeprefix(want).partition(":")
+        if entry.startswith(want) and pid.isdigit() and start.isdigit():
+            holders.add((int(pid), int(start)))
+    return bool(holders) and any(a in holders for a in lanelib.ancestry(os.getpid()))
+
+
+@contextlib.contextmanager
+def held_lock(repo: Repo, name: str, wait: float | None, command: list[str]):
+    """Hold lock name, one of the config's locks, with its holder line naming command, for the
+    body of a `with`: yields True once held, False when wait ran out (nothing held). The holder
+    line is cleared and the lock let go however the body ends. `lock` and `trial` both run under
+    it; a Ctrl-C while waiting comes out as KeyboardInterrupt.
+
+    Re-entrant for descendants: the body runs with the lock, and this process, named in
+    LOCKS_HELD, so a command it starts that takes the same lock (a `--run` of `lane trial` that
+    wraps a suite in `lane lock suite`) runs under this hold instead of waiting on it forever,
+    while this process is its ancestor (held_by_caller). The locks are cooperative and their
+    commands sandboxed, so that proves enough."""
     names = parse_locks(repo.config().get("locks", ""))
-    if args.name not in names:
-        raise LaneError(f"no lock {args.name!r} in the lanes config (locks:{', '.join(names) or 'none'})"
-                        ": add it with `lane init --locks <full,list>` (it replaces the list); an "
-                        "unlisted name would split the mutual exclusion")
-    path = lock_path(repo, args.name)
+    if name not in names:
+        raise LaneError(f"no lock {name!r} in the lanes config (locks:"
+                        f"{', '.join(names) or 'none'}): add it with `lane init --locks "
+                        "<full,list>` (it replaces the list); an unlisted name would split the "
+                        "mutual exclusion")
+    if held_by_caller(repo, name):
+        warn(f"lock {name} is held by a command this one runs under: running under its hold")
+        yield True
+        return
+    path = lock_path(repo, name)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     # O_CLOEXEC, and Popen's close_fds: the command and anything it backgrounds never inherit the
     # lock, so it ends with this process.
     fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_CLOEXEC, 0o644)
     try:
-        if not take_lock(fd, args.name, args.wait):
-            return LOCK_BUSY
+        if not take_lock(fd, name, wait):
+            yield False
+            return
+        before = os.environ.get(LOCKS_HELD)
         try:
             os.ftruncate(fd, 0)
-            os.pwrite(fd, (holder_line(repo, args.command) + "\n").encode(), 0)
-            return run_child(args.command)
+            os.pwrite(fd, (holder_line(repo, command) + "\n").encode(), 0)
+            me = os.getpid()
+            os.environ[LOCKS_HELD] = ",".join(filter(None, [
+                before, f"{repo.key}/{name}@{me}:{lanelib.proc_start(me) or 0}"]))
+            yield True
         finally:
+            if before is None:
+                os.environ.pop(LOCKS_HELD, None)
+            else:
+                os.environ[LOCKS_HELD] = before
             # Cleared while still held: a waiter that reads between the next holder's acquire and
             # its write sees "an unknown holder", never this run.
             os.ftruncate(fd, 0)
-    except KeyboardInterrupt:  # a Ctrl-C while waiting, or before or after the command runs
-        return -signal.SIGINT
     finally:
         os.close(fd)
+
+
+def cmd_lock(args) -> int:
+    repo = lanes_repo()
+    try:
+        with held_lock(repo, args.name, args.wait, args.command) as held:
+            return run_child(args.command) if held else LOCK_BUSY
+    except KeyboardInterrupt:  # a Ctrl-C while waiting, or before or after the command runs
+        return -signal.SIGINT
+
+
+# ---- trial: the suites on a merge with every other live lane ---------------------------------
+UNITTEST_FAIL = re.compile(r"(?:FAIL|ERROR): \S")
+# An id never starts with '(': unittest's own summary, `FAILED (failures=12, skipped=4)`, isn't
+# one, and its counts change whenever a lane adds a test.
+PYTEST_FAIL = re.compile(r"(?:FAILED|ERROR) ([^\s(].*?)(?: - .*)?")
+
+
+class TrialStopped(Exception):
+    """A suite died of SIGINT or SIGTERM: the whole trial stops, as `lock` would."""
+
+    def __init__(self, sig: int):
+        super().__init__(sig)
+        self.sig = sig
+
+
+def failing_ids(lines: list[str]) -> list[str]:
+    """The failing test ids a run printed, in order, each once: a unittest `FAIL: ...` or
+    `ERROR: ...` line whole (a subtest's parameters, which can embed the tree's path, with it),
+    a pytest `FAILED x` or `ERROR x` summary line's x, its ` - message` tail cut."""
+    found = []
+    for line in lines:
+        line = line.rstrip()
+        if UNITTEST_FAIL.match(line):
+            found.append(line)
+        elif m := PYTEST_FAIL.fullmatch(line):
+            found.append(m.group(1))
+    return list(dict.fromkeys(found))
+
+
+class NotUtf8(LaneError):
+    """git's output in a trial isn't UTF-8: a lane names its own files."""
+
+
+def trial_git(repo: Repo, args: list[str], ok: tuple[int, ...] = (0,),
+              env: dict[str, str] | None = None) -> subprocess.CompletedProcess:
+    """git in the lane (`trial` runs sandboxed), bounded by TRIAL_GIT_WAIT. Running out, an exit
+    outside ok, or output that isn't UTF-8 (NotUtf8) aborts the trial with a message. env, when
+    given, replaces every inherited GIT_* variable (lanelib.git)."""
+    sub = next((a for a in args if a[:1] != "-" and "=" not in a), "git")
+    try:
+        p = git(args, repo.toplevel, timeout=TRIAL_GIT_WAIT, env=env)
+    except subprocess.TimeoutExpired:
+        raise LaneError(f"git {sub} took over {TRIAL_GIT_WAIT} s, so the trial stopped")
+    except UnicodeDecodeError:
+        raise NotUtf8(f"git {sub}'s output isn't UTF-8 (a lane names its own files), so the "
+                      "trial stopped")
+    if p.returncode not in ok:
+        line = (p.stderr.strip().splitlines() or [f"exit {p.returncode}"])[-1]
+        raise LaneError(f"git {sub} failed ({shown(line)}), so the trial stopped")
+    return p
+
+
+def merged_in(repo: Repo, sha: str, cur: str) -> bool:
+    """Whether commit sha is already in cur's history."""
+    return trial_git(repo, ["merge-base", "--is-ancestor", "--end-of-options", sha, cur],
+                     ok=(0, 1)).returncode == 0
+
+
+def merge_tree(repo: Repo, ours: str, theirs: str, label: str) -> tuple[str | None, list[str]]:
+    """(the merged tree, []) when commit theirs merges cleanly into ours, else (None, the paths
+    git names as conflicted, which may be none). Writes objects only. Any other git outcome
+    (unrelated histories, a bad commit) aborts, and a conflicted name that isn't UTF-8 stops
+    the trial naming label, so the lane needn't bisect for it."""
+    try:
+        p = trial_git(repo, ["merge-tree", "--write-tree", "-z", "--name-only", "--no-messages",
+                             "--end-of-options", ours, theirs], ok=(0, 1))
+    except NotUtf8:
+        raise NotUtf8(shown(f"git merge-tree's output merging {label} isn't UTF-8 (a lane names "
+                            "its own files), so the trial stopped; `lane trial <id> ...` with "
+                            "the other lanes' ids tries the rest")) from None
+    tree, *paths = p.stdout.split("\0")
+    if p.returncode == 1:
+        return None, [x for x in paths if x]
+    if not lanelib.SHA_RE.fullmatch(tree):
+        raise LaneError(f"git merge-tree gave no tree for {label}, so the trial stopped")
+    return tree, []
+
+
+def trial_commit(repo: Repo, tree: str, parents: list[str], message: str) -> str:
+    """A commit of tree with parents. It is dangling (no ref moves) and carries a fixed identity,
+    so no user config is needed and none signs it: no inherited GIT_* passes (env={}), since
+    GIT_AUTHOR_* and GIT_COMMITTER_* would beat the -c identity."""
+    return trial_git(repo, ["-c", f"user.name={TRIAL_IDENTITY[0]}", "-c",
+                            f"user.email={TRIAL_IDENTITY[1]}", "commit-tree", "--no-gpg-sign",
+                            *[x for p in parents for x in ("-p", p)], "-m", message,
+                            tree], env={}).stdout.strip()
+
+
+def merge_onto(repo: Repo, cur: str, sha: str, label: str) -> tuple[str, list[str] | None]:
+    """(the merge commit of sha onto cur, None) when it merges cleanly, else (cur, the paths git
+    names as conflicted, which may be none)."""
+    tree, paths = merge_tree(repo, cur, sha, label)
+    if tree is None:
+        return cur, paths
+    return trial_commit(repo, tree, [cur, sha], f"lane trial: merge {label}"), None
+
+
+def status_entry(repo: Repo, commit: str) -> tuple[str, str] | None:
+    """(mode, oid) of commit's top-level STATUS.md when it is a file, else None. Objects only,
+    and only that entry is listed, so no other name passes through text."""
+    out = trial_git(repo, ["ls-tree", "-z", "--end-of-options", commit, "STATUS.md"]).stdout
+    for record in filter(None, out.split("\0")):
+        meta, name = record.split("\t", 1)
+        mode, kind, oid = meta.split(" ")
+        if name == "STATUS.md" and kind == "blob":
+            return mode, oid
+    return None
+
+
+LEAD_LINE_RE = re.compile(r"^Lead branch: `([^`\n]+)`", re.MULTILINE)
+
+
+class Lead(NamedTuple):
+    """The lead's notes a trial puts in every commit it merges: the branch, its commit, and that
+    commit's STATUS.md (mode, oid)."""
+    name: str
+    commit: str
+    mode: str
+    oid: str
+
+
+def lead_line(repo: Repo, commit: str) -> str | None:
+    """The branch commit's STATUS.md names on its `Lead branch:` line, or None: no STATUS.md
+    file, one that isn't text, or no such line. Objects only."""
+    own = status_entry(repo, commit)
+    if own is None:
+        return None
+    try:
+        text = trial_git(repo, ["cat-file", "blob", own[1]]).stdout
+    except NotUtf8:
+        return None
+    m = LEAD_LINE_RE.search(text)
+    return m.group(1) if m else None
+
+
+def lead_status(repo: Repo, head: str, base: str) -> Lead | None:
+    """The lead's notes when head's STATUS.md, else the base's (a lane that branched before the
+    line and hasn't merged the base since), has a `Lead branch:` line naming a plain branch
+    (lanelib.BRANCH_RE) that resolves and holds STATUS.md as a file, else None."""
+    name = lead_line(repo, head) or lead_line(repo, base)
+    if name is None or not lanelib.BRANCH_RE.fullmatch(name):
+        return None
+    p = trial_git(repo, ["rev-parse", "--verify", "--quiet", "--end-of-options",
+                         f"refs/heads/{name}^{{commit}}"], ok=(0, 1))
+    if p.returncode:
+        return None
+    lead = p.stdout.strip()
+    theirs = status_entry(repo, lead)
+    if theirs is None:
+        return None
+    return Lead(name, lead, *theirs)
+
+
+class LeadStatus:
+    """Gives each commit a trial merges the lead's STATUS.md (`Lead branch:`, from lead_status),
+    so lanes that carry the lead's notes from different lead heads (after the merge order
+    changes) never conflict there: a carry takes the lead branch's STATUS.md whole, so every
+    merge holds that file already. A commit whose STATUS.md is the lead's stays itself; any
+    other gets a dangling child with that one entry set, built in a temporary index so no other
+    name passes through text. With no lead, every commit stays itself. A context manager: it
+    removes its scratch dir (trial_prefix's name, so a killed run's is a leftover)."""
+
+    def __init__(self, repo: Repo, lead: Lead | None, prefix: str, tmp: str):
+        self.repo, self.lead, self.prefix, self.tmp = repo, lead, prefix, tmp
+        self.made: dict[str, str] = {}
+        self.scratch: str | None = None
+
+    def __enter__(self) -> "LeadStatus":
+        return self
+
+    def __exit__(self, *exc) -> None:
+        if self.scratch:
+            shutil.rmtree(self.scratch, ignore_errors=True)
+
+    @property
+    def changed(self) -> bool:
+        return any(k != v for k, v in self.made.items())
+
+    def __call__(self, commit: str) -> str:
+        if self.lead is None:
+            return commit
+        if commit not in self.made:
+            self.made[commit] = self.build(commit)
+        return self.made[commit]
+
+    def build(self, commit: str) -> str:
+        lead = self.lead
+        if status_entry(self.repo, commit) == (lead.mode, lead.oid):
+            return commit
+        if self.scratch is None:
+            self.scratch = tempfile.mkdtemp(prefix=self.prefix, dir=self.tmp)
+        env = {"GIT_INDEX_FILE": os.path.join(self.scratch, "index")}
+        trial_git(self.repo, ["read-tree", "--end-of-options", commit], env=env)
+        trial_git(self.repo, ["update-index", "--add", "--replace", "--cacheinfo",
+                              f"{lead.mode},{lead.oid},STATUS.md"], env=env)
+        tree = trial_git(self.repo, ["write-tree"], env=env).stdout.strip()
+        return trial_commit(self.repo, tree, [commit],
+                            f"lane trial: STATUS.md from {lead.name}")
+
+
+def trial_prefix(repo: Repo, lane_id: str) -> str:
+    """The name of a trial's scratch dir in the temp dir, before mkdtemp's 8 characters. Keyed by
+    repo: another repo's lane of the same id shares the temp dir but not this repo's suite
+    lock, so its live tree must never look like this lane's leftover."""
+    return f"lane-trial-{repo.key}-{lane_id}-"
+
+
+def trial_leftovers(repo: Repo, lane_id: str, tmp: str) -> None:
+    """Clear what earlier trials of this lane left in tmp: one killed by the Bash cap or a
+    respawn never reaches its `finally`. Only this repo's lane's names (trial_prefix and
+    mkdtemp's 8 characters, so lane a never takes lane a-b's), and only registrations of a
+    `tree` there: never a blanket `git worktree prune`, since the common dir holds other
+    prunable entries that aren't this lane's. A sandboxed command can't remove an admin dir the
+    sandbox mounted when it started, so a registration it can't remove is named, once, with the
+    command to run sandbox-off."""
+    mine = re.compile(re.escape(trial_prefix(repo, lane_id)) + "[a-z0-9_]{8}")
+    cleared, stuck = [], []
+    for path in worktree_heads(repo):
+        parent = os.path.dirname(path)
+        if (os.path.basename(path) == "tree" and os.path.dirname(parent) == tmp
+                and mine.fullmatch(os.path.basename(parent))):
+            p = trial_git(repo, ["worktree", "remove", "--force", "--end-of-options", path],
+                          ok=tuple(range(256)))
+            (cleared if p.returncode == 0 else stuck).append(path)
+    for d in glob.glob(os.path.join(tmp, "lane-trial-*")):
+        if mine.fullmatch(os.path.basename(d)) and not os.path.islink(d):
+            shutil.rmtree(d, ignore_errors=True)
+    if cleared:
+        warn(shown(f"cleared the tree an earlier trial left registered (it never reached its "
+                   f"cleanup): {', '.join(cleared)}"))
+    if stuck:
+        warn(shown("an earlier trial's tree is still registered and the sandbox can't remove "
+                   "it; run sandbox-off: " + "; ".join(
+                       f"git worktree remove --force {shlex.quote(p)}" for p in stuck)))
+
+
+class SuiteRun(NamedTuple):
+    """One run of a suite: its exit code, the failing ids it printed, and whether its output was
+    cut (a process it started still held the pipe past TEE_GRACE, so ids may be missing)."""
+    rc: int
+    ids: list[str]
+    cut: bool = False
+
+    @property
+    def failed(self) -> bool:
+        return bool(self.rc or self.ids or self.cut)
+
+
+def run_suites(tree: str, commands: list[str], label: str, picked) -> list[SuiteRun]:
+    """Run each picked command (by index) as `sh -c` in tree, its output streamed. A suite that
+    dies of SIGINT or SIGTERM (a Ctrl-C, a stop of the whole tree) stops the trial."""
+    out = []
+    for i in picked:
+        say(shown(f"lane trial: {label} run of suite {i + 1}/{len(commands)}: {commands[i]}"))
+        lines, ended = [], []
+
+        def take(x, lines=lines, ended=ended):  # bound now: a cut run's reader writes on later
+            (lines if x is not None else ended).append(x)
+
+        rc = run_child(["sh", "-c", commands[i]], cwd=tree, on_line=take)
+        if rc in (-signal.SIGINT, -signal.SIGTERM):
+            raise TrialStopped(-rc)
+        # The end first, the lines after: the reader hands on every line before its None, so a
+        # copy taken once the end is seen holds them all. In the other order a reader that ends
+        # between the two reads drops its last ids from a run that reads as whole.
+        cut = not ended
+        out.append(SuiteRun(rc, failing_ids(list(lines)), cut=cut))
+    return out
+
+
+def trial_lanes(repo: Repo, me: dict, ids: list[str],
+                trees: dict[str, tuple[str, str]]) -> list[dict]:
+    """The live lanes to merge, sorted by id: every other one, or only those ids."""
+    live = [x for x in repo.lanes() if x["id"] != me["id"]
+            and os.path.realpath(x["path"]) in trees and os.path.isdir(x["path"])]
+    for lane_id in ids:
+        check_id(lane_id)
+        if lane_id == me["id"]:
+            raise LaneError(f"lane {lane_id} is this lane: name the lanes to merge into it")
+        if lane_id not in {x["id"] for x in live}:
+            raise LaneError(f"no live lane {lane_id} to merge (`lane ls` lists them)")
+    return [x for x in live if not ids or x["id"] in ids]
+
+
+def cmd_trial(args) -> int:
+    """Merge the base and every other live lane's commits onto this lane's HEAD in dangling
+    commits, check the merge out in a fresh scratch tree, and run each suite there under a
+    lock; a failed suite reruns on the baseline (HEAD plus the base) at the same path, so a
+    failure the location alone causes, or one already on the base, isn't the merge's.
+    PLAN.md of lane cross-lane, section B, and docs/lanes.md have the design."""
+    repo = lanes_repo()
+    me = own_lane(repo)
+    if held_by_caller(repo, TRIAL_LOCK):  # held_lock would let it in, and its sweep then clear
+        raise LaneError(f"a trial can't run under a hold of the {TRIAL_LOCK} lock (inside "
+                        "another trial's suite, or `lane lock suite`): an outer trial's live tree "
+                        "would look like a leftover to clear. Run it on its own")
+    command = ["lane", "trial", *args.ids, *[x for c in args.run for x in ("--run", c)]]
+    try:
+        with held_lock(repo, TRIAL_LOCK, args.wait, command) as held:
+            return trial(repo, me, args) if held else LOCK_BUSY
+    except KeyboardInterrupt:  # a Ctrl-C while waiting, merging or cleaning up
+        return -signal.SIGINT
+    except TrialStopped as e:
+        return -e.sig
+
+
+def trial(repo: Repo, me: dict, args) -> int:
+    """cmd_trial's work, under its lock. When this lane's HEAD, else the base, names the lead's
+    branch in its STATUS.md (lead_status), every commit it merges (HEAD, the base, each lane's
+    head) and each one conflict_line tries holds the lead's STATUS.md first (LeadStatus), so
+    carries of the lead's notes never conflict, as a carry settles them; the already-in checks
+    use the commits as they are."""
+    cfg = repo.config()
+    base_name = cfg.get("base", "origin/main")
+    trees = worktree_heads(repo)
+    others = trial_lanes(repo, me, args.ids, trees)
+    tmp = os.path.realpath(tempfile.gettempdir())
+    trial_leftovers(repo, me["id"], tmp)
+    head = rev(repo, "HEAD")
+    base = rev(repo, base_ref(cfg))
+    if head is None or base is None:
+        raise LaneError(f"{'HEAD' if head is None else base_name} doesn't name a commit here")
+    if trial_git(repo, ["status", "--porcelain"]).stdout.strip():
+        warn(f"lane {me['id']} has uncommitted changes: only its HEAD is tried")
+    with LeadStatus(repo, lead_status(repo, head, base), trial_prefix(repo, me["id"]),
+                    tmp) as norm:
+        cur = norm(head)
+        if not merged_in(repo, base, head):
+            cur, conflicted = merge_onto(repo, cur, norm(base), base_name)
+            if conflicted is not None:
+                raise LaneError(shown(f"{base_name} doesn't merge cleanly into lane {me['id']} ("
+                                      f"{', '.join(conflicted) or 'git named no path'}): merge "
+                                      f"{base_name} into the lane first"))
+        baseline = cur
+        chain = {"base": norm(base), "base_name": base_name, "baseline": baseline, "norm": norm}
+        merged, already, conflicts = [], [], {}
+        for lane in others:
+            sha = rev(repo, lane_head(lane, trees)[1])
+            if sha is None:
+                raise LaneError(f"lane {lane['id']}'s head doesn't name a commit, so the trial "
+                                "stopped")
+            if merged_in(repo, sha, cur):
+                already.append(lane["id"])
+                continue
+            cur, conflicted = merge_onto(repo, cur, norm(sha), lane["id"])
+            if conflicted is None:
+                merged.append((lane["id"], sha))
+            else:
+                conflicts[lane["id"]] = conflict_line(repo, lane["id"], sha, conflicted, chain,
+                                                      merged, args.run)
+        lead = norm.lead if norm.changed else None
+    if lead:
+        say(f"lane trial: STATUS.md is the lead's notes on {lead.name} ({lead.commit[:12]}) in "
+            "every merge, as a carry would make it")
+    if already:
+        say(f"lane trial: nothing to merge from {', '.join(already)} (already in)")
+    for line in conflicts.values():
+        say(shown(line))
+    if not merged:
+        say("lane trial: no other lane's work merged, so no suite ran")
+        return 1 if conflicts else 0
+    say("lane trial: merged " + ", ".join(f"{i} ({s[:12]})" for i, s in merged)
+        + f" onto lane {me['id']}'s HEAD and {base_name}")
+    warn("other lanes' uncommitted work isn't in the merge, only their commits")
+    tmpdir = tempfile.mkdtemp(prefix=trial_prefix(repo, me["id"]), dir=tmp)
+    tree, holds = os.path.join(tmpdir, "tree"), None
+    try:
+        trial_git(repo, ["worktree", "add", "--detach", "--quiet", "--end-of-options", tree, cur])
+        holds = "merge"
+        runs = run_suites(tree, args.run, "merge", range(len(args.run)))
+        failed = [i for i, run in enumerate(runs) if run.failed]
+        again = {}
+        if failed:
+            # At the same path: subtest ids that embed it, and the admin dir's name, then match.
+            holds = None
+            trial_git(repo, ["worktree", "remove", "--force", "--end-of-options", tree])
+            trial_git(repo, ["worktree", "add", "--detach", "--quiet", "--end-of-options", tree,
+                             baseline])
+            holds = "baseline"
+            again = dict(zip(failed, run_suites(tree, args.run, "baseline", failed)))
+        rc = trial_report(args.run, runs, again)
+    finally:
+        if args.keep and holds:
+            say(shown(f"lane trial: kept the tree (the {holds}) at {tree}; remove it with `git "
+                      f"worktree remove --force {shlex.quote(tree)}`"))
+        else:
+            drop_tree(repo, tree, tmpdir)
+    if conflicts:
+        many = len(conflicts) > 1
+        say(f"lane trial: FAILED: lane{'s' * many} {', '.join(conflicts)} didn't merge, so "
+            f"{'their' if many else 'its'} work went untried")
+        return 1
+    return rc
+
+
+def conflict_line(repo: Repo, lane_id: str, sha: str, conflicted: list[str], chain: dict,
+                  merged: list[tuple[str, str]], commands: list[str]) -> str:
+    """The report's line for lane lane_id, whose head sha conflicted with the merge so far
+    (chain: the base commit and its name, the baseline, and norm). Merges decide, in this order:
+      - with the base alone: the lane conflicts with the base itself, so it needs to merge the
+        base before a trial can tell whether it conflicts with this lane (the line claims
+        nothing about this lane, which the known limit below may hide);
+      - with none merged before it, the merge so far is the baseline: this lane's conflict;
+      - with the baseline: the base merges cleanly with the lane, so a conflict there needs this
+        lane's own changes: this lane's conflict;
+      - else it is with lanes merged before it: the line names each of them it conflicts with by
+        itself (or, when none does, the merge of them all) and how to try the lane with this one
+        alone.
+    Not by paths: git conflicts by hunk, not by file, and names a renamed file by its new path.
+    Not by this lane's HEAD: it may hold the base already, and then conflicts wherever the base
+    does. A lane behind the base that also conflicts with this lane gets the first verdict
+    only; its own trial, once it merges the base, finds the rest. Each merge here takes its
+    commits through chain's norm (LeadStatus), as the trial's own merges do, so a clash of
+    carries of the lead's notes never decides a verdict."""
+    paths = ", ".join(conflicted) or "git named no path"
+    norm = chain["norm"]
+    sha = norm(sha)
+    base = chain["base_name"]
+    tree, with_base = merge_tree(repo, chain["base"], sha, f"{lane_id} and {base}")
+    if tree is None:
+        return (f"lane trial: lane {lane_id} conflicts with {base} ("
+                f"{', '.join(with_base) or 'git named no path'}): it needs to merge {base} "
+                "before a trial can tell whether it conflicts with this lane")
+    if not merged or merge_tree(repo, chain["baseline"], sha, lane_id)[0] is None:
+        return f"lane trial: conflict with lane {lane_id}: {paths}"
+    pairs = []
+    for other, other_sha in merged:
+        tree, both = merge_tree(repo, norm(other_sha), sha, f"{lane_id} and {other}")
+        if tree is None:
+            pairs.append(f"lane {other} ({', '.join(both) or 'git named no path'})")
+    whom = (" and ".join(pairs) if pairs else
+            "the merge of lane " + ", ".join(other for other, _ in merged) + f" ({paths})")
+    alone = shlex.join(["lane", "trial", lane_id, *[x for c in commands for x in ("--run", c)]])
+    return (f"lane trial: lane {lane_id} conflicts with {whom}, not with this lane: {lane_id} "
+            f"was left out; try it with this lane alone: {alone}")
+
+
+def drop_tree(repo: Repo, tree: str, tmpdir: str) -> None:
+    """Unregister and remove the trial's tree, then its dir; a failure only warns, so it never
+    hides how the trial ended."""
+    if os.path.lexists(os.path.join(tree, ".git")):
+        try:
+            p = git(["worktree", "remove", "--force", "--end-of-options", tree], repo.toplevel,
+                    timeout=TRIAL_GIT_WAIT)
+            if p.returncode != 0:
+                warn(shown(f"couldn't remove the trial's tree at {tree}: {p.stderr.strip()}"))
+        except subprocess.TimeoutExpired:
+            warn(f"git worktree remove took over {TRIAL_GIT_WAIT} s: the tree at {tree} is left")
+    shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+def trial_report(commands: list[str], runs: list[SuiteRun], again: dict[int, SuiteRun]) -> int:
+    """Say how each suite did on the merge, judged against its baseline rerun (again, by suite
+    index) when it failed: 0 when no failure is the merge's, else 1. A failed suite passes only
+    when every id it failed on the merge also fails on the baseline, and its exit doesn't get
+    worse there: non-zero on the merge but zero on the baseline, or a death by signal on the
+    merge only, is the merge's (a `--run` can chain a runner whose ids it parses with a check
+    that prints none). One with no ids to compare, or whose output either run cut, fails, to be
+    compared by hand. Ids come from the suites' output, so they are masked."""
+    new = 0
+    for i, (cmd, (rc, ids, cut)) in enumerate(zip(commands, runs)):
+        head = f"lane trial: suite {i + 1} ({cmd}):"
+        if i not in again:
+            say(shown(f"{head} ok"))
+            continue
+        base_rc, base_ids, base_cut = again[i]
+        if cut or base_cut:
+            new += 1
+            which = "both runs" if cut and base_cut else "the merge" if cut else "the baseline"
+            say(shown(f"{head} its output on {which} was cut (a process it started still holds "
+                      "it), so test ids may be missing: compare by hand"))
+            continue
+        if not ids:
+            new += 1
+            say(shown(f"{head} failed (exit {rc}) with no test id to compare against the "
+                      "baseline: compare the two runs above by hand"))
+            continue
+        only = [x for x in ids if x not in base_ids]
+        worse = (rc != 0 and base_rc == 0) or (rc < 0 <= base_rc)
+        if only or worse:
+            new += 1
+        if only:
+            say(shown(f"{head} {len(only)} failure(s) only on the merge:"))
+        elif worse:
+            say(shown(f"{head} its ids fail on the baseline too, but it exits {rc} on the merge "
+                      f"and {base_rc} on the baseline, so a failure is the merge's: compare "
+                      "the two runs above"))
+        else:
+            say(shown(f"{head} every failure also fails on the baseline (exit {rc} on the merge, "
+                      f"{base_rc} on the baseline), so none is the merge's:"))
+        for x in only or ([] if worse else ids):
+            say(shown(f"  {x}"))
+    if new:
+        say(f"lane trial: FAILED: {new} suite(s) fail on the merge")
+    return 1 if new else 0
 
 
 # ---- done: what runs in a lane, and ending it ------------------------------------------------
@@ -1880,8 +2594,15 @@ def self_guard(lane_id: str, path: str, procs: dict[int, lanelib.Proc], hits: di
 def removable(lane_id: str, path: str) -> None:
     """Refuse unless a plain `git worktree remove` will take the lane, so nothing is ended only
     for the remove to fail afterwards: a clean tree by git's own test, not locked, and no
-    submodules (a gitlink in the index, or a modules dir in its admin dir)."""
-    p = git(["status", "--porcelain", "--ignore-submodules=none"], path)
+    submodules (a gitlink in the index, or a modules dir in its admin dir).
+
+    The status skips submodules: one with changes in it would run its own `git status`, whose
+    config (core.fsmonitor among it) sits where the lane can write it, and GIT_COMMON_DIR never
+    reaches that child. The lane's sessions still run here, so refusing submodules first would
+    race a lane that adds one after the check: the submodule refusal below stays the gate. And
+    fsmonitor is off: a relative core.fsmonitor in the repo's config resolves in the lane."""
+    p = git(["-c", "core.fsmonitor=false", "status", "--porcelain", "--ignore-submodules=all"],
+            path)
     if p.returncode != 0:
         raise LaneError(f"git status failed in {path}: {p.stderr.strip()}")
     if dirty := [line[3:] for line in p.stdout.splitlines()]:
@@ -1896,7 +2617,8 @@ def removable(lane_id: str, path: str) -> None:
         elif tree == path and (line == "locked" or line.startswith("locked ")):
             raise LaneError(f"lane {lane_id}'s worktree is locked, so git won't remove it: "
                             f"`git worktree unlock {path}`, then rerun `lane done {lane_id}`")
-    staged = git(["ls-files", "--stage"], path).stdout.splitlines()
+    # ls-files queries fsmonitor too, as it reads the index.
+    staged = git(["-c", "core.fsmonitor=false", "ls-files", "--stage"], path).stdout.splitlines()
     admin = git(["rev-parse", "--absolute-git-dir"], path).stdout.strip()
     if any(line.startswith("160000 ") for line in staged) or (
             admin and os.path.isdir(os.path.join(admin, "modules"))):
@@ -2624,6 +3346,16 @@ def cmd_done(args) -> None:
     # file that worktree_problem checks: a lane could repoint it after the check to a config
     # whose core.fsmonitor runs a command sandbox-off.
     os.environ["GIT_COMMON_DIR"] = repo.common_dir
+    # And none of them writes the lane's index: a status that refreshes it fires the
+    # post-index-change hook, which a relative core.hooksPath runs from the lane's worktree.
+    os.environ["GIT_OPTIONAL_LOCKS"] = "0"
+    # Nor does any of them query fsmonitor: a relative core.fsmonitor in the repo's config runs
+    # from the lane's worktree, and `git worktree remove` runs a status there of its own, past
+    # any -c on our command line. Config from the environment reaches it, and submodules: the
+    # last entry of GIT_CONFIG_PARAMETERS, which git reads after any GIT_CONFIG_COUNT entries
+    # and the inherited ones before it, so nothing inherited turns it back on.
+    os.environ["GIT_CONFIG_PARAMETERS"] = " ".join(filter(None, [
+        os.environ.get("GIT_CONFIG_PARAMETERS", "").strip(), "'core.fsmonitor'='false'"]))
     # Not even then, where the repo turns on per-worktree config: git would read the lane's
     # <admin>/config.worktree too, which its sandbox can write and no variable overrides.
     present = os.path.isdir(path)
@@ -2808,6 +3540,19 @@ def parser() -> argparse.ArgumentParser:
                    help=f"give up after SECS, exit {LOCK_BUSY} (default: wait as long as it "
                         f"takes); the command's own {LOCK_BUSY} looks the same, but only a "
                         "timeout prints \"gave up on lock\" on stderr")
+    p = sub.add_parser("trial", help="run the suites on a merge of this lane with every other "
+                                     "live lane, in a scratch tree, under the suite lock",
+                       usage="lane trial [<id> ...] [--wait SECS] [--keep] "
+                             "--run CMD [--run CMD ...]")
+    p.add_argument("ids", nargs="*", metavar="id",
+                   help="merge only these lanes (default: every other live lane)")
+    p.add_argument("--run", action="append", required=True, metavar="CMD",
+                   help="a suite, run as `sh -c CMD` in the tree and judged on its own; repeat "
+                        "it per suite (a chained `a && b` stops at the first failure)")
+    p.add_argument("--wait", type=float, metavar="SECS",
+                   help=f"give up on the lock after SECS, exit {LOCK_BUSY} (default: wait)")
+    p.add_argument("--keep", action="store_true",
+                   help="keep the scratch tree (it says where, and how to remove it)")
     p = sub.add_parser("whoami", help="this checkout's lane id, main, or plain")
     p.add_argument("--json", action="store_true")
     for name in ("claim", "release"):
@@ -2873,9 +3618,9 @@ def main(argv=None) -> int:
     # act never moves it. `open --print` only prints.
     if args.cmd in LEAD_ACTS and not getattr(args, "print", False):
         take_lead()
-    if rc and rc < 0:  # lock's command died of signal -rc, or a Ctrl-C hit `lane` itself
-        return die_of(-rc)  # only now: cmd_lock has cleared the holder line and let go
-    return rc or 0  # only `lock` returns a code: its command's
+    if rc and rc < 0:  # a command died of signal -rc, or a Ctrl-C hit `lane` itself
+        return die_of(-rc)  # only now: the lock's holder line is cleared and the lock let go
+    return rc or 0  # only `lock` (its command's) and `trial` return a code
 
 
 if __name__ == "__main__":

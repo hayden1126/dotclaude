@@ -120,7 +120,8 @@ EXCLUDED = [
 # subcommands, must stay sandboxed so the command `lane lock` wraps inherits the sandbox).
 SANDBOXED = ["tmux -L x ls", "tmux send-keys -t %1 x", "tmux lsp", "tmux display-message -p x",
              "tmux -V", "FOO=1 tmux ls", "codex exec x", "codex --version", "codex mcp add x",
-             "codex login", "lane lock gate -- true", "lane whoami", "lane claim 42",
+             "codex login", "lane lock gate -- true", "lane trial --run true", "lane whoami",
+             "lane claim 42",
              "git clone x", "git -C . fetch", "git -c k=v fetch", "claude-alt -p x",
              "git push ../r feat", "git push /tmp/r feat", "git push upstream feat",
              "gh gist create f", "gh gist new f", "gh release download v1 -O x",

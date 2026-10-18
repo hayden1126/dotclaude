@@ -88,8 +88,17 @@ def sandbox_stub(path: str) -> bool:
 
 def leftovers(repo: lanelib.Repo) -> list[str]:
     """Uncommitted paths, repo-relative, minus agent worktrees (each is its own checkout) and
-    sandbox stubs."""
-    p = git(["status", "--porcelain", "--untracked-files=all"], repo.toplevel, check=True)
+    sandbox stubs.
+
+    `lane done` runs this sandbox-off in the lane, so the status runs nothing the lane can
+    configure. --ignore-submodules=dirty still reports a submodule whose commit moved, but never
+    runs a status inside one, whose own config the lane can write (its clean filter would run).
+    --no-optional-locks keeps the index unwritten, so no post-index-change hook fires; it sets
+    GIT_OPTIONAL_LOCKS=0 and leaves the rest of the environment alone, since `done` passes
+    GIT_COMMON_DIR down. core.fsmonitor=false: a relative fsmonitor command in the repo's config
+    would resolve in the lane."""
+    p = git(["--no-optional-locks", "-c", "core.fsmonitor=false", "status", "--porcelain",
+             "--untracked-files=all", "--ignore-submodules=dirty"], repo.toplevel, check=True)
     out = []
     for line in p.stdout.splitlines():
         path = line[3:].split(" -> ")[-1].strip('"')
@@ -112,7 +121,9 @@ def head_carries(repo: lanelib.Repo, path: str) -> bool:
     rel = os.path.relpath(path, repo.toplevel)
     if rel.startswith(".."):
         return False
-    p = git(["diff-tree", "--root", "--no-commit-id", "--name-only", "-r", "HEAD"], repo.toplevel)
+    # fsmonitor off, as in leftovers: diff-tree queries it too.
+    p = git(["-c", "core.fsmonitor=false", "diff-tree", "--root", "--no-commit-id", "--name-only",
+             "-r", "HEAD"], repo.toplevel)
     return rel in p.stdout.splitlines()
 
 
