@@ -84,7 +84,10 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     diff at the draft push, another lane's install hold), 2 done-rerun (`fix/done-rerun`: `lane
     done`'s rerun on a restored tab), 3 restore-effort (`fix/restore-effort`: restore and the
     shelf's Open keep `--model`/`--effort`). Their briefs hold the backlog detail; state is in
-    each record. lead-chain carries the lead's lagging STATUS to main.
+    each record. lead-chain carries the lead's lagging STATUS to main. Lead PR #117
+    (`fix/pass-invoke-handoff`, worktree `.claude/worktrees/pass-handoff`): the pass skill's step
+    3 loads the handoff skill with the Skill tool. Draft; it shares `tests/pass/test_pass_guards.py`
+    with #116 (restore-effort), a clean trial merge. Remove the worktree after it merges.
   - The parked json-depth sweep (21 files, among them the delegation enforcement scripts) is on
     `fix/json-depth-sweep`, a local branch never pushed: keep it while the sweep is in the
     backlog. Shipping it first needs a check of how each enforcement site fails
