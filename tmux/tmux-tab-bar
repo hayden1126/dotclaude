@@ -75,20 +75,20 @@ row gets a placement 0..n-1. The move then lays out at once under the layout loc
 hook's run in flight, so the next queued move reads a fresh @tab_bar_nav) and copies each
 changed placement into the restore records of the window's panes (open-sessions/<sid>.json,
 field `place`), so tmux/claude-restore puts it back on the new window after tmux dies.
-A placement records the tab's kind and repo (its checkout's git common dir) when it entered
-its row (`kind`, `repo`; a move that renumbers the row keeps them). One made while the tab was
-shared is void once that same repo has lanes: a repo with no lanes puts its tabs in the shared
-row, a move there pins them all, and without this the pin kept a lead off its repo's row once a
-lane opened (2026-10-17). Hayden's rule (2026-10-18): a tab placed while laned keeps its pin,
-but one placed as a shared tab goes back to its repo's row; one that only changes directory
-(or pane) into another repo keeps it. group_windows skips a void placement and `layout` unsets
-it in the same source-file, as Auto place would. A placement from before `kind` (four keys)
-is never void. Two gaps are
-accepted: a move whose writes land between a layout's read and its unset loses the new
-placements of the tabs that layout unsets (each sits in auto order in its row, while the
-restore records keep the move's), and the restore records keep a void placement until the
-session's next SessionStart (hooks/session-registry.sh rereads @tab_place); a restore
-meanwhile sets it back, void again while the repo has lanes.
+A placement records the tab's kind and repo (a digest of its checkout's git common dir) when
+it entered its row (`kind`, `repo`; a move that renumbers the row keeps them). One made while
+the tab was shared is void once that same repo has lanes: a repo with no lanes puts its tabs
+in the shared row, a move there pins them all, and without this the pin kept a lead off its
+repo's row once a lane opened (2026-10-17). Hayden's rule (2026-10-18): a tab placed while
+laned keeps its pin, but one placed as a shared tab goes back to its repo's row; one that only
+changes directory (or pane) into another repo keeps it. group_windows skips a void placement
+and `layout` unsets it in the same source-file, as Auto place would. A placement from before
+`kind` (four keys) is never void, until a move in its row rewrites it with its tab's kind and
+repo of that moment. Two gaps are accepted: a move whose writes land between a layout's read
+and its unset loses the new placements of the tabs that layout unsets (each sits in auto order
+in its row, while the restore records keep the move's), and the restore records keep a void
+placement until the session's next SessionStart (hooks/session-registry.sh rereads
+@tab_place); a restore meanwhile sets it back, void again while the repo has lanes.
 
 Nothing from a window title, a directory name, a lane record or the lead record enters a format
 string (the lead record only picks one of the windows tmux listed): the rows hold only window ids
@@ -156,6 +156,7 @@ NAV_ROW = re.compile(r"\d{1,2};@\d{1,9}:\d{1,6}:\d{1,6}(?:,@\d{1,9}:\d{1,6}:\d{1
 NAV_MAX = 16 * 1024
 DIRECTIONS = ("left", "right", "up", "down")
 ROW_KEY = re.compile(r"(?:p:/.*|s|c:[1-9]\d{0,3})\Z", re.S)   # a project, the shared or a custom row
+REPO_DIGEST = re.compile(r"[0-9a-f]{16}\Z")                     # a placement's repo (repo_key)
 PLAIN_WORD = re.compile(r"[A-Za-z0-9_@-][A-Za-z0-9_@\[\]-]*")   # needs no quotes in tmux's config
 
 FILL = "#[fill=colour236]"
@@ -457,8 +458,9 @@ def lead_name(n: int) -> str:
 class Place:
     """A window's @tab_place: its row ("p:<common dir>", "s" or "c:<n>") and position there; a
     custom row's members also carry the row it was made below (`after`) and its cleaned name.
-    `kind` and `repo` are the tab's when it entered that row (apply), both "" in a placement
-    from before kinds; one made as a shared tab is void once its repo has lanes (void)."""
+    `kind` and `repo` (repo_key of its Tab.repo) are the tab's when it entered that row (apply),
+    both "" in a placement from before kinds; one made as a shared tab is void once its repo has
+    lanes (void)."""
     row: str
     pos: int
     after: str = ""
@@ -474,7 +476,7 @@ def plain(s: object) -> bool:
 
 def parse_place(text: str) -> Place | None:
     """An @tab_place value read strictly, or None: exactly the four keys, or those and both a
-    `kind` from KINDS and a `repo` ("" or an absolute path); a row key, an int position
+    `kind` from KINDS and a `repo` ("" or a repo_key); a row key, an int position
     0..POS_MAX, an `after` that is "" or a row key, and an already cleaned name; at most
     PLACE_MAX bytes and no control characters, raw or decoded. It comes from a window option a
     restore record can set, so it is untrusted, and it never reaches a format."""
@@ -491,8 +493,8 @@ def parse_place(text: str) -> Place | None:
     if not plain(row) or not ROW_KEY.match(row) or type(pos) is not int \
             or not 0 <= pos <= POS_MAX or not plain(after) or (after and not ROW_KEY.match(after)) \
             or not plain(name) or name != clean_row_name(name) \
-            or ("kind" in d and (kind not in KINDS or not plain(repo)
-                                 or (repo and not os.path.isabs(repo)))):
+            or ("kind" in d and (kind not in KINDS or not isinstance(repo, str)
+                                 or (repo and not REPO_DIGEST.match(repo)))):
         return None
     return Place(row, pos, after, name, kind, repo)
 
@@ -508,13 +510,21 @@ def place_text(place: Place) -> str | None:
     return text if parse_place(text) == place else None
 
 
+def repo_key(common: str) -> str:
+    """A placement's `repo` for a git common dir: a short digest ("" for none), so a placement
+    never holds a second path (a project row's key already holds one, PLACE_MAX bounds both)."""
+    if not common:
+        return ""
+    return hashlib.sha256(common.encode(errors="surrogateescape")).hexdigest()[:16]
+
+
 def void(place: Place, tab: Tab) -> bool:
     """A placement made while the tab was shared, on a tab whose repo (the same one) now has
     lanes: that repo had no row then (put() pins every member of the row it moves in), so the
     tab goes back to its repo's row and layout unsets the placement, whether the move carried
     this tab or another (Hayden's rule, 2026-10-18). A tab that only changed directory (or
     pane) into a laned repo keeps its placement."""
-    return place.kind == "shared" and tab.kind != "shared" and place.repo == tab.repo
+    return place.kind == "shared" and tab.kind != "shared" and place.repo == repo_key(tab.repo)
 
 
 # --- lay out ------------------------------------------------------------------------------------
@@ -1486,14 +1496,16 @@ def apply(ctx: Context, changes: dict, base: str) -> None:
     (under layout's lock, waiting up to LOCK_WAIT for a hook's run in flight, so the next
     queued move reads the bar this one drew), then copy the changes into the restore records of
     each changed window's panes. Each Place gets the kind and repo its tab had when it entered
-    that row (Place): its old placement's, when that one is in the same row and not void
-    (put() renumbers a row's members, which keeps a pin made while laned hard), else its own."""
+    that row (Place): its old placement's, when that one has them, is in the same row and isn't
+    void (put() renumbers a row's members, which keeps a pin made while laned hard), else its
+    own now (a four-key placement from before kinds takes them at its first rewrite)."""
     lines, changed, tabs = [], {}, {}
     for wid, place in changes.items():
         if place is not None:
             tab, old = tab_in(ctx.state, wid, tabs), parse_place(ctx.state.options[wid]["place"])
-            entry = old if old is not None and old.row == place.row and not void(old, tab) else tab
-            place = dataclasses.replace(place, kind=entry.kind, repo=entry.repo)
+            keep = old is not None and old.kind and old.row == place.row and not void(old, tab)
+            kind, repo = (old.kind, old.repo) if keep else (tab.kind, repo_key(tab.repo))
+            place = dataclasses.replace(place, kind=kind, repo=repo)
         text = place_text(place) if place is not None else None
         if (place is not None and text is None) or (text or "") == ctx.state.options[wid]["place"]:
             continue

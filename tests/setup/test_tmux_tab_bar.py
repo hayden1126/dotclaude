@@ -820,6 +820,7 @@ class Nav(unittest.TestCase):
 
 P = tb.Place
 REPO_KEY, KAR_KEY = "p:/r/.git", "p:/k/.git"
+R, K = tb.repo_key("/r/.git"), tb.repo_key("/k/.git")   # their placements' repo
 TAB_OF = {"@1": tb.Tab("shared", "", "hq", "hq:"), "@2": tb.Tab("lead", "/r/.git", "repo", "lead"),
           "@3": tb.Tab("lane", "/r/.git", "repo", "a"), "@4": tb.Tab("lane", "/r/.git", "repo", "b"),
           "@5": tb.Tab("lead", "/k/.git", "kar", "lead"), "@6": tb.Tab("shared", "", "x", "x:")}
@@ -836,17 +837,26 @@ class Placement(unittest.TestCase):
     def test_a_valid_placement_reads_back(self):
         for p in (P("s", 0), P(REPO_KEY, 999), P("c:1", 3, REPO_KEY, "work ♯1"),
                   P("c:9999", 0, "s", ""), P("c:2", 0, "c:1", ""),
-                  *(P("s", 1, kind=kind, repo="/r/.git") for kind in tb.KINDS),
+                  *(P("s", 1, kind=kind, repo=R) for kind in tb.KINDS),
                   P("s", 1, kind="shared")):
             with self.subTest(p=p):
+                self.assertEqual(tb.parse_place(tb.place_text(p)), p)
+
+    def test_a_long_or_odd_repo_path_still_fits_as_a_digest(self):
+        long = "/" + "a" * 1000                 # in the row key too: a digest keeps one copy
+        self.assertEqual((len(tb.repo_key(long)), tb.repo_key("")), (16, ""))
+        for p in (P("p:" + long, 0, kind="lead", repo=tb.repo_key(long)),
+                  P("s", 0, kind="shared", repo=tb.repo_key("/r\x07/.git")),
+                  P("s", 0, kind="shared", repo=tb.repo_key("/r\udcff/.git"))):
+            with self.subTest(p=p.repo):
                 self.assertEqual(tb.parse_place(tb.place_text(p)), p)
 
     def test_the_four_key_form_still_reads_and_writes_back_as_four_keys(self):
         old = '{"row":"s","pos":2,"after":"","name":""}'      # every pin made before `kind`
         self.assertEqual(tb.parse_place(old), P("s", 2))
         self.assertEqual(tb.place_text(P("s", 2)), old)
-        self.assertEqual(json.loads(tb.place_text(P("s", 2, kind="shared", repo="/r/.git"))),
-                         {**json.loads(old), "kind": "shared", "repo": "/r/.git"})
+        self.assertEqual(json.loads(tb.place_text(P("s", 2, kind="shared", repo=R))),
+                         {**json.loads(old), "kind": "shared", "repo": R})
 
     def test_each_bad_field_or_shape_is_no_placement(self):
         good = {"row": "s", "pos": 0, "after": "", "name": ""}
@@ -859,10 +869,11 @@ class Placement(unittest.TestCase):
             with self.subTest(change=change):
                 self.assertIsNone(tb.parse_place(json.dumps({**good, **change})))
         for change in ({"kind": ""}, {"kind": "x"}, {"kind": "Lead"}, {"kind": None},
-                       {"kind": 1}, {"kind": "shared\n"}, {"kind": ["lead"]}, {"repo": "r/.git"},
-                       {"repo": None}, {"repo": 1}, {"repo": "/r\x07"}, {"repo": ["/r"]}):
+                       {"kind": 1}, {"kind": "shared\n"}, {"kind": ["lead"]}, {"repo": "/r/.git"},
+                       {"repo": R.upper()}, {"repo": R[:-1]}, {"repo": R + "0"},
+                       {"repo": R[:-1] + "\n"}, {"repo": None}, {"repo": 1}, {"repo": [R]}):
             with self.subTest(change=change):
-                bad = {**good, "kind": "shared", "repo": "/r/.git", **change}
+                bad = {**good, "kind": "shared", "repo": R, **change}
                 self.assertIsNone(tb.parse_place(json.dumps(bad)))
         for text in ("", "null", "[]", "{", json.dumps({**good, "extra": 1}),
                      json.dumps({**good, "kind": "lead"}), json.dumps({**good, "repo": ""}),
@@ -931,8 +942,8 @@ class Order(unittest.TestCase):
         # A move in the shared row while repo had no lanes pinned its tabs as shared ones; with
         # lanes they go back to repo's row, from the shared row or a custom one. Tabs still
         # shared keep their pins.
-        rows, _, _, names = arranged({"@2": P("s", 1, kind="shared", repo="/r/.git"),
-                                      "@3": P("c:1", 0, "s", kind="shared", repo="/r/.git"),
+        rows, _, _, names = arranged({"@2": P("s", 1, kind="shared", repo=R),
+                                      "@3": P("c:1", 0, "s", kind="shared", repo=R),
                                       "@6": P("s", 0, kind="shared"),
                                       "@1": P("s", 2, kind="shared")})
         self.assertEqual(rows, [(REPO_KEY, ["@2", "@3", "@4"]), (KAR_KEY, ["@5"]),
@@ -940,15 +951,15 @@ class Order(unittest.TestCase):
         self.assertEqual((names["@2"][0], names["@3"][0]), ("lead", "a"))
         tab_of = dict(TAB_OF, **{"@7": tb.Tab("other", "/r/.git", "repo", "agent")})
         groups, _, _ = tb.group_windows(WINS + [(7, "@7")], tab_of,
-                                        {"@7": P("s", 0, kind="shared", repo="/r/.git")})
+                                        {"@7": P("s", 0, kind="shared", repo=R)})
         self.assertEqual([w for w, _ in groups[0].tabs], ["@2", "@3", "@4", "@7"])
 
     def test_a_pin_made_while_laned_elsewhere_or_before_kinds_holds(self):
         # Laned when placed, placed as a shared tab of another repo or of no repo (it changed
         # directory or pane since), or a four-key pin from before kinds.
-        for lead, lane in ((P("s", 0, kind="lead", repo="/r/.git"),
-                            P("s", 1, kind="lane", repo="/r/.git")),
-                           (P("s", 0, kind="shared", repo="/k/.git"), P("s", 1, kind="shared")),
+        for lead, lane in ((P("s", 0, kind="lead", repo=R),
+                            P("s", 1, kind="lane", repo=R)),
+                           (P("s", 0, kind="shared", repo=K), P("s", 1, kind="shared")),
                            (P("s", 0), P("s", 1))):
             with self.subTest(place=lead):
                 rows, _, _, names = arranged({"@2": lead, "@3": lane})
@@ -1884,6 +1895,7 @@ class FakeTmux(unittest.TestCase):
                       for w, p in cwds.items()],
         })
         self.common = os.path.join(lead, ".git")
+        self.repo = tb.repo_key(self.common)
 
     def write_state(self, st):
         with open(self.state, "w") as f:
@@ -2219,9 +2231,9 @@ class FakeTmux(unittest.TestCase):
         self.nav_state("@2")
         calls = self.run_cmd("move", "right", "/dev/pts/7")
         key = "p:" + self.common
-        self.assertEqual(self.places(), {"@3": tb.Place(key, 0, kind="lane", repo=self.common),
-                                         "@2": tb.Place(key, 1, kind="lead", repo=self.common),
-                                         "@4": tb.Place(key, 2, kind="lane", repo=self.common)})
+        self.assertEqual(self.places(), {"@3": tb.Place(key, 0, kind="lane", repo=self.repo),
+                                         "@2": tb.Place(key, 1, kind="lead", repo=self.repo),
+                                         "@4": tb.Place(key, 2, kind="lane", repo=self.repo)})
         writes = [c for c in calls if c[0] == "set-option"]
         self.assertEqual([c[3] for c in writes[:3]], ["@3", "@2", "@4"])
         self.assertTrue(all(c[1:3] == ["-w", "-t"] and c[4] == "@tab_place" for c in writes[:3]))
@@ -2250,7 +2262,7 @@ class FakeTmux(unittest.TestCase):
         self.run_cmd("move", "newrow", "/dev/pts/7")
         key = "p:" + self.common
         self.assertEqual(self.places(),
-                         {"@3": tb.Place("c:1", 0, key, kind="lane", repo=self.common)})
+                         {"@3": tb.Place("c:1", 0, key, kind="lane", repo=self.repo)})
         self.assertEqual(self.nav_rows(), [["@2", "@4"], ["@3"], ["@1"]])
         window = {w["window_id"]: w for w in self.read_state()["windows"]}
         self.assertEqual(window["@3"].get("@tab_row_custom"), "1")
@@ -2324,7 +2336,7 @@ class FakeTmux(unittest.TestCase):
         self.assertEqual(self.nav_rows(), [["@1", "@2", "@3", "@4"]])
         self.run_cmd("move", "right", "/dev/pts/7")
         self.assertEqual(self.places(), {w: tb.Place("s", k, kind="shared",
-                                                     repo="" if w == "@1" else self.common)
+                                                     repo="" if w == "@1" else self.repo)
                                          for k, w in enumerate(("@2", "@1", "@3", "@4"))})
         self.lanes(True)
         self.run_layout()
@@ -2339,7 +2351,7 @@ class FakeTmux(unittest.TestCase):
         # A tab moved while laned keeps its pin through the repo losing its lanes and back.
         self.nav_state("@2")                            # row 1: @1 at 39
         self.run_cmd("drop", "@2", "@1", "40", "1", "window", "/dev/pts/7")
-        self.assertEqual(self.places()["@2"], tb.Place("s", 0, kind="lead", repo=self.common))
+        self.assertEqual(self.places()["@2"], tb.Place("s", 0, kind="lead", repo=self.repo))
         for on in (False, True):
             self.lanes(on)
             self.run_layout()
@@ -2356,10 +2368,10 @@ class FakeTmux(unittest.TestCase):
         self.nav_state("@1")
         self.assertEqual(self.nav_rows(), [["@2", "@1", "@3", "@4"]])
         self.run_cmd("move", "right", "/dev/pts/7")
-        self.assertEqual(self.places(), {"@2": tb.Place("s", 0, kind="lead", repo=self.common),
-                                         "@3": tb.Place("s", 1, kind="shared", repo=self.common),
+        self.assertEqual(self.places(), {"@2": tb.Place("s", 0, kind="lead", repo=self.repo),
+                                         "@3": tb.Place("s", 1, kind="shared", repo=self.repo),
                                          "@1": tb.Place("s", 2, kind="shared"),
-                                         "@4": tb.Place("s", 3, kind="shared", repo=self.common)})
+                                         "@4": tb.Place("s", 3, kind="shared", repo=self.repo)})
         self.lanes(True)
         self.run_layout()
         self.assertEqual(self.unsets(), ["@3", "@4"])
@@ -2367,10 +2379,10 @@ class FakeTmux(unittest.TestCase):
 
     def test_a_void_pin_in_the_row_a_tab_enters_is_not_kept(self):
         self.nav_state("@2")
-        void = tb.Place("s", 0, kind="shared", repo=self.common)       # not unset yet
+        void = tb.Place("s", 0, kind="shared", repo=self.repo)       # not unset yet
         self.set_place("@2", tb.place_text(void))
         self.run_cmd("drop", "@2", "@1", "40", "1", "window", "/dev/pts/7")
-        self.assertEqual(self.places()["@2"], tb.Place("s", 0, kind="lead", repo=self.common))
+        self.assertEqual(self.places()["@2"], tb.Place("s", 0, kind="lead", repo=self.repo))
 
     def test_a_shared_tab_that_changes_directory_into_a_laned_repo_keeps_its_pin(self):
         # Hayden's pick (2026-10-18): only the tab's own repo gaining lanes resets its pin. hq
@@ -2384,6 +2396,18 @@ class FakeTmux(unittest.TestCase):
             self.assertEqual(self.nav_rows(), [["@2", "@3", "@4"], ["@1"]], back)
             self.assertEqual(self.places(), {"@1": hq}, back)
             self.cd("@1", home)
+
+    def test_a_pin_from_before_kinds_takes_one_at_its_first_rewrite(self):
+        # The 2026-10-17 pin itself: dotclaude's lead in the shared row, pinned before kinds.
+        self.lanes(False)
+        self.set_place("@2", '{"row":"s","pos":0,"after":"","name":""}')
+        self.nav_state("@1")
+        self.run_cmd("move", "right", "/dev/pts/7")     # renumbers the shared row
+        self.assertEqual(self.places()["@2"], tb.Place("s", 0, kind="shared", repo=self.repo))
+        self.lanes(True)
+        self.run_layout()
+        self.assertEqual(self.unsets(), ["@2", "@3", "@4"])
+        self.assertEqual(self.nav_rows(), [["@2", "@3", "@4"], ["@1"]])
 
     def test_a_pin_from_before_kinds_never_resets(self):
         self.set_place("@2", '{"row":"s","pos":0,"after":"","name":""}')
@@ -2442,7 +2466,7 @@ class FakeTmux(unittest.TestCase):
         with open(os.path.join(reg, "mine.json")) as f:
             mine = json.load(f)
         self.assertEqual(tb.parse_place(mine["place"]),
-                         tb.Place("p:" + self.common, 1, kind="lead", repo=self.common))
+                         tb.Place("p:" + self.common, 1, kind="lead", repo=self.repo))
         self.assertEqual({k: v for k, v in mine.items() if k != "place"}, recs["mine"])
         after = {n: open(os.path.join(reg, n)).read() for n in os.listdir(reg)
                  if n != tb.RECORDS_LOCK}
@@ -3164,7 +3188,7 @@ class RealTmux(unittest.TestCase):
     def test_a_pin_made_while_shared_is_unset_on_a_laned_tab(self):
         common = os.path.join(self.lead, ".git")
         self.ti("set-option", "-w", "-t", "t:0", "@tab_place",
-                tb.place_text(tb.Place("s", 0, kind="shared", repo=common)))
+                tb.place_text(tb.Place("s", 0, kind="shared", repo=tb.repo_key(common))))
         self.run_layout()
         self.assertEqual(self.ti("show-options", "-wqv", "-t", "t:0", "@tab_place").stdout, "")
         self.assertEqual(self.nav_rows(), [["0", "1"], ["2"]])
