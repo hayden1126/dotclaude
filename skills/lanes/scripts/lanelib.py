@@ -15,6 +15,9 @@ Layout (PLAN.md "Layout"):
   <state-dir>/lanes/<repo>-<hash>.lead.json
                                 the lead record (read_lead): the main-checkout session that last
                                 acted as lead, written only by bare commands
+  <state-dir>/lanes/<repo>-<hash>.closing/<id>.json
+                                the pane shells a `lane done` of lane <id> proved the lane's,
+                                kept for a rerun until the close completes (Repo.closing_path)
 """
 import contextlib
 import datetime
@@ -215,6 +218,12 @@ class Repo:
         """The lead record (read_lead), beside the config: only a bare command can write it, so
         no lane's sandboxed Bash can make itself the lead. tmux/tmux-tab-bar reads this path."""
         return self.config_path.removesuffix(".toml") + ".lead.json"
+
+    def closing_path(self, lane_id: str) -> str:
+        """Where `lane done` records the pane shells it proved lane lane_id's for a rerun (the
+        CLI's save_proof), beside the config: `done` signals by it, so only a bare command may
+        write it, never lane.json's sandbox-writable dir."""
+        return os.path.join(self.config_path.removesuffix(".toml") + ".closing", lane_id + ".json")
 
     @property
     def has_lanes(self) -> bool:
@@ -1028,6 +1037,13 @@ def proc_stat(pid: int, proc: str = PROC) -> tuple[str, str, int, int] | None:
 def proc_start(pid: int, proc: str = PROC) -> int | None:
     st = proc_stat(pid, proc)
     return st[3] if st else None
+
+
+def boot_id(proc: str = PROC) -> str:
+    """This boot's id. (pid, start) names a process only within one boot, since pids and clock
+    ticks both start over at each. Raises OSError when it can't be read."""
+    with open(os.path.join(proc, "sys", "kernel", "random", "boot_id")) as f:
+        return f.read().strip()
 
 
 def proc_alive(p: Proc, proc: str = PROC) -> bool:
