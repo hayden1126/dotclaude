@@ -102,6 +102,11 @@ HOLDER_CMD_MAX = 120  # chars of the wrapped command kept in a lock's holder lin
 RECORD_READ = 1 << 20  # bytes of a lane's STATUS.md read by `ls` and `done`
 PR_LIMIT = 200  # PRs `ls` lists in its one gh call, newest first
 CLOCK_SLACK = 10  # secs: HAYPC's wall clock steps by about 5 s, and GitHub keeps another clock
+OVERLAP_WAIT = 10  # secs each git call behind the board's overlap flag may take
+OVERLAP_SHOWN = 5  # files each overlap line under the board names
+# Every git behind the overlap flag: no transport at all, so not even a partial clone's lazy
+# fetch runs a program its config names (install-state.py commits_past's set)
+OVERLAP_ENV = {"GIT_NO_LAZY_FETCH": "1", "GIT_ALLOW_PROTOCOL": "none"}
 # init's defaults and open's flags for claude's --model and --effort -> each one's check
 PICKS = {"model": lanelib.model_problem, "effort": lanelib.effort_problem}
 # new's brief flags -> the <placeholder> each fills in templates/LANE.md
@@ -1008,6 +1013,105 @@ def ctx_cell(ctx: dict | None) -> str:
     return "%dk%s" % (round(ctx["tokens"] / 1000), CTX_MARK.get(ctx["tier"], ""))
 
 
+def read_git(args: list[str], cwd: str, env: dict[str, str],
+             ok: tuple[int, ...] = (0,)) -> tuple[subprocess.CompletedProcess | None, str]:
+    """(git's result, '') when it exits with a code in ok, else (None, why): `ls` shows its board
+    whatever git does, so a failure, OVERLAP_WAIT running out, or output that isn't UTF-8 (a
+    lane names its own files) becomes a reason to warn with. env is lanelib.git's."""
+    try:
+        p = git(args, cwd, timeout=OVERLAP_WAIT, env=env)
+    except subprocess.TimeoutExpired:
+        return None, f"git took over {OVERLAP_WAIT} s"
+    except (OSError, subprocess.SubprocessError, ValueError) as e:  # ValueError: not UTF-8
+        return None, f"git didn't run: {e}"
+    if p.returncode not in ok:
+        return None, next(iter(p.stderr.strip().splitlines()), f"git exit {p.returncode}")
+    return p, ""
+
+
+def per_worktree_config(repo: Repo) -> bool | None:
+    """Whether the repo sets extensions.worktreeConfig, as `done` checks it (the common dir's own
+    config file); None when git can't tell, which `ls` treats as set."""
+    p, _ = read_git(["config", "--file", os.path.join(repo.common_dir, "config"), "--type=bool",
+                     "--get", "extensions.worktreeConfig"], repo.main, dict(OVERLAP_ENV),
+                    ok=(0, 1))  # 1: unset
+    return None if p is None else p.stdout.strip() == "true"
+
+
+def changed_files(repo: Repo, lane: dict, base: str, ref: str, lanes: list[dict],
+                  per_worktree: bool | None) -> tuple[set[str], str | None]:
+    """The files a live lane's work changes, for the board's overlap flag, and why part of them
+    went unread (None when nothing did). Committed: the three-dot diff from base to ref
+    (lane_head's), so main's later commits and a merged lane's work drop out; it reads objects
+    only. Uncommitted: modified, staged and untracked files, from `git status` in the lane.
+
+    That status is the first git `ls` runs in a lane, sandbox-off, so it runs only once each
+    gate passes, else the lane keeps its committed set and `ls` warns. lanes is every record
+    (Repo.lanes(shared=True)) for worktree_problem; per_worktree is per_worktree_config's.
+      - worktree_problem: the lane is a real worktree of this repo;
+      - per_worktree false: git there would read the lane-writable config.worktree too;
+      - no filter's clean or process command configured: status re-hashes a stat-dirty file
+        through the clean filter the lane picks by its own .gitattributes (or by the
+        sandbox-writable <common>/info/attributes);
+      - GIT_COMMON_DIR: config only from this repo's common dir, never the lane-writable
+        commondir file worktree_problem checked (a lane could repoint it after);
+      - GIT_OPTIONAL_LOCKS=0: no index write, so no index.lock taken under the lane's own `git
+        commit`, and no post-index-change hook, which a relative core.hooksPath would run from
+        the lane's worktree;
+      - core.fsmonitor=false: a relative fsmonitor command would resolve in the lane;
+      - --ignore-submodules=all: git never runs a status in a submodule, whose own config the
+        lane can write. That child gets GIT_CONFIG_PARAMETERS, so the -c above turns off its
+        fsmonitor too, but nothing else here would keep its clean filter from running."""
+    env = dict(OVERLAP_ENV)
+    files, unread = set(), []
+    p, why = read_git(["diff", "--name-only", "-z", "--no-renames", "--no-ext-diff",
+                       "--end-of-options", f"{base}...{ref}", "--"], repo.toplevel, env)
+    if p is not None:
+        files.update(filter(None, p.stdout.split("\0")))
+    else:
+        unread.append(f"its commits went unread ({why})")
+    path = lane["path"]
+    env.update(GIT_COMMON_DIR=repo.common_dir, GIT_OPTIONAL_LOCKS="0")
+    why = lanelib.worktree_problem(repo, path, lanes)
+    if why is None and per_worktree is not False:
+        why = ("this repo sets extensions.worktreeConfig, so git there reads the lane-writable "
+               "config.worktree" if per_worktree else
+               "can't tell whether this repo sets extensions.worktreeConfig")
+    if why is None:
+        p, err = read_git(["config", "--get-regexp", r"^filter\..*\.(clean|process)$"], path, env,
+                          ok=(0, 1))  # 1: none set
+        if p is None:
+            why = f"its filter config went unread: {err}"
+        elif p.returncode == 0:
+            why = ("a filter's clean or process command is configured, which `git status` there "
+                   "would run on files the lane picks")
+    if why is None:
+        p, why = read_git(["-c", "core.fsmonitor=false", "status", "--porcelain=v1", "-z",
+                           "--untracked-files=all", "--no-renames", "--ignore-submodules=all"],
+                          path, env)
+        if p is not None:  # each entry is `XY path`: --no-renames leaves no second path
+            files.update(entry[3:] for entry in p.stdout.split("\0") if entry)
+    if why:
+        unread.append(f"its uncommitted files went unread ({why})")
+    return files, "; ".join(unread) or None
+
+
+def overlap_lines(rows: list[dict]) -> list[str]:
+    """The board's line for each pair of lanes whose changed files overlap (board's overlaps),
+    naming at most OVERLAP_SHOWN files, control characters masked: a lane names its own
+    files."""
+    out = []
+    for row in rows:
+        for other, both in sorted(row["overlaps"].items()):
+            if other < row["id"]:
+                continue  # each pair once, from its first lane
+            more = (f" (and {len(both) - OVERLAP_SHOWN} more)" if len(both) > OVERLAP_SHOWN
+                    else "")
+            out.append(shown(f"overlap: {row['id']} and {other} both change "
+                             f"{', '.join(both[:OVERLAP_SHOWN])}{more}"))
+    return out
+
+
 def board(repo: Repo) -> list[dict]:
     """Each lane's record plus its derived state: nothing here is stored."""
     cfg = repo.config()
@@ -1022,6 +1126,17 @@ def board(repo: Repo) -> list[dict]:
         if os.path.realpath(lane["path"]) in trees and os.path.isdir(lane["path"]):
             for r in lane.get("claims", []):
                 claimers.setdefault(r, []).append(lane["id"])
+    # The overlap flag: each live lane's changed files, read now and never stored. A stale
+    # lane's are left out, as its claims are.
+    shared, per_worktree, changed = repo.lanes(shared=True), per_worktree_config(repo), {}
+    for lane in lanes:
+        if os.path.realpath(lane["path"]) in trees and os.path.isdir(lane["path"]):
+            changed[lane["id"]], why = changed_files(repo, lane, base, lane_head(lane, trees)[1],
+                                                     shared, per_worktree)
+            if why:
+                warn(shown(f"overlap for lane {lane['id']} may be short: {why}"))
+    overlaps = {a: {b: sorted(changed[a] & changed[b]) for b in changed
+                    if b != a and changed[a] & changed[b]} for a in changed}
     rows = []
     for lane in lanes:
         path = os.path.realpath(lane["path"])
@@ -1059,6 +1174,9 @@ def board(repo: Repo) -> list[dict]:
             flags.append("rebase")
         if any(len(claimers.get(r, [])) > 1 for r in lane.get("claims", [])):
             flags.append("conflict")
+        row["overlaps"] = overlaps.get(lane["id"], {})
+        if row["overlaps"]:
+            flags.append("overlap")
         if not stale and row["live_sessions"] == []:
             flags.append("orphan")
         if stopped:
@@ -1155,6 +1273,8 @@ def cmd_ls(args) -> None:
     for name in parse_locks(repo.config().get("locks", "")):
         if (holder := lock_holder(repo, name)) is not None:
             say(f"locks: {name} held by {holder}")
+    for line in overlap_lines(rows):
+        say(line)
     if line := main_footer(repo):
         say(line)
     try:
