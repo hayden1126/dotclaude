@@ -994,6 +994,20 @@ class Trial(LaneWork):
         self.assertIn("lane trial: lane gamma conflicts with lane beta (shared.txt), not with "
                       "this lane", out)
 
+    def test_a_conflict_in_a_name_that_isnt_utf8_stops_the_trial_with_no_traceback(self):
+        # merge-tree names the conflicted file raw (-z), and a lane names its own files.
+        for lane in (self.alpha, self.beta):
+            with open(os.path.join(os.fsencode(lane), b"\xff.txt"), "w") as f:
+                f.write(f"{os.path.basename(lane)}\n")
+            self.git("add", "--", os.fsdecode(b"\xff.txt"), cwd=lane)
+            self.git("commit", "-q", "-m", "odd name", cwd=lane)
+        rc, out, err = self.trial("--run", "true")
+        self.assertEqual(rc, 1, out + err)
+        self.assertIn("lane: git merge-tree's output isn't UTF-8 (a lane names its own files), "
+                      "so the trial stopped", err)
+        self.assertNotIn("Traceback", err)
+        self.assertEqual(self.leftovers(), ([], []))
+
     def test_a_code_conflict_with_the_base_still_aborts_beside_the_lead_status(self):
         self.carries()
         self.commit_files(self.alpha, ["shared.txt"])

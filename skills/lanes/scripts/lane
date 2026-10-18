@@ -1888,16 +1888,23 @@ def failing_ids(lines: list[str]) -> list[str]:
     return list(dict.fromkeys(found))
 
 
+class NotUtf8(LaneError):
+    """git's output in a trial isn't UTF-8: a lane names its own files."""
+
+
 def trial_git(repo: Repo, args: list[str], ok: tuple[int, ...] = (0,),
               env: dict[str, str] | None = None) -> subprocess.CompletedProcess:
-    """git in the lane (`trial` runs sandboxed), bounded by TRIAL_GIT_WAIT. Running out, or an
-    exit outside ok, aborts the trial with git's message. env, when given, replaces every
-    inherited GIT_* variable (lanelib.git)."""
+    """git in the lane (`trial` runs sandboxed), bounded by TRIAL_GIT_WAIT. Running out, an exit
+    outside ok, or output that isn't UTF-8 (NotUtf8) aborts the trial with a message. env, when
+    given, replaces every inherited GIT_* variable (lanelib.git)."""
     sub = next((a for a in args if a[:1] != "-" and "=" not in a), "git")
     try:
         p = git(args, repo.toplevel, timeout=TRIAL_GIT_WAIT, env=env)
     except subprocess.TimeoutExpired:
         raise LaneError(f"git {sub} took over {TRIAL_GIT_WAIT} s, so the trial stopped")
+    except UnicodeDecodeError:
+        raise NotUtf8(f"git {sub}'s output isn't UTF-8 (a lane names its own files), so the "
+                      "trial stopped")
     if p.returncode not in ok:
         line = (p.stderr.strip().splitlines() or [f"exit {p.returncode}"])[-1]
         raise LaneError(f"git {sub} failed ({shown(line)}), so the trial stopped")
@@ -1975,7 +1982,7 @@ def lead_status(repo: Repo, commit: str) -> Lead | None:
         return None
     try:
         text = trial_git(repo, ["cat-file", "blob", own[1]]).stdout
-    except UnicodeDecodeError:
+    except NotUtf8:
         return None
     m = LEAD_LINE_RE.search(text)
     name = m.group(1) if m else None
