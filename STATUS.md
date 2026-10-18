@@ -80,7 +80,7 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     [[dotclaude-tab-bar]], remote-paste's live tests in [[dotclaude-remote-paste]]. #115 left the
     tab glyph's prompt at v4: an ask a reply only announces for later stays a documented known
     miss (`hooks/wants_input.py`'s docstring), since its one prompt round flipped 10 verdicts.
-  - **No live lanes.** Merge order: lead PR #117 alone; it carries the lead's notes.
+  - **No live lanes, no open PRs** (2026-10-18). The next PR carries the lead's notes from here.
   - done-rerun merged as #119 (2026-10-18): `lane done` keeps a restored tab's shell proof
     across a rerun. Installed from main; the lane closed with the installed fix.
   - lead-chain merged as #118 (2026-10-18): the lane next in merge order carries the lead's
@@ -93,11 +93,10 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     and the shelf's Open each brought a `--model sonnet --effort low` tab back at sonnet/low, and
     an entry without the fields restored bare (evidence in the closed record,
     `.git/lanes/_closed/restore-effort-2026-10-17/.lane/artifacts/smoke-2026-10-17.txt`). Closed.
-  - Lead PR #117 (`fix/pass-invoke-handoff`, worktree `.claude/worktrees/pass-handoff`): the pass
-    skill's step 3 loads the handoff skill with the Skill tool. Draft; Hayden skipped its install
-    from the branch (2026-10-18: `setup.sh` never reads the skill's text). Before ready: merge
-    main (it shares `tests/pass/test_pass_guards.py` with #116, a clean trial merge), rerun
-    `tests/pass`. Remove the worktree after it merges.
+  - Lead PR #117 merged (2026-10-18): the pass skill's step 3 loads the handoff skill with the
+    Skill tool, not from memory. No install from the branch (Hayden's call: `setup.sh` never
+    reads the skill's text); reinstalled from main after. **Check:** the next real `/pass`
+    transcript should show a Skill call for `handoff` before `handoff-check`.
   - The parked json-depth sweep (21 files, among them the delegation enforcement scripts) is on
     `fix/json-depth-sweep`, a local branch never pushed: keep it while the sweep is in the
     backlog. Shipping it first needs a check of how each enforcement site fails
