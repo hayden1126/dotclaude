@@ -2,6 +2,7 @@
 import datetime
 import json
 import os
+import shutil
 import subprocess
 import tempfile
 import time
@@ -370,6 +371,58 @@ class LedgerHook(LedgerEnv):
         return subprocess.run(["python3", LEDGER, "audit"], capture_output=True, text=True,
                               env=self.env).stdout
 
+    OK_LINE = ("ok   no worktree agent coincided with a change in the main checkout or the parent "
+               "session's checkout")
+    UNCHECKED = ("WARN 1 worktree agent run(s) couldn't be checked against the main checkout or "
+                 "the parent session's checkout: git status there was unreadable, or the repo "
+                 "sets extensions.worktreeConfig")
+
+    def writer_run(self, before=None, mid=None):
+        """A writer's start and stop in a worktree of a fresh repo, with `before(repo)` ahead of
+        the start and `mid(repo)` between. Returns the audit's completed process."""
+        repo = os.path.join(self.tmp.name, "repo")
+        wt = os.path.join(repo, ".claude", "worktrees", "agent-w1")
+        os.makedirs(wt)
+        subprocess.run(["git", "init", "-q", repo], check=True)
+        if before:
+            before(repo)
+        self.hook(dict(self.start("agent-w1"), cwd=wt, agent_type="writer"))
+        if mid:
+            mid(repo)
+        self.hook(dict(self.stop("w1"), cwd=wt, agent_type="writer"))
+        return subprocess.run(["python3", LEDGER, "audit"], capture_output=True, text=True,
+                              env=self.env)
+
+    @staticmethod
+    def set_extension(repo):
+        subprocess.run(["git", "-C", repo, "config", "extensions.worktreeConfig", "true"],
+                       check=True)
+
+    def test_every_run_checked_keeps_the_ok_line_as_it_was(self):
+        p = self.writer_run()
+        self.assertIn(self.OK_LINE, p.stdout.splitlines())
+        self.assertNotIn("couldn't be checked", p.stdout)
+        self.assertEqual(p.returncode, 0)
+
+    def test_two_unknown_hashes_are_an_unchecked_run_not_an_ok(self):
+        # Equal "unknown"s match while nothing was compared: audit names the run unchecked.
+        p = self.writer_run(before=self.set_extension)
+        start, stop = self.rows()
+        self.assertEqual((start["main_before"], stop["main_after"]), ("unknown", "unknown"))
+        lines = p.stdout.splitlines()
+        self.assertIn(self.OK_LINE + " among the runs that could be checked", lines)
+        self.assertIn(self.UNCHECKED, lines)
+        self.assertEqual(p.returncode, 1)
+
+    def test_a_hash_against_unknown_is_an_unchecked_run_not_a_change(self):
+        p = self.writer_run(mid=self.set_extension)
+        start, stop = self.rows()
+        self.assertNotEqual(start["main_before"], "unknown")
+        self.assertEqual(stop["main_after"], "unknown")
+        self.assertNotIn("main checkout changed", p.stdout)
+        self.assertIn(self.UNCHECKED, p.stdout.splitlines())
+        self.assertEqual(p.returncode, 1)
+
     def test_a_resume_compares_only_its_own_activation(self):
         # audit pairs each start with its own stop, never the previous activation's: an edit
         # between activations is no agent's doing.
@@ -555,10 +608,10 @@ class CheckoutStatus(unittest.TestCase):
             self.assertEqual(f.read(), before)
         self.assertFalse(os.path.exists(marker), "post-index-change ran")
 
-    def test_per_worktree_config_reads_as_unknown_and_never_runs(self):
-        # config.worktree is trusted only for the session's own gitdir, and the checkout the
-        # hook reads may be another's: a clean filter there, routed by .gitattributes to a
-        # stat-dirty file, would run.
+    def worktree_clean_trap(self):
+        """The extension on in the repo's own config and a clean filter in config.worktree,
+        routed by .gitattributes to a stat-dirty file, so a status there would run it. Returns
+        the marker the filter touches."""
         marker = os.path.join(self.tmp, "CLEAN")
         clean = os.path.join(self.tmp, "clean.sh")
         with open(clean, "w") as f:
@@ -569,14 +622,48 @@ class CheckoutStatus(unittest.TestCase):
         with open(os.path.join(self.repo, ".gitattributes"), "w") as f:
             f.write("* filter=x\n")
         os.utime(os.path.join(self.repo, "f"), (0, 0))
+        return marker
+
+    def assertTrapHeld(self, marker):
         got = self.status()
         self.assertFalse(os.path.exists(marker), "config.worktree's clean filter ran")
         self.assertEqual(got, "unknown")
         subprocess.run(["git", "status"], cwd=self.repo, env=self.env, capture_output=True)
         self.assertTrue(os.path.exists(marker), "the trap never fires")
 
+    def test_per_worktree_config_reads_as_unknown_and_never_runs(self):
+        # config.worktree is trusted only for the session's own gitdir, and the checkout the
+        # hook reads may be another's.
+        self.assertTrapHeld(self.worktree_clean_trap())
+
+    def test_a_config_worktree_cannot_turn_the_extension_off(self):
+        # git reads the extension from the repo's own config alone, so a config.worktree that
+        # sets it false changes the merged value but not which files git reads.
+        marker = self.worktree_clean_trap()
+        self.git(self.repo, "config", "--worktree", "extensions.worktreeConfig", "false")
+        self.assertEqual(self.git(self.repo, "config", "--type=bool", "--get",
+                                  "extensions.worktreeConfig").strip(), "false")
+        self.assertTrapHeld(marker)
+
     def test_an_unreadable_worktree_config_setting_reads_as_unknown(self):
         self.git(self.repo, "config", "extensions.worktreeConfig", "maybe")
+        self.assertEqual(self.status(), "unknown")
+
+    def test_a_failed_extension_read_reads_as_unknown_even_if_status_runs(self):
+        # A real malformed value fails git status too; a git that fails only the config read
+        # shows the read's own exit code is what gates.
+        stub = os.path.join(self.tmp, "bin")
+        os.makedirs(stub)
+        with open(os.path.join(stub, "git"), "w") as f:
+            f.write("#!/bin/sh\nfor a; do [ \"$a\" = config ] && exit 128; done\n"
+                    f"exec {shutil.which('git')} \"$@\"\n")
+        os.chmod(os.path.join(stub, "git"), 0o755)
+        self.env["PATH"] = stub + os.pathsep + self.env.get("PATH", "")
+        self.assertEqual(self.status(), "unknown")
+
+    def test_a_failing_status_reads_as_unknown(self):
+        with open(os.path.join(self.repo, ".git", "index"), "w") as f:
+            f.write("garbage")
         self.assertEqual(self.status(), "unknown")
 
     def test_a_relative_fsmonitor_never_runs_from_the_checkout(self):

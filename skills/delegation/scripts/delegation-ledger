@@ -59,7 +59,8 @@ stop that closed it, so it checks every activation of a resumed agent or a teamm
 an edit made between two. The sandbox lets a worktree agent's subprocess write anywhere in the
 session's write root, so a computed-path write into either checkout can't be stopped, only seen.
 `audit` reports a changed hash as evidence, not a verdict, because the lead may have been editing
-too.
+too. A repo that sets extensions.worktreeConfig, or a status git can't run, isn't hashed
+("unknown"), and `audit` names those runs as unchecked.
 
 `open` only suggests. Each row prints the evidence it used (parent session alive, how long
 this activation has run, the newest transcript entry and its age, the calls still open), so
@@ -173,7 +174,7 @@ def main_checkout(cwd):
 
 
 def checkout_status(root):
-    """sha256 of `git status` in the checkout at root, or "unknown" when git can't run.
+    """sha256 of `git status` in the checkout at root, or "unknown" when it can't be trusted.
 
     The hook runs it sandbox-off in a checkout whose files and index the session's own sandbox
     can write. What it guards, each by one flag:
@@ -183,24 +184,30 @@ def checkout_status(root):
     - fsmonitor: -c core.fsmonitor=false, since a relative fsmonitor command in the config
       resolves inside the checkout.
     The checkout's own pointers (its .git, the admin dir's commondir) and its config are
-    sandbox-protected, so they aren't checked again here. Its config.worktree is trusted only
-    for the session's own gitdir (docs/delegation.md), and this checkout (the main one, or the
-    parent lane) can be another's, so a repo that sets extensions.worktreeConfig reads as
-    "unknown", as `lane ls` and `lane done` gate it. A configured filter driver (a program the
-    user installed, such as git-lfs) still runs on the files the checkout routes to it, by
-    design: turning it off would make every file it tracks read as modified."""
+    sandbox-protected, so they aren't checked again here. A config.worktree is trusted only for
+    the session's own gitdir (docs/delegation.md), and the hook doesn't tell which checkout is
+    the session's own, so for both the main checkout and the parent's, a repo whose own config
+    sets extensions.worktreeConfig reads as "unknown", as `lane ls` and `lane done` gate it. So
+    does a status git can't run or that fails, and `audit` reports those runs as unchecked. A
+    configured filter driver (a program the user installed, such as git-lfs) still runs on the
+    files the checkout routes to it, by design: turning it off would make every file it tracks
+    read as modified."""
     try:
-        wtc = subprocess.run(["git", "-C", root, "config", "--type=bool", "--get",
+        # --local: the repo's own config alone, as git's format check reads it; the merged
+        # value would let a config.worktree turn the extension off while git still reads it.
+        wtc = subprocess.run(["git", "-C", root, "config", "--local", "--type=bool", "--get",
                               "extensions.worktreeConfig"], capture_output=True, timeout=3)
         if wtc.returncode not in (0, 1) or wtc.stdout.strip() == b"true":  # 1: unset
             return "unknown"
-        out = subprocess.run(["git", "--no-optional-locks", "-c", "core.fsmonitor=false", "-C",
-                              root, "status", "--porcelain=v1", "-uall",
-                              "--ignore-submodules=dirty"],
-                             capture_output=True, timeout=3).stdout
+        st = subprocess.run(["git", "--no-optional-locks", "-c", "core.fsmonitor=false", "-C",
+                             root, "status", "--porcelain=v1", "-uall",
+                             "--ignore-submodules=dirty"],
+                            capture_output=True, timeout=3)
     except (OSError, subprocess.SubprocessError):
         return "unknown"
-    return hashlib.sha256(out).hexdigest()[:16]
+    if st.returncode:
+        return "unknown"
+    return hashlib.sha256(st.stdout).hexdigest()[:16]
 
 
 def parent_checkout(session_id, main):
@@ -808,9 +815,15 @@ def cmd_audit(args):
     # another), kept when it stopped in the window: a writer that started before the window and
     # stopped inside it still pairs its start and stop.
     ran = [a for a in activations(every)[0] if a.end >= horizon]
+
+    def ends(a, field):
+        return a.first.get(f"{field}_before"), a.last.get(f"{field}_after")
+
     def changed(field):
-        return [a for a in ran if a.first.get(f"{field}_before") and a.last.get(f"{field}_after")
-                and a.first[f"{field}_before"] != a.last[f"{field}_after"]]
+        return [a for a in ran if all(ends(a, field)) and "unknown" not in ends(a, field)
+                and len(set(ends(a, field))) == 2]
+    # checkout_status's "unknown" is no hash: two of them match while nothing was checked.
+    unchecked = [a for a in ran if "unknown" in ends(a, "main") + ends(a, "parent")]
     moved = ([("main checkout", a.key, a.last) for a in changed("main")]
              + [(f"{a.last.get('parent_root')} (the parent session's checkout)", a.key, a.last)
                 for a in changed("parent")])
@@ -820,7 +833,12 @@ def cmd_audit(args):
             "(evidence, not proof: the lead may have edited too). Inspect `git status` there.")
     if not moved:
         say("ok   no worktree agent coincided with a change in the main checkout or the parent "
-            "session's checkout")
+            "session's checkout" + (" among the runs that could be checked" if unchecked else ""))
+    if unchecked:
+        warn += 1
+        say(f"WARN {len(unchecked)} worktree agent run(s) couldn't be checked against the main "
+            "checkout or the parent session's checkout: git status there was unreadable, or the "
+            "repo sets extensions.worktreeConfig")
     policy = read_policy()
     roles = report_roles(policy)
     folded = {k: e for k, e in dc.fold(every).items()
