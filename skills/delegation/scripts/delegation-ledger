@@ -183,10 +183,17 @@ def checkout_status(root):
     - fsmonitor: -c core.fsmonitor=false, since a relative fsmonitor command in the config
       resolves inside the checkout.
     The checkout's own pointers (its .git, the admin dir's commondir) and its config are
-    sandbox-protected, so they aren't checked again here. A configured filter driver (a program
-    the user installed, such as git-lfs) still runs on the files the checkout routes to it, by
+    sandbox-protected, so they aren't checked again here. Its config.worktree is trusted only
+    for the session's own gitdir (docs/delegation.md), and this checkout (the main one, or the
+    parent lane) can be another's, so a repo that sets extensions.worktreeConfig reads as
+    "unknown", as `lane ls` and `lane done` gate it. A configured filter driver (a program the
+    user installed, such as git-lfs) still runs on the files the checkout routes to it, by
     design: turning it off would make every file it tracks read as modified."""
     try:
+        wtc = subprocess.run(["git", "-C", root, "config", "--type=bool", "--get",
+                              "extensions.worktreeConfig"], capture_output=True, timeout=3)
+        if wtc.returncode not in (0, 1) or wtc.stdout.strip() == b"true":  # 1: unset
+            return "unknown"
         out = subprocess.run(["git", "--no-optional-locks", "-c", "core.fsmonitor=false", "-C",
                               root, "status", "--porcelain=v1", "-uall",
                               "--ignore-submodules=dirty"],

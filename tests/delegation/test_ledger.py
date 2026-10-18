@@ -555,6 +555,30 @@ class CheckoutStatus(unittest.TestCase):
             self.assertEqual(f.read(), before)
         self.assertFalse(os.path.exists(marker), "post-index-change ran")
 
+    def test_per_worktree_config_reads_as_unknown_and_never_runs(self):
+        # config.worktree is trusted only for the session's own gitdir, and the checkout the
+        # hook reads may be another's: a clean filter there, routed by .gitattributes to a
+        # stat-dirty file, would run.
+        marker = os.path.join(self.tmp, "CLEAN")
+        clean = os.path.join(self.tmp, "clean.sh")
+        with open(clean, "w") as f:
+            f.write(f"#!/bin/sh\ntouch {marker}\ncat\n")
+        os.chmod(clean, 0o755)
+        self.git(self.repo, "config", "extensions.worktreeConfig", "true")
+        self.git(self.repo, "config", "--worktree", "filter.x.clean", clean)
+        with open(os.path.join(self.repo, ".gitattributes"), "w") as f:
+            f.write("* filter=x\n")
+        os.utime(os.path.join(self.repo, "f"), (0, 0))
+        got = self.status()
+        self.assertFalse(os.path.exists(marker), "config.worktree's clean filter ran")
+        self.assertEqual(got, "unknown")
+        subprocess.run(["git", "status"], cwd=self.repo, env=self.env, capture_output=True)
+        self.assertTrue(os.path.exists(marker), "the trap never fires")
+
+    def test_an_unreadable_worktree_config_setting_reads_as_unknown(self):
+        self.git(self.repo, "config", "extensions.worktreeConfig", "maybe")
+        self.assertEqual(self.status(), "unknown")
+
     def test_a_relative_fsmonitor_never_runs_from_the_checkout(self):
         # The repo's config is protected, but a relative command in it resolves in the checkout.
         marker = os.path.join(self.tmp, "FSM")
