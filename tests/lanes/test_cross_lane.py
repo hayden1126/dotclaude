@@ -622,6 +622,23 @@ class Trial(LaneWork):
         self.assertIn("lane trial: conflict with lane delta: a.txt", out)
         self.assertIn("suite 1 (test -f b.txt): ok", out)
 
+    def test_a_lane_behind_the_base_that_conflicts_with_it_is_its_own_to_merge(self):
+        # main moved on in a file alpha never touches, and beta, branched before, changed it too.
+        self.commit_files(self.main, ["shared.txt"])
+        self.git("push", "-q", "origin", "main")
+        self.commit_files(self.beta, ["shared.txt"])
+        rc, out, err = self.trial("--run", "true")
+        self.assertEqual(rc, 1, out + err)
+        self.assertIn("lane trial: lane beta conflicts with origin/main (shared.txt), not with "
+                      "this lane: it needs to merge origin/main", out)
+        self.assertNotIn("conflict with lane beta", out)
+        # One that conflicts with this lane's HEAD as well is this lane's conflict too.
+        self.commit_files(self.alpha, ["g.txt"])
+        self.commit_files(self.beta, ["g.txt"])
+        rc, out, err = self.trial("--run", "true")
+        self.assertEqual(rc, 1, out + err)
+        self.assertRegex(out, r"lane trial: conflict with lane beta: \S")
+
     def test_a_base_conflict_aborts_before_any_suite(self):
         self.commit_files(self.alpha, ["shared.txt"])
         self.commit_files(self.main, ["shared.txt"])
