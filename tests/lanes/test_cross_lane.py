@@ -3,12 +3,14 @@ the git `ls` and `done` run in a lane, sandbox-off, kept from running what the l
 
 Each guard has a test that fails with the guard taken out, and each trap is shown to fire without
 it: a trap that never fires proves nothing."""
+import contextlib
 import json
 import os
 import subprocess
+import sys
 from unittest import mock
 
-from _fixture import LanesRepo
+from _fixture import HANDOFF_CHECK, LanesRepo
 from test_cli import load_lane_script
 
 import lanelib  # on sys.path through _fixture
@@ -276,3 +278,72 @@ class OverlapGuards(LaneWork):
         rows, err = self.rows()
         self.assertEqual(rows["alpha"]["overlaps"], {"beta": ["loose.txt"]})
         self.assertIn("overlap for lane alpha may be short: its commits went unread", err)
+
+
+class DoneStatus(LaneWork):
+    """`done` and handoff-check run git status in the lane, sandbox-off under `done`: it runs
+    nothing the lane's own config names."""
+
+    def setUp(self):
+        super().setUp()
+        self.path = self.new("alpha")
+
+    def test_done_refuses_a_submodule_without_running_its_fsmonitor(self):
+        gitdir = self.plant_submodule(self.path)
+        fsmonitor, ran = self.trap("fsmonitor")
+        self.git("config", "--file", os.path.join(gitdir, "config"), "core.fsmonitor", fsmonitor)
+        p = self.run_lane("done", "alpha", "--abandon")
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn("worktree has submodules", p.stderr)
+        self.assertFalse(os.path.exists(ran))
+        self.assertTrue(os.path.isdir(self.path))
+        self.lane_status(self.path, "--ignore-submodules=none")  # the trap is real
+        self.assertTrue(os.path.exists(ran))
+
+    def test_dones_status_never_writes_the_lanes_index(self):
+        # A rewritten index fires post-index-change, which a relative core.hooksPath runs from
+        # the lane. Committed, so the clean-tree check passes and the close goes ahead.
+        marker = self.hook_in_lane(self.path)
+        self.git("add", "hk", cwd=self.path)
+        self.git("commit", "-q", "-m", "hk", cwd=self.path)
+        with contextlib.suppress(FileNotFoundError):
+            os.unlink(marker)  # `git add` wrote the index, so it fired
+        os.utime(os.path.join(self.path, "README.md"), (OLD, OLD))
+        self.lane_status(self.path)  # the trap is real
+        self.assertTrue(os.path.exists(marker))
+        os.unlink(marker)
+        os.utime(os.path.join(self.path, "README.md"), (OLD + 1, OLD + 1))
+        self.assertIn("closed", self.lane("done", "alpha", "--abandon"))
+        self.assertFalse(os.path.exists(marker))
+
+    def handoff_check(self):
+        return subprocess.run([sys.executable, HANDOFF_CHECK, "-C", self.path], env=self.env,
+                              capture_output=True, text=True, timeout=60)
+
+    def test_handoff_check_never_runs_a_submodules_fsmonitor(self):
+        gitdir = self.plant_submodule(self.path)
+        fsmonitor, ran = self.trap("fsmonitor")
+        self.git("config", "--file", os.path.join(gitdir, "config"), "core.fsmonitor", fsmonitor)
+        p = self.handoff_check()
+        self.assertIn(p.returncode, (0, 1), p.stderr)
+        self.assertFalse(os.path.exists(ran))
+        self.lane_status(self.path, "--untracked-files=all")  # the trap is real
+        self.assertTrue(os.path.exists(ran))
+
+    def test_handoff_check_still_sees_a_moved_submodule_commit(self):
+        # --ignore-submodules=dirty hides only what is inside the submodule's worktree.
+        self.plant_submodule(self.path)
+        sub = os.path.join(self.path, SUB)
+        self.git("commit", "-q", "--allow-empty", "-m", "moved", cwd=sub)
+        p = self.handoff_check()
+        self.assertEqual(p.returncode, 1, p.stdout)
+        self.assertIn("uncommitted and not named in the status file: " + SUB, p.stdout)
+
+    def test_handoff_check_never_writes_the_lanes_index(self):
+        marker = self.hook_in_lane(self.path)
+        os.utime(os.path.join(self.path, "README.md"), (OLD, OLD))
+        p = self.handoff_check()
+        self.assertIn(p.returncode, (0, 1), p.stderr)
+        self.assertFalse(os.path.exists(marker))
+        self.lane_status(self.path)  # the trap is real
+        self.assertTrue(os.path.exists(marker))

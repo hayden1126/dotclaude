@@ -2000,8 +2000,13 @@ def self_guard(lane_id: str, path: str, procs: dict[int, lanelib.Proc], hits: di
 def removable(lane_id: str, path: str) -> None:
     """Refuse unless a plain `git worktree remove` will take the lane, so nothing is ended only
     for the remove to fail afterwards: a clean tree by git's own test, not locked, and no
-    submodules (a gitlink in the index, or a modules dir in its admin dir)."""
-    p = git(["status", "--porcelain", "--ignore-submodules=none"], path)
+    submodules (a gitlink in the index, or a modules dir in its admin dir).
+
+    The status skips submodules: one with changes in it would run its own `git status`, whose
+    config (core.fsmonitor among it) sits where the lane can write it, and GIT_COMMON_DIR never
+    reaches that child. The lane's sessions still run here, so refusing submodules first would
+    race a lane that adds one after the check: the submodule refusal below stays the gate."""
+    p = git(["status", "--porcelain", "--ignore-submodules=all"], path)
     if p.returncode != 0:
         raise LaneError(f"git status failed in {path}: {p.stderr.strip()}")
     if dirty := [line[3:] for line in p.stdout.splitlines()]:
@@ -2744,6 +2749,9 @@ def cmd_done(args) -> None:
     # file that worktree_problem checks: a lane could repoint it after the check to a config
     # whose core.fsmonitor runs a command sandbox-off.
     os.environ["GIT_COMMON_DIR"] = repo.common_dir
+    # And none of them writes the lane's index: a status that refreshes it fires the
+    # post-index-change hook, which a relative core.hooksPath runs from the lane's worktree.
+    os.environ["GIT_OPTIONAL_LOCKS"] = "0"
     # Not even then, where the repo turns on per-worktree config: git would read the lane's
     # <admin>/config.worktree too, which its sandbox can write and no variable overrides.
     present = os.path.isdir(path)
