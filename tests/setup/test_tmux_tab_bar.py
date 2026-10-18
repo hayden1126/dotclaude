@@ -2409,6 +2409,48 @@ class FakeTmux(unittest.TestCase):
         self.assertEqual(self.unsets(), ["@2", "@3", "@4"])
         self.assertEqual(self.nav_rows(), [["@2", "@3", "@4"], ["@1"]])
 
+    def test_a_pin_from_before_kinds_rewritten_while_laned_stays_hard(self):
+        # Four keys can't say how the pin was made, so a laned tab's first rewrite keeps it
+        # hard (Auto place clears it); a name-row rewrites a custom row's old pins too.
+        self.set_place("@2", '{"row":"s","pos":0,"after":"","name":""}')
+        self.nav_state("@1")
+        self.run_cmd("move", "left", "/dev/pts/7")      # @1 before @2 in the shared row
+        self.assertEqual(self.places()["@2"], tb.Place("s", 1, kind="lead", repo=self.repo))
+        self.run_layout()
+        self.assertEqual(self.unsets(), [])
+        self.assertEqual(self.nav_rows(), [["@3", "@4"], ["@1", "@2"]])
+        after = "p:" + self.common
+        self.set_place("@3", json.dumps({"row": "c:1", "pos": 0, "after": after, "name": ""}))
+        st = self.read_state()
+        next(w for w in st["windows"] if w["window_id"] == "@3")["@tab_row_name_in"] = "work"
+        self.write_state(st)
+        self.nav_state("@3")
+        self.run_cmd("name-row", "/dev/pts/7")
+        self.assertEqual(self.places()["@3"],
+                         tb.Place("c:1", 0, after, "work", kind="lane", repo=self.repo))
+
+    def test_a_move_stamps_the_kinds_it_was_worked_out_with(self):
+        # A lane opening mid-move (after put() read the tabs as shared, before apply stamps
+        # them) must not stamp the shared row's bystanders as leads: they'd keep that pin.
+        self.lanes(False)
+        self.nav_state("@1")
+        classify, seen = tb.classify, set()
+
+        def lanes_open_on_a_second_look(cwd):
+            if cwd in seen and not os.path.exists(os.path.join(self.common, "lanes")):
+                self.lanes(True)
+            seen.add(cwd)
+            return classify(cwd)
+
+        os.remove(self.log)
+        with unittest.mock.patch.dict(os.environ, self.env, clear=True), \
+                unittest.mock.patch.object(tb, "classify", lanes_open_on_a_second_look):
+            tb.arrange_command(["move", "right", "/dev/pts/7"], self.base)
+        written = [tb.parse_place(c[-1]) for c in self.writes()
+                   if c[1:3] == ["-w", "-t"] and c[4] == "@tab_place"]
+        self.assertEqual([p.kind for p in written], ["shared"] * 4)
+        self.assertEqual(sorted(self.unsets()), ["@2", "@3", "@4"])    # the next layout's
+
     def test_a_pin_from_before_kinds_never_resets(self):
         self.set_place("@2", '{"row":"s","pos":0,"after":"","name":""}')
         self.run_layout()
