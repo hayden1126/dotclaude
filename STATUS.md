@@ -113,6 +113,16 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     runs the suites there under `lane lock suite` (the trial-tree traps are in
     [[dotclaude-lanes]]). The lead plan review (C) was not picked. Files: `skills/lanes/scripts/
     lane`, `lanelib.py`, `tests/lanes`, `skills/lanes/SKILL.md`, `docs/lanes.md`.
+  - **pass-respawn misreports a background session** (reported by the karaoke session 07618dd3,
+    2026-10-18; Hayden asked it to send it here). A `kind: "bg"` session (daemon-hosted:
+    `claude bg-pty-host` under `claude daemon run --origin transient`, under the interactive
+    claude in pane %1) has no `TMUX_PANE`, so `pass-respawn` refuses with "not in a tmux pane"
+    (its pane check, before the session file is read) while Hayden watches it in a pane.
+    Refusing is right: respawning %1 would kill the hosting session, not the bg one. Fix: read
+    the session file's `kind` and, for `bg`, refuse with "background session (daemon-hosted):
+    pass by hand with /clear, or run it in a pane of its own first"; name the case in the pass
+    skill's step 5. Later, maybe: pass a bg session through the daemon (`claude attach`).
+    Files: `skills/pass/scripts/pass-respawn`, `tests/pass/`, `skills/pass/SKILL.md`.
   - **chrome-bg's TTL loop counts down on the wall clock** (from lane monotonic, 2026-10-18).
     `bin/chrome-bg:1314` and `:1353` wait until the run record's `expires`, so a forward clock
     step cuts a TTL short by up to 0.6 s. The record stays wall clock (`ls` and gc read it,
