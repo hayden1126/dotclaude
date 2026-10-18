@@ -372,7 +372,12 @@ The last gate has a wider reason. A status that looks into a submodule runs a ch
 there, which reads the submodule's own config, and a sandboxed session can write that config.
 So every sandbox-off status in a checkout now skips submodule contents: `lane done`'s
 `removable()` (`=all`, its submodule refusal stays), `handoff-check` and `delegation-ledger`'s
-hook (`=dirty`, which still reports a moved gitlink), each with optional locks off.
+hook (`=dirty`, which still reports a moved gitlink), each with optional locks off and
+`core.fsmonitor=false` (a relative fsmonitor command resolves inside the checkout; `done` sets
+it for every git it runs, `git worktree remove`'s own status included). A configured filter
+driver (a program the user installed, such as git-lfs) still runs on the files a checkout
+routes to it: turning it off would make every file it tracks read as modified, so `done` would
+refuse every LFS lane. `ls` alone skips the uncommitted read then, since it can afford to.
 
 **`lane trial`.** Before a lane asks Hayden for ready, it runs
 `lane trial --run "<suite>" --run "<suite>" ...`, sandboxed:
@@ -416,11 +421,13 @@ working when a future test turns out to depend on its location.
 
 Its limits: a test failing in both runs for different reasons hides a real break; a runner with
 another output format can only be compared by hand; a flaky test failing only on the merge reads
-as the merge's. And a trial killed partway (the Bash cap, a respawn) leaves its tree registered.
-The sandbox mounts each registered worktree's admin dir in every command started after the tree
-exists, so a later sandboxed run can't delete it. The next trial removes the files it can, and
-names the sandbox-off `git worktree remove --force <path>` for the rest, never a blanket
-`git worktree prune`.
+as the merge's. The number of tests run is never compared, so a fail-fast flag (pytest `-x`,
+unittest `-f`) can stop both runs at a shared failure before the test the merge broke, and a
+merge that drops a test package from discovery passes unseen. And a trial killed partway (the
+Bash cap, a respawn) leaves its tree registered. The sandbox mounts each registered worktree's
+admin dir in every command started after the tree exists, so a later sandboxed run can't delete
+it. The next trial removes the files it can, and names the sandbox-off
+`git worktree remove --force <path>` for the rest, never a blanket `git worktree prune`.
 
 ## Layout
 
