@@ -2429,9 +2429,9 @@ class FakeTmux(unittest.TestCase):
         self.assertEqual(self.places()["@3"],
                          tb.Place("c:1", 0, after, "work", kind="lane", repo=self.repo))
 
-    def test_a_move_stamps_the_kinds_it_was_worked_out_with(self):
-        # A lane opening mid-move (after put() read the tabs as shared, before apply stamps
-        # them) must not stamp the shared row's bystanders as leads: they'd keep that pin.
+    def kinds_in_a_race(self, *words):
+        """The kinds an arrange command (run in-process, from the shared row with no lanes)
+        writes when dotclaude's lanes come back at any cwd's second classification."""
         self.lanes(False)
         self.nav_state("@1")
         classify, seen = tb.classify, set()
@@ -2445,11 +2445,21 @@ class FakeTmux(unittest.TestCase):
         os.remove(self.log)
         with unittest.mock.patch.dict(os.environ, self.env, clear=True), \
                 unittest.mock.patch.object(tb, "classify", lanes_open_on_a_second_look):
-            tb.arrange_command(["move", "right", "/dev/pts/7"], self.base)
-        written = [tb.parse_place(c[-1]) for c in self.writes()
-                   if c[1:3] == ["-w", "-t"] and c[4] == "@tab_place"]
-        self.assertEqual([p.kind for p in written], ["shared"] * 4)
+            tb.arrange_command(list(words), self.base)
+        return [tb.parse_place(c[-1]).kind for c in self.writes()
+                if c[1:3] == ["-w", "-t"] and c[4] == "@tab_place"]
+
+    def test_a_move_stamps_the_kinds_it_was_worked_out_with(self):
+        # A lane opening mid-move (after put() read the tabs as shared, before apply stamps
+        # them) must not stamp the shared row's bystanders as leads: they'd keep that pin.
+        self.assertEqual(self.kinds_in_a_race("move", "right", "/dev/pts/7"), ["shared"] * 4)
         self.assertEqual(sorted(self.unsets()), ["@2", "@3", "@4"])    # the next layout's
+
+    def test_a_drop_stamps_the_kinds_its_tries_were_worked_out_with(self):
+        # A drop also lays out its tries (on_line, drawn_lines): one classification for all.
+        self.assertEqual(self.kinds_in_a_race("drop-row", "@1", "180", "0", "/dev/pts/7"),
+                         ["shared"] * 4)
+        self.assertEqual(sorted(self.unsets()), ["@2", "@3", "@4"])
 
     def test_a_pin_from_before_kinds_never_resets(self):
         self.set_place("@2", '{"row":"s","pos":0,"after":"","name":""}')

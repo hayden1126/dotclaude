@@ -441,9 +441,9 @@ need nothing extra.
   back where the bar places it. A row you moved a tab into keeps the order you gave it; a new
   tab joins its end. A tab placed while its repo had no lanes (a move in the shared row places
   every tab there) returns to its repo's row once the repo has a lane; one placed while the repo
-  had lanes stays put. A placement made before this rule never resets on its own: if one keeps
-  a tab out of its repo's row, **Auto place** clears it. A lane tab outside its project's row
-  shows as `repo·lane`. The
+  had lanes stays put. A placement made before this rule can't say how it was made, so it may
+  never reset: if one keeps a tab out of its repo's row, **Auto place** clears it. A lane tab
+  outside its project's row shows as `repo·lane`. The
   arrangement is kept in each window's `@tab_place` option, so it survives `/clear` and
   `/pass`, and in the restore record (`place`), so `claude-restore` brings it back after tmux
   dies. A tab reopened from the Shelf lands at the end of its project's row.
