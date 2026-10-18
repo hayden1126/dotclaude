@@ -405,7 +405,11 @@ alone skips the uncommitted read then, since it can afford to.
    names a renamed file by its new path); not a merge with this lane's HEAD, which may hold the
    base already and then conflicts wherever the base does. A lane behind the base that also
    conflicts with this lane gets the base's verdict only; its own trial, once it merges the
-   base, finds the rest. Other lanes' uncommitted work isn't in the merge.
+   base, finds the rest. One conflict is settled instead: in STATUS.md alone, when this lane's
+   STATUS.md names the lead's branch (its `Lead branch:` line) and that branch holds one. After
+   the merge order changes, two lanes carry the lead's notes from different lead heads, which
+   always conflict, so the merge takes the lead branch's STATUS.md whole, as a carry would, and
+   the report says so. Other lanes' uncommitted work isn't in the merge.
 3. It checks the merge out in a fresh `mkdtemp` tree under the temp dir, named by repo key and
    lane id, and runs each `--run` there as `sh -c`, streaming its output. One `--run` per
    suite: a chained `a && b` stops at the first failure, and `a; b` reports only the last exit.

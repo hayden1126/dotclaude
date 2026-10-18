@@ -794,6 +794,100 @@ class Trial(LaneWork):
         self.assertFalse(os.path.exists(ran))
         self.assertEqual(self.leftovers(), ([], []))
 
+    def carries(self, line="Lead branch: `lead` (the lead's STATUS commits)"):
+        """main's STATUS.md with line in it, and a branch lead three commits past it. alpha
+        carries lead's first and beta its second, each in a STATUS.md commit of its own (beta's
+        work is b.txt), so the lead's head is neither carry. Returns the lead's head."""
+        status = os.path.join(self.main, "STATUS.md")
+        self.write(status, f"# Status\n\n{line}\n\nend\n")
+        self.git("add", "STATUS.md")
+        self.git("commit", "-q", "-m", "status")
+        self.push_main()
+        self.git("switch", "-q", "-c", "lead")
+        heads = []
+        for note in ("lead one", "lead two", "lead three"):
+            self.write(status, self.read(status).replace("\nend\n", f"\n{note}\nend\n"))
+            self.git("commit", "-q", "-am", note)
+            heads.append(self.git("rev-parse", "HEAD").strip())
+        self.git("switch", "-q", "main")
+        for lane, head in ((self.alpha, heads[0]), (self.beta, heads[1])):
+            self.git("merge", "-q", "--no-edit", "origin/main", cwd=lane)
+            self.git("checkout", head, "--", "STATUS.md", cwd=lane)
+            self.git("commit", "-q", "-m", "STATUS: the lead's notes", cwd=lane)
+        return heads[2]
+
+    def on_lead(self, *commands):
+        """Run each git command (a tuple of args) on branch lead, then return to main."""
+        self.git("switch", "-q", "lead")
+        for args in commands:
+            self.git(*args)
+        self.git("switch", "-q", "main")
+
+    def assertStillConflicts(self, paths="STATUS.md"):
+        rc, out, err = self.trial("--run", "true")
+        self.assertEqual(rc, 1, out + err)
+        self.assertIn(f"lane trial: conflict with lane beta: {paths}", out)
+        self.assertNotIn("as a carry would", out)
+
+    def test_two_carries_of_the_lead_notes_merge_as_a_carry_would(self):
+        # The merge order changed, so alpha and beta carry the lead's notes from two lead heads:
+        # their STATUS.md always conflicts, and a carry takes the lead branch's whole.
+        lead = self.carries()
+        got = os.path.join(self.tmp, "got")
+        rc, out, err = self.trial("--run", "test -f b.txt",
+                                  "--run", f"cp STATUS.md {shlex.quote(got)}")
+        self.assertEqual(rc, 0, out + err)
+        self.assertIn("lane trial: lane beta conflicts in STATUS.md alone, which carries the "
+                      f"lead's notes: the merge takes lead's ({lead[:12]}), as a carry would",
+                      out)
+        self.assertIn("lane trial: merged beta (", out)
+        self.assertIn("suite 1 (test -f b.txt): ok", out)
+        self.assertEqual(self.read(got), self.git("show", "lead:STATUS.md"))
+        self.assertEqual(self.leftovers(), ([], []))
+
+    def test_a_status_conflict_beside_another_path_stays_a_conflict(self):
+        self.carries()
+        self.commit_files(self.alpha, ["shared.txt"])
+        self.commit_files(self.beta, ["shared.txt"])
+        self.assertStillConflicts("STATUS.md, shared.txt")
+
+    def test_a_status_with_no_lead_branch_line_stays_a_conflict(self):
+        self.carries(line="Lead: none named")
+        self.assertStillConflicts()
+
+    def test_a_lead_branch_that_is_no_plain_branch_name_stays_a_conflict(self):
+        # lead~1 resolves (to the lead's second commit), so only the name check stops it.
+        self.carries(line="Lead branch: `lead~1` (a revision, not a branch)")
+        self.assertStillConflicts()
+
+    def test_a_missing_lead_branch_stays_a_conflict(self):
+        self.carries()
+        self.git("branch", "-q", "-D", "lead")
+        self.assertStillConflicts()
+
+    def test_a_lead_branch_without_a_status_file_stays_a_conflict(self):
+        self.carries()
+        self.on_lead(("rm", "-q", "STATUS.md"), ("commit", "-q", "-m", "no status"))
+        self.assertStillConflicts()
+
+    def test_a_lead_branch_whose_status_is_a_directory_stays_a_conflict(self):
+        self.carries()
+        self.git("switch", "-q", "lead")
+        self.git("rm", "-q", "STATUS.md")
+        self.write(os.path.join(self.main, "STATUS.md", "x"), "x\n")
+        self.git("add", "STATUS.md")
+        self.git("commit", "-q", "-m", "status dir")
+        self.git("switch", "-q", "main")
+        self.assertStillConflicts()
+
+    def test_this_lane_without_a_status_file_stays_a_conflict(self):
+        # alpha deletes STATUS.md, beta carries: a modify/delete conflict in STATUS.md alone,
+        # with no `Lead branch:` line on this lane's side to read.
+        self.carries()
+        self.git("rm", "-q", "STATUS.md", cwd=self.alpha)
+        self.git("commit", "-q", "-m", "no status", cwd=self.alpha)
+        self.assertStillConflicts()
+
     def test_a_merge_only_failure_fails_and_names_the_test(self):
         rc, out, err = self.trial("--run", BOTH, "--run", "true")
         self.assertEqual(rc, 1, out + err)
