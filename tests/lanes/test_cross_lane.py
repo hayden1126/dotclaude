@@ -1,16 +1,21 @@
-"""skills/lanes/scripts/lane: the board's overlap flag (live lanes whose changed files meet), and
-the git `ls` and `done` run in a lane, sandbox-off, kept from running what the lane can configure.
+"""skills/lanes/scripts/lane: the board's overlap flag (live lanes whose changed files meet), the
+git `ls` and `done` run in a lane, sandbox-off, kept from running what the lane can configure,
+and `lane trial` (the suites on a merge with every other live lane).
 
 Each guard has a test that fails with the guard taken out, and each trap is shown to fire without
 it: a trap that never fires proves nothing."""
 import contextlib
+import fcntl
+import glob
 import json
 import os
+import shlex
 import subprocess
 import sys
+import unittest
 from unittest import mock
 
-from _fixture import HANDOFF_CHECK, LanesRepo
+from _fixture import HANDOFF_CHECK, LANE, LanesRepo
 from test_cli import load_lane_script
 
 import lanelib  # on sys.path through _fixture
@@ -347,3 +352,186 @@ class DoneStatus(LaneWork):
         self.assertFalse(os.path.exists(marker))
         self.lane_status(self.path)  # the trap is real
         self.assertTrue(os.path.exists(marker))
+
+
+class FailingIds(unittest.TestCase):
+    def test_unittest_lines_whole_and_pytest_ids_without_their_message(self):
+        lane_mod = load_lane_script()
+        lines = ["FAIL: test_x (a.B.test_x) (path='/tmp/t/tree')", "ERROR: test_y (a.B.test_y)",
+                 "FAILED t.py::test_z - assert 1 == 2", "ERROR t.py::test_w",
+                 "FAIL: test_x (a.B.test_x) (path='/tmp/t/tree')",  # once
+                 "ERROR:root:a log line", "FAILED", "ok", "Ran 3 tests in 0.1s"]
+        self.assertEqual(lane_mod.failing_ids(lines),
+                         ["FAIL: test_x (a.B.test_x) (path='/tmp/t/tree')",
+                          "ERROR: test_y (a.B.test_y)", "t.py::test_z", "t.py::test_w"])
+
+
+# A suite for the trial tests: fails test_ab only where both lanes' files meet.
+BOTH = 'if [ -f a.txt ] && [ -f b.txt ]; then echo "FAIL: test_ab (t.T.test_ab)"; exit 1; fi'
+
+
+class Trial(LaneWork):
+    """`lane trial` from lane alpha, with beta (and sometimes gamma) live beside it. TMPDIR is
+    the test's own, so every scratch dir a run leaves is in sight."""
+
+    def setUp(self):
+        super().setUp()
+        self.lane("init", "--locks", "suite")
+        self.scratch = os.path.join(self.tmp, "scratch")
+        os.makedirs(self.scratch)
+        self.env["TMPDIR"] = self.scratch
+        self.alpha, self.beta = self.new("alpha"), self.new("beta")
+        self.commit_files(self.alpha, ["a.txt"])
+        self.commit_files(self.beta, ["b.txt"])
+
+    def trial(self, *args, cwd=None):
+        p = self.run_lane("trial", *args, cwd=cwd or self.alpha)
+        return p.returncode, p.stdout, p.stderr
+
+    def leftovers(self):
+        """Scratch dirs and registered trees a run left."""
+        trees = [line for line in self.git("worktree", "list", "--porcelain").splitlines()
+                 if line.startswith("worktree ") and self.scratch in line]
+        return os.listdir(self.scratch), trees
+
+    def test_a_clean_trial_runs_each_suite_on_both_lanes_files_and_leaves_nothing(self):
+        where = os.path.join(self.tmp, "where")
+        rc, out, err = self.trial("--run", "test -f a.txt && test -f b.txt",
+                                  "--run", f"pwd > {shlex.quote(where)}")
+        self.assertEqual(rc, 0, out + err)
+        self.assertIn("lane trial: merged beta (", out)
+        self.assertIn("suite 1 (test -f a.txt && test -f b.txt): ok", out)
+        self.assertIn("suite 2", out)
+        tree = self.read(where).strip()
+        self.assertRegex(tree, rf"^{self.scratch}/lane-trial-alpha-[a-z0-9_]{{8}}/tree$")
+        self.assertEqual(self.leftovers(), ([], []))
+        self.assertIn("other lanes' uncommitted work isn't in the merge", err)
+        # Nothing moved: no ref names a trial commit, and alpha's branch is where it was.
+        self.assertNotIn("lane trial", self.git("log", "--all", "--format=%s"))
+
+    def test_a_lane_conflict_names_the_lane_and_path_and_fails(self):
+        self.commit_files(self.alpha, ["shared.txt"])
+        self.commit_files(self.beta, ["shared.txt"])
+        gamma = self.new("gamma")
+        self.commit_files(gamma, ["c.txt"])
+        rc, out, err = self.trial("--run", "test -f c.txt && test ! -f b.txt")
+        self.assertEqual(rc, 1, out + err)
+        self.assertIn("lane trial: conflict with lane beta: shared.txt", out)
+        self.assertIn("merged gamma (", out)
+        self.assertIn("suite 1 (test -f c.txt && test ! -f b.txt): ok", out)  # gamma went on
+        self.assertIn("FAILED: lane beta didn't merge", out)
+        self.assertEqual(self.leftovers(), ([], []))
+
+    def test_a_base_conflict_aborts_before_any_suite(self):
+        self.commit_files(self.alpha, ["shared.txt"])
+        self.commit_files(self.main, ["shared.txt"])
+        self.git("push", "-q", "origin", "main")
+        ran = os.path.join(self.tmp, "ran")
+        rc, out, err = self.trial("--run", f"touch {shlex.quote(ran)}")
+        self.assertEqual(rc, 1, out + err)
+        self.assertIn("origin/main doesn't merge cleanly into lane alpha (shared.txt): merge "
+                      "origin/main into the lane first", err)
+        self.assertFalse(os.path.exists(ran))
+        self.assertEqual(self.leftovers(), ([], []))
+
+    def test_a_merge_only_failure_fails_and_names_the_test(self):
+        rc, out, err = self.trial("--run", BOTH, "--run", "true")
+        self.assertEqual(rc, 1, out + err)
+        self.assertIn("baseline run of suite 1/2", out)
+        self.assertNotIn("baseline run of suite 2/2", out)  # only the failed suite reruns
+        self.assertIn("suite 1 (" + BOTH + "): 1 failure(s) only on the merge:\n"
+                      "  FAIL: test_ab (t.T.test_ab)", out)
+        self.assertIn("suite 2 (true): ok", out)
+        self.assertEqual(self.leftovers(), ([], []))
+
+    def test_an_id_failing_on_the_baseline_too_passes_even_with_the_trees_path_in_it(self):
+        # The baseline reruns at the same path, so a subtest id that embeds it matches.
+        rc, out, err = self.trial("--run", 'echo "FAIL: test_where (t.T.test_where) '
+                                           '(path=$PWD)"; exit 1')
+        self.assertEqual(rc, 0, out + err)
+        self.assertIn("every failure also fails on the baseline, so none is the merge's", out)
+        self.assertRegex(out, r"FAIL: test_where \(t\.T\.test_where\) \(path=\S+/tree\)")
+
+    def test_a_failure_behind_a_zero_exit_still_counts(self):
+        # `a; b` exits with b's code: the failing id a printed decides.
+        rc, out, err = self.trial("--run", 'if [ -f b.txt ]; then echo "FAIL: test_b '
+                                           '(t.T.test_b)"; fi; true')
+        self.assertEqual(rc, 1, out + err)
+        self.assertIn("1 failure(s) only on the merge", out)
+
+    def test_a_failure_with_no_test_id_is_compared_by_hand(self):
+        rc, out, err = self.trial("--run", "false")
+        self.assertEqual(rc, 1, out + err)
+        self.assertIn("failed (exit 1) with no test id to compare against the baseline", out)
+
+    def test_a_leftover_tree_from_a_killed_run_is_cleared(self):
+        # A run killed past its cleanup leaves its dir and its registration; only this lane's
+        # names go (lane alpha-b's look alike).
+        stale = os.path.join(self.scratch, "lane-trial-alpha-abcd1234")
+        self.git("worktree", "add", "--detach", "--quiet", os.path.join(stale, "tree"), "HEAD",
+                 cwd=self.alpha)
+        loose = os.path.join(self.scratch, "lane-trial-alpha-zzzz9999")
+        other = os.path.join(self.scratch, "lane-trial-alpha-b-abcd1234")
+        for d in (loose, other):
+            os.makedirs(d)
+        rc, out, err = self.trial("--run", "true")
+        self.assertEqual(rc, 0, out + err)
+        self.assertIn("cleared the tree an earlier trial left registered", err)
+        self.assertIn(os.path.join(stale, "tree"), err)
+        self.assertEqual(self.leftovers(), (["lane-trial-alpha-b-abcd1234"], []))
+
+    def test_it_holds_the_lock_and_a_held_lock_with_wait_0_exits_75(self):
+        rc_file = os.path.join(self.tmp, "inner-rc")
+        inner = shlex.join([sys.executable, LANE, "lock", "suite", "--wait", "0", "--", "true"])
+        rc, out, err = self.trial("--run", f"{inner}; echo $? > {shlex.quote(rc_file)}")
+        self.assertEqual(rc, 0, out + err)
+        self.assertEqual(self.read(rc_file).strip(), "75")  # held by the trial meanwhile
+        self.assertIn("gave up on lock suite", out)  # a suite's stderr is teed with its stdout
+        lock = os.path.join(self.common, "lanes", "_locks", "suite")
+        self.assertEqual(self.read(lock), "")  # its holder line cleared on the way out
+        fd = os.open(lock, os.O_RDWR)
+        self.addCleanup(os.close, fd)
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        rc, out, err = self.trial("--wait", "0", "--run", "true")
+        self.assertEqual(rc, 75, out + err)
+        self.assertIn("gave up on lock suite", err)
+        self.assertNotIn("merged", out)
+
+    def test_an_unlisted_lock_and_a_run_from_the_main_checkout_refuse(self):
+        rc, out, err = self.trial("--lock", "nope", "--run", "true")
+        self.assertEqual(rc, 1)
+        self.assertIn("no lock 'nope' in the lanes config", err)
+        rc, out, err = self.trial("--run", "true", cwd=self.main)
+        self.assertEqual(rc, 1)
+        self.assertIn("not a lane", err)
+
+    def test_keep_keeps_the_tree(self):
+        rc, out, err = self.trial("--keep", "--run", "true")
+        self.assertEqual(rc, 0, out + err)
+        (tree,) = glob.glob(os.path.join(self.scratch, "lane-trial-alpha-*", "tree"))
+        self.assertIn(f"kept the tree (the merge) at {tree}", out)
+        self.assertTrue(os.path.isfile(os.path.join(tree, "b.txt")))
+        self.git("worktree", "remove", "--force", tree)
+
+    def test_positional_ids_restrict_the_merge(self):
+        gamma = self.new("gamma")
+        self.commit_files(gamma, ["c.txt"])
+        rc, out, err = self.trial("gamma", "--run", "test -f c.txt && test ! -f b.txt")
+        self.assertEqual(rc, 0, out + err)
+        self.assertNotIn("beta", out)
+        rc, out, err = self.trial("--run", "true", "nosuch")
+        self.assertEqual(rc, 1)
+        self.assertIn("no live lane nosuch", err)
+        rc, out, err = self.trial("alpha", "--run", "true")
+        self.assertEqual(rc, 1)
+        self.assertIn("lane alpha is this lane", err)
+
+    def test_nothing_to_merge_says_so_and_runs_nothing(self):
+        ran = os.path.join(self.tmp, "ran")
+        self.git("push", "-q", "origin", "beta:main", cwd=self.beta)  # beta's work is merged
+        self.git("fetch", "-q", "origin")
+        rc, out, err = self.trial("beta", "--run", f"touch {shlex.quote(ran)}")
+        self.assertEqual(rc, 0, out + err)
+        self.assertIn("nothing to merge from beta (already in)", out)
+        self.assertIn("no other lane's work merged, so no suite ran", out)
+        self.assertFalse(os.path.exists(ran))
