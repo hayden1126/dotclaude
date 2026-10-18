@@ -32,9 +32,12 @@ must, so the commands they run stay sandboxed too.
 `trial`, from inside a lane, merges the base and every other live lane's commits (or only the
 ids given) onto the lane's HEAD in dangling commits, checks the merge out in a fresh scratch
 tree under the temp dir, and runs each `--run` there under the `suite` lock. A suite
-that fails reruns on the baseline (HEAD plus the base) at the same path; it passes when every
-test id it failed on the merge fails there too. It exits 0 with no conflict and no failure of
-the merge's own, 1 otherwise, and 75 when `--wait` runs out, as `lock` does.
+that fails reruns on the baseline (HEAD plus the base) at the same path. It passes only when
+every test id it failed on the merge also fails on the baseline and its exit is no worse there
+(not non-zero on the merge but zero on the baseline, nor a death by signal on the merge only);
+one that printed no id, or whose output either run cut, fails, to be compared by hand. It exits
+0 with no conflict and no failure of the merge's own, 1 otherwise, and 75 when `--wait` runs
+out, as `lock` does.
 
 The lead is the main-checkout session that last acted as lead: a bare `init`, `new`, `adopt`,
 `open` (not `--print`) or `done` that succeeds from an interactive session in the main checkout,
