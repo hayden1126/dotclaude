@@ -234,9 +234,9 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
   on cross-lane orders, decisions raised with the lead, failed checks and lead-only actions.
   - The lead's commits: `git log --first-parent main..chore/after-pr4` (STATUS only, plus merges
     of main). Session 9dd86d28 (2026-10-18) started at ee36b32 and ended at this handoff: it ran
-    the chain for #120 and #121 (lanes monotonic and tab-pin closed), checked #117 on the
+    the chain for #120 to #122 (`ls .git/lanes/_closed/` shows each close), checked #117 on the
     previous lead's pass, opened tab-pin, cross-lane and pass-bg, and logged the karaoke
-    session's report and Hayden's bug-report pick.
+    session's report, Hayden's bug-report pick and pass-bg's Not mine items.
   - Open with Hayden, nothing for the lead to do: the capella-studio lead asked how a new lane
     should clear the excluded-command guard, and the lead recommended (2026-10-17) pointing
     capella's `core.hooksPath` at the main checkout's protected `.githooks` (absolute path)
