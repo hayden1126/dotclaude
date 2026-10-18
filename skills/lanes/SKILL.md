@@ -159,7 +159,8 @@ The lead is an optional session, usually in the main checkout, that splits a bat
 into lanes and keeps them moving. It owns the project STATUS (backlog, merge order) and nothing
 inside a lane. It commits that STATUS on a branch of its own, named on the STATUS's
 `Lead branch:` line, and opens no STATUS-only PR: the lane next in merge order carries those
-commits to main in its PR (Lifecycle, step 6).
+commits to main in its PR (Lifecycle, step 6). It only adds commits there, never amends or
+rebases: a carry names the lead's head, and the next carry diffs from it.
 
 **Which session leads.** A main checkout can hold two live sessions: a stray resumed there, or a
 side chat. The lead is the last one to act as lead. A bare `lane init`, `new`, `adopt`, `open` (not
