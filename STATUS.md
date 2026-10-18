@@ -136,7 +136,15 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     before or not, resets its pin and opens its repo's row. That needs the kind at pin time in
     the placement; `parse_place` reads exactly four keys, so the old form must keep reading (no
     kind: no reset, today's behavior). Files: `tmux/tmux-tab-bar`,
-    `tests/setup/test_tmux_tab_bar.py`, README's tab-bar section.
+    `tests/setup/test_tmux_tab_bar.py`, README's tab-bar section. Branch after monotonic merges
+    (it changes 8 lines of that test file); any new `time.time()` in tests needs a `# wall clock`
+    marker, or monotonic's guard (`tests/setup/test_clock_use.py`) fails.
+  - **chrome-bg's TTL loop counts down on the wall clock** (from lane monotonic, 2026-10-18).
+    `bin/chrome-bg:1314` and `:1353` wait until the run record's `expires`, so a forward clock
+    step cuts a TTL short by up to 0.6 s. The record stays wall clock (`ls` and gc read it,
+    `:1458`); the loop can keep a monotonic deadline beside it. The only duration site in shipped
+    code: the other 46 `time.time()` calls are stamps or windows on persisted stamps. Optional
+    with it: the monotonic rule in `skills/coding-practices`, since the guard covers `tests/` only.
 
   **The post-merge chain** (Hayden's design B, standing approval 2026-10-14): `skills/lanes/SKILL.md`,
   The lead, step 7. Lead commits on the lead branch ride the PR of the lane next in merge order,
