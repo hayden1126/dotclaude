@@ -80,7 +80,9 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     [[dotclaude-tab-bar]], remote-paste's live tests in [[dotclaude-remote-paste]]. #115 left the
     tab glyph's prompt at v4: an ask a reply only announces for later stays a documented known
     miss (`hooks/wants_input.py`'s docstring), since its one prompt round flipped 10 verdicts.
-  - **No live lanes, no open PRs** (2026-10-18). The next PR carries the lead's notes from here.
+  - **Live lane (opened 2026-10-18), merge order:** 1 monotonic (`fix/monotonic-tests`: tests
+    time durations with `time.monotonic()`, 152 `time.time()` calls in 27 test files; tests
+    only, so it runs alone). It carries the lead's notes. Its brief holds the detail.
   - done-rerun merged as #119 (2026-10-18): `lane done` keeps a restored tab's shell proof
     across a rerun. Installed from main; the lane closed with the installed fix.
   - lead-chain merged as #118 (2026-10-18): the lane next in merge order carries the lead's
@@ -115,10 +117,15 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     rerun the menu-clip repro and the tmux suites. If it fixes the clip, install at a quiet
     moment (a server restart; claude-restore reopens the tabs) and drop the row-0 menu rule.
     Until then, 3.7c's default menus that dotclaude doesn't own still clip under a top bar.
-  - Tests time durations with `time.monotonic()`, not `time.time()` (151 calls in 27 test
-    files on 2026-10-17). It touches every suite, so it opens only when no lane runs: after the
-    three live lanes close. It is the flakes' real fix: the wall clock still steps with timesyncd
-    off (Notes, "Root cause of the timing flakes").
+  - **Cross-lane checks, next after monotonic** (Hayden's pick 2026-10-18: A and B as one lane).
+    Lanes plan alone, and nothing compares their designs: on 2026-10-17 restore-effort's brief
+    listed 7 files, #116 changed 14 (among them `lane` and `lanelib.py`, done-rerun's files), and
+    the brief named no overlap with done-rerun. A: `lane ls` flags two live lanes whose actual
+    changed files overlap (committed and uncommitted against `origin/main`, derived on each call).
+    B: before ready, a lane trial-merges every other live lane's branch into a scratch tree and
+    runs the suites there under `lane lock suite` (the trial-tree traps are in
+    [[dotclaude-lanes]]). The lead plan review (C) was not picked. Files: `skills/lanes/scripts/
+    lane`, `lanelib.py`, `tests/lanes`, `skills/lanes/SKILL.md`, `docs/lanes.md`.
 
   **The post-merge chain** (Hayden's design B, standing approval 2026-10-14): `skills/lanes/SKILL.md`,
   The lead, step 7. Lead commits on the lead branch ride the PR of the lane next in merge order,
