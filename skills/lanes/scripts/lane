@@ -1861,18 +1861,27 @@ def merged_in(repo: Repo, sha: str, cur: str) -> bool:
                      ok=(0, 1)).returncode == 0
 
 
+def merge_tree(repo: Repo, ours: str, theirs: str, label: str) -> tuple[str | None, list[str]]:
+    """(the merged tree, []) when commit theirs merges cleanly into ours, else (None, the paths
+    git names as conflicted, which may be none). Writes objects only. Any other git outcome
+    (unrelated histories, a bad commit) aborts."""
+    p = trial_git(repo, ["merge-tree", "--write-tree", "-z", "--name-only", "--no-messages",
+                         "--end-of-options", ours, theirs], ok=(0, 1))
+    tree, *paths = p.stdout.split("\0")
+    if p.returncode == 1:
+        return None, [x for x in paths if x]
+    if not lanelib.SHA_RE.fullmatch(tree):
+        raise LaneError(f"git merge-tree gave no tree for {label}, so the trial stopped")
+    return tree, []
+
+
 def merge_onto(repo: Repo, cur: str, sha: str, label: str) -> tuple[str, list[str] | None]:
     """(the merge commit of sha onto cur, None) when it merges cleanly, else (cur, the paths git
     names as conflicted, which may be none). The commit is dangling (no ref moves) and carries
-    a fixed identity, so no user config is needed and none signs it. Any other git outcome
-    (unrelated histories, a bad commit) aborts."""
-    p = trial_git(repo, ["merge-tree", "--write-tree", "-z", "--name-only", "--no-messages",
-                         "--end-of-options", cur, sha], ok=(0, 1))
-    tree, *paths = p.stdout.split("\0")
-    if p.returncode == 1:
-        return cur, [x for x in paths if x]
-    if not lanelib.SHA_RE.fullmatch(tree):
-        raise LaneError(f"git merge-tree gave no tree for {label}, so the trial stopped")
+    a fixed identity, so no user config is needed and none signs it."""
+    tree, paths = merge_tree(repo, cur, sha, label)
+    if tree is None:
+        return cur, paths
     p = trial_git(repo, ["-c", f"user.name={TRIAL_IDENTITY[0]}", "-c",
                          f"user.email={TRIAL_IDENTITY[1]}", "commit-tree", "--no-gpg-sign",
                          "-p", cur, "-p", sha, "-m", f"lane trial: merge {label}", tree])
@@ -1998,12 +2007,12 @@ def trial(repo: Repo, me: dict, args) -> int:
         if conflicted is None:
             merged.append((lane["id"], sha))
         else:
-            conflicts[lane["id"]] = conflicted
+            conflicts[lane["id"]] = conflict_line(repo, lane["id"], sha, conflicted, baseline,
+                                                  merged, args.run)
     if already:
         say(f"lane trial: nothing to merge from {', '.join(already)} (already in)")
-    for lane_id, paths in conflicts.items():
-        say(shown(f"lane trial: conflict with lane {lane_id}: "
-                  f"{', '.join(paths) or 'git named no path'}"))
+    for line in conflicts.values():
+        say(shown(line))
     if not merged:
         say("lane trial: no other lane's work merged, so no suite ran")
         return 1 if conflicts else 0
@@ -2034,10 +2043,33 @@ def trial(repo: Repo, me: dict, args) -> int:
         else:
             drop_tree(repo, tree, tmpdir)
     if conflicts:
-        say(f"lane trial: FAILED: lane {', '.join(conflicts)} didn't merge, so its work went "
-            "untried")
+        many = len(conflicts) > 1
+        say(f"lane trial: FAILED: lane{'s' * many} {', '.join(conflicts)} didn't merge, so "
+            f"{'their' if many else 'its'} work went untried")
         return 1
     return rc
+
+
+def conflict_line(repo: Repo, lane_id: str, sha: str, conflicted: list[str], baseline: str,
+                  merged: list[tuple[str, str]], commands: list[str]) -> str:
+    """The report's line for lane lane_id, whose head sha conflicted with the merge so far. When
+    it merges cleanly into the baseline alone, the conflict is with lanes merged before it, not
+    with this one: it names each of them it conflicts with by itself (or, when none does, the
+    merge of them all) and how to try the lane with this one alone. Otherwise the conflict is
+    this lane's, with the paths git named."""
+    paths = ", ".join(conflicted) or "git named no path"
+    if not merged or merge_tree(repo, baseline, sha, lane_id)[0] is None:
+        return f"lane trial: conflict with lane {lane_id}: {paths}"
+    pairs = []
+    for other, other_sha in merged:
+        tree, both = merge_tree(repo, other_sha, sha, f"{lane_id} and {other}")
+        if tree is None:
+            pairs.append(f"lane {other} ({', '.join(both) or 'git named no path'})")
+    whom = (" and ".join(pairs) if pairs else
+            "the merge of lane " + ", ".join(other for other, _ in merged) + f" ({paths})")
+    alone = shlex.join(["lane", "trial", lane_id, *[x for c in commands for x in ("--run", c)]])
+    return (f"lane trial: lane {lane_id} conflicts with {whom}, not with this lane: {lane_id} "
+            f"was left out; try it with this lane alone: {alone}")
 
 
 def drop_tree(repo: Repo, tree: str, tmpdir: str) -> None:

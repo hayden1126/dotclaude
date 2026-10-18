@@ -423,6 +423,22 @@ class Trial(LaneWork):
         self.assertIn("FAILED: lane beta didn't merge", out)
         self.assertEqual(self.leftovers(), ([], []))
 
+    def test_a_conflict_between_two_other_lanes_names_them_not_this_lane(self):
+        # beta and gamma change one file alpha never touches: gamma conflicts with beta (merged
+        # first), not with alpha. delta's conflict is alpha's own, with beta merged before it.
+        self.commit_files(self.beta, ["shared.txt"])
+        gamma, delta = self.new("gamma"), self.new("delta")
+        self.commit_files(gamma, ["shared.txt", "c.txt"])
+        self.commit_files(delta, ["a.txt"])
+        rc, out, err = self.trial("--run", "test -f b.txt")
+        self.assertEqual(rc, 1, out + err)
+        self.assertIn("lane trial: lane gamma conflicts with lane beta (shared.txt), not with "
+                      "this lane: gamma was left out; try it with this lane alone: lane trial "
+                      "gamma --run 'test -f b.txt'", out)
+        self.assertNotIn("conflict with lane gamma", out)
+        self.assertIn("lane trial: conflict with lane delta: a.txt", out)
+        self.assertIn("suite 1 (test -f b.txt): ok", out)
+
     def test_a_base_conflict_aborts_before_any_suite(self):
         self.commit_files(self.alpha, ["shared.txt"])
         self.commit_files(self.main, ["shared.txt"])
