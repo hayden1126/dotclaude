@@ -337,6 +337,82 @@ How it holds:
   renames tabs and moves none. Once the heal rewrites the record, the bar follows a resume in
   another tab with no change of its own.
 
+## Cross-lane checks (lane cross-lane, 2026-10-18)
+
+Lanes plan alone, and nothing compared their work. On 2026-10-17 restore-effort's brief listed 7
+files, and its PR #116 changed 14, two of them (`skills/lanes/scripts/lane` and `lanelib.py`)
+done-rerun's. No brief named that overlap. Earlier, #93's "every setup.sh source is in
+denyWrite" test failed on lane-close's new `install-state.py`: there was no textual conflict,
+so only a merge with the suites run showed it. Two checks cover those cases. One is cheap and
+runs on every `lane ls`; the other runs once per PR.
+
+**The `overlap` flag.** `lane ls` flags two live lanes whose changed files meet, and names the
+pair under the board:
+
+```
+overlap: cross-lane and tab-pin both change README.md
+```
+
+A lane's changed files are its commits since it left the base (`git diff <base>...<ref>`: three
+dots, so main's later commits and a merged lane's work drop out) plus what is uncommitted in its
+worktree (modified, staged and untracked). Both are read on each `ls`, never stored. A file a
+lane's setup leaves untracked and unignored counts too, so it shows on every pair: ignore it in
+the repo.
+
+The uncommitted part is the first git `ls` runs inside a lane, sandbox-off, so it runs only past
+these gates; a lane that fails one keeps its committed set, and `ls` says why:
+- the lane passes `worktree_problem`, and the repo sets no `extensions.worktreeConfig`;
+- no filter has a `clean` or `process` command configured: status re-hashes a stat-dirty file
+  through the filter the lane picks by its own `.gitattributes`;
+- `GIT_COMMON_DIR` pins the config to the common dir; `GIT_OPTIONAL_LOCKS=0` leaves the index
+  unwritten (no `index.lock` under the lane's own commit, no `post-index-change` hook); every
+  inherited `GIT_*` is dropped; `core.fsmonitor=false`; and `--ignore-submodules=all`.
+
+The last gate has a wider reason. A status that looks into a submodule runs a child status
+there, which reads the submodule's own config, and a sandboxed session can write that config.
+So every sandbox-off status in a checkout now skips submodule contents: `lane done`'s
+`removable()` (`=all`, its submodule refusal stays), `handoff-check` and `delegation-ledger`'s
+hook (`=dirty`, which still reports a moved gitlink), each with optional locks off.
+
+**`lane trial`.** Before a lane asks Hayden for ready, it runs
+`lane trial --run "<suite>" --run "<suite>" ...`, sandboxed:
+
+1. It takes the `suite` lock for the whole run. One name for every trial: a trial clears its
+   lane's leftover trees under that lock, so a second trial under another lock could remove a
+   live tree.
+2. It builds the merge with no worktree: from the lane's HEAD, `git merge-tree --write-tree`
+   merges the base, then each other live lane's head by id, and `git commit-tree` turns each
+   clean result into a dangling commit (a fixed `lane-trial` identity, unsigned; no ref moves).
+   A conflict with the base aborts ("merge origin/main first"); a conflict with a lane is
+   reported by path, that lane is skipped, and the trial fails. Other lanes' uncommitted work
+   isn't in it.
+3. It checks the merge out in a fresh `mkdtemp` tree under the temp dir and runs each `--run`
+   there as `sh -c`, streaming its output. One `--run` per suite: a chained `a && b` stops at
+   the first failure, and `a; b` reports only the last exit.
+4. A suite fails when it exits non-zero or prints a failing test id (unittest's `FAIL:` and
+   `ERROR:` lines, pytest's `FAILED` and `ERROR`), whatever its exit code.
+5. A failed suite reruns on the baseline (HEAD plus the base alone), in a tree at the same path,
+   so ids that embed the path match. It passes when every id it failed on the merge also fails
+   there. A failure with no id to compare fails, to be judged by hand.
+6. It exits 0 with no conflict and no failure of the merge's own, 1 otherwise, and 75 when
+   `--wait` runs out.
+
+Why the baseline: some tests fail on location alone. In a scratch tree of origin/main
+(2026-10-18) tests/lanes and tests/pass passed. tests/setup failed three SandboxReality
+subtests, since the sandbox never protects a tree under the temp dir; that test now skips
+there. tests/delegation failed 12 subagent-policy cases, since the policy allows temp paths
+before it checks protected roots. Skipping those would drop cases that do run correctly under
+temp, so they stay on the baseline path, about 2 minutes per trial. The baseline also keeps
+working when a future test turns out to depend on its location.
+
+Its limits: a test failing in both runs for different reasons hides a real break; a runner with
+another output format can only be compared by hand; a flaky test failing only on the merge reads
+as the merge's. And a trial killed partway (the Bash cap, a respawn) leaves its tree registered.
+The sandbox mounts each registered worktree's admin dir in every command started after the tree
+exists, so a later sandboxed run can't delete it. The next trial removes the files it can, and
+names the sandbox-off `git worktree remove --force <path>` for the rest, never a blanket
+`git worktree prune`.
+
 ## Layout
 
 Claude Code treats every path under `.git/` as a "sensitive file", so Edit/Write there always

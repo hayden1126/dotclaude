@@ -654,7 +654,8 @@ and status single-writer:
   in Claude Code once (`lane init` prints how), or each new window waits at the trust dialog.
 - `lane ls` is the board, derived live from git, gh and the session files, down to each lane's
   tmux window, context (CTX: `312k*` past the auto-pass soft tier, `523k!` past hard) and
-  state (STATE: busy, idle, waiting or shell).
+  state (STATE: busy, idle, waiting or shell). Its `overlap` flag marks two live lanes that
+  change the same file, committed or not, and the lines under the board name the files.
   `lane who 42` is the only answer to who owns #42.
 - `lane addr chart-fix` (or `lane addr lead`) prints `uds:<socket>`, the SendMessage address of
   that lane's live session. A session's ListAgents name is its tab title, which changes most
@@ -665,6 +666,10 @@ and status single-writer:
   purpose (`! lane lead` at its prompt). `lane ls` names both, with their windows.
 - `lane lock gate -- npm run e2e` runs a shared gate under a named lock, so a second lane's run
   waits instead of colliding.
+- `lane trial --run "<suite>" ...`, before a lane asks for ready, merges origin/main and every
+  other live lane's commits onto it in a scratch tree and runs each suite there under the
+  `suite` lock. A failed suite reruns without the other lanes, so only the merge's own failures
+  count (docs/lanes.md, "Cross-lane checks").
 - A lane tests its change by installing from its own worktree (`lane lock install --
   ./setup.sh`), and that install holds. setup.sh refuses to run from any other lane or clone
   until the main checkout's own run relinks everything. It also refuses a lane with no commit
