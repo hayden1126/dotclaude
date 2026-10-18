@@ -8,8 +8,11 @@ SessionEnd deletes the entry on an explicit end (/exit, /clear, logout) and only
 `other`, which a window kill, a SIGTERM and a tmux server kill all send (probed 2026-10-05), so a
 shutdown can't be told from a closed window at hook time. In a tab it then hands the payload to
 ~/.local/bin/claude-saved, fail-open. The entry also carries the window's @tab_place (the tab
-bar's placement, opaque here) as `place` when it is a valid one. A stub tmux answers `display` and
-logs each call's argv, one argument per field."""
+bar's placement, opaque here) as `place` when it is a valid one, and the `--model` and `--effort`
+the session's claude launched with (its nearest ancestor named claude, from /proc) as `model` and
+`effort`, each when present and in its shape. A stub tmux answers `display` and logs each call's
+argv, one argument per field. Each hook runs under a stub claude: its own parent, nearer than any
+real session the test runs in, whose launch flags would otherwise leak in."""
 import fcntl
 import json
 import os
@@ -46,6 +49,13 @@ TAB = {"TMUX": "/tmp/tmux-1000/default,1,0", "TMUX_PANE": "%7",
        "CLAUDE_CODE_SESSION_ATTENDED": "1"}
 # A tab bar placement: opaque to the hook, so spaces, quotes, # and non-ASCII pass as they are.
 PLACE = '{"row": 1, "pos": 2, "k": "a b #{pane_id} \'q\' ' + chr(0xe9) + ';"}'
+# A stub claude: a direct shebang keeps its comm `claude` (an env shebang would make it bash), and
+# it runs the hook as a child, never exec, so it stays the hook's ancestor.
+CLAUDE = """#!/bin/bash
+"$CLAUDE_RUNS" "$@"
+exit $?
+"""
+LAUNCH = ["--model", "sonnet", "--effort=low", "--permission-mode", "plan", "Read STATUS.md"]
 
 
 class Registry(unittest.TestCase):
@@ -66,13 +76,31 @@ class Registry(unittest.TestCase):
         self.env.update(PATH=stubs + os.pathsep + self.env["PATH"], STUB_LOG=self.log,
                         HOME=self.home, XDG_STATE_HOME=os.path.join(self.tmp, "state"),
                         STUB_START=str(START), STUB_PID=str(PID), STUB_SOCKET=SOCKET)
+        self.claude = self.claude_stub("claude-bin")
+        self.hook = HOOK
 
-    def fire(self, event, session=TAB, **payload):
+    def claude_stub(self, where):
+        """A stub claude in its own dir, which runs $CLAUDE_RUNS with its args."""
+        path = os.path.join(self.tmp, where, "claude")
+        os.makedirs(os.path.dirname(path))
+        with open(path, "w") as f:
+            f.write(CLAUDE)
+        os.chmod(path, 0o755)
+        return path
+
+    def fire(self, event, session=TAB, launch=(), **payload):
+        """Run the hook as `claude <launch>` would: under the stub claude, with launch as its
+        flags."""
         body = {"session_id": SID, "hook_event_name": event, "cwd": "/home/u/code/dna",
                 "transcript_path": f"/home/u/.claude/projects/dna/{payload.get('session_id', SID)}.jsonl",
                 **payload}
-        p = subprocess.run(["bash", HOOK], input=json.dumps(body), capture_output=True,
-                           text=True, timeout=10, env={**self.env, **session})
+        runs = os.path.join(self.tmp, "run-hook")
+        with open(runs, "w") as f:
+            f.write('#!/bin/bash\nbash "%s"\nexit $?\n' % self.hook)
+        os.chmod(runs, 0o755)
+        p = subprocess.run([self.claude, *launch], input=json.dumps(body), capture_output=True,
+                           text=True, timeout=10,
+                           env={"CLAUDE_RUNS": runs, **self.env, **session})
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertEqual((p.stdout, p.stderr), ("", ""))
 
@@ -111,6 +139,8 @@ class Registry(unittest.TestCase):
         self.assertIsInstance(e["ts"], (int, float))
         self.assertNotIn("ended_other_at", e)
         self.assertNotIn("place", e)   # the window has no @tab_place
+        self.assertNotIn("model", e)   # its claude launched with no flags
+        self.assertNotIn("effort", e)
         self.assertEqual(self.calls(), [["tmux", "display", "-p", "-t", "%7",
                                          "#{start_time} #{pid} #{window_index} #{socket_path}"],
                                         ["tmux", "-u", "display", "-p", "-t", "%7",
@@ -228,6 +258,89 @@ class Registry(unittest.TestCase):
         self.env["STUB_NO_PLACE"] = "1"
         self.start()
         self.assertNotIn("place", self.entries()[SID])
+
+    # --- the launch flags, for claude-restore and claude-saved -----------------------------
+
+    def test_a_start_saves_the_flags_its_claude_launched_with(self):
+        self.start(launch=LAUNCH)
+        e = self.entries()[SID]
+        self.assertEqual((e["model"], e["effort"]), ("sonnet", "low"))
+        self.start(launch=["--model", "opus", "--model=claude-sonnet-5-5[1m]"])  # the last wins
+        e = self.entries()[SID]
+        self.assertEqual(e["model"], "claude-sonnet-5-5[1m]")
+        self.assertNotIn("effort", e)
+
+    def test_each_start_refreshes_the_flags(self):
+        self.start(launch=LAUNCH)
+        self.fire("SessionStart", source="resume", launch=["--effort", "max"])
+        e = self.entries()[SID]
+        self.assertEqual(e["effort"], "max")
+        self.assertNotIn("model", e)
+        self.end("clear")
+        self.fire("SessionStart", source="clear", session_id=NEW, launch=LAUNCH)
+        self.assertEqual({k: self.entries()[NEW][k] for k in ("model", "effort")},
+                         {"model": "sonnet", "effort": "low"})
+
+    def test_other_keeps_the_flags(self):
+        self.start(launch=LAUNCH)
+        self.end("other")
+        e = self.entries()[SID]
+        self.assertEqual((e["model"], e["effort"]), ("sonnet", "low"))
+        self.assertIn("ended_other_at", e)
+
+    def test_a_flag_outside_its_shape_is_left_out(self):
+        for launch, kept in ((["--model", "a b", "--effort", "extreme"], {}),
+                             (["--model=-x", "--effort", "high"], {"effort": "high"}),
+                             (["--model", "opus;x", "--effort", "High"], {}),
+                             (["--model"], {})):  # a flag with no value
+            with self.subTest(launch=launch):
+                self.start(launch=launch)
+                e = self.entries()[SID]
+                self.assertEqual({k: e[k] for k in ("model", "effort") if k in e}, kept)
+                self.assertEqual(e["pane"], "%7")
+
+    def test_the_nearest_claude_is_the_sessions(self):
+        # A session's hook sits a few processes below its claude; any claude further up (the
+        # one a test runs in, say) is another session.
+        inner = self.claude
+        self.claude = os.path.join(self.tmp, "outer", "claude")   # runs inner with no flags
+        os.makedirs(os.path.dirname(self.claude))
+        with open(self.claude, "w") as f:
+            f.write('#!/bin/bash\n"%s"\nexit $?\n' % inner)
+        os.chmod(self.claude, 0o755)
+        self.start(launch=LAUNCH)
+        e = self.entries()[SID]
+        self.assertNotIn("model", e)
+        self.assertNotIn("effort", e)
+
+    def test_a_linked_hook_finds_lanelib_through_its_link(self):
+        # Installed, the hook is a symlink in ~/.claude/hooks to the repo's hooks/.
+        link = os.path.join(self.tmp, "installed", "session-registry.sh")
+        os.makedirs(os.path.dirname(link))
+        os.symlink(HOOK, link)
+        self.hook = link
+        self.start(launch=LAUNCH)
+        self.assertEqual(self.entries()[SID]["model"], "sonnet")
+
+    def test_without_lanelib_the_entry_is_still_written(self):
+        # A copy of the hook with no lanelib beside it, then with one that raises on import.
+        repo = os.path.join(self.tmp, "repo")
+        os.makedirs(os.path.join(repo, "hooks"))
+        shutil.copy(HOOK, os.path.join(repo, "hooks"))
+        self.hook = os.path.join(repo, "hooks", "session-registry.sh")
+        broken = os.path.join(repo, "skills", "lanes", "scripts", "lanelib.py")
+        for lanelib in (None, "raise RuntimeError('broken')\n", "def ancestry(*a):\n    1 / 0\n"):
+            with self.subTest(lanelib=lanelib):
+                shutil.rmtree(self.dir, ignore_errors=True)   # no earlier entry to pass on
+                if lanelib:
+                    os.makedirs(os.path.dirname(broken), exist_ok=True)
+                    with open(broken, "w") as f:
+                        f.write(lanelib)
+                self.start(launch=LAUNCH)
+                e = self.entries()[SID]
+                self.assertEqual((e["pane"], e["socket"]), ("%7", SOCKET))
+                self.assertNotIn("model", e)
+                self.assertNotIn("effort", e)
 
     # --- the records lock, shared with tmux-tab-bar's record update ---------------------------
 

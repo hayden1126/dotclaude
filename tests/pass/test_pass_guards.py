@@ -303,9 +303,9 @@ class PinnedPath(Plain):
                           (12, ["/usr/bin/python3", "-I", "/elsewhere/other", "pass-respawn"]),
                           (13, ["/usr/bin/python3", "-c", "pass-respawn"])):
             self.write(os.path.join(procdir, str(pid), "cmdline"), "\0".join(argv) + "\0")
-        self.assertEqual(self.mod.proc_cmdline(10, procdir),
+        self.assertEqual(self.mod.lanelib.proc_cmdline(10, procdir),
                          ["/usr/bin/python3", "-I", SCRIPT, "-C", "/x"])
-        self.assertIsNone(self.mod.proc_cmdline(99, procdir))
+        self.assertIsNone(self.mod.lanelib.proc_cmdline(99, procdir))
         got = {pid: self.mod.is_pass_respawn(pid, procdir) for pid in (10, 11, 12, 13, 99)}
         self.assertEqual(got, {10: True, 11: True, 12: False, 13: False, 99: False})
 

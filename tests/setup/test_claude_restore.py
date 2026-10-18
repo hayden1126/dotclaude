@@ -7,7 +7,9 @@ $XDG_STATE_HOME/dotclaude/open-sessions/, naming its server by socket path and s
 entry from the current socket but an earlier server is a candidate; other sockets are never
 touched. One with no end mark is restored; one marked by SessionEnd `other` is restored only if
 it ended in the old server's final 120 s (a shutdown), not earlier (a window closed while work
-went on). Stubs stand in for tmux and claude and log each call's argv, one argument per field."""
+went on). A tab comes back with the `--model` and `--effort` its claude launched with (the entry's
+`model` and `effort`), or what it ran after a /model or /effort since (lanelib.carried_pick). Stubs
+stand in for tmux and claude and log each call's argv, one argument per field."""
 import fcntl
 import json
 import os
@@ -48,6 +50,21 @@ def sid(n):
 
 # A tab bar placement: opaque to the restore, so spaces, quotes, # and $() pass as they are.
 PLACE = '{"row": 1, "pos": 2, "k": "a b #{pane_id} $(id) \'q\' ' + chr(0xe9) + '"}'
+PICK = {"model": "sonnet", "effort": "low"}
+
+
+def command(name, args=""):
+    """A slash command's user entry, as Claude Code 2.1.301 writes /model and /effort."""
+    return {"type": "user", "isSidechain": False, "message": {"role": "user", "content": (
+        f"<command-name>{name}</command-name>\n            <command-message>{name[1:]}"
+        f"</command-message>\n            <command-args>{args}</command-args>")}}
+
+
+def reply(model, effort="medium"):
+    """A main-chain assistant entry and what it ran with."""
+    return {"type": "assistant", "isSidechain": False, "effort": effort,
+            "message": {"model": model, "role": "assistant",
+                        "content": [{"type": "text", "text": "ok"}]}}
 
 
 class Restore(unittest.TestCase):
@@ -83,10 +100,11 @@ class Restore(unittest.TestCase):
 
     def entry(self, n, window, pane=None, age=600, ended=None, transcript=True, cwd=True,
               transcript_age=None, socket=SOCKET, server_start=OLD_START, server_pid=OLD_PID,
-              dirname=None, died=None, attach=False, place=None):
+              dirname=None, died=None, attach=False, place=None, pick=None, history=()):
         """Write an entry for session n, its times `age`/`ended` seconds before its server
         died (`died`, default the old server's), in a real cwd. attach: claude-saved track's
-        entry for a tab attached to background session n. place: its window's @tab_place."""
+        entry for a tab attached to background session n. place: its window's @tab_place.
+        pick: the launch fields (model, effort) to add. history: its transcript's entries."""
         died = self.died if died is None else died
         path = os.path.join(self.tmp, "code", dirname or f"repo{n}")
         if cwd:
@@ -94,7 +112,8 @@ class Restore(unittest.TestCase):
         tpath = os.path.join(self.tmp, "projects", f"{sid(n)}.jsonl")
         if transcript:
             os.makedirs(os.path.dirname(tpath), exist_ok=True)
-            open(tpath, "w").close()
+            with open(tpath, "w") as f:
+                f.writelines(json.dumps(h) + "\n" for h in history)
             t = died - (age if transcript_age is None else transcript_age)
             os.utime(tpath, (t, t))
         e = {"session_id": sid(n), "cwd": path, "transcript_path": tpath,
@@ -106,6 +125,7 @@ class Restore(unittest.TestCase):
             e |= {"attach": True, "job_id": sid(n)[:8]}
         if place is not None:
             e["place"] = place
+        e |= pick or {}
         with open(os.path.join(self.reg, sid(n) + ".json"), "w") as f:
             json.dump(e, f)
         return path
@@ -146,6 +166,10 @@ class Restore(unittest.TestCase):
                 out.append((cwd, words[2]))
         self.assertEqual(panes, [f"%{101 + i}" for i in range(len(panes))])
         return out
+
+    def typed(self):
+        """Each command typed into a new pane, in order."""
+        return [a[4] for a in self.calls("tmux", "send-keys")]
 
     def registry(self, sub=""):
         d = os.path.join(self.reg, sub)
@@ -415,6 +439,124 @@ class Restore(unittest.TestCase):
                        "ts": self.died, "transcript_path": "/nonexistent"}, f)
         self.run_restore()
         self.assertEqual(self.calls("tmux", "send-keys"), [])
+
+    # --- the launch flags (docs/lanes.md, "Model and effort") ---------------------------
+
+    def test_a_tab_comes_back_with_the_flags_its_claude_launched_with(self):
+        # An entry written before the fields existed, or by a claude launched with none, comes
+        # back bare: the user's default effort, as before.
+        self.entry(1, window=1, pick=PICK)
+        self.entry(2, window=2)
+        self.entry(3, window=3, pick={"effort": "max"})
+        self.run_restore()
+        self.assertEqual(self.typed(), [f"claude --resume {sid(1)} --model sonnet --effort low",
+                                        f"claude --resume {sid(2)}",
+                                        f"claude --resume {sid(3)} --effort max"])
+        self.assertIn("--model sonnet --effort low", self.restore_log()[0])
+
+    def test_a_pick_since_launch_carries_as_a_pass_would(self):
+        self.entry(1, window=1, pick=PICK,
+                   history=[reply("claude-sonnet-5-5", "low"), command("/model", "opus"),
+                            reply("claude-opus-5-5", "high")])
+        self.entry(2, window=2, pick=PICK,
+                   history=[command("/effort", "max"), reply("claude-sonnet-5-5", "max")])
+        self.run_restore()
+        self.assertEqual(self.typed(), [f"claude --resume {sid(1)} --model opus --effort high",
+                                        f"claude --resume {sid(2)} --model sonnet --effort max"])
+
+    def test_a_model_picked_just_before_the_end_carries_its_argument(self):
+        # No reply followed the /model: the resume would keep the model before it.
+        self.entry(1, window=1, pick=PICK,
+                   history=[reply("claude-sonnet-5-5", "low"), command("/model", "opus")])
+        self.run_restore()
+        self.assertEqual(self.typed(), [f"claude --resume {sid(1)} --model opus"])
+
+    def test_a_bad_field_drops_its_flag_and_never_the_tab(self):
+        picks = ({"model": "a b", "effort": "low"}, {"model": 5, "effort": ["x"]},
+                 {"model": "$(id)", "effort": "extreme"}, {"model": "-x", "effort": "High"},
+                 {"model": "sonnet[1m]"})
+        paths = [self.entry(n, window=n, pick=p) for n, p in enumerate(picks, 1)]
+        self.run_restore()
+        # %q escapes the brackets, which zsh would otherwise glob.
+        self.assertEqual(self.typed(), [f"claude --resume {sid(1)} --effort low",
+                                        f"claude --resume {sid(2)}", f"claude --resume {sid(3)}",
+                                        f"claude --resume {sid(4)}",
+                                        f"claude --resume {sid(5)} --model sonnet\\[1m\\]"])
+        self.assertEqual([c for c, _ in self.resumed()], paths)
+
+    def test_a_fresh_tab_starts_with_its_launch_flags(self):
+        self.entry(1, window=1, transcript=False, pick=PICK)
+        self.run_restore()
+        self.assertEqual(self.typed(), ["claude --model sonnet --effort low"])
+
+    def test_an_attach_tab_attaches_bare(self):
+        # The resume attaches to the running session, whose pick is its own; after a reboot
+        # nothing runs, so the chat resumes with its flags.
+        self.entry(1, window=1, attach=True, pick=PICK)
+        self.agents((1, "background"))
+        self.run_restore()
+        self.assertEqual(self.typed(), [f"claude --resume {sid(1)}"])
+        self.entry(2, window=1, attach=True, pick=PICK)
+        self.env["STUB_AGENTS"] = "[]"
+        self.run_restore()
+        self.assertEqual(self.typed()[1:], [f"claude --resume {sid(2)} --model sonnet --effort low"])
+
+    def test_an_attach_tab_stays_bare_when_the_agents_call_fails(self):
+        # Its session may still run in the background, where the resume only attaches to it; an
+        # answer that is no list (an error object) says no more than a failure. With no
+        # transcript the tab starts a new session, which attaches to nothing: its flags hold.
+        for n, env in enumerate(({"STUB_AGENTS_FAIL": "1"}, {"STUB_AGENTS": '{"error": "x"}'})):
+            with self.subTest(env=env):
+                self.env.update(env)
+                self.entry(3 * n + 1, window=1, attach=True, pick=PICK)
+                self.entry(3 * n + 2, window=2, pick=PICK)
+                self.entry(3 * n + 3, window=3, attach=True, pick=PICK, transcript=False)
+                self.run_restore()
+                self.assertEqual(self.typed()[-3:], [
+                    f"claude --resume {sid(3 * n + 1)}",
+                    f"claude --resume {sid(3 * n + 2)} --model sonnet --effort low",
+                    "claude --model sonnet --effort low"])
+                for key in env:
+                    del self.env[key]
+
+    def test_a_transcript_that_is_no_regular_file_is_never_read(self):
+        # A FIFO has an mtime, but opening it would block the whole restore.
+        self.entry(1, window=1, pick=PICK)
+        tpath = os.path.join(self.tmp, "projects", f"{sid(1)}.jsonl")
+        os.remove(tpath)
+        os.mkfifo(tpath)
+        os.utime(tpath, (self.died - 600, self.died - 600))
+        self.run_restore()
+        self.assertEqual(self.typed(), [f"claude --resume {sid(1)} --model sonnet --effort low"])
+
+    def test_list_names_the_flags(self):
+        self.entry(1, window=1, pick=PICK)
+        p = self.run_restore("--list")
+        self.assertIn("--model sonnet --effort low", p.stdout)
+
+    def test_every_tab_still_restores_when_lanelib_fails(self):
+        # A copy of the script with no lanelib beside it, one that raises on import, and one
+        # whose carried_pick raises: each tab comes back bare, none is lost.
+        repo = os.path.join(self.tmp, "repo")
+        os.makedirs(os.path.join(repo, "tmux"))
+        shutil.copy(SCRIPT, os.path.join(repo, "tmux"))
+        script = os.path.join(repo, "tmux", "claude-restore")
+        lib = os.path.join(repo, "skills", "lanes", "scripts", "lanelib.py")
+        for n, body in enumerate((None, "raise RuntimeError('broken')\n",
+                                  "def stored_pick(e):\n    return {'--model': 'x'}\n"
+                                  "def carried_pick(*a, **k):\n    raise RuntimeError('broken')\n"),
+                                 1):
+            with self.subTest(lanelib=body):
+                if body:
+                    os.makedirs(os.path.dirname(lib), exist_ok=True)
+                    with open(lib, "w") as f:
+                        f.write(body)
+                self.entry(2 * n, window=1, pick=PICK, history=[reply("claude-sonnet-5-5")])
+                self.entry(2 * n + 1, window=2, transcript=False, pick=PICK)
+                p = subprocess.run(["bash", script], capture_output=True, text=True, timeout=20,
+                                   env=self.env)
+                self.assertEqual(p.returncode, 0, p.stderr)
+                self.assertEqual(self.typed()[-2:], [f"claude --resume {sid(2 * n)}", "claude"])
 
     # --- the tab bar's placement -------------------------------------------------------
 
