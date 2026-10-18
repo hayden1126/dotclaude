@@ -125,6 +125,17 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     pass by hand with /clear, or run it in a pane of its own first"; name the case in the pass
     skill's step 5. Later, maybe: pass a bg session through the daemon (`claude attach`).
     Files: `skills/pass/scripts/pass-respawn`, `tests/pass/`, `skills/pass/SKILL.md`.
+  - **Bug reports from sessions outside dotclaude reach its lead, after cross-lane merges**
+    (Hayden's pick 2026-10-18, option A). The karaoke session's report (pass-bg) worked over
+    SendMessage only because Hayden told it where to send, since `lane addr` refuses outside its
+    repo and ListAgents names are tab titles. Build: `lane addr --repo <path> lead`, which finds
+    another repo's lead from its lead record with the same checks, plus one global CLAUDE.md
+    line: a bug in dotclaude's tooling goes to that address, and with no lead live, to Hayden.
+    The lead logs each report in this backlog. Rejected: a durable inbox that runs sandbox-off
+    and that the lead reads at session start (a new write path, and untrusted text in the lead's
+    context); revisit only if a report gets lost. The CLAUDE.md line is Hayden's edit (proposed
+    via `/revise-claude-md`). Files: `skills/lanes/scripts/lane` (cross-lane's file, hence the
+    wait), `tests/lanes`, `skills/lanes/SKILL.md`, `docs/lanes.md`, `CLAUDE.md`.
   - **chrome-bg's TTL loop counts down on the wall clock** (from lane monotonic, 2026-10-18).
     `bin/chrome-bg:1314` and `:1353` wait until the run record's `expires`, so a forward clock
     step cuts a TTL short by up to 0.6 s. The record stays wall clock (`ls` and gc read it,
@@ -203,18 +214,19 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
   `claude -p` repro and the 2.1.285 boundary; the karaoke session's has the incident.
 
 ## Notes for next session
-- **Next (lead, main checkout):** watch lanes tab-pin and cross-lane (In flight, merge order). On
+- **Next (lead, main checkout):** watch lanes cross-lane and pass-bg (In flight, merge order). On
   each "merged #N", run the post-merge chain (`skills/lanes/SKILL.md`, The lead, step 7; never
   amend or rebase the lead branch). Check `lane ls` first: a merge Hayden made on GitHub and
-  mentioned to no session sends no message. After tab-pin's merge, step 7.6 tells cross-lane to
-  merge origin/main and to carry the lead's notes from then on. If cross-lane is ready first, swap
-  the order in STATUS and tell both lanes. When both are closed, the backlog's chrome-bg TTL loop
-  is the next candidate (optional). No chat about a lane's own asks; speak on cross-lane orders,
-  decisions raised with the lead, failed checks and lead-only actions.
+  mentioned to no session sends no message. If pass-bg is ready first, swap the order in STATUS
+  and tell both lanes (the one next in order carries the lead's notes). Hold `lane done` while
+  another lane holds the `suite` lock (its `branch -d` rewrites `.git/config`). After cross-lane
+  merges, propose the bug-report lane (Backlog, option A). No chat about a lane's own asks; speak
+  on cross-lane orders, decisions raised with the lead, failed checks and lead-only actions.
   - The lead's commits: `git log --first-parent main..chore/after-pr4` (STATUS only, plus merges
     of main). Session 9dd86d28 (2026-10-18) started at ee36b32 and ended at this handoff: it ran
-    the chain for #120 (lane monotonic closed), checked #117 on the previous lead's pass, and
-    opened tab-pin and cross-lane.
+    the chain for #120 and #121 (lanes monotonic and tab-pin closed), checked #117 on the
+    previous lead's pass, opened tab-pin, cross-lane and pass-bg, and logged the karaoke
+    session's report and Hayden's bug-report pick.
   - Open with Hayden, nothing for the lead to do: the capella-studio lead asked how a new lane
     should clear the excluded-command guard, and the lead recommended (2026-10-17) pointing
     capella's `core.hooksPath` at the main checkout's protected `.githooks` (absolute path)
