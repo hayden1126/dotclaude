@@ -135,6 +135,13 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     context); revisit only if a report gets lost. The CLAUDE.md line is Hayden's edit (proposed
     via `/revise-claude-md`). Files: `skills/lanes/scripts/lane` (cross-lane's file, hence the
     wait), `tests/lanes`, `skills/lanes/SKILL.md`, `docs/lanes.md`, `CLAUDE.md`.
+  - **`session-registry.sh`'s `launch_pick()` finds the session by comm `claude`** (from lane
+    pass-bg's reviewer, 2026-10-18, read from code). A bg session's comm is the version
+    (`2.1.302`), so the lookup would land on the daemon. Unreachable today: the hook exits
+    before it for a bg session (`ATTENDED=0`, no `TMUX_PANE`). Optional, cheap: switch to
+    lanelib `sessions_above` (the ancestor whose `sessions/<pid>.json` records its own
+    procStart), as pass-bg did for pass-respawn. Do it with any change that lets bg sessions
+    register.
   - **chrome-bg's TTL loop counts down on the wall clock** (from lane monotonic, 2026-10-18).
     `bin/chrome-bg:1314` and `:1353` wait until the run record's `expires`, so a forward clock
     step cuts a TTL short by up to 0.6 s. The record stays wall clock (`ls` and gc read it,
