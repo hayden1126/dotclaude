@@ -695,16 +695,18 @@ class Trial(LaneWork):
         self.assertIn("lane trial: lane beta conflicts with origin/main (shared.txt), not with "
                       "this lane: it needs to merge origin/main", out)
         self.assertNotIn("conflict with lane beta", out)
-        # One that conflicts with this lane's HEAD as well is this lane's conflict too.
+        # One that conflicts with this lane too gets the base's verdict only (the known limit):
+        # its own trial, once it merges the base, finds the rest. The trial still fails.
         self.commit_files(self.alpha, ["g.txt"])
         self.commit_files(self.beta, ["g.txt"])
         rc, out, err = self.trial("--run", "true")
         self.assertEqual(rc, 1, out + err)
-        self.assertRegex(out, r"lane trial: conflict with lane beta: \S")
+        self.assertIn("lane trial: lane beta conflicts with origin/main (shared.txt), not with "
+                      "this lane: it needs to merge origin/main", out)
 
     def test_a_lane_that_holds_the_base_still_leaves_a_base_conflict_to_the_other_lane(self):
-        # alpha merged origin/main, so its HEAD conflicts with beta wherever main does: only
-        # the paths tell that shared.txt is main's change, never alpha's.
+        # alpha merged origin/main, so its HEAD conflicts with beta wherever main does: only a
+        # merge with the base alone tells that shared.txt is main's change, never alpha's.
         self.commit_files(self.main, ["shared.txt"])
         self.git("push", "-q", "origin", "main")
         self.git("merge", "-q", "--no-edit", "origin/main", cwd=self.alpha)
@@ -714,6 +716,69 @@ class Trial(LaneWork):
         self.assertIn("lane trial: lane beta conflicts with origin/main (shared.txt), not with "
                       "this lane: it needs to merge origin/main", out)
         self.assertNotIn("conflict with lane beta", out)
+
+    def edit_lines(self, cwd, name, edits):
+        """Commit name in cwd with edits ({line number: text}) applied to its lines: the file as
+        it is there, or a fresh one of 50 numbered lines, so hunks can sit far apart."""
+        path = os.path.join(cwd, name)
+        lines = (self.read(path).splitlines() if os.path.exists(path)
+                 else [f"line {i}" for i in range(1, 51)])
+        for n, text in edits.items():
+            lines[n - 1] = text
+        self.write(path, "\n".join(lines) + "\n")
+        self.git("add", name, cwd=cwd)
+        self.git("commit", "-q", "-m", f"edit {name}", cwd=cwd)
+
+    def push_main(self):
+        self.git("push", "-q", "origin", "main")
+
+    def test_two_other_lanes_conflicting_in_a_file_this_lane_edits_elsewhere_are_named(self):
+        # Case A: alpha edits line 5 of x.txt, beta and gamma both line 40. gamma conflicts
+        # with beta, merged before it; the file alone would blame alpha.
+        self.edit_lines(self.main, "x.txt", {})
+        self.push_main()
+        for lane in (self.alpha, self.beta):
+            self.git("merge", "-q", "--no-edit", "origin/main", cwd=lane)
+        gamma = self.new("gamma")
+        self.edit_lines(self.alpha, "x.txt", {5: "alpha"})
+        self.edit_lines(self.beta, "x.txt", {40: "beta"})
+        self.edit_lines(gamma, "x.txt", {40: "gamma"})
+        rc, out, err = self.trial("--run", "true")
+        self.assertEqual(rc, 1, out + err)
+        self.assertIn("lane trial: lane gamma conflicts with lane beta (x.txt), not with this "
+                      "lane: gamma was left out", out)
+        self.assertNotIn("conflict with lane gamma", out)
+
+    def test_a_lane_behind_the_base_in_a_file_this_lane_edits_elsewhere_must_merge_it(self):
+        # Case B: main edits line 1 of x.txt, alpha merges main and edits line 40, beta
+        # (merged x.txt before main's edit) edits line 1: beta's to merge origin/main.
+        self.edit_lines(self.main, "x.txt", {})
+        self.push_main()
+        self.git("merge", "-q", "--no-edit", "origin/main", cwd=self.beta)
+        self.edit_lines(self.main, "x.txt", {1: "main"})
+        self.push_main()
+        self.git("merge", "-q", "--no-edit", "origin/main", cwd=self.alpha)
+        self.edit_lines(self.alpha, "x.txt", {40: "alpha"})
+        self.edit_lines(self.beta, "x.txt", {1: "beta"})
+        rc, out, err = self.trial("--run", "true")
+        self.assertEqual(rc, 1, out + err)
+        self.assertIn("lane trial: lane beta conflicts with origin/main (x.txt), not with this "
+                      "lane: it needs to merge origin/main", out)
+
+    def test_a_lane_that_renames_a_file_this_lane_edits_conflicts_with_this_lane(self):
+        # gamma renames old.txt to new.txt and edits line 10, which alpha edits too: git names
+        # new.txt, a path alpha never changed, yet the conflict is alpha's. beta merges first.
+        self.edit_lines(self.main, "old.txt", {})
+        self.push_main()
+        gamma = self.new("gamma")
+        self.git("merge", "-q", "--no-edit", "origin/main", cwd=self.alpha)
+        self.edit_lines(self.alpha, "old.txt", {10: "alpha"})
+        self.git("mv", "old.txt", "new.txt", cwd=gamma)
+        self.edit_lines(gamma, "new.txt", {10: "gamma"})
+        rc, out, err = self.trial("--run", "true")
+        self.assertEqual(rc, 1, out + err)
+        self.assertIn("merged beta (", out)
+        self.assertRegex(out, r"lane trial: conflict with lane gamma: \S")
 
     def test_a_base_conflict_aborts_before_any_suite(self):
         self.commit_files(self.alpha, ["shared.txt"])

@@ -392,14 +392,17 @@ refuse every LFS lane. `ls` alone skips the uncommitted read then, since it can 
    merges the base, then each other live lane's head by id, and `git commit-tree` turns each
    clean result into a dangling commit (a fixed `lane-trial` identity, unsigned; no ref moves).
    A conflict with the base aborts ("merge origin/main first"). A lane that conflicts is
-   skipped and the trial fails, and the report says whose conflict it is by the paths git
-   names. It is this lane's when one of them is a path this lane changes past the base. Else,
-   when the other lane conflicts with the base by itself, it is that lane's to merge the base,
-   and this lane's ask for ready goes ahead. Else it is between that lane and lanes merged
-   before it: the report names each pair and the `lane trial <id>` that tries it with this lane
-   alone. Paths decide, not a trial merge with this lane's HEAD, because a HEAD that holds the
-   base already conflicts wherever the base does. Other lanes' uncommitted work isn't in the
-   merge.
+   skipped and the trial fails, and the report says whose conflict it is. Merges decide, in
+   order. When the other lane conflicts with the base alone, it is that lane's to merge the
+   base, and this lane's ask for ready goes ahead. Else, with no lane merged before it, or when
+   it conflicts with the baseline (this lane's HEAD plus the base, which merges cleanly with
+   it), it is this lane's. Else it is between that lane and lanes merged before it: the report
+   names each pair and the `lane trial <id>` that tries it with this lane alone. Not paths,
+   since git conflicts by hunk, not by file (and names a renamed file by its new path); not a
+   merge with this lane's HEAD, which may hold the base already and then conflicts wherever the
+   base does. A lane behind the base that also conflicts with this lane gets the base's verdict
+   only; its own trial, once it merges the base, finds the rest. Other lanes' uncommitted work
+   isn't in the merge.
 3. It checks the merge out in a fresh `mkdtemp` tree under the temp dir, named by repo key and
    lane id, and runs each `--run` there as `sh -c`, streaming its output. One `--run` per
    suite: a chained `a && b` stops at the first failure, and `a; b` reports only the last exit.
