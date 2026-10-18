@@ -384,14 +384,16 @@ class DoneStatus(LaneWork):
         os.utime(os.path.join(self.path, SUB, "f.txt"), (OLD, OLD))
         return fsmonitor_ran, clean_ran
 
-    def fsmonitor_in_lane(self):
+    def fsmonitor_in_lane(self, configure=True):
         """A relative core.fsmonitor in the repo's (protected) config, which resolves in the
-        lane's worktree, to the lane's own fsm.sh, committed; returns its marker."""
+        lane's worktree, to the lane's own fsm.sh, committed; returns its marker. configure
+        False leaves the setting to the caller."""
         script, ran = self.trap("fsmonitor-in-lane")
         os.rename(script, os.path.join(self.path, "fsm.sh"))
         self.git("add", "fsm.sh", cwd=self.path)
         self.git("commit", "-q", "-m", "fsm", cwd=self.path)
-        self.git("config", "core.fsmonitor", "./fsm.sh")
+        if configure:
+            self.git("config", "core.fsmonitor", "./fsm.sh")
         return ran
 
     def test_done_refuses_a_submodule_without_running_its_config(self):
@@ -416,6 +418,19 @@ class DoneStatus(LaneWork):
     def test_done_never_runs_a_relative_fsmonitor(self):
         # `git worktree remove` runs a status in the lane of its own, past any -c of ours.
         ran = self.fsmonitor_in_lane()
+        self.assertIn("closed", self.lane("done", "alpha", "--abandon"))
+        self.assertFalse(os.path.exists(ran))
+
+    def test_done_never_runs_a_relative_fsmonitor_its_caller_configures(self):
+        # git reads GIT_CONFIG_PARAMETERS after any GIT_CONFIG_COUNT entries: done's own setting
+        # has to come last there, or an inherited one wins in the remove's status.
+        ran = self.fsmonitor_in_lane(configure=False)
+        inherited = "'core.fsmonitor'='./fsm.sh'"
+        subprocess.run(["git", "status"], cwd=self.path, capture_output=True, timeout=60,
+                       env=dict(self.env, GIT_CONFIG_PARAMETERS=inherited))
+        self.assertTrue(os.path.exists(ran))  # the trap is real
+        os.unlink(ran)
+        self.env["GIT_CONFIG_PARAMETERS"] = inherited
         self.assertIn("closed", self.lane("done", "alpha", "--abandon"))
         self.assertFalse(os.path.exists(ran))
 

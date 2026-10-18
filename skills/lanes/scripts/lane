@@ -3212,10 +3212,11 @@ def cmd_done(args) -> None:
     os.environ["GIT_OPTIONAL_LOCKS"] = "0"
     # Nor does any of them query fsmonitor: a relative core.fsmonitor in the repo's config runs
     # from the lane's worktree, and `git worktree remove` runs a status there of its own, past
-    # any -c on our command line. Config from the environment reaches it, and submodules.
-    count = int(os.environ.get("GIT_CONFIG_COUNT", "0") or 0)
-    os.environ.update({f"GIT_CONFIG_KEY_{count}": "core.fsmonitor",
-                       f"GIT_CONFIG_VALUE_{count}": "false", "GIT_CONFIG_COUNT": str(count + 1)})
+    # any -c on our command line. Config from the environment reaches it, and submodules: the
+    # last entry of GIT_CONFIG_PARAMETERS, which git reads after any GIT_CONFIG_COUNT entries
+    # and the inherited ones before it, so nothing inherited turns it back on.
+    os.environ["GIT_CONFIG_PARAMETERS"] = " ".join(filter(None, [
+        os.environ.get("GIT_CONFIG_PARAMETERS", "").strip(), "'core.fsmonitor'='false'"]))
     # Not even then, where the repo turns on per-worktree config: git would read the lane's
     # <admin>/config.worktree too, which its sandbox can write and no variable overrides.
     present = os.path.isdir(path)
