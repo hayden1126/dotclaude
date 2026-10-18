@@ -83,9 +83,11 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     [[dotclaude-tab-bar]], remote-paste's live tests in [[dotclaude-remote-paste]]. #115 left the
     tab glyph's prompt at v4: an ask a reply only announces for later stays a documented known
     miss (`hooks/wants_input.py`'s docstring), since its one prompt round flipped 10 verdicts.
-  - **Live lane (opened 2026-10-18), merge order:** 1 cross-lane (`feat/cross-lane-checks`,
-    branched from e2a2294). Since #121 merged it merges origin/main and carries the lead's
-    notes. Its Brief has the detail; the backlog item below keeps the evidence.
+  - **Live lanes (opened 2026-10-18), merge order:** 1 cross-lane (`feat/cross-lane-checks`,
+    branched from e2a2294; since #121 merged it merges origin/main and carries the lead's
+    notes), 2 pass-bg (`fix/pass-bg-session`, from 53d3a11; Hayden's pick to open it at once;
+    the lead swaps the order if it's ready first). Each Brief has the detail; the backlog items
+    below keep the evidence.
   - The parked json-depth sweep (21 files, among them the delegation enforcement scripts) is on
     `fix/json-depth-sweep`, a local branch never pushed: keep it while the sweep is in the
     backlog. Shipping it first needs a check of how each enforcement site fails
@@ -113,7 +115,7 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     runs the suites there under `lane lock suite` (the trial-tree traps are in
     [[dotclaude-lanes]]). The lead plan review (C) was not picked. Files: `skills/lanes/scripts/
     lane`, `lanelib.py`, `tests/lanes`, `skills/lanes/SKILL.md`, `docs/lanes.md`.
-  - **pass-respawn misreports a background session** (reported by the karaoke session 07618dd3,
+  - **pass-respawn misreports a background session (lane pass-bg, live)** (reported by the karaoke session 07618dd3,
     2026-10-18; Hayden asked it to send it here). A `kind: "bg"` session (daemon-hosted:
     `claude bg-pty-host` under `claude daemon run --origin transient`, under the interactive
     claude in pane %1) has no `TMUX_PANE`, so `pass-respawn` refuses with "not in a tmux pane"
