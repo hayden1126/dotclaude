@@ -103,7 +103,8 @@ stored here).
     Until then, 3.7c's default menus that dotclaude doesn't own still clip under a top bar.
   - Tests time durations with `time.monotonic()`, not `time.time()` (151 calls in 27 test
     files on 2026-10-17). It touches every suite, so it opens only when no lane runs: after the
-    three live lanes close. Mostly hygiene once timesyncd is off (Blocked).
+    three live lanes close. It is the flakes' real fix: the wall clock still steps with timesyncd
+    off (Notes, "Root cause of the timing flakes").
 
   **The post-merge chain** (Hayden's design B, standing approval 2026-10-14): `skills/lanes/SKILL.md`,
   The lead, step 7. Lead commits ride the next lane PR: that lane applies `git diff origin/main
@@ -163,10 +164,6 @@ stored here).
   `delegation-ledger exclude --id <id> --why probe`.
 
 ## Blocked / decisions needed
-- **Disable `systemd-timesyncd`** (Hayden's call 2026-10-14, not yet run): on 2026-10-17 it was
-  still `active` and `enabled`, and a 40 s sample of `time.time()` minus `time.monotonic()`
-  stepped 1.07 s. Hayden runs `! sudo systemctl disable --now systemd-timesyncd`; the lead then
-  re-samples (expect no step over 0.5 s).
 - **Rescan the `rm` gap around 2026-11-04** (Hayden's call; the delete guard covers only
   sandbox-off deletes, so the sandboxed gap stands):
   `python3 -I ~/scratch/sandbox-audit/rm_scan.py 2026-11-04`. Sending the drafted
@@ -209,9 +206,12 @@ stored here).
     -2.7 s then +5.4 s about every 33 s (`time.time()` minus `time.monotonic()`; evidence:
     `.git/lanes/_closed/lane-addr-2026-10-14/.lane/artifacts/clock-steps.txt`). It matches the setup, ctx, handoff-reminder and
     ledger flakes. `systemd-timesyncd` is active inside WSL2 beside WSL's own host time sync,
-    which likely means two sources fighting (inferred). Hayden's call: `sudo systemctl disable
-    --now systemd-timesyncd`, then re-sample. Separately, tests should measure durations with
-    `time.monotonic()`, not `time.time()`.
+    which likely meant two sources fighting. Hayden disabled it on 2026-10-17 (`inactive`,
+    `disabled`). The swings stopped, but the clock still steps forward 0.3 to 0.6 s every 30 s
+    with no time daemon running (a 120 s sample: +0.47, +0.59, +0.44, +0.29 at 1, 31, 61, 91 s).
+    The likely source is Hyper-V's host time sync correcting a guest clock about 1.5% slow
+    (inferred; clocksource `tsc`, `ptp0` present). So tests must measure durations with
+    `time.monotonic()`, not `time.time()` (the backlog sweep).
   - **Flakes:** `tests/pass` fails timing asserts under a load spike, so judge it on a run of
     about 46 s. `test_tmux_hooks` flaked on `main` too; its ring-decision wait is now 15 s.
     Watch `seen()`'s 3 s wait, which also serves negative checks.
