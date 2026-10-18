@@ -8,11 +8,17 @@ a passing handoff.
 
 /pass runs it last (skills/pass/SKILL.md; PLAN.md "PR 3: /pass" has the design and the spike
 results it rests on). At call time it refuses unless $TMUX_PANE names a pane (exit 2, printing
-the line to do by hand) and `handoff-check -C <dir>` passes (exit 1, echoing its gaps). It also
-refuses (exit 1) when it can't find this session: the nearest `claude` ancestor process, whose
-Claude Code session file ~/.claude/sessions/<pid>.json must name $CLAUDE_CODE_SESSION_ID, the
-process's own start time (procStart, so a reused pid can't pass) and this pane. One pass may be
-pending per session: the waiter holds an exclusive flock on
+the line to do by hand) and `handoff-check -C <dir>` passes (exit 1, echoing its gaps). A
+background session (its session file says kind `bg`: the daemon runs it, never a pane) refuses
+with exit 2 too, $TMUX_PANE or not, printing the line to do by hand and the way into a pane of
+its own: `claude stop <jobId>`, then `claude --resume <sessionId>` in its directory (live on
+2.1.302, 2026-10-18: the session kept its id there and passed). `claude attach` only shows it,
+still daemon-run. It also refuses (exit 1) when it can't find this session: the nearest
+ancestor process whose Claude Code session file ~/.claude/sessions/<pid>.json records that
+process's own start time (procStart, so a reused pid's stale file can't pass), whatever its
+process title (one the daemon runs shows `2.1.302`); that file must name
+$CLAUDE_CODE_SESSION_ID and this pane. One pass may be pending per session: the waiter holds an
+exclusive flock on
 $XDG_STATE_HOME/dotclaude/pass-pending/<session>.lock for its whole life, with its pid and start
 time written in it, and a second call while it is held refuses (exit 1). Then it detaches the
 waiter (a double fork; a fork or setsid that fails exits 1 and logs `error`) and exits 0.
@@ -200,7 +206,10 @@ the sandbox can write (docs/lanes.md S3). Every input, and why each is safe:
     counted: an accepted limit. So is the command line itself: the native install keeps
     claude's full argv there (seen live on Claude Code 2.1.296, a session launched with
     --settings), but an npm install may overwrite its process title, and then no session flag
-    is seen. Code can't tell "launched with no flags" from "title overwritten". And the early
+    is seen. Code can't tell "launched with no flags" from "title overwritten". A session the
+    daemon runs is the same: its argv is the spare it claimed (`claude bg-spare --bg-spare
+    <sock>` on 2.1.302), so its launch flags go unseen while git runs for its refusal, which
+    needs the checkout to name the resume prompt; its file's cwd still counts. And the early
     --settings check, made before git runs, knows only the dirs that need no git: a --settings
     file in the main checkout of a lane session launched from the lane is caught only by the
     late check, after lanelib's git has run once.
@@ -224,7 +233,10 @@ the sandbox can write (docs/lanes.md S3). Every input, and why each is safe:
     call's; TMUX_PANE must be `%<n>`, and the session id must match the session file.
   - The session file (~/.claude/sessions/<pid>.json) is Claude Code's, and the sandbox can't
     write ~/.claude/sessions. Only `idle` there (or `shell`: at the prompt with a background
-    shell running), or `busy` with the transcript's turn end, lets the waiter act.
+    shell running), or `busy` with the transcript's turn end, lets the waiter act. Its `kind`
+    can only make the call refuse (bg), never let a pass through. That refusal prints its jobId
+    only as a plain id, and its cwd only as an absolute, printable path with no backtick,
+    shell-quoted; both are shown, never run.
   - The transcript (~/.claude/projects/...) is Claude Code's too, also out of the sandbox's
     reach. It only decides: whether the turn ended (with the session file's `busy`), whether a
     prompt came after the call (which drops a pass) and the respawn's model and effort (above).
@@ -441,9 +453,17 @@ def ancestry(table: dict, pid: int | None) -> list[int]:
     return chain
 
 
-def session_claude(table: dict, me: int) -> int | None:
-    """The nearest ancestor of me whose comm is `claude`: the session that ran this call."""
-    return next((p for p in ancestry(table, me)[1:] if table[p][0] == "claude"), None)
+def session_claude(table: dict, me: int) -> tuple[int | None, dict | None]:
+    """The session that ran this call: the nearest ancestor of me whose session file records
+    that process's own procStart (a reused pid's stale file doesn't), and the file; else
+    (None, None). Never its comm, which is a title the process sets: one the daemon runs is
+    exec'd by its versioned path and shows `2.1.302`, and the `claude` above it is the daemon."""
+    for pid in ancestry(table, me)[1:]:
+        session = load_session(pid)
+        start = lanelib.proc_start_of(session) if session is not None else None
+        if start is not None and start == proc_start(pid):
+            return pid, session
+    return None, None
 
 
 # ---- Claude Code's files ----
@@ -1166,18 +1186,27 @@ def prepare(args: argparse.Namespace, procs, cmdline=lanelib.proc_cmdline) -> Pl
     mode = "compact" if args.compact else "plain"
     sid = os.environ.get("CLAUDE_CODE_SESSION_ID") or ""
     sid = sid if SID_RE.fullmatch(sid) else ""  # it names files: a plain id or nothing
-    claude_pid = session_claude(procs(), os.getpid())
-    # These two refuse before anything runs sandbox-off: without its claude the session's own
-    # launch flags (--settings, --add-dir) can't be read, so the roots below would be short.
+    claude_pid, session = session_claude(procs(), os.getpid())
+    # These three refuse before anything runs sandbox-off: without its claude the session's own
+    # launch flags (--settings, --add-dir) can't be read, so the roots below would be short. A
+    # file of another session's (the walk went past a caller whose file is missing: a nested
+    # `claude -p`'s outer session, a bg session's daemon client) would lend its flags instead.
     if claude_pid is None:
-        raise Refuse(1, "pass-respawn: can't find this session's claude process, so it can't "
-                     "tell when the turn ends. Run it bare (sandbox-off)", "no claude")
+        hint = (" Sandboxed, it sees none of the session's processes: run it bare (sandbox-off)"
+                if lanelib.sandboxed() else "")
+        raise Refuse(1, "pass-respawn: can't find this session's claude process: no session file "
+                     "above this call records its process's own procStart, so it can't tell when "
+                     f"the turn ends.{hint}", "no claude")
     if not sid:
         raise Refuse(1, "pass-respawn: CLAUDE_CODE_SESSION_ID is unset (or not a plain id), so "
                      "it can't tell this session's file from another's", "no session id")
-    session = load_session(claude_pid)
-    launch = session.get("cwd") if session and isinstance(session.get("cwd"), str) else None
-    claude_argv = cmdline(claude_pid) if claude_pid else None
+    if session.get("sessionId") != sid:
+        raise Refuse(1, f"pass-respawn: the nearest session file above this call (claude "
+                     f"{claude_pid}) has session id {session.get('sessionId')!r}, not {sid}: it "
+                     "is another session's, so it can't tell when this one's turn ends",
+                     "not this session's file")
+    launch = session.get("cwd") if isinstance(session.get("cwd"), str) else None
+    claude_argv = cmdline(claude_pid)
     early = writable_roots(None, args.cwd, launch, session_argv=claude_argv)
     refuse_writable_settings(claude_argv, flag_base(None, args.cwd, launch), early)
     resolve_bin("git", early, pin(early))  # lanelib.resolve runs it next
@@ -1192,15 +1221,34 @@ def prepare(args: argparse.Namespace, procs, cmdline=lanelib.proc_cmdline) -> Pl
     except OSError:
         size = None
     pane = os.environ.get("TMUX_PANE") or ""
-    if not PANE_RE.fullmatch(pane):
+    # The daemon runs a background session, never a pane, even with a TMUX_PANE set: a respawn
+    # or the keys would reach whatever session that pane shows.
+    background = session.get("kind") == "bg"
+    if background or not PANE_RE.fullmatch(pane):
         draft = Plan(mode, "", repo.toplevel, lane is not None, status_rel, "", None, 0, 0, sid,
                      {}, called, None, 0, args.timeout)
-        ours = session if session and session.get("sessionId") == sid else None
-        prompt = resume_prompt(status_rel, lane is not None, approved_now(draft, ours),
+        prompt = resume_prompt(status_rel, lane is not None, approved_now(draft, session),
                                args.compact)
         by_hand = f"/compact {compact_focus(status_rel)}" if args.compact else "/clear"
-        raise Refuse(2, f"pass-respawn: not in a tmux pane. Do it by hand: {by_hand}, then: "
-                     f"{prompt}", "no tmux pane")
+        if not background:
+            raise Refuse(2, f"pass-respawn: not in a tmux pane. Do it by hand: {by_hand}, then: "
+                         f"{prompt}", "no tmux pane")
+        # The job id and the cwd are printed only when plain: a plain id, and an absolute,
+        # printable path with no backtick (it would end the code span), shell-quoted. --resume
+        # finds the session from its directory.
+        job = session.get("jobId")
+        job = job if isinstance(job, str) and SID_RE.fullmatch(job) else None
+        stop = (f"`claude stop {job}`" if job
+                else "`claude stop <jobId>` (`claude agents --json` lists it)")
+        cwd = session.get("cwd")
+        resume = f"`claude --resume {sid}` in a tmux pane in the session's directory"
+        if isinstance(cwd, str) and os.path.isabs(cwd) and cwd.isprintable() and "`" not in cwd:
+            resume = f"`cd {shlex.quote(cwd)} && claude --resume {sid}` in a tmux pane"
+        raise Refuse(2, f"pass-respawn: session {sid} is a background session (daemon-hosted"
+                     f"{f', job {job}' if job else ''}): the daemon runs it, not a tmux pane, so "
+                     f"there is no pane to respawn. Do it by hand: {by_hand}, then: {prompt} Or "
+                     f"move it into a pane of its own and pass there: once this turn ends, from "
+                     f"another terminal, run {stop}, then {resume}.", "background session")
     roots = writable_roots(repo, args.cwd, launch, session_argv=claude_argv)
     # Again against the full roots: the main checkout and the toplevel's relative allowWrite
     # entries are known only now, and without a launch dir a relative --settings value
