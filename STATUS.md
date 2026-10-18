@@ -124,6 +124,15 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     also accept the basename of the claude's own argv[0]. Keep the check itself: it is what
     catches a Ctrl+Z'd claude with another program in front. Files:
     `skills/pass/scripts/pass-respawn`, `tests/pass/`.
+  - **The tab scripts find claude by the pane's command too** (from lane launch-path,
+    2026-10-18; Hayden's pick: log it, not that lane's work). Same cause as the item above: a
+    claude run under its versioned path reads `2.1.302`. In `tmux/tmux-claude-status`'s pane
+    loop, such a pane counts toward no window's `win_has_claude`, and a starred one loses its
+    star and gets `@claude_star_away` on every tick. In `tmux/claude-saved`'s session lookup,
+    the branch with no live session file requires `claude`, so the pane maps to no session.
+    Needs its own design: the status script reads only `pane_current_command` per pane per
+    tick, so a per-pane session-file lookup (or matching the claude's argv[0] basename) has a
+    cost to weigh. Not seen live (same 9-pane check).
   - **A background session passes on its own (log only: Hayden kept the bg pass manual,
     2026-10-18; don't build it without his ask)** (from lane pass-bg). After the turn ends, the
     waiter finds the pane running `claude attach <jobId>` (`tmux/claude-saved` already maps
