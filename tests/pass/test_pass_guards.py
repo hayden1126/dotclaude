@@ -1072,6 +1072,14 @@ class SkillLeftovers(unittest.TestCase):
         self.assertIn("ask Hayden before you stop it, and don't pass this turn", step2)
         self.assertIn("In compact mode, leave it running", step2)
 
+    def test_step_3_loads_the_handoff_skill_with_the_skill_tool(self):
+        # A step that only said "run the handoff skill" let a session follow a remembered
+        # procedure; handoff-check can't tell a thin record from a full one.
+        start = self.text.index("**Run the handoff skill.**")
+        end = self.text.index("**Run `~/.claude/skills/handoff/scripts/handoff-check`**")
+        step3 = self.text[start:end]
+        self.assertIn("Load it with the Skill tool (`handoff`)", step3)
+
     def test_step_2_says_an_artifact_watch_doesnt_block(self):
         call = self.text.index("Run `pass-respawn -C <toplevel>`")
         before = self.text[:call]

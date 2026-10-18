@@ -33,6 +33,7 @@ The record holds the exact facts and the fresh session re-reads it. So the hando
    - You judge, the script enforces: `pass-respawn` still refuses a plain pass while any task but memory upkeep (`dream`) or an artifact watch runs, so a skipped check can't kill a live watcher. Its refusal is loud (a notice held until a key, plus the Windows toast) and names the first two tasks with their ids; `pass.log` names every one.
 
 3. **Run the handoff skill.**
+   - Load it with the Skill tool (`handoff`) unless this session already did, so its current procedure runs, not a remembered one. `handoff-check` gates what it can test, not how well the record reads.
    - If a handoff already ran this session, run its delta mode (the `handoff` skill, "Delta mode").
    - Skip it only when the handoff was the step right before this one and `handoff-check` passes now.
    - Otherwise run the full procedure.
@@ -117,6 +118,7 @@ The fresh session starts in **plan mode** unless the status doc's Next block car
 | Checking `ps` for leftover tasks | Read `pass-respawn -C <toplevel> --tasks`: tasks aren't child processes, and the MCP servers that are look like the whole list |
 | Promising "the pane restarts" | Say it restarts unless the gate refuses; the checks run after your reply |
 | Saying a pass is "still queued" in a later turn | By your next turn it has run or dropped; a `[pass]` notice names the drop and its fix |
+| Running the handoff from memory | Load the `handoff` skill with the Skill tool first; the procedure changes |
 | Skipping the delta handoff because a handoff ran earlier | Work after a handoff makes it stale; run the delta mode |
 | Writing the approval marker to get a normal-mode resume | Only for an approval Hayden gave this session, cited; never inferred |
 | Calling `pass-respawn` without `-C`, or behind `cd` or a pipe | Run `pass-respawn -C <toplevel>` bare |
