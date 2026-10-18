@@ -5,6 +5,7 @@ import contextlib
 import datetime
 import errno
 import fcntl
+import glob
 import importlib.machinery
 import importlib.util
 import json
@@ -1033,6 +1034,7 @@ FAKE = r'''
   log       the file each signal it gets is appended to, as "<pid> <SIGNAME>"
   ignore    signal names it logs and survives (an interactive shell's SIGTERM)
   hold      a file it keeps open
+  release   a file whose appearance makes it close hold (a git that finishes)
   on_term   [argv, stdin]: run on SIGTERM before it exits (a SessionEnd hook); a signal that
             comes while it runs is logged and waits, as a session mid-exit does
   drop      a file it removes on SIGTERM, before on_term ({pid} its pid: its session file,
@@ -1043,7 +1045,7 @@ FAKE = r'''
   comm      the comm it gives itself (/proc/self/comm), e.g. "tmux: server"
   session   {file, sid}: Claude Code's session file it writes for itself (pid, procStart)
 It prints "ready <pid> <its descendants' pids>" once set up, then sleeps."""
-import json, os, signal, subprocess, sys, time
+import json, os, signal, subprocess, sys, threading, time
 
 cfg = json.loads(sys.argv[1])
 ending = False
@@ -1078,6 +1080,16 @@ if s := cfg.get("session"):
                    "kind": "interactive", "procStart": start}, f)
     os.rename(s["file"] + ".tmp", s["file"])
 held = open(cfg["hold"], "a") if cfg.get("hold") else None
+
+
+def release():
+    while not os.path.exists(cfg["release"]):
+        time.sleep(0.05)
+    held.close()
+
+
+if held and cfg.get("release"):
+    threading.Thread(target=release, daemon=True).start()
 pids = []
 for child in cfg.get("children", []):
     p = subprocess.Popen([sys.executable, __file__, json.dumps(child)], cwd=child["cwd"],
@@ -1372,6 +1384,7 @@ class Close(Fakes):
     def assertClosed(self):
         self.assertFalse(os.path.exists(self.path))
         self.assertFalse(os.path.exists(os.path.join(self.common, "lanes", "chart-fix")))
+        self.assertEqual(glob.glob(self.proof()), [])  # a completed close deletes its record
 
     def assertRefusedUntouched(self, p, *pids):
         """A refusal before any signal: exit 1, each pid still running, nothing signalled, and
@@ -1384,6 +1397,7 @@ class Close(Fakes):
         self.assertNotIn("ended", p.stdout)
         self.assertEqual(self.lane_json("chart-fix")["state"], "active")
         self.assertTrue(os.path.isdir(self.path))
+        self.assertEqual(glob.glob(self.proof()), [])  # only a closing lane gets a record
 
     # ---- 1. a lane session and what runs under it ------------------------------------------
 
@@ -1511,7 +1525,8 @@ class Close(Fakes):
         self.assertRefusedUntouched(p, shell, claude)
 
     def test_a_pane_shell_that_takes_a_new_job_mid_close_is_never_sighuped(self):
-        # Its SIGHUP would reach the new job too: round 1 skips it, and round 2 refuses it.
+        # Its SIGHUP would reach the new job too: round 1 waits it out for the grace, then skips
+        # it, and round 2 refuses it.
         self.hand_off()
         go, ready = os.path.join(self.tmp, "go"), os.path.join(self.tmp, "job-ready")
         server, shell, claude = self.pane(
@@ -1530,6 +1545,264 @@ class Close(Fakes):
         self.assertEqual(self.signals(), [(claude, "SIGTERM")])
         self.assertTrue(self.alive(shell))
         self.assertEqual(self.lane_json("chart-fix")["state"], "closing")
+
+    def test_a_job_the_pane_shell_starts_as_its_session_ends_is_waited_out(self):
+        # A prompt forks as it draws (agnoster's `$(build_prompt)` runs git in a -zsh child), and
+        # a restored tab draws one the moment its claude exits: round 1 waits such a job out, up
+        # to the grace, before the shell's SIGHUP.
+        self.env["_LANE_TEST_GRACE"] = "4"
+        self.hand_off()
+        go, ready = os.path.join(self.tmp, "go"), os.path.join(self.tmp, "job-ready")
+        server, shell, claude = self.pane(
+            shell={"then": {"argv": ["sh", "-c", f"touch {ready}; sleep 1.5"], "cwd": self.path,
+                            "go": go, "out": os.path.join(self.tmp, "o")}},
+            claude={"on_term": [["sh", "-c", f"touch {go}; while [ ! -e {ready} ]; do "
+                                             "sleep 0.05; done"], ""]})
+        out = self.lane("done", "chart-fix", "--abandon")
+        self.assertIn(f"ended {shell} {self.comms[shell]} (the shell of lane session "
+                      f"{self.SID})", out)
+        self.assertEqual(self.signals(), [(claude, "SIGTERM"), (shell, "SIGHUP")])
+        self.assertClosed()
+
+    def proof(self):
+        """The glob of lane chart-fix's recorded proof (Repo.closing_path) in the temp state."""
+        return os.path.join(self.tmp, "state", "dotclaude", "lanes", "*.closing", "chart-fix.json")
+
+    def refused_mid_close(self):
+        """The 2026-10-15 shape (lane two-sessions), first run: as its session ends, the pane
+        shell starts an in-lane job with no session id that outlasts the grace, so round 2
+        refuses both and the lane stays closing. [shell, claude, job, release, saw]: touching
+        release ends the job, and saw lists the proof the session's SIGTERM found recorded."""
+        go, ready, release, saw = (os.path.join(self.tmp, x)
+                                   for x in ("go", "job-ready", "release", "saw-proof"))
+        server, shell, claude = self.pane(
+            shell={"then": {"argv": ["sh", "-c", f"touch {ready}; while [ ! -e {release} ]; do "
+                                                 "sleep 0.05; done"],
+                            "cwd": self.path, "go": go, "out": os.path.join(self.tmp, "o")}},
+            claude={"on_term": [["sh", "-c", f"ls {self.proof()} >{saw}; touch {go}; while [ ! "
+                                             f"-e {ready} ]; do sleep 0.05; done"], ""]})
+        p = self.run_lane("done", "chart-fix", "--abandon")
+        (job,) = lanelib.children(lanelib.scan()).get(shell, [])
+        self.starts[job], self.comms[job] = lanelib.proc_start(job), "sh"
+        self.addCleanup(self.kill_ours, [job])
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn(f"{shell} {self.comms[shell]} (the shell of lane session {self.SID}, now "
+                      f"running {job} sh)", p.stderr)
+        self.assertIn(f"{job} sh (no session id in its environment)", p.stderr)
+        self.assertEqual(self.signals(), [(claude, "SIGTERM")])
+        self.assertTrue(self.alive(shell))
+        self.assertEqual(self.lane_json("chart-fix")["state"], "closing")
+        return shell, claude, job, release, saw
+
+    def test_a_rerun_closes_a_pane_shell_whose_session_the_first_run_ended(self):
+        # The rerun finds the session gone, and with it the only proof that the shell is the
+        # lane's: the first run recorded it before its first signal, and the rerun keeps it.
+        self.hand_off()
+        shell, claude, job, release, saw = self.refused_mid_close()
+        self.write(release, "")
+        self.assertTrue(self.gone(job))
+        out = self.lane("done", "chart-fix", "--abandon")
+        self.assertIn(f"ended {shell} {self.comms[shell]} (the shell of lane session "
+                      f"{self.SID})", out)
+        self.assertEqual(self.signals(), [(claude, "SIGTERM"), (shell, "SIGHUP")])
+        self.assertClosed()
+        self.assertEqual(glob.glob(self.proof()), [])
+        self.assertTrue(self.read(saw).strip(), "no proof was recorded by the first signal")
+
+    def test_a_rerun_still_refuses_a_recorded_pane_shell_that_runs_a_job(self):
+        # A recorded shell keeps only its class: a job it runs at the rerun still refuses it,
+        # since its SIGHUP would reach that job too.
+        self.hand_off()
+        shell, claude, job, release, saw = self.refused_mid_close()
+        p = self.run_lane("done", "chart-fix", "--abandon")
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn(f"{shell} {self.comms[shell]} (the shell of lane session {self.SID}, now "
+                      f"running {job} sh)", p.stderr)
+        self.assertIn("nothing was signalled", p.stderr)
+        self.assertEqual(self.signals(), [(claude, "SIGTERM")])
+        self.assertTrue(self.alive(shell))
+
+    def test_a_recorded_proof_counts_only_for_the_process_it_names(self):
+        # Only for the same boot, lane and process (pid, start, comm), and for a pane shell only
+        # while a tmux server is its parent and it carries no foreign session id: otherwise the
+        # scan's own classification stands, which refuses the shell.
+        self.hand_off()
+        shell, claude, job, release, saw = self.refused_mid_close()
+        self.write(release, "")
+        self.assertTrue(self.gone(job))
+        (path,) = glob.glob(self.proof())
+        good = self.read(path)
+        unproven = f"{shell} {self.comms[shell]} (no session id in its environment)"
+
+        def shell_entry(rec):
+            return next(e for e in rec["shells"] if e["pid"] == shell)
+
+        tampers = {
+            "boot": lambda rec: rec.update(boot="00000000-0000-0000-0000-000000000000"),
+            "lane": lambda rec: rec.update(lane="other"),
+            "created": lambda rec: rec.update(created="2026-01-01T00:00:00Z"),
+            "path": lambda rec: rec.update(path=self.main),
+            "start": lambda rec: shell_entry(rec).update(start=self.starts[shell] + 1),
+            "comm": lambda rec: shell_entry(rec).update(comm="bash"),
+        }
+        for name, tamper in tampers.items():
+            with self.subTest(name):
+                rec = json.loads(good)
+                tamper(rec)
+                self.write(path, json.dumps(rec))
+                p = self.run_lane("done", "chart-fix", "--abandon")
+                self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+                self.assertIn(unproven, p.stderr)
+        for raw in ("{", "[]", json.dumps(dict(json.loads(good), shells="x")), "[" * 100000):
+            with self.subTest(raw[:10]):
+                self.write(path, raw)
+                p = self.run_lane("done", "chart-fix", "--abandon")
+                self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+                self.assertNotIn("Traceback", p.stderr)
+                self.assertIn(unproven, p.stderr)
+        # Entries naming other pane-shaped processes in the lane: one carries a foreign session
+        # id, and one's parent is no tmux server. Neither is kept, and each refuses as it would
+        # unrecorded; the real shell's entry still holds.
+        self.transcript("sess-main-0007", self.main)
+        _, foreign = self.start(self.fake(self.tmp, comm="tmux: server", children=[
+            self.fake(self.path, sid="sess-main-0007")]))
+        _, loose = self.start(self.fake(self.tmp, children=[self.fake(self.path)]))
+        rec = json.loads(good)
+        rec["shells"] += [dict(shell_entry(rec), pid=pid, start=self.starts[pid],
+                              comm=self.comms[pid]) for pid in (foreign, loose)]
+        self.write(path, json.dumps(rec))
+        p = self.run_lane("done", "chart-fix", "--abandon")
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn(f"{foreign} {self.comms[foreign]} (session sess-main-0007 is not lane "
+                      "chart-fix's)", p.stderr)
+        self.assertIn(f"{loose} {self.comms[loose]} (no session id in its environment)",
+                      p.stderr)
+        self.assertNotIn(f"\n  {shell} ", p.stderr)
+        self.kill_ours([foreign, loose])
+        self.assertTrue(self.gone(foreign) and self.gone(loose))
+        self.lane("done", "chart-fix", "--abandon")
+        self.assertEqual(self.signals(), [(claude, "SIGTERM"), (shell, "SIGHUP")])
+        self.assertClosed()
+
+    def test_a_pane_shell_first_proven_in_round_two_keeps_its_proof_for_the_rerun(self):
+        # A tab opened in the lane mid-close, whose claude round 2 ends: round 2 records its
+        # shell too, so a rerun after the close refuses at its final look (the shell holds a
+        # git file open) still knows the shell as the lane's.
+        self.hand_off()
+        held, ready = os.path.join(self.common, "held.lock"), os.path.join(self.tmp, "late-ready")
+        sfile = os.path.join(self.home, ".claude", "sessions", "late.json")
+        tab = self.fake(self.tmp, comm="tmux: server", children=[
+            self.fake(self.path, hold=held, ignore=["SIGTERM"], children=[
+                self.fake(self.path, session={"file": sfile, "sid": "sess-lane-0002"})])])
+        argv = shlex.join([sys.executable, self.fake_py, json.dumps(tab)])
+        spawn = (f"cd {shlex.quote(self.tmp)} && {argv} </dev/null >{ready} 2>/dev/null & "
+                 f"while [ ! -s {ready} ]; do sleep 0.05; done")
+        (claude,) = self.claude(on_term=[["sh", "-c", spawn], ""])
+        p = self.run_lane("done", "chart-fix", "--abandon")
+        server, shell, late = [int(x) for x in self.read(ready).split()[1:]]
+        for pid in (server, shell, late):
+            self.starts[pid] = lanelib.proc_start(pid)
+        self.addCleanup(self.kill_ours, [server, shell, late])
+        self.comms[shell] = lanelib.proc_stat(shell)[0]
+        why = (f"{shell} {self.comms[shell]} (the shell of lane session sess-lane-0002; holds "
+               f"{held} open, so it was left running")
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn(why, p.stderr)
+        self.assertEqual(self.signals(), [(claude, "SIGTERM"), (late, "SIGTERM")])
+        p = self.run_lane("done", "chart-fix", "--abandon")
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn(why, p.stderr)
+        self.kill_ours([shell])
+        self.assertTrue(self.gone(shell))
+        self.lane("done", "chart-fix", "--abandon")
+        self.assertClosed()
+
+    def test_a_pane_shell_whose_git_file_closes_within_the_grace_gets_one_sighup(self):
+        # guarded holds its SIGHUP while it has a git file open; round 1 retries within the
+        # grace, so the SIGHUP comes once the file closes, not a grace later in round 2.
+        self.env["_LANE_TEST_GRACE"] = "8"
+        self.hand_off()
+        held, release = os.path.join(self.common, "held.lock"), os.path.join(self.tmp, "release")
+        server, shell, claude = self.pane(shell={"hold": held, "release": release})
+        p = subprocess.Popen([sys.executable, LANE, "done", "chart-fix", "--abandon"],
+                             cwd=self.main, env=self.env, stdout=subprocess.PIPE,
+                             stderr=subprocess.PIPE, text=True)
+        self.addCleanup(p.wait, 60)
+        deadline = time.monotonic() + 30
+        while (claude, "SIGTERM") not in self.signals() and time.monotonic() < deadline:
+            time.sleep(0.05)
+        time.sleep(0.5)  # round 1 is retrying the shell's held SIGHUP by now
+        self.assertNotIn((shell, "SIGHUP"), self.signals())
+        released = time.monotonic()
+        self.write(release, "")
+        while (shell, "SIGHUP") not in self.signals() and time.monotonic() < released + 30:
+            time.sleep(0.05)
+        self.assertLess(time.monotonic() - released, 3)  # round 2's comes a full 8 s grace later
+        out, err = p.communicate(timeout=60)
+        self.assertEqual(p.returncode, 0, out + err)
+        self.assertEqual(self.signals(), [(claude, "SIGTERM"), (shell, "SIGHUP")])
+        self.assertClosed()
+
+    def test_a_proof_that_can_t_be_recorded_refuses_before_any_signal(self):
+        # A close that can't keep its proof would leave a rerun nothing to prove a pane shell by.
+        # The lane is marked closing by then, and a rerun once the record can be written closes.
+        self.hand_off()
+        (claude,) = self.claude()
+        (config,) = glob.glob(os.path.join(self.tmp, "state", "dotclaude", "lanes", "*.toml"))
+        blocker = config.removesuffix(".toml") + ".closing"
+        self.write(blocker, "")  # a file where its dir goes
+        p = self.run_lane("done", "chart-fix", "--abandon")
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertNotIn("Traceback", p.stderr)
+        self.assertIn("so nothing was signalled and the lane is left closing: rerun `lane done "
+                      "chart-fix` once it can be written", p.stderr)
+        self.assertEqual(self.signals(), [])
+        self.assertTrue(self.alive(claude))
+        self.assertEqual(self.lane_json("chart-fix")["state"], "closing")
+        os.remove(blocker)
+        self.lane("done", "chart-fix", "--abandon")
+        self.assertEqual(self.signals(), [(claude, "SIGTERM")])
+        self.assertClosed()
+
+    def test_each_pane_shell_gets_its_sighup_once_its_own_job_ends(self):
+        # One shell's job holds back only that shell's SIGHUP.
+        self.env["_LANE_TEST_GRACE"] = "6"
+        self.hand_off()
+        go, ready = os.path.join(self.tmp, "go"), os.path.join(self.tmp, "job-ready")
+        _, busy, claude = self.pane(
+            shell={"then": {"argv": ["sh", "-c", f"touch {ready}; sleep 3"], "cwd": self.path,
+                            "go": go, "out": os.path.join(self.tmp, "o")}},
+            claude={"on_term": [["sh", "-c", f"touch {go}; while [ ! -e {ready} ]; do "
+                                             "sleep 0.05; done"], ""]})
+        _, idle, other = self.pane()
+        self.lane("done", "chart-fix", "--abandon")
+        sigs = self.signals()
+        self.assertCountEqual(sigs, [(claude, "SIGTERM"), (other, "SIGTERM"), (busy, "SIGHUP"),
+                                     (idle, "SIGHUP")])
+        self.assertLess(sigs.index((idle, "SIGHUP")), sigs.index((busy, "SIGHUP")))
+        self.assertClosed()
+
+    def test_a_pane_shell_held_at_the_final_look_keeps_its_proof_for_the_rerun(self):
+        # Held for a git file it holds open, the shell outlives its session, and the close
+        # refuses at its final look: the rerun still knows it as the lane's pane shell, which
+        # nothing else could prove once its session is gone.
+        self.hand_off()
+        held = os.path.join(self.common, "held.lock")
+        server, shell, claude = self.pane(shell={"hold": held})
+        why = (f"{shell} {self.comms[shell]} (the shell of lane session {self.SID}; holds "
+               f"{held} open, so it was left running")
+        p = self.run_lane("done", "chart-fix", "--abandon")
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn("lane chart-fix is closing, and these still run", p.stderr)
+        self.assertIn(why, p.stderr)
+        p = self.run_lane("done", "chart-fix", "--abandon")
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertIn(why, p.stderr)
+        self.assertEqual(self.signals(), [(claude, "SIGTERM")])
+        self.kill_ours([shell])
+        self.assertTrue(self.gone(shell))
+        self.lane("done", "chart-fix", "--abandon")
+        self.assertClosed()
 
     def test_a_shell_with_another_job_refuses(self):
         self.hand_off()
@@ -2046,6 +2319,7 @@ class Close(Fakes):
         self.assertEqual(self.signals(), [])
         self.assertTrue(self.alive(pid))
         self.assertEqual(self.lane_json("chart-fix")["state"], "active")
+        self.assertEqual(glob.glob(self.proof()), [])  # no record outlives a run that stopped
 
     def test_the_remove_runs_without_the_lanes_lock_and_a_timeout_after_it_is_clean(self):
         # `git worktree remove` can take seconds, and every lane's hooks give up on the lanes
