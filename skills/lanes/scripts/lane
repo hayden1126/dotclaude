@@ -50,16 +50,18 @@ lands), the processes under them, their tmux pane shells (SIGHUP) and leftovers 
 lane session's id; survivors get SIGTERM (a pane shell SIGHUP), then SIGKILL. Every signal but
 a session's first (and its SIGCONTs) is checked just before it is sent, and held while the
 target or a process under it holds a file open in the git dir. Proof comes only from /proc and
-Claude Code's own session files and transcripts, never lane.json. Anything else with
-its cwd in the lane refuses the close by name before any signal, as do installed links into the
+Claude Code's own session files and transcripts, never lane.json, and on a rerun from the pane
+shells an earlier run proved, recorded in the state dir before its first signal. Anything else
+with its cwd in the lane refuses the close by name before any signal, as do installed links into the
 lane (it holds the install: install-state.py, checked again under setup.sh's install.lock just
 before the remove), a dirty, locked or submodule worktree, a background session, a `done` run
 from anywhere but the main checkout or under a lane's session (only the lead closes lanes), a
 repo that sets extensions.worktreeConfig (git in the lane would read the lane-writable
 config.worktree), a record whose Next says `Keep open:` (more PRs to come; --abandon closes it
 anyway), and, when there is something to end, a failing `handoff-check --closing`.
-A close refused after a signal leaves the lane `closing`, which `open` refuses: rerun `done`.
-With nothing to end, a refused close leaves the lane as it was.
+A close refused after a signal, or one that couldn't record its proof (nothing signalled), leaves
+the lane `closing`, which `open` refuses: rerun `done`, which keeps the pane shells the first run
+proved. With nothing to end, a refused close leaves the lane as it was.
 """
 import argparse
 import contextlib
@@ -1648,6 +1650,7 @@ SESSION = "session"    # a session file's own process (pid and procStart), both 
 OWNED = "owned"        # its parent chain reaches a SESSION: its Bash commands, hooks, MCP servers
 PANE = "pane shell"    # a tmux pane's shell whose children are all SESSIONs (claude-restore's zsh)
 LEFTOVER = "leftover"  # none of those, started with a lane session's CLAUDE_CODE_SESSION_ID
+PROOF_MAX = 1 << 20  # bytes of a recorded proof (save_proof) load_proof reads
 # secs a round waits for what it signalled to exit: twice settings.json's SessionEnd hook
 # timeout (5 s), so round 2 never cuts off a hook Claude Code itself would still let run
 GRACE = 10.0
@@ -1809,6 +1812,55 @@ def survey(lane_id: str,
                     refused[d] = described(procs[d], f"runs under {pid} {h.proc.comm} ({h.why}), "
                                                      f"outside lane {lane_id}")
     return hits, refused
+
+
+def save_proof(repo: Repo, lane: dict, path: str, hits) -> None:
+    """Record the pane shells among hits at repo.closing_path for a rerun's load_proof: a pane
+    shell's only proof is its session, which the close itself ends (2026-10-15, lane
+    two-sessions). Every other class a rerun proves afresh. Raises OSError when it can't."""
+    write_json(repo.closing_path(lane["id"]), {
+        "boot": lanelib.boot_id(), "lane": lane["id"], "created": lane.get("created"),
+        "path": path,
+        "shells": [{"pid": h.proc.pid, "start": h.proc.start, "comm": h.proc.comm, "why": h.why}
+                   for h in hits if h.kind == PANE]})
+
+
+def load_proof(repo: Repo,
+    lane: dict,
+    path: str,
+    procs: dict[int, lanelib.Proc],
+) -> dict[tuple[int, int], Hit]:
+    """survey's known from the pane shells an earlier `done` of the lane recorded (save_proof):
+    each of this boot, lane (its id and created stamp, so no later lane of that id inherits it)
+    and path whose pid runs with its start and comm, while a tmux server is its parent and it
+    carries no foreign session id. The rest is left to survey's own classification, and a
+    malformed record counts as none."""
+    try:
+        rec = json.loads(lanelib.read_head(repo.closing_path(lane["id"]), PROOF_MAX) or b"null")
+        boot = lanelib.boot_id()
+    except (ValueError, RecursionError, OSError):
+        return {}
+    if not (isinstance(rec, dict) and rec.get("boot") == boot and rec.get("lane") == lane["id"]
+            and rec.get("created") == lane.get("created") and rec.get("path") == path
+            and isinstance(rec.get("shells"), list)):
+        return {}
+    files = lanelib.session_files()
+    known = {}
+    for e in rec["shells"]:
+        if not isinstance(e, dict) or type(pid := e.get("pid")) is not int:
+            continue
+        p, why = procs.get(pid), e.get("why")
+        parent = procs.get(p.ppid) if p else None
+        if not (p and p.start == e.get("start") and p.comm == e.get("comm")
+                and isinstance(why, str) and parent and parent.comm.startswith("tmux")):
+            continue
+        try:
+            sid = lanelib.proc_env_sid(pid)
+        except OSError:
+            continue
+        if sid is None or lanelib.lane_sid(sid, path, files):
+            known[(pid, p.start)] = Hit(p, PANE, why)
+    return known
 
 
 def refusal(head: str, refused: dict[int, str], tail: str) -> LaneError:
@@ -1995,14 +2047,15 @@ def sweep_open_sessions(path: str) -> None:
         os.close(fd)
 
 
-def end_lane(repo: Repo, lane_id: str, path: str, hits: dict[int, Hit]) -> None:
+def end_lane(repo: Repo, lane: dict, path: str, hits: dict[int, Hit]) -> None:
     """End what `done` proved the lane's (hits) in two rounds, then look once more: anything
-    still in the lane refuses, nothing is archived, and a rerun carries on. The lanes lock is
+    still in the lane refuses, nothing is archived, and a rerun carries on from the pane shells
+    cmd_done recorded (save_proof), which round 2 records again with its own. The lanes lock is
     never held here: a session's SessionEnd hook takes it to stamp endedAt. Each session's
     open-sessions entry goes before its SIGTERM, in either round (forget_sessions). Every signal
     but round 1's SIGTERM to a session, and the SIGCONTs that land it on a stopped one and its
     stopped tree, goes through guarded."""
-    wait = grace()
+    lane_id, wait = lane["id"], grace()
     known = {(h.proc.pid, h.proc.start): h for h in hits.values()}
     ended, held, forgotten = set(), {}, set()
 
@@ -2043,8 +2096,11 @@ def end_lane(repo: Repo, lane_id: str, path: str, hits: dict[int, Hit]) -> None:
         # Round 1: the sessions and the leftovers. A session gets a plain SIGTERM, unchecked:
         # Claude Code handles it as when its tab closes, running its SessionEnd hooks and ending
         # its own children, which are left to it. Every other signal goes through guarded.
-        # Then the pane shells, which an interactive shell ignores SIGTERM for; one that took a
-        # new job meanwhile is left to round 2's refusal.
+        # Then the pane shells, which an interactive shell ignores SIGTERM for. A shell draws its
+        # prompt once its session exits, and a prompt can fork as it draws (agnoster's
+        # `$(build_prompt)` runs git in a -zsh child, 2026-10-15), so each shell gets its SIGHUP
+        # once it runs no job of its own and guarded lets it through, within the grace; one
+        # still running a job then is left to round 2.
         first = [h for h in hits.values() if h.kind in (SESSION, LEFTOVER)]
         forget(first)
         for h in first:
@@ -2067,13 +2123,18 @@ def end_lane(repo: Repo, lane_id: str, path: str, hits: dict[int, Hit]) -> None:
                 send(h, signal.SIGTERM)
         settle(first, wait)
         if shells := [h for h in hits.values() if h.kind == PANE]:
-            procs = lanelib.scan()
-            kids = lanelib.children(procs)
-            targets = {pid for pid, p in procs.items() if (pid, p.start) in known}
-            shells = [h for h in shells if not other_jobs(h.proc.pid, kids, targets)]
-            for h in shells:
-                send(h, signal.SIGHUP, set(known))
-            settle(shells, wait)
+            deadline, left = time.monotonic() + wait, shells
+            while True:
+                procs = lanelib.scan(full=False)
+                kids = lanelib.children(procs)
+                targets = {pid for pid, p in procs.items() if (pid, p.start) in known}
+                # Left: still running a job, or held by guarded (a job forked since this scan).
+                left = [h for h in left if other_jobs(h.proc.pid, kids, targets)
+                        or not send(h, signal.SIGHUP, set(known))]
+                if not left or time.monotonic() >= deadline:
+                    break
+                time.sleep(0.05)
+            settle([h for h in shells if h not in left], wait)
         # Round 2: whatever runs now, classified afresh, but a known process keeps its round-1
         # class (a pane shell whose session has gone is no less the lane's, and a session still
         # exiting keeps its hooks OWNED).
@@ -2084,6 +2145,11 @@ def end_lane(repo: Repo, lane_id: str, path: str, hits: dict[int, Hit]) -> None:
                           refused, f"End or move them, then rerun `lane done {lane_id}`")
         for h in now.values():
             known.setdefault((h.proc.pid, h.proc.start), h)
+        try:  # the pane shells still running, round 2's own included, for a rerun
+            save_proof(repo, lane, path, now.values())
+        except OSError as e:
+            warn(f"can't record round 2's proof of lane {lane_id} ({e.strerror or e}): a rerun "
+                 "keeps only round 1's")
         forget(now.values())
         running = {pid for pid, h in now.items() if h.kind == SESSION}
         for pid, h in now.items():
@@ -2589,7 +2655,8 @@ def cmd_done(args) -> None:
     if present:  # every gate before any signal (lead_only refused a sandboxed run)
         removable(args.id, path)
         procs = lanelib.scan()
-        hits, refused = survey(args.id, path, procs)
+        # A rerun keeps what an earlier run proved: its signals may have ended the proof itself.
+        hits, refused = survey(args.id, path, procs, load_proof(repo, lane, path, procs))
         self_guard(args.id, path, procs, hits)
         if refused:
             raise refusal(f"nothing proves these processes in {path} are lane {args.id}'s, so "
@@ -2602,19 +2669,37 @@ def cmd_done(args) -> None:
     if hits:
         # Closing from here on: `open` refuses the lane, so no new session starts mid-close,
         # and a refusal below leaves it closing for a rerun to finish. With nothing to end, a
-        # refusal leaves the lane as it was.
+        # refusal leaves the lane as it was. Then, before any signal, the proof is recorded:
+        # without it, a refusal after a session ended would leave its pane shell nothing a rerun
+        # can prove it by. Only a closing lane gets one, so none outlives a run that stopped
+        # short of its signals.
         with lanes_lock(repo, f"nothing was signalled: rerun `lane done {args.id}`"):
             reread(repo, lane, path)
             lanelib.update_lane(repo, args.id, lambda x: x.update(state="closing"))
         try:
-            end_lane(repo, args.id, path, hits)
+            save_proof(repo, lane, path, hits.values())
+        except OSError as e:
+            raise LaneError(f"can't record what lane {args.id}'s close proved at "
+                            f"{repo.closing_path(args.id)} ({e.strerror or e}), so nothing was "
+                            f"signalled and the lane is left closing: rerun `lane done {args.id}` "
+                            "once it can be written")
+        try:
+            end_lane(repo, lane, path, hits)
         finally:  # a close refused partway has ended sessions all the same
             sweep_open_sessions(path)
     else:
         if present:
-            end_lane(repo, args.id, path, hits)  # its final look only
+            end_lane(repo, lane, path, hits)  # its final look only
         sweep_open_sessions(path)
     archive = close_record(repo, lane, path, data_dir, state, how, present, heads.get(path))
+    try:
+        os.remove(repo.closing_path(args.id))
+    except FileNotFoundError:
+        pass
+    except OSError as e:
+        warn(f"the record of lane {args.id}'s close is kept at {repo.closing_path(args.id)} "
+             f"({e.strerror}): remove it by hand (no later lane {args.id} takes it, since it "
+             "names this one's created stamp)")
     say(f"lane {args.id} closed ({how}); archived to {archive}")
     delete_branches(repo, branches)
     orphaned_rules(args.id, path)
@@ -2743,7 +2828,9 @@ def parser() -> argparse.ArgumentParser:
                        "or submodule worktree, a repo with extensions.worktreeConfig, a record "
                        "whose Next says `Keep open:` (unless --abandon) and, when there is "
                        "something to end, a failing `handoff-check --closing`. A close refused "
-                       "after a signal leaves the lane closing: rerun `lane done <id>`.")
+                       "after a signal, or one that couldn't record its proof (nothing "
+                       "signalled), leaves the lane closing: rerun `lane done <id>`, which keeps "
+                       "the pane shells the first run proved.")
     p.add_argument("id")
     p.add_argument("--abandon", action="store_true",
                    help="close an unmerged lane, or one whose Next says `Keep open:`")
