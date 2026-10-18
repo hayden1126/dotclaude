@@ -734,10 +734,10 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
   which the close itself ends, so on 2026-10-15 each rerun refused the two-sessions tab's shell
   until its session was resumed there. So once it marks the lane `closing`, and again before
   step 3's signals, `done` records each pane shell it proved the lane's in
-  `<state-dir>/lanes/<repo>-<hash>.closing/<id>.json`: the boot id, the lane's created stamp,
-  then each shell's pid, start time and comm. When the first write fails, it signals nothing and
-  leaves the lane `closing` for a rerun; a failed second one only warns, and the first stands.
-  A completed close deletes the record.
+  `<state-dir>/lanes/<repo>-<hash>.closing/<id>.json`: the boot id, the lane's id, created stamp
+  and path, then each shell's pid, start time and comm. When the first write fails, it signals
+  nothing and leaves the lane `closing` for a rerun; a failed second one only warns, and the
+  first stands. A completed close deletes the record, or warns and names the file when it can't.
 
   A rerun keeps a recorded shell's class only for the same boot, lane (id and created stamp, so
   a later lane of that id never inherits it) and path, while a process with that pid, start

@@ -138,11 +138,11 @@ an unregistered worktree: `lane whoami` tells you which.
    - links the install still points into the lane;
    - a failing `handoff-check --closing`.
 
-   A close refused after a signal leaves the lane `closing`, which `open` refuses: rerun
-   `lane done`, which keeps what the first run proved (a restored tab's shell, whose session
-   that run ended). Give its Bash call `timeout: 600000`: it can wait minutes (the fetch,
-   handoff-check, up to five 10 s grace periods, the locks), and one cut off by a timeout
-   needs a rerun.
+   A close refused after a signal, or one that couldn't record its proof (nothing signalled),
+   leaves the lane `closing`, which `open` refuses: rerun `lane done`, which keeps what the
+   first run proved (a restored tab's shell, whose session that run ended). Give its Bash call
+   `timeout: 600000`: it can wait minutes (the fetch, handoff-check, up to five 10 s grace
+   periods, the locks), and one cut off by a timeout needs a rerun.
    It archives `lane.json` and `.lane/` to `<common-dir>/lanes/_closed/<id>-<date>/`, runs
    `git worktree remove` (never `--force`) and `git branch -d` (never `-D`). It judges and
    deletes the branch the worktree has checked out, and `lane.json`'s when that differs (a lane

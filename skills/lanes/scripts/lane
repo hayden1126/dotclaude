@@ -59,8 +59,9 @@ from anywhere but the main checkout or under a lane's session (only the lead clo
 repo that sets extensions.worktreeConfig (git in the lane would read the lane-writable
 config.worktree), a record whose Next says `Keep open:` (more PRs to come; --abandon closes it
 anyway), and, when there is something to end, a failing `handoff-check --closing`.
-A close refused after a signal leaves the lane `closing`, which `open` refuses: rerun `done`.
-With nothing to end, a refused close leaves the lane as it was.
+A close refused after a signal, or one that couldn't record its proof (nothing signalled), leaves
+the lane `closing`, which `open` refuses: rerun `done`, which keeps the pane shells the first run
+proved. With nothing to end, a refused close leaves the lane as it was.
 """
 import argparse
 import contextlib
@@ -2827,7 +2828,9 @@ def parser() -> argparse.ArgumentParser:
                        "or submodule worktree, a repo with extensions.worktreeConfig, a record "
                        "whose Next says `Keep open:` (unless --abandon) and, when there is "
                        "something to end, a failing `handoff-check --closing`. A close refused "
-                       "after a signal leaves the lane closing: rerun `lane done <id>`.")
+                       "after a signal, or one that couldn't record its proof (nothing "
+                       "signalled), leaves the lane closing: rerun `lane done <id>`, which keeps "
+                       "the pane shells the first run proved.")
     p.add_argument("id")
     p.add_argument("--abandon", action="store_true",
                    help="close an unmerged lane, or one whose Next says `Keep open:`")
