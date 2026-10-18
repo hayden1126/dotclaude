@@ -83,11 +83,10 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     [[dotclaude-tab-bar]], remote-paste's live tests in [[dotclaude-remote-paste]]. #115 left the
     tab glyph's prompt at v4: an ask a reply only announces for later stays a documented known
     miss (`hooks/wants_input.py`'s docstring), since its one prompt round flipped 10 verdicts.
-  - **Live lanes (opened 2026-10-18), merge order:** 1 cross-lane (`feat/cross-lane-checks`,
-    branched from e2a2294; since #121 merged it merges origin/main and carries the lead's
-    notes), 2 pass-bg (`fix/pass-bg-session`, from 53d3a11; Hayden's pick to open it at once;
-    the lead swaps the order if it's ready first). Each Brief has the detail; the backlog items
-    below keep the evidence.
+  - **Live lanes (opened 2026-10-18), merge order:** 1 pass-bg (`fix/pass-bg-session`, from
+    53d3a11, draft #122; swapped ahead on 2026-10-18 because it was ready while cross-lane was
+    still in review; it carries the lead's notes), 2 cross-lane (`feat/cross-lane-checks`, from
+    e2a2294). Each Brief has the detail; the backlog items below keep the evidence.
   - The parked json-depth sweep (21 files, among them the delegation enforcement scripts) is on
     `fix/json-depth-sweep`, a local branch never pushed: keep it while the sweep is in the
     backlog. Shipping it first needs a check of how each enforcement site fails
@@ -136,6 +135,13 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     context); revisit only if a report gets lost. The CLAUDE.md line is Hayden's edit (proposed
     via `/revise-claude-md`). Files: `skills/lanes/scripts/lane` (cross-lane's file, hence the
     wait), `tests/lanes`, `skills/lanes/SKILL.md`, `docs/lanes.md`, `CLAUDE.md`.
+  - **`session-registry.sh`'s `launch_pick()` finds the session by comm `claude`** (from lane
+    pass-bg's reviewer, 2026-10-18, read from code). A bg session's comm is the version
+    (`2.1.302`), so the lookup would land on the daemon. Unreachable today: the hook exits
+    before it for a bg session (`ATTENDED=0`, no `TMUX_PANE`). Optional, cheap: switch to
+    lanelib `sessions_above` (the ancestor whose `sessions/<pid>.json` records its own
+    procStart), as pass-bg did for pass-respawn. Do it with any change that lets bg sessions
+    register.
   - **chrome-bg's TTL loop counts down on the wall clock** (from lane monotonic, 2026-10-18).
     `bin/chrome-bg:1314` and `:1353` wait until the run record's `expires`, so a forward clock
     step cuts a TTL short by up to 0.6 s. The record stays wall clock (`ls` and gc read it,
@@ -217,7 +223,7 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
 - **Next (lead, main checkout):** watch lanes cross-lane and pass-bg (In flight, merge order). On
   each "merged #N", run the post-merge chain (`skills/lanes/SKILL.md`, The lead, step 7; never
   amend or rebase the lead branch). Check `lane ls` first: a merge Hayden made on GitHub and
-  mentioned to no session sends no message. If pass-bg is ready first, swap the order in STATUS
+  mentioned to no session sends no message. If a lane later in order is ready first, swap the order in STATUS
   and tell both lanes (the one next in order carries the lead's notes). Hold `lane done` while
   another lane holds the `suite` lock (its `branch -d` rewrites `.git/config`). After cross-lane
   merges, propose the bug-report lane (Backlog, option A). No chat about a lane's own asks; speak

@@ -248,10 +248,12 @@ class Base(LanesRepo):
             if status in ("idle", "shell") and self.stop_waits is not None and not self.stopped:
                 self.write_stop(self.stop_waits)
                 self.stopped = True
-        return {"sessionId": SID, "pid": CLAUDE, "procStart": START, "status": status,
-                "statusUpdatedAt": self.updated, "startedAt": int(self.started * 1000),
-                "cwd": self.session_cwd, "tmux": "main:@3.%4",
-                **{k: v for k, v in entry.items() if k != "status"}}
+        # An entry's key set to None is left out: a background session's file has no tmux.
+        record = {"sessionId": SID, "pid": CLAUDE, "procStart": START, "status": status,
+                  "statusUpdatedAt": self.updated, "startedAt": int(self.started * 1000),
+                  "cwd": self.session_cwd, "kind": "interactive", "tmux": "main:@3.%4",
+                  **{k: v for k, v in entry.items() if k != "status"}}
+        return {k: v for k, v in record.items() if v is not None}
 
     def write_session(self, entry):
         path = os.path.join(self.sessions, f"{CLAUDE}.json")
@@ -262,6 +264,8 @@ class Base(LanesRepo):
             self.write(path, json.dumps(self.session_record(entry)))
 
     def fake_load(self, pid):
+        if pid != CLAUDE:  # the call's search for its session reads the ancestors below it
+            return self.real_load(pid)
         self.reads += 1
         entry = self.script.pop(0) if len(self.script) > 1 else self.script[0]
         if callable(entry):
@@ -567,6 +571,116 @@ class Plain(Base):
         self.assertEqual(self.calls("tmux"), [])
         self.assertIn("mode=compact outcome=refused no tmux pane", self.log())
 
+    BG = {"status": "busy", "kind": "bg", "jobId": "07618dd3", "tmux": None}
+
+    def assertBackground(self, out, by_hand, job="07618dd3", resume=None):
+        named = f", job {job}" if job else ""
+        stop = (f"`claude stop {job}`" if job
+                else "`claude stop <jobId>` (`claude agents --json` lists it)")
+        resume = resume or (f"`cd {shlex.quote(self.main)} && claude --resume {SID}` in a tmux "
+                            "pane.")
+        self.assertIn(f"session {SID} is a background session (daemon-hosted{named}): ", out)
+        self.assertIn(f"Do it by hand: {by_hand}, then: {self.PROMPT}", out)
+        self.assertIn(f"from another terminal, run {stop}, then {resume}", out)
+        self.assertNotIn("not in a tmux pane", out)
+        self.assertEqual(self.calls("tmux"), [])
+
+    def test_a_background_session_names_itself_and_the_way_into_a_pane(self):
+        del os.environ["TMUX_PANE"]
+        self.script = [self.BG]
+        code, out = self.run_pass()
+        self.assertEqual(code, 2, out)
+        self.assertBackground(out, "/clear")
+        self.assertIn("mode=plain outcome=refused background session", self.log())
+
+    def test_a_compact_pass_in_a_background_session_prints_the_manual_compact(self):
+        del os.environ["TMUX_PANE"]
+        self.script = [self.BG]
+        code, out = self.run_pass("--compact")
+        self.assertEqual(code, 2, out)
+        self.assertBackground(out, f"/compact {self.mod.compact_focus('STATUS.md')}")
+        self.assertIn("mode=compact outcome=refused background session", self.log())
+
+    def test_a_background_session_is_found_by_its_file_not_its_title(self):
+        # Live on 2.1.302: the daemon execs a session by its versioned path, so it and its pty
+        # host show `2.1.302`, and the first `claude` above them is the daemon, with no file.
+        del os.environ["TMUX_PANE"]
+        self.script = [self.BG]
+        daemon_chain = table((CLAUDE, "2.1.302", 900010), (900010, "2.1.302", 900011),
+                             (900011, "claude", PANE_SHELL))
+        code, out = self.run_pass(procs=lambda: daemon_chain)
+        self.assertEqual(code, 2, out)
+        self.assertBackground(out, "/clear")
+
+    def test_a_session_titled_by_its_version_still_passes_the_call(self):
+        self.script = ["busy"]
+        code, out = self.run_pass("--print", procs=lambda: table((CLAUDE, "2.1.302", PANE_SHELL)))
+        self.assertEqual(code, 0, out)
+        self.assertIn("mode: plain (plan)", out)
+
+    def test_a_session_file_whose_procstart_isnt_its_process_is_passed_over(self):
+        # The zsh between the call and the session has a stale file (its pid was a session's).
+        self.write(os.path.join(self.sessions, f"{SHELL}.json"),
+                   json.dumps({"sessionId": "stale", "pid": SHELL, "procStart": "1"}))
+        code, out = self.run_pass("--print")
+        self.assertEqual(code, 0, out)
+
+    def test_a_background_session_refuses_the_same_with_a_tmux_pane_set(self):
+        # Its claude is the daemon's, never the pane's: a respawn would end whatever runs there.
+        self.script = [self.BG]
+        code, out = self.run_pass()
+        self.assertEqual(code, 2, out)
+        self.assertBackground(out, "/clear")
+
+    def test_a_background_session_refuses_before_the_handoff_gate(self):
+        self.write(os.path.join(self.main, "scratch.txt"), "x")
+        self.script = [self.BG]
+        code, out = self.run_pass()
+        self.assertEqual(code, 2, out)
+        self.assertBackground(out, "/clear")
+        self.assertNotIn("FAIL", out)
+
+    def test_a_job_id_that_isnt_a_plain_id_is_not_printed(self):
+        del os.environ["TMUX_PANE"]
+        for job in ("$(reboot)", "", None, 7):
+            with self.subTest(job=job):
+                self.script = [{**self.BG, "jobId": job}]
+                code, out = self.run_pass()
+                self.assertEqual(code, 2, out)
+                self.assertBackground(out, "/clear", job=None)
+                self.assertNotIn("$(reboot)", out)
+
+    def test_the_resume_line_cds_to_a_plain_session_dir_shell_quoted(self):
+        del os.environ["TMUX_PANE"]
+        bare = f"`claude --resume {SID}` in a tmux pane in the session's directory."
+        quoted = f"`cd '/tmp/has space' && claude --resume {SID}` in a tmux pane."
+        for cwd, resume in (("/tmp/has space", quoted), ("/tmp/a\nb", bare),
+                            ("/tmp/a`b", bare), ("relative/dir", bare), (None, bare)):
+            with self.subTest(cwd=cwd):
+                self.script = [{**self.BG, "cwd": cwd}]
+                code, out = self.run_pass()
+                self.assertEqual(code, 2, out)
+                self.assertBackground(out, "/clear", resume=resume)
+
+    def test_another_sessions_file_refuses_before_it_can_say_background(self):
+        del os.environ["TMUX_PANE"]
+        self.script = [{**self.BG, "sessionId": "other"}]
+        code, out = self.run_pass()
+        self.assertEqual(code, 1, out)
+        self.assertIn(f"has session id 'other', not {SID}: it is another session's", out)
+        self.assertNotIn("background session", out)
+        self.assertIn("outcome=refused not this session's file", self.log())
+
+    def test_any_kind_but_bg_in_its_pane_passes(self):
+        # The fixture's file says interactive; a file with no kind, or one Claude Code might
+        # add later, still passes in its pane. Only bg refuses.
+        for kind in (None, "background"):
+            with self.subTest(kind=kind):
+                self.script = [{"status": "busy", "kind": kind}]
+                code, out = self.run_pass("--print")
+                self.assertEqual(code, 0, out)
+                self.assertIn("mode: plain (plan)", out)
+
     def test_a_failing_handoff_check_refuses(self):
         self.write(os.path.join(self.main, "scratch.txt"), "x")
         code, out = self.run_pass("--foreground")
@@ -582,20 +696,28 @@ class Plain(Base):
             self.assertEqual(code, 1, out)
             self.assertIn("can't find this session's claude", out)
 
+    def test_the_run_bare_hint_shows_only_when_sandboxed(self):
+        for sandboxed in (True, False):
+            with self.subTest(sandboxed=sandboxed), \
+                    mock.patch.object(self.mod.lanelib, "sandboxed", return_value=sandboxed):
+                code, out = self.run_pass("--print", procs=lambda: table(claude=False))
+                self.assertEqual(code, 1, out)
+                self.assertEqual("run it bare (sandbox-off)" in out, sandboxed, out)
+
     def test_a_session_file_that_does_not_match_refuses(self):
         for entry, words in (({"status": "busy", "sessionId": "other"}, "session id"),
                              ({"status": "busy", "tmux": "main:@3.%9"}, "pane"),
-                             (None, "no session file")):
+                             (None, "can't find this session's claude")):
             with self.subTest(words=words):
                 self.script = [entry]
                 code, out = self.run_pass("--print")
                 self.assertEqual(code, 1, out)
                 self.assertIn(words, out)
         self.script = ["busy"]
-        self.start_now = START + 1  # the pid was reused
+        self.start_now = START + 1  # the pid was reused: its file names another process
         code, out = self.run_pass("--print")
         self.assertEqual(code, 1, out)
-        self.assertIn("procStart", out)
+        self.assertIn("can't find this session's claude", out)
 
     def test_no_session_id_refuses(self):
         del os.environ["CLAUDE_CODE_SESSION_ID"]
@@ -2270,10 +2392,26 @@ class Units(unittest.TestCase):
                            text=True, timeout=20, env=env)
         self.assertEqual((p.returncode, p.stdout.strip()), (0, "'caf\\xe9'"), p.stderr)
 
-    def test_the_sessions_claude_is_the_nearest_claude_ancestor(self):
-        self.assertEqual(self.mod.session_claude(table(), os.getpid()), CLAUDE)
-        self.assertIsNone(self.mod.session_claude(table(claude=False), os.getpid()))
-        self.assertIsNone(self.mod.session_claude({5: ("zsh", 6), 6: ("zsh", 5)}, 5))  # a cycle
+    def test_the_sessions_claude_is_the_nearest_ancestor_with_its_own_session_file(self):
+        daemon = 900011
+        files = {CLAUDE: {"pid": CLAUDE, "procStart": START}, daemon: {"procStart": "7"}}
+        self.mod.load_session = files.get
+        self.mod.proc_start = {CLAUDE: START, daemon: 7, SHELL: 1}.get
+        # The comm decides nothing: a versioned title, and a `claude` farther up.
+        chain = table((CLAUDE, "2.1.302", daemon), (daemon, "claude", PANE_SHELL))
+        me = os.getpid()
+        self.assertEqual(self.mod.session_claude(chain, me), (CLAUDE, files[CLAUDE]))
+        # A file whose procStart isn't its process's (a reused pid's) is passed over.
+        files[CLAUDE] = {"procStart": START + 1}
+        self.assertEqual(self.mod.session_claude(chain, me), (daemon, files[daemon]))
+        # A file with no procStart can't be told from a reused pid's, even against a process
+        # gone by the read (None).
+        files[CLAUDE] = {"pid": CLAUDE}
+        self.mod.proc_start = {daemon: 7}.get
+        self.assertEqual(self.mod.session_claude(chain, me), (daemon, files[daemon]))
+        self.assertEqual(self.mod.session_claude(table(claude=False), me), (None, None))
+        self.assertEqual(self.mod.session_claude({5: ("zsh", 6), 6: ("zsh", 5)}, 5),  # a cycle
+                         (None, None))
 
     def stat(self, rows):
         for pid, stat in rows:

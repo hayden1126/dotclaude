@@ -172,6 +172,20 @@ class WritableRoots(Plain):
         self.assertIn("can't find this session's claude", out.getvalue())
         self.assertFalse(os.path.exists(git_log))
 
+    def test_another_sessions_file_refuses_before_git_runs(self):
+        # A nested `claude -p` (pid 900020) whose own file is missing: the walk reaches the outer
+        # session's file, whose flags aren't the caller's, so nothing may run sandbox-off.
+        os.environ["CLAUDE_CODE_SESSION_ID"] = "inner-sid"
+        added = os.path.join(self.tmp, "added")
+        git_log = self.logging_git()
+        nested = t.table((t.SHELL, "zsh", 900020), (900020, "claude", t.CLAUDE))
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            code = self.mod.main(["--print", "-C", self.main], procs=lambda: nested,
+                                 cmdline=lambda pid: ["claude", "-p", "--add-dir", added])
+        self.assertEqual(code, 1, out.getvalue())
+        self.assertIn(f"has session id {t.SID!r}, not inner-sid", out.getvalue())
+        self.assertFalse(os.path.exists(git_log))
+
     def test_session_flags_past_a_double_dash_still_count(self):
         # Claude Code's parser can take `--` as an option's value and parse a later --settings,
         # so the scan goes past it: a false hit only refuses more, or adds a root.
@@ -477,6 +491,23 @@ class PartialDocs(unittest.TestCase):
         for rel in ("skills/pass/SKILL.md", "README.md"):
             with self.subTest(doc=rel), open(os.path.join(REPO, rel)) as f:
                 self.assertEqual(partial_gaps(f.read()), [])
+
+
+class BackgroundDocs(unittest.TestCase):
+    def test_step_5_and_the_docstring_name_the_background_refusal(self):
+        with open(os.path.join(REPO, "skills/pass/SKILL.md")) as f:
+            skill = f.read()
+        (step,) = [p for p in re.split(r"\n(?=\d+\. )", skill)
+                   if p.startswith("5. **Run `pass-respawn")]
+        doc = " ".join(t.load().__doc__.split())
+        for text in (" ".join(step.split()), doc):
+            for words in ("background session", "claude stop", "claude --resume"):
+                self.assertIn(words, text)
+        self.assertIn("claude attach", step)
+        (row,) = [ln for ln in skill.splitlines()
+                  if ln.startswith("| Passing a background session after `claude attach` |")]
+        for words in ("once the turn ends", "from another terminal", "end the turn"):
+            self.assertIn(words, row)
 
 
 # ---- 5. prompts typed mid-turn and the transcript ----------------------------------------------
