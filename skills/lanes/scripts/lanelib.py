@@ -219,11 +219,16 @@ class Repo:
         return self.toplevel == self.main
 
     @property
+    def key(self) -> str:
+        """This repo's name in places other repos share: its config's in the state dir, its
+        `lane trial` scratch dirs' in the temp dir. 12 hex of the common dir's sha256."""
+        return hashlib.sha256(self.common_dir.encode()).hexdigest()[:12]
+
+    @property
     def config_path(self) -> str:
         """Out of the repo, where sandboxed Bash can't write (docs/lanes.md S3). One file per
         common dir."""
-        key = hashlib.sha256(self.common_dir.encode()).hexdigest()[:12]
-        return os.path.join(state_dir(), LANES, f"{os.path.basename(self.main)}-{key}.toml")
+        return os.path.join(state_dir(), LANES, f"{os.path.basename(self.main)}-{self.key}.toml")
 
     @property
     def lead_path(self) -> str:

@@ -1879,15 +1879,22 @@ def merge_onto(repo: Repo, cur: str, sha: str, label: str) -> tuple[str, list[st
     return p.stdout.strip(), None
 
 
+def trial_prefix(repo: Repo, lane_id: str) -> str:
+    """The name of a trial's scratch dir in the temp dir, before mkdtemp's 8 characters. Keyed by
+    repo: another repo's lane of the same id shares the temp dir but not this repo's suite
+    lock, so its live tree must never look like this lane's leftover."""
+    return f"lane-trial-{repo.key}-{lane_id}-"
+
+
 def trial_leftovers(repo: Repo, lane_id: str, tmp: str) -> None:
     """Clear what earlier trials of this lane left in tmp: one killed by the Bash cap or a
-    respawn never reaches its `finally`. Only this lane's names (lane-trial-<id>- and
+    respawn never reaches its `finally`. Only this repo's lane's names (trial_prefix and
     mkdtemp's 8 characters, so lane a never takes lane a-b's), and only registrations of a
     `tree` there: never a blanket `git worktree prune`, since the common dir holds other
     prunable entries that aren't this lane's. A sandboxed command can't remove an admin dir the
     sandbox mounted when it started, so a registration it can't remove is named, once, with the
     command to run sandbox-off."""
-    mine = re.compile(rf"lane-trial-{re.escape(lane_id)}-[a-z0-9_]{{8}}")
+    mine = re.compile(re.escape(trial_prefix(repo, lane_id)) + "[a-z0-9_]{8}")
     cleared, stuck = [], []
     for path in worktree_heads(repo):
         parent = os.path.dirname(path)
@@ -2003,7 +2010,7 @@ def trial(repo: Repo, me: dict, args) -> int:
     say("lane trial: merged " + ", ".join(f"{i} ({s[:12]})" for i, s in merged)
         + f" onto lane {me['id']}'s HEAD and {base_name}")
     warn("other lanes' uncommitted work isn't in the merge, only their commits")
-    tmpdir = tempfile.mkdtemp(prefix=f"lane-trial-{me['id']}-", dir=tmp)
+    tmpdir = tempfile.mkdtemp(prefix=trial_prefix(repo, me["id"]), dir=tmp)
     tree, holds = os.path.join(tmpdir, "tree"), None
     try:
         trial_git(repo, ["worktree", "add", "--detach", "--quiet", "--end-of-options", tree, cur])

@@ -381,6 +381,7 @@ class Trial(LaneWork):
         os.makedirs(self.scratch)
         self.env["TMPDIR"] = self.scratch
         self.alpha, self.beta = self.new("alpha"), self.new("beta")
+        self.prefix = f"lane-trial-{lanelib.Repo(self.main, self.common).key}-alpha-"
         self.commit_files(self.alpha, ["a.txt"])
         self.commit_files(self.beta, ["b.txt"])
 
@@ -392,7 +393,7 @@ class Trial(LaneWork):
         """Scratch dirs and registered trees a run left."""
         trees = [line for line in self.git("worktree", "list", "--porcelain").splitlines()
                  if line.startswith("worktree ") and self.scratch in line]
-        return os.listdir(self.scratch), trees
+        return sorted(os.listdir(self.scratch)), trees
 
     def test_a_clean_trial_runs_each_suite_on_both_lanes_files_and_leaves_nothing(self):
         where = os.path.join(self.tmp, "where")
@@ -403,7 +404,7 @@ class Trial(LaneWork):
         self.assertIn("suite 1 (test -f a.txt && test -f b.txt): ok", out)
         self.assertIn("suite 2", out)
         tree = self.read(where).strip()
-        self.assertRegex(tree, rf"^{self.scratch}/lane-trial-alpha-[a-z0-9_]{{8}}/tree$")
+        self.assertRegex(tree, rf"^{self.scratch}/{self.prefix}[a-z0-9_]{{8}}/tree$")
         self.assertEqual(self.leftovers(), ([], []))
         self.assertIn("other lanes' uncommitted work isn't in the merge", err)
         # Nothing moved: no ref names a trial commit, and alpha's branch is where it was.
@@ -484,20 +485,23 @@ class Trial(LaneWork):
         self.assertIn("failed (exit 1) with no test id to compare against the baseline", out)
 
     def test_a_leftover_tree_from_a_killed_run_is_cleared(self):
-        # A run killed past its cleanup leaves its dir and its registration; only this lane's
-        # names go (lane alpha-b's look alike).
-        stale = os.path.join(self.scratch, "lane-trial-alpha-abcd1234")
+        # A run killed past its cleanup leaves its dir and its registration; only this repo's
+        # lane's names go. Lane alpha-b's look alike, and so does another repo's lane alpha,
+        # whose trial may be live: it shares the temp dir but not this repo's suite lock.
+        stale = os.path.join(self.scratch, self.prefix + "abcd1234")
         self.git("worktree", "add", "--detach", "--quiet", os.path.join(stale, "tree"), "HEAD",
                  cwd=self.alpha)
-        loose = os.path.join(self.scratch, "lane-trial-alpha-zzzz9999")
-        other = os.path.join(self.scratch, "lane-trial-alpha-b-abcd1234")
-        for d in (loose, other):
+        loose = os.path.join(self.scratch, self.prefix + "zzzz9999")
+        lane_b = self.prefix.removesuffix("alpha-") + "alpha-b-abcd1234"
+        other_repo = "lane-trial-000000000000-alpha-abcd1234"
+        for d in (loose, os.path.join(self.scratch, lane_b),
+                  os.path.join(self.scratch, other_repo, "tree")):
             os.makedirs(d)
         rc, out, err = self.trial("--run", "true")
         self.assertEqual(rc, 0, out + err)
         self.assertIn("cleared the tree an earlier trial left registered", err)
         self.assertIn(os.path.join(stale, "tree"), err)
-        self.assertEqual(self.leftovers(), (["lane-trial-alpha-b-abcd1234"], []))
+        self.assertEqual(self.leftovers(), (sorted([lane_b, other_repo]), []))
 
     def test_it_holds_the_lock_and_a_held_lock_with_wait_0_exits_75(self):
         rc_file = os.path.join(self.tmp, "inner-rc")
@@ -529,7 +533,7 @@ class Trial(LaneWork):
     def test_keep_keeps_the_tree(self):
         rc, out, err = self.trial("--keep", "--run", "true")
         self.assertEqual(rc, 0, out + err)
-        (tree,) = glob.glob(os.path.join(self.scratch, "lane-trial-alpha-*", "tree"))
+        (tree,) = glob.glob(os.path.join(self.scratch, self.prefix + "*", "tree"))
         self.assertIn(f"kept the tree (the merge) at {tree}", out)
         self.assertTrue(os.path.isfile(os.path.join(tree, "b.txt")))
         self.git("worktree", "remove", "--force", tree)
