@@ -961,16 +961,28 @@ def settings_tree(text: str | bytes, name: str) -> dict:
     return tree
 
 
+SETTINGS_REREAD = 0.1  # seconds before a settings file that won't parse is read again
+
+
 def listed_paths(path: str, keys: tuple[str, ...], base: str | None) -> list[str]:
     """A settings file's list at keys as absolute paths (listed): a relative one resolves against
     base and against the file's own dir, or is skipped when base is None. A file that can't be
-    opened lists nothing; one that doesn't parse refuses (settings_tree)."""
-    try:
-        with open(path, "rb") as f:
-            text = f.read()
-    except OSError:
-        return []
-    tree = settings_tree(text, f"the settings file {path}")
+    opened lists nothing; one that doesn't parse is read once more after SETTINGS_REREAD (Claude
+    Code rewrites settings.json, as on a /model save, and a read may catch it torn), then
+    refuses (settings_tree)."""
+    for last in (False, True):
+        try:
+            with open(path, "rb") as f:
+                text = f.read()
+        except OSError:
+            return []
+        try:
+            tree = settings_tree(text, f"the settings file {path}")
+            break
+        except Refuse:
+            if last:
+                raise
+            time.sleep(SETTINGS_REREAD)
     return listed(tree, keys, [base, os.path.dirname(path)] if base is not None else [])
 
 
@@ -1026,13 +1038,21 @@ def flag_base(repo: lanelib.Repo | None, cwd: str, launch: str | None) -> str:
     return repo.toplevel if repo else os.path.realpath(cwd)
 
 
+def ordinal(n: int) -> str:
+    """1st, 2nd, 3rd, 4th, ... 11th, 12th, 13th, 21st."""
+    suffix = "th" if n % 100 in (11, 12, 13) else {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
+    return f"{n}{suffix}"
+
+
 def flag_settings(argv: list[str] | None, base: str) -> tuple[list[str], list[dict]]:
     """The session's --settings values: (absolute file paths, parsed inline JSON objects).
-    Refuses an inline value that doesn't parse (settings_tree)."""
+    Refuses an inline value that doesn't parse (settings_tree), named by its place and length
+    alone: it may hold an env secret, and the refusal is printed into the session."""
     files, inline = [], []
     for value in session_flags(argv)[1]:
         if value.lstrip().startswith("{"):
-            inline.append(settings_tree(value, f"an inline --settings value ({value[:80]!r})"))
+            name = f"the {ordinal(len(inline) + 1)} inline --settings value ({len(value)} chars)"
+            inline.append(settings_tree(value, name))
         else:
             files.append(os.path.normpath(os.path.join(base, os.path.expanduser(value))))
     return files, inline
