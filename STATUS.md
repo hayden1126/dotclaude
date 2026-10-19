@@ -74,7 +74,7 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
 - **dotclaude runs in lanes (since 2026-10-12).** The lead is the main checkout. Lanes live in
   `~/dotclaude-lanes/`, and each lane's state is in its record (`lane ls`, `lane asks`), not
   here. The config caps live lanes at 3, with locks `install` and `suite`.
-  - Merged through lanes, installed from main and closed: #90 to #125 (2026-10-12 to
+  - Merged through lanes, installed from main and closed: #90 to #129 (2026-10-12 to
     2026-10-19), with lead PR #117 among them (its check passed: session 3a153a27's auto-pass
     loaded the handoff skill before pass-respawn's `handoff-check`). Last: bug-route, #125
     (`lane addr --repo <path> lead`, and a CLAUDE.md line sending a dotclaude bug met in another
@@ -87,17 +87,14 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     [[dotclaude-tab-bar]], remote-paste's live tests in [[dotclaude-remote-paste]]. #115 left the
     tab glyph's prompt at v4: an ask a reply only announces for later stays a documented known
     miss (`hooks/wants_input.py`'s docstring), since its one prompt round flipped 10 verdicts.
-  - **Live lanes** (opened 2026-10-19 from origin/main 6522605; briefs in each record). Merged,
-    installed from main and closed 2026-10-19: chrome-ttl as #126 (chrome-bg's TTL on a
-    monotonic deadline, plus coding-practices rule 8) and tab-cmd as #127 (a claude run under its
+  - **No live lanes** (since json-depth's close, 2026-10-19). The three lanes opened 2026-10-19
+    merged, were installed from main and closed: chrome-ttl as #126 (chrome-bg's TTL on a
+    monotonic deadline, plus coding-practices rule 8), tab-cmd as #127 (a claude run under its
     versioned path counts as claude in the tab scripts: Hayden's "trigger + confirm" design, the
-    command looks like N.N.N and the pane tty's foreground group runs from `/claude/versions/`).
-    json-depth's PR 1 merged as #128 and was installed from main, 2026-10-19: deep JSON reads as
-    malformed wherever that is equal or stricter. The lane stays open (`Keep open:`) for PR 2:
-    fail closed at the trust sites, plus chrome-bg, on `fix/json-depth-fail-closed` from main (Hayden's picks are
-    in its record's Decisions). Merge order: 1 **json-depth** PR 2 (carries the lead's notes).
-  - The parked json-depth sweep is on `fix/json-depth-sweep`, a local branch never pushed: lane
-    json-depth's reference only. Ask Hayden before deleting it once that lane merges.
+    command looks like N.N.N and the pane tty's foreground group runs from `/claude/versions/`),
+    json-depth as #128 (deep JSON reads as malformed wherever that is equal or stricter) and #129
+    (malformed JSON fails closed at the trust sites, plus chrome-bg; Hayden's per-site picks are
+    in its closed record's Decisions). `fix/json-depth-sweep` is deleted (Hayden's ok).
   - `lane new` with `|`, `<`, `>` or `;` inside its quoted `--goal` runs sandboxed and fails
     ("Read-only file system"), leaving a stray branch. The matcher likely reads them as compound
     syntax (inferred). Keep briefs free of them.
@@ -126,6 +123,9 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
   - **setup.sh's ccstatusline write crashes on an odd settings shape** (from lane json-depth's PR 1
     writer, 2026-10-19; predates it): the heredoc's `has_ctx_widget` assumes `lines` is a list of
     lists, and a directory at the destination crashes it too.
+  - **Two delegation readers ignore CLAUDE_CONFIG_DIR** (from lane json-depth's PR 2 plan pass,
+    2026-10-19; predates it): `dc.claude_ancestor` and `dc.live_sessions` read a hard-coded
+    `~/.claude/sessions`, while `dc.session_toplevel` uses `sessions_dir`.
   - **handoff-check's unpushed count ignores a branch switch** (from lane json-depth,
     2026-10-19; checked against the code). `unpushed()` (`skills/handoff/scripts/handoff-check:132`)
     reads lane.json's `branch`, while `ls`, `whoami` and `done` follow the checked-out branch.
@@ -229,16 +229,12 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
   0. Lane ask quality (Backlog): read `~/scratch/lane-ask-quality/MISTAKES.md`, investigate the
      causes, run the past transcript search it describes, then plan fixes and show Hayden the
      options before building (likely a lead PR or its own lane; keep off live lanes' files).
-  1. Watch the lanes (json-depth: In flight). First check `lane ls` shows
-     each with a live session, not `orphan`. On each "merged #N", run the post-merge chain (The lead, step 7; never
-     amend or rebase the lead branch). Check `lane ls` first: a merge Hayden made on GitHub and
-     mentioned to no session sends no message. If a lane later in order is ready first, swap
-     the order in STATUS and tell both lanes (the one next in order carries the lead's notes).
-     Hold `lane done` while another lane holds the `suite` lock (its `branch -d` rewrites
-     `.git/config`). A bug report from a session in another repo arrives by SendMessage
-     (CLAUDE.md, #125): check it against the code and log it in the backlog. No chat about a
-     lane's own asks; speak on cross-lane orders, decisions raised with the lead, failed checks
-     and lead-only actions.
+  1. No live lanes. Hayden picks the next work from the backlog (item 0 first, unless he says
+     otherwise). On a bug report from another repo's session (CLAUDE.md, #125): check it
+     against the code and log it in the backlog. When lanes run again, follow The lead in
+     `skills/lanes/SKILL.md` (step 7 is the post-merge chain; never amend or rebase the lead
+     branch), and check a new lane's branch name against `gh pr list --state all --head <b>`
+     first (#94's name reuse, 2026-10-19).
   - The lead's commits: `git log --first-parent main..chore/after-pr4` (STATUS only, plus merges
     of main). Session 9dd86d28 (2026-10-18 to 2026-10-19) started at ee36b32 and ended at this handoff: it ran
     the chain for #120 to #125 (`ls .git/lanes/_closed/` shows each close), checked #117 on the
