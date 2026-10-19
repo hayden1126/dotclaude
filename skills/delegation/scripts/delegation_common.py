@@ -65,28 +65,62 @@ def state_dir(home=None):
     return os.path.join(base, "dotclaude")
 
 
+def read_object(path, what):
+    """The JSON object in the file at path, or {} when it is missing or empty: while a
+    sandboxed command runs, the sandbox mounts /dev/null over a protected path the project
+    lacks, which leaves an empty file where a reader looks. ValueError, naming the file as
+    `what`, for anything else that doesn't read as a JSON object (an unreadable file, junk, too
+    deep, or another JSON value), so a reader that trusts it fails closed."""
+    try:
+        with open(path) as f:
+            text = f.read()
+    except FileNotFoundError:
+        return {}
+    except (OSError, ValueError) as e:  # ValueError: not UTF-8
+        raise ValueError(f"unreadable {what} {path}: {e}") from None
+    if not text.strip():
+        return {}
+    try:
+        obj = json.loads(text)
+    except (ValueError, RecursionError) as e:  # json recurses on nesting
+        raise ValueError(f"unreadable {what} {path}: {type(e).__name__}") from None
+    if not isinstance(obj, dict):
+        raise ValueError(f"{what} {path} is not a JSON object")
+    return obj
+
+
+def read_settings(path):
+    """A Claude Code settings file, as read_object reads it."""
+    return read_object(path, "settings file")
+
+
 def sandbox_paths(home=None):
     """(read_denied, write_denied): the sandbox's denyRead and denyWrite from the trusted
     settings tiers (user and managed) plus policy.toml's [protect] lists, each as its expanded
     path and its symlink-resolved one. Our wrappers run outside the sandbox, so they hold their
-    own path arguments to these lists, which the sandbox can't do for them."""
+    own path arguments to these lists, which the sandbox can't do for them. ValueError when a
+    settings file (read_settings) or policy.toml exists but can't be read, since skipping it
+    would drop its lists."""
     home = home or os.path.expanduser("~")
     lists = {"denyRead": [], "denyWrite": []}
     for path in (os.path.join(home, ".claude", "settings.json"),
                  os.path.join(home, ".claude", "settings.local.json"),
                  "/etc/claude-code/managed-settings.json"):
+        settings = read_settings(path)
         try:
-            with open(path) as f:
-                fs = ((json.load(f) or {}).get("sandbox") or {}).get("filesystem") or {}
-        except (OSError, ValueError, AttributeError):
+            fs = (settings.get("sandbox") or {}).get("filesystem") or {}
+            found = {key: [p for p in fs.get(key) or [] if isinstance(p, str)] for key in lists}
+        except AttributeError:  # a sandbox or filesystem that isn't an object holds none
             continue
         for key in lists:
-            lists[key] += [p for p in fs.get(key) or [] if isinstance(p, str)]
+            lists[key] += found[key]
     try:
         with open(policy_path(), "rb") as f:
             protect = tomllib.load(f).get("protect") or {}
-    except (OSError, ValueError):
+    except FileNotFoundError:
         protect = {}
+    except (OSError, ValueError) as e:  # tomllib.TOMLDecodeError is a ValueError
+        raise ValueError(f"unreadable policy file {policy_path()}: {e}") from None
     lists["denyRead"] += protect.get("read_denied") or []
     lists["denyWrite"] += protect.get("write_denied") or []
 
@@ -121,15 +155,24 @@ def open_unprotected(path):
         real = os.path.realpath(f"/proc/self/fd/{f.fileno()}")
     except OSError:
         real = os.path.realpath(path)
-    if path_conflict(real, sandbox_paths()[0]):
+    try:
+        hit = path_conflict(real, sandbox_paths()[0])
+    except ValueError as e:  # the protected paths can't be read
+        f.close()
+        raise PermissionError(f"{path} can't be checked against the protected paths: {e}")
+    if hit:
         f.close()
         raise PermissionError(f"{path} reaches a read-protected path")
     return f
 
 
 def unprotected_exists(path):
-    """os.path.exists, but False for a path that reaches a read-protected one."""
-    return os.path.exists(path) and not path_conflict(path, sandbox_paths()[0])
+    """os.path.exists, but False for a path that reaches a read-protected one, or when the
+    protected paths can't be read (sandbox_paths)."""
+    try:
+        return os.path.exists(path) and not path_conflict(path, sandbox_paths()[0])
+    except ValueError:
+        return False
 
 
 def ledger_path():
@@ -449,19 +492,23 @@ def report_check(text):
     return (not errs), status, (errs[0] if errs else None)
 
 
-def agent_meta(data):
+def agent_meta(data, strict=False):
     """The agent's meta.json, which sits beside its transcript under the parent session's
-    subagents/ directory, or {} when there is none."""
+    subagents/ directory, or {} when there is none or it is empty (a plain subagent's doesn't
+    exist yet at SubagentStart). One that exists but doesn't read as a JSON object reads as {}
+    too, unless `strict` (the policy's Analyzer): then ValueError, since its worktreePath
+    confines a writer."""
     tp, aid = data.get("transcript_path") or "", norm_id(data.get("agent_id"))
     if not tp or not aid:
         return {}
     base = tp[:-len(".jsonl")] if tp.endswith(".jsonl") else tp
     try:
-        with open(os.path.join(base, "subagents", f"agent-{aid}.meta.json")) as f:
-            meta = json.load(f)
-    except (OSError, ValueError):
+        return read_object(os.path.join(base, "subagents", f"agent-{aid}.meta.json"),
+                           "agent meta file")
+    except ValueError:
+        if strict:
+            raise
         return {}
-    return meta if isinstance(meta, dict) else {}
 
 
 def agent_role(data, meta=None):
@@ -533,22 +580,62 @@ def ancestors():
     return out
 
 
+REREAD_WAIT = 0.1  # seconds before an unread session file is read again: a torn rewrite
+
+
+def read_session(path):
+    """One session file as a JSON object, else None (gone, unreadable, junk or too deep)."""
+    try:
+        with open(path) as f:
+            s = json.load(f)
+    except (OSError, ValueError, RecursionError):  # json recurses on nesting
+        return None
+    return s if isinstance(s, dict) else None
+
+
+def session_scan(paths):
+    """(files, unread) for the Claude Code session files at paths: (path, object) for each
+    that reads as a JSON object, and the paths of those that exist yet don't, each read once
+    more after REREAD_WAIT. A caller that trusts what it finds rules each unread path out
+    (file_pid) or fails closed."""
+    files, unread = [], list(paths)
+    for wait in (0, REREAD_WAIT):
+        if not unread:
+            break
+        time.sleep(wait)
+        paths, unread = unread, []
+        for path in paths:
+            if (s := read_session(path)) is not None:
+                files.append((path, s))
+            elif os.path.lexists(path):  # a missing file is no session
+                unread.append(path)
+    return files, unread
+
+
+def file_pid(path):
+    """The pid a session file's name gives (<pid>.json), or None for another name."""
+    m = re.fullmatch(r"([1-9][0-9]{0,9})\.json", os.path.basename(path))
+    return int(m.group(1)) if m else None
+
+
 def claude_ancestor(chain=None):
     """(pid, procStart, sessionId) of the nearest process in `chain` (ancestors(), this process
     first), at most SESSION_WALK parents up, whose ~/.claude/sessions/<pid>.json names that pid
     and its procStart: the Claude Code process this one runs under, and its session as that
     file names it (None when it names none). None when there is no such process (outside Claude
-    Code, or sandboxed, where no pid outside the sandbox can be seen). A `claude -p` run writes
-    its own sessions file, so a nested one finds itself, not its parent."""
+    Code, or sandboxed, where no pid outside the sandbox can be seen), and when an ancestor's
+    file exists but can't be read (session_scan): the walk never goes on to a farther claude,
+    which would pin a nested `claude -p` on its parent's session. A `claude -p` run writes its
+    own sessions file, so a nested one finds itself, not its parent."""
     for pid in (ancestors() if chain is None else chain)[:SESSION_WALK + 1]:
-        try:
-            with open(os.path.expanduser(f"~/.claude/sessions/{pid}.json")) as f:
-                d = json.load(f)
-        except (OSError, ValueError):
+        files, unread = session_scan([os.path.expanduser(f"~/.claude/sessions/{pid}.json")])
+        if unread:
+            return None
+        if not files:
             continue
-        start = proc_start(pid)
-        if (isinstance(d, dict) and d.get("pid") == pid
-                and (d.get("procStart") is None or str(d["procStart"]) == str(start))):
+        d, start = files[0][1], proc_start(pid)
+        if d.get("pid") == pid and (d.get("procStart") is None
+                                    or str(d["procStart"]) == str(start)):
             sid = d.get("sessionId")
             return pid, start, (sid if isinstance(sid, str) and sid else None)
     return None
@@ -1168,15 +1255,15 @@ class StepAside(Exception):
 
 def live_sessions():
     """sessionId -> pid for Claude processes that are still running. A session file's
-    procStart must match the process too, so a reused pid doesn't keep a gone session alive."""
+    procStart must match the process too, so a reused pid doesn't keep a gone session alive.
+    None (liveness unknown) when a file that won't read (session_scan) may be a live one: it is
+    named for a pid that runs, or not for a pid at all."""
+    files, unread = session_scan(glob.glob(os.path.expanduser("~/.claude/sessions/*.json")))
+    if any((pid := file_pid(path)) is None or pid_alive(pid) for path in unread):
+        return None
     out = {}
-    for p in glob.glob(os.path.expanduser("~/.claude/sessions/*.json")):
-        try:
-            with open(p) as f:
-                d = json.load(f)
-        except (OSError, ValueError):
-            continue
-        sid = d.get("sessionId") if isinstance(d, dict) else None
+    for _, d in files:
+        sid = d.get("sessionId")
         if isinstance(sid, str) and sid and pid_alive(d.get("pid"), d.get("procStart")):
             out[sid] = d.get("pid")
     return out
@@ -1194,18 +1281,24 @@ def session_toplevel(session_id, home=None):
     The sessions file is undocumented: <pid>.json names a running process's sessionId and its
     `cwd`, which is the directory the session was launched in (a lane-rooted session's lane),
     not wherever its Bash has since `cd`'d to. When several files name the session, the newest
-    wins. The git call has a short timeout, so subagent-policy stays inside its 5-second alarm."""
+    wins. ValueError when a file that won't read (session_scan) may be this session's: one
+    named for an ancestor of this process, or not for a pid at all. The git call has a short
+    timeout, so subagent-policy stays inside its 5-second alarm."""
     if not session_id:
         return None
+    files, unread = session_scan(glob.glob(os.path.join(sessions_dir(home), "*.json")))
+    chain = ancestors() if unread else []
+    for path in unread:
+        if (pid := file_pid(path)) is None or pid in chain:
+            raise ValueError(f"session file {path} can't be read as a JSON object, so the "
+                             "parent session's checkout can't be told")
     found = None
-    for path in glob.glob(os.path.join(sessions_dir(home), "*.json")):
+    for path, d in files:
         try:
-            with open(path) as f:
-                d = json.load(f)
             mtime = os.path.getmtime(path)
-        except (OSError, ValueError):
+        except OSError:
             continue
-        if not isinstance(d, dict) or d.get("sessionId") != session_id:
+        if d.get("sessionId") != session_id:
             continue
         cwd = d.get("cwd")
         if isinstance(cwd, str) and cwd and (found is None or mtime > found[0]):
@@ -1272,8 +1365,9 @@ def left_by_clear(w, me, live):
     live_sessions()). That is a watch from before a /clear, since the process runs on under a
     new session id and its sessions file names the new one, so the old id leaves the live set;
     or one recorded with no session ("unknown", never live). A live session's watch never
-    counts, whatever the pids say: that session has it."""
-    return (me is not None and w.get("claude_pid") == me[0]
+    counts, whatever the pids say: that session has it. With liveness unknown (`live` None),
+    none does."""
+    return (me is not None and live is not None and w.get("claude_pid") == me[0]
             and str(w.get("claude_start")) == str(me[1]) and w.get("session_id") not in live)
 
 
@@ -1311,7 +1405,8 @@ def watch_orphaned(w, current=None, live=None, now=None):
     session's, or left_by_clear, which covers an "unknown" session too). With none recorded,
     the session decides: not while it is `current` (the caller's) or live. A watch with no
     session and no process was started outside Claude Code and reports to whoever ran it, so
-    only a dead waiter orphans it. `live` is live_sessions(), if read."""
+    only a dead waiter orphans it. `live` is live_sessions(), if read; when liveness is unknown
+    (None), a session isn't known to be gone, so its watch isn't orphaned."""
     if w.get("waiter_unheard"):
         return True
     if w.get("claude_pid") is not None:
@@ -1321,7 +1416,8 @@ def watch_orphaned(w, current=None, live=None, now=None):
         return not waiter_alive(w, now)
     if current and sid == current:
         return False
-    return sid not in (live_sessions() if live is None else live)
+    live = live_sessions() if live is None else live
+    return live is not None and sid not in live
 
 
 def unblock(w):

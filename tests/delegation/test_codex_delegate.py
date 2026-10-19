@@ -230,6 +230,25 @@ class Audit(unittest.TestCase):
         res = cd.audit("nope", 0)
         self.assertEqual((res["ok"], res["root_found"]), (False, False))
 
+    def test_an_unreadable_meta_or_model_line_fails_the_audit(self):
+        # A skipped meta line may hide a child thread (in any rollout), a model line its model.
+        deep = "[" * 100000 + "]" * 100000  # RecursionError in json
+        for name, marker in (("U", "session_meta"), ("R", "turn_context")):
+            for line in ('{"type": "%s", ' % marker, '{"type": "%s", "x": %s}' % (marker, deep)):
+                self.rollout("R", None, "gpt-5.6-sol")
+                self.assertEqual(cd.audit("R", 0)["unreadable"], 0)
+                path = os.path.join(self.day, f"rollout-2026-x-{name}.jsonl")
+                with open(path, "a") as f:
+                    f.write(line + "\n")
+                res = cd.audit("R", 0)
+                self.assertEqual((res["ok"], res["unreadable"]), (False, 1), (name, line[:30]))
+                if name == "U":
+                    os.remove(path)
+        self.rollout("R", None, "gpt-5.6-sol")
+        with open(os.path.join(self.day, "rollout-2026-x-R.jsonl"), "a") as f:
+            f.write("{\n")  # no marker: not a line the audit reads
+        self.assertTrue(cd.audit("R", 0)["ok"])
+
 
 class TurnRows(unittest.TestCase):
     """The rows a wrapper writes for its turn, and the supervisor's exit code, in process
@@ -474,6 +493,29 @@ class FullRun(unittest.TestCase):
                          ("stop", 4, False, "report is not a JSON object"))
         self.assertIsNone(stop["report_status"])
         self.assertEqual(p.returncode, 0)
+
+    def test_an_unreadable_rollout_line_fails_the_audit_and_is_counted(self):
+        day = os.path.join(self.tmp.name, "codex", "sessions",
+                           datetime.date.today().strftime("%Y/%m/%d"))
+        os.makedirs(day)
+        with open(os.path.join(day, "rollout-x-junk.jsonl"), "w") as f:
+            f.write('{"type": "session_meta", \n')  # it may be a child of this run's thread
+        p = self.run_ok()
+        self.assertEqual(p.returncode, 3, p.stderr)
+        s = self.summary(p)
+        self.assertEqual((s["audit_ok"], s["audit_unreadable"]), (False, 1))
+
+    def test_a_malformed_settings_file_refuses_before_anything_runs(self):
+        # Skipped, it would drop its denyWrite entries from codex's writable-root check.
+        os.makedirs(os.path.join(self.tmp.name, ".claude"))
+        for text in ("{", "[" * 100000):  # RecursionError in json
+            with open(os.path.join(self.tmp.name, ".claude", "settings.json"), "w") as f:
+                f.write(text)
+            p = self.run_ok()
+            self.assertEqual(p.returncode, 2, p.stderr)
+            self.assertIn("settings.json", p.stderr)
+            self.assertNotIn("Traceback", p.stderr)
+        self.assertFalse(os.path.exists(self.argv_log))
 
     def test_finalize_records_a_run_whose_wrapper_died(self):
         self.run_ok()

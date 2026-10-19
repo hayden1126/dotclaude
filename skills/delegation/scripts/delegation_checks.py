@@ -450,7 +450,7 @@ def left_watches(current=None, now=None):
     none."""
     if not dc.pids_visible():
         return [], [], 0
-    live = set(dc.live_sessions())
+    live = dc.live_sessions()  # None: liveness unknown, so no session counts as gone
     current = current if isinstance(current, str) and current else None
     orphans, unheard, unreadable = [], [], 0
     for p in sorted(glob.glob(os.path.join(dc.watches_dir(), "*.json"))):

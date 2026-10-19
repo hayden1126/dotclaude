@@ -1063,6 +1063,42 @@ class Usage(WaitEnv):
             open(self.path("other"), "w").close()
             self.assertTrue(dc.unprotected_exists(self.path("other")))
 
+    def test_a_malformed_settings_or_policy_file_refuses_instead_of_dropping_its_lists(self):
+        # A skipped file would drop its denyRead entries, and the waiter reads outside the
+        # sandbox. Missing and empty (the sandbox's mount stub) stay no settings.
+        settings = self.path(".claude/settings.json")
+        os.makedirs(os.path.dirname(settings), exist_ok=True)
+        target = self.path("out")
+        open(target, "w").close()
+        with mock.patch.dict(os.environ, {"HOME": self.tmp.name}):
+            dc.sandbox_paths()
+            for text in ("", "\n"):
+                with open(settings, "w") as f:
+                    f.write(text)
+                self.assertTrue(dc.sandbox_paths()[0])
+            for text in ("{", "[" * 100000, "[]"):  # RecursionError in json; not an object
+                with open(settings, "w") as f:
+                    f.write(text)
+                with self.assertRaises(ValueError):
+                    dc.sandbox_paths()
+                with self.assertRaises(PermissionError):
+                    dc.open_unprotected(target)
+                self.assertFalse(dc.unprotected_exists(target))
+                p = self.run_("--file", target, poll=False)
+                self.assertEqual(p.returncode, USAGE, p.stderr)
+                self.assertIn("settings.json", p.stderr)
+            os.remove(settings)
+            bad = self.path("bad.toml")
+            with open(bad, "w") as f:
+                f.write("[protect\n")
+            with mock.patch.dict(os.environ, {"DELEGATION_POLICY": bad}):
+                with self.assertRaises(ValueError):
+                    dc.sandbox_paths()
+            p = self.run_("--file", target, poll=False, DELEGATION_POLICY=bad)
+            self.assertEqual(p.returncode, USAGE, p.stderr)
+            self.assertIn("bad.toml", p.stderr)
+        self.assertFalse(os.path.exists(self.watches))
+
     def test_max_stays_under_the_bash_cap(self):
         target = self.path("out")
         open(target, "w").close()
@@ -1506,6 +1542,52 @@ class ClaudeProcess(unittest.TestCase):
             self.assertFalse(dc.pids_visible())  # the sandbox: nothing outside it shows
             self.session_file(os.getppid())
             self.assertTrue(dc.pids_visible())  # only stale: a live Claude process is above
+
+    def junk(self, name, text):
+        with open(os.path.join(self.sessions, name), "w") as f:
+            f.write(text)
+
+    def test_an_unreadable_ancestor_file_stops_the_walk(self):
+        # A farther claude would pin this command on its parent's session.
+        self.session_file(os.getppid())
+        for text in ("{", "[" * 100000):  # RecursionError in json
+            self.junk(f"{os.getpid()}.json", text)
+            self.assertIsNone(dc.claude_ancestor())
+        os.remove(os.path.join(self.sessions, f"{os.getpid()}.json"))
+        self.junk(f"{DEAD}.json", "{")  # not an ancestor's: never read
+        self.assertEqual(dc.claude_ancestor()[0], os.getppid())
+
+    def test_an_unreadable_file_that_may_be_live_makes_liveness_unknown(self):
+        self.session_file(os.getppid())
+        self.junk(f"{DEAD}.json", "{")  # a pid that isn't running: ruled out
+        self.assertEqual(dc.live_sessions(), {"s": os.getppid()})
+        w = {"id": "w-1", "state": "open", "session_id": "s-gone"}
+        self.assertTrue(dc.watch_orphaned(w))
+        me = (os.getpid(), dc.proc_start(os.getpid()))
+        left = dict(w, claude_pid=me[0], claude_start=me[1])
+        self.assertTrue(dc.left_by_clear(left, me, dc.live_sessions()))
+        for name in (f"{os.getpid()}.json", "odd.json"):  # a running pid, or no pid at all
+            for text in ("{", "[" * 100000):  # RecursionError in json
+                self.junk(name, text)
+                self.assertIsNone(dc.live_sessions(), name)
+                self.assertFalse(dc.watch_orphaned(w), name)  # so a live waiter is held
+                self.assertFalse(dc.left_by_clear(left, me, dc.live_sessions()), name)
+            os.remove(os.path.join(self.sessions, name))
+
+    def test_session_toplevel_refuses_an_unreadable_file_it_cant_rule_out(self):
+        repo = os.path.join(os.path.dirname(self.sessions), "repo")
+        subprocess.run(["git", "init", "-q", repo], check=True)
+        with open(os.path.join(self.sessions, "4242.json"), "w") as f:
+            json.dump({"pid": 4242, "sessionId": "s1", "cwd": repo}, f)
+        os.environ.pop("CLAUDE_CONFIG_DIR", None)
+        self.junk(f"{DEAD}.json", "{")  # not an ancestor's: ruled out
+        self.assertEqual(dc.session_toplevel("s1"), os.path.realpath(repo))
+        for name in (f"{os.getpid()}.json", "odd.json"):  # an ancestor's, or no pid at all
+            for text in ("{", "[" * 100000):  # RecursionError in json
+                self.junk(name, text)
+                with self.assertRaises(ValueError, msg=name):
+                    dc.session_toplevel("s1")
+            os.remove(os.path.join(self.sessions, name))
 
 
 class WaiterIdentity(unittest.TestCase):

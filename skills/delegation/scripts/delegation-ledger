@@ -211,8 +211,12 @@ def checkout_status(root):
 
 
 def parent_checkout(session_id, main):
-    """The parent session's own checkout when it is not `main` (a lane), else None."""
-    top = dc.session_toplevel(session_id)
+    """The parent session's own checkout when it is not `main` (a lane), else None, as when
+    the session files can't be trusted (dc.session_toplevel raises)."""
+    try:
+        top = dc.session_toplevel(session_id)
+    except ValueError:
+        return None
     return top if top and top != os.path.realpath(main) else None
 
 
@@ -1288,7 +1292,10 @@ def wait_condition(args):
     if not (args.pid or args.file or args.done):
         raise dc.WaitRefused("give what to wait for: --pid, --file, --log with --done, or --codex")
     # The waiter runs outside the sandbox, where its exit would say what a protected file holds.
-    read_denied = dc.sandbox_paths()[0]
+    try:
+        read_denied = dc.sandbox_paths()[0]
+    except ValueError as ex:  # a skipped file would drop its protected paths
+        raise dc.WaitRefused(f"{ex}, so the protected paths can't be checked") from None
     for opt in ("log", "file"):
         path = getattr(args, opt)
         hit = path is not None and dc.path_conflict(path, read_denied)

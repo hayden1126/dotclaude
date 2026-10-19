@@ -182,6 +182,27 @@ class Gate(Base):
         p = self.run_main(self.ev("SubagentHandback", {"message": "report"}), env)
         self.assertEqual((p.returncode, p.stdout), (0, ""))
 
+    def test_malformed_settings_or_meta_deny_policed_tools(self):
+        # Skipped, a settings file would drop its deny lists, and a meta.json a writer's root.
+        self.meta("w1", agentType="writer", worktreePath=self.wt)
+        payload = self.ev("Bash", {"command": "touch x"}, atype="writer", cwd=self.wt, aid="w1")
+        self.assertEqual(self.run_main(payload).stdout, "")
+        settings = os.path.join(self.home, ".claude", "settings.json")
+        meta = os.path.join(self.slug_dir, "s1", "subagents", "agent-w1.meta.json")
+        for path in (settings, meta):
+            with open(path) as f:
+                good = f.read()
+            for text in ("{", "[" * 100000, "[]"):  # RecursionError in json; not an object
+                with open(path, "w") as f:
+                    f.write(text)
+                p = self.run_main(payload)
+                self.assertIn("policy-error", p.stdout, (path, text[:5]))
+                handback = self.ev("SubagentHandback", {"message": "r"}, atype="writer",
+                                   cwd=self.wt, aid="w1")
+                self.assertEqual(self.run_main(handback).stdout, "")
+            with open(path, "w") as f:
+                f.write(good)
+
     def test_the_alarm_denies_before_claude_codes_timeout_would_allow(self):
         fifo = os.path.join(self.home, "hang.toml")
         os.mkfifo(fifo)  # opening it for reading blocks until the alarm fires
@@ -589,6 +610,20 @@ class WriterInLane(Writer):
         d = sp.evaluate(self.ev("Bash", {"command": self.lane_writes()[0]}, atype="writer",
                                 cwd=self.wt, aid="w1"), POLICY, home=self.home)
         self.assertIn("the parent session's checkout", d.message)
+
+    def test_an_unreadable_session_file_that_may_be_the_parents_refuses(self):
+        # Skipped, it may hold the parent's lane, which would then be left to the sandbox.
+        with open(os.path.join(self.sessions, f"{2 ** 22 + 12345}.json"), "w") as f:
+            f.write("{")  # a pid that isn't an ancestor: ruled out
+        self.assertDenied(self.wb(self.lane_writes()[0]), "worktree-root", "scope_down")
+        for name in (f"{os.getpid()}.json", "odd.json"):  # an ancestor's, or no pid at all
+            for text in ("{", "[" * 100000):  # RecursionError in json
+                with open(os.path.join(self.sessions, name), "w") as f:
+                    f.write(text)
+                with self.assertRaises(ValueError, msg=name):
+                    self.wb(self.lane_writes()[0])
+                self.assertIsNone(self.wb("touch x"))  # no lookup inside the worktree
+            os.remove(os.path.join(self.sessions, name))
 
     def test_without_a_sessions_file_the_lane_is_left_to_the_sandbox(self):
         os.remove(os.path.join(self.sessions, "4242.json"))
