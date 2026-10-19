@@ -87,16 +87,15 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     [[dotclaude-tab-bar]], remote-paste's live tests in [[dotclaude-remote-paste]]. #115 left the
     tab glyph's prompt at v4: an ask a reply only announces for later stays a documented known
     miss (`hooks/wants_input.py`'s docstring), since its one prompt round flipped 10 verdicts.
-  - **Live lanes** (opened 2026-10-19 from origin/main 6522605; briefs in each record). Merge
-    order: 1 **chrome-ttl** (`fix/chrome-bg-ttl`, the chrome-bg TTL loop on a monotonic
-    deadline; carries the lead's notes), 2 **tab-cmd** (`fix/tab-scripts-claude-cmd`, the tab
-    scripts finding claude under its versioned path; its design fork goes to Hayden), 3
-    **json-depth** (`fix/json-depth-rebuild`, the parked sweep rebuilt on main; told to switch
-    off its record's `fix/json-depth`, which merged #94 already used, so `lane ls` showed it
-    "#94 merged"). #94 already covered `claude-saved` and `tmux-claude-status`, so json-depth no
-    longer overlaps tab-cmd (both lanes told). Hayden's fail-closed picks (2026-10-19) moved it onto
-    `bin/chrome-bg` (chrome-ttl's file, #126) and `setup.sh`: its chrome-bg work starts from main
-    after #126 merges.
+  - **Live lanes** (opened 2026-10-19 from origin/main 6522605; briefs in each record). chrome-ttl
+    merged as #126 (chrome-bg's TTL on a monotonic deadline, plus coding-practices rule 8),
+    installed from main and closed 2026-10-19. Merge order: 1 **tab-cmd** (`fix/tab-scripts-claude-cmd`, the
+    tab scripts finding claude under its versioned path; its design fork goes to Hayden; carries
+    the lead's notes), 2 **json-depth** (`fix/json-depth-rebuild`, the parked sweep rebuilt on
+    main; it switched off its record's `fix/json-depth`, which merged #94 already used). #94
+    already covered `claude-saved` and `tmux-claude-status`, so json-depth no longer overlaps
+    tab-cmd. Hayden's fail-closed picks (2026-10-19) moved json-depth onto `bin/chrome-bg` and
+    `setup.sh`; #126 is in main now, so its chrome-bg work starts from there.
   - The parked json-depth sweep is on `fix/json-depth-sweep`, a local branch never pushed: lane
     json-depth's reference only. Ask Hayden before deleting it once that lane merges.
   - `lane new` with `|`, `<`, `>` or `;` inside its quoted `--goal` runs sandboxed and fails
@@ -135,12 +134,9 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     it), runs `claude stop <job>` and respawns that pane with a fresh claude. Unknowns: a pane
     in agent view leaves no link on disk, two clients can attach to one job, and the order of
     the stop and the respawn.
-  - **chrome-bg's TTL loop counts down on the wall clock** (in lane chrome-ttl; from lane monotonic, 2026-10-18).
-    `bin/chrome-bg:1314` and `:1353` wait until the run record's `expires`, so a forward clock
-    step cuts a TTL short by up to 0.6 s. The record stays wall clock (`ls` and gc read it,
-    `:1458`); the loop can keep a monotonic deadline beside it. The only duration site in shipped
-    code: the other 46 `time.time()` calls are stamps or windows on persisted stamps. Optional
-    with it: the monotonic rule in `skills/coding-practices`, since the guard covers `tests/` only.
+  - **chrome-bg's gc still judges `expires` by wall clock** (log only, from #126's PR body): a
+    gc inside a clock step can stop a run up to 0.6 s early, and after a Windows sleep the holder
+    outlives `expires` until the next gc. The holder's own loop is monotonic since #126.
 
   **The post-merge chain** (Hayden's design B, standing approval 2026-10-14): `skills/lanes/SKILL.md`,
   The lead, step 7. Lead commits on the lead branch ride the PR of the lane next in merge order,
@@ -217,7 +213,7 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
   0. Lane ask quality (Backlog): read `~/scratch/lane-ask-quality/MISTAKES.md`, investigate the
      causes, run the past transcript search it describes, then plan fixes and show Hayden the
      options before building (likely a lead PR or its own lane; keep off live lanes' files).
-  1. Watch the lanes (chrome-ttl, tab-cmd, json-depth: In flight). First check `lane ls` shows
+  1. Watch the lanes (tab-cmd, json-depth: In flight). First check `lane ls` shows
      each with a live session, not `orphan`. On each "merged #N", run the post-merge chain (The lead, step 7; never
      amend or rebase the lead branch). Check `lane ls` first: a merge Hayden made on GitHub and
      mentioned to no session sends no message. If a lane later in order is ready first, swap
