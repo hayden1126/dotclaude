@@ -365,6 +365,7 @@ them. Each call meets the excluded-command guard first (docs/delegation.md), and
 | The lane's working design | `.lane/PLAN.md` |
 | Direction, backlog, merge order | the project STATUS.md, from `main` or the lead's branch (its `Lead branch:` line), carried to main in a lane's PR (Lifecycle, step 6) |
 | A heads-up to a peer lane | SendMessage to what `lane addr <id>` prints, as a nudge only; anything that matters goes in a record first |
+| A bug report from a session in another repo | the lead's one backlog line in the project STATUS (The lead, step 9); the sender used `lane addr --repo <main checkout> lead` |
 | Messaging a lane or the lead by its ListAgents name or tab title | `lane addr <id>` or `lane addr lead`, run just before each send: the name is the title, which changes most turns, and a pass gives the session a new pid and socket |
 
 ## Common mistakes

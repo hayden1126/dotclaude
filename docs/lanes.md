@@ -471,7 +471,9 @@ object or hook, the way `git_read` and `commits_past` run theirs (`lanelib.HANDE
 - no system or global config, and no transport;
 - a 10 s cap, since a FIFO include holds git at its open.
 
-Git's ownership check stays on, so a repo another user owns is refused. PATH must also sit in
+The git binary is PATH's, as for `commits_past` and every other git `lane` runs: the guard's
+rule 2 judged PATH for the call (`git_read` alone insists on a system git, since PATH's may be
+one its scan just found writable). Git's ownership check stays on, so a repo another user owns is refused. PATH must also sit in
 the main checkout of the repo git names: the nearest `.git` at or above it must be that repo's
 git dir itself, as the guard requires of a cwd. Else a planted `.git` file, `commondir` or
 `core.worktree` would send the report to another repo's lead, an enclosing lanes repo's
