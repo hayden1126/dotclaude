@@ -745,6 +745,14 @@ class Hooks(unittest.TestCase):
             f.write((pad + "\n") * 12)                   # 12 MiB after the Monitor call
         self.assertEqual(stop_ring.task_types([{"id": "m1", "type": "shell"}], path), ["monitor"])
 
+    def test_a_line_too_deep_for_json_is_passed_over(self):
+        # "[" * 100000: RecursionError in json, not ValueError. The walk meets it first, skips
+        # it, and goes on to the Monitor's real result.
+        path = self.monitor_transcript()
+        with open(path, "a") as f:
+            f.write("[" * 100000 + '"taskId":"m1"\n')
+        self.assertEqual(stop_ring.task_types([{"id": "m1", "type": "shell"}], path), ["monitor"])
+
     def test_only_a_taskid_answering_a_monitor_call_counts(self):
         path = os.path.join(self.tmp, "t.jsonl")
         entries = [

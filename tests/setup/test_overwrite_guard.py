@@ -262,6 +262,22 @@ class Guard(unittest.TestCase):
             f.write('{"broken karaoke-personal-product.md\n')
         self.assertDenied(self.fire("y" * 6000), "read-proof")
 
+    def test_a_line_too_deep_for_json_skips_only_itself(self):
+        name = os.path.basename(self.file)
+        deep = "[" * 100000 + " " + name + "\n"   # RecursionError in json, not ValueError
+        self.entries([])
+        with open(self.transcript, "a") as f:   # ahead of the proof, so the scan meets it first
+            f.write(deep)
+            for r in (use("toolu_1", "Read", file_path=self.file), result("toolu_1")):
+                f.write(json.dumps(r) + "\n")
+        self.assertIsNone(self.fire("y" * 6000))
+        self.assertDenied(self.fire("y"), "shrink")   # the guard ran on: it didn't fail open
+        self.entries([])
+        with open(self.transcript, "a") as f:
+            f.write(deep)
+        self.assertDenied(self.fire("y" * 6000), "read-proof")
+        self.assertNotIn("error", self.log())
+
     def test_fails_open(self):
         # Bad input, and a state dir that can't be written: the Write goes through.
         p = subprocess.run(["bash", HOOK], input="not json", capture_output=True, text=True,

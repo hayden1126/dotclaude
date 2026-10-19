@@ -66,7 +66,7 @@ def lines_with(m, needle, start=0):
         e = len(m) if e == -1 else e
         try:
             yield e, json.loads(m[s:e])
-        except ValueError:
+        except (ValueError, RecursionError):   # json recurses on nesting
             pass
         pos = e + 1
 

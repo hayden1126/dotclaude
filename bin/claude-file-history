@@ -61,6 +61,7 @@ def backups(target, given):
     except OSError as e:
         sys.exit(f"claude-file-history: grep failed: {e}")
     found = {}
+    bad = 0
     for transcript in out.splitlines():
         sid = session_of(transcript, projects)
         with open(transcript, "rb") as f:
@@ -73,9 +74,13 @@ def backups(target, given):
                 continue
             try:
                 entry = json.loads(line)
-            except ValueError:
+            except (ValueError, RecursionError):   # json recurses on nesting
+                bad += 1
                 continue
             found_in(entry, target, {c for c in (first, cwd) if c}, cfg, sid, found)
+    if bad:
+        print(f"claude-file-history: {bad} transcript line{'s' if bad != 1 else ''} unreadable: "
+              "backups recorded in them aren't listed", file=sys.stderr)
     return sorted(found.values(), key=lambda b: (b["time"], b["file"]))
 
 

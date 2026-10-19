@@ -8,6 +8,7 @@ with $STUB_SERVER, and an env scrubbed of CLAUDE* and TMUX*."""
 import importlib.util
 import json
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -380,6 +381,29 @@ class Fallback(Widget):
         self.assertEqual(self.run_widget(self.payload(100000), widget=link),
                          chip(22, 114, "Ctx", "100k 17% A"))
         self.assertEqual(self.read_ctx()["window"], 600000)
+
+    def test_a_cache_too_deep_for_json_is_recomputed(self):
+        transcript = os.path.join(self.tmp, "t.jsonl")
+        with open(transcript, "w") as f:
+            f.write("{}\n")
+        cache = os.path.join(self.tmp, "ctx-breakdown-"
+                             + re.sub(r"\W", "_", transcript)[-80:] + ".json")
+        with open(cache, "w") as f:
+            f.write("[" * 100000)   # RecursionError in json, not ValueError
+        out = self.run_widget(dict(self.payload(100000), transcript_path=transcript),
+                              env={"TMPDIR": self.tmp})   # exit 0, nothing on stderr
+        self.assertEqual(out, self.run_widget(self.payload(100000)))
+        with open(cache) as f:
+            self.assertEqual(json.load(f), {"size": 3, "cats": None, "acw": None})
+
+    def test_settings_or_stdin_too_deep_for_json_read_as_none(self):
+        plain = self.run_widget(self.payload(140000, 1000000), args=("--no-pct",))
+        os.makedirs(os.path.join(self.home, ".claude"))
+        with open(os.path.join(self.home, ".claude", "settings.json"), "w") as f:
+            f.write("[" * 100000)   # RecursionError in json, not ValueError
+        self.assertEqual(self.run_widget(self.payload(140000, 1000000), args=("--no-pct",)),
+                         plain)
+        self.assertEqual(self.run_widget("[" * 100000), "Ctx ?")
 
     def test_garbage_stdin(self):
         for stdin in ("", "not json", "[1]", "5", "null", '{"context_window": "x"}',

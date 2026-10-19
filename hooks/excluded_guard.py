@@ -178,7 +178,7 @@ def load_settings(env):
             data = json.loads(text) if text.strip() else {}
         except FileNotFoundError:
             continue
-        except (OSError, ValueError) as e:
+        except (OSError, ValueError, RecursionError) as e:   # json recurses on nesting
             errors.append(f"{path}: {type(e).__name__}")
             continue
         perms = data.get("permissions") if isinstance(data, dict) else None
@@ -746,7 +746,7 @@ def rules_naming(path, env):
             with open(f) as fh:
                 text = fh.read()
             data = json.loads(text) if text.strip() else {}
-        except (OSError, ValueError):
+        except (OSError, ValueError, RecursionError):   # json recurses on nesting
             continue
         perms = data.get("permissions") if isinstance(data, dict) else None
         deny = perms.get("deny") if isinstance(perms, dict) else None
@@ -936,7 +936,7 @@ def print_paste(machine, rules):
         data = json.loads(text) if text.strip() else {}
     except FileNotFoundError:
         data = {}
-    except (OSError, ValueError) as e:
+    except (OSError, ValueError, RecursionError) as e:   # json recurses on nesting
         print(f"{machine} not read ({type(e).__name__}); add these to its permissions.deny:")
         print("\n".join(f"  {json.dumps(r)}," for r in rules))
         return
@@ -1015,7 +1015,7 @@ def unseen(findings):
                 seen = {}
         except FileNotFoundError:
             seen = {}
-        except (OSError, ValueError) as e:
+        except (OSError, ValueError, RecursionError) as e:   # json recurses on nesting
             log(f"excluded-check state not read ({type(e).__name__}: {e})")
             seen = {}
         out = {}

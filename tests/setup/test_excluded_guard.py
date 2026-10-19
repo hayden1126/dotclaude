@@ -7,7 +7,9 @@ user, so a "clean" (protected) dir is one an Edit deny rule in the user settings
 permission bits protect nothing there, and only /usr/bin-style dirs outside every root are
 protected by location.
 """
+import contextlib
 import importlib.util
+import io
 import json
 import os
 import shutil
@@ -668,6 +670,16 @@ class Matching(Guard):
         self.write(os.path.join(self.proj, ".claude", "settings.json"), "{not json")
         self.denied("gh issue list", "rule2")
 
+    def test_a_settings_file_too_deep_for_json_makes_the_call_a_candidate(self):
+        # "[" * 100000: RecursionError in json, not ValueError. It takes the unread-settings
+        # path a "{not json" file takes, not the match-error fallback.
+        self.env["PATH"] = f"{self.wbin}:/usr/bin"
+        self.write(os.path.join(self.proj, ".claude", "settings.json"), "[" * 100000)
+        self.denied("gh issue list", "rule2")
+        self.assertIn("unread settings", self.log())
+        self.assertIn("RecursionError", self.log())
+        self.assertNotIn("match error", self.log())
+
     def test_an_empty_settings_file_is_no_settings(self):
         # The sandbox's mount points for protected files it lacks can stay behind on disk as
         # empty files; Claude Code reads one as no settings, so it can't hold a pattern.
@@ -971,6 +983,26 @@ class RulesNaming(Guard):
                    json.dumps({"permissions": {"deny": "Edit(~/lanes/chart-fix/**)"}}))
         self.assertEqual(guard.rules_naming(lane, self.env), [])
 
+    def test_a_settings_file_too_deep_for_json_is_skipped(self):
+        guard = load_guard()
+        lane = self.mkdir("home", "lanes", "chart-fix")
+        rule = "Edit(~/lanes/chart-fix/**)"
+        self.write(os.path.join(self.home, ".claude", "settings.machine.json"),
+                   "[" * 100000)   # RecursionError in json, not ValueError
+        user = self.write(os.path.join(self.home, ".claude", "settings.json"),
+                          json.dumps({"permissions": {"deny": [rule]}}))
+        self.assertEqual(guard.rules_naming(lane, self.env), [(user, rule)])
+
+    def test_a_machine_file_too_deep_for_json_gets_the_rules_by_hand(self):
+        guard = load_guard()
+        machine = self.write(os.path.join(self.home, ".claude", "settings.machine.json"),
+                             "[" * 100000)   # RecursionError in json, not ValueError
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            guard.print_paste(machine, ["Edit(~/lanes/x/**)"])
+        self.assertIn("not read (RecursionError); add these", out.getvalue())
+        self.assertIn('"Edit(~/lanes/x/**)",', out.getvalue())
+
 
 class Session(Guard):
     """`--session`, the SessionStart check: what an excluded call from this session's project
@@ -1117,6 +1149,17 @@ class Session(Guard):
             self.assertEqual(guard.unseen({"machine:x": ["a"]}), {"machine:x": ["a"]})
         self.assertEqual(slurp(target), "keep")
         self.assertIn("state not written", self.log())
+
+    def test_a_state_file_too_deep_for_json_reads_as_none_seen(self):
+        guard = load_guard()
+        d = self.mkdir("state", "dotclaude")
+        self.write(os.path.join(d, "excluded-check.json"),
+                   "[" * 100000)   # RecursionError in json, not ValueError
+        with mock.patch.dict(os.environ, XDG_STATE_HOME=os.path.join(self.tmp, "state")):
+            self.assertEqual(guard.unseen({"machine:x": ["a"]}), {"machine:x": ["a"]})
+        self.assertIn("state not read (RecursionError", self.log())
+        with open(os.path.join(d, "excluded-check.json")) as f:
+            self.assertIn("machine:x", json.load(f))
 
     def test_keys_with_nothing_to_say_are_not_stored(self):
         self.assertIsNone(self.start())

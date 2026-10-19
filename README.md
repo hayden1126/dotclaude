@@ -210,7 +210,7 @@ sees it.
 | `plugins/enabled.json` | Plugins to install and enable (must equal the baseline `settings.json`'s `enabledPlugins`; a test pins it) | consumed by `setup.sh` |
 | `statusline/ctx-breakdown.py` | ccstatusline widget: colored per-category context chips (system prompt, tools, agents, memory, skills, MCP, messages); the total chip colors by the auto-pass tiers, ends in `A` when auto-pass is on, and the widget writes the model's window for the watcher (imports `hooks/autopass_state.py` through its real path) | symlink `~/.config/ccstatusline/ctx-breakdown.py` |
 | `statusline/session-summary.py` | ccstatusline widget: renders the cached session summary (nothing until the first one lands), word-wrapped across two dim rows on status lines 2-3 (`--row 1` / `--row 2`) | symlink `~/.config/ccstatusline/session-summary.py` |
-| `statusline/ccstatusline-settings.json` | ccstatusline layout baseline that wires the ctx-breakdown and session-summary widgets in | installed by `setup.sh` to `~/.config/ccstatusline/settings.json` (paths patched per machine) |
+| `statusline/ccstatusline-settings.json` | ccstatusline layout baseline that wires the ctx-breakdown and session-summary widgets in | installed by `setup.sh` to `~/.config/ccstatusline/settings.json` (paths patched per machine); an existing file that doesn't parse or lacks the ctx widget is backed up to `settings.json.pre-dotclaude-<ts>` first |
 | `tools.json` | Standalone CLI tools (ccstatusline via bun) | consumed by `setup.sh` |
 | `docs/PLUGINS.md` | One-line description of each plugin | reference |
 | `docs/delegation.md` | Delegation hardening: design, verified facts, known gaps, install order, next stages | reference |

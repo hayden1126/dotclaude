@@ -170,6 +170,13 @@ class SessionSummary(Workspace):
         with open(out) as f:
             self.assertEqual(f.read().split(), ["-I", str(len(json.dumps(event).encode()))])
 
+    def test_stdin_too_deep_for_json_draws_nothing(self):
+        # The widget, statusline/session-summary.py: "[" * 100000 is RecursionError in json.
+        widget = os.path.join(REPO, "statusline", "session-summary.py")
+        p = subprocess.run(["python3", "-I", widget, "--row", "1"], input="[" * 100000,
+                           capture_output=True, text=True, timeout=20)
+        self.assertEqual((p.returncode, p.stdout, p.stderr), (0, "", ""))
+
 
 class ProjectFilesStayOut(Workspace):
     """A hook runs in the project's directory: a json.py there must not replace the stdlib's."""

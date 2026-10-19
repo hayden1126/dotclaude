@@ -101,7 +101,7 @@ def read_object(path, what):
         with open(path) as f:
             text = f.read()
         obj = json.loads(text) if text.strip() else {}
-    except (OSError, ValueError) as e:
+    except (OSError, ValueError, RecursionError) as e:   # json recurses on nesting
         sys.stderr.write(f"merge-settings: {what} {path} does not parse: {e}\n")
         return None
     if not isinstance(obj, dict):
