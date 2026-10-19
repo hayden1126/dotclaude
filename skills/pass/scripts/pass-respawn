@@ -8,7 +8,9 @@ a passing handoff.
 
 /pass runs it last (skills/pass/SKILL.md; PLAN.md "PR 3: /pass" has the design and the spike
 results it rests on). At call time it refuses unless $TMUX_PANE names a pane (exit 2, printing
-the line to do by hand) and `handoff-check -C <dir>` passes (exit 1, echoing its gaps). A
+the line to do by hand) and `handoff-check -C <dir>` passes (exit 1, echoing its gaps). It also
+refuses (exit 1) while a settings file or inline --settings it reads for the sandbox's writable
+dirs won't parse as a JSON object, or a left-out lane record may be this checkout's. A
 background session (its session file says kind `bg`: the daemon runs it, never a pane) refuses
 with exit 2 too, $TMUX_PANE or not, printing the line to do by hand and the way into a pane of
 its own: `claude stop <jobId>`, then `claude --resume <sessionId>` in its directory (live on

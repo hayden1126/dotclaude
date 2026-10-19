@@ -36,7 +36,8 @@ The contract every run gets, whatever the brief says:
   sub-agent spawned without a model stays on it too. An explicit spawn_agent(model=...)
   can still override that, so the preamble tells Codex to pin every spawn, and a post-run
   audit walks every descendant rollout and fails the run on any model outside sol, terra
-  and the run's own (so astra fails any run that didn't choose it).
+  and the run's own (so astra fails any run that didn't choose it), and on a session_meta
+  or turn_context line that won't parse (audit_unreadable), since it may hide either.
 - Sandbox: workspace-write rooted at --dir, network only with --network.
 - Limits: a systemd-run --user --scope memory cap (so an OOM kills Codex, not the WSL VM)
   and a hard timeout.

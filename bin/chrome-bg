@@ -26,7 +26,8 @@ on the primary monitor at the bottom of the z-order. Records of live runs sit in
 $XDG_STATE_HOME/dotclaude/chrome-bg/<id>.json. `stop` takes a run id or its browserURL, never a
 bare port (chrome-debug.ps1 serves 9222, maybe with your real profile). `--gc` (also run by
 each start and run) stops runs whose owner is gone or whose TTL ran out, kills run dirs with no
-record once they are 2 minutes old, and prunes logs older than 7 days.
+record once they are 2 minutes old (a run whose record is malformed is left alone), and prunes
+logs older than 7 days.
 """
 import argparse
 import base64
