@@ -941,17 +941,22 @@ def prune_watches():
                     os.remove(p)
 
 
-def all_watches():
-    """Every watch file that parses, oldest first."""
+def all_watches(unread=None):
+    """Every watch file that parses, oldest first. One that doesn't (torn, hand-edited, nested
+    past json's reach, no JSON object) is left out, and its path goes on `unread` when given."""
     out = []
     for p in glob.glob(os.path.join(watches_dir(), "*.json")):
         try:
             with open(p) as f:
                 w = json.load(f)
-        except (OSError, ValueError, RecursionError):   # json recurses on nesting
+        except FileNotFoundError:  # resolved and pruned since the glob
             continue
+        except (OSError, ValueError, RecursionError):   # json recurses on nesting
+            w = None
         if isinstance(w, dict):
             out.append(w)
+        elif unread is not None:
+            unread.append(p)
     return sorted(out, key=lambda w: str(w.get("created")))
 
 
@@ -1333,10 +1338,10 @@ def new_watch_id():
     return "w-" + time.strftime("%Y%m%dT%H%M%S") + "-" + secrets.token_hex(3)
 
 
-def codex_watch(run_id):
+def codex_watch(run_id, unread=None):
     """The unresolved watch on a codex run, or None. There is one at most: a second is refused
-    (Waiter.refuse_a_second_codex_watch)."""
-    return next((w for w in all_watches() if w.get("state") in UNRESOLVED
+    (Waiter.refuse_a_second_codex_watch). unread: as all_watches'."""
+    return next((w for w in all_watches(unread) if w.get("state") in UNRESOLVED
                  and (w.get("condition") or {}).get("codex") == run_id), None)
 
 
@@ -1383,13 +1388,20 @@ class Waiter:
     def refuse_a_second_codex_watch(self, new):
         """WaitRefused when any session already has an unresolved watch on new's codex run,
         since each watch's waiter could finalize it. Called under the watches lock, so two
-        waits started together can't both pass."""
+        waits started together can't both pass. A watch file that can't be read refuses too:
+        it may be that watch."""
         run = new["condition"].get("codex")
-        w = codex_watch(run) if run is not None else None
+        if run is None:
+            return
+        unread = []
+        w = codex_watch(run, unread)
         if w is not None:
             self.refuse_a_live_waiter(w)
             raise WaitRefused(f"watch {w.get('id')} already waits on {run}: "
                               f"delegation-ledger wait --resume {w.get('id')}")
+        if unread:
+            raise WaitRefused(f"watch file {unread[0]} can't be read, and it may already wait "
+                              f"on {run}: look at it, then fix or remove it")
 
     def refuse_unless_left_to_the_guard(self, w):
         """For a detached waiter: WaitRefused unless the watch is as the guard left it when it

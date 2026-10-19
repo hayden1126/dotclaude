@@ -1289,6 +1289,19 @@ class Codex(WaitEnv):
                          (USAGE, f"wait: watch {wid} already waits on r1: delegation-ledger "
                                  f"wait --resume {wid}\n"))
 
+    def test_a_watch_file_that_does_not_read_refuses_a_codex_watch(self):
+        # It may be an unresolved watch on the same run, so a second waiter is refused.
+        self.codex_row("r1", self.job().pid)
+        os.makedirs(self.watches, exist_ok=True)
+        bad = os.path.join(self.watches, "w-bad.json")
+        for junk in ("{", "[" * 100000):  # RecursionError in json, not ValueError
+            with open(bad, "w") as f:
+                f.write(junk)
+            again = self.run_("--codex", "r1")
+            self.assertEqual(again.returncode, USAGE)
+            self.assertIn(f"watch file {bad} can't be read", again.stderr)
+            self.assertNotIn("Traceback", again.stderr)
+
     def test_a_beat_that_fails_mid_finalize_still_waits_for_it(self):
         # The stub finalize holds until the test releases it, which it does only once the
         # failed heartbeat is in the error log, so the order doesn't depend on timing.
