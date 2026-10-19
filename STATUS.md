@@ -118,6 +118,15 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     rerun the menu-clip repro and the tmux suites. If it fixes the clip, install at a quiet
     moment (a server restart; claude-restore reopens the tabs) and drop the row-0 menu rule.
     Until then, 3.7c's default menus that dotclaude doesn't own still clip under a top bar.
+  - **`handoff?` never clears on a switched lane past 200 PRs** (bug report from capella-studio's
+    lead, session 5788b9fb, 2026-10-19; checked against the code). `pr_states` lists the newest
+    `PR_LIMIT` (200) PRs in one gh call; once that list is full, `merges_of`
+    (`skills/lanes/scripts/lane:884`) returns unknown for any lane that switched branches (or was
+    adopted, or predates the horizon), so the flag stays on and the hand-back gate can't pass.
+    Documented as a limit in `docs/lanes.md` ("What it can't tell"), but capella's lanes keys,
+    polish and blockfix all hit it; dotclaude reaches it near #200. Fix shape (the reporter's):
+    for just those lanes, one extra `gh pr list --head <branch> --state merged` per branch
+    instead of giving up. Lane-able (`lane`, `tests/lanes`, `docs/lanes.md`).
   - **An untitled versioned claude's tab reads `2.1.303`** (cosmetic, from lane tab-cmd,
     2026-10-19): `tmux/claude.conf:55-56` and `tmux/tmux-tab-bar:201` fall back to
     `pane_current_command` for a pane with no title.
