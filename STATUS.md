@@ -128,6 +128,14 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
   - **Two delegation readers ignore CLAUDE_CONFIG_DIR** (from lane json-depth's PR 2 plan pass,
     2026-10-19; predates it): `dc.claude_ancestor` and `dc.live_sessions` read a hard-coded
     `~/.claude/sessions`, while `dc.session_toplevel` uses `sessions_dir`.
+  - **Lanes tell the lead at workflow stages** (Hayden, 2026-10-19, in lane branch-reuse's
+    window: "when a PR is made, or similar stages"). The board already shows a draft (`lane ls`
+    reads gh); what it doesn't explain ahead of time are side effects: branch-reuse's install hold
+    and its probe lane reading "#129 merged". Branch-reuse's suggested rule: message the lead at
+    draft opened (with what's left before ready), at ready asked and at merged (exists), and
+    before any act whose effect reaches past the lane's worktree (an install from the lane,
+    making a lane, taking a cap slot). Home: `skills/lanes/SKILL.md` Lifecycle step 6 and "Who
+    asks Hayden what", which lane ask-check is editing, so a later lane.
   - **`handoff?` never clears on a switched lane past 200 PRs** (bug report from capella-studio's
     lead, session 5788b9fb, 2026-10-19; checked against the code). `pr_states` lists the newest
     `PR_LIMIT` (200) PRs in one gh call; once that list is full, `merges_of`
