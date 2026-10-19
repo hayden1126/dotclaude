@@ -447,6 +447,42 @@ admin dir in every command started after the tree exists, so a later sandboxed r
 it. The next trial removes the files it can, and names the sandbox-off
 `git worktree remove --force <path>` for the rest, never a blanket `git worktree prune`.
 
+## Bug reports from other repos (lane bug-route, 2026-10-18)
+
+On 2026-10-18 a session in `~/code/karaoke` had a bug report for dotclaude's tooling (lane
+pass-bg's) and no way to reach the lead. `lane addr` reads the repo from its cwd, so it refused
+outside dotclaude, and a ListAgents name is a tab title that changes most turns. The report got
+through only because Hayden said where to send it.
+
+Hayden picked option A. `lane addr --repo PATH` looks in the lanes repo whose main checkout
+holds PATH instead of the cwd's, from any dir. One line in the global CLAUDE.md sends a
+dotclaude bug met in any other repo to what `lane addr --repo ~/dotclaude lead` prints, and to
+Hayden when it refuses. The lead logs each report as a backlog line (SKILL.md, The lead, step
+9). A durable inbox lost: it is a new sandbox-off write path, and every report in it would
+reach the lead's context at session start as untrusted text. Revisit it only if a report gets
+lost.
+
+The flag raises one trust question. The excluded-command guard judges the call's cwd, never
+PATH, and a sandboxed session can write PATH's git config (one rooted at `$HOME` can write every
+repo's under it). So `handed_repo` runs its one git there, a `rev-parse` that reads no index,
+object or hook, the way `git_read` and `commits_past` run theirs (`lanelib.HANDED_ENV`):
+- no inherited `GIT_*`: a `GIT_DIR` would redirect it, and the sandbox's exported
+  `safe.directory=*` would switch off git's ownership check;
+- no system or global config, and no transport;
+- a 10 s cap, since a FIFO include holds git at its open.
+
+The git binary is PATH's, as for `commits_past` and every other git `lane` runs: the guard's
+rule 2 judged PATH for the call (`git_read` alone insists on a system git, since PATH's may be
+one its scan just found writable). Git's ownership check stays on, so a repo another user owns
+is refused. PATH must also sit in the main checkout of the repo git names: the nearest `.git`
+at or above it must be that repo's git dir itself, as the guard requires of a cwd. Else a
+planted `.git` file, `commondir` or `core.worktree` would send the report to another repo's
+lead, an enclosing lanes repo's included. A lane's worktree doesn't count either: its path
+comes from a `lane.json` that sandboxed Bash can write (lane ids still resolve through the main
+checkout). Past that, nothing needs a new check. A repo counts only when its config sits in the
+state dir, which only a bare `lane init` writes, and its lead comes from the lead record beside
+that config.
+
 ## Layout
 
 Claude Code treats every path under `.git/` as a "sensitive file", so Edit/Write there always
@@ -522,6 +558,9 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
   - A lane's path must be a real worktree of this repo, outside the main checkout and any other
     lane, before `open` starts `claude` there, the setup runs there, files are copied there, or
     `done` archives and removes it.
+  - `addr --repo`'s path is one the guard never judged, so its one git runs with
+    `lanelib.HANDED_ENV` and git's ownership check, and the path must sit in the main checkout
+    of the repo git names ("Bug reports from other repos").
   - `new` branches from the commit `ls-remote` reports for the base after a fetch, never from a
     local ref, and refuses when the fetch fails. Other git calls get refs in full
     (`refs/heads/<branch>`, `refs/remotes/origin/main`) after `--end-of-options`.
@@ -569,7 +608,9 @@ Run 2026-10-11 on Claude Code 2.1.296, with `claude -p` in a scratch repo with a
   a new pid, so callers resolve it before each send. It runs
   sandbox-off, since a sandboxed command has its own pid namespace and sees no other process.
   The id `lead` is reserved for new lanes. In the main checkout, `lead` picks the lead ("One
-  lead per main checkout").
+  lead per main checkout"). `--repo PATH` looks in the lanes repo whose main checkout holds
+  PATH instead of the cwd's, so a session in another repo can reach this one's lead ("Bug
+  reports from other repos").
 
 ## The pieces
 

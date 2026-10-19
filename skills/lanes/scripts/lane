@@ -8,7 +8,7 @@
   lane adopt <path> [--id SLUG]
   lane ls [--json] [--requests]
   lane open <id> [--focus] [--print] [--model M] [--effort E] [prompt]
-  lane addr <id> | lane addr lead
+  lane addr [--repo PATH] <id> | lane addr [--repo PATH] lead
   lane lead
   lane lock <name> [--wait SECS] -- <cmd...>
   lane trial [<id> ...] [--wait SECS] [--keep] --run CMD [--run CMD ...]
@@ -117,6 +117,7 @@ PR_LIMIT = 200  # PRs `ls` lists in its one gh call, newest first
 CLOCK_SLACK = 10  # secs: HAYPC's wall clock steps by about 5 s, and GitHub keeps another clock
 TEE_GRACE = 10.0  # secs run_child keeps reading a teed pipe once its child exits
 TRIAL_GIT_WAIT = 120  # secs each git call of `lane trial` may take
+HANDED_GIT_WAIT = 10  # secs the git `addr --repo` runs may take: a FIFO include would hold it
 TRIAL_IDENTITY = ("lane-trial", "lane-trial@localhost")  # the author of its dangling merges
 # The lock every trial holds, one name for all: a trial clears this lane's leftover trees under
 # it, so a second trial of the lane under another lock could remove the first one's live tree
@@ -163,6 +164,31 @@ def lanes_repo() -> Repo:
                 "or `root` unread), then delete it") if os.path.isfile(old) else ""
         raise LaneError(f"no lanes config at {repo.config_path}: run `lane init` in the main "
                         f"checkout{hint}")
+    return repo
+
+
+def handed_repo(path: str) -> Repo:
+    """The lanes repo whose main checkout holds path, a dir the caller named (`addr --repo`)
+    rather than its cwd. git there runs with lanelib.HANDED_ENV, since the excluded-command
+    guard never judged it. path must sit in the main checkout of the repo git names: the
+    nearest .git at or above it must be that repo's git dir itself, as the guard requires of a
+    cwd. Else a planted .git file, commondir or core.worktree could send git to another repo's
+    git dir (an enclosing lanes repo's too), and a lane's path comes from its lane.json, which
+    sandboxed Bash can write, so it can't vouch for one."""
+    real = os.path.realpath(os.path.expanduser(path))
+    if not os.path.isdir(real):
+        raise LaneError(shown(f"--repo {path}: no such directory"))
+    repo = lanelib.resolve(real, env=lanelib.HANDED_ENV, timeout=HANDED_GIT_WAIT)
+    if repo is None:
+        raise LaneError(shown(f"--repo {path}: git names no work tree there that it trusts (none, "
+                              f"one another user owns, or no answer within {HANDED_GIT_WAIT} s)"))
+    if not repo.has_lanes:
+        raise LaneError(shown(f"--repo {path}: {repo.main} is no lanes repo (no lanes config at "
+                              f"{repo.config_path})"))
+    if (top := lanelib.git_top(real)) is None or os.path.join(top, ".git") != repo.common_dir:
+        raise LaneError(shown(f"--repo {path}: git places it in the repo of {repo.main}, but the "
+                              "nearest .git above it is not that repo's git dir (name the main "
+                              "checkout)"))
     return repo
 
 
@@ -1483,26 +1509,32 @@ def holders(repo: Repo, path: str) -> list[dict]:
     return [lane for lane in repo.lanes(shared=True) if os.path.realpath(lane["path"]) == real]
 
 
-def load_lane(repo: Repo, lane_id: str) -> dict:
+def load_lane(repo: Repo, lane_id: str, of: str = "") -> dict:
     """The lane's checked record, refused while another record claims its path: one of the two
-    was planted, and `open` or `done` on either would act in the other's worktree."""
+    was planted, and `open` or `done` on either would act in the other's worktree. of names the
+    repo in each refusal (`addr --repo`)."""
     check_id(lane_id)
     try:
         lane = lanelib.read_record(repo, lane_id)
     except FileNotFoundError:
-        raise LaneError(f"no lane {lane_id}")
+        raise LaneError(f"no lane {lane_id}{of}")
+    except lanelib.Untrusted as e:
+        if of:  # seen from another repo, the record's relative path names none
+            raise LaneError(f"lane {lane_id}{of}: {e}")
+        raise
     if twins := [x["id"] for x in holders(repo, lane["path"]) if x["id"] != lane_id]:
-        raise LaneError(f"refusing lane {lane_id}: lane {', '.join(twins)} claims its path "
+        raise LaneError(f"refusing lane {lane_id}{of}: lane {', '.join(twins)} claims its path "
                         f"{lane['path']} too. Sandboxed Bash can write any lane.json: look at "
                         f"each under {repo.lanes_dir}/ and remove the one the CLI didn't write")
     return lane
 
 
-def usable_path(repo: Repo, lane: dict) -> str:
+def usable_path(repo: Repo, lane: dict, of: str = "") -> str:
     """The lane's path, once worktree_problem passes: every sandbox-off act in a lane (the cwd
-    of `open` and the setup, the copy's destination, `done`) goes through this."""
+    of `open` and the setup, the copy's destination, `done`) goes through this. of as
+    load_lane's."""
     if why := lanelib.worktree_problem(repo, lane["path"], repo.lanes(shared=True)):
-        raise LaneError(f"refusing lane {lane['id']}: {why}")
+        raise LaneError(f"refusing lane {lane['id']}{of}: {why}")
     return lane["path"]
 
 
@@ -1613,25 +1645,36 @@ def cmd_addr(args) -> None:
     never an address, since nothing reads its socket until `fg`; a refusal names its window
     instead. A lane's path comes from its lane.json, which it can, so load_lane and usable_path
     check it first. `lead` names the lead lanelib.lead_of picks among the main checkout's live
-    sessions, or refuses with the way to pick one (LEAD_HINT) and any stopped lead's window."""
+    sessions, or refuses with the way to pick one (LEAD_HINT) and any stopped lead's window.
+    --repo looks in the lanes repo whose main checkout holds that path instead of the cwd's
+    (handed_repo), so a session in another repo can reach this one's lead."""
+    handed = args.repo is not None
+    if handed and not args.repo:  # `--repo "$UNSET"`: never the cwd's repo
+        raise LaneError("--repo: an empty path names no repo")
+    flag = f"--repo {shlex.quote(os.path.expanduser(args.repo))} " if handed else ""
     if not lanelib.pids_visible():
-        raise LaneError(f"sandboxed: other sessions' processes are out of sight, so a live "
-                        f"session can't be told from a stale file. Run it as a bare `lane addr "
-                        f"{args.id}` (excludedCommands runs that outside the sandbox)")
-    repo = lanes_repo()
+        raise LaneError(shown(f"sandboxed: other sessions' processes are out of sight, so a live "
+                              f"session can't be told from a stale file. Run it as a bare `lane "
+                              f"addr {flag}{args.id}` (excludedCommands runs that outside the "
+                              "sandbox)"))
+    repo = handed_repo(args.repo) if handed else lanes_repo()
+    # Seen from another repo, an id alone is ambiguous, and a bare `lane open` or `lane done`
+    # would find the cwd's repo.
+    of, start = (shown(f" of {repo.main}"), shown(f" from {repo.main}")) if handed else ("", "")
     if args.id == "lead":
         # Agent worktrees sit under main, so they count as the lead's; a lane never does
         # (lanelib.worktree_problem refuses a lane path inside the main checkout).
-        where, hint, path = "the main checkout (the lead)", "", repo.main
+        where, hint, path = f"the main checkout{of} (the lead)", "", repo.main
         if os.path.lexists(repo.lane_dir("lead")):  # a lane from before `lead` was reserved
             raise LaneError("ambiguous: a lane is named lead too. `lane addr lead` means the main "
-                            "checkout; rename that lane (`lane done lead`, then a new id)")
+                            f"checkout; rename that lane (`lane done lead`{start}, then a new id)")
     else:
-        lane = load_lane(repo, args.id)
+        lane = load_lane(repo, args.id, of)
         if not lanelib.is_live(lane):
-            raise LaneError(f"lane {args.id} is stale: its worktree {lane['path']} is gone")
-        path = usable_path(repo, lane)
-        where, hint = f"lane {args.id}", f": `lane open {args.id}` starts one"
+            raise LaneError(shown(f"lane {args.id}{of} is stale: its worktree {lane['path']} is "
+                                  "gone"))
+        path = usable_path(repo, lane, of)
+        where, hint = f"lane {args.id}{of}", f": `lane open {args.id}`{start} starts one"
     pick, note, stopped = None, None, []
     if args.id == "lead":
         found = lanelib.main_sessions(repo)
@@ -3528,6 +3571,10 @@ def parser() -> argparse.ArgumentParser:
     p = sub.add_parser("addr", help="the messaging address (uds:<socket>) of a lane's live "
                                     "session, or the lead's; resolve it before each send")
     p.add_argument("id", help="a lane id, or `lead`")
+    p.add_argument("--repo", metavar="PATH",
+                   help="look in the lanes repo whose main checkout holds PATH, not the cwd's (a "
+                        "session in another repo reaching this one's lead: `lane addr --repo "
+                        "~/dotclaude lead`)")
     p = sub.add_parser("lead", help="make the session that runs this the lead, the one `lane addr "
                                     "lead` names (a bare init, new, adopt, open or done does too)")
     p.add_argument("--expect-sid", metavar="SID",

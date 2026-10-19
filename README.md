@@ -668,6 +668,9 @@ and status single-writer:
   to run a bare `lane init`, `new`, `adopt`, `open` (not `--print`) or `done` that succeeds,
   or `lane lead` to take it on
   purpose (`! lane lead` at its prompt). `lane ls` names both, with their windows.
+  `--repo PATH` looks in the lanes repo whose main checkout holds PATH instead of the cwd's,
+  so a session in any other repo sends a dotclaude bug report to the address
+  `lane addr --repo ~/dotclaude lead` prints.
 - `lane lock gate -- npm run e2e` runs a shared gate under a named lock, so a second lane's run
   waits instead of colliding.
 - `lane trial --run "<suite>" ...`, before a lane asks for ready, merges origin/main and every

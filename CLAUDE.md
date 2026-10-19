@@ -30,6 +30,7 @@
 - A wait that may outlast 30 minutes goes through `delegation-ledger wait` (run_in_background, timeout 7200000): Bash background commands stop at 30 minutes by default and 2 hours at most, Monitor at 30.
 - Always give yourself a runnable verification target (tests, build, lint, screenshot). Show evidence, not assertions. A job's state comes from its own finish marker (the field or log line its script checks), never from timestamps or its likeness to an earlier run.
 - If I have corrected you twice on the same thing, the context is polluted: stop, reload from the durable files, and start fresh.
+- A bug in dotclaude's own tooling (hooks, skills, `lane`, `pass`, the status line) met in a session outside dotclaude: SendMessage it, with your repo, session id and the failing command, to what a bare `lane addr --repo ~/dotclaude lead` prints, run just before the send. When that refuses, tell me instead.
 
 ## Memory
 - Save genuinely reusable facts (my preferences, project state, decisions) at a moderate threshold. High signal over volume. No duplicates.
