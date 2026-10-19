@@ -462,6 +462,59 @@ class Lane(Check):
         self.finish("\nBranch is unpushed: push waits for Hayden.\n")
         self.assertNotIn("unpushed commit", self.check(cwd=self.path)[1])
 
+    def test_unpushed_counts_the_branch_checked_out_not_lane_json_s(self):
+        # A switch for a follow-up PR leaves lane.json's branch behind.
+        self.git("switch", "-q", "-c", "chart-more", cwd=self.path)
+        self.commit("chart.txt", "axis\n", cwd=self.path)
+        self.finish()
+        self.assertIn("branch chart-more has 1 unpushed commit", self.check(cwd=self.path)[1])
+
+    def test_an_old_pushed_copy_of_lane_json_s_branch_counts_nothing(self):
+        # lane.json's name was an old PR's head: its pushed copy is unrelated to the lane's work,
+        # so measured against it the fresh branch looked hundreds of commits ahead.
+        tree = self.git("rev-parse", "HEAD^{tree}").strip()
+        old = self.git("commit-tree", tree, "-m", "an old PR's head").strip()
+        self.git("update-ref", "refs/remotes/origin/chart-fix", old)
+        self.git("switch", "-q", "-c", "chart-more", cwd=self.path)
+        self.finish()
+        self.assertNotIn("unpushed commit", self.check(cwd=self.path)[1])
+
+    def test_an_unpruned_copy_of_the_checked_out_branch_counts_nothing(self):
+        # `lane new --reuse-branch` on a merged PR's old head: fetch never prunes its pushed
+        # copy, which sits behind base commits the lane's branch has.
+        old = self.git("rev-parse", "HEAD").strip()
+        self.commit("later.txt", "on main\n")
+        self.git("push", "-q", "origin", "main")
+        self.git("fetch", "-q", "origin")
+        self.lane("new", "reused", "--branch", "fix/old", "--reuse-branch")
+        self.git("update-ref", "refs/remotes/origin/fix/old", old)
+        path = self.lane_path("reused")
+        self.commit("chart.txt", "axis\n", cwd=path)
+        out = self.check(cwd=path)[1]
+        self.assertIn("branch fix/old has 1 unpushed commit", out)
+        self.git("push", "-q", "origin", "fix/old", cwd=path)  # pushed under its own name
+        self.assertNotIn("unpushed commit", self.check(cwd=path)[1])
+
+    def test_a_detached_head_counts_its_own_commits(self):
+        self.git("switch", "-q", "--detach", cwd=self.path)
+        self.commit("chart.txt", "axis\n", cwd=self.path)
+        self.finish()
+        self.assertIn("detached HEAD has 1 unpushed commit", self.check(cwd=self.path)[1])
+        # Pushed under another name, it is not unpushed.
+        self.git("push", "-q", "origin", "HEAD:refs/heads/chart-elsewhere", cwd=self.path)
+        self.git("fetch", "-q", "origin")
+        self.assertNotIn("unpushed commit", self.check(cwd=self.path)[1])
+
+    def test_a_planted_head_name_falls_back_to_lane_json_s_branch(self):
+        # The admin dir is sandbox-writable: a name valid_branch refuses is never used or shown.
+        self.commit("chart.txt", "axis\n", cwd=self.path)
+        admin = self.git("rev-parse", "--absolute-git-dir", cwd=self.path).strip()
+        self.write(os.path.join(admin, "HEAD"), "ref: refs/heads/-bad`name\n")
+        self.finish()
+        out = self.check(cwd=self.path)[1]
+        self.assertIn("branch chart-fix has 1 unpushed commit", out)
+        self.assertNotIn("-bad", out)
+
     def test_a_commit_after_the_record_fails(self):
         self.finish()
         past = time.time() - 3600  # wall clock

@@ -3,8 +3,8 @@
 
   lane init [--root DIR] [--setup CMD] [--ports A-B] [--cap N] [--locks A,B]
             [--autopass | --no-autopass] [--model M] [--effort E]
-  lane new <id> [--branch B] [--claim N ...] [--goal T] [--files T] [--overlaps T]
-               [--done-when T] [--constraints T]
+  lane new <id> [--branch B] [--reuse-branch] [--claim N ...] [--goal T] [--files T]
+               [--overlaps T] [--done-when T] [--constraints T]
   lane adopt <path> [--id SLUG]
   lane ls [--json] [--requests]
   lane open <id> [--focus] [--print] [--model M] [--effort E] [prompt]
@@ -748,7 +748,21 @@ def cmd_new(args) -> None:
                         "starting with a letter or digit")
     path = os.path.join(cfg["root"], args.id)
     base = cfg.get("base", "origin/main")
+    check_unregistered(repo, args.id)  # again under the lock; first so a rerun says so, not gh
     base_sha = fetched_base(repo, cfg)
+    if not args.reuse_branch:
+        # `ls` labels a lane by its branch's newest PR, so on a name an old PR used it shows that
+        # PR, and a merged one reads as this lane's merge. Asked after the fetch proved the
+        # network up; a gh that still can't answer refuses too, as the fetch does.
+        rows, why = branch_prs(repo, branch, "all")
+        if rows is None:
+            raise LaneError(f"can't ask GitHub which PRs used branch {branch} ({why}): fix gh, "
+                            "or pass --reuse-branch to skip the check")
+        if rows:
+            prs = ", ".join(f"#{r.get('number')} ({str(r.get('state')).lower()})" for r in rows)
+            raise LaneError(f"branch {branch} was the head of {prs}: `lane ls` would show that "
+                            "PR as this lane's. Name another with --branch, or pass "
+                            "--reuse-branch")
     with lock(repo):
         check_unregistered(repo, args.id)
         live = list(filter(lanelib.is_live, held_lanes(repo)))
@@ -893,6 +907,29 @@ def pr_states(repo: Repo) -> PRs | None:
         stamps = [lanelib.parse_iso(r.get("createdAt")) for r in rows]
         horizon = float("inf") if None in stamps else min(stamps)
     return PRs(label, merges, horizon)
+
+
+def branch_prs(repo: Repo, branch: str, state: str) -> tuple[list[dict] | None, str]:
+    """(rows, why): the PRs whose head branch is named `branch`, in gh's `state` (merged, all,
+    ...), each with number, state and headRefOid. rows is None when gh can't answer, and why
+    then says what went wrong: gh's last stderr line, or what is wrong with its reply."""
+    try:
+        p = subprocess.run(["gh", "pr", "list", "--head", branch, "--state", state, "--json",
+                            "number,state,headRefOid"], cwd=repo.toplevel, capture_output=True,
+                           text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError, ValueError) as e:  # ValueError: not UTF-8
+        return None, str(e)[:200]
+    if p.returncode != 0:
+        return None, (p.stderr.strip().splitlines() or [f"gh exit {p.returncode}"])[-1][:200]
+    if not p.stdout.strip():  # with --json, gh prints [] for no PR
+        return None, "gh's reply is empty"
+    try:
+        rows = json.loads(p.stdout)
+    except (ValueError, RecursionError):  # json recurses on nesting
+        return None, "gh's reply is not JSON"
+    if not (isinstance(rows, list) and all(isinstance(r, dict) for r in rows)):
+        return None, "gh's reply is not a list of PRs"
+    return rows, ""
 
 
 def merges_of(prs: PRs | None, lane: dict, guess: str) -> list[float | None] | None:
@@ -3143,16 +3180,10 @@ def closable(repo: Repo, lane: dict, fetched: bool, branch: str) -> tuple[str | 
     no_work = count.returncode == 0 and count.stdout.strip() == "0"
     if no_work and not lane.get("adopted"):
         return None, "empty", f"no commits past its base {fork[:12]}"
-    try:
-        p = subprocess.run(["gh", "pr", "list", "--head", branch, "--state", "merged", "--json",
-                            "number,headRefOid"], cwd=repo.toplevel, capture_output=True,
-                           text=True, timeout=30)
-        rows = json.loads(p.stdout or "[]") if p.returncode == 0 else []
-        for row in rows:
-            if row.get("headRefOid") == tip:
-                return f"PR #{row.get('number')} merged", "merged", ""
-    except (OSError, subprocess.SubprocessError, ValueError, RecursionError):
-        pass
+    rows, _ = branch_prs(repo, branch, "merged")
+    for row in rows or []:  # gh can't answer: no PR proves the merge, git still may
+        if row.get("headRefOid") == tip:
+            return f"PR #{row.get('number')} merged", "merged", ""
     in_base = git(["merge-base", "--is-ancestor", "--end-of-options", tip, ref],
                   repo.toplevel).returncode == 0
     if in_base and no_work:
@@ -3609,6 +3640,8 @@ def parser() -> argparse.ArgumentParser:
     p = sub.add_parser("new", help="make a lane: worktree, branch, record, port, setup")
     p.add_argument("id")
     p.add_argument("--branch", help="branch name (default: the id)")
+    p.add_argument("--reuse-branch", action="store_true",
+                   help="make it even though a PR used the branch name, or gh can't say")
     p.add_argument("--claim", action="append", default=[], metavar="REQ")
     p.add_argument("--goal")
     p.add_argument("--files", help="files the lane expects to touch")

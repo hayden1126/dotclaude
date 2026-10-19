@@ -41,6 +41,7 @@ import datetime
 import os
 import re
 import stat
+import subprocess
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "..", "lanes",
@@ -128,16 +129,38 @@ def head_carries(repo: lanelib.Repo, path: str) -> bool:
     return rel in p.stdout.splitlines()
 
 
-def unpushed(repo: lanelib.Repo, lane: dict) -> int:
-    """Commits on the lane branch not on origin (its pushed copy, else the base)."""
-    branch = lane["branch"]
-    remote = f"refs/remotes/origin/{branch}"
-    has_remote = git(["rev-parse", "--verify", "--quiet", remote], repo.toplevel).returncode == 0
+def checked_out(repo: lanelib.Repo, lane: dict) -> tuple[str, str]:
+    """(label, branch) the lane's checkout has checked out, branch '' for a detached HEAD:
+    lane.json's branch goes stale once the lane runs `git switch` for a follow-up PR (the same
+    read as `lane_head` in the lane CLI and `checked_out` in hooks/lane_identity.py). The admin
+    dir is sandbox-writable, so a HEAD that can't be read, or names a branch valid_branch
+    refuses, gives lane.json's branch."""
+    fallback = f"branch {lane['branch']}", lane["branch"]
+    try:
+        p = git(["symbolic-ref", "-q", "HEAD"], repo.toplevel)
+    except (OSError, ValueError, subprocess.SubprocessError):  # ValueError: not UTF-8
+        return fallback
+    if p.returncode == 1:
+        return "detached HEAD", ""
+    ref = p.stdout.strip()
+    name = ref.removeprefix("refs/heads/")
+    if p.returncode != 0 or name == ref or not lanelib.valid_branch(name):
+        return fallback
+    return f"branch {name}", name
+
+
+def unpushed(repo: lanelib.Repo, lane: dict) -> tuple[str, int]:
+    """(label, count): commits on what the lane has checked out (checked_out) that neither the
+    base nor any of origin's refs hold. Not against one chosen ref: a pushed copy of the same
+    name can be an old PR's head that fetch never pruned, and measured against it a branch
+    reused with `lane new --reuse-branch` counts every base commit since that PR."""
+    label, branch = checked_out(repo, lane)
     base = repo.config().get("base", "origin/main")
-    base = remote if has_remote else base if base.startswith("refs/") else f"refs/remotes/{base}"
-    p = git(["rev-list", "--count", "--end-of-options", f"{base}..refs/heads/{branch}"],
-            repo.toplevel)
-    return int(p.stdout.strip()) if p.returncode == 0 else 0
+    base = base if base.startswith("refs/") else f"refs/remotes/{base}"
+    tip = f"refs/heads/{branch}" if branch else "HEAD"
+    p = git(["rev-list", "--count", "--not", "--remotes=origin", "--not", "--end-of-options",
+             tip, f"^{base}"], repo.toplevel)
+    return label, int(p.stdout.strip()) if p.returncode == 0 else 0
 
 
 def check(cwd: str, closing: bool = False,
@@ -216,9 +239,10 @@ def check(cwd: str, closing: bool = False,
                    if not re.search(re.escape(c) + r"(?![\w-])", text)]
         if missing:
             fails.append(f"claims not named in the record: {', '.join(missing)}")
-        if (n := unpushed(repo, lane)) and not re.search(r"unpushed|not pushed", text, re.I):
-            warns.append(f"branch {lane['branch']} has {n} unpushed commit(s): note it in the "
-                         "record (pushing needs Hayden)")
+        label, n = unpushed(repo, lane)
+        if n and not re.search(r"unpushed|not pushed", text, re.I):
+            warns.append(f"{label} has {n} unpushed commit(s): note it in the record (pushing "
+                         "needs Hayden)")
     return header, fails, warns
 
 

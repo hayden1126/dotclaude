@@ -74,7 +74,7 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
 - **dotclaude runs in lanes (since 2026-10-12).** The lead is the main checkout. Lanes live in
   `~/dotclaude-lanes/`, and each lane's state is in its record (`lane ls`, `lane asks`), not
   here. The config caps live lanes at 3, with locks `install` and `suite`.
-  - Merged through lanes, installed from main and closed: #90 to #125 (2026-10-12 to
+  - Merged through lanes, installed from main and closed: #90 to #129 (2026-10-12 to
     2026-10-19), with lead PR #117 among them (its check passed: session 3a153a27's auto-pass
     loaded the handoff skill before pass-respawn's `handoff-check`). Last: bug-route, #125
     (`lane addr --repo <path> lead`, and a CLAUDE.md line sending a dotclaude bug met in another
@@ -87,30 +87,29 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     [[dotclaude-tab-bar]], remote-paste's live tests in [[dotclaude-remote-paste]]. #115 left the
     tab glyph's prompt at v4: an ask a reply only announces for later stays a documented known
     miss (`hooks/wants_input.py`'s docstring), since its one prompt round flipped 10 verdicts.
-  - **Live lanes** (opened 2026-10-19 from origin/main 6522605; briefs in each record). Merged,
-    installed from main and closed 2026-10-19: chrome-ttl as #126 (chrome-bg's TTL on a
-    monotonic deadline, plus coding-practices rule 8) and tab-cmd as #127 (a claude run under its
+  - **Live lanes: branch-reuse and ask-check** (opened 2026-10-19, Next item 0). The three lanes opened earlier on 2026-10-19
+    merged, were installed from main and closed: chrome-ttl as #126 (chrome-bg's TTL on a
+    monotonic deadline, plus coding-practices rule 8), tab-cmd as #127 (a claude run under its
     versioned path counts as claude in the tab scripts: Hayden's "trigger + confirm" design, the
-    command looks like N.N.N and the pane tty's foreground group runs from `/claude/versions/`).
-    json-depth's PR 1 merged as #128 and was installed from main, 2026-10-19: deep JSON reads as
-    malformed wherever that is equal or stricter. The lane stays open (`Keep open:`) for PR 2:
-    fail closed at the trust sites, plus chrome-bg, on `fix/json-depth-fail-closed` from main (Hayden's picks are
-    in its record's Decisions). Merge order: 1 **json-depth** PR 2 (carries the lead's notes).
-  - The parked json-depth sweep is on `fix/json-depth-sweep`, a local branch never pushed: lane
-    json-depth's reference only. Ask Hayden before deleting it once that lane merges.
+    command looks like N.N.N and the pane tty's foreground group runs from `/claude/versions/`),
+    json-depth as #128 (deep JSON reads as malformed wherever that is equal or stricter) and #129
+    (malformed JSON fails closed at the trust sites, plus chrome-bg; Hayden's per-site picks are
+    in its closed record's Decisions). `fix/json-depth-sweep` is deleted (Hayden's ok).
   - `lane new` with `|`, `<`, `>` or `;` inside its quoted `--goal` runs sandboxed and fails
     ("Read-only file system"), leaving a stray branch. The matcher likely reads them as compound
     syntax (inferred). Keep briefs free of them.
   - Once pushed, a lane merges `origin/main` into its branch, since force pushes are denied.
 
   Backlog:
-  - **Lane ask quality** (logged 2026-10-19, Hayden: "in a next session we investigate, do a
-    past transcript search, and plan for fixes"). Lane json-depth's four question rounds: claims
-    asked before they were checked (two wrong), another live lane's file proposed without saying
-    so, scope grown past the brief on its own recommendations, a skipped question re-split
-    silently, jargon, decisions kept only in the plan-mode file. Plus the lead's own: `lane new`
-    took a branch name merged #94 had used. Log, evidence and the search plan:
-    `~/scratch/lane-ask-quality/MISTAKES.md` (private: it quotes the transcript).
+  - **Lane ask quality: investigated, Hayden picked the fixes** (2026-10-19, session ee8a43bd).
+    A search of 1,472 asks found the problem in every kind of session, not only lanes, roughly
+    doubled in plan mode (agents' claims reach the ask unchecked). The rules were already in
+    context and were ignored; a checklist sent at ask time fixed json-depth's later rounds.
+    Hayden's picks: a PreToolUse hook on AskUserQuestion denies only risky asks, with a
+    checklist in the reason (probe the same-turn resend first); plan mode at `lane open` stays;
+    `lane new` refuses a branch name with any PR, with an override; two parallel lanes,
+    ask-check and branch-reuse. Causes and picks: `~/scratch/lane-ask-quality/MISTAKES.md`;
+    rates and precision: `SEARCH.md` beside it (both private: they quote transcripts).
   - G8 open probes (a) and (b) (Hayden's pick, 2026-10-14): Hayden runs
     `~/scratch/sandbox-audit/g8-probe/run.py` by hand with the sandbox off, because the auto-mode
     classifier refused the run. Results go into the private findings file's G8 section.
@@ -126,12 +125,17 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
   - **setup.sh's ccstatusline write crashes on an odd settings shape** (from lane json-depth's PR 1
     writer, 2026-10-19; predates it): the heredoc's `has_ctx_widget` assumes `lines` is a list of
     lists, and a directory at the destination crashes it too.
-  - **handoff-check's unpushed count ignores a branch switch** (from lane json-depth,
-    2026-10-19; checked against the code). `unpushed()` (`skills/handoff/scripts/handoff-check:132`)
-    reads lane.json's `branch`, while `ls`, `whoami` and `done` follow the checked-out branch.
-    After json-depth's `git switch -c fix/json-depth-rebuild` it counted the old `fix/json-depth`
-    against #94's stale `origin/fix/json-depth` and warned "431 unpushed commit(s)". Warning only.
-    Fix: count the checked-out branch, as the rest of the lane tooling does.
+  - **Two delegation readers ignore CLAUDE_CONFIG_DIR** (from lane json-depth's PR 2 plan pass,
+    2026-10-19; predates it): `dc.claude_ancestor` and `dc.live_sessions` read a hard-coded
+    `~/.claude/sessions`, while `dc.session_toplevel` uses `sessions_dir`.
+  - **Lanes tell the lead at workflow stages** (Hayden, 2026-10-19, in lane branch-reuse's
+    window: "when a PR is made, or similar stages"). The board already shows a draft (`lane ls`
+    reads gh); what it doesn't explain ahead of time are side effects: branch-reuse's install hold
+    and its probe lane reading "#129 merged". Branch-reuse's suggested rule: message the lead at
+    draft opened (with what's left before ready), at ready asked and at merged (exists), and
+    before any act whose effect reaches past the lane's worktree (an install from the lane,
+    making a lane, taking a cap slot). Home: `skills/lanes/SKILL.md` Lifecycle step 6 and "Who
+    asks Hayden what", which lane ask-check is editing, so a later lane.
   - **`handoff?` never clears on a switched lane past 200 PRs** (bug report from capella-studio's
     lead, session 5788b9fb, 2026-10-19; checked against the code). `pr_states` lists the newest
     `PR_LIMIT` (200) PRs in one gh call; once that list is full, `merges_of`
@@ -226,24 +230,20 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
 
 ## Notes for next session
 - **Next (lead, main checkout):**
-  0. Lane ask quality (Backlog): read `~/scratch/lane-ask-quality/MISTAKES.md`, investigate the
-     causes, run the past transcript search it describes, then plan fixes and show Hayden the
-     options before building (likely a lead PR or its own lane; keep off live lanes' files).
-  1. Watch the lanes (json-depth: In flight). First check `lane ls` shows
-     each with a live session, not `orphan`. On each "merged #N", run the post-merge chain (The lead, step 7; never
-     amend or rebase the lead branch). Check `lane ls` first: a merge Hayden made on GitHub and
-     mentioned to no session sends no message. If a lane later in order is ready first, swap
-     the order in STATUS and tell both lanes (the one next in order carries the lead's notes).
-     Hold `lane done` while another lane holds the `suite` lock (its `branch -d` rewrites
-     `.git/config`). A bug report from a session in another repo arrives by SendMessage
-     (CLAUDE.md, #125): check it against the code and log it in the backlog. No chat about a
-     lane's own asks; speak on cross-lane orders, decisions raised with the lead, failed checks
-     and lead-only actions.
+  0. Lane ask quality (Backlog, picks made): lanes branch-reuse (`fix/lane-branch-reuse`, merge
+     order 1, carries the lead branch) and ask-check (`feat/ask-check`, order 2) opened
+     2026-10-19; their state is in their records (`lane ls`). They overlap only if branch-reuse
+     touches `skills/lanes/SKILL.md`.
+  1. While item 0's lanes run, Hayden picks any further work from the backlog. On a bug report from another repo's session (CLAUDE.md, #125): check it
+     against the code and log it in the backlog. When lanes run again, follow The lead in
+     `skills/lanes/SKILL.md` (step 7 is the post-merge chain; never amend or rebase the lead
+     branch). `lane new` refuses a branch name any PR used, and refuses when gh can't answer
+     (lane branch-reuse); `--reuse-branch` overrides.
   - The lead's commits: `git log --first-parent main..chore/after-pr4` (STATUS only, plus merges
-    of main). Session 9dd86d28 (2026-10-18 to 2026-10-19) started at ee36b32 and ended at this handoff: it ran
-    the chain for #120 to #125 (`ls .git/lanes/_closed/` shows each close), checked #117 on the
-    previous lead's pass, opened tab-pin, cross-lane, pass-bg, launch-path and bug-route, and logged the karaoke
-    session's report, Hayden's bug-report pick and pass-bg's Not mine items.
+    of main). Session c6847b46 (2026-10-19) started at 7aad9eb and ended at this handoff: it
+    opened chrome-ttl, tab-cmd and json-depth, ran the chain for #126 to #129 and closed all three,
+    logged json-depth's ask mistakes for item 0, capella's `handoff?` report, the AWS article and
+    the lanes' Not mine items.
   - Open with Hayden, nothing for the lead to do: the capella-studio lead asked how a new lane
     should clear the excluded-command guard, and the lead recommended (2026-10-17) pointing
     capella's `core.hooksPath` at the main checkout's protected `.githooks` (absolute path)
