@@ -11,8 +11,8 @@ points HOME and XDG_STATE_HOME into a temp dir). Fakes stand in for everything l
     read), then reads it for real. When the status first turns idle (or shell), the wrapper writes
     the stop record stop-ring.sh would (self.stop_waits; None writes none). A callable in the
     script runs first and gives the status (Base.then: it appends to the transcript once).
-  - /proc: proc_start and foreground are replaced, and a fake process table stands in for
-    proc_table.
+  - /proc: proc_start, foreground and stopped_jobs are replaced for the session's claude (Units
+    tests the real ones on a fake /proc), and a fake process table stands in for proc_table.
   - the transcript: a file under the fake $HOME/.claude/projects, which tests append to.
 handoff-check runs for real as a subprocess. Nothing reaches the live tmux server or the real
 ~/.claude."""
@@ -2482,8 +2482,16 @@ class Units(unittest.TestCase):
     def test_proc_table_reads_comm_and_ppid(self):
         self.stat((("123", "123 (odd (name) x) S 45 1 1 0"), ("7", "7 (claude) S 1 7 7"),
                    ("self", "1 (x) S 0"), ("99", "garbage")))
-        self.assertEqual(self.mod.proc_table(self.dir),
-                         {123: ("odd (name) x", 45), 7: ("claude", 1)})
+        self.raw_stat("8", b"8 (caf\xc3) S 7 8 8 0")  # a name the kernel cut mid-character
+        self.assertEqual(self.mod.proc_table(self.dir), {123: ("odd (name) x", 45),
+                                                         7: ("claude", 1),
+                                                         8: ("caf" + chr(0xFFFD), 7)})
+
+    def raw_stat(self, pid, data):
+        """A stat file holding data as bytes: /proc prints a process's name unescaped."""
+        os.makedirs(os.path.join(self.dir, pid))
+        with open(os.path.join(self.dir, pid, "stat"), "wb") as f:
+            f.write(data)
 
     def test_proc_start_reads_field_22_and_a_zombie_has_none(self):
         tail = " ".join(str(n) for n in range(4, 22))  # fields 4..21, then starttime
@@ -2534,6 +2542,10 @@ class Units(unittest.TestCase):
         self.stat((row(40, "claude", "S", 40, 0), row(41, "vim", "T", 41, 0)))  # no terminal
         self.assertEqual(self.mod.stopped_jobs(40, self.dir), [])
         self.assertEqual(self.mod.stopped_jobs(99, self.dir), [])  # gone
+        # A name that isn't UTF-8 (the kernel cuts one at 15 bytes, mid-character if need be)
+        # still lists the job.
+        self.raw_stat("38", f"38 (vim \xe9) T 24 38 24 34823 30 {tail} 5 0 0".encode("latin-1"))
+        self.assertIn((38, "vim " + chr(0xFFFD)), self.mod.stopped_jobs(30, self.dir))
 
     def test_the_transcript_path_follows_the_session(self):
         with mock.patch.dict(os.environ, {"HOME": self.dir}):

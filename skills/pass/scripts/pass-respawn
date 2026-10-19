@@ -425,9 +425,9 @@ def proc_table(proc: str = "/proc") -> dict[int, tuple[str, int]]:
     for name in os.listdir(proc):
         if not name.isdigit():
             continue
-        try:
-            with open(os.path.join(proc, name, "stat")) as f:
-                stat = f.read()
+        try:  # bytes: a comm is unescaped and may be cut mid-character, so it may not be UTF-8
+            with open(os.path.join(proc, name, "stat"), "rb") as f:
+                stat = f.read().decode(errors="replace")
         except OSError:
             continue
         left, right = stat.find("("), stat.rfind(")")  # comm may hold spaces and parens
@@ -470,9 +470,9 @@ def stopped_jobs(pid: int, proc: str = "/proc") -> list[tuple[int, str]]:
     Ctrl+Z'd vim with unsaved edits or a Ctrl+Z'd claude. A background job that runs dies too,
     but a shell keeps helpers running (zsh plugins' workers), so only a stopped one counts. []
     when pid has no terminal or its stat can't be read."""
-    def stat(name):
-        with open(os.path.join(proc, str(name), "stat")) as f:
-            head, _, rest = f.read().rpartition(")")
+    def stat(name):  # bytes: the name is unescaped, and the kernel may cut it mid-character
+        with open(os.path.join(proc, str(name), "stat"), "rb") as f:
+            head, _, rest = f.read().decode(errors="replace").rpartition(")")
         return head.partition("(")[2], rest.split()
 
     try:
