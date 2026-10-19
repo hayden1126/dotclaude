@@ -232,8 +232,7 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
      order 1, carries the lead branch) and ask-check (`feat/ask-check`, order 2) opened
      2026-10-19; their state is in their records (`lane ls`). They overlap only if branch-reuse
      touches `skills/lanes/SKILL.md`.
-  1. No live lanes. Hayden picks the next work from the backlog (item 0 first, unless he says
-     otherwise). On a bug report from another repo's session (CLAUDE.md, #125): check it
+  1. While item 0's lanes run, Hayden picks any further work from the backlog. On a bug report from another repo's session (CLAUDE.md, #125): check it
      against the code and log it in the backlog. When lanes run again, follow The lead in
      `skills/lanes/SKILL.md` (step 7 is the post-merge chain; never amend or rebase the lead
      branch), and check a new lane's branch name against `gh pr list --state all --head <b>`
