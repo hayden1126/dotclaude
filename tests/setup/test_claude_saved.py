@@ -18,6 +18,8 @@ import tempfile
 import time
 import unittest
 
+import fg_pane
+
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 SCRIPT = os.path.join(REPO, "tmux", "claude-saved")
 
@@ -293,6 +295,83 @@ class Saved(unittest.TestCase):
         self.env["STUB_PANE_PID"] = str(DEAD)
         self.run_saved("star", "%4", CLIENT)
         self.assertEqual(list(self.saved()), [sid(2)])
+
+    # --- claude run by its versioned path ---------------------------------------------------
+    # tmux names the pane `2.1.303` (argv[0]'s basename). The registry fallback takes it for
+    # claude only when the pane tty's foreground process runs from a claude/versions directory:
+    # a crashed claude's entry must not get a program that merely carries a version name killed.
+
+    def versioned_pane(self, home="claude/versions"):
+        """Make the pane %4 (its process: the returned pid) run a foreground job as
+        <tmp>/<home>/2.1.303, which tmux names `2.1.303`."""
+        argv0 = fg_pane.link(self.tmp, *home.split("/"), "2.1.303")
+        pane_pid, _ = fg_pane.spawn(self, argv0)
+        self.env.update(STUB_PANE_PID=str(pane_pid), STUB_COMMAND="2.1.303")
+        return pane_pid
+
+    def test_the_registry_counts_for_a_versioned_claude(self):
+        self.registered(1, "%4")
+        self.transcript(1)
+        self.versioned_pane()
+        self.run_saved("star", "%4", CLIENT)
+        self.assertTrue(self.saved()[sid(1)]["starred"])
+        self.assertTrue(self.star_set())
+        self.run_saved("sync", "%4")
+        self.assertFalse(self.star_unset())
+        self.run_saved("shelve", "%4", CLIENT)
+        self.assertEqual(self.calls("tmux", "kill-window"), [["tmux", "kill-window", "-t", "%4"]])
+
+    def test_the_registry_never_counts_for_a_version_name_from_elsewhere(self):
+        self.registered(1, "%4")
+        self.transcript(1)
+        self.versioned_pane(home="other")
+        for action in ("star", "shelve"):
+            with self.subTest(action=action):
+                self.run_saved(action, "%4", CLIENT)
+                self.assertEqual(self.saved(), {})
+                self.assertIn("no Claude session", self.messages()[-1])
+        self.assertEqual(self.calls("tmux", "kill-window"), [])
+
+    def test_a_versioned_attach_client_wins_over_a_crashed_claudes_entry(self):
+        # tmux names the client's pane `2.1.303` too: the registry fallback would take the
+        # crashed chat for the tab's, and Shelve would close the tab and leave the background
+        # chat running unseen.
+        self.registered(2, "%4")
+        self.transcript(2)
+        self.background(1)
+        self.transcript(1)
+        # The client is the pane tty's foreground job, as in a real attach tab, so the pane
+        # passes runs_claude: only the client scan keeps the crashed chat out. bash runs the
+        # script file named `attach` from its cwd, its argv kept as a real client's.
+        d = os.path.join(self.tmp, "client")
+        os.makedirs(d, exist_ok=True)
+        with open(os.path.join(d, "attach"), "w") as f:
+            f.write("sleep 30\n:\n")
+        pane_pid, _ = fg_pane.spawn(self, "/home/u/.local/share/claude/versions/2.1.303",
+                                    args=("attach", sid(1)[:8]), exe="/bin/bash", cwd=d)
+        self.env.update(STUB_PANE_PID=str(pane_pid), STUB_COMMAND="2.1.303")
+        self.run_saved("shelve", "%4", CLIENT)
+        self.assertEqual(list(self.saved()), [sid(1)])
+        self.assertEqual(self.calls("claude"), [["claude", "stop", sid(1)[:8]]])
+
+    def test_open_goes_to_a_versioned_claudes_registry_pane(self):
+        self.put(1, shelved=True)
+        self.transcript(1)
+        self.registered(1, "%7")
+        pane_pid = self.versioned_pane()
+        self.env["STUB_PANES"] = f"$1 @3 %7 {pane_pid} 2.1.303\\n"
+        self.run_saved("open", sid(1), CLIENT)
+        self.assertEqual(self.opened(), [])
+        self.assertIn(["tmux", "select-pane", "-t", "%7"], self.calls("tmux"))
+
+    def test_open_reopens_past_a_version_name_from_elsewhere(self):
+        self.put(1, shelved=True)
+        self.transcript(1)
+        self.registered(1, "%7")
+        pane_pid = self.versioned_pane(home="other")
+        self.env["STUB_PANES"] = f"$1 @3 %7 {pane_pid} 2.1.303\\n"
+        self.run_saved("open", sid(1), CLIENT)
+        self.assertEqual(len(self.opened()), 1)
 
     def test_star_with_no_session_says_so(self):
         self.live(1, "%5")
@@ -824,8 +903,9 @@ class Saved(unittest.TestCase):
 
     def test_an_attach_client_names_its_chat_by_job_id(self):
         # argv[0] may be the full path the client re-execs itself under (a `claude --resume` of
-        # a background chat does).
-        for argv0 in ("claude", "/home/u/.local/bin/claude"):
+        # a background chat does), or claude's versioned path.
+        for argv0 in ("claude", "/home/u/.local/bin/claude",
+                      "/home/u/.local/share/claude/versions/2.1.303"):
             with self.subTest(argv0=argv0):
                 self.setUp()
                 self.background(1)
