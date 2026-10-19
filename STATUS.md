@@ -85,9 +85,10 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     [[dotclaude-tab-bar]], remote-paste's live tests in [[dotclaude-remote-paste]]. #115 left the
     tab glyph's prompt at v4: an ask a reply only announces for later stays a documented known
     miss (`hooks/wants_input.py`'s docstring), since its one prompt round flipped 10 verdicts.
-  - **Live lane (opened 2026-10-18), merge order:** 1 launch-path (`fix/launch-path-checks`,
-    from 6583c7b; Hayden's go after #122; it carries the lead's notes). Its Brief has the
-    detail; the backlog items below keep the evidence.
+  - **Live lanes (opened 2026-10-18), merge order:** 1 launch-path (`fix/launch-path-checks`,
+    from 6583c7b; Hayden's go after #122; it carries the lead's notes), 2 bug-route
+    (`feat/addr-repo`, from d8683d2; Hayden's go after #123). No shared files. Each Brief has
+    the detail; the backlog items below keep the evidence.
   - The parked json-depth sweep (21 files, among them the delegation enforcement scripts) is on
     `fix/json-depth-sweep`, a local branch never pushed: keep it while the sweep is in the
     backlog. Shipping it first needs a check of how each enforcement site fails
@@ -130,8 +131,8 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     it), runs `claude stop <job>` and respawns that pane with a fresh claude. Unknowns: a pane
     in agent view leaves no link on disk, two clients can attach to one job, and the order of
     the stop and the respawn.
-  - **Bug reports from sessions outside dotclaude reach its lead** (Hayden's pick 2026-10-18,
-    option A; unblocked by #123, the lead proposed its lane on 2026-10-18). The karaoke session's report (pass-bg) worked over
+  - **Bug reports from sessions outside dotclaude reach its lead (lane bug-route, live)**
+    (Hayden's pick 2026-10-18, option A). The karaoke session's report (pass-bg) worked over
     SendMessage only because Hayden told it where to send, since `lane addr` refuses outside its
     repo and ListAgents names are tab titles. Build: `lane addr --repo <path> lead`, which finds
     another repo's lead from its lead record with the same checks, plus one global CLAUDE.md
@@ -226,19 +227,18 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
   `claude -p` repro and the 2.1.285 boundary; the karaoke session's has the incident.
 
 ## Notes for next session
-- **Next (lead, main checkout):** watch lane launch-path (In flight, merge order 1). On its
-  "merged #N", run the post-merge chain (`skills/lanes/SKILL.md`, The lead, step 7; never
+- **Next (lead, main checkout):** watch lanes launch-path and bug-route (In flight, merge
+  order). On each "merged #N", run the post-merge chain (`skills/lanes/SKILL.md`, The lead, step 7; never
   amend or rebase the lead branch). Check `lane ls` first: a merge Hayden made on GitHub and
   mentioned to no session sends no message. If a lane later in order is ready first, swap the
   order in STATUS and tell both lanes (the one next in order carries the lead's notes). Hold
   `lane done` while
-  another lane holds the `suite` lock (its `branch -d` rewrites `.git/config`). The bug-report
-  lane (Backlog, option A) waits on Hayden's go, proposed 2026-10-18. No chat about a lane's own asks; speak
+  another lane holds the `suite` lock (its `branch -d` rewrites `.git/config`). No chat about a lane's own asks; speak
   on cross-lane orders, decisions raised with the lead, failed checks and lead-only actions.
   - The lead's commits: `git log --first-parent main..chore/after-pr4` (STATUS only, plus merges
     of main). Session 9dd86d28 (2026-10-18) started at ee36b32 and ended at this handoff: it ran
     the chain for #120 to #123 (`ls .git/lanes/_closed/` shows each close), checked #117 on the
-    previous lead's pass, opened tab-pin, cross-lane, pass-bg and launch-path, and logged the karaoke
+    previous lead's pass, opened tab-pin, cross-lane, pass-bg, launch-path and bug-route, and logged the karaoke
     session's report, Hayden's bug-report pick and pass-bg's Not mine items.
   - Open with Hayden, nothing for the lead to do: the capella-studio lead asked how a new lane
     should clear the excluded-command guard, and the lead recommended (2026-10-17) pointing
