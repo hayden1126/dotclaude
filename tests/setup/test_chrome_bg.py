@@ -1229,6 +1229,17 @@ if os.environ.get("DRIVER_STALL_PROCS"):
         return call(self, op, *a, **kw)
     mod.page_count = counting
     mod.Supervisor.call = stalling_call
+if os.environ.get("DRIVER_WALL_STEP"):
+    # The wall clock steps forward DRIVER_WALL_STEP s once start_run returns, just after the
+    # record (with its wall-clock expires) is written.
+    start_run, wall = mod.start_run, time.time  # wall clock
+
+    def stepping_start_run(*a, **kw):
+        run = start_run(*a, **kw)
+        step = float(os.environ["DRIVER_WALL_STEP"])
+        time.time = lambda: wall() + step  # wall clock
+        return run
+    mod.start_run = stepping_start_run
 if "DRIVER_TTY_FG" in os.environ:  # stands in for /dev/tty's foreground process group check
     mod.in_tty_foreground = lambda: os.environ["DRIVER_TTY_FG"] == "1"
 sys.exit(mod.main(sys.argv[3:]))
@@ -1495,6 +1506,16 @@ class Live(unittest.TestCase):
         self.assertRegex(r.stdout.strip(), r"^http://127\.0\.0\.1:\d+$")
         rid = self.only_run_id()
         self.wait_for(lambda: self.has("eof-" + rid) and not self.records(), what="the TTL stop")
+
+    def test_start_ttl_outlasts_a_wall_clock_step(self):
+        # A wall clock 60 s ahead puts the record's expires in the past at once: the run must
+        # still last its 3 s TTL, timed by the monotonic deadline.
+        began = time.monotonic()
+        r = self.cli("start", "--ttl", "3s", env={"DRIVER_WALL_STEP": "60"})
+        self.assertEqual(r.returncode, 0, r.stderr)
+        rid = self.only_run_id()
+        self.wait_for(lambda: self.has("eof-" + rid) and not self.records(), what="the TTL stop")
+        self.assertGreaterEqual(time.monotonic() - began, 3)
 
     def test_wrong_port_refused(self):
         r = self.cli("run", "--", sys.executable, "-c", "pass", env={"FAKE_WRONG_PATH": "1"})
