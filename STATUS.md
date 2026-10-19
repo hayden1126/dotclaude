@@ -87,13 +87,10 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     [[dotclaude-tab-bar]], remote-paste's live tests in [[dotclaude-remote-paste]]. #115 left the
     tab glyph's prompt at v4: an ask a reply only announces for later stays a documented known
     miss (`hooks/wants_input.py`'s docstring), since its one prompt round flipped 10 verdicts.
-  - **No live lanes** (since #125's close, 2026-10-19). The next lane comes from the backlog
-    on Hayden's pick.
-  - The parked json-depth sweep (21 files, among them the delegation enforcement scripts) is on
-    `fix/json-depth-sweep`, a local branch never pushed: keep it while the sweep is in the
-    backlog. Shipping it first needs a check of how each enforcement site fails
-    (a caught error must not turn a deny into an allow). Optional: the trigger is near
-    theoretical.
+  - **No live lanes** (since #125's close, 2026-10-19). Hayden's go for three more is the
+    first Next item (Notes for next session).
+  - The parked json-depth sweep is on `fix/json-depth-sweep`, a local branch never pushed:
+    keep it as lane json-depth's reference (Next, item 1). Its trigger is near theoretical.
   - `lane new` with `|`, `<`, `>` or `;` inside its quoted `--goal` runs sandboxed and fails
     ("Read-only file system"), leaving a stray branch. The matcher likely reads them as compound
     syntax (inferred). Keep briefs free of them.
@@ -201,17 +198,40 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
   `claude -p` repro and the 2.1.285 boundary; the karaoke session's has the incident.
 
 ## Notes for next session
-- **Next (lead, main checkout):** no lanes are live. Offer Hayden the backlog (In flight) and
-  open what he picks with a lane table (`skills/lanes/SKILL.md`, The lead, steps 1-3). A bug
-  report from a session in another repo now arrives by SendMessage (CLAUDE.md, #125): check it
-  against the code and log it in the backlog. On a lane's "merged #N", run the post-merge chain
-  (The lead, step 7; never amend or rebase the lead branch). Check `lane ls` first: a merge
-  Hayden made on GitHub and mentioned to no session sends no message. Hold `lane done` while
-  another lane holds the `suite` lock (its `branch -d` rewrites `.git/config`). No chat about a
-  lane's own asks; speak on cross-lane orders, decisions raised with the lead, failed checks
-  and lead-only actions.
+- **Next (lead, main checkout):**
+  1. Open three lanes, one per lane-able backlog item (approved by Hayden 2026-10-19: "open 3
+     lanes next", after the lead listed the backlog: these three, plus the G8 probes and tmux
+     3.8 left to him and the bg auto-pass left as log only). Run `lane new <id> --branch <b>
+     --goal ... --files ... --overlaps ... --done-when ...` bare, then `lane open <id>`, for each
+     (`skills/lanes/SKILL.md`, The lead, step 3). Goals from the backlog items, in plain text:
+     no backticks, `|`, `<`, `>`, `;` or `#`. Then commit the Live lanes line with the merge
+     order, and show Hayden the table.
+     - 1 **chrome-ttl** (`fix/chrome-bg-ttl`): the chrome-bg TTL loop item. Files `bin/chrome-bg`,
+       `tests/setup/test_chrome_bg.py`, optionally `skills/coding-practices` (the monotonic
+       rule). Overlaps none. It carries the lead's notes.
+     - 2 **tab-cmd** (`fix/tab-scripts-claude-cmd`): the tab scripts item. Files
+       `tmux/tmux-claude-status`, `tmux/claude-saved`, `tests/setup/test_tmux_claude_status.py`,
+       `tests/setup/test_claude_saved.py`. Overlaps json-depth (`claude-saved` and its test).
+       Its design fork (a per-pane session-file lookup or the claude's argv[0] basename, against
+       the cost per tick) goes to Hayden from the lane's plan.
+     - 3 **json-depth** (`fix/json-depth`): the parked sweep, rebuilt on main, with
+       `fix/json-depth-sweep` as the reference only. It is based on 2a8cc269 (2026-10-13), and
+       `lane`, `lanelib.py`, pass-respawn and `session-registry.sh` have changed a lot since.
+       Files: what `git diff --name-only main...fix/json-depth-sweep` lists (21 source files,
+       6 tests). Overlaps tab-cmd. Its first step is to check how each enforcement site fails: a
+       caught error must not turn a deny into an allow. Once it merges, ask Hayden before
+       deleting the old branch.
+  2. Watch the lanes. On each "merged #N", run the post-merge chain (The lead, step 7; never
+     amend or rebase the lead branch). Check `lane ls` first: a merge Hayden made on GitHub and
+     mentioned to no session sends no message. If a lane later in order is ready first, swap
+     the order in STATUS and tell both lanes (the one next in order carries the lead's notes).
+     Hold `lane done` while another lane holds the `suite` lock (its `branch -d` rewrites
+     `.git/config`). A bug report from a session in another repo arrives by SendMessage
+     (CLAUDE.md, #125): check it against the code and log it in the backlog. No chat about a
+     lane's own asks; speak on cross-lane orders, decisions raised with the lead, failed checks
+     and lead-only actions.
   - The lead's commits: `git log --first-parent main..chore/after-pr4` (STATUS only, plus merges
-    of main). Session 9dd86d28 (2026-10-18) started at ee36b32 and ended at this handoff: it ran
+    of main). Session 9dd86d28 (2026-10-18 to 2026-10-19) started at ee36b32 and ended at this handoff: it ran
     the chain for #120 to #125 (`ls .git/lanes/_closed/` shows each close), checked #117 on the
     previous lead's pass, opened tab-pin, cross-lane, pass-bg, launch-path and bug-route, and logged the karaoke
     session's report, Hayden's bug-report pick and pass-bg's Not mine items.
