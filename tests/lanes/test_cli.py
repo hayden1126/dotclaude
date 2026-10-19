@@ -105,6 +105,43 @@ class RoundTrip(LanesRepo):
         self.lane("init", "--cap", "1")
         self.assertIn("cap", self.run_lane("new", "third").stderr)
 
+    def assertNothingMade(self, lane_id, branch):
+        self.assertFalse(os.path.exists(self.lane_path(lane_id)))
+        self.assertFalse(os.path.exists(os.path.join(self.common, "lanes", lane_id)))
+        self.assertEqual(self.git("branch", "--list", branch), "")
+
+    def test_new_refuses_a_branch_name_a_pr_used_unless_told_to_reuse_it(self):
+        # `ls` labels a lane by its branch's newest PR: an old merged one would read as this
+        # lane's merge.
+        self.env["FAKE_GH_NEW"] = json.dumps([{"number": 94, "state": "MERGED"}])
+        for args in (("probe", "--branch", "fix/old"), ("fix-old",)):  # --branch, or the id
+            with self.subTest(args):
+                p = self.run_lane("new", *args)
+                self.assertEqual(p.returncode, 1, p.stdout)
+                self.assertIn("#94 (merged)", p.stderr)
+                self.assertIn("--reuse-branch", p.stderr)
+                self.assertNothingMade(args[0], args[-1])
+        self.lane("new", "probe", "--branch", "fix/old", "--reuse-branch")
+        self.assertEqual(self.lane_json("probe")["branch"], "fix/old")
+        # A rerun is told the lane exists, not sent to --reuse-branch by the lane's own PR.
+        self.assertIn("already registered", self.run_lane("new", "probe").stderr)
+
+    def test_new_refuses_when_gh_cannot_say_which_prs_used_the_name(self):
+        # "\udcff" reaches gh's env as the byte 0xff: a reply that isn't UTF-8.
+        for reply in ("fail", " ", "\udcff", '{"number": 94}', "[94]", "[" * 100000):
+            with self.subTest(reply[:10]):
+                self.env["FAKE_GH_NEW"] = reply
+                p = self.run_lane("new", "probe")
+                self.assertEqual(p.returncode, 1, p.stdout)
+                self.assertNotIn("Traceback", p.stderr)
+                self.assertIn("can't ask GitHub", p.stderr)
+                self.assertIn("--reuse-branch", p.stderr)
+                self.assertNothingMade("probe", "probe")
+        self.env["FAKE_GH_NEW"] = "fail"
+        self.assertIn("offline in tests", self.run_lane("new", "probe").stderr)  # gh's own words
+        self.lane("new", "probe", "--reuse-branch")
+        self.assertEqual(self.lane_json("probe")["branch"], "probe")
+
     def test_adopt_registers_an_existing_worktree(self):
         path = os.path.join(self.tmp, "elsewhere", "docs-lane")
         self.git("worktree", "add", "-q", "-b", "docs", path, "origin/main")
