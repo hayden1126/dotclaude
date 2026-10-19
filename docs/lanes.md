@@ -473,14 +473,15 @@ object or hook, the way `git_read` and `commits_past` run theirs (`lanelib.HANDE
 
 The git binary is PATH's, as for `commits_past` and every other git `lane` runs: the guard's
 rule 2 judged PATH for the call (`git_read` alone insists on a system git, since PATH's may be
-one its scan just found writable). Git's ownership check stays on, so a repo another user owns is refused. PATH must also sit in
-the main checkout of the repo git names: the nearest `.git` at or above it must be that repo's
-git dir itself, as the guard requires of a cwd. Else a planted `.git` file, `commondir` or
-`core.worktree` would send the report to another repo's lead, an enclosing lanes repo's
-included. A lane's worktree doesn't count either: its path comes from a `lane.json` that
-sandboxed Bash can write (lane ids still resolve through the main checkout). Past that, nothing
-needs a new check. A repo counts only when its config sits in the state dir, which only a bare
-`lane init` writes, and its lead comes from the lead record beside that config.
+one its scan just found writable). Git's ownership check stays on, so a repo another user owns
+is refused. PATH must also sit in the main checkout of the repo git names: the nearest `.git`
+at or above it must be that repo's git dir itself, as the guard requires of a cwd. Else a
+planted `.git` file, `commondir` or `core.worktree` would send the report to another repo's
+lead, an enclosing lanes repo's included. A lane's worktree doesn't count either: its path
+comes from a `lane.json` that sandboxed Bash can write (lane ids still resolve through the main
+checkout). Past that, nothing needs a new check. A repo counts only when its config sits in the
+state dir, which only a bare `lane init` writes, and its lead comes from the lead record beside
+that config.
 
 ## Layout
 
