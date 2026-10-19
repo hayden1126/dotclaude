@@ -248,6 +248,12 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
   - A config rewrite with the sandbox off (`git config`, `branch -d`, so `lane done` too) while a
     lane's suite runs can fail its SandboxReality test once: the rewrite swaps `.git/config`
     under the running sandbox's mount. Wait for `lane ls` to drop the `suite` lock.
+  - A detached job started from a lane's held install keeps running in the lane after the
+    lead's reinstall, and `lane done` refuses it by name ("nothing proves these processes ...
+    are lane X's"). Seen 2026-10-18: Vulcan lane blockfix's session (fa4e8df1) began the
+    post-upgrade quick canary (`delegation-ledger due --background quick audit`, 2.1.303) from
+    cross-lane's `delegation-ledger` about when #123's reinstall ran. Wait for it to exit
+    (about 5 min), then rerun `lane done`; the job is blockfix's, so never kill it.
   - **Watch (PR 4, live on HAYPC):** `context-watch.err` in the state dir (a Stop that timed out
     waiting for its reply, and the watcher's Python errors). Not yet seen live: a refused pass's
     toast, and Hayden's verdict on the rendered popup.
