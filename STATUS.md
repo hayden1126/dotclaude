@@ -74,20 +74,20 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
 - **dotclaude runs in lanes (since 2026-10-12).** The lead is the main checkout. Lanes live in
   `~/dotclaude-lanes/`, and each lane's state is in its record (`lane ls`, `lane asks`), not
   here. The config caps live lanes at 3, with locks `install` and `suite`.
-  - Merged through lanes, installed from main and closed: #90 to #122 (2026-10-12 to
+  - Merged through lanes, installed from main and closed: #90 to #123 (2026-10-12 to
     2026-10-18), with lead PR #117 among them (its check passed: session 3a153a27's auto-pass
-    loaded the handoff skill before pass-respawn's `handoff-check`). Last: pass-bg, #122
-    (pass-respawn names a background session instead of "not in a tmux pane", and finds the
-    calling session by its session file; [[cc-background-sessions]]).
+    loaded the handoff skill before pass-respawn's `handoff-check`). Last: cross-lane, #123
+    (`lane ls` flags `overlap` when two live lanes change one file, and `lane trial` merges the
+    other live lanes into a scratch tree and runs the suites before ready; `skills/lanes/
+    SKILL.md`, Lifecycle). Before it, pass-bg, #122 (pass-respawn names a background session).
     `gh pr list --state merged --limit 30` names each, and the closed records under `.git/lanes/_closed/<id>-<date>/` hold the detail (#116's
     post-merge smoke is in restore-effort's artifacts); tab-bar's design is in
     [[dotclaude-tab-bar]], remote-paste's live tests in [[dotclaude-remote-paste]]. #115 left the
     tab glyph's prompt at v4: an ask a reply only announces for later stays a documented known
     miss (`hooks/wants_input.py`'s docstring), since its one prompt round flipped 10 verdicts.
-  - **Live lanes (opened 2026-10-18), merge order:** 1 cross-lane (`feat/cross-lane-checks`, from
-    e2a2294; it carries the lead's notes), 2 launch-path (`fix/launch-path-checks`, from
-    6583c7b; Hayden's go after #122). No shared files: launch-path only reads `lanelib.py`.
-    Each Brief has the detail; the backlog items below keep the evidence.
+  - **Live lane (opened 2026-10-18), merge order:** 1 launch-path (`fix/launch-path-checks`,
+    from 6583c7b; Hayden's go after #122; it carries the lead's notes). Its Brief has the
+    detail; the backlog items below keep the evidence.
   - The parked json-depth sweep (21 files, among them the delegation enforcement scripts) is on
     `fix/json-depth-sweep`, a local branch never pushed: keep it while the sweep is in the
     backlog. Shipping it first needs a check of how each enforcement site fails
@@ -106,15 +106,6 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     rerun the menu-clip repro and the tmux suites. If it fixes the clip, install at a quiet
     moment (a server restart; claude-restore reopens the tabs) and drop the row-0 menu rule.
     Until then, 3.7c's default menus that dotclaude doesn't own still clip under a top bar.
-  - **Cross-lane checks (lane cross-lane, live)** (Hayden's pick 2026-10-18: A and B as one lane).
-    Lanes plan alone, and nothing compares their designs: on 2026-10-17 restore-effort's brief
-    listed 7 files, #116 changed 14 (among them `lane` and `lanelib.py`, done-rerun's files), and
-    the brief named no overlap with done-rerun. A: `lane ls` flags two live lanes whose actual
-    changed files overlap (committed and uncommitted against `origin/main`, derived on each call).
-    B: before ready, a lane trial-merges every other live lane's branch into a scratch tree and
-    runs the suites there under `lane lock suite` (the trial-tree traps are in
-    [[dotclaude-lanes]]). The lead plan review (C) was not picked. Files: `skills/lanes/scripts/
-    lane`, `lanelib.py`, `tests/lanes`, `skills/lanes/SKILL.md`, `docs/lanes.md`.
   - **pass-respawn's final re-check wants the pane's command to read `claude`** (lane
     launch-path, live; from lane pass-bg, 2026-10-18; the tmux half probed by the lead). `observe()` checks
     `pane_current_command`, which tmux takes from argv[0]'s basename: a private-server pane
@@ -139,8 +130,8 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     it), runs `claude stop <job>` and respawns that pane with a fresh claude. Unknowns: a pane
     in agent view leaves no link on disk, two clients can attach to one job, and the order of
     the stop and the respawn.
-  - **Bug reports from sessions outside dotclaude reach its lead, after cross-lane merges**
-    (Hayden's pick 2026-10-18, option A). The karaoke session's report (pass-bg) worked over
+  - **Bug reports from sessions outside dotclaude reach its lead** (Hayden's pick 2026-10-18,
+    option A; unblocked by #123, the lead proposed its lane on 2026-10-18). The karaoke session's report (pass-bg) worked over
     SendMessage only because Hayden told it where to send, since `lane addr` refuses outside its
     repo and ListAgents names are tab titles. Build: `lane addr --repo <path> lead`, which finds
     another repo's lead from its lead record with the same checks, plus one global CLAUDE.md
@@ -148,8 +139,8 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     The lead logs each report in this backlog. Rejected: a durable inbox that runs sandbox-off
     and that the lead reads at session start (a new write path, and untrusted text in the lead's
     context); revisit only if a report gets lost. The CLAUDE.md line is Hayden's edit (proposed
-    via `/revise-claude-md`). Files: `skills/lanes/scripts/lane` (cross-lane's file, hence the
-    wait), `tests/lanes`, `skills/lanes/SKILL.md`, `docs/lanes.md`, `CLAUDE.md`.
+    via `/revise-claude-md`). Files: `skills/lanes/scripts/lane`, `tests/lanes`,
+    `skills/lanes/SKILL.md`, `docs/lanes.md`, `CLAUDE.md`.
   - **`session-registry.sh`'s `launch_pick()` finds the session by comm `claude`** (lane
     launch-path, live; from lane pass-bg's reviewer, 2026-10-18, read from code). A bg session's comm is the version
     (`2.1.302`), so the lookup would land on the daemon. Unreachable today: the hook exits
@@ -235,18 +226,18 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
   `claude -p` repro and the 2.1.285 boundary; the karaoke session's has the incident.
 
 ## Notes for next session
-- **Next (lead, main checkout):** watch lanes cross-lane and launch-path (In flight, merge
-  order). On each "merged #N", run the post-merge chain (`skills/lanes/SKILL.md`, The lead, step 7; never
+- **Next (lead, main checkout):** watch lane launch-path (In flight, merge order 1). On its
+  "merged #N", run the post-merge chain (`skills/lanes/SKILL.md`, The lead, step 7; never
   amend or rebase the lead branch). Check `lane ls` first: a merge Hayden made on GitHub and
   mentioned to no session sends no message. If a lane later in order is ready first, swap the
   order in STATUS and tell both lanes (the one next in order carries the lead's notes). Hold
   `lane done` while
-  another lane holds the `suite` lock (its `branch -d` rewrites `.git/config`). After cross-lane
-  merges, propose the bug-report lane (Backlog, option A). No chat about a lane's own asks; speak
+  another lane holds the `suite` lock (its `branch -d` rewrites `.git/config`). The bug-report
+  lane (Backlog, option A) waits on Hayden's go, proposed 2026-10-18. No chat about a lane's own asks; speak
   on cross-lane orders, decisions raised with the lead, failed checks and lead-only actions.
   - The lead's commits: `git log --first-parent main..chore/after-pr4` (STATUS only, plus merges
     of main). Session 9dd86d28 (2026-10-18) started at ee36b32 and ended at this handoff: it ran
-    the chain for #120 to #122 (`ls .git/lanes/_closed/` shows each close), checked #117 on the
+    the chain for #120 to #123 (`ls .git/lanes/_closed/` shows each close), checked #117 on the
     previous lead's pass, opened tab-pin, cross-lane, pass-bg and launch-path, and logged the karaoke
     session's report, Hayden's bug-report pick and pass-bg's Not mine items.
   - Open with Hayden, nothing for the lead to do: the capella-studio lead asked how a new lane
