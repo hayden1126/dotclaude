@@ -30,9 +30,10 @@
 # shows a background session the daemon hosts: the live `kind: bg` sessions file whose jobId it
 # names; not one stopped by Ctrl+Z), else from the newest unmarked open-sessions entry
 # for that pane on this tmux server (hooks/session-registry.sh), but only while the pane runs
-# `claude` and no live sessions file puts another chat there: a crashed claude leaves its entry
-# behind. The ★ is the pane option @claude_star (a chat is per pane); tmux/claude.conf shows it
-# through the active pane.
+# claude (named `claude`, or a version name confirmed from /proc: runs_claude) and no live
+# sessions file puts another chat there: a crashed claude leaves its entry behind. The ★ is
+# the pane option @claude_star (a chat is per pane); tmux/claude.conf shows it through the
+# active pane.
 #
 # The rules:
 #   - Star and Shelve act only in a window with a @claude_state (a Claude runs there: a stale
@@ -112,6 +113,7 @@ if os.path.isabs(os.environ.get("LANELIB_DIR", "")):
 
 STORE, REG, CARRY = os.environ["SAVED_DIR"], os.environ["REG_DIR"], os.environ["CARRY_DIR"]
 CARRY_TTL = 120
+VERSIONS = "/claude/versions/"   # a claude run by its versioned path: runs_claude
 SHELVED_GRACE = 30   # s after a Shelve in which track won't record its chat (see op_track)
 SESSIONS, PROJECTS = os.environ["SESSIONS_DIR"], os.environ["PROJECTS_DIR"]
 SID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{7,127}")
@@ -291,18 +293,32 @@ def stopped(pid):
     except (OSError, IndexError):
         return True
 
+def runs_claude(command, pane_pid):
+    """True when a pane runs claude (command: its #{pane_current_command}). tmux names a pane by
+    argv[0]'s basename, so a claude run by its versioned path reads `2.1.303`: that name counts
+    only when the pane tty's foreground process group (field 8 of the pane process's stat, the
+    process tmux names) runs from a claude/versions directory, since any program may carry a
+    version name. tmux/tmux-claude-status's is_claude is the same check."""
+    if command == "claude":
+        return True
+    if not re.match(r"[0-9]+\.[0-9]+\.[0-9]+", command) or not isint(pane_pid):
+        return False
+    fg = stat(pane_pid, 8)
+    a = argv(fg) if fg and fg > 0 else []
+    return bool(a) and VERSIONS in a[0]
+
 def clients():
     """(pid, arg) for each running `claude attach <arg>` process: a tab showing a background
-    session. argv[0] is `claude` or the full path a client re-execs itself under (a
-    `claude --resume` of a background chat becomes one). A stopped one isn't what its pane
-    shows (Claude's own Ctrl+Z exits a client, but a SIGSTOP can stop one). "<-" turns a client
-    into `claude agents`, which names no session even after it opens one, so that tab isn't
-    recognized."""
+    session. argv[0] is `claude`, the full path a client re-execs itself under (a
+    `claude --resume` of a background chat becomes one), or a versioned path (VERSIONS). A
+    stopped one isn't what its pane shows (Claude's own Ctrl+Z exits a client, but a SIGSTOP
+    can stop one). "<-" turns a client into `claude agents`, which names no session even after
+    it opens one, so that tab isn't recognized."""
     for name in os.listdir("/proc"):
         if name.isdigit():
             a = argv(int(name))
-            if (len(a) >= 3 and os.path.basename(a[0]) == "claude" and a[1] == "attach"
-                    and not stopped(int(name))):
+            if (len(a) >= 3 and (os.path.basename(a[0]) == "claude" or VERSIONS in a[0])
+                    and a[1] == "attach" and not stopped(int(name))):
                 yield int(name), a[2]
 
 def shown(arg, bgs):
@@ -385,7 +401,7 @@ def resolve(tab, pane_pid, command):
         if not isinstance(cwd, str) or not cwd:
             cwd = r.get("cwd")
     else:
-        if command != "claude":
+        if not runs_claude(command, root):
             return None   # a crashed claude leaves its entry: the pane must still run one
         mine = [e for e in regs.values() if e.get("pane") == tab["pane"] and on_server(e, tab)]
         if not mine:
@@ -544,7 +560,7 @@ def op_live(sid, start, pid, socket, csess):
     p = r.get("pane")
     if (server and on_server(r, server) and "ended_other_at" not in r
             and r.get("attach") is not True and p in panes
-            and panes[p][2] == "claude" and showing.get(p, sid) == sid
+            and runs_claude(panes[p][2], panes[p][1]) and showing.get(p, sid) == sid
             and not any(pane_of(s) == p and s["sessionId"] != sid
                         and descends(s["pid"], panes[p][1]) for s in every)):
         candidates.append(p)
