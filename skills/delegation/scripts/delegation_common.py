@@ -65,17 +65,19 @@ def state_dir(home=None):
     return os.path.join(base, "dotclaude")
 
 
-REREAD_WAIT = 0.1  # seconds before a file that won't parse is read again: a torn rewrite
+REREAD_WAIT = 0.1  # seconds before a file that won't parse, or is empty, is read again
 
 
 def read_object(path, what):
-    """The JSON object in the file at path, or {} when it is missing or empty: while a
-    sandboxed command runs, the sandbox mounts /dev/null over a protected path the project
-    lacks, which leaves an empty file where a reader looks. A file that won't parse is read once
-    more after REREAD_WAIT, since Claude Code rewrites settings.json in place (a /model save).
-    ValueError, naming the file as `what`, for anything else that doesn't read as a JSON object
-    (an unreadable file, junk, too deep, or another JSON value), so a reader that trusts it
-    fails closed."""
+    """The JSON object in the file at path, or {} when it is missing (at once) or empty on both
+    reads: while a sandboxed command runs, the sandbox mounts /dev/null over a protected path
+    the project lacks, which leaves an empty file where a reader looks. A file that is empty or
+    won't parse is read once more after REREAD_WAIT, since Claude Code rewrites settings.json in
+    place (a /model save), and a truncate-then-write is likeliest caught empty. ValueError,
+    naming the file as `what`, for anything else that doesn't read as a JSON object (an
+    unreadable file, junk, too deep, or another JSON value), so a reader that trusts it fails
+    closed."""
+    err = None
     for wait in (0, REREAD_WAIT):
         if wait:
             time.sleep(wait)
@@ -90,7 +92,8 @@ def read_object(path, what):
         except (OSError, ValueError) as e:  # ValueError: a NUL in the path
             raise ValueError(f"unreadable {what} {path}: {e}") from None
         if not text.strip():
-            return {}
+            err = None  # empty on the last read too: a mount stub, so no settings
+            continue
         try:
             obj = json.loads(text)
         except (ValueError, RecursionError) as e:  # json recurses on nesting
@@ -99,6 +102,8 @@ def read_object(path, what):
         if not isinstance(obj, dict):
             raise ValueError(f"{what} {path} is not a JSON object")
         return obj
+    if err is None:
+        return {}
     raise ValueError(err)
 
 

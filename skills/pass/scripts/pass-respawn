@@ -961,21 +961,25 @@ def settings_tree(text: str | bytes, name: str) -> dict:
     return tree
 
 
-SETTINGS_REREAD = 0.1  # seconds before a settings file that won't parse is read again
+SETTINGS_REREAD = 0.1  # seconds before a settings file that's empty or won't parse is reread
 
 
 def listed_paths(path: str, keys: tuple[str, ...], base: str | None) -> list[str]:
     """A settings file's list at keys as absolute paths (listed): a relative one resolves against
     base and against the file's own dir, or is skipped when base is None. A file that can't be
-    opened lists nothing; one that doesn't parse is read once more after SETTINGS_REREAD (Claude
-    Code rewrites settings.json, as on a /model save, and a read may catch it torn), then
-    refuses (settings_tree)."""
+    opened lists nothing, at once; one that is empty or doesn't parse is read once more after
+    SETTINGS_REREAD (Claude Code rewrites settings.json, as on a /model save, and a read may
+    catch it torn, likeliest empty after the truncate), then lists nothing if still empty (a
+    sandbox mount stub) or refuses (settings_tree)."""
     for last in (False, True):
         try:
             with open(path, "rb") as f:
                 text = f.read()
         except OSError:
             return []
+        if not text.strip() and not last:
+            time.sleep(SETTINGS_REREAD)
+            continue
         try:
             tree = settings_tree(text, f"the settings file {path}")
             break

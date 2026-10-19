@@ -1646,12 +1646,27 @@ class ReadObject(unittest.TestCase):
                 dc.read_settings(self.path)
             sleep.assert_called_once_with(dc.REREAD_WAIT)
 
-    def test_missing_or_empty_is_no_settings_with_no_wait(self):
+    def test_a_missing_file_is_no_settings_with_no_wait(self):
         with mock.patch.object(dc.time, "sleep") as sleep:
             self.assertEqual(dc.read_settings(self.path), {})
-            self.write("\n")
-            self.assertEqual(dc.read_settings(self.path), {})
         sleep.assert_not_called()
+
+    def test_an_empty_first_read_takes_the_second(self):
+        # A truncate-then-write leaves an empty file as its likeliest torn state: taken as {}
+        # at once, it would drop that tier's denyRead.
+        full = {"sandbox": {"filesystem": {"denyRead": ["/secret"]}}}
+        self.write("")
+        with mock.patch.object(dc.time, "sleep",
+                               side_effect=lambda s: s and self.write(json.dumps(full))):
+            self.assertEqual(dc.read_settings(self.path), full)
+
+    def test_an_empty_file_is_no_settings_after_one_wait(self):
+        # A sandbox mount stub (/dev/null) stays empty.
+        for text in ("", "\n", "  \t\n"):
+            self.write(text)
+            with mock.patch.object(dc.time, "sleep") as sleep:
+                self.assertEqual(dc.read_settings(self.path), {})
+            sleep.assert_called_once_with(dc.REREAD_WAIT)
 
 
 class WaiterIdentity(unittest.TestCase):
