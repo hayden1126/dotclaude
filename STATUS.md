@@ -87,7 +87,10 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     [[dotclaude-tab-bar]], remote-paste's live tests in [[dotclaude-remote-paste]]. #115 left the
     tab glyph's prompt at v4: an ask a reply only announces for later stays a documented known
     miss (`hooks/wants_input.py`'s docstring), since its one prompt round flipped 10 verdicts.
-  - **Live lanes: branch-reuse and ask-check** (opened 2026-10-19, Next item 0). The three lanes opened earlier on 2026-10-19
+  - **Live lanes: ask-check** (opened 2026-10-19, Next item 0; merge order 1 now, carries the
+    lead's notes). branch-reuse merged as #130 and was installed from main, 2026-10-19: `lane
+    new` refuses a branch name any PR used (or when gh can't answer; `--reuse-branch`
+    overrides), and handoff-check counts the checked-out branch. The three lanes opened earlier on 2026-10-19
     merged, were installed from main and closed: chrome-ttl as #126 (chrome-bg's TTL on a
     monotonic deadline, plus coding-practices rule 8), tab-cmd as #127 (a claude run under its
     versioned path counts as claude in the tab scripts: Hayden's "trigger + confirm" design, the
@@ -230,10 +233,9 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
 
 ## Notes for next session
 - **Next (lead, main checkout):**
-  0. Lane ask quality (Backlog, picks made): lanes branch-reuse (`fix/lane-branch-reuse`, merge
-     order 1, carries the lead branch) and ask-check (`feat/ask-check`, order 2) opened
-     2026-10-19; their state is in their records (`lane ls`). They overlap only if branch-reuse
-     touches `skills/lanes/SKILL.md`.
+  0. Lane ask quality (Backlog, picks made): branch-reuse merged as #130; lane ask-check
+     (`feat/ask-check`) is merge order 1 now and carries the lead branch. Its state is in its
+     record (`lane ls`).
   1. While item 0's lanes run, Hayden picks any further work from the backlog. On a bug report from another repo's session (CLAUDE.md, #125): check it
      against the code and log it in the backlog. When lanes run again, follow The lead in
      `skills/lanes/SKILL.md` (step 7 is the post-merge chain; never amend or rebase the lead
