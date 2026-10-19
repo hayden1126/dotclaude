@@ -236,10 +236,10 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
      branch), and check a new lane's branch name against `gh pr list --state all --head <b>`
      first (#94's name reuse, 2026-10-19).
   - The lead's commits: `git log --first-parent main..chore/after-pr4` (STATUS only, plus merges
-    of main). Session 9dd86d28 (2026-10-18 to 2026-10-19) started at ee36b32 and ended at this handoff: it ran
-    the chain for #120 to #125 (`ls .git/lanes/_closed/` shows each close), checked #117 on the
-    previous lead's pass, opened tab-pin, cross-lane, pass-bg, launch-path and bug-route, and logged the karaoke
-    session's report, Hayden's bug-report pick and pass-bg's Not mine items.
+    of main). Session c6847b46 (2026-10-19) started at 7aad9eb and ended at this handoff: it
+    opened chrome-ttl, tab-cmd and json-depth, ran the chain for #126 to #129 and closed all three,
+    logged json-depth's ask mistakes for item 0, capella's `handoff?` report, the AWS article and
+    the lanes' Not mine items.
   - Open with Hayden, nothing for the lead to do: the capella-studio lead asked how a new lane
     should clear the excluded-command guard, and the lead recommended (2026-10-17) pointing
     capella's `core.hooksPath` at the main checkout's protected `.githooks` (absolute path)
