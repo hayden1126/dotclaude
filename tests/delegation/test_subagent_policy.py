@@ -3,10 +3,13 @@
 Each test runs against a temporary home whose user settings carry this repo's baseline
 `sandbox` block, so the excluded-command rules are the ones that ship. Its state dir (the
 liveness index the deadline reads) is in that home too."""
+import contextlib
 import datetime
+import io
 import json
 import os
 import re
+import signal
 import subprocess
 import tempfile
 import unittest
@@ -207,7 +210,39 @@ class Gate(Base):
         fifo = os.path.join(self.home, "hang.toml")
         os.mkfifo(fifo)  # opening it for reading blocks until the alarm fires
         p = self.run_main(self.ev("Bash", {"command": "ls"}), {"DELEGATION_POLICY": fifo})
-        self.assertIn("TimeoutError", p.stdout)
+        self.assertIn("PolicyTimeout", p.stdout)
+
+    def main_in_process(self, payload):
+        """main() run here, its stdout: patch what the alarm should land in around it."""
+        self.addCleanup(signal.signal, signal.SIGALRM, signal.getsignal(signal.SIGALRM))
+        out = io.StringIO()
+        with mock.patch("sys.stdin", io.StringIO(json.dumps(payload))), \
+                contextlib.redirect_stdout(out):
+            self.assertEqual(sp.main(), 0)
+        return out.getvalue()
+
+    def test_an_alarm_inside_a_read_that_catches_oserror_or_any_error_still_denies(self):
+        # TimeoutError is an OSError: an alarm landing in dc.read_session (except OSError) was
+        # swallowed, and the hook ran on with no alarm left. So were ones in the deadline check
+        # and the heartbeat (except Exception, failing open). PolicyTimeout gets past each.
+        path = os.path.join(self.home, "s.json")
+        with open(path, "w") as f:
+            f.write("{}")
+
+        def ring(*_):
+            sp._alarm(signal.SIGALRM, None)
+
+        session = mock.patch.object(sp, "evaluate", lambda *_: sp.dc.read_session(path))
+        sites = {"a session read": (session, mock.patch.object(sp.dc.json, "load", ring)),
+                 "the deadline": (mock.patch.object(sp.dc, "read_agent_state", ring),),
+                 "the heartbeat": (mock.patch.object(sp.os, "utime", ring),)}
+        for where, patches in sites.items():
+            with self.subTest(where), contextlib.ExitStack() as stack:
+                for p in patches:
+                    stack.enter_context(p)
+                out = self.main_in_process(self.ev("Bash", {"command": "ls"}))
+                self.assertIn("policy-error", out)
+                self.assertIn("PolicyTimeout", out)
 
     def test_malformed_input_from_a_subagent_is_denied(self):
         env = dict(os.environ, HOME=self.home, XDG_STATE_HOME=os.path.join(self.home, "state"))

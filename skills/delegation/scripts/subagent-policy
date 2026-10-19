@@ -320,7 +320,8 @@ class Analyzer:
     def deadline(self, tool):
         """Past the role's stop budget for this activation, deny every tool but [deadline]
         allow, policed or not: a web-looping agent must stop too. Fails open: an unreadable
-        index, or any error here, means no deadline rather than a policy-error."""
+        index, or any error here but the alarm's (PolicyTimeout), means no deadline rather than
+        a policy-error."""
         allow = self.p["deadline"]["allow"]
         if tool in allow:
             return
@@ -328,6 +329,8 @@ class Analyzer:
             age = dc.activation_age(dc.read_agent_state(dc.norm_id(self.data.get("agent_id"))),
                                     time.time())
             _, stop_s = dc.deadline_for(self.p, self.agent_type)
+        except PolicyTimeout:
+            raise
         except Exception:  # noqa: BLE001  no clock, no deadline
             return
         if age is not None and age >= stop_s:
@@ -1179,12 +1182,19 @@ def heartbeat():
         with open(path, "a"):
             pass
         os.utime(path, None)
+    except PolicyTimeout:
+        raise
     except Exception:
         pass
 
 
+class PolicyTimeout(Exception):
+    """The alarm's: not TimeoutError, an OSError that a read catching OSError (dc.read_session)
+    would swallow, leaving the hook to run on with no alarm. main turns it into a deny."""
+
+
 def _alarm(_sig, _frm):
-    raise TimeoutError(f"policy check took over {ALARM_SECONDS}s")
+    raise PolicyTimeout(f"policy check took over {ALARM_SECONDS}s")
 
 
 def evaluate(data, policy=None, home=None):
