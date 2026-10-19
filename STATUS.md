@@ -105,6 +105,13 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
   - Once pushed, a lane merges `origin/main` into its branch, since force pushes are denied.
 
   Backlog:
+  - **Lane ask quality** (logged 2026-10-19, Hayden: "in a next session we investigate, do a
+    past transcript search, and plan for fixes"). Lane json-depth's four question rounds: claims
+    asked before they were checked (two wrong), another live lane's file proposed without saying
+    so, scope grown past the brief on its own recommendations, a skipped question re-split
+    silently, jargon, decisions kept only in the plan-mode file. Plus the lead's own: `lane new`
+    took a branch name merged #94 had used. Log, evidence and the search plan:
+    `~/scratch/lane-ask-quality/MISTAKES.md` (private: it quotes the transcript).
   - G8 open probes (a) and (b) (Hayden's pick, 2026-10-14): Hayden runs
     `~/scratch/sandbox-audit/g8-probe/run.py` by hand with the sandbox off, because the auto-mode
     classifier refused the run. Results go into the private findings file's G8 section.
@@ -207,6 +214,9 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
 
 ## Notes for next session
 - **Next (lead, main checkout):**
+  0. Lane ask quality (Backlog): read `~/scratch/lane-ask-quality/MISTAKES.md`, investigate the
+     causes, run the past transcript search it describes, then plan fixes and show Hayden the
+     options before building (likely a lead PR or its own lane; keep off live lanes' files).
   1. Watch the lanes (chrome-ttl, tab-cmd, json-depth: In flight). First check `lane ls` shows
      each with a live session, not `orphan`. On each "merged #N", run the post-merge chain (The lead, step 7; never
      amend or rebase the lead branch). Check `lane ls` first: a merge Hayden made on GitHub and
