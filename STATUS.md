@@ -117,6 +117,11 @@ them, `skills/lanes/SKILL.md` Lifecycle step 6).
     rerun the menu-clip repro and the tmux suites. If it fixes the clip, install at a quiet
     moment (a server restart; claude-restore reopens the tabs) and drop the row-0 menu rule.
     Until then, 3.7c's default menus that dotclaude doesn't own still clip under a top bar.
+  - **Gap check against AWS's agentic AI security principles** (Hayden, 2026-10-19): read
+    https://aws.amazon.com/blogs/security/four-security-principles-for-agentic-ai-systems/ and
+    list what dotclaude's guards (sandbox, permission rules, delete, overwrite and excluded-command
+    guards, subagent policy, lanes) don't cover. Unfixed security gaps go to the private
+    findings file, not here ([[dotclaude-public-repo]]).
   - **`handoff?` never clears on a switched lane past 200 PRs** (bug report from capella-studio's
     lead, session 5788b9fb, 2026-10-19; checked against the code). `pr_states` lists the newest
     `PR_LIMIT` (200) PRs in one gh call; once that list is full, `merges_of`
