@@ -127,7 +127,7 @@ def wrap(text, width, max_rows):
 def main():
     try:
         data = json.load(sys.stdin)
-    except (ValueError, OSError):
+    except (ValueError, OSError, RecursionError):   # json recurses on nesting
         fail()
     session_id = data.get("session_id")
     transcript = data.get("transcript_path")

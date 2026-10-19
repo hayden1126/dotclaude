@@ -146,7 +146,7 @@ def main_chain(line: bytes):
         return None
     try:
         d = json.loads(line)
-    except ValueError:
+    except (ValueError, RecursionError):   # json recurses on nesting
         return None
     if not isinstance(d, dict) or d.get("isSidechain") or d.get("type") not in ("user",
                                                                                 "assistant"):
@@ -249,7 +249,7 @@ def starts_handoff(line: bytes) -> bool:
         return False
     try:
         d = json.loads(line)
-    except ValueError:
+    except (ValueError, RecursionError):   # json recurses on nesting
         return False
     if not isinstance(d, dict) or d.get("isSidechain"):
         return False

@@ -169,7 +169,7 @@ def _line_at(m, pos: int):
     end = m.find(b"\n", pos)
     try:
         return start, json.loads(m[start:end if end >= 0 else len(m)])
-    except ValueError:
+    except (ValueError, RecursionError):   # json recurses on nesting
         return start, None
 
 
